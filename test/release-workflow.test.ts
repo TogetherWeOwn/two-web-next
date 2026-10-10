@@ -58,7 +58,10 @@ describe("release on promote", () => {
     const call = job(deploy, "release");
     expect(call).toContain("needs: [preflight, deploy-production]");
     expect(call).toContain("uses: ./.github/workflows/release.yml");
-    expect(call).toContain("sha: ${{ needs.preflight.outputs.sha || github.sha }}");
+    // The promoted commit (DEPLOY_SHA from ci/resolve-promotion-sha.mjs), never main's tip.
+    expect(call).toContain("sha: ${{ needs.preflight.outputs.sha }}");
+    expect(call).not.toContain("github.sha");
+    expect(deploy).toMatch(/^ {6}sha: \$\{\{ steps\.target\.outputs\.sha \}\}$/m);
     expect(call).toMatch(/^ {4}permissions:\n {6}contents: write[^\n]*\n(?! {6})/m);
   });
 

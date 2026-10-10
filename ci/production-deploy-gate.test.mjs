@@ -432,8 +432,12 @@ test("both Environment gate jobs inherit contents and Actions read permissions",
     "utf8",
   );
   assert.match(workflow, /^permissions:\n  contents: read\n  actions: read\n/m);
+  // The post-deploy `release` call (release.yml) is the only job override: it
+  // runs after both gate jobs and needs only contents: write to tag the commit.
+  const release = workflow.slice(workflow.indexOf("\n  release:\n"));
+  assert.match(release, /^ {4}permissions:\n {6}contents: write[^\n]*\n(?! {6})/m);
   assert.ok(
-    !/^ {4,}permissions:/m.test(workflow),
+    !/^ {4,}permissions:/m.test(workflow.slice(0, workflow.indexOf("\n  release:\n"))),
     "job overrides must not drop inherited Actions read",
   );
   assert.match(workflow, /^  preflight:/m);

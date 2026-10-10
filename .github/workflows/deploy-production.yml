@@ -149,11 +149,10 @@ jobs:
   release:
     name: release
     # Tag the commit that is now live and publish its notes (release.yml).
-    # preflight.outputs.sha is the resolved promotion SHA when present; a
-    # plain dispatch deploys github.sha.
+    # preflight.outputs.sha is the promoted commit (DEPLOY_SHA), never main's tip.
     needs: [preflight, deploy-production]
     permissions:
       contents: write # Create the tag and its GitHub Release.
     uses: ./.github/workflows/release.yml
     with:
-      sha: ${{ needs.preflight.outputs.sha || github.sha }}
+      sha: ${{ needs.preflight.outputs.sha }}
