@@ -13,6 +13,8 @@ export type RosterSort = "status" | "answered";
 export type RosterQuery = { q: string; sort: RosterSort; order: SortOrder; page: number };
 export type JoinAttemptsQuery = { outcome: string; q: string; page: number };
 export const JOIN_ATTEMPT_PAGE_SIZE = 100;
+export type ActivityLogQuery = { subject: string; causer: string; page: number };
+export const ACTIVITY_LOG_PAGE_SIZE = 50;
 /** The RSVP roster reuses the 100-row admin convention. */
 export const ROSTER_PAGE_SIZE = 100;
 
@@ -51,6 +53,23 @@ export function parseJoinAttemptsQuery(params: ListParams): JoinAttemptsQuery {
   return { outcome: params.outcome ?? "", q: (params.q ?? "").trim(), page: validPage ? page : 1 };
 }
 
+export function parseActivityLogQuery(params: ListParams): ActivityLogQuery {
+  const page = Number(params.page);
+  // PostgreSQL OFFSET is a signed bigint; keep arithmetic exact in JS too.
+  const validPage =
+    /^[1-9]\d*$/.test(params.page ?? "") &&
+    Number.isSafeInteger(page) &&
+    Number.isSafeInteger((page - 1) * ACTIVITY_LOG_PAGE_SIZE);
+  return {
+    // PostgreSQL text cannot contain NUL; retain the rest as literal input.
+    // Spelled with fromCharCode so the NUL survives transports that decode
+    // backslash-u escapes in transit.
+    subject: (params.subject ?? "").replaceAll(String.fromCharCode(0), "").trim(),
+    causer: (params.causer ?? "").replaceAll(String.fromCharCode(0), "").trim(),
+    page: validPage ? page : 1,
+  };
+}
+
 export function featuredListUrl(
   query: FeaturedListQuery,
   patch: Partial<FeaturedListQuery> = {},
@@ -82,6 +101,13 @@ export function joinAttemptsUrl(query: JoinAttemptsQuery, page: number): string 
   return `/admin/join-attempts?${params}`;
 }
 
+export function activityLogUrl(query: ActivityLogQuery, page: number): string {
+  const params = new URLSearchParams({ page: String(page) });
+  if (query.subject) params.set("subject", query.subject);
+  if (query.causer) params.set("causer", query.causer);
+  return `/admin/activity-log?${params}`;
+}
+
 /** Zero-row copy: filtered empties name the filters, genuine empties invite creation. */
 export function featuredEmptyText(query: FeaturedListQuery): string {
   return query.q || query.published
@@ -92,4 +118,9 @@ export function featuredEmptyText(query: FeaturedListQuery): string {
 /** Zero-row copy for the RSVP roster on the event edit page. */
 export function rosterEmptyText(query: RosterQuery): string {
   return query.q ? "No RSVPs match this member search." : "No RSVPs yet.";
+}
+
+/** Zero-row copy for the activity-log viewer. */
+export function activityLogEmptyText(query: ActivityLogQuery): string {
+  return query.subject || query.causer ? "No activity matches these filters." : "No activity yet.";
 }

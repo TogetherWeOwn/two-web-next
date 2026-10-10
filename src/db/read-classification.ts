@@ -44,12 +44,24 @@ export function validateNonSensitiveRead(
     if (!rosterCountUnfiltered.test(query) && !rosterCountFiltered.test(query)) refuseMemberRead();
     return;
   }
-  if (classification !== "events" && classification !== "featured") {
+  if (
+    classification !== "events" &&
+    classification !== "featured" &&
+    classification !== "activity-log"
+  ) {
     if (query !== fixedStatements[classification]) refuseMemberRead();
     return;
   }
   if (classification === "featured" && fields?.length && query === featuredEditRead) return;
-  const table = classification === "events" ? "events" : "featured_contents";
+  const table =
+    classification === "events"
+      ? "events"
+      : classification === "featured"
+        ? "featured_contents"
+        : "activity_log";
+  // The viewer never renders the dirty before/after map: refuse any statement
+  // that selects it, so a future projection cannot leak raw properties JSON.
+  if (classification === "activity-log" && /\bproperties\b/i.test(query)) refuseMemberRead();
   if (
     !fields?.length ||
     fields.some(({ field }) => !is(field, Column) || getTableName(field.table) !== table)

@@ -240,6 +240,7 @@ const MATRIX: Case[] = [
     format: "html" as const,
   })),
   ...[
+    "/admin/activity-log",
     "/admin/join-attempts",
     "/admin/join-attempts/:id",
     "/admin/events",

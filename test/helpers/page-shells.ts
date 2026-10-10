@@ -27,6 +27,7 @@ export const HTML_READS = [
   "/profile",
   "/members/:user",
   "/admin",
+  "/admin/activity-log",
   "/admin/events",
   "/admin/events/new",
   "/admin/events/:key",
@@ -202,6 +203,13 @@ export function pageShellFixture(status = "published") {
       sql.includes("from rsvps")
     )
       return { rows: [] };
+    // The activity-log viewer selects an explicit 7-column projection that
+    // never includes `properties`; one null-causer system row keeps the page
+    // shell covered without inventing an access-log subject.
+    if (sql.includes('from "activity_log"'))
+      return {
+        rows: [[1, "Fixture activity", "event", "1", null, "created", now.toISOString()]],
+      };
     if (
       sql.includes('from "rsvps"') ||
       sql.includes('from "event_search_log"') ||

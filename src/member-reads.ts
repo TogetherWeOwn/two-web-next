@@ -15,6 +15,7 @@ type Capture = {
 export type NonSensitiveRead =
   | "events"
   | "featured"
+  | "activity-log"
   | "join-funnel"
   | "going-counts"
   | "roster-count"
