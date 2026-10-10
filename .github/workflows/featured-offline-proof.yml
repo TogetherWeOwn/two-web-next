@@ -57,6 +57,7 @@ jobs:
             ".github/workflows/featured-offline-proof.yml" \
             "ci/featured-proof/**" \
             "src/admin/pages.tsx" \
+            "src/admin/pages/**" \
             "src/admin/routes.tsx" \
             "src/featured-status.tsx" \
             "src/pages.tsx" \
