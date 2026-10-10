@@ -26,9 +26,12 @@ screenshots are uploaded as `a11y-evidence` even on failure (14-day retention).
 - Public pages, homepage notices, event list/calendar/search/no-results/past
   states, published/draft/cancelled event details, owner profile + validation
   alert, another member's profile, moderator admin pages and missing records are
-  scanned at 360×780 and 1280×900. The matrix has 50 cases / 100 scans,
+  scanned at 360×780 and 1280×900. The matrix has 63 cases / 126 scans,
   including seeded and missing moderator join-attempt details, populated counts
   and profile stats/milestones, and explicit unavailable-counts/stats cases.
+  The extra states cover an archive page beyond the last seeded page, a selected
+  calendar month other than the fixture default, and freeze/expired-write banners
+  separately and together on the about page.
 - Branded 404/429/500/503 handlers are exposed by **test-only** routes in
   `ci/a11y-worker.ts`. Production configuration still points at `src/worker.ts`.
 - Canonical migrations and synthetic users/events/RSVPs/featured/join-attempt
@@ -59,6 +62,14 @@ screenshots are uploaded as `a11y-evidence` even on failure (14-day retention).
   Another-member coverage includes one-day/former-member/empty-milestone copy.
   Query-spy regressions run the production stats reader and prove zero shared
   DB reads. Missing or hidden populated sections fail even with HTTP 200.
+  Archive overflow asserts page 99 is beyond the seeded last page and shows its
+  out-of-range copy; the navigated calendar asserts the December 2099 heading and
+  grid. The test-only worker reads a per-case header to toggle the freeze flag,
+  with dates from the generated audit config. The runner supplies a locally signed
+  one-shot expired-write cookie using the fixture's session secret. Each banner
+  case asserts its own notice is visible and the other is absent unless both are
+  requested. These content checks run before axe; no production route or config
+  changes are needed.
 - The runner stops Wrangler, closes its clients and drops only its own schema
   on completion; run-owned scratch is removed. SIGINT/SIGTERM seal resource
   acquisition and join in-flight setup before cleanup. Signal and `finally`
@@ -95,7 +106,7 @@ marks incomplete still need human/manual assessment; that is outside this slice.
 
 ## Acceptance / reproduction
 
-- **Given** seeded local fixtures, **when** `npm run a11y` runs, **then** all 100
+- **Given** seeded local fixtures, **when** `npm run a11y` runs, **then** all 126
   document scans pass with zero WCAG A/AA violations and a rejected sentinel.
 - **Given** populated homepage fixtures, **when** either viewport renders,
   **then** the report records assertions for member/online counts and all five
@@ -127,5 +138,3 @@ serial with separate sessions; no concurrency change ships. Performance: 15-minu
 CI timeout bounds the audit, not a production performance budget. Compatibility:
 existing production routes/guards and plain-form fallback stay intact. Telemetry:
 local response log + JSON/table/screenshots. Screen-reader assessment: N/A here.
-
-Refs: TOG-10844
