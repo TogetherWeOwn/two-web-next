@@ -22,21 +22,18 @@ Global middleware runs in this order for every request
 ([src/index.tsx](../src/index.tsx)):
 
 1. Request logging plus static security headers and the staging robots tag,
-   with handler errors settled to the branded 500 (`app.use` at line 160).
-2. `trustHosts()` at line 176: refuses foreign `Host` values before routing.
-3. `sameOrigin` at line 179, `authStatusScript` at line 180,
-   `expiredWriteBanner` at line 181, `freezeBanner` at line 182.
+   with handler errors settled to the branded 500 (`app.use`).
+2. `trustHosts()`: refuses foreign `Host` values before routing.
+3. `sameOrigin`, `authStatusScript`, `expiredWriteBanner`, `freezeBanner`.
 
 Route-scoped middleware applies per route instead: body-size budgets on the
 agent-events and logout/QA posts, admission and throttles on the agent
 ingress, and the QA gate on the staging-only QA sign-in.
 
 Routes are a mix of direct handlers and mounted sub-apps
-([src/index.tsx](../src/index.tsx)): the join journey (`registerJoinRoutes`,
-line 481), `POST /csp-reports` (line 547), `POST /api/agent-events`
-(line 549), the error handlers (line 614), `/admin` (line 764),
-`/` for profiles (line 768), event routes (line 771), and the alert probe
-(line 831).
+([src/index.tsx](../src/index.tsx)): the join journey (`registerJoinRoutes`),
+`POST /csp-reports`, `POST /api/agent-events`, the error handlers, `/admin`,
+`/` for profiles, event routes, and the alert probe.
 
 There is no global database pool. Each request builds a short-lived client
 from `databaseUrl(c.env)` with `databaseOptions`
