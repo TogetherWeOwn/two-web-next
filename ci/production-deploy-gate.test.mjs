@@ -571,10 +571,14 @@ const autoEnvironment = {
   deployment_branch_policy: { protected_branches: false, custom_branch_policies: true },
   protection_rules: [{ type: "branch_policy" }],
 };
+// workflow_run runs record main's tip as head_sha; the run-name names the deployed commit.
+const tipSha = "c".repeat(40);
 function stagingRun(file, id, overrides = {}) {
   return {
     id,
-    head_sha: dispatchSha,
+    head_sha: tipSha,
+    display_title:
+      file === "deploy.yml" ? `deploy ${dispatchSha}` : `e2e-staging deploy ${dispatchSha}`,
     head_branch: "main",
     path: `.github/workflows/${file}`,
     head_repository: { full_name: "fixture/repo" },
@@ -600,11 +604,18 @@ function stubAutoApi(staging, environment = autoEnvironment, seen = {}) {
     for (const file of ["deploy.yml", "e2e-staging.yml"]) {
       if (parsed.pathname.endsWith(`/workflows/${file}/runs`)) {
         seen[file] = (seen[file] ?? 0) + 1;
-        assert.equal(parsed.searchParams.get("head_sha"), dispatchSha);
+        // head_sha is main's tip for workflow_run runs: never filter on it.
+        assert.equal(parsed.searchParams.get("head_sha"), null);
         assert.equal(parsed.searchParams.get("branch"), "main");
-        const runs = staging[file];
+        const runs = parsed.searchParams.get("page") === "1" ? staging[file] : [];
         return { ok: true, json: async () => ({ total_count: runs.length, workflow_runs: runs }) };
       }
+    }
+    const jobsOf = parsed.pathname.match(/\/actions\/runs\/(\d+)\/jobs$/)?.[1];
+    // Only e2e-staging run ids answer here; CI run job lookups fall through.
+    if (jobsOf && (staging["e2e-staging.yml"] ?? []).some((run) => String(run.id) === jobsOf)) {
+      const conclusion = staging.journeys?.[jobsOf] ?? "success";
+      return { ok: true, json: async () => ({ jobs: [{ name: "staging-journeys", conclusion }] }) };
     }
     return ci(url, init);
   };
@@ -660,8 +671,18 @@ for (const [name, pattern, mutate] of [
   ],
   [
     "evidence for another SHA",
-    /deploy\.yml evidence revision\/branch\/workflow mismatch/,
-    (s) => (s["deploy.yml"][0].head_sha = otherSha),
+    /Missing or incomplete exact-SHA deploy\.yml/,
+    (s) => (s["deploy.yml"][0].display_title = `deploy ${otherSha}`),
+  ],
+  [
+    "a manual e2e-staging run (tests whatever staging serves)",
+    /Missing or incomplete exact-SHA e2e-staging\.yml/,
+    (s) => (s["e2e-staging.yml"][0].display_title = `e2e-staging ${dispatchSha}`),
+  ],
+  [
+    "e2e-staging that skipped its journeys",
+    /e2e-staging\.yml run 200 did not pass staging-journeys/,
+    (s) => (s.journeys = { 200: "skipped" }),
   ],
   [
     "evidence from another branch",
@@ -745,4 +766,21 @@ test("refuses a missing or malformed DEPLOY_SHA before any API call", async () =
       /DEPLOY_SHA must be a full 40-hex commit/,
     );
   }
+});
+
+test("rollback-production passes the checked-out commit as DEPLOY_SHA to both gate steps", () => {
+  const rollback = readFileSync(
+    new URL("../.github/workflows/rollback-production.yml", import.meta.url),
+    "utf8",
+  );
+  const gates = rollback.split("run: node ci/production-deploy-gate.mjs\n").slice(1);
+  assert.equal(gates.length, 2);
+  for (const gate of gates) {
+    assert.match(gate.split("\n      - ")[0], /DEPLOY_SHA: \$\{\{ github\.sha \}\}/);
+  }
+});
+
+test("CI runs the promotion resolver selftest beside the production gate selftest", () => {
+  const ci = readFileSync(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8");
+  assert.match(ci, /run: node --test ci\/resolve-promotion-sha\.test\.mjs\n/);
 });

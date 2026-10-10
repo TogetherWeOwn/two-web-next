@@ -13,7 +13,11 @@ import { appendFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 
 const shaPattern = /^[0-9a-f]{40}$/;
-const titleSha = /\b([0-9a-f]{40})$/;
+const titleSha = /^e2e-staging deploy ([0-9a-f]{40})$/;
+
+// Run-names (see the workflow headers): the deployed commit is the title's SHA.
+export const deployTitle = (sha) => `deploy ${sha}`;
+export const e2eTitle = (sha) => `e2e-staging deploy ${sha}`;
 
 export async function resolvePromotionSha({ repository, token, fetchImpl = fetch, pages = 5 }) {
   async function get(path) {

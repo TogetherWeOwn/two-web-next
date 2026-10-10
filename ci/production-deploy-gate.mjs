@@ -2,6 +2,7 @@ import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
+import { deployTitle, e2eTitle } from "./resolve-promotion-sha.mjs";
 import { requireSuccessfulCi } from "./staging-deploy-gate.mjs";
 import { readWranglerConfig } from "./wrangler-config.mjs";
 
@@ -61,38 +62,47 @@ export const stagingEvidenceWorkflows = ["deploy.yml", "e2e-staging.yml"];
 // Automated approval evidence: for each staging workflow, the most recent run on
 // the deployment SHA must be a completed success. An older success does not
 // count if a later run on the same SHA failed or is still running.
+// deploy.yml and e2e-staging.yml run on workflow_run, so their API head_sha is
+// main's tip when they triggered, not the deployed commit. Their run-names carry
+// the deployed SHA (deploy <sha>, e2e-staging deploy <sha>); evidence joins on
+// that. The newest run per title decides, and the e2e run must have actually
+// passed staging-journeys (it concludes success with the job skipped).
 export async function requireStagingEvidence(
   { repository, sha },
-  { token, fetchImpl = fetch, workflows = stagingEvidenceWorkflows } = {},
+  { token, fetchImpl = fetch, workflows = stagingEvidenceWorkflows, pages = 3 } = {},
 ) {
-  const evidence = [];
-  for (const file of workflows) {
-    const query = new URLSearchParams({ branch: "main", head_sha: sha, per_page: "100" });
-    const response = await fetchImpl(
-      `https://api.github.com/repos/${repository}/actions/workflows/${file}/runs?${query}`,
-      {
-        headers: {
-          Authorization: `Bearer ${token}`,
-          Accept: "application/vnd.github+json",
-          "X-GitHub-Api-Version": "2022-11-28",
-        },
-        redirect: "error",
-        signal: AbortSignal.timeout(10_000),
+  async function get(path) {
+    const response = await fetchImpl(`https://api.github.com/repos/${repository}${path}`, {
+      headers: {
+        Authorization: `Bearer ${token}`,
+        Accept: "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
       },
-    );
+      redirect: "error",
+      signal: AbortSignal.timeout(10_000),
+    });
     if (!response.ok) {
       throw new Error(`Staging evidence request failed (HTTP ${response.status})`);
     }
-    const result = await response.json();
-    const runs = result.workflow_runs ?? [];
-    if (!runs.length || result.total_count !== runs.length) {
+    return response.json();
+  }
+  const titles = { "deploy.yml": deployTitle(sha), "e2e-staging.yml": e2eTitle(sha) };
+  const evidence = [];
+  for (const file of workflows) {
+    const runs = [];
+    for (let page = 1; page <= pages; page += 1) {
+      const query = new URLSearchParams({ branch: "main", per_page: "100", page: String(page) });
+      const batch = (await get(`/actions/workflows/${file}/runs?${query}`)).workflow_runs ?? [];
+      runs.push(...batch.filter((run) => run.display_title === titles[file]));
+      if (batch.length < 100) break;
+    }
+    if (!runs.length) {
       throw new Error(`Missing or incomplete exact-SHA ${file} evidence`);
     }
     if (
       !runs.every(
         (run) =>
           Number.isSafeInteger(run.id) &&
-          run.head_sha === sha &&
           run.head_branch === "main" &&
           run.path === `.github/workflows/${file}` &&
           run.head_repository?.full_name === repository,
@@ -103,6 +113,12 @@ export async function requireStagingEvidence(
     const latest = runs.reduce((a, b) => (b.id > a.id ? b : a));
     if (latest.status !== "completed" || latest.conclusion !== "success") {
       throw new Error(`Latest ${file} run on the deployment SHA is not successful`);
+    }
+    if (file === "e2e-staging.yml") {
+      const { jobs = [] } = await get(`/actions/runs/${latest.id}/jobs?per_page=100`);
+      if (jobs.find((job) => job.name === "staging-journeys")?.conclusion !== "success") {
+        throw new Error(`e2e-staging.yml run ${latest.id} did not pass staging-journeys`);
+      }
     }
     evidence.push({ workflow: file, runId: latest.id });
   }
