@@ -175,6 +175,14 @@ jobs:
           retention-days: 14
       - name: Profile native and island Unicode regressions (memory fixtures)
         run: A11Y_BROWSER_TESTS=true npx vitest run test/profile-native-length.test.ts
+      # The suite skips unless ADMIN_EVENT_BROWSER_TESTS is "true"; the verifier
+      # fails the step when any of its 48 browser cases skipped or went missing.
+      - name: Admin event native Unicode regressions (intercepted fixtures, no network or DB)
+        env:
+          ADMIN_EVENT_BROWSER_TESTS: "true"
+        run: |
+          npx vitest run test/admin-event-native-unicode.test.ts --reporter=default --reporter=json --outputFile.json=artifacts/a11y/admin-native-unicode.json
+          node ci/a11y-require-executed.mjs artifacts/a11y/admin-native-unicode.json "native admin event text limits" 48
       - name: WCAG 2.2 AA (local fixtures, no external services)
         env:
           DEBUG: pw:browser
