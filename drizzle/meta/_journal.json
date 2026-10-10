@@ -162,6 +162,13 @@
       "when": 1791347535034,
       "tag": "1021_discord-event-snapshots",
       "breakpoints": true
+    },
+    {
+      "idx": 23,
+      "version": "7",
+      "when": 1791599802458,
+      "tag": "1022_agent-event-audits-prune-idx",
+      "breakpoints": true
     }
   ]
 }
