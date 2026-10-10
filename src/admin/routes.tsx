@@ -39,6 +39,7 @@ import { bufferedMemberHtml, bufferedMemberText } from "../member-reads";
 import { EVENT_PAGE_SIZE, parseEventListQuery } from "./event-list";
 import {
   ACTIVITY_LOG_PAGE_SIZE,
+  FEATURED_PAGE_SIZE,
   JOIN_ATTEMPT_PAGE_SIZE,
   parseActivityLogQuery,
   parseFeaturedListQuery,
@@ -481,11 +482,15 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
     const db = await dbOr503(c);
     if (!db) return bufferedMemberText(c, "Admin temporarily unavailable", 503);
     const query = parseFeaturedListQuery(c.req.query());
-    const rows = await listFeatured(db, {
+    const fetched = await listFeatured(db, {
       ...query,
       published: query.published ? query.published === "1" : undefined,
     });
-    return bufferedMemberHtml(c, <FeaturedPage rows={rows} query={query} />);
+    const rows = fetched.slice(0, FEATURED_PAGE_SIZE);
+    return bufferedMemberHtml(
+      c,
+      <FeaturedPage rows={rows} query={query} hasNext={fetched.length > FEATURED_PAGE_SIZE} />,
+    );
   });
 
   admin.get("/featured/new", (c) => {
