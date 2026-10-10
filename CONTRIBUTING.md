@@ -28,6 +28,7 @@ version.
   followed by digits), private URLs, tokens or secrets in any title, body, commit,
   comment or branch name. `pr-lint` warns when it finds a card ID in the title, body
   or a commit subject, and in the branch name in any letter case (`qa/tog-123-x`).
+- Every PR, including docs-only and draft heads, must not increase the total count of internal card IDs and instance-UI links in tracked files versus its base; `pr-lint` enforces this with named lint-fixture exclusions only.
 - Be honest about the tests. Give the exact commands you ran and their results in
   Verification, and say what you did not run. Never claim a green run you did not see.
 - Address every review finding, or reply with why it does not apply.
