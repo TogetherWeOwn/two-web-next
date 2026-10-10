@@ -18,10 +18,15 @@ const cancels = (text: string) =>
   );
 // A bare `cancel-in-progress: true` on a workflow that also runs on push to main
 // is only safe when its group is per SHA (main pushes then never share a group).
-const pushesMain = (text: string) => /\n  push:\n    branches: \[main\]/.test(triggers(text));
+const pushesMain = (text: string) => /(^|\n)  push:\n    branches: \[main\]/.test(triggers(text));
 const bareCancel = (text: string) => /\n  cancel-in-progress: true\n/.test(text);
 const groupPerSha = (text: string) =>
   /\nconcurrency:\n  group: [^\n]*github\.sha[^\n]*\n/.test(text);
+
+// release.yml keeps one fixed `release` group on purpose: release-please runs
+// must never overlap on the release PR, and every run re-reads main, so a
+// scheduled run replacing a pending push run still covers the same main state.
+const SCHEDULE_SHARES_MAIN_GROUP = new Set(["release.yml"]);
 
 describe("workflow concurrency", () => {
   it("cancels superseded runs of every pull_request workflow", () => {
@@ -41,7 +46,12 @@ describe("workflow concurrency", () => {
     // With the default queue, a newly queued run cancels any PENDING run in its
     // group, so a nightly sharing main's group would replace a waiting push run.
     const offenders = workflows
-      .filter(({ text }) => pushesMain(text) && /\n  schedule:\n/.test(triggers(text)))
+      .filter(
+        ({ name, text }) =>
+          pushesMain(text) &&
+          /(^|\n)  schedule:\n/.test(triggers(text)) &&
+          !SCHEDULE_SHARES_MAIN_GROUP.has(name),
+      )
       .filter(({ text }) => !/\n  group: [^\n]*github\.event_name == 'schedule'[^\n]*\n/.test(text))
       .map(({ name }) => name);
     expect(offenders).toEqual([]);
