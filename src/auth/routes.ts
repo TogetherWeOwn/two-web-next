@@ -20,6 +20,7 @@ import {
   isProviderOutage,
 } from "../discord";
 import type { Env } from "../env";
+import { STATE_TTL_SECONDS } from "../index";
 import { safeNext } from "../join/service";
 import { QA_HEADER, qaEnabled, qaIdentity, qaTokenMatches } from "../qa";
 import {
@@ -40,8 +41,6 @@ import { consumeExpiredWrite, flashExpiredWrite, recoveryLanding } from "../writ
 
 export const SESSION_COOKIE = "__Host-two_session";
 const STATE_COOKIE = "__Host-two_oauth_state";
-// Re-exported by src/index.tsx so existing `from "../src/index"` imports keep working.
-export const STATE_TTL_SECONDS = 600;
 
 type Ctx = Context<{ Bindings: Env }>;
 

@@ -57,9 +57,9 @@ import { freezeBanner } from "./freeze-banner";
 export { rulesLastUpdated } from "./rules-last-updated";
 
 // The session cookie name is defined once in ./auth/routes (it owns logout).
-// STATE_TTL_SECONDS is re-exported here so existing `from "../src/index"`
-// imports keep working.
-export { STATE_TTL_SECONDS } from "./auth/routes";
+// The OAuth state lifetime stays defined here: the privacy-numbers pin only
+// allows STATE_TTL_SECONDS to originate from this module (or join/route).
+export const STATE_TTL_SECONDS = 600;
 
 const app = new Hono<{ Bindings: Env }>();
 
