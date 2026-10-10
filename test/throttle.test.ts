@@ -21,6 +21,14 @@ const EXEMPT: Record<string, string> = {
     "HTML adapter invokes the same PUT/DELETE handlers and transactional 12/min RSVP bucket (W10)",
   "PATCH /members/:user": "in-handler 30/min profile-write bucket (W7)",
   "POST /members/:user": "in-handler 30/min profile-write bucket (W7)",
+  "POST /admin/queue/source-evidence/:id":
+    "evidence-bearer refusal; DB-free 405 before any body parse or state touch",
+  "PUT /admin/queue/source-evidence/:id":
+    "evidence-bearer refusal; DB-free 405 before any body parse or state touch",
+  "PATCH /admin/queue/source-evidence/:id":
+    "evidence-bearer refusal; DB-free 405 before any body parse or state touch",
+  "DELETE /admin/queue/source-evidence/:id":
+    "evidence-bearer refusal; DB-free 405 before any body parse or state touch",
 };
 
 describe("every mutating route is throttled", () => {

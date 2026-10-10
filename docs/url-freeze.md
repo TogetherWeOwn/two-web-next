@@ -175,6 +175,9 @@ role/owner/bearer/QA behavioral tests prove authorization. `public-draft-moderat
 public records are public, drafts require a moderator; `member-decoy` means genuine
 RSVP writes require membership but honeypot decoys intentionally bypass auth.
 `oauth-state` is an OAuth callback's signed state, not an existing login session.
+`evidence-bearer` is the session-free source-evidence verifier: a runtime-only
+one-time bearer token plus the authorized incident ID and expiry, staging-only
+and default-off. No moderator session, no `activity_log` write.
 Public routes may read optional sessions; this does not promise zero DB queries.
 
 | Registered method + Hono pattern | Auth class | Test reference / mapping |
@@ -185,6 +188,7 @@ Public routes may read optional sessions; this does not promise zero DB queries.
 | `ALL /events/:key/rsvp` | public | rsvp: 405 fallback, not a public read |
 | `ALL /members/*` | member | member-exposure: gate + access log |
 | `ALL /profile` | member | member-exposure: gate + access log |
+| `DELETE /admin/queue/source-evidence/:id` | evidence-bearer | source-evidence-route: write verbs refuse before any middleware or source read |
 | `DELETE /events/:key/rsvp` | member-decoy | rsvp: owner withdrawal + decoy |
 | `GET /` | public | app: home / optional session |
 | `GET /.well-known/security.txt` | public | security-txt: RFC 9116 contact, database-free leaf |
@@ -200,6 +204,7 @@ Public routes may read optional sessions; this does not promise zero DB queries.
 | `GET /admin/join-attempts` | moderator | admin-reads: join audit viewer |
 | `GET /admin/join-attempts/:id` | moderator | admin-join-attempt: read-only join audit detail |
 | `GET /admin/queue/failed/:id/preview` | staging-operator | queue-preview-route / queue-preview-postgres: one-row snapshot advice only; the guarded apply lives on the redispatch route |
+| `GET /admin/queue/source-evidence/:id` | evidence-bearer | source-evidence-route / source-evidence-postgres / source-evidence-statements: evidence-only source/cache proof; session-free, no audit write, inert without runtime-only settings |
 | `GET /auth/discord` | public | app: OAuth start; legacy `/auth/discord/redirect` now temporarily redirects here |
 | `GET /auth/discord/callback` | oauth-state | app: sign-in callback |
 | `GET /discord` | public | seo: invite redirect |
@@ -224,6 +229,8 @@ Public routes may read optional sessions; this does not promise zero DB queries.
 | `GET /rules` | public | seo: frozen funnel leaf |
 | `GET /sitemap_index.xml` | public | seo: frozen sitemap |
 | `GET /up` | public | up: always-200 queue health |
+| `OPTIONS /admin/queue/source-evidence/:id` | evidence-bearer | source-evidence-route: write verbs refuse before any middleware or source read |
+| `PATCH /admin/queue/source-evidence/:id` | evidence-bearer | source-evidence-route: write verbs refuse before any middleware or source read |
 | `PATCH /events/:key` | moderator | events: JSON update |
 | `PATCH /members/:user` | member-owner | profiles: self-only edit |
 | `POST /__probe/alert` | staging-token | alerts: QA-only request + poison-job drill; expected 500, no production seam |
@@ -235,6 +242,7 @@ Public routes may read optional sessions; this does not promise zero DB queries.
 | `POST /admin/featured/:id` | moderator | admin: featured update |
 | `POST /admin/featured/:id/delete` | moderator | admin: featured delete |
 | `POST /admin/queue/failed/:id/redispatch` | staging-operator | queue-redispatch-route / queue-redispatch-postgres: one-row guarded re-dispatch of replay advice only; refusals and stale rows are never deleted, reset or re-budgeted |
+| `POST /admin/queue/source-evidence/:id` | evidence-bearer | source-evidence-route: write verbs refuse before any middleware or source read |
 | `POST /api/agent-events` | machine-bearer | agent-events: W14 machine ingress |
 | `POST /auth/qa/:identity` | staging-token | app: deliberate POST divergence from legacy GET |
 | `POST /csp-reports` | public | csp-reports: no-store violation sink |
@@ -243,6 +251,7 @@ Public routes may read optional sessions; this does not promise zero DB queries.
 | `POST /events/:key/publish` | moderator | events: publish |
 | `POST /logout` | public | app: optional session revoke + origin check |
 | `POST /members/:user` | member-owner | profiles: `_method=PATCH` form adapter |
+| `PUT /admin/queue/source-evidence/:id` | evidence-bearer | source-evidence-route: write verbs refuse before any middleware or source read |
 | `PUT /events/:key/rsvp` | member-decoy | rsvp: owner answer + decoy |
 
 The diagnostic aliases were removed by [TOG-10852](/TOG/issues/TOG-10852).

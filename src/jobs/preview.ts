@@ -2,7 +2,7 @@ import postgres from "postgres";
 import { databaseOptions, databaseUrl } from "../db/connection";
 import type { Env } from "../env";
 import { eventKeyAllowed } from "../events/keys";
-import { pgEventStore } from "./events";
+import { pgEventStore, type SourceReadReport } from "./events";
 import { eventKeyFromFailedJob, reconcileFailedJob, type ReplayDisposition } from "./replay";
 
 export type FailedJobPreview = {
@@ -46,6 +46,35 @@ export async function previewFailedJobWithSql(
 }
 
 /**
+ * Evidence-only verifier support. When provided, every source SELECT executed
+ * inside the snapshot reports its statement name, row count and
+ * `clock_timestamp()` marker. Absent by default; the public advice path never
+ * passes it and its return shape is unchanged.
+ */
+export type SourceEvidenceSink = {
+  onSourceRead?: (report: SourceReadReport) => void;
+};
+
+/**
+ * Source-event existence check with the same statement, isolation and marker
+ * as the inline query it replaces. Reports to the evidence sink when present.
+ */
+async function readSourceEvent(
+  tx: postgres.TransactionSql,
+  eventKey: string,
+  evidence?: SourceEvidenceSink,
+): Promise<{ found: boolean }> {
+  const rows = await tx`select 1, clock_timestamp() as preview_read_at from events
+        where event_key = ${eventKey} limit 1`;
+  evidence?.onSourceRead?.({
+    statement: "events_by_key_exists",
+    rowCount: rows.length,
+    readAt: (rows[0] as { preview_read_at?: unknown } | undefined)?.preview_read_at ?? null,
+  });
+  return { found: rows.length > 0 };
+}
+
+/**
  * Same read-only snapshot as the advice, plus the rebuildable identity for a
  * guarded apply. Same statements, same transaction posture; only the return
  * shape keeps what the public advice strips.
@@ -54,6 +83,7 @@ export async function loadReplayCandidateWithSql(
   sql: postgres.Sql,
   failureId: number,
   appUrl: string,
+  evidence?: SourceEvidenceSink,
 ): Promise<FailedJobReplayCandidate | null> {
   if (parseFailureId(String(failureId)) !== failureId) throw new Error("invalid failure ID");
   return sql.begin("isolation level repeatable read read only", async (tx) => {
@@ -62,9 +92,17 @@ export async function loadReplayCandidateWithSql(
     const [row] = await tx`select id, left(kind, 64) as kind, left(key, 128) as key,
       failed_at, transaction_timestamp() as observed_at, clock_timestamp() as preview_read_at
       from queue_failed_jobs where id = ${failureId} limit 1`;
+    evidence?.onSourceRead?.({
+      statement: "queue_failed_jobs_by_id",
+      rowCount: row ? 1 : 0,
+      readAt: (row as { preview_read_at?: unknown } | undefined)?.preview_read_at ?? null,
+    });
     if (!row) return null;
     const failed = { kind: String(row.kind), key: row.key == null ? null : String(row.key) };
-    const events = pgEventStore(tx, { bypassReadCache: true });
+    const events = pgEventStore(tx, {
+      bypassReadCache: true,
+      ...(evidence?.onSourceRead ? { onSourceRead: evidence.onSourceRead } : {}),
+    });
     // EventStore makes this optional for other consumers. Here all three
     // checks are mandatory, even if this particular row would not use one.
     const { needsSync, pendingSync, hasFailedSync } = events;
@@ -85,13 +123,7 @@ export async function loadReplayCandidateWithSql(
         eventKey: null,
         reason: "invalid source identity; preserve dead row",
       };
-    } else if (
-      eventKey &&
-      !(
-        await tx`select 1, clock_timestamp() as preview_read_at from events
-        where event_key = ${eventKey} limit 1`
-      ).length
-    ) {
+    } else if (eventKey && !(await readSourceEvent(tx, eventKey, evidence)).found) {
       disposition = {
         action: "keep",
         eventKey,

@@ -15,6 +15,7 @@
 // - GET  /admin/join-attempts/:id    read-only attempt detail
 // - GET  /admin/activity-log         read-only activity-log viewer (R11)
 // - GET  /admin/queue/failed/:id/preview  one-row advice only
+// - GET  /admin/queue/source-evidence/:id  evidence-only source/cache proof (no session, no audit write)
 // - POST /admin/queue/failed/:id/redispatch  one-row guarded re-dispatch
 //   (replay advice only; refusals and stale rows are never deleted here)
 // - GET  /admin/featured             list, position order
@@ -34,6 +35,7 @@ import { Hono } from "hono";
 import type { Context } from "hono";
 import { queuePreviewAdmission, queuePreviewHandler, type QueuePreviewVars } from "./queue-preview";
 import { queueRedispatchHandler } from "./queue-redispatch";
+import { sourceEvidenceHandler, sourceEvidenceMethodRefused } from "./source-evidence";
 import { dbFor, type EnvWithAdminDb } from "./db";
 import { bufferedMemberHtml, bufferedMemberText } from "../member-reads";
 import { EVENT_PAGE_SIZE, parseEventListQuery } from "./event-list";
@@ -148,14 +150,32 @@ function formError(
  */
 export function adminApp(overrides?: AdminOverrides | SessionStore) {
   const admin = new Hono<Vars>();
+  // Evidence-only source/cache verifier: session-free by construction.
+  // Registered before every admin middleware (Hono composes in registration
+  // order and these handlers answer without next()), so no session lookup,
+  // guard, or preview admission runs for this path. The bearer/incident/
+  // one-hour-window admission lives in the GET handler; write verbs are refused on the
+  // same path so the method contract never depends on sibling flags. The
+  // route is inert without the runtime-only settings.
+  admin.get("/queue/source-evidence/:id", sourceEvidenceHandler);
+  // HEAD keeps standard GET-without-body semantics; it is safe here because
+  // the handler has no side effects (read-only snapshot, no audit write).
+  admin.on(
+    ["POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    "/queue/source-evidence/:id",
+    // Same wire cap as every other admin write: oversized attempts refuse
+    // before parsing, and the refusal itself never parses a payload.
+    requestBodyLimit("action"),
+    sourceEvidenceMethodRefused,
+  );
+  admin.use("/queue/*", queuePreviewAdmission);
+  admin.use("/*", adminGuard(overrides));
+  admin.get("/queue/failed/:id/preview", queuePreviewHandler);
   // Same write envelope as every other admin POST: throttle admits before
   // buffering (oversized attempts count against the bucket), the wire cap
   // refuses before parsing, and the handler itself never parses a payload
   // (dispatch always starts from the reconciled source). Only the dedicated
   // staging operator principal can reach the handler.
-  admin.use("/queue/*", queuePreviewAdmission);
-  admin.use("/*", adminGuard(overrides));
-  admin.get("/queue/failed/:id/preview", queuePreviewHandler);
   admin.post(
     "/queue/failed/:id/redispatch",
     throttle("admin-write", WRITE_THROTTLE_PER_MINUTE),

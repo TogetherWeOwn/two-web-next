@@ -56,6 +56,7 @@ export const ALERT_ROUTES = new Set([
   "/admin/join-attempts/:id",
   "/admin/queue/failed/:id/preview",
   "/admin/queue/failed/:id/redispatch",
+  "/admin/queue/source-evidence/:id",
   "/api/agent-events",
   "/auth/discord",
   "/auth/discord/callback",

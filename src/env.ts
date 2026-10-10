@@ -38,6 +38,16 @@ export type Env = AgentEventsEnv & {
   // provisioned here; both settings require independent security review.
   QUEUE_RECONCILE_PREVIEW_ENABLED?: string;
   QUEUE_RECONCILE_OPERATOR_ID?: string;
+  // Evidence-only source/cache verifier (runtime-only, never checked-in
+  // config). The bearer token, authorized incident ID, issued instant and
+  // expiry instant are provisioned for one separately authorized invocation
+  // (at most a one-hour issued-to-expiry window) and removed at teardown;
+  // merged main carries no values, leaving the route inert.
+  SOURCE_EVIDENCE_VERIFIER_ENABLED?: string;
+  SOURCE_EVIDENCE_VERIFIER_TOKEN?: string;
+  SOURCE_EVIDENCE_VERIFIER_INCIDENT_ID?: string;
+  SOURCE_EVIDENCE_VERIFIER_ISSUED_AT?: string;
+  SOURCE_EVIDENCE_VERIFIER_EXPIRES_AT?: string;
   // The staging alert probe uses the same internal queue as JobsEnv, without a DB fixture.
   INTERNAL_ACTION_QUEUE?: Queue<QueueMessage>;
   MEMBER_ACCESS_LOG_ENFORCE?: string;
