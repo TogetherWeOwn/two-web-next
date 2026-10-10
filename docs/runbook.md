@@ -1148,10 +1148,11 @@ age-delete old rows or clear unique locks as an outage workaround.
 `queue_failed_jobs` ([drizzle/1007_queue-ledger.sql](../drizzle/1007_queue-ledger.sql))
 has `id`, `job_id`, `kind`, `key`, `reason`, `failed_at` only. It has **no payload
 and no original bot idempotency key**. There is no repo replay script,
-`queue:retry` command, Wrangler message-send subcommand, or operational mutation
-entrypoint. The default-off staging preview at
+`queue:retry` command, or Wrangler message-send subcommand. The default-off staging preview at
 `GET /admin/queue/failed/:id/preview` supplies read-only one-row advice, not replay
-or discard authority. Its activation, dedicated principal, audit and custody
+or discard authority; the guarded one-row re-dispatch at
+`POST /admin/queue/failed/:id/redispatch` is the single operational apply path
+for `replay` advice. Its activation, dedicated principal, audit and custody
 prerequisites are in [queue-redrive-runbook.md](queue-redrive-runbook.md#read-only-runtime-preview-disabled-until-separately-authorized).
 The sync-event library remains proved in `test/queue-replay.test.ts`. The operator
 inspect-list-redrive loop over these rows lives in
@@ -1187,10 +1188,14 @@ The reviewed one-row library function (`reconcileFailedJob` in
 advice after checking dirty source, current-revision refusal and surviving
 pending requests. The disabled runtime preview calls only that reconciliation
 function inside a consistent read-only snapshot; it never executes the advice.
-`replayFailedSyncEvent` remains a library-only mutation helper. It reuses a due
+`replayFailedSyncEvent` reuses a due
 pending request's key or mints a fresh one, then wraps the caller's raw queue
 binding and ledger with `trackingQueue` so the new message records its ledger
-job ID. No CLI, route or operational Worker caller wires replay or discard.
+job ID. Its single operational caller is the guarded one-row re-dispatch route
+(`POST /admin/queue/failed/:id/redispatch`, documented in
+[queue-redrive-runbook.md](queue-redrive-runbook.md#guarded-one-row-re-dispatch-disabled-until-separately-authorized)).
+No CLI or other operational Worker caller wires replay; `discardFailedJob`
+remains library-only with no operational route.
 A later explicit replay requires fresh reconciliation and separate authority.
 Only after confirmed recovery should separately approved history cleanup be
 considered; this runbook intentionally provides no blind `DELETE`, fabricated
