@@ -32,6 +32,12 @@ export type Env = AgentEventsEnv & {
   // QA seam; unset elsewhere, the route 404s. `MEMBER_ACCESS_LOG_ENFORCE`
   // defaults to true (a log write failure refuses the read; "false" degrades).
   DATABASE_URL?: string;
+  // Bot database for the homepage counts' `web_v1` views (bot-owned, read-only
+  // `two_web_reader` grant). Hyperdrive binding `BOT_DB` in deployed
+  // environments; `BOT_DATABASE_URL` overrides it for local/dev use. Absent
+  // both, counts degrade to hidden — the web `DB` is never read for them.
+  BOT_DB?: { connectionString: string };
+  BOT_DATABASE_URL?: string;
   DISCORD_MODERATOR_ROLE_IDS?: string;
   QA_AUTH_TOKEN?: string;
   // Separate default-off operational read boundary. No grant or principal is
