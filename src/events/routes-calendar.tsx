@@ -13,8 +13,19 @@ import {
   parseCalendarView,
   wallMonth,
 } from "../islands/contracts";
-import { takeJoinResult } from "../return-journey";
+import { takeJoinResult, readJoinResult } from "../return-journey";
 import { MAX_QUERY_LENGTH, matchQuery, recordSearch } from "./search-log";
+import {
+  ANON_EVENTS_TTL_MS,
+  ANON_PAST_TTL_MS,
+  anonCacheGeneration,
+  anonCacheSource,
+  anonEventsKey,
+  anonPastKey,
+  isAnonCacheEligible,
+  readAnonCache,
+  writeAnonCache,
+} from "./anon-cache";
 import { discordEventsSource } from "./discord-transients";
 import {
   listCalendarPast,
@@ -55,6 +66,46 @@ export function registerCalendarRoutes(
     const past = c.req.query("past") === "1";
 
     const opts = { includeDrafts: session?.moderator ?? false, search: match };
+    // Anonymous shared entry (N6 retire): only a cookieless, session-free,
+    // search-free render with no pending join flash may serve shared bytes.
+    // The peek reads without consuming; the miss path below still consumes
+    // exactly once, and island swaps keep their pending value like today.
+    const island = c.req.header("x-two-island") === "events-calendar";
+    const flashed = island ? null : await readJoinResult(c);
+    const anonEligible = isAnonCacheEligible({
+      method: c.req.method,
+      hasCookie: c.req.header("cookie") !== undefined,
+      hasSession: session !== null,
+      searching,
+      flashed: flashed !== null,
+    });
+    const anonSource = anonEligible ? anonCacheSource(c.env) : null;
+    let anonKey: string | null = null;
+    if (anonSource) {
+      let pathAndSearch = "";
+      try {
+        const u = new URL(c.req.url);
+        pathAndSearch = u.pathname + u.search;
+      } catch {
+        pathAndSearch = "/events";
+      }
+      anonKey = anonEventsKey(c.req.method, pathAndSearch, island);
+      const hit = readAnonCache(anonKey, anonSource);
+      if (hit) {
+        // Remaining TTL, not the stored full window: a browser must never
+        // extend the entry past its origin expiry.
+        c.header(
+          "cache-control",
+          hit.cacheControl.replace(/max-age=\d+/, `max-age=${hit.maxAgeSeconds}`),
+        );
+        if (hit.vary) c.header("vary", hit.vary);
+        return c.html(hit.body, hit.status as 200);
+      }
+    }
+    // Retire generation before the first render read: a publish, edit or RSVP
+    // that commits (and retires) while this render awaits its reads must stop
+    // the stale bytes from settling below.
+    const anonGen = anonSource ? anonCacheGeneration() : 0;
     const localUpcoming = await listUpcoming(db, now, opts);
     const localPast = await listCalendarPast(db, now, opts);
 
@@ -128,7 +179,8 @@ export function registerCalendarRoutes(
     // review). Island fragment swaps must not consume it: the banner renders
     // outside the swapped zones, so a fragment would eat the flash without
     // ever displaying it — the pending value survives for the next full load.
-    const island = c.req.header("x-two-island") === "events-calendar";
+    // `island` is hoisted above the anonymous-cache lookup; `flashed` peeked
+    // there, so this consume is a no-op on the cacheable path.
     const joinResult = island ? null : await takeJoinResult(c);
     // Search analytics must run per request, not only on shared-cache misses.
     c.header(
@@ -148,7 +200,7 @@ export function registerCalendarRoutes(
     } catch {
       loginReturnTo = "/events";
     }
-    return c.html(
+    const response = await c.html(
       <EventsCalendarPage
         state={state}
         upcoming={upcoming}
@@ -164,6 +216,28 @@ export function registerCalendarRoutes(
         joinResult={joinResult}
       />,
     );
+    // Settle the shared entry only from an anonymous 200: the header guard
+    // above already forced private on session/search/flash, so a `public`
+    // prefix re-checks that no viewer state slipped into shared bytes. The
+    // generation check drops a render overtaken by a retire mid-flight; the
+    // compare-and-write is synchronous, so it is atomic within the isolate.
+    if (anonSource && anonKey && response.status === 200 && anonCacheGeneration() === anonGen) {
+      const cacheControl = response.headers.get("cache-control");
+      if (cacheControl?.startsWith("public")) {
+        writeAnonCache(
+          anonKey,
+          anonSource,
+          {
+            status: 200,
+            cacheControl,
+            vary: response.headers.get("vary"),
+            body: await response.clone().text(),
+          },
+          ANON_EVENTS_TTL_MS,
+        );
+      }
+    }
+    return response;
   });
 
   app.get("/events/past", async (c) => {
@@ -172,9 +246,37 @@ export function registerCalendarRoutes(
     const db = await dbFor(c);
     if (!db) return eventsUnavailable(c);
     const page = normalizePastPage(Number.parseInt(c.req.query("page") ?? "1", 10));
+    // Anonymous shared entry (N6 retire): the archive renders no session, no
+    // flash and no RSVP controls, so every cookieless render is shareable.
+    // Only data pages settle — empty and out-of-range renders stay uncached
+    // so a fresh archive never pins a stale "never ran" state, and keys stay
+    // bounded.
+    const pastEligible = isAnonCacheEligible({
+      method: c.req.method,
+      hasCookie: c.req.header("cookie") !== undefined,
+      hasSession: false,
+      searching: false,
+      flashed: false,
+    });
+    const pastSource = pastEligible ? anonCacheSource(c.env) : null;
+    const pastKey = pastEligible ? anonPastKey(c.req.method, page) : null;
+    if (pastSource && pastKey) {
+      const hit = readAnonCache(pastKey, pastSource);
+      if (hit) {
+        c.header(
+          "cache-control",
+          hit.cacheControl.replace(/max-age=\d+/, `max-age=${hit.maxAgeSeconds}`),
+        );
+        if (hit.vary) c.header("vary", hit.vary);
+        return c.html(hit.body, hit.status as 200);
+      }
+    }
+    // Same retire-generation guard as `/events`: an edit that commits while
+    // this archive render awaits its read must stop stale bytes settling.
+    const pastGen = pastSource ? anonCacheGeneration() : 0;
     const { rows, hasMore, totalPages } = await listPast(db, page);
     c.header("cache-control", "public, max-age=300");
-    return c.html(
+    const pastResponse = await c.html(
       <PastEventsPage
         rows={rows}
         page={page}
@@ -183,5 +285,25 @@ export function registerCalendarRoutes(
         appUrl={c.env.APP_URL}
       />,
     );
+    if (
+      pastSource &&
+      pastKey &&
+      pastResponse.status === 200 &&
+      rows.length > 0 &&
+      anonCacheGeneration() === pastGen
+    ) {
+      writeAnonCache(
+        pastKey,
+        pastSource,
+        {
+          status: 200,
+          cacheControl: pastResponse.headers.get("cache-control") ?? "public, max-age=300",
+          vary: pastResponse.headers.get("vary"),
+          body: await pastResponse.clone().text(),
+        },
+        ANON_PAST_TTL_MS,
+      );
+    }
+    return pastResponse;
   });
 }

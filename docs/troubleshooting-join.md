@@ -141,8 +141,9 @@ This guide describes the implementation, not a live staging certification:
   recovery wording, attempt recording and successful-session issuance.
 - [Join service](../src/join/service.ts): outcomes, safe return paths, throttling
   and the direct Discord add-member call.
-- [App routes](../src/index.tsx): `/auth/discord`, its callback, logout and
-  `/discord`; [page text](../src/pages.tsx): notices, join/recovery pages and FAQ.
+- [Auth routes](../src/auth/routes.ts): `/auth/discord`, its callback and
+  logout; [app routes](../src/index.tsx): `/discord`;
+  [page text](../src/pages.tsx): notices, join/recovery pages and FAQ.
 - [Role lookup](../src/roles.ts) and [rate-limit page](../src/errors.tsx).
 - [Admin routes](../src/admin/routes.tsx), [admin pages](../src/admin/pages.tsx),
   [table queries](../src/admin/table-list.ts), [admin reads](../src/admin/reads.ts)

@@ -83,7 +83,7 @@ POST paths are form actions, **not URLs to open or call manually**.
 | POST | `/admin/events/:key/cancel` | **Cancel** / **Cancel event**. |
 | POST | `/admin/events/:key/rsvp-pause` | **Pause RSVPs** without cancelling. |
 | POST | `/admin/events/:key/rsvp-reopen` | **Reopen RSVPs** on an eligible event. |
-| GET | `/admin/featured` | Featured content list, title/publication filters and sorting. |
+| GET | `/admin/featured` | Featured content list, title/publication filters, sorting and pagination. |
 | GET | `/admin/featured/new` | **New featured slot** form. |
 | POST | `/admin/featured` | **Create** a slot. |
 | GET | `/admin/featured/:id` | Edit a slot. |
@@ -244,11 +244,13 @@ To prepare or maintain an approved slot:
 
 1. Open `/admin/featured` and choose **New featured slot**, or open an existing
    title to edit. **Search titles** matches title text case-insensitively;
-   **Published** filters All/Published/Unpublished. Press **Filter** to apply.
+   **Published** filters All/Published/Unpublished. Press **Filter** to apply
+   and return to page 1.
    The list shows **Published** (`yes`/`no`), **Position**, **Window (UTC)** and
    **Last changed** (UTC), ordered by ascending position by default. **Position**
-   and **Last changed** column links toggle sorting while retaining filters.
-   There is no pagination or drag-and-drop ordering.
+   and **Last changed** column links toggle sorting while retaining filters
+   and return to page 1. Use **Previous**/**Next** for 25-row pages, which keep
+   filters and sort. There is no drag-and-drop ordering.
 2. Fill in these settings:
 
    | Field | Rule |

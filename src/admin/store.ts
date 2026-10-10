@@ -26,7 +26,7 @@ import {
   type SQL,
 } from "drizzle-orm";
 import { EVENT_PAGE_SIZE, parseEventListQuery, type EventListParams } from "./event-list";
-import { parseFeaturedListQuery } from "./table-list";
+import { FEATURED_PAGE_SIZE, parseFeaturedListQuery } from "./table-list";
 import { escapeLikeTerm } from "../islands/contracts";
 import type { Db } from "../db/index";
 import { nonSensitiveRead } from "../member-reads";
@@ -46,6 +46,7 @@ import {
   lockWaitlist,
   promoteWaitlist,
 } from "../events/waitlist";
+import { retireAnonEventCaches } from "../events/anon-cache";
 
 export type Actor = { id: string; username: string };
 
@@ -173,6 +174,9 @@ export async function createEvent(
     });
     return parent;
   });
+  // Committed: a new event can appear on the calendar once published, so the
+  // anonymous entries retire here too (N6), never on a throw above.
+  retireAnonEventCaches();
   return { row, writeBack: null };
 }
 
@@ -275,68 +279,73 @@ export async function updateEvent(
   eventKey: string,
   input: EventFormInput,
 ): Promise<{ row: EventRow; writeBack: WriteBack; childWriteBacks: NonNullable<WriteBack>[] }> {
-  return db.transaction(async (tx) => {
-    // FOR UPDATE serialises RSVP allocation and concurrent parent edits so the
-    // child shift below always sees the committed old times (no double-shift).
-    const [locked] = await tx
-      .select()
-      .from(events)
-      .where(eq(events.eventKey, eventKey))
-      .for("update");
-    if (!locked) throw new NotFoundError("event");
-    if (input.capacity !== null) {
-      const occupied = await goingCount(tx, locked.id);
-      if (input.capacity < occupied) {
-        throw new ValidationError({
-          capacity: `${CAPACITY_BELOW_GOING} Occupied seats: ${occupied}.`,
+  const result: { row: EventRow; writeBack: WriteBack; childWriteBacks: NonNullable<WriteBack>[] } =
+    await db.transaction(async (tx) => {
+      // FOR UPDATE serialises RSVP allocation and concurrent parent edits so the
+      // child shift below always sees the committed old times (no double-shift).
+      const [locked] = await tx
+        .select()
+        .from(events)
+        .where(eq(events.eventKey, eventKey))
+        .for("update");
+      if (!locked) throw new NotFoundError("event");
+      if (input.capacity !== null) {
+        const occupied = await goingCount(tx, locked.id);
+        if (input.capacity < occupied) {
+          throw new ValidationError({
+            capacity: `${CAPACITY_BELOW_GOING} Occupied seats: ${occupied}.`,
+          });
+        }
+      }
+      // Closed field list: the key is addressed by, never written through,
+      // this update (EventFormInput carries no key; forged keys never parse).
+      const [row] = await tx
+        .update(events)
+        .set({
+          title: input.title,
+          game: input.game,
+          description: input.description,
+          startsAt: input.startsAtUtc,
+          endsAt: input.endsAtUtc,
+          timezone: input.timezone,
+          location: input.location,
+          capacity: input.capacity,
+          // A moderator edit must invalidate an agent's full-field stale write.
+          agentVersion:
+            locked.agentGrantId === null ? locked.agentVersion : locked.agentVersion + 1,
+          updatedAt: new Date(),
+        })
+        .where(eq(events.eventKey, eventKey))
+        .returning();
+      if (!row) throw new Error("event update returned no row");
+      await promoteWaitlist(tx, row);
+      const changes = dirty(
+        locked as Record<string, unknown>,
+        row as unknown as Record<string, unknown>,
+      );
+      if (Object.keys(changes).length > 0) {
+        await tx.insert(activityLog).values({
+          logName: "default",
+          description: `updated event ${row.title}`,
+          subjectType: "Event",
+          subjectId: row.eventKey,
+          causerId: actor.id,
+          properties: changes,
         });
       }
-    }
-    // Closed field list: the key is addressed by, never written through,
-    // this update (EventFormInput carries no key; forged keys never parse).
-    const [row] = await tx
-      .update(events)
-      .set({
-        title: input.title,
-        game: input.game,
-        description: input.description,
-        startsAt: input.startsAtUtc,
-        endsAt: input.endsAtUtc,
-        timezone: input.timezone,
-        location: input.location,
-        capacity: input.capacity,
-        // A moderator edit must invalidate an agent's full-field stale write.
-        agentVersion: locked.agentGrantId === null ? locked.agentVersion : locked.agentVersion + 1,
-        updatedAt: new Date(),
-      })
-      .where(eq(events.eventKey, eventKey))
-      .returning();
-    if (!row) throw new Error("event update returned no row");
-    await promoteWaitlist(tx, row);
-    const changes = dirty(
-      locked as Record<string, unknown>,
-      row as unknown as Record<string, unknown>,
-    );
-    if (Object.keys(changes).length > 0) {
-      await tx.insert(activityLog).values({
-        logName: "default",
-        description: `updated event ${row.title}`,
-        subjectType: "Event",
-        subjectId: row.eventKey,
-        causerId: actor.id,
-        properties: changes,
-      });
-    }
-    const childWriteBacks = row.recurrenceFrequency
-      ? await shiftFutureChildren(tx, actor, row, locked.startsAt, locked.endsAt)
-      : [];
-    const status = toEventStatus(row.status);
-    return {
-      row,
-      writeBack: isMirrored(status) ? { eventKey: row.eventKey, status } : null,
-      childWriteBacks,
-    };
-  });
+      const childWriteBacks = row.recurrenceFrequency
+        ? await shiftFutureChildren(tx, actor, row, locked.startsAt, locked.endsAt)
+        : [];
+      const status = toEventStatus(row.status);
+      return {
+        row,
+        writeBack: isMirrored(status) ? { eventKey: row.eventKey, status } : null,
+        childWriteBacks,
+      };
+    });
+  // Committed: the edit is visible to guests on the next fetch (N6).
+  retireAnonEventCaches();
+  return result;
 }
 
 /**
@@ -405,7 +414,7 @@ export async function transitionEvent(
   eventKey: string,
   to: "published" | "cancelled",
 ): Promise<{ row: EventRow; writeBack: WriteBack }> {
-  return db.transaction(async (tx) => {
+  const result: { row: EventRow; writeBack: WriteBack } = await db.transaction(async (tx) => {
     // Share the ingress/RSVP row lock: judge the transition only after an
     // earlier writer commits, so publication cannot resurrect cancellation.
     const [locked] = await tx
@@ -444,6 +453,9 @@ export async function transitionEvent(
     });
     return { row, writeBack: { eventKey: row.eventKey, status: target } };
   });
+  // Committed: publish/cancel moves the row between guest views (N6).
+  retireAnonEventCaches();
+  return result;
 }
 
 /** Pause/reopen keeps the event published; only a changed flag needs a sync. */
@@ -454,7 +466,7 @@ export async function setRsvpOpen(
   open: boolean,
   clock: () => Date = () => new Date(),
 ): Promise<{ row: EventRow; writeBack: WriteBack }> {
-  return db.transaction(async (tx) => {
+  const result: { row: EventRow; writeBack: WriteBack } = await db.transaction(async (tx) => {
     // Share the RSVP writer's event lock. Check the clock after acquiring it,
     // so a wait that crosses the end cannot reopen an expired event.
     const [locked] = await tx
@@ -493,6 +505,9 @@ export async function setRsvpOpen(
     });
     return { row, writeBack: { eventKey: row.eventKey, status: "published" } };
   });
+  // Committed: pausing/reopening can settle the waitlist line (N6).
+  retireAnonEventCaches();
+  return result;
 }
 
 export class NotFoundError extends Error {
@@ -679,21 +694,29 @@ export async function deleteFeatured(db: Db, actor: Actor, id: number): Promise<
 
 export async function listFeatured(
   db: Db,
-  opts: { published?: boolean; q?: string; sort?: string; order?: string },
+  opts: { published?: boolean; q?: string; sort?: string; order?: string; page?: string | number },
 ): Promise<FeaturedRow[]> {
-  const query = parseFeaturedListQuery({ q: opts.q, sort: opts.sort, order: opts.order });
+  const query = parseFeaturedListQuery({
+    q: opts.q,
+    sort: opts.sort,
+    order: opts.order,
+    page: opts.page === undefined ? undefined : String(opts.page),
+  });
   const conds: SQL[] = [];
   if (opts.published !== undefined) conds.push(eq(featuredContents.isPublished, opts.published));
   if (query.q) conds.push(ilike(featuredContents.title, `%${escapeLikeTerm(query.q)}%`));
   const column =
     query.sort === "updated_at" ? featuredContents.updatedAt : featuredContents.position;
   const order = query.order === "desc" ? desc(column) : asc(column);
+  // Fetch one extra row so pagination needs no separate count query.
   return nonSensitiveRead("featured", () =>
     db
       .select()
       .from(featuredContents)
       .where(and(...conds))
-      .orderBy(order, asc(featuredContents.id)),
+      .orderBy(order, asc(featuredContents.id))
+      .limit(FEATURED_PAGE_SIZE + 1)
+      .offset((query.page - 1) * FEATURED_PAGE_SIZE),
   );
 }
 
