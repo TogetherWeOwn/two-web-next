@@ -611,7 +611,7 @@ describe("performance CI", () => {
     const workflow = readFileSync(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8");
     const check = workflow.split("\n  check:\n")[1]!.split("\n  bundle-budget:\n")[0]!;
     expect(check).toContain("name: check");
-    expect(check).toContain("needs: [a11y, lighthouse, bundle-budget, scope]");
+    expect(check).toContain("needs: [a11y, lighthouse, bundle-budget, docs-links, scope]");
     expect(check).toContain("if: always()");
     expect(check).toContain(
       'node ci/require-performance.mjs "${{ needs.lighthouse.result }}" "${{ needs.bundle-budget.result }}"',

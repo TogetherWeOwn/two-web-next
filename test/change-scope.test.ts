@@ -325,8 +325,9 @@ describe("check job", () => {
     const unguarded = steps.filter(
       (step) =>
         !step.includes("Docs-only fast pass") &&
-        // The scope guard is deliberately unconditional: pinned below.
+        // The scope and doc-link guards are deliberately unconditional: pinned below.
         !step.includes("Require successful scope") &&
+        !step.includes("Require successful docs-links") &&
         !step.includes("needs.scope.outputs.docs_only != 'true'"),
     );
     expect(unguarded.map((step) => step.split("\n")[0])).toEqual([]);
@@ -356,8 +357,16 @@ describe("ci heavy-job scope gates", () => {
 
   it("check still runs on every verdict and gates on the audit result", () => {
     const block = jobBlock("check");
-    expect(block).toMatch(/\n    needs: \[a11y, lighthouse, bundle-budget, scope\]\n/);
+    expect(block).toMatch(/\n    needs: \[a11y, lighthouse, bundle-budget, docs-links, scope\]\n/);
     expect(block).toMatch(/\n    if: always\(\)\n/);
+  });
+
+  it("docs-links runs on every PR and check fails unless it passes", () => {
+    const block = jobBlock("docs-links");
+    expect(block).toMatch(/(^|\n)    needs: scope\n/);
+    expect(block).not.toMatch(/\n    if: /);
+    expect(block).toContain("run: npm run docs:links");
+    expect(jobBlock("check")).toContain('run: test "$DOCS_LINKS_RESULT" = success');
   });
 
   it("ci-ok aggregates every gated job and fails closed on scope", () => {

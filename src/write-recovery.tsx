@@ -5,7 +5,14 @@ import { Recovery } from "./pages";
 
 export const EXPIRED_WRITE_COOKIE = "__Host-two_expired_write";
 const INTENDED_COOKIE = "__Host-two_login_intended";
-const OPTIONS = { path: "/", secure: true, httpOnly: true, sameSite: "Lax" as const, maxAge: 600 };
+export const WRITE_RECOVERY_TTL_SECONDS = 600;
+const OPTIONS = {
+  path: "/",
+  secure: true,
+  httpOnly: true,
+  sameSite: "Lax" as const,
+  maxAge: WRITE_RECOVERY_TTL_SECONDS,
+};
 type Ctx = Context<any>;
 
 export const recoveryUrl = (next: string) =>

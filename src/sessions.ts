@@ -68,6 +68,11 @@ export type Sql = (<T = Record<string, unknown>[]>(
   ...values: unknown[]
 ) => Promise<T>) & { unsafe: (query: string) => Promise<unknown> };
 
+// Fixture/backfill helper only (TOG-19721): the canonical DDL for these
+// shapes lives in drizzle/1022_web-sessions-oauth-journeys.sql and is applied
+// by the migrate workflow. The request path must NOT call migrate(): the
+// runtime role holds read/write only, no schema CREATE. Tests use this to
+// build disposable schemas; its statements stay identical to the migration.
 const MIGRATION = [
   `create table if not exists web_sessions (
     token_hash text primary key,
