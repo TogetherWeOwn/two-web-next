@@ -75,6 +75,17 @@ Full database verification must explicitly use
 never a live service. Required CI runs the complete suite on
 its disposable Postgres service.
 
+## A moderator lost their role
+
+Moderator status is stored on each session at sign-in and read live from that row; role removal does not update existing sessions. First confirm the Discord moderator role has been removed. If the moderator stops visiting pages, the idle session expires within two hours (120 minutes after its last session-refreshing page view); normal browsing can rotate and extend that window. Run this command for immediate invalidation; it does not depend on the member signing out. Use a dry-run first, verify the active-session count, then apply. It revokes only unexpired, not-yet-revoked sessions for that member.
+
+```sh
+node --import ./bin/ts-hook.mjs bin/revoke-sessions.mjs --discord-id=<snowflake> --target production
+node --import ./bin/ts-hook.mjs bin/revoke-sessions.mjs --discord-id=<snowflake> --target production --apply
+```
+
+`DATABASE_URL` is supplied through the environment only. Remote database URLs—including production-looking ones—require `--target production`; do not add a URL to command arguments or paste it into logs. Accepted form is `postgres://USER:PASSWORD@HOST:5432/DATABASE?sslmode=verify-full` (`sslrootcert=system` is accepted as an alias for `verify-full`); no other query parameters are accepted, so a console URL with extra parameters or `sslmode=require` is refused as missing or invalid until it is reduced to that form. See [moderator admin guide](moderator-admin-guide.md#a-moderator-lost-their-role).
+
 ## Deploy and record the rollback pointer
 
 The authoritative target is [wrangler.jsonc](../wrangler.jsonc): Worker
