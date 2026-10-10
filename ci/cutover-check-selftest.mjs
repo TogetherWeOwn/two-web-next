@@ -56,11 +56,18 @@ function fixture(url, phase) {
   if (hostname === apex && phase === "before") {
     return { status: 200, headers: { "content-type": "text/html" }, body: "<h1>legacy</h1>" };
   }
-  // Pin the login alias independently of the checker table.
-  if (path === "/auth/discord/redirect") {
+  // Pin the login/community aliases independently of the checker table.
+  if (path === "/auth/discord/redirect" || path === "/login") {
     return {
       status: 302,
       headers: { location: "/auth/discord", "cache-control": "no-store" },
+      body: "",
+    };
+  }
+  if (path === "/community") {
+    return {
+      status: 302,
+      headers: { location: "/", "cache-control": "no-store, private" },
       body: "",
     };
   }
@@ -290,6 +297,69 @@ test("login alias requires the temporary local no-store redirect in both phases"
         [id],
         `${phase} ${label}`,
       );
+    }
+  }
+});
+
+test("vanity aliases require the DB-free temporary redirect in both phases", async () => {
+  assert.deepEqual(
+    URL_CASES.filter((row) => row.path === "/login"),
+    [{ frozen: "/login", path: "/login", status: 302, redirect: "/auth/discord", noStore: true }],
+  );
+  assert.deepEqual(
+    URL_CASES.filter((row) => row.path === "/community"),
+    [{ frozen: "/community", path: "/community", status: 302, redirect: "/", noStore: true }],
+  );
+  for (const phase of ["before", "after"]) {
+    for (const path of ["/login", "/community"]) {
+      const measure = (change) =>
+        runChecks(options(phase), {
+          freeze,
+          resolver: stubDns(),
+          request: async (url) => {
+            const response = fixture(url, phase);
+            if (new URL(url).hostname === options(phase).target && new URL(url).pathname === path)
+              change(response);
+            return { ...response, tlsVerified: true };
+          },
+        });
+      const healthy = await measure(() => {});
+      assert.equal(healthy.ok, true, `${phase} ${path}`);
+      for (const id of [`url:${path}`, `location:${path}`, `no-store:${path}`]) {
+        assert.equal(healthy.checks.find((check) => check.id === id)?.ok, true, `${phase} ${id}`);
+      }
+      const regressions = [
+        [
+          "permanent redirect",
+          (response) => {
+            response.status = 301;
+          },
+          `url:${path}`,
+        ],
+        [
+          "missing Location",
+          (response) => {
+            delete response.headers.location;
+          },
+          `location:${path}`,
+        ],
+        [
+          "cacheable",
+          (response) => {
+            response.headers["cache-control"] = "public, max-age=3600";
+          },
+          `no-store:${path}`,
+        ],
+      ];
+      for (const [label, change, id] of regressions) {
+        const result = await measure(change);
+        assert.equal(result.ok, false, `${phase} ${path} ${label}`);
+        assert.deepEqual(
+          result.checks.filter((check) => !check.ok).map((check) => check.id),
+          [id],
+          `${phase} ${path} ${label}`,
+        );
+      }
     }
   }
 });
