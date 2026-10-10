@@ -1,8 +1,13 @@
 // Admin read surfaces (W12: M6 roster, M8 join viewer + funnel stats).
 // Read-only by construction: nothing here inserts, updates or deletes.
 
-import { and, asc, count, desc, eq, gte, ilike, or } from "drizzle-orm";
-import { JOIN_ATTEMPT_PAGE_SIZE, parseJoinAttemptsQuery, type RosterQuery } from "./table-list";
+import { and, asc, count, desc, eq, gte, ilike, or, type SQL } from "drizzle-orm";
+import {
+  JOIN_ATTEMPT_PAGE_SIZE,
+  ROSTER_PAGE_SIZE,
+  parseJoinAttemptsQuery,
+  type RosterQuery,
+} from "./table-list";
 import { escapeLikeTerm } from "../islands/contracts";
 import type { Db } from "../db/index";
 import { events, rsvps } from "../db/admin-schema";
@@ -20,17 +25,36 @@ export type RosterEntry = {
   answeredAt: Date;
 };
 
-/** Read-only RSVP roster for one event; most recent first unless explicitly sorted. */
+/** Paged read-only RSVP roster for one event; most recent first unless explicitly sorted.
+ *
+ * Search and sort apply before paging, so `total` is the filtered count and
+ * `rows` is one page of it. The deterministic `rsvps.userId` tie-break is kept.
+ * A page past the end returns no rows (with working navigation); callers render
+ * the past-end copy. The count is a classified aggregate: it returns only a
+ * number, never member identifiers.
+ */
 export async function listRoster(
   db: Db,
   eventKey: string,
-  query: RosterQuery = { q: "", sort: "answered", order: "desc" },
-): Promise<RosterEntry[]> {
-  const conds = [eq(events.eventKey, eventKey)];
-  if (query.q) conds.push(ilike(users.username, `%${escapeLikeTerm(query.q)}%`));
+  query: RosterQuery = { q: "", sort: "answered", order: "desc", page: 1 },
+): Promise<{ rows: RosterEntry[]; total: number }> {
+  const page = Number.isSafeInteger(query.page) && query.page > 0 ? query.page : 1;
+  const search: SQL | undefined = query.q
+    ? ilike(users.username, `%${escapeLikeTerm(query.q)}%`)
+    : undefined;
+  const conds = search ? and(eq(events.eventKey, eventKey), search) : eq(events.eventKey, eventKey);
   const column = query.sort === "status" ? rsvps.status : rsvps.updatedAt;
   const order = query.order === "asc" ? asc(column) : desc(column);
-  return keyedMemberRead(() =>
+  const countRows = await nonSensitiveRead("roster-count", () => {
+    const counted = db
+      .select({ n: count() })
+      .from(rsvps)
+      .innerJoin(events, eq(events.id, rsvps.eventId));
+    return search
+      ? counted.leftJoin(users, eq(users.id, rsvps.userId)).where(conds)
+      : counted.where(conds);
+  });
+  const rows = await keyedMemberRead(() =>
     db
       .select({
         userId: rsvps.userId,
@@ -42,9 +66,12 @@ export async function listRoster(
       .from(rsvps)
       .innerJoin(events, eq(events.id, rsvps.eventId))
       .leftJoin(users, eq(users.id, rsvps.userId))
-      .where(and(...conds))
-      .orderBy(order, rsvps.userId),
+      .where(conds)
+      .orderBy(order, rsvps.userId)
+      .limit(ROSTER_PAGE_SIZE)
+      .offset((page - 1) * ROSTER_PAGE_SIZE),
   );
+  return { rows, total: Number(countRows[0]?.n ?? 0) };
 }
 
 // Explicit projection works on both migrateJoin() bootstrap and imported

@@ -219,9 +219,11 @@ The event edit screen shows **RSVPs (count)** with **Member**, **Status**, and
 **Answered** (UTC), newest responses first by default. **Search members** with
 **Search** matches username text case-insensitively; **Status** and **Answered**
 column links toggle sorting while retaining the search. The count is the number
-of displayed answers (all statuses, not just going seats), so searching can
-reduce it. There is no roster pagination. Save event edits before these controls
-reload the page. This is a read-only roster: no adding/removing answers,
+of matching answers (all statuses, not just going seats), so searching can
+reduce it. The roster shows 100 answers per page with a "Showing a-b of N"
+line; **Previous** and **Next** keep the search and sort and return to the
+roster section. Sorting or searching again starts back on page 1. Save event
+edits before these controls reload the page. This is a read-only roster: no adding/removing answers,
 changing seats or exporting members. Read it only for authorized moderation.
 Reads of other members are access-logged; empty rosters and self-only reads create
 no access row. Audit-write failures always refuse protected contents, including
