@@ -167,7 +167,7 @@
       "idx": 23,
       "version": "7",
       "when": 1791599802458,
-      "tag": "1022_agent-event-audits-prune-idx",
+      "tag": "1023_agent-event-audits-prune-idx",
       "breakpoints": true
     }
   ]
