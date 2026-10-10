@@ -31,8 +31,10 @@ agent-events and logout/QA posts, admission and throttles on the agent
 ingress, and the QA gate on the staging-only QA sign-in.
 
 Routes are a mix of direct handlers and mounted sub-apps
-([src/index.tsx](../src/index.tsx)): the join journey (`registerJoinRoutes`),
-`POST /csp-reports`, `POST /api/agent-events`, the error handlers, `/admin`,
+([src/index.tsx](../src/index.tsx)): the static leaves (`registerStaticLeaves`),
+the policy/SEO leaves (`registerSeoLeaves`: `/privacy`, `/sitemap_index.xml`,
+`/robots.txt`, `POST /csp-reports`), the join journey (`registerJoinRoutes`),
+`POST /api/agent-events`, the error handlers, `/admin`,
 `/` for profiles, event routes, and the alert probe.
 
 There is no global database pool. Each request builds a short-lived client
@@ -269,6 +271,7 @@ exactly once.
 | `src/screens/` | content |
 | `src/security-txt.ts` | content |
 | `src/seo.ts` | content |
+| `src/seo-leaves.tsx` | entry |
 | `src/session-revocation.ts` | auth |
 | `src/sessions.ts` | auth |
 | `src/static-leaves.tsx` | entry |
