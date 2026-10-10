@@ -107,12 +107,13 @@ node ci/coverage-summary.mjs
 
 Coverage includes every
 `src/**/*.{ts,tsx}` file, even if no test imports it. Global and aggregate
-area floors (`src/admin`, `src/events`, `src/join`, `src/sessions.ts`) live in
-`vitest.config.ts`. The baseline uses the full suite with the test database;
-without it, skipped live suites may put coverage below the floors. CI's
+area floors (`src/admin`, `src/events`, `src/join`, `src/sessions.ts`, `src/jobs`,
+`src/bot`, `src/agent-events`, `src/profiles`) live in `vitest.config.ts`. The
+baseline uses the full suite with the test database; without it, skipped live
+suites may put coverage below the floors. CI's
 required `check` job runs the configuration drift check, Biome lint/format gate,
 typecheck and the coverage gate against its Postgres service, writes a job summary
-with the ten least-covered files, and uploads HTML, LCOV and JSON reports for 14 days,
+with the ten least-covered files, and uploads the JSON coverage summary for 14 days,
 including on failure.
 
 When intentionally raising a floor, re-measure with the same locked provider
