@@ -159,6 +159,23 @@ npm run config:check                 # drift check + its local-fixture selftests
 npx wrangler deploy --dry-run --outdir dist   # bundle check; does not deploy
 ```
 
+### Browser regressions
+
+`test/admin-event-native-unicode.test.ts` drives native admin event forms in
+Chromium and skips its 48 browser cases unless `ADMIN_EVENT_BROWSER_TESTS=true`.
+Every document and asset is an intercepted synthetic fixture, so it needs no
+server, database or network. Install the browser once, then run:
+
+```sh
+npx playwright install --with-deps chromium
+ADMIN_EVENT_BROWSER_TESTS=true npx vitest run test/admin-event-native-unicode.test.ts
+```
+
+Without Chromium the suite fails in `beforeAll` and vitest reports the cases as
+skipped. The `a11y` job in CI sets the variable, reuses its cached Playwright
+Chromium, and `ci/a11y-require-executed.mjs` fails the step unless all 48 cases
+ran and passed. The step runs on `app`, `db` and `full` scopes, main and nightly.
+
 Do not use `npm run deploy` as a test or build command.
 
 ## Deploy

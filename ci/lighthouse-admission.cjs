@@ -5,7 +5,15 @@ const { spawn } = require("node:child_process");
 
 const origin = "http://127.0.0.1:8787";
 const key = "01ARZ3NDEKTSV4RRFFQ69G5FAV";
-const paths = ["/", "/events", `/e/${key}`, "/join", "/about"];
+const paths = ["/", "/events", `/e/${key}`, "/join", "/about", "/faq", "/rules", "/privacy"];
+// Static leaves have no fixture data: admit the real page heading, not an error or fallback.
+const staticHeadings = {
+  "/join": "Join Together We Own",
+  "/about": "About Together We Own",
+  "/faq": "Frequently asked questions",
+  "/rules": "House rules",
+  "/privacy": "Privacy policy",
+};
 const readyPattern = "Lighthouse fixture content admitted";
 
 function assertFixtureContent(path, response, html, before, after) {
@@ -69,9 +77,7 @@ function assertFixtureContent(path, response, html, before, after) {
     assert.ok(paths.includes(path), "Unknown fixture path");
     assert.match(
       html,
-      path === "/join"
-        ? /<h1\b[^>]*>Join Together We Own<\/h1>/
-        : /<h1\b[^>]*>About Together We Own<\/h1>/,
+      new RegExp(`<h1\\b[^>]*>${staticHeadings[path]}</h1>`),
       `${path}: real page heading`,
     );
     if (path === "/join") assert.doesNotMatch(html, /<iframe\b/, "Fixture must not embed Discord");
@@ -102,7 +108,7 @@ async function probeFixture(urls, fetchPage = fetch) {
   assert.deepEqual(
     urls,
     paths.map((path) => `${origin}${path}`),
-    "Only the five local fixture URLs may be probed",
+    "Only the audited local fixture URLs may be probed",
   );
   for (const url of urls) {
     const before = Date.now();
@@ -192,7 +198,7 @@ function startFixture(
   return { child, admission, stop };
 }
 
-module.exports = { assertFixtureContent, probeFixture, startFixture, readyPattern };
+module.exports = { assertFixtureContent, probeFixture, startFixture, readyPattern, origin, paths };
 
 if (require.main === module) {
   const { child, admission, stop } = startFixture(require("./lighthouserc.cjs").ci.collect.url);

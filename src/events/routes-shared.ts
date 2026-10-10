@@ -96,7 +96,10 @@ export async function jsonResponse(c: Ctx, value: unknown): Promise<Response> {
   return c.body(body, 200, { "content-type": "application/json; charset=UTF-8" });
 }
 
-export async function body(c: Pick<Ctx, "req">): Promise<Record<string, unknown>> {
+export async function body(
+  c: Pick<Ctx, "req">,
+  opts?: { onMalformedForm?: "empty" | "throw" },
+): Promise<Record<string, unknown>> {
   // Media types are case-insensitive (RFC 2045 §5.1): normalize before the
   // JSON check so `Application/Json` cannot smuggle a body past the trap.
   // Forms parse with all values preserved: duplicate keys arrive as arrays
@@ -106,5 +109,14 @@ export async function body(c: Pick<Ctx, "req">): Promise<Record<string, unknown>
     const j = await c.req.json().catch(() => null);
     return j && typeof j === "object" ? (j as Record<string, unknown>) : {};
   }
-  return (await c.req.parseBody({ all: true })) as Record<string, unknown>;
+  // A malformed multipart body rejects the parse (Node: TypeError from
+  // Response.formData()): fail open to an empty body so the caller answers a
+  // 4xx (401/422) instead of throwing into the alerting 500 path. The JSON
+  // branch above already fails open to {}; the form branch must do the same,
+  // before and independent of the session check. Callers that must never turn
+  // a parse failure into an empty write (eventBody) opt into the throw and
+  // map it to a 422 themselves.
+  const parsed = c.req.parseBody({ all: true });
+  if (opts?.onMalformedForm === "throw") return (await parsed) as Record<string, unknown>;
+  return (await parsed.catch(() => ({}))) as Record<string, unknown>;
 }

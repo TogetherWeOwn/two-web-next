@@ -91,6 +91,17 @@ jobs:
           gh api "repos/$REPO/pulls/$PR_NUMBER/files" --paginate \
             --jq '.[] | "\(.filename)\t\(.previous_filename // "")"' > "$RUNNER_TEMP/pr-files.tsv"
           bash ci/change-scope.sh "$RUNNER_TEMP/pr-files.tsv" "$CHANGED_FILES" >> "$GITHUB_OUTPUT"
+      # Tier 0 (pipeline review 2026-10-10): workflow logic was the largest class of review
+      # findings a linter catches. scope gates ci-ok (fails closed), so a red lint blocks merge.
+      - name: Lint workflows (actionlint)
+        if: github.event_name == 'pull_request'
+        run: |
+          set -euo pipefail
+          curl -fsSL -o "$RUNNER_TEMP/actionlint.tgz" \
+            https://github.com/rhysd/actionlint/releases/download/v1.7.7/actionlint_1.7.7_linux_amd64.tar.gz
+          echo "023070a287cd8cccd71515fedc843f1985bf96c436b7effaecce67290e7e0757  $RUNNER_TEMP/actionlint.tgz" | sha256sum -c -
+          tar -xzf "$RUNNER_TEMP/actionlint.tgz" -C "$RUNNER_TEMP" actionlint
+          "$RUNNER_TEMP/actionlint" -shellcheck= -pyflakes=
 
   # Doc links run on every PR, including the docs-only ones the scope job fast-passes.
   docs-links:
@@ -175,6 +186,14 @@ jobs:
           retention-days: 14
       - name: Profile native and island Unicode regressions (memory fixtures)
         run: A11Y_BROWSER_TESTS=true npx vitest run test/profile-native-length.test.ts
+      # The suite skips unless ADMIN_EVENT_BROWSER_TESTS is "true"; the verifier
+      # fails the step when any of its 48 browser cases skipped or went missing.
+      - name: Admin event native Unicode regressions (intercepted fixtures, no network or DB)
+        env:
+          ADMIN_EVENT_BROWSER_TESTS: "true"
+        run: |
+          npx vitest run test/admin-event-native-unicode.test.ts --reporter=default --reporter=json --outputFile.json=artifacts/a11y/admin-native-unicode.json
+          node ci/a11y-require-executed.mjs artifacts/a11y/admin-native-unicode.json "native admin event text limits" 48
       - name: WCAG 2.2 AA (local fixtures, no external services)
         env:
           DEBUG: pw:browser
@@ -345,6 +364,27 @@ jobs:
       - name: Neon backup selftest (stubbed, no secrets)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
         run: bash ci/neon-backup-selftest.sh
+      # Hermetic backup fixture suites: fake pg_dump/R2/wrangler on local disk, no
+      # secrets, no network, no database. They gate the same `check` as every
+      # other step (no continue-on-error), and run when backup inputs change
+      # (bin/**, ci/** select `app`) and on every main, nightly and dispatch run
+      # (all areas true). Fixture proof is not a live restore. The "backup selftest
+      # wiring" block in test/change-scope.test.ts pins this.
+      - name: Backup custody integrity selftest (fixtures, no secrets)
+        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true')
+        run: bash ci/backup-integrity-selftest
+      - name: Backup target selftest (fixtures, no secrets)
+        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true')
+        run: python3 ci/backup-target-selftest
+      - name: Neon backup argv selftest (stubbed, no secrets)
+        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true')
+        run: bash ci/neon-backup-argv-selftest.sh
+      - name: Backup manifest admission selftest (fixtures, no secrets)
+        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true')
+        run: python3 ci/backup-manifest-admission-selftest
+      - name: Backup restore-proof selftest (no network, no database)
+        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true')
+        run: python3 ci/backup-restore-proof/selftest.py
       - name: Migration numbering check
         shell: bash
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.db == 'true')
@@ -401,6 +441,9 @@ jobs:
       - name: Build alert Tail Worker (wrangler dry run)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true' || needs.scope.outputs.worker == 'true')
         run: npx wrangler deploy --config tail/wrangler.jsonc --dry-run --outdir ../dist-tail
+      - name: Build production alert Tail Worker (wrangler dry run)
+        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true' || needs.scope.outputs.worker == 'true')
+        run: npx wrangler deploy --config tail/wrangler.jsonc --env production --dry-run --outdir ../dist-tail-production
       - name: Production build (wrangler dry run, no deployment)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true' || needs.scope.outputs.worker == 'true')
         run: npx wrangler deploy --dry-run --env production --outdir dist-production

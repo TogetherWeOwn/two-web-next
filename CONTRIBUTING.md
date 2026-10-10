@@ -16,22 +16,20 @@ version.
   `test`, `docs`, `build`, `ci`, `chore`, `revert`, `style`, `security`. The scope
   names the area of the code, such as `auth`, `events` or `sync`. Release automation
   reads these headers.
-- Fill in every section of the [PR template](.github/pull_request_template.md):
-  Thinking Path, Linked Issues or Issue Description, What Changed, Verification,
-  Risks, Model Used, and the Checklist. Use short, active sentences.
+- Use the [PR template](.github/pull_request_template.md), in short, active
+  sentences. `pr-lint` requires Linked Issues or Issue Description and
+  Verification (commands run and their results); the other sections are optional.
 - Link a public GitHub issue with `Closes #123`, or describe the problem in the PR.
   No card reference is required. `docs`, `chore`, `build`, `ci`, `style`, `test` and
   `revert` PRs need no linked issue.
 - Search first. Look for an open or recent PR that touches the same area, and link
-  what you find. `feat`, `fix`, `perf`, `refactor` and `security` PRs tick the
-  duplicate-search box in the checklist.
+  what you find.
 - Keep references public-safe. Do not put internal card IDs (`TOG-` or `PAP-`
   followed by digits), private URLs, tokens or secrets in any title, body, commit,
   comment or branch name. `pr-lint` warns when it finds a card ID in the title, body
   or a commit subject, and in the branch name in any letter case (`qa/tog-123-x`).
-- Be honest about the model and the tests. Name the model that wrote or assisted the
-  change, give the exact commands you ran and their results, and say what you did
-  not run. Never claim a green run you did not see.
+- Be honest about the tests. Give the exact commands you ran and their results in
+  Verification, and say what you did not run. Never claim a green run you did not see.
 - Address every review finding, or reply with why it does not apply.
 - Credit the contributors whose work you build on.
 - Done means merged. Do not leave an orphan PR open: merge it, or close it with a

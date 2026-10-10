@@ -115,28 +115,56 @@ describe.skipIf(!process.env.DATABASE_URL)("postgres single-flight + unique lock
     await lock.release(key, next!);
   });
 
+  // Both lease proofs below compare database-clock readings taken inside one
+  // transaction, so no host scheduling delay can flip them. `pg_sleep` only
+  // guarantees the transaction is older than its start timestamp; the proofs
+  // never bound how long it ran.
+  async function elapsedInTx(tx: postgres.TransactionSql) {
+    const [row] = await tx<{ elapsed: string }[]>`
+      select (clock_timestamp() - transaction_timestamp())::text as elapsed`;
+    return row!.elapsed;
+  }
+
+  /** True when the lease runs at least `elapsed + ttl` past the transaction start. */
+  async function leaseCoversTtlFromAcquire(
+    tx: postgres.TransactionSql,
+    key: string,
+    ttlSeconds: number,
+    elapsedBeforeAcquire: string,
+  ) {
+    const [row] = await tx<{ ok: boolean }[]>`
+      select (expires_at - transaction_timestamp())
+        >= (${elapsedBeforeAcquire}::interval + make_interval(secs => ${ttlSeconds})) as ok
+      from job_unique_locks where key = ${key}`;
+    return row!.ok;
+  }
+
   it("new locks get their full TTL even in an old transaction", async () => {
     await sql.begin(async (tx) => {
       await tx`select pg_sleep(0.2)`;
+      const elapsed = await elapsedInTx(tx);
       const key = own("fresh-ttl");
-      expect(await pgUniqueLock(tx).acquire(key, 1)).toEqual(expect.any(String));
-      const [row] =
-        await tx`select extract(epoch from expires_at - clock_timestamp())::float as remaining
-        from job_unique_locks where key = ${key}`;
-      expect(row!.remaining).toBeGreaterThan(0.9);
+      expect(await pgUniqueLock(tx).acquire(key, 60)).toEqual(expect.any(String));
+      // Transaction-start expiry would sit exactly `ttl` past the start, short
+      // of `elapsed + ttl` by at least the 0.2 s the sleep guaranteed.
+      // Acquisition-time expiry always clears it, however slow the host.
+      expect(await leaseCoversTtlFromAcquire(tx, key, 60, elapsed)).toBe(true);
     });
   });
 
   it("takes over a lock that expired after the transaction began", async () => {
     const key = own("elapsed-ttl");
-    await sql`insert into job_unique_locks (key, expires_at) values (${key}, clock_timestamp() + interval '0.1 second')`;
     await sql.begin(async (tx) => {
       await tx`select pg_sleep(0.2)`;
-      expect(await pgUniqueLock(tx).acquire(key, 1)).toEqual(expect.any(String));
-      const [row] =
-        await tx`select extract(epoch from expires_at - clock_timestamp())::float as remaining
-        from job_unique_locks where key = ${key}`;
-      expect(row!.remaining).toBeGreaterThan(0.9);
+      const elapsed = await elapsedInTx(tx);
+      // Expiry at the midpoint of the transaction so far: strictly after the
+      // transaction start (elapsed >= 0.2 s) and strictly before the acquire
+      // below (the clock never runs backwards), at any host speed.
+      await tx`insert into job_unique_locks (key, expires_at)
+        values (${key}, transaction_timestamp() + ${elapsed}::interval / 2)`;
+      // A start-of-transaction comparison sees this row as still live.
+      expect(await pgUniqueLock(tx).acquire(key, 60)).toEqual(expect.any(String));
+      expect(await leaseCoversTtlFromAcquire(tx, key, 60, elapsed)).toBe(true);
     });
   });
 });
