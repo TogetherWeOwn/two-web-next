@@ -33,10 +33,12 @@ the staging targets.
 | Backup and restore (verify archives, plan recovery) | [Backups and restore drill](#backups-and-restore-drill) | Local `bash ci/neon-backup-selftest.sh` (no secrets, no network) first; remote `BACKUP_BUCKET=two-web-next-backups BACKUP_JURISDICTION=eu BACKUP_PREFIX=neon WRANGLER_BIN= bash bin/neon-backup.sh check staging` re-downloads every manifest archive locally, needs the Cloudflare API token and separate approval; keep dumps inside approved EU custody; never `rotate` or restore without separate approval | DevOps & Reliability Engineer; live-data recovery needs CEO approval via the Director and the authorized custodian |
 
 Not an incident entry: [Final import and reconcile](#final-import-and-reconcile)
-(cutover-only authorized import) and
+(cutover-only authorized import),
 [Secret rotation pointer (procedure only)](#secret-rotation-pointer-procedure-only)
-(no rotation here) are not incident entries; read those sections directly when
-that work is authorized.
+(no rotation here) and
+[Quarterly moderator access review (revoke-command half)](#quarterly-moderator-access-review-revoke-command-half)
+(scheduled quarterly review, not incident response) are not incident entries;
+read those sections directly when that work is authorized.
 
 ## Safety and escalation
 
