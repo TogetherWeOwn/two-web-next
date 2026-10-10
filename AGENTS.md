@@ -16,6 +16,7 @@ Guidance for human and AI contributors.
 
 - Work on a branch and open a PR. Never push to `main`.
 - Name branches `type/short-slug`, for example `fix/sudo-window`.
+- The workspace may hand you a local branch named after a tracker card; keep committing to it, never publish that name, push `git push origin HEAD:refs/heads/<type>/<short-slug>` and open the PR from that ref.
 - Squash-merge only. One PR is one logical change.
 - Title the PR with a Conventional Commits header: `type(scope): summary`, at most 100 characters, no trailing period. Release automation reads it.
 - Fill in every section of the PR template, in short, active sentences.

@@ -8,6 +8,7 @@ version.
 - Work on a branch and open a PR. Never push to `main`. Name branches
   `type/short-slug`, for example `fix/sudo-window`. Head branches are deleted when
   the PR merges.
+- The workspace may hand you a local branch named after a tracker card; keep committing to it, never publish that name, push `git push origin HEAD:refs/heads/<type>/<short-slug>` and open the PR from that ref.
 - Squash-merge only. Each PR is one logical change. The squash commit takes the PR
   title and body, so write both for the history on `main`.
 - PR title = Conventional Commits header: `type(scope): summary`, at most 100
