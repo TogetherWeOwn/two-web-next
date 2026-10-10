@@ -5,7 +5,7 @@ on:
   workflow_dispatch:
     inputs:
       sha:
-        description: "Full 40-hex main commit to deploy. Empty promotes the commit of the latest successful e2e-staging run on main (staging-verified)"
+        description: "Full 40-hex main commit to deploy. Empty promotes the latest main commit whose e2e-staging staging-journeys passed. Always set it explicitly for a redeploy of a prior good commit"
         required: false
         type: string
         default: ""
@@ -41,9 +41,21 @@ jobs:
         run: |
           sha="$(printf '%s' "$INPUT_SHA" | tr -d '[:space:]' | tr 'A-F' 'a-f')"
           if [ -z "$sha" ]; then
-            sha="$(gh api --method GET "repos/$REPO/actions/workflows/e2e-staging.yml/runs" \
-              -f branch=main -f status=success -f per_page=1 --jq '.workflow_runs[0].head_sha // ""')"
-            echo "Promoting the latest staging-verified commit: $sha"
+            # e2e-staging can conclude success with staging-journeys skipped (docs-only diff against the
+            # parent), so only runs whose journeys actually passed count as staging-verified.
+            for page in 1 2 3 4 5; do
+              runs="$(gh api --method GET "repos/$REPO/actions/workflows/e2e-staging.yml/runs" \
+                -f branch=main -f status=success -f per_page=20 -f page="$page" \
+                --jq '.workflow_runs[] | "\(.id) \(.head_sha)"')"
+              [ -n "$runs" ] || break
+              while read -r run_id run_sha; do
+                verdict="$(gh api --method GET "repos/$REPO/actions/runs/$run_id/jobs" -f per_page=100 \
+                  --jq '[.jobs[] | select(.name == "staging-journeys") | .conclusion] | first // ""')"
+                if [ "$verdict" = "success" ]; then sha="$run_sha"; break; fi
+              done <<< "$runs"
+              [ -n "$sha" ] && break
+            done
+            echo "Promoting the latest staging-verified commit (staging-journeys passed): ${sha:-none}"
           fi
           if ! printf '%s' "$sha" | grep -Eqx '[0-9a-f]{40}'; then
             echo "::error::No full 40-hex commit to deploy (input empty and no successful e2e-staging run on main)"
