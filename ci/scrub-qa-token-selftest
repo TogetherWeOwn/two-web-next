@@ -163,6 +163,31 @@ class ScrubQaTokenTests(unittest.TestCase):
         self.assert_retained(target)
         self.assertIn("swept=true", self.swept())
 
+    def test_duplicate_member_names_first_hit_is_found(self):
+        # Reading by filename resolves to the LAST same-named entry, so the
+        # last entry would be inspected twice and the first one never. Each
+        # ZipInfo is read directly, so the marker in the first entry is found.
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w") as archive:
+            archive.writestr(
+                "trace.network",
+                b"Authorization: " + MARKER,
+                compress_type=zipfile.ZIP_DEFLATED,
+            )
+            archive.writestr(
+                "trace.network", b"clean", compress_type=zipfile.ZIP_DEFLATED
+            )
+        raw = buf.getvalue()
+        self.assertNotIn(MARKER, raw)
+        target = self.write_tree("dup-names.zip", raw)
+        result = self.run_scrubber()
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assert_removed(target)
+        self.assertIn("swept=true", self.swept())
+        self.assert_no_leak(result)
+        combined = result.stdout + result.stderr
+        self.assertIn("was found", combined)
+
     # The core regression: an early unreadable member must not hide a later marker.
 
     def test_early_unsupported_member_cannot_hide_later_marker(self):
@@ -352,6 +377,57 @@ class ScrubQaTokenTests(unittest.TestCase):
         combined = result.stdout + result.stderr
         self.assertNotIn(MARKER_TEXT, combined)
         self.assertNotIn(tainted_name, combined)
+
+    # Withheld files are removed without claiming the token was found.
+
+    def test_withheld_only_prints_withheld_notice_not_exposure(self):
+        # Token-free truncated archive: incompletely inspected, so withheld
+        # from the upload. That alone is not a token exposure.
+        raw = make_zip([
+            ("trace.network", b"clean " * 200, zipfile.ZIP_DEFLATED),
+        ])
+        truncated = raw[: len(raw) // 2]
+        self.assertNotIn(MARKER, truncated)
+        target = self.write_tree("truncated-clean.zip", truncated)
+        result = self.run_scrubber()
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assert_removed(target)
+        self.assertIn("swept=true", self.swept())
+        combined = result.stdout + result.stderr
+        self.assertIn("withheld from the upload", combined)
+        self.assertNotIn("was found", combined)
+        self.assertNotIn("Treat the token as exposed", combined)
+        self.assertNotIn("report it to the COO", combined)
+
+    def test_real_hit_prints_exposure_error_without_withheld_notice(self):
+        target = self.write_tree("hit.log", b"prefix " + MARKER + b" suffix")
+        result = self.run_scrubber()
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assert_removed(target)
+        self.assertIn("swept=true", self.swept())
+        self.assert_no_leak(result)
+        combined = result.stdout + result.stderr
+        self.assertIn("was found", combined)
+        self.assertIn("report it to the COO", combined)
+        self.assertNotIn("withheld from the upload", combined)
+
+    def test_mixed_hit_and_withheld_prints_both_notices(self):
+        hit = self.write_tree("hit.log", b"prefix " + MARKER + b" suffix")
+        raw = make_zip([
+            ("trace.network", b"clean " * 200, zipfile.ZIP_DEFLATED),
+        ])
+        truncated = raw[: len(raw) // 2]
+        self.assertNotIn(MARKER, truncated)
+        unproven = self.write_tree("truncated-clean.zip", truncated)
+        result = self.run_scrubber()
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assert_removed(hit)
+        self.assert_removed(unproven)
+        self.assertIn("swept=true", self.swept())
+        self.assert_no_leak(result)
+        combined = result.stdout + result.stderr
+        self.assertIn("was found", combined)
+        self.assertIn("withheld from the upload", combined)
 
     def test_broad_exception_as_clean_fallback_is_gone(self):
         # Reintroducing `except ...: return None` around the whole member loop

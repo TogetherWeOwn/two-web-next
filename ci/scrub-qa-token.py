@@ -5,15 +5,18 @@ signed-in GitHub user for its retention and log masking does not cover it.
 
 Deletes every file under the given directories that contains the staging QA
 token, prints file names only, and exits 1 when it removed anything so the
-leak is loud instead of silent.
+leak is loud instead of silent. Files that cannot be completely inspected are
+withheld from the upload the same way (removed, exit 1, swept=true), but a
+withheld-only run is not a token exposure: only a real token hit prints the
+exposure alarm and needs a COO report.
 
 Usage: QA_AUTH_TOKEN=<token> ci/scrub-qa-token.py <dir>...
 
-Exit 0: nothing found. Exit 1: found and removed (the tree is now safe to
-upload). Exit 2: a file could not be removed, so the tree is NOT safe. When the
-whole tree was swept (exit 0 or 1) and GITHUB_OUTPUT is set, `swept=true` is
-written to it; the workflow uploads only then, so a crashed sweep never
-publishes an unswept tree.
+Exit 0: nothing found. Exit 1: found and removed, or uninspectable files
+withheld (the tree is now safe to upload). Exit 2: a file could not be
+removed, so the tree is NOT safe. When the whole tree was swept (exit 0 or 1)
+and GITHUB_OUTPUT is set, `swept=true` is written to it; the workflow uploads
+only then, so a crashed sweep never publishes an unswept tree.
 
 The token is read from the environment, never argv, so it is not visible in the
 process list. A plain byte search is not enough on its own. Playwright stores
@@ -80,6 +83,16 @@ def _safe_path(path: str, token: bytes) -> str:
     return path
 
 
+def _is_withheld(where: str) -> bool:
+    """Whether the removal reason means incompletely inspected, not a real hit.
+
+    Only completely inspected content that actually holds the token counts as
+    a token exposure. Anything that could not be proven clean is withheld
+    from the upload without claiming the token was found.
+    """
+    return where == "unreadable file" or where.startswith("incompletely inspected")
+
+
 def zip_hit(data: bytes, token: bytes, depth: int) -> str | None:
     """Name of the first zip member that holds the token, else None.
 
@@ -103,7 +116,11 @@ def zip_hit(data: bytes, token: bytes, depth: int) -> str | None:
             continue
         safe_name = _safe_member(info.filename, token)
         try:
-            member = archive.read(info.filename)
+            # Read by ZipInfo (header offset), never by filename: read(name)
+            # resolves through NameToInfo, which keeps only the LAST entry
+            # with that name, so earlier same-named members would go
+            # uninspected while the last one is read twice.
+            member = archive.read(info)
         except _Incomplete:
             raise
         except Exception as error:
@@ -171,7 +188,9 @@ def main(directories: list[str]) -> int:
         return 0
 
     removed = 0
+    withheld = 0
     stuck = 0
+    stuck_withheld = 0
     for directory in directories:
         if not os.path.isdir(directory):
             continue
@@ -196,16 +215,28 @@ def main(directories: list[str]) -> int:
                     os.remove(path)
                 except OSError:
                     print(f"scrub-qa-token: could NOT remove {safe} ({where})", file=sys.stderr)
-                    stuck += 1
+                    if _is_withheld(where):
+                        stuck_withheld += 1
+                    else:
+                        stuck += 1
                     continue
                 print(f"scrub-qa-token: removed {safe} ({where})", file=sys.stderr)
-                removed += 1
+                if _is_withheld(where):
+                    withheld += 1
+                else:
+                    removed += 1
 
-    if stuck:
-        print(
-            f"::error::QA_AUTH_TOKEN is in {stuck} failure artifact file(s) that could not be "
-            "removed; the artifacts must not be uploaded. Treat the token as exposed."
-        )
+    if stuck or stuck_withheld:
+        if stuck:
+            print(
+                f"::error::QA_AUTH_TOKEN is in {stuck} failure artifact file(s) that could not be "
+                "removed; the artifacts must not be uploaded. Treat the token as exposed."
+            )
+        if stuck_withheld:
+            print(
+                f"::error::{stuck_withheld} failure artifact file(s) could not be fully inspected "
+                "and could not be removed; the artifacts must not be uploaded."
+            )
         return 2
     mark_swept()
     if removed:
@@ -213,6 +244,13 @@ def main(directories: list[str]) -> int:
             f"::error::QA_AUTH_TOKEN was found in {removed} failure artifact file(s); removed. "
             "Treat the token as exposed and report it to the COO."
         )
+    if withheld:
+        print(
+            f"scrub-qa-token: {withheld} failure artifact file(s) could not be fully inspected "
+            "and were withheld from the upload.",
+            file=sys.stderr,
+        )
+    if removed or withheld:
         return 1
     return 0
 
