@@ -48,6 +48,20 @@ class Ratchet(unittest.TestCase):
                                  self.snapshot() if head is None else head)
         return code, output.getvalue()
 
+    def commit(self, tree, parents, message="Synthetic fixture"):
+        env = {**os.environ, "GIT_AUTHOR_NAME": "Synthetic Fixture",
+               "GIT_COMMITTER_NAME": "Synthetic Fixture",
+               "GIT_AUTHOR_EMAIL": "fixture@example.invalid",
+               "GIT_COMMITTER_EMAIL": "fixture@example.invalid"}
+        args = ["-c", "user.name=Synthetic Fixture",
+                "-c", "user.email=fixture@example.invalid",
+                "commit-tree", tree, "-m", message]
+        for parent in parents:
+            args += ["-p", parent]
+        return subprocess.run(["git", "-C", str(self.repo), *args],
+                              capture_output=True, check=True, env=env,
+                              text=True).stdout.strip()
+
     def test_added_reference_fails_without_echoing_content(self):
         self.write("docs/example.md", f"Synthetic {ID} and {LINK}\n")
         code, output = self.result()
@@ -75,6 +89,35 @@ class Ratchet(unittest.TestCase):
         self.base = self.snapshot()
         self.write("docs/example.md", "Public explanation")
         self.assertEqual(0, self.result()[0])
+
+    def test_main_drift_after_fork_does_not_fail_unchanged_pr(self):
+        self.write("doc.md", ID)
+        fork = self.commit(self.snapshot(), [], "fork")
+        self.write("doc.md", "Public explanation")
+        main = self.commit(self.snapshot(), [fork], "main drops a reference")
+        # The PR changes nothing after the fork; the base tip moved, not the PR.
+        self.assertEqual(0, self.result(base=main, head=fork)[0])
+
+    def test_main_growth_does_not_hide_pr_growth(self):
+        self.write("doc.md", "Clean public explanation")
+        fork = self.commit(self.snapshot(), [], "fork")
+        self.write("main.md", ID)
+        main = self.commit(self.snapshot(), [fork], "main adds a reference")
+        (self.repo / "main.md").unlink()
+        self.write("pr.md", ID)
+        pr = self.commit(self.snapshot(), [fork], "pr adds a reference")
+        # Base-tip totals tie at one each, but the fork had none: the PR grew.
+        self.assertEqual(1, self.result(base=main, head=pr)[0])
+
+    def test_no_common_commit_fails_closed(self):
+        self.write("doc.md", ID)
+        left = self.commit(self.snapshot(), [], "left root")
+        (self.repo / "doc.md").unlink()
+        self.write("other.md", "Clean public explanation")
+        right = self.commit(self.snapshot(), [], "right root")
+        code, output = self.result(base=left, head=right)
+        self.assertEqual(1, code)
+        self.assertEqual("Cannot read the base tracked tree; refusing to pass.\n", output)
 
     def test_total_not_per_file_or_per_category(self):
         self.write("a.md", f"{ID}\n{ID}")

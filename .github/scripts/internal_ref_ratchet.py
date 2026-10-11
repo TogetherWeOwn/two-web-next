@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 """Reject net growth of internal card IDs and instance-UI links in tracked blobs.
 
-Compare immutable Git trees, not a diff or the working directory. Moves and splits
-are net-zero. Existing references are debt, not an allowlist. Diagnostics contain
-only JSON-escaped paths and counts, never blob content or Git stderr. Stdlib only.
+Compare the head tree against its fork point (the merge-base with the base),
+not the base tip: a PR behind its base is judged only on what it changed.
+Moves and splits are net-zero. Existing references are debt, not an allowlist.
+Diagnostics contain only JSON-escaped paths and counts, never blob content or
+Git stderr. Stdlib only.
 """
 import argparse
 import json
@@ -78,9 +80,37 @@ def tree_counts(repo, revision, prefixes=DEFAULT_PREFIXES):
     return counts
 
 
+def resolve_base(repo, base, head):
+    """Return the fork point both sides share, or the raw base for tree inputs.
+
+    Commit SHAs compare against ``git merge-base`` so main's own drift after
+    the fork cannot fail or excuse the PR. Hermetic tree SHAs (for example
+    from ``git write-tree``) have no merge-base; compare those directly.
+    Anything unresolvable raises UnreadableTree so the caller fails closed.
+    """
+    try:
+        git(repo, "rev-parse", "--verify", "--end-of-options", base + "^{commit}")
+        git(repo, "rev-parse", "--verify", "--end-of-options", head + "^{commit}")
+    except UnreadableTree:
+        return base
+    out = git(repo, "merge-base", "--end-of-options", base, head)
+    try:
+        sha = out.decode("ascii").strip().splitlines()[0].strip()
+    except (UnicodeDecodeError, IndexError) as exc:
+        raise UnreadableTree() from exc
+    if not sha:
+        raise UnreadableTree()
+    return sha
+
+
 def check(repo, base, head="HEAD", prefixes=DEFAULT_PREFIXES):
+    try:
+        effective_base = resolve_base(repo, base, head)
+    except UnreadableTree:
+        print("Cannot read the base tracked tree; refusing to pass.")
+        return 1
     snapshots = []
-    for label, revision in (("base", base), ("head", head)):
+    for label, revision in (("base", effective_base), ("head", head)):
         try:
             snapshots.append(tree_counts(repo, revision, prefixes))
         except UnreadableTree:
@@ -99,7 +129,7 @@ def check(repo, base, head="HEAD", prefixes=DEFAULT_PREFIXES):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--base", required=True, help="PR base SHA (missing/unreadable fails closed)")
+    parser.add_argument("--base", required=True, help="PR base SHA, compared at its merge-base with head (missing/unreadable fails closed)")
     parser.add_argument("--head", default="HEAD", help="PR head SHA or a staged tree from git write-tree")
     args = parser.parse_args()
     return check(".", args.base, args.head, os.environ.get("INTERNAL_ID_PREFIXES") or DEFAULT_PREFIXES)
