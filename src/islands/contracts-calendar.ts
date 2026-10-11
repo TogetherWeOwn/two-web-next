@@ -328,6 +328,24 @@ export function monthGrid<E>(
   return weeks;
 }
 
+/** The wall-day range the month grid covers: whole Monday-first weeks, so the
+ * leading/trailing neighbor days plot the adjacent months' events too. Null
+ * for unsupported months. */
+export function calendarGridRange(month: string): { first: string; last: string } | null {
+  const parsed = parseCalendarMonth(month);
+  if (!parsed) return null;
+  // Day 15 exists in every supported month; only the geometry is read here.
+  const days = monthGrid(parsed, `${parsed}-15`, new Map()).flat();
+  return { first: days[0]!.iso, last: days.at(-1)!.iso };
+}
+
+/** Midnight-UTC instant of a wall day for range checks. Plain string order
+ * breaks past year 9999 (the `+` prefix sorts before digits), so grid-range
+ * comparisons go through instants. */
+export function wallDayStart(iso: string): number {
+  return new Date(`${iso}T00:00:00Z`).getTime();
+}
+
 /** Grid cell link text: host-zone "HH:mm" + title capped at GRID_TITLE_MAX chars. */
 export function gridTitle(title: string): string {
   const chars = [...title];

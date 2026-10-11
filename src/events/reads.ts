@@ -20,13 +20,14 @@ import { events, rsvps } from "../db/admin-schema";
 import { users } from "../db/schema";
 import { keyedMemberRead, nonSensitiveRead } from "../member-reads";
 import {
+  calendarGridRange,
   EVENTS_MONTH_GRID_LIMIT,
   EVENTS_PAST_DRAWER_LIMIT,
   EVENTS_UPCOMING_PAGE_SIZE,
   escapeLikeTerm,
   PAST_EVENTS_PAGE_SIZE,
-  parseCalendarMonth,
   wallDateIso,
+  wallDayStart,
 } from "../islands/contracts";
 
 export type PublicEvent = typeof events.$inferSelect & { goingCount: number };
@@ -128,10 +129,11 @@ export async function listUpcoming(
   };
 }
 
-/** Month-grid scope: the visible upcoming rows whose host-zone wall month is
- * `month` ("YYYY-MM", caller-validated). SQL reads a UTC window widened by a
- * day on each side — the widest IANA offset plus DST — and JS keeps exactly
- * the rows that land in the month in their own zone. The grid cap is a
+/** Month-grid scope: the visible upcoming rows plotted on the grid for `month`
+ * ("YYYY-MM", caller-validated). The grid renders whole Monday-first weeks,
+ * so the covered range reaches into the adjacent months and the read keeps
+ * exactly the rows landing on a covered wall day in their own zone. SQL reads
+ * the covered UTC days widened for the widest zone offset; the grid cap is a
  * pathological guard only: a real month never holds that many events. */
 export async function listUpcomingForMonth(
   db: Db,
@@ -141,11 +143,12 @@ export async function listUpcomingForMonth(
 ): Promise<PublicEvent[]> {
   // A bad month is an empty grid, never a 500: the route only passes
   // validated months, this keeps the read total.
-  const parsed = parseCalendarMonth(month);
-  if (!parsed) return [];
-  const [y, m] = parsed.split("-").map(Number);
-  const from = new Date(Date.UTC(y!, m! - 1, 1) - 86400000);
-  const to = new Date(Date.UTC(y!, m!, 1) + 86400000);
+  const range = calendarGridRange(month);
+  if (!range) return [];
+  const from = new Date(wallDayStart(range.first) - 86400000);
+  const to = new Date(wallDayStart(range.last) + 2 * 86400000);
+  const firstDay = wallDayStart(range.first);
+  const lastDay = wallDayStart(range.last);
   const rows = await db
     .select()
     .from(events)
@@ -162,10 +165,11 @@ export async function listUpcomingForMonth(
     .limit(EVENTS_MONTH_GRID_LIMIT);
   return withGoing(
     db,
-    rows.filter(
-      (r) =>
-        isRenderableEventWindow(r) && wallDateIso(r.startsAt, r.timezone).slice(0, 7) === parsed,
-    ),
+    rows.filter((r) => {
+      if (!isRenderableEventWindow(r)) return false;
+      const day = wallDayStart(wallDateIso(r.startsAt, r.timezone));
+      return day >= firstDay && day <= lastDay;
+    }),
   );
 }
 

@@ -602,7 +602,13 @@ export const EventsCalendarPage: FC<{
             </div>
           ) : null}
 
-          {emptyState === null && hasVisibleResults && state.view === "calendar" ? (
+          {/* The grid is month-scoped, so its gate cannot be the rendered rows:
+              an empty month of a non-empty schedule still renders the grid.
+              With no empty state there is always something somewhere — the
+              empty states already cover the empty collection — so their
+              absence alone opens the grid, exactly like the old unpaged merge
+              whose non-emptiness always implied visible rows. */}
+          {emptyState === null && state.view === "calendar" ? (
             <MonthGrid state={state} weeks={weeks} zone={zone} />
           ) : null}
         </div>

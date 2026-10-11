@@ -4,6 +4,7 @@ import { dbFor } from "../admin/db";
 import { inviteDestination } from "../invite";
 import {
   calendarEmptyState,
+  calendarGridRange,
   calendarZone,
   currentCalendarMonth,
   dedupeTransients,
@@ -12,6 +13,7 @@ import {
   parseCalendarMonth,
   parseCalendarView,
   wallDateIso,
+  wallDayStart,
   wallMonth,
 } from "../islands/contracts";
 import { takeJoinResult, readJoinResult } from "../return-journey";
@@ -183,11 +185,18 @@ export function registerCalendarRoutes(
         ...monthRows.map((e) => e.timezone),
         ...localPast.map((e) => e.timezone),
       ]);
-      // The grid plots host-zone wall days, so it keeps exactly the Discord
-      // extras that land in the displayed month in the same zone.
+      // The grid renders whole weeks, so it keeps exactly the Discord extras
+      // landing on a covered wall day in the same zone — including the
+      // adjacent months' neighbor cells.
+      const grid = calendarGridRange(month) ?? { first: month, last: month };
+      const gridFirst = wallDayStart(grid.first);
+      const gridLast = wallDayStart(grid.last);
       upcoming = mergeCalendarRows(
         monthRows,
-        transients.filter((t) => wallDateIso(t.startsAt, zone).slice(0, 7) === month),
+        transients.filter((t) => {
+          const day = wallDayStart(wallDateIso(t.startsAt, zone));
+          return day >= gridFirst && day <= gridLast;
+        }),
       );
     }
 

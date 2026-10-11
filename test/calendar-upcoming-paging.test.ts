@@ -1,7 +1,7 @@
-// The upcoming calendar list is paged and the month grid is month-scoped, so
-// the read, the RSVP aggregate and the rendered HTML stay bounded no matter
-// how many future events exist. Real route + real SQL against the isolated
-// test database only.
+// The upcoming calendar list is paged and the month grid reads only its
+// covered weeks, so the read, the RSVP aggregate and the rendered HTML stay
+// bounded no matter how many future events exist. Real route + real SQL
+// against the isolated test database only.
 import { Hono } from "hono";
 import { describe, expect, it } from "vitest";
 import type { EnvWithAdminDb } from "../src/admin/db";
@@ -9,7 +9,7 @@ import type { Env } from "../src/env";
 import { __resetAnonEventCacheForTests } from "../src/events/anon-cache";
 import { listUpcoming, listUpcomingForMonth, normalizeUpcomingPage } from "../src/events/reads";
 import { registerEventRoutes } from "../src/events/routes";
-import { EVENTS_UPCOMING_PAGE_SIZE } from "../src/islands/contracts";
+import { calendarGridRange, EVENTS_UPCOMING_PAGE_SIZE } from "../src/islands/contracts";
 import { createMemberDataFixture, testDatabaseUrl } from "./helpers/member-data-db";
 
 const raw = process.env.DATABASE_URL;
@@ -132,6 +132,22 @@ describe.skipIf(!url)("upcoming list paging (isolated test DB)", () => {
       expect(await listUpcomingForMonth(db, "2060-09", NOW)).toEqual([]);
       // A bad month is an empty grid, never a 500.
       expect(await listUpcomingForMonth(db, "banana", NOW)).toEqual([]);
+    } finally {
+      await fixture.dispose();
+    }
+  });
+
+  it("covers the grid's neighbor days but nothing outside the covered weeks", async () => {
+    const fixture = await createMemberDataFixture(url!, { max: 2 });
+    const { client, db } = fixture;
+    try {
+      // Geometry-independent: the range helper and the read share the grid.
+      const range = calendarGridRange("2060-07")!;
+      const before = new Date(`${range.first}T18:00:00Z`).getTime() - 86400000;
+      await seedUpcoming(client, 40, 1, new Date(`${range.first}T18:00:00Z`));
+      await seedUpcoming(client, 41, 1, new Date(before));
+      const july = await listUpcomingForMonth(db, "2060-07", NOW);
+      expect(july.map((row) => row.eventKey)).toEqual([key(40)]);
     } finally {
       await fixture.dispose();
     }

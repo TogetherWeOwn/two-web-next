@@ -6,6 +6,7 @@ import app from "../src/index";
 import { events } from "../src/db/admin-schema";
 import type { Db } from "../src/db/index";
 import type { Env } from "../src/env";
+import { EVENTS_MONTH_GRID_LIMIT, EVENTS_UPCOMING_PAGE_SIZE } from "../src/islands/contracts";
 import { createMemorySessionStore } from "../src/sessions";
 
 import { auditPaths, fixtureKey } from "./lighthouse-paths";
@@ -110,11 +111,42 @@ export function fixtureEnvForRequest(nowMs: number): Env & Record<string, unknow
         }
         if (
           sql ===
-            `${eventSelect} where ("events"."status" != 'draft' and (isfinite("events"."starts_at") and isfinite("events"."ends_at")) and "events"."ends_at" >= $1) order by "events"."starts_at" asc, "events"."id" asc` &&
+            `select count(*) from "events" where ("events"."status" != 'draft' and (isfinite("events"."starts_at") and isfinite("events"."ends_at")) and "events"."ends_at" >= $1)` &&
           params.length === 1 &&
           isInstant(params[0])
         ) {
+          return { rows: [[fixture.endsAt >= new Date(params[0]) ? "1" : "0"]] };
+        }
+        // The upcoming list is paged: the audited set only turns page one
+        // (Drizzle omits a zero offset), so the pinned limit below proves the
+        // bound, not just the shape. Later pages emit an offset clause the
+        // closed list deliberately does not know.
+        if (
+          sql ===
+            `${eventSelect} where ("events"."status" != 'draft' and (isfinite("events"."starts_at") and isfinite("events"."ends_at")) and "events"."ends_at" >= $1) order by "events"."starts_at" asc, "events"."id" asc limit $2` &&
+          params.length === 2 &&
+          isInstant(params[0]) &&
+          params[1] === EVENTS_UPCOMING_PAGE_SIZE + 1
+        ) {
           return { rows: fixture.endsAt >= new Date(params[0]) ? [encoded] : [] };
+        }
+        // No calendar-view traffic in the audited set; emulate the month read
+        // faithfully against the single fixture row so one never 500s silently.
+        if (
+          sql ===
+            `${eventSelect} where ("events"."status" != 'draft' and (isfinite("events"."starts_at") and isfinite("events"."ends_at")) and "events"."ends_at" >= $1 and "events"."starts_at" >= $2 and "events"."starts_at" < $3) order by "events"."starts_at" asc, "events"."id" asc limit $4` &&
+          params.length === 4 &&
+          isInstant(params[0]) &&
+          isInstant(params[1]) &&
+          isInstant(params[2]) &&
+          params[3] === EVENTS_MONTH_GRID_LIMIT
+        ) {
+          const startsAt = fixture.startsAt.getTime();
+          const inWindow =
+            startsAt >= new Date(params[1]).getTime() && startsAt < new Date(params[2]).getTime();
+          return {
+            rows: fixture.endsAt >= new Date(params[0]) && inWindow ? [encoded] : [],
+          };
         }
         if (
           inTransaction &&
