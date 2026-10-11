@@ -218,7 +218,9 @@ from TypeScript's module diagnostic. `assets/styles.css`, `public/styles.css`,
 source-order substrings and single-line selector scoping. `ci/featured-proof/**` also retains its immutable,
 hash-verified proof inputs byte-for-byte. Their content, hashes and regression
 assertions remain unchanged. These formatter exemptions disable neither lint nor
-typecheck.
+typecheck. Lint exemptions are limited to `public/islands/**` and the hash-pinned
+`ci/featured-proof/fixtures/**`; `ci/a11y.mjs`, the other featured-proof files and the
+stylesheets are still linted.
 Configuration options follow the [Biome configuration reference](https://biomejs.dev/reference/configuration/).
 
 Never commit secrets, `.dev.vars` or `node_modules/`. Run tests only against the
