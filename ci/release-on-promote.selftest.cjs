@@ -198,13 +198,15 @@ fs.writeFileSync(
     "#!/bin/sh",
     'echo "$*" >> "$FAKE_GH_LOG"',
     'case "$*" in',
-    '  "api repos/o/r/releases/tags/v1.0.1"*|"release view v1.0.1"*)',
+    '  "api repos/o/r/releases/tags/v1.0.1"*)',
     '    case "$FAKE_GH_MODE" in',
     '      absent) echo "gh: Not Found (HTTP 404)" >&2; exit 1 ;;',
     '      exists) echo "{}"; exit 0 ;;',
     '      outage) echo "gh: Service Unavailable (HTTP 503)" >&2; exit 1 ;;',
     '      limited) echo "gh: API rate limit exceeded (HTTP 403)" >&2; exit 1 ;;',
+    '      unauthorized) echo "gh: Bad credentials (HTTP 401)" >&2; exit 1 ;;',
     '      offline) echo "dial tcp: lookup api.github.com: no such host" >&2; exit 1 ;;',
+    "      silent) exit 1 ;;",
     "    esac ;;",
     '  "release create "*) exit 0 ;;',
     "esac",
@@ -244,7 +246,7 @@ const exists = publish("exists");
 assert.equal(exists.status, 0, exists.stderr);
 assert.doesNotMatch(exists.gh, /^release create /m);
 assert.equal(exists.out, "tag_name=v1.0.1\nreleased=true\n");
-for (const mode of ["outage", "limited", "offline"]) {
+for (const mode of ["outage", "limited", "unauthorized", "offline", "silent"]) {
   const stopped = publish(mode);
   assert.notEqual(stopped.status, 0, `${mode}: an inconclusive lookup must stop the promote`);
   assert.match(stopped.stderr, /existing-release lookup for v1\.0\.1 was inconclusive/, mode);
