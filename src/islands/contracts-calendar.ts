@@ -352,6 +352,16 @@ export function gridTitle(title: string): string {
   return chars.length > GRID_TITLE_MAX ? `${chars.slice(0, GRID_TITLE_MAX).join("")}…` : title;
 }
 
+/** Month-grid link accessible name: the COMPLETE title plus the card's human
+ * day/time ("Tue 15 Jan, 20:00") so same-time rows sharing the truncated
+ * visible prefix stay distinguishable to assistive tech. The visible label
+ * keeps the compact `gridTitle` form; this string rides as the link's
+ * accessible name only. Rendered through JSX, so markup in titles is
+ * escaped, never interpreted. */
+export function gridAccessibleName(title: string, startsAt: Date, zone: string): string {
+  return `${title}, ${cardTimeLabel(startsAt, zone)}`;
+}
+
 /* Discord-native rows (TOG-5168): display-only transients merged into the
  * upcoming list in start order — expiring cache bytes, never canonical events, published, or
  * handed to the write-back. A transient card shows the Discord RSVP link and
