@@ -66,6 +66,17 @@
     if (active) active.abort();
     var controller = new AbortController();
     active = controller;
+    // Focus ownership: an uninterrupted page turn lands on the archive heading,
+    // but a member who deliberately tabs to a stable header/footer control while
+    // the read is pending keeps that control. Any focusin to another target
+    // marks movement, so moving away and back is remembered explicitly rather
+    // than guessed from the final active element.
+    var focusAtStart = document.activeElement;
+    var focusMoved = false;
+    var trackFocus = function (event) {
+      if (event && event.target !== focusAtStart) focusMoved = true;
+    };
+    document.addEventListener("focusin", trackFocus);
     root.setAttribute("aria-busy", "true");
     feedback.textContent = "Loading past events…";
     try {
@@ -126,6 +137,17 @@
         };
       });
       if (active !== controller || controller.signal.aborted) return;
+      // Decide focus before the swap detaches the activating pager link: an
+      // uninterrupted turn owns focus and lands on the heading, while deliberate
+      // movement preserves the member's control unless it lives inside a zone
+      // about to be replaced (then the heading avoids a body fallback).
+      var currentFocus = document.activeElement;
+      var ownsFocus = !focusMoved && currentFocus === focusAtStart;
+      var focusInsideSwap =
+        !!currentFocus &&
+        targets.some(function (target) {
+          return target.contains(currentFocus);
+        });
       swaps.forEach(function (swap) {
         swap.target.replaceChildren.apply(swap.target, swap.children);
         swap.target.hidden = swap.hidden;
@@ -137,7 +159,7 @@
       if (push) window.history.pushState(null, "", url.pathname + url.search);
       renderedUrl = url.href;
       feedback.textContent = "";
-      heading.focus();
+      if (ownsFocus || focusInsideSwap) heading.focus();
     } catch (error) {
       if (active !== controller || error.name === "AbortError") return;
       feedback.textContent = root.dataset.loadError;
@@ -145,6 +167,7 @@
       if (!push || window.location.href !== renderedUrl)
         window.location.assign(window.location.href);
     } finally {
+      document.removeEventListener("focusin", trackFocus);
       if (active === controller) {
         root.removeAttribute("aria-busy");
         active = null;
