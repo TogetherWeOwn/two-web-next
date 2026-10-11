@@ -3,7 +3,15 @@ import { handleCallInternalAction } from "../src/jobs/call-internal-action";
 import { CALL_INTERNAL_ACTION } from "../src/jobs/constants";
 import { consume } from "../src/jobs/consumer";
 import { admitRetryDelay, MAX_RETRY_DELAY_SECONDS } from "../src/jobs/retry-delay";
-import type { BotClient, BotFailure, QueueLedger, UniqueLock } from "../src/jobs/types";
+import { handleSyncEvent } from "../src/jobs/sync-event";
+import type {
+  BotClient,
+  BotFailure,
+  EventStore,
+  QueueLedger,
+  SyncAttempt,
+  UniqueLock,
+} from "../src/jobs/types";
 
 const FALLBACK = 5; // backoffFor(CALL_INTERNAL_ACTION.backoffSeconds, 1)
 
@@ -159,5 +167,78 @@ describe("handleCallInternalAction retry admission (TOG-11629)", () => {
     // Attempt 5 with a poisoned delay still fails terminally, not retries.
     const outcome = await handleCallInternalAction({ ...ann }, 5, botWith(NaN));
     expect("failed" in outcome).toBe(true);
+  });
+});
+
+describe("handleSyncEvent retry admission (TOG-21876)", () => {
+  const clock = Date.parse("2026-10-11T12:00:00Z");
+  const now = () => new Date(clock);
+  const msg = { eventKey: "event-key", idempotencyKey: "00000000-0000-4000-8000-000000000001" };
+  const SYNC_BACKOFF = 10; // backoffFor(SYNC_EVENT.backoffSeconds, 1)
+
+  const attempt = (): SyncAttempt => ({
+    eventKey: "event-key",
+    idempotencyKey: msg.idempotencyKey,
+    revision: 1,
+    mirroredAt: new Date(0),
+    state: "pending",
+    requestAttempts: 0,
+    nextAttemptAt: new Date(0),
+    action: "event.upsert",
+    payload: {
+      eventKey: "event-key",
+      name: "event",
+      startsAt: "2026-10-01T12:00:00Z",
+      endsAt: "2026-10-01T13:00:00Z",
+      location: "room",
+      description: "details",
+    },
+  });
+
+  function syncStore(current: SyncAttempt) {
+    const deferred: Array<Date | null> = [];
+    const events = {
+      prepareSync: async () => current,
+      claimSync: async () => current,
+      deferSync: async (_attempt: SyncAttempt, at: Date | null) => void deferred.push(at),
+      completeSync: async () => {},
+    } as unknown as EventStore;
+    return { events, deferred };
+  }
+
+  function syncBot(retryAfterSeconds: unknown): BotClient {
+    const answer: BotFailure = {
+      ok: false,
+      code: "rate_limited",
+      status: 429,
+      requestId: null,
+      message: "slow down",
+      retryable: true,
+      retryAfterSeconds: retryAfterSeconds as number | null,
+    };
+    return {
+      upsertEvent: async () => answer,
+      cancelEvent: async () => answer,
+    } as unknown as BotClient;
+  }
+
+  it("uses a valid bot Retry-After as both the persisted deadline and the queue delay", async () => {
+    const { events, deferred } = syncStore(attempt());
+    const outcome = await handleSyncEvent(msg, 1, { bot: syncBot(42), events, now });
+    expect(outcome).toEqual({ retryInSeconds: 42 });
+    expect(deferred).toEqual([new Date(clock + 42_000)]);
+  });
+
+  it.each([
+    ["zero (outside the retry transport range)", 0],
+    ["above the documented range", 86401],
+    ["a header value too large to be a delay", 1e26],
+    ["an overflowing header value", Infinity],
+    ["absent", null],
+  ])("falls back to this attempt's sync backoff for %s", async (_label, candidate) => {
+    const { events, deferred } = syncStore(attempt());
+    const outcome = await handleSyncEvent(msg, 1, { bot: syncBot(candidate), events, now });
+    expect(outcome).toEqual({ retryInSeconds: SYNC_BACKOFF });
+    expect(deferred).toEqual([new Date(clock + SYNC_BACKOFF * 1000)]);
   });
 });
