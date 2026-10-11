@@ -3,7 +3,7 @@ import { URL } from "node:url";
 import { describe, expect, it } from "vitest";
 
 const model = readFileSync(new URL("../docs/threat-model.md", import.meta.url), "utf8");
-const references = [...model.matchAll(/`((?:test|docs|src|tail|drizzle)\/[^`]+)`/g)].map(
+const references = [...model.matchAll(/`((?:test|docs|src|tail|drizzle|bin)\/[^`]+)`/g)].map(
   (match) => match[1]!,
 );
 const relativeLinks = [...model.matchAll(/\]\((\.\.\/[^)#]+)/g)].map((match) => match[1]!);

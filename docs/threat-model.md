@@ -52,7 +52,7 @@ Each case names the repository control and at least one existing test or documen
 | An attacker forges OAuth journey state to alter the callback's stored login intent or return path. | Signed, short-lived journey cookies are verified; see `src/oauth-journeys.ts`, `test/oauth-journeys.test.ts`. Callback identity binding is outside this assertion. |
 | An attacker replays a consumed OAuth callback journey. | Journey freshness and one-use admission are checked against the shared store; see `src/oauth-journeys.ts`, `test/oauth-journeys.test.ts`, `test/oauth-exchange-outcomes.test.ts`. |
 | A stolen session cookie is replayed after logout, expiry, fresh login or concurrent rotation. | Only token hashes are stored; sessions expire, rotate atomically and can be revoked; see `src/sessions.ts`, `test/sessions.test.ts`, `test/session-rotation-revocation-race.test.ts`. |
-| An OAuth access token is persisted by the web application after the join flow. | The access token is used for the bounded join operation and is not stored; see `test/auth-discord-no-store.test.ts`. |
+| An OAuth access token is persisted by the web application after sign-in or the join flow. | The token remains request-local in `src/auth/routes.ts` and `src/join/route.ts` and is omitted from their persistence payloads. `test/join.test.ts` checks successful-flow token exclusion from join-attempt and throttle records only, not every store. Success-path session and member-roster coverage remains an evidence gap below. |
 | An OAuth access token is exposed in a failure-path diagnostic. | The application avoids storing the token; `test/oauth-failure.test.ts` covers failure handling but does not establish that every diagnostic excludes token material. This residual is listed below. |
 
 ### Hyperdrive / Postgres, member data and audit records
@@ -75,7 +75,7 @@ Each case names the repository control and at least one existing test or documen
 | --- | --- |
 | A guest, non-member or ordinary member attempts to access moderator routes by guessing URLs or changing client-side state. | Server-side session authorization rejects guests and non-moderators; see `src/admin/guard.ts`, `test/admin-guard-matrix.test.ts`, `test/admin-authwall-probe.test.ts`. |
 | A similarly named or malformed role grants elevated rights. | Role checks use configured numeric snowflake IDs, not names; blank allowlists and failed lookups fail closed. See `src/roles.ts`, `test/moderator-malformed-success.test.ts`. |
-| A moderator's Discord role is removed but their existing session remains privileged. | Role membership is recomputed at login, not on every admin request; session lifetime/rotation bounds freshness but does not provide immediate role revocation. See `src/roles.ts`, `src/admin/guard.ts`, `docs/moderator-admin-guide.md`. `test/admin-guard-matrix.test.ts` verifies role gating, not Discord role-removal freshness. |
+| A moderator's Discord role is removed but their existing session remains privileged. | Role membership is recomputed at login, not on every admin request; rotation preserves the session's moderator flag. Operators can invalidate active sessions using `bin/revoke-sessions.mjs`, backed by `src/session-revocation.ts` and `test/revoke-sessions.test.ts`. `docs/runbook.md` documents immediate invalidation and quarterly `audit:moderator-roles` drift checks; see also `docs/moderator-admin-guide.md`. Removal does not automatically trigger revocation: detection and operator action are still required. |
 
 ### Bot internal actions and Discord credentials
 
@@ -114,10 +114,11 @@ This table lists the residual portion of the abuse cases above that the cited co
 
 | Abuse case with an unresolved control or evidence gap | Suggested owner |
 | --- | --- |
-| Discord role removal does not revoke an already-issued moderator session immediately. | Security |
+| Discord role removal does not automatically revoke an already-issued moderator session; operator detection and revocation are required, including between quarterly access reviews. | Security |
+| Successful-flow OAuth token non-persistence lacks a cited regression covering session and member-roster rows. | Security |
 | An OAuth access token is exposed in a failure-path diagnostic. | Security |
-| An unauthenticated caller submits an internal action directly to the bot receiver. | Web |
-| A captured signed request is replayed at the bot receiver. | Web |
+| An unauthenticated caller submits an internal action directly to the bot receiver. | Security (coordinate with bot receiver maintainers) |
+| A captured signed request is replayed at the bot receiver. | Security (coordinate with bot receiver maintainers) |
 | An overprivileged database operator bypasses append-only enforcement or extracts stored member data. | Security |
 
 ## Limits and review
