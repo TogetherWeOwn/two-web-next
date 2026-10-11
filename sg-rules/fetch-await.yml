@@ -4,10 +4,15 @@
 # is unobserved and its response never reaches the caller. Deliberate
 # fire-and-forget needs an explicit `void` with a comment saying why the
 # outcome is safe to drop (a future rule revision can allow void explicitly).
+#
+# Every `inside` search stops at the nearest function boundary: an `await`
+# or `return` outside a callback does not settle the promise created inside
+# it. A concise arrow body (`(u) => fetch(u)`) is the callback's implicit
+# return, so it stays exempt. Edge: `resolve(fetch(u))` inside a Promise
+# executor is flagged; restructure to async/await instead.
 id: fetch-must-be-awaited
-# `ts`, not `tsx`: with 0.50.0 the tsx grammar does not match the
-# call_expression pattern below (verified: ts matches, tsx misses).
-# The ts grammar still parses the repo's .tsx files for this pattern.
+# `ts` only: ast-grep applies a rule to a single language, so `src/**/*.tsx`
+# is covered by the sibling rule in fetch-await-tsx.yml (`language: tsx`).
 language: ts
 severity: error
 message: "fetch(...) must be awaited, returned, or .then/.catch-chained"
@@ -19,27 +24,56 @@ files:
   # (`inflight = fetch(...).then(...)`) behind generation guards; they are
   # covered by browser tests, not by this rule.
   - src/**/*.ts
-  - src/**/*.tsx
 rule:
   kind: call_expression
   pattern: fetch($$$)
   not:
     any:
-      # await fetch(...) anywhere up the ancestor chain.
+      # await fetch(...) up the ancestor chain, within the same function.
       - inside:
           kind: await_expression
-          stopBy: end
-      # return fetch(...).
+          stopBy:
+            any:
+              - kind: arrow_function
+              - kind: function_declaration
+              - kind: function_expression
+              - kind: method_definition
+      # return fetch(...), within the same function.
       - inside:
           kind: return_statement
-          stopBy: end
+          stopBy:
+            any:
+              - kind: arrow_function
+              - kind: function_declaration
+              - kind: function_expression
+              - kind: method_definition
       # fetch(...).then(...) / .catch(...) / .finally(...) chains.
       - inside:
-          stopBy: end
+          stopBy:
+            any:
+              - kind: arrow_function
+              - kind: function_declaration
+              - kind: function_expression
+              - kind: method_definition
           pattern: fetch($$$).then($$$)
       - inside:
-          stopBy: end
+          stopBy:
+            any:
+              - kind: arrow_function
+              - kind: function_declaration
+              - kind: function_expression
+              - kind: method_definition
           pattern: fetch($$$).catch($$$)
       - inside:
-          stopBy: end
+          stopBy:
+            any:
+              - kind: arrow_function
+              - kind: function_declaration
+              - kind: function_expression
+              - kind: method_definition
           pattern: fetch($$$).finally($$$)
+      # `(u) => fetch(u)`: the call is the arrow body, i.e. the callback's
+      # implicit return, so the promise reaches the caller.
+      - inside:
+          kind: arrow_function
+          field: body

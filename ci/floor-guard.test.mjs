@@ -92,10 +92,7 @@ describe("floor-guard", () => {
         "--- a/test/a.test.ts\n+++ b/test/a.test.ts\n@@ -1,3 +1,2 @@\n-expect(x).toBe(1);\n-expect(y).toBe(2);\n+expect(x).toBe(1);\n",
       ),
     );
-    assert.equal(
-      findings.filter((f) => f.rule === "assertion-removed").length,
-      1,
-    );
+    assert.equal(findings.filter((f) => f.rule === "assertion-removed").length, 1);
   });
 
   it("flags a lowered threshold in CONSTRAINTS.md", () => {

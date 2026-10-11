@@ -603,15 +603,21 @@ describe("mapping table", () => {
     const { fileURLToPath } = await import("node:url");
     const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
     const src = readFileSync(resolve(root, "test/seo-headers.test.ts"), "utf8");
-    const titles = new Set([...src.matchAll(/^describe\("([^"]+)",/gm)].map((m) => m[1]));
+    // Compare trailing-parenthetical-free names: the describe titles carry
+    // legacy origin tags, and spelling those tags here would add new
+    // internal references to a public repo (the internal-ref ratchet fails
+    // net growth). The pin still requires every section to exist.
+    const titles = new Set(
+      [...src.matchAll(/^describe\("([^"]+)",/gm)].map((m) => m[1]?.replace(/\s*\([^()]*\)$/, "")),
+    );
     // "Ported here" column of the legacy mapping table above, limited to the
     // sections owned by this file; other slices assert their own sections.
     for (const section of [
-      "sitemap + robots (per-env host)",
-      "share meta (TOG-5624)",
-      "static leaves (DB-free floor)",
+      "sitemap + robots",
+      "share meta",
+      "static leaves",
       "homepage degraded fallback",
-      "profile share tags (TOG-6793)",
+      "profile share tags",
       "security headers per route class",
       "URL freeze + no soft 404s",
     ]) {

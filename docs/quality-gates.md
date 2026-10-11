@@ -3,21 +3,31 @@
 Deterministic gates over reviewer judgment. New gates start WARN (report, do
 not fail) unless marked HARD. All of them run on the existing runners only.
 
-- **fetch-await (HARD):** `sg-rules/fetch-await.yml` requires every `fetch(...)`
-  in `src/**` to be awaited, returned, or `.then/.catch`-chained. Fails
-  `check` via `ast-grep scan --error`. Islands (`assets/islands/*.js`) are
-  out of scope: they use assigned `.then` chains behind generation guards.
+- **fetch-await (HARD):** `sg-rules/fetch-await.yml` (`language: ts`,
+  `src/**/*.ts`) plus its twin `sg-rules/fetch-await-tsx.yml`
+  (`language: tsx`, `src/**/*.tsx`) require every `fetch(...)` in `src/**`
+  to be awaited, returned, or `.then/.catch`-chained. Fails `check` via
+  `ast-grep scan --error`. The `await`/`return` search stops at the nearest
+  function boundary, so a floating call inside a callback is still flagged;
+  a concise arrow body (`(u) => fetch(u)`) is the callback's implicit return
+  and stays exempt. Islands (`assets/islands/*.js`) are out of scope: they
+  use assigned `.then` chains behind generation guards. Rule fixtures live
+  in `sg-tests/fetch-await*.yml` and run under `npm run scan:rules-test`.
 - **Changed-lines coverage (WARN, 80%):** `ci/patch-coverage.mjs` intersects
   the PR diff with `coverage-final.json`; added TS lines nobody executes warn.
   Aggregate floors in `vitest.config.ts` stay. Flip to `--strict` for HARD.
 - **Semgrep TS + secrets (WARN):** `ci/semgrep-rules.yml` flags dangerous
   sinks (`eval`, string `setTimeout`, `innerHTML`, `document.write`) and
-  secret-shaped literals. Full-history leak scanning stays with gitleaks.
+  secret-shaped literals. The CI step calls the `semgrep` console script
+  (pinned) because `python -m semgrep` is a deprecated shim that exits 2
+  without scanning. Full-history leak scanning stays with gitleaks.
 - **Mutation nightly (non-blocking):** `ci/mutation-sessions-join.mjs` weakens
   one auth check at a time and runs the hermetic kill suite; survivors are
   coverage gaps in the report artifact, never a red build.
-- **Test inventory (WARN):** `ci/test-inventory.mjs` fails (warns) when a
-  `*.test.ts` / `*.test.mjs` file is reachable from no CI job.
+- **Test inventory (WARN):** `ci/test-inventory.mjs` warns when a
+  `*.test.ts` / `*.test.mjs` file is reachable from no CI job. The step
+  runs with `continue-on-error` and the `--selftest` is hermetic (fixture
+  trees only), so an orphan can never fail the job or skip later steps.
 - **Floor guard (HARD):** `ci/floor-guard.mjs` enforces the CONSTRAINTS.md
   floor on the PR diff: new suppressions, added skips, deleted test files,
   net-removed assertions, stubs, new exception rows, and lowered thresholds
