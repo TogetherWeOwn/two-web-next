@@ -817,7 +817,7 @@ describe.skipIf(!process.env.DATABASE_URL)("admin store failure and rollback pat
   it("ignores a file upload field on the event form and still creates the draft", async () => {
     const body = new FormData();
     for (const [k, v] of Object.entries(FORM)) body.set(k, v);
-    body.set("poster", new File(["bytes"], "poster.png", { type: "image/png" }));
+    body.set("capacity", new File(["8"], "c.txt", { type: "text/plain" }));
     const res = await app().request(
       "/events",
       { method: "POST", headers: { cookie }, body },
@@ -825,6 +825,8 @@ describe.skipIf(!process.env.DATABASE_URL)("admin store failure and rollback pat
     );
     expect(res.status).toBe(303);
     expect(await eventCount(db)).toBe(1);
+    const [row] = await db.select().from(events);
+    expect(row?.capacity).toBeNull();
   });
 
   it("fails the queue preview audit closed when no audit database is configured", async () => {
