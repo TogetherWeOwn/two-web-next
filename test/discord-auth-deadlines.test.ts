@@ -402,7 +402,10 @@ describe("Discord auth deadlines", () => {
     const body = new ReadableStream<Uint8Array>({
       start(c) {
         for (const chunk of chunks) c.enqueue(chunk);
-        c.close();
+        // Leave single-chunk bodies open so the overflow cancel is observable:
+        // a pre-closed stream never invokes its cancel callback, unlike a real
+        // network body that is still open when the cap trips.
+        if (chunkCount > 1) c.close();
       },
       cancel,
     });
@@ -415,8 +418,10 @@ describe("Discord auth deadlines", () => {
     expect(res.statusText).toBe("OK");
     expect(await res.text()).toBe("");
     expect(body.locked).toBe(false);
-    // Reader cancellation on overflow is verified by the unlocked body and empty result.
-    // The cancel callback may resolve asynchronously after reader.cancel() returns.
+    // Overflow must cancel the reader to stop the download and free the
+    // connection; body.locked is false either way because discordFetch always
+    // releases the lock in its finally block.
+    expect(cancel).toHaveBeenCalledOnce();
     expect(vi.getTimerCount()).toBe(0);
   });
 
