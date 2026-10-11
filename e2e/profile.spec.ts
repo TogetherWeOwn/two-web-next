@@ -41,6 +41,11 @@ test("QA member signs out from the profile header and sees no moderator shortcut
   page,
   context,
 }) => {
+  // Eleventh login in the single-worker suite: the shared qa-login budget
+  // (10/min) can park this login on Retry-After for most of a minute.
+  // Triples the timeout to 90s; the fixtures retry is bounded at three
+  // attempts and fails loud past that.
+  test.slow();
   await qaLogin(context, "qa-member");
   await page.goto("/profile");
   await expect(page.getByRole("heading", { name: "QA Member", exact: true })).toBeVisible();
@@ -59,6 +64,10 @@ test("QA member signs out from the profile header and sees no moderator shortcut
 });
 
 test("QA moderator reaches the admin panel from the profile header", async ({ page, context }) => {
+  // Twelfth login in the single-worker suite: same throttle wait as above.
+  // Triples the timeout to 90s; the fixtures retry is bounded at three
+  // attempts and fails loud past that.
+  test.slow();
   await qaLogin(context, "qa-moderator");
   await page.goto("/profile");
   await expect(page.getByRole("heading", { name: "QA Moderator", exact: true })).toBeVisible();
