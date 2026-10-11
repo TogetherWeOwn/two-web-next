@@ -13,17 +13,19 @@ with the committed baselines in `e2e/visual/__screenshots__/`.
   wall clock), animations are disabled, and the caret is hidden. A route must
   return 200.
 - **Threshold:** `maxDiffPixelRatio: 0.01` per screenshot
-  (`playwright.visual.config.ts`). CI never rewrites a baseline
-  (`updateSnapshots: "none"`).
+  (`playwright.visual.config.ts`). CI never rewrites an existing baseline
+  (`updateSnapshots: "missing"` only creates absent ones), and the job fails
+  while any generated baseline is uncommitted.
 
 ## When a diff is intentional
 
 1. Download the `e2e-failure-<run>` artifact from the failed run. It holds the
-   expected, actual and diff images under `test-results-visual/` and an HTML
-   report under `playwright-report-visual/`.
+   expected, actual and diff images under `test-results-visual/`, any newly
+   generated baselines under `e2e/visual/__screenshots__/`, and an HTML report
+   under `playwright-report-visual/`.
 2. Check every diff image. Only accept changes the PR meant to make.
 3. Run `node ci/visual-accept.mjs <unzipped-artifact-dir>`, which copies each
-   `*-actual.png` over its baseline.
+   `*-actual.png` over its baseline and each new baseline into place.
 4. Commit the updated baselines in the same PR and say why in the PR body.
    Reviewers treat a baseline change like code: an unexplained one is a finding.
 
