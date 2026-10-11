@@ -5,6 +5,7 @@
 import { Hono } from "hono";
 import { describe, expect, it } from "vitest";
 import type { EnvWithAdminDb } from "../src/admin/db";
+import { eventSearchLogs } from "../src/db/admin-schema";
 import type { Env } from "../src/env";
 import { __resetAnonEventCacheForTests } from "../src/events/anon-cache";
 import {
@@ -14,7 +15,12 @@ import {
   rankUpcoming,
 } from "../src/events/reads";
 import { registerEventRoutes } from "../src/events/routes";
-import { calendarGridRange, EVENTS_UPCOMING_PAGE_SIZE } from "../src/islands/contracts";
+import {
+  calendarGridRange,
+  eventsSearchHitCopy,
+  eventsSearchMissCopy,
+  EVENTS_UPCOMING_PAGE_SIZE,
+} from "../src/islands/contracts";
 import { createMemberDataFixture, testDatabaseUrl } from "./helpers/member-data-db";
 
 const raw = process.env.DATABASE_URL;
@@ -267,6 +273,87 @@ describe.skipIf(!url)("upcoming list paging (isolated test DB)", () => {
       expect(html).toContain('data-testid="events-calendar-grid"');
       expect(html).toContain("Paged 0");
       expect(html).not.toContain("Paged 1");
+    } finally {
+      await fixture.dispose();
+    }
+  });
+
+  it("keeps paged and jump renders noindex across anonymous cache hits", async () => {
+    const fixture = await createMemberDataFixture(url!, { max: 2 });
+    const { client, db } = fixture;
+    try {
+      __resetAnonEventCacheForTests();
+      await seedUpcoming(
+        client,
+        0,
+        EVENTS_UPCOMING_PAGE_SIZE + 5,
+        new Date("2060-07-01T18:00:00Z"),
+      );
+      const application = app();
+      // One shared env: the anonymous entry is source-scoped, so two
+      // requests through one env hit the same entry like two crawler fetches.
+      const env = routeEnv(db);
+      const first = await application.request("/events?page=2", {}, env);
+      expect(first.status).toBe(200);
+      expect(first.headers.get("x-robots-tag")).toBe("noindex, follow");
+      const firstHtml = await first.text();
+      expect(firstHtml).toContain('name="robots" content="noindex, follow"');
+      // The repeat serves the shared entry: the header is gone, but the
+      // in-body meta survives, so the page is still noindex.
+      const second = await application.request("/events?page=2", {}, env);
+      expect(second.status).toBe(200);
+      const secondHtml = await second.text();
+      expect(secondHtml).toBe(firstHtml);
+      expect(secondHtml).toContain('name="robots" content="noindex, follow"');
+      // A grid day-jump resolves to its list page and stays noindex too.
+      const jumpEnv = routeEnv(db);
+      const target = key(EVENTS_UPCOMING_PAGE_SIZE + 4);
+      const jumpFirst = await application.request(`/events?event=${target}`, {}, jumpEnv);
+      expect(jumpFirst.status).toBe(200);
+      const jumpFirstHtml = await jumpFirst.text();
+      expect(jumpFirstHtml).toContain('name="robots" content="noindex, follow"');
+      const jumpSecond = await application.request(`/events?event=${target}`, {}, jumpEnv);
+      expect(await jumpSecond.text()).toBe(jumpFirstHtml);
+      // Page one stays indexable: no header, no meta.
+      const home = await application.request("/events", {}, routeEnv(db));
+      expect(home.status).toBe(200);
+      expect(home.headers.get("x-robots-tag")).toBeNull();
+      expect(await home.text()).not.toContain('name="robots"');
+    } finally {
+      await fixture.dispose();
+    }
+  });
+
+  it("announces and logs a search per query, not per page", async () => {
+    const fixture = await createMemberDataFixture(url!, { max: 2 });
+    const { client, db } = fixture;
+    try {
+      __resetAnonEventCacheForTests();
+      await seedUpcoming(
+        client,
+        0,
+        EVENTS_UPCOMING_PAGE_SIZE + 5,
+        new Date("2060-07-01T18:00:00Z"),
+      );
+      const application = app();
+      const first = await application.request("/events?q=Paged", {}, routeEnv(db));
+      expect(first.status).toBe(200);
+      expect(await first.text()).toContain(eventsSearchHitCopy("Paged"));
+      // A page past the end still announces a hit — its matches sit on
+      // another page — and records no new search.
+      const far = await application.request("/events?q=Paged&page=9", {}, routeEnv(db));
+      expect(far.status).toBe(200);
+      const farHtml = await far.text();
+      expect(farHtml).toContain('data-testid="events-out-of-range"');
+      expect(farHtml).toContain(eventsSearchHitCopy("Paged"));
+      expect(farHtml).not.toContain(eventsSearchMissCopy("Paged"));
+      // A page turn records no new search either: one row, query total.
+      const turn = await application.request("/events?q=Paged&page=2", {}, routeEnv(db));
+      expect(turn.status).toBe(200);
+      const rows = await db.select().from(eventSearchLogs);
+      expect(rows.map((r) => [r.normalizedQuery, r.resultCount])).toEqual([
+        ["paged", EVENTS_UPCOMING_PAGE_SIZE + 5],
+      ]);
     } finally {
       await fixture.dispose();
     }

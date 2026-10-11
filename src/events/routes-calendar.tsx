@@ -212,6 +212,12 @@ export function registerCalendarRoutes(
     }
 
     const state = { view, month, q, past, page: listPage };
+    // Paged turns and card jumps duplicate first-page content for crawlers,
+    // like the past archive's always-noindex pages. The x-robots-tag header
+    // below is not enough on its own: anonymous cache hits replay only
+    // cache-control, vary and body, so the in-body meta carries the noindex
+    // through the shared entry.
+    const robots = searching || state.page > 1 || jumpKey !== "" ? "noindex, follow" : undefined;
     const emptyState = calendarEmptyState({
       searching,
       upcomingEmpty: totalUpcoming === 0 && transients.length === 0,
@@ -219,12 +225,15 @@ export function registerCalendarRoutes(
       readFailed: discordFailed,
     });
 
-    // One structured line per rendered search: normalized query + visible
-    // count, no identity (legacy EventSearchLogger, TOG-8400). Fail-open.
-    if (searching) {
-      const visibleCount = upcoming.length + localPast.length;
-      await recordSearch(db, q, visibleCount);
-      const entry = eventSearchLogEntry(match ?? "", visibleCount);
+    // One structured line per search: normalized query + the query's total
+    // matches, no identity (legacy EventSearchLogger, TOG-8400). Fail-open.
+    // Page turns and out-of-range pages are the same search, not new ones, so
+    // only the first page records — and the count is the query total, not one
+    // page's rows, or the zero-result report lists queries that do match.
+    if (searching && listPage === 1) {
+      const totalMatches = totalUpcoming + transients.length + localPast.length;
+      await recordSearch(db, q, totalMatches);
+      const entry = eventSearchLogEntry(match ?? "", totalMatches);
       if (entry) {
         try {
           console.info("event_search", JSON.stringify(entry));
@@ -248,9 +257,9 @@ export function registerCalendarRoutes(
       "cache-control",
       session || searching || joinResult ? "private, no-store" : "public, max-age=60",
     );
-    // Paged turns and card jumps duplicate first-page content for crawlers,
-    // like the past archive's always-noindex pages.
-    if (searching || state.page > 1 || jumpKey !== "") c.header("x-robots-tag", "noindex, follow");
+    // First-fetch header for the same duplicates the in-body meta covers on
+    // cache hits (see `robots` above).
+    if (robots !== undefined) c.header("x-robots-tag", "noindex, follow");
     c.header("vary", "Cookie, X-Two-Island");
     // Guest sign-in links carry this page as ?next= so the OAuth round trip
     // lands back here (TOG-10356). Rooted pathname + search only — the
@@ -272,6 +281,7 @@ export function registerCalendarRoutes(
         now={now}
         totalPages={totalPages}
         emptyState={emptyState}
+        robots={robots}
         discordFailed={discordFailed}
         member={session?.member ?? false}
         inviteUrl={inviteDestination(c.env.DISCORD_INVITE_URL)}

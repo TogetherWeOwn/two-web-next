@@ -356,6 +356,10 @@ export const EventsCalendarPage: FC<{
   appUrl: string;
   /** Rooted path the guest sign-in link carries as ?next= (null = bare link). */
   loginReturnTo?: string | null;
+  /** In-body robots directive (survives the anonymous shared entry, where the
+      response header is dropped on a cache hit): set for paged turns, card
+      jumps and searches, like the past archive's always-noindex pages. */
+  robots?: string;
   /** One-shot join confirmation when this page is the join landing (TOG-10356). */
   joinResult?: JoinResult | null;
 }> = ({
@@ -371,6 +375,7 @@ export const EventsCalendarPage: FC<{
   inviteUrl,
   appUrl,
   loginReturnTo = null,
+  robots,
   joinResult = null,
 }) => {
   const searching = calendarSearching(state);
@@ -397,6 +402,7 @@ export const EventsCalendarPage: FC<{
       title="Events"
       canonical={canonicalUrl(appUrl, "/events")}
       description="Game nights, tournaments and whatever else the community puts on."
+      robots={robots}
       member={member}
       loginReturnTo={loginReturnTo}
     >
@@ -434,9 +440,12 @@ export const EventsCalendarPage: FC<{
         <p role="status" class="sr-only" data-testid={EVENTS_VIEW_STATUS_TESTID}>
           {eventsViewStatusCopy(state.view)}
         </p>
+        {/* An out-of-range search page still announces a hit: its matches sit
+            on another page, so "nothing matches" would be wrong and the miss
+            block stays hidden for the same reason (see searchMiss above). */}
         <p role="status" class="sr-only" data-testid={EVENTS_SEARCH_STATUS_TESTID}>
           {searching && emptyState !== "error"
-            ? hasVisibleResults
+            ? hasVisibleResults || outOfRange
               ? eventsSearchHitCopy(state.q)
               : eventsSearchMissCopy(state.q)
             : ""}
