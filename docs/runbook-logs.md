@@ -14,7 +14,9 @@ replacements have the same log/header contract.
 1. Ask for the response's **`x-request-id`** and approximate time, not a cookie,
    Authorization header, OAuth callback URL or Discord identity. The header is
    a validated Cloudflare Ray ID (`cf-ray`), or a generated ULID when no valid
-   Ray ID is available. Client `x-request-id` input is ignored.
+   Ray ID is available. Client `x-request-id` input is ignored. A 500 or 503
+   browser page shows the same value as its **Support reference**, so a member
+   can copy it without developer tools.
 2. Open **Cloudflare dashboard → Workers & Pages → two-web-next → Observability**.
    Choose a time window around the report and the correct deployed Worker.
 3. Search the log message for the exact ID (for example,
