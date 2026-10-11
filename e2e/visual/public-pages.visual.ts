@@ -1,6 +1,6 @@
 import postgres from "postgres";
 import { requireTestDatabase } from "../ci-only.mjs";
-import { expect, qaLogin, test } from "../fixtures";
+import { expect, localOrigin, test } from "../fixtures";
 
 // Public pages only: no session, no writes. Server-rendered times depend on the
 // wall clock, so every <time> element is masked; everything else must match the
@@ -105,10 +105,32 @@ test.describe("event member states", () => {
     });
   }
 
-  // One login for both widths: POST /auth/qa/:identity shares the 10/min
-  // qa-login throttle with the journeys that run next (e2e/fixtures.ts).
+  // Sign in through the stubbed Discord OAuth round trip (the same stub as
+  // e2e/join.spec.ts), not POST /auth/qa/:identity: the journeys that run next
+  // already spend the whole 10/min qa-login throttle (e2e/fixtures.ts), so one
+  // more QA login here pushes the last journey login into a 429. The OAuth
+  // routes have their own buckets with plenty of headroom. One login serves
+  // both widths.
   test("paused as a signed-in member @ desktop and mobile", async ({ page, context }) => {
-    await qaLogin(context, "qa-member");
+    await context.route(`${localOrigin}/auth/discord`, async (route) => {
+      const response = await route.fetch({ maxRedirects: 0 });
+      expect(response.status()).toBe(302);
+      const state = new URL(response.headers().location!).searchParams.get("state");
+      expect(state).toBeTruthy();
+      // Keep the production state cookie; swap only the authorize hop for the
+      // stub's local callback. No request reaches Discord.
+      await route.fulfill({
+        response,
+        headers: {
+          ...response.headers(),
+          location: `${localOrigin}/auth/discord/callback?code=e2e-code&state=${encodeURIComponent(state!)}`,
+        },
+      });
+    });
+    await page.goto("/auth/discord");
+    // The landing page also consumes any one-shot sign-in flash, so neither
+    // width's screenshot below carries it.
+    await expect(page.getByRole("button", { name: "Sign out" })).toBeVisible();
     for (const [viewport, size] of VIEWPORTS) {
       await page.setViewportSize(size);
       const response = await page.goto(`/e/${STATE_FIXTURES.paused.key}`);

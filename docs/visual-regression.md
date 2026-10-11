@@ -22,11 +22,12 @@ Each baseline exists at both widths (`<name>-desktop.png`, `<name>-mobile.png`).
   events" cards and in the journeys' lists, so the spec inserts both rows after the
   public routes have been compared and deletes them when its block ends (the same
   disposable Postgres guard as `e2e/seed.mjs`). Only a signed-in member sees the
-  paused notice (a guest gets the sign-in link), so that test logs in once as the QA
-  member for both widths; the cancelled page is the same 410 for a guest and a
-  member, so it needs no login. That one login draws on the same `qa-login`
-  throttle as the journeys that run next (`e2e/fixtures.ts`).
-
+  paused notice (a guest gets the sign-in link), so that test signs in once through
+  the stubbed Discord OAuth round trip that `e2e/join.spec.ts` uses, for both
+  widths. It does not use the QA login: the journeys that run next already spend
+  the whole `qa-login` throttle (10 per minute, `e2e/fixtures.ts`), and one more
+  login there turns the last journey login into a 429. The cancelled page is the
+  same 410 for a guest and a member, so it needs no login.
 - **Where it runs:** the `browser-smoke` job in `.github/workflows/e2e.yml`, before
   the critical journeys, on the freshly seeded local stack (no secrets, no
   staging or production). `browser-smoke` is a required check, so a visual diff
