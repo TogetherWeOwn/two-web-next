@@ -113,7 +113,7 @@ describe("admitRetryDelay", () => {
   });
 });
 
-describe("handleCallInternalAction retry admission (TOG-11629)", () => {
+describe("handleCallInternalAction retry admission", () => {
   it("keeps Retry-After precedence over backoff for valid delays", async () => {
     const outcome = await handleCallInternalAction({ ...ann }, 1, botWith(42));
     expect(outcome).toEqual({ retryInSeconds: 42 });
