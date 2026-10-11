@@ -2,7 +2,14 @@ import { mkdirSync, appendFileSync, writeFileSync } from "node:fs";
 import AxeBuilder from "@axe-core/playwright";
 import { expect, test, type Page } from "@playwright/test";
 import { installReadOnlyGuard } from "../watch-guard.mjs";
-import { crawlablePath, EXPLORE_ORIGIN, findingId, mdCell, severityFor } from "./crawl-utils.mjs";
+import {
+  crawlablePath,
+  EXPLORE_ORIGIN,
+  findingId,
+  landedOffOrigin,
+  mdCell,
+  severityFor,
+} from "./crawl-utils.mjs";
 
 // Guest explorer (docs/explore-staging.md): breadth-first crawl of the staging
 // Worker at desktop and mobile widths, recording breakage as findings in
@@ -60,13 +67,16 @@ test("explore staging as a guest", async ({ browser }) => {
       // redirect, so without this check the explorer would audit the foreign
       // page and report its breakage as staging findings. Record a low
       // off-origin finding and skip the audit when landing off staging.
+      // Only http(s) landings count as off-origin: a failed navigation
+      // leaves chrome-error://chromewebdata/ or about:blank, which falls
+      // through to the status branch (status 0, medium) below.
       let landedOrigin = "";
       try {
         landedOrigin = new URL(page.url()).origin;
       } catch {
         landedOrigin = "";
       }
-      const offOrigin = landedOrigin !== EXPLORE_ORIGIN;
+      const offOrigin = landedOffOrigin(page.url());
       if (offOrigin) {
         add({
           kind: "off-origin",

@@ -3,6 +3,7 @@ import {
   crawlablePath,
   EXPLORE_ORIGIN,
   findingId,
+  landedOffOrigin,
   mdCell,
   severityFor,
   // @ts-expect-error Standalone tooling has no declaration file.
@@ -41,6 +42,14 @@ describe("e2e/explore/crawl-utils.mjs", () => {
     expect(crawlablePath("/events/past?page=2", from)).toBe("/events/past?page=2");
     expect(crawlablePath("/events/past?page=9999", from)).toBe("/events/past");
     expect(crawlablePath("/events?q=x&page=2", from)).toBe("/events");
+  });
+
+  it("lands off-origin only for http(s) URLs away from staging", () => {
+    expect(landedOffOrigin(`${EXPLORE_ORIGIN}/rules`)).toBe(false);
+    expect(landedOffOrigin("https://discord.gg/x")).toBe(true);
+    expect(landedOffOrigin("about:blank")).toBe(false);
+    expect(landedOffOrigin("chrome-error://chromewebdata/")).toBe(false);
+    expect(landedOffOrigin("not a url")).toBe(false);
   });
 
   it("gives stable ids across volatile numbers and distinct ids per viewport", () => {

@@ -32,6 +32,24 @@ export function crawlablePath(href, fromUrl, origin = EXPLORE_ORIGIN) {
   return url.pathname + (keepPage ? `?page=${page}` : "");
 }
 
+/**
+ * True when a crawled page landed off staging after a redirect (for example
+ * /discord 302s to a Discord invite). Only http(s) landings count: a failed
+ * navigation leaves page.url() at chrome-error://chromewebdata/ or
+ * about:blank, which must fall through to the status branch (status 0) so the
+ * QA routine still files a card.
+ */
+export function landedOffOrigin(pageUrl, origin = EXPLORE_ORIGIN) {
+  let url;
+  try {
+    url = new URL(pageUrl);
+  } catch {
+    return false;
+  }
+  if (url.protocol !== "http:" && url.protocol !== "https:") return false;
+  return url.origin !== origin;
+}
+
 /** Stable id for a finding, so the QA routine can dedupe across days. */
 export function findingId({ kind, path, viewport, detail }) {
   return createHash("sha256")
