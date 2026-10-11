@@ -20,9 +20,13 @@ import { events, rsvps } from "../db/admin-schema";
 import { users } from "../db/schema";
 import { keyedMemberRead, nonSensitiveRead } from "../member-reads";
 import {
+  EVENTS_MONTH_GRID_LIMIT,
   EVENTS_PAST_DRAWER_LIMIT,
+  EVENTS_UPCOMING_PAGE_SIZE,
   escapeLikeTerm,
   PAST_EVENTS_PAGE_SIZE,
+  parseCalendarMonth,
+  wallDateIso,
 } from "../islands/contracts";
 
 export type PublicEvent = typeof events.$inferSelect & { goingCount: number };
@@ -87,18 +91,82 @@ function calendarVisible(opts: CalendarReadOpts): SQL | undefined {
   return clauses.length === 0 ? undefined : clauses.length === 1 ? clauses[0] : and(...clauses);
 }
 
-/** Upcoming = visible, finite boundaries and not yet ended, soonest first (legacy `upcoming()`). Equal starts break ties by id for a deterministic total order. */
+/** Invalid list-page numbers retain the page-one fallback, like the archive. */
+export function normalizeUpcomingPage(page: number): number {
+  return Number.isSafeInteger(page) && page > 0 ? page : 1;
+}
+
+/** Upcoming = visible, finite boundaries and not yet ended, soonest first (legacy `upcoming()`). Equal starts break ties by id for a deterministic total order. Paged like the past archive: one page of full rows, so the read, the RSVP aggregate and the rendered HTML stay bounded no matter how many future events exist. A page past the end renders empty (with an out-of-range note) instead of clamping, exactly like `listPast`. */
 export async function listUpcoming(
   db: Db,
   now = new Date(),
   opts: CalendarReadOpts = {},
-): Promise<PublicEvent[]> {
+  page = 1,
+): Promise<{ rows: PublicEvent[]; hasMore: boolean; totalPages: number; total: number }> {
+  page = normalizeUpcomingPage(page);
+  const visible = and(calendarVisible(opts), finiteEventWindow, gte(events.endsAt, now));
+  const [total] = await db.select({ n: count() }).from(events).where(visible);
+  const n = Number(total?.n ?? 0);
+  const totalPages = Math.ceil(n / EVENTS_UPCOMING_PAGE_SIZE);
   const rows = await db
     .select()
     .from(events)
-    .where(and(calendarVisible(opts), finiteEventWindow, gte(events.endsAt, now)))
-    .orderBy(asc(events.startsAt), asc(events.id));
-  return withGoing(db, rows.filter(isRenderableEventWindow));
+    .where(visible)
+    .orderBy(asc(events.startsAt), asc(events.id))
+    .limit(EVENTS_UPCOMING_PAGE_SIZE + 1)
+    .offset((page - 1) * EVENTS_UPCOMING_PAGE_SIZE);
+  // Like `listPast`, the total still counts unrenderable windows so page
+  // boundaries stay stable while poison rows drop out of the render.
+  return {
+    rows: await withGoing(
+      db,
+      rows.slice(0, EVENTS_UPCOMING_PAGE_SIZE).filter(isRenderableEventWindow),
+    ),
+    hasMore: rows.length > EVENTS_UPCOMING_PAGE_SIZE,
+    totalPages,
+    total: n,
+  };
+}
+
+/** Month-grid scope: the visible upcoming rows whose host-zone wall month is
+ * `month` ("YYYY-MM", caller-validated). SQL reads a UTC window widened by a
+ * day on each side — the widest IANA offset plus DST — and JS keeps exactly
+ * the rows that land in the month in their own zone. The grid cap is a
+ * pathological guard only: a real month never holds that many events. */
+export async function listUpcomingForMonth(
+  db: Db,
+  month: string,
+  now = new Date(),
+  opts: CalendarReadOpts = {},
+): Promise<PublicEvent[]> {
+  // A bad month is an empty grid, never a 500: the route only passes
+  // validated months, this keeps the read total.
+  const parsed = parseCalendarMonth(month);
+  if (!parsed) return [];
+  const [y, m] = parsed.split("-").map(Number);
+  const from = new Date(Date.UTC(y!, m! - 1, 1) - 86400000);
+  const to = new Date(Date.UTC(y!, m!, 1) + 86400000);
+  const rows = await db
+    .select()
+    .from(events)
+    .where(
+      and(
+        calendarVisible(opts),
+        finiteEventWindow,
+        gte(events.endsAt, now),
+        gte(events.startsAt, from),
+        lt(events.startsAt, to),
+      ),
+    )
+    .orderBy(asc(events.startsAt), asc(events.id))
+    .limit(EVENTS_MONTH_GRID_LIMIT);
+  return withGoing(
+    db,
+    rows.filter(
+      (r) =>
+        isRenderableEventWindow(r) && wallDateIso(r.startsAt, r.timezone).slice(0, 7) === parsed,
+    ),
+  );
 }
 
 // Exclude PostgreSQL infinity starts before limits so unusable links cannot occupy slots.

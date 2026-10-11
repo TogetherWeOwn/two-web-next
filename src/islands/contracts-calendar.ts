@@ -17,7 +17,8 @@ export const eventPageUrl = (eventKey: string): string => `/e/${encodeURICompone
 export const EVENTS_CALENDAR_ISLAND = "events-calendar";
 export const EVENTS_CALENDAR_TESTID = "events-calendar";
 
-/** The two views are one query rendered twice — never two components. */
+/** The two views share one query shape but different bounds: the list is paged,
+ * the month grid is month-scoped — never two components, never unbounded. */
 export const CALENDAR_VIEWS = ["list", "calendar"] as const;
 export type CalendarView = (typeof CALENDAR_VIEWS)[number];
 export const CALENDAR_DEFAULT_VIEW: CalendarView = "list";
@@ -89,6 +90,28 @@ export const EVENTS_SUBSCRIBE_TESTID = "events-subscribe";
 export const EVENTS_SUBSCRIBE_URL = "/events.ics";
 export const EVENTS_PAST_DRAWER_LIMIT = 20;
 export const EVENTS_GAP_LIST_LIMIT = 5;
+
+/* Upcoming list paging: the list view renders one page of full cards, so the
+ * read, the aggregate and the HTML stay bounded no matter how many future
+ * events exist. Same size as the past archive's pages. */
+export const EVENTS_UPCOMING_PAGE_SIZE = 20;
+/* Month-grid guard: the grid reads one wall month, which bounds it in
+ * practice; this caps a pathological month (hundreds of events in 31 days)
+ * at the soonest rows so the render cannot blow up. */
+export const EVENTS_MONTH_GRID_LIMIT = 200;
+export const EVENTS_PAGER_TESTID = "events-pager";
+export const EVENTS_PAGER_PREV_TESTID = "events-pager-prev";
+export const EVENTS_PAGER_NEXT_TESTID = "events-pager-next";
+export const EVENTS_PAGER_STATUS_TESTID = "events-pager-status";
+export const EVENTS_PAGER_LABEL = "Upcoming event pages";
+export const EVENTS_PAGER_PREV_COPY = "Previous page";
+export const EVENTS_PAGER_NEXT_COPY = "Next page";
+export const EVENTS_OUT_OF_RANGE_TESTID = "events-out-of-range";
+export function upcomingEventsOutOfRangeCopy(page: number, totalPages: number): string {
+  return `Page ${page} is outside the schedule. There ${totalPages === 1 ? "is" : "are"} ${totalPages} ${totalPages === 1 ? "page" : "pages"}.`;
+}
+export const upcomingEventsPageStatusCopy = (page: number, totalPages: number): string =>
+  `Page ${page} of ${totalPages}.`;
 
 /* Skeleton + content: member-started re-renders show the skeleton and hide the
  * content — except typing in the search box, which is deliberately untargeted. */
@@ -352,12 +375,15 @@ export function dedupeTransients(
 }
 
 /* Resolved island state. `q` is the raw input; searching = trimmed non-blank.
- * `month` is always resolved (the grid is one render away via the toggle). */
+ * `month` is always resolved (the grid is one render away via the toggle).
+ * `page` is the upcoming-list page; the month grid is month-scoped, so it
+ * always reads as page 1. */
 export interface CalendarState {
   view: CalendarView;
   month: string;
   q: string;
   past: boolean;
+  page: number;
 }
 
 /** Whether this state is a search (blank input is no search). */
@@ -369,7 +395,8 @@ export const calendarShowingPast = (s: CalendarState): boolean => s.past || cale
 /**
  * The island's shareable URL. `view`/`month` are emitted only for the calendar
  * view (the list is the default and a search forces it); `q` only when
- * non-blank; `past` only when open.
+ * non-blank; `past` only when open; `page` only past the first list page (the
+ * month grid is month-scoped, so it never carries a page).
  */
 export function calendarUrl(s: CalendarState): string {
   const params = new URLSearchParams();
@@ -378,6 +405,8 @@ export function calendarUrl(s: CalendarState): string {
   if (s.view === "calendar") {
     params.set("view", "calendar");
     params.set("month", s.month);
+  } else if (Number.isSafeInteger(s.page) && s.page > 1) {
+    params.set("page", String(s.page));
   }
   const qs = params.toString();
   return qs === "" ? "/events" : `/events?${qs}`;

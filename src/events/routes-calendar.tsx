@@ -11,6 +11,7 @@ import {
   mergeCalendarRows,
   parseCalendarMonth,
   parseCalendarView,
+  wallDateIso,
   wallMonth,
 } from "../islands/contracts";
 import { takeJoinResult, readJoinResult } from "../return-journey";
@@ -31,7 +32,9 @@ import {
   listCalendarPast,
   listPast,
   listUpcoming,
+  listUpcomingForMonth,
   normalizePastPage,
+  normalizeUpcomingPage,
   persistedDiscordIds,
 } from "./reads";
 import { EventsCalendarPage, PastEventsPage } from "./pages";
@@ -64,6 +67,9 @@ export function registerCalendarRoutes(
     const searching = match !== null;
     const view = searching ? "list" : (parseCalendarView(c.req.query("view")) ?? "list");
     const past = c.req.query("past") === "1";
+    // The upcoming list is paged: one page of full cards per render. The
+    // month grid is month-scoped and always reads as page one.
+    const page = normalizeUpcomingPage(Number.parseInt(c.req.query("page") ?? "1", 10));
 
     const opts = { includeDrafts: session?.moderator ?? false, search: match };
     // Anonymous shared entry (N6 retire): only a cookieless, session-free,
@@ -106,7 +112,16 @@ export function registerCalendarRoutes(
     // that commits (and retires) while this render awaits its reads must stop
     // the stale bytes from settling below.
     const anonGen = anonSource ? anonCacheGeneration() : 0;
-    const localUpcoming = await listUpcoming(db, now, opts);
+    // One bounded page of upcoming rows plus the capped past drawer: the read,
+    // the RSVP aggregate and the rendered HTML stay flat no matter how many
+    // future events exist. The calendar view always works from page one — it
+    // only needs the total (for the empty states) and the soonest row (for
+    // the default month); the grid itself is month-scoped below.
+    const {
+      rows: pageRows,
+      totalPages,
+      total: totalUpcoming,
+    } = await listUpcoming(db, now, opts, view === "calendar" ? 1 : page);
     const localPast = await listCalendarPast(db, now, opts);
 
     // One resolve per request: the rows and the failure flag MUST come from the
@@ -130,30 +145,56 @@ export function registerCalendarRoutes(
           (t.description ?? "").toLowerCase().includes(term)),
     );
     const discordFailed = discord.lastReadFailed();
-    const upcoming = mergeCalendarRows(localUpcoming, transients);
 
-    const zone = calendarZone([
-      ...localUpcoming.map((e) => e.timezone),
+    // Discord extras are unpaged, so they render on the first list page only
+    // — later pages must not repeat them — plus on an empty collection, where
+    // any page is effectively the first and they are the whole schedule. The
+    // calendar view keeps them in the probe so the default month still opens
+    // on a Discord-only schedule, exactly like the old unpaged merge.
+    const probe = mergeCalendarRows(
+      pageRows,
+      view !== "list" || page === 1 || totalUpcoming === 0 ? transients : [],
+    );
+    const probeZone = calendarZone([
+      ...pageRows.map((e) => e.timezone),
       ...localPast.map((e) => e.timezone),
     ]);
     // No month given: open on the first upcoming event's host-zone month, else
-    // this month. An unparseable month is a page, never a 500.
-    const month =
-      parseCalendarMonth(c.req.query("month")) ??
+    // this month. An unparseable month is a page, never a 500. In the list
+    // view the toggle target follows the rendered page, not the whole
+    // collection — page one keeps the old soonest-first behavior exactly.
+    const firstProbe = probe[0];
+    const fallbackMonth =
       parseCalendarMonth(
-        upcoming[0]
+        firstProbe
           ? wallMonth(
-              upcoming[0].startsAt,
-              "discordId" in upcoming[0] ? zone : upcoming[0].timezone,
+              firstProbe.startsAt,
+              "discordId" in firstProbe ? probeZone : firstProbe.timezone,
             )
           : null,
-      ) ??
-      currentCalendarMonth(now);
+      ) ?? currentCalendarMonth(now);
 
-    const state = { view, month, q, past };
+    let upcoming = probe;
+    let zone = probeZone;
+    const month = parseCalendarMonth(c.req.query("month")) ?? fallbackMonth;
+    if (view === "calendar") {
+      const monthRows = await listUpcomingForMonth(db, month, now, opts);
+      zone = calendarZone([
+        ...monthRows.map((e) => e.timezone),
+        ...localPast.map((e) => e.timezone),
+      ]);
+      // The grid plots host-zone wall days, so it keeps exactly the Discord
+      // extras that land in the displayed month in the same zone.
+      upcoming = mergeCalendarRows(
+        monthRows,
+        transients.filter((t) => wallDateIso(t.startsAt, zone).slice(0, 7) === month),
+      );
+    }
+
+    const state = { view, month, q, past, page: view === "calendar" ? 1 : page };
     const emptyState = calendarEmptyState({
       searching,
-      upcomingEmpty: upcoming.length === 0,
+      upcomingEmpty: totalUpcoming === 0 && transients.length === 0,
       pastEmpty: localPast.length === 0,
       readFailed: discordFailed,
     });
@@ -187,7 +228,9 @@ export function registerCalendarRoutes(
       "cache-control",
       session || searching || joinResult ? "private, no-store" : "public, max-age=60",
     );
-    if (searching) c.header("x-robots-tag", "noindex, follow");
+    // Paged turns are archive-like duplicates of the first page for crawlers,
+    // like the past archive's always-noindex pages.
+    if (searching || state.page > 1) c.header("x-robots-tag", "noindex, follow");
     c.header("vary", "Cookie, X-Two-Island");
     // Guest sign-in links carry this page as ?next= so the OAuth round trip
     // lands back here (TOG-10356). Rooted pathname + search only — the
@@ -207,6 +250,7 @@ export function registerCalendarRoutes(
         past={localPast}
         zone={zone}
         now={now}
+        totalPages={totalPages}
         emptyState={emptyState}
         discordFailed={discordFailed}
         member={session?.member ?? false}
