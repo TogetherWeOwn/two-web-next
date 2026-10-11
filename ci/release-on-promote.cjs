@@ -115,14 +115,21 @@ function git(...args) {
   return execFileSync("git", args, { encoding: "utf8" }).trim();
 }
 
-function releaseExists(tag) {
+// Only a 404 proves the release is absent. Any other failure (outage, rate
+// limit, auth, no network) is inconclusive and must not fall through to create.
+function releaseExists(repo, tag) {
   try {
-    execFileSync("gh", ["release", "view", tag, "--json", "tagName"], {
-      stdio: "ignore",
+    execFileSync("gh", ["api", `repos/${repo}/releases/tags/${tag}`], {
+      stdio: ["ignore", "ignore", "pipe"],
+      encoding: "utf8",
     });
     return true;
-  } catch {
-    return false;
+  } catch (err) {
+    const stderr = String(err.stderr || err.message).trim();
+    if (/\bHTTP 404\b/.test(stderr)) return false;
+    throw new Error(
+      `existing-release lookup for ${tag} was inconclusive; not publishing: ${stderr.split("\n")[0]}`,
+    );
   }
 }
 
@@ -207,7 +214,7 @@ function main() {
     output({ tag_name: "", released: "false" });
     return;
   }
-  if (!releaseExists(tag)) {
+  if (!releaseExists(repo, tag)) {
     const notesFile = `${process.env.RUNNER_TEMP || "/tmp"}/release-notes-${tag}.md`;
     fs.writeFileSync(notesFile, notes);
     // Creates the tag on the promoted commit when it does not exist yet.
