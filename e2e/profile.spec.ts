@@ -1,6 +1,10 @@
 import { test, expect, qaLogin } from "./fixtures";
 
 test("QA member edits and persists their profile using the keyboard", async ({ page, context }) => {
+  // Last file in the run: earlier specs can fill the shared 10/min qa-login
+  // window, so the login below may honor Retry-After into a fresh window
+  // (e2e/fixtures.ts). Triples the timeout to 90s to cover that wait.
+  test.slow();
   await qaLogin(context, "qa-member");
   await page.goto("/profile");
   await expect(page.getByRole("heading", { name: "QA Member", exact: true })).toBeVisible();
@@ -41,6 +45,8 @@ test("QA member signs out from the profile header and sees no moderator shortcut
   page,
   context,
 }) => {
+  // Same shared-window wait as the test above (e2e/fixtures.ts).
+  test.slow();
   await qaLogin(context, "qa-member");
   await page.goto("/profile");
   await expect(page.getByRole("heading", { name: "QA Member", exact: true })).toBeVisible();
@@ -59,6 +65,8 @@ test("QA member signs out from the profile header and sees no moderator shortcut
 });
 
 test("QA moderator reaches the admin panel from the profile header", async ({ page, context }) => {
+  // Same shared-window wait as the tests above (e2e/fixtures.ts).
+  test.slow();
   await qaLogin(context, "qa-moderator");
   await page.goto("/profile");
   await expect(page.getByRole("heading", { name: "QA Moderator", exact: true })).toBeVisible();
