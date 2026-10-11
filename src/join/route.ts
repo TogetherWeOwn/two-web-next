@@ -215,9 +215,26 @@ export function registerJoinRoutes(
     const rawNext = await getSignedCookie(c, c.env.SESSION_SECRET, JOIN_NEXT_COOKIE);
     const next = safeNext(typeof rawNext === "string" ? rawNext : null);
     const clearJourney = () => {
-      deleteCookie(c, JOIN_STATE_COOKIE, { path: "/", secure: true });
-      deleteCookie(c, JOIN_SOURCE_COOKIE, { path: "/", secure: true });
-      deleteCookie(c, JOIN_NEXT_COOKIE, { path: "/", secure: true });
+      // Mirror the set attributes (minus maxAge): flag-less clearing
+      // Set-Cookies are flagged by scanners (ZAP 10010/10054).
+      deleteCookie(c, JOIN_STATE_COOKIE, {
+        path: "/",
+        secure: true,
+        httpOnly: true,
+        sameSite: "Lax",
+      });
+      deleteCookie(c, JOIN_SOURCE_COOKIE, {
+        path: "/",
+        secure: true,
+        httpOnly: true,
+        sameSite: "Lax",
+      });
+      deleteCookie(c, JOIN_NEXT_COOKIE, {
+        path: "/",
+        secure: true,
+        httpOnly: true,
+        sameSite: "Lax",
+      });
     };
     // Sanitized like /discord: a bad DISCORD_INVITE_URL renders the
     // hardcoded fallback, never a hostile or relative href (legacy

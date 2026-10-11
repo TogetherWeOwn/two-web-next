@@ -20,6 +20,7 @@ import { WRITE_THROTTLE_PER_MINUTE, throttle } from "../throttle";
 import { expiredWriteBounce } from "../write-recovery";
 import { getPublicEvent, withGoingCount } from "./reads";
 import { body, eventJson, type App, type Ctx, type SessionReader } from "./routes-shared";
+import { SESSION_COOKIE } from "../session-cookie";
 
 async function moderator(c: Ctx, readFragmentSession: SessionReader): Promise<Session | Response> {
   // Non-rotating: concurrent writes with one cookie must all authenticate.
@@ -32,7 +33,7 @@ async function moderator(c: Ctx, readFragmentSession: SessionReader): Promise<Se
   // admission pins assert.
   const session = await readFragmentSession(c);
   if (!session) {
-    const token = await getSignedCookie(c, c.env.SESSION_SECRET, "__Host-two_session");
+    const token = await getSignedCookie(c, c.env.SESSION_SECRET, SESSION_COOKIE);
     if (token) return expiredWriteBounce(c, true);
     return c.json({ error: "unauthenticated" }, 401);
   }

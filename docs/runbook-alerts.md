@@ -156,6 +156,12 @@ configuration silently drops outbound work; it is not a successful probe.
    the script's redacted result. A merged/dry-run-built PR is **not** live
    webhook delivery evidence.
 
+Production post-deploy check: after
+`npx wrangler deploy --config tail/wrangler.jsonc --env production`, confirm
+`OPS_ALERT_WEBHOOK_URL` is bound on `two-web-next-alerts-production` (secret
+names only, never values). A missing binding deploys successfully but pages
+nothing: both `tail()` and `scheduled()` return early with no outbound work.
+
 Production/cutover remains separately gated: staging probe success does not
 approve a production deploy, credential change or production test.
 

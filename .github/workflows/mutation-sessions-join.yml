@@ -1,11 +1,13 @@
 name: mutation-sessions-join
 
 # Nightly mutation signal for the auth blast radius (`src/sessions.ts`,
-# `src/join/service.ts` and `src/join/route.ts`). The runner weakens one auth
-# check at a time and runs the hermetic DB-free kill suite against it; survivors
-# are coverage gaps and are listed in the uploaded report artifact. Hermetic on
-# purpose: no database, no Discord, no secrets, so a schedule tick can never be
-# blocked on a service.
+# `src/join/service.ts`, `src/join/route.ts`, RSVP write admission in
+# `src/events/routes-rsvp.tsx` / `src/events/rsvp.ts`, and admin write
+# admission in `src/admin/guard.ts` / `src/admin/writeback.ts`). The runner weakens one
+# auth check at a time and runs the hermetic DB-free kill suite against it;
+# survivors are coverage gaps and are listed in the uploaded report artifact.
+# Hermetic on purpose: no database, no Discord, no secrets, so a schedule tick
+# can never be blocked on a service.
 #
 # Non-blocking by design: this workflow gates no merge. The required checks
 # stay exactly `check`, `gitleaks` and `pr-lint`; there is deliberately no
@@ -29,8 +31,8 @@ jobs:
     name: mutation
     # Public repo: standard GitHub-hosted Linux only, no larger or third-party runner.
     runs-on: ubuntu-latest
-    # 16 kill runs, each capped at 5 minutes by the runner, plus setup.
-    timeout-minutes: 90
+    # 20 kill runs, each capped at 5 minutes by the runner, plus setup.
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -42,7 +44,7 @@ jobs:
       - run: npm ci --include=dev --no-audit --no-fund
       - name: Mutation harness selftest
         run: npm run mutation:sessions-join:selftest
-      - name: Mutation run (sessions + join)
+      - name: Mutation run (sessions + join + rsvp + admin)
         run: npm run mutation:sessions-join
       - name: Surviving-mutant report summary
         if: always() && hashFiles('artifacts/mutation-sessions-join/report.md') != ''

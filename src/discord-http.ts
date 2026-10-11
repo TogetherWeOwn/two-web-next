@@ -2,6 +2,12 @@
 // A callback can make several sequential requests; this is not a journey-wide deadline.
 export const DISCORD_HTTP_BUDGET_MS = 5_000;
 
+/** Maximum buffered response body for Discord HTTP calls (auth/join/roles/widget).
+ * Mirrors DISCORD_SNAPSHOT_MAX_BYTES (256 KiB) to bound worker memory on
+ * oversized or hostile provider responses inside the time budget.
+ */
+export const DISCORD_HTTP_MAX_RESPONSE_BYTES = 262_144;
+
 export class DiscordHttpTimeoutError extends Error {
   constructor() {
     super("Discord HTTP operation timed out");
@@ -46,8 +52,20 @@ export async function discordFetch(
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
-        chunks.push(value);
         size += value.byteLength;
+        // Cap the buffered response to bound worker memory on oversized or
+        // hostile provider bodies. Overflow is classified like an unreadable
+        // body: the real status/headers are preserved and the body is empty,
+        // so downstream parsing reports a provider rejection.
+        if (size > DISCORD_HTTP_MAX_RESPONSE_BYTES) {
+          void reader.cancel().catch(() => {});
+          return new Response("", {
+            status: res.status,
+            statusText: res.statusText,
+            headers: res.headers,
+          });
+        }
+        chunks.push(value);
       }
     } catch (error) {
       // Headers arrived, so the provider answered; an unreadable body is a

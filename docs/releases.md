@@ -1,69 +1,59 @@
 # Releases
 
-`CHANGELOG.md`, the `vX.Y.Z` tag and the GitHub Release come from
-[release-please](https://github.com/googleapis/release-please) via
-`.github/workflows/release.yml` (config: `release-please-config.json` +
-`.release-please-manifest.json`, release-type `node`). Never tag or release by
-hand. Versioning and changelog categories are in
-[`CONTRIBUTING.md`](../CONTRIBUTING.md#releases).
+A release is cut by the production promote itself. When `deploy-production`
+succeeds, its `release` job calls `.github/workflows/release.yml` with the exact
+deployed SHA. `ci/release-on-promote.cjs` then tags that commit `vX.Y.Z` and
+publishes a GitHub Release whose notes list the Conventional Commit subjects
+(squash-merged PR titles) since the previous `vX.Y.Z` tag. Never tag or release
+by hand.
 
-## Release triggers
-
-`release.yml` treats its events differently (TOG-13034, a port of the
-two-bot-next fix in TOG-12931). It used to regenerate the release PR on every
-push to `main`: the PR head was rewritten about a minute after each merge and a
-full `ci` + `pr-gates` started on the new head. With roughly ten merges an hour
-the PR never held one head long enough to be green and merged, and every merge
-spent a run on a head nobody could use. Now:
-
-| Event | Publishes a merged release PR | Regenerates the PR | Dispatches `ci` / `pr-gates` |
-| --- | --- | --- | --- |
-| `push` to `main` | yes | **no** (`skip-github-pull-request`) | **no** |
-| `workflow_dispatch` | yes | yes | yes |
-| `schedule` (Mondays 04:23 UTC) | yes | yes | yes |
-
-The tag and release are published by the `push` run for the release PR's merge
-commit, exactly as before: the publication path and the job permissions did not
-change, and `skip-github-release` is never set. A missed publication is
-recovered by the next run of any kind. `pr-lint`, `gitleaks` and `ci` stay
-required on the release PR; the dispatched runs are still the only way they
-start on a `GITHUB_TOKEN`-created PR (see the header of `release.yml`).
-
-`test/release-workflow.test.ts` pins this: it fails if a push can regenerate
-the PR or dispatch checks, if publication is ever skipped, if the schedule
-disappears, if the pre-1.0 breaking-change config pin is removed or changed, or
-if a hand-written `## Unreleased` heading appears above the first released
-changelog section.
+There is no release PR, so there is nothing to regenerate, re-check, review or
+freeze `main` for: the version and notes are derived from commits that already
+passed CI and review on `main`. The release-please release PR it replaces went
+stale on every merge and needed a freeze, dispatched checks and a separate
+review to land.
 
 ## Cutting a release
 
-With no push regeneration the open release PR lags `main` by design. Cut a
-release with a short freeze: release-please drops commits that land between the
-PR's generation snapshot and its merge commit (they ship in the tag but appear
-in neither release's notes).
+Nothing to do by hand: a successful `deploy-production` promote is the cut. The
+cutover promote cuts `v1.0.0` (see `release-as` below). The release vehicle is
+the promoted commit itself. Every commit on `main` already has exact-head green
+required checks and a Paperclip Review 5/5 (rulesets). The promote gate
+(`ci/production-deploy-gate.mjs`) requires a green main `ci` on that exact SHA,
+plus staging evidence under auto-approve. There is no release PR and no
+release freeze.
 
-1. **Announce the freeze.** The Director (or the COO) posts on the release card
-   that nothing merges to `main` until the freeze is lifted, and confirms no
-   merge is in flight.
-2. **Dispatch regeneration.** `gh workflow run release.yml --ref main`, then wait
-   for the run. It regenerates the PR from the current `main` and dispatches
-   `ci.yml` and `pr-gates.yml` on the new head.
-3. **Confirm the PR is fresh.** The release branch must not be behind `main`:
-   ```sh
-   gh api "repos/TogetherWeOwn/two-web-next/compare/main...release-please--branches--main--components--two-web-next" --jq .behind_by
-   ```
-   `0` means the PR was generated from today's `main`. Anything else (or no open
-   release PR) means `main` moved after the snapshot: do not merge, dispatch
-   again.
-4. **Exact-head green and review.** `ci` (`check`), `pr-lint` and `gitleaks` are
-   green on the PR's current head SHA, and the Code Reviewer approved that same
-   SHA. A re-push, including a new regeneration, restarts both.
-5. **Reviewer merges.** The approving reviewer squash-merges with
-   `expectedHeadSha` set to the reviewed head. The merge's `push` run publishes
-   the tag and GitHub Release; verify the new `vX.Y.Z` release and the
-   `autorelease: tagged` label on the PR.
-6. **Lift the freeze** once publication is verified. The next release PR appears
-   at the next dispatch or Monday run.
+## Versions and notes
 
-The freeze is the exception path for the cut, not a standing hold: outside steps
-1-6 `main` merges freely and nothing rewrites the release PR.
+- Bump rules and note sections are read from `release-please-config.json`
+  (`bump-minor-pre-major`, `bump-patch-for-minor-pre-major`,
+  `changelog-sections`), so versions continue the existing tag line.
+- `release-as` in `release-please-config.json` forces the next version while it
+  is above the previous tag. It is set to `1.0.0`, so the production cutover
+  promote (the first production deploy) cuts `v1.0.0`; once `v1.0.0` exists it
+  is ignored and normal bumps resume (remove it in any later PR).
+- Before `1.0.0`: `feat!` / `BREAKING CHANGE` and `feat` bump the minor version;
+  everything else bumps the patch version. From `1.0.0` onward: breaking bumps
+  major, `feat` bumps minor, anything else bumps patch.
+- Every promote of new commits gets a tag, even one with only hidden types
+  (`chore`, `ci`, ...); its notes say there are no user-facing changes.
+- Promoting a commit that already has a tag reuses that tag and only repairs a
+  missing GitHub Release. Promoting a commit older than the newest release (a
+  rollback) creates no tag.
+- `CHANGELOG.md` keeps the history up to `v0.4.0`; later notes live on the
+  GitHub Releases page.
+
+## Repairing a missed release
+
+If a promote deployed but its `release` job failed, dispatch the workflow for
+the deployed SHA (it is idempotent):
+
+```sh
+gh workflow run release.yml --ref main -f sha=<deployed 40-hex SHA>
+```
+
+`-f dry_run=true` prints the version and notes without publishing.
+
+`ci/release-on-promote.selftest.cjs` (run by `test/release-workflow.test.ts`)
+pins the bump rules, note rendering, the rollback guard and the refusal to tag
+a commit that is not on `main`.

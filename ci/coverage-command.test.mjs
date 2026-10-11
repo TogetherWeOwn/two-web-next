@@ -40,6 +40,20 @@ test("the required check keeps full coverage in isolated serial threads inside m
   assert.doesNotMatch(config, /\bisolate:\s*false/);
 });
 
+test("the coverage gate keeps area floors and summary scopes for the high-blast-radius areas", async () => {
+  const config = await readFile(new URL("../vitest.config.ts", import.meta.url), "utf8");
+  const summary = await readFile(new URL("./coverage-summary.mjs", import.meta.url), "utf8");
+  for (const area of ["src/jobs", "src/bot", "src/agent-events", "src/profiles"]) {
+    assert.match(
+      config,
+      new RegExp(
+        `"${area}/\\*\\*": \\{ statements: [0-9.]+, branches: [0-9.]+, functions: [0-9.]+, lines: [0-9.]+ \\}`,
+      ),
+    );
+    assert.ok(summary.includes(`"${area}/"`), `coverage summary must report ${area}/`);
+  }
+});
+
 // Exercise the shipped npm script against a local CLI fixture. A successful-looking
 // summary must not turn a failed coverage invocation into a passing required gate.
 for (const [label, body, expected] of [

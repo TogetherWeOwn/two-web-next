@@ -224,7 +224,9 @@ function fail(fields: FieldErrors): never {
 
 // Legacy NoControlCharacters: allow tab/LF/CR and genuine emoji ZWJ
 // sequences, but refuse other Cc and targeted invisible/bidi format chars.
-function containsControlCharacters(value: string): boolean {
+// Shared with the machine ingress (validateFields) so both writers apply one
+// rule; check the raw submitted text, not its trimmed value (trim removes BOM).
+export function containsControlCharacters(value: string): boolean {
   const stripped = value.replace(/[\t\n\r]/g, "");
   if (/\p{Cc}/u.test(stripped)) return true;
   // Match the original text: removing whitespace can manufacture an emoji.

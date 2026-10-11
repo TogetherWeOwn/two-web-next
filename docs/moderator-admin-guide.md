@@ -417,7 +417,9 @@ For maintainers checking this guide:
 
 - [Admin routes](../src/admin/routes.tsx): complete route inventory and form actions.
 - [Admin pages](../src/admin/pages.tsx), [validation](../src/admin/validation.ts),
-  [store](../src/admin/store.ts), [recurrence](../src/admin/recurrence.ts),
+  [store](../src/admin/store.ts) ([event writes](../src/admin/store-event-writes.ts),
+  [event reads](../src/admin/store-event-reads.ts),
+  [access log](../src/admin/store-access.ts)), [recurrence](../src/admin/recurrence.ts),
   [event-list query](../src/admin/event-list.ts), [table queries](../src/admin/table-list.ts),
   [reads](../src/admin/reads.ts) and [join-funnel widget](../src/admin/join-funnel.ts):
   labels, limits, transitions, series, filters, roster, pagination and cached counts.
