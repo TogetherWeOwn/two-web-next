@@ -276,6 +276,59 @@ describe("shipped member-profile edit lifecycle", () => {
     expect(f.departure().defaultPrevented).toBe(true);
   });
 
+  it("does not warn after the member moves on during a save that normalised untouched fields", async () => {
+    const f = fixture();
+    f.enter({ bio: "Saved bio ", games_text: "Go\nChess\n" });
+    f.form.dispatch("submit");
+    f.form.elements.timezone!.focus();
+    f.form.dispatch("focusin");
+    f.requests[0]!.resolve(success());
+    await flush();
+    expect(f.form.elements.bio!.value).toBe("Saved bio");
+    expect(f.form.elements.games_text!.value).toBe("Go\nChess");
+    expect(f.document.activeElement).toBe(f.form.elements.timezone);
+    expect(f.departure().defaultPrevented).toBe(false);
+  });
+
+  it("keeps the focused field's raw text and caret, and does not warn about its normalised saved text", async () => {
+    const f = fixture();
+    f.enter({ bio: "Saved bio " });
+    f.form.elements.bio!.focus();
+    f.form.dispatch("submit");
+    f.form.dispatch("pointerdown");
+    f.requests[0]!.resolve(success());
+    await flush();
+    expect(f.form.elements.bio!.value).toBe("Saved bio ");
+    expect(f.form.elements.bio!.defaultValue).toBe("Saved bio");
+    expect(f.document.activeElement).toBe(f.form.elements.bio);
+    expect(f.departure().defaultPrevented).toBe(false);
+  });
+
+  it("still warns about a draft typed during the save and normalises the untouched fields", async () => {
+    const f = fixture();
+    f.enter({ bio: "Saved bio ", games_text: "Go\nChess\n" });
+    f.form.dispatch("submit");
+    f.form.elements.bio!.focus();
+    f.form.dispatch("input");
+    f.enter({ bio: "Newer draft" });
+    f.requests[0]!.resolve(success());
+    await flush();
+    expect(f.form.elements.bio!.value).toBe("Newer draft");
+    expect(f.form.elements.games_text!.value).toBe("Go\nChess");
+    expect(f.departure().defaultPrevented).toBe(true);
+  });
+
+  it("settles an uninterrupted save of normalisable text with no departure warning", async () => {
+    const f = fixture();
+    f.enter({ bio: "Saved bio ", games_text: "Go\nChess\n" });
+    f.form.dispatch("submit");
+    f.requests[0]!.resolve(success());
+    await flush();
+    expect(f.form.elements.bio!.value).toBe("Saved bio");
+    expect(f.form.elements.games_text!.value).toBe("Go\nChess");
+    expect(f.departure().defaultPrevented).toBe(false);
+  });
+
   it("keeps failed drafts protected except when following recovery, then reset restores protection", async () => {
     const f = fixture();
     f.enter({ bio: "Keep this draft" });
