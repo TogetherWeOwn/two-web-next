@@ -219,7 +219,7 @@ pins each documented number to its constant so drift fails CI.
 | Refresh-lease (single-owner Discord refresh) | 5,000 ms | `DISCORD_REFRESH_LEASE_MS` in `src/events/discord-snapshot.ts`, asserted in `test/discord-events-cache.test.ts` and `test/discord-snapshot-postgres.test.ts` |
 
 The live Discord read inside a refresh has a 1,000 ms headers-and-body deadline
-(`DISCORD_READ_DEADLINE_MS` in `src/events/discord-transients.ts`). Storage
+(`DISCORD_READ_DEADLINE_MS` in `src/events/discord-transients-types.ts`, applied by `src/events/discord-transients-live.ts`). Storage
 statements run under 400 ms statement / 350 ms lock timeouts
 (`DISCORD_STORE_SQL_TIMEOUT_MS`; the lock cap is derived as the statement cap
 minus 50). A failed refresh keeps the successful

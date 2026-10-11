@@ -1,7 +1,7 @@
 // Bounded retry-until-miss for the staging events search journey.
 //
 // A search with zero local matches depends on the live Discord scheduled-events
-// read (1 s deadline, src/events/discord-transients.ts). When that read fails,
+// read (1 s deadline, src/events/discord-transients-live.ts). When that read fails,
 // the page renders the error state instead of the miss block — "error beats
 // search-miss" is a pinned product contract (src/islands/contracts.ts), so the
 // harness tolerates it instead of weakening it. A single immediate retry was
