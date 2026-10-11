@@ -79,7 +79,9 @@ function createZones(content: string) {
 
 // Execute the shipped binder in an isolated VM. Fetches deliberately ignore
 // abort so obsolete completions exercise ownership rather than transport luck.
-function browser() {
+// entry sets the address the island renders at: Back/forward tests start from
+// a search address so the popstate target differs from renderedAddress.
+function browser(entry = "/events") {
   const zones = createZones("last-good content");
   const content = zones[3]!;
   const skeleton = new Node();
@@ -107,7 +109,7 @@ function browser() {
     past: "",
     loadError: "Calendar unavailable. Try again.",
   };
-  const canonical = { href: APP_URL + "/events" };
+  const canonical = { href: APP_URL + entry };
   const og = { content: canonical.href };
   const history: string[] = [];
   const reloads: string[] = [];
@@ -128,6 +130,7 @@ function browser() {
   const READ_DEADLINE_MS = EVENTS_CALENDAR_READ_DEADLINE_MS;
   const timers = new Map<number, { ms: number; callback: () => void }>();
   let nextTimer = 0;
+  let popstate: () => void = () => {};
   runInNewContext(
     binder,
     {
@@ -152,7 +155,9 @@ function browser() {
             location.href = APP_URL + url;
           },
         },
-        addEventListener() {},
+        addEventListener(_type: string, listener: () => void) {
+          popstate = listener;
+        },
       },
       DOMParser: class {
         parseFromString(html: string) {
@@ -176,6 +181,12 @@ function browser() {
       button: 0,
       target: { closest: () => link },
     });
+  }
+
+  // Back/forward: the browser commits the address before the island's fetch.
+  function back(path = "/events") {
+    location.href = APP_URL + path;
+    popstate();
   }
 
   function typeSearch() {
@@ -245,6 +256,7 @@ function browser() {
     og,
     location,
     navigate,
+    back,
     typeSearch,
     fireSearch,
     fireDeadline,
@@ -475,5 +487,36 @@ describe("EventsCalendar owned read deadline", () => {
     expectLoading(b, false);
     expect(b.content.childNodes).toEqual(["response-1"]);
     expect(b.history).toEqual([b.requests[1]!.url]);
+  });
+
+  it("reconciles the address when a Back/forward read hits the deadline", async () => {
+    const b = browser("/events?q=old");
+    b.back("/events");
+    expectLoading(b, true);
+    expect(b.fireDeadline()).toBe(true);
+    await settle();
+    expectLoading(b, false);
+    expect(b.content.childNodes).toEqual(["last-good content"]);
+    expect(b.feedback.textContent).toBe(b.root.dataset.loadError);
+    expect(b.reloads).toEqual([`${APP_URL}/events`]);
+  });
+
+  it("reconciles the address when a push supersedes a Back and then times out", async () => {
+    const b = browser("/events?q=old");
+    b.back("/events");
+    b.navigate();
+    expect(b.requests[0]!.signal.aborted).toBe(true);
+    // The superseded Back deadline fires first and stays silent; the push
+    // still owns its deadline and times out itself.
+    expect(b.fireDeadline()).toBe(true);
+    await settle();
+    expectLoading(b, true);
+    expect(b.fireDeadline()).toBe(true);
+    await settle();
+    expectLoading(b, false);
+    expect(b.content.childNodes).toEqual(["last-good content"]);
+    expect(b.feedback.textContent).toBe(b.root.dataset.loadError);
+    expect(b.history).toEqual([]);
+    expect(b.reloads).toEqual([`${APP_URL}/events`]);
   });
 });

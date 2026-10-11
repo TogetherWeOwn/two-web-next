@@ -141,9 +141,15 @@
         } catch (e) {}
         if (trackFocus) document.removeEventListener("focusin", trackFocus);
         // Zones are untouched: the last good content is still in place, only
-        // hidden by loading. No history, canonical or fragment commit.
+        // hidden by loading. No history, canonical or fragment commit. Keep
+        // the Back/forward reconcile the catch path performs: popstate commits
+        // the address before the read, so a timed-out Back (or a push that
+        // superseded one) reloads for SSR to restore the matching page.
         feedback.textContent = root.dataset.loadError;
         setLoading(false);
+        if (!push || renderedAddress !== pageAddress(new URL(window.location.href))) {
+          window.location.assign(window.location.href);
+        }
       }, READ_DEADLINE_MS);
     }
     try {
