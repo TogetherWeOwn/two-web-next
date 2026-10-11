@@ -489,6 +489,27 @@ describe("e2e scope gate", () => {
   });
 });
 
+describe("e2e-ok aggregator (required check)", () => {
+  const e2e = readFileSync(".github/workflows/e2e.yml", "utf8");
+  const agg = e2e.split("\n  e2e-ok:\n")[1] ?? "";
+
+  it("runs always and depends on both scope and the smoke", () => {
+    expect(agg).toMatch(/\n    needs: \[scope, browser-smoke\]\n/);
+    expect(agg).toMatch(/\n    if: always\(\)\n/);
+  });
+
+  it("fails on a failed scope and on a failed or cancelled smoke", () => {
+    expect(agg).toContain('[ "$SCOPE" = success ] || {');
+    expect(agg).toContain('*) echo "browser-smoke result: $SMOKE"; exit 1 ;;');
+  });
+
+  it("passes a skipped smoke only on an explicit scope verdict or a draft", () => {
+    expect(agg).toContain("SKIP_E2E: ${{ needs.scope.outputs.skip_e2e }}");
+    expect(agg).toContain('if [ "$SKIP_E2E" = true ] || [ "$DRAFT" = true ]; then');
+    expect(agg).toContain('else echo "browser-smoke skipped without a scope verdict"; exit 1; fi');
+  });
+});
+
 describe("e2e-staging scope gate", () => {
   const staging = readFileSync(".github/workflows/e2e-staging.yml", "utf8");
   const scopeJob = staging.split("\n  scope:\n")[1]?.split(/\n  [\w-]+:\n/)[0] ?? "";
