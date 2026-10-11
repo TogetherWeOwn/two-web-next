@@ -1,10 +1,15 @@
-// Backstop sweep for RSVP fixtures made by the local browser spec.
-// This module is local-origin-only and never constructs a request to staging.
+// Backstop sweep for fixtures made by the local browser specs (waitlist,
+// promotion and cancel journeys). This module is local-origin-only and never
+// constructs a request to staging.
 
 import { parseRetryAfterSeconds, QA_LOGIN_MAX_ATTEMPTS, sleep } from "./qa-login-retry.mjs";
 
 export const LOCAL_FIXTURE_ORIGIN = "https://localhost:8787";
-export const LOCAL_FIXTURE_TITLE_PREFIXES = Object.freeze(["E2E Waitlist ", "E2E Promotion "]);
+export const LOCAL_FIXTURE_TITLE_PREFIXES = Object.freeze([
+  "E2E Waitlist ",
+  "E2E Promotion ",
+  "E2E Cancel ",
+]);
 export const LOCAL_SWEEP_STATUSES = Object.freeze(["published", "draft"]);
 export const LOCAL_SWEEP_MAX_PASSES = 4;
 export const LOCAL_SWEEP_MAX_PAGES = 20;
