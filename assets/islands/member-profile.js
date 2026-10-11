@@ -9,8 +9,9 @@
 // with the draft intact, and releases the controls. A late completion after
 // expiry changes nothing; there is no automatic resend.
 // Outcomes: saved → "Profile saved." + re-edit control (or keep a newer draft),
-// focus on the confirmation; Cancel resets to the last accepted values and
-// ignores pending completions, but a newer save waits until the cancelled
+// focus on the confirmation unless the member moved on during the save;
+// Cancel resets to the last accepted values and ignores pending completions,
+// but a newer save waits until the cancelled
 // write settles or its deadline expires. 422 → errors in the alert, input kept; 401/302-to-login/419 → session
 // expired notice with login link, input kept; anything else → save-failed
 // alert, input kept. Copy and testids mirror src/islands/contracts.ts.
@@ -40,6 +41,12 @@
   var canTimeout = typeof setTimeout !== "undefined" && typeof clearTimeout !== "undefined";
   var deadlineTimer = null;
   var currentAbort = null;
+  // editing: the member acted in the editor while the owned save was pending.
+  // saveFocus: the focus owner when that save started.
+  var editing = false;
+  var saveFocus = null;
+  // Raw text the server last accepted; a field still holding it is saved, not dirty.
+  var acceptedDraft = null;
 
   function clearDeadline() {
     if (deadlineTimer !== null) {
@@ -54,7 +61,9 @@
 
   function hasUnsavedChanges() {
     return ["bio", "games_text", "timezone"].some(function (key) {
-      return form.elements[key].value !== form.elements[key].defaultValue;
+      var field = form.elements[key];
+      if (field.value === field.defaultValue) return false;
+      return !acceptedDraft || field.value !== acceptedDraft[key];
     });
   }
 
@@ -109,10 +118,16 @@
     Object.keys(values).forEach(function (key) {
       if (form.elements[key].value !== body[key]) unchanged = false;
     });
+    acceptedDraft = { bio: body.bio, games_text: body.games_text, timezone: body.timezone };
     Object.keys(values).forEach(function (key) {
+      var field = form.elements[key];
+      // Setting defaultValue rewrites a pristine field, so pin the live text first.
+      if (editing) field.value = field.value;
       // Native Cancel/reset now restores the latest accepted save, not SSR.
-      form.elements[key].defaultValue = values[key];
-      if (unchanged) form.elements[key].value = values[key];
+      field.defaultValue = values[key];
+      // The focused field keeps its caret; untouched fields take the saved value.
+      var kept = editing && field === document.activeElement;
+      if (!kept && field.value === body[key]) field.value = values[key];
     });
     // Empty-state copy mirrors PROFILE_EMPTY_COPY; the binder only runs for the owner.
     var isNew = !values.bio && !games.length && !values.timezone;
@@ -138,9 +153,10 @@
       });
       list.appendChild(content);
     }
-    // If a newer draft was typed while saving, keep it reachable too.
-    form.hidden = unchanged && !!edit && !!editControl;
+    // A newer draft or any member action in the editor keeps it open.
+    form.hidden = unchanged && !editing && !!edit && !!editControl;
     if (editControl) editControl.hidden = !form.hidden;
+    return unchanged;
   }
 
   function control(v) {
@@ -170,7 +186,7 @@
     return e;
   }
 
-  function notice(testid, role, text, loginLink) {
+  function notice(testid, role, text, loginLink, noFocus) {
     var old = root.querySelector('[data-testid="' + testid + '"]');
     if (old) old.remove();
     var el = document.createElement("div");
@@ -187,7 +203,7 @@
       el.appendChild(a);
     }
     form.parentNode.insertBefore(el, form);
-    el.focus();
+    if (!noFocus) el.focus();
   }
 
   function clearNotices() {
@@ -326,6 +342,13 @@
     }, 0);
   });
 
+  // Member work in the editor during an owned save: keep their focus, caret and draft.
+  ["keydown", "pointerdown", "focusin", "input"].forEach(function (type) {
+    form.addEventListener(type, function () {
+      if (pending) editing = true;
+    });
+  });
+
   form.addEventListener("submit", function (ev) {
     ev.preventDefault();
     if (pending) return;
@@ -341,6 +364,8 @@
     clearNotices();
     var errs = clientErrors(body.bio, body.games_text, body.timezone);
     if (errs.length) return errorList(errs);
+    editing = false;
+    saveFocus = document.activeElement;
     pending = true;
     var request = ++generation;
     pendingRequest = request;
@@ -396,8 +421,10 @@
           var admit = function (j) {
             if (request !== generation) return;
             if (isSavedAck(j)) {
-              accepted(body);
-              notice("profile-saved", "status", "Profile saved.");
+              // Read focus before accepted() may collapse a focused editor.
+              var movedOn = editing || document.activeElement !== saveFocus;
+              var unchanged = accepted(body);
+              notice("profile-saved", "status", "Profile saved.", false, movedOn || !unchanged);
             } else {
               saveFailed();
             }

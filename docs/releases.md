@@ -54,6 +54,14 @@ gh workflow run release.yml --ref main -f sha=<deployed 40-hex SHA>
 
 `-f dry_run=true` prints the version and notes without publishing.
 
+Before creating anything, the job looks up the GitHub Release for the tag. Only a
+404 means it is absent. Any other failure (a GitHub outage, a rate limit, an auth
+error or no network) is inconclusive: the job fails with `existing-release lookup
+... was inconclusive`, creates nothing and tags nothing. Dispatch it again for the
+same SHA once the lookup works.
+
 `ci/release-on-promote.selftest.cjs` (run by `test/release-workflow.test.ts`)
-pins the bump rules, note rendering, the rollback guard and the refusal to tag
-a commit that is not on `main`.
+pins the bump rules, note rendering, the rollback guard, the refusal to tag a
+commit that is not on `main`, and the publish path against a fake `gh`: a 404
+creates the release, an existing release is kept, and an inconclusive lookup
+stops before anything is created.
