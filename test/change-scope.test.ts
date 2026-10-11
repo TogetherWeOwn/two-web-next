@@ -477,7 +477,9 @@ describe("e2e scope gate", () => {
   });
 
   it("stays on standard hosted runners and skips only the smoke, never a required check", () => {
-    expect(smoke).toMatch(/\n    runs-on: ubuntu-latest\n/);
+    // browser-smoke is pinned to ubuntu-24.04 for visual-regression font
+    // stability (docs/visual-regression.md); still GitHub-hosted Linux.
+    expect(smoke).toMatch(/\n    runs-on: ubuntu-(latest|24\.04)\n/);
     // browser-smoke is not a required check: CONTRIBUTING names exactly
     // check, gitleaks and pr-lint, so a docs-only or test-only skip never
     // blocks a merge.
@@ -486,6 +488,27 @@ describe("e2e scope gate", () => {
         .split("### Branch protection and required checks")[1]
         ?.split(/\n#{2,3} /)[0] ?? "";
     expect(section).not.toContain("browser-smoke");
+  });
+});
+
+describe("e2e-ok aggregator (required check)", () => {
+  const e2e = readFileSync(".github/workflows/e2e.yml", "utf8");
+  const agg = e2e.split("\n  e2e-ok:\n")[1] ?? "";
+
+  it("runs always and depends on both scope and the smoke", () => {
+    expect(agg).toMatch(/\n    needs: \[scope, browser-smoke\]\n/);
+    expect(agg).toMatch(/\n    if: always\(\)\n/);
+  });
+
+  it("fails on a failed scope and on a failed or cancelled smoke", () => {
+    expect(agg).toContain('[ "$SCOPE" = success ] || {');
+    expect(agg).toContain('*) echo "browser-smoke result: $SMOKE"; exit 1 ;;');
+  });
+
+  it("passes a skipped smoke only on an explicit scope verdict or a draft", () => {
+    expect(agg).toContain("SKIP_E2E: ${{ needs.scope.outputs.skip_e2e }}");
+    expect(agg).toContain('if [ "$SKIP_E2E" = true ] || [ "$DRAFT" = true ]; then');
+    expect(agg).toContain('else echo "browser-smoke skipped without a scope verdict"; exit 1; fi');
   });
 });
 

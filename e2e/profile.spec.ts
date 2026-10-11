@@ -1,6 +1,10 @@
 import { test, expect, qaLogin } from "./fixtures";
 
-test("QA member edits and persists their profile using the keyboard", async ({ page, context }) => {
+// One member login covers the edit and sign-out journeys: POST
+// /auth/qa/:identity shares the `qa-login` throttle (10/min per runner IP,
+// src/throttle.ts) across the whole sequential smoke, so each spec file spends
+// as few logins as it can. The moderator journey below keeps its own login.
+test("QA member edits and persists their profile, then signs out", async ({ page, context }) => {
   await qaLogin(context, "qa-member");
   await page.goto("/profile");
   await expect(page.getByRole("heading", { name: "QA Member", exact: true })).toBeVisible();
@@ -35,15 +39,7 @@ test("QA member edits and persists their profile using the keyboard", async ({ p
   ).toBeVisible();
   await expect(view.getByText("Timezone: Europe/London", { exact: true })).toBeVisible();
   await expect(view.getByRole("listitem")).toHaveText(["Deep Rock Galactic", "Minecraft"]);
-});
 
-test("QA member signs out from the profile header and sees no moderator shortcut", async ({
-  page,
-  context,
-}) => {
-  await qaLogin(context, "qa-member");
-  await page.goto("/profile");
-  await expect(page.getByRole("heading", { name: "QA Member", exact: true })).toBeVisible();
   await expect(page.getByTestId("profile-admin-link")).toHaveCount(0);
   const logoutRequest = page.waitForRequest(
     (request) => request.url().endsWith("/logout") && request.method() === "POST",

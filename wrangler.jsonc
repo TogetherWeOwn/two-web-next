@@ -102,8 +102,9 @@
           }
         ]
       },
-      // PLACEHOLDER: replace with the separately provisioned production Hyperdrive
-      // id in a reviewed cutover PR. The manual workflow refuses this sentinel.
+      // Production Hyperdrive for the separately named two-web-next-production
+      // database, distinct from staging. The all-zero id is only the inert
+      // sentinel ci/production-deploy-gate.mjs refuses; it never lives here.
       "hyperdrive": [{ "binding": "DB", "id": "7489f6ad630042148cdef83602f27b8a" }],
       // Vars/bindings do not inherit across environments. No QA_AUTH_TOKEN in prod.
       // env.production.vars must repeat every var the worker reads: Wrangler

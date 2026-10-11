@@ -77,6 +77,18 @@ jobs:
           EXPECTED=$(wc -l < "$RUNNER_TEMP/deployed-files.tsv")
           bash ci/change-scope.sh "$RUNNER_TEMP/deployed-files.tsv" "$EXPECTED" >> "$GITHUB_OUTPUT"
 
+  # OWASP ZAP passive scan of the deployed staging Worker (zap-staging.yml).
+  # Runs for every successful main deploy, including docs-only ones (it scans
+  # the live Worker, not the diff). A failing scan fails this run, which keeps
+  # the commit from being promoted to production.
+  zap-baseline:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.head_branch == 'main' &&
+       github.event.workflow_run.head_repository.full_name == github.repository)
+    uses: ./.github/workflows/zap-staging.yml
+
   staging-journeys:
     name: staging-journeys
     needs: scope
