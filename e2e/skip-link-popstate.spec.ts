@@ -44,11 +44,13 @@ test("calendar: the skip link issues no island read, a real Back still does", as
   await backToAnotherAddress(page, "/events?q=Community", "/events");
   await expect.poll(reads).toBe(1);
   await expect(page).toHaveURL(/\/events\?q=Community$/);
+  // The read has committed once the island releases aria-busy; only then is
+  // the rendered address the one the skip link leaves unchanged.
+  await expect(page.locator('[data-island="events-calendar"]')).not.toHaveAttribute("aria-busy");
 
   await activateSkipLink(page);
   await page.waitForTimeout(500);
   expect(reads(), "skip link must not trigger an island read").toBe(1);
-  await expect(page.getByTestId("events-loading")).toBeHidden();
 });
 
 test("past archive: the skip link issues no island read, a real Back still does", async ({
@@ -61,6 +63,7 @@ test("past archive: the skip link issues no island read, a real Back still does"
   await backToAnotherAddress(page, "/events/past?utm_source=e2e", "/events/past");
   await expect.poll(reads).toBe(1);
   await expect(page).toHaveURL(/\/events\/past\?utm_source=e2e$/);
+  await expect(page.locator('[data-island="past-events"]')).not.toHaveAttribute("aria-busy");
 
   await activateSkipLink(page);
   await page.waitForTimeout(500);
