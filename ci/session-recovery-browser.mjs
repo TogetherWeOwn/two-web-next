@@ -527,10 +527,14 @@ try {
     "PASS logout deadline: hung, duplicate, early confirmation, late success and late refusal",
   );
 
+  // The deadline pages rotated the earlier session in their own context; sign in again so this logout revokes a live row.
+  const live = await login();
+  assert.ok(await f.sessions.get(live.tokenHash));
   // Successful retry from the editor still revokes the session and notifies the other tab.
   await logoutButton.focus();
   await a.keyboard.press("Enter");
   await a.waitForURL(url("/"));
+  assert.equal(await f.sessions.get(live.tokenHash), null);
   await b.waitForFunction(
     () => !window.TwoAuth && !!document.querySelector('a[href="/auth/discord"]'),
   );
