@@ -13,7 +13,11 @@ import type { SuggestedEvent } from "./events/suggestions";
 import { inviteDestination } from "./invite";
 import { bufferedMemberHtml, bufferedMemberText, memberReadActive } from "./member-reads";
 import { cachedNotFoundSuggestions } from "./not-found-suggestions";
-import { requestRoute } from "./request-log";
+import { requestRoute, safeRequestId } from "./request-log";
+
+function supportReference(c: Context): string | undefined {
+  return safeRequestId(c.get("requestId"));
+}
 
 // Host refusals use only this shell, never the optional DB lookup.
 export function notFoundResponse(
@@ -52,7 +56,12 @@ export function internalErrorHandler(err: unknown, c: Context): Response | Promi
   if (isDatabaseUnavailable(err)) return databaseUnavailable(c);
   c.header("cache-control", "no-store, private");
   c.status(500);
-  return c.html(<InternalErrorPage inviteUrl={inviteDestination(c.env?.DISCORD_INVITE_URL)} />);
+  return c.html(
+    <InternalErrorPage
+      inviteUrl={inviteDestination(c.env?.DISCORD_INVITE_URL)}
+      supportReference={supportReference(c)}
+    />,
+  );
 }
 
 // One 429 shape for every throttle (ports ThrottleEnvelope::render): JSON
@@ -135,7 +144,12 @@ export function databaseUnavailable(c: Context, jsonOnly = false): Response | Pr
       message: "The service is temporarily unavailable. Try again shortly.",
     });
   }
-  return c.html(<MaintenancePage inviteUrl={inviteDestination(c.env?.DISCORD_INVITE_URL)} />);
+  return c.html(
+    <MaintenancePage
+      inviteUrl={inviteDestination(c.env?.DISCORD_INVITE_URL)}
+      supportReference={supportReference(c)}
+    />,
+  );
 }
 
 // Like the shared 429 response: one static envelope for API/JSON callers,
@@ -161,6 +175,6 @@ export function maintenanceHandler(
   return (c) => {
     c.header("cache-control", "no-store, private");
     c.status(503);
-    return c.html(<MaintenancePage inviteUrl={inviteUrl} />);
+    return c.html(<MaintenancePage inviteUrl={inviteUrl} supportReference={supportReference(c)} />);
   };
 }
