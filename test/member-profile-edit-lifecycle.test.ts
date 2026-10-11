@@ -40,7 +40,17 @@ class Element {
   children: Element[] = [];
   parentNode: Element | null = null;
   attributes: Record<string, string> = {};
-  listeners: Record<string, ((event: { preventDefault: () => void }) => void)[]> = {};
+  listeners: Record<
+    string,
+    ((event: {
+      preventDefault: () => void;
+      button?: number;
+      ctrlKey?: boolean;
+      metaKey?: boolean;
+      shiftKey?: boolean;
+      altKey?: boolean;
+    }) => void)[]
+  > = {};
   hidden = false;
   href = "";
   value = "";
@@ -79,11 +89,30 @@ class Element {
   focus() {
     this.document.activeElement = this;
   }
-  addEventListener(type: string, listener: (event: { preventDefault: () => void }) => void) {
+  addEventListener(
+    type: string,
+    listener: (event: {
+      preventDefault: () => void;
+      button?: number;
+      ctrlKey?: boolean;
+      metaKey?: boolean;
+      shiftKey?: boolean;
+      altKey?: boolean;
+    }) => void,
+  ) {
     (this.listeners[type] ??= []).push(listener);
   }
-  dispatch(type: string) {
-    const event = { preventDefault: vi.fn() };
+  dispatch(
+    type: string,
+    details: Partial<{
+      button: number;
+      ctrlKey: boolean;
+      metaKey: boolean;
+      shiftKey: boolean;
+      altKey: boolean;
+    }> = {},
+  ) {
+    const event = Object.assign({ preventDefault: vi.fn() }, details);
     this.listeners[type]?.forEach((listener) => listener(event));
     return event;
   }
@@ -207,6 +236,7 @@ function fixture(search = "") {
     requests,
     enter,
     cancel,
+    runTimers: () => timers.splice(0).forEach((callback) => callback()),
     notice,
   };
 }
@@ -236,17 +266,30 @@ describe("shipped member-profile edit lifecycle", () => {
     expect(f.departure().defaultPrevented).toBe(true);
   });
 
-  it("keeps failed drafts protected and lets explicit recovery navigation escape", async () => {
+  it("keeps failed drafts protected except when following recovery, then reset restores protection", async () => {
     const f = fixture();
     f.enter({ bio: "Keep this draft" });
     f.form.dispatch("submit");
     f.requests[0]!.resolve({ ok: false, status: 401 });
     await flush();
     expect(f.form.elements.bio!.value).toBe("Keep this draft");
+    expect(f.departure().defaultPrevented).toBe(true);
+    const recoveryLink = f.notice("profile-session-expired")?.querySelector("a");
+    expect(recoveryLink?.href).toContain("/auth/recover?next=");
+    recoveryLink?.dispatch("click", { button: 1 });
+    expect(f.departure().defaultPrevented).toBe(true);
+    recoveryLink?.dispatch("click", { button: 0, ctrlKey: true });
+    expect(f.departure().defaultPrevented).toBe(true);
+    recoveryLink?.dispatch("click", { button: 0 });
+    f.runTimers();
+    expect(f.departure().defaultPrevented).toBe(true);
+    recoveryLink?.dispatch("click", { button: 0 });
     expect(f.departure().defaultPrevented).toBe(false);
-    expect(f.notice("profile-session-expired")?.querySelector("a")?.href).toContain(
-      "/auth/recover?next=",
-    );
+    expect(f.departure().defaultPrevented).toBe(true);
+
+    f.cancel();
+    f.enter({ bio: "New draft after reset" });
+    expect(f.departure().defaultPrevented).toBe(true);
   });
 
   it("supports two saves, re-edit and cancel to the latest accepted values without reloading", async () => {
@@ -591,6 +634,9 @@ describe("shipped member-profile edit lifecycle", () => {
     expect(expired.querySelector("a")?.href).toBe(
       `/auth/recover?next=${encodeURIComponent("/members/100000000000000001?tab=games")}`,
     );
+    expect(f.departure().defaultPrevented).toBe(true);
+    expired.querySelector("a")?.dispatch("click", { button: 0 });
+    expect(f.departure().defaultPrevented).toBe(false);
     f.edit.dispatch("click");
     expect(f.notice("profile-session-expired")).toBe(expired);
     f.form.dispatch("submit");
