@@ -266,6 +266,20 @@ class SharedPolicy(unittest.TestCase):
         self.assertIn("fetch-depth: 0", job)
         self.assertIn("test_internal_ref_ratchet.py", job)
 
+    def test_workflow_dispatch_resolves_head_ref_from_api(self):
+        workflow = SCRIPT.parent.parent / "workflows" / "pr-gates.yml"
+        job = workflow.read_text().split("  pr-lint:\n", 1)[1].split("  gitleaks:\n", 1)[0]
+        # The check step must not bind the branch name from the event alone:
+        # workflow_dispatch events have no pull_request snapshot, so that
+        # expression is empty on manual runs.
+        self.assertNotIn("HEAD_REF: ${{ github.event.pull_request.head.ref }}", job)
+        # A resolver step falls back to the PR API snapshot, mirroring the
+        # PR_NUMBER fallback, and fails closed when the branch is still empty.
+        self.assertIn("Resolve PR head ref", job)
+        self.assertIn('gh api "repos/$REPO/pulls/$PR_NUMBER" --jq \'.head.ref\'', job)
+        self.assertIn('head_ref=%s\\n', job)
+        self.assertIn("steps.head-ref.outputs.head_ref", job)
+
 
 if __name__ == "__main__":
     unittest.main()
