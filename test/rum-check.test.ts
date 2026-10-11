@@ -125,9 +125,47 @@ describe("ci/rum-check.mjs response admission", () => {
 
   it("accepts N/A quantiles as legitimate data", () => {
     const admitted = admitRumResponse(
-      validBody(validGroup({ quantiles: { largestContentfulPaintP75: -1 } })),
+      validBody(
+        validGroup({
+          quantiles: {
+            largestContentfulPaintP75: -1,
+            cumulativeLayoutShiftP75: -1,
+            interactionToNextPaintP75: -1,
+          },
+        }),
+      ),
     );
     expect(admitted.count).toBe(500);
+  });
+
+  it("rejects samples without numeric p75 quantiles instead of passing all-n/a", () => {
+    const full = {
+      largestContentfulPaintP75: 1_800_000,
+      cumulativeLayoutShiftP75: 0.05,
+      interactionToNextPaintP75: 150_000,
+    };
+    const broken = [
+      undefined,
+      null,
+      {},
+      { ...full, largestContentfulPaintP75: undefined },
+      { ...full, cumulativeLayoutShiftP75: null },
+      { ...full, interactionToNextPaintP75: "150000" },
+      { ...full, largestContentfulPaintP75: Number.NaN },
+    ];
+    for (const quantiles of broken) {
+      expect(
+        () => admitRumResponse(validBody(validGroup({ quantiles }))),
+        String(quantiles),
+      ).toThrow(/Response invalid/);
+    }
+  });
+
+  it("accepts a zero-sample group without quantiles", () => {
+    expect(admitRumResponse(validBody(validGroup({ count: 0, quantiles: undefined })))).toEqual({
+      count: 0,
+      quantiles: undefined,
+    });
   });
 });
 
@@ -169,6 +207,16 @@ describe("ci/rum-check.mjs injected fetch", () => {
     expect(r.kind).toBe("invalid-response");
     expect(r.summary).toMatch(/Response invalid/);
     expect(r.summary).not.toMatch(/below minSamples/);
+  });
+
+  it("reports non-2xx non-JSON gateway pages as query failures with the HTTP status", async () => {
+    for (const status of [502, 429]) {
+      const r = await run(new Response("<html>gateway</html>", { status }));
+      expect(r.code, String(status)).toBe(1);
+      expect(r.kind, String(status)).toBe("query-failed");
+      expect(r.summary, String(status)).toContain(`HTTP ${status}`);
+      expect(r.summary, String(status)).not.toMatch(/Response invalid/);
+    }
   });
 
   it("fails {} and data:null instead of reporting insufficient data", async () => {

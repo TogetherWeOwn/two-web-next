@@ -37,12 +37,7 @@ export function evaluate(quantiles, budget, count) {
   return { rows, enoughData: count >= minSamples, failed: rows.filter((r) => !r.ok) };
 }
 
-// Admission: a configured HTTP-200 body must carry the queried GraphQL shape.
-// Broken responses (invalid JSON handled by the caller, missing/null data,
-// malformed accounts/groups, invalid counts) throw a bounded, payload-free
-// "Response invalid: <reason>" instead of collapsing to count zero, so they
-// never report as legitimate insufficient data. A structurally valid empty
-// groups array is the legitimate zero-sample case.
+// Throws a bounded "Response invalid: <reason>" instead of collapsing broken data to zero samples.
 export function admitRumResponse(body) {
   const invalid = (reason) => {
     throw new Error(`Response invalid: ${reason}`);
@@ -81,14 +76,25 @@ export function admitRumResponse(body) {
     invalid("invalid count");
   }
   const quantiles = group.quantiles;
-  if (
-    quantiles !== undefined &&
-    quantiles !== null &&
-    (typeof quantiles !== "object" || Array.isArray(quantiles))
-  ) {
+  if (group.count > 0 && !hasP75Quantiles(quantiles)) {
     invalid("malformed quantiles");
   }
   return { count: group.count, quantiles };
+}
+
+const P75_FIELDS = [
+  "largestContentfulPaintP75",
+  "cumulativeLayoutShiftP75",
+  "interactionToNextPaintP75",
+];
+
+function hasP75Quantiles(quantiles) {
+  return (
+    quantiles !== null &&
+    typeof quantiles === "object" &&
+    !Array.isArray(quantiles) &&
+    P75_FIELDS.every((field) => Number.isFinite(quantiles[field]))
+  );
 }
 
 function tableLines(rows) {
@@ -101,9 +107,7 @@ function tableLines(rows) {
   ];
 }
 
-// Injectable runner so tests can pass synthetic fetch responses without any
-// Cloudflare query. Summaries are bounded, fixed-shape strings: they never
-// echo provider payloads, credentials or identity (token, account, site).
+// Summaries are bounded fixed-shape strings: no provider payloads, credentials or identity.
 export async function runRumCheck({
   env = process.env,
   fetchImpl = fetch,
@@ -144,21 +148,24 @@ export async function runRumCheck({
     return { code: 1, kind: "query-failed", summary };
   }
   let body;
+  let jsonFailed = false;
   try {
     body = await res.json();
   } catch {
+    jsonFailed = true;
+  }
+  const errorCount = Array.isArray(body?.errors) ? body.errors.length : 0;
+  if (!res.ok || errorCount > 0) {
+    // Provider error text is omitted on purpose; a non-JSON gateway page keeps its HTTP status.
+    const summary = `## Real-user Web Vitals\n\nQuery failed (HTTP ${res.status}, ${errorCount} GraphQL error(s)). Budgets not evaluated.`;
+    emit(summary);
+    return { code: 1, kind: "query-failed", summary };
+  }
+  if (jsonFailed) {
     const summary =
       "## Real-user Web Vitals\n\nResponse invalid: invalid JSON. Expected GraphQL data.viewer.accounts[0].rumWebVitalsEventsAdaptiveGroups[0] with a non-negative integer count. Budgets not evaluated.";
     emit(summary);
     return { code: 1, kind: "invalid-response", summary };
-  }
-  const errorCount = Array.isArray(body?.errors) ? body.errors.length : 0;
-  if (!res.ok || errorCount > 0) {
-    // Intentionally omit provider error text: bounded, payload-free, and
-    // distinct from admission and budget failures.
-    const summary = `## Real-user Web Vitals\n\nQuery failed (HTTP ${res.status}, ${errorCount} GraphQL error(s)). Budgets not evaluated.`;
-    emit(summary);
-    return { code: 1, kind: "query-failed", summary };
   }
   let admitted;
   try {
