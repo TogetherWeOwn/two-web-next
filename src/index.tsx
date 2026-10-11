@@ -85,6 +85,13 @@ const staticSecurityHeaders = secureHeaders({
   // Edge-owned (TOG-8729): emitting HSTS from the app would pin local dev
   // machines to HTTPS, so the Hono default is explicitly off.
   strictTransportSecurity: false,
+  // ZAP 90004: emit Cross-Origin-Embedder-Policy. `credentialless`,
+  // not `require-corp`: the only cross-origin embeds are credential-free —
+  // cdn.discordapp.com <img> (no-cors) and the lazy /join widget iframe (public
+  // content, no viewer cookies) — while require-corp would block both unless
+  // Discord served CORP headers. Island fetches are same-origin paths, and
+  // scripts/styles are 'self' by CSP, so nothing needs credentials cross-origin.
+  crossOriginEmbedderPolicy: "credentialless",
   contentSecurityPolicy: {
     defaultSrc: ["'self'"],
     // Restored legacy directives (W16b TOG-11942): object-src 'none' (no
