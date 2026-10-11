@@ -89,10 +89,11 @@ describe.skipIf(!process.env.DATABASE_URL)("guarded one-row failed-job re-dispat
   let createdDb = false;
 
   beforeAll(async () => {
-    // Guard the ambient URL before any driver or DDL, and validate the
-    // derived per-invocation target too so a guard change fails fast here.
+    // Guard the ambient URL before any driver or DDL. The derived
+    // per-invocation target is validated by name below: the full guard's CI
+    // branch only allows the /postgres path, so it cannot approve a derived
+    // fixture-database URL in CI.
     testDatabaseUrl(process.env.DATABASE_URL!);
-    testDatabaseUrl(testDbUrl());
     if (!isOwnedRedispatchDbName(DB_NAME)) {
       throw new Error("refusing to create an unguarded database");
     }
