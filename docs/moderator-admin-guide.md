@@ -59,8 +59,11 @@ guild-members read filtered against `DISCORD_MODERATOR_ROLE_IDS` for the
 Discord set. Moderators never supply the lists and never paste member
 identifiers into public channels. The app set sees only sessions live in the
 120-minute sliding TTL, so a clean re-run needs every Discord moderator signed
-in during that window. Treat the ID files as member data: keep them out of the
-repo and delete them after the run.
+in during that window. Treat `app-moderators.txt`, `discord-moderators.txt`,
+and `members.jsonl` as member data and `discord-auth.conf` as a credential:
+run the recipe from a scratch directory outside the checkout and keep all
+four files out of the repo. Delete them after the run:
+`rm app-moderators.txt discord-moderators.txt members.jsonl discord-auth.conf`.
 
 The command compares the Discord-moderator set against the app-moderator set.
 It reads only the ID lists it is given: it never touches the network, never
