@@ -144,7 +144,7 @@ This guide describes the implementation, not a live staging certification:
 - [Auth routes](../src/auth/routes.ts): `/auth/discord`, its callback and
   logout; [app routes](../src/index.tsx): `/discord`;
   [page text](../src/pages.tsx): notices, join/recovery pages and FAQ.
-- [Role lookup](../src/roles.ts) and [rate-limit page](../src/errors.tsx).
+- [Role lookup](../src/roles.ts) and [rate-limit response](../src/error-responses.tsx).
 - [Admin routes](../src/admin/routes.tsx), [admin pages](../src/admin/pages.tsx),
   [table queries](../src/admin/table-list.ts), [admin reads](../src/admin/reads.ts)
   and [join-funnel widget](../src/admin/join-funnel.ts): read-only controls,

@@ -43,7 +43,7 @@ test("the required check keeps full coverage in isolated serial threads inside m
 test("the coverage gate keeps area floors and summary scopes for the high-blast-radius areas", async () => {
   const config = await readFile(new URL("../vitest.config.ts", import.meta.url), "utf8");
   const summary = await readFile(new URL("./coverage-summary.mjs", import.meta.url), "utf8");
-  for (const area of ["src/jobs", "src/bot", "src/agent-events", "src/profiles"]) {
+  for (const area of ["src/jobs", "src/bot", "src/agent-events", "src/profiles", "src/auth"]) {
     assert.match(
       config,
       new RegExp(
@@ -51,6 +51,15 @@ test("the coverage gate keeps area floors and summary scopes for the high-blast-
       ),
     );
     assert.ok(summary.includes(`"${area}/"`), `coverage summary must report ${area}/`);
+  }
+  for (const file of ["src/invite.ts", "src/return-journey.ts", "src/write-recovery.tsx"]) {
+    assert.match(
+      config,
+      new RegExp(
+        `"${file}": \\{ statements: [0-9.]+, branches: [0-9.]+, functions: [0-9.]+, lines: [0-9.]+ \\}`,
+      ),
+    );
+    assert.ok(summary.includes(`"${file}"`), `coverage summary must report ${file}`);
   }
 });
 

@@ -1102,7 +1102,7 @@ Sources: [src/index.tsx](../src/index.tsx), [auth routes](../src/auth/routes.ts)
 [event routes](../src/events/routes.tsx), [profile routes](../src/profiles/routes.tsx) (gate in [`routes-gate.ts`](../src/profiles/routes-gate.ts), saves in [`routes-writes.tsx`](../src/profiles/routes-writes.tsx)),
 [admin guard](../src/admin/guard.ts), [admin routes](../src/admin/routes.tsx),
 [access logging](../src/access-log.ts), [agent ingress](../src/agent-events/route.ts),
-[error handler](../src/errors.tsx). The homepage fallback is already present at
+[error handler](../src/error-responses.tsx). The homepage fallback is already present at
 [`eed3c8b`, `src/index.tsx:271–277`](https://github.com/TogetherWeOwn/two-web-next/blob/eed3c8b8976986d6aeb7f97e1b656d7bbbaf85c7/src/index.tsx#L271-L277),
 not conditional on an unmerged outage fix. Offline evidence:
 [session/event failure fixtures](../test/home-events.test.ts),
