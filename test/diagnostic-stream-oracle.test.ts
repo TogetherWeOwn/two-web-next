@@ -109,6 +109,34 @@ describe("diagnostic stream capture", () => {
     ]);
   });
 
+  it("finds a marker held as a symbol value", () => {
+    const records = captureDiagnosticStream();
+    console.warn("symbol", Symbol(MARK));
+    expect(scanDiagnosticStream(records, MARKERS).hits).toEqual(["warn[0].args[1]"]);
+  });
+
+  it("finds a marker used as a Map key", () => {
+    const records = captureDiagnosticStream();
+    console.debug("keys", new Map([[MARK, 1]]));
+    expect(scanDiagnosticStream(records, MARKERS).hits).toEqual(["debug[0].args[1]<key>"]);
+  });
+
+  it("finds a marker in a symbol key's description", () => {
+    const records = captureDiagnosticStream();
+    console.warn("symkey", { [Symbol(MARK)]: 1 });
+    expect(scanDiagnosticStream(records, MARKERS).hits).toEqual(["warn[0].args[1].<key>"]);
+  });
+
+  it("finds a marker returned by an own accessor", () => {
+    const records = captureDiagnosticStream();
+    console.info("accessor", {
+      get detail(): string {
+        return MARK;
+      },
+    });
+    expect(scanDiagnosticStream(records, MARKERS).hits).toEqual(["info[0].args[1].detail"]);
+  });
+
   it("reads each value when the call happens, so a later scrub cannot hide the leak", () => {
     const records = captureDiagnosticStream();
     const detail = { value: MARK };
@@ -253,6 +281,12 @@ describe("withheld", () => {
     };
     const copy = withheld(hostile, MARKERS);
     expect(JSON.stringify(copy)).not.toContain(MARK);
+  });
+
+  it("withholds a fragment of a marker, so a diff cannot rebuild it from pieces", () => {
+    expect(
+      withheld({ head: MARK.slice(0, 10), tail: MARK.slice(10), status: 400 }, MARKERS),
+    ).toEqual({ head: "[marker withheld]", tail: "[marker withheld]", status: 400 });
   });
 
   it("withholds a symbol whose description carries the marker", () => {

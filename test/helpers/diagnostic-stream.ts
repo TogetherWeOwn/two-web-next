@@ -228,12 +228,15 @@ export function expectDiagnosticStreamClean(
 }
 
 /**
- * Marker-free copy for deep-equal diffs. It reads descriptors, never getters, so a thrown value
- * carrying a marker cannot escape into a failure message.
+ * Marker-free copy for deep-equal diffs. Object properties are read as descriptors, so accessors
+ * are never invoked; arrays and collections are read directly and any throw becomes an
+ * "[unreadable]" entry. A fragment of a marker (four or more characters) is withheld too, so a
+ * diff cannot rebuild a canary from pieces that were split across values.
  */
 export function withheld(value: unknown, markers: readonly string[]): unknown {
   const active = new Set<object>();
-  const hides = (text: string) => markers.some((marker) => text.includes(marker));
+  const hides = (text: string) =>
+    markers.some((marker) => text.includes(marker) || (text.length >= 4 && marker.includes(text)));
   const text = (value: string | symbol): string => {
     if (typeof value === "string") return hides(value) ? WITHHELD : value;
     const description = value.description ?? "";

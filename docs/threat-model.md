@@ -115,7 +115,7 @@ This table lists the residual portion of the abuse cases above that the cited co
 | Abuse case with an unresolved control or evidence gap | Suggested owner |
 | --- | --- |
 | Discord role removal does not automatically revoke an already-issued moderator session; operator detection and revocation are required, including between quarterly access reviews. | Security |
-| An OAuth access token is exposed in a failure-path diagnostic outside the branches named in the failure-stream claim above, through other console methods, or through live log sinks. | Security |
+| An OAuth access token is exposed in a failure-path diagnostic outside the branches named in the failure-stream claim above, through other console methods, or through live log sinks. It also stays open for a token in a transformed form (truncated, encoded or case-folded), and for a write that lands after the test has read the response, such as a timer or `waitUntil` callback. | Security |
 | An unauthenticated caller submits an internal action directly to the bot receiver. | Security (coordinate with bot receiver maintainers) |
 | A captured signed request is replayed at the bot receiver. | Security (coordinate with bot receiver maintainers) |
 | An overprivileged database operator bypasses append-only enforcement or extracts stored member data. | Security |
