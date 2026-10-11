@@ -879,6 +879,36 @@ describe("RsvpButton shipped binder", () => {
     expect(b.get("waitlist-position")).toBeNull();
   });
 
+  it("a paused holder leave keeps the polite paused status, raises no alert and moves no focus", async () => {
+    const b = browser("waitlisted", undefined, false, { rsvpOpen: false });
+    expect(b.get("rsvp-paused")?.getAttribute("role")).toBe("status");
+    b.get("waitlist-leave")!.click();
+    b.finish(0, 204);
+    await b.settle();
+    expect(b.root.querySelectorAll("[data-action]")).toHaveLength(0);
+    expect(b.get("waitlist-position")).toBeNull();
+    expect(b.get("rsvp-paused")?.getAttribute("role")).toBe("status");
+    expect(b.root.querySelectorAll('[role="alert"]')).toHaveLength(0);
+    expect(b.get("rsvp-failed")).toBeNull();
+    expect(b.get("rsvp-unknown")).toBeNull();
+    expect(b.get("rsvp-paused")?.focused).toBe(false);
+  });
+
+  it("a paused-closed refusal reloads into fresh SSR without an alert or focus move", async () => {
+    const b = browser();
+    const button = b.get("rsvp-going")!;
+    button.click();
+    // The event paused (or ended, or was cancelled) while the page was open:
+    // the binder reloads into the fresh SSR instead of announcing a refusal.
+    b.finish(0, 403, { error: "rsvp_closed" });
+    await b.settle();
+    expect(b.reloads()).toBe(1);
+    expect(b.root.querySelectorAll('[role="alert"]')).toHaveLength(0);
+    expect(b.get("rsvp-failed")).toBeNull();
+    expect(b.get("rsvp-unknown")).toBeNull();
+    expect(b.root.getAttribute("aria-busy")).toBeNull();
+  });
+
   it("keeps every conflicting control disabled through response-body parsing", async () => {
     const b = browser("waitlisted");
     let resolveBody!: (body: unknown) => void;

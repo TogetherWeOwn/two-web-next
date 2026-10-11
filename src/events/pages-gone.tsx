@@ -8,7 +8,7 @@ export const EventGonePage: FC<{ e: PublicEvent; jsonLd: string }> = ({ e, jsonL
   <EventDetailShell title={e.title} robots="noindex, nofollow" account={false}>
     <section class="event-hero event-gone" aria-label="Cancelled event">
       <p class="event-kicker">{e.game || "Community event"}</p>
-      <p class="notice" data-testid="event-cancelled">
+      <p class="notice" role="status" data-testid="event-cancelled">
         Cancelled
       </p>
       <h1>{e.title}</h1>
