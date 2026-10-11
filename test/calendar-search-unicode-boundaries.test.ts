@@ -9,7 +9,9 @@
 import { Hono } from "hono";
 import { createServer, type Server } from "node:http";
 import { once } from "node:events";
+import { readFileSync } from "node:fs";
 import type { AddressInfo } from "node:net";
+import { URL as NodeURL } from "node:url";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Browser, BrowserContext, Page } from "playwright";
 import type { Db } from "../src/db/index";
@@ -25,6 +27,7 @@ import {
 import {
   EVENTS_SEARCH_MAX_LENGTH,
   EVENTS_SEARCH_TESTID,
+  EVENTS_SEARCH_TOO_LONG_COPY,
   normalizeEventSearch,
 } from "../src/islands/contracts-calendar";
 import { MAX_QUERY_LENGTH, matchQuery, normalizeQuery } from "../src/events/search-log";
@@ -151,6 +154,12 @@ describe("calendar search Unicode boundaries", () => {
     expect(html).toContain('<form method="get" action="/events" role="search"');
   });
 
+  it("hands the island the 255 limit and its named copy", async () => {
+    const html = await eventsHtml();
+    expect(html).toContain(`data-search-max-length="${EVENTS_SEARCH_MAX_LENGTH}"`);
+    expect(html).toContain(`data-search-too-long="${EVENTS_SEARCH_TOO_LONG_COPY}"`);
+  });
+
   it("keeps the 255 code-point budget without grapheme counting", () => {
     expect(EVENTS_SEARCH_MAX_LENGTH).toBe(255);
     expect(MAX_QUERY_LENGTH).toBe(255);
@@ -189,8 +198,9 @@ describe("calendar search Unicode boundaries", () => {
       const response = await app.request(`/events?q=${encodeURIComponent(query)}`, undefined, env);
       expect(response.status).toBe(422);
       expect(response.headers.get("cache-control")).toBe("no-store, private");
+      expect(response.headers.get("content-type")).toContain("text/html");
       const body = await response.text();
-      expect(body).toBe("Search query must be 255 characters or fewer.");
+      expect(body).toContain(`role="alert">${EVENTS_SEARCH_TOO_LONG_COPY}<`);
       expect(body).not.toContain(query.slice(0, 10));
     },
   );
@@ -224,8 +234,14 @@ describe.skipIf(process.env.CALENDAR_SEARCH_BROWSER_TESTS !== "true")(
       );
     });
 
-    async function openCalendar(): Promise<{ page: Page; submissions: string[] }> {
+    async function openCalendar(
+      options: { javaScript?: boolean } = {},
+    ): Promise<{ page: Page; submissions: string[] }> {
       const html = await eventsHtml();
+      const islandSource = readFileSync(
+        new NodeURL("../public/islands/events-calendar.js", import.meta.url),
+        "utf8",
+      );
       // The rendered markup itself must carry no maxlength; otherwise real
       // typing/paste below is truncated before any submission exists.
       expect(searchInputTag(html)).not.toMatch(/\bmaxlength\s*=/i);
@@ -234,6 +250,11 @@ describe.skipIf(process.env.CALENDAR_SEARCH_BROWSER_TESTS !== "true")(
       const server = createServer(async (request, reply) => {
         try {
           const url = new URL(request.url!, base);
+          if (url.pathname === "/islands/events-calendar.js") {
+            reply.writeHead(200, { "content-type": "text/javascript; charset=utf-8" });
+            reply.end(islandSource);
+            return;
+          }
           if (url.pathname !== "/events") {
             reply.writeHead(404);
             reply.end("");
@@ -243,10 +264,10 @@ describe.skipIf(process.env.CALENDAR_SEARCH_BROWSER_TESTS !== "true")(
           if (request.method === "GET" && url.search !== "") {
             submissions.push(q);
             // Mirror the route contract without a DB: admitted queries render,
-            // over-limit queries refuse with the existing static 422.
+            // over-limit queries get the 422 notice page.
             if ([...q].length > 255) {
-              reply.writeHead(422, { "content-type": "text/plain; charset=utf-8" });
-              reply.end("Search query must be 255 characters or fewer.");
+              reply.writeHead(422, { "content-type": "text/html; charset=utf-8" });
+              reply.end(`<main><p role="alert">${EVENTS_SEARCH_TOO_LONG_COPY}</p></main>`);
               return;
             }
           }
@@ -262,7 +283,7 @@ describe.skipIf(process.env.CALENDAR_SEARCH_BROWSER_TESTS !== "true")(
       await once(server, "listening");
       base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
       const context = await browser.newContext({
-        javaScriptEnabled: false,
+        javaScriptEnabled: options.javaScript === true,
         permissions: ["clipboard-read", "clipboard-write"],
       });
       contexts.push(context);
@@ -337,11 +358,38 @@ describe.skipIf(process.env.CALENDAR_SEARCH_BROWSER_TESTS !== "true")(
           await page.waitForURL(/\/events\?/);
           expect(submissions).toHaveLength(1);
           expect(submissions[0]).toBe(value);
-          expect(await page.locator("body").textContent()).toContain(
-            "Search query must be 255 characters or fewer.",
-          );
+          expect(await page.locator("body").textContent()).toContain(EVENTS_SEARCH_TOO_LONG_COPY);
         },
       );
     }
+
+    const feedbackText = (page: Page) => page.locator("[data-cal-feedback]").textContent();
+
+    it("with JS, pasting 256 characters names the limit and sends no request", async () => {
+      const { page, submissions } = await openCalendar({ javaScript: true });
+      const value = "x".repeat(256);
+      await pasteReal(page, value);
+      await expect.poll(() => feedbackText(page)).toBe(EVENTS_SEARCH_TOO_LONG_COPY);
+      expect(submissions).toHaveLength(0);
+      expect(await page.locator(`[data-testid="${EVENTS_SEARCH_TESTID}"]`).inputValue()).toBe(
+        value,
+      );
+    });
+
+    it("with JS, typing 256 characters names the limit and sends no request", async () => {
+      const { page, submissions } = await openCalendar({ javaScript: true });
+      await typeReal(page, "x".repeat(256));
+      await expect.poll(() => feedbackText(page)).toBe(EVENTS_SEARCH_TOO_LONG_COPY);
+      expect(submissions).toHaveLength(0);
+    });
+
+    it("with JS, pasting 255 characters still searches", async () => {
+      const { page, submissions } = await openCalendar({ javaScript: true });
+      const value = "x".repeat(255);
+      await pasteReal(page, value);
+      await expect.poll(() => submissions.length).toBe(1);
+      expect(submissions[0]).toBe(value);
+      expect(await feedbackText(page)).toBe("");
+    });
   },
 );
