@@ -45,6 +45,8 @@
   // saveFocus: the focus owner when that save started.
   var editing = false;
   var saveFocus = null;
+  // Raw text the server last accepted; a field still holding it is saved, not dirty.
+  var acceptedDraft = null;
 
   function clearDeadline() {
     if (deadlineTimer !== null) {
@@ -59,7 +61,9 @@
 
   function hasUnsavedChanges() {
     return ["bio", "games_text", "timezone"].some(function (key) {
-      return form.elements[key].value !== form.elements[key].defaultValue;
+      var field = form.elements[key];
+      if (field.value === field.defaultValue) return false;
+      return !acceptedDraft || field.value !== acceptedDraft[key];
     });
   }
 
@@ -114,12 +118,16 @@
     Object.keys(values).forEach(function (key) {
       if (form.elements[key].value !== body[key]) unchanged = false;
     });
+    acceptedDraft = { bio: body.bio, games_text: body.games_text, timezone: body.timezone };
     Object.keys(values).forEach(function (key) {
+      var field = form.elements[key];
       // Setting defaultValue rewrites a pristine field, so pin the live text first.
-      if (editing) form.elements[key].value = form.elements[key].value;
+      if (editing) field.value = field.value;
       // Native Cancel/reset now restores the latest accepted save, not SSR.
-      form.elements[key].defaultValue = values[key];
-      if (unchanged && !editing) form.elements[key].value = values[key];
+      field.defaultValue = values[key];
+      // The focused field keeps its caret; untouched fields take the saved value.
+      var kept = editing && field === document.activeElement;
+      if (!kept && field.value === body[key]) field.value = values[key];
     });
     // Empty-state copy mirrors PROFILE_EMPTY_COPY; the binder only runs for the owner.
     var isNew = !values.bio && !games.length && !values.timezone;
