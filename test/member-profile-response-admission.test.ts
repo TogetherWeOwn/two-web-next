@@ -375,6 +375,7 @@ describe("member-profile successful acknowledgement focus ownership", () => {
     f.form.dispatch("submit");
     const timezone = f.form.elements.timezone!;
     timezone.focus();
+    f.form.dispatch("focusin");
     f.requests[0]!.resolve(ack());
     await flush();
     await flush();
@@ -449,6 +450,52 @@ describe("member-profile successful acknowledgement focus ownership", () => {
     f.form.elements.bio!.focus();
     f.form.dispatch("submit");
     f.requests[0]!.resolve(ack());
+    await flush();
+    await flush();
+    f.drainTimers();
+    expect(f.form.hidden).toBe(true);
+    expect(f.document.activeElement).toBe(f.notice("profile-saved"));
+  });
+
+  it("keeps focus and the editor when the member acts in the field they submitted from", async () => {
+    const f = fixture();
+    f.enter({ bio: "Saved bio" });
+    f.form.elements.bio!.focus();
+    f.form.dispatch("submit");
+    f.form.dispatch("pointerdown");
+    f.requests[0]!.resolve(ack());
+    await flush();
+    await flush();
+    f.drainTimers();
+    expect(f.form.hidden).toBe(false);
+    expect(f.document.activeElement).toBe(f.form.elements.bio);
+  });
+
+  it.each(["focusin", "input"])("keeps the editor open on %s during the save", async (type) => {
+    const f = fixture();
+    f.enter({ bio: "Saved bio" });
+    f.form.elements.bio!.focus();
+    f.form.dispatch("submit");
+    f.form.dispatch(type);
+    f.requests[0]!.resolve(ack());
+    await flush();
+    await flush();
+    f.drainTimers();
+    expect(f.form.hidden).toBe(false);
+    expect(f.document.activeElement).toBe(f.form.elements.bio);
+  });
+
+  it("collapses and focuses the confirmation on a clean save after an interrupted one", async () => {
+    const f = fixture();
+    f.enter({ bio: "Saved bio" });
+    f.form.dispatch("submit");
+    f.form.dispatch("keydown");
+    f.requests[0]!.resolve(ack());
+    await flush();
+    await flush();
+    expect(f.form.hidden).toBe(false);
+    f.form.dispatch("submit");
+    f.requests[1]!.resolve(ack());
     await flush();
     await flush();
     f.drainTimers();
