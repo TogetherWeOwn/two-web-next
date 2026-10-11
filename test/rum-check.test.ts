@@ -161,6 +161,24 @@ describe("ci/rum-check.mjs response admission", () => {
     }
   });
 
+  it("requires numeric quantiles only once a group reaches minSamples", () => {
+    expect(admitRumResponse(validBody(validGroup({ count: 49, quantiles: null })), 50)).toEqual({
+      count: 49,
+      quantiles: null,
+    });
+    expect(() =>
+      admitRumResponse(validBody(validGroup({ count: 50, quantiles: null })), 50),
+    ).toThrow(/Response invalid/);
+  });
+
+  it("rejects non-object quantiles at any sample count", () => {
+    for (const quantiles of [5, "quantiles", []]) {
+      expect(() => admitRumResponse(validBody(validGroup({ count: 10, quantiles })), 50)).toThrow(
+        /Response invalid/,
+      );
+    }
+  });
+
   it("accepts a zero-sample group without quantiles", () => {
     expect(admitRumResponse(validBody(validGroup({ count: 0, quantiles: undefined })))).toEqual({
       count: 0,
@@ -305,6 +323,19 @@ describe("ci/rum-check.mjs injected fetch", () => {
     expect(r.kind).toBe("over-budget");
     expect(r.summary).toMatch(/over/);
     expect(r.summary).not.toMatch(/Response invalid/);
+  });
+
+  it("keeps a low-sample day with missing quantiles as insufficient data", async () => {
+    const lowSampleNoQuantiles = {
+      data: {
+        viewer: {
+          accounts: [{ rumWebVitalsEventsAdaptiveGroups: [{ count: 10, quantiles: null }] }],
+        },
+      },
+    };
+    const r = await run(jsonResponse(lowSampleNoQuantiles));
+    expect(r.code).toBe(0);
+    expect(r.kind).toBe("insufficient");
   });
 
   it("keeps the unconfigured skip without calling fetch", async () => {

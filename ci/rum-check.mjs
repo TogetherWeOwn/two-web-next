@@ -17,6 +17,13 @@ const QUERY = `query ($account: String!, $site: String!, $since: Time!, $until: 
   } }
 }`;
 
+const DEFAULT_MIN_SAMPLES = 50;
+const P75_FIELDS = [
+  "largestContentfulPaintP75",
+  "cumulativeLayoutShiftP75",
+  "interactionToNextPaintP75",
+];
+
 export function evaluate(quantiles, budget, count) {
   // Cloudflare returns LCP/INP p75 in microseconds (CLS is unitless) and a
   // negative value means N/A (no data for that metric that day).
@@ -27,7 +34,7 @@ export function evaluate(quantiles, budget, count) {
     ["CLS p75", unitless(quantiles?.cumulativeLayoutShiftP75), budget.cls],
     ["INP p75 (ms)", microsToMs(quantiles?.interactionToNextPaintP75), budget.inpMs],
   ];
-  const minSamples = budget.minSamples ?? 50;
+  const minSamples = budget.minSamples ?? DEFAULT_MIN_SAMPLES;
   const rows = metrics.map(([name, value, max]) => ({
     name,
     value,
@@ -38,7 +45,7 @@ export function evaluate(quantiles, budget, count) {
 }
 
 // Throws a bounded "Response invalid: <reason>" instead of collapsing broken data to zero samples.
-export function admitRumResponse(body) {
+export function admitRumResponse(body, minSamples = DEFAULT_MIN_SAMPLES) {
   const invalid = (reason) => {
     throw new Error(`Response invalid: ${reason}`);
   };
@@ -76,25 +83,18 @@ export function admitRumResponse(body) {
     invalid("invalid count");
   }
   const quantiles = group.quantiles;
-  if (group.count > 0 && !hasP75Quantiles(quantiles)) {
+  if (
+    quantiles !== undefined &&
+    quantiles !== null &&
+    (typeof quantiles !== "object" || Array.isArray(quantiles))
+  ) {
+    invalid("malformed quantiles");
+  }
+  const budgetEnforced = group.count > 0 && group.count >= minSamples;
+  if (budgetEnforced && !P75_FIELDS.every((field) => Number.isFinite(quantiles?.[field]))) {
     invalid("malformed quantiles");
   }
   return { count: group.count, quantiles };
-}
-
-const P75_FIELDS = [
-  "largestContentfulPaintP75",
-  "cumulativeLayoutShiftP75",
-  "interactionToNextPaintP75",
-];
-
-function hasP75Quantiles(quantiles) {
-  return (
-    quantiles !== null &&
-    typeof quantiles === "object" &&
-    !Array.isArray(quantiles) &&
-    P75_FIELDS.every((field) => Number.isFinite(quantiles[field]))
-  );
 }
 
 function tableLines(rows) {
@@ -169,7 +169,7 @@ export async function runRumCheck({
   }
   let admitted;
   try {
-    admitted = admitRumResponse(body);
+    admitted = admitRumResponse(body, resolvedBudget.minSamples ?? DEFAULT_MIN_SAMPLES);
   } catch (err) {
     const reason = String(err?.message ?? "Response invalid").replace(/^Response invalid:\s*/, "");
     const summary = `## Real-user Web Vitals\n\nResponse invalid: ${reason.slice(0, 120)}. Expected GraphQL data.viewer.accounts[0].rumWebVitalsEventsAdaptiveGroups[0] with a non-negative integer count. Budgets not evaluated.`;
@@ -180,7 +180,7 @@ export async function runRumCheck({
   const summary = [
     "## Real-user Web Vitals (production, last 24 h)",
     "",
-    `${admitted.count} sample(s)${enoughData ? "" : ` — below minSamples=${resolvedBudget.minSamples ?? 50}, budgets not enforced`}`,
+    `${admitted.count} sample(s)${enoughData ? "" : ` — below minSamples=${resolvedBudget.minSamples ?? DEFAULT_MIN_SAMPLES}, budgets not enforced`}`,
     "",
     ...tableLines(rows),
   ].join("\n");
