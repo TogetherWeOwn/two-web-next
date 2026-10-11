@@ -30,6 +30,11 @@ const workflow = await readFile(new URL("../.github/workflows/ci.yml", import.me
 const job = workflow.split("\n  a11y:\n")[1]?.split(/\n  [\w-]+:\n/)[0] ?? "";
 const steps = job.split(/\n(?=      - )/);
 const stepRunning = (file) => steps.find((step) => step.includes(`npx vitest run ${file} `));
+const chromiumInstall = job.indexOf("npx playwright install --with-deps chromium");
+
+test("the a11y job does not bypass its steps at job level", () => {
+  assert.doesNotMatch(job, /^    continue-on-error:/m);
+});
 
 for (const suite of SUITES) {
   test(`a11y job runs ${suite.file} with its opt-in, a JSON report and the executed-count verifier`, async () => {
@@ -49,8 +54,9 @@ for (const suite of SUITES) {
         `\\n          node ci/a11y-require-executed\\.mjs ${escape(artifact)} "${escape(suite.title)}" ${suite.min}\\s*$`,
       ),
     );
-    assert.doesNotMatch(step, /continue-on-error:|\n        if:/);
-    assert(job.indexOf("npx playwright install --with-deps chromium") < job.indexOf(step));
+    assert.doesNotMatch(step, /^\s*(?:- )?(?:if|continue-on-error):/m);
+    assert(chromiumInstall >= 0, "a11y job must install Chromium");
+    assert(chromiumInstall < job.indexOf(step));
 
     const source = await readFile(new URL(`../${suite.file}`, import.meta.url), "utf8");
     assert.match(source, new RegExp(`skipIf\\(process\\.env\\.${suite.env} !== "true"\\)`));
@@ -58,27 +64,25 @@ for (const suite of SUITES) {
   });
 }
 
+// Every browser gate is named *_BROWSER_TESTS, so the scan keys on that name.
 async function browserGatedSuites() {
   const found = [];
   for (const dir of ["test", "ci"]) {
     for (const entry of await readdir(new URL(`../${dir}/`, import.meta.url), {
       recursive: true,
     })) {
+      if (![".ts", ".mjs"].includes(extname(entry))) continue;
+      if (basename(entry) === basename(import.meta.filename)) continue;
       const file = `${dir}/${entry}`;
-      if (
-        [".ts", ".mjs"].includes(extname(entry)) &&
-        basename(entry) !== basename(import.meta.filename)
-      ) {
-        const source = await readFile(new URL(`../${file}`, import.meta.url), "utf8");
-        for (const match of source.matchAll(/process\.env\.([A-Z0-9_]+) !== "true"/g))
-          found.push({ file, env: match[1] });
-      }
+      const source = await readFile(new URL(`../${file}`, import.meta.url), "utf8");
+      for (const [, env] of source.matchAll(/process\.env\.([A-Z0-9_]*_BROWSER_TESTS)\b/g))
+        found.push({ file, env });
     }
   }
   return found;
 }
 
-test("the README Browser regressions section lists every browser-gated suite", async () => {
+test("the README Browser regressions table lists every browser-gated suite", async () => {
   const readme = await readFile(new URL("../README.md", import.meta.url), "utf8");
   const section = readme.split("\n### Browser regressions\n")[1]?.split(/\n#{2,3} /)[0] ?? "";
   assert(section, "README must keep the Browser regressions section");
@@ -89,7 +93,7 @@ test("the README Browser regressions section lists every browser-gated suite", a
       suite.file,
     );
   for (const { file, env } of gated) {
-    assert(section.includes(file), `README must list ${file}`);
-    assert(section.includes(env), `README must name ${env}`);
+    const row = new RegExp(`^\\|\\s*\`${escape(file)}\`\\s*\\|\\s*\`${env}\``, "m");
+    assert.match(section, row, `README table must list ${file} with ${env}`);
   }
 });
