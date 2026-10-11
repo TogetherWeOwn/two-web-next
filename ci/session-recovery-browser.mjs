@@ -117,7 +117,7 @@ try {
   context.setDefaultTimeout(8000);
   context.setDefaultNavigationTimeout(12000);
   const forbidden = [];
-  await context.route("**/*", async (route) => {
+  const guard = async (route) => {
     const url = new URL(route.request().url());
     // Playwright routes intercept only the first URL in a redirect chain.
     // Stop the local OAuth start's 302 before the browser can follow it externally.
@@ -142,7 +142,8 @@ try {
     if (url.origin === f.env.APP_URL) return route.continue();
     forbidden.push(url.origin + url.pathname);
     return route.abort();
-  });
+  };
+  await context.route("**/*", guard);
   async function login() {
     const result = await f.login();
     const equals = result.cookie.indexOf("=");
@@ -319,6 +320,12 @@ try {
     "PASS refused/network logout draft retention, accessible explicit retry and no duplicates",
   );
 
+  // Fake clocks freeze Date.now() for sibling pages in the same context, so the deadline pages get their own.
+  const timed = await browser.newContext({ serviceWorkers: "block", ignoreHTTPSErrors: true });
+  timed.setDefaultTimeout(8000);
+  timed.setDefaultNavigationTimeout(12000);
+  await timed.route("**/*", guard);
+  await timed.addCookies(await context.cookies());
   // Fake-clock logout deadline: a hung or late logout shows uncertainty, keeps drafts, never publishes or redirects.
   const T0 = Date.UTC(2026, 9, 11, 12, 0, 0);
   const COUNT_RECHECKS = `(() => {
@@ -348,7 +355,7 @@ try {
     assert.fail(message);
   }
   async function deadlinePage({ hold, draft }) {
-    const page = await context.newPage();
+    const page = await timed.newPage();
     page.on("pageerror", (error) => errors.push(error.message));
     await page.clock.install({ time: T0 });
     await page.addInitScript(COUNT_RECHECKS);
@@ -472,7 +479,6 @@ try {
     rechecks: sessionStorage.getItem("recheck-posts"),
   }));
   assert.deepEqual(snapshot, { posts: "1", rechecks: "1" });
-  // A paused fake clock otherwise stalled the sibling tab's sync check in this context.
   await early.clock.resume();
   await early.close();
 
@@ -516,6 +522,7 @@ try {
   await assertDraft(refusedLate, "Refused late draft");
   await refusedLate.clock.resume();
   await refusedLate.close();
+  await timed.close();
   console.log(
     "PASS logout deadline: hung, duplicate, early confirmation, late success and late refusal",
   );
