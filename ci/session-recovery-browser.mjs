@@ -333,8 +333,9 @@ try {
     window.fetch = function (input, init) {
       if (input !== "/logout") return fetchOriginal.call(this, input, init);
       sessionStorage.setItem("logout-posts", String(Number(sessionStorage.getItem("logout-posts") || 0) + 1));
-      return new Promise((resolve) => {
-        window.settleLogout = (status) => resolve(new Response(null, { status }));
+      return new Promise((resolve, reject) => {
+        window.settleLogout = (status) =>
+          status ? resolve(new Response(null, { status })) : reject(new TypeError("network"));
       });
     };
   })();`;
@@ -408,6 +409,7 @@ try {
   assert.equal(snapshot.disabled, true);
   assert.equal(snapshot.unconfirmed, 0);
   await duplicateLogout(hung);
+  await pause(200);
   assert.equal(hungRequests, 1);
   await hung.clock.runFor(1_000);
   snapshot = await logoutState(hung);
@@ -425,7 +427,35 @@ try {
   await hung.clock.resume();
   assert.equal((await new AxeBuilder({ page: hung }).analyze()).violations.length, 0);
   releaseHung();
+  await pause(300);
+  snapshot = await logoutState(hung);
+  assert.equal(snapshot.unconfirmed, 1);
+  assert.equal(snapshot.failed, 0);
+  assert.equal(snapshot.busy, null);
+  assert.equal(snapshot.rechecks, 0);
   await hung.close();
+
+  // A refusal or network failure before the deadline cancels the timer; no notice appears later.
+  for (const outcome of [503, 0]) {
+    const settled = await deadlinePage({ hold: true, draft: `Settled ${outcome} draft` });
+    await submitLogout(settled);
+    await until(async () => (await logoutState(settled)).posts === 1, "early failure not sent");
+    await settled.clock.runFor(2_000);
+    await settled.evaluate((status) => window.settleLogout(status), outcome);
+    await pause(300);
+    snapshot = await logoutState(settled);
+    assert.equal(snapshot.failed, 1);
+    assert.equal(snapshot.unconfirmed, 0);
+    assert.equal(snapshot.busy, null);
+    assert.equal(snapshot.disabled, false);
+    await settled.clock.runFor(10_000);
+    snapshot = await logoutState(settled);
+    assert.equal(snapshot.failed, 1);
+    assert.equal(snapshot.unconfirmed, 0);
+    assert.equal(snapshot.rechecks, 0);
+    await settled.clock.resume();
+    await settled.close();
+  }
 
   // Confirmation before the deadline keeps the existing success redirect and one broadcast.
   const early = await deadlinePage({ hold: true, draft: "Early logout draft" });
