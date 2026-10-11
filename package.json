@@ -52,7 +52,8 @@
     "drill:internal-action": "node --import ./bin/ts-hook.mjs bin/internal-action-drill.mjs",
     "lighthouse:quality": "lhci autorun --config=ci/lighthouserc.quality.cjs",
     "standards": "node ci/web-standards.mjs",
-    "standards:selftest": "node ci/web-standards.mjs --selftest && node ci/lighthouse-summary.mjs --selftest"
+    "standards:selftest": "node ci/web-standards.mjs --selftest && node ci/lighthouse-summary.mjs --selftest",
+    "audit:moderator-roles": "node --import ./bin/ts-hook.mjs bin/role-audit.mjs"
   },
   "dependencies": {
     "drizzle-orm": "^0.45.3",
