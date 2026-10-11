@@ -1,5 +1,10 @@
 {
   "maxMedium": 4,
   "maxLow": 2,
-  "ignore": []
+  "ignore": [
+    {
+      "pluginId": "10096",
+      "why": "Accepted edge behavior (TOG-21273): all instances are the Cloudflare challenge-platform injector's base64 unix-time 't' param (window.__CF$cv$params, /cdn-cgi/challenge-platform/scripts/jsd/main.js), added by bot-management/JSD at the edge on the staging hostname, not by Worker-rendered HTML (verified 2026-10-11: homepage has no raw 10-digit timestamps; /events digit runs are 13-digit E2E fixture titles). Revisit if the injector is ever scoped off staging or Worker HTML starts emitting timestamps."
+    }
+  ]
 }
