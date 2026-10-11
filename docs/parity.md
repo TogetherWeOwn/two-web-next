@@ -217,7 +217,7 @@ go hunting for them.
 | RsvpPolicy (owner-only write; Published + !ended + rsvpOpen create) | ✅ owner-only, Published + !ended + rsvpOpen | W9 ✅ |
 | FeaturedContentPolicy (all moderator; public via `currentlyVisible`) | ✅ moderator-only writes (`src/featured-policy.ts`, `ALL /admin/*` guard), public reads exactly `currentlyVisible` (`src/featured.ts`; `test/featured-policy.test.ts`) | W11 ✅ |
 | JoinAttemptPolicy (read moderator; writes denied — controller writes direct) | ✅ moderator-only reads (`src/admin/guard.ts` + `src/admin/reads.ts`; `test/admin-join-attempt.test.ts`), zero admin write routes with the single controller insert (`src/join/service.ts` `recordAttempt`; `test/join-attempt-write-policy.test.ts`) | W6 ✅ + W12 ✅ |
-| UserPolicy (`updateProfile` self-only) | ✅ owner-only PATCH incl. moderator-refused, no existence oracle (`src/profiles/routes.tsx`; `test/profile-self-only.test.ts`) | W7 ✅ |
+| UserPolicy (`updateProfile` self-only) | ✅ owner-only PATCH incl. moderator-refused, no existence oracle (`src/profiles/routes-admission.ts`; `test/profile-self-only.test.ts`) | W7 ✅ |
 | `access-admin` gate (`is_moderator`, recomputed from Discord role IDs each login) | ✅ recompute live + gate enforced: guest bounce, non-moderator 403, failure 503, private no-store (`src/admin/guard.ts`; `test/admin-guard-matrix.test.ts`) | W5 ✅ + W11 ✅ |
 
 ## 10. Middleware and edge behavior

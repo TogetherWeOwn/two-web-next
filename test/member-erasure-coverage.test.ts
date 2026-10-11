@@ -212,7 +212,7 @@ const MEMBER_BUCKETS = [
   { prefix: "rsvp-write", constructedIn: "src/events/rsvp.ts", prunedIn: "src/events/rsvp.ts" },
   {
     prefix: "profile-write",
-    constructedIn: "src/profiles/routes.tsx",
+    constructedIn: "src/profiles/routes-admission.ts",
     prunedIn: "src/join/service.ts",
   },
 ] as const;
@@ -304,7 +304,7 @@ describe("member-erasure coverage (DB-free migration introspection)", () => {
     ).toBe(true);
     expect(/prune/i.test(docs), "docs/member-erasure.md must describe the prune proof").toBe(true);
     // The profile path shares the join admission prune rather than owning one.
-    expect(readFileSync(join(root, "src/profiles/routes.tsx"), "utf8")).toContain(
+    expect(readFileSync(join(root, "src/profiles/routes-admission.ts"), "utf8")).toContain(
       "checkJoinThrottle",
     );
   });

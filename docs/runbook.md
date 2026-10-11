@@ -1099,7 +1099,7 @@ below, not its older `/up` row, define these outcomes.
 
 Sources: [src/index.tsx](../src/index.tsx), [auth routes](../src/auth/routes.ts),
 [join routes](../src/join/route.ts),
-[event routes](../src/events/routes.tsx), [profile routes](../src/profiles/routes.tsx),
+[event routes](../src/events/routes.tsx), [profile routes](../src/profiles/routes.tsx) (gate in [`routes-gate.ts`](../src/profiles/routes-gate.ts), saves in [`routes-writes.tsx`](../src/profiles/routes-writes.tsx)),
 [admin guard](../src/admin/guard.ts), [admin routes](../src/admin/routes.tsx),
 [access logging](../src/access-log.ts), [agent ingress](../src/agent-events/route.ts),
 [error handler](../src/error-responses.tsx). The homepage fallback is already present at

@@ -49,7 +49,7 @@ path is [`checkJoinThrottle`](../src/join/service.ts); RSVP writes use
 | Auth | 10 / 60 s | `AUTH_THROTTLE_PER_MINUTE` in [`src/throttle.ts`](../src/throttle.ts) | `login-redirect` (`GET /auth/discord`), `login-callback` (`GET /auth/discord/callback`), `qa-login` (`POST /auth/qa/:identity`) in [`src/index.tsx`](../src/index.tsx), `alert-probe` in [`src/alert-probe.ts`](../src/alert-probe.ts) |
 | Join | 10 / 60 s | `JOIN_THROTTLE_PER_MINUTE` with `JOIN_THROTTLE_BUCKET = "join"` in [`src/join/service.ts`](../src/join/service.ts) | `join:<clientKey>:<minute>` shared by `GET /join/discord` and `GET /join/callback` in [`src/join/route.ts`](../src/join/route.ts) |
 | Write | 30 / 60 s | `WRITE_THROTTLE_PER_MINUTE` in [`src/throttle.ts`](../src/throttle.ts) | `logout` (`POST /logout`) in [`src/index.tsx`](../src/index.tsx), `event-write` on the moderator event writes in [`src/events/routes.tsx`](../src/events/routes.tsx) |
-| Profile write | 30 / 60 s | `PROFILE_WRITE_THROTTLE_PER_MINUTE` in [`src/profiles/routes.tsx`](../src/profiles/routes.tsx) | `profile-write:<viewerId>` per member on profile writes |
+| Profile write | 30 / 60 s | `PROFILE_WRITE_THROTTLE_PER_MINUTE` in [`src/profiles/routes-admission.ts`](../src/profiles/routes-admission.ts) | `profile-write:<viewerId>` per member on profile writes |
 | Public event reads | 60 / 60 s | `PUBLIC_EVENT_READS_PER_MINUTE` in [`src/events/routes.tsx`](../src/events/routes.tsx) | `events-read:<clientKey>` across public event pages and feeds; see [`event-read-admission.md`](event-read-admission.md) |
 | RSVP write | 12 / 60 s | `RSVP_RATE_LIMIT` (`maxAttempts: 12`, `decaySeconds: 60`) in [`src/islands/contracts.ts`](../src/islands/contracts.ts) | `rsvp-write:<userId>` per member, shared by RSVP PUT and DELETE across events in [`src/events/rsvp.ts`](../src/events/rsvp.ts) |
 
@@ -61,7 +61,7 @@ policy refusals (`not_found`, closed events) return before the charge in
 [`chargeThrottle`](../src/events/rsvp.ts) and spend nothing; other paths spend
 before policy is judged — the generic middleware charges before the handler
 runs, profile-write 403s charge before the owner check in
-[`admitWrite`](../src/profiles/routes.tsx), and RSVP DELETE on a missing event
+[`admitWrite`](../src/profiles/routes-admission.ts), and RSVP DELETE on a missing event
 charges in [`withdrawRsvp`](../src/events/rsvp.ts).
 
 ## Prune and storage bound

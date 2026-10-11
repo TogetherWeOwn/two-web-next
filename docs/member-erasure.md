@@ -63,7 +63,7 @@ A second apply is a no-op: every count returns 0.
 
 `web_throttle_hits.bucket` embeds a Discord id in two write budgets:
 `rsvp-write:<discord id>` (`src/events/rsvp.ts`) and
-`profile-write:<discord id>` (`src/profiles/routes.tsx`). These rows are not
+`profile-write:<discord id>` (`src/profiles/routes-admission.ts`). These rows are not
 deleted by `eraseMember`: the rsvp path prunes counters older than five
 minutes before judging the budget (`pruneThrottle` in `src/events/rsvp.ts`);
 the join admission path (`checkJoinThrottle` in `src/join/service.ts`, shared
