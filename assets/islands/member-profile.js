@@ -48,6 +48,35 @@
   // Raw text the server last accepted; a field still holding it is saved, not dirty.
   var acceptedDraft = null;
 
+  // Busy state for an unsettled write: aria-busy on the form plus a polite
+  // status line. Save stays enabled and focus never moves. Cancel leaves it in
+  // place (the write is still unsettled); only settlement or the deadline ends it.
+  var SAVING_COPY = "Saving your profile\u2026";
+  var STILL_SAVING_COPY =
+    "Still finishing your earlier save. Your changes are kept; press Save again in a moment.";
+
+  function showPending(text) {
+    var old = root.querySelector('[data-testid="profile-pending"]');
+    if (old) old.remove();
+    var el = document.createElement("div");
+    el.setAttribute("data-testid", "profile-pending");
+    el.setAttribute("role", "status");
+    el.textContent = text;
+    form.parentNode.insertBefore(el, form);
+  }
+
+  function setPending(on) {
+    pending = on;
+    if (on) {
+      form.setAttribute("aria-busy", "true");
+      showPending(SAVING_COPY);
+      return;
+    }
+    form.removeAttribute("aria-busy");
+    var old = root.querySelector('[data-testid="profile-pending"]');
+    if (old) old.remove();
+  }
+
   function clearDeadline() {
     if (deadlineTimer !== null) {
       if (canTimeout) clearTimeout(deadlineTimer);
@@ -259,7 +288,7 @@
     if (!pending || request !== pendingRequest) return;
     var controller = currentAbort;
     clearDeadline();
-    pending = false;
+    setPending(false);
     if (controller) {
       try {
         controller.abort();
@@ -351,7 +380,7 @@
 
   form.addEventListener("submit", function (ev) {
     ev.preventDefault();
-    if (pending) return;
+    if (pending) return showPending(STILL_SAVING_COPY);
     if (sessionExpired) return expiredNotice();
     var f = form.elements;
     var body = {
@@ -366,9 +395,9 @@
     if (errs.length) return errorList(errs);
     editing = false;
     saveFocus = document.activeElement;
-    pending = true;
     var request = ++generation;
     pendingRequest = request;
+    setPending(true);
     // The owned deadline covers the whole write: fetch plus response-body
     // completion. On expiry the request no longer owns feedback — late
     // completions are dropped by the generation guard, and the uncertain
@@ -465,7 +494,7 @@
         // guard and dispose the deadline. An expired request has already
         // released both, and a newer request owns them now.
         if (!pending || pendingRequest !== request) return;
-        pending = false;
+        setPending(false);
         clearDeadline();
       });
   });

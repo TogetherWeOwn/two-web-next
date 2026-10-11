@@ -3,6 +3,7 @@ import { runInNewContext } from "node:vm";
 import { describe, expect, it, vi } from "vitest";
 import {
   PROFILE_COPY,
+  PROFILE_PENDING_TESTID,
   PROFILE_SAVE_DEADLINE_MS,
   PROFILE_UNCERTAIN_TESTID,
 } from "../src/islands/contracts";
@@ -62,6 +63,9 @@ class Element {
   }
   getAttribute(key: string) {
     return this.attributes[key] ?? null;
+  }
+  removeAttribute(key: string) {
+    delete this.attributes[key];
   }
   appendChild(child: Element) {
     child.parentNode = this;
@@ -291,6 +295,24 @@ describe("member-profile save deadline", () => {
       expect(f.form.hidden).toBe(false);
       expect(f.fetch).toHaveBeenCalledTimes(1);
       expect(f.document.activeElement).toBe(focusedBefore);
+    },
+  );
+
+  it.each([false, true])(
+    "clears the busy state and pending status at the deadline (cancelled write=%s)",
+    async (cancelled) => {
+      const f = fixture(true);
+      f.enter({ bio: "Hung write" });
+      f.form.dispatch("submit");
+      if (cancelled) f.cancel();
+      f.form.dispatch("submit");
+      expect(f.form.getAttribute("aria-busy")).toBe("true");
+      expect(f.notice(PROFILE_PENDING_TESTID)).not.toBeNull();
+      f.advance(PROFILE_SAVE_DEADLINE_MS);
+      await flush();
+      expect(f.form.getAttribute("aria-busy")).toBeNull();
+      expect(f.notice(PROFILE_PENDING_TESTID)).toBeNull();
+      expect(f.uncertain() === null).toBe(cancelled);
     },
   );
 
