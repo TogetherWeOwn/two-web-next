@@ -163,20 +163,33 @@ npx wrangler deploy --dry-run --outdir dist   # bundle check; does not deploy
 
 ### Browser regressions
 
-`test/admin-event-native-unicode.test.ts` drives native admin event forms in
-Chromium and skips its 48 browser cases unless `ADMIN_EVENT_BROWSER_TESTS=true`.
-Every document and asset is an intercepted synthetic fixture, so it needs no
-server, database or network. Install the browser once, then run:
+These suites skip their browser cases unless the opt-in variable is `"true"`, so
+a run without it can pass without executing them. The `a11y` job sets each
+variable, writes a Vitest JSON report and runs `ci/a11y-require-executed.mjs`,
+which fails the step unless every case in the named suite passed and at least
+the minimum ran. The minimums live in `.github/workflows/ci.yml`.
+
+| Suite | Opt-in variable | Local command |
+| --- | --- | --- |
+| `test/admin-event-native-unicode.test.ts` | `ADMIN_EVENT_BROWSER_TESTS` | `ADMIN_EVENT_BROWSER_TESTS=true npx vitest run test/admin-event-native-unicode.test.ts` |
+| `test/featured-native-length.test.ts` | `FEATURED_NATIVE_BROWSER_TESTS` | `FEATURED_NATIVE_BROWSER_TESTS=true npx vitest run test/featured-native-length.test.ts` |
+| `test/calendar-search-unicode-boundaries.test.ts` | `CALENDAR_SEARCH_BROWSER_TESTS` | `CALENDAR_SEARCH_BROWSER_TESTS=true npx vitest run test/calendar-search-unicode-boundaries.test.ts` |
+| `test/profile-native-length.test.ts` | `A11Y_BROWSER_TESTS` | `A11Y_BROWSER_TESTS=true npx vitest run test/profile-native-length.test.ts` |
+| `ci/a11y-lifecycle.test.mjs` | `A11Y_BROWSER_TESTS` | `A11Y_BROWSER_TESTS=true node --test ci/a11y-lifecycle.test.mjs` (real Chromium signal cases; no executed-count verifier yet) |
+
+The admin, featured and calendar suites use intercepted synthetic fixtures or
+loopback servers with mocked reads, and the profile suite uses loopback fixtures
+with memory stores. None needs a database, staging or the network. Install the
+browser once, then run a suite with its variable set:
 
 ```sh
 npx playwright install --with-deps chromium
-ADMIN_EVENT_BROWSER_TESTS=true npx vitest run test/admin-event-native-unicode.test.ts
 ```
 
-Without Chromium the suite fails in `beforeAll` and vitest reports the cases as
-skipped. The `a11y` job in CI sets the variable, reuses its cached Playwright
-Chromium, and `ci/a11y-require-executed.mjs` fails the step unless all 48 cases
-ran and passed. The step runs on `app`, `db` and `full` scopes, main and nightly.
+Without Chromium the Vitest suites fail in `beforeAll`, vitest reports their
+cases as skipped, and the verifier fails the CI step. The `a11y` job reuses its
+cached Playwright Chromium. These steps run on `app`, `db` and `full` scopes,
+main and nightly.
 
 Do not use `npm run deploy` as a test or build command.
 
