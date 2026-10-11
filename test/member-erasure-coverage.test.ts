@@ -54,8 +54,8 @@ const RETAINED = new Map<string, string>([
   ["member_data_access_logs.viewer_discord_id", "append-only access evidence, 90-day prune"],
   ["member_data_access_logs.viewer_user_id", "append-only access evidence, 90-day prune"],
   ["member_data_access_logs.subject_user_ids", "append-only access evidence, 90-day prune"],
-  ["activity_log.causer_id", "append-only moderation evidence, pruned by age"],
-  ["activity_log.subject_id", "append-only moderation evidence, pruned by age"],
+  ["activity_log.causer_id", "append-only moderation evidence, retained indefinitely"],
+  ["activity_log.subject_id", "append-only moderation evidence, retained indefinitely"],
 ]);
 
 const COLUMN_TYPES =
@@ -212,7 +212,7 @@ const MEMBER_BUCKETS = [
   { prefix: "rsvp-write", constructedIn: "src/events/rsvp.ts", prunedIn: "src/events/rsvp.ts" },
   {
     prefix: "profile-write",
-    constructedIn: "src/profiles/routes.tsx",
+    constructedIn: "src/profiles/routes-admission.ts",
     prunedIn: "src/join/service.ts",
   },
 ] as const;
@@ -264,6 +264,19 @@ describe("member-erasure coverage (DB-free migration introspection)", () => {
     }
   });
 
+  it("pins the activity_log retain decision: docs claim it, no prune code exists", () => {
+    const docs = readFileSync(docsPath, "utf8");
+    expect(docs).toContain("activity_log");
+    expect(docs).toContain("retained indefinitely per CISO decision");
+    expect(docs).toContain("No job prunes it");
+    // No prune deleter may target activity_log: the daily model:prune job
+    // covers other audit tables only.
+    const postgresJobs = readFileSync(join(root, "src/jobs/postgres.ts"), "utf8");
+    expect(postgresJobs).not.toContain("activity_log");
+    const migrationsDoc = readFileSync(join(root, "docs/db-migrations.md"), "utf8");
+    expect(migrationsDoc).toMatch(/does\s+not prune `activity_log`/);
+  });
+
   it("proves each Discord-embedding write bucket is ephemeral with a prune", () => {
     const buckets = collectWriteBuckets();
     expect(
@@ -291,7 +304,7 @@ describe("member-erasure coverage (DB-free migration introspection)", () => {
     ).toBe(true);
     expect(/prune/i.test(docs), "docs/member-erasure.md must describe the prune proof").toBe(true);
     // The profile path shares the join admission prune rather than owning one.
-    expect(readFileSync(join(root, "src/profiles/routes.tsx"), "utf8")).toContain(
+    expect(readFileSync(join(root, "src/profiles/routes-admission.ts"), "utf8")).toContain(
       "checkJoinThrottle",
     );
   });

@@ -147,6 +147,7 @@ test("local sweep matches only its named fixture titles", () => {
     row(KEY, "E2E Waitlist fixture"),
     row("01ARZ3NDEKTSV4RRFFQ69G5FAW", "E2E Promotion fixture"),
     row("01ARZ3NDEKTSV4RRFFQ69G5FAA", "E2E Pause fixture"),
+    row("01ARZ3NDEKTSV4RRFFQ69G5FAD", "E2E Moderator Game Night"),
     row("01ARZ3NDEKTSV4RRFFQ69G5FAB", "E2E Waitlistish unrelated"),
     row("01ARZ3NDEKTSV4RRFFQ69G5FAC", "Staging E2E event"),
   ].join("");
@@ -158,6 +159,9 @@ test("local sweep matches only its named fixture titles", () => {
   ]);
   assert.deepEqual(parseLocalFixtureRows(html, "E2E Pause "), [
     { eventKey: "01ARZ3NDEKTSV4RRFFQ69G5FAA", title: "E2E Pause fixture" },
+  ]);
+  assert.deepEqual(parseLocalFixtureRows(html, "E2E Moderator "), [
+    { eventKey: "01ARZ3NDEKTSV4RRFFQ69G5FAD", title: "E2E Moderator Game Night" },
   ]);
   assert.throws(() => localSweepListPath("Staging E2E ", "draft"), /invalid list filter/);
 });

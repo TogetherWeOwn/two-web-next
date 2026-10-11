@@ -50,9 +50,11 @@ A second apply is a no-op: every count returns 0.
 - `member_data_access_logs` is immutable with a 90-day prune
   (`drizzle/1018_audit-immutability.sql`, W13 `model:prune`). Past access
   records are compliance evidence and cannot be rewritten per request.
-- `activity_log` is append-only and retained. No job prunes it today; although
-  the database trigger permits deletion after 90 days, nothing currently does so.
+- `activity_log` is append-only and retained indefinitely per CISO decision
+  (retain). No job prunes it; although the database trigger permits deletion
+  after 90 days, nothing does so — that exception stays an unused safety valve.
   It records cutover and moderation evidence and is never edited per subject.
+  Revisit only through the whole-schema retention ledger.
 - The Discord-side mirror (roles, messages, tickets) is out of scope here:
   Discord is governed by Discord's own privacy policy, and removal there
   happens through Discord's moderation tools, not this command.
@@ -61,7 +63,7 @@ A second apply is a no-op: every count returns 0.
 
 `web_throttle_hits.bucket` embeds a Discord id in two write budgets:
 `rsvp-write:<discord id>` (`src/events/rsvp.ts`) and
-`profile-write:<discord id>` (`src/profiles/routes.tsx`). These rows are not
+`profile-write:<discord id>` (`src/profiles/routes-admission.ts`). These rows are not
 deleted by `eraseMember`: the rsvp path prunes counters older than five
 minutes before judging the budget (`pruneThrottle` in `src/events/rsvp.ts`);
 the join admission path (`checkJoinThrottle` in `src/join/service.ts`, shared

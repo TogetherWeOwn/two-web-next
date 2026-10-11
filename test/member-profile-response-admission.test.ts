@@ -35,13 +35,29 @@ class Element {
   attributes: Record<string, string> = {};
   listeners: Record<string, ((event: { preventDefault: () => void }) => void)[]> = {};
   hidden = false;
-  value = "";
-  defaultValue = "";
+  private raw = "";
+  private initial = "";
+  private dirty = false;
   private text = "";
   constructor(
     readonly tag: string,
     readonly document: { activeElement: Element | null },
   ) {}
+  get value(): string {
+    return this.raw;
+  }
+  set value(next: string) {
+    this.raw = next;
+    this.dirty = true;
+  }
+  get defaultValue(): string {
+    return this.initial;
+  }
+  set defaultValue(next: string) {
+    this.initial = next;
+    // Like a browser, a field the member has not edited follows its default.
+    if (!this.dirty) this.raw = next;
+  }
   get textContent(): string {
     return this.text + this.children.map((child) => child.textContent).join("");
   }
@@ -140,7 +156,7 @@ function fixture() {
           root.querySelector("form")!,
           key === "bio" || key === "games_text" ? "textarea" : "input",
         );
-        field.value = field.defaultValue = value;
+        field.defaultValue = value;
         return [key, field];
       }),
     ) as Record<string, Element>,
@@ -162,12 +178,13 @@ function fixture() {
   const enter = (values: Partial<Record<"bio" | "games_text" | "timezone", string>>) => {
     for (const [key, value] of Object.entries(values)) form.elements[key]!.value = value;
   };
+  const drainTimers = () => timers.splice(0).forEach((callback) => callback());
   const cancel = () => {
     form.dispatch("reset");
     Object.values(form.elements).forEach((field) => {
       field.value = field.defaultValue;
     });
-    timers.splice(0).forEach((callback) => callback());
+    drainTimers();
   };
   const notice = (id: string) => root.querySelector(`[data-testid="${id}"]`);
   return {
@@ -185,6 +202,7 @@ function fixture() {
     requests,
     enter,
     cancel,
+    drainTimers,
     notice,
   };
 }
@@ -347,5 +365,141 @@ describe("member-profile response admission", () => {
     f.form.dispatch("submit");
     expect(f.fetch).not.toHaveBeenCalled();
     expect(f.notice("profile-error")?.textContent).toContain("1000 characters");
+  });
+});
+
+describe("member-profile successful acknowledgement focus ownership", () => {
+  it("keeps focus where the member moved it during the owned save", async () => {
+    const f = fixture();
+    f.enter({ bio: "Saved bio" });
+    f.form.dispatch("submit");
+    const timezone = f.form.elements.timezone!;
+    timezone.focus();
+    f.form.dispatch("focusin");
+    f.requests[0]!.resolve(ack());
+    await flush();
+    await flush();
+    f.drainTimers();
+    expect(f.bio.textContent).toBe("Saved bio");
+    expect(f.notice("profile-saved")?.textContent).toBe("Profile saved.");
+    expect(f.document.activeElement).toBe(timezone);
+  });
+
+  it("does not pull focus from the page when the member moved outside the editor", async () => {
+    const f = fixture();
+    f.enter({ bio: "Saved bio" });
+    f.form.dispatch("submit");
+    f.name.focus();
+    f.requests[0]!.resolve(ack());
+    await flush();
+    await flush();
+    f.drainTimers();
+    expect(f.notice("profile-saved")).not.toBeNull();
+    expect(f.document.activeElement).toBe(f.name);
+  });
+
+  it("keeps the editor open and focus in place for an in-editor interaction", async () => {
+    const f = fixture();
+    f.enter({ bio: "Saved bio" });
+    f.form.dispatch("submit");
+    f.form.elements.bio!.focus();
+    f.form.dispatch("keydown");
+    f.requests[0]!.resolve(ack());
+    await flush();
+    await flush();
+    f.drainTimers();
+    expect(f.form.hidden).toBe(false);
+    expect(f.editControl.hidden).toBe(true);
+    expect(f.document.activeElement).toBe(f.form.elements.bio);
+  });
+
+  it("keeps newer typed text and its focus after acknowledgement", async () => {
+    const f = fixture();
+    f.enter({ bio: "Saved bio" });
+    f.form.dispatch("submit");
+    f.form.elements.bio!.focus();
+    f.enter({ bio: "Saved bio and more" });
+    f.requests[0]!.resolve(ack());
+    await flush();
+    await flush();
+    f.drainTimers();
+    expect(f.form.elements.bio!.value).toBe("Saved bio and more");
+    expect(f.form.hidden).toBe(false);
+    expect(f.document.activeElement).toBe(f.form.elements.bio);
+  });
+
+  it("does not reset a field the member is editing when the saved text is normalized", async () => {
+    const f = fixture();
+    f.form.elements.games_text!.defaultValue = "  Go  \nGo\n\nChess ";
+    f.form.dispatch("submit");
+    f.form.elements.games_text!.focus();
+    f.form.dispatch("pointerdown");
+    f.requests[0]!.resolve(ack());
+    await flush();
+    await flush();
+    f.drainTimers();
+    expect(f.form.elements.games_text!.defaultValue).toBe("Go\nChess");
+    expect(f.form.elements.games_text!.value).toBe("  Go  \nGo\n\nChess ");
+    expect(f.form.hidden).toBe(false);
+    expect(f.document.activeElement).toBe(f.form.elements.games_text);
+  });
+
+  it("still moves focus to the confirmation for an uninterrupted save submitted from a field", async () => {
+    const f = fixture();
+    f.enter({ bio: "Saved bio" });
+    f.form.elements.bio!.focus();
+    f.form.dispatch("submit");
+    f.requests[0]!.resolve(ack());
+    await flush();
+    await flush();
+    f.drainTimers();
+    expect(f.form.hidden).toBe(true);
+    expect(f.document.activeElement).toBe(f.notice("profile-saved"));
+  });
+
+  it("keeps focus and the editor when the member acts in the field they submitted from", async () => {
+    const f = fixture();
+    f.enter({ bio: "Saved bio" });
+    f.form.elements.bio!.focus();
+    f.form.dispatch("submit");
+    f.form.dispatch("pointerdown");
+    f.requests[0]!.resolve(ack());
+    await flush();
+    await flush();
+    f.drainTimers();
+    expect(f.form.hidden).toBe(false);
+    expect(f.document.activeElement).toBe(f.form.elements.bio);
+  });
+
+  it.each(["focusin", "input"])("keeps the editor open on %s during the save", async (type) => {
+    const f = fixture();
+    f.enter({ bio: "Saved bio" });
+    f.form.elements.bio!.focus();
+    f.form.dispatch("submit");
+    f.form.dispatch(type);
+    f.requests[0]!.resolve(ack());
+    await flush();
+    await flush();
+    f.drainTimers();
+    expect(f.form.hidden).toBe(false);
+    expect(f.document.activeElement).toBe(f.form.elements.bio);
+  });
+
+  it("collapses and focuses the confirmation on a clean save after an interrupted one", async () => {
+    const f = fixture();
+    f.enter({ bio: "Saved bio" });
+    f.form.dispatch("submit");
+    f.form.dispatch("keydown");
+    f.requests[0]!.resolve(ack());
+    await flush();
+    await flush();
+    expect(f.form.hidden).toBe(false);
+    f.form.dispatch("submit");
+    f.requests[1]!.resolve(ack());
+    await flush();
+    await flush();
+    f.drainTimers();
+    expect(f.form.hidden).toBe(true);
+    expect(f.document.activeElement).toBe(f.notice("profile-saved"));
   });
 });

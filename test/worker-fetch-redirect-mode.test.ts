@@ -35,7 +35,7 @@ describe("Worker fetch redirect mode", () => {
 // entirely (a revert to the default "follow"), so pin the option's presence per file: dropping
 // any one of these lines fails the matching assertion below.
 const PINNED_MANUAL_SITES = [
-  { file: "src/bot/client.ts", minManual: 1 },
+  { file: "src/bot/client-transport.ts", minManual: 1 },
   { file: "src/bot/event-read.ts", minManual: 1 },
   { file: "tail/worker.ts", minManual: 3 },
 ] as const;

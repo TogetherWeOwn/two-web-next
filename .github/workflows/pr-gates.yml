@@ -123,12 +123,35 @@ jobs:
             : > "$RUNNER_TEMP/pr-commit-subjects.txt"
           fi
 
+      - name: Resolve PR head ref
+        id: head-ref
+        if: github.event_name != 'push'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ inputs.pr_number || github.event.pull_request.number }}
+          HEAD_EVENT_REF: ${{ github.event.pull_request.head.ref }}
+        run: |
+          set -euo pipefail
+          # pull_request events carry the head ref; dispatch runs resolve it from
+          # the API so manual runs lint the same branch name.
+          if [ -n "$HEAD_EVENT_REF" ]; then
+            head_ref="$HEAD_EVENT_REF"
+          else
+            head_ref=$(gh api "repos/$REPO/pulls/$PR_NUMBER" --jq '.head.ref')
+          fi
+          if [ -z "$head_ref" ]; then
+            echo "::error::Could not resolve the PR head branch name."
+            exit 1
+          fi
+          printf 'head_ref=%s\n' "$head_ref" >> "$GITHUB_OUTPUT"
+
       - name: Check title, body and commits
         env:
           PR_METADATA_PATH: ${{ steps.pr.outputs.metadata }}
           COMMITS: ${{ toJSON(github.event.commits) }}
           COMMIT_SUBJECTS_PATH: ${{ runner.temp }}/pr-commit-subjects.txt
-          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          HEAD_REF: ${{ steps.head-ref.outputs.head_ref || github.event.pull_request.head.ref }}
           REPO_PRIVATE: ${{ github.event.repository.private }}
           PR_NUMBER: ${{ github.event.pull_request.number || inputs.pr_number || '0' }}
           HEAD_REF_ERROR_FROM_PR: ${{ env.HEAD_REF_ERROR_FROM_PR }}

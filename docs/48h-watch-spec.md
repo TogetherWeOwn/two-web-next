@@ -48,7 +48,7 @@ Conventions used below: `p95` is the 95th percentile of `duration_ms` in the
 5xx responses divided by all dispatched responses for the class over the
 window. `pending`, `oldest_pending_age_seconds` and `failed` are the `/up`
 queue envelope fields (`warn_at: 20`, `critical_at: 100` reported from
-`src/up.ts`; the code has no separate critical status).
+`src/up-queue.ts`; the code has no separate critical status).
 
 ### Availability and 5xx rate
 

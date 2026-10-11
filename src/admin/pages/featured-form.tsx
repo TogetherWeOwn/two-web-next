@@ -57,16 +57,12 @@ export const FeaturedFormPage: FC<{
           data-event-editor=""
           data-event-draft={Object.keys(errors).length > 0 ? "" : undefined}
         >
+          {/* Native maxlength counts UTF-16 units and truncates supplementary
+              characters early; the 255-code-point limits belong to the server
+              validator so valid headlines and image descriptions survive. */}
           <Field name="title" label="Headline" errors={errors}>
             {(id) => (
-              <input
-                id={id}
-                name="title"
-                type="text"
-                value={val(values, "title")}
-                maxlength={255}
-                required
-              />
+              <input id={id} name="title" type="text" value={val(values, "title")} required />
             )}
           </Field>
           <Field name="body" label="Body" errors={errors}>
@@ -94,13 +90,7 @@ export const FeaturedFormPage: FC<{
             hint="Required when an image URL is set — one plain sentence for screen-reader visitors."
           >
             {(id) => (
-              <input
-                id={id}
-                name="image_alt"
-                type="text"
-                value={val(values, "image_alt")}
-                maxlength={255}
-              />
+              <input id={id} name="image_alt" type="text" value={val(values, "image_alt")} />
             )}
           </Field>
           <div class="field">

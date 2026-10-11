@@ -12,12 +12,44 @@ import { pathToFileURL } from "node:url";
 const RISK = { 3: "High", 2: "Medium", 1: "Low", 0: "Informational" };
 
 export function summarize(report, budget) {
-  const ignore = new Set((budget.ignore ?? []).map((entry) => String(entry.pluginId)));
+  const ignoreByPlugin = new Map();
+  for (const entry of budget.ignore ?? []) {
+    const key = String(entry.pluginId);
+    if (!ignoreByPlugin.has(key)) ignoreByPlugin.set(key, []);
+    ignoreByPlugin.get(key).push(entry);
+  }
   const alerts = [];
   for (const site of report.site ?? []) {
     for (const alert of site.alerts ?? []) {
       const pluginId = String(alert.pluginid ?? alert.alertRef ?? "");
-      if (ignore.has(pluginId)) continue;
+      const entries = ignoreByPlugin.get(pluginId) ?? [];
+      // Unscoped entries ignore the whole alert (legacy behavior).
+      if (entries.some((entry) => !entry.uriPrefix)) continue;
+      // Scoped entries ignore only instances whose URI contains uriPrefix, so
+      // Worker-served hits still count. Without instances we cannot prove
+      // scope, so the alert stays.
+      if (entries.length > 0) {
+        const instances = alert.instances;
+        if (!Array.isArray(instances) || instances.length === 0) {
+          // Fall through to counting below.
+        } else {
+          const remaining = instances.filter(
+            (instance) =>
+              !entries.some(
+                (entry) =>
+                  entry.uriPrefix && String(instance.uri ?? "").includes(String(entry.uriPrefix)),
+              ),
+          );
+          if (remaining.length === 0) continue;
+          alerts.push({
+            pluginId,
+            name: String(alert.name ?? alert.alert ?? "unknown"),
+            risk: Number(alert.riskcode ?? 0),
+            count: remaining.length,
+          });
+          continue;
+        }
+      }
       alerts.push({
         pluginId,
         name: String(alert.name ?? alert.alert ?? "unknown"),
