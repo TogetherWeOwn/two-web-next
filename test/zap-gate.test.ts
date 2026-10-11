@@ -39,6 +39,58 @@ describe("ci/zap-gate.mjs", () => {
     expect(r.alerts).toHaveLength(0);
   });
 
+  it("scopes an ignore with uriPrefix to matching instances only", () => {
+    const scoped = {
+      ...alert(10096, "1", "Timestamp Disclosure"),
+      instances: [
+        {
+          uri: "https://next.togetherweown.com/cdn-cgi/challenge-platform/h/g/scripts/jsd/main.js",
+        },
+        { uri: "https://next.togetherweown.com/" },
+      ],
+    };
+    const budget = {
+      maxMedium: 4,
+      maxLow: 2,
+      ignore: [{ pluginId: "10096", uriPrefix: "/cdn-cgi/", why: "test" }],
+    };
+    const r = summarize(report([scoped]), budget);
+    expect(r.alerts).toHaveLength(1);
+    expect(r.alerts[0].count).toBe(1);
+    // The surviving Worker-served hit still counts against the Low budget.
+    expect(summarize(report([scoped]), { ...budget, maxLow: 0 }).failures).toHaveLength(1);
+  });
+
+  it("drops a scoped ignore only when every instance matches", () => {
+    const edgeOnly = {
+      ...alert(10096, "1", "Timestamp Disclosure"),
+      instances: [
+        {
+          uri: "https://next.togetherweown.com/cdn-cgi/challenge-platform/h/g/scripts/jsd/main.js",
+        },
+      ],
+    };
+    const budget = {
+      maxMedium: 4,
+      maxLow: 2,
+      ignore: [{ pluginId: "10096", uriPrefix: "/cdn-cgi/", why: "test" }],
+    };
+    const r = summarize(report([edgeOnly]), budget);
+    expect(r.alerts).toHaveLength(0);
+    expect(r.failures).toEqual([]);
+  });
+
+  it("keeps a scoped alert without instances, since scope cannot be proven", () => {
+    const budget = {
+      maxMedium: 4,
+      maxLow: 0,
+      ignore: [{ pluginId: "10096", uriPrefix: "/cdn-cgi/", why: "test" }],
+    };
+    const r = summarize(report([alert(10096, "1")]), budget);
+    expect(r.alerts).toHaveLength(1);
+    expect(r.failures).toHaveLength(1);
+  });
+
   it("never prints URLs or evidence in the summary", () => {
     const withInstances = {
       ...alert(10020, "2"),
