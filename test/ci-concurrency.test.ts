@@ -170,4 +170,21 @@ describe("superseded duplicate pull_request runs", () => {
   it.each(gates)("$gate still fails when scope fails in a run that was not cancelled", (gate) => {
     expect(conclusion(gate, false, { scope: "failure", downstream: "skipped" })).toBe("failure");
   });
+
+  // A job that times out or is cancelled on its own leaves its run uncancelled,
+  // so the gate runs and must reject the cancelled result.
+  it.each(gates)("$gate fails when scope was cancelled but its run was not", (gate) => {
+    expect(conclusion(gate, false, { scope: "cancelled", downstream: "skipped" })).toBe("failure");
+  });
+
+  // Only check's scope guard is modelled here; ci/a11y-policy.test.mjs and
+  // `npm run gate:selftest` pin its other guards rejecting a cancelled job.
+  it.each(gates.filter(({ gate }) => gate !== "check"))(
+    "$gate fails when a gated job was cancelled but its run was not",
+    (gate) => {
+      expect(conclusion(gate, false, { scope: "success", downstream: "cancelled" })).toBe(
+        "failure",
+      );
+    },
+  );
 });
