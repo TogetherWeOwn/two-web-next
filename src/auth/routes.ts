@@ -10,7 +10,7 @@
 import { type Context, Hono } from "hono";
 import { deleteCookie, getSignedCookie, setSignedCookie } from "hono/cookie";
 import { requestBodyLimit } from "../body-limit";
-import { authStatus, clearAuthStatus } from "../auth-status";
+import { AUTH_STATUS_COOKIE, authStatus, clearAuthStatus } from "../auth-status";
 import {
   addGuildMember,
   authorizeUrl,
@@ -237,6 +237,10 @@ export function registerAuthRoutes(app: Hono<{ Bindings: Env }>, hooks: AuthHook
         try {
           const store = await hooks.storeFor(c);
           await store.revoke(await hashToken(token));
+          const statusHash = await getSignedCookie(c, c.env.SESSION_SECRET, AUTH_STATUS_COOKIE);
+          if (typeof statusHash === "string" && /^[a-f0-9]{64}$/.test(statusHash)) {
+            await store.revokeLineage(statusHash);
+          }
         } catch {
           // Authoritative, not best-effort: a failed revocation must not clear
           // this browser's cookie as if the server row were gone.

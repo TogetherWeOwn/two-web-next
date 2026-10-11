@@ -155,6 +155,22 @@ function contract(name: string, make: () => SessionStore | Promise<SessionStore>
       expect(await store.get(s.tokenHash)).toBeNull();
     });
 
+    it("revokes every live token in one rotated lineage without affecting another lineage", async () => {
+      const original = row();
+      const independent = row();
+      const successor = row();
+      await store.create(original);
+      await store.create(independent);
+      const statusHash = await store.statusHash(original.tokenHash);
+      expect(await store.rotate(original.tokenHash, successor)).toBe(true);
+
+      await store.revokeLineage(statusHash!);
+
+      expect(await store.get(successor.tokenHash)).toBeNull();
+      expect(await store.isActive(statusHash!)).toBe(false);
+      expect(await store.get(independent.tokenHash)).not.toBeNull();
+    });
+
     it("expired rows read as missing", async () => {
       const s = { ...row(), expiresAt: new Date(Date.now() - 1000) };
       await store.create(s);
