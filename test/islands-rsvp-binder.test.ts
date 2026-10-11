@@ -1269,4 +1269,25 @@ describe("RsvpButton shipped binder", () => {
     expect(b.timers).toHaveLength(0);
     expect(binder).not.toMatch(/setInterval|window\.confirm|website/);
   });
+
+  it("keeps focus on a field the member moved to when a going request hits a full event", async () => {
+    const b = browser();
+    const field = new Node();
+    b.page.appendChild(field);
+    b.get("rsvp-going")!.click();
+    field.focus();
+    b.finish(0, 409, { capacity: 4 });
+    await b.settle();
+    expect(b.get("event-full")?.textContent).toBe("This one's full. Cap is 4.");
+    expect(b.get("event-full")?.focused).toBe(false);
+    expect(field.focused).toBe(true);
+  });
+
+  it("moves focus to the full message when a going request hits a full event uninterrupted", async () => {
+    const b = browser();
+    b.get("rsvp-going")!.click();
+    b.finish(0, 409, { capacity: 4 });
+    await b.settle();
+    expect(b.get("event-full")?.focused).toBe(true);
+  });
 });
