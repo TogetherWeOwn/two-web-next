@@ -146,14 +146,18 @@ test("local sweep matches only its named fixture titles", () => {
   const html = [
     row(KEY, "E2E Waitlist fixture"),
     row("01ARZ3NDEKTSV4RRFFQ69G5FAW", "E2E Promotion fixture"),
-    row("01ARZ3NDEKTSV4RRFFQ69G5FAX", "E2E Waitlistish unrelated"),
-    row("01ARZ3NDEKTSV4RRFFQ69G5FAY", "Staging E2E event"),
+    row("01ARZ3NDEKTSV4RRFFQ69G5FAA", "E2E Pause fixture"),
+    row("01ARZ3NDEKTSV4RRFFQ69G5FAB", "E2E Waitlistish unrelated"),
+    row("01ARZ3NDEKTSV4RRFFQ69G5FAC", "Staging E2E event"),
   ].join("");
   assert.deepEqual(parseLocalFixtureRows(html, "E2E Waitlist "), [
     { eventKey: KEY, title: "E2E Waitlist fixture" },
   ]);
   assert.deepEqual(parseLocalFixtureRows(html, "E2E Promotion "), [
     { eventKey: "01ARZ3NDEKTSV4RRFFQ69G5FAW", title: "E2E Promotion fixture" },
+  ]);
+  assert.deepEqual(parseLocalFixtureRows(html, "E2E Pause "), [
+    { eventKey: "01ARZ3NDEKTSV4RRFFQ69G5FAA", title: "E2E Pause fixture" },
   ]);
   assert.throws(() => localSweepListPath("Staging E2E ", "draft"), /invalid list filter/);
 });
