@@ -89,6 +89,17 @@ test("every unfinished state of the newest run blocks an older pass of its commi
   }
 });
 
+test("an unfinished run is not promotable even while it carries a success conclusion", async () => {
+  assert.equal(
+    await resolve([run(3, A, "success", "in_progress"), run(2, A), run(1, B)], {
+      3: "success",
+      2: "success",
+      1: "success",
+    }),
+    B,
+  );
+});
+
 test("a commit whose only verification is unfinished is not promoted", async () => {
   assert.equal(await resolve([run(2, A, null, "queued")], {}), null);
 });
