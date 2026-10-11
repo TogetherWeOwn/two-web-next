@@ -8,10 +8,15 @@
 // the same artifact before committing; a baseline change is a reviewed change.
 //
 // Collision preflight: the full destination-name map is built and validated
-// before any baseline write. When two admitted candidates flatten to one
-// destination name, acceptance is refused with a nonzero exit and existing
-// baseline bytes and directory contents are left untouched.
-import { copyFileSync, mkdirSync, readdirSync, statSync } from "node:fs";
+// before any baseline write. Destinations with two genuinely different sources
+// (for example two different `*-actual.png` files flattening to one name) are
+// refused with a nonzero exit and existing baseline bytes and directory
+// contents are left untouched. Two non-collisions never refuse:
+// a reviewed `*-actual.png` supersedes a stale committed copy of the same
+// destination carried inside the artifact (the e2e-failure artifact uploads
+// the whole `e2e/visual/__screenshots__/` directory), and byte-identical
+// duplicates of one destination collapse to a single write.
+import { copyFileSync, mkdirSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { basename, join } from "node:path";
 import { pathToFileURL } from "node:url";
 
@@ -54,21 +59,61 @@ export function collectCandidates(root) {
   return candidates;
 }
 
-// Groups candidates by destination; every destination with more than one
-// source is a collision. Sorted by destination for a stable diagnostic.
-export function findDuplicateDestinations(candidates) {
+function isActualSource(src) {
+  return basename(src).endsWith("-actual.png");
+}
+
+// One representative `{ src, bytes }` per distinct byte content, in first-seen
+// order. Reading happens during the preflight, so an unreadable candidate
+// fails before any baseline is written.
+function distinctByBytes(sources) {
+  const seen = [];
+  for (const src of sources) {
+    const bytes = readFileSync(src);
+    if (!seen.some((entry) => entry.bytes.equals(bytes))) {
+      seen.push({ src, bytes });
+    }
+  }
+  return seen;
+}
+
+// Resolves every destination to a single winning source. Returns `{ resolved,
+// droppedStale, duplicates }`: `resolved` is the `[{ src, dest }]` write plan
+// in destination order, `droppedStale` counts committed copies superseded by a
+// reviewed actual, and `duplicates` lists destinations with more than one
+// genuinely different source. Sorted by destination for a stable diagnostic.
+export function resolveDestinations(candidates) {
   const byDest = new Map();
   for (const { src, dest } of candidates) {
     const sources = byDest.get(dest) ?? [];
     sources.push(src);
     byDest.set(dest, sources);
   }
+  const resolved = [];
+  let droppedStale = 0;
   const duplicates = [];
-  for (const [dest, sources] of byDest) {
-    if (sources.length > 1) duplicates.push({ dest, sources: [...sources].sort() });
+  for (const dest of [...byDest.keys()].sort()) {
+    const sources = [...byDest.get(dest)].sort();
+    const actuals = sources.filter(isActualSource);
+    if (actuals.length > 0) {
+      // Reviewed actuals supersede stale committed copies of this destination.
+      droppedStale += sources.length - actuals.length;
+      const winners = distinctByBytes(actuals);
+      if (winners.length > 1) {
+        duplicates.push({ dest, sources: actuals });
+      } else {
+        resolved.push({ src: winners[0].src, dest });
+      }
+    } else {
+      const winners = distinctByBytes(sources);
+      if (winners.length > 1) {
+        duplicates.push({ dest, sources });
+      } else {
+        resolved.push({ src: winners[0].src, dest });
+      }
+    }
   }
-  duplicates.sort((a, b) => (a.dest < b.dest ? -1 : a.dest > b.dest ? 1 : 0));
-  return duplicates;
+  return { resolved, droppedStale, duplicates };
 }
 
 // Bounded diagnostic: names colliding destinations and their sources without
@@ -92,20 +137,31 @@ export function formatCollisionDiagnostic(duplicates) {
 }
 
 // Two-phase acceptance: preflight the full map, then write only when every
-// destination has exactly one source. Returns the number of baselines written.
+// destination resolves to one source. Candidates already byte-identical to
+// the destination are skipped. Returns `{ written, dropped }`.
 export function acceptBaselines(artifactDir, destDir) {
   const candidates = collectCandidates(artifactDir);
-  const duplicates = findDuplicateDestinations(candidates);
+  const { resolved, droppedStale, duplicates } = resolveDestinations(candidates);
   if (duplicates.length > 0) {
     throw new Error(formatCollisionDiagnostic(duplicates));
   }
   mkdirSync(destDir, { recursive: true });
-  let n = 0;
-  for (const { src, dest } of candidates) {
-    copyFileSync(src, join(destDir, dest));
-    n++;
+  let written = 0;
+  for (const { src, dest } of resolved) {
+    const target = join(destDir, dest);
+    let current = null;
+    try {
+      current = readFileSync(target);
+    } catch {
+      current = null;
+    }
+    if (current !== null && current.equals(readFileSync(src))) {
+      continue;
+    }
+    copyFileSync(src, target);
+    written++;
   }
-  return n;
+  return { written, dropped: droppedStale };
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
@@ -115,24 +171,15 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     process.exit(2);
   }
   const dest = "e2e/visual/__screenshots__";
-  let candidates;
   try {
-    candidates = collectCandidates(root);
+    const { written, dropped } = acceptBaselines(root, dest);
+    console.log(`accepted ${written} baseline(s) into ${dest}`);
+    if (dropped > 0) {
+      console.log(`dropped ${dropped} stale copy(ies) superseded by *-actual.png`);
+    }
+    process.exit(written ? 0 : 1);
   } catch (error) {
-    console.error(`visual baseline acceptance failed: ${error.message}`);
+    console.error(error instanceof Error ? error.message : String(error));
     process.exit(1);
   }
-  const duplicates = findDuplicateDestinations(candidates);
-  if (duplicates.length > 0) {
-    console.error(formatCollisionDiagnostic(duplicates));
-    process.exit(1);
-  }
-  mkdirSync(dest, { recursive: true });
-  let n = 0;
-  for (const { src, dest: name } of candidates) {
-    copyFileSync(src, join(dest, name));
-    n++;
-  }
-  console.log(`accepted ${n} baseline(s) into ${dest}`);
-  process.exit(n ? 0 : 1);
 }

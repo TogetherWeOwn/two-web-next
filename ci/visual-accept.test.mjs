@@ -11,6 +11,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { test } from "node:test";
+import { acceptBaselines } from "./visual-accept.mjs";
 
 const SCRIPT = new URL("./visual-accept.mjs", import.meta.url);
 
@@ -81,25 +82,79 @@ test("duplicate actual baselines for one destination are refused before any writ
   assert.deepEqual(listFilesRecursive(destDir), before);
 });
 
-test("an actual baseline colliding with a new baseline is refused without partial writes", () => {
-  const workspace = scratchRoot("visual-accept-mixed-");
+test("a reviewed actual supersedes a stale committed copy of the same destination", () => {
+  const workspace = scratchRoot("visual-accept-precedence-");
   const artifact = join(workspace, "artifact");
+  // The failure artifact carries the whole __screenshots__ dir (stale committed
+  // copies) next to the reviewed actuals; the actual must win, not refuse.
   writeBytes(join(artifact, "run", "home-actual.png"), "actual-bytes");
   writeBytes(
     join(artifact, "run", "e2e", "visual", "__screenshots__", "home.png"),
-    "new-baseline-bytes",
+    "stale-baseline-bytes",
   );
-  // A non-colliding candidate is also present: refusal must be all-or-nothing.
   writeBytes(join(artifact, "run", "about-actual.png"), "about-bytes");
   writeBytes(join(workspace, "e2e", "visual", "__screenshots__", "home.png"), "baseline-bytes");
   const before = listFilesRecursive(join(workspace, "e2e", "visual", "__screenshots__"));
 
   const { result, destDir } = runAccept(workspace, artifact);
 
+  assert.equal(result.status, 0, `expected acceptance, stderr: ${result.stderr}`);
+  assert.match(result.stdout, /accepted 2 baseline\(s\)/);
+  assert.match(result.stdout, /dropped 1 stale/);
+  assert.equal(readFileSync(join(destDir, "home.png"), "utf8"), "actual-bytes");
+  assert.equal(readFileSync(join(destDir, "about.png"), "utf8"), "about-bytes");
+  assert.deepEqual(
+    listFilesRecursive(destDir).filter((f) => !before.includes(f)),
+    ["about.png"],
+  );
+});
+
+test("a changed page next to a full committed screenshots dir is accepted", () => {
+  const workspace = scratchRoot("visual-accept-real-layout-");
+  const artifact = join(workspace, "artifact");
+  // Real e2e-failure artifact layout: every committed baseline is present
+  // under e2e/visual/__screenshots__/, plus the reviewed actual rendering.
+  writeBytes(join(artifact, "e2e", "visual", "__screenshots__", "home-desktop.png"), "committed");
+  writeBytes(join(artifact, "e2e", "visual", "__screenshots__", "about.png"), "committed-about");
+  writeBytes(
+    join(artifact, "test-results-visual", "home", "home-desktop-actual.png"),
+    "new-rendering",
+  );
+  writeBytes(join(workspace, "e2e", "visual", "__screenshots__", "home-desktop.png"), "committed");
+  writeBytes(join(workspace, "e2e", "visual", "__screenshots__", "about.png"), "committed-about");
+
+  const { result, destDir } = runAccept(workspace, artifact);
+
+  assert.equal(result.status, 0, `expected acceptance, stderr: ${result.stderr}`);
+  assert.match(result.stdout, /accepted 1 baseline\(s\)/);
+  assert.equal(readFileSync(join(destDir, "home-desktop.png"), "utf8"), "new-rendering");
+  assert.equal(readFileSync(join(destDir, "about.png"), "utf8"), "committed-about");
+});
+
+test("byte-identical duplicate actuals are accepted once, not refused", () => {
+  const workspace = scratchRoot("visual-accept-identical-");
+  const artifact = join(workspace, "artifact");
+  writeBytes(join(artifact, "a", "home-actual.png"), "same-bytes");
+  writeBytes(join(artifact, "b", "home-actual.png"), "same-bytes");
+
+  const { result, destDir } = runAccept(workspace, artifact);
+
+  assert.equal(result.status, 0, `expected acceptance, stderr: ${result.stderr}`);
+  assert.match(result.stdout, /accepted 1 baseline\(s\)/);
+  assert.equal(readFileSync(join(destDir, "home.png"), "utf8"), "same-bytes");
+});
+
+test("differing duplicate new baselines are refused without partial writes", () => {
+  const workspace = scratchRoot("visual-accept-snapshot-dup-");
+  const artifact = join(workspace, "artifact");
+  writeBytes(join(artifact, "a", "e2e", "visual", "__screenshots__", "about.png"), "variant-a");
+  writeBytes(join(artifact, "b", "e2e", "visual", "__screenshots__", "about.png"), "variant-b");
+
+  const { result } = runAccept(workspace, artifact);
+
   assert.notEqual(result.status, 0, `expected refusal, stdout: ${result.stdout}`);
-  assert.match(result.stderr, /home\.png/);
-  assert.equal(readFileSync(join(destDir, "home.png"), "utf8"), "baseline-bytes");
-  assert.deepEqual(listFilesRecursive(destDir), before);
+  assert.match(result.stderr, /about\.png/);
+  assert.throws(() => statSync(join(workspace, "e2e", "visual", "__screenshots__")));
 });
 
 test("collision refusal does not create the destination directory", () => {
@@ -129,21 +184,19 @@ test("non-colliding actual and new baselines are still accepted", () => {
   assert.equal(readFileSync(join(destDir, "about.png"), "utf8"), "about-bytes");
 });
 
-test("copy-before-preflight leaves a partial write and must fail these tests", () => {
-  // Negative control: documents what the pre-fix behavior did. A collector
-  // that copies during the walk overwrites the baseline before seeing the
-  // second source, so the post-run bytes cannot still equal the original.
-  // This test pins the buggy outcome; it must fail once the fix lands only
-  // if someone reintroduces copy-during-walk (it asserts the bug exists in
-  // a simulated copy-first walk, not in the script).
-  const workspace = scratchRoot("visual-accept-copyfirst-");
-  const artifact = join(workspace, "artifact");
-  writeBytes(join(artifact, "a", "home-actual.png"), "candidate-a-bytes");
-  writeBytes(join(artifact, "b", "home-actual.png"), "candidate-b-bytes");
-  const dest = join(workspace, "dest");
-  mkdirSync(dest, { recursive: true });
-  writeFileSync(join(dest, "home.png"), "baseline-bytes");
-  // Simulate the old copy-during-walk order: first candidate wins immediately.
-  writeFileSync(join(dest, "home.png"), "candidate-a-bytes");
-  assert.notEqual(readFileSync(join(dest, "home.png"), "utf8"), "baseline-bytes");
+test("acceptBaselines reports counts and throws a diagnostic on collision", () => {
+  const root = scratchRoot("visual-accept-api-");
+  const artifact = join(root, "artifact");
+  const destDir = join(root, "dest");
+  writeBytes(join(artifact, "run", "home-actual.png"), "actual-bytes");
+  writeBytes(join(artifact, "run", "e2e", "visual", "__screenshots__", "home.png"), "stale-bytes");
+
+  const { written, dropped } = acceptBaselines(artifact, destDir);
+
+  assert.equal(written, 1);
+  assert.equal(dropped, 1);
+  assert.equal(readFileSync(join(destDir, "home.png"), "utf8"), "actual-bytes");
+
+  writeBytes(join(artifact, "other", "home-actual.png"), "different-bytes");
+  assert.throws(() => acceptBaselines(artifact, join(root, "dest2")), /home\.png/);
 });
