@@ -190,6 +190,20 @@ describe("auth-status check budget when fetch ignores abort", () => {
     expect(b.requests).toHaveLength(2);
   });
 
+  it("a settled request's budget timer cannot abort a newer request", async () => {
+    const b = browser();
+    const first = track(b.api.check());
+    await b.advance(1000);
+    b.requests[0]?.respond(reply({ authenticated: true }));
+    await b.flush();
+    expect(first).toMatchObject({ settled: true, value: true });
+    void b.api.check();
+    expect(b.requests).toHaveLength(2);
+    await b.advance(BUDGET_MS - 1000);
+    expect(b.requests[0]?.signal.aborted).toBe(false);
+    expect(b.requests[1]?.signal.aborted).toBe(false);
+  });
+
   it("a late false after the budget cannot expire the session", async () => {
     const b = browser();
     const first = track(b.api.check());
