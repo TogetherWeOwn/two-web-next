@@ -323,10 +323,13 @@ jobs:
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
         run: bash ci/biome-selftest.sh
       # Fetch-await HARD gate (quality-gates.md): every fetch() in src/ is
-      # awaited, returned or chained. No build needed; fails the job.
+      # awaited, returned or chained, plus the shared vendored warning rules
+      # and their fixtures. No build needed; fails the job.
       - name: Fetch-await gate (ast-grep, HARD)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
-        run: npx -y --package @ast-grep/cli@0.50.0 ast-grep scan --error
+        run: |
+          npx -y --package @ast-grep/cli@0.50.0 ast-grep scan --error
+          npx -y --package @ast-grep/cli@0.50.0 ast-grep test
       # Floor guard HARD (CONSTRAINTS.md): no new suppressions, skips,
       # deleted tests, stripped assertions, stubs, exception rows or lowered
       # thresholds in the PR diff. Reads git history; fails the job.

@@ -25,6 +25,7 @@ thresholds, exception rows, or deleted tests.
 | Types | Zero type errors | `npm run typecheck` | every PR (`check` job) |
 | Lint | Zero errors from our config | `npm run lint` | every PR (`check` job) |
 | Fetch await | Every `fetch(...)` in `src/**` awaited, returned, or chained | `npm run scan:fetch-await` | every PR (`check` job, HARD) |
+| Shared ast-grep rules | Vendored `sg-rules/ts-*.yml` report only; fixtures in `sg-tests/` pass | `npm run scan:rules-test` (fixtures) inside the fetch-await CI step | every PR (`check` job; scan WARN, fixtures HARD) |
 | Secrets | No secrets in source | `bash .github/scripts/gitleaks-scan.sh` | every PR (`gitleaks` required check) |
 | Coverage of changed lines | Added TS lines ≥ 80% executed | `npm run patch:coverage` (`--strict` flips it HARD) | every PR (`check` job, WARN: reports only) |
 | Security: code | No high findings | `python3 -m semgrep --config ci/semgrep-rules.yml` | every PR (`check` job, WARN: reports only) |

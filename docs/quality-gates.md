@@ -20,8 +20,25 @@ not fail) unless marked HARD. All of them run on the existing runners only.
   `*.test.ts` / `*.test.mjs` file is reachable from no CI job.
 - **Floor guard (HARD):** `ci/floor-guard.mjs` enforces the CONSTRAINTS.md
   floor on the PR diff: new suppressions, added skips, deleted test files,
-  stripped assertions, stubs, new exception rows, and lowered thresholds fail
-  `check`. Exemptions live in `.constraintsignore` (content rules only).
+  net-removed assertions, stubs, new exception rows, and lowered thresholds
+  fail `check`. A removed assertion paired with one added in the same test
+  file reads as a replacement, not a strip. Exemptions live in
+  `.constraintsignore` (content rules only).
+- **Shared ast-grep rules (WARN):** `sg-rules/ts-*.yml` are vendored
+  byte-identical from the shared meta-only quality assets
+  (`quality/meta-only/rules/ts/`) instead of rewritten: `ts-admin-join-attempt-write`
+  (no SQL writes to join-attempt history from admin stores),
+  `ts-path-stat-then-stream` (open once, stream the same descriptor),
+  `ts-probe-unbounded-buffer` (bounded probe bodies), and
+  `ts-vacuous-literal-expect` (no literal-true assertions). They run at
+  warning severity inside the existing `ast-grep scan --error` step, so they
+  report without failing; their fixtures live in `sg-tests/` with recorded
+  baselines (`npm run scan:rules-test`, also run in that CI step).
+  `ts-probe-unbounded-buffer` targets a `wrangler/src/**` tree this repo does
+  not have, so it is wired for parity but never fires here. Wiring the rules
+  caught one live `expect(true).toBe(true)` placeholder in
+  `test/seo-headers.test.ts`, replaced with a mapping-table pin that asserts
+  every documented section exists in the file.
 
 ## Merge-blocking mutation proposal
 

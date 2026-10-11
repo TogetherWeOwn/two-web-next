@@ -103,11 +103,27 @@ export function scanAdded(added, ignore = []) {
   return findings;
 }
 
-export function scanRemoved(removed) {
+// A removed assertion paired with an assertion added in the same test file
+// is a replacement (strengthening), not a strip: only the net excess is
+// flagged, so a vacuous placeholder can be swapped for a real pin without
+// tripping the floor, while a genuine strip stays loud.
+export function scanRemoved(removed, added = []) {
   const findings = [];
-  for (const { file, text } of removed) {
+  const addedAssert = new Map();
+  for (const { file, text } of added) {
     if (TEST_PATH.test(file) && ASSERTIONS.test(text))
+      addedAssert.set(file, (addedAssert.get(file) ?? 0) + 1);
+  }
+  const paired = new Map();
+  for (const { file, text } of removed) {
+    if (TEST_PATH.test(file) && ASSERTIONS.test(text)) {
+      const used = paired.get(file) ?? 0;
+      if (used < (addedAssert.get(file) ?? 0)) {
+        paired.set(file, used + 1);
+        continue;
+      }
       flag(findings, "assertion-removed", file, text);
+    }
   }
   return findings;
 }
@@ -140,7 +156,7 @@ export function guardDiff(diff, opts = {}) {
   const { added, removed, deletedFiles } = parseDiff(diff);
   return [
     ...scanAdded(added, opts.ignore ?? []),
-    ...scanRemoved(removed),
+    ...scanRemoved(removed, added),
     ...scanDeleted(deletedFiles),
     ...checkThresholds(removed, added),
   ];

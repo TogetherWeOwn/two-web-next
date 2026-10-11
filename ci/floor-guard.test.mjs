@@ -74,6 +74,30 @@ describe("floor-guard", () => {
     assert.ok(findings.some((f) => f.rule === "assertion-removed"));
   });
 
+  it("stays silent when a removed assertion is replaced in the same file", () => {
+    const findings = guardDiff(
+      diff(
+        "--- a/test/a.test.ts\n+++ b/test/a.test.ts\n@@ -1,2 +1,2 @@\n-expect(true).toBe(true);\n+expect(titles.has(section), section).toBe(true);\n",
+      ),
+    );
+    assert.deepEqual(
+      findings.filter((f) => f.rule === "assertion-removed"),
+      [],
+    );
+  });
+
+  it("still flags a net strip when more assertions leave than arrive", () => {
+    const findings = guardDiff(
+      diff(
+        "--- a/test/a.test.ts\n+++ b/test/a.test.ts\n@@ -1,3 +1,2 @@\n-expect(x).toBe(1);\n-expect(y).toBe(2);\n+expect(x).toBe(1);\n",
+      ),
+    );
+    assert.equal(
+      findings.filter((f) => f.rule === "assertion-removed").length,
+      1,
+    );
+  });
+
   it("flags a lowered threshold in CONSTRAINTS.md", () => {
     const findings = guardDiff(
       diff(
