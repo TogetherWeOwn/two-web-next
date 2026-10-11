@@ -51,6 +51,21 @@
 
   var sessionExpired = false;
 
+  function hasUnsavedChanges() {
+    return ["bio", "games_text", "timezone"].some(function (key) {
+      return form.elements[key].value !== form.elements[key].defaultValue;
+    });
+  }
+
+  if (typeof window !== "undefined")
+    window.addEventListener("beforeunload", function (event) {
+      // Recovery navigation is the explicit escape; the notice keeps the draft
+      // available in this document if the member chooses to stay.
+      if (sessionExpired || !hasUnsavedChanges()) return;
+      event.preventDefault();
+      event.returnValue = "";
+    });
+
   function expiredNotice() {
     sessionExpired = true;
     notice(

@@ -183,6 +183,11 @@ function fixture(search = "") {
     timers.splice(0).forEach((callback) => callback());
   };
   const notice = (id: string) => root.querySelector(`[data-testid="${id}"]`);
+  const departure = () => {
+    const event = new Event("beforeunload", { cancelable: true });
+    window.dispatchEvent(event);
+    return event;
+  };
   return {
     document,
     window,
@@ -197,6 +202,7 @@ function fixture(search = "") {
     form,
     edit,
     editControl,
+    departure,
     fetch,
     requests,
     enter,
@@ -206,6 +212,43 @@ function fixture(search = "") {
 }
 
 describe("shipped member-profile edit lifecycle", () => {
+  it("warns only while the profile differs from its accepted baseline", async () => {
+    const f = fixture();
+    expect(f.departure().defaultPrevented).toBe(false);
+
+    f.enter({ bio: "Unsaved bio" });
+    expect(f.departure().defaultPrevented).toBe(true);
+    f.cancel();
+    expect(f.departure().defaultPrevented).toBe(false);
+
+    f.enter({ bio: "Saved bio" });
+    f.form.dispatch("submit");
+    f.requests[0]!.resolve(success());
+    await flush();
+    expect(f.departure().defaultPrevented).toBe(false);
+
+    f.enter({ bio: "Newer draft" });
+    f.form.dispatch("submit");
+    f.enter({ bio: "Typed while saving" });
+    f.requests[1]!.resolve(success());
+    await flush();
+    expect(f.form.elements.bio!.value).toBe("Typed while saving");
+    expect(f.departure().defaultPrevented).toBe(true);
+  });
+
+  it("keeps failed drafts protected and lets explicit recovery navigation escape", async () => {
+    const f = fixture();
+    f.enter({ bio: "Keep this draft" });
+    f.form.dispatch("submit");
+    f.requests[0]!.resolve({ ok: false, status: 401 });
+    await flush();
+    expect(f.form.elements.bio!.value).toBe("Keep this draft");
+    expect(f.departure().defaultPrevented).toBe(false);
+    expect(f.notice("profile-session-expired")?.querySelector("a")?.href).toContain(
+      "/auth/recover?next=",
+    );
+  });
+
   it("supports two saves, re-edit and cancel to the latest accepted values without reloading", async () => {
     const f = fixture();
     f.enter({ bio: "First bio", games_text: "Go\nChess", timezone: "Europe/London" });
@@ -365,6 +408,7 @@ describe("shipped member-profile edit lifecycle", () => {
       expect(f.document.activeElement).toBe(alert);
       expect(f.form.hidden).toBe(false);
       expect(f.form.elements.bio!.value).toBe("Keep this draft");
+      expect(f.departure().defaultPrevented).toBe(true);
       expect(f.form.elements.bio!.defaultValue).toBe("Original bio");
       f.form.dispatch("submit");
       f.requests[1]!.resolve(success());
