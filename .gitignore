@@ -10,6 +10,8 @@ e2e/.dev.vars
 e2e/staging/.auth/
 playwright-report/
 test-results/
+playwright-report-visual/
+test-results-visual/
 artifacts/
 .lighthouseci/
 dist-tail/

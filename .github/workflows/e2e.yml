@@ -119,7 +119,13 @@ jobs:
             playwright-chromium-${{ runner.os }}-
       - name: Install Chromium
         run: npx playwright install --with-deps chromium
+      # Visual regression runs first, on the freshly seeded state: the journeys
+      # below mutate events and RSVPs (docs/visual-regression.md).
+      - name: Visual regression
+        id: visual
+        run: npx playwright test --config playwright.visual.config.ts
       - name: Critical browser journeys
+        if: ${{ !cancelled() }}
         run: npm run e2e
       - name: Failure traces and report
         if: failure()
@@ -129,6 +135,8 @@ jobs:
           path: |
             test-results/
             playwright-report/
+            test-results-visual/
+            playwright-report-visual/
           if-no-files-found: ignore
           retention-days: 7
       - name: Remove ephemeral QA material
