@@ -1,14 +1,18 @@
 // Nightly mutation signal for the auth blast radius: `src/sessions.ts`,
 // `src/join/service.ts`, `src/join/route.ts`, RSVP write admission
 // (member-denied matrix in routes-rsvp, throttle/waitlist/capacity in rsvp.ts),
-// admin write admission (`src/admin/guard.ts`, `src/admin/writeback.ts`), and
-// the agent-events ingress (`src/agent-events/ingress.ts` admission plus
-// `src/agent-events/route.ts` refusals).
+// admin write admission (`src/admin/guard.ts`, `src/admin/writeback.ts`),
+// moderator recompute (`src/roles.ts`: blank-allowlist/lookup-failure
+// fail-open, fabricated membership, name-lenient intersection), wall-time
+// admission (`src/admin/validation-wall-time.ts`: fold preference, gap
+// refusal, unknown-zone refusal), and the agent-events ingress
+// (`src/agent-events/ingress.ts` admission plus `src/agent-events/route.ts`
+// refusals).
 //
 // Each mutant weakens exactly one auth check (expired-session blindness, lost
 // revocation, throttle/review bypass, forged join outcomes, admin guard bypass,
-// refused write-back dispatched, ingress auth/replay/idempotency bypass,
-// route refusal bypass). The runner applies
+// refused write-back dispatched, moderator fail-open, wall-time misresolve,
+// ingress auth/replay/idempotency bypass, route refusal bypass). The runner applies
 // one mutant at a time to the working tree, runs the hermetic DB-free kill
 // suite, then restores the file byte-for-byte (hash-verified). A mutant the
 // suite fails to kill is a coverage gap, not a test failure.
@@ -52,6 +56,8 @@ const KILL_SUITE = [
   "test/rsvp-waitlist-admission.test.ts",
   "test/admin-write-admission.test.ts",
   "test/admin-writeback-refusal.test.ts",
+  "test/moderator-malformed-success.test.ts",
+  "test/event-time-validation.test.ts",
   "test/agent-events-ingress-auth.test.ts",
   "test/agent-events-ingress-replay.test.ts",
   "test/agent-events-route-refusal.test.ts",
@@ -207,6 +213,56 @@ const MUTANTS = [
     note: "refused (draft) write-back stays suppressed: it is forced onto the published carrier",
     find: "await enqueueEventSync(env, wb.eventKey, wb.status, requestId);",
     replace: 'await enqueueEventSync(env, wb.eventKey, "published", requestId);',
+  },
+  {
+    id: "R4-blank-allowlist-admits",
+    file: "src/roles.ts",
+    note: "blank moderator allowlist denies without a lookup: it admits instead",
+    find: "if (opts.moderatorRoleIds.length === 0) return false;",
+    replace: "if (opts.moderatorRoleIds.length === 0) return true;",
+  },
+  {
+    id: "R5-fetch-failure-admits",
+    file: "src/roles.ts",
+    note: "failed role lookup fails closed: the failure fabricates full membership",
+    find: "const member = await fetchMemberRoles(opts.guildId, opts.userId, opts.botToken).catch(() => null);",
+    replace:
+      "const member = await fetchMemberRoles(opts.guildId, opts.userId, opts.botToken).catch(() => ({ roles: opts.moderatorRoleIds, joinedAt: null }));",
+  },
+  {
+    id: "R6-lookup-failure-admits",
+    file: "src/roles.ts",
+    note: "unresolved membership fails closed: it admits as moderator",
+    find: "if (!member) return false;",
+    replace: "if (!member) return true;",
+  },
+  {
+    id: "R7-any-role-admits",
+    file: "src/roles.ts",
+    note: "moderator check intersects IDs: any role string admits",
+    find: "return memberRoles.some((r) => allow.has(r));",
+    replace: "return memberRoles.length > 0;",
+  },
+  {
+    id: "W1-fold-later-resolves-earlier",
+    file: "src/admin/validation-wall-time.ts",
+    note: "fold-ambiguous times resolve to the later occurrence: they resolve to the earlier one",
+    find: 'return new Date(fold === "later" ? Math.max(...instants) : Math.min(...instants));',
+    replace: 'return new Date(fold === "later" ? Math.min(...instants) : Math.max(...instants));',
+  },
+  {
+    id: "W2-gap-time-admitted",
+    file: "src/admin/validation-wall-time.ts",
+    note: "spring-forward gap times are refused: they resolve to an instant",
+    find: "if (candidates.size === 0) {",
+    replace: "if (false) {",
+  },
+  {
+    id: "W3-unknown-timezone-admitted",
+    file: "src/admin/validation-wall-time.ts",
+    note: "unknown zones are refused with a ValidationError: they fall through to the Intl throw",
+    find: "if (!isKnownTimezone(timezone))",
+    replace: "if (false)",
   },
   {
     id: "E1-anon-admitted",
@@ -371,7 +427,7 @@ export function renderReport({ sha: headSha, startedAt, results }) {
   const survived = results.filter((r) => r.status === "survived");
   const stale = results.filter((r) => r.status !== "killed" && r.status !== "survived");
   const lines = [
-    "# Mutation report: sessions + join + rsvp + admin + agent-events (nightly, non-blocking)",
+    "# Mutation report: sessions + join + rsvp + admin + roles + wall-time + agent-events (nightly, non-blocking)",
     "",
     `- head: ${headSha}`,
     `- started: ${startedAt}`,
@@ -461,7 +517,7 @@ export function run(root, kill = defaultKill) {
   const stale = results.filter((r) => r.status !== "killed" && r.status !== "survived");
   const survivedRows = survived(results);
   console.log(
-    `mutation sessions+join+rsvp+admin+agent-events: ${results.length - survivedRows.length - stale.length}/${results.length} killed.`,
+    `mutation sessions+join+rsvp+admin+roles+wall-time+agent-events: ${results.length - survivedRows.length - stale.length}/${results.length} killed.`,
   );
   console.log(`report: artifacts/mutation-sessions-join/report.{json,md}`);
   for (const r of [...survivedRows, ...stale])

@@ -322,6 +322,16 @@ jobs:
       - name: Biome gate selftest (intentional violations)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
         run: bash ci/biome-selftest.sh
+      # Fetch-await HARD gate (quality-gates.md): every fetch() in src/ is
+      # awaited, returned or chained. No build needed; fails the job.
+      - name: Fetch-await gate (ast-grep, HARD)
+        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
+        run: npx -y --package @ast-grep/cli@0.50.0 ast-grep scan --error
+      # Test-inventory WARN gate (quality-gates.md): every test file runs
+      # somewhere. Filesystem-only; never fails (WARN).
+      - name: Test inventory (WARN)
+        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
+        run: npm run test:inventory:selftest && npm run test:inventory
       - name: Check (lint + typecheck + coverage gate)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
         run: npm run lint && npm run typecheck && npm run e2e:typecheck && npm run test:coverage && npm run e2e:safety && node --test ci/a11y-*.test.mjs ci/admin-properties-ci.test.mjs ci/coverage-command.test.mjs
@@ -352,6 +362,21 @@ jobs:
       - name: Shadow-compare selftest (loopback only)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
         run: npm run test:shadow
+      # Changed-lines WARN gate (quality-gates.md): added TS lines should be
+      # executed (80%). Reads the coverage this job just produced; warns only.
+      - name: Patch coverage (WARN)
+        if: always() && (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && hashFiles('coverage/coverage-final.json') != ''
+        run: npm run patch:coverage:selftest && npm run patch:coverage
+      # Semgrep WARN gate (quality-gates.md): TS sinks + secret-shaped
+      # literals. continue-on-error so installer hiccups never fail the job;
+      # WARNING-severity findings exit 0 by themselves.
+      - name: Semgrep (WARN)
+        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          python3 -m pip install --quiet semgrep
+          python3 -m semgrep --config ci/semgrep-rules.yml --quiet
       - name: Coverage job summary
         if: always() && (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && hashFiles('coverage/coverage-summary.json') != ''
         run: node ci/coverage-summary.mjs >> "$GITHUB_STEP_SUMMARY"

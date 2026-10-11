@@ -1,0 +1,9 @@
+# ast-grep project config (quality gate: fetch-await HARD).
+#
+# Rules live in sg-rules/ (ast-grep 0.50.0 project mode only reads
+# `ruleDirs`; inline `rules:` here are silently ignored).
+#
+# Run locally: npx -y --package @ast-grep/cli@0.50.0 ast-grep scan
+# CI runs `ast-grep scan --error`: any error-severity finding fails `check`.
+ruleDirs:
+  - sg-rules

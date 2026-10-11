@@ -1,0 +1,45 @@
+# fetch(...) must be awaited, returned, or .then/.catch-chained (HARD gate).
+#
+# A floating fetch() keeps running after the handler settled: its rejection
+# is unobserved and its response never reaches the caller. Deliberate
+# fire-and-forget needs an explicit `void` with a comment saying why the
+# outcome is safe to drop (a future rule revision can allow void explicitly).
+id: fetch-must-be-awaited
+# `ts`, not `tsx`: with 0.50.0 the tsx grammar does not match the
+# call_expression pattern below (verified: ts matches, tsx misses).
+# The ts grammar still parses the repo's .tsx files for this pattern.
+language: ts
+severity: error
+message: "fetch(...) must be awaited, returned, or .then/.catch-chained"
+note: >-
+  Write `await fetch(...)`, `return fetch(...)`, or chain
+  `fetch(...).then(...)`.
+files:
+  # Server code only. assets/islands/*.js use assigned `.then` chains
+  # (`inflight = fetch(...).then(...)`) behind generation guards; they are
+  # covered by browser tests, not by this rule.
+  - src/**/*.ts
+  - src/**/*.tsx
+rule:
+  kind: call_expression
+  pattern: fetch($$$)
+  not:
+    any:
+      # await fetch(...) anywhere up the ancestor chain.
+      - inside:
+          kind: await_expression
+          stopBy: end
+      # return fetch(...).
+      - inside:
+          kind: return_statement
+          stopBy: end
+      # fetch(...).then(...) / .catch(...) / .finally(...) chains.
+      - inside:
+          stopBy: end
+          pattern: fetch($$$).then($$$)
+      - inside:
+          stopBy: end
+          pattern: fetch($$$).catch($$$)
+      - inside:
+          stopBy: end
+          pattern: fetch($$$).finally($$$)
