@@ -119,10 +119,23 @@ describe("join-attempt write policy: single controller insert (DB-free source al
   });
 
   it("the admin write store never touches join attempts", () => {
-    const store = read("src/admin/store.ts");
-    expect(store).not.toMatch(/join_attempts/);
-    expect(store).not.toMatch(/\bjoinAttempts\b/);
-    expect(store).not.toMatch(/recordAttempt/);
+    // store.ts is a re-export barrel; the bodies live in the leaves, so the
+    // pin must scan every store module (globbed so future leaves stay covered).
+    const stores = srcFiles().filter((path) => /^src\/admin\/store.*\.ts$/.test(path));
+    expect(stores).toEqual([
+      "src/admin/store-access.ts",
+      "src/admin/store-event-reads.ts",
+      "src/admin/store-event-writes.ts",
+      "src/admin/store-featured.ts",
+      "src/admin/store-shared.ts",
+      "src/admin/store.ts",
+    ]);
+    for (const file of stores) {
+      const text = read(file);
+      expect(text, file).not.toMatch(/join_attempts/);
+      expect(text, file).not.toMatch(/\bjoinAttempts\b/);
+      expect(text, file).not.toMatch(/recordAttempt/);
+    }
   });
 });
 
