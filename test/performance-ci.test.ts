@@ -17,6 +17,7 @@ import { auditPaths, fixtureKey } from "../ci/lighthouse-paths";
 
 const require = createRequire(import.meta.url);
 const config = require("../ci/lighthouserc.cjs").ci;
+const qualityBudget = require("../ci/quality-budget.json");
 const {
   assertFixtureContent,
   probeFixture,
@@ -510,11 +511,16 @@ describe("performance CI", () => {
   it("pins legacy public thresholds, median sampling and the phone profile", () => {
     expect(config.collect.url).toEqual(auditPaths.map((path) => `http://127.0.0.1:8787${path}`));
     expect(config.collect.numberOfRuns).toBe(3);
+    // The mobile performance category floor is the owner-approved web quality gate (ci/quality-budget.json).
     expect(config.assert.assertions).toEqual({
+      "categories:performance": [
+        "error",
+        { minScore: qualityBudget.mobilePerformance, aggregationMethod: "median-run" },
+      ],
       "largest-contentful-paint": ["error", { maxNumericValue: 2000, aggregationMethod: "median" }],
       "cumulative-layout-shift": ["error", { maxNumericValue: 0.1, aggregationMethod: "median" }],
       "server-response-time": ["error", { maxNumericValue: 600, aggregationMethod: "median" }],
-      "total-blocking-time": ["warn", { maxNumericValue: 300, aggregationMethod: "median" }],
+      "total-blocking-time": ["error", { maxNumericValue: 200, aggregationMethod: "median" }],
       "first-contentful-paint": ["warn", { maxNumericValue: 1800, aggregationMethod: "median" }],
     });
     expect(config.collect.settings.formFactor).toBe("mobile");
@@ -550,7 +556,13 @@ describe("performance CI", () => {
       );
       audits[audit] = { numericValue };
       const report = join(root, "report.json");
-      writeFileSync(report, JSON.stringify({ finalUrl: "http://127.0.0.1:8787/events", audits }));
+      // The categories:performance assertion reads lhr.categories, not audits: give it a passing
+      // score so the run fails on the intended audit instead of a missing category.
+      const categories = { performance: { score: 1 } };
+      writeFileSync(
+        report,
+        JSON.stringify({ finalUrl: "http://127.0.0.1:8787/events", audits, categories }),
+      );
       // Real assertion command and production thresholds; no collection/network.
       const assertion = spawnSync(
         process.execPath,
