@@ -157,7 +157,7 @@ No Logpush or external shipping is configured by this change.
 
 ## Discord snapshot outcome
 
-The calendar's Discord snapshot source (`src/events/discord-transients.ts`)
+The calendar's Discord snapshot source (`src/events/discord-transients-cached.ts`)
 emits one bounded `Discord snapshot outcome` diagnostic per request through the
 shared snapshot path. The staging events incident, where Discord 429s made the
 events page show an error state instead of events, was diagnosed by tallying
