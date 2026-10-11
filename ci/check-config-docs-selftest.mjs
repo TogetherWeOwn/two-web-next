@@ -7,8 +7,16 @@ import { test } from "node:test";
 import { getPlatformProxy } from "wrangler";
 import {
   checkKeys,
+  checkTailKeys,
+  readAppScriptNames,
+  readAppTailConsumers,
   readDocKeys,
   readEnvKeys,
+  readTailDocKeys,
+  readTailEnvKeys,
+  readTailScriptNames,
+  readTailWorkerNames,
+  readTailWranglerVars,
   readWranglerConfig,
   readWranglerKeys,
 } from "./check-config-docs.mjs";
@@ -363,4 +371,218 @@ test("fails when Wrangler gains an undeclared or undocumented binding", () => {
     "Wrangler key missing from Env/JobsEnv: NEW_QUEUE",
     "Undocumented Wrangler key: NEW_QUEUE",
   ]);
+});
+
+test("tail inventory covers vars, secrets, services and script names without inheritance", () => {
+  const tailVars = readTailWranglerVars(
+    JSON.stringify({
+      vars: { UPTIME_URL: "https://staging.example/up" },
+      secrets: { required: ["OPS_ALERT_WEBHOOK_URL"] },
+      env: { production: { vars: { UPTIME_URL: "https://apex.example/up" } } },
+    }),
+  );
+  assert.deepEqual(tailVars, set("UPTIME_URL", "OPS_ALERT_WEBHOOK_URL"));
+  const workerNames = readTailWorkerNames(
+    JSON.stringify({
+      name: "two-web-next-alerts",
+      env: { production: { name: "two-web-next-alerts-production" } },
+    }),
+  );
+  assert.deepEqual(workerNames, set("two-web-next-alerts", "two-web-next-alerts-production"));
+  const appConfig = JSON.stringify({
+    name: "two-web-next",
+    tail_consumers: [{ service: "two-web-next-alerts" }],
+    env: {
+      production: {
+        name: "two-web-next-production",
+        tail_consumers: [{ service: "two-web-next-alerts-production" }],
+      },
+    },
+  });
+  const consumers = readAppTailConsumers(appConfig);
+  assert.deepEqual(consumers, set("two-web-next-alerts", "two-web-next-alerts-production"));
+  assert.deepEqual(readAppScriptNames(appConfig), set("two-web-next", "two-web-next-production"));
+  const renamedProduction = JSON.stringify({
+    name: "two-web-next",
+    tail_consumers: [{ service: "two-web-next-alerts" }],
+    env: {
+      production: {
+        name: "two-web-next-prod",
+        tail_consumers: [{ service: "two-web-next-alerts-production" }],
+      },
+    },
+  });
+  const appScripts = readAppScriptNames(renamedProduction);
+  assert.deepEqual(appScripts, set("two-web-next", "two-web-next-prod"));
+  assert.deepEqual(
+    checkTailKeys(
+      set(),
+      set(),
+      set("two-web-next-alerts-production"),
+      set("two-web-next-alerts-production"),
+      set("two-web-next", "two-web-next-production"),
+      set("two-web-next", "two-web-next-production", "two-web-next-alerts-production"),
+      appScripts,
+    ),
+    [
+      "App script not accepted by Tail: two-web-next-prod (wrangler.jsonc vs tail/worker.ts APP_SCRIPT_NAMES)",
+    ],
+  );
+  assert.deepEqual(
+    readAppScriptNames(
+      JSON.stringify({
+        name: "two-web-next",
+        env: { production: { tail_consumers: [{ service: "alerts" }] } },
+      }),
+    ),
+    set("two-web-next-production"),
+  );
+  const scripts = readTailScriptNames(
+    `export const APP_SCRIPT_NAMES = new Set(["two-web-next", "two-web-next-production"]);`,
+  );
+  assert.deepEqual(scripts, set("two-web-next", "two-web-next-production"));
+  assert.throws(() => readTailScriptNames("export const APP_SCRIPT_NAMES = new Set([]);"), /Empty/);
+});
+
+const tailInventory = (rows) => `<!-- tail-config-docs:start -->
+| Name | Kind | Environments | Default | Failure behaviour |
+| --- | --- | --- | --- | --- |
+${rows}
+<!-- tail-config-docs:end -->`;
+const tailRow = (key) =>
+  `| \`${key}\` | test kind | tail staging/prod | none | silently disables paging |`;
+
+test("tail doc table accepts service aliases and rejects malformed rows", () => {
+  const doc = tailInventory(
+    [tailRow("UPTIME_URL"), tailRow("two-web-next-alerts"), tailRow("two-web-next")].join("\n"),
+  );
+  assert.deepEqual(
+    doc && readTailDocKeys(doc),
+    set("UPTIME_URL", "two-web-next-alerts", "two-web-next"),
+  );
+  assert.throws(
+    () => readTailDocKeys(tailInventory(tailRow("UPTIME_URL") + "\n" + tailRow("UPTIME_URL"))),
+    /Duplicate/,
+  );
+  assert.throws(
+    () => readTailDocKeys(tailInventory("| `DB` | binding | dev | | fails |")),
+    /Tail config rows/,
+  );
+  assert.throws(
+    () => readTailDocKeys(tailInventory("| DB | binding | dev | none | fails |")),
+    /Invalid tail/,
+  );
+  assert.throws(() => readTailDocKeys("UPTIME_URL in prose only"), /tail-config-docs/);
+});
+
+test("tail check passes when every declaration is documented", () => {
+  const tailEnv = set("UPTIME_URL", "OPS_ALERT_WEBHOOK_URL");
+  const tailVars = set("UPTIME_URL");
+  const workerNames = set("two-web-next-alerts", "two-web-next-alerts-production");
+  const consumers = set("two-web-next-alerts", "two-web-next-alerts-production");
+  const scripts = set("two-web-next", "two-web-next-production");
+  const docs = set(
+    "UPTIME_URL",
+    "OPS_ALERT_WEBHOOK_URL",
+    "two-web-next-alerts",
+    "two-web-next-alerts-production",
+    "two-web-next",
+    "two-web-next-production",
+  );
+  assert.deepEqual(checkTailKeys(tailEnv, tailVars, workerNames, consumers, scripts, docs), []);
+});
+
+test("tail check fails when a declaration is omitted from the docs", () => {
+  const tailEnv = set("UPTIME_URL", "OPS_ALERT_WEBHOOK_URL");
+  const tailVars = set("UPTIME_URL");
+  const workerNames = set("two-web-next-alerts");
+  const consumers = set("two-web-next-alerts");
+  const scripts = set("two-web-next");
+  const docs = set("UPTIME_URL", "two-web-next-alerts", "two-web-next");
+  assert.deepEqual(checkTailKeys(tailEnv, tailVars, workerNames, consumers, scripts, docs), [
+    "Undocumented TailEnv key: OPS_ALERT_WEBHOOK_URL (tail/worker.ts -> docs/config.md)",
+  ]);
+  assert.deepEqual(
+    checkTailKeys(
+      tailEnv,
+      tailVars,
+      set("two-web-next-alerts"),
+      set("two-web-next-alerts", "missing-service"),
+      scripts,
+      set("UPTIME_URL", "OPS_ALERT_WEBHOOK_URL", "two-web-next-alerts", "two-web-next"),
+    ),
+    [
+      "Undocumented Tail consumer service: missing-service (wrangler.jsonc -> docs/config.md)",
+      "App tail_consumer without Tail worker: missing-service (wrangler.jsonc vs tail/wrangler.jsonc)",
+    ],
+  );
+});
+
+test("tail check fails on obsolete or misspelled documented keys", () => {
+  const tailEnv = set("UPTIME_URL");
+  const docs = set("UPTIME_URL", "OBSOLETE_TAIL_KEY");
+  assert.deepEqual(
+    checkTailKeys(
+      tailEnv,
+      set("UPTIME_URL"),
+      set(),
+      set(),
+      set("two-web-next"),
+      set("UPTIME_URL", "two-web-next"),
+    ),
+    [],
+  );
+  assert.deepEqual(checkTailKeys(tailEnv, set("UPTIME_URL"), set(), set(), set(), docs), [
+    "Obsolete Tail doc key: OBSOLETE_TAIL_KEY (docs/config.md)",
+  ]);
+  assert.deepEqual(
+    checkTailKeys(
+      tailEnv,
+      set("UPTIME_URL"),
+      set(),
+      set(),
+      set("two-web-next"),
+      set("UPTIME_URL", "two-web-next-typo"),
+    ),
+    [
+      "Undocumented Tail app script name: two-web-next (tail/worker.ts -> docs/config.md)",
+      "Obsolete Tail doc key: two-web-next-typo (docs/config.md)",
+    ],
+  );
+});
+
+test("tail check covers environment-only declarations without inheritance", () => {
+  const tailVars = readTailWranglerVars(
+    JSON.stringify({ vars: {}, env: { production: { vars: { ENV_ONLY_VAR: "x" } } } }),
+  );
+  assert.deepEqual(tailVars, set("ENV_ONLY_VAR"));
+  const tailEnv = set("ENV_ONLY_VAR");
+  assert.deepEqual(checkTailKeys(tailEnv, tailVars, set(), set(), set(), set("ENV_ONLY_VAR")), []);
+  assert.deepEqual(checkTailKeys(tailEnv, tailVars, set(), set(), set(), set()), [
+    "Undocumented TailEnv key: ENV_ONLY_VAR (tail/worker.ts -> docs/config.md)",
+    "Undocumented Tail Wrangler key: ENV_ONLY_VAR (tail/wrangler.jsonc -> docs/config.md)",
+  ]);
+});
+
+test("tail env keys resolve from the TailEnv alias without secret values", () => {
+  const dir = mkdtempSync(
+    join(process.env.PAPERCLIP_RUN_SCRATCH_DIR ?? tmpdir(), "tail-selftest-"),
+  );
+  try {
+    const file = join(dir, "worker.ts");
+    const config = join(dir, "tsconfig.json");
+    writeFileSync(
+      config,
+      JSON.stringify({ files: ["worker.ts"], compilerOptions: { noLib: true } }),
+    );
+    writeFileSync(
+      file,
+      `export type TailEnv = { OPS_ALERT_WEBHOOK_URL?: string; UPTIME_URL?: string };`,
+    );
+    assert.deepEqual(readTailEnvKeys(file, config), set("OPS_ALERT_WEBHOOK_URL", "UPTIME_URL"));
+    writeFileSync(file, `export type TailEnv = { UPTIME_URL?: string };`);
+    assert.deepEqual(readTailEnvKeys(file, config), set("UPTIME_URL"));
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
