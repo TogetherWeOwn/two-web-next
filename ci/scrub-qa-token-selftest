@@ -123,6 +123,15 @@ class ScrubQaTokenTests(unittest.TestCase):
             if "scrub-qa-token: removed" in line or "could NOT remove" in line:
                 self.assertNotIn(MARKER_TEXT, line)
 
+    def assert_exposed_and_removed(self, target: Path, result) -> None:
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assert_removed(target)
+        self.assertIn("swept=true", self.swept())
+        self.assert_no_leak(result)
+        combined = result.stdout + result.stderr
+        self.assertIn("was found", combined)
+        self.assertIn("report it to the COO", combined)
+
     # Raw files and normal ZIPs retain their existing behavior.
 
     def test_raw_file_hit_is_removed_exit1_with_swept(self):
@@ -232,6 +241,28 @@ class ScrubQaTokenTests(unittest.TestCase):
         self.assert_removed(target)
         self.assertIn("swept=true", self.swept())
 
+    def test_depth_capped_member_cannot_hide_later_marker(self):
+        deep = make_zip([
+            ("too-deep.zip", make_zip([("x.txt", b"clean", zipfile.ZIP_STORED)]), zipfile.ZIP_DEFLATED),
+            ("second.txt", b"prefix " + MARKER + b" suffix", zipfile.ZIP_DEFLATED),
+        ])
+        raw = nest_zip(deep, 4)
+        self.assertNotIn(MARKER, raw)
+        target = self.write_tree("depth-capped-first.zip", raw)
+        self.assert_exposed_and_removed(target, self.run_scrubber())
+
+    def test_nested_incomplete_member_cannot_hide_later_marker(self):
+        nested = patch_first_member_method(
+            make_zip([("first.txt", b"hello unreadable", zipfile.ZIP_STORED)]), 99
+        )
+        raw = make_zip([
+            ("nested.zip", nested, zipfile.ZIP_STORED),
+            ("second.txt", b"prefix " + MARKER + b" suffix", zipfile.ZIP_DEFLATED),
+        ])
+        self.assertNotIn(MARKER, raw)
+        target = self.write_tree("nested-incomplete-first.zip", raw)
+        self.assert_exposed_and_removed(target, self.run_scrubber())
+
     def test_corrupt_archive_is_removed(self):
         raw = make_zip([("only.txt", b"prefix " + MARKER + b" suffix", zipfile.ZIP_DEFLATED)])
         truncated = raw[: len(raw) // 2]
@@ -316,6 +347,68 @@ class ScrubQaTokenTests(unittest.TestCase):
         self.assert_removed(target)
         self.assertIn("swept=true", self.swept())
         self.assert_no_leak(result)
+
+    def embedded_html(self, *blobs: str) -> bytes:
+        templates = "".join(
+            "<template>data:application/zip;base64," + blob + "</template>" for blob in blobs
+        )
+        return ("<html><body>" + templates + "</body></html>").encode("utf-8")
+
+    def test_corrupt_base64_embedded_is_removed(self):
+        # Truncated padding cannot be decoded, so the blob is unknown, not clean.
+        inner = make_zip([("trace.trace", b"header " + MARKER + b" tail", zipfile.ZIP_DEFLATED)])
+        bad = base64.b64encode(inner).decode("ascii")[:-1]
+        target = self.write_tree("corrupt-b64.html", self.embedded_html(bad))
+        result = self.run_scrubber()
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assert_removed(target)
+        self.assertIn("swept=true", self.swept())
+        self.assert_no_leak(result)
+        combined = result.stdout + result.stderr
+        self.assertIn("withheld from the upload", combined)
+        self.assertNotIn("was found", combined)
+
+    def test_truncated_embedded_zip_is_removed(self):
+        # A half-length embedded zip decodes but cannot be opened, so it is withheld.
+        inner = make_zip([("trace.trace", b"header " + MARKER + b" tail", zipfile.ZIP_DEFLATED)])
+        truncated = base64.b64encode(inner[: len(inner) // 2]).decode("ascii")
+        target = self.write_tree("truncated-embedded.html", self.embedded_html(truncated))
+        result = self.run_scrubber()
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assert_removed(target)
+        self.assertIn("swept=true", self.swept())
+        self.assert_no_leak(result)
+        combined = result.stdout + result.stderr
+        self.assertIn("withheld from the upload", combined)
+        self.assertNotIn("was found", combined)
+
+    # An incomplete embedded or outer archive must not hide a readable hit.
+
+    def test_corrupt_base64_cannot_hide_later_embedded_marker(self):
+        inner = make_zip([("trace.trace", b"header " + MARKER + b" tail", zipfile.ZIP_DEFLATED)])
+        encoded = base64.b64encode(inner).decode("ascii")
+        raw = self.embedded_html(encoded[:-1], encoded)
+        self.assertNotIn(MARKER, raw)
+        target = self.write_tree("corrupt-then-good.html", raw)
+        self.assert_exposed_and_removed(target, self.run_scrubber())
+
+    def test_truncated_embedded_zip_cannot_hide_later_marker(self):
+        inner = make_zip([("trace.trace", b"header " + MARKER + b" tail", zipfile.ZIP_DEFLATED)])
+        truncated = base64.b64encode(inner[: len(inner) // 2]).decode("ascii")
+        encoded = base64.b64encode(inner).decode("ascii")
+        raw = self.embedded_html(truncated, encoded)
+        self.assertNotIn(MARKER, raw)
+        target = self.write_tree("truncated-then-good.html", raw)
+        self.assert_exposed_and_removed(target, self.run_scrubber())
+
+    def test_truncated_outer_zip_cannot_hide_embedded_marker(self):
+        # The file starts like a zip but has no central directory, so the outer
+        # archive is incomplete while the embedded zip holds a readable hit.
+        inner = make_zip([("trace.trace", b"header " + MARKER + b" tail", zipfile.ZIP_DEFLATED)])
+        raw = b"PK\x03\x04" + self.embedded_html(base64.b64encode(inner).decode("ascii"))
+        self.assertNotIn(MARKER, raw)
+        target = self.write_tree("truncated-outer.html", raw)
+        self.assert_exposed_and_removed(target, self.run_scrubber())
 
     # Removal failure and diagnostic hygiene.
 
