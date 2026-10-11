@@ -1,13 +1,18 @@
 // route-inventory: GET /events/past
 // Pin the past-archive page-normalization contract: invalid HTML archive
-// pages fall back to page one, far-past-the-end pages echo with a stable
-// total instead of scanning, and the read layer never issues an unbounded
-// OFFSET. Real app + agent-testdb/CI Postgres for the route/read halves;
-// the pure normalizer pins always run.
+// pages fall back to page one with no OFFSET, and far-past-the-end pages
+// echo with a stable total from the count alone (no row or OFFSET query).
+// Real app + agent-testdb/CI Postgres for the route/read halves, with a
+// Drizzle statement logger on a second handle over the fixture pool (seeds
+// stay uncounted); the pure normalizer pins always run. The mock-DB suite
+// test/islands-past-events.test.ts pins the same statement shape against a
+// fake driver; this file proves it against real Postgres.
+import { drizzle } from "drizzle-orm/postgres-js";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import app from "./app";
 import { events } from "../src/db/admin-schema";
-import type { Db } from "../src/db/index";
+import { adminSchema, schema, type Db } from "../src/db/index";
+import { __resetAnonEventCacheForTests } from "../src/events/anon-cache";
 import { listPast, normalizePastPage, PAGE_SIZE } from "../src/events/reads";
 import {
   PAST_EVENTS_OUT_OF_RANGE_TESTID,
@@ -48,6 +53,8 @@ describe("normalizePastPage", () => {
 describe.skipIf(!process.env.DATABASE_URL)("past-archive page normalization (agent-testdb)", () => {
   let fixture: MemberDataFixture;
   let db: Db;
+  let countedDb: Db;
+  let statements: string[] = [];
   const env = {
     APP_URL,
     DISCORD_CLIENT_ID: "client-id",
@@ -62,10 +69,22 @@ describe.skipIf(!process.env.DATABASE_URL)("past-archive page normalization (age
   beforeAll(async () => {
     fixture = await createMemberDataFixture(process.env.DATABASE_URL!);
     db = fixture.db;
+    countedDb = drizzle(fixture.client, {
+      schema: { ...schema, ...adminSchema },
+      logger: {
+        logQuery(query) {
+          statements.push(query);
+        },
+      },
+    });
   });
   afterAll(() => fixture?.dispose());
   beforeEach(async () => {
     await fixture.reset();
+    // Page-one renders settle in the shared anon cache under the normalized
+    // page; clear it so every case reaches the read instead of a cache hit.
+    __resetAnonEventCacheForTests();
+    statements = [];
   });
 
   async function seedTwentyFive() {
@@ -83,12 +102,22 @@ describe.skipIf(!process.env.DATABASE_URL)("past-archive page normalization (age
   const keys = (html: string) => [...html.matchAll(/data-event-key="([^"]+)"/g)].map((m) => m[1]);
   const pageOneKeys = Array.from({ length: 20 }, (_, i) => `archive-${25 - i}`);
 
-  it.each(["0", "-1", "invalid", "", "NaN", "9".repeat(400)])(
-    "falls back to page one for %s with a 200 and the clamped page echoed",
+  // Only the archive count statement: a far-past page must stop before any
+  // row read, so no OFFSET is ever sent for it.
+  function expectCountOnly() {
+    expect(statements).toHaveLength(1);
+    expect(statements[0]).toMatch(/^select count\(\*\)/);
+    expect(statements[0]).not.toContain(" offset ");
+  }
+
+  // `null` requests the archive with no query string; "" sends `?page=`.
+  it.each(["0", "-1", "invalid", "", "NaN", "9".repeat(400), null])(
+    "falls back to page one for %j with a 200, the clamped page echoed and no OFFSET",
     async (raw) => {
       await seedTwentyFive();
-      const path = raw === "" ? "/events/past" : `/events/past?page=${raw}`;
-      const res = await app.request(path, {}, { ...env, ADMIN_DB: db });
+      const path = raw === null ? "/events/past" : `/events/past?page=${raw}`;
+      statements = [];
+      const res = await app.request(path, {}, { ...env, ADMIN_DB: countedDb });
       expect(res.status).toBe(200);
       const html = await res.text();
       expect(keys(html)).toEqual(pageOneKeys);
@@ -96,14 +125,23 @@ describe.skipIf(!process.env.DATABASE_URL)("past-archive page normalization (age
       expect(html).toContain('data-total-pages="2"');
       expect(html).toContain(`rel="canonical" href="${APP_URL}/events/past"`);
       expect(html).not.toContain(`data-testid="${PAST_EVENTS_OUT_OF_RANGE_TESTID}"`);
+      // Count, page-one rows and the going aggregate; Drizzle elides a zero
+      // offset, so a clamped page sends none.
+      expect(statements).toHaveLength(3);
+      for (const statement of statements) expect(statement).not.toContain(" offset ");
     },
   );
 
   it.each(["3", "9", "999"])(
-    "echoes far-past-the-end page %s with a stable total instead of scanning",
+    "echoes far-past-the-end page %s with a stable total from the count alone",
     async (raw) => {
       await seedTwentyFive();
-      const res = await app.request(`/events/past?page=${raw}`, {}, { ...env, ADMIN_DB: db });
+      statements = [];
+      const res = await app.request(
+        `/events/past?page=${raw}`,
+        {},
+        { ...env, ADMIN_DB: countedDb },
+      );
       expect(res.status).toBe(200);
       const html = await res.text();
       expect(keys(html)).toEqual([]);
@@ -112,6 +150,7 @@ describe.skipIf(!process.env.DATABASE_URL)("past-archive page normalization (age
       expect(html).toContain(`rel="canonical" href="${APP_URL}/events/past?page=${raw}"`);
       expect(html).toContain(`data-testid="${PAST_EVENTS_OUT_OF_RANGE_TESTID}"`);
       expect(html).toContain(pastEventsOutOfRangeCopy(Number(raw), 2));
+      expectCountOnly();
     },
   );
 
@@ -126,11 +165,13 @@ describe.skipIf(!process.env.DATABASE_URL)("past-archive page normalization (age
     },
   );
 
-  it("keeps the total stable for a far-past-the-end direct read", async () => {
+  it("keeps the total stable for a far-past-the-end direct read from the count alone", async () => {
     await seedTwentyFive();
-    const result = await listPast(db, 999);
+    statements = [];
+    const result = await listPast(countedDb, 999);
     expect(result.rows).toEqual([]);
     expect(result.totalPages).toBe(2);
     expect(result.hasMore).toBe(false);
+    expectCountOnly();
   });
 });
