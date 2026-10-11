@@ -15,6 +15,8 @@
 // write settles or its deadline expires. 422 → errors in the alert, input kept; 401/302-to-login/419 → session
 // expired notice with login link, input kept; anything else → save-failed
 // alert, input kept. Copy and testids mirror src/islands/contracts.ts.
+// While a write is unsettled the form is aria-busy and a polite progress line
+// sits just after it; a Save press then says the earlier save is still finishing.
 
 (function () {
   var root = document.querySelector('[data-island="member-profile"]');
@@ -48,33 +50,18 @@
   // Raw text the server last accepted; a field still holding it is saved, not dirty.
   var acceptedDraft = null;
 
-  // Busy state for an unsettled write: aria-busy on the form plus a polite
-  // status line. Save stays enabled and focus never moves. Cancel leaves it in
-  // place (the write is still unsettled); only settlement or the deadline ends it.
-  var SAVING_COPY = "Saving your profile\u2026";
-  var STILL_SAVING_COPY =
-    "Still finishing your earlier save. Your changes are kept; press Save again in a moment.";
-
-  function showPending(text) {
-    var old = root.querySelector('[data-testid="profile-pending"]');
-    if (old) old.remove();
-    var el = document.createElement("div");
-    el.setAttribute("data-testid", "profile-pending");
-    el.setAttribute("role", "status");
-    el.textContent = text;
-    form.parentNode.insertBefore(el, form);
-  }
-
+  // Busy state for an unsettled write: aria-busy on the form plus a progress
+  // line. Save stays enabled and focus never moves. Only settlement or the
+  // deadline ends it; Cancel keeps it, because the write is still unsettled.
   function setPending(on) {
     pending = on;
     if (on) {
       form.setAttribute("aria-busy", "true");
-      showPending(SAVING_COPY);
-      return;
+      progress("profile-pending", "Saving your profile\u2026");
+    } else {
+      form.removeAttribute("aria-busy");
+      drop("profile-pending");
     }
-    form.removeAttribute("aria-busy");
-    var old = root.querySelector('[data-testid="profile-pending"]');
-    if (old) old.remove();
   }
 
   function clearDeadline() {
@@ -215,9 +202,13 @@
     return e;
   }
 
-  function notice(testid, role, text, loginLink, noFocus) {
+  function drop(testid) {
     var old = root.querySelector('[data-testid="' + testid + '"]');
     if (old) old.remove();
+  }
+
+  function notice(testid, role, text, loginLink, noFocus, afterForm) {
+    drop(testid);
     var el = document.createElement("div");
     el.setAttribute("data-testid", testid);
     el.setAttribute("role", role);
@@ -231,8 +222,17 @@
       a.textContent = "Log in with Discord";
       el.appendChild(a);
     }
-    form.parentNode.insertBefore(el, form);
+    if (afterForm) form.after(el);
+    else form.parentNode.insertBefore(el, form);
     if (!noFocus) el.focus();
+    return el;
+  }
+
+  // Progress of an unsettled or timed-out save: a polite status, never
+  // focused, placed just after the form: next to Save and outside the busy
+  // form. Inserting it never moves Save.
+  function progress(testid, text) {
+    return notice(testid, "status", text, false, true, true);
   }
 
   function clearNotices() {
@@ -303,20 +303,17 @@
     // has moved on from this request: focus stays where the member left it.
     // Invalidate the timed-out request so a late completion can never replace
     // newer feedback or mutate the accepted baseline.
+    // The notice takes the place of the progress line the member was watching;
+    // unlike a repeat press it does not scroll, because the member may be typing.
     generation++;
-    var old = root.querySelector('[data-testid="profile-uncertain"]');
-    if (old) old.remove();
-    var el = document.createElement("div");
-    el.setAttribute("data-testid", "profile-uncertain");
-    el.setAttribute("role", "status");
-    el.textContent =
-      "Still saving — this is taking longer than expected. It may still have gone through; wait a moment, then save again if nothing changed.";
-    form.parentNode.insertBefore(el, form);
+    progress(
+      "profile-uncertain",
+      "Still saving — this is taking longer than expected. It may still have gone through; wait a moment, then save again if nothing changed.",
+    );
   }
 
   function errorList(errors) {
-    var old = root.querySelector('[data-testid="profile-error"]');
-    if (old) old.remove();
+    drop("profile-error");
     var list = Array.isArray(errors) && errors.length ? errors : [GENERIC_INVALID_COPY];
     var alert = document.createElement("div");
     alert.setAttribute("role", "alert");
@@ -364,6 +361,9 @@
     form.hidden = false;
     if (editControl) editControl.hidden = true;
     clearNotices();
+    // The draft that "still finishing" promised to keep is gone: an unsettled
+    // write goes back to the plain saving line.
+    if (pending) setPending(true);
     setTimeout(function () {
       if (cancelled !== generation) return;
       var h = document.querySelector('[data-testid="profile-name"]');
@@ -380,7 +380,15 @@
 
   form.addEventListener("submit", function (ev) {
     ev.preventDefault();
-    if (pending) return showPending(STILL_SAVING_COPY);
+    // The press is not queued: say so politely, keep focus and the draft. The
+    // member is at Save, so bring the whole line into view (on a phone its end
+    // can fall below the page); the first press never scrolls, so a quick
+    // second click still lands on Save.
+    if (pending)
+      return progress(
+        "profile-pending",
+        "Still finishing your earlier save. Your changes are kept; press Save again in a moment.",
+      ).scrollIntoView({ block: "nearest" });
     if (sessionExpired) return expiredNotice();
     var f = form.elements;
     var body = {

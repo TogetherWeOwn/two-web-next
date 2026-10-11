@@ -76,6 +76,15 @@ class Element {
     child.parentNode = this;
     this.children.splice(this.children.indexOf(before), 0, child);
   }
+  after(node: Element) {
+    const parent = this.parentNode!;
+    node.parentNode = parent;
+    parent.children.splice(parent.children.indexOf(this) + 1, 0, node);
+  }
+  scrolls: unknown[] = [];
+  scrollIntoView(options: unknown) {
+    this.scrolls.push(options);
+  }
   remove() {
     if (this.parentNode) this.parentNode.children.splice(this.parentNode.children.indexOf(this), 1);
     this.parentNode = null;
@@ -290,6 +299,11 @@ describe("member-profile save deadline", () => {
       expect(el?.getAttribute("role")).toBe("status");
       expect(el?.textContent).toContain(PROFILE_COPY.uncertain);
       expect(el?.textContent.length).toBeGreaterThan(0);
+      // It takes the progress line's place just after the form, next to Save.
+      expect(f.notice(PROFILE_PENDING_TESTID)).toBeNull();
+      expect(f.root.children.indexOf(el!)).toBe(f.root.children.indexOf(f.form) + 1);
+      // Not scrolled into view: the member may be typing elsewhere in the form.
+      expect(el?.scrolls).toEqual([]);
       // Draft intact, form still open, single PATCH sent, no focus theft.
       expect(f.form.elements.bio!.value).toBe("Hung write plus newer typing");
       expect(f.form.hidden).toBe(false);

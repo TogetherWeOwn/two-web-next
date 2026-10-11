@@ -87,6 +87,15 @@ class Element {
     child.parentNode = this;
     this.children.splice(this.children.indexOf(before), 0, child);
   }
+  after(node: Element) {
+    const parent = this.parentNode!;
+    node.parentNode = parent;
+    parent.children.splice(parent.children.indexOf(this) + 1, 0, node);
+  }
+  scrolls: unknown[] = [];
+  scrollIntoView(options: unknown) {
+    this.scrolls.push(options);
+  }
   remove() {
     if (this.parentNode) this.parentNode.children.splice(this.parentNode.children.indexOf(this), 1);
     this.parentNode = null;
@@ -489,6 +498,10 @@ describe("shipped member-profile edit lifecycle", () => {
     const status = f.notice(PROFILE_PENDING_TESTID);
     expect(status?.getAttribute("role")).toBe("status");
     expect(status?.textContent).toBe(PROFILE_COPY.saving);
+    // Just after the form: next to Save, outside the busy form, and Save does not move.
+    expect(f.root.children.indexOf(status!)).toBe(f.root.children.indexOf(f.form) + 1);
+    // The first press never scrolls, so a quick second click still lands on Save.
+    expect(status?.scrolls).toEqual([]);
     expect(f.document.activeElement).toBe(f.form.elements.bio);
     f.requests[0]!.resolve(success());
     await flush();
@@ -510,13 +523,17 @@ describe("shipped member-profile edit lifecycle", () => {
     const status = f.notice(PROFILE_PENDING_TESTID);
     expect(status?.getAttribute("role")).toBe("status");
     expect(status?.textContent).toBe(PROFILE_COPY.stillSaving);
+    expect(f.root.children.indexOf(status!)).toBe(f.root.children.indexOf(f.form) + 1);
+    // A repeat press brings the whole line into view without moving focus.
+    expect(status?.scrolls).toEqual([{ block: "nearest" }]);
     expect(f.form.getAttribute("aria-busy")).toBe("true");
     expect(f.document.activeElement).toBe(f.form.elements.bio);
     expect(f.form.elements.bio!.value).toBe("B");
     // Cancel keeps the unsettled write's busy state; only settlement clears it.
+    // The draft is gone, so the line no longer says the changes are kept.
     f.cancel();
     expect(f.form.getAttribute("aria-busy")).toBe("true");
-    expect(f.notice(PROFILE_PENDING_TESTID)).not.toBeNull();
+    expect(f.notice(PROFILE_PENDING_TESTID)?.textContent).toBe(PROFILE_COPY.saving);
     f.requests[0]!.reject(new Error("offline"));
     await flush();
     expect(f.form.getAttribute("aria-busy")).toBeNull();
