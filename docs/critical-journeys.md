@@ -122,10 +122,10 @@ RSVPs are withdrawn in-spec and every fixture the suite creates is cancelled
 browser contexts before that `finally` runs. Staging event journeys therefore
 have a staging-only backstop: `e2e/staging/global-teardown.ts` signs the QA
 moderator in fresh and cancels every `Staging E2E` event still published or draft
-(`e2e/fixture-sweep.mjs`), and fails the run if one stays live. The local RSVP
-pins (`e2e/event-waitlist.spec.ts`, `e2e/event-pause.spec.ts`) have their own backstop,
+(`e2e/fixture-sweep.mjs`), and fails the run if one stays live. The local
+pins (`e2e/event-waitlist.spec.ts`, `e2e/event-pause.spec.ts`, `e2e/admin.spec.ts`) have their own backstop,
 `e2e/local-global-teardown.ts`, which only uses `https://localhost:8787`, only
-matches their `E2E Waitlist `, `E2E Promotion ` and `E2E Pause ` fixture titles, and is guarded
+matches their `E2E Waitlist `, `E2E Promotion `, `E2E Pause ` and `E2E Moderator ` fixture titles, and is guarded
 to run in GitHub Actions on Linux. Neither sweep crosses into the other's
 origin. Each list and final verification traverse matching pages even when a
 page contains substring lookalikes. Pagination keeps the fixed origin and
