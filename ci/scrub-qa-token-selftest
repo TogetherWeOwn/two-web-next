@@ -212,6 +212,11 @@ class ScrubQaTokenTests(unittest.TestCase):
         self.assert_removed(target)
         self.assertIn("swept=true", self.swept())
         self.assert_no_leak(result)
+        # A readable member behind the unreadable one still holds the marker,
+        # so this must print the exposure alarm, not just the withheld notice.
+        combined = result.stdout + result.stderr
+        self.assertIn("was found", combined)
+        self.assertIn("report it to the COO", combined)
 
     def test_early_unsupported_member_without_marker_still_removed(self):
         clean = make_zip([
@@ -354,6 +359,93 @@ class ScrubQaTokenTests(unittest.TestCase):
         )
         self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
         self.assertNotIn("swept=true", self.swept())
+        self.assert_no_leak(result)
+
+    def test_withheld_removal_failure_exits_2_without_swept(self):
+        # A withheld-only file that cannot be removed must fail closed the
+        # same way a token hit does: exit 2, no swept=true, and the withheld
+        # removal-failure message without the token-exposure alarm.
+        raw = make_zip([
+            ("trace.network", b"clean " * 200, zipfile.ZIP_DEFLATED),
+        ])
+        truncated = raw[: len(raw) // 2]
+        self.assertNotIn(MARKER, truncated)
+        target = self.write_tree("truncated-stuck.zip", truncated)
+        wrapper = self.fixture / "scrub-wrapper-withheld.py"
+        wrapper.write_text(
+            "import os, runpy, sys\n"
+            "real_remove = os.remove\n"
+            "def failing_remove(path):\n"
+            "    raise OSError('synthetic removal failure')\n"
+            "os.remove = failing_remove\n"
+            "sys.argv = ['scrub-qa-token.py', '" + str(self.tree) + "']\n"
+            "runpy.run_path('" + str(SCRUBBER) + "', run_name='__main__')\n",
+            encoding="utf-8",
+        )
+        env = {
+            "PATH": os.defpath,
+            "HOME": str(self.fixture),
+            "TMPDIR": str(self.fixture),
+            "QA_AUTH_TOKEN": MARKER_TEXT,
+            "GITHUB_OUTPUT": str(self.output),
+        }
+        result = subprocess.run(
+            [sys.executable, str(wrapper)],
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        combined = result.stdout + result.stderr
+        self.assertEqual(result.returncode, 2, combined)
+        self.assertNotIn("swept=true", self.swept())
+        self.assertTrue(target.is_file(), "withheld file that could not be removed must stay")
+        self.assertIn("could not be fully inspected", combined)
+        self.assertIn("could not be removed", combined)
+        self.assertNotIn("Treat the token as exposed", combined)
+        self.assertNotIn("was found", combined)
+        self.assert_no_leak(result)
+
+    def test_unreadable_file_is_withheld_not_exposure(self):
+        # An OSError while reading is not clean: the file is removed and the
+        # run reports withheld, never the token-exposure alarm.
+        target = self.write_tree("unreadable.log", b"clean content, no marker")
+        wrapper = self.fixture / "scrub-wrapper-unreadable.py"
+        wrapper.write_text(
+            "import builtins, os, runpy, sys\n"
+            "real_open = builtins.open\n"
+            "target_name = 'unreadable.log'\n"
+            "def failing_open(path, *args, **kwargs):\n"
+            "    if isinstance(path, (str, os.PathLike)) and str(path).endswith(target_name):\n"
+            "        raise OSError('synthetic unreadable file')\n"
+            "    return real_open(path, *args, **kwargs)\n"
+            "builtins.open = failing_open\n"
+            "sys.argv = ['scrub-qa-token.py', '" + str(self.tree) + "']\n"
+            "runpy.run_path('" + str(SCRUBBER) + "', run_name='__main__')\n",
+            encoding="utf-8",
+        )
+        env = {
+            "PATH": os.defpath,
+            "HOME": str(self.fixture),
+            "TMPDIR": str(self.fixture),
+            "QA_AUTH_TOKEN": MARKER_TEXT,
+            "GITHUB_OUTPUT": str(self.output),
+        }
+        result = subprocess.run(
+            [sys.executable, str(wrapper)],
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        combined = result.stdout + result.stderr
+        self.assertEqual(result.returncode, 1, combined)
+        self.assert_removed(target)
+        self.assertIn("swept=true", self.swept())
+        self.assertIn("withheld from the upload", combined)
+        self.assertNotIn("was found", combined)
+        self.assertNotIn("Treat the token as exposed", combined)
+        self.assertNotIn("report it to the COO", combined)
         self.assert_no_leak(result)
 
     def test_diagnostics_never_disclose_marker_or_tainted_member_name(self):

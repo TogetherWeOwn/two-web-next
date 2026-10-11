@@ -6,9 +6,10 @@ signed-in GitHub user for its retention and log masking does not cover it.
 Deletes every file under the given directories that contains the staging QA
 token, prints file names only, and exits 1 when it removed anything so the
 leak is loud instead of silent. Files that cannot be completely inspected are
-withheld from the upload the same way (removed, exit 1, swept=true), but a
-withheld-only run is not a token exposure: only a real token hit prints the
-exposure alarm and needs a COO report.
+withheld from the upload the same way (removed, exit 1, swept=true). A
+withheld-only run means the token was not seen in what could be read, not
+that it is proven absent: only a real token hit prints the exposure alarm
+and needs a COO report.
 
 Usage: QA_AUTH_TOKEN=<token> ci/scrub-qa-token.py <dir>...
 
@@ -88,7 +89,8 @@ def _is_withheld(where: str) -> bool:
 
     Only completely inspected content that actually holds the token counts as
     a token exposure. Anything that could not be proven clean is withheld
-    from the upload without claiming the token was found.
+    from the upload without claiming the token was found: withheld means the
+    token was not seen in what could be read, not that it is proven absent.
     """
     return where == "unreadable file" or where.startswith("incompletely inspected")
 
@@ -96,8 +98,11 @@ def _is_withheld(where: str) -> bool:
 def zip_hit(data: bytes, token: bytes, depth: int) -> str | None:
     """Name of the first zip member that holds the token, else None.
 
-    Raises _Incomplete when any member or nested content cannot be completely
-    inspected. Callers must treat incomplete as unclean, never as a miss.
+    Raises _Incomplete only when no readable member holds the token and some
+    member or nested content could not be completely inspected. A hit in any
+    readable member wins over incomplete content elsewhere, so the exposure
+    alarm never depends on member order. Callers must treat incomplete as
+    unclean, never as a miss.
     """
     try:
         archive = zipfile.ZipFile(io.BytesIO(data))
@@ -111,6 +116,7 @@ def zip_hit(data: bytes, token: bytes, depth: int) -> str | None:
         raise
     except Exception as error:
         raise _Incomplete("unreadable archive listing") from error
+    first_incomplete: _Incomplete | None = None
     for info in entries:
         if info.is_dir():
             continue
@@ -121,25 +127,37 @@ def zip_hit(data: bytes, token: bytes, depth: int) -> str | None:
             # with that name, so earlier same-named members would go
             # uninspected while the last one is read twice.
             member = archive.read(info)
-        except _Incomplete:
-            raise
+        except _Incomplete as error:
+            if first_incomplete is None:
+                first_incomplete = error
+            continue
         except Exception as error:
-            raise _Incomplete(f"unreadable archive member {safe_name}") from error
+            if first_incomplete is None:
+                first_incomplete = _Incomplete(
+                    f"unreadable archive member {safe_name}"
+                )
+            continue
         if token in member:
             return safe_name
         if member.startswith(b"PK\x03\x04"):
             if depth >= MAX_DEPTH:
-                raise _Incomplete(
-                    f"uninspected nested archive beyond depth limit in {safe_name}"
-                )
+                if first_incomplete is None:
+                    first_incomplete = _Incomplete(
+                        f"uninspected nested archive beyond depth limit in {safe_name}"
+                    )
+                continue
             try:
                 inner = zip_hit(member, token, depth + 1)
             except _Incomplete as error:
-                raise _Incomplete(
-                    f"{safe_name}!{error.reason}"
-                ) from error
+                if first_incomplete is None:
+                    first_incomplete = _Incomplete(
+                        f"{safe_name}!{error.reason}"
+                    )
+                continue
             if inner:
                 return f"{safe_name}!{inner}"
+    if first_incomplete is not None:
+        raise first_incomplete
     return None
 
 
@@ -154,18 +172,24 @@ def file_hit(path: str, token: bytes) -> str | None:
         data = handle.read()
     if token in data:
         return "file"
+    first_incomplete: str | None = None
     if data.startswith(b"PK\x03\x04"):
         try:
             member = zip_hit(data, token, 0)
         except _Incomplete as error:
-            return f"incompletely inspected archive ({error.reason})"
+            first_incomplete = f"incompletely inspected archive ({error.reason})"
+            member = None
         if member:
             return f"archive member {member}"
     for match in EMBEDDED_ZIP.finditer(data):
         try:
             blob = base64.b64decode(re.sub(rb"\s", b"", match.group(1)))
         except (binascii.Error, ValueError):
-            return "incompletely inspected embedded archive (unreadable encoding)"
+            if first_incomplete is None:
+                first_incomplete = (
+                    "incompletely inspected embedded archive (unreadable encoding)"
+                )
+            continue
         if token in blob:
             return "embedded file"
         if not blob.startswith(b"PK\x03\x04"):
@@ -173,9 +197,15 @@ def file_hit(path: str, token: bytes) -> str | None:
         try:
             member = zip_hit(blob, token, 0)
         except _Incomplete as error:
-            return f"incompletely inspected embedded archive ({error.reason})"
+            if first_incomplete is None:
+                first_incomplete = (
+                    f"incompletely inspected embedded archive ({error.reason})"
+                )
+            continue
         if member:
             return f"embedded archive member {member}"
+    if first_incomplete is not None:
+        return first_incomplete
     return None
 
 

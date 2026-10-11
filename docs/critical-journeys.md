@@ -150,8 +150,9 @@ text; a plain search of the HTML finds nothing). It then fails the job, and the
 artifact upload runs only after a sweep that finished the whole tree. A token
 found in an artifact is exposed: report it to the COO the same hour. Files the
 sweep could not fully inspect are withheld from the upload too (removed, job
-fails), but a withheld-only run is not a token exposure and needs no COO
-report; only a real token hit does.
+fails). A withheld-only run means the token was not seen in what could be
+read, not that it is proven absent; only a real token hit prints the exposure
+alarm and needs a COO report.
 
 Blast-radius note: publishing the RSVP fixture and answering RSVPs enqueue
 sync-event carriers (`src/events/sync.ts` enqueues published/cancelled
