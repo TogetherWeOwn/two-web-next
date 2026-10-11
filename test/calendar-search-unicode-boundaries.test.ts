@@ -1,4 +1,4 @@
-// Calendar search Unicode boundaries (TOG-21767): the native `maxlength=255`
+// Calendar search Unicode boundaries: the native `maxlength=255`
 // counts UTF-16 units while the server admits 255 code points, so 128
 // supplementary characters (256 units) are server-valid but natively
 // truncated. The fix is markup-only: omit `maxlength` so complete admitted
