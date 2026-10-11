@@ -8,6 +8,7 @@ import { getPlatformProxy } from "wrangler";
 import {
   checkKeys,
   checkTailKeys,
+  readAppScriptNames,
   readAppTailConsumers,
   readDocKeys,
   readEnvKeys,
@@ -388,13 +389,54 @@ test("tail inventory covers vars, secrets, services and script names without inh
     }),
   );
   assert.deepEqual(workerNames, set("two-web-next-alerts", "two-web-next-alerts-production"));
-  const consumers = readAppTailConsumers(
-    JSON.stringify({
-      tail_consumers: [{ service: "two-web-next-alerts" }],
-      env: { production: { tail_consumers: [{ service: "two-web-next-alerts-production" }] } },
-    }),
-  );
+  const appConfig = JSON.stringify({
+    name: "two-web-next",
+    tail_consumers: [{ service: "two-web-next-alerts" }],
+    env: {
+      production: {
+        name: "two-web-next-production",
+        tail_consumers: [{ service: "two-web-next-alerts-production" }],
+      },
+    },
+  });
+  const consumers = readAppTailConsumers(appConfig);
   assert.deepEqual(consumers, set("two-web-next-alerts", "two-web-next-alerts-production"));
+  assert.deepEqual(readAppScriptNames(appConfig), set("two-web-next", "two-web-next-production"));
+  const renamedProduction = JSON.stringify({
+    name: "two-web-next",
+    tail_consumers: [{ service: "two-web-next-alerts" }],
+    env: {
+      production: {
+        name: "two-web-next-prod",
+        tail_consumers: [{ service: "two-web-next-alerts-production" }],
+      },
+    },
+  });
+  const appScripts = readAppScriptNames(renamedProduction);
+  assert.deepEqual(appScripts, set("two-web-next", "two-web-next-prod"));
+  assert.deepEqual(
+    checkTailKeys(
+      set(),
+      set(),
+      set("two-web-next-alerts-production"),
+      set("two-web-next-alerts-production"),
+      set("two-web-next", "two-web-next-production"),
+      set("two-web-next", "two-web-next-production", "two-web-next-alerts-production"),
+      appScripts,
+    ),
+    [
+      "App script not accepted by Tail: two-web-next-prod (wrangler.jsonc vs tail/worker.ts APP_SCRIPT_NAMES)",
+    ],
+  );
+  assert.deepEqual(
+    readAppScriptNames(
+      JSON.stringify({
+        name: "two-web-next",
+        env: { production: { tail_consumers: [{ service: "alerts" }] } },
+      }),
+    ),
+    set("two-web-next-production"),
+  );
   const scripts = readTailScriptNames(
     `export const APP_SCRIPT_NAMES = new Set(["two-web-next", "two-web-next-production"]);`,
   );

@@ -231,6 +231,29 @@ export function readAppTailConsumers(text) {
   return services;
 }
 
+export function readAppScriptNames(text) {
+  const config = readWranglerConfig(text);
+  const names = new Set();
+  if (Array.isArray(config.tail_consumers) && config.tail_consumers.length) {
+    if (typeof config.name !== "string")
+      throw new Error("Missing app Worker name (wrangler.jsonc)");
+    names.add(config.name);
+  }
+  for (const [environmentName, environment] of Object.entries(config.env ?? {})) {
+    if (!Array.isArray(environment?.tail_consumers) || !environment.tail_consumers.length) continue;
+    const name =
+      typeof environment.name === "string"
+        ? environment.name
+        : typeof config.name === "string"
+          ? `${config.name}-${environmentName}`
+          : null;
+    if (!name)
+      throw new Error(`Missing app Worker name for env.${environmentName} (wrangler.jsonc)`);
+    names.add(name);
+  }
+  return names;
+}
+
 export function readTailScriptNames(text) {
   const block = /APP_SCRIPT_NAMES[^=]*=\s*new\s+Set\(\[([\s\S]*?)\]\)/.exec(text);
   if (!block) {
@@ -287,6 +310,7 @@ export function checkTailKeys(
   appConsumers,
   tailScripts,
   docs,
+  appScripts = new Set(),
 ) {
   const errors = [];
   const union = new Set([
@@ -330,6 +354,13 @@ export function checkTailKeys(
       errors.push(`Undocumented Tail app script name: ${key} (tail/worker.ts -> docs/config.md)`);
     }
   }
+  for (const name of [...appScripts].sort()) {
+    if (!tailScripts.has(name)) {
+      errors.push(
+        `App script not accepted by Tail: ${name} (wrangler.jsonc vs tail/worker.ts APP_SCRIPT_NAMES)`,
+      );
+    }
+  }
   for (const key of [...docs].sort()) {
     if (!union.has(key)) errors.push(`Obsolete Tail doc key: ${key} (docs/config.md)`);
   }
@@ -353,7 +384,9 @@ export function checkConfigDocs() {
   const tailWorkerNames = readTailWorkerNames(
     readFileSync(resolve(root, "tail/wrangler.jsonc"), "utf8"),
   );
-  const appConsumers = readAppTailConsumers(readFileSync(resolve(root, "wrangler.jsonc"), "utf8"));
+  const appConfig = readFileSync(resolve(root, "wrangler.jsonc"), "utf8");
+  const appConsumers = readAppTailConsumers(appConfig);
+  const appScripts = readAppScriptNames(appConfig);
   const tailScripts = readTailScriptNames(readFileSync(resolve(root, "tail/worker.ts"), "utf8"));
   const tailDocs = readTailDocKeys(docText);
   errors.push(
@@ -364,6 +397,7 @@ export function checkConfigDocs() {
       appConsumers,
       tailScripts,
       tailDocs,
+      appScripts,
     ),
   );
   if (errors.length) throw new Error(errors.join("\n"));
