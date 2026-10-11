@@ -8,7 +8,7 @@ import type { JoinResult } from "../return-journey";
 import { googleCalendarUrl } from "./feeds";
 import type { EventAttendee, EventLink, EventNeighbors, PublicEvent, ViewerRsvp } from "./reads";
 import { RsvpButton } from "./rsvp-button";
-import { EventDetailShell, fmt } from "./pages-shared";
+import { EventDetailShell } from "./pages-shared";
 
 const fmtWithOffset = (d: Date, tz: string): string => {
   try {
@@ -94,7 +94,9 @@ export const EventPage: FC<{
         <div>
           <dt>When</dt>
           <dd>
-            <time datetime={e.startsAt.toISOString()}>{fmt(e.startsAt, e.timezone)}</time>
+            <time datetime={e.startsAt.toISOString()}>
+              {fmtWithOffset(e.startsAt, e.timezone)} ({e.timezone})
+            </time>
           </dd>
         </div>
         {e.location ? (
