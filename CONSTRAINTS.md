@@ -8,8 +8,10 @@ numbered dimensions below mirror the gates already wired in this repo.
 
 - No new suppression comments that silence a checker.
 - No unimplemented stubs and no empty catch blocks that turn failure silent.
-- No added test skips, no deleted test files, and no assertions stripped from
-  a test that stays, without a reason in the commit message.
+- No added test skips. Test-file deletion and assertion removal require a
+  path-scoped, reasoned commit trailer:
+  `Floor-waiver: test-deleted <path> -- <reason>` or
+  `Floor-waiver: assertion-removed <path> -- <reason>`.
 - No secrets in source.
 - This file does not get weakened to make a change pass: thresholds only move
   up without discussion, and new exception rows fail the gate.
@@ -28,7 +30,7 @@ thresholds, exception rows, or deleted tests.
 | Shared ast-grep rules | Vendored `sg-rules/ts-*.yml` report only; fixtures in `sg-tests/` pass | `npm run scan:rules-test` (fixtures) inside the fetch-await CI step | every PR (`check` job; scan WARN, fixtures HARD) |
 | Secrets | No secrets in source | `bash .github/scripts/gitleaks-scan.sh` | every PR (`gitleaks` required check) |
 | Coverage of changed lines | Added TS lines ≥ 80% executed | `npm run patch:coverage` (`--strict` flips it HARD) | every PR (`check` job, WARN: reports only) |
-| Security: code | No high findings | `python3 -m semgrep --config ci/semgrep-rules.yml` | every PR (`check` job, WARN: reports only) |
+| Security: code | No high findings | Semgrep WARN step in `.github/workflows/ci.yml` (planted-warning selftest + scan) | every PR (`check` job, WARN: reports only) |
 | Test inventory | Every test file reachable from CI | `npm run test:inventory` (`--strict` flips it HARD) | every PR (`check` job, WARN: reports only) |
 | Bundle size | Served assets within budget | `npm run budget` | `bundle-budget` job, blocks merge |
 | Page quality | Lighthouse categories within `ci/quality-budget.json`; security headers, HTML basics, internal links | `npm run lighthouse:quality`, `npm run standards` | `lighthouse` job, blocks merge |

@@ -3,5 +3,8 @@
 # deleted tests are never ignorable. Each entry needs a reason it exists.
 # The guard's own pattern lists must name the forms they detect, and its
 # fixtures must contain them to prove detection.
+# Minified island bundles are generated outputs; their one-line diffs can
+# reproduce existing empty catches and are reviewed against their source.
+public/**
 ci/floor-guard.mjs
 ci/floor-guard.test.mjs

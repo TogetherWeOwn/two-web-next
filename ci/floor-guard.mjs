@@ -22,11 +22,14 @@ import { fileURLToPath } from "node:url";
 // Silenced checker — extend for the ecosystem; biome-ignore is this repo's form.
 const SUPPRESSIONS =
   /@ts-ignore|@ts-nocheck|eslint-disable|biome-ignore|# *noqa|# *type: *ignore|istanbul ignore|nosemgrep|gitleaks:allow|Stryker disable/;
-// Unfinished work.
+// Unfinished work in source and test code; generated output and prose are not
+// reliable places to distinguish a real stub from a string or explanation.
+const CODE_PATH = /\.(?:[cm]?[jt]sx?|py|sh|go|rs)$/i;
 const STUBS =
   /throw new (Error|NotImplemented).*[Nn]ot implemented|catch\s*\(\w*\)\s*\{\s*\}|catch\s*\{\s*\}|\bTODO\b|\bpass\s*# *stub/;
-// A test made easier (added skips).
-const SKIPS = /\.(skip|todo)\b|\bxit\(|\bxdescribe\(|@pytest\.mark\.skip|t\.Skip\(/;
+// Only test skip calls weaken the test floor; property reads and prose do not.
+const TEST_SKIP_CALL =
+  /\.(?:skip|todo)\s*\(|\b(?:xit|xdescribe)\s*\(|@pytest\.mark\.skip\s*\(|\bt\.Skip\s*\(/;
 const TEST_PATH = /\.(test|spec)\.|_test\.|test_/;
 const CONSTRAINTS_FILE = /CONSTRAINTS\.md$/;
 const ASSERTIONS = /\b(expect|assert|should)\b/;
@@ -97,8 +100,9 @@ export function scanAdded(added, ignore = []) {
       flag(findings, "new-exception", file, text);
     if (ignored.some((re) => re.test(file))) continue;
     if (SUPPRESSIONS.test(text)) flag(findings, "silenced-checker", file, text);
-    if (STUBS.test(text)) flag(findings, "unfinished-work", file, text);
-    if (SKIPS.test(text)) flag(findings, "test-made-easier", file, text);
+    if (CODE_PATH.test(file) && STUBS.test(text)) flag(findings, "unfinished-work", file, text);
+    if (CODE_PATH.test(file) && TEST_PATH.test(file) && TEST_SKIP_CALL.test(text))
+      flag(findings, "test-made-easier", file, text);
   }
   return findings;
 }
@@ -107,7 +111,19 @@ export function scanAdded(added, ignore = []) {
 // is a replacement (strengthening), not a strip: only the net excess is
 // flagged, so a vacuous placeholder can be swapped for a real pin without
 // tripping the floor, while a genuine strip stays loud.
-export function scanRemoved(removed, added = []) {
+export function parseFloorWaivers(messages) {
+  const waivers = new Map();
+  for (const line of messages.split(/\r?\n/)) {
+    const match = line.match(/^Floor-waiver: (assertion-removed|test-deleted) (\S+) -- (.+)$/);
+    if (!match || !match[3].trim()) continue;
+    const [, rule, file] = match;
+    if (!waivers.has(rule)) waivers.set(rule, new Set());
+    waivers.get(rule).add(file);
+  }
+  return waivers;
+}
+
+export function scanRemoved(removed, added = [], waivers = new Map()) {
   const findings = [];
   const addedAssert = new Map();
   for (const { file, text } of added) {
@@ -117,6 +133,7 @@ export function scanRemoved(removed, added = []) {
   const paired = new Map();
   for (const { file, text } of removed) {
     if (TEST_PATH.test(file) && ASSERTIONS.test(text)) {
+      if (waivers.get("assertion-removed")?.has(file)) continue;
       const used = paired.get(file) ?? 0;
       if (used < (addedAssert.get(file) ?? 0)) {
         paired.set(file, used + 1);
@@ -128,10 +145,11 @@ export function scanRemoved(removed, added = []) {
   return findings;
 }
 
-export function scanDeleted(deletedFiles) {
+export function scanDeleted(deletedFiles, waivers = new Map()) {
   const findings = [];
   for (const file of deletedFiles) {
-    if (TEST_PATH.test(file)) flag(findings, "test-deleted", file, "(test file deleted)");
+    if (TEST_PATH.test(file) && !waivers.get("test-deleted")?.has(file))
+      flag(findings, "test-deleted", file, "(test file deleted)");
   }
   return findings;
 }
@@ -141,11 +159,20 @@ export function scanDeleted(deletedFiles) {
 export function checkThresholds(removed, added) {
   const findings = [];
   const nums = (s) => (s.match(/\d+(\.\d+)?/g) || []).map(Number);
+  const label = (text) => text.match(/^\s*\|\s*([^|]+?)\s*\|/)?.[1]?.trim();
   const removedConstraints = removed.filter((l) => CONSTRAINTS_FILE.test(l.file));
   const addedConstraints = added.filter((l) => CONSTRAINTS_FILE.test(l.file));
+  const addedByLabel = new Map();
+  for (const line of addedConstraints) {
+    const key = label(line.text);
+    if (key) addedByLabel.set(key, line);
+  }
   for (const r of removedConstraints) {
-    const a = addedConstraints.find((x) => x.text.split(/[|:]/)[0] === r.text.split(/[|:]/)[0]);
-    if (a && nums(a.text).some((n, i) => nums(r.text)[i] !== undefined && n < nums(r.text)[i])) {
+    const key = label(r.text);
+    const a = key ? addedByLabel.get(key) : null;
+    if (!a) continue;
+    const before = nums(r.text);
+    if (nums(a.text).some((n, i) => before[i] !== undefined && n < before[i])) {
       flag(findings, "threshold-lowered", r.file, `${r.text}  ->  ${a.text}`);
     }
   }
@@ -156,8 +183,8 @@ export function guardDiff(diff, opts = {}) {
   const { added, removed, deletedFiles } = parseDiff(diff);
   return [
     ...scanAdded(added, opts.ignore ?? []),
-    ...scanRemoved(removed, added),
-    ...scanDeleted(deletedFiles),
+    ...scanRemoved(removed, added, opts.waivers ?? new Map()),
+    ...scanDeleted(deletedFiles, opts.waivers ?? new Map()),
     ...checkThresholds(removed, added),
   ];
 }
@@ -172,9 +199,12 @@ function main() {
   // spawnSync, not execFileSync: `git diff` exits 1 whenever a diff exists,
   // and execFileSync discards stdout on non-zero exit — which would make the
   // guard blind to every violation and always report clean.
-  const git = (args) => {
-    const r = spawnSync("git", args, { encoding: "utf8" });
-    if (r.error) return null;
+  const git = (args, allowDiff = false) => {
+    const r = spawnSync("git", args, {
+      encoding: "utf8",
+      maxBuffer: 64 * 1024 * 1024,
+    });
+    if (r.error || (r.status !== 0 && !(allowDiff && r.status === 1))) return null;
     return r.stdout ?? "";
   };
 
@@ -186,15 +216,35 @@ function main() {
     process.exit(2);
   }
 
+  const commitMessages = git(["log", "--format=%B", `${mergeBase}..HEAD`]);
+  if (commitMessages === null) {
+    console.error("floor-guard: could not read commit messages");
+    process.exit(2);
+  }
+  const waivers = parseFloorWaivers(commitMessages);
+
   // Unified diff plus untracked files (git diff alone cannot see new files).
-  const tracked = git(["diff", "--unified=0", mergeBase, "--"]) ?? "";
-  const untracked = (git(["ls-files", "--others", "--exclude-standard"]) ?? "")
+  // Any failed diff is a guard failure, never an empty/clean result.
+  const tracked = git(["diff", "--unified=0", mergeBase, "--"], true);
+  const untrackedFiles = git(["ls-files", "--others", "--exclude-standard"]);
+  if (tracked === null || untrackedFiles === null) {
+    console.error("floor-guard: could not read the repository diff");
+    process.exit(2);
+  }
+  const untrackedParts = untrackedFiles
     .split("\n")
     .filter(Boolean)
-    .map((f) => git(["diff", "--no-index", "--unified=0", "/dev/null", f]) ?? "")
-    .join("\n");
+    .map((f) => git(["diff", "--no-index", "--unified=0", "/dev/null", f], true));
+  if (untrackedParts.some((part) => part === null)) {
+    console.error("floor-guard: could not read an untracked file diff");
+    process.exit(2);
+  }
+  const untracked = untrackedParts.join("\n");
   const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-  const findings = guardDiff(`${tracked}\n${untracked}`, { ignore: loadIgnore(repoRoot) });
+  const findings = guardDiff(`${tracked}\n${untracked}`, {
+    ignore: loadIgnore(repoRoot),
+    waivers,
+  });
 
   if (findings.length === 0) {
     console.log("floor-guard: clean");

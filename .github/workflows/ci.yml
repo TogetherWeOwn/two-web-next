@@ -268,7 +268,7 @@ jobs:
           # On hosted/overflow runners the job container's root does not own the
           # runner-owned checkout, so Git refuses it as dubious ownership.
           git config --global --add safe.directory "$GITHUB_WORKSPACE"
-          apt-get update -qq && apt-get install -y -qq --no-install-recommends socat postgresql-client >/dev/null
+          apt-get update -qq && apt-get install -y -qq --no-install-recommends socat postgresql-client python3-venv >/dev/null
           nohup setsid socat TCP-LISTEN:5432,bind=127.0.0.1,reuseaddr,fork TCP:postgres:5432 >/dev/null 2>&1 &
           for i in $(seq 1 30); do pg_isready -q -h 127.0.0.1 -U postgres && exit 0; sleep 1; done
           exit 1
@@ -328,8 +328,9 @@ jobs:
       - name: Fetch-await gate (ast-grep, HARD)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
         run: |
-          npx -y --package @ast-grep/cli@0.50.0 ast-grep scan --error
-          npx -y --package @ast-grep/cli@0.50.0 ast-grep test
+          node ci/ast-grep-warn-selftest.mjs
+          npm run scan:fetch-await
+          npm run scan:rules-test
       # Floor guard HARD (CONSTRAINTS.md): no new suppressions, skips,
       # deleted tests, stripped assertions, stubs, exception rows or lowered
       # thresholds in the PR diff. Reads git history; fails the job.
@@ -379,11 +380,8 @@ jobs:
         if: always() && (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && hashFiles('coverage/coverage-final.json') != ''
         run: npm run patch:coverage:selftest && npm run patch:coverage
       # Semgrep WARN gate (quality-gates.md): TS sinks + secret-shaped
-      # literals. continue-on-error so installer hiccups never fail the job;
-      # WARNING-severity findings exit 0 by themselves. `python -m semgrep`
-      # is a deprecated shim that exits 2 without scanning, so call the
-      # console script from PATH instead (pinned: CLI changes darkened this
-      # gate silently once already).
+      # literals. A planted warning must be detected before scanning the tree;
+      # failures stay advisory but emit a visible workflow warning.
       - name: Semgrep (WARN)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
         continue-on-error: true
@@ -391,8 +389,13 @@ jobs:
           SEMGREP_SEND_METRICS: "off"
         run: |
           set -euo pipefail
-          python3 -m pip install --quiet 'semgrep==1.180.0'
-          semgrep --config ci/semgrep-rules.yml --quiet
+          python3 -m venv "$RUNNER_TEMP/semgrep"
+          "$RUNNER_TEMP/semgrep/bin/pip" install --quiet 'semgrep==1.180.0'
+          if ! node ci/semgrep-warn-selftest.mjs "$RUNNER_TEMP/semgrep/bin/semgrep"; then
+            echo "::warning::Semgrep WARN selftest failed; scan may be unavailable"
+            exit 1
+          fi
+          "$RUNNER_TEMP/semgrep/bin/semgrep" --config ci/semgrep-rules.yml --quiet --metrics=off
       - name: Coverage job summary
         if: always() && (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && hashFiles('coverage/coverage-summary.json') != ''
         run: node ci/coverage-summary.mjs >> "$GITHUB_STEP_SUMMARY"

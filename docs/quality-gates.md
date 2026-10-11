@@ -7,7 +7,8 @@ not fail) unless marked HARD. All of them run on the existing runners only.
   `src/**/*.ts`) plus its twin `sg-rules/fetch-await-tsx.yml`
   (`language: tsx`, `src/**/*.tsx`) require every `fetch(...)` in `src/**`
   to be awaited, returned, or `.then/.catch`-chained. Fails `check` via
-  `ast-grep scan --error`. The `await`/`return` search stops at the nearest
+  `npm run scan:fetch-await`; its error-severity fetch rules fail while
+  warning-severity rules remain report-only. The `await`/`return` search stops at the nearest
   function boundary, so a floating call inside a callback is still flagged;
   a concise arrow body (`(u) => fetch(u)`) is the callback's implicit return
   and stays exempt. Islands (`assets/islands/*.js`) are out of scope: they
@@ -18,9 +19,11 @@ not fail) unless marked HARD. All of them run on the existing runners only.
   Aggregate floors in `vitest.config.ts` stay. Flip to `--strict` for HARD.
 - **Semgrep TS + secrets (WARN):** `ci/semgrep-rules.yml` flags dangerous
   sinks (`eval`, string `setTimeout`, `innerHTML`, `document.write`) and
-  secret-shaped literals. The CI step calls the `semgrep` console script
-  (pinned) because `python -m semgrep` is a deprecated shim that exits 2
-  without scanning. Full-history leak scanning stays with gitleaks.
+  secret-shaped literals. CI installs the pinned CLI into a Python virtual
+  environment and runs `ci/semgrep-warn-selftest.mjs` against a planted warning
+  before scanning the tree. The selftest makes a dark scanner visible without
+  promoting WARN findings to merge blockers. Full-history leak scanning stays
+  with gitleaks.
 - **Mutation nightly (non-blocking):** `ci/mutation-sessions-join.mjs` weakens
   one auth check at a time and runs the hermetic kill suite; survivors are
   coverage gaps in the report artifact, never a red build.
@@ -29,11 +32,15 @@ not fail) unless marked HARD. All of them run on the existing runners only.
   runs with `continue-on-error` and the `--selftest` is hermetic (fixture
   trees only), so an orphan can never fail the job or skip later steps.
 - **Floor guard (HARD):** `ci/floor-guard.mjs` enforces the CONSTRAINTS.md
-  floor on the PR diff: new suppressions, added skips, deleted test files,
-  net-removed assertions, stubs, new exception rows, and lowered thresholds
-  fail `check`. A removed assertion paired with one added in the same test
-  file reads as a replacement, not a strip. Exemptions live in
-  `.constraintsignore` (content rules only).
+  floor on the PR diff: new suppressions, test skip calls, deleted test files,
+  net-removed assertions, source-code stubs, new exception rows, and lowered
+  table thresholds fail `check`. Only test deletions and assertion removals can
+  use path-scoped `Floor-waiver: test-deleted <path> -- <reason>` or
+  `Floor-waiver: assertion-removed <path> -- <reason>` commit trailers. It
+  scopes skip detection to test code and stub detection to source/test code;
+  generated minified islands are exempted by `.constraintsignore`. An assertion
+  paired with one added in the same test file reads as a replacement. Failed or
+  oversized diffs exit 2 rather than looking clean.
 - **Shared ast-grep rules (WARN):** `sg-rules/ts-*.yml` are vendored
   byte-identical from the shared meta-only quality assets
   (`quality/meta-only/rules/ts/`) instead of rewritten: `ts-admin-join-attempt-write`
@@ -41,8 +48,8 @@ not fail) unless marked HARD. All of them run on the existing runners only.
   `ts-path-stat-then-stream` (open once, stream the same descriptor),
   `ts-probe-unbounded-buffer` (bounded probe bodies), and
   `ts-vacuous-literal-expect` (no literal-true assertions). They run at
-  warning severity inside the existing `ast-grep scan --error` step, so they
-  report without failing; their fixtures live in `sg-tests/` with recorded
+  warning severity inside the existing `ast-grep scan` step, so they report
+  without failing; their fixtures live in `sg-tests/` with recorded
   baselines (`npm run scan:rules-test`, also run in that CI step).
   `ts-probe-unbounded-buffer` targets a `wrangler/src/**` tree this repo does
   not have, so it is wired for parity but never fires here. Wiring the rules

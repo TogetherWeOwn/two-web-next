@@ -9,7 +9,7 @@ import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { guardDiff } from "./floor-guard.mjs";
+import { guardDiff, loadIgnore, parseFloorWaivers } from "./floor-guard.mjs";
 
 const diff = (body) => `diff --git a/x b/x\n${body}`;
 
@@ -39,6 +39,34 @@ describe("floor-guard", () => {
     assert.ok(findings.some((f) => f.rule === "silenced-checker"));
   });
 
+  it("flags test skip calls but not property reads or prose", () => {
+    const property = guardDiff(
+      diff(
+        "--- a/ci/a11y-policy.test.mjs\n+++ b/ci/a11y-policy.test.mjs\n@@ -1,0 +2 @@\n+assert.equal(entry.skip, true);\n",
+      ),
+    );
+    const docs = guardDiff(
+      diff(
+        "--- a/docs/guide.md\n+++ b/docs/guide.md\n@@ -1,0 +2 @@\n+TODO: test.skip is mentioned here as documentation.\n",
+      ),
+    );
+    assert.deepEqual(
+      property.filter((f) => f.rule === "test-made-easier"),
+      [],
+    );
+    assert.deepEqual(
+      docs.filter((f) => f.rule === "unfinished-work" || f.rule === "test-made-easier"),
+      [],
+    );
+    assert.ok(
+      guardDiff(
+        diff(
+          '--- a/test/a.test.ts\n+++ b/test/a.test.ts\n@@ -1,0 +2 @@\n+it.skip("x", () => {});\n',
+        ),
+      ).some((f) => f.rule === "test-made-easier"),
+    );
+  });
+
   it("flags an added skip", () => {
     const findings = guardDiff(
       diff('--- a/test/a.test.ts\n+++ b/test/a.test.ts\n@@ -1,0 +2 @@\n+it.skip("x", () => {});\n'),
@@ -65,6 +93,39 @@ describe("floor-guard", () => {
     ].join("\n");
     const findings = guardDiff(d);
     assert.ok(findings.some((f) => f.rule === "test-deleted"));
+  });
+
+  it("accepts reasoned, path-scoped floor waivers for test removals", () => {
+    const deletion = [
+      "diff --git a/test/gone.test.ts b/test/gone.test.ts",
+      "deleted file mode 100644",
+      "--- a/test/gone.test.ts",
+      "+++ /dev/null",
+      "@@ -1,2 +0,0 @@",
+      '-it("x", () => {',
+      "-});",
+    ].join("\n");
+    const waived = parseFloorWaivers(
+      "cleanup tests\n\nFloor-waiver: test-deleted test/gone.test.ts -- replaced by the new suite\n",
+    );
+    assert.deepEqual(guardDiff(deletion, { waivers: waived }), []);
+    assert.ok(
+      guardDiff(deletion, {
+        waivers: parseFloorWaivers("Floor-waiver: test-deleted test/gone.test.ts"),
+      }).some((f) => f.rule === "test-deleted"),
+      "waiver without a reason is ignored",
+    );
+  });
+
+  it("accepts a reasoned assertion-removal waiver only for its named test", () => {
+    const d = diff(
+      "--- a/test/a.test.ts\n+++ b/test/a.test.ts\n@@ -1 +0,0 @@\n-expect(x).toBe(1);\n",
+    );
+    const waived = parseFloorWaivers(
+      "Floor-waiver: assertion-removed test/a.test.ts -- assertion moved to the replacement suite\n",
+    );
+    assert.deepEqual(guardDiff(d, { waivers: waived }), []);
+    assert.ok(guardDiff(d, { waivers: new Map() }).some((f) => f.rule === "assertion-removed"));
   });
 
   it("flags an assertion stripped from a surviving test", () => {
@@ -122,6 +183,50 @@ describe("floor-guard", () => {
     assert.ok(findings.some((f) => f.rule === "new-exception"));
   });
 
+  it("pairs changed thresholds by table label, not row position", () => {
+    const findings = guardDiff(
+      diff(
+        "--- a/CONSTRAINTS.md\n+++ b/CONSTRAINTS.md\n@@ -1,3 +1,4 @@\n-| Coverage | Changed lines ≥ 80% covered | vitest |\n-| Lint | Zero errors | biome |\n+| New metric | 70% minimum | tool |\n+| Coverage | Changed lines ≥ 90% covered | vitest |\n+| Lint | Zero errors | biome |\n",
+      ),
+    );
+    assert.deepEqual(
+      findings.filter((f) => f.rule === "threshold-lowered"),
+      [],
+    );
+  });
+
+  it("catches one lowered row among other threshold changes", () => {
+    const findings = guardDiff(
+      diff(
+        "--- a/CONSTRAINTS.md\n+++ b/CONSTRAINTS.md\n@@ -1,2 +1,3 @@\n+| New metric | 95% minimum | tool |\n+| Coverage | Changed lines ≥ 90% covered | vitest |\n+| Mutation | Kills ≥ 80% | runner |\n-| Coverage | Changed lines ≥ 80% covered | vitest |\n-| Mutation | Kills ≥ 90% | runner |\n",
+      ),
+    );
+    assert.equal(findings.filter((f) => f.rule === "threshold-lowered").length, 1);
+    assert.match(findings.find((f) => f.rule === "threshold-lowered").text, /Mutation/);
+  });
+
+  it("ignores date changes outside threshold table rows", () => {
+    const findings = guardDiff(
+      diff(
+        "--- a/CONSTRAINTS.md\n+++ b/CONSTRAINTS.md\n@@ -1 +1 @@\n-Last reviewed: 2026-10-11.\n+Last reviewed: 2026-11-02.\n",
+      ),
+    );
+    assert.deepEqual(
+      findings.filter((f) => f.rule === "threshold-lowered"),
+      [],
+    );
+  });
+
+  it("ignores generated island bundles with existing empty catches", () => {
+    const root = join(dirname(fileURLToPath(import.meta.url)), "..");
+    const ignore = loadIgnore(root);
+    const d = diff(
+      "--- a/public/islands/auth-status.js\n+++ b/public/islands/auth-status.js\n@@ -1 +1 @@\n-old output\n+(()=>{try{}catch{}})();\n",
+    );
+    assert.ok(ignore.includes("public/**"));
+    assert.deepEqual(guardDiff(d, { ignore }), []);
+  });
+
   it("honors ignore globs for added-line content rules", () => {
     const d = diff(
       "--- a/ci/floor-guard.mjs\n+++ b/ci/floor-guard.mjs\n@@ -1,0 +2 @@\n+// biome-ignore lint: pattern list mentions the form it detects\n",
@@ -176,6 +281,14 @@ describe("floor-guard", () => {
       const bad = run();
       assert.equal(bad.status, 1, "untracked suppression exits 1");
       assert.match(bad.stderr, /silenced-checker/);
+      rmSync(join(dir, "b.ts"));
+      writeFileSync(
+        join(dir, "large.ts"),
+        `${"x".repeat(1_200_000)}// eslint-disable-next-line no-any\n`,
+      );
+      const large = run();
+      assert.equal(large.status, 1, "large diff still reports the suppression");
+      assert.match(large.stderr, /silenced-checker/);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
