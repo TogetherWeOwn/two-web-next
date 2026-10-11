@@ -296,6 +296,13 @@ exactly once.
 | `src/static-leaves.tsx` | entry |
 | `src/throttle.ts` | http-guard |
 | `src/trust-hosts.ts` | http-guard |
+| `src/up-body.ts` | observability |
+| `src/up-config.ts` | observability |
+| `src/up-database.ts` | observability |
+| `src/up-migrations.ts` | observability |
+| `src/up-queue.ts` | observability |
+| `src/up-revision.ts` | observability |
+| `src/up-timeout.ts` | observability |
 | `src/up.ts` | observability |
 | `src/worker.ts` | entry |
 | `src/write-recovery.tsx` | auth |
