@@ -5,6 +5,7 @@ import {
   maintenanceHandler,
   notFoundHandler,
   notFoundResponse,
+  payloadTooLarge,
   rateLimitExceeded,
 } from "../src/errors";
 import type { Env } from "../src/env";
@@ -116,4 +117,76 @@ describe("base-theme error and recovery shells without a DB binding", () => {
     expect(html).toContain('href="/join/discord" data-testid="recovery-retry"');
     expect(html).toContain('href="https://discord.gg/invite" data-testid="recovery-invite"');
   });
+});
+
+// Table-driven coverage for 429/413 Accept negotiation (quality, specificity,
+// q=0, case, machine-only, missing/wildcard). A substring match or early
+// cache-header return would fail these.
+describe("refusal response Accept negotiation and cache headers", () => {
+  function rateFixture() {
+    const f = new Hono();
+    f.get("/rate", (c) => rateLimitExceeded(c, 45));
+    f.post("/events/publish", (c) => rateLimitExceeded(c, 30)); // machine-only
+    return f;
+  }
+  function bodyFixture() {
+    const f = new Hono();
+    f.post("/api/upload", (c) => payloadTooLarge(c));
+    f.post("/form", (c) => payloadTooLarge(c));
+    return f;
+  }
+
+  it.each([
+    // [path, accept, expectedStatus, isJson, hasRetry, cache, vary]
+    ["/rate", "application/json", 429, true, true, "no-store, private", "Accept"],
+    ["/rate", "text/html", 429, false, true, "no-store, private", "Accept"],
+    ["/rate", "*/*", 429, false, true, "no-store, private", "Accept"],
+    ["/rate", "", 429, false, true, "no-store, private", "Accept"],
+    ["/rate", "APPLICATION/JSON", 429, true, true, "no-store, private", "Accept"],
+    ["/rate", "application/json;q=0, text/html", 429, false, true, "no-store, private", "Accept"],
+    ["/rate", "text/*, application/json", 429, true, true, "no-store, private", "Accept"],
+    ["/events/publish", "text/html", 429, true, true, "no-store, private", "Accept"], // machine wins
+    ["/rate", "text/html, application/json;q=0.5", 429, false, true, "no-store, private", "Accept"],
+  ])(
+    "rateLimitExceeded %s Accept:%s -> %i json=%s retry=%s cache=%s vary=%s",
+    async (path, accept, status, isJson, hasRetry, cache, vary) => {
+      const init: RequestInit = accept ? { headers: { accept } } : {};
+      if (path.includes("publish")) init.method = "POST";
+      const res = await rateFixture().request(path, init, env);
+      expect(res.status).toBe(status);
+      expect(res.headers.get("cache-control")).toBe(cache);
+      expect(res.headers.get("vary")).toBe(vary);
+      if (hasRetry) expect(res.headers.get("retry-after")).toBe("45");
+      if (isJson) {
+        const body = await res.json();
+        expect(body).toMatchObject({ reason: "rate_limited", retry_after: 45 });
+      } else {
+        const html = await res.text();
+        expect(html).toContain("Rate limited");
+      }
+    },
+  );
+
+  it.each([
+    ["/api/upload", "text/html", 413, true, "no-store, private", "Accept"],
+    ["/form", "application/json", 413, true, "no-store, private", "Accept"],
+    ["/form", "", 413, false, "no-store, private", "Accept"],
+    ["/api/upload", "*/*", 413, true, "no-store, private", "Accept"], // /api/ forces json
+  ])(
+    "payloadTooLarge %s Accept:%s -> %i json=%s cache=%s vary=%s",
+    async (path, accept, status, isJson, cache, vary) => {
+      const init: RequestInit = accept ? { method: "POST", headers: { accept } } : { method: "POST" };
+      const res = await bodyFixture().request(path, init, env);
+      expect(res.status).toBe(status);
+      expect(res.headers.get("cache-control")).toBe(cache);
+      expect(res.headers.get("vary")).toBe(vary);
+      if (isJson) {
+        const body = await res.json();
+        expect(body).toMatchObject({ reason: "payload_too_large" });
+      } else {
+        const html = await res.text();
+        expect(html).toContain("Payload too large");
+      }
+    },
+  );
 });
