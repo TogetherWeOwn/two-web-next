@@ -1,0 +1,362 @@
+// The failure-stream oracle must read every channel and field it claims to inspect.
+// These negative controls plant the leaks it must catch and the benign shapes it must accept.
+import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  captureDiagnosticStream,
+  channelCounts,
+  expectDiagnosticStreamClean,
+  scanDiagnosticStream,
+  withheld,
+} from "./helpers/diagnostic-stream";
+
+const MARK = "***synthetic-marker-9q2w***";
+const MARKERS = [MARK];
+const ROUTE = "/fixture/callback";
+
+/** The line the request middleware writes; the oracle counts only lines shaped like this. */
+const requestLine = (route: string) =>
+  JSON.stringify({ event: "http.request", route, status: 302 });
+
+function cyclicWith(marker: string): Record<string, unknown> {
+  const record: Record<string, unknown> = { status: 400, detail: marker };
+  record.self = record;
+  return record;
+}
+
+function benignCyclic(): Record<string, unknown> {
+  const record: Record<string, unknown> = { status: 400 };
+  record.self = record;
+  return record;
+}
+
+class AccessorMessageError extends Error {}
+Object.defineProperty(AccessorMessageError.prototype, "message", {
+  get: () => MARK,
+});
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
+
+describe("diagnostic stream capture", () => {
+  it("records every named console channel in call order", () => {
+    const records = captureDiagnosticStream();
+    console.log("a");
+    console.info("b");
+    console.debug("c");
+    console.warn("d");
+    console.error("e");
+    expect(records.map((r) => r.channel)).toEqual(["log", "info", "debug", "warn", "error"]);
+    expect(channelCounts(records)).toEqual({ log: 1, info: 1, debug: 1, warn: 1, error: 1 });
+  });
+
+  it("finds a marker written to each channel, console.log included", () => {
+    const records = captureDiagnosticStream();
+    console.log(`planted ${MARK}`);
+    console.info(`planted ${MARK}`);
+    console.debug(`planted ${MARK}`);
+    console.warn(`planted ${MARK}`);
+    console.error(`planted ${MARK}`);
+    expect(scanDiagnosticStream(records, MARKERS).hits).toEqual([
+      "debug[2].args[0]",
+      "error[4].args[0]",
+      "info[1].args[0]",
+      "log[0].args[0]",
+      "warn[3].args[0]",
+    ]);
+  });
+
+  it("inspects an Error's message, stack and nested cause", () => {
+    const records = captureDiagnosticStream();
+    console.warn("outer", new Error(`message ${MARK}`));
+    const stackOnly = new Error("plain");
+    stackOnly.stack = `Error: plain\n    at ${MARK}`;
+    console.error("stack", stackOnly);
+    console.warn("cause", new Error("outer", { cause: new Error(`inner ${MARK}`) }));
+    expect(scanDiagnosticStream(records, MARKERS).hits).toEqual(
+      expect.arrayContaining([
+        "warn[0].args[1].message",
+        "error[1].args[1].stack",
+        "warn[2].args[1].cause.message",
+      ]),
+    );
+  });
+
+  it("reads an Error message supplied by a prototype accessor", () => {
+    const records = captureDiagnosticStream();
+    const err = new AccessorMessageError();
+    err.stack = "AccessorMessageError";
+    console.warn("accessor", err);
+    expect(scanDiagnosticStream(records, MARKERS).hits).toEqual(["warn[0].args[1].message"]);
+  });
+
+  it("finds a marker in a non-enumerable property", () => {
+    const records = captureDiagnosticStream();
+    console.warn(
+      "hidden",
+      Object.defineProperty({ status: 400 }, "raw", { value: MARK, enumerable: false }),
+    );
+    expect(scanDiagnosticStream(records, MARKERS).hits).toEqual(["warn[0].args[1].raw"]);
+  });
+
+  it("finds markers in Map values, Set members and symbol-keyed properties", () => {
+    const records = captureDiagnosticStream();
+    console.debug("collections", new Map([["k", MARK]]), new Set([MARK]), { [Symbol("s")]: MARK });
+    expect(scanDiagnosticStream(records, MARKERS).hits).toEqual([
+      "debug[0].args[1]<value>",
+      "debug[0].args[2]<member>",
+      "debug[0].args[3].<symbol>",
+    ]);
+  });
+
+  it("reads each value when the call happens, so a later scrub cannot hide the leak", () => {
+    const records = captureDiagnosticStream();
+    const detail = { value: MARK };
+    const err = new Error(MARK);
+    console.warn("scrubbed", detail, err);
+    detail.value = "[redacted]";
+    err.message = "ok";
+    err.stack = "Error: ok";
+    expect(scanDiagnosticStream(records, MARKERS).hits).toEqual(
+      expect.arrayContaining(["warn[0].args[1].value", "warn[0].args[2].message"]),
+    );
+  });
+
+  it("finds a marker split across the values of one call", () => {
+    const records = captureDiagnosticStream();
+    console.warn("%s%s", MARK.slice(0, 10), MARK.slice(10));
+    expect(scanDiagnosticStream(records, MARKERS).hits).toEqual(["warn[0] (split across values)"]);
+  });
+
+  it("terminates on a cyclic record and still finds a marker inside it", () => {
+    const records = captureDiagnosticStream();
+    console.warn("cycle", cyclicWith(MARK));
+    const scan = scanDiagnosticStream(records, MARKERS);
+    expect(scan.incomplete).toEqual([]);
+    expect(scan.hits).toEqual(["warn[0].args[1].detail"]);
+  });
+
+  it("terminates on cyclic Error causes and self-containing Maps, finding the marker", () => {
+    const records = captureDiagnosticStream();
+    const inner = new Error(MARK);
+    const outer = new Error("outer", { cause: inner });
+    inner.cause = outer;
+    const holder = new Map<string, unknown>();
+    holder.set("self", holder);
+    holder.set("detail", MARK);
+    console.warn("cycles", outer, holder);
+    const scan = scanDiagnosticStream(records, MARKERS);
+    expect(scan.incomplete).toEqual([]);
+    expect(scan.hits).toEqual(
+      expect.arrayContaining(["warn[0].args[1].cause.message", "warn[0].args[2]<value>"]),
+    );
+  });
+
+  it("reports a benign cyclic record as complete and marker-free", () => {
+    const records = captureDiagnosticStream();
+    console.info("benign", benignCyclic());
+    expect(scanDiagnosticStream(records, MARKERS)).toEqual({ hits: [], incomplete: [] });
+  });
+
+  it("withholds marker bytes from labels when the marker is a property name", () => {
+    const records = captureDiagnosticStream();
+    console.warn("key", { [MARK]: MARK });
+    const { hits } = scanDiagnosticStream(records, MARKERS);
+    expect(hits).toHaveLength(2);
+    expect(hits.some((hit) => hit.includes(MARK))).toBe(false);
+  });
+
+  it("marks a throwing getter as incomplete rather than clean", () => {
+    const records = captureDiagnosticStream();
+    console.warn("getter", {
+      get detail(): string {
+        throw new Error("getter");
+      },
+    });
+    expect(scanDiagnosticStream(records, MARKERS)).toEqual({
+      hits: [],
+      incomplete: ["warn[0].args[1].detail: getter threw"],
+    });
+  });
+
+  it("reports a truncated walk as incomplete, never clean", () => {
+    const records = captureDiagnosticStream();
+    console.info(
+      "bulk",
+      Array.from({ length: 25_000 }, () => "ok"),
+    );
+    const { hits, incomplete } = scanDiagnosticStream(records, MARKERS);
+    expect(hits).toEqual([]);
+    expect(incomplete).toHaveLength(1);
+    expect(incomplete[0]).toContain("step budget exhausted");
+  });
+
+  it("reports a marker beyond the depth limit as incomplete, never clean", () => {
+    const records = captureDiagnosticStream();
+    let deep: Record<string, unknown> = { token: MARK };
+    for (let i = 0; i < 40; i++) deep = { next: deep };
+    console.warn("deep", deep);
+    const { hits, incomplete } = scanDiagnosticStream(records, MARKERS);
+    expect(hits).toEqual([]);
+    expect(incomplete.length).toBeGreaterThan(0);
+  });
+
+  it("reports binary payloads as uninspectable", () => {
+    const records = captureDiagnosticStream();
+    console.warn("bytes", new TextEncoder().encode(MARK));
+    expect(scanDiagnosticStream(records, MARKERS)).toEqual({
+      hits: [],
+      incomplete: ["warn[0].args[1]: binary payload"],
+    });
+  });
+
+  it.each([
+    ["a URL", () => new URL(`https://example.test/?t=${MARK}`)],
+    ["Headers", () => new Headers({ "x-token": MARK })],
+    ["a String wrapper", () => Object(MARK)],
+    ["a function", () => function leak() {}],
+  ])("reports %s as opaque, never clean", (_name, value) => {
+    const records = captureDiagnosticStream();
+    console.warn("opaque", value());
+    const { incomplete } = scanDiagnosticStream(records, MARKERS);
+    expect(incomplete).toHaveLength(1);
+    expect(incomplete[0]).toContain("opaque");
+  });
+});
+
+describe("withheld", () => {
+  it("replaces marker-bearing strings and keys, and keeps everything else", () => {
+    expect(
+      withheld(
+        { exception: "DiscordError", detail: `x ${MARK}`, [`k ${MARK}`]: 1, status: 400 },
+        MARKERS,
+      ),
+    ).toEqual({
+      exception: "DiscordError",
+      detail: "[marker withheld]",
+      "[marker withheld]": 1,
+      status: 400,
+    });
+  });
+
+  it("terminates on a cyclic value and marks the back-reference", () => {
+    const copy = withheld(cyclicWith(MARK), MARKERS) as Record<string, unknown>;
+    expect(copy.self).toBe("[circular]");
+    expect(copy.detail).toBe("[marker withheld]");
+  });
+
+  it("never invokes a getter, so a thrown marker cannot reach a failure message", () => {
+    const hostile = {
+      get detail(): string {
+        throw new Error(MARK);
+      },
+    };
+    const copy = withheld(hostile, MARKERS);
+    expect(JSON.stringify(copy)).not.toContain(MARK);
+  });
+
+  it("withholds a symbol whose description carries the marker", () => {
+    expect(withheld(Symbol(MARK), MARKERS)).toBe("[marker withheld]");
+    expect(withheld(Symbol("ok"), MARKERS)).toBe("Symbol(ok)");
+  });
+});
+
+describe("expectDiagnosticStreamClean", () => {
+  it("passes a complete, marker-free stream with its request line and expected record", () => {
+    const records = captureDiagnosticStream();
+    console.log(requestLine(ROUTE));
+    console.info("sign-in ok", { status: 302 });
+    expect(() =>
+      expectDiagnosticStreamClean(records, MARKERS, { request: ROUTE, messages: ["sign-in ok"] }),
+    ).not.toThrow();
+  });
+
+  it("passes a complete benign cyclic record", () => {
+    const records = captureDiagnosticStream();
+    console.log(requestLine(ROUTE));
+    console.debug("leak", benignCyclic());
+    expect(() => expectDiagnosticStreamClean(records, MARKERS, { request: ROUTE })).not.toThrow();
+  });
+
+  it("fails without the request line, even with no marker present", () => {
+    const records = captureDiagnosticStream();
+    console.log("request");
+    expect(() => expectDiagnosticStreamClean(records, MARKERS, { request: ROUTE })).toThrow(
+      "request line written",
+    );
+  });
+
+  it("fails when the expected positive record is absent", () => {
+    const records = captureDiagnosticStream();
+    console.log(requestLine(ROUTE));
+    expect(() =>
+      expectDiagnosticStreamClean(records, MARKERS, {
+        request: ROUTE,
+        messages: ["discord sign-in failed"],
+      }),
+    ).toThrow("expected record written once");
+  });
+
+  it("fails when inspection is incomplete even with no marker present", () => {
+    const records = captureDiagnosticStream();
+    console.log(requestLine(ROUTE));
+    console.warn("getter", {
+      get detail(): string {
+        throw new Error("getter");
+      },
+    });
+    expect(() => expectDiagnosticStreamClean(records, MARKERS, { request: ROUTE })).toThrow(
+      "every diagnostic value inspected",
+    );
+  });
+
+  it.each([
+    ["console.log", () => console.log("leak", `planted ${MARK}`)],
+    ["console.info with an object field", () => console.info("leak", { detail: MARK })],
+    ["console.debug with a cyclic record", () => console.debug("leak", cyclicWith(MARK))],
+    [
+      "console.warn with an Error message",
+      () => console.warn("leak", new Error(`carries ${MARK}`)),
+    ],
+    [
+      "console.error with a nested Error cause",
+      () => console.error("leak", new Error("outer", { cause: new Error(`inner ${MARK}`) })),
+    ],
+    [
+      "console.warn with a non-enumerable property",
+      () => console.warn("leak", Object.defineProperty({}, "raw", { value: MARK })),
+    ],
+    [
+      "console.warn with a prototype-accessor message",
+      () => console.warn("leak", new AccessorMessageError()),
+    ],
+    [
+      "console.warn with a marker split across arguments",
+      () => console.warn("leak", MARK.slice(0, 10), MARK.slice(10)),
+    ],
+  ])("fails on a planted leak via %s, naming a label and never the marker", (_name, plant) => {
+    const records = captureDiagnosticStream();
+    console.log(requestLine(ROUTE));
+    plant();
+    let failure: unknown;
+    try {
+      expectDiagnosticStreamClean(records, MARKERS, { request: ROUTE, messages: ["leak"] });
+    } catch (error) {
+      failure = error;
+    }
+    expect(failure).toBeInstanceOf(Error);
+    expect((failure as Error).message).toContain("marker found in diagnostic stream");
+    expect((failure as Error).message).not.toContain(MARK);
+  });
+
+  it("fails when a logged value was scrubbed afterwards", () => {
+    const records = captureDiagnosticStream();
+    console.log(requestLine(ROUTE));
+    const detail = { value: MARK };
+    console.warn("leak", detail);
+    detail.value = "[redacted]";
+    expect(() => expectDiagnosticStreamClean(records, MARKERS, { request: ROUTE })).toThrow(
+      "marker found in diagnostic stream",
+    );
+  });
+});
