@@ -1,4 +1,10 @@
 import { test as base, expect, type BrowserContext } from "@playwright/test";
+import {
+  parseRetryAfterSeconds,
+  QA_LOGIN_MAX_ATTEMPTS,
+  qaLoginThrottleError,
+  sleep,
+} from "./qa-login-retry.mjs";
 
 export const localOrigin = "https://localhost:8787";
 
@@ -39,16 +45,32 @@ export async function qaLogin(context: BrowserContext, identity: "qa-member" | "
   // evidence on every unsafe method. Send the local origin explicitly: the
   // E2E worker translates exactly this value to the virtual staging origin
   // the gate expects, and foreign origins are still never translated.
-  const response = await context.request.post(`/auth/qa/${identity}`, {
-    headers: { "X-TWO-QA-Auth": token, Origin: localOrigin },
-    maxRedirects: 0,
-  });
-  expect(response.status()).toBe(204);
-  const cookie = (await context.cookies()).find((item) => item.name === "__Host-two_session");
-  expect(cookie).toMatchObject({
-    httpOnly: true,
-    secure: true,
-    sameSite: "Lax",
-    domain: "localhost",
-  });
+  // POST /auth/qa/:identity spends the shared `qa-login` throttle (10/min per
+  // runner IP, src/throttle.ts). The local suite performs 11 sequential logins,
+  // so the last login can 429 when they land in one window. Honor the server's
+  // Retry-After across the minute boundary instead of failing the file.
+  let retryAfterSeconds = 60;
+  for (let attempt = 1; attempt <= QA_LOGIN_MAX_ATTEMPTS; attempt++) {
+    const response = await context.request.post(`/auth/qa/${identity}`, {
+      headers: { "X-TWO-QA-Auth": token, Origin: localOrigin },
+      maxRedirects: 0,
+    });
+    if (response.status() === 429) {
+      retryAfterSeconds = parseRetryAfterSeconds(response.headers());
+      if (attempt < QA_LOGIN_MAX_ATTEMPTS) {
+        await sleep(retryAfterSeconds * 1000);
+        continue;
+      }
+      throw qaLoginThrottleError(identity, retryAfterSeconds, QA_LOGIN_MAX_ATTEMPTS);
+    }
+    expect(response.status()).toBe(204);
+    const cookie = (await context.cookies()).find((item) => item.name === "__Host-two_session");
+    expect(cookie).toMatchObject({
+      httpOnly: true,
+      secure: true,
+      sameSite: "Lax",
+      domain: "localhost",
+    });
+    return;
+  }
 }

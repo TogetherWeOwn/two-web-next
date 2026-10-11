@@ -41,6 +41,9 @@ test("QA member signs out from the profile header and sees no moderator shortcut
   page,
   context,
 }) => {
+  // Late in the sequential suite: qaLogin may wait out the shared 10/min
+  // throttle window (Retry-After, up to 60 s) before the 204 lands.
+  test.setTimeout(90_000);
   await qaLogin(context, "qa-member");
   await page.goto("/profile");
   await expect(page.getByRole("heading", { name: "QA Member", exact: true })).toBeVisible();
@@ -59,6 +62,9 @@ test("QA member signs out from the profile header and sees no moderator shortcut
 });
 
 test("QA moderator reaches the admin panel from the profile header", async ({ page, context }) => {
+  // Last login of the sequential suite: honor the shared 10/min throttle
+  // Retry-After (up to 60 s) instead of failing on the first 429.
+  test.setTimeout(90_000);
   await qaLogin(context, "qa-moderator");
   await page.goto("/profile");
   await expect(page.getByRole("heading", { name: "QA Moderator", exact: true })).toBeVisible();
