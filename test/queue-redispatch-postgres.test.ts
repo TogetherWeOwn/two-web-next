@@ -45,6 +45,49 @@ export function shouldDropRedispatchDb(target: string, created: string | null): 
   return created !== null && target === created && isOwnedRedispatchDbName(target);
 }
 
+// Fixture lifecycle, extracted so the driver-free regression below pins the
+// shipped wiring instead of only the pure predicates above. The fake-admin
+// tests drive these directly: any mutation that restores drop-and-recreate,
+// drops on the refusal path, or skips the ambient guard fails them.
+type RedispatchAdmin = Pick<postgres.Sql, "unsafe">;
+
+export async function provisionRedispatchDb(
+  admin: RedispatchAdmin,
+  ambientUrl: string,
+  name: string,
+): Promise<true> {
+  // Refuse before any query or DDL: postgres.js connects lazily, so no driver
+  // has connected until the first unsafe() below. The derived per-invocation
+  // target is validated by name here: the full guard's CI branch only allows
+  // the /postgres path, so it cannot approve a derived fixture-database URL.
+  testDatabaseUrl(ambientUrl);
+  if (!isOwnedRedispatchDbName(name)) {
+    throw new Error("refusing to create an unguarded database");
+  }
+  const rows = (await admin.unsafe(
+    "select pg_get_userbyid(datdba) as owner from pg_database where datname = $1",
+    [name],
+  )) as unknown as { owner: string }[];
+  if (rows[0]?.owner) {
+    // Another invocation (or a previous crashed run) owns this name. Refuse
+    // instead of dropping an unproven database; with per-invocation names
+    // a collision here means our entropy repeated, not a stale fixture.
+    throw new Error(`refusing to reuse existing database "${name}"`);
+  }
+  await admin.unsafe(`CREATE DATABASE "${name}"`);
+  return true;
+}
+
+export async function teardownRedispatchDb(
+  admin: RedispatchAdmin,
+  target: string,
+  created: boolean,
+): Promise<boolean> {
+  if (!shouldDropRedispatchDb(target, created ? target : null)) return false;
+  await admin.unsafe(`DROP DATABASE "${target}" WITH (FORCE)`);
+  return true;
+}
+
 const DB_NAME = buildRedispatchDbName({
   pid: process.pid,
   nowMs: Date.now(),
@@ -89,14 +132,11 @@ describe.skipIf(!process.env.DATABASE_URL)("guarded one-row failed-job re-dispat
   let createdDb = false;
 
   beforeAll(async () => {
-    // Guard the ambient URL before any driver or DDL. The derived
-    // per-invocation target is validated by name below: the full guard's CI
-    // branch only allows the /postgres path, so it cannot approve a derived
-    // fixture-database URL in CI.
-    testDatabaseUrl(process.env.DATABASE_URL!);
-    if (!isOwnedRedispatchDbName(DB_NAME)) {
-      throw new Error("refusing to create an unguarded database");
-    }
+    // Provisioning validates the ambient URL, refuses an existing target
+    // instead of dropping it, and creates exactly one database. The derived
+    // per-invocation target is validated by name inside provisionRedispatchDb:
+    // the full guard's CI branch only allows the /postgres path, so it cannot
+    // approve a derived fixture-database URL in CI.
     const adminUrl = new URL(process.env.DATABASE_URL!);
     adminUrl.pathname = "/postgres";
     const admin = postgres(adminUrl.href, {
@@ -106,19 +146,7 @@ describe.skipIf(!process.env.DATABASE_URL)("guarded one-row failed-job re-dispat
       onnotice: () => {},
     });
     try {
-      const rows = (await admin.unsafe(
-        "select pg_get_userbyid(datdba) as owner from pg_database where datname = $1",
-        [DB_NAME],
-      )) as unknown as { owner: string }[];
-      const owner = rows[0]?.owner;
-      if (owner) {
-        // Another invocation (or a previous crashed run) owns this name. Refuse
-        // instead of dropping an unproven database; with per-invocation names
-        // a collision here means our entropy repeated, not a stale fixture.
-        throw new Error(`refusing to reuse existing database "${DB_NAME}"`);
-      }
-      await admin.unsafe(`CREATE DATABASE "${DB_NAME}"`);
-      createdDb = true;
+      createdDb = await provisionRedispatchDb(admin, process.env.DATABASE_URL!, DB_NAME);
     } finally {
       await admin.end({ timeout: 1 });
     }
@@ -173,21 +201,22 @@ describe.skipIf(!process.env.DATABASE_URL)("guarded one-row failed-job re-dispat
       await sql?.end({ timeout: 1 });
     } finally {
       // Drop only the exact database this invocation created, after its
-      // clients are closed. A foreign or unproven name is left untouched.
-      if (shouldDropRedispatchDb(DB_NAME, createdDb ? DB_NAME : null)) {
-        const adminUrl = new URL(process.env.DATABASE_URL!);
-        adminUrl.pathname = "/postgres";
-        const admin = postgres(adminUrl.href, {
-          max: 1,
-          connect_timeout: 5,
-          password: () => adminUrl.password,
-          onnotice: () => {},
-        });
-        try {
-          await admin.unsafe(`DROP DATABASE "${DB_NAME}" WITH (FORCE)`);
-        } finally {
-          await admin.end({ timeout: 1 });
-        }
+      // clients are closed. teardownRedispatchDb no-ops unless created is
+      // true and the target is owned, so a foreign or unproven name is left
+      // untouched even though the admin client is always constructed here
+      // (postgres.js connects lazily; no query is issued on the no-op path).
+      const adminUrl = new URL(process.env.DATABASE_URL!);
+      adminUrl.pathname = "/postgres";
+      const admin = postgres(adminUrl.href, {
+        max: 1,
+        connect_timeout: 5,
+        password: () => adminUrl.password,
+        onnotice: () => {},
+      });
+      try {
+        await teardownRedispatchDb(admin, DB_NAME, createdDb);
+      } finally {
+        await admin.end({ timeout: 1 });
       }
     }
   }, 60000);
@@ -429,11 +458,81 @@ describe("redispatch fixture database isolation", () => {
     expect(isOwnedRedispatchDbName(DB_NAME)).toBe(true);
   });
 
-  it("an existing target is refused instead of dropped", () => {
-    // beforeAll throws on an existing target, so the teardown predicate must
-    // never authorize a database this invocation did not create.
-    expect(shouldDropRedispatchDb("two_web_next_tog19289", null)).toBe(false);
-    expect(shouldDropRedispatchDb(DB_NAME, null)).toBe(false);
+  // Fake admin whose unsafe() records every statement instead of connecting.
+  // Drives provisionRedispatchDb/teardownRedispatchDb directly, so the shipped
+  // wiring (refuse instead of drop, drop only what this invocation created,
+  // ambient guard before any query) is pinned, not just the pure predicates.
+  function fakeAdmin(ownerRows: { owner: string }[]) {
+    const statements: { query: string; params?: unknown[] }[] = [];
+    const admin = {
+      async unsafe(query: string, params?: unknown[]): Promise<unknown> {
+        statements.push({ query, params });
+        if (query.includes("pg_database")) return ownerRows;
+        return [];
+      },
+    } as unknown as Pick<postgres.Sql, "unsafe">;
+    return { admin, statements };
+  }
+
+  function fakeAmbient(): string {
+    // Valid under both guard branches: the CI service URL in CI, the
+    // agent-testdb URL locally. Never connects; only validated by name.
+    return process.env.DATABASE_URL ?? "postgres://agent_test@agent-testdb:5432/postgres";
+  }
+
+  function fakeName(seed: number): string {
+    return buildRedispatchDbName({ pid: 100 + seed, nowMs: 1760000000000, rand: seed });
+  }
+
+  it("provisioning refuses an existing target without creating or dropping", async () => {
+    const name = fakeName(11);
+    const { admin, statements } = fakeAdmin([{ owner: "someone_else" }]);
+    await expect(provisionRedispatchDb(admin, fakeAmbient(), name)).rejects.toThrow(
+      `refusing to reuse existing database "${name}"`,
+    );
+    expect(statements).toHaveLength(1);
+    expect(statements[0]?.query ?? "").toContain("pg_database");
+    expect(statements.some((s) => /CREATE DATABASE/.test(s.query))).toBe(false);
+    expect(statements.some((s) => /DROP DATABASE/.test(s.query))).toBe(false);
+  });
+
+  it("provisioning validates the ambient database before any query", async () => {
+    const { admin, statements } = fakeAdmin([]);
+    await expect(
+      provisionRedispatchDb(admin, "postgres://evil@example.com:5432/postgres", fakeName(12)),
+    ).rejects.toThrow("refusing before connecting");
+    expect(statements).toHaveLength(0);
+  });
+
+  it("provisioning refuses an unowned target name before any query", async () => {
+    const { admin, statements } = fakeAdmin([]);
+    await expect(provisionRedispatchDb(admin, fakeAmbient(), "two_web_next")).rejects.toThrow(
+      "refusing to create an unguarded database",
+    );
+    expect(statements).toHaveLength(0);
+  });
+
+  it("provisioning creates a missing owned target exactly once", async () => {
+    const name = fakeName(13);
+    const { admin, statements } = fakeAdmin([]);
+    await expect(provisionRedispatchDb(admin, fakeAmbient(), name)).resolves.toBe(true);
+    expect(statements).toHaveLength(2);
+    expect(statements[0]?.query ?? "").toContain("pg_database");
+    expect(statements[1]?.query).toBe(`CREATE DATABASE "${name}"`);
+  });
+
+  it("teardown issues no DROP when this invocation created nothing", async () => {
+    const { admin, statements } = fakeAdmin([]);
+    await expect(teardownRedispatchDb(admin, fakeName(14), false)).resolves.toBe(false);
+    expect(statements).toHaveLength(0);
+  });
+
+  it("teardown drops exactly the created database once", async () => {
+    const name = fakeName(15);
+    const { admin, statements } = fakeAdmin([]);
+    await expect(teardownRedispatchDb(admin, name, true)).resolves.toBe(true);
+    expect(statements).toHaveLength(1);
+    expect(statements[0]?.query).toBe(`DROP DATABASE "${name}" WITH (FORCE)`);
   });
 
   it("teardown drops only the exact database this invocation created", () => {
