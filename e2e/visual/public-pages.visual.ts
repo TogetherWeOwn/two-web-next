@@ -2,7 +2,7 @@ import { expect, test } from "../fixtures";
 
 // Public pages only: no session, no writes. Server-rendered times depend on the
 // wall clock, so every <time> element is masked; everything else must match the
-// committed baseline within maxDiffPixelRatio (playwright.visual.config.ts).
+// committed baseline within maxDiffPixels (playwright.visual.config.ts).
 // Changing a baseline is a deliberate act: see docs/visual-regression.md.
 const ROUTES: Array<[name: string, path: string]> = [
   ["home", "/"],

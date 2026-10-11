@@ -23,7 +23,11 @@ export default defineConfig({
   snapshotPathTemplate: "{testDir}/__screenshots__/{arg}{ext}",
   expect: {
     toHaveScreenshot: {
-      maxDiffPixelRatio: 0.01,
+      // Absolute pixel budget, not a ratio: a ratio grows with page height
+      // (1% is ~15k px on event-desktop, ~55k px on privacy-desktop), so a
+      // vanished primary button (~8.5k px) still passes. 300 px keeps
+      // run-to-run noise passing while a hidden call-to-action fails.
+      maxDiffPixels: 300,
       animations: "disabled",
       caret: "hide",
       scale: "css",

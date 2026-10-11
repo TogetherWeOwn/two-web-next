@@ -13,10 +13,16 @@ with the committed baselines in `e2e/visual/__screenshots__/`.
 - **Stability:** `<time>` elements are masked (server-rendered times follow the
   wall clock), animations are disabled, and the caret is hidden. A route must
   return 200.
-- **Threshold:** `maxDiffPixelRatio: 0.01` per screenshot
-  (`playwright.visual.config.ts`). CI never rewrites an existing baseline
-  (`updateSnapshots: "missing"` only creates absent ones), and the job fails
-  while any generated baseline is uncommitted.
+- **Threshold:** `maxDiffPixels: 300` per screenshot
+  (`playwright.visual.config.ts`). An absolute budget, not a ratio: a ratio
+  grows with page height, so a vanished primary button still passes. CI never
+  rewrites an existing baseline (`updateSnapshots: "missing"` only creates
+  absent ones), and the job fails while any generated baseline is uncommitted.
+- **Runner pin:** `browser-smoke` runs on pinned `ubuntu-24.04` (not
+  `ubuntu-latest`) because body text uses the runner's system fonts. A runner
+  image bump or a Playwright bump (`@playwright/test` in `package.json`) can
+  shift text rendering, so either bump is expected to re-baseline through the
+  failure artifact in its own PR.
 
 ## When a diff is intentional
 

@@ -78,7 +78,11 @@ jobs:
     needs: scope
     # Drafts skip the 25-minute smoke; undrafting re-runs via ready_for_review.
     if: needs.scope.outputs.skip_e2e != 'true' && github.event.pull_request.draft != true
-    runs-on: ubuntu-latest
+    # Pinned for visual-regression stability: body text renders with the
+    # runner's system fonts, so a floating ubuntu-latest image change would
+    # shift every baseline with no code change. Bump deliberately and
+    # re-baseline in the same PR (docs/visual-regression.md).
+    runs-on: ubuntu-24.04
     timeout-minutes: 25
     services:
       postgres:
