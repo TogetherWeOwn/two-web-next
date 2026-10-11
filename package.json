@@ -49,7 +49,10 @@
     "check:worker-moderators": "node --import ./bin/ts-hook.mjs bin/check-moderators.mjs --config=wrangler.jsonc --require-configured",
     "check:worker-moderators-production": "node --import ./bin/ts-hook.mjs bin/check-moderators.mjs --config=wrangler.jsonc --env=production --require-configured",
     "smoke:internal-action": "node --import ./bin/ts-hook.mjs bin/internal-action-smoke.mjs",
-    "drill:internal-action": "node --import ./bin/ts-hook.mjs bin/internal-action-drill.mjs"
+    "drill:internal-action": "node --import ./bin/ts-hook.mjs bin/internal-action-drill.mjs",
+    "lighthouse:quality": "lhci autorun --config=ci/lighthouserc.quality.cjs",
+    "standards": "node ci/web-standards.mjs",
+    "standards:selftest": "node ci/web-standards.mjs --selftest && node ci/lighthouse-summary.mjs --selftest"
   },
   "dependencies": {
     "drizzle-orm": "^0.45.3",

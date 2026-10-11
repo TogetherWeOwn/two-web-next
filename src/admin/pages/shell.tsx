@@ -1,3 +1,4 @@
+import { raw } from "hono/html";
 // Admin page shell and shared helpers (split from pages.tsx; zero behavior change).
 // Shell/TableSortHeader/RsvpAction/Field/val are shared by every admin screen;
 // only the historic public names are re-exported through ../pages.
@@ -29,31 +30,34 @@ export const TableSortHeader: FC<{
 };
 
 export const Shell: FC<PropsWithChildren<{ title: string }>> = ({ title, children }) => (
-  <html lang="en">
-    <head>
-      <meta charset="utf-8" />
-      <meta name="viewport" content="width=device-width, initial-scale=1" />
-      <title>{title} — TWO admin</title>
-      <link rel="stylesheet" href="/styles.css" />
-    </head>
-    <body>
-      <SkipLink />
-      <header class="bar">
-        <a class="brand" href="/admin">
-          TWO admin
-        </a>
-        <nav aria-label="Administration">
-          <a href="/admin/events">Events</a> · <a href="/admin/featured">Featured</a> ·{" "}
-          <a href="/admin/join-attempts">Join attempts</a> ·{" "}
-          <a href="/admin/activity-log">Activity log</a> · <a href="/">Site</a>
-        </nav>
-      </header>
-      <main id="main" tabindex={-1}>
-        {children}
-      </main>
-      <footer>Together We Own · moderators only</footer>
-    </body>
-  </html>
+  <>
+    {raw("<!doctype html>")}
+    <html lang="en">
+      <head>
+        <meta charset="utf-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1" />
+        <title>{title} — TWO admin</title>
+        <link rel="stylesheet" href="/styles.css" />
+      </head>
+      <body>
+        <SkipLink />
+        <header class="bar">
+          <a class="brand" href="/admin">
+            TWO admin
+          </a>
+          <nav aria-label="Administration">
+            <a href="/admin/events">Events</a> · <a href="/admin/featured">Featured</a> ·{" "}
+            <a href="/admin/join-attempts">Join attempts</a> ·{" "}
+            <a href="/admin/activity-log">Activity log</a> · <a href="/">Site</a>
+          </nav>
+        </header>
+        <main id="main" tabindex={-1}>
+          {children}
+        </main>
+        <footer>Together We Own · moderators only</footer>
+      </body>
+    </html>
+  </>
 );
 
 export const ErrorPage: FC<{ heading: string; detail?: string }> = ({ heading, detail }) => (

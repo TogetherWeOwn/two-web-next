@@ -4,6 +4,7 @@ import { auditPaths } from "../ci/lighthouse-paths";
 
 const require = createRequire(import.meta.url);
 const { ci } = require("../ci/lighthouserc.cjs");
+const qualityBudget = require("../ci/quality-budget.json");
 const admission = require("../ci/lighthouse-admission.cjs");
 
 const origin = "http://127.0.0.1:8787";
@@ -66,7 +67,12 @@ describe("Lighthouse path inventory", () => {
   });
 
   it("leaves the budget thresholds unchanged for all paths", () => {
+    // The mobile performance category floor is the owner-approved web quality gate (ci/quality-budget.json).
     expect(ci.assert.assertions).toEqual({
+      "categories:performance": [
+        "error",
+        { minScore: qualityBudget.mobilePerformance, aggregationMethod: "median-run" },
+      ],
       "largest-contentful-paint": ["error", { maxNumericValue: 2000, aggregationMethod: "median" }],
       "cumulative-layout-shift": ["error", { maxNumericValue: 0.1, aggregationMethod: "median" }],
       "server-response-time": ["error", { maxNumericValue: 600, aggregationMethod: "median" }],

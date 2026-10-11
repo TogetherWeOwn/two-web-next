@@ -7,7 +7,8 @@ const A = "a".repeat(40);
 const B = "b".repeat(40);
 const TIP = "f".repeat(40);
 
-// runs: newest first, as the API returns them; jobs: run id -> staging-journeys conclusion.
+// runs: newest first, as the API returns them; jobs: run id -> staging-journeys conclusion, or
+// { journeys, quality } (quality defaults to success; null leaves the job out, like runs before the gate existed).
 function stub(runs, jobs) {
   return async (url) => {
     const { pathname, searchParams } = new URL(url);
@@ -24,11 +25,13 @@ function stub(runs, jobs) {
     }
     const id = pathname.match(/\/actions\/runs\/(\d+)\/jobs$/)?.[1];
     if (id) {
-      const conclusion = jobs[id];
-      return {
-        ok: true,
-        json: async () => ({ jobs: conclusion ? [{ name: "staging-journeys", conclusion }] : [] }),
-      };
+      const spec =
+        typeof jobs[id] === "object" && jobs[id] !== null ? jobs[id] : { journeys: jobs[id] };
+      const quality = "quality" in spec ? spec.quality : "success";
+      const list = [];
+      if (spec.journeys) list.push({ name: "staging-journeys", conclusion: spec.journeys });
+      if (quality) list.push({ name: "staging-quality / quality", conclusion: quality });
+      return { ok: true, json: async () => ({ jobs: list }) };
     }
     assert.fail(`unexpected ${pathname}`);
   };
@@ -91,4 +94,18 @@ test("deploy-production resolves through this script and gates the resolved DEPL
   );
   assert.match(workflow, /run: node ci\/resolve-promotion-sha\.mjs\n/);
   assert.ok(!workflow.includes("e2e-staging.yml/runs"), "no inline resolver left");
+});
+
+test("a deploy whose web quality gate failed is never promoted", async () => {
+  assert.equal(
+    await resolve([run(3, A), run(2, B)], {
+      3: { journeys: "success", quality: "failure" },
+      2: "success",
+    }),
+    B,
+  );
+});
+
+test("a deploy without the web quality gate (older runs) is not promotable", async () => {
+  assert.equal(await resolve([run(2, A)], { 2: { journeys: "success", quality: null } }), null);
 });
