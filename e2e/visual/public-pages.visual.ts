@@ -139,7 +139,9 @@ test.describe("event member states", () => {
       await expect(page.getByTestId("rsvp-paused")).toBeVisible();
       await expect(page.getByTestId("rsvp-going")).toHaveCount(0);
       await page.waitForLoadState("networkidle");
-      await expect(page).toHaveScreenshot(`event-paused-${viewport}.png`, {
+      // Soft: a desktop diff must not hide the mobile image, so one run
+      // yields both actual images for ci/visual-accept.mjs.
+      await expect.soft(page).toHaveScreenshot(`event-paused-${viewport}.png`, {
         fullPage: true,
         mask: [page.locator("time")],
       });
