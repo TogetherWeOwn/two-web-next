@@ -537,6 +537,7 @@ describe("PastEvents archive read deadline", () => {
     const snapshot = b.snapshot();
     b.fireTimers();
     await b.settle();
+    expect(b.requests[0]!.signal.aborted).toBe(true);
     expect(b.snapshot()).toEqual(snapshot);
     expect(b.live.feedback.textContent).toBe(PAST_EVENTS_COPY.failed);
     expect(b.live.root.attributes.has("aria-busy")).toBe(false);
@@ -568,6 +569,7 @@ describe("PastEvents archive read deadline", () => {
     expect(b.live.root.attributes.get("aria-busy")).toBe("true");
     b.fireTimers();
     await b.settle();
+    expect(b.requests[0]!.signal.aborted).toBe(true);
     expect(b.snapshot()).toEqual(snapshot);
     expect(b.live.feedback.textContent).toBe(PAST_EVENTS_COPY.failed);
     expect(b.live.root.attributes.has("aria-busy")).toBe(false);
