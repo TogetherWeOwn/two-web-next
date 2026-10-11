@@ -29,6 +29,28 @@ import {
 import type { MemberView } from "./store";
 import type { MemberStats } from "./stats";
 
+// Stable field/error ids for profile validation association.
+// The server `games` key maps to the `games_text` control; any other key is
+// global and stays in the summary without a fabricated control link.
+export const PROFILE_FIELD_IDS = {
+  bio: "profile-bio",
+  games_text: "profile-games-text",
+  timezone: "profile-timezone",
+} as const;
+type ProfileField = keyof typeof PROFILE_FIELD_IDS;
+const PROFILE_ERROR_IDS: Record<ProfileField, string> = {
+  bio: "profile-bio-error",
+  games_text: "profile-games-text-error",
+  timezone: "profile-timezone-error",
+};
+const profileFieldForErrorKey = (key: string): ProfileField | null =>
+  key === "bio"
+    ? "bio"
+    : key === "games" || key === "games_text"
+      ? "games_text"
+      : key === "timezone"
+        ? "timezone"
+        : null;
 const statsLabel = (key: string) =>
   key.replace(/[_-]+/g, " ").replace(/\b\w/g, (letter) => letter.toUpperCase());
 // Legacy parity: the avatar fallback is the first two code points, uppercased.
@@ -270,9 +292,16 @@ export const ProfilePage: FC<{
             {errors && Object.keys(errors).length > 0 ? (
               <div role="alert" tabindex={-1} data-testid={PROFILE_ERROR_TESTID}>
                 <ul>
-                  {Object.values(errors).map((e) => (
-                    <li>{e}</li>
-                  ))}
+                  {Object.entries(errors).map(([key, message]) => {
+                    const field = profileFieldForErrorKey(key);
+                    return field ? (
+                      <li>
+                        <a href={`#${PROFILE_FIELD_IDS[field]}`}>{message}</a>
+                      </li>
+                    ) : (
+                      <li>{message}</li>
+                    );
+                  })}
                 </ul>
               </div>
             ) : null}
@@ -281,18 +310,57 @@ export const ProfilePage: FC<{
               {/* Native maxlength counts UTF-16 units; code-point limits belong to the validators. */}
               <label class="profile-field">
                 Bio{" "}
-                <textarea name="bio" rows={4}>
+                <textarea
+                  id={PROFILE_FIELD_IDS.bio}
+                  name="bio"
+                  rows={4}
+                  aria-invalid={errors?.bio ? "true" : undefined}
+                  aria-describedby={errors?.bio ? PROFILE_ERROR_IDS.bio : undefined}
+                >
                   {form.bio}
                 </textarea>
+                {errors?.bio ? (
+                  <p id={PROFILE_ERROR_IDS.bio} class="error">
+                    {errors.bio}
+                  </p>
+                ) : null}
               </label>
               <label class="profile-field">
                 Games (one per line){" "}
-                <textarea name="games_text" rows={4}>
+                <textarea
+                  id={PROFILE_FIELD_IDS.games_text}
+                  name="games_text"
+                  rows={4}
+                  aria-invalid={errors && (errors.games ?? errors.games_text) ? "true" : undefined}
+                  aria-describedby={
+                    errors && (errors.games ?? errors.games_text)
+                      ? PROFILE_ERROR_IDS.games_text
+                      : undefined
+                  }
+                >
                   {form.games_text}
                 </textarea>
+                {errors && (errors.games ?? errors.games_text) ? (
+                  <p id={PROFILE_ERROR_IDS.games_text} class="error">
+                    {errors.games ?? errors.games_text}
+                  </p>
+                ) : null}
               </label>
               <label class="profile-field">
-                Timezone <input name="timezone" value={form.timezone} placeholder="Europe/London" />
+                Timezone{" "}
+                <input
+                  id={PROFILE_FIELD_IDS.timezone}
+                  name="timezone"
+                  value={form.timezone}
+                  placeholder="Europe/London"
+                  aria-invalid={errors?.timezone ? "true" : undefined}
+                  aria-describedby={errors?.timezone ? PROFILE_ERROR_IDS.timezone : undefined}
+                />
+                {errors?.timezone ? (
+                  <p id={PROFILE_ERROR_IDS.timezone} class="error">
+                    {errors.timezone}
+                  </p>
+                ) : null}
               </label>
               <div aria-hidden="true" class="sr-only">
                 <label>
