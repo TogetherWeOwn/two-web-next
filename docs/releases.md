@@ -32,6 +32,9 @@ release freeze.
   is above the previous tag. It is set to `1.0.0`, so the production cutover
   promote (the first production deploy) cuts `v1.0.0`; once `v1.0.0` exists it
   is ignored and normal bumps resume (remove it in any later PR).
+- Note sections are the `changelog-sections` entries: `perf` and `revert` go
+  under Changed, `feat` under Added, and `fix` and `security` under Fixed.
+  `security` is a patch bump, like `fix`.
 - Before `1.0.0`: `feat!` / `BREAKING CHANGE` and `feat` bump the minor version;
   everything else bumps the patch version. From `1.0.0` onward: breaking bumps
   major, `feat` bumps minor, anything else bumps patch.
