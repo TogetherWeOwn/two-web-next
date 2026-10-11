@@ -58,6 +58,31 @@ export function assertProductionProtection(environment, { autoApprove = false } 
 }
 
 export const stagingEvidenceWorkflows = ["deploy.yml", "e2e-staging.yml"];
+// The web quality gate is a reusable-workflow call, so its job is "<caller> / <called job>".
+export const stagingQualityJob = "staging-quality / quality";
+export const stagingQualitySteps = [
+  "Lighthouse performance budgets (mobile, ci/lighthouserc.cjs)",
+  "Lighthouse quality scores (desktop, categories vs ci/quality-budget.json)",
+];
+
+// A green quality job with a skipped or failed Lighthouse step has not executed the gate.
+function requireExecutedStagingQuality(jobs, runId) {
+  const quality = jobs.filter((job) => job.name === stagingQualityJob);
+  if (quality.length !== 1) {
+    throw new Error(
+      `e2e-staging.yml run ${runId} has missing or ambiguous staging-quality evidence`,
+    );
+  }
+  const [job] = quality;
+  const executed = stagingQualitySteps.every((name) =>
+    (job.steps ?? []).some((step) => step.name === name && step.conclusion === "success"),
+  );
+  if (job.conclusion !== "success" || !executed) {
+    throw new Error(
+      `e2e-staging.yml run ${runId} did not execute and pass the staging quality gate`,
+    );
+  }
+}
 
 // Automated approval evidence: for each staging workflow, the most recent run on
 // the deployment SHA must be a completed success. An older success does not
@@ -119,6 +144,7 @@ export async function requireStagingEvidence(
       if (jobs.find((job) => job.name === "staging-journeys")?.conclusion !== "success") {
         throw new Error(`e2e-staging.yml run ${latest.id} did not pass staging-journeys`);
       }
+      requireExecutedStagingQuality(jobs, latest.id);
     }
     evidence.push({ workflow: file, runId: latest.id });
   }
