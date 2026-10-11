@@ -48,3 +48,13 @@ export function severityFor(kind, detail = "") {
     return "medium";
   return "low";
 }
+
+/** A Markdown table cell: backslash, pipe and backtick escaped, newlines flattened, length capped. */
+export function mdCell(value, max = 120) {
+  return String(value)
+    .slice(0, max)
+    .replace(/[\r\n]+/g, " ")
+    .replace(/\\/g, "\\\\")
+    .replace(/\|/g, "\\|")
+    .replace(/`/g, "\\`");
+}

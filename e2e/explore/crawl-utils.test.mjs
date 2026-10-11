@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { crawlablePath, EXPLORE_ORIGIN, findingId, severityFor } from "./crawl-utils.mjs";
+import { crawlablePath, EXPLORE_ORIGIN, findingId, mdCell, severityFor } from "./crawl-utils.mjs";
 
 const from = `${EXPLORE_ORIGIN}/events`;
 
@@ -47,4 +47,9 @@ test("severity: 5xx and page errors are high, 404 medium, console low", () => {
   assert.equal(severityFor("pageerror"), "high");
   assert.equal(severityFor("status", "404"), "medium");
   assert.equal(severityFor("console"), "low");
+});
+
+test("markdown cells escape backslash before pipe and backtick, and flatten newlines", () => {
+  assert.equal(mdCell("a\\|b`c\nd"), "a\\\\\\|b\\`c d");
+  assert.equal(mdCell("x".repeat(200)).length, 120);
 });

@@ -2,7 +2,7 @@ import { mkdirSync, appendFileSync, writeFileSync } from "node:fs";
 import AxeBuilder from "@axe-core/playwright";
 import { expect, test, type Page } from "@playwright/test";
 import { installReadOnlyGuard } from "../watch-guard.mjs";
-import { crawlablePath, EXPLORE_ORIGIN, findingId, severityFor } from "./crawl-utils.mjs";
+import { crawlablePath, EXPLORE_ORIGIN, findingId, mdCell, severityFor } from "./crawl-utils.mjs";
 
 // Guest explorer (docs/explore-staging.md): breadth-first crawl of the staging
 // Worker at desktop and mobile widths, recording breakage as findings in
@@ -90,7 +90,7 @@ test("explore staging as a guest", async ({ browser }) => {
       .sort((a, b) => a.severity.localeCompare(b.severity))
       .map(
         (f) =>
-          `| ${f.severity} | ${f.kind} | ${f.viewport} | \`${f.path}\` | ${f.detail.slice(0, 120).replace(/\|/g, "\\|")} |`,
+          `| ${f.severity} | ${f.kind} | ${f.viewport} | ${mdCell(f.path)} | ${mdCell(f.detail)} |`,
       );
     appendFileSync(
       process.env.GITHUB_STEP_SUMMARY,
