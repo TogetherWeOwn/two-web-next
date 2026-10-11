@@ -170,7 +170,7 @@ describe("handleCallInternalAction retry admission (TOG-11629)", () => {
   });
 });
 
-describe("handleSyncEvent retry admission (TOG-21876)", () => {
+describe("handleSyncEvent retry admission", () => {
   const clock = Date.parse("2026-10-11T12:00:00Z");
   const now = () => new Date(clock);
   const msg = { eventKey: "event-key", idempotencyKey: "00000000-0000-4000-8000-000000000001" };
