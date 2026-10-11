@@ -43,7 +43,14 @@ export async function prepareAuthStatus(
 }
 
 export function clearAuthStatus(c: Ctx): void {
-  deleteCookie(c, AUTH_STATUS_COOKIE, { path: "/", secure: true });
+  // Mirror OPTIONS (minus maxAge): a clearing Set-Cookie without
+  // HttpOnly/SameSite is flagged by scanners (ZAP 10010/10054).
+  deleteCookie(c, AUTH_STATUS_COOKIE, {
+    path: "/",
+    secure: true,
+    httpOnly: true,
+    sameSite: "Lax",
+  });
 }
 
 export async function authStatus(c: Ctx, storeFor: () => Promise<SessionStore>): Promise<Response> {

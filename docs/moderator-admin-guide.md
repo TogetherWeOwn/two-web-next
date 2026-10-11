@@ -50,7 +50,7 @@ production-looking ones—require `--target production`. See [the runbook proced
 ## Quarterly moderator access review (role-audit half)
 
 Once a quarter, pair this read-only comparison with the
-[revoke-command half](runbook.md#quarterly-moderator-access-review-revoke-command-half):
+[quarterly review](runbook.md#quarterly-moderator-access-review):
 audit first to find drift, then revoke app-only sessions, then re-run to confirm
 clean. An authorized operator runs the command and builds both ID lists with
 the read-only queries in [the cutover checklist](cutover-check.md#moderator-role-audit-w16-pre-flip):
@@ -58,8 +58,8 @@ a read-only SELECT over live `web_sessions` for the app set, and a paginated
 guild-members read filtered against `DISCORD_MODERATOR_ROLE_IDS` for the
 Discord set. Moderators never supply the lists and never paste member
 identifiers into public channels. The app set sees only sessions live in the
-120-minute sliding TTL, so a clean re-run needs every Discord moderator signed
-in during that window. Treat `app-moderators.txt`, `discord-moderators.txt`,
+120-minute sliding TTL, so expect `discord-only` for moderators not signed in
+during that window; close on `app-only` = 0 per the runbook. Treat `app-moderators.txt`, `discord-moderators.txt`,
 and `members.jsonl` as member data and `discord-auth.conf` as a credential:
 run the recipe from a scratch directory outside the checkout and keep all
 four files out of the repo. Delete them after the run:
@@ -82,7 +82,7 @@ IDs. Exit codes:
 | Exit | Meaning | Response |
 |---|---|---|
 | 0 | Sets match (empty on both sides is a clean pass) | Record the clean result |
-| 1 | Drift: the sets differ | Sign in each discord-only moderator, clear app-only access with the revoke procedure above, then re-run before relying on the result |
+| 1 | Drift: the sets differ | Record `discord-only` as information; clear app-only access with the revoke procedure above, then re-run until `app-only` is 0 |
 | 2 | Usage or malformed input (missing side, both sources for one side, unknown flag, bad file, non-snowflake ID) | Fix the invocation or input, then re-run |
 
 `discord-only` means the person has the Discord role but no live app session;
@@ -94,7 +94,7 @@ Keep evidence counts-only: the text report prints exact counts plus at most 20
 IDs per side (`…and N more` beyond that), and `--json` reports exact
 `discordCount`/`appCount` with truncated `shown` lists and `omitted` counts.
 Record the review date, the counts, the outcome, and the follow-up actions in
-the private review record. Keep the ID lists there too, never in public text.
+the private review record. Keep ID lists, member identifiers, database URLs, tokens, and secrets out of the record and all public text.
 
 ## Auth-wall probe (staging only)
 
@@ -466,7 +466,9 @@ For maintainers checking this guide:
 
 - [Admin routes](../src/admin/routes.tsx): complete route inventory and form actions.
 - [Admin pages](../src/admin/pages.tsx), [validation](../src/admin/validation.ts),
-  [store](../src/admin/store.ts), [recurrence](../src/admin/recurrence.ts),
+  [store](../src/admin/store.ts) ([event writes](../src/admin/store-event-writes.ts),
+  [event reads](../src/admin/store-event-reads.ts),
+  [access log](../src/admin/store-access.ts)), [recurrence](../src/admin/recurrence.ts),
   [event-list query](../src/admin/event-list.ts), [table queries](../src/admin/table-list.ts),
   [reads](../src/admin/reads.ts) and [join-funnel widget](../src/admin/join-funnel.ts):
   labels, limits, transitions, series, filters, roster, pagination and cached counts.

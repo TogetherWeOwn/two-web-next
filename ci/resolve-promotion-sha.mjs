@@ -52,7 +52,15 @@ export async function resolvePromotionSha({ repository, token, fetchImpl = fetch
       decided.add(sha);
       if (run.conclusion !== "success") continue;
       const { jobs = [] } = await get(`/actions/runs/${run.id}/jobs?per_page=100`);
-      if (jobs.find((job) => job.name === "staging-journeys")?.conclusion === "success") return sha;
+      // Both gates must have passed on this deploy: journeys and the web quality gate (a job called through a
+      // reusable workflow is named "<caller job> / <job>").
+      const passed = (name) =>
+        jobs.some(
+          (job) =>
+            (job.name === name || job.name.startsWith(`${name} / `)) &&
+            job.conclusion === "success",
+        );
+      if (passed("staging-journeys") && passed("staging-quality")) return sha;
     }
   }
   return null;
@@ -69,7 +77,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
       }));
     if (!shaPattern.test(sha ?? "")) {
       throw new Error(
-        "No commit to promote: set the sha input, or wait for a deploy whose staging-journeys pass",
+        "No commit to promote: set the sha input, or wait for a deploy whose staging-journeys and staging-quality pass",
       );
     }
     console.log(

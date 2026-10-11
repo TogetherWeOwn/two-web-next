@@ -6,11 +6,17 @@ import type { Db } from "../src/db/index";
 import type { Env } from "../src/env";
 import { __resetAnonEventCacheForTests } from "../src/events/anon-cache";
 import { registerEventRoutes } from "../src/events/routes";
-import { listCalendarPast, listUpcoming, type PublicEvent } from "../src/events/reads";
+import {
+  listCalendarPast,
+  listUpcoming,
+  listUpcomingForMonth,
+  type PublicEvent,
+} from "../src/events/reads";
 
 vi.mock("../src/events/reads", async (original) => ({
   ...(await original<typeof import("../src/events/reads")>()),
   listUpcoming: vi.fn(),
+  listUpcomingForMonth: vi.fn(),
   listCalendarPast: vi.fn(),
   persistedDiscordIds: vi.fn(async () => new Set<string>()),
 }));
@@ -100,7 +106,13 @@ beforeEach(() => {
   // One shared fake env serves every test while the mocks vary per test, so
   // drop shared entries: each test asserts a fresh render contract.
   __resetAnonEventCacheForTests();
-  vi.mocked(listUpcoming).mockResolvedValue([eventRow(1, new Date("2030-01-12T20:00:00Z"))]);
+  vi.mocked(listUpcoming).mockResolvedValue({
+    rows: [eventRow(1, new Date("2030-01-12T20:00:00Z"))],
+    hasMore: false,
+    totalPages: 1,
+    total: 1,
+  });
+  vi.mocked(listUpcomingForMonth).mockResolvedValue([]);
   vi.mocked(listCalendarPast).mockResolvedValue([eventRow(2, new Date("2020-01-12T20:00:00Z"))]);
   vi.spyOn(console, "info").mockImplementation(() => {});
 });
@@ -167,7 +179,12 @@ describe("calendar native search state", () => {
   it("does not open the past drawer just because a search reveals past matches", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-10-01T12:00:00Z"));
-    vi.mocked(listUpcoming).mockResolvedValue([]);
+    vi.mocked(listUpcoming).mockResolvedValue({
+      rows: [],
+      hasMore: false,
+      totalPages: 0,
+      total: 0,
+    });
     const html = await page("/events?q=game&month=2030-02");
     expect(html).toContain('data-testid="events-past-list"');
     expect(nativeSearch(html, "").params.has("past")).toBe(false);
@@ -181,7 +198,12 @@ describe("calendar native search state", () => {
   it("defaults to the current month when searching an empty past-enabled calendar", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-10-01T12:00:00Z"));
-    vi.mocked(listUpcoming).mockResolvedValue([]);
+    vi.mocked(listUpcoming).mockResolvedValue({
+      rows: [],
+      hasMore: false,
+      totalPages: 0,
+      total: 0,
+    });
     vi.mocked(listCalendarPast).mockResolvedValue([]);
     const html = await page("/events?view=calendar&month=2030-02&past=1");
     expect(calendarState(await page(nativeSearch(html, "").url))).toEqual({

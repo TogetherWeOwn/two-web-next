@@ -1,3 +1,4 @@
+import { raw } from "hono/html";
 import type { FC, PropsWithChildren } from "hono/jsx";
 import type { Session } from "./env";
 import type { JoinResult } from "./return-journey";
@@ -20,67 +21,75 @@ export const Layout: FC<
     theme?: "home" | "event" | "content" | "join" | "profile" | "schedule";
   }>
 > = ({ title, canonical, shareTitle, shareDescription, robots, theme, children }) => (
-  <html lang="en">
-    <head>
-      <meta charset="utf-8" />
-      <meta name="viewport" content="width=device-width, initial-scale=1" />
-      <meta name="theme-color" content="#151720" />
-      <link rel="manifest" href="/site.webmanifest" />
-      <link rel="icon" href="/icons/icon-192.png" type="image/png" sizes="192x192" />
-      <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png" sizes="180x180" />
-      {robots ? <meta name="robots" content={robots} /> : null}
-      <title>{title}</title>
-      <meta
-        name="description"
-        content={
-          shareDescription || "Together We Own: a close-knit adult gaming community, founded 1998."
+  <>
+    {raw("<!doctype html>")}
+    <html lang="en">
+      <head>
+        <meta charset="utf-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1" />
+        <meta name="theme-color" content="#151720" />
+        <link rel="manifest" href="/site.webmanifest" />
+        <link rel="icon" href="/icons/icon-192.png" type="image/png" sizes="192x192" />
+        <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png" sizes="180x180" />
+        {robots ? <meta name="robots" content={robots} /> : null}
+        <title>{title}</title>
+        <meta
+          name="description"
+          content={
+            shareDescription ||
+            "Together We Own: a close-knit adult gaming community, founded 1998."
+          }
+        />
+        {canonical ? (
+          <>
+            <link rel="canonical" href={canonical} />
+            <meta property="og:type" content="website" />
+            <meta property="og:site_name" content={SITE_NAME} />
+            <meta property="og:url" content={canonical} />
+            <meta property="og:title" content={shareTitle ?? title} />
+            {shareDescription ? (
+              <meta property="og:description" content={shareDescription} />
+            ) : null}
+            <meta name="twitter:card" content="summary" />
+            <meta name="twitter:title" content={shareTitle ?? title} />
+            {shareDescription ? (
+              <meta name="twitter:description" content={shareDescription} />
+            ) : null}
+          </>
+        ) : null}
+        <link
+          rel="alternate"
+          type="application/rss+xml"
+          title={`${SITE_NAME} Events`}
+          href="/events.rss"
+        />
+        <link rel="stylesheet" href="/styles.css" />
+        {theme ? (
+          <>
+            <link
+              rel="preload"
+              href="/fonts/display-latin-700.woff2"
+              as="font"
+              type="font/woff2"
+              crossorigin="anonymous"
+            />
+            <link rel="stylesheet" href="/theme.css" />
+            {theme === "event" ? <link rel="stylesheet" href="/event-theme.css" /> : null}
+            {theme === "profile" ? <link rel="stylesheet" href="/profile-theme.css" /> : null}
+            {theme === "schedule" ? <link rel="stylesheet" href="/schedule-theme.css" /> : null}
+          </>
+        ) : null}
+      </head>
+      <body
+        class={
+          theme ? `base-theme ${theme === "home" ? "homepage-theme" : `${theme}-theme`}` : undefined
         }
-      />
-      {canonical ? (
-        <>
-          <link rel="canonical" href={canonical} />
-          <meta property="og:type" content="website" />
-          <meta property="og:site_name" content={SITE_NAME} />
-          <meta property="og:url" content={canonical} />
-          <meta property="og:title" content={shareTitle ?? title} />
-          {shareDescription ? <meta property="og:description" content={shareDescription} /> : null}
-          <meta name="twitter:card" content="summary" />
-          <meta name="twitter:title" content={shareTitle ?? title} />
-          {shareDescription ? <meta name="twitter:description" content={shareDescription} /> : null}
-        </>
-      ) : null}
-      <link
-        rel="alternate"
-        type="application/rss+xml"
-        title={`${SITE_NAME} Events`}
-        href="/events.rss"
-      />
-      <link rel="stylesheet" href="/styles.css" />
-      {theme ? (
-        <>
-          <link
-            rel="preload"
-            href="/fonts/display-latin-700.woff2"
-            as="font"
-            type="font/woff2"
-            crossorigin="anonymous"
-          />
-          <link rel="stylesheet" href="/theme.css" />
-          {theme === "event" ? <link rel="stylesheet" href="/event-theme.css" /> : null}
-          {theme === "profile" ? <link rel="stylesheet" href="/profile-theme.css" /> : null}
-          {theme === "schedule" ? <link rel="stylesheet" href="/schedule-theme.css" /> : null}
-        </>
-      ) : null}
-    </head>
-    <body
-      class={
-        theme ? `base-theme ${theme === "home" ? "homepage-theme" : `${theme}-theme`}` : undefined
-      }
-    >
-      <SkipLink />
-      {children}
-    </body>
-  </html>
+      >
+        <SkipLink />
+        {children}
+      </body>
+    </html>
+  </>
 );
 
 type HeaderCta = { href: string; label: string };

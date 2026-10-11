@@ -87,7 +87,7 @@ function event(overrides: Partial<PublicEvent> = {}): PublicEvent {
   };
 }
 
-const listState: CalendarState = { view: "list", month: "2030-01", q: "", past: true };
+const listState: CalendarState = { view: "list", month: "2030-01", q: "", past: true, page: 1 };
 const pastEvent = () =>
   event({
     id: 2,
@@ -103,6 +103,7 @@ const calendarProps = (state: CalendarState) => ({
   past: [pastEvent()],
   zone: "UTC",
   now: NOW,
+  totalPages: 1,
   emptyState: null as CalendarEmptyState,
   discordFailed: false,
   member: false,

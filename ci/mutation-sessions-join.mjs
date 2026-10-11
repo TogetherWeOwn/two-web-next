@@ -1,9 +1,11 @@
 // Nightly mutation signal for the auth blast radius: `src/sessions.ts`,
-// `src/join/service.ts`, `src/join/route.ts`, and RSVP write admission
-// (member-denied matrix in routes-rsvp, throttle/waitlist/capacity in rsvp.ts).
+// `src/join/service.ts`, `src/join/route.ts`, RSVP write admission
+// (member-denied matrix in routes-rsvp, throttle/waitlist/capacity in rsvp.ts),
+// and admin write admission (`src/admin/guard.ts`, `src/admin/writeback.ts`).
 //
 // Each mutant weakens exactly one auth check (expired-session blindness, lost
-// revocation, throttle/review bypass, forged join outcomes). The runner applies
+// revocation, throttle/review bypass, forged join outcomes, admin guard bypass,
+// refused write-back dispatched). The runner applies
 // one mutant at a time to the working tree, runs the hermetic DB-free kill
 // suite, then restores the file byte-for-byte (hash-verified). A mutant the
 // suite fails to kill is a coverage gap, not a test failure.
@@ -45,6 +47,8 @@ const KILL_SUITE = [
   "test/rsvp-member-denied.test.ts",
   "test/rsvp-throttle-denied.test.ts",
   "test/rsvp-waitlist-admission.test.ts",
+  "test/admin-write-admission.test.ts",
+  "test/admin-writeback-refusal.test.ts",
 ];
 
 const DB_URL_VARS = ["DATABASE_URL", "AUDIT_IMPORT_TEST_DATABASE_URL", "LEGACY_DATABASE_URL"];
@@ -184,6 +188,20 @@ const MUTANTS = [
     find: 'status === "going" && existing?.status !== "going" ? "waitlisted" : status;',
     replace: 'status === "going" && existing?.status !== "going" ? status : status;',
   },
+  {
+    id: "A1-guard-bypass-admits-member",
+    file: "src/admin/guard.ts",
+    note: "admin moderator gate: any signed-in session is admitted to admin writes (write admission)",
+    find: "if (row?.moderator) actor = { id: row.userId, username: row.username };",
+    replace: "if (row) actor = { id: row.userId, username: row.username };",
+  },
+  {
+    id: "A2-refusal-dispatched-as-published",
+    file: "src/admin/writeback.ts",
+    note: "refused (draft) write-back stays suppressed: it is forced onto the published carrier",
+    find: "await enqueueEventSync(env, wb.eventKey, wb.status, requestId);",
+    replace: 'await enqueueEventSync(env, wb.eventKey, "published", requestId);',
+  },
 ];
 
 function sha(text) {
@@ -270,7 +288,7 @@ export function renderReport({ sha: headSha, startedAt, results }) {
   const survived = results.filter((r) => r.status === "survived");
   const stale = results.filter((r) => r.status !== "killed" && r.status !== "survived");
   const lines = [
-    "# Mutation report: sessions + join + rsvp (nightly, non-blocking)",
+    "# Mutation report: sessions + join + rsvp + admin (nightly, non-blocking)",
     "",
     `- head: ${headSha}`,
     `- started: ${startedAt}`,
@@ -360,7 +378,7 @@ export function run(root, kill = defaultKill) {
   const stale = results.filter((r) => r.status !== "killed" && r.status !== "survived");
   const survivedRows = survived(results);
   console.log(
-    `mutation sessions+join+rsvp: ${results.length - survivedRows.length - stale.length}/${results.length} killed.`,
+    `mutation sessions+join+rsvp+admin: ${results.length - survivedRows.length - stale.length}/${results.length} killed.`,
   );
   console.log(`report: artifacts/mutation-sessions-join/report.{json,md}`);
   for (const r of [...survivedRows, ...stale])

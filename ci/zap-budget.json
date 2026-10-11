@@ -1,5 +1,5 @@
 {
-  "maxMedium": null,
-  "maxLow": null,
+  "maxMedium": 4,
+  "maxLow": 2,
   "ignore": []
 }

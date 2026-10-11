@@ -29,6 +29,14 @@ import {
   EVENTS_LOADING_COPY,
   EVENTS_LOADING_ROWS,
   EVENTS_LOADING_TESTID,
+  EVENTS_OUT_OF_RANGE_TESTID,
+  EVENTS_PAGER_LABEL,
+  EVENTS_PAGER_NEXT_COPY,
+  EVENTS_PAGER_NEXT_TESTID,
+  EVENTS_PAGER_PREV_COPY,
+  EVENTS_PAGER_PREV_TESTID,
+  EVENTS_PAGER_STATUS_TESTID,
+  EVENTS_PAGER_TESTID,
   EVENTS_PAST_ARCHIVE_LINK_TESTID,
   EVENTS_PAST_LIST_HEADING,
   EVENTS_PAST_LIST_TESTID,
@@ -55,6 +63,7 @@ import {
   EVENT_DRAFT_TESTID,
   WEEKDAY_HEADINGS,
   addCalendarMonth,
+  calendarJumpUrl,
   calendarMonthLabel,
   calendarSearching,
   calendarShowingPast,
@@ -66,6 +75,8 @@ import {
   gridTitle,
   monthGrid,
   transientEventKey,
+  upcomingEventsOutOfRangeCopy,
+  upcomingEventsPageStatusCopy,
   wallDateIso,
   wallTimeHm,
   type CalendarDay,
@@ -293,10 +304,7 @@ const MonthGrid: FC<{ state: CalendarState; weeks: CalendarDay<CalRow>[][]; zone
                   <ul>
                     {day.events.map((e) => (
                       <li>
-                        <a
-                          href={`${calendarUrl({ ...state, view: "list" })}#event-${rowKey(e)}`}
-                          data-cal-jump
-                        >
+                        <a href={calendarJumpUrl(state.past, rowKey(e))} data-cal-jump>
                           {wallTimeHm(e.startsAt, rowZone(e, zone))} {gridTitle(rowTitle(e))}
                         </a>
                       </li>
@@ -321,12 +329,26 @@ const MonthGrid: FC<{ state: CalendarState; weeks: CalendarDay<CalRow>[][]; zone
  * lines, the search input, skeleton and feedback stay outside swapped zones —
  * the input must never be re-created mid-typing.
  */
+/** A pager turn: a real anchor so page turns work without JavaScript and the island binder upgrades them to fragment swaps. */
+const PagerTurn: FC<{ state: CalendarState; page: number; testid: string; copy: string }> = ({
+  state,
+  page,
+  testid,
+  copy,
+}) => (
+  <a href={calendarUrl({ ...state, page })} data-testid={testid}>
+    {copy}
+  </a>
+);
+
 export const EventsCalendarPage: FC<{
   state: CalendarState;
   upcoming: CalRow[];
   past: PublicEvent[];
   zone: string;
   now: Date;
+  /** Upcoming-list pages; the month grid is month-scoped and ignores it. */
+  totalPages: number;
   emptyState: CalendarEmptyState;
   discordFailed: boolean;
   member: boolean;
@@ -334,6 +356,10 @@ export const EventsCalendarPage: FC<{
   appUrl: string;
   /** Rooted path the guest sign-in link carries as ?next= (null = bare link). */
   loginReturnTo?: string | null;
+  /** In-body robots directive (survives the anonymous shared entry, where the
+      response header is dropped on a cache hit): set for paged turns, card
+      jumps and searches, like the past archive's always-noindex pages. */
+  robots?: string;
   /** One-shot join confirmation when this page is the join landing (TOG-10356). */
   joinResult?: JoinResult | null;
 }> = ({
@@ -342,20 +368,26 @@ export const EventsCalendarPage: FC<{
   past,
   zone,
   now,
+  totalPages,
   emptyState,
   discordFailed,
   member,
   inviteUrl,
   appUrl,
   loginReturnTo = null,
+  robots,
   joinResult = null,
 }) => {
   const searching = calendarSearching(state);
   const showPast = calendarShowingPast(state);
   const hasVisibleResults = upcoming.length > 0 || (showPast && past.length > 0);
+  // A page past the end renders an out-of-range note with turns back into the
+  // schedule — like the past archive — never a "never scheduled" state and
+  // never a search miss for matches sitting on another page.
+  const outOfRange = state.view === "list" && upcoming.length === 0 && totalPages > 0;
   // An error state suppresses the miss block: a failed read must never read
   // as "no matches" (contract: error beats everything, including a search).
-  const searchMiss = searching && !hasVisibleResults && emptyState === null;
+  const searchMiss = searching && !hasVisibleResults && emptyState === null && !outOfRange;
   const url = calendarUrl(state);
   const byDay = new Map<string, CalRow[]>();
   for (const e of [...upcoming, ...(showPast ? past : [])]) {
@@ -370,6 +402,7 @@ export const EventsCalendarPage: FC<{
       title="Events"
       canonical={canonicalUrl(appUrl, "/events")}
       description="Game nights, tournaments and whatever else the community puts on."
+      robots={robots}
       member={member}
       loginReturnTo={loginReturnTo}
     >
@@ -407,9 +440,12 @@ export const EventsCalendarPage: FC<{
         <p role="status" class="sr-only" data-testid={EVENTS_VIEW_STATUS_TESTID}>
           {eventsViewStatusCopy(state.view)}
         </p>
+        {/* An out-of-range search page still announces a hit: its matches sit
+            on another page, so "nothing matches" would be wrong and the miss
+            block stays hidden for the same reason (see searchMiss above). */}
         <p role="status" class="sr-only" data-testid={EVENTS_SEARCH_STATUS_TESTID}>
           {searching && emptyState !== "error"
-            ? hasVisibleResults
+            ? hasVisibleResults || outOfRange
               ? eventsSearchHitCopy(state.q)
               : eventsSearchMissCopy(state.q)
             : ""}
@@ -497,8 +533,13 @@ export const EventsCalendarPage: FC<{
             <EmptyGap past={past} zone={zone} />
           ) : null}
 
-          {emptyState === null && hasVisibleResults && state.view === "list" ? (
+          {emptyState === null && (hasVisibleResults || outOfRange) && state.view === "list" ? (
             <div>
+              {outOfRange ? (
+                <p role="status" data-testid={EVENTS_OUT_OF_RANGE_TESTID}>
+                  {upcomingEventsOutOfRangeCopy(state.page, totalPages)}
+                </p>
+              ) : null}
               <h2 class="sr-only">{EVENTS_LIST_HEADING_SR}</h2>
               <ul data-testid={EVENTS_LIST_TESTID}>
                 {upcoming.map((e) => (
@@ -512,6 +553,32 @@ export const EventsCalendarPage: FC<{
                   />
                 ))}
               </ul>
+              {totalPages > 1 || outOfRange ? (
+                <nav aria-label={EVENTS_PAGER_LABEL} data-testid={EVENTS_PAGER_TESTID}>
+                  {state.page > 1 ? (
+                    <PagerTurn
+                      state={state}
+                      page={outOfRange ? Math.min(state.page - 1, totalPages) : state.page - 1}
+                      testid={EVENTS_PAGER_PREV_TESTID}
+                      copy={EVENTS_PAGER_PREV_COPY}
+                    />
+                  ) : null}{" "}
+                  <span role="status" data-testid={EVENTS_PAGER_STATUS_TESTID}>
+                    {upcomingEventsPageStatusCopy(
+                      Math.min(state.page, Math.max(totalPages, 1)),
+                      totalPages,
+                    )}
+                  </span>{" "}
+                  {state.page < totalPages ? (
+                    <PagerTurn
+                      state={state}
+                      page={state.page + 1}
+                      testid={EVENTS_PAGER_NEXT_TESTID}
+                      copy={EVENTS_PAGER_NEXT_COPY}
+                    />
+                  ) : null}
+                </nav>
+              ) : null}
               {showPast && past.length > 0 ? (
                 <div>
                   <h2>{EVENTS_PAST_LIST_HEADING}</h2>
@@ -542,7 +609,13 @@ export const EventsCalendarPage: FC<{
             </div>
           ) : null}
 
-          {emptyState === null && hasVisibleResults && state.view === "calendar" ? (
+          {/* The grid is month-scoped, so its gate cannot be the rendered rows:
+              an empty month of a non-empty schedule still renders the grid.
+              With no empty state there is always something somewhere — the
+              empty states already cover the empty collection — so their
+              absence alone opens the grid, exactly like the old unpaged merge
+              whose non-emptiness always implied visible rows. */}
+          {emptyState === null && state.view === "calendar" ? (
             <MonthGrid state={state} weeks={weeks} zone={zone} />
           ) : null}
         </div>

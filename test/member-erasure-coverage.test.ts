@@ -54,8 +54,8 @@ const RETAINED = new Map<string, string>([
   ["member_data_access_logs.viewer_discord_id", "append-only access evidence, 90-day prune"],
   ["member_data_access_logs.viewer_user_id", "append-only access evidence, 90-day prune"],
   ["member_data_access_logs.subject_user_ids", "append-only access evidence, 90-day prune"],
-  ["activity_log.causer_id", "append-only moderation evidence, pruned by age"],
-  ["activity_log.subject_id", "append-only moderation evidence, pruned by age"],
+  ["activity_log.causer_id", "append-only moderation evidence, retained indefinitely"],
+  ["activity_log.subject_id", "append-only moderation evidence, retained indefinitely"],
 ]);
 
 const COLUMN_TYPES =
@@ -262,6 +262,19 @@ describe("member-erasure coverage (DB-free migration introspection)", () => {
     for (const table of ERASURE_TABLES) {
       expect(tables.has(table), `erasure table "${table}" has no migrated definition`).toBe(true);
     }
+  });
+
+  it("pins the activity_log retain decision: docs claim it, no prune code exists", () => {
+    const docs = readFileSync(docsPath, "utf8");
+    expect(docs).toContain("activity_log");
+    expect(docs).toContain("retained indefinitely per CISO decision");
+    expect(docs).toContain("No job prunes it");
+    // No prune deleter may target activity_log: the daily model:prune job
+    // covers other audit tables only.
+    const postgresJobs = readFileSync(join(root, "src/jobs/postgres.ts"), "utf8");
+    expect(postgresJobs).not.toContain("activity_log");
+    const migrationsDoc = readFileSync(join(root, "docs/db-migrations.md"), "utf8");
+    expect(migrationsDoc).toMatch(/does\s+not prune `activity_log`/);
   });
 
   it("proves each Discord-embedding write bucket is ephemeral with a prune", () => {

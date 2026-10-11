@@ -1,7 +1,7 @@
 // TOG-12440: `listUpcoming` ordered by `startsAt` only, so tied events fell
 // back to physical row order. It now orders by `(startsAt, id)` like
 // `listHomeUpcoming` already does. Equal-start seed asserts stable id order
-// with projection, visibility and (uncapped) shape unchanged.
+// with projection, visibility and (single-page) shape unchanged.
 // Isolated test DB only.
 import { describe, expect, it } from "vitest";
 import { listUpcoming } from "../src/events/reads";
@@ -34,9 +34,9 @@ describe.skipIf(!url)("listUpcoming orders equal starts by id (isolated test DB)
       await client`insert into rsvps (event_id, user_id, status)
         values (9002, '424242424242424242', 'going')`;
 
-      const rows = await listUpcoming(db, NOW);
+      const { rows, hasMore, totalPages, total } = await listUpcoming(db, NOW);
       // Primary order by startsAt, ties by ascending id; drafts stay
-      // invisible while cancelled rows stay listed; no cap is applied.
+      // invisible while cancelled rows stay listed; one page holds them all.
       expect(rows.map((row) => row.eventKey)).toEqual([
         "01J0000000000000000000T0E",
         "01J0000000000000000000T0A",
@@ -45,6 +45,7 @@ describe.skipIf(!url)("listUpcoming orders equal starts by id (isolated test DB)
         "01J0000000000000000000T0X",
         "01J0000000000000000000T0L",
       ]);
+      expect({ hasMore, totalPages, total }).toEqual({ hasMore: false, totalPages: 1, total: 6 });
       const tiedStarts = new Date(TIED_STARTS).getTime();
       const tied = rows.filter((row) => row.startsAt.getTime() === tiedStarts);
       expect(tied.map((row) => row.id)).toEqual([9001, 9002, 9003, 9103]);
@@ -53,7 +54,7 @@ describe.skipIf(!url)("listUpcoming orders equal starts by id (isolated test DB)
       expect(rows.find((row) => row.eventKey === "01J0000000000000000000T0A")?.goingCount).toBe(0);
 
       const withDrafts = await listUpcoming(db, NOW, { includeDrafts: true });
-      expect(withDrafts.map((row) => row.eventKey)).toContain("01J0000000000000000000T0D");
+      expect(withDrafts.rows.map((row) => row.eventKey)).toContain("01J0000000000000000000T0D");
     } finally {
       await fixture.dispose();
     }

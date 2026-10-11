@@ -109,13 +109,14 @@ async function renderPage(e: PublicEvent): Promise<string> {
 }
 
 async function renderCalendar(e: PublicEvent, month: string): Promise<string> {
-  const state: CalendarState = { view: "calendar", month, q: "", past: false };
+  const state: CalendarState = { view: "calendar", month, q: "", past: false, page: 1 };
   const html = await jsx(EventsCalendarPage, {
     state,
     upcoming: [e],
     past: [],
     zone: e.timezone,
     now: new Date("2026-07-01T12:00:00Z"),
+    totalPages: 1,
     emptyState: null as CalendarEmptyState,
     discordFailed: false,
     member: false,
