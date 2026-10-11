@@ -1,4 +1,4 @@
-// Featured headline/image-description native length (TOG-21771). SSR-only by
+// Featured headline/image-description native length. SSR-only by
 // default; no DB, no staging endpoint. Native HTML maxlength counts UTF-16
 // units, so maxlength=255 truncates 128 supplementary characters (256 units)
 // before the server's 255-code-point validator runs. Omitting it lets valid
