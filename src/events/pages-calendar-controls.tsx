@@ -9,7 +9,6 @@ import {
   EVENTS_PAST_STATUS_TESTID,
   EVENTS_SEARCH_CLEAR_TESTID,
   EVENTS_SEARCH_LABEL,
-  EVENTS_SEARCH_MAX_LENGTH,
   EVENTS_SEARCH_PLACEHOLDER,
   EVENTS_SEARCH_STATUS_TESTID,
   EVENTS_SEARCH_TESTID,
@@ -103,12 +102,12 @@ export const CalendarSearchForm: FC<{ state: CalendarState; searching: boolean }
     <label class="sr-only" for="events-search-input">
       {EVENTS_SEARCH_LABEL}
     </label>
+    {/* Native maxlength counts UTF-16 units; code-point limits belong to the validators. */}
     <input
       id="events-search-input"
       type="search"
       name="q"
       value={state.q}
-      maxlength={EVENTS_SEARCH_MAX_LENGTH}
       placeholder={EVENTS_SEARCH_PLACEHOLDER}
       aria-label={EVENTS_SEARCH_LABEL}
       data-testid={EVENTS_SEARCH_TESTID}
