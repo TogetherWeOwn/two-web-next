@@ -83,7 +83,7 @@ export const EventPage: FC<{
           </p>
         ) : null}
         {e.status === "cancelled" ? (
-          <p class="notice" data-testid="event-cancelled">
+          <p class="notice" role="status" data-testid="event-cancelled">
             Cancelled
           </p>
         ) : null}
