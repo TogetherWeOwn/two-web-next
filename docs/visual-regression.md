@@ -1,10 +1,33 @@
 # Visual regression
 
-`e2e/visual/public-pages.visual.ts` takes full-page screenshots of the public
-routes (home, events, the seeded event, past events, rules, privacy; `/community`
-redirects to home) at desktop (1280×800) and mobile (390×844) widths and compares them
-with the committed baselines in `e2e/visual/__screenshots__/`.
+`e2e/visual/public-pages.visual.ts` takes full-page screenshots of the routes and
+event states below at desktop (1280×800) and mobile (390×844) widths and compares
+them with the committed baselines in `e2e/visual/__screenshots__/`.
 
+| Baseline | Route | Viewer | Status |
+| --- | --- | --- | --- |
+| `home` | `/` (`/community` redirects here) | guest | 200 |
+| `events` | `/events` | guest | 200 |
+| `event` | `/e/01J00000000000000000000001` (the seeded event) | guest | 200 |
+| `past` | `/events/past` | guest | 200 |
+| `rules` | `/rules` | guest | 200 |
+| `privacy` | `/privacy` | guest | 200 |
+| `event-paused` | `/e/01J00000000000000000000005` (published, RSVPs paused) | signed-in member | 200 |
+| `event-cancelled` | `/e/01J00000000000000000000006` (cancelled) | guest | 410 |
+
+Each baseline exists at both widths (`<name>-desktop.png`, `<name>-mobile.png`).
+
+- **Event states:** the paused and cancelled events are not in the seed. A future
+  paused or cancelled row would show up in `/events`, in the seeded event's "more
+  events" cards and in the journeys' lists, so the spec inserts both rows after the
+  public routes have been compared and deletes them when its block ends (the same
+  disposable Postgres guard as `e2e/seed.mjs`). Only a signed-in member sees the
+  paused notice (a guest gets the sign-in link), so that test signs in once through
+  the stubbed Discord OAuth round trip that `e2e/join.spec.ts` uses, for both
+  widths. It does not use the QA login: the journeys that run next already spend
+  the whole `qa-login` throttle (10 per minute, `e2e/fixtures.ts`), and one more
+  login there turns the last journey login into a 429. The cancelled page is the
+  same 410 for a guest and a member, so it needs no login.
 - **Where it runs:** the `browser-smoke` job in `.github/workflows/e2e.yml`, before
   the critical journeys, on the freshly seeded local stack (no secrets, no
   staging or production). `browser-smoke` is a required check, so a visual diff
@@ -12,7 +35,7 @@ with the committed baselines in `e2e/visual/__screenshots__/`.
   skipped, which passes).
 - **Stability:** `<time>` elements are masked (server-rendered times follow the
   wall clock), animations are disabled, and the caret is hidden. A route must
-  return 200.
+  return the status in the table above.
 - **Threshold:** `maxDiffPixels: 300` per screenshot
   (`playwright.visual.config.ts`). An absolute budget, not a ratio: a ratio
   grows with page height, so a vanished primary button still passes. CI never
