@@ -44,10 +44,13 @@ The repository rulesets enforce the following on `main`:
 
 - `protect-main`: changes arrive through a pull request, the branch cannot be
   deleted or force-pushed, only squash merges are allowed, and `ci-ok`,
-  `gitleaks`, `e2e-ok` and Paperclip Review (5/5 on the exact head) must pass.
-  `e2e-ok` is the aggregator in `e2e.yml`: it fails when its `scope` job fails or
-  the browser journeys fail or are cancelled, and passes a skipped journey run
-  only on an explicit scope verdict (docs/test-only) or a draft.
+  `gitleaks` and `e2e-ok` must pass, plus Paperclip Review 5/5 on the exact head.
+
+  The journeys count only through the aggregator in e2e.yml: it fails when the
+  scope job fails or the browser journeys fail or are cancelled, and passes a
+  skipped journey run only on an explicit scope verdict (docs/test-only) or a
+  draft.
+
 - `pr-conventions`: `pr-lint` must pass.
 
 ### Change-gated CI and `ci-ok`
