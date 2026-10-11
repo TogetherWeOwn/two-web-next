@@ -48,6 +48,13 @@ function failureReason(test) {
   return "failed with no error message";
 }
 
+function unknownStatusReason(status) {
+  if (typeof status !== "string") return "unknown test status: missing or non-string status";
+  const cleaned = cleanReason(status);
+  if (!cleaned) return "unknown test status: empty status";
+  return `unknown test status: ${cleaned}`.slice(0, MAX_REASON_LENGTH);
+}
+
 function collectTests(suites, out) {
   for (const suite of suites ?? []) {
     if (!suite || typeof suite !== "object") continue;
@@ -87,7 +94,10 @@ export function summarizeJourneys(report) {
     if (status === "unexpected") {
       return { name, file, project, status: "failed", reason: failureReason(test) };
     }
-    return { name, file, project, status: "passed", reason: null };
+    if (status === "expected") {
+      return { name, file, project, status: "passed", reason: null };
+    }
+    return { name, file, project, status: "failed", reason: unknownStatusReason(status) };
   });
 
   const counts = {

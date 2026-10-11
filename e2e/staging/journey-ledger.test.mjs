@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { test } from "node:test";
+import { runGate } from "../../ci/check-staging-journeys.mjs";
 import { formatLedgerMarkdown, summarizeJourneys } from "./journey-ledger.mjs";
 
 function reportWith(specs) {
@@ -167,4 +170,183 @@ test("the always-run ledger upload ships only derived files, never the raw repor
   assert.doesNotMatch(step, /staging-journeys\.json/);
   assert.match(step, /staging-journey-ledger\.json/);
   assert.match(step, /staging-journey-ledger\.md/);
+});
+
+function statusSpec(title, status) {
+  return {
+    title,
+    file: "e2e/staging/auth.spec.ts",
+    tests: [{ projectName: "chromium", status, annotations: [], results: [] }],
+  };
+}
+
+test("unknown, missing or non-string statuses fail closed with bounded diagnostics", () => {
+  for (const status of ["interrupted", "passed", "timedOut", "", 123, null, undefined, {}]) {
+    const summary = summarizeJourneys(
+      reportWith([statusSpec(`journey with ${String(status)}`, status)]),
+    );
+    assert.equal(summary.verdict, "fail", `status ${String(status)} must fail`);
+    assert.deepEqual(summary.counts, { total: 1, passed: 0, failed: 1, skipped: 0, flaky: 0 });
+    assert.equal(summary.journeys[0].status, "failed");
+    assert.match(summary.journeys[0].reason ?? "", /^unknown test status: /);
+    assert.ok(
+      (summary.journeys[0].reason ?? "").length <= 200,
+      "unknown-status reason stays bounded",
+    );
+    assert.doesNotMatch(summary.journeys[0].reason ?? "", /[\u0000-\u001f\u007f\n]/);
+  }
+});
+
+test("unknown-status reason stays bounded and single-line for long input", () => {
+  const summary = summarizeJourneys(
+    reportWith([statusSpec("long status", `x${"y".repeat(500)}|pipe`)]),
+  );
+  assert.equal(summary.verdict, "fail");
+  assert.ok(summary.journeys[0].reason.length <= 200);
+  assert.doesNotMatch(summary.journeys[0].reason, /\n/);
+  const row = formatLedgerMarkdown(summary)
+    .split("\n")
+    .find((line) => line.startsWith("| long status"));
+  assert.ok(row, "unknown-status row renders in markdown");
+  assert.match(row ?? "", /unknown test status/);
+});
+
+test("expected still passes and an unknown beside it still fails the run", () => {
+  const summary = summarizeJourneys(
+    reportWith([passingSpec(), statusSpec("interrupted journey", "interrupted")]),
+  );
+  assert.equal(summary.verdict, "fail");
+  assert.deepEqual(summary.counts, { total: 2, passed: 1, failed: 1, skipped: 0, flaky: 0 });
+});
+
+function gateScratch(prefix) {
+  const base =
+    process.env.PAPERCLIP_RUN_SCRATCH_DIR ?? process.env.PAPERCLIP_SCRATCH_DIR ?? tmpdir();
+  const dir = mkdtempSync(join(base, prefix));
+  return {
+    dir,
+    reportPath: join(dir, "staging-journeys.json"),
+    ledgerJsonPath: join(dir, "staging-journey-ledger.json"),
+    ledgerMdPath: join(dir, "staging-journey-ledger.md"),
+    stepSummaryPath: join(dir, "step-summary.md"),
+  };
+}
+
+function gateStreams() {
+  let out = "";
+  let err = "";
+  return {
+    get out() {
+      return out;
+    },
+    get err() {
+      return err;
+    },
+    stdout: {
+      write: (chunk) => {
+        out += String(chunk);
+        return true;
+      },
+    },
+    stderr: {
+      write: (chunk) => {
+        err += String(chunk);
+        return true;
+      },
+    },
+  };
+}
+
+function writeReport(path, value) {
+  writeFileSync(path, `${JSON.stringify(value)}\n`);
+}
+
+test("gate exit 0 on mixed expected and skipped with ledger and step-summary output", () => {
+  const paths = gateScratch("journey-gate-pass-");
+  writeReport(paths.reportPath, reportWith([passingSpec(), skippedSpec("journey b", "empty")]));
+  const streams = gateStreams();
+  const code = runGate({ ...paths, stdout: streams.stdout, stderr: streams.stderr });
+  assert.equal(code, 0);
+  const ledger = JSON.parse(readFileSync(paths.ledgerJsonPath, "utf8"));
+  assert.equal(ledger.verdict, "pass");
+  assert.deepEqual(ledger.counts, { total: 2, passed: 1, failed: 0, skipped: 1, flaky: 0 });
+  const markdown = readFileSync(paths.ledgerMdPath, "utf8");
+  assert.match(markdown, /## Staging journey ledger/);
+  assert.match(markdown, /journey b/);
+  const summary = readFileSync(paths.stepSummaryPath, "utf8");
+  assert.match(summary, /## Staging journey ledger/);
+  assert.match(streams.out, /1 passed, 0 failed, 1 skipped/);
+});
+
+test("gate exit 1 on unexpected failure and on unknown or missing status", () => {
+  for (const [label, specs] of [
+    ["unexpected", reportWith([passingSpec(), statusSpec("bad journey", "unexpected")])],
+    ["interrupted", reportWith([passingSpec(), statusSpec("cut short", "interrupted")])],
+    ["missing", reportWith([passingSpec(), statusSpec("no status", undefined)])],
+    ["non-string", reportWith([passingSpec(), statusSpec("weird status", 123)])],
+  ]) {
+    const paths = gateScratch(`journey-gate-fail-${label}-`);
+    writeReport(paths.reportPath, specs);
+    const streams = gateStreams();
+    const code = runGate({ ...paths, stdout: streams.stdout, stderr: streams.stderr });
+    assert.equal(code, 1, `${label} must exit 1`);
+    const ledger = JSON.parse(readFileSync(paths.ledgerJsonPath, "utf8"));
+    assert.equal(ledger.verdict, "fail");
+    assert.equal(ledger.counts.failed, 1);
+    assert.match(streams.err, /Staging journeys failed/);
+  }
+});
+
+test("gate exit 2 on unreadable, empty and all-skipped reports", () => {
+  const unreadable = gateScratch("journey-gate-unreadable-");
+  {
+    const streams = gateStreams();
+    const code = runGate({ ...unreadable, stdout: streams.stdout, stderr: streams.stderr });
+    assert.equal(code, 2);
+    assert.match(streams.err, /LOUD ALL-SKIPPED: no readable Playwright JSON report/);
+  }
+  for (const [label, report] of [
+    ["empty-object", {}],
+    ["empty-suites", { suites: [] }],
+  ]) {
+    const paths = gateScratch(`journey-gate-empty-${label}-`);
+    writeReport(paths.reportPath, report);
+    const streams = gateStreams();
+    const code = runGate({ ...paths, stdout: streams.stdout, stderr: streams.stderr });
+    assert.equal(code, 2, `${label} must exit 2`);
+    const ledger = JSON.parse(readFileSync(paths.ledgerJsonPath, "utf8"));
+    assert.equal(ledger.verdict, "empty");
+    assert.match(readFileSync(paths.ledgerMdPath, "utf8"), /LOUD EMPTY/);
+    assert.match(streams.err, /LOUD ALL-SKIPPED/);
+  }
+  {
+    const paths = gateScratch("journey-gate-all-skipped-");
+    writeReport(
+      paths.reportPath,
+      reportWith([skippedSpec("journey a", "no events on staging"), skippedSpec("journey b", "")]),
+    );
+    const streams = gateStreams();
+    const code = runGate({ ...paths, stdout: streams.stdout, stderr: streams.stderr });
+    assert.equal(code, 2);
+    const ledger = JSON.parse(readFileSync(paths.ledgerJsonPath, "utf8"));
+    assert.equal(ledger.verdict, "all-skipped");
+    assert.match(readFileSync(paths.stepSummaryPath, "utf8"), /LOUD ALL-SKIPPED/);
+    assert.match(streams.err, /LOUD ALL-SKIPPED/);
+  }
+});
+
+test("gate without a step summary still writes ledger files and exits by verdict", () => {
+  const paths = gateScratch("journey-gate-no-summary-");
+  writeReport(paths.reportPath, reportWith([passingSpec()]));
+  const streams = gateStreams();
+  const code = runGate({
+    reportPath: paths.reportPath,
+    ledgerJsonPath: paths.ledgerJsonPath,
+    ledgerMdPath: paths.ledgerMdPath,
+    stepSummaryPath: "",
+    stdout: streams.stdout,
+    stderr: streams.stderr,
+  });
+  assert.equal(code, 0);
+  assert.match(readFileSync(paths.ledgerMdPath, "utf8"), /## Staging journey ledger/);
 });
