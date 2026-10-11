@@ -117,7 +117,7 @@ try {
   context.setDefaultTimeout(8000);
   context.setDefaultNavigationTimeout(12000);
   const forbidden = [];
-  await context.route("**/*", async (route) => {
+  const guard = async (route) => {
     const url = new URL(route.request().url());
     // Playwright routes intercept only the first URL in a redirect chain.
     // Stop the local OAuth start's 302 before the browser can follow it externally.
@@ -142,7 +142,8 @@ try {
     if (url.origin === f.env.APP_URL) return route.continue();
     forbidden.push(url.origin + url.pathname);
     return route.abort();
-  });
+  };
+  await context.route("**/*", guard);
   async function login() {
     const result = await f.login();
     const equals = result.cookie.indexOf("=");
@@ -319,10 +320,221 @@ try {
     "PASS refused/network logout draft retention, accessible explicit retry and no duplicates",
   );
 
+  // Fake clocks freeze Date.now() for sibling pages in the same context, so the deadline pages get their own.
+  const timed = await browser.newContext({ serviceWorkers: "block", ignoreHTTPSErrors: true });
+  timed.setDefaultTimeout(8000);
+  timed.setDefaultNavigationTimeout(12000);
+  await timed.route("**/*", guard);
+  await timed.addCookies(await context.cookies());
+  // Fake-clock logout deadline: a hung or late logout shows uncertainty, keeps drafts, never publishes or redirects.
+  const T0 = Date.UTC(2026, 9, 11, 12, 0, 0);
+  const COUNT_RECHECKS = `(() => {
+    const post = BroadcastChannel.prototype.postMessage;
+    BroadcastChannel.prototype.postMessage = function (message) {
+      if (message === "recheck") sessionStorage.setItem("recheck-posts", String(Number(sessionStorage.getItem("recheck-posts") || 0) + 1));
+      return post.call(this, message);
+    };
+  })();`;
+  const HOLD_LOGOUT = `(() => {
+    const fetchOriginal = window.fetch;
+    window.fetch = function (input, init) {
+      if (input !== "/logout") return fetchOriginal.call(this, input, init);
+      sessionStorage.setItem("logout-posts", String(Number(sessionStorage.getItem("logout-posts") || 0) + 1));
+      return new Promise((resolve, reject) => {
+        window.settleLogout = (status) =>
+          status ? resolve(new Response(null, { status })) : reject(new TypeError("network"));
+      });
+    };
+  })();`;
+  const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+  async function until(check, message) {
+    for (let attempt = 0; attempt < 200; attempt++) {
+      if (await check()) return;
+      await pause(25);
+    }
+    assert.fail(message);
+  }
+  async function deadlinePage({ hold, draft }) {
+    const page = await timed.newPage();
+    page.on("pageerror", (error) => errors.push(error.message));
+    await page.clock.install({ time: T0 });
+    await page.addInitScript(COUNT_RECHECKS);
+    if (hold) await page.addInitScript(HOLD_LOGOUT);
+    await page.goto(url("/profile?edit=1"));
+    await page.waitForFunction(() => !!window.TwoAuth);
+    await page.getByRole("textbox", { name: /^Bio\b/ }).fill(draft);
+    await page.getByRole("textbox", { name: /^Games\b/ }).fill("Go\nChess");
+    await page.getByLabel("Timezone", { exact: true }).fill("UTC");
+    await page.clock.pauseAt(T0 + 3_600_000);
+    return page;
+  }
+  const submitLogout = (page) =>
+    page.evaluate(() =>
+      document.querySelector('[data-testid="profile-signout"] [type="submit"]').click(),
+    );
+  const duplicateLogout = (page) =>
+    page.evaluate(() => {
+      const form = document.querySelector('[data-testid="profile-signout"]');
+      for (let i = 0; i < 3; i++) form.requestSubmit();
+    });
+  const logoutState = (page) =>
+    page.evaluate(() => {
+      const form = document.querySelector('[data-testid="profile-signout"]');
+      const count = (id) => document.querySelectorAll(`[data-testid="${id}"]`).length;
+      return {
+        busy: form.getAttribute("aria-busy"),
+        disabled: form.querySelector('[type="submit"]').disabled,
+        unconfirmed: count("logout-unconfirmed"),
+        failed: count("logout-error"),
+        focusedUnconfirmed: document.activeElement?.dataset.testid === "logout-unconfirmed",
+        posts: Number(sessionStorage.getItem("logout-posts") || 0),
+        rechecks: Number(sessionStorage.getItem("recheck-posts") || 0),
+      };
+    });
+  async function assertDraft(page, bio) {
+    assert.equal(await page.getByRole("textbox", { name: /^Bio\b/ }).inputValue(), bio);
+    assert.equal(await page.getByRole("textbox", { name: /^Games\b/ }).inputValue(), "Go\nChess");
+    assert.equal(await page.getByLabel("Timezone", { exact: true }).inputValue(), "UTC");
+  }
+
+  // Hung logout: the real request never settles; the deadline shows uncertainty without waiting for it.
+  const hung = await deadlinePage({ hold: false, draft: "Hung logout draft" });
+  let releaseHung;
+  let hungRequests = 0;
+  await hung.route("**/logout", async (route) => {
+    hungRequests++;
+    await new Promise((resolve) => {
+      releaseHung = resolve;
+    });
+    await route.abort().catch(() => {});
+  });
+  await submitLogout(hung);
+  await until(() => hungRequests === 1, "hung logout did not reach the route");
+  await hung.clock.runFor(9_000);
+  let snapshot = await logoutState(hung);
+  assert.equal(snapshot.busy, "true");
+  assert.equal(snapshot.disabled, true);
+  assert.equal(snapshot.unconfirmed, 0);
+  await duplicateLogout(hung);
+  await pause(200);
+  assert.equal(hungRequests, 1);
+  await hung.clock.runFor(1_000);
+  snapshot = await logoutState(hung);
+  assert.equal(snapshot.busy, null);
+  assert.equal(snapshot.disabled, false);
+  assert.equal(snapshot.unconfirmed, 1);
+  assert.equal(snapshot.failed, 0);
+  assert.equal(snapshot.focusedUnconfirmed, true);
+  assert.equal(snapshot.rechecks, 0);
+  assert.equal(hung.url(), url("/profile?edit=1"));
+  const hungNotice = hung.getByTestId("logout-unconfirmed");
+  assert.equal(await hungNotice.getAttribute("role"), "alert");
+  assert.match(await hungNotice.innerText(), /not confirmed/i);
+  await assertDraft(hung, "Hung logout draft");
+  await hung.clock.resume();
+  assert.equal((await new AxeBuilder({ page: hung }).analyze()).violations.length, 0);
+  releaseHung();
+  await pause(300);
+  snapshot = await logoutState(hung);
+  assert.equal(snapshot.unconfirmed, 1);
+  assert.equal(snapshot.failed, 0);
+  assert.equal(snapshot.busy, null);
+  assert.equal(snapshot.rechecks, 0);
+  await hung.close();
+
+  // A refusal or network failure before the deadline cancels the timer; no notice appears later.
+  for (const outcome of [503, 0]) {
+    const settled = await deadlinePage({ hold: true, draft: `Settled ${outcome} draft` });
+    await submitLogout(settled);
+    await until(async () => (await logoutState(settled)).posts === 1, "early failure not sent");
+    await settled.clock.runFor(2_000);
+    await settled.evaluate((status) => window.settleLogout(status), outcome);
+    await pause(300);
+    snapshot = await logoutState(settled);
+    assert.equal(snapshot.failed, 1);
+    assert.equal(snapshot.unconfirmed, 0);
+    assert.equal(snapshot.busy, null);
+    assert.equal(snapshot.disabled, false);
+    await settled.clock.runFor(10_000);
+    snapshot = await logoutState(settled);
+    assert.equal(snapshot.failed, 1);
+    assert.equal(snapshot.unconfirmed, 0);
+    assert.equal(snapshot.rechecks, 0);
+    await settled.clock.resume();
+    await settled.close();
+  }
+
+  // Confirmation before the deadline keeps the existing success redirect and one broadcast.
+  const early = await deadlinePage({ hold: true, draft: "Early logout draft" });
+  await submitLogout(early);
+  await until(async () => (await logoutState(early)).posts === 1, "early logout not sent");
+  await early.clock.runFor(9_000);
+  snapshot = await logoutState(early);
+  assert.equal(snapshot.busy, "true");
+  assert.equal(snapshot.unconfirmed, 0);
+  await early.evaluate(() => window.settleLogout(303));
+  await early.waitForURL(url("/"));
+  snapshot = await early.evaluate(() => ({
+    posts: sessionStorage.getItem("logout-posts"),
+    rechecks: sessionStorage.getItem("recheck-posts"),
+  }));
+  assert.deepEqual(snapshot, { posts: "1", rechecks: "1" });
+  await early.clock.resume();
+  await early.close();
+
+  // Late success after the deadline cannot publish, redirect, clear the notice or re-post.
+  const late = await deadlinePage({ hold: true, draft: "Late logout draft" });
+  await submitLogout(late);
+  await until(async () => (await logoutState(late)).posts === 1, "late logout not sent");
+  await late.clock.runFor(5_000);
+  await duplicateLogout(late);
+  assert.equal((await logoutState(late)).posts, 1);
+  await late.clock.runFor(5_000);
+  assert.equal((await logoutState(late)).unconfirmed, 1);
+  await late.evaluate(() => window.settleLogout(303));
+  await pause(300);
+  assert.equal(late.url(), url("/profile?edit=1"));
+  snapshot = await logoutState(late);
+  assert.equal(snapshot.unconfirmed, 1);
+  assert.equal(snapshot.failed, 0);
+  assert.equal(snapshot.busy, null);
+  assert.equal(snapshot.disabled, false);
+  assert.equal(snapshot.posts, 1);
+  assert.equal(snapshot.rechecks, 0);
+  await assertDraft(late, "Late logout draft");
+  await late.clock.resume();
+  await late.close();
+
+  // Late refusal after the deadline cannot overwrite the timeout notice.
+  const refusedLate = await deadlinePage({ hold: true, draft: "Refused late draft" });
+  await submitLogout(refusedLate);
+  await until(async () => (await logoutState(refusedLate)).posts === 1, "refused late not sent");
+  await refusedLate.clock.runFor(10_000);
+  assert.equal((await logoutState(refusedLate)).unconfirmed, 1);
+  await refusedLate.evaluate(() => window.settleLogout(503));
+  await pause(300);
+  snapshot = await logoutState(refusedLate);
+  assert.equal(snapshot.unconfirmed, 1);
+  assert.equal(snapshot.failed, 0);
+  assert.equal(snapshot.busy, null);
+  assert.equal(snapshot.rechecks, 0);
+  assert.equal(refusedLate.url(), url("/profile?edit=1"));
+  await assertDraft(refusedLate, "Refused late draft");
+  await refusedLate.clock.resume();
+  await refusedLate.close();
+  await timed.close();
+  console.log(
+    "PASS logout deadline: hung, duplicate, early confirmation, late success and late refusal",
+  );
+
+  // The deadline pages rotated the earlier session in their own context; sign in again so this logout revokes a live row.
+  const live = await login();
+  assert.ok(await f.sessions.get(live.tokenHash));
   // Successful retry from the editor still revokes the session and notifies the other tab.
   await logoutButton.focus();
   await a.keyboard.press("Enter");
   await a.waitForURL(url("/"));
+  assert.equal(await f.sessions.get(live.tokenHash), null);
   await b.waitForFunction(
     () => !window.TwoAuth && !!document.querySelector('a[href="/auth/discord"]'),
   );
@@ -436,6 +648,7 @@ try {
           "non-authoritative errors",
           "rotation-cookie race",
           "refused/network logout draft retention and accessible retry at 360/1280",
+          "hung logout deadline, duplicate activation, early confirmation, late success and late refusal under fake clocks",
           "no duplicate logout or failure notification to other tabs",
           "successful editor logout retry and broadcast logout",
           "expired draft and explicit reset",
