@@ -1,3 +1,4 @@
+import { randomInt } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { readMigrationFiles } from "drizzle-orm/migrator";
 import { Hono } from "hono";
@@ -10,8 +11,45 @@ import { pgEventStore } from "../src/jobs/events";
 import type { QueueMessage } from "../src/jobs/types";
 import { STAGING_APP_URL } from "../src/qa";
 import { createMemorySessionStore, hashToken, newSessionToken } from "../src/sessions";
+import { testDatabaseUrl } from "./helpers/member-data-db";
 
-const DB_NAME = "two_web_next_tog19289";
+export const REDISPATCH_DB_PREFIX = "two_web_next_tog";
+
+// Per-invocation fixture target: pid + millisecond timestamp + random digits,
+// digits-only so the disposable-database guard keeps passing
+// (`two_web_next_tog[0-9]+` on agent-testdb). Two concurrent verification
+// processes never share a pid/timestamp/random triple, so they never share a
+// target, even though they derive it from different ambient DATABASE_URLs.
+export function buildRedispatchDbName({
+  pid,
+  nowMs,
+  rand,
+}: {
+  pid: number;
+  nowMs: number;
+  rand: number;
+}): string {
+  const pidPart = String(Math.floor(Math.abs(pid)) % 1_000_000);
+  const randPart = String(Math.floor(Math.abs(rand)) % 1_000_000).padStart(6, "0");
+  return `${REDISPATCH_DB_PREFIX}${Math.floor(Math.abs(nowMs))}${pidPart}${randPart}`;
+}
+
+export function isOwnedRedispatchDbName(name: string): boolean {
+  return /^two_web_next_tog[0-9]+$/.test(name);
+}
+
+// Teardown rule, kept as a pure predicate so the regression below proves the
+// shipped path: drop only the exact database this invocation created, never a
+// foreign or unproven one.
+export function shouldDropRedispatchDb(target: string, created: string | null): boolean {
+  return created !== null && target === created && isOwnedRedispatchDbName(target);
+}
+
+const DB_NAME = buildRedispatchDbName({
+  pid: process.pid,
+  nowMs: Date.now(),
+  rand: randomInt(0, 1_000_000),
+});
 const operator = "100000000000000111";
 const secret = "test-session-secret-at-least-32-bytes-long";
 const sourceIdentity = "01ARZ3NDEKTSV4RRFFQ69G5FAA";
@@ -48,8 +86,16 @@ describe.skipIf(!process.env.DATABASE_URL)("guarded one-row failed-job re-dispat
   let store: ReturnType<typeof createMemorySessionStore>;
   let bearer: string;
   let sent: unknown[];
+  let createdDb = false;
 
   beforeAll(async () => {
+    // Guard the ambient URL before any driver or DDL, and validate the
+    // derived per-invocation target too so a guard change fails fast here.
+    testDatabaseUrl(process.env.DATABASE_URL!);
+    testDatabaseUrl(testDbUrl());
+    if (!isOwnedRedispatchDbName(DB_NAME)) {
+      throw new Error("refusing to create an unguarded database");
+    }
     const adminUrl = new URL(process.env.DATABASE_URL!);
     adminUrl.pathname = "/postgres";
     const admin = postgres(adminUrl.href, {
@@ -65,12 +111,13 @@ describe.skipIf(!process.env.DATABASE_URL)("guarded one-row failed-job re-dispat
       )) as unknown as { owner: string }[];
       const owner = rows[0]?.owner;
       if (owner) {
-        if (owner !== adminUrl.username) {
-          throw new Error(`refusing to drop database owned by ${owner}`);
-        }
-        await admin.unsafe(`DROP DATABASE "${DB_NAME}" WITH (FORCE)`);
+        // Another invocation (or a previous crashed run) owns this name. Refuse
+        // instead of dropping an unproven database; with per-invocation names
+        // a collision here means our entropy repeated, not a stale fixture.
+        throw new Error(`refusing to reuse existing database "${DB_NAME}"`);
       }
       await admin.unsafe(`CREATE DATABASE "${DB_NAME}"`);
+      createdDb = true;
     } finally {
       await admin.end({ timeout: 1 });
     }
@@ -124,18 +171,22 @@ describe.skipIf(!process.env.DATABASE_URL)("guarded one-row failed-job re-dispat
     try {
       await sql?.end({ timeout: 1 });
     } finally {
-      const adminUrl = new URL(process.env.DATABASE_URL!);
-      adminUrl.pathname = "/postgres";
-      const admin = postgres(adminUrl.href, {
-        max: 1,
-        connect_timeout: 5,
-        password: () => adminUrl.password,
-        onnotice: () => {},
-      });
-      try {
-        await admin.unsafe(`DROP DATABASE "${DB_NAME}" WITH (FORCE)`);
-      } finally {
-        await admin.end({ timeout: 1 });
+      // Drop only the exact database this invocation created, after its
+      // clients are closed. A foreign or unproven name is left untouched.
+      if (shouldDropRedispatchDb(DB_NAME, createdDb ? DB_NAME : null)) {
+        const adminUrl = new URL(process.env.DATABASE_URL!);
+        adminUrl.pathname = "/postgres";
+        const admin = postgres(adminUrl.href, {
+          max: 1,
+          connect_timeout: 5,
+          password: () => adminUrl.password,
+          onnotice: () => {},
+        });
+        try {
+          await admin.unsafe(`DROP DATABASE "${DB_NAME}" WITH (FORCE)`);
+        } finally {
+          await admin.end({ timeout: 1 });
+        }
       }
     }
   }, 60000);
@@ -356,5 +407,39 @@ describe.skipIf(!process.env.DATABASE_URL)("guarded one-row failed-job re-dispat
     expect(
       (receipts[0] as { properties: { outcome: { after: string } } }).properties.outcome.after,
     ).toBe("refused");
+  });
+});
+
+// Deterministic, driver-free regression for the full-suite collision: two
+// verification processes used different ambient DATABASE_URLs but derived the
+// same fixed target and forcibly recreated/dropped it. No DATABASE_URL needed.
+describe("redispatch fixture database isolation", () => {
+  it("two concurrent invocations target different guard-compliant databases", () => {
+    const first = buildRedispatchDbName({ pid: 100, nowMs: 1760000000000, rand: 1 });
+    const second = buildRedispatchDbName({ pid: 200, nowMs: 1760000000000, rand: 1 });
+    expect(first).not.toBe(second);
+    for (const name of [first, second]) {
+      expect(isOwnedRedispatchDbName(name)).toBe(true);
+      expect(() =>
+        testDatabaseUrl(`postgres://agent_test@agent-testdb:5432/${name}`, {}),
+      ).not.toThrow();
+    }
+    // The live invocation's own target is itself owned and guard-compliant.
+    expect(isOwnedRedispatchDbName(DB_NAME)).toBe(true);
+  });
+
+  it("an existing target is refused instead of dropped", () => {
+    // beforeAll throws on an existing target, so the teardown predicate must
+    // never authorize a database this invocation did not create.
+    expect(shouldDropRedispatchDb("two_web_next_tog19289", null)).toBe(false);
+    expect(shouldDropRedispatchDb(DB_NAME, null)).toBe(false);
+  });
+
+  it("teardown drops only the exact database this invocation created", () => {
+    const other = buildRedispatchDbName({ pid: 300, nowMs: 1760000000000, rand: 2 });
+    expect(other).not.toBe(DB_NAME);
+    expect(shouldDropRedispatchDb(DB_NAME, DB_NAME)).toBe(true);
+    expect(shouldDropRedispatchDb(other, DB_NAME)).toBe(false);
+    expect(shouldDropRedispatchDb("two_web_next", DB_NAME)).toBe(false);
   });
 });
