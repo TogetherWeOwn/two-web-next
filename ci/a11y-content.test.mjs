@@ -74,19 +74,58 @@ test("the waitlisted event fixture cannot silently render as going", async () =>
   assert.deepEqual(contentExpectations({ ...scenario, status: 410 }), []);
 });
 
+test("paused-member audit requires the paused hold and no join control before axe", async () => {
+  const scenario = coverage["/e/:key"].cases.find((item) => item.state === "paused-member");
+  assert.equal(scenario.path, "/e/01J00000000000000000000020");
+  assert.equal(scenario.identity, "member");
+  const page = { ...scenario, route: "/e/:key", status: 200 };
+  await assertAuditContent(fixturePage(page), page);
+  await assert.rejects(
+    assertAuditContent(fixturePage(page, { '[data-testid="rsvp-paused"]': { count: 0 } }), page),
+    /Fixture content count/,
+  );
+  await assert.rejects(
+    assertAuditContent(fixturePage(page, { '[data-testid="rsvp-going"]': { count: 1 } }), page),
+    /Fixture content count/,
+  );
+});
+
+test("cancelled-member audit requires the cancelled notice alone before axe", async () => {
+  const scenario = coverage["/e/:key"].cases.find((item) => item.state === "cancelled-member");
+  assert.equal(scenario.identity, "member");
+  assert.equal(scenario.status, 410);
+  const page = { ...scenario, route: "/e/:key" };
+  await assertAuditContent(fixturePage(page), page);
+  await assert.rejects(
+    assertAuditContent(
+      fixturePage(page, { '[data-testid="event-cancelled"]': { count: 0 } }),
+      page,
+    ),
+    /Fixture content count/,
+  );
+  await assert.rejects(
+    assertAuditContent(fixturePage(page, { '[data-island="rsvp-button"]': { count: 1 } }), page),
+    /Fixture content count/,
+  );
+});
+
 test("404 audit distinguishes populated suggestions from their empty fallback", async () => {
   const populated = { route: "/__a11y/404", status: 404 };
   const empty = { route: "/__a11y/404-empty", status: 404 };
   for (const scenario of [populated, empty])
     await assertAuditContent(fixturePage(scenario), scenario);
   const cards = '[data-testid="error-event-suggestions"] .card';
-  assert.equal(contentExpectations(populated).find((item) => item.selector === cards).count, 2);
-  for (const count of [0, 1, 3])
+  assert.equal(contentExpectations(populated).find((item) => item.selector === cards).count, 3);
+  for (const count of [0, 1, 2, 4])
     await assert.rejects(
       assertAuditContent(fixturePage(populated, { [cards]: { count } }), populated),
       /Fixture content count/,
     );
-  for (const key of ["01J00000000000000000000015", "01J00000000000000000000019"]) {
+  for (const key of [
+    "01J00000000000000000000015",
+    "01J00000000000000000000019",
+    "01J00000000000000000000020",
+  ]) {
     const link = `${cards} > a[href="/e/${key}"]`;
     await assert.rejects(
       assertAuditContent(fixturePage(populated, { [link]: { count: 0 } }), populated),

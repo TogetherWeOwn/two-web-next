@@ -62,6 +62,24 @@ export function contentExpectations(scenario) {
       })),
     ];
   }
+  if (scenario.route === "/e/:key" && scenario.state === "paused-member") {
+    return [
+      {
+        selector: '[data-testid="rsvp-paused"]',
+        text: "RSVPs are paused for this event — check back soon.",
+      },
+      // A paused member is offered no join control; holders keep only
+      // withdraw/leave, so the going control must really be absent.
+      { selector: '[data-testid="rsvp-going"]', count: 0 },
+    ];
+  }
+  if (scenario.route === "/e/:key" && scenario.state === "cancelled-member") {
+    return [
+      { selector: '[data-testid="event-cancelled"]', text: "Cancelled" },
+      // The cancelled notice stands alone: no RSVP island beside it.
+      { selector: '[data-island="rsvp-button"]', count: 0 },
+    ];
+  }
   if (scenario.route === "/e/:key" && scenario.status === 200) {
     return [
       {
@@ -82,7 +100,7 @@ export function contentExpectations(scenario) {
     const empty = scenario.route === "/__a11y/404-empty";
     const suggestions = '[data-testid="error-event-suggestions"]';
     return [
-      { selector: `${suggestions} .card`, count: empty ? 0 : 2 },
+      { selector: `${suggestions} .card`, count: empty ? 0 : 3 },
       ...(empty
         ? [
             {
@@ -91,7 +109,7 @@ export function contentExpectations(scenario) {
             },
           ]
         : [
-            { selector: `${suggestions} .card > a`, count: 2 },
+            { selector: `${suggestions} .card > a`, count: 3 },
             {
               selector: `${suggestions} .card > a[href="/e/01J00000000000000000000015"]`,
               text: "Friday night games",
@@ -99,6 +117,10 @@ export function contentExpectations(scenario) {
             {
               selector: `${suggestions} .card > a[href="/e/01J00000000000000000000019"]`,
               text: "Full co-op night",
+            },
+            {
+              selector: `${suggestions} .card > a[href="/e/01J00000000000000000000020"]`,
+              text: "Paused games",
             },
           ]),
       { selector: ".error-events-search input", attributes: { name: "q" } },
