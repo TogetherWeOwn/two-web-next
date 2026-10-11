@@ -124,14 +124,14 @@ describe("erase-member CLI safety (no database)", () => {
     for (const prod of [
       "postgres://fixture@db.production.test/two_web_next",
       "postgres://fixture@prod.example.test/neondb",
-      "postgres://fixture@ep-live-pooler.example.neon.tech/prod",
-      "postgres://fixture@ep-live.example.neon.tech/production",
+      "postgres://fixture@ep-live-pooler.example.neon.tech.invalid/prod",
+      "postgres://fixture@ep-live.example.neon.tech.invalid/production",
       "postgres://agent_test@agent-testdb/production",
     ])
       expect(isProductionDatabaseUrl(prod), prod).toBe(true);
     for (const safe of [
       "postgres://agent_test@agent-testdb:5432/two_web_next",
-      "postgres://fixture@ep-staging.example.neon.tech/neondb",
+      "postgres://fixture@ep-staging.example.neon.tech.invalid/neondb",
       "postgres://postgres:ci@localhost:5432/postgres",
       "not a url",
       "",
@@ -170,19 +170,19 @@ const NO_TARGET = "--target staging or --target production";
 const TLS_REQUIRED = "sslmode=verify-full or sslrootcert=system";
 const LOCAL_URL = "postgres://agent_test@agent-testdb:5432/two_web_next";
 const STAGING_URL =
-  "postgres://fixture:synthetic-password@ep-staging.example.neon.tech/neondb?sslmode=verify-full";
+  "postgres://fixture:synthetic-password@ep-staging.example.neon.tech.invalid/neondb?sslmode=verify-full";
 const STAGING_REQUIRE_URL =
-  "postgres://fixture:synthetic-password@ep-staging.example.neon.tech/neondb?sslmode=require";
+  "postgres://fixture:synthetic-password@ep-staging.example.neon.tech.invalid/neondb?sslmode=require";
 const POOLER_URL =
-  "postgres://fixture:synthetic-password@ep-cool-frost-12345-pooler.us-east-2.aws.neon.tech/neondb?sslmode=verify-full";
+  "postgres://fixture:synthetic-password@ep-cool-frost-12345-pooler.us-east-2.aws.neon.tech.invalid/neondb?sslmode=verify-full";
 const PSDB_URL =
-  "postgres://fixture:synthetic-password@aws-us-east-1.pg.psdb.cloud/two_web_next?sslmode=verify-full";
+  "postgres://fixture:synthetic-password@aws-us-east-1.pg.psdb.cloud.invalid/two_web_next?sslmode=verify-full";
 const OPAQUE_URL =
   "postgres://fixture:synthetic-password@db-7f3a9c.internal.example/postgres?sslmode=verify-full";
 const PROD_URL =
   "postgres://fixture:synthetic-password@db.production.test/neondb?sslmode=verify-full";
 const STAGING_UPPER_URL =
-  "postgres://fixture:synthetic-password@EP-Staging.Example.Neon.Tech./neondb?sslmode=verify-full";
+  "postgres://fixture:synthetic-password@EP-Staging.Example.Invalid./neondb?sslmode=verify-full";
 const recordingPostgres =
   (calls: Record<string, unknown>[]) =>
   (options: Record<string, unknown>): object => {
@@ -208,7 +208,7 @@ describe("erase target and TLS policy (no connection)", () => {
       ).toThrow(NO_TARGET);
   });
 
-  it("refuses pooler, *.pg.psdb.cloud, and opaque-host URLs without a target", () => {
+  it("refuses pooler, *.pg.psdb.cloud.invalid, and opaque-host URLs without a target", () => {
     for (const remote of [POOLER_URL, PSDB_URL, OPAQUE_URL])
       expect(() => validateEraseEnvironment({ DATABASE_URL: remote }, undefined), remote).toThrow(
         NO_TARGET,
@@ -216,7 +216,8 @@ describe("erase target and TLS policy (no connection)", () => {
   });
 
   it("requires sslmode=verify-full or sslrootcert for a remote target", () => {
-    const base = "postgres://fixture:synthetic-password@ep-staging.example.neon.tech/neondb";
+    const base =
+      "postgres://fixture:synthetic-password@ep-staging.example.neon.tech.invalid/neondb";
     for (const query of [
       "",
       "?sslmode=require",
@@ -287,7 +288,7 @@ describe("erase target and TLS policy (no connection)", () => {
     const [[options, ...extra]] = calls as [[Record<string, unknown>, ...unknown[]]];
     expect(extra).toEqual([]);
     expect(options).toMatchObject({
-      host: ["ep-staging.example.neon.tech"],
+      host: ["ep-staging.example.neon.tech.invalid"],
       port: [5432],
       database: "neondb",
       username: "fixture",
@@ -304,7 +305,8 @@ describe("erase target and TLS policy (no connection)", () => {
       calls.push(options);
       return {};
     };
-    const base = "postgres://fixture:synthetic-password@ep-staging.example.neon.tech/neondb";
+    const base =
+      "postgres://fixture:synthetic-password@ep-staging.example.neon.tech.invalid/neondb";
     for (const query of ["", "?sslmode=require", "?sslmode=disable"])
       expect(() => createEraseClient(fakePostgres, `${base}${query}`), query).toThrow(
         "requires verify-full TLS",
@@ -317,7 +319,7 @@ describe("erase target and TLS policy (no connection)", () => {
   it("gives the driver the same normalized host the TLS classifier checks", () => {
     const calls: Record<string, unknown>[] = [];
     createEraseClient(recordingPostgres(calls), STAGING_UPPER_URL);
-    expect(calls[0]).toMatchObject({ host: ["ep-staging.example.neon.tech"], ssl: "verify-full" });
+    expect(calls[0]).toMatchObject({ host: ["ep-staging.example.invalid"], ssl: "verify-full" });
   });
 
   it("keeps the agent-testdb client plaintext by default", () => {
