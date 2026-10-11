@@ -41,7 +41,16 @@ describe("workflow runner labels", () => {
   it("runs every job on GitHub-hosted Linux unless the repo is private", () => {
     for (const { name, text } of workflows) {
       for (const { id, runsOn } of jobs(text)) {
-        expect([hosted, byVisibility, overflowSwitch(id)], `${name} job ${id}`).toContain(runsOn);
+        // Visual baselines render body text with the runner's system fonts, so
+        // e2e.yml browser-smoke is deliberately pinned to ubuntu-24.04 and
+        // re-baselined in the same PR on bumps (docs/visual-regression.md).
+        // ubuntu-24.04 is still GitHub-hosted Linux, so the TOG-12326
+        // queue-forever risk does not apply.
+        const allowed =
+          name === "e2e.yml" && id === "browser-smoke"
+            ? [hosted, "ubuntu-24.04", byVisibility, overflowSwitch(id)]
+            : [hosted, byVisibility, overflowSwitch(id)];
+        expect(allowed, `${name} job ${id}`).toContain(runsOn);
       }
     }
   });
