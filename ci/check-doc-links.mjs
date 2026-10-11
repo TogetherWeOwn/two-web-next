@@ -546,52 +546,35 @@ function selftest() {
       ['missing anchor "#setup-2"'],
     );
 
-    // Restoring the old three-file scope must fail these cases: a broken
-    // link in an omitted file is silently accepted (exit 0, not 1).
-    check(
-      "AGENTS.md broken links fail with file, line and target",
-      () => {
-        write(
-          "AGENTS.md",
-          ["# Agents", "", "[lost](missing.md)", "[anchor](#no-such-anchor)"].join("\n"),
-        );
-      },
-      1,
-      [
-        'AGENTS.md:3: missing link target "missing.md"',
-        'AGENTS.md:4: missing anchor "#no-such-anchor"',
-      ],
-    );
-
-    check(
-      "PR template broken links fail with file, line and target",
-      () => {
-        write(
-          ".github/pull_request_template.md",
-          ["# Template", "", "[lost](missing.md)", "[anchor](#no-such-anchor)"].join("\n"),
-        );
-      },
-      1,
-      [
-        '.github/pull_request_template.md:3: missing link target "missing.md"',
-        '.github/pull_request_template.md:4: missing anchor "#no-such-anchor"',
-      ],
-    );
-
-    check(
-      "in-tree guide broken links fail with file, line and target",
-      () => {
-        write(
-          "bin/import/README.md",
-          ["# Import", "", "[lost](missing.md)", "[anchor](#no-such-anchor)"].join("\n"),
-        );
-      },
-      1,
-      [
-        'bin/import/README.md:3: missing link target "missing.md"',
-        'bin/import/README.md:4: missing anchor "#no-such-anchor"',
-      ],
-    );
+    // The six files this scope added, pinned literally on purpose: a loop over
+    // the scope constants shrinks with them and would never notice a dropped
+    // entry. Restoring the old three-file scope, or dropping any one of these,
+    // makes the checker skip the file, so its broken link is accepted (exit 0,
+    // not 1) and the case fails.
+    const NEW_SCOPE_FILES = [
+      "AGENTS.md",
+      "CHANGELOG.md",
+      "CODE_OF_CONDUCT.md",
+      ".github/pull_request_template.md",
+      "bin/import/README.md",
+      "ci/featured-proof/README.md",
+    ];
+    for (const path of NEW_SCOPE_FILES) {
+      check(
+        `${path} broken links fail with file, line and target`,
+        () => {
+          write(
+            path,
+            ["# Heading", "", "[lost](missing.md)", "[anchor](#no-such-anchor)"].join("\n"),
+          );
+        },
+        1,
+        [
+          `${path}:3: missing link target "missing.md"`,
+          `${path}:4: missing anchor "#no-such-anchor"`,
+        ],
+      );
+    }
 
     check(
       "new-scope fenced code and inline code links are skipped",
