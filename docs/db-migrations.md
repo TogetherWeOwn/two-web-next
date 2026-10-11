@@ -18,7 +18,7 @@ bot rewrite, framework ADR pending).
 | Bot path | Container → direct `postgres` driver (no Hyperdrive) → staging Neon pooled URL / production PlanetScale `5432` direct URL |
 | Migrations | direct (non-pooled) URL on port `5432`; pooled endpoints can break DDL transactionally. Staging reads `NEON_STAGING_DATABASE_URL`; production reads `PRODUCTION_DATABASE_URL` (PlanetScale direct `<id>.pg.psdb.cloud:5432`, never `6432`) |
 
-Repository configuration targets Neon staging through the Worker's `DB`
+Repository configuration routes the Worker through the `DB`
 Hyperdrive binding ([Wrangler config](../wrangler.jsonc)).
 The [backup workflow](../.github/workflows/neon-backup.yml) schedules nightly
 staging backups using `NEON_STAGING_DATABASE_URL`; an unset target secret skips the backup.
