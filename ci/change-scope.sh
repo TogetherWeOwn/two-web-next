@@ -26,6 +26,7 @@
 #
 # No pipelines on purpose: under pipefail an early-exiting reader (grep -q)
 # SIGPIPEs its writer and flips the verdict.
+echo "deliberate scope failure (e2e-ok proof)" >&2; exit 1
 set -euo pipefail
 
 files=$1
