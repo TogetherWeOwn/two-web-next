@@ -53,6 +53,20 @@ path is [`checkJoinThrottle`](../src/join/service.ts); RSVP writes use
 | Public event reads | 60 / 60 s | `PUBLIC_EVENT_READS_PER_MINUTE` in [`src/events/routes.tsx`](../src/events/routes.tsx) | `events-read:<clientKey>` across public event pages and feeds; see [`event-read-admission.md`](event-read-admission.md) |
 | RSVP write | 12 / 60 s | `RSVP_RATE_LIMIT` (`maxAttempts: 12`, `decaySeconds: 60`) in [`src/islands/contracts.ts`](../src/islands/contracts.ts) | `rsvp-write:<userId>` per member, shared by RSVP PUT and DELETE across events in [`src/events/rsvp.ts`](../src/events/rsvp.ts) |
 
+The `qa-login` Auth budget is per runner IP and shared across every suite in
+a run, including local runs: the whole sequential smoke presents a single
+runner IP, and each `qaLogin` in
+[`e2e/fixtures.ts`](../e2e/fixtures.ts) spends the same
+`qa-login:<clientKey>` bucket, so the 11th login inside one 60-second window
+is refused with the shared 429. The count lives in the `e2e/qa-login-budget`
+static guard (`e2e/qa-login-budget.test.mjs`, shipped with the local-smoke
+budget fix #665): it totals `qaLogin` call sites across the specs and fails when a
+run would exceed the budget — merge journeys onto fewer logins instead of
+retrying across the window. Bounded retry handling for an
+already-throttled staging login lives in
+[`e2e/qa-login-retry.mjs`](../e2e/qa-login-retry.mjs); the local `qaLogin`
+fails hard on the first 429.
+
 Generic and join buckets key on the client key above (`<name>:<clientKey>`);
 RSVP and profile-write buckets key on the member id instead, so switching verb
 or path cannot multiply the budget. The join bucket additionally carries the

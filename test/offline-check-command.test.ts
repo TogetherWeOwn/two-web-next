@@ -9,6 +9,7 @@ const entry = join(root, "ci/offline-check.mjs");
 const dbTargets = {
   DATABASE_URL: "postgres://fixture.invalid/never-connect",
   AUDIT_IMPORT_TEST_DATABASE_URL: "postgres://fixture.invalid/never-connect",
+  LEGACY_DATABASE_URL: "postgres://fixture.invalid/never-connect",
   W1_AGENT_TESTDB: "1",
   CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_DB: "postgres://fixture.invalid/never-connect",
   CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_OTHER: "postgres://fixture.invalid/never-connect",
@@ -39,7 +40,7 @@ function offline(args: string[] = [], failAt = "", failure = "status") {
 import { appendFileSync } from "node:fs";
 import { syncBuiltinESMExports } from "node:module";
 childProcess.spawnSync = (command, args, options) => {
-  const dbKeys = Object.keys(options.env).filter(key => key === "DATABASE_URL" || key === "AUDIT_IMPORT_TEST_DATABASE_URL" || key === "W1_AGENT_TESTDB" || key.startsWith("CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_") || key.startsWith("PG"));
+  const dbKeys = Object.keys(options.env).filter(key => key === "DATABASE_URL" || key === "AUDIT_IMPORT_TEST_DATABASE_URL" || key === "LEGACY_DATABASE_URL" || key === "W1_AGENT_TESTDB" || key.startsWith("CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_") || key.startsWith("PG"));
   appendFileSync(process.env.OFFLINE_TRACE, JSON.stringify({ command, args, dbKeys, cwd: options.cwd, marker: options.env.OFFLINE_MARKER }) + "\\n");
   if (args.includes(process.env.OFFLINE_FAIL_AT)) {
     if (process.env.OFFLINE_FAILURE === "error") return { error: new Error("fixture child unavailable"), status: null, signal: null };

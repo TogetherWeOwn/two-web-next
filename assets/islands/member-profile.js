@@ -50,6 +50,26 @@
   }
 
   var sessionExpired = false;
+  var leavingForRecovery = false;
+
+  function hasUnsavedChanges() {
+    return ["bio", "games_text", "timezone"].some(function (key) {
+      return form.elements[key].value !== form.elements[key].defaultValue;
+    });
+  }
+
+  if (typeof window !== "undefined")
+    window.addEventListener("beforeunload", function (event) {
+      // Recovery navigation is the explicit escape; the notice keeps the draft
+      // available in this document if the member chooses to stay.
+      if (leavingForRecovery) {
+        leavingForRecovery = false;
+        return;
+      }
+      if (!hasUnsavedChanges()) return;
+      event.preventDefault();
+      event.returnValue = "";
+    });
 
   function expiredNotice() {
     sessionExpired = true;
@@ -59,6 +79,17 @@
       "Your session expired. Your changes are still here.",
       true,
     );
+    var recoveryNotice = root.querySelector('[data-testid="profile-session-expired"]');
+    var recoveryLink = recoveryNotice && recoveryNotice.querySelector("a");
+    if (recoveryLink)
+      recoveryLink.addEventListener("click", function (event) {
+        if (event.button !== 0 || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey)
+          return;
+        leavingForRecovery = true;
+        setTimeout(function () {
+          leavingForRecovery = false;
+        }, 0);
+      });
   }
   if (typeof window !== "undefined")
     window.addEventListener("two:session-expired", function (event) {
@@ -379,6 +410,7 @@
     // the guard holds until it settles or expires.
     var cancelled = ++generation;
     sessionExpired = false;
+    leavingForRecovery = false;
     form.hidden = false;
     if (editControl) editControl.hidden = true;
     clearNotices();
