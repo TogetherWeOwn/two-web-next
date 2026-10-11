@@ -326,6 +326,13 @@ function browser(entry = "/events/past") {
     URL,
     AbortController,
     document: {
+      // Focus-ownership stubs: this drift fixture never moves focus, so every
+      // uninterrupted turn owns focus (null === null) and keeps heading focus.
+      get activeElement() {
+        return null;
+      },
+      addEventListener: () => {},
+      removeEventListener: () => {},
       querySelector: (s: string) =>
         s === '[data-island="past-events"]' ? mount : s.startsWith("link") ? canonical : og,
       querySelectorAll: (s: string) => [
