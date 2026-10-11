@@ -475,9 +475,12 @@ describe("redispatch fixture database isolation", () => {
   }
 
   function fakeAmbient(): string {
-    // Valid under both guard branches: the CI service URL in CI, the
-    // agent-testdb URL locally. Never connects; only validated by name.
-    return process.env.DATABASE_URL ?? "postgres://agent_test@agent-testdb:5432/postgres";
+    // Fixed literal, never the ambient env: `??` does not fall back for an
+    // empty DATABASE_URL, which the repo treats as a supported no-DB state
+    // (global guard skips empty values and DB suites skip). The literal
+    // passes the guard's agentTest branch in every runner env, including CI.
+    // Never connects; only validated, never opened.
+    return "postgres://agent_test@agent-testdb:5432/postgres";
   }
 
   function fakeName(seed: number): string {
