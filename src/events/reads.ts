@@ -138,8 +138,8 @@ export async function listUpcoming(
 
 /** Zero-based rank of one visible event in the upcoming order: the count of
  * visible rows sorted before it. Null when the key is absent, invisible,
- * ended or unrenderable — a grid day-jump to it resolves to page one. Two
- * small reads, only for explicit `event` jumps, never for a plain render. */
+ * ended or unrenderable — a grid day-jump to it keeps the requested page.
+ * Two small reads, only for explicit `event` jumps, never for a plain render. */
 export async function rankUpcoming(
   db: Db,
   key: string,
