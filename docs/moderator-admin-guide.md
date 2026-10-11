@@ -52,9 +52,15 @@ production-looking ones—require `--target production`. See [the runbook proced
 Once a quarter, pair this read-only comparison with the
 [revoke-command half](runbook.md#quarterly-moderator-access-review-revoke-command-half):
 audit first to find drift, then revoke app-only sessions, then re-run to confirm
-clean. An authorized operator runs the command; moderators supply the two ID
-lists through the approved private support process and never paste member
-identifiers into public channels.
+clean. An authorized operator runs the command and builds both ID lists with
+the read-only queries in [the cutover checklist](cutover-check.md#moderator-role-audit-w16-pre-flip):
+a read-only SELECT over live `web_sessions` for the app set, and a paginated
+guild-members read filtered against `DISCORD_MODERATOR_ROLE_IDS` for the
+Discord set. Moderators never supply the lists and never paste member
+identifiers into public channels. The app set sees only sessions live in the
+120-minute sliding TTL, so a clean re-run needs every Discord moderator signed
+in during that window. Treat the ID files as member data: keep them out of the
+repo and delete them after the run.
 
 The command compares the Discord-moderator set against the app-moderator set.
 It reads only the ID lists it is given: it never touches the network, never

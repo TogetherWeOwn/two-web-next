@@ -122,8 +122,8 @@ node --import ./bin/ts-hook.mjs bin/revoke-sessions.mjs --discord-id=<snowflake>
 
 - Cadence: quarterly. Cadence ownership is a CTO/COO call; this section does not change it.
 - Owner: Director of Engineering, with security/access decisions through the CISO (see [Safety and escalation](#safety-and-escalation)).
-- Scope: every person confirmed to have lost the Discord moderator role since the last review. First confirm the Discord moderator role has been removed, as in [A moderator lost their role](#a-moderator-lost-their-role).
-- Procedure: for each such Discord snowflake, dry-run first, verify the active-session count, then apply:
+- Scope: every person confirmed to have lost the Discord moderator role since the last review, plus every app-only ID the [role-audit half](moderator-admin-guide.md#quarterly-moderator-access-review-role-audit-half) reports. First confirm the Discord moderator role has been removed, as in [A moderator lost their role](#a-moderator-lost-their-role).
+- Procedure: run the role-audit half first to find drift, then for each such Discord snowflake, dry-run first, verify the active-session count, then apply:
 
 ```sh
 node --import ./bin/ts-hook.mjs bin/revoke-sessions.mjs --discord-id=<snowflake> --target production
@@ -132,7 +132,7 @@ node --import ./bin/ts-hook.mjs bin/revoke-sessions.mjs --discord-id=<snowflake>
 
 `DATABASE_URL` is supplied through the environment only, as in the procedure above.
 - Evidence of completion: a dated review record with the review date (UTC), the reviewer/operator, each reviewed Discord snowflake with its dry-run active-session count and its apply count, and confirmation that Discord role removal was verified before revocation. The command output is counts only; keep member identifiers in the private review record and never paste database URLs, tokens, or secrets.
-- Non-goal: the role-audit half is a separate future change. This section covers only the revoke-command half.
+- Non-goal: changing review cadence or access-decision ownership; those stay with the CTO/COO and CISO calls above.
 
 ## Deploy and record the rollback pointer
 
