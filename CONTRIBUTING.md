@@ -28,6 +28,7 @@ version.
   followed by digits), private URLs, tokens or secrets in any title, body, commit,
   comment or branch name. `pr-lint` warns when it finds a card ID in the title, body
   or a commit subject, and in the branch name in any letter case (`qa/tog-123-x`).
+- Every PR, including docs-only and draft heads, must not increase the total count of internal card IDs and instance-UI links in tracked files versus its fork point (the merge-base with its base); `pr-lint` enforces this with named lint-fixture exclusions only.
 - Be honest about the tests. Give the exact commands you ran and their results in
   Verification, and say what you did not run. Never claim a green run you did not see.
 - Address every review finding, or reply with why it does not apply.
@@ -43,8 +44,14 @@ version.
 The repository rulesets enforce the following on `main`:
 
 - `protect-main`: changes arrive through a pull request, the branch cannot be
-  deleted or force-pushed, only squash merges are allowed, and `check` and
-  `gitleaks` must pass.
+  deleted or force-pushed, only squash merges are allowed, and `ci-ok`,
+  `gitleaks` and `e2e-ok` must pass, plus Paperclip Review 5/5 on the exact head.
+
+  The journeys count only through the aggregator in e2e.yml: it fails when the
+  scope job fails or the browser journeys fail or are cancelled, and passes a
+  skipped journey run only on an explicit scope verdict (docs/test-only) or a
+  draft.
+
 - `pr-conventions`: `pr-lint` must pass.
 
 ### Change-gated CI and `ci-ok`
