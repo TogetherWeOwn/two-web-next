@@ -9,15 +9,18 @@ import { expect, localOrigin, qaLogin, test } from "./fixtures";
 // prove the Status and RSVPs filters each show only matching rows through
 // the frozen filter controls (src/admin/pages/events-list.tsx): Status
 // select, RSVPs select (Open = rsvp_open=1, Paused = rsvp_open=0), Filter
-// button, events-table / events-empty testids. Guest-redirect and
-// member-403 are unit-pinned and not re-proven here. This file subsumes the
-// create/publish/calendar journey so the sequential smoke holds its 10/min
-// shared `qa-login` throttle budget (one login here, none elsewhere added):
-// POST /auth/qa/:identity is throttled at 10/min per runner IP
-// (src/throttle.ts), so a separate create/publish spec file would push the
-// run to 11 logins and 429 the late profile journeys. Fixtures are cancelled
-// in `finally` through the request API; the local teardown sweep is the
-// backstop.
+// button, events-table / events-empty testids. The run ends with the
+// event-cancel finale the old admin.spec pinned (JSON cancel, guest 410
+// notice, refused RSVP write, STATUS:CANCELLED feed) on the published
+// fixture. Guest-redirect and member-403 are unit-pinned and not re-proven
+// here. This file subsumes the create/publish/calendar/cancel journey so the
+// sequential smoke holds its 10/min shared `qa-login` throttle budget (one
+// login here, none elsewhere added): POST /auth/qa/:identity is throttled at
+// 10/min per runner IP (src/throttle.ts), so a separate create/publish spec
+// file would push the run to 11 logins and 429 the late profile journeys.
+// Fixtures are cancelled in `finally` through the request API (cancel is
+// terminal, so the journey-cancelled fixture needs no cleanup); the local
+// teardown sweep is the backstop.
 
 async function createDraft(page: Page, title: string): Promise<string> {
   await page.goto("/admin/events");
@@ -40,7 +43,7 @@ async function createDraft(page: Page, title: string): Promise<string> {
   return eventKey;
 }
 
-test("moderator publishes an event and filters the admin event list by status and RSVP state", async ({
+test("moderator publishes, filters and cancels an event; guests see the notice", async ({
   page,
   context,
 }) => {
@@ -119,6 +122,54 @@ test("moderator publishes an event and filters the admin event list by status an
     await expect(page).toHaveURL(/rsvp_open=0/);
     await expect(rowFor(pausedTitle)).toHaveCount(1);
     await expect(rowFor(draftTitle)).toHaveCount(0);
+
+    // 8. Cancel finale: the moderator cancels the published fixture through
+    // the JSON transition (src/events/routes-writes.ts) and the run proves
+    // the guest-visible cancellation contract on the same login — no second
+    // login spends the shared 10/min qa-login budget (src/throttle.ts).
+    const cancelledKey = pausedKey!;
+    const cancel = await context.request.post(`/events/${cancelledKey}/cancel`, {
+      headers: { Origin: localOrigin },
+    });
+    expect(cancel.status()).toBe(200);
+    expect(((await cancel.json()) as { data: { status: string } }).data.status).toBe("cancelled");
+    // Cancel is terminal, so the fixture needs no finally cleanup.
+    pausedKey = undefined;
+
+    // The guest now sees the cancelled notice (frozen testid) on the 410 page.
+    const guestPage = await guest.newPage();
+    const gone = await guestPage.goto(`/e/${cancelledKey}`);
+    expect(gone?.status()).toBe(410);
+    await expect(guestPage.getByTestId("event-cancelled")).toContainText("Cancelled");
+
+    // The JSON show names the cancellation.
+    const show = await context.request.get(`/events/${cancelledKey}`);
+    expect(show.status()).toBe(410);
+    expect(await show.json()).toEqual({
+      reason: "event_cancelled",
+      message: "This event was cancelled.",
+      event_key: cancelledKey,
+      status: "cancelled",
+    });
+
+    // RSVP writes against the cancelled event are refused: the PUT answers
+    // 403 naming the cancellation (the JSON show above carries the
+    // `event_cancelled` reason; the RSVP resource names the same closure as
+    // `event_not_open` with `why: "cancelled"`).
+    const rsvp = await context.request.put(`/events/${cancelledKey}/rsvp`, {
+      data: { status: "going" },
+      headers: { Origin: localOrigin },
+    });
+    expect(rsvp.status()).toBe(403);
+    expect(await rsvp.json()).toMatchObject({ reason: "event_not_open", why: "cancelled" });
+
+    // The per-event feed still downloads for a cancelled event and renders
+    // the cancellation.
+    const ics = await guest.request.get(`/events/${cancelledKey}.ics`);
+    expect(ics.status()).toBe(200);
+    const icsBody = await ics.text();
+    expect(icsBody).toContain("STATUS:CANCELLED");
+    expect(icsBody).toContain(`UID:${cancelledKey}@`);
   } finally {
     await guest.close().catch(() => {});
     // API-only cleanup: cancel is idempotent, so cleanup holds on every
