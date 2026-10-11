@@ -374,11 +374,7 @@ function selftest() {
       // Every explicitly scoped file must exist in the scratch tree: the
       // checker fails closed on unreadable files, so stub the scope here and
       // let each setup overwrite the files it exercises.
-      for (const stub of [
-        ...ROOT_FILES,
-        ...CONTRIBUTOR_CONTRACT_FILES,
-        ...IN_TREE_GUIDE_FILES,
-      ]) {
+      for (const stub of [...ROOT_FILES, ...CONTRIBUTOR_CONTRACT_FILES, ...IN_TREE_GUIDE_FILES]) {
         write(stub, "# Stub\n");
       }
       // The docs walk requires the directory to exist; the stub carries no
@@ -602,9 +598,16 @@ function selftest() {
       () => {
         write(
           "AGENTS.md",
-          ["# Agents", "", "```md", "[fenced](missing.md)", "```", "", "`[inline](missing.md)`", ""].join(
-            "\n",
-          ),
+          [
+            "# Agents",
+            "",
+            "```md",
+            "[fenced](missing.md)",
+            "```",
+            "",
+            "`[inline](missing.md)`",
+            "",
+          ].join("\n"),
         );
         write(
           ".github/pull_request_template.md",
