@@ -38,6 +38,9 @@ export const URL_CASES = [
     redirect: "/auth/discord",
     noStore: true,
   },
+  // Post-cutover vanity aliases: sign-in entry and lobby front (DB-free 302s).
+  { frozen: "/login", path: "/login", status: 302, redirect: "/auth/discord", noStore: true },
+  { frozen: "/community", path: "/community", status: 302, redirect: "/", noStore: true },
   {
     frozen: "/auth/discord/callback",
     path: "/auth/discord/callback",

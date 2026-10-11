@@ -27,6 +27,8 @@ import re
 import sys
 from dataclasses import dataclass
 
+from internal_references import DEFAULT_PREFIXES, INSTANCE_UI, ticket_id_pattern
+
 TYPES = "feat|fix|perf|refactor|test|docs|build|ci|chore|revert|style|security"
 HEADER = re.compile(rf"^({TYPES})(\([A-Za-z0-9._/,-]+\))?!?: \S.*$")
 HELP = (
@@ -39,20 +41,12 @@ LIGHT_TYPES = {"docs", "chore", "build", "ci", "style", "test", "revert"}
 
 REQUIRED_SECTIONS = [
     # (heading, minimum real items, skipped for LIGHT_TYPES)
-    ("Thinking Path", 3, False),
+    # Pipeline review 2026-10-10: only what a reviewer or a deterministic gate needs. The tracked card or
+    # issue, and the test evidence. Thinking Path, What Changed, Risks, Model Used and the checklist ticks
+    # are optional prose; the Paperclip Review reads the diff itself.
     ("Linked Issues or Issue Description", 1, True),
-    ("What Changed", 1, False),
     ("Verification", 1, False),
-    ("Risks", 1, False),
-    ("Model Used", 1, False),
 ]
-
-MODEL_PLACEHOLDERS = ("provider, model id", "your model", "<model>", "[provider")
-
-DEDUP_CHECKBOX = re.compile(
-    r"^\s*[-*]\s*\[\s*([ xX])\s*\][^\n]*search(?:ed)?[^\n]*(?:similar|duplicate|prior|related)[^\n]*\bprs?\b",
-    re.I | re.M,
-)
 
 COMMENT = re.compile(r"<!--.*?-->", re.S)
 
@@ -60,7 +54,7 @@ COMMENT = re.compile(r"<!--.*?-->", re.S)
 # The ticket-id pattern is built per call from INTERNAL_ID_PREFIXES; these are the fixed ones.
 FIXED_INTERNAL = [
     (re.compile(r"\bagent://"), "an agent:// link"),
-    (re.compile(r"(?:^|[\s(<\[])/[A-Z]{2,6}/(?:issues|agents|projects|approvals|runs)/"), "an instance UI link"),
+    INSTANCE_UI,
     (re.compile(r"\b(?:localhost|127\.0\.0\.1)\b"), "a localhost URL"),
     (re.compile(r"\b(?:10\.\d{1,3}\.\d{1,3}\.\d{1,3}|192\.168\.\d{1,3}\.\d{1,3}|172\.(?:1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3})\b"),
      "a private-network address"),
@@ -133,11 +127,7 @@ def internal_hits(text, prefixes, slug=False):
     tooling lowercases (`qa/tog-1-fix`), so pass `slug=True` to match any case and to count `_` as a separator."""
     text = strip_comments(text)
     hits = []
-    if slug:
-        # [^\W_] keeps Unicode alphanumeric boundaries while allowing underscore separators.
-        m = re.search(rf"(?<![^\W_])(?:{prefixes})-\d+(?![^\W_])", text, re.I)
-    else:
-        m = re.search(rf"\b(?:{prefixes})-\d+\b", text)
+    m = ticket_id_pattern(prefixes, slug).search(text)
     if m:
         hits.append(f"ticket id {m.group(0)}")
     for pat, label in FIXED_INTERNAL:
@@ -148,7 +138,7 @@ def internal_hits(text, prefixes, slug=False):
 
 def check_pull_request(env):
     mode = "error" if env.get("PR_STANDARDS_MODE", "warn").strip().lower() == "error" else "warning"
-    prefixes = env.get("INTERNAL_ID_PREFIXES") or "TOG|PAP|PAPA"
+    prefixes = env.get("INTERNAL_ID_PREFIXES") or DEFAULT_PREFIXES
     private = env.get("REPO_PRIVATE", "true").strip().lower() == "true"
     title = (env.get("TITLE") or "").strip()
     body = env.get("BODY") or ""
@@ -169,8 +159,8 @@ def check_pull_request(env):
 
     plain = strip_comments(body)
     if len(re.sub(r"\s", "", plain)) < 40:
-        out.append(Finding("error", "PR body", "The description is empty. Fill in the PR template: thinking path, "
-                           "what changed, how it was verified, risks and the model used."))
+        out.append(Finding("error", "PR body", "The description is empty. Fill in the PR template: the linked card or issue and "
+                           "how it was verified."))
     elif not generated:
         ptype = pr_type(title)
         light = ptype in LIGHT_TYPES
@@ -182,17 +172,9 @@ def check_pull_request(env):
             if content is None:
                 out.append(Finding(mode, "PR template", f"Missing section '## {heading}'."))
                 continue
-            if heading == "Model Used" and any(p in content.lower() for p in MODEL_PLACEHOLDERS):
-                out.append(Finding(mode, "PR template", "'## Model Used' still holds placeholder text. Name the "
-                                   "model and version, or write 'None - human-authored'."))
-            elif real_items(content) < minimum:
+            if real_items(content) < minimum:
                 need = f"at least {minimum} items" if minimum > 1 else "real content"
                 out.append(Finding(mode, "PR template", f"'## {heading}' needs {need}."))
-        if ptype and ptype not in LIGHT_TYPES:
-            m = DEDUP_CHECKBOX.search(plain)
-            if not m or m.group(1) == " ":
-                out.append(Finding(mode, "Duplicate search", "Tick the checklist line saying you searched for "
-                                   "duplicate or related PRs, and link any you found."))
 
     if private:
         if not generated and not re.search(r"\bTOG-\d+\b", body):
@@ -202,15 +184,31 @@ def check_pull_request(env):
         for where, text in (("title", title), ("body", body), ("branch name", head_ref)):
             hits = internal_hits(text, prefixes, slug=where == "branch name")
             if hits:
-                out.append(Finding(mode, "Internal reference", f"The PR {where} holds {', '.join(hits)}. Public "
-                                   "repos carry no internal references: say it in plain words, link only public "
-                                   "GitHub issues, and name the branch after the change (fix/short-slug)."))
+                level = mode
+                if where == "branch name":
+                    cutoff = (env.get("HEAD_REF_ERROR_FROM_PR") or "").strip()
+                    pr_num_str = (env.get("PR_NUMBER") or "0").strip()
+                    try:
+                        pr_num = int(pr_num_str) if pr_num_str else 0
+                        cutoff_num = int(cutoff) if cutoff else 0
+                        if cutoff_num > 0 and pr_num >= cutoff_num:
+                            level = "error"
+                    except ValueError:
+                        pass
+                msg = (f"The PR {where} holds {', '.join(hits)}. Public "
+                       "repos carry no internal references: say it in plain words, link only public "
+                       "GitHub issues, and name the branch after the change (fix/short-slug).")
+                if where == "branch name":
+                    msg += (" Push the same SHA with "
+                            "`git push origin HEAD:refs/heads/<type>/<short-slug>` "
+                            "and open the PR from that ref.")
+                out.append(Finding(level, "Internal reference", msg))
     return out
 
 
 def check_commits(env):
     mode = "error" if env.get("PR_STANDARDS_MODE", "warn").strip().lower() == "error" else "warning"
-    prefixes = env.get("INTERNAL_ID_PREFIXES") or "TOG|PAP|PAPA"
+    prefixes = env.get("INTERNAL_ID_PREFIXES") or DEFAULT_PREFIXES
     private = env.get("REPO_PRIVATE", "true").strip().lower() == "true"
     out = []
     try:

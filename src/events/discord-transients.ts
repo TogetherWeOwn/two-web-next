@@ -32,7 +32,19 @@ export {
 } from "./discord-snapshot";
 
 const API = "https://discord.com/api/v10";
-const SAFE_SNAPSHOT_SQLSTATES = ["42501", "42P01", "55P03", "57014"];
+
+/**
+ * Every `outcome` value the `Discord snapshot outcome` log can emit. The
+ * runbook documents this exact set; the drift test fails when code and doc
+ * differ, so a new outcome cannot ship undocumented.
+ */
+export const DISCORD_SNAPSHOT_OUTCOMES = ["cold", "held", "fresh", "stale", "error"] as const;
+
+/** One of {@link DISCORD_SNAPSHOT_OUTCOMES}. */
+export type DiscordSnapshotOutcome = (typeof DISCORD_SNAPSHOT_OUTCOMES)[number];
+
+/** SQLSTATE codes allowed to leave the snapshot store in the outcome log. */
+export const SAFE_SNAPSHOT_SQLSTATES = ["42501", "42P01", "55P03", "57014"];
 
 function safeSnapshotSqlState(error: unknown): string | undefined {
   const rawCode = error && typeof error === "object" && "code" in error ? error.code : undefined;
@@ -308,14 +320,15 @@ export function cachedDiscordEventsSource(
             : usableDiscordSnapshot(snapshot);
         failed = recent === null;
         // One bounded diagnostic per request, never a key, payload or error message.
+        const outcome: DiscordSnapshotOutcome = failed
+          ? "cold"
+          : snapshot.retryAt > snapshot.now
+            ? "held"
+            : snapshot.now - snapshot.succeededAt! < DISCORD_CACHE_FRESH_MS
+              ? "fresh"
+              : "stale";
         console.info("Discord snapshot outcome", {
-          outcome: failed
-            ? "cold"
-            : snapshot.retryAt > snapshot.now
-              ? "held"
-              : snapshot.now - snapshot.succeededAt! < DISCORD_CACHE_FRESH_MS
-                ? "fresh"
-                : "stale",
+          outcome,
           completionFailed,
           ...(completionCode ? { code: completionCode } : {}),
         });
@@ -325,7 +338,8 @@ export function cachedDiscordEventsSource(
         // codes may leave the store; never log the driver's message or other fields.
         failed = true;
         const code = safeSnapshotSqlState(err);
-        console.warn("Discord snapshot outcome", { outcome: "error", code });
+        const outcome: DiscordSnapshotOutcome = "error";
+        console.warn("Discord snapshot outcome", { outcome, code });
         return [];
       }
     },

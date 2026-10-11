@@ -27,6 +27,75 @@ Never borrow another person's session or use the QA authentication seam to get
 admin access. If access or member-data audit logging fails, stop and escalate;
 do not bypass it with direct database queries or another endpoint.
 
+## A moderator lost their role
+
+Moderator status is copied into the session at sign-in, so removing a Discord
+role does not update existing sessions. First confirm the Discord moderator
+role has been removed. If the moderator stops visiting pages, the idle session
+expires within two hours (120 minutes after its last session-refreshing page view);
+normal browsing can rotate and extend that window. For immediate invalidation,
+an authorized operator should run the command below. It does not depend on the
+moderator signing out. First dry-run, check the active-session count, then apply
+revocation for the moderator's Discord snowflake:
+
+```sh
+node --import ./bin/ts-hook.mjs bin/revoke-sessions.mjs --discord-id=<snowflake> --target production
+node --import ./bin/ts-hook.mjs bin/revoke-sessions.mjs --discord-id=<snowflake> --target production --apply
+```
+
+The command revokes only active sessions; the database URL is supplied through
+`DATABASE_URL`, never as an argument. Remote database URLs—including
+production-looking ones—require `--target production`. See [the runbook procedure](runbook.md#a-moderator-lost-their-role).
+
+## Quarterly moderator access review (role-audit half)
+
+Once a quarter, pair this read-only comparison with the
+[quarterly review](runbook.md#quarterly-moderator-access-review):
+audit first to find drift, then revoke app-only sessions, then re-run to confirm
+clean. An authorized operator runs the command and builds both ID lists with
+the read-only queries in [the cutover checklist](cutover-check.md#moderator-role-audit-w16-pre-flip):
+a read-only SELECT over live `web_sessions` for the app set, and a paginated
+guild-members read filtered against `DISCORD_MODERATOR_ROLE_IDS` for the
+Discord set. Moderators never supply the lists and never paste member
+identifiers into public channels. The app set sees only sessions live in the
+120-minute sliding TTL, so expect `discord-only` for moderators not signed in
+during that window; close on `app-only` = 0 per the runbook. Treat `app-moderators.txt`, `discord-moderators.txt`,
+and `members.jsonl` as member data and `discord-auth.conf` as a credential:
+run the recipe from a scratch directory outside the checkout and keep all
+four files out of the repo. Delete them after the run:
+`rm app-moderators.txt discord-moderators.txt members.jsonl discord-auth.conf`.
+
+The command compares the Discord-moderator set against the app-moderator set.
+It reads only the ID lists it is given: it never touches the network, never
+opens a database, never changes roles, and never reads or prints tokens or
+secrets.
+
+```sh
+node --import ./bin/ts-hook.mjs bin/role-audit.mjs --discord-file=<path> --app-file=<path> [--json]
+node --import ./bin/ts-hook.mjs bin/role-audit.mjs --discord-ids=<csv> --app-ids=<csv> [--json]
+```
+
+Each side needs exactly one source (`--*-file` or `--*-ids`, not both, not
+neither). Files hold either a JSON array of strings or newline/comma separated
+IDs. Exit codes:
+
+| Exit | Meaning | Response |
+|---|---|---|
+| 0 | Sets match (empty on both sides is a clean pass) | Record the clean result |
+| 1 | Drift: the sets differ | Record `discord-only` as information; clear app-only access with the revoke procedure above, then re-run until `app-only` is 0 |
+| 2 | Usage or malformed input (missing side, both sources for one side, unknown flag, bad file, non-snowflake ID) | Fix the invocation or input, then re-run |
+
+`discord-only` means the person has the Discord role but no live app session;
+they gain the panel at next sign-in, so this is not a denial to troubleshoot.
+`app-only` means a live app session without the Discord role: excess privilege
+until the session expires or is revoked.
+
+Keep evidence counts-only: the text report prints exact counts plus at most 20
+IDs per side (`…and N more` beyond that), and `--json` reports exact
+`discordCount`/`appCount` with truncated `shown` lists and `omitted` counts.
+Record the review date, the counts, the outcome, and the follow-up actions in
+the private review record. Keep ID lists, member identifiers, database URLs, tokens, and secrets out of the record and all public text.
+
 ## Auth-wall probe (staging only)
 
 `bin/admin-authwall-probe.mjs` verifies all nine admin POST routes answer each
@@ -46,7 +115,7 @@ Live runs belong to the authorized cutover procedure, not CI.
 
 ## Screens and route reference
 
-Use the navigation **Events**, **Featured**, **Join attempts**, or **Site**.
+Use the navigation **Events**, **Featured**, **Join attempts**, **Activity log**, or **Site**.
 There is no panel-specific sign-out button; return to the homepage to sign out.
 In the table, `:key` means an event's key and `:id` a featured slot's ID. The
 POST paths are form actions, **not URLs to open or call manually**.
@@ -63,7 +132,7 @@ POST paths are form actions, **not URLs to open or call manually**.
 | POST | `/admin/events/:key/cancel` | **Cancel** / **Cancel event**. |
 | POST | `/admin/events/:key/rsvp-pause` | **Pause RSVPs** without cancelling. |
 | POST | `/admin/events/:key/rsvp-reopen` | **Reopen RSVPs** on an eligible event. |
-| GET | `/admin/featured` | Featured content list, title/publication filters and sorting. |
+| GET | `/admin/featured` | Featured content list, title/publication filters, sorting and pagination. |
 | GET | `/admin/featured/new` | **New featured slot** form. |
 | POST | `/admin/featured` | **Create** a slot. |
 | GET | `/admin/featured/:id` | Edit a slot. |
@@ -71,8 +140,9 @@ POST paths are form actions, **not URLs to open or call manually**.
 | POST | `/admin/featured/:id/delete` | **Delete this slot**. |
 | GET | `/admin/join-attempts` | Read-only join diagnostics, filters and pagination. |
 | GET | `/admin/join-attempts/:id` | Read-only attempt outcome and trace detail. |
+| GET | `/admin/activity-log` | Read-only activity log, subject/causer filters and pagination. |
 
-These are the 18 canonical routes in `src/admin/routes.tsx` (9 GET, 9 POST).
+These are the 19 canonical routes in `src/admin/routes.tsx` (10 GET, 9 POST).
 Five additional GET routes retain legacy bookmarks as 301 redirects:
 
 | Legacy path | Destination |
@@ -83,7 +153,7 @@ Five additional GET routes retain legacy bookmarks as 301 redirects:
 | `/admin/featured-contents/create` | `/admin/featured/new` |
 | `/admin/featured-contents/:id/edit` | `/admin/featured/:id` with the native ID resolved from the imported legacy ID, not a native-ID fallback. |
 
-All 23 routes (14 GET, 9 POST) use the moderator guard. Legacy redirects drop
+All 24 routes (15 GET, 9 POST) use the moderator guard. Legacy redirects drop
 query strings; an invalid or unmapped legacy featured ID returns 404, and an
 unavailable lookup returns 503. Use the canonical links for new instructions.
 Mutating buttons submit immediately: there is no action-confirmation dialog.
@@ -199,9 +269,11 @@ The event edit screen shows **RSVPs (count)** with **Member**, **Status**, and
 **Answered** (UTC), newest responses first by default. **Search members** with
 **Search** matches username text case-insensitively; **Status** and **Answered**
 column links toggle sorting while retaining the search. The count is the number
-of displayed answers (all statuses, not just going seats), so searching can
-reduce it. There is no roster pagination. Save event edits before these controls
-reload the page. This is a read-only roster: no adding/removing answers,
+of matching answers (all statuses, not just going seats), so searching can
+reduce it. The roster shows 100 answers per page with a "Showing a-b of N"
+line; **Previous** and **Next** keep the search and sort and return to the
+roster section. Sorting or searching again starts back on page 1. Save event
+edits before these controls reload the page. This is a read-only roster: no adding/removing answers,
 changing seats or exporting members. Read it only for authorized moderation.
 Reads of other members are access-logged; empty rosters and self-only reads create
 no access row. Audit-write failures always refuse protected contents, including
@@ -221,11 +293,13 @@ To prepare or maintain an approved slot:
 
 1. Open `/admin/featured` and choose **New featured slot**, or open an existing
    title to edit. **Search titles** matches title text case-insensitively;
-   **Published** filters All/Published/Unpublished. Press **Filter** to apply.
+   **Published** filters All/Published/Unpublished. Press **Filter** to apply
+   and return to page 1.
    The list shows **Published** (`yes`/`no`), **Position**, **Window (UTC)** and
    **Last changed** (UTC), ordered by ascending position by default. **Position**
-   and **Last changed** column links toggle sorting while retaining filters.
-   There is no pagination or drag-and-drop ordering.
+   and **Last changed** column links toggle sorting while retaining filters
+   and return to page 1. Use **Previous**/**Next** for 25-row pages, which keep
+   filters and sort. There is no drag-and-drop ordering.
 2. Fill in these settings:
 
    | Field | Rule |
@@ -286,10 +360,24 @@ Request ID is normally blank for the current live Discord add-member call.
 The ordinary sign-in flow does not write these rows; absence is not proof of
 success or no attempted join. Keep member identifiers private.
 
+### Read-only activity log
+
+`/admin/activity-log` shows **Who**, **What**, **When** and **Subject** for each
+recorded change. It shows up to **50 rows per page**, newest first. Use
+**Subject** (type, ID or description) and **Causer** (ID substring), then
+**Filter**; use **Next** for older rows and **Previous** to return. There is no
+edit or delete control, and the raw change payload is never shown.
+
+**Who** is a Discord ID for current activity. Imported rows keep their legacy
+internal causer IDs, shown with a **legacy ID** label; those IDs are not
+remapped to members and are never access-log subjects. Views that name a member
+write one access row; system-only or legacy-only pages create no per-subject
+row, the same rule as join attempts. Keep member identifiers private.
+
 ### Dashboard
 
-`/admin` has **Events** and **Featured content** cards plus these diagnostic
-sections when their data is available:
+`/admin` has **Events**, **Featured content** and **Activity log** cards plus
+these diagnostic sections when their data is available:
 
 - **Join funnel, last 90 days:** counts for recorded outcomes across the full
   window, not just one 100-row viewer page. Aggregate counts contain no member
@@ -310,7 +398,7 @@ Missing database configuration is different: normal signed-in session resolution
 and admin access are unavailable, not just the widgets. A signed-session request
 can return 503; guests still go to sign-in. Stop and escalate rather than assuming
 an otherwise usable panel with empty counts.
-There is no activity-log/member-access-log viewer, user editor, role/ban manager
+There is no member-access-log viewer, user editor, role/ban manager
 or join-attempt mutation screen here.
 
 ## Member deletion requests
@@ -378,7 +466,9 @@ For maintainers checking this guide:
 
 - [Admin routes](../src/admin/routes.tsx): complete route inventory and form actions.
 - [Admin pages](../src/admin/pages.tsx), [validation](../src/admin/validation.ts),
-  [store](../src/admin/store.ts), [recurrence](../src/admin/recurrence.ts),
+  [store](../src/admin/store.ts) ([event writes](../src/admin/store-event-writes.ts),
+  [event reads](../src/admin/store-event-reads.ts),
+  [access log](../src/admin/store-access.ts)), [recurrence](../src/admin/recurrence.ts),
   [event-list query](../src/admin/event-list.ts), [table queries](../src/admin/table-list.ts),
   [reads](../src/admin/reads.ts) and [join-funnel widget](../src/admin/join-funnel.ts):
   labels, limits, transitions, series, filters, roster, pagination and cached counts.
@@ -390,6 +480,9 @@ For maintainers checking this guide:
   [sessions](../src/sessions.ts), [roles](../src/roles.ts) and
   [throttling](../src/throttle.ts): permissions, member-data access logging,
   its default fail-closed policy and request limits.
+- [Role-audit command](../bin/role-audit.mjs) and
+  [role-audit comparison](../src/probes/role-audit.ts): deploy-time moderator
+  set comparison, exit codes and bounded counts-only report.
 - [Event sync](../src/events/sync.ts), [public event reads](../src/events/reads.ts)
   and [RSVP rules](../src/events/rsvp.ts): asynchronous write-back and public behavior.
 - [App routes](../src/index.tsx), [public pages](../src/pages.tsx),

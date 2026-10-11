@@ -112,7 +112,7 @@ export function validateEnvironment(env) {
     !db.password &&
     (!db.port || db.port === "5432");
   if (!testDb) {
-    // No Neon endpoint is committed in this repo. Remote execution needs an
+    // No staging endpoint is committed in this repo. Remote execution needs an
     // operator-verified staging allowlist AND the independently verified prod denylist.
     if (
       !stagingApp ||
@@ -123,12 +123,13 @@ export function validateEnvironment(env) {
       throw new Error(
         "Refusing seed: remote target requires a verified staging host/name and production host denylist.",
       );
+    const stagingProvider = host.endsWith(".neon.tech") || host.endsWith(".pg.psdb.cloud");
     if (
       host !== hostname(env.SEED_STAGING_DB_HOST) ||
       name !== env.SEED_STAGING_DB_NAME ||
-      !host.endsWith(".neon.tech")
+      !stagingProvider
     )
-      throw new Error("Refusing seed: database is not the allowlisted staging Neon endpoint.");
+      throw new Error("Refusing seed: database is not the allowlisted staging endpoint.");
   }
   return { databaseUrl: env.DATABASE_URL, host, name };
 }

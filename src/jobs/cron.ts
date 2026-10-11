@@ -1,4 +1,5 @@
 import {
+  AGENT_EVENT_AUDIT_RETENTION_DAYS,
   EVENT_SEARCH_LOG_RETENTION_DAYS,
   IDEMPOTENCY_KEY_RETENTION_DAYS,
   JOIN_ATTEMPT_RETENTION_DAYS,
@@ -68,6 +69,7 @@ export async function reconcileEvents(deps: {
 }
 
 export type PruneCounts = {
+  agentEventAudits: number;
   accessLog: number;
   joinAttempts: number;
   idempotencyKeys: number;
@@ -88,14 +90,23 @@ export async function pruneModelTables(
   stores: PruneStores,
   now: Date = new Date(),
 ): Promise<PruneCounts> {
-  const [accessLog, joinAttempts, idempotencyKeys, searchLog, sessions] = await Promise.all([
-    stores.accessLog.pruneOlderThan(cutoff(now, MEMBER_ACCESS_LOG_RETENTION_DAYS)),
-    stores.joinAttempts.pruneOlderThan(cutoff(now, JOIN_ATTEMPT_RETENTION_DAYS)),
-    stores.idempotencyKeys.pruneOlderThan(cutoff(now, IDEMPOTENCY_KEY_RETENTION_DAYS)),
-    stores.searchLog.pruneOlderThan(cutoff(now, EVENT_SEARCH_LOG_RETENTION_DAYS)),
-    stores.sessions.sweepExpired(now),
-  ]);
-  const counts = { accessLog, joinAttempts, idempotencyKeys, searchLog, sessions };
+  const [agentEventAudits, accessLog, joinAttempts, idempotencyKeys, searchLog, sessions] =
+    await Promise.all([
+      stores.agentEventAudits.pruneOlderThan(cutoff(now, AGENT_EVENT_AUDIT_RETENTION_DAYS)),
+      stores.accessLog.pruneOlderThan(cutoff(now, MEMBER_ACCESS_LOG_RETENTION_DAYS)),
+      stores.joinAttempts.pruneOlderThan(cutoff(now, JOIN_ATTEMPT_RETENTION_DAYS)),
+      stores.idempotencyKeys.pruneOlderThan(cutoff(now, IDEMPOTENCY_KEY_RETENTION_DAYS)),
+      stores.searchLog.pruneOlderThan(cutoff(now, EVENT_SEARCH_LOG_RETENTION_DAYS)),
+      stores.sessions.sweepExpired(now),
+    ]);
+  const counts = {
+    agentEventAudits,
+    accessLog,
+    joinAttempts,
+    idempotencyKeys,
+    searchLog,
+    sessions,
+  };
   if (Object.values(counts).some((n) => n > 0)) console.info("Model prune pass completed.", counts);
   return counts;
 }

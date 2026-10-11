@@ -37,6 +37,7 @@ describe.skipIf(!raw)("Postgres Discord snapshots, independent request clients",
       ...databaseOptions,
       password: () => url.password,
       connect_timeout: 1,
+      idle_timeout: 0, // pre-opened sessions may wait for their race
       connection: {
         search_path: fixture.schemaName,
         application_name: `discord-fence-${fixture.schemaName}`,
@@ -68,52 +69,87 @@ describe.skipIf(!raw)("Postgres Discord snapshots, independent request clients",
       await gate;
       return [];
     });
-    const a = cachedDiscordEventsSource(
-      env,
-      { upcoming: read, lastReadFailed: () => false },
-      pgDiscordSnapshotStore(connect),
-    );
-    const pending = a.upcoming();
-    await started;
-    const losers = await Promise.all(
-      Array.from({ length: 6 }, async () => {
-        const source = cachedDiscordEventsSource(
-          env,
-          { upcoming: read, lastReadFailed: () => false },
-          pgDiscordSnapshotStore(connect),
-        );
-        expect(await source.upcoming()).toEqual([]);
-        return source.lastReadFailed();
-      }),
-    );
-    expect(losers).toEqual(Array(6).fill(true));
-    expect(read).toHaveBeenCalledTimes(1);
-    release();
-    expect(await pending).toEqual([]);
-    expect(a.lastReadFailed()).toBe(false);
-    expect(clients).toBe(8);
-    const fresh = cachedDiscordEventsSource(
-      env,
-      { upcoming: read, lastReadFailed: () => false },
-      pgDiscordSnapshotStore(connect),
-    );
-    expect(await fresh.upcoming()).toEqual([]);
-    expect(fresh.lastReadFailed()).toBe(false);
-    expect(read).toHaveBeenCalledTimes(1);
+    const loserClients = Array.from({ length: 6 }, connect);
+    try {
+      // Open loser sessions before the owner takes its lease, so setup never runs under it.
+      for (const client of loserClients) await client`select pg_backend_pid()`;
+      const a = cachedDiscordEventsSource(
+        env,
+        { upcoming: read, lastReadFailed: () => false },
+        pgDiscordSnapshotStore(connect),
+      );
+      const pending = a.upcoming();
+      await started;
+      const loserOpens = Array<number>(6).fill(0);
+      const losers = await Promise.all(
+        loserClients.map(async (client, i) => {
+          const source = cachedDiscordEventsSource(
+            env,
+            { upcoming: read, lastReadFailed: () => false },
+            pgDiscordSnapshotStore(() => {
+              loserOpens[i]! += 1;
+              return client;
+            }),
+          );
+          expect(await source.upcoming()).toEqual([]);
+          return source.lastReadFailed();
+        }),
+      );
+      expect(losers).toEqual(Array(6).fill(true));
+      expect(loserOpens).toEqual(Array(6).fill(1));
+      expect(read).toHaveBeenCalledTimes(1);
+      release();
+      expect(await pending).toEqual([]);
+      expect(a.lastReadFailed()).toBe(false);
+      expect(clients).toBe(8);
+      const fresh = cachedDiscordEventsSource(
+        env,
+        { upcoming: read, lastReadFailed: () => false },
+        pgDiscordSnapshotStore(connect),
+      );
+      expect(await fresh.upcoming()).toEqual([]);
+      expect(fresh.lastReadFailed()).toBe(false);
+      expect(read).toHaveBeenCalledTimes(1);
+    } finally {
+      await Promise.all(loserClients.map((client) => client.end({ timeout: 0 })));
+    }
   });
   it.each(["cold", "stale"])(
     "simultaneous %s claims have exactly one database-clock winner",
     async (state) => {
       if (state === "stale")
         await fixture.client`insert into discord_event_snapshots (key,payload,succeeded_at) values (${key}, '[]', clock_timestamp() - interval '61 seconds')`;
-      const claims = await Promise.all(
-        Array.from({ length: 8 }, () => pgDiscordSnapshotStore(connect).claim(key)),
-      );
-      expect(claims.filter((c) => c.token)).toHaveLength(1);
-      const winner = claims.find((c) => c.token)!;
-      expect(winner.leaseExpiresAt! - winner.now).toBeGreaterThan(DISCORD_REFRESH_LEASE_MS - 100);
-      expect(winner.leaseExpiresAt! - winner.now).toBeLessThanOrEqual(DISCORD_REFRESH_LEASE_MS);
-      expect(clients).toBe(8);
+      const requestClients = Array.from({ length: 8 }, connect);
+      const storeOpens = Array<number>(8).fill(0);
+      try {
+        // postgres.js connects lazily: open every session before the race.
+        const backendPids = [];
+        for (const client of requestClients) {
+          const [backend] = await client`select pg_backend_pid() as pid`;
+          backendPids.push(backend!.pid);
+        }
+        expect(new Set(backendPids).size).toBe(8);
+
+        const settled = await Promise.allSettled(
+          requestClients.map((client, i) =>
+            pgDiscordSnapshotStore(() => {
+              storeOpens[i]! += 1;
+              return client;
+            }).claim(key),
+          ),
+        );
+        const claims = settled.map((result) => {
+          if (result.status === "rejected") throw result.reason;
+          return result.value;
+        });
+        expect(claims.filter((c) => c.token)).toHaveLength(1);
+        const winner = claims.find((c) => c.token)!;
+        expect(winner.leaseExpiresAt! - winner.now).toBeGreaterThan(DISCORD_REFRESH_LEASE_MS - 100);
+        expect(winner.leaseExpiresAt! - winner.now).toBeLessThanOrEqual(DISCORD_REFRESH_LEASE_MS);
+        expect(storeOpens).toEqual(Array(8).fill(1));
+      } finally {
+        await Promise.all(requestClients.map((client) => client.end({ timeout: 0 })));
+      }
     },
   );
   it("samples the claim clock anchor before its transaction query without an outer query", async () => {

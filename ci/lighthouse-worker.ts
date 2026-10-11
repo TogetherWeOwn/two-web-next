@@ -6,6 +6,7 @@ import app from "../src/index";
 import { events } from "../src/db/admin-schema";
 import type { Db } from "../src/db/index";
 import type { Env } from "../src/env";
+import { EVENTS_MONTH_GRID_LIMIT, EVENTS_UPCOMING_PAGE_SIZE } from "../src/islands/contracts";
 import { createMemorySessionStore } from "../src/sessions";
 
 import { auditPaths, fixtureKey } from "./lighthouse-paths";
@@ -24,7 +25,7 @@ const goingSql =
 const localOrigin = "http://127.0.0.1:8787";
 
 function neighborSql(comparison: "<" | ">", direction: "asc" | "desc"): string {
-  return `${linkSelect} where ("events"."status" = $1 and "events"."id" <> $2 and isfinite("events"."starts_at") and ("events"."starts_at" ${comparison} (select "starts_at" from "events" where "events"."id" = $3) or ("events"."starts_at" = (select "starts_at" from "events" where "events"."id" = $4) and "events"."id" ${comparison} $5))) order by "events"."starts_at" ${direction}, "events"."id" ${direction} limit $6`;
+  return `${linkSelect} where ("events"."status" = $1 and "events"."id" <> $2 and isfinite("events"."starts_at") and "events"."ends_at" >= $3 and ("events"."starts_at" ${comparison} (select "starts_at" from "events" where "events"."id" = $4) or ("events"."starts_at" = (select "starts_at" from "events" where "events"."id" = $5) and "events"."id" ${comparison} $6))) order by "events"."starts_at" ${direction}, "events"."id" ${direction} limit $7`;
 }
 
 function isInstant(value: unknown): value is string {
@@ -110,11 +111,72 @@ export function fixtureEnvForRequest(nowMs: number): Env & Record<string, unknow
         }
         if (
           sql ===
-            `${eventSelect} where ("events"."status" != 'draft' and (isfinite("events"."starts_at") and isfinite("events"."ends_at")) and "events"."ends_at" >= $1) order by "events"."starts_at" asc, "events"."id" asc` &&
+            `select count(*) from "events" where ("events"."status" != 'draft' and (isfinite("events"."starts_at") and isfinite("events"."ends_at")) and "events"."ends_at" >= $1)` &&
           params.length === 1 &&
           isInstant(params[0])
         ) {
+          return { rows: [[fixture.endsAt >= new Date(params[0]) ? "1" : "0"]] };
+        }
+        // The upcoming list is paged: the audited set only turns page one
+        // (Drizzle omits a zero offset), so the pinned limit below proves the
+        // bound, not just the shape. Later pages emit an offset clause the
+        // closed list deliberately does not know.
+        if (
+          sql ===
+            `${eventSelect} where ("events"."status" != 'draft' and (isfinite("events"."starts_at") and isfinite("events"."ends_at")) and "events"."ends_at" >= $1) order by "events"."starts_at" asc, "events"."id" asc limit $2` &&
+          params.length === 2 &&
+          isInstant(params[0]) &&
+          params[1] === EVENTS_UPCOMING_PAGE_SIZE + 1
+        ) {
           return { rows: fixture.endsAt >= new Date(params[0]) ? [encoded] : [] };
+        }
+        // No calendar-view traffic in the audited set; emulate the month read
+        // faithfully against the single fixture row so one never 500s silently.
+        if (
+          sql ===
+            `${eventSelect} where ("events"."status" != 'draft' and (isfinite("events"."starts_at") and isfinite("events"."ends_at")) and "events"."ends_at" >= $1 and "events"."starts_at" >= $2 and "events"."starts_at" < $3) order by "events"."starts_at" asc, "events"."id" asc limit $4` &&
+          params.length === 4 &&
+          isInstant(params[0]) &&
+          isInstant(params[1]) &&
+          isInstant(params[2]) &&
+          params[3] === EVENTS_MONTH_GRID_LIMIT
+        ) {
+          const startsAt = fixture.startsAt.getTime();
+          const inWindow =
+            startsAt >= new Date(params[1]).getTime() && startsAt < new Date(params[2]).getTime();
+          return {
+            rows: fixture.endsAt >= new Date(params[0]) && inWindow ? [encoded] : [],
+          };
+        }
+        // Grid day-jumps resolve the card's list page: the anchor row, then the
+        // count of visible rows before it. Single-fixture emulation: the row
+        // counts exactly when the anchor is the fixture itself.
+        if (
+          sql ===
+            `${eventSelect} where ("events"."event_key" = $1 and "events"."status" != 'draft' and (isfinite("events"."starts_at") and isfinite("events"."ends_at")) and "events"."ends_at" >= $2)` &&
+          params.length === 2 &&
+          params[0] === fixtureKey &&
+          isInstant(params[1])
+        ) {
+          return { rows: fixture.endsAt >= new Date(params[1]) ? [encoded] : [] };
+        }
+        if (
+          sql ===
+            `select count(*) from "events" where ("events"."status" != 'draft' and (isfinite("events"."starts_at") and isfinite("events"."ends_at")) and "events"."ends_at" >= $1 and ("events"."starts_at" < $2 or ("events"."starts_at" = $3 and "events"."id" < $4)))` &&
+          params.length === 4 &&
+          isInstant(params[0]) &&
+          isInstant(params[1]) &&
+          isInstant(params[2]) &&
+          typeof params[3] === "number"
+        ) {
+          const anchor = { startsAt: new Date(params[1]).getTime(), id: params[3] };
+          const before =
+            fixture.endsAt >= new Date(params[0]) &&
+            (fixture.startsAt.getTime() < anchor.startsAt ||
+              (fixture.startsAt.getTime() === anchor.startsAt && fixture.id < anchor.id))
+              ? "1"
+              : "0";
+          return { rows: [[before]] };
         }
         if (
           inTransaction &&
@@ -160,7 +222,14 @@ export function fixtureEnvForRequest(nowMs: number): Env & Record<string, unknow
         // The one fixture has no neighboring or related events.
         if (
           (sql === neighborSql("<", "desc") || sql === neighborSql(">", "asc")) &&
-          sameParams(params, ["published", fixture.id, fixture.id, fixture.id, fixture.id, 1])
+          params.length === 7 &&
+          params[0] === "published" &&
+          params[1] === fixture.id &&
+          isInstant(params[2]) &&
+          params[3] === fixture.id &&
+          params[4] === fixture.id &&
+          params[5] === fixture.id &&
+          params[6] === 1
         )
           return { rows: [] };
         if (

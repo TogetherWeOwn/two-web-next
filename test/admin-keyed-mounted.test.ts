@@ -132,6 +132,7 @@ describe.skipIf(!process.env.DATABASE_URL)(
       "featured",
       "join-funnel",
       "going-counts",
+      "roster-count",
       "search-widget",
       "timeouts",
     ] as const)(

@@ -10,6 +10,7 @@ Stack: [Hono](https://hono.dev) on Cloudflare Workers, TypeScript, Vitest,
 [Drizzle](https://orm.drizzle.team) + Postgres, server-rendered HTML with plain
 JavaScript islands. The [parity matrix](docs/parity.md) tracks the migration;
 migration plan: TOG-9671.
+How it fits together: [docs/architecture.md](docs/architecture.md).
 Shared-DB foundation (topology, numbering, backups): [docs/db-migrations.md](docs/db-migrations.md).
 Operations (deploy/rollback, `/up`, queues, outages and restore drills):
 [docs/runbook.md](docs/runbook.md). Security boundaries and repository evidence:
@@ -17,36 +18,14 @@ Operations (deploy/rollback, `/up`, queues, outages and restore drills):
 
 ## What works today
 
-- Homepage, rules (optional last-updated stamp), privacy page, branded error pages,
-  manifest/icons, canonical URLs, sitemap, robots and security/cache headers.
-  Homepage member counts currently show an unavailable state, not live statistics.
-- Discord sign-in (`identify` + `guilds.join`) and the join journey, including
-  fallback invite and join-attempt audit. The OAuth access token is used once,
-  never stored. OAuth-state and session cookies contain signed random values;
-  only persisted session tokens are hashed. Authenticated views rotate session
-  tokens and logout revokes them.
-- Moderator status is recomputed at login from Discord snowflake role IDs (not
-  names); missing configuration or failed lookups fail closed. The QA sign-in
-  seam requires the exact staging `APP_URL` configuration and is disabled
-  without its token; that configuration gate is not a request-host allowlist.
-- Member-gated `/profile` and `/members/:user` views, plus self-only profile
-  edits. Member-data access is recorded; log-write failures refuse reads by
-  default.
-- Event listing, calendar and past-event islands, event detail/search, iCalendar
-  and Google Calendar links, event feeds, RSVP/leave endpoints and going counts.
-  RSVP endpoints are implemented; the event detail page does not yet mount an
-  RSVP-button island. Discord-native calendar rows use [shared expiring snapshots](docs/discord-snapshots.md)
-  and atomic refresh admission in the existing database; they never become canonical events.
-- Moderator admin screens: event and featured-event CRUD, read-only RSVP roster,
-  join audit and funnel summary.
-- Guarded agent-event ingress with caller/guild validation, idempotency and
-  outer rate limiting. CSP report ingestion and human-route throttle responses
-  have fixture coverage; the general human throttle currently needs an explicit
-  `DATABASE_URL` (the Hyperdrive-only path does not enforce it).
-- Worker queue/scheduler scaffolding: retries, locking, queue ledger,
-  `events:reconcile`, retention pruning and readiness `/up` (503 on DB/schema failure or a missing required secret).
-  Bot/Discord adapters are still reject-all stubs; the separate event write-back
-  queue is not bound. These are not a claim of end-to-end live bot parity.
+- Homepage member/online counts and rank reads come from bot-owned `web_v1` views, are cached for 60 seconds, and hide missing or stale counts; the page degrades when reads fail. House rules, the versioned privacy page, branded error pages, manifest/icons, canonical metadata, sitemap, robots, and security/cache headers are also implemented ([`src/counts.ts`](src/counts.ts), [`src/pages.tsx`](src/pages.tsx), [`src/index.tsx`](src/index.tsx), [`src/seo.ts`](src/seo.ts), [`test/home-counts.test.ts`](test/home-counts.test.ts), [`test/seo.test.ts`](test/seo.test.ts), [`test/n2-manifest-errors.test.ts`](test/n2-manifest-errors.test.ts)). `/.well-known/security.txt` serves the RFC 9116 disclosure file ([`src/security-txt.ts`](src/security-txt.ts), [`src/index.tsx`](src/index.tsx), [`test/security-txt.test.ts`](test/security-txt.test.ts)).
+- Discord sign-in requests `identify` + `guilds.join`; the join journey includes an invite fallback and join-attempt audit. The OAuth access token is used for the join request and not stored. OAuth state and return-journey cookies are signed; persisted session tokens are hashed, rotated on authenticated reads, and revoked on logout ([`src/index.tsx`](src/index.tsx), [`src/join/route.ts`](src/join/route.ts), [`src/sessions.ts`](src/sessions.ts), [`test/auth-acceptance.test.ts`](test/auth-acceptance.test.ts), [`test/sessions.test.ts`](test/sessions.test.ts)).
+- Moderator status is recomputed at login by matching Discord snowflake role IDs, not names; a blank allowlist or failed lookup denies moderator status. QA sign-in requires its configured token and exact staging `APP_URL`; this is not a request-host allowlist ([`src/index.tsx`](src/index.tsx), [`src/roles.ts`](src/roles.ts), [`src/qa.ts`](src/qa.ts), [`test/auth-acceptance.test.ts`](test/auth-acceptance.test.ts), [`test/qa-identity-admission.test.ts`](test/qa-identity-admission.test.ts)).
+- `/profile` and `/members/:user` are member-gated; profile edits are self-only. Reads of another member's data are recorded, and these profile/member reads are refused if audit recording fails ([`src/profiles/routes.tsx`](src/profiles/routes.tsx), [`src/member-reads.ts`](src/member-reads.ts), [`test/profiles.test.ts`](test/profiles.test.ts), [`test/profile-self-only.test.ts`](test/profile-self-only.test.ts), [`test/member-data-access.test.ts`](test/member-data-access.test.ts)).
+- Event listing, calendar and past-event islands, event detail/search, iCalendar and Google Calendar links, event feeds, RSVP/leave endpoints, and going counts are implemented. The event detail page mounts the RSVP-button island. Discord-native calendar rows use [shared expiring snapshots](docs/discord-snapshots.md) and atomic refresh admission in Postgres; they are display-only, not canonical events ([`src/events/pages.tsx`](src/events/pages.tsx), [`src/events/routes.tsx`](src/events/routes.tsx), [`src/events/reads.ts`](src/events/reads.ts), [`test/events.test.ts`](test/events.test.ts), [`test/event-page.test.ts`](test/event-page.test.ts), [`test/islands-rsvp-button.test.ts`](test/islands-rsvp-button.test.ts), [`test/event-feeds.test.ts`](test/event-feeds.test.ts), [`test/discord-snapshot-postgres.test.ts`](test/discord-snapshot-postgres.test.ts)).
+- Moderator admin screens include event and featured-event CRUD, a read-only RSVP roster, join-attempt audit, and a funnel summary ([`src/admin/routes.tsx`](src/admin/routes.tsx), [`src/admin/reads.ts`](src/admin/reads.ts), [`test/admin.test.ts`](test/admin.test.ts), [`test/admin-reads.test.ts`](test/admin-reads.test.ts)). They also include a read-only activity-log viewer showing who changed what, with subject and causer filters ([`src/admin/routes.tsx`](src/admin/routes.tsx), [`src/admin/reads.ts`](src/admin/reads.ts), [`src/admin/pages.tsx`](src/admin/pages.tsx), [`test/admin-activity-log.test.ts`](test/admin-activity-log.test.ts)).
+- Agent-event ingress validates its caller and guild, supports idempotency, and applies an outer rate limit. CSP report ingestion and human-route throttles have fixture coverage; the human throttle uses `DATABASE_URL` when set, otherwise Hyperdrive's `DB.connectionString`. Shared throttle middleware allows when no store is configured or a store operation fails; `/join/discord` and `/join/callback` use a separate check that can fail if its configured store errors ([`src/agent-events/route.ts`](src/agent-events/route.ts), [`src/agent-events/service.ts`](src/agent-events/service.ts), [`src/throttle.ts`](src/throttle.ts), [`src/join/route.ts`](src/join/route.ts), [`src/db/connection.ts`](src/db/connection.ts), [`test/agent-events.test.ts`](test/agent-events.test.ts), [`test/agent-events-shield.test.ts`](test/agent-events-shield.test.ts), [`test/csp-reports.test.ts`](test/csp-reports.test.ts), [`test/throttle-db-connection.test.ts`](test/throttle-db-connection.test.ts)).
+- Queue and scheduler code includes retries, locking, a queue ledger, `events:reconcile`, retention pruning, and `/up` readiness (503 on DB/schema failure or missing `SESSION_SECRET`, `DISCORD_CLIENT_SECRET`, or `DISCORD_BOT_TOKEN`). The jobs worker uses a bot client and Postgres event store; missing bot endpoint/key/secret configuration makes bot calls fail as terminal jobs. Internal-action producer/consumer logic and its Wrangler queue binding exist, but the alert probe is the only sender to the internal-action queue; this does not claim normal web dispatch or end-to-end live bot parity ([`src/jobs/worker.ts`](src/jobs/worker.ts), [`src/jobs/call-internal-action.ts`](src/jobs/call-internal-action.ts), [`src/bot/client.ts`](src/bot/client.ts), [`src/alert-probe.ts`](src/alert-probe.ts), [`src/up.ts`](src/up.ts), [`wrangler.jsonc`](wrangler.jsonc), [`test/jobs.test.ts`](test/jobs.test.ts), [`test/jobs-worker-config.test.ts`](test/jobs-worker-config.test.ts), [`test/callinternalaction-no-web-dispatch.test.ts`](test/callinternalaction-no-web-dispatch.test.ts), [`test/up.test.ts`](test/up.test.ts)). Guarded one-row re-dispatch applies a single `replay` advice by queueing a fresh sync-event via `POST /admin/queue/failed/:id/redispatch`; it is staging-only and disabled until separately authorized ([queue-redrive runbook](docs/queue-redrive-runbook.md)) ([`src/admin/queue-redispatch.ts`](src/admin/queue-redispatch.ts), [`src/admin/routes.tsx`](src/admin/routes.tsx), [`test/queue-redispatch-route.test.ts`](test/queue-redispatch-route.test.ts), [`test/queue-redispatch-postgres.test.ts`](test/queue-redispatch-postgres.test.ts)).
 
 ## Moderator guides
 
@@ -129,12 +108,13 @@ node ci/coverage-summary.mjs
 
 Coverage includes every
 `src/**/*.{ts,tsx}` file, even if no test imports it. Global and aggregate
-area floors (`src/admin`, `src/events`, `src/join`, `src/sessions.ts`) live in
-`vitest.config.ts`. The baseline uses the full suite with the test database;
-without it, skipped live suites may put coverage below the floors. CI's
+area floors (`src/admin`, `src/events`, `src/join`, `src/sessions.ts`, `src/jobs`,
+`src/bot`, `src/agent-events`, `src/profiles`) live in `vitest.config.ts`. The
+baseline uses the full suite with the test database; without it, skipped live
+suites may put coverage below the floors. CI's
 required `check` job runs the configuration drift check, Biome lint/format gate,
 typecheck and the coverage gate against its Postgres service, writes a job summary
-with the ten least-covered files, and uploads HTML, LCOV and JSON reports for 14 days,
+with the ten least-covered files, and uploads the JSON coverage summary for 14 days,
 including on failure.
 
 When intentionally raising a floor, re-measure with the same locked provider
@@ -179,6 +159,23 @@ npm run build:assets:check           # fail when the output drifted
 npm run config:check                 # drift check + its local-fixture selftests
 npx wrangler deploy --dry-run --outdir dist   # bundle check; does not deploy
 ```
+
+### Browser regressions
+
+`test/admin-event-native-unicode.test.ts` drives native admin event forms in
+Chromium and skips its 48 browser cases unless `ADMIN_EVENT_BROWSER_TESTS=true`.
+Every document and asset is an intercepted synthetic fixture, so it needs no
+server, database or network. Install the browser once, then run:
+
+```sh
+npx playwright install --with-deps chromium
+ADMIN_EVENT_BROWSER_TESTS=true npx vitest run test/admin-event-native-unicode.test.ts
+```
+
+Without Chromium the suite fails in `beforeAll` and vitest reports the cases as
+skipped. The `a11y` job in CI sets the variable, reuses its cached Playwright
+Chromium, and `ci/a11y-require-executed.mjs` fails the step unless all 48 cases
+ran and passed. The step runs on `app`, `db` and `full` scopes, main and nightly.
 
 Do not use `npm run deploy` as a test or build command.
 
@@ -237,16 +234,20 @@ probe or production cutover.
 `main`; it never deploys on push, PR or release. Before the deploy job can start,
 `ci/production-deploy-gate.mjs` requires the repository variable
 `PRODUCTION_DEPLOY_ENABLED` to be exactly `true`, verifies the live GitHub
-Environment `production` has nonempty required reviewers with self-review
-prevented, and rejects the placeholder Hyperdrive id. Admin bypass explicitly
-remains enabled by the owner's provisioning exception; neither the workflow nor
+Environment `production` protection and rejects the placeholder Hyperdrive id.
+By default, protection requires nonempty reviewers with self-review prevented;
+with `PRODUCTION_AUTO_APPROVE=true`, it instead requires a main-only deployment
+policy and successful staging deploy and `e2e-staging` runs on the exact SHA.
+Both modes require successful exact-SHA CI. Admin bypass explicitly remains
+enabled by the owner's provisioning exception; neither the workflow nor
 the preflight claims to prevent an authorized administrator from bypassing review.
 Missing protection, failed
 API access, unset/false flag or any other ref fails closed. Both gate jobs inherit
 `contents: read` and `actions: read`; the latter is required to
 [read an Environment in this private repository](https://docs.github.com/en/rest/deployments/environments#get-an-environment--fine-grained-access-tokens).
 The deploy job uses that Environment, checks the gate again after approval, and
-deploys the dispatch SHA with `wrangler deploy --env production`. It does not
+deploys the promoted SHA (`sha` input, or by default the latest main commit
+whose post-deploy e2e-staging journeys passed) with `wrangler deploy --env production`. It does not
 create resources or run migrations/tests on production. Its post-deploy smoke runs
 the same GET-only public-route set as staging
 (`node bin/smoke.mjs https://togetherweown.com --allow-indexable`): `/up`
@@ -263,10 +264,11 @@ production probe is performed by delivering or testing this template.
 - Route/origin: `togetherweown.com` / `https://togetherweown.com`, the intended
   apex **placeholder target**. Defining it does not flip DNS; deploying would
   claim that custom domain, so do not deploy before W16 authorization.
-- Hyperdrive `DB`: all-zero id `00000000000000000000000000000000` is an inert
-  dry-run placeholder, never the staging Hyperdrive. Provision the separately
-  named `two-web-next-production` Hyperdrive and replace the id in a reviewed
-  cutover PR.
+- Hyperdrive `DB`: the separately named `two-web-next-production` Hyperdrive
+  with its provisioned id in `wrangler.jsonc` `env.production`, distinct from
+  the staging Hyperdrive. The all-zero id `00000000000000000000000000000000`
+  is only the inert sentinel `ci/production-deploy-gate.mjs` refuses; it never
+  lives in config or deploys.
 - Queues: `two-web-next-production-sync-event` and
   `two-web-next-production-internal-action` are reserved, unprovisioned names;
   provision both separately from staging before cutover. Producers and consumers
@@ -276,8 +278,12 @@ production probe is performed by delivering or testing this template.
   separately. Never set `QA_AUTH_TOKEN` or a staging `DATABASE_URL` in production.
 
 Before enabling the flag, the authorized provisioning actor must configure the
-live `production` Environment's required reviewers, prevent self-review and
-main-only deployment policy, install the Environment-scoped secrets
+live `production` Environment with a main-only deployment branch policy and, by
+default, required reviewers with self-review prevented; with
+`PRODUCTION_AUTO_APPROVE=true` the reviewer requirement is replaced by
+successful staging deploy and `e2e-staging` runs on the exact SHA (which the
+gate checks), while the branch policy stays required. Install the
+Environment-scoped secrets
 `PRODUCTION_CLOUDFLARE_API_TOKEN` and `PRODUCTION_CLOUDFLARE_ACCOUNT_ID`, and
 complete resource/secret provisioning and W16 authorization. These names must
 exist only in the `production` Environment, never at repository or organization

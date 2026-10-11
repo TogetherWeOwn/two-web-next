@@ -6,6 +6,7 @@ const draft = "01J00000000000000000000017";
 const member = "100000000000000101";
 const otherMember = "100000000000000102";
 const skip = (reason) => ({ skip: true, reason });
+export const A11Y_FREEZE_DATES = "12–14 Oct UTC";
 export const coverage = {
   "/discord": skip("External invite redirect, not an HTML page"),
   "/join/discord": skip("OAuth redirect, never contact Discord in CI"),
@@ -16,6 +17,8 @@ export const coverage = {
   "/auth/discord/redirect": skip(
     "Legacy login alias redirects to the non-document OAuth start route",
   ),
+  "/login": skip("Vanity sign-in alias redirects to the non-document OAuth start route"),
+  "/community": skip("Vanity lobby alias redirects to the audited homepage"),
   "/admin/events/create": skip(
     "Legacy admin alias redirects to the audited /admin/events/new form",
   ),
@@ -33,6 +36,7 @@ export const coverage = {
   ),
   "/sitemap_index.xml": skip("XML sitemap"),
   "/robots.txt": skip("Plain-text robots policy"),
+  "/.well-known/security.txt": skip("Plain-text RFC 9116 security policy"),
   "/up": skip("JSON queue health response"),
   "/admin/queue/failed/:id/preview": skip(
     "Default-off operator-only JSON advice, not an HTML document",
@@ -52,6 +56,14 @@ export const coverage = {
       })),
     ],
   },
+  "/about": {
+    cases: [
+      { path: "/about" },
+      { path: "/about", state: "freeze-banner" },
+      { path: "/about", state: "expired-write-banner" },
+      { path: "/about", state: "both-banners" },
+    ],
+  },
   "/join/callback": {
     cases: [{ path: "/join/callback?error=access_denied" }, { path: "/join/callback" }],
   },
@@ -59,11 +71,18 @@ export const coverage = {
     cases: [
       { path: "/events" },
       { path: "/events?view=calendar" },
+      { path: "/events?view=calendar&month=2099-12", state: "navigated-month" },
       { path: "/events?past=1" },
       { path: "/events?q=Friday" },
       { path: "/events?q=zz-no-matches" },
       { path: "/events", identity: "member" },
       { path: "/events", identity: "moderator" },
+    ],
+  },
+  "/events/past": {
+    cases: [
+      { path: "/events/past" },
+      { path: "/events/past?page=99", state: "past-page-overflow" },
     ],
   },
   "/profile": {
@@ -104,6 +123,8 @@ export const coverage = {
       { path: `/e/${event}`, identity: "member", state: "going" },
       { path: "/e/01J00000000000000000000019", identity: "member", state: "waitlisted" },
       { path: `/e/${cancelled}`, status: 410 },
+      { path: `/e/${cancelled}`, identity: "member", status: 410, state: "cancelled-member" },
+      { path: "/e/01J00000000000000000000020", identity: "member", state: "paused-member" },
       { path: `/e/${draft}`, identity: "moderator" },
       { path: "/e/invalid-key", status: 404 },
     ],
@@ -136,6 +157,12 @@ export const coverage = {
     cases: [
       { path: "/admin/join-attempts/1", identity: "moderator" },
       { path: "/admin/join-attempts/999999", identity: "moderator", status: 404 },
+    ],
+  },
+  "/admin/activity-log": {
+    cases: [
+      { path: "/admin/activity-log", identity: "moderator" },
+      { path: "/admin/activity-log?subject=zz-no-matches", identity: "moderator" },
     ],
   },
   "/__a11y/404": { cases: [{ path: "/__a11y/404", status: 404 }] },

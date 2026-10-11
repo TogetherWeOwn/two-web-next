@@ -1,4 +1,5 @@
 {
+  "_comment": "Dependency audit exceptions. Optional per-exception lockfile scopes to one audited lockfile root: '.' (repository root) or 'web' (web/ Kit workspace). An exception without lockfile applies to both lockfiles; an exception with lockfile applies only to that lockfile. See CONTRIBUTING.md dependency security section.",
   "version": 1,
   "exceptions": []
 }

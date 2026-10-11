@@ -197,6 +197,9 @@ function calendar(
           (r.description ?? "").toLowerCase().includes(term),
       );
     }
+    // The paged upcoming read counts first under the same predicates, then
+    // reads one page: answer the count from the same filtered set.
+    if (/^select count/i.test(sql)) return { rows: [[rows.length]] };
     if (sql.includes("limit")) rows = rows.slice(0, Number(params.at(-1)));
     return { rows: rows.map(encode) };
   });
@@ -405,7 +408,9 @@ describe("EventsCalendar review regressions", () => {
     const e = eventRow({ eventKey: "grid-link", startsAt: new Date(Date.UTC(2030, 0, 15, 20)) });
     const src = calendar([e], [], okSource());
     const grid = await (await src.request("/events?view=calendar&month=2030-01&past=1")).text();
-    expect(grid).toContain('href="/events?past=1#event-grid-link" data-cal-jump');
+    expect(grid).toContain(
+      'href="/events?event=grid-link&amp;past=1#event-grid-link" data-cal-jump',
+    );
     const list = await (await src.request("/events?past=1")).text();
     expect(list).toContain('id="event-grid-link"');
   });
@@ -553,12 +558,13 @@ describe("EventsCalendar contract drift", () => {
     expect(eventsSearchMissCopy("jam")).toBe("Nothing matches “jam”.");
   });
 
-  it("pins URL rules: q raw + non-blank, view/month only for calendar, past flag", () => {
+  it("pins URL rules: q raw + non-blank, view/month only for calendar, past flag, list paging", () => {
     const s = (o: Partial<CalendarState>): CalendarState => ({
       view: "list",
       month: "2026-10",
       q: "",
       past: false,
+      page: 1,
       ...o,
     });
     expect(calendarUrl(s({}))).toBe("/events");
@@ -573,6 +579,15 @@ describe("EventsCalendar contract drift", () => {
     expect(calendarUrl(s({ q: "x" }))).toBe("/events?q=x");
     expect(calendarUrl(s({ q: "x", view: "calendar", month: "2026-10" }))).toBe(
       "/events?q=x&view=calendar&month=2026-10",
+    );
+    // The upcoming list is paged: page one is the canonical URL, later pages
+    // ride along in list view only — the month grid is month-scoped.
+    expect(calendarUrl(s({ page: 1 }))).toBe("/events");
+    expect(calendarUrl(s({ page: 3 }))).toBe("/events?page=3");
+    expect(calendarUrl(s({ page: 2, past: true }))).toBe("/events?past=1&page=2");
+    expect(calendarUrl(s({ q: "x", page: 2 }))).toBe("/events?q=x&page=2");
+    expect(calendarUrl(s({ view: "calendar", month: "2026-11", page: 2 }))).toBe(
+      "/events?view=calendar&month=2026-11",
     );
   });
 
@@ -665,14 +680,17 @@ describe("EventsCalendar SSR drift", () => {
     expect(html).not.toContain(EVENTS_PAST_TOGGLE_TESTID); // no past rows → no toggle
     expect(html).toContain('src="/islands/events-calendar.js"');
     expect(html).toContain(`rel="canonical" href="${APP_URL}/events"`);
-    // Read order: upcoming rows, their grouped going aggregate, then the past
-    // drawer read (empty page → no aggregate). Never a per-card query.
+    // Read order: upcoming page count, one page of rows, their grouped going
+    // aggregate, then the past drawer read (empty page → no aggregate).
+    // Never a per-card query, never more than a page of rows.
     expect(source.queries.map((q) => (q.sql.includes("rsvps") ? "rsvps" : "events"))).toEqual([
+      "events",
       "events",
       "rsvps",
       "events",
     ]);
-    expect(source.queries[1]!.sql).toContain('group by "rsvps"."event_id"');
+    expect(source.queries[0]!.sql).toMatch(/^select count/i);
+    expect(source.queries[2]!.sql).toContain('group by "rsvps"."event_id"');
   });
 
   it("pins the LIKE: bound, wildcard-escaped, title OR description, drafts gated for guests", async () => {

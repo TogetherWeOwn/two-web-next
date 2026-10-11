@@ -13,10 +13,8 @@ on:
     types: [opened, edited, synchronize, reopened, ready_for_review]
   push:
     branches: [main]
-  # Dispatched by the release workflow on release-please branches:
-  # PRs opened with GITHUB_TOKEN trigger no workflows, so the required
-  # `pr-lint` check would never run on the release PR without this path.
-  # The release workflow passes the release PR number; the pr-lint job fetches
+  # Manual validation of an open PR by number (releases no longer dispatch it:
+  # there is no release PR, docs/releases.md). The pr-lint job fetches
   # the title/body via the API and validates them with the same
   # ci/check-pr-conventions.py script as the pull_request path.
   workflow_dispatch:
@@ -44,6 +42,11 @@ env:
   # Upstream body/branch/reference rules (`.github/scripts/pr_standards.py`) start as
   # warnings; flip to "error" once the repo's open PRs are clear (target 2026-10-10).
   PR_STANDARDS_MODE: "warn"
+  # Dedicated cutoff (PR number) for branch-name internal-ID *errors* on public repos.
+  # PRs numbered at/above this value get an error for internal IDs in the head ref;
+  # older open PRs keep the warning (a head ref cannot be renamed after the PR is open).
+  # Set at merge time to (newest open PR number + 1). Title/body checks stay on PR_STANDARDS_MODE.
+  HEAD_REF_ERROR_FROM_PR: "627"
 
 jobs:
   # Convention for every change that lands on main:
@@ -71,10 +74,31 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ env.PR_LINT_CHECKOUT_SHA }}
+          # Read both immutable tracked trees, including the event's base snapshot.
+          fetch-depth: 0
           persist-credentials: false
 
       - name: Unit-test the lint
-        run: python3 -m unittest discover -s .github/scripts -p 'test_pr_standards.py'
+        run: |
+          python3 -m unittest discover -s .github/scripts -p 'test_pr_standards.py'
+          python3 -m unittest discover -s .github/scripts -p 'test_internal_ref_ratchet.py'
+
+      - name: Ratchet tracked internal references
+        if: github.event_name != 'push'
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ env.PR_LINT_CHECKOUT_SHA }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ inputs.pr_number }}
+        run: |
+          set -euo pipefail
+          # Dispatched release PRs have no pull_request event snapshot. The metadata
+          # binding below verifies their current head against this checked-out SHA.
+          if [ "$GITHUB_EVENT_NAME" = workflow_dispatch ]; then
+            BASE_SHA=$(gh api "repos/$REPO/pulls/$PR_NUMBER" --jq '.base.sha')
+          fi
+          python3 .github/scripts/internal_ref_ratchet.py --base "$BASE_SHA" --head "$HEAD_SHA"
 
       - name: Resolve PR title/body
         id: pr
@@ -99,13 +123,38 @@ jobs:
             : > "$RUNNER_TEMP/pr-commit-subjects.txt"
           fi
 
+      - name: Resolve PR head ref
+        id: head-ref
+        if: github.event_name != 'push'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ inputs.pr_number || github.event.pull_request.number }}
+          HEAD_EVENT_REF: ${{ github.event.pull_request.head.ref }}
+        run: |
+          set -euo pipefail
+          # pull_request events carry the head ref; dispatch runs resolve it from
+          # the API so manual runs lint the same branch name.
+          if [ -n "$HEAD_EVENT_REF" ]; then
+            head_ref="$HEAD_EVENT_REF"
+          else
+            head_ref=$(gh api "repos/$REPO/pulls/$PR_NUMBER" --jq '.head.ref')
+          fi
+          if [ -z "$head_ref" ]; then
+            echo "::error::Could not resolve the PR head branch name."
+            exit 1
+          fi
+          printf 'head_ref=%s\n' "$head_ref" >> "$GITHUB_OUTPUT"
+
       - name: Check title, body and commits
         env:
           PR_METADATA_PATH: ${{ steps.pr.outputs.metadata }}
           COMMITS: ${{ toJSON(github.event.commits) }}
           COMMIT_SUBJECTS_PATH: ${{ runner.temp }}/pr-commit-subjects.txt
-          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          HEAD_REF: ${{ steps.head-ref.outputs.head_ref || github.event.pull_request.head.ref }}
           REPO_PRIVATE: ${{ github.event.repository.private }}
+          PR_NUMBER: ${{ github.event.pull_request.number || inputs.pr_number || '0' }}
+          HEAD_REF_ERROR_FROM_PR: ${{ env.HEAD_REF_ERROR_FROM_PR }}
         run: python3 ci/pr-lint-output.py check
 
   # Full-history gitleaks scan; `gitleaks` is a required check on main. Uses

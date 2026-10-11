@@ -78,9 +78,10 @@ not served if its mandatory record cannot be written.
 
 Home renders as guest when its session dependency is unavailable, keeps a
 DB-free `/discord` invite CTA, and omits unavailable counts. It never extracts
-identity from a signed bearer cookie. Same-origin logout still attempts row
-revocation and clears the browser cookie with a 303 when the DB is down,
-including migration failure. **Cookie deletion is not proof of server-side
+identity from a signed bearer cookie. Same-origin logout without a session
+cookie clears the browser cookie with a 303 when the DB is down. With a session
+cookie, a store or revocation failure returns 503 and keeps the cookie.
+**Cookie deletion is not proof of server-side
 revocation**: a copied bearer can remain valid until revocation/expiry once the
 DB recovers. Cross-origin logout remains forbidden without clearing cookies.
 

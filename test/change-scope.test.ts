@@ -1,5 +1,13 @@
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -325,8 +333,9 @@ describe("check job", () => {
     const unguarded = steps.filter(
       (step) =>
         !step.includes("Docs-only fast pass") &&
-        // The scope guard is deliberately unconditional: pinned below.
+        // The scope and doc-link guards are deliberately unconditional: pinned below.
         !step.includes("Require successful scope") &&
+        !step.includes("Require successful docs-links") &&
         !step.includes("needs.scope.outputs.docs_only != 'true'"),
     );
     expect(unguarded.map((step) => step.split("\n")[0])).toEqual([]);
@@ -356,8 +365,16 @@ describe("ci heavy-job scope gates", () => {
 
   it("check still runs on every verdict and gates on the audit result", () => {
     const block = jobBlock("check");
-    expect(block).toMatch(/\n    needs: \[a11y, lighthouse, bundle-budget, scope\]\n/);
+    expect(block).toMatch(/\n    needs: \[a11y, lighthouse, bundle-budget, docs-links, scope\]\n/);
     expect(block).toMatch(/\n    if: always\(\)\n/);
+  });
+
+  it("docs-links runs on every PR and check fails unless it passes", () => {
+    const block = jobBlock("docs-links");
+    expect(block).toMatch(/(^|\n)    needs: scope\n/);
+    expect(block).not.toMatch(/\n    if: /);
+    expect(block).toContain("run: npm run docs:links");
+    expect(jobBlock("check")).toContain('run: test "$DOCS_LINKS_RESULT" = success');
   });
 
   it("ci-ok aggregates every gated job and fails closed on scope", () => {
@@ -460,7 +477,9 @@ describe("e2e scope gate", () => {
   });
 
   it("stays on standard hosted runners and skips only the smoke, never a required check", () => {
-    expect(smoke).toMatch(/\n    runs-on: ubuntu-latest\n/);
+    // browser-smoke is pinned to ubuntu-24.04 for visual-regression font
+    // stability (docs/visual-regression.md); still GitHub-hosted Linux.
+    expect(smoke).toMatch(/\n    runs-on: ubuntu-(latest|24\.04)\n/);
     // browser-smoke is not a required check: CONTRIBUTING names exactly
     // check, gitleaks and pr-lint, so a docs-only or test-only skip never
     // blocks a merge.
@@ -469,6 +488,27 @@ describe("e2e scope gate", () => {
         .split("### Branch protection and required checks")[1]
         ?.split(/\n#{2,3} /)[0] ?? "";
     expect(section).not.toContain("browser-smoke");
+  });
+});
+
+describe("e2e-ok aggregator (required check)", () => {
+  const e2e = readFileSync(".github/workflows/e2e.yml", "utf8");
+  const agg = e2e.split("\n  e2e-ok:\n")[1] ?? "";
+
+  it("runs always and depends on both scope and the smoke", () => {
+    expect(agg).toMatch(/\n    needs: \[scope, browser-smoke\]\n/);
+    expect(agg).toMatch(/\n    if: always\(\)\n/);
+  });
+
+  it("fails on a failed scope and on a failed or cancelled smoke", () => {
+    expect(agg).toContain('[ "$SCOPE" = success ] || {');
+    expect(agg).toContain('*) echo "browser-smoke result: $SMOKE"; exit 1 ;;');
+  });
+
+  it("passes a skipped smoke only on an explicit scope verdict or a draft", () => {
+    expect(agg).toContain("SKIP_E2E: ${{ needs.scope.outputs.skip_e2e }}");
+    expect(agg).toContain('if [ "$SKIP_E2E" = true ] || [ "$DRAFT" = true ]; then');
+    expect(agg).toContain('else echo "browser-smoke skipped without a scope verdict"; exit 1; fi');
   });
 });
 
@@ -594,5 +634,85 @@ describe("changed-path fixture matrix", () => {
     const result = scope([["docs/rsvp-button.md", "assets/islands/rsvp-button.js"]]);
     expect(result.docsOnly).toBe("false");
     expect(result.skipE2e).toBe("false");
+  });
+});
+
+// The hermetic backup fixture suites run inside the required `check` job. They
+// are fixtures (fake pg_dump, R2 and clients on local disk), so a green run
+// proves the transport, custody and refusal logic, not a live restore.
+describe("backup selftest wiring", () => {
+  const ci = readFileSync(".github/workflows/ci.yml", "utf8");
+  const check = ci.split("\n  check:\n")[1]?.split(/\n  [\w-]+:\n/)[0] ?? "";
+  const steps = check.split("\n    steps:\n")[1]?.split(/\n      - /) ?? [];
+  const selftests = [
+    "bash ci/backup-integrity-selftest",
+    "python3 ci/backup-target-selftest",
+    "bash ci/neon-backup-argv-selftest.sh",
+    "python3 ci/backup-manifest-admission-selftest",
+    "python3 ci/backup-restore-proof/selftest.py",
+  ];
+  const gate =
+    "if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true')";
+
+  it.each(selftests)("check runs `%s` exactly once under the app/full gate", (command) => {
+    const matching = steps.filter((step) =>
+      step.split("\n").some((line) => line === `        run: ${command}`),
+    );
+    expect(matching).toHaveLength(1);
+    const lines = (matching[0] ?? "").split("\n");
+    expect(lines.filter((line) => line.startsWith("        if:"))).toEqual([`        ${gate}`]);
+  });
+
+  it("lets no backup step swallow a failure", () => {
+    const backup = steps.filter((step) => selftests.some((command) => step.includes(command)));
+    expect(backup).toHaveLength(selftests.length);
+    for (const step of backup) {
+      const body = step
+        .split("\n")
+        .filter((line) => !line.startsWith("        if:"))
+        .join("\n");
+      expect(body).not.toMatch(/continue-on-error|\|\||set \+e|; *true\b/);
+    }
+  });
+
+  const walk = (dir: string): string[] =>
+    readdirSync(dir, { withFileTypes: true }).flatMap((entry) =>
+      entry.isDirectory() ? walk(join(dir, entry.name)) : [join(dir, entry.name)],
+    );
+  const inputs = [
+    "bin/neon-backup.sh",
+    "ci/neon-backup-argv-selftest.sh",
+    ...walk("bin/backup"),
+    ...readdirSync("ci")
+      .filter((name) => name.startsWith("backup-"))
+      .flatMap((name) => {
+        const path = join("ci", name);
+        return statSync(path).isDirectory() ? walk(path) : [path];
+      }),
+  ];
+
+  it("finds the backup inputs it is about to check", () => {
+    expect(inputs).toEqual(
+      expect.arrayContaining([
+        "bin/neon-backup.sh",
+        "bin/backup/integrity-helper",
+        "ci/backup-integrity-selftest",
+        "ci/backup-restore-proof/selftest.py",
+        "ci/neon-backup-argv-selftest.sh",
+      ]),
+    );
+  });
+
+  it.each(inputs.map((path) => [path] as [string]))("%s selects the app area", (path) => {
+    const result = scope([[path, ""]]);
+    expect(result.docsOnly).toBe("false");
+    expect(result.app).toBe("true");
+    expect(result.draft).toBe("false");
+  });
+
+  it("selects the app area when a backup input is renamed away", () => {
+    const result = scope([["docs/old-backup.md", "bin/backup/integrity-helper"]]);
+    expect(result.docsOnly).toBe("false");
+    expect(result.app).toBe("true");
   });
 });

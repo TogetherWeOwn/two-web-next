@@ -185,6 +185,18 @@ describe.skipIf(!process.env.DATABASE_URL)("event mutation admission (agent-test
     await expectUnchanged(before);
   });
 
+  for (const method of ["POST", "PATCH"] as const) {
+    it(`${method} answers 422 for a malformed multipart body with no writes`, async () => {
+      // A garbage multipart body must never become an empty write: PATCH must
+      // not rewrite the row, log, or enqueue a Discord re-sync for a request
+      // the server could not parse.
+      const before = await snapshot();
+      const res = await write(method, "garbage", "multipart/form-data; boundary=x");
+      expect(res.status).toBe(422);
+      await expectUnchanged(before);
+    });
+  }
+
   it.each([
     {},
     { starts_at: "2026-10-25 01:30" },

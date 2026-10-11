@@ -580,4 +580,19 @@ describe("Production Tail pager wiring", () => {
       "https://next.togetherweown.com/up",
     );
   });
+
+  it("CI dry-run builds the production Tail Worker with --env production", () => {
+    const ci = readFileSync(".github/workflows/ci.yml", "utf8");
+    const checkJob = ci.slice(ci.indexOf("  check:\n"));
+    const scope =
+      "if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true' || needs.scope.outputs.worker == 'true')";
+    // Both dry runs share the same scope: the production env builds on
+    // app/worker/full runs only, never on docs-only or draft fast passes.
+    expect(checkJob).toContain(
+      `${scope}\n        run: npx wrangler deploy --config tail/wrangler.jsonc --dry-run --outdir ../dist-tail`,
+    );
+    expect(checkJob).toContain(
+      `${scope}\n        run: npx wrangler deploy --config tail/wrangler.jsonc --env production --dry-run --outdir ../dist-tail-production`,
+    );
+  });
 });

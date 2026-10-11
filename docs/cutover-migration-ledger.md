@@ -60,8 +60,10 @@ The sanctioned live apply path is the `db-migrate` workflow
   (`NEON_STAGING_DATABASE_URL` or `PRODUCTION_DATABASE_URL`); the
   unselected target is never exposed and no fallback URL exists.
 - Endpoint rules are enforced in code: direct port `5432`, no pooler;
-  staging must be a direct Neon endpoint, production must be a direct
-  PlanetScale endpoint (`<id>.pg.psdb.cloud`) with TLS.
+  staging must be the pinned PlanetScale staging branch and host (direct Neon
+  endpoints still accepted during the transition; the production identity is
+  refused), production must be a direct PlanetScale endpoint
+  (`<id>.pg.psdb.cloud`) with TLS.
 - Steps: numbering guard, read-only `plan` (journal/ledger diff, no
   DDL), `apply` under a Postgres transaction advisory lock with the
   pre-apply PITR timestamp recorded, then `verify` proves zero pending

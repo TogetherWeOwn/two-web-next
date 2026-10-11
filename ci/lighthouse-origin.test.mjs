@@ -297,6 +297,9 @@ test("per-route verdicts: pass, warn, fail, missing run and skipped event", () =
     "/events": "fail",
     "/join": "warn",
     "/about": "fail",
+    "/faq": "pass",
+    "/rules": "pass",
+    "/privacy": "pass",
     "/e/<key>": "skipped",
   });
   assert.equal(rows.find((row) => row.path === "/").medians["largest-contentful-paint"], 1100);

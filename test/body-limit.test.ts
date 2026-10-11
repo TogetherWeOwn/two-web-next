@@ -108,6 +108,14 @@ describe("every registered write route is body-limited", () => {
         QA_AUTH_TOKEN: "test-only-qa-token",
         SESSION_SECRET: "test-session-secret-at-least-32-bytes-long",
         SESSION_STORE: store,
+        // The staging-operator boundary opens only for its dedicated
+        // principal; without these the admission refuses before the cap.
+        ...(key === "POST /admin/queue/failed/:id/redispatch"
+          ? {
+              QUEUE_RECONCILE_PREVIEW_ENABLED: "true",
+              QUEUE_RECONCILE_OPERATOR_ID: "111111111111111111",
+            }
+          : {}),
       } as unknown as Env;
       const cookie = (
         await serializeSigned("__Host-two_session", token, env.SESSION_SECRET, {

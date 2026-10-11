@@ -22,6 +22,6 @@ See the [TWO Web Next threat model](docs/threat-model.md) for the assets, trust 
 
 ## Supported Versions
 
-Security fixes land on `main` and ship with the next release-please release
-(see [CHANGELOG.md](CHANGELOG.md)). Pre-`1.0.0` versions are pre-production;
+Security fixes land on `main` and ship with the next production promote, which
+tags a release (see the GitHub Releases page and [docs/releases.md](docs/releases.md)). Pre-`1.0.0` versions are pre-production;
 upgrade to the latest tagged release.

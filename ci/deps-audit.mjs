@@ -1,11 +1,15 @@
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
 const knownSeverities = new Set(["info", "low", "moderate", "high", "critical"]);
+// Every lockfile root audited by the gate. "." is the repository root,
+// "web" is the Kit workspace at web/. Keys in the printed result and the
+// optional allowlist `lockfile` scope use exactly these labels.
+const lockfileLabels = [".", "web"];
 const isObject = (value) => value !== null && typeof value === "object" && !Array.isArray(value);
 const text = (value) => typeof value === "string" && value.trim().length > 0;
 
@@ -21,8 +25,16 @@ function date(value) {
   return value;
 }
 
-export function evaluateAudit(report, allowlist, today = new Date().toISOString().slice(0, 10)) {
+export function evaluateAudit(
+  report,
+  allowlist,
+  today = new Date().toISOString().slice(0, 10),
+  lockfile = undefined,
+) {
   date(today);
+  if (lockfile !== undefined && !lockfileLabels.includes(lockfile)) {
+    throw new Error('Invalid lockfile scope (expected "." or "web")');
+  }
   if (
     !isObject(report) ||
     report.error ||
@@ -79,6 +91,9 @@ export function evaluateAudit(report, allowlist, today = new Date().toISOString(
         "Invalid exception: package, range, severity, advisoryIds and reason are required",
       );
     }
+    if (entry.lockfile !== undefined && !lockfileLabels.includes(entry.lockfile)) {
+      throw new Error(`Invalid lockfile scope for ${entry.package}`);
+    }
     if (
       date(entry.reviewed) > today ||
       date(entry.expires) <= today ||
@@ -86,8 +101,9 @@ export function evaluateAudit(report, allowlist, today = new Date().toISOString(
     ) {
       throw new Error(`Expired or invalid exception dates for ${entry.package}`);
     }
-    if (seen.has(entry.package)) throw new Error(`Duplicate exception for ${entry.package}`);
-    seen.add(entry.package);
+    const scopeKey = `${entry.lockfile ?? "*"}:${entry.package}`;
+    if (seen.has(scopeKey)) throw new Error(`Duplicate exception for ${entry.package}`);
+    seen.add(scopeKey);
   }
 
   // npm's string "via" entries reference another vulnerable package. Include its
@@ -152,6 +168,7 @@ export function evaluateAudit(report, allowlist, today = new Date().toISOString(
         entry.package === name &&
         entry.range === vulnerability.range &&
         entry.severity === severity &&
+        (entry.lockfile === undefined || entry.lockfile === lockfile) &&
         JSON.stringify([...entry.advisoryIds].sort((a, b) => a - b)) === JSON.stringify(ids),
     );
     const finding = { package: name, severity, range: vulnerability.range, advisoryIds: ids };
@@ -161,18 +178,17 @@ export function evaluateAudit(report, allowlist, today = new Date().toISOString(
   return result;
 }
 
-export function runAudit() {
+function auditOneLockfile({ label, dir, guard, allowlist, cacheParent }) {
+  const lockfilePath = join(dir, "package-lock.json");
+  if (!existsSync(lockfilePath)) {
+    throw new Error(`Missing lockfile for "${label}" at ${lockfilePath}`);
+  }
   // No install scripts, node_modules or application/database credentials needed.
   // npm's advisory cache can retain old severity even after an online response.
-  // Override inherited config with a fresh, owned cache for every invocation.
-  const cache = mkdtempSync(
-    join(
-      process.env.PAPERCLIP_RUN_SCRATCH_DIR ?? process.env.PAPERCLIP_SCRATCH_DIR ?? tmpdir(),
-      "deps-audit-cache-",
-    ),
-  );
+  // Override inherited config with a fresh, owned cache for every lockfile.
+  const cache = join(cacheParent, label === "." ? "root" : label);
+  mkdirSync(cache, { recursive: true });
   try {
-    const guard = fileURLToPath(new URL("./deps-audit-registry.cjs", import.meta.url));
     const audit = spawnSync(
       "npm",
       [
@@ -187,7 +203,7 @@ export function runAudit() {
         "--include=peer",
       ],
       {
-        cwd: root,
+        cwd: dir,
         encoding: "utf8",
         timeout: 120_000,
         maxBuffer: 16 * 1024 * 1024,
@@ -200,7 +216,7 @@ export function runAudit() {
       },
     );
     if (audit.error || ![0, 1].includes(audit.status)) {
-      throw new Error("npm audit did not complete successfully");
+      throw new Error(`npm audit did not complete successfully for "${label}"`);
     }
     // fd 3 contains only validation state, never registry data or credentials.
     const boundary = JSON.parse(audit.output[3] || "null");
@@ -212,18 +228,44 @@ export function runAudit() {
       boundary.responses < 1 ||
       boundary.pending !== 0
     ) {
-      throw new Error("Registry advisory response was not schema-validated");
+      throw new Error(`Registry advisory response was not schema-validated for "${label}"`);
     }
     const report = JSON.parse(audit.stdout);
+    return evaluateAudit(report, allowlist, undefined, label);
+  } catch (error) {
+    if (error instanceof SyntaxError) throw new Error(`Invalid JSON for "${label}"`);
+    throw error;
+  }
+}
+
+export function runAudit() {
+  // One owned parent cache; each lockfile gets its own fresh child cache so a
+  // retained advisory severity in one lockfile cannot leak into the other.
+  const cacheParent = mkdtempSync(
+    join(
+      process.env.PAPERCLIP_RUN_SCRATCH_DIR ?? process.env.PAPERCLIP_SCRATCH_DIR ?? tmpdir(),
+      "deps-audit-cache-",
+    ),
+  );
+  try {
+    const guard = fileURLToPath(new URL("./deps-audit-registry.cjs", import.meta.url));
     const allowlist = JSON.parse(
       readFileSync(new URL("./deps-audit-allowlist.json", import.meta.url), "utf8"),
     );
-    const result = evaluateAudit(report, allowlist);
+    const lockfiles = [
+      { label: ".", dir: root },
+      { label: "web", dir: join(root, "web") },
+    ];
+    const results = {};
+    for (const { label, dir } of lockfiles) {
+      results[label] = auditOneLockfile({ label, dir, guard, allowlist, cacheParent });
+    }
     // Do not print raw registry responses or stderr; only policy findings.
-    console.log(JSON.stringify(result, null, 2));
-    if (result.blocked.length > 0) process.exitCode = 1;
+    // One result per lockfile, keyed by the lockfile label.
+    console.log(JSON.stringify(results, null, 2));
+    if (Object.values(results).some((result) => result.blocked.length > 0)) process.exitCode = 1;
   } finally {
-    rmSync(cache, { recursive: true, force: true });
+    rmSync(cacheParent, { recursive: true, force: true });
   }
 }
 

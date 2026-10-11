@@ -37,9 +37,10 @@ import { databaseUnavailable, NotFoundPage, rateLimitExceeded } from "../errors"
 import { isDatabaseUnavailable } from "../db/errors";
 import type { Env } from "../env";
 import { databaseOptions, databaseUrl } from "../db/connection";
-import { checkJoinThrottle, migrateJoin } from "../join/service";
+import { checkJoinThrottle } from "../join/service";
 import { bounceToLogin, readJoinResult, takeJoinResult } from "../return-journey";
 import { hashToken, type SessionStore, type Sql } from "../sessions";
+import { SESSION_COOKIE } from "../session-cookie";
 import {
   PROFILE_COPY,
   PROFILE_HONEY_FIELD,
@@ -58,7 +59,6 @@ import {
 } from "./stats";
 
 export const PROFILE_WRITE_THROTTLE_PER_MINUTE = 30;
-const SESSION_COOKIE = "__Host-two_session";
 const SNOWFLAKE = /^\d{10,25}$/;
 // UpdateProfileRequest's fields plus the spam-trap pair. Anything else (user_id,
 // username, avatar, member…) refuses the whole write: no body key can name
@@ -87,8 +87,6 @@ export type ProfileDeps = {
 type Viewer = { id: string; username: string; member: boolean; moderator: boolean };
 type Vars = { viewerId: string; access: AccessDecl; viewer: Viewer };
 type Ctx = Context<{ Bindings: Env; Variables: Vars }>;
-
-const migratedThrottle = new Set<string>();
 
 export function profilesApp(deps: ProfileDeps = {}) {
   const app = new Hono<{ Bindings: Env; Variables: Vars }>();
@@ -135,11 +133,9 @@ export function profilesApp(deps: ProfileDeps = {}) {
     if (deps.throttle) return deps.throttle(bucket);
     const url = databaseUrl(c.env);
     if (!url) return { limited: false };
+    // No DDL here (TOG-19721): web_throttle_hits comes from the migrate
+    // workflow (drizzle/1000); the runtime role stays read/write-only.
     const sql = postgres(url, databaseOptions) as unknown as Sql;
-    if (!migratedThrottle.has(url)) {
-      await migrateJoin(sql);
-      migratedThrottle.add(url);
-    }
     return checkJoinThrottle(sql, bucket, PROFILE_WRITE_THROTTLE_PER_MINUTE);
   };
 
