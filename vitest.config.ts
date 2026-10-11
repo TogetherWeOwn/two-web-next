@@ -40,7 +40,7 @@ export default defineConfig({
         branches: 84.2,
         functions: 92.3,
         lines: 94.4,
-        "src/admin/**": { statements: 81.6, branches: 69.6, functions: 89.9, lines: 89.5 },
+        "src/admin/**": { statements: 95.9, branches: 94.8, functions: 99, lines: 98.3 },
         "src/events/**": { statements: 92, branches: 86.3, functions: 96.1, lines: 96.7 },
         "src/join/**": { statements: 96, branches: 92.8, functions: 99, lines: 98.1 },
         "src/sessions.ts": { statements: 94.7, branches: 79.9, functions: 99, lines: 94.4 },
