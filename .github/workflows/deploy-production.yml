@@ -67,7 +67,8 @@ jobs:
     timeout-minutes: 15
     # Required reviewers + prevent-self-review are live repo settings unless
     # vars.PRODUCTION_AUTO_APPROVE is true, in which case the gate requires green
-    # staging deploy + e2e-staging on this exact SHA instead. Preflight refuses a
+    # staging deploy + e2e-staging on this exact SHA instead, with the e2e-staging
+    # staging-quality job executed and passed. Preflight refuses a
     # missing/unprotected Environment before GitHub can auto-create it.
     environment:
       name: production

@@ -31,7 +31,8 @@ PRs, logs or command arguments.
   exact-SHA CI and the Hyperdrive sentinel check. By default, protection requires
   reviewers with self-review prevented; with `PRODUCTION_AUTO_APPROVE=true`, the
   gate instead requires a main-only deployment policy and successful staging
-  deploy and `e2e-staging` runs on the same SHA. Neither the checked-in template nor the workflow
+  deploy and `e2e-staging` runs on the same SHA, with an executed, passing
+  `staging-quality` job. Neither the checked-in template nor the workflow
   is permission to deploy: production deployment, DNS and database/queue
   provisioning stay separately gated until cutover authorization. There is no
   `env.staging` block. Do not infer isolation from a var's name or these labels.

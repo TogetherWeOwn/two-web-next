@@ -238,7 +238,9 @@ probe or production cutover.
 Environment `production` protection and rejects the placeholder Hyperdrive id.
 By default, protection requires nonempty reviewers with self-review prevented;
 with `PRODUCTION_AUTO_APPROVE=true`, it instead requires a main-only deployment
-policy and successful staging deploy and `e2e-staging` runs on the exact SHA.
+policy and successful staging deploy and `e2e-staging` runs on the exact SHA,
+whose `staging-quality` job (Lighthouse budgets and quality scores) must also
+have executed and passed.
 Both modes require successful exact-SHA CI. Admin bypass explicitly remains
 enabled by the owner's provisioning exception; neither the workflow nor
 the preflight claims to prevent an authorized administrator from bypassing review.
@@ -282,8 +284,9 @@ Before enabling the flag, the authorized provisioning actor must configure the
 live `production` Environment with a main-only deployment branch policy and, by
 default, required reviewers with self-review prevented; with
 `PRODUCTION_AUTO_APPROVE=true` the reviewer requirement is replaced by
-successful staging deploy and `e2e-staging` runs on the exact SHA (which the
-gate checks), while the branch policy stays required. Install the
+successful staging deploy and `e2e-staging` runs on the exact SHA, with an
+executed, passing `staging-quality` job (which the gate checks), while the branch
+policy stays required. Install the
 Environment-scoped secrets
 `PRODUCTION_CLOUDFLARE_API_TOKEN` and `PRODUCTION_CLOUDFLARE_ACCOUNT_ID`, and
 complete resource/secret provisioning and W16 authorization. These names must
