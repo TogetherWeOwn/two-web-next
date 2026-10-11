@@ -24,6 +24,9 @@ skip an unimplemented UI or replace button clicks with direct API mutations.
 At introduction, the prerequisite is the W10 RSVP binder/SSR mount tracked by
 [TOG-9839](/TOG/issues/TOG-9839); a red RSVP spec is NEEDS WORK, not acceptance.
 
+Visual regression of the public pages runs in the same job, before these
+journeys: see [visual-regression.md](visual-regression.md).
+
 ## CI isolation
 
 `.github/workflows/e2e.yml` runs on pull requests, main pushes and manual dispatch.

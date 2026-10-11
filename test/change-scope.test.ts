@@ -477,7 +477,9 @@ describe("e2e scope gate", () => {
   });
 
   it("stays on standard hosted runners and skips only the smoke, never a required check", () => {
-    expect(smoke).toMatch(/\n    runs-on: ubuntu-latest\n/);
+    // browser-smoke is pinned to ubuntu-24.04 for visual-regression font
+    // stability (docs/visual-regression.md); still GitHub-hosted Linux.
+    expect(smoke).toMatch(/\n    runs-on: ubuntu-(latest|24\.04)\n/);
     // browser-smoke is not a required check: CONTRIBUTING names exactly
     // check, gitleaks and pr-lint, so a docs-only or test-only skip never
     // blocks a merge.
