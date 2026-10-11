@@ -1,10 +1,5 @@
 import { test as base, expect, type BrowserContext } from "@playwright/test";
-import {
-  parseRetryAfterSeconds,
-  QA_LOGIN_MAX_ATTEMPTS,
-  qaLoginThrottleError,
-  sleep,
-} from "./qa-login-retry.mjs";
+import { parseRetryAfterSeconds, qaLoginThrottleError } from "./qa-login-retry.mjs";
 
 export const localOrigin = "https://localhost:8787";
 
@@ -46,32 +41,28 @@ export async function qaLogin(context: BrowserContext, identity: "qa-member" | "
   // E2E worker translates exactly this value to the virtual staging origin
   // the gate expects, and foreign origins are still never translated.
   //
-  // The shared qa-login throttle (AUTH_THROTTLE_PER_MINUTE = 10/min per
-  // runner IP, src/throttle.ts) counts every login in the single-worker
-  // suite, so late specs routinely meet a 429. Honor Retry-After with the
-  // same bounded retries as the local teardown sweep; a login still
-  // throttled after every retry fails loud so the suite cuts logins instead
-  // of waiting longer.
-  let retryAfter = 0;
-  for (let attempt = 1; attempt <= QA_LOGIN_MAX_ATTEMPTS; attempt++) {
-    const response = await context.request.post(`/auth/qa/${identity}`, {
-      headers: { "X-TWO-QA-Auth": token, Origin: localOrigin },
-      maxRedirects: 0,
-    });
-    if (response.status() === 204) {
-      const cookie = (await context.cookies()).find((item) => item.name === "__Host-two_session");
-      expect(cookie).toMatchObject({
-        httpOnly: true,
-        secure: true,
-        sameSite: "Lax",
-        domain: "localhost",
-      });
-      return;
-    }
-    if (response.status() !== 429)
-      throw new Error(`QA login as ${identity} answered ${response.status()}`);
-    retryAfter = parseRetryAfterSeconds(response.headers());
-    if (attempt < QA_LOGIN_MAX_ATTEMPTS) await sleep(retryAfter * 1000);
+  // POST /auth/qa/:identity shares the `qa-login` throttle (10/min per runner
+  // IP, src/throttle.ts) across the whole sequential run — 10 logins today
+  // (waitlist 4, profile 2, activity-log/admin/events/featured 1 each). The
+  // suite must stay at or under the budget: a Retry-After wait long enough to
+  // cross the window boundary does not fit the 30 s test timeout, so a 429
+  // here is a hard failure naming the budget, and the fix is fewer logins,
+  // not retries.
+  const response = await context.request.post(`/auth/qa/${identity}`, {
+    headers: { "X-TWO-QA-Auth": token, Origin: localOrigin },
+    maxRedirects: 0,
+  });
+  const status = response.status();
+  if (status === 429) {
+    const retryAfterSeconds = parseRetryAfterSeconds(response.headers());
+    throw qaLoginThrottleError(identity, retryAfterSeconds, 1, "local");
   }
-  throw qaLoginThrottleError(identity, retryAfter, QA_LOGIN_MAX_ATTEMPTS);
+  expect(status).toBe(204);
+  const cookie = (await context.cookies()).find((item) => item.name === "__Host-two_session");
+  expect(cookie).toMatchObject({
+    httpOnly: true,
+    secure: true,
+    sameSite: "Lax",
+    domain: "localhost",
+  });
 }

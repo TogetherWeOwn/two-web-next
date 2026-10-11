@@ -1,6 +1,10 @@
 import { test, expect, qaLogin } from "./fixtures";
 
-test("QA member edits and persists their profile using the keyboard", async ({ page, context }) => {
+// One member login covers the edit and sign-out journeys: POST
+// /auth/qa/:identity shares the `qa-login` throttle (10/min per runner IP,
+// src/throttle.ts) across the whole sequential smoke, so each spec file spends
+// as few logins as it can. The moderator journey below keeps its own login.
+test("QA member edits and persists their profile, then signs out", async ({ page, context }) => {
   await qaLogin(context, "qa-member");
   await page.goto("/profile");
   await expect(page.getByRole("heading", { name: "QA Member", exact: true })).toBeVisible();
@@ -35,20 +39,7 @@ test("QA member edits and persists their profile using the keyboard", async ({ p
   ).toBeVisible();
   await expect(view.getByText("Timezone: Europe/London", { exact: true })).toBeVisible();
   await expect(view.getByRole("listitem")).toHaveText(["Deep Rock Galactic", "Minecraft"]);
-});
 
-test("QA member signs out from the profile header and sees no moderator shortcut", async ({
-  page,
-  context,
-}) => {
-  // Eleventh login in the single-worker suite: the shared qa-login budget
-  // (10/min) can park this login on Retry-After for most of a minute.
-  // Triples the timeout to 90s; the fixtures retry is bounded at three
-  // attempts and fails loud past that.
-  test.slow();
-  await qaLogin(context, "qa-member");
-  await page.goto("/profile");
-  await expect(page.getByRole("heading", { name: "QA Member", exact: true })).toBeVisible();
   await expect(page.getByTestId("profile-admin-link")).toHaveCount(0);
   const logoutRequest = page.waitForRequest(
     (request) => request.url().endsWith("/logout") && request.method() === "POST",
@@ -64,10 +55,6 @@ test("QA member signs out from the profile header and sees no moderator shortcut
 });
 
 test("QA moderator reaches the admin panel from the profile header", async ({ page, context }) => {
-  // Twelfth login in the single-worker suite: same throttle wait as above.
-  // Triples the timeout to 90s; the fixtures retry is bounded at three
-  // attempts and fails loud past that.
-  test.slow();
   await qaLogin(context, "qa-moderator");
   await page.goto("/profile");
   await expect(page.getByRole("heading", { name: "QA Moderator", exact: true })).toBeVisible();
