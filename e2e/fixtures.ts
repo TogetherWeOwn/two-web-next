@@ -1,4 +1,10 @@
 import { test as base, expect, type BrowserContext } from "@playwright/test";
+import {
+  parseRetryAfterSeconds,
+  QA_LOGIN_MAX_ATTEMPTS,
+  qaLoginThrottleError,
+  sleep,
+} from "./qa-login-retry.mjs";
 
 export const localOrigin = "https://localhost:8787";
 
@@ -39,10 +45,25 @@ export async function qaLogin(context: BrowserContext, identity: "qa-member" | "
   // evidence on every unsafe method. Send the local origin explicitly: the
   // E2E worker translates exactly this value to the virtual staging origin
   // the gate expects, and foreign origins are still never translated.
-  const response = await context.request.post(`/auth/qa/${identity}`, {
-    headers: { "X-TWO-QA-Auth": token, Origin: localOrigin },
-    maxRedirects: 0,
-  });
+  // Every login — this one included — spends the shared `qa-login` throttle
+  // budget (10/min per runner IP, src/throttle.ts), so a late-suite login can
+  // land in a window earlier specs filled. Retry only 429, honoring the
+  // server's Retry-After into a fresh window (bounded: the throttle error
+  // names the budget instead of retrying harder). Any other status fails loud
+  // below, as before.
+  const send = () =>
+    context.request.post(`/auth/qa/${identity}`, {
+      headers: { "X-TWO-QA-Auth": token, Origin: localOrigin },
+      maxRedirects: 0,
+    });
+  let response = await send();
+  for (let attempt = 1; attempt <= QA_LOGIN_MAX_ATTEMPTS && response.status() === 429; attempt++) {
+    const retryAfterSeconds = parseRetryAfterSeconds(response.headers());
+    if (attempt === QA_LOGIN_MAX_ATTEMPTS)
+      throw qaLoginThrottleError(identity, retryAfterSeconds, attempt);
+    await sleep(retryAfterSeconds * 1000);
+    response = await send();
+  }
   expect(response.status()).toBe(204);
   const cookie = (await context.cookies()).find((item) => item.name === "__Host-two_session");
   expect(cookie).toMatchObject({

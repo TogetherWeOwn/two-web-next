@@ -82,24 +82,21 @@ test("moderator cancels a published event; guests see the notice and writes stay
   page,
   browser,
 }) => {
-  // Two logins plus a full fixture lifecycle (create, publish, cancel, RSVP
-  // refusal, feed read, two guest page views) needs more than the 30s
-  // default. Triples the timeout to 90s.
+  // One login plus a full fixture lifecycle (create, publish, cancel, RSVP
+  // refusal, JSON show, feed read, two guest page views) needs more than the
+  // 30s default. Triples the timeout to 90s.
   test.slow();
   // The guest drives the default browser context (never signed in, so the
-  // network-isolation fixture covers its page views); the moderator and the
-  // member work from separate contexts because each identity holds its own
-  // session.
+  // network-isolation fixture covers its page views). The moderator works
+  // from a second context; both QA identities are members (src/auth/routes.ts
+  // signs every QA session member: true), so the moderator's own session
+  // proves the RSVP refusal and the JSON show — no second login spends the
+  // shared 10/min qa-login budget (src/throttle.ts).
   const moderator = await browser.newContext({
     baseURL: localOrigin,
     ignoreHTTPSErrors: true,
   });
-  const member = await browser.newContext({
-    baseURL: localOrigin,
-    ignoreHTTPSErrors: true,
-  });
   await qaLogin(moderator, "qa-moderator");
-  await qaLogin(member, "qa-member");
   let eventKey: string | undefined;
   try {
     const stem = `E2E Cancel ${Date.now()}`;
@@ -123,8 +120,10 @@ test("moderator cancels a published event; guests see the notice and writes stay
     expect(gone?.status()).toBe(410);
     await expect(page.getByTestId("event-cancelled")).toContainText("Cancelled");
 
-    // The JSON show refuses with the exact legacy Gone body.
-    const show = await page.request.get(`/events/${eventKey}`);
+    // The JSON show refuses with the exact legacy Gone body. The JSON show
+    // requires a session (src/events/routes-shared.ts answers guests 401
+    // before any read), so the moderator's own session proves it.
+    const show = await moderator.request.get(`/events/${eventKey}`);
     expect(show.status()).toBe(410);
     expect(await show.json()).toEqual({
       reason: "event_cancelled",
@@ -133,11 +132,11 @@ test("moderator cancels a published event; guests see the notice and writes stay
       status: "cancelled",
     });
 
-    // RSVP writes against the cancelled event are refused: the member's PUT
-    // answers 403 naming the cancellation (the JSON show above carries the
+    // RSVP writes against the cancelled event are refused: the PUT answers
+    // 403 naming the cancellation (the JSON show above carries the
     // `event_cancelled` reason; the RSVP resource names the same closure as
     // `event_not_open` with `why: "cancelled"`).
-    const rsvp = await member.request.put(`/events/${eventKey}/rsvp`, {
+    const rsvp = await moderator.request.put(`/events/${eventKey}/rsvp`, {
       data: { status: "going" },
       headers: { Origin: localOrigin },
     });
@@ -157,7 +156,6 @@ test("moderator cancels a published event; guests see the notice and writes stay
     try {
       await cleanUpFixture(moderator, eventKey);
     } finally {
-      await member.close().catch(() => {});
       await moderator.close().catch(() => {});
     }
   }
