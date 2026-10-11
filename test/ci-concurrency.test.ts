@@ -1,8 +1,7 @@
+import { spawnSync } from "node:child_process";
 import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { findSupersedingRun, isSupersededRun } from "../ci/find-superseding-run.mjs";
-import type { WorkflowRun } from "../ci/find-superseding-run.mjs";
 
 // TOG-11811: runners are the throughput ceiling, so a superseded PR push must
 // cancel its own runs. Deploy, rollback and release runs must never be cancelled midway.
@@ -27,141 +26,6 @@ const groupPerSha = (text: string) =>
 
 // No workflow currently needs a schedule that shares main's push group.
 const SCHEDULE_SHARES_MAIN_GROUP = new Set<string>();
-
-const ci = workflows.find(({ name }) => name === "ci.yml")?.text ?? "";
-const workflowJob = (job: string) =>
-  ci.match(new RegExp(`\\n  ${job}:\\n([\\s\\S]*?)(?=\\n  [\\w-]+:\\n|\\n$)`))?.[1] ?? "";
-const aggregateJob = (job: "check" | "ci-ok") => workflowJob(job);
-const cancellationGuardJob = workflowJob("ci-supersession");
-const ciOkCancellationGuardJob = workflowJob("ci-ok-supersession");
-
-const headSha = "a".repeat(40);
-const currentRun = { hasCancelledDependency: true, runId: 100, pullNumber: 17, headSha };
-const queryContext = {
-  ...currentRun,
-  runId: "100",
-  pullNumber: "17",
-  repository: "TogetherWeOwn/two-web-next",
-  token: "fixture",
-};
-const matchingNewerRun = {
-  id: 101,
-  event: "pull_request",
-  pull_requests: [{ number: 17, head: { sha: headSha } }],
-};
-
-const queryRuns = (runs: WorkflowRun[], hasCancelledDependency = true) =>
-  findSupersedingRun({ ...queryContext, hasCancelledDependency }, async (url, options) => {
-    expect(new URL(url).pathname).toBe(
-      "/repos/TogetherWeOwn/two-web-next/actions/workflows/ci.yml/runs",
-    );
-    expect(new URL(url).searchParams.get("event")).toBe("pull_request");
-    expect(new URL(url).searchParams.get("head_sha")).toBe(headSha);
-    expect(options.headers.Authorization).toBe("Bearer fixture");
-    return { ok: true, json: async () => ({ workflow_runs: runs }) };
-  });
-
-describe("superseded workflow runs", () => {
-  it("skips cancelled aggregates only when a newer run matches the same PR and head", () => {
-    expect(isSupersededRun(currentRun, [matchingNewerRun])).toBe(true);
-    expect(cancellationGuardJob).toContain("needs.scope.result == 'cancelled'");
-    expect(cancellationGuardJob).toContain("needs.a11y.result == 'cancelled'");
-    expect(cancellationGuardJob).toContain("needs.lighthouse.result == 'cancelled'");
-    expect(cancellationGuardJob).toContain("needs.bundle-budget.result == 'cancelled'");
-    expect(cancellationGuardJob).toContain("needs.docs-links.result == 'cancelled'");
-  });
-
-  it.each(["check", "ci-ok"] as const)(
-    "uses the supersession result before skipping the required %s aggregate",
-    (job) => {
-      expect(aggregateJob(job)).toContain("needs.ci-supersession.outputs.superseded != 'true'");
-      expect(aggregateJob(job)).toContain("ci-supersession");
-    },
-  );
-
-  it("checks for supersession when check itself is cancelled", () => {
-    expect(ciOkCancellationGuardJob).toContain("needs.check.result == 'cancelled'");
-    expect(aggregateJob("ci-ok")).toContain(
-      "needs.ci-ok-supersession.outputs.superseded != 'true'",
-    );
-  });
-
-  it.each(["ci-supersession", "ci-ok-supersession"])("pins Node and a timeout for %s", (job) => {
-    const block = workflowJob(job);
-    expect(block).toMatch(/\n    timeout-minutes: 5\n/);
-    expect(block).toContain("actions/setup-node@820762786026740c76f36085b0efc47a31fe5020");
-    expect(block).toMatch(/\n          node-version: 22\n/);
-  });
-
-  it("confirms a matching newer run through the workflow-runs API", async () => {
-    expect(await queryRuns([matchingNewerRun])).toBe(true);
-  });
-
-  it("continues through a full first page to find the matching newer run", async () => {
-    const pages: string[] = [];
-    const result = await findSupersedingRun(queryContext, async (url) => {
-      const page = new URL(url).searchParams.get("page") ?? "";
-      pages.push(page);
-      const runs =
-        page === "1"
-          ? Array.from({ length: 100 }, (_, index) => ({
-              ...matchingNewerRun,
-              id: index + 1,
-              pull_requests: [{ number: 18, head: { sha: headSha } }],
-            }))
-          : [matchingNewerRun];
-      return { ok: true, json: async () => ({ workflow_runs: runs }) };
-    });
-    expect(result).toBe(true);
-    expect(pages).toEqual(["1", "2"]);
-  });
-
-  it("fails closed when GitHub cannot confirm supersession", async () => {
-    await expect(
-      findSupersedingRun(queryContext, async () => ({
-        ok: false,
-        status: 403,
-        json: async () => ({}),
-      })),
-    ).rejects.toThrow("Workflow runs API returned 403.");
-    expect(aggregateJob("check")).toContain(
-      'test "$SUPERSESSION_RESULT" = success || test "$SUPERSESSION_RESULT" = skipped',
-    );
-  });
-
-  it("fails closed when cancellation has no newer matching run", async () => {
-    expect(isSupersededRun(currentRun, [])).toBe(false);
-    expect(await queryRuns([])).toBe(false);
-    expect(
-      isSupersededRun({ ...currentRun, hasCancelledDependency: false }, [matchingNewerRun]),
-    ).toBe(false);
-  });
-
-  it("does not query GitHub when no dependency was cancelled", async () => {
-    const result = await findSupersedingRun(
-      { ...queryContext, hasCancelledDependency: false },
-      async () => {
-        throw new Error("unexpected API request");
-      },
-    );
-    expect(result).toBe(false);
-  });
-
-  it.each([
-    { ...matchingNewerRun, event: "push" },
-    { ...matchingNewerRun, pull_requests: [{ number: 18, head: { sha: "abc123" } }] },
-    { ...matchingNewerRun, pull_requests: [{ number: 17, head: { sha: "different" } }] },
-    { ...matchingNewerRun, id: 99 },
-  ])("does not treat another event, PR, head, or older run as superseding", (run) => {
-    expect(isSupersededRun(currentRun, [run])).toBe(false);
-  });
-
-  it.each(["check", "ci-ok"] as const)("fails the required %s check when scope failed", (job) => {
-    if (job === "check") expect(aggregateJob(job)).toContain('run: test "$SCOPE_RESULT" = success');
-    if (job === "ci-ok")
-      expect(aggregateJob(job)).toContain('[ "$SCOPE_RESULT" = success ] || fail');
-  });
-});
 
 describe("workflow concurrency", () => {
   it("cancels superseded runs of every pull_request workflow", () => {
@@ -217,5 +81,93 @@ describe("workflow concurrency", () => {
         .filter(({ text }) => /cancel-in-progress: true/.test(text))
         .map(({ name }) => name),
     ).toEqual([]);
+  });
+});
+
+// Opening a draft PR and marking it ready seconds later starts two pull_request
+// runs on one head (`opened`, then `ready_for_review`), and the concurrency group
+// cancels the older run. GitHub concludes a job whose `if` is false because its
+// run was cancelled as `cancelled`, never `skipped` (as gitleaks shows in
+// cancelled pr-gates runs). A required check passes only on success, skipped or
+// neutral, so a cancelled gate keeps the merge blocked until the newer run's own
+// gate succeeds, without leaving a red failure on the head.
+const PASSING = ["success", "skipped", "neutral"];
+const jobBlock = (text: string, id: string) =>
+  text.split(new RegExp(`\\n  ${id}:\\n`))[1]?.split(/\n  [A-Za-z0-9_-]+:\n/)[0] ?? "";
+// The job's own `run: |` script, dedented.
+const runScript = (block: string) =>
+  (block.split("\n        run: |\n")[1] ?? "exit 99")
+    .split("\n")
+    .map((line) => line.replace(/^ {10}/, ""))
+    .join("\n");
+// Only the conditions modelled here are accepted: any other gate condition fails
+// this suite until its conclusion in a cancelled run is worked out and pinned.
+const conditionHolds = (condition: string, runCancelled: boolean) => {
+  if (condition === "always()") return true;
+  if (condition === "${{ !cancelled() }}") return !runCancelled;
+  throw new Error(`unmodelled gate condition: ${condition}`);
+};
+type Results = { scope: string; downstream: string };
+const ciText = readFileSync(join(dir, "ci.yml"), "utf8");
+const e2eText = readFileSync(join(dir, "e2e.yml"), "utf8");
+const gates = [
+  {
+    gate: "check",
+    block: jobBlock(ciText, "check"),
+    // check's first guard: it fails before any other step reads scope outputs.
+    script: (block: string) =>
+      block.match(
+        /- name: Require successful scope\n        env:\n          SCOPE_RESULT: [^\n]+\n        run: ([^\n]+)\n/,
+      )?.[1] ?? "exit 99",
+    env: ({ scope }: Results) => ({ SCOPE_RESULT: scope }),
+  },
+  {
+    gate: "ci-ok",
+    block: jobBlock(ciText, "ci-ok"),
+    script: runScript,
+    env: ({ scope, downstream }: Results) => ({
+      SCOPE_RESULT: scope,
+      ...{ FULL: "true", APP: "true", WORKER: "true", DB: "true", DRAFT: "false" },
+      CHECK_RESULT: downstream,
+      A11Y_RESULT: downstream,
+      LIGHTHOUSE_RESULT: downstream,
+      BUDGET_RESULT: downstream,
+    }),
+  },
+  {
+    gate: "e2e-ok",
+    block: jobBlock(e2eText, "e2e-ok"),
+    script: runScript,
+    env: ({ scope, downstream }: Results) => ({
+      SCOPE: scope,
+      SMOKE: downstream,
+      SKIP_E2E: "false",
+      DRAFT: "false",
+    }),
+  },
+];
+const conclusion = (gate: (typeof gates)[number], runCancelled: boolean, results: Results) => {
+  const condition = gate.block.match(/\n    if: ([^\n]+)\n/)?.[1] ?? "";
+  if (!conditionHolds(condition, runCancelled)) return runCancelled ? "cancelled" : "skipped";
+  const run = spawnSync("bash", ["-c", gate.script(gate.block)], {
+    env: gate.env(results),
+    encoding: "utf8",
+  });
+  return run.status === 0 ? "success" : "failure";
+};
+
+describe("superseded duplicate pull_request runs", () => {
+  it.each(gates)("$gate passes a green run", (gate) => {
+    expect(conclusion(gate, false, { scope: "success", downstream: "success" })).toBe("success");
+  });
+
+  it.each(gates)("$gate is cancelled, neither failed nor passing, in a cancelled run", (gate) => {
+    const result = conclusion(gate, true, { scope: "cancelled", downstream: "cancelled" });
+    expect(result).toBe("cancelled");
+    expect(PASSING).not.toContain(result);
+  });
+
+  it.each(gates)("$gate still fails when scope fails in a run that was not cancelled", (gate) => {
+    expect(conclusion(gate, false, { scope: "failure", downstream: "skipped" })).toBe("failure");
   });
 });

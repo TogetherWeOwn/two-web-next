@@ -17,7 +17,6 @@ const workflows = readdirSync(dir)
 const hosted = "ubuntu-latest";
 const byVisibility = `\${{ github.event.repository.private && fromJSON('["self-hosted","two-selfhosted"]') || '${hosted}' }}`;
 const publicGuard = `!github.event.repository.private && '["${hosted}"]'`;
-const readOnlyGuard = `\${{ fromJSON((${publicGuard}) || '["self-hosted","two-selfhosted"]') }}`;
 const overflowSwitch = (job: string) =>
   `\${{ fromJSON((${publicGuard}) || (contains(fromJSON(vars.CI_OVERFLOW_JOBS || '[]'), '${job}') && contains(fromJSON(vars.CI_OVERFLOW_EVENTS || '[]'), github.event_name) && vars.CI_OVERFLOW_RUNNER) || '["self-hosted","two-selfhosted"]') }}`;
 
@@ -50,12 +49,7 @@ describe("workflow runner labels", () => {
         const allowed =
           name === "e2e.yml" && id === "browser-smoke"
             ? [hosted, "ubuntu-24.04", byVisibility, overflowSwitch(id)]
-            : [
-                hosted,
-                byVisibility,
-                overflowSwitch(id),
-                ...(id.endsWith("supersession") ? [readOnlyGuard] : []),
-              ];
+            : [hosted, byVisibility, overflowSwitch(id)];
         expect(allowed, `${name} job ${id}`).toContain(runsOn);
       }
     }

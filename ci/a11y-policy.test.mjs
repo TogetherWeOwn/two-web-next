@@ -175,14 +175,8 @@ test("audit artifacts omit Wrangler's synthetic session and DB configuration val
 test("the required CI job runs after a non-green audit and rejects every non-success result", async () => {
   const workflow = await readFile(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8");
   const check = workflow.slice(workflow.indexOf("\n  check:\n"));
-  assert.match(
-    check,
-    /\n    needs: \[a11y, lighthouse, bundle-budget, docs-links, scope, ci-supersession\]\n/,
-  );
-  assert.match(
-    check,
-    /\n    if: always\(\) && needs\.ci-supersession\.outputs\.superseded != 'true'\n/,
-  );
+  assert.match(check, /\n    needs: \[a11y, lighthouse, bundle-budget, docs-links, scope\]\n/);
+  assert.match(check, /\n    if: \$\{\{ !cancelled\(\) \}\}\n/);
   assert.match(check, /A11Y_RESULT: \$\{\{ needs\.a11y\.result \}\}/);
   const guard = check.match(
     /- name: Require successful accessibility audit\n        if: \(needs\.scope\.outputs\.docs_only != 'true' && needs\.scope\.outputs\.draft != 'true'\)\n        env:\n          A11Y_RESULT: [^\n]+\n          A11Y_SELECTED: [^\n]+\n        run: ([^\n]+)/,
@@ -211,23 +205,16 @@ test("the required CI job runs after a non-green audit and rejects every non-suc
   }
 });
 
-test("the required CI job fails when scope did not succeed before audit outputs are read", async () => {
+test("the required CI job fails first when scope did not succeed, before any guard reads its outputs", async () => {
   const workflow = await readFile(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8");
   const check = workflow.split("\n  check:\n")[1]?.split(/\n  [\w-]+:\n/)[0];
   assert(check, "Required check job must exist");
   const steps = check.split("\n    steps:\n")[1] ?? "";
-  // Unconditional and before the conditional audit guard: no `if:` between
-  // the scope step name and its env, and scope outputs are validated first.
+  // First step, unconditional: no `if:` between its name and its env.
   const guard = steps.match(
-    /(?:^|\n)      - name: Require successful scope\n        env:\n          SCOPE_RESULT: \$\{\{ needs\.scope\.result \}\}\n        run: ([^\n]+)\n/,
+    /^      - name: Require successful scope\n        env:\n          SCOPE_RESULT: \$\{\{ needs\.scope\.result \}\}\n        run: ([^\n]+)\n/,
   );
-  assert(guard, "Scope guard must remain unconditional");
-  const scopeGuardIndex = steps.indexOf("      - name: Require successful scope");
-  const auditGuardIndex = steps.indexOf("      - name: Require successful accessibility audit");
-  assert(
-    auditGuardIndex > scopeGuardIndex,
-    "Scope guard must precede the audit guard that reads scope outputs",
-  );
+  assert(guard, "Scope guard must be the first, unconditional step of check");
   // `scope` is not a required check; empty outputs would otherwise read as
   // unselected areas and let `check` pass on a skipped audit.
   for (const [result, expected] of [

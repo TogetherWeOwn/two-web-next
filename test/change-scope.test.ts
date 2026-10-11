@@ -333,8 +333,7 @@ describe("check job", () => {
     const unguarded = steps.filter(
       (step) =>
         !step.includes("Docs-only fast pass") &&
-        // The supersession, scope and doc-link guards are deliberately unconditional.
-        !step.includes("Require successful supersession check") &&
+        // The scope and doc-link guards are deliberately unconditional: pinned below.
         !step.includes("Require successful scope") &&
         !step.includes("Require successful docs-links") &&
         !step.includes("needs.scope.outputs.docs_only != 'true'"),
@@ -366,12 +365,8 @@ describe("ci heavy-job scope gates", () => {
 
   it("check still runs on every verdict and gates on the audit result", () => {
     const block = jobBlock("check");
-    expect(block).toMatch(
-      /\n    needs: \[a11y, lighthouse, bundle-budget, docs-links, scope, ci-supersession\]\n/,
-    );
-    expect(block).toMatch(
-      /\n    if: always\(\) && needs\.ci-supersession\.outputs\.superseded != 'true'\n/,
-    );
+    expect(block).toMatch(/\n    needs: \[a11y, lighthouse, bundle-budget, docs-links, scope\]\n/);
+    expect(block).toMatch(/\n    if: \$\{\{ !cancelled\(\) \}\}\n/);
   });
 
   it("docs-links runs on every PR and check fails unless it passes", () => {
@@ -384,34 +379,19 @@ describe("ci heavy-job scope gates", () => {
 
   it("ci-ok aggregates every gated job and fails closed on scope", () => {
     const block = jobBlock("ci-ok");
-    expect(block).toMatch(
-      /\n    needs: \[a11y, lighthouse, bundle-budget, check, scope, ci-supersession, ci-ok-supersession\]\n/,
-    );
-    expect(block).toMatch(
-      /\n    if: >-\n      always\(\) && needs\.ci-supersession\.outputs\.superseded != 'true' &&\n      needs\.ci-ok-supersession\.outputs\.superseded != 'true'\n/,
-    );
+    expect(block).toMatch(/\n    needs: \[a11y, lighthouse, bundle-budget, check, scope\]\n/);
+    expect(block).toMatch(/\n    if: \$\{\{ !cancelled\(\) \}\}\n/);
     expect(block).toContain("SCOPE_RESULT: ${{ needs.scope.result }}");
     expect(block).toContain("CHECK_RESULT: ${{ needs.check.result }}");
   });
 
-  it("check fails when scope did not succeed, as an unconditional step", () => {
+  it("check fails when scope did not succeed, as its first and unconditional step", () => {
     const steps = jobBlock("check").split("\n    steps:\n")[1] ?? "";
-    const stepBlocks = steps.split("\n      - ");
-    const scopeGuardIndex = stepBlocks.findIndex((step) =>
-      step.includes("Require successful scope"),
-    );
-    const auditGuardIndex = stepBlocks.findIndex((step) =>
-      step.includes("Require successful accessibility audit"),
-    );
-    expect(scopeGuardIndex, "scope guard must exist").toBeGreaterThanOrEqual(0);
-    expect(scopeGuardIndex, "scope guard must precede the audit guard").toBeLessThan(
-      auditGuardIndex,
-    );
     // No `if:` between the step name and its env: it runs on every verdict.
     const guard = steps.match(
-      /      - name: Require successful scope\n        env:\n          SCOPE_RESULT: \$\{\{ needs\.scope\.result \}\}\n        run: ([^\n]+)\n/,
+      /^      - name: Require successful scope\n        env:\n          SCOPE_RESULT: \$\{\{ needs\.scope\.result \}\}\n        run: ([^\n]+)\n/,
     )?.[1];
-    expect(guard, "scope guard must be unconditional").toBeDefined();
+    expect(guard, "scope guard must be check's first, unconditional step").toBeDefined();
     // `scope` is not a required check: a red scope must not leave `check` green.
     for (const [result, expected] of [
       ["success", 0],
@@ -429,10 +409,7 @@ describe("ci heavy-job scope gates", () => {
   });
 
   it("ci-ok rejects scope outputs that are not exactly true or false", () => {
-    const body =
-      jobBlock("ci-ok")
-        .split("- name: Aggregate change-gated conclusions\n")[1]
-        ?.split("\n        run: |\n")[1] ?? "";
+    const body = jobBlock("ci-ok").split("\n        run: |\n")[1] ?? "";
     const script = body
       .split("\n")
       .map((line) => line.replace(/^ {10}/, ""))
@@ -518,9 +495,9 @@ describe("e2e-ok aggregator (required check)", () => {
   const e2e = readFileSync(".github/workflows/e2e.yml", "utf8");
   const agg = e2e.split("\n  e2e-ok:\n")[1] ?? "";
 
-  it("runs always and depends on both scope and the smoke", () => {
+  it("runs unless its run was cancelled and depends on both scope and the smoke", () => {
     expect(agg).toMatch(/\n    needs: \[scope, browser-smoke\]\n/);
-    expect(agg).toMatch(/\n    if: always\(\)\n/);
+    expect(agg).toMatch(/\n    if: \$\{\{ !cancelled\(\) \}\}\n/);
   });
 
   it("fails on a failed scope and on a failed or cancelled smoke", () => {
