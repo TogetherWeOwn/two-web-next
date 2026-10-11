@@ -5,7 +5,9 @@
 (1280×800) and mobile (390×844) widths, following same-origin links breadth-first
 (up to 40 pages per width, small pagination only). Sign-in, Discord, admin,
 profile and feed paths are skipped, and every non-GET request is blocked by the
-watch guard (`e2e/watch-guard.mjs`). It never targets production.
+watch guard (`e2e/watch-guard.mjs`). A page that lands off-origin after a
+redirect (for example `/discord` 302s to Discord) is recorded as a low
+off-origin finding and is not audited. It never targets production.
 
 ## What counts as a finding
 
@@ -15,7 +17,7 @@ watch guard (`e2e/watch-guard.mjs`). It never targets production.
 | --- | --- |
 | Page status 5xx / uncaught page error / critical axe violation | high |
 | Page status 4xx, failed same-origin subresource, broken image, horizontal overflow, serious axe violation, blocked write attempt | medium |
-| Console error | low |
+| Console error / off-origin redirect (info, not audited) | low |
 
 Each finding has a stable `id` (kind + path + viewport + detail with volatile
 numbers normalised), so the same problem keeps the same id across days. Findings

@@ -25,6 +25,8 @@ describe("e2e/explore/crawl-utils.mjs", () => {
     for (const p of [
       "/auth/discord",
       "/join/discord",
+      "/discord",
+      "/discord/",
       "/login",
       "/profile",
       "/admin/x",

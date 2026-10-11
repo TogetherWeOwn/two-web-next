@@ -55,19 +55,40 @@ test("explore staging as a guest", async ({ browser }) => {
       const status = response?.status() ?? 0;
       if (path === "/" && viewportName === "desktop") expect(status, "staging home").toBe(200);
       crawled.push(`${viewportName} ${path} ${status}`);
-      if (status >= 400 || status === 0)
-        add({ kind: "status", viewport: viewportName, path, detail: String(status) });
-      for (const p of problems)
-        add({ kind: p.kind, viewport: viewportName, path, detail: p.detail });
-      if (status === 200) {
-        await checkPage(page, viewportName, path, add);
-        for (const href of await page.$$eval("a[href]", (as) =>
-          as.map((a) => a.getAttribute("href") ?? ""),
-        )) {
-          const next = crawlablePath(href, page.url());
-          if (next && !seen.has(next) && seen.size < MAX_PAGES) {
-            seen.add(next);
-            queue.push(next);
+      // General off-origin guard: some staging paths 302 off-site (for
+      // example /discord to a Discord invite). page.goto follows the
+      // redirect, so without this check the explorer would audit the foreign
+      // page and report its breakage as staging findings. Record a low
+      // off-origin finding and skip the audit when landing off staging.
+      let landedOrigin = "";
+      try {
+        landedOrigin = new URL(page.url()).origin;
+      } catch {
+        landedOrigin = "";
+      }
+      const offOrigin = landedOrigin !== EXPLORE_ORIGIN;
+      if (offOrigin) {
+        add({
+          kind: "off-origin",
+          viewport: viewportName,
+          path,
+          detail: `landed on ${landedOrigin || page.url()}`,
+        });
+      } else {
+        if (status >= 400 || status === 0)
+          add({ kind: "status", viewport: viewportName, path, detail: String(status) });
+        for (const p of problems)
+          add({ kind: p.kind, viewport: viewportName, path, detail: p.detail });
+        if (status === 200) {
+          await checkPage(page, viewportName, path, add);
+          for (const href of await page.$$eval("a[href]", (as) =>
+            as.map((a) => a.getAttribute("href") ?? ""),
+          )) {
+            const next = crawlablePath(href, page.url());
+            if (next && !seen.has(next) && seen.size < MAX_PAGES) {
+              seen.add(next);
+              queue.push(next);
+            }
           }
         }
       }
@@ -78,8 +99,11 @@ test("explore staging as a guest", async ({ browser }) => {
       }
       await page.close();
     }
+    // Only staging write attempts are findings: an off-origin page (see the
+    // guard above) reports its own origin in the violation detail.
     for (const write of guard.violations)
-      add({ kind: "write-attempt", viewport: viewportName, path: "*", detail: write });
+      if (write.includes(EXPLORE_ORIGIN))
+        add({ kind: "write-attempt", viewport: viewportName, path: "*", detail: write });
     await context.close();
   }
 

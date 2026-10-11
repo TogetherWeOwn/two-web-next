@@ -5,7 +5,7 @@ export const EXPLORE_ORIGIN = "https://next.togetherweown.com";
 
 // Paths the explorer never follows: they start sign-in or Discord flows, or are
 // non-HTML feeds the explorer cannot judge visually.
-const SKIP_PREFIXES = ["/auth/", "/join/", "/login", "/profile", "/admin", "/cdn-cgi/"];
+const SKIP_PREFIXES = ["/auth/", "/join/", "/discord", "/login", "/profile", "/admin", "/cdn-cgi/"];
 const SKIP_SUFFIXES = [".ics", ".rss", ".json", ".xml", ".txt"];
 
 /**
