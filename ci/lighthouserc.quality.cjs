@@ -32,7 +32,9 @@ module.exports = {
         preset: "desktop",
         chromeFlags: "--no-sandbox --disable-dev-shm-usage",
         onlyCategories: Object.keys(budget.categories),
-        skipAudits: ["uses-http2", "canonical"],
+        // is-crawlable: the fixture worker and staging send X-Robots-Tag noindex by design (src/headers.ts,
+        // test/events.test.ts); production indexability is covered by those unit tests, not by this gate.
+        skipAudits: ["uses-http2", "canonical", "is-crawlable"],
       },
     },
     assert: { assertions },
