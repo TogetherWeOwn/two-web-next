@@ -258,10 +258,12 @@ production probe is performed by delivering or testing this template.
   separately. Never set `QA_AUTH_TOKEN` or a staging `DATABASE_URL` in production.
 
 Before enabling the flag, the authorized provisioning actor must configure the
-live `production` Environment for the selected approval mode: required reviewers
-with self-review prevented by default, or a main-only deployment policy when
-`PRODUCTION_AUTO_APPROVE=true` (the gate also requires successful staging deploy
-and `e2e-staging` runs on the exact SHA). Install the Environment-scoped secrets
+live `production` Environment with a main-only deployment branch policy and, by
+default, required reviewers with self-review prevented; with
+`PRODUCTION_AUTO_APPROVE=true` the reviewer requirement is replaced by
+successful staging deploy and `e2e-staging` runs on the exact SHA (which the
+gate checks), while the branch policy stays required. Install the
+Environment-scoped secrets
 `PRODUCTION_CLOUDFLARE_API_TOKEN` and `PRODUCTION_CLOUDFLARE_ACCOUNT_ID`, and
 complete resource/secret provisioning and W16 authorization. These names must
 exist only in the `production` Environment, never at repository or organization
