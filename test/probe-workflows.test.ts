@@ -242,13 +242,15 @@ describe("source-managed moderator deployment preflight", () => {
     expect(production).toContain("run: npm run check:worker-moderators-production");
     // The moderator preflight runs after the credentials check and before
     // the first Cloudflare mutation (shared step order: gate → dry-run →
-    // credentials → moderator preflight → deploy → public-route smoke).
+    // credentials → moderator preflight → version upload/deploy → public-route smoke).
     const prodGate = production.indexOf("run: npm run check:worker-moderators-production");
     expect(prodGate).toBeGreaterThan(-1);
     expect(prodGate).toBeGreaterThan(
       production.indexOf("run: node ci/production-deploy-gate.mjs --credentials"),
     );
-    expect(prodGate).toBeLessThan(production.indexOf("run: npx wrangler deploy --env production"));
+    expect(prodGate).toBeLessThan(
+      production.indexOf("npx wrangler versions upload --env production"),
+    );
     expect(production).not.toContain("secrets.DISCORD_MODERATOR_ROLE_IDS");
     // env.production declares the same approved SySOp role; Wrangler does not
     // inherit top-level vars, so this entry is the one production boots with.
@@ -366,6 +368,23 @@ describe("staging smoke workflow safety", () => {
   });
 });
 
+describe("production deployment preserves configured triggers", () => {
+  it("uploads and promotes the exact target version without syncing custom domains", () => {
+    const workflow = read(".github/workflows/deploy-production.yml");
+    const upload = workflow.indexOf(
+      'npx wrangler versions upload --env production --tag "${DEPLOY_SHA:?}"',
+    );
+    const promote = workflow.indexOf(
+      'npx wrangler versions deploy --env production --name two-web-next-production --version-tag "${DEPLOY_SHA:?}@100%" --yes',
+    );
+
+    expect(upload).toBeGreaterThan(-1);
+    expect(promote).toBeGreaterThan(upload);
+    expect(workflow).not.toContain("wrangler triggers deploy");
+    expect(workflow).not.toContain("wrangler deploy --env production");
+  });
+});
+
 describe("deployed revision marker is staging-only", () => {
   const config = readWranglerConfig(read("wrangler.jsonc"));
 
@@ -375,7 +394,6 @@ describe("deployed revision marker is staging-only", () => {
     // cutover decision: declare the binding in env.production in that PR and
     // update this pin with it.
     expect(config.env?.production?.version_metadata).toBeUndefined();
-    expect(read(".github/workflows/deploy-production.yml")).not.toMatch(/--tag|revision-check/);
   });
 
   it("logs the live revision before any mutation and verifies the deployed commit after", () => {
