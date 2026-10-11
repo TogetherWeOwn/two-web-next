@@ -132,7 +132,7 @@ npm run audit:moderator-roles -- --discord-ids=<csv> --app-ids=<csv> --json
 ```
 
   Each side needs exactly one source (`--*-file` or `--*-ids`, not both). Files hold a JSON array of Discord user IDs or newline/comma separated IDs. Exit 0 = sets match (empty-safe: no moderators on either side is a clean pass), 1 = drift, 2 = usage or malformed input. The report shows at most 20 IDs per side with exact counts; the rest is `…and N more`.
-  2. On drift: `discord-only` IDs hold the Discord role but have no live app session, so have each sign in again (login recomputes the flag); `app-only` IDs carry the flag in a live session without the Discord role, so revoke each with the command below (dry-run first, verify the active-session count, then apply).
+  2. On drift: `discord-only` IDs hold the Discord role but have no live app session. They carry no excess privilege; they gain the panel at next login (login recomputes the flag). Record the count as information. `app-only` IDs carry the flag in a live session without the Discord role, so revoke each with the command below (dry-run first, verify the active-session count, then apply).
   3. For each such Discord snowflake, dry-run first, verify the active-session count, then apply:
 
 ```sh
@@ -141,7 +141,7 @@ node --import ./bin/ts-hook.mjs bin/revoke-sessions.mjs --discord-id=<snowflake>
 ```
 
   `DATABASE_URL` is supplied through the environment only, as in the procedure above.
-  4. Re-run the audit until it exits 0 before closing the review. A clean audit is one receipt, not permission to change cadence or scope.
+  4. Re-run the audit until `app-only` is 0 before closing the review. `discord-only` does not block close: the app set sees live sessions only (120-minute sliding TTL), so it includes every moderator not signed in at audit time. When a moderator is unavailable, record the `discord-only` count and close on `app-only` = 0. A clean audit is one receipt, not permission to change cadence or scope.
 - Evidence of completion: a dated review record with the review date (UTC), the reviewer/operator, the audit counts (`discord`, `app`, `discord-only`, `app-only`), the revoke dry-run/apply counts, and confirmation that Discord role removal was verified before revocation. Record counts only; keep member identifiers, ID-file contents, database URLs, tokens, and secrets out of docs, logs, and the record. The command output is counts with bounded ID lists; do not paste the lists into the record.
 
 ## Deploy and record the rollback pointer
