@@ -1,4 +1,4 @@
-// Profile validation field association (TOG-21705). SSR: each field error
+// Profile validation field association. SSR: each field error
 // exposes stable field/error ids, aria-invalid and associated error text;
 // the server `games` key maps to the `games_text` control. Unknown/global
 // errors stay in the summary without fabricated control associations.

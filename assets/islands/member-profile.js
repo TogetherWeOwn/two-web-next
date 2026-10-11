@@ -150,7 +150,7 @@
     return /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/.test(v);
   }
 
-  // Field association (TOG-21705): stable ids shared with SSR pages.tsx.
+  // Field association: stable ids shared with SSR pages.tsx.
   // The server `games` key maps to the `games_text` control; any other key
   // is global and stays in the summary with no fabricated control link.
   var FIELD_IDS = {

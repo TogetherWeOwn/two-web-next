@@ -29,7 +29,7 @@ import {
 import type { MemberView } from "./store";
 import type { MemberStats } from "./stats";
 
-// Stable field/error ids for profile validation association (TOG-21705).
+// Stable field/error ids for profile validation association.
 // The server `games` key maps to the `games_text` control; any other key is
 // global and stays in the summary without a fabricated control link.
 export const PROFILE_FIELD_IDS = {

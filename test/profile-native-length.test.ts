@@ -325,7 +325,7 @@ describe("real island binder: oversized synthetic lists", () => {
     expect(insertBefore).toHaveBeenCalledOnce();
     const alert = insertBefore.mock.calls[0]![0] as Element;
     expect(alert.setAttribute).toHaveBeenCalledWith("role", "alert");
-    // Field errors render as summary links (TOG-21705); read the link text.
+    // Field errors render as summary links; read the link text.
     expect(
       alert.children[0]!.children.map(
         (child) => child.children[0]?.textContent || child.textContent,
