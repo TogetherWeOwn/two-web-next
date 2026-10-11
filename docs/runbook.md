@@ -5,17 +5,25 @@ Start here for releases, queue incidents and database recovery; use
 [log-line alerts](runbook-alerts.md) for fingerprints and
 [shared Postgres](db-migrations.md) for migration ownership and backup policy.
 The [parity matrix](parity.md) records what is implemented versus still missing.
-The production cutover and its DNS changes are outside this runbook; only the
+Operations guidance (the index below, `/up` readiness, queues, deploy and
+rollback pointers, alerts) applies to staging and, where a section names the
+production binding, to production. The production cutover and its DNS changes
+are separately gated and outside this runbook; only the
 staging rollback and DNS flip-back rehearsal is covered here.
+The cutover-only sections are [Final import and reconcile](#final-import-and-reconcile)
+and [48h post-flip watch](#48h-post-flip-watch).
 
 **First responder index.** Match the symptom, open the section, run the first
 read-only diagnostic, then escalate. Every diagnostic below is a read; do not
 mutate, purge, roll back, migrate, rotate or restore from this table.
 
-Scope: staging (pre-cutover). Every host, Tail Worker and queue name below is
-the staging binding; for a production incident use
-[cutover-rollback.md](cutover-rollback.md) and the production bindings, never
-the staging targets.
+Scope: staging (pre-cutover) targets. Every host, Tail Worker and queue name
+in this index is the staging binding unless a row names production
+(`two-web-next-production`, `two-web-next-alerts-production`, the apex); never
+triage a production incident with the staging targets. For production use the
+[production rollback workflow](../.github/workflows/rollback-production.yml) and the
+production bindings; [cutover-rollback.md](cutover-rollback.md) is the staging
+rehearsal record plus a non-executable production recovery map.
 
 | Symptom or alert | Runbook section | First read-only diagnostic | Escalate to |
 | --- | --- | --- | --- |
