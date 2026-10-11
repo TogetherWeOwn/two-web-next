@@ -345,8 +345,9 @@ images on it. No proxying or resizing is performed.
 
 Only GET/HEAD `/join` permits frames, and only from `https://discord.com` for
 the widget. Other routes have `frame-src 'none'`; `frame-ancestors 'none'` and
-`X-Frame-Options: DENY` still prevent framing this site. CSP continues reporting
-to `/csp-reports` via both `report-uri` and the `csp-endpoint` reporting group.
+`X-Frame-Options: DENY` still prevent framing this site. CSP reports violations
+to `/csp-reports` through the `csp-endpoint` reporting group (`report-to` plus the
+`Reporting-Endpoints` header). The deprecated `report-uri` directive is not sent.
 
 ## Pre-flip probes (W16 rehearsal)
 

@@ -60,8 +60,9 @@ export const STATE_TTL_SECONDS = 600;
 
 const app = new Hono<{ Bindings: Env }>();
 
-// The violation sink (TOG-10107): report-uri is the legacy fallback;
-// the CSP report-to directive selects the modern Reporting-Endpoints group.
+// The violation sink (TOG-10107): the CSP report-to directive selects the
+// Reporting-Endpoints group. No report-uri: it is deprecated (ZAP 10055
+// notices flag it) and report-to is Baseline in current browsers.
 // Omit the deprecated Report-To header: unlike Reporting-Endpoints, it
 // requires absolute HTTPS URLs, not this same-origin relative destination.
 const CSP_REPORT_ENDPOINT = "/csp-reports";
@@ -117,7 +118,6 @@ const staticSecurityHeaders = secureHeaders({
     fontSrc: ["'self'"],
     frameAncestors: ["'none'"],
     formAction: ["'self'"],
-    reportUri: CSP_REPORT_ENDPOINT,
     reportTo: "csp-endpoint",
   },
   xContentTypeOptions: SECURITY_HEADERS["X-Content-Type-Options"],
