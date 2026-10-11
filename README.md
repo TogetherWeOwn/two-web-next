@@ -12,7 +12,8 @@ JavaScript islands. The [parity matrix](docs/parity.md) tracks the migration;
 migration plan: TOG-9671.
 Shared-DB foundation (topology, numbering, backups): [docs/db-migrations.md](docs/db-migrations.md).
 Operations (deploy/rollback, `/up`, queues, outages and restore drills):
-[docs/runbook.md](docs/runbook.md).
+[docs/runbook.md](docs/runbook.md). Security boundaries and repository evidence:
+[docs/threat-model.md](docs/threat-model.md).
 
 ## What works today
 

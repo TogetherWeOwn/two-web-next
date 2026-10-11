@@ -16,6 +16,10 @@ contents, or member data. Redact them and name the variable or field instead.
 If you find a live secret in the repository or its history, report it
 privately and do not copy the value.
 
+## Threat Model
+
+See the [TWO Web Next threat model](docs/threat-model.md) for the assets, trust boundaries, abuse cases, and repository evidence considered for this application. It is not a penetration-test report or external review.
+
 ## Supported Versions
 
 Security fixes land on `main` and ship with the next release-please release
