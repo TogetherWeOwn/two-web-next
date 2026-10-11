@@ -47,6 +47,46 @@ The command revokes only active sessions; the database URL is supplied through
 `DATABASE_URL`, never as an argument. Remote database URLs—including
 production-looking ones—require `--target production`. See [the runbook procedure](runbook.md#a-moderator-lost-their-role).
 
+## Quarterly moderator access review (role-audit half)
+
+Once a quarter, pair this read-only comparison with the
+[revoke-command half](runbook.md#quarterly-moderator-access-review-revoke-command-half):
+audit first to find drift, then revoke app-only sessions, then re-run to confirm
+clean. An authorized operator runs the command; moderators supply the two ID
+lists through the approved private support process and never paste member
+identifiers into public channels.
+
+The command compares the Discord-moderator set against the app-moderator set.
+It reads only the ID lists it is given: it never touches the network, never
+opens a database, never changes roles, and never reads or prints tokens or
+secrets.
+
+```sh
+node --import ./bin/ts-hook.mjs bin/role-audit.mjs --discord-file=<path> --app-file=<path> [--json]
+node --import ./bin/ts-hook.mjs bin/role-audit.mjs --discord-ids=<csv> --app-ids=<csv> [--json]
+```
+
+Each side needs exactly one source (`--*-file` or `--*-ids`, not both, not
+neither). Files hold either a JSON array of strings or newline/comma separated
+IDs. Exit codes:
+
+| Exit | Meaning | Response |
+|---|---|---|
+| 0 | Sets match (empty on both sides is a clean pass) | Record the clean result |
+| 1 | Drift: the sets differ | Sign in each discord-only moderator, clear app-only access with the revoke procedure above, then re-run before relying on the result |
+| 2 | Usage or malformed input (missing side, both sources for one side, unknown flag, bad file, non-snowflake ID) | Fix the invocation or input, then re-run |
+
+`discord-only` means the person has the Discord role but no live app session;
+they gain the panel at next sign-in, so this is not a denial to troubleshoot.
+`app-only` means a live app session without the Discord role: excess privilege
+until the session expires or is revoked.
+
+Keep evidence counts-only: the text report prints exact counts plus at most 20
+IDs per side (`…and N more` beyond that), and `--json` reports exact
+`discordCount`/`appCount` with truncated `shown` lists and `omitted` counts.
+Record the review date, the counts, the outcome, and the follow-up actions in
+the private review record. Keep the ID lists there too, never in public text.
+
 ## Auth-wall probe (staging only)
 
 `bin/admin-authwall-probe.mjs` verifies all nine admin POST routes answer each
@@ -429,6 +469,9 @@ For maintainers checking this guide:
   [sessions](../src/sessions.ts), [roles](../src/roles.ts) and
   [throttling](../src/throttle.ts): permissions, member-data access logging,
   its default fail-closed policy and request limits.
+- [Role-audit command](../bin/role-audit.mjs) and
+  [role-audit comparison](../src/probes/role-audit.ts): deploy-time moderator
+  set comparison, exit codes and bounded counts-only report.
 - [Event sync](../src/events/sync.ts), [public event reads](../src/events/reads.ts)
   and [RSVP rules](../src/events/rsvp.ts): asynchronous write-back and public behavior.
 - [App routes](../src/index.tsx), [public pages](../src/pages.tsx),
