@@ -274,7 +274,6 @@ describe("member-erasure coverage (DB-free migration introspection)", () => {
     const postgresJobs = readFileSync(join(root, "src/jobs/postgres.ts"), "utf8");
     expect(postgresJobs).not.toContain("activity_log");
     const migrationsDoc = readFileSync(join(root, "docs/db-migrations.md"), "utf8");
-    expect(migrationsDoc).toContain("does");
     expect(migrationsDoc).toMatch(/does\s+not prune `activity_log`/);
   });
 
