@@ -4,7 +4,7 @@ Source: legacy [two-web](https://github.com/TogetherWeOwn/two-web) @ `e1e939a`
 (read 2026-09-29: `routes/web.php`, `routes/api.php`, `routes/funnel.php`,
 `routes/console.php`, controllers, Livewire, Filament, jobs, commands,
 policies, middleware, services, config, views, content, public).
-Next side: this repo @ `b46a479a` (2026-10-03) + live card statuses of the same date.
+Next side: this repo @ `56c4502c` (2026-10-10).
 
 Flip gate (owner): re-run before W16; the DNS flip needs **0 unmapped rows**.
 A row is mapped when it names a card or is **dropped, with a reason**.
@@ -288,4 +288,12 @@ Unmapped rows remaining: **0**. Dropped rows carry reasons above; every other
 row names its card. Re-run 2026-10-03 at `b46a479a`: table scan finds no row
 without a card or drop reason, and no new legacy surface appeared (legacy
 still pinned at `e1e939a`); this refresh records only post-`e2f8969`
-landings, no product code changed. Re-run this matrix before the DNS flip.
+landings, no product code changed. Re-run 2026-10-10 at `56c4502c`: every
+row touched by #615 (admin split), #622 (cookie single-source), #645
+(islands split) and #646/#632 (agent-events split + ingress text rules) was
+re-checked against head source and confirmed with no flip — the three splits
+preserve their export surfaces (10/10 admin pages, 210/210 island contracts,
+12/12 ingress exports), the session cookie value is unchanged behind its
+single source, and the tightened ingress text rules narrow no parity claim.
+Prune/immutability rows and the rows owned by open #620/#582 were not
+touched. Re-run this matrix before the DNS flip.
