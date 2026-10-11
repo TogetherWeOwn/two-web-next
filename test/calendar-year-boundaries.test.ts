@@ -260,7 +260,7 @@ describe("calendar year-boundary Hono SSR", () => {
       )![1]!;
       expect(eventCell).toContain("data-cal-jump");
       expect(eventCell).toContain(">12:00 Boundary fixture</a>");
-      expect(eventCell).toContain('aria-label="Boundary fixture, ');
+      expect(eventCell).toContain('aria-label="12:00 Boundary fixture, ');
       for (const [direction, expected] of [
         ["Previous month", previous],
         ["Next month", next],
@@ -317,7 +317,7 @@ describe("calendar year-boundary Hono SSR", () => {
     const cell = /<td[^>]*data-date="\+010000-01-01"[^>]*>([\s\S]*?)<\/td>/.exec(html)![1]!;
     expect(cell).toContain("data-cal-jump");
     expect(cell).toContain(">00:30 Boundary fixture</a>");
-    expect(cell).toContain('aria-label="Boundary fixture, ');
+    expect(cell).toContain('aria-label="00:30 Boundary fixture, ');
     expect(
       renderedDays(html)
         .filter((day) => day.isToday)

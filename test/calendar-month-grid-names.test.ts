@@ -8,7 +8,7 @@ import { EventsCalendarPage } from "../src/events/pages";
 import type { PublicEvent } from "../src/events/reads";
 import {
   calendarJumpUrl,
-  cardTimeLabel,
+  cardDayLabel,
   gridTitle,
   wallDateIso,
   wallMonth,
@@ -111,6 +111,12 @@ function gridLinks(html: string): GridLink[] {
 
 const ariaOf = (attrs: string): string | null => /aria-label="([^"]*)"/.exec(attrs)?.[1] ?? null;
 
+// WCAG 2.5.3: speech-input users say the visible words, so the name must start with them.
+function expectNameLeadsWithVisible(name: string, link: GridLink): void {
+  const lead = link.visible.replace(/…$/, "");
+  expect(name.slice(0, lead.length)).toBe(lead);
+}
+
 describe("month grid accessible names", () => {
   it("gives same-time same-prefix persisted rows distinct accessible names with full title + day/time", async () => {
     const prefix = "Game night spectacular raid evening";
@@ -146,9 +152,10 @@ describe("month grid accessible names", () => {
       // Complete title, not the truncated visible label.
       expect(name).toContain(e.title);
       expect(name.length).toBeGreaterThan(link.visible.length);
-      // Useful day/time context survives alongside the title.
+      expectNameLeadsWithVisible(name, link);
+      // Useful day context follows the title.
       expect(name).toContain(wallTimeHm(e.startsAt, ZONE));
-      expect(name).toContain(cardTimeLabel(e.startsAt, ZONE));
+      expect(name).toContain(cardDayLabel(e.startsAt, ZONE));
       // Compact visible label is unchanged.
       expect(link.visible).toBe(`${wallTimeHm(e.startsAt, ZONE)} ${gridTitle(e.title)}`);
       // Link target / jump behavior unchanged.
@@ -185,8 +192,10 @@ describe("month grid accessible names", () => {
     const byHref = new Map(links.map((l) => [l.href, l]));
     const uniLink = byHref.get(calendarJumpUrl(false, rowKey(uni)))!;
     expect(ariaOf(uniLink.attrs)).toContain(uni.title);
+    expectNameLeadsWithVisible(ariaOf(uniLink.attrs)!, uniLink);
     const evilLink = byHref.get(calendarJumpUrl(false, rowKey(evil)))!;
     const evilName = ariaOf(evilLink.attrs)!;
+    expectNameLeadsWithVisible(evilName, evilLink);
     // Escaped punctuation survives as text (decoded form keeps every character).
     expect(evilName).toContain("&quot;");
     expect(evilName).not.toContain("<script>");
@@ -194,8 +203,9 @@ describe("month grid accessible names", () => {
     const dLink = byHref.get(calendarJumpUrl(false, rowKey(d)))!;
     const dName = ariaOf(dLink.attrs)!;
     expect(dName).toContain(d.title);
+    expectNameLeadsWithVisible(dName, dLink);
     expect(dName).toContain(wallTimeHm(d.startsAt, ZONE));
-    expect(dName).toContain(cardTimeLabel(d.startsAt, ZONE));
+    expect(dName).toContain(cardDayLabel(d.startsAt, ZONE));
     expect(dLink.visible).toBe(`${wallTimeHm(d.startsAt, ZONE)} ${gridTitle(d.title)}`);
   });
 
@@ -244,7 +254,8 @@ describe("month grid accessible names", () => {
       expect(links).toHaveLength(1);
       const name = ariaOf(links[0]!.attrs)!;
       expect(name).toContain(e.title);
-      expect(name).toContain(cardTimeLabel(e.startsAt, ZONE));
+      expectNameLeadsWithVisible(name, links[0]!);
+      expect(name).toContain(cardDayLabel(e.startsAt, ZONE));
       expect(links[0]!.href).toBe(calendarJumpUrl(false, rowKey(e)));
       expect(links[0]!.attrs).toContain("data-cal-jump");
     }

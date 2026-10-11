@@ -258,11 +258,15 @@ export function wallMonth(instant: Date, zone: string): string {
   return wallDateIso(instant, zone).slice(0, -3);
 }
 
+/** "Fri 4 Nov" — the card's human day in the host zone. */
+export function cardDayLabel(instant: Date, zone: string): string {
+  const p = partsIn(instant, zone, { weekday: "short", day: "numeric", month: "short" });
+  return `${p.get("weekday")} ${p.get("day")} ${p.get("month")}`;
+}
+
 /** "Fri 4 Nov, 20:00" — the card's human time in the host zone (legacy 'D j M, H:i'). */
 export function cardTimeLabel(instant: Date, zone: string): string {
-  const z = isValidZone(zone) ? zone : "UTC";
-  const p = partsIn(instant, z, { weekday: "short", day: "numeric", month: "short" });
-  return `${p.get("weekday")} ${p.get("day")} ${p.get("month")}, ${wallTimeHm(instant, z)}`;
+  return `${cardDayLabel(instant, zone)}, ${wallTimeHm(instant, zone)}`;
 }
 
 /**
@@ -352,14 +356,9 @@ export function gridTitle(title: string): string {
   return chars.length > GRID_TITLE_MAX ? `${chars.slice(0, GRID_TITLE_MAX).join("")}…` : title;
 }
 
-/** Month-grid link accessible name: the COMPLETE title plus the card's human
- * day/time ("Tue 15 Jan, 20:00") so same-time rows sharing the truncated
- * visible prefix stay distinguishable to assistive tech. The visible label
- * keeps the compact `gridTitle` form; this string rides as the link's
- * accessible name only. Rendered through JSX, so markup in titles is
- * escaped, never interpreted. */
+/** Month-grid link name starts with the visible "HH:mm title" (WCAG 2.5.3), then the day. */
 export function gridAccessibleName(title: string, startsAt: Date, zone: string): string {
-  return `${title}, ${cardTimeLabel(startsAt, zone)}`;
+  return `${wallTimeHm(startsAt, zone)} ${title}, ${cardDayLabel(startsAt, zone)}`;
 }
 
 /* Discord-native rows (TOG-5168): display-only transients merged into the
