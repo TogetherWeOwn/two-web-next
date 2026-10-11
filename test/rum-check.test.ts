@@ -338,6 +338,27 @@ describe("ci/rum-check.mjs injected fetch", () => {
     expect(r.kind).toBe("insufficient");
   });
 
+  it("applies the configured minSamples when admitting the response", async () => {
+    const countAt = (count: number) => ({
+      data: {
+        viewer: { accounts: [{ rumWebVitalsEventsAdaptiveGroups: [{ count, quantiles: null }] }] },
+      },
+    });
+    const raisedThreshold = await run(jsonResponse(countAt(100)), env, {
+      ...budget,
+      minSamples: 200,
+    });
+    expect(raisedThreshold.kind).toBe("insufficient");
+    expect(raisedThreshold.code).toBe(0);
+
+    const loweredThreshold = await run(jsonResponse(countAt(30)), env, {
+      ...budget,
+      minSamples: 20,
+    });
+    expect(loweredThreshold.kind).toBe("invalid-response");
+    expect(loweredThreshold.code).toBe(1);
+  });
+
   it("keeps the unconfigured skip without calling fetch", async () => {
     const fetchImpl = vi.fn();
     const r = await run(fetchImpl, {});
