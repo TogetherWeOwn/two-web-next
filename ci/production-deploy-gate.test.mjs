@@ -566,10 +566,13 @@ test("manual production workflow routes runners by repo visibility and uses prod
       tailDeploy < upload &&
       upload < deploy,
   );
-  assert.match(workflow, /versions upload --env production --tag "\$\{DEPLOY_SHA:\?\}"/);
   assert.match(
     workflow,
-    /versions deploy --env production --name two-web-next-production --version-tag "\$\{DEPLOY_SHA:\?\}@100%" --yes/,
+    /versions upload --env production --tag "\$\{DEPLOY_SHA:\?\}-\$\{GITHUB_RUN_ID:\?\}-\$\{GITHUB_RUN_ATTEMPT:\?\}"/,
+  );
+  assert.match(
+    workflow,
+    /versions deploy --env production --name two-web-next-production --version-tag "\$\{DEPLOY_SHA:\?\}-\$\{GITHUB_RUN_ID:\?\}-\$\{GITHUB_RUN_ATTEMPT:\?\}@100%" --yes/,
   );
   assert.ok(!workflow.includes("wrangler deploy --env production"));
 });

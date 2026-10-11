@@ -372,10 +372,10 @@ describe("production deployment preserves configured triggers", () => {
   it("uploads and promotes the exact target version without syncing custom domains", () => {
     const workflow = read(".github/workflows/deploy-production.yml");
     const upload = workflow.indexOf(
-      'npx wrangler versions upload --env production --tag "${DEPLOY_SHA:?}"',
+      'npx wrangler versions upload --env production --tag "${DEPLOY_SHA:?}-${GITHUB_RUN_ID:?}-${GITHUB_RUN_ATTEMPT:?}"',
     );
     const promote = workflow.indexOf(
-      'npx wrangler versions deploy --env production --name two-web-next-production --version-tag "${DEPLOY_SHA:?}@100%" --yes',
+      'npx wrangler versions deploy --env production --name two-web-next-production --version-tag "${DEPLOY_SHA:?}-${GITHUB_RUN_ID:?}-${GITHUB_RUN_ATTEMPT:?}@100%" --yes',
     );
 
     expect(upload).toBeGreaterThan(-1);

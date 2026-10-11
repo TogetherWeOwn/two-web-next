@@ -262,12 +262,14 @@ API access, unset/false flag or any other ref fails closed. Both gate jobs inher
 `contents: read` and `actions: read`; the latter is required to
 [read an Environment in this private repository](https://docs.github.com/en/rest/deployments/environments#get-an-environment--fine-grained-access-tokens).
 The deploy job uses that Environment and checks the gate again after approval.
-It uploads a Worker version tagged with the promoted SHA (`sha` input, or by
-default the latest main commit whose post-deploy e2e-staging journeys passed),
-then promotes that exact tag to 100% with `wrangler versions upload` and
-`wrangler versions deploy`. These commands change code without re-syncing the
-already-attached apex custom domain or other triggers; trigger changes are a
-separate operation. The workflow does not create resources or run
+It uploads a Worker version tagged with the promoted SHA, GitHub run ID, and
+run attempt (`sha` input, or by default the latest main commit whose post-deploy
+e2e-staging journeys passed), then promotes that exact tag to 100%. Including the
+run and attempt keeps retries of the same SHA unambiguous. `wrangler versions
+upload` and `wrangler versions deploy` change code without re-syncing the
+already-attached apex custom domain or other triggers. The workflow intentionally
+does not reconcile trigger configuration from `wrangler.jsonc`; trigger changes
+must be managed separately. The workflow does not create resources or run
 migrations/tests on production. Its post-deploy smoke runs
 the same GET-only public-route set as staging
 (`node bin/smoke.mjs https://togetherweown.com --allow-indexable`): `/up`
