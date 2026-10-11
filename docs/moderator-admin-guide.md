@@ -487,6 +487,6 @@ For maintainers checking this guide:
   and [RSVP rules](../src/events/rsvp.ts): asynchronous write-back and public behavior.
 - [App routes](../src/index.tsx), [public pages](../src/pages.tsx),
   [missed-search widget](../src/events/search-log.ts) and
-  [error pages](../src/errors.tsx): current homepage wiring and diagnostic copy.
+  [error pages](../src/error-pages.tsx): current homepage wiring and diagnostic copy.
 - [Admin tests](../test/admin.test.ts), [admin read tests](../test/admin-reads.test.ts)
   and [event search tests](../test/event-search.test.ts): executable behavior checks.

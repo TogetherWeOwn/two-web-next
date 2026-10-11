@@ -254,6 +254,9 @@ exactly once.
 | `src/discord-widget.ts` | join |
 | `src/discord.ts` | auth |
 | `src/env.ts` | entry |
+| `src/error-pages.tsx` | entry |
+| `src/error-registration.ts` | entry |
+| `src/error-responses.tsx` | entry |
 | `src/errors.tsx` | entry |
 | `src/events/` | events |
 | `src/featured-image.ts` | content |
