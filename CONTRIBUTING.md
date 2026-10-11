@@ -165,7 +165,7 @@ PR. See [`docs/releases.md`](docs/releases.md). Never tag or release by hand.
 
 Release notes use the [Common Changelog](https://common-changelog.org/)
 categories, in its order: **Changed** (`perf`, `revert`), **Added** (`feat`),
-**Fixed** (`fix`). `chore`, `docs`, `test`, `ci`, `build`, `refactor` and `style`
+**Fixed** (`fix`, `security`). `chore`, `docs`, `test`, `ci`, `build`, `refactor` and `style`
 stay out of the notes. Each squash-merged PR title becomes one entry, so
 write it for a reader of the release notes: imperative mood, one user-facing change.
 

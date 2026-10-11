@@ -12,7 +12,9 @@ const os = require("node:os");
 const path = require("node:path");
 
 const SCRIPT = process.env.RELEASE_ON_PROMOTE || path.join(__dirname, "release-on-promote.cjs");
-const { parseCommit, nextVersion, renderNotes } = require(SCRIPT);
+const REAL_CONFIG = path.join(__dirname, "..", "release-please-config.json");
+const { parseCommit, nextVersion, renderNotes, loadOptions } = require(SCRIPT);
+const { sections } = loadOptions(REAL_CONFIG);
 
 const c = (subject, body = "") => parseCommit("a".repeat(40), subject, body);
 
@@ -48,14 +50,9 @@ assert.deepEqual(nextVersion([0, 4, 0], [], pre), [0, 4, 1]);
 assert.deepEqual(nextVersion([1, 2, 3], [c("feat: a")], pre), [1, 3, 0]);
 assert.deepEqual(nextVersion([1, 2, 3], [c("fix!: a")], pre), [2, 0, 0]);
 assert.deepEqual(nextVersion([1, 2, 3], [c("perf: a")], pre), [1, 2, 4]);
+assert.deepEqual(nextVersion([1, 2, 3], [c("security(auth): a")], pre), [1, 2, 4]);
 
 // Notes: visible sections only, scope-sorted, hidden types dropped.
-const sections = [
-  { type: "feat", section: "Added" },
-  { type: "fix", section: "Fixed" },
-  { type: "security", section: "Fixed" },
-  { type: "chore", section: "Miscellaneous", hidden: true },
-];
 const notes = renderNotes({
   version: [0, 5, 0],
   prevTag: "v0.4.0",
@@ -91,6 +88,20 @@ assert.match(
   }),
   /No user-facing changes/,
 );
+const securityOnly = renderNotes({
+  version: [0, 4, 1],
+  prevTag: "v0.4.0",
+  date: "d",
+  sections,
+  repoUrl: "https://github.com/o/r",
+  commits: [c("security(auth): refuse expired sudo tokens (#900)")],
+});
+assert.ok(
+  securityOnly.includes(
+    "### Fixed\n\n* **auth:** refuse expired sudo tokens ([#900](https://github.com/o/r/issues/900))",
+  ),
+);
+assert.doesNotMatch(securityOnly, /No user-facing/);
 assert.match(
   renderNotes({
     version: [0, 5, 0],
@@ -109,11 +120,11 @@ const g = (...a) => execFileSync("git", ["-C", dir, ...a], { encoding: "utf8" })
 g("init", "-q", "-b", "main");
 g("config", "user.email", "t@example.invalid");
 g("config", "user.name", "t");
+const realPkg = JSON.parse(fs.readFileSync(REAL_CONFIG, "utf8")).packages["."];
+delete realPkg["release-as"];
 fs.writeFileSync(
   path.join(dir, "release-please-config.json"),
-  JSON.stringify({
-    packages: { ".": { "bump-minor-pre-major": true, "changelog-sections": sections } },
-  }),
+  JSON.stringify({ packages: { ".": realPkg } }),
 );
 const commit = (msg) => {
   g("commit", "-q", "--allow-empty", "-m", msg);
