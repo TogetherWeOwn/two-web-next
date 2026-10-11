@@ -105,6 +105,78 @@ test("404 audit distinguishes populated suggestions from their empty fallback", 
   assert(coverage[empty.route].cases.some((item) => item.status === 404));
 });
 
+test("past-page overflow must show the archive boundary, not an empty archive", async () => {
+  const scenario = coverage["/events/past"].cases.find(
+    (item) => item.state === "past-page-overflow",
+  );
+  assert.equal(scenario.path, "/events/past?page=99");
+  const page = { ...scenario, route: "/events/past", status: 200 };
+  await assertAuditContent(fixturePage(page), page);
+  await assert.rejects(
+    assertAuditContent(
+      fixturePage(page, {
+        '[data-testid="past-events"]': {
+          attributes: { "data-page": "99", "data-total-pages": "0" },
+        },
+      }),
+      page,
+    ),
+    /Fixture content attribute/,
+  );
+  await assert.rejects(
+    assertAuditContent(
+      fixturePage(page, { '[data-testid="past-events-out-of-range"]': { count: 0 } }),
+      page,
+    ),
+    /Fixture content count/,
+  );
+});
+
+test("navigated calendar month must render its chosen month and grid", async () => {
+  const scenario = coverage["/events"].cases.find((item) => item.state === "navigated-month");
+  assert.equal(scenario.path, "/events?view=calendar&month=2099-12");
+  const page = { ...scenario, route: "/events", status: 200 };
+  await assertAuditContent(fixturePage(page), page);
+  await assert.rejects(
+    assertAuditContent(
+      fixturePage(page, { '[data-testid="calendar-month"]': { text: "November 2099" } }),
+      page,
+    ),
+    /Fixture content text/,
+  );
+  await assert.rejects(
+    assertAuditContent(
+      fixturePage(page, { '[data-testid="events-calendar-grid"]': { count: 0 } }),
+      page,
+    ),
+    /Fixture content count/,
+  );
+});
+
+test("freeze and expired-write banners are present only in their audited states", async () => {
+  const cases = coverage["/about"].cases;
+  assert(cases.some((item) => item.path === "/about" && !item.state));
+  for (const state of ["freeze-banner", "expired-write-banner", "both-banners"]) {
+    const scenario = cases.find((item) => item.state === state);
+    assert.equal(scenario.path, "/about");
+    const page = { ...scenario, route: "/about", status: 200 };
+    await assertAuditContent(fixturePage(page), page);
+    for (const [selector, expected] of [
+      ['[data-testid="freeze-banner"]', state === "expired-write-banner" ? 0 : 1],
+      ['[data-testid="auth-error"]', state === "freeze-banner" ? 0 : 1],
+    ]) {
+      assert.equal(
+        contentExpectations(page).find((item) => item.selector === selector).count,
+        expected,
+      );
+      await assert.rejects(
+        assertAuditContent(fixturePage(page, { [selector]: { count: 1 - expected } }), page),
+        /Fixture content count/,
+      );
+    }
+  }
+});
+
 test("home assertions require member, online, numeric and zero-rank content before axe", async () => {
   const assertions = await assertAuditContent(fixturePage(home), home);
   assert(assertions.some((item) => item.text === "84 members · 12 online"));

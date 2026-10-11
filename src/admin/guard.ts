@@ -42,6 +42,7 @@ import {
 import { dbFor } from "./db";
 import { recordAccess } from "./store";
 import { memberReadBoundary } from "../member-reads";
+import { SESSION_COOKIE } from "../session-cookie";
 
 export type Actor = { id: string; username: string };
 
@@ -101,7 +102,7 @@ export function adminGuard(overrides?: AdminOverrides | SessionStore) {
     c: Context<{ Bindings: Env; Variables: { adminActor: Actor; access: AccessDecl } }>,
     next: Next,
   ) => {
-    const token = await getSignedCookie(c, c.env.SESSION_SECRET, "__Host-two_session");
+    const token = await getSignedCookie(c, c.env.SESSION_SECRET, SESSION_COOKIE);
     // Guest: into the site Discord OAuth flow, like everyone else. There is
     // no panel login page. The bounce records the page they asked for
     // (legacy url.intended) so the callback returns them to it.

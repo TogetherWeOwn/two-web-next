@@ -1,7 +1,54 @@
 import assert from "node:assert/strict";
+import { A11Y_FREEZE_DATES } from "./a11y-cases.mjs";
 
 export function contentExpectations(scenario) {
   const unavailable = scenario.readState === "unavailable";
+  if (scenario.route === "/events/past" && scenario.state === "past-page-overflow") {
+    return [
+      {
+        selector: '[data-testid="past-events"]',
+        attributes: { "data-page": "99", "data-total-pages": "1" },
+      },
+      {
+        selector: '[data-testid="past-events-out-of-range"]',
+        text: "Page 99 is outside the archive. There is 1 page.",
+      },
+      { selector: '[data-testid="past-events-list"] > li', count: 0 },
+    ];
+  }
+  if (scenario.route === "/events" && scenario.state === "navigated-month") {
+    return [
+      {
+        selector: '[data-testid="events-calendar"]',
+        attributes: { "data-view": "calendar", "data-month": "2099-12" },
+      },
+      { selector: '[data-testid="calendar-month"]', text: "December 2099" },
+      { selector: '[data-testid="events-calendar-grid"]' },
+    ];
+  }
+  if (
+    scenario.route === "/about" &&
+    ["freeze-banner", "expired-write-banner", "both-banners"].includes(scenario.state)
+  ) {
+    const freeze = scenario.state !== "expired-write-banner";
+    const expired = scenario.state !== "freeze-banner";
+    return [
+      {
+        selector: '[data-testid="freeze-banner"]',
+        count: freeze ? 1 : 0,
+        ...(freeze
+          ? { includes: `Moving to our new site soon — edits frozen ${A11Y_FREEZE_DATES}.` }
+          : {}),
+      },
+      {
+        selector: '[data-testid="auth-error"]',
+        count: expired ? 1 : 0,
+        ...(expired
+          ? { includes: "You signed in again. Your earlier changes were not saved." }
+          : {}),
+      },
+    ];
+  }
   if (scenario.route === "/") {
     const values = unavailable ? ["", "", "", "", ""] : ["4", "50", "20", "10", "unclaimed"];
     return [

@@ -43,6 +43,8 @@ export default {
     try {
       const bindings = {
         ...env,
+        FREEZE_BANNER_ENABLED:
+          request.headers.get("x-a11y-freeze-banner") === "true" ? "true" : "false",
         A11Y_READ_STATE: readState,
         ADMIN_DB: auditReadDatabase(
           drizzle(client, { schema: { ...schema, ...adminSchema } }),

@@ -1,6 +1,15 @@
 // Legacy public-page thresholds and mid-range phone profile, unchanged.
 // Threshold changes need a separate owner-approved PR, never a green-build fix.
-const paths = ["/", "/events", "/e/01ARZ3NDEKTSV4RRFFQ69G5FAV", "/join", "/about"];
+const paths = [
+  "/",
+  "/events",
+  "/e/01ARZ3NDEKTSV4RRFFQ69G5FAV",
+  "/join",
+  "/about",
+  "/faq",
+  "/rules",
+  "/privacy",
+];
 
 module.exports = {
   ci: {

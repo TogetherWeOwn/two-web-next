@@ -40,6 +40,10 @@ timing check to fake timers; do not retry the job until it passes.
 | `test/event-ics-schema.test.ts` | 90 s; `drizzle-kit generate` 60 s | Spawns drizzle-kit, the slowest step on a loaded host |
 | `test/web-db-binding.test.ts:156` | 30 s | 31 sequential PATCH requests against the DB binding |
 | `test/admin-validation.property.test.ts` | hard 10 s | Seeded property suite; intentionally hard |
+| `test/agent-events-shield.test.ts` "admits a fresh credential while an unrelated stale row is locked" | elapsed `< 4000` ms | Proves the shield skips a locked stale row instead of waiting on it (`lockWaitMs: 50`); a stalled wait would answer 503 or hang |
+| `test/agent-events-shield.test.ts` "bounds the shield lock wait under contention" | elapsed `< 4000` ms | Proves the shield gives up on a held advisory lock with a retryable 503 (`lockWaitMs: 50`) instead of waiting for the holder |
+| `test/jobs-postgres.test.ts` "flight body queries run on the reserved tx (no max:1 deadlock)" | 3 s race timer | Detects the `max: 1` pool deadlock; a passing run finishes in milliseconds |
+| `test/jobs-postgres.test.ts` "overlapping cron invocations single-flight…", "different jobs do not block each other" | 200 ms / 100 ms sleeps | Give the first flight time to take its lock before the second starts; a longer pause is safe, a shorter one can let the second flight win |
 
 ## Dashboard widget deadline
 
@@ -50,3 +54,17 @@ The client deadline must outlast the DB-side cap plus the other widget's
 transaction. If it fires while a counted read is still pending, the
 member-read boundary refuses the whole page with 503.
 `test/event-search.test.ts` ("loaded host") pins this.
+
+## Lock TTL proofs
+
+The two `pgUniqueLock` lease tests in `test/jobs-postgres.test.ts` ("new locks
+get their full TTL even in an old transaction", "takes over a lock that expired
+after the transaction began") carry no wall-clock margin. Each reads the
+database clock inside one transaction, after `pg_sleep(0.2)` has made it older
+than its start timestamp, and compares readings. The first requires
+`expires_at - transaction_timestamp() >= elapsed + ttl`; transaction-start expiry
+falls short of that by `elapsed`, which is at least 0.2 s. The second inserts a
+lease that expires at the midpoint of the elapsed time, so it expires after the
+transaction began and before the acquire, and requires that the acquire takes
+it over. Host scheduling delay moves both readings together and cannot flip
+either result. Do not turn these back into `remaining > x` bounds.
