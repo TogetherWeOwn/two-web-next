@@ -111,6 +111,7 @@ export function securityHeadersFor(
     .map((directive) => directive.join(" "))
     .join("; ");
   return [
+    ["Cross-Origin-Embedder-Policy", "credentialless"],
     ["Cross-Origin-Resource-Policy", "same-origin"],
     ["Cross-Origin-Opener-Policy", "same-origin"],
     ["Origin-Agent-Cluster", "?1"],
