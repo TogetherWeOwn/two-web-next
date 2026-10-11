@@ -18,17 +18,21 @@ const QUERY = `query ($account: String!, $site: String!, $since: Time!, $until: 
 }`;
 
 export function evaluate(quantiles, budget, count) {
+  // Cloudflare returns LCP/INP p75 in microseconds (CLS is unitless) and a
+  // negative value means N/A (no data for that metric that day).
+  const microsToMs = (v) => (typeof v === "number" && v >= 0 ? v / 1000 : null);
+  const unitless = (v) => (typeof v === "number" && v >= 0 ? v : null);
   const metrics = [
-    ["LCP p75 (ms)", quantiles?.largestContentfulPaintP75, budget.lcpMs],
-    ["CLS p75", quantiles?.cumulativeLayoutShiftP75, budget.cls],
-    ["INP p75 (ms)", quantiles?.interactionToNextPaintP75, budget.inpMs],
+    ["LCP p75 (ms)", microsToMs(quantiles?.largestContentfulPaintP75), budget.lcpMs],
+    ["CLS p75", unitless(quantiles?.cumulativeLayoutShiftP75), budget.cls],
+    ["INP p75 (ms)", microsToMs(quantiles?.interactionToNextPaintP75), budget.inpMs],
   ];
   const minSamples = budget.minSamples ?? 50;
   const rows = metrics.map(([name, value, max]) => ({
     name,
-    value: typeof value === "number" ? value : null,
+    value,
     max,
-    ok: typeof value !== "number" || count < minSamples || value <= max,
+    ok: value === null || count < minSamples || value <= max,
   }));
   return { rows, enoughData: count >= minSamples, failed: rows.filter((r) => !r.ok) };
 }
