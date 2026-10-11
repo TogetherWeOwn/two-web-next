@@ -54,7 +54,9 @@ describe("required checks always report", () => {
     // More gates may join `needs`; the guard below only relies on these two.
     const needs = check.match(/\n    needs: \[([^\]]*)\]\n/)?.[1]?.split(/,\s*/) ?? [];
     expect(needs).toEqual(expect.arrayContaining(["a11y", "scope"]));
-    expect(check).toMatch(/\n    if: always\(\)\n/);
+    expect(check).toMatch(
+      /\n    if: always\(\) && needs\.ci-supersession\.outputs\.superseded != 'true'\n/,
+    );
     expect(check).toContain('run: test "$A11Y_RESULT" = success');
   });
 
@@ -66,8 +68,12 @@ describe("required checks always report", () => {
   it("ci-ok aggregates the gated jobs", () => {
     const ci = readFileSync(join(dir, "ci.yml"), "utf8");
     const ok = job(ci, "ci-ok");
-    expect(ok).toMatch(/\n    needs: \[a11y, lighthouse, bundle-budget, check, scope\]\n/);
-    expect(ok).toMatch(/\n    if: always\(\)\n/);
+    expect(ok).toMatch(
+      /\n    needs: \[a11y, lighthouse, bundle-budget, check, scope, ci-supersession, ci-ok-supersession\]\n/,
+    );
+    expect(ok).toMatch(
+      /\n    if: >-\n      always\(\) && needs\.ci-supersession\.outputs\.superseded != 'true' &&\n      needs\.ci-ok-supersession\.outputs\.superseded != 'true'\n/,
+    );
     // ci-ok is required (ruleset protect-main); the change-gating section documents what it aggregates.
     expect(readFileSync("CONTRIBUTING.md", "utf8")).toContain("### Change-gated CI and `ci-ok`");
   });

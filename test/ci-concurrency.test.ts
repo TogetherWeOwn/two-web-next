@@ -1,6 +1,8 @@
 import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import { findSupersedingRun, isSupersededRun } from "../ci/find-superseding-run.mjs";
+import type { WorkflowRun } from "../ci/find-superseding-run.mjs";
 
 // TOG-11811: runners are the throughput ceiling, so a superseded PR push must
 // cancel its own runs. Deploy, rollback and release runs must never be cancelled midway.
@@ -25,6 +27,141 @@ const groupPerSha = (text: string) =>
 
 // No workflow currently needs a schedule that shares main's push group.
 const SCHEDULE_SHARES_MAIN_GROUP = new Set<string>();
+
+const ci = workflows.find(({ name }) => name === "ci.yml")?.text ?? "";
+const workflowJob = (job: string) =>
+  ci.match(new RegExp(`\\n  ${job}:\\n([\\s\\S]*?)(?=\\n  [\\w-]+:\\n|\\n$)`))?.[1] ?? "";
+const aggregateJob = (job: "check" | "ci-ok") => workflowJob(job);
+const cancellationGuardJob = workflowJob("ci-supersession");
+const ciOkCancellationGuardJob = workflowJob("ci-ok-supersession");
+
+const headSha = "a".repeat(40);
+const currentRun = { hasCancelledDependency: true, runId: 100, pullNumber: 17, headSha };
+const queryContext = {
+  ...currentRun,
+  runId: "100",
+  pullNumber: "17",
+  repository: "TogetherWeOwn/two-web-next",
+  token: "fixture",
+};
+const matchingNewerRun = {
+  id: 101,
+  event: "pull_request",
+  pull_requests: [{ number: 17, head: { sha: headSha } }],
+};
+
+const queryRuns = (runs: WorkflowRun[], hasCancelledDependency = true) =>
+  findSupersedingRun({ ...queryContext, hasCancelledDependency }, async (url, options) => {
+    expect(new URL(url).pathname).toBe(
+      "/repos/TogetherWeOwn/two-web-next/actions/workflows/ci.yml/runs",
+    );
+    expect(new URL(url).searchParams.get("event")).toBe("pull_request");
+    expect(new URL(url).searchParams.get("head_sha")).toBe(headSha);
+    expect(options.headers.Authorization).toBe("Bearer fixture");
+    return { ok: true, json: async () => ({ workflow_runs: runs }) };
+  });
+
+describe("superseded workflow runs", () => {
+  it("skips cancelled aggregates only when a newer run matches the same PR and head", () => {
+    expect(isSupersededRun(currentRun, [matchingNewerRun])).toBe(true);
+    expect(cancellationGuardJob).toContain("needs.scope.result == 'cancelled'");
+    expect(cancellationGuardJob).toContain("needs.a11y.result == 'cancelled'");
+    expect(cancellationGuardJob).toContain("needs.lighthouse.result == 'cancelled'");
+    expect(cancellationGuardJob).toContain("needs.bundle-budget.result == 'cancelled'");
+    expect(cancellationGuardJob).toContain("needs.docs-links.result == 'cancelled'");
+  });
+
+  it.each(["check", "ci-ok"] as const)(
+    "uses the supersession result before skipping the required %s aggregate",
+    (job) => {
+      expect(aggregateJob(job)).toContain("needs.ci-supersession.outputs.superseded != 'true'");
+      expect(aggregateJob(job)).toContain("ci-supersession");
+    },
+  );
+
+  it("checks for supersession when check itself is cancelled", () => {
+    expect(ciOkCancellationGuardJob).toContain("needs.check.result == 'cancelled'");
+    expect(aggregateJob("ci-ok")).toContain(
+      "needs.ci-ok-supersession.outputs.superseded != 'true'",
+    );
+  });
+
+  it.each(["ci-supersession", "ci-ok-supersession"])("pins Node and a timeout for %s", (job) => {
+    const block = workflowJob(job);
+    expect(block).toMatch(/\n    timeout-minutes: 5\n/);
+    expect(block).toContain("actions/setup-node@820762786026740c76f36085b0efc47a31fe5020");
+    expect(block).toMatch(/\n          node-version: 22\n/);
+  });
+
+  it("confirms a matching newer run through the workflow-runs API", async () => {
+    expect(await queryRuns([matchingNewerRun])).toBe(true);
+  });
+
+  it("continues through a full first page to find the matching newer run", async () => {
+    const pages: string[] = [];
+    const result = await findSupersedingRun(queryContext, async (url) => {
+      const page = new URL(url).searchParams.get("page") ?? "";
+      pages.push(page);
+      const runs =
+        page === "1"
+          ? Array.from({ length: 100 }, (_, index) => ({
+              ...matchingNewerRun,
+              id: index + 1,
+              pull_requests: [{ number: 18, head: { sha: headSha } }],
+            }))
+          : [matchingNewerRun];
+      return { ok: true, json: async () => ({ workflow_runs: runs }) };
+    });
+    expect(result).toBe(true);
+    expect(pages).toEqual(["1", "2"]);
+  });
+
+  it("fails closed when GitHub cannot confirm supersession", async () => {
+    await expect(
+      findSupersedingRun(queryContext, async () => ({
+        ok: false,
+        status: 403,
+        json: async () => ({}),
+      })),
+    ).rejects.toThrow("Workflow runs API returned 403.");
+    expect(aggregateJob("check")).toContain(
+      'test "$SUPERSESSION_RESULT" = success || test "$SUPERSESSION_RESULT" = skipped',
+    );
+  });
+
+  it("fails closed when cancellation has no newer matching run", async () => {
+    expect(isSupersededRun(currentRun, [])).toBe(false);
+    expect(await queryRuns([])).toBe(false);
+    expect(
+      isSupersededRun({ ...currentRun, hasCancelledDependency: false }, [matchingNewerRun]),
+    ).toBe(false);
+  });
+
+  it("does not query GitHub when no dependency was cancelled", async () => {
+    const result = await findSupersedingRun(
+      { ...queryContext, hasCancelledDependency: false },
+      async () => {
+        throw new Error("unexpected API request");
+      },
+    );
+    expect(result).toBe(false);
+  });
+
+  it.each([
+    { ...matchingNewerRun, event: "push" },
+    { ...matchingNewerRun, pull_requests: [{ number: 18, head: { sha: "abc123" } }] },
+    { ...matchingNewerRun, pull_requests: [{ number: 17, head: { sha: "different" } }] },
+    { ...matchingNewerRun, id: 99 },
+  ])("does not treat another event, PR, head, or older run as superseding", (run) => {
+    expect(isSupersededRun(currentRun, [run])).toBe(false);
+  });
+
+  it.each(["check", "ci-ok"] as const)("fails the required %s check when scope failed", (job) => {
+    if (job === "check") expect(aggregateJob(job)).toContain('run: test "$SCOPE_RESULT" = success');
+    if (job === "ci-ok")
+      expect(aggregateJob(job)).toContain('[ "$SCOPE_RESULT" = success ] || fail');
+  });
+});
 
 describe("workflow concurrency", () => {
   it("cancels superseded runs of every pull_request workflow", () => {
