@@ -145,3 +145,14 @@ jobs:
           done
           echo "::error::production public-route smoke failed after deploy"
           exit 1
+
+  release:
+    name: release
+    # Tag the commit that is now live and publish its notes (release.yml).
+    # preflight.outputs.sha is the promoted commit (DEPLOY_SHA), never main's tip.
+    needs: [preflight, deploy-production]
+    permissions:
+      contents: write # Create the tag and its GitHub Release.
+    uses: ./.github/workflows/release.yml
+    with:
+      sha: ${{ needs.preflight.outputs.sha }}

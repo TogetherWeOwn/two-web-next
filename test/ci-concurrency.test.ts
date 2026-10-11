@@ -23,10 +23,8 @@ const bareCancel = (text: string) => /\n  cancel-in-progress: true\n/.test(text)
 const groupPerSha = (text: string) =>
   /\nconcurrency:\n  group: [^\n]*github\.sha[^\n]*\n/.test(text);
 
-// release.yml keeps one fixed `release` group on purpose: release-please runs
-// must never overlap on the release PR, and every run re-reads main, so a
-// scheduled run replacing a pending push run still covers the same main state.
-const SCHEDULE_SHARES_MAIN_GROUP = new Set(["release.yml"]);
+// No workflow currently needs a schedule that shares main's push group.
+const SCHEDULE_SHARES_MAIN_GROUP = new Set<string>();
 
 describe("workflow concurrency", () => {
   it("cancels superseded runs of every pull_request workflow", () => {

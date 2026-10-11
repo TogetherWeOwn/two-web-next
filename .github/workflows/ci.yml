@@ -14,9 +14,8 @@ on:
   # past area-gated PR runs within hours.
   schedule:
     - cron: '19 2 * * *'
-  # Dispatched by the release workflow (TOG-9865) on release-please branches:
-  # PRs opened with GITHUB_TOKEN trigger no workflows, so the required `check`
-  # would never run on the release PR without this path.
+  # Manual re-run on a branch. Releases no longer dispatch it: there is no
+  # release PR (docs/releases.md).
   workflow_dispatch:
 
 permissions:
@@ -329,6 +328,9 @@ jobs:
         env:
           DATABASE_URL: postgres://postgres:ci@localhost:5432/postgres
           AUDIT_IMPORT_TEST_DATABASE_URL: postgres://postgres:ci@localhost:5432/postgres
+      - name: Web quality gate selftests (standards checks + summary formatter)
+        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
+        run: npm run standards:selftest
       # SvelteKit spike (TOG-12247): the web/ workspace has its own lockfile and
       # typecheck. web/node_modules is installed here so the Kit steps never run
       # on a partial workspace.
@@ -479,7 +481,7 @@ jobs:
     # A private namespace keeps Wrangler's fixed audit port off the shared host.
     container:
       image: node:24-bookworm
-    timeout-minutes: 15
+    timeout-minutes: 30
     env:
       WRANGLER_SEND_METRICS: "false"
       # Ignore process bindings and .env; the fixture also discards runtime env.
@@ -508,6 +510,18 @@ jobs:
           node -e 'require("fs").appendFileSync(process.env.GITHUB_ENV, "CHROME_PATH=" + require("playwright").chromium.executablePath() + "\n")'
       - name: Lighthouse (local fixture worker, no database or Discord)
         run: npm run lighthouse
+      # Web quality gate (owner 2026-10-10): category scores vs ci/quality-budget.json, then security headers,
+      # HTML basics and internal links. Each step runs even after an earlier failure so one red run lists
+      # everything to fix; any failure fails this job and therefore ci-ok.
+      - name: Lighthouse quality scores (desktop, categories vs ci/quality-budget.json)
+        if: ${{ !cancelled() }}
+        run: npm run lighthouse:quality
+      - name: Web standards (security headers, HTML basics, internal links)
+        if: ${{ !cancelled() }}
+        run: npm run standards
+      - name: Quality summary (what to fix)
+        if: ${{ !cancelled() }}
+        run: node ci/lighthouse-summary.mjs >> "$GITHUB_STEP_SUMMARY"
       - name: Performance evidence (including failures)
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1

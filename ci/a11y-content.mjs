@@ -1,7 +1,54 @@
 import assert from "node:assert/strict";
+import { A11Y_FREEZE_DATES } from "./a11y-cases.mjs";
 
 export function contentExpectations(scenario) {
   const unavailable = scenario.readState === "unavailable";
+  if (scenario.route === "/events/past" && scenario.state === "past-page-overflow") {
+    return [
+      {
+        selector: '[data-testid="past-events"]',
+        attributes: { "data-page": "99", "data-total-pages": "1" },
+      },
+      {
+        selector: '[data-testid="past-events-out-of-range"]',
+        text: "Page 99 is outside the archive. There is 1 page.",
+      },
+      { selector: '[data-testid="past-events-list"] > li', count: 0 },
+    ];
+  }
+  if (scenario.route === "/events" && scenario.state === "navigated-month") {
+    return [
+      {
+        selector: '[data-testid="events-calendar"]',
+        attributes: { "data-view": "calendar", "data-month": "2099-12" },
+      },
+      { selector: '[data-testid="calendar-month"]', text: "December 2099" },
+      { selector: '[data-testid="events-calendar-grid"]' },
+    ];
+  }
+  if (
+    scenario.route === "/about" &&
+    ["freeze-banner", "expired-write-banner", "both-banners"].includes(scenario.state)
+  ) {
+    const freeze = scenario.state !== "expired-write-banner";
+    const expired = scenario.state !== "freeze-banner";
+    return [
+      {
+        selector: '[data-testid="freeze-banner"]',
+        count: freeze ? 1 : 0,
+        ...(freeze
+          ? { includes: `Moving to our new site soon — edits frozen ${A11Y_FREEZE_DATES}.` }
+          : {}),
+      },
+      {
+        selector: '[data-testid="auth-error"]',
+        count: expired ? 1 : 0,
+        ...(expired
+          ? { includes: "You signed in again. Your earlier changes were not saved." }
+          : {}),
+      },
+    ];
+  }
   if (scenario.route === "/") {
     const values = unavailable ? ["", "", "", "", ""] : ["4", "50", "20", "10", "unclaimed"];
     return [
@@ -13,6 +60,24 @@ export function contentExpectations(scenario) {
         selector: `[data-rank="${rank}"] dd`,
         text: values[i],
       })),
+    ];
+  }
+  if (scenario.route === "/e/:key" && scenario.state === "paused-member") {
+    return [
+      {
+        selector: '[data-testid="rsvp-paused"]',
+        text: "RSVPs are paused for this event — check back soon.",
+      },
+      // A paused member is offered no join control; holders keep only
+      // withdraw/leave, so the going control must really be absent.
+      { selector: '[data-testid="rsvp-going"]', count: 0 },
+    ];
+  }
+  if (scenario.route === "/e/:key" && scenario.state === "cancelled-member") {
+    return [
+      { selector: '[data-testid="event-cancelled"]', text: "Cancelled" },
+      // The cancelled notice stands alone: no RSVP island beside it.
+      { selector: '[data-island="rsvp-button"]', count: 0 },
     ];
   }
   if (scenario.route === "/e/:key" && scenario.status === 200) {
@@ -35,7 +100,7 @@ export function contentExpectations(scenario) {
     const empty = scenario.route === "/__a11y/404-empty";
     const suggestions = '[data-testid="error-event-suggestions"]';
     return [
-      { selector: `${suggestions} .card`, count: empty ? 0 : 2 },
+      { selector: `${suggestions} .card`, count: empty ? 0 : 3 },
       ...(empty
         ? [
             {
@@ -44,7 +109,7 @@ export function contentExpectations(scenario) {
             },
           ]
         : [
-            { selector: `${suggestions} .card > a`, count: 2 },
+            { selector: `${suggestions} .card > a`, count: 3 },
             {
               selector: `${suggestions} .card > a[href="/e/01J00000000000000000000015"]`,
               text: "Friday night games",
@@ -52,6 +117,10 @@ export function contentExpectations(scenario) {
             {
               selector: `${suggestions} .card > a[href="/e/01J00000000000000000000019"]`,
               text: "Full co-op night",
+            },
+            {
+              selector: `${suggestions} .card > a[href="/e/01J00000000000000000000020"]`,
+              text: "Paused games",
             },
           ]),
       { selector: ".error-events-search input", attributes: { name: "q" } },

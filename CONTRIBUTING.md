@@ -28,6 +28,7 @@ version.
   followed by digits), private URLs, tokens or secrets in any title, body, commit,
   comment or branch name. `pr-lint` warns when it finds a card ID in the title, body
   or a commit subject, and in the branch name in any letter case (`qa/tog-123-x`).
+- Every PR, including docs-only and draft heads, must not increase the total count of internal card IDs and instance-UI links in tracked files versus its fork point (the merge-base with its base); `pr-lint` enforces this with named lint-fixture exclusions only.
 - Be honest about the tests. Give the exact commands you ran and their results in
   Verification, and say what you did not run. Never claim a green run you did not see.
 - Address every review finding, or reply with why it does not apply.
@@ -43,8 +44,14 @@ version.
 The repository rulesets enforce the following on `main`:
 
 - `protect-main`: changes arrive through a pull request, the branch cannot be
-  deleted or force-pushed, only squash merges are allowed, and `check` and
-  `gitleaks` must pass.
+  deleted or force-pushed, only squash merges are allowed, and `ci-ok`,
+  `gitleaks` and `e2e-ok` must pass, plus Paperclip Review 5/5 on the exact head.
+
+  The journeys count only through the aggregator in e2e.yml: it fails when the
+  scope job fails or the browser journeys fail or are cancelled, and passes a
+  skipped journey run only on an explicit scope verdict (docs/test-only) or a
+  draft.
+
 - `pr-conventions`: `pr-lint` must pass.
 
 ### Change-gated CI and `ci-ok`
@@ -151,23 +158,20 @@ workflow or change repository scanning settings as part of the dependency gate.
 
 ## Releases
 
-Releases are automated with [release-please](https://github.com/googleapis/release-please)
-(`release-please-config.json` + `.release-please-manifest.json`, release-type
-`node`). The `release` workflow regenerates the release PR on a weekly schedule
-or a manual dispatch, not on every merge to `main` (a push only publishes).
-Merging that PR writes `CHANGELOG.md`, tags `vX.Y.Z` and publishes a GitHub
-Release. Cut one with the short freeze procedure in
-[`docs/releases.md`](docs/releases.md#cutting-a-release). Never tag or release
-by hand.
+Each successful production promote tags the deployed commit `vX.Y.Z` and
+publishes a GitHub Release from the Conventional Commit subjects since the
+previous tag (`release.yml`, called by `deploy-production`). There is no release
+PR. See [`docs/releases.md`](docs/releases.md). Never tag or release by hand.
 
-`CHANGELOG.md` uses the [Common Changelog](https://common-changelog.org/)
+Release notes use the [Common Changelog](https://common-changelog.org/)
 categories, in its order: **Changed** (`perf`, `revert`), **Added** (`feat`),
 **Fixed** (`fix`). `chore`, `docs`, `test`, `ci`, `build`, `refactor` and `style`
-stay out of the changelog. Each squash-merged PR title becomes one entry, so
-write it for a reader of the changelog: imperative mood, one user-facing change.
+stay out of the notes. Each squash-merged PR title becomes one entry, so
+write it for a reader of the release notes: imperative mood, one user-facing change.
 
 Versioning is SemVer, starting at `0.1.0`; `1.0.0` marks the production
-cutover. Before `1.0.0`, `feat!` / `BREAKING CHANGE` bumps the minor version;
+cutover: `release-as: 1.0.0` in `release-please-config.json` makes the
+cutover promote cut `v1.0.0`. Before `1.0.0`, `feat!` / `BREAKING CHANGE` bumps the minor version;
 from `1.0.0` onward, it bumps the major version.
 
 ## Local development

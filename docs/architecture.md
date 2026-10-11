@@ -44,6 +44,22 @@ the roster through `src/sessions.ts` and `src/db/roster.ts`, page reads
 through [src/db/](../src/db/). Without a configured database the app fails
 closed to guest sessions and unavailable DB features rather than crashing.
 
+### Agent ingress boundaries
+
+[src/agent-events/service.ts](../src/agent-events/service.ts) is the public
+re-export barrel; its numbered check-order header remains authoritative.
+[ingress.ts](../src/agent-events/ingress.ts) orchestrates admission and the
+operation transaction. [shield.ts](../src/agent-events/shield.ts) admits the
+hit before body processing, [grants.ts](../src/agent-events/grants.ts) checks
+credentials and live grant admission, [idempotency.ts](../src/agent-events/idempotency.ts)
+answers replays, and [rate-limit.ts](../src/agent-events/rate-limit.ts)
+applies the inner budgets. [dispatch.ts](../src/agent-events/dispatch.ts)
+executes the five operations under the existing locks; write-back runs only
+after commit. [audit.ts](../src/agent-events/audit.ts) writes receipts,
+[payload.ts](../src/agent-events/payload.ts) owns hashing and field validation,
+and [types.ts](../src/agent-events/types.ts) holds shared types and defaults.
+The split introduces no separate coordination store or new admission policy.
+
 ## 2. Configuration and secrets
 
 Read from: [src/env.ts](../src/env.ts), [wrangler.jsonc](../wrangler.jsonc),

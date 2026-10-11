@@ -107,12 +107,13 @@ node ci/coverage-summary.mjs
 
 Coverage includes every
 `src/**/*.{ts,tsx}` file, even if no test imports it. Global and aggregate
-area floors (`src/admin`, `src/events`, `src/join`, `src/sessions.ts`) live in
-`vitest.config.ts`. The baseline uses the full suite with the test database;
-without it, skipped live suites may put coverage below the floors. CI's
+area floors (`src/admin`, `src/events`, `src/join`, `src/sessions.ts`, `src/jobs`,
+`src/bot`, `src/agent-events`, `src/profiles`) live in `vitest.config.ts`. The
+baseline uses the full suite with the test database; without it, skipped live
+suites may put coverage below the floors. CI's
 required `check` job runs the configuration drift check, Biome lint/format gate,
 typecheck and the coverage gate against its Postgres service, writes a job summary
-with the ten least-covered files, and uploads HTML, LCOV and JSON reports for 14 days,
+with the ten least-covered files, and uploads the JSON coverage summary for 14 days,
 including on failure.
 
 When intentionally raising a floor, re-measure with the same locked provider
@@ -232,9 +233,12 @@ probe or production cutover.
 `main`; it never deploys on push, PR or release. Before the deploy job can start,
 `ci/production-deploy-gate.mjs` requires the repository variable
 `PRODUCTION_DEPLOY_ENABLED` to be exactly `true`, verifies the live GitHub
-Environment `production` has nonempty required reviewers with self-review
-prevented, and rejects the placeholder Hyperdrive id. Admin bypass explicitly
-remains enabled by the owner's provisioning exception; neither the workflow nor
+Environment `production` protection and rejects the placeholder Hyperdrive id.
+By default, protection requires nonempty reviewers with self-review prevented;
+with `PRODUCTION_AUTO_APPROVE=true`, it instead requires a main-only deployment
+policy and successful staging deploy and `e2e-staging` runs on the exact SHA.
+Both modes require successful exact-SHA CI. Admin bypass explicitly remains
+enabled by the owner's provisioning exception; neither the workflow nor
 the preflight claims to prevent an authorized administrator from bypassing review.
 Missing protection, failed
 API access, unset/false flag or any other ref fails closed. Both gate jobs inherit
@@ -259,10 +263,11 @@ production probe is performed by delivering or testing this template.
 - Route/origin: `togetherweown.com` / `https://togetherweown.com`, the intended
   apex **placeholder target**. Defining it does not flip DNS; deploying would
   claim that custom domain, so do not deploy before W16 authorization.
-- Hyperdrive `DB`: all-zero id `00000000000000000000000000000000` is an inert
-  dry-run placeholder, never the staging Hyperdrive. Provision the separately
-  named `two-web-next-production` Hyperdrive and replace the id in a reviewed
-  cutover PR.
+- Hyperdrive `DB`: the separately named `two-web-next-production` Hyperdrive
+  with its provisioned id in `wrangler.jsonc` `env.production`, distinct from
+  the staging Hyperdrive. The all-zero id `00000000000000000000000000000000`
+  is only the inert sentinel `ci/production-deploy-gate.mjs` refuses; it never
+  lives in config or deploys.
 - Queues: `two-web-next-production-sync-event` and
   `two-web-next-production-internal-action` are reserved, unprovisioned names;
   provision both separately from staging before cutover. Producers and consumers
@@ -272,8 +277,12 @@ production probe is performed by delivering or testing this template.
   separately. Never set `QA_AUTH_TOKEN` or a staging `DATABASE_URL` in production.
 
 Before enabling the flag, the authorized provisioning actor must configure the
-live `production` Environment's required reviewers, prevent self-review and
-main-only deployment policy, install the Environment-scoped secrets
+live `production` Environment with a main-only deployment branch policy and, by
+default, required reviewers with self-review prevented; with
+`PRODUCTION_AUTO_APPROVE=true` the reviewer requirement is replaced by
+successful staging deploy and `e2e-staging` runs on the exact SHA (which the
+gate checks), while the branch policy stays required. Install the
+Environment-scoped secrets
 `PRODUCTION_CLOUDFLARE_API_TOKEN` and `PRODUCTION_CLOUDFLARE_ACCOUNT_ID`, and
 complete resource/secret provisioning and W16 authorization. These names must
 exist only in the `production` Environment, never at repository or organization

@@ -4,14 +4,16 @@ import { requireGithubRunner } from "./e2e/ci-only.mjs";
 requireGithubRunner();
 
 export default defineConfig({
+  globalTeardown: "./e2e/local-global-teardown.ts",
   testDir: "./e2e",
   testMatch: "**/*.spec.ts",
   // Staging journey specs run only via playwright.staging.config.ts in the
   // e2e-staging workflow (real Hyperdrive/queues + QA seam). They must never
   // run under wrangler dev + CI Postgres, where that seam doesn't exist. The
   // watch specs target the deployed staging or apex origin through
-  // playwright.watch.config.ts and likewise never run here.
-  testIgnore: "**/{staging,watch}/**",
+  // playwright.watch.config.ts and likewise never run here, and so do the
+  // staging explorer specs (playwright.explore.config.ts).
+  testIgnore: "**/{staging,watch,explore}/**",
   fullyParallel: false,
   workers: 1,
   retries: 0,
