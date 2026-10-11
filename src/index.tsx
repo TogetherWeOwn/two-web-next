@@ -233,7 +233,7 @@ async function issueSession(
   } catch (err) {
     // Driver messages can carry DSN fragments; the class name is the whole story here.
     console.warn("roster upsert failed", {
-      user: row.userId,
+      request_id: c.get("requestId"),
       exception: (err as Error)?.constructor?.name ?? "unknown",
     });
   }
@@ -262,7 +262,7 @@ async function issueSession(
     await store.revokeUserSessions(row.userId, tokenHash);
   } catch (err) {
     console.warn("prior session sweep failed", {
-      user: row.userId,
+      request_id: c.get("requestId"),
       exception: (err as Error)?.constructor?.name ?? "unknown",
     });
   }
