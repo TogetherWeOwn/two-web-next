@@ -43,7 +43,8 @@ export async function qaLogin(context: BrowserContext, identity: "qa-member" | "
   //
   // POST /auth/qa/:identity shares the `qa-login` throttle (10/min per runner
   // IP, src/throttle.ts) across the whole sequential run — 10 logins today
-  // (waitlist 4, profile 2, activity-log/admin/events/featured 1 each). The
+  // (waitlist/pause/profile 2 each, activity-log/admin/events/featured 1
+  // each). The
   // suite must stay at or under the budget: a Retry-After wait long enough to
   // cross the window boundary does not fit the 30 s test timeout, so a 429
   // here is a hard failure naming the budget, and the fix is fewer logins,

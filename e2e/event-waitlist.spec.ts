@@ -1,12 +1,12 @@
 import type { APIRequestContext, BrowserContext, Page } from "@playwright/test";
 import { expect, localOrigin, qaLogin, test } from "./fixtures";
 
-// Local pin for the capacity-1 waitlist journey, mirroring
+// Local pin for the capacity-1 waitlist journeys, mirroring
 // e2e/staging/event-rsvp.spec.ts without its staging seam (no storageState
 // files, no re-sign: every test gets fresh contexts, and every qaLogin spends
-// the shared 10/min `qa-login` throttle, so this file's two tests hold four
-// of the run's ten logins). Moderator creates a capacity-1
-// fixture event and fills the single seat through the JSON resource; the
+// the shared 10/min `qa-login` throttle, so this file's one test holds two
+// of the run's ten logins). Moderator creates capacity-1
+// fixture events and fills the single seat through the JSON resource; the
 // member drives the browser journey through the frozen RSVP testids
 // (src/islands/contracts.ts): waitlist-join at #1 in line, leave returning
 // the join control, and — on a second fixture — automatic promotion on
@@ -89,18 +89,21 @@ async function publishDraft(admin: Page): Promise<void> {
   ).toBeVisible();
 }
 
-// Waitlist journey on a capacity-1 fixture: the moderator fills the single
-// seat, the member joins the line at #1, then leaves it. Seat allocation runs
-// through the server FIFO (src/events/rsvp.ts settles every new seat request
-// through the line and promotes into free seats in the same transaction); the
-// journey pins the member-visible states.
-test("member joins then leaves the waitlist on a capacity-1 fixture", async ({
+// Waitlist journeys on capacity-1 fixtures, sharing one login pair: the two
+// journeys ran as separate tests before, spending four of the run's ten
+// `qa-login` throttle logins; the event-pause spec needs two, so they share
+// one member and one moderator login across two sequential fixtures. Seat
+// allocation runs through the server FIFO (src/events/rsvp.ts settles every
+// new seat request through the line and promotes into free seats in the same
+// transaction); the journey pins the member-visible states.
+test("member waitlist join/leave and promotion share one login pair", async ({
   page,
   context,
   browser,
 }) => {
-  // A full fixture lifecycle (two logins, draft, publish, RSVP writes, two
-  // reloads) needs more than the 30s default. Triples the timeout to 90s.
+  // Two full fixture lifecycles (two logins, two drafts, publishes, RSVP
+  // writes, reloads) need more than the 30s default. Triples the timeout
+  // to 90s.
   test.slow();
   // The member drives the browser journey on the default context (so the
   // network-isolation fixture covers it); the moderator works from a second
@@ -111,31 +114,37 @@ test("member joins then leaves the waitlist on a capacity-1 fixture", async ({
     ignoreHTTPSErrors: true,
   });
   await qaLogin(moderator, "qa-moderator");
-  let eventKey: string | undefined;
+  let joinLeaveKey: string | undefined;
+  let promotionKey: string | undefined;
   try {
     const admin = await moderator.newPage();
-    const stem = `E2E Waitlist ${Date.now()}`;
-    eventKey = await createDraft(admin, stem, 1);
+    const base = Date.now();
+
+    // Join then leave on the first capacity-1 fixture: the moderator fills
+    // the single seat, the member joins the line at #1, then leaves it.
+    joinLeaveKey = await createDraft(admin, `E2E Waitlist ${base}`, 1);
     await publishDraft(admin);
 
     // The moderator fills the single seat through the JSON resource — both QA
     // identities are members, so the moderator answers like one. 201: the
     // first answer creates the row, already holding the seat.
-    const seat = await moderator.request.put(`/events/${eventKey}/rsvp`, {
+    const seat = await moderator.request.put(`/events/${joinLeaveKey}/rsvp`, {
       data: { status: "going" },
       headers: { Origin: localOrigin },
     });
     expect(seat.status()).toBe(201);
     expect(((await seat.json()) as { data: { status: string } }).data.status).toBe("going");
 
-    await page.goto(`/e/${eventKey}`);
-    await expect(page.getByRole("heading", { name: stem, exact: true })).toBeVisible();
+    await page.goto(`/e/${joinLeaveKey}`);
+    await expect(
+      page.getByRole("heading", { name: `E2E Waitlist ${base}`, exact: true }),
+    ).toBeVisible();
     await expect(page.getByTestId("event-going-count")).toContainText("1 of 1 going");
     await expect(page.getByTestId("event-full")).toContainText("This one's full.");
     await expect(page.getByTestId("waitlist-join")).toBeVisible();
     const joined = page.waitForResponse(
       (response) =>
-        response.url().endsWith(`/events/${eventKey}/rsvp`) &&
+        response.url().endsWith(`/events/${joinLeaveKey}/rsvp`) &&
         response.request().method() === "PUT",
     );
     await page.getByTestId("waitlist-join").click();
@@ -155,7 +164,7 @@ test("member joins then leaves the waitlist on a capacity-1 fixture", async ({
 
     const left = page.waitForResponse(
       (response) =>
-        response.url().endsWith(`/events/${eventKey}/rsvp`) &&
+        response.url().endsWith(`/events/${joinLeaveKey}/rsvp`) &&
         response.request().method() === "DELETE",
     );
     await page.getByTestId("waitlist-leave").click();
@@ -166,72 +175,47 @@ test("member joins then leaves the waitlist on a capacity-1 fixture", async ({
     await page.reload();
     await expect(page.getByTestId("waitlist-join")).toBeVisible();
     await expect(page.getByTestId("waitlist-position")).toHaveCount(0);
-  } finally {
-    // API-only cleanup: cancel is idempotent, so cleanup holds on every path
-    // out of the journey (see cleanUpFixture).
-    try {
-      await cleanUpFixture(context, moderator, eventKey, true);
-    } finally {
-      await moderator.close().catch(() => {});
-    }
-  }
-});
 
-// Promotion journey on a capacity-1 fixture: the moderator holds the single
-// seat, the member queues at #1, the moderator withdraws, and the member's next
-// page view shows the seat. Promotion is automatic: withdrawRsvp deals the freed
-// seat to the FIFO head inside its own transaction (promoteWaitlist in
-// src/events/rsvp.ts), so no claim control ever appears for the promoted
-// member. The claim button only renders for a waitlisted row on a not-full
-// event (src/events/rsvp-button.tsx), so its absence pins that the seat was
-// dealt, not offered.
-test("waitlisted member is promoted when the seat holder withdraws", async ({
-  page,
-  context,
-  browser,
-}) => {
-  // Same cost as the join + leave journey: two logins, then a full fixture
-  // lifecycle. Triples the timeout to 90s.
-  test.slow();
-  await qaLogin(context, "qa-member");
-  const moderator = await browser.newContext({
-    baseURL: localOrigin,
-    ignoreHTTPSErrors: true,
-  });
-  await qaLogin(moderator, "qa-moderator");
-  let eventKey: string | undefined;
-  try {
-    const admin = await moderator.newPage();
-    const stem = `E2E Promotion ${Date.now()}`;
-    eventKey = await createDraft(admin, stem, 1);
+    // Promotion on the second capacity-1 fixture: the moderator holds the
+    // single seat, the member queues at #1, the moderator withdraws, and the
+    // member's next page view shows the seat. Promotion is automatic:
+    // withdrawRsvp deals the freed seat to the FIFO head inside its own
+    // transaction (promoteWaitlist in src/events/rsvp.ts), so no claim
+    // control ever appears for the promoted member. The claim button only
+    // renders for a waitlisted row on a not-full event
+    // (src/events/rsvp-button.tsx), so its absence pins that the seat was
+    // dealt, not offered.
+    promotionKey = await createDraft(admin, `E2E Promotion ${base}`, 1);
     await publishDraft(admin);
 
     // 201: the moderator's first answer creates the row, already holding the seat.
-    const seat = await moderator.request.put(`/events/${eventKey}/rsvp`, {
+    const promotedSeat = await moderator.request.put(`/events/${promotionKey}/rsvp`, {
       data: { status: "going" },
       headers: { Origin: localOrigin },
     });
-    expect(seat.status()).toBe(201);
-    expect(((await seat.json()) as { data: { status: string } }).data.status).toBe("going");
+    expect(promotedSeat.status()).toBe(201);
+    expect(((await promotedSeat.json()) as { data: { status: string } }).data.status).toBe("going");
 
-    await page.goto(`/e/${eventKey}`);
-    await expect(page.getByRole("heading", { name: stem, exact: true })).toBeVisible();
+    await page.goto(`/e/${promotionKey}`);
+    await expect(
+      page.getByRole("heading", { name: `E2E Promotion ${base}`, exact: true }),
+    ).toBeVisible();
     await expect(page.getByTestId("event-going-count")).toContainText("1 of 1 going");
     await expect(page.getByTestId("event-full")).toContainText("This one's full.");
-    const joined = page.waitForResponse(
+    const promotedJoin = page.waitForResponse(
       (response) =>
-        response.url().endsWith(`/events/${eventKey}/rsvp`) &&
+        response.url().endsWith(`/events/${promotionKey}/rsvp`) &&
         response.request().method() === "PUT",
     );
     await page.getByTestId("waitlist-join").click();
-    expect((await joined).status()).toBe(201);
+    expect((await promotedJoin).status()).toBe(201);
     await expect(page.getByTestId("waitlist-position")).toContainText("#1 in line");
     await page.reload();
     await expect(page.getByTestId("waitlist-position")).toContainText("#1 in line");
     await expect(page.getByTestId("waitlist-claim")).toHaveCount(0);
 
     // The seat holder withdraws; the quiet 204 commits the promotion with it.
-    const withdrawn = await moderator.request.delete(`/events/${eventKey}/rsvp`, {
+    const withdrawn = await moderator.request.delete(`/events/${promotionKey}/rsvp`, {
       headers: { Origin: localOrigin },
     });
     expect(withdrawn.status()).toBe(204);
@@ -253,10 +237,11 @@ test("waitlisted member is promoted when the seat holder withdraws", async ({
     await expect(page.getByTestId("rsvp-confirmed")).toContainText("You're in");
     await expect(page.getByTestId("waitlist-position")).toHaveCount(0);
   } finally {
-    // API-only cleanup, as in the join + leave journey. The member now holds the
-    // seat, so its DELETE is the one that frees it.
+    // API-only cleanup: cancel is idempotent, so cleanup holds on every path
+    // out of the journey (see cleanUpFixture).
     try {
-      await cleanUpFixture(context, moderator, eventKey, true);
+      await cleanUpFixture(context, moderator, joinLeaveKey, true);
+      await cleanUpFixture(context, moderator, promotionKey, true);
     } finally {
       await moderator.close().catch(() => {});
     }

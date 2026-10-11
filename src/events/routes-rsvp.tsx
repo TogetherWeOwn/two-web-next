@@ -1,3 +1,4 @@
+import { raw } from "hono/html";
 // RSVP member writes: PUT/DELETE /events/:key/rsvp, the POST /e/:key/rsvp
 // HTML adapter and the 405 fallback. Split out of src/events/routes.tsx;
 // behavior unchanged.
@@ -132,20 +133,23 @@ export function registerRsvpRoutes(app: App, readFragmentSession: SessionReader)
     const retryAfter = response.headers.get("Retry-After");
     if (retryAfter) c.header("Retry-After", retryAfter);
     return c.html(
-      <html lang="en">
-        <head>
-          <title>RSVP not saved</title>
-        </head>
-        <body>
-          <h1>{RSVP_COPY.failedTitle}</h1>
-          <p role="alert">
-            {response.status === 429
-              ? throttleWaitCopy(retryAfter ? Number(retryAfter) : null)
-              : "Nothing changed. Return to the event to check availability and try again."}
-          </p>
-          <a href={path}>Return to the event</a>
-        </body>
-      </html>,
+      <>
+        {raw("<!doctype html>")}
+        <html lang="en">
+          <head>
+            <title>RSVP not saved</title>
+          </head>
+          <body>
+            <h1>{RSVP_COPY.failedTitle}</h1>
+            <p role="alert">
+              {response.status === 429
+                ? throttleWaitCopy(retryAfter ? Number(retryAfter) : null)
+                : "Nothing changed. Return to the event to check availability and try again."}
+            </p>
+            <a href={path}>Return to the event</a>
+          </body>
+        </html>
+      </>,
       response.status as ContentfulStatusCode,
     );
   });

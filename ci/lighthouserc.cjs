@@ -1,5 +1,7 @@
-// Legacy public-page thresholds and mid-range phone profile, unchanged.
-// Threshold changes need a separate owner-approved PR, never a green-build fix.
+// Legacy public-page thresholds and mid-range phone profile.
+// Threshold changes need a separate owner-approved PR, never a green-build fix. The mobile performance
+// category floor comes from ci/quality-budget.json (owner-approved web quality gate, 2026-10-10).
+const budget = require("./quality-budget.json");
 const paths = [
   "/",
   "/events",
@@ -44,13 +46,17 @@ module.exports = {
     },
     assert: {
       assertions: {
+        "categories:performance": [
+          "error",
+          { minScore: budget.mobilePerformance, aggregationMethod: "median-run" },
+        ],
         "largest-contentful-paint": [
           "error",
           { maxNumericValue: 2000, aggregationMethod: "median" },
         ],
         "cumulative-layout-shift": ["error", { maxNumericValue: 0.1, aggregationMethod: "median" }],
         "server-response-time": ["error", { maxNumericValue: 600, aggregationMethod: "median" }],
-        "total-blocking-time": ["warn", { maxNumericValue: 300, aggregationMethod: "median" }],
+        "total-blocking-time": ["error", { maxNumericValue: 200, aggregationMethod: "median" }],
         "first-contentful-paint": ["warn", { maxNumericValue: 1800, aggregationMethod: "median" }],
       },
     },

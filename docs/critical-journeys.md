@@ -14,6 +14,7 @@ non-Actions execution.
 | QA sign-in → keyboard profile edit | `e2e/profile.spec.ts` | Genuine QA session cookie; tab order and Enter submit; PATCH 200; saved status focused; values survive reload |
 | Events list → event page → RSVP going → withdraw | `e2e/events.spec.ts` | Real going/withdraw controls; PUT 201 and DELETE 204; both states persist after reload |
 | Capacity-1 waitlist join → leave, and promotion on seat-holder withdraw | `e2e/event-waitlist.spec.ts` | Capacity-1 fixtures: moderator fills the seat, member waitlist-joins at `#1 in line`, leaves and the join control returns; second fixture: seat-holder withdraw promotes automatically (`You're in`, `1 of 1 going`, no claim click), persisting across reload; fixtures cancelled in `finally` through the request API |
+| Pause → refused RSVP with the paused reason → reopen → RSVP restored | `e2e/event-pause.spec.ts` | Moderator pauses through the admin form; member sees the paused notice with no going control; a request-API PUT is refused 403 `event_not_open` with `why: paused` and the seat count is unchanged; both transitions persist across reload; reopen restores the going control and a browser-click PUT answers 201 (`You're in`, `1 of 10 going`), persisting across reload; the fixture is cancelled in `finally` through the request API |
 | Moderator → create draft → publish | `e2e/admin.spec.ts` | Real form/redirect; draft hidden from guest (403); publish status; guest view 200 and public calendar navigation |
 | Blocked join → recovery copy + fallback invite | `e2e/join-blocked.spec.ts` | Bot-refused guild add renders the blocked copy with retry and invite CTA, 200, no session; distinct from denied/outage/expired copy |
 
@@ -22,6 +23,9 @@ contracts in `src/islands/contracts.ts`. The suite deliberately does **not**
 skip an unimplemented UI or replace button clicks with direct API mutations.
 At introduction, the prerequisite is the W10 RSVP binder/SSR mount tracked by
 [TOG-9839](/TOG/issues/TOG-9839); a red RSVP spec is NEEDS WORK, not acceptance.
+
+Visual regression of the public pages runs in the same job, before these
+journeys: see [visual-regression.md](visual-regression.md).
 
 ## CI isolation
 
@@ -119,9 +123,9 @@ browser contexts before that `finally` runs. Staging event journeys therefore
 have a staging-only backstop: `e2e/staging/global-teardown.ts` signs the QA
 moderator in fresh and cancels every `Staging E2E` event still published or draft
 (`e2e/fixture-sweep.mjs`), and fails the run if one stays live. The local RSVP
-pin (`e2e/event-waitlist.spec.ts`) has its own backstop,
+pins (`e2e/event-waitlist.spec.ts`, `e2e/event-pause.spec.ts`) have their own backstop,
 `e2e/local-global-teardown.ts`, which only uses `https://localhost:8787`, only
-matches its `E2E Waitlist ` and `E2E Promotion ` fixture titles, and is guarded
+matches their `E2E Waitlist `, `E2E Promotion ` and `E2E Pause ` fixture titles, and is guarded
 to run in GitHub Actions on Linux. Neither sweep crosses into the other's
 origin. Each list and final verification traverse matching pages even when a
 page contains substring lookalikes. Pagination keeps the fixed origin and
