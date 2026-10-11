@@ -61,10 +61,22 @@ function noFetch() {
   );
 }
 
+// Stub executionCtx so a kill cannot come from the harness crashing in the
+// route's `finally` (route.ts): the verdict must come from the assertion.
+const executionCtx = {
+  waitUntil: () => {},
+  passThroughOnException: () => {},
+} as never;
+
 describe("agent-events route refusal (DB-free kill)", () => {
   it("a disabled ingress answers 404 without touching a store", async () => {
     noFetch();
-    const res = await app.request("/api/agent-events", { method: "POST", body: "{}" }, baseEnv);
+    const res = await app.request(
+      "/api/agent-events",
+      { method: "POST", body: "{}" },
+      baseEnv,
+      executionCtx,
+    );
     expect(res.status).toBe(404);
     expect((await res.json()) as { reason: string }).toMatchObject({
       reason: "ingress_disabled",
@@ -73,10 +85,19 @@ describe("agent-events route refusal (DB-free kill)", () => {
 
   it("an enabled ingress with no store answers 503", async () => {
     noFetch();
-    const res = await app.request("/api/agent-events", { method: "POST", body: "{}" }, enabledEnv);
+    const res = await app.request(
+      "/api/agent-events",
+      { method: "POST", body: "{}" },
+      enabledEnv,
+      executionCtx,
+    );
     expect(res.status).toBe(503);
-    expect((await res.json()) as { reason: string }).toMatchObject({
+    // Pin the not-configured message, not just the reason: a G2 mutant
+    // (`if (!injected && !url)` to `if (false)`) dials postgres(undefined),
+    // which maps ECONNREFUSED to the same reason with a different message.
+    expect((await res.json()) as { reason: string; message: string }).toMatchObject({
       reason: "ingress_unavailable",
+      message: "The agent event store is not configured.",
     });
   });
 
@@ -102,6 +123,7 @@ describe("agent-events route refusal (DB-free kill)", () => {
         body: JSON.stringify({ op: "delete", idempotency_key: "route-g3-001" }),
       },
       env,
+      executionCtx,
     );
     expect(res.status).toBe(403);
     expect((await res.json()) as { reason: string }).toMatchObject({
@@ -135,6 +157,7 @@ describe("agent-events route refusal (DB-free kill)", () => {
         }),
       },
       env,
+      executionCtx,
     );
     expect(res.status).toBe(201);
   });

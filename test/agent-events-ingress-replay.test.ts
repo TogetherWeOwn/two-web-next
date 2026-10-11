@@ -5,8 +5,10 @@
 // fake store.
 //
 // A weakened check must be killed here:
-// - E4 (`if (!replay)` to `if (false)`): a stored replay answers without
+// - E4 (`if (!replay)` to `if (true)`): a stored replay answers without
 //   spending rate budget, even when the mutating budgets are spent.
+// - E4b (`if (!replay)` to `if (false)`): a fresh create with spent mutating
+//   budgets stays 429 rate_limited instead of skipping the limiter.
 // - E7 (`if (raced)` to `if (false)`): a concurrent store that lands while
 //   the operation lock waits answers as a replay instead of re-executing.
 // The fresh-create test proves the fake stores and returns without a replay
@@ -92,6 +94,25 @@ describe("agent-events ingress replay (DB-free kill)", () => {
     const a = await handleAgentEvent(fake.sql, cfg, body, CRED);
     expect(a.status).toBe(201);
     expect(a.body).toMatchObject({ replayed: true });
+  });
+
+  it("a fresh create with spent mutating budgets stays 429", async () => {
+    noFetch();
+    const fake = makeFakeAgentDb();
+    await fake.addGrant(CRED, GRANT);
+    // Same spent buckets as the replay test: a fresh key has no stored
+    // replay, so the limiter must refuse before the operation runs (E4b).
+    fake.prespend(`mutating:${GRANT_ID}`);
+    fake.prespend("service-mutating");
+
+    const a = await handleAgentEvent(
+      fake.sql,
+      cfg,
+      { op: "create", idempotency_key: "replay-e4b-fresh-001", fields: FIELDS },
+      CRED,
+    );
+    expect(a.status).toBe(429);
+    expect(a.body).toMatchObject({ reason: "rate_limited" });
   });
 
   it("a replay stored while the operation lock waits answers replayed", async () => {

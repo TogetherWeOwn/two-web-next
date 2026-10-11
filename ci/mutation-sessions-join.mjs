@@ -232,9 +232,16 @@ const MUTANTS = [
   {
     id: "E4-replay-spends-budget",
     file: "src/agent-events/ingress.ts",
-    note: "replays answer before rate limits: a stored replay keeps its free pass (replay bypass)",
+    note: "replay free pass: a stored replay answers without spending rate budget (replay spends budget)",
     find: "if (!replay) {",
     replace: "if (true) {",
+  },
+  {
+    id: "E4b-fresh-skips-budget",
+    file: "src/agent-events/ingress.ts",
+    note: "fresh rate limit: a fresh create with spent mutating budgets stays 429 rate_limited (rate-limit bypass)",
+    find: "if (!replay) {",
+    replace: "if (false) {",
   },
   {
     id: "E5-envelope-unvalidated",
