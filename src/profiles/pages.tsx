@@ -319,12 +319,12 @@ export const ProfilePage: FC<{
                 >
                   {form.bio}
                 </textarea>
-                {errors?.bio ? (
-                  <p id={PROFILE_ERROR_IDS.bio} class="error">
-                    {errors.bio}
-                  </p>
-                ) : null}
               </label>
+              {errors?.bio ? (
+                <p id={PROFILE_ERROR_IDS.bio} class="error">
+                  {errors.bio}
+                </p>
+              ) : null}
               <label class="profile-field">
                 Games (one per line){" "}
                 <textarea
@@ -340,12 +340,12 @@ export const ProfilePage: FC<{
                 >
                   {form.games_text}
                 </textarea>
-                {errors && (errors.games ?? errors.games_text) ? (
-                  <p id={PROFILE_ERROR_IDS.games_text} class="error">
-                    {errors.games ?? errors.games_text}
-                  </p>
-                ) : null}
               </label>
+              {errors && (errors.games ?? errors.games_text) ? (
+                <p id={PROFILE_ERROR_IDS.games_text} class="error">
+                  {errors.games ?? errors.games_text}
+                </p>
+              ) : null}
               <label class="profile-field">
                 Timezone{" "}
                 <input
@@ -356,12 +356,12 @@ export const ProfilePage: FC<{
                   aria-invalid={errors?.timezone ? "true" : undefined}
                   aria-describedby={errors?.timezone ? PROFILE_ERROR_IDS.timezone : undefined}
                 />
-                {errors?.timezone ? (
-                  <p id={PROFILE_ERROR_IDS.timezone} class="error">
-                    {errors.timezone}
-                  </p>
-                ) : null}
               </label>
+              {errors?.timezone ? (
+                <p id={PROFILE_ERROR_IDS.timezone} class="error">
+                  {errors.timezone}
+                </p>
+              ) : null}
               <div aria-hidden="true" class="sr-only">
                 <label>
                   Website <input name={PROFILE_HONEY_FIELD} tabindex={-1} autocomplete="off" />

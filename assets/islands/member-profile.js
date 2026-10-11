@@ -186,8 +186,9 @@
 
   function clientErrors(bio, games, tz) {
     var e = [];
-    if (control(bio) || control(games) || control(tz))
-      e.push({ key: null, text: "Remove control characters." });
+    if (control(bio)) e.push({ key: "bio", text: "Remove control characters." });
+    if (control(games)) e.push({ key: "games_text", text: "Remove control characters." });
+    if (control(tz)) e.push({ key: "timezone", text: "Remove control characters." });
     if (Array.from(bio).length > 1000)
       e.push({ key: "bio", text: "Keep your bio to 1000 characters or fewer." });
     var seen = new Set();
@@ -268,13 +269,16 @@
     if (tokens.indexOf(id) < 0) tokens.push(id);
     input.setAttribute("aria-describedby", tokens.join(" "));
     var old = root.querySelector('[id="' + id + '"]');
+    var prior = old ? old.textContent + " " : "";
     if (old) old.remove();
     var p = document.createElement("p");
     p.setAttribute("id", id);
     p.setAttribute("class", "error");
     // textContent keeps server strings literal; bound by the caller.
-    p.textContent = String(text);
-    (input.parentNode || form).appendChild(p);
+    p.textContent = prior + String(text);
+    // Beside the label, not in it: label text is the control's accessible name.
+    var host = input.parentNode || form;
+    host.parentNode.insertBefore(p, host.nextSibling);
   }
 
   function clearNotices() {

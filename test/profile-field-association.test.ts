@@ -58,6 +58,17 @@ describe("profile SSR field association", () => {
     expect(html).toContain('href="#profile-timezone"');
   });
 
+  it("inline errors sit after their label so the control's accessible name excludes them", () => {
+    const html = render({
+      bio: "Keep your bio to 1000 characters or fewer.",
+      games: "Keep each game name to 80 characters or fewer.",
+      timezone: "Choose a valid IANA timezone, e.g. Europe/London.",
+    });
+    for (const id of ["profile-bio-error", "profile-games-text-error", "profile-timezone-error"]) {
+      expect(html).toMatch(new RegExp(`</label><p id="${id}"`));
+    }
+  });
+
   it("unknown/global errors render safely without fabricated associations", () => {
     const html = render({ fields: "Only your bio, games and timezone can be changed." });
     expect(html).toContain("Only your bio, games and timezone can be changed.");
@@ -121,6 +132,10 @@ describe("profile island field association", () => {
     set textContent(value: string) {
       this.text = value;
       this.children = [];
+    }
+    get nextSibling(): Element | null {
+      const siblings = this.parentNode?.children ?? [];
+      return siblings[siblings.indexOf(this) + 1] ?? null;
     }
     setAttribute(key: string, value: string) {
       this.attributes[key] = value;
@@ -206,7 +221,8 @@ describe("profile island field association", () => {
       const field = document.createElement(tag);
       field.value = field.defaultValue =
         key === "formOpenedAt" ? "1800000000000" : key === "timezone" ? "UTC" : "";
-      form.appendChild(field);
+      const labelled = key === "bio" || key === "games_text" || key === "timezone";
+      (labelled ? form.appendChild(document.createElement("label")) : form).appendChild(field);
       form.elements[key] = field;
     }
     const requests: {
@@ -332,6 +348,42 @@ describe("profile island field association", () => {
     expect(errorNode.textContent.length).toBeLessThanOrEqual(500);
     expect(errorNode.querySelector("img")).toBeNull();
     expect(f.root.querySelector('[data-testid="profile-error"]')?.querySelector("img")).toBeNull();
+  });
+
+  it("control-character client error links the summary to the field it names", () => {
+    const f = fixture();
+    f.form.elements.bio!.value = "a\u0001b";
+    f.form.dispatch("submit");
+    const summary = f.root.querySelector('[data-testid="profile-error"]')!;
+    expect(summary.querySelector("a")!.getAttribute("href")).toBe("#profile-bio");
+    expect(f.form.elements.bio!.getAttribute("aria-invalid")).toBe("true");
+    expect(f.byId("profile-bio-error")).not.toBeNull();
+    expect(f.requests).toHaveLength(0);
+  });
+
+  it("inline error is inserted beside its label, never inside it", async () => {
+    const f = fixture();
+    f.form.dispatch("submit");
+    f.requests[0]!.resolve({
+      ok: false,
+      status: 422,
+      json: async () => ({ errors: { bio: "Bad bio." } }),
+    });
+    await flush();
+    const label = f.form.elements.bio!.parentNode!;
+    const inline = f.byId("profile-bio-error")!;
+    expect(inline.parentNode).toBe(label.parentNode);
+    expect(label.children).not.toContain(inline);
+  });
+
+  it("two client errors on one field keep both messages inline", () => {
+    const f = fixture();
+    const games = ["g".repeat(81), ...Array.from({ length: 21 }, (_, i) => `game ${i}`)];
+    f.form.elements.games_text!.value = games.join("\n");
+    f.form.dispatch("submit");
+    const inline = f.byId("profile-games-text-error")!;
+    expect(inline.textContent).toContain("Keep each game name to 80 characters or fewer.");
+    expect(inline.textContent).toContain("Add no more than 20 games.");
   });
 
   it("accept clears obsolete field errors; reset clears them explicitly", async () => {
