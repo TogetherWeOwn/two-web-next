@@ -184,3 +184,29 @@ Never relax a Lighthouse threshold to turn a build green. Threshold changes
 require a separate owner-approved PR. Byte-ceiling increases must likewise be a
 separate deliberate PR explaining what grew and why. A failure gets a fix or an
 explicit decision, not retries until a lucky sample passes.
+
+## Discord snapshot path
+
+The shared-snapshot + fenced-refresh Discord path adds a latency-critical read
+path: every request runs one storage claim, at most one owner then performs the
+live Discord read followed by a storage complete, every other request serving
+the stored snapshot. The request that owns a refresh runs claim, live read,
+then complete in sequence, so its worst case is about 4,000 ms
+(1,500 + 1,000 + 1,500). The bounds below
+restate the implemented constants; `test/performance-budgets-snapshot.test.ts`
+pins each documented number to its constant so drift fails CI.
+
+| Snapshot path | Budget | Enforced by |
+|---|---|---|
+| Snapshot cold-claim (each storage claim and complete) | 1,500 ms per operation | `DISCORD_STORE_DEADLINE_MS` in `src/events/discord-snapshot-postgres.ts`, asserted in `test/discord-snapshot-deadline.test.ts` |
+| Stale-serve (usable snapshot age from last success) | Fresh under 60,000 ms; serves stale while age is under 600,000 ms total | `DISCORD_CACHE_FRESH_MS` and `DISCORD_CACHE_STALE_MS` in `src/events/discord-snapshot.ts`, asserted in `test/discord-events-cache.test.ts` |
+| Refresh-lease (single-owner Discord refresh) | 5,000 ms | `DISCORD_REFRESH_LEASE_MS` in `src/events/discord-snapshot.ts`, asserted in `test/discord-events-cache.test.ts` and `test/discord-snapshot-postgres.test.ts` |
+
+The live Discord read inside a refresh has a 1,000 ms headers-and-body deadline
+(`DISCORD_READ_DEADLINE_MS` in `src/events/discord-transients.ts`). Storage
+statements run under 400 ms statement / 350 ms lock timeouts
+(`DISCORD_STORE_SQL_TIMEOUT_MS`; the lock cap is derived as the statement cap
+minus 50). A failed refresh keeps the successful
+timestamp and installs at least a 10,000 ms shared retry hold
+(`DISCORD_FAILURE_HOLD_MS`). These rows document behavior only; changing
+snapshot behavior or deadlines is out of scope.

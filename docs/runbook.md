@@ -8,6 +8,36 @@ The [parity matrix](parity.md) records what is implemented versus still missing.
 The production cutover and its DNS changes are outside this runbook; only the
 staging rollback and DNS flip-back rehearsal is covered here.
 
+**First responder index.** Match the symptom, open the section, run the first
+read-only diagnostic, then escalate. Every diagnostic below is a read; do not
+mutate, purge, roll back, migrate, rotate or restore from this table.
+
+Scope: staging (pre-cutover). Every host, Tail Worker and queue name below is
+the staging binding; for a production incident use
+[cutover-rollback.md](cutover-rollback.md) and the production bindings, never
+the staging targets.
+
+| Symptom or alert | Runbook section | First read-only diagnostic | Escalate to |
+| --- | --- | --- | --- |
+| Any incident: start here | [Safety and escalation](#safety-and-escalation) | Re-read the authorization box; confirm staging-vs-production scope first (staging targets below do not triage production); record UTC time, commit, Worker version IDs, route/job and redacted error class; keep logs private | DevOps & Reliability Engineer; Director of Engineering for technical dead-ends |
+| Moderator lost their Discord role but sessions still authenticate | [A moderator lost their role](#a-moderator-lost-their-role) | Confirm the Discord role removal first; dry-run `node --import ./bin/ts-hook.mjs bin/revoke-sessions.mjs --discord-id=<snowflake> --target production` to read the active-session count (idle sessions expire within two hours); do not `--apply` from this table | DevOps & Reliability Engineer |
+| `GET /up` 503 (`db:error`, `pending_migrations` nonzero or `null`, `config:missing`) | [Read `/up` without mistaking liveness for readiness](#read-up-without-mistaking-liveness-for-readiness) | `curl -sS --max-time 10 https://next.togetherweown.com/up`; compare HTTP status, `db`, `pending_migrations` and `config` against the readiness tables | DevOps & Reliability Engineer |
+| `GET /up` queue `degraded` (`pending >= 20`) or `unknown` with HTTP 200 | [Queue containment, drain and failed-job replay](#queue-containment-drain-and-failed-job-replay) | Same `GET /up`; read `queue.status`, `pending`, `oldest_ready_wait_age_seconds` and `ready_wait_severity`; `healthy + unknown` is lack of evidence, not recovery | DevOps & Reliability Engineer |
+| `error.alert` flood or pager storm | [48h post-flip watch](#48h-post-flip-watch) | `npx wrangler tail two-web-next-alerts --search '"delivery":"ops.alert.'`; correlate `request_id` per [runbook-logs.md](runbook-logs.md); fingerprints are in [runbook-alerts.md](runbook-alerts.md) | DevOps & Reliability Engineer |
+| `queue.failing` or failed-history growth (terminal bot failures, dead-letter backlog) | [Queue containment, drain and failed-job replay](#queue-containment-drain-and-failed-job-replay) | `npx wrangler queues info two-sync-event` and `npx wrangler queues info two-internal-action` (transport metadata only); read the `/up` queue envelope; do not purge or replay | DevOps & Reliability Engineer |
+| Sign-in or join failing (`/auth/discord/callback`, `/join/discord`, `/join/callback`, `/auth/qa/:identity`) | [Neon / Hyperdrive outage behavior](#neon--hyperdrive-outage-behavior) | `GET /up` readiness first; `GET /robots.txt` proves Worker startup only; on an auth failure stop and do not try another credential | DevOps & Reliability Engineer; through the Director to CISO if member data may have leaked |
+| Events page error state (`/events`, `/events.rss`, `/events.ics`, `/e/:key`) | [Neon / Hyperdrive outage behavior](#neon--hyperdrive-outage-behavior) | `GET /up` plus `ready_wait_severity` and `oldest_ready_wait_age_seconds`; filter `http.request` by route and status in Observability per [runbook-logs.md](runbook-logs.md) | DevOps & Reliability Engineer |
+| Discord rate limiting (sync backoff, `rate_limited` bot sync refusal) | [Queue containment, drain and failed-job replay](#queue-containment-drain-and-failed-job-replay) | `GET /up` queue envelope plus `sync_retry_code` per [runbook-alerts.md](runbook-alerts.md); `rate_limited` is a retryable bot refusal under backoff, not a database outage; read the retry-cause table before touching delivery; do not purge or replay | DevOps & Reliability Engineer |
+| Bad deploy: need the rollback pointer | [Deploy and record the rollback pointer](#deploy-and-record-the-rollback-pointer) | `npx wrangler deployments status --name two-web-next --json` and `GET /up` `revision.version_id`; `wrangler deployments` wins on disagreement; do not roll back from this table | DevOps & Reliability Engineer; Director of Engineering for the rollback decision |
+| Database or Hyperdrive outage (configured DB unreachable, private 500/503 per the route table) | [Neon / Hyperdrive outage behavior](#neon--hyperdrive-outage-behavior) | `GET /up`, which measures the selected `DATABASE_URL` else `DB.connectionString`; never substitute another backend or credential | Director of Engineering and the authorized custodian; through the Director to CISO if a leak is suspected |
+| Backup and restore (verify archives, plan recovery) | [Backups and restore drill](#backups-and-restore-drill) | Local `bash ci/neon-backup-selftest.sh` (no secrets, no network) first; remote `BACKUP_BUCKET=two-web-next-backups BACKUP_JURISDICTION=eu BACKUP_PREFIX=neon WRANGLER_BIN= bash bin/neon-backup.sh check staging` re-downloads every manifest archive locally, needs the Cloudflare API token and separate approval; keep dumps inside approved EU custody; never `rotate` or restore without separate approval | DevOps & Reliability Engineer; live-data recovery needs CEO approval via the Director and the authorized custodian |
+
+Not an incident entry: [Final import and reconcile](#final-import-and-reconcile)
+(cutover-only authorized import) and
+[Secret rotation pointer (procedure only)](#secret-rotation-pointer-procedure-only)
+(no rotation here) are not incident entries; read those sections directly when
+that work is authorized.
+
 ## Safety and escalation
 
 - **Read the incident/release authorization first.** Commands labelled remote

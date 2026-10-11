@@ -26,6 +26,8 @@
     "seed:staging": "node bin/seed-staging.mjs",
     "test:cutover": "node --test ci/cutover-check-selftest.mjs",
     "test:shadow": "node --test ci/shadow-compare-selftest.mjs",
+    "mutation:sessions-join": "node ci/mutation-sessions-join.mjs",
+    "mutation:sessions-join:selftest": "node ci/mutation-sessions-join.mjs --selftest",
     "a11y": "node ci/a11y.mjs",
     "test:auth-browser": "node ci/session-recovery-browser.mjs",
     "budget": "node ci/check-bundle-budget.mjs",

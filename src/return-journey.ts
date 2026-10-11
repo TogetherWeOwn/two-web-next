@@ -29,7 +29,7 @@ export const LOGIN_NEXT_COOKIE = "__Host-two_login_next";
 export const LOGIN_INTENDED_COOKIE = "__Host-two_login_intended";
 export const JOIN_RESULT_COOKIE = "__Host-two_join_result";
 // Same ten-minute window as the OAuth state cookie it accompanies.
-const JOURNEY_TTL_SECONDS = 600;
+export const JOURNEY_TTL_SECONDS = 600;
 
 // `any` env so callers carrying middleware Variables (profiles' viewer, the
 // admin guard's actor/access) can pass their Context unchanged; hono's own

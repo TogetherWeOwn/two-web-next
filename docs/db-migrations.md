@@ -158,10 +158,13 @@ exception. Normal migration PRs review the append-only SQL and lock diff togethe
 ([TOG-10289](/TOG/issues/TOG-10289)). INSERT is unrestricted. UPDATE and
 TRUNCATE are refused, and so is any DELETE except of a row strictly older than
 90 days by its age column (`created_at`, or `occurred_at` for access logs). That
-retention exception is what `model:prune` uses. The guard has no bypass
-setting. It also refuses deleting an `agent_event_grants` row that audits still
-reference, because `ON DELETE SET NULL` would rewrite them. Grants are disabled,
-never deleted.
+retention exception is available to a prune job. The daily `model:prune` job
+prunes `agent_event_audits` and `member_data_access_logs` after 90 days. It does
+not prune `activity_log`: that table is append-only and retained. The trigger
+permits deleting its rows after 90 days, but no job does so. The guard has no
+bypass setting. It also refuses deleting an `agent_event_grants` row that audits
+still reference, because `ON DELETE SET NULL` would rewrite them. Grants are
+disabled, never deleted.
 
 The guard binds every role that cannot alter the tables. It does not bind
 their owner or a superuser: either can disable or drop the triggers. This

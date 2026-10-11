@@ -125,8 +125,9 @@ export interface SessionSweeper {
   sweepExpired(now: Date): Promise<number>;
 }
 
-/** Every table the daily model:prune pass owns (routes/console.php ×3 + web_sessions GC). */
+/** Tables owned by the daily model:prune pass (audit logs, legacy prunes, and web_sessions GC). */
 export interface PruneStores {
+  agentEventAudits: AgePrunedTable;
   accessLog: AgePrunedTable;
   joinAttempts: AgePrunedTable;
   idempotencyKeys: AgePrunedTable;

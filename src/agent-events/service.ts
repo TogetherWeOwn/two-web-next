@@ -16,6 +16,7 @@ import { eq } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/pg-proxy";
 import { events } from "../db/admin-schema";
 import { CAPACITY_BELOW_GOING, goingCount, promoteWaitlist } from "../events/waitlist";
+import { retireAnonEventCaches } from "../events/anon-cache";
 import { utcToWall, wallToUtc, type EventStatus } from "../admin/validation";
 import type { WriteBack } from "../admin/store";
 import { observeDiscordEvent, type ObservationEvent, type EventReader } from "../bot/event-read";
@@ -517,6 +518,15 @@ async function processAgentEvent(
     // have no dispatch intent, so a duplicate delivery never sends twice.
     if ("writeBack" in committed && committed.writeBack)
       await effects.writeBack?.(committed.writeBack);
+    // A committed agent create/update/publish/cancel changed guest-visible
+    // state, so it retires the anonymous card entries like the moderator
+    // store paths (N6). Reads, refusals and rollbacks never reach a 200/201
+    // here; a replayed success only drops entries that rebuild on next fetch.
+    if (
+      (op === "create" || op === "update" || op === "publish" || op === "cancel") &&
+      (committed.status === 200 || committed.status === 201)
+    )
+      retireAnonEventCaches();
     return { status: committed.status, body: committed.body };
   } catch (err) {
     const code = (err as { code?: string }).code;

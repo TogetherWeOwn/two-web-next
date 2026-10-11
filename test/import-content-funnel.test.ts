@@ -496,8 +496,9 @@ describe.skipIf(!process.env.DATABASE_URL)(
     });
 
     it("reads a fresh migrateJoin bootstrap with the viewer, before and after 1012", async () => {
-      // Fresh staging databases are bootstrapped by migrateJoin() (drizzle/1000
-      // shape, no legacy_id). The viewer selects explicit columns so it stays
+      // Databases at the drizzle/1000 shape (no legacy_id) — the shape the
+      // migrate workflow leaves before 1012, also produced by the migrateJoin()
+      // fixture helper. The viewer selects explicit columns so it stays
       // readable there, and 1012 still applies cleanly afterwards.
       const base = testDatabaseUrl(process.env.DATABASE_URL!);
       const bootstrapSchema = `bootstrap_${fixture!.schemaName}`.slice(0, 62);

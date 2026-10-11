@@ -74,12 +74,16 @@ async function sessionEnv(sql: Sql) {
     expiresAt: new Date(Date.now() + 3600_000),
   });
   // In-process fixture only: this URL enables the gate; no staging HTTP or DB.
+  // The staging-operator boundary opens for the fixture moderator, who is
+  // its dedicated principal here; other routes ignore these flags.
   const env = {
     APP_URL: STAGING_APP_URL,
     QA_AUTH_TOKEN: "test-only-qa-token",
     SESSION_SECRET: "test-session-secret-at-least-32-bytes-long",
     SESSION_STORE: store,
     THROTTLE_STORE: async () => withThrottleTx(sql),
+    QUEUE_RECONCILE_PREVIEW_ENABLED: "true",
+    QUEUE_RECONCILE_OPERATOR_ID: "111111111111111111",
   } as unknown as EnvWithThrottle;
   const cookie = (
     await serializeSigned("__Host-two_session", token, env.SESSION_SECRET, {

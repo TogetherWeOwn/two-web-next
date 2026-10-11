@@ -145,13 +145,17 @@ them from the importer's `expired` count.
 Reported counts are the **selected rows after filters**, not whole-table totals.
 No historical query text is renormalized.
 
-Featured content has no age-prune rule and is compared in full. Access logs are
-also compared in full in this baseline because the audit import card requests
-insert-only preservation. The scheduled worker normally prunes access logs at
-90 days; the importer and operator must explicitly decide whether to use the same
-selection filter on both sides before cutover. Activity logs, grants and agent
-audits are not age-filtered. Freeze retention jobs as well as writers during
-verification; otherwise the two independent snapshots can legitimately differ.
+Featured content has no age-prune rule and is compared in full. Access logs and
+agent audits are also compared in full in this baseline because the audit import
+card requests insert-only preservation. The scheduled `model:prune` job prunes
+both after 90 days, so the importer and operator must explicitly decide whether to
+use the same selection filter on both sides before cutover. Without one, keep
+`model:prune` frozen until verification is signed off: its first run after the
+import deletes imported agent audits older than 90 days, and a later verify run
+reports them as missing. `bin/import/verify-map.mjs` has no such filter for audits
+today. Activity logs and grants are not age-filtered, and no job prunes them.
+Freeze retention jobs as well as writers during verification; otherwise the two
+independent snapshots can legitimately differ.
 
 ## Configuration and invocation
 

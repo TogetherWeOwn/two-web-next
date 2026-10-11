@@ -10,9 +10,13 @@ export type FeaturedListQuery = {
   order: SortOrder;
 };
 export type RosterSort = "status" | "answered";
-export type RosterQuery = { q: string; sort: RosterSort; order: SortOrder };
+export type RosterQuery = { q: string; sort: RosterSort; order: SortOrder; page: number };
 export type JoinAttemptsQuery = { outcome: string; q: string; page: number };
 export const JOIN_ATTEMPT_PAGE_SIZE = 100;
+export type ActivityLogQuery = { subject: string; causer: string; page: number };
+export const ACTIVITY_LOG_PAGE_SIZE = 50;
+/** The RSVP roster reuses the 100-row admin convention. */
+export const ROSTER_PAGE_SIZE = 100;
 
 export function parseFeaturedListQuery(params: ListParams): FeaturedListQuery {
   return {
@@ -24,10 +28,18 @@ export function parseFeaturedListQuery(params: ListParams): FeaturedListQuery {
 }
 
 export function parseRosterQuery(params: ListParams): RosterQuery {
+  const page = Number(params.roster_page);
+  // Same unsafe-OFFSET guard as the join-attempts viewer: PostgreSQL OFFSET
+  // is a signed bigint, so keep the arithmetic exact in JS too.
+  const validPage =
+    /^[1-9]\d*$/.test(params.roster_page ?? "") &&
+    Number.isSafeInteger(page) &&
+    Number.isSafeInteger((page - 1) * ROSTER_PAGE_SIZE);
   return {
     q: (params.roster_q ?? "").trim(),
     sort: params.roster_sort === "status" ? "status" : "answered",
     order: params.roster_order === "asc" ? "asc" : "desc",
+    page: validPage ? page : 1,
   };
 }
 
@@ -39,6 +51,23 @@ export function parseJoinAttemptsQuery(params: ListParams): JoinAttemptsQuery {
     Number.isSafeInteger(page) &&
     Number.isSafeInteger((page - 1) * JOIN_ATTEMPT_PAGE_SIZE);
   return { outcome: params.outcome ?? "", q: (params.q ?? "").trim(), page: validPage ? page : 1 };
+}
+
+export function parseActivityLogQuery(params: ListParams): ActivityLogQuery {
+  const page = Number(params.page);
+  // PostgreSQL OFFSET is a signed bigint; keep arithmetic exact in JS too.
+  const validPage =
+    /^[1-9]\d*$/.test(params.page ?? "") &&
+    Number.isSafeInteger(page) &&
+    Number.isSafeInteger((page - 1) * ACTIVITY_LOG_PAGE_SIZE);
+  return {
+    // PostgreSQL text cannot contain NUL; retain the rest as literal input.
+    // Spelled with fromCharCode so the NUL survives transports that decode
+    // backslash-u escapes in transit.
+    subject: (params.subject ?? "").replaceAll(String.fromCharCode(0), "").trim(),
+    causer: (params.causer ?? "").replaceAll(String.fromCharCode(0), "").trim(),
+    page: validPage ? page : 1,
+  };
 }
 
 export function featuredListUrl(
@@ -60,6 +89,8 @@ export function rosterUrl(
   const q = { ...query, ...patch };
   const params = new URLSearchParams({ roster_sort: q.sort, roster_order: q.order });
   if (q.q) params.set("roster_q", q.q);
+  // Page 1 stays bare so sort/search links reset the roster to its first page.
+  if (q.page > 1) params.set("roster_page", String(q.page));
   return `/admin/events/${encodeURIComponent(eventKey)}?${params}#rsvp-roster`;
 }
 
@@ -68,6 +99,13 @@ export function joinAttemptsUrl(query: JoinAttemptsQuery, page: number): string 
   if (query.outcome) params.set("outcome", query.outcome);
   if (query.q) params.set("q", query.q);
   return `/admin/join-attempts?${params}`;
+}
+
+export function activityLogUrl(query: ActivityLogQuery, page: number): string {
+  const params = new URLSearchParams({ page: String(page) });
+  if (query.subject) params.set("subject", query.subject);
+  if (query.causer) params.set("causer", query.causer);
+  return `/admin/activity-log?${params}`;
 }
 
 /** Zero-row copy: filtered empties name the filters, genuine empties invite creation. */
@@ -80,4 +118,9 @@ export function featuredEmptyText(query: FeaturedListQuery): string {
 /** Zero-row copy for the RSVP roster on the event edit page. */
 export function rosterEmptyText(query: RosterQuery): string {
   return query.q ? "No RSVPs match this member search." : "No RSVPs yet.";
+}
+
+/** Zero-row copy for the activity-log viewer. */
+export function activityLogEmptyText(query: ActivityLogQuery): string {
+  return query.subject || query.causer ? "No activity matches these filters." : "No activity yet.";
 }

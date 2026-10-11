@@ -13,7 +13,10 @@
 // - POST /admin/events/:key/cancel   draft|published → cancelled
 // - GET  /admin/join-attempts        read-only join audit viewer (W12 M8)
 // - GET  /admin/join-attempts/:id    read-only attempt detail
+// - GET  /admin/activity-log         read-only activity-log viewer (R11)
 // - GET  /admin/queue/failed/:id/preview  one-row advice only
+// - POST /admin/queue/failed/:id/redispatch  one-row guarded re-dispatch
+//   (replay advice only; refusals and stale rows are never deleted here)
 // - GET  /admin/featured             list, position order
 // - GET  /admin/featured/new         create form
 // - POST /admin/featured             create
@@ -30,11 +33,14 @@ import { requestBodyLimit } from "../body-limit";
 import { Hono } from "hono";
 import type { Context } from "hono";
 import { queuePreviewAdmission, queuePreviewHandler, type QueuePreviewVars } from "./queue-preview";
+import { queueRedispatchHandler } from "./queue-redispatch";
 import { dbFor, type EnvWithAdminDb } from "./db";
 import { bufferedMemberHtml, bufferedMemberText } from "../member-reads";
 import { EVENT_PAGE_SIZE, parseEventListQuery } from "./event-list";
 import {
+  ACTIVITY_LOG_PAGE_SIZE,
   JOIN_ATTEMPT_PAGE_SIZE,
+  parseActivityLogQuery,
   parseFeaturedListQuery,
   parseJoinAttemptsQuery,
   parseRosterQuery,
@@ -63,12 +69,13 @@ import { JOIN_OUTCOMES } from "../join/service";
 import { databaseUrl } from "../db/connection";
 import { isDatabaseUnavailable } from "../db/errors";
 import { dashboardJoinFunnel, FUNNEL_READ_DEADLINE_MS } from "./join-funnel";
-import { getJoinAttempt, listJoinAttempts, listRoster } from "./reads";
+import { getJoinAttempt, listActivityLog, listJoinAttempts, listRoster } from "./reads";
 import { parseRecordId } from "./record-id";
 import { parseRecurrenceForm } from "./recurrence";
 import { parseEventForm, parseFeaturedForm, utcToWall, ValidationError } from "./validation";
 import { dispatchWriteBack } from "./writeback";
 import {
+  ActivityLogPage,
   AdminDashboard,
   ErrorPage,
   EventFormPage,
@@ -140,9 +147,20 @@ function formError(
  */
 export function adminApp(overrides?: AdminOverrides | SessionStore) {
   const admin = new Hono<Vars>();
+  // Same write envelope as every other admin POST: throttle admits before
+  // buffering (oversized attempts count against the bucket), the wire cap
+  // refuses before parsing, and the handler itself never parses a payload
+  // (dispatch always starts from the reconciled source). Only the dedicated
+  // staging operator principal can reach the handler.
   admin.use("/queue/*", queuePreviewAdmission);
   admin.use("/*", adminGuard(overrides));
   admin.get("/queue/failed/:id/preview", queuePreviewHandler);
+  admin.post(
+    "/queue/failed/:id/redispatch",
+    throttle("admin-write", WRITE_THROTTLE_PER_MINUTE),
+    requestBodyLimit("action"),
+    queueRedispatchHandler,
+  );
 
   // Legacy Filament bookmarks: guard first, no query forwarding.
   // Only the featured edit alias needs a resource read to resolve the imported ID.
@@ -253,6 +271,27 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
     return bufferedMemberHtml(c, <JoinAttemptPage row={result.attempt} />);
   });
 
+  admin.get("/activity-log", async (c) => {
+    declareAccess(c, {
+      resource: "activity_log",
+      action: "list",
+      route: "admin.activity-log.index",
+    });
+    const db = await dbOr503(c);
+    if (!db) return bufferedMemberText(c, "Admin temporarily unavailable", 503);
+    const query = parseActivityLogQuery(c.req.query());
+    const fetched = await listActivityLog(db, query);
+    const rows = fetched.slice(0, ACTIVITY_LOG_PAGE_SIZE);
+    return bufferedMemberHtml(
+      c,
+      <ActivityLogPage
+        rows={rows}
+        query={query}
+        hasNext={fetched.length > ACTIVITY_LOG_PAGE_SIZE}
+      />,
+    );
+  });
+
   admin.get("/events", async (c) => {
     declareAccess(c, { resource: "events", action: "list", route: "admin.events.index" });
     const db = await dbOr503(c);
@@ -322,7 +361,7 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
     const row = await getEvent(db, c.req.param("key"));
     if (!row) return errorPage(c, 404, "Event not found");
     const rosterQuery = parseRosterQuery(c.req.query());
-    const roster = await listRoster(db, row.eventKey, rosterQuery);
+    const { rows: roster, total: rosterTotal } = await listRoster(db, row.eventKey, rosterQuery);
     return bufferedMemberHtml(
       c,
       <EventFormPage
@@ -331,6 +370,7 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
         values={eventValues(row)}
         errors={{}}
         roster={roster}
+        rosterTotal={rosterTotal}
         rosterQuery={rosterQuery}
       />,
     );

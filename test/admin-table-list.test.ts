@@ -1,5 +1,7 @@
+import { drizzle } from "drizzle-orm/postgres-js";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { adminApp } from "../src/admin/routes";
+import type { Db } from "../src/db/index";
 import { listFeatured } from "../src/admin/store";
 import { listJoinAttempts, listRoster, JOIN_RETENTION_DAYS } from "../src/admin/reads";
 import {
@@ -10,6 +12,7 @@ import {
   parseRosterQuery,
   rosterUrl,
   JOIN_ATTEMPT_PAGE_SIZE,
+  ROSTER_PAGE_SIZE,
 } from "../src/admin/table-list";
 import { events, featuredContents, memberDataAccessLogs, rsvps } from "../src/db/admin-schema";
 import { joinAttempts, users } from "../src/db/schema";
@@ -54,10 +57,10 @@ describe("admin table query state (no DB)", () => {
   });
 
   it("defaults and allowlists roster sort/order independently of event parameters", () => {
-    expect(parseRosterQuery({})).toEqual({ q: "", sort: "answered", order: "desc" });
+    expect(parseRosterQuery({})).toEqual({ q: "", sort: "answered", order: "desc", page: 1 });
     expect(
       parseRosterQuery({ roster_q: "  Alice  ", roster_sort: "status", roster_order: "asc" }),
-    ).toEqual({ q: "Alice", sort: "status", order: "asc" });
+    ).toEqual({ q: "Alice", sort: "status", order: "asc", page: 1 });
     expect(
       parseRosterQuery({
         q: "wrong",
@@ -65,8 +68,21 @@ describe("admin table query state (no DB)", () => {
         roster_sort: injection,
         roster_order: injection,
       }),
-    ).toEqual({ q: "", sort: "answered", order: "desc" });
+    ).toEqual({ q: "", sort: "answered", order: "desc", page: 1 });
+    expect(parseRosterQuery({ roster_page: "3" })).toEqual({
+      q: "",
+      sort: "answered",
+      order: "desc",
+      page: 3,
+    });
   });
+
+  it.each(["", "0", "-1", "1.5", "1e2", "Infinity", injection, "9007199254740991"])(
+    "normalizes unsafe roster page %s to page 1",
+    (roster_page) => {
+      expect(parseRosterQuery({ roster_page }).page).toBe(1);
+    },
+  );
 
   it.each(["", "0", "-1", "1.5", "1e2", "Infinity", injection, "9007199254740991"])(
     "normalizes unsafe page %s",
@@ -102,12 +118,62 @@ describe("admin table query state (no DB)", () => {
       roster_order: "desc",
     });
     expect(url.hash).toBe("#rsvp-roster");
+    // Page 1 stays bare; later pages keep every filter and the roster anchor.
+    const paged = new URL(rosterUrl("event", { ...roster, page: 2 }, { page: 3 }), env.APP_URL);
+    expect(Object.fromEntries(paged.searchParams)).toEqual({
+      roster_q: injection,
+      roster_sort: "status",
+      roster_order: "asc",
+      roster_page: "3",
+    });
+    expect(paged.hash).toBe("#rsvp-roster");
+    const reset = new URL(
+      rosterUrl("event", { ...roster, page: 3 }, { sort: "answered", order: "desc", page: 1 }),
+      env.APP_URL,
+    );
+    expect(reset.searchParams.has("roster_page")).toBe(false);
     expect(
       Object.fromEntries(
         new URL(joinAttemptsUrl({ outcome: "denied", q: "request & id", page: 2 }, 3), env.APP_URL)
           .searchParams,
       ),
     ).toEqual({ outcome: "denied", q: "request & id", page: "3" });
+  });
+
+  it("bounds the roster read with a filtered count plus a LIMIT/OFFSET page", async () => {
+    const statements: string[] = [];
+    const db = drizzle.mock() as unknown as Db;
+    // Real builders and SQL text; only returned rows are fixtures.
+    const session = (
+      db as unknown as {
+        session: {
+          prepareQuery: (query: { sql: string }) => unknown;
+          transaction: (work: (tx: Db) => Promise<unknown>) => Promise<unknown>;
+        };
+      }
+    ).session;
+    session.prepareQuery = (query) => ({
+      setToken() {
+        return this;
+      },
+      execute: async () => {
+        statements.push(query.sql);
+        return query.sql.startsWith("select count(*)") ? [{ n: 250 }] : [];
+      },
+    });
+    session.transaction = async (work) => work(db);
+    const first = await listRoster(db, "roster", parseRosterQuery({ roster_q: "alice" }));
+    expect(first).toEqual({ rows: [], total: 250 });
+    expect(statements).toHaveLength(2);
+    expect(statements[0]).toMatch(/^select count\(\*\)/);
+    expect(statements[0]).toContain("ilike");
+    expect(statements[0]).not.toMatch(/limit/i);
+    expect(statements[1]).toContain("limit");
+    statements.length = 0;
+    await listRoster(db, "roster", parseRosterQuery({ roster_page: "3" }));
+    expect(statements).toHaveLength(2);
+    expect(statements[0]).toMatch(/^select count\(\*\)/);
+    expect(statements[1]).toMatch(/limit \$\d+ offset \$\d+/);
   });
 
   it("keeps filtered/sorted/paged views behind the existing moderator guard", async () => {
@@ -117,6 +183,7 @@ describe("admin table query state (no DB)", () => {
     for (const path of [
       "/featured?published=0&q=alice&sort=updated_at",
       "/events/event?roster_q=alice&roster_sort=status",
+      "/events/event?roster_page=2",
       "/join-attempts?page=2",
     ]) {
       expect((await app.request(path, {}, env)).status).toBe(302);
@@ -311,6 +378,9 @@ describe.skipIf(!process.env.DATABASE_URL)(
       ] as const) {
         const html = await request(`/events/roster?roster_q=${encodeURIComponent(q)}`);
         expect(html).toContain(`RSVPs (${ids.length})`);
+        expect(html).toContain(
+          `Showing ${ids.length === 0 ? "0-0" : `1-${ids.length}`} of ${ids.length}`,
+        );
         if (ids.length) expect((await logs()).at(-1)!.subjectUserIds).toEqual(ids);
         expect(html).not.toContain("100000000000001005");
         expect(html).not.toContain("Unknown member");
@@ -324,7 +394,8 @@ describe.skipIf(!process.env.DATABASE_URL)(
     it.each(["status", "answered"])(
       "roster sort=%s supports both directions and stable member ties",
       async (sort) => {
-        const rows = await seedRoster();
+        const { rows, total } = await seedRoster();
+        expect(total).toBe(rows.length);
         for (const order of ["asc", "desc"] as const) {
           const query = parseRosterQuery({ roster_sort: sort, roster_order: order });
           const expected = [...rows].sort((a, b) => {
@@ -334,9 +405,9 @@ describe.skipIf(!process.env.DATABASE_URL)(
                 : a.answeredAt.getTime() - b.answeredAt.getTime();
             return (order === "asc" ? diff : -diff) || a.userId.localeCompare(b.userId);
           });
-          expect((await listRoster(fixture.db, "roster", query)).map((r) => r.userId)).toEqual(
-            expected.map((r) => r.userId),
-          );
+          const page = await listRoster(fixture.db, "roster", query);
+          expect(page.total).toBe(rows.length);
+          expect(page.rows.map((r) => r.userId)).toEqual(expected.map((r) => r.userId));
           const html = await request(`/events/roster?roster_sort=${sort}&roster_order=${order}`);
           const names = expected.map((r) => r.username ?? "Unknown member");
           // Table cell positions, not form values/encoded query strings.
@@ -348,6 +419,147 @@ describe.skipIf(!process.env.DATABASE_URL)(
         }
       },
     );
+
+    async function seedPagedRoster(size: number, eventKey: string) {
+      const [event] = await fixture.db
+        .insert(events)
+        .values({
+          eventKey,
+          title: eventKey,
+          startsAt: new Date("2099-10-01T20:00Z"),
+          endsAt: new Date("2099-10-01T22:00Z"),
+        })
+        .returning();
+      const base = 100000000000020000n;
+      const at = new Date("2026-10-01T00:00Z").getTime();
+      await fixture.db.insert(rsvps).values(
+        Array.from({ length: size }, (_, i) => ({
+          eventId: event!.id,
+          userId: String(base + BigInt(i)),
+          status: i % 2 === 0 ? "going" : "maybe",
+          // Pairs share an instant so the userId tie-break decides within them.
+          updatedAt: new Date(at + Math.floor(i / 2) * 60_000),
+        })),
+      );
+      return event!;
+    }
+
+    it("roster pages hold 100 rows: 250 answers read 100/100/50 with the filtered total", async () => {
+      expect(ROSTER_PAGE_SIZE).toBe(100);
+      await seedPagedRoster(2 * ROSTER_PAGE_SIZE + 50, "paged");
+      const first = await listRoster(fixture.db, "paged", parseRosterQuery({}));
+      const second = await listRoster(fixture.db, "paged", parseRosterQuery({ roster_page: "2" }));
+      const third = await listRoster(fixture.db, "paged", parseRosterQuery({ roster_page: "3" }));
+      for (const page of [first, second, third]) expect(page.total).toBe(250);
+      expect(first.rows).toHaveLength(100);
+      expect(second.rows).toHaveLength(100);
+      expect(third.rows).toHaveLength(50);
+      // Deterministic newest-first order with the userId tie-break, stable
+      // across the page seams.
+      const base = 100000000000020000n;
+      const expected = Array.from({ length: 250 }, (_, i) => ({
+        tick: Math.floor(i / 2),
+        id: String(base + BigInt(i)),
+      }))
+        .sort((a, b) => b.tick - a.tick || (a.id < b.id ? -1 : 1))
+        .map((r) => r.id);
+      expect([...first.rows, ...second.rows, ...third.rows].map((r) => r.userId)).toEqual(expected);
+      const one = await request("/events/paged");
+      expect(one).toContain("RSVPs (250)");
+      expect(one).toContain("Showing 1-100 of 250");
+      expect(one.match(/<td>Unknown member<\/td>/g)).toHaveLength(100);
+      expect(link(one, "prev")).toBeUndefined();
+      const next = new URL(link(one, "next")!, env.APP_URL);
+      expect(next.hash).toBe("#rsvp-roster");
+      expect(Object.fromEntries(next.searchParams)).toEqual({
+        roster_sort: "answered",
+        roster_order: "desc",
+        roster_page: "2",
+      });
+      const two = await request(`/events/paged${next.search}`);
+      expect(two).toContain("Showing 101-200 of 250");
+      expect(new URL(link(two, "prev")!, env.APP_URL).searchParams.has("roster_page")).toBe(false);
+      const three = await request("/events/paged?roster_page=3");
+      expect(three).toContain("Showing 201-250 of 250");
+      expect(three.match(/<td>Unknown member<\/td>/g)).toHaveLength(50);
+      expect(link(three, "next")).toBeUndefined();
+      const prev = new URL(link(three, "prev")!, env.APP_URL);
+      expect(prev.searchParams.get("roster_page")).toBe("2");
+      expect(prev.hash).toBe("#rsvp-roster");
+      // One audit row per rendered page; the count query logs no subjects.
+      expect((await logs()).map((r) => r.subjectUserIds.length)).toEqual([100, 100, 50]);
+      expect((await logs()).every((r) => r.route === "admin.events.edit")).toBe(true);
+    });
+
+    it("roster search narrows the total before paging", async () => {
+      const [event] = await fixture.db
+        .insert(events)
+        .values({
+          eventKey: "filtered",
+          title: "filtered",
+          startsAt: new Date("2099-10-01T20:00Z"),
+          endsAt: new Date("2099-10-01T22:00Z"),
+        })
+        .returning();
+      const base = 100000000000030000n;
+      await fixture.db.insert(users).values(
+        Array.from({ length: 120 }, (_, i) => ({
+          id: String(base + BigInt(i)),
+          username: `Filterme ${i}`,
+        })),
+      );
+      await fixture.db.insert(rsvps).values(
+        Array.from({ length: 150 }, (_, i) => ({
+          eventId: event!.id,
+          userId: String(base + BigInt(i)),
+          status: "going",
+          updatedAt: new Date(new Date("2026-10-01T00:00Z").getTime() + i * 60_000),
+        })),
+      );
+      const page = await listRoster(
+        fixture.db,
+        "filtered",
+        parseRosterQuery({ roster_q: "filterme", roster_page: "2" }),
+      );
+      expect(page.total).toBe(120);
+      expect(page.rows).toHaveLength(20);
+      const html = await request("/events/filtered?roster_q=filterme&roster_page=2");
+      expect(html).toContain("RSVPs (120)");
+      expect(html).toContain("Showing 101-120 of 120");
+      expect(link(html, "next")).toBeUndefined();
+      const prev = new URL(link(html, "prev")!, env.APP_URL);
+      expect(prev.searchParams.get("roster_q")).toBe("filterme");
+      expect(prev.searchParams.has("roster_page")).toBe(false);
+      expect(prev.hash).toBe("#rsvp-roster");
+    });
+
+    it.each(["", "0", "-1", "1.5", "1e2", "not-a-page", "9007199254740991"])(
+      "roster falls back to page 1 for roster_page %s",
+      async (roster_page) => {
+        await seedPagedRoster(ROSTER_PAGE_SIZE + 1, "invalid-page");
+        const html = await request(
+          `/events/invalid-page?roster_page=${encodeURIComponent(roster_page)}`,
+        );
+        expect(html).toContain("Showing 1-100 of 101");
+        expect(html).toContain("Page 1");
+      },
+    );
+
+    it("roster past-end pages stay empty with working navigation", async () => {
+      await seedPagedRoster(50, "short");
+      const page = await listRoster(fixture.db, "short", parseRosterQuery({ roster_page: "9" }));
+      expect(page.total).toBe(50);
+      expect(page.rows).toEqual([]);
+      const html = await request("/events/short?roster_page=9");
+      expect(html).toContain("RSVPs (50)");
+      expect(html).toContain("Showing 0-0 of 50");
+      expect(html).toContain("No RSVPs on this page.");
+      expect(html).toContain("Page 9");
+      expect(link(html, "next")).toBeUndefined();
+      const prev = new URL(link(html, "prev")!, env.APP_URL);
+      expect(prev.searchParams.get("roster_page")).toBe("8");
+      expect(prev.hash).toBe("#rsvp-roster");
+    });
 
     it("roster invalid sorts use newest-first; headers/search preserve state and missing names do not expose ids", async () => {
       await seedRoster();

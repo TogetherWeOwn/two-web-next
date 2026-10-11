@@ -18,6 +18,7 @@ export const CALL_INTERNAL_ACTION = {
 
 // routes/console.php + config/member_access_log.php:14
 export const MEMBER_ACCESS_LOG_RETENTION_DAYS = 90;
+export const AGENT_EVENT_AUDIT_RETENTION_DAYS = 90;
 // routes/console.php model:prune ×3 (TOG-8710 join funnel + agent replay store, TOG-8400 search log)
 export const JOIN_ATTEMPT_RETENTION_DAYS = 90; // config/join.php: attempt_retention_days
 export const IDEMPOTENCY_KEY_RETENTION_DAYS = 90; // config/agent-events.php: idempotency_retention_days
