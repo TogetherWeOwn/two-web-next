@@ -1,12 +1,4 @@
-// Every response carries Cross-Origin-Embedder-Policy: credentialless.
-//
-// ZAP 90004 flags a missing COEP header. The value is `credentialless`, not
-// `require-corp`: the only cross-origin embeds are credential-free —
-// cdn.discordapp.com <img> (no-cors) and the lazy /join widget iframe (public
-// content, no viewer cookies) — while require-corp would block both unless
-// Discord served CORP headers. Island fetches are same-origin paths and
-// scripts/styles are 'self' by CSP, so nothing needs credentials cross-origin.
-// Local fixtures only: no database, no Discord.
+// ZAP 90004: every response carries COEP credentialless, never require-corp.
 import { describe, expect, it } from "vitest";
 import app from "../src/index";
 import { securityHeadersFor } from "../src/headers";
