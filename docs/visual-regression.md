@@ -1,8 +1,7 @@
 # Visual regression
 
 `e2e/visual/public-pages.visual.ts` takes full-page screenshots of the public
-routes (home, events, a seeded event, past events, community, members, rules,
-privacy) at desktop (1280×800) and mobile (390×844) widths and compares them
+routes (home, events, the seeded event, past events, community, rules, privacy) at desktop (1280×800) and mobile (390×844) widths and compares them
 with the committed baselines in `e2e/visual/__screenshots__/`.
 
 - **Where it runs:** the `browser-smoke` job in `.github/workflows/e2e.yml`, before

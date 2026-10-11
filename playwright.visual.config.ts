@@ -8,6 +8,10 @@ import base from "./playwright.config";
 // Missing or differing screenshots fail; CI never rewrites a baseline.
 export default defineConfig({
   ...base,
+  // Read-only run: no fixtures to sweep. The base teardown logs in as the QA
+  // moderator and cancels fixtures, which must not run between this step and
+  // the journeys.
+  globalTeardown: undefined,
   testDir: "./e2e/visual",
   testMatch: "**/*.visual.ts",
   testIgnore: [],

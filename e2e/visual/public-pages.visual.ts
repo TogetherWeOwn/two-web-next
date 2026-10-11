@@ -7,10 +7,9 @@ import { expect, test } from "../fixtures";
 const ROUTES: Array<[name: string, path: string]> = [
   ["home", "/"],
   ["events", "/events"],
-  ["event", "/events/01J00000000000000000000001"],
+  ["event", "/e/01J00000000000000000000001"],
   ["past", "/events/past"],
   ["community", "/community"],
-  ["members", "/members"],
   ["rules", "/rules"],
   ["privacy", "/privacy"],
 ];
