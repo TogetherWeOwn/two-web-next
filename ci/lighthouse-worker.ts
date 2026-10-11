@@ -148,6 +148,36 @@ export function fixtureEnvForRequest(nowMs: number): Env & Record<string, unknow
             rows: fixture.endsAt >= new Date(params[0]) && inWindow ? [encoded] : [],
           };
         }
+        // Grid day-jumps resolve the card's list page: the anchor row, then the
+        // count of visible rows before it. Single-fixture emulation: the row
+        // counts exactly when the anchor is the fixture itself.
+        if (
+          sql ===
+            `${eventSelect} where ("events"."event_key" = $1 and "events"."status" != 'draft' and (isfinite("events"."starts_at") and isfinite("events"."ends_at")) and "events"."ends_at" >= $2)` &&
+          params.length === 2 &&
+          params[0] === fixtureKey &&
+          isInstant(params[1])
+        ) {
+          return { rows: fixture.endsAt >= new Date(params[1]) ? [encoded] : [] };
+        }
+        if (
+          sql ===
+            `select count(*) from "events" where ("events"."status" != 'draft' and (isfinite("events"."starts_at") and isfinite("events"."ends_at")) and "events"."ends_at" >= $1 and ("events"."starts_at" < $2 or ("events"."starts_at" = $3 and "events"."id" < $4)))` &&
+          params.length === 4 &&
+          isInstant(params[0]) &&
+          isInstant(params[1]) &&
+          isInstant(params[2]) &&
+          typeof params[3] === "number"
+        ) {
+          const anchor = { startsAt: new Date(params[1]).getTime(), id: params[3] };
+          const before =
+            fixture.endsAt >= new Date(params[0]) &&
+            (fixture.startsAt.getTime() < anchor.startsAt ||
+              (fixture.startsAt.getTime() === anchor.startsAt && fixture.id < anchor.id))
+              ? "1"
+              : "0";
+          return { rows: [[before]] };
+        }
         if (
           inTransaction &&
           sql ===

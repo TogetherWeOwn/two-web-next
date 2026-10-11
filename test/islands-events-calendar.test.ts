@@ -408,7 +408,9 @@ describe("EventsCalendar review regressions", () => {
     const e = eventRow({ eventKey: "grid-link", startsAt: new Date(Date.UTC(2030, 0, 15, 20)) });
     const src = calendar([e], [], okSource());
     const grid = await (await src.request("/events?view=calendar&month=2030-01&past=1")).text();
-    expect(grid).toContain('href="/events?past=1#event-grid-link" data-cal-jump');
+    expect(grid).toContain(
+      'href="/events?event=grid-link&amp;past=1#event-grid-link" data-cal-jump',
+    );
     const list = await (await src.request("/events?past=1")).text();
     expect(list).toContain('id="event-grid-link"');
   });

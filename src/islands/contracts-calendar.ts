@@ -430,6 +430,16 @@ export function calendarUrl(s: CalendarState): string {
   return qs === "" ? "/events" : `/events?${qs}`;
 }
 
+/** Grid day-jump into the list: names the card so the route renders the list
+ * page holding it, plus the card anchor. `past` rides along; a search never
+ * co-occurs with the grid (it forces the list view). */
+export function calendarJumpUrl(past: boolean, key: string): string {
+  const params = new URLSearchParams();
+  params.set("event", key);
+  if (past) params.set("past", "1");
+  return `/events?${params.toString()}#event-${key}`;
+}
+
 /**
  * Which empty state renders — error beats everything, including a search miss
  * (a failed read must never read as "no events"); a search suppresses the

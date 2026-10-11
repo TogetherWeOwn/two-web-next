@@ -9,6 +9,7 @@ import {
   currentCalendarMonth,
   dedupeTransients,
   eventSearchLogEntry,
+  EVENTS_UPCOMING_PAGE_SIZE,
   mergeCalendarRows,
   parseCalendarMonth,
   parseCalendarView,
@@ -38,6 +39,7 @@ import {
   normalizePastPage,
   normalizeUpcomingPage,
   persistedDiscordIds,
+  rankUpcoming,
 } from "./reads";
 import { EventsCalendarPage, PastEventsPage } from "./pages";
 import { eventsUnavailable, publicReadGuard, type App, type SessionReader } from "./routes-shared";
@@ -114,6 +116,15 @@ export function registerCalendarRoutes(
     // that commits (and retires) while this render awaits its reads must stop
     // the stale bytes from settling below.
     const anonGen = anonSource ? anonCacheGeneration() : 0;
+    // Grid day-jumps name the card (`?event=`): resolve the list page holding
+    // it so jumps land even past page one. Absent, invisible or over-long
+    // keys fall back to the requested page.
+    const jumpKey = c.req.query("event") ?? "";
+    let listPage = view === "calendar" ? 1 : page;
+    if (view === "list" && jumpKey !== "" && jumpKey.length <= 64) {
+      const rank = await rankUpcoming(db, jumpKey, now, opts);
+      if (rank !== null) listPage = Math.floor(rank / EVENTS_UPCOMING_PAGE_SIZE) + 1;
+    }
     // One bounded page of upcoming rows plus the capped past drawer: the read,
     // the RSVP aggregate and the rendered HTML stay flat no matter how many
     // future events exist. The calendar view always works from page one — it
@@ -123,7 +134,7 @@ export function registerCalendarRoutes(
       rows: pageRows,
       totalPages,
       total: totalUpcoming,
-    } = await listUpcoming(db, now, opts, view === "calendar" ? 1 : page);
+    } = await listUpcoming(db, now, opts, listPage);
     const localPast = await listCalendarPast(db, now, opts);
 
     // One resolve per request: the rows and the failure flag MUST come from the
@@ -155,7 +166,7 @@ export function registerCalendarRoutes(
     // on a Discord-only schedule, exactly like the old unpaged merge.
     const probe = mergeCalendarRows(
       pageRows,
-      view !== "list" || page === 1 || totalUpcoming === 0 ? transients : [],
+      view !== "list" || listPage === 1 || totalUpcoming === 0 ? transients : [],
     );
     const probeZone = calendarZone([
       ...pageRows.map((e) => e.timezone),
@@ -200,7 +211,7 @@ export function registerCalendarRoutes(
       );
     }
 
-    const state = { view, month, q, past, page: view === "calendar" ? 1 : page };
+    const state = { view, month, q, past, page: listPage };
     const emptyState = calendarEmptyState({
       searching,
       upcomingEmpty: totalUpcoming === 0 && transients.length === 0,
@@ -237,9 +248,9 @@ export function registerCalendarRoutes(
       "cache-control",
       session || searching || joinResult ? "private, no-store" : "public, max-age=60",
     );
-    // Paged turns are archive-like duplicates of the first page for crawlers,
+    // Paged turns and card jumps duplicate first-page content for crawlers,
     // like the past archive's always-noindex pages.
-    if (searching || state.page > 1) c.header("x-robots-tag", "noindex, follow");
+    if (searching || state.page > 1 || jumpKey !== "") c.header("x-robots-tag", "noindex, follow");
     c.header("vary", "Cookie, X-Two-Island");
     // Guest sign-in links carry this page as ?next= so the OAuth round trip
     // lands back here (TOG-10356). Rooted pathname + search only — the

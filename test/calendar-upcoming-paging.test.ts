@@ -7,7 +7,12 @@ import { describe, expect, it } from "vitest";
 import type { EnvWithAdminDb } from "../src/admin/db";
 import type { Env } from "../src/env";
 import { __resetAnonEventCacheForTests } from "../src/events/anon-cache";
-import { listUpcoming, listUpcomingForMonth, normalizeUpcomingPage } from "../src/events/reads";
+import {
+  listUpcoming,
+  listUpcomingForMonth,
+  normalizeUpcomingPage,
+  rankUpcoming,
+} from "../src/events/reads";
 import { registerEventRoutes } from "../src/events/routes";
 import { calendarGridRange, EVENTS_UPCOMING_PAGE_SIZE } from "../src/islands/contracts";
 import { createMemberDataFixture, testDatabaseUrl } from "./helpers/member-data-db";
@@ -69,6 +74,8 @@ describe("upcoming page numbers", () => {
     expect(normalizeUpcomingPage(-3)).toBe(1);
     expect(normalizeUpcomingPage(Number.NaN)).toBe(1);
     expect(normalizeUpcomingPage(Number.parseInt("banana", 10))).toBe(1);
+    // Overflow: the offset would stop being a safe integer, like the archive.
+    expect(normalizeUpcomingPage(5000000000000000)).toBe(1);
   });
 });
 
@@ -148,6 +155,57 @@ describe.skipIf(!url)("upcoming list paging (isolated test DB)", () => {
       await seedUpcoming(client, 41, 1, new Date(before));
       const july = await listUpcomingForMonth(db, "2060-07", NOW);
       expect(july.map((row) => row.eventKey)).toEqual([key(40)]);
+    } finally {
+      await fixture.dispose();
+    }
+  });
+
+  it("ranks visible events for grid day-jumps and nulls the rest", async () => {
+    const fixture = await createMemberDataFixture(url!, { max: 2 });
+    const { client, db } = fixture;
+    try {
+      await seedUpcoming(
+        client,
+        0,
+        EVENTS_UPCOMING_PAGE_SIZE + 5,
+        new Date("2060-07-01T18:00:00Z"),
+      );
+      expect(await rankUpcoming(db, key(0), NOW)).toBe(0);
+      expect(await rankUpcoming(db, key(EVENTS_UPCOMING_PAGE_SIZE), NOW)).toBe(
+        EVENTS_UPCOMING_PAGE_SIZE,
+      );
+      expect(await rankUpcoming(db, "01P99999999999999999999999", NOW)).toBeNull();
+    } finally {
+      await fixture.dispose();
+    }
+  });
+
+  it("resolves a grid day-jump to the list page holding the card", async () => {
+    const fixture = await createMemberDataFixture(url!, { max: 2 });
+    const { client, db } = fixture;
+    try {
+      __resetAnonEventCacheForTests();
+      await seedUpcoming(
+        client,
+        0,
+        EVENTS_UPCOMING_PAGE_SIZE + 5,
+        new Date("2060-07-01T18:00:00Z"),
+      );
+      const application = app();
+      const target = key(EVENTS_UPCOMING_PAGE_SIZE + 4);
+      const jumped = await application.request(`/events?event=${target}`, {}, routeEnv(db));
+      expect(jumped.status).toBe(200);
+      const jumpedHtml = await jumped.text();
+      expect(jumpedHtml).toContain("Page 2 of 2.");
+      expect(jumpedHtml).toContain(`id="event-${target}"`);
+      // An unknown key falls back to the requested page instead of failing.
+      const missed = await application.request(
+        "/events?event=01P99999999999999999999999",
+        {},
+        routeEnv(db),
+      );
+      expect(missed.status).toBe(200);
+      expect(await missed.text()).toContain("Page 1 of 2.");
     } finally {
       await fixture.dispose();
     }

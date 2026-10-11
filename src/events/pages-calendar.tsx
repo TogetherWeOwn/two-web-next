@@ -63,6 +63,7 @@ import {
   EVENT_DRAFT_TESTID,
   WEEKDAY_HEADINGS,
   addCalendarMonth,
+  calendarJumpUrl,
   calendarMonthLabel,
   calendarSearching,
   calendarShowingPast,
@@ -303,10 +304,7 @@ const MonthGrid: FC<{ state: CalendarState; weeks: CalendarDay<CalRow>[][]; zone
                   <ul>
                     {day.events.map((e) => (
                       <li>
-                        <a
-                          href={`${calendarUrl({ ...state, view: "list" })}#event-${rowKey(e)}`}
-                          data-cal-jump
-                        >
+                        <a href={calendarJumpUrl(state.past, rowKey(e))} data-cal-jump>
                           {wallTimeHm(e.startsAt, rowZone(e, zone))} {gridTitle(rowTitle(e))}
                         </a>
                       </li>

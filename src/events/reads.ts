@@ -92,9 +92,14 @@ function calendarVisible(opts: CalendarReadOpts): SQL | undefined {
   return clauses.length === 0 ? undefined : clauses.length === 1 ? clauses[0] : and(...clauses);
 }
 
-/** Invalid list-page numbers retain the page-one fallback, like the archive. */
+/** Invalid list-page numbers retain the page-one fallback, like the archive —
+ * including overflow, where the offset would stop being a safe integer. */
 export function normalizeUpcomingPage(page: number): number {
-  return Number.isSafeInteger(page) && page > 0 ? page : 1;
+  return Number.isSafeInteger(page) &&
+    page > 0 &&
+    Number.isSafeInteger((page - 1) * EVENTS_UPCOMING_PAGE_SIZE)
+    ? page
+    : 1;
 }
 
 /** Upcoming = visible, finite boundaries and not yet ended, soonest first (legacy `upcoming()`). Equal starts break ties by id for a deterministic total order. Paged like the past archive: one page of full rows, so the read, the RSVP aggregate and the rendered HTML stay bounded no matter how many future events exist. A page past the end renders empty (with an out-of-range note) instead of clamping, exactly like `listPast`. */
@@ -109,6 +114,8 @@ export async function listUpcoming(
   const [total] = await db.select({ n: count() }).from(events).where(visible);
   const n = Number(total?.n ?? 0);
   const totalPages = Math.ceil(n / EVENTS_UPCOMING_PAGE_SIZE);
+  // Like `listPast`: a page past the end costs only the count, never a skipped scan.
+  if (page > totalPages) return { rows: [], hasMore: false, totalPages, total: n };
   const rows = await db
     .select()
     .from(events)
@@ -127,6 +134,45 @@ export async function listUpcoming(
     totalPages,
     total: n,
   };
+}
+
+/** Zero-based rank of one visible event in the upcoming order: the count of
+ * visible rows sorted before it. Null when the key is absent, invisible,
+ * ended or unrenderable — a grid day-jump to it resolves to page one. Two
+ * small reads, only for explicit `event` jumps, never for a plain render. */
+export async function rankUpcoming(
+  db: Db,
+  key: string,
+  now = new Date(),
+  opts: CalendarReadOpts = {},
+): Promise<number | null> {
+  const [anchor] = await db
+    .select()
+    .from(events)
+    .where(
+      and(
+        eq(events.eventKey, key),
+        calendarVisible(opts),
+        finiteEventWindow,
+        gte(events.endsAt, now),
+      ),
+    );
+  if (!anchor || !isRenderableEventWindow(anchor)) return null;
+  const [before] = await db
+    .select({ n: count() })
+    .from(events)
+    .where(
+      and(
+        calendarVisible(opts),
+        finiteEventWindow,
+        gte(events.endsAt, now),
+        or(
+          lt(events.startsAt, anchor.startsAt),
+          and(eq(events.startsAt, anchor.startsAt), lt(events.id, anchor.id)),
+        ),
+      ),
+    );
+  return Number(before?.n ?? 0);
 }
 
 /** Month-grid scope: the visible upcoming rows plotted on the grid for `month`
