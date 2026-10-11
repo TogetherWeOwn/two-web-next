@@ -24,6 +24,11 @@ the places the token would land inside compressed data:
     request headers in `trace.trace` and `trace.network`.
 So every file is searched raw, as a zip, and for an embedded base64 zip, and the
 whole file is deleted on a hit.
+
+Fail-closed inspection: an archive member that cannot be read (unsupported
+compression, encrypted, corrupt, truncated) or nested content beyond the depth
+cap cannot be proven clean, so the whole containing file is removed rather than
+uploaded. Diagnostics never echo the token or a member name containing it.
 """
 
 import base64
@@ -40,43 +45,118 @@ EMBEDDED_ZIP = re.compile(rb"data:application/zip;base64,([A-Za-z0-9+/=\s]+)")
 MAX_DEPTH = 4
 
 
+class _Incomplete(Exception):
+    """An archive could not be completely inspected; fail closed."""
+
+    def __init__(self, reason: str):
+        super().__init__(reason)
+        self.reason = reason
+
+
+def _contains_token(text: str, token: bytes) -> bool:
+    """Whether a member name carries the token, without echoing either."""
+    try:
+        if token in text.encode("utf-8"):
+            return True
+    except (UnicodeError, ValueError):
+        return True
+    try:
+        return token.decode("utf-8") in text
+    except UnicodeDecodeError:
+        return False
+
+
+def _safe_member(filename: str, token: bytes) -> str:
+    """Member name safe for diagnostics; redacted when it carries the token."""
+    if _contains_token(filename, token):
+        return "<redacted>"
+    return filename
+
+
+def _safe_path(path: str, token: bytes) -> str:
+    """Outer path safe for diagnostics; redacted when it carries the token."""
+    if _contains_token(path, token):
+        return "<redacted>"
+    return path
+
+
 def zip_hit(data: bytes, token: bytes, depth: int) -> str | None:
-    """Name of the first zip member that holds the token, else None."""
+    """Name of the first zip member that holds the token, else None.
+
+    Raises _Incomplete when any member or nested content cannot be completely
+    inspected. Callers must treat incomplete as unclean, never as a miss.
+    """
     try:
         archive = zipfile.ZipFile(io.BytesIO(data))
-        for info in archive.infolist():
-            if info.is_dir():
-                continue
-            member = archive.read(info)
-            if token in member:
-                return info.filename
-            if depth < MAX_DEPTH and member.startswith(b"PK\x03\x04"):
+    except _Incomplete:
+        raise
+    except Exception as error:
+        raise _Incomplete("unreadable archive") from error
+    try:
+        entries = archive.infolist()
+    except _Incomplete:
+        raise
+    except Exception as error:
+        raise _Incomplete("unreadable archive listing") from error
+    for info in entries:
+        if info.is_dir():
+            continue
+        safe_name = _safe_member(info.filename, token)
+        try:
+            member = archive.read(info.filename)
+        except _Incomplete:
+            raise
+        except Exception as error:
+            raise _Incomplete(f"unreadable archive member {safe_name}") from error
+        if token in member:
+            return safe_name
+        if member.startswith(b"PK\x03\x04"):
+            if depth >= MAX_DEPTH:
+                raise _Incomplete(
+                    f"uninspected nested archive beyond depth limit in {safe_name}"
+                )
+            try:
                 inner = zip_hit(member, token, depth + 1)
-                if inner:
-                    return f"{info.filename}!{inner}"
-    except (zipfile.BadZipFile, NotImplementedError, RuntimeError, EOFError, OSError):
-        # A corrupt archive cannot be opened by a viewer either, and the raw
-        # search already covered any bytes stored uncompressed.
-        return None
+            except _Incomplete as error:
+                raise _Incomplete(
+                    f"{safe_name}!{error.reason}"
+                ) from error
+            if inner:
+                return f"{safe_name}!{inner}"
     return None
 
 
 def file_hit(path: str, token: bytes) -> str | None:
-    """Where in the file the token sits ("file", "archive member", ...) or None."""
+    """Where in the file the token sits ("file", "archive member", ...) or None.
+
+    Incompletely inspected content returns an "incompletely inspected ..."
+    reason so the caller removes the file; only completely inspected clean
+    content returns None.
+    """
     with open(path, "rb") as handle:
         data = handle.read()
     if token in data:
         return "file"
     if data.startswith(b"PK\x03\x04"):
-        member = zip_hit(data, token, 0)
+        try:
+            member = zip_hit(data, token, 0)
+        except _Incomplete as error:
+            return f"incompletely inspected archive ({error.reason})"
         if member:
             return f"archive member {member}"
     for match in EMBEDDED_ZIP.finditer(data):
         try:
             blob = base64.b64decode(re.sub(rb"\s", b"", match.group(1)))
-        except binascii.Error:
+        except (binascii.Error, ValueError):
+            return "incompletely inspected embedded archive (unreadable encoding)"
+        if token in blob:
+            return "embedded file"
+        if not blob.startswith(b"PK\x03\x04"):
             continue
-        member = zip_hit(blob, token, 0)
+        try:
+            member = zip_hit(blob, token, 0)
+        except _Incomplete as error:
+            return f"incompletely inspected embedded archive ({error.reason})"
         if member:
             return f"embedded archive member {member}"
     return None
@@ -108,13 +188,17 @@ def main(directories: list[str]) -> int:
                     where = "unreadable file"
                 if where is None:
                     continue
+                # Never disclose the token or a tainted name in diagnostics.
+                safe = _safe_path(path, token)
+                if _contains_token(where, token):
+                    where = "tainted finding (redacted)"
                 try:
                     os.remove(path)
                 except OSError:
-                    print(f"scrub-qa-token: could NOT remove {path} ({where})", file=sys.stderr)
+                    print(f"scrub-qa-token: could NOT remove {safe} ({where})", file=sys.stderr)
                     stuck += 1
                     continue
-                print(f"scrub-qa-token: removed {path} ({where})", file=sys.stderr)
+                print(f"scrub-qa-token: removed {safe} ({where})", file=sys.stderr)
                 removed += 1
 
     if stuck:
