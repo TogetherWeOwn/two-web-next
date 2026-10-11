@@ -22,21 +22,34 @@ function collectSourceFiles(dir: string): string[] {
 }
 
 /** Extract the first argument of console.error("...") calls as a literal string. */
-function extractConsoleErrorLiterals(filePath: string): Array<{ literal: string; line: number }> {
+function extractConsoleErrorLiterals(
+  filePath: string,
+): Array<{ literal: string; line: number; index: number }> {
   const content = readFileSync(filePath, "utf8");
-  const lines = content.split(/\r?\n/);
-  const results: Array<{ literal: string; line: number }> = [];
-  // Match console.error("literal" or console.error('literal' at start of call
-  const re = /console\.error\(\s*(["'])(.*?)\1/g;
-  for (const [idx, line] of lines.entries()) {
-    if (typeof line !== "string") continue;
-    // matchAll yields RegExpStringIterator; each match has capture groups as strings when matched
-    for (const m of line.matchAll(re)) {
-      // m[2] is the literal content (second capture group)
-      const g2: string | undefined = m[2];
-      if (typeof g2 === "string") {
-        results.push({ literal: g2, line: idx + 1 });
-      }
+  const results: Array<{ literal: string; line: number; index: number }> = [];
+  // Match against the whole file text so `\s*` spans the newline Biome emits
+  // when it formats a long message with a non-object second argument across
+  // multiple lines. The literal itself stays on one line.
+  const re = /console\.error\(\s*(["'])((?:\\.|(?!\1)[^\\\n])*)\1/g;
+  for (const m of content.matchAll(re)) {
+    // m[2] is the literal content (second capture group)
+    const g2: string | undefined = m[2];
+    if (typeof g2 === "string" && typeof m.index === "number") {
+      const line = content.slice(0, m.index).split("\n").length;
+      results.push({ literal: g2, line, index: m.index });
+    }
+  }
+  return results;
+}
+
+/** Every console.error( call site, literal or not, with its line number. */
+function extractAllConsoleErrorCalls(filePath: string): Array<{ line: number; index: number }> {
+  const content = readFileSync(filePath, "utf8");
+  const results: Array<{ line: number; index: number }> = [];
+  const re = /console\.error\s*\(/g;
+  for (const m of content.matchAll(re)) {
+    if (typeof m.index === "number") {
+      results.push({ line: content.slice(0, m.index).split("\n").length, index: m.index });
     }
   }
   return results;
@@ -59,7 +72,7 @@ function extractDocumentedPrefixes(docsPath: string): Set<string> {
     const g1: string | undefined = m[1];
     if (typeof g1 === "string") {
       const trimmed = g1.trim();
-      if (trimmed && trimmed !== "---" && !trimmed.toLowerCase().startsWith("prefix")) {
+      if (trimmed && trimmed !== "---" && !trimmed.toLowerCase().startsWith("message")) {
         prefixes.add(trimmed);
       }
     }
@@ -70,8 +83,10 @@ function extractDocumentedPrefixes(docsPath: string): Set<string> {
 describe("runbook log lines coverage", () => {
   it("every console.error literal first argument has a row in docs/runbook-logs.md", () => {
     const documented = extractDocumentedPrefixes(DOCS_PATH);
+    expect(documented.size).toBeGreaterThan(0);
     const sourceFiles = collectSourceFiles(SRC_DIR);
     const missing: Array<{ file: string; line: number; literal: string }> = [];
+    const unshaped: Array<{ file: string; line: number }> = [];
 
     for (const file of sourceFiles) {
       const literals = extractConsoleErrorLiterals(file);
@@ -82,6 +97,23 @@ describe("runbook log lines coverage", () => {
           missing.push({ file, line, literal });
         }
       }
+
+      // A console.error( call the literal matcher did not cover (template
+      // literal, variable, or member first argument) must be explicitly
+      // allowlisted, otherwise the catalogue silently stops covering it.
+      // Match by call index, not line: two calls can share one line.
+      const calls = extractAllConsoleErrorCalls(file);
+      const literalIndexes = new Set(literals.map((l) => l.index));
+      const uncovered = calls.filter((call) => !literalIndexes.has(call.index));
+      // src/alerts.ts is the shared sink that forwards an already-shaped
+      // line; it takes no message literal by design. Allow exactly that call
+      // (`console.error(line)`): any other uncovered call still fails.
+      const content = readFileSync(file, "utf8");
+      for (const call of uncovered) {
+        const text = content.slice(call.index, call.index + 20);
+        if (file === "src/alerts.ts" && text.includes("console.error(line)")) continue;
+        unshaped.push({ file, line: call.line });
+      }
     }
 
     if (missing.length > 0) {
@@ -91,7 +123,13 @@ describe("runbook log lines coverage", () => {
       );
     }
 
-    // If we reach here, all literals are documented
-    expect(true).toBe(true);
+    if (unshaped.length > 0) {
+      const details = unshaped.map((m) => `${m.file}:${m.line}`).join("\n  ");
+      throw new Error(
+        `Found console.error calls with no string-literal first argument and no allowlist entry:\n  ${details}\n\nAdd a catalogue row for the literal or allowlist the call site in test/runbook-log-lines.test.ts if it takes no message literal by design.`,
+      );
+    }
+
+    expect(missing).toHaveLength(0);
   });
 });
