@@ -1,4 +1,4 @@
-// TOG-21694 (C1): month-grid links expose complete event names.
+// Month-grid links expose complete event names.
 // DB-free: real SSR shells rendered directly. RED first: grid links currently
 // render only "HH:mm <truncated>" with no full-name accessible name, so two
 // same-time titles sharing the truncated prefix are indistinguishable.
