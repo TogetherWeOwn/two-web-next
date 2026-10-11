@@ -1,10 +1,10 @@
 import { test, expect, qaLogin } from "./fixtures";
 
-test("QA member edits and persists their profile using the keyboard", async ({ page, context }) => {
-  // Last file in the run: earlier specs can fill the shared 10/min qa-login
-  // window, so the login below may honor Retry-After into a fresh window
-  // (e2e/fixtures.ts). Triples the timeout to 90s to cover that wait.
-  test.slow();
+// One member login covers the edit and sign-out journeys: POST
+// /auth/qa/:identity shares the `qa-login` throttle (10/min per runner IP,
+// src/throttle.ts) across the whole sequential smoke, so each spec file spends
+// as few logins as it can. The moderator journey below keeps its own login.
+test("QA member edits and persists their profile, then signs out", async ({ page, context }) => {
   await qaLogin(context, "qa-member");
   await page.goto("/profile");
   await expect(page.getByRole("heading", { name: "QA Member", exact: true })).toBeVisible();
@@ -39,17 +39,7 @@ test("QA member edits and persists their profile using the keyboard", async ({ p
   ).toBeVisible();
   await expect(view.getByText("Timezone: Europe/London", { exact: true })).toBeVisible();
   await expect(view.getByRole("listitem")).toHaveText(["Deep Rock Galactic", "Minecraft"]);
-});
 
-test("QA member signs out from the profile header and sees no moderator shortcut", async ({
-  page,
-  context,
-}) => {
-  // Same shared-window wait as the test above (e2e/fixtures.ts).
-  test.slow();
-  await qaLogin(context, "qa-member");
-  await page.goto("/profile");
-  await expect(page.getByRole("heading", { name: "QA Member", exact: true })).toBeVisible();
   await expect(page.getByTestId("profile-admin-link")).toHaveCount(0);
   const logoutRequest = page.waitForRequest(
     (request) => request.url().endsWith("/logout") && request.method() === "POST",
@@ -65,8 +55,6 @@ test("QA member signs out from the profile header and sees no moderator shortcut
 });
 
 test("QA moderator reaches the admin panel from the profile header", async ({ page, context }) => {
-  // Same shared-window wait as the tests above (e2e/fixtures.ts).
-  test.slow();
   await qaLogin(context, "qa-moderator");
   await page.goto("/profile");
   await expect(page.getByRole("heading", { name: "QA Moderator", exact: true })).toBeVisible();

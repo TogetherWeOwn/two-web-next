@@ -3,8 +3,9 @@ import { expect, localOrigin, qaLogin, test } from "./fixtures";
 
 // Local pin for the capacity-1 waitlist journey, mirroring
 // e2e/staging/event-rsvp.spec.ts without its staging seam (no storageState
-// files, no re-sign: every test gets fresh contexts, and the ephemeral QA
-// token has no per-minute budget locally). Moderator creates a capacity-1
+// files, no re-sign: every test gets fresh contexts, and every qaLogin spends
+// the shared 10/min `qa-login` throttle, so this file's two tests hold four
+// of the run's ten logins). Moderator creates a capacity-1
 // fixture event and fills the single seat through the JSON resource; the
 // member drives the browser journey through the frozen RSVP testids
 // (src/islands/contracts.ts): waitlist-join at #1 in line, leave returning

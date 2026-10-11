@@ -1,10 +1,5 @@
 import { test as base, expect, type BrowserContext } from "@playwright/test";
-import {
-  parseRetryAfterSeconds,
-  QA_LOGIN_MAX_ATTEMPTS,
-  qaLoginThrottleError,
-  sleep,
-} from "./qa-login-retry.mjs";
+import { parseRetryAfterSeconds, qaLoginThrottleError } from "./qa-login-retry.mjs";
 
 export const localOrigin = "https://localhost:8787";
 
@@ -45,26 +40,24 @@ export async function qaLogin(context: BrowserContext, identity: "qa-member" | "
   // evidence on every unsafe method. Send the local origin explicitly: the
   // E2E worker translates exactly this value to the virtual staging origin
   // the gate expects, and foreign origins are still never translated.
-  // Every login — this one included — spends the shared `qa-login` throttle
-  // budget (10/min per runner IP, src/throttle.ts), so a late-suite login can
-  // land in a window earlier specs filled. Retry only 429, honoring the
-  // server's Retry-After into a fresh window (bounded: the throttle error
-  // names the budget instead of retrying harder). Any other status fails loud
-  // below, as before.
-  const send = () =>
-    context.request.post(`/auth/qa/${identity}`, {
-      headers: { "X-TWO-QA-Auth": token, Origin: localOrigin },
-      maxRedirects: 0,
-    });
-  let response = await send();
-  for (let attempt = 1; attempt <= QA_LOGIN_MAX_ATTEMPTS && response.status() === 429; attempt++) {
+  //
+  // POST /auth/qa/:identity shares the `qa-login` throttle (10/min per runner
+  // IP, src/throttle.ts) across the whole sequential run — 10 logins today
+  // (waitlist 4, profile 2, activity-log/admin/events/featured 1 each). The
+  // suite must stay at or under the budget: a Retry-After wait long enough to
+  // cross the window boundary does not fit the 30 s test timeout, so a 429
+  // here is a hard failure naming the budget, and the fix is fewer logins,
+  // not retries.
+  const response = await context.request.post(`/auth/qa/${identity}`, {
+    headers: { "X-TWO-QA-Auth": token, Origin: localOrigin },
+    maxRedirects: 0,
+  });
+  const status = response.status();
+  if (status === 429) {
     const retryAfterSeconds = parseRetryAfterSeconds(response.headers());
-    if (attempt === QA_LOGIN_MAX_ATTEMPTS)
-      throw qaLoginThrottleError(identity, retryAfterSeconds, attempt);
-    await sleep(retryAfterSeconds * 1000);
-    response = await send();
+    throw qaLoginThrottleError(identity, retryAfterSeconds, 1, "local");
   }
-  expect(response.status()).toBe(204);
+  expect(status).toBe(204);
   const cookie = (await context.cookies()).find((item) => item.name === "__Host-two_session");
   expect(cookie).toMatchObject({
     httpOnly: true,
