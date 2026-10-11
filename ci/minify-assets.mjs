@@ -10,7 +10,7 @@
 // Regenerate with `npm run build:assets`; CI fails on drift (`--check`).
 // 0 = built/verified, 1 = drift or minify failure.
 import { execFileSync, spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -43,6 +43,11 @@ function sourceFor(entry) {
 
 function minifyBytes(entry, root) {
   const source = join(root, sourceFor(entry));
+  if (!existsSync(source)) {
+    throw new Error(
+      `no source ${sourceFor(entry)} for ${entry}: add to AUTHORED_CSS in ci/minify-assets.mjs or create ${sourceFor(entry)}`,
+    );
+  }
   // esbuild infers the loader from the file extension, so keep the real
   // filename on the command line (never a temp copy or stdin without an
   // explicit --loader): a probe that minified member-profile.js without its
@@ -80,7 +85,9 @@ export function build(root = repoRoot, output = console) {
     try {
       bytes = minifyBytes(entry, root);
     } catch (error) {
-      output.error(`minify assets: ${entry}: esbuild failed: ${error.message}`);
+      const detail = error instanceof Error ? error.message : String(error);
+      const prefix = detail.startsWith("no source") ? "" : "esbuild failed: ";
+      output.error(`minify assets: ${entry}: ${prefix}${detail}`);
       return 1;
     }
     if (!entry.endsWith(".css")) {
@@ -108,7 +115,9 @@ export function check(root = repoRoot, output = console) {
     try {
       bytes = minifyBytes(entry, root);
     } catch (error) {
-      output.error(`minify assets: ${entry}: esbuild failed: ${error.message}`);
+      const detail = error instanceof Error ? error.message : String(error);
+      const prefix = detail.startsWith("no source") ? "" : "esbuild failed: ";
+      output.error(`minify assets: ${entry}: ${prefix}${detail}`);
       return 1;
     }
     let checked;
