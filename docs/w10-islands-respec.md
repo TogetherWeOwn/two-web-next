@@ -156,7 +156,8 @@ trap, TOG-6924-adjacent new-member state).
 - Edit flow: one `PATCH` on save (validation: bio ≤1000, games ≤20×80 chars one per
   line de-duped, IANA timezone, no control chars); cancel discards; save-failed keeps
   input + announces; session-expired (checked before the gate) keeps input + points at
-  login; focus moves to form heading / alert / saved confirmation.
+  login; focus moves to form heading / alert / saved confirmation, which takes focus
+  only while the member has not moved focus, caret or text during the save.
 - Save deadline (TOG-11625): one owned 10 s client deadline
   (`PROFILE_SAVE_DEADLINE_MS`) covering fetch plus response-body completion;
   on expiry the binder aborts the owned fetch where possible, shows the

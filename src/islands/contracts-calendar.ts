@@ -45,6 +45,7 @@ export const EVENTS_SEARCH_CLEAR_EMPTY_TESTID = "events-search-clear-empty";
 export const EVENTS_SEARCH_STATUS_TESTID = "events-search-status";
 export const EVENTS_SEARCH_DEBOUNCE_MS = 300;
 export const EVENTS_SEARCH_MAX_LENGTH = 255;
+export const EVENTS_SEARCH_TOO_LONG_COPY = `Search query must be ${EVENTS_SEARCH_MAX_LENGTH} characters or fewer.`;
 export const EVENTS_SEARCH_PLACEHOLDER = "Search events…";
 export const EVENTS_SEARCH_LABEL = "Search events";
 export const eventsSearchHitCopy = (query: string): string => `Results for “${query}”`;

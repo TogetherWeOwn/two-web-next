@@ -19,7 +19,9 @@ import {
   EVENTS_SEARCH_CLEAR_EMPTY_TESTID,
   EVENTS_SEARCH_CLEAR_TESTID,
   EVENTS_SEARCH_DEBOUNCE_MS,
+  EVENTS_SEARCH_MAX_LENGTH,
   EVENTS_SEARCH_STATUS_TESTID,
+  EVENTS_SEARCH_TOO_LONG_COPY,
   eventsSearchHitCopy,
   eventsSearchMissCopy,
 } from "../src/islands/contracts";
@@ -161,6 +163,8 @@ function browser(entry = "/events", fixtures: Fixture[] = FIXTURES) {
     month: "2026-10",
     past: "",
     loadError: EVENTS_CALENDAR_FETCH_FAILED,
+    searchMaxLength: String(EVENTS_SEARCH_MAX_LENGTH),
+    searchTooLong: EVENTS_SEARCH_TOO_LONG_COPY,
   };
   const requests: {
     url: string;
@@ -243,6 +247,9 @@ function browser(entry = "/events", fixtures: Fixture[] = FIXTURES) {
     },
     fire() {
       vi.advanceTimersByTime(EVENTS_SEARCH_DEBOUNCE_MS);
+    },
+    submit() {
+      form.listeners.get("submit")!({ preventDefault: () => {} });
     },
     clickLink(path: string) {
       const url = new NodeURL(path, APP_URL);
@@ -413,5 +420,47 @@ describe("EventsCalendar live-search binding", () => {
     expect(b.miss.childNodes).toEqual([]);
     expect(b.live[EVENTS_SEARCH_STATUS_TESTID]!.textContent).toBe("");
     expect(b.history).toEqual(["/events"]);
+  });
+
+  it("an over-limit query is named in the status line and never fetched", async () => {
+    const b = browser("/events?q=chess");
+    const over = "x".repeat(EVENTS_SEARCH_MAX_LENGTH + 1);
+    b.type(over);
+    b.fire();
+    expect(b.requests).toHaveLength(0);
+    expect(b.feedback.textContent).toBe(EVENTS_SEARCH_TOO_LONG_COPY);
+    expect(b.content.childNodes).toEqual([rowMarker(FIXTURES[0]!)]);
+    expect(b.input.value).toBe(over);
+    expect(b.history).toEqual([]);
+  });
+
+  it("a navigation that commits while the box is over the limit keeps naming the limit", async () => {
+    const b = browser("/events?q=chess");
+    expect(b.clickLink("/events")).toBe(true);
+    b.type("x".repeat(EVENTS_SEARCH_MAX_LENGTH + 1));
+    b.fire();
+    expect(b.requests).toHaveLength(1);
+    expect(b.feedback.textContent).toBe(EVENTS_SEARCH_TOO_LONG_COPY);
+    b.finish(0);
+    await b.flush();
+    expect(b.feedback.textContent).toBe(EVENTS_SEARCH_TOO_LONG_COPY);
+  });
+
+  it("submitting an over-limit query names the limit without a request", async () => {
+    const b = browser();
+    b.type("x".repeat(EVENTS_SEARCH_MAX_LENGTH + 1));
+    b.submit();
+    expect(b.requests).toHaveLength(0);
+    expect(b.feedback.textContent).toBe(EVENTS_SEARCH_TOO_LONG_COPY);
+  });
+
+  it("counts the limit in code points, so 255 astral characters still search", async () => {
+    const b = browser();
+    b.type("😀".repeat(EVENTS_SEARCH_MAX_LENGTH));
+    b.fire();
+    expect(b.requests).toHaveLength(1);
+    b.finish(0);
+    await b.flush();
+    expect(b.feedback.textContent).toBe("");
   });
 });

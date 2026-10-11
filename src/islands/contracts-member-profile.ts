@@ -179,7 +179,10 @@ export type ProfileOutcome =
   | "uncertain"
   | "cancelled";
 
-/** Focus after each outcome: heading, alert, or saved confirmation (TOG-6957). */
+/**
+ * Focus after each outcome: heading, alert, or saved confirmation (TOG-6957).
+ * A saved confirmation takes focus only while the member has not moved on.
+ */
 export function profileFocusTarget(outcome: ProfileOutcome): string | null {
   switch (outcome) {
     case "saved":

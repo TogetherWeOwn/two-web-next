@@ -37,6 +37,8 @@
     return;
 
   var DEBOUNCE_MS = 300;
+  var searchMaxLength = Number(root.dataset.searchMaxLength);
+  var searchTooLong = root.dataset.searchTooLong;
   // Owned overall read deadline: fetch headers plus response-body completion,
   // at most 10 seconds (mirrors EVENTS_CALENDAR_READ_DEADLINE_MS in
   // src/islands/contracts-calendar.ts). On expiry the owned request is
@@ -228,7 +230,8 @@
       if (ogUrl) ogUrl.content = canonical.href;
       if (push) window.history.pushState(null, "", url.pathname + url.search + url.hash);
       renderedAddress = pageAddress(url);
-      feedback.textContent = "";
+      // A navigation that commits while the box is still over the limit keeps naming it.
+      feedback.textContent = overLimit() ? searchTooLong : "";
       // A card or month control cannot take focus while content is hidden.
       setLoading(false);
       if (ownsFocus && (opts.focus || opts.control)) {
@@ -269,6 +272,19 @@
       url.searchParams.set("past", "1");
     }
     return url;
+  }
+
+  // The server counts code points; over-limit input is named here, never fetched.
+  function overLimit() {
+    return Array.from(input.value).length > searchMaxLength;
+  }
+
+  function runSearch() {
+    if (overLimit()) {
+      feedback.textContent = searchTooLong;
+      return;
+    }
+    load(searchUrl(input.value), true, { search: true });
   }
 
   root.addEventListener("click", function (event) {
@@ -329,7 +345,7 @@
     if (composing) return;
     debounceTimer = setTimeout(function () {
       debounceTimer = null;
-      load(searchUrl(input.value), true, { search: true });
+      runSearch();
     }, DEBOUNCE_MS);
   }
 
@@ -352,7 +368,7 @@
     event.preventDefault();
     cancelDebounce();
     if (composing || (event && event.isComposing)) return;
-    load(searchUrl(input.value), true, { search: true });
+    runSearch();
   });
 
   window.addEventListener("popstate", function () {

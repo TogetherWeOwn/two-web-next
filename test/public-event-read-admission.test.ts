@@ -5,6 +5,7 @@ import type { Db } from "../src/db/index";
 import type { Env } from "../src/env";
 import { PUBLIC_EVENT_READS_PER_MINUTE, registerEventRoutes } from "../src/events/routes";
 import { MAX_QUERY_LENGTH } from "../src/events/search-log";
+import { EVENTS_SEARCH_TOO_LONG_COPY } from "../src/islands/contracts-calendar";
 import type { Sql } from "../src/sessions";
 import type { EnvWithThrottle } from "../src/throttle";
 
@@ -179,7 +180,8 @@ describe("event query cost bound", () => {
       const response = await f.request(`/events?q=${encodeURIComponent(query)}`);
       expect(response.status).toBe(422);
       expect(response.headers.get("cache-control")).toBe("no-store, private");
-      expect(await response.text()).toBe("Search query must be 255 characters or fewer.");
+      expect(response.headers.get("content-type")).toContain("text/html");
+      expect(await response.text()).toContain(EVENTS_SEARCH_TOO_LONG_COPY);
       expect(f.throttleStore).not.toHaveBeenCalled();
       expect(f.eventStore).not.toHaveBeenCalled();
       expect(f.readSession).not.toHaveBeenCalled();

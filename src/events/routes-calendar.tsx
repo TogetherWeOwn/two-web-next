@@ -41,7 +41,7 @@ import {
   persistedDiscordIds,
   rankUpcoming,
 } from "./reads";
-import { EventsCalendarPage, PastEventsPage } from "./pages";
+import { EventsCalendarPage, EventsSearchTooLongPage, PastEventsPage } from "./pages";
 import { eventsUnavailable, publicReadGuard, type App, type SessionReader } from "./routes-shared";
 
 export function registerCalendarRoutes(
@@ -53,7 +53,7 @@ export function registerCalendarRoutes(
     const q = c.req.query("q") ?? "";
     if ([...q].length > MAX_QUERY_LENGTH) {
       c.header("cache-control", "no-store, private");
-      return c.text(`Search query must be ${MAX_QUERY_LENGTH} characters or fewer.`, 422);
+      return c.html(<EventsSearchTooLongPage appUrl={c.env.APP_URL} />, 422);
     }
     const limited = await publicReadGuard(c);
     if (limited) return limited;

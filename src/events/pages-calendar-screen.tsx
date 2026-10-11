@@ -10,6 +10,8 @@ import {
   EVENTS_LOADING_COPY,
   EVENTS_LOADING_ROWS,
   EVENTS_LOADING_TESTID,
+  EVENTS_SEARCH_MAX_LENGTH,
+  EVENTS_SEARCH_TOO_LONG_COPY,
   calendarSearching,
   calendarShowingPast,
   calendarUrl,
@@ -109,6 +111,8 @@ export const EventsCalendarPage: FC<{
         data-month={state.month}
         data-past={state.past ? "1" : ""}
         data-load-error={EVENTS_CALENDAR_FETCH_FAILED}
+        data-search-max-length={EVENTS_SEARCH_MAX_LENGTH}
+        data-search-too-long={EVENTS_SEARCH_TOO_LONG_COPY}
         aria-labelledby="events-heading"
       >
         <div class="schedule-heading">
@@ -143,6 +147,9 @@ export const EventsCalendarPage: FC<{
         <CalendarHead state={state} appUrl={appUrl} />
 
         <CalendarSearchForm state={state} searching={searching} />
+
+        {/* Beside the search box, so the over-limit notice shows where the query is typed. */}
+        <p role="status" {...{ [EVENTS_CAL_FEEDBACK]: true }} />
 
         <div data-cal-zone="miss">{searchMiss ? <SearchMiss state={state} /> : null}</div>
 
@@ -188,10 +195,26 @@ export const EventsCalendarPage: FC<{
             <MonthGrid state={state} weeks={weeks} zone={zone} />
           ) : null}
         </div>
-
-        <p role="status" {...{ [EVENTS_CAL_FEEDBACK]: true }} />
       </section>
       <script src="/islands/events-calendar.js" defer />
     </ScheduleShell>
   );
 };
+
+/** No-JS over-limit search: a notice with site chrome. It never echoes the query back. */
+export const EventsSearchTooLongPage: FC<{ appUrl: string }> = ({ appUrl }) => (
+  <ScheduleShell
+    title="Events"
+    canonical={canonicalUrl(appUrl, "/events")}
+    robots="noindex, follow"
+  >
+    <div class="schedule-heading">
+      <p class="strap">Community schedule</p>
+      <h1>Events</h1>
+    </div>
+    <p role="alert">{EVENTS_SEARCH_TOO_LONG_COPY}</p>
+    <p>
+      <a href="/events">Back to events</a>
+    </p>
+  </ScheduleShell>
+);
