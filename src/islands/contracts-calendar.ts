@@ -124,6 +124,10 @@ export const EVENTS_LIST_HEADING_SR = "Upcoming events";
 /** Stable status line for fragment-fetch failures; content is preserved. */
 export const EVENTS_CAL_FEEDBACK = "data-cal-feedback";
 export const EVENTS_CALENDAR_FETCH_FAILED = "Couldn't refresh the events — try again.";
+/** Owned overall read deadline for one island fragment fetch: headers plus
+ * response-body completion, at most 10 seconds. On expiry the binder aborts
+ * the owned fetch, restores the last good zones and releases loading. */
+export const EVENTS_CALENDAR_READ_DEADLINE_MS = 10_000;
 
 /* Empty states: never / gap (with past list) / error (role=alert + Retry) /
  * search-miss. The error state means a read failed — it must never read as
