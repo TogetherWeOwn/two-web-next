@@ -18,6 +18,10 @@ not fail) unless marked HARD. All of them run on the existing runners only.
   coverage gaps in the report artifact, never a red build.
 - **Test inventory (WARN):** `ci/test-inventory.mjs` fails (warns) when a
   `*.test.ts` / `*.test.mjs` file is reachable from no CI job.
+- **Floor guard (HARD):** `ci/floor-guard.mjs` enforces the CONSTRAINTS.md
+  floor on the PR diff: new suppressions, added skips, deleted test files,
+  stripped assertions, stubs, new exception rows, and lowered thresholds fail
+  `check`. Exemptions live in `.constraintsignore` (content rules only).
 
 ## Merge-blocking mutation proposal
 

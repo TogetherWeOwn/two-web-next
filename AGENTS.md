@@ -25,6 +25,7 @@ Guidance for human and AI contributors.
 - Address every review finding, or reply with why it does not apply.
 - Credit the contributors whose work you build on.
 - Never commit `.dev.vars`, secrets, or `node_modules/`. Use variable names in docs, never values.
+- Read [CONSTRAINTS.md](CONSTRAINTS.md) before writing code. Do not weaken it to make a change pass.
 - Done means merged. Do not leave an orphan PR open: merge it, or close it with a note naming its replacement.
 
 ## Commands
