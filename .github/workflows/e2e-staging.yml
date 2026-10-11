@@ -174,8 +174,8 @@ jobs:
   # Web quality gate on the deployed staging Worker (owner policy 2026-10-10): runs after EVERY staging deploy
   # (not skipped with the journeys). A Lighthouse failure fails this run, and ci/resolve-promotion-sha.mjs also
   # requires this job by name, so production is never promoted from a staging deploy that scored below budget.
-  # The origin web-standards step inside is informational until the staging edge preserves the Worker's CSP/XFO
-  # (live staging currently sends only frame-ancestors 'self' + SAMEORIGIN); see web-quality-origin.yml.
+  # The origin web-standards step inside (security headers, HTML basics, internal links) blocks this job too,
+  # the same as the Lighthouse budgets; see web-quality-origin.yml.
   staging-quality:
     name: staging-quality
     needs: scope

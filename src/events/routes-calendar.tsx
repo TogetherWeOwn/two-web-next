@@ -41,7 +41,7 @@ import {
   persistedDiscordIds,
   rankUpcoming,
 } from "./reads";
-import { EventsCalendarPage, PastEventsPage } from "./pages";
+import { EventsCalendarPage, EventsSearchTooLongPage, PastEventsPage } from "./pages";
 import { eventsUnavailable, publicReadGuard, type App, type SessionReader } from "./routes-shared";
 
 export function registerCalendarRoutes(
@@ -53,7 +53,7 @@ export function registerCalendarRoutes(
     const q = c.req.query("q") ?? "";
     if ([...q].length > MAX_QUERY_LENGTH) {
       c.header("cache-control", "no-store, private");
-      return c.text(`Search query must be ${MAX_QUERY_LENGTH} characters or fewer.`, 422);
+      return c.html(<EventsSearchTooLongPage appUrl={c.env.APP_URL} />, 422);
     }
     const limited = await publicReadGuard(c);
     if (limited) return limited;
@@ -118,8 +118,9 @@ export function registerCalendarRoutes(
     const anonGen = anonSource ? anonCacheGeneration() : 0;
     // Grid day-jumps name the card (`?event=`): resolve the list page holding
     // it so jumps land even past page one. Absent, invisible or over-long
-    // keys fall back to the requested page.
-    const jumpKey = c.req.query("event") ?? "";
+    // keys fall back to the requested page; a NUL is dropped first, since
+    // PostgreSQL text cannot hold one.
+    const jumpKey = (c.req.query("event") ?? "").replaceAll(String.fromCharCode(0), "");
     let listPage = view === "calendar" ? 1 : page;
     if (view === "list" && jumpKey !== "" && jumpKey.length <= 64) {
       const rank = await rankUpcoming(db, jumpKey, now, opts);

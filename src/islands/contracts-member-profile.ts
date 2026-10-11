@@ -7,7 +7,7 @@
 /* ------------------------------------------------------------ member-profile
  * Legacy: app/Livewire/MemberProfile.php + member-profile.blade.php +
  * MemberProfileTest.php (TOG-8137 session-first ordering, TOG-6957 focus
- * moves, TOG-8715/TOG-9361 oracle-free trap). Server: src/profiles/routes.tsx
+ * moves, TOG-8715/TOG-9361 oracle-free trap). Server: src/profiles/routes-writes.tsx
  * (W7, TOG-9686). Re-spec §5.
  *
  * Deviations from the legacy row list, recorded so nobody hunts for them:
@@ -179,7 +179,10 @@ export type ProfileOutcome =
   | "uncertain"
   | "cancelled";
 
-/** Focus after each outcome: heading, alert, or saved confirmation (TOG-6957). */
+/**
+ * Focus after each outcome: heading, alert, or saved confirmation (TOG-6957).
+ * A saved confirmation takes focus only while the member has not moved on.
+ */
 export function profileFocusTarget(outcome: ProfileOutcome): string | null {
   switch (outcome) {
     case "saved":

@@ -14,7 +14,10 @@ replacements have the same log/header contract.
 1. Ask for the response's **`x-request-id`** and approximate time, not a cookie,
    Authorization header, OAuth callback URL or Discord identity. The header is
    a validated Cloudflare Ray ID (`cf-ray`), or a generated ULID when no valid
-   Ray ID is available. Client `x-request-id` input is ignored.
+   Ray ID is available. Client `x-request-id` input is ignored. The generic 500
+   page and the database-outage and maintenance 503 pages show the same value as
+   their **Support reference**, so a member can copy it without developer tools.
+   The join-flow recovery page does not show it.
 2. Open **Cloudflare dashboard → Workers & Pages → two-web-next → Observability**.
    Choose a time window around the report and the correct deployed Worker.
 3. Search the log message for the exact ID (for example,
@@ -62,7 +65,7 @@ Documented cause set: `discord_unavailable`, `in_progress`, `internal`, `rate_li
 | Cause (`sync_retry_code`) | Meaning |
 | --- | --- |
 | `in_progress` | The bot reports the operation is already in progress (409 with a retryable answer); another attempt for the same logical operation is underway |
-| `rate_limited` | The bot or Discord rate-limited the call (429); the existing Retry-After/backoff still sets the wait |
+| `rate_limited` | The bot or Discord rate-limited the call (429); a Retry-After above 0 and at most 86400 seconds (fractions round up) sets the wait, and an absent, zero or out-of-range value uses the attempt's backoff |
 | `internal` | The bot reported a retryable internal error |
 | `discord_unavailable` | The bot surfaced Discord-side unavailability |
 | `upstream_timeout` | The bot's upstream call timed out |
@@ -121,10 +124,10 @@ Read-only checks only: a Workers Logs search, a `SELECT`, or a source file.
 | `sync retry result persistence failed` | A known sync-retry result could not be committed (`src/jobs/consumer.ts`), so the durable claim stays fenced. | Degrades: the delivery is retried after the known wait, or marked failed once tries run out. | Search logs for `sync retry classified` and `queue.failing` for the same event; see [sync-event retry-cause diagnostics](#sync-event-retry-cause-diagnostics). | Fixed reason string `sync retry result could not be persisted; request remains fenced` |
 | `job threw` | A queue job threw something that is not a bot transport error, a terminal error or a refusal (`src/jobs/consumer.ts`). | Retries until the job runs out of tries, then it is buried and a `queue.failing` alert fires. | Search logs for `queue.failing` with the same job kind; then `SELECT * FROM queue_failed_jobs` for that kind. | Job `kind`, `exception` (class name) |
 | `job failed` | A job returned a failed outcome (`src/jobs/consumer.ts`), and a `queue.failing` alert follows. | Terminal for that job; the ledger row is marked failed. | Search logs for `queue.failing` with the same job kind; then `SELECT * FROM queue_failed_jobs` for that kind. | Job `kind`, then the bounded failure reason (a stable code or class name, not raw error text) |
-| `Member request failed; refusing contents.` | An unhandled error reached the shared error handler while a member read was active (`src/errors.tsx`). | Fails closed with a 503 "Member data is temporarily unavailable." body. | Search logs for the matching `http.request` record and its route. | `exception` (class name) |
-| `Profile request failed; refusing contents.` | An unhandled error reached the profiles router error handler (`src/profiles/routes.tsx`). | Fails closed: database-unavailable response for an outage, otherwise a 503 member text. | Search logs for the matching `http.request` record on a `/members` route. | `exception` (class name) |
-| `profiles could not resolve the session; refusing.` | The profiles session lookup threw (`src/profiles/routes.tsx`). | Fails closed with the database-unavailable response. | Search logs for the matching `http.request` status; then `SELECT count(*) FROM web_sessions` to confirm the table is readable. | `exception` (class name) |
-| `profile save failed` | Saving a validated profile threw (`src/profiles/routes.tsx`). | Fails closed: database-unavailable response for an outage, otherwise 500 "Could not save your profile." | Search logs for the matching `http.request` status on the profile save route; then `SELECT updated_at FROM profiles` for that member. | `exception` (class name) |
+| `Member request failed; refusing contents.` | An unhandled error reached the shared error handler while a member read was active (`src/error-responses.tsx`). | Fails closed with a 503 "Member data is temporarily unavailable." body. | Search logs for the matching `http.request` record and its route. | `exception` (class name) |
+| `Profile request failed; refusing contents.` | An unhandled error reached the profiles router error handler (`src/profiles/routes-gate.ts`). | Fails closed: database-unavailable response for an outage, otherwise a 503 member text. | Search logs for the matching `http.request` record on a `/members` route. | `exception` (class name) |
+| `profiles could not resolve the session; refusing.` | The profiles session lookup threw (`src/profiles/routes-gate.ts`). | Fails closed with the database-unavailable response. | Search logs for the matching `http.request` status; then `SELECT count(*) FROM web_sessions` to confirm the table is readable. | `exception` (class name) |
+| `profile save failed` | Saving a validated profile threw (`src/profiles/routes-writes.tsx`). | Fails closed: database-unavailable response for an outage, otherwise 500 "Could not save your profile." | Search logs for the matching `http.request` status on the profile save route; then `SELECT updated_at FROM profiles` for that member. | `exception` (class name) |
 
 The `sync attempt settlement failed` line (`src/jobs/consumer.ts`) is outside
 this catalogue.
@@ -157,7 +160,7 @@ No Logpush or external shipping is configured by this change.
 
 ## Discord snapshot outcome
 
-The calendar's Discord snapshot source (`src/events/discord-transients.ts`)
+The calendar's Discord snapshot source (`src/events/discord-transients-cached.ts`)
 emits one bounded `Discord snapshot outcome` diagnostic per request through the
 shared snapshot path. The staging events incident, where Discord 429s made the
 events page show an error state instead of events, was diagnosed by tallying

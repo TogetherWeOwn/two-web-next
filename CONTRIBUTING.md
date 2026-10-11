@@ -165,7 +165,7 @@ PR. See [`docs/releases.md`](docs/releases.md). Never tag or release by hand.
 
 Release notes use the [Common Changelog](https://common-changelog.org/)
 categories, in its order: **Changed** (`perf`, `revert`), **Added** (`feat`),
-**Fixed** (`fix`). `chore`, `docs`, `test`, `ci`, `build`, `refactor` and `style`
+**Fixed** (`fix`, `security`). `chore`, `docs`, `test`, `ci`, `build`, `refactor` and `style`
 stay out of the notes. Each squash-merged PR title becomes one entry, so
 write it for a reader of the release notes: imperative mood, one user-facing change.
 
@@ -218,7 +218,9 @@ from TypeScript's module diagnostic. `assets/styles.css`, `public/styles.css`,
 source-order substrings and single-line selector scoping. `ci/featured-proof/**` also retains its immutable,
 hash-verified proof inputs byte-for-byte. Their content, hashes and regression
 assertions remain unchanged. These formatter exemptions disable neither lint nor
-typecheck.
+typecheck. Lint exemptions are limited to `public/islands/**` and the hash-pinned
+`ci/featured-proof/fixtures/**`; `ci/a11y.mjs`, the other featured-proof files and the
+stylesheets are still linted.
 Configuration options follow the [Biome configuration reference](https://biomejs.dev/reference/configuration/).
 
 Never commit secrets, `.dev.vars` or `node_modules/`. Run tests only against the

@@ -24,6 +24,7 @@ the staging targets.
 | `GET /up` 503 (`db:error`, `pending_migrations` nonzero or `null`, `config:missing`) | [Read `/up` without mistaking liveness for readiness](#read-up-without-mistaking-liveness-for-readiness) | `curl -sS --max-time 10 https://next.togetherweown.com/up`; compare HTTP status, `db`, `pending_migrations` and `config` against the readiness tables | DevOps & Reliability Engineer |
 | `GET /up` queue `degraded` (`pending >= 20`) or `unknown` with HTTP 200 | [Queue containment, drain and failed-job replay](#queue-containment-drain-and-failed-job-replay) | Same `GET /up`; read `queue.status`, `pending`, `oldest_ready_wait_age_seconds` and `ready_wait_severity`; `healthy + unknown` is lack of evidence, not recovery | DevOps & Reliability Engineer |
 | `error.alert` flood or pager storm | [48h post-flip watch](#48h-post-flip-watch) | `npx wrangler tail two-web-next-alerts --search '"delivery":"ops.alert.'`; correlate `request_id` per [runbook-logs.md](runbook-logs.md); fingerprints are in [runbook-alerts.md](runbook-alerts.md) | DevOps & Reliability Engineer |
+| `uptime.down` alert (cron prober failed twice) | [Scheduled `/up` prober: `uptime.down`](runbook-alerts.md#scheduled-up-prober-uptimedown) | Read status in alert; the prober has no corresponding app critical-log line; status zero means transport/timeout, not proof of a database failure; status 200 with missing or wrong `x-two-origin` means `/up` was not served by two-web-next (check DNS and routes), 3xx means a redirect; identify which Tail Worker sent the page (`two-web-next-alerts` vs `two-web-next-alerts-production`) or which webhook channel received it to verify staging vs production target first, then `curl -sS -D - -o /dev/null --max-time 10 https://next.togetherweown.com/up` for staging or apex for production and check `x-two-origin: two-web-next` | DevOps & Reliability Engineer |
 | `queue.failing` or failed-history growth (terminal bot failures, dead-letter backlog) | [Queue containment, drain and failed-job replay](#queue-containment-drain-and-failed-job-replay) | `npx wrangler queues info two-sync-event` and `npx wrangler queues info two-internal-action` (transport metadata only); read the `/up` queue envelope; do not purge or replay | DevOps & Reliability Engineer |
 | Sign-in or join failing (`/auth/discord/callback`, `/join/discord`, `/join/callback`, `/auth/qa/:identity`) | [Neon / Hyperdrive outage behavior](#neon--hyperdrive-outage-behavior) | `GET /up` readiness first; `GET /robots.txt` proves Worker startup only; on an auth failure stop and do not try another credential | DevOps & Reliability Engineer; through the Director to CISO if member data may have leaked |
 | Events page error state (`/events`, `/events.rss`, `/events.ics`, `/e/:key`) | [Neon / Hyperdrive outage behavior](#neon--hyperdrive-outage-behavior) | `GET /up` plus `ready_wait_severity` and `oldest_ready_wait_age_seconds`; filter `http.request` by route and status in Observability per [runbook-logs.md](runbook-logs.md) | DevOps & Reliability Engineer |
@@ -1099,10 +1100,10 @@ below, not its older `/up` row, define these outcomes.
 
 Sources: [src/index.tsx](../src/index.tsx), [auth routes](../src/auth/routes.ts),
 [join routes](../src/join/route.ts),
-[event routes](../src/events/routes.tsx), [profile routes](../src/profiles/routes.tsx),
+[event routes](../src/events/routes.tsx), [profile routes](../src/profiles/routes.tsx) (gate in [`routes-gate.ts`](../src/profiles/routes-gate.ts), saves in [`routes-writes.tsx`](../src/profiles/routes-writes.tsx)),
 [admin guard](../src/admin/guard.ts), [admin routes](../src/admin/routes.tsx),
 [access logging](../src/access-log.ts), [agent ingress](../src/agent-events/route.ts),
-[error handler](../src/errors.tsx). The homepage fallback is already present at
+[error handler](../src/error-responses.tsx). The homepage fallback is already present at
 [`eed3c8b`, `src/index.tsx:271–277`](https://github.com/TogetherWeOwn/two-web-next/blob/eed3c8b8976986d6aeb7f97e1b656d7bbbaf85c7/src/index.tsx#L271-L277),
 not conditional on an unmerged outage fix. Offline evidence:
 [session/event failure fixtures](../test/home-events.test.ts),
@@ -1259,8 +1260,9 @@ Sync carriers (including waiting deliveries) settle their ledger and ACK at 6
 tries, before transport `max_retries: 10`. Internal-action carriers cap at 5.
 Sync requests independently persist `request_attempts` and `next_attempt_at`:
 claims durably set eligibility to null **before** bot I/O. Only a committed
-result can reopen that fence: backoff (`10,60,300,900,3600`) and authoritative
-Retry-After select the next absolute deadline. A failed deadline write retries
+result can reopen that fence: backoff (`10,60,300,900,3600`) or a bot Retry-After
+above 0 and at most 86400 seconds (fractions round up) selects the next absolute
+deadline; any other Retry-After uses the backoff. A failed deadline write retries
 that same Date (or exhausted null), never shorter generic backoff. If both writes
 fail, the consumer carries the known remaining wait on that delivery, but the
 request remains closed across new carriers and reconciliation. The old

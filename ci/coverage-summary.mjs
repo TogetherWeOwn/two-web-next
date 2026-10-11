@@ -42,6 +42,10 @@ const scopes = [
   "src/bot/",
   "src/agent-events/",
   "src/profiles/",
+  "src/auth/",
+  "src/invite.ts",
+  "src/return-journey.ts",
+  "src/write-recovery.tsx",
 ];
 const scoped = scopes.map((scope) => {
   const entries = files.filter(({ file }) =>

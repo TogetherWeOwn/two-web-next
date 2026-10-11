@@ -45,6 +45,7 @@ export const EVENTS_SEARCH_CLEAR_EMPTY_TESTID = "events-search-clear-empty";
 export const EVENTS_SEARCH_STATUS_TESTID = "events-search-status";
 export const EVENTS_SEARCH_DEBOUNCE_MS = 300;
 export const EVENTS_SEARCH_MAX_LENGTH = 255;
+export const EVENTS_SEARCH_TOO_LONG_COPY = `Search query must be ${EVENTS_SEARCH_MAX_LENGTH} characters or fewer.`;
 export const EVENTS_SEARCH_PLACEHOLDER = "Search events…";
 export const EVENTS_SEARCH_LABEL = "Search events";
 export const eventsSearchHitCopy = (query: string): string => `Results for “${query}”`;
@@ -124,6 +125,10 @@ export const EVENTS_LIST_HEADING_SR = "Upcoming events";
 /** Stable status line for fragment-fetch failures; content is preserved. */
 export const EVENTS_CAL_FEEDBACK = "data-cal-feedback";
 export const EVENTS_CALENDAR_FETCH_FAILED = "Couldn't refresh the events — try again.";
+/** Owned overall read deadline for one island fragment fetch: headers plus
+ * response-body completion, at most 10 seconds. On expiry the binder aborts
+ * the owned fetch, restores the last good zones and releases loading. */
+export const EVENTS_CALENDAR_READ_DEADLINE_MS = 10_000;
 
 /* Empty states: never / gap (with past list) / error (role=alert + Retry) /
  * search-miss. The error state means a read failed — it must never read as
@@ -258,11 +263,15 @@ export function wallMonth(instant: Date, zone: string): string {
   return wallDateIso(instant, zone).slice(0, -3);
 }
 
+/** "Fri 4 Nov" — the card's human day in the host zone. */
+export function cardDayLabel(instant: Date, zone: string): string {
+  const p = partsIn(instant, zone, { weekday: "short", day: "numeric", month: "short" });
+  return `${p.get("weekday")} ${p.get("day")} ${p.get("month")}`;
+}
+
 /** "Fri 4 Nov, 20:00" — the card's human time in the host zone (legacy 'D j M, H:i'). */
 export function cardTimeLabel(instant: Date, zone: string): string {
-  const z = isValidZone(zone) ? zone : "UTC";
-  const p = partsIn(instant, z, { weekday: "short", day: "numeric", month: "short" });
-  return `${p.get("weekday")} ${p.get("day")} ${p.get("month")}, ${wallTimeHm(instant, z)}`;
+  return `${cardDayLabel(instant, zone)}, ${wallTimeHm(instant, zone)}`;
 }
 
 /**
@@ -350,6 +359,11 @@ export function wallDayStart(iso: string): number {
 export function gridTitle(title: string): string {
   const chars = [...title];
   return chars.length > GRID_TITLE_MAX ? `${chars.slice(0, GRID_TITLE_MAX).join("")}…` : title;
+}
+
+/** Month-grid link name starts with the visible "HH:mm title" (WCAG 2.5.3), then the day. */
+export function gridAccessibleName(title: string, startsAt: Date, zone: string): string {
+  return `${wallTimeHm(startsAt, zone)} ${title}, ${cardDayLabel(startsAt, zone)}`;
 }
 
 /* Discord-native rows (TOG-5168): display-only transients merged into the

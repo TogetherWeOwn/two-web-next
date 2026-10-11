@@ -27,6 +27,7 @@ import {
   EVENTS_CALENDAR_ISLAND,
   EVENTS_CALENDAR_TESTID,
   EVENTS_CALENDAR_FETCH_FAILED,
+  EVENTS_CALENDAR_READ_DEADLINE_MS,
   EVENTS_EMPTY_COPY,
   EVENTS_EMPTY_ERROR_TESTID,
   EVENTS_EMPTY_GAP_ITEM_TESTID,
@@ -1102,14 +1103,16 @@ function browser(entry = "/events") {
     reject: (e: Error) => void;
   }[] = [];
   const parsedPages = new Map<string, { querySelector: (s: string) => unknown }>();
-  const timers = new Map<number, () => void>();
+  // Timers keyed by requested delay: fireTimer() drains only the short
+  // search-debounce timers, never the owned multi-second read deadline.
+  const timers = new Map<number, { ms: number; fn: () => void }>();
   let nextTimer = 0;
   runInNewContext(binder, {
     URL,
     AbortController,
-    setTimeout: (fn: () => void) => {
+    setTimeout: (fn: () => void, ms = 0) => {
       const id = ++nextTimer;
-      timers.set(id, fn);
+      timers.set(id, { ms, fn });
       return id;
     },
     clearTimeout: (id: number) => {
@@ -1148,10 +1151,12 @@ function browser(entry = "/events") {
   });
 
   function fireTimer() {
-    const next = timers.entries().next();
-    if (next.done) return;
-    timers.delete(next.value[0]);
-    next.value[1]();
+    // Fire the oldest short (debounce) timer. A pending read keeps its owned
+    // deadline: firing it here would expire a multi-second bound instantly.
+    const next = [...timers.entries()].find(([, t]) => t.ms < EVENTS_CALENDAR_READ_DEADLINE_MS);
+    if (!next) return;
+    timers.delete(next[0]);
+    next[1].fn();
   }
 
   function clickLink(href: string, modifiers: Partial<Click> = {}, attrs: string[] = []) {

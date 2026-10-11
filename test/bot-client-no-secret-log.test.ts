@@ -1,4 +1,4 @@
-// No-secret logging on bot failure paths (legacy §4 rule, src/bot/client.ts).
+// No-secret logging on bot failure paths (legacy §4 rule, src/bot/client-transport.ts).
 //
 // The client may log request metadata (request_id, action, status, code,
 // retryable, duration_ms); it must never log the wire secret, the
