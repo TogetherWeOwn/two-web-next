@@ -20,6 +20,7 @@ import { createRequire } from "node:module";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { build } from "esbuild";
+import { chromium } from "playwright";
 
 const root = new URL("../", import.meta.url);
 const webDir = new URL("../web/", import.meta.url);
@@ -92,19 +93,40 @@ export function archive(total, appUrl) {
 // compiled with the web workspace's svelte/compiler; #lib/* resolves through
 // the web tsconfig imports map, relative src/* through the worktree.
 async function buildKitBundle(scratch, outfile) {
+  const accountFixture = join(scratch, "account-chrome-fixture.svelte");
+  writeFileSync(
+    accountFixture,
+    `
+<script lang="ts">
+import Shell from ${JSON.stringify(join(worktree, "web/src/lib/Shell.svelte"))};
+</script>
+{#snippet accountChrome()}
+  <strong data-testid="explicit-account-chrome">Signed in as a member</strong>
+{/snippet}
+<Shell title="Account fixture" theme="schedule" accountChrome={accountChrome}>
+  <h1>Account fixture</h1>
+</Shell>
+`,
+  );
   const entry = join(scratch, "kit-e2e-entry.mjs");
   writeFileSync(
     entry,
     `
 import { render } from "svelte/server";
 import Page from ${JSON.stringify(join(worktree, "web/src/routes/events/past/+page.svelte"))};
+import AccountFixture from ${JSON.stringify(accountFixture)};
 export function renderPage(data) {
   const { head, body } = render(Page, { props: { data } });
   return "<head>" + head + "</head><body>" + body + "</body>";
 }
+export function renderAccountFixture() {
+  const { head, body } = render(AccountFixture);
+  return "<head>" + head + "</head><body>" + body + "</body>";
+}
 `,
   );
-  await build({
+  const result = await build({
+    metafile: true,
     entryPoints: [entry],
     bundle: true,
     platform: "node",
@@ -129,6 +151,7 @@ export function renderPage(data) {
       },
     ],
   });
+  return Object.keys(result.metafile.inputs);
 }
 
 const sectionOf = (html) => {
@@ -165,16 +188,110 @@ function normalize(html) {
   );
 }
 
-// The theme stylesheets hang every rule off the <body> class, so the Kit
-// shell (web/src/app.html) must carry the class Hono's Layout emits.
-const bodyClassOf = (html) => html.match(/<body(?:\s+class="([^"]*)")?[^>]*>/)?.[1] ?? null;
-
 const failures = [];
+let browserFixturesRun = false;
 function check(label, condition, detail = "") {
   if (condition) console.log(`PASS ${label}`);
   else {
     failures.push(label);
     console.log(`FAIL ${label}${detail ? `: ${detail}` : ""}`);
+  }
+}
+
+function expectShell(document) {
+  const count = (pattern) => [...document.matchAll(pattern)].length;
+  check("one document head is assembled", count(/<head(?:\s|>)/g) === 1);
+  check("one semantic main is rendered", count(/<main(?:\s|>)/g) === 1);
+  check("one script element is rendered", count(/<script(?:\s|>)/g) === 1);
+  check("one canonical URL is rendered", count(/<link rel="canonical"/g) === 1);
+  check("archive shell carries the schedule theme", document.includes('data-theme="schedule"'));
+  check(
+    "archive navigation marks Events current",
+    document.includes('href="/events" aria-current="page"'),
+  );
+  check("skip link targets the main landmark", document.includes('class="skip-link" href="#main"'));
+  check("primary navigation has an accessible name", document.includes('aria-label="Primary"'));
+  check(
+    "static account chrome stays guest-only",
+    document.includes("Welcome, guest") && !document.includes("Sign out"),
+  );
+  check(
+    "app template leaves theme choice to the shared layout",
+    !/<body[^>]*class=/.test(document),
+  );
+}
+
+async function browserShellFixtures(document) {
+  const css = ["styles.css", "theme-tokens.css", "theme.css", "schedule-theme.css"]
+    .map((name) => readFileSync(new URL(`../public/${name}`, import.meta.url), "utf8"))
+    .join("\n")
+    .replace(/@font-face\s*\{[^}]*\}/g, "");
+  const fixture = document
+    .replace(/<link rel="(?:stylesheet|preload)"[^>]*\/?\s*>/g, "")
+    .replace(/<link rel="(?:manifest|icon|apple-touch-icon)"[^>]*\/?\s*>/g, "")
+    .replace(/<script src="\/islands\/past-events\.js"[^>]*><\/script>/g, "")
+    .replace(
+      'src="/logo.svg"',
+      'src="data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 1 1%22/%3E"',
+    )
+    .replace("</head>", `<style>${css}</style></head>`);
+  const browser = await chromium.launch({ headless: true });
+  try {
+    const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
+    const pageErrors = [];
+    page.on("pageerror", (error) => pageErrors.push(error.message));
+    await page.setContent(fixture, { waitUntil: "domcontentloaded" });
+    await page.addStyleTag({
+      content: '.base-theme[data-theme="schedule"] { --theme-schedule-accent: #ff00aa; }',
+    });
+    const accent = await page.evaluate(() =>
+      getComputedStyle(document.querySelector(".base-theme"))
+        .getPropertyValue("--color-accent")
+        .trim(),
+    );
+    check("schedule theme accepts pluggable semantic token values", accent === "#ff00aa");
+    const desktop = await page.evaluate(() => ({
+      width: document.documentElement.scrollWidth,
+      viewport: window.innerWidth,
+      wrapperWidth: document.querySelector(".base-theme")?.getBoundingClientRect().width,
+    }));
+    check("desktop shell fits the viewport", desktop.width <= desktop.viewport);
+    check("desktop shell has a themed layout root", desktop.wrapperWidth > 0);
+
+    await page.keyboard.press("Tab");
+    const skipFocused = await page.evaluate(
+      () => document.activeElement?.matches("a.skip-link") === true,
+    );
+    check("keyboard focus reaches the skip link first", skipFocused);
+    await page.keyboard.press("Enter");
+    const skipTargetFocused = await page.evaluate(
+      () => location.hash === "#main" && document.activeElement?.id === "main",
+    );
+    check("skip link moves keyboard focus to main", skipTargetFocused);
+
+    await page.setViewportSize({ width: 375, height: 812 });
+    const mobile = await page.evaluate(() => {
+      const nav = document.querySelector(".main-nav").getBoundingClientRect();
+      const links = [...document.querySelectorAll(".main-nav a")].map((link) => {
+        const rect = link.getBoundingClientRect();
+        return rect.left >= 0 && rect.right <= window.innerWidth;
+      });
+      return {
+        width: document.documentElement.scrollWidth,
+        viewport: window.innerWidth,
+        navVisible: nav.width > 0 && nav.height > 0,
+        linksVisible: links.every(Boolean),
+      };
+    });
+    check("mobile shell has no horizontal overflow", mobile.width <= mobile.viewport);
+    check(
+      "mobile primary navigation and links remain visible",
+      mobile.navVisible && mobile.linksVisible,
+    );
+    check("browser fixture has no uncaught errors", pageErrors.length === 0, pageErrors.join("; "));
+    await page.close();
+  } finally {
+    await browser.close();
   }
 }
 
@@ -211,10 +328,26 @@ async function unitParity() {
     const honoBundle = join(scratch, "hono.mjs");
     const kitBundle = join(scratch, "kit.mjs");
     await buildHonoBundle(scratch, honoBundle);
-    await buildKitBundle(scratch, kitBundle);
+    const kitModules = await buildKitBundle(scratch, kitBundle);
     const { archive } = await import(pathToFileURL(honoBundle).href);
-    const { renderPage } = await import(pathToFileURL(kitBundle).href);
+    const { renderPage, renderAccountFixture } = await import(pathToFileURL(kitBundle).href);
     const appShell = readFileSync(new URL("src/app.html", webDir), "utf8");
+    const applicationModules = kitModules.filter((module) => !module.includes("node_modules/"));
+    const forbiddenModules = applicationModules.filter((module) =>
+      /(?:^|[\\/])(?:db|database|session)(?:[\\/.]|$)/i.test(module),
+    );
+    check(
+      "compiled shared static shell has no database or session modules",
+      forbiddenModules.length === 0,
+      forbiddenModules.join(", "),
+    );
+    const accountHtml = renderAccountFixture();
+    check(
+      "explicit account chrome renders in the shared shell",
+      accountHtml.includes('data-testid="explicit-account-chrome"') &&
+        accountHtml.includes("Signed in as a member") &&
+        !accountHtml.includes("Welcome, guest"),
+    );
 
     const states = [
       { path: "/events/past", page: 1, total: 25, pager: ["/events/past?page=2"] },
@@ -261,20 +394,22 @@ async function unitParity() {
       });
       console.log(`--- Kit ${path} ---`);
       expectArchive(kitHtml, { keys, pager });
+      const kitHead = kitHtml.match(/<head>([\s\S]*?)<\/head>/)?.[1] ?? "";
+      const kitBody = kitHtml.match(/<body>([\s\S]*?)<\/body>/)?.[1] ?? "";
+      const document = appShell
+        .replace("%sveltekit.head%", kitHead)
+        .replace("%sveltekit.body%", kitBody);
+      expectShell(document);
+      if (!browserFixturesRun) {
+        await browserShellFixtures(document);
+        browserFixturesRun = true;
+      }
 
       const same = normalize(sectionOf(honoHtml)) === normalize(sectionOf(kitHtml));
       check(
         `${path}: archive section is byte-identical (modulo boolean serialization)`,
         same,
         "section HTML differs",
-      );
-      // renderPage has no document shell; the Kit <body> comes from app.html.
-      const honoBody = bodyClassOf(honoHtml);
-      const kitBody = bodyClassOf(appShell);
-      check(
-        `${path}: app.html body carries Hono's theme class`,
-        honoBody !== null && kitBody === honoBody,
-        `Hono ${JSON.stringify(honoBody)}, Kit ${JSON.stringify(kitBody)}`,
       );
       if (!same && process.env.KIT_E2E_DUMP) {
         const { writeFileSync } = await import("node:fs");
@@ -316,15 +451,9 @@ async function previewParity(kitBase, honoBase) {
     const keys = [...kitHtml.matchAll(/data-event-key="([^"]+)"/g)].map((m) => m[1]);
     console.log(`--- Kit ${path} ---`);
     expectArchive(kitHtml, { keys, pager: [] });
+    expectShell(kitHtml);
     const same = normalize(sectionOf(kitHtml)) === normalize(sectionOf(honoHtml));
     check(`${path}: preview sections match staging`, same, "section HTML differs");
-    const kitBody = bodyClassOf(kitHtml);
-    const honoBody = bodyClassOf(honoHtml);
-    check(
-      `${path}: preview body carries the staging theme class`,
-      honoBody !== null && kitBody === honoBody,
-      `Hono ${JSON.stringify(honoBody)}, Kit ${JSON.stringify(kitBody)}`,
-    );
   }
   // /api/* still reaches the unchanged Hono app through the Kit catch-all.
   const apiRes = await fetch(new URL("/api/agent-events", kitBase), {

@@ -29,6 +29,7 @@ const AUTHORED_CSS = new Set([
   "public/event-theme.css",
   "public/profile-theme.css",
   "public/schedule-theme.css",
+  "public/theme-tokens.css",
 ]);
 const BUDGET_PATHS = Object.keys(
   JSON.parse(readFileSync(join(repoRoot, "ci", "bundle-budget.json"), "utf8")).budgets,
