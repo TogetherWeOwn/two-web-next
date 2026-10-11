@@ -82,6 +82,7 @@ jobs:
         run: |
           python3 -m unittest discover -s .github/scripts -p 'test_pr_standards.py'
           python3 -m unittest discover -s .github/scripts -p 'test_internal_ref_ratchet.py'
+          python3 -m unittest discover -s ci -p 'test_check_pr_conventions.py'
 
       - name: Ratchet tracked internal references
         if: github.event_name != 'push'

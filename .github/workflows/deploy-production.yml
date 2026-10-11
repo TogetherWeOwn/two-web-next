@@ -5,7 +5,7 @@ on:
   workflow_dispatch:
     inputs:
       sha:
-        description: "Full 40-hex main commit to deploy. Empty promotes the newest deployed commit whose post-deploy staging-journeys passed (ci/resolve-promotion-sha.mjs). Always set it explicitly to redeploy a prior good commit"
+        description: "Full 40-hex main commit to deploy. Empty promotes the newest deployed commit whose newest post-deploy staging-journeys run passed (ci/resolve-promotion-sha.mjs). Always set it explicitly to redeploy a prior good commit"
         required: false
         type: string
         default: ""

@@ -141,17 +141,17 @@
     var signingOut = false;
     var button = form.querySelector('[type="submit"]');
     var failureNotice = null;
-    function failedLogout() {
+    function showFailure(testId, message) {
       signingOut = false;
       form.removeAttribute("aria-busy");
       if (button) button.disabled = false;
       // A refused or uncertain logout must not replace an editor's in-memory draft.
       failureNotice = document.createElement("p");
       failureNotice.className = "notice";
-      failureNotice.setAttribute("data-testid", "logout-error");
+      failureNotice.setAttribute("data-testid", testId);
       failureNotice.setAttribute("role", "alert");
       failureNotice.setAttribute("tabindex", "-1");
-      failureNotice.textContent = "Could not sign out. Please try again.";
+      failureNotice.textContent = message;
       form.appendChild(failureNotice);
       failureNotice.focus();
     }
@@ -160,22 +160,31 @@
       event.preventDefault();
       if (signingOut) return;
       signingOut = true;
-      if (failureNotice) {
-        failureNotice.remove();
-        failureNotice = null;
-      }
+      if (failureNotice) failureNotice.remove();
       form.setAttribute("aria-busy", "true");
       if (button) button.disabled = true;
+      var timedOut = false;
+      // A 10 s feedback deadline; expiry shows uncertainty and never publishes or redirects.
+      var deadline = setTimeout(function () {
+        timedOut = true;
+        showFailure("logout-unconfirmed", "Sign-out not confirmed. Please try again.");
+      }, 10000);
       fetch("/logout", { method: "POST", credentials: "same-origin", redirect: "manual" })
         .then(function (response) {
+          clearTimeout(deadline);
+          if (timedOut) return;
           if (response.type === "opaqueredirect" || response.status === 303) {
             publish();
             location.assign("/");
           } else {
-            failedLogout();
+            showFailure("logout-error", "Could not sign out. Please try again.");
           }
         })
-        .catch(failedLogout);
+        .catch(function () {
+          clearTimeout(deadline);
+          if (timedOut) return;
+          showFailure("logout-error", "Could not sign out. Please try again.");
+        });
     });
   }
 })();

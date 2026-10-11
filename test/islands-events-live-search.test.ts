@@ -11,6 +11,7 @@ import { URL as NodeURL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   EVENTS_CALENDAR_FETCH_FAILED,
+  EVENTS_CALENDAR_READ_DEADLINE_MS,
   EVENTS_EMPTY_COPY,
   EVENTS_EMPTY_NEVER_TESTID,
   EVENTS_EMPTY_SEARCH_TESTID,
@@ -178,7 +179,9 @@ function browser(entry = "/events", fixtures: Fixture[] = FIXTURES) {
       URL: NodeURL,
       AbortController,
       setTimeout: (fn: () => void, ms: number) => {
-        expect(ms).toBe(EVENTS_SEARCH_DEBOUNCE_MS);
+        // The search debounce and the owned read deadline share this clock;
+        // short advances only ever fire the debounce.
+        expect([EVENTS_SEARCH_DEBOUNCE_MS, EVENTS_CALENDAR_READ_DEADLINE_MS]).toContain(ms);
         return setTimeout(fn, ms);
       },
       clearTimeout,

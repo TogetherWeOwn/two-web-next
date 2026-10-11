@@ -266,6 +266,17 @@ class SharedPolicy(unittest.TestCase):
         self.assertIn("fetch-depth: 0", job)
         self.assertIn("test_internal_ref_ratchet.py", job)
 
+    def test_workflow_runs_pr_convention_decisions_in_required_job(self):
+        workflow = SCRIPT.parent.parent / "workflows" / "pr-gates.yml"
+        job = workflow.read_text().split("  pr-lint:\n", 1)[1].split("  gitleaks:\n", 1)[0]
+        step = job.split("      - name: Unit-test the lint\n", 1)[1].split("      - name:", 1)[0]
+        self.assertIn(
+            "python3 -m unittest discover -s ci -p 'test_check_pr_conventions.py'",
+            step,
+        )
+        self.assertNotIn("continue-on-error", step)
+        self.assertNotIn("if:", step)
+
     def test_workflow_dispatch_resolves_head_ref_from_api(self):
         workflow = SCRIPT.parent.parent / "workflows" / "pr-gates.yml"
         job = workflow.read_text().split("  pr-lint:\n", 1)[1].split("  gitleaks:\n", 1)[0]
