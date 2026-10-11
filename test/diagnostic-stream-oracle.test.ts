@@ -289,6 +289,28 @@ describe("withheld", () => {
     ).toEqual({ head: "[marker withheld]", tail: "[marker withheld]", status: 400 });
   });
 
+  it("withholds a fragment embedded in other text", () => {
+    expect(withheld({ leak: `x${MARK.slice(0, 10)}y` }, MARKERS)).toEqual({
+      leak: "[marker withheld]",
+    });
+  });
+
+  it("shows short strings and the empty string unchanged", () => {
+    const shape = { empty: "", ok: "ok", kind: "expired_grant", status: 400 };
+    expect(withheld(shape, MARKERS)).toEqual(shape);
+  });
+
+  it("reports an array whose element getter throws as unreadable, never printing the marker", () => {
+    const hostile: unknown[] = [];
+    Object.defineProperty(hostile, 0, {
+      enumerable: true,
+      get(): never {
+        throw new Error(MARK);
+      },
+    });
+    expect(withheld(hostile, MARKERS)).toBe("[unreadable]");
+  });
+
   it("withholds a symbol whose description carries the marker", () => {
     expect(withheld(Symbol(MARK), MARKERS)).toBe("[marker withheld]");
     expect(withheld(Symbol("ok"), MARKERS)).toBe("Symbol(ok)");

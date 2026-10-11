@@ -227,16 +227,25 @@ export function expectDiagnosticStreamClean(
   expect(scan.hits, "marker found in diagnostic stream (labels only)").toEqual([]);
 }
 
+// Long enough that ordinary metadata never shares a run with a canary; shorter fragments can show.
+const FRAGMENT = 8;
+
 /**
  * Marker-free copy for deep-equal diffs. Object properties are read as descriptors, so accessors
  * are never invoked; arrays and collections are read directly and any throw becomes an
- * "[unreadable]" entry. A fragment of a marker (four or more characters) is withheld too, so a
- * diff cannot rebuild a canary from pieces that were split across values.
+ * "[unreadable]" entry. A string sharing a run of eight characters with a marker is withheld, so a
+ * diff cannot rebuild a canary from pieces embedded in other text. Shorter fragments are shown.
  */
 export function withheld(value: unknown, markers: readonly string[]): unknown {
   const active = new Set<object>();
   const hides = (text: string) =>
-    markers.some((marker) => text.includes(marker) || (text.length >= 4 && marker.includes(text)));
+    markers.some((marker) => {
+      if (text.includes(marker)) return true;
+      for (let start = 0; start + FRAGMENT <= text.length; start++) {
+        if (marker.includes(text.slice(start, start + FRAGMENT))) return true;
+      }
+      return false;
+    });
   const text = (value: string | symbol): string => {
     if (typeof value === "string") return hides(value) ? WITHHELD : value;
     const description = value.description ?? "";
