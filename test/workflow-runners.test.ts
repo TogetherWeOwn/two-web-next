@@ -44,7 +44,7 @@ describe("workflow runner labels", () => {
         // Visual baselines render body text with the runner's system fonts, so
         // e2e.yml browser-smoke is deliberately pinned to ubuntu-24.04 and
         // re-baselined in the same PR on bumps (docs/visual-regression.md).
-        // ubuntu-24.04 is still GitHub-hosted Linux, so the TOG-12326
+        // ubuntu-24.04 is still GitHub-hosted Linux, so the self-hosted
         // queue-forever risk does not apply.
         const allowed =
           name === "e2e.yml" && id === "browser-smoke"
