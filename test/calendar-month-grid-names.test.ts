@@ -1,7 +1,5 @@
 // Month-grid links expose complete event names.
-// DB-free: real SSR shells rendered directly. RED first: grid links currently
-// render only "HH:mm <truncated>" with no full-name accessible name, so two
-// same-time titles sharing the truncated prefix are indistinguishable.
+// DB-free: real SSR shells rendered directly.
 import { jsx } from "hono/jsx/jsx-runtime";
 import { describe, expect, it } from "vitest";
 import { EventsCalendarPage } from "../src/events/pages";
@@ -209,7 +207,7 @@ describe("month grid accessible names", () => {
     expect(dLink.visible).toBe(`${wallTimeHm(d.startsAt, ZONE)} ${gridTitle(d.title)}`);
   });
 
-  it("retains the names across an island month swap without changing targets or geometry", async () => {
+  it("keeps the names and link targets on consecutive month pages", async () => {
     const jan = persisted({
       id: 5,
       eventKey: "ev-jan",
@@ -224,8 +222,7 @@ describe("month grid accessible names", () => {
       startsAt: febStart,
     });
     const janHtml = await renderGrid([jan]);
-    // Synthetic island month swap: the binder GETs the next month URL and
-    // patches zones verbatim — both months must carry the names.
+    // The binder patches server HTML verbatim (not executed here), so each month page must carry the names.
     const febState: CalendarState = {
       view: "calendar",
       month: "2030-02",
@@ -265,5 +262,25 @@ describe("month grid accessible names", () => {
     expect(janHtml).toContain(`data-date="${wallDateIso(jan.startsAt, ZONE)}"`);
     expect(febHtml).toContain(`data-date="${wallDateIso(feb.startsAt, ZONE)}"`);
     expect(febHtml).toContain(`month=${wallMonth(febStart, ZONE)}`);
+  });
+
+  it("names a persisted row by its own zone, matching the visible time and the cell day", async () => {
+    const ny = persisted({
+      id: 7,
+      eventKey: "ev-ny",
+      title: "NY raid night",
+      timezone: "America/New_York",
+      startsAt: new Date("2030-01-15T01:00:00Z"),
+    });
+    const html = await renderGrid([ny]);
+    const links = gridLinks(html);
+    expect(links).toHaveLength(1);
+    const link = links[0]!;
+    expect(link.visible).toBe("20:00 NY raid night");
+    expect(ariaOf(link.attrs)).toBe("20:00 NY raid night, Mon 14 Jan");
+    const cell = new RegExp(`<td[^>]*data-date="2030-01-14"[^>]*>([\\s\\S]*?)</td>`).exec(
+      html,
+    )![1]!;
+    expect(cell).toContain(">20:00 NY raid night</a>");
   });
 });
