@@ -120,6 +120,14 @@ describe("runbook first-responder index", () => {
     expect(diagnostic).toMatch(/not proof of a database failure/i);
     // Explicit staging/production separation; does not direct operator to staging targets for prod
     expect(diagnostic).toMatch(/staging vs production/i);
+    // Prober requires HTTP 200 plus x-two-origin and never follows redirects:
+    // a 200 page means the wrong origin served /up, a 3xx page means a redirect.
+    expect(diagnostic).toMatch(/status 200.*x-two-origin/i);
+    expect(diagnostic).toMatch(/3xx.*redirect/i);
+    // Header-checking probe and unambiguous page-source identification.
+    expect(diagnostic).toMatch(/-D -/);
+    expect(diagnostic).toMatch(/check.*x-two-origin/i);
+    expect(diagnostic).toMatch(/two-web-next-alerts-production/);
   });
 
   it("gives every row a first read-only diagnostic step", () => {
