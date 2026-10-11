@@ -96,6 +96,8 @@ function browser() {
     resolve: (value: Response) => void;
     reject: (error: Error) => void;
   }[] = [];
+  const timers: { id: number; callback: () => void; ms: number }[] = [];
+  let timerSeq = 0;
   const location = {
     origin: ORIGIN,
     href: ORIGIN + "/events/past",
@@ -169,6 +171,15 @@ function browser() {
   });
   runInNewContext(binder, {
     URL,
+    setTimeout: (callback: () => void, ms: number) => {
+      const id = ++timerSeq;
+      timers.push({ id, callback, ms });
+      return id;
+    },
+    clearTimeout: (id: number) => {
+      const at = timers.findIndex((timer) => timer.id === id);
+      if (at >= 0) timers.splice(at, 1);
+    },
     AbortController: class extends AbortController {
       constructor() {
         super();
@@ -257,6 +268,7 @@ function browser() {
     operations,
     requests,
     controllers,
+    timers,
     location,
     outside,
     body,
@@ -266,6 +278,9 @@ function browser() {
     finish,
     settle,
     snapshot,
+    fireTimers: () => {
+      timers.splice(0).forEach((timer) => timer.callback());
+    },
     popstate: () => popstate(),
     importWith: (callback: typeof onImport) => {
       onImport = callback;
@@ -656,5 +671,134 @@ describe("PastEvents complete-snapshot admission", () => {
     await b.settle();
     rejected(b, snapshot);
     expect(b.reloads).toEqual([`${ORIGIN}/events/past`]);
+  });
+});
+
+describe("PastEvents archive read deadline", () => {
+  it("arms an owned read deadline of at most 10 seconds per page turn", async () => {
+    const b = browser();
+    b.turn();
+    expect(b.timers).toHaveLength(1);
+    expect(b.timers[0]!.ms).toBeGreaterThan(0);
+    expect(b.timers[0]!.ms).toBeLessThanOrEqual(10000);
+  });
+
+  it("releases a hung-headers read with the last-good snapshot intact and ignores its late arrival", async () => {
+    const b = browser();
+    b.turn();
+    const snapshot = b.snapshot();
+    b.fireTimers();
+    await b.settle();
+    expect(b.requests[0]!.signal.aborted).toBe(true);
+    expect(b.snapshot()).toEqual(snapshot);
+    expect(b.live.feedback.textContent).toBe(PAST_EVENTS_COPY.failed);
+    expect(b.live.root.attributes.has("aria-busy")).toBe(false);
+    expect(b.history).toEqual([]);
+    expect(b.reloads).toEqual([]);
+    expect(b.requests).toHaveLength(1);
+    expect(b.operations).not.toContain("parse");
+    b.finish();
+    await b.settle();
+    expect(b.snapshot()).toEqual(snapshot);
+    expect(b.live.feedback.textContent).toBe(PAST_EVENTS_COPY.failed);
+    expect(b.live.root.attributes.has("aria-busy")).toBe(false);
+    expect(b.history).toEqual([]);
+  });
+
+  it("releases a hung body after headers settle without committing its late arrival", async () => {
+    const b = browser();
+    let resolveBody: (value: string) => void = () => {};
+    b.turn();
+    b.requests[0]!.resolve({
+      ok: true,
+      text: () =>
+        new Promise<string>((resolve) => {
+          resolveBody = resolve;
+        }),
+    });
+    await b.settle();
+    const snapshot = b.snapshot();
+    expect(b.live.root.attributes.get("aria-busy")).toBe("true");
+    b.fireTimers();
+    await b.settle();
+    expect(b.requests[0]!.signal.aborted).toBe(true);
+    expect(b.snapshot()).toEqual(snapshot);
+    expect(b.live.feedback.textContent).toBe(PAST_EVENTS_COPY.failed);
+    expect(b.live.root.attributes.has("aria-busy")).toBe(false);
+    expect(b.history).toEqual([]);
+    resolveBody("late fixture");
+    await b.settle();
+    expect(b.snapshot()).toEqual(snapshot);
+    expect(b.operations).not.toContain("replace");
+    expect(b.history).toEqual([]);
+    expect(b.live.feedback.textContent).toBe(PAST_EVENTS_COPY.failed);
+  });
+
+  it("admits a timely read and disarms its deadline", async () => {
+    const b = browser();
+    b.turn();
+    b.finish();
+    await b.settle();
+    expect(b.history).toEqual(["/events/past?page=2"]);
+    expect(b.timers).toHaveLength(0);
+    const snapshot = b.snapshot();
+    b.fireTimers();
+    await b.settle();
+    expect(b.snapshot()).toEqual(snapshot);
+    expect(b.live.feedback.textContent).toBe("");
+  });
+
+  it("a superseding turn disarms the previous deadline", async () => {
+    const b = browser();
+    b.turn();
+    expect(b.timers).toHaveLength(1);
+    b.turn();
+    expect(b.requests[0]!.signal.aborted).toBe(true);
+    expect(b.timers).toHaveLength(1);
+    expect(b.live.root.attributes.get("aria-busy")).toBe("true");
+    expect(b.live.feedback.textContent).toBe("Loading past events…");
+    b.finish(1);
+    await b.settle();
+    expect(b.history).toEqual(["/events/past?page=2"]);
+    expect(b.timers).toHaveLength(0);
+  });
+
+  it("an obsolete timer cannot clear a newer read", async () => {
+    const b = browser();
+    b.turn();
+    const stale = b.timers.slice();
+    b.turn();
+    const snapshot = b.snapshot();
+    stale[0]!.callback();
+    await b.settle();
+    expect(b.snapshot()).toEqual(snapshot);
+    expect(b.live.root.attributes.get("aria-busy")).toBe("true");
+    expect(b.live.feedback.textContent).toBe("Loading past events…");
+    b.finish(1);
+    await b.settle();
+    expect(b.history).toEqual(["/events/past?page=2"]);
+  });
+
+  it("a timed-out click stays inline while a timed-out Back/forward read reloads SSR", async () => {
+    const click = browser();
+    click.turn();
+    const clickSnapshot = click.snapshot();
+    click.fireTimers();
+    await click.settle();
+    expect(click.snapshot()).toEqual(clickSnapshot);
+    expect(click.history).toEqual([]);
+    expect(click.reloads).toEqual([]);
+    expect(click.live.feedback.textContent).toBe(PAST_EVENTS_COPY.failed);
+    expect(click.live.root.attributes.has("aria-busy")).toBe(false);
+
+    const back = browser();
+    back.location.href = `${ORIGIN}/events/past?page=2`;
+    back.popstate();
+    back.fireTimers();
+    await back.settle();
+    expect(back.history).toEqual([]);
+    expect(back.reloads).toEqual([`${ORIGIN}/events/past?page=2`]);
+    expect(back.live.feedback.textContent).toBe(PAST_EVENTS_COPY.failed);
+    expect(back.live.root.attributes.has("aria-busy")).toBe(false);
   });
 });
