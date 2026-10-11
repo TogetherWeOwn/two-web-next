@@ -30,7 +30,7 @@
       "maxGzipBytes": 1536
     },
     "public/islands/member-profile.js": {
-      "maxRawBytes": 7680,
+      "maxRawBytes": 8704,
       "maxGzipBytes": 3072
     },
     "public/islands/past-events.js": {

@@ -110,16 +110,39 @@
     // If a newer draft was typed while saving, keep it reachable too.
     form.hidden = unchanged && !!edit && !!editControl;
     if (editControl) editControl.hidden = !form.hidden;
+    // A successful accept clears obsolete field errors; called only while
+    // the request still owns feedback (generation guard at the call site).
+    clearFieldErrors();
   }
 
   function control(v) {
     return /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/.test(v);
   }
 
+  // Field association (TOG-21705): stable ids shared with SSR pages.tsx.
+  // The server `games` key maps to the `games_text` control; any other key
+  // is global and stays in the summary with no fabricated control link.
+  var FIELD_IDS = {
+    bio: "profile-bio",
+    games_text: "profile-games-text",
+    timezone: "profile-timezone",
+  };
+  function fieldForKey(k) {
+    return k === "bio"
+      ? "bio"
+      : k === "games" || k === "games_text"
+        ? "games_text"
+        : k === "timezone"
+          ? "timezone"
+          : null;
+  }
+
   function clientErrors(bio, games, tz) {
     var e = [];
-    if (control(bio) || control(games) || control(tz)) e.push("Remove control characters.");
-    if (Array.from(bio).length > 1000) e.push("Keep your bio to 1000 characters or fewer.");
+    if (control(bio) || control(games) || control(tz))
+      e.push({ key: null, text: "Remove control characters." });
+    if (Array.from(bio).length > 1000)
+      e.push({ key: "bio", text: "Keep your bio to 1000 characters or fewer." });
     var seen = new Set();
     var long = false;
     games.split(/\r\n|\r|\n/).forEach(function (l) {
@@ -127,13 +150,13 @@
       if (Array.from(t).length > 80) long = true;
       if (t) seen.add(t);
     });
-    if (long) e.push("Keep each game name to 80 characters or fewer.");
-    if (seen.size > 20) e.push("Add no more than 20 games.");
+    if (long) e.push({ key: "games_text", text: "Keep each game name to 80 characters or fewer." });
+    if (seen.size > 20) e.push({ key: "games_text", text: "Add no more than 20 games." });
     if (tz) {
       try {
         new Intl.DateTimeFormat("en", { timeZone: tz });
       } catch {
-        e.push("Choose a valid IANA timezone, e.g. Europe/London.");
+        e.push({ key: "timezone", text: "Choose a valid IANA timezone, e.g. Europe/London." });
       }
     }
     return e;
@@ -159,7 +182,56 @@
     el.focus();
   }
 
+  function errorId(field) {
+    return FIELD_IDS[field] + "-error";
+  }
+
+  function clearFieldErrors() {
+    Object.keys(FIELD_IDS).forEach(function (field) {
+      var id = errorId(field);
+      var node = root.querySelector('[id="' + id + '"]');
+      if (node) node.remove();
+      var input = form.elements[field];
+      if (!input || typeof input.setAttribute !== "function") return;
+      if (typeof input.removeAttribute === "function") {
+        input.removeAttribute("aria-invalid");
+        var described = input.getAttribute("aria-describedby");
+        if (described) {
+          var kept = String(described)
+            .split(/\s+/)
+            .filter(function (t) {
+              return t && t !== id;
+            });
+          if (kept.length) input.setAttribute("aria-describedby", kept.join(" "));
+          else input.removeAttribute("aria-describedby");
+        }
+      }
+    });
+  }
+
+  function wireFieldError(field, text) {
+    var input = form.elements[field];
+    if (!input || typeof input.setAttribute !== "function") return;
+    input.setAttribute("id", FIELD_IDS[field]);
+    input.setAttribute("aria-invalid", "true");
+    var id = errorId(field);
+    var described =
+      typeof input.getAttribute === "function" ? input.getAttribute("aria-describedby") || "" : "";
+    var tokens = String(described).split(/\s+/).filter(Boolean);
+    if (tokens.indexOf(id) < 0) tokens.push(id);
+    input.setAttribute("aria-describedby", tokens.join(" "));
+    var old = root.querySelector('[id="' + id + '"]');
+    if (old) old.remove();
+    var p = document.createElement("p");
+    p.setAttribute("id", id);
+    p.setAttribute("class", "error");
+    // textContent keeps server strings literal; bound by the caller.
+    p.textContent = String(text);
+    (input.parentNode || form).appendChild(p);
+  }
+
   function clearNotices() {
+    clearFieldErrors();
     root.querySelectorAll("[data-testid^='profile-']").forEach(function (n) {
       var t = n.getAttribute("data-testid");
       if (t === "profile-session-expired" && sessionExpired) return;
@@ -194,11 +266,12 @@
       if (bag && typeof bag === "object" && !Array.isArray(bag)) {
         Object.keys(bag).forEach(function (k) {
           var m = bag[k];
-          if (typeof m === "string" && m.trim() !== "") out.push(boundError(m));
+          if (typeof m === "string" && m.trim() !== "")
+            out.push({ key: fieldForKey(k), text: boundError(m) });
         });
       }
     }
-    return out.length ? out : [GENERIC_INVALID_COPY];
+    return out.length ? out : [{ key: null, text: GENERIC_INVALID_COPY }];
   }
 
   function saveFailed() {
@@ -239,18 +312,40 @@
   }
 
   function errorList(errors) {
+    clearFieldErrors();
     var old = root.querySelector('[data-testid="profile-error"]');
     if (old) old.remove();
-    var list = Array.isArray(errors) && errors.length ? errors : [GENERIC_INVALID_COPY];
+    var list =
+      Array.isArray(errors) && errors.length ? errors : [{ key: null, text: GENERIC_INVALID_COPY }];
+    // Inline errors first so the summary links resolve to live nodes.
+    list.forEach(function (e) {
+      if (e && e.key && FIELD_IDS[e.key]) wireFieldError(e.key, e.text);
+    });
     var alert = document.createElement("div");
     alert.setAttribute("role", "alert");
     alert.setAttribute("tabindex", "-1");
     alert.setAttribute("data-testid", "profile-error");
     var ul = document.createElement("ul");
-    list.forEach(function (m) {
+    list.forEach(function (e) {
       var li = document.createElement("li");
-      // textContent keeps server strings literal; bound above for 422 maps.
-      li.textContent = typeof m === "string" ? boundError(m) : GENERIC_INVALID_COPY;
+      var text = e && typeof e.text === "string" ? boundError(e.text) : GENERIC_INVALID_COPY;
+      if (e && e.key && FIELD_IDS[e.key] && form.elements[e.key]) {
+        var a = document.createElement("a");
+        a.setAttribute("href", "#" + FIELD_IDS[e.key]);
+        // textContent keeps server strings literal; bound above for 422 maps.
+        a.textContent = text;
+        (function (control) {
+          // Summary-link activation focuses the control without changing
+          // values; keyboard Enter fires click, so one handler covers both.
+          a.addEventListener("click", function (ev) {
+            ev.preventDefault();
+            control.focus();
+          });
+        })(form.elements[e.key]);
+        li.appendChild(a);
+      } else {
+        li.textContent = text;
+      }
       ul.appendChild(li);
     });
     alert.appendChild(ul);

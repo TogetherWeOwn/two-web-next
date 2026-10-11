@@ -331,9 +331,7 @@ export const ProfilePage: FC<{
                   id={PROFILE_FIELD_IDS.games_text}
                   name="games_text"
                   rows={4}
-                  aria-invalid={
-                    errors && (errors.games ?? errors.games_text) ? "true" : undefined
-                  }
+                  aria-invalid={errors && (errors.games ?? errors.games_text) ? "true" : undefined}
                   aria-describedby={
                     errors && (errors.games ?? errors.games_text)
                       ? PROFILE_ERROR_IDS.games_text

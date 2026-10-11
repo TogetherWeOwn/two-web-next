@@ -63,6 +63,9 @@ class Element {
   getAttribute(key: string) {
     return this.attributes[key] ?? null;
   }
+  removeAttribute(key: string) {
+    delete this.attributes[key];
+  }
   appendChild(child: Element) {
     child.parentNode = this;
     this.children.push(child);
