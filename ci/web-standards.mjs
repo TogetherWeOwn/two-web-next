@@ -59,16 +59,23 @@ export function internalLinks(html) {
 }
 
 export function routeMatchers(srcDir = "src") {
-  const patterns = new Set(["/about", "/faq"]);
+  const patterns = new Set(["/about", "/faq", "/admin"]);
+  const adminDir = join(srcDir, "admin");
   const walk = (dir) => {
     for (const name of readdirSync(dir)) {
       const full = join(dir, name);
       if (statSync(full).isDirectory()) walk(full);
-      else if (/\.(ts|tsx)$/.test(name))
+      else if (/\.(ts|tsx)$/.test(name)) {
+        // Sub-apps mount under a prefix (src/index.tsx: app.route("/admin", adminApp())).
+        // Routes defined in src/admin/ serve under /admin, not at the root.
+        const prefix = full === adminDir || full.startsWith(`${adminDir}/`) ? "/admin" : "";
         for (const m of readFileSync(full, "utf8").matchAll(
           /\.(?:get|all|on)\(\s*["'`](\/[^"'`]*)["'`]/g,
-        ))
-          patterns.add(m[1]);
+        )) {
+          const route = m[1];
+          patterns.add(prefix ? (route === "/" ? prefix : `${prefix}${route}`) : route);
+        }
+      }
     }
   };
   walk(srcDir);
@@ -121,9 +128,21 @@ function selftest() {
     "/about",
     "/styles.css",
     "/auth/discord?next=%2Fevents",
+    "/admin",
+    "/admin/activity-log",
+    "/admin/join-attempts/1",
+    "/admin/featured/new",
   ])
     assert.ok(linkResolves(ok, ms), `should resolve: ${ok}`);
-  for (const bad of ["/nope", "/events/a/b/c", "/about-us"])
+  for (const bad of [
+    "/nope",
+    "/events/a/b/c",
+    "/about-us",
+    // Admin routes mount under /admin (src/index.tsx), never at the root.
+    "/activity-log",
+    "/join-attempts/1",
+    "/featured/new",
+  ])
     assert.ok(!linkResolves(bad, ms), `should not resolve: ${bad}`);
   console.log("web-standards selftest: ok");
 }
