@@ -1,7 +1,7 @@
 import { getTableColumns } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/pg-proxy";
 import { serializeSigned } from "hono/utils/cookie";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import app from "./app";
 import { events } from "../src/db/admin-schema";
 import type { Db } from "../src/db/index";
@@ -14,7 +14,7 @@ const PATH = `/e/${KEY}`;
 const SECRET = "test-session-secret-at-least-32-bytes-long";
 
 // Real Drizzle queries and Hono/session rendering; all data is local, no DB connection.
-function fixture(over: Partial<typeof events.$inferSelect> = {}) {
+function fixture(over: Partial<typeof events.$inferSelect> = {}, queryError?: Error) {
   const start = new Date("2030-01-10T20:00:00Z");
   const row: typeof events.$inferSelect = {
     id: 1,
@@ -52,6 +52,7 @@ function fixture(over: Partial<typeof events.$inferSelect> = {}) {
   const queries: string[] = [];
   const db = drizzle(async (sql) => {
     queries.push(sql);
+    if (queryError && sql.includes('"event_key" =')) throw queryError;
     if (sql.includes('from "rsvps"') && sql.includes('inner join "users"')) return { rows: [] };
     // The going-count aggregate reads two positional columns; the viewer
     // answer read selects its own row and is empty in this fixture.
@@ -144,6 +145,26 @@ describe("Event page parity (fixture-only)", () => {
       ),
     ).toBe(true);
     expect(html).not.toMatch(/\son(?:click|keydown)=/);
+  });
+
+  it("alerts once when the buffered public event read throws and preserves its 503", async () => {
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    const source = fixture({}, new TypeError("private event query failure"));
+    const response = await source.request(undefined, PATH);
+    expect(response.status).toBe(503);
+    expect(await response.text()).toBe("Member data is temporarily unavailable.");
+    const alerts = error.mock.calls
+      .map(([line]) => (typeof line === "string" && line.startsWith("{") ? JSON.parse(line) : null))
+      .filter((line) => line?.event === "error.alert");
+    expect(alerts).toHaveLength(1);
+    expect(alerts[0]).toMatchObject({
+      event: "error.alert",
+      exception: "DrizzleQueryError",
+      method: "GET",
+      route: "/e/:key",
+      request_id: response.headers.get("x-request-id"),
+    });
+    expect(JSON.stringify(error.mock.calls)).not.toContain("private event query failure");
   });
 
   it("hides guest pitch from a member without share-caching their session-dependent HTML", async () => {

@@ -41,18 +41,19 @@ export async function notFoundHandler(c: Context): Promise<Response> {
 }
 
 export function internalErrorHandler(err: unknown, c: Context): Response | Promise<Response> {
-  if (memberReadActive()) {
-    // Sanitize before the ordinary logger/alert sees SQL, bindings or causes.
-    console.error("Member request failed; refusing contents.", {
-      exception: err instanceof Error ? err.constructor.name : "unknown",
-    });
-    return bufferedMemberText(c, "Member data is temporarily unavailable.", 503);
-  }
   alertRequestError(err, {
     method: c.req.method,
     route: requestRoute(c),
     requestId: c.get("requestId"),
   });
+  if (memberReadActive()) {
+    // Keep the log class-only; the alert above has the same privacy boundary.
+    console.error("Member request failed; refusing contents.", {
+      exception: err instanceof Error ? err.constructor.name : "unknown",
+      request_id: safeRequestId(c.get("requestId")),
+    });
+    return bufferedMemberText(c, "Member data is temporarily unavailable.", 503);
+  }
   if (isDatabaseUnavailable(err)) return databaseUnavailable(c);
   c.header("cache-control", "no-store, private");
   c.status(500);

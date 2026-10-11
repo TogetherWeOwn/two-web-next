@@ -6,7 +6,14 @@ import { recordAccess } from "../src/admin/store";
 import { memberDataAccessLogs, rsvps } from "../src/db/admin-schema";
 import { joinAttempts as attempts, profiles, users } from "../src/db/schema";
 import type { Env } from "../src/env";
-import { bufferedMemberText, keyedMemberRead, memberReadBoundary } from "../src/member-reads";
+import {
+  bufferedMemberText,
+  declareMemberResult,
+  keyedMemberRead,
+  MemberReadRefused,
+  memberReadBoundary,
+} from "../src/member-reads";
+import { requestLog } from "../src/request-log";
 import { memberReadDb, observeMemberReads } from "../src/db/member-reads";
 import { alias } from "drizzle-orm/pg-core";
 import { events } from "../src/db/admin-schema";
@@ -423,6 +430,84 @@ describe.skipIf(!process.env.DATABASE_URL)("keyed member read boundary (real Pos
       return bufferedMemberText(c, PERSONAL_STRINGS[1]!);
     });
     await deny(await app.request("/existing", {}, env));
+  });
+});
+
+describe("caught member-read boundary failures", () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it("alerts once for a directly caught MemberReadRefused and preserves the plain 503", async () => {
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    const app = new Hono();
+    app.use("*", requestLog);
+    app.use("/direct/*", (c) =>
+      memberReadBoundary(
+        c,
+        { ...declaration, viewer: null },
+        async () => true,
+        async () => {
+          throw new MemberReadRefused();
+        },
+      ),
+    );
+    app.get("/direct/:key", (c) => c.text("should not run"));
+
+    const response = await app.request("/direct/private-key", {}, env);
+    const requestId = response.headers.get("x-request-id");
+    expect(response.status).toBe(503);
+    expect(await response.text()).toBe("Member data is temporarily unavailable.");
+    const alerts = error.mock.calls
+      .map(([line]) => (typeof line === "string" && line.startsWith("{") ? JSON.parse(line) : null))
+      .filter((line) => line?.event === "error.alert");
+    expect(alerts).toHaveLength(1);
+    expect(alerts[0]).toMatchObject({
+      event: "error.alert",
+      exception: "MemberReadRefused",
+      method: "GET",
+      request_id: requestId,
+    });
+    expect(JSON.stringify(error.mock.calls)).not.toContain("private-key");
+  });
+
+  it("alerts once when the member-read audit write throws and preserves the plain 503", async () => {
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    const app = new Hono();
+    app.use("*", requestLog);
+    app.use("/audit/*", (c) =>
+      memberReadBoundary(
+        c,
+        { ...declaration, viewer: MEMBER.userId },
+        async () => {
+          throw new TypeError("private audit failure");
+        },
+        async () => {
+          declareMemberResult([SUBJECT.userId]);
+          bufferedMemberText(c, "private member data");
+        },
+      ),
+    );
+    app.get("/audit/:key", (c) => c.text("should not run"));
+
+    const response = await app.request("/audit/private-key", {}, env);
+    const requestId = response.headers.get("x-request-id");
+    expect(response.status).toBe(503);
+    expect(await response.text()).toBe("Member data is temporarily unavailable.");
+    const alerts = error.mock.calls
+      .map(([line]) => (typeof line === "string" && line.startsWith("{") ? JSON.parse(line) : null))
+      .filter((line) => line?.event === "error.alert");
+    expect(alerts).toHaveLength(1);
+    expect(alerts[0]).toMatchObject({
+      event: "error.alert",
+      exception: "TypeError",
+      method: "GET",
+      route: "/audit/:key",
+      request_id: requestId,
+    });
+    expect(error).toHaveBeenCalledWith("Member read audit failed; refusing contents.", {
+      exception: "TypeError",
+      request_id: requestId,
+    });
+    expect(JSON.stringify(error.mock.calls)).not.toContain("private");
   });
 });
 

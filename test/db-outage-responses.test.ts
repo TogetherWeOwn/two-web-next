@@ -6,6 +6,7 @@ import app from "./app";
 import { createMemorySessionStore } from "../src/sessions";
 import { profilesApp } from "../src/profiles/routes";
 import { createMemoryProfileStore } from "../src/profiles/store";
+import { requestLog } from "../src/request-log";
 import { cookieFor, env, EVENT_KEY, MEMBER, MODERATOR } from "./helpers/member-data";
 
 const EVENT_WRITES = [
@@ -23,6 +24,7 @@ const refused = () =>
   Object.assign(new Error("private connection details"), { code: "ECONNREFUSED" });
 const pgError = (code: string) =>
   Object.assign(new Error("private query details"), { name: "PostgresError", code });
+class ProfileSaveFailure extends Error {}
 
 beforeEach(() => {
   vi.spyOn(console, "error").mockImplementation(() => {});
@@ -253,6 +255,92 @@ describe("profile failures after a successful session and data read", () => {
       expect(body).toContain('<a class="brand" href="/"');
     },
   );
+  it.each([
+    ["TypeError", new TypeError("private profile save failure")],
+    [
+      "ProfileSaveFailure",
+      Object.assign(new ProfileSaveFailure("private profile save failure"), { code: "57014" }),
+    ],
+  ])("alerts once for a %s profile save failure", async (exception, failure) => {
+    const { cookie, store, profile } = await fixture();
+    vi.spyOn(store, "save").mockRejectedValue(failure);
+    const router = new Hono();
+    router.use("*", requestLog);
+    router.route("/", profile);
+    const ray = "0123456789abcdef-LHR";
+    const res = await router.request(
+      `/members/${MEMBER.userId}`,
+      {
+        method: "PATCH",
+        headers: {
+          cookie,
+          "cf-ray": ray,
+          origin: env.APP_URL,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({ bio: "new fixture", games: [] }),
+      },
+      env,
+    );
+    expect(res.status).toBe(500);
+    const alerts = vi
+      .mocked(console.error)
+      .mock.calls.map(([line]) =>
+        typeof line === "string" && line.startsWith("{") ? JSON.parse(line) : null,
+      )
+      .filter((line) => line?.event === "error.alert");
+    expect(alerts).toHaveLength(1);
+    expect(alerts[0]).toMatchObject({
+      event: "error.alert",
+      exception,
+      method: "PATCH",
+      route: "/members/:user",
+      request_id: ray,
+    });
+    expect(console.error).toHaveBeenCalledWith("profile save failed", {
+      exception,
+      request_id: ray,
+    });
+    expect(JSON.stringify(vi.mocked(console.error).mock.calls)).not.toContain(
+      "private profile save failure",
+    );
+  });
+
+  it.each(["/profile", `/members/${MEMBER.userId}`])(
+    "alerts once for a failed profile read at %s",
+    async (path) => {
+      const { cookie, store, profile } = await fixture();
+      vi.spyOn(store, "find").mockRejectedValue(new RangeError("private profile read failure"));
+      const router = new Hono();
+      router.use("*", requestLog);
+      router.route("/", profile);
+      const ray = "fedcba9876543210-LHR";
+      const res = await router.request(path, { headers: { cookie, "cf-ray": ray } }, env);
+      expect(res.status).toBe(503);
+      const alerts = vi
+        .mocked(console.error)
+        .mock.calls.map(([line]) =>
+          typeof line === "string" && line.startsWith("{") ? JSON.parse(line) : null,
+        )
+        .filter((line) => line?.event === "error.alert");
+      expect(alerts).toHaveLength(1);
+      expect(alerts[0]).toMatchObject({
+        event: "error.alert",
+        exception: "RangeError",
+        method: "GET",
+        route: path === "/profile" ? "/profile" : "/members/:user",
+        request_id: ray,
+      });
+      expect(console.error).toHaveBeenCalledWith("Profile request failed; refusing contents.", {
+        exception: "RangeError",
+        request_id: ray,
+      });
+      expect(JSON.stringify(vi.mocked(console.error).mock.calls)).not.toContain(
+        "private profile read failure",
+      );
+    },
+  );
+
   it.each(["text/html", "application/json"])(
     "classifies a save outage after a successful lookup for %s",
     async (accept) => {
