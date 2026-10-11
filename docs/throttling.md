@@ -59,12 +59,13 @@ runner IP, and each `qaLogin` in
 [`e2e/fixtures.ts`](../e2e/fixtures.ts) spends the same
 `qa-login:<clientKey>` bucket, so the 11th login inside one 60-second window
 is refused with the shared 429. The count lives in the `e2e/qa-login-budget`
-static guard (`e2e/qa-login-budget.test.mjs`, arriving with the local-smoke
-budget fix): it totals `qaLogin` call sites across the specs and fails when a
+static guard (`e2e/qa-login-budget.test.mjs`, shipped with the local-smoke
+budget fix #665): it totals `qaLogin` call sites across the specs and fails when a
 run would exceed the budget — merge journeys onto fewer logins instead of
 retrying across the window. Bounded retry handling for an
-already-throttled login lives in
-[`e2e/qa-login-retry.mjs`](../e2e/qa-login-retry.mjs).
+already-throttled staging login lives in
+[`e2e/qa-login-retry.mjs`](../e2e/qa-login-retry.mjs); the local `qaLogin`
+fails hard on the first 429.
 
 Generic and join buckets key on the client key above (`<name>:<clientKey>`);
 RSVP and profile-write buckets key on the member id instead, so switching verb
