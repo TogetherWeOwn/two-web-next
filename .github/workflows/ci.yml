@@ -327,6 +327,12 @@ jobs:
       - name: Fetch-await gate (ast-grep, HARD)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
         run: npx -y --package @ast-grep/cli@0.50.0 ast-grep scan --error
+      # Floor guard HARD (CONSTRAINTS.md): no new suppressions, skips,
+      # deleted tests, stripped assertions, stubs, exception rows or lowered
+      # thresholds in the PR diff. Reads git history; fails the job.
+      - name: Floor guard (HARD)
+        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
+        run: npm run floor-guard:selftest && npm run floor-guard
       # Test-inventory WARN gate (quality-gates.md): every test file runs
       # somewhere. Filesystem-only; never fails (WARN).
       - name: Test inventory (WARN)

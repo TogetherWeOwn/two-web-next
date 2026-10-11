@@ -29,6 +29,8 @@
     "mutation:sessions-join": "node ci/mutation-sessions-join.mjs",
     "mutation:sessions-join:selftest": "node ci/mutation-sessions-join.mjs --selftest",
     "scan:fetch-await": "npx -y --package @ast-grep/cli@0.50.0 ast-grep scan --error",
+    "floor-guard": "node ci/floor-guard.mjs",
+    "floor-guard:selftest": "node --test ci/floor-guard.test.mjs",
     "patch:coverage": "node ci/patch-coverage.mjs",
     "patch:coverage:selftest": "node ci/patch-coverage.mjs --selftest",
     "test:inventory": "node ci/test-inventory.mjs",

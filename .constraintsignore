@@ -1,0 +1,7 @@
+# Floor-guard exemptions (one glob per line). Applies to added-line content
+# rules only (suppressions, stubs, skips); thresholds, exception rows and
+# deleted tests are never ignorable. Each entry needs a reason it exists.
+# The guard's own pattern lists must name the forms they detect, and its
+# fixtures must contain them to prove detection.
+ci/floor-guard.mjs
+ci/floor-guard.test.mjs
