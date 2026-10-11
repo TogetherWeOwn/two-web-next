@@ -42,37 +42,44 @@
       return inflight;
     }
     last = Date.now();
-    controller = new AbortController();
-    var timeout = setTimeout(function () {
-      controller.abort();
-    }, 4000);
-    inflight = fetch("/auth/status", {
+    var request = new AbortController();
+    var timeout;
+    // Settles at the budget even if fetch ignores abort; a late answer is then dropped.
+    var budget = new Promise(function (resolve) {
+      timeout = setTimeout(function () {
+        request.abort();
+        resolve(null);
+      }, 4000);
+    });
+    var answer = fetch("/auth/status", {
       credentials: "same-origin",
       cache: "no-store",
       redirect: "manual",
-      signal: controller.signal,
+      signal: request.signal,
     })
       .then(function (response) {
         if (!response.ok) return null;
         return response.json().then(function (body) {
           if (Object.keys(body).length !== 1 || typeof body.authenticated !== "boolean")
             return null;
-          if (!body.authenticated) loseSession();
           return body.authenticated;
         });
       })
       .catch(function () {
         return null;
-      })
-      .finally(function () {
-        clearTimeout(timeout);
-        inflight = null;
-        controller = null;
-        if (queued) {
-          queued = false;
-          schedule();
-        }
       });
+    controller = request;
+    inflight = Promise.race([answer, budget]).then(function (value) {
+      clearTimeout(timeout);
+      inflight = null;
+      controller = null;
+      if (value === false) loseSession();
+      if (queued) {
+        queued = false;
+        schedule();
+      }
+      return value;
+    });
     return inflight;
   }
   function schedule() {
