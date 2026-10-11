@@ -39,6 +39,12 @@ test("the throttle error names the budget and carries no secret", () => {
   assert.ok(!error.message.includes("X-TWO-QA-Auth"), "header name leaked");
 });
 
+test("the throttle error names a local scope when asked", () => {
+  const error = qaLoginThrottleError("qa-moderator", 3, QA_LOGIN_MAX_ATTEMPTS, "local");
+  assert.match(error.message, /local QA login as qa-moderator/);
+  assert.match(error.message, /429/);
+});
+
 test("the retry budget stays small enough to fit the 30s hook window", () => {
   assert.ok(QA_LOGIN_MAX_ATTEMPTS >= 2, "at least one retry across the minute boundary");
   assert.ok(QA_LOGIN_MAX_ATTEMPTS <= 3, "more attempts cannot beat the 30s beforeAll timeout");
