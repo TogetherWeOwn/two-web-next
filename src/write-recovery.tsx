@@ -90,7 +90,12 @@ export async function recoveryLanding(c: Ctx): Promise<Response> {
 /** Every terminal callback clears the pending notice, including denial/failure. */
 export async function consumeExpiredWrite(c: Ctx): Promise<string | null> {
   const raw = await getSignedCookie(c, c.env.SESSION_SECRET, EXPIRED_WRITE_COOKIE);
-  deleteCookie(c, EXPIRED_WRITE_COOKIE, { path: "/", secure: true });
+  deleteCookie(c, EXPIRED_WRITE_COOKIE, {
+    path: "/",
+    secure: true,
+    httpOnly: true,
+    sameSite: "Lax",
+  });
   return typeof raw === "string" && raw.startsWith("pending|") ? safeNext(raw.slice(8)) : null;
 }
 
@@ -119,7 +124,12 @@ export async function expiredWriteBanner(c: Ctx, next: Next): Promise<void> {
     c.res = new Response(html, { status: c.res.status, headers: c.res.headers });
     return;
   }
-  deleteCookie(c, EXPIRED_WRITE_COOKIE, { path: "/", secure: true });
+  deleteCookie(c, EXPIRED_WRITE_COOKIE, {
+    path: "/",
+    secure: true,
+    httpOnly: true,
+    sameSite: "Lax",
+  });
   c.header("cache-control", "no-store, private");
   c.header("vary", "Cookie");
   const banner =

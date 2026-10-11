@@ -118,7 +118,7 @@ export function registerAuthRoutes(app: Hono<{ Bindings: Env }>, hooks: AuthHook
     const limited = await throttleGuard(c, "login-callback", AUTH_THROTTLE_PER_MINUTE);
     if (limited) return limited;
     const expected = await getSignedCookie(c, c.env.SESSION_SECRET, STATE_COOKIE);
-    deleteCookie(c, STATE_COOKIE, { path: "/", secure: true });
+    deleteCookie(c, STATE_COOKIE, { path: "/", secure: true, httpOnly: true, sameSite: "Lax" });
     // Consume the return journey on every terminal path — success, denial and
     // failure all clear it (legacy forget on login_next + url.intended).
     const returnTo = await consumeLoginReturn(c);
@@ -243,7 +243,7 @@ export function registerAuthRoutes(app: Hono<{ Bindings: Env }>, hooks: AuthHook
           return c.text("Sign-out temporarily unavailable", 503);
         }
       }
-      deleteCookie(c, SESSION_COOKIE, { path: "/", secure: true });
+      deleteCookie(c, SESSION_COOKIE, { path: "/", secure: true, httpOnly: true, sameSite: "Lax" });
       clearAuthStatus(c);
       await consumeExpiredWrite(c);
       return c.redirect("/", 303);
