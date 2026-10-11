@@ -24,6 +24,14 @@ for (const [category, minScore] of Object.entries(budget.categories)) {
   assertions[`categories:${category}`] = ["error", { minScore, aggregationMethod: "median-run" }];
 }
 
+// Deployed staging sits behind the platform bot-management script (cdn-cgi
+// challenge bundle), which trips the third-party `deprecations` audit on every
+// route. Skip it on deployed-origin runs only; fixture-worker runs keep the
+// strict audit so app-code regressions still fail. Category floors in
+// quality-budget.json are untouched.
+const baseSkipAudits = ["uses-http2", "canonical", "is-crawlable"];
+const skipAudits = deployed ? [...baseSkipAudits, "deprecations"] : baseSkipAudits;
+
 module.exports = {
   ci: {
     collect: {
@@ -34,7 +42,7 @@ module.exports = {
         onlyCategories: Object.keys(budget.categories),
         // is-crawlable: the fixture worker and staging send X-Robots-Tag noindex by design (src/headers.ts,
         // test/events.test.ts); production indexability is covered by those unit tests, not by this gate.
-        skipAudits: ["uses-http2", "canonical", "is-crawlable"],
+        skipAudits,
       },
     },
     assert: { assertions },
