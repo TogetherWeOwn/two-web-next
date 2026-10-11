@@ -24,3 +24,7 @@ any other host.
 - The repo is public, so the job summary lists alert names and counts only. The
   full report, with URLs and evidence, is never uploaded. Reproduce locally with
   the same image and command when you need detail.
+- An `ignore` entry may carry an optional `uriPrefix`: only alert instances
+  whose URI contains that substring are ignored, so Worker-served hits for the
+  same plugin still count. Prefer a scoped ignore when the evidence is
+  edge-owned (for example `/cdn-cgi/` for Cloudflare-injected assets).
