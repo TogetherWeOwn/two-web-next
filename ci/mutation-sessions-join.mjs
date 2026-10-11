@@ -1,11 +1,14 @@
 // Nightly mutation signal for the auth blast radius: `src/sessions.ts`,
 // `src/join/service.ts`, `src/join/route.ts`, RSVP write admission
 // (member-denied matrix in routes-rsvp, throttle/waitlist/capacity in rsvp.ts),
-// and admin write admission (`src/admin/guard.ts`, `src/admin/writeback.ts`).
+// admin write admission (`src/admin/guard.ts`, `src/admin/writeback.ts`), and
+// the agent-events ingress (`src/agent-events/ingress.ts` admission plus
+// `src/agent-events/route.ts` refusals).
 //
 // Each mutant weakens exactly one auth check (expired-session blindness, lost
 // revocation, throttle/review bypass, forged join outcomes, admin guard bypass,
-// refused write-back dispatched). The runner applies
+// refused write-back dispatched, ingress auth/replay/idempotency bypass,
+// route refusal bypass). The runner applies
 // one mutant at a time to the working tree, runs the hermetic DB-free kill
 // suite, then restores the file byte-for-byte (hash-verified). A mutant the
 // suite fails to kill is a coverage gap, not a test failure.
@@ -49,6 +52,9 @@ const KILL_SUITE = [
   "test/rsvp-waitlist-admission.test.ts",
   "test/admin-write-admission.test.ts",
   "test/admin-writeback-refusal.test.ts",
+  "test/agent-events-ingress-auth.test.ts",
+  "test/agent-events-ingress-replay.test.ts",
+  "test/agent-events-route-refusal.test.ts",
 ];
 
 const DB_URL_VARS = ["DATABASE_URL", "AUDIT_IMPORT_TEST_DATABASE_URL", "LEGACY_DATABASE_URL"];
@@ -202,6 +208,83 @@ const MUTANTS = [
     find: "await enqueueEventSync(env, wb.eventKey, wb.status, requestId);",
     replace: 'await enqueueEventSync(env, wb.eventKey, "published", requestId);',
   },
+  {
+    id: "E1-anon-admitted",
+    file: "src/agent-events/ingress.ts",
+    note: "machine credential gate: anonymous hits stay 401 (auth bypass)",
+    find: "if (!grant)",
+    replace: "if (false)",
+  },
+  {
+    id: "E2-wrong-caller-admitted",
+    file: "src/agent-events/ingress.ts",
+    note: "admitted-caller gate: a foreign agent stays 403 wrong_caller (auth bypass)",
+    find: 'if (cfg.callerAgentId === "" || grant.agent_id !== cfg.callerAgentId) {',
+    replace: "if (false) {",
+  },
+  {
+    id: "E3-wrong-guild-admitted",
+    file: "src/agent-events/ingress.ts",
+    note: "staging-guild gate: a foreign guild stays 403 (auth bypass)",
+    find: 'if (cfg.stagingGuildId !== "" && grant.guild_id !== cfg.stagingGuildId) {',
+    replace: "if (false) {",
+  },
+  {
+    id: "E4-replay-spends-budget",
+    file: "src/agent-events/ingress.ts",
+    note: "replay free pass: a stored replay answers without spending rate budget (replay spends budget)",
+    find: "if (!replay) {",
+    replace: "if (true) {",
+  },
+  {
+    id: "E4b-fresh-skips-budget",
+    file: "src/agent-events/ingress.ts",
+    note: "fresh rate limit: a fresh create with spent mutating budgets stays 429 rate_limited (rate-limit bypass)",
+    find: "if (!replay) {",
+    replace: "if (false) {",
+  },
+  {
+    id: "E5-envelope-unvalidated",
+    file: "src/agent-events/ingress.ts",
+    note: "op/idempotency_key envelope: a keyless envelope stays 422 (idempotency bypass)",
+    find: 'if (typeof op !== "string" || typeof idem !== "string" || idem === "" || idem.length > 255) {',
+    replace: "if (false) {",
+  },
+  {
+    id: "E6-unknown-op-admitted",
+    file: "src/agent-events/ingress.ts",
+    note: "five-op allowlist: an unknown op stays 403 forbidden_action (auth bypass)",
+    find: "if (!(OPS as readonly string[]).includes(op))",
+    replace: "if (false)",
+  },
+  {
+    id: "E7-raced-replay-ignored",
+    file: "src/agent-events/ingress.ts",
+    note: "under-lock raced recheck: a concurrent store answers replayed (idempotency bypass)",
+    find: "if (raced) {",
+    replace: "if (false) {",
+  },
+  {
+    id: "G1-disabled-proceeds",
+    file: "src/agent-events/route.ts",
+    note: "disabled ingress stays 404 and never reaches the store seam (refusal bypass)",
+    find: "if (!cfg.enabled) {",
+    replace: "if (false) {",
+  },
+  {
+    id: "G2-unavailable-proceeds",
+    file: "src/agent-events/route.ts",
+    note: "unconfigured store stays 503 instead of proceeding (refusal bypass)",
+    find: "if (!injected && !url)",
+    replace: "if (false)",
+  },
+  {
+    id: "G3-bearer-dropped",
+    file: "src/agent-events/route.ts",
+    note: "bearer credential reaches admission: a valid bearer stays past 401 (refusal bypass)",
+    find: "return m ? m[1]! : null;",
+    replace: "return null;",
+  },
 ];
 
 function sha(text) {
@@ -288,7 +371,7 @@ export function renderReport({ sha: headSha, startedAt, results }) {
   const survived = results.filter((r) => r.status === "survived");
   const stale = results.filter((r) => r.status !== "killed" && r.status !== "survived");
   const lines = [
-    "# Mutation report: sessions + join + rsvp + admin (nightly, non-blocking)",
+    "# Mutation report: sessions + join + rsvp + admin + agent-events (nightly, non-blocking)",
     "",
     `- head: ${headSha}`,
     `- started: ${startedAt}`,
@@ -378,7 +461,7 @@ export function run(root, kill = defaultKill) {
   const stale = results.filter((r) => r.status !== "killed" && r.status !== "survived");
   const survivedRows = survived(results);
   console.log(
-    `mutation sessions+join+rsvp+admin: ${results.length - survivedRows.length - stale.length}/${results.length} killed.`,
+    `mutation sessions+join+rsvp+admin+agent-events: ${results.length - survivedRows.length - stale.length}/${results.length} killed.`,
   );
   console.log(`report: artifacts/mutation-sessions-join/report.{json,md}`);
   for (const r of [...survivedRows, ...stale])
