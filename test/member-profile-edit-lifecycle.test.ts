@@ -251,6 +251,16 @@ describe("shipped member-profile edit lifecycle", () => {
     f.cancel();
     expect(f.departure().defaultPrevented).toBe(false);
 
+    f.enter({ games_text: "Go alone" });
+    expect(f.departure().defaultPrevented).toBe(true);
+    f.cancel();
+    expect(f.departure().defaultPrevented).toBe(false);
+
+    f.enter({ timezone: "Europe/Paris" });
+    expect(f.departure().defaultPrevented).toBe(true);
+    f.cancel();
+    expect(f.departure().defaultPrevented).toBe(false);
+
     f.enter({ bio: "Saved bio" });
     f.form.dispatch("submit");
     f.requests[0]!.resolve(success());
