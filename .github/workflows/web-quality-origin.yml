@@ -55,12 +55,6 @@ jobs:
         run: npm run lighthouse:quality
       - name: Web standards (security headers, HTML basics, internal links)
         if: ${{ !cancelled() }}
-        # Staging edge replaces the Worker's CSP/XFO (live staging sends only
-        # `content-security-policy: frame-ancestors 'self'` + `x-frame-options: SAMEORIGIN`,
-        # not the full CSP/DENY from src/headers.ts), so --origin fails 7/7 on headers.
-        # Informational until the edge preserves Worker headers; Lighthouse budgets still block.
-        # TODO: drop continue-on-error after the edge fix + one green workflow_dispatch run.
-        continue-on-error: true
         run: npm run standards -- --origin "$ORIGIN"
       - name: Quality summary (what to fix)
         if: ${{ !cancelled() }}

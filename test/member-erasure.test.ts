@@ -7,7 +7,7 @@
 // explicitly allowed GitHub CI Postgres service; CLI safety tests run
 // without a database.
 import { spawnSync } from "node:child_process";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import {
   assertDiscordId,
@@ -18,7 +18,7 @@ import {
 } from "../src/member-erasure";
 // @ts-expect-error Standalone Node CLI is intentionally JavaScript, like bin/import.
 // biome-ignore format: single-line import keeps the @ts-expect-error above attached to TS7016 (wrapping detaches it)
-import { isProductionDatabaseUrl, parseEraseArgs, validateEraseEnvironment } from "../bin/erase-member.mjs";
+import { createEraseClient, isProductionDatabaseUrl, parseEraseArgs, validateEraseEnvironment } from "../bin/erase-member.mjs";
 import { createMemberDataFixture, type MemberDataFixture } from "./helpers/member-data-db";
 
 const script = fileURLToPath(new URL("../bin/erase-member.mjs", import.meta.url).href);
@@ -124,14 +124,14 @@ describe("erase-member CLI safety (no database)", () => {
     for (const prod of [
       "postgres://fixture@db.production.test/two_web_next",
       "postgres://fixture@prod.example.test/neondb",
-      "postgres://fixture@ep-live-pooler.example.neon.tech/prod",
-      "postgres://fixture@ep-live.example.neon.tech/production",
+      "postgres://fixture@ep-live-pooler.example.neon.tech.invalid/prod",
+      "postgres://fixture@ep-live.example.neon.tech.invalid/production",
       "postgres://agent_test@agent-testdb/production",
     ])
       expect(isProductionDatabaseUrl(prod), prod).toBe(true);
     for (const safe of [
       "postgres://agent_test@agent-testdb:5432/two_web_next",
-      "postgres://fixture@ep-staging.example.neon.tech/neondb",
+      "postgres://fixture@ep-staging.example.neon.tech.invalid/neondb",
       "postgres://postgres:ci@localhost:5432/postgres",
       "not a url",
       "",
@@ -140,7 +140,8 @@ describe("erase-member CLI safety (no database)", () => {
   });
 
   it("refuses production without --target production and never echoes the URL", () => {
-    const prod = "postgres://fixture:synthetic-password@db.production.test/neondb";
+    const prod =
+      "postgres://fixture:synthetic-password@db.production.test/neondb?sslmode=verify-full";
     expect(() => validateEraseEnvironment({ DATABASE_URL: prod }, undefined)).toThrow(
       "--target production",
     );
@@ -162,6 +163,214 @@ describe("erase-member CLI safety (no database)", () => {
     const missing = run([`--discord-id=${MEMBER_A}`], {});
     expect(missing.status).toBe(2);
     expect(missing.stderr).toContain("DATABASE_URL");
+  });
+});
+
+const NO_TARGET = "--target staging or --target production";
+const TLS_REQUIRED = "sslmode=verify-full or sslrootcert=system";
+const LOCAL_URL = "postgres://agent_test@agent-testdb:5432/two_web_next";
+const STAGING_URL =
+  "postgres://fixture:synthetic-password@ep-staging.example.neon.tech.invalid/neondb?sslmode=verify-full";
+const STAGING_REQUIRE_URL =
+  "postgres://fixture:synthetic-password@ep-staging.example.neon.tech.invalid/neondb?sslmode=require";
+const POOLER_URL =
+  "postgres://fixture:synthetic-password@ep-cool-frost-12345-pooler.us-east-2.aws.neon.tech.invalid/neondb?sslmode=verify-full";
+const PSDB_URL =
+  "postgres://fixture:synthetic-password@aws-us-east-1.pg.psdb.cloud.invalid/two_web_next?sslmode=verify-full";
+const OPAQUE_URL =
+  "postgres://fixture:synthetic-password@db-7f3a9c.internal.example/postgres?sslmode=verify-full";
+const PROD_URL =
+  "postgres://fixture:synthetic-password@db.production.test/neondb?sslmode=verify-full";
+const STAGING_UPPER_URL =
+  "postgres://fixture:synthetic-password@EP-Staging.Example.Invalid./neondb?sslmode=verify-full";
+const recordingPostgres =
+  (calls: Record<string, unknown>[]) =>
+  (options: Record<string, unknown>): object => {
+    calls.push(options);
+    return {};
+  };
+
+describe("erase target and TLS policy (no connection)", () => {
+  it("refuses a staging-looking remote URL without a target", () => {
+    expect(() => validateEraseEnvironment({ DATABASE_URL: STAGING_URL }, undefined)).toThrow(
+      NO_TARGET,
+    );
+    expect(validateEraseEnvironment({ DATABASE_URL: STAGING_URL }, "staging")).toMatchObject({
+      databaseUrl: STAGING_URL,
+    });
+  });
+
+  it("accepts only staging or production as a remote target, even when called directly", () => {
+    for (const bad of ["dev", "STAGING", "", null, 0, false])
+      expect(
+        () => validateEraseEnvironment({ DATABASE_URL: STAGING_URL }, bad),
+        String(bad),
+      ).toThrow(NO_TARGET);
+  });
+
+  it("refuses pooler, *.pg.psdb.cloud.invalid, and opaque-host URLs without a target", () => {
+    for (const remote of [POOLER_URL, PSDB_URL, OPAQUE_URL])
+      expect(() => validateEraseEnvironment({ DATABASE_URL: remote }, undefined), remote).toThrow(
+        NO_TARGET,
+      );
+  });
+
+  it("requires sslmode=verify-full or sslrootcert for a remote target", () => {
+    const base =
+      "postgres://fixture:synthetic-password@ep-staging.example.neon.tech.invalid/neondb";
+    for (const query of [
+      "",
+      "?sslmode=require",
+      "?sslmode=verify-ca",
+      "?sslmode=disable",
+      "?sslmode=require&sslrootcert=system",
+    ])
+      expect(
+        () => validateEraseEnvironment({ DATABASE_URL: `${base}${query}` }, "staging"),
+        query,
+      ).toThrow(TLS_REQUIRED);
+    for (const query of ["?sslmode=verify-full", "?sslrootcert=system"])
+      expect(
+        validateEraseEnvironment({ DATABASE_URL: `${base}${query}` }, "staging"),
+      ).toMatchObject({ databaseUrl: `${base}${query}` });
+  });
+
+  it("applies the TLS rule to production targets and keeps production-looking URLs on production", () => {
+    expect(() =>
+      validateEraseEnvironment(
+        {
+          DATABASE_URL:
+            "postgres://fixture:synthetic-password@db.production.test/neondb?sslmode=require",
+        },
+        "production",
+      ),
+    ).toThrow(TLS_REQUIRED);
+    expect(() => validateEraseEnvironment({ DATABASE_URL: PROD_URL }, "staging")).toThrow(
+      "--target production",
+    );
+  });
+
+  it("refuses NODE_TLS_REJECT_UNAUTHORIZED=0 for remote and local targets", () => {
+    expect(() =>
+      validateEraseEnvironment(
+        { DATABASE_URL: STAGING_URL, NODE_TLS_REJECT_UNAUTHORIZED: "0" },
+        "staging",
+      ),
+    ).toThrow("NODE_TLS_REJECT_UNAUTHORIZED=0");
+    expect(() =>
+      validateEraseEnvironment(
+        { DATABASE_URL: LOCAL_URL, NODE_TLS_REJECT_UNAUTHORIZED: "0" },
+        undefined,
+      ),
+    ).toThrow("NODE_TLS_REJECT_UNAUTHORIZED=0");
+  });
+
+  it("keeps the local allowlist free of target and TLS requirements", () => {
+    for (const local of [
+      LOCAL_URL,
+      "postgres://fixture@localhost:5432/postgres",
+      "postgres://fixture@127.0.0.1:5432/postgres",
+      "postgres://fixture@[::1]:5432/postgres",
+    ])
+      expect(validateEraseEnvironment({ DATABASE_URL: local }, undefined), local).toMatchObject({
+        databaseUrl: local,
+      });
+  });
+
+  it("builds the client from parsed endpoint fields, never the raw URL", () => {
+    const calls: unknown[][] = [];
+    const fakePostgres = (...args: unknown[]) => {
+      calls.push(args);
+      return {};
+    };
+    createEraseClient(fakePostgres, STAGING_URL);
+    expect(calls).toHaveLength(1);
+    const [[options, ...extra]] = calls as [[Record<string, unknown>, ...unknown[]]];
+    expect(extra).toEqual([]);
+    expect(options).toMatchObject({
+      host: ["ep-staging.example.neon.tech.invalid"],
+      port: [5432],
+      database: "neondb",
+      username: "fixture",
+      ssl: "verify-full",
+      max: 1,
+    });
+    expect((options!.password as () => string)()).toBe("synthetic-password");
+    expect(options).not.toHaveProperty("sslmode");
+  });
+
+  it("refuses to build a remote client unless its effective TLS is verify-full", () => {
+    const calls: Record<string, unknown>[] = [];
+    const fakePostgres = (options: Record<string, unknown>) => {
+      calls.push(options);
+      return {};
+    };
+    const base =
+      "postgres://fixture:synthetic-password@ep-staging.example.neon.tech.invalid/neondb";
+    for (const query of ["", "?sslmode=require", "?sslmode=disable"])
+      expect(() => createEraseClient(fakePostgres, `${base}${query}`), query).toThrow(
+        "requires verify-full TLS",
+      );
+    expect(calls).toHaveLength(0);
+    createEraseClient(fakePostgres, `${base}?sslrootcert=system`);
+    expect(calls[0]).toMatchObject({ ssl: "verify-full" });
+  });
+
+  it("gives the driver the same normalized host the TLS classifier checks", () => {
+    const calls: Record<string, unknown>[] = [];
+    createEraseClient(recordingPostgres(calls), STAGING_UPPER_URL);
+    expect(calls[0]).toMatchObject({ host: ["ep-staging.example.invalid"], ssl: "verify-full" });
+  });
+
+  it("keeps the agent-testdb client plaintext by default", () => {
+    const calls: Record<string, unknown>[] = [];
+    createEraseClient(recordingPostgres(calls), LOCAL_URL);
+    expect(calls[0]).toMatchObject({ ssl: false });
+  });
+
+  it("refuses unauthorized remote URLs before connecting and never echoes them", () => {
+    const cases: [string[], Record<string, string>, string][] = [
+      [[`--discord-id=${MEMBER_A}`], { DATABASE_URL: POOLER_URL }, NO_TARGET],
+      [[`--discord-id=${MEMBER_A}`], { DATABASE_URL: PSDB_URL }, NO_TARGET],
+      [[`--discord-id=${MEMBER_A}`], { DATABASE_URL: OPAQUE_URL }, NO_TARGET],
+      [
+        [`--discord-id=${MEMBER_A}`, "--target", "staging"],
+        { DATABASE_URL: STAGING_REQUIRE_URL },
+        TLS_REQUIRED,
+      ],
+      [
+        [`--discord-id=${MEMBER_A}`, "--target", "staging"],
+        { DATABASE_URL: STAGING_URL, NODE_TLS_REJECT_UNAUTHORIZED: "0" },
+        "NODE_TLS_REJECT_UNAUTHORIZED=0",
+      ],
+    ];
+    for (const [args, env, reason] of cases) {
+      const result = run(args, env);
+      expect(result.status, reason).toBe(2);
+      expect(result.stdout).toBe("");
+      expect(result.stderr).toContain(reason);
+      const output = result.stdout + result.stderr;
+      for (const secret of [env.DATABASE_URL!, "synthetic-password", MEMBER_A, "postgres://"])
+        expect(output).not.toContain(secret);
+    }
+  });
+
+  it("checks the live process environment for the TLS override, not only the env argument", () => {
+    // The port is closed: if the gate is missing, the run fails with exit 1, never a live connection.
+    const code = `import(${JSON.stringify(pathToFileURL(script).href)}).then((m) => m.main(["--discord-id=${MEMBER_A}"], { DATABASE_URL: "postgres://fixture@127.0.0.1:1/neondb" })).then((code) => { process.exitCode = code; });`;
+    const result = spawnSync(
+      process.execPath,
+      ["--import", "./bin/ts-hook.mjs", "--input-type=module", "-e", code],
+      {
+        env: { PATH: process.env.PATH ?? "", NODE_TLS_REJECT_UNAUTHORIZED: "0" },
+        cwd: fileURLToPath(new URL("..", import.meta.url).href),
+        encoding: "utf8",
+        timeout: 20_000,
+      },
+    );
+    expect(result.status).toBe(2);
+    expect(result.stderr).toContain("NODE_TLS_REJECT_UNAUTHORIZED=0");
+    expect(result.stdout + result.stderr).not.toContain("127.0.0.1:1");
   });
 });
 

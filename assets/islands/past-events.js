@@ -1,4 +1,10 @@
 // PastEvents: SSR-first archive; page-turn reads only, never a polling loop.
+//
+// One owned read deadline (READ_DEADLINE_MS, at most 10 seconds) spans response
+// headers plus HTML body settlement. On expiry the read is aborted where
+// possible, busy/loading is released and accessible failure recovery is shown,
+// even when abort is ignored. Late or superseded completions never commit
+// content, history or metadata and never clear a newer read. No repeat read.
 (function () {
   "use strict";
   var root = document.querySelector('[data-island="past-events"]');
@@ -18,11 +24,43 @@
   )
     return;
   var active = null;
+  var deadlineTimer = null;
   // Path and query of the rendered page; a fragment does not change the page.
   var renderedAddress = pageAddress(new URL(window.location.href));
+  // Owned read deadline for one page turn: fetch plus response-body completion.
+  // One shot per read, never a repeat; superseded timers are disarmed and an
+  // obsolete timer that still fires cannot touch a newer read.
+  var READ_DEADLINE_MS = 10000;
+  // The deadline needs both timer globals; harnesses without a fake clock keep
+  // the pre-deadline admission behavior.
+  var canTimeout = typeof setTimeout !== "undefined" && typeof clearTimeout !== "undefined";
 
   function pageAddress(url) {
     return url.pathname + url.search;
+  }
+
+  function clearDeadline() {
+    if (deadlineTimer !== null) {
+      if (canTimeout) clearTimeout(deadlineTimer);
+      deadlineTimer = null;
+    }
+  }
+
+  function expire(controller, push) {
+    // Only the current read owns failure recovery: a superseded timer that
+    // fires during a newer read changes nothing.
+    if (active !== controller) return;
+    deadlineTimer = null;
+    try {
+      controller.abort();
+    } catch {}
+    active = null;
+    root.removeAttribute("aria-busy");
+    feedback.textContent = root.dataset.loadError;
+    // Same reconciliation as an ordinary failure: a click that never pushed its
+    // target stays inline, a Back/forward read reloads the SSR document.
+    if (!push || pageAddress(new URL(window.location.href)) !== renderedAddress)
+      window.location.assign(window.location.href);
   }
 
   function archiveUrl(href, fromHistory) {
@@ -69,6 +107,7 @@
 
   async function load(url, push) {
     if (active) active.abort();
+    clearDeadline();
     var controller = new AbortController();
     // Back/forward reads must not be skipped by the fragment-only popstate rule.
     controller.fromHistory = !push;
@@ -86,6 +125,14 @@
     document.addEventListener("focusin", trackFocus);
     root.setAttribute("aria-busy", "true");
     feedback.textContent = "Loading past events…";
+    // The owned deadline covers the whole read: headers plus body. On expiry
+    // the read no longer owns content, history or metadata — late completions
+    // are dropped by the active guard. No automatic repeat read.
+    if (canTimeout) {
+      deadlineTimer = setTimeout(function () {
+        expire(controller, push);
+      }, READ_DEADLINE_MS);
+    }
     try {
       var response = await fetch(url.pathname + url.search, {
         method: "GET",
@@ -175,7 +222,10 @@
         window.location.assign(window.location.href);
     } finally {
       document.removeEventListener("focusin", trackFocus);
+      // Settlement owns the deadline only while still current: an expired or
+      // superseded read has already released both, and a newer read owns them.
       if (active === controller) {
+        clearDeadline();
         root.removeAttribute("aria-busy");
         active = null;
       }

@@ -14,7 +14,10 @@ replacements have the same log/header contract.
 1. Ask for the response's **`x-request-id`** and approximate time, not a cookie,
    Authorization header, OAuth callback URL or Discord identity. The header is
    a validated Cloudflare Ray ID (`cf-ray`), or a generated ULID when no valid
-   Ray ID is available. Client `x-request-id` input is ignored.
+   Ray ID is available. Client `x-request-id` input is ignored. The generic 500
+   page and the database-outage and maintenance 503 pages show the same value as
+   their **Support reference**, so a member can copy it without developer tools.
+   The join-flow recovery page does not show it.
 2. Open **Cloudflare dashboard → Workers & Pages → two-web-next → Observability**.
    Choose a time window around the report and the correct deployed Worker.
 3. Search the log message for the exact ID (for example,
@@ -62,7 +65,7 @@ Documented cause set: `discord_unavailable`, `in_progress`, `internal`, `rate_li
 | Cause (`sync_retry_code`) | Meaning |
 | --- | --- |
 | `in_progress` | The bot reports the operation is already in progress (409 with a retryable answer); another attempt for the same logical operation is underway |
-| `rate_limited` | The bot or Discord rate-limited the call (429); the existing Retry-After/backoff still sets the wait |
+| `rate_limited` | The bot or Discord rate-limited the call (429); a Retry-After above 0 and at most 86400 seconds (fractions round up) sets the wait, and an absent, zero or out-of-range value uses the attempt's backoff |
 | `internal` | The bot reported a retryable internal error |
 | `discord_unavailable` | The bot surfaced Discord-side unavailability |
 | `upstream_timeout` | The bot's upstream call timed out |

@@ -1,5 +1,6 @@
 import { SYNC_EVENT, backoffFor } from "./constants";
 import { botRefusalReason, sanitizeQueueScope, terminalFailureReason } from "./queue-error";
+import { admitRetryDelay } from "./retry-delay";
 import { BotTerminalError, BotTransportError, SyncRetryPersistenceError } from "./types";
 import type { BotClient, BotFailure, EventStore, UniqueLock } from "./types";
 import { safeRequestId } from "../request-log";
@@ -142,7 +143,7 @@ export async function handleSyncEvent(
         };
       // Record the refusal before persistence can throw and obscure its cause.
       reportRetry("BotFailure", answer);
-      return await retry(answer.retryAfterSeconds ?? backoff());
+      return await retry(admitRetryDelay(answer.retryAfterSeconds, backoff()));
     }
     await deps.events.completeSync(attempt, answer.discordEventId);
     return { done: true };

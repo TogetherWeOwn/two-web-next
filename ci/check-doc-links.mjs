@@ -1,8 +1,9 @@
 #!/usr/bin/env node
 // Checks relative file links and `#anchor` fragments in the Markdown files
-// GitHub renders for this repo: README.md, CONTRIBUTING.md, SECURITY.md and
-// docs/**/*.md. External `http(s)` links are ignored (no network); fenced
-// code blocks and inline code spans are skipped.
+// GitHub renders for this repo: the root files (ROOT_FILES) plus the
+// contributor contracts (CONTRIBUTOR_CONTRACT_FILES), the in-tree guides
+// (IN_TREE_GUIDE_FILES) and docs/**/*.md. External `http(s)` links are
+// ignored (no network); fenced code blocks and inline code spans are skipped.
 //
 // Exit codes: 0 = every link resolves, 1 = at least one broken link,
 // 2 = usage error or an unreadable file (fail closed, like check-bundle-budget).
@@ -23,6 +24,17 @@ import assert from "node:assert/strict";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const ROOT_FILES = ["README.md", "CONTRIBUTING.md", "SECURITY.md"];
+// Contributor contracts GitHub renders at the repo root or under .github/:
+// an explicit list (not a glob) so silently dropping a file fails the
+// selftests below instead of passing with fewer files checked.
+const CONTRIBUTOR_CONTRACT_FILES = [
+  "AGENTS.md",
+  "CHANGELOG.md",
+  "CODE_OF_CONDUCT.md",
+  ".github/pull_request_template.md",
+];
+// In-tree guides with relative links into docs/ and test fixtures.
+const IN_TREE_GUIDE_FILES = ["bin/import/README.md", "ci/featured-proof/README.md"];
 const DOCS_DIR = "docs";
 
 // A link target with a URI scheme (http:, https:, mailto:, data:, ...) or a
@@ -261,7 +273,8 @@ function fenceMask(lines) {
 
 function walkMarkdownFiles(root) {
   const files = [];
-  for (const name of ROOT_FILES) files.push(join(root, name));
+  for (const name of [...ROOT_FILES, ...CONTRIBUTOR_CONTRACT_FILES, ...IN_TREE_GUIDE_FILES])
+    files.push(join(root, name));
   const docs = join(root, DOCS_DIR);
   const walk = (dir) => {
     for (const entry of readdirSync(dir, { withFileTypes: true })) {
@@ -358,6 +371,15 @@ function selftest() {
     const check = (name, setup, expected, diagnostics = []) => {
       rmSync(root, { recursive: true, force: true });
       mkdirSync(root, { recursive: true });
+      // Every explicitly scoped file must exist in the scratch tree: the
+      // checker fails closed on unreadable files, so stub the scope here and
+      // let each setup overwrite the files it exercises.
+      for (const stub of [...ROOT_FILES, ...CONTRIBUTOR_CONTRACT_FILES, ...IN_TREE_GUIDE_FILES]) {
+        write(stub, "# Stub\n");
+      }
+      // The docs walk requires the directory to exist; the stub carries no
+      // links so it cannot change any expectation.
+      write("docs/scope-stub.md", "# Stub\n");
       setup();
       const messages = [];
       const code = checkLinks(root, {
@@ -522,6 +544,64 @@ function selftest() {
       },
       1,
       ['missing anchor "#setup-2"'],
+    );
+
+    // The six files this scope added, pinned literally on purpose: a loop over
+    // the scope constants shrinks with them and would never notice a dropped
+    // entry. Restoring the old three-file scope, or dropping any one of these,
+    // makes the checker skip the file, so its broken link is accepted (exit 0,
+    // not 1) and the case fails.
+    const NEW_SCOPE_FILES = [
+      "AGENTS.md",
+      "CHANGELOG.md",
+      "CODE_OF_CONDUCT.md",
+      ".github/pull_request_template.md",
+      "bin/import/README.md",
+      "ci/featured-proof/README.md",
+    ];
+    for (const path of NEW_SCOPE_FILES) {
+      check(
+        `${path} broken links fail with file, line and target`,
+        () => {
+          write(
+            path,
+            ["# Heading", "", "[lost](missing.md)", "[anchor](#no-such-anchor)"].join("\n"),
+          );
+        },
+        1,
+        [
+          `${path}:3: missing link target "missing.md"`,
+          `${path}:4: missing anchor "#no-such-anchor"`,
+        ],
+      );
+    }
+
+    check(
+      "new-scope fenced code and inline code links are skipped",
+      () => {
+        write(
+          "AGENTS.md",
+          [
+            "# Agents",
+            "",
+            "```md",
+            "[fenced](missing.md)",
+            "```",
+            "",
+            "`[inline](missing.md)`",
+            "",
+          ].join("\n"),
+        );
+        write(
+          ".github/pull_request_template.md",
+          ["# Template", "", "```md", "[fenced](missing.md)", "```", ""].join("\n"),
+        );
+        write(
+          "bin/import/README.md",
+          ["# Import", "", "```md", "[fenced](missing.md)", "```", ""].join("\n"),
+        );
+      },
+      0,
     );
 
     check(
