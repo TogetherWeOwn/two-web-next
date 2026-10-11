@@ -1,4 +1,6 @@
 name: deploy
+# The deployed commit, queryable later: workflow_run runs record main's tip as head_sha.
+run-name: deploy ${{ github.event.workflow_run.head_sha || github.sha }}
 
 # Staging deploy after successful full CI on main. Production (togetherweown.com) is only
 # switched at cutover (plan TOG-9671, W16): there is deliberately no prod job here.

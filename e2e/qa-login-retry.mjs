@@ -1,4 +1,4 @@
-// Bounded 429 handling for staging QA logins (THROTTLE-SELF-HIT FIX).
+// Bounded 429 handling for staging and local QA logins (THROTTLE-SELF-HIT FIX).
 //
 // POST /auth/qa/:identity carries the shared `qa-login` throttle
 // (AUTH_THROTTLE_PER_MINUTE = 10/min per runner IP, src/throttle.ts). Every
@@ -44,10 +44,11 @@ export function parseRetryAfterSeconds(headers, fallbackSeconds = 60) {
  * @param {string} identity "qa-member" | "qa-moderator"
  * @param {number} retryAfterSeconds last Retry-After seen
  * @param {number} attempts attempts made
+ * @param {string} [scope] "staging" (default) or "local"
  */
-export function qaLoginThrottleError(identity, retryAfterSeconds, attempts) {
+export function qaLoginThrottleError(identity, retryAfterSeconds, attempts, scope = "staging") {
   return new Error(
-    `staging QA login as ${identity} refused with 429 after ${attempts} attempt(s) ` +
+    `${scope} QA login as ${identity} refused with 429 after ${attempts} attempt(s) ` +
       `(qa-login throttle: 10/min per runner IP; server asked to retry in ${retryAfterSeconds}s). ` +
       `Per-file QA logins exceeded the shared budget — cut the login count ` +
       `(scoped per-file sessions, no global-setup login) rather than retrying harder.`,

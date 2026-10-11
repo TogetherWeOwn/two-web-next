@@ -8,6 +8,7 @@ version.
 - Work on a branch and open a PR. Never push to `main`. Name branches
   `type/short-slug`, for example `fix/sudo-window`. Head branches are deleted when
   the PR merges.
+- The workspace may hand you a local branch named after a tracker card; keep committing to it, never publish that name, push `git push origin HEAD:refs/heads/<type>/<short-slug>` and open the PR from that ref.
 - Squash-merge only. Each PR is one logical change. The squash commit takes the PR
   title and body, so write both for the history on `main`.
 - PR title = Conventional Commits header: `type(scope): summary`, at most 100
@@ -15,22 +16,20 @@ version.
   `test`, `docs`, `build`, `ci`, `chore`, `revert`, `style`, `security`. The scope
   names the area of the code, such as `auth`, `events` or `sync`. Release automation
   reads these headers.
-- Fill in every section of the [PR template](.github/pull_request_template.md):
-  Thinking Path, Linked Issues or Issue Description, What Changed, Verification,
-  Risks, Model Used, and the Checklist. Use short, active sentences.
+- Use the [PR template](.github/pull_request_template.md), in short, active
+  sentences. `pr-lint` requires Linked Issues or Issue Description and
+  Verification (commands run and their results); the other sections are optional.
 - Link a public GitHub issue with `Closes #123`, or describe the problem in the PR.
   No card reference is required. `docs`, `chore`, `build`, `ci`, `style`, `test` and
   `revert` PRs need no linked issue.
 - Search first. Look for an open or recent PR that touches the same area, and link
-  what you find. `feat`, `fix`, `perf`, `refactor` and `security` PRs tick the
-  duplicate-search box in the checklist.
+  what you find.
 - Keep references public-safe. Do not put internal card IDs (`TOG-` or `PAP-`
   followed by digits), private URLs, tokens or secrets in any title, body, commit,
   comment or branch name. `pr-lint` warns when it finds a card ID in the title, body
   or a commit subject, and in the branch name in any letter case (`qa/tog-123-x`).
-- Be honest about the model and the tests. Name the model that wrote or assisted the
-  change, give the exact commands you ran and their results, and say what you did
-  not run. Never claim a green run you did not see.
+- Be honest about the tests. Give the exact commands you ran and their results in
+  Verification, and say what you did not run. Never claim a green run you did not see.
 - Address every review finding, or reply with why it does not apply.
 - Credit the contributors whose work you build on.
 - Done means merged. Do not leave an orphan PR open: merge it, or close it with a
@@ -152,23 +151,20 @@ workflow or change repository scanning settings as part of the dependency gate.
 
 ## Releases
 
-Releases are automated with [release-please](https://github.com/googleapis/release-please)
-(`release-please-config.json` + `.release-please-manifest.json`, release-type
-`node`). The `release` workflow regenerates the release PR on a weekly schedule
-or a manual dispatch, not on every merge to `main` (a push only publishes).
-Merging that PR writes `CHANGELOG.md`, tags `vX.Y.Z` and publishes a GitHub
-Release. Cut one with the short freeze procedure in
-[`docs/releases.md`](docs/releases.md#cutting-a-release). Never tag or release
-by hand.
+Each successful production promote tags the deployed commit `vX.Y.Z` and
+publishes a GitHub Release from the Conventional Commit subjects since the
+previous tag (`release.yml`, called by `deploy-production`). There is no release
+PR. See [`docs/releases.md`](docs/releases.md). Never tag or release by hand.
 
-`CHANGELOG.md` uses the [Common Changelog](https://common-changelog.org/)
+Release notes use the [Common Changelog](https://common-changelog.org/)
 categories, in its order: **Changed** (`perf`, `revert`), **Added** (`feat`),
 **Fixed** (`fix`). `chore`, `docs`, `test`, `ci`, `build`, `refactor` and `style`
-stay out of the changelog. Each squash-merged PR title becomes one entry, so
-write it for a reader of the changelog: imperative mood, one user-facing change.
+stay out of the notes. Each squash-merged PR title becomes one entry, so
+write it for a reader of the release notes: imperative mood, one user-facing change.
 
 Versioning is SemVer, starting at `0.1.0`; `1.0.0` marks the production
-cutover. Before `1.0.0`, `feat!` / `BREAKING CHANGE` bumps the minor version;
+cutover: `release-as: 1.0.0` in `release-please-config.json` makes the
+cutover promote cut `v1.0.0`. Before `1.0.0`, `feat!` / `BREAKING CHANGE` bumps the minor version;
 from `1.0.0` onward, it bumps the major version.
 
 ## Local development

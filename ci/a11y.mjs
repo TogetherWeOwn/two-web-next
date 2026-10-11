@@ -8,6 +8,8 @@ import { pathToFileURL } from "node:url";
 import { build } from "esbuild";
 import { chromium, request as apiRequest } from "playwright";
 import AxeBuilder from "@axe-core/playwright";
+import { serializeSigned } from "hono/utils/cookie";
+import { A11Y_FREEZE_DATES } from "./a11y-cases.mjs";
 import { assertNoViolations, auditCases, redactAuditLog, WCAG_AA_TAGS } from "./a11y-policy.mjs";
 import { AUDIT_BROWSER_OPTIONS, createAuditLifecycle, stopChildProcess } from "./a11y-lifecycle.mjs";
 import { buildAuditWorker } from "./a11y-build.mjs";
@@ -31,6 +33,12 @@ async function freePort() {
   const port = socket.address().port;
   await new Promise((resolve) => socket.close(resolve));
   return port;
+}
+
+async function addAuditCookie(context, origin, cookie) {
+  const pair = cookie.split(";")[0];
+  const equals = pair.indexOf("=");
+  await context.addCookies([{ name: pair.slice(0, equals), value: pair.slice(equals + 1), url: origin, secure: true, httpOnly: true, sameSite: "Lax" }]);
 }
 
 for (const signal of ["SIGINT", "SIGTERM"]) {
@@ -70,7 +78,7 @@ try {
     compatibility_date: "2026-09-29",
     compatibility_flags: ["nodejs_compat"],
     assets: { directory: resolve("public") },
-    vars: { APP_URL: origin, A11Y_DATABASE_URL: database, A11Y_SCHEMA: fixture.schemaName, A11Y_CI: String(process.env.CI === "true" && process.env.GITHUB_ACTIONS === "true"), SESSION_SECRET: fixture.sessionSecret, DISCORD_CLIENT_ID: "local-fixture", DISCORD_GUILD_ID: "local-fixture", DISCORD_INVITE_URL: "/discord" },
+    vars: { APP_URL: origin, A11Y_DATABASE_URL: database, A11Y_SCHEMA: fixture.schemaName, A11Y_CI: String(process.env.CI === "true" && process.env.GITHUB_ACTIONS === "true"), SESSION_SECRET: fixture.sessionSecret, FREEZE_BANNER_DATES: A11Y_FREEZE_DATES, DISCORD_CLIENT_ID: "local-fixture", DISCORD_GUILD_ID: "local-fixture", DISCORD_INVITE_URL: "/discord" },
     dev: { local_protocol: "https" },
   })));
   // Do not inherit DB URLs, Cloudflare credentials, or .dev.vars. This worker has no remote bindings.
@@ -97,7 +105,7 @@ try {
       lifecycle.assertRunning();
       const label = `${scenario.identity} ${scenario.path} ${scenario.state || "default"} ${viewport.width}px`;
       const result = { ...scenario, viewport, label };
-      const context = await browser.newContext({ viewport, ignoreHTTPSErrors: true, extraHTTPHeaders: { "x-a11y-read-state": scenario.readState || "populated" } });
+      const context = await browser.newContext({ viewport, ignoreHTTPSErrors: true, extraHTTPHeaders: { "x-a11y-read-state": scenario.readState || "populated", "x-a11y-freeze-banner": ["freeze-banner", "both-banners"].includes(scenario.state) ? "true" : "false" } });
       // Block every off-origin browser request, including redirects to Discord.
       await context.route("**/*", (route) => new URL(route.request().url()).origin === origin ? route.continue() : route.abort());
       const page = await context.newPage();
@@ -110,10 +118,11 @@ try {
         if (response.status() >= 400 && ["script", "stylesheet"].includes(response.request().resourceType())) resourceErrors.push(`${response.status()} ${response.url()}`);
       });
       try {
-        if (scenario.identity !== "guest") {
-          const cookie = await fixture.cookie(scenario.identity);
-          const equals = cookie.indexOf("=");
-          await context.addCookies([{ name: cookie.slice(0, equals), value: cookie.slice(equals + 1), url: origin, secure: true, httpOnly: true, sameSite: "Lax" }]);
+        if (scenario.identity !== "guest")
+          await addAuditCookie(context, origin, await fixture.cookie(scenario.identity));
+        if (["expired-write-banner", "both-banners"].includes(scenario.state)) {
+          const cookie = await serializeSigned("__Host-two_expired_write", "restored|/profile", fixture.sessionSecret, { path: "/", secure: true });
+          await addAuditCookie(context, origin, cookie);
         }
         const response = await page.goto(`${origin}${scenario.path}`, { waitUntil: "networkidle" });
         assert.equal(response?.status(), scenario.status, "Unexpected page status");

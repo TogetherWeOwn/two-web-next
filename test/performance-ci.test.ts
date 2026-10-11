@@ -42,7 +42,7 @@ async function request(path: string, method = "GET") {
 }
 
 describe("performance CI", () => {
-  it("measures all five real public pages, not error pages or redirects", async () => {
+  it("measures all eight real public pages, not error pages or redirects", async () => {
     const outbound = vi
       .spyOn(globalThis, "fetch")
       .mockRejectedValue(new Error("Unexpected outbound fetch"));
@@ -84,6 +84,12 @@ describe("performance CI", () => {
           );
         }
         if (path === "/join") expect(html).not.toContain("<iframe");
+        const staticHeading = {
+          "/faq": "Frequently asked questions",
+          "/rules": "House rules",
+          "/privacy": "Privacy policy",
+        }[path];
+        if (staticHeading) expect(html).toMatch(new RegExp(`<h1\\b[^>]*>${staticHeading}</h1>`));
       }
       expect(outbound).not.toHaveBeenCalled();
     } finally {
@@ -253,9 +259,11 @@ describe("performance CI", () => {
       [...config.collect.url, "http://127.0.0.1:8787/admin"],
       config.collect.url.slice(1),
       [...config.collect.url.slice(0, 4), "http://127.0.0.1:8787/about?probe=1"],
+      config.collect.url.slice(0, 5),
+      config.collect.url.slice(0, 7),
     ]) {
       await expect(probeFixture(urls, fetchPage)).rejects.toThrow(
-        "Only the five local fixture URLs",
+        "Only the audited local fixture URLs",
       );
     }
     expect(fetchPage).not.toHaveBeenCalled();
@@ -339,6 +347,21 @@ describe("performance CI", () => {
       "/about",
       (html: string) => html.replace("About Together We Own</h1>", "Unavailable</h1>"),
     ],
+    [
+      "FAQ error content",
+      "/faq",
+      (html: string) => html.replace("Frequently asked questions</h1>", "Unavailable</h1>"),
+    ],
+    [
+      "rules error content",
+      "/rules",
+      (html: string) => html.replace("House rules</h1>", "Unavailable</h1>"),
+    ],
+    [
+      "privacy error content",
+      "/privacy",
+      (html: string) => html.replace("Privacy policy</h1>", "Unavailable</h1>"),
+    ],
   ])("refuses %s even when the route remains HTTP 200", async (_label, path, mutate) => {
     const before = Date.now();
     const response = await request(path);
@@ -383,7 +406,7 @@ describe("performance CI", () => {
     child.stdout.emit("data", "1:8787\n");
     expect(chunks.join("")).not.toContain(readyPattern);
     await running.admission;
-    expect(fetchPage).toHaveBeenCalledTimes(5);
+    expect(fetchPage).toHaveBeenCalledTimes(8);
     expect(chunks.join("")).toContain(readyPattern);
     expect(stopServer).not.toHaveBeenCalled();
     running.stop();
@@ -446,7 +469,7 @@ describe("performance CI", () => {
     child.emit("exit", 1);
     await expect(running.admission).rejects.toThrow("exited before content admission");
     release();
-    await vi.waitFor(() => expect(fetchPage).toHaveBeenCalledTimes(5));
+    await vi.waitFor(() => expect(fetchPage).toHaveBeenCalledTimes(8));
     expect(chunks.join("")).not.toContain(readyPattern);
     expect(stopServer).toHaveBeenCalledExactlyOnceWith(child);
   });
