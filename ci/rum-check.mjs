@@ -37,57 +37,156 @@ export function evaluate(quantiles, budget, count) {
   return { rows, enoughData: count >= minSamples, failed: rows.filter((r) => !r.ok) };
 }
 
-async function main() {
-  const {
-    CF_ANALYTICS_READ_TOKEN: token,
-    CF_RUM_ACCOUNT_ID: account,
-    CF_RUM_SITE_TAG: site,
-  } = process.env;
-  const summary = (md) => {
-    console.log(md);
-    if (process.env.GITHUB_STEP_SUMMARY) appendFileSync(process.env.GITHUB_STEP_SUMMARY, `${md}\n`);
+// Admission: a configured HTTP-200 body must carry the queried GraphQL shape.
+// Broken responses (invalid JSON handled by the caller, missing/null data,
+// malformed accounts/groups, invalid counts) throw a bounded, payload-free
+// "Response invalid: <reason>" instead of collapsing to count zero, so they
+// never report as legitimate insufficient data. A structurally valid empty
+// groups array is the legitimate zero-sample case.
+export function admitRumResponse(body) {
+  const invalid = (reason) => {
+    throw new Error(`Response invalid: ${reason}`);
   };
-  if (!token || !account || !site) {
-    summary(
-      "## Real-user Web Vitals\n\nNot configured (needs secret CF_ANALYTICS_READ_TOKEN and variables CF_RUM_ACCOUNT_ID, CF_RUM_SITE_TAG). Skipped.",
-    );
-    return 0;
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
+    invalid("empty response");
   }
-  const budget = JSON.parse(readFileSync("ci/rum-budget.json", "utf8"));
+  const data = body.data;
+  if (!data || typeof data !== "object" || Array.isArray(data)) {
+    invalid("missing data");
+  }
+  const viewer = data.viewer;
+  if (!viewer || typeof viewer !== "object" || Array.isArray(viewer)) {
+    invalid("missing viewer");
+  }
+  const accounts = viewer.accounts;
+  if (!Array.isArray(accounts) || accounts.length === 0) {
+    invalid("malformed accounts");
+  }
+  const account = accounts[0];
+  if (!account || typeof account !== "object" || Array.isArray(account)) {
+    invalid("malformed accounts");
+  }
+  const groups = account.rumWebVitalsEventsAdaptiveGroups;
+  if (!Array.isArray(groups)) {
+    invalid("malformed groups");
+  }
+  if (groups.length === 0) {
+    return { count: 0, quantiles: undefined };
+  }
+  const group = groups[0];
+  if (!group || typeof group !== "object" || Array.isArray(group)) {
+    invalid("malformed groups");
+  }
+  if (!Number.isInteger(group.count) || group.count < 0) {
+    invalid("invalid count");
+  }
+  const quantiles = group.quantiles;
+  if (
+    quantiles !== undefined &&
+    quantiles !== null &&
+    (typeof quantiles !== "object" || Array.isArray(quantiles))
+  ) {
+    invalid("malformed quantiles");
+  }
+  return { count: group.count, quantiles };
+}
+
+function tableLines(rows) {
+  return [
+    "| Metric | p75 | Budget | |",
+    "| --- | --- | --- | --- |",
+    ...rows.map(
+      (r) => `| ${r.name} | ${r.value ?? "n/a"} | ${r.max} | ${r.ok ? "ok" : "**over**"} |`,
+    ),
+  ];
+}
+
+// Injectable runner so tests can pass synthetic fetch responses without any
+// Cloudflare query. Summaries are bounded, fixed-shape strings: they never
+// echo provider payloads, credentials or identity (token, account, site).
+export async function runRumCheck({
+  env = process.env,
+  fetchImpl = fetch,
+  budget,
+  onSummary,
+} = {}) {
+  const { CF_ANALYTICS_READ_TOKEN: token, CF_RUM_ACCOUNT_ID: account, CF_RUM_SITE_TAG: site } = env;
+  const emit =
+    onSummary ??
+    ((md) => {
+      console.log(md);
+      if (process.env.GITHUB_STEP_SUMMARY)
+        appendFileSync(process.env.GITHUB_STEP_SUMMARY, `${md}\n`);
+    });
+  if (!token || !account || !site) {
+    const summary =
+      "## Real-user Web Vitals\n\nNot configured (needs secret CF_ANALYTICS_READ_TOKEN and variables CF_RUM_ACCOUNT_ID, CF_RUM_SITE_TAG). Skipped.";
+    emit(summary);
+    return { code: 0, kind: "skipped", summary };
+  }
+  const resolvedBudget = budget ?? JSON.parse(readFileSync("ci/rum-budget.json", "utf8"));
   const until = new Date();
   const since = new Date(until.getTime() - 24 * 3600 * 1000);
-  const res = await fetch("https://api.cloudflare.com/client/v4/graphql", {
-    method: "POST",
-    headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
-    body: JSON.stringify({
-      query: QUERY,
-      variables: { account, site, since: since.toISOString(), until: until.toISOString() },
-    }),
-  });
-  const body = await res.json().catch(() => ({}));
-  if (!res.ok || body.errors?.length) {
-    summary(
-      `## Real-user Web Vitals\n\nQuery failed (HTTP ${res.status}): ${(body.errors ?? []).map((e) => e.message).join("; ")}`,
-    );
-    return 1;
+  let res;
+  try {
+    res = await fetchImpl("https://api.cloudflare.com/client/v4/graphql", {
+      method: "POST",
+      headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+      body: JSON.stringify({
+        query: QUERY,
+        variables: { account, site, since: since.toISOString(), until: until.toISOString() },
+      }),
+    });
+  } catch {
+    const summary =
+      "## Real-user Web Vitals\n\nQuery failed (network error). Budgets not evaluated.";
+    emit(summary);
+    return { code: 1, kind: "query-failed", summary };
   }
-  const group = body.data?.viewer?.accounts?.[0]?.rumWebVitalsEventsAdaptiveGroups?.[0];
-  const count = group?.count ?? 0;
-  const { rows, enoughData, failed } = evaluate(group?.quantiles, budget, count);
-  summary(
-    [
-      "## Real-user Web Vitals (production, last 24 h)",
-      "",
-      `${count} sample(s)${enoughData ? "" : ` — below minSamples=${budget.minSamples ?? 50}, budgets not enforced`}`,
-      "",
-      "| Metric | p75 | Budget | |",
-      "| --- | --- | --- | --- |",
-      ...rows.map(
-        (r) => `| ${r.name} | ${r.value ?? "n/a"} | ${r.max} | ${r.ok ? "ok" : "**over**"} |`,
-      ),
-    ].join("\n"),
-  );
-  return failed.length ? 1 : 0;
+  let body;
+  try {
+    body = await res.json();
+  } catch {
+    const summary =
+      "## Real-user Web Vitals\n\nResponse invalid: invalid JSON. Expected GraphQL data.viewer.accounts[0].rumWebVitalsEventsAdaptiveGroups[0] with a non-negative integer count. Budgets not evaluated.";
+    emit(summary);
+    return { code: 1, kind: "invalid-response", summary };
+  }
+  const errorCount = Array.isArray(body?.errors) ? body.errors.length : 0;
+  if (!res.ok || errorCount > 0) {
+    // Intentionally omit provider error text: bounded, payload-free, and
+    // distinct from admission and budget failures.
+    const summary = `## Real-user Web Vitals\n\nQuery failed (HTTP ${res.status}, ${errorCount} GraphQL error(s)). Budgets not evaluated.`;
+    emit(summary);
+    return { code: 1, kind: "query-failed", summary };
+  }
+  let admitted;
+  try {
+    admitted = admitRumResponse(body);
+  } catch (err) {
+    const reason = String(err?.message ?? "Response invalid").replace(/^Response invalid:\s*/, "");
+    const summary = `## Real-user Web Vitals\n\nResponse invalid: ${reason.slice(0, 120)}. Expected GraphQL data.viewer.accounts[0].rumWebVitalsEventsAdaptiveGroups[0] with a non-negative integer count. Budgets not evaluated.`;
+    emit(summary);
+    return { code: 1, kind: "invalid-response", summary };
+  }
+  const { rows, enoughData, failed } = evaluate(admitted.quantiles, resolvedBudget, admitted.count);
+  const summary = [
+    "## Real-user Web Vitals (production, last 24 h)",
+    "",
+    `${admitted.count} sample(s)${enoughData ? "" : ` — below minSamples=${resolvedBudget.minSamples ?? 50}, budgets not enforced`}`,
+    "",
+    ...tableLines(rows),
+  ].join("\n");
+  emit(summary);
+  if (failed.length) {
+    return { code: 1, kind: "over-budget", summary };
+  }
+  return { code: 0, kind: enoughData ? "pass" : "insufficient", summary };
+}
+
+async function main() {
+  const { code } = await runRumCheck();
+  return code;
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
