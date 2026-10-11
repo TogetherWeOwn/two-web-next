@@ -134,3 +134,31 @@ jobs:
       - name: Remove ephemeral QA material
         if: always()
         run: rm -f e2e/.dev.vars
+
+  # Required check (rule 3 model): branch protection requires e2e-ok, not browser-smoke, because a directly required
+  # job that `needs: scope` reports skipped (= pass) when scope itself fails. e2e-ok passes a skipped smoke only on an
+  # explicit scope verdict (skip_e2e=true) or a draft; a failed/cancelled scope or smoke fails it.
+  e2e-ok:
+    name: e2e-ok
+    needs: [scope, browser-smoke]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Verdict
+        env:
+          SCOPE: ${{ needs.scope.result }}
+          SMOKE: ${{ needs.browser-smoke.result }}
+          SKIP_E2E: ${{ needs.scope.outputs.skip_e2e }}
+          DRAFT: ${{ github.event.pull_request.draft }}
+        run: |
+          set -euo pipefail
+          [ "$SCOPE" = success ] || { echo "scope result: $SCOPE"; exit 1; }
+          case "$SMOKE" in
+            success) echo "browser-smoke passed" ;;
+            skipped)
+              if [ "$SKIP_E2E" = true ] || [ "$DRAFT" = true ]; then echo "browser-smoke skipped by scope verdict/draft"
+              else echo "browser-smoke skipped without a scope verdict"; exit 1; fi ;;
+            *) echo "browser-smoke result: $SMOKE"; exit 1 ;;
+          esac
+
