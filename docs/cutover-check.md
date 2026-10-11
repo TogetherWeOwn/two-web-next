@@ -135,8 +135,10 @@ npm run audit:moderator-roles -- --discord-ids=<csv> --app-ids=<csv> --json
   `DATABASE_URL`; there is nothing credential-shaped to echo.
 
 Build the two inputs with read-only queries. Keep variable **names** in
-notes and logs, never values. Treat ID files as member data: keep them out
-of the repo and delete them after the run.
+notes and logs, never values. Treat `app-moderators.txt`,
+`discord-moderators.txt`, and `members.jsonl` as member data and
+`discord-auth.conf` as a credential: run this recipe from a scratch
+directory outside the checkout and keep all four files out of the repo.
 
 ```sh
 # App set: live moderator sessions only (read-only SELECT). The flag lives
@@ -175,14 +177,18 @@ jq -r --arg roles "$DISCORD_MODERATOR_ROLE_IDS" '
   ($roles | split(",") | map(gsub("^\\s+|\\s+$"; "")) | map(select(length > 0))) as $want
   | select((.roles // []) | map(select(IN($want[]))) | length > 0)
   | .user.id' members.jsonl | sort -u > discord-moderators.txt
+# After the audit completes, delete all four working files:
+# rm app-moderators.txt discord-moderators.txt members.jsonl discord-auth.conf
 ```
 
 A clean audit is one pre-flip receipt, not permission to flip. On drift,
 have each discord-only moderator sign in again (login recomputes the flag
 from Discord roles), clear any app-only access (revoke that session or
-wait out the 120-minute TTL), then re-run until clean. Treat the ID files
-and `discord-auth.conf` as member data and credentials respectively: keep
-them out of the repo and delete them after the run.
+wait out the 120-minute TTL), then re-run until clean. Treat
+`app-moderators.txt`, `discord-moderators.txt`, and `members.jsonl` as
+member data and `discord-auth.conf` as a credential: keep all four files
+out of the repo and delete them after the run:
+`rm app-moderators.txt discord-moderators.txt members.jsonl discord-auth.conf`.
 
 ## Local-only verification
 

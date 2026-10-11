@@ -47,6 +47,55 @@ The command revokes only active sessions; the database URL is supplied through
 `DATABASE_URL`, never as an argument. Remote database URLs—including
 production-looking ones—require `--target production`. See [the runbook procedure](runbook.md#a-moderator-lost-their-role).
 
+## Quarterly moderator access review (role-audit half)
+
+Once a quarter, pair this read-only comparison with the
+[quarterly review](runbook.md#quarterly-moderator-access-review):
+audit first to find drift, then revoke app-only sessions, then re-run to confirm
+clean. An authorized operator runs the command and builds both ID lists with
+the read-only queries in [the cutover checklist](cutover-check.md#moderator-role-audit-w16-pre-flip):
+a read-only SELECT over live `web_sessions` for the app set, and a paginated
+guild-members read filtered against `DISCORD_MODERATOR_ROLE_IDS` for the
+Discord set. Moderators never supply the lists and never paste member
+identifiers into public channels. The app set sees only sessions live in the
+120-minute sliding TTL, so expect `discord-only` for moderators not signed in
+during that window; close on `app-only` = 0 per the runbook. Treat `app-moderators.txt`, `discord-moderators.txt`,
+and `members.jsonl` as member data and `discord-auth.conf` as a credential:
+run the recipe from a scratch directory outside the checkout and keep all
+four files out of the repo. Delete them after the run:
+`rm app-moderators.txt discord-moderators.txt members.jsonl discord-auth.conf`.
+
+The command compares the Discord-moderator set against the app-moderator set.
+It reads only the ID lists it is given: it never touches the network, never
+opens a database, never changes roles, and never reads or prints tokens or
+secrets.
+
+```sh
+node --import ./bin/ts-hook.mjs bin/role-audit.mjs --discord-file=<path> --app-file=<path> [--json]
+node --import ./bin/ts-hook.mjs bin/role-audit.mjs --discord-ids=<csv> --app-ids=<csv> [--json]
+```
+
+Each side needs exactly one source (`--*-file` or `--*-ids`, not both, not
+neither). Files hold either a JSON array of strings or newline/comma separated
+IDs. Exit codes:
+
+| Exit | Meaning | Response |
+|---|---|---|
+| 0 | Sets match (empty on both sides is a clean pass) | Record the clean result |
+| 1 | Drift: the sets differ | Record `discord-only` as information; clear app-only access with the revoke procedure above, then re-run until `app-only` is 0 |
+| 2 | Usage or malformed input (missing side, both sources for one side, unknown flag, bad file, non-snowflake ID) | Fix the invocation or input, then re-run |
+
+`discord-only` means the person has the Discord role but no live app session;
+they gain the panel at next sign-in, so this is not a denial to troubleshoot.
+`app-only` means a live app session without the Discord role: excess privilege
+until the session expires or is revoked.
+
+Keep evidence counts-only: the text report prints exact counts plus at most 20
+IDs per side (`…and N more` beyond that), and `--json` reports exact
+`discordCount`/`appCount` with truncated `shown` lists and `omitted` counts.
+Record the review date, the counts, the outcome, and the follow-up actions in
+the private review record. Keep ID lists, member identifiers, database URLs, tokens, and secrets out of the record and all public text.
+
 ## Auth-wall probe (staging only)
 
 `bin/admin-authwall-probe.mjs` verifies all nine admin POST routes answer each
@@ -431,6 +480,9 @@ For maintainers checking this guide:
   [sessions](../src/sessions.ts), [roles](../src/roles.ts) and
   [throttling](../src/throttle.ts): permissions, member-data access logging,
   its default fail-closed policy and request limits.
+- [Role-audit command](../bin/role-audit.mjs) and
+  [role-audit comparison](../src/probes/role-audit.ts): deploy-time moderator
+  set comparison, exit codes and bounded counts-only report.
 - [Event sync](../src/events/sync.ts), [public event reads](../src/events/reads.ts)
   and [RSVP rules](../src/events/rsvp.ts): asynchronous write-back and public behavior.
 - [App routes](../src/index.tsx), [public pages](../src/pages.tsx),
