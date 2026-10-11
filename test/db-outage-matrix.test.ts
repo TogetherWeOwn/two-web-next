@@ -57,7 +57,11 @@ const MATRIX: Case[] = [
     status: 200,
   })),
   { method: "GET", route: "/discord", status: 302, location: env.DISCORD_INVITE_URL },
-  ...["/sitemap_index.xml", "/robots.txt"].map((route) => ({ method: "GET", route, status: 200 })),
+  ...["/sitemap_index.xml", "/robots.txt", "/.well-known/security.txt"].map((route) => ({
+    method: "GET",
+    route,
+    status: 200,
+  })),
   // Main #111: a failed DB ping is a readiness failure, so /up answers 503
   // with the sanitized readiness body instead of a false healthy 200.
   { method: "GET", route: "/up", status: 503, format: "json" },

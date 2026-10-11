@@ -1,4 +1,7 @@
 name: e2e-staging
+# Inherits the deploy run-name, so the title ends in the commit these journeys exercised
+# (ci/resolve-promotion-sha.mjs reads it; head_sha is main's tip for workflow_run runs).
+run-name: e2e-staging ${{ github.event.workflow_run.display_title || github.sha }}
 
 # Post-deploy critical journeys against the staging Worker
 # (docs/critical-journeys.md, "Staging post-deploy journeys"). Runs after a

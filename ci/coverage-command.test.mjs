@@ -23,7 +23,7 @@ test("the required check keeps full coverage in isolated serial threads inside m
   );
   assert.equal(
     step?.[1].match(/^        run: (.+)$/m)?.[1],
-    "npm run lint && npm run typecheck && npm run test:coverage && node --test ci/a11y-*.test.mjs ci/admin-properties-ci.test.mjs ci/coverage-command.test.mjs",
+    "npm run lint && npm run typecheck && npm run e2e:typecheck && npm run test:coverage && npm run e2e:safety && node --test ci/a11y-*.test.mjs ci/admin-properties-ci.test.mjs ci/coverage-command.test.mjs",
   );
   // Only the docs-only/draft scope gate (TOG-11811/TOG-14880) may guard the step; nothing may bypass it.
   assert.doesNotMatch(step[1], /continue-on-error:/);

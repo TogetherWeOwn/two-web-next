@@ -40,6 +40,8 @@ jobs:
         env:
           PRODUCTION_DEPLOY_ENABLED: ${{ vars.PRODUCTION_DEPLOY_ENABLED }}
           GITHUB_TOKEN: ${{ github.token }}
+          # Rollback checks out github.sha; the gate verifies DEPLOY_SHA.
+          DEPLOY_SHA: ${{ github.sha }}
       - name: Refuse an empty, malformed or injectable version_id
         # The input travels inputs -> env -> quoted shell variable, never
         # through expression interpolation in a run: block.
@@ -74,6 +76,8 @@ jobs:
         env:
           PRODUCTION_DEPLOY_ENABLED: ${{ vars.PRODUCTION_DEPLOY_ENABLED }}
           GITHUB_TOKEN: ${{ github.token }}
+          # Rollback checks out github.sha; the gate verifies DEPLOY_SHA.
+          DEPLOY_SHA: ${{ github.sha }}
       - name: Recheck version_id after Environment approval
         run: node ci/production-deploy-gate.mjs --version-id
         env:

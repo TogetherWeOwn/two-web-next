@@ -39,6 +39,7 @@ import { bufferedMemberHtml, bufferedMemberText } from "../member-reads";
 import { EVENT_PAGE_SIZE, parseEventListQuery } from "./event-list";
 import {
   ACTIVITY_LOG_PAGE_SIZE,
+  FEATURED_PAGE_SIZE,
   JOIN_ATTEMPT_PAGE_SIZE,
   parseActivityLogQuery,
   parseFeaturedListQuery,
@@ -96,6 +97,16 @@ function formData(body: Record<string, string | File>): Record<string, unknown> 
     if (typeof v === "string") out[k] = v;
   }
   return out;
+}
+
+// A malformed multipart body rejects the parse: answer 400 instead of throwing
+// into the alerting 500 path. Null means the caller must refuse the write.
+async function parsedForm(c: Context<Vars>): Promise<Record<string, unknown> | null> {
+  try {
+    return formData(await c.req.parseBody());
+  } catch {
+    return null;
+  }
 }
 
 function declareAccess(c: Context<Vars>, decl: AccessDecl): void {
@@ -318,7 +329,8 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
     async (c) => {
       const db = await dbOr503(c);
       if (!db) return c.text("Admin temporarily unavailable", 503);
-      const values = formData(await c.req.parseBody());
+      const values = await parsedForm(c);
+      if (!values) return c.text("Bad request", 400);
       let input;
       let recurrence;
       try {
@@ -386,7 +398,8 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
       const key = c.req.param("key");
       const existing = await getEvent(db, key);
       if (!existing) return errorPage(c, 404, "Event not found");
-      const values = formData(await c.req.parseBody());
+      const values = await parsedForm(c);
+      if (!values) return c.text("Bad request", 400);
       // Hidden carriers: an untouched fold/gap wall time keeps the stored
       // instant (TOG-6805 — see validation.preservedOrParsed).
       const carriers = {
@@ -481,11 +494,15 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
     const db = await dbOr503(c);
     if (!db) return bufferedMemberText(c, "Admin temporarily unavailable", 503);
     const query = parseFeaturedListQuery(c.req.query());
-    const rows = await listFeatured(db, {
+    const fetched = await listFeatured(db, {
       ...query,
       published: query.published ? query.published === "1" : undefined,
     });
-    return bufferedMemberHtml(c, <FeaturedPage rows={rows} query={query} />);
+    const rows = fetched.slice(0, FEATURED_PAGE_SIZE);
+    return bufferedMemberHtml(
+      c,
+      <FeaturedPage rows={rows} query={query} hasNext={fetched.length > FEATURED_PAGE_SIZE} />,
+    );
   });
 
   admin.get("/featured/new", (c) => {
@@ -513,7 +530,8 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
     async (c) => {
       const db = await dbOr503(c);
       if (!db) return c.text("Admin temporarily unavailable", 503);
-      const values = formData(await c.req.parseBody());
+      const values = await parsedForm(c);
+      if (!values) return c.text("Bad request", 400);
       let input;
       try {
         input = parseFeaturedForm(values, c.env.FEATURED_IMAGE_HOSTS);
@@ -578,7 +596,8 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
       if (!db) return c.text("Admin temporarily unavailable", 503);
       const existing = await getFeatured(db, id);
       if (!existing) return errorPage(c, 404, "Featured content not found");
-      const values = formData(await c.req.parseBody());
+      const values = await parsedForm(c);
+      if (!values) return c.text("Bad request", 400);
       let input;
       try {
         input = parseFeaturedForm(values, c.env.FEATURED_IMAGE_HOSTS);

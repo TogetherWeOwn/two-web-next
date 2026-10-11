@@ -30,9 +30,12 @@ permissions:
   # The scope job lists the PR's changed files via the API.
   pull-requests: read
 
+# Schedule and dispatch runs get their own groups (as in ci.yml): with the
+# default queue a newly queued run cancels any pending run in its group, so a
+# nightly or dispatch sharing main's group would replace a waiting push run.
 concurrency:
-  group: e2e-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  group: e2e-${{ github.event.pull_request.number || (github.event_name == 'schedule' && 'nightly') || (github.event_name == 'workflow_dispatch' && github.run_id) || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   # Cheap change-scope gate (mirrors ci.yml): a PR that only touches prose

@@ -8,6 +8,7 @@ export type FeaturedListQuery = {
   q: string;
   sort: FeaturedSort;
   order: SortOrder;
+  page: number;
 };
 export type RosterSort = "status" | "answered";
 export type RosterQuery = { q: string; sort: RosterSort; order: SortOrder; page: number };
@@ -17,13 +18,24 @@ export type ActivityLogQuery = { subject: string; causer: string; page: number }
 export const ACTIVITY_LOG_PAGE_SIZE = 50;
 /** The RSVP roster reuses the 100-row admin convention. */
 export const ROSTER_PAGE_SIZE = 100;
+/** One extra row is fetched as the next-page lookahead, like events. */
+export const FEATURED_PAGE_SIZE = 25;
 
 export function parseFeaturedListQuery(params: ListParams): FeaturedListQuery {
+  const page = Number(params.page);
   return {
     published: params.published === "1" || params.published === "0" ? params.published : "",
     q: (params.q ?? "").trim(),
     sort: params.sort === "updated_at" ? "updated_at" : "position",
     order: params.order === "desc" ? "desc" : "asc",
+    // Keep the offset within a safe integer, even for adversarial page values.
+    page:
+      /^\d+$/.test(params.page ?? "") &&
+      Number.isSafeInteger(page) &&
+      page > 0 &&
+      Number.isSafeInteger(page * FEATURED_PAGE_SIZE)
+        ? page
+        : 1,
   };
 }
 
@@ -78,6 +90,7 @@ export function featuredListUrl(
   const params = new URLSearchParams({ sort: q.sort, order: q.order });
   if (q.published) params.set("published", q.published);
   if (q.q) params.set("q", q.q);
+  if (q.page > 1) params.set("page", String(q.page));
   return `/admin/featured?${params}`;
 }
 

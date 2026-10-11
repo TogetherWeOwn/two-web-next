@@ -31,8 +31,10 @@ agent-events and logout/QA posts, admission and throttles on the agent
 ingress, and the QA gate on the staging-only QA sign-in.
 
 Routes are a mix of direct handlers and mounted sub-apps
-([src/index.tsx](../src/index.tsx)): the join journey (`registerJoinRoutes`),
-`POST /csp-reports`, `POST /api/agent-events`, the error handlers, `/admin`,
+([src/index.tsx](../src/index.tsx)): the static leaves (`registerStaticLeaves`),
+the policy/SEO leaves (`registerSeoLeaves`: `/privacy`, `/sitemap_index.xml`,
+`/robots.txt`, `POST /csp-reports`), the join journey (`registerJoinRoutes`),
+`POST /api/agent-events`, the error handlers, `/admin`,
 `/` for profiles, event routes, and the alert probe.
 
 There is no global database pool. Each request builds a short-lived client
@@ -41,6 +43,22 @@ from `databaseUrl(c.env)` with `databaseOptions`
 the roster through `src/sessions.ts` and `src/db/roster.ts`, page reads
 through [src/db/](../src/db/). Without a configured database the app fails
 closed to guest sessions and unavailable DB features rather than crashing.
+
+### Agent ingress boundaries
+
+[src/agent-events/service.ts](../src/agent-events/service.ts) is the public
+re-export barrel; its numbered check-order header remains authoritative.
+[ingress.ts](../src/agent-events/ingress.ts) orchestrates admission and the
+operation transaction. [shield.ts](../src/agent-events/shield.ts) admits the
+hit before body processing, [grants.ts](../src/agent-events/grants.ts) checks
+credentials and live grant admission, [idempotency.ts](../src/agent-events/idempotency.ts)
+answers replays, and [rate-limit.ts](../src/agent-events/rate-limit.ts)
+applies the inner budgets. [dispatch.ts](../src/agent-events/dispatch.ts)
+executes the five operations under the existing locks; write-back runs only
+after commit. [audit.ts](../src/agent-events/audit.ts) writes receipts,
+[payload.ts](../src/agent-events/payload.ts) owns hashing and field validation,
+and [types.ts](../src/agent-events/types.ts) holds shared types and defaults.
+The split introduces no separate coordination store or new admission policy.
 
 ## 2. Configuration and secrets
 
@@ -136,6 +154,7 @@ web never migrates bot tables or queries member-level bot data.
 ## 6. Auth and sessions
 
 Read from: [src/sessions.ts](../src/sessions.ts),
+[src/session-cookie.ts](../src/session-cookie.ts),
 [src/session-revocation.ts](../src/session-revocation.ts),
 [bin/revoke-sessions.mjs](../bin/revoke-sessions.mjs),
 [src/discord.ts](../src/discord.ts), [src/oauth-journeys.ts](../src/oauth-journeys.ts),
@@ -144,7 +163,8 @@ Read from: [src/sessions.ts](../src/sessions.ts),
 
 Sign-in is Discord OAuth2 with the `identify` and `guilds.join` scopes
 ([src/discord.ts](../src/discord.ts)); the access token is used for the join
-request and never stored. The session cookie (`__Host-two_session`) carries
+request and never stored. The session cookie (`__Host-two_session`,
+[src/session-cookie.ts](../src/session-cookie.ts)) carries
 only a random `two_` token while the row in `web_sessions` carries identity,
 member/moderator flags, and expiry ([src/sessions.ts](../src/sessions.ts),
 [src/index.tsx](../src/index.tsx)); tokens are SHA-256 hashed at rest,
@@ -221,6 +241,7 @@ exactly once.
 | `src/alert-probe-error.ts` | observability |
 | `src/alert-probe.ts` | observability |
 | `src/alerts.ts` | observability |
+| `src/auth/` | auth |
 | `src/auth-status.ts` | auth |
 | `src/body-limit.ts` | http-guard |
 | `src/bot/` | bot |
@@ -252,6 +273,7 @@ exactly once.
 | `src/member-reads.ts` | profiles |
 | `src/not-found-suggestions.ts` | content |
 | `src/oauth-journeys.ts` | auth |
+| `src/page-shell.tsx` | content |
 | `src/pages.tsx` | content |
 | `src/pinned-assets.ts` | content |
 | `src/privacy-content.ts` | content |
@@ -264,7 +286,11 @@ exactly once.
 | `src/roles.ts` | auth |
 | `src/rules-last-updated.ts` | content |
 | `src/same-origin.ts` | http-guard |
+| `src/screens/` | content |
+| `src/security-txt.ts` | content |
 | `src/seo.ts` | content |
+| `src/seo-leaves.tsx` | entry |
+| `src/session-cookie.ts` | auth |
 | `src/session-revocation.ts` | auth |
 | `src/sessions.ts` | auth |
 | `src/static-leaves.tsx` | entry |
