@@ -9,6 +9,7 @@ import { featuredContents, memberDataAccessLogs, rsvps } from "../src/db/admin-s
 import type { Db } from "../src/db/index";
 import { joinAttempts, users } from "../src/db/schema";
 import * as memberReads from "../src/member-reads";
+import { __resetAlertRateLimitForTests } from "../src/alerts";
 import { notFoundResponse } from "../src/errors";
 import { createMemorySessionStore } from "../src/sessions";
 import {
@@ -66,6 +67,7 @@ describe.skipIf(!process.env.DATABASE_URL)(
       await seed(fixture.db);
       sessions = createMemorySessionStore();
       cookie = await cookieFor(sessions, MODERATOR);
+      __resetAlertRateLimitForTests();
       vi.spyOn(console, "error").mockImplementation(() => {});
     });
     afterEach(async () => {

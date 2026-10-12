@@ -7,6 +7,7 @@ import { createMemorySessionStore } from "../src/sessions";
 import { profilesApp } from "../src/profiles/routes";
 import { createMemoryProfileStore } from "../src/profiles/store";
 import { requestLog } from "../src/request-log";
+import { __resetAlertRateLimitForTests } from "../src/alerts";
 import { cookieFor, env, EVENT_KEY, MEMBER, MODERATOR } from "./helpers/member-data";
 
 const EVENT_WRITES = [
@@ -27,6 +28,7 @@ const pgError = (code: string) =>
 class ProfileSaveFailure extends Error {}
 
 beforeEach(() => {
+  __resetAlertRateLimitForTests();
   vi.spyOn(console, "error").mockImplementation(() => {});
   vi.spyOn(console, "warn").mockImplementation(() => {});
   vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("External HTTP is disabled"));

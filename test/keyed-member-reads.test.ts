@@ -14,6 +14,7 @@ import {
   memberReadBoundary,
 } from "../src/member-reads";
 import { requestLog } from "../src/request-log";
+import { __resetAlertRateLimitForTests } from "../src/alerts";
 import { memberReadDb, observeMemberReads } from "../src/db/member-reads";
 import { alias } from "drizzle-orm/pg-core";
 import { events } from "../src/db/admin-schema";
@@ -34,6 +35,7 @@ describe.skipIf(!process.env.DATABASE_URL)("keyed member read boundary (real Pos
   beforeEach(async () => {
     await fixture.reset();
     await seed(fixture.db);
+    __resetAlertRateLimitForTests();
     vi.spyOn(console, "error").mockImplementation(() => {});
   });
   afterEach(() => fixture?.reset());
@@ -434,6 +436,7 @@ describe.skipIf(!process.env.DATABASE_URL)("keyed member read boundary (real Pos
 });
 
 describe("caught member-read boundary failures", () => {
+  beforeEach(() => __resetAlertRateLimitForTests());
   afterEach(() => vi.restoreAllMocks());
 
   it("alerts once for a directly caught MemberReadRefused and preserves the plain 503", async () => {

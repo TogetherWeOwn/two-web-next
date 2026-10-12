@@ -8,6 +8,7 @@ import { memberDataAccessLogs } from "../src/db/admin-schema";
 import type { Db } from "../src/db/index";
 import { users } from "../src/db/schema";
 import { keyedMemberRead } from "../src/member-reads";
+import { __resetAlertRateLimitForTests } from "../src/alerts";
 import { profilesApp } from "../src/profiles/routes";
 import { createDbProfileStore } from "../src/profiles/store";
 import { createMemorySessionStore } from "../src/sessions";
@@ -28,6 +29,7 @@ describe.skipIf(!process.env.DATABASE_URL)(
       await fixture.reset();
       await seed(fixture.db);
       sessions = createMemorySessionStore();
+      __resetAlertRateLimitForTests();
       vi.spyOn(console, "error").mockImplementation(() => {});
       vi.spyOn(console, "warn").mockImplementation(() => {});
     });

@@ -1,7 +1,8 @@
 import { getTableColumns } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/pg-proxy";
 import { serializeSigned } from "hono/utils/cookie";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { __resetAlertRateLimitForTests } from "../src/alerts";
 import app from "./app";
 import { events } from "../src/db/admin-schema";
 import type { Db } from "../src/db/index";
@@ -115,6 +116,10 @@ const esc = (s: string) =>
     .replace(/'/g, "&#39;");
 
 describe("Event page parity (fixture-only)", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    __resetAlertRateLimitForTests();
+  });
   it("renders published venue, guest pitch, calendar and canonical copy link without inline JS", async () => {
     const response = await fixture().request(undefined, `${PATH}?from=discord`);
     const html = await response.text();

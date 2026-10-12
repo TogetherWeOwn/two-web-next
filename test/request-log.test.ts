@@ -4,6 +4,7 @@ import app from "./app";
 import { registerErrorHandlers } from "../src/errors";
 import type { Env } from "../src/env";
 import { memberReadBoundary } from "../src/member-reads";
+import { __resetAlertRateLimitForTests } from "../src/alerts";
 import { newRequestId, requestLog, safeRequestId } from "../src/request-log";
 
 // Lets one test make the real app's outer post-processing throw.
@@ -31,6 +32,7 @@ const PERSONAL = [
 afterEach(() => {
   post.fail = false;
   vi.restoreAllMocks();
+  __resetAlertRateLimitForTests();
 });
 
 function logs(spy: { mock: { calls: unknown[][] } }) {
