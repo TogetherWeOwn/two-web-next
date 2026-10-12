@@ -81,7 +81,18 @@ jobs:
       - name: Unit-test the lint
         run: |
           python3 -m unittest discover -s .github/scripts -p 'test_pr_standards.py'
-          python3 -m unittest discover -s .github/scripts -p 'test_internal_ref_ratchet.py'
+          # Heads cut before #651 lack the ratchet files: the head-SHA checkout
+          # then has nothing for this pattern, and unittest exits 5. Skip with a
+          # warning when the head predates the ratchet; fail closed when the head
+          # deletes the ratchet files so a PR cannot silence its own gate.
+          if [ -f .github/scripts/test_internal_ref_ratchet.py ] && [ -f .github/scripts/internal_ref_ratchet.py ] && [ -f .github/scripts/internal_references.py ]; then
+            python3 -m unittest discover -s .github/scripts -p 'test_internal_ref_ratchet.py'
+          elif git log --format=%H -1 HEAD -- .github/scripts/internal_ref_ratchet.py .github/scripts/test_internal_ref_ratchet.py .github/scripts/internal_references.py | grep -q .; then
+            echo "::error::Ratchet files deleted at this head; refusing to skip."
+            exit 1
+          else
+            echo "::warning::Ratchet tests absent at this head SHA; skipped (predates #651)."
+          fi
           python3 -m unittest discover -s ci -p 'test_check_pr_conventions.py'
 
       - name: Ratchet tracked internal references
@@ -94,6 +105,17 @@ jobs:
           PR_NUMBER: ${{ inputs.pr_number }}
         run: |
           set -euo pipefail
+          # Heads cut before #651 lack the script at the head-SHA checkout.
+          # Skip with a warning when the head predates the ratchet; fail closed
+          # when the head deletes it so a PR cannot silence its own gate.
+          if [ ! -f .github/scripts/internal_ref_ratchet.py ] || [ ! -f .github/scripts/internal_references.py ]; then
+            if git log --format=%H -1 HEAD -- .github/scripts/internal_ref_ratchet.py .github/scripts/internal_references.py | grep -q .; then
+              echo "::error::Ratchet script deleted at this head; refusing to skip."
+              exit 1
+            fi
+            echo "::warning::Ratchet script absent at this head SHA; skipped (predates #651)."
+            exit 0
+          fi
           # Dispatched release PRs have no pull_request event snapshot. The metadata
           # binding below verifies their current head against this checked-out SHA.
           if [ "$GITHUB_EVENT_NAME" = workflow_dispatch ]; then
