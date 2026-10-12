@@ -332,11 +332,19 @@ describe("model-context island stub contract", () => {
   });
 
   it("persisted pageshow re-registers tools with live signals after pagehide", async () => {
-    const fetchImpl = vi.fn(async (_url: string, _init?: RequestInit) => ({
-      ok: true,
-      status: 200,
-      json: async () => ({}),
-    }));
+    const fetchImpl = vi.fn(async (_url: string, init?: { signal?: AbortSignal }) => {
+      // A stale aborted controller must fail the read, like a real fetch would.
+      if (init?.signal?.aborted) {
+        const err = new Error("The operation was aborted.");
+        err.name = "AbortError";
+        throw err;
+      }
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({}),
+      };
+    });
     const ctx = { registerTool: vi.fn(), provideContext: vi.fn(), clearContext: vi.fn() };
     const listeners = new Map<string, (event?: { persisted?: boolean }) => void>();
     runInNewContext(binder, {
@@ -345,9 +353,26 @@ describe("model-context island stub contract", () => {
       document: { cookie: "", modelContext: ctx },
       navigator: {},
       window: {
-        addEventListener: vi.fn((kind: string, fn: (event?: { persisted?: boolean }) => void) => {
-          listeners.set(kind, fn);
-        }),
+        // Honor { once: true } like a real EventTarget: a one-shot pagehide
+        // listener is gone before the second navigation, so repeat teardown
+        // silently stops working and the assertions below fail.
+        addEventListener: vi.fn(
+          (
+            kind: string,
+            fn: (event?: { persisted?: boolean }) => void,
+            options?: { once?: boolean } | boolean,
+          ) => {
+            const once = typeof options === "object" && options !== null && options.once === true;
+            if (once) {
+              const original = fn;
+              fn = (event?: { persisted?: boolean }) => {
+                listeners.delete(kind);
+                original(event);
+              };
+            }
+            listeners.set(kind, fn);
+          },
+        ),
         removeEventListener: vi.fn(),
       },
     });
@@ -364,9 +389,13 @@ describe("model-context island stub contract", () => {
     // Reads after restore ride the fresh controller, not the aborted one.
     const restored = calls[4]![0];
     await expect(restored.execute({})).resolves.toEqual({});
+    const lastInit = fetchImpl.mock.calls.at(-1)?.[1];
+    expect(lastInit?.signal).toBeInstanceOf(AbortSignal);
+    expect(lastInit?.signal?.aborted).toBe(false);
     // Teardown is repeatable (no once): leaving again aborts the new set.
     listeners.get("pagehide")?.({ persisted: true });
     for (const signal of secondGen) expect(signal.aborted).toBe(true);
+    expect(lastInit?.signal?.aborted).toBe(true);
   });
 
   it("pageshow on first load does not duplicate registrations", () => {
