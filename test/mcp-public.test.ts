@@ -4,8 +4,9 @@
 // published-only reads, no session, no mutations. Real app +
 // agent-testdb/CI Postgres only.
 import { serializeSigned } from "hono/utils/cookie";
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import app from "./app";
+import { __resetAlertRateLimitForTests } from "../src/alerts";
 import { events } from "../src/db/admin-schema";
 import type { Env } from "../src/env";
 import { MCP_TOOL_NAMES } from "../src/mcp/server";
@@ -407,4 +408,112 @@ describe.skipIf(!process.env.DATABASE_URL)("public MCP: /mcp", () => {
     expect(res.status).toBe(429);
     expect(res.headers.get("retry-after")).toBeTruthy();
   });
+
+  it("refuses JSON-RPC batches with -32600/400 without burning the budget", async () => {
+    await seed(44);
+    const batch = [
+      {
+        jsonrpc: "2.0",
+        id: 40,
+        method: "tools/call",
+        params: { name: "list_events", arguments: { per_page: 20, page: 1 } },
+      },
+      {
+        jsonrpc: "2.0",
+        id: 41,
+        method: "tools/call",
+        params: { name: "list_events", arguments: { per_page: 20, page: 1 } },
+      },
+    ];
+    const res = await post(batch, {}, "192.0.2.78");
+    expect(res.status).toBe(400);
+    expect(res.messages).toHaveLength(1);
+    expect(res.messages[0]).toMatchObject({
+      jsonrpc: "2.0",
+      error: { code: -32600 },
+    });
+    expect(res.messages[0]).not.toHaveProperty("result");
+    // No admission burn and no tool run: the shared budget is untouched.
+    expect(hits).toHaveLength(0);
+  });
+
+  it("returns a static error and alerts instead of leaking SQL on tool failure", async () => {
+    __resetAlertRateLimitForTests();
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      class McpBoomError extends Error {}
+      // Plain fake, not a Proxy around the real Db: memberReadDb passes
+      // non-Postgres adapters through unwrapped, so select reliably throws.
+      const boomDb = {
+        select() {
+          throw new McpBoomError(
+            'Failed query: select "id", "event_key" from "events" params: secret',
+          );
+        },
+      } as unknown as typeof db;
+      const boomEnv = {
+        ...env,
+        get ADMIN_DB() {
+          return boomDb;
+        },
+      } as unknown as Env & EnvWithThrottle;
+      const res = await app.request(
+        "/mcp",
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            accept: "application/json, text/event-stream",
+            "cf-connecting-ip": "192.0.2.79",
+          },
+          body: JSON.stringify({
+            jsonrpc: "2.0",
+            id: 50,
+            method: "tools/call",
+            params: { name: "list_events", arguments: { per_page: 20, page: 1 } },
+          }),
+        },
+        boomEnv,
+      );
+      expect(res.status).toBe(200);
+      const text = await res.text();
+      const message = JSON.parse(
+        text
+          .split("\n")
+          .filter((line) => line.startsWith("data:"))
+          .map((line) => line.slice("data:".length).trim())[0]!,
+      ) as Record<string, unknown>;
+      const result = message["result"] as Record<string, unknown>;
+      expect(result["isError"]).toBe(true);
+      const content = result["content"] as { text: string }[];
+      const body = JSON.parse(content[0]!.text) as {
+        error: { code: string; message: string };
+      };
+      expect(body.error.code).toBe("internal");
+      expect(body.error.message).toBe("Event data could not be read.");
+      expect(content[0]!.text).not.toContain("Failed query");
+      expect(content[0]!.text).not.toContain("event_key");
+      const alerts = spy.mock.calls
+        .map((args) => {
+          try {
+            return JSON.parse(args[0] as string) as Record<string, unknown>;
+          } catch {
+            return null;
+          }
+        })
+        .filter((line) => line?.["event"] === "error.alert");
+      expect(alerts).toHaveLength(1);
+      expect(alerts[0]).toMatchObject({
+        method: "POST",
+        route: "/mcp",
+        fingerprint: "McpBoomError@/mcp",
+      });
+    } finally {
+      spy.mockRestore();
+    }
+  });
+});
+
+afterEach(() => {
+  vi.restoreAllMocks();
 });

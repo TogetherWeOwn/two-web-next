@@ -5,6 +5,7 @@
 // the DTO field sets and byte-equality with the REST collection.
 import { McpServer } from "@modelcontextprotocol/server";
 import { z } from "zod";
+import { alertRequestError } from "../alerts";
 import { readCounts } from "../counts";
 import type { Db } from "../db/index";
 import { isDatabaseUnavailable } from "../db/errors";
@@ -60,6 +61,15 @@ function toolJson(value: object) {
 }
 
 const UNAVAILABLE = "Event data is temporarily unavailable.";
+// Static programming-error message: never err.message (drizzle echoes the
+// failed SQL, column names and bound params). Mirrors the REST 500 without
+// exposing internals; the real error goes to error.alert only.
+const INTERNAL = "Event data could not be read.";
+
+function internalError(err: unknown) {
+  alertRequestError(err, { method: "POST", route: "/mcp" });
+  return toolError("internal", INTERNAL);
+}
 
 export function createPublicMcpServer(deps: PublicMcpDeps): McpServer {
   const { env, db } = deps;
@@ -84,14 +94,18 @@ export function createPublicMcpServer(deps: PublicMcpDeps): McpServer {
     async ({ page, per_page }) => {
       if (!db) return toolError("unavailable", UNAVAILABLE);
       // A refused socket reads as the unavailable error; programming errors
-      // stay 500s, mirroring the REST collection.
-      const listed = await listPublicApiEvents(db, {
-        limit: per_page,
-        offset: (page - 1) * per_page,
-      }).catch((err: unknown) => {
-        if (!isDatabaseUnavailable(err)) throw err;
-        return null;
-      });
+      // alert and return the static message (the SDK turns a throw into an
+      // HTTP 200 isError echoing err.message, so never rethrow here).
+      let listed;
+      try {
+        listed = await listPublicApiEvents(db, {
+          limit: per_page,
+          offset: (page - 1) * per_page,
+        });
+      } catch (err: unknown) {
+        if (isDatabaseUnavailable(err)) return toolError("unavailable", UNAVAILABLE);
+        return internalError(err);
+      }
       if (!listed) return toolError("unavailable", UNAVAILABLE);
       const payload: PublicApiEventCollectionDto = serializeEventCollection(
         listed.rows.map(serializeEvent),
@@ -125,8 +139,8 @@ export function createPublicMcpServer(deps: PublicMcpDeps): McpServer {
       try {
         row = await getPublicApiEvent(db, event_key);
       } catch (err) {
-        if (!isDatabaseUnavailable(err)) throw err;
-        return toolError("unavailable", UNAVAILABLE);
+        if (isDatabaseUnavailable(err)) return toolError("unavailable", UNAVAILABLE);
+        return internalError(err);
       }
       if (!row) return toolError("not_found", "No published event with that key.");
       const body = fitByteBudget(
@@ -147,7 +161,12 @@ export function createPublicMcpServer(deps: PublicMcpDeps): McpServer {
     },
     async () => {
       // readCounts never throws: missing collectors degrade to nulls, never 0.
-      return toolJson(serializeCommunity(await readCounts(env)));
+      // Defensive: a throw still alerts with the static message, never err.message.
+      try {
+        return toolJson(serializeCommunity(await readCounts(env)));
+      } catch (err) {
+        return internalError(err);
+      }
     },
   );
 
@@ -160,7 +179,11 @@ export function createPublicMcpServer(deps: PublicMcpDeps): McpServer {
     },
     async () => {
       // Database-free like the /join leaf: the handoff is env config only.
-      return toolJson(serializeJoin(env));
+      try {
+        return toolJson(serializeJoin(env));
+      } catch (err) {
+        return internalError(err);
+      }
     },
   );
 

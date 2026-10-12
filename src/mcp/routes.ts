@@ -14,12 +14,45 @@
 import { createMcpHandler } from "agents/mcp/server";
 import type { Context, Hono } from "hono";
 import { dbFor } from "../admin/db";
+import { alertRequestError } from "../alerts";
 import { requestBodyLimit } from "../body-limit";
 import type { Env } from "../env";
+import { safeRequestId } from "../request-log";
 import { admitted } from "../public-data/routes";
 import { createPublicMcpServer } from "./server";
 
 type Ctx = Context<{ Bindings: Env }>;
+
+/**
+ * JSON-RPC batches (an array at the top level) would let one admitted POST
+ * run hundreds of DB-backed tool calls for a single budget hit. The
+ * 2025-06-18 protocol removed batching, so refuse arrays with -32600/400
+ * before admission burns or the handler runs. Returns the refusal, if any.
+ */
+async function refuseMcpBatch(c: Ctx): Promise<Response | null> {
+  let text: string;
+  try {
+    text = await c.req.raw.clone().text();
+  } catch {
+    return null;
+  }
+  if (!text) return null;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    return null;
+  }
+  if (!Array.isArray(parsed)) return null;
+  return c.json(
+    {
+      jsonrpc: "2.0",
+      id: null,
+      error: { code: -32600, message: "Invalid Request: batched requests are not supported." },
+    },
+    400,
+  );
+}
 
 /**
  * One stateless handler per request: the tool factory closes over this
@@ -30,9 +63,18 @@ type Ctx = Context<{ Bindings: Env }>;
 async function serveMcp(c: Ctx): Promise<Response> {
   // The database resolves inside the factory so OPTIONS preflights never
   // open one; event tools report unavailable when it resolves to null.
+  // onerror pages factory/transport failures through error.alert: tool
+  // errors are already static inside the tools, but the SDK wrapper catches
+  // factory failures as a plain 500 JSON body that never reaches app.onError.
+  const requestId = safeRequestId(c.get("requestId"));
   const handler = createMcpHandler(
     async () => createPublicMcpServer({ env: c.env, db: await dbFor(c) }),
-    { route: "/mcp" },
+    {
+      route: "/mcp",
+      onerror: (err) => {
+        alertRequestError(err, { method: "POST", route: "/mcp", requestId });
+      },
+    },
   );
   // Hono types the context minimally, and app.request (tests) carries
   // none at all. The runtime object is the real worker context in
@@ -53,6 +95,9 @@ export function registerMcpRoutes(app: Hono<{ Bindings: Env }>): void {
   // admission burn: the handler answers with its CORS headers.
   app.options("/mcp", (c) => serveMcp(c));
   app.post("/mcp", requestBodyLimit("mcp"), async (c) => {
+    // Batch refusal first: no budget burn, no DB read, no handler run.
+    const batch = await refuseMcpBatch(c);
+    if (batch) return batch;
     // The shared public-read budget, before any database read. A 429 keeps
     // the shared Retry-After with the public error envelope.
     const refused = await admitted(c);
