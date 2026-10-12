@@ -76,11 +76,14 @@ consumers and attaches `two-web-jobs` itself with no pause-delivery step. Treat
 secret provisioning as a covered handoff mutation, not a pre-step outside the
 hold.
 
-- Make the hold enforceable for the window, not just acknowledged: disable the
-  automatic lane (`gh workflow disable deploy`) or leave the `staging`
-  environment approval pending and stop main merges, then re-enable (or release
-  the approval and resume merges) explicitly when the handoff is done or
-  aborted. An acknowledgement on the card thread alone does not stop the lane.
+- Make the hold enforceable for the window, not just acknowledged: disable
+  both automatic lanes before the first mutation —
+  `gh workflow disable deploy` and `gh workflow disable db-migrate` — then
+  re-enable both when the handoff is done or aborted —
+  `gh workflow enable deploy` and `gh workflow enable db-migrate`.
+  An acknowledgement on the card thread alone does not stop the lane. (There
+  is no approval gate to leave pending: the `staging` environment has no
+  required reviewers, so only the disable commands freeze anything.)
 - Open the deploy, db-migrate and ci Actions pages (the `ci.yml` workflow for
   the exact main SHA counts: a still-running ci run on main triggers a deploy
   when it ends and shows on neither of the other two pages) and confirm no run
@@ -173,11 +176,14 @@ applied outside versions, so rolling back both Workers alone leaves
 `two-web-jobs` still owning both consumers and both crons. Move them back
 explicitly after the version rollbacks (same pre-handoff settings the web
 Worker ran with: `max_retries` 10, batch 10, timeout 5). First freeze the deploy lane
-until the cause is fixed (`gh workflow disable deploy`, or revert the
-consumer/cron move on main) and re-enable it explicitly afterwards: main still
-carries the moved consumers/crons and the three BOT secrets now exist, so the
-next push to main would pass the secrets gate, re-detach the web consumers and
-re-attach `two-web-jobs`, silently reversing the rollback.
+until the cause is fixed: run `gh workflow disable deploy` before anything else,
+and re-enable it (`gh workflow enable deploy`) explicitly afterwards. A revert of
+the consumer/cron move on main is not a freeze — a revert is a push to main, so
+it fires the deploy workflow — and is merged only after the manual rollback
+below is complete: main still carries the moved consumers/crons and the three
+BOT secrets now exist, so the next push to main would pass the secrets gate,
+re-detach the web consumers and re-attach `two-web-jobs`, silently reversing
+the rollback.
 
 ```bash
 # REMOTE MUTATION: run only after the incident's rollback decision.

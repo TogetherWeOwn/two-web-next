@@ -141,6 +141,14 @@ describe("staging jobs handoff invariants", () => {
     // automatic deploy lane; secret provisioning is a covered mutation and an
     // in-flight ci run on main is part of the idle check.
     expect(runbook).toContain("gh workflow disable deploy");
+    expect(runbook).toContain("gh workflow enable deploy");
+    expect(runbook).toContain("gh workflow disable db-migrate");
+    // The disable commands must resolve: pin the workflow names and the
+    // trigger the hold cites, so a renamed workflow fails here instead of
+    // leaving the Operator with a command that stops nothing.
+    expect(read(".github/workflows/deploy.yml")).toMatch(/^name: deploy$/m);
+    expect(read(".github/workflows/deploy.yml")).toContain("workflow_run:");
+    expect(read(".github/workflows/db-migrate.yml")).toMatch(/^name: db-migrate$/m);
     expect(runbook).toContain("secret provisioning");
     expect(runbook).toContain("ci.yml");
     // The required gate command is Actions-only by default; the runbook must
@@ -165,6 +173,11 @@ describe("staging jobs handoff invariants", () => {
     // automatic deploy lane or the next main push silently redoes the handoff.
     expect(runbook).toContain("skip the `wrangler rollback");
     expect(runbook).toContain("freeze the deploy lane");
+    // A revert on main is a push, so it fires the deploy workflow: the freeze
+    // is always the disable command first, and a revert lands only after the
+    // manual consumer/cron moves below are complete.
+    expect(runbook).toContain("before anything else");
+    expect(runbook).toContain("only after the manual rollback");
   });
 
   it("pins staging-only secret custody without values or substitution", () => {
