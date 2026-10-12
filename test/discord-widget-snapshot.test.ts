@@ -1,4 +1,4 @@
-// TOG-22969: server-side widget.json presence (invite + voice/stage + online
+// Server-side widget.json presence (invite + voice/stage + online
 // count + up to 100 anonymized members). No token in the client bundle; the
 // response never waits on Discord (cache read + waitUntil re-probe, like the
 // existing health verdict); widget-disabled falls back to the static invite.
