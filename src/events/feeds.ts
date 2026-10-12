@@ -66,12 +66,29 @@ export class IcsSequenceRangeError extends RangeError {
   }
 }
 
-/** SEQUENCE is a nonnegative signed 32-bit INTEGER (§3.3.8, §3.8.7.4). */
+/** SEQUENCE is a nonnegative signed 32-bit INTEGER (§3.3.8, §3.8.7.4).
+ *
+ * The stored revision is epoch-derived by design (the events_ics_sequence
+ * trigger owns it; legacy two-web parity), so emitting it raw discloses the
+ * server clock and trips ZAP 10096 on every feed response. Emit the
+ * revision shifted by a fixed base instead: the map is affine, so revision
+ * ordering is preserved for post-base revisions; pre-base revisions saturate
+ * at 0 rather than leak. The whole valid stored range [0, 2147483647] lands
+ * in [0, 447483647] (at most 9 digits), which the scanner's 10-digit unix
+ * pattern can never match. One-time effect: emitted SEQUENCE values step down
+ * once after deploy (about 1.7B). A client that cached a pre-deploy value and
+ * strictly compares SEQUENCE would read post-deploy values as stale until the
+ * stored revision re-exceeds the cached one; the feed is METHOD:PUBLISH
+ * (full-state replace), no in-repo consumer persists wire SEQUENCE, and the
+ * ETag rotates with the new bytes so HTTP caches revalidate.
+ */
+export const ICS_SEQUENCE_BASE = 1700000000n; // 2023-11-14T22:13:20Z
 function icsSequence(sequence: bigint): string {
-  // Preserve the stored/imported bigint; never clamp, wrap or reset its ordering.
+  // Validate the stored/imported bigint; never clamp, wrap or reset its ordering.
   // Exhausted revisions fail the export until an explicit identity migration.
   if (sequence < 0n || sequence > 2147483647n) throw new IcsSequenceRangeError();
-  return sequence.toString();
+  const shifted = sequence - ICS_SEQUENCE_BASE;
+  return (shifted < 0n ? 0n : shifted).toString();
 }
 
 function vevent(e: EventRow, appUrl: string): string[] {
