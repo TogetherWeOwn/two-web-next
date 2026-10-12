@@ -335,7 +335,8 @@ describe("performance CI", () => {
     [
       "missing real app CSS",
       "/",
-      (html: string) => html.replace('href="/styles.css"', 'href="/missing.css"'),
+      (html: string) =>
+        html.replace('rel="stylesheet" href="/styles.css"', 'rel="stylesheet" href="/missing.css"'),
     ],
     [
       "external Discord embed",

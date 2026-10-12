@@ -40,6 +40,30 @@ afterEach(() => {
 });
 
 describe("homepage theme", () => {
+  it("preloads themed stylesheets before their render-blocking links", () => {
+    const html = Layout({ title: "Fixture", theme: "content" })!.toString();
+    const preloads = [
+      ...html.matchAll(/<link(?=[^>]*rel="preload")(?=[^>]*as="style")[^>]*href="([^"]+)"[^>]*>/g),
+    ];
+    const stylesheets = [...html.matchAll(/<link rel="stylesheet" href="([^"]+)"/g)];
+
+    expect(preloads.map(([, href]) => href)).toEqual([
+      "/styles.css",
+      "/theme-tokens.css",
+      "/theme.css",
+    ]);
+    for (const [preload, href] of preloads) {
+      expect(html.indexOf(preload)).toBeLessThan(
+        html.indexOf(`<link rel="stylesheet" href="${href}"`),
+      );
+    }
+    expect(stylesheets.map(([, href]) => href)).toEqual([
+      "/styles.css",
+      "/theme-tokens.css",
+      "/theme.css",
+    ]);
+  });
+
   it("loads semantic theme tokens for Hono themes and schedule overrides target its body class", () => {
     const html = Layout({ title: "Fixture", theme: "schedule" })!.toString();
     const tokens = readFileSync(new URL("../public/theme-tokens.css", import.meta.url), "utf8");

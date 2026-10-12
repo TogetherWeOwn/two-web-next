@@ -20,7 +20,7 @@ function assertFixtureContent(path, response, html, before, after) {
   assert.equal(response.status, 200, `${path}: fixture status`);
   assert.equal(response.redirected, false, `${path}: fixture redirect`);
   assert.match(response.headers.get("content-type") || "", /text\/html/, `${path}: HTML required`);
-  assert.match(html, /<link\b[^>]*href="\/styles\.css"/, `${path}: real app stylesheet`);
+  assert.match(html, /<link rel="stylesheet" href="\/styles\.css"/, `${path}: real app stylesheet`);
   let populated;
   if (path === "/") {
     assert.doesNotMatch(

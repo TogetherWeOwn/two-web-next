@@ -38,6 +38,13 @@ export const Layout: FC<
       <head>
         <meta charset="utf-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1" />
+        <link rel="preload" href="/styles.css" as="style" />
+        {theme ? (
+          <>
+            <link rel="preload" href="/theme-tokens.css" as="style" />
+            <link rel="preload" href="/theme.css" as="style" />
+          </>
+        ) : null}
         <meta name="theme-color" content="#151720" />
         <link rel="manifest" href="/site.webmanifest" />
         <link rel="icon" href="/icons/icon-192.png" type="image/png" sizes="192x192" />
