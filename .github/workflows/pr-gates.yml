@@ -84,7 +84,18 @@ jobs:
       - name: Unit-test the lint
         run: |
           python3 -m unittest discover -s .github/scripts -p 'test_pr_standards.py'
-          python3 -m unittest discover -s .github/scripts -p 'test_internal_ref_ratchet.py'
+          # Heads cut before #651 lack the ratchet files: the head-SHA checkout
+          # then has nothing for this pattern, and unittest exits 5. Skip with a
+          # warning when the head predates the ratchet; fail closed when the head
+          # deletes the ratchet files so a PR cannot silence its own gate.
+          if [ -f .github/scripts/test_internal_ref_ratchet.py ] && [ -f .github/scripts/internal_ref_ratchet.py ] && [ -f .github/scripts/internal_references.py ]; then
+            python3 -m unittest discover -s .github/scripts -p 'test_internal_ref_ratchet.py'
+          elif git log --format=%H -1 HEAD -- .github/scripts/internal_ref_ratchet.py .github/scripts/test_internal_ref_ratchet.py .github/scripts/internal_references.py | grep -q .; then
+            echo "::error::Ratchet files deleted at this head; refusing to skip."
+            exit 1
+          else
+            echo "::warning::Ratchet tests absent at this head SHA; skipped (predates #651)."
+          fi
           python3 -m unittest discover -s ci -p 'test_check_pr_conventions.py'
 
       - name: Ratchet tracked internal references
@@ -102,7 +113,25 @@ jobs:
           if [ "$GITHUB_EVENT_NAME" = workflow_dispatch ]; then
             BASE_SHA=$(gh api "repos/$REPO/pulls/$PR_NUMBER" --jq '.base.sha')
           fi
-          python3 .github/scripts/internal_ref_ratchet.py --base "$BASE_SHA" --head "$HEAD_SHA"
+          # Heads cut before #651 lack the script at the head-SHA checkout.
+          # The script reads only git objects, so the trusted base copy can still
+          # judge a stale head: run it instead of skipping, otherwise any branch
+          # based before #651 bypasses this required gate. Fail closed when the
+          # head deletes the script so a PR cannot silence its own gate.
+          # (The head-side unittest block above keeps its predates-#651 skip.)
+          if [ ! -f .github/scripts/internal_ref_ratchet.py ] || [ ! -f .github/scripts/internal_references.py ]; then
+            if git log --format=%H -1 HEAD -- .github/scripts/internal_ref_ratchet.py .github/scripts/internal_references.py | grep -q .; then
+              echo "::error::Ratchet script deleted at this head; refusing to skip."
+              exit 1
+            fi
+            echo "::warning::Ratchet script absent at this head SHA; checking with the base copy (predates #651)."
+            mkdir -p "$RUNNER_TEMP/ratchet"
+            git show "$BASE_SHA:.github/scripts/internal_ref_ratchet.py" > "$RUNNER_TEMP/ratchet/internal_ref_ratchet.py"
+            git show "$BASE_SHA:.github/scripts/internal_references.py" > "$RUNNER_TEMP/ratchet/internal_references.py"
+            python3 "$RUNNER_TEMP/ratchet/internal_ref_ratchet.py" --base "$BASE_SHA" --head "$HEAD_SHA"
+          else
+            python3 .github/scripts/internal_ref_ratchet.py --base "$BASE_SHA" --head "$HEAD_SHA"
+          fi
 
       - name: Resolve PR title/body
         id: pr
