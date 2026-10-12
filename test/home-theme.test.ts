@@ -40,6 +40,14 @@ afterEach(() => {
 });
 
 describe("homepage theme", () => {
+  it("loads semantic theme tokens for Hono themes and schedule overrides target its body class", () => {
+    const html = Layout({ title: "Fixture", theme: "schedule" })!.toString();
+    const tokens = readFileSync(new URL("../public/theme-tokens.css", import.meta.url), "utf8");
+
+    expect(html).toContain('href="/theme-tokens.css"');
+    expect(tokens).toContain(".base-theme.schedule-theme");
+  });
+
   it("opts the homepage into the theme without changing unthemed layouts", () => {
     const html = render();
     expect(html).toContain('<body class="base-theme homepage-theme"><a class="skip-link"');
@@ -49,6 +57,7 @@ describe("homepage theme", () => {
     expect(html).not.toContain("<script");
     const leaf = Layout({ title: "Fixture" })!.toString();
     expect(leaf).not.toContain("/theme.css");
+    expect(leaf).not.toContain("/theme-tokens.css");
     expect(leaf).not.toContain("/fonts/");
   });
 
