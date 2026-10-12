@@ -135,10 +135,12 @@ export function registerRsvpRoutes(app: App, readFragmentSession: SessionReader)
     // No-JS refusal renders inside the branded event shell (viewport, skip
     // link, main landmark, stylesheets, header/footer), like every other
     // event failure page. Status, Retry-After, failure copy and the
-    // return-to-event link are unchanged. Presentational only: like the
-    // branded error shells, it never reads the session for its chrome.
+    // return-to-event link are unchanged. Only signed-in members reach this
+    // page (a missing session redirects to login above), so the shell stays
+    // presentational with account={false} — like the cancelled (410) event
+    // page — instead of rendering guest sign-in chrome for a member.
     return c.html(
-      <EventDetailShell title={RSVP_COPY.failedTitle} loginReturnTo={path}>
+      <EventDetailShell title={RSVP_COPY.failedTitle} account={false}>
         <h1>{RSVP_COPY.failedTitle}</h1>
         <p role="alert">
           {response.status === 429

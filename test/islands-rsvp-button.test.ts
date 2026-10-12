@@ -609,6 +609,10 @@ describe("rsvp-button SSR/server drift", () => {
       // JSX escapes the apostrophe in the frozen failure title.
       expect(html).toContain("<h1>That RSVP didn&#39;t save.</h1>");
       expect(html).toContain(`<a href="/e/${KEY}">Return to the event</a>`);
+      // Only signed-in members reach this page (a missing session redirects
+      // to login), so the shell must not render guest chrome for them.
+      expect(html).not.toContain("Welcome, guest");
+      expect(html).not.toContain('data-testid="signin"');
     };
     write.mockResolvedValue({ ok: false, reason: "limited", retryAfter: 5 });
     const throttled = await submit();
