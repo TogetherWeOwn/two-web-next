@@ -289,6 +289,21 @@ describe("Event page parity (fixture-only)", () => {
     },
   );
 
+  it("labels an invalid stored zone as UTC instead of printing the bad name", async () => {
+    const start = new Date("2030-01-10T20:00:00.000Z");
+    const html = await (
+      await fixture({
+        timezone: "Invalid/Zone",
+        startsAt: start,
+        endsAt: new Date(start.getTime() + 7200_000),
+      }).request()
+    ).text();
+    expect(html).toContain(
+      `<time datetime="2030-01-10T20:00:00.000Z">2030-01-10T20:00:00.000Z (UTC)</time>`,
+    );
+    expect(html).not.toContain("(Invalid/Zone)");
+  });
+
   it("shows the same host clock to members without changing links", async () => {
     const source = fixture({ timezone: "Europe/London" });
     const guest = await (await source.request()).text();

@@ -1,7 +1,7 @@
 // Event detail screen: hero, RSVP, share, attendees, discovery.
 import type { FC } from "hono/jsx";
 import { canonicalUrl } from "../seo";
-import { renderGoingCount } from "../islands/contracts";
+import { isValidZone, renderGoingCount } from "../islands/contracts";
 import type { Session } from "../env";
 import { JoinResultBanner } from "../pages";
 import type { JoinResult } from "../return-journey";
@@ -95,7 +95,8 @@ export const EventPage: FC<{
           <dt>When</dt>
           <dd>
             <time datetime={e.startsAt.toISOString()}>
-              {fmtWithOffset(e.startsAt, e.timezone)} ({e.timezone})
+              {fmtWithOffset(e.startsAt, e.timezone)} (
+              {isValidZone(e.timezone) ? e.timezone : "UTC"})
             </time>
           </dd>
         </div>
