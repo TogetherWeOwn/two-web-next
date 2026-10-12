@@ -32,12 +32,20 @@ function requireDisposableDatabase(value) {
   }
 }
 
-function listen(child, origin, timeoutMs = 60_000) {
+function tail(value, limit = 4000) {
+  return value.length > limit ? `…${value.slice(-limit)}` : value;
+}
+
+function listen(child, origin, getLog, timeoutMs = 60_000) {
   const started = Date.now();
   return new Promise((resolveReady, reject) => {
     const attempt = async () => {
       if (child.exitCode !== null) {
-        reject(new Error(`Wrangler dev exited before ready (exit ${child.exitCode})`));
+        reject(
+          new Error(
+            `Wrangler dev exited before ready (exit ${child.exitCode}). Worker output:\n${tail(getLog())}`,
+          ),
+        );
         return;
       }
       try {
@@ -52,7 +60,11 @@ function listen(child, origin, timeoutMs = 60_000) {
         // Wrangler has not bound its local listener yet.
       }
       if (Date.now() - started >= timeoutMs) {
-        reject(new Error("Timed out waiting for the generated Kit Worker"));
+        reject(
+          new Error(
+            `Timed out waiting for the generated Kit Worker. Worker output:\n${tail(getLog())}`,
+          ),
+        );
         return;
       }
       setTimeout(attempt, 250);
@@ -126,15 +138,30 @@ const child = spawn(
       CLOUDFLARE_LOAD_DEV_VARS_FROM_DOT_ENV: "false",
       CLOUDFLARE_INCLUDE_PROCESS_ENV: "false",
     },
-    stdio: ["ignore", "ignore", "ignore"],
+    stdio: ["ignore", "pipe", "pipe"],
   },
 );
+// Buffer Worker output and print it only on failure: --log-level error keeps
+// success quiet while a red check still shows the cause.
+let workerLog = "";
+child.on("error", (error) => {
+  workerLog += `\n${error.message}`;
+});
+for (const stream of [child.stdout, child.stderr]) {
+  stream?.on("data", (data) => {
+    workerLog += data.toString();
+  });
+}
 try {
-  await listen(child, origin);
+  await listen(child, origin, () => workerLog);
 
   const archive = await fetch(`${origin}/events/past`);
   const archiveHtml = await archive.text();
-  assert.equal(archive.status, 200, "generated Worker serves the archive route");
+  assert.equal(
+    archive.status,
+    200,
+    `generated Worker serves the archive route (got ${archive.status}; body: ${archiveHtml.slice(0, 500)}; worker output: ${tail(workerLog)})`,
+  );
   assert.match(archive.headers.get("content-type") ?? "", /text\/html/);
   assert.match(
     archiveHtml,
@@ -165,6 +192,9 @@ try {
   );
   assert.ok((await asset.arrayBuffer()).byteLength > 0, "favicon response has a body");
   console.log("PASS generated Worker public asset response");
+} catch (error) {
+  process.stderr.write(`Generated Kit Worker output:\n${tail(workerLog)}\n`);
+  throw error;
 } finally {
   child.kill("SIGTERM");
   await Promise.race([
