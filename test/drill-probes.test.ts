@@ -267,7 +267,7 @@ describe("queue:poison-probe drill", () => {
     vi.spyOn(console, "error").mockImplementation(() => {});
     const { ledger, rows } = memLedger();
     const { lock, held } = memLock();
-    const mirrored: string[] = [];
+    const mirrored: (string | null)[] = [];
     const events: EventStore = {
       ...memStore(),
       completeSync: async (_a, id) => void mirrored.push(id),

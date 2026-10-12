@@ -74,7 +74,10 @@ describe("runbook diagnostic and homepage contract", () => {
     expect(home).not.toMatch(/500|Not guaranteed/);
     expect(home).toMatch(/counts.*events.*featured/i);
     expect(routeRow("/events/past")).toMatch(
-      /DB-outage failures.*503 HTML.*Other uncaught failures.*500 HTML/,
+      /Classified DB outages.*503.*missing event DB.*plain-text.*503.*other uncaught failures.*500 HTML/i,
+    );
+    expect(routeRow("/e/:key")).toMatch(
+      /missing event DB.*plain-text.*503.*other failed reads inside the member-read boundary.*plain-text.*503/,
     );
     expect(outage).toMatch(/public\s+fallback[^.]*not[^.]*private[^.]*writes/i);
   });
@@ -86,24 +89,40 @@ describe("runbook diagnostic and homepage contract", () => {
     expect(health).not.toMatch(/Pending[^\n]*#111/);
     expect(outage).not.toMatch(/Pending[^\n]*#92|not shipped in this snapshot/);
     expect(routeRow("/events/past")).toMatch(
-      /DB-outage failures.*503 HTML.*Events temporarily unavailable/,
+      /Classified DB outages.*503.*missing event DB.*plain-text.*503.*other uncaught failures.*500 HTML/i,
+    );
+    expect(routeRow("/join/discord")).toMatch(
+      /classified DB outage.*503.*other uncaught join-store, attempt or session errors.*500/i,
+    );
+    const watch = readFileSync(new URL("../docs/48h-watch-spec.md", import.meta.url), "utf8");
+    expect(watch).not.toMatch(/uncaught DB failure is 500 HTML/);
+    const watchRow = (route: string) => {
+      const row = watch.split("\n").find((line) => line.startsWith(`| ${route} |`));
+      expect(row, `watch-spec row for ${route}`).toBeDefined();
+      return row!;
+    };
+    expect(watchRow("M member writes")).toMatch(
+      /classified DB outage and profile read failure 503.*other session, transaction or save failure 500/,
+    );
+    expect(watchRow("A privileged")).toMatch(
+      /admin reads.*classified DB outage 503.*other uncaught admin-write failure 500/,
     );
     expect(routeRow("/e/:key")).toMatch(
-      /DB-outage failures.*503 HTML.*Member data is temporarily unavailable\./,
+      /Classified DB outages.*503.*Member data is temporarily unavailable\./,
     );
     expect(routeRow("/profile")).toMatch(
-      /GET\/HEAD.*other failures inside the member-read boundary.*503.*Member data is temporarily unavailable/,
+      /Classified DB outages use the shared sanitized \*\*503\*\* response \(HTML, or JSON when negotiated\); other failures inside the member-read boundary.*503.*Member data is temporarily unavailable/,
     );
     expect(rowContaining("Member save")).toMatch(
       /classified DB outage.*503.*store\.save.*500.*Could not save your profile.*other failures before the write.*503.*Member data is temporarily unavailable/,
     );
     expect(routeRow("/admin")).toMatch(
-      /GET\/HEAD.*other failures inside the member-read boundary.*503.*Member data is temporarily unavailable/,
+      /Classified DB outages use the shared sanitized \*\*503\*\* response \(HTML, or JSON when negotiated\); other failures inside the member-read boundary.*503.*Member data is temporarily unavailable/,
     );
     expect(outage).toMatch(
       /Implemented `\/admin` writes \(POST\)[^\n]*outside the member-read boundary[^\n]*classified DB outage.*503[^\n]*other uncaught failures.*500 HTML/i,
     );
-    expect(outage).toMatch(/reads inside the member-read boundary.*member\/admin GET\/HEAD/);
+    expect(outage).toMatch(/Reads inside the member-read boundary.*member\/admin GET\/HEAD/);
     expect(health).not.toMatch(/curl\s|fetch\(/);
     expect(outage).not.toMatch(/curl\s|fetch\(/);
   });

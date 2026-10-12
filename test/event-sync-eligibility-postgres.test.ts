@@ -300,6 +300,10 @@ describe.skipIf(!process.env.DATABASE_URL)("event sync eligibility (native Postg
       const cancellation = control === "closed cancellation";
       const ended = control === "closed upsert" || cancellation;
       await seed(cancellation ? "cancelled" : "published", ended);
+      // The recovery path needs a mirrored cancel (bot I/O). A never-mirrored
+      // cancel completes locally with no bot call, so seed the
+      // mirror id here; the hermetic suite pins the local path.
+      if (cancellation) await sql`update events set discord_event_id = 'discord-1'`;
       const original = await dispatch();
       const bot = botDouble();
       const action = cancellation ? bot.cancelEvent : bot.upsertEvent;
