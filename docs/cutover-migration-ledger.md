@@ -2,13 +2,15 @@
 
 Offline ledger of every web migration in `drizzle/` that the cutover
 must run against production, read from the migration SQL and
-`drizzle/meta/_journal.json` on `origin/main` (`7e92b7a3`,
-22 journal entries, idx 0–21). No database connection was used and no
+`drizzle/meta/_journal.json`. It was pinned at 22 journal entries
+(idx 0–21) on `origin/main` (`7e92b7a3`); it is now reconciled to
+25 entries (idx 0–24), with the production apply outcome recorded
+below. No database connection was used and no
 migration was run to build this document. Numbering and topology live
 in [db-migrations.md](db-migrations.md); the bot migration set is a
 different ledger and is out of scope here.
 
-Two facts govern every row below. First, all 22 migrations are
+Two facts govern every row below. First, all 25 migrations are
 **up-only**: Drizzle ships no down files, and the applier
 (`ci/neon-migrate.mjs`) moves the `drizzle.__drizzle_migrations` ledger
 forward only, refusing any history that is not an exact prefix of the
@@ -45,6 +47,35 @@ prior state cannot be restored by SQL alone; needs backup/PITR).
 | 19 | `1018_audit-immutability` | up-only | agent_event_audits, member_data_access_logs, activity_log + `audit_rows_append_only()` | backout-script | Drop the six guard triggers and the function; audit tables stay writable until re-guarded. |
 | 20 | `1019_shared-agent-events` | up-only | events (columns + copied rows), `agent_events` dropped | unmeasurable | `DROP TABLE agent_events` destroys the wall-clock source table; copied rows survive in `events` but the separate table returns only from backup/PITR. |
 | 21 | `1020_event-sync-revisions` | up-only | event_sync_attempts (new), events (two revision columns) + two revision triggers | backout-script | Drop both triggers/functions, drop the attempts table and the two columns; mirrors restart from revision zero. |
+| 22 | `1021_discord-event-snapshots` | up-only | discord_event_snapshots | backout-script | `DROP TABLE discord_event_snapshots`; display cache only, no canonical rows lost. |
+| 23 | `1022_web-sessions-oauth-journeys` | up-only | web_sessions, web_oauth_journeys (columns + indexes) | backout-script | `DROP TABLE` × 2; loses sessions (forces re-login) and journeys; the `status_hash` backfill re-derives from `token_hash`. |
+| 24 | `1023_agent-event-audits-prune-idx` | up-only | agent_event_audits (index only) | backout-script | `DROP INDEX agent_event_audits_created_at_idx`; no row data. |
+
+## Production apply outcome
+
+The cutover flipped production to the Next Worker at 2026-10-10
+00:52Z ([flip receipt](/TOG/issues/TOG-11938#comment-928cfdcb-e6ca-4142-888d-b2e40672351d)):
+production `/up` reported healthy with `db ok` and **0 pending
+migrations**, covering the pinned 22 plus `1021_discord-event-snapshots`
+(merged 2026-10-07, in the flipped `15423dc9` release). Zero pending
+held through the 2h watch close at 02:52Z
+([watch close](/TOG/issues/TOG-11938#comment-36f97063-4c70-447a-ae45-fb42a3d47c0e)),
+the origin re-run at 03:03Z
+([origin rows green](/TOG/issues/TOG-11938#comment-a58c2cde-c1bc-42ad-aaad-c1080e97fe98)),
+the tail samples including 21:47Z
+([tail watch](/TOG/issues/TOG-11938#comment-407582d1-b596-4eda-939c-c067252b1cc9)),
+and the 48h close at 2026-10-12 00:57Z
+([cutover closed](/TOG/issues/TOG-11938#comment-37cb6d8e-6074-42d4-baa0-449738178392)).
+The early-watch auth P0 (session/join 500s) was host role grants, not
+pending migrations: `/up` stayed 0 pending throughout and the funnel
+recovered per the 01:27Z receipt
+([auth funnel recovered](/TOG/issues/TOG-11938#comment-05935cb5-f743-45da-8507-63e2c1586cfa)).
+Of rows 22–24, only `1021` was in the flipped release (noted
+above); `1022` and `1023` merged afterwards, are recorded here, and
+reach production through the normal `db-migrate` path, not through
+this outcome.
+Nothing here was probed: every production fact is cited from the
+linked receipts.
 
 ## Gated apply path
 
