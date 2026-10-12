@@ -113,6 +113,71 @@ describe("floor-guard", () => {
     assert.ok(findings.some((f) => f.rule === "test-deleted"));
   });
 
+  it("flags a test file renamed out of the test glob as a deletion", () => {
+    // git rename detection sends a `git mv` as rename headers with no
+    // ---/+++ lines, which a deletion-only parser reads as clean.
+    const renamed = [
+      "diff --git a/test/a.test.ts b/docs/a.txt",
+      "similarity index 100%",
+      "rename from test/a.test.ts",
+      "rename to docs/a.txt",
+    ].join("\n");
+    assert.ok(
+      guardDiff(renamed).some((f) => f.rule === "test-deleted"),
+      "moving a test out of the suite needs a test-deleted waiver",
+    );
+  });
+
+  it("flags a test file renamed to a non-runner suffix as a deletion", () => {
+    // `test/a.test.ts.disabled` still contains `.test.` but no runner picks
+    // it up (vitest includes only *.test.ts / *.test.mjs), so it is a move
+    // out of the suite, not a keep.
+    const disabled = [
+      "diff --git a/test/a.test.ts b/test/a.test.ts.disabled",
+      "similarity index 100%",
+      "rename from test/a.test.ts",
+      "rename to test/a.test.ts.disabled",
+    ].join("\n");
+    assert.ok(
+      guardDiff(disabled).some((f) => f.rule === "test-deleted"),
+      "disabling a test by suffix needs a test-deleted waiver",
+    );
+  });
+
+  it("flags assertions stripped in a partial rename to a non-test path", () => {
+    // A partial rename attributes removed lines to the destination unless the
+    // parser maps them back to the old path.
+    const partial = [
+      "diff --git a/test/big.test.ts b/docs/big.txt",
+      "similarity index 95%",
+      "rename from test/big.test.ts",
+      "rename to docs/big.txt",
+      "--- a/test/big.test.ts",
+      "+++ b/docs/big.txt",
+      "@@ -1 +0,0 @@",
+      "-expect(3).toBe(3);",
+    ].join("\n");
+    const findings = guardDiff(partial);
+    assert.ok(
+      findings.some((f) => f.rule === "assertion-removed"),
+      "stripped assertion in a moved test still fails",
+    );
+    assert.ok(
+      findings.some((f) => f.rule === "test-deleted"),
+      "moving a test out of the suite still fails",
+    );
+  });
+
+  it("stays silent on a rename that keeps a runnable test path", () => {
+    const kept = [
+      "diff --git a/test/a.test.ts b/test/unit/a.test.ts",
+      "similarity index 100%",
+      "rename from test/a.test.ts",
+      "rename to test/unit/a.test.ts",
+    ].join("\n");
+    assert.deepEqual(guardDiff(kept), []);
+  });
+
   it("accepts reasoned, path-scoped floor waivers for test removals", () => {
     const deletion = [
       "diff --git a/test/gone.test.ts b/test/gone.test.ts",
@@ -535,6 +600,35 @@ describe("floor-guard", () => {
       });
       assert.equal(run.status, 0, "non-tip new-exemption waiver covers the addition");
       assert.match(run.stdout, /Floor-waiver: new-exemption \.constraintsignore/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("catches a git-moved test file end to end", () => {
+    // Real `git mv` output uses rename headers (no ---/+++ for a 100% move),
+    // so this pins the parser against actual git output, not just fixtures.
+    const dir = mkdtempSync(join(tmpdir(), "floor-guard-rename-"));
+    try {
+      const git = (args) => spawnSync("git", args, { cwd: dir, encoding: "utf8" });
+      git(["init", "-q"]);
+      git(["config", "user.email", "test@example.com"]);
+      git(["config", "user.name", "test"]);
+      mkdirSync(join(dir, "test"), { recursive: true });
+      writeFileSync(join(dir, "test", "a.test.ts"), 'it("x", () => {\n expect(1).toBe(1);\n});\n');
+      git(["add", "."]);
+      git(["commit", "-qm", "base"]);
+      const base = git(["rev-parse", "HEAD"]).stdout.trim();
+      mkdirSync(join(dir, "docs"), { recursive: true });
+      git(["mv", "test/a.test.ts", "docs/a.txt"]);
+      git(["commit", "-qm", "move test out of suite"]);
+      const guard = join(dirname(fileURLToPath(import.meta.url)), "floor-guard.mjs");
+      const bad = spawnSync("node", [guard, "--base", base], {
+        cwd: dir,
+        encoding: "utf8",
+      });
+      assert.equal(bad.status, 1, "moved-out test fails");
+      assert.match(bad.stderr, /test-deleted/);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

@@ -43,14 +43,40 @@ const stripPrefix = (p) => p.replace(/^[ab]\//, "");
 // Parse a unified diff into added/removed lines plus deleted file paths.
 // Handles `+++ b/<path>` attribution, `+++ /dev/null` deletions, and the
 // `git diff --no-index /dev/null <f>` form used for untracked files.
+// Git's default rename detection turns a `git mv` into `rename from X` /
+// `rename to Y` headers: a 100% rename carries no ---/+++ lines at all and a
+// partial rename attributes its removed lines to the destination, so both
+// forms are handled here. A move whose source is a test path but whose
+// destination no longer runs as one (non-test path, or a non-code suffix such
+// as `*.test.ts.disabled`) counts as a deletion and needs the usual
+// `test-deleted` waiver; removed lines in a renamed file are attributed to
+// the old path so `assertion-removed` still sees them. A move that keeps a
+// runnable test path stays silent.
 export function parseDiff(diff) {
   const added = [];
   const removed = [];
   const deletedFiles = [];
   let file = "";
   let lastMinus = "";
+  let renameFrom = "";
+  const unquote = (p) => p.replace(/^"(.*)"$/, "$1");
   for (const line of diff.split("\n")) {
-    if (line.startsWith("--- ")) {
+    if (line.startsWith("diff --git ")) {
+      file = "";
+      lastMinus = "";
+      renameFrom = "";
+    } else if (line.startsWith("rename from ")) {
+      renameFrom = unquote(line.slice("rename from ".length).trim());
+    } else if (line.startsWith("rename to ")) {
+      const renameTo = unquote(line.slice("rename to ".length).trim());
+      if (
+        renameFrom &&
+        TEST_PATH.test(renameFrom) &&
+        !(TEST_PATH.test(renameTo) && CODE_PATH.test(renameTo))
+      ) {
+        deletedFiles.push(renameFrom);
+      }
+    } else if (line.startsWith("--- ")) {
       lastMinus = line.slice(4).trim();
     } else if (line.startsWith("+++ ")) {
       const plus = line.slice(4).trim();
@@ -63,7 +89,10 @@ export function parseDiff(diff) {
     } else if (line.startsWith("+") && !line.startsWith("+++")) {
       added.push({ file, text: line.slice(1) });
     } else if (line.startsWith("-") && !line.startsWith("---")) {
-      removed.push({ file, text: line.slice(1) });
+      // In a renamed file the hunk belongs to the old path; in a pure
+      // deletion (file reset to "") it stays unattributed so a deleted test
+      // reports test-deleted only, not assertion-removed on top.
+      removed.push({ file: renameFrom && file ? renameFrom : file, text: line.slice(1) });
     }
   }
   return { added, removed, deletedFiles };
