@@ -54,6 +54,7 @@ import { trustHosts } from "./trust-hosts";
 import { authStatusScript, enableAuthStatus } from "./auth-status";
 import { expiredWriteBanner } from "./write-recovery";
 import { freezeBanner } from "./freeze-banner";
+import { webmcpPilot } from "./webmcp-pilot";
 
 export { rulesLastUpdated } from "./rules-last-updated";
 
@@ -158,6 +159,7 @@ app.use("*", sameOrigin);
 app.use("*", authStatusScript);
 app.use("*", expiredWriteBanner);
 app.use("*", freezeBanner);
+app.use("*", webmcpPilot);
 
 // OAuth and login routes live in ./auth/routes; the app module only wires them.
 registerAuthRoutes(app, {

@@ -316,6 +316,7 @@ exactly once.
 | `src/up-revision.ts` | observability |
 | `src/up-timeout.ts` | observability |
 | `src/up.ts` | observability |
+| `src/webmcp-pilot.ts` | http-guard |
 | `src/worker.ts` | entry |
 | `src/write-recovery.tsx` | auth |
 <!-- module-map:end -->

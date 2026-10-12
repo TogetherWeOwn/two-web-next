@@ -62,6 +62,10 @@ export type Env = AgentEventsEnv & {
   // the banner needs real dates, so the flag alone never renders.
   FREEZE_BANNER_ENABLED?: string;
   FREEZE_BANNER_DATES?: string;
+  // B1 read-only WebMCP pilot: only the exact strings "true"/"1" inject the
+  // model-context island on the four pilot pages; unset or anything else
+  // leaves pages byte-identical. No session, cookie or database read.
+  WEBMCP_PILOT_ENABLED?: string;
 };
 
 // Worker-only bindings added by W13; the web app (Hono) and its tests only need `Env`.
