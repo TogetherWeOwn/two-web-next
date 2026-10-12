@@ -239,12 +239,34 @@ class CardAndInternalRefs(unittest.TestCase):
         self.assertIn("branch name", f[0].message)
 
     def test_public_branch_head_ref_cutoff_leaves_title_body_unchanged(self):
-        # Title/body internal refs still follow PR_STANDARDS_MODE, not the branch cutoff knob
+        # Strict title/body refs always fail, regardless of mode or the branch cutoff knob
         clean = GOOD_BODY.replace("Refs: TOG-1234", "Fixes #12")
-        for mode, level in (("warn", "warning"), ("error", "error")):
+        for mode in ("warn", "error"):
             f = ps.evaluate(env(TITLE="fix(auth): TOG-123 refresh", BODY=clean, REPO_PRIVATE="false",
                                 PR_STANDARDS_MODE=mode, PR_NUMBER="700", HEAD_REF_ERROR_FROM_PR="627"))
-            self.assertEqual([(level, "Internal reference")], levels(f), mode)
+            self.assertEqual([("error", "Internal reference")], levels(f), mode)
+
+    def test_public_title_body_strict_subset_always_errors(self):
+        # Tracker id, instance UI link and internal host fail the title/body even in warn mode
+        clean = GOOD_BODY.replace("Refs: TOG-1234", "Fixes #12")
+        for leak in ("TOG-123", "see /TOG/issues/TOG-1", "https://workforce.infextion.net/x"):
+            for where in ("TITLE", "BODY"):
+                body = clean if where == "TITLE" else GOOD_BODY.replace("Refs: TOG-1234", leak)
+                title = "fix(auth): refresh the key " + leak if where == "TITLE" else "fix(auth): refresh the key"
+                f = ps.evaluate(env(TITLE=title, BODY=body, REPO_PRIVATE="false",
+                                    PR_STANDARDS_MODE="warn"))
+                self.assertIn(("error", "Internal reference"), levels(f), (where, leak))
+
+    def test_public_title_body_advisory_subset_follows_mode(self):
+        # Agent links, localhost, private nets and tailnet names stay advisory in warn mode
+        clean = GOOD_BODY.replace("Refs: TOG-1234", "Fixes #12")
+        for leak in ("agent://abc", "http://localhost:3100/x", "http://10.0.0.5/x",
+                     "https://box.tail1234.ts.net/x"):
+            body = GOOD_BODY.replace("Refs: TOG-1234", leak)
+            f = ps.evaluate(env(BODY=body, REPO_PRIVATE="false", PR_STANDARDS_MODE="warn"))
+            self.assertEqual([("warning", "Internal reference")], levels(f), leak)
+            f = ps.evaluate(env(BODY=body, REPO_PRIVATE="false", PR_STANDARDS_MODE="error"))
+            self.assertEqual([("error", "Internal reference")], levels(f), leak)
 
     def test_private_repo_allows_lowercase_ids_in_branch(self):
         self.assertEqual([], ps.evaluate(env(HEAD_REF="qa/tog-123-example")))
