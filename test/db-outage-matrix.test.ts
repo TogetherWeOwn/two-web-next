@@ -115,6 +115,20 @@ const MATRIX: Case[] = [
     path: route === "/events/:file{.+\\.ics}" ? `/events/${EVENT_KEY}.ics` : undefined,
   })),
   { method: "GET", route: "/events.json", status: 503, actor: "member", format: "json" },
+  // A3 bounded public read API: refused event reads stay machine-readable
+  // (the 503 envelope, never an empty list), the counts degrade to nulls,
+  // and the database-free handoff and spec stay 200.
+  { method: "GET", route: "/api/public/events", status: 503, format: "json" },
+  {
+    method: "GET",
+    route: "/api/public/events/:key",
+    path: `/api/public/events/${EVENT_KEY}`,
+    status: 503,
+    format: "json",
+  },
+  { method: "GET", route: "/api/public/community", status: 200, format: "json" },
+  { method: "GET", route: "/api/public/join", status: 200, format: "json" },
+  { method: "GET", route: "/openapi.json", status: 200, format: "json" },
   // Main #109/#98: JSON event show. Anonymous browsers redirect to the join
   // funnel before any DB read. The member-session outage envelope is pinned
   // below, outside the inventory, so the route string stays unique.

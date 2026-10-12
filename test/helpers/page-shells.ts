@@ -66,6 +66,11 @@ export const NON_HTML_READS = [
   "/events.ics",
   "/events.rss",
   "/events/:file{.+\\.ics}",
+  "/api/public/events", // Bounded session-free JSON, never an HTML page.
+  "/api/public/events/:key",
+  "/api/public/community",
+  "/api/public/join",
+  "/openapi.json", // Static OpenAPI document, never an HTML page.
 ];
 
 export const concretePath = (pattern: string) =>
