@@ -34,6 +34,33 @@ describe("workflow concurrency", () => {
     expect(pr.filter(({ text }) => !cancels(text)).map(({ name }) => name)).toEqual([]);
   });
 
+  it("cancels only on pull_request events when a workflow has other triggers", () => {
+    // A bare `true` would also cancel a dispatch or push run of the same group.
+    const mixed = workflows.filter(({ text }) => {
+      const t = triggers(text);
+      return (
+        /(^|\n)  pull_request:/.test(t) &&
+        /(^|\n)  (push|schedule|workflow_dispatch|workflow_call):/.test(t)
+      );
+    });
+    expect(mixed.length).toBeGreaterThan(2);
+    expect(mixed.filter(({ text }) => bareCancel(text)).map(({ name }) => name)).toEqual([]);
+  });
+
+  it("groups every pull_request workflow per PR number", () => {
+    const pr = workflows.filter(({ text }) => /(^|\n)  pull_request:/.test(triggers(text)));
+    expect(
+      pr
+        .filter(
+          ({ text }) =>
+            !/\nconcurrency:\n  group: [^\n]*github\.event\.pull_request\.number[^\n]*\n/.test(
+              text,
+            ),
+        )
+        .map(({ name }) => name),
+    ).toEqual([]);
+  });
+
   it("never cancels a main push run (CI standard rule 9)", () => {
     const offenders = workflows
       .filter(({ text }) => pushesMain(text) && bareCancel(text) && !groupPerSha(text))
