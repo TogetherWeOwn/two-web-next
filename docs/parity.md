@@ -107,7 +107,7 @@ production testing, or change the recorded rotating TTL/POST-QA divergences.
 | `GET /about`, `GET /faq` (static, zero-query) | ✅ | W4 ✅ |
 | `GET /privacy` (versioned policy from disk, no session/cache/DB; v1 file retained as history, live page serves `content/privacy-policy-v2.md` via `POLICY_FILE`) | ✅ `src/privacy.ts` + `test/privacy.test.ts` | **N1** ✅ ([TOG-9893](/TOG/issues/TOG-9893)) |
 | `GET /up` (always-200 `{status, queue{pending,…,warn:20,critical:100}}`, unknown-not-500) | ✅ `src/up.ts` + `test/up.test.ts`; sole deploy/uptime endpoint, payload unchanged; queue read covers the ledger (`queue.status: "unknown"` when unconfigured) | **N3** ✅ ([TOG-9895](/TOG/issues/TOG-9895)) + [TOG-10852](/TOG/issues/TOG-10852) ✅ |
-| `POST /csp-reports` (always-204, 8 KB cap, sampled fixed-key log, never stored) | ✅ `src/csp-reports.ts` + `test/csp-reports.test.ts` (funnel posture: no session/cookie/cache/DB, `no-store`); CSP `report-uri` + Reporting API `Reporting-Endpoints`/`Report-To` point at it | [TOG-10107](/TOG/issues/TOG-10107) ✅ |
+| `POST /csp-reports` (always-204, 8 KB cap, sampled fixed-key log, never stored) | ✅ `src/csp-reports.ts` + `test/csp-reports.test.ts` (funnel posture: no session/cookie/cache/DB, `no-store`); CSP `report-to` + the `Reporting-Endpoints` header point at it (no deprecated `report-uri`) | [TOG-10107](/TOG/issues/TOG-10107) ✅ |
 
 ### Diagnostic surface decision ([TOG-10852](/TOG/issues/TOG-10852))
 
