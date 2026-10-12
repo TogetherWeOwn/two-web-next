@@ -677,9 +677,60 @@ describe("adjacent auth log paths stay bounded", () => {
     expect(calls.some((c) => c.method === "PUT" && c.url.includes("/members/42"))).toBe(true);
     const rosterLine = recordsFor(logs, "roster upsert failed");
     expect(rosterLine).toHaveLength(1);
-    expect(rosterLine[0]!.args[1]).toEqual({ user: "42", exception: "Error" });
+    expect(rosterLine[0]!.args[1]).toEqual({
+      request_id: res.headers.get("x-request-id"),
+      exception: "Error",
+    });
     streamClean(logs, LOGIN_ROUTE, ["roster upsert failed"]);
     leakFree(res.headers.getSetCookie());
+  });
+
+  it("prior session sweep failure: sign-in completes, the log carries request_id and no Discord ID", async () => {
+    const store = createMemorySessionStore();
+    (store as unknown as { revokeUserSessions: () => Promise<never> }).revokeUserSessions =
+      async () => {
+        throw new Error(`sweep failed ${TOK}`);
+      };
+    const e = { ...env, SESSION_STORE: store } as Env;
+    const logs = captureDiagnosticStream();
+    stubSignInDiscord();
+    const start = await app.request("/auth/discord", {}, e);
+    const state = new URL(start.headers.get("location")!).searchParams.get("state")!;
+    const res = await app.request(
+      `/auth/discord/callback?code=abc&state=${state}`,
+      { headers: { cookie: cookiesFrom(start) } },
+      e,
+    );
+    expect(res.headers.get("location")).toBe("/?n=joined");
+    expect(res.headers.getSetCookie().join("\n")).toContain("__Host-two_session=");
+    const sweepLine = recordsFor(logs, "prior session sweep failed");
+    expect(sweepLine).toHaveLength(1);
+    expect(sweepLine[0]!.args[1]).toEqual({
+      request_id: res.headers.get("x-request-id"),
+      exception: "Error",
+    });
+    streamClean(logs, LOGIN_ROUTE, ["prior session sweep failed"]);
+    leakFree(res.headers.getSetCookie());
+  });
+
+  it("guild auto-join failure: sign-in completes and the log carries request_id, never the Discord ID", async () => {
+    const store = createMemorySessionStore();
+    const e = { ...env, SESSION_STORE: store } as Env;
+    const logs = captureDiagnosticStream();
+    stubSignInDiscord(TOK, 500);
+    const start = await app.request("/auth/discord", {}, e);
+    const state = new URL(start.headers.get("location")!).searchParams.get("state")!;
+    const res = await app.request(
+      `/auth/discord/callback?code=abc&state=${state}`,
+      { headers: { cookie: cookiesFrom(start) } },
+      e,
+    );
+    expect(res.headers.getSetCookie().join("\n")).toContain("__Host-two_session=");
+    const joinLine = recordsFor(logs, "guild auto-join failed");
+    expect(joinLine).toHaveLength(1);
+    expect(joinLine[0]!.args[1]).toEqual({ request_id: res.headers.get("x-request-id") });
+    streamClean(logs, LOGIN_ROUTE, ["guild auto-join failed"]);
+    leakFree(res.headers.getSetCookie(), res.headers.get("location"));
   });
 
   it("profiles session gate: a store failure answers 503 and logs the class only", async () => {

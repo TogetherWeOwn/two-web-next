@@ -352,7 +352,7 @@ describe.skipIf(!process.env.DATABASE_URL)("events routes (agent-testdb)", () =>
     return (await res.json()) as Collection;
   };
 
-  it("pages earliest-first without repeats/skips, with an ID tiebreak and role-scoped totals", async () => {
+  it("pages published rows earliest-first without repeats or skips for every role", async () => {
     // Insert later rows first; six tied starts straddle two page boundaries.
     const seeded = await db
       .insert(events)
@@ -364,30 +364,25 @@ describe.skipIf(!process.env.DATABASE_URL)("events routes (agent-testdb)", () =>
         eventRow(10, "draft", 1),
       ])
       .returning();
-    const expected = [seeded[7]!, ...seeded.slice(1, 7), seeded[0]!, seeded[8]!].map(
-      (row) => row.eventKey,
-    );
+    const expected = [...seeded.slice(1, 7), seeded[0]!].map((row) => row.eventKey);
     const seen: string[] = [];
     for (let page = 1; page <= 3; page++) {
       const result = await collection(`?per_page=3&page=${page}`);
-      expect(result.meta).toEqual({ current_page: page, per_page: 3, total: 9, last_page: 3 });
+      expect(result.meta).toEqual({ current_page: page, per_page: 3, total: 7, last_page: 3 });
       expect(result.page).toBe(page);
       expect(result.limit).toBe(3);
       seen.push(...result.data.map((row) => row.event_key));
     }
     expect(seen).toEqual(expected);
-    expect(new Set(seen).size).toBe(9);
+    expect(new Set(seen).size).toBe(7);
+    const memberRows = await collection("?per_page=100", MEMBER);
     const mod = await collection("?per_page=100", MOD);
-    expect(mod.meta.total).toBe(10);
-    expect([...new Set(mod.data.map((row) => row.status))].sort()).toEqual([
-      "cancelled",
-      "draft",
-      "past",
-      "published",
-    ]);
+    expect(memberRows).toEqual(mod);
+    expect(mod.meta.total).toBe(7);
+    expect([...new Set(mod.data.map((row) => row.status))]).toEqual(["published"]);
     const outside = await collection("?per_page=3&page=4");
     expect(outside).toEqual(await collection("?per_page=3&page=3"));
-    expect(outside.meta).toEqual({ current_page: 3, per_page: 3, total: 9, last_page: 3 });
+    expect(outside.meta).toEqual({ current_page: 3, per_page: 3, total: 7, last_page: 3 });
     expect(outside.page).toBe(3);
   });
 
@@ -499,7 +494,7 @@ describe.skipIf(!process.env.DATABASE_URL)("events routes (agent-testdb)", () =>
     }
   });
 
-  it("show and list preserve the row keys/types, count only going and isolate the viewer's FIFO position", async () => {
+  it("show keeps viewer FIFO position while the public list shares base fields without personal state", async () => {
     const [event] = await db
       .insert(events)
       .values({
@@ -571,7 +566,12 @@ describe.skipIf(!process.env.DATABASE_URL)("events routes (agent-testdb)", () =>
       waitlist_position: 2,
     });
     expect(res.headers.get("x-robots-tag")).toBeNull();
-    expect((await collection()).data).toEqual([data]);
+    // Public collection (A0): same base fields, published-only, no viewer state.
+    const { waitlist_position: _dropped, ...publicData } = data;
+    const listed = (await collection()).data;
+    expect(listed).toHaveLength(1);
+    expect(listed[0]).toEqual(publicData);
+    expect(listed[0]).not.toHaveProperty("waitlist_position");
     const etag = res.headers.get("etag")!;
     const mod = await req(path, await as(MOD, { "if-none-match": etag }));
     expect(mod.status).toBe(200);
@@ -601,7 +601,7 @@ describe.skipIf(!process.env.DATABASE_URL)("events routes (agent-testdb)", () =>
     },
   );
 
-  it("collection ETag changes with totals, role, page, going counts and viewer position", async () => {
+  it("collection ETag changes with totals, page and going counts, not role or personal state", async () => {
     const seeded = await db
       .insert(events)
       .values([eventRow(1), eventRow(2), eventRow(3, "draft")])
@@ -610,7 +610,7 @@ describe.skipIf(!process.env.DATABASE_URL)("events routes (agent-testdb)", () =>
     const original = await req(path, await as(MEMBER));
     const etag = original.headers.get("etag")!;
     expect((await req(path, await as(MEMBER, { "if-none-match": etag }))).status).toBe(304);
-    expect((await req(path, await as(MOD, { "if-none-match": etag }))).status).toBe(200);
+    expect((await req(path, await as(MOD, { "if-none-match": etag }))).status).toBe(304);
     expect((await req(`${path}&page=2`, await as(MEMBER, { "if-none-match": etag }))).status).toBe(
       200,
     );
@@ -623,7 +623,7 @@ describe.skipIf(!process.env.DATABASE_URL)("events routes (agent-testdb)", () =>
     await db
       .insert(rsvps)
       .values({ eventId: seeded[0]!.id, userId: "100000000000000112", status: "waitlisted" });
-    expect((await req(path, await as(MEMBER, { "if-none-match": counted }))).status).toBe(200);
+    expect((await req(path, await as(MEMBER, { "if-none-match": counted }))).status).toBe(304);
   });
 
   it("JSON show distinguishes malformed/missing keys and does not shadow archive or ICS", async () => {
@@ -653,7 +653,7 @@ describe.skipIf(!process.env.DATABASE_URL)("events routes (agent-testdb)", () =>
     expect((await req("/e/not-a-ulid")).status).toBe(404);
   });
 
-  it("filters keyed JSON reads before pagination without changing draft visibility", async () => {
+  it("filters keyed JSON reads to published rows before count and pagination", async () => {
     const key = String(26).padStart(26, "0");
     const draftKey = String(99).padStart(26, "0");
     await db.insert(events).values(
@@ -686,8 +686,8 @@ describe.skipIf(!process.env.DATABASE_URL)("events routes (agent-testdb)", () =>
     expect(hidden.data).toEqual([]);
     expect(hidden.meta.total).toBe(0);
     const shown = await collection(`?event_key=${draftKey}`, MOD);
-    expect(shown.data[0]?.event_key).toBe(draftKey);
-    expect(shown.meta.total).toBe(1);
+    expect(shown.data).toEqual([]);
+    expect(shown.meta.total).toBe(0);
     const second = await collection(`?event_key=${key}&per_page=1&page=2`);
     expect(second.data).toEqual((await collection(`?event_key=${key}&per_page=1`)).data);
     expect(second.meta).toEqual({ current_page: 1, per_page: 1, total: 1, last_page: 1 });

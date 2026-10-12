@@ -25,6 +25,21 @@ export const IDEMPOTENCY_KEY_RETENTION_DAYS = 90; // config/agent-events.php: id
 export const EVENT_SEARCH_LOG_RETENTION_DAYS = 90; // config/event_search_log.php: retention_days
 export const RECONCILE_CRON = "*/10 * * * *"; // routes/console.php:35 everyTenMinutes()
 export const PRUNE_CRON = "0 0 * * *"; // routes/console.php:19 daily() (Laravel daily = 00:00)
+// Max rows one daily pass deletes per age-pruned table. Postgres
+// DELETE takes no LIMIT, so each statement deletes the oldest N ids via a
+// subselect and reports the exact count through RETURNING. The pass repeats
+// the batched statement until a short batch proves the backlog drained, so a
+// backlog above one batch clears in a single pass instead of piling past
+// retention. The loop stops after PRUNE_DELETE_MAX_BATCHES batches per table
+// (100k rows) to bound the `model:prune` single-flight hold; a final full
+// batch logs a warning with rows possibly pending. The web_sessions expiry
+// sweep stays unbounded.
+export const PRUNE_DELETE_BATCH_SIZE = 1000;
+// Max batched statements per age-pruned table per daily pass: 100k rows,
+// covering the worst-case public event-search inflow (60 reads/min = 86,400
+// rows/day from one client) with headroom, plus the smaller join inflow
+// (14,400/day); larger floods warn instead of silently piling past retention.
+export const PRUNE_DELETE_MAX_BATCHES = 100;
 
 /** Gap before the attempt after `attempts` (1-based), holding at the last value (nextDelay / backoffFor). */
 export function backoffFor(backoff: readonly number[], attempts: number): number {

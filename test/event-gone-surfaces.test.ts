@@ -201,27 +201,24 @@ describe.skipIf(!process.env.DATABASE_URL)("event gone surfaces (agent-testdb)",
     expect(html).toContain('name="robots" content="noindex, nofollow"');
   });
 
-  it("hides drafts from member JSON and ICS while moderators still read them", async () => {
+  it("hides drafts from every JSON collection and keeps moderator-only ICS access", async () => {
     expect((await req("/events.json")).status).toBe(401);
     const hidden = await req(`/events.json?event_key=${DRAFT}`, await auth(false));
     expect(hidden.status).toBe(200);
     expect(((await hidden.json()) as { data: unknown[] }).data).toEqual([]);
     const shown = await req(`/events.json?event_key=${DRAFT}`, await auth(true));
-    expect(((await shown.json()) as { data: { event_key: string }[] }).data[0]?.event_key).toBe(
-      DRAFT,
-    );
+    expect(((await shown.json()) as { data: unknown[] }).data).toEqual([]);
     expect((await req(`/events/${DRAFT}.ics`)).status).toBe(403);
     expect((await req(`/events/${DRAFT}.ics`, await auth(false))).status).toBe(403);
     expect((await req(`/events/${DRAFT}.ics`, await auth(true))).status).toBe(200);
   });
 
-  it("keeps a cancelled row listed in member JSON with its status and no JSON robots tag", async () => {
+  it("excludes cancelled rows from the public JSON collection", async () => {
     const res = await req(`/events.json?event_key=${CANCELLED}`, await auth(false));
     expect(res.status).toBe(200);
-    expect(res.headers.get("x-robots-tag")).toBeNull();
-    const rows = ((await res.json()) as { data: { event_key: string; status: string }[] }).data;
-    expect(rows).toHaveLength(1);
-    expect(rows[0]).toMatchObject({ event_key: CANCELLED, status: "cancelled" });
+    const body = (await res.json()) as { data: unknown[]; meta: { total: number } };
+    expect(body.data).toEqual([]);
+    expect(body.meta.total).toBe(0);
   });
 
   it("leaves a published page without any robots signal on the apex", async () => {

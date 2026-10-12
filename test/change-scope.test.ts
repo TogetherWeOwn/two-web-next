@@ -121,7 +121,7 @@ describe("change-scope gate", () => {
       draft: "false",
     });
     expect(verdict([["web/src/lib/Shell.svelte", ""]])).toEqual({
-      app: "false",
+      app: "true",
       worker: "true",
       db: "false",
       full: "false",
@@ -290,6 +290,7 @@ describe("skip_e2e verdict", () => {
       "public/styles.css",
       "content/policy.md",
       "e2e/admin.spec.ts",
+      "web/src/lib/Shell.svelte",
       "wrangler.jsonc",
       "bin/smoke.mjs",
       "ci/check-config-docs.mjs",
@@ -366,7 +367,28 @@ describe("ci heavy-job scope gates", () => {
   it("check still runs on every verdict and gates on the audit result", () => {
     const block = jobBlock("check");
     expect(block).toMatch(/\n    needs: \[a11y, lighthouse, bundle-budget, docs-links, scope\]\n/);
-    expect(block).toMatch(/\n    if: always\(\)\n/);
+    expect(block).toMatch(/\n    if: \$\{\{ !cancelled\(\) \}\}\n/);
+  });
+
+  it("runs the adapter build, dry run and generated Worker fixture in required check", () => {
+    const block = jobBlock("check");
+    for (const [name, command] of [
+      ["Kit adapter build", "npm run build --prefix web"],
+      [
+        "Kit Worker bundle dry run (no deploy)",
+        "npx wrangler deploy --config web/wrangler.jsonc --dry-run",
+      ],
+      [
+        "Kit Worker runtime fixture (disposable Postgres, fake Discord)",
+        "node ci/kit-worker-e2e.mjs",
+      ],
+    ]) {
+      const step = block.split(`- name: ${name}\n`)[1]?.split("\n      - ")[0] ?? "";
+      expect(step, name).toContain(command);
+      expect(step, name).toContain("needs.scope.outputs.app == 'true'");
+      expect(step, name).toContain("needs.scope.outputs.worker == 'true'");
+      expect(step, name).toContain("needs.scope.outputs.draft != 'true'");
+    }
   });
 
   it("docs-links runs on every PR and check fails unless it passes", () => {
@@ -380,7 +402,7 @@ describe("ci heavy-job scope gates", () => {
   it("ci-ok aggregates every gated job and fails closed on scope", () => {
     const block = jobBlock("ci-ok");
     expect(block).toMatch(/\n    needs: \[a11y, lighthouse, bundle-budget, check, scope\]\n/);
-    expect(block).toMatch(/\n    if: always\(\)\n/);
+    expect(block).toMatch(/\n    if: \$\{\{ !cancelled\(\) \}\}\n/);
     expect(block).toContain("SCOPE_RESULT: ${{ needs.scope.result }}");
     expect(block).toContain("CHECK_RESULT: ${{ needs.check.result }}");
   });
@@ -495,9 +517,9 @@ describe("e2e-ok aggregator (required check)", () => {
   const e2e = readFileSync(".github/workflows/e2e.yml", "utf8");
   const agg = e2e.split("\n  e2e-ok:\n")[1] ?? "";
 
-  it("runs always and depends on both scope and the smoke", () => {
+  it("runs unless its run was cancelled and depends on both scope and the smoke", () => {
     expect(agg).toMatch(/\n    needs: \[scope, browser-smoke\]\n/);
-    expect(agg).toMatch(/\n    if: always\(\)\n/);
+    expect(agg).toMatch(/\n    if: \$\{\{ !cancelled\(\) \}\}\n/);
   });
 
   it("fails on a failed scope and on a failed or cancelled smoke", () => {

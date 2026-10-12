@@ -2,6 +2,7 @@
 // of src/profiles/routes.tsx. Admission (throttle, owner only) runs first, then
 // the body limit, then the save.
 import { requestBodyLimit } from "../body-limit";
+import { alertRequestError } from "../alerts";
 import { isDatabaseUnavailable } from "../db/errors";
 import { databaseUnavailable } from "../errors";
 import {
@@ -14,6 +15,7 @@ import { ProfilePage } from "./pages";
 import { admitWrite } from "./routes-admission";
 import type { Ctx, ProfileApp, ProfileDeps } from "./routes-shared";
 import type { ProfileStores } from "./routes-stores";
+import { requestRoute, safeRequestId } from "../request-log";
 import { validateProfile } from "./validation";
 
 // UpdateProfileRequest's fields plus the spam-trap pair. Anything else (user_id,
@@ -28,6 +30,21 @@ const WRITABLE_FIELDS = new Set([
   PROFILE_OPENED_AT_FIELD,
 ]);
 const UNSUPPORTED_FIELDS = "Only your bio, games and timezone can be changed.";
+
+// Media types are case-insensitive (RFC 2045 §5.1) and may carry parameters:
+// compare only the type/subtype before `;`, trimmed and lowercased. Anything
+// else (including a missing Content-Type) is not a save body at all: Hono's
+// parseBody answers `{}` for those, which would otherwise validate as a blank
+// profile and silently wipe bio/games/timezone.
+const mediaType = (value: string | null | undefined): string =>
+  (value ?? "").split(";")[0]?.trim().toLowerCase() ?? "";
+
+const isJsonMediaType = (value: string | null | undefined): boolean =>
+  mediaType(value) === "application/json";
+const isFormMediaType = (value: string | null | undefined): boolean => {
+  const mt = mediaType(value);
+  return mt === "application/x-www-form-urlencoded" || mt === "multipart/form-data";
+};
 
 export function registerWriteRoutes(
   app: ProfileApp,
@@ -47,10 +64,15 @@ export function registerWriteRoutes(
     let isJson = false;
     try {
       if (forced) input = forced;
-      else if ((c.req.header("content-type") ?? "").includes("application/json")) {
+      else if (isJsonMediaType(c.req.header("content-type"))) {
         isJson = true;
         input = (await c.req.json()) as Record<string, unknown>;
-      } else input = { ...(await c.req.parseBody({ all: true })) };
+      } else if (isFormMediaType(c.req.header("content-type"))) {
+        input = { ...(await c.req.parseBody({ all: true })) };
+      } else {
+        c.header("cache-control", "private, no-store");
+        return c.text("Unsupported Media Type", 415);
+      }
     } catch {
       return c.text("Bad request", 400);
     }
@@ -97,7 +119,15 @@ export function registerWriteRoutes(
     try {
       if (!trapped) await store.save(id, result.attrs);
     } catch (err) {
-      console.error("profile save failed", { exception: (err as Error)?.constructor?.name });
+      alertRequestError(err, {
+        method: c.req.method,
+        route: requestRoute(c),
+        requestId: c.get("requestId"),
+      });
+      console.error("profile save failed", {
+        exception: (err as Error)?.constructor?.name,
+        request_id: safeRequestId(c.get("requestId")),
+      });
       if (isDatabaseUnavailable(err)) return databaseUnavailable(c);
       return c.text("Could not save your profile.", 500);
     }
@@ -110,14 +140,14 @@ export function registerWriteRoutes(
   app.patch("/members/:user", admit, requestBodyLimit("form"), (c) => patch(c));
   // Plain HTML forms cannot PATCH: the edit form posts `_method=PATCH`.
   app.post("/members/:user", admit, requestBodyLimit("form"), async (c) => {
-    const ct = c.req.header("content-type") ?? "";
-    if (ct.includes("application/x-www-form-urlencoded") || ct.includes("multipart/form-data")) {
+    if (isFormMediaType(c.req.header("content-type"))) {
       const body = await c.req.parseBody({ all: true }).catch(() => null);
       if (body && body._method === "PATCH") {
         const { _method, ...rest } = body;
         return patch(c, rest);
       }
     }
+    c.header("Allow", "GET, PATCH, POST");
     return c.text("Method Not Allowed", 405);
   });
 }

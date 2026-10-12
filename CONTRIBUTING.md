@@ -27,11 +27,13 @@ version.
 - Search first. Look for an open or recent PR that touches the same area, and link
   what you find.
 - Keep references public-safe. Do not put internal card IDs (`TOG-` or `PAP-`
-  followed by digits), private URLs, tokens or secrets in any title, body, commit,
-  comment or branch name. `pr-lint` warns when it finds a card ID in the title, body
-  or a commit subject, and in the branch name in any letter case (`qa/tog-123-x`),
-  except a branch-name internal ID on a PR numbered at or above
-  `HEAD_REF_ERROR_FROM_PR: "627"`, which fails `pr-lint`.
+  followed by digits), instance UI links, the internal host, private URLs, tokens or
+  secrets in any title, body, commit, comment or branch name. A tracker ID, instance
+  UI link or the internal host in the title or body fails `pr-lint`, comments
+  included; a card ID in a commit subject warns (first checker,
+  `INTERNAL_ID_LEVEL: "warning"`); a branch-name internal ID fails only on a PR
+  numbered at or above `HEAD_REF_ERROR_FROM_PR: "627"`, and warns below it; other
+  title/body references follow `PR_STANDARDS_MODE`.
 - Every PR, including docs-only and draft heads, must not increase the total count of internal card IDs and instance-UI links in tracked files versus its fork point (the merge-base with its base); `pr-lint` fails when that tracked-file ratchet grows, with named lint-fixture exclusions only.
 - Be honest about the tests. Give the exact commands you ran and their results in
   Verification, and say what you did not run. Never claim a green run you did not see.
@@ -66,9 +68,11 @@ Heavy CI jobs run only when their inputs changed (TOG-14877 CI standard). The
 worker, the Kit spike), `db` (migrations) — plus `full` (lockfiles,
 `.github/**`, shared config, or anything unknown: run everything) and `draft`.
 `a11y` runs on app/db, `lighthouse` and `bundle-budget` on app, and `docs-links`
-checks relative links and anchors on every PR. `check` always runs, skips its
-heavy steps on docs-only and draft PRs, and requires `docs-links`; the `ci-ok`
-aggregator reports the overall conclusion. Main pushes and the nightly schedule
+checks relative links and anchors on every PR. `check` runs unless its run was
+cancelled, skips its heavy steps on docs-only and draft PRs, and requires
+`docs-links`; the `ci-ok` aggregator reports the overall conclusion. In a run
+cancelled by a newer run on the same PR, both conclude cancelled rather than
+failed, and the newer run's `ci-ok` decides the merge. Main pushes and the nightly schedule
 run the full suite. The `ci-ok`-as-required-check ruleset cutover is an
 OPERATOR step after merge plus green probes — never part of a PR.
 
@@ -80,10 +84,10 @@ fail it and some only warn. Current mode in
 `PR_STANDARDS_MODE: "warn"`, `HEAD_REF_ERROR_FROM_PR: "627"`. A finding that
 fails exits the checker nonzero and turns the job red; a warning is annotated
 without failing. Flipping a knob to `"error"` turns the Warns-only rows that
-name it into failures, so update this table in the same change. An internal ID
-in the PR title or body is covered by both knobs, so either flip makes that
-hit fail; a commit-subject hit needs `INTERNAL_ID_LEVEL`, and the Linked
-Issues, Verification and below-cutoff branch rows need `PR_STANDARDS_MODE`.
+name it into failures, so update this table in the same change. The strict
+title/body subset always fails regardless of either knob; a commit-subject hit
+needs `INTERNAL_ID_LEVEL`, and the Linked Issues, Verification, advisory and
+below-cutoff branch rows need `PR_STANDARDS_MODE`.
 
 | Check | Result today |
 | --- | --- |
@@ -94,8 +98,9 @@ Issues, Verification and below-cutoff branch rows need `PR_STANDARDS_MODE`.
 | Branch-name internal ID on a PR numbered at or above the cutoff (`HEAD_REF_ERROR_FROM_PR: "627"`) | Fails `pr-lint` |
 | Missing or thin Linked Issues or Issue Description section (upstream gate, `PR_STANDARDS_MODE: "warn"`) | Warns only |
 | Missing or thin Verification section (upstream gate, `PR_STANDARDS_MODE: "warn"`) | Warns only |
-| Internal card ID in the PR title, body, or commit subject (first checker, `INTERNAL_ID_LEVEL: "warning"`) | Warns only |
-| Internal reference in the PR title, body, or branch name below the cutoff (upstream gate, `PR_STANDARDS_MODE: "warn"`) | Warns only |
+| Tracker ID, instance UI link or the internal host in the PR title or body (upstream strict subset, always fails) | Fails `pr-lint` |
+| Internal card ID in a commit subject (first checker, `INTERNAL_ID_LEVEL: "warning"`) | Warns only |
+| Advisory references in the PR title or body, or an internal reference in the branch name below the cutoff (upstream gate, `PR_STANDARDS_MODE: "warn"`) | Warns only |
 
 GitHub does not enforce an approval count here. Team policy does: an independent
 reviewer, who did not write the change, reviews the exact head SHA that merges, CI
@@ -107,10 +112,11 @@ title that is not a Conventional Commits header, a title over 100 characters or
 ending in a period, and an empty body; its internal-ID check is a warning
 today, and `INTERNAL_ID_LEVEL` in the workflow turns it into an error), then
 `.github/scripts/pr_standards.py` for pull requests when the workflow sets
-`PR_STANDARDS_MODE`. The upstream body, branch and reference rules start as
-warnings (`PR_STANDARDS_MODE: "warn"`); the flip to `"error"` is a separate
-one-line change once the repo's open PRs are clear. The script is unit-tested
-beside it: `python3 -m unittest discover -s .github/scripts -p
+`PR_STANDARDS_MODE`. A tracker ID, instance UI link or the internal host in a
+public title or body always fails, comments included; the remaining body, branch
+and reference rules follow the mode (`PR_STANDARDS_MODE: "warn"`); the flip to
+`"error"` is a separate one-line change once the repo's open PRs are clear. The
+script is unit-tested beside it: `python3 -m unittest discover -s .github/scripts -p
 'test_pr_standards.py'`.
 
 ### Secret-scan allowlists

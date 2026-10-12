@@ -2,7 +2,7 @@
 // routes as ci/lighthouserc.cjs (which keeps the mobile performance metrics). Desktop preset, 3 runs, median.
 // Minimum scores live in ci/quality-budget.json so a loosening is a visible, reviewed diff.
 // QUALITY_ORIGIN=<allowlisted origin> measures a deployed site instead (staging after every deploy, nightly drift):
-// the DB-free routes only, since the fixture event key exists only on the fixture worker.
+// the fixture event-detail route is dropped, since the fixture event key exists only on the fixture worker.
 const base = require("./lighthouserc.cjs").ci;
 const budget = require("./quality-budget.json");
 const { requireAllowedOrigin } = require("./lighthouse-origin-lib.cjs");

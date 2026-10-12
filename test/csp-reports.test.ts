@@ -251,10 +251,10 @@ describe("POST /csp-reports sink (TOG-10107)", () => {
     expect(warn).toHaveBeenCalledTimes(1);
   });
 
-  it("selects the Reporting API endpoint in the CSP and keeps report-uri fallback", async () => {
+  it("selects the Reporting API endpoint in the CSP and drops the deprecated report-uri", async () => {
     const res = await app.request("/about", {}, env);
     const directives = res.headers.get("content-security-policy")?.split("; ");
-    expect(directives).toContain("report-uri /csp-reports");
+    expect(directives?.some((directive) => directive.startsWith("report-uri"))).toBe(false);
     expect(directives).toContain("report-to csp-endpoint");
     expect(res.headers.get("reporting-endpoints")).toBe('csp-endpoint="/csp-reports"');
   });

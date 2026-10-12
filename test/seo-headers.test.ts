@@ -242,7 +242,8 @@ describe("static leaves (DB-free floor)", () => {
     expect(html).toContain('data-testid="faq-list"');
     expect(html).toContain('data-testid="faq-join"');
     expect(html).toContain("What is Together We Own?");
-    expect(html).toContain("Sunday Squad, every Sunday at 8pm Eastern");
+    expect(html).not.toContain("Sunday Squad");
+    expect(html).toContain("Game nights are scheduled in Discord");
     expect(html).toContain("How do I open a private support ticket?");
     expect(html).toContain("How do I fill in my profile?");
     expect(html).toContain("How does the game picker work?");
@@ -439,7 +440,7 @@ describe("security headers per route class", () => {
       expect(res.headers.get("content-type"), path).toContain("text/html");
       const csp = res.headers.get("Content-Security-Policy");
       expect(csp, path).toContain("default-src 'self'");
-      expect(csp, path).toContain("report-uri /csp-reports");
+      expect(csp, path).not.toContain("report-uri");
       expect(csp, path).toContain("report-to csp-endpoint");
       expect(res.headers.get("reporting-endpoints"), path).toBe('csp-endpoint="/csp-reports"');
     }

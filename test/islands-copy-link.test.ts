@@ -189,7 +189,7 @@ describe("Copy-link island DOM double", () => {
     const b = browser();
     await b.click();
     await b.click();
-    expect(b.clearTimeout).toHaveBeenLastCalledWith(1);
+    expect(b.clearTimeout).toHaveBeenCalledWith(b.setTimeout.mock.results[1]!.value);
     expect(b.timers.size).toBe(1);
   });
 

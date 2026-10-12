@@ -131,6 +131,7 @@ class DocsClassification(unittest.TestCase):
         assert_fails(rows, "bypass commit")
         assert_fails(rows, "ratchet")
         assert_fails(rows, "branch-name internal ID")
+        assert_fails(rows, "strict subset")
 
     def test_warning_checks_are_documented_as_warnings(self):
         _, rows = docs_table_rows()
@@ -243,7 +244,61 @@ class CheckerBehaviorMatchesDocs(unittest.TestCase):
         )
         self.assertTrue(any(f.level == "error" for f in flipped), flipped)
 
-    def test_internal_ids_warn_in_configured_mode(self):
+    def test_strict_title_body_hits_fail_in_warn_mode(self):
+        """The strict subset (tracker id, instance link, internal host) fails even in warn mode."""
+        mode = workflow_env("PR_STANDARDS_MODE")
+        self.assertEqual(mode, "warn", "test expectation pins the current warn mode; update docs + test on flip")
+        strict_body = GOOD_BODY.replace("Fixes #123", "Refs: TOG-1234")
+        findings = ps.evaluate(
+            {
+                "EVENT": "pull_request",
+                "TITLE": "fix(auth): refresh the key",
+                "BODY": strict_body,
+                "AUTHOR": "alice",
+                "HEAD_REF": "fix/short-slug",
+                "REPO_PRIVATE": "false",
+                "PR_STANDARDS_MODE": mode,
+            }
+        )
+        self.assertTrue(
+            any(f.level == "error" and f.title == "Internal reference" for f in findings),
+            findings,
+        )
+        strict_title = ps.evaluate(
+            {
+                "EVENT": "pull_request",
+                "TITLE": "fix(auth): handle TOG-1234 retries",
+                "BODY": GOOD_BODY,
+                "AUTHOR": "alice",
+                "HEAD_REF": "fix/short-slug",
+                "REPO_PRIVATE": "false",
+                "PR_STANDARDS_MODE": mode,
+            }
+        )
+        self.assertTrue(
+            any(f.level == "error" and f.title == "Internal reference" for f in strict_title),
+            strict_title,
+        )
+        # The advisory remainder still only warns: a localhost URL is not strict.
+        advisory_body = GOOD_BODY + "\nProbed at http://localhost:8787/health.\n"
+        advisory = ps.evaluate(
+            {
+                "EVENT": "pull_request",
+                "TITLE": "fix(auth): refresh the key",
+                "BODY": advisory_body,
+                "AUTHOR": "alice",
+                "HEAD_REF": "fix/short-slug",
+                "REPO_PRIVATE": "false",
+                "PR_STANDARDS_MODE": mode,
+            }
+        )
+        self.assertTrue(
+            any(f.level == "warning" and f.title == "Internal reference" for f in advisory),
+            advisory,
+        )
+        self.assertFalse(any(f.level == "error" for f in advisory), advisory)
+
+    def test_commit_subject_ids_warn_in_configured_mode(self):
         level = workflow_env("INTERNAL_ID_LEVEL")
         self.assertEqual(level, "warning", "test expectation pins the current warning level; update docs + test on flip")
         self.assertFalse(
@@ -256,20 +311,6 @@ class CheckerBehaviorMatchesDocs(unittest.TestCase):
                 "fix(ci): handle TOG-1234 retries", GOOD_BODY, "alice", (), "error"
             )
         )
-        mode = workflow_env("PR_STANDARDS_MODE")
-        findings = ps.evaluate(
-            {
-                "EVENT": "pull_request",
-                "TITLE": "fix(auth): refresh the key",
-                "BODY": GOOD_BODY.replace("Fixes #123", "Refs: TOG-1234"),
-                "AUTHOR": "alice",
-                "HEAD_REF": "fix/short-slug",
-                "REPO_PRIVATE": "false",
-                "PR_STANDARDS_MODE": mode,
-            }
-        )
-        self.assertTrue(any(f.level == "warning" for f in findings), findings)
-        self.assertFalse(any(f.level == "error" for f in findings), findings)
 
     def test_branch_cutoff_still_errors_in_warn_mode(self):
         mode = workflow_env("PR_STANDARDS_MODE")
