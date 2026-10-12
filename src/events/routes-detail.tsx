@@ -6,7 +6,7 @@ import { bufferedMemberHtml, bufferedMemberText, memberReadBoundary } from "../m
 import { readJoinResult, takeJoinResult } from "../return-journey";
 import { canonicalUrl } from "../seo";
 import { canonicalEventKey, eventKeyAllowed } from "./keys";
-import { notFoundSuggestions } from "./suggestions";
+import { cachedNotFoundSuggestions } from "../not-found-suggestions";
 import {
   getEventNeighbors,
   getPublicEvent,
@@ -106,9 +106,12 @@ export function registerDetailRoutes(
       async () => {
         const notFound = async () => {
           c.header("x-robots-tag", "noindex, nofollow");
+          // Same per-isolate, DB-source-scoped cached guest snapshot as
+          // ordinary 404s (TOG-22184): one fill per TTL, never one Postgres
+          // transaction per probe.
           return bufferedMemberHtml(
             c,
-            <NotFoundPage suggestions={await notFoundSuggestions(c.env)} />,
+            <NotFoundPage suggestions={await cachedNotFoundSuggestions(c.env, c.req.path)} />,
             404,
           );
         };
