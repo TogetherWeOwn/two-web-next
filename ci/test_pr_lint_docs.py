@@ -80,17 +80,22 @@ def row_result(rows, needle):
 def assert_no_bare_required_claim(text, name):
     """Fail when a docs block presents warn-only sections as required.
 
-    Each blank-line-separated block is whitespace-collapsed before matching,
-    so hard-wrapped prose (e.g. the old two-line "`pr-lint` requires the title,
-    the linked issue ..." / "and Verification;" template wording) is caught as
-    well as single-line claims.
+    Each blank-line-separated block is further split at list-item starts,
+    then whitespace-collapsed before matching, so a bare `requires` claim in
+    one bullet cannot hide behind a `warns` qualifier in a neighbouring
+    bullet, and hard-wrapped prose (e.g. the old two-line "`pr-lint`
+    requires the title, the linked issue ..." / "and Verification;"
+    template wording) is caught as well as single-line claims.
     """
     for block in re.split(r"\n\s*\n", text):
-        collapsed = re.sub(r"\s+", " ", block).lower()
-        if "linked issue" in collapsed and "verification" in collapsed and "requir" in collapsed:
-            assert "warn" in collapsed, (
-                f"{name} still presents warn-only sections as required: {collapsed.strip()[:200]}"
-            )
+        for piece in re.split(r"(?m)^(?=\s*(?:[-*] |\d+\. ))", block):
+            if not piece.strip():
+                continue
+            collapsed = re.sub(r"\s+", " ", piece).lower()
+            if "linked issue" in collapsed and "verification" in collapsed and "requir" in collapsed:
+                assert "warn" in collapsed, (
+                    f"{name} still presents warn-only sections as required: {collapsed.strip()[:200]}"
+                )
 
 
 def assert_fails(rows, needle):
@@ -150,6 +155,16 @@ class DocsClassification(unittest.TestCase):
             assert_no_bare_required_claim(old_wording, "template")
         with self.assertRaises(AssertionError):
             assert_no_bare_required_claim(old_wording.replace("\n", " "), "template")
+
+    def test_required_scan_catches_contributing_list_claim(self):
+        """Red case: the pre-PR CONTRIBUTING bullet must fail even next to a warns bullet."""
+        old_bullet = (
+            "- `pr-lint` requires Linked Issues or Issue Description and\n"
+            "Verification (commands run and their results); the other sections are optional.\n"
+            "- Keep references public-safe. `pr-lint` warns when it finds a card ID in the title.\n"
+        )
+        with self.assertRaises(AssertionError):
+            assert_no_bare_required_claim(old_bullet, "CONTRIBUTING.md")
 
     def test_template_states_warn_mode(self):
         """The PR template is read first, so it must carry the same warn-mode contract as CONTRIBUTING.md."""
