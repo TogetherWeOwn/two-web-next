@@ -46,16 +46,18 @@ instead of installed on the host. Temporary files, fake objects and archives are
 private to the invocation and removed; Paperclip runs use
 `PAPERCLIP_RUN_SCRATCH_DIR` as their scratch parent.
 
-## Optional isolated GitHub Actions service
+## Isolated GitHub Actions job
 
-No shared workflow/package changes are part of this slice. A future dedicated
-job may run the same standalone commands in a job container with a service named
-`postgres`, configured with **POSTGRES_USER=agent_test**, **POSTGRES_DB=agent_test**
-and **POSTGRES_HOST_AUTH_METHOD=trust** (empty password). Use an isolated CI service
-only, never a mapped host database or an existing staging/production server.
+`.github/workflows/backup-restore-proof.yml` runs the same standalone commands
+on a disposable service named `postgres`, configured with **POSTGRES_USER=agent_test**,
+**POSTGRES_DB=agent_test** and **POSTGRES_HOST_AUTH_METHOD=trust** (empty password).
+The job sets no `PG*` or `*DATABASE_URL*` variables, uses no secrets, and touches
+no staging or production server. Docs-only PRs and drafts skip it through the
+same scope gate as the hermetic selftest steps; the proof log uploads as a
+short-retention artifact.
 
 ```sh
-# Inside that GitHub Actions job container (CI=true, GITHUB_ACTIONS=true):
+# Inside that GitHub Actions job (CI=true, GITHUB_ACTIONS=true arrive from the runner):
 python3 ci/backup-restore-proof/run.py --host postgres
 ```
 
