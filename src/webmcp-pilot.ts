@@ -4,8 +4,9 @@
 // page byte-identical. When enabled, the four pilot pages (homepage, events
 // list, event detail, join) carry one deferred island that registers exactly
 // the read-only tools T1–T4 against the session-free `/api/public/*` surface.
-// The middleware reads no session, no cookie and no database, so moderator
-// sessions render byte-identical markup with no extra tools. No polyfill and
+// The middleware reads no session, no cookie and no database, so it adds no
+// session-dependent markup of its own: every viewer gets the same island,
+// hence the same four tools and no extras. No polyfill and
 // no CDN script: without the browser API the island returns before any fetch.
 import type { Context, Next } from "hono";
 
