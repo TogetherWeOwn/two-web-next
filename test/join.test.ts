@@ -3,6 +3,9 @@
 // route-inventory: GET /join/discord
 // route-inventory: GET /join/callback
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { readFileSync } from "node:fs";
+import { runInNewContext } from "node:vm";
+import { URL as NodeURL } from "node:url";
 import postgres from "postgres";
 import app from "./app";
 import type { Env } from "../src/env";
@@ -335,9 +338,57 @@ describe("W15 join landing and recovery parity", () => {
     const { env: e } = isolated();
     const html = await (await app.request("/join", {}, e)).text();
     expect(html).toContain('data-testid="join-widget-load"');
+    // The island binds through this hook: removing it leaves the click
+    // un-intercepted and sends the visitor off-site, so pin it here.
+    expect(html).toContain("data-join-widget");
     expect(html).toContain('referrerpolicy="no-referrer"');
     expect(html).toContain('<script src="/islands/join-widget.js" defer=""></script>');
     expect(html).not.toContain("<iframe");
+  });
+
+  it("wires the rendered preview link to the shipped island: a click builds the frame", async () => {
+    // Pins the markup-to-island contract against the real SSR HTML: the
+    // href the server renders is the src the island frames on click.
+    const { env: e } = isolated();
+    const html = await (await app.request("/join", {}, e)).text();
+    const anchor = html.match(/<a[^>]*data-join-widget[^>]*>/)?.[0];
+    // SSR escapes `&` as `&amp;`; the browser hands the island the decoded
+    // value via getAttribute, so decode the same way here.
+    const href = anchor?.match(/href="([^"]+)"/)?.[1]?.replace(/&amp;/g, "&");
+    expect(href).toMatch(/^https:\/\/discord\.com\/widget\?id=\d{10,25}&theme=dark$/);
+    expect(html).toMatch(/class="join-preview"[\s\S]*data-join-widget/);
+    const binder = readFileSync(
+      new NodeURL("../public/islands/join-widget.js", import.meta.url),
+      "utf8",
+    );
+    expect(binder).toContain("[data-join-widget]");
+    const frame = { setAttribute: vi.fn(), focus: vi.fn() } as {
+      src?: string;
+      setAttribute: ReturnType<typeof vi.fn>;
+      focus: ReturnType<typeof vi.fn>;
+    };
+    const preview = { replaceChildren: vi.fn() };
+    let onClick: (event: { button: number; preventDefault: () => void }) => void = () => {};
+    runInNewContext(binder, {
+      document: {
+        querySelector: (selector: string) =>
+          selector === "[data-join-widget]"
+            ? {
+                getAttribute: () => href,
+                closest: (s: string) => (s === ".join-preview" ? preview : null),
+                addEventListener: (kind: string, fn: typeof onClick) => {
+                  if (kind === "click") onClick = fn;
+                },
+              }
+            : null,
+        createElement: () => frame,
+      },
+    });
+    const event = { button: 0, preventDefault: vi.fn() };
+    onClick(event);
+    expect(event.preventDefault).toHaveBeenCalledOnce();
+    expect(frame.src).toBe(href);
+    expect(preview.replaceChildren).toHaveBeenCalledWith(frame);
   });
 
   it.each(["", "javascript:alert(1)", "https://evil.test/invite"])(
