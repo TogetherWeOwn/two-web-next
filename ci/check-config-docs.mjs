@@ -341,11 +341,13 @@ export function checkTailKeys(
   }
   for (const key of [...appConsumers].sort()) {
     if (!docs.has(key)) {
-      errors.push(`Undocumented Tail consumer service: ${key} (wrangler.jsonc -> docs/config.md)`);
+      errors.push(
+        `Undocumented Tail consumer service: ${key} (wrangler.jsonc/wrangler.jobs.jsonc -> docs/config.md)`,
+      );
     }
     if (!tailWorkerNames.has(key)) {
       errors.push(
-        `App tail_consumer without Tail worker: ${key} (wrangler.jsonc vs tail/wrangler.jsonc)`,
+        `App tail_consumer without Tail worker: ${key} (wrangler.jsonc/wrangler.jobs.jsonc vs tail/wrangler.jsonc)`,
       );
     }
   }
@@ -357,7 +359,7 @@ export function checkTailKeys(
   for (const name of [...appScripts].sort()) {
     if (!tailScripts.has(name)) {
       errors.push(
-        `App script not accepted by Tail: ${name} (wrangler.jsonc vs tail/worker.ts APP_SCRIPT_NAMES)`,
+        `App script not accepted by Tail: ${name} (wrangler.jsonc/wrangler.jobs.jsonc vs tail/worker.ts APP_SCRIPT_NAMES)`,
       );
     }
   }
@@ -384,9 +386,14 @@ export function checkConfigDocs() {
   const tailWorkerNames = readTailWorkerNames(
     readFileSync(resolve(root, "tail/wrangler.jsonc"), "utf8"),
   );
-  const appConfig = readFileSync(resolve(root, "wrangler.jsonc"), "utf8");
-  const appConsumers = readAppTailConsumers(appConfig);
-  const appScripts = readAppScriptNames(appConfig);
+  // Staging runs two app Workers after TOG-22127: the web front
+  // (wrangler.jsonc) and the jobs consumer (wrangler.jobs.jsonc). Both tail
+  // to the staging pager, so both configs contribute consumers/scripts.
+  const appConfigs = ["wrangler.jsonc", "wrangler.jobs.jsonc"].map((file) =>
+    readFileSync(resolve(root, file), "utf8"),
+  );
+  const appConsumers = new Set(appConfigs.flatMap((text) => [...readAppTailConsumers(text)]));
+  const appScripts = new Set(appConfigs.flatMap((text) => [...readAppScriptNames(text)]));
   const tailScripts = readTailScriptNames(readFileSync(resolve(root, "tail/worker.ts"), "utf8"));
   const tailDocs = readTailDocKeys(docText);
   errors.push(
