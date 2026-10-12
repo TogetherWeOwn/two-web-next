@@ -181,12 +181,23 @@ applied outside versions, so rolling back both Workers alone leaves
 explicitly after the version rollbacks (same pre-handoff settings the web
 Worker ran with: `max_retries` 10, batch 10, timeout 5). First freeze the deploy lane
 and the migrate lane until the cause is fixed: run `gh workflow disable deploy`
-and `gh workflow disable db-migrate` before anything else, and re-enable both
-(`gh workflow enable deploy` and `gh workflow enable db-migrate`) explicitly
-after the cause is fixed and the revert or fix is on main, then verify
-`gh workflow list --all` shows both `deploy` and `db-migrate` as active: a lane
-left disabled silently drops later `workflow_run` events. `db-migrate` is the
-staging recovery path, so a rolled-back handoff must not strand it disabled. A revert of
+and `gh workflow disable db-migrate` before anything else, then list `deploy`
+and `ci` runs that are in progress or queued on main
+(`gh run list --workflow deploy --status in_progress`, then `--status queued`;
+same for `ci` with `gh run list --workflow ci --status in_progress`, then
+`--status queued`), let an in-progress deploy finish rather than cancelling it mid-mutation,
+cancel queued ones with `gh run cancel`, and only then start the wrangler commands below,
+re-recording the step-0 pointers if a deploy completed in the meantime. Disabling stops
+future triggers; the hold treats existing runs as surviving the disable, so the rollback
+carries the same in-flight check.
+Re-enable both (`gh workflow enable deploy` and `gh workflow enable db-migrate`)
+explicitly after the cause is fixed and the revert or fix is on main, then
+verify `gh workflow list --all` shows both `deploy` and `db-migrate` as active:
+a lane left disabled silently drops later `workflow_run` events. `db-migrate`
+is the staging recovery path, so a rolled-back handoff must not strand it
+disabled. `db-migrate` serves both `staging` and `production` targets on one
+workflow — production is pre-cutover so nothing is blocked today, but the
+freeze covers the production target too, so re-enable promptly per above. A revert of
 the consumer/cron move on main is not a freeze — a revert is a push to main, so
 it fires the deploy workflow — and is merged only after the manual rollback
 below is complete: main still carries the moved consumers/crons and the three

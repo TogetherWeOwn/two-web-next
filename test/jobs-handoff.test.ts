@@ -180,6 +180,19 @@ describe("staging jobs handoff invariants", () => {
     // release re-enables both lanes once the cause is fixed and proves it.
     expect(rollbackSection).toContain("after the cause is fixed");
     expect(rollbackSection).toContain("gh workflow list");
+    // The disable stops future triggers, not runs already started: the
+    // rollback carries the hold's in-flight check, or a surviving run
+    // re-attaches two-web-jobs after the manual moves.
+    expect(rollbackSection).toContain("gh run list --workflow deploy");
+    expect(rollbackSection).toContain("gh run list --workflow ci");
+    expect(rollbackSection).toContain("--status queued");
+    expect(rollbackSection).toContain("gh run cancel");
+    expect(rollbackSection).toContain("rather than cancelling it mid-mutation");
+    expect(rollbackSection).toContain("re-recording the step-0 pointers");
+    // db-migrate serves both targets on one workflow: the freeze covers
+    // production too, so the runbook must say what is blocked today.
+    expect(rollbackSection).toContain("production is pre-cutover");
+    expect(rollbackSection).toContain("covers the production target");
   });
 
   it("pins the first-install rollback from the inert draft (no GOOD_JOBS_VERSION)", () => {
