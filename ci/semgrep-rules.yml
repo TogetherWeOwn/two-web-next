@@ -1,0 +1,42 @@
+# Semgrep rules (WARN gate): TypeScript footguns + secret-shaped literals.
+# Full-history secret scanning stays with gitleaks (required check); these
+# rules catch the patterns gitleaks allowlists, not live leaks: dangerous
+# sinks and committed secret-shaped strings in the working tree.
+rules:
+  - id: ts-no-eval
+    languages: [ts, js]
+    severity: WARNING
+    message: "eval() executes a string as code; use a static construct instead"
+    pattern: eval(...)
+  - id: ts-no-implied-eval
+    languages: [ts, js]
+    severity: WARNING
+    message: "setTimeout/setInterval with a string first argument is eval in disguise"
+    pattern-either:
+      - pattern: setTimeout("...", ...)
+      - pattern: setInterval("...", ...)
+  - id: ts-no-inner-html-assignment
+    languages: [ts, js]
+    severity: WARNING
+    message: "innerHTML assignment sinks unescaped markup; build DOM nodes or escape first"
+    pattern: $EL.innerHTML = ...
+  - id: ts-no-document-write
+    languages: [ts, js]
+    severity: WARNING
+    message: "document.write() blocks rendering and invites injection; use DOM APIs"
+    pattern: document.write(...)
+  - id: secret-aws-key-literal
+    languages: [ts, js]
+    severity: WARNING
+    message: "AWS secret-shaped literal in source; read it from the environment instead"
+    pattern-regex: (?i)aws_(secret|session)[\w-]*['"]?\s*[:=]\s*['"][A-Za-z0-9/+=]{16,}['"]
+  - id: secret-private-key-block
+    languages: [generic]
+    severity: WARNING
+    message: "PEM private-key block in source; mount it as a secret instead"
+    pattern-regex: -----BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY-----
+  - id: secret-discord-token-literal
+    languages: [ts, js]
+    severity: WARNING
+    message: "Discord bot-token-shaped literal in source; read DISCORD_BOT_TOKEN from the environment"
+    pattern-regex: 'Bot [A-Za-z0-9._-]{20,}'
