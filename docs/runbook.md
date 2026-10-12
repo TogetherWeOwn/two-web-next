@@ -1159,7 +1159,7 @@ Never test production; staging E2E needs verified staging bindings.
 
 The table describes the path that reaches the relevant operation; validation,
 authentication, access gates or static asset handling can return earlier.
-Uncaught non-database errors use the global **500 HTML** handler, even on event JSON routes, except inside the member-read boundary (`/e/:key` and the member and admin rows), which returns **503**. Classified database-unavailable errors use the shared sanitized **503** response.
+Uncaught non-database errors use the global **500 HTML** handler, even on event JSON routes, except for reads inside the member-read boundary (`/e/:key` and member/admin GET/HEAD), which return sanitized **503**. Writes outside that boundary use their route-specific handling below; classified database-unavailable errors use the shared sanitized **503** response.
 The [parity matrix](parity.md) is a historical snapshot; current source/tests
 below, not its older `/up` row, define these outcomes.
 
@@ -1181,8 +1181,10 @@ below, not its older `/up` row, define these outcomes.
 | `/e/:key` (GET) | Classified DB-outage failures return **503 HTML**. A missing event DB returns plain-text **503** `Events temporarily unavailable`. Any other failure inside the member-read boundary returns plain-text **503** `Member data is temporarily unavailable.`. Invalid keys can be **404** before DB access. |
 | `/events.json` (GET); `/events` (POST); `/events/:key` (PATCH); publish/cancel (POST) | Classified DB-outage failures and missing event DB return **503 JSON**. Other uncaught failures use **500 HTML**. Auth gates can return **401/403** first. Post-commit enqueue failure leaves normal **201/200**. |
 | `/events/:key/rsvp` (PUT/DELETE) | Classified DB-outage failures and missing event DB return **503 JSON**. Other uncaught failures use **500 HTML**; auth gates **401/403**. Honeypot decoys are DB-free **201/204**, not successful attendance. Post-commit enqueue failure does not change success status. |
-| `/profile`, `/members/:user` (GET); member save (PATCH or form-override POST) | Session resolution and subsequent member-data read/save failures return sanitized **503**; missing store **503**. Default required access-log failure replaces successful reads with **503**; guest **302**, non-member **403**. |
-| Implemented `/admin` routes | Session resolution and subsequent admin data/query failures return sanitized **503**; missing resource DB and default required access-log failure also give **503**; guest **302**, non-moderator **403**. |
+| `/profile`, `/members/:user` (GET/HEAD) | Classified DB-outage failures return **503 HTML**; other failures inside the member-read boundary return plain-text **503** `Member data is temporarily unavailable.`. Default required access-log failure replaces successful reads with **503**; guest **302**, non-member **403**. |
+| Member save (PATCH or form-override POST) | A classified DB outage returns the shared sanitized **503**; a failing `store.save` returns **500** text `Could not save your profile.`; other failures before the write (for example, member lookup) return plain-text **503** `Member data is temporarily unavailable.`. |
+| Implemented `/admin` reads (GET/HEAD) | Classified DB-outage failures return **503 HTML**; other failures inside the member-read boundary return plain-text **503** `Member data is temporarily unavailable.`. Default required access-log failure gives **503**; guest **302**, non-moderator **403**. |
+| Implemented `/admin` writes (POST) | Outside the member-read boundary: a classified DB outage returns the shared sanitized **503**; other uncaught failures return **500 HTML**. Guest **302**, non-moderator **403**. |
 | `/api/agent-events` (POST) | Shared web database (`AGENT_DB` when bound, else `DATABASE_URL`, otherwise `DB`): disabled **404**, enabled without any source **503**, service DB failure **500 JSON** `internal_error` (or **503** `ingress_unavailable` when the database is unreachable). No connection failover. Bot observation failure stays a typed unavailable result; post-commit write-back uses the same optional admin carrier. |
 
 Sources: [src/index.tsx](../src/index.tsx), [auth routes](../src/auth/routes.ts),

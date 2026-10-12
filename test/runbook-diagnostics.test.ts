@@ -22,6 +22,12 @@ function routeRow(path: string) {
   return row!;
 }
 
+function rowContaining(text: string) {
+  const row = rows.find((line) => line.includes(text));
+  expect(row, `outage row containing ${text}`).toBeDefined();
+  return row!;
+}
+
 describe("runbook diagnostic and homepage contract", () => {
   it("documents the deployed public-route smoke, not removed diagnostic probes", () => {
     expect(deploy).toMatch(/node bin\/smoke\.mjs https:\/\/next\.togetherweown\.com/);
@@ -85,8 +91,19 @@ describe("runbook diagnostic and homepage contract", () => {
     expect(routeRow("/e/:key")).toMatch(
       /DB-outage failures.*503 HTML.*Member data is temporarily unavailable\./,
     );
-    expect(routeRow("/profile")).toMatch(/member-data read\/save failures.*503/);
-    expect(routeRow("/admin")).toMatch(/admin data\/query failures.*503/);
+    expect(routeRow("/profile")).toMatch(
+      /GET\/HEAD.*other failures inside the member-read boundary.*503.*Member data is temporarily unavailable/,
+    );
+    expect(rowContaining("Member save")).toMatch(
+      /classified DB outage.*503.*store\.save.*500.*Could not save your profile.*other failures before the write.*503.*Member data is temporarily unavailable/,
+    );
+    expect(routeRow("/admin")).toMatch(
+      /GET\/HEAD.*other failures inside the member-read boundary.*503.*Member data is temporarily unavailable/,
+    );
+    expect(outage).toMatch(
+      /Implemented `\/admin` writes \(POST\)[^\n]*outside the member-read boundary[^\n]*classified DB outage.*503[^\n]*other uncaught failures.*500 HTML/i,
+    );
+    expect(outage).toMatch(/reads inside the member-read boundary.*member\/admin GET\/HEAD/);
     expect(health).not.toMatch(/curl\s|fetch\(/);
     expect(outage).not.toMatch(/curl\s|fetch\(/);
   });
