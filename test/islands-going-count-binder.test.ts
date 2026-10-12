@@ -97,15 +97,32 @@ type PendingRead = ReturnType<typeof deferred<ReadResponse>>;
 // Each fixture evaluates the distributed source in its own VM, with only the
 // DOM surface the binder uses and deferred fetch/JSON responses. No helper
 // implementation, real network, database or shared document is involved.
+// Timers are manual: only a test that fires the owned multi-second read
+// deadline leaves the pre-deadline path, so every existing test keeps its
+// timing behavior.
 function browser(...badges: Badge[]) {
   const listeners: ((event: { detail: Detail }) => void)[] = [];
-  const requests: { url: string; init: { headers: Record<string, string> }; read: PendingRead }[] =
-    [];
+  const requests: {
+    url: string;
+    init: { headers: Record<string, string>; signal?: AbortSignal };
+    read: PendingRead;
+  }[] = [];
   const refreshes: Snapshot[] = [];
+  const timers = new Map<number, { ms: number; fn: () => void }>();
+  let nextTimer = 0;
   runInContext(
     binder,
     createContext({
       CustomEvent: DOMCustomEvent,
+      AbortController,
+      setTimeout: (fn: () => void, ms = 0) => {
+        const id = ++nextTimer;
+        timers.set(id, { ms, fn });
+        return id;
+      },
+      clearTimeout: (id: number) => {
+        timers.delete(id);
+      },
       document: {
         addEventListener(type: string, listener: (event: { detail: Detail }) => void) {
           expect(type).toBe(EVENT);
@@ -122,9 +139,14 @@ function browser(...badges: Badge[]) {
           return badges;
         },
       },
-      fetch(url: string, init: { headers: Record<string, string> }) {
+      fetch(url: string, init: { headers: Record<string, string>; signal?: AbortSignal }) {
         const read = deferred<ReadResponse>();
         requests.push({ url, init, read });
+        const signal = init.signal;
+        if (signal) {
+          if (signal.aborted) read.reject(abortError());
+          else signal.addEventListener("abort", () => read.reject(abortError()), { once: true });
+        }
         return read.promise;
       },
     }),
@@ -134,6 +156,7 @@ function browser(...badges: Badge[]) {
   return {
     requests,
     refreshes,
+    timers,
     broadcast(detail: Detail) {
       listeners.forEach((listener) => listener({ detail }));
     },
@@ -143,7 +166,20 @@ function browser(...badges: Badge[]) {
       );
       await settle();
     },
+    fireDeadline() {
+      // Only the owned multi-second read deadline fires here.
+      const expired = [...timers.entries()].filter(([, t]) => t.ms >= 5000);
+      expect(expired.length).toBeGreaterThan(0);
+      for (const [id, t] of expired) {
+        timers.delete(id);
+        t.fn();
+      }
+    },
   };
+}
+
+function abortError() {
+  return new DOMException("Aborted", "AbortError");
 }
 
 // A task boundary drains the entire fetch -> JSON -> DOM promise chain,
@@ -377,7 +413,11 @@ describe("GoingCount accepted aggregate snapshots", () => {
       await settle();
       expect(b.requests).toHaveLength(1);
       expect(b.requests[0]!.url).toBe("/events.json?event_key=a");
-      expect(binder).not.toMatch(/setInterval|setTimeout/);
+      // No polling: the only timer is the owned per-read abort deadline
+      // (~5s; the minifier may render the constant as 5e3).
+      expect(binder).not.toMatch(/setInterval/);
+      expect(binder).toMatch(/AbortController/);
+      expect(binder).toMatch(/5e3|5000/);
     },
   );
 
@@ -525,4 +565,58 @@ describe("GoingCount accepted aggregate snapshots", () => {
       expect(b.requests).toHaveLength(2);
     },
   );
+});
+
+describe("GoingCount owned read deadline", () => {
+  it("aborts a hung fetch past the deadline with no refresh event", async () => {
+    const badge = new Badge("a");
+    const b = browser(badge);
+    b.broadcast({ eventKey: "a", viewerState: "going" });
+    expect(b.requests).toHaveLength(1);
+    expect(b.requests[0]!.init.signal).toBeInstanceOf(AbortSignal);
+    b.fireDeadline();
+    await settle();
+    expect(b.requests[0]!.init.signal!.aborted).toBe(true);
+    expect(badge.count.writes).toEqual([]);
+    expect(badge.announcement.writes).toEqual([]);
+    expect(b.refreshes).toEqual([]);
+  });
+
+  it("ignores a hung JSON body that resolves after the deadline", async () => {
+    const badge = new Badge("a");
+    const b = browser(badge);
+    const body = deferred<unknown>();
+    b.broadcast({ eventKey: "a", viewerState: "going" });
+    b.requests[0]!.read.resolve({ ok: true, status: 200, json: () => body.promise });
+    await settle();
+    b.fireDeadline();
+    await settle();
+    body.resolve(rows("a", 3));
+    await settle();
+    expect(badge.count.writes).toEqual([]);
+    expect(badge.announcement.writes).toEqual([]);
+    expect(b.refreshes).toEqual([]);
+    // The key recovers on the next broadcast.
+    b.broadcast({ eventKey: "a", viewerState: "none" });
+    await b.respond(1, rows("a", 1));
+    expect(badge.count.textContent).toBe("1 of 4 going");
+    expect(b.refreshes).toEqual([{ eventKey: "a", goingCount: 1, capacity: 4 }]);
+  });
+
+  it("a second broadcast aborts the first read and its late resolution patches nothing", async () => {
+    const badge = new Badge("a");
+    const b = browser(badge);
+    b.broadcast({ eventKey: "a", viewerState: "going" });
+    b.broadcast({ eventKey: "a", viewerState: "none" });
+    expect(b.requests).toHaveLength(2);
+    expect(b.requests[0]!.init.signal!.aborted).toBe(true);
+    expect(b.requests[1]!.init.signal!.aborted).toBe(false);
+    await b.respond(0, rows("a", 3));
+    expect(badge.count.writes).toEqual([]);
+    expect(badge.announcement.writes).toEqual([]);
+    await b.respond(1, rows("a", 1));
+    expect(badge.count.textContent).toBe("1 of 4 going");
+    expect(badge.announcement.writes).toEqual(["RSVP removed. "]);
+    expect(b.refreshes).toEqual([{ eventKey: "a", goingCount: 1, capacity: 4 }]);
+  });
 });
