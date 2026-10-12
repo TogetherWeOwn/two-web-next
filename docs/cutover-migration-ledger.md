@@ -54,28 +54,20 @@ prior state cannot be restored by SQL alone; needs backup/PITR).
 ## Production apply outcome
 
 The cutover flipped production to the Next Worker at 2026-10-10
-00:52Z ([flip receipt](/TOG/issues/TOG-11938#comment-928cfdcb-e6ca-4142-888d-b2e40672351d)):
-production `/up` reported healthy with `db ok` and **0 pending
+00:52Z: production `/up` reported healthy with `db ok` and **0 pending
 migrations**, covering the pinned 22 plus `1021_discord-event-snapshots`
 (merged 2026-10-07, in the flipped `15423dc9` release). Zero pending
-held through the 2h watch close at 02:52Z
-([watch close](/TOG/issues/TOG-11938#comment-36f97063-4c70-447a-ae45-fb42a3d47c0e)),
-the origin re-run at 03:03Z
-([origin rows green](/TOG/issues/TOG-11938#comment-a58c2cde-c1bc-42ad-aaad-c1080e97fe98)),
-the tail samples including 21:47Z
-([tail watch](/TOG/issues/TOG-11938#comment-407582d1-b596-4eda-939c-c067252b1cc9)),
-and the 48h close at 2026-10-12 00:57Z
-([cutover closed](/TOG/issues/TOG-11938#comment-37cb6d8e-6074-42d4-baa0-449738178392)).
-The early-watch auth P0 (session/join 500s) was host role grants, not
-pending migrations: `/up` stayed 0 pending throughout and the funnel
-recovered per the 01:27Z receipt
-([auth funnel recovered](/TOG/issues/TOG-11938#comment-05935cb5-f743-45da-8507-63e2c1586cfa)).
+held through the 2h watch close at 02:52Z, the origin re-run at
+03:03Z, the tail samples including 21:47Z, and the 48h close at
+2026-10-12 00:57Z. The early-watch auth P0 (session/join 500s) was
+host role grants, not pending migrations: `/up` stayed 0 pending
+throughout and the funnel recovered per the 01:27Z receipt.
 Of rows 22–24, only `1021` was in the flipped release (noted
 above); `1022` and `1023` merged afterwards, are recorded here, and
 reach production through the normal `db-migrate` path, not through
 this outcome.
 Nothing here was probed: every production fact is cited from the
-linked receipts.
+production health receipts recorded through the cutover close.
 
 ## Gated apply path
 
