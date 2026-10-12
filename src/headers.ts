@@ -1,6 +1,7 @@
 import type { Context, Next } from "hono";
 import type { Env } from "./env";
 import { imageHosts } from "./image-policy";
+import { LEAF_CRITICAL_CSS_SHA256 } from "./leaf-critical-css";
 
 // Response-header parity (TOG-10118 ports two-web TOG-7328 + TOG-8729).
 // Two layers, same split as legacy:
@@ -100,7 +101,10 @@ export function securityHeadersFor(
     ["object-src", "'none'"],
     ["img-src", "'self'", images],
     ["frame-src", framed ? "https://discord.com/widget" : "'none'"],
-    ["style-src", "'self'"],
+    // Content-leaf inlined <style> allowlisted by hash (TOG-22787); mirrors
+    // src/index.tsx secureHeaders, pinned equal by
+    // test/security-headers-builder.test.ts.
+    ["style-src", "'self'", `'sha256-${LEAF_CRITICAL_CSS_SHA256}'`],
     ["script-src", "'self'"],
     ["font-src", "'self'"],
     ["frame-ancestors", "'none'"],

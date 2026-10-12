@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import app from "./app";
+import { LEAF_CRITICAL_CSS_SHA256 } from "../src/leaf-critical-css";
 import type { Env } from "../src/env";
 
 const env: Env = {
@@ -32,7 +33,7 @@ describe("route CSP (local fixtures, no DB)", () => {
       expect(csp["frame-src"]).toBe("https://discord.com/widget");
       expect(csp["default-src"]).toBe("'self'");
       expect(csp["script-src"]).toBe("'self'");
-      expect(csp["style-src"]).toBe("'self'");
+      expect(csp["style-src"]).toBe(`'self' 'sha256-${LEAF_CRITICAL_CSS_SHA256}'`);
       expect(csp["font-src"]).toBe("'self'");
       expect(csp["frame-ancestors"]).toBe("'none'");
       expect(res.headers.get("x-frame-options")).toBe("DENY");

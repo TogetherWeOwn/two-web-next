@@ -31,6 +31,7 @@ import { discordEventsSource } from "./events/discord-transients";
 import { dbFor } from "./admin/db";
 import { listVisibleFeatured } from "./featured";
 import { robotsTag, SECURITY_HEADERS } from "./headers";
+import { LEAF_CRITICAL_CSS_SHA256 } from "./leaf-critical-css";
 import { registerJoinRoutes } from "./join/route";
 import { registerAiFriendlyRoutes } from "./ai-friendly/routes";
 import { registerSeoLeaves } from "./seo-leaves";
@@ -118,7 +119,10 @@ const staticSecurityHeaders = secureHeaders({
           ? "https://discord.com/widget"
           : "'none'",
     ],
-    styleSrc: ["'self'"],
+    // The content-leaf inlined <style> block (TOG-22787) is allowlisted by
+    // hash: no 'unsafe-inline', and the hash is pinned by
+    // test/leaf-css-drift.test.ts.
+    styleSrc: ["'self'", `'sha256-${LEAF_CRITICAL_CSS_SHA256}'`],
     scriptSrc: ["'self'"],
     fontSrc: ["'self'"],
     frameAncestors: ["'none'"],

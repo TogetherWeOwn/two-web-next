@@ -40,28 +40,13 @@ afterEach(() => {
 });
 
 describe("homepage theme", () => {
-  it("preloads themed stylesheets before their render-blocking links", () => {
-    const html = Layout({ title: "Fixture", theme: "content" })!.toString();
-    const preloads = [
-      ...html.matchAll(/<link(?=[^>]*rel="preload")(?=[^>]*as="style")[^>]*href="([^"]+)"[^>]*>/g),
-    ];
-    const stylesheets = [...html.matchAll(/<link rel="stylesheet" href="([^"]+)"/g)];
-
-    expect(preloads.map(([, href]) => href)).toEqual([
-      "/styles.css",
-      "/theme-tokens.css",
-      "/theme.css",
-    ]);
-    for (const [preload, href] of preloads) {
-      expect(html.indexOf(preload)).toBeLessThan(
-        html.indexOf(`<link rel="stylesheet" href="${href}"`),
-      );
+  it("emits no stylesheet preloads: they measured zero LCP effect (TOG-22787)", () => {
+    for (const theme of ["home", "event", "content", "join", "profile", "schedule"] as const) {
+      const html = Layout({ title: "Fixture", theme })!.toString();
+      expect(html).not.toMatch(/<link(?=[^>]*rel="preload")(?=[^>]*as="style")/);
     }
-    expect(stylesheets.map(([, href]) => href)).toEqual([
-      "/styles.css",
-      "/theme-tokens.css",
-      "/theme.css",
-    ]);
+    const plain = Layout({ title: "Fixture" })!.toString();
+    expect(plain).not.toMatch(/<link(?=[^>]*rel="preload")(?=[^>]*as="style")/);
   });
 
   it("loads semantic theme tokens for Hono themes and schedule overrides target its body class", () => {

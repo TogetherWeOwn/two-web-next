@@ -58,7 +58,15 @@ it.each(paths)(
     expect(html).toContain(
       `<body class="base-theme ${path === "/join" ? "join" : "content"}-theme"><a class="skip-link"`,
     );
-    expect(html).toContain('rel="stylesheet" href="/theme.css"');
+    if (path === "/join") {
+      expect(html).toContain('rel="stylesheet" href="/theme.css"');
+    } else {
+      // Content leaves inline the stylesheets (TOG-22787): no render-blocking
+      // CSS requests, with the real rules verifiable inside the style block.
+      expect(html).toContain("<style>");
+      expect(html).toContain(".content-page");
+      expect(html).not.toContain('rel="stylesheet"');
+    }
     expect(html).toContain('href="/fonts/display-latin-700.woff2" as="font"');
     expect(html).toContain('class="bar site-header"');
     expect(html).toContain('src="/logo.svg" width="64" height="64"');

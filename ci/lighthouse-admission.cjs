@@ -20,7 +20,21 @@ function assertFixtureContent(path, response, html, before, after) {
   assert.equal(response.status, 200, `${path}: fixture status`);
   assert.equal(response.redirected, false, `${path}: fixture redirect`);
   assert.match(response.headers.get("content-type") || "", /text\/html/, `${path}: HTML required`);
-  assert.match(html, /<link rel="stylesheet" href="\/styles\.css"/, `${path}: real app stylesheet`);
+  if (["/about", "/faq", "/rules", "/privacy"].includes(path)) {
+    // Content leaves inline the stylesheets (TOG-22787): the real app rules
+    // must be present in the style block instead of a stylesheet link.
+    assert.match(
+      html,
+      /<style>[\s\S]*\.content-page[\s\S]*<\/style>/,
+      `${path}: real app stylesheet`,
+    );
+  } else {
+    assert.match(
+      html,
+      /<link rel="stylesheet" href="\/styles\.css"/,
+      `${path}: real app stylesheet`,
+    );
+  }
   let populated;
   if (path === "/") {
     assert.doesNotMatch(
