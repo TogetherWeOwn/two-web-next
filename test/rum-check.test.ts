@@ -368,6 +368,36 @@ describe("ci/rum-check.mjs injected fetch", () => {
     expect(fetchImpl).not.toHaveBeenCalled();
   });
 
+  it("fails GraphQL errors even with valid in-budget data", async () => {
+    const validWithErrors = {
+      data: {
+        viewer: {
+          accounts: [
+            {
+              rumWebVitalsEventsAdaptiveGroups: [
+                {
+                  count: 500,
+                  quantiles: {
+                    largestContentfulPaintP75: 1_800_000,
+                    cumulativeLayoutShiftP75: 0.05,
+                    interactionToNextPaintP75: 150_000,
+                  },
+                },
+              ],
+            },
+          ],
+        },
+      },
+      errors: [{ message: "partial-failure-marker" }],
+    };
+    const r = await run(jsonResponse(validWithErrors));
+    expect(r.code).toBe(1);
+    expect(r.kind).toBe("query-failed");
+    expect(r.summary).toContain("HTTP 200");
+    expect(r.summary).toContain("1 GraphQL error(s)");
+    expect(r.summary).not.toContain("partial-failure-marker");
+  });
+
   it("bounds failure summaries and omits payloads, credentials and identity", async () => {
     const hostile = {
       data: { viewer: { accounts: [] } },
