@@ -80,7 +80,11 @@ hold.
   both automatic lanes before the first mutation —
   `gh workflow disable deploy` and `gh workflow disable db-migrate` — then
   re-enable both when the handoff is done or aborted —
-  `gh workflow enable deploy` and `gh workflow enable db-migrate`.
+  `gh workflow enable deploy` and `gh workflow enable db-migrate` — unless the
+  handoff rolled back, in which case leave both disabled per Rollback
+  until the cause is fixed. After re-enabling, verify
+  `gh workflow list --all` shows both `deploy` and `db-migrate` as active:
+  a workflow left disabled silently drops later `workflow_run` events.
   An acknowledgement on the card thread alone does not stop the lane. (There
   is no approval gate to leave pending: the `staging` environment has no
   required reviewers, so only the disable commands freeze anything.)

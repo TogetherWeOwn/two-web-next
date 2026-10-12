@@ -139,10 +139,20 @@ describe("staging jobs handoff invariants", () => {
     expect(runbook).toContain("aborts the handoff");
     // The hold is enforceable and starts before the secrets step that arms the
     // automatic deploy lane; secret provisioning is a covered mutation and an
-    // in-flight ci run on main is part of the idle check.
-    expect(runbook).toContain("gh workflow disable deploy");
-    expect(runbook).toContain("gh workflow enable deploy");
-    expect(runbook).toContain("gh workflow disable db-migrate");
+    // in-flight ci run on main is part of the idle check. Scope the command
+    // pins to the hold section so the rollback section's copies cannot satisfy
+    // them.
+    const holdSection = runbook.split("## Coordinated hold")[1]!.split("## Handoff sequence")[0]!;
+    expect(holdSection).toContain("gh workflow disable deploy");
+    expect(holdSection).toContain("gh workflow enable deploy");
+    expect(holdSection).toContain("gh workflow disable db-migrate");
+    expect(holdSection).toContain("gh workflow enable db-migrate");
+    // A rolled-back handoff is an aborted handoff: the hold must not re-arm
+    // the lane the rollback keeps frozen, and the release must prove both
+    // lanes are active again (a disabled workflow silently drops workflow_run).
+    expect(holdSection).toContain("rolled back");
+    expect(holdSection).toContain("until the cause is fixed");
+    expect(holdSection).toContain("gh workflow list");
     // The disable commands must resolve: pin the workflow names and the
     // trigger the hold cites, so a renamed workflow fails here instead of
     // leaving the Operator with a command that stops nothing.
