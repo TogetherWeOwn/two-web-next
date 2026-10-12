@@ -454,6 +454,7 @@ registerJoinRoutes(
         <Join
           inviteUrl={props.inviteUrl}
           widgetUrl={props.widgetUrl}
+          widgetSnapshot={props.widgetSnapshot}
           next={props.next}
           appUrl={c.env.APP_URL}
           joinResult={joinResult}
