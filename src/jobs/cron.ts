@@ -83,8 +83,9 @@ const cutoff = (now: Date, days: number): Date => new Date(now.getTime() - days 
  * Ports model:prune daily ×3 (routes/console.php) plus the web_sessions expiry
  * sweep (no legacy equivalent — Laravel GC; rows accumulate without one).
  * Every delete is age-only (Laravel MassPrunable shape): strictly older than
- * the cutoff goes, cutoff-exact rows survive. Idempotent: a re-run matches
- * nothing and reports zeros.
+ * the cutoff goes, cutoff-exact rows survive. Each age-pruned table deletes at
+ * most PRUNE_DELETE_BATCH_SIZE rows per pass; a larger backlog drains over
+ * repeat passes. Idempotent: a re-run matches nothing and reports zeros.
  */
 export async function pruneModelTables(
   stores: PruneStores,

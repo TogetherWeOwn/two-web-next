@@ -14,6 +14,7 @@ import {
   JOIN_ATTEMPT_RETENTION_DAYS,
   MEMBER_ACCESS_LOG_RETENTION_DAYS,
   PRUNE_CRON,
+  PRUNE_DELETE_BATCH_SIZE,
 } from "../src/jobs/constants";
 import { pruneModelTables, runScheduled } from "../src/jobs/cron";
 import { pgPruneStores } from "../src/jobs/postgres";
@@ -71,6 +72,12 @@ describe("model:prune windows and sweep (memory, no DB)", () => {
     expect(JOIN_ATTEMPT_RETENTION_DAYS).toBe(90);
     expect(IDEMPOTENCY_KEY_RETENTION_DAYS).toBe(90);
     expect(EVENT_SEARCH_LOG_RETENTION_DAYS).toBe(90);
+  });
+
+  it("prune deletes carry a documented fixed per-statement batch bound", () => {
+    // One daily pass removes at most this many rows per age-pruned table;
+    // repeat passes drain a larger backlog. Sessions sweep stays unbounded.
+    expect(PRUNE_DELETE_BATCH_SIZE).toBe(1000);
   });
 
   it("deletes only rows older than each cutoff; cutoff-exact rows survive", async () => {
@@ -262,5 +269,134 @@ describe.skipIf(!process.env.DATABASE_URL)("model:prune (test Postgres)", () => 
       searchLog: 0,
       sessions: 0,
     });
+  });
+
+  it("each age-pruned delete is batch-bounded; repeat passes drain the backlog", async () => {
+    // More expired rows than one batch per table; markers carry a `cap-`
+    // prefix so the earlier test's leftover edge/fresh rows stay out of the
+    // survivor assertions (the shared fixture drops its schema on dispose).
+    const now = new Date();
+    const old = new Date(now.getTime() - 91 * DAY);
+    const edge = new Date(now.getTime() - 90 * DAY);
+    const fresh = new Date(now.getTime() - DAY);
+    const extra = PRUNE_DELETE_BATCH_SIZE + 3;
+
+    await sql`insert into agent_event_audits (operation, request_id, result, created_at)
+      select 'create', 'cap-' || g, 'ok', ${old} from generate_series(1, ${extra}) g`;
+    await sql`insert into agent_event_audits (operation, request_id, result, created_at)
+      values ('create','cap-edge','ok',${edge}),('create','cap-fresh','ok',${fresh})`;
+    await sql`insert into member_data_access_logs (viewer_discord_id, resource, action, subject_user_ids, subject_count, occurred_at)
+      select '1','members','view','["2"]',1, ${old} from generate_series(1, ${extra}) g`;
+    await sql`insert into member_data_access_logs (viewer_discord_id, resource, action, subject_user_ids, subject_count, occurred_at)
+      values ('1','members','view','["2"]',1,${edge}),('1','members','view','["2"]',1,${fresh})`;
+    await sql`insert into join_attempts (outcome, source, request_id, discord_id, created_at)
+      select 'added','site','cap-r' || g,'10', ${old} from generate_series(1, ${extra}) g`;
+    await sql`insert into join_attempts (outcome, source, request_id, discord_id, created_at)
+      values ('added','site','cap-r-edge','11',${edge}),('denied','site','cap-r-fresh','12',${fresh})`;
+    const [grant] = await sql<
+      { id: string }[]
+    >`insert into agent_event_grants (agent_id, company_id, guild_id, verifier_hash)
+      values ('a','co','g',${`cap-h-${fixture!.schemaName}`}) returning id`;
+    await sql`insert into agent_event_idempotency_keys (grant_id, key, payload_digest, status, body, created_at)
+      select ${grant!.id}, 'cap-k' || g, 'd', 200, '{}', ${old} from generate_series(1, ${extra}) g`;
+    await sql`insert into agent_event_idempotency_keys (grant_id, key, payload_digest, status, body, created_at)
+      values (${grant!.id},'cap-k-edge','d',200,'{}',${edge}),(${grant!.id},'cap-k-fresh','d',200,'{}',${fresh})`;
+    await sql`insert into event_search_logs (normalized_query, result_count, occurred_at)
+      select 'cap q ' || g, 0, ${old} from generate_series(1, ${extra}) g`;
+    await sql`insert into event_search_logs (normalized_query, result_count, occurred_at)
+      values ('cap q edge',1,${edge}),('cap q fresh',0,${fresh})`;
+
+    // Each table holds `extra` expired rows of its own (91 days old: past
+    // both the 90-day cutoff and the audit database-clock guard by a full day,
+    // so no clock skew can flip them), plus the earlier test's edge/fresh
+    // leftovers. Expired backlog per table is therefore above one batch.
+    // First pass removes exactly one batch per age-pruned table and reports it.
+    const first = await pruneModelTables(pgPruneStores(sql), now);
+    expect(first).toEqual({
+      agentEventAudits: PRUNE_DELETE_BATCH_SIZE,
+      accessLog: PRUNE_DELETE_BATCH_SIZE,
+      joinAttempts: PRUNE_DELETE_BATCH_SIZE,
+      idempotencyKeys: PRUNE_DELETE_BATCH_SIZE,
+      searchLog: PRUNE_DELETE_BATCH_SIZE,
+      sessions: 0,
+    });
+
+    // Repeat passes drain the rest; no pass exceeds the batch. The loop exits
+    // on a zero pass. Global totals are not asserted: the earlier test's
+    // leftover edge rows sit exactly on the audit clock-guard boundary and can
+    // flip eligibility between statements — the marker-scoped checks below are
+    // the exact drain proof instead.
+    let last = first;
+    for (let i = 0; i < 5; i++) {
+      last = await pruneModelTables(pgPruneStores(sql), now);
+      for (const [name, n] of Object.entries(last)) {
+        expect(n, `pass ${i + 2} ${name}`).toBeLessThanOrEqual(
+          name === "sessions" ? 0 : PRUNE_DELETE_BATCH_SIZE,
+        );
+      }
+      if (Object.values(last).every((n) => n === 0)) break;
+    }
+    expect(last).toEqual({
+      agentEventAudits: 0,
+      accessLog: 0,
+      joinAttempts: 0,
+      idempotencyKeys: 0,
+      searchLog: 0,
+      sessions: 0,
+    });
+
+    // Every expired `cap-` row is gone; only the cutoff-exact and fresh
+    // markers remain, so the reported counts were exact, not estimates.
+    const gone = async (q: Promise<{ n: number }[]>) => (await q)[0]!.n;
+    expect(
+      await gone(
+        sql`select count(*)::int as n from agent_event_audits
+          where request_id like 'cap-%' and request_id not in ('cap-edge', 'cap-fresh')`,
+      ),
+    ).toBe(0);
+    expect(
+      await gone(
+        sql`select count(*)::int as n from join_attempts
+          where request_id like 'cap-r%' and request_id not in ('cap-r-edge', 'cap-r-fresh')`,
+      ),
+    ).toBe(0);
+    expect(
+      await gone(
+        sql`select count(*)::int as n from agent_event_idempotency_keys
+          where key like 'cap-k%' and key not in ('cap-k-edge', 'cap-k-fresh')`,
+      ),
+    ).toBe(0);
+    expect(
+      await gone(
+        sql`select count(*)::int as n from event_search_logs
+          where normalized_query like 'cap q%' and normalized_query not in ('cap q edge', 'cap q fresh')`,
+      ),
+    ).toBe(0);
+    // Access logs carry no text marker; every row this test inserted at `old`
+    // (91 days, a full day past cutoff and guard) is gone. The earlier test's
+    // leftovers are newer than `old`, so they cannot match.
+    expect(
+      await gone(
+        sql`select count(*)::int as n from member_data_access_logs where occurred_at < ${old}`,
+      ),
+    ).toBe(0);
+
+    // Cutoff-exact rows survive, newer rows remain.
+    const audits = await sql<
+      { request_id: string }[]
+    >`select request_id from agent_event_audits where request_id like 'cap-%' order by id`;
+    expect(audits.map((r) => r.request_id)).toEqual(["cap-edge", "cap-fresh"]);
+    const joins = await sql<
+      { request_id: string }[]
+    >`select request_id from join_attempts where request_id like 'cap-r%' order by id`;
+    expect(joins.map((r) => r.request_id)).toEqual(["cap-r-edge", "cap-r-fresh"]);
+    const keys = await sql<
+      { key: string }[]
+    >`select key from agent_event_idempotency_keys where key like 'cap-k%' order by id`;
+    expect(keys.map((r) => r.key)).toEqual(["cap-k-edge", "cap-k-fresh"]);
+    const searches = await sql<
+      { normalized_query: string }[]
+    >`select normalized_query from event_search_logs where normalized_query like 'cap q%' order by id`;
+    expect(searches.map((r) => r.normalized_query)).toEqual(["cap q edge", "cap q fresh"]);
   });
 });
