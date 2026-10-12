@@ -477,7 +477,10 @@ describe.skipIf(!process.env.DATABASE_URL)("member leaderboard (agent-testdb)", 
   it("excludes opted-out members from every aggregate", async () => {
     await fixture.reset();
     const ids = await seedBoard({ prefix: "100000000000000", goings: [3, 5], keyBase: 250 });
-    await fixture.client`update profiles set leaderboard_opt_out = true where user_id = ${ids[1]!}`;
+    await db
+      .insert(profiles)
+      .values({ userId: ids[1]!, leaderboardOptOut: true })
+      .onConflictDoUpdate({ target: profiles.userId, set: { leaderboardOptOut: true } });
     const html = await (await board("?season=2026-09")).text();
     expect(html).toContain("zxq-100000000000000-m00");
     expect(html).not.toContain("zxq-100000000000000-m01");
