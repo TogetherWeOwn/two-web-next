@@ -27,7 +27,13 @@ try {
   } catch {
     throw new Error("Semgrep selftest returned invalid JSON");
   }
-  if (!report.results?.some((finding) => finding.check_id === "ts-no-eval")) {
+  // Semgrep prefixes the rule id with the config path (ci/ts-no-eval for
+  // --config ci/semgrep-rules.yml), so match on the suffix, not the bare id.
+  if (
+    !report.results?.some(
+      (finding) => finding.check_id === "ts-no-eval" || finding.check_id?.endsWith(".ts-no-eval"),
+    )
+  ) {
     throw new Error("Semgrep selftest did not report the planted warning rule");
   }
   console.log("Semgrep WARN selftest: planted ts-no-eval reported with exit 0");

@@ -385,10 +385,16 @@ jobs:
       - name: Semgrep (WARN)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
         continue-on-error: true
+        # Container steps run under sh (dash here: no pipefail), so pin bash
+        # for `set -euo pipefail` like the migration-numbering step does.
+        shell: bash
         env:
           SEMGREP_SEND_METRICS: "off"
         run: |
           set -euo pipefail
+          # continue-on-error keeps the step green on failure; the trap keeps a
+          # dead gate visible as a workflow warning instead of silent green.
+          trap 'echo "::warning::Semgrep WARN step failed before completing the scan"' ERR
           python3 -m venv "$RUNNER_TEMP/semgrep"
           "$RUNNER_TEMP/semgrep/bin/pip" install --quiet 'semgrep==1.180.0'
           if ! node ci/semgrep-warn-selftest.mjs "$RUNNER_TEMP/semgrep/bin/semgrep"; then

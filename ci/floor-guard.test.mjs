@@ -159,7 +159,7 @@ describe("floor-guard", () => {
   it("flags a lowered threshold in CONSTRAINTS.md", () => {
     const findings = guardDiff(
       diff(
-        "--- a/CONSTRAINTS.md\n+++ b/CONSTRAINTS.md\n@@ -1 +1 @@\n-| Coverage | Changed lines ≥ 80% covered | vitest |\n+| Coverage | Changed lines ≥ 70% covered | vitest |\n",
+        "--- a/CONSTRAINTS.md\n+++ b/CONSTRAINTS.md\n@@ -1 +1 @@\n-| Coverage | Changed lines ≥ 80% covered | `npm run patch:coverage` |\n+| Coverage | Changed lines ≥ 70% covered | `npm run patch:coverage` |\n",
       ),
     );
     assert.ok(findings.some((f) => f.rule === "threshold-lowered"));
@@ -168,7 +168,7 @@ describe("floor-guard", () => {
   it("stays silent when a threshold is tightened", () => {
     const findings = guardDiff(
       diff(
-        "--- a/CONSTRAINTS.md\n+++ b/CONSTRAINTS.md\n@@ -1 +1 @@\n-| Coverage | Changed lines ≥ 80% covered | vitest |\n+| Coverage | Changed lines ≥ 90% covered | vitest |\n",
+        "--- a/CONSTRAINTS.md\n+++ b/CONSTRAINTS.md\n@@ -1 +1 @@\n-| Coverage | Changed lines ≥ 80% covered | `npm run patch:coverage` |\n+| Coverage | Changed lines ≥ 90% covered | `npm run patch:coverage` |\n",
       ),
     );
     assert.deepEqual(findings, []);
@@ -186,7 +186,7 @@ describe("floor-guard", () => {
   it("pairs changed thresholds by table label, not row position", () => {
     const findings = guardDiff(
       diff(
-        "--- a/CONSTRAINTS.md\n+++ b/CONSTRAINTS.md\n@@ -1,3 +1,4 @@\n-| Coverage | Changed lines ≥ 80% covered | vitest |\n-| Lint | Zero errors | biome |\n+| New metric | 70% minimum | tool |\n+| Coverage | Changed lines ≥ 90% covered | vitest |\n+| Lint | Zero errors | biome |\n",
+        "--- a/CONSTRAINTS.md\n+++ b/CONSTRAINTS.md\n@@ -1,3 +1,4 @@\n-| Coverage | Changed lines ≥ 80% covered | `npm run patch:coverage` |\n-| Lint | Zero errors | `npm run lint` |\n+| New metric | 70% minimum | tool |\n+| Coverage | Changed lines ≥ 90% covered | `npm run patch:coverage` |\n+| Lint | Zero errors | `npm run lint` |\n",
       ),
     );
     assert.deepEqual(
@@ -198,7 +198,7 @@ describe("floor-guard", () => {
   it("catches one lowered row among other threshold changes", () => {
     const findings = guardDiff(
       diff(
-        "--- a/CONSTRAINTS.md\n+++ b/CONSTRAINTS.md\n@@ -1,2 +1,3 @@\n+| New metric | 95% minimum | tool |\n+| Coverage | Changed lines ≥ 90% covered | vitest |\n+| Mutation | Kills ≥ 80% | runner |\n-| Coverage | Changed lines ≥ 80% covered | vitest |\n-| Mutation | Kills ≥ 90% | runner |\n",
+        "--- a/CONSTRAINTS.md\n+++ b/CONSTRAINTS.md\n@@ -1,2 +1,3 @@\n+| New metric | 95% minimum | tool |\n+| Coverage | Changed lines ≥ 90% covered | `npm run patch:coverage` |\n+| Mutation | Kills ≥ 80% | `npm run mutation` |\n-| Coverage | Changed lines ≥ 80% covered | `npm run patch:coverage` |\n-| Mutation | Kills ≥ 90% | `npm run mutation` |\n",
       ),
     );
     assert.equal(findings.filter((f) => f.rule === "threshold-lowered").length, 1);
@@ -241,7 +241,7 @@ describe("floor-guard", () => {
   it("never lets ignore silence thresholds, exceptions or deletions", () => {
     const lowered = guardDiff(
       diff(
-        "--- a/CONSTRAINTS.md\n+++ b/CONSTRAINTS.md\n@@ -1 +1 @@\n-| Coverage | Changed lines ≥ 80% covered | vitest |\n+| Coverage | Changed lines ≥ 70% covered | vitest |\n",
+        "--- a/CONSTRAINTS.md\n+++ b/CONSTRAINTS.md\n@@ -1 +1 @@\n-| Coverage | Changed lines ≥ 80% covered | `npm run patch:coverage` |\n+| Coverage | Changed lines ≥ 70% covered | `npm run patch:coverage` |\n",
       ),
       { ignore: ["CONSTRAINTS.md"] },
     );
@@ -259,6 +259,107 @@ describe("floor-guard", () => {
       { ignore: ["test/**"] },
     );
     assert.ok(deleted.some((f) => f.rule === "test-deleted"));
+  });
+
+  it("flags a deleted *-selftest script as a test deletion", () => {
+    const d = [
+      "diff --git a/ci/cutover-check-selftest.mjs b/ci/cutover-check-selftest.mjs",
+      "deleted file mode 100644",
+      "--- a/ci/cutover-check-selftest.mjs",
+      "+++ /dev/null",
+      "@@ -1,2 +0,0 @@",
+      "-assert.equal(a, b);",
+      "-});",
+    ].join("\n");
+    assert.ok(guardDiff(d).some((f) => f.rule === "test-deleted"));
+  });
+
+  it("flags assertions stripped from a *-selftest script", () => {
+    const findings = guardDiff(
+      diff(
+        "--- a/ci/cutover-check-selftest.mjs\n+++ b/ci/cutover-check-selftest.mjs\n@@ -1 +1 @@\n-assert.equal(a, b);\n",
+      ),
+    );
+    assert.ok(findings.some((f) => f.rule === "assertion-removed"));
+  });
+
+  it("flags a renamed-then-lowered threshold via its Checked-by cell", () => {
+    const findings = guardDiff(
+      diff(
+        "--- a/CONSTRAINTS.md\n+++ b/CONSTRAINTS.md\n@@ -1 +1 @@\n-| Coverage of changed lines | Added TS lines ≥ 80% executed | `npm run patch:coverage` | CI |\n+| Changed-line coverage | Added TS lines ≥ 50% executed | `npm run patch:coverage` | CI |\n",
+      ),
+    );
+    assert.ok(findings.some((f) => f.rule === "threshold-lowered"));
+  });
+
+  it("stays silent on a rename that keeps the numbers", () => {
+    const findings = guardDiff(
+      diff(
+        "--- a/CONSTRAINTS.md\n+++ b/CONSTRAINTS.md\n@@ -1 +1 @@\n-| Coverage of changed lines | Added TS lines ≥ 80% executed | `npm run patch:coverage` | CI |\n+| Changed-line coverage | Added TS lines ≥ 80% executed | `npm run patch:coverage` | CI |\n",
+      ),
+    );
+    assert.deepEqual(
+      findings.filter((f) => f.rule === "threshold-lowered" || f.rule === "threshold-removed"),
+      [],
+    );
+  });
+
+  it("flags a deleted enforced-threshold row", () => {
+    const findings = guardDiff(
+      diff(
+        "--- a/CONSTRAINTS.md\n+++ b/CONSTRAINTS.md\n@@ -1 +0,0 @@\n-| Accessibility | Zero critical or serious violations on fixtures | `npm run a11y` | `a11y` job |\n",
+      ),
+    );
+    assert.ok(findings.some((f) => f.rule === "threshold-removed"));
+  });
+
+  it("ignores removed rows outside the enforced table", () => {
+    const findings = guardDiff(
+      diff(
+        "--- a/CONSTRAINTS.md\n+++ b/CONSTRAINTS.md\n@@ -1 +0,0 @@\n-| Project coverage | 62.4% | must not fall |\n",
+      ),
+    );
+    assert.deepEqual(
+      findings.filter((f) => f.rule === "threshold-removed"),
+      [],
+    );
+  });
+
+  it("does not read an exception-row removal as a threshold removal", () => {
+    const findings = guardDiff(
+      diff(
+        "--- a/CONSTRAINTS.md\n+++ b/CONSTRAINTS.md\n@@ -1 +0,0 @@\n-| W1 | `no-explicit-any` | `src/legacy/**` | rewrite | @x | 2027-01-01 |\n",
+      ),
+    );
+    assert.deepEqual(
+      findings.filter((f) => f.rule === "threshold-removed"),
+      [],
+    );
+  });
+
+  it("flags an added .constraintsignore glob as a new exemption", () => {
+    const findings = guardDiff(
+      diff("--- a/.constraintsignore\n+++ b/.constraintsignore\n@@ -1,0 +2 @@\n+src/**\n"),
+      { baseIgnore: ["public/**"] },
+    );
+    assert.ok(findings.some((f) => f.rule === "new-exemption"));
+  });
+
+  it("lets a reasoned waiver cover a threshold removal or ignore addition", () => {
+    const deletion = diff(
+      "--- a/CONSTRAINTS.md\n+++ b/CONSTRAINTS.md\n@@ -1 +0,0 @@\n-| Accessibility | Zero critical or serious violations on fixtures | `npm run a11y` | `a11y` job |\n",
+    );
+    const waived = parseFloorWaivers(
+      "retire dimension\n\nFloor-waiver: threshold-removed Accessibility -- moved to the nightly audit\n",
+    );
+    assert.deepEqual(guardDiff(deletion, { waivers: waived }), []);
+    const ignoreAdd = diff(
+      "--- a/.constraintsignore\n+++ b/.constraintsignore\n@@ -1,0 +2 @@\n+src/**\n",
+    );
+    const waivedIgnore = parseFloorWaivers(
+      "exempt generated\n\nFloor-waiver: new-exemption .constraintsignore -- generated output reviewed against source\n",
+    );
+    assert.deepEqual(guardDiff(ignoreAdd, { waivers: waivedIgnore, baseIgnore: [] }), []);
   });
 
   it("sees untracked files end to end (a diff means exit 1, not dropped stdout)", () => {

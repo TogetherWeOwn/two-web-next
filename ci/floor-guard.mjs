@@ -15,7 +15,7 @@
 // Exit codes: 0 clean, 1 at least one floor violation, 2 guard could not run.
 // A 2 must never read as a 0.
 import { spawnSync } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
+import { appendFileSync, existsSync, readFileSync } from "node:fs";
 import { join, resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -30,7 +30,11 @@ const STUBS =
 // Only test skip calls weaken the test floor; property reads and prose do not.
 const TEST_SKIP_CALL =
   /\.(?:skip|todo)\s*\(|\b(?:xit|xdescribe)\s*\(|@pytest\.mark\.skip\s*\(|\bt\.Skip\s*\(/;
-const TEST_PATH = /\.(test|spec)\.|_test\.|test_/;
+// *-selftest scripts are CI-executed checks too (ci/*-selftest.mjs, .sh and
+// extensionless forms, plus dotted and nested variants such as
+// ci/release-on-promote.selftest.cjs and ci/backup-restore-proof/selftest.py),
+// so deleting or stripping them trips the same floor as a *.test.* file.
+const TEST_PATH = /\.(test|spec)\.|_test\.|test_|[-./]selftest(?=\.|$)/;
 const CONSTRAINTS_FILE = /CONSTRAINTS\.md$/;
 const ASSERTIONS = /\b(expect|assert|should)\b/;
 
@@ -114,7 +118,9 @@ export function scanAdded(added, ignore = []) {
 export function parseFloorWaivers(messages) {
   const waivers = new Map();
   for (const line of messages.split(/\r?\n/)) {
-    const match = line.match(/^Floor-waiver: (assertion-removed|test-deleted) (\S+) -- (.+)$/);
+    const match = line.match(
+      /^Floor-waiver: (assertion-removed|test-deleted|threshold-removed|new-exemption) (\S+) -- (.+)$/,
+    );
     if (!match || !match[3].trim()) continue;
     const [, rule, file] = match;
     if (!waivers.has(rule)) waivers.set(rule, new Set());
@@ -154,38 +160,92 @@ export function scanDeleted(deletedFiles, waivers = new Map()) {
   return findings;
 }
 
-// A number in CONSTRAINTS.md that went down (paired by row label); a number
-// that went up is a tightening and stays silent.
-export function checkThresholds(removed, added) {
+// A number in CONSTRAINTS.md that went down. Rows pair by label first; a row
+// whose label vanished pairs by its Checked-by cell, so renaming a dimension
+// while lowering it still reads as a lowering. An enforced row (one whose
+// Checked-by cell names a command in backticks, and which is not an exception
+// row) with no successor at all is a removal of the bar itself. Header,
+// separator, exception and non-command rows are not enforced rows. A
+// legitimate rename or removal passes only with a reasoned
+// `Floor-waiver: threshold-removed <Dimension> -- <reason>` trailer.
+export function checkThresholds(removed, added, waivers = new Map()) {
   const findings = [];
   const nums = (s) => (s.match(/\d+(\.\d+)?/g) || []).map(Number);
-  const label = (text) => text.match(/^\s*\|\s*([^|]+?)\s*\|/)?.[1]?.trim();
-  const removedConstraints = removed.filter((l) => CONSTRAINTS_FILE.test(l.file));
-  const addedConstraints = added.filter((l) => CONSTRAINTS_FILE.test(l.file));
+  const cells = (text) =>
+    text
+      .split("|")
+      .slice(1, -1)
+      .map((c) => c.trim());
+  const label = (text) => cells(text)[0] ?? "";
+  const checkedBy = (text) => cells(text)[2] ?? "";
+  const isEnforcedRow = (text) => {
+    const kind = label(text);
+    if (!kind || /^-+$/.test(kind) || /^dimension$/i.test(kind)) return false;
+    if (/^\s*\|\s*(W|E)\d+\s*\|/.test(text)) return false;
+    return /`[^`]+`/.test(checkedBy(text));
+  };
+  const isLowered = (before, after) => {
+    const b = nums(before);
+    return nums(after).some((n, i) => b[i] !== undefined && n < b[i]);
+  };
+  const removedRows = removed.filter((l) => CONSTRAINTS_FILE.test(l.file) && isEnforcedRow(l.text));
+  const addedRows = added.filter((l) => CONSTRAINTS_FILE.test(l.file) && isEnforcedRow(l.text));
   const addedByLabel = new Map();
-  for (const line of addedConstraints) {
-    const key = label(line.text);
-    if (key) addedByLabel.set(key, line);
+  const addedByCheckedBy = new Map();
+  for (const line of addedRows) {
+    if (!addedByLabel.has(label(line.text))) addedByLabel.set(label(line.text), line);
+    const key = checkedBy(line.text);
+    if (key && !addedByCheckedBy.has(key)) addedByCheckedBy.set(key, line);
   }
-  for (const r of removedConstraints) {
+  const paired = new Set();
+  for (const r of removedRows) {
     const key = label(r.text);
-    const a = key ? addedByLabel.get(key) : null;
-    if (!a) continue;
-    const before = nums(r.text);
-    if (nums(a.text).some((n, i) => before[i] !== undefined && n < before[i])) {
-      flag(findings, "threshold-lowered", r.file, `${r.text}  ->  ${a.text}`);
+    const sameLabel = addedByLabel.get(key);
+    if (sameLabel) {
+      if (isLowered(r.text, sameLabel.text))
+        flag(findings, "threshold-lowered", r.file, `${r.text}  ->  ${sameLabel.text}`);
+      continue;
     }
+    const sameCheck = addedByCheckedBy.get(checkedBy(r.text));
+    if (sameCheck && !paired.has(sameCheck)) {
+      paired.add(sameCheck);
+      if (isLowered(r.text, sameCheck.text))
+        flag(findings, "threshold-lowered", r.file, `${r.text}  ->  ${sameCheck.text}`);
+      continue;
+    }
+    if (waivers.get("threshold-removed")?.has(key)) continue;
+    flag(findings, "threshold-removed", r.file, r.text);
+  }
+  return findings;
+}
+
+// Added `.constraintsignore` lines are new exemptions from the HARD gate, so
+// they fail unless a reasoned `Floor-waiver: new-exemption .constraintsignore
+// -- <reason>` trailer covers the file. Comment and blank lines are not
+// exemptions. `baseIgnore` is the ignore list at the merge base: entries that
+// predate the branch are grandfathered, entries the branch adds are flagged.
+export function scanIgnoreAdditions(added, baseIgnore = [], waivers = new Map()) {
+  const findings = [];
+  if (waivers.get("new-exemption")?.has(".constraintsignore")) return findings;
+  const base = new Set(baseIgnore);
+  for (const { file, text } of added) {
+    if (!/\.constraintsignore$/.test(file)) continue;
+    const line = text.trim();
+    if (!line || line.startsWith("#") || base.has(line)) continue;
+    flag(findings, "new-exemption", file, line);
   }
   return findings;
 }
 
 export function guardDiff(diff, opts = {}) {
   const { added, removed, deletedFiles } = parseDiff(diff);
+  const waivers = opts.waivers ?? new Map();
   return [
     ...scanAdded(added, opts.ignore ?? []),
-    ...scanRemoved(removed, added, opts.waivers ?? new Map()),
-    ...scanDeleted(deletedFiles, opts.waivers ?? new Map()),
-    ...checkThresholds(removed, added),
+    ...scanIgnoreAdditions(added, opts.baseIgnore ?? [], waivers),
+    ...scanRemoved(removed, added, waivers),
+    ...scanDeleted(deletedFiles, waivers),
+    ...checkThresholds(removed, added, waivers),
   ];
 }
 
@@ -223,6 +283,27 @@ function main() {
   }
   const waivers = parseFloorWaivers(commitMessages);
 
+  // Every active waiver is surfaced in the log and the job summary, so a
+  // self-approved exemption is visible to the reviewer, not silent.
+  if (waivers.size > 0) {
+    const lines = [...waivers.entries()].flatMap(([rule, files]) =>
+      [...files].map((f) => `Floor-waiver: ${rule} ${f}`),
+    );
+    console.log(`floor-guard: ${lines.length} waiver trailer(s) active:`);
+    for (const l of lines) console.log(`  ${l}`);
+    const summary = process.env.GITHUB_STEP_SUMMARY;
+    if (summary) {
+      try {
+        appendFileSync(
+          summary,
+          `### floor-guard waivers\n\n${lines.map((l) => `- \`${l}\``).join("\n")}\n`,
+        );
+      } catch {
+        console.log("floor-guard: could not append waivers to the job summary");
+      }
+    }
+  }
+
   // Unified diff plus untracked files (git diff alone cannot see new files).
   // Any failed diff is a guard failure, never an empty/clean result.
   const tracked = git(["diff", "--unified=0", mergeBase, "--"], true);
@@ -241,8 +322,22 @@ function main() {
   }
   const untracked = untrackedParts.join("\n");
   const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+  // The ignore list is pinned to the merge base: entries the branch adds take
+  // effect only behind a reasoned new-exemption waiver (flagged by
+  // scanIgnoreAdditions otherwise), so an author cannot silently waive the
+  // HARD gate with an ignore edit. A missing file at the base is not an
+  // error; it means nothing is grandfathered.
+  const baseIgnore = (git(["show", `${mergeBase}:.constraintsignore`]) ?? "")
+    .split("\n")
+    .map((l) => l.trim())
+    .filter((l) => l && !l.startsWith("#"));
+  const treeIgnore = loadIgnore(repoRoot);
+  const ignore = waivers.get("new-exemption")?.has(".constraintsignore")
+    ? [...new Set([...baseIgnore, ...treeIgnore])]
+    : baseIgnore;
   const findings = guardDiff(`${tracked}\n${untracked}`, {
-    ignore: loadIgnore(repoRoot),
+    ignore,
+    baseIgnore,
     waivers,
   });
 

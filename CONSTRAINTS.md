@@ -8,17 +8,24 @@ numbered dimensions below mirror the gates already wired in this repo.
 
 - No new suppression comments that silence a checker.
 - No unimplemented stubs and no empty catch blocks that turn failure silent.
-- No added test skips. Test-file deletion and assertion removal require a
-  path-scoped, reasoned commit trailer:
-  `Floor-waiver: test-deleted <path> -- <reason>` or
-  `Floor-waiver: assertion-removed <path> -- <reason>`.
+- No added test skips. Test-file deletion, assertion removal, enforced-row
+  removal, and ignore-list addition require a reasoned commit trailer:
+  `Floor-waiver: test-deleted <path> -- <reason>`,
+  `Floor-waiver: assertion-removed <path> -- <reason>`,
+  `Floor-waiver: threshold-removed <Dimension> -- <reason>`, or
+  `Floor-waiver: new-exemption .constraintsignore -- <reason>`.
 - No secrets in source.
 - This file does not get weakened to make a change pass: thresholds only move
   up without discussion, and new exception rows fail the gate.
 
 Checked by `npm run floor-guard` (HARD in the `check` job). Exemptions live
 in `.constraintsignore`, one glob per line with a reason, and never cover
-thresholds, exception rows, or deleted tests.
+thresholds, exception rows, or deleted tests. The ignore list is pinned to
+the merge base: lines the branch adds fail as `new-exemption` unless a
+reasoned waiver trailer covers the file. Every active waiver is printed to
+the CI log and the job summary, so exemptions are tracked in the open.
+Threshold rows pair by label, then by Checked-by cell: renaming a dimension
+while lowering it, or deleting the row, fails the gate.
 
 ## Enforced with numbers
 
