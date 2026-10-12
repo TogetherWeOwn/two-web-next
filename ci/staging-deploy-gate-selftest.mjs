@@ -564,10 +564,15 @@ test("workflow wires the tested gate before both mutations and preserves staging
     /- name: Re-verify exact-SHA full CI before Tail Worker deploy\n(?:(?!      - ).*\n)*      - name: Deploy alert Tail Worker before attaching the app\n(?:(?!      - ).*\n)*      - name: Re-verify exact-SHA full CI before Worker deploy\n/,
     "Tail gate must be the step immediately before the Tail deploy, which precedes the app deploy gate",
   );
+  assert.match(
+    workflow,
+    /- name: Re-verify exact-SHA full CI before jobs Worker deploy\n(?:(?!      - ).*\n)*      - name: Deploy staging jobs Worker \(queues \+ cron owner\)\n/,
+    "Jobs Worker gate must immediately precede its deploy",
+  );
   assert.equal(
     (workflow.match(/npx wrangler/g) ?? []).length,
-    3,
-    "No additional ungated mutations",
+    4,
+    "Every Cloudflare mutation is explicitly accounted for",
   );
   const ci = readFileSync(join(root, ".github/workflows/ci.yml"), "utf8");
   assert.match(ci, /run: node --test ci\/staging-deploy-gate-selftest.mjs/);
