@@ -128,6 +128,17 @@ describe("evidence-only source/cache verifier admission", () => {
     },
   );
 
+  it("a staging APP_URL alone does not admit a foreign request origin", async () => {
+    const app = new Hono().route("/admin", adminApp(createMemorySessionStore()));
+    const res = await app.request(
+      "https://elsewhere.example/admin/queue/source-evidence/7",
+      { headers: { authorization: `Bearer ${token}` } },
+      env,
+    );
+    expect(res.status).toBe(404);
+    expect(mocks.factory).not.toHaveBeenCalled();
+  });
+
   it.each(["OPTIONS", "POST", "PUT", "PATCH", "DELETE"])(
     "%s has no evidence authority",
     async (method) => {

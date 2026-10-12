@@ -73,7 +73,7 @@ const CANONICAL_STATEMENTS: ReadonlyArray<{ statement: SourceReadStatement; text
   },
   {
     statement: "pending_sync",
-    text: `select a.*\${readMarker()} from event_sync_attempts a join events e on e.id = a.event_id
+    text: `select a.*, e.discord_event_id\${readMarker()} from event_sync_attempts a join events e on e.id = a.event_id
         where e.event_key = \${eventKey} and a.state = 'pending'`,
   },
 ];
@@ -90,7 +90,7 @@ export async function statementSetHash(): Promise<string> {
 
 /** Pinned by `test/source-evidence-statements.test.ts`; recompute there. */
 export const STATEMENT_SET_HASH =
-  "sha256:d9463d2564c15bd7acb498f80be70bad3031a0115f5fde9d5dce3540628eb001";
+  "sha256:15a07bfb471b367b09621ac2dc4e95a89a7e04cfab06b2d255dd7cef96ae1286";
 
 export function canonicalStatementTexts(): ReadonlyArray<{
   statement: SourceReadStatement;
