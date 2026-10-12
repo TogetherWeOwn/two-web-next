@@ -8,10 +8,13 @@ The [parity matrix](parity.md) records what is implemented versus still missing.
 Operations guidance (the index below, `/up` readiness, queues, deploy and
 rollback pointers, alerts) applies to staging and, where a section names the
 production binding, to production. The production cutover and its DNS changes
-are separately gated and outside this runbook; only the
+are separately gated; only the
 staging rollback and DNS flip-back rehearsal is covered here.
-The cutover-only sections are [Final import and reconcile](#final-import-and-reconcile)
-and [48h post-flip watch](#48h-post-flip-watch).
+[Final import and reconcile](#final-import-and-reconcile) (including
+[Before the production flip](#before-the-production-flip)) runs only as a
+gated cutover step. [48h post-flip watch](#48h-post-flip-watch) applies only
+in the post-flip window: on a pager storm follow its Sev-1 path (contain,
+then the production rollback workflow).
 
 **First responder index.** Match the symptom, open the section, run the first
 read-only diagnostic, then escalate. Every diagnostic below is a read; do not
