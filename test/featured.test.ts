@@ -56,7 +56,11 @@ describe("featured homepage fallback (local fixtures)", () => {
   it("serves guest 200 at the deadline when featured connection acquisition stalls", async () => {
     const db = drizzle.mock();
     let rejectRead!: (error: Error) => void;
-    vi.spyOn(eventReads, "loadHomeUpcoming").mockResolvedValue([]); // only featured stalls in this test
+    vi.spyOn(eventReads, "loadHomeUpcomingMerged").mockResolvedValue({
+      items: [],
+      unavailable: false,
+      discordFailed: false,
+    }); // only featured stalls in this test
     const session = Reflect.get(db, "session") as { transaction: () => Promise<unknown> };
     const transaction = vi.spyOn(session, "transaction").mockImplementation(
       () =>
@@ -92,7 +96,11 @@ describe("featured homepage fallback (local fixtures)", () => {
     for (const host of ["images.corp", "images.mail", "localhost.localdomain", "images.alt"]) {
       expect(featuredImageSrc(`https://${host}/photo.jpg`, env.APP_URL, host)).toBeNull();
     }
-    vi.spyOn(eventReads, "loadHomeUpcoming").mockResolvedValue([]);
+    vi.spyOn(eventReads, "loadHomeUpcomingMerged").mockResolvedValue({
+      items: [],
+      unavailable: false,
+      discordFailed: false,
+    });
     vi.spyOn(featuredReads, "listVisibleFeatured").mockResolvedValue([
       {
         id: 1,
@@ -244,7 +252,11 @@ describe.skipIf(!process.env.DATABASE_URL)("featured homepage (isolated test Pos
       '<h3><a href="https://example.test/squad?a=1&amp;b=2">Squad &lt;night&gt;</a></h3>',
     );
     expect(html).toContain("&lt;script&gt;");
-    expect(html).not.toMatch(/<script\b|\sstyle=|\son\w+=/i);
+    const withoutJsonLd = html.replace(
+      /<script type="application\/ld\+json"[^>]*>[\s\S]*?<\/script>/g,
+      "",
+    );
+    expect(withoutJsonLd).not.toMatch(/<script\b|\sstyle=|\son\w+=/i);
     expect(html).toContain('alt="Squad &amp; friends"');
     expect(html).toContain('alt="Title fallback"');
     expect(html).toContain('alt="Blank fallback"');

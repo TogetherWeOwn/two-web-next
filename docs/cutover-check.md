@@ -1,5 +1,9 @@
 # W16 cutover gate
 
+> Archive note (October 2026): the W16 rehearsal and flip invocations below
+> are historical. This doc remains the standing contract reference for the
+> checker gates and the role-audit recipe.
+
 This ships the checker, **not a DNS flip or permission to perform one**.
 Owner slice: [TOG-10841](/TOG/issues/TOG-10841); cutover execution belongs to
 [TOG-9698](/TOG/issues/TOG-9698). URL contract: [url-freeze.md](url-freeze.md).
@@ -111,7 +115,11 @@ rehearsal/flip invocation.
 
 A read-only operator-invoked command compares the Discord-moderator set
 against the app-moderator set and exits non-zero on drift with a bounded
-report. Run it during the W16 rehearsal and again before the flip. It never
+report. Run it on the live quarterly cadence in
+[the quarterly review](runbook.md#quarterly-moderator-access-review),
+recording the review date, the counts, the outcome, and the follow-up actions
+in the private review record. Archived schedule (pre-live, October 2026): ran
+during the W16 rehearsal and again before the flip. It never
 mutates roles and never prints tokens or secrets.
 
 ```sh
@@ -125,9 +133,11 @@ npm run audit:moderator-roles -- --discord-ids=<csv> --app-ids=<csv> --json
   clean pass), 1 = drift, 2 = usage or malformed input.
 - The report shows at most 20 IDs per side with exact counts; the rest is
   `…and N more`. `discord-only` IDs hold the Discord role but have no live
-  app session: they gain the panel at their next login, so a clean pre-flip
-  receipt needs every Discord moderator signed in during the rehearsal
-  window (sessions slide on a 120-minute TTL). `app-only` IDs carry the flag
+  app session: they gain the panel at their next login. An exit-0 result
+  needs every Discord moderator signed in during the review window
+  (sessions slide on a 120-minute TTL), but the live review closes on
+  `app-only` = 0 with `discord-only` recorded as information.
+  `app-only` IDs carry the flag
   in a live session without the Discord role: excess privilege until that
   session expires or is revoked.
 - The command reads files or flags only. It opens no database, calls no
@@ -144,8 +154,8 @@ directory outside the checkout and keep all four files out of the repo.
 # App set: live moderator sessions only (read-only SELECT). The flag lives
 # on each session, is recomputed from Discord roles at login, and slides
 # on a 120-minute TTL — so this list sees only currently signed-in
-# moderators. A clean pre-flip receipt needs every Discord moderator
-# signed in during the rehearsal window.
+# moderators. Exit 0 needs every Discord moderator signed in during the
+# review window; the live review still closes on `app-only` = 0.
 psql "$DATABASE_URL" -tA -c \
   "select distinct user_id from web_sessions where moderator is true and revoked_at is null and expires_at > now();" \
   > app-moderators.txt
@@ -181,10 +191,11 @@ jq -r --arg roles "$DISCORD_MODERATOR_ROLE_IDS" '
 # rm app-moderators.txt discord-moderators.txt members.jsonl discord-auth.conf
 ```
 
-A clean audit is one pre-flip receipt, not permission to flip. On drift,
-have each discord-only moderator sign in again (login recomputes the flag
-from Discord roles), clear any app-only access (revoke that session or
-wait out the 120-minute TTL), then re-run until clean. Treat
+A clean audit is one live receipt, not permission to change cadence or scope.
+On drift, record `discord-only` as information (those moderators gain the panel
+at next login), clear any `app-only` access (revoke that session or wait out
+the 120-minute TTL), then re-run until `app-only` is 0 and close per
+[the quarterly review](runbook.md#quarterly-moderator-access-review). Treat
 `app-moderators.txt`, `discord-moderators.txt`, and `members.jsonl` as
 member data and `discord-auth.conf` as a credential: keep all four files
 out of the repo and delete them after the run:

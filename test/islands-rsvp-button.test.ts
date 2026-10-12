@@ -587,6 +587,51 @@ describe("rsvp-button SSR/server drift", () => {
     expect(html).toContain(`href="/e/${KEY}"`);
   });
 
+  it("no-JS refusal renders inside the branded event shell, for throttle and closed states", async () => {
+    const p = page({}, {}, true);
+    p.as(viewer);
+    const write = vi.spyOn(rsvpService, "writeRsvp");
+    const submit = () =>
+      p.request(`/e/${KEY}/rsvp`, {
+        method: "POST",
+        headers: { origin: "https://next.example.test" },
+        body: new URLSearchParams({ status: "going" }),
+      });
+    const assertShell = (html: string) => {
+      expect(html).toContain("<!doctype html>");
+      expect(html).toContain('name="viewport"');
+      expect(html).toContain('rel="stylesheet" href="/styles.css"');
+      expect(html).toMatch(
+        /<body(?: class="base-theme event-theme")?>\s*<a class="skip-link" href="#main">Skip to content<\/a>/,
+      );
+      expect(html.match(/<main\b[^>]*>/g)).toHaveLength(1);
+      expect(html).toContain('<main id="main" tabindex="-1">');
+      // JSX escapes the apostrophe in the frozen failure title.
+      expect(html).toContain("<h1>That RSVP didn&#39;t save.</h1>");
+      expect(html).toContain(`<a href="/e/${KEY}">Return to the event</a>`);
+      // Only signed-in members reach this page (a missing session redirects
+      // to login), so the shell must not render guest chrome for them.
+      expect(html).not.toContain("Welcome, guest");
+      expect(html).not.toContain('data-testid="signin"');
+    };
+    write.mockResolvedValue({ ok: false, reason: "limited", retryAfter: 5 });
+    const throttled = await submit();
+    expect(throttled.status).toBe(429);
+    expect(throttled.headers.get("Retry-After")).toBe("5");
+    const throttledHtml = await throttled.text();
+    assertShell(throttledHtml);
+    expect(throttledHtml).toContain(throttleWaitCopy(5));
+    write.mockResolvedValue({ ok: false, reason: "closed", why: "paused" });
+    const closed = await submit();
+    expect(closed.status).toBe(403);
+    expect(closed.headers.get("Retry-After")).toBeNull();
+    const closedHtml = await closed.text();
+    assertShell(closedHtml);
+    expect(closedHtml).toContain(
+      "Nothing changed. Return to the event to check availability and try again.",
+    );
+  });
+
   it("no-JS refuses missing/foreign origins, non-members and cross-user writes; expired sessions get the return-aware link", async () => {
     const p = page({}, {}, true);
     p.as(viewer);

@@ -46,6 +46,11 @@ export const coverage = {
   "/events.ics": skip("Calendar feed, not HTML"),
   "/events.rss": skip("RSS feed, not HTML"),
   "/events/:file{.+\\.ics}": skip("Per-event calendar download, not HTML"),
+  "/api/public/events": skip("Bounded session-free JSON collection, not HTML"),
+  "/api/public/events/:key": skip("Bounded session-free JSON event detail, not HTML"),
+  "/api/public/community": skip("Bounded session-free JSON snapshot, not HTML"),
+  "/api/public/join": skip("Bounded session-free JSON handoff, not HTML"),
+  "/openapi.json": skip("Static OpenAPI document, not HTML"),
   "/": {
     cases: [
       { path: "/" },

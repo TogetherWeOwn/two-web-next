@@ -63,7 +63,7 @@ export function publicEventJson(e: PublicEvent): PublicEventDto {
   };
 }
 
-async function etagFor(body: string): Promise<string> {
+export async function etagFor(body: string): Promise<string> {
   const d = await crypto.subtle.digest("SHA-1", new TextEncoder().encode(body));
   return `"${[...new Uint8Array(d)].map((b) => b.toString(16).padStart(2, "0")).join("")}"`;
 }

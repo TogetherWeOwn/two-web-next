@@ -37,6 +37,15 @@ globalThis.fetch = async (input, init) => {
         avatar: null,
       });
     }
+    if (
+      request.method === "GET" &&
+      url.pathname === "/api/v10/guilds/326474832151838730/widget.json"
+    ) {
+      // Join-preview health probe: the /join leaf reads the verdict without
+      // awaiting it, so the click-to-load link renders on a cold isolate and
+      // the background re-probe must not count as forbidden upstream traffic.
+      return Response.json({ id: "326474832151838730" });
+    }
     if (url.pathname === "/api/v10/guilds/326474832151838730/members/900000000000001398") {
       if (request.method === "PUT") {
         // The blocked-join marker token is refused like a real bot refusal

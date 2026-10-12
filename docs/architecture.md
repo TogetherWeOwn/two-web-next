@@ -293,6 +293,7 @@ exactly once.
 | `src/screens/` | content |
 | `src/security-txt.ts` | content |
 | `src/seo.ts` | content |
+| `src/seo-json-ld.ts` | content |
 | `src/seo-leaves.tsx` | entry |
 | `src/session-cookie.ts` | auth |
 | `src/session-revocation.ts` | auth |

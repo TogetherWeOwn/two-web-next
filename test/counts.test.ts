@@ -40,7 +40,7 @@ vi.mock("postgres", () => ({
 }));
 
 const NOW = Date.parse("2026-09-30T12:00:00Z");
-const env = { DB: { connectionString: "postgres://fixture.test/counts" } } as Env;
+const env = { BOT_DB: { connectionString: "postgres://fixture.test/counts" } } as Env;
 let counts: typeof import("../src/counts");
 let warn: ReturnType<typeof vi.spyOn>;
 
@@ -77,13 +77,13 @@ describe("readCounts contract", () => {
     expect(warn).not.toHaveBeenCalled();
   });
 
-  it("reads both bot views through DB, converts bigint strings, and closes clients", async () => {
+  it("reads both bot views through BOT_DB, converts bigint strings, and closes clients", async () => {
     expect(await counts.readCounts(env)).toEqual({
       memberCount: 84,
       onlineCount: 12,
       ranks: [{ key: "prospect", label: "Prospect", memberCount: 24 }],
     });
-    expect(state.urls).toEqual([env.DB!.connectionString, env.DB!.connectionString]);
+    expect(state.urls).toEqual([env.BOT_DB!.connectionString, env.BOT_DB!.connectionString]);
     expect(state.queries[0]).toContain("human_member_count, online_count, counts_updated_at");
     expect(state.queries[1]).toContain("ORDER BY rank_order");
     expect(state.options[0]).toMatchObject({
@@ -96,11 +96,21 @@ describe("readCounts contract", () => {
   });
 
   it("uses the explicit local/dev URL without trying a second credential", async () => {
-    await counts.readCounts({ ...env, DATABASE_URL: "postgres://fixture.test/explicit" });
+    await counts.readCounts({ ...env, BOT_DATABASE_URL: "postgres://fixture.test/explicit" });
     expect(state.urls).toEqual([
       "postgres://fixture.test/explicit",
       "postgres://fixture.test/explicit",
     ]);
+  });
+
+  it("never reads the web database: web-only sources stay hidden without connecting", async () => {
+    const webOnly = {
+      DATABASE_URL: "postgres://fixture.test/web",
+      DB: { connectionString: "postgres://fixture.test/web" },
+    } as Env;
+    expect(await counts.readCounts(webOnly)).toEqual(counts.UNAVAILABLE);
+    expect(state.urls).toEqual([]);
+    expect(warn).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -230,7 +240,7 @@ describe("60-second isolate cache", () => {
     expect(
       (
         await counts.readCounts({
-          DB: { connectionString: "postgres://fixture.test/other" },
+          BOT_DB: { connectionString: "postgres://fixture.test/other" },
         } as Env)
       ).memberCount,
     ).toBe(7);
@@ -243,7 +253,7 @@ describe("60-second isolate cache", () => {
     await vi.advanceTimersByTimeAsync(150);
     state.delayMs = 0;
     state.live[0]!.human_member_count = "99";
-    const other = { DB: { connectionString: "postgres://fixture.test/other" } } as Env;
+    const other = { BOT_DB: { connectionString: "postgres://fixture.test/other" } } as Env;
     await expect(counts.readCounts(other)).resolves.toMatchObject({ memberCount: 99 });
     await vi.advanceTimersByTimeAsync(850);
     await expect(older).resolves.toMatchObject({ memberCount: 84 });

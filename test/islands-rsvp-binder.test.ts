@@ -12,6 +12,7 @@ const binder = readFileSync(
   new NodeURL("../public/islands/rsvp-button.js", import.meta.url),
   "utf8",
 );
+let focusSink: ((target: Node) => void) | null = null;
 class Node {
   children: Node[] = [];
   parentNode: Node | null = null;
@@ -59,6 +60,11 @@ class Node {
   }
   focus() {
     this.focused = true;
+    focusSink?.(this);
+  }
+  contains(node: Node | null): boolean {
+    for (let n = node; n; n = n.parentNode) if (n === this) return true;
+    return false;
   }
   addEventListener(type: string, fn: (e: { preventDefault: () => void }) => void) {
     this.listeners.set(type, fn);
@@ -199,7 +205,12 @@ function browser(
       if (!timer.cancelled) timer.callback();
     });
   };
-  const listeners = new Map<string, (event: { type: string; detail: unknown }) => void>();
+  const listeners = new Map<
+    string,
+    (event: { type: string; detail: unknown; target?: Node }) => void
+  >();
+  const notifyDocument = (type: string, target: Node) =>
+    listeners.get(type)?.({ type, detail: undefined, target });
   const context = {
     document: {
       querySelector: (selector: string) => page.querySelector(selector),
@@ -245,6 +256,7 @@ function browser(
       if (index !== -1) timers.splice(index, 1);
     },
   };
+  focusSink = (target) => notifyDocument("focusin", target);
   if (integrated)
     runInNewContext(
       readFileSync(new NodeURL("../public/islands/going-count.js", import.meta.url), "utf8"),
@@ -278,6 +290,7 @@ function browser(
     timers,
     runTimers,
     emit,
+    pointerDown: (target: Node) => notifyDocument("pointerdown", target),
     reloads: () => reloads,
   };
 }
@@ -474,6 +487,97 @@ describe("RsvpButton shipped binder", () => {
     expect(b.get("rsvp-confirmed")).toBeNull();
     expect(b.broadcasts).toHaveLength(0);
     expect(b.requests).toHaveLength(1);
+  });
+
+  it("keeps focus on a field the member moved to while a going write is pending", async () => {
+    const b = browser();
+    const field = new Node();
+    b.page.appendChild(field);
+    b.get("rsvp-going")!.click();
+    field.focus();
+    b.finish(0, 201);
+    await b.settle();
+    expect(b.get("rsvp-confirmed")?.textContent).toBe("✓ You're in");
+    expect(b.get("rsvp-confirmed")?.focused).toBe(false);
+    expect(b.get("rsvp-syncing")?.getAttribute("role")).toBe("status");
+    expect(field.focused).toBe(true);
+  });
+
+  it("keeps focus off the confirmation after a pointer press outside the widget", async () => {
+    const b = browser();
+    const elsewhere = new Node();
+    b.page.appendChild(elsewhere);
+    b.get("rsvp-going")!.click();
+    b.pointerDown(elsewhere);
+    b.finish(0, 201);
+    await b.settle();
+    expect(b.get("rsvp-confirmed")?.textContent).toBe("✓ You're in");
+    expect(b.get("rsvp-confirmed")?.focused).toBe(false);
+  });
+
+  it("keeps focus on a field the member moved to when the join is waitlisted", async () => {
+    const b = browser();
+    const field = new Node();
+    b.page.appendChild(field);
+    b.get("rsvp-going")!.click();
+    field.focus();
+    b.finish(0, 200, { data: { status: "waitlisted", waitlist_position: 3 } });
+    await b.settle();
+    expect(b.get("waitlist-position")?.textContent).toBe("You're on the waitlist — #3 in line");
+    expect(b.get("waitlist-position")?.focused).toBe(false);
+    expect(field.focused).toBe(true);
+  });
+
+  it("keeps focus on a field the member moved to when a withdrawal settles", async () => {
+    const b = browser("going");
+    const field = new Node();
+    b.page.appendChild(field);
+    b.get("rsvp-withdraw")!.click();
+    field.focus();
+    b.finish(0, 204);
+    await b.settle();
+    expect(b.get("rsvp-going")).not.toBeNull();
+    expect(b.get("rsvp-going")?.focused).toBe(false);
+    expect(field.focused).toBe(true);
+  });
+
+  it("keeps focus on a field the member moved to when a claim conflict settles", async () => {
+    const b = browser("waitlisted");
+    const field = new Node();
+    b.page.appendChild(field);
+    const position = b.get("waitlist-position")!;
+    b.get("waitlist-claim")!.click();
+    field.focus();
+    b.finish(0, 409, { capacity: 4 });
+    await b.settle();
+    expect(b.root.getAttribute("data-full")).toBe("true");
+    expect(position.focused).toBe(false);
+    expect(field.focused).toBe(true);
+  });
+
+  it("does not revive focus ownership when the member moves back into the widget", async () => {
+    const b = browser();
+    const field = new Node();
+    b.page.appendChild(field);
+    const form = b.root.querySelector("[data-rsvp-form]")!;
+    b.get("rsvp-going")!.click();
+    field.focus();
+    form.focus();
+    b.finish(0, 201);
+    await b.settle();
+    expect(b.get("rsvp-confirmed")).not.toBeNull();
+    expect(b.get("rsvp-confirmed")?.focused).toBe(false);
+    expect(form.focused).toBe(true);
+  });
+
+  it("keeps the outcome focus when the member presses inside the widget", async () => {
+    const b = browser();
+    const going = b.get("rsvp-going")!;
+    going.click();
+    b.pointerDown(going);
+    b.finish(0, 201);
+    await b.settle();
+    expect(b.get("rsvp-confirmed")?.focused).toBe(true);
   });
 
   it("mounts an empty polite claim-loss region before updating it in a later task", async () => {
@@ -1260,5 +1364,26 @@ describe("RsvpButton shipped binder", () => {
     // A one-shot status announcement after a click is not load-time polling.
     expect(b.timers).toHaveLength(0);
     expect(binder).not.toMatch(/setInterval|window\.confirm|website/);
+  });
+
+  it("keeps focus on a field the member moved to when a going request hits a full event", async () => {
+    const b = browser();
+    const field = new Node();
+    b.page.appendChild(field);
+    b.get("rsvp-going")!.click();
+    field.focus();
+    b.finish(0, 409, { capacity: 4 });
+    await b.settle();
+    expect(b.get("event-full")?.textContent).toBe("This one's full. Cap is 4.");
+    expect(b.get("event-full")?.focused).toBe(false);
+    expect(field.focused).toBe(true);
+  });
+
+  it("moves focus to the full message when a going request hits a full event uninterrupted", async () => {
+    const b = browser();
+    b.get("rsvp-going")!.click();
+    b.finish(0, 409, { capacity: 4 });
+    await b.settle();
+    expect(b.get("event-full")?.focused).toBe(true);
   });
 });

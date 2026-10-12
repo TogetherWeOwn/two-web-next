@@ -11,7 +11,7 @@ import { background, type JoinRender } from "./route-shared";
 export function registerJoinPageRoutes(app: Hono<{ Bindings: Env }>, render: JoinRender) {
   app.get("/join", (c) => {
     // The widget verdict is read, never awaited: a Discord outage or a hung
-    // probe swaps the iframe for the static fallback without touching the
+    // probe swaps the preview link for the static fallback without touching the
     // response path. Re-probes ride waitUntil, so they need an execution
     // context; without one (local requests) the last verdict stands. No
     // binding is read here: /join stays a persistence-free leaf.

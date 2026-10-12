@@ -40,15 +40,29 @@ afterEach(() => {
 });
 
 describe("homepage theme", () => {
+  it("loads semantic theme tokens for Hono themes and schedule overrides target its body class", () => {
+    const html = Layout({ title: "Fixture", theme: "schedule" })!.toString();
+    const tokens = readFileSync(new URL("../public/theme-tokens.css", import.meta.url), "utf8");
+
+    expect(html).toContain('href="/theme-tokens.css"');
+    expect(tokens).toContain(".base-theme.schedule-theme");
+  });
+
   it("opts the homepage into the theme without changing unthemed layouts", () => {
     const html = render();
     expect(html).toContain('<body class="base-theme homepage-theme"><a class="skip-link"');
     expect(html).toContain('href="/theme.css"');
     expect(html).toContain('href="/fonts/display-latin-700.woff2" as="font"');
     expect(html).toContain('src="/logo.svg" width="64" height="64" alt="Together We Own"');
-    expect(html).not.toContain("<script");
+    expect(html).toContain('data-testid="site-jsonld"');
+    const withoutJsonLd = html.replace(
+      /<script type="application\/ld\+json"[^>]*>[\s\S]*?<\/script>/g,
+      "",
+    );
+    expect(withoutJsonLd).not.toContain("<script");
     const leaf = Layout({ title: "Fixture" })!.toString();
     expect(leaf).not.toContain("/theme.css");
+    expect(leaf).not.toContain("/theme-tokens.css");
     expect(leaf).not.toContain("/fonts/");
   });
 
@@ -177,11 +191,12 @@ describe("homepage theme", () => {
     );
     const html = await response.text();
     expect(html).toContain('id="join-heading"');
-    expect(html).toContain('src="https://discord.com/widget?id=123456789012345678&amp;theme=dark"');
     expect(html).toContain(
-      'sandbox="allow-scripts allow-same-origin" loading="lazy" referrerpolicy="no-referrer"',
+      'href="https://discord.com/widget?id=123456789012345678&amp;theme=dark"',
     );
-    expect(html).toContain('data-testid="join-widget"');
+    expect(html).toContain('data-testid="join-widget-load"');
+    expect(html).toContain('<script src="/islands/join-widget.js" defer=""></script>');
+    expect(html).not.toContain("<iframe");
   });
 
   it.each([undefined, "guild", "123", "1234567890&evil=1", "https://evil.test"])(

@@ -129,7 +129,7 @@ class Ratchet(unittest.TestCase):
         self.assertEqual(1, self.result()[0])
 
     def test_fixture_exclusions_are_exact_and_reasoned(self):
-        self.assertEqual(3, len(ratchet.LINT_FIXTURE_EXCLUSIONS))
+        self.assertEqual(4, len(ratchet.LINT_FIXTURE_EXCLUSIONS))
         for name, reason in ratchet.LINT_FIXTURE_EXCLUSIONS.items():
             self.assertTrue(reason.strip())
             self.assertNotIn("*", name)
@@ -265,6 +265,104 @@ class SharedPolicy(unittest.TestCase):
         self.assertIn('internal_ref_ratchet.py --base "$BASE_SHA" --head "$HEAD_SHA"', step)
         self.assertIn("fetch-depth: 0", job)
         self.assertIn("test_internal_ref_ratchet.py", job)
+
+    def test_ratchet_step_enforces_stale_and_deletion_heads(self):
+        workflow = SCRIPT.parent.parent / "workflows" / "pr-gates.yml"
+        job = workflow.read_text().split("  pr-lint:\n", 1)[1].split("  gitleaks:\n", 1)[0]
+        step = job.split("      - name: Ratchet tracked internal references\n", 1)[1].split("      - name:", 1)[0]
+        raw = step.split("run: |\n", 1)[1]
+        body_lines = []
+        for line in raw.splitlines():
+            if line.startswith("          "):
+                body_lines.append(line[10:])
+            elif line.strip() == "":
+                body_lines.append("")
+            else:
+                self.fail(f"Unexpected workflow indentation: {line!r}")
+        body = "\n".join(body_lines) + "\n"
+        self.assertTrue(body.startswith("set -euo pipefail\n"))
+        scratch = os.environ.get("PAPERCLIP_RUN_SCRATCH_DIR") or os.environ.get("RUNNER_TEMP") or tempfile.gettempdir()
+        with tempfile.TemporaryDirectory(dir=scratch) as td:
+            td_path = Path(td)
+            repo = td_path / "repo"
+            repo.mkdir()
+
+            def git(*args):
+                return subprocess.run(["git", "-C", str(repo), *args],
+                                      check=True, capture_output=True, text=True)
+
+            git("init", "-q")
+            git("config", "user.name", "Synthetic Fixture")
+            git("config", "user.email", "fixture@example.invalid")
+            # Root simulates a commit before the ratchet existed: clean, no scripts.
+            (repo / "README.md").write_text("Public explanation\n")
+            git("add", "--all")
+            git("commit", "-qm", "root before ratchet")
+            root = git("rev-parse", "HEAD").stdout.strip()
+            # Base simulates the PR base tip: the trusted scripts are present.
+            scripts_dir = repo / ".github" / "scripts"
+            scripts_dir.mkdir(parents=True)
+            (scripts_dir / "internal_ref_ratchet.py").write_bytes(SCRIPT.read_bytes())
+            (scripts_dir / "internal_references.py").write_bytes(
+                (SCRIPT.parent / "internal_references.py").read_bytes())
+            git("add", "--all")
+            git("commit", "-qm", "add ratchet (base)")
+            base = git("rev-parse", "HEAD").stdout.strip()
+            # Clean stale head: forked from the root, still no scripts, no IDs.
+            git("checkout", "-q", root)
+            (repo / "docs").mkdir(exist_ok=True)
+            (repo / "docs" / "clean.md").write_text("Public explanation\n")
+            git("add", "--all")
+            git("commit", "-qm", "stale clean head")
+            stale_clean = git("rev-parse", "HEAD").stdout.strip()
+            # Violating stale head: forked from the root, adds a synthetic ID.
+            git("checkout", "-q", root)
+            (repo / "docs").mkdir(exist_ok=True)
+            (repo / "docs" / "example.md").write_text(f"Synthetic {ID}\n")
+            git("add", "--all")
+            git("commit", "-qm", "stale head adds reference")
+            stale_bad = git("rev-parse", "HEAD").stdout.strip()
+            # Deletion head: removes the ratchet script but adds no references,
+            # so only the fail-closed guard (not the counts) can reject it.
+            git("checkout", "-q", base)
+            subprocess.run(["git", "-C", str(repo), "rm", "-q",
+                            ".github/scripts/internal_ref_ratchet.py"],
+                           check=True, capture_output=True, text=True)
+            git("commit", "-qm", "delete ratchet script")
+            deleted = git("rev-parse", "HEAD").stdout.strip()
+            # Current head: scripts present, clean.
+            git("checkout", "-q", base)
+            (repo / "docs").mkdir(exist_ok=True)
+            (repo / "docs" / "current.md").write_text("Public explanation\n")
+            git("add", "--all")
+            git("commit", "-qm", "current clean head")
+            current = git("rev-parse", "HEAD").stdout.strip()
+
+            script_path = td_path / "ratchet-step.sh"
+            script_path.write_text(body)
+            runner_temp = td_path / "runner-temp"
+            runner_temp.mkdir()
+
+            def run_step(base_sha, head_sha):
+                git("checkout", "-q", head_sha)
+                env = {**os.environ, "BASE_SHA": base_sha, "HEAD_SHA": head_sha,
+                       "RUNNER_TEMP": str(runner_temp),
+                       "GITHUB_EVENT_NAME": "pull_request"}
+                return subprocess.run(["bash", "-e", str(script_path)], cwd=str(repo),
+                                      env=env, capture_output=True, text=True, timeout=120)
+
+            with self.subTest(case="stale violating head fails"):
+                result = run_step(base, stale_bad)
+                self.assertNotEqual(0, result.returncode, msg=result.stdout + result.stderr)
+            with self.subTest(case="clean stale head passes"):
+                result = run_step(base, stale_clean)
+                self.assertEqual(0, result.returncode, msg=result.stdout + result.stderr)
+            with self.subTest(case="deletion head fails closed"):
+                result = run_step(base, deleted)
+                self.assertNotEqual(0, result.returncode, msg=result.stdout + result.stderr)
+            with self.subTest(case="current head passes"):
+                result = run_step(base, current)
+                self.assertEqual(0, result.returncode, msg=result.stdout + result.stderr)
 
     def test_workflow_runs_pr_convention_decisions_in_required_job(self):
         workflow = SCRIPT.parent.parent / "workflows" / "pr-gates.yml"

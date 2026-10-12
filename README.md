@@ -164,10 +164,12 @@ npx wrangler deploy --dry-run --outdir dist   # bundle check; does not deploy
 ### Browser regressions
 
 These suites skip their browser cases unless the opt-in variable is `"true"`, so
-a run without it can pass without executing them. The `a11y` job sets each
-variable, writes a Vitest JSON report and runs `ci/a11y-require-executed.mjs`,
-which fails the step unless every case in the named suite passed and at least
-the minimum ran. The minimums live in `.github/workflows/ci.yml`.
+a run without it can pass without executing them. For the suites wired into CI,
+the `a11y` job sets each variable, writes a Vitest JSON report and runs
+`ci/a11y-require-executed.mjs`, which fails the step unless every case in the
+named suite passed and at least the minimum ran. The minimums live in
+`.github/workflows/ci.yml`. The RSVP focus suite below is not wired into CI yet;
+run its listed command locally to execute the Chromium proof.
 
 | Suite | Opt-in variable | Local command |
 | --- | --- | --- |
@@ -176,6 +178,7 @@ the minimum ran. The minimums live in `.github/workflows/ci.yml`.
 | `test/calendar-search-unicode-boundaries.test.ts` | `CALENDAR_SEARCH_BROWSER_TESTS` | `CALENDAR_SEARCH_BROWSER_TESTS=true npx vitest run test/calendar-search-unicode-boundaries.test.ts` |
 | `test/profile-native-length.test.ts` | `A11Y_BROWSER_TESTS` | `A11Y_BROWSER_TESTS=true npx vitest run test/profile-native-length.test.ts` |
 | `ci/a11y-lifecycle.test.mjs` | `A11Y_BROWSER_TESTS` | `A11Y_BROWSER_TESTS=true node --test ci/a11y-lifecycle.test.mjs` (real Chromium signal cases; no executed-count verifier yet) |
+| `ci/rsvp-focus-browser.test.mjs` | `RSVP_FOCUS_BROWSER_TESTS` | `RSVP_FOCUS_BROWSER_TESTS=true node --test ci/rsvp-focus-browser.test.mjs` (real Chromium focus proof; not run by CI) |
 
 The admin, featured and calendar suites use intercepted synthetic fixtures or
 loopback servers with mocked reads, and the profile suite uses loopback fixtures
@@ -269,10 +272,20 @@ Missing protection, failed
 API access, unset/false flag or any other ref fails closed. Both gate jobs inherit
 `contents: read` and `actions: read`; the latter is required to
 [read an Environment in this private repository](https://docs.github.com/en/rest/deployments/environments#get-an-environment--fine-grained-access-tokens).
-The deploy job uses that Environment, checks the gate again after approval, and
-deploys the promoted SHA (`sha` input, or by default the latest main commit
-whose post-deploy e2e-staging journeys passed) with `wrangler deploy --env production`. It does not
-create resources or run migrations/tests on production. Its post-deploy smoke runs
+The deploy job uses that Environment and checks the gate again after approval.
+It uploads a Worker version tagged with the promoted SHA, GitHub run ID, and
+run attempt (`sha` input, or by default the latest main commit whose post-deploy
+e2e-staging journeys passed), then promotes that exact tag to 100%. Including the
+run and attempt keeps retries of the same SHA unambiguous. `wrangler versions
+upload` and `wrangler versions deploy` change code without re-syncing the
+already-attached apex custom domain or other triggers. The workflow intentionally
+does not reconcile trigger configuration from `wrangler.jsonc`; trigger changes
+must be managed separately via [Production trigger reconciliation](docs/runbook.md#production-trigger-reconciliation-manual-domain-safe)
+(CI pins the literal reviewed `env.production` schedule and consumer values,
+so any change fails CI until the test is updated in the same release PR; the
+authorized principal must still run the reconciliation for the change to take
+effect in production). The workflow does not create resources or run
+migrations/tests on production. Its post-deploy smoke runs
 the same GET-only public-route set as staging
 (`node bin/smoke.mjs https://togetherweown.com --allow-indexable`): `/up`
 requires HTTP 200 with `db:ok` and `pending_migrations:0`, accepting

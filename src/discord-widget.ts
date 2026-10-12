@@ -11,7 +11,7 @@ export const DISCORD_WIDGET_VERDICT_TTL_MS = 60_000;
 
 export type DiscordWidgetHealth = {
   /**
-   * The iframe URL to render, or null for the static fallback. Synchronous:
+   * The widget URL to offer, or null for the static fallback. Synchronous:
    * it answers from the last verdict and never waits on Discord. A stale
    * verdict hands one background probe to `background` (the request's
    * waitUntil); without one, nothing is probed and the last verdict stands.
@@ -23,8 +23,8 @@ export type DiscordWidgetHealthDeps = { fetch?: typeof fetch; now?: () => number
 
 /**
  * Per-isolate view of whether Discord is serving the guild widget. Optimistic
- * until a probe says otherwise: the iframe is lazy with fixed dimensions, so
- * a dead one costs a blank box, while a pessimistic default would hide the
+ * until a probe says otherwise: the preview loads only on request, so a dead
+ * one costs a failed click, while a pessimistic default would hide the
  * preview on every cold isolate. The probe reads the public widget JSON for
  * the same guild (no member data, no cookies) under the shared Discord HTTP
  * budget. 2xx is up; 429 is no new information; any other status, a network

@@ -54,7 +54,10 @@
   // Shared Postgres (S1: TOG-9679): Hyperdrive "two-web-next-staging" → Neon
   // project two-web-next, staging branch (pooled endpoint). Local dev sets
   // CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_DB to agent-testdb.
-  "hyperdrive": [{ "binding": "DB", "id": "1d48a54abd3444009b7067c03c63ff9f" }],
+  "hyperdrive": [
+    { "binding": "DB", "id": "1d48a54abd3444009b7067c03c63ff9f" },
+    { "binding": "BOT_DB", "id": "63e6e86a91cb4e40b3ee54f459c8b450" }
+  ],
   // Not secrets (the client id is public: it is in every OAuth URL). Secrets (DISCORD_CLIENT_SECRET, DISCORD_BOT_TOKEN, SESSION_SECRET) are set with
   // `wrangler secret put` and never live in this file.
   "vars": {
@@ -105,7 +108,11 @@
       // Production Hyperdrive for the separately named two-web-next-production
       // database, distinct from staging. The all-zero id is only the inert
       // sentinel ci/production-deploy-gate.mjs refuses; it never lives here.
-      "hyperdrive": [{ "binding": "DB", "id": "7489f6ad630042148cdef83602f27b8a" }],
+      // Production database plus read-only bot-reader Hyperdrive binding.
+      "hyperdrive": [
+        { "binding": "DB", "id": "7489f6ad630042148cdef83602f27b8a" },
+        { "binding": "BOT_DB", "id": "14c00d84d1d446c1b117861f3b49473f" }
+      ],
       // Vars/bindings do not inherit across environments. No QA_AUTH_TOKEN in prod.
       // env.production.vars must repeat every var the worker reads: Wrangler
       // never inherits top-level vars into a named environment. The moderator

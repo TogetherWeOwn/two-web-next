@@ -90,6 +90,11 @@ const OTHER_READS = [
   "/events.ics",
   "/events.rss",
   "/events/:file{.+\\.ics}",
+  "/api/public/events", // Bounded session-free JSON: published-only, no member access.
+  "/api/public/events/:key",
+  "/api/public/community",
+  "/api/public/join",
+  "/openapi.json", // Static OpenAPI document, no member access.
 ];
 const readInventory = (router: { routes: { method: string; path: string }[] }) =>
   router.routes
