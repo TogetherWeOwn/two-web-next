@@ -118,6 +118,152 @@ describe("hooks.server route ownership wiring", () => {
     expect(await response.text()).toBe("hono-post");
   });
 
+  it("routes a POST on a Kit-enabled GET path to Hono, body unread", async () => {
+    // Kills the hard-coded-GET mutant: the method must come from the Request.
+    const body = JSON.stringify({ title: "Seed swap" });
+    const request = new Request(new URL("/events/past", APP_URL).href, {
+      method: "POST",
+      headers: { host: "example.com", "content-type": "application/json" },
+      body,
+    });
+    const event = { request, url: new URL(request.url), route: { id: "/events/past" } };
+    let usedAtHandoff = null;
+    const d = deps({
+      manifest: KIT_MANIFEST,
+      honoFetch: vi.fn(async (req) => {
+        usedAtHandoff = req.bodyUsed;
+        return new Response("hono-post", { status: 200 });
+      }),
+    });
+
+    const response = await dispatchHookRequest(event, d);
+    expect(d.honoFetch).toHaveBeenCalledOnce();
+    expect(d.honoFetch.mock.calls[0][0]).toBe(event.request);
+    expect(usedAtHandoff).toBe(false);
+    expect(d.resolve).not.toHaveBeenCalled();
+    expect(await response.text()).toBe("hono-post");
+  });
+
+  it("routes a path outside the manifest to Hono even when another path is Kit-enabled", async () => {
+    // Kills the hard-coded-path mutant: /nope must not follow /events/past.
+    const event = trustedEvent("/nope");
+    const d = deps({ manifest: KIT_MANIFEST });
+
+    const response = await dispatchHookRequest(event, d);
+    expect(d.honoFetch).toHaveBeenCalledOnce();
+    expect(d.honoFetch.mock.calls[0][0]).toBe(event.request);
+    expect(d.resolve).not.toHaveBeenCalled();
+    expect(await response.text()).toBe("hono");
+  });
+
+  it("routes HEAD on a Kit-enabled GET path to Kit", async () => {
+    const request = new Request(new URL("/events/past", APP_URL).href, {
+      method: "HEAD",
+      headers: { host: "example.com" },
+    });
+    const event = { request, url: new URL(request.url), route: { id: "/events/past" } };
+    const d = deps({
+      manifest: KIT_MANIFEST,
+      resolve: vi.fn(async () => new Response(null, { status: 200 })),
+    });
+
+    await dispatchHookRequest(event, d);
+    expect(d.resolve).toHaveBeenCalledOnce();
+    expect(d.honoFetch).not.toHaveBeenCalled();
+  });
+
+  it("decodes an encoded path before the dispatch decision", async () => {
+    // %70 is "p": /events/%70ast decodes to /events/past, which the shipped
+    // manifest keeps on Hono and KIT_MANIFEST moves to Kit.
+    const shipped = trustedEvent("/events/%70ast");
+    const dShipped = deps();
+    const shippedResponse = await dispatchHookRequest(shipped, dShipped);
+    expect(dShipped.honoFetch).toHaveBeenCalledOnce();
+    expect(dShipped.resolve).not.toHaveBeenCalled();
+    expect(await shippedResponse.text()).toBe("hono");
+
+    const kit = trustedEvent("/events/%70ast");
+    const dKit = deps({
+      manifest: KIT_MANIFEST,
+      resolve: vi.fn(async () => new Response("kit", { status: 200 })),
+    });
+    const kitResponse = await dispatchHookRequest(kit, dKit);
+    expect(dKit.resolve).toHaveBeenCalledOnce();
+    expect(dKit.honoFetch).not.toHaveBeenCalled();
+    expect(await kitResponse.text()).toBe("kit");
+  });
+
+  it("keeps the query string on a Kit-owned dispatch without changing the owner", async () => {
+    // Kills the path+search mutant: the query must not enter the decision.
+    const event = trustedEvent("/events/past?page=2");
+    const d = deps({
+      manifest: KIT_MANIFEST,
+      resolve: vi.fn(async () => new Response("kit", { status: 200 })),
+    });
+
+    const response = await dispatchHookRequest(event, d);
+    expect(d.resolve).toHaveBeenCalledOnce();
+    expect(d.honoFetch).not.toHaveBeenCalled();
+    expect(event.request.url).toContain("?page=2");
+    expect(await response.text()).toBe("kit");
+  });
+
+  it("answers an untrusted URL host via Hono with the body unread, even with a trusted Host header", async () => {
+    // Pins the event.url.host half of the trust guard: the manifest below
+    // makes POST Kit-owned, so dropping event.url.host from the check would
+    // send this request to resolve instead of Hono.
+    const KIT_POST_MANIFEST = [
+      { method: "GET", path: "/events/past", enabled: true },
+      { method: "POST", path: "/events/past", enabled: true },
+    ];
+    const body = JSON.stringify({ title: "Seed swap" });
+    const request = new Request("https://evil.example/events/past", {
+      method: "POST",
+      headers: {
+        host: "example.com",
+        cookie: "session=abc",
+        "content-type": "application/json",
+      },
+      body,
+    });
+    const event = { request, url: new URL(request.url), route: { id: "/events/past" } };
+    let usedAtHandoff = null;
+    const d = deps({
+      manifest: KIT_POST_MANIFEST,
+      honoFetch: vi.fn(async (req) => {
+        usedAtHandoff = req.bodyUsed;
+        expect(req.method).toBe("POST");
+        expect(req.headers.get("cookie")).toBe("session=abc");
+        expect(await req.json()).toMatchObject({ title: "Seed swap" });
+        return new Response("hono-untrusted", { status: 200 });
+      }),
+    });
+    expect(request.bodyUsed).toBe(false);
+
+    const response = await dispatchHookRequest(event, d);
+    expect(d.honoFetch).toHaveBeenCalledOnce();
+    expect(d.honoFetch.mock.calls[0][0]).toBe(event.request);
+    expect(usedAtHandoff).toBe(false);
+    expect(d.resolve).not.toHaveBeenCalled();
+    expect(await response.text()).toBe("hono-untrusted");
+  });
+
+  it("answers an untrusted URL host via Hono even for a Kit-owned GET", async () => {
+    // GET variant of the URL-host pin: no body involved, purely the trust
+    // guard. Header-only checking would resolve this in Kit.
+    const request = new Request("https://evil.example/events/past", {
+      headers: { host: "example.com" },
+    });
+    const event = { request, url: new URL(request.url), route: { id: "/events/past" } };
+    const d = deps({ manifest: KIT_MANIFEST });
+
+    const response = await dispatchHookRequest(event, d);
+    expect(d.honoFetch).toHaveBeenCalledOnce();
+    expect(d.honoFetch.mock.calls[0][0]).toBe(event.request);
+    expect(d.resolve).not.toHaveBeenCalled();
+    expect(await response.text()).toBe("hono");
+  });
+
   it("decorates a Kit-owned HTML page: marker, security headers, charset, robots tag", async () => {
     const event = trustedEvent("/events/past");
     const d = deps({

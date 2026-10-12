@@ -237,10 +237,11 @@ export async function dispatchHookRequest(
   if (!isTrustedHost(deps.appUrl, [event.request.headers.get("host"), event.url.host])) {
     return deps.honoFetch(event.request);
   }
-  const owner = resolveRouteOwner(
-    { method: event.request.method, path: new URL(event.request.url).pathname },
-    deps.manifest ?? ROUTE_MANIFEST,
-  );
+  // Single Request-to-decision path: decideOwner is the production call, so
+  // its method/path/query/decode coverage guards the dispatch too. Inlining
+  // resolveRouteOwner here once left mutants (hard-coded GET, hard-coded
+  // path, path+search) green against 32 dispatch tests.
+  const owner = decideOwner(event.request, deps.manifest ?? ROUTE_MANIFEST);
   if (owner === "hono") {
     return deps.honoFetch(event.request);
   }
