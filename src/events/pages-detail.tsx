@@ -1,14 +1,14 @@
 // Event detail screen: hero, RSVP, share, attendees, discovery.
 import type { FC } from "hono/jsx";
 import { canonicalUrl } from "../seo";
-import { renderGoingCount } from "../islands/contracts";
+import { isValidZone, renderGoingCount } from "../islands/contracts";
 import type { Session } from "../env";
 import { JoinResultBanner } from "../pages";
 import type { JoinResult } from "../return-journey";
 import { googleCalendarUrl } from "./feeds";
 import type { EventAttendee, EventLink, EventNeighbors, PublicEvent, ViewerRsvp } from "./reads";
 import { RsvpButton } from "./rsvp-button";
-import { EventDetailShell, fmt } from "./pages-shared";
+import { EventDetailShell } from "./pages-shared";
 
 const fmtWithOffset = (d: Date, tz: string): string => {
   try {
@@ -94,7 +94,10 @@ export const EventPage: FC<{
         <div>
           <dt>When</dt>
           <dd>
-            <time datetime={e.startsAt.toISOString()}>{fmt(e.startsAt, e.timezone)}</time>
+            <time datetime={e.startsAt.toISOString()}>
+              {fmtWithOffset(e.startsAt, e.timezone)} (
+              {isValidZone(e.timezone) ? e.timezone : "UTC"})
+            </time>
           </dd>
         </div>
         {e.location ? (

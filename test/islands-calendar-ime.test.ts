@@ -5,6 +5,7 @@ import { readFileSync } from "node:fs";
 import { runInNewContext } from "node:vm";
 import { URL as NodeURL } from "node:url";
 import { describe, expect, it } from "vitest";
+import { EVENTS_CALENDAR_READ_DEADLINE_MS } from "../src/islands/contracts-calendar";
 
 const APP_URL = "https://next.example.test";
 const binder = readFileSync(
@@ -74,14 +75,14 @@ function browser() {
   const history: string[] = [];
   const location = { href: `${APP_URL}/events`, origin: APP_URL, assign: () => {} };
   const requests: { url: string; init: RequestInit }[] = [];
-  const timers = new Map<number, { at: number; fn: () => void }>();
+  const timers = new Map<number, { at: number; delay: number; fn: () => void }>();
   let now = 0;
   let next = 0;
   runInNewContext(binder, {
     URL,
     AbortController,
     setTimeout: (fn: () => void, ms: number) => {
-      timers.set(++next, { at: now + ms, fn });
+      timers.set(++next, { at: now + ms, delay: ms, fn });
       return next;
     },
     clearTimeout: (id: number) => {
@@ -123,7 +124,10 @@ function browser() {
           t.fn();
         }
     },
-    pending: () => timers.size,
+    // Pending debounces only: an in-flight read keeps its owned deadline,
+    // which a short clock advance must not expire.
+    pending: () =>
+      [...timers.values()].filter((t) => t.delay < EVENTS_CALENDAR_READ_DEADLINE_MS).length,
     compositionstart: () => fire("compositionstart"),
     compositionend: () => fire("compositionend"),
     inputEvent: (isComposing = false) => fire("input", { isComposing }),

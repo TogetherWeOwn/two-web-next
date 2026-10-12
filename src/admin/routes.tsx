@@ -472,6 +472,21 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
         } catch (err) {
           if (err instanceof NotFoundError) return errorPage(c, 404, "Event not found");
           if (err instanceof ValidationError) {
+            // A blank location blocks publishing: re-render the edit form so the
+            // no-JS moderator sees the error next to the location control and can
+            // fix it, rather than an error page with nowhere to correct it.
+            if (err.fields.location) {
+              const key = c.req.param("key");
+              const row = await getEvent(db, key);
+              if (!row) return errorPage(c, 404, "Event not found");
+              return formError(
+                c,
+                err,
+                (errors, v) =>
+                  c.html(<EventFormPage mode="edit" row={row} values={v} errors={errors} />),
+                eventValues(row),
+              );
+            }
             return errorPage(
               c,
               422,

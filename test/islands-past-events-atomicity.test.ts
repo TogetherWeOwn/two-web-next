@@ -96,6 +96,8 @@ function browser() {
     resolve: (value: Response) => void;
     reject: (error: Error) => void;
   }[] = [];
+  const timers: { id: number; callback: () => void; ms: number }[] = [];
+  let timerSeq = 0;
   const location = {
     origin: ORIGIN,
     href: ORIGIN + "/events/past",
@@ -104,22 +106,56 @@ function browser() {
   let click: (event: unknown) => void = () => {};
   let popstate: () => void = () => {};
   let onImport: (node: Node) => void = () => {};
+  // Focus-aware fixture: the activating pager link lives inside the pager zone
+  // (like the real template), a stable outside control survives swaps, and
+  // detaching the focused node falls back to body without firing focusin.
+  const body = new Node("body");
+  const outside = new Node("stable-outside");
+  let activeElement: Node = body;
+  const focusListeners = new Set<(event: { target: Node }) => void>();
+  function focusNode(node: Node) {
+    if (activeElement === node) return;
+    activeElement = node;
+    focusListeners.forEach((fn) => fn({ target: node }));
+  }
+  body.focus = () => focusNode(body);
+  outside.focus = () => {
+    outside.focused = true;
+    focusNode(outside);
+  };
   Object.assign(live.root, {
     addEventListener: (_type: string, listener: typeof click) => {
       click = listener;
     },
   });
   live.zones.forEach((zone) => {
+    const previous = zone.childNodes.slice();
     zone.replaceChildren = (...children) => {
       operations.push("replace");
+      if (
+        previous.some((child) => child.contains(activeElement)) ||
+        zone.childNodes.some((child) => child.contains(activeElement))
+      ) {
+        activeElement = body;
+      }
       zone.childNodes = children;
     };
   });
   live.heading.focus = () => {
     operations.push("focus");
     live.heading.focused = true;
+    focusNode(live.heading);
   };
+  // Note: Object.assign would invoke the getter once and store a stale value,
+  // so activeElement is defined as a live getter after the plain assignments.
   const document = Object.assign(live.document, {
+    body,
+    addEventListener: (type: string, fn: (event: { target: Node }) => void) => {
+      if (type === "focusin") focusListeners.add(fn);
+    },
+    removeEventListener: (type: string, fn: (event: { target: Node }) => void) => {
+      if (type === "focusin") focusListeners.delete(fn);
+    },
     importNode: (node: Node, deep: boolean) => {
       operations.push("import");
       expect(deep).toBe(true);
@@ -127,8 +163,23 @@ function browser() {
       return new Node(node.label);
     },
   });
+  Object.defineProperty(document, "activeElement", {
+    get() {
+      return activeElement;
+    },
+    configurable: true,
+  });
   runInNewContext(binder, {
     URL,
+    setTimeout: (callback: () => void, ms: number) => {
+      const id = ++timerSeq;
+      timers.push({ id, callback, ms });
+      return id;
+    },
+    clearTimeout: (id: number) => {
+      const at = timers.findIndex((timer) => timer.id === id);
+      if (at >= 0) timers.splice(at, 1);
+    },
     AbortController: class extends AbortController {
       constructor() {
         super();
@@ -168,16 +219,20 @@ function browser() {
         requests.push({ signal: init.signal, resolve, reject });
       }),
   });
-  function turn(page = 2) {
-    const link = Object.assign(new Node("link"), {
+  function turn(page = 2, keyboard = true) {
+    const link = Object.assign(new Node(`activating-link-${page}-${requests.length}`), {
       href: `${ORIGIN}/events/past?page=${page}`,
       target: "",
       hasAttribute: () => false,
     });
-    live.root.childNodes.push(link);
+    link.focus = () => focusNode(link);
+    // The real pager link lives inside the pager zone, so committing detaches it.
+    live.zones[2]!.childNodes.push(link);
+    if (keyboard) link.focus();
     click({
       defaultPrevented: false,
       button: 0,
+      detail: keyboard ? 0 : 1,
       target: { closest: () => link },
       preventDefault: () => {},
     });
@@ -190,7 +245,14 @@ function browser() {
   }
   function snapshot() {
     return {
-      zones: live.zones.map((zone) => ({ children: zone.childNodes.slice(), hidden: zone.hidden })),
+      zones: live.zones.map((zone) => ({
+        // Activating pager links are test chrome inside the pager zone, not
+        // committed content: exclude them so pre-turn snapshots compare clean.
+        children: zone.childNodes
+          .filter((child) => !child.label.startsWith("activating-link-"))
+          .slice(),
+        hidden: zone.hidden,
+      })),
       dataset: { ...live.root.dataset },
       canonical: live.canonical.href,
       og: live.og.content,
@@ -206,11 +268,19 @@ function browser() {
     operations,
     requests,
     controllers,
+    timers,
     location,
+    outside,
+    body,
+    focused: () => activeElement,
+    focusListeners,
     turn,
     finish,
     settle,
     snapshot,
+    fireTimers: () => {
+      timers.splice(0).forEach((timer) => timer.callback());
+    },
     popstate: () => popstate(),
     importWith: (callback: typeof onImport) => {
       onImport = callback;
@@ -221,7 +291,9 @@ function browser() {
 function rejected(b: ReturnType<typeof browser>, snapshot: ReturnType<typeof b.snapshot>) {
   expect(b.snapshot()).toEqual(snapshot);
   b.live.zones.forEach((zone, i) =>
-    zone.childNodes.forEach((node, j) => expect(node).toBe(snapshot.zones[i]!.children[j])),
+    zone.childNodes
+      .filter((child) => !child.label.startsWith("activating-link-"))
+      .forEach((node, j) => expect(node).toBe(snapshot.zones[i]!.children[j])),
   );
   expect(b.live.feedback.textContent).toBe(PAST_EVENTS_COPY.failed);
   expect(b.live.root.attributes.has("aria-busy")).toBe(false);
@@ -409,6 +481,101 @@ describe("PastEvents complete-snapshot admission", () => {
     expect(b.live.heading.focused).toBe(true);
   });
 
+  it("keeps heading focus for an uninterrupted keyboard page turn", async () => {
+    const b = browser();
+    b.turn(2, true);
+    b.finish();
+    await b.settle();
+    expect(b.snapshot()).toMatchObject({ dataset: { page: "2", totalPages: "4" } });
+    expect(b.history).toEqual(["/events/past?page=2"]);
+    expect(b.live.heading.focused).toBe(true);
+    expect(b.focused()).toBe(b.live.heading);
+    expect(b.operations).toContain("focus");
+  });
+
+  it("preserves deliberate focus on a stable outside control while committing the page", async () => {
+    const b = browser();
+    b.turn();
+    b.outside.focus();
+    b.finish();
+    await b.settle();
+    // The valid page still commits: zones, metadata, history.
+    expect(b.snapshot()).toMatchObject({ dataset: { page: "2", totalPages: "4" } });
+    expect(b.history).toEqual(["/events/past?page=2"]);
+    expect(b.live.feedback.textContent).toBe("");
+    // But focus stays where the member deliberately put it.
+    expect(b.live.heading.focused).toBe(false);
+    expect(b.operations).not.toContain("focus");
+    expect(b.focused()).toBe(b.outside);
+  });
+
+  it("does not mistake a move-away-and-back for an uninterrupted turn", async () => {
+    const b = browser();
+    // Pointer activation leaves focus on the stable outside control.
+    b.outside.focus();
+    b.turn(2, false);
+    // Deliberate movement away and back: an equality-only check would see the
+    // same element and steal focus, but explicit ownership remembers the move.
+    b.body.focus();
+    b.outside.focus();
+    b.finish();
+    await b.settle();
+    expect(b.snapshot()).toMatchObject({ dataset: { page: "2", totalPages: "4" } });
+    expect(b.history).toEqual(["/events/past?page=2"]);
+    expect(b.live.heading.focused).toBe(false);
+    expect(b.operations).not.toContain("focus");
+    expect(b.focused()).toBe(b.outside);
+  });
+
+  it("falls back to the heading when deliberate focus lands inside a replaced zone", async () => {
+    const b = browser();
+    b.turn();
+    // Focus moves to the activating link's sibling... then back to the link
+    // itself, which the commit detaches: focus must land on the heading rather
+    // than a detached node or body.
+    b.outside.focus();
+    const link = b.live.zones[2]!.childNodes.find((child) =>
+      child.label.startsWith("activating-link-"),
+    )!;
+    link.focus();
+    b.finish();
+    await b.settle();
+    expect(b.snapshot()).toMatchObject({ dataset: { page: "2", totalPages: "4" } });
+    expect(b.live.heading.focused).toBe(true);
+    expect(b.focused()).toBe(b.live.heading);
+  });
+
+  it("lets only the latest read own focus, ignoring a late aborted success", async () => {
+    const b = browser();
+    b.turn();
+    b.turn();
+    expect(b.requests[0]!.signal.aborted).toBe(true);
+    b.finish(1);
+    await b.settle();
+    expect(b.live.heading.focused).toBe(true);
+    expect(b.focused()).toBe(b.live.heading);
+    const operations = b.operations.slice();
+    b.finish(0);
+    await b.settle();
+    expect(b.operations).toEqual(operations);
+    expect(b.focused()).toBe(b.live.heading);
+  });
+
+  it("preserves deliberate focus on failure without moving to the heading", async () => {
+    const b = browser();
+    b.turn();
+    b.outside.focus();
+    const snapshot = b.snapshot();
+    b.requests[0]!.reject(new Error("offline"));
+    await b.settle();
+    expect(b.snapshot()).toEqual(snapshot);
+    expect(b.live.feedback.textContent).toBe(PAST_EVENTS_COPY.failed);
+    expect(b.live.heading.focused).toBe(false);
+    expect(b.operations).not.toContain("focus");
+    expect(b.operations).not.toContain("replace");
+    expect(b.focused()).toBe(b.outside);
+  });
+
   it("allows empty/out-of-range SSR states with zero total pages", async () => {
     const b = browser();
     b.incoming.root.dataset.totalPages = "0";
@@ -504,5 +671,150 @@ describe("PastEvents complete-snapshot admission", () => {
     await b.settle();
     rejected(b, snapshot);
     expect(b.reloads).toEqual([`${ORIGIN}/events/past`]);
+  });
+});
+
+describe("PastEvents archive read deadline", () => {
+  it("arms an owned read deadline of at most 10 seconds per page turn", async () => {
+    const b = browser();
+    b.turn();
+    expect(b.timers).toHaveLength(1);
+    expect(b.timers[0]!.ms).toBeGreaterThan(0);
+    expect(b.timers[0]!.ms).toBeLessThanOrEqual(10000);
+  });
+
+  it("releases a hung-headers read with the last-good snapshot intact and ignores its late arrival", async () => {
+    const b = browser();
+    b.turn();
+    const snapshot = b.snapshot();
+    b.fireTimers();
+    await b.settle();
+    expect(b.requests[0]!.signal.aborted).toBe(true);
+    expect(b.snapshot()).toEqual(snapshot);
+    expect(b.live.feedback.textContent).toBe(PAST_EVENTS_COPY.failed);
+    expect(b.live.root.attributes.has("aria-busy")).toBe(false);
+    expect(b.history).toEqual([]);
+    expect(b.reloads).toEqual([]);
+    expect(b.requests).toHaveLength(1);
+    expect(b.operations).not.toContain("parse");
+    b.finish();
+    await b.settle();
+    expect(b.snapshot()).toEqual(snapshot);
+    expect(b.live.feedback.textContent).toBe(PAST_EVENTS_COPY.failed);
+    expect(b.live.root.attributes.has("aria-busy")).toBe(false);
+    expect(b.history).toEqual([]);
+  });
+
+  it("releases a hung body after headers settle without committing its late arrival", async () => {
+    const b = browser();
+    let resolveBody: (value: string) => void = () => {};
+    b.turn();
+    b.requests[0]!.resolve({
+      ok: true,
+      text: () =>
+        new Promise<string>((resolve) => {
+          resolveBody = resolve;
+        }),
+    });
+    await b.settle();
+    const snapshot = b.snapshot();
+    expect(b.live.root.attributes.get("aria-busy")).toBe("true");
+    b.fireTimers();
+    await b.settle();
+    expect(b.requests[0]!.signal.aborted).toBe(true);
+    expect(b.snapshot()).toEqual(snapshot);
+    expect(b.live.feedback.textContent).toBe(PAST_EVENTS_COPY.failed);
+    expect(b.live.root.attributes.has("aria-busy")).toBe(false);
+    expect(b.history).toEqual([]);
+    resolveBody("late fixture");
+    await b.settle();
+    expect(b.snapshot()).toEqual(snapshot);
+    expect(b.operations).not.toContain("replace");
+    expect(b.history).toEqual([]);
+    expect(b.live.feedback.textContent).toBe(PAST_EVENTS_COPY.failed);
+  });
+
+  it("admits a timely read and disarms its deadline", async () => {
+    const b = browser();
+    b.turn();
+    b.finish();
+    await b.settle();
+    expect(b.history).toEqual(["/events/past?page=2"]);
+    expect(b.timers).toHaveLength(0);
+    const snapshot = b.snapshot();
+    b.fireTimers();
+    await b.settle();
+    expect(b.snapshot()).toEqual(snapshot);
+    expect(b.live.feedback.textContent).toBe("");
+  });
+
+  it("a superseding turn disarms the previous deadline", async () => {
+    const b = browser();
+    b.turn();
+    expect(b.timers).toHaveLength(1);
+    b.turn();
+    expect(b.requests[0]!.signal.aborted).toBe(true);
+    expect(b.timers).toHaveLength(1);
+    expect(b.live.root.attributes.get("aria-busy")).toBe("true");
+    expect(b.live.feedback.textContent).toBe("Loading past events…");
+    b.finish(1);
+    await b.settle();
+    expect(b.history).toEqual(["/events/past?page=2"]);
+    expect(b.timers).toHaveLength(0);
+  });
+
+  it("an obsolete timer cannot clear a newer read", async () => {
+    const b = browser();
+    b.turn();
+    const stale = b.timers.slice();
+    b.turn();
+    const snapshot = b.snapshot();
+    stale[0]!.callback();
+    await b.settle();
+    expect(b.snapshot()).toEqual(snapshot);
+    expect(b.live.root.attributes.get("aria-busy")).toBe("true");
+    expect(b.live.feedback.textContent).toBe("Loading past events…");
+    b.finish(1);
+    await b.settle();
+    expect(b.history).toEqual(["/events/past?page=2"]);
+  });
+
+  it("a timed-out click stays inline while a timed-out Back/forward read reloads SSR", async () => {
+    const click = browser();
+    click.turn();
+    const clickSnapshot = click.snapshot();
+    click.fireTimers();
+    await click.settle();
+    expect(click.snapshot()).toEqual(clickSnapshot);
+    expect(click.history).toEqual([]);
+    expect(click.reloads).toEqual([]);
+    expect(click.live.feedback.textContent).toBe(PAST_EVENTS_COPY.failed);
+    expect(click.live.root.attributes.has("aria-busy")).toBe(false);
+
+    const back = browser();
+    back.location.href = `${ORIGIN}/events/past?page=2`;
+    back.popstate();
+    back.fireTimers();
+    await back.settle();
+    expect(back.history).toEqual([]);
+    expect(back.reloads).toEqual([`${ORIGIN}/events/past?page=2`]);
+    expect(back.live.feedback.textContent).toBe(PAST_EVENTS_COPY.failed);
+    expect(back.live.root.attributes.has("aria-busy")).toBe(false);
+  });
+
+  it("a timed-out page turn stays inline after a skip link instead of reloading", async () => {
+    const b = browser();
+    b.location.href = `${ORIGIN}/events/past#main`;
+    b.popstate();
+    expect(b.requests).toHaveLength(0);
+    b.turn();
+    const snapshot = b.snapshot();
+    b.fireTimers();
+    await b.settle();
+    expect(b.snapshot()).toEqual(snapshot);
+    expect(b.history).toEqual([]);
+    expect(b.reloads).toEqual([]);
+    expect(b.live.feedback.textContent).toBe(PAST_EVENTS_COPY.failed);
+    expect(b.live.root.attributes.has("aria-busy")).toBe(false);
   });
 });

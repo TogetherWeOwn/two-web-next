@@ -71,7 +71,8 @@ describe("funnel leaves (DB-free floor)", () => {
     expect(html).toContain("Frequently asked questions");
     expect(html).toContain('data-testid="faq-list"');
     expect(html).toContain('data-testid="faq-join"');
-    expect(html).toContain("Sunday Squad");
+    expect(html).not.toContain("Sunday Squad");
+    expect(html).toContain("Game nights are scheduled in Discord");
   });
 
   it("/rules carries the five rules and hides the stamp when unconfigured", async () => {

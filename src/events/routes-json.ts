@@ -1,11 +1,11 @@
 // JSON/ETag event routes: GET /events.json. Split out of
-// src/events/routes.tsx; behavior unchanged.
+// src/events/routes.tsx; publishes the same bounded projection to every session.
 import { dbFor } from "../admin/db";
 import { eventKeyAllowed } from "./keys";
 import { JSON_DEFAULT_LIMIT, JSON_MAX_LIMIT, listJson } from "./reads";
-import { waitlistPositions } from "./waitlist";
+import type { PublicEventCollectionDto } from "../public-data/contracts";
 import {
-  eventJson,
+  publicEventJson,
   jsonResponse,
   jsonSession,
   type App,
@@ -35,19 +35,10 @@ export function registerJsonRoutes(app: App, readFragmentSession: SessionReader)
     } = await listJson(db, {
       limit,
       offset: (page - 1) * limit,
-      includeDrafts: session.moderator,
       eventKey,
     });
-    const positions = await waitlistPositions(
-      db,
-      rows.map((row) => row.id),
-      session.id,
-    );
-    const data = rows.map((row) => ({
-      ...eventJson(row),
-      waitlist_position: positions.get(row.id) ?? null,
-    }));
-    return jsonResponse(c, {
+    const data = rows.map(publicEventJson);
+    const response: PublicEventCollectionDto = {
       data,
       page: clamped,
       limit,
@@ -57,6 +48,7 @@ export function registerJsonRoutes(app: App, readFragmentSession: SessionReader)
         total,
         last_page: Math.max(1, Math.ceil(total / limit)),
       },
-    });
+    };
+    return jsonResponse(c, response);
   });
 }

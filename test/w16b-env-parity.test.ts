@@ -195,7 +195,7 @@ describe("row 18: CSP deltas from legacy, each pinned with its reason", () => {
   it("keeps frame-ancestors none and the report sink", async () => {
     const csp = directives(await app.request("/", {}, staging));
     expect(csp["frame-ancestors"]).toBe("'none'");
-    expect(csp["report-uri"]).toBe("/csp-reports");
+    expect(csp["report-uri"]).toBeUndefined();
     expect(csp["report-to"]).toBe("csp-endpoint");
   });
 

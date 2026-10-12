@@ -209,6 +209,18 @@ export async function execute(
       ek,
     );
   const next = op === "publish" ? "published" : "cancelled";
+  // Publishing needs a non-blank location (bot upsert contract): drafts may
+  // stay blank, and a moderator can clear an agent-owned draft's location, so
+  // judge the stored row here under the lock, mirroring transitionEvent.
+  if (op === "publish" && String(event.location ?? "").trim() === "") {
+    return denyOutcome(
+      422,
+      "validation_failed",
+      "The event fields did not validate.",
+      { errors: { location: ["Add a location before publishing."] } },
+      ek,
+    );
+  }
   await tx`UPDATE events SET status = ${next}, updated_at = now() WHERE event_key = ${ek}`;
   return done(200, { event_key: ek, status: next }, ek, writeBackFor(ek, next));
 }

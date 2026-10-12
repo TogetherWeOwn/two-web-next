@@ -1,7 +1,8 @@
 import { getTableColumns } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/pg-proxy";
 import { serializeSigned } from "hono/utils/cookie";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { __resetAlertRateLimitForTests } from "../src/alerts";
 import app from "./app";
 import { events } from "../src/db/admin-schema";
 import type { Db } from "../src/db/index";
@@ -14,7 +15,7 @@ const PATH = `/e/${KEY}`;
 const SECRET = "test-session-secret-at-least-32-bytes-long";
 
 // Real Drizzle queries and Hono/session rendering; all data is local, no DB connection.
-function fixture(over: Partial<typeof events.$inferSelect> = {}) {
+function fixture(over: Partial<typeof events.$inferSelect> = {}, queryError?: Error) {
   const start = new Date("2030-01-10T20:00:00Z");
   const row: typeof events.$inferSelect = {
     id: 1,
@@ -52,6 +53,7 @@ function fixture(over: Partial<typeof events.$inferSelect> = {}) {
   const queries: string[] = [];
   const db = drizzle(async (sql) => {
     queries.push(sql);
+    if (queryError && sql.includes('"event_key" =')) throw queryError;
     if (sql.includes('from "rsvps"') && sql.includes('inner join "users"')) return { rows: [] };
     // The going-count aggregate reads two positional columns; the viewer
     // answer read selects its own row and is empty in this fixture.
@@ -114,6 +116,10 @@ const esc = (s: string) =>
     .replace(/'/g, "&#39;");
 
 describe("Event page parity (fixture-only)", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    __resetAlertRateLimitForTests();
+  });
   it("renders published venue, guest pitch, calendar and canonical copy link without inline JS", async () => {
     const response = await fixture().request(undefined, `${PATH}?from=discord`);
     const html = await response.text();
@@ -144,6 +150,26 @@ describe("Event page parity (fixture-only)", () => {
       ),
     ).toBe(true);
     expect(html).not.toMatch(/\son(?:click|keydown)=/);
+  });
+
+  it("alerts once when the buffered public event read throws and preserves its 503", async () => {
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    const source = fixture({}, new TypeError("private event query failure"));
+    const response = await source.request(undefined, PATH);
+    expect(response.status).toBe(503);
+    expect(await response.text()).toBe("Member data is temporarily unavailable.");
+    const alerts = error.mock.calls
+      .map(([line]) => (typeof line === "string" && line.startsWith("{") ? JSON.parse(line) : null))
+      .filter((line) => line?.event === "error.alert");
+    expect(alerts).toHaveLength(1);
+    expect(alerts[0]).toMatchObject({
+      event: "error.alert",
+      exception: "DrizzleQueryError",
+      method: "GET",
+      route: "/e/:key",
+      request_id: response.headers.get("x-request-id"),
+    });
+    expect(JSON.stringify(error.mock.calls)).not.toContain("private event query failure");
   });
 
   it("hides guest pitch from a member without share-caching their session-dependent HTML", async () => {
@@ -240,5 +266,87 @@ describe("Event page parity (fixture-only)", () => {
     expect(html).not.toContain('data-testid="event-venue"');
     expect(html).toContain('property="og:description" content="An event at Together We Own."');
     expect(html).toContain('name="twitter:description" content="An event at Together We Own."');
+  });
+
+  it.each([
+    [
+      "UTC",
+      "2030-01-10T20:00:00.000Z",
+      "UTC",
+      "Thursday, 10 January 2030 at 20:00 GMT+00:00 (UTC)",
+    ],
+    [
+      "London summer",
+      "2026-07-15T19:00:00.000Z",
+      "Europe/London",
+      "Wednesday, 15 July 2026 at 20:00 GMT+01:00 (Europe/London)",
+    ],
+    [
+      "London winter",
+      "2026-01-15T20:00:00.000Z",
+      "Europe/London",
+      "Thursday, 15 January 2026 at 20:00 GMT+00:00 (Europe/London)",
+    ],
+    [
+      "fold first (BST)",
+      "2026-10-25T00:30:00.000Z",
+      "Europe/London",
+      "Sunday, 25 October 2026 at 01:30 GMT+01:00 (Europe/London)",
+    ],
+    [
+      "fold second (GMT)",
+      "2026-10-25T01:30:00.000Z",
+      "Europe/London",
+      "Sunday, 25 October 2026 at 01:30 GMT+00:00 (Europe/London)",
+    ],
+  ])(
+    "identifies the host clock and offset on the When line: %s",
+    async (_, iso, timezone, visible) => {
+      const start = new Date(iso);
+      const html = await (
+        await fixture({
+          timezone,
+          startsAt: start,
+          endsAt: new Date(start.getTime() + 7200_000),
+        }).request()
+      ).text();
+      // Machine instant is untouched; human text names the host zone + offset.
+      expect(html).toContain(`<time datetime="${iso}">${visible}</time>`);
+    },
+  );
+
+  it("labels an invalid stored zone as UTC instead of printing the bad name", async () => {
+    const start = new Date("2030-01-10T20:00:00.000Z");
+    const html = await (
+      await fixture({
+        timezone: "Invalid/Zone",
+        startsAt: start,
+        endsAt: new Date(start.getTime() + 7200_000),
+      }).request()
+    ).text();
+    expect(html).toContain(
+      `<time datetime="2030-01-10T20:00:00.000Z">2030-01-10T20:00:00.000Z (UTC)</time>`,
+    );
+    expect(html).not.toContain("(Invalid/Zone)");
+  });
+
+  it("shows the same host clock to members without changing links", async () => {
+    const source = fixture({ timezone: "Europe/London" });
+    const guest = await (await source.request()).text();
+    const member = await (await source.request(await source.cookie())).text();
+    const when = (html: string) =>
+      html.match(/<dd>\s*<time datetime="([^"]+)">([^<]*)<\/time>\s*<\/dd>/);
+    const guestWhen = when(guest);
+    const memberWhen = when(member);
+    expect(guestWhen, "guest When line renders").not.toBeNull();
+    expect(memberWhen, "member When line renders").not.toBeNull();
+    expect(guestWhen![1]).toBe(memberWhen![1]);
+    expect(guestWhen![2]).toBe(memberWhen![2]);
+    expect(guestWhen![2]).toContain("(Europe/London)");
+    for (const html of [guest, member]) {
+      expect(html).toContain('data-testid="event-ics"');
+      expect(html).toContain('data-testid="event-google-calendar"');
+      expect(html).toContain('data-testid="event-copy-link"');
+    }
   });
 });

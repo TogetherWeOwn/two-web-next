@@ -3,9 +3,11 @@ import { runInNewContext } from "node:vm";
 import { jsx } from "hono/jsx";
 import { describe, expect, it, vi } from "vitest";
 import {
+  PROFILE_COPY,
   PROFILE_EMPTY_COPY,
   PROFILE_NEW_MEMBER_CTA_TESTID,
   PROFILE_NEW_MEMBER_TESTID,
+  PROFILE_PENDING_TESTID,
 } from "../src/islands/contracts";
 import { ProfilePage } from "../src/profiles/pages";
 
@@ -73,6 +75,9 @@ class Element {
   getAttribute(key: string) {
     return this.attributes[key] ?? null;
   }
+  removeAttribute(key: string) {
+    delete this.attributes[key];
+  }
   appendChild(child: Element) {
     child.parentNode = this;
     this.children.push(child);
@@ -81,6 +86,15 @@ class Element {
   insertBefore(child: Element, before: Element) {
     child.parentNode = this;
     this.children.splice(this.children.indexOf(before), 0, child);
+  }
+  after(node: Element) {
+    const parent = this.parentNode!;
+    node.parentNode = parent;
+    parent.children.splice(parent.children.indexOf(this) + 1, 0, node);
+  }
+  scrolls: unknown[] = [];
+  scrollIntoView(options: unknown) {
+    this.scrolls.push(options);
   }
   remove() {
     if (this.parentNode) this.parentNode.children.splice(this.parentNode.children.indexOf(this), 1);
@@ -276,6 +290,59 @@ describe("shipped member-profile edit lifecycle", () => {
     expect(f.departure().defaultPrevented).toBe(true);
   });
 
+  it("does not warn after the member moves on during a save that normalised untouched fields", async () => {
+    const f = fixture();
+    f.enter({ bio: "Saved bio ", games_text: "Go\nChess\n" });
+    f.form.dispatch("submit");
+    f.form.elements.timezone!.focus();
+    f.form.dispatch("focusin");
+    f.requests[0]!.resolve(success());
+    await flush();
+    expect(f.form.elements.bio!.value).toBe("Saved bio");
+    expect(f.form.elements.games_text!.value).toBe("Go\nChess");
+    expect(f.document.activeElement).toBe(f.form.elements.timezone);
+    expect(f.departure().defaultPrevented).toBe(false);
+  });
+
+  it("keeps the focused field's raw text and caret, and does not warn about its normalised saved text", async () => {
+    const f = fixture();
+    f.enter({ bio: "Saved bio " });
+    f.form.elements.bio!.focus();
+    f.form.dispatch("submit");
+    f.form.dispatch("pointerdown");
+    f.requests[0]!.resolve(success());
+    await flush();
+    expect(f.form.elements.bio!.value).toBe("Saved bio ");
+    expect(f.form.elements.bio!.defaultValue).toBe("Saved bio");
+    expect(f.document.activeElement).toBe(f.form.elements.bio);
+    expect(f.departure().defaultPrevented).toBe(false);
+  });
+
+  it("still warns about a draft typed during the save and normalises the untouched fields", async () => {
+    const f = fixture();
+    f.enter({ bio: "Saved bio ", games_text: "Go\nChess\n" });
+    f.form.dispatch("submit");
+    f.form.elements.bio!.focus();
+    f.form.dispatch("input");
+    f.enter({ bio: "Newer draft" });
+    f.requests[0]!.resolve(success());
+    await flush();
+    expect(f.form.elements.bio!.value).toBe("Newer draft");
+    expect(f.form.elements.games_text!.value).toBe("Go\nChess");
+    expect(f.departure().defaultPrevented).toBe(true);
+  });
+
+  it("settles an uninterrupted save of normalisable text with no departure warning", async () => {
+    const f = fixture();
+    f.enter({ bio: "Saved bio ", games_text: "Go\nChess\n" });
+    f.form.dispatch("submit");
+    f.requests[0]!.resolve(success());
+    await flush();
+    expect(f.form.elements.bio!.value).toBe("Saved bio");
+    expect(f.form.elements.games_text!.value).toBe("Go\nChess");
+    expect(f.departure().defaultPrevented).toBe(false);
+  });
+
   it("keeps failed drafts protected except when following recovery, then reset restores protection", async () => {
     const f = fixture();
     f.enter({ bio: "Keep this draft" });
@@ -419,6 +486,62 @@ describe("shipped member-profile edit lifecycle", () => {
     await flush();
     expect(store).toEqual(["A", "B"]);
     expect(f.bio.textContent).toBe("B");
+  });
+
+  it("marks the form busy with a polite status while a save is unsettled, then clears both", async () => {
+    const f = fixture();
+    expect(f.form.getAttribute("aria-busy")).toBeNull();
+    f.enter({ bio: "A" });
+    f.form.elements.bio!.focus();
+    f.form.dispatch("submit");
+    expect(f.form.getAttribute("aria-busy")).toBe("true");
+    const status = f.notice(PROFILE_PENDING_TESTID);
+    expect(status?.getAttribute("role")).toBe("status");
+    expect(status?.textContent).toBe(PROFILE_COPY.saving);
+    // Just after the form: next to Save, outside the busy form, and Save does not move.
+    expect(f.root.children.indexOf(status!)).toBe(f.root.children.indexOf(f.form) + 1);
+    // The first press never scrolls, so a quick second click still lands on Save.
+    expect(status?.scrolls).toEqual([]);
+    expect(f.document.activeElement).toBe(f.form.elements.bio);
+    f.requests[0]!.resolve(success());
+    await flush();
+    expect(f.form.getAttribute("aria-busy")).toBeNull();
+    expect(f.notice(PROFILE_PENDING_TESTID)).toBeNull();
+    expect(f.notice("profile-saved")).not.toBeNull();
+  });
+
+  it("tells the member the earlier save is still finishing when Save is pressed while pending", async () => {
+    const f = fixture();
+    f.enter({ bio: "A" });
+    f.form.dispatch("submit");
+    f.cancel();
+    f.enter({ bio: "B" });
+    f.form.elements.bio!.focus();
+    const event = f.form.dispatch("submit");
+    expect(event.preventDefault).toHaveBeenCalled();
+    expect(f.fetch).toHaveBeenCalledOnce();
+    const status = f.notice(PROFILE_PENDING_TESTID);
+    expect(status?.getAttribute("role")).toBe("status");
+    expect(status?.textContent).toBe(PROFILE_COPY.stillSaving);
+    expect(f.root.children.indexOf(status!)).toBe(f.root.children.indexOf(f.form) + 1);
+    // A repeat press brings the whole line into view without moving focus.
+    expect(status?.scrolls).toEqual([{ block: "nearest" }]);
+    expect(f.form.getAttribute("aria-busy")).toBe("true");
+    expect(f.document.activeElement).toBe(f.form.elements.bio);
+    expect(f.form.elements.bio!.value).toBe("B");
+    // Cancel keeps the unsettled write's busy state; only settlement clears it.
+    // The draft is gone, so the line no longer says the changes are kept.
+    f.cancel();
+    expect(f.form.getAttribute("aria-busy")).toBe("true");
+    expect(f.notice(PROFILE_PENDING_TESTID)?.textContent).toBe(PROFILE_COPY.saving);
+    f.requests[0]!.reject(new Error("offline"));
+    await flush();
+    expect(f.form.getAttribute("aria-busy")).toBeNull();
+    expect(f.notice(PROFILE_PENDING_TESTID)).toBeNull();
+    f.enter({ bio: "B" });
+    f.form.dispatch("submit");
+    expect(f.fetch).toHaveBeenCalledTimes(2);
+    expect(f.notice(PROFILE_PENDING_TESTID)?.textContent).toBe(PROFILE_COPY.saving);
   });
 
   it("ignores delayed validation JSON after cancel; newer save waits until it settles", async () => {

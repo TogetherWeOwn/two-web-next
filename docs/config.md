@@ -31,7 +31,8 @@ PRs, logs or command arguments.
   exact-SHA CI and the Hyperdrive sentinel check. By default, protection requires
   reviewers with self-review prevented; with `PRODUCTION_AUTO_APPROVE=true`, the
   gate instead requires a main-only deployment policy and successful staging
-  deploy and `e2e-staging` runs on the same SHA. Neither the checked-in template nor the workflow
+  deploy and `e2e-staging` runs on the same SHA, with an executed, passing
+  `staging-quality` job. Neither the checked-in template nor the workflow
   is permission to deploy: production deployment, DNS and database/queue
   provisioning stay separately gated until cutover authorization. There is no
   `env.staging` block. Do not infer isolation from a var's name or these labels.
@@ -85,6 +86,27 @@ an actual code fallback or a checked-in Wrangler value, not a recommended value.
 | `INTERNAL_ACTION_QUEUE` | Required Queue producer binding (`JobsEnv`) | dev: local Queue; staging/prod: provisioned Queue | Main Wrangler: `two-internal-action`; local config: `two-internal-action-local` | Declared/configured but no consumer reads this producer property in current source; both configured queue consumers share the Worker dispatch path. No application-side default. |
 | `HYPERDRIVE` | Optional Hyperdrive legacy alias (`JobsEnv`) | dev/staging/prod | Unbound in Wrangler | Jobs use this only when nonempty `DATABASE_URL` and `DB.connectionString` are both absent/empty. With no usable database source, job DB selection throws. No retry fallback after a connection error. |
 <!-- config-docs:end -->
+
+## Tail Worker inventory
+
+The Tail pager returns silently when its optional configuration is absent,
+so this marked table is machine-checked separately from the app inventory.
+Keep exactly one row for each Tail `TailEnv` key, Tail Wrangler var, Tail
+worker service name, app `tail_consumers` service and accepted app script
+name. Secret names only, never values. Named Tail environments are listed
+explicitly because Wrangler never inherits top-level vars (or
+`tail_consumers`) into a named environment.
+
+<!-- tail-config-docs:start -->
+| Name | Kind | Environments | Default | Failure behaviour |
+| --- | --- | --- | --- | --- |
+| `UPTIME_URL` | Optional public var (Tail) | tail staging/prod (top-level + `env.production`, not inherited) | Tail config staging: `https://next.togetherweown.com/up`; production: `https://togetherweown.com/up` | Unset `UPTIME_URL` makes `scheduled()` return early with no probing work at all. A missing production row silently leaves the production prober with nothing to probe. |
+| `OPS_ALERT_WEBHOOK_URL` | Optional secret (Tail; name only) | tail staging/prod (installed separately per environment) | None; install with `wrangler secret put` on the Tail Worker, never in a file | Missing/invalid webhook makes both `tail()` and `scheduled()` return early with no parsing, logging or outbound work. A missing production binding deploys successfully but pages nothing. |
+| `two-web-next-alerts` | Tail worker name / app `tail_consumers` service | tail staging | Tail config name `two-web-next-alerts`; app top-level `tail_consumers` service `two-web-next-alerts` | A missing or mismatched staging consumer detaches the Tail pager: app deploys may fail on a missing target, or staging traces never reach the pager. |
+| `two-web-next-alerts-production` | Tail worker name / app `tail_consumers` service | tail production | Tail `env.production` name `two-web-next-alerts-production`; app `env.production` `tail_consumers` service `two-web-next-alerts-production` | A missing or mismatched production consumer silently leaves production traces unpaged; `tail_consumers` are not inherited from the top level. |
+| `two-web-next` | App script name accepted by Tail (`APP_SCRIPT_NAMES`) | app staging (Tail accepts) | Tail `APP_SCRIPT_NAMES` includes `two-web-next` | Traces from an undocumented script name are ignored by `tail()`; paging for that Worker is silently disabled. Never match by prefix. |
+| `two-web-next-production` | App script name accepted by Tail (`APP_SCRIPT_NAMES`) | app production (Tail accepts) | Tail `APP_SCRIPT_NAMES` includes `two-web-next-production` | Production traces arrive under the production app name; without this exact entry production pages are silently ignored. |
+<!-- tail-config-docs:end -->
 
 ### CSP report log budget
 
@@ -172,12 +194,14 @@ These names are deliberately **not** extra rows in the marked inventory:
 - **Alerts (app Worker):** [`src/alerts.ts`](../src/alerts.ts) uses a fixed five-minute
   per-isolate rate window. There are no alert environment variables in the
   app Worker `Env`/`JobsEnv` contract. Do not invent settings from proposed work.
-- **Tail Worker settings (not machine-checked):** the separate Tail Worker
-  ([`tail/wrangler.jsonc`](../tail/wrangler.jsonc),
+- **Tail Worker settings (separately machine-checked):** the Tail pager names
+  live in the Tail Worker inventory above, not in the app table. The separate
+  Tail Worker ([`tail/wrangler.jsonc`](../tail/wrangler.jsonc),
   [`tail/worker.ts`](../tail/worker.ts)) reads public var `UPTIME_URL` and
   secret `OPS_ALERT_WEBHOOK_URL` (secret name only, never a value; install
-  with `wrangler secret put`, never in a file). They are not app
-  `Env`/`JobsEnv` keys and are not read by `ci/check-config-docs.mjs`. See
+  with `wrangler secret put`, never in a file), attaches via
+  `tail_consumers` services and accepts only the listed app script names.
+  They are not app `Env`/`JobsEnv` keys. See
   [runbook-alerts](runbook-alerts.md) for the install procedure.
 - **CI/tooling secrets:** deployment uses `CLOUDFLARE_API_TOKEN` and
   `CLOUDFLARE_ACCOUNT_ID`; backup automation additionally references
@@ -200,21 +224,29 @@ npm run config:check
 TypeScript 7 native API to resolve `Env` and `JobsEnv` properties (including
 intersections/inheritance) and parses the actual JSONC Wrangler vars/bindings
 from `wrangler.jsonc` and `wrangler.local.jsonc`, including named-environment
-overrides if added. It does not read `tail/wrangler.jsonc` (Tail Worker
-`UPTIME_URL` / `OPS_ALERT_WEBHOOK_URL`) or
-`spike/hyperdrive-semantics/wrangler.probe.jsonc`; those settings stay
-documented under "Settings outside the checked Worker contract" above.
-Binding declarations include name-based Durable Objects,
+overrides if added. It separately resolves Tail `TailEnv` keys from
+`tail/worker.ts`, Tail vars (names only) from `tail/wrangler.jsonc` top level
+and named environments without assuming inheritance, Tail worker service names
+and app `tail_consumers` services, and accepted app script names
+(`APP_SCRIPT_NAMES`) from `tail/worker.ts` against the Tail inventory above.
+It does not read `spike/hyperdrive-semantics/wrangler.probe.jsonc`; those
+settings stay documented under "Settings outside the checked Worker contract"
+above. Binding declarations include name-based Durable Objects,
 email and rate limits; nested JSON var data is not a declaration. It rejects:
 
 - Missing documentation for any required **or optional** property.
 - A marked-table key no longer present in `Env`/`JobsEnv`.
 - An actual Wrangler var/binding absent from the types or documentation.
+- A Tail `TailEnv` key, Tail Wrangler var, Tail worker name, app
+  `tail_consumers` service or accepted app script name absent from the Tail
+  inventory, an obsolete/misspelled Tail row, or an app `tail_consumers`
+  service without its Tail worker (either direction silently disables paging).
 - Duplicate rows, blank metadata, malformed/absent inventory markers or invalid
   source/config input. Mentions in prose and commented-out bindings do not count.
 
 The companion selftest covers inherited/optional/job keys, comments, nested
-fields, JSONC strings/trailing commas, scoped Wrangler keys and both directions
+fields, JSONC strings/trailing commas, scoped Wrangler keys, synthetic Tail
+aliases, top-level/named-environment Tail config and both directions
 of drift using local fixtures only. `npm run check` includes both commands, so
 CI's required `check` job executes them before Vitest. This check proves names
 and row completeness, not the semantic correctness of descriptions or live

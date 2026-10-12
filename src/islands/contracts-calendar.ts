@@ -5,6 +5,18 @@
  */
 
 export const eventPageUrl = (eventKey: string): string => `/e/${encodeURIComponent(eventKey)}`;
+export {
+  calendarZone,
+  cardDayLabel,
+  cardTimeLabel,
+  isValidZone,
+  currentCalendarMonth,
+  wallDateIso,
+  wallDayStart,
+  wallMonth,
+  wallTimeHm,
+} from "../events/date-format";
+import { cardDayLabel, wallTimeHm } from "../events/date-format";
 /* ---------------------------------------------------------- events-calendar
  * Legacy: app/Livewire/EventsCalendar.php + events-calendar.blade.php.
  * One rowset rendered twice — list + month grid — in a single SSR pass.
@@ -45,6 +57,7 @@ export const EVENTS_SEARCH_CLEAR_EMPTY_TESTID = "events-search-clear-empty";
 export const EVENTS_SEARCH_STATUS_TESTID = "events-search-status";
 export const EVENTS_SEARCH_DEBOUNCE_MS = 300;
 export const EVENTS_SEARCH_MAX_LENGTH = 255;
+export const EVENTS_SEARCH_TOO_LONG_COPY = `Search query must be ${EVENTS_SEARCH_MAX_LENGTH} characters or fewer.`;
 export const EVENTS_SEARCH_PLACEHOLDER = "Search events…";
 export const EVENTS_SEARCH_LABEL = "Search events";
 export const eventsSearchHitCopy = (query: string): string => `Results for “${query}”`;
@@ -124,6 +137,10 @@ export const EVENTS_LIST_HEADING_SR = "Upcoming events";
 /** Stable status line for fragment-fetch failures; content is preserved. */
 export const EVENTS_CAL_FEEDBACK = "data-cal-feedback";
 export const EVENTS_CALENDAR_FETCH_FAILED = "Couldn't refresh the events — try again.";
+/** Owned overall read deadline for one island fragment fetch: headers plus
+ * response-body completion, at most 10 seconds. On expiry the binder aborts
+ * the owned fetch, restores the last good zones and releases loading. */
+export const EVENTS_CALENDAR_READ_DEADLINE_MS = 10_000;
 
 /* Empty states: never / gap (with past list) / error (role=alert + Retry) /
  * search-miss. The error state means a read failed — it must never read as
@@ -211,80 +228,6 @@ export function calendarMonthLabel(month: string): string {
   }).format(calendarDate(y!, m! - 1, 1));
 }
 
-export function isValidZone(zone: string | null | undefined): boolean {
-  if (!zone) return false;
-  try {
-    new Intl.DateTimeFormat("en", { timeZone: zone });
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-function partsIn(
-  instant: Date,
-  zone: string,
-  opts: Intl.DateTimeFormatOptions,
-): Map<string, string> {
-  const z = isValidZone(zone) ? zone : "UTC";
-  const parts = new Intl.DateTimeFormat("en-US", { timeZone: z, ...opts }).formatToParts(instant);
-  return new Map(parts.filter((p) => p.type !== "literal").map((p) => [p.type, p.value]));
-}
-
-/** Canonical ISO wall date, including expanded years (invalid zones read as UTC). */
-export function wallDateIso(instant: Date, zone: string): string {
-  const p = partsIn(instant, zone, {
-    era: "short",
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  });
-  // Intl's Gregorian year is era-relative: 1 BC is astronomical year zero.
-  const year = Number(p.get("year"));
-  const isoYear = p.get("era") === "BC" ? 1 - year : year;
-  return calendarDate(isoYear, Number(p.get("month")) - 1, Number(p.get("day")))
-    .toISOString()
-    .split("T")[0]!;
-}
-
-/** "HH:mm" 24-hour wall time in `zone` (invalid zones read as UTC). */
-export function wallTimeHm(instant: Date, zone: string): string {
-  const p = partsIn(instant, zone, { hour: "2-digit", minute: "2-digit", hourCycle: "h23" });
-  return `${p.get("hour")}:${p.get("minute")}`;
-}
-
-/** ISO wall month in `zone`; unsupported years remain rejectable by the parser. */
-export function wallMonth(instant: Date, zone: string): string {
-  return wallDateIso(instant, zone).slice(0, -3);
-}
-
-/** "Fri 4 Nov, 20:00" — the card's human time in the host zone (legacy 'D j M, H:i'). */
-export function cardTimeLabel(instant: Date, zone: string): string {
-  const z = isValidZone(zone) ? zone : "UTC";
-  const p = partsIn(instant, z, { weekday: "short", day: "numeric", month: "short" });
-  return `${p.get("weekday")} ${p.get("day")} ${p.get("month")}, ${wallTimeHm(instant, z)}`;
-}
-
-/**
- * The zone the grid's "today" is evaluated in: the modal timezone of the shown
- * rows (the community's zone in practice), validated against IANA, UTC when
- * there are no rows. Legacy calendarZone(): first modal zone wins on ties,
- * an unparseable winner falls back to the app zone rather than the runner-up.
- */
-export function calendarZone(timezones: Iterable<string | null | undefined>): string {
-  const counts = new Map<string, number>();
-  for (const tz of timezones) {
-    if (tz) counts.set(tz, (counts.get(tz) ?? 0) + 1);
-  }
-  const top = [...counts.entries()].sort((a, b) => b[1] - a[1])[0];
-  return top && isValidZone(top[0]) ? top[0] : "UTC";
-}
-
-/** Bad/absent `month` falls back to this month (UTC) — a wrong month is a page, not a 500. */
-export function currentCalendarMonth(now: Date): string {
-  return wallMonth(now, "UTC");
-}
-
 export interface CalendarDay<E = unknown> {
   /** ISO date; trailing neighbours after 9999-12 use the expanded year +010000. */
   iso: string;
@@ -339,17 +282,15 @@ export function calendarGridRange(month: string): { first: string; last: string 
   return { first: days[0]!.iso, last: days.at(-1)!.iso };
 }
 
-/** Midnight-UTC instant of a wall day for range checks. Plain string order
- * breaks past year 9999 (the `+` prefix sorts before digits), so grid-range
- * comparisons go through instants. */
-export function wallDayStart(iso: string): number {
-  return new Date(`${iso}T00:00:00Z`).getTime();
-}
-
 /** Grid cell link text: host-zone "HH:mm" + title capped at GRID_TITLE_MAX chars. */
 export function gridTitle(title: string): string {
   const chars = [...title];
   return chars.length > GRID_TITLE_MAX ? `${chars.slice(0, GRID_TITLE_MAX).join("")}…` : title;
+}
+
+/** Month-grid link name starts with the visible "HH:mm title" (WCAG 2.5.3), then the day. */
+export function gridAccessibleName(title: string, startsAt: Date, zone: string): string {
+  return `${wallTimeHm(startsAt, zone)} ${title}, ${cardDayLabel(startsAt, zone)}`;
 }
 
 /* Discord-native rows (TOG-5168): display-only transients merged into the

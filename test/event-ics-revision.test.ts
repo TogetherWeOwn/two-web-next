@@ -57,6 +57,8 @@ describe.skipIf(!process.env.DATABASE_URL)("database-owned ICS revisions", () =>
         title: input.title,
         startsAt: input.startsAtUtc,
         endsAt: input.endsAtUtc,
+        timezone: input.timezone,
+        location: input.location,
         status,
         createdAt: NOW,
         updatedAt: NOW,

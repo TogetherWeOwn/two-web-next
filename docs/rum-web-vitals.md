@@ -13,7 +13,12 @@ Analytics API and fails when a 75th percentile exceeds its budget in
 | Interaction to Next Paint | 200 ms |
 
 Budgets are enforced only when the day has at least `minSamples` (50) samples.
-Budgets only go down; raising one is its own reviewed PR.
+A configured query that returns invalid JSON, a malformed GraphQL shape, or a
+day with at least `minSamples` samples whose p75 quantiles are missing or not
+numeric fails instead of reporting insufficient data. A non-2xx response fails
+as a query failure with its HTTP status. Only a structurally valid empty or
+low-sample result counts as insufficient data. Budgets only go down; raising
+one is its own reviewed PR.
 
 **Loop:** a failed run on `main` is re-run once by the host flake ledger. If it
 fails again, a private main-red card goes to the Web Engineer, whose fix goes

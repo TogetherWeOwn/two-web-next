@@ -163,20 +163,33 @@ npx wrangler deploy --dry-run --outdir dist   # bundle check; does not deploy
 
 ### Browser regressions
 
-`test/admin-event-native-unicode.test.ts` drives native admin event forms in
-Chromium and skips its 48 browser cases unless `ADMIN_EVENT_BROWSER_TESTS=true`.
-Every document and asset is an intercepted synthetic fixture, so it needs no
-server, database or network. Install the browser once, then run:
+These suites skip their browser cases unless the opt-in variable is `"true"`, so
+a run without it can pass without executing them. The `a11y` job sets each
+variable, writes a Vitest JSON report and runs `ci/a11y-require-executed.mjs`,
+which fails the step unless every case in the named suite passed and at least
+the minimum ran. The minimums live in `.github/workflows/ci.yml`.
+
+| Suite | Opt-in variable | Local command |
+| --- | --- | --- |
+| `test/admin-event-native-unicode.test.ts` | `ADMIN_EVENT_BROWSER_TESTS` | `ADMIN_EVENT_BROWSER_TESTS=true npx vitest run test/admin-event-native-unicode.test.ts` |
+| `test/featured-native-length.test.ts` | `FEATURED_NATIVE_BROWSER_TESTS` | `FEATURED_NATIVE_BROWSER_TESTS=true npx vitest run test/featured-native-length.test.ts` |
+| `test/calendar-search-unicode-boundaries.test.ts` | `CALENDAR_SEARCH_BROWSER_TESTS` | `CALENDAR_SEARCH_BROWSER_TESTS=true npx vitest run test/calendar-search-unicode-boundaries.test.ts` |
+| `test/profile-native-length.test.ts` | `A11Y_BROWSER_TESTS` | `A11Y_BROWSER_TESTS=true npx vitest run test/profile-native-length.test.ts` |
+| `ci/a11y-lifecycle.test.mjs` | `A11Y_BROWSER_TESTS` | `A11Y_BROWSER_TESTS=true node --test ci/a11y-lifecycle.test.mjs` (real Chromium signal cases; no executed-count verifier yet) |
+
+The admin, featured and calendar suites use intercepted synthetic fixtures or
+loopback servers with mocked reads, and the profile suite uses loopback fixtures
+with memory stores. None needs a database, staging or the network. Install the
+browser once, then run a suite with its variable set:
 
 ```sh
 npx playwright install --with-deps chromium
-ADMIN_EVENT_BROWSER_TESTS=true npx vitest run test/admin-event-native-unicode.test.ts
 ```
 
-Without Chromium the suite fails in `beforeAll` and vitest reports the cases as
-skipped. The `a11y` job in CI sets the variable, reuses its cached Playwright
-Chromium, and `ci/a11y-require-executed.mjs` fails the step unless all 48 cases
-ran and passed. The step runs on `app`, `db` and `full` scopes, main and nightly.
+Without Chromium the Vitest suites fail in `beforeAll`, vitest reports their
+cases as skipped, and the verifier fails the CI step. The `a11y` job reuses its
+cached Playwright Chromium. These steps run on `app`, `db` and `full` scopes,
+main and nightly.
 
 Do not use `npm run deploy` as a test or build command.
 
@@ -192,8 +205,8 @@ contract). `/up` requires HTTP 200 with `db:ok` and `pending_migrations:0` (DB/s
 readiness); degraded or unknown queue health alone does not fail deployment. Redirects are not followed; each
 request/body has a 5-second timeout. A failure names the route and expected versus
 actual result and fails the deploy job after six attempts. That workflow remains
-staging-only; the separate production workflow below stays disabled until
-authorized cutover (plan TOG-9671, W16).
+staging-only; the separate production workflow below is gated and runs only
+when manually authorized.
 Full procedures live in [docs/runbook.md](docs/runbook.md).
 
 `npm run test:smoke` runs both checkers against loopback stub servers with local
@@ -225,20 +238,30 @@ reports its skip and passes, so a missing token never fails a deploy.
 Deployment context: the top-level Wrangler configuration names Worker
 `two-web-next` and the `next.togetherweown.com` route; it has no named
 `env.staging` block. The Hyperdrive resource name is not a Worker selector or
-proof of environment isolation. The separate `env.production` block below is
-a disabled cutover template, not authorization for a live deployment, database
-probe or production cutover.
+proof of environment isolation. The separate `env.production` block below
+configures the production Worker; it is not authorization for a deployment,
+database probe or production test.
 
-### Production (manual, disabled until cutover)
+### Production (not live: gated manual deployment, cutover pending)
 
-`.github/workflows/deploy-production.yml` accepts only `workflow_dispatch` on
+TWO Web Next is not yet live in production; the apex is still served by the
+legacy stack and the cutover is pending (see `docs/cutover-gates.md`, currently
+NO-GO, and `docs/releases.md`: the cutover promote cuts `v1.0.0`, which does
+not exist yet). Worker code reaches production only through
+`.github/workflows/deploy-production.yml` (rollbacks through
+`.github/workflows/rollback-production.yml`; production migrations through
+`.github/workflows/db-migrate.yml`), all require `PRODUCTION_DEPLOY_ENABLED` to be
+exactly `true`, and each requires a
+manually authorized dispatch. The workflow accepts only `workflow_dispatch` on
 `main`; it never deploys on push, PR or release. Before the deploy job can start,
 `ci/production-deploy-gate.mjs` requires the repository variable
 `PRODUCTION_DEPLOY_ENABLED` to be exactly `true`, verifies the live GitHub
 Environment `production` protection and rejects the placeholder Hyperdrive id.
 By default, protection requires nonempty reviewers with self-review prevented;
 with `PRODUCTION_AUTO_APPROVE=true`, it instead requires a main-only deployment
-policy and successful staging deploy and `e2e-staging` runs on the exact SHA.
+policy and successful staging deploy and `e2e-staging` runs on the exact SHA,
+whose `staging-quality` job (Lighthouse budgets and quality scores) must also
+have executed and passed.
 Both modes require successful exact-SHA CI. Admin bypass explicitly remains
 enabled by the owner's provisioning exception; neither the workflow nor
 the preflight claims to prevent an authorized administrator from bypassing review.
@@ -256,15 +279,19 @@ requires HTTP 200 with `db:ok` and `pending_migrations:0`, accepting
 degraded/unknown queue states like staging, and the remaining 15 routes assert
 status/body/CSP/nosniff/content-type/redirect plus the apex indexing posture
 (indexable HTML omits the staging noindex). No auth, no writes, no PII.
-The smoke runs only after a separately authorized production deployment; no
-production probe is performed by delivering or testing this template.
+The smoke runs only inside an authorized production deployment run. Routine
+tests and probes stay staging-only; production live checks run only inside the
+authorized cutover (`docs/cutover-check.md`) or incident (`docs/runbook.md`)
+procedures.
 
-`env.production` is a **cutover template**, not a live deployment:
+`env.production` in `wrangler.jsonc` is a cutover template for the production
+Worker, not a live deployment. Never deploy it outside the gated workflow:
 
 - Worker: `two-web-next-production`; workers.dev and preview URLs disabled.
 - Route/origin: `togetherweown.com` / `https://togetherweown.com`, the intended
-  apex **placeholder target**. Defining it does not flip DNS; deploying would
-  claim that custom domain, so do not deploy before W16 authorization.
+  apex placeholder target. Defining it does not flip DNS; deploying would
+  claim that custom domain, so deploy only through the gated workflow once
+  cutover is authorized.
 - Hyperdrive `DB`: the separately named `two-web-next-production` Hyperdrive
   with its provisioned id in `wrangler.jsonc` `env.production`, distinct from
   the staging Hyperdrive. The all-zero id `00000000000000000000000000000000`
@@ -278,26 +305,33 @@ production probe is performed by delivering or testing this template.
   the production Discord callback; provision secrets for the production Worker
   separately. Never set `QA_AUTH_TOKEN` or a staging `DATABASE_URL` in production.
 
-Before enabling the flag, the authorized provisioning actor must configure the
-live `production` Environment with a main-only deployment branch policy and, by
+Whoever is authorized to provision production must keep the live `production`
+Environment configured with a main-only deployment branch policy and, by
 default, required reviewers with self-review prevented; with
 `PRODUCTION_AUTO_APPROVE=true` the reviewer requirement is replaced by
-successful staging deploy and `e2e-staging` runs on the exact SHA (which the
-gate checks), while the branch policy stays required. Install the
+successful staging deploy and `e2e-staging` runs on the exact SHA, with an
+executed, passing `staging-quality` job (which the gate checks), while the branch
+policy stays required. Install the
 Environment-scoped secrets
 `PRODUCTION_CLOUDFLARE_API_TOKEN` and `PRODUCTION_CLOUDFLARE_ACCOUNT_ID`, and
-complete resource/secret provisioning and W16 authorization. These names must
+complete resource/secret provisioning before a deployment is authorized. These names must
 exist only in the `production` Environment, never at repository or organization
 scope. They map to Wrangler's `CLOUDFLARE_API_TOKEN` / `CLOUDFLARE_ACCOUNT_ID`
 variables only in the credential check and deployment steps. Missing/empty values
 are rejected before deployment, so absent production secrets cannot fall back to
 the staging secret names. No secret values are printed.
 
-Keep `PRODUCTION_DEPLOY_ENABLED` unset/false until then, including applicable
-organization and Environment values. The workflow's `vars` expression resolves
-configuration across scopes: repository/Environment absence alone does not
-prove the effective flag is disabled. Verify the organization's value and repo
-visibility before cutover; keep the repository value unset/false while disabled.
+Keep `PRODUCTION_DEPLOY_ENABLED` unset/false except while a deployment,
+rollback, or production migration is authorized, including applicable
+organization and Environment values.
+The deploy, rollback, and db-migrate workflows each require the flag to be
+exactly `true`; `ci/production-deploy-gate.mjs` runs in the deploy and rollback
+workflows, while db-migrate relies on the flag, the main-only ref check, and
+production Environment protection. The
+workflow's `vars` expression resolves configuration across scopes:
+repository/Environment absence alone does not prove the effective flag is
+disabled. Verify the organization's value and repo visibility before
+authorizing a deployment, rollback, or production migration; keep the repository value unset/false otherwise.
 GitHub YAML alone does **not** install review protection.
 A failed protection lookup must be resolved with the existing credential's
 provisioning owner, not by removing the check or substituting credentials.
@@ -311,9 +345,8 @@ npx wrangler deploy --dry-run --env production --outdir dist-production
 
 The selftest proves disabled flags fail before API access, non-main/non-manual
 requests fail, missing/unprotected Environments fail, and the Hyperdrive sentinel
-blocks live deployment. No production deploy, DNS flip or W16 rehearsal is
-performed by adding this template. Actual production rollout and tested rollback
-remain W16 work (plan TOG-9671).
+blocks deployment. Running these checks, or editing this documentation, deploys
+nothing and probes nothing in production.
 
 ## Configuration
 
@@ -345,8 +378,9 @@ images on it. No proxying or resizing is performed.
 
 Only GET/HEAD `/join` permits frames, and only from `https://discord.com` for
 the widget. Other routes have `frame-src 'none'`; `frame-ancestors 'none'` and
-`X-Frame-Options: DENY` still prevent framing this site. CSP continues reporting
-to `/csp-reports` via both `report-uri` and the `csp-endpoint` reporting group.
+`X-Frame-Options: DENY` still prevent framing this site. CSP reports violations
+to `/csp-reports` through the `csp-endpoint` reporting group (`report-to` plus the
+`Reporting-Endpoints` header). The deprecated `report-uri` directive is not sent.
 
 ## Pre-flip probes (W16 rehearsal)
 

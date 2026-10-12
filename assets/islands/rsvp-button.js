@@ -146,6 +146,9 @@
   }
   document.addEventListener("focusin", releaseFocusOnOutsideInteraction, true);
   document.addEventListener("pointerdown", releaseFocusOnOutsideInteraction, true);
+  // Feedback deadline only: it cannot cancel or determine the server write.
+  // Unknown outcomes stay locked until the member refreshes the SSR page.
+  var FEEDBACK_DEADLINE_MS = 8000;
 
   function clearOutcome() {
     [
@@ -569,6 +572,13 @@
     var controller = {};
     inflight = controller;
     focusOwned = true;
+    var watchdog = setTimeout(function () {
+      if (inflight !== controller) return;
+      // Revoke write ownership before rendering recovery so late headers/body
+      // and buffered capacity snapshots cannot guess or replace its outcome.
+      inflight = null;
+      unknownOutcome(button);
+    }, FEEDBACK_DEADLINE_MS);
     // A waitlisted member clicking the claim control: if the locked server
     // keeps them waitlisted, a rival took the freed seat first.
     var claimingFromWaitlist =
@@ -771,6 +781,7 @@
       )
       .finally(function () {
         // Keep ownership through body parsing; header arrival is not completion.
+        clearTimeout(watchdog);
         if (inflight === controller) {
           inflight = null;
           focusOwned = false;

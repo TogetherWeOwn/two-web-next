@@ -1,8 +1,9 @@
 #!/usr/bin/env node
 "use strict";
 
-// Offline tests for release-on-promote.cjs: bump rules, note rendering, and a
-// dry run against a throwaway git repository (no network, no gh calls).
+// Offline tests for release-on-promote.cjs: bump rules, note rendering, a dry
+// run, and the publish path against a throwaway git repository with a fake gh
+// on PATH (no network).
 
 const assert = require("node:assert/strict");
 const { execFileSync } = require("node:child_process");
@@ -11,7 +12,9 @@ const os = require("node:os");
 const path = require("node:path");
 
 const SCRIPT = process.env.RELEASE_ON_PROMOTE || path.join(__dirname, "release-on-promote.cjs");
-const { parseCommit, nextVersion, renderNotes } = require(SCRIPT);
+const REAL_CONFIG = path.join(__dirname, "..", "release-please-config.json");
+const { parseCommit, nextVersion, renderNotes, loadOptions } = require(SCRIPT);
+const { sections } = loadOptions(REAL_CONFIG);
 
 const c = (subject, body = "") => parseCommit("a".repeat(40), subject, body);
 
@@ -47,14 +50,9 @@ assert.deepEqual(nextVersion([0, 4, 0], [], pre), [0, 4, 1]);
 assert.deepEqual(nextVersion([1, 2, 3], [c("feat: a")], pre), [1, 3, 0]);
 assert.deepEqual(nextVersion([1, 2, 3], [c("fix!: a")], pre), [2, 0, 0]);
 assert.deepEqual(nextVersion([1, 2, 3], [c("perf: a")], pre), [1, 2, 4]);
+assert.deepEqual(nextVersion([1, 2, 3], [c("security(auth): a")], pre), [1, 2, 4]);
 
 // Notes: visible sections only, scope-sorted, hidden types dropped.
-const sections = [
-  { type: "feat", section: "Added" },
-  { type: "fix", section: "Fixed" },
-  { type: "security", section: "Fixed" },
-  { type: "chore", section: "Miscellaneous", hidden: true },
-];
 const notes = renderNotes({
   version: [0, 5, 0],
   prevTag: "v0.4.0",
@@ -90,6 +88,20 @@ assert.match(
   }),
   /No user-facing changes/,
 );
+const securityOnly = renderNotes({
+  version: [0, 4, 1],
+  prevTag: "v0.4.0",
+  date: "d",
+  sections,
+  repoUrl: "https://github.com/o/r",
+  commits: [c("security(auth): refuse expired sudo tokens (#900)")],
+});
+assert.ok(
+  securityOnly.includes(
+    "### Fixed\n\n* **auth:** refuse expired sudo tokens ([#900](https://github.com/o/r/issues/900))",
+  ),
+);
+assert.doesNotMatch(securityOnly, /No user-facing/);
 assert.match(
   renderNotes({
     version: [0, 5, 0],
@@ -108,11 +120,11 @@ const g = (...a) => execFileSync("git", ["-C", dir, ...a], { encoding: "utf8" })
 g("init", "-q", "-b", "main");
 g("config", "user.email", "t@example.invalid");
 g("config", "user.name", "t");
+const realPkg = JSON.parse(fs.readFileSync(REAL_CONFIG, "utf8")).packages["."];
+delete realPkg["release-as"];
 fs.writeFileSync(
   path.join(dir, "release-please-config.json"),
-  JSON.stringify({
-    packages: { ".": { "bump-minor-pre-major": true, "changelog-sections": sections } },
-  }),
+  JSON.stringify({ packages: { ".": realPkg } }),
 );
 const commit = (msg) => {
   g("commit", "-q", "--allow-empty", "-m", msg);
@@ -187,6 +199,72 @@ assert.notEqual(r.status, 0);
 assert.match(r.stderr, /not on origin\/main/);
 r = run("not-a-sha");
 assert.notEqual(r.status, 0);
+
+// Publishing against a fake gh that models the tag's release: absent, present,
+// or a failed lookup. A failed lookup must stop before anything is created.
+const ghBin = fs.mkdtempSync(path.join(os.tmpdir(), "release-gh-"));
+fs.writeFileSync(
+  path.join(ghBin, "gh"),
+  [
+    "#!/bin/sh",
+    'echo "$*" >> "$FAKE_GH_LOG"',
+    'case "$*" in',
+    '  "api repos/o/r/releases/tags/v1.0.1"*)',
+    '    case "$FAKE_GH_MODE" in',
+    '      absent) echo "gh: Not Found (HTTP 404)" >&2; exit 1 ;;',
+    '      exists) echo "{}"; exit 0 ;;',
+    '      outage) echo "gh: Service Unavailable (HTTP 503)" >&2; exit 1 ;;',
+    '      limited) echo "gh: API rate limit exceeded (HTTP 403)" >&2; exit 1 ;;',
+    '      unauthorized) echo "gh: Bad credentials (HTTP 401)" >&2; exit 1 ;;',
+    '      offline) echo "dial tcp: lookup api.github.com: no such host" >&2; exit 1 ;;',
+    "      silent) exit 1 ;;",
+    "    esac ;;",
+    '  "release create "*) exit 0 ;;',
+    "esac",
+    'echo "unexpected gh call: $*" >&2',
+    "exit 2",
+    "",
+  ].join("\n"),
+  { mode: 0o755 },
+);
+const publish = (mode) => {
+  const out = path.join(ghBin, `output-${mode}`);
+  const log = path.join(ghBin, `gh-${mode}.log`);
+  fs.writeFileSync(out, "");
+  fs.writeFileSync(log, "");
+  const res = require("node:child_process").spawnSync("node", [SCRIPT], {
+    cwd: dir,
+    encoding: "utf8",
+    env: {
+      ...process.env,
+      PATH: `${ghBin}${path.delimiter}${process.env.PATH}`,
+      FAKE_GH_MODE: mode,
+      FAKE_GH_LOG: log,
+      RELEASE_SHA: later,
+      GH_REPO: "o/r",
+      DRY_RUN: "false",
+      GITHUB_OUTPUT: out,
+      RUNNER_TEMP: ghBin,
+    },
+  });
+  return { ...res, out: fs.readFileSync(out, "utf8"), gh: fs.readFileSync(log, "utf8") };
+};
+const absent = publish("absent");
+assert.equal(absent.status, 0, absent.stderr);
+assert.match(absent.gh, /^release create v1\.0\.1 /m);
+assert.equal(absent.out, "tag_name=v1.0.1\nreleased=true\n");
+const exists = publish("exists");
+assert.equal(exists.status, 0, exists.stderr);
+assert.doesNotMatch(exists.gh, /^release create /m);
+assert.equal(exists.out, "tag_name=v1.0.1\nreleased=true\n");
+for (const mode of ["outage", "limited", "unauthorized", "offline", "silent"]) {
+  const stopped = publish(mode);
+  assert.notEqual(stopped.status, 0, `${mode}: an inconclusive lookup must stop the promote`);
+  assert.match(stopped.stderr, /existing-release lookup for v1\.0\.1 was inconclusive/, mode);
+  assert.doesNotMatch(stopped.gh, /^release create /m, mode);
+  assert.equal(stopped.out, "", mode);
+}
+fs.rmSync(ghBin, { recursive: true, force: true });
 fs.rmSync(dir, { recursive: true, force: true });
 
 console.log("release-on-promote: all tests passed");

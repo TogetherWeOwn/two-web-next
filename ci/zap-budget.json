@@ -1,6 +1,6 @@
 {
-  "maxMedium": 4,
-  "maxLow": 2,
+  "maxMedium": 0,
+  "maxLow": 1,
   "ignore": [
     {
       "pluginId": "10096",

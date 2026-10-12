@@ -3,6 +3,9 @@
   const link = document.querySelector("[data-copy-link]");
   const toast = document.querySelector("[data-copy-toast]");
   if (!link || !toast) return;
+  // Unsettled clipboard promises get truthful feedback at 5 s; the feedback contract caps this at 10 s.
+  const feedbackDeadlineMs = 5000;
+  const resetMs = 4000;
   let timer;
   // Monotonic attempt token: only the newest click may touch the toast or timer.
   let latest = 0;
@@ -42,6 +45,17 @@
     clearTimeout(timer);
     toast.textContent = "";
     const text = link.getAttribute("data-copy-link");
+    let pending = true;
+    const owns = () => pending && mine === latest;
+    timer = setTimeout(() => {
+      if (!owns()) return;
+      pending = false;
+      toast.textContent =
+        "Copy not confirmed — if it isn't on your clipboard, copy the link from the address bar.";
+      timer = setTimeout(() => {
+        if (mine === latest) toast.textContent = "";
+      }, resetMs);
+    }, feedbackDeadlineMs);
     let copied = false;
     try {
       // writeText needs a secure context and can reject (e.g. denied permission).
@@ -51,8 +65,8 @@
           await navigator.clipboard.writeText(text);
           copied = true;
         } catch {
-          // A newer click already owns feedback; do not run the legacy fallback for a stale attempt.
-          if (mine !== latest) return;
+          // A newer click or an expired deadline owns feedback; never fall back for it.
+          if (!owns()) return;
           copied = fallback(text);
         }
       } else {
@@ -61,13 +75,15 @@
     } catch {
       copied = false;
     }
-    if (mine !== latest) return;
+    if (!owns()) return;
+    pending = false;
+    clearTimeout(timer);
     toast.textContent = copied
       ? "Event link copied."
       : "That link didn't copy — copy it from the address bar.";
     timer = setTimeout(() => {
       if (mine === latest) toast.textContent = "";
-    }, 4000);
+    }, resetMs);
   }
 
   link.setAttribute("role", "button");
