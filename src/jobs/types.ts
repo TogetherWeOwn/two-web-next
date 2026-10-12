@@ -66,6 +66,12 @@ export type SyncAttempt = {
   requestAttempts: number;
   /** Null while a claim's result is unsettled, or after retirement/exhaustion. */
   nextAttemptAt: Date | null;
+  /**
+   * Current `events.discord_event_id` at snapshot/claim time. Null means the
+   * event was never mirrored to Discord; undefined is a pre-mirror snapshot
+   * (hermetic doubles) and is treated as mirrored to preserve the bot path.
+   */
+  discordEventId?: string | null;
 } & (
   | { action: "event.upsert"; payload: EventUpsert }
   | { action: "event.cancel"; payload: { eventKey: string } }
@@ -78,8 +84,12 @@ export interface EventStore {
     idempotencyKey: string,
     mirroredAt: Date,
   ): Promise<SyncAttempt | { waiting: true } | null>;
-  /** Atomically settle the attempt and acknowledge only its revision/RSVP cutoff. */
-  completeSync(attempt: SyncAttempt, discordEventId: string): Promise<void>;
+  /**
+   * Atomically settle the attempt and acknowledge only its revision/RSVP cutoff.
+   * Null keeps the stored `discord_event_id` (never-mirrored local completion):
+   * the revision still advances and RSVPs stamp to the attempt's mirrored_at.
+   */
+  completeSync(attempt: SyncAttempt, discordEventId: string | null): Promise<void>;
   /** Fence a due request until its result commits, or retire an obsolete snapshot. */
   claimSync(attempt: SyncAttempt, now: Date): Promise<SyncAttempt | null>;
   deferSync(attempt: SyncAttempt, nextAttemptAt: Date | null): Promise<void>;
