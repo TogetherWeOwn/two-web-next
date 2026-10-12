@@ -75,19 +75,17 @@ function normalizePath(path: string): string {
   return out || "/";
 }
 
-function isMachinePath(path: string): boolean {
-  const normalized = normalizePath(path);
-  if (normalized === "/api" || normalized.startsWith("/api/")) return true;
-  if (normalized === "/events.json") return true;
-  const method = "GET";
-  void method;
-  // JSON-only event writes (src/error-responses.tsx jsonOnlyEventRequest parity
-  // for the read side; writes are covered by path shapes below regardless of
-  // method because this helper sees only the Request).
-  if (normalized === "/events") return true;
-  if (/^\/events\/[^/]+\/(publish|cancel|rsvp-pause|rsvp-reopen)$/.test(normalized)) return true;
-  if (/^\/events\/[^/]+\/rsvp$/.test(normalized)) return true;
-  if (/^\/events\/[^/]+$/.test(normalized)) return true;
+function isMachinePath(path: string, method: string): boolean {
+  if (path === "/api" || path.startsWith("/api/")) return true;
+  // Match jsonOnlyEventRequest: browser GET/HEAD pages still negotiate.
+  if (method === "GET" || method === "HEAD") return path === "/events.json";
+  if (method === "POST") {
+    return (
+      path === "/events" || /^\/events\/[^/]+\/(publish|cancel|rsvp-pause|rsvp-reopen)$/.test(path)
+    );
+  }
+  if (method === "PATCH") return /^\/events\/[^/]+$/.test(path);
+  if (method === "PUT" || method === "DELETE") return /^\/events\/[^/]+\/rsvp$/.test(path);
   return false;
 }
 
@@ -141,9 +139,10 @@ function prefersJson(ranges: AcceptRange[]): boolean {
   return preferred.type === "application/json";
 }
 
-/** "json" for machine contracts and JSON-preferring callers, else "html". */
-export function negotiateKitError(request: Request): "json" | "html" {
+/** Feeds stay "text"; machine contracts stay "json"; browser pages negotiate. */
+export function negotiateKitError(request: Request): "json" | "html" | "text" {
   const path = normalizePath(new URL(request.url).pathname);
-  if (isMachinePath(path)) return "json";
+  if (isFeedPath(path)) return "text";
+  if (isMachinePath(path, request.method)) return "json";
   return prefersJson(parseAccept(request.headers.get("accept"))) ? "json" : "html";
 }

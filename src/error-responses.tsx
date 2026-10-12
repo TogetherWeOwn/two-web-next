@@ -13,7 +13,12 @@ import {
 } from "./error-pages";
 import type { SuggestedEvent } from "./events/suggestions";
 import { inviteDestination } from "./invite";
-import { bufferedMemberHtml, bufferedMemberText, memberReadActive } from "./member-reads";
+import {
+  bufferedMemberHtml,
+  bufferedMemberJson,
+  bufferedMemberText,
+  memberReadActive,
+} from "./member-reads";
 import { cachedNotFoundSuggestions } from "./not-found-suggestions";
 import { requestRoute, safeRequestId } from "./request-log";
 
@@ -211,19 +216,21 @@ export function forbidden(c: Context): Response | Promise<Response> {
   varyAccept(c);
   c.status(403);
   if (isFeedErrorPath(c.req.path)) {
-    return c.text("Forbidden", 403);
+    return memberReadActive() ? bufferedMemberText(c, "Forbidden", 403) : c.text("Forbidden", 403);
   }
   if (
     jsonOnlyEventRequest(c) ||
     c.req.path.startsWith("/api/") ||
     outageRepresentation(c) === "application/json"
   ) {
-    return c.json({
+    const body = {
       error: "forbidden",
       message: "You do not have access to this.",
-    });
+    };
+    return memberReadActive() ? bufferedMemberJson(c, body, 403) : c.json(body);
   }
-  return c.html(<ForbiddenPage inviteUrl={inviteDestination(c.env?.DISCORD_INVITE_URL)} />);
+  const page = <ForbiddenPage inviteUrl={inviteDestination(c.env?.DISCORD_INVITE_URL)} />;
+  return memberReadActive() ? bufferedMemberHtml(c, page, 403) : c.html(page);
 }
 
 // Branded 410 for explicitly retired documents. Unknown and
@@ -236,19 +243,21 @@ export function gone(c: Context): Response | Promise<Response> {
   varyAccept(c);
   c.status(410);
   if (isFeedErrorPath(c.req.path)) {
-    return c.text("Gone", 410);
+    return memberReadActive() ? bufferedMemberText(c, "Gone", 410) : c.text("Gone", 410);
   }
   if (
     jsonOnlyEventRequest(c) ||
     c.req.path.startsWith("/api/") ||
     outageRepresentation(c) === "application/json"
   ) {
-    return c.json({
+    const body = {
       reason: "gone",
       message: "This page is gone.",
-    });
+    };
+    return memberReadActive() ? bufferedMemberJson(c, body, 410) : c.json(body);
   }
-  return c.html(<GonePage />);
+  const page = <GonePage />;
+  return memberReadActive() ? bufferedMemberHtml(c, page, 410) : c.html(page);
 }
 
 export function maintenanceHandler(
