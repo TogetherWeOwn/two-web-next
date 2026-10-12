@@ -176,45 +176,59 @@ describe("profile games JSON/form round-trip", () => {
   });
 
   it("refuses a missing Content-Type with 415 without saving or wiping", async () => {
-    const sessions = createMemorySessionStore();
-    const token = newSessionToken();
-    await sessions.create({
-      tokenHash: await hashToken(token),
-      userId: id,
-      username: "alice",
-      avatar: null,
-      member: true,
-      moderator: false,
-      expiresAt: new Date(Date.now() + 3600_000),
-    });
-    const cookie = (
-      await serializeSigned("__Host-two_session", token, secret, {
-        path: "/",
-        secure: true,
-        httpOnly: true,
-        sameSite: "Lax",
-      })
-    ).split(";")[0]!;
-    const store = createMemoryProfileStore([{ ...seeded }]);
-    const save = vi.spyOn(store, "save");
-    const app = profilesApp({
-      sessionStore: sessions,
-      store,
-      accessLog: async () => true,
-      throttle: async () => ({ limited: false }),
-    });
-    const res = await app.request(
-      `/members/${id}`,
-      {
-        method: "PATCH",
-        headers: { cookie, origin: env.APP_URL, accept: "application/json" },
-        body: JSON.stringify({ bio: "Updated", timezone: "UTC", games: ["Chess"] }),
-      },
-      env,
-    );
-    expect(res.status).toBe(415);
-    expect(res.headers.get("cache-control")).toBe("private, no-store");
-    expect(save).not.toHaveBeenCalled();
-    expect(store.rows.get(id)).toMatchObject({ bio: "Hi", games: ["Chess"], timezone: "UTC" });
+    // A string body would get `content-type: text/plain;charset=UTF-8` from the
+    // Fetch spec, so exercise a genuinely missing header instead: no body, and
+    // a Blob body (whose empty type sets no header).
+    const payload = JSON.stringify({ bio: "Updated", timezone: "UTC", games: ["Chess"] });
+    const bodies: Array<{ label: string; body: BodyInit | undefined }> = [
+      { label: "no body", body: undefined },
+      { label: "Blob body", body: new Blob([payload]) },
+    ];
+    for (const { label, body } of bodies) {
+      const sessions = createMemorySessionStore();
+      const token = newSessionToken();
+      await sessions.create({
+        tokenHash: await hashToken(token),
+        userId: id,
+        username: "alice",
+        avatar: null,
+        member: true,
+        moderator: false,
+        expiresAt: new Date(Date.now() + 3600_000),
+      });
+      const cookie = (
+        await serializeSigned("__Host-two_session", token, secret, {
+          path: "/",
+          secure: true,
+          httpOnly: true,
+          sameSite: "Lax",
+        })
+      ).split(";")[0]!;
+      const store = createMemoryProfileStore([{ ...seeded }]);
+      const save = vi.spyOn(store, "save");
+      const app = profilesApp({
+        sessionStore: sessions,
+        store,
+        accessLog: async () => true,
+        throttle: async () => ({ limited: false }),
+      });
+      const res = await app.request(
+        `/members/${id}`,
+        {
+          method: "PATCH",
+          headers: { cookie, origin: env.APP_URL, accept: "application/json" },
+          body,
+        },
+        env,
+      );
+      expect(res.status, label).toBe(415);
+      expect(res.headers.get("cache-control"), label).toBe("private, no-store");
+      expect(save, label).not.toHaveBeenCalled();
+      expect(store.rows.get(id), label).toMatchObject({
+        bio: "Hi",
+        games: ["Chess"],
+        timezone: "UTC",
+      });
+    }
   });
 });
