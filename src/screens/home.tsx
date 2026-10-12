@@ -1,7 +1,7 @@
 import type { FC } from "hono/jsx";
 import type { Counts, Rank } from "../counts";
 import type { Session } from "../env";
-import type { HomeEvent } from "../events/reads";
+import type { HomeUpcomingRow } from "../events/reads";
 import type { VisibleFeatured } from "../featured";
 import { inviteDestination } from "../invite";
 import { cardTimeLabel, isValidZone } from "../islands/contracts";
@@ -33,7 +33,7 @@ export const Home: FC<{
   appUrl: string;
   counts: Counts;
   sessionUnavailable?: boolean;
-  upcomingEvents: HomeEvent[];
+  upcomingEvents: HomeUpcomingRow[];
   eventsUnavailable: boolean;
   featured: VisibleFeatured[];
   imageHosts?: string;
@@ -185,21 +185,37 @@ export const Home: FC<{
           {upcomingEvents.length > 0 ? (
             <>
               <ul class="facts home-events" data-testid="home-events-list">
-                {upcomingEvents.map((event) => (
-                  <li class="card">
-                    <a class="home-event-link" href={`/e/${encodeURIComponent(event.eventKey)}`}>
-                      <p>
-                        <time datetime={event.startsAt.toISOString()}>
-                          {cardTimeLabel(event.startsAt, event.timezone)} (
-                          {isValidZone(event.timezone) ? event.timezone : "UTC"})
-                        </time>
-                      </p>
-                      <h3>{event.title}</h3>
-                      {event.location ? <p>{event.location}</p> : null}
-                      <p>{event.goingCount} going</p>
-                    </a>
-                  </li>
-                ))}
+                {upcomingEvents.map((event) =>
+                  event.source === "discord" ? (
+                    <li class="card" data-source="discord" key={`discord-${event.discordId}`}>
+                      <a class="home-event-link" href={inviteUrl} data-testid="home-event-discord">
+                        <p>
+                          <time datetime={event.startsAt.toISOString()}>
+                            {cardTimeLabel(event.startsAt, event.timezone)} (
+                            {isValidZone(event.timezone) ? event.timezone : "UTC"})
+                          </time>
+                        </p>
+                        <h3>{event.title}</h3>
+                        {event.location ? <p>{event.location}</p> : null}
+                        <p>RSVP in Discord</p>
+                      </a>
+                    </li>
+                  ) : (
+                    <li class="card" data-source="canonical" key={`canonical-${event.eventKey}`}>
+                      <a class="home-event-link" href={`/e/${encodeURIComponent(event.eventKey)}`}>
+                        <p>
+                          <time datetime={event.startsAt.toISOString()}>
+                            {cardTimeLabel(event.startsAt, event.timezone)} (
+                            {isValidZone(event.timezone) ? event.timezone : "UTC"})
+                          </time>
+                        </p>
+                        <h3>{event.title}</h3>
+                        {event.location ? <p>{event.location}</p> : null}
+                        <p>{event.goingCount} going</p>
+                      </a>
+                    </li>
+                  ),
+                )}
               </ul>
               <p>
                 <a href="/events">

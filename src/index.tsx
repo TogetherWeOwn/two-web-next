@@ -26,7 +26,8 @@ import { imageHosts } from "./image-policy";
 import { Join, Recovery, Home, type Notice } from "./pages";
 import { internalErrorHandler, registerErrorHandlers } from "./errors";
 import { registerEventRoutes } from "./events/routes";
-import { loadHomeUpcoming } from "./events/reads";
+import { loadHomeUpcomingMerged } from "./events/reads";
+import { discordEventsSource } from "./events/discord-transients";
 import { dbFor } from "./admin/db";
 import { listVisibleFeatured } from "./featured";
 import { robotsTag, SECURITY_HEADERS } from "./headers";
@@ -374,8 +375,11 @@ app.get("/", async (c) => {
   ].includes(notice ?? "")
     ? null
     : flashed;
-  const [upcomingEvents, featured] = await Promise.all([
-    loadHomeUpcoming(() => dbFor(c)),
+  const [homeUpcoming, featured] = await Promise.all([
+    loadHomeUpcomingMerged(
+      () => dbFor(c),
+      () => discordEventsSource(c.env),
+    ),
     dbFor(c)
       .then((db) => (db ? listVisibleFeatured(db) : []))
       .catch(() => []),
@@ -390,8 +394,8 @@ app.get("/", async (c) => {
       inviteUrl={c.env.DISCORD_INVITE_URL}
       appUrl={c.env.APP_URL}
       counts={counts}
-      upcomingEvents={upcomingEvents ?? []}
-      eventsUnavailable={upcomingEvents === null}
+      upcomingEvents={homeUpcoming.items}
+      eventsUnavailable={homeUpcoming.unavailable}
       featured={featured}
       imageHosts={c.env.FEATURED_IMAGE_HOSTS}
     />,

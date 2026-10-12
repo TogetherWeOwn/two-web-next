@@ -56,7 +56,11 @@ describe("featured homepage fallback (local fixtures)", () => {
   it("serves guest 200 at the deadline when featured connection acquisition stalls", async () => {
     const db = drizzle.mock();
     let rejectRead!: (error: Error) => void;
-    vi.spyOn(eventReads, "loadHomeUpcoming").mockResolvedValue([]); // only featured stalls in this test
+    vi.spyOn(eventReads, "loadHomeUpcomingMerged").mockResolvedValue({
+      items: [],
+      unavailable: false,
+      discordFailed: false,
+    }); // only featured stalls in this test
     const session = Reflect.get(db, "session") as { transaction: () => Promise<unknown> };
     const transaction = vi.spyOn(session, "transaction").mockImplementation(
       () =>
@@ -92,7 +96,11 @@ describe("featured homepage fallback (local fixtures)", () => {
     for (const host of ["images.corp", "images.mail", "localhost.localdomain", "images.alt"]) {
       expect(featuredImageSrc(`https://${host}/photo.jpg`, env.APP_URL, host)).toBeNull();
     }
-    vi.spyOn(eventReads, "loadHomeUpcoming").mockResolvedValue([]);
+    vi.spyOn(eventReads, "loadHomeUpcomingMerged").mockResolvedValue({
+      items: [],
+      unavailable: false,
+      discordFailed: false,
+    });
     vi.spyOn(featuredReads, "listVisibleFeatured").mockResolvedValue([
       {
         id: 1,

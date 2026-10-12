@@ -22,13 +22,16 @@ import { users } from "../db/schema";
 import { keyedMemberRead, nonSensitiveRead } from "../member-reads";
 import {
   calendarGridRange,
+  dedupeTransients,
   EVENTS_MONTH_GRID_LIMIT,
   EVENTS_PAST_DRAWER_LIMIT,
   EVENTS_UPCOMING_PAGE_SIZE,
   escapeLikeTerm,
   PAST_EVENTS_PAGE_SIZE,
+  type DiscordTransient,
 } from "../islands/contracts";
-import { wallDateIso, wallDayStart } from "./date-format";
+import { calendarZone, wallDateIso, wallDayStart } from "./date-format";
+import type { DiscordEventsSource } from "./discord-transients-types";
 
 export type PublicEvent = typeof events.$inferSelect & { goingCount: number };
 
@@ -229,6 +232,13 @@ const finiteEventWindow = and(sql`isfinite(${events.startsAt})`, sql`isfinite(${
 export const HOME_EVENTS_DEADLINE_MS = 1000;
 // Each of the two reads is cancelled server-side before the response deadline.
 export const HOME_EVENTS_DB_TIMEOUT_MS = 400;
+// The Discord snapshot read gets its own bound below the homepage deadline.
+// A stale-snapshot refresh claimant runs a claim transaction plus a live
+// Discord GET, so it can outlast the homepage race on its own; without this
+// bound that one request would hide the canonical rows behind the
+// unavailable state. On timeout the Discord rows degrade to none with
+// discordFailed set, never to a whole-read failure.
+export const HOME_DISCORD_TIMEOUT_MS = 700;
 
 /** Home teaser: published and not ended, capped in SQL; calendar visibility is broader. */
 export async function listHomeUpcoming(db: Db, now = new Date()): Promise<HomeEvent[]> {
@@ -256,6 +266,159 @@ export async function listHomeUpcoming(db: Db, now = new Date()): Promise<HomeEv
       }),
     );
   });
+}
+
+/**
+ * Homepage teaser row: canonical published events plus display-only Discord
+ * snapshot rows, labelled by source. Discord rows carry no RSVP aggregate and
+ * no detail page — they keep their Discord invite link at render time.
+ * Never carries creator, RSVP identities, or member data.
+ */
+export type HomeCanonicalRow = HomeEvent & { source: "canonical" };
+export type HomeDiscordRow = {
+  source: "discord";
+  discordId: string;
+  title: string;
+  startsAt: Date;
+  /** Effective display zone (modal zone over canonical upcoming plus recent past rows, like /events; UTC only when both are empty). */
+  timezone: string;
+  location: string | null;
+};
+export type HomeUpcomingRow = HomeCanonicalRow | HomeDiscordRow;
+
+/** Homepage teaser cap: the soonest rows across both sources, like the SQL cap. */
+export const HOME_UPCOMING_LIMIT = 3;
+
+/**
+ * Pure merge for the homepage teaser (shared with the SvelteKit card): the
+ * same source-aware rules as /events — deduplicated Discord transients,
+ * hidden-event suppression via persisted ids, re-checked against the local
+ * clock — merged in start order and capped. No private data enters or leaves.
+ */
+export function mergeHomeUpcoming(
+  canonical: HomeEvent[],
+  transients: DiscordTransient[],
+  persistedDiscordIds: ReadonlySet<string>,
+  now: Date,
+  fallbackZone?: string,
+): HomeUpcomingRow[] {
+  const zone = fallbackZone ?? calendarZone(canonical.map((e) => e.timezone));
+  const eligible = dedupeTransients(transients, persistedDiscordIds).filter(
+    (t) =>
+      Number.isFinite(t.startsAt.getTime()) &&
+      (t.endsAt === null || (Number.isFinite(t.endsAt.getTime()) && t.endsAt >= now)),
+  );
+  const rows: HomeUpcomingRow[] = [
+    ...canonical.map((e): HomeUpcomingRow => ({ ...e, source: "canonical" as const })),
+    ...eligible.map(
+      (t): HomeUpcomingRow => ({
+        source: "discord" as const,
+        discordId: t.discordId,
+        title: t.title,
+        startsAt: t.startsAt,
+        timezone: zone,
+        location: t.location,
+      }),
+    ),
+  ];
+  // Same start-order rule as /events' mergeCalendarRows; stable so canonical
+  // keeps its SQL order on equal starts.
+  return rows
+    .sort((a, b) => a.startsAt.getTime() - b.startsAt.getTime())
+    .slice(0, HOME_UPCOMING_LIMIT);
+}
+
+/**
+ * Recent past timezones for the homepage display zone, mirroring /events'
+ * past drawer (`loadCalendarPageModel` derives its zone from upcoming page
+ * rows plus `listCalendarPast`). Lightweight: one timezone-only select, no
+ * RSVP aggregate — the zone is public data and the teaser never renders
+ * these rows. The caller treats a failure as no past zones, falling back to
+ * the canonical-only zone (UTC when that is empty too).
+ */
+export async function listHomePastTimezones(db: Db, now = new Date()): Promise<string[]> {
+  const rows = await db
+    .select({ timezone: events.timezone })
+    .from(events)
+    .where(and(ne(events.status, "draft"), lt(events.endsAt, now)))
+    .orderBy(desc(events.startsAt), desc(events.id))
+    .limit(EVENTS_PAST_DRAWER_LIMIT);
+  return rows.map((r) => r.timezone);
+}
+
+export interface HomeUpcomingMerged {
+  items: HomeUpcomingRow[];
+  /** True when neither source could produce a trustworthy list (DB down, or empty + Discord failed). */
+  unavailable: boolean;
+  discordFailed: boolean;
+}
+
+/**
+ * Source-aware homepage read: canonical teaser rows plus eligible Discord
+ * snapshot transients, deduplicated with hidden-event suppression. Reuses the
+ * existing cache/freshness/outage contracts — never throws, never a 500.
+ * An empty canonical list with a failed Discord read is the unavailable state
+ * (like /events' error state), never "nothing scheduled".
+ */
+export async function loadHomeUpcomingMerged(
+  openDb: () => Promise<Db | null>,
+  getDiscordSource: () => DiscordEventsSource,
+  now = new Date(),
+): Promise<HomeUpcomingMerged> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const read: Promise<HomeUpcomingMerged> = (async () => {
+    const db = await openDb();
+    if (!db) return { items: [], unavailable: true, discordFailed: false };
+    const discord = getDiscordSource();
+    // Canonical, past-zone and Discord reads start together: a slow Discord
+    // refresh must never hold the canonical rows past the deadline.
+    const canonicalPromise = listHomeUpcoming(db, now);
+    const pastZonesPromise = listHomePastTimezones(db, now).catch(() => [] as string[]);
+    let discordTimer: ReturnType<typeof setTimeout> | undefined;
+    const discordTimeout = new Promise<null>((resolve) => {
+      discordTimer = setTimeout(() => resolve(null), HOME_DISCORD_TIMEOUT_MS);
+    });
+    const discordPromise = Promise.race([
+      discord.upcoming(now).catch(() => [] as DiscordTransient[]),
+      discordTimeout,
+    ]).finally(() => clearTimeout(discordTimer));
+    const [canonical, pastZones, discordRowsOrNull] = await Promise.all([
+      canonicalPromise,
+      pastZonesPromise,
+      discordPromise,
+    ]);
+    const discordTimedOut = discordRowsOrNull === null;
+    const discordRows = discordTimedOut ? [] : (discordRowsOrNull as DiscordTransient[]);
+    // A timed-out Discord read counts as failed (its rows are unknown), so
+    // an empty canonical list still reports unavailable rather than "empty".
+    const discordFailed = discordTimedOut || discord.lastReadFailed();
+    const persisted = await persistedDiscordIds(
+      db,
+      discordRows.map((t) => t.discordId),
+    );
+    // Same zone rule as /events: modal zone over upcoming rows plus recent
+    // past rows, so a Discord-only teaser matches the /events wall time.
+    const zone = calendarZone([...canonical.map((e) => e.timezone), ...pastZones]);
+    const items = mergeHomeUpcoming(canonical, discordRows, persisted, now, zone);
+    if (items.length === 0 && discordFailed) return { items, unavailable: true, discordFailed };
+    return { items, unavailable: false, discordFailed };
+  })();
+  const deadline = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error("HomeEventsDeadline")), HOME_EVENTS_DEADLINE_MS);
+  });
+  try {
+    return await Promise.race([read, deadline]);
+  } catch (err) {
+    console.warn("Home events unavailable; serving the fallback.", {
+      exception:
+        err instanceof Error && err.message === "HomeEventsDeadline"
+          ? "HomeEventsDeadline"
+          : "ReadFailure",
+    });
+    return { items: [], unavailable: true, discordFailed: false };
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 /** Bound connection setup as well as both optional reads; never log driver messages/SQL/identities. */
