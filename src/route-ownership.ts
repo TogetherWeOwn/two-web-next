@@ -139,25 +139,6 @@ export function resolveRouteOwner(
   return bestMatch(normalized, candidates)?.enabled ? "kit" : "hono";
 }
 
-// The exact methods Kit claims for a path. Anything else on that path belongs
-// to Hono, whose own 405/Allow semantics then govern the response. HEAD is
-// claimed wherever GET is, mirroring the dispatch lookup.
-export function allowedMethodsFor(path: string, manifest: OwnedRoute[] = ROUTE_MANIFEST): string[] {
-  const normalized = normalizePath(path);
-  if (normalized === null) return [];
-  if (isReserved(normalized)) return [];
-  const seen = new Set<string>();
-  for (const entry of manifest) {
-    if (!entry.enabled) continue;
-    const exact = !entry.path.includes(":");
-    if (!(exact ? entry.path === normalized : matchPattern(entry.path, normalized))) continue;
-    const method = entry.method.toUpperCase();
-    seen.add(method);
-    if (method === "GET") seen.add("HEAD");
-  }
-  return [...seen].sort();
-}
-
 // Hook entry point: pure function of method + path. Reads nothing else, so the
 // body is still unread and the URL (query included) is intact for the owner.
 export function decideOwner(request: Request, manifest: OwnedRoute[] = ROUTE_MANIFEST): RouteOwner {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { allowedMethodsFor, decideOwner, resolveRouteOwner } from "../src/route-ownership";
+import { decideOwner, resolveRouteOwner } from "../src/route-ownership";
 
 const get = (path: string, init?: RequestInit) =>
   new Request(`http://localhost${path}`, { method: "GET", ...init });
@@ -95,15 +95,23 @@ describe("route ownership", () => {
     expect(resolveRouteOwner({ method: "GET", path: "/events/past/__data.json" })).toBe("hono");
   });
 
-  it("lists the enabled Kit methods for a path, for Allow/405 semantics", () => {
+  it("claims a :param pattern only with the same segment count and static segments", () => {
+    const manifest = [{ method: "GET", path: "/events/:key", enabled: true }];
+    expect(resolveRouteOwner({ method: "GET", path: "/events/spring-fete" }, manifest)).toBe("kit");
+    expect(resolveRouteOwner({ method: "GET", path: "/events" }, manifest)).toBe("hono");
+    expect(resolveRouteOwner({ method: "GET", path: "/events/a/b" }, manifest)).toBe("hono");
+    expect(resolveRouteOwner({ method: "GET", path: "/nope/x" }, manifest)).toBe("hono");
+  });
+
+  it("breaks equal-specificity pattern ties by manifest order", () => {
     const manifest = [
-      { method: "GET", path: "/events/past", enabled: true },
-      { method: "POST", path: "/events/past", enabled: false },
+      { method: "GET", path: "/:a/x", enabled: true },
+      { method: "GET", path: "/y/:b", enabled: false },
     ];
-    // HEAD is claimed wherever GET is, mirroring the dispatch lookup.
-    expect(allowedMethodsFor("/events/past", manifest)).toEqual(["GET", "HEAD"]);
-    expect(allowedMethodsFor("/events/past")).toEqual([]);
-    expect(allowedMethodsFor("/up", [{ method: "GET", path: "/up", enabled: true }])).toEqual([]);
+    expect(resolveRouteOwner({ method: "GET", path: "/y/x" }, manifest)).toBe("kit");
+    expect(resolveRouteOwner({ method: "GET", path: "/y/x" }, [...manifest].reverse())).toBe(
+      "hono",
+    );
   });
 
   it("decodes percent escapes like Kit before matching, so encoded aliases cannot bypass a rollback", () => {
@@ -127,7 +135,6 @@ describe("route ownership", () => {
     expect(resolveRouteOwner({ method: "GET", path: "/%61pi/agent-events" }, manifest)).toBe(
       "hono",
     );
-    expect(allowedMethodsFor("/%61pi/agent-events", manifest)).toEqual([]);
   });
 
   it("fails closed to Hono on malformed escapes and preserves literal %25 like Kit", () => {
@@ -136,7 +143,6 @@ describe("route ownership", () => {
     expect(resolveRouteOwner({ method: "GET", path: "/events/%" }, manifest)).toBe("hono");
     // %25 is a literal "%": Kit leaves it untouched to avoid double-decoding.
     expect(resolveRouteOwner({ method: "GET", path: "/events/%25" }, manifest)).toBe("kit");
-    expect(allowedMethodsFor("/events/%ZZ", manifest)).toEqual([]);
   });
 
   it("treats an encoded data suffix like the literal page suffix", () => {
