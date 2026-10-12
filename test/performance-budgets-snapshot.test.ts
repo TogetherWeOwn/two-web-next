@@ -127,10 +127,11 @@ describe("performance budgets snapshot path", () => {
     }
   });
 
-  it("distinguishes staging journeys, blocking quality checks and informational standards", () => {
+  it("distinguishes staging journeys from blocking quality and standards checks", () => {
     expect(doc).toMatch(/`staging-journeys`[^\n]*critical journey/i);
     expect(doc).toMatch(/`staging-quality`[^\n]*Lighthouse/i);
-    expect(doc).toMatch(/\| Web standards \([^\n]*informational/i);
+    expect(doc).toMatch(/\| Web standards \([^\n]*blocks/i);
+    expect(doc).not.toMatch(/continue-on-error/);
     expect(stagingWorkflow).toContain("name: staging-journeys");
     expect(stagingWorkflow).toContain("name: staging-quality");
     // Pin workflow behaviour, not comment prose: rewrapping a header comment
@@ -157,7 +158,9 @@ describe("performance budgets snapshot path", () => {
     );
     expect(mobileStep).not.toContain("continue-on-error");
     expect(desktopStep).not.toContain("continue-on-error");
-    expect(standardsStep).toContain("continue-on-error: true");
+    // Web standards blocks since the staging edge preserves Worker headers:
+    // re-adding continue-on-error to any origin step must fail this test.
+    expect(standardsStep).not.toContain("continue-on-error");
     expect(standardsStep).toContain("run: npm run standards -- --origin");
     expect(ciWorkflow).toContain(
       "name: Web standards (security headers, HTML basics, internal links)",
