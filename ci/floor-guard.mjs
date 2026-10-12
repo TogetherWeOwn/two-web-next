@@ -40,18 +40,52 @@ const ASSERTIONS = /\b(expect|assert|should)\b/;
 
 const stripPrefix = (p) => p.replace(/^[ab]\//, "");
 
+// Runner globs, not name patterns, decide whether a moved test still runs.
+// Vitest includes only test/**/*.test.ts and test/**/*.test.mjs
+// (vitest.config.ts); Playwright e2e specs run via testMatch **/*.spec.ts
+// (playwright*.config.ts) and the e2e safety scripts run via explicit
+// `node --test e2e/*.test.mjs` paths; ci selftests run via explicit
+// `node --test ci/*selftest*` paths. A rename whose source is runnable but
+// whose destination leaves the runner globs (docs/a.test.ts, test/a.test.js)
+// is a deletion from the suite, even though the name still looks like a test.
+const VITEST_RE = /^test\/.*\.test\.(ts|mjs)$/;
+const E2E_SPEC_RE = /^e2e\/.*\.spec\.ts$/;
+const E2E_SAFETY_RE = /^e2e\/.*\.test\.mjs$/;
+const isCiSelftest = (p) => p.startsWith("ci/") && TEST_PATH.test(p) && CODE_PATH.test(p);
+
+function stillRunnable(from, to) {
+  if (VITEST_RE.test(from)) return VITEST_RE.test(to);
+  if (E2E_SPEC_RE.test(from)) return E2E_SPEC_RE.test(to);
+  if (E2E_SAFETY_RE.test(from)) return E2E_SAFETY_RE.test(to);
+  if (isCiSelftest(from)) {
+    const ext = (s) => s.match(/\.[^.]*$/)?.[0] ?? "";
+    // ci selftests run via explicit paths, so a move out of ci/ or a suffix
+    // change breaks the wiring even when the name still matches.
+    return (
+      TEST_PATH.test(to) &&
+      CODE_PATH.test(to) &&
+      to.split("/")[0] === from.split("/")[0] &&
+      ext(to) === ext(from)
+    );
+  }
+  return TEST_PATH.test(to) && CODE_PATH.test(to);
+}
+
 // Parse a unified diff into added/removed lines plus deleted file paths.
 // Handles `+++ b/<path>` attribution, `+++ /dev/null` deletions, and the
 // `git diff --no-index /dev/null <f>` form used for untracked files.
 // Git's default rename detection turns a `git mv` into `rename from X` /
 // `rename to Y` headers: a 100% rename carries no ---/+++ lines at all and a
-// partial rename attributes its removed lines to the destination, so both
-// forms are handled here. A move whose source is a test path but whose
-// destination no longer runs as one (non-test path, or a non-code suffix such
-// as `*.test.ts.disabled`) counts as a deletion and needs the usual
-// `test-deleted` waiver; removed lines in a renamed file are attributed to
-// the old path so `assertion-removed` still sees them. A move that keeps a
-// runnable test path stays silent.
+// partial rename attributes its hunks to the destination, so both forms are
+// handled here. A move whose source is a test path but whose destination no
+// longer runs under the runner globs (non-test path, a non-runner suffix such
+// as `*.test.ts.disabled`, or a test-looking name outside the runner globs
+// such as `docs/a.test.ts` or `test/a.test.js`) counts as a deletion and
+// needs the usual `test-deleted` waiver. Removed lines in a renamed file keep
+// the destination as their pairing key and carry the old path separately, so
+// `assertion-removed` still pairs a one-for-one swap in a moved test; the
+// test-path check, waiver lookup and finding label read the origin. A move
+// that keeps a runnable test path stays silent.
 export function parseDiff(diff) {
   const added = [];
   const removed = [];
@@ -69,11 +103,7 @@ export function parseDiff(diff) {
       renameFrom = unquote(line.slice("rename from ".length).trim());
     } else if (line.startsWith("rename to ")) {
       const renameTo = unquote(line.slice("rename to ".length).trim());
-      if (
-        renameFrom &&
-        TEST_PATH.test(renameFrom) &&
-        !(TEST_PATH.test(renameTo) && CODE_PATH.test(renameTo))
-      ) {
+      if (renameFrom && TEST_PATH.test(renameFrom) && !stillRunnable(renameFrom, renameTo)) {
         deletedFiles.push(renameFrom);
       }
     } else if (line.startsWith("--- ")) {
@@ -89,10 +119,15 @@ export function parseDiff(diff) {
     } else if (line.startsWith("+") && !line.startsWith("+++")) {
       added.push({ file, text: line.slice(1) });
     } else if (line.startsWith("-") && !line.startsWith("---")) {
-      // In a renamed file the hunk belongs to the old path; in a pure
-      // deletion (file reset to "") it stays unattributed so a deleted test
-      // reports test-deleted only, not assertion-removed on top.
-      removed.push({ file: renameFrom && file ? renameFrom : file, text: line.slice(1) });
+      // In a renamed file the hunk keeps the destination as its pairing key
+      // and carries the old path separately; in a pure deletion (file reset
+      // to "") there is no origin, so a deleted test reports test-deleted
+      // only, not assertion-removed on top.
+      removed.push({
+        file,
+        from: renameFrom && file ? renameFrom : undefined,
+        text: line.slice(1),
+      });
     }
   }
   return { added, removed, deletedFiles };
@@ -183,15 +218,18 @@ export function scanRemoved(removed, added = [], waivers = new Map()) {
       addedAssert.set(file, (addedAssert.get(file) ?? 0) + 1);
   }
   const paired = new Map();
-  for (const { file, text } of removed) {
-    if (TEST_PATH.test(file) && ASSERTIONS.test(text)) {
-      if (waivers.get("assertion-removed")?.has(file)) continue;
+  for (const { file, from, text } of removed) {
+    // Pairing stays keyed by the destination (where the replacement lands);
+    // the test-path check, waiver lookup and finding label read the origin.
+    const origin = from ?? file;
+    if (TEST_PATH.test(origin) && ASSERTIONS.test(text)) {
+      if (waivers.get("assertion-removed")?.has(origin)) continue;
       const used = paired.get(file) ?? 0;
       if (used < (addedAssert.get(file) ?? 0)) {
         paired.set(file, used + 1);
         continue;
       }
-      flag(findings, "assertion-removed", file, text);
+      flag(findings, "assertion-removed", origin, text);
     }
   }
   return findings;

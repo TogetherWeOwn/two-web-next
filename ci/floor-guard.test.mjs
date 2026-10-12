@@ -178,6 +178,61 @@ describe("floor-guard", () => {
     assert.deepEqual(guardDiff(kept), []);
   });
 
+  it("stays silent on a rename with a one-for-one assertion swap", () => {
+    // Removed lines pair against added lines at the destination: moving a
+    // test and tweaking one assertion is a refactor, not a strip.
+    const swapped = [
+      "diff --git a/test/a.test.ts b/test/unit/a.test.ts",
+      "similarity index 90%",
+      "rename from test/a.test.ts",
+      "rename to test/unit/a.test.ts",
+      "--- a/test/a.test.ts",
+      "+++ b/test/unit/a.test.ts",
+      "@@ -1 +1 @@",
+      "-expect(1).toBe(1);",
+      "+expect(1).toBeLessThan(2);",
+    ].join("\n");
+    assert.deepEqual(
+      guardDiff(swapped).filter((f) => f.rule === "assertion-removed"),
+      [],
+    );
+  });
+
+  it("still flags a net strip in a renamed test", () => {
+    const stripped = [
+      "diff --git a/test/a.test.ts b/test/unit/a.test.ts",
+      "similarity index 90%",
+      "rename from test/a.test.ts",
+      "rename to test/unit/a.test.ts",
+      "--- a/test/a.test.ts",
+      "+++ b/test/unit/a.test.ts",
+      "@@ -1,2 +1 @@",
+      "-expect(1).toBe(1);",
+      "-expect(2).toBe(2);",
+      "+expect(1).toBeLessThan(2);",
+    ].join("\n");
+    const findings = guardDiff(stripped);
+    assert.equal(findings.filter((f) => f.rule === "assertion-removed").length, 1);
+  });
+
+  it("flags a test renamed to a test-looking name outside the runner globs", () => {
+    // Vitest includes only test/**/*.test.ts and test/**/*.test.mjs, so a
+    // move to docs/ or to a .test.js suffix leaves the suite even though the
+    // name still matches the test pattern.
+    for (const dest of ["docs/a.test.ts", "test/a.test.js"]) {
+      const renamed = [
+        `diff --git a/test/a.test.ts b/${dest}`,
+        "similarity index 100%",
+        "rename from test/a.test.ts",
+        `rename to ${dest}`,
+      ].join("\n");
+      assert.ok(
+        guardDiff(renamed).some((f) => f.rule === "test-deleted"),
+        `${dest} is outside the runner globs and needs a test-deleted waiver`,
+      );
+    }
+  });
+
   it("accepts reasoned, path-scoped floor waivers for test removals", () => {
     const deletion = [
       "diff --git a/test/gone.test.ts b/test/gone.test.ts",
