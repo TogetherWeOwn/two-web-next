@@ -183,12 +183,27 @@ describe("staging jobs handoff invariants", () => {
     // The disable stops future triggers, not runs already started: the
     // rollback carries the hold's in-flight check, or a surviving run
     // re-attaches two-web-jobs after the manual moves.
-    expect(rollbackSection).toContain("gh run list --workflow deploy");
-    expect(rollbackSection).toContain("gh run list --workflow ci");
-    expect(rollbackSection).toContain("--status queued");
+    // Address workflows by file name: the workflow-name lookup stops resolving
+    // once the lane is disabled, so the bare `--workflow deploy` form fails the
+    // Operator exactly when the check matters. The negative pins below fail on
+    // that form (and the matching ci one).
+    expect(rollbackSection).toContain("gh run list");
+    expect(rollbackSection).toContain("--workflow deploy.yml");
+    expect(rollbackSection).toContain("--workflow ci.yml");
+    expect(rollbackSection).not.toMatch(/--workflow deploy(?!\.yml)/);
+    expect(rollbackSection).not.toMatch(/--workflow ci(?!\.yml)/);
+    // Filtering on one queued status misses the run the deploy-staging
+    // concurrency group holds as pending: list every non-terminal run.
+    expect(rollbackSection).toContain('select(.status != "completed")');
+    expect(rollbackSection).toContain("pending");
     expect(rollbackSection).toContain("gh run cancel");
     expect(rollbackSection).toContain("rather than cancelling it mid-mutation");
-    expect(rollbackSection).toContain("re-recording the step-0 pointers");
+    // The step-0 record is immutable: re-recording after a mid-rollback deploy
+    // would overwrite the good pre-handoff pointers with post-deploy versions.
+    expect(rollbackSection).not.toContain("re-recording the step-0 pointers");
+    expect(rollbackSection).toContain("stays immutable");
+    expect(rollbackSection).toContain("never overwrite");
+    expect(rollbackSection).toContain("separate incident names");
     // db-migrate serves both targets on one workflow: the freeze covers
     // production too, so the runbook must say what is blocked today.
     expect(rollbackSection).toContain("production is pre-cutover");

@@ -181,13 +181,21 @@ applied outside versions, so rolling back both Workers alone leaves
 explicitly after the version rollbacks (same pre-handoff settings the web
 Worker ran with: `max_retries` 10, batch 10, timeout 5). First freeze the deploy lane
 and the migrate lane until the cause is fixed: run `gh workflow disable deploy`
-and `gh workflow disable db-migrate` before anything else, then list `deploy`
-and `ci` runs that are in progress or queued on main
-(`gh run list --workflow deploy --status in_progress`, then `--status queued`;
-same for `ci` with `gh run list --workflow ci --status in_progress`, then
-`--status queued`), let an in-progress deploy finish rather than cancelling it mid-mutation,
-cancel queued ones with `gh run cancel`, and only then start the wrangler commands below,
-re-recording the step-0 pointers if a deploy completed in the meantime. Disabling stops
+and `gh workflow disable db-migrate` before anything else, then list every
+non-terminal `deploy` and `ci` run on main. Address both workflows by file name
+and filter out only `completed`
+(`gh run list --workflow deploy.yml --json databaseId,status,headBranch --jq '.[]
+| select(.status != "completed")'`, same `gh run list` with `--workflow ci.yml`):
+the plain workflow-name lookup stops resolving once the lane is disabled, and
+filtering on a single queued status misses the run the `deploy-staging`
+concurrency group holds as pending behind an executing deploy
+(`cancel-in-progress: false`). Let an in-progress deploy finish rather than cancelling it mid-mutation,
+cancel the rest with `gh run cancel <run-id>`, and only then start the wrangler
+commands below. The step-0 record stays immutable:
+never overwrite the pre-handoff version pointers; if a deploy completed in the
+meantime, log its new live version IDs under separate incident names, re-read
+`wrangler queues consumer list` for both queues and the live schedules, and apply
+the moves below against the original pre-handoff pointers. Disabling stops
 future triggers; the hold treats existing runs as surviving the disable, so the rollback
 carries the same in-flight check.
 Re-enable both (`gh workflow enable deploy` and `gh workflow enable db-migrate`)
