@@ -123,6 +123,13 @@ describe.skipIf(!process.env.DATABASE_URL)("homepage counts (test container)", (
       DB: { connectionString: testDatabaseUrl(process.env.DATABASE_URL!).href },
       ADMIN_DB: db,
       SESSION_STORE: createMemorySessionStore(),
+      // The homepage merges Discord snapshot transients like /events. Keep
+      // this suite hermetic: no live Discord fetch, no failure warn noise in
+      // the counts logging pins below.
+      DISCORD_EVENTS: {
+        upcoming: async () => [],
+        lastReadFailed: () => false,
+      },
     } as Env;
     vi.spyOn(Date, "now").mockReturnValue(NOW);
     warn = vi.spyOn(console, "warn").mockImplementation(() => {});
