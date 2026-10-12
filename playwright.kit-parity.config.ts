@@ -1,7 +1,7 @@
 import { defineConfig, devices } from "@playwright/test";
 import { requireGithubRunner } from "./e2e/ci-only.mjs";
 import base from "./playwright.config";
-import kitPerfBudget from "./ci/kit-perf-budget.json";
+import kitPerfBudget from "./ci/kit-perf-budget.json" with { type: "json" };
 
 requireGithubRunner();
 
@@ -11,7 +11,7 @@ requireGithubRunner();
 const kitOrigin =
   process.env.KIT_WORKER_ORIGIN ?? `http://127.0.0.1:${process.env.KIT_WORKER_PORT ?? "8788"}`;
 
-// Kit journey parity (TOG-22120, docs/kit-parity-gates.md): the no-login
+// Kit journey parity (docs/kit-parity-gates.md): the no-login
 // journeys in e2e/kit-parity/ run against BOTH the Hono worker
 // (https://localhost:8787, same entrypoint as the browser smoke) and the
 // adapter-built Kit Worker (http://127.0.0.1:8788 via ci/kit-worker-dev.mjs,

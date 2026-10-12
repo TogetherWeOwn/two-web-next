@@ -10,7 +10,7 @@ import {
   type ParityTarget,
 } from "../kit-parity";
 
-// Kit journey parity (TOG-22120, docs/kit-parity-gates.md): the no-login
+// Kit journey parity (docs/kit-parity-gates.md): the no-login
 // journeys run against BOTH the Hono worker and the built Kit Worker in one
 // run, and every body comparison is origin-normalized first. Seeded
 // guest-only routes: no QA token, no session, no fixtures — so failure

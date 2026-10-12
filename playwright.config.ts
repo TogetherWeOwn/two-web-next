@@ -14,7 +14,7 @@ export default defineConfig({
   // playwright.watch.config.ts and likewise never run here, and so do the
   // staging explorer specs (playwright.explore.config.ts). The Kit parity
   // specs need the built Kit Worker next to Hono, so they run only via
-  // playwright.kit-parity.config.ts (TOG-22120).
+  // playwright.kit-parity.config.ts.
   testIgnore: "**/{staging,watch,explore,kit-parity}/**",
   fullyParallel: false,
   workers: 1,

@@ -131,7 +131,7 @@ jobs:
       - name: Critical browser journeys
         if: ${{ !cancelled() }}
         run: npm run e2e
-      # Kit journey parity (TOG-22120, docs/kit-parity-gates.md): the no-login
+      # Kit journey parity (docs/kit-parity-gates.md): the no-login
       # journeys run against Hono and the built Kit Worker on the same seeded
       # disposable Postgres. Read-only specs (no fixtures, no QA logins), so
       # they run after the journeys without skewing the teardown sweep.

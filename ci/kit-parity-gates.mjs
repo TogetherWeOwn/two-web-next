@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Kit journey parity gates (TOG-22120): status/header, semantic DOM/a11y,
+// Kit journey parity gates: status/header, semantic DOM/a11y,
 // no-JS and account-chrome assertions that run identically against Hono and
 // the built Kit Worker, with a loud ledger (unexecuted suites cannot be
 // green) and secret scrubbing (no tokens/PII in artifacts).

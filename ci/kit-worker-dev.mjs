@@ -56,6 +56,7 @@ writeFileSync(
       APP_URL: `http://127.0.0.1:${port}`,
       DATABASE_URL: databaseUrl,
       FEATURED_IMAGE_HOSTS: "",
+      SESSION_SECRET: "ci-fixture-secret",
       DISCORD_CLIENT_ID: "ci-fixture-client",
       DISCORD_CLIENT_SECRET: "ci-fixture-secret",
       DISCORD_BOT_TOKEN: "ci-fixture-token",

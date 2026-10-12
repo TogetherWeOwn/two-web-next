@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Kit performance budgets (TOG-22120): ceilings for the adapter-generated
+// Kit performance budgets: ceilings for the adapter-generated
 // Worker bundle and the Kit client assets, mirroring ci/check-bundle-budget.mjs
 // enforcement semantics. Exit 0 fits, 1 breach, 2 cannot enforce.
 //

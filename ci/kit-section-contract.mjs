@@ -1,4 +1,4 @@
-// Shared Kit/Hono section comparison (TOG-22120).
+// Shared Kit/Hono section comparison.
 //
 // The canonical treatment lives in ci/kit-preview-e2e.mjs
 // (stripHydrationMarkers/normalize): Svelte SSR emits hydration markers with
