@@ -349,8 +349,9 @@ export async function transitionEvent(
       });
     }
     // Publishing needs a non-blank location (bot upsert + ingress contract):
-    // judged here under the row lock so no route can bypass the form. Drafts
-    // may stay blank; cancellation is exempt.
+    // judged here under the row lock so no moderator route can bypass the
+    // form. The agent ingress guards its own publish path in dispatch.ts.
+    // Drafts may stay blank; cancellation is exempt.
     if (to === "published" && isBlankLocation(locked.location)) {
       throw new ValidationError({ location: LOCATION_REQUIRED });
     }
