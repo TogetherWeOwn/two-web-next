@@ -1335,10 +1335,10 @@ secret is readable by any job without that gate, so delete it there.
 `ci/check-production-secrets.test.mjs` fails any workflow job that reads a
 `PRODUCTION_*` secret without binding `production`.
 
-Implementation naming wins over older examples in `docs/db-migrations.md`:
-for branch `staging`, the actual manifest is
+For branch `staging`, the manifest is
 `neon/staging-staging/MANIFEST.txt`, daily dumps are
-`neon/staging-staging-<UTC>.dump`, weeklies append `-weekly-<UTC>.dump`.
+`neon/staging-staging-<UTC>.dump`, weeklies append `-weekly-<UTC>.dump`
+(see `docs/db-migrations.md` "Backups" for the full layout).
 Retention is newest 7 dailies + 4 weeklies. Member-data dumps belong **only** in
 EU-jurisdiction `two-web-next-backups`, never `paperclip-backups`.
 

@@ -341,6 +341,110 @@ test("neon-backup selects its environment from the dispatch target, staging by d
   assert.equal(jobEnvironment(backup.lines), "${{ inputs.target || 'staging' }}");
 });
 
+// ---------------------------------------------------------------------------
+// Backup docs pin to the implementation (TOG-22084).
+//
+// docs/db-migrations.md "Backups" and the neon-backup.yml header must state the
+// real schedule (staging nightly; production manual dispatch only) and the real
+// R2 key layout from bin/neon-backup.sh prefix() / manifest_key(). No workflow
+// or script behavior changes here.
+// ---------------------------------------------------------------------------
+
+test("neon-backup schedule dumps staging; production is manual dispatch only", () => {
+  const workflow = readFileSync(new URL("neon-backup.yml", WORKFLOWS), "utf8");
+  // The 03:17Z schedule carries no inputs, so `inputs.target || 'staging'`
+  // resolves to staging; production needs a manual dispatch with a target.
+  assert.ok(workflow.includes("17 3 * * *"), "expected the 03:17Z cron in neon-backup.yml");
+  assert.ok(
+    workflow.includes("environment: ${{ inputs.target || 'staging' }}"),
+    "schedule path must resolve to staging via the inputs.target fallback",
+  );
+  assert.ok(
+    workflow.includes('default: "staging"'),
+    "expected the dispatch target to default to staging",
+  );
+
+  const header = workflow.slice(0, workflow.indexOf("on:"));
+  assert.ok(
+    header.includes("Staging is dumped nightly by the schedule"),
+    "workflow header must state staging is dumped nightly by the schedule",
+  );
+  assert.ok(
+    header.includes("target: production"),
+    "workflow header must state production is dumped only by manual dispatch",
+  );
+  assert.ok(
+    header.includes("`production` Environment"),
+    "workflow header must name the production Environment gate",
+  );
+
+  const docs = readFileSync(new URL("../docs/db-migrations.md", import.meta.url), "utf8");
+  const start = docs.indexOf("## Backups");
+  assert.ok(start >= 0, "expected a Backups section in docs/db-migrations.md");
+  const end = docs.indexOf("## ", start + "## ".length);
+  const backups = docs.slice(start, end < 0 ? undefined : end);
+  assert.ok(
+    backups.includes("Staging is dumped nightly by the schedule") ||
+      backups.includes("Staging is\n dumped nightly by the schedule") ||
+      backups.includes("dumped nightly by the schedule"),
+    "Backups section must state staging is dumped nightly by the schedule",
+  );
+  assert.ok(
+    backups.includes("only by manual dispatch"),
+    "Backups section must state production is dumped only by manual dispatch",
+  );
+  assert.ok(
+    backups.includes("target: production"),
+    "Backups section must name the manual dispatch target: production",
+  );
+  assert.ok(
+    backups.includes("`production` Environment"),
+    "Backups section must name the production Environment gate",
+  );
+});
+
+test("backup docs name the real R2 key layout from prefix() / manifest_key()", () => {
+  const script = readFileSync(new URL("../bin/neon-backup.sh", import.meta.url), "utf8");
+  assert.match(
+    script,
+    /prefix\(\) \{ printf '%s\/%s-%s'/,
+    "expected prefix() to build <prefix>/<branch>-<branch> in bin/neon-backup.sh",
+  );
+  assert.match(
+    script,
+    /manifest_key\(\) \{ printf '%s\/%s-%s\/MANIFEST\.txt'/,
+    "expected manifest_key() to build <prefix>/<branch>-<branch>/MANIFEST.txt",
+  );
+
+  const docs = readFileSync(new URL("../docs/db-migrations.md", import.meta.url), "utf8");
+  const start = docs.indexOf("## Backups");
+  assert.ok(start >= 0, "expected a Backups section in docs/db-migrations.md");
+  const end = docs.indexOf("## ", start + "## ".length);
+  const backups = docs.slice(start, end < 0 ? undefined : end);
+  assert.ok(
+    backups.includes("neon/<branch>-<branch>-<UTC>.dump"),
+    "Backups layout must name the real daily key neon/<branch>-<branch>-<UTC>.dump",
+  );
+  assert.ok(
+    backups.includes("neon/<branch>-<branch>/MANIFEST.txt"),
+    "Backups layout must name the real manifest neon/<branch>-<branch>/MANIFEST.txt",
+  );
+  assert.ok(
+    !backups.includes("neon-staging/neon-") && !backups.includes("neon-production/neon-"),
+    "Backups layout must not use the old neon-staging/neon- prefix",
+  );
+
+  const runbook = readFileSync(new URL("../docs/runbook.md", import.meta.url), "utf8");
+  assert.ok(
+    !runbook.includes("older examples in `docs/db-migrations.md`"),
+    "runbook must not carry the older-examples caveat once the docs agree",
+  );
+  assert.ok(
+    runbook.includes("neon/staging-staging/MANIFEST.txt"),
+    "runbook must keep the staging manifest example",
+  );
+});
+
 // Fixtures mirror the shapes that matter; none contain a real value.
 const FIXTURE_HEAD = `name: fixture
 on:
