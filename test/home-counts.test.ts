@@ -103,6 +103,9 @@ describe.skipIf(!process.env.DATABASE_URL)("homepage counts (test container)", (
     const columns = Object.keys(getTableColumns(events)) as (keyof typeof event)[];
     const db = drizzle(async (query) => {
       if (query.includes("set_config")) return { rows: [] };
+      // Past-zones probe (timezone-only select): this fixture holds a single
+      // future event, so there are no past zones.
+      if (query.includes('"timezone"') && !query.includes('"title"')) return { rows: [] };
       if (query.includes('from "events"'))
         return {
           rows: [
@@ -120,9 +123,16 @@ describe.skipIf(!process.env.DATABASE_URL)("homepage counts (test container)", (
     Object.assign(db, { transaction: async (fn: (tx: Db) => Promise<unknown>) => fn(db) });
     env = {
       ...baseEnv,
-      DB: { connectionString: testDatabaseUrl(process.env.DATABASE_URL!).href },
+      BOT_DB: { connectionString: testDatabaseUrl(process.env.DATABASE_URL!).href },
       ADMIN_DB: db,
       SESSION_STORE: createMemorySessionStore(),
+      // The homepage merges Discord snapshot transients like /events. Keep
+      // this suite hermetic: no live Discord fetch, no failure warn noise in
+      // the counts logging pins below.
+      DISCORD_EVENTS: {
+        upcoming: async () => [],
+        lastReadFailed: () => false,
+      },
     } as Env;
     vi.spyOn(Date, "now").mockReturnValue(NOW);
     warn = vi.spyOn(console, "warn").mockImplementation(() => {});
@@ -177,9 +187,21 @@ describe.skipIf(!process.env.DATABASE_URL)("homepage counts (test container)", (
     expect(warn).not.toHaveBeenCalled();
   });
 
-  it("supports explicit local DATABASE_URL without the binding", async () => {
-    env = { ...env, DATABASE_URL: env.DB!.connectionString, DB: undefined };
+  it("supports explicit local BOT_DATABASE_URL without the binding", async () => {
+    env = { ...env, BOT_DATABASE_URL: env.BOT_DB!.connectionString, BOT_DB: undefined };
     expect(await home()).toContain("<strong>84</strong> members");
+  });
+
+  it("hides counts when only the web database is configured", async () => {
+    env = {
+      ...env,
+      BOT_DATABASE_URL: undefined,
+      BOT_DB: undefined,
+      DB: { connectionString: testDatabaseUrl(process.env.DATABASE_URL!).href },
+    };
+    const html = await home();
+    expect(html).not.toContain('data-testid="member-count"');
+    expect(html).toContain("The lobby is open.");
   });
 
   it("keeps a genuine zero member count, and omits zero online", async () => {

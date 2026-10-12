@@ -20,6 +20,7 @@ LINT_FIXTURE_EXCLUSIONS = {
     ".github/scripts/test_pr_standards.py": "Synthetic PR-text violations exercise the metadata lint.",
     "ci/test_check_pr_conventions.py": "Synthetic titles, bodies and commit subjects exercise the conventions lint.",
     ".github/scripts/test_internal_ref_ratchet.py": "Synthetic tracked-file violations exercise this ratchet.",
+    "ci/test_pr_lint_docs.py": "Synthetic PR-text violations exercise the pr-lint docs drift test.",
 }
 
 

@@ -122,6 +122,18 @@ jobs:
       # unreachable /up, never fails the deploy.
       - name: Record live revision (rollback pointer)
         run: node bin/revision-check.mjs https://next.togetherweown.com
+      - name: Verify jobs Worker BOT secrets exist (fail-closed)
+        # Read-only preflight before the first Cloudflare mutation (queue
+        # creation below). The jobs deploy attaches the jobs consumer
+        # automatically; without its BOT_* secrets every bot job fails
+        # terminally and the consumer acks the message
+        # (src/jobs/consumer.ts), so deliveries leave the queue and need a
+        # manual replay. Fail here, before anything mutates, when a name is
+        # missing. Names only, never values (docs/jobs-handoff.md).
+        run: node ci/check-jobs-secrets.mjs
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
       - name: Ensure queues exist
         # Idempotent: "already exists" is fine; a real permission error surfaces at deploy.
         run: |
@@ -153,14 +165,47 @@ jobs:
       - name: Deploy to Cloudflare Workers
         # The Version is tagged with the CI-verified commit; /up reads the tag
         # back as revision.commit (a full lowercase SHA only). The web Worker
-        # only produces after TOG-22127: deploy it before the jobs Worker so a
-        # handoff detach precedes the attach and two consumers never exist.
+        # only produces after the handoff. Deploying the consumer-free config
+        # does NOT detach the existing consumers: Wrangler only adds or updates
+        # the consumers listed in the deployed config, never deletes a dropped
+        # one. The detach step below removes them explicitly before the jobs
+        # Worker attaches, so two consumers never exist.
         run: npx wrangler deploy --config wrangler.jsonc --tag "${DEPLOY_SHA:?}"
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           # workflow_run's github.sha is main's tip; tag the CI-verified checkout.
           DEPLOY_SHA: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
+      - name: Re-verify exact-SHA full CI before detaching web consumers
+        # The web deploy may outlive the accepted CI attempt; this step runs directly before the detach.
+        run: node ci/staging-deploy-gate.mjs
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+      - name: Detach staging web queue consumers (idempotent)
+        # The consumer-free web deploy above leaves worker:two-web-next attached
+        # to both staging queues. Remove it explicitly so the jobs deploy below
+        # does not collide with a conflicting consumer. Idempotent: the list
+        # check makes a re-run after a partial detach a no-op, and removing an
+        # already-absent consumer is never an error here.
+        run: |
+          for q in two-sync-event two-internal-action; do
+            # Preparation or an earlier mutation may outlive the accepted CI attempt.
+            node ci/staging-deploy-gate.mjs || exit 1
+            # The step shell is dash without pipefail: a failed list piped
+            # into grep reads as "no consumer" and the jobs deploy then
+            # collides with the still-attached web consumer. Capture first so
+            # a failed list fails the job instead.
+            out=$(npx wrangler queues consumer list "$q") || exit 1
+            if printf '%s' "$out" | grep -q "two-web-next"; then
+              npx wrangler queues consumer remove "$q" two-web-next
+            else
+              echo "no two-web-next consumer on $q"
+            fi
+          done
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
       - name: Re-verify exact-SHA full CI before jobs Worker deploy
         # The web deploy may outlive the accepted CI attempt; this step runs directly before the jobs deploy.
         run: node ci/staging-deploy-gate.mjs
@@ -168,8 +213,9 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
       - name: Deploy staging jobs Worker (queues + cron owner)
         # two-web-jobs consumes the staging queues and owns both crons
-        # (docs/jobs-handoff.md). Same tag as the web Worker. Its BOT_* and
-        # QA_AUTH_TOKEN secrets are Operator-provisioned, never in source.
+        # (docs/jobs-handoff.md). Same tag as the web Worker. Its BOT_*
+        # secrets are Operator-provisioned, never in source, and verified by
+        # the preflight above; QA_AUTH_TOKEN stays optional (probe-only).
         run: npx wrangler deploy --config wrangler.jobs.jsonc --tag "${DEPLOY_SHA:?}"
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}

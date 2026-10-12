@@ -1,0 +1,62 @@
+# fetch(...) must be awaited, returned, or .then/.catch-chained (HARD gate).
+#
+# TSX twin of fetch-await.yml: ast-grep applies a rule to a single language,
+# so `src/**/*.tsx` needs `language: tsx`. Rule body is identical; keep the
+# two files in sync. See fetch-await.yml for the boundary rationale.
+id: fetch-must-be-awaited-tsx
+language: tsx
+severity: error
+message: "fetch(...) must be awaited, returned, or .then/.catch-chained"
+note: >-
+  Write `await fetch(...)`, `return fetch(...)`, or chain
+  `fetch(...).then(...)`.
+files:
+  - src/**/*.tsx
+rule:
+  kind: call_expression
+  pattern: fetch($$$)
+  not:
+    any:
+      - inside:
+          kind: await_expression
+          stopBy:
+            any:
+              - kind: arrow_function
+              - kind: function_declaration
+              - kind: function_expression
+              - kind: method_definition
+      - inside:
+          kind: return_statement
+          stopBy:
+            any:
+              - kind: arrow_function
+              - kind: function_declaration
+              - kind: function_expression
+              - kind: method_definition
+      - inside:
+          stopBy:
+            any:
+              - kind: arrow_function
+              - kind: function_declaration
+              - kind: function_expression
+              - kind: method_definition
+          pattern: fetch($$$).then($$$)
+      - inside:
+          stopBy:
+            any:
+              - kind: arrow_function
+              - kind: function_declaration
+              - kind: function_expression
+              - kind: method_definition
+          pattern: fetch($$$).catch($$$)
+      - inside:
+          stopBy:
+            any:
+              - kind: arrow_function
+              - kind: function_declaration
+              - kind: function_expression
+              - kind: method_definition
+          pattern: fetch($$$).finally($$$)
+      - inside:
+          kind: arrow_function
+          field: body

@@ -388,6 +388,81 @@ Postgres migrations, data writes, Discord side effects, queue messages or
 external-resource changes; keep the release workflow from redeploying the bad
 head. Record the rollback deployment and previous/current version IDs.
 
+#### Production trigger reconciliation (manual, domain-safe)
+
+Promoting a Worker Version does not apply `wrangler.jsonc` cron schedules or
+queue consumers, and neither `wrangler deploy --env production` nor `wrangler
+triggers deploy --env production` may be used to apply them: both re-sync
+routes and custom domains, retry provisioning the already-attached apex, and
+fail with Cloudflare 100117. `test/probe-workflows.test.ts` pins the
+literal reviewed `env.production` schedules and consumers, so any change
+fails CI until the test is updated in the same release PR; the authorized
+production principal then reconciles
+only the changed trigger kind below and reads back the result. These endpoints
+manage schedules and consumers only and never touch custom domains or DNS.
+Never delete/recreate the apex DNS record or the custom domain, and never
+remove consumers to hide an incident (see [Queue containment](#queue-containment-drain-and-failed-job-replay)).
+
+1. Read the live state (metadata reads, no mutation; approved Cloudflare
+   credentials must already be injected, never supplied on argv). Resolve
+   queue names to IDs first; the consumer endpoints take the queue ID.
+   The token is read from the environment inside node, never placed on
+   argv, so it never appears in `ps` or `/proc/<pid>/cmdline`:
+
+   ```bash
+   (
+     set -euo pipefail
+     : "${CF_ACCOUNT_ID:?production account id}"
+     : "${CLOUDFLARE_API_TOKEN:?injected, never on argv}"
+     CF_TOKEN="$CLOUDFLARE_API_TOKEN" CF_ACCT="$CF_ACCOUNT_ID" node -e '
+       const token = process.env.CF_TOKEN;
+       const acct = process.env.CF_ACCT;
+       (async () => {
+         for (const p of [
+           `/accounts/${acct}/workers/scripts/two-web-next-production/schedules`,
+           `/accounts/${acct}/queues`,
+         ]) {
+           const r = await fetch("https://api.cloudflare.com/client/v4" + p, {
+             headers: { authorization: "Bearer " + token },
+           });
+           const d = await r.json();
+           if (!d.success) { console.error(JSON.stringify(d.errors)); process.exit(1); }
+           console.log(JSON.stringify(d.result));
+         }
+       })();
+     '
+   )
+   ```
+
+   Compare the schedules against `wrangler.jsonc`
+   `env.production.triggers.crons`, and each production queue's consumers
+   (`GET .../queues/<queue_id>/consumers`) against
+   `env.production.queues.consumers`. Identical means nothing to do.
+2. On cron drift only, replace the script schedules with the reviewed crons:
+   `PUT .../workers/scripts/two-web-next-production/schedules` with
+   `[{"cron": "<each env.production cron>"}]`, then repeat the GET read-back
+   until it matches.
+3. On consumer drift only, reconcile that queue's consumer with the
+   reviewed `script_name`, `type: "worker"` and settings, then repeat the
+   list read-back until it matches. Wrangler maps `wrangler.jsonc` keys to
+   API fields: `max_batch_size` → `batch_size`, `max_batch_timeout`
+   (seconds) → `max_wait_time_ms` (milliseconds, so `5` becomes `5000`;
+   copying `5` verbatim would set a 5 ms wait), `max_retries` unchanged.
+   `PUT` replaces the whole consumer, so send every setting every time;
+   if the reviewed config gains `dead_letter_queue`, `max_concurrency` or
+   `retry_delay`, include those too. Consumers attach a queue to a script
+   and survive version promotions; only an actual config change needs this
+   step.
+   - Consumer missing (the read-back lists no worker consumer for this
+     script on the queue): create it with `POST
+     .../queues/<queue_id>/consumers` and this body (current reviewed
+     values): `{"type": "worker", "script_name":
+     "two-web-next-production", "settings": {"batch_size": 10,
+     "max_retries": 10, "max_wait_time_ms": 5000}}`.
+   - Consumer exists: replace it with `PUT
+     .../queues/<queue_id>/consumers/<consumer_id>` and the same body.
+   Record the before/after read-backs with the release evidence.
+
 #### Staging (manual)
 
 ```bash
@@ -1084,7 +1159,7 @@ Never test production; staging E2E needs verified staging bindings.
 
 The table describes the path that reaches the relevant operation; validation,
 authentication, access gates or static asset handling can return earlier.
-Uncaught DB errors use the global **500 HTML** handler, even on event JSON routes.
+Uncaught non-database errors generally use the global **500 HTML** handler, including on event JSON routes. Member-read boundaries instead refuse failed reads with plain-text **503**; classified database-unavailable errors use the shared sanitized **503** response.
 The [parity matrix](parity.md) is a historical snapshot; current source/tests
 below, not its older `/up` row, define these outcomes.
 
@@ -1098,15 +1173,16 @@ below, not its older `/up` row, define these outcomes.
 | `/csp-reports` (POST) | Stays **204**, DB-free sink. |
 | `/db-ping`, `/health`, `/healthz` (GET) | **404**, same as unknown paths; optional event suggestions tolerate DB failure. |
 | `/` (GET) | Stays **200** with guest fallback on session-store setup/migration/read or rotation failure. Unavailable counts are omitted, events show the unavailable state, and failed featured reads are omitted. Missing DB also serves the guest shell. This does not prove an authenticated session or successful persistence. |
-| `/auth/discord/callback` (GET) | With the app DB down before the one-use journey is consumed, **302** to `/?n=signin_failed`. Session-create failure after a successful Discord exchange is **500**; roster-write-only failure is caught. Invalid state or Discord exchange failure redirects **302** before persistence. |
-| `/join/discord`, `/join/callback` (GET) | Configured join-store/throttle/attempt/session errors can be **500**. Discord exchange failure separately gives a **503** recovery page; missing DB uses no-op attempt/throttle stores. |
-| `/auth/qa/:identity` (POST) | Enabled/authorized session failure **500**; disabled/bad credential **404**. QA is never a production recovery mechanism. |
+| `/auth/discord/callback` (GET) | With the app DB down before the one-use journey is consumed, **302** to `/?n=signin_failed`. A classified DB outage during session creation after a successful Discord exchange returns sanitized **503**; roster-write-only failure is caught. Invalid state or Discord exchange failure redirects **302** before persistence. |
+| `/join/discord`, `/join/callback` (GET) | A classified DB outage (the throttle runs first on both routes) returns the branded sanitized **503** before any Discord call; other uncaught join-store, attempt or session errors can be **500**. Discord exchange failure separately gives a **503** recovery page; missing DB uses no-op attempt/throttle stores. |
+| `/auth/qa/:identity` (POST) | Enabled/authorized session failure from a classified DB outage **503**; other uncaught failures **500**; disabled/bad credential **404**. QA is never a production recovery mechanism. |
 | `/logout` (POST) | Without a session cookie, **303** and cookie clearing even when the DB is down. With a session cookie, a store or revocation failure returns **503** `Sign-out temporarily unavailable` and keeps the cookie, because the server row may still be valid. |
-| `/events`, `/events/past`, `/events.rss`, `/events.ics`, `/events/:key.ics`, `/e/:key` (GET) | Uncaught DB/session failure **500 HTML**; missing event DB **503**. Invalid keys can be **404** before DB access. |
-| `/events.json` (GET); `/events` (POST); `/events/:key` (PATCH); publish/cancel (POST) | DB/session failure **500 HTML**; missing event DB **503 JSON**. Auth gates can return **401/403** first. Post-commit enqueue failure leaves normal **201/200**. |
-| `/events/:key/rsvp` (PUT/DELETE) | Session/transaction failure **500 HTML**; missing event DB **503 JSON**, auth gates **401/403**. Honeypot decoys are DB-free **201/204**, not successful attendance. Post-commit enqueue failure does not change success status. |
-| `/profile`, `/members/:user` (GET); member save (PATCH or form-override POST) | Session resolution failure **503**; subsequent read/save failure **500**. Missing store **503**. Default required access-log failure replaces successful reads with **503**; guest **302**, non-member **403**. |
-| Implemented `/admin` routes | Session resolution failure **503**, later resource/dashboard query failure **500**; missing resource DB **503**. Default required access-log failure gives **503**; guest **302**, non-moderator **403**. |
+| `/events`, `/events/past`, `/events.rss`, `/events.ics`, `/events/:key.ics` (GET) | Classified DB outages use the shared sanitized **503** response (HTML, or JSON when negotiated). A missing event DB returns plain-text **503** `Events temporarily unavailable`. Other uncaught failures use **500 HTML**. Invalid keys can be **404** before DB access. |
+| `/e/:key` (GET) | Classified DB outages use the shared sanitized **503** response (HTML, or JSON when negotiated). A missing event DB returns plain-text **503** `Events temporarily unavailable`; other failed reads are refused with plain-text **503** `Member data is temporarily unavailable.` Invalid keys can be **404** before DB access. |
+| `/events.json` (GET); `/events` (POST); `/events/:key` (PATCH); publish/cancel (POST) | Classified DB-outage failures and missing event DB return **503 JSON**. Other uncaught failures use **500 HTML**. Auth gates can return **401/403** first. Post-commit enqueue failure leaves normal **201/200**. |
+| `/events/:key/rsvp` (PUT/DELETE) | Classified DB-outage failures and missing event DB return **503 JSON**. Other uncaught failures use **500 HTML**; auth gates **401/403**. Honeypot decoys are DB-free **201/204**, not successful attendance. Post-commit enqueue failure does not change success status. |
+| `/profile`, `/members/:user` (GET); member save (PATCH or form-override POST) | Session resolution and member-data read failures return sanitized **503**; classified DB outages during saves also return sanitized **503**, while other save failures return plain-text **500** `Could not save your profile.` Missing store **503**. Default required access-log failure replaces successful reads with **503**; guest **302**, non-member **403**. |
+| Implemented `/admin` routes | Session resolution, admin reads and classified DB outages return sanitized **503**; missing resource DB and default required access-log failure also give **503**. Other uncaught admin-write failures use the global **500 HTML** handler; guest **302**, non-moderator **403**. |
 | `/api/agent-events` (POST) | Shared web database (`AGENT_DB` when bound, else `DATABASE_URL`, otherwise `DB`): disabled **404**, enabled without any source **503**, service DB failure **500 JSON** `internal_error` (or **503** `ingress_unavailable` when the database is unreachable). No connection failover. Bot observation failure stays a typed unavailable result; post-commit write-back uses the same optional admin carrier. |
 
 Sources: [src/index.tsx](../src/index.tsx), [auth routes](../src/auth/routes.ts),
@@ -1121,12 +1197,6 @@ not conditional on an unmerged outage fix. Offline evidence:
 [counts failure fixtures](../test/home-counts.test.ts) and
 [DB-construction/featured failure fixtures](../test/featured-outage.test.ts).
 These are local doubles, not deployed outage acceptance.
-
-Pending [#92](https://github.com/TogetherWeOwn/two-web-next/pull/92), inspected at
-[`826e77d`](https://github.com/TogetherWeOwn/two-web-next/commit/826e77d535325624b00d01c2a702d0617f26323a),
-adds broader sanitized DB-outage 503 responses, homepage session-unavailable UI
-and best-effort logout setup. Those changes are **not shipped in this snapshot**;
-retain the current private-route 500/503 distinctions above until it merges.
 
 Shared human throttles and profile throttles fail open on store error; the shared
 human throttle currently uses only `DATABASE_URL`, not Hyperdrive. Optional

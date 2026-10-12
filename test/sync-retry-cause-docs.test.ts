@@ -75,7 +75,7 @@ describe("sync retry-cause runbook contract", () => {
     expect(body).toMatch(/no event payload/i);
     expect(body).toMatch(/key material/i);
     expect(body).toContain("sync retry classified");
-    expect(body).toContain("npx wrangler tail two-web-next");
+    expect(body).toContain("npx wrangler tail two-web-jobs");
     expect(body).toContain('any(.message[]?; . == "sync retry classified")');
     expect(body).toContain('select(type == "object")');
   });

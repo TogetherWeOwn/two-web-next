@@ -93,7 +93,7 @@ probe sends to the internal-action queue) with the same
 `handleQueue`/`handleScheduled` handlers that the jobs-only entry
 ([src/jobs-worker.ts](../src/jobs-worker.ts)) exports. The jobs Worker
 (`two-web-jobs`, [wrangler.jobs.jsonc](../wrangler.jobs.jsonc)) owns both
-staging consumers and both crons after TOG-22127; a queue has exactly one
+staging consumers and both crons after the handoff; a queue has exactly one
 consumer. The handoff sequence, secrets and rollback are in
 [jobs-handoff.md](./jobs-handoff.md).
 
@@ -198,8 +198,12 @@ Read from: [web/package.json](../web/package.json),
 
 - [web/](../web/) (`two-web-next-kit` in
   [web/package.json](../web/package.json)) is the experimental SvelteKit
-  strangler preview, not the primary Worker: unported routes fall through to
-  the unchanged Hono app
+  strangler preview, not the primary Worker: the hook
+  ([web/src/hooks.server.ts](../web/src/hooks.server.ts)) picks exactly one
+  renderer per request from the method-aware manifest in
+  [src/route-ownership.ts](../src/route-ownership.ts) before Kit resolve,
+  and Hono-owned paths (the default, including disabled native routes and the
+  reserved APIs) go to the unchanged in-process Hono app
   ([web/src/lib/server/hono.ts](../web/src/lib/server/hono.ts)). Status:
   experimental spike, not serving production traffic.
 - [spike/](../spike/) holds the Hyperdrive-semantics probe only. Status:
@@ -241,6 +245,7 @@ exactly once.
 | Path | Area |
 | --- | --- |
 | `src/access-log.ts` | observability |
+| `src/ai-friendly/` | content |
 | `src/admin/` | admin |
 | `src/agent-events/` | agent-events |
 | `src/alert-probe-error.ts` | observability |
@@ -277,6 +282,8 @@ exactly once.
 | `src/jobs/` | jobs |
 | `src/jobs-worker.ts` | jobs |
 | `src/join/` | join |
+| `src/kit-session.ts` | auth |
+| `src/mcp/` | content |
 | `src/member-erasure.ts` | profiles |
 | `src/member-reads.ts` | profiles |
 | `src/not-found-suggestions.ts` | content |
@@ -293,11 +300,13 @@ exactly once.
 | `src/request-log.ts` | observability |
 | `src/return-journey.ts` | auth |
 | `src/roles.ts` | auth |
+| `src/route-ownership.ts` | entry |
 | `src/rules-last-updated.ts` | content |
 | `src/same-origin.ts` | http-guard |
 | `src/screens/` | content |
 | `src/security-txt.ts` | content |
 | `src/seo.ts` | content |
+| `src/seo-json-ld.ts` | content |
 | `src/seo-leaves.tsx` | entry |
 | `src/session-cookie.ts` | auth |
 | `src/session-revocation.ts` | auth |
@@ -313,6 +322,7 @@ exactly once.
 | `src/up-revision.ts` | observability |
 | `src/up-timeout.ts` | observability |
 | `src/up.ts` | observability |
+| `src/webmcp-pilot.ts` | http-guard |
 | `src/worker.ts` | entry |
 | `src/write-recovery.tsx` | auth |
 <!-- module-map:end -->

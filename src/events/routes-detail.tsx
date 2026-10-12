@@ -4,7 +4,7 @@ import { dbFor } from "../admin/db";
 import { databaseUnavailable, NotFoundPage } from "../errors";
 import { bufferedMemberHtml, bufferedMemberText, memberReadBoundary } from "../member-reads";
 import { readJoinResult, takeJoinResult } from "../return-journey";
-import { canonicalUrl } from "../seo";
+import { eventJsonLd, siteJsonLd } from "../seo-json-ld";
 import { canonicalEventKey, eventKeyAllowed } from "./keys";
 import { cachedNotFoundSuggestions } from "../not-found-suggestions";
 import {
@@ -27,26 +27,15 @@ import {
   type SessionReader,
 } from "./routes-shared";
 
+// The per-event block stays a top-level Event (existing readers pin that
+// shape) with a stable @id, organizer reference and attendance mode; the
+// shared site identities travel in a second block (see pages-shared).
 function jsonLd(e: PublicEvent, appUrl: string): string {
-  const ld = {
-    "@context": "https://schema.org",
-    "@type": "Event",
-    name: e.title,
-    startDate: e.startsAt.toISOString(),
-    endDate: e.endsAt.toISOString(),
-    eventStatus:
-      e.status === "cancelled"
-        ? "https://schema.org/EventCancelled"
-        : "https://schema.org/EventScheduled",
-    location: {
-      "@type": "VirtualLocation",
-      url: e.location && /^https?:/.test(e.location) ? e.location : appUrl,
-    },
-    ...(e.description ? { description: e.description } : {}),
-    url: canonicalUrl(appUrl, `/e/${e.eventKey}`),
-  };
-  // `<` escaped so a title can never close the script element.
-  return JSON.stringify(ld).replace(/</g, "\\u003c");
+  return eventJsonLd(e, appUrl);
+}
+
+function siteIdentities(appUrl: string): string {
+  return siteJsonLd(appUrl);
 }
 
 export function registerDetailRoutes(
@@ -142,7 +131,11 @@ export function registerDetailRoutes(
             c.header("cache-control", "private, no-store");
             return bufferedMemberHtml(
               c,
-              <EventGonePage e={e} jsonLd={jsonLd(e, c.env.APP_URL)} />,
+              <EventGonePage
+                e={e}
+                jsonLd={jsonLd(e, c.env.APP_URL)}
+                siteJsonLd={siteIdentities(c.env.APP_URL)}
+              />,
               410,
             );
           }
@@ -176,12 +169,16 @@ export function registerDetailRoutes(
               attendees={attendees}
               appUrl={c.env.APP_URL}
               jsonLd={jsonLd(e, c.env.APP_URL)}
+              siteJsonLd={siteIdentities(c.env.APP_URL)}
               session={session}
               joinResult={joinResult}
               waitlistPosition={position}
               member={member}
               answer={answer}
               returnTo={returnTo}
+              // Drafts have no Markdown view: the session-free .md route 403s
+              // for every viewer, so only link it where it answers 200.
+              markdownAlternate={e.status === "draft" ? undefined : `/e/${e.eventKey}.md`}
             />,
           );
         };

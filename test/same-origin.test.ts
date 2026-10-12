@@ -70,6 +70,7 @@ describe("mounted route same-origin audit", () => {
     expect(SAME_ORIGIN_EXEMPTIONS).toEqual([
       { method: "POST", path: "/api/agent-events" },
       { method: "POST", path: "/csp-reports" },
+      { method: "POST", path: "/mcp" },
     ]);
     expect(guarded.length).toBeGreaterThan(0);
     // The QA alert probe is a guarded write, not a machine-ingress exemption.
@@ -239,6 +240,6 @@ describe("same-origin middleware", () => {
         ).toBe(403);
       }
     }
-    expect(effect).toHaveBeenCalledTimes(2);
+    expect(effect).toHaveBeenCalledTimes(SAME_ORIGIN_EXEMPTIONS.length);
   });
 });

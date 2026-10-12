@@ -285,7 +285,7 @@ jobs:
           # On hosted/overflow runners the job container's root does not own the
           # runner-owned checkout, so Git refuses it as dubious ownership.
           git config --global --add safe.directory "$GITHUB_WORKSPACE"
-          apt-get update -qq && apt-get install -y -qq --no-install-recommends socat postgresql-client >/dev/null
+          apt-get update -qq && apt-get install -y -qq --no-install-recommends socat postgresql-client python3-venv >/dev/null
           nohup setsid socat TCP-LISTEN:5432,bind=127.0.0.1,reuseaddr,fork TCP:postgres:5432 >/dev/null 2>&1 &
           for i in $(seq 1 30); do pg_isready -q -h 127.0.0.1 -U postgres && exit 0; sleep 1; done
           exit 1
@@ -339,9 +339,31 @@ jobs:
       - name: Biome gate selftest (intentional violations)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
         run: bash ci/biome-selftest.sh
+      # Fetch-await HARD gate (quality-gates.md): every fetch() in src/ is
+      # awaited, returned or chained, plus the shared vendored warning rules
+      # and their fixtures. No build needed; fails the job.
+      - name: Fetch-await gate (ast-grep, HARD)
+        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
+        run: |
+          node ci/ast-grep-warn-selftest.mjs
+          npm run scan:fetch-await
+          npm run scan:rules-test
+      # Floor guard HARD (CONSTRAINTS.md): no new suppressions, skips,
+      # deleted tests, stripped assertions, stubs, exception rows or lowered
+      # thresholds in the PR diff. Reads git history; fails the job.
+      - name: Floor guard (HARD)
+        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
+        run: npm run floor-guard:selftest && npm run floor-guard
+      # Test-inventory WARN gate (quality-gates.md): every test file runs
+      # somewhere. Filesystem-only; continue-on-error so it reports without
+      # ever failing the job or skipping the steps after it (WARN).
+      - name: Test inventory (WARN)
+        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
+        continue-on-error: true
+        run: npm run test:inventory:selftest && npm run test:inventory
       - name: Check (lint + typecheck + coverage gate)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
-        run: npm run lint && npm run typecheck && npm run e2e:typecheck && npm run test:coverage && npm run e2e:safety && node --test ci/a11y-*.test.mjs ci/admin-properties-ci.test.mjs ci/coverage-command.test.mjs ci/visual-accept.test.mjs
+        run: npm run lint && npm run typecheck && npm run e2e:typecheck && npm run test:coverage && npm run e2e:safety && node --test ci/a11y-*.test.mjs ci/admin-properties-ci.test.mjs ci/coverage-command.test.mjs ci/kit-preview-e2e-wiring.test.mjs ci/visual-accept.test.mjs
         env:
           DATABASE_URL: postgres://postgres:ci@localhost:5432/postgres
           AUDIT_IMPORT_TEST_DATABASE_URL: postgres://postgres:ci@localhost:5432/postgres
@@ -357,6 +379,17 @@ jobs:
       - name: Kit typecheck (svelte-check, warnings fail)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true' || needs.scope.outputs.worker == 'true')
         run: npm run check --prefix web
+      - name: Cache Kit parity Chromium
+        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true' || needs.scope.outputs.worker == 'true')
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/ms-playwright
+          key: kit-parity-chromium-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
+          restore-keys: |
+            kit-parity-chromium-${{ runner.os }}-
+      - name: Install Kit parity Chromium
+        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true' || needs.scope.outputs.worker == 'true')
+        run: npx playwright install --with-deps chromium
       - name: Kit archive parity (Hono vs SvelteKit section contract)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true' || needs.scope.outputs.worker == 'true')
         run: node ci/kit-preview-e2e.mjs
@@ -383,6 +416,34 @@ jobs:
       - name: Shadow-compare selftest (loopback only)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
         run: npm run test:shadow
+      # Changed-lines WARN gate (quality-gates.md): added TS lines should be
+      # executed (80%). Reads the coverage this job just produced; warns only.
+      - name: Patch coverage (WARN)
+        if: always() && (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && hashFiles('coverage/coverage-final.json') != ''
+        run: npm run patch:coverage:selftest && npm run patch:coverage
+      # Semgrep WARN gate (quality-gates.md): TS sinks + secret-shaped
+      # literals. A planted warning must be detected before scanning the tree;
+      # failures stay advisory but emit a visible workflow warning.
+      - name: Semgrep (WARN)
+        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
+        continue-on-error: true
+        # Container steps run under sh (dash here: no pipefail), so pin bash
+        # for `set -euo pipefail` like the migration-numbering step does.
+        shell: bash
+        env:
+          SEMGREP_SEND_METRICS: "off"
+        run: |
+          set -euo pipefail
+          # continue-on-error keeps the step green on failure; the trap keeps a
+          # dead gate visible as a workflow warning instead of silent green.
+          trap 'echo "::warning::Semgrep WARN step failed before completing the scan"' ERR
+          python3 -m venv "$RUNNER_TEMP/semgrep"
+          "$RUNNER_TEMP/semgrep/bin/pip" install --quiet 'semgrep==1.180.0'
+          if ! node ci/semgrep-warn-selftest.mjs "$RUNNER_TEMP/semgrep/bin/semgrep"; then
+            echo "::warning::Semgrep WARN selftest failed; scan may be unavailable"
+            exit 1
+          fi
+          "$RUNNER_TEMP/semgrep/bin/semgrep" --config ci/semgrep-rules.yml --quiet --metrics=off
       - name: Coverage job summary
         if: always() && (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && hashFiles('coverage/coverage-summary.json') != ''
         run: node ci/coverage-summary.mjs >> "$GITHUB_STEP_SUMMARY"
@@ -468,6 +529,9 @@ jobs:
       - name: Production secrets preflight selftest (stubbed wrangler, no secrets or network)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
         run: node --test ci/check-production-secrets.test.mjs
+      - name: Jobs secrets preflight selftest (stubbed wrangler, no secrets or network)
+        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
+        run: node --test ci/check-jobs-secrets.test.mjs
       - name: Watch Lighthouse runner selftest (stub fetch and lhci, no network or browser)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
         run: npm run lighthouse:origin:selftest

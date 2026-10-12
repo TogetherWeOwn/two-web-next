@@ -83,8 +83,10 @@ are never invoked. The Tail Worker does not forward these fields.
 ### Tally retry causes in Workers telemetry
 
 ```sh
-# Live stream of classified retries (authorized Cloudflare access required)
-npx wrangler tail two-web-next --format json \
+# Live stream of classified retries (authorized Cloudflare access required).
+# The queue consumer runs on two-web-jobs after the handoff: `sync retry
+# classified` is emitted there (src/jobs/consumer.ts), not on two-web-next.
+npx wrangler tail two-web-jobs --format json \
   | jq -c 'select(.logs[]?.message[]? | tostring | contains("sync retry classified"))'
 
 # Count occurrences per cause over a saved tail file
@@ -96,7 +98,7 @@ jq -c '.logs[]? | select(any(.message[]?; . == "sync retry classified")) | .mess
   deliveries.json | grep -o '"sync_retry_class":"[A-Za-z]*"' | sort | uniq -c
 ```
 
-In the dashboard (**Workers & Pages → two-web-next → Observability**), filter
+In the dashboard (**Workers & Pages → two-web-jobs → Observability**), filter
 the message/text with `sync retry classified` over the incident window and
 group by `sync_retry_code` (refusals) or `sync_retry_class`. These receipts
 count occurrences, not distinct durable requests, and cannot reconstruct the

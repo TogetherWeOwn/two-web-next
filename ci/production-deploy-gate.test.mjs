@@ -317,7 +317,12 @@ function assertIsolatedBindings(config) {
   assert.equal(production.vars.APP_URL, "https://togetherweown.com");
   assert.equal(production.vars.QA_AUTH_TOKEN, undefined);
   assert.notEqual(production.hyperdrive[0].id, config.hyperdrive[0].id);
-  assert.deepEqual(production.triggers, config.triggers);
+  // Staging handoff: the web Worker owns no crons (both live on two-web-jobs,
+  // wrangler.jobs.jsonc). The production cutover template keeps both schedules
+  // on the web Worker until its own handoff, so assert each side explicitly.
+  // Values must match RECONCILE_CRON/PRUNE_CRON in src/jobs/constants.ts.
+  assert.deepEqual(config.triggers, { crons: [] });
+  assert.deepEqual(production.triggers, { crons: ["*/10 * * * *", "0 0 * * *"] });
   const stagingQueues = config.queues.producers.map((producer) => producer.queue);
   for (const producer of production.queues.producers) {
     assert.ok(!stagingQueues.includes(producer.queue));
@@ -549,21 +554,32 @@ test("manual production workflow routes runners by repo visibility and uses prod
   assert.ok(!workflow.includes("secrets.CLOUDFLARE_ACCOUNT_ID"));
   for (const key of Object.keys(credentials)) {
     // Credentials check, required-secrets preflight, production Tail deploy,
-    // app deploy: all production-only.
-    assert.equal((workflow.match(new RegExp(`secrets\\.PRODUCTION_${key}`, "g")) ?? []).length, 4);
+    // version upload and promotion: all production-only.
+    assert.equal((workflow.match(new RegExp(`secrets\\.PRODUCTION_${key}`, "g")) ?? []).length, 5);
   }
   const credentialCheck = workflow.indexOf("run: node ci/production-deploy-gate.mjs --credentials");
   const requiredSecrets = workflow.indexOf("run: node ci/check-production-secrets.mjs");
   const tailDeploy = workflow.indexOf(
     "run: npx wrangler deploy --config tail/wrangler.jsonc --env production",
   );
-  const deploy = workflow.indexOf("run: npx wrangler deploy --env production");
+  const upload = workflow.indexOf("npx wrangler versions upload --env production --tag ");
+  const deploy = workflow.indexOf("npx wrangler versions deploy --env production");
   assert.ok(
     credentialCheck > 0 &&
       credentialCheck < requiredSecrets &&
       requiredSecrets < tailDeploy &&
-      tailDeploy < deploy,
+      tailDeploy < upload &&
+      upload < deploy,
   );
+  assert.match(
+    workflow,
+    /versions upload --env production --tag "\$\{DEPLOY_SHA:\?\}-\$\{GITHUB_RUN_ID:\?\}-\$\{GITHUB_RUN_ATTEMPT:\?\}"/,
+  );
+  assert.match(
+    workflow,
+    /versions deploy --env production --name two-web-next-production --version-tag "\$\{DEPLOY_SHA:\?\}-\$\{GITHUB_RUN_ID:\?\}-\$\{GITHUB_RUN_ATTEMPT:\?\}@100%" --yes/,
+  );
+  assert.ok(!workflow.includes("wrangler deploy --env production"));
 });
 
 test("rollback workflow reuses the production gate with no wider permissions", () => {

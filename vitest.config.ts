@@ -31,7 +31,9 @@ export default defineConfig({
       // CI uploads the artifact and the job summary reads only
       // json-summary; lcov/html are unread artifacts, so they stay off the
       // hot path (CI timing audit: `check` mean 9.5 min across 20 main runs).
-      reporter: ["text", "json-summary"],
+      // The `json` reporter additionally writes coverage-final.json, the
+      // per-line input of the changed-lines gate (ci/patch-coverage.mjs).
+      reporter: ["text", "json-summary", "json"],
       reportOnFailure: true,
       // Node 24 + full test-DB suite: baseline minus 1 point, rounded down to 0.1.
       // Aggregate area floors prevent unrelated coverage from masking a regression.

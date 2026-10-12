@@ -8,7 +8,7 @@ import { STAGING_APP_URL, qaEnabled } from "../src/qa";
 // TOG-12247: the SvelteKit spike splits the runtime in two Workers that share
 // src/db and the domain modules. A queue has exactly one consumer and a cron
 // exactly one owner, so this pins the split: staging consumes in two-web-jobs
-// (wrangler.jobs.jsonc top level) after TOG-22127; the web Worker
+// (wrangler.jobs.jsonc top level) after the handoff; the web Worker
 // (wrangler.jsonc top level) only produces, and both preview Workers stay off
 // the staging queues, routes and secrets. An accidental deploy must not steal
 // staging's consumers, double-run its crons, or page from an alert probe.
@@ -39,7 +39,7 @@ describe("jobs Worker config (wrangler.jobs.jsonc)", () => {
   it("owns both staging consumers and both crons; the web Worker only produces", () => {
     expect(jobs.workers_dev).toBe(false);
     expect(jobs.routes).toBeUndefined();
-    // Staging handoff (TOG-22127): jobs owns both cron schedules.
+    // Staging handoff: jobs owns both cron schedules.
     expect(jobs.triggers?.crons).toEqual([RECONCILE_CRON, PRUNE_CRON]);
     // Same queue names and producer bindings as the web Worker: no renames.
     expect(queueNames(jobs, "producers")).toEqual(queueNames(main, "producers"));

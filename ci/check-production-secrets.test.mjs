@@ -170,7 +170,7 @@ test("CLI fails closed on a missing secret and on wrangler failure without echoi
   assert.equal(failed.stdout, "");
 });
 
-test("required-secrets preflight runs after the credentials check and before the moderator preflight and deploy", () => {
+test("required-secrets preflight runs before the moderator preflight and version upload/deploy", () => {
   const workflow = readFileSync(
     new URL("../.github/workflows/deploy-production.yml", import.meta.url),
     "utf8",
@@ -178,14 +178,15 @@ test("required-secrets preflight runs after the credentials check and before the
   const credentials = workflow.indexOf("run: node ci/production-deploy-gate.mjs --credentials");
   const secrets = workflow.indexOf("run: node ci/check-production-secrets.mjs");
   const moderator = workflow.indexOf("run: npm run check:worker-moderators-production");
-  const deploy = workflow.indexOf("run: npx wrangler deploy --env production");
+  const upload = workflow.indexOf("npx wrangler versions upload --env production");
+  const deploy = workflow.indexOf("npx wrangler versions deploy --env production");
   assert.ok(
-    credentials > 0 && secrets > 0 && moderator > 0 && deploy > 0,
-    "expected credentials, secrets, moderator and deploy steps in deploy-production.yml",
+    credentials > 0 && secrets > 0 && moderator > 0 && upload > 0 && deploy > 0,
+    "expected credentials, secrets, moderator and version upload/deploy steps in deploy-production.yml",
   );
   assert.ok(
-    credentials < secrets && secrets < moderator && moderator < deploy,
-    "order must be credentials check, required-secrets preflight, moderator preflight, deploy",
+    credentials < secrets && secrets < moderator && moderator < upload && upload < deploy,
+    "order must be credentials check, required-secrets preflight, moderator preflight, upload, deploy",
   );
 });
 

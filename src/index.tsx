@@ -26,15 +26,19 @@ import { imageHosts } from "./image-policy";
 import { Join, Recovery, Home, type Notice } from "./pages";
 import { internalErrorHandler, registerErrorHandlers } from "./errors";
 import { registerEventRoutes } from "./events/routes";
-import { loadHomeUpcoming } from "./events/reads";
+import { loadHomeUpcomingMerged } from "./events/reads";
+import { discordEventsSource } from "./events/discord-transients";
 import { dbFor } from "./admin/db";
 import { listVisibleFeatured } from "./featured";
 import { robotsTag, SECURITY_HEADERS } from "./headers";
 import { registerJoinRoutes } from "./join/route";
+import { registerAiFriendlyRoutes } from "./ai-friendly/routes";
 import { registerSeoLeaves } from "./seo-leaves";
 import { registerStaticLeaves } from "./static-leaves";
 import { safeNext } from "./join/service";
 import { profilesApp } from "./profiles/routes";
+import { registerMcpRoutes } from "./mcp/routes";
+import { registerPublicApiRoutes } from "./public-data/routes";
 import { takeJoinResult } from "./return-journey";
 import { buildSecurityTxt } from "./security-txt";
 import {
@@ -50,6 +54,7 @@ import { trustHosts } from "./trust-hosts";
 import { authStatusScript, enableAuthStatus } from "./auth-status";
 import { expiredWriteBanner } from "./write-recovery";
 import { freezeBanner } from "./freeze-banner";
+import { webmcpPilot } from "./webmcp-pilot";
 
 export { rulesLastUpdated } from "./rules-last-updated";
 
@@ -154,6 +159,7 @@ app.use("*", sameOrigin);
 app.use("*", authStatusScript);
 app.use("*", expiredWriteBanner);
 app.use("*", freezeBanner);
+app.use("*", webmcpPilot);
 
 // OAuth and login routes live in ./auth/routes; the app module only wires them.
 registerAuthRoutes(app, {
@@ -182,9 +188,16 @@ type EnvWithRoster = Env & { ROSTER_STORE?: Sql };
 // (drizzle/1022), so the runtime role stays read/write-only. A database that
 // predates that migration surfaces as a query failure, like any other outage.
 async function storeFor(c: Context<{ Bindings: Env }>): Promise<SessionStore> {
-  const injected = (c.env as EnvWithStore).SESSION_STORE;
+  return storeForEnv(c.env);
+}
+
+// Shared with the Kit hook: the same DB selection Hono uses, so
+// Kit reads the sessions Hono writes. Same lifecycle too — a short-lived
+// per-request client, Hyperdrive pooling underneath, idle_timeout reaping.
+export async function storeForEnv(env: Env): Promise<SessionStore> {
+  const injected = (env as EnvWithStore).SESSION_STORE;
   if (injected) return injected;
-  const url = databaseUrl(c.env);
+  const url = databaseUrl(env);
   // No DB configuration: a fresh memory store per request fails closed to guest.
   if (!url) return createMemorySessionStore();
   // Short-lived per-request client; Hyperdrive pools underneath in the Worker.
@@ -374,8 +387,11 @@ app.get("/", async (c) => {
   ].includes(notice ?? "")
     ? null
     : flashed;
-  const [upcomingEvents, featured] = await Promise.all([
-    loadHomeUpcoming(() => dbFor(c)),
+  const [homeUpcoming, featured] = await Promise.all([
+    loadHomeUpcomingMerged(
+      () => dbFor(c),
+      () => discordEventsSource(c.env),
+    ),
     dbFor(c)
       .then((db) => (db ? listVisibleFeatured(db) : []))
       .catch(() => []),
@@ -390,8 +406,8 @@ app.get("/", async (c) => {
       inviteUrl={c.env.DISCORD_INVITE_URL}
       appUrl={c.env.APP_URL}
       counts={counts}
-      upcomingEvents={upcomingEvents ?? []}
-      eventsUnavailable={upcomingEvents === null}
+      upcomingEvents={homeUpcoming.items}
+      eventsUnavailable={homeUpcoming.unavailable}
       featured={featured}
       imageHosts={c.env.FEATURED_IMAGE_HOSTS}
     />,
@@ -410,6 +426,12 @@ registerStaticLeaves(app);
 // DB-degrades-to-static sitemap policy live there verbatim. Registered before
 // the join journey so the CSP sink keeps its pre-session placement.
 registerSeoLeaves(app);
+
+// AI-friendly machine formats: `/llms.txt` + curated `.md`
+// alternates. New routes, not Accept negotiation — one media type per route.
+// Viewer-independent by construction (no session read), so the HTML pages
+// above link out with `rel=alternate` and staging noindexes the .md surface.
+registerAiFriendlyRoutes(app);
 
 // The one-click join journey (W6: TOG-9685). /join is the database-free page;
 // /join/discord + /join/callback run the throttled OAuth round trip with the
@@ -543,6 +565,17 @@ registerEventRoutes(
   async (c) => readSession(c),
   async (c) => readSession(c, false),
 );
+
+// A3: bounded session-free public read API + OpenAPI spec. No session
+// readers: every representation is published-only and identical for all
+// viewers, so the shared isolate-local cache needs no cookie partitioning.
+registerPublicApiRoutes(app);
+
+// B2: stateless public read-only MCP at POST /mcp. Same posture as A3 — no
+// session readers, published-only tools, shared rate budget — behind the
+// exact-path transport guard in ./mcp/routes (the global same-origin rule
+// keeps one exact-path exemption for POST /mcp and is otherwise untouched).
+registerMcpRoutes(app);
 
 registerAlertProbe(app);
 

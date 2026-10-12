@@ -5,10 +5,14 @@ export const UNSAFE_METHODS = ["POST", "PUT", "PATCH", "DELETE"] as const;
 
 // Exact method + path exemptions, never whole prefixes or cookie presence.
 // Agent ingress authenticates independently; CSP reports cannot carry Origin
-// reliably and only feed the bounded, non-persistent violation sink.
+// reliably and only feed the bounded, non-persistent violation sink. The MCP
+// endpoint serves remote clients that cannot send our Origin, so it enforces
+// its own transport guard instead (exact-path route plus the handler's
+// Origin/Host validation); the rule below is unchanged.
 export const SAME_ORIGIN_EXEMPTIONS = [
   { method: "POST", path: "/api/agent-events" },
   { method: "POST", path: "/csp-reports" },
+  { method: "POST", path: "/mcp" },
 ] as const;
 
 export const sameOrigin = createMiddleware<{ Bindings: Env }>(async (c, next) => {

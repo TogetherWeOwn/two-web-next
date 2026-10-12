@@ -1,0 +1,236 @@
+name: backup-restore-proof
+
+# Full dump-to-restore proof (docs/backup-restore-proof.md) on a disposable
+# PostgreSQL 17 service. The hermetic selftests in the required `check` job
+# (ci/backup-restore-proof/selftest.py) prove fixtures with fake clients; this
+# workflow proves a real pg_dump archive restores with real pg_restore.
+# The Postgres service is disposable per job; the proof script itself refuses
+# any inherited PG* or *DATABASE_URL* variable, non-allowlisted hosts, users
+# and ports, so this workflow sets none of them: no staging or production
+# URLs, no secrets, no shared databases. The service shape (postgres:17 with
+# a trust-auth test role) is modeled on .github/workflows/e2e.yml.
+# The pull_request trigger stays unfiltered so this workflow always reports;
+# relevance is decided per PR by the `scope` job below (ci/change-scope.sh
+# fails closed), using the same docs_only/draft + full/app gate as the
+# hermetic selftest steps, so docs-only PRs skip the proof. The always-run
+# `backup-restore-proof` aggregator reports the conclusion.
+
+on:
+  pull_request:
+    # ready_for_review re-runs the proof when a draft becomes ready (drafts
+    # skip it below). `edited` needs no proof run; pr-gates covers it.
+    types: [opened, synchronize, reopened, ready_for_review]
+  push:
+    branches: [main]
+  # Nightly full proof: schedule events run unconditionally (the scope step
+  # only fast-passes pull requests), catching client/server image drift.
+  schedule:
+    - cron: '37 2 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  # The scope job lists the PR's changed files via the API.
+  pull-requests: read
+
+# Schedule and dispatch runs get their own groups (as in ci.yml): with the
+# default queue a newly queued run cancels any pending run in its group, so a
+# nightly or dispatch sharing main's group would replace a waiting push run.
+concurrency:
+  group: backup-restore-proof-${{ github.event.pull_request.number || (github.event_name == 'schedule' && 'nightly') || (github.event_name == 'workflow_dispatch' && github.run_id) || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  # Cheap change-scope gate (mirrors ci.yml): a PR that only touches prose
+  # (`docs/**`, root `*.md`) that no gate, test or build reads fast-passes the
+  # proof below. ci/change-scope.sh fails closed.
+  scope:
+    name: scope
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      docs_only: ${{ steps.scope.outputs.docs_only }}
+      app: ${{ steps.scope.outputs.app }}
+      full: ${{ steps.scope.outputs.full }}
+      draft: ${{ steps.scope.outputs.draft }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: github.event_name == 'pull_request'
+        with:
+          persist-credentials: false
+      - id: scope
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          EVENT_NAME: ${{ github.event_name }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          CHANGED_FILES: ${{ github.event.pull_request.changed_files }}
+          DRAFT: ${{ github.event.pull_request.draft }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT_NAME" != pull_request ]; then
+            # Main pushes, schedules and dispatches run everything (same
+            # safety net as ci.yml). No checkout on this path, so verdicts
+            # are constant: the script itself is never consulted here.
+            {
+              echo "docs_only=false"
+              echo "app=true"
+              echo "full=true"
+              echo "draft=false"
+            } >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          gh api "repos/$REPO/pulls/$PR_NUMBER/files" --paginate \
+            --jq '.[] | "\(.filename)\t\(.previous_filename // "")"' > "$RUNNER_TEMP/pr-files.tsv"
+          bash ci/change-scope.sh "$RUNNER_TEMP/pr-files.tsv" "$CHANGED_FILES" >> "$GITHUB_OUTPUT"
+
+  proof:
+    name: backup-restore-proof
+    needs: scope
+    # Same gate as the hermetic backup selftest steps in the `check` job:
+    # docs-only PRs and drafts skip; everything else with app/full inputs
+    # runs. A backup input (bin/*, ci/*) selects `app`; `.github/**` selects
+    # `full`; unknown paths fail closed to `full`.
+    if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true') && github.event.pull_request.draft != true
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: agent_test
+          POSTGRES_DB: agent_test
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U agent_test -d agent_test" --health-interval 5s --health-timeout 5s --health-retries 10
+    # Deliberately no job-level env: the proof refuses any inherited PG* or
+    # *DATABASE_URL* variable, so setting DATABASE_URL here (as the e2e smoke
+    # does) would fail the run. CI=true and GITHUB_ACTIONS=true arrive from
+    # the runner itself and together allowlist the `postgres` host.
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install PostgreSQL 17 client (pg_dump/pg_restore on PATH)
+        run: |
+          set -euo pipefail
+          # The runner's default client predates the postgres:17 service and
+          # pg_dump refuses an older major, so install the matching PGDG
+          # client instead of relying on the preinstalled one.
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends ca-certificates curl gnupg
+          curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc \
+            | sudo gpg --dearmor -o /usr/share/keyrings/postgresql.gpg
+          # shellcheck disable=SC1091
+          . /etc/os-release
+          echo "deb [signed-by=/usr/share/keyrings/postgresql.gpg] https://apt.postgresql.org/pub/repos/apt ${VERSION_CODENAME}-pgdg main" \
+            | sudo tee /etc/apt/sources.list.d/pgdg.list >/dev/null
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends postgresql-client-17
+          pg_dump --version
+          pg_restore --version
+          psql --version
+      - name: Map the postgres service name to loopback
+        run: |
+          set -euo pipefail
+          # Steps run on the runner host, outside the service network, so the
+          # `postgres` service hostname does not resolve there; the service is
+          # reachable through its mapped port on loopback (e2e.yml connects to
+          # 127.0.0.1 for the same reason). Point the allowlisted name at
+          # loopback instead of widening the proof's host allowlist, which
+          # refuses loopback addresses by design.
+          echo "127.0.0.1 postgres" | sudo tee -a /etc/hosts >/dev/null
+          # Fail closed when the name resolves anywhere but loopback: a stale
+          # or shadowed entry must never redirect the proof at another server.
+          getent hosts postgres | tee /dev/stderr | grep -q "^127\.0\.0\.1[[:space:]]"
+      - name: Wait for the disposable Postgres service
+        run: |
+          set -euo pipefail
+          # Fails the job when the service never becomes reachable: an
+          # unreachable service must never read as a passing proof.
+          for i in $(seq 1 30); do
+            if pg_isready -q -h postgres -U agent_test -d agent_test; then
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "::error::postgres service did not become ready"
+          exit 1
+      - name: Full backup-to-restore proof (real dump, real restore)
+        run: |
+          set -euo pipefail
+          set -o pipefail
+          # pipefail keeps a failing proof red through tee; the greps keep an
+          # empty or truncated log from reading as a silent pass.
+          python3 ci/backup-restore-proof/run.py --host postgres 2>&1 | tee backup-restore-proof.log
+          grep -q "^PASS round-trip: tables=4 rows=10 inventory/counts/contents equal$" backup-restore-proof.log
+          grep -q "^synthetic restore proof: PASS (no live archives or remote R2)$" backup-restore-proof.log
+      - name: Negative control (refused host must fail closed)
+        run: |
+          set -euo pipefail
+          # The harness refuses before any client invocation; it must exit
+          # nonzero with a FAIL line and no PASS lines. A down service
+          # surfaces the same way (client failure exits nonzero), so neither
+          # path can pass silently.
+          if python3 ci/backup-restore-proof/run.py --host unreachable.invalid > backup-restore-proof-negative.log 2>&1; then
+            echo "::error::proof exited 0 against a refused host; expected fail-closed"
+            exit 1
+          fi
+          grep -q "synthetic restore proof: FAIL" backup-restore-proof-negative.log
+          if grep -q "^PASS " backup-restore-proof-negative.log; then
+            echo "::error::negative control printed a PASS line"
+            exit 1
+          fi
+      - name: Upload proof logs (short retention)
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: backup-restore-proof-${{ github.run_id }}-${{ github.run_attempt }}
+          path: backup-restore-proof*.log
+          if-no-files-found: error
+          retention-days: 7
+
+  # Always-run aggregator (e2e-ok model): reports the conclusion even when the
+  # proof is skipped for a docs-only PR or a draft. A skipped job passes only
+  # on an explicit scope verdict; a failed/cancelled scope or proof fails it.
+  # `!cancelled()`, not `always()`: when a newer run supersedes this one, the
+  # aggregator concludes cancelled instead of failing (see ci-ok in ci.yml).
+  # No ruleset change here: requiring the aggregator is a human-admin step.
+  backup-restore-proof-ok:
+    name: backup-restore-proof-ok
+    needs: [scope, proof]
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Verdict
+        env:
+          SCOPE_RESULT: ${{ needs.scope.result }}
+          PROOF_RESULT: ${{ needs.proof.result }}
+          DOCS_ONLY: ${{ needs.scope.outputs.docs_only }}
+          DRAFT: ${{ needs.scope.outputs.draft }}
+          FULL: ${{ needs.scope.outputs.full }}
+          APP: ${{ needs.scope.outputs.app }}
+        run: |
+          set -euo pipefail
+          [ "$SCOPE_RESULT" = success ] || { echo "::error::scope result: $SCOPE_RESULT"; exit 1; }
+          # Empty or unexpected outputs would read as unselected areas and let
+          # a skipped proof pass, so every verdict must be exactly true/false.
+          for pair in "DOCS_ONLY=$DOCS_ONLY" "DRAFT=$DRAFT" "FULL=$FULL" "APP=$APP"; do
+            case "${pair#*=}" in
+              true|false) ;;
+              *) echo "::error::scope output ${pair%%=*} is '${pair#*=}', expected true or false; failing closed."; exit 1 ;;
+            esac
+          done
+          if [ "$DOCS_ONLY" = true ] || [ "$DRAFT" = true ]; then
+            [ "$PROOF_RESULT" = skipped ] || { echo "::error::proof result: $PROOF_RESULT (expected skipped for docs-only/draft)"; exit 1; }
+            echo "proof skipped by scope verdict (docs-only or draft)"
+          elif [ "$FULL" = true ] || [ "$APP" = true ]; then
+            [ "$PROOF_RESULT" = success ] || { echo "::error::proof result: $PROOF_RESULT"; exit 1; }
+            echo "backup-to-restore proof passed"
+          else
+            [ "$PROOF_RESULT" = skipped ] || { echo "::error::proof result: $PROOF_RESULT (expected skipped: no app/full inputs)"; exit 1; }
+            echo "proof skipped (no app/full inputs)"
+          fi

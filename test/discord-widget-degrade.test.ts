@@ -15,7 +15,7 @@ import {
 
 const GUILD = "326474832151838730";
 const PROBE_URL = `https://discord.com/api/v10/guilds/${GUILD}/widget.json`;
-const IFRAME = `src="https://discord.com/widget?id=${GUILD}&amp;theme=dark" width="350" height="500"`;
+const FACADE = `href="https://discord.com/widget?id=${GUILD}&amp;theme=dark"`;
 const FALLBACK = '<div class="join-preview"><p class="strap" data-testid="join-widget-fallback">';
 
 const env: Env = {
@@ -66,9 +66,10 @@ function harness(transport: Transport, overrides: Partial<Env> = {}) {
   };
 }
 
-function expectIframe(html: string) {
-  expect(html).toContain(IFRAME);
-  expect(html).toContain('loading="lazy"');
+function expectFacade(html: string) {
+  expect(html).toContain(FACADE);
+  expect(html).toContain('data-testid="join-widget-load"');
+  expect(html).not.toContain("<iframe");
   expect(html).not.toContain('data-testid="join-widget-fallback"');
 }
 
@@ -94,7 +95,7 @@ describe("/join Discord widget: success", () => {
     const h = harness(async () => Response.json({ id: GUILD, presence_count: 12 }));
     const first = await h.join();
     expect(first.status).toBe(200);
-    expectIframe(first.html);
+    expectFacade(first.html);
     expect(first.pending).toHaveLength(1);
     await Promise.all(first.pending);
     expect(h.calls).toEqual([PROBE_URL]);
@@ -104,12 +105,12 @@ describe("/join Discord widget: success", () => {
     expect([...new Headers(init?.headers).keys()]).toEqual([]);
 
     const second = await h.join();
-    expectIframe(second.html);
+    expectFacade(second.html);
     expect(second.pending).toHaveLength(0);
 
     h.advance(DISCORD_WIDGET_VERDICT_TTL_MS);
     const third = await h.join();
-    expectIframe(third.html);
+    expectFacade(third.html);
     await Promise.all(third.pending);
     expect(h.calls).toEqual([PROBE_URL, PROBE_URL]);
   });
@@ -121,7 +122,7 @@ describe("/join Discord widget: success", () => {
     status = 429;
     h.advance(DISCORD_WIDGET_VERDICT_TTL_MS);
     await Promise.all((await h.join()).pending);
-    expectIframe((await h.join()).html);
+    expectFacade((await h.join()).html);
   });
 });
 
@@ -149,7 +150,7 @@ describe("/join Discord widget: outage", () => {
       // The first view answers from the (optimistic) verdict; the probe runs after.
       const first = await h.join();
       expect(first.status).toBe(200);
-      expectIframe(first.html);
+      expectFacade(first.html);
       await Promise.all(first.pending);
 
       const degraded = await h.join();
@@ -180,7 +181,7 @@ describe("/join Discord widget: outage", () => {
     const stale = await h.join();
     expectFallback(stale.html);
     await Promise.all(stale.pending);
-    expectIframe((await h.join()).html);
+    expectFacade((await h.join()).html);
   });
 });
 
@@ -194,12 +195,12 @@ describe("/join Discord widget: timeout", () => {
     // No timer has advanced, yet the page is complete: nothing awaits the probe.
     const first = await h.join();
     expect(first.status).toBe(200);
-    expectIframe(first.html);
+    expectFacade(first.html);
     expect(first.pending).toHaveLength(1);
 
     // Concurrent views while the probe hangs: same page, no probe pile-up.
     const during = await h.join();
-    expectIframe(during.html);
+    expectFacade(during.html);
     expect(during.pending).toHaveLength(0);
     expect(h.calls).toEqual([PROBE_URL]);
 
@@ -216,7 +217,7 @@ describe("/join Discord widget: probe guards", () => {
     const h = harness(async () => new Response("{}", { status: 503 }));
     const res = await h.join(false);
     expect(res.status).toBe(200);
-    expectIframe(res.html);
+    expectFacade(res.html);
     expect(h.calls).toEqual([]);
   });
 

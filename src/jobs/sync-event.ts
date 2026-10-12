@@ -132,6 +132,13 @@ export async function handleSyncEvent(
   const backoff = () =>
     backoffFor(SYNC_EVENT.backoffSeconds, Math.max(attempts, attempt.requestAttempts));
   try {
+    // Never-mirrored cancel: no Discord object exists, so skip the bot and
+    // settle locally. The revision still advances and RSVPs stamp to the
+    // attempt's mirrored_at; the stored discord id stays null (no bot revision).
+    if (attempt.action === "event.cancel" && attempt.discordEventId === null) {
+      await deps.events.completeSync(attempt, null);
+      return { done: true };
+    }
     const answer =
       attempt.action === "event.cancel"
         ? await deps.bot.cancelEvent(attempt.payload, msg.idempotencyKey)

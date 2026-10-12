@@ -598,7 +598,31 @@ describe("URL freeze + no soft 404s", () => {
 // (strictTransportSecurity: false in src/index.tsx) and pins its absence
 // instead of asserting on a file that does not exist.
 describe("mapping table", () => {
-  it("is documentation, not code", () => {
-    expect(true).toBe(true);
+  it("names only sections that exist in this file", async () => {
+    const { readFileSync } = await import("node:fs");
+    const { resolve, dirname } = await import("node:path");
+    const { fileURLToPath } = await import("node:url");
+    const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+    const src = readFileSync(resolve(root, "test/seo-headers.test.ts"), "utf8");
+    // Compare trailing-parenthetical-free names: the describe titles carry
+    // legacy origin tags, and spelling those tags here would add new
+    // internal references to a public repo (the internal-ref ratchet fails
+    // net growth). The pin still requires every section to exist.
+    const titles = new Set(
+      [...src.matchAll(/^describe\("([^"]+)",/gm)].map((m) => m[1]?.replace(/\s*\([^()]*\)$/, "")),
+    );
+    // "Ported here" column of the legacy mapping table above, limited to the
+    // sections owned by this file; other slices assert their own sections.
+    for (const section of [
+      "sitemap + robots",
+      "share meta",
+      "static leaves",
+      "homepage degraded fallback",
+      "profile share tags",
+      "security headers per route class",
+      "URL freeze + no soft 404s",
+    ]) {
+      expect(titles.has(section), section).toBe(true);
+    }
   });
 });

@@ -242,13 +242,15 @@ describe("source-managed moderator deployment preflight", () => {
     expect(production).toContain("run: npm run check:worker-moderators-production");
     // The moderator preflight runs after the credentials check and before
     // the first Cloudflare mutation (shared step order: gate → dry-run →
-    // credentials → moderator preflight → deploy → public-route smoke).
+    // credentials → moderator preflight → version upload/deploy → public-route smoke).
     const prodGate = production.indexOf("run: npm run check:worker-moderators-production");
     expect(prodGate).toBeGreaterThan(-1);
     expect(prodGate).toBeGreaterThan(
       production.indexOf("run: node ci/production-deploy-gate.mjs --credentials"),
     );
-    expect(prodGate).toBeLessThan(production.indexOf("run: npx wrangler deploy --env production"));
+    expect(prodGate).toBeLessThan(
+      production.indexOf("npx wrangler versions upload --env production"),
+    );
     expect(production).not.toContain("secrets.DISCORD_MODERATOR_ROLE_IDS");
     // env.production declares the same approved SySOp role; Wrangler does not
     // inherit top-level vars, so this entry is the one production boots with.
@@ -366,6 +368,101 @@ describe("staging smoke workflow safety", () => {
   });
 });
 
+describe("production deployment preserves configured triggers", () => {
+  it("uploads and promotes the exact target version without syncing custom domains", () => {
+    const workflow = read(".github/workflows/deploy-production.yml");
+    const upload = workflow.indexOf(
+      'npx wrangler versions upload --env production --tag "${DEPLOY_SHA:?}-${GITHUB_RUN_ID:?}-${GITHUB_RUN_ATTEMPT:?}"',
+    );
+    const promote = workflow.indexOf(
+      'npx wrangler versions deploy --env production --name two-web-next-production --version-tag "${DEPLOY_SHA:?}-${GITHUB_RUN_ID:?}-${GITHUB_RUN_ATTEMPT:?}@100%" --yes',
+    );
+
+    expect(upload).toBeGreaterThan(-1);
+    expect(promote).toBeGreaterThan(upload);
+    expect(workflow).not.toContain("wrangler triggers deploy");
+    expect(workflow).not.toContain("wrangler deploy --env production");
+  });
+
+  it("pins production crons and queue consumers to the reviewed config", () => {
+    type Consumer = {
+      queue?: unknown;
+      max_retries?: unknown;
+      max_batch_size?: unknown;
+      max_batch_timeout?: unknown;
+    };
+    type Producer = { binding?: unknown; queue?: unknown };
+    const config = readWranglerConfig(read("wrangler.jsonc")) as {
+      triggers?: unknown;
+      queues?: { consumers?: Consumer[]; producers?: Producer[] };
+      env?: {
+        production?: {
+          triggers?: unknown;
+          queues?: { consumers?: Consumer[]; producers?: Producer[] };
+        };
+      };
+    };
+    const jobsConfig = readWranglerConfig(read("wrangler.jobs.jsonc")) as {
+      triggers?: unknown;
+      queues?: { consumers?: Consumer[]; producers?: Producer[] };
+    };
+    // `versions upload`/`deploy` never reconcile triggers, and `wrangler
+    // triggers deploy` is banned above (it also syncs routes/domains and
+    // re-triggers 100117). The pins below are literal reviewed values, not
+    // staging-relative: any schedule/consumer change — even one made in both
+    // blocks at once — fails CI until this test is updated in the same
+    // release PR, and the runbook's "Production trigger reconciliation"
+    // applies it without touching the apex custom domain.
+    expect(config.env?.production?.triggers).toEqual({
+      crons: ["*/10 * * * *", "0 0 * * *"],
+    });
+    // Staging handoff: the web Worker owns no cron and consumes no queue, so a
+    // queue keeps exactly one consumer and a cron exactly one owner. Both
+    // schedules and both staging consumers live on two-web-jobs
+    // (wrangler.jobs.jsonc top level); test/jobs-worker-config.test.ts pins
+    // that split. env.production keeps its own cutover template below.
+    expect(config.triggers).toEqual({ crons: [] });
+    expect(config.queues?.consumers ?? []).toEqual([]);
+    expect(jobsConfig.triggers).toEqual({ crons: ["*/10 * * * *", "0 0 * * *"] });
+    const stagingConsumers = jobsConfig.queues?.consumers ?? [];
+    const prodConsumers = config.env?.production?.queues?.consumers ?? [];
+    expect(
+      [...prodConsumers].sort((a, b) => String(a.queue).localeCompare(String(b.queue))),
+    ).toEqual([
+      {
+        queue: "two-web-next-production-internal-action",
+        max_retries: 10,
+        max_batch_size: 10,
+        max_batch_timeout: 5,
+      },
+      {
+        queue: "two-web-next-production-sync-event",
+        max_retries: 10,
+        max_batch_size: 10,
+        max_batch_timeout: 5,
+      },
+    ]);
+    expect(prodConsumers).toHaveLength(stagingConsumers.length);
+    for (const consumer of prodConsumers) {
+      expect(
+        stagingConsumers.some(
+          (peer) =>
+            peer.max_retries === consumer.max_retries &&
+            peer.max_batch_size === consumer.max_batch_size &&
+            peer.max_batch_timeout === consumer.max_batch_timeout,
+        ),
+      ).toBe(true);
+    }
+    // Producers keep the same bindings so the promoted code talks to the
+    // production queues, never the staging ones.
+    const prodProducers = config.env?.production?.queues?.producers ?? [];
+    expect(prodProducers.map((p) => `${p.binding}=${p.queue}`).sort()).toEqual([
+      "INTERNAL_ACTION_QUEUE=two-web-next-production-internal-action",
+      "SYNC_EVENT_QUEUE=two-web-next-production-sync-event",
+    ]);
+  });
+});
+
 describe("deployed revision marker is staging-only", () => {
   const config = readWranglerConfig(read("wrangler.jsonc"));
 
@@ -375,7 +472,6 @@ describe("deployed revision marker is staging-only", () => {
     // cutover decision: declare the binding in env.production in that PR and
     // update this pin with it.
     expect(config.env?.production?.version_metadata).toBeUndefined();
-    expect(read(".github/workflows/deploy-production.yml")).not.toMatch(/--tag|revision-check/);
   });
 
   it("logs the live revision before any mutation and verifies the deployed commit after", () => {
@@ -392,8 +488,10 @@ describe("deployed revision marker is staging-only", () => {
     );
     expect(verify).toBeLessThan(deploy.indexOf("node bin/smoke.mjs"));
     // The tag and the verified commit come from the same CI-verified expression.
+    // Both staging deploys (web and jobs Workers) share that one tag, so the
+    // expression appears three times: web deploy, jobs deploy, verify step.
     const expr =
       "DEPLOY_SHA: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}";
-    expect(deploy.split(expr)).toHaveLength(3);
+    expect(deploy.split(expr)).toHaveLength(4);
   });
 });

@@ -386,7 +386,7 @@ export function checkConfigDocs() {
   const tailWorkerNames = readTailWorkerNames(
     readFileSync(resolve(root, "tail/wrangler.jsonc"), "utf8"),
   );
-  // Staging runs two app Workers after TOG-22127: the web front
+  // Staging runs two app Workers after the handoff: the web front
   // (wrangler.jsonc) and the jobs consumer (wrangler.jobs.jsonc). Both tail
   // to the staging pager, so both configs contribute consumers/scripts.
   const appConfigs = ["wrangler.jsonc", "wrangler.jobs.jsonc"].map((file) =>

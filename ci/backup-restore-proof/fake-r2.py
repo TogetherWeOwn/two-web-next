@@ -33,6 +33,10 @@ def main():
         shutil.copyfile(args.file, destination)
     else:
         if not destination.is_file():
+            # Faithful to real wrangler: a missing remote object reports
+            # `✘ [ERROR] The specified key does not exist.` on stderr, which
+            # bin/backup/manifest-helper recognises as first-use init.
+            print("✘ [ERROR] The specified key does not exist.", file=sys.stderr)
             return 1
         shutil.copyfile(destination, args.file)
     return 0

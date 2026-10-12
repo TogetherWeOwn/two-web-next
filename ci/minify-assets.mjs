@@ -38,6 +38,7 @@ const AUTHORED_CSS = new Set([
   "public/event-theme.css",
   "public/profile-theme.css",
   "public/schedule-theme.css",
+  "public/theme-tokens.css",
 ]);
 // Budget entries are read from the checked root (not captured at import),
 // so --selftest can copy the budget file into a scratch root and prove that

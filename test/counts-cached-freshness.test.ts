@@ -30,7 +30,7 @@ vi.mock("postgres", () => ({
 }));
 
 const NOW = Date.parse("2026-09-30T12:00:00Z");
-const env = { DB: { connectionString: "postgres://fixture.test/counts" } } as Env;
+const env = { BOT_DB: { connectionString: "postgres://fixture.test/counts" } } as Env;
 let counts: typeof import("../src/counts");
 let warn: ReturnType<typeof vi.spyOn>;
 
