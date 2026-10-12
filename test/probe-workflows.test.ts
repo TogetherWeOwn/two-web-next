@@ -383,6 +383,40 @@ describe("production deployment preserves configured triggers", () => {
     expect(workflow).not.toContain("wrangler triggers deploy");
     expect(workflow).not.toContain("wrangler deploy --env production");
   });
+
+  it("pins production crons and queue consumers to the reviewed config", () => {
+    const config = readWranglerConfig(read("wrangler.jsonc"));
+    // `versions upload`/`deploy` never reconcile triggers, and `wrangler
+    // triggers deploy` is banned above (it also syncs routes/domains and
+    // re-triggers 100117). Any schedule/consumer change must land in the
+    // reviewed config; the runbook's "Production trigger reconciliation"
+    // applies it without touching the apex custom domain.
+    expect(config.env?.production?.triggers).toEqual(config.triggers);
+    const stagingConsumers = config.queues?.consumers ?? [];
+    const prodConsumers = config.env?.production?.queues?.consumers ?? [];
+    expect(prodConsumers).toHaveLength(stagingConsumers.length);
+    for (const consumer of prodConsumers) {
+      expect(
+        stagingConsumers.some(
+          (peer) =>
+            peer.max_retries === consumer.max_retries &&
+            peer.max_batch_size === consumer.max_batch_size &&
+            peer.max_batch_timeout === consumer.max_batch_timeout,
+        ),
+      ).toBe(true);
+    }
+    expect(prodConsumers.map((c) => c.queue).sort()).toEqual([
+      "two-web-next-production-internal-action",
+      "two-web-next-production-sync-event",
+    ]);
+    // Producers keep the same bindings so the promoted code talks to the
+    // production queues, never the staging ones.
+    const prodProducers = config.env?.production?.queues?.producers ?? [];
+    expect(prodProducers.map((p) => `${p.binding}=${p.queue}`).sort()).toEqual([
+      "INTERNAL_ACTION_QUEUE=two-web-next-production-internal-action",
+      "SYNC_EVENT_QUEUE=two-web-next-production-sync-event",
+    ]);
+  });
 });
 
 describe("deployed revision marker is staging-only", () => {

@@ -110,9 +110,14 @@ steps against `togetherweown.com`, `www`, or
 
 This is a **non-chronological capability map**, not an execution sequence:
 row IDs identify related effects and reverses, not independently ordered steps.
-The current `wrangler deploy --env production` claims the apex custom domain
-and installs production queue consumers and crons in the same deployment;
-it is not a code-only preparation followed by separate DNS/queue activation.
+`deploy-production.yml` uploads a Worker Version tagged with the release SHA
+and promotes it to 100%. It never re-syncs routes or the already-attached apex
+custom domain (a full `wrangler deploy` fails with Cloudflare 100117), and it
+does not reconcile cron schedules or queue consumers: those are applied
+separately per
+[runbook](runbook.md#production-trigger-reconciliation-manual-domain-safe)
+only when the reviewed config changes them. Code promotion alone is not
+DNS/queue activation.
 Before any traffic-bearing deployment, legacy writes must be paused, the
 import destination quiescent, and migration/import verification complete under
 those holds. A route-free or consumer-free preparation path would need a
@@ -128,10 +133,10 @@ changes. This record does not establish fully rehearsed cutover readiness.
 |---|---|---|---|
 | 0 | Pre-apply snapshot (checklist below) | Snapshot is read-only; no reverse. A missing prerequisite aborts the cutover | Partial staging analogue: CI gate, `/up` readiness and Worker pointers recorded; no migration plan/PITR evidence. Six-item breakdown in the result table |
 | 1 | Production schema migration (`db-migrate.yml`, target production), completed and verified before traffic | Reviewed forward repair first. PITR restore requires owner-reserved approval consolidated by the CEO: migrations `1017` and `1019` are unmeasurable (see [cutover-migration-ledger.md](cutover-migration-ledger.md)) — only backup/PITR restores them | Not run: no staging forward repair or PITR restore; schema/config compatibility checked only (see result table) |
-| 2 | Traffic-bearing production Worker deploy (`deploy-production.yml`): apex custom domain, queue consumers and crons | `rollback-production` to a recorded compatible version ID when available, then `/up` smoke (200, `db:ok`, zero pending). Code-version rollback is not DNS/data/queue recovery; see rows 3–5 | Pass on staging, 2026-10-04: `wrangler rollback` N+1 → N → N+1 with smoke before/during/after; production workflow not executed |
+| 2 | Traffic-bearing production Worker deploy (`deploy-production.yml`): Version upload + promote to 100%. The apex stays attached and untouched; crons/consumers are reconciled separately per the runbook only when the reviewed config changes them | `rollback-production` to a recorded compatible version ID when available, then `/up` smoke (200, `db:ok`, zero pending). Code-version rollback is not DNS/data/queue recovery; see rows 3–5 | Pass on staging, 2026-10-04: `wrangler rollback` N+1 → N → N+1 with smoke before/during/after; production workflow not executed |
 | 3 | DNS/public traffic to Next: apex is claimed by the deployment in row 2; www needs separate provisioning | Remove Next custom-domain attachments for the affected hosts and restore saved legacy apex/www record sets, including proxy/TTL settings. Do not re-attach Next or use the unqualified staging `wrangler triggers deploy` fallback. Executable production DNS recovery remains a reviewed operator prerequisite, not a procedure supplied here | Pass for staging flip/restoration only, 2026-10-03 18:25: `next.togetherweown.com` moved to legacy and back; legacy answered 522. Production DNS reverse not tested |
 | 4 | Member-data import under paused legacy writes and a quiescent destination, verified before traffic-bearing deployment | Same-key corrections only where importer update rules permit. Wrong identities/keys, extra rows or lost overwritten state need separately approved backup/repair recovery under writer holds. Idempotent upsert is not an inverse; never perform ad hoc deletion or hand-edit the ledger | Not run: dry run failed closed; no staging import receipts. Idempotency has fixture coverage only (see result table) |
-| 5 | Queue/cron activity installed by production deployment, not a later independent activation | Reviewed holds must cover producers, cron and shared-database writers; delivery pause alone does not stop them. Pause delivery to `two-web-next-production-sync-event` and `two-web-next-production-internal-action` with the authorized production principal and verify containment. Production containment/resume procedure and hold mechanism remain missing prerequisites; do not copy staging targets. Never purge, delete/recreate queues or remove consumers; resume only after implementation, holds, receiver/adapter and replay gates clear | Not run: read-only staging queue info, not production pause/resume, was recorded (see result table) |
+| 5 | Queue/cron activity reconciled separately from code promotion (runbook), not installed by the version promote itself | Reviewed holds must cover producers, cron and shared-database writers; delivery pause alone does not stop them. Pause delivery to `two-web-next-production-sync-event` and `two-web-next-production-internal-action` with the authorized production principal and verify containment. Production containment/resume procedure and hold mechanism remain missing prerequisites; do not copy staging targets. Never purge, delete/recreate queues or remove consumers; resume only after implementation, holds, receiver/adapter and replay gates clear | Not run: read-only staging queue info, not production pause/resume, was recorded (see result table) |
 | 6 | 48h post-flip watch ([cutover-freeze.md](cutover-freeze.md) in force) | On Sev-1: contain, then use the applicable approved code/DNS/data recovery above. The 48h clock restarts after the re-flip | Not run: no post-flip watch or watch-triggered rollback was rehearsed (see result table) |
 
 ## Pre-apply snapshot (record all six before migration or traffic changes)
