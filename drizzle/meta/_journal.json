@@ -176,6 +176,13 @@
       "when": 1791621386747,
       "tag": "1023_agent-event-audits-prune-idx",
       "breakpoints": true
+    },
+    {
+      "idx": 25,
+      "version": "7",
+      "when": 1791840468916,
+      "tag": "1024_board-view-logs",
+      "breakpoints": true
     }
   ]
 }

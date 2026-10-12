@@ -26,6 +26,7 @@ import { imageHosts } from "./image-policy";
 import { Join, Recovery, Home, type Notice } from "./pages";
 import { internalErrorHandler, registerErrorHandlers } from "./errors";
 import { registerEventRoutes } from "./events/routes";
+import { registerHotzoneRoutes } from "./hotzones/routes";
 import { loadHomeUpcomingMerged } from "./events/reads";
 import { discordEventsSource } from "./events/discord-transients";
 import { dbFor } from "./admin/db";
@@ -565,6 +566,9 @@ registerEventRoutes(
   async (c) => readSession(c),
   async (c) => readSession(c, false),
 );
+
+// Hot zones (Builder A, TOG-22865 slice A): public aggregate heatmaps.
+registerHotzoneRoutes(app);
 
 // A3: bounded session-free public read API + OpenAPI spec. No session
 // readers: every representation is published-only and identical for all

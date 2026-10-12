@@ -220,6 +220,8 @@ Public routes may read optional sessions; this does not promise zero DB queries.
 | `GET /events/past` | public | events: archive |
 | `GET /faq` | public | seo: frozen funnel leaf |
 | `GET /faq.md` | public | ai-friendly-md: curated Markdown alternate, `text/markdown`, static TTL, staging noindex |
+| `GET /hotzones` | public | hotzones: aggregate index |
+| `GET /hotzones/:signal` | public | hotzones: per-signal drill-down |
 | `GET /join` | public | join: landing page |
 | `GET /join/callback` | oauth-state | join: one-click callback |
 | `GET /join/discord` | public | join: OAuth start |
