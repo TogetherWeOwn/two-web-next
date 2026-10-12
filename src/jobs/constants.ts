@@ -31,14 +31,15 @@ export const PRUNE_CRON = "0 0 * * *"; // routes/console.php:19 daily() (Laravel
 // the batched statement until a short batch proves the backlog drained, so a
 // backlog above one batch clears in a single pass instead of piling past
 // retention. The loop stops after PRUNE_DELETE_MAX_BATCHES batches per table
-// (20k rows) to bound the `model:prune` single-flight hold; a final full
+// (100k rows) to bound the `model:prune` single-flight hold; a final full
 // batch logs a warning with rows possibly pending. The web_sessions expiry
 // sweep stays unbounded.
 export const PRUNE_DELETE_BATCH_SIZE = 1000;
-// Max batched statements per age-pruned table per daily pass: 20k rows,
-// covering the documented per-IP worst-case join inflow (14,400/day) with
-// headroom; larger floods warn instead of silently piling past retention.
-export const PRUNE_DELETE_MAX_BATCHES = 20;
+// Max batched statements per age-pruned table per daily pass: 100k rows,
+// covering the worst-case public event-search inflow (60 reads/min = 86,400
+// rows/day from one client) with headroom, plus the smaller join inflow
+// (14,400/day); larger floods warn instead of silently piling past retention.
+export const PRUNE_DELETE_MAX_BATCHES = 100;
 
 /** Gap before the attempt after `attempts` (1-based), holding at the last value (nextDelay / backoffFor). */
 export function backoffFor(backoff: readonly number[], attempts: number): number {

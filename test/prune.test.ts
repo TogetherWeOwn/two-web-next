@@ -81,7 +81,7 @@ describe("model:prune windows and sweep (memory, no DB)", () => {
     // warns when the cap is hit with rows possibly pending. Sessions sweep
     // stays unbounded.
     expect(PRUNE_DELETE_BATCH_SIZE).toBe(1000);
-    expect(PRUNE_DELETE_MAX_BATCHES).toBe(20);
+    expect(PRUNE_DELETE_MAX_BATCHES).toBe(100);
   });
 
   it("drains a multi-batch backlog in one pass and sums the counts", async () => {
