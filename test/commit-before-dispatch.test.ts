@@ -84,6 +84,7 @@ describe.skipIf(!process.env.DATABASE_URL)("commit-before-dispatch (agent-testdb
         startsAt: new Date(Date.now() + 3600_000),
         endsAt: new Date(Date.now() + 2 * 3600_000),
         timezone: "UTC",
+        location: "Voice",
         status,
         capacity: 8,
         discordEventId: status === "published" ? "discord-seed-1" : null,

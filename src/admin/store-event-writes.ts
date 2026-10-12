@@ -29,6 +29,12 @@ function toEventStatus(raw: string): EventStatus {
   throw new Error(`unknown event status: ${raw}`);
 }
 
+const LOCATION_REQUIRED = "Add a location before publishing.";
+
+function isBlankLocation(value: string | null | undefined): boolean {
+  return value == null || value.trim() === "";
+}
+
 export async function createEvent(
   db: Db,
   actor: Actor,
@@ -201,6 +207,12 @@ export async function updateEvent(
           });
         }
       }
+      // A published row must keep a non-blank location (bot upsert contract):
+      // drafts may stay blank, but an edit that would leave a published event
+      // without one is refused under the same row lock, so no route can bypass it.
+      if (toEventStatus(locked.status) === "published" && isBlankLocation(input.location)) {
+        throw new ValidationError({ location: LOCATION_REQUIRED });
+      }
       // Closed field list: the key is addressed by, never written through,
       // this update (EventFormInput carries no key; forged keys never parse).
       const [row] = await tx
@@ -335,6 +347,12 @@ export async function transitionEvent(
       throw new ValidationError({
         ends_at: "An event that has already ended cannot be published. Update its dates first.",
       });
+    }
+    // Publishing needs a non-blank location (bot upsert + ingress contract):
+    // judged here under the row lock so no route can bypass the form. Drafts
+    // may stay blank; cancellation is exempt.
+    if (to === "published" && isBlankLocation(locked.location)) {
+      throw new ValidationError({ location: LOCATION_REQUIRED });
     }
     if (from === target) return { row: locked, writeBack: null };
     const [row] = await tx

@@ -167,6 +167,7 @@ describe.skipIf(!process.env.DATABASE_URL)(
           startsAt: FUTURE_START,
           endsAt: FUTURE_END,
           timezone: "UTC",
+          location: "Voice",
           status: "published",
           createdAt: new Date(),
           updatedAt: new Date(),

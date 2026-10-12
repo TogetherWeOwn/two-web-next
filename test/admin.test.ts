@@ -245,6 +245,7 @@ describe.skipIf(!process.env.DATABASE_URL)("admin round-trips (agent-testdb)", (
         starts_at: "2026-11-04 20:00",
         ends_at: "2026-11-04 23:00",
         timezone: "Europe/London",
+        location: "Voice",
       }),
       liveEnv(),
     );
@@ -300,6 +301,74 @@ describe.skipIf(!process.env.DATABASE_URL)("admin round-trips (agent-testdb)", (
     expect(res.status).toBe(422);
     const html = await res.text();
     expect(html).toContain("Give the event a title.");
+  });
+
+  it("publishing a draft without a location is refused with a location field error; blanking a published location is refused", async () => {
+    const LOCATION = "Add a location before publishing.";
+    const create = await app().request(
+      "/events",
+      form({
+        title: "No-location night",
+        starts_at: "2026-11-04 20:00",
+        ends_at: "2026-11-04 22:00",
+        timezone: "Europe/London",
+      }),
+      liveEnv(),
+    );
+    expect(create.status).toBe(303);
+    const key = new URL(create.headers.get("location")!, "https://x.test").pathname
+      .split("/")
+      .pop()!;
+    const publish = await app().request(
+      `/events/${key}/publish`,
+      { method: "POST", headers: { cookie, origin: APP_URL } },
+      liveEnv(),
+    );
+    expect(publish.status).toBe(422);
+    const publishHtml = await publish.text();
+    expect(publishHtml).toContain(LOCATION);
+    expect(publishHtml).toContain('name="location"');
+    const [stillDraft] = await db.select().from(events).where(eq(events.eventKey, key));
+    expect(stillDraft?.status).toBe("draft");
+    expect(dispatchWriteBack).not.toHaveBeenCalled();
+    // Adding a location unblocks publishing.
+    const fix = await app().request(
+      `/events/${key}`,
+      form({
+        title: "No-location night",
+        starts_at: "2026-11-04 20:00",
+        ends_at: "2026-11-04 22:00",
+        timezone: "Europe/London",
+        location: "Voice",
+      }),
+      liveEnv(),
+    );
+    expect(fix.status).toBe(303);
+    expect(
+      (
+        await app().request(
+          `/events/${key}/publish`,
+          { method: "POST", headers: { cookie, origin: APP_URL } },
+          liveEnv(),
+        )
+      ).status,
+    ).toBe(303);
+    // Blanking the published location is refused with the same field error.
+    vi.clearAllMocks();
+    const blank = await app().request(
+      `/events/${key}`,
+      form({
+        title: "No-location night",
+        starts_at: "2026-11-04 20:00",
+        ends_at: "2026-11-04 22:00",
+        timezone: "Europe/London",
+        location: "   ",
+      }),
+      liveEnv(),
+    );
+    expect(blank.status).toBe(422);
+    expect(await blank.text()).toContain(LOCATION);
+    expect(dispatchWriteBack).not.toHaveBeenCalled();
   });
 
   it("featured CRUD: create → publish toggle → reorder → delete, audited", async () => {
