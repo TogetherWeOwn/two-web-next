@@ -801,4 +801,20 @@ describe("PastEvents archive read deadline", () => {
     expect(back.live.feedback.textContent).toBe(PAST_EVENTS_COPY.failed);
     expect(back.live.root.attributes.has("aria-busy")).toBe(false);
   });
+
+  it("a timed-out page turn stays inline after a skip link instead of reloading", async () => {
+    const b = browser();
+    b.location.href = `${ORIGIN}/events/past#main`;
+    b.popstate();
+    expect(b.requests).toHaveLength(0);
+    b.turn();
+    const snapshot = b.snapshot();
+    b.fireTimers();
+    await b.settle();
+    expect(b.snapshot()).toEqual(snapshot);
+    expect(b.history).toEqual([]);
+    expect(b.reloads).toEqual([]);
+    expect(b.live.feedback.textContent).toBe(PAST_EVENTS_COPY.failed);
+    expect(b.live.root.attributes.has("aria-busy")).toBe(false);
+  });
 });
