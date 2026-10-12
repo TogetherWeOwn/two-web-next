@@ -1,4 +1,4 @@
-// Hot-zone HTML pages (Builder A, TOG-22865 slice A).
+// Hot-zone HTML pages.
 //
 // Aggregates only: 7x24 grids of counts, weekday names, no per-user rows, no
 // timestamps, no discord_id/created_at strings. Voice/games grids always carry

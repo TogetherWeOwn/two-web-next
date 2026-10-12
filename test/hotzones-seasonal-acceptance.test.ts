@@ -1,6 +1,6 @@
 // route-inventory: GET /hotzones
 // route-inventory: GET /hotzones/:signal
-// TOG-22959 acceptance (test files only) for TOG-22865 hot-zone heatmap pages.
+// Acceptance (test files only) for hot-zone heatmap pages.
 //
 // Contract lock-in (Test Author). The Builder implements against this file;
 // nothing here may change to make an implementation pass.
@@ -15,8 +15,8 @@
 //   reads the Kit `load` functions call, so this Vitest suite (which drives
 //   the Hono app) proves the contract; the Kit shells under
 //   web/src/routes/hotzones/ carry `csr = false` and the same grammar.
-// - Sibling TOG-22864 owns `/leaderboards` + `/leaderboards/[game]`; this
-//   card never duplicates them.
+// - The sibling game-leaderboards slice owns `/leaderboards` +
+//   `/leaderboards/[game]`; this card never duplicates them.
 //
 // `?season=` grammar (pure date-window function, no seasons table in v1,
 // shared with the sibling `?season=`):
@@ -27,8 +27,8 @@
 // - `YYYY-QN`, N 1..4 (e.g. 2026-Q3) -> quarter window UTC
 // - anything else -> 400, never a silent fallback window.
 // Joins cells aggregate real web data (`join_attempts.createdAt` in the
-// window); voice/games cells are the WhatPulse-seeded prior with the TOG-22857
-// rollup semantics, rendered labeled as estimates until bot event-store
+// window); voice/games cells are the WhatPulse-seeded prior with the rollup
+// semantics, rendered labeled as estimates until bot event-store
 // calibration. Season filtering is proven on joins (real data); the seeded
 // priors keep their own re-weight schedule.
 //

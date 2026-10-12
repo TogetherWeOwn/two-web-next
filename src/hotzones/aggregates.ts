@@ -1,11 +1,11 @@
-// Hot-zone 7x24 aggregates (Builder A, TOG-22865 slice A).
+// Hot-zone 7x24 aggregates.
 //
 // - Joins cells aggregate real web data: `join_attempts.createdAt` in the
 //   season window plus published `events.startsAt` in the window (aggregate
 //   counts only, never per-user rows, timestamps, or identities).
-// - Voice/games cells are the WhatPulse-seeded prior with TOG-22857 rollup
-//   semantics by contract (same 7x24 shape/seed/weekly re-weight), not a crate
-//   import: deterministic seeded base, weekly re-weighted so each weekday
+// - Voice/games cells are the WhatPulse-seeded prior with rollup semantics by
+//   contract (same 7x24 shape/seed/weekly re-weight), not a crate import:
+//   deterministic seeded base, weekly re-weighted so each weekday
 //   carries equal weight. Always rendered labeled as estimates until bot
 //   event-store calibration.
 //
@@ -96,7 +96,7 @@ export async function loadJoinsGrid(
 
 // --- WhatPulse-seeded prior (voice/games, estimates) ---
 
-// Contract seed for the TOG-22857 rollup (by contract, not import).
+// Contract seed for the rollup (by contract, not import).
 const PRIOR_SEED_BASE = 0x22857;
 
 function hashSignal(signal: string): number {
@@ -120,8 +120,8 @@ function mulberry32(seed: number): () => number {
 }
 
 /**
- * Deterministic WhatPulse-seeded prior for voice/games with TOG-22857 rollup
- * semantics by contract: same 7x24 shape, same seed derivation, same weekly
+ * Deterministic WhatPulse-seeded prior for voice/games with rollup semantics
+ * by contract: same 7x24 shape, same seed derivation, same weekly
  * re-weight (each weekday normalized to equal weight so no weekday dominates
  * the week). Pure function of signal; the season window does not move the
  * prior (the seeded priors keep their own re-weight schedule).

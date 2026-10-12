@@ -23,8 +23,8 @@ export const AGENT_EVENT_AUDIT_RETENTION_DAYS = 90;
 export const JOIN_ATTEMPT_RETENTION_DAYS = 90; // config/join.php: attempt_retention_days
 export const IDEMPOTENCY_KEY_RETENTION_DAYS = 90; // config/agent-events.php: idempotency_retention_days
 export const EVENT_SEARCH_LOG_RETENTION_DAYS = 90; // config/event_search_log.php: retention_days
-// Anonymous board views (hot zones + member leaderboard, TOG-22865): same 90-day
-// retention as event searches, pruned by occurred_at (see src/hotzones/board-log.ts).
+// Anonymous board views (hot zones + member leaderboard): same 90-day retention
+// as event searches, pruned by occurred_at (see src/hotzones/board-log.ts).
 export const BOARD_VIEW_LOG_RETENTION_DAYS = 90;
 export const RECONCILE_CRON = "*/10 * * * *"; // routes/console.php:35 everyTenMinutes()
 export const PRUNE_CRON = "0 0 * * *"; // routes/console.php:19 daily() (Laravel daily = 00:00)

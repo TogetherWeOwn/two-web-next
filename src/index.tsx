@@ -572,7 +572,7 @@ registerEventRoutes(
   async (c) => readSession(c, false),
 );
 
-// Hot zones (Builder A, TOG-22865 slice A): public aggregate heatmaps.
+// Hot zones: public aggregate heatmaps.
 registerHotzoneRoutes(app);
 
 // A3: bounded session-free public read API + OpenAPI spec. No session

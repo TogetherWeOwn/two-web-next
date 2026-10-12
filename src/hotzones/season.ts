@@ -1,4 +1,4 @@
-// Hot-zone `?season=` grammar (Builder A, TOG-22865 slice A).
+// Hot-zone `?season=` grammar.
 //
 // Pure date-window function, no seasons table in v1, shared with the sibling
 // leaderboards slice: absent/all = unbounded; YYYY; YYYY-MM; YYYY-QN (N 1-4);

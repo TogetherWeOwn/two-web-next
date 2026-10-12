@@ -1,4 +1,4 @@
-// Hot-zone Hono routes (Builder A, TOG-22865 slice A).
+// Hot-zone Hono routes.
 //
 // GET /hotzones (index, links all 3 signals) + GET /hotzones/:signal for
 // joins|voice|games exactly; unknown segments 404, never a grid. `?season=`

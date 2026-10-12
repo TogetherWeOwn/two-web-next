@@ -1,5 +1,5 @@
 // route-inventory: GET /leaderboards/members
-// TOG-22959 acceptance (test files only) for the TOG-22865 member leaderboard.
+// Acceptance (test files only) for the member leaderboard.
 //
 // Contract lock-in (Test Author). The Builder implements against this file;
 // nothing here may change to make an implementation pass.
@@ -7,7 +7,7 @@
 // Route (v1, Hono + SvelteKit strangler shell serving the same reads, per the
 // web/src/routes/events/past/ precedent):
 // - `/leaderboards/members` — member leaderboard. Complements, never
-//   duplicates, the sibling TOG-22864 `/leaderboards` + `/leaderboards/[game]`
+//   duplicates, the sibling game-leaderboards `/leaderboards` + `/leaderboards/[game]`
 //   boards. Builder exposes this path on the Hono app with the same aggregate
 //   reads the Kit `load` calls, so this Vitest suite proves the contract; the
 //   Kit shell under web/src/routes/leaderboards/members/ carries `csr = false`

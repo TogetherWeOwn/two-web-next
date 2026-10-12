@@ -101,6 +101,14 @@ export const coverage = {
       { path: "/events/past?page=99", state: "past-page-overflow" },
     ],
   },
+  "/hotzones/:signal": {
+    cases: [
+      { path: "/hotzones/joins" },
+      { path: "/hotzones/voice" },
+      { path: "/hotzones/games" },
+      { path: "/hotzones/bogus", status: 404 },
+    ],
+  },
   "/profile": {
     cases: [
       { path: "/profile", identity: "member" },

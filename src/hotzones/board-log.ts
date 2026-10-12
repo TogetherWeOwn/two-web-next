@@ -1,4 +1,4 @@
-// Anonymous hot-zone board-view logging (Builder A, TOG-22865 slice A).
+// Anonymous hot-zone board-view logging.
 //
 // Mirrors src/events/search-log.ts into the shared board_view_logs table:
 // normalized_board_key (hotzones | hotzones/<signal>) + scope + season +

@@ -259,9 +259,9 @@ export const eventSearchLogs = pgTable(
   ],
 );
 
-// Anonymous board-view log (Builder A, TOG-22865 slice A; shared with the
-// sibling leaderboards slice — whichever merges first owns the migration, the
-// other reuses it). One row per board render: normalized board key + scope +
+// Anonymous board-view log (shared with the sibling leaderboards slice —
+// whichever merges first owns the migration, the other reuses it). One row
+// per board render: normalized board key + scope +
 // season + result count only. No user id, session, discord id, IP, or username
 // columns by design; pruned at 90 d like event_search_logs.
 export const boardViewLogs = pgTable(
