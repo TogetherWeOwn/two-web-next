@@ -5,6 +5,8 @@ Also wired into the `Unit-test the lint` step in .github/workflows/pr-gates.yml.
 """
 
 import os
+import contextlib
+import io
 import re
 import subprocess
 import sys
@@ -29,6 +31,13 @@ _spec = importlib.util.spec_from_file_location(
 )
 _conventions = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(_conventions)
+
+
+def check_pr_quiet(*args, **kwargs):
+    """Run check_pr without leaking ::error/::warning annotations into the job log."""
+    with contextlib.redirect_stdout(io.StringIO()):
+        return _conventions.check_pr(*args, **kwargs)
+
 
 GOOD_BODY = """
 ## Linked Issues or Issue Description
@@ -206,9 +215,9 @@ class CheckerBehaviorMatchesDocs(unittest.TestCase):
         )
         self.assertTrue(any(f.level == "error" for f in empty_body), empty_body)
         # First checker agrees: bad title and empty body fail regardless of warn levels.
-        self.assertTrue(_conventions.check_pr("not conventional", GOOD_BODY, "alice", (), "warning"))
+        self.assertTrue(check_pr_quiet("not conventional", GOOD_BODY, "alice", (), "warning"))
         self.assertTrue(
-            _conventions.check_pr(
+            check_pr_quiet(
                 "fix(auth): refuse expired sudo sessions", "<!-- nothing -->  ", "alice", (), "warning"
             )
         )
@@ -302,15 +311,40 @@ class CheckerBehaviorMatchesDocs(unittest.TestCase):
         level = workflow_env("INTERNAL_ID_LEVEL")
         self.assertEqual(level, "warning", "test expectation pins the current warning level; update docs + test on flip")
         self.assertFalse(
-            _conventions.check_pr(
+            check_pr_quiet(
                 "fix(ci): handle TOG-1234 retries", GOOD_BODY, "alice", (), level
             )
         )
         self.assertTrue(
-            _conventions.check_pr(
+            check_pr_quiet(
                 "fix(ci): handle TOG-1234 retries", GOOD_BODY, "alice", (), "error"
             )
         )
+
+    def test_convention_calls_emit_no_workflow_commands(self):
+        """Red case: check_pr prints ::error/::warning, so callers must swallow it."""
+        noisy = [
+            ("not conventional", GOOD_BODY, "alice", (), "warning"),
+            ("fix(auth): refuse expired sudo sessions", "<!-- nothing -->  ", "alice", (), "warning"),
+            ("fix(ci): handle TOG-1234 retries", GOOD_BODY, "alice", (), "warning"),
+            ("fix(ci): handle TOG-1234 retries", GOOD_BODY, "alice", (), "error"),
+        ]
+        # The raw checker leaks workflow commands (proves the trap is real).
+        loud = io.StringIO()
+        with contextlib.redirect_stdout(loud):
+            for args in noisy:
+                _conventions.check_pr(*args)
+        self.assertTrue(
+            any(line.startswith("::") for line in loud.getvalue().splitlines()),
+            "expected check_pr to print :: workflow commands",
+        )
+        # The quiet helper used above must not.
+        quiet = io.StringIO()
+        with contextlib.redirect_stdout(quiet):
+            for args in noisy:
+                check_pr_quiet(*args)
+        leaked = [line for line in quiet.getvalue().splitlines() if line.startswith("::")]
+        self.assertEqual([], leaked)
 
     def test_branch_cutoff_still_errors_in_warn_mode(self):
         mode = workflow_env("PR_STANDARDS_MODE")
