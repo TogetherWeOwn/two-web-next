@@ -90,14 +90,5 @@
   },
   "engines": {
     "node": "^22.18.0 || >=24"
-  },
-  "description": "[![Release](https://img.shields.io/github/v/release/TogetherWeOwn/two-web-next)](https://github.com/TogetherWeOwn/two-web-next/releases)",
-  "main": "index.js",
-  "directories": {
-    "doc": "docs",
-    "test": "test"
-  },
-  "keywords": [],
-  "author": "",
-  "license": "ISC"
+  }
 }
