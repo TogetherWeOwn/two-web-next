@@ -311,6 +311,19 @@ async function previewParity(kitBase, honoBase) {
     );
     check(`Kit ${path}: HTTP 200`, kitRes.status === 200, `got ${kitRes.status}`);
     check(`Hono ${path}: HTTP 200`, honoRes.status === 200, `got ${honoRes.status}`);
+    // Renderer marker (web/src/hooks.server.ts): Kit answers with
+    // x-two-renderer=kit; Hono (honoFetch or the catch-all) never sets it.
+    // Fails when ownership sends a Kit-enabled path to Hono instead.
+    check(
+      `Kit ${path}: renderer marker proves Kit answered`,
+      kitRes.headers.get("x-two-renderer") === "kit",
+      `got ${JSON.stringify(kitRes.headers.get("x-two-renderer"))}`,
+    );
+    check(
+      `Hono ${path}: no Kit renderer marker`,
+      honoRes.headers.get("x-two-renderer") === null,
+      `got ${JSON.stringify(honoRes.headers.get("x-two-renderer"))}`,
+    );
     if (kitRes.status !== 200 || honoRes.status !== 200) continue;
     const [kitHtml, honoHtml] = await Promise.all([kitRes, honoRes].map((r) => r.text()));
     const keys = [...kitHtml.matchAll(/data-event-key="([^"]+)"/g)].map((m) => m[1]);

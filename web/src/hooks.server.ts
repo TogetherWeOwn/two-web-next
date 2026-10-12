@@ -1,7 +1,7 @@
 import type { Handle } from "@sveltejs/kit/hooks";
 import { env } from "cloudflare:workers";
 import { robotsTagFor, securityHeadersFor } from "../../src/headers";
-import { decideOwner } from "../../src/route-ownership";
+import { KIT_RENDERER_HEADER, KIT_RENDERER_VALUE, decideOwner } from "../../src/route-ownership";
 import { isTrustedHost } from "../../src/trust-hosts";
 import { honoFetch } from "#lib/server/hono.ts";
 
@@ -24,6 +24,9 @@ export const handle: Handle = async ({ event, resolve }) => {
   }
   const response = await resolve(event);
   if (event.route.id === HONO_ROUTE) return response;
+  // Renderer marker: proves Kit answered, so the preview parity and worker
+  // e2e fail when a Hono-owned path (or the catch-all) answers instead.
+  response.headers.set(KIT_RENDERER_HEADER, KIT_RENDERER_VALUE);
 
   for (const [name, value] of securityHeadersFor(
     { path: event.url.pathname, method: event.request.method },

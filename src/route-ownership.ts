@@ -30,10 +30,17 @@ export interface RouteDecision {
 }
 
 // The only native route so far renders the archive page; it stays on Hono
-// until its enablement is reviewed, so shipping this manifest changes no
-// traffic. Add one entry per migrated route, enabled only when its Kit
-// handler is ready to own the exact method/path.
+// until its enablement is reviewed. Production (the Hono Worker) sees no
+// traffic change; the preview Worker moves /events/past from Kit to Hono by
+// design — that is the rollback. Add one entry per migrated route, enabled
+// only when its Kit handler is ready to own the exact method/path.
 const ROUTE_MANIFEST: OwnedRoute[] = [{ method: "GET", path: "/events/past", enabled: false }];
+
+// Response header set only on the Kit-rendered branch of the hook, so the
+// preview parity check and worker e2e can prove which renderer answered.
+// Hono responses (honoFetch or the catch-all fallback) never carry it.
+export const KIT_RENDERER_HEADER = "x-two-renderer";
+export const KIT_RENDERER_VALUE = "kit";
 
 // Paths Kit must never shadow, whatever the manifest claims. The machine API
 // prefix plus the operational endpoints the Hono app owns.
@@ -44,8 +51,25 @@ const RESERVED_EXACT = new Set(["/up", "/csp-reports"]);
 // the underlying page, with or without CSR.
 const DATA_SUFFIX = "/__data.json";
 
-function normalizePath(path: string): string {
-  let out = path.endsWith(DATA_SUFFIX) ? path.slice(0, -DATA_SUFFIX.length) : path;
+// Kit 3.0.0 routes on decode_pathname (respond.js:299): split on %25 to
+// avoid double-decoding, decodeURI each piece. Malformed sequences fail
+// closed to Hono, never to Kit.
+function decodeKitPath(path: string): string | null {
+  try {
+    return path.split("%25").map(decodeURI).join("%25");
+  } catch {
+    return null;
+  }
+}
+
+function normalizePath(path: string): string | null {
+  const withoutData = path.endsWith(DATA_SUFFIX) ? path.slice(0, -DATA_SUFFIX.length) : path;
+  const decoded = decodeKitPath(withoutData);
+  if (decoded === null) return null;
+  // An encoded data suffix (%5F is "_") decodes into the suffix; strip again
+  // so /events/past/%5F%5Fdata.json follows its page like the literal form.
+  const base = decoded.endsWith(DATA_SUFFIX) ? decoded.slice(0, -DATA_SUFFIX.length) : decoded;
+  let out = base;
   while (out.length > 1 && out.endsWith("/")) out = out.slice(0, -1);
   return out || "/";
 }
@@ -99,6 +123,7 @@ export function resolveRouteOwner(
   manifest: OwnedRoute[] = ROUTE_MANIFEST,
 ): RouteOwner {
   const normalized = normalizePath(decision.path);
+  if (normalized === null) return "hono";
   if (isReserved(normalized)) return "hono";
   const upper = decision.method.toUpperCase();
   const lookup = upper === "HEAD" ? "GET" : upper;
@@ -111,6 +136,7 @@ export function resolveRouteOwner(
 // claimed wherever GET is, mirroring the dispatch lookup.
 export function allowedMethodsFor(path: string, manifest: OwnedRoute[] = ROUTE_MANIFEST): string[] {
   const normalized = normalizePath(path);
+  if (normalized === null) return [];
   if (isReserved(normalized)) return [];
   const seen = new Set<string>();
   for (const entry of manifest) {

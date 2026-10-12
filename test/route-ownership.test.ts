@@ -105,6 +105,51 @@ describe("route ownership", () => {
     expect(allowedMethodsFor("/events/past")).toEqual([]);
     expect(allowedMethodsFor("/up", [{ method: "GET", path: "/up", enabled: true }])).toEqual([]);
   });
+
+  it("decodes percent escapes like Kit before matching, so encoded aliases cannot bypass a rollback", () => {
+    // %70 is "p": /events/%70ast decodes to /events/past.
+    const manifest = [
+      { method: "GET", path: "/events/:key", enabled: true },
+      { method: "GET", path: "/events/past", enabled: false },
+    ];
+    expect(resolveRouteOwner({ method: "GET", path: "/events/past" }, manifest)).toBe("hono");
+    expect(resolveRouteOwner({ method: "GET", path: "/events/%70ast" }, manifest)).toBe("hono");
+    expect(resolveRouteOwner({ method: "GET", path: "/events/spring-fete" }, manifest)).toBe("kit");
+    expect(resolveRouteOwner({ method: "GET", path: "/events/%73pring-fete" }, manifest)).toBe(
+      "kit",
+    );
+  });
+
+  it("decodes before the reserved guard, so encoded /api cannot be shadowed", () => {
+    // %61 is "a": /%61pi decodes to /api.
+    const manifest = [{ method: "GET", path: "/:group/agent-events", enabled: true }];
+    expect(resolveRouteOwner({ method: "GET", path: "/api/agent-events" }, manifest)).toBe("hono");
+    expect(resolveRouteOwner({ method: "GET", path: "/%61pi/agent-events" }, manifest)).toBe(
+      "hono",
+    );
+    expect(allowedMethodsFor("/%61pi/agent-events", manifest)).toEqual([]);
+  });
+
+  it("fails closed to Hono on malformed escapes and preserves literal %25 like Kit", () => {
+    const manifest = [{ method: "GET", path: "/events/:key", enabled: true }];
+    expect(resolveRouteOwner({ method: "GET", path: "/events/%ZZ" }, manifest)).toBe("hono");
+    expect(resolveRouteOwner({ method: "GET", path: "/events/%" }, manifest)).toBe("hono");
+    // %25 is a literal "%": Kit leaves it untouched to avoid double-decoding.
+    expect(resolveRouteOwner({ method: "GET", path: "/events/%25" }, manifest)).toBe("kit");
+    expect(allowedMethodsFor("/events/%ZZ", manifest)).toEqual([]);
+  });
+
+  it("treats an encoded data suffix like the literal page suffix", () => {
+    // %5F is "_": %5F%5Fdata.json decodes to __data.json.
+    const enabled = [{ method: "GET", path: "/events/past", enabled: true }];
+    const disabled = [{ method: "GET", path: "/events/past", enabled: false }];
+    expect(
+      resolveRouteOwner({ method: "GET", path: "/events/past/%5F%5Fdata.json" }, enabled),
+    ).toBe("kit");
+    expect(
+      resolveRouteOwner({ method: "GET", path: "/events/past/%5F%5Fdata.json" }, disabled),
+    ).toBe("hono");
+  });
 });
 
 describe("decideOwner over a real Request", () => {
