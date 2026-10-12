@@ -277,6 +277,7 @@ exactly once.
 | `src/jobs/` | jobs |
 | `src/jobs-worker.ts` | jobs |
 | `src/join/` | join |
+| `src/mcp/` | content |
 | `src/member-erasure.ts` | profiles |
 | `src/member-reads.ts` | profiles |
 | `src/not-found-suggestions.ts` | content |

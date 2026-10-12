@@ -1,5 +1,36 @@
 {
   "_comment": "Dependency audit exceptions. Optional per-exception lockfile scopes to one audited lockfile root: '.' (repository root) or 'web' (web/ Kit workspace). An exception without lockfile applies to both lockfiles; an exception with lockfile applies only to that lockfile. See CONTRIBUTING.md dependency security section.",
   "version": 1,
-  "exceptions": []
+  "exceptions": [
+    {
+      "package": "@modelcontextprotocol/sdk",
+      "range": "1.12.0 - 1.30.1",
+      "severity": "high",
+      "advisoryIds": [1241339],
+      "lockfile": ".",
+      "reviewed": "2026-10-12",
+      "expires": "2026-11-11",
+      "reason": "GHSA-6qxp-vccf-f47h is an MCP client-side OAuth credential leak (a client sends credentials to a server-chosen authorization server). This Worker imports only agents/mcp/server, the stateless server entry: it never instantiates an MCP client, performs no OAuth flow, and the /mcp endpoint takes no credentials (no session, no cookies, no auth), so the vulnerable client modules are unreachable from the shipped bundle. Accepted until Dependabot lands a fixed release; re-check at expiry. Reviewed in the stateless public MCP PR."
+    },
+    {
+      "package": "@modelcontextprotocol/client",
+      "range": "2.0.0 - 2.1.0",
+      "severity": "high",
+      "advisoryIds": [1241338],
+      "lockfile": ".",
+      "reviewed": "2026-10-12",
+      "expires": "2026-11-11",
+      "reason": "Same GHSA-6qxp-vccf-f47h client-side OAuth leak as the sdk entry above: server-only import, no client instantiation, no OAuth, no credentials on /mcp. Unreachable from the shipped bundle. Accepted until Dependabot lands a fixed release; re-check at expiry. Reviewed in the stateless public MCP PR."
+    },
+    {
+      "package": "agents",
+      "range": "<=0.0.0-9631b6d || >=0.2.34",
+      "severity": "high",
+      "advisoryIds": [1241338, 1241339],
+      "lockfile": ".",
+      "reviewed": "2026-10-12",
+      "expires": "2026-11-11",
+      "reason": "Transitive carrier only: agents 0.28.0 pulls the two vulnerable MCP packages above, but this Worker imports just agents/mcp/server and never touches the client/OAuth paths. Same unreachability rationale and expiry as the direct entries. Reviewed in the stateless public MCP PR."
+    }
+  ]
 }

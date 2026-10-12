@@ -67,6 +67,7 @@
   { "method": "GET", "path": "/rules.md", "auth": "public" },
   { "method": "GET", "path": "/sitemap_index.xml", "auth": "public" },
   { "method": "GET", "path": "/up", "auth": "public" },
+  { "method": "OPTIONS", "path": "/mcp", "auth": "public" },
   { "method": "PATCH", "path": "/events/:key", "auth": "moderator" },
   { "method": "PATCH", "path": "/members/:user", "auth": "member-owner" },
   { "method": "POST", "path": "/__probe/alert", "auth": "staging-token" },
@@ -90,6 +91,7 @@
   { "method": "POST", "path": "/events/:key/rsvp-pause", "auth": "moderator" },
   { "method": "POST", "path": "/events/:key/rsvp-reopen", "auth": "moderator" },
   { "method": "POST", "path": "/logout", "auth": "public" },
+  { "method": "POST", "path": "/mcp", "auth": "public" },
   { "method": "POST", "path": "/members/:user", "auth": "member-owner" },
   { "method": "PUT", "path": "/events/:key/rsvp", "auth": "member-decoy" }
 ]

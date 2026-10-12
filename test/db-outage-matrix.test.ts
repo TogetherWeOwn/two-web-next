@@ -143,6 +143,11 @@ const MATRIX: Case[] = [
   { method: "GET", route: "/api/public/community", status: 200, format: "json" },
   { method: "GET", route: "/api/public/join", status: 200, format: "json" },
   { method: "GET", route: "/openapi.json", status: 200, format: "json" },
+  // B2 public MCP: the handler's DNS-rebinding policy rejects the matrix's
+  // same-origin Origin before any database read, so both methods stay 403
+  // with or without the app DB. Origin-less remote clients are unaffected.
+  { method: "POST", route: "/mcp", status: 403, format: "json", body: "{}" },
+  { method: "OPTIONS", route: "/mcp", status: 403, format: "json" },
   // Main #109/#98: JSON event show. Anonymous browsers redirect to the join
   // funnel before any DB read. The member-session outage envelope is pinned
   // below, outside the inventory, so the route string stays unique.

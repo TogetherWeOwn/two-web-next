@@ -22,6 +22,7 @@ describe("public data contract", () => {
 
   it("keeps one public read error vocabulary and documents data exclusions", () => {
     expect(PUBLIC_DATA_ERROR_CODES).toEqual([
+      "internal",
       "invalid_request",
       "not_found",
       "rate_limited",

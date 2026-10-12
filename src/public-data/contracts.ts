@@ -122,6 +122,7 @@ export interface PublicEventCollectionDto {
 }
 
 export const PUBLIC_DATA_ERROR_CODES = [
+  "internal",
   "invalid_request",
   "not_found",
   "rate_limited",
