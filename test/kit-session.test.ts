@@ -387,7 +387,9 @@ describe("dispatchHookRequest session bridge (Kit branch only)", () => {
   const APP_URL = "https://next.example.test";
   // The shipped manifest keeps every route on Hono; tests that need the Kit
   // branch pass this override (same convention as hook-route-ownership).
-  const KIT_MANIFEST = [{ method: "GET", path: "/events/past", enabled: true }];
+  const KIT_MANIFEST = [
+    { method: "GET", path: "/events/past", enabled: true, reads: "public" as const },
+  ];
 
   const eventFor = (
     path: string,
@@ -614,7 +616,7 @@ describe("kitSessionBridge (production hook composition)", () => {
       appUrl: "https://next.example.test",
       honoFetch: async () => new Response("hono", { status: 200 }),
       resolve,
-      manifest: [{ method: "GET", path: "/events/past", enabled: true }],
+      manifest: [{ method: "GET", path: "/events/past", enabled: true, reads: "public" as const }],
       sessionFor: kitSessionBridge(bridgeEnvFor(store)),
     });
     expect(resolve).toHaveBeenCalledTimes(1);

@@ -12,11 +12,17 @@
 // of those are ignored, and the original Request passes through untouched
 // (query preserved, body unread) to whichever renderer owns it.
 
+import type { AccessSink } from "./access-log";
 import { robotsTagFor, securityHeadersFor } from "./headers";
 import type { KitLocals } from "./kit-session";
+import { type MemberRead, memberReadResponse } from "./member-reads";
 import { isTrustedHost } from "./trust-hosts";
 
 export type RouteOwner = "kit" | "hono";
+
+// "public" routes render outside the member-read boundary and must not query
+// member owners. Anything else (including an absent field) is member data.
+export type RouteReads = "public" | MemberRead;
 
 export interface OwnedRoute {
   // Uppercase HTTP method, for example "GET". Never list HEAD: it follows the
@@ -26,6 +32,7 @@ export interface OwnedRoute {
   path: string;
   // Native rendering stays off until explicitly enabled.
   enabled: boolean;
+  reads?: RouteReads;
 }
 
 export interface RouteDecision {
@@ -42,7 +49,7 @@ export interface RouteDecision {
 // shipped manifest instead of hard-coding "kit": flipping enabled flips the
 // gate for the right reason.
 export const ROUTE_MANIFEST: OwnedRoute[] = [
-  { method: "GET", path: "/events/past", enabled: false },
+  { method: "GET", path: "/events/past", enabled: false, reads: "public" },
 ];
 
 // Response header set only on the Kit-rendered branch of the hook, so the
@@ -127,26 +134,38 @@ function bestMatch(path: string, manifest: OwnedRoute[]): OwnedRoute | undefined
   return best;
 }
 
+function enabledRouteFor(decision: RouteDecision, manifest: OwnedRoute[]): OwnedRoute | undefined {
+  const normalized = normalizePath(decision.path);
+  if (normalized === null) return undefined;
+  if (isReserved(normalized)) return undefined;
+  const upper = decision.method.toUpperCase();
+  const lookup = upper === "HEAD" ? "GET" : upper;
+  const candidates = manifest.filter((entry) => entry.method.toUpperCase() === lookup);
+  const best = bestMatch(normalized, candidates);
+  return best?.enabled ? best : undefined;
+}
+
 export function resolveRouteOwner(
   decision: RouteDecision,
   manifest: OwnedRoute[] = ROUTE_MANIFEST,
 ): RouteOwner {
-  const normalized = normalizePath(decision.path);
-  if (normalized === null) return "hono";
-  if (isReserved(normalized)) return "hono";
-  const upper = decision.method.toUpperCase();
-  const lookup = upper === "HEAD" ? "GET" : upper;
-  const candidates = manifest.filter((entry) => entry.method.toUpperCase() === lookup);
-  return bestMatch(normalized, candidates)?.enabled ? "kit" : "hono";
+  return enabledRouteFor(decision, manifest) ? "kit" : "hono";
 }
 
 // Hook entry point: pure function of method + path. Reads nothing else, so the
 // body is still unread and the URL (query included) is intact for the owner.
+export function decideRoute(request: Request, manifest: OwnedRoute[] = ROUTE_MANIFEST) {
+  return enabledRouteFor({ method: request.method, path: new URL(request.url).pathname }, manifest);
+}
+
 export function decideOwner(request: Request, manifest: OwnedRoute[] = ROUTE_MANIFEST): RouteOwner {
-  return resolveRouteOwner(
-    { method: request.method, path: new URL(request.url).pathname },
-    manifest,
-  );
+  return decideRoute(request, manifest) ? "kit" : "hono";
+}
+
+// Kit-side reads: only an authenticated bridge decision names a viewer.
+function viewerOf(locals: unknown): string | null {
+  const bridged = locals as Partial<KitLocals> | undefined;
+  return bridged?.status === "authenticated" ? (bridged.session?.userId ?? null) : null;
 }
 
 // The Kit catch-all route id that hands the request to the Hono app. Shared
@@ -184,6 +203,8 @@ export interface HookDispatchDeps {
   // resolve, so Kit loads share one session decision. Absent by default:
   // without it the dispatch behaves exactly as before.
   sessionFor?: (event: HookEventLike) => Promise<KitLocals>;
+  // Access-log sink for member-read Kit routes. Absent or null refuses the read.
+  accessSink?: () => Promise<AccessSink | null>;
 }
 
 // Production Kit decoration, owned by the core so the tested path is the
@@ -213,6 +234,27 @@ function decorateKitResponse(
   }
 }
 
+// A member-read route renders inside the boundary. The manifest supplies the
+// audit label, the bridge supplies the viewer, and a route with no declared
+// read class has no declaration, so the boundary refuses it.
+function renderMemberRead(
+  event: HookEventLike,
+  reads: MemberRead | undefined,
+  deps: HookDispatchDeps,
+): Promise<Response> {
+  return memberReadResponse(
+    { method: event.request.method, route: event.route?.id ?? "unmatched" },
+    () =>
+      reads && typeof reads === "object" ? { ...reads, viewer: viewerOf(event.locals) } : undefined,
+    async (entry) => {
+      const sink = await deps.accessSink?.();
+      if (!sink) throw new Error("no access-log sink");
+      return sink(entry);
+    },
+    () => deps.resolve(event),
+  );
+}
+
 // Framework-free core of web/src/hooks.server.ts handle(): exactly one
 // renderer runs, decided before resolve and before any auth/body read. A
 // resolve() failure propagates and is never replayed through Hono. The
@@ -234,13 +276,14 @@ export async function dispatchHookRequest(
   // its method/path/query/decode coverage guards the dispatch too. Inlining
   // resolveRouteOwner here once left mutants (hard-coded GET, hard-coded
   // path, path+search) green against 32 dispatch tests.
-  const owner = decideOwner(event.request, deps.manifest ?? ROUTE_MANIFEST);
-  if (owner === "hono") {
+  const route = decideRoute(event.request, deps.manifest ?? ROUTE_MANIFEST);
+  if (!route) {
     return deps.honoFetch(event.request);
   }
   // Kit branch only: one read-only session decision merged into locals before
   // resolve. A bridge failure must not 500 the render — public Kit pages fail
   // closed to guest-equivalent locals, exactly as if no bridge were wired.
+  // It runs outside the member-read boundary: its session read is not member data.
   if (deps.sessionFor) {
     try {
       const bridged = await deps.sessionFor(event);
@@ -252,7 +295,10 @@ export async function dispatchHookRequest(
       });
     }
   }
-  const response = await deps.resolve(event);
+  const response =
+    route.reads === "public"
+      ? await deps.resolve(event)
+      : await renderMemberRead(event, route.reads, deps);
   if (event.route?.id === HONO_FALLBACK_ROUTE_ID) return response;
   decorateKitResponse(response, event, deps.appUrl, deps.featuredImageHosts);
   return response;
