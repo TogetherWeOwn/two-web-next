@@ -1,6 +1,7 @@
 import { raw } from "hono/html";
 import type { FC, PropsWithChildren } from "hono/jsx";
 import type { Session } from "./env";
+import { LEAF_CRITICAL_CSS } from "./leaf-critical-css";
 import type { JoinResult } from "./return-journey";
 
 const SITE_NAME = "Together We Own";
@@ -82,7 +83,15 @@ export const Layout: FC<
             href={markdownAlternate}
           />
         ) : null}
-        <link rel="stylesheet" href="/styles.css" />
+        {theme === "content" ? (
+          // Content leaves inline the three stylesheets: the mobile audit
+          // measured ~150 ms of render-blocking savings on /rules, while
+          // preload hints for the same files measured zero. The block is
+          // allowlisted by hash in style-src (no unsafe-inline).
+          <style dangerouslySetInnerHTML={{ __html: LEAF_CRITICAL_CSS }} />
+        ) : (
+          <link rel="stylesheet" href="/styles.css" />
+        )}
         {theme ? (
           <>
             <link
@@ -92,8 +101,12 @@ export const Layout: FC<
               type="font/woff2"
               crossorigin="anonymous"
             />
-            <link rel="stylesheet" href="/theme-tokens.css" />
-            <link rel="stylesheet" href="/theme.css" />
+            {theme === "content" ? null : (
+              <>
+                <link rel="stylesheet" href="/theme-tokens.css" />
+                <link rel="stylesheet" href="/theme.css" />
+              </>
+            )}
             {theme === "event" ? <link rel="stylesheet" href="/event-theme.css" /> : null}
             {theme === "profile" ? <link rel="stylesheet" href="/profile-theme.css" /> : null}
             {theme === "schedule" ? <link rel="stylesheet" href="/schedule-theme.css" /> : null}

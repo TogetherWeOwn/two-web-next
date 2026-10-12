@@ -41,6 +41,9 @@ export const coverage = {
   "/admin/queue/failed/:id/preview": skip(
     "Default-off operator-only JSON advice, not an HTML document",
   ),
+  "/admin/queue/source-evidence/:id": skip(
+    "Default-off evidence-only bearer-authenticated JSON, not an HTML document",
+  ),
   "/events.json": skip("Session-gated JSON feed"),
   "/events/:key": skip("Session-gated JSON event detail; browser guests redirect to sign-in"),
   "/events.ics": skip("Calendar feed, not HTML"),

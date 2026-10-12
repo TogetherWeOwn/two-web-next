@@ -31,6 +31,11 @@
   },
   {
     "method": "DELETE",
+    "path": "/admin/queue/source-evidence/:id",
+    "auth": "evidence-bearer"
+  },
+  {
+    "method": "DELETE",
     "path": "/events/:key/rsvp",
     "auth": "member-decoy"
   },
@@ -133,6 +138,11 @@
     "method": "GET",
     "path": "/admin/queue/failed/:id/preview",
     "auth": "staging-operator"
+  },
+  {
+    "method": "GET",
+    "path": "/admin/queue/source-evidence/:id",
+    "auth": "evidence-bearer"
   },
   {
     "method": "GET",
@@ -351,8 +361,18 @@
   },
   {
     "method": "OPTIONS",
+    "path": "/admin/queue/source-evidence/:id",
+    "auth": "evidence-bearer"
+  },
+  {
+    "method": "OPTIONS",
     "path": "/mcp",
     "auth": "public"
+  },
+  {
+    "method": "PATCH",
+    "path": "/admin/queue/source-evidence/:id",
+    "auth": "evidence-bearer"
   },
   {
     "method": "PATCH",
@@ -421,6 +441,11 @@
   },
   {
     "method": "POST",
+    "path": "/admin/queue/source-evidence/:id",
+    "auth": "evidence-bearer"
+  },
+  {
+    "method": "POST",
     "path": "/api/agent-events",
     "auth": "machine-bearer"
   },
@@ -478,6 +503,11 @@
     "method": "POST",
     "path": "/members/:user",
     "auth": "member-owner"
+  },
+  {
+    "method": "PUT",
+    "path": "/admin/queue/source-evidence/:id",
+    "auth": "evidence-bearer"
   },
   {
     "method": "PUT",

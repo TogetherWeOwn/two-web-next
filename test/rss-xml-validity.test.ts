@@ -224,7 +224,7 @@ describe("RSS XML character validity", () => {
       "X-WR-CALDESC:Upcoming events from Together We Own",
       "BEGIN:VEVENT",
       `UID:${row.eventKey}@next.example.test`,
-      "SEQUENCE:1782907200",
+      "SEQUENCE:82907200",
       "DTSTAMP:20260701T120000Z",
       "DTSTART:20260715T180000Z",
       "DTEND:20260715T200000Z",

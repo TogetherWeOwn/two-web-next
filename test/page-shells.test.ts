@@ -25,7 +25,15 @@ function assertShell(html: string) {
     /<body(?: class="base-theme (?:homepage|content|join|profile|schedule|event)-theme")?>\s*<a class="skip-link" href="#main">Skip to content<\/a>/,
   );
   for (const nav of html.match(/<nav\b[^>]*>/g) ?? []) expect(nav).toMatch(/aria-label="[^"]+"/);
-  expect(html).toContain('rel="stylesheet" href="/styles.css"');
+  if (html.includes("base-theme content-theme")) {
+    // Content leaves inline the stylesheets instead of linking them; the
+    // real rules must still be present in the style block.
+    expect(html).toContain("<style>");
+    expect(html).toContain(".content-page");
+    expect(html).not.toContain('rel="stylesheet"');
+  } else {
+    expect(html).toContain('rel="stylesheet" href="/styles.css"');
+  }
 }
 
 function assertInventory(router: { routes: { method: string; path: string }[] }) {
