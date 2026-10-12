@@ -144,12 +144,44 @@ npx --no-install wrangler queues consumer add two-internal-action two-web-next \
 # multi-environment warning for the top-level staging config.
 git show "$PRE_HANDOFF_SHA:wrangler.jsonc" > ./rollback-wrangler.jsonc
 git show "$PRE_HANDOFF_SHA:wrangler.jobs.jsonc" > ./rollback-wrangler.jobs.jsonc
+
+# Verify the pre-handoff configs before mutating (fails closed when either is
+# unexpected): the web config restores both crons, the jobs config owns none.
+# This runs before the triggers deploys so a wrong $PRE_HANDOFF_SHA fails
+# before any Cloudflare mutation.
+node --input-type=module -e "import { readFileSync } from 'node:fs'; import { readWranglerConfig } from './ci/wrangler-config.mjs'; const web = readWranglerConfig(readFileSync('./rollback-wrangler.jsonc', 'utf8')); const jobs = readWranglerConfig(readFileSync('./rollback-wrangler.jobs.jsonc', 'utf8')); for (const cron of ['*/10 * * * *', '0 0 * * *']) { if (!(web.triggers?.crons ?? []).includes(cron)) { console.error('rollback web config is missing cron ' + cron); process.exit(1); } } if ((jobs.triggers?.crons ?? []).length !== 0) { console.error('rollback jobs config still owns crons'); process.exit(1); } console.log('rollback schedules ok: web owns both crons, jobs owns none');"
 npx --no-install wrangler triggers deploy --config ./rollback-wrangler.jsonc --env ""
 npx --no-install wrangler triggers deploy --config ./rollback-wrangler.jobs.jsonc --env ""
 
-# Read back the schedules just applied (fails closed when either is unexpected):
-# the web config restores both crons, the jobs config owns none.
-node --input-type=module -e "import { readFileSync } from 'node:fs'; import { readWranglerConfig } from './ci/wrangler-config.mjs'; const web = readWranglerConfig(readFileSync('./rollback-wrangler.jsonc', 'utf8')); const jobs = readWranglerConfig(readFileSync('./rollback-wrangler.jobs.jsonc', 'utf8')); for (const cron of ['*/10 * * * *', '0 0 * * *']) { if (!(web.triggers?.crons ?? []).includes(cron)) { console.error('rollback web config is missing cron ' + cron); process.exit(1); } } if ((jobs.triggers?.crons ?? []).length !== 0) { console.error('rollback jobs config still owns crons'); process.exit(1); } console.log('rollback schedules ok: web owns both crons, jobs owns none');"
+# Read back the live schedules just applied (fails closed when Cloudflare
+# disagrees with the pre-handoff configs). The local check above cannot show
+# what the Workers now hold, so GET each staging script's schedules like
+# docs/runbook.md does for production (token from the environment, never argv).
+(
+  set -euo pipefail
+  : "${CF_ACCOUNT_ID:?staging account id}"
+  : "${CLOUDFLARE_API_TOKEN:?injected, never on argv}"
+  CF_TOKEN="$CLOUDFLARE_API_TOKEN" CF_ACCT="$CF_ACCOUNT_ID" node -e '
+    const token = process.env.CF_TOKEN;
+    const acct = process.env.CF_ACCT;
+    (async () => {
+      const expected = { "two-web-next": ["*/10 * * * *", "0 0 * * *"], "two-web-jobs": [] };
+      for (const [script, crons] of Object.entries(expected)) {
+        const r = await fetch("https://api.cloudflare.com/client/v4/accounts/" + acct + "/workers/scripts/" + script + "/schedules", {
+          headers: { authorization: "Bearer " + token },
+        });
+        const d = await r.json();
+        if (!d.success) { console.error(JSON.stringify(d.errors)); process.exit(1); }
+        const live = (d.result ?? []).map((s) => s.cron).sort();
+        if (JSON.stringify(live) !== JSON.stringify([...crons].sort())) {
+          console.error(script + " schedules mismatch: " + JSON.stringify(live));
+          process.exit(1);
+        }
+      }
+      console.log("live schedules ok: web owns both crons, jobs owns none");
+    })();
+  '
+)
 rm -f ./rollback-wrangler.jsonc ./rollback-wrangler.jobs.jsonc
 
 # Verify: exactly one consumer again (worker:two-web-next, once per queue).

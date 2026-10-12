@@ -57,6 +57,15 @@ describe("staging jobs handoff invariants", () => {
     }
   });
 
+  it("pins the rollback configs inside the checkout (wrangler resolves assets relative to the config)", () => {
+    const runbook = read("docs/jobs-handoff.md");
+    expect(runbook).toContain("> ./rollback-wrangler.jsonc");
+    expect(runbook).toContain("> ./rollback-wrangler.jobs.jsonc");
+    expect(runbook).toContain("--config ./rollback-wrangler.jsonc");
+    expect(runbook).toContain("--config ./rollback-wrangler.jobs.jsonc");
+    expect(runbook).not.toContain("--config /tmp/");
+  });
+
   it("keeps the jobs preview off staging queues and the staging APP_URL", () => {
     const preview = jobs.env?.preview;
     const produced = names(preview?.queues?.producers);

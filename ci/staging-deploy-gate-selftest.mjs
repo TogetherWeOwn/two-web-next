@@ -571,8 +571,13 @@ test("workflow wires the tested gate before both mutations and preserves staging
   );
   assert.match(
     step("Detach staging web queue consumers (idempotent)"),
-    /queues consumer list/,
-    "Detach must check the consumer list first so a re-run is a no-op",
+    /out=\$\(npx wrangler queues consumer list "\$q"\) \|\| exit 1/,
+    "Detach must capture the consumer list so a failed list fails instead of reading as no consumer",
+  );
+  assert.doesNotMatch(
+    step("Detach staging web queue consumers (idempotent)"),
+    /consumer list "\$q" \|/,
+    "Detach must not pipe a possibly-failed list into grep: capture first with || exit 1",
   );
   assert.match(
     step("Detach staging web queue consumers (idempotent)"),
