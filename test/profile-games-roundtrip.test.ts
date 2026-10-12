@@ -131,4 +131,90 @@ describe("profile games JSON/form round-trip", () => {
     expect(textarea(html)).toBe("A");
     expect(html).not.toContain("<i>x</i>");
   });
+
+  it("saves case-insensitive JSON with parameters exactly like application/json", async () => {
+    const { store, save, send } = await setup();
+    const res = await send(
+      JSON.stringify({ bio: "a", timezone: "UTC", games: ["Chess"] }),
+      "Application/JSON; charset=UTF-8",
+      "application/json",
+    );
+    expect(res.status).toBe(200);
+    expect(save).toHaveBeenCalledTimes(1);
+    expect(store.rows.get(id)?.games).toEqual(["Chess"]);
+  });
+
+  it("treats Application/JSON as JSON: missing games is 422, never a form wipe", async () => {
+    const { store, save, send } = await setup();
+    const res = await send(
+      JSON.stringify({ bio: "Updated", timezone: "UTC" }),
+      "Application/JSON",
+      "application/json",
+    );
+    expect(res.status).toBe(422);
+    expect(save).not.toHaveBeenCalled();
+    expect(store.rows.get(id)).toMatchObject({ bio: "Hi", games: ["Chess"], timezone: "UTC" });
+  });
+
+  it("refuses unsupported media types with 415 without saving or wiping", async () => {
+    for (const type of ["text/plain", "application/merge-patch+json"]) {
+      const { store, save, send } = await setup();
+      const res = await send(
+        JSON.stringify({ bio: "Updated", timezone: "UTC", games: ["Chess"] }),
+        type,
+        "application/json",
+      );
+      expect(res.status, type).toBe(415);
+      expect(res.headers.get("cache-control"), type).toBe("private, no-store");
+      expect(save, type).not.toHaveBeenCalled();
+      expect(store.rows.get(id), type).toMatchObject({
+        bio: "Hi",
+        games: ["Chess"],
+        timezone: "UTC",
+      });
+    }
+  });
+
+  it("refuses a missing Content-Type with 415 without saving or wiping", async () => {
+    const sessions = createMemorySessionStore();
+    const token = newSessionToken();
+    await sessions.create({
+      tokenHash: await hashToken(token),
+      userId: id,
+      username: "alice",
+      avatar: null,
+      member: true,
+      moderator: false,
+      expiresAt: new Date(Date.now() + 3600_000),
+    });
+    const cookie = (
+      await serializeSigned("__Host-two_session", token, secret, {
+        path: "/",
+        secure: true,
+        httpOnly: true,
+        sameSite: "Lax",
+      })
+    ).split(";")[0]!;
+    const store = createMemoryProfileStore([{ ...seeded }]);
+    const save = vi.spyOn(store, "save");
+    const app = profilesApp({
+      sessionStore: sessions,
+      store,
+      accessLog: async () => true,
+      throttle: async () => ({ limited: false }),
+    });
+    const res = await app.request(
+      `/members/${id}`,
+      {
+        method: "PATCH",
+        headers: { cookie, origin: env.APP_URL, accept: "application/json" },
+        body: JSON.stringify({ bio: "Updated", timezone: "UTC", games: ["Chess"] }),
+      },
+      env,
+    );
+    expect(res.status).toBe(415);
+    expect(res.headers.get("cache-control")).toBe("private, no-store");
+    expect(save).not.toHaveBeenCalled();
+    expect(store.rows.get(id)).toMatchObject({ bio: "Hi", games: ["Chess"], timezone: "UTC" });
+  });
 });
