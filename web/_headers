@@ -1,4 +1,4 @@
-# Kit /_app asset headers (TOG-22117, security lane).
+# Kit /_app asset headers (security lane).
 #
 # Adapter-owned immutable output is served by the generated Worker before
 # hooks run (adapter-cloudflare files/worker.js asset branch), so hooks alone

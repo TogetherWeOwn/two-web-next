@@ -1,4 +1,4 @@
-// Kit CSP + full request-header parity (TOG-22117).
+// Kit CSP + full request-header parity.
 //
 // Security lane: hostile Host/Origin, Sec-Fetch-Site fallback, HEAD,
 // CSP shape (no unsafe-inline, /join frame exception only), static + /_app
