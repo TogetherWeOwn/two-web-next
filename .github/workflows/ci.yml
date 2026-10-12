@@ -183,16 +183,32 @@ jobs:
           path: artifacts/session-recovery/
           if-no-files-found: warn
           retention-days: 14
+      # Each browser-gated suite skips unless its opt-in is "true"; the verifier
+      # fails the step when any of its cases skipped or went missing.
       - name: Profile native and island Unicode regressions (memory fixtures)
-        run: A11Y_BROWSER_TESTS=true npx vitest run test/profile-native-length.test.ts
-      # The suite skips unless ADMIN_EVENT_BROWSER_TESTS is "true"; the verifier
-      # fails the step when any of its 48 browser cases skipped or went missing.
+        env:
+          A11Y_BROWSER_TESTS: "true"
+        run: |
+          npx vitest run test/profile-native-length.test.ts --reporter=default --reporter=json --outputFile.json=artifacts/a11y/profile-native-length.json
+          node ci/a11y-require-executed.mjs artifacts/a11y/profile-native-length.json "native browser submission and real island binder" 15
       - name: Admin event native Unicode regressions (intercepted fixtures, no network or DB)
         env:
           ADMIN_EVENT_BROWSER_TESTS: "true"
         run: |
           npx vitest run test/admin-event-native-unicode.test.ts --reporter=default --reporter=json --outputFile.json=artifacts/a11y/admin-native-unicode.json
           node ci/a11y-require-executed.mjs artifacts/a11y/admin-native-unicode.json "native admin event text limits" 48
+      - name: Featured native headline and image description regressions (intercepted fixtures, no network or DB)
+        env:
+          FEATURED_NATIVE_BROWSER_TESTS: "true"
+        run: |
+          npx vitest run test/featured-native-length.test.ts --reporter=default --reporter=json --outputFile.json=artifacts/a11y/featured-native-length.json
+          node ci/a11y-require-executed.mjs artifacts/a11y/featured-native-length.json "native featured headline and image description" 36
+      - name: Calendar search native Unicode input regressions (real Chromium typing and paste, mocked reads)
+        env:
+          CALENDAR_SEARCH_BROWSER_TESTS: "true"
+        run: |
+          npx vitest run test/calendar-search-unicode-boundaries.test.ts --reporter=default --reporter=json --outputFile.json=artifacts/a11y/calendar-search-unicode-boundaries.json
+          node ci/a11y-require-executed.mjs artifacts/a11y/calendar-search-unicode-boundaries.json "native calendar search input (real Chromium typing/paste)" 21
       - name: WCAG 2.2 AA (local fixtures, no external services)
         env:
           DEBUG: pw:browser
@@ -215,8 +231,9 @@ jobs:
   check:
     name: check
     needs: [a11y, lighthouse, bundle-budget, docs-links, scope]
-    # A skipped required check is mergeable; explicitly fail when the audit is not green.
-    if: always()
+    # A skipped required check is mergeable; explicitly fail when the audit is
+    # not green. `!cancelled()`, not `always()`: see the note on ci-ok.
+    if: ${{ !cancelled() }}
     # Overflow switch: see CI_OVERFLOW_* note on the first job above.
     runs-on: ${{ fromJSON((!github.event.repository.private && '["ubuntu-latest"]') || (contains(fromJSON(vars.CI_OVERFLOW_JOBS || '[]'), 'check') && contains(fromJSON(vars.CI_OVERFLOW_EVENTS || '[]'), github.event_name) && vars.CI_OVERFLOW_RUNNER) || '["self-hosted","two-selfhosted"]') }}
     # Container setup and serial SQL coverage takes 17-20m on the slowest shared
@@ -268,7 +285,7 @@ jobs:
           # On hosted/overflow runners the job container's root does not own the
           # runner-owned checkout, so Git refuses it as dubious ownership.
           git config --global --add safe.directory "$GITHUB_WORKSPACE"
-          apt-get update -qq && apt-get install -y -qq --no-install-recommends socat postgresql-client >/dev/null
+          apt-get update -qq && apt-get install -y -qq --no-install-recommends socat postgresql-client python3-venv >/dev/null
           nohup setsid socat TCP-LISTEN:5432,bind=127.0.0.1,reuseaddr,fork TCP:postgres:5432 >/dev/null 2>&1 &
           for i in $(seq 1 30); do pg_isready -q -h 127.0.0.1 -U postgres && exit 0; sleep 1; done
           exit 1
@@ -322,9 +339,31 @@ jobs:
       - name: Biome gate selftest (intentional violations)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
         run: bash ci/biome-selftest.sh
+      # Fetch-await HARD gate (quality-gates.md): every fetch() in src/ is
+      # awaited, returned or chained, plus the shared vendored warning rules
+      # and their fixtures. No build needed; fails the job.
+      - name: Fetch-await gate (ast-grep, HARD)
+        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
+        run: |
+          node ci/ast-grep-warn-selftest.mjs
+          npm run scan:fetch-await
+          npm run scan:rules-test
+      # Floor guard HARD (CONSTRAINTS.md): no new suppressions, skips,
+      # deleted tests, stripped assertions, stubs, exception rows or lowered
+      # thresholds in the PR diff. Reads git history; fails the job.
+      - name: Floor guard (HARD)
+        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
+        run: npm run floor-guard:selftest && npm run floor-guard
+      # Test-inventory WARN gate (quality-gates.md): every test file runs
+      # somewhere. Filesystem-only; continue-on-error so it reports without
+      # ever failing the job or skipping the steps after it (WARN).
+      - name: Test inventory (WARN)
+        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
+        continue-on-error: true
+        run: npm run test:inventory:selftest && npm run test:inventory
       - name: Check (lint + typecheck + coverage gate)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
-        run: npm run lint && npm run typecheck && npm run e2e:typecheck && npm run test:coverage && npm run e2e:safety && node --test ci/a11y-*.test.mjs ci/admin-properties-ci.test.mjs ci/coverage-command.test.mjs ci/visual-accept.test.mjs
+        run: npm run lint && npm run typecheck && npm run e2e:typecheck && npm run test:coverage && npm run e2e:safety && node --test ci/a11y-*.test.mjs ci/admin-properties-ci.test.mjs ci/coverage-command.test.mjs ci/kit-preview-e2e-wiring.test.mjs ci/visual-accept.test.mjs
         env:
           DATABASE_URL: postgres://postgres:ci@localhost:5432/postgres
           AUDIT_IMPORT_TEST_DATABASE_URL: postgres://postgres:ci@localhost:5432/postgres
@@ -336,13 +375,38 @@ jobs:
       # on a partial workspace.
       - name: Install Kit workspace dependencies
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true' || needs.scope.outputs.worker == 'true')
-        run: npm ci --prefix web --no-audit --no-fund
+        run: npm ci --prefix web --include=dev --no-audit --no-fund
       - name: Kit typecheck (svelte-check, warnings fail)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true' || needs.scope.outputs.worker == 'true')
         run: npm run check --prefix web
+      - name: Cache Kit parity Chromium
+        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true' || needs.scope.outputs.worker == 'true')
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/ms-playwright
+          key: kit-parity-chromium-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
+          restore-keys: |
+            kit-parity-chromium-${{ runner.os }}-
+      - name: Install Kit parity Chromium
+        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true' || needs.scope.outputs.worker == 'true')
+        run: npx playwright install --with-deps chromium
       - name: Kit archive parity (Hono vs SvelteKit section contract)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true' || needs.scope.outputs.worker == 'true')
         run: node ci/kit-preview-e2e.mjs
+      - name: Kit preview env-guard (one-sided URL rejection)
+        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true' || needs.scope.outputs.worker == 'true')
+        run: node --test ci/kit-preview-env-guard.test.mjs
+      - name: Kit adapter build
+        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true' || needs.scope.outputs.worker == 'true')
+        run: npm run build --prefix web
+      - name: Kit Worker bundle dry run (no deploy)
+        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true' || needs.scope.outputs.worker == 'true')
+        run: npx wrangler deploy --config web/wrangler.jsonc --dry-run --outdir "$RUNNER_TEMP/kit-worker-dry-run"
+      - name: Kit Worker runtime fixture (disposable Postgres, fake Discord)
+        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true' || needs.scope.outputs.worker == 'true')
+        run: node ci/kit-worker-e2e.mjs
+        env:
+          KIT_WORKER_TEST_DATABASE_URL: postgres://postgres:ci@localhost:5432/postgres
       - name: Staging deployment gate selftest (stubbed, no Cloudflare calls)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
         run: node --test ci/staging-deploy-gate-selftest.mjs
@@ -352,6 +416,34 @@ jobs:
       - name: Shadow-compare selftest (loopback only)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
         run: npm run test:shadow
+      # Changed-lines WARN gate (quality-gates.md): added TS lines should be
+      # executed (80%). Reads the coverage this job just produced; warns only.
+      - name: Patch coverage (WARN)
+        if: always() && (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && hashFiles('coverage/coverage-final.json') != ''
+        run: npm run patch:coverage:selftest && npm run patch:coverage
+      # Semgrep WARN gate (quality-gates.md): TS sinks + secret-shaped
+      # literals. A planted warning must be detected before scanning the tree;
+      # failures stay advisory but emit a visible workflow warning.
+      - name: Semgrep (WARN)
+        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
+        continue-on-error: true
+        # Container steps run under sh (dash here: no pipefail), so pin bash
+        # for `set -euo pipefail` like the migration-numbering step does.
+        shell: bash
+        env:
+          SEMGREP_SEND_METRICS: "off"
+        run: |
+          set -euo pipefail
+          # continue-on-error keeps the step green on failure; the trap keeps a
+          # dead gate visible as a workflow warning instead of silent green.
+          trap 'echo "::warning::Semgrep WARN step failed before completing the scan"' ERR
+          python3 -m venv "$RUNNER_TEMP/semgrep"
+          "$RUNNER_TEMP/semgrep/bin/pip" install --quiet 'semgrep==1.180.0'
+          if ! node ci/semgrep-warn-selftest.mjs "$RUNNER_TEMP/semgrep/bin/semgrep"; then
+            echo "::warning::Semgrep WARN selftest failed; scan may be unavailable"
+            exit 1
+          fi
+          "$RUNNER_TEMP/semgrep/bin/semgrep" --config ci/semgrep-rules.yml --quiet --metrics=off
       - name: Coverage job summary
         if: always() && (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && hashFiles('coverage/coverage-summary.json') != ''
         run: node ci/coverage-summary.mjs >> "$GITHUB_STEP_SUMMARY"
@@ -387,6 +479,9 @@ jobs:
       - name: Backup restore-proof selftest (no network, no database)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true')
         run: python3 ci/backup-restore-proof/selftest.py
+      - name: Scrub QA token selftest (offline fixtures, no secrets)
+        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true')
+        run: python3 ci/scrub-qa-token-selftest
       - name: Migration numbering check
         shell: bash
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.db == 'true')
@@ -434,6 +529,9 @@ jobs:
       - name: Production secrets preflight selftest (stubbed wrangler, no secrets or network)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
         run: node --test ci/check-production-secrets.test.mjs
+      - name: Jobs secrets preflight selftest (stubbed wrangler, no secrets or network)
+        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
+        run: node --test ci/check-jobs-secrets.test.mjs
       - name: Watch Lighthouse runner selftest (stub fetch and lhci, no network or browser)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
         run: npm run lighthouse:origin:selftest
@@ -446,6 +544,9 @@ jobs:
       - name: Build production alert Tail Worker (wrangler dry run)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true' || needs.scope.outputs.worker == 'true')
         run: npx wrangler deploy --config tail/wrangler.jsonc --env production --dry-run --outdir ../dist-tail-production
+      - name: Build staging jobs Worker (wrangler dry run)
+        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true' || needs.scope.outputs.worker == 'true')
+        run: npx wrangler deploy --config wrangler.jobs.jsonc --dry-run --outdir ../dist-jobs
       - name: Production build (wrangler dry run, no deployment)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true' || needs.scope.outputs.worker == 'true')
         run: npx wrangler deploy --dry-run --env production --outdir dist-production
@@ -539,10 +640,17 @@ jobs:
   # explicitly fails when scope itself did not succeed. Name pinned equal to
   # the id: the operator requires `ci-ok` in the ruleset after merge + green
   # probes (ruleset cutover is an OPERATOR step, never this PR).
+  # It runs unless its own run was cancelled. A draft PR marked ready seconds
+  # after opening starts two runs on one head, and the concurrency group cancels
+  # the older one; under `always()` that run's gates still ran and failed,
+  # leaving a stale red on a head the newer run passes. In a cancelled run this
+  # job concludes cancelled instead. Branch protection accepts only success,
+  # skipped or neutral, so it still blocks the merge until the newer run's
+  # ci-ok succeeds. test/ci-concurrency.test.ts pins both outcomes.
   ci-ok:
     name: ci-ok
     needs: [a11y, lighthouse, bundle-budget, check, scope]
-    if: always()
+    if: ${{ !cancelled() }}
     # Overflow switch: see CI_OVERFLOW_* note on the a11y job.
     runs-on: ${{ fromJSON((!github.event.repository.private && '["ubuntu-latest"]') || (contains(fromJSON(vars.CI_OVERFLOW_JOBS || '[]'), 'ci-ok') && contains(fromJSON(vars.CI_OVERFLOW_EVENTS || '[]'), github.event_name) && vars.CI_OVERFLOW_RUNNER) || '["self-hosted","two-selfhosted"]') }}
     timeout-minutes: 5

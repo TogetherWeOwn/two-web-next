@@ -10,13 +10,16 @@ CI runs two independent jobs in `.github/workflows/ci.yml`:
   `ci/minify-assets.mjs --check` and fails on drift.
   `npm run check` also runs these checks.
 - `lighthouse`: pinned `@lhci/cli`, actual `wrangler dev --local`, three samples per
-  page, median assertions. Reports and assertion results (also on failure) are
-  uploaded as the `lighthouse-<sha>` GitHub artifact for 14 days. Uploads go to the
-  repository artifact store, not a public LHCI server.
+  page, mobile performance assertions, desktop Lighthouse category scores, and a
+  web-standards check. These checks fail the CI job when they fail. Reports and
+  assertion results (also on failure) are uploaded as the `lighthouse-<sha>` GitHub
+  artifact for 14 days in the repository artifact store, not a public LHCI server.
 
 The required `check` job depends on **both** performance jobs and runs with
-`if: always()`. Its first gate explicitly rejects failed, cancelled, skipped or
-missing results; a skipped required check alone is not a safe merge gate.
+`if: ${{ !cancelled() }}`: whatever they concluded, unless its own run was
+cancelled (then it concludes cancelled, which still blocks a merge). Its first
+gate explicitly rejects failed, cancelled, skipped or missing results; a skipped
+required check alone is not a safe merge gate.
 `test/performance-ci.test.ts` sends synthetic over-budget LCP/CLS reports through
 the real LHCI assertion command, proves its nonzero exit fails this gate, and pins
 the workflow wiring. `npm run gate:selftest` covers result-state handling offline.
@@ -117,25 +120,57 @@ coverage of the legacy authenticated performance surfaces.
 
 ## Threshold policy
 
-`ci/lighthouserc.cjs` copies the legacy public-page thresholds and mobile profile:
+`ci/lighthouserc.cjs` defines the mobile public-page assertions below. Each
+metric uses the median of three runs; the performance category uses the median
+run score. The mobile performance category floor is read from
+`ci/quality-budget.json`.
 
-| Audit | Median ceiling | Severity |
+| Assertion | Threshold | Severity |
 |---|---:|---|
+| Performance category score (mobile) | 0.9 (90%) minimum | error |
 | Largest contentful paint | 2000 ms | error |
 | Cumulative layout shift | 0.1 | error |
 | Server response time (observed TTFB) | 600 ms | error |
-| Total blocking time | 300 ms | warning |
+| Total blocking time | 200 ms | error |
 | First contentful paint | 1800 ms | warning |
+
+The separate desktop category check uses the same category floors from
+`ci/quality-budget.json`:
+
+| Category | Minimum score |
+|---|---:|
+| performance | 0.9 (90%) |
+| accessibility | 0.95 (95%) |
+| best-practices | 0.95 (95%) |
+| seo | 0.95 (95%) |
 
 Mobile screen 412 × 823, scale 1.75, simulated Slow 4G (150 ms RTT,
 1638.4 Kbps throughput) and 4× CPU slowdown are unchanged. The observed TTFB
 tripwire prevents Lantern's per-origin simulation from hiding slow HTML responses.
-`test/performance-ci.test.ts` pins all thresholds, the phone profile and route set.
-`test/lighthouse-inventory.test.ts` fails when the worker allowlist
-(`ci/lighthouse-paths.ts`), the LHCI list and the admission list disagree, or when
-any of them drops one of the eight routes. The post-cutover watch
-(`npm run lighthouse:origin`) reuses the LHCI route list, so it measures the same
-eight routes on its allowlisted origin with the same thresholds.
+`test/performance-ci.test.ts` pins mobile thresholds, the phone profile and route
+set. `test/performance-budgets-snapshot.test.ts` pins the documented thresholds
+and category floors to their source configuration. `test/lighthouse-inventory.test.ts`
+fails when the worker allowlist (`ci/lighthouse-paths.ts`), the LHCI list and the
+admission list disagree, or when any of them drops one of the eight routes. The
+post-cutover watch (`npm run lighthouse:origin`) reuses the LHCI route list, so it
+measures the same eight routes on its allowlisted origin with the same thresholds.
+
+## Staging quality and journey gates
+
+The staging checks run after deployment and serve different purposes:
+
+| Check | What it verifies | Gate behavior |
+|---|---|---|
+| `staging-journeys` | Authenticated critical journeys against the deployed Worker; a journey ledger fails the job if every journey skips. | Post-deploy evidence, not a PR merge check. Docs-only and test-only deploys may skip it. Automatic production candidate resolution requires a successful `staging-journeys` result. |
+| `staging-quality` | Mobile Lighthouse performance assertions plus desktop Lighthouse category scores on the deployed origin. | Runs after every qualifying staging deploy, even when journeys are skipped. A Lighthouse assertion failure fails the check; automatic production candidate resolution also requires this job to pass. |
+| Web standards (`npm run standards -- --origin`) | Security headers, HTML basics and internal links. | Runs inside `staging-quality` and blocks it: a Web standards failure fails the job, like the Lighthouse budgets. |
+
+The staging origin runs use GET-only requests with no sign-in or writes, but
+they are not database-free: both Lighthouse runs measure `/events`, and the
+mobile run also measures the discovered `/e/<key>`. Those routes read the
+staging database, so a staging DB outage fails `staging-quality` and blocks
+promotion. Every check listed above blocks: a failure in any of them fails
+`staging-quality` and blocks promotion.
 
 The byte ceilings are specific to Next's unbundled assets, based on the measured
 2026-09-30 sizes documented in `ci/bundle-budget.json`, with roughly 25–45%
@@ -186,15 +221,20 @@ bytes. Measured on this tree with esbuild `0.28.1`:
 |---|---:|---:|
 | `public/islands/admin-event-editor.js` | 1429 / 737 | 2048 / 1024 |
 | `public/islands/admin-event-text-limits.js` | 998 / 539 | 1536 / 768 |
-| `public/islands/auth-status.js` | 2081 / 1009 | 3072 / 1280 |
+| `public/islands/auth-status.js` | 2765 / 1297 | 3072 / 1536 |
 | `public/islands/avatar.js` | 287 / 213 | 512 / 512 |
 | `public/islands/copy-link.js` | 1323 / 714 | 2048 / 1024 |
-| `public/islands/events-calendar.js` | 5133 / 1991 | 6656 / 2560 |
+| `public/islands/events-calendar.js` | 5640 / 2146 | 6656 / 2560 |
 | `public/islands/going-count.js` | 2289 / 1092 | 3072 / 1536 |
-| `public/islands/member-profile.js` | 6138 / 2414 | 7680 / 3072 |
-| `public/islands/past-events.js` | 3350 / 1397 | 4608 / 1792 |
-| `public/islands/rsvp-button.js` | 13662 / 4001 | 17408 / 5120 |
+| `public/islands/member-profile.js` | 9471 / 3500 | 12288 / 4608 |
+| `public/islands/past-events.js` | 3602 / 1490 | 4608 / 1792 |
+| `public/islands/rsvp-button.js` | 14498 / 4201 | 17408 / 5120 |
 | `public/styles.css` | 4749 / 1611 | 6144 / 2048 |
+
+The auth-status gzip ceiling uses the repository's ×1.25 rule on its recorded
+2026-10-10 baseline (1213 B → 1536 B). This approved headroom covers two
+fail-safe auth changes: bounded sign-out feedback and a session-read deadline
+that settles even when abort is ignored. The raw ceiling remains unchanged.
 
 Never relax a Lighthouse threshold to turn a build green. Threshold changes
 require a separate owner-approved PR. Byte-ceiling increases must likewise be a

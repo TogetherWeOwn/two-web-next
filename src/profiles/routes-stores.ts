@@ -6,7 +6,7 @@ import postgres from "postgres";
 import type { AccessSink } from "../access-log";
 import { dbFor, type EnvWithAdminDb } from "../admin/db";
 import { recordAccess } from "../admin/store";
-import { databaseOptions, databaseUrl } from "../db/connection";
+import { botDatabaseUrl, databaseOptions } from "../db/connection";
 import type { Env } from "../env";
 import type { Ctx, ProfileDeps } from "./routes-shared";
 import {
@@ -30,7 +30,10 @@ export function profileStores(deps: ProfileDeps) {
           // Injected fixtures/clients are borrowed, never shut down by this request.
           const injected = (c.env as EnvWithAdminDb).ADMIN_DB;
           if (injected) return readMemberStats(injected, memberId, signal);
-          const url = databaseUrl(c.env);
+          // Bot-owned `web_v1` views live in the bot database, never the
+          // web DB (same source rule as homepage counts): explicit
+          // BOT_DATABASE_URL wins, else the BOT_DB Hyperdrive binding.
+          const url = botDatabaseUrl(c.env);
           if (!url) return null;
           signal.throwIfAborted();
           // Also bound server-side execution if the connection disappears mid-query.

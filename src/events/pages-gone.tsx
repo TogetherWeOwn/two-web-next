@@ -4,8 +4,18 @@ import type { PublicEvent } from "./reads";
 import { EventDetailShell } from "./pages-shared";
 
 /** The notice is the only visible cancellation copy; a closed RSVP control would repeat it. */
-export const EventGonePage: FC<{ e: PublicEvent; jsonLd: string }> = ({ e, jsonLd }) => (
-  <EventDetailShell title={e.title} robots="noindex, nofollow" account={false}>
+export const EventGonePage: FC<{ e: PublicEvent; jsonLd: string; siteJsonLd?: string }> = ({
+  e,
+  jsonLd,
+  siteJsonLd,
+}) => (
+  <EventDetailShell
+    title={e.title}
+    robots="noindex, nofollow"
+    account={false}
+    markdownAlternate={`/e/${e.eventKey}.md`}
+    siteJsonLd={siteJsonLd}
+  >
     <section class="event-hero event-gone" aria-label="Cancelled event">
       <p class="event-kicker">{e.game || "Community event"}</p>
       <p class="notice" role="status" data-testid="event-cancelled">
@@ -18,6 +28,10 @@ export const EventGonePage: FC<{ e: PublicEvent; jsonLd: string }> = ({ e, jsonL
         </a>
       </p>
     </section>
-    <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: jsonLd }} />
+    <script
+      type="application/ld+json"
+      data-testid="event-jsonld"
+      dangerouslySetInnerHTML={{ __html: jsonLd }}
+    />
   </EventDetailShell>
 );

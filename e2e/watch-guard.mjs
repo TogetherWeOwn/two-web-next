@@ -75,19 +75,28 @@ export function isEdgeBeacon(method, rawUrl) {
   );
 }
 
-// The /join page embeds Discord's own widget page in an iframe. Everything
-// inside it (its scripts, its calls to the Discord API, its own bot-detection
-// beacon) is Discord's, not the site's, and fails for reasons the site cannot
-// control: a guild with the widget disabled answers 403 "Widget Disabled",
-// which the frame logs as a console error and an uncaught page error. The site
-// already probes that and renders a static fallback; the watch asserts the
-// site, so this one document is answered locally and Discord is never
-// contacted. The match is a GET on exactly https://discord.com/widget; the
-// frame-src CSP and the iframe element on the page are still exercised.
+// The /join page offers Discord's own widget page behind a click: a
+// no-referrer link that the same-origin island swaps for the sandboxed iframe
+// only when the visitor asks, so page load never contacts Discord. Everything
+// inside the frame (its scripts, its calls to the Discord API, its own
+// bot-detection beacon) is Discord's, not the site's, and fails for reasons
+// the site cannot control: a guild with the widget disabled answers 403
+// "Widget Disabled", which the frame logs as a console error and an uncaught
+// page error. The site already probes that and renders a static fallback; the
+// watch asserts the site, so when a journey clicks through, this one document
+// is answered locally and Discord is never contacted. The match is a GET on
+// exactly https://discord.com/widget. The GET-only journeys below never
+// click, so they exercise the preview link and island script under the
+// frame-src CSP, not the frame itself; the stub stays for journeys that do.
 const DISCORD_WIDGET_FRAME = Object.freeze({ origin: "https://discord.com", pathname: "/widget" });
 const DISCORD_WIDGET_STUB = Object.freeze({
   status: 200,
   contentType: "text/html; charset=utf-8",
+  // Discord's own widget headers, so the frame loads under the site's COEP credentialless.
+  headers: Object.freeze({
+    "cross-origin-embedder-policy": "require-corp",
+    "cross-origin-resource-policy": "cross-origin",
+  }),
   body: "<!doctype html><title>discord widget (stubbed by the watch)</title>",
 });
 

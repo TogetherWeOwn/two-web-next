@@ -19,8 +19,19 @@ export const Layout: FC<
     shareDescription?: string | null;
     robots?: string;
     theme?: "home" | "event" | "content" | "join" | "profile" | "schedule";
+    /** Rooted path of the curated Markdown alternate (A2), e.g. `/about.md`. */
+    markdownAlternate?: string;
   }>
-> = ({ title, canonical, shareTitle, shareDescription, robots, theme, children }) => (
+> = ({
+  title,
+  canonical,
+  shareTitle,
+  shareDescription,
+  robots,
+  theme,
+  markdownAlternate,
+  children,
+}) => (
   <>
     {raw("<!doctype html>")}
     <html lang="en">
@@ -63,6 +74,14 @@ export const Layout: FC<
           title={`${SITE_NAME} Events`}
           href="/events.rss"
         />
+        {markdownAlternate ? (
+          <link
+            rel="alternate"
+            type="text/markdown"
+            title="Markdown version"
+            href={markdownAlternate}
+          />
+        ) : null}
         <link rel="stylesheet" href="/styles.css" />
         {theme ? (
           <>
@@ -73,6 +92,7 @@ export const Layout: FC<
               type="font/woff2"
               crossorigin="anonymous"
             />
+            <link rel="stylesheet" href="/theme-tokens.css" />
             <link rel="stylesheet" href="/theme.css" />
             {theme === "event" ? <link rel="stylesheet" href="/event-theme.css" /> : null}
             {theme === "profile" ? <link rel="stylesheet" href="/profile-theme.css" /> : null}
@@ -273,10 +293,26 @@ export const JoinResultBanner: FC<{ result: JoinResult }> = ({ result }) => (
 // directly so the re-export list stays exactly the previous export list.
 export const JOIN_HREF = "/join";
 
+// The .md alternate sits next to the leaf path by construction (A2: one media
+// type per route, so the alternate is the same path plus `.md`). Derived here
+// so the four leaf screens cannot ship a mismatched pair.
+const leafMarkdownAlternate = (canonical: string): string | undefined => {
+  try {
+    return `${new URL(canonical).pathname}.md`;
+  } catch {
+    return undefined;
+  }
+};
+
 export const Leaf: FC<
   PropsWithChildren<{ title: string; canonical: string; headingId: string; heading: string }>
 > = ({ title, canonical, headingId, heading, children }) => (
-  <Layout title={title} canonical={canonical} theme="content">
+  <Layout
+    title={title}
+    canonical={canonical}
+    theme="content"
+    markdownAlternate={leafMarkdownAlternate(canonical)}
+  >
     <SiteHeader joinAction />
     <main id="main" tabindex={-1}>
       <div class="content-layout">

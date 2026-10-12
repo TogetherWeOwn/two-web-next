@@ -543,6 +543,48 @@ describe("PATCH /members/:user (memory doubles)", () => {
     });
   });
 
+  it("the _method=PATCH override accepts case-insensitive form media types", async () => {
+    const { app, sessions, store } = harness();
+    const cookie = await cookieFor(sessions, ALICE);
+    for (const contentType of [
+      "Application/X-Www-Form-Urlencoded",
+      "APPLICATION/X-WWW-FORM-URLENCODED; charset=UTF-8",
+    ]) {
+      store.rows.get(ALICE.userId)!.games = ["Chess"];
+      const res = await app.request(
+        `/members/${ALICE.userId}`,
+        {
+          method: "POST",
+          headers: { cookie, origin: APP_URL, "content-type": contentType },
+          body: new URLSearchParams({ _method: "PATCH", bio: "via form", games_text: "" }),
+        },
+        env,
+      );
+      expect(res.status, contentType).toBe(303);
+      expect(store.rows.get(ALICE.userId)?.games, contentType).toEqual([]);
+    }
+  });
+
+  it("POST without an override is 405 with an Allow header", async () => {
+    const { app, sessions, store } = harness();
+    const cookie = await cookieFor(sessions, ALICE);
+    const res = await app.request(
+      `/members/${ALICE.userId}`,
+      {
+        method: "POST",
+        headers: { cookie, origin: APP_URL, "content-type": "application/json" },
+        body: JSON.stringify({ bio: "x", games: [] }),
+      },
+      env,
+    );
+    expect(res.status).toBe(405);
+    const allow = res.headers.get("allow") ?? "";
+    expect(allow).toMatch(/GET/);
+    expect(allow).toMatch(/PATCH/);
+    expect(allow).toMatch(/POST/);
+    expect(store.rows.get(ALICE.userId)!.bio).toBe("Alice bio <b>x</b>");
+  });
+
   it("a member cannot edit someone else's profile, and neither can a moderator", async () => {
     const { app, sessions, store } = harness();
     for (const who of [BOB, MOD]) {

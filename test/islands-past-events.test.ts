@@ -421,7 +421,10 @@ describe("PastEvents shipped binder request/state drift", () => {
   it("fires no load/poll request, then exactly one GET per page turn and patches stable nodes", async () => {
     const b = browser();
     expect(b.requests).toHaveLength(0);
-    expect(binder).not.toMatch(/setInterval|setTimeout|events\.json|\/rsvp/);
+    expect(binder).not.toMatch(/setInterval|events\.json|\/rsvp/);
+    // Exactly one owned one-shot read deadline, never a polling loop.
+    expect(binder.match(/setTimeout\(/g)).toHaveLength(1);
+    expect(binder.match(/clearTimeout\(/g)).toHaveLength(1);
     expect(b.turn(2)).toBe(true);
     expect(b.requests).toHaveLength(1);
     expect(b.requests[0]).toMatchObject({
@@ -562,6 +565,53 @@ describe("PastEvents shipped binder request/state drift", () => {
     expect(b.targets[1]!.childNodes).toEqual(["page one cards"]);
     expect(b.location.href).toBe(`${APP_URL}/events/past`);
     expect(b.canonical.href).toBe(b.location.href);
+  });
+
+  it.each(["/events/past", "/events/past?page=2", "/events/past?utm_source=discord#archive"])(
+    "ignores a fragment-only popstate on the rendered address %s",
+    async (entry) => {
+      const b = browser(entry);
+      b.location.href = new URL(entry.replace(/#.*/, "") + "#main", APP_URL).href; // skip link
+      b.popstate();
+      expect(b.requests).toHaveLength(0);
+      expect(b.reloads).toEqual([]);
+      expect(b.root.attributes.has("aria-busy")).toBe(false);
+    },
+  );
+
+  it("ignores a fragment-only popstate while a page turn is in flight", async () => {
+    const b = browser();
+    b.turn(2);
+    b.location.href = `${APP_URL}/events/past#main`;
+    b.popstate();
+    expect(b.requests).toHaveLength(1);
+    expect(b.requests[0]!.init.signal!.aborted).toBe(false);
+    b.finish(0, 2, "", "page two cards");
+    await b.settle();
+    expect(b.history).toEqual(["/events/past?page=2"]);
+    expect(b.targets[1]!.childNodes).toEqual(["page two cards"]);
+  });
+
+  it("keeps a failed page turn inline after a skip link instead of reloading", async () => {
+    const b = browser();
+    b.location.href = `${APP_URL}/events/past#main`;
+    b.popstate();
+    b.turn(2);
+    b.requests[0]!.reject(new Error("offline"));
+    await b.settle();
+    expect(b.reloads).toEqual([]);
+    expect(b.feedback.textContent).toBe(PAST_EVENTS_COPY.failed);
+  });
+
+  it("still reloads when Forward returns to the rendered address while an earlier Back read is in flight", async () => {
+    const b = browser("/events/past?page=2");
+    b.location.href = `${APP_URL}/events/past`; // Back
+    b.popstate();
+    b.location.href = `${APP_URL}/events/past?page=2`; // Forward before Back settles
+    b.popstate();
+    expect(b.requests).toHaveLength(2);
+    expect(b.requests[0]!.init.signal!.aborted).toBe(true);
+    expect(b.requests[1]!.url).toBe("/events/past?page=2");
   });
 
   it("handles back/forward without a second history entry and reloads SSR on history-read failure", async () => {

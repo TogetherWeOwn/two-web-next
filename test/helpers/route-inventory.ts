@@ -31,6 +31,9 @@ export function routeInventory(router: Router): RouteInventoryEntry[] {
       auth = "session";
     else if (path === "/e/:key" || path === "/events/:file{.+\\.ics}")
       auth = "public-draft-moderator";
+    // A2 machine alternate: session-free by construction, so drafts refuse for
+    // every viewer (no moderator bypass) while cancelled answers 410 like HTML.
+    else if (path === "/e/:file{.+\\.md}") auth = "public-draft-403";
     else if (
       (path === "/events/:key/rsvp" && (method === "PUT" || method === "DELETE")) ||
       (path === "/e/:key/rsvp" && method === "POST")

@@ -6,6 +6,11 @@ import type { Env, Session } from "../env";
 import { loginUrl, wallDateIso, wallTimeHm } from "../islands/contracts";
 import { safeNext } from "../join/service";
 import { throttleGuard } from "../throttle";
+import {
+  PUBLIC_EVENT_STATUS,
+  type PublicEventDto,
+  type PublicEventId,
+} from "../public-data/contracts";
 import type { PublicEvent } from "./reads";
 
 export type Ctx = Context<{ Bindings: Env }>;
@@ -49,7 +54,16 @@ export function eventJson(e: PublicEvent) {
   };
 }
 
-async function etagFor(body: string): Promise<string> {
+/** Public collection projection; callers must filter to published rows in SQL first. */
+export function publicEventJson(e: PublicEvent): PublicEventDto {
+  return {
+    ...eventJson(e),
+    event_key: e.eventKey as PublicEventId,
+    status: PUBLIC_EVENT_STATUS,
+  };
+}
+
+export async function etagFor(body: string): Promise<string> {
   const d = await crypto.subtle.digest("SHA-1", new TextEncoder().encode(body));
   return `"${[...new Uint8Array(d)].map((b) => b.toString(16).padStart(2, "0")).join("")}"`;
 }

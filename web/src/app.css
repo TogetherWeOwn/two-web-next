@@ -1,0 +1,101 @@
+/* Tailwind v4 without Preflight: the Hono twin serves unlayered author
+ * sheets with no reset, so Kit must not apply one either. Importing the full
+ * "tailwindcss" entry pulls in Preflight (@layer base), which strips the
+ * underline from every content link (WCAG 1.4.1: colour alone distinguishes
+ * them) and zeroes paragraph margins on the archive page. Import only the
+ * theme and utilities layers the shell uses. */
+@layer theme, base, components, utilities;
+@import "tailwindcss/theme.css" layer(theme);
+@import "tailwindcss/utilities.css" layer(utilities);
+
+/*
+ * Open Lobby tokens. Single source of truth for the SvelteKit
+ * shell: every colour, type, spacing, radius and surface value in Kit chrome
+ * flows from this file. A later design direction is a token swap here plus
+ * light component edits; components must use these utilities (bg-lobby-*,
+ * text-lobby-*, border-lobby-*, font-display) and never hard-code palette
+ * values or arbitrary hex. Spacing and radius stay on the Tailwind scale
+ * (no arbitrary p-[…]/rounded-[…] values).
+ *
+ * Values are the Open Lobby direction, not Tailwind Plus: the Plus catalogue
+ * is design reference only and must never be pasted into this repo. The
+ * display stack reuses the self-hosted Display font already served from
+ * public/fonts; swapping the direction swaps this token, not every caller.
+ */
+@theme {
+  --color-lobby-surface: #121719;
+  --color-lobby-raised: #1e292c;
+  --color-lobby-ink: #f5f5eb;
+  --color-lobby-muted: #b5c1c1;
+  --color-lobby-accent: #c2f45b;
+  --color-lobby-on-accent: #14200a;
+  --color-lobby-line: #4b5b5d;
+  --color-lobby-focus: #ffffff;
+  --font-display: Display, "Arial Narrow", ui-sans-serif, system-ui, sans-serif;
+  --font-sans: ui-sans-serif, system-ui, sans-serif;
+}
+
+/*
+ * Canvas rule. Unlayered on purpose: layered author styles lose to the
+ * unlayered public sheets Kit still links (styles.css sets
+ * body{background:var(--paper)} cream, #f4efe6). The html background paints
+ * the canvas regardless of the body rule, so it covers overscroll bounce,
+ * pinch zoom-out and mobile bar tinting. `html body` outranks the bare `body`
+ * selector, so the body itself stays dark whichever stylesheet loads first.
+ * Both values flow from the @theme tokens above, so a direction swap stays a
+ * token swap.
+ */
+:root {
+  color-scheme: dark;
+}
+
+html {
+  background-color: var(--color-lobby-surface);
+  color: var(--color-lobby-ink);
+}
+
+html body {
+  background-color: var(--color-lobby-surface);
+  color: var(--color-lobby-ink);
+}
+
+/*
+ * Kit shell mapping. The Hono app keeps its own public/theme-tokens.css; Kit
+ * pages do not link it (see SiteMetadata) and take the same semantic
+ * variables from the @theme tokens above instead. Every public theme rule
+ * styles through these variables, so the whole Kit shell follows a token
+ * swap with no per-component edits. The --theme-* / --theme-schedule-*
+ * plugs are preserved, so an explicit override still wins over the default.
+ * Unlayered on purpose: layered author styles lose to the unlayered public
+ * theme sheets Kit still links (theme.css, schedule-theme.css).
+ */
+.base-theme {
+  --color-text: var(--theme-text, var(--color-lobby-ink));
+  --color-page: var(--theme-page, var(--color-lobby-surface));
+  --color-accent: var(--theme-accent, var(--color-lobby-accent));
+  --color-muted: var(--theme-muted, var(--color-lobby-muted));
+  --color-surface: var(--theme-surface, var(--color-lobby-raised));
+  --color-border: var(--theme-border, var(--color-lobby-line));
+  --ink: var(--color-text);
+  --paper: var(--color-page);
+  --brand: var(--color-accent);
+  --muted: var(--color-muted);
+  --surface: var(--color-surface);
+  --line: var(--color-border);
+}
+
+.base-theme.schedule-theme,
+.base-theme[data-theme="schedule"] {
+  --color-text: var(--theme-schedule-text, var(--color-lobby-ink));
+  --color-page: var(--theme-schedule-page, var(--color-lobby-surface));
+  --color-accent: var(--theme-schedule-accent, var(--color-lobby-accent));
+  --color-muted: var(--theme-schedule-muted, var(--color-lobby-muted));
+  --color-surface: var(--theme-schedule-surface, var(--color-lobby-raised));
+  --color-border: var(--theme-schedule-border, var(--color-lobby-line));
+  --ink: var(--color-text);
+  --paper: var(--color-page);
+  --brand: var(--color-accent);
+  --muted: var(--color-muted);
+  --surface: var(--color-surface);
+  --line: var(--color-border);
+}

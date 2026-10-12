@@ -3,6 +3,7 @@ import { runInNewContext } from "node:vm";
 import { describe, expect, it, vi } from "vitest";
 import {
   PROFILE_COPY,
+  PROFILE_PENDING_TESTID,
   PROFILE_SAVE_DEADLINE_MS,
   PROFILE_UNCERTAIN_TESTID,
 } from "../src/islands/contracts";
@@ -63,6 +64,9 @@ class Element {
   getAttribute(key: string) {
     return this.attributes[key] ?? null;
   }
+  removeAttribute(key: string) {
+    delete this.attributes[key];
+  }
   appendChild(child: Element) {
     child.parentNode = this;
     this.children.push(child);
@@ -71,6 +75,15 @@ class Element {
   insertBefore(child: Element, before: Element) {
     child.parentNode = this;
     this.children.splice(this.children.indexOf(before), 0, child);
+  }
+  after(node: Element) {
+    const parent = this.parentNode!;
+    node.parentNode = parent;
+    parent.children.splice(parent.children.indexOf(this) + 1, 0, node);
+  }
+  scrolls: unknown[] = [];
+  scrollIntoView(options: unknown) {
+    this.scrolls.push(options);
   }
   remove() {
     if (this.parentNode) this.parentNode.children.splice(this.parentNode.children.indexOf(this), 1);
@@ -286,11 +299,34 @@ describe("member-profile save deadline", () => {
       expect(el?.getAttribute("role")).toBe("status");
       expect(el?.textContent).toContain(PROFILE_COPY.uncertain);
       expect(el?.textContent.length).toBeGreaterThan(0);
+      // It takes the progress line's place just after the form, next to Save.
+      expect(f.notice(PROFILE_PENDING_TESTID)).toBeNull();
+      expect(f.root.children.indexOf(el!)).toBe(f.root.children.indexOf(f.form) + 1);
+      // Not scrolled into view: the member may be typing elsewhere in the form.
+      expect(el?.scrolls).toEqual([]);
       // Draft intact, form still open, single PATCH sent, no focus theft.
       expect(f.form.elements.bio!.value).toBe("Hung write plus newer typing");
       expect(f.form.hidden).toBe(false);
       expect(f.fetch).toHaveBeenCalledTimes(1);
       expect(f.document.activeElement).toBe(focusedBefore);
+    },
+  );
+
+  it.each([false, true])(
+    "clears the busy state and pending status at the deadline (cancelled write=%s)",
+    async (cancelled) => {
+      const f = fixture(true);
+      f.enter({ bio: "Hung write" });
+      f.form.dispatch("submit");
+      if (cancelled) f.cancel();
+      f.form.dispatch("submit");
+      expect(f.form.getAttribute("aria-busy")).toBe("true");
+      expect(f.notice(PROFILE_PENDING_TESTID)).not.toBeNull();
+      f.advance(PROFILE_SAVE_DEADLINE_MS);
+      await flush();
+      expect(f.form.getAttribute("aria-busy")).toBeNull();
+      expect(f.notice(PROFILE_PENDING_TESTID)).toBeNull();
+      expect(f.uncertain() === null).toBe(cancelled);
     },
   );
 

@@ -9,6 +9,8 @@ import {
   assertProductionTarget,
   assertRollbackVersionId,
   checkProductionGate,
+  stagingQualityJob,
+  stagingQualitySteps,
 } from "./production-deploy-gate.mjs";
 
 const enabled = {
@@ -315,7 +317,12 @@ function assertIsolatedBindings(config) {
   assert.equal(production.vars.APP_URL, "https://togetherweown.com");
   assert.equal(production.vars.QA_AUTH_TOKEN, undefined);
   assert.notEqual(production.hyperdrive[0].id, config.hyperdrive[0].id);
-  assert.deepEqual(production.triggers, config.triggers);
+  // Staging handoff: the web Worker owns no crons (both live on two-web-jobs,
+  // wrangler.jobs.jsonc). The production cutover template keeps both schedules
+  // on the web Worker until its own handoff, so assert each side explicitly.
+  // Values must match RECONCILE_CRON/PRUNE_CRON in src/jobs/constants.ts.
+  assert.deepEqual(config.triggers, { crons: [] });
+  assert.deepEqual(production.triggers, { crons: ["*/10 * * * *", "0 0 * * *"] });
   const stagingQueues = config.queues.producers.map((producer) => producer.queue);
   for (const producer of production.queues.producers) {
     assert.ok(!stagingQueues.includes(producer.queue));
@@ -547,21 +554,32 @@ test("manual production workflow routes runners by repo visibility and uses prod
   assert.ok(!workflow.includes("secrets.CLOUDFLARE_ACCOUNT_ID"));
   for (const key of Object.keys(credentials)) {
     // Credentials check, required-secrets preflight, production Tail deploy,
-    // app deploy: all production-only.
-    assert.equal((workflow.match(new RegExp(`secrets\\.PRODUCTION_${key}`, "g")) ?? []).length, 4);
+    // version upload and promotion: all production-only.
+    assert.equal((workflow.match(new RegExp(`secrets\\.PRODUCTION_${key}`, "g")) ?? []).length, 5);
   }
   const credentialCheck = workflow.indexOf("run: node ci/production-deploy-gate.mjs --credentials");
   const requiredSecrets = workflow.indexOf("run: node ci/check-production-secrets.mjs");
   const tailDeploy = workflow.indexOf(
     "run: npx wrangler deploy --config tail/wrangler.jsonc --env production",
   );
-  const deploy = workflow.indexOf("run: npx wrangler deploy --env production");
+  const upload = workflow.indexOf("npx wrangler versions upload --env production --tag ");
+  const deploy = workflow.indexOf("npx wrangler versions deploy --env production");
   assert.ok(
     credentialCheck > 0 &&
       credentialCheck < requiredSecrets &&
       requiredSecrets < tailDeploy &&
-      tailDeploy < deploy,
+      tailDeploy < upload &&
+      upload < deploy,
   );
+  assert.match(
+    workflow,
+    /versions upload --env production --tag "\$\{DEPLOY_SHA:\?\}-\$\{GITHUB_RUN_ID:\?\}-\$\{GITHUB_RUN_ATTEMPT:\?\}"/,
+  );
+  assert.match(
+    workflow,
+    /versions deploy --env production --name two-web-next-production --version-tag "\$\{DEPLOY_SHA:\?\}-\$\{GITHUB_RUN_ID:\?\}-\$\{GITHUB_RUN_ATTEMPT:\?\}@100%" --yes/,
+  );
+  assert.ok(!workflow.includes("wrangler deploy --env production"));
 });
 
 test("rollback workflow reuses the production gate with no wider permissions", () => {
@@ -672,6 +690,18 @@ function stagingEvidence() {
     "e2e-staging.yml": [stagingRun("e2e-staging.yml", 200)],
   };
 }
+function qualitySteps(conclusions = {}) {
+  return stagingQualitySteps.map((name) => ({ name, conclusion: conclusions[name] ?? "success" }));
+}
+function qualityJob(overrides = {}) {
+  return { name: stagingQualityJob, conclusion: "success", steps: qualitySteps(), ...overrides };
+}
+function e2eJobs(journeys = "success") {
+  return [{ name: "staging-journeys", conclusion: journeys }, qualityJob()];
+}
+function withQuality(quality) {
+  return { 200: [{ name: "staging-journeys", conclusion: "success" }, quality] };
+}
 function stubAutoApi(staging, environment = autoEnvironment, seen = {}) {
   const ci = stubProductionApi(ciEvidence());
   return async (url, init) => {
@@ -693,8 +723,8 @@ function stubAutoApi(staging, environment = autoEnvironment, seen = {}) {
     const jobsOf = parsed.pathname.match(/\/actions\/runs\/(\d+)\/jobs$/)?.[1];
     // Only e2e-staging run ids answer here; CI run job lookups fall through.
     if (jobsOf && (staging["e2e-staging.yml"] ?? []).some((run) => String(run.id) === jobsOf)) {
-      const conclusion = staging.journeys?.[jobsOf] ?? "success";
-      return { ok: true, json: async () => ({ jobs: [{ name: "staging-journeys", conclusion }] }) };
+      const jobs = staging.jobs?.[jobsOf] ?? e2eJobs(staging.journeys?.[jobsOf]);
+      return { ok: true, json: async () => ({ jobs }) };
     }
     return ci(url, init);
   };
@@ -764,6 +794,42 @@ for (const [name, pattern, mutate] of [
     (s) => (s.journeys = { 200: "skipped" }),
   ],
   [
+    "e2e-staging with no staging quality job",
+    /e2e-staging\.yml run 200 has missing or ambiguous staging-quality evidence/,
+    (s) => (s.jobs = { 200: [{ name: "staging-journeys", conclusion: "success" }] }),
+  ],
+  [
+    "e2e-staging with two staging quality jobs, one failing",
+    /e2e-staging\.yml run 200 has missing or ambiguous staging-quality evidence/,
+    (s) => (s.jobs = { 200: [...e2eJobs(), qualityJob({ conclusion: "failure" })] }),
+  ],
+  [
+    "staging quality job skipped under a green e2e-staging run",
+    /e2e-staging\.yml run 200 did not execute and pass the staging quality gate/,
+    (s) => (s.jobs = withQuality(qualityJob({ conclusion: "skipped", steps: [] }))),
+  ],
+  [
+    "staging quality job failed",
+    /e2e-staging\.yml run 200 did not execute and pass the staging quality gate/,
+    (s) => (s.jobs = withQuality(qualityJob({ conclusion: "failure" }))),
+  ],
+  [
+    "Lighthouse budget step skipped under a green quality job",
+    /e2e-staging\.yml run 200 did not execute and pass the staging quality gate/,
+    (s) =>
+      (s.jobs = withQuality(
+        qualityJob({ steps: qualitySteps({ [stagingQualitySteps[0]]: "skipped" }) }),
+      )),
+  ],
+  [
+    "Lighthouse quality step failing under a green quality job",
+    /e2e-staging\.yml run 200 did not execute and pass the staging quality gate/,
+    (s) =>
+      (s.jobs = withQuality(
+        qualityJob({ steps: qualitySteps({ [stagingQualitySteps[1]]: "failure" }) }),
+      )),
+  ],
+  [
     "evidence from another branch",
     /e2e-staging\.yml evidence revision\/branch\/workflow mismatch/,
     (s) => (s["e2e-staging.yml"][0].head_branch = "feature"),
@@ -790,6 +856,26 @@ test("auto-approve still requires the main-only branch policy", async () => {
       checkAuto(stagingEvidence(), environment),
       /main-only deployment branch policy/,
     );
+  }
+});
+
+test("auto-approve's staging quality job and steps are the ones the workflows run", () => {
+  const quality = readFileSync(
+    new URL("../.github/workflows/web-quality-origin.yml", import.meta.url),
+    "utf8",
+  );
+  const e2e = readFileSync(
+    new URL("../.github/workflows/e2e-staging.yml", import.meta.url),
+    "utf8",
+  );
+  assert.match(
+    e2e,
+    /\n {2}staging-quality:\n {4}name: staging-quality\n[\s\S]*?uses: \.\/\.github\/workflows\/web-quality-origin\.yml\n/,
+  );
+  assert.match(quality, /\n {2}quality:\n {4}name: quality\n/);
+  assert.equal(stagingQualityJob, "staging-quality / quality");
+  for (const step of stagingQualitySteps) {
+    assert.ok(quality.includes(`      - name: ${step}\n`), `web-quality-origin.yml runs "${step}"`);
   }
 });
 

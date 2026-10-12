@@ -84,38 +84,43 @@ Read from: [src/jobs-worker.ts](../src/jobs-worker.ts),
 [src/jobs/](../src/jobs/), [wrangler.jsonc](../wrangler.jsonc),
 [wrangler.jobs.jsonc](../wrangler.jobs.jsonc).
 
-Two queues, declared in [wrangler.jsonc](../wrangler.jsonc): `two-sync-event`
-bound as `SYNC_EVENT_QUEUE` and `two-internal-action` bound as
-`INTERNAL_ACTION_QUEUE`, each with a consumer backstop (`max_retries 10`).
+Two queues, declared in both [wrangler.jsonc](../wrangler.jsonc) (producers)
+and [wrangler.jobs.jsonc](../wrangler.jobs.jsonc) (producers + consumers):
+`two-sync-event` bound as `SYNC_EVENT_QUEUE` and `two-internal-action` bound
+as `INTERNAL_ACTION_QUEUE`, each with a consumer backstop (`max_retries 10`).
 The web Worker produces (event writes enqueue a sync message; the alert
-probe sends to the internal-action queue) and consumes with the same
+probe sends to the internal-action queue) with the same
 `handleQueue`/`handleScheduled` handlers that the jobs-only entry
-([src/jobs-worker.ts](../src/jobs-worker.ts)) exports. The jobs-only Worker
-(`two-web-jobs`, [wrangler.jobs.jsonc](../wrangler.jobs.jsonc)) currently only
-produces; staging keeps consuming in the web Worker until a cutover moves
-consumers over, and a queue has exactly one consumer.
+([src/jobs-worker.ts](../src/jobs-worker.ts)) exports. The jobs Worker
+(`two-web-jobs`, [wrangler.jobs.jsonc](../wrangler.jobs.jsonc)) owns both
+staging consumers and both crons after the handoff; a queue has exactly one
+consumer. The handoff sequence, secrets and rollback are in
+[jobs-handoff.md](./jobs-handoff.md).
 
-Cron triggers in [wrangler.jsonc](../wrangler.jsonc) are `*/10 * * * *` and
-`0 0 * * *`, pinned to `RECONCILE_CRON` and `PRUNE_CRON` in
+Cron triggers in [wrangler.jobs.jsonc](../wrangler.jobs.jsonc) are
+`*/10 * * * *` and `0 0 * * *`, pinned to `RECONCILE_CRON` and `PRUNE_CRON` in
 [src/jobs/constants.ts](../src/jobs/constants.ts): every-ten-minutes event
 reconciliation and daily model-table pruning, dispatched through
-[src/jobs/worker.ts](../src/jobs/worker.ts). Per-call internals of the
-reconcile and prune implementations were not line-verified for this page;
-read [src/jobs/](../src/jobs/) for the consumer, retry, ledger, redrive, and
-replay modules. Missing bot configuration makes bot calls fail as terminal,
-alerting job failures, never silent success.
+[src/jobs/worker.ts](../src/jobs/worker.ts). The web Worker runs no cron.
+Per-call internals of the reconcile and prune implementations were not
+line-verified for this page; read [src/jobs/](../src/jobs/) for the consumer,
+retry, ledger, redrive, and replay modules. Missing bot configuration makes
+bot calls fail as terminal, alerting job failures, never silent success.
 
 ## 4. Tail Worker
 
 Read from: [tail/worker.ts](../tail/worker.ts),
 [tail/wrangler.jsonc](../tail/wrangler.jsonc),
-[wrangler.jsonc](../wrangler.jsonc).
+[wrangler.jsonc](../wrangler.jsonc),
+[wrangler.jobs.jsonc](../wrangler.jobs.jsonc).
 
 The Tail Worker in [tail/](../tail/) is the pager and uptime prober. It has
 no public route, no database, and no queues of its own. It tails only the
-exact app script names `two-web-next` and `two-web-next-production`
+exact app script names `two-web-next`, `two-web-next-production` and
+`two-web-jobs`
 ([tail/worker.ts](../tail/worker.ts), `APP_SCRIPT_NAMES`), wired via
-`tail_consumers` in [wrangler.jsonc](../wrangler.jsonc). It accepts only
+`tail_consumers` in [wrangler.jsonc](../wrangler.jsonc) and
+[wrangler.jobs.jsonc](../wrangler.jobs.jsonc). It accepts only
 allowlisted log lines — `error.alert` on registered routes and
 `queue.failing` for known job names — and posts a small allowlisted JSON
 summary to the optional ops webhook, muted per isolate for five minutes.
@@ -193,8 +198,12 @@ Read from: [web/package.json](../web/package.json),
 
 - [web/](../web/) (`two-web-next-kit` in
   [web/package.json](../web/package.json)) is the experimental SvelteKit
-  strangler preview, not the primary Worker: unported routes fall through to
-  the unchanged Hono app
+  strangler preview, not the primary Worker: the hook
+  ([web/src/hooks.server.ts](../web/src/hooks.server.ts)) picks exactly one
+  renderer per request from the method-aware manifest in
+  [src/route-ownership.ts](../src/route-ownership.ts) before Kit resolve,
+  and Hono-owned paths (the default, including disabled native routes and the
+  reserved APIs) go to the unchanged in-process Hono app
   ([web/src/lib/server/hono.ts](../web/src/lib/server/hono.ts)). Status:
   experimental spike, not serving production traffic.
 - [spike/](../spike/) holds the Hyperdrive-semantics probe only. Status:
@@ -236,6 +245,7 @@ exactly once.
 | Path | Area |
 | --- | --- |
 | `src/access-log.ts` | observability |
+| `src/ai-friendly/` | content |
 | `src/admin/` | admin |
 | `src/agent-events/` | agent-events |
 | `src/alert-probe-error.ts` | observability |
@@ -272,6 +282,9 @@ exactly once.
 | `src/jobs/` | jobs |
 | `src/jobs-worker.ts` | jobs |
 | `src/join/` | join |
+| `src/kit-access-sink.ts` | profiles |
+| `src/kit-session.ts` | auth |
+| `src/mcp/` | content |
 | `src/member-erasure.ts` | profiles |
 | `src/member-reads.ts` | profiles |
 | `src/not-found-suggestions.ts` | content |
@@ -283,15 +296,18 @@ exactly once.
 | `src/privacy.ts` | content |
 | `src/probes/` | observability |
 | `src/profiles/` | profiles |
+| `src/public-data/` | content |
 | `src/qa.ts` | auth |
 | `src/request-log.ts` | observability |
 | `src/return-journey.ts` | auth |
 | `src/roles.ts` | auth |
+| `src/route-ownership.ts` | entry |
 | `src/rules-last-updated.ts` | content |
 | `src/same-origin.ts` | http-guard |
 | `src/screens/` | content |
 | `src/security-txt.ts` | content |
 | `src/seo.ts` | content |
+| `src/seo-json-ld.ts` | content |
 | `src/seo-leaves.tsx` | entry |
 | `src/session-cookie.ts` | auth |
 | `src/session-revocation.ts` | auth |
@@ -307,6 +323,7 @@ exactly once.
 | `src/up-revision.ts` | observability |
 | `src/up-timeout.ts` | observability |
 | `src/up.ts` | observability |
+| `src/webmcp-pilot.ts` | http-guard |
 | `src/worker.ts` | entry |
 | `src/write-recovery.tsx` | auth |
 <!-- module-map:end -->

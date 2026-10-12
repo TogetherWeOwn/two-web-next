@@ -173,6 +173,52 @@ describe("Tail delivery", () => {
     ]);
   });
 
+  it("outbound summaries carry only the allowlisted fields for one request and one queue alert", async () => {
+    const { worker, send } = fixture();
+    await worker.tail([trace([requestAlert, queueAlert])], env);
+    expect(send).toHaveBeenCalledTimes(2);
+    const summaries = (send.mock.calls as unknown as [string, RequestInit][]).map(([, init]) =>
+      JSON.parse(JSON.parse(init.body as string).content),
+    );
+    const [request, queue] = summaries;
+    expect(Object.keys(request).sort()).toEqual(["event", "fingerprint", "route", "timestamp"]);
+    expect(request).toMatchObject({ event: "error.alert", route: "/join" });
+    expect(request.fingerprint).toMatch(/^[a-f0-9]{64}$/);
+    expect(Object.keys(queue).sort()).toEqual([
+      "attempts",
+      "event",
+      "fingerprint",
+      "job",
+      "timestamp",
+    ]);
+    expect(queue).toMatchObject({
+      event: "queue.failing",
+      fingerprint: "queue.failing@CallInternalAction",
+      job: "CallInternalAction",
+      attempts: 6,
+    });
+    for (const summary of summaries) {
+      for (const banned of [
+        "exception",
+        "message",
+        "method",
+        "stack",
+        "request_id",
+        "probeId",
+        "connection",
+        "queue",
+        "body",
+        "token",
+        "headers",
+        "url",
+        "trace",
+      ]) {
+        expect(summary).not.toHaveProperty(banned);
+      }
+      expect(JSON.stringify(summary)).not.toMatch(/never-send|private-message|private-queue/);
+    }
+  });
+
   it("mutes each fingerprint for exactly five minutes of source log time, ignoring JSON timestamp fields", async () => {
     const { worker, send, advance } = fixture();
     await worker.tail([trace([requestAlert, requestAlert, queueAlert, queueAlert])], env);
@@ -363,8 +409,12 @@ describe("Tail delivery", () => {
     });
   });
 
-  it("accepts only the staging and production app scripts, never a prefix of them", async () => {
-    expect([...APP_SCRIPT_NAMES].sort()).toEqual(["two-web-next", "two-web-next-production"]);
+  it("accepts only the staging, production and jobs app scripts, never a prefix of them", async () => {
+    expect([...APP_SCRIPT_NAMES].sort()).toEqual([
+      "two-web-jobs",
+      "two-web-next",
+      "two-web-next-production",
+    ]);
     const { worker, send } = fixture();
     await worker.tail(
       [
@@ -579,6 +629,19 @@ describe("Production Tail pager wiring", () => {
     expect((tail.vars as Record<string, unknown> | undefined)?.UPTIME_URL).toBe(
       "https://next.togetherweown.com/up",
     );
+  });
+
+  it("the staging jobs Worker pages through the staging alerts Worker", async () => {
+    const jobs = readWranglerConfig(readFileSync("wrangler.jobs.jsonc", "utf8")) as Record<
+      string,
+      unknown
+    >;
+    expect(jobs.tail_consumers).toEqual([{ service: "two-web-next-alerts" }]);
+    // The jobs script name is accepted, so its queue.failing traces page.
+    expect([...APP_SCRIPT_NAMES]).toContain("two-web-jobs");
+    const { worker, send } = fixture();
+    await worker.tail([trace([queueAlert], timestamp, "two-web-jobs")], env);
+    expect(send).toHaveBeenCalledTimes(1);
   });
 
   it("CI dry-run builds the production Tail Worker with --env production", () => {

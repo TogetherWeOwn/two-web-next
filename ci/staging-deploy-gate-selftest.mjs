@@ -564,10 +564,54 @@ test("workflow wires the tested gate before both mutations and preserves staging
     /- name: Re-verify exact-SHA full CI before Tail Worker deploy\n(?:(?!      - ).*\n)*      - name: Deploy alert Tail Worker before attaching the app\n(?:(?!      - ).*\n)*      - name: Re-verify exact-SHA full CI before Worker deploy\n/,
     "Tail gate must be the step immediately before the Tail deploy, which precedes the app deploy gate",
   );
+  assert.match(
+    workflow,
+    /- name: Re-verify exact-SHA full CI before detaching web consumers\n(?:(?!      - ).*\n)*      - name: Detach staging web queue consumers \(idempotent\)\n/,
+    "Detach gate must be the step immediately before the detach",
+  );
+  assert.match(
+    step("Detach staging web queue consumers (idempotent)"),
+    /out=\$\(npx wrangler queues consumer list "\$q"\) \|\| exit 1/,
+    "Detach must capture the consumer list so a failed list fails instead of reading as no consumer",
+  );
+  assert.doesNotMatch(
+    step("Detach staging web queue consumers (idempotent)"),
+    /consumer list "\$q" \|/,
+    "Detach must not pipe a possibly-failed list into grep: capture first with || exit 1",
+  );
+  assert.match(
+    step("Detach staging web queue consumers (idempotent)"),
+    /queues consumer remove "\$q" two-web-next/,
+    "Detach must remove the web Worker consumer explicitly: a consumer-free deploy never detaches it",
+  );
+  assert.ok(
+    workflow.includes("two-sync-event") && workflow.includes("two-internal-action"),
+    "Detach must cover both staging queues",
+  );
+  assert.ok(
+    workflow.indexOf("- name: Detach staging web queue consumers (idempotent)") <
+      workflow.indexOf("- name: Re-verify exact-SHA full CI before jobs Worker deploy"),
+    "Detach must precede the jobs gate so the attach cannot collide",
+  );
+  assert.ok(
+    workflow.indexOf("run: node ci/check-jobs-secrets.mjs") <
+      workflow.indexOf("- name: Ensure queues exist"),
+    "Jobs-secrets preflight must run before the first Cloudflare mutation so a missing BOT_* secret fails before any web deploy or detach",
+  );
+  assert.ok(
+    workflow.indexOf("run: node ci/check-jobs-secrets.mjs") <
+      workflow.indexOf("- name: Re-verify exact-SHA full CI before jobs Worker deploy"),
+    "Jobs-secrets preflight must run before the jobs gate so a missing BOT_* secret fails before any attach",
+  );
+  assert.match(
+    workflow,
+    /- name: Re-verify exact-SHA full CI before jobs Worker deploy\n(?:(?!      - ).*\n)*      - name: Deploy staging jobs Worker \(queues \+ cron owner\)\n/,
+    "Jobs Worker gate must immediately precede its deploy",
+  );
   assert.equal(
     (workflow.match(/npx wrangler/g) ?? []).length,
-    3,
-    "No additional ungated mutations",
+    6,
+    "Every Cloudflare mutation is explicitly accounted for: queues create, Tail deploy, web deploy, detach list, detach remove, jobs deploy",
   );
   const ci = readFileSync(join(root, ".github/workflows/ci.yml"), "utf8");
   assert.match(ci, /run: node --test ci\/staging-deploy-gate-selftest.mjs/);

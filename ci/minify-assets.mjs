@@ -10,7 +10,16 @@
 // Regenerate with `npm run build:assets`; CI fails on drift (`--check`).
 // 0 = built/verified, 1 = drift or minify failure.
 import { execFileSync, spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  copyFileSync,
+  cpSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -29,12 +38,18 @@ const AUTHORED_CSS = new Set([
   "public/event-theme.css",
   "public/profile-theme.css",
   "public/schedule-theme.css",
+  "public/theme-tokens.css",
 ]);
-const BUDGET_PATHS = Object.keys(
-  JSON.parse(readFileSync(join(repoRoot, "ci", "bundle-budget.json"), "utf8")).budgets,
-)
-  .filter((entry) => !AUTHORED_CSS.has(entry))
-  .sort();
+// Budget entries are read from the checked root (not captured at import),
+// so --selftest can copy the budget file into a scratch root and prove that
+// check() fails closed on scratch mutations. On the real tree this reads the
+// same ci/bundle-budget.json, so behavior there is unchanged.
+function budgetPathsFor(root) {
+  const budgets = JSON.parse(readFileSync(join(root, "ci", "bundle-budget.json"), "utf8")).budgets;
+  return Object.keys(budgets)
+    .filter((entry) => !AUTHORED_CSS.has(entry))
+    .sort();
+}
 
 function sourceFor(entry) {
   // public/islands/<name>.js -> assets/islands/<name>.js; public/styles.css -> assets/styles.css.
@@ -79,8 +94,16 @@ function parsesAsJs(bytes, entry) {
 }
 
 export function build(root = repoRoot, output = console) {
+  let entries;
+  try {
+    entries = budgetPathsFor(root);
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    output.error(`minify assets: cannot read budget: ${detail}`);
+    return 1;
+  }
   let built = 0;
-  for (const entry of BUDGET_PATHS) {
+  for (const entry of entries) {
     let bytes;
     try {
       bytes = minifyBytes(entry, root);
@@ -109,8 +132,16 @@ export function build(root = repoRoot, output = console) {
 // checked-in public/ output, so an edited source without a regenerated (and
 // reviewed) public/ file cannot merge or deploy.
 export function check(root = repoRoot, output = console) {
+  let entries;
+  try {
+    entries = budgetPathsFor(root);
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    output.error(`minify assets: cannot read budget: ${detail}`);
+    return 1;
+  }
   let drifted = 0;
-  for (const entry of BUDGET_PATHS) {
+  for (const entry of entries) {
     let bytes;
     try {
       bytes = minifyBytes(entry, root);
@@ -144,8 +175,6 @@ export function check(root = repoRoot, output = console) {
 
 function selftest() {
   let cases = 0;
-  // Real coverage comes from --check over the repo tree; the unit cases
-  // below pin the CLI contract and the parse tripwire.
   assert.equal(typeof build, "function");
   assert.equal(typeof check, "function");
   assert.ok(
@@ -159,6 +188,175 @@ function selftest() {
   cases += 2;
   console.log("PASS valid JS parses");
   console.log("PASS broken JS fails node --check");
+
+  // Prove every failure branch of check() on a scratch copy of the real
+  // tree: check() reads its budget list from the given root, so mutating the
+  // scratch budget/sources/outputs exercises the same code that guards the
+  // real tree, without ever writing to it. The scratch root is removed in a
+  // finally, so it is cleaned up on success and on assertion failure alike.
+  const witnessEntry = "public/islands/avatar.js";
+  const witnessSource = sourceFor(witnessEntry);
+  const realOutputBefore = readFileSync(join(repoRoot, witnessEntry));
+  const realSourceBefore = readFileSync(join(repoRoot, witnessSource));
+  const realBudgetBefore = readFileSync(join(repoRoot, "ci", "bundle-budget.json"), "utf8");
+  const scratch = mkdtempSync(
+    join(process.env.PAPERCLIP_RUN_SCRATCH_DIR || tmpdir(), "minify-assets-"),
+  );
+  try {
+    cpSync(join(repoRoot, "assets"), join(scratch, "assets"), { recursive: true });
+    cpSync(join(repoRoot, "public"), join(scratch, "public"), { recursive: true });
+    mkdirSync(join(scratch, "ci"), { recursive: true });
+    copyFileSync(
+      join(repoRoot, "ci", "bundle-budget.json"),
+      join(scratch, "ci", "bundle-budget.json"),
+    );
+    // esbuild resolves the nearest tsconfig.json from each source file, and
+    // the repo tsconfig changes the minified bytes (the "use strict" prefix):
+    // without this copy an unmodified scratch tree drifts by 13B per island.
+    copyFileSync(join(repoRoot, "tsconfig.json"), join(scratch, "tsconfig.json"));
+
+    const runCheck = () => {
+      const errors = [];
+      const code = check(scratch, {
+        log() {},
+        error(text) {
+          errors.push(String(text));
+        },
+      });
+      return { code, errors };
+    };
+    const runBuild = () => {
+      const errors = [];
+      const code = build(scratch, {
+        log() {},
+        error(text) {
+          errors.push(String(text));
+        },
+      });
+      return { code, errors };
+    };
+
+    {
+      const { code, errors } = runCheck();
+      assert.equal(code, 0, `unmodified scratch copy should pass: ${errors.join("; ")}`);
+      cases += 1;
+      console.log("PASS unmodified scratch copy is in sync");
+    }
+
+    // Prove drift and missing-output for every budgeted entry, not just one
+    // witness: a filter or early-exit bug that skips an entry would otherwise
+    // stay green while appearing covered.
+    const entries = budgetPathsFor(scratch);
+    for (const entry of entries) {
+      const sourcePath = join(scratch, sourceFor(entry));
+      const original = readFileSync(sourcePath);
+      // esbuild strips comments when minifying, so the probe must be real
+      // code (or a real CSS rule) that survives --minify and changes the
+      // regenerated bytes.
+      const probe = entry.endsWith(".css")
+        ? Buffer.from("\n.minify-selftest-drift{color:#123456}\n")
+        : Buffer.from("\n;globalThis.__minifySelftestDrift = 1;\n");
+      try {
+        writeFileSync(sourcePath, Buffer.concat([original, probe]));
+        const { code, errors } = runCheck();
+        assert.equal(code, 1, `changed source should fail for ${entry}: ${errors.join("; ")}`);
+        assert.ok(
+          errors.some((text) => text.includes(entry) && text.includes("drifted")),
+          `changed source should report drift of ${entry}: ${errors.join("; ")}`,
+        );
+      } finally {
+        writeFileSync(sourcePath, original);
+      }
+      cases += 1;
+      console.log(`PASS changed source fails with drift diagnostic for ${entry}`);
+    }
+
+    for (const entry of entries) {
+      const outputPath = join(scratch, entry);
+      const original = readFileSync(outputPath);
+      try {
+        rmSync(outputPath);
+        const { code, errors } = runCheck();
+        assert.equal(code, 1, `deleted output should fail for ${entry}: ${errors.join("; ")}`);
+        assert.ok(
+          errors.some((text) => text.includes(entry) && text.includes("missing checked-in output")),
+          `deleted output should report missing output for ${entry}: ${errors.join("; ")}`,
+        );
+      } finally {
+        writeFileSync(outputPath, original);
+      }
+      cases += 1;
+      console.log(`PASS deleted output fails with missing-output diagnostic for ${entry}`);
+    }
+
+    {
+      const budgetPath = join(scratch, "ci", "bundle-budget.json");
+      const originalText = readFileSync(budgetPath, "utf8");
+      try {
+        writeFileSync(budgetPath, "{");
+        const checked = runCheck();
+        assert.equal(
+          checked.code,
+          1,
+          `corrupt budget should fail check: ${checked.errors.join("; ")}`,
+        );
+        assert.ok(
+          checked.errors.some((text) => text.includes("cannot read budget")),
+          `corrupt budget should report cannot read budget in check: ${checked.errors.join("; ")}`,
+        );
+        const built = runBuild();
+        assert.equal(built.code, 1, `corrupt budget should fail build: ${built.errors.join("; ")}`);
+        assert.ok(
+          built.errors.some((text) => text.includes("cannot read budget")),
+          `corrupt budget should report cannot read budget in build: ${built.errors.join("; ")}`,
+        );
+      } finally {
+        writeFileSync(budgetPath, originalText);
+      }
+      cases += 1;
+      console.log("PASS corrupt budget fails closed in check and build");
+    }
+
+    {
+      const budgetPath = join(scratch, "ci", "bundle-budget.json");
+      const originalText = readFileSync(budgetPath, "utf8");
+      const probeEntry = "public/islands/missing-source-probe.js";
+      try {
+        const document = JSON.parse(originalText);
+        document.budgets[probeEntry] = { maxRawBytes: 1, maxGzipBytes: 1 };
+        writeFileSync(budgetPath, JSON.stringify(document));
+        const { code, errors } = runCheck();
+        assert.equal(code, 1, `budget entry without a source should fail: ${errors.join("; ")}`);
+        assert.ok(
+          errors.some((text) => text.includes(probeEntry) && text.includes("no source")),
+          `budget entry without a source should report no source for ${probeEntry}: ${errors.join("; ")}`,
+        );
+      } finally {
+        writeFileSync(budgetPath, originalText);
+      }
+      cases += 1;
+      console.log("PASS budget entry without a source fails with no-source diagnostic");
+    }
+
+    assert.ok(
+      realOutputBefore.equals(readFileSync(join(repoRoot, witnessEntry))),
+      "selftest must never write the real public/ tree",
+    );
+    assert.ok(
+      realSourceBefore.equals(readFileSync(join(repoRoot, witnessSource))),
+      "selftest must never write the real assets/ tree",
+    );
+    assert.equal(
+      readFileSync(join(repoRoot, "ci", "bundle-budget.json"), "utf8"),
+      realBudgetBefore,
+      "selftest must never write the real budget file",
+    );
+  } finally {
+    rmSync(scratch, { recursive: true, force: true });
+  }
+  assert.ok(!existsSync(scratch), "scratch root is removed");
+  console.log("PASS scratch root is removed and the real tree is untouched");
+  cases += 1;
   console.log(`minify assets selftest: ${cases} cases passed.`);
   return 0;
 }

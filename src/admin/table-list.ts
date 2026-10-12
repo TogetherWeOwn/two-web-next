@@ -21,11 +21,16 @@ export const ROSTER_PAGE_SIZE = 100;
 /** One extra row is fetched as the next-page lookahead, like events. */
 export const FEATURED_PAGE_SIZE = 25;
 
+// PostgreSQL text cannot contain NUL: drop it so a NUL-only filter reads as absent.
+// Spelled with fromCharCode so the NUL survives transports that decode backslash-u escapes in transit.
+const withoutNul = (raw: string | undefined): string =>
+  (raw ?? "").replaceAll(String.fromCharCode(0), "");
+
 export function parseFeaturedListQuery(params: ListParams): FeaturedListQuery {
   const page = Number(params.page);
   return {
     published: params.published === "1" || params.published === "0" ? params.published : "",
-    q: (params.q ?? "").trim(),
+    q: withoutNul(params.q).trim(),
     sort: params.sort === "updated_at" ? "updated_at" : "position",
     order: params.order === "desc" ? "desc" : "asc",
     // Keep the offset within a safe integer, even for adversarial page values.
@@ -48,7 +53,7 @@ export function parseRosterQuery(params: ListParams): RosterQuery {
     Number.isSafeInteger(page) &&
     Number.isSafeInteger((page - 1) * ROSTER_PAGE_SIZE);
   return {
-    q: (params.roster_q ?? "").trim(),
+    q: withoutNul(params.roster_q).trim(),
     sort: params.roster_sort === "status" ? "status" : "answered",
     order: params.roster_order === "asc" ? "asc" : "desc",
     page: validPage ? page : 1,
@@ -62,7 +67,11 @@ export function parseJoinAttemptsQuery(params: ListParams): JoinAttemptsQuery {
     /^[1-9]\d*$/.test(params.page ?? "") &&
     Number.isSafeInteger(page) &&
     Number.isSafeInteger((page - 1) * JOIN_ATTEMPT_PAGE_SIZE);
-  return { outcome: params.outcome ?? "", q: (params.q ?? "").trim(), page: validPage ? page : 1 };
+  return {
+    outcome: withoutNul(params.outcome),
+    q: withoutNul(params.q).trim(),
+    page: validPage ? page : 1,
+  };
 }
 
 export function parseActivityLogQuery(params: ListParams): ActivityLogQuery {
@@ -73,11 +82,8 @@ export function parseActivityLogQuery(params: ListParams): ActivityLogQuery {
     Number.isSafeInteger(page) &&
     Number.isSafeInteger((page - 1) * ACTIVITY_LOG_PAGE_SIZE);
   return {
-    // PostgreSQL text cannot contain NUL; retain the rest as literal input.
-    // Spelled with fromCharCode so the NUL survives transports that decode
-    // backslash-u escapes in transit.
-    subject: (params.subject ?? "").replaceAll(String.fromCharCode(0), "").trim(),
-    causer: (params.causer ?? "").replaceAll(String.fromCharCode(0), "").trim(),
+    subject: withoutNul(params.subject).trim(),
+    causer: withoutNul(params.causer).trim(),
     page: validPage ? page : 1,
   };
 }

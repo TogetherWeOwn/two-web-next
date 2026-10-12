@@ -14,9 +14,15 @@ non-Actions execution.
 | QA sign-in → keyboard profile edit | `e2e/profile.spec.ts` | Genuine QA session cookie; tab order and Enter submit; PATCH 200; saved status focused; values survive reload |
 | Events list → event page → RSVP going → withdraw | `e2e/events.spec.ts` | Real going/withdraw controls; PUT 201 and DELETE 204; both states persist after reload |
 | Capacity-1 waitlist join → leave, and promotion on seat-holder withdraw | `e2e/event-waitlist.spec.ts` | Capacity-1 fixtures: moderator fills the seat, member waitlist-joins at `#1 in line`, leaves and the join control returns; second fixture: seat-holder withdraw promotes automatically (`You're in`, `1 of 1 going`, no claim click), persisting across reload; fixtures cancelled in `finally` through the request API |
+| Moderator → create draft → publish → filter admin list → cancel | `e2e/admin-filters.spec.ts` | Real form/redirect; draft hidden from guest (403); publish status; guest view 200 and public calendar navigation; Status draft/published and RSVPs Open/Paused filters each show only matching rows; JSON cancel renders the guest 410 notice, refused RSVP write and STATUS:CANCELLED feed |
 | Pause → refused RSVP with the paused reason → reopen → RSVP restored | `e2e/event-pause.spec.ts` | Moderator pauses through the admin form; member sees the paused notice with no going control; a request-API PUT is refused 403 `event_not_open` with `why: paused` and the seat count is unchanged; both transitions persist across reload; reopen restores the going control and a browser-click PUT answers 201 (`You're in`, `1 of 10 going`), persisting across reload; the fixture is cancelled in `finally` through the request API |
-| Moderator → create draft → publish | `e2e/admin.spec.ts` | Real form/redirect; draft hidden from guest (403); publish status; guest view 200 and public calendar navigation |
 | Blocked join → recovery copy + fallback invite | `e2e/join-blocked.spec.ts` | Bot-refused guild add renders the blocked copy with retry and invite CTA, 200, no session; distinct from denied/outage/expired copy |
+| Calendar month view shows the chosen month, hides the other | `e2e/calendar-month.spec.ts` | Zero QA logins by design; seeded `E2E Calendar May` / `E2E Calendar June` rows in the disposable CI database; guest drives `/events?view=calendar&month=2099-05` then `2099-06`, asserting the month label, `data-month` and grid contents each way; no fixtures, nothing to cancel |
+| Past archive renders the seeded row; out-of-range pages refuse | `e2e/past.spec.ts` | Seeded `E2E Past Night` row (page size 20, exactly one page); guest navigations only: page 1 renders the list with that row, pages 2 and 9999 render the out-of-range refusal; no fixtures, writes or session |
+| Sign out answers 303 to `/` as guest; the old session cannot replay | `e2e/logout.spec.ts` | Stubbed OAuth join (no QA login); header Sign out form POSTs `/logout`, landing on guest `/` with the `__Host-` session cookie cleared; the captured pre-logout cookie replays to guest home and `/profile` bounces 302 to OAuth; no fixtures |
+| Public feeds and SEO answer unauthenticated GETs | `e2e/feeds.spec.ts` | GET-only, no session or fixtures; sitemap/robots/RSS/ICS answer 200 with contract content-types (`max-age=300, public`, no `set-cookie` on feeds); pins the seeded `01J00000000000000000000001` event GUID and ICS UID envelopes so an empty collection cannot pass silently |
+| Live search filters the rendered list; a miss swaps the empty block; clearing restores | `e2e/events-live-search.spec.ts` | Seeded `E2E Community Night` on local `/events`, no QA token; typing debounces into a settled `?q=` read that filters the DOM list, the `zzz-no-such-event` miss swaps in `events-empty-search`, clearing restores the list and the empty URL; asserts no console errors/warnings or page errors; no fixtures |
+| Clipboard-denied copy falls back to the selectable canonical URL | `e2e/event-copy-link.spec.ts` | Seeded `01J00000000000000000000001` event page, no QA token; Clipboard API denied, the binder attempts one `writeText` with the page canonical then falls back through `execCommand("copy")` carrying the same canonical `/e/:key` URL with the `Event link copied.` toast; asserts no console noise or page errors; no fixtures |
 
 RSVP selectors are the frozen `rsvp-going`, `rsvp-confirmed`, `rsvp-withdraw`
 contracts in `src/islands/contracts.ts`. The suite deliberately does **not**
@@ -148,7 +154,11 @@ headers in `trace.trace` and `trace.network`) and inside the zip that
 `playwright-report/index.html` embeds as base64 (the report's copy of the error
 text; a plain search of the HTML finds nothing). It then fails the job, and the
 artifact upload runs only after a sweep that finished the whole tree. A token
-found in an artifact is exposed: report it to the COO the same hour.
+found in an artifact is exposed: report it to the COO the same hour. Files the
+sweep could not fully inspect are withheld from the upload too (removed, job
+fails). A withheld-only run means the token was not seen in what could be
+read, not that it is proven absent; only a real token hit prints the exposure
+alarm and needs a COO report.
 
 Blast-radius note: publishing the RSVP fixture and answering RSVPs enqueue
 sync-event carriers (`src/events/sync.ts` enqueues published/cancelled

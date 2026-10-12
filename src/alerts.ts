@@ -73,6 +73,11 @@ export class AlertRateLimit {
 
 const limiter = new AlertRateLimit();
 
+/** Test-only: clear the global per-fingerprint mute so alert assertions stay isolated. */
+export function __resetAlertRateLimitForTests(): void {
+  (limiter as unknown as { last: Map<string, number> }).last.clear();
+}
+
 type Sink = (line: string) => void;
 const consoleSink: Sink = (line) => console.error(line);
 

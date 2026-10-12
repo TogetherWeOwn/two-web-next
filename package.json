@@ -28,6 +28,14 @@
     "test:shadow": "node --test ci/shadow-compare-selftest.mjs",
     "mutation:sessions-join": "node ci/mutation-sessions-join.mjs",
     "mutation:sessions-join:selftest": "node ci/mutation-sessions-join.mjs --selftest",
+    "scan:fetch-await": "npx -y --package @ast-grep/cli@0.50.0 ast-grep scan",
+    "scan:rules-test": "npx -y --package @ast-grep/cli@0.50.0 ast-grep test",
+    "floor-guard": "node ci/floor-guard.mjs",
+    "floor-guard:selftest": "node --test ci/floor-guard.test.mjs",
+    "patch:coverage": "node ci/patch-coverage.mjs",
+    "patch:coverage:selftest": "node ci/patch-coverage.mjs --selftest",
+    "test:inventory": "node ci/test-inventory.mjs",
+    "test:inventory:selftest": "node ci/test-inventory.mjs --selftest",
     "a11y": "node ci/a11y.mjs",
     "test:auth-browser": "node ci/session-recovery-browser.mjs",
     "budget": "node ci/check-bundle-budget.mjs",
@@ -56,9 +64,12 @@
     "audit:moderator-roles": "node --import ./bin/ts-hook.mjs bin/role-audit.mjs"
   },
   "dependencies": {
+    "@modelcontextprotocol/server": "2.0.0",
+    "agents": "0.28.0",
     "drizzle-orm": "^0.45.3",
     "hono": "^4.13.12",
-    "postgres": "^3.4.9"
+    "postgres": "^3.4.9",
+    "zod": "4.6.6"
   },
   "devDependencies": {
     "@axe-core/playwright": "^4.13.0",

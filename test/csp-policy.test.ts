@@ -111,10 +111,10 @@ describe("route CSP (local fixtures, no DB)", () => {
     }
   });
 
-  it("keeps both report directives and the reporting destination unchanged", async () => {
+  it("reports through report-to only: the deprecated report-uri is gone", async () => {
     for (const path of ["/join", "/about"]) {
       const res = await app.request(path, {}, env);
-      expect(directives(res)["report-uri"]).toBe("/csp-reports");
+      expect(directives(res)["report-uri"]).toBeUndefined();
       expect(directives(res)["report-to"]).toBe("csp-endpoint");
       expect(res.headers.get("reporting-endpoints")).toBe('csp-endpoint="/csp-reports"');
       expect(res.headers.get("report-to")).toBeNull();
