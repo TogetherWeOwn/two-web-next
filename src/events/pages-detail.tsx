@@ -39,6 +39,7 @@ export const EventPage: FC<{
   attendees?: EventAttendee[];
   appUrl: string;
   jsonLd: string;
+  siteJsonLd?: string;
   session?: Session | null;
   joinResult?: JoinResult | null;
   waitlistPosition?: number | null;
@@ -54,6 +55,7 @@ export const EventPage: FC<{
   attendees = [],
   appUrl,
   jsonLd,
+  siteJsonLd,
   session,
   joinResult,
   waitlistPosition,
@@ -73,6 +75,7 @@ export const EventPage: FC<{
       description={e.description || "An event at Together We Own."}
       robots={e.status === "draft" || e.status === "past" ? "noindex, nofollow" : undefined}
       markdownAlternate={markdownAlternate}
+      siteJsonLd={siteJsonLd}
     >
       <section class="event-hero" aria-label="Event overview">
         <p class="event-kicker">{e.game || "Community event"}</p>
@@ -210,7 +213,11 @@ export const EventPage: FC<{
       ) : null}
       <script src="/islands/copy-link.js" defer />
       <script src="/islands/going-count.js" defer />
-      <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: jsonLd }} />
+      <script
+        type="application/ld+json"
+        data-testid="event-jsonld"
+        dangerouslySetInnerHTML={{ __html: jsonLd }}
+      />
       <div class="event-discovery">
         {neighbors.previous || neighbors.next ? (
           <nav class="event-pagination" aria-label="More events" data-testid="event-pagination">

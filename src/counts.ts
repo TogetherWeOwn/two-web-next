@@ -1,8 +1,10 @@
 // Frozen two-web CountsReader contract. Bot-owned views only; no migrations
-// or writes here. Each read degrades independently so ranks can survive a
+// or writes here. The views live in the bot database (BOT_DB/BOT_DATABASE_URL),
+// never in the web database: without a bot source the reads degrade to hidden.
+// Each read degrades independently so ranks can survive a
 // missing collector snapshot (and live counts can survive a missing ladder).
 import postgres from "postgres";
-import { databaseOptions, databaseUrl } from "./db/connection";
+import { botDatabaseUrl, databaseOptions } from "./db/connection";
 import type { Env } from "./env";
 
 export type Rank = {
@@ -123,7 +125,7 @@ const readRanks = cachedRead<Rank[]>("counts.ranks", [], async (sql) => {
 });
 
 export async function readCounts(env: Env): Promise<Counts> {
-  const url = databaseUrl(env); // Explicit local/dev URL, else Hyperdrive DB.
+  const url = botDatabaseUrl(env); // Explicit local/dev URL, else Hyperdrive BOT_DB.
   const [live, ranks] = await Promise.all([readLive(url), readRanks(url)]);
   return { ...live, ranks };
 }

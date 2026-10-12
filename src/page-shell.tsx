@@ -92,6 +92,7 @@ export const Layout: FC<
               type="font/woff2"
               crossorigin="anonymous"
             />
+            <link rel="stylesheet" href="/theme-tokens.css" />
             <link rel="stylesheet" href="/theme.css" />
             {theme === "event" ? <link rel="stylesheet" href="/event-theme.css" /> : null}
             {theme === "profile" ? <link rel="stylesheet" href="/profile-theme.css" /> : null}

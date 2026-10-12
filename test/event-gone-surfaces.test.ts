@@ -70,7 +70,9 @@ async function cookieFor(store: SessionStore, moderator: boolean): Promise<strin
 }
 
 function jsonLdOf(html: string): Record<string, unknown> {
-  const match = html.match(/<script type="application\/ld\+json">([\s\S]*?)<\/script>/);
+  const match = html.match(
+    /<script type="application\/ld\+json"[^>]*data-testid="event-jsonld"[^>]*>([\s\S]*?)<\/script>/,
+  );
   expect(match?.[1], "gone page carries a JSON-LD block").toBeDefined();
   return JSON.parse(match![1]!) as Record<string, unknown>;
 }

@@ -92,6 +92,7 @@ const EventDetailShell: FC<
     loginReturnTo?: string | null;
     account?: boolean;
     markdownAlternate?: string;
+    siteJsonLd?: string;
   }>
 > = ({
   title,
@@ -102,6 +103,7 @@ const EventDetailShell: FC<
   loginReturnTo,
   account,
   markdownAlternate,
+  siteJsonLd,
   children,
 }) => (
   <Layout
@@ -119,6 +121,13 @@ const EventDetailShell: FC<
         <a href="/events">← All events</a>
       </nav>
       {children}
+      {siteJsonLd ? (
+        <script
+          type="application/ld+json"
+          data-testid="site-jsonld"
+          dangerouslySetInnerHTML={{ __html: siteJsonLd }}
+        />
+      ) : null}
     </main>
     <SiteFooter />
   </Layout>
