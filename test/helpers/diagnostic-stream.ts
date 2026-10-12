@@ -54,6 +54,81 @@ function isInspectable(value: object): boolean {
   return proto === Object.prototype || proto === null;
 }
 
+/** The built-in prototype an inspectable subclass chain must end at. */
+function builtinPrototypeFor(value: object): object | null {
+  if (Array.isArray(value)) return Array.prototype;
+  if (value instanceof Error) return Error.prototype;
+  if (value instanceof Map) return Map.prototype;
+  if (value instanceof Set) return Set.prototype;
+  if (value instanceof RegExp) return RegExp.prototype;
+  return null;
+}
+
+/**
+ * A subclass can print through a prototype formatter (`%s` calls `toString`,
+ * `util.inspect` calls `nodejs.util.inspect.custom`) that own-state reads miss.
+ * Walk each intermediate prototype up to the built-in one; any own function or
+ * accessor there (other than `constructor`) means the printed form is not fully
+ * visible here. Returns a reason when opaque, null when the chain is clean.
+ * Ruling: Error `name`, `message`, `stack` and `cause` are read explicitly via
+ * `Reflect.get` (so a prototype accessor for one of those still reports its hit
+ * and is not treated as a hidden formatter); every other prototype function or
+ * accessor is opaque. Mark incomplete but keep reading own state, so a covered
+ * Error field still reports its hit; either entry alone fails the clean check.
+ */
+function prototypeFormatterReason(value: object): string | null {
+  let builtin: object | null;
+  try {
+    builtin = builtinPrototypeFor(value);
+  } catch {
+    return "prototype unreadable";
+  }
+  if (builtin === null) return null;
+  let proto: unknown;
+  try {
+    proto = Object.getPrototypeOf(value);
+  } catch {
+    return "prototype unreadable";
+  }
+  while (proto !== null && proto !== builtin) {
+    if ((typeof proto !== "object" || proto === null) && typeof proto !== "function") {
+      return "prototype unreadable";
+    }
+    const current = proto as object;
+    let keys: (string | symbol)[];
+    try {
+      keys = Reflect.ownKeys(current);
+    } catch {
+      return "prototype unreadable";
+    }
+    const isError = value instanceof Error;
+    for (const key of keys) {
+      if (key === "constructor") continue;
+      if (isError && (key === "name" || key === "message" || key === "stack" || key === "cause")) {
+        continue;
+      }
+      let descriptor: PropertyDescriptor | undefined;
+      try {
+        descriptor = Reflect.getOwnPropertyDescriptor(current, key);
+      } catch {
+        return "prototype unreadable";
+      }
+      if (!descriptor) continue;
+      if ("value" in descriptor) {
+        if (typeof descriptor.value === "function") return "opaque prototype formatter";
+      } else {
+        return "opaque prototype formatter";
+      }
+    }
+    try {
+      proto = Object.getPrototypeOf(current);
+    } catch {
+      return "prototype unreadable";
+    }
+  }
+  return null;
+}
+
 /** Reads every string a call can print, now, and lists each place that cannot be read. */
 function inspect(args: unknown[], prefix: string): Pick<DiagnosticRecord, "texts" | "incomplete"> {
   const texts: DiagnosticRecord["texts"] = [];
@@ -99,6 +174,12 @@ function inspect(args: unknown[], prefix: string): Pick<DiagnosticRecord, "texts
       return stop(path, "prototype unreadable");
     }
     if (!inspectable) return stop(path, "opaque object");
+    try {
+      const formatter = prototypeFormatterReason(value);
+      if (formatter) stop(path, formatter);
+    } catch {
+      return stop(path, "prototype unreadable");
+    }
     if (value instanceof RegExp) texts.push({ path, text: value.source });
 
     const readInto = (key: PropertyKey, childPath: string) => {

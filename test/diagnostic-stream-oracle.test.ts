@@ -34,6 +34,44 @@ Object.defineProperty(AccessorMessageError.prototype, "message", {
   get: () => MARK,
 });
 
+// Local fixtures only: subclasses whose prototype carries a formatter that
+// Node's %s / util.inspect would print, but own-state reads would miss.
+class PrototypeToStringError extends Error {
+  toString(): string {
+    return MARK;
+  }
+}
+class PrototypeToStringMap extends Map<string, string> {
+  toString(): string {
+    return MARK;
+  }
+}
+class PrototypeToStringSet extends Set<string> {
+  toString(): string {
+    return MARK;
+  }
+}
+class PrototypeToStringRegExp extends RegExp {
+  toString(): string {
+    return MARK;
+  }
+}
+class PrototypeToStringArray extends Array<string> {
+  toString(): string {
+    return MARK;
+  }
+}
+class PrototypeCustomInspectError extends Error {
+  [Symbol.for("nodejs.util.inspect.custom")](): string {
+    return MARK;
+  }
+}
+class PrototypeAccessorMap extends Map<string, string> {
+  get detail(): string {
+    return MARK;
+  }
+}
+
 afterEach(() => {
   vi.restoreAllMocks();
 });
@@ -247,6 +285,48 @@ describe("diagnostic stream capture", () => {
     const records = captureDiagnosticStream();
     console.warn("opaque", value());
     const { incomplete } = scanDiagnosticStream(records, MARKERS);
+    expect(incomplete).toHaveLength(1);
+    expect(incomplete[0]).toContain("opaque");
+  });
+
+  it.each([
+    [
+      "Error subclass",
+      () => {
+        const err = new PrototypeToStringError("ok");
+        err.stack = "PrototypeToStringError: ok";
+        return err;
+      },
+    ],
+    ["Map subclass", () => new PrototypeToStringMap([["k", "v"]])],
+    ["Set subclass", () => new PrototypeToStringSet(["v"])],
+    ["RegExp subclass", () => new PrototypeToStringRegExp("ok")],
+    ["Array subclass", () => new PrototypeToStringArray("ok")],
+  ])("reports a %s toString override as opaque, never clean", (_name, value) => {
+    const records = captureDiagnosticStream();
+    console.warn("opaque", value());
+    const { hits, incomplete } = scanDiagnosticStream(records, MARKERS);
+    expect(hits).toEqual([]);
+    expect(incomplete).toHaveLength(1);
+    expect(incomplete[0]).toContain("opaque");
+  });
+
+  it("reports a prototype nodejs.util.inspect.custom as opaque, never clean", () => {
+    const records = captureDiagnosticStream();
+    const err = new PrototypeCustomInspectError("ok");
+    err.stack = "PrototypeCustomInspectError: ok";
+    console.warn("opaque", err);
+    const { hits, incomplete } = scanDiagnosticStream(records, MARKERS);
+    expect(hits).toEqual([]);
+    expect(incomplete).toHaveLength(1);
+    expect(incomplete[0]).toContain("opaque");
+  });
+
+  it("reports a prototype accessor as opaque, never clean", () => {
+    const records = captureDiagnosticStream();
+    console.warn("opaque", new PrototypeAccessorMap([["k", "v"]]));
+    const { hits, incomplete } = scanDiagnosticStream(records, MARKERS);
+    expect(hits).toEqual([]);
     expect(incomplete).toHaveLength(1);
     expect(incomplete[0]).toContain("opaque");
   });
