@@ -19,7 +19,12 @@ export interface ParityTarget {
 }
 
 export const HONO_ORIGIN = "https://localhost:8787";
-export const KIT_ORIGIN = process.env.KIT_WORKER_ORIGIN ?? "http://127.0.0.1:8788";
+// One variable owns the Kit fixture address: KIT_WORKER_ORIGIN wins when set,
+// otherwise it derives from KIT_WORKER_PORT (the same variable
+// ci/kit-worker-dev.mjs listens on), so setting one without the other cannot
+// silently point the spec at a dead origin.
+export const KIT_ORIGIN =
+  process.env.KIT_WORKER_ORIGIN ?? `http://127.0.0.1:${process.env.KIT_WORKER_PORT ?? "8788"}`;
 
 export function parityTargets(): ParityTarget[] {
   return [

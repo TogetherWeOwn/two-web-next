@@ -7,11 +7,12 @@
 // place. An intentional redesign is a reviewed artifact committed in the same
 // PR; reviewers treat a baseline change like code.
 //
-// Hard boundary: this script NEVER writes into e2e/visual/__screenshots__/
-// (the 16 attributable Hono baselines). A Kit actual that maps to a Hono
-// baseline name is refused with a nonzero exit and nothing is written: the
-// two suites stay attributable, and a Kit redesign can never silently
-// regenerate a Hono baseline. Use node ci/visual-accept.mjs for Hono.
+// Hard boundary: this script writes ONLY under e2e/visual/__screenshots-kit__/
+// and NEVER into e2e/visual/__screenshots__/ (the 16 attributable Hono
+// baselines) — the destination directory is fixed, not derived from artifact
+// paths, so a Kit redesign can never silently regenerate a Hono baseline.
+// Same file names in the two directories are independent suites, not a
+// collision. Use node ci/visual-accept.mjs for Hono.
 import { copyFileSync, mkdirSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { basename, join } from "node:path";
 import { pathToFileURL } from "node:url";

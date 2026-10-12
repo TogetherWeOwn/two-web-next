@@ -1,8 +1,15 @@
 import { defineConfig, devices } from "@playwright/test";
 import { requireGithubRunner } from "./e2e/ci-only.mjs";
 import base from "./playwright.config";
+import kitPerfBudget from "./ci/kit-perf-budget.json";
 
 requireGithubRunner();
+
+// Same single-variable address as e2e/kit-parity.ts: an explicit
+// KIT_WORKER_ORIGIN wins, otherwise the origin derives from KIT_WORKER_PORT,
+// the port ci/kit-worker-dev.mjs listens on.
+const kitOrigin =
+  process.env.KIT_WORKER_ORIGIN ?? `http://127.0.0.1:${process.env.KIT_WORKER_PORT ?? "8788"}`;
 
 // Kit journey parity (TOG-22120, docs/kit-parity-gates.md): the no-login
 // journeys in e2e/kit-parity/ run against BOTH the Hono worker
@@ -39,9 +46,13 @@ export default defineConfig({
     },
     {
       command: "node ci/kit-worker-dev.mjs",
-      url: "http://127.0.0.1:8788/favicon.ico",
+      url: `${kitOrigin}/favicon.ico`,
       reuseExistingServer: false,
-      timeout: 120_000,
+      // True startup enforcement: a worker that never becomes ready fails
+      // the run before any journey executes. The ceiling is startup.maxMs in
+      // ci/kit-perf-budget.json (same cold-start bound as
+      // ci/kit-worker-e2e.mjs's listen).
+      timeout: kitPerfBudget.startup.maxMs,
       env: { WRANGLER_SEND_METRICS: "false" },
     },
   ],

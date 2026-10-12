@@ -17,6 +17,7 @@
 import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { sectionOf } from "./kit-section-contract.mjs";
 
 export const PARITY_ROUTES = [
   { path: "/events/past", expectStatus: 200, expectMarker: "manifest" },
@@ -429,20 +430,22 @@ async function runPreviewMode(
       reason: honoFailures.join("; ").slice(0, 200) || null,
     });
     if (kitRes.status === 200 && honoRes.status === 200) {
-      const honoHtml = await honoRes.text();
-      const kitSection = kitHtml.match(/<section[^>]*data-testid="past-events"[\s\S]*?<\/section>/);
-      const honoSection = honoHtml.match(
-        /<section[^>]*data-testid="past-events"[\s\S]*?<\/section>/,
-      );
-      const same = Boolean(
-        kitSection &&
-          honoSection &&
-          kitSection[0].replace(/>\s+</g, "><") === honoSection[0].replace(/>\s+</g, "><"),
-      );
+      // Framework-tolerant comparison (ci/kit-section-contract.mjs): raw
+      // bytes always differ (hydration markers, boolean attributes, `>`
+      // escaping), so compare the normalized contract, not the bytes.
+      let same = false;
+      let reason = "section HTML differs";
+      try {
+        const honoHtml = await honoRes.text();
+        same = sectionOf(kitHtml, "past-events") === sectionOf(honoHtml, "past-events");
+        if (same) reason = null;
+      } catch (error) {
+        reason = String(error?.message ?? error).slice(0, 200);
+      }
       journeys.push({
         name: `preview ${route.path}: sections match`,
         status: same ? "passed" : "failed",
-        reason: same ? null : "section HTML differs",
+        reason,
       });
     }
   }

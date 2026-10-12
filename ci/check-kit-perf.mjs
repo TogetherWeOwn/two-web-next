@@ -212,7 +212,7 @@ export function run(root = repoRoot, output = console) {
     }
   }
   output.log(
-    `kit perf budget: startup probe ceiling ${budget.startup.maxMs}ms (enforced by the kit-parity Playwright project, which times first-200 of the built Worker)`,
+    `kit perf budget: startup ceiling ${budget.startup.maxMs}ms (enforced as the Kit webServer readiness timeout in playwright.kit-parity.config.ts)`,
   );
   if (breaches) return 1;
   output.log("kit perf budget: every Kit asset fits.");
