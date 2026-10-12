@@ -11,8 +11,10 @@
 // and NEVER into e2e/visual/__screenshots__/ (the 16 attributable Hono
 // baselines) — the destination directory is fixed, not derived from artifact
 // paths, so a Kit redesign can never silently regenerate a Hono baseline.
-// Same file names in the two directories are independent suites, not a
-// collision. Use node ci/visual-accept.mjs for Hono.
+// Source boundary too: the shared e2e-failure artifact carries both suites,
+// so Hono `*-actual.png` files are ignored, never copied into the Kit
+// baselines. Same file names in the two directories are independent suites,
+// not a collision. Use node ci/visual-accept.mjs for Hono.
 import { copyFileSync, mkdirSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { basename, join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -20,8 +22,16 @@ import { pathToFileURL } from "node:url";
 export const KIT_SCREENSHOT_DIR = "e2e/visual/__screenshots-kit__";
 export const HONO_SCREENSHOT_DIR = "e2e/visual/__screenshots__";
 
+// Source-scoped: the shared e2e-failure artifact carries both suites, so an
+// admitted candidate must come from the Kit suite's own folders —
+// `test-results-kit-parity/` (reviewed actuals) or a `__screenshots-kit__`
+// path (new baselines). A Hono `*-actual.png` at any other path is ignored,
+// never copied into the Kit baselines.
 export function destinationName(entry, fullPath) {
+  const fromKitSuite =
+    fullPath.includes("test-results-kit-parity") || fullPath.includes("__screenshots-kit__");
   if (entry.endsWith("-actual.png")) {
+    if (!fromKitSuite) return null;
     return basename(entry).replace(/-actual\.png$/, ".png");
   }
   if (entry.endsWith(".png") && fullPath.includes("__screenshots-kit__")) {

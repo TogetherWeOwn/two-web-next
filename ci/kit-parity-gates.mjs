@@ -98,6 +98,25 @@ export function expectedMarkerFor(manifestSource, path) {
   return match[1] === "true" ? "kit" : null;
 }
 
+// Login-journey ownership derives from the shipped manifest, the same way
+// expectedMarkerFor does for /events/past: a path with no entry (or
+// enabled:false) is Hono-owned and ledgers as skipped; enabled:true means the
+// route is Kit-native, so an unexecuted skip would be a quiet green and the
+// gate records a failure instead.
+export function isManifestEnabled(manifestSource, path) {
+  const escaped = path.replace(/[/\\^$.*+?()[\]{}|]/g, "\\$&");
+  const match = manifestSource.match(
+    new RegExp(`path:\\s*"${escaped}"[^}]*enabled:\\s*(true|false)`),
+  );
+  return match !== null && match[1] === "true";
+}
+
+export const LOGIN_JOURNEYS = [
+  ["member RSVP going/withdraw (/e/:key)", "/e/:key"],
+  ["moderator publish/cancel (/admin/events)", "/admin/events"],
+  ["member profile edit (/profile)", "/profile"],
+];
+
 const SECRET_PATTERNS = [
   /X-TWO-QA-Auth/i,
   /__Host-two_session\s*=/,
@@ -190,13 +209,11 @@ function headerMap(entries) {
   return { get: (name) => entries[name.toLowerCase()] ?? null };
 }
 
-export function runUnitMode({ stdout = process.stdout } = {}) {
+export function runUnitMode({ stdout = process.stdout, manifestSource: manifestOverride } = {}) {
   const journeys = [];
   const push = (name, status, reason = null) => journeys.push({ name, status, reason });
-  const manifestSource = readFileSync(
-    new URL("../src/route-ownership.ts", import.meta.url),
-    "utf8",
-  );
+  const manifestSource =
+    manifestOverride ?? readFileSync(new URL("../src/route-ownership.ts", import.meta.url), "utf8");
   const marker = expectedMarkerFor(manifestSource, "/events/past");
   stdout.write(
     `kit-parity-gates: manifest expects marker ${JSON.stringify(marker)} for /events/past\n`,
@@ -285,15 +302,21 @@ export function runUnitMode({ stdout = process.stdout } = {}) {
       : "failed",
   );
 
-  // Login journeys stay Hono-only until their routes migrate. They are
-  // ledgered as skipped WITH reasons — loud and countable, never a quiet
-  // green — and flip to executed the moment the manifest enables their route.
-  for (const name of [
-    "member RSVP going/withdraw (/e/:key)",
-    "moderator publish/cancel (/admin/events)",
-    "member profile edit (/profile)",
-  ]) {
-    push(`parity: ${name}`, "skipped", "route not Kit-native (ROUTE_MANIFEST enabled:false)");
+  // Login journeys stay Hono-only until their routes migrate. A Hono-owned
+  // route ledgers as skipped WITH a reason — loud and countable, never a
+  // quiet green. The moment the manifest enables a route, the skip becomes a
+  // failure (no executed parity journey covers it yet), so the first
+  // Kit-native member route can never ship on a green ledger with no run.
+  for (const [name, path] of LOGIN_JOURNEYS) {
+    if (isManifestEnabled(manifestSource, path)) {
+      push(
+        `parity: ${name}`,
+        "failed",
+        `route Kit-native (ROUTE_MANIFEST enabled:true) but no executed parity journey covers ${path}`,
+      );
+    } else {
+      push(`parity: ${name}`, "skipped", "route not Kit-native (ROUTE_MANIFEST enabled:false)");
+    }
   }
 
   return journeys;
@@ -406,6 +429,7 @@ async function runPreviewMode(
       continue;
     }
     const kitHtml = kitRes.status === 200 ? await kitRes.text() : "";
+    const honoHtml = honoRes.status === 200 ? await honoRes.text() : "";
     const kitFailures = assertRouteContract({
       label: `preview Kit ${route.path}`,
       html: kitHtml,
@@ -418,12 +442,16 @@ async function runPreviewMode(
       status: kitFailures.length ? "failed" : "passed",
       reason: kitFailures.join("; ").slice(0, 200) || null,
     });
-    const honoMarker = honoRes.headers.get("x-two-renderer");
-    const honoFailures = [];
-    if (honoRes.status !== route.expectStatus)
-      honoFailures.push(`status ${honoRes.status} !== ${route.expectStatus}`);
-    if (honoMarker !== null)
-      honoFailures.push(`Hono marker ${JSON.stringify(honoMarker)} !== null`);
+    // The Hono side runs the same contract helpers (expected marker null):
+    // a Hono-side regression outside the section would otherwise go
+    // unflagged in preview mode.
+    const honoFailures = assertRouteContract({
+      label: `preview Hono ${route.path}`,
+      html: honoHtml,
+      headers: honoRes.headers,
+      status: honoRes.status,
+      expected: { status: route.expectStatus, marker: null },
+    });
     journeys.push({
       name: `preview Hono ${route.path}: no Kit marker`,
       status: honoFailures.length ? "failed" : "passed",
@@ -436,7 +464,6 @@ async function runPreviewMode(
       let same = false;
       let reason = "section HTML differs";
       try {
-        const honoHtml = await honoRes.text();
         same = sectionOf(kitHtml, "past-events") === sectionOf(honoHtml, "past-events");
         if (same) reason = null;
       } catch (error) {

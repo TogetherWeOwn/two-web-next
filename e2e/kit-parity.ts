@@ -53,15 +53,21 @@ export function normalizeOrigin(body: string, origin: string): string {
   // bare https/http origin never matches the subscribe href. Normalize both
   // schemes, or the cross-target section comparison fails on host bytes that
   // differ by design (staging origin vs Kit fixture origin).
+  //
+  // The webcal variants map to a DISTINCT token, replaced BEFORE the bare
+  // origins: the subscribe link (webcal) and the .ics download link (https)
+  // share the /events.ics path, so one shared placeholder would let a Kit
+  // page that emits the wrong scheme compare equal. The scheme stays part of
+  // the compared contract.
   const toWebcal = (url: string) => url.replace(/^https?:\/\//, "webcal://");
   return body
+    .split(toWebcal(origin))
+    .join("PARITY_WEBCAL_ORIGIN")
+    .split(toWebcal(STAGING_APP_URL))
+    .join("PARITY_WEBCAL_ORIGIN")
     .split(origin)
     .join("PARITY_ORIGIN")
     .split(STAGING_APP_URL)
-    .join("PARITY_ORIGIN")
-    .split(toWebcal(origin))
-    .join("PARITY_ORIGIN")
-    .split(toWebcal(STAGING_APP_URL))
     .join("PARITY_ORIGIN");
 }
 

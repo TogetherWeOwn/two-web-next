@@ -52,11 +52,15 @@ Two modes, one assertion set per parity route:
   secret leak, wrong renderer marker: a gate that cannot fail on a planted
   break proves nothing), checks the reserved probes, distinguishes the
   member-chrome fragment from guest chrome, and ledgers the login journeys
-  (member RSVP, moderator admin, profile edit) as skipped WITH reasons —
-  loud and countable until their routes migrate. The heavyweight SSR
+  (member RSVP, moderator admin, profile edit) from the manifest: Hono-owned
+  routes ledger as skipped WITH reasons — loud and countable until their
+  routes migrate — while an enabled route with no executed journey covering
+  it records a failure, so the first Kit-native member route can never ship
+  on a green ledger with no run. The heavyweight SSR
   byte-comparison stays in `ci/kit-preview-e2e.mjs`, which runs right before.
 - **Preview mode** (`KIT_PREVIEW_URL` + `HONO_PREVIEW_URL`): fetches each
-  parity route from both deployed Workers and applies the same helpers,
+  parity route from both deployed Workers and applies the same helpers to
+  both (Kit: manifest-derived marker, Hono: always null),
   plus a framework-tolerant section comparison
   (`ci/kit-section-contract.mjs`, same treatment as `kit-preview-e2e.mjs`:
   hydration markers, boolean attributes and `>` escaping are
@@ -97,7 +101,10 @@ too: `KIT_WORKER_ORIGIN`, else derived from `KIT_WORKER_PORT` (the port
 - Kit redesign baselines live in `e2e/visual/__screenshots-kit__/` only.
   `ci/kit-visual-accept.mjs` writes ONLY under that directory — the
   destination is fixed, not derived from artifact paths, so it can never
-  touch the Hono baselines. An intentional redesign is a reviewed artifact
+  touch the Hono baselines — and reads ONLY the Kit suite's own folders
+  (`test-results-kit-parity/`, `__screenshots-kit__/`), ignoring Hono
+  actuals in the shared failure artifact. `ci/visual-accept.mjs` likewise
+  ignores Kit suite outputs. An intentional redesign is a reviewed artifact
   committed in the same PR — reviewers treat a baseline change like code —
   never a silent regeneration. (No Kit screenshots are captured yet: the
   accept flow is ready for the first enabled route; the DOM/state parity for
@@ -134,7 +141,9 @@ to 256B — the repository rule from `ci/bundle-budget.json`):
 paging/refusals, public feeds/SEO, reserved/API surface, cross-origin
 refusals — against both the Hono worker and the built Kit Worker in one run.
 Bodies are origin-normalized before comparison (Hono pins the virtual
-staging origin, Kit pins its own `APP_URL`; host strings differ by design),
+staging origin, Kit pins its own `APP_URL`; host strings differ by design).
+The `webcal://` feed origins normalize to a distinct token from the
+`https://` origins, so the subscribe-link scheme stays in the contract,
 sections compare through the shared framework-tolerant treatment, renderer
 expectations are per target (Kit: manifest-derived, Hono: always null), and
 the archive page is driven at desktop and mobile widths with a horizontal
@@ -142,10 +151,12 @@ overflow assertion and a page-error watch. Seeded rows pin non-empty
 collections so an empty fixture cannot pass silently.
 
 Login journeys (member RSVP, waitlist, pause, admin, profile, featured) stay
-Hono-only until their routes migrate; the gate ledger records them as
+Hono-only until their routes migrate; the gate ledger derives each entry
+from `ROUTE_MANIFEST` and records Hono-owned routes as
 `skipped: <route> not Kit-native` with reason strings — loud, countable,
 never quiet green, and never a `test.skip` call (the floor forbids new
-skips).
+skips). An enabled route with no executed journey covering it records a
+failure instead of a skip.
 
 ## Security
 

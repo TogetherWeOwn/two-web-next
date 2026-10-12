@@ -10,7 +10,9 @@ import {
   assertRouteContract,
   expectedMarkerFor,
   isAllowlistedHost,
+  isManifestEnabled,
   runGate,
+  runUnitMode,
   scrubSecrets,
   summarizeLedger,
   validatePreviewPair,
@@ -162,6 +164,44 @@ test("unit gate passes on the shipped manifest (no network)", async () => {
   });
   assert.equal(code, 0, `expected exit 0, got ${code}\n${lines.join("")}`);
   assert.ok(lines.some((line) => line.includes("mutant") || line.includes("Kit parity ledger")));
+});
+
+test("login journey ownership derives from the manifest", () => {
+  const honoManifest = `{ method: "GET", path: "/events/past", enabled: false }`;
+  assert.equal(isManifestEnabled(honoManifest, "/e/:key"), false);
+  assert.equal(isManifestEnabled(honoManifest, "/profile"), false);
+  const enabledManifest =
+    `{ method: "GET", path: "/events/past", enabled: false },` +
+    ` { method: "POST", path: "/e/:key", enabled: true },` +
+    ` { method: "GET", path: "/profile", enabled: true }`;
+  assert.equal(isManifestEnabled(enabledManifest, "/e/:key"), true);
+  assert.equal(isManifestEnabled(enabledManifest, "/profile"), true);
+  assert.equal(isManifestEnabled(enabledManifest, "/admin/events"), false);
+  const disabledManifest = `{ method: "GET", path: "/profile", enabled: false }`;
+  assert.equal(isManifestEnabled(disabledManifest, "/profile"), false);
+});
+
+test("an enabled login route fails instead of a quiet skip", () => {
+  const silent = { write: () => {} };
+  const honoJourneys = runUnitMode({
+    stdout: silent,
+    manifestSource: `{ method: "GET", path: "/events/past", enabled: false }`,
+  });
+  for (const journey of honoJourneys.filter((j) => j.name.startsWith("parity: "))) {
+    assert.equal(journey.status, "skipped", journey.name);
+  }
+  const enabledJourneys = runUnitMode({
+    stdout: silent,
+    manifestSource:
+      `{ method: "GET", path: "/events/past", enabled: false },` +
+      ` { method: "POST", path: "/e/:key", enabled: true },` +
+      ` { method: "GET", path: "/profile", enabled: true }`,
+  });
+  const byName = new Map(enabledJourneys.map((j) => [j.name, j]));
+  assert.equal(byName.get("parity: member RSVP going/withdraw (/e/:key)").status, "failed");
+  assert.equal(byName.get("parity: member profile edit (/profile)").status, "failed");
+  assert.equal(byName.get("parity: moderator publish/cancel (/admin/events)").status, "skipped");
+  assert.equal(summarizeLedger(enabledJourneys).verdict, "fail");
 });
 
 test("route contract detects a planted break", () => {

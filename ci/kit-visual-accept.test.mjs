@@ -63,8 +63,14 @@ test("empty artifact refuses with nothing written", () => {
 test("colliding sources refuse with nothing written", () => {
   const workspace = scratch();
   const artifact = scratch();
-  writeBytes(join(artifact, "a", "past-desktop-actual.png"), "bytes-one");
-  writeBytes(join(artifact, "b", "past-desktop-actual.png"), "bytes-two");
+  writeBytes(
+    join(artifact, "test-results-kit-parity", "a", "past-desktop-actual.png"),
+    "bytes-one",
+  );
+  writeBytes(
+    join(artifact, "test-results-kit-parity", "b", "past-desktop-actual.png"),
+    "bytes-two",
+  );
   let writes = 0;
   const result = acceptBaselines(artifact, {
     cwd: workspace,
@@ -75,6 +81,32 @@ test("colliding sources refuse with nothing written", () => {
   assert.equal(result.ok, false);
   assert.match(result.message, /refusing/);
   assert.equal(writes, 0);
+});
+
+test("Hono suite actuals in the shared artifact are ignored", () => {
+  const workspace = scratch();
+  const artifact = scratch();
+  // Shared e2e-failure artifact layout: the Hono actual must not land in the
+  // Kit baselines, even when it flattens to the same destination name.
+  writeBytes(
+    join(artifact, "test-results-visual", "past", "past-desktop-actual.png"),
+    "hono-bytes",
+  );
+  writeBytes(
+    join(artifact, "test-results-kit-parity", "past", "past-desktop-actual.png"),
+    "kit-bytes",
+  );
+  const result = acceptBaselines(artifact, {
+    cwd: workspace,
+    mkdir: mkdirSync,
+    copy: (src, dest) => writeBytes(dest, readFileSync(src, "utf8")),
+  });
+  assert.equal(result.ok, true, result.message);
+  assert.deepEqual(result.accepted, ["past-desktop.png"]);
+  assert.equal(
+    readFileSync(join(workspace, KIT_SCREENSHOT_DIR, "past-desktop.png"), "utf8"),
+    "kit-bytes",
+  );
 });
 
 test("Hono baseline names stay attributable to the Hono suite", async () => {

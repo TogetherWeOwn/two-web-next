@@ -184,6 +184,29 @@ test("non-colliding actual and new baselines are still accepted", () => {
   assert.equal(readFileSync(join(destDir, "about.png"), "utf8"), "about-bytes");
 });
 
+test("Kit suite outputs in the shared artifact are ignored", () => {
+  const workspace = scratchRoot("visual-accept-kit-ignored-");
+  const artifact = join(workspace, "artifact");
+  // Shared e2e-failure artifact layout: Kit actuals and Kit new baselines
+  // must never regenerate a Hono baseline.
+  writeBytes(
+    join(artifact, "test-results-kit-parity", "past", "past-desktop-actual.png"),
+    "kit-bytes",
+  );
+  writeBytes(
+    join(artifact, "e2e", "visual", "__screenshots-kit__", "past-desktop.png"),
+    "kit-new-baseline",
+  );
+  writeBytes(join(artifact, "test-results-visual", "home", "home-actual.png"), "hono-bytes");
+
+  const { result, destDir } = runAccept(workspace, artifact);
+
+  assert.equal(result.status, 0, `expected acceptance, stderr: ${result.stderr}`);
+  assert.match(result.stdout, /accepted 1 baseline\(s\)/);
+  assert.equal(readFileSync(join(destDir, "home.png"), "utf8"), "hono-bytes");
+  assert.deepEqual(listFilesRecursive(destDir), ["home.png"]);
+});
+
 test("acceptBaselines reports counts and throws a diagnostic on collision", () => {
   const root = scratchRoot("visual-accept-api-");
   const artifact = join(root, "artifact");
