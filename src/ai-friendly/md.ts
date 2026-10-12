@@ -46,10 +46,13 @@ export function mdText(value: string): string {
     .replace(/\\/g, "\\\\")
     .replace(/\[/g, "\\[")
     .replace(/\]/g, "\\]")
+    .replace(/\r\n|\r/g, "\n")
     .split("\n")
     .map((line) => (MD_BLOCK_START.test(line) || MD_INDENTED_CODE.test(line) ? `\\${line}` : line))
     .join("\n");
 }
+
+const mdInlineText = (value: string): string => mdText(value.replace(/\r\n|\r|\n/g, " "));
 
 const sourceLine = (appUrl: string, path: string): string =>
   `> Canonical page: ${canonicalUrl(appUrl, path)} · Markdown alternate: ${canonicalUrl(appUrl, `${path}.md`)}`;
@@ -164,12 +167,12 @@ function mdEventWhen(e: MdEvent): string {
 
 function mdEventBlock(appUrl: string, e: MdEvent): string[] {
   const out = [
-    `## [${mdText(e.title)}](${canonicalUrl(appUrl, `/e/${e.eventKey}`)})`,
+    `## [${mdInlineText(e.title)}](${canonicalUrl(appUrl, `/e/${e.eventKey}`)})`,
     "",
     `- When: ${mdEventWhen(e)}`,
   ];
-  if (e.game) out.push(`- Game: ${mdText(e.game)}`);
-  if (e.location) out.push(`- Where: ${mdText(e.location)}`);
+  if (e.game) out.push(`- Game: ${mdInlineText(e.game)}`);
+  if (e.location) out.push(`- Where: ${mdInlineText(e.location)}`);
   if (e.goingCount !== null)
     out.push(`- Lineup: ${e.goingCount} going${e.capacity !== null ? ` of ${e.capacity}` : ""}`);
   out.push(`- Markdown: ${canonicalUrl(appUrl, `/e/${e.eventKey}.md`)}`);
@@ -201,14 +204,14 @@ export function mdEvents(appUrl: string, rows: MdEvent[]): string {
 
 export function mdEvent(appUrl: string, e: MdEvent): string {
   return [
-    `# ${mdText(e.title)}`,
+    `# ${mdInlineText(e.title)}`,
     "",
     sourceLine(appUrl, `/e/${e.eventKey}`),
     "",
     `- Status: ${e.status === "past" ? "past" : "scheduled"}`,
     `- When: ${mdEventWhen(e)}`,
-    ...(e.game ? [`- Game: ${mdText(e.game)}`] : []),
-    ...(e.location ? [`- Where: ${mdText(e.location)}`] : []),
+    ...(e.game ? [`- Game: ${mdInlineText(e.game)}`] : []),
+    ...(e.location ? [`- Where: ${mdInlineText(e.location)}`] : []),
     ...(e.goingCount !== null
       ? [`- Lineup: ${e.goingCount} going${e.capacity !== null ? ` of ${e.capacity}` : ""}`]
       : []),
@@ -221,7 +224,7 @@ export function mdEvent(appUrl: string, e: MdEvent): string {
 
 export function mdEventGone(appUrl: string, e: Pick<MdEvent, "title" | "eventKey">): string {
   return [
-    `# ${mdText(e.title)}`,
+    `# ${mdInlineText(e.title)}`,
     "",
     sourceLine(appUrl, `/e/${e.eventKey}`),
     "",

@@ -222,6 +222,24 @@ describe("md builders (pure, DB-free)", () => {
     expect(eventsLinks).toHaveLength(1);
   });
 
+  it("mdText treats bare CR as a line break before checking Markdown blocks", () => {
+    expect(mdText("a\r```\rb")).toBe("a\n\\```\nb");
+  });
+
+  it("keeps multiline event titles, game and location on one line", () => {
+    const body = mdEvents(APP_URL, [
+      mdRow({
+        title: "Night\nsecond line",
+        game: "Game\rsecond line",
+        location: "Voice\nsecond line",
+      }),
+    ]);
+    expect(body).toContain("## [Night second line](");
+    expect(body).toContain("- Game: Game second line");
+    expect(body).toContain("- Where: Voice second line");
+    expect(body.match(/^## /gm)).toHaveLength(1);
+  });
+
   it("mdText keeps fences, setext underlines and HTML blocks inline", () => {
     expect(mdText("```\nABC123")).toBe("\\```\nABC123");
     expect(mdText("~~~\nABC123")).toBe("\\~~~\nABC123");
@@ -246,6 +264,13 @@ describe("md builders (pure, DB-free)", () => {
     expect(body.match(/^## \[/gm)).toHaveLength(2);
     expect(body).toContain("Second night");
     expect(body).toContain(`${APP_URL}/e/01J0000000000000000000WXYZ.md`);
+  });
+
+  it("a bare-CR fence in detail cannot swallow the calendar links", () => {
+    const body = mdEvent(APP_URL, mdRow({ description: "code:\r```\rABC" }));
+    expect(body).toContain("\\```");
+    expect(body).toContain("[Add to calendar (.ics)]");
+    expect(body).toContain("[See upcoming events]");
   });
 
   it("an unclosed fence in detail cannot swallow the calendar links", () => {
