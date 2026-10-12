@@ -85,6 +85,31 @@ describe.skipIf(!process.env.DATABASE_URL)("public read API: openapi.json", () =
     expect(paths["/api/public/events/{key}"]?.get?.responses?.["404"]).toBeDefined();
   });
 
+  it("keeps 429 Retry-After on the response object, not the media type (OpenAPI 3.1)", () => {
+    // Headers belong on the Response Object; the Media Type Object takes
+    // only schema/examples/encoding. A Retry-After under the media type
+    // fails OpenAPI 3.1 schema validation on every 429.
+    const spec = getOpenApiDocument(APP_URL);
+    const paths = spec.paths as unknown as Record<
+      string,
+      { get?: { responses?: Record<string, Record<string, unknown>> } }
+    >;
+    for (const path of SPEC_PATHS) {
+      const r429 = paths[path]?.get?.responses?.["429"] as unknown as {
+        headers?: Record<string, unknown>;
+        content?: Record<string, Record<string, unknown>>;
+      };
+      expect(r429?.headers?.["Retry-After"], path).toEqual({
+        schema: { type: "integer" },
+      });
+      const media = r429?.content?.["application/json"];
+      expect((media?.["schema"] as { $ref?: string } | undefined)?.$ref, path).toBe(
+        "#/components/schemas/PublicDataError",
+      );
+      expect("headers" in (media ?? {}), path).toBe(false);
+    }
+  });
+
   it("keeps the spec schemas identical to the serializer field lists", async () => {
     const spec = getOpenApiDocument(APP_URL);
     const schemas = spec.components.schemas as Record<string, { required?: string[] }>;

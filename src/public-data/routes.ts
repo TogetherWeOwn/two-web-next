@@ -119,10 +119,14 @@ function fitByteBudget(
         longest = row;
     }
     if (!longest?.description) return body;
+    // Cut on code points, not UTF-16 units: slicing astral characters
+    // (emoji, some CJK) mid-pair emits a lone surrogate that strict JSON
+    // decoders reject. Array.from splits on whole code points.
+    const codePoints = Array.from(longest.description);
     longest.description =
-      longest.description.length <= 1
+      codePoints.length <= 1
         ? ""
-        : `${longest.description.slice(0, Math.ceil(longest.description.length / 2) - 1)}…`;
+        : `${codePoints.slice(0, Math.ceil(codePoints.length / 2) - 1).join("")}…`;
     body = JSON.stringify(wrap(rows));
   }
 }

@@ -74,10 +74,13 @@ const JOIN_PROPERTIES: Record<(typeof JOIN_HANDOFF_FIELDS)[number], JsonSchema> 
 function error(status: number, description: string) {
   return {
     description,
+    // OpenAPI 3.1 allows headers on the Response Object only; the Media
+    // Type Object takes schema/examples/encoding. A Retry-After under the
+    // media type fails schema validation on every 429.
+    ...(status === 429 ? { headers: { "Retry-After": { schema: { type: "integer" } } } } : {}),
     content: {
       "application/json": {
         schema: { $ref: "#/components/schemas/PublicDataError" },
-        ...(status === 429 ? { headers: { "Retry-After": { schema: { type: "integer" } } } } : {}),
       },
     },
   };

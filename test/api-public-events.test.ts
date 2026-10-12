@@ -218,6 +218,28 @@ describe.skipIf(!process.env.DATABASE_URL)("public read API: events", () => {
     expect(validatePublicSchema(body, "PublicApiEventCollection")).toEqual([]);
   });
 
+  it("trims astral descriptions on code-point boundaries", async () => {
+    // 10 events of 1000 emoji (the form cap) push the body past 32 KiB, so
+    // the trimmer runs on exactly the inputs that used to split UTF-16
+    // surrogate pairs into lone surrogates strict decoders reject.
+    for (let i = 0; i < 10; i++) await seed(31 + i, { description: "😀".repeat(1000) });
+    const res = await get("/api/public/events");
+    expect(res.status).toBe(200);
+    const raw = await res.text();
+    expect(new TextEncoder().encode(raw).length).toBeLessThanOrEqual(MAX_BYTES);
+    const body = JSON.parse(raw) as PublicApiEventCollectionDto;
+    expect(body.data).toHaveLength(10);
+    const loneSurrogate = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
+    const trimmed = body.data.filter((row) => row.description!.endsWith("…"));
+    // The cap forces at least one trim, and no row — trimmed or intact —
+    // may carry a split surrogate pair.
+    expect(trimmed.length).toBeGreaterThan(0);
+    for (const row of body.data) {
+      expect(loneSurrogate.test(row.description!), row.event_key).toBe(false);
+    }
+    expect(validatePublicSchema(body, "PublicApiEventCollection")).toEqual([]);
+  });
+
   it("serves one published event and 404s drafts, cancelled rows and missing keys", async () => {
     // Synthetic mirror id: non-numeric on purpose, so the secret scanner
     // never reads it as a Discord snowflake. The property under test is
