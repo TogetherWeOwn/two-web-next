@@ -111,7 +111,11 @@ class TransportTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0)
             self.assertEqual(downloaded.read_bytes(), source.read_bytes())
             self.assertEqual(result.stdout, b"")
-            self.assertNotEqual(invoke("get", key.replace("20250101", "20250102"), downloaded).returncode, 0)
+            missing = invoke("get", key.replace("20250101", "20250102"), downloaded)
+            self.assertNotEqual(missing.returncode, 0)
+            # The fake must emulate wrangler's missing-object diagnostic so
+            # fetch_manifest initialises first use instead of refusing.
+            self.assertIn("The specified key does not exist.", missing.stderr.decode())
             # The pipeline publishes the archive with its digest receipt pair.
             receipt_key = key + ".digest.json"
             self.assertEqual(invoke("put", receipt_key, source).returncode, 0)
