@@ -16,10 +16,12 @@
   var EVENT = "going-count-updated";
   var REFRESHED = "going-count-refreshed";
   var URL = "/events.json";
-  // Owned read deadline: fetch headers plus the JSON body, at most ~5s. On
-  // expiry the owned fetch aborts and the last-known-good badge stays with
-  // no announcement. A newer broadcast for the same key aborts the older
-  // read; its late completion patches nothing.
+  // Owned read deadline: fetch headers plus the JSON body, at most ~5s
+  // (mirrors GOING_COUNT_READ_DEADLINE_MS in
+  // src/islands/contracts-going-count.ts). On expiry the owned fetch aborts
+  // and the last-known-good badge stays with no announcement. A newer
+  // broadcast for the same key aborts the older read; its late completion
+  // patches nothing.
   var READ_DEADLINE_MS = 5000;
   var latest = new Map();
   var inflight = new Map();

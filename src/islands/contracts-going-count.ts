@@ -82,6 +82,11 @@ export function renderGoingCount(eventKey: string, s: GoingCountState): string {
 
 /* -------------------------------------------------------- going-count fetch */
 
+/** Owned overall read deadline for one aggregate refresh: headers plus
+ * response-body completion, at most 5 seconds. On expiry the binder aborts
+ * the owned fetch and keeps the last good badge with no announcement. */
+export const GOING_COUNT_READ_DEADLINE_MS = 5_000;
+
 export interface GoingRefreshRequest {
   method: "GET";
   url: string;

@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { URL as NodeURL } from "node:url";
 import { createContext, runInContext } from "node:vm";
 import { describe, expect, it } from "vitest";
+import { GOING_COUNT_READ_DEADLINE_MS } from "../src/islands/contracts";
 
 const binder = readFileSync(
   new NodeURL("../public/islands/going-count.js", import.meta.url),
@@ -167,8 +168,11 @@ function browser(...badges: Badge[]) {
       await settle();
     },
     fireDeadline() {
-      // Only the owned multi-second read deadline fires here.
-      const expired = [...timers.entries()].filter(([, t]) => t.ms >= 5000);
+      // Only the owned read deadline fires here, at the contracted delay
+      // exactly: any drift in the value fails every deadline test below.
+      const expired = [...timers.entries()].filter(
+        ([, t]) => t.ms === GOING_COUNT_READ_DEADLINE_MS,
+      );
       expect(expired.length).toBeGreaterThan(0);
       for (const [id, t] of expired) {
         timers.delete(id);
@@ -413,11 +417,12 @@ describe("GoingCount accepted aggregate snapshots", () => {
       await settle();
       expect(b.requests).toHaveLength(1);
       expect(b.requests[0]!.url).toBe("/events.json?event_key=a");
-      // No polling: the only timer is the owned per-read abort deadline
-      // (~5s; the minifier may render the constant as 5e3).
+      // No polling: the only timer is the owned per-read abort deadline.
+      // The delay value itself is pinned exactly by fireDeadline and the
+      // deadline contract test — a source-text match here would also accept
+      // a regressed 15e3/25e3, so there is deliberately no /5e3|5000/ check.
       expect(binder).not.toMatch(/setInterval/);
       expect(binder).toMatch(/AbortController/);
-      expect(binder).toMatch(/5e3|5000/);
     },
   );
 
@@ -568,6 +573,17 @@ describe("GoingCount accepted aggregate snapshots", () => {
 });
 
 describe("GoingCount owned read deadline", () => {
+  it("pins the owned delay to the contracted deadline", () => {
+    expect(Number.isFinite(GOING_COUNT_READ_DEADLINE_MS)).toBe(true);
+    expect(GOING_COUNT_READ_DEADLINE_MS).toBeGreaterThan(0);
+    const badge = new Badge("a");
+    const b = browser(badge);
+    b.broadcast({ eventKey: "a", viewerState: "going" });
+    // The served bundle's only timer is the read deadline, at the contracted
+    // delay exactly — a lengthened deadline fails here, not silently.
+    expect([...b.timers.values()].map((t) => t.ms)).toEqual([GOING_COUNT_READ_DEADLINE_MS]);
+  });
+
   it("aborts a hung fetch past the deadline with no refresh event", async () => {
     const badge = new Badge("a");
     const b = browser(badge);
