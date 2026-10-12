@@ -25,7 +25,10 @@ wrangler.jobs.jsonc`, never in a file, PR, log or argv value:
 - `BOT_ENDPOINT_URL`, `BOT_KEY_ID`, `BOT_SHARED_SECRET` — required for
   delivery. A missing value fails every bot job terminally (`BotTerminalError`,
   `queue.failing` alert, never acked as success). Confirm present before
-  resuming delivery or replaying real messages.
+  resuming delivery or replaying real messages. The staging deploy workflow
+  enforces this fail-closed (`node ci/check-jobs-secrets.mjs` runs before the
+  jobs Worker deploy and refuses when any of the three names is absent), so an
+  automatic deploy after merge can never attach the jobs consumer without them.
 - `QA_AUTH_TOKEN` — staging only; gates the alert-probe path through
   `qaEnabled()` with the staging `APP_URL`.
 
@@ -67,8 +70,19 @@ curl -fsS https://next.togetherweown.com/up
 npx --no-install wrangler queues pause-delivery two-sync-event
 npx --no-install wrangler queues pause-delivery two-internal-action
 
-# 2. Detach: deploy the web Worker without consumers or crons.
+# 2. Detach: deploy the web Worker without consumers or crons, then remove
+# its existing consumers explicitly. The deploy alone does NOT detach:
+# Wrangler only adds or updates the consumers listed in the deployed config
+# and never deletes one that was dropped from it, so without the removes the
+# next step collides with the still-attached worker:two-web-next consumer.
 npx wrangler deploy --config wrangler.jsonc --tag "$DEPLOY_SHA"
+for q in two-sync-event two-internal-action; do
+  if npx --no-install wrangler queues consumer list "$q" | grep -q "two-web-next"; then
+    npx --no-install wrangler queues consumer remove "$q" two-web-next
+  else
+    echo "no two-web-next consumer on $q"
+  fi
+done
 npx --no-install wrangler queues consumer list two-sync-event
 npx --no-install wrangler queues consumer list two-internal-action
 # Both lists are empty; messages accumulate, none are lost.
@@ -94,14 +108,43 @@ as a shortcut. Never `wrangler queues purge` here.
 
 ## Rollback (restores ownership once)
 
+`wrangler rollback` only changes which Worker version is active. Queue
+consumers are queue-side attachments and cron schedules are trigger settings
+applied outside versions, so rolling back both Workers alone leaves
+`two-web-jobs` still owning both consumers and both crons. Move them back
+explicitly after the version rollbacks (same pre-handoff settings the web
+Worker ran with: `max_retries` 10, batch 10, timeout 5):
+
 ```bash
 # REMOTE MUTATION: run only after the incident's rollback decision.
 npx --no-install wrangler rollback "$GOOD_JOBS_VERSION" --name two-web-jobs -y
 npx --no-install wrangler rollback "$GOOD_WEB_VERSION" --name two-web-next -y
+
+# Move both consumers back to the web Worker.
+npx --no-install wrangler queues consumer remove two-sync-event two-web-jobs
+npx --no-install wrangler queues consumer remove two-internal-action two-web-jobs
+npx --no-install wrangler queues consumer add two-sync-event two-web-next \
+  --message-retries 10 --batch-size 10 --batch-timeout 5
+npx --no-install wrangler queues consumer add two-internal-action two-web-next \
+  --message-retries 10 --batch-size 10 --batch-timeout 5
+
+# Move both crons back: check out the pre-handoff wrangler.jsonc (it still
+# lists both schedules) and apply its triggers, then clear the jobs Worker's
+# schedules by applying its produce-only config from the same commit.
+# $PRE_HANDOFF_SHA is the pre-handoff main commit: the commit SHA the
+# pre-handoff Versions are tagged with (step-0 record, bin/revision-check.mjs).
+git show "$PRE_HANDOFF_SHA:wrangler.jsonc" > /tmp/rollback-wrangler.jsonc
+git show "$PRE_HANDOFF_SHA:wrangler.jobs.jsonc" > /tmp/rollback-wrangler.jobs.jsonc
+npx --no-install wrangler triggers deploy --config /tmp/rollback-wrangler.jsonc
+npx --no-install wrangler triggers deploy --config /tmp/rollback-wrangler.jobs.jsonc
+
+# Verify: exactly one consumer again (worker:two-web-next, once per queue).
 npx --no-install wrangler queues consumer list two-sync-event
 npx --no-install wrangler queues consumer list two-internal-action
-# Exactly one consumer again (worker:two-web-next at the pre-handoff
-# versions); resume delivery only if paused.
+npx --no-install wrangler deployments status --name two-web-next --json
+npx --no-install wrangler deployments status --name two-web-jobs --json
+curl -fsS https://next.togetherweown.com/up
+# Resume delivery only if paused.
 ```
 
 A Worker rollback does not undo schema, data, Discord side effects or queue
