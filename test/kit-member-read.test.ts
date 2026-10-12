@@ -4,6 +4,7 @@ import { __resetAlertRateLimitForTests } from "../src/alerts";
 import {
   declareMemberResult,
   keyedMemberRead,
+  MemberReadRefused,
   memberQueryPermit,
   memberReadResponse,
 } from "../src/member-reads";
@@ -170,9 +171,13 @@ describe("memberReadResponse (Kit boundary)", () => {
   it("refuses an undeclared query even when the handler catches the refusal", async () => {
     const { sink } = recorder();
     const res = await memberReadResponse(meta, declared(), sink, async () => {
+      let swallowed: unknown;
       try {
         memberQueryPermit();
-      } catch {}
+      } catch (err) {
+        swallowed = err;
+      }
+      expect(swallowed).toBeInstanceOf(MemberReadRefused);
       return new Response("<p>x</p>");
     });
     await expectRefused(res);
