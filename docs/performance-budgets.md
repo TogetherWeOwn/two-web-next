@@ -10,9 +10,10 @@ CI runs two independent jobs in `.github/workflows/ci.yml`:
   `ci/minify-assets.mjs --check` and fails on drift.
   `npm run check` also runs these checks.
 - `lighthouse`: pinned `@lhci/cli`, actual `wrangler dev --local`, three samples per
-  page, median assertions. Reports and assertion results (also on failure) are
-  uploaded as the `lighthouse-<sha>` GitHub artifact for 14 days. Uploads go to the
-  repository artifact store, not a public LHCI server.
+  page, mobile performance assertions, desktop Lighthouse category scores, and a
+  web-standards check. These checks fail the CI job when they fail. Reports and
+  assertion results (also on failure) are uploaded as the `lighthouse-<sha>` GitHub
+  artifact for 14 days in the repository artifact store, not a public LHCI server.
 
 The required `check` job depends on **both** performance jobs and runs with
 `if: always()`. Its first gate explicitly rejects failed, cancelled, skipped or
@@ -117,25 +118,57 @@ coverage of the legacy authenticated performance surfaces.
 
 ## Threshold policy
 
-`ci/lighthouserc.cjs` copies the legacy public-page thresholds and mobile profile:
+`ci/lighthouserc.cjs` defines the mobile public-page assertions below. Each
+metric uses the median of three runs; the performance category uses the median
+run score. The mobile performance category floor is read from
+`ci/quality-budget.json`.
 
-| Audit | Median ceiling | Severity |
+| Assertion | Threshold | Severity |
 |---|---:|---|
+| Performance category score (mobile) | 0.9 (90%) minimum | error |
 | Largest contentful paint | 2000 ms | error |
 | Cumulative layout shift | 0.1 | error |
 | Server response time (observed TTFB) | 600 ms | error |
-| Total blocking time | 300 ms | warning |
+| Total blocking time | 200 ms | error |
 | First contentful paint | 1800 ms | warning |
+
+The separate desktop category check uses the same category floors from
+`ci/quality-budget.json`:
+
+| Category | Minimum score |
+|---|---:|
+| performance | 0.9 (90%) |
+| accessibility | 0.95 (95%) |
+| best-practices | 0.95 (95%) |
+| seo | 0.95 (95%) |
 
 Mobile screen 412 × 823, scale 1.75, simulated Slow 4G (150 ms RTT,
 1638.4 Kbps throughput) and 4× CPU slowdown are unchanged. The observed TTFB
 tripwire prevents Lantern's per-origin simulation from hiding slow HTML responses.
-`test/performance-ci.test.ts` pins all thresholds, the phone profile and route set.
-`test/lighthouse-inventory.test.ts` fails when the worker allowlist
-(`ci/lighthouse-paths.ts`), the LHCI list and the admission list disagree, or when
-any of them drops one of the eight routes. The post-cutover watch
-(`npm run lighthouse:origin`) reuses the LHCI route list, so it measures the same
-eight routes on its allowlisted origin with the same thresholds.
+`test/performance-ci.test.ts` pins mobile thresholds, the phone profile and route
+set. `test/performance-budgets-snapshot.test.ts` pins the documented thresholds
+and category floors to their source configuration. `test/lighthouse-inventory.test.ts`
+fails when the worker allowlist (`ci/lighthouse-paths.ts`), the LHCI list and the
+admission list disagree, or when any of them drops one of the eight routes. The
+post-cutover watch (`npm run lighthouse:origin`) reuses the LHCI route list, so it
+measures the same eight routes on its allowlisted origin with the same thresholds.
+
+## Staging quality and journey gates
+
+The staging checks run after deployment and serve different purposes:
+
+| Check | What it verifies | Gate behavior |
+|---|---|---|
+| `staging-journeys` | Authenticated critical journeys against the deployed Worker; a journey ledger fails the job if every journey skips. | Post-deploy evidence, not a PR merge check. Docs-only and test-only deploys may skip it. Automatic production candidate resolution requires a successful `staging-journeys` result. |
+| `staging-quality` | Mobile Lighthouse performance assertions plus desktop Lighthouse category scores on the deployed origin. | Runs after every qualifying staging deploy, even when journeys are skipped. A Lighthouse assertion failure fails the check; automatic production candidate resolution also requires this job to pass. |
+| Web standards (`npm run standards -- --origin`) | Security headers, HTML basics and internal links. | Runs inside `staging-quality` and blocks it: a Web standards failure fails the job, like the Lighthouse budgets. |
+
+The staging origin runs use GET-only requests with no sign-in or writes, but
+they are not database-free: both Lighthouse runs measure `/events`, and the
+mobile run also measures the discovered `/e/<key>`. Those routes read the
+staging database, so a staging DB outage fails `staging-quality` and blocks
+promotion. Every check listed above blocks: a failure in any of them fails
+`staging-quality` and blocks promotion.
 
 The byte ceilings are specific to Next's unbundled assets, based on the measured
 2026-09-30 sizes documented in `ci/bundle-budget.json`, with roughly 25–45%
