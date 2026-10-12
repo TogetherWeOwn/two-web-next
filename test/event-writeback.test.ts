@@ -234,8 +234,16 @@ describe.skipIf(!process.env.DATABASE_URL)("event write-back through W13 (test c
         const m = delivery(body);
         await consume({ messages: [m] }, deps(bot));
         expect(m.ack).toHaveBeenCalledOnce();
-        expect(bot.cancelEvent).toHaveBeenCalledTimes(operation === "cancel" ? 1 : 0);
+        // A cancel of a never-mirrored event settles locally with no bot call
+        // (TOG-22698); mirrored publishes/edits still reach the bot.
+        expect(bot.cancelEvent).toHaveBeenCalledTimes(0);
         expect(bot.upsertEvent).toHaveBeenCalledTimes(operation === "cancel" ? 0 : 1);
+        if (operation === "cancel") {
+          expect(await pgEventStore(sql).needsSync(eventKey)).toBe(false);
+          expect(await sql`select discord_event_id from events`).toEqual([
+            { discord_event_id: null },
+          ]);
+        }
       });
     }
   }
@@ -331,8 +339,10 @@ describe.skipIf(!process.env.DATABASE_URL)("event write-back through W13 (test c
     expect(body.idempotencyKey).toBe(built.idempotencyKey);
     const bot = botDouble();
     await consume({ messages: [delivery(body)] }, deps(bot));
-    expect(bot.cancelEvent).toHaveBeenCalledExactlyOnceWith({ eventKey }, built.idempotencyKey);
+    // Never-mirrored (no Discord object yet): local settlement, no bot call.
+    expect(bot.cancelEvent).not.toHaveBeenCalled();
     expect(bot.upsertEvent).not.toHaveBeenCalled();
+    expect(await pgEventStore(sql).needsSync(eventKey)).toBe(false);
   });
 
   it("the actual worker drops a row changed to draft before consumption", async () => {
@@ -571,10 +581,8 @@ describe.skipIf(!process.env.DATABASE_URL)("event write-back through W13 (test c
     expect(sent[1]!.body.idempotencyKey).not.toBe(original.idempotencyKey);
     expect(await events.needsSync(eventKey)).toBe(true);
     await consume({ messages: [delivery(sent[1]!.body)] }, deps(bot));
-    expect(bot.cancelEvent).toHaveBeenCalledExactlyOnceWith(
-      { eventKey },
-      sent[1]!.body.idempotencyKey,
-    );
+    // Never-mirrored successor cancel settles locally with no bot call.
+    expect(bot.cancelEvent).not.toHaveBeenCalled();
     expect(await events.needsSync(eventKey)).toBe(false);
     expect(
       await sql`select state, request_attempts from event_sync_attempts order by revision`,

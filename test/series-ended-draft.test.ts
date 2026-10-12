@@ -229,6 +229,7 @@ describe.skipIf(!process.env.DATABASE_URL)("series ended-draft publication (agen
     expect(sent).toHaveLength(1);
     expect(sent[0]).toMatchObject({ kind: "sync-event", eventKey: parent.eventKey });
     // The consumer decides the action from the row at send time: cancelled → event.cancel.
+    // Never-mirrored (draft parent, no Discord object): local settlement, no bot call.
     const calls: string[] = [];
     const bot = {
       cancelEvent: async (p: { eventKey: string }) => (
@@ -249,7 +250,7 @@ describe.skipIf(!process.env.DATABASE_URL)("series ended-draft publication (agen
     } finally {
       await sql.end({ timeout: 1 });
     }
-    expect(calls).toEqual([`cancel:${parent.eventKey}`]);
+    expect(calls).toEqual([]);
   });
 
   it("POST publish refuses a series-child draft of an ended parent the same way", async () => {
