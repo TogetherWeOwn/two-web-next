@@ -54,6 +54,93 @@ function isInspectable(value: object): boolean {
   return proto === Object.prototype || proto === null;
 }
 
+/** The built-in prototype an inspectable subclass chain must end at. */
+function builtinPrototypeFor(value: object): object | null {
+  if (Array.isArray(value)) return Array.prototype;
+  if (value instanceof Error) return Error.prototype;
+  if (value instanceof Map) return Map.prototype;
+  if (value instanceof Set) return Set.prototype;
+  if (value instanceof RegExp) return RegExp.prototype;
+  return null;
+}
+
+/**
+ * Intermediate prototypes between a value and its built-in prototype, in
+ * chain order. Both the formatter check and the constructor-name read use
+ * this one walk so the two cannot drift apart. Anything unreadable fails
+ * closed with "prototype unreadable".
+ */
+function intermediatePrototypes(value: object): { chain: object[] } | { unreadable: string } {
+  let builtin: object | null;
+  try {
+    builtin = builtinPrototypeFor(value);
+  } catch {
+    return { unreadable: "prototype unreadable" };
+  }
+  if (builtin === null) return { chain: [] };
+  const chain: object[] = [];
+  let proto: object | null;
+  try {
+    proto = Object.getPrototypeOf(value);
+  } catch {
+    return { unreadable: "prototype unreadable" };
+  }
+  while (proto !== null && proto !== builtin) {
+    chain.push(proto);
+    try {
+      proto = Object.getPrototypeOf(proto);
+    } catch {
+      return { unreadable: "prototype unreadable" };
+    }
+  }
+  return { chain };
+}
+
+/**
+ * A subclass can print through prototype state that own-state reads miss: a
+ * formatter (`%s` calls `toString`, `util.inspect` calls
+ * `nodejs.util.inspect.custom`), a data value (`Symbol.toStringTag` prints as
+ * `[tag]`, any other plain value prints under `%o`), or the constructor name
+ * (Map/Array tag `Name(n)`, Error stack prefix `Name: message`). Walk each
+ * intermediate prototype up to the built-in one; any own key there (other than
+ * `constructor`) means the printed form is not fully visible here. Returns a
+ * reason when opaque, null when the chain is clean.
+ * Ruling: Error `name`, `message`, `stack` and `cause` are read explicitly via
+ * `Reflect.get` (so a prototype accessor for one of those still reports its hit
+ * and is not treated as hidden state); every other prototype own key is opaque.
+ * Constructor names are read as text separately in `inspect`, so a marker in
+ * the name is a hit. Mark incomplete but keep reading own state, so a covered
+ * Error field still reports its hit; either entry alone fails the clean check.
+ */
+function prototypeFormatterReason(value: object): string | null {
+  const walked = intermediatePrototypes(value);
+  if ("unreadable" in walked) return walked.unreadable;
+  for (const current of walked.chain) {
+    let keys: (string | symbol)[];
+    try {
+      keys = Reflect.ownKeys(current);
+    } catch {
+      return "prototype unreadable";
+    }
+    const isError = value instanceof Error;
+    for (const key of keys) {
+      if (key === "constructor") continue;
+      if (isError && (key === "name" || key === "message" || key === "stack" || key === "cause")) {
+        continue;
+      }
+      let descriptor: PropertyDescriptor | undefined;
+      try {
+        descriptor = Reflect.getOwnPropertyDescriptor(current, key);
+      } catch {
+        return "prototype unreadable";
+      }
+      if (!descriptor) continue;
+      return "opaque prototype formatter";
+    }
+  }
+  return null;
+}
+
 /** Reads every string a call can print, now, and lists each place that cannot be read. */
 function inspect(args: unknown[], prefix: string): Pick<DiagnosticRecord, "texts" | "incomplete"> {
   const texts: DiagnosticRecord["texts"] = [];
@@ -99,6 +186,67 @@ function inspect(args: unknown[], prefix: string): Pick<DiagnosticRecord, "texts
       return stop(path, "prototype unreadable");
     }
     if (!inspectable) return stop(path, "opaque object");
+    try {
+      const formatter = prototypeFormatterReason(value);
+      if (formatter) stop(path, formatter);
+    } catch {
+      return stop(path, "prototype unreadable");
+    }
+    // Node prints the subclass constructor name (Map/Array `Name(n)` tag, Error
+    // stack prefix `Name: message`) but own-state reads never see it. Read each
+    // intermediate constructor's `name` as text so a marker there is a hit;
+    // anything unreadable or non-string fails closed.
+    try {
+      const walked = intermediatePrototypes(value);
+      if ("unreadable" in walked) {
+        stop(path, walked.unreadable);
+      } else {
+        for (const currentNode of walked.chain) {
+          let ctorDescriptor: PropertyDescriptor | undefined;
+          try {
+            ctorDescriptor = Reflect.getOwnPropertyDescriptor(currentNode, "constructor");
+          } catch {
+            stop(path, "prototype unreadable");
+            break;
+          }
+          if (ctorDescriptor) {
+            if ("value" in ctorDescriptor) {
+              const ctor = ctorDescriptor.value;
+              if (typeof ctor === "function") {
+                let nameDescriptor: PropertyDescriptor | undefined;
+                try {
+                  nameDescriptor = Reflect.getOwnPropertyDescriptor(ctor, "name");
+                } catch {
+                  stop(path, "prototype unreadable");
+                }
+                if (nameDescriptor) {
+                  if ("value" in nameDescriptor) {
+                    if (typeof nameDescriptor.value === "string") {
+                      if (nameDescriptor.value.length > 0) {
+                        texts.push({ path: `${path}.<constructor>`, text: nameDescriptor.value });
+                      }
+                    } else {
+                      stop(path, "opaque prototype formatter");
+                    }
+                  } else {
+                    stop(path, "opaque prototype formatter");
+                  }
+                }
+              } else {
+                if (typeof ctor === "string") {
+                  texts.push({ path: `${path}.<constructor>`, text: ctor });
+                }
+                stop(path, "opaque prototype formatter");
+              }
+            } else {
+              stop(path, "opaque prototype formatter");
+            }
+          }
+        }
+      }
+    } catch {
+      stop(path, "prototype unreadable");
+    }
     if (value instanceof RegExp) texts.push({ path, text: value.source });
 
     const readInto = (key: PropertyKey, childPath: string) => {
