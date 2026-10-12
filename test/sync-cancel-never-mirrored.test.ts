@@ -1,4 +1,4 @@
-// Never-mirrored cancel skips the bot (TOG-22698).
+// Never-mirrored cancel skips the bot.
 //
 // Legacy SyncEventToDiscord never calls the bot when a cancelled event was
 // never mirrored (discord_event_id null); it stamps RSVPs locally and resolves

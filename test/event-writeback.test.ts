@@ -234,8 +234,8 @@ describe.skipIf(!process.env.DATABASE_URL)("event write-back through W13 (test c
         const m = delivery(body);
         await consume({ messages: [m] }, deps(bot));
         expect(m.ack).toHaveBeenCalledOnce();
-        // A cancel of a never-mirrored event settles locally with no bot call
-        // (TOG-22698); mirrored publishes/edits still reach the bot.
+        // A cancel of a never-mirrored event settles locally with no bot call;
+        // mirrored publishes/edits still reach the bot.
         expect(bot.cancelEvent).toHaveBeenCalledTimes(0);
         expect(bot.upsertEvent).toHaveBeenCalledTimes(operation === "cancel" ? 0 : 1);
         if (operation === "cancel") {
