@@ -1,4 +1,4 @@
-// W15 acceptance-ledger citation pins (TOG-22335).
+// W15 acceptance-ledger citation pins.
 // docs/w15-events-acceptance-ledger.md cites src/test file:line ranges as
 // implementation evidence. After the admin store split, two ranges pointed
 // past the end of src/admin/store.ts (a 30-line re-export barrel). This
@@ -54,7 +54,7 @@ describe("w15 acceptance-ledger citations resolve within EOF", () => {
   });
 });
 
-describe("w15 acceptance-ledger lifecycle row (TOG-22335)", () => {
+describe("w15 acceptance-ledger lifecycle row", () => {
   it("points refused cancel/reopen at the store-event-writes implementations", () => {
     const doc = read(LEDGER);
     const row = doc.split("\n").find((line) => line.includes("EventLifecycleTest.php"));
@@ -78,7 +78,7 @@ describe("w15 acceptance-ledger lifecycle row (TOG-22335)", () => {
   });
 });
 
-describe("w15 acceptance-ledger A2 row (TOG-22335)", () => {
+describe("w15 acceptance-ledger A2 row", () => {
   it("cites the occupied-seat capacity error where it now lives", () => {
     const doc = read(LEDGER);
     const row = doc.split("\n").find((line) => line.startsWith("| A2 "));
