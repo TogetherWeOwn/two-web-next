@@ -91,4 +91,12 @@ describe("admin new-event dirty navigation", () => {
     expect(b.values.get("title")).toBe("Rejected draft");
     expect(b.navigate("save").preventDefault).not.toHaveBeenCalled();
   });
+
+  it("cancels a repeated Save, so a double click creates one draft", () => {
+    const html = form(NEW);
+    expect(html).toContain('<script src="/islands/admin-event-editor.js" defer=""></script>');
+    const b = eventEditorBrowser({ initial: NEW });
+    const submits = [b.submit(), b.submit(), b.submit()];
+    expect(submits.filter((s) => !s.defaultPrevented)).toHaveLength(1);
+  });
 });
