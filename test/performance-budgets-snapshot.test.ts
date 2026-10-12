@@ -95,16 +95,23 @@ describe("performance budgets snapshot path", () => {
       const [severity, assertion] = thresholds[audit]!;
       const line = flat.split("\n").find((row) => row.startsWith(`| ${label} |`));
       expect(line, `threshold row for ${label}`).toBeDefined();
+      const cells = line!.split("|").map((cell) => cell.trim());
       const ceiling =
         audit === "cumulative-layout-shift"
           ? String(assertion.maxNumericValue)
           : `${assertion.maxNumericValue} ms`;
-      expect(line!).toContain(ceiling);
-      expect(line!).toContain(severity === "warn" ? "warning" : severity);
+      // Exact cell match: a substring check cannot tell "200 ms" from "1200 ms".
+      expect(cells[2], `threshold cell for ${label}`).toBe(ceiling);
+      expect(cells[3], `severity cell for ${label}`).toBe(
+        severity === "warn" ? "warning" : severity,
+      );
     }
 
-    expect(lineFor(/^\| Performance category score \(mobile\) \|/)).toContain(
-      `${qualityBudget.mobilePerformance} (${qualityBudget.mobilePerformance * 100}%)`,
+    const mobileScore = lineFor(/^\| Performance category score \(mobile\) \|/)
+      .split("|")
+      .map((cell) => cell.trim());
+    expect(mobileScore[2], "mobile score cell").toBe(
+      `${qualityBudget.mobilePerformance} (${qualityBudget.mobilePerformance * 100}%) minimum`,
     );
     expect(lighthouse.assert.assertions["categories:performance"][1].minScore).toBe(
       qualityBudget.mobilePerformance,
@@ -113,8 +120,10 @@ describe("performance budgets snapshot path", () => {
 
   it("documents every desktop quality category floor", () => {
     for (const [category, score] of Object.entries(qualityBudget.categories)) {
-      const line = lineFor(new RegExp(`^\\| ${category} \\|`));
-      expect(line).toContain(`${score} (${score * 100}%)`);
+      const cells = lineFor(new RegExp(`^\\| ${category} \\|`))
+        .split("|")
+        .map((cell) => cell.trim());
+      expect(cells[2], `${category} floor cell`).toBe(`${score} (${score * 100}%)`);
     }
   });
 
@@ -124,12 +133,32 @@ describe("performance budgets snapshot path", () => {
     expect(doc).toMatch(/\| Web standards \([^\n]*informational/i);
     expect(stagingWorkflow).toContain("name: staging-journeys");
     expect(stagingWorkflow).toContain("name: staging-quality");
-    expect(originWorkflow).toContain(
-      "name: Web standards (security headers, HTML basics, internal links)",
+    // Pin workflow behaviour, not comment prose: rewrapping a header comment
+    // must not fail this test, while a gating change must.
+    const journeysBlock = stagingWorkflow
+      .split("    name: staging-journeys\n")[1]
+      ?.split("\n  staging-quality:\n")[0];
+    expect(journeysBlock, "staging-journeys job block").toBeDefined();
+    expect(journeysBlock!).toContain("needs.scope.outputs.skip_e2e != 'true'");
+    const qualityBlock = stagingWorkflow.split("    name: staging-quality\n")[1];
+    expect(qualityBlock, "staging-quality job block").toBeDefined();
+    expect(qualityBlock!).not.toContain("skip_e2e");
+    const originStep = (name: string): string => {
+      const block = originWorkflow.split(`      - name: ${name}\n`)[1]?.split(/\n      - /)[0];
+      expect(block, `Missing origin workflow step: ${name}`).toBeDefined();
+      return block as string;
+    };
+    const mobileStep = originStep("Lighthouse performance budgets (mobile, ci/lighthouserc.cjs)");
+    const desktopStep = originStep(
+      "Lighthouse quality scores (desktop, categories vs ci/quality-budget.json)",
     );
-    expect(originWorkflow).toMatch(
-      /continue-on-error: true[\s\S]*?run: npm run standards -- --origin/,
+    const standardsStep = originStep(
+      "Web standards (security headers, HTML basics, internal links)",
     );
+    expect(mobileStep).not.toContain("continue-on-error");
+    expect(desktopStep).not.toContain("continue-on-error");
+    expect(standardsStep).toContain("continue-on-error: true");
+    expect(standardsStep).toContain("run: npm run standards -- --origin");
     expect(ciWorkflow).toContain(
       "name: Web standards (security headers, HTML basics, internal links)",
     );
@@ -137,8 +166,6 @@ describe("performance budgets snapshot path", () => {
       .split("name: Web standards (security headers, HTML basics, internal links)")[1]!
       .split("- name:")[0]!;
     expect(ciStandards).not.toContain("continue-on-error");
-    expect(stagingWorkflow).toContain("Docs-only and test-only deploys");
-    expect(stagingWorkflow).toContain("e2e-staging gates no merge");
     expect(promotionResolver).toContain('passed("staging-journeys") && passed("staging-quality")');
   });
 });

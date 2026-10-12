@@ -163,9 +163,12 @@ The staging checks run after deployment and serve different purposes:
 | `staging-quality` | Mobile Lighthouse performance assertions plus desktop Lighthouse category scores on the deployed origin. | Runs after every qualifying staging deploy, even when journeys are skipped. A Lighthouse assertion failure fails the check; automatic production candidate resolution also requires this job to pass. |
 | Web standards (`npm run standards -- --origin`) | Security headers, HTML basics and internal links. | Runs inside `staging-quality`, but is informational (`continue-on-error: true`) until the staging edge preserves the Worker CSP/XFO headers; its failure alone does not fail the job. |
 
-The staging origin runs use GET-only requests and database-free routes. The
-standards check is intentionally the only non-blocking step listed above; the
-Lighthouse assertions remain blocking.
+The staging origin runs use GET-only requests with no sign-in or writes, but
+they are not database-free: both Lighthouse runs measure `/events`, and the
+mobile run also measures the discovered `/e/<key>`. Those routes read the
+staging database, so a staging DB outage fails `staging-quality` and blocks
+promotion. The standards check is intentionally the only non-blocking step
+listed above; the Lighthouse assertions remain blocking.
 
 The byte ceilings are specific to Next's unbundled assets, based on the measured
 2026-09-30 sizes documented in `ci/bundle-budget.json`, with roughly 25–45%
