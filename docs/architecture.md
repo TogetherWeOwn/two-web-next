@@ -193,8 +193,12 @@ Read from: [web/package.json](../web/package.json),
 
 - [web/](../web/) (`two-web-next-kit` in
   [web/package.json](../web/package.json)) is the experimental SvelteKit
-  strangler preview, not the primary Worker: unported routes fall through to
-  the unchanged Hono app
+  strangler preview, not the primary Worker: the hook
+  ([web/src/hooks.server.ts](../web/src/hooks.server.ts)) picks exactly one
+  renderer per request from the method-aware manifest in
+  [src/route-ownership.ts](../src/route-ownership.ts) before Kit resolve,
+  and Hono-owned paths (the default, including disabled native routes and the
+  reserved APIs) go to the unchanged in-process Hono app
   ([web/src/lib/server/hono.ts](../web/src/lib/server/hono.ts)). Status:
   experimental spike, not serving production traffic.
 - [spike/](../spike/) holds the Hyperdrive-semantics probe only. Status:
@@ -287,6 +291,7 @@ exactly once.
 | `src/request-log.ts` | observability |
 | `src/return-journey.ts` | auth |
 | `src/roles.ts` | auth |
+| `src/route-ownership.ts` | entry |
 | `src/rules-last-updated.ts` | content |
 | `src/same-origin.ts` | http-guard |
 | `src/screens/` | content |

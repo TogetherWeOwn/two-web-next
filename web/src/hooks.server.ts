@@ -1,6 +1,7 @@
 import type { Handle } from "@sveltejs/kit/hooks";
 import { env } from "cloudflare:workers";
 import { robotsTagFor, securityHeadersFor } from "../../src/headers";
+import { decideOwner } from "../../src/route-ownership";
 import { isTrustedHost } from "../../src/trust-hosts";
 import { honoFetch } from "#lib/server/hono.ts";
 
@@ -12,6 +13,13 @@ export const handle: Handle = async ({ event, resolve }) => {
   // Untrusted Host: Hono's trustHosts() refuses it with the branded 404, so the
   // refusal stays byte-identical whichever framework owns the path.
   if (!isTrustedHost(env.APP_URL, [event.request.headers.get("host"), event.url.host])) {
+    return honoFetch(event.request);
+  }
+  // Exact route ownership, decided before Kit resolve and before any auth/body
+  // read: a Hono-owned path (including a disabled native route) never reaches
+  // resolve(), a Kit-owned path never reaches Hono. Exactly one renderer runs;
+  // a resolve() failure propagates and is never replayed through the other.
+  if (decideOwner(event.request) === "hono") {
     return honoFetch(event.request);
   }
   const response = await resolve(event);
