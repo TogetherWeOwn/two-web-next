@@ -117,6 +117,8 @@
     var focusAtStart = document.activeElement;
     if (active) active.abort();
     var controller = new AbortController();
+    // Back/forward reads must not be skipped by the fragment-only popstate rule.
+    controller.fromHistory = !push;
     active = controller;
     var focusMoved = false;
     var trackFocus =
@@ -372,8 +374,13 @@
   });
 
   window.addEventListener("popstate", function () {
-    cancelDebounce();
     var url = calendarHref(window.location.href);
+    // A fragment-only navigation (the skip link to #main) also fires popstate.
+    // It leaves path and query on the rendered page, so there is nothing to
+    // restore: no request, no skeleton, no touch to the box or its debounce.
+    // An in-flight Back/forward read still owns the zones and must be replaced.
+    if (url && pageAddress(url) === renderedAddress && !(active && active.fromHistory)) return;
+    cancelDebounce();
     if (url) load(url, false, { skeleton: true, syncInput: true });
   });
 })();

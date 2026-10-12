@@ -1390,6 +1390,54 @@ describe("EventsCalendar shipped binder request/state drift", () => {
     expect(b.feedback.textContent).toBe(EVENTS_CALENDAR_FETCH_FAILED);
   });
 
+  it("ignores a fragment-only popstate: no request, no skeleton, debounce and input untouched", async () => {
+    const b = browser("/events?q=old");
+    b.input.value = "newer";
+    b.inputEvent();
+    b.location.href = APP_URL + "/events?q=old#main"; // skip link to #main
+    b.popstate();
+    expect(b.requests).toHaveLength(0);
+    expect(b.skeleton.hidden).toBe(true);
+    expect(b.input.value).toBe("newer");
+    expect(b.reloads).toEqual([]);
+    b.fireTimer(); // the pending debounce still runs its search
+    expect(b.requests).toHaveLength(1);
+    expect(b.requests[0]!.url).toBe("/events?q=newer");
+  });
+
+  it("ignores a fragment-only popstate while a pushed navigation is in flight", async () => {
+    const b = browser();
+    b.clickLink("/events?past=1");
+    b.location.href = APP_URL + "/events#main";
+    b.popstate();
+    expect(b.requests).toHaveLength(1);
+    expect(b.requests[0]!.init.signal!.aborted).toBe(false);
+    b.finish(0, "/events?past=1", { content: ["past"] });
+    await b.settle();
+    expect(b.history).toEqual(["/events?past=1"]);
+    expect(b.zones.content.childNodes).toEqual(["past"]);
+  });
+
+  it("still reloads on Back and forward whose path or query differs from the rendered page", async () => {
+    const b = browser("/events?q=old");
+    b.location.href = APP_URL + "/events?q=other#main";
+    b.popstate();
+    expect(b.requests.map((r) => r.url)).toEqual(["/events?q=other"]);
+    expect(b.skeleton.hidden).toBe(false);
+  });
+
+  it("still reloads when Forward returns to the rendered address while an earlier Back read is in flight", async () => {
+    const b = browser("/events?q=old");
+    b.location.href = APP_URL + "/events"; // Back
+    b.popstate();
+    b.location.href = APP_URL + "/events?q=old"; // Forward before Back's read settles
+    b.popstate();
+    expect(b.requests).toHaveLength(2);
+    expect(b.requests[0]!.init.signal!.aborted).toBe(true);
+    expect(b.requests[1]!.url).toBe("/events?q=old");
+    expect(b.requests[1]!.init.signal!.aborted).toBe(false);
+  });
+
   it("cancels pending debounce before a slow Back restoration", async () => {
     const b = browser("/events?q=old");
     b.input.value = "new";
