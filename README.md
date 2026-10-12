@@ -229,10 +229,15 @@ proof of environment isolation. The separate `env.production` block below
 configures the production Worker; it is not authorization for a deployment,
 database probe or production test.
 
-### Production (live service, gated manual deployment)
+### Production (not live: gated manual deployment, cutover pending)
 
-TWO Web Next is live in production. Changes reach it only through
-`.github/workflows/deploy-production.yml`, which stays gated and requires a
+TWO Web Next is not yet live in production; the apex is still served by the
+legacy stack and the cutover is pending (see `docs/cutover-gates.md`, currently
+NO-GO, and `docs/releases.md`: the cutover promote cuts `v1.0.0`, which does
+not exist yet). Worker code reaches production only through
+`.github/workflows/deploy-production.yml` (rollbacks through
+`.github/workflows/rollback-production.yml`; production migrations through
+`.github/workflows/db-migrate.yml`), all behind the same gate, and each requires a
 manually authorized dispatch. The workflow accepts only `workflow_dispatch` on
 `main`; it never deploys on push, PR or release. Before the deploy job can start,
 `ci/production-deploy-gate.mjs` requires the repository variable
@@ -258,17 +263,19 @@ requires HTTP 200 with `db:ok` and `pending_migrations:0`, accepting
 degraded/unknown queue states like staging, and the remaining 15 routes assert
 status/body/CSP/nosniff/content-type/redirect plus the apex indexing posture
 (indexable HTML omits the staging noindex). No auth, no writes, no PII.
-The smoke runs only inside an authorized production deployment run. Do not
-run it, or any other probe or test, against production by hand; tests and
-probes stay staging-only.
+The smoke runs only inside an authorized production deployment run. Routine
+tests and probes stay staging-only; production live checks run only inside the
+authorized cutover (`docs/cutover-check.md`) or incident (`docs/runbook.md`)
+procedures.
 
-`env.production` in `wrangler.jsonc` configures the production Worker. Never
-deploy it outside the gated workflow:
+`env.production` in `wrangler.jsonc` is a cutover template for the production
+Worker, not a live deployment. Never deploy it outside the gated workflow:
 
 - Worker: `two-web-next-production`; workers.dev and preview URLs disabled.
 - Route/origin: `togetherweown.com` / `https://togetherweown.com`, the intended
-  apex. Deploying claims that custom domain, so deploy only through the gated
-  workflow.
+  apex placeholder target. Defining it does not flip DNS; deploying would
+  claim that custom domain, so deploy only through the gated workflow once
+  cutover is authorized.
 - Hyperdrive `DB`: the separately named `two-web-next-production` Hyperdrive
   with its provisioned id in `wrangler.jsonc` `env.production`, distinct from
   the staging Hyperdrive. The all-zero id `00000000000000000000000000000000`
@@ -276,7 +283,7 @@ deploy it outside the gated workflow:
   lives in config or deploys.
 - Queues: `two-web-next-production-sync-event` and
   `two-web-next-production-internal-action` are reserved, unprovisioned names;
-  provision both separately from staging. Producers and consumers
+  provision both separately from staging before cutover. Producers and consumers
   use these names; crons match staging (every ten minutes, midnight UTC).
 - Vars are explicit because environment bindings/vars do not inherit. Register
   the production Discord callback; provision secrets for the production Worker
@@ -297,12 +304,13 @@ variables only in the credential check and deployment steps. Missing/empty value
 are rejected before deployment, so absent production secrets cannot fall back to
 the staging secret names. No secret values are printed.
 
-Keep `PRODUCTION_DEPLOY_ENABLED` unset/false except while a deployment is
-authorized, including applicable organization and Environment values. The
+Keep `PRODUCTION_DEPLOY_ENABLED` unset/false except while a deployment or
+rollback is authorized, including applicable organization and Environment values.
+Both the deploy and rollback gates require the flag to be exactly `true`. The
 workflow's `vars` expression resolves configuration across scopes:
 repository/Environment absence alone does not prove the effective flag is
 disabled. Verify the organization's value and repo visibility before
-authorizing a deployment; keep the repository value unset/false otherwise.
+authorizing a deployment or rollback; keep the repository value unset/false otherwise.
 GitHub YAML alone does **not** install review protection.
 A failed protection lookup must be resolved with the existing credential's
 provisioning owner, not by removing the check or substituting credentials.
