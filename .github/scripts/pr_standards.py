@@ -19,7 +19,9 @@ Environment contract (every value is a plain string):
 
 Title format, an empty body and a missing required card reference are always errors: they are the
 standard the org already enforces. On a public repo the strict title/body subset (tracker ids,
-instance UI links, the internal host) also always fails, comments included. Everything else new
+instance UI links, the internal host) also always fails, comments included. Tracker ids and
+instance UI links match case-sensitively in prose; the internal host matches
+case-insensitively (hostnames are case-insensitive). Everything else new
 is `PR_STANDARDS_MODE` so a repo can land the gate in warn mode, clear its open PRs, then flip
 one line to `error`.
 """
@@ -60,7 +62,7 @@ COMMENT = re.compile(r"<!--.*?-->", re.S)
 # title/body check, regardless of PR_STANDARDS_MODE.
 # The remaining fixed patterns (agent links, localhost, private-network addresses, tailnet names)
 # stay at PR_STANDARDS_MODE: they are common in legitimate verification prose.
-HOST_INTERNAL = (re.compile(r"\binfextion\.net\b"), "the internal Paperclip host")
+HOST_INTERNAL = (re.compile(r"\binfextion\.net\b", re.I), "the internal Paperclip host")
 STRICT_FIXED = [INSTANCE_UI, HOST_INTERNAL]
 OTHER_FIXED = [
     (re.compile(r"\bagent://"), "an agent:// link"),
@@ -150,9 +152,10 @@ def internal_hits(text, prefixes, slug=False):
 def strict_hits(text, prefixes):
     """Fail-closed subset for public title/body: tracker ids, instance UI links, internal host.
 
-    Always case-sensitive in prose. Returns label strings naming each strict hit,
-    without echoing the matched value. The raw text is scanned: an id, link or host
-    inside an HTML comment is still published text."""
+    Tracker ids and instance UI links stay case-sensitive in prose; the internal host
+    matches case-insensitively (hostnames are case-insensitive). Returns label strings
+    naming each strict hit, without echoing the matched value. The raw text is scanned:
+    an id, link or host inside an HTML comment is still published text."""
     hits = []
     m = ticket_id_pattern(prefixes, slug=False).search(text)
     if m:
