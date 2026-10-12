@@ -6,6 +6,11 @@ import type { Env, Session } from "../env";
 import { loginUrl, wallDateIso, wallTimeHm } from "../islands/contracts";
 import { safeNext } from "../join/service";
 import { throttleGuard } from "../throttle";
+import {
+  PUBLIC_EVENT_STATUS,
+  type PublicEventDto,
+  type PublicEventId,
+} from "../public-data/contracts";
 import type { PublicEvent } from "./reads";
 
 export type Ctx = Context<{ Bindings: Env }>;
@@ -46,6 +51,15 @@ export function eventJson(e: PublicEvent) {
     status: e.status,
     rsvp_open: e.rsvpOpen,
     synced_to_discord: e.discordEventId !== null,
+  };
+}
+
+/** Public collection projection; callers must filter to published rows in SQL first. */
+export function publicEventJson(e: PublicEvent): PublicEventDto {
+  return {
+    ...eventJson(e),
+    event_key: e.eventKey as PublicEventId,
+    status: PUBLIC_EVENT_STATUS,
   };
 }
 
