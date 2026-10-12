@@ -384,6 +384,38 @@ describe("diagnostic stream capture", () => {
     expect(hits).toEqual(["warn[0].args[1].<constructor>"]);
     expect(incomplete).toEqual([]);
   });
+
+  it.each([
+    [
+      "static name method",
+      () => {
+        class StaticNameMethodMap extends Map<string, string> {
+          static name(): string {
+            return MARK;
+          }
+        }
+        return new StaticNameMethodMap([["k", "v"]]);
+      },
+    ],
+    [
+      "static name getter",
+      () => {
+        class StaticNameGetterMap extends Map<string, string> {
+          static get name(): string {
+            return MARK;
+          }
+        }
+        return new StaticNameGetterMap([["k", "v"]]);
+      },
+    ],
+  ])("reports a Map subclass %s as opaque, never clean", (_name, value) => {
+    const records = captureDiagnosticStream();
+    console.warn("opaque", value());
+    const { hits, incomplete } = scanDiagnosticStream(records, MARKERS);
+    expect(hits).toEqual([]);
+    expect(incomplete).toHaveLength(1);
+    expect(incomplete[0]).toContain("opaque");
+  });
 });
 
 describe("withheld", () => {

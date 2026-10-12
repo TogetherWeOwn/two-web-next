@@ -65,6 +65,38 @@ function builtinPrototypeFor(value: object): object | null {
 }
 
 /**
+ * Intermediate prototypes between a value and its built-in prototype, in
+ * chain order. Both the formatter check and the constructor-name read use
+ * this one walk so the two cannot drift apart. Anything unreadable fails
+ * closed with "prototype unreadable".
+ */
+function intermediatePrototypes(value: object): { chain: object[] } | { unreadable: string } {
+  let builtin: object | null;
+  try {
+    builtin = builtinPrototypeFor(value);
+  } catch {
+    return { unreadable: "prototype unreadable" };
+  }
+  if (builtin === null) return { chain: [] };
+  const chain: object[] = [];
+  let proto: object | null;
+  try {
+    proto = Object.getPrototypeOf(value);
+  } catch {
+    return { unreadable: "prototype unreadable" };
+  }
+  while (proto !== null && proto !== builtin) {
+    chain.push(proto);
+    try {
+      proto = Object.getPrototypeOf(proto);
+    } catch {
+      return { unreadable: "prototype unreadable" };
+    }
+  }
+  return { chain };
+}
+
+/**
  * A subclass can print through prototype state that own-state reads miss: a
  * formatter (`%s` calls `toString`, `util.inspect` calls
  * `nodejs.util.inspect.custom`), a data value (`Symbol.toStringTag` prints as
@@ -81,24 +113,9 @@ function builtinPrototypeFor(value: object): object | null {
  * Error field still reports its hit; either entry alone fails the clean check.
  */
 function prototypeFormatterReason(value: object): string | null {
-  let builtin: object | null;
-  try {
-    builtin = builtinPrototypeFor(value);
-  } catch {
-    return "prototype unreadable";
-  }
-  if (builtin === null) return null;
-  let proto: unknown;
-  try {
-    proto = Object.getPrototypeOf(value);
-  } catch {
-    return "prototype unreadable";
-  }
-  while (proto !== null && proto !== builtin) {
-    if ((typeof proto !== "object" || proto === null) && typeof proto !== "function") {
-      return "prototype unreadable";
-    }
-    const current = proto as object;
+  const walked = intermediatePrototypes(value);
+  if ("unreadable" in walked) return walked.unreadable;
+  for (const current of walked.chain) {
     let keys: (string | symbol)[];
     try {
       keys = Reflect.ownKeys(current);
@@ -119,11 +136,6 @@ function prototypeFormatterReason(value: object): string | null {
       }
       if (!descriptor) continue;
       return "opaque prototype formatter";
-    }
-    try {
-      proto = Object.getPrototypeOf(current);
-    } catch {
-      return "prototype unreadable";
     }
   }
   return null;
@@ -185,18 +197,11 @@ function inspect(args: unknown[], prefix: string): Pick<DiagnosticRecord, "texts
     // intermediate constructor's `name` as text so a marker there is a hit;
     // anything unreadable or non-string fails closed.
     try {
-      const builtinForName = builtinPrototypeFor(value);
-      if (builtinForName !== null) {
-        let protoNode: unknown = Object.getPrototypeOf(value);
-        while (protoNode !== null && protoNode !== builtinForName) {
-          if (
-            (typeof protoNode !== "object" || protoNode === null) &&
-            typeof protoNode !== "function"
-          ) {
-            stop(path, "prototype unreadable");
-            break;
-          }
-          const currentNode = protoNode as object;
+      const walked = intermediatePrototypes(value);
+      if ("unreadable" in walked) {
+        stop(path, walked.unreadable);
+      } else {
+        for (const currentNode of walked.chain) {
           let ctorDescriptor: PropertyDescriptor | undefined;
           try {
             ctorDescriptor = Reflect.getOwnPropertyDescriptor(currentNode, "constructor");
@@ -236,12 +241,6 @@ function inspect(args: unknown[], prefix: string): Pick<DiagnosticRecord, "texts
             } else {
               stop(path, "opaque prototype formatter");
             }
-          }
-          try {
-            protoNode = Object.getPrototypeOf(currentNode);
-          } catch {
-            stop(path, "prototype unreadable");
-            break;
           }
         }
       }
