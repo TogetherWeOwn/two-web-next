@@ -180,8 +180,13 @@ applied outside versions, so rolling back both Workers alone leaves
 `two-web-jobs` still owning both consumers and both crons. Move them back
 explicitly after the version rollbacks (same pre-handoff settings the web
 Worker ran with: `max_retries` 10, batch 10, timeout 5). First freeze the deploy lane
-until the cause is fixed: run `gh workflow disable deploy` before anything else,
-and re-enable it (`gh workflow enable deploy`) explicitly afterwards. A revert of
+and the migrate lane until the cause is fixed: run `gh workflow disable deploy`
+and `gh workflow disable db-migrate` before anything else, and re-enable both
+(`gh workflow enable deploy` and `gh workflow enable db-migrate`) explicitly
+after the cause is fixed and the revert or fix is on main, then verify
+`gh workflow list --all` shows both `deploy` and `db-migrate` as active: a lane
+left disabled silently drops later `workflow_run` events. `db-migrate` is the
+staging recovery path, so a rolled-back handoff must not strand it disabled. A revert of
 the consumer/cron move on main is not a freeze — a revert is a push to main, so
 it fires the deploy workflow — and is merged only after the manual rollback
 below is complete: main still carries the moved consumers/crons and the three

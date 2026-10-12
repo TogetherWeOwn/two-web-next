@@ -167,6 +167,21 @@ describe("staging jobs handoff invariants", () => {
     expect(runbook).toContain("GITHUB_EVENT_NAME=workflow_dispatch");
   });
 
+  it("pins the rollback freeze and release on both automatic lanes", () => {
+    const runbook = read("docs/jobs-handoff.md");
+    // Scope to the standard rollback so the hold section's copies cannot
+    // satisfy these pins (and vice versa).
+    const rollbackSection = runbook.split("## Rollback")[1]!.split("### First install")[0]!;
+    expect(rollbackSection).toContain("gh workflow disable deploy");
+    expect(rollbackSection).toContain("gh workflow disable db-migrate");
+    expect(rollbackSection).toContain("gh workflow enable deploy");
+    expect(rollbackSection).toContain("gh workflow enable db-migrate");
+    // A rolled-back handoff must not strand the migrate lane disabled: the
+    // release re-enables both lanes once the cause is fixed and proves it.
+    expect(rollbackSection).toContain("after the cause is fixed");
+    expect(rollbackSection).toContain("gh workflow list");
+  });
+
   it("pins the first-install rollback from the inert draft (no GOOD_JOBS_VERSION)", () => {
     const runbook = read("docs/jobs-handoff.md");
     expect(runbook).toContain("inert");
