@@ -102,19 +102,28 @@ jobs:
         if: github.event_name != 'push'
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          BASE_REF: ${{ github.base_ref }}
           HEAD_SHA: ${{ env.PR_LINT_CHECKOUT_SHA }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO: ${{ github.repository }}
           PR_NUMBER: ${{ inputs.pr_number }}
         run: |
           set -euo pipefail
-          # Dispatched release PRs have no pull_request event snapshot. The metadata
-          # binding below verifies their current head against this checked-out SHA.
+          # Dispatched runs have no pull_request event snapshot: resolve the
+          # recorded base SHA and the live base branch from the API. PR events
+          # use the snapshot SHA and the event's base ref (usually main).
+          BASE_BRANCH=""
           if [ "$GITHUB_EVENT_NAME" = workflow_dispatch ]; then
             BASE_SHA=$(gh api "repos/$REPO/pulls/$PR_NUMBER" --jq '.base.sha')
+            BASE_BRANCH=$(gh api "repos/$REPO/pulls/$PR_NUMBER" --jq '.base.ref')
+          else
+            BASE_BRANCH="${BASE_REF:-main}"
+          fi
+          if [ -z "$BASE_BRANCH" ]; then
+            BASE_BRANCH="main"
           fi
           # Heads cut before #651 lack the script at the head-SHA checkout.
-          # The script reads only git objects, so the trusted base copy can still
+          # The script reads only git objects, so a trusted base copy can still
           # judge a stale head: run it instead of skipping, otherwise any branch
           # based before #651 bypasses this required gate. Fail closed when the
           # head deletes the script so a PR cannot silence its own gate.
@@ -126,8 +135,30 @@ jobs:
             fi
             echo "::warning::Ratchet script absent at this head SHA; checking with the base copy (predates #651)."
             mkdir -p "$RUNNER_TEMP/ratchet"
-            git show "$BASE_SHA:.github/scripts/internal_ref_ratchet.py" > "$RUNNER_TEMP/ratchet/internal_ref_ratchet.py"
-            git show "$BASE_SHA:.github/scripts/internal_references.py" > "$RUNNER_TEMP/ratchet/internal_references.py"
+            RATCHET_SRC=""
+            if git cat-file -e "$BASE_SHA:.github/scripts/internal_ref_ratchet.py" 2>/dev/null && git cat-file -e "$BASE_SHA:.github/scripts/internal_references.py" 2>/dev/null; then
+              RATCHET_SRC="$BASE_SHA"
+            else
+              # Recorded bases can predate #651 too: their snapshot lacks the
+              # ratchet files, so fall back to the live base-branch tip while
+              # keeping --base "$BASE_SHA" for the diff range (for behind-PRs
+              # the recorded base equals the merge-base, so the range stays
+              # correct). The checkout already fetches the base branch, so the
+              # tip is usually present; fetch it when it is not.
+              echo "::warning::Ratchet script absent at recorded base $BASE_SHA (predates #651); using live $BASE_BRANCH tip."
+              LIVE_REF="refs/remotes/origin/$BASE_BRANCH"
+              if ! git cat-file -e "$LIVE_REF:.github/scripts/internal_ref_ratchet.py" 2>/dev/null || ! git cat-file -e "$LIVE_REF:.github/scripts/internal_references.py" 2>/dev/null; then
+                git fetch --no-tags origin "$BASE_BRANCH"
+              fi
+              if git cat-file -e "$LIVE_REF:.github/scripts/internal_ref_ratchet.py" 2>/dev/null && git cat-file -e "$LIVE_REF:.github/scripts/internal_references.py" 2>/dev/null; then
+                RATCHET_SRC="$LIVE_REF"
+              else
+                echo "::error::Ratchet script absent at recorded base and at live $BASE_BRANCH tip; refusing to pass."
+                exit 1
+              fi
+            fi
+            git show "$RATCHET_SRC:.github/scripts/internal_ref_ratchet.py" > "$RUNNER_TEMP/ratchet/internal_ref_ratchet.py"
+            git show "$RATCHET_SRC:.github/scripts/internal_references.py" > "$RUNNER_TEMP/ratchet/internal_references.py"
             python3 "$RUNNER_TEMP/ratchet/internal_ref_ratchet.py" --base "$BASE_SHA" --head "$HEAD_SHA"
           else
             python3 .github/scripts/internal_ref_ratchet.py --base "$BASE_SHA" --head "$HEAD_SHA"
