@@ -179,10 +179,24 @@ describe.skipIf(!process.env.DATABASE_URL)(
             accessLog: (entry) => recordAccess(connection, entry),
           });
           await denial(await request(app));
-          expect(console.error).toHaveBeenCalledExactlyOnceWith(
+          const calls = vi.mocked(console.error).mock.calls;
+          const alerts = calls
+            .map(([line]) =>
+              typeof line === "string" && line.startsWith("{") ? JSON.parse(line) : null,
+            )
+            .filter((line) => line?.event === "error.alert");
+          expect(alerts).toHaveLength(1);
+          expect(alerts[0]).toMatchObject({
+            event: "error.alert",
+            exception: "DrizzleQueryError",
+            method: "GET",
+            route: "/members/:user",
+          });
+          expect(console.error).toHaveBeenCalledWith(
             "Member read audit failed; refusing contents.",
             { exception: "DrizzleQueryError", request_id: undefined },
           );
+          expect(console.error).toHaveBeenCalledTimes(2);
           const diagnostics = JSON.stringify(vi.mocked(console.error).mock.calls);
           for (const value of [
             ...PERSONAL_STRINGS,
