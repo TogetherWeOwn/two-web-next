@@ -79,6 +79,10 @@
       }
     },
     {
+      "includes": ["web/src/app.css"],
+      "css": { "parser": { "tailwindDirectives": true } }
+    },
+    {
       "includes": ["spike/hyperdrive-semantics/staging-checks.ts"],
       "linter": {
         "rules": {

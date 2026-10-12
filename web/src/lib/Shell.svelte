@@ -35,7 +35,10 @@ const themeClass = $derived(theme === "home" ? "homepage-theme" : `${theme}-them
 </script>
 
 <SiteMetadata {title} {canonical} {robots} {description} {shareTitle} {theme} />
-<div class="base-theme {themeClass}" data-theme={theme}>
+<!-- Open Lobby chrome: colours resolve through src/app.css semantic tokens
+  (bg-lobby-*/text-lobby-*/font-sans); no hard-coded palette values here. A
+  restyle is a token swap in that one file. -->
+<div class="base-theme bg-lobby-surface font-sans text-lobby-ink {themeClass}" data-theme={theme}>
   <SiteHeader {activeNav} {loginReturnTo} {accountChrome} />
   <main class={mainClass} id="main" tabindex="-1">{@render children()}</main>
   <SiteFooter />

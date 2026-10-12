@@ -51,7 +51,8 @@ const themeStylesheet = $derived(
   <link rel="alternate" type="application/rss+xml" title="{SITE_NAME} Events" href="/events.rss" />
   <link rel="stylesheet" href="/styles.css" />
   <link rel="preload" href="/fonts/display-latin-700.woff2" as="font" type="font/woff2" crossorigin="anonymous" />
-  <link rel="stylesheet" href="/theme-tokens.css" />
+  <!-- Kit token source is web/src/app.css (Tailwind v4 @theme, Open Lobby),
+    not public/theme-tokens.css, which stays Hono-only. -->
   <link rel="stylesheet" href="/theme.css" />
   {#if themeStylesheet}<link rel="stylesheet" href={themeStylesheet} />{/if}
 </svelte:head>
