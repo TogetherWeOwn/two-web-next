@@ -67,18 +67,21 @@ describe("runbook diagnostic and homepage contract", () => {
     expect(home).toMatch(/\*\*200\*\*.*guest/);
     expect(home).not.toMatch(/500|Not guaranteed/);
     expect(home).toMatch(/counts.*events.*featured/i);
-    expect(routeRow("/events/:key")).toMatch(/500 HTML.*503 JSON/);
+    expect(routeRow("/events/past")).toMatch(
+      /DB-outage failures.*503 HTML.*Other uncaught failures.*500 HTML/,
+    );
     expect(outage).toMatch(/public\s+fallback[^.]*not[^.]*private[^.]*writes/i);
   });
 
-  it("cites shipped readiness and keeps the broader outage PR pending", () => {
+  it("cites shipped readiness and documents current outage responses", () => {
     expect(health).toMatch(
       /Readiness shipped in \[#111\]\(https:\/\/github.com\/TogetherWeOwn\/two-web-next\/pull\/111\)/,
     );
     expect(health).not.toMatch(/Pending[^\n]*#111/);
-    expect(outage).toMatch(
-      /Pending[^\n]*\[#92\]\(https:\/\/github.com\/TogetherWeOwn\/two-web-next\/pull\/92\)/,
-    );
+    expect(outage).not.toMatch(/Pending[^\n]*#92|not shipped in this snapshot/);
+    expect(routeRow("/events/past")).toMatch(/DB-outage failures.*503 HTML/);
+    expect(routeRow("/profile")).toMatch(/member-data read\/save failures.*503/);
+    expect(routeRow("/admin")).toMatch(/admin data\/query failures.*503/);
     expect(health).not.toMatch(/curl\s|fetch\(/);
     expect(outage).not.toMatch(/curl\s|fetch\(/);
   });

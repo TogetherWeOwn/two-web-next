@@ -1159,7 +1159,7 @@ Never test production; staging E2E needs verified staging bindings.
 
 The table describes the path that reaches the relevant operation; validation,
 authentication, access gates or static asset handling can return earlier.
-Uncaught DB errors use the global **500 HTML** handler, even on event JSON routes.
+Uncaught non-database errors use the global **500 HTML** handler, even on event JSON routes. Classified database-unavailable errors use the shared sanitized **503** response.
 The [parity matrix](parity.md) is a historical snapshot; current source/tests
 below, not its older `/up` row, define these outcomes.
 
@@ -1173,15 +1173,15 @@ below, not its older `/up` row, define these outcomes.
 | `/csp-reports` (POST) | Stays **204**, DB-free sink. |
 | `/db-ping`, `/health`, `/healthz` (GET) | **404**, same as unknown paths; optional event suggestions tolerate DB failure. |
 | `/` (GET) | Stays **200** with guest fallback on session-store setup/migration/read or rotation failure. Unavailable counts are omitted, events show the unavailable state, and failed featured reads are omitted. Missing DB also serves the guest shell. This does not prove an authenticated session or successful persistence. |
-| `/auth/discord/callback` (GET) | With the app DB down before the one-use journey is consumed, **302** to `/?n=signin_failed`. Session-create failure after a successful Discord exchange is **500**; roster-write-only failure is caught. Invalid state or Discord exchange failure redirects **302** before persistence. |
+| `/auth/discord/callback` (GET) | With the app DB down before the one-use journey is consumed, **302** to `/?n=signin_failed`. A classified DB outage during session creation after a successful Discord exchange returns sanitized **503**; roster-write-only failure is caught. Invalid state or Discord exchange failure redirects **302** before persistence. |
 | `/join/discord`, `/join/callback` (GET) | Configured join-store/throttle/attempt/session errors can be **500**. Discord exchange failure separately gives a **503** recovery page; missing DB uses no-op attempt/throttle stores. |
-| `/auth/qa/:identity` (POST) | Enabled/authorized session failure **500**; disabled/bad credential **404**. QA is never a production recovery mechanism. |
+| `/auth/qa/:identity` (POST) | Enabled/authorized session failure from a classified DB outage **503**; other uncaught failures **500**; disabled/bad credential **404**. QA is never a production recovery mechanism. |
 | `/logout` (POST) | Without a session cookie, **303** and cookie clearing even when the DB is down. With a session cookie, a store or revocation failure returns **503** `Sign-out temporarily unavailable` and keeps the cookie, because the server row may still be valid. |
-| `/events`, `/events/past`, `/events.rss`, `/events.ics`, `/events/:key.ics`, `/e/:key` (GET) | Uncaught DB/session failure **500 HTML**; missing event DB **503**. Invalid keys can be **404** before DB access. |
-| `/events.json` (GET); `/events` (POST); `/events/:key` (PATCH); publish/cancel (POST) | DB/session failure **500 HTML**; missing event DB **503 JSON**. Auth gates can return **401/403** first. Post-commit enqueue failure leaves normal **201/200**. |
-| `/events/:key/rsvp` (PUT/DELETE) | Session/transaction failure **500 HTML**; missing event DB **503 JSON**, auth gates **401/403**. Honeypot decoys are DB-free **201/204**, not successful attendance. Post-commit enqueue failure does not change success status. |
-| `/profile`, `/members/:user` (GET); member save (PATCH or form-override POST) | Session resolution failure **503**; subsequent read/save failure **500**. Missing store **503**. Default required access-log failure replaces successful reads with **503**; guest **302**, non-member **403**. |
-| Implemented `/admin` routes | Session resolution failure **503**, later resource/dashboard query failure **500**; missing resource DB **503**. Default required access-log failure gives **503**; guest **302**, non-moderator **403**. |
+| `/events`, `/events/past`, `/events.rss`, `/events.ics`, `/events/:key.ics`, `/e/:key` (GET) | Classified DB-outage failures and missing event DB return **503 HTML**. Other uncaught failures use **500 HTML**. Invalid keys can be **404** before DB access. |
+| `/events.json` (GET); `/events` (POST); `/events/:key` (PATCH); publish/cancel (POST) | Classified DB-outage failures and missing event DB return **503 JSON**. Other uncaught failures use **500 HTML**. Auth gates can return **401/403** first. Post-commit enqueue failure leaves normal **201/200**. |
+| `/events/:key/rsvp` (PUT/DELETE) | Classified DB-outage failures and missing event DB return **503 JSON**. Other uncaught failures use **500 HTML**; auth gates **401/403**. Honeypot decoys are DB-free **201/204**, not successful attendance. Post-commit enqueue failure does not change success status. |
+| `/profile`, `/members/:user` (GET); member save (PATCH or form-override POST) | Session resolution and subsequent member-data read/save failures return sanitized **503**; missing store **503**. Default required access-log failure replaces successful reads with **503**; guest **302**, non-member **403**. |
+| Implemented `/admin` routes | Session resolution and subsequent admin data/query failures return sanitized **503**; missing resource DB and default required access-log failure also give **503**; guest **302**, non-moderator **403**. |
 | `/api/agent-events` (POST) | Shared web database (`AGENT_DB` when bound, else `DATABASE_URL`, otherwise `DB`): disabled **404**, enabled without any source **503**, service DB failure **500 JSON** `internal_error` (or **503** `ingress_unavailable` when the database is unreachable). No connection failover. Bot observation failure stays a typed unavailable result; post-commit write-back uses the same optional admin carrier. |
 
 Sources: [src/index.tsx](../src/index.tsx), [auth routes](../src/auth/routes.ts),
@@ -1196,12 +1196,6 @@ not conditional on an unmerged outage fix. Offline evidence:
 [counts failure fixtures](../test/home-counts.test.ts) and
 [DB-construction/featured failure fixtures](../test/featured-outage.test.ts).
 These are local doubles, not deployed outage acceptance.
-
-Pending [#92](https://github.com/TogetherWeOwn/two-web-next/pull/92), inspected at
-[`826e77d`](https://github.com/TogetherWeOwn/two-web-next/commit/826e77d535325624b00d01c2a702d0617f26323a),
-adds broader sanitized DB-outage 503 responses, homepage session-unavailable UI
-and best-effort logout setup. Those changes are **not shipped in this snapshot**;
-retain the current private-route 500/503 distinctions above until it merges.
 
 Shared human throttles and profile throttles fail open on store error; the shared
 human throttle currently uses only `DATABASE_URL`, not Hyperdrive. Optional
