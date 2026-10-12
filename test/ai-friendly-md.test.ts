@@ -12,7 +12,9 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import app from "./app";
 import type { Env } from "../src/env";
 import { events } from "../src/db/admin-schema";
+import { createMemorySessionStore } from "../src/sessions";
 import { createMemberDataFixture, type MemberDataFixture } from "./helpers/member-data-db";
+import { cookieFor, MODERATOR } from "./helpers/member-data";
 import {
   MARKDOWN_MIME,
   llmsTxt,
@@ -62,6 +64,7 @@ const mdRow = (o: Partial<MdEvent> = {}): MdEvent => ({
   location: past.location,
   capacity: null,
   goingCount: 7,
+  status: "published",
   ...o,
 });
 
@@ -135,6 +138,13 @@ describe("md builders (pure, DB-free)", () => {
     ])
       expect(body).toContain(phrase);
     expect(body).not.toMatch(/client_id|client-secret|token endpoint/i);
+  });
+
+  it("states the true status: scheduled for published, past for archived", () => {
+    expect(mdEvent(APP_URL, mdRow())).toContain("- Status: scheduled");
+    const past = mdEvent(APP_URL, mdRow({ status: "past" }));
+    expect(past).toContain("- Status: past");
+    expect(past).not.toContain("scheduled");
   });
 
   it("event detail carries public fields only", () => {
@@ -356,6 +366,33 @@ describe.skipIf(!process.env.DATABASE_URL)("event .md routes (agent-testdb)", ()
     expect(draft.status).toBe(403);
     const missing = await tReq("/e/01J0000000000000000000ZZZ9.md");
     expect(missing.status).toBe(404);
+  });
+
+  it("past .md states the archived status instead of scheduled", async () => {
+    await ins("01J0000000000000000000PST1", "past");
+    const res = await tReq("/e/01J0000000000000000000PST1.md");
+    expect(res.status).toBe(200);
+    const body = await res.text();
+    expect(body).toContain("- Status: past");
+    expect(body).not.toContain("scheduled");
+  });
+
+  it("moderator draft HTML omits the alternate that would 403", async () => {
+    await ins("01J0000000000000000000DRF1", "draft");
+    const store = createMemorySessionStore();
+    const res = await app.request(
+      "/e/01J0000000000000000000DRF1",
+      { headers: { cookie: await cookieFor(store, MODERATOR) } },
+      {
+        ...baseEnv(APP_URL),
+        SESSION_STORE: store,
+        get ADMIN_DB() {
+          return db;
+        },
+      } as unknown as Env,
+    );
+    expect(res.status).toBe(200);
+    expect(await res.text()).not.toContain('type="text/markdown"');
   });
 
   it("staging noindexes the event machine formats", async () => {

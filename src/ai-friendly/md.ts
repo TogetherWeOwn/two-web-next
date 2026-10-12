@@ -32,6 +32,8 @@ export interface MdEvent {
   capacity: number | null;
   /** Null on collection rows (feed scope carries no counts — same as RSS). */
   goingCount: number | null;
+  /** Published or past: drafts/cancelled never reach the detail builder. */
+  status: "published" | "past";
 }
 
 /** Keep author-written text inline-safe: links can never form, headings can never start. */
@@ -199,7 +201,7 @@ export function mdEvent(appUrl: string, e: MdEvent): string {
     "",
     sourceLine(appUrl, `/e/${e.eventKey}`),
     "",
-    `- Status: scheduled`,
+    `- Status: ${e.status === "past" ? "past" : "scheduled"}`,
     `- When: ${mdEventWhen(e)}`,
     ...(e.game ? [`- Game: ${mdText(e.game)}`] : []),
     ...(e.location ? [`- Where: ${mdText(e.location)}`] : []),

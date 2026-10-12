@@ -86,8 +86,15 @@ const toMdEvent = (e: {
   timezone: string;
   location: string | null;
   capacity: number | null;
+  status: string;
   goingCount?: number | null;
-}): MdEvent => ({ ...e, goingCount: e.goingCount ?? null });
+}): MdEvent => ({
+  ...e,
+  goingCount: e.goingCount ?? null,
+  // Callers only pass published/past rows: the collection predicate filters in
+  // SQL and the detail handler returns drafts/cancelled above.
+  status: e.status as MdEvent["status"],
+});
 
 export function registerAiFriendlyRoutes(app: App): void {
   app.get("/llms.txt", (c) => mdOk(c, llmsTxt(c.env.APP_URL), STATIC_MD_CACHE));
