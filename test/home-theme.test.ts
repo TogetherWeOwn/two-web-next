@@ -54,7 +54,12 @@ describe("homepage theme", () => {
     expect(html).toContain('href="/theme.css"');
     expect(html).toContain('href="/fonts/display-latin-700.woff2" as="font"');
     expect(html).toContain('src="/logo.svg" width="64" height="64" alt="Together We Own"');
-    expect(html).not.toContain("<script");
+    expect(html).toContain('data-testid="site-jsonld"');
+    const withoutJsonLd = html.replace(
+      /<script type="application\/ld\+json"[^>]*>[\s\S]*?<\/script>/g,
+      "",
+    );
+    expect(withoutJsonLd).not.toContain("<script");
     const leaf = Layout({ title: "Fixture" })!.toString();
     expect(leaf).not.toContain("/theme.css");
     expect(leaf).not.toContain("/theme-tokens.css");

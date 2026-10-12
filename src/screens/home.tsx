@@ -7,6 +7,7 @@ import { inviteDestination } from "../invite";
 import { cardTimeLabel, isValidZone } from "../islands/contracts";
 import type { JoinResult } from "../return-journey";
 import { canonicalUrl } from "../seo";
+import { siteJsonLd } from "../seo-json-ld";
 import {
   JoinResultBanner,
   Layout,
@@ -51,6 +52,8 @@ export const Home: FC<{
   imageHosts,
 }) => {
   const inviteUrl = inviteDestination(configuredInviteUrl);
+  // Site identities for AI consumers: stable Organization + WebSite @ids.
+  const siteIdentities = siteJsonLd(appUrl);
   return (
     <Layout
       title="Together We Own — the lobby is open"
@@ -250,6 +253,11 @@ export const Home: FC<{
           ) : null}
         </section>
       </main>
+      <script
+        type="application/ld+json"
+        data-testid="site-jsonld"
+        dangerouslySetInnerHTML={{ __html: siteIdentities }}
+      />
       <SiteFooter />
     </Layout>
   );

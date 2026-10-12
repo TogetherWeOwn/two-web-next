@@ -80,8 +80,19 @@ const EventDetailShell: FC<
     session?: Session | null;
     loginReturnTo?: string | null;
     account?: boolean;
+    siteJsonLd?: string;
   }>
-> = ({ title, canonical, robots, description, session, loginReturnTo, account, children }) => (
+> = ({
+  title,
+  canonical,
+  robots,
+  description,
+  session,
+  loginReturnTo,
+  account,
+  siteJsonLd,
+  children,
+}) => (
   <Layout
     title={`${title} — Together We Own`}
     canonical={canonical}
@@ -96,6 +107,13 @@ const EventDetailShell: FC<
         <a href="/events">← All events</a>
       </nav>
       {children}
+      {siteJsonLd ? (
+        <script
+          type="application/ld+json"
+          data-testid="site-jsonld"
+          dangerouslySetInnerHTML={{ __html: siteJsonLd }}
+        />
+      ) : null}
     </main>
     <SiteFooter />
   </Layout>

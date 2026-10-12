@@ -252,7 +252,11 @@ describe.skipIf(!process.env.DATABASE_URL)("featured homepage (isolated test Pos
       '<h3><a href="https://example.test/squad?a=1&amp;b=2">Squad &lt;night&gt;</a></h3>',
     );
     expect(html).toContain("&lt;script&gt;");
-    expect(html).not.toMatch(/<script\b|\sstyle=|\son\w+=/i);
+    const withoutJsonLd = html.replace(
+      /<script type="application\/ld\+json"[^>]*>[\s\S]*?<\/script>/g,
+      "",
+    );
+    expect(withoutJsonLd).not.toMatch(/<script\b|\sstyle=|\son\w+=/i);
     expect(html).toContain('alt="Squad &amp; friends"');
     expect(html).toContain('alt="Title fallback"');
     expect(html).toContain('alt="Blank fallback"');
