@@ -8,6 +8,7 @@ import {
   PROFILE_HONEY_FIELD,
   PROFILE_MIN_FILL_MS,
   PROFILE_OPENED_AT_FIELD,
+  PROFILE_PENDING_TESTID,
   profileAvatarSrcset,
   profileClientErrors,
   profileEditVisible,
@@ -261,12 +262,14 @@ describe("member-profile states rendered", () => {
     const js = readFileSync("public/islands/member-profile.js", "utf8");
     // The served binder is minified: the em dash in the save-failed copy is
     // a — escape there, so compare with escapes resolved.
-    const unescaped = js.replace(/\\u2014/g, "—");
+    const unescaped = js.replace(/\\u2014/g, "—").replace(/\\u2026/g, "…");
     for (const c of [
       PROFILE_COPY.saved,
       PROFILE_COPY.saveFailed,
       PROFILE_COPY.sessionExpired,
       PROFILE_COPY.logIn,
+      PROFILE_COPY.saving,
+      PROFILE_COPY.stillSaving,
     ])
       expect(unescaped).toContain(c);
     for (const t of [
@@ -274,6 +277,7 @@ describe("member-profile states rendered", () => {
       "profile-error",
       "profile-save-failed",
       "profile-session-expired",
+      PROFILE_PENDING_TESTID,
     ])
       expect(js).toContain(t);
   });
