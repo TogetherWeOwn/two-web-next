@@ -385,7 +385,23 @@ describe("production deployment preserves configured triggers", () => {
   });
 
   it("pins production crons and queue consumers to the reviewed config", () => {
-    const config = readWranglerConfig(read("wrangler.jsonc"));
+    type Consumer = {
+      queue?: unknown;
+      max_retries?: unknown;
+      max_batch_size?: unknown;
+      max_batch_timeout?: unknown;
+    };
+    type Producer = { binding?: unknown; queue?: unknown };
+    const config = readWranglerConfig(read("wrangler.jsonc")) as {
+      triggers?: unknown;
+      queues?: { consumers?: Consumer[]; producers?: Producer[] };
+      env?: {
+        production?: {
+          triggers?: unknown;
+          queues?: { consumers?: Consumer[]; producers?: Producer[] };
+        };
+      };
+    };
     // `versions upload`/`deploy` never reconcile triggers, and `wrangler
     // triggers deploy` is banned above (it also syncs routes/domains and
     // re-triggers 100117). Any schedule/consumer change must land in the
