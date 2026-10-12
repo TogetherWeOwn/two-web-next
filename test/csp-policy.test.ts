@@ -33,13 +33,28 @@ describe("route CSP (local fixtures, no DB)", () => {
       expect(csp["frame-src"]).toBe("https://discord.com/widget");
       expect(csp["default-src"]).toBe("'self'");
       expect(csp["script-src"]).toBe("'self'");
-      expect(csp["style-src"]).toBe(`'self' 'sha256-${LEAF_CRITICAL_CSS_SHA256}'`);
+      expect(csp["style-src"]).toBe("'self'");
       expect(csp["font-src"]).toBe("'self'");
       expect(csp["frame-ancestors"]).toBe("'none'");
       expect(res.headers.get("x-frame-options")).toBe("DENY");
       if (method === "GET") expect(await res.text()).toContain("https://discord.com/widget?id=");
     }
   });
+
+  it.each(["GET", "HEAD"])(
+    "%s content leaf allowlists only the inlined style hash",
+    async (method) => {
+      for (const path of ["/about", "/faq", "/rules", "/privacy"]) {
+        const res = await app.request(path, { method }, env);
+        expect(res.status).toBe(200);
+        const csp = directives(res);
+        expect(csp["style-src"]).toBe(`'self' 'sha256-${LEAF_CRITICAL_CSS_SHA256}'`);
+        expect(csp["script-src"]).toBe("'self'");
+        expect(res.headers.get("Content-Security-Policy")).not.toContain("unsafe-inline");
+        if (method === "GET") expect(await res.text()).toContain("<style>");
+      }
+    },
+  );
 
   it.each(["GET", "HEAD"])("%s homepage cannot embed Discord", async (method) => {
     const res = await app.request("/", { method }, env);

@@ -1,14 +1,13 @@
 #!/usr/bin/env node
 // Bundle the content-leaf stylesheets into a generated module so the Worker
-// can inline them without a filesystem read (TOG-22787): the staging
-// Lighthouse run 38259681332 measured mobile /rules LCP 2029 > 2000 with
-// render-blocking-resources savings of ~150 ms across styles.css,
-// theme-tokens.css and theme.css, while the <link rel="preload"> hints for
-// those same files measured zero effect (whole head fits the first response
-// chunk). Inlining removes all three render-blocking requests from the
-// content leaves (/about, /faq, /rules, /privacy — the only theme="content"
-// pages); the <style> block is allowlisted by its sha256 hash, so
-// style-src keeps no 'unsafe-inline'.
+// can inline them without a filesystem read: the staging Lighthouse audit
+// measured mobile /rules LCP just over budget with render-blocking-resources
+// savings of ~150 ms across styles.css, theme-tokens.css and theme.css,
+// while the <link rel="preload"> hints for those same files measured zero
+// effect (the whole head fits the first response chunk). Inlining removes
+// all three render-blocking requests from the content leaves (/about, /faq,
+// /rules, /privacy — the only theme="content" pages); the <style> block is
+// allowlisted by its sha256 hash, so style-src keeps no 'unsafe-inline'.
 // Regen: node ci/build-leaf-css.mjs (drift is pinned by
 // test/leaf-css-drift.test.ts — CI fails until this is re-run).
 import { createHash } from "node:crypto";

@@ -35,7 +35,7 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-describe("content-leaf inlined CSS (TOG-22787)", () => {
+describe("content-leaf inlined CSS", () => {
   it("matches the three concatenated stylesheets byte for byte", () => {
     const concatenated = SOURCES.map(cssPath).join("\n");
     expect(LEAF_CRITICAL_CSS).toBe(concatenated);

@@ -40,7 +40,7 @@ afterEach(() => {
 });
 
 describe("homepage theme", () => {
-  it("emits no stylesheet preloads: they measured zero LCP effect (TOG-22787)", () => {
+  it("emits no stylesheet preloads: they measured zero LCP effect", () => {
     for (const theme of ["home", "event", "content", "join", "profile", "schedule"] as const) {
       const html = Layout({ title: "Fixture", theme })!.toString();
       expect(html).not.toMatch(/<link(?=[^>]*rel="preload")(?=[^>]*as="style")/);

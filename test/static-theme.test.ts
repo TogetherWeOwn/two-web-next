@@ -61,8 +61,8 @@ it.each(paths)(
     if (path === "/join") {
       expect(html).toContain('rel="stylesheet" href="/theme.css"');
     } else {
-      // Content leaves inline the stylesheets (TOG-22787): no render-blocking
-      // CSS requests, with the real rules verifiable inside the style block.
+      // Content leaves inline the stylesheets: no render-blocking CSS
+      // requests, with the real rules verifiable inside the style block.
       expect(html).toContain("<style>");
       expect(html).toContain(".content-page");
       expect(html).not.toContain('rel="stylesheet"');

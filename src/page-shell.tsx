@@ -84,10 +84,10 @@ export const Layout: FC<
           />
         ) : null}
         {theme === "content" ? (
-          // Content leaves inline the three stylesheets (TOG-22787): the
-          // staging mobile audit measured ~150 ms of render-blocking savings
-          // on /rules, while preload hints for the same files measured zero.
-          // The block is allowlisted by hash in style-src (no unsafe-inline).
+          // Content leaves inline the three stylesheets: the mobile audit
+          // measured ~150 ms of render-blocking savings on /rules, while
+          // preload hints for the same files measured zero. The block is
+          // allowlisted by hash in style-src (no unsafe-inline).
           <style dangerouslySetInnerHTML={{ __html: LEAF_CRITICAL_CSS }} />
         ) : (
           <link rel="stylesheet" href="/styles.css" />

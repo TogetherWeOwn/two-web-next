@@ -26,8 +26,8 @@ function assertShell(html: string) {
   );
   for (const nav of html.match(/<nav\b[^>]*>/g) ?? []) expect(nav).toMatch(/aria-label="[^"]+"/);
   if (html.includes("base-theme content-theme")) {
-    // Content leaves inline the stylesheets instead of linking them
-    // (TOG-22787); the real rules must still be present in the style block.
+    // Content leaves inline the stylesheets instead of linking them; the
+    // real rules must still be present in the style block.
     expect(html).toContain("<style>");
     expect(html).toContain(".content-page");
     expect(html).not.toContain('rel="stylesheet"');

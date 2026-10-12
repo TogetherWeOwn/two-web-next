@@ -30,8 +30,7 @@ import { loadHomeUpcomingMerged } from "./events/reads";
 import { discordEventsSource } from "./events/discord-transients";
 import { dbFor } from "./admin/db";
 import { listVisibleFeatured } from "./featured";
-import { robotsTag, SECURITY_HEADERS } from "./headers";
-import { LEAF_CRITICAL_CSS_SHA256 } from "./leaf-critical-css";
+import { leafInlineStyleCsp, robotsTag, SECURITY_HEADERS } from "./headers";
 import { registerJoinRoutes } from "./join/route";
 import { registerAiFriendlyRoutes } from "./ai-friendly/routes";
 import { registerSeoLeaves } from "./seo-leaves";
@@ -86,8 +85,9 @@ const CSP_REPORT_ENDPOINT = "/csp-reports";
 // local dev machines to HTTPS. The absence is pinned in test/seo-headers.
 // One security-header wrapper (the exposure inventory in
 // test/member-exposure.test.ts pins middleware multiplicity): secureHeaders
-// plus the staging X-Robots-Tag. Mounted sub-apps inherit both from this
-// outer dispatch, including refusals from the same-origin guard.
+// plus the staging X-Robots-Tag plus the content-leaf inline-style hash.
+// Mounted sub-apps inherit all three from this outer dispatch, including
+// refusals from the same-origin guard.
 const staticSecurityHeaders = secureHeaders({
   // Edge-owned (TOG-8729): emitting HSTS from the app would pin local dev
   // machines to HTTPS, so the Hono default is explicitly off.
@@ -119,10 +119,10 @@ const staticSecurityHeaders = secureHeaders({
           ? "https://discord.com/widget"
           : "'none'",
     ],
-    // The content-leaf inlined <style> block (TOG-22787) is allowlisted by
-    // hash: no 'unsafe-inline', and the hash is pinned by
-    // test/leaf-css-drift.test.ts.
-    styleSrc: ["'self'", `'sha256-${LEAF_CRITICAL_CSS_SHA256}'`],
+    // The static policy stays 'self'-only on every route. Content-leaf
+    // inline styles are allowlisted per-route by leafInlineStyleCsp below,
+    // so the documented policy for non-leaf routes never changes shape.
+    styleSrc: ["'self'"],
     scriptSrc: ["'self'"],
     fontSrc: ["'self'"],
     frameAncestors: ["'none'"],
@@ -145,6 +145,7 @@ app.use("*", (c, next) =>
     try {
       await staticSecurityHeaders(c, next);
       await robotsTag(c, async () => {});
+      leafInlineStyleCsp(c);
     } catch (err) {
       // Handler errors already became responses; one thrown by this
       // post-processing would skip requestLog, so settle the final 500 here.

@@ -55,8 +55,8 @@ describe("performance CI", () => {
         expect(response.headers.get("content-type"), path).toContain("text/html");
         const html = await response.text();
         if (["/about", "/faq", "/rules", "/privacy"].includes(path)) {
-          // Content leaves inline the stylesheets (TOG-22787): the real app
-          // rules must be present in the style block instead of a link.
+          // Content leaves inline the stylesheets: the real app rules must
+          // be present in the style block instead of a link.
           expect(html, path).toContain("<style>");
           expect(html, path).toContain(".content-page");
         } else {
