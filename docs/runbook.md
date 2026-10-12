@@ -8,8 +8,8 @@ The [parity matrix](parity.md) records what is implemented versus still missing.
 Operations guidance (the index below, `/up` readiness, queues, deploy and
 rollback pointers, alerts) applies to staging and, where a section names the
 production binding, to production. The production cutover and its DNS changes
-are separately gated. The staging rollback and DNS flip-back rehearsal is
-covered in [Staging rehearsal](#staging-rehearsal-worker-rollback-and-dns-flip-back).
+are separately gated. The staging rollback and DNS flip-back rehearsal is covered here. See
+[Staging rehearsal](#staging-rehearsal-worker-rollback-and-dns-flip-back).
 [Final import and reconcile](#final-import-and-reconcile) (including
 [Before the production flip](#before-the-production-flip)) runs only as a
 gated cutover step. [48h post-flip watch](#48h-post-flip-watch) applies only
