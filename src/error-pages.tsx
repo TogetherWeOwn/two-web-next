@@ -164,6 +164,48 @@ export const RateLimitedPage: FC<{ inviteUrl: string }> = ({ inviteUrl }) => (
   </ErrorShell>
 );
 
+// 403 (TOG-22119). Branded form of the bare "Forbidden" refusals: the viewer
+// is signed in but lacks membership or the moderator bit, so there is no login
+// loop and no OAuth start — only the way back home and the invite URL that
+// works during an outage. No session or DB reads.
+export const ForbiddenPage: FC<{ inviteUrl: string }> = ({ inviteUrl }) => (
+  <ErrorShell
+    code="403"
+    title="You do not have access to this"
+    headerCta={{ href: inviteUrl, label: "Open Discord" }}
+  >
+    <p class="lead">
+      This page is for members or moderators. If you should see it, sign in again — otherwise the
+      lobby is still open.
+    </p>
+    <p class="recovery-actions">
+      <a class="btn" href={inviteUrl} data-testid="error-invite" rel="noopener">
+        Use the Discord invite instead
+      </a>{" "}
+      <a href="/" data-testid="error-home">
+        Back to the homepage
+      </a>
+    </p>
+  </ErrorShell>
+);
+
+// 410 (TOG-22119). Generic retired-page shell, distinct from the event-specific
+// EventGonePage: unknown and URL-freeze-retired paths stay 404, while an
+// explicitly retired document answers here. No session or DB reads.
+export const GonePage: FC = () => (
+  <ErrorShell code="410" title="This page is gone">
+    <p class="lead">The page was removed. The lobby is still open — come in and say hello.</p>
+    <p class="recovery-actions">
+      <a class="btn" href="/events" data-testid="error-events">
+        Browse all events
+      </a>{" "}
+      <a href="/" data-testid="error-home">
+        Back to the homepage
+      </a>
+    </p>
+  </ErrorShell>
+);
+
 export const PayloadTooLargePage: FC = () => (
   <ErrorShell code="413" title="That request is too large">
     <p class="lead">Reduce the size of your request and try again.</p>

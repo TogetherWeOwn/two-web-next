@@ -3,6 +3,8 @@ import { accepts } from "hono/accepts";
 import { alertRequestError } from "./alerts";
 import { isDatabaseUnavailable } from "./db/errors";
 import {
+  ForbiddenPage,
+  GonePage,
   InternalErrorPage,
   MaintenancePage,
   NotFoundPage,
@@ -191,6 +193,62 @@ export function payloadTooLarge(c: Context): Response | Promise<Response> {
     });
   }
   return c.html(<PayloadTooLargePage />);
+}
+
+// Feed contracts stay non-HTML: a calendar/RSS/Markdown caller never receives
+// the branded shell. Mirrors the per-event ICS draft refusal ("Forbidden") and
+// the ai-friendly Markdown envelope, so error helpers cannot swallow them.
+function isFeedErrorPath(path: string): boolean {
+  return /\.rss$|\.ics$|\.md$|^\/llms\.txt$/.test(path);
+}
+
+// Branded 403 (TOG-22119): one static envelope for API/JSON callers, plain
+// text for feed paths (the existing draft-ICS contract), and the branded page
+// for browsers. Machine-only event writes and /api/ return JSON even when
+// Accept prefers HTML or is absent. Always private no-store + Vary: Accept.
+export function forbidden(c: Context): Response | Promise<Response> {
+  c.header("cache-control", "no-store, private");
+  varyAccept(c);
+  c.status(403);
+  if (isFeedErrorPath(c.req.path)) {
+    return c.text("Forbidden", 403);
+  }
+  if (
+    jsonOnlyEventRequest(c) ||
+    c.req.path.startsWith("/api/") ||
+    outageRepresentation(c) === "application/json"
+  ) {
+    return c.json({
+      error: "forbidden",
+      message: "You do not have access to this.",
+    });
+  }
+  return c.html(<ForbiddenPage inviteUrl={inviteDestination(c.env?.DISCORD_INVITE_URL)} />);
+}
+
+// Branded 410 for explicitly retired documents (TOG-22119). Unknown and
+// URL-freeze-retired paths stay 404; cancelled events keep their dedicated
+// EventGonePage. Same negotiation as 403: JSON envelope for machine callers,
+// plain text for feeds, branded shell for browsers. Gone is
+// viewer-independent, so the cache header is private, no-store.
+export function gone(c: Context): Response | Promise<Response> {
+  c.header("cache-control", "private, no-store");
+  varyAccept(c);
+  c.status(410);
+  if (isFeedErrorPath(c.req.path)) {
+    return c.text("Gone", 410);
+  }
+  if (
+    jsonOnlyEventRequest(c) ||
+    c.req.path.startsWith("/api/") ||
+    outageRepresentation(c) === "application/json"
+  ) {
+    return c.json({
+      reason: "gone",
+      message: "This page is gone.",
+    });
+  }
+  return c.html(<GonePage />);
 }
 
 export function maintenanceHandler(

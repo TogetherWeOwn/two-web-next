@@ -3,6 +3,8 @@
 // list below is exactly the previous export list of this file, so all importers
 // keep working untouched.
 export {
+  ForbiddenPage,
+  GonePage,
   InternalErrorPage,
   MaintenancePage,
   NotFoundPage,
@@ -12,6 +14,8 @@ export {
 export { registerErrorHandlers } from "./error-registration";
 export {
   databaseUnavailable,
+  forbidden,
+  gone,
   internalErrorHandler,
   maintenanceHandler,
   notFoundHandler,
