@@ -55,7 +55,10 @@
         "ci/featured-proof/**",
         "public/islands/**"
       ],
-      "formatter": { "enabled": false },
+      "formatter": { "enabled": false }
+    },
+    {
+      "includes": ["public/islands/**", "ci/featured-proof/fixtures/**"],
       "linter": { "enabled": false }
     },
     {

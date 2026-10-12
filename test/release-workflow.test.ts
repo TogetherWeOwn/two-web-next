@@ -7,11 +7,26 @@ import { describe, expect, it } from "vitest";
 // the deployed SHA and ci/release-on-promote.cjs tags it.
 const release = readFileSync(".github/workflows/release.yml", "utf8");
 const deploy = readFileSync(".github/workflows/deploy-production.yml", "utf8");
+type ChangelogSection = { type: string; section?: string; hidden?: boolean };
 const releasePleaseConfig = JSON.parse(readFileSync("release-please-config.json", "utf8")) as {
-  packages: Record<string, { "bump-minor-pre-major"?: boolean; "release-as"?: string }>;
+  packages: Record<
+    string,
+    {
+      "bump-minor-pre-major"?: boolean;
+      "release-as"?: string;
+      "changelog-sections"?: ChangelogSection[];
+    }
+  >;
 };
 const changelog = readFileSync("CHANGELOG.md", "utf8");
 const header = release.slice(0, release.search(/^permissions:/m));
+const changelogSections = releasePleaseConfig.packages["."]?.["changelog-sections"] ?? [];
+
+function prTitleTypes(path: string) {
+  const types = readFileSync(path, "utf8").match(/^TYPES = "([^"]+)"/m)?.[1];
+  if (!types) throw new Error(`no TYPES list in ${path}`);
+  return types.split("|");
+}
 
 function job(text: string, id: string) {
   const body = text.slice(text.search(/^jobs:\n/m));
@@ -29,6 +44,21 @@ describe("release on promote", () => {
 
   it("cuts v1.0.0 at the production cutover promote", () => {
     expect(releasePleaseConfig.packages["."]?.["release-as"]).toBe("1.0.0");
+  });
+
+  it("gives every allowed PR-title type a visible changelog section or hides it", () => {
+    for (const path of ["ci/check-pr-conventions.py", ".github/scripts/pr_standards.py"]) {
+      for (const type of prTitleTypes(path)) {
+        const entry = changelogSections.find((s) => s.type === type);
+        const hidden = entry?.hidden === true;
+        const visible = Boolean(entry?.section) && !hidden;
+        expect(hidden || visible, `${type} in ${path} is neither visible nor hidden`).toBe(true);
+      }
+    }
+  });
+
+  it("files security fixes under the Fixed section", () => {
+    expect(changelogSections).toContainEqual({ type: "security", section: "Fixed" });
   });
 
   it("has no hand-written Unreleased heading above the first released section", () => {

@@ -88,6 +88,11 @@ const DISCORD_WIDGET_FRAME = Object.freeze({ origin: "https://discord.com", path
 const DISCORD_WIDGET_STUB = Object.freeze({
   status: 200,
   contentType: "text/html; charset=utf-8",
+  // Discord's own widget headers, so the frame loads under the site's COEP credentialless.
+  headers: Object.freeze({
+    "cross-origin-embedder-policy": "require-corp",
+    "cross-origin-resource-policy": "cross-origin",
+  }),
   body: "<!doctype html><title>discord widget (stubbed by the watch)</title>",
 });
 

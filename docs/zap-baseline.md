@@ -16,7 +16,10 @@ any other host.
 
 ## Gate (`ci/zap-gate.mjs`)
 
-- Any **High** alert fails. There is no budget for High.
+- Any **High** alert fails. There is no budget for High, and no `ignore`
+  entry (scoped or unscoped) suppresses a High.
+- Missing/malformed scan evidence, unknown risk codes and invalid budgets
+  fail closed with a public-safe diagnostic instead of passing.
 - **Medium** and **Low** alert-type counts fail above `maxMedium` / `maxLow` in
   `ci/zap-budget.json`. `null` means not yet enforced: counts are reported only.
   Budgets only go down. Raising one, or adding an `ignore` entry (each needs a

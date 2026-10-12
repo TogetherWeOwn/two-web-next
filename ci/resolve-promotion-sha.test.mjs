@@ -21,7 +21,11 @@ function stub(runs, jobs) {
         "never hide failed runs behind a success filter",
       );
       const page = Number(searchParams.get("page"));
-      return { ok: true, json: async () => ({ workflow_runs: page === 1 ? runs : [] }) };
+      const size = Number(searchParams.get("per_page"));
+      return {
+        ok: true,
+        json: async () => ({ workflow_runs: runs.slice((page - 1) * size, page * size) }),
+      };
     }
     const id = pathname.match(/\/actions\/runs\/(\d+)\/jobs$/)?.[1];
     if (id) {
@@ -62,8 +66,60 @@ test("a newer failed run of a commit is not outvoted by an older pass of the sam
   );
 });
 
-test("an in-progress run neither promotes nor blocks its commit's older verdict", async () => {
-  assert.equal(await resolve([run(3, A, null, "in_progress"), run(2, A)], { 2: "success" }), A);
+test("a newer unfinished run blocks an older pass of the same commit", async () => {
+  assert.equal(
+    await resolve([run(3, A, null, "in_progress"), run(2, A), run(1, B)], {
+      2: "success",
+      1: "success",
+    }),
+    B,
+  );
+});
+
+test("every unfinished state of the newest run blocks an older pass of its commit", async () => {
+  for (const status of ["queued", "waiting", "requested", "pending", "in_progress"]) {
+    assert.equal(
+      await resolve([run(3, A, null, status), run(2, A), run(1, B)], {
+        2: "success",
+        1: "success",
+      }),
+      B,
+      status,
+    );
+  }
+});
+
+test("an unfinished run is not promotable even while it carries a success conclusion", async () => {
+  assert.equal(
+    await resolve([run(3, A, "success", "in_progress"), run(2, A), run(1, B)], {
+      3: "success",
+      2: "success",
+      1: "success",
+    }),
+    B,
+  );
+});
+
+test("a commit whose only verification is unfinished is not promoted", async () => {
+  assert.equal(await resolve([run(2, A, null, "queued")], {}), null);
+});
+
+test("an unfinished run on an earlier page still blocks an older pass on a later page", async () => {
+  const filler = Array.from({ length: 19 }, (_, i) => ({
+    ...run(100 + i, A),
+    display_title: "e2e-staging",
+  }));
+  assert.equal(
+    await resolve([...filler, run(3, A, null, "in_progress"), run(2, A), run(1, B)], {
+      2: "success",
+      1: "success",
+    }),
+    B,
+  );
+});
+
+test("a newer completed pass is not blocked by an older unfinished run of its commit", async () => {
+  assert.equal(await resolve([run(3, A), run(2, A, null, "in_progress")], { 3: "success" }), A);
 });
 
 test("runs without a deployed SHA in their name (pre run-name) are ignored", async () => {

@@ -421,7 +421,10 @@ describe("PastEvents shipped binder request/state drift", () => {
   it("fires no load/poll request, then exactly one GET per page turn and patches stable nodes", async () => {
     const b = browser();
     expect(b.requests).toHaveLength(0);
-    expect(binder).not.toMatch(/setInterval|setTimeout|events\.json|\/rsvp/);
+    expect(binder).not.toMatch(/setInterval|events\.json|\/rsvp/);
+    // Exactly one owned one-shot read deadline, never a polling loop.
+    expect(binder.match(/setTimeout\(/g)).toHaveLength(1);
+    expect(binder.match(/clearTimeout\(/g)).toHaveLength(1);
     expect(b.turn(2)).toBe(true);
     expect(b.requests).toHaveLength(1);
     expect(b.requests[0]).toMatchObject({

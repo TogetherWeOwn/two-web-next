@@ -85,6 +85,8 @@ const staticSecurityHeaders = secureHeaders({
   // Edge-owned (TOG-8729): emitting HSTS from the app would pin local dev
   // machines to HTTPS, so the Hono default is explicitly off.
   strictTransportSecurity: false,
+  // ZAP 90004; credentialless, not require-corp: cross-origin embeds are credential-free.
+  crossOriginEmbedderPolicy: "credentialless",
   contentSecurityPolicy: {
     defaultSrc: ["'self'"],
     // Restored legacy directives (W16b TOG-11942): object-src 'none' (no
