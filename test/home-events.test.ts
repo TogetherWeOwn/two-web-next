@@ -122,6 +122,18 @@ function fixture(
           .map((r) => [r.discordEventId]),
       };
     }
+    // Past-zones probe for the /events-parity display zone (timezone-only
+    // select, no title): ended non-draft rows, most recent first, capped.
+    if (sql.includes('"timezone"') && !sql.includes('"title"')) {
+      const cutoff = new Date(
+        String(params.find((p) => !Number.isNaN(Date.parse(String(p)))) ?? NOW),
+      );
+      const past = rows
+        .filter((r) => r.status !== "draft" && r.endsAt < cutoff)
+        .sort((a, b) => b.startsAt.getTime() - a.startsAt.getTime() || b.id - a.id)
+        .slice(0, Number(params.at(-1) ?? 20));
+      return { rows: past.map((r) => [r.timezone]) };
+    }
     // Honor the query's bound status, boundary and cap, not the reader's intent.
     let selected = [...rows];
     if (sql.includes('"status" =')) selected = selected.filter((r) => r.status === params[0]);
@@ -203,6 +215,8 @@ describe("homepage upcoming events", () => {
     expect(rows.map((r) => r.eventKey)).toEqual(["event-1", "event-2", "event-3"]);
     expect(rows.map((r) => r.goingCount)).toEqual([2, 1, 0]);
     expect(f.queries).toHaveLength(3);
+    // Note: this pins listHomeUpcoming (the canonical teaser read) only, not
+    // the merged homepage loader, which additionally reads past zones.
     expect(f.queries[0]!.sql).toContain("set_config('lock_timeout', $1, true)");
     expect(f.queries[0]!.sql).toContain("set_config('statement_timeout', $2, true)");
     expect(f.queries[0]!.params).toEqual([
@@ -301,7 +315,8 @@ describe("homepage upcoming events", () => {
       const html = await expectEmpty(await f.request(), "empty");
       expect(html).toContain("Nothing scheduled yet.");
       expect(html).not.toContain(row.title);
-      expect(f.queries).toHaveLength(2); // settings + events, no aggregate query for an empty list
+      // settings + events + past-zones; no aggregate or suppression query for an empty list.
+      expect(f.queries).toHaveLength(3);
     },
   );
 
@@ -369,7 +384,9 @@ describe("homepage upcoming events", () => {
       f.rejectRead();
       await vi.advanceTimersByTimeAsync(0);
       expect(warn).toHaveBeenCalledTimes(1); // no duplicate or unhandled late rejection
-      expect(f.queries).toHaveLength(holdAt === "events" ? 2 : 3);
+      // The past-zones probe runs in parallel with the canonical read, so it
+      // lands even when the stalled read trips the deadline.
+      expect(f.queries).toHaveLength(holdAt === "events" ? 3 : 4);
     },
   );
 

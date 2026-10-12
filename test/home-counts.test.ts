@@ -103,6 +103,9 @@ describe.skipIf(!process.env.DATABASE_URL)("homepage counts (test container)", (
     const columns = Object.keys(getTableColumns(events)) as (keyof typeof event)[];
     const db = drizzle(async (query) => {
       if (query.includes("set_config")) return { rows: [] };
+      // Past-zones probe (timezone-only select): this fixture holds a single
+      // future event, so there are no past zones.
+      if (query.includes('"timezone"') && !query.includes('"title"')) return { rows: [] };
       if (query.includes('from "events"'))
         return {
           rows: [

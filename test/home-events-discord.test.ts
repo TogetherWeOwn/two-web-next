@@ -8,6 +8,7 @@ import { events } from "../src/db/admin-schema";
 import type { Db } from "../src/db/index";
 import type { Env } from "../src/env";
 import {
+  HOME_DISCORD_TIMEOUT_MS,
   HOME_EVENTS_DB_TIMEOUT_MS,
   mergeHomeUpcoming,
   loadHomeUpcomingMerged,
@@ -112,6 +113,21 @@ function fixture(
           )
           .map((r) => [r.discordEventId]),
       };
+    }
+    // Past-zones probe for the /events-parity display zone: the homepage
+    // derives the Discord-row zone from canonical upcoming zones plus a
+    // capped set of recent past zones, like loadCalendarPageModel. The probe
+    // selects only the timezone column (no title), so it is distinguished
+    // here from the canonical teaser and the suppression probe.
+    if (sql.includes('"timezone"') && !sql.includes('"title"')) {
+      const cutoff = new Date(
+        String((params as unknown[]).find((p) => !Number.isNaN(Date.parse(String(p)))) ?? NOW),
+      );
+      const past = rows
+        .filter((r) => r.status !== "draft" && r.endsAt < cutoff)
+        .sort((a, b) => b.startsAt.getTime() - a.startsAt.getTime() || b.id - a.id)
+        .slice(0, Number((params as unknown[]).at(-1) ?? 20));
+      return { rows: past.map((r) => [r.timezone]) };
     }
     let selected = [...rows];
     if (sql.includes('"status" =')) selected = selected.filter((r) => r.status === params[0]);
@@ -289,6 +305,56 @@ describe("homepage Discord rendering", () => {
     expect(html).toContain('data-testid="home-events-list"');
     expect(html).toContain("Game night 1");
     expect(html).not.toContain('data-state="unavailable"');
+  });
+
+  it("still renders canonical rows when the Discord read is slow (no schedule hide)", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(NOW);
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const { db } = fixture([canonical(1), canonical(2)]);
+    Object.assign(db, { transaction: async (fn: (tx: Db) => Promise<unknown>) => fn(db) });
+    const pending = loadHomeUpcomingMerged(
+      async () => db,
+      () => ({
+        // A stale-snapshot refresh claimant holds the Discord read past the
+        // homepage deadline; the teaser must still show the canonical rows.
+        upcoming: () => new Promise<DiscordTransient[]>(() => {}),
+        lastReadFailed: () => false,
+      }),
+      NOW,
+    );
+    await vi.advanceTimersByTimeAsync(HOME_DISCORD_TIMEOUT_MS + 100);
+    const merged = await pending;
+    expect(merged.items.map((r) => (r.source === "canonical" ? r.eventKey : null))).toEqual([
+      "event-1",
+      "event-2",
+    ]);
+    expect(merged.unavailable).toBe(false);
+    expect(merged.discordFailed).toBe(true);
+    expect(warn).not.toHaveBeenCalled();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("renders Discord-only rows in the past-rows zone like /events, not UTC", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(NOW);
+    // No canonical upcoming rows; one ended London row sets the community
+    // modal zone the same way /events' past drawer does.
+    const past = canonical(99, {
+      eventKey: "past-night",
+      title: "Past community night",
+      startsAt: new Date(NOW.getTime() - 48 * 3600_000),
+      endsAt: new Date(NOW.getTime() - 46 * 3600_000),
+      timezone: "Europe/London",
+    });
+    const html = await (
+      await fixture([past], { rows: [transient("d1", 5, "Friday community games")] }).request()
+    ).text();
+    expect(html).toContain('data-testid="home-events-list"');
+    expect(html).toContain("Friday community games");
+    // 23:00Z is 00:00 next-day in London (BST); UTC would render 23:00 same-day.
+    expect(html).toContain("(Europe/London)");
+    expect(html).not.toContain("(UTC)");
   });
 
   it("loader returns unavailable on DB outage without leaking driver text", async () => {

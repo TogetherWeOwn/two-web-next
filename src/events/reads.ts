@@ -232,6 +232,13 @@ const finiteEventWindow = and(sql`isfinite(${events.startsAt})`, sql`isfinite(${
 export const HOME_EVENTS_DEADLINE_MS = 1000;
 // Each of the two reads is cancelled server-side before the response deadline.
 export const HOME_EVENTS_DB_TIMEOUT_MS = 400;
+// The Discord snapshot read gets its own bound below the homepage deadline.
+// A stale-snapshot refresh claimant runs a claim transaction plus a live
+// Discord GET, so it can outlast the homepage race on its own; without this
+// bound that one request would hide the canonical rows behind the
+// unavailable state. On timeout the Discord rows degrade to none with
+// discordFailed set, never to a whole-read failure.
+export const HOME_DISCORD_TIMEOUT_MS = 700;
 
 /** Home teaser: published and not ended, capped in SQL; calendar visibility is broader. */
 export async function listHomeUpcoming(db: Db, now = new Date()): Promise<HomeEvent[]> {
@@ -273,7 +280,7 @@ export type HomeDiscordRow = {
   discordId: string;
   title: string;
   startsAt: Date;
-  /** Effective display zone (modal canonical zone, UTC when canonical is empty). */
+  /** Effective display zone (modal zone over canonical upcoming plus recent past rows, like /events; UTC only when both are empty). */
   timezone: string;
   location: string | null;
 };
@@ -321,6 +328,24 @@ export function mergeHomeUpcoming(
     .slice(0, HOME_UPCOMING_LIMIT);
 }
 
+/**
+ * Recent past timezones for the homepage display zone, mirroring /events'
+ * past drawer (`loadCalendarPageModel` derives its zone from upcoming page
+ * rows plus `listCalendarPast`). Lightweight: one timezone-only select, no
+ * RSVP aggregate — the zone is public data and the teaser never renders
+ * these rows. The caller treats a failure as no past zones, falling back to
+ * the canonical-only zone (UTC when that is empty too).
+ */
+export async function listHomePastTimezones(db: Db, now = new Date()): Promise<string[]> {
+  const rows = await db
+    .select({ timezone: events.timezone })
+    .from(events)
+    .where(and(ne(events.status, "draft"), lt(events.endsAt, now)))
+    .orderBy(desc(events.startsAt), desc(events.id))
+    .limit(EVENTS_PAST_DRAWER_LIMIT);
+  return rows.map((r) => r.timezone);
+}
+
 export interface HomeUpcomingMerged {
   items: HomeUpcomingRow[];
   /** True when neither source could produce a trustworthy list (DB down, or empty + Discord failed). */
@@ -344,15 +369,36 @@ export async function loadHomeUpcomingMerged(
   const read: Promise<HomeUpcomingMerged> = (async () => {
     const db = await openDb();
     if (!db) return { items: [], unavailable: true, discordFailed: false };
-    const canonical = await listHomeUpcoming(db, now);
     const discord = getDiscordSource();
-    const discordRows = await discord.upcoming(now);
-    const discordFailed = discord.lastReadFailed();
+    // Canonical, past-zone and Discord reads start together: a slow Discord
+    // refresh must never hold the canonical rows past the deadline.
+    const canonicalPromise = listHomeUpcoming(db, now);
+    const pastZonesPromise = listHomePastTimezones(db, now).catch(() => [] as string[]);
+    let discordTimer: ReturnType<typeof setTimeout> | undefined;
+    const discordTimeout = new Promise<null>((resolve) => {
+      discordTimer = setTimeout(() => resolve(null), HOME_DISCORD_TIMEOUT_MS);
+    });
+    const discordPromise = Promise.race([
+      discord.upcoming(now).catch(() => [] as DiscordTransient[]),
+      discordTimeout,
+    ]).finally(() => clearTimeout(discordTimer));
+    const [canonical, pastZones, discordRowsOrNull] = await Promise.all([
+      canonicalPromise,
+      pastZonesPromise,
+      discordPromise,
+    ]);
+    const discordTimedOut = discordRowsOrNull === null;
+    const discordRows = discordTimedOut ? [] : (discordRowsOrNull as DiscordTransient[]);
+    // A timed-out Discord read counts as failed (its rows are unknown), so
+    // an empty canonical list still reports unavailable rather than "empty".
+    const discordFailed = discordTimedOut || discord.lastReadFailed();
     const persisted = await persistedDiscordIds(
       db,
       discordRows.map((t) => t.discordId),
     );
-    const zone = calendarZone(canonical.map((e) => e.timezone));
+    // Same zone rule as /events: modal zone over upcoming rows plus recent
+    // past rows, so a Discord-only teaser matches the /events wall time.
+    const zone = calendarZone([...canonical.map((e) => e.timezone), ...pastZones]);
     const items = mergeHomeUpcoming(canonical, discordRows, persisted, now, zone);
     if (items.length === 0 && discordFailed) return { items, unavailable: true, discordFailed };
     return { items, unavailable: false, discordFailed };
