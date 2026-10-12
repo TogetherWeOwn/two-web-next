@@ -10,6 +10,7 @@
 import type { Context, Hono } from "hono";
 import { dbFor } from "../admin/db";
 import { readCounts } from "../counts";
+import { isDatabaseUnavailable } from "../db/errors";
 import type { Env } from "../env";
 import { getPublicApiEvent, listPublicApiEvents, type PublicApiEvent } from "../events/reads";
 import { etagFor, publicReadGuard } from "../events/routes-shared";
@@ -168,14 +169,16 @@ export function registerPublicApiRoutes(app: Hono<{ Bindings: Env }>): void {
     if (hit) return cachedEntry(c, hit);
     const db = await dbFor(c);
     if (!db) return apiError(c, "unavailable", "Event data is temporarily unavailable.", 503);
-    const {
-      rows,
-      total,
-      page: clamped,
-    } = await listPublicApiEvents(db, {
+    // A refused socket reads as the 503 envelope; programming errors stay 500s.
+    const listed = await listPublicApiEvents(db, {
       limit,
       offset: (page - 1) * limit,
+    }).catch((err: unknown) => {
+      if (!isDatabaseUnavailable(err)) throw err;
+      return null;
     });
+    if (!listed) return apiError(c, "unavailable", "Event data is temporarily unavailable.", 503);
+    const { rows, total, page: clamped } = listed;
     const data = rows.map(serializeEvent);
     const payload: PublicApiEventCollectionDto = {
       data,
@@ -210,7 +213,13 @@ export function registerPublicApiRoutes(app: Hono<{ Bindings: Env }>): void {
     if (hit) return cachedEntry(c, hit);
     const db = await dbFor(c);
     if (!db) return apiError(c, "unavailable", "Event data is temporarily unavailable.", 503);
-    const row = await getPublicApiEvent(db, raw);
+    let row;
+    try {
+      row = await getPublicApiEvent(db, raw);
+    } catch (err) {
+      if (!isDatabaseUnavailable(err)) throw err;
+      return apiError(c, "unavailable", "Event data is temporarily unavailable.", 503);
+    }
     if (!row) return apiError(c, "not_found", "No published event with that key.", 404);
     const [dto] = [serializeEvent(row)];
     return servePublicJson(
