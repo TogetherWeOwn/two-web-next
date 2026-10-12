@@ -91,6 +91,17 @@ describe("runbook diagnostic and homepage contract", () => {
     );
     const watch = readFileSync(new URL("../docs/48h-watch-spec.md", import.meta.url), "utf8");
     expect(watch).not.toMatch(/uncaught DB failure is 500 HTML/);
+    const watchRow = (route: string) => {
+      const row = watch.split("\n").find((line) => line.startsWith(`| ${route} |`));
+      expect(row, `watch-spec row for ${route}`).toBeDefined();
+      return row!;
+    };
+    expect(watchRow("M member writes")).toMatch(
+      /classified DB outage and profile read failure 503.*other session, transaction or save failure 500/,
+    );
+    expect(watchRow("A privileged")).toMatch(
+      /admin reads.*classified DB outage 503.*other uncaught admin-write failure 500/,
+    );
     expect(health).not.toMatch(/curl\s|fetch\(/);
     expect(outage).not.toMatch(/curl\s|fetch\(/);
   });
