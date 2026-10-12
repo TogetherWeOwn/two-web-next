@@ -107,7 +107,7 @@ export function registerDetailRoutes(
         const notFound = async () => {
           c.header("x-robots-tag", "noindex, nofollow");
           // Same per-isolate, DB-source-scoped cached guest snapshot as
-          // ordinary 404s (TOG-22184): one fill per TTL, never one Postgres
+          // ordinary 404s: one fill per TTL, never one Postgres
           // transaction per probe.
           return bufferedMemberHtml(
             c,

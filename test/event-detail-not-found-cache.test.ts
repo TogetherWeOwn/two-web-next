@@ -6,7 +6,7 @@ import type { Db } from "../src/db/index";
 import * as suggestions from "../src/events/suggestions";
 import app from "./app";
 
-// TOG-22184: unknown/invalid /e/:key must reuse the same per-isolate,
+// Unknown/invalid /e/:key must reuse the same per-isolate,
 // DB-source-scoped cached suggestion snapshot as ordinary 404s instead of
 // running notFoundSuggestions for every request.
 //

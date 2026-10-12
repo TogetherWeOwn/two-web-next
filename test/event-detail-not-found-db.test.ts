@@ -6,7 +6,7 @@ import { NOT_FOUND_SUGGESTIONS_TTL_MS } from "../src/not-found-suggestions";
 import app from "./app";
 import { createMemberDataFixture, type MemberDataFixture } from "./helpers/member-data-db";
 
-// TOG-22184 (DB-backed): unknown/invalid /e/:key misses render the same
+// DB-backed: unknown/invalid /e/:key misses render the same
 // cached guest snapshot as ordinary 404s through the real member-read
 // boundary (postgres-js statements + read classification), with one
 // suggestion fill per TTL. Needs DATABASE_URL (agent-testdb); skipped without
