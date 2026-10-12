@@ -383,7 +383,18 @@ describe("hooks.server route ownership wiring", () => {
     expect(source).toContain("honoFetch,");
     expect(source).toContain("featuredImageHosts: env.FEATURED_IMAGE_HOSTS");
     expect(source).toContain("appUrl: env.APP_URL");
+    expect(source).toContain("sessionFor: kitSessionBridge(env)");
     expect(source.match(/dispatchHookRequest\(event,/g)?.length).toBe(1);
+    // Production session composition lives in kitSessionBridge
+    // (src/kit-session.ts), pinned by test/kit-session.test.ts: the hook must
+    // not carry any session logic to mutate. Each of these mutants stays green
+    // without this pin (an empty journey secret, unknown remapped to guest, a
+    // forced memory store).
+    expect(source).not.toContain("resolveRequestSession");
+    expect(source).not.toContain("readReturnJourney");
+    expect(source).not.toContain("storeForEnv");
+    expect(source).not.toContain("SESSION_SECRET");
+    expect(source).not.toContain("Promise.all");
     // Production trust and ownership live in the core (imported, not
     // injected): the hook must not carry any owner logic to mutate. Each of
     // these mutants stays green without this pin (force kit via an injected

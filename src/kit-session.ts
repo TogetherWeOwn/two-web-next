@@ -3,8 +3,10 @@
 //
 // Read-only by construction. It verifies the signed __Host session cookie with
 // the same hono primitive Hono's own readers use (parseSigned), hashes the
-// bearer, and makes exactly one store.get per request — memoized, so the hook
-// and every Kit load share one decision. It never rotates, revokes, issues,
+// bearer, and makes exactly one store.get per request — one decision per
+// request, shared with Kit loads through locals (createRequestSessionCache
+// shares one decision across concurrent readers of the same Request where
+// several readers are wired). It never rotates, revokes, issues,
 // or sets cookies: rotation stays route-specific inside Hono's readSession
 // (no blanket rotating layout load; fragments and JSON keep nonrotating
 // reads), logout stays the authoritative Hono POST /logout, and flashes stay
@@ -17,6 +19,8 @@
 // member to logged-out). The auth-status probe cookie is deliberately never
 // accepted here: it proves liveness only and is not a login token.
 import { parseSigned } from "hono/utils/cookie";
+import type { Env } from "./env";
+import { storeForEnv } from "./index";
 import { safeNext } from "./join/service";
 import {
   JOIN_RESULT_COOKIE,
@@ -24,6 +28,7 @@ import {
   LOGIN_NEXT_COOKIE,
   type JoinResult,
 } from "./return-journey";
+import type { HookEventLike } from "./route-ownership";
 import { SESSION_COOKIE } from "./session-cookie";
 import { hashToken, type SessionStore } from "./sessions";
 import { EXPIRED_WRITE_COOKIE } from "./write-recovery";
@@ -165,5 +170,36 @@ export async function readReturnJourney(
       safeNext(typeof intended === "string" ? intended : null),
     joinResult: request.method === "GET" ? joinResultOf(cookies[JOIN_RESULT_COOKIE]) : null,
     expiredWrite: expiredWriteOf(cookies[EXPIRED_WRITE_COOKIE]),
+  };
+}
+
+/**
+ * Production session-bridge composition for the Kit hook: the exact secret,
+ * store and merge wiring every Kit-owned request uses. Lives here (not in
+ * web/src/hooks.server.ts) so the root suite pins it — the hook passes
+ * `sessionFor: kitSessionBridge(env)` and carries no session logic of its own.
+ *
+ * Fails closed twice: a storeForEnv failure (no store to read) resolves to
+ * "unknown" with whatever journey the cookies carry, and
+ * resolveRequestSession maps every read failure to a decision — so the bridge
+ * never throws, a Kit render never 500s on a session outage, and an outage
+ * never reads as a logout.
+ */
+export function kitSessionBridge(env: Env): (event: HookEventLike) => Promise<KitLocals> {
+  return async (event) => {
+    const [session, journey] = await Promise.all([
+      (async (): Promise<KitRequestSession> => {
+        try {
+          return await resolveRequestSession(event.request, {
+            sessionSecret: env.SESSION_SECRET,
+            store: await storeForEnv(env),
+          });
+        } catch {
+          return UNKNOWN;
+        }
+      })(),
+      readReturnJourney(event.request, env.SESSION_SECRET),
+    ]);
+    return { ...session, ...journey };
   };
 }

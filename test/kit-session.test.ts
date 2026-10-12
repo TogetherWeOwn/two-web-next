@@ -19,6 +19,7 @@ import { serializeSigned } from "hono/utils/cookie";
 import { describe, expect, it, vi } from "vitest";
 import { AUTH_STATUS_COOKIE } from "../src/auth-status";
 import { SESSION_COOKIE } from "../src/session-cookie";
+import type { Env } from "../src/env";
 import {
   createMemorySessionStore,
   hashToken,
@@ -33,6 +34,7 @@ import {
 import { EXPIRED_WRITE_COOKIE } from "../src/write-recovery";
 import {
   createRequestSessionCache,
+  kitSessionBridge,
   readReturnJourney,
   resolveRequestSession,
   type KitLocals,
@@ -491,5 +493,131 @@ describe("dispatchHookRequest session bridge (Kit branch only)", () => {
     await dispatchHookRequest(event, deps);
     expect(deps.resolve).toHaveBeenCalledTimes(1);
     expect(event.locals).toBeUndefined();
+  });
+});
+
+describe("kitSessionBridge (production hook composition)", () => {
+  // The exact wiring web/src/hooks.server.ts passes as sessionFor: the real
+  // secret, the shared store selection and the session/journey merge. Each
+  // mutant below (empty journey secret, unknown remapped to guest, store
+  // forced to the memory fallback) stays green without these pins.
+  const bridgeEnvFor = (store: SessionStore, sessionSecret: string = SECRET) =>
+    ({ SESSION_SECRET: sessionSecret, SESSION_STORE: store }) as unknown as Env;
+
+  const bridgeEventFor = (pairs: string[] = [], method = "GET"): HookEventLike => {
+    const request = new Request("https://next.example.test/events/past", {
+      method,
+      headers: pairs.length ? { cookie: pairs.join("; ") } : {},
+    });
+    return { request, url: new URL(request.url), route: { id: "/events/past" } };
+  };
+
+  it("resolves an authenticated session with the row's bits and the signed journey", async () => {
+    const store = createMemorySessionStore();
+    const { token } = await seedSession(store, { moderator: true });
+    const locals = await kitSessionBridge(bridgeEnvFor(store))(
+      bridgeEventFor([
+        await pair(SESSION_COOKIE, token),
+        await pair(LOGIN_NEXT_COOKIE, "/e/two"),
+        await pair(JOIN_RESULT_COOKIE, "added"),
+        await pair(EXPIRED_WRITE_COOKIE, "pending|/profile"),
+      ]),
+    );
+    expect(locals.status).toBe("authenticated");
+    expect(locals.session).toEqual({
+      userId: "42",
+      username: "Rick",
+      avatar: null,
+      member: true,
+      moderator: true,
+    });
+    expect(locals.returnTo).toBe("/e/two");
+    expect(locals.joinResult).toBe("added");
+    expect(locals.expiredWrite).toBe("/profile");
+  });
+
+  it("reports unknown — never a false logout — when the store fails, keeping the journey", async () => {
+    const store = createMemorySessionStore();
+    const { token } = await seedSession(store);
+    const failing: SessionStore = {
+      ...store,
+      get: async () => {
+        throw new Error("connection refused");
+      },
+    };
+    const locals = await kitSessionBridge(bridgeEnvFor(failing))(
+      bridgeEventFor([await pair(SESSION_COOKIE, token), await pair(LOGIN_NEXT_COOKIE, "/events")]),
+    );
+    expect(locals.status).toBe("unknown");
+    expect(locals.session).toBeNull();
+    expect(locals.returnTo).toBe("/events");
+  });
+
+  it("reports unknown with an empty journey when no secret is configured", async () => {
+    const store = createMemorySessionStore();
+    const { token } = await seedSession(store);
+    const locals = await kitSessionBridge(bridgeEnvFor(store, ""))(
+      bridgeEventFor([await pair(SESSION_COOKIE, token)]),
+    );
+    expect(locals).toEqual({
+      status: "unknown",
+      session: null,
+      returnTo: null,
+      joinResult: null,
+      expiredWrite: null,
+    });
+  });
+
+  it("reports guest for a tampered session cookie while the journey still reads", async () => {
+    const store = createMemorySessionStore();
+    const { token } = await seedSession(store);
+    const good = await pair(SESSION_COOKIE, token);
+    const tampered = `${good.slice(0, -1)}${good.endsWith("A") ? "B" : "A"}`;
+    const locals = await kitSessionBridge(bridgeEnvFor(store))(
+      bridgeEventFor([tampered, await pair(LOGIN_NEXT_COOKIE, "/events")]),
+    );
+    expect(locals.status).toBe("guest");
+    expect(locals.session).toBeNull();
+    expect(locals.returnTo).toBe("/events");
+  });
+
+  it("a signed-but-hostile next never becomes a destination on an authenticated read", async () => {
+    const store = createMemorySessionStore();
+    const { token } = await seedSession(store);
+    const locals = await kitSessionBridge(bridgeEnvFor(store))(
+      bridgeEventFor([
+        await pair(SESSION_COOKIE, token),
+        await pair(LOGIN_NEXT_COOKIE, "https://evil.test/"),
+      ]),
+    );
+    expect(locals.status).toBe("authenticated");
+    expect(locals.returnTo).toBeNull();
+  });
+
+  it("plugs into the dispatch as sessionFor: a Kit-owned request merges bridge locals", async () => {
+    const store = createMemorySessionStore();
+    const { token } = await seedSession(store);
+    const request = new Request("https://next.example.test/events/past", {
+      headers: { host: "next.example.test", cookie: await pair(SESSION_COOKIE, token) },
+    });
+    const event: HookEventLike = {
+      request,
+      url: new URL(request.url),
+      route: { id: "/events/past" },
+    };
+    const seen: HookEventLike[] = [];
+    const resolve = vi.fn(async (hookEvent: HookEventLike) => {
+      seen.push(hookEvent);
+      return new Response("kit", { status: 200 });
+    });
+    await dispatchHookRequest(event, {
+      appUrl: "https://next.example.test",
+      honoFetch: async () => new Response("hono", { status: 200 }),
+      resolve,
+      manifest: [{ method: "GET", path: "/events/past", enabled: true }],
+      sessionFor: kitSessionBridge(bridgeEnvFor(store)),
+    });
+    expect(resolve).toHaveBeenCalledTimes(1);
+    expect((seen[0]!.locals as KitLocals).status).toBe("authenticated");
   });
 });
