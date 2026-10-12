@@ -183,7 +183,7 @@ editor's separate browser warning for unsaved changes is not action approval.
    | Description | Optional, at most 1000 characters. |
    | Starts / Ends | Required local wall time, `YYYY-MM-DD HH:mm`; end must be after start. |
    | Timezone | Recognized timezone; defaults to `Europe/London`. Local form times are interpreted in this zone and stored as UTC. |
-   | Location | Optional, at most 255 characters. |
+   | Location | Optional for drafts; required to publish, at most 255 characters. |
    | Capacity | Empty = unlimited; otherwise a whole number from 1 to 2147483647. On edit, it cannot be lower than the current **Going** count; equality is allowed. |
    | Repeats (new events only) | **Does not repeat** or **Weekly**. Weekly requires Occurrences (1–52, including the first) or Repeat until (`YYYY-MM-DD`); when both are set the earlier bound wins. Every series is capped at 52 total occurrences, even with only a Repeat until date. |
 

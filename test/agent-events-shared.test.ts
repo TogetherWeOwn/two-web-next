@@ -173,6 +173,22 @@ describe.skipIf(!process.env.DATABASE_URL)("shared agent event acceptance (agent
     });
   });
 
+  it("refuses an agent publish when a moderator blanked the draft location", async () => {
+    const event_key = await create();
+    // Drafts may stay blank: a moderator clearing the location is accepted.
+    const actor = { id: "fixture-moderator", username: "Moderator" };
+    await updateEvent(fixture.db, actor, event_key, parseEventForm({ ...fields, location: "" }));
+    const publish = await call("publish", { event_key, idempotency_key: randomUUID() });
+    expect(publish.status).toBe(422);
+    expect(publish.body).toMatchObject({
+      reason: "validation_failed",
+      errors: { location: ["Add a location before publishing."] },
+    });
+    const [row] = await fixture.client`SELECT status FROM events WHERE event_key = ${event_key}`;
+    expect(row!.status).toBe("draft");
+    expect(sent).toHaveLength(0);
+  });
+
   it("dispatches once per accepted lifecycle move/published edit, never for drafts, replays or denials", async () => {
     const event_key = await create();
     expect((await call("update", { event_key, version: 1, fields })).status).toBe(200);
