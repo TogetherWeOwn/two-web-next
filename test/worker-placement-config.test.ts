@@ -9,10 +9,27 @@ import { readWranglerConfig } from "../ci/wrangler-config.mjs";
 // Production's database is elsewhere, so it must not inherit this pin.
 const main = readWranglerConfig(readFileSync("wrangler.jsonc", "utf8")) as {
   placement?: unknown;
-  env?: { production?: { placement?: unknown } };
+  hyperdrive?: { binding: string; id: string }[];
+  env?: {
+    production?: {
+      placement?: unknown;
+      hyperdrive?: { binding: string; id: string }[];
+    };
+  };
 };
 
 describe("Worker placement (wrangler.jsonc)", () => {
+  it("binds the bot-reader Hyperdrive separately in staging and production", () => {
+    expect(main.hyperdrive).toContainEqual({
+      binding: "BOT_DB",
+      id: "63e6e86a91cb4e40b3ee54f459c8b450",
+    });
+    expect(main.env?.production?.hyperdrive).toContainEqual({
+      binding: "BOT_DB",
+      id: "14c00d84d1d446c1b117861f3b49473f",
+    });
+  });
+
   it("places the staging Worker in the AWS region of its Neon database", () => {
     expect(main.placement).toEqual({ region: "aws:eu-central-1" });
   });

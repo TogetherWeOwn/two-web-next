@@ -120,7 +120,7 @@ describe.skipIf(!process.env.DATABASE_URL)("homepage counts (test container)", (
     Object.assign(db, { transaction: async (fn: (tx: Db) => Promise<unknown>) => fn(db) });
     env = {
       ...baseEnv,
-      DB: { connectionString: testDatabaseUrl(process.env.DATABASE_URL!).href },
+      BOT_DB: { connectionString: testDatabaseUrl(process.env.DATABASE_URL!).href },
       ADMIN_DB: db,
       SESSION_STORE: createMemorySessionStore(),
     } as Env;
@@ -177,9 +177,21 @@ describe.skipIf(!process.env.DATABASE_URL)("homepage counts (test container)", (
     expect(warn).not.toHaveBeenCalled();
   });
 
-  it("supports explicit local DATABASE_URL without the binding", async () => {
-    env = { ...env, DATABASE_URL: env.DB!.connectionString, DB: undefined };
+  it("supports explicit local BOT_DATABASE_URL without the binding", async () => {
+    env = { ...env, BOT_DATABASE_URL: env.BOT_DB!.connectionString, BOT_DB: undefined };
     expect(await home()).toContain("<strong>84</strong> members");
+  });
+
+  it("hides counts when only the web database is configured", async () => {
+    env = {
+      ...env,
+      BOT_DATABASE_URL: undefined,
+      BOT_DB: undefined,
+      DB: { connectionString: testDatabaseUrl(process.env.DATABASE_URL!).href },
+    };
+    const html = await home();
+    expect(html).not.toContain('data-testid="member-count"');
+    expect(html).toContain("The lobby is open.");
   });
 
   it("keeps a genuine zero member count, and omits zero online", async () => {
