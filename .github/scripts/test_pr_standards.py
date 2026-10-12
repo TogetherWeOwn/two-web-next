@@ -258,6 +258,18 @@ class CardAndInternalRefs(unittest.TestCase):
                                     PR_STANDARDS_MODE="warn"))
                 self.assertIn(("error", "Internal reference"), levels(f), (where, leak))
 
+    def test_public_title_body_host_is_case_insensitive(self):
+        # Hostnames are case-insensitive: sentence-case and upper-case must fail too.
+        clean = GOOD_BODY.replace("Refs: TOG-1234", "Fixes #12")
+        for leak in ("https://workforce.Infextion.net/x", "https://workforce.INFEXTION.NET/x",
+                     "see Infextion.net here"):
+            for where in ("TITLE", "BODY"):
+                body = clean if where == "TITLE" else GOOD_BODY.replace("Refs: TOG-1234", leak)
+                title = "fix(auth): refresh the key " + leak if where == "TITLE" else "fix(auth): refresh the key"
+                f = ps.evaluate(env(TITLE=title, BODY=body, REPO_PRIVATE="false",
+                                    PR_STANDARDS_MODE="warn"))
+                self.assertIn(("error", "Internal reference"), levels(f), (where, leak))
+
     def test_public_title_body_advisory_subset_follows_mode(self):
         # Agent links, localhost, private nets and tailnet names stay advisory in warn mode
         clean = GOOD_BODY.replace("Refs: TOG-1234", "Fixes #12")
