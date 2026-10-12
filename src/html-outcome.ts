@@ -1,4 +1,4 @@
-// Shared HTML outcome renderer (TOG-22119).
+// Shared HTML outcome renderer.
 //
 // Hono-owned controllers that return HTML recovery or form-validation
 // outcomes render through this injected, buffered interface instead of

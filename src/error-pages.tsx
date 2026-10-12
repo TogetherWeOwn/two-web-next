@@ -164,7 +164,7 @@ export const RateLimitedPage: FC<{ inviteUrl: string }> = ({ inviteUrl }) => (
   </ErrorShell>
 );
 
-// 403 (TOG-22119). Branded form of the bare "Forbidden" refusals: the viewer
+// 403. Branded form of the bare "Forbidden" refusals: the viewer
 // is signed in but lacks membership or the moderator bit, so there is no login
 // loop and no OAuth start — only the way back home and the invite URL that
 // works during an outage. No session or DB reads.
@@ -189,7 +189,7 @@ export const ForbiddenPage: FC<{ inviteUrl: string }> = ({ inviteUrl }) => (
   </ErrorShell>
 );
 
-// 410 (TOG-22119). Generic retired-page shell, distinct from the event-specific
+// 410. Generic retired-page shell, distinct from the event-specific
 // EventGonePage: unknown and URL-freeze-retired paths stay 404, while an
 // explicitly retired document answers here. No session or DB reads.
 export const GonePage: FC = () => (

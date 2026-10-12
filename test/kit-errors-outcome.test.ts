@@ -1,4 +1,4 @@
-// TOG-22119: branded Kit 404/403/410/429/500/503 shells, negotiated helpers
+// Branded Kit 404/403/410/429/500/503 shells, negotiated helpers
 // and the shared HTML outcome renderer. Hermetic: local fixtures only, no
 // live services, no session/DB reads merely to offer recovery.
 import { readFileSync } from "node:fs";

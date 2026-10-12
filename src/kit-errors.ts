@@ -1,4 +1,4 @@
-// Branded Kit error copy + framework-free negotiation (TOG-22119).
+// Branded Kit error copy + framework-free negotiation.
 //
 // The Hono shells in src/error-pages.tsx stay the HTML source of truth; this
 // module carries the same copy as data so the SvelteKit error boundary

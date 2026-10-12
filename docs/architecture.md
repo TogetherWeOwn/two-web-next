@@ -275,6 +275,7 @@ exactly once.
 | `src/featured.ts` | content |
 | `src/freeze-banner.ts` | http-guard |
 | `src/headers.ts` | http-guard |
+| `src/html-outcome.ts` | entry |
 | `src/image-policy.ts` | content |
 | `src/index.tsx` | entry |
 | `src/invite.ts` | join |
@@ -283,6 +284,7 @@ exactly once.
 | `src/jobs-worker.ts` | jobs |
 | `src/join/` | join |
 | `src/kit-access-sink.ts` | profiles |
+| `src/kit-errors.ts` | entry |
 | `src/kit-session.ts` | auth |
 | `src/mcp/` | content |
 | `src/member-erasure.ts` | profiles |
@@ -298,6 +300,7 @@ exactly once.
 | `src/profiles/` | profiles |
 | `src/public-data/` | content |
 | `src/qa.ts` | auth |
+| `src/recovery-outcome.ts` | entry |
 | `src/request-log.ts` | observability |
 | `src/return-journey.ts` | auth |
 | `src/roles.ts` | auth |

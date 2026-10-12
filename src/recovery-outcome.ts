@@ -1,4 +1,4 @@
-// One recovery adapter over the shared HTML outcome renderer (TOG-22119).
+// One recovery adapter over the shared HTML outcome renderer.
 //
 // Proves the interface without moving OAuth logic or changing statuses: the
 // production recoveryLanding in src/write-recovery.tsx keeps its wiring, and

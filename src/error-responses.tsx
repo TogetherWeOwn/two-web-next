@@ -202,7 +202,7 @@ function isFeedErrorPath(path: string): boolean {
   return /\.rss$|\.ics$|\.md$|^\/llms\.txt$/.test(path);
 }
 
-// Branded 403 (TOG-22119): one static envelope for API/JSON callers, plain
+// Branded 403: one static envelope for API/JSON callers, plain
 // text for feed paths (the existing draft-ICS contract), and the branded page
 // for browsers. Machine-only event writes and /api/ return JSON even when
 // Accept prefers HTML or is absent. Always private no-store + Vary: Accept.
@@ -226,7 +226,7 @@ export function forbidden(c: Context): Response | Promise<Response> {
   return c.html(<ForbiddenPage inviteUrl={inviteDestination(c.env?.DISCORD_INVITE_URL)} />);
 }
 
-// Branded 410 for explicitly retired documents (TOG-22119). Unknown and
+// Branded 410 for explicitly retired documents. Unknown and
 // URL-freeze-retired paths stay 404; cancelled events keep their dedicated
 // EventGonePage. Same negotiation as 403: JSON envelope for machine callers,
 // plain text for feeds, branded shell for browsers. Gone is
