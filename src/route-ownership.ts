@@ -16,6 +16,7 @@ import type { AccessSink } from "./access-log";
 import { robotsTagFor, securityHeadersFor } from "./headers";
 import type { KitLocals } from "./kit-session";
 import { type MemberRead, memberReadResponse } from "./member-reads";
+import { SAME_ORIGIN_EXEMPTIONS, UNSAFE_METHODS } from "./same-origin";
 import { isTrustedHost } from "./trust-hosts";
 
 export type RouteOwner = "kit" | "hono";
@@ -59,8 +60,13 @@ export const KIT_RENDERER_HEADER = "x-two-renderer";
 export const KIT_RENDERER_VALUE = "kit";
 
 // Paths Kit must never shadow, whatever the manifest claims. The machine API
-// prefix plus the operational endpoints the Hono app owns.
-const RESERVED_PREFIXES = ["/api/"];
+// prefix plus the operational endpoints the Hono app owns. /_app/* is the
+// adapter-owned immutable asset prefix: it is served by the adapter before
+// hooks run (web/wrangler.jsonc run_worker_first still bypasses handle for
+// /_app/immutable/*), so reserving it here guarantees that any request that
+// DOES reach the hook (dev, future adapter change) falls through to Hono's
+// host-guarded ASSETS branch with full headers, never to Kit resolve.
+const RESERVED_PREFIXES = ["/api/", "/_app/"];
 const RESERVED_EXACT = new Set(["/up", "/csp-reports"]);
 
 // Kit data requests carry the page path with this suffix; ownership follows
@@ -234,6 +240,62 @@ function decorateKitResponse(
   }
 }
 
+// Same-origin parity for the Kit branch (src/same-origin.ts twin, framework-free).
+// Exact method + path exemptions only, never prefixes: agent ingress, the CSP
+// sink and the MCP endpoint authenticate/validate independently. Mirrors the
+// Hono middleware byte-for-byte: unsafe methods only, explicit Origin wins
+// (including "null"/malformed), Sec-Fetch-Site same-origin is a fallback only
+// when Origin is absent and only when the request origin is APP_URL, invalid
+// config fails closed. Reads headers + URL only, never the body.
+export function isSameOriginAllowed(request: Request, appUrl: string): boolean {
+  const method = request.method.toUpperCase();
+  let path: string;
+  try {
+    path = new URL(request.url).pathname;
+  } catch {
+    return false;
+  }
+  if (!UNSAFE_METHODS.some((m) => m === method)) return true;
+  if (SAME_ORIGIN_EXEMPTIONS.some(({ method: em, path: ep }) => em === method && ep === path)) {
+    return true;
+  }
+  let expected: string | undefined;
+  try {
+    const url = new URL(appUrl);
+    if (url.protocol === "https:" || url.protocol === "http:") expected = url.origin;
+  } catch {
+    /* Invalid configuration fails closed, never trusts the request host. */
+  }
+  if (expected === undefined) return false;
+  const origin = request.headers.get("origin") ?? undefined;
+  if (origin !== undefined) return origin === expected;
+  if (request.headers.get("sec-fetch-site") !== "same-origin") return false;
+  try {
+    return new URL(request.url).origin === expected;
+  } catch {
+    return false;
+  }
+}
+
+// Kit 403 twin of Hono's sameOrigin refusal: identical JSON envelope +
+// no-store private, plus the Kit marker and full security headers (Hono's
+// refusal leaves hardened because secureHeaders runs outer; Kit must too).
+function sameOriginRefusal(
+  event: HookEventLike,
+  appUrl: string,
+  featuredImageHosts?: string,
+): Response {
+  const response = new Response(JSON.stringify({ error: "cross_origin" }), {
+    status: 403,
+    headers: {
+      "content-type": "application/json",
+      "cache-control": "no-store, private",
+    },
+  });
+  decorateKitResponse(response, event, appUrl, featuredImageHosts);
+  return response;
+}
+
 // A member-read route renders inside the boundary. The manifest supplies the
 // audit label, the bridge supplies the viewer, and a route with no declared
 // read class has no declaration, so the boundary refuses it.
@@ -279,6 +341,13 @@ export async function dispatchHookRequest(
   const route = decideRoute(event.request, deps.manifest ?? ROUTE_MANIFEST);
   if (!route) {
     return deps.honoFetch(event.request);
+  }
+  // Kit same-origin gate (Hono sameOrigin parity): unsafe methods need an
+  // exact APP_URL Origin (or the Sec-Fetch-Site fallback when Origin is
+  // absent), with only the documented machine exemptions. Refused before the
+  // session bridge and before resolve, body unread, hardened like Hono.
+  if (!isSameOriginAllowed(event.request, deps.appUrl)) {
+    return sameOriginRefusal(event, deps.appUrl, deps.featuredImageHosts);
   }
   // Kit branch only: one read-only session decision merged into locals before
   // resolve. A bridge failure must not 500 the render — public Kit pages fail
