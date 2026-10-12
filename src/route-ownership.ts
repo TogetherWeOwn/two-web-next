@@ -13,6 +13,7 @@
 // (query preserved, body unread) to whichever renderer owns it.
 
 import { robotsTagFor, securityHeadersFor } from "./headers";
+import { isTrustedHost } from "./trust-hosts";
 
 export type RouteOwner = "kit" | "hono";
 
@@ -184,10 +185,12 @@ export interface HookEventLike {
 export interface HookDispatchDeps {
   appUrl: string;
   featuredImageHosts?: string;
-  isTrustedHost: (appUrl: string, hosts: Array<string | null | undefined>) => boolean;
-  decideOwner: (request: Request) => RouteOwner;
   honoFetch: (request: Request) => Promise<Response>;
   resolve: (event: HookEventLike) => Promise<Response>;
+  // Optional manifest override for tests. The hook never passes this: it
+  // always uses the shipped ROUTE_MANIFEST, so there is no swappable owner
+  // seam in production wiring to mutate to always-Kit.
+  manifest?: OwnedRoute[];
 }
 
 // Production Kit decoration, owned by the core so the tested path is the
@@ -222,14 +225,23 @@ function decorateKitResponse(
 // resolve() failure propagates and is never replayed through Hono. The
 // catch-all fallback returns undecorated: it is Hono answering through Kit,
 // so it must never carry the Kit marker or Kit security headers.
+//
+// The trust check and the owner decision are imported, not injected: the hook
+// passes only env, honoFetch and resolve (plus an optional test manifest), so
+// production wiring has no swappable decideOwner seam to mutate to always-Kit.
+// The original Request passes through untouched (identity, body unread).
 export async function dispatchHookRequest(
   event: HookEventLike,
   deps: HookDispatchDeps,
 ): Promise<Response> {
-  if (!deps.isTrustedHost(deps.appUrl, [event.request.headers.get("host"), event.url.host])) {
+  if (!isTrustedHost(deps.appUrl, [event.request.headers.get("host"), event.url.host])) {
     return deps.honoFetch(event.request);
   }
-  if (deps.decideOwner(event.request) === "hono") {
+  const owner = resolveRouteOwner(
+    { method: event.request.method, path: new URL(event.request.url).pathname },
+    deps.manifest ?? ROUTE_MANIFEST,
+  );
+  if (owner === "hono") {
     return deps.honoFetch(event.request);
   }
   const response = await deps.resolve(event);

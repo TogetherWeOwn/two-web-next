@@ -1,13 +1,15 @@
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 // The hook wiring test targets the framework-free dispatch core in
 // src/route-ownership.ts, not web/src/hooks.server.ts: the root Vitest suite
 // cannot transform that file (web/tsconfig.json extends the
 // SvelteKit-generated $app/tsconfig, so the vite:oxc transform fails under
-// coverage). web/src/hooks.server.ts is a pure env binding that delegates to
-// dispatchHookRequest, so these cases pin the shipped ordering plus the
-// production Kit decoration exactly, and the wiring case pins the delegation.
+// coverage). dispatchHookRequest imports the trust check and the owner
+// decision itself; web/src/hooks.server.ts passes only env, honoFetch and
+// resolve (plus no owner logic), so these cases pin the shipped ordering plus
+// the production Kit decoration exactly, and the wiring case pins that the
+// hook carries no swappable owner seam.
 vi.mock("cloudflare:workers", () => ({
   env: { APP_URL: "https://example.com", FEATURED_IMAGE_HOSTS: "" },
   waitUntil: vi.fn(),
@@ -17,12 +19,15 @@ import {
   HONO_FALLBACK_ROUTE_ID,
   KIT_RENDERER_HEADER,
   KIT_RENDERER_VALUE,
-  decideOwner,
+  ROUTE_MANIFEST,
   dispatchHookRequest,
 } from "../src/route-ownership";
-import { isTrustedHost } from "../src/trust-hosts";
 
 const APP_URL = "https://example.com";
+// Kit-owned view of the archive page for tests: the shipped manifest keeps it
+// on Hono, so tests that need the Kit branch pass this override. Production
+// wiring never passes a manifest and always uses the shipped default.
+const KIT_MANIFEST = [{ method: "GET", path: "/events/past", enabled: true }];
 
 function eventFor(appUrl, path, host) {
   const request = new Request(new URL(path, appUrl).href, {
@@ -39,8 +44,6 @@ function deps(overrides = {}) {
   return {
     appUrl: APP_URL,
     featuredImageHosts: "",
-    isTrustedHost,
-    decideOwner,
     honoFetch: vi.fn(async () => new Response("hono", { status: 200 })),
     resolve: vi.fn(async () => new Response("kit", { status: 200 })),
     ...overrides,
@@ -59,23 +62,66 @@ beforeEach(() => {
 });
 
 describe("hooks.server route ownership wiring", () => {
+  it("ships the native archive route disabled", () => {
+    expect(ROUTE_MANIFEST).toEqual([{ method: "GET", path: "/events/past", enabled: false }]);
+  });
+
+  it("pins HONO_FALLBACK_ROUTE_ID to the real catch-all route directory", () => {
+    expect(HONO_FALLBACK_ROUTE_ID).toBe("/[...path]");
+    const serverUrl = new URL("../web/src/routes/[...path]/+server.ts", import.meta.url);
+    expect(existsSync(serverUrl)).toBe(true);
+  });
+
   it("returns honoFetch before resolve for a Hono-owned path, undecorated", async () => {
     const event = trustedEvent("/events/past");
     const d = deps();
 
     const response = await dispatchHookRequest(event, d);
     expect(d.honoFetch).toHaveBeenCalledOnce();
-    expect(d.honoFetch).toHaveBeenCalledWith(event.request);
+    expect(d.honoFetch.mock.calls[0][0]).toBe(event.request);
     expect(d.resolve).not.toHaveBeenCalled();
     expect(await response.text()).toBe("hono");
     expect(response.headers.get(KIT_RENDERER_HEADER)).toBeNull();
     expect(response.headers.get("Content-Security-Policy")).toBeNull();
   });
 
+  it("forwards the original POST Request untouched with body unread at hand-off", async () => {
+    const body = JSON.stringify({ title: "Seed swap" });
+    const request = new Request(new URL("/events/past", APP_URL).href, {
+      method: "POST",
+      headers: {
+        host: "example.com",
+        cookie: "session=abc",
+        "content-type": "application/json",
+      },
+      body,
+    });
+    const event = { request, url: new URL(request.url), route: { id: "/events/past" } };
+    let usedAtHandoff = null;
+    const d = deps({
+      honoFetch: vi.fn(async (req) => {
+        usedAtHandoff = req.bodyUsed;
+        expect(req.method).toBe("POST");
+        expect(req.headers.get("cookie")).toBe("session=abc");
+        expect(await req.json()).toMatchObject({ title: "Seed swap" });
+        return new Response("hono-post", { status: 200 });
+      }),
+    });
+    expect(request.bodyUsed).toBe(false);
+
+    const response = await dispatchHookRequest(event, d);
+    expect(d.honoFetch).toHaveBeenCalledOnce();
+    expect(d.honoFetch.mock.calls[0][0]).toBe(event.request);
+    // Awaiting text()/json() before forwarding would mark the body used here.
+    expect(usedAtHandoff).toBe(false);
+    expect(d.resolve).not.toHaveBeenCalled();
+    expect(await response.text()).toBe("hono-post");
+  });
+
   it("decorates a Kit-owned HTML page: marker, security headers, charset, robots tag", async () => {
     const event = trustedEvent("/events/past");
     const d = deps({
-      decideOwner: () => "kit",
+      manifest: KIT_MANIFEST,
       resolve: vi.fn(async () => kitHtmlResponse()),
     });
 
@@ -94,7 +140,7 @@ describe("hooks.server route ownership wiring", () => {
   it("flows featured image hosts into the Kit CSP", async () => {
     const event = trustedEvent("/events/past");
     const d = deps({
-      decideOwner: () => "kit",
+      manifest: KIT_MANIFEST,
       featuredImageHosts: "images.example.com",
       resolve: vi.fn(async () => kitHtmlResponse()),
     });
@@ -107,7 +153,7 @@ describe("hooks.server route ownership wiring", () => {
   it("marks a Kit-owned non-HTML response without charset or robots fixes", async () => {
     const event = trustedEvent("/events/past");
     const d = deps({
-      decideOwner: () => "kit",
+      manifest: KIT_MANIFEST,
       resolve: vi.fn(
         async () =>
           new Response(JSON.stringify({ ok: true }), {
@@ -130,7 +176,7 @@ describe("hooks.server route ownership wiring", () => {
     const event = eventFor(apex, "/events/past", "togetherweown.com");
     const d = deps({
       appUrl: apex,
-      decideOwner: () => "kit",
+      manifest: KIT_MANIFEST,
       resolve: vi.fn(async () => kitHtmlResponse()),
     });
 
@@ -144,7 +190,7 @@ describe("hooks.server route ownership wiring", () => {
     const event = trustedEvent("/events/past");
     const failure = new Error("kit resolve blew up");
     const d = deps({
-      decideOwner: () => "kit",
+      manifest: KIT_MANIFEST,
       resolve: vi.fn(async () => {
         throw failure;
       }),
@@ -155,22 +201,22 @@ describe("hooks.server route ownership wiring", () => {
   });
 
   it("answers untrusted hosts via Hono before the ownership decision", async () => {
+    // Even a Kit-enabled manifest must not matter: the trust guard runs first.
     const event = trustedEvent("/events/past", "evil.example");
-    const decide = vi.fn(() => "kit");
-    const d = deps({ decideOwner: decide });
+    const d = deps({ manifest: KIT_MANIFEST });
 
     const response = await dispatchHookRequest(event, d);
     expect(d.honoFetch).toHaveBeenCalledOnce();
+    expect(d.honoFetch.mock.calls[0][0]).toBe(event.request);
     expect(d.resolve).not.toHaveBeenCalled();
-    expect(decide).not.toHaveBeenCalled();
     expect(await response.text()).toBe("hono");
   });
 
   it("returns the catch-all fallback without marker, headers, or charset fix", async () => {
-    const event = trustedEvent("/api/ping");
+    const event = trustedEvent("/events/past");
     event.route = { id: HONO_FALLBACK_ROUTE_ID };
     const d = deps({
-      decideOwner: () => "kit",
+      manifest: KIT_MANIFEST,
       resolve: vi.fn(async () => kitHtmlResponse()),
     });
 
@@ -184,27 +230,30 @@ describe("hooks.server route ownership wiring", () => {
     expect(await response.text()).toBe("<html>kit page</html>");
   });
 
-  it("wires hooks.server.ts as a pure env binding to the canonical deps", async () => {
+  it("wires hooks.server.ts as a pure env binding with no owner seam", async () => {
     const source = readFileSync(new URL("../web/src/hooks.server.ts", import.meta.url), "utf8");
-    // Delegates to the core with the canonical owner, trust check and fetch.
+    // Delegates to the core with env, fetch and resolve only.
     expect(source).toContain("dispatchHookRequest");
-    expect(source).toContain("decideOwner,");
-    expect(source).toContain("isTrustedHost,");
     expect(source).toContain("honoFetch,");
     expect(source).toContain("featuredImageHosts: env.FEATURED_IMAGE_HOSTS");
     expect(source).toContain("appUrl: env.APP_URL");
-    // Production decoration lives in the core: the hook must not duplicate it
-    // and must not hard-code an owner. Each of these mutants stays green
-    // without this pin (delete the marker, drop the decoration, force kit).
+    expect(source.match(/dispatchHookRequest\(event,/g)?.length).toBe(1);
+    // Production trust and ownership live in the core (imported, not
+    // injected): the hook must not carry any owner logic to mutate. Each of
+    // these mutants stays green without this pin (force kit via an injected
+    // owner, a manifest override, or a hard-coded string).
+    expect(source).not.toContain("decideOwner");
+    expect(source).not.toContain("isTrustedHost");
+    expect(source).not.toContain("resolveRouteOwner");
+    expect(source).not.toContain("ROUTE_MANIFEST");
+    expect(source).not.toContain("manifest");
+    expect(source).not.toContain("enabled");
     expect(source).not.toContain("decorateKitResponse");
     expect(source).not.toContain("KIT_RENDERER");
     expect(source).not.toContain("securityHeadersFor");
     expect(source).not.toContain("robotsTagFor");
-    expect(source).not.toContain('() => "kit"');
-    expect(source).not.toContain("() => 'kit'");
+    expect(source).not.toContain('"kit"');
+    expect(source).not.toContain("'kit'");
+    expect(source).not.toContain("as const");
   });
 });
-
-// Reference the module export so unused-import drift fails loudly rather
-// than silently dropping the contract pin.
-void decideOwner;
