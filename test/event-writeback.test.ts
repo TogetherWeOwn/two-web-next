@@ -330,7 +330,9 @@ describe.skipIf(!process.env.DATABASE_URL)("event write-back through W13 (test c
   });
 
   it("publish then cancel during debounce selects cancel at send time, with the built key", async () => {
-    await seed();
+    const eventId = await seed();
+    await sql`insert into rsvps (event_id, user_id, status, updated_at)
+      values (${eventId}, 'test-user', 'going', '2026-01-01T00:00:00Z')`;
     const built = buildSyncMessage(eventKey, "published")!;
     await enqueueSyncEvent(env, built);
     await sql`update events set status = 'cancelled' where event_key = ${eventKey}`;
@@ -343,6 +345,9 @@ describe.skipIf(!process.env.DATABASE_URL)("event write-back through W13 (test c
     expect(bot.cancelEvent).not.toHaveBeenCalled();
     expect(bot.upsertEvent).not.toHaveBeenCalled();
     expect(await pgEventStore(sql).needsSync(eventKey)).toBe(false);
+    expect(await sql`select synced_to_discord_at from rsvps where event_id = ${eventId}`).toEqual([
+      { synced_to_discord_at: expect.any(Date) },
+    ]);
   });
 
   it("the actual worker drops a row changed to draft before consumption", async () => {
