@@ -13,6 +13,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   KIT_RENDERER_HEADER,
   KIT_RENDERER_VALUE,
+  type OwnedRoute,
   dispatchHookRequest,
   resolveRouteOwner,
 } from "../src/route-ownership";
@@ -20,11 +21,13 @@ import {
 const APP_URL = "https://example.com";
 const APEX_URL = "https://togetherweown.com";
 // Kit-owned view for tests: shipped manifest keeps /events/past on Hono.
-const KIT_MANIFEST = [
-  { method: "GET", path: "/events/past", enabled: true },
-  { method: "POST", path: "/events/past", enabled: true },
+const KIT_MANIFEST: OwnedRoute[] = [
+  { method: "GET", path: "/events/past", enabled: true, reads: "public" },
+  { method: "POST", path: "/events/past", enabled: true, reads: "public" },
 ];
-const KIT_GET_ONLY = [{ method: "GET", path: "/events/past", enabled: true }];
+const KIT_GET_ONLY: OwnedRoute[] = [
+  { method: "GET", path: "/events/past", enabled: true, reads: "public" },
+];
 
 function eventFor(
   appUrl: string,

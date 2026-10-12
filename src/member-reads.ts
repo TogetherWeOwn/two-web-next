@@ -27,6 +27,8 @@ type ReadPermit = { capture: Capture; queries: number; classification?: NonSensi
 const captures = new AsyncLocalStorage<Capture>();
 const permits = new AsyncLocalStorage<ReadPermit>();
 
+const READ_REFUSAL = "Member data is temporarily unavailable.";
+
 export class MemberReadRefused extends Error {
   constructor() {
     super("Member read contract refused.");
@@ -142,7 +144,9 @@ export function bufferedMemberJson(
   return c.res;
 }
 
-type ReadDeclaration = Omit<AccessDecl, "subjects"> & { viewer: string | null };
+export type ReadDeclaration = Omit<AccessDecl, "subjects"> & { viewer: string | null };
+export type MemberRead = Omit<ReadDeclaration, "viewer">;
+export type MemberReadMeta = { method: string; route: string; requestId?: string };
 
 /** Renders the caller's sanitized outage envelope (branded HTML or negotiated JSON). */
 export type UnavailableResponse = (c: Context) => Response | Promise<Response>;
@@ -152,10 +156,58 @@ export type UnavailableResponse = (c: Context) => Response | Promise<Response>;
 // the plain contract refusal, so a programming error is never relabelled as
 // a database outage. Either way the reason is never in the body.
 async function refuse(c: Context, unavailable?: UnavailableResponse): Promise<void> {
-  c.res = unavailable
-    ? await unavailable(c)
-    : c.text("Member data is temporarily unavailable.", 503);
+  c.res = unavailable ? await unavailable(c) : c.text(READ_REFUSAL, 503);
   c.header("cache-control", "private, no-store");
+}
+
+type Release = { released: true } | { released: false; outage: boolean };
+
+// The one audit decision both renderers share. A read is released only when
+// every query was permitted and classified, nothing is still pending, the
+// declaration names a valid viewer, and the audit row (if any subject) was written.
+async function releaseAfterAudit(
+  capture: Capture,
+  declared: ReadDeclaration | undefined,
+  write: AccessSink,
+  meta: MemberReadMeta,
+): Promise<Release> {
+  // Anonymous event pages may return explicitly classified public data only.
+  // null is deliberate; missing/invalid viewers never authorize member data.
+  if (
+    !declared ||
+    (declared.viewer === null ? capture.subjects.size > 0 : !/^\d{10,25}$/.test(declared.viewer))
+  )
+    capture.failed = true;
+  if (capture.failed || capture.pending !== 0) return { released: false, outage: false };
+  const subjects = [...capture.subjects].filter((key) => key !== declared!.viewer).sort();
+  if (subjects.length === 0) return { released: true };
+  try {
+    const recorded = await captures.exit(() =>
+      write({
+        viewerDiscordId: declared!.viewer!,
+        viewerUserId: declared!.viewer!,
+        resource: declared!.resource,
+        action: declared!.action,
+        route: declared!.route,
+        subjectUserIds: subjects,
+      }),
+    );
+    if (!recorded) throw new MemberReadRefused();
+    return { released: true };
+  } catch (error) {
+    alertRequestError(error, meta);
+    // No SQL, parameters, route URL, subject keys or exception messages.
+    console.error("Member read audit failed; refusing contents.", {
+      exception: error instanceof Error ? error.constructor.name : "unknown",
+      request_id: safeRequestId(meta.requestId),
+    });
+    // The audit store is unavailable for this read: an outage, not a contract bug.
+    return { released: false, outage: true };
+  }
+}
+
+function metaOf(c: Context): MemberReadMeta {
+  return { method: c.req.method, route: requestRoute(c), requestId: c.get("requestId") };
 }
 
 export async function memberReadBoundary(
@@ -176,57 +228,65 @@ export async function memberReadBoundary(
       didThrow = true;
       capture.failed = true;
     }
-    if (didThrow && !c.error)
-      alertRequestError(thrown, {
-        method: c.req.method,
-        route: requestRoute(c),
-        requestId: c.get("requestId"),
-      });
+    const meta = metaOf(c);
+    if (didThrow && !c.error) alertRequestError(thrown, meta);
     if (c.error) capture.failed = true;
     const outage = isDatabaseUnavailable(thrown ?? c.error);
     const declared = typeof declaration === "function" ? declaration() : declaration;
-    // Anonymous event pages may return explicitly classified public data only.
-    // null is deliberate; missing/invalid viewers never authorize member data.
-    if (
-      !declared ||
-      (declared.viewer === null ? capture.subjects.size > 0 : !/^\d{10,25}$/.test(declared.viewer))
-    )
-      capture.failed = true;
     // Classification is tied to this exact response. A later stream (declared
     // or not) cannot borrow an earlier buffered response's approval.
-    if (capture.failed || capture.pending !== 0 || capture.response !== c.res) {
-      await refuse(c, outage ? unavailable : undefined);
-      return;
-    }
+    if (capture.response !== c.res) capture.failed = true;
     // Hono header() clones a finalized Response; classify before changing it.
     c.header("cache-control", "private, no-store");
-    const subjects = [...capture.subjects].filter((key) => key !== declared!.viewer).sort();
-    if (subjects.length === 0) return;
+    const release = await releaseAfterAudit(capture, declared, write, meta);
+    if (!release.released) await refuse(c, outage || release.outage ? unavailable : undefined);
+  });
+}
+
+/** A fully read copy this boundary owns: the only bytes a Kit render can release. */
+async function bufferedCopy(response: Response): Promise<Response> {
+  const bytes = await response.arrayBuffer();
+  return new Response(bytes.byteLength === 0 ? null : bytes, {
+    status: response.status,
+    statusText: response.statusText,
+    headers: new Headers(response.headers),
+  });
+}
+
+function refusedResponse(): Response {
+  return new Response(READ_REFUSAL, {
+    status: 503,
+    headers: { "content-type": "text/plain; charset=UTF-8", "cache-control": "private, no-store" },
+  });
+}
+
+/**
+ * Kit counterpart of memberReadBoundary. The whole render runs inside one
+ * capture, and the response is read to completion inside it, so deferred and
+ * streamed reads finish before the audit decision. Only that fully read copy
+ * can leave, and only after its audit row is written.
+ */
+export function memberReadResponse(
+  meta: MemberReadMeta,
+  declaration: ReadDeclaration | (() => ReadDeclaration | undefined),
+  write: AccessSink,
+  render: () => Promise<Response>,
+): Promise<Response> {
+  const capture: Capture = { subjects: new Set(), failed: false, pending: 0 };
+  return captures.run(capture, async () => {
+    let buffered: Response | undefined;
     try {
-      const recorded = await captures.exit(() =>
-        write({
-          viewerDiscordId: declared!.viewer!,
-          viewerUserId: declared!.viewer!,
-          resource: declared!.resource,
-          action: declared!.action,
-          route: declared!.route,
-          subjectUserIds: subjects,
-        }),
-      );
-      if (!recorded) throw new MemberReadRefused();
+      buffered = await bufferedCopy(await render());
     } catch (error) {
-      alertRequestError(error, {
-        method: c.req.method,
-        route: requestRoute(c),
-        requestId: c.get("requestId"),
-      });
-      // No SQL, parameters, route URL, subject keys or exception messages.
-      console.error("Member read audit failed; refusing contents.", {
-        exception: error instanceof Error ? error.constructor.name : "unknown",
-        request_id: safeRequestId(c.get("requestId")),
-      });
-      // The audit store is unavailable for this read: an outage, not a contract bug.
-      await refuse(c, unavailable);
+      capture.failed = true;
+      alertRequestError(error, meta);
     }
+    const declared = typeof declaration === "function" ? declaration() : declaration;
+    const release = await releaseAfterAudit(capture, declared, write, meta);
+    if (buffered && release.released) {
+      buffered.headers.set("cache-control", "private, no-store");
+      return buffered;
+    }
+    return refusedResponse();
   });
 }

@@ -27,7 +27,7 @@ const APP_URL = "https://example.com";
 // Kit-owned view of the archive page for tests: the shipped manifest keeps it
 // on Hono, so tests that need the Kit branch pass this override. Production
 // wiring never passes a manifest and always uses the shipped default.
-const KIT_MANIFEST = [{ method: "GET", path: "/events/past", enabled: true }];
+const KIT_MANIFEST = [{ method: "GET", path: "/events/past", enabled: true, reads: "public" }];
 
 function eventFor(appUrl, path, host) {
   const request = new Request(new URL(path, appUrl).href, {
@@ -63,7 +63,9 @@ beforeEach(() => {
 
 describe("hooks.server route ownership wiring", () => {
   it("ships the native archive route disabled", () => {
-    expect(ROUTE_MANIFEST).toEqual([{ method: "GET", path: "/events/past", enabled: false }]);
+    expect(ROUTE_MANIFEST).toEqual([
+      { method: "GET", path: "/events/past", enabled: false, reads: "public" },
+    ]);
   });
 
   it("pins HONO_FALLBACK_ROUTE_ID to the real catch-all route directory", () => {
@@ -213,8 +215,8 @@ describe("hooks.server route ownership wiring", () => {
     // makes POST Kit-owned, so dropping event.url.host from the check would
     // send this request to resolve instead of Hono.
     const KIT_POST_MANIFEST = [
-      { method: "GET", path: "/events/past", enabled: true },
-      { method: "POST", path: "/events/past", enabled: true },
+      { method: "GET", path: "/events/past", enabled: true, reads: "public" },
+      { method: "POST", path: "/events/past", enabled: true, reads: "public" },
     ];
     const body = JSON.stringify({ title: "Seed swap" });
     const request = new Request("https://evil.example/events/past", {

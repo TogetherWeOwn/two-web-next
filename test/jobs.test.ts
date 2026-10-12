@@ -64,8 +64,8 @@ function memLedger(): QueueLedger & {
     failed: async (id, _kind, _key, reason) => void rows.set(id, { state: "failed", reason }),
   };
 }
-function store(over: Partial<EventStore> = {}): EventStore & { mirrored: string[] } {
-  const mirrored: string[] = [];
+function store(over: Partial<EventStore> = {}): EventStore & { mirrored: (string | null)[] } {
+  const mirrored: (string | null)[] = [];
   return {
     mirrored,
     prepareSync: async (_eventKey, idempotencyKey, mirroredAt) => ({
