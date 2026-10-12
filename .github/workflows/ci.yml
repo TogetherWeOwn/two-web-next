@@ -529,6 +529,9 @@ jobs:
       - name: Production secrets preflight selftest (stubbed wrangler, no secrets or network)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
         run: node --test ci/check-production-secrets.test.mjs
+      - name: Jobs secrets preflight selftest (stubbed wrangler, no secrets or network)
+        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
+        run: node --test ci/check-jobs-secrets.test.mjs
       - name: Watch Lighthouse runner selftest (stub fetch and lhci, no network or browser)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
         run: npm run lighthouse:origin:selftest
@@ -541,6 +544,9 @@ jobs:
       - name: Build production alert Tail Worker (wrangler dry run)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true' || needs.scope.outputs.worker == 'true')
         run: npx wrangler deploy --config tail/wrangler.jsonc --env production --dry-run --outdir ../dist-tail-production
+      - name: Build staging jobs Worker (wrangler dry run)
+        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true' || needs.scope.outputs.worker == 'true')
+        run: npx wrangler deploy --config wrangler.jobs.jsonc --dry-run --outdir ../dist-jobs
       - name: Production build (wrangler dry run, no deployment)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true' || needs.scope.outputs.worker == 'true')
         run: npx wrangler deploy --dry-run --env production --outdir dist-production

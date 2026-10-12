@@ -402,6 +402,10 @@ describe("production deployment preserves configured triggers", () => {
         };
       };
     };
+    const jobsConfig = readWranglerConfig(read("wrangler.jobs.jsonc")) as {
+      triggers?: unknown;
+      queues?: { consumers?: Consumer[]; producers?: Producer[] };
+    };
     // `versions upload`/`deploy` never reconcile triggers, and `wrangler
     // triggers deploy` is banned above (it also syncs routes/domains and
     // re-triggers 100117). The pins below are literal reviewed values, not
@@ -412,8 +416,15 @@ describe("production deployment preserves configured triggers", () => {
     expect(config.env?.production?.triggers).toEqual({
       crons: ["*/10 * * * *", "0 0 * * *"],
     });
-    expect(config.triggers).toEqual({ crons: ["*/10 * * * *", "0 0 * * *"] });
-    const stagingConsumers = config.queues?.consumers ?? [];
+    // Staging handoff: the web Worker owns no cron and consumes no queue, so a
+    // queue keeps exactly one consumer and a cron exactly one owner. Both
+    // schedules and both staging consumers live on two-web-jobs
+    // (wrangler.jobs.jsonc top level); test/jobs-worker-config.test.ts pins
+    // that split. env.production keeps its own cutover template below.
+    expect(config.triggers).toEqual({ crons: [] });
+    expect(config.queues?.consumers ?? []).toEqual([]);
+    expect(jobsConfig.triggers).toEqual({ crons: ["*/10 * * * *", "0 0 * * *"] });
+    const stagingConsumers = jobsConfig.queues?.consumers ?? [];
     const prodConsumers = config.env?.production?.queues?.consumers ?? [];
     expect(
       [...prodConsumers].sort((a, b) => String(a.queue).localeCompare(String(b.queue))),
@@ -477,8 +488,10 @@ describe("deployed revision marker is staging-only", () => {
     );
     expect(verify).toBeLessThan(deploy.indexOf("node bin/smoke.mjs"));
     // The tag and the verified commit come from the same CI-verified expression.
+    // Both staging deploys (web and jobs Workers) share that one tag, so the
+    // expression appears three times: web deploy, jobs deploy, verify step.
     const expr =
       "DEPLOY_SHA: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}";
-    expect(deploy.split(expr)).toHaveLength(3);
+    expect(deploy.split(expr)).toHaveLength(4);
   });
 });

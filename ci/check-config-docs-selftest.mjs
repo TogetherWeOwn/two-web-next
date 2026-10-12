@@ -425,7 +425,7 @@ test("tail inventory covers vars, secrets, services and script names without inh
       appScripts,
     ),
     [
-      "App script not accepted by Tail: two-web-next-prod (wrangler.jsonc vs tail/worker.ts APP_SCRIPT_NAMES)",
+      "App script not accepted by Tail: two-web-next-prod (wrangler.jsonc/wrangler.jobs.jsonc vs tail/worker.ts APP_SCRIPT_NAMES)",
     ],
   );
   assert.deepEqual(
@@ -512,8 +512,8 @@ test("tail check fails when a declaration is omitted from the docs", () => {
       set("UPTIME_URL", "OPS_ALERT_WEBHOOK_URL", "two-web-next-alerts", "two-web-next"),
     ),
     [
-      "Undocumented Tail consumer service: missing-service (wrangler.jsonc -> docs/config.md)",
-      "App tail_consumer without Tail worker: missing-service (wrangler.jsonc vs tail/wrangler.jsonc)",
+      "Undocumented Tail consumer service: missing-service (wrangler.jsonc/wrangler.jobs.jsonc -> docs/config.md)",
+      "App tail_consumer without Tail worker: missing-service (wrangler.jsonc/wrangler.jobs.jsonc vs tail/wrangler.jsonc)",
     ],
   );
 });

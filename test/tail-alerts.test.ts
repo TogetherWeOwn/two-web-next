@@ -409,8 +409,12 @@ describe("Tail delivery", () => {
     });
   });
 
-  it("accepts only the staging and production app scripts, never a prefix of them", async () => {
-    expect([...APP_SCRIPT_NAMES].sort()).toEqual(["two-web-next", "two-web-next-production"]);
+  it("accepts only the staging, production and jobs app scripts, never a prefix of them", async () => {
+    expect([...APP_SCRIPT_NAMES].sort()).toEqual([
+      "two-web-jobs",
+      "two-web-next",
+      "two-web-next-production",
+    ]);
     const { worker, send } = fixture();
     await worker.tail(
       [
@@ -625,6 +629,19 @@ describe("Production Tail pager wiring", () => {
     expect((tail.vars as Record<string, unknown> | undefined)?.UPTIME_URL).toBe(
       "https://next.togetherweown.com/up",
     );
+  });
+
+  it("the staging jobs Worker pages through the staging alerts Worker", async () => {
+    const jobs = readWranglerConfig(readFileSync("wrangler.jobs.jsonc", "utf8")) as Record<
+      string,
+      unknown
+    >;
+    expect(jobs.tail_consumers).toEqual([{ service: "two-web-next-alerts" }]);
+    // The jobs script name is accepted, so its queue.failing traces page.
+    expect([...APP_SCRIPT_NAMES]).toContain("two-web-jobs");
+    const { worker, send } = fixture();
+    await worker.tail([trace([queueAlert], timestamp, "two-web-jobs")], env);
+    expect(send).toHaveBeenCalledTimes(1);
   });
 
   it("CI dry-run builds the production Tail Worker with --env production", () => {

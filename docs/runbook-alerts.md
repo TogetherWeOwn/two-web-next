@@ -75,7 +75,9 @@ occurring work.
 ## Delivery and redaction
 
 For source alerts, `tail/worker.ts` accepts only critical `error.alert` and
-`queue.failing` JSON arguments from error-level logs of `two-web-next`. Other
+`queue.failing` JSON arguments from error-level logs of `two-web-next` and
+`two-web-jobs` (`error.alert` from the web Worker, `queue.failing` from the
+jobs Worker after the handoff). Other
 events, malformed arguments, other Workers and recursive Tail logs are ignored.
 
 | Outbound field | Policy |
@@ -228,7 +230,11 @@ unverified; local fixture tests still cover the chain.
 ## Tailing and fallback
 
 ```sh
-# Source alerts only (authorized Cloudflare access required)
+# Source alerts only (authorized Cloudflare access required). The queue
+# consumer runs on two-web-jobs after the handoff, so tail it for
+# queue.failing; tail two-web-next for error.alert.
+npx wrangler tail two-web-jobs --format json \
+  | jq -c 'select(.logs[]?.message[]? | tostring | test("\"event\":\"(error.alert|queue.failing)\""))'
 npx wrangler tail two-web-next --format json \
   | jq -c 'select(.logs[]?.message[]? | tostring | test("\"event\":\"(error.alert|queue.failing)\""))'
 
