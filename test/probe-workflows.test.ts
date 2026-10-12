@@ -404,12 +404,39 @@ describe("production deployment preserves configured triggers", () => {
     };
     // `versions upload`/`deploy` never reconcile triggers, and `wrangler
     // triggers deploy` is banned above (it also syncs routes/domains and
-    // re-triggers 100117). Any schedule/consumer change must land in the
-    // reviewed config; the runbook's "Production trigger reconciliation"
+    // re-triggers 100117). The pins below are literal reviewed values, not
+    // staging-relative: any schedule/consumer change — even one made in both
+    // blocks at once — fails CI until this test is updated in the same
+    // release PR, and the runbook's "Production trigger reconciliation"
     // applies it without touching the apex custom domain.
-    expect(config.env?.production?.triggers).toEqual(config.triggers);
+    expect(config.env?.production?.triggers).toEqual({
+      crons: ["*/10 * * * *", "0 0 * * *"],
+    });
+    expect(config.triggers).toEqual({ crons: ["*/10 * * * *", "0 0 * * *"] });
     const stagingConsumers = config.queues?.consumers ?? [];
     const prodConsumers = config.env?.production?.queues?.consumers ?? [];
+    const pick = (consumer: Consumer) => ({
+      queue: consumer.queue,
+      max_retries: consumer.max_retries,
+      max_batch_size: consumer.max_batch_size,
+      max_batch_timeout: consumer.max_batch_timeout,
+    });
+    expect(
+      prodConsumers.map(pick).sort((a, b) => String(a.queue).localeCompare(String(b.queue))),
+    ).toEqual([
+      {
+        queue: "two-web-next-production-internal-action",
+        max_retries: 10,
+        max_batch_size: 10,
+        max_batch_timeout: 5,
+      },
+      {
+        queue: "two-web-next-production-sync-event",
+        max_retries: 10,
+        max_batch_size: 10,
+        max_batch_timeout: 5,
+      },
+    ]);
     expect(prodConsumers).toHaveLength(stagingConsumers.length);
     for (const consumer of prodConsumers) {
       expect(
@@ -421,10 +448,6 @@ describe("production deployment preserves configured triggers", () => {
         ),
       ).toBe(true);
     }
-    expect(prodConsumers.map((c) => c.queue).sort()).toEqual([
-      "two-web-next-production-internal-action",
-      "two-web-next-production-sync-event",
-    ]);
     // Producers keep the same bindings so the promoted code talks to the
     // production queues, never the staging ones.
     const prodProducers = config.env?.production?.queues?.producers ?? [];

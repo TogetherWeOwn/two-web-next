@@ -270,8 +270,10 @@ upload` and `wrangler versions deploy` change code without re-syncing the
 already-attached apex custom domain or other triggers. The workflow intentionally
 does not reconcile trigger configuration from `wrangler.jsonc`; trigger changes
 must be managed separately via [Production trigger reconciliation](docs/runbook.md#production-trigger-reconciliation-manual-domain-safe)
-(CI pins `env.production` schedules and consumers to the reviewed config, so
-drift fails closed). The workflow does not create resources or run
+(CI pins the literal reviewed `env.production` schedule and consumer values,
+so any change fails CI until the test is updated in the same release PR; the
+authorized principal must still run the reconciliation for the change to take
+effect in production). The workflow does not create resources or run
 migrations/tests on production. Its post-deploy smoke runs
 the same GET-only public-route set as staging
 (`node bin/smoke.mjs https://togetherweown.com --allow-indexable`): `/up`

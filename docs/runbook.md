@@ -383,9 +383,10 @@ Promoting a Worker Version does not apply `wrangler.jsonc` cron schedules or
 queue consumers, and neither `wrangler deploy --env production` nor `wrangler
 triggers deploy --env production` may be used to apply them: both re-sync
 routes and custom domains, retry provisioning the already-attached apex, and
-fail with Cloudflare 100117. `test/probe-workflows.test.ts` pins
-`env.production` schedules and consumers to the reviewed config, so any change
-ships in the release PR; the authorized production principal then reconciles
+fail with Cloudflare 100117. `test/probe-workflows.test.ts` pins the
+literal reviewed `env.production` schedules and consumers, so any change
+fails CI until the test is updated in the same release PR; the authorized
+production principal then reconciles
 only the changed trigger kind below and reads back the result. These endpoints
 manage schedules and consumers only and never touch custom domains or DNS.
 Never delete/recreate the apex DNS record or the custom domain, and never
@@ -393,16 +394,32 @@ remove consumers to hide an incident (see [Queue containment](#queue-containment
 
 1. Read the live state (metadata reads, no mutation; approved Cloudflare
    credentials must already be injected, never supplied on argv). Resolve
-   queue names to IDs first; the consumer endpoints take the queue ID:
+   queue names to IDs first; the consumer endpoints take the queue ID.
+   The token is read from the environment inside node, never placed on
+   argv, so it never appears in `ps` or `/proc/<pid>/cmdline`:
 
    ```bash
    (
      set -euo pipefail
      : "${CF_ACCOUNT_ID:?production account id}"
      : "${CLOUDFLARE_API_TOKEN:?injected, never on argv}"
-     auth=(-H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}")
-     curl -fsS "${auth[@]}" "https://api.cloudflare.com/client/v4/accounts/${CF_ACCOUNT_ID}/workers/scripts/two-web-next-production/schedules"
-     curl -fsS "${auth[@]}" "https://api.cloudflare.com/client/v4/accounts/${CF_ACCOUNT_ID}/queues"
+     CF_TOKEN="$CLOUDFLARE_API_TOKEN" CF_ACCT="$CF_ACCOUNT_ID" node -e '
+       const token = process.env.CF_TOKEN;
+       const acct = process.env.CF_ACCT;
+       (async () => {
+         for (const p of [
+           `/accounts/${acct}/workers/scripts/two-web-next-production/schedules`,
+           `/accounts/${acct}/queues`,
+         ]) {
+           const r = await fetch("https://api.cloudflare.com/client/v4" + p, {
+             headers: { authorization: "Bearer " + token },
+           });
+           const d = await r.json();
+           if (!d.success) { console.error(JSON.stringify(d.errors)); process.exit(1); }
+           console.log(JSON.stringify(d.result));
+         }
+       })();
+     '
    )
    ```
 
@@ -414,11 +431,25 @@ remove consumers to hide an incident (see [Queue containment](#queue-containment
    `PUT .../workers/scripts/two-web-next-production/schedules` with
    `[{"cron": "<each env.production cron>"}]`, then repeat the GET read-back
    until it matches.
-3. On consumer drift only, update that queue's consumer (`PUT
-   .../queues/<queue_id>/consumers/<consumer_id>` with the reviewed
-   `script_name`, `type: "worker"` and settings), then repeat the list
-   read-back until it matches. Consumers attach a queue to a script and
-   survive version promotions; only an actual config change needs this step.
+3. On consumer drift only, reconcile that queue's consumer with the
+   reviewed `script_name`, `type: "worker"` and settings, then repeat the
+   list read-back until it matches. Wrangler maps `wrangler.jsonc` keys to
+   API fields: `max_batch_size` → `batch_size`, `max_batch_timeout`
+   (seconds) → `max_wait_time_ms` (milliseconds, so `5` becomes `5000`;
+   copying `5` verbatim would set a 5 ms wait), `max_retries` unchanged.
+   `PUT` replaces the whole consumer, so send every setting every time;
+   if the reviewed config gains `dead_letter_queue`, `max_concurrency` or
+   `retry_delay`, include those too. Consumers attach a queue to a script
+   and survive version promotions; only an actual config change needs this
+   step.
+   - Consumer missing (the read-back lists no worker consumer for this
+     script on the queue): create it with `POST
+     .../queues/<queue_id>/consumers` and this body (current reviewed
+     values): `{"type": "worker", "script_name":
+     "two-web-next-production", "settings": {"batch_size": 10,
+     "max_retries": 10, "max_wait_time_ms": 5000}}`.
+   - Consumer exists: replace it with `PUT
+     .../queues/<queue_id>/consumers/<consumer_id>` and the same body.
    Record the before/after read-backs with the release evidence.
 
 #### Staging (manual)
