@@ -1,6 +1,7 @@
 import type { Context, Next } from "hono";
 import type { Env } from "./env";
 import { imageHosts } from "./image-policy";
+import { LEAF_CRITICAL_CSS_SHA256 } from "./leaf-critical-css";
 
 // Response-header parity (TOG-10118 ports two-web TOG-7328 + TOG-8729).
 // Two layers, same split as legacy:
@@ -77,6 +78,35 @@ export async function robotsTag(c: Context<{ Bindings: Env }>, next: Next): Prom
   if (tag) c.res.headers.set("X-Robots-Tag", tag);
 }
 
+// The only pages whose shell inlines the stylesheets instead of linking
+// them (theme="content" in src/page-shell.tsx): the stylesheets must be
+// inlined to remove their render-blocking requests on slow mobile audits,
+// and the inlined block is allowlisted by hash so style-src keeps no
+// 'unsafe-inline'. Any other response carrying the hash would be inert, but
+// the allowlist stays scoped to these paths so the documented policy for
+// every other route never changes shape.
+const CONTENT_LEAF_PATHS: ReadonlySet<string> = new Set(["/about", "/faq", "/rules", "/privacy"]);
+
+export function isContentLeafPath(path: string): boolean {
+  return CONTENT_LEAF_PATHS.has(path);
+}
+
+// Per-route twin of the static secureHeaders() policy in src/index.tsx: on a
+// content-leaf path, widen the already-emitted `style-src 'self'` with the
+// inlined block's hash. Runs inside the existing header wrapper after
+// secureHeaders (same pattern as robotsTag), so no extra middleware is
+// registered. String replacement keeps the directive order byte-identical to
+// securityHeadersFor for the same path.
+export function leafInlineStyleCsp(c: Context): void {
+  if (!isContentLeafPath(c.req.path)) return;
+  const csp = c.res.headers.get("Content-Security-Policy");
+  if (!csp || !csp.includes("style-src 'self'")) return;
+  c.res.headers.set(
+    "Content-Security-Policy",
+    csp.replace("style-src 'self'", `style-src 'self' 'sha256-${LEAF_CRITICAL_CSS_SHA256}'`),
+  );
+}
+
 // Framework-neutral twin of the secureHeaders() options in src/index.tsx, for
 // hosts that are not Hono (the SvelteKit spike's web/src/hooks.server.ts,
 // TOG-12247). Same names, values and order as hono's middleware emits, so a
@@ -93,6 +123,11 @@ export function securityHeadersFor(
   const images = imageHosts(featuredImageHosts)
     .map((host) => `https://${host}`)
     .join(" ");
+  // Only the content leaves (about/faq/rules/privacy) emit an inlined
+  // <style> block, so only they carry its hash allowlist. Every other path
+  // keeps the exact documented policy byte-identical, which the adapter
+  // _headers parity and Kit parity tests pin.
+  const leafStyle = isContentLeafPath(request.path) ? [`'sha256-${LEAF_CRITICAL_CSS_SHA256}'`] : [];
   const csp = [
     ["default-src", "'self'"],
     ["base-uri", "'self'"],
@@ -100,7 +135,9 @@ export function securityHeadersFor(
     ["object-src", "'none'"],
     ["img-src", "'self'", images],
     ["frame-src", framed ? "https://discord.com/widget" : "'none'"],
-    ["style-src", "'self'"],
+    // Mirrors the leafInlineStyleCsp rewrite of the secureHeaders output in
+    // src/index.tsx, pinned equal by test/security-headers-builder.test.ts.
+    ["style-src", "'self'", ...leafStyle],
     ["script-src", "'self'"],
     ["font-src", "'self'"],
     ["frame-ancestors", "'none'"],

@@ -40,6 +40,15 @@ afterEach(() => {
 });
 
 describe("homepage theme", () => {
+  it("emits no stylesheet preloads: they measured zero LCP effect", () => {
+    for (const theme of ["home", "event", "content", "join", "profile", "schedule"] as const) {
+      const html = Layout({ title: "Fixture", theme })!.toString();
+      expect(html).not.toMatch(/<link(?=[^>]*rel="preload")(?=[^>]*as="style")/);
+    }
+    const plain = Layout({ title: "Fixture" })!.toString();
+    expect(plain).not.toMatch(/<link(?=[^>]*rel="preload")(?=[^>]*as="style")/);
+  });
+
   it("loads semantic theme tokens for Hono themes and schedule overrides target its body class", () => {
     const html = Layout({ title: "Fixture", theme: "schedule" })!.toString();
     const tokens = readFileSync(new URL("../public/theme-tokens.css", import.meta.url), "utf8");

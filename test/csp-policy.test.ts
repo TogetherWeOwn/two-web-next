@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import app from "./app";
+import { LEAF_CRITICAL_CSS_SHA256 } from "../src/leaf-critical-css";
 import type { Env } from "../src/env";
 
 const env: Env = {
@@ -39,6 +40,21 @@ describe("route CSP (local fixtures, no DB)", () => {
       if (method === "GET") expect(await res.text()).toContain("https://discord.com/widget?id=");
     }
   });
+
+  it.each(["GET", "HEAD"])(
+    "%s content leaf allowlists only the inlined style hash",
+    async (method) => {
+      for (const path of ["/about", "/faq", "/rules", "/privacy"]) {
+        const res = await app.request(path, { method }, env);
+        expect(res.status).toBe(200);
+        const csp = directives(res);
+        expect(csp["style-src"]).toBe(`'self' 'sha256-${LEAF_CRITICAL_CSS_SHA256}'`);
+        expect(csp["script-src"]).toBe("'self'");
+        expect(res.headers.get("Content-Security-Policy")).not.toContain("unsafe-inline");
+        if (method === "GET") expect(await res.text()).toContain("<style>");
+      }
+    },
+  );
 
   it.each(["GET", "HEAD"])("%s homepage cannot embed Discord", async (method) => {
     const res = await app.request("/", { method }, env);

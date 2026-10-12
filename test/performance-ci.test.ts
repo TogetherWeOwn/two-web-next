@@ -54,7 +54,14 @@ describe("performance CI", () => {
         expect(response.headers.get("location"), path).toBeNull();
         expect(response.headers.get("content-type"), path).toContain("text/html");
         const html = await response.text();
-        expect(html, path).toContain("/styles.css");
+        if (["/about", "/faq", "/rules", "/privacy"].includes(path)) {
+          // Content leaves inline the stylesheets: the real app rules must
+          // be present in the style block instead of a link.
+          expect(html, path).toContain("<style>");
+          expect(html, path).toContain(".content-page");
+        } else {
+          expect(html, path).toContain("/styles.css");
+        }
         if (path === "/" || path === "/events" || path.startsWith("/e/")) {
           expect(html).toContain("Lighthouse fixture game night");
           expect(html).toContain(fixtureKey);
@@ -335,7 +342,13 @@ describe("performance CI", () => {
     [
       "missing real app CSS",
       "/",
-      (html: string) => html.replace('href="/styles.css"', 'href="/missing.css"'),
+      (html: string) =>
+        html.replace('rel="stylesheet" href="/styles.css"', 'rel="stylesheet" href="/missing.css"'),
+    ],
+    [
+      "missing inlined leaf CSS",
+      "/rules",
+      (html: string) => html.replace(/<style>[\s\S]*?<\/style>/, ""),
     ],
     [
       "external Discord embed",
