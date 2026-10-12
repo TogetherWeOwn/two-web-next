@@ -156,15 +156,20 @@ export function databaseUnavailable(c: Context, jsonOnly = false): Response | Pr
 
 // Like the shared 429 response: one static envelope for API/JSON callers,
 // a branded page for browsers, and no request body, field names or stack traces.
-// The /api/ prefix is the fixed machine-only contract (returns JSON even if
-// Accept prefers HTML); otherwise delegates to the quality selector so that
-// q=0, specificity, case and wildcards match the outage contract. Always sets
+// The /api/ prefix and the JSON-only event write methods are the fixed
+// machine-only contracts (return JSON even if Accept prefers HTML or is
+// absent); otherwise delegates to the quality selector so that q=0,
+// specificity, case and wildcards match the outage contract. Always sets
 // private no-store + Vary: Accept (merged).
 export function payloadTooLarge(c: Context): Response | Promise<Response> {
   c.header("cache-control", "no-store, private");
   varyAccept(c);
   c.status(413);
-  if (c.req.path.startsWith("/api/") || outageRepresentation(c) === "application/json") {
+  if (
+    jsonOnlyEventRequest(c) ||
+    c.req.path.startsWith("/api/") ||
+    outageRepresentation(c) === "application/json"
+  ) {
     return c.json({
       reason: "payload_too_large",
       message: "Reduce the size of your request and try again.",
