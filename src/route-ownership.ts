@@ -54,7 +54,9 @@ function isReserved(path: string): boolean {
   if (RESERVED_EXACT.has(path)) return true;
   // The bare prefix counts too: trailing-slash normalization turns "/api/"
   // into "/api", which must not escape the reservation.
-  return RESERVED_PREFIXES.some((prefix) => path === prefix.slice(0, -1) || path.startsWith(prefix));
+  return RESERVED_PREFIXES.some(
+    (prefix) => path === prefix.slice(0, -1) || path.startsWith(prefix),
+  );
 }
 
 function matchPattern(pattern: string, path: string): boolean {
