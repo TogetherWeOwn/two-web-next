@@ -164,10 +164,12 @@ npx wrangler deploy --dry-run --outdir dist   # bundle check; does not deploy
 ### Browser regressions
 
 These suites skip their browser cases unless the opt-in variable is `"true"`, so
-a run without it can pass without executing them. The `a11y` job sets each
-variable, writes a Vitest JSON report and runs `ci/a11y-require-executed.mjs`,
-which fails the step unless every case in the named suite passed and at least
-the minimum ran. The minimums live in `.github/workflows/ci.yml`.
+a run without it can pass without executing them. For the suites wired into CI,
+the `a11y` job sets each variable, writes a Vitest JSON report and runs
+`ci/a11y-require-executed.mjs`, which fails the step unless every case in the
+named suite passed and at least the minimum ran. The minimums live in
+`.github/workflows/ci.yml`. The RSVP focus suite below is not wired into CI yet;
+run its listed command locally to execute the Chromium proof.
 
 | Suite | Opt-in variable | Local command |
 | --- | --- | --- |
@@ -176,6 +178,7 @@ the minimum ran. The minimums live in `.github/workflows/ci.yml`.
 | `test/calendar-search-unicode-boundaries.test.ts` | `CALENDAR_SEARCH_BROWSER_TESTS` | `CALENDAR_SEARCH_BROWSER_TESTS=true npx vitest run test/calendar-search-unicode-boundaries.test.ts` |
 | `test/profile-native-length.test.ts` | `A11Y_BROWSER_TESTS` | `A11Y_BROWSER_TESTS=true npx vitest run test/profile-native-length.test.ts` |
 | `ci/a11y-lifecycle.test.mjs` | `A11Y_BROWSER_TESTS` | `A11Y_BROWSER_TESTS=true node --test ci/a11y-lifecycle.test.mjs` (real Chromium signal cases; no executed-count verifier yet) |
+| `ci/rsvp-focus-browser.test.mjs` | `RSVP_FOCUS_BROWSER_TESTS` | `RSVP_FOCUS_BROWSER_TESTS=true node --test ci/rsvp-focus-browser.test.mjs` (real Chromium focus proof; not run by CI) |
 
 The admin, featured and calendar suites use intercepted synthetic fixtures or
 loopback servers with mocked reads, and the profile suite uses loopback fixtures
