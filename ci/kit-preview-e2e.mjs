@@ -343,7 +343,7 @@ async function previewParity(kitBase, honoBase) {
 
 const kitPreview = process.env.KIT_PREVIEW_URL;
 const honoPreview = process.env.HONO_PREVIEW_URL;
-if ((((kitPreview ?? null) === null) !== (honoPreview ?? null)) === null) {
+if (((kitPreview ?? null) === null) !== ((honoPreview ?? null) === null)) {
   console.error(
     "kit-preview-e2e: set both KIT_PREVIEW_URL and HONO_PREVIEW_URL, or neither (unit mode)",
   );
@@ -356,6 +356,6 @@ if ((((kitPreview ?? null) === null) !== (honoPreview ?? null)) === null) {
 if (failures.length) {
   console.error(`kit-preview-e2e: ${failures.length} failed assertions`);
   process.exitCode = 1;
-} else {
+} else if (!process.exitCode) {
   console.log("kit-preview-e2e: all parity assertions passed");
 }
