@@ -494,7 +494,7 @@ describe.skipIf(!process.env.DATABASE_URL)("events routes (agent-testdb)", () =>
     }
   });
 
-  it("show and list preserve the row keys/types, count only going and isolate the viewer's FIFO position", async () => {
+  it("show keeps viewer FIFO position while the public list shares base fields without personal state", async () => {
     const [event] = await db
       .insert(events)
       .values({
@@ -566,7 +566,12 @@ describe.skipIf(!process.env.DATABASE_URL)("events routes (agent-testdb)", () =>
       waitlist_position: 2,
     });
     expect(res.headers.get("x-robots-tag")).toBeNull();
-    expect((await collection()).data).toEqual([data]);
+    // Public collection (A0): same base fields, published-only, no viewer state.
+    const { waitlist_position: _dropped, ...publicData } = data;
+    const listed = (await collection()).data;
+    expect(listed).toHaveLength(1);
+    expect(listed[0]).toEqual(publicData);
+    expect(listed[0]).not.toHaveProperty("waitlist_position");
     const etag = res.headers.get("etag")!;
     const mod = await req(path, await as(MOD, { "if-none-match": etag }));
     expect(mod.status).toBe(200);
