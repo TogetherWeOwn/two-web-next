@@ -229,6 +229,7 @@ Public routes may read optional sessions; this does not promise zero DB queries.
 | `GET /rules` | public | seo: frozen funnel leaf |
 | `GET /sitemap_index.xml` | public | seo: frozen sitemap |
 | `GET /up` | public | up: always-200 queue health |
+| `OPTIONS /mcp` | public | mcp: CORS preflight for the stateless public MCP; answered by the handler, no body, no budget burn |
 | `PATCH /events/:key` | moderator | events: JSON update |
 | `PATCH /members/:user` | member-owner | profiles: self-only edit |
 | `POST /__probe/alert` | staging-token | alerts: QA-only request + poison-job drill; expected 500, no production seam |
@@ -247,6 +248,7 @@ Public routes may read optional sessions; this does not promise zero DB queries.
 | `POST /events/:key/cancel` | moderator | events: cancel |
 | `POST /events/:key/publish` | moderator | events: publish |
 | `POST /logout` | public | app: optional session revoke + origin check |
+| `POST /mcp` | public | mcp: stateless public read-only MCP (list_events, get_event, get_community, get_join); session-free, shared read budget, 32 KiB cap |
 | `POST /members/:user` | member-owner | profiles: `_method=PATCH` form adapter |
 | `PUT /events/:key/rsvp` | member-decoy | rsvp: owner answer + decoy |
 

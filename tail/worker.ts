@@ -91,6 +91,7 @@ export const ALERT_ROUTES = new Set([
   "/join/discord",
   "/login",
   "/logout",
+  "/mcp",
   "/members",
   "/members/",
   "/members/:user",
