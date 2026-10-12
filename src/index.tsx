@@ -412,7 +412,7 @@ registerStaticLeaves(app);
 // the join journey so the CSP sink keeps its pre-session placement.
 registerSeoLeaves(app);
 
-// AI-friendly machine formats (A2: TOG-22171): `/llms.txt` + curated `.md`
+// AI-friendly machine formats: `/llms.txt` + curated `.md`
 // alternates. New routes, not Accept negotiation — one media type per route.
 // Viewer-independent by construction (no session read), so the HTML pages
 // above link out with `rel=alternate` and staging noindexes the .md surface.
