@@ -23,16 +23,9 @@ describe("staging jobs handoff invariants", () => {
     expect(names(jobs.queues?.producers)).toEqual(["two-sync-event", "two-internal-action"]);
     expect(names(jobs.queues?.consumers)).toEqual(["two-sync-event", "two-internal-action"]);
     expect(names(main.queues?.producers)).toEqual(["two-sync-event", "two-internal-action"]);
-    const bindings = (entries: QueueEntry[] | undefined) =>
-      (entries ?? []).map((e) => e.binding);
-    expect(bindings(jobs.queues?.producers)).toEqual([
-      "SYNC_EVENT_QUEUE",
-      "INTERNAL_ACTION_QUEUE",
-    ]);
-    expect(bindings(main.queues?.producers)).toEqual([
-      "SYNC_EVENT_QUEUE",
-      "INTERNAL_ACTION_QUEUE",
-    ]);
+    const bindings = (entries: QueueEntry[] | undefined) => (entries ?? []).map((e) => e.binding);
+    expect(bindings(jobs.queues?.producers)).toEqual(["SYNC_EVENT_QUEUE", "INTERNAL_ACTION_QUEUE"]);
+    expect(bindings(main.queues?.producers)).toEqual(["SYNC_EVENT_QUEUE", "INTERNAL_ACTION_QUEUE"]);
   });
 
   it("has exactly one consumer per staging queue across both top levels", () => {
