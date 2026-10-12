@@ -25,7 +25,7 @@ export const IDEMPOTENCY_KEY_RETENTION_DAYS = 90; // config/agent-events.php: id
 export const EVENT_SEARCH_LOG_RETENTION_DAYS = 90; // config/event_search_log.php: retention_days
 export const RECONCILE_CRON = "*/10 * * * *"; // routes/console.php:35 everyTenMinutes()
 export const PRUNE_CRON = "0 0 * * *"; // routes/console.php:19 daily() (Laravel daily = 00:00)
-// Max rows one daily pass deletes per age-pruned table (TOG-22188). Postgres
+// Max rows one daily pass deletes per age-pruned table. Postgres
 // DELETE takes no LIMIT, so each statement deletes the oldest N ids via a
 // subselect and reports the exact count through RETURNING. A larger backlog
 // drains over repeat passes; the web_sessions expiry sweep stays unbounded.
