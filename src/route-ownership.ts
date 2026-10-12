@@ -13,6 +13,7 @@
 // (query preserved, body unread) to whichever renderer owns it.
 
 import { robotsTagFor, securityHeadersFor } from "./headers";
+import type { KitLocals } from "./kit-session";
 import { isTrustedHost } from "./trust-hosts";
 
 export type RouteOwner = "kit" | "hono";
@@ -161,6 +162,9 @@ export interface HookEventLike {
   request: Request;
   url: URL;
   route: { id?: string | null } | null | undefined;
+  // Kit locals the session bridge merges on the Kit branch only. Hono-owned
+  // requests never touch this: their session stays Hono's own read.
+  locals?: Record<string, unknown>;
 }
 
 export interface HookDispatchDeps {
@@ -172,6 +176,11 @@ export interface HookDispatchDeps {
   // always uses the shipped ROUTE_MANIFEST, so there is no swappable owner
   // seam in production wiring to mutate to always-Kit.
   manifest?: OwnedRoute[];
+  // Optional read-only session bridge (TOG-22116). Runs only after a Kit
+  // ownership decision and merges its decision into event.locals before
+  // resolve, so Kit loads share one session decision. Absent by default:
+  // without it the dispatch behaves exactly as before.
+  sessionFor?: (event: HookEventLike) => Promise<KitLocals>;
 }
 
 // Production Kit decoration, owned by the core so the tested path is the
@@ -225,6 +234,19 @@ export async function dispatchHookRequest(
   const owner = decideOwner(event.request, deps.manifest ?? ROUTE_MANIFEST);
   if (owner === "hono") {
     return deps.honoFetch(event.request);
+  }
+  // Kit branch only: one read-only session decision merged into locals before
+  // resolve. A bridge failure must not 500 the render — public Kit pages fail
+  // closed to guest-equivalent locals, exactly as if no bridge were wired.
+  if (deps.sessionFor) {
+    try {
+      const bridged = await deps.sessionFor(event);
+      event.locals = { ...(event.locals ?? {}), ...bridged };
+    } catch (err) {
+      console.warn("kit session bridge unavailable; rendering without locals.", {
+        exception: (err as Error)?.constructor?.name ?? "unknown",
+      });
+    }
   }
   const response = await deps.resolve(event);
   if (event.route?.id === HONO_FALLBACK_ROUTE_ID) return response;

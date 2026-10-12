@@ -35,7 +35,9 @@ import {
   createRequestSessionCache,
   readReturnJourney,
   resolveRequestSession,
+  type KitLocals,
 } from "../src/kit-session";
+import { dispatchHookRequest, type HookEventLike } from "../src/route-ownership";
 
 const SECRET = "test-session-secret-at-least-32-bytes-long";
 const WRONG_SECRET = "a-different-secret-at-least-32-bytes-long";
@@ -370,5 +372,110 @@ describe("readReturnJourney (Kit-visible return state, read-only)", () => {
         SECRET,
       ),
     ).toEqual({ returnTo: null, joinResult: null, expiredWrite: null });
+  });
+});
+
+describe("dispatchHookRequest session bridge (Kit branch only)", () => {
+  const APP_URL = "https://next.example.test";
+  // The shipped manifest keeps every route on Hono; tests that need the Kit
+  // branch pass this override (same convention as hook-route-ownership).
+  const KIT_MANIFEST = [{ method: "GET", path: "/events/past", enabled: true }];
+
+  const eventFor = (path: string, pairs: string[] = {}, host = "next.example.test") => {
+    const request = new Request(new URL(path, APP_URL).href, {
+      headers: { host, ...(pairs.length ? { cookie: pairs.join("; ") } : {}) },
+    });
+    return { request, url: new URL(request.url), route: { id: "/events/past" } };
+  };
+
+  const depsFor = (overrides: Record<string, unknown> = {}) => ({
+    appUrl: APP_URL,
+    featuredImageHosts: "",
+    honoFetch: vi.fn(async () => new Response("hono", { status: 200 })),
+    resolve: vi.fn(async () => new Response("kit", { status: 200 })),
+    ...overrides,
+  });
+
+  const localsOf = (session: string | null): KitLocals => ({
+    status: session ? "authenticated" : "guest",
+    session,
+  });
+
+  it("a Hono-owned request never invokes the session bridge, cookies or not", async () => {
+    const store = createMemorySessionStore();
+    const { token } = await seedSession(store);
+    const sessionFor = vi.fn(async (_event: HookEventLike) => localsOf("x"));
+    const event = eventFor("/events/past", [await pair(SESSION_COOKIE, token)]);
+    const deps = depsFor({ sessionFor });
+    const res = await dispatchHookRequest(event, deps);
+    expect(sessionFor).not.toHaveBeenCalled();
+    expect(deps.honoFetch).toHaveBeenCalledTimes(1);
+    expect(deps.resolve).not.toHaveBeenCalled();
+    expect(await res.text()).toBe("hono");
+    // Static and Hono leaves stay cookie-free: the pass-through adds nothing.
+    expect(res.headers.getSetCookie()).toEqual([]);
+  });
+
+  it("a Kit-owned request resolves the session exactly once and merges locals", async () => {
+    const store = createMemorySessionStore();
+    const { token } = await seedSession(store);
+    const seen: HookEventLike[] = [];
+    const deps = depsFor({
+      manifest: KIT_MANIFEST,
+      sessionFor: vi.fn(async (hookEvent: HookEventLike) => {
+        const decision = await resolveRequestSession(hookEvent.request, {
+          sessionSecret: SECRET,
+          store,
+        });
+        return { ...decision, returnTo: null, joinResult: null, expiredWrite: null };
+      }),
+      resolve: vi.fn(async (hookEvent: HookEventLike) => {
+        seen.push(hookEvent);
+        return new Response("kit", { status: 200 });
+      }),
+    });
+    const event = eventFor("/events/past", [await pair(SESSION_COOKIE, token)]);
+    await dispatchHookRequest(event, deps);
+    expect(deps.sessionFor).toHaveBeenCalledTimes(1);
+    expect(deps.resolve).toHaveBeenCalledTimes(1);
+    expect(seen[0]!.locals?.session).toEqual({
+      userId: "42",
+      username: "Rick",
+      avatar: null,
+      member: true,
+      moderator: false,
+    });
+    expect(seen[0]!.locals?.status).toBe("authenticated");
+  });
+
+  it("a failing bridge never 500s a Kit render: resolve still runs without locals", async () => {
+    const deps = depsFor({
+      manifest: KIT_MANIFEST,
+      sessionFor: vi.fn(async () => {
+        throw new Error("connection refused");
+      }),
+    });
+    const event = eventFor("/events/past");
+    const res = await dispatchHookRequest(event, deps);
+    expect(deps.resolve).toHaveBeenCalledTimes(1);
+    expect(event.locals).toBeUndefined();
+    expect(res.status).toBe(200);
+  });
+
+  it("an untrusted host bypasses the bridge straight to Hono", async () => {
+    const sessionFor = vi.fn(async (_event: HookEventLike) => localsOf("x"));
+    const event = eventFor("/events/past", [], "evil.test");
+    const deps = depsFor({ manifest: KIT_MANIFEST, sessionFor });
+    await dispatchHookRequest(event, deps);
+    expect(sessionFor).not.toHaveBeenCalled();
+    expect(deps.honoFetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("without a bridge the dispatch behaves exactly as before (no locals)", async () => {
+    const deps = depsFor({ manifest: KIT_MANIFEST });
+    const event = eventFor("/events/past");
+    await dispatchHookRequest(event, deps);
+    expect(deps.resolve).toHaveBeenCalledTimes(1);
+    expect(event.locals).toBeUndefined();
   });
 });
