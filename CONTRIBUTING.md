@@ -17,8 +17,10 @@ version.
   names the area of the code, such as `auth`, `events` or `sync`. Release automation
   reads these headers.
 - Use the [PR template](.github/pull_request_template.md), in short, active
-  sentences. `pr-lint` requires Linked Issues or Issue Description and
-  Verification (commands run and their results); the other sections are optional.
+  sentences. In the current warn mode `pr-lint` warns (does not fail) on a
+  missing or thin Linked Issues or Issue Description and Verification; the
+  other sections are optional. See "What fails `pr-lint` today vs what only
+  warns" below for the full fail/warn split.
 - Link a public GitHub issue with `Closes #123`, or describe the problem in the PR.
   No card reference is required. `docs`, `chore`, `build`, `ci`, `style`, `test` and
   `revert` PRs need no linked issue.
@@ -26,11 +28,13 @@ version.
   what you find.
 - Keep references public-safe. Do not put internal card IDs (`TOG-` or `PAP-`
   followed by digits), instance UI links, the internal host, private URLs, tokens or
-  secrets in any title, body, commit, comment or branch name. A card ID, instance link
-  or the internal host in the title or body fails `pr-lint`, comments included; other
-  references and the branch name in any letter case (`qa/tog-123-x`) follow the
-  workflow mode.
-- Every PR, including docs-only and draft heads, must not increase the total count of internal card IDs and instance-UI links in tracked files versus its fork point (the merge-base with its base); `pr-lint` enforces this with named lint-fixture exclusions only.
+  secrets in any title, body, commit, comment or branch name. A tracker ID, instance
+  UI link or the internal host in the title or body fails `pr-lint`, comments
+  included; a card ID in a commit subject warns (first checker,
+  `INTERNAL_ID_LEVEL: "warning"`); a branch-name internal ID fails only on a PR
+  numbered at or above `HEAD_REF_ERROR_FROM_PR: "627"`, and warns below it; other
+  title/body references follow `PR_STANDARDS_MODE`.
+- Every PR, including docs-only and draft heads, must not increase the total count of internal card IDs and instance-UI links in tracked files versus its fork point (the merge-base with its base); `pr-lint` fails when that tracked-file ratchet grows, with named lint-fixture exclusions only.
 - Be honest about the tests. Give the exact commands you ran and their results in
   Verification, and say what you did not run. Never claim a green run you did not see.
 - Address every review finding, or reply with why it does not apply.
@@ -71,6 +75,32 @@ cancelled by a newer run on the same PR, both conclude cancelled rather than
 failed, and the newer run's `ci-ok` decides the merge. Main pushes and the nightly schedule
 run the full suite. The `ci-ok`-as-required-check ruleset cutover is an
 OPERATOR step after merge plus green probes — never part of a PR.
+
+### What fails `pr-lint` today vs what only warns
+
+`pr-lint` is a required job, so it must pass; inside the job, some findings
+fail it and some only warn. Current mode in
+`.github/workflows/pr-gates.yml`: `INTERNAL_ID_LEVEL: "warning"`,
+`PR_STANDARDS_MODE: "warn"`, `HEAD_REF_ERROR_FROM_PR: "627"`. A finding that
+fails exits the checker nonzero and turns the job red; a warning is annotated
+without failing. Flipping a knob to `"error"` turns the Warns-only rows that
+name it into failures, so update this table in the same change. The strict
+title/body subset always fails regardless of either knob; a commit-subject hit
+needs `INTERNAL_ID_LEVEL`, and the Linked Issues, Verification, advisory and
+below-cutoff branch rows need `PR_STANDARDS_MODE`.
+
+| Check | Result today |
+| --- | --- |
+| PR title is not a Conventional Commits title, exceeds 100 characters, or ends with a period (`ci/check-pr-conventions.py` and `.github/scripts/pr_standards.py`) | Fails `pr-lint` |
+| Empty body: fewer than 40 non-space characters after stripping HTML comments | Fails `pr-lint` |
+| Push to main carries a bypass commit message that is not a Conventional Commits header (squash-merge bypass) | Fails `pr-lint` |
+| Net growth from the fork point in the internal-card-ID and instance-UI-link tracked-file ratchet (`.github/scripts/internal_ref_ratchet.py`); unreadable trees also fail closed | Fails `pr-lint` |
+| Branch-name internal ID on a PR numbered at or above the cutoff (`HEAD_REF_ERROR_FROM_PR: "627"`) | Fails `pr-lint` |
+| Missing or thin Linked Issues or Issue Description section (upstream gate, `PR_STANDARDS_MODE: "warn"`) | Warns only |
+| Missing or thin Verification section (upstream gate, `PR_STANDARDS_MODE: "warn"`) | Warns only |
+| Tracker ID, instance UI link or the internal host in the PR title or body (upstream strict subset, always fails) | Fails `pr-lint` |
+| Internal card ID in a commit subject (first checker, `INTERNAL_ID_LEVEL: "warning"`) | Warns only |
+| Advisory references in the PR title or body, or an internal reference in the branch name below the cutoff (upstream gate, `PR_STANDARDS_MODE: "warn"`) | Warns only |
 
 GitHub does not enforce an approval count here. Team policy does: an independent
 reviewer, who did not write the change, reviews the exact head SHA that merges, CI
