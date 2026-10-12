@@ -104,6 +104,10 @@
     {
       "path": "drizzle/1024_board-view-logs.sql",
       "sha256": "214978b9ea09f4b944228013815177b286babd8897fda1786b7f86453eb6151c"
+    },
+    {
+      "path": "drizzle/1025_leaderboard-opt-out.sql",
+      "sha256": "cd56bd4947a15ac1a5c0257b1543cdc3250d5e58f15a8c7aad73663b677f6b6e"
     }
   ]
 }

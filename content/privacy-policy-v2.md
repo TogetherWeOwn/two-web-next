@@ -68,6 +68,13 @@ which moderator made each change and what changed.
 Private support-ticket transcripts live in Discord, not in this site's
 database: staff-only, kept for 90 days, then deleted.
 
+The member leaderboard is members-only. It ranks members by how many events
+they answered going to, optionally for one season or one game, and shows only
+rank, display name and that count. It never counts join attempts and shows no
+dates. Opening it is written down in the access log like any other look at
+members' records. You can opt out of leaderboards at any time — DM a moderator
+or open a private support ticket — and you leave every board and every count.
+
 ## Cookies and tracking
 
 Every cookie this site sets is its own: signed, `__Host-` prefixed, never

@@ -1,7 +1,7 @@
 <script lang="ts">
 import Shell from "#lib/Shell.svelte";
-import { canonicalUrl } from "../../../../../src/seo";
-import { WEEKDAY_NAMES } from "../../../../../src/hotzones/aggregates";
+import { canonicalUrl } from "../../../../src/seo";
+import { WEEKDAY_NAMES } from "../../../../src/hotzones/aggregates";
 import type { PageProps } from "./$types";
 
 let { data }: PageProps = $props();

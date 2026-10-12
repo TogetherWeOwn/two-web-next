@@ -37,7 +37,7 @@ import { createMemberDataFixture, type MemberDataFixture } from "./helpers/membe
 
 // Nonempty, exhaustive inventories: a newly registered read needs an exposure
 // case. This cannot quietly become [] == [] when a namespace is renamed.
-const PROFILE_READS = ["/profile", "/members/:user"];
+const PROFILE_READS = ["/profile", "/members/:user", "/leaderboards/members"];
 const ADMIN_REDIRECTS = [
   "/events/create",
   "/events/:key/edit",
@@ -84,6 +84,8 @@ const OTHER_READS = [
   "/members/", // Trailing-slash form is retired before the same gate.
   "/events",
   "/events/past",
+  "/hotzones", // Aggregate heatmaps: counts only, no member rows.
+  "/hotzones/:signal",
   "/events.json",
   "/events/:key",
   "/e/:key",
@@ -140,6 +142,8 @@ function assertReadInventory(router: Parameters<typeof readInventory>[0]) {
       "ALL /events/:key/rsvp",
       "ALL /profile",
       "ALL /profile",
+      "ALL /leaderboards/members",
+      "ALL /leaderboards/members",
       "ALL /members/*",
       "ALL /members/*",
     ].sort(),

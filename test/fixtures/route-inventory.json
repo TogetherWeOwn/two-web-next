@@ -21,6 +21,11 @@
   },
   {
     "method": "ALL",
+    "path": "/leaderboards/members",
+    "auth": "member"
+  },
+  {
+    "method": "ALL",
     "path": "/members/*",
     "auth": "member"
   },
@@ -288,6 +293,11 @@
     "method": "GET",
     "path": "/join/discord",
     "auth": "public"
+  },
+  {
+    "method": "GET",
+    "path": "/leaderboards/members",
+    "auth": "member"
   },
   {
     "method": "GET",

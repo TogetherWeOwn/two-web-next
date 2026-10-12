@@ -1,14 +1,14 @@
 import { error } from "@sveltejs/kit";
 import { env } from "cloudflare:workers";
 import type { PageServerLoad } from "./$types";
-import { dbFor } from "../../../../../../src/admin/db";
+import { dbFor } from "../../../../../src/admin/db";
 import {
   isHotzoneSignal,
   loadJoinsGrid,
   priorGrid,
   type HotzoneSignal,
-} from "../../../../../../src/hotzones/aggregates";
-import { parseSeasonParam } from "../../../../../../src/hotzones/season";
+} from "../../../../../src/hotzones/aggregates";
+import { parseSeasonParam } from "../../../../../src/hotzones/season";
 
 // Server-rendered only: no hydration bundle, so no inline bootstrap script that
 // the CSP (script-src 'self') would block.

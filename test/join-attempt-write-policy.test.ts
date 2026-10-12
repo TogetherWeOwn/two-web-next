@@ -118,6 +118,7 @@ describe("join-attempt write policy: single controller insert (DB-free source al
     expect(filesMatching(/\bjoinAttempts\b/)).toEqual([
       "src/admin/reads.ts",
       "src/db/schema.ts",
+      "src/hotzones/aggregates.ts",
       "src/jobs/cron.ts",
       "src/jobs/postgres.ts",
       "src/jobs/types.ts",
