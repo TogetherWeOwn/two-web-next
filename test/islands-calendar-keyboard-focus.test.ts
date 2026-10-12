@@ -5,6 +5,7 @@ import { readFileSync } from "node:fs";
 import { runInNewContext } from "node:vm";
 import { URL as NodeURL } from "node:url";
 import { describe, expect, it } from "vitest";
+import { EVENTS_CALENDAR_READ_DEADLINE_MS } from "../src/islands/contracts-calendar";
 
 const binder = readFileSync(
   new NodeURL("../public/islands/events-calendar.js", import.meta.url),
@@ -152,7 +153,9 @@ function browser() {
     reject: (error: Error) => void;
   }[] = [];
   const pages = new Map<string, Element>();
-  const timers = new Map<number, () => void>();
+  // Timed callbacks keyed by requested delay: tick() drains only the short
+  // search-debounce timers, never the owned multi-second read deadline.
+  const timers = new Map<number, { ms: number; fn: () => void }>();
   let timer = 0;
   runInNewContext(binder, {
     URL,
@@ -188,8 +191,8 @@ function browser() {
     },
     fetch: (_url: string, init: RequestInit) =>
       new Promise((resolve, reject) => requests.push({ signal: init.signal!, resolve, reject })),
-    setTimeout: (fn: () => void) => {
-      timers.set(++timer, fn);
+    setTimeout: (fn: () => void, ms = 0) => {
+      timers.set(++timer, { ms, fn });
       return timer;
     },
     clearTimeout: (id: number) => timers.delete(id),
@@ -230,9 +233,12 @@ function browser() {
     input.fire("input");
   }
   function tick() {
-    for (const [id, fn] of timers) {
+    // Drain only the short debounce timers: a pending read keeps its owned
+    // deadline (a late completion is dropped by ownership, not by the clock).
+    for (const [id, t] of [...timers]) {
+      if (t.ms >= EVENTS_CALENDAR_READ_DEADLINE_MS) continue;
       timers.delete(id);
-      fn();
+      t.fn();
     }
   }
   function paint() {

@@ -37,10 +37,23 @@
     return;
 
   var DEBOUNCE_MS = 300;
+  var searchMaxLength = Number(root.dataset.searchMaxLength);
+  var searchTooLong = root.dataset.searchTooLong;
+  // Owned overall read deadline: fetch headers plus response-body completion,
+  // at most 10 seconds (mirrors EVENTS_CALENDAR_READ_DEADLINE_MS in
+  // src/islands/contracts-calendar.ts). On expiry the owned request is
+  // abandoned: the last good zones stay intact, loading/aria-busy releases,
+  // and failure feedback shows without committing the timed-out URL,
+  // canonical state or response fragment. A superseded request's timer stays
+  // silent and cannot clear the newer owner's loading state.
+  var READ_DEADLINE_MS = 10000;
   var active = null;
   var activeIsSearch = false;
   var debounceTimer = null;
   var inputRevision = 0;
+  // The deadline needs both timer globals; harnesses with a partial fake
+  // clock (setTimeout only) get the pre-deadline behavior.
+  var canTimeout = typeof setTimeout !== "undefined" && typeof clearTimeout !== "undefined";
   // Back changes the address before its fetch commits. Replacing that request
   // must not lose the obligation to reconcile the address with the rendered page.
   var renderedAddress = pageAddress(new URL(window.location.href));
@@ -104,6 +117,8 @@
     var focusAtStart = document.activeElement;
     if (active) active.abort();
     var controller = new AbortController();
+    // Back/forward reads must not be skipped by the fragment-only popstate rule.
+    controller.fromHistory = !push;
     active = controller;
     var focusMoved = false;
     var trackFocus =
@@ -115,6 +130,32 @@
     if (trackFocus) document.addEventListener("focusin", trackFocus, { signal: controller.signal });
     activeIsSearch = !!opts.search;
     setLoading(!!opts.skeleton);
+    // The owned deadline covers the whole read: headers plus body. On expiry
+    // this request no longer owns the zones: release active first so its late
+    // abort/completion stays silent, then restore the last good view.
+    var deadlineTimer = null;
+    if (canTimeout) {
+      deadlineTimer = setTimeout(function () {
+        if (active !== controller) return;
+        deadlineTimer = null;
+        active = null;
+        activeIsSearch = false;
+        try {
+          controller.abort();
+        } catch (e) {}
+        if (trackFocus) document.removeEventListener("focusin", trackFocus);
+        // Zones are untouched: the last good content is still in place, only
+        // hidden by loading. No history, canonical or fragment commit. Keep
+        // the Back/forward reconcile the catch path performs: popstate commits
+        // the address before the read, so a timed-out Back (or a push that
+        // superseded one) reloads for SSR to restore the matching page.
+        feedback.textContent = root.dataset.loadError;
+        setLoading(false);
+        if (!push || renderedAddress !== pageAddress(new URL(window.location.href))) {
+          window.location.assign(window.location.href);
+        }
+      }, READ_DEADLINE_MS);
+    }
     try {
       var response = await fetch(url.pathname + url.search, {
         method: "GET",
@@ -191,7 +232,8 @@
       if (ogUrl) ogUrl.content = canonical.href;
       if (push) window.history.pushState(null, "", url.pathname + url.search + url.hash);
       renderedAddress = pageAddress(url);
-      feedback.textContent = "";
+      // A navigation that commits while the box is still over the limit keeps naming it.
+      feedback.textContent = overLimit() ? searchTooLong : "";
       // A card or month control cannot take focus while content is hidden.
       setLoading(false);
       if (ownsFocus && (opts.focus || opts.control)) {
@@ -210,6 +252,10 @@
       }
     } finally {
       if (trackFocus) document.removeEventListener("focusin", trackFocus);
+      if (deadlineTimer !== null) {
+        clearTimeout(deadlineTimer);
+        deadlineTimer = null;
+      }
       if (active === controller) {
         setLoading(false);
         active = null;
@@ -228,6 +274,19 @@
       url.searchParams.set("past", "1");
     }
     return url;
+  }
+
+  // The server counts code points; over-limit input is named here, never fetched.
+  function overLimit() {
+    return Array.from(input.value).length > searchMaxLength;
+  }
+
+  function runSearch() {
+    if (overLimit()) {
+      feedback.textContent = searchTooLong;
+      return;
+    }
+    load(searchUrl(input.value), true, { search: true });
   }
 
   root.addEventListener("click", function (event) {
@@ -288,7 +347,7 @@
     if (composing) return;
     debounceTimer = setTimeout(function () {
       debounceTimer = null;
-      load(searchUrl(input.value), true, { search: true });
+      runSearch();
     }, DEBOUNCE_MS);
   }
 
@@ -311,12 +370,17 @@
     event.preventDefault();
     cancelDebounce();
     if (composing || (event && event.isComposing)) return;
-    load(searchUrl(input.value), true, { search: true });
+    runSearch();
   });
 
   window.addEventListener("popstate", function () {
-    cancelDebounce();
     var url = calendarHref(window.location.href);
+    // A fragment-only navigation (the skip link to #main) also fires popstate.
+    // It leaves path and query on the rendered page, so there is nothing to
+    // restore: no request, no skeleton, no touch to the box or its debounce.
+    // An in-flight Back/forward read still owns the zones and must be replaced.
+    if (url && pageAddress(url) === renderedAddress && !(active && active.fromHistory)) return;
+    cancelDebounce();
     if (url) load(url, false, { skeleton: true, syncInput: true });
   });
 })();

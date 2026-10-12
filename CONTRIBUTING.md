@@ -62,9 +62,11 @@ Heavy CI jobs run only when their inputs changed (TOG-14877 CI standard). The
 worker, the Kit spike), `db` (migrations) — plus `full` (lockfiles,
 `.github/**`, shared config, or anything unknown: run everything) and `draft`.
 `a11y` runs on app/db, `lighthouse` and `bundle-budget` on app, and `docs-links`
-checks relative links and anchors on every PR. `check` always runs, skips its
-heavy steps on docs-only and draft PRs, and requires `docs-links`; the `ci-ok`
-aggregator reports the overall conclusion. Main pushes and the nightly schedule
+checks relative links and anchors on every PR. `check` runs unless its run was
+cancelled, skips its heavy steps on docs-only and draft PRs, and requires
+`docs-links`; the `ci-ok` aggregator reports the overall conclusion. In a run
+cancelled by a newer run on the same PR, both conclude cancelled rather than
+failed, and the newer run's `ci-ok` decides the merge. Main pushes and the nightly schedule
 run the full suite. The `ci-ok`-as-required-check ruleset cutover is an
 OPERATOR step after merge plus green probes — never part of a PR.
 
@@ -165,7 +167,7 @@ PR. See [`docs/releases.md`](docs/releases.md). Never tag or release by hand.
 
 Release notes use the [Common Changelog](https://common-changelog.org/)
 categories, in its order: **Changed** (`perf`, `revert`), **Added** (`feat`),
-**Fixed** (`fix`). `chore`, `docs`, `test`, `ci`, `build`, `refactor` and `style`
+**Fixed** (`fix`, `security`). `chore`, `docs`, `test`, `ci`, `build`, `refactor` and `style`
 stay out of the notes. Each squash-merged PR title becomes one entry, so
 write it for a reader of the release notes: imperative mood, one user-facing change.
 
@@ -218,7 +220,9 @@ from TypeScript's module diagnostic. `assets/styles.css`, `public/styles.css`,
 source-order substrings and single-line selector scoping. `ci/featured-proof/**` also retains its immutable,
 hash-verified proof inputs byte-for-byte. Their content, hashes and regression
 assertions remain unchanged. These formatter exemptions disable neither lint nor
-typecheck.
+typecheck. Lint exemptions are limited to `public/islands/**` and the hash-pinned
+`ci/featured-proof/fixtures/**`; `ci/a11y.mjs`, the other featured-proof files and the
+stylesheets are still linted.
 Configuration options follow the [Biome configuration reference](https://biomejs.dev/reference/configuration/).
 
 Never commit secrets, `.dev.vars` or `node_modules/`. Run tests only against the

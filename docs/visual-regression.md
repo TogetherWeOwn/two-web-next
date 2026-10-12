@@ -50,12 +50,15 @@ Each baseline exists at both widths (`<name>-desktop.png`, `<name>-mobile.png`).
 ## When a diff is intentional
 
 1. Download the `e2e-failure-<run>` artifact from the failed run. It holds the
-   expected, actual and diff images under `test-results-visual/`, any newly
-   generated baselines under `e2e/visual/__screenshots__/`, and an HTML report
-   under `playwright-report-visual/`.
+   expected, actual and diff images under `test-results-visual/`, the whole
+   `e2e/visual/__screenshots__/` directory (committed baselines plus any newly
+   generated ones), and an HTML report under `playwright-report-visual/`.
 2. Check every diff image. Only accept changes the PR meant to make.
 3. Run `node ci/visual-accept.mjs <unzipped-artifact-dir>`, which copies each
-   `*-actual.png` over its baseline and each new baseline into place.
+   `*-actual.png` over its baseline and each new baseline into place. A
+   reviewed actual supersedes the stale committed copy of the same baseline
+   inside the artifact; the script refuses (writing nothing) when two
+   genuinely different sources map to one baseline.
 4. Commit the updated baselines in the same PR and say why in the PR body.
    Reviewers treat a baseline change like code: an unexplained one is a finding.
 

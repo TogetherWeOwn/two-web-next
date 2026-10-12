@@ -105,11 +105,21 @@ export const NotFoundPage: FC<{ suggestions?: SuggestedEvent[] }> = ({ suggestio
   </ErrorShell>
 );
 
+const SupportReference: FC<{ reference?: string }> = ({ reference }) =>
+  reference ? (
+    <p class="support-reference">
+      Support reference: <code data-testid="error-support-reference">{reference}</code>
+    </p>
+  ) : null;
+
 // 500 (ports errors/500). Never echoes the failure: message and trace stay in
 // the logs, never in a member's browser. The CTA — and the header nav — point
 // at the Discord invite URL directly, never /auth/discord: during a store
 // outage the OAuth start is dead, same as 503.
-export const InternalErrorPage: FC<{ inviteUrl: string }> = ({ inviteUrl }) => (
+export const InternalErrorPage: FC<{ inviteUrl: string; supportReference?: string }> = ({
+  inviteUrl,
+  supportReference,
+}) => (
   <ErrorShell
     code="500"
     title="Something broke on our side"
@@ -127,6 +137,7 @@ export const InternalErrorPage: FC<{ inviteUrl: string }> = ({ inviteUrl }) => (
         Back to the homepage
       </a>
     </p>
+    <SupportReference reference={supportReference} />
   </ErrorShell>
 );
 
@@ -165,7 +176,10 @@ export const PayloadTooLargePage: FC = () => (
 // 503 (ports errors/503). The CTA — and the header nav — point at the Discord
 // invite URL directly, never /auth/discord: during maintenance /auth may itself
 // be down, so nothing on this page sends the member there.
-export const MaintenancePage: FC<{ inviteUrl: string }> = ({ inviteUrl }) => (
+export const MaintenancePage: FC<{ inviteUrl: string; supportReference?: string }> = ({
+  inviteUrl,
+  supportReference,
+}) => (
   <ErrorShell
     code="503"
     title="We will be right back"
@@ -183,5 +197,6 @@ export const MaintenancePage: FC<{ inviteUrl: string }> = ({ inviteUrl }) => (
         Try again
       </a>
     </p>
+    <SupportReference reference={supportReference} />
   </ErrorShell>
 );

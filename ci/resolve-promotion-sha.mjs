@@ -7,8 +7,8 @@
 //   deploy.yml      run-name: deploy <ci head_sha>
 //   e2e-staging.yml run-name: e2e-staging <deploy run-name>
 // so an e2e-staging display_title ends in the commit its journeys exercised.
-// The newest post-deploy run for a commit decides it: a later failed or
-// skipped run is not outvoted by an older pass of the same commit.
+// The newest post-deploy run for a commit decides it: a later unfinished, failed
+// or skipped run is not outvoted by an older pass of the same commit.
 import { appendFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 
@@ -48,9 +48,8 @@ export async function resolvePromotionSha({ repository, token, fetchImpl = fetch
     for (const run of runs) {
       const sha = titleSha.exec(run.display_title ?? "")?.[1];
       if (!sha || decided.has(sha)) continue;
-      if (run.status !== "completed") continue; // still verifying; an older verdict may decide
       decided.add(sha);
-      if (run.conclusion !== "success") continue;
+      if (run.status !== "completed" || run.conclusion !== "success") continue;
       const { jobs = [] } = await get(`/actions/runs/${run.id}/jobs?per_page=100`);
       // Both gates must have passed on this deploy: journeys and the web quality gate (a job called through a
       // reusable workflow is named "<caller job> / <job>").

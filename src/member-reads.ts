@@ -4,7 +4,9 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import type { Context, Next } from "hono";
 import type { ContentfulStatusCode } from "hono/utils/http-status";
 import type { AccessDecl, AccessSink } from "./access-log";
+import { alertRequestError } from "./alerts";
 import { isDatabaseUnavailable } from "./db/errors";
+import { requestRoute, safeRequestId } from "./request-log";
 
 type Capture = {
   subjects: Set<string>;
@@ -166,12 +168,20 @@ export async function memberReadBoundary(
   const capture: Capture = { subjects: new Set(), failed: false, pending: 0 };
   await captures.run(capture, async () => {
     let thrown: unknown;
+    let didThrow = false;
     try {
       await next();
     } catch (error) {
       thrown = error;
+      didThrow = true;
       capture.failed = true;
     }
+    if (didThrow && !c.error)
+      alertRequestError(thrown, {
+        method: c.req.method,
+        route: requestRoute(c),
+        requestId: c.get("requestId"),
+      });
     if (c.error) capture.failed = true;
     const outage = isDatabaseUnavailable(thrown ?? c.error);
     const declared = typeof declaration === "function" ? declaration() : declaration;
@@ -205,9 +215,15 @@ export async function memberReadBoundary(
       );
       if (!recorded) throw new MemberReadRefused();
     } catch (error) {
+      alertRequestError(error, {
+        method: c.req.method,
+        route: requestRoute(c),
+        requestId: c.get("requestId"),
+      });
       // No SQL, parameters, route URL, subject keys or exception messages.
       console.error("Member read audit failed; refusing contents.", {
         exception: error instanceof Error ? error.constructor.name : "unknown",
+        request_id: safeRequestId(c.get("requestId")),
       });
       // The audit store is unavailable for this read: an outage, not a contract bug.
       await refuse(c, unavailable);

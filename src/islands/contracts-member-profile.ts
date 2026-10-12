@@ -7,7 +7,7 @@
 /* ------------------------------------------------------------ member-profile
  * Legacy: app/Livewire/MemberProfile.php + member-profile.blade.php +
  * MemberProfileTest.php (TOG-8137 session-first ordering, TOG-6957 focus
- * moves, TOG-8715/TOG-9361 oracle-free trap). Server: src/profiles/routes.tsx
+ * moves, TOG-8715/TOG-9361 oracle-free trap). Server: src/profiles/routes-writes.tsx
  * (W7, TOG-9686). Re-spec §5.
  *
  * Deviations from the legacy row list, recorded so nobody hunts for them:
@@ -35,6 +35,8 @@ export const PROFILE_ERROR_TESTID = "profile-error";
 export const PROFILE_SAVE_FAILED_TESTID = "profile-save-failed";
 export const PROFILE_SESSION_EXPIRED_TESTID = "profile-session-expired";
 export const PROFILE_UNCERTAIN_TESTID = "profile-uncertain";
+/** Polite status shown while a save is unsettled; the form carries aria-busy meanwhile. */
+export const PROFILE_PENDING_TESTID = "profile-pending";
 
 /**
  * Owned client deadline for a profile save, covering fetch plus
@@ -58,6 +60,9 @@ export const PROFILE_COPY = {
   sessionExpired: "Your session expired. Your changes are still here.",
   uncertain:
     "Still saving — this is taking longer than expected. It may still have gone through; wait a moment, then save again if nothing changed.",
+  saving: "Saving your profile…",
+  stillSaving:
+    "Still finishing your earlier save. Your changes are kept; press Save again in a moment.",
   logIn: "Log in with Discord",
   edit: "Edit profile",
   save: "Save",
@@ -179,7 +184,10 @@ export type ProfileOutcome =
   | "uncertain"
   | "cancelled";
 
-/** Focus after each outcome: heading, alert, or saved confirmation (TOG-6957). */
+/**
+ * Focus after each outcome: heading, alert, or saved confirmation (TOG-6957).
+ * A saved confirmation takes focus only while the member has not moved on.
+ */
 export function profileFocusTarget(outcome: ProfileOutcome): string | null {
   switch (outcome) {
     case "saved":

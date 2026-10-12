@@ -1,5 +1,6 @@
 // Nightly mutation signal for the auth blast radius: `src/sessions.ts`,
-// `src/join/service.ts`, `src/join/route.ts`, RSVP write admission
+// `src/join/service.ts`, `src/join/route-start.ts` / `src/join/route-callback.ts`, RSVP write
+// admission
 // (member-denied matrix in routes-rsvp, throttle/waitlist/capacity in rsvp.ts),
 // admin write admission (`src/admin/guard.ts`, `src/admin/writeback.ts`),
 // moderator recompute (`src/roles.ts`: blank-allowlist/lookup-failure
@@ -151,14 +152,14 @@ const MUTANTS = [
   },
   {
     id: "J9-state-cookie-binding-dropped",
-    file: "src/join/route.ts",
+    file: "src/join/route-callback.ts",
     note: "callback state must match the journey cookie: the binding is dropped",
     find: "state && expected && state === expected ? await hooks.storeFor(c)",
     replace: "state && expected ? await hooks.storeFor(c)",
   },
   {
     id: "J10-journey-replay-admitted",
-    file: "src/join/route.ts",
+    file: "src/join/route-callback.ts",
     note: "callback admits a consumed journey: a replayed state is accepted",
     find: '(await store.journeys.consume(await hashToken(state!), "join").catch(() => false))',
     replace:
@@ -166,14 +167,14 @@ const MUTANTS = [
   },
   {
     id: "J11-start-throttle-ignored",
-    file: "src/join/route.ts",
+    file: "src/join/route-start.ts",
     note: "start route ignores its per-client budget: no 429 is returned",
     find: "if (limited) return limited;\n    const source = sanitizeSource(",
     replace: "if (limited && false) return limited;\n    const source = sanitizeSource(",
   },
   {
     id: "J12-callback-throttle-ignored",
-    file: "src/join/route.ts",
+    file: "src/join/route-callback.ts",
     note: "callback ignores its per-client budget: token exchanges are unthrottled",
     find: "if (limited) return limited;\n    const sql = await joinStore(c);",
     replace: "if (limited && false) return limited;\n    const sql = await joinStore(c);",

@@ -60,8 +60,9 @@ export const STATE_TTL_SECONDS = 600;
 
 const app = new Hono<{ Bindings: Env }>();
 
-// The violation sink (TOG-10107): report-uri is the legacy fallback;
-// the CSP report-to directive selects the modern Reporting-Endpoints group.
+// The violation sink (TOG-10107): the CSP report-to directive selects the
+// Reporting-Endpoints group. No report-uri: it is deprecated (ZAP 10055
+// notices flag it) and report-to is Baseline in current browsers.
 // Omit the deprecated Report-To header: unlike Reporting-Endpoints, it
 // requires absolute HTTPS URLs, not this same-origin relative destination.
 const CSP_REPORT_ENDPOINT = "/csp-reports";
@@ -85,6 +86,8 @@ const staticSecurityHeaders = secureHeaders({
   // Edge-owned (TOG-8729): emitting HSTS from the app would pin local dev
   // machines to HTTPS, so the Hono default is explicitly off.
   strictTransportSecurity: false,
+  // ZAP 90004; credentialless, not require-corp: cross-origin embeds are credential-free.
+  crossOriginEmbedderPolicy: "credentialless",
   contentSecurityPolicy: {
     defaultSrc: ["'self'"],
     // Restored legacy directives (W16b TOG-11942): object-src 'none' (no
@@ -115,7 +118,6 @@ const staticSecurityHeaders = secureHeaders({
     fontSrc: ["'self'"],
     frameAncestors: ["'none'"],
     formAction: ["'self'"],
-    reportUri: CSP_REPORT_ENDPOINT,
     reportTo: "csp-endpoint",
   },
   xContentTypeOptions: SECURITY_HEADERS["X-Content-Type-Options"],
@@ -233,7 +235,7 @@ async function issueSession(
   } catch (err) {
     // Driver messages can carry DSN fragments; the class name is the whole story here.
     console.warn("roster upsert failed", {
-      user: row.userId,
+      request_id: c.get("requestId"),
       exception: (err as Error)?.constructor?.name ?? "unknown",
     });
   }
@@ -262,7 +264,7 @@ async function issueSession(
     await store.revokeUserSessions(row.userId, tokenHash);
   } catch (err) {
     console.warn("prior session sweep failed", {
-      user: row.userId,
+      request_id: c.get("requestId"),
       exception: (err as Error)?.constructor?.name ?? "unknown",
     });
   }

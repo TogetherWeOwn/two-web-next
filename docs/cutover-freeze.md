@@ -1,16 +1,48 @@
-# Cutover freeze window and member announcement (proposed)
+# Cutover freeze window and member announcement (archived)
 
-Proposed window, pending CEO go/no-go on the cutover card: freeze
-`2026-10-14 00:00 UTC` to `2026-10-18 00:00 UTC`. The flip target is
-14–16 Oct; the tail to 18 Oct covers the 48h post-flip watch. If the CEO
-defers, this file moves to the new dates in a follow-up docs PR.
+> **Archived 2026-10-12. Historical record, not a live instruction.** Do not
+> declare a freeze, post an announcement or change any setting from this
+> file.
+>
+> **Outcome.** Production went live on 2026-10-10 and the apex now serves
+> `two-web-next`. The 48h post-flip watch ran `2026-10-10 00:52 UTC` to
+> `2026-10-12 00:52 UTC`, and the cutover closed on 2026-10-12. The flip and
+> the watch are recorded on the cutover card in the team tracker, including
+> whether and how a freeze was applied. Their receipts are not in this
+> repository, so a gate snapshot built from public repo state alone, such as
+> [cutover-gates.md](cutover-gates.md), can still read NO-GO.
+>
+> **The proposal is withdrawn.** The freeze window below was written before
+> the flip date was set. Take no freeze from this file: any future freeze
+> (for example around a rollback and re-flip) needs new dates decided at that
+> time. Several docs still call this freeze "in force" or ask for it to be
+> "posted" (the runbook watch section, the rollback checklist, the watch spec
+> and run record); read those references as describing the withdrawn
+> proposal. This archive does not edit them.
+>
+> **Current guidance** lives in [runbook.md](runbook.md#48h-post-flip-watch)
+> (watch procedure) and [releases.md](releases.md) (release mechanics: the
+> production promote cuts the release, with no release freeze).
+>
+> The member-facing banner code in `src/freeze-banner.ts` stays flag-gated
+> off by default: leave `FREEZE_BANNER_ENABLED` unset, and nothing renders.
+> This file is kept so existing links resolve.
 
-Staging-safe draft: prose plus read-only commands only. No production
-mutation. Production cutover execution, DNS changes and any database or
-secret step stay in the separately approved operator procedure; this file
-only drafts the freeze notice and the member-facing words.
+## Original proposal (historical)
 
-## Freeze window (proposed text for the release card and ops channel)
+Window proposed while the CEO go/no-go on the cutover card was pending:
+freeze `2026-10-14 00:00 UTC` to `2026-10-18 00:00 UTC`. The flip target was
+14–16 Oct; the tail to 18 Oct was meant to cover the 48h post-flip watch.
+The text promised a follow-up docs PR to move the dates if the CEO deferred;
+this archive replaces that PR.
+
+The draft was staging-safe: prose plus read-only commands only, with no
+production mutation. Production cutover execution, DNS changes and any
+database or secret step stayed in the separately approved operator
+procedure; the file only drafted the freeze notice and the member-facing
+words.
+
+## Freeze window (historical text, superseded)
 
 > Freeze from `2026-10-14 00:00 UTC` to `2026-10-18 00:00 UTC`: no merges to `main` except the
 > Director-approved Sev-1 fixes. The cutover promote itself cuts the
@@ -18,7 +50,7 @@ only drafts the freeze notice and the member-facing words.
 > the 48h post-flip watch exits; the lifter posts the lift on the same card.
 > See [releases.md](releases.md#cutting-a-release) for the release mechanics.
 
-Read-only checks (no mutation, no credentials):
+Read-only checks from the draft (no mutation, no credentials):
 
 ```bash
 (
@@ -29,7 +61,7 @@ Read-only checks (no mutation, no credentials):
 )
 ```
 
-## Member announcement: Discord (draft)
+## Member announcement: Discord (historical draft, superseded)
 
 > Hi everyone — the website moves to its new home soon.
 > From `2026-10-14 00:00 UTC` to `2026-10-18 00:00 UTC` the site is frozen:
@@ -40,14 +72,14 @@ Read-only checks (no mutation, no credentials):
 > If something looks wrong after the move, DM a moderator or open a
 > private support ticket. Thank you for your patience.
 
-## Member announcement: site banner (draft)
+## Member announcement: site banner (historical draft, superseded)
 
 > Moving to our new site soon — edits frozen `14–18 Oct UTC`. Privacy page
 > updated to version 2; details in Discord.
 
 The banner links to the relative path `/privacy`, never a pasted URL.
 
-## Privacy policy version 2 note (draft)
+## Privacy policy version 2 note (historical draft)
 
 The live source is [content/privacy-policy-v2.md](../content/privacy-policy-v2.md),
 served at `/privacy` and bundled via `src/privacy-content.ts`. Member words:

@@ -7,6 +7,7 @@ import { listJoinAttempts, listRoster, JOIN_RETENTION_DAYS } from "../src/admin/
 import {
   featuredListUrl,
   joinAttemptsUrl,
+  parseActivityLogQuery,
   parseFeaturedListQuery,
   parseJoinAttemptsQuery,
   parseRosterQuery,
@@ -92,6 +93,22 @@ describe("admin table query state (no DB)", () => {
       expect(parseJoinAttemptsQuery({ page }).page).toBe(1);
     },
   );
+
+  it("drops NUL from filter text so it reads as absent", () => {
+    expect(parseFeaturedListQuery({ q: "\u0000" }).q).toBe("");
+    expect(parseFeaturedListQuery({ q: " a\u0000b " }).q).toBe("ab");
+    expect(parseRosterQuery({ roster_q: " \u0000Ann\u0000 " }).q).toBe("Ann");
+    expect(parseJoinAttemptsQuery({ q: "\u0000", outcome: "\u0000" })).toEqual({
+      outcome: "",
+      q: "",
+      page: 1,
+    });
+    expect(parseJoinAttemptsQuery({ outcome: "added\u0000" }).outcome).toBe("added");
+    expect(parseActivityLogQuery({ subject: "\u0000", causer: " \u0000x\u0000 " })).toMatchObject({
+      subject: "",
+      causer: "x",
+    });
+  });
 
   it("preserves and encodes all filter state in navigation", () => {
     const featured = parseFeaturedListQuery({
@@ -309,6 +326,30 @@ describe.skipIf(!process.env.DATABASE_URL)(
       const empty = await request("/featured?q=absent");
       expect(empty).toContain('colspan="5" data-testid="featured-empty"');
       expect(await logs()).toEqual([]); // All featured projections are classified non-sensitive.
+    });
+
+    it("NUL in featured, roster and join filters reads as absent, not a 500", async () => {
+      const rows = await seedFeatured();
+      const allFeatured = featuredIds(await request("/featured"));
+      expect(featuredIds(await request("/featured?q=%00"))).toEqual(allFeatured);
+      expect(
+        featuredIds(await request(`/featured?q=${encodeURIComponent("100%\u0000_\\")}`)),
+      ).toEqual([rows[3]!.id]);
+
+      await seedRoster();
+      const rosterCount = (html: string) => html.match(/RSVPs \((\d+)\)/)?.[1];
+      const allRsvps = rosterCount(await request("/events/roster"));
+      expect(rosterCount(await request("/events/roster?roster_q=%00"))).toBe(allRsvps);
+      expect(rosterCount(await request("/events/roster?roster_q=ali%00ce"))).toBe("2");
+
+      await fixture.db.insert(joinAttempts).values([
+        { outcome: "added", discordId: "100000000000004001", requestId: "one" },
+        { outcome: "denied", discordId: "100000000000004002", requestId: "two" },
+      ]);
+      const allAttempts = attemptIds(await request("/join-attempts"));
+      expect(attemptIds(await request("/join-attempts?q=%00&outcome=%00"))).toEqual(allAttempts);
+      expect(attemptIds(await request("/join-attempts?outcome=added%00"))).toHaveLength(1);
+      expect(attemptIds(await request("/join-attempts?q=100000000000004002%00"))).toHaveLength(1);
     });
 
     it("featured last-changed column and accessible sort links preserve filters and sort direction", async () => {

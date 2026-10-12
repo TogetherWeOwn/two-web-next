@@ -96,6 +96,7 @@ function browser(opts: { copied?: boolean } = {}) {
     click() {
       click({ button: 0, preventDefault: vi.fn() });
     },
+    runTimer: (call: number) => setTimeout.mock.calls[call]![0](),
   };
 }
 
@@ -118,7 +119,7 @@ describe("Copy-link attempt ordering", () => {
     expect(b.field.remove).not.toHaveBeenCalled();
     expect(b.active.focus).not.toHaveBeenCalled();
     expect(b.timers.size).toBe(1); // no extra reset timer armed over the newer toast
-    expect(b.clearTimeout).toHaveBeenCalledTimes(2);
+    expect(b.clearTimeout).toHaveBeenCalledTimes(3);
 
     b.timers.values().next().value!(); // surviving timer belongs to attempt 2
     await settle();
@@ -140,8 +141,8 @@ describe("Copy-link attempt ordering", () => {
     await settle();
     expect(b.toast.textContent).toBe(failedText); // stale success must not overwrite
     expect(b.timers.size).toBe(1);
-    expect(b.clearTimeout).toHaveBeenCalledTimes(2);
-    expect(b.setTimeout).toHaveBeenCalledTimes(1);
+    expect(b.clearTimeout).toHaveBeenCalledTimes(3);
+    expect(b.setTimeout).toHaveBeenCalledTimes(3);
   });
 
   it("gives three rapid clicks to the last attempt regardless of settle order", async () => {
@@ -160,7 +161,7 @@ describe("Copy-link attempt ordering", () => {
     expect(b.toast.textContent).toBe(copiedText);
     expect(b.exec).not.toHaveBeenCalled();
     expect(b.timers.size).toBe(1);
-    expect(b.setTimeout).toHaveBeenCalledTimes(1);
+    expect(b.setTimeout).toHaveBeenCalledTimes(4);
   });
 
   it.each(["success", "failure"] as const)(
@@ -178,7 +179,7 @@ describe("Copy-link attempt ordering", () => {
       b.click(); // new owner remains pending beyond the previous toast's lifetime
       expect(b.toast.textContent).toBe("");
       expect(b.clearTimeout).toHaveBeenLastCalledWith(priorTimer);
-      expect(b.timers.size).toBe(0);
+      expect(b.timers.size).toBe(1); // only the new owner's deadline is live
       priorReset(); // even an already-queued old callback may not write feedback
       await settle();
       expect(b.toast.textContent).toBe("");
@@ -207,5 +208,104 @@ describe("Copy-link attempt ordering", () => {
     expect(b.active.focus).toHaveBeenCalledWith({ preventScroll: true });
     expect(b.toast.textContent).toBe(failedText);
     expect(b.timers.size).toBe(1);
+  });
+});
+
+describe("Copy-link pending attempts", () => {
+  const unconfirmedText =
+    "Copy not confirmed — if it isn't on your clipboard, copy the link from the address bar.";
+
+  it("announces unconfirmed guidance at the deadline without a second write or fallback", async () => {
+    const b = browser();
+    b.click();
+    const deadlineMs = b.setTimeout.mock.calls[0]?.[1];
+    expect(deadlineMs).toBeGreaterThan(0);
+    expect(deadlineMs).toBeLessThanOrEqual(10_000);
+
+    b.runTimer(0); // writeText is still pending when the deadline elapses
+    expect(b.toast.textContent).toBe(unconfirmedText);
+    expect(b.writeText).toHaveBeenCalledTimes(1);
+    expect(b.exec).not.toHaveBeenCalled();
+  });
+
+  it("drops a late rejection after the deadline instead of running the fallback", async () => {
+    const b = browser();
+    b.click();
+    b.runTimer(0);
+    b.writes[0]!.reject(new Error("denied"));
+    await settle();
+    expect(b.exec).not.toHaveBeenCalled();
+    expect(b.field.remove).not.toHaveBeenCalled();
+    expect(b.toast.textContent).toBe(unconfirmedText);
+  });
+
+  it("drops a late success after the deadline rather than claiming a copy", async () => {
+    const b = browser();
+    b.click();
+    b.runTimer(0);
+    b.writes[0]!.resolve();
+    await settle();
+    expect(b.toast.textContent).toBe(unconfirmedText);
+    expect(b.exec).not.toHaveBeenCalled();
+  });
+
+  it.each(["success", "denial"] as const)(
+    "a timely %s disarms the deadline so a late callback cannot overwrite it",
+    async (outcome) => {
+      const b = browser({ copied: false });
+      b.click();
+      if (outcome === "success") b.writes[0]!.resolve();
+      else b.writes[0]!.reject(new Error("denied"));
+      await settle();
+      const reported = outcome === "success" ? copiedText : failedText;
+      expect(b.toast.textContent).toBe(reported);
+
+      b.runTimer(0); // this attempt's deadline, now stale
+      expect(b.toast.textContent).toBe(reported);
+      expect(b.writeText).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it("lets an explicit later activation succeed after an expired attempt", async () => {
+    const b = browser();
+    b.click();
+    b.runTimer(0);
+    b.click(); // explicit retry
+    expect(b.writeText).toHaveBeenCalledTimes(2);
+    expect(b.toast.textContent).toBe("");
+
+    b.writes[0]!.reject(new Error("denied")); // expired attempt settles late
+    await settle();
+    expect(b.exec).not.toHaveBeenCalled();
+    expect(b.toast.textContent).toBe("");
+
+    b.writes[1]!.resolve();
+    await settle();
+    expect(b.toast.textContent).toBe(copiedText);
+  });
+
+  it("ignores a superseded attempt's deadline so the newer attempt keeps ownership", async () => {
+    const b = browser();
+    b.click(); // attempt 1
+    b.click(); // attempt 2 supersedes attempt 1
+    b.runTimer(0); // attempt 1's deadline arrives late
+    expect(b.toast.textContent).toBe("");
+    expect(b.writeText).toHaveBeenCalledTimes(2);
+
+    b.writes[1]!.resolve();
+    await settle();
+    expect(b.toast.textContent).toBe(copiedText);
+  });
+
+  it("clears unconfirmed guidance on the standard four-second reset", async () => {
+    const b = browser();
+    b.click();
+    b.runTimer(0);
+    expect(b.toast.textContent).toBe(unconfirmedText);
+    const reset = b.setTimeout.mock.calls.length - 1;
+    expect(b.setTimeout.mock.calls[reset]?.[1]).toBe(4000);
+
+    b.runTimer(reset);
+    expect(b.toast.textContent).toBe("");
   });
 });

@@ -1,10 +1,10 @@
 name: mutation-sessions-join
 
 # Nightly mutation signal for the auth blast radius (`src/sessions.ts`,
-# `src/join/service.ts`, `src/join/route.ts`, RSVP write admission in
-# `src/events/routes-rsvp.tsx` / `src/events/rsvp.ts`, admin write
-# admission in `src/admin/guard.ts` / `src/admin/writeback.ts`, moderator
-# recompute in `src/roles.ts`, wall-time admission in
+# `src/join/service.ts`, `src/join/route-start.ts` / `src/join/route-callback.ts`,
+# RSVP write admission in `src/events/routes-rsvp.tsx` / `src/events/rsvp.ts`,
+# admin write admission in `src/admin/guard.ts` / `src/admin/writeback.ts`,
+# moderator recompute in `src/roles.ts`, wall-time admission in
 # `src/admin/validation-wall-time.ts`, and the agent-events ingress in
 # `src/agent-events/ingress.ts` / `src/agent-events/route.ts`). The runner weakens one
 # auth check at a time and runs the hermetic DB-free kill suite against it;

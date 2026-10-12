@@ -13,6 +13,7 @@ import {
   calendarJumpUrl,
   calendarMonthLabel,
   calendarUrl,
+  gridAccessibleName,
   gridTitle,
   wallTimeHm,
   type CalendarDay,
@@ -71,7 +72,11 @@ export const MonthGrid: FC<{
                   <ul>
                     {day.events.map((e) => (
                       <li>
-                        <a href={calendarJumpUrl(state.past, rowKey(e))} data-cal-jump>
+                        <a
+                          href={calendarJumpUrl(state.past, rowKey(e))}
+                          data-cal-jump
+                          aria-label={gridAccessibleName(rowTitle(e), e.startsAt, rowZone(e, zone))}
+                        >
                           {wallTimeHm(e.startsAt, rowZone(e, zone))} {gridTitle(rowTitle(e))}
                         </a>
                       </li>

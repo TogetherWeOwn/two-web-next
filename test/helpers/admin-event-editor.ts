@@ -8,6 +8,21 @@ const binder = readFileSync(
   "utf8",
 );
 
+type DomEvent = {
+  defaultPrevented: boolean;
+  preventDefault: ReturnType<typeof vi.fn>;
+};
+
+function domEvent(): DomEvent {
+  const event: DomEvent = {
+    defaultPrevented: false,
+    preventDefault: vi.fn(() => {
+      event.defaultPrevented = true;
+    }),
+  };
+  return event;
+}
+
 export function eventEditorBrowser({
   missing = false,
   draft = false,
@@ -28,7 +43,11 @@ export function eventEditorBrowser({
     ["capacity", ""],
     ...Object.entries(initial),
   ]);
-  const listeners = new Map<string, () => void>();
+  const listeners = new Map<string, Array<(event: DomEvent) => void>>();
+  const dispatch = (kind: string, event: DomEvent = domEvent()) => {
+    for (const fn of listeners.get(kind) ?? []) fn(event);
+    return event;
+  };
   type FakeElement = {
     tag: string;
     attrs: Record<string, string>;
@@ -68,20 +87,32 @@ export function eventEditorBrowser({
     return el;
   };
   const inserted: { node: FakeElement; before: unknown }[] = [];
+  const editorAttrs: Record<string, string> = {};
   const editor = {
-    addEventListener: (kind: string, fn: () => void) => listeners.set(kind, fn),
+    attrs: editorAttrs,
+    addEventListener: (kind: string, fn: (event: DomEvent) => void) => {
+      listeners.set(kind, [...(listeners.get(kind) ?? []), fn]);
+    },
     hasAttribute: (name: string) => draft && name === "data-event-draft",
+    setAttribute: (k: string, v: string) => {
+      editorAttrs[k] = v;
+    },
+    removeAttribute: (k: string) => {
+      delete editorAttrs[k];
+    },
     parentNode: {
       insertBefore: (node: FakeElement, before: unknown) => {
         inserted.push({ node, before });
       },
     },
   };
-  const search = { q: "", listeners: new Map<string, () => void>() };
+  const search = { q: "", listeners: new Map<string, (event: DomEvent) => void>() };
   const windowListeners = new Map<
     string,
     (event: { preventDefault: () => void; returnValue?: string; detail?: unknown }) => void
   >();
+  const timers = new Map<number, { fn: () => void; ms: number }>();
+  let nextTimer = 1;
   runInNewContext(binder, {
     document: {
       querySelector: (selector: string) => {
@@ -98,6 +129,14 @@ export function eventEditorBrowser({
         kind: string,
         fn: (event: { preventDefault: () => void; returnValue?: string; detail?: unknown }) => void,
       ) => windowListeners.set(kind, fn),
+      setTimeout: (fn: () => void, ms: number) => {
+        const id = nextTimer++;
+        timers.set(id, { fn, ms });
+        return id;
+      },
+      clearTimeout: (id: number) => {
+        timers.delete(id);
+      },
       location: { origin: "https://next.example", pathname: "/admin/events/abc", search: "" },
     },
     FormData: class {
@@ -119,9 +158,23 @@ export function eventEditorBrowser({
     created,
     inserted,
     editor,
+    submit: () => dispatch("submit"),
+    input: () => dispatch("input"),
+    searchSubmit() {
+      const event = domEvent();
+      search.listeners.get("submit")?.(event);
+      return event;
+    },
+    pendingTimers: () => [...timers.values()].map((t) => t.ms),
+    fireTimers() {
+      for (const [id, timer] of [...timers]) {
+        timers.delete(id);
+        timer.fn();
+      }
+    },
     navigate(kind: "search" | "sort" | "save") {
-      if (kind === "save") listeners.get("submit")?.();
-      if (kind === "search") search.listeners.get("submit")?.();
+      if (kind === "save") dispatch("submit");
+      if (kind === "search") search.listeners.get("submit")?.(domEvent());
       const event = { preventDefault: vi.fn(), returnValue: undefined as string | undefined };
       windowListeners.get("beforeunload")?.(event);
       return event;
