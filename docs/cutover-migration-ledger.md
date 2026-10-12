@@ -48,7 +48,7 @@ prior state cannot be restored by SQL alone; needs backup/PITR).
 | 20 | `1019_shared-agent-events` | up-only | events (columns + copied rows), `agent_events` dropped | unmeasurable | `DROP TABLE agent_events` destroys the wall-clock source table; copied rows survive in `events` but the separate table returns only from backup/PITR. |
 | 21 | `1020_event-sync-revisions` | up-only | event_sync_attempts (new), events (two revision columns) + two revision triggers | backout-script | Drop both triggers/functions, drop the attempts table and the two columns; mirrors restart from revision zero. |
 | 22 | `1021_discord-event-snapshots` | up-only | discord_event_snapshots | backout-script | `DROP TABLE discord_event_snapshots`; display cache only, no canonical rows lost. |
-| 23 | `1022_web-sessions-oauth-journeys` | up-only | web_sessions, web_oauth_journeys (columns + indexes) | backout-script | `DROP TABLE` × 2; loses sessions (forces re-login) and journeys; the `status_hash` backfill re-derives from `token_hash`. |
+| 23 | `1022_web-sessions-oauth-journeys` | up-only | web_sessions, web_oauth_journeys (columns + indexes) | re-runnable | `CREATE TABLE/INDEX IF NOT EXISTS` throughout plus `ADD COLUMN IF NOT EXISTS` and an `UPDATE` that only fills NULL `status_hash`; re-apply is safe. Live databases already carry these tables from the retired runtime backstop, so no backout applies there — do not `DROP` them (the runtime no longer holds CREATE, dropped sessions and journeys would not rebuild, and the migrate ledger would still report 1022 applied). |
 | 24 | `1023_agent-event-audits-prune-idx` | up-only | agent_event_audits (index only) | backout-script | `DROP INDEX agent_event_audits_created_at_idx`; no row data. |
 
 ## Production apply outcome
