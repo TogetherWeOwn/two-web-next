@@ -366,6 +366,101 @@ describe("staging smoke workflow safety", () => {
   });
 });
 
+describe("production deployment preserves configured triggers", () => {
+  it("uploads and promotes the exact target version without syncing custom domains", () => {
+    const workflow = read(".github/workflows/deploy-production.yml");
+    const upload = workflow.indexOf(
+      'npx wrangler versions upload --env production --tag "${DEPLOY_SHA:?}-${GITHUB_RUN_ID:?}-${GITHUB_RUN_ATTEMPT:?}"',
+    );
+    const promote = workflow.indexOf(
+      'npx wrangler versions deploy --env production --name two-web-next-production --version-tag "${DEPLOY_SHA:?}-${GITHUB_RUN_ID:?}-${GITHUB_RUN_ATTEMPT:?}@100%" --yes',
+    );
+
+    expect(upload).toBeGreaterThan(-1);
+    expect(promote).toBeGreaterThan(upload);
+    expect(workflow).not.toContain("wrangler triggers deploy");
+    expect(workflow).not.toContain("wrangler deploy --env production");
+  });
+
+  it("pins production crons and queue consumers to the reviewed config", () => {
+    type Consumer = {
+      queue?: unknown;
+      max_retries?: unknown;
+      max_batch_size?: unknown;
+      max_batch_timeout?: unknown;
+    };
+    type Producer = { binding?: unknown; queue?: unknown };
+    const config = readWranglerConfig(read("wrangler.jsonc")) as {
+      triggers?: unknown;
+      queues?: { consumers?: Consumer[]; producers?: Producer[] };
+      env?: {
+        production?: {
+          triggers?: unknown;
+          queues?: { consumers?: Consumer[]; producers?: Producer[] };
+        };
+      };
+    };
+    const jobsConfig = readWranglerConfig(read("wrangler.jobs.jsonc")) as {
+      triggers?: unknown;
+      queues?: { consumers?: Consumer[]; producers?: Producer[] };
+    };
+    // `versions upload`/`deploy` never reconcile triggers, and `wrangler
+    // triggers deploy` is banned above (it also syncs routes/domains and
+    // re-triggers 100117). The pins below are literal reviewed values, not
+    // staging-relative: any schedule/consumer change — even one made in both
+    // blocks at once — fails CI until this test is updated in the same
+    // release PR, and the runbook's "Production trigger reconciliation"
+    // applies it without touching the apex custom domain.
+    expect(config.env?.production?.triggers).toEqual({
+      crons: ["*/10 * * * *", "0 0 * * *"],
+    });
+    // Staging handoff: the web Worker owns no cron and consumes no queue, so a
+    // queue keeps exactly one consumer and a cron exactly one owner. Both
+    // schedules and both staging consumers live on two-web-jobs
+    // (wrangler.jobs.jsonc top level); test/jobs-worker-config.test.ts pins
+    // that split. env.production keeps its own cutover template below.
+    expect(config.triggers).toEqual({ crons: [] });
+    expect(config.queues?.consumers ?? []).toEqual([]);
+    expect(jobsConfig.triggers).toEqual({ crons: ["*/10 * * * *", "0 0 * * *"] });
+    const stagingConsumers = jobsConfig.queues?.consumers ?? [];
+    const prodConsumers = config.env?.production?.queues?.consumers ?? [];
+    expect(
+      [...prodConsumers].sort((a, b) => String(a.queue).localeCompare(String(b.queue))),
+    ).toEqual([
+      {
+        queue: "two-web-next-production-internal-action",
+        max_retries: 10,
+        max_batch_size: 10,
+        max_batch_timeout: 5,
+      },
+      {
+        queue: "two-web-next-production-sync-event",
+        max_retries: 10,
+        max_batch_size: 10,
+        max_batch_timeout: 5,
+      },
+    ]);
+    expect(prodConsumers).toHaveLength(stagingConsumers.length);
+    for (const consumer of prodConsumers) {
+      expect(
+        stagingConsumers.some(
+          (peer) =>
+            peer.max_retries === consumer.max_retries &&
+            peer.max_batch_size === consumer.max_batch_size &&
+            peer.max_batch_timeout === consumer.max_batch_timeout,
+        ),
+      ).toBe(true);
+    }
+    // Producers keep the same bindings so the promoted code talks to the
+    // production queues, never the staging ones.
+    const prodProducers = config.env?.production?.queues?.producers ?? [];
+    expect(prodProducers.map((p) => `${p.binding}=${p.queue}`).sort()).toEqual([
+      "INTERNAL_ACTION_QUEUE=two-web-next-production-internal-action",
+      "SYNC_EVENT_QUEUE=two-web-next-production-sync-event",
+    ]);
+  });
+});
+
 describe("deployed revision marker is staging-only", () => {
   const config = readWranglerConfig(read("wrangler.jsonc"));
 
