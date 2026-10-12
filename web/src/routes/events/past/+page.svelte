@@ -31,6 +31,9 @@ const island = '<script src="/islands/past-events.js" defer></' + "script>";
   canonical={canonicalUrl(appUrl, destination)}
   robots="noindex, follow"
   description="Look back at the community’s game nights and tournaments."
+  theme="schedule"
+  activeNav="events"
+  mainClass="events-page"
   loginReturnTo={destination}
 >
   <section data-island={PAST_EVENTS_ISLAND} data-testid={PAST_EVENTS_TESTID} data-page={page} data-total-pages={totalPages} data-load-error={PAST_EVENTS_COPY.failed} aria-labelledby="past-events-heading">
