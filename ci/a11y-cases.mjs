@@ -54,6 +54,11 @@ export const coverage = {
   "/join.md": skip("Markdown alternate, not HTML"),
   "/events.md": skip("Markdown event collection, not HTML"),
   "/e/:file{.+\\.md}": skip("Per-event Markdown alternate, not HTML"),
+  "/api/public/events": skip("Bounded session-free JSON collection, not HTML"),
+  "/api/public/events/:key": skip("Bounded session-free JSON event detail, not HTML"),
+  "/api/public/community": skip("Bounded session-free JSON snapshot, not HTML"),
+  "/api/public/join": skip("Bounded session-free JSON handoff, not HTML"),
+  "/openapi.json": skip("Static OpenAPI document, not HTML"),
   "/": {
     cases: [
       { path: "/" },

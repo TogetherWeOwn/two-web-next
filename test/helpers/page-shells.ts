@@ -74,6 +74,11 @@ export const NON_HTML_READS = [
   "/join.md",
   "/events.md",
   "/e/:file{.+\\.md}", // Per-event Markdown alternate; cancelled 410, draft 403, never HTML.
+  "/api/public/events", // Bounded session-free JSON, never an HTML page.
+  "/api/public/events/:key",
+  "/api/public/community",
+  "/api/public/join",
+  "/openapi.json", // Static OpenAPI document, never an HTML page.
 ];
 
 export const concretePath = (pattern: string) =>

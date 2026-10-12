@@ -37,6 +37,7 @@ import { registerSeoLeaves } from "./seo-leaves";
 import { registerStaticLeaves } from "./static-leaves";
 import { safeNext } from "./join/service";
 import { profilesApp } from "./profiles/routes";
+import { registerPublicApiRoutes } from "./public-data/routes";
 import { takeJoinResult } from "./return-journey";
 import { buildSecurityTxt } from "./security-txt";
 import {
@@ -554,6 +555,11 @@ registerEventRoutes(
   async (c) => readSession(c),
   async (c) => readSession(c, false),
 );
+
+// A3: bounded session-free public read API + OpenAPI spec. No session
+// readers: every representation is published-only and identical for all
+// viewers, so the shared isolate-local cache needs no cookie partitioning.
+registerPublicApiRoutes(app);
 
 registerAlertProbe(app);
 

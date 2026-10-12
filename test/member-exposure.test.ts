@@ -99,6 +99,11 @@ const OTHER_READS = [
   "/join.md",
   "/events.md",
   "/e/:file{.+\\.md}",
+  "/api/public/events", // Bounded session-free JSON: published-only, no member access.
+  "/api/public/events/:key",
+  "/api/public/community",
+  "/api/public/join",
+  "/openapi.json", // Static OpenAPI document, no member access.
 ];
 const readInventory = (router: { routes: { method: string; path: string }[] }) =>
   router.routes

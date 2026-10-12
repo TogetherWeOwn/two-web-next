@@ -62,6 +62,10 @@ TOG-6990 syncing-vs-failed, TOG-8715 honeypot swallow).
   announces an unknown outcome and offers an event refresh; mutations stay disabled
   until SSR recovers the answer, rather than asserting a failed write or blindly
   replaying it. Losing transport does not prove a delivered transaction was refused.
+- Outcome focus: a settled going, waitlist, withdrawal or full outcome moves focus to its
+  new state only while the member's activation still owns focus. Focus or a pointer press
+  outside the widget during the write ends that ownership, and moving back into the widget
+  does not revive it. Unknown and session-expired notices keep their existing focus rules.
 - States rendered: guest login link (never a dead button); closed (Cancelled /
   Not published yet / been-and-gone, `role="status"`); full + waitlist join; in-line
   position + claim-seat (locked path); You're-in + withdraw; optimistic saving in

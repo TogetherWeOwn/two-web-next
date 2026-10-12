@@ -97,6 +97,18 @@ jobs:
             echo "::warning::Ratchet tests absent at this head SHA; skipped (predates #651)."
           fi
           python3 -m unittest discover -s ci -p 'test_check_pr_conventions.py'
+          # Heads cut before this PR lack the docs drift test: the head-SHA
+          # checkout then has nothing for this pattern, and unittest exits 5.
+          # Skip with a warning when the head predates the test; fail closed
+          # when the head deletes it so a PR cannot silence its own gate.
+          if [ -f ci/test_pr_lint_docs.py ]; then
+            python3 -m unittest discover -s ci -p 'test_pr_lint_docs.py'
+          elif git log --format=%H -1 HEAD -- ci/test_pr_lint_docs.py | grep -q .; then
+            echo "::error::pr-lint docs test deleted at this head; refusing to skip."
+            exit 1
+          else
+            echo "::warning::pr-lint docs test absent at this head SHA; skipped (predates #769)."
+          fi
 
       - name: Ratchet tracked internal references
         if: github.event_name != 'push'

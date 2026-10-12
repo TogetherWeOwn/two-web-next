@@ -760,3 +760,44 @@ export async function getEventRow(db: Db, key: string) {
   if (!row || !isRenderableEventWindow(row)) return null;
   return row;
 }
+
+export type PublicApiEvent = Omit<PublicEvent, "goingCount"> & { goingCount: number | null };
+
+/**
+ * A3 public-API collection: published-only with the same clamp-to-last-page
+ * bound as `listJson`, but the going-count aggregate degrades to null instead
+ * of failing the page — an unreadable RSVP rollup reads as unknown, never 0.
+ * `listJson` stays untouched for the session-gated `/events.json` contract.
+ */
+export async function listPublicApiEvents(
+  db: Db,
+  opts: { limit: number; offset: number },
+): Promise<{ rows: PublicApiEvent[]; total: number; page: number }> {
+  const predicate = eq(events.status, PUBLIC_EVENT_STATUS);
+  const [total] = await db.select({ n: count() }).from(events).where(predicate);
+  const n = Number(total?.n ?? 0);
+  const lastPage = Math.max(1, Math.ceil(n / opts.limit));
+  const page = Math.min(Math.max(1, Math.floor(opts.offset / opts.limit) + 1), lastPage);
+  const rows = await db
+    .select()
+    .from(events)
+    .where(predicate)
+    .orderBy(asc(events.startsAt), asc(events.id))
+    .limit(opts.limit)
+    .offset((page - 1) * opts.limit);
+  const renderable = rows.filter(isRenderableEventWindow);
+  const withCounts = await withGoing(db, renderable).catch(() =>
+    renderable.map((row) => ({ ...row, goingCount: null as number | null })),
+  );
+  return { rows: withCounts, total: n, page };
+}
+
+/** A3 public-API single: published rows only — drafts, cancelled rows and unrenderable windows are all a 404 upstream. */
+export async function getPublicApiEvent(db: Db, eventKey: string): Promise<PublicApiEvent | null> {
+  const row = await getEventRow(db, eventKey);
+  if (!row || row.status !== PUBLIC_EVENT_STATUS) return null;
+  const [withCount] = await withGoing(db, [row]).catch(() => [
+    { ...row, goingCount: null as number | null },
+  ]);
+  return withCount ?? { ...row, goingCount: null };
+}

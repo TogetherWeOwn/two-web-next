@@ -15,9 +15,10 @@ test("bot-refused join renders the blocked copy with retry and invite, without s
   page,
   context,
 }) => {
-  // Start the one-click journey without rendering /join (its Discord widget
-  // iframe is external traffic the isolation guard forbids): fetch the local
-  // entry only, validate the Discord authorize redirect, keep the state cookie.
+  // Start the one-click journey without rendering /join: its click-to-load
+  // preview sends no Discord traffic before a visitor click, and that path is
+  // covered by e2e/join-widget.spec.ts. Fetch the local entry only, validate
+  // the Discord authorize redirect, keep the state cookie.
   const entry = await context.request.get("/join/discord", { maxRedirects: 0 });
   expect(entry.status()).toBe(302);
   const rawLocation = entry.headers()["location"];
