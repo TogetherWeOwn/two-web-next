@@ -16,8 +16,10 @@ CI runs two independent jobs in `.github/workflows/ci.yml`:
   artifact for 14 days in the repository artifact store, not a public LHCI server.
 
 The required `check` job depends on **both** performance jobs and runs with
-`if: always()`. Its first gate explicitly rejects failed, cancelled, skipped or
-missing results; a skipped required check alone is not a safe merge gate.
+`if: ${{ !cancelled() }}`: whatever they concluded, unless its own run was
+cancelled (then it concludes cancelled, which still blocks a merge). Its first
+gate explicitly rejects failed, cancelled, skipped or missing results; a skipped
+required check alone is not a safe merge gate.
 `test/performance-ci.test.ts` sends synthetic over-budget LCP/CLS reports through
 the real LHCI assertion command, proves its nonzero exit fails this gate, and pins
 the workflow wiring. `npm run gate:selftest` covers result-state handling offline.
