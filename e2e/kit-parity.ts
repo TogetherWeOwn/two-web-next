@@ -48,7 +48,21 @@ export function expectedKitMarker(path: string): string | null {
 }
 
 export function normalizeOrigin(body: string, origin: string): string {
-  return body.split(origin).join("PARITY_ORIGIN").split(STAGING_APP_URL).join("PARITY_ORIGIN");
+  // Feed links also ship a webcal:// variant (webcalUrl in
+  // src/events/feeds.ts rewrites the http(s) scheme to webcal://), so the
+  // bare https/http origin never matches the subscribe href. Normalize both
+  // schemes, or the cross-target section comparison fails on host bytes that
+  // differ by design (staging origin vs Kit fixture origin).
+  const toWebcal = (url: string) => url.replace(/^https?:\/\//, "webcal://");
+  return body
+    .split(origin)
+    .join("PARITY_ORIGIN")
+    .split(STAGING_APP_URL)
+    .join("PARITY_ORIGIN")
+    .split(toWebcal(origin))
+    .join("PARITY_ORIGIN")
+    .split(toWebcal(STAGING_APP_URL))
+    .join("PARITY_ORIGIN");
 }
 
 const SECRET_PATTERNS = [/X-TWO-QA-Auth/i, /__Host-two_session\s*=/, /DISCORD_BOT_TOKEN/i];
