@@ -11,6 +11,7 @@ import { transitionEvent, updateEvent } from "../src/admin/store";
 import { parseEventForm, ValidationError } from "../src/admin/validation";
 import type { QueueMessage } from "../src/jobs/types";
 import { createMemorySessionStore } from "../src/sessions";
+import { ICS_SEQUENCE_BASE } from "../src/events/feeds";
 import type { Env } from "../src/env";
 
 type TrackedSync = Extract<QueueMessage, { kind: "sync-event" }>;
@@ -237,7 +238,7 @@ describe.skipIf(!process.env.DATABASE_URL)("shared agent event acceptance (agent
     expect(published).toBeGreaterThan(created);
     const feed = await app.request("/events.ics", {}, env);
     expect(feed.status).toBe(200);
-    expect(await feed.text()).toContain(`SEQUENCE:${published}\r\n`);
+    expect(await feed.text()).toContain(`SEQUENCE:${published - ICS_SEQUENCE_BASE}\r\n`);
     expect((await call("publish", publish)).body.replayed).toBe(true);
     expect((await call("read", { event_key })).status).toBe(200);
     expect(await revision()).toBe(published);
