@@ -18,8 +18,10 @@ Environment contract (every value is a plain string):
   INTERNAL_ID_PREFIXES   regex alternation of internal ticket prefixes (default TOG|PAP|PAPA)
 
 Title format, an empty body and a missing required card reference are always errors: they are the
-standard the org already enforces. Everything new is `PR_STANDARDS_MODE` so a repo can land the
-gate in warn mode, clear its open PRs, then flip one line to `error`.
+standard the org already enforces. On a public repo the strict title/body subset (tracker ids,
+instance UI links, the internal host) also always fails, comments included. Everything else new
+is `PR_STANDARDS_MODE` so a repo can land the gate in warn mode, clear its open PRs, then flip
+one line to `error`.
 """
 import json
 import os
@@ -67,15 +69,9 @@ OTHER_FIXED = [
      "a private-network address"),
     (re.compile(r"\b[\w-]+(?:\.[\w-]+)*\.ts\.net\b"), "a tailnet hostname"),
 ]
-FIXED_INTERNAL = [
-    (re.compile(r"\bagent://"), "an agent:// link"),
-    INSTANCE_UI,
-    (re.compile(r"\b(?:localhost|127\.0\.0\.1)\b"), "a localhost URL"),
-    (re.compile(r"\b(?:10\.\d{1,3}\.\d{1,3}\.\d{1,3}|192\.168\.\d{1,3}\.\d{1,3}|172\.(?:1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3})\b"),
-     "a private-network address"),
-    (re.compile(r"\b[\w-]+(?:\.[\w-]+)*\.ts\.net\b"), "a tailnet hostname"),
-    HOST_INTERNAL,
-]
+# Single source per pattern: the commit/branch check sees the advisory remainder plus the
+# strict subset, so a leak caught in a title is also caught in a commit message and vice versa.
+FIXED_INTERNAL = OTHER_FIXED + STRICT_FIXED
 
 
 @dataclass
@@ -155,8 +151,8 @@ def strict_hits(text, prefixes):
     """Fail-closed subset for public title/body: tracker ids, instance UI links, internal host.
 
     Always case-sensitive in prose. Returns label strings naming each strict hit,
-    without echoing the matched value."""
-    text = strip_comments(text)
+    without echoing the matched value. The raw text is scanned: an id, link or host
+    inside an HTML comment is still published text."""
     hits = []
     m = ticket_id_pattern(prefixes, slug=False).search(text)
     if m:

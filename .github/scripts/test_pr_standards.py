@@ -249,7 +249,8 @@ class CardAndInternalRefs(unittest.TestCase):
     def test_public_title_body_strict_subset_always_errors(self):
         # Tracker id, instance UI link and internal host fail the title/body even in warn mode
         clean = GOOD_BODY.replace("Refs: TOG-1234", "Fixes #12")
-        for leak in ("TOG-123", "see /TOG/issues/TOG-1", "https://workforce.infextion.net/x"):
+        for leak in ("TOG-123", "see /TOG/issues/TOG-1", "see (/TOG/issues/abc)",
+                       "https://workforce.infextion.net/x"):
             for where in ("TITLE", "BODY"):
                 body = clean if where == "TITLE" else GOOD_BODY.replace("Refs: TOG-1234", leak)
                 title = "fix(auth): refresh the key " + leak if where == "TITLE" else "fix(auth): refresh the key"
@@ -287,9 +288,18 @@ class CardAndInternalRefs(unittest.TestCase):
         body = GOOD_BODY.replace("Refs: TOG-1234", "Fixes #12. Mentions CVE-2026-1234, UTF-8, SHA-256, GPT-4 and 172.32.0.1.")
         self.assertEqual([], ps.evaluate(env(BODY=body, REPO_PRIVATE="false")))
 
-    def test_html_comments_are_not_scanned(self):
-        body = GOOD_BODY.replace("Refs: TOG-1234", "Fixes #12\n<!-- do not write TOG-123 or localhost here -->")
+    def test_html_comments_are_not_scanned_for_advisory_refs(self):
+        body = GOOD_BODY.replace("Refs: TOG-1234", "Fixes #12\n<!-- do not write agent://abc or localhost here -->")
         self.assertEqual([], ps.evaluate(env(BODY=body, REPO_PRIVATE="false")))
+
+    def test_html_comments_do_not_hide_strict_refs(self):
+        # An id, instance link or host inside a comment is still published text.
+        clean = GOOD_BODY.replace("Refs: TOG-1234", "Fixes #12")
+        for leak in ("TOG-123", "see (/TOG/issues/abc)", "https://workforce.infextion.net/x"):
+            body = clean + f"\n<!-- {leak} -->\n"
+            for mode in ("warn", "error"):
+                f = ps.evaluate(env(BODY=body, REPO_PRIVATE="false", PR_STANDARDS_MODE=mode))
+                self.assertIn(("error", "Internal reference"), levels(f), (mode, leak))
 
     def test_prefixes_are_configurable(self):
         body = GOOD_BODY.replace("Refs: TOG-1234", "Refs ACME-77")
