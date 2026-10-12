@@ -63,6 +63,14 @@ test("operational preview JSON is explicitly a non-document", () => {
   assert.deepEqual(auditCases([{ method: "GET", path }], { [path]: entry }), []);
 });
 
+test("evidence-only source verifier JSON is explicitly a non-document", () => {
+  const path = "/admin/queue/source-evidence/:id";
+  const entry = documentCoverage[path];
+  assert.equal(entry.skip, true);
+  assert.match(entry.reason, /evidence-only.*JSON/);
+  assert.deepEqual(auditCases([{ method: "GET", path }], { [path]: entry }), []);
+});
+
 test("removed routes and unexplained exclusions fail", () => {
   assert.throws(() => auditCases(routes.slice(1), coverage), /stale=\//);
   assert.throws(
