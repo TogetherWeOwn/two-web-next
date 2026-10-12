@@ -59,8 +59,13 @@ jobs:
             "src/admin/pages.tsx" \
             "src/admin/pages/**" \
             "src/admin/routes.tsx" \
+            "src/admin/table-list.ts" \
+            "src/featured-image.ts" \
             "src/featured-status.tsx" \
+            "src/image-policy.ts" \
+            "src/page-shell.tsx" \
             "src/pages.tsx" \
+            "src/screens/featured-item.tsx" \
             "public/styles.css" >> "$GITHUB_OUTPUT"
 
   capture:
@@ -120,7 +125,7 @@ jobs:
           fi
       - name: Retain all available captures and reports, including failures
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: featured-offline-proof-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/featured-output/
@@ -170,7 +175,7 @@ jobs:
           node "$RUNNER_TEMP/featured-current-capture.cjs" "$RUNNER_TEMP/featured-current-fixtures" "$RUNNER_TEMP/featured-current-output"
       - name: Retain screenshots, manifest and report for independent QA
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: featured-current-source-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/featured-current-output/

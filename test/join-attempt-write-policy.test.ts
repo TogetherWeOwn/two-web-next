@@ -102,9 +102,15 @@ describe("join-attempt write policy: single controller insert (DB-free source al
 
   it("recordAttempt is defined once and called only from the join callback route", () => {
     // recordAttempt\( matches the definition plus call sites; the import,
-    // comments and docs carry no paren and stay out of this pin.
-    expect(filesMatching(/recordAttempt\(/)).toEqual(["src/join/route.ts", "src/join/service.ts"]);
-    expect(read("src/join/route.ts").match(/await recordAttempt\(/g)).toHaveLength(5);
+    // comments and docs carry no paren and stay out of this pin. route.ts is
+    // a re-export barrel; the five callback calls live in route-callback.ts.
+    expect(filesMatching(/recordAttempt\(/)).toEqual([
+      "src/join/route-callback.ts",
+      "src/join/service.ts",
+    ]);
+    expect(read("src/join/route-callback.ts").match(/await recordAttempt\(/g)).toHaveLength(5);
+    expect(read("src/join/route-callback.ts")).not.toMatch(/INSERT INTO join_attempts/);
+    expect(read("src/join/route.ts")).not.toMatch(/await recordAttempt\(/);
     expect(read("src/join/route.ts")).not.toMatch(/INSERT INTO join_attempts/);
   });
 
@@ -119,10 +125,23 @@ describe("join-attempt write policy: single controller insert (DB-free source al
   });
 
   it("the admin write store never touches join attempts", () => {
-    const store = read("src/admin/store.ts");
-    expect(store).not.toMatch(/join_attempts/);
-    expect(store).not.toMatch(/\bjoinAttempts\b/);
-    expect(store).not.toMatch(/recordAttempt/);
+    // store.ts is a re-export barrel; the bodies live in the leaves, so the
+    // pin must scan every store module (globbed so future leaves stay covered).
+    const stores = srcFiles().filter((path) => /^src\/admin\/store.*\.ts$/.test(path));
+    expect(stores).toEqual([
+      "src/admin/store-access.ts",
+      "src/admin/store-event-reads.ts",
+      "src/admin/store-event-writes.ts",
+      "src/admin/store-featured.ts",
+      "src/admin/store-shared.ts",
+      "src/admin/store.ts",
+    ]);
+    for (const file of stores) {
+      const text = read(file);
+      expect(text, file).not.toMatch(/join_attempts/);
+      expect(text, file).not.toMatch(/\bjoinAttempts\b/);
+      expect(text, file).not.toMatch(/recordAttempt/);
+    }
   });
 });
 

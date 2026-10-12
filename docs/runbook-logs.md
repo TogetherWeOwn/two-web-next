@@ -14,7 +14,10 @@ replacements have the same log/header contract.
 1. Ask for the response's **`x-request-id`** and approximate time, not a cookie,
    Authorization header, OAuth callback URL or Discord identity. The header is
    a validated Cloudflare Ray ID (`cf-ray`), or a generated ULID when no valid
-   Ray ID is available. Client `x-request-id` input is ignored.
+   Ray ID is available. Client `x-request-id` input is ignored. The generic 500
+   page and the database-outage and maintenance 503 pages show the same value as
+   their **Support reference**, so a member can copy it without developer tools.
+   The join-flow recovery page does not show it.
 2. Open **Cloudflare dashboard → Workers & Pages → two-web-next → Observability**.
    Choose a time window around the report and the correct deployed Worker.
 3. Search the log message for the exact ID (for example,
@@ -62,7 +65,7 @@ Documented cause set: `discord_unavailable`, `in_progress`, `internal`, `rate_li
 | Cause (`sync_retry_code`) | Meaning |
 | --- | --- |
 | `in_progress` | The bot reports the operation is already in progress (409 with a retryable answer); another attempt for the same logical operation is underway |
-| `rate_limited` | The bot or Discord rate-limited the call (429); the existing Retry-After/backoff still sets the wait |
+| `rate_limited` | The bot or Discord rate-limited the call (429); a Retry-After above 0 and at most 86400 seconds (fractions round up) sets the wait, and an absent, zero or out-of-range value uses the attempt's backoff |
 | `internal` | The bot reported a retryable internal error |
 | `discord_unavailable` | The bot surfaced Discord-side unavailability |
 | `upstream_timeout` | The bot's upstream call timed out |
@@ -80,8 +83,10 @@ are never invoked. The Tail Worker does not forward these fields.
 ### Tally retry causes in Workers telemetry
 
 ```sh
-# Live stream of classified retries (authorized Cloudflare access required)
-npx wrangler tail two-web-next --format json \
+# Live stream of classified retries (authorized Cloudflare access required).
+# The queue consumer runs on two-web-jobs after the handoff: `sync retry
+# classified` is emitted there (src/jobs/consumer.ts), not on two-web-next.
+npx wrangler tail two-web-jobs --format json \
   | jq -c 'select(.logs[]?.message[]? | tostring | contains("sync retry classified"))'
 
 # Count occurrences per cause over a saved tail file
@@ -93,11 +98,41 @@ jq -c '.logs[]? | select(any(.message[]?; . == "sync retry classified")) | .mess
   deliveries.json | grep -o '"sync_retry_class":"[A-Za-z]*"' | sort | uniq -c
 ```
 
-In the dashboard (**Workers & Pages → two-web-next → Observability**), filter
+In the dashboard (**Workers & Pages → two-web-jobs → Observability**), filter
 the message/text with `sync retry classified` over the incident window and
 group by `sync_retry_code` (refusals) or `sync_retry_class`. These receipts
 count occurrences, not distinct durable requests, and cannot reconstruct the
 causes of earlier exhausted deliveries.
+
+## Failure log lines
+
+These `console.error` lines mean a request or job hit a failure path. Each row
+gives the exact message, what it means, whether the request fails closed,
+degrades or only logs, the first read-only check, and the fields the line
+carries. Find a line with the message **contains** filter from
+[Find a request](#find-a-request). Where a line carries an exception, it is the
+class name only, never the raw error text, which can hold SQL bindings, tokens
+or personal data. A line that carries a reason instead says so in its row.
+Read-only checks only: a Workers Logs search, a `SELECT`, or a source file.
+
+| Message | Meaning | Severity | First read-only check | Fields carried |
+| --- | --- | --- | --- | --- |
+| `Member read audit failed; refusing contents.` | The member-read audit write failed or reported no row written (`src/member-reads.ts`). | Fails closed: the contents are refused with the unavailable response. | Search logs for the line and the matching `http.request` status; then `SELECT count(*) FROM member_data_access_logs` over the same window to see whether writes resumed. | `exception` (class name), validated `request_id` |
+| `Member data access could not be recorded; refusing to serve the read.` | The access-log write failed after a handler declared a member-data read (`src/access-log.ts`). | Fails closed with the database-unavailable response unless `MEMBER_ACCESS_LOG_ENFORCE` is `false`, `0` or `no`; then it only logs. | Search logs for the `route` value; then `SELECT count(*) FROM member_data_access_logs` over the same window. | `route`, `exception` (class name) |
+| `admin guard could not resolve the session; refusing.` | The admin session lookup threw (`src/admin/guard.ts`). | Fails closed with the database-unavailable response. | Search logs for the matching `http.request` status on `/admin` routes; then check database health with the [alert runbook](runbook-alerts.md). | `exception` (error name) |
+| `event write-back enqueue failed; reconcile will re-dispatch` | Sending the event write-back to the sync queue threw (`src/events/sync.ts`). The request itself already succeeded. | Degrades: the write-back is late until reconcile re-dispatches it. | Search logs for the `eventKey` and `request_id`; then join through `events` (`event_sync_attempts` carries `event_id`, not `event_key`): `SELECT * FROM event_sync_attempts JOIN events ON events.id = event_sync_attempts.event_id WHERE events.event_key = '<eventKey>'` to see whether a later attempt landed. | `eventKey`, `exception` (error name), `request_id` |
+| `services.discord.invite_url is unusable; serving the hardcoded fallback invite.` | The configured invite URL is not an `https` `discord.gg` or `discord.com/invite` link (`src/invite.ts`). | Degrades: visitors get the hardcoded invite, which may be a rotation old. | Read the `services.discord.invite_url` setting in the deployed config and compare it with the validator in `src/invite.ts`. | None |
+| `agent-events failed` | The agent-events ingress threw before or while handling a request (`src/agent-events/route.ts`, two call sites). | Fails closed: 503 `ingress_unavailable` for a database outage, otherwise 500 `internal_error`. | Search logs for the matching `http.request` status on the agent-events route; then `SELECT * FROM agent_event_audits` for the window. | Error name as the second argument |
+| `sync retry result persistence failed` | A known sync-retry result could not be committed (`src/jobs/consumer.ts`), so the durable claim stays fenced. | Degrades: the delivery is retried after the known wait, or marked failed once tries run out. | Search logs for `sync retry classified` and `queue.failing` for the same event; see [sync-event retry-cause diagnostics](#sync-event-retry-cause-diagnostics). | Fixed reason string `sync retry result could not be persisted; request remains fenced` |
+| `job threw` | A queue job threw something that is not a bot transport error, a terminal error or a refusal (`src/jobs/consumer.ts`). | Retries until the job runs out of tries, then it is buried and a `queue.failing` alert fires. | Search logs for `queue.failing` with the same job kind; then `SELECT * FROM queue_failed_jobs` for that kind. | Job `kind`, `exception` (class name) |
+| `job failed` | A job returned a failed outcome (`src/jobs/consumer.ts`), and a `queue.failing` alert follows. | Terminal for that job; the ledger row is marked failed. | Search logs for `queue.failing` with the same job kind; then `SELECT * FROM queue_failed_jobs` for that kind. | Job `kind`, then the bounded failure reason (a stable code or class name, not raw error text) |
+| `Member request failed; refusing contents.` | An unhandled error reached the shared error handler while a member read was active (`src/error-responses.tsx`). | Fails closed with a 503 "Member data is temporarily unavailable." body. | Search logs for the matching `http.request` record and its route. | `exception` (class name), validated `request_id` |
+| `Profile request failed; refusing contents.` | An unhandled error reached the profiles router error handler (`src/profiles/routes-gate.ts`). | Fails closed: database-unavailable response for an outage, otherwise a 503 member text. | Search logs for the matching `http.request` record on a `/members` route. | `exception` (class name), validated `request_id` |
+| `profiles could not resolve the session; refusing.` | The profiles session lookup threw (`src/profiles/routes-gate.ts`). | Fails closed with the database-unavailable response. | Search logs for the matching `http.request` status; then `SELECT count(*) FROM web_sessions` to confirm the table is readable. | `exception` (class name) |
+| `profile save failed` | Saving a validated profile threw (`src/profiles/routes-writes.tsx`). | Fails closed: database-unavailable response for an outage, otherwise 500 "Could not save your profile." | Search logs for the matching `http.request` status on the profile save route; then `SELECT updated_at FROM profiles` for that member. | `exception` (class name), validated `request_id` |
+
+The `sync attempt settlement failed` line (`src/jobs/consumer.ts`) is outside
+this catalogue.
 
 ## Privacy and boundaries
 
@@ -113,6 +148,15 @@ message (which may carry SQL or connection secrets); see
 [the alert runbook](runbook-alerts.md). Do not add those values when
 investigating an incident.
 
+Warning lines follow the same boundary. `roster upsert failed` and
+`prior session sweep failed` (`src/index.tsx`) and `guild auto-join failed`
+(`src/auth/routes.ts`) carry `request_id` and, where there is one, the exception
+class; they never carry a member's Discord ID. `csp.report.violation`
+(`src/csp-reports.ts`) keeps each reported URI's origin and path shape, but a
+17-20 digit run in a path segment (a Discord ID in `/members/:user`) is logged
+as `:id` (`src/csp-report-uri.ts`). `test/console-user-key-guard.test.ts` fails
+the suite if any `console.*` call under `src/` logs a `user` or `userId` key.
+
 This is the application-log contract, not a claim that all platform telemetry
 is sanitized. Cloudflare invocation records may independently include the
 request URL, and existing specialist audit/warning records have their own
@@ -127,7 +171,7 @@ No Logpush or external shipping is configured by this change.
 
 ## Discord snapshot outcome
 
-The calendar's Discord snapshot source (`src/events/discord-transients.ts`)
+The calendar's Discord snapshot source (`src/events/discord-transients-cached.ts`)
 emits one bounded `Discord snapshot outcome` diagnostic per request through the
 shared snapshot path. The staging events incident, where Discord 429s made the
 events page show an error state instead of events, was diagnosed by tallying

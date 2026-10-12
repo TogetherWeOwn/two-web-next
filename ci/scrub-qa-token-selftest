@@ -1,0 +1,634 @@
+#!/usr/bin/env python3
+"""Offline regressions for ci/scrub-qa-token.py (artifact privacy).
+
+Synthetic non-secret markers only. Proves an early unreadable member
+cannot hide a later readable compressed marker, and that corrupt,
+encrypted, unsupported and depth-overflow content fails closed.
+
+Run with: python3 ci/scrub-qa-token-selftest
+"""
+
+import base64
+import io
+import os
+import subprocess
+import sys
+import tempfile
+import unittest
+import zipfile
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+SCRUBBER = ROOT / "ci" / "scrub-qa-token.py"
+# Clearly synthetic, never a real credential.
+MARKER = b"SYNTHETIC-QA-SWEEP-MARKER-7f3a9c2e"
+MARKER_TEXT = MARKER.decode("ascii")
+
+
+def make_zip(members: list[tuple[str, bytes, int]]) -> bytes:
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as archive:
+        for name, payload, method in members:
+            archive.writestr(name, payload, compress_type=method)
+    return buf.getvalue()
+
+
+def patch_first_member_method(raw: bytes, method: int) -> bytes:
+    data = bytearray(raw)
+    local = data.find(b"PK\x03\x04")
+    assert local != -1
+    data[local + 8] = method & 0xFF
+    data[local + 9] = (method >> 8) & 0xFF
+    central = data.find(b"PK\x01\x02")
+    assert central != -1
+    data[central + 10] = method & 0xFF
+    data[central + 11] = (method >> 8) & 0xFF
+    return bytes(data)
+
+
+def patch_first_member_encrypted(raw: bytes) -> bytes:
+    data = bytearray(raw)
+    local = data.find(b"PK\x03\x04")
+    assert local != -1
+    data[local + 6] |= 0x01
+    central = data.find(b"PK\x01\x02")
+    assert central != -1
+    data[central + 8] |= 0x01
+    return bytes(data)
+
+
+def nest_zip(payload: bytes, levels: int) -> bytes:
+    # DEFLATED at every layer so a deep marker is not visible to the raw
+    # outer search; only complete recursive inspection can find it.
+    data = payload
+    for depth in range(levels):
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w") as archive:
+            archive.writestr(f"level{depth}.zip", data, compress_type=zipfile.ZIP_DEFLATED)
+        data = buf.getvalue()
+    return data
+
+
+class ScrubQaTokenTests(unittest.TestCase):
+    def setUp(self):
+        scratch = os.environ.get("PAPERCLIP_RUN_SCRATCH_DIR") or os.environ.get("TMPDIR")
+        self.temp = tempfile.TemporaryDirectory(dir=scratch)
+        self.addCleanup(self.temp.cleanup)
+        self.fixture = Path(self.temp.name)
+        self.tree = self.fixture / "artifacts"
+        self.tree.mkdir()
+        self.output = self.fixture / "github-output.txt"
+
+    def run_scrubber(self, *extra_dirs: str):
+        env = {
+            "PATH": os.defpath,
+            "HOME": str(self.fixture),
+            "TMPDIR": str(self.fixture),
+            "QA_AUTH_TOKEN": MARKER_TEXT,
+            "GITHUB_OUTPUT": str(self.output),
+        }
+        dirs = list(extra_dirs) if extra_dirs else [str(self.tree)]
+        result = subprocess.run(
+            [sys.executable, str(SCRUBBER), *dirs],
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        return result
+
+    def swept(self) -> str:
+        if not self.output.is_file():
+            return ""
+        return self.output.read_text(encoding="utf-8")
+
+    def write_tree(self, name: str, data: bytes) -> Path:
+        path = self.tree / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(data)
+        return path
+
+    def assert_removed(self, path: Path):
+        self.assertFalse(path.exists(), f"{path.name} should have been removed")
+
+    def assert_retained(self, path: Path):
+        self.assertTrue(path.is_file(), f"{path.name} should have been retained")
+
+    def assert_no_leak(self, result) -> None:
+        combined = result.stdout + result.stderr
+        self.assertNotIn(MARKER_TEXT, combined)
+        self.assertNotIn(MARKER.decode("ascii", errors="strict"), combined)
+        # Member names containing the marker must never be echoed either.
+        for line in combined.splitlines():
+            if "scrub-qa-token: removed" in line or "could NOT remove" in line:
+                self.assertNotIn(MARKER_TEXT, line)
+
+    def assert_exposed_and_removed(self, target: Path, result) -> None:
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assert_removed(target)
+        self.assertIn("swept=true", self.swept())
+        self.assert_no_leak(result)
+        combined = result.stdout + result.stderr
+        self.assertIn("was found", combined)
+        self.assertIn("report it to the COO", combined)
+
+    # Raw files and normal ZIPs retain their existing behavior.
+
+    def test_raw_file_hit_is_removed_exit1_with_swept(self):
+        target = self.write_tree("failure.log", b"prefix " + MARKER + b" suffix")
+        result = self.run_scrubber()
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assert_removed(target)
+        self.assertIn("swept=true", self.swept())
+        self.assert_no_leak(result)
+
+    def test_clean_raw_file_is_retained_exit0_with_swept(self):
+        target = self.write_tree("clean.log", b"nothing interesting here")
+        result = self.run_scrubber()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assert_retained(target)
+        self.assertIn("swept=true", self.swept())
+
+    def test_normal_zip_later_member_hit_is_removed(self):
+        raw = make_zip([
+            ("first.txt", b"hello", zipfile.ZIP_STORED),
+            ("second.txt", b"prefix " + MARKER + b" suffix", zipfile.ZIP_DEFLATED),
+        ])
+        target = self.write_tree("report.zip", raw)
+        result = self.run_scrubber()
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assert_removed(target)
+        self.assertIn("swept=true", self.swept())
+        self.assert_no_leak(result)
+
+    def test_clean_zip_is_retained(self):
+        raw = make_zip([
+            ("first.txt", b"hello", zipfile.ZIP_STORED),
+            ("second.txt", b"world", zipfile.ZIP_DEFLATED),
+        ])
+        target = self.write_tree("clean.zip", raw)
+        result = self.run_scrubber()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assert_retained(target)
+        self.assertIn("swept=true", self.swept())
+
+    def test_duplicate_member_names_first_hit_is_found(self):
+        # Reading by filename resolves to the LAST same-named entry, so the
+        # last entry would be inspected twice and the first one never. Each
+        # ZipInfo is read directly, so the marker in the first entry is found.
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w") as archive:
+            archive.writestr(
+                "trace.network",
+                b"Authorization: " + MARKER,
+                compress_type=zipfile.ZIP_DEFLATED,
+            )
+            archive.writestr(
+                "trace.network", b"clean", compress_type=zipfile.ZIP_DEFLATED
+            )
+        raw = buf.getvalue()
+        self.assertNotIn(MARKER, raw)
+        target = self.write_tree("dup-names.zip", raw)
+        result = self.run_scrubber()
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assert_removed(target)
+        self.assertIn("swept=true", self.swept())
+        self.assert_no_leak(result)
+        combined = result.stdout + result.stderr
+        self.assertIn("was found", combined)
+
+    # The core regression: an early unreadable member must not hide a later marker.
+
+    def test_early_unsupported_member_cannot_hide_later_marker(self):
+        clean = make_zip([
+            ("first.txt", b"hello unreadable", zipfile.ZIP_STORED),
+            ("second.txt", b"prefix " + MARKER + b" suffix", zipfile.ZIP_DEFLATED),
+        ])
+        raw = patch_first_member_method(clean, 99)
+        # Sanity: the second member independently contains the marker when
+        # read directly, so classifying the file clean would be a bypass.
+        archive = zipfile.ZipFile(io.BytesIO(raw))
+        members = {info.filename: info for info in archive.infolist()}
+        self.assertIn("second.txt", members)
+        second = archive.read("second.txt")
+        self.assertIn(MARKER, second)
+        # The first member is genuinely unreadable to this runtime.
+        with self.assertRaises(Exception):
+            archive.read("first.txt")
+        target = self.write_tree("early-unsupported.zip", raw)
+        result = self.run_scrubber()
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assert_removed(target)
+        self.assertIn("swept=true", self.swept())
+        self.assert_no_leak(result)
+        # A readable member behind the unreadable one still holds the marker,
+        # so this must print the exposure alarm, not just the withheld notice.
+        combined = result.stdout + result.stderr
+        self.assertIn("was found", combined)
+        self.assertIn("report it to the COO", combined)
+
+    def test_early_unsupported_member_without_marker_still_removed(self):
+        clean = make_zip([
+            ("first.txt", b"hello unreadable", zipfile.ZIP_STORED),
+            ("second.txt", b"world", zipfile.ZIP_DEFLATED),
+        ])
+        raw = patch_first_member_method(clean, 99)
+        target = self.write_tree("unsupported-clean.zip", raw)
+        result = self.run_scrubber()
+        # Fail closed: incompletely inspected content cannot be classified clean,
+        # even when the inspectable remainder holds no marker.
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assert_removed(target)
+        self.assertIn("swept=true", self.swept())
+
+    def test_depth_capped_member_cannot_hide_later_marker(self):
+        deep = make_zip([
+            ("too-deep.zip", make_zip([("x.txt", b"clean", zipfile.ZIP_STORED)]), zipfile.ZIP_DEFLATED),
+            ("second.txt", b"prefix " + MARKER + b" suffix", zipfile.ZIP_DEFLATED),
+        ])
+        raw = nest_zip(deep, 4)
+        self.assertNotIn(MARKER, raw)
+        target = self.write_tree("depth-capped-first.zip", raw)
+        self.assert_exposed_and_removed(target, self.run_scrubber())
+
+    def test_nested_incomplete_member_cannot_hide_later_marker(self):
+        nested = patch_first_member_method(
+            make_zip([("first.txt", b"hello unreadable", zipfile.ZIP_STORED)]), 99
+        )
+        raw = make_zip([
+            ("nested.zip", nested, zipfile.ZIP_STORED),
+            ("second.txt", b"prefix " + MARKER + b" suffix", zipfile.ZIP_DEFLATED),
+        ])
+        self.assertNotIn(MARKER, raw)
+        target = self.write_tree("nested-incomplete-first.zip", raw)
+        self.assert_exposed_and_removed(target, self.run_scrubber())
+
+    def test_corrupt_archive_is_removed(self):
+        raw = make_zip([("only.txt", b"prefix " + MARKER + b" suffix", zipfile.ZIP_DEFLATED)])
+        truncated = raw[: len(raw) // 2]
+        target = self.write_tree("corrupt.zip", truncated)
+        result = self.run_scrubber()
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assert_removed(target)
+        self.assertIn("swept=true", self.swept())
+        self.assert_no_leak(result)
+
+    def test_encrypted_member_is_removed(self):
+        # DEFLATED so the raw outer bytes do not carry the marker; only a
+        # complete inspection would find it, and encryption blocks that.
+        raw = make_zip([("secret.txt", b"prefix " + MARKER + b" suffix", zipfile.ZIP_DEFLATED)])
+        encrypted = patch_first_member_encrypted(raw)
+        target = self.write_tree("encrypted.zip", encrypted)
+        result = self.run_scrubber()
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assert_removed(target)
+        self.assertIn("swept=true", self.swept())
+        self.assert_no_leak(result)
+
+    # Embedded and nested archives.
+
+    def test_embedded_zip_hit_is_removed(self):
+        inner = make_zip([("trace.trace", b"header " + MARKER + b" tail", zipfile.ZIP_DEFLATED)])
+        blob = base64.b64encode(inner).decode("ascii")
+        html = (
+            "<html><body><template id=\"playwrightReportBase64\">"
+            "data:application/zip;base64," + blob + "</template></body></html>"
+        ).encode("utf-8")
+        target = self.write_tree("index.html", html)
+        result = self.run_scrubber()
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assert_removed(target)
+        self.assertIn("swept=true", self.swept())
+        self.assert_no_leak(result)
+
+    def test_embedded_nested_zip_hit_is_removed(self):
+        inner = make_zip([("trace.trace", b"header " + MARKER + b" tail", zipfile.ZIP_DEFLATED)])
+        mid_buf = io.BytesIO()
+        with zipfile.ZipFile(mid_buf, "w") as archive:
+            archive.writestr("inner.zip", inner, compress_type=zipfile.ZIP_STORED)
+        blob = base64.b64encode(mid_buf.getvalue()).decode("ascii")
+        html = (
+            "<html><template>data:application/zip;base64," + blob + "</template></html>"
+        ).encode("utf-8")
+        target = self.write_tree("nested.html", html)
+        result = self.run_scrubber()
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assert_removed(target)
+        self.assertIn("swept=true", self.swept())
+        self.assert_no_leak(result)
+
+    def test_depth_overflow_is_removed_even_without_visible_marker(self):
+        # Six nested layers exceed MAX_DEPTH=4, so the innermost content is
+        # never inspected. Fail closed regardless of any marker.
+        inner = make_zip([("deep.txt", b"no marker here", zipfile.ZIP_STORED)])
+        raw = nest_zip(inner, 6)
+        target = self.write_tree("deep.zip", raw)
+        result = self.run_scrubber()
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assert_removed(target)
+        self.assertIn("swept=true", self.swept())
+
+    def test_depth_overflow_hides_marker_is_removed(self):
+        inner = make_zip([("deep.txt", b"prefix " + MARKER + b" suffix", zipfile.ZIP_STORED)])
+        raw = nest_zip(inner, 6)
+        target = self.write_tree("deep-marker.zip", raw)
+        result = self.run_scrubber()
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assert_removed(target)
+        self.assertIn("swept=true", self.swept())
+        self.assert_no_leak(result)
+
+    def test_shallow_nesting_retains_detection(self):
+        inner = make_zip([("deep.txt", b"prefix " + MARKER + b" suffix", zipfile.ZIP_DEFLATED)])
+        raw = nest_zip(inner, 1)
+        target = self.write_tree("shallow.zip", raw)
+        result = self.run_scrubber()
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assert_removed(target)
+        self.assertIn("swept=true", self.swept())
+        self.assert_no_leak(result)
+
+    def embedded_html(self, *blobs: str) -> bytes:
+        templates = "".join(
+            "<template>data:application/zip;base64," + blob + "</template>" for blob in blobs
+        )
+        return ("<html><body>" + templates + "</body></html>").encode("utf-8")
+
+    def test_corrupt_base64_embedded_is_removed(self):
+        # Truncated padding cannot be decoded, so the blob is unknown, not clean.
+        inner = make_zip([("trace.trace", b"header " + MARKER + b" tail", zipfile.ZIP_DEFLATED)])
+        bad = base64.b64encode(inner).decode("ascii")[:-1]
+        target = self.write_tree("corrupt-b64.html", self.embedded_html(bad))
+        result = self.run_scrubber()
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assert_removed(target)
+        self.assertIn("swept=true", self.swept())
+        self.assert_no_leak(result)
+        combined = result.stdout + result.stderr
+        self.assertIn("withheld from the upload", combined)
+        self.assertNotIn("was found", combined)
+
+    def test_truncated_embedded_zip_is_removed(self):
+        # A half-length embedded zip decodes but cannot be opened, so it is withheld.
+        inner = make_zip([("trace.trace", b"header " + MARKER + b" tail", zipfile.ZIP_DEFLATED)])
+        truncated = base64.b64encode(inner[: len(inner) // 2]).decode("ascii")
+        target = self.write_tree("truncated-embedded.html", self.embedded_html(truncated))
+        result = self.run_scrubber()
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assert_removed(target)
+        self.assertIn("swept=true", self.swept())
+        self.assert_no_leak(result)
+        combined = result.stdout + result.stderr
+        self.assertIn("withheld from the upload", combined)
+        self.assertNotIn("was found", combined)
+
+    # An incomplete embedded or outer archive must not hide a readable hit.
+
+    def test_corrupt_base64_cannot_hide_later_embedded_marker(self):
+        inner = make_zip([("trace.trace", b"header " + MARKER + b" tail", zipfile.ZIP_DEFLATED)])
+        encoded = base64.b64encode(inner).decode("ascii")
+        raw = self.embedded_html(encoded[:-1], encoded)
+        self.assertNotIn(MARKER, raw)
+        target = self.write_tree("corrupt-then-good.html", raw)
+        self.assert_exposed_and_removed(target, self.run_scrubber())
+
+    def test_truncated_embedded_zip_cannot_hide_later_marker(self):
+        inner = make_zip([("trace.trace", b"header " + MARKER + b" tail", zipfile.ZIP_DEFLATED)])
+        truncated = base64.b64encode(inner[: len(inner) // 2]).decode("ascii")
+        encoded = base64.b64encode(inner).decode("ascii")
+        raw = self.embedded_html(truncated, encoded)
+        self.assertNotIn(MARKER, raw)
+        target = self.write_tree("truncated-then-good.html", raw)
+        self.assert_exposed_and_removed(target, self.run_scrubber())
+
+    def test_truncated_outer_zip_cannot_hide_embedded_marker(self):
+        # The file starts like a zip but has no central directory, so the outer
+        # archive is incomplete while the embedded zip holds a readable hit.
+        inner = make_zip([("trace.trace", b"header " + MARKER + b" tail", zipfile.ZIP_DEFLATED)])
+        raw = b"PK\x03\x04" + self.embedded_html(base64.b64encode(inner).decode("ascii"))
+        self.assertNotIn(MARKER, raw)
+        target = self.write_tree("truncated-outer.html", raw)
+        self.assert_exposed_and_removed(target, self.run_scrubber())
+
+    # Removal failure and diagnostic hygiene.
+
+    def test_removal_failure_exits_2_without_swept(self):
+        target = self.write_tree("stuck.log", b"prefix " + MARKER + b" suffix")
+        # Make removal fail: replace the file with a non-empty directory at
+        # the same path shape the walker will visit (os.remove on a directory
+        # raises IsADirectoryError). Use a nested path to keep the tree walk.
+        target.unlink()
+        stuck_dir = self.tree / "stuck.log"
+        stuck_dir.mkdir()
+        (stuck_dir / "inner.txt").write_bytes(b"prefix " + MARKER + b" suffix")
+        # Point the scrubber at the inner file via a symlink-free direct dir;
+        # instead simulate removal failure by making the parent read-only and
+        # asserting exit 2. Simpler and hermetic: chmod the file's directory
+        # is flaky as root, so patch os.remove via a wrapper script.
+        wrapper = self.fixture / "scrub-wrapper.py"
+        wrapper.write_text(
+            "import os, runpy, sys\n"
+            "real_remove = os.remove\n"
+            "def failing_remove(path):\n"
+            "    raise OSError('synthetic removal failure')\n"
+            "os.remove = failing_remove\n"
+            "sys.argv = ['scrub-qa-token.py', '" + str(self.tree) + "']\n"
+            "runpy.run_path('" + str(SCRUBBER) + "', run_name='__main__')\n",
+            encoding="utf-8",
+        )
+        env = {
+            "PATH": os.defpath,
+            "HOME": str(self.fixture),
+            "TMPDIR": str(self.fixture),
+            "QA_AUTH_TOKEN": MARKER_TEXT,
+            "GITHUB_OUTPUT": str(self.output),
+        }
+        result = subprocess.run(
+            [sys.executable, str(wrapper)],
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+        self.assertNotIn("swept=true", self.swept())
+        self.assert_no_leak(result)
+
+    def test_withheld_removal_failure_exits_2_without_swept(self):
+        # A withheld-only file that cannot be removed must fail closed the
+        # same way a token hit does: exit 2, no swept=true, and the withheld
+        # removal-failure message without the token-exposure alarm.
+        raw = make_zip([
+            ("trace.network", b"clean " * 200, zipfile.ZIP_DEFLATED),
+        ])
+        truncated = raw[: len(raw) // 2]
+        self.assertNotIn(MARKER, truncated)
+        target = self.write_tree("truncated-stuck.zip", truncated)
+        wrapper = self.fixture / "scrub-wrapper-withheld.py"
+        wrapper.write_text(
+            "import os, runpy, sys\n"
+            "real_remove = os.remove\n"
+            "def failing_remove(path):\n"
+            "    raise OSError('synthetic removal failure')\n"
+            "os.remove = failing_remove\n"
+            "sys.argv = ['scrub-qa-token.py', '" + str(self.tree) + "']\n"
+            "runpy.run_path('" + str(SCRUBBER) + "', run_name='__main__')\n",
+            encoding="utf-8",
+        )
+        env = {
+            "PATH": os.defpath,
+            "HOME": str(self.fixture),
+            "TMPDIR": str(self.fixture),
+            "QA_AUTH_TOKEN": MARKER_TEXT,
+            "GITHUB_OUTPUT": str(self.output),
+        }
+        result = subprocess.run(
+            [sys.executable, str(wrapper)],
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        combined = result.stdout + result.stderr
+        self.assertEqual(result.returncode, 2, combined)
+        self.assertNotIn("swept=true", self.swept())
+        self.assertTrue(target.is_file(), "withheld file that could not be removed must stay")
+        self.assertIn("could not be fully inspected", combined)
+        self.assertIn("could not be removed", combined)
+        self.assertNotIn("Treat the token as exposed", combined)
+        self.assertNotIn("was found", combined)
+        self.assert_no_leak(result)
+
+    def test_unreadable_file_is_withheld_not_exposure(self):
+        # An OSError while reading is not clean: the file is removed and the
+        # run reports withheld, never the token-exposure alarm.
+        target = self.write_tree("unreadable.log", b"clean content, no marker")
+        wrapper = self.fixture / "scrub-wrapper-unreadable.py"
+        wrapper.write_text(
+            "import builtins, os, runpy, sys\n"
+            "real_open = builtins.open\n"
+            "target_name = 'unreadable.log'\n"
+            "def failing_open(path, *args, **kwargs):\n"
+            "    if isinstance(path, (str, os.PathLike)) and str(path).endswith(target_name):\n"
+            "        raise OSError('synthetic unreadable file')\n"
+            "    return real_open(path, *args, **kwargs)\n"
+            "builtins.open = failing_open\n"
+            "sys.argv = ['scrub-qa-token.py', '" + str(self.tree) + "']\n"
+            "runpy.run_path('" + str(SCRUBBER) + "', run_name='__main__')\n",
+            encoding="utf-8",
+        )
+        env = {
+            "PATH": os.defpath,
+            "HOME": str(self.fixture),
+            "TMPDIR": str(self.fixture),
+            "QA_AUTH_TOKEN": MARKER_TEXT,
+            "GITHUB_OUTPUT": str(self.output),
+        }
+        result = subprocess.run(
+            [sys.executable, str(wrapper)],
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        combined = result.stdout + result.stderr
+        self.assertEqual(result.returncode, 1, combined)
+        self.assert_removed(target)
+        self.assertIn("swept=true", self.swept())
+        self.assertIn("withheld from the upload", combined)
+        self.assertNotIn("was found", combined)
+        self.assertNotIn("Treat the token as exposed", combined)
+        self.assertNotIn("report it to the COO", combined)
+        self.assert_no_leak(result)
+
+    def test_diagnostics_never_disclose_marker_or_tainted_member_name(self):
+        # Embedded base64 zip: the outer HTML never carries the marker raw,
+        # so detection must go through the member path, which must be
+        # redacted when the inner name itself contains the marker.
+        tainted_name = "note-" + MARKER_TEXT + ".txt"
+        inner = make_zip([
+            (tainted_name, b"prefix " + MARKER + b" suffix", zipfile.ZIP_DEFLATED),
+        ])
+        blob = base64.b64encode(inner).decode("ascii")
+        html = (
+            "<html><body><template>data:application/zip;base64,"
+            + blob + "</template></body></html>"
+        ).encode("utf-8")
+        self.assertNotIn(MARKER, html)
+        target = self.write_tree("tainted.html", html)
+        result = self.run_scrubber()
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assert_removed(target)
+        combined = result.stdout + result.stderr
+        self.assertNotIn(MARKER_TEXT, combined)
+        self.assertNotIn(tainted_name, combined)
+
+    # Withheld files are removed without claiming the token was found.
+
+    def test_withheld_only_prints_withheld_notice_not_exposure(self):
+        # Token-free truncated archive: incompletely inspected, so withheld
+        # from the upload. That alone is not a token exposure.
+        raw = make_zip([
+            ("trace.network", b"clean " * 200, zipfile.ZIP_DEFLATED),
+        ])
+        truncated = raw[: len(raw) // 2]
+        self.assertNotIn(MARKER, truncated)
+        target = self.write_tree("truncated-clean.zip", truncated)
+        result = self.run_scrubber()
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assert_removed(target)
+        self.assertIn("swept=true", self.swept())
+        combined = result.stdout + result.stderr
+        self.assertIn("withheld from the upload", combined)
+        self.assertNotIn("was found", combined)
+        self.assertNotIn("Treat the token as exposed", combined)
+        self.assertNotIn("report it to the COO", combined)
+
+    def test_real_hit_prints_exposure_error_without_withheld_notice(self):
+        target = self.write_tree("hit.log", b"prefix " + MARKER + b" suffix")
+        result = self.run_scrubber()
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assert_removed(target)
+        self.assertIn("swept=true", self.swept())
+        self.assert_no_leak(result)
+        combined = result.stdout + result.stderr
+        self.assertIn("was found", combined)
+        self.assertIn("report it to the COO", combined)
+        self.assertNotIn("withheld from the upload", combined)
+
+    def test_mixed_hit_and_withheld_prints_both_notices(self):
+        hit = self.write_tree("hit.log", b"prefix " + MARKER + b" suffix")
+        raw = make_zip([
+            ("trace.network", b"clean " * 200, zipfile.ZIP_DEFLATED),
+        ])
+        truncated = raw[: len(raw) // 2]
+        self.assertNotIn(MARKER, truncated)
+        unproven = self.write_tree("truncated-clean.zip", truncated)
+        result = self.run_scrubber()
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assert_removed(hit)
+        self.assert_removed(unproven)
+        self.assertIn("swept=true", self.swept())
+        self.assert_no_leak(result)
+        combined = result.stdout + result.stderr
+        self.assertIn("was found", combined)
+        self.assertIn("withheld from the upload", combined)
+
+    def test_broad_exception_as_clean_fallback_is_gone(self):
+        # Reintroducing `except ...: return None` around the whole member loop
+        # would classify this file clean. The fixture must be removed, so the
+        # fallback cannot come back without failing this test.
+        clean = make_zip([
+            ("first.txt", b"hello unreadable", zipfile.ZIP_STORED),
+            ("second.txt", b"prefix " + MARKER + b" suffix", zipfile.ZIP_DEFLATED),
+        ])
+        raw = patch_first_member_method(clean, 99)
+        target = self.write_tree("fallback-probe.zip", raw)
+        result = self.run_scrubber()
+        self.assert_removed(target)
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("swept=true", self.swept())
+
+
+if __name__ == "__main__":
+    unittest.main(verbosity=2)

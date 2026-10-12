@@ -10,6 +10,7 @@ operator command; there is no self-serve path.
 ```sh
 node --import ./bin/ts-hook.mjs bin/erase-member.mjs --discord-id=<snowflake>
 node --import ./bin/ts-hook.mjs bin/erase-member.mjs --discord-id=<snowflake> --apply
+node --import ./bin/ts-hook.mjs bin/erase-member.mjs --discord-id=<snowflake> --target staging
 node --import ./bin/ts-hook.mjs bin/erase-member.mjs --discord-id=<snowflake> --apply --target production
 ```
 
@@ -17,8 +18,22 @@ node --import ./bin/ts-hook.mjs bin/erase-member.mjs --discord-id=<snowflake> --
   contents. `--apply` deletes.
 - `DATABASE_URL` comes from the environment only — never argv, never logs.
   The output is one JSON line (`{"mode","counts"}`); the URL is never printed.
-- A production-looking connection string is refused unless `--target
-  production` is passed explicitly.
+- Any host outside `agent-testdb` and loopback (`localhost`, `127.0.0.1`,
+  `::1`) needs `--target staging` or `--target production`. A
+  production-looking URL needs `--target production`, and `--target staging`
+  on it is refused. The target is an operator assertion: the tool cannot
+  verify which environment a host belongs to.
+- A remote connection must verify the server certificate. The URL needs
+  `sslmode=verify-full` or `sslrootcert=system` (an alias for verify-full).
+  `require`, `verify-ca`, `disable`, and other query parameters are refused.
+  The driver receives only the parsed endpoint fields.
+- A loopback URL without `sslmode` connects without TLS, as
+  `revoke-sessions` does. Add `sslmode=require` when the local server enforces
+  TLS.
+- `NODE_TLS_REJECT_UNAUTHORIZED=0` is refused for every host.
+- Every refusal happens before a connection opens. Refusal messages are
+  fixed strings: the URL, the password, and the Discord id never appear in
+  output.
 - The Discord id is validated before any connection is opened. A malformed id
   exits 2 without touching the database.
 
@@ -50,9 +65,11 @@ A second apply is a no-op: every count returns 0.
 - `member_data_access_logs` is immutable with a 90-day prune
   (`drizzle/1018_audit-immutability.sql`, W13 `model:prune`). Past access
   records are compliance evidence and cannot be rewritten per request.
-- `activity_log` is append-only and retained. No job prunes it today; although
-  the database trigger permits deletion after 90 days, nothing currently does so.
+- `activity_log` is append-only and retained indefinitely per CISO decision
+  (retain). No job prunes it; although the database trigger permits deletion
+  after 90 days, nothing does so — that exception stays an unused safety valve.
   It records cutover and moderation evidence and is never edited per subject.
+  Revisit only through the whole-schema retention ledger.
 - The Discord-side mirror (roles, messages, tickets) is out of scope here:
   Discord is governed by Discord's own privacy policy, and removal there
   happens through Discord's moderation tools, not this command.
@@ -61,7 +78,7 @@ A second apply is a no-op: every count returns 0.
 
 `web_throttle_hits.bucket` embeds a Discord id in two write budgets:
 `rsvp-write:<discord id>` (`src/events/rsvp.ts`) and
-`profile-write:<discord id>` (`src/profiles/routes.tsx`). These rows are not
+`profile-write:<discord id>` (`src/profiles/routes-admission.ts`). These rows are not
 deleted by `eraseMember`: the rsvp path prunes counters older than five
 minutes before judging the budget (`pruneThrottle` in `src/events/rsvp.ts`);
 the join admission path (`checkJoinThrottle` in `src/join/service.ts`, shared

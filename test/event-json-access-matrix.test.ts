@@ -20,8 +20,7 @@ const APP_URL = "https://next.example.test";
 const SESSION_SECRET = "test-session-secret-at-least-32-bytes-long";
 
 // Legacy EventResource order (event_key first, synced_to_discord last, never
-// the autoincrement id), plus Next's viewer-specific waitlist_position trailer
-// (already pinned by test/rsvp-waitlist.test.ts).
+// the autoincrement id). Personal waitlist state is deliberately excluded.
 const EXPECTED_KEYS = [
   "event_key",
   "title",
@@ -38,7 +37,6 @@ const EXPECTED_KEYS = [
   "status",
   "rsvp_open",
   "synced_to_discord",
-  "waitlist_position",
 ];
 
 // 26-char Crockford keys (digits are a valid subset) distinct per seed row.
@@ -75,14 +73,14 @@ describe.skipIf(!process.env.DATABASE_URL)("event JSON access matrix (agent-test
     await fixture?.dispose();
   });
 
-  async function cookieFor(userId: string, moderator: boolean): Promise<string> {
+  async function cookieFor(userId: string, moderator: boolean, member = true): Promise<string> {
     const token = newSessionToken();
     await store.create({
       tokenHash: await hashToken(token),
       userId,
       username: userId,
       avatar: null,
-      member: true,
+      member,
       moderator,
       expiresAt: new Date(Date.now() + 3600_000),
     });
@@ -98,13 +96,14 @@ describe.skipIf(!process.env.DATABASE_URL)("event JSON access matrix (agent-test
 
   // /events.json never rotates the fragment session, but /e/:key HTML does, so
   // every request mints a fresh cookie rather than replaying one.
-  async function get(path: string, userId: string | null, moderator = false) {
+  async function get(path: string, userId: string | null, moderator = false, member = true) {
     const headers: Record<string, string> = {};
-    if (userId) headers.cookie = await cookieFor(userId, moderator);
+    if (userId) headers.cookie = await cookieFor(userId, moderator, member);
     return app.request(path, { headers }, env);
   }
   // Keyed member reads (d5d789c) require numeric Discord-snowflake viewers;
   // string ids trip the member-read boundary into 503 on /e/:key HTML.
+  const asGuest = (path: string) => get(path, "100000000000000130", false, false);
   const asMember = (path: string) => get(path, "100000000000000131", false);
   const asModerator = (path: string) => get(path, "100000000000000132", true);
   const rowsOf = async (res: Response) => ((await res.json()) as { data: Row[] }).data;
@@ -142,22 +141,20 @@ describe.skipIf(!process.env.DATABASE_URL)("event JSON access matrix (agent-test
     expect(await res.json()).toEqual({ error: "unauthenticated" });
   });
 
-  it("shows a member published, cancelled and past events but no drafts", async () => {
+  it("shows only published events to a guest session", async () => {
     await seedStatuses();
-    const res = await asMember("/events.json");
+    const res = await asGuest("/events.json");
     expect(res.status).toBe(200);
     const statuses = (await rowsOf(res)).map((r) => r.status).sort();
-    // Cancelled stays visible: members who RSVP'd need to see that it is off,
-    // and the collection only ever excludes drafts for non-moderators.
-    expect(statuses).toEqual(["cancelled", "past", "published"]);
+    expect(statuses).toEqual(["published"]);
   });
 
-  it("shows a moderator drafts alongside everything else", async () => {
+  it("shows the same published-only collection to moderators", async () => {
     await seedStatuses();
     const res = await asModerator("/events.json");
     expect(res.status).toBe(200);
     const statuses = (await rowsOf(res)).map((r) => r.status).sort();
-    expect(statuses).toEqual(["cancelled", "draft", "past", "published"]);
+    expect(statuses).toEqual(["published"]);
   });
 
   it("refuses a member the draft show while the moderator reads it; unknown/malformed keys 404", async () => {
@@ -191,9 +188,12 @@ describe.skipIf(!process.env.DATABASE_URL)("event JSON access matrix (agent-test
       startsAt: new Date("2099-11-05T20:00:00Z"),
       endsAt: new Date("2099-11-05T22:00:00Z"),
     });
-    for (const res of [await asMember("/events.json"), await asModerator("/events.json")]) {
-      expect(res.status).toBe(200);
-      const rows = await rowsOf(res);
+    const guestRows = await rowsOf(await asGuest("/events.json"));
+    const memberRows = await rowsOf(await asMember("/events.json"));
+    const moderatorRows = await rowsOf(await asModerator("/events.json"));
+    expect(memberRows).toEqual(guestRows);
+    expect(moderatorRows).toEqual(guestRows);
+    for (const rows of [guestRows, memberRows, moderatorRows]) {
       expect(rows).toHaveLength(2);
       for (const row of rows) {
         // Strict equality: a rename, removal, addition or reorder fails here.
@@ -234,7 +234,7 @@ describe.skipIf(!process.env.DATABASE_URL)("event JSON access matrix (agent-test
     expect(row.status).toBe("published");
     expect(row.rsvp_open).toBe(true);
     expect(row.synced_to_discord).toBe(false);
-    expect(row.waitlist_position).toBeNull();
+    expect(row).not.toHaveProperty("waitlist_position");
     expect(() => new Date(String(row.starts_at))).not.toThrow();
     expect(() => new Date(String(row.ends_at))).not.toThrow();
     // BST wall time beside the UTC instant: 18:00Z renders as 19:00 in London.
@@ -301,13 +301,19 @@ describe.skipIf(!process.env.DATABASE_URL)("event JSON access matrix (agent-test
     expect(raw).not.toContain(mirrorId);
   });
 
-  it("filters keyed collection reads by visibility: malformed refused, drafts hidden from members", async () => {
+  it("filters keyed collection reads to published status before reporting totals", async () => {
     const { draftKey, publishedKey } = await seedStatuses();
     const picked = await rowsOf(await asMember(`/events.json?event_key=${publishedKey}`));
     expect(picked.map((r) => r.event_key)).toEqual([publishedKey]);
     expect(await rowsOf(await asMember(`/events.json?event_key=${draftKey}`))).toEqual([]);
-    const shown = await rowsOf(await asModerator(`/events.json?event_key=${draftKey}`));
-    expect(shown.map((r) => r.event_key)).toEqual([draftKey]);
+    for (const response of [
+      await asMember(`/events.json?event_key=${draftKey}`),
+      await asModerator(`/events.json?event_key=${draftKey}`),
+    ]) {
+      const body = (await response.json()) as { data: Row[]; meta: { total: number } };
+      expect(body.data).toEqual([]);
+      expect(body.meta.total).toBe(0);
+    }
     expect((await asMember("/events.json?event_key=nope")).status).toBe(422);
     expect(
       await rowsOf(await asMember("/events.json?event_key=01J00000000000000000000999")),

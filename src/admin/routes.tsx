@@ -101,6 +101,16 @@ function formData(body: Record<string, string | File>): Record<string, unknown> 
   return out;
 }
 
+// A malformed multipart body rejects the parse: answer 400 instead of throwing
+// into the alerting 500 path. Null means the caller must refuse the write.
+async function parsedForm(c: Context<Vars>): Promise<Record<string, unknown> | null> {
+  try {
+    return formData(await c.req.parseBody());
+  } catch {
+    return null;
+  }
+}
+
 function declareAccess(c: Context<Vars>, decl: AccessDecl): void {
   c.set("access", decl);
 }
@@ -339,7 +349,8 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
     async (c) => {
       const db = await dbOr503(c);
       if (!db) return c.text("Admin temporarily unavailable", 503);
-      const values = formData(await c.req.parseBody());
+      const values = await parsedForm(c);
+      if (!values) return c.text("Bad request", 400);
       let input;
       let recurrence;
       try {
@@ -407,7 +418,8 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
       const key = c.req.param("key");
       const existing = await getEvent(db, key);
       if (!existing) return errorPage(c, 404, "Event not found");
-      const values = formData(await c.req.parseBody());
+      const values = await parsedForm(c);
+      if (!values) return c.text("Bad request", 400);
       // Hidden carriers: an untouched fold/gap wall time keeps the stored
       // instant (TOG-6805 — see validation.preservedOrParsed).
       const carriers = {
@@ -480,6 +492,21 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
         } catch (err) {
           if (err instanceof NotFoundError) return errorPage(c, 404, "Event not found");
           if (err instanceof ValidationError) {
+            // A blank location blocks publishing: re-render the edit form so the
+            // no-JS moderator sees the error next to the location control and can
+            // fix it, rather than an error page with nowhere to correct it.
+            if (err.fields.location) {
+              const key = c.req.param("key");
+              const row = await getEvent(db, key);
+              if (!row) return errorPage(c, 404, "Event not found");
+              return formError(
+                c,
+                err,
+                (errors, v) =>
+                  c.html(<EventFormPage mode="edit" row={row} values={v} errors={errors} />),
+                eventValues(row),
+              );
+            }
             return errorPage(
               c,
               422,
@@ -538,7 +565,8 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
     async (c) => {
       const db = await dbOr503(c);
       if (!db) return c.text("Admin temporarily unavailable", 503);
-      const values = formData(await c.req.parseBody());
+      const values = await parsedForm(c);
+      if (!values) return c.text("Bad request", 400);
       let input;
       try {
         input = parseFeaturedForm(values, c.env.FEATURED_IMAGE_HOSTS);
@@ -603,7 +631,8 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
       if (!db) return c.text("Admin temporarily unavailable", 503);
       const existing = await getFeatured(db, id);
       if (!existing) return errorPage(c, 404, "Featured content not found");
-      const values = formData(await c.req.parseBody());
+      const values = await parsedForm(c);
+      if (!values) return c.text("Bad request", 400);
       let input;
       try {
         input = parseFeaturedForm(values, c.env.FEATURED_IMAGE_HOSTS);

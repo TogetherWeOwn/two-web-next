@@ -29,6 +29,8 @@ const EXEMPT: Record<string, string> = {
     "evidence-bearer refusal; DB-free 405 before any body parse or state touch",
   "DELETE /admin/queue/source-evidence/:id":
     "evidence-bearer refusal; DB-free 405 before any body parse or state touch",
+  "POST /mcp":
+    "public MCP; in-handler shared 60/min public-read budget, same 429 envelope as the public API (B2)",
 };
 
 describe("every mutating route is throttled", () => {

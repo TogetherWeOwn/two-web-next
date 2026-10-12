@@ -242,7 +242,8 @@ describe("static leaves (DB-free floor)", () => {
     expect(html).toContain('data-testid="faq-list"');
     expect(html).toContain('data-testid="faq-join"');
     expect(html).toContain("What is Together We Own?");
-    expect(html).toContain("Sunday Squad, every Sunday at 8pm Eastern");
+    expect(html).not.toContain("Sunday Squad");
+    expect(html).toContain("Game nights are scheduled in Discord");
     expect(html).toContain("How do I open a private support ticket?");
     expect(html).toContain("How do I fill in my profile?");
     expect(html).toContain("How does the game picker work?");
@@ -439,7 +440,7 @@ describe("security headers per route class", () => {
       expect(res.headers.get("content-type"), path).toContain("text/html");
       const csp = res.headers.get("Content-Security-Policy");
       expect(csp, path).toContain("default-src 'self'");
-      expect(csp, path).toContain("report-uri /csp-reports");
+      expect(csp, path).not.toContain("report-uri");
       expect(csp, path).toContain("report-to csp-endpoint");
       expect(res.headers.get("reporting-endpoints"), path).toBe('csp-endpoint="/csp-reports"');
     }
@@ -597,7 +598,31 @@ describe("URL freeze + no soft 404s", () => {
 // (strictTransportSecurity: false in src/index.tsx) and pins its absence
 // instead of asserting on a file that does not exist.
 describe("mapping table", () => {
-  it("is documentation, not code", () => {
-    expect(true).toBe(true);
+  it("names only sections that exist in this file", async () => {
+    const { readFileSync } = await import("node:fs");
+    const { resolve, dirname } = await import("node:path");
+    const { fileURLToPath } = await import("node:url");
+    const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+    const src = readFileSync(resolve(root, "test/seo-headers.test.ts"), "utf8");
+    // Compare trailing-parenthetical-free names: the describe titles carry
+    // legacy origin tags, and spelling those tags here would add new
+    // internal references to a public repo (the internal-ref ratchet fails
+    // net growth). The pin still requires every section to exist.
+    const titles = new Set(
+      [...src.matchAll(/^describe\("([^"]+)",/gm)].map((m) => m[1]?.replace(/\s*\([^()]*\)$/, "")),
+    );
+    // "Ported here" column of the legacy mapping table above, limited to the
+    // sections owned by this file; other slices assert their own sections.
+    for (const section of [
+      "sitemap + robots",
+      "share meta",
+      "static leaves",
+      "homepage degraded fallback",
+      "profile share tags",
+      "security headers per route class",
+      "URL freeze + no soft 404s",
+    ]) {
+      expect(titles.has(section), section).toBe(true);
+    }
   });
 });

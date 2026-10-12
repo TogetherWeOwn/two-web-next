@@ -193,6 +193,7 @@ Public routes may read optional sessions; this does not promise zero DB queries.
 | `GET /` | public | app: home / optional session |
 | `GET /.well-known/security.txt` | public | security-txt: RFC 9116 contact, database-free leaf |
 | `GET /about` | public | seo: frozen funnel leaf |
+| `GET /about.md` | public | ai-friendly-md: curated Markdown alternate, `text/markdown`, static TTL, staging noindex |
 | `GET /admin` | moderator | admin: dashboard |
 | `GET /admin/activity-log` | moderator | admin-activity-log: read-only activity viewer |
 | `GET /admin/events` | moderator | admin: event table |
@@ -205,11 +206,17 @@ Public routes may read optional sessions; this does not promise zero DB queries.
 | `GET /admin/join-attempts/:id` | moderator | admin-join-attempt: read-only join audit detail |
 | `GET /admin/queue/failed/:id/preview` | staging-operator | queue-preview-route / queue-preview-postgres: one-row snapshot advice only; the guarded apply lives on the redispatch route |
 | `GET /admin/queue/source-evidence/:id` | evidence-bearer | source-evidence-route / source-evidence-postgres / source-evidence-statements: evidence-only source/cache proof; session-free, no audit write, inert without runtime-only settings |
+| `GET /api/public/community` | public | public-data: community snapshot; null counts when collectors are down, public ETag/304 |
+| `GET /api/public/events` | public | public-data: published events, 20-row/32 KiB cap, public ETag/304 |
+| `GET /api/public/events/:key` | public | public-data: one published event; drafts and cancelled rows 404, public ETag/304 |
+| `GET /api/public/join` | public | public-data: Discord join handoff, database-free |
 | `GET /auth/discord` | public | app: OAuth start; legacy `/auth/discord/redirect` now temporarily redirects here |
 | `GET /auth/discord/callback` | oauth-state | app: sign-in callback |
 | `GET /discord` | public | seo: invite redirect |
 | `GET /e/:key` | public-draft-moderator | events: legacy `/e/{event}` |
+| `GET /e/:file{.+\.md}` | public-draft-403 | ai-friendly-md: per-event Markdown alternate; draft 403, cancelled 410, staging noindex |
 | `GET /events` | public | events: calendar |
+| `GET /events.md` | public | ai-friendly-md: published-upcoming Markdown collection, feed TTL, staging noindex |
 | `GET /events.ics` | public | event-feeds: subscription |
 | `GET /events.json` | session | events: paginated JSON; JSON guest 401 / browser guest guarded OAuth 302 |
 | `GET /events/:key` | session | events: JSON show; draft moderator-only, cancelled 410, private ETag/304 |
@@ -217,19 +224,26 @@ Public routes may read optional sessions; this does not promise zero DB queries.
 | `GET /events/:file{.+\.ics}` | public-draft-moderator | event-feeds: legacy `/events/{event}.ics` |
 | `GET /events/past` | public | events: archive |
 | `GET /faq` | public | seo: frozen funnel leaf |
+| `GET /faq.md` | public | ai-friendly-md: curated Markdown alternate, `text/markdown`, static TTL, staging noindex |
 | `GET /join` | public | join: landing page |
 | `GET /join/callback` | oauth-state | join: one-click callback |
 | `GET /join/discord` | public | join: OAuth start |
+| `GET /join.md` | public | ai-friendly-md: Discord-handoff Markdown alternate, static TTL, staging noindex |
+| `GET /llms.txt` | public | ai-friendly-md: assistant index of every Markdown alternate, static TTL, staging noindex |
 | `GET /members` | public | profiles: retired bare path, frozen 404 for every role |
 | `GET /members/` | public | profiles: retired trailing-slash path, frozen 404 for every role |
 | `GET /members/:user` | member | profiles: legacy `/members/{user}` |
+| `GET /openapi.json` | public | public-data: OpenAPI 3.1 for the public read API, static |
 | `GET /privacy` | public | privacy: versioned policy |
+| `GET /privacy.md` | public | ai-friendly-md: policy-source Markdown alternate, static TTL, staging noindex |
 | `GET /profile` | member | profiles: current member |
 | `GET /robots.txt` | public | seo: frozen robots |
 | `GET /rules` | public | seo: frozen funnel leaf |
+| `GET /rules.md` | public | ai-friendly-md: curated Markdown alternate with last-updated stamp, static TTL, staging noindex |
 | `GET /sitemap_index.xml` | public | seo: frozen sitemap |
 | `GET /up` | public | up: always-200 queue health |
 | `OPTIONS /admin/queue/source-evidence/:id` | evidence-bearer | source-evidence-route: write verbs refuse before any middleware or source read |
+| `OPTIONS /mcp` | public | mcp: CORS preflight for the stateless public MCP; answered by the handler, no body, no budget burn |
 | `PATCH /admin/queue/source-evidence/:id` | evidence-bearer | source-evidence-route: write verbs refuse before any middleware or source read |
 | `PATCH /events/:key` | moderator | events: JSON update |
 | `PATCH /members/:user` | member-owner | profiles: self-only edit |
@@ -250,6 +264,7 @@ Public routes may read optional sessions; this does not promise zero DB queries.
 | `POST /events/:key/cancel` | moderator | events: cancel |
 | `POST /events/:key/publish` | moderator | events: publish |
 | `POST /logout` | public | app: optional session revoke + origin check |
+| `POST /mcp` | public | mcp: stateless public read-only MCP (list_events, get_event, get_community, get_join); session-free, shared read budget, 32 KiB cap |
 | `POST /members/:user` | member-owner | profiles: `_method=PATCH` form adapter |
 | `PUT /admin/queue/source-evidence/:id` | evidence-bearer | source-evidence-route: write verbs refuse before any middleware or source read |
 | `PUT /events/:key/rsvp` | member-decoy | rsvp: owner answer + decoy |

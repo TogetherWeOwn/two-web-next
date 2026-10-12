@@ -75,8 +75,11 @@ describe.skipIf(!url)("served reads refuse JS-unrepresentable windows (isolated 
 
       const feed = await listFeed(db, ["published", "cancelled"]);
       expect(feed.map((row) => row.eventKey)).toEqual([FINITE]);
-      const upcoming = await listUpcoming(db);
+      const { rows: upcoming, total } = await listUpcoming(db);
       expect(upcoming.map((row) => row.eventKey)).toEqual([FINITE]);
+      // Like the past archive, the total still counts the JS-refused rows so
+      // page boundaries stay stable while they drop out of the render.
+      expect(total).toBe(3);
       const home = await listHomeUpcoming(db);
       expect(home.map((row) => row.eventKey)).toEqual([FINITE]);
     } finally {
@@ -141,7 +144,7 @@ describe.skipIf(!url)("served reads refuse JS-unrepresentable windows (isolated 
       expect(drawer.map((row) => row.eventKey)).toEqual([FINITE]);
       const archive = await listPast(db, 1);
       expect(archive.rows.map((row) => row.eventKey)).toEqual([FINITE]);
-      const json = await listJson(db, { limit: 20, offset: 0, includeDrafts: false });
+      const json = await listJson(db, { limit: 20, offset: 0 });
       expect(json.rows.map((row) => row.eventKey)).toEqual([FINITE]);
 
       // The pages themselves stay 200 with only the poison row archived.

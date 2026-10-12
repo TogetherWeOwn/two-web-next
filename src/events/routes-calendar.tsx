@@ -2,19 +2,8 @@
 // Split out of src/events/routes.tsx; behavior unchanged.
 import { dbFor } from "../admin/db";
 import { inviteDestination } from "../invite";
-import {
-  calendarEmptyState,
-  calendarZone,
-  currentCalendarMonth,
-  dedupeTransients,
-  eventSearchLogEntry,
-  mergeCalendarRows,
-  parseCalendarMonth,
-  parseCalendarView,
-  wallMonth,
-} from "../islands/contracts";
 import { takeJoinResult, readJoinResult } from "../return-journey";
-import { MAX_QUERY_LENGTH, matchQuery, recordSearch } from "./search-log";
+import { loadCalendarPageModel, resolveCalendarInput } from "./page-models.server";
 import {
   ANON_EVENTS_TTL_MS,
   ANON_PAST_TTL_MS,
@@ -27,14 +16,8 @@ import {
   writeAnonCache,
 } from "./anon-cache";
 import { discordEventsSource } from "./discord-transients";
-import {
-  listCalendarPast,
-  listPast,
-  listUpcoming,
-  normalizePastPage,
-  persistedDiscordIds,
-} from "./reads";
-import { EventsCalendarPage, PastEventsPage } from "./pages";
+import { listPast, normalizePastPage } from "./reads";
+import { EventsCalendarPage, EventsSearchTooLongPage, PastEventsPage } from "./pages";
 import { eventsUnavailable, publicReadGuard, type App, type SessionReader } from "./routes-shared";
 
 export function registerCalendarRoutes(
@@ -43,10 +26,17 @@ export function registerCalendarRoutes(
   readFragmentSession: SessionReader,
 ): void {
   app.get("/events", async (c) => {
-    const q = c.req.query("q") ?? "";
-    if ([...q].length > MAX_QUERY_LENGTH) {
+    const input = resolveCalendarInput({
+      q: c.req.query("q"),
+      view: c.req.query("view"),
+      past: c.req.query("past"),
+      page: c.req.query("page"),
+      event: c.req.query("event"),
+      month: c.req.query("month"),
+    });
+    if (input.queryTooLong) {
       c.header("cache-control", "no-store, private");
-      return c.text(`Search query must be ${MAX_QUERY_LENGTH} characters or fewer.`, 422);
+      return c.html(<EventsSearchTooLongPage appUrl={c.env.APP_URL} />, 422);
     }
     const limited = await publicReadGuard(c);
     if (limited) return limited;
@@ -57,15 +47,7 @@ export function registerCalendarRoutes(
       : readSession(c));
     const now = new Date();
 
-    // Resolve the URL state. A search forces the list view (a month grid that
-    // may not contain the matches reads as "no results"); an unknown view
-    // keeps the current one, which for a fresh URL means the default list.
-    const match = matchQuery(q);
-    const searching = match !== null;
-    const view = searching ? "list" : (parseCalendarView(c.req.query("view")) ?? "list");
-    const past = c.req.query("past") === "1";
-
-    const opts = { includeDrafts: session?.moderator ?? false, search: match };
+    const { searching } = input;
     // Anonymous shared entry (N6 retire): only a cookieless, session-free,
     // search-free render with no pending join flash may serve shared bytes.
     // The peek reads without consuming; the miss path below still consumes
@@ -106,72 +88,23 @@ export function registerCalendarRoutes(
     // that commits (and retires) while this render awaits its reads must stop
     // the stale bytes from settling below.
     const anonGen = anonSource ? anonCacheGeneration() : 0;
-    const localUpcoming = await listUpcoming(db, now, opts);
-    const localPast = await listCalendarPast(db, now, opts);
-
-    // One resolve per request: the rows and the failure flag MUST come from the
-    // same source instance (legacy render() comment) or every error reads as
-    // "never scheduled". Transients are re-checked against the local clock —
-    // a just-ended event cannot linger if the collector goes dark.
-    const discord = discordEventsSource(c.env);
-    const discordRows = await discord.upcoming(now);
-    // Probe only candidate identities, without search/draft/time/pagination
-    // predicates. A filtered canonical row must never become a stale transient.
-    const persistedIds = await persistedDiscordIds(
+    const model = await loadCalendarPageModel({
       db,
-      discordRows.map((t) => t.discordId),
-    );
-    const term = (match ?? "").toLowerCase();
-    const transients = dedupeTransients(discordRows, persistedIds).filter(
-      (t) =>
-        (t.endsAt === null || t.endsAt >= now) &&
-        (term === "" ||
-          t.title.toLowerCase().includes(term) ||
-          (t.description ?? "").toLowerCase().includes(term)),
-    );
-    const discordFailed = discord.lastReadFailed();
-    const upcoming = mergeCalendarRows(localUpcoming, transients);
-
-    const zone = calendarZone([
-      ...localUpcoming.map((e) => e.timezone),
-      ...localPast.map((e) => e.timezone),
-    ]);
-    // No month given: open on the first upcoming event's host-zone month, else
-    // this month. An unparseable month is a page, never a 500.
-    const month =
-      parseCalendarMonth(c.req.query("month")) ??
-      parseCalendarMonth(
-        upcoming[0]
-          ? wallMonth(
-              upcoming[0].startsAt,
-              "discordId" in upcoming[0] ? zone : upcoming[0].timezone,
-            )
-          : null,
-      ) ??
-      currentCalendarMonth(now);
-
-    const state = { view, month, q, past };
-    const emptyState = calendarEmptyState({
-      searching,
-      upcomingEmpty: upcoming.length === 0,
-      pastEmpty: localPast.length === 0,
-      readFailed: discordFailed,
+      input,
+      includeDrafts: session?.moderator ?? false,
+      discord: discordEventsSource(c.env),
+      now,
     });
-
-    // One structured line per rendered search: normalized query + visible
-    // count, no identity (legacy EventSearchLogger, TOG-8400). Fail-open.
-    if (searching) {
-      const visibleCount = upcoming.length + localPast.length;
-      await recordSearch(db, q, visibleCount);
-      const entry = eventSearchLogEntry(match ?? "", visibleCount);
-      if (entry) {
-        try {
-          console.info("event_search", JSON.stringify(entry));
-        } catch {
-          /* a down logger is an unrecorded search, never a broken page */
-        }
-      }
-    }
+    const {
+      state,
+      upcoming,
+      past: localPast,
+      zone,
+      totalPages,
+      emptyState,
+      robots,
+      discordFailed,
+    } = model;
 
     // One-shot join confirmation (legacy join_result flash): /events is a
     // join-CTA landing (`/join?next=/events`), so it consumes and renders the
@@ -187,7 +120,9 @@ export function registerCalendarRoutes(
       "cache-control",
       session || searching || joinResult ? "private, no-store" : "public, max-age=60",
     );
-    if (searching) c.header("x-robots-tag", "noindex, follow");
+    // First-fetch header for the same duplicates the in-body meta covers on
+    // cache hits (see `robots` above).
+    if (robots !== undefined) c.header("x-robots-tag", "noindex, follow");
     c.header("vary", "Cookie, X-Two-Island");
     // Guest sign-in links carry this page as ?next= so the OAuth round trip
     // lands back here (TOG-10356). Rooted pathname + search only — the
@@ -207,13 +142,16 @@ export function registerCalendarRoutes(
         past={localPast}
         zone={zone}
         now={now}
+        totalPages={totalPages}
         emptyState={emptyState}
+        robots={robots}
         discordFailed={discordFailed}
         member={session?.member ?? false}
         inviteUrl={inviteDestination(c.env.DISCORD_INVITE_URL)}
         appUrl={c.env.APP_URL}
         loginReturnTo={loginReturnTo}
         joinResult={joinResult}
+        markdownAlternate="/events.md"
       />,
     );
     // Settle the shared entry only from an anonymous 200: the header guard

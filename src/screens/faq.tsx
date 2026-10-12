@@ -2,7 +2,7 @@ import type { FC } from "hono/jsx";
 import { canonicalUrl } from "../seo";
 import { JOIN_HREF, Leaf } from "../page-shell";
 
-const FAQS: Array<{ section: string; sectionId: string; items: Array<[string, string]> }> = [
+export const FAQS: Array<{ section: string; sectionId: string; items: Array<[string, string]> }> = [
   {
     section: "Getting in",
     sectionId: "faq-getting-in",
@@ -59,7 +59,7 @@ const FAQS: Array<{ section: string; sectionId: string; items: Array<[string, st
     items: [
       [
         "When do you actually play together?",
-        "Sunday Squad, every Sunday at 8pm Eastern, about an hour in the Lobby voice room. It runs whether there's two of us or eight.",
+        "Game nights are scheduled in Discord — see the Events page for what's on. Times are posted there, so you always see the current plan.",
       ],
       [
         "Where do I find events, and do I need an account to look?",

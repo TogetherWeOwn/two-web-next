@@ -14,11 +14,12 @@ The app writes ONE single-line JSON object on `console.error`, with
 
 | `event` | When | Source fields (internal logs only) |
 | --- | --- | --- |
-| `error.alert` | An unhandled error reached the 500 handler | `fingerprint` (`ExceptionClass@/route/pattern`), `exception`, `method`, `route`, optional `request_id` |
+| `error.alert` | An unexpected non-4xx error reached an HTTP error path, including a member-read refusal or locally handled profile-save failure (the response may remain 503) | `fingerprint` (`ExceptionClass@/route/pattern`), `exception`, `method`, `route`, optional `request_id` |
 | `queue.failing` | A job failed terminally or threw on its final attempt | `connection`, `queue`, `job`, `attempts`, `exception`, optional `request_id` |
 
 - The app mutes `error.alert` per `class@route` for five minutes. Client errors
-  (404, 403, 429, other 4xx and validation errors) stay silent.
+  (404, 403, 429 and other 4xx) and `ZodError` stay silent. A thrown
+  `MemberReadRefused` is a non-4xx boundary failure and does alert.
 - Request alert lines use exception classes, not messages or stacks (a database
   error message can hold bound values); no `unhandled error:` line is emitted.
 - Both alert types carry a validated `request_id` when an HTTP request
@@ -74,7 +75,9 @@ occurring work.
 ## Delivery and redaction
 
 For source alerts, `tail/worker.ts` accepts only critical `error.alert` and
-`queue.failing` JSON arguments from error-level logs of `two-web-next`. Other
+`queue.failing` JSON arguments from error-level logs of `two-web-next` and
+`two-web-jobs` (`error.alert` from the web Worker, `queue.failing` from the
+jobs Worker after the handoff). Other
 events, malformed arguments, other Workers and recursive Tail logs are ignored.
 
 | Outbound field | Policy |
@@ -156,6 +159,12 @@ configuration silently drops outbound work; it is not a successful probe.
    the script's redacted result. A merged/dry-run-built PR is **not** live
    webhook delivery evidence.
 
+Production post-deploy check: after
+`npx wrangler deploy --config tail/wrangler.jsonc --env production`, confirm
+`OPS_ALERT_WEBHOOK_URL` is bound on `two-web-next-alerts-production` (secret
+names only, never values). A missing binding deploys successfully but pages
+nothing: both `tail()` and `scheduled()` return early with no outbound work.
+
 Production/cutover remains separately gated: staging probe success does not
 approve a production deploy, credential change or production test.
 
@@ -221,7 +230,11 @@ unverified; local fixture tests still cover the chain.
 ## Tailing and fallback
 
 ```sh
-# Source alerts only (authorized Cloudflare access required)
+# Source alerts only (authorized Cloudflare access required). The queue
+# consumer runs on two-web-jobs after the handoff, so tail it for
+# queue.failing; tail two-web-next for error.alert.
+npx wrangler tail two-web-jobs --format json \
+  | jq -c 'select(.logs[]?.message[]? | tostring | test("\"event\":\"(error.alert|queue.failing)\""))'
 npx wrangler tail two-web-next --format json \
   | jq -c 'select(.logs[]?.message[]? | tostring | test("\"event\":\"(error.alert|queue.failing)\""))'
 

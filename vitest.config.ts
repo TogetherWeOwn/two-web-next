@@ -31,7 +31,9 @@ export default defineConfig({
       // CI uploads the artifact and the job summary reads only
       // json-summary; lcov/html are unread artifacts, so they stay off the
       // hot path (CI timing audit: `check` mean 9.5 min across 20 main runs).
-      reporter: ["text", "json-summary"],
+      // The `json` reporter additionally writes coverage-final.json, the
+      // per-line input of the changed-lines gate (ci/patch-coverage.mjs).
+      reporter: ["text", "json-summary", "json"],
       reportOnFailure: true,
       // Node 24 + full test-DB suite: baseline minus 1 point, rounded down to 0.1.
       // Aggregate area floors prevent unrelated coverage from masking a regression.
@@ -40,10 +42,18 @@ export default defineConfig({
         branches: 84.2,
         functions: 92.3,
         lines: 94.4,
-        "src/admin/**": { statements: 81.6, branches: 69.6, functions: 89.9, lines: 89.5 },
+        "src/admin/**": { statements: 95.9, branches: 94.8, functions: 99, lines: 98.3 },
         "src/events/**": { statements: 92, branches: 86.3, functions: 96.1, lines: 96.7 },
         "src/join/**": { statements: 96, branches: 92.8, functions: 99, lines: 98.1 },
         "src/sessions.ts": { statements: 94.7, branches: 79.9, functions: 99, lines: 94.4 },
+        "src/jobs/**": { statements: 98.2, branches: 95.8, functions: 95.7, lines: 98.7 },
+        "src/bot/**": { statements: 92, branches: 88.8, functions: 99, lines: 93.5 },
+        "src/agent-events/**": { statements: 93.8, branches: 92, functions: 96.8, lines: 95.4 },
+        "src/profiles/**": { statements: 96.3, branches: 92, functions: 95.4, lines: 97.7 },
+        "src/auth/**": { statements: 95.7, branches: 95.2, functions: 84.7, lines: 97.7 },
+        "src/invite.ts": { statements: 92.7, branches: 99, functions: 99, lines: 91.8 },
+        "src/return-journey.ts": { statements: 99, branches: 94.4, functions: 99, lines: 99 },
+        "src/write-recovery.tsx": { statements: 99, branches: 94.4, functions: 99, lines: 99 },
       },
     },
   },

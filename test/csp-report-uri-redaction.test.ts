@@ -146,6 +146,31 @@ describe("CSP report URI log confidentiality", () => {
     for (const marker of markers) expect(JSON.stringify(warn.mock.calls)).not.toContain(marker);
   });
 
+  it("logs a member profile path with the Discord ID replaced by :id", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    await post({
+      "csp-report": {
+        "blocked-uri": "inline",
+        "document-uri": credentialUrl("/members/123456789012345678"),
+        "violated-directive": "script-src",
+        "line-number": 3,
+      },
+    });
+    expect(warn.mock.calls).toEqual([
+      [
+        "csp.report.violation",
+        {
+          blocked_uri: "inline",
+          document_uri: "https://next.example.test/members/:id",
+          source_file: null,
+          violated_directive: "script-src",
+          line_number: 3,
+        },
+      ],
+    ]);
+    expect(JSON.stringify(warn.mock.calls)).not.toContain("123456789012345678");
+  });
+
   it("fails closed on attacker strings at the actual logging boundary", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     await post({
@@ -235,6 +260,48 @@ describe("redactCspReportUri", () => {
   ])("retains only normalized origin/path for %s", (input, expected) => {
     expect(redactCspReportUri(input)).toBe(expected);
     expect(redactCspReportUri(expected)).toBe(expected);
+  });
+
+  it.each([
+    [
+      "https://next.example.test/members/123456789012345678",
+      "https://next.example.test/members/:id",
+    ],
+    [
+      "https://next.example.test/members/12345678901234567",
+      "https://next.example.test/members/:id",
+    ],
+    [
+      "https://next.example.test/members/12345678901234567890",
+      "https://next.example.test/members/:id",
+    ],
+    [
+      "https://next.example.test/members/123456789012345678/edit",
+      "https://next.example.test/members/:id/edit",
+    ],
+    [
+      "https://next.example.test/members/123456789012345678.json",
+      "https://next.example.test/members/:id",
+    ],
+    [
+      "https://next.example.test/members/%31%32%33%34%35%36%37%38%39%30%31%32%33%34%35%36%37",
+      "https://next.example.test/members/:id",
+    ],
+    [
+      "https://next.example.test/members/12345678901234567%2F",
+      "https://next.example.test/members/:id",
+    ],
+    [
+      "https://next.example.test/members/1234567890123456",
+      "https://next.example.test/members/1234567890123456",
+    ],
+    [
+      "https://next.example.test/members/123456789012345678901",
+      "https://next.example.test/members/123456789012345678901",
+    ],
+    ["https://next.example.test/members/alice", "https://next.example.test/members/alice"],
+  ])("replaces only a Discord-ID-sized digit run in %s", (input, expected) => {
+    expect(redactCspReportUri(input)).toBe(expected);
   });
 
   it.each([

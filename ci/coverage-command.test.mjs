@@ -23,7 +23,7 @@ test("the required check keeps full coverage in isolated serial threads inside m
   );
   assert.equal(
     step?.[1].match(/^        run: (.+)$/m)?.[1],
-    "npm run lint && npm run typecheck && npm run e2e:typecheck && npm run test:coverage && npm run e2e:safety && node --test ci/a11y-*.test.mjs ci/admin-properties-ci.test.mjs ci/coverage-command.test.mjs",
+    "npm run lint && npm run typecheck && npm run e2e:typecheck && npm run test:coverage && npm run e2e:safety && node --test ci/a11y-*.test.mjs ci/admin-properties-ci.test.mjs ci/coverage-command.test.mjs ci/kit-preview-e2e-wiring.test.mjs ci/visual-accept.test.mjs",
   );
   // Only the docs-only/draft scope gate (TOG-11811/TOG-14880) may guard the step; nothing may bypass it.
   assert.doesNotMatch(step[1], /continue-on-error:/);
@@ -38,6 +38,29 @@ test("the required check keeps full coverage in isolated serial threads inside m
   assert.match(config, /include: \["test\/\*\*\/\*\.test\.ts", "test\/\*\*\/\*\.test\.mjs"\]/);
   assert.match(config, /fileParallelism: false/);
   assert.doesNotMatch(config, /\bisolate:\s*false/);
+});
+
+test("the coverage gate keeps area floors and summary scopes for the high-blast-radius areas", async () => {
+  const config = await readFile(new URL("../vitest.config.ts", import.meta.url), "utf8");
+  const summary = await readFile(new URL("./coverage-summary.mjs", import.meta.url), "utf8");
+  for (const area of ["src/jobs", "src/bot", "src/agent-events", "src/profiles", "src/auth"]) {
+    assert.match(
+      config,
+      new RegExp(
+        `"${area}/\\*\\*": \\{ statements: [0-9.]+, branches: [0-9.]+, functions: [0-9.]+, lines: [0-9.]+ \\}`,
+      ),
+    );
+    assert.ok(summary.includes(`"${area}/"`), `coverage summary must report ${area}/`);
+  }
+  for (const file of ["src/invite.ts", "src/return-journey.ts", "src/write-recovery.tsx"]) {
+    assert.match(
+      config,
+      new RegExp(
+        `"${file}": \\{ statements: [0-9.]+, branches: [0-9.]+, functions: [0-9.]+, lines: [0-9.]+ \\}`,
+      ),
+    );
+    assert.ok(summary.includes(`"${file}"`), `coverage summary must report ${file}`);
+  }
 });
 
 // Exercise the shipped npm script against a local CLI fixture. A successful-looking

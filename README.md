@@ -13,14 +13,15 @@ migration plan: TOG-9671.
 How it fits together: [docs/architecture.md](docs/architecture.md).
 Shared-DB foundation (topology, numbering, backups): [docs/db-migrations.md](docs/db-migrations.md).
 Operations (deploy/rollback, `/up`, queues, outages and restore drills):
-[docs/runbook.md](docs/runbook.md).
+[docs/runbook.md](docs/runbook.md). Security boundaries and repository evidence:
+[docs/threat-model.md](docs/threat-model.md).
 
 ## What works today
 
 - Homepage member/online counts and rank reads come from bot-owned `web_v1` views, are cached for 60 seconds, and hide missing or stale counts; the page degrades when reads fail. House rules, the versioned privacy page, branded error pages, manifest/icons, canonical metadata, sitemap, robots, and security/cache headers are also implemented ([`src/counts.ts`](src/counts.ts), [`src/pages.tsx`](src/pages.tsx), [`src/index.tsx`](src/index.tsx), [`src/seo.ts`](src/seo.ts), [`test/home-counts.test.ts`](test/home-counts.test.ts), [`test/seo.test.ts`](test/seo.test.ts), [`test/n2-manifest-errors.test.ts`](test/n2-manifest-errors.test.ts)). `/.well-known/security.txt` serves the RFC 9116 disclosure file ([`src/security-txt.ts`](src/security-txt.ts), [`src/index.tsx`](src/index.tsx), [`test/security-txt.test.ts`](test/security-txt.test.ts)).
 - Discord sign-in requests `identify` + `guilds.join`; the join journey includes an invite fallback and join-attempt audit. The OAuth access token is used for the join request and not stored. OAuth state and return-journey cookies are signed; persisted session tokens are hashed, rotated on authenticated reads, and revoked on logout ([`src/index.tsx`](src/index.tsx), [`src/join/route.ts`](src/join/route.ts), [`src/sessions.ts`](src/sessions.ts), [`test/auth-acceptance.test.ts`](test/auth-acceptance.test.ts), [`test/sessions.test.ts`](test/sessions.test.ts)).
 - Moderator status is recomputed at login by matching Discord snowflake role IDs, not names; a blank allowlist or failed lookup denies moderator status. QA sign-in requires its configured token and exact staging `APP_URL`; this is not a request-host allowlist ([`src/index.tsx`](src/index.tsx), [`src/roles.ts`](src/roles.ts), [`src/qa.ts`](src/qa.ts), [`test/auth-acceptance.test.ts`](test/auth-acceptance.test.ts), [`test/qa-identity-admission.test.ts`](test/qa-identity-admission.test.ts)).
-- `/profile` and `/members/:user` are member-gated; profile edits are self-only. Reads of another member's data are recorded, and these profile/member reads are refused if audit recording fails ([`src/profiles/routes.tsx`](src/profiles/routes.tsx), [`src/member-reads.ts`](src/member-reads.ts), [`test/profiles.test.ts`](test/profiles.test.ts), [`test/profile-self-only.test.ts`](test/profile-self-only.test.ts), [`test/member-data-access.test.ts`](test/member-data-access.test.ts)).
+- `/profile` and `/members/:user` are member-gated; profile edits are self-only. Reads of another member's data are recorded, and these profile/member reads are refused if audit recording fails ([`src/profiles/routes-gate.ts`](src/profiles/routes-gate.ts), [`src/profiles/routes-admission.ts`](src/profiles/routes-admission.ts), [`src/member-reads.ts`](src/member-reads.ts), [`test/profiles.test.ts`](test/profiles.test.ts), [`test/profile-self-only.test.ts`](test/profile-self-only.test.ts), [`test/member-data-access.test.ts`](test/member-data-access.test.ts)).
 - Event listing, calendar and past-event islands, event detail/search, iCalendar and Google Calendar links, event feeds, RSVP/leave endpoints, and going counts are implemented. The event detail page mounts the RSVP-button island. Discord-native calendar rows use [shared expiring snapshots](docs/discord-snapshots.md) and atomic refresh admission in Postgres; they are display-only, not canonical events ([`src/events/pages.tsx`](src/events/pages.tsx), [`src/events/routes.tsx`](src/events/routes.tsx), [`src/events/reads.ts`](src/events/reads.ts), [`test/events.test.ts`](test/events.test.ts), [`test/event-page.test.ts`](test/event-page.test.ts), [`test/islands-rsvp-button.test.ts`](test/islands-rsvp-button.test.ts), [`test/event-feeds.test.ts`](test/event-feeds.test.ts), [`test/discord-snapshot-postgres.test.ts`](test/discord-snapshot-postgres.test.ts)).
 - Moderator admin screens include event and featured-event CRUD, a read-only RSVP roster, join-attempt audit, and a funnel summary ([`src/admin/routes.tsx`](src/admin/routes.tsx), [`src/admin/reads.ts`](src/admin/reads.ts), [`test/admin.test.ts`](test/admin.test.ts), [`test/admin-reads.test.ts`](test/admin-reads.test.ts)). They also include a read-only activity-log viewer showing who changed what, with subject and causer filters ([`src/admin/routes.tsx`](src/admin/routes.tsx), [`src/admin/reads.ts`](src/admin/reads.ts), [`src/admin/pages.tsx`](src/admin/pages.tsx), [`test/admin-activity-log.test.ts`](test/admin-activity-log.test.ts)).
 - Agent-event ingress validates its caller and guild, supports idempotency, and applies an outer rate limit. CSP report ingestion and human-route throttles have fixture coverage; the human throttle uses `DATABASE_URL` when set, otherwise Hyperdrive's `DB.connectionString`. Shared throttle middleware allows when no store is configured or a store operation fails; `/join/discord` and `/join/callback` use a separate check that can fail if its configured store errors ([`src/agent-events/route.ts`](src/agent-events/route.ts), [`src/agent-events/service.ts`](src/agent-events/service.ts), [`src/throttle.ts`](src/throttle.ts), [`src/join/route.ts`](src/join/route.ts), [`src/db/connection.ts`](src/db/connection.ts), [`test/agent-events.test.ts`](test/agent-events.test.ts), [`test/agent-events-shield.test.ts`](test/agent-events-shield.test.ts), [`test/csp-reports.test.ts`](test/csp-reports.test.ts), [`test/throttle-db-connection.test.ts`](test/throttle-db-connection.test.ts)).
@@ -107,12 +108,14 @@ node ci/coverage-summary.mjs
 
 Coverage includes every
 `src/**/*.{ts,tsx}` file, even if no test imports it. Global and aggregate
-area floors (`src/admin`, `src/events`, `src/join`, `src/sessions.ts`) live in
-`vitest.config.ts`. The baseline uses the full suite with the test database;
-without it, skipped live suites may put coverage below the floors. CI's
+area floors (`src/admin`, `src/events`, `src/join`, `src/sessions.ts`, `src/jobs`,
+`src/bot`, `src/agent-events`, `src/profiles`, `src/auth`, `src/invite.ts`,
+`src/return-journey.ts`, `src/write-recovery.tsx`) live in `vitest.config.ts`. The
+baseline uses the full suite with the test database; without it, skipped live
+suites may put coverage below the floors. CI's
 required `check` job runs the configuration drift check, Biome lint/format gate,
 typecheck and the coverage gate against its Postgres service, writes a job summary
-with the ten least-covered files, and uploads HTML, LCOV and JSON reports for 14 days,
+with the ten least-covered files, and uploads the JSON coverage summary for 14 days,
 including on failure.
 
 When intentionally raising a floor, re-measure with the same locked provider
@@ -158,6 +161,39 @@ npm run config:check                 # drift check + its local-fixture selftests
 npx wrangler deploy --dry-run --outdir dist   # bundle check; does not deploy
 ```
 
+### Browser regressions
+
+These suites skip their browser cases unless the opt-in variable is `"true"`, so
+a run without it can pass without executing them. For the suites wired into CI,
+the `a11y` job sets each variable, writes a Vitest JSON report and runs
+`ci/a11y-require-executed.mjs`, which fails the step unless every case in the
+named suite passed and at least the minimum ran. The minimums live in
+`.github/workflows/ci.yml`. The RSVP focus suite below is not wired into CI yet;
+run its listed command locally to execute the Chromium proof.
+
+| Suite | Opt-in variable | Local command |
+| --- | --- | --- |
+| `test/admin-event-native-unicode.test.ts` | `ADMIN_EVENT_BROWSER_TESTS` | `ADMIN_EVENT_BROWSER_TESTS=true npx vitest run test/admin-event-native-unicode.test.ts` |
+| `test/featured-native-length.test.ts` | `FEATURED_NATIVE_BROWSER_TESTS` | `FEATURED_NATIVE_BROWSER_TESTS=true npx vitest run test/featured-native-length.test.ts` |
+| `test/calendar-search-unicode-boundaries.test.ts` | `CALENDAR_SEARCH_BROWSER_TESTS` | `CALENDAR_SEARCH_BROWSER_TESTS=true npx vitest run test/calendar-search-unicode-boundaries.test.ts` |
+| `test/profile-native-length.test.ts` | `A11Y_BROWSER_TESTS` | `A11Y_BROWSER_TESTS=true npx vitest run test/profile-native-length.test.ts` |
+| `ci/a11y-lifecycle.test.mjs` | `A11Y_BROWSER_TESTS` | `A11Y_BROWSER_TESTS=true node --test ci/a11y-lifecycle.test.mjs` (real Chromium signal cases; no executed-count verifier yet) |
+| `ci/rsvp-focus-browser.test.mjs` | `RSVP_FOCUS_BROWSER_TESTS` | `RSVP_FOCUS_BROWSER_TESTS=true node --test ci/rsvp-focus-browser.test.mjs` (real Chromium focus proof; not run by CI) |
+
+The admin, featured and calendar suites use intercepted synthetic fixtures or
+loopback servers with mocked reads, and the profile suite uses loopback fixtures
+with memory stores. None needs a database, staging or the network. Install the
+browser once, then run a suite with its variable set:
+
+```sh
+npx playwright install --with-deps chromium
+```
+
+Without Chromium the Vitest suites fail in `beforeAll`, vitest reports their
+cases as skipped, and the verifier fails the CI step. The `a11y` job reuses its
+cached Playwright Chromium. These steps run on `app`, `db` and `full` scopes,
+main and nightly.
+
 Do not use `npm run deploy` as a test or build command.
 
 ## Deploy
@@ -172,8 +208,8 @@ contract). `/up` requires HTTP 200 with `db:ok` and `pending_migrations:0` (DB/s
 readiness); degraded or unknown queue health alone does not fail deployment. Redirects are not followed; each
 request/body has a 5-second timeout. A failure names the route and expected versus
 actual result and fails the deploy job after six attempts. That workflow remains
-staging-only; the separate production workflow below stays disabled until
-authorized cutover (plan TOG-9671, W16).
+staging-only; the separate production workflow below is gated and runs only
+when manually authorized.
 Full procedures live in [docs/runbook.md](docs/runbook.md).
 
 `npm run test:smoke` runs both checkers against loopback stub servers with local
@@ -205,46 +241,75 @@ reports its skip and passes, so a missing token never fails a deploy.
 Deployment context: the top-level Wrangler configuration names Worker
 `two-web-next` and the `next.togetherweown.com` route; it has no named
 `env.staging` block. The Hyperdrive resource name is not a Worker selector or
-proof of environment isolation. The separate `env.production` block below is
-a disabled cutover template, not authorization for a live deployment, database
-probe or production cutover.
+proof of environment isolation. The separate `env.production` block below
+configures the production Worker; it is not authorization for a deployment,
+database probe or production test.
 
-### Production (manual, disabled until cutover)
+### Production (not live: gated manual deployment, cutover pending)
 
-`.github/workflows/deploy-production.yml` accepts only `workflow_dispatch` on
+TWO Web Next is not yet live in production; the apex is still served by the
+legacy stack and the cutover is pending (see `docs/cutover-gates.md`, currently
+NO-GO, and `docs/releases.md`: the cutover promote cuts `v1.0.0`, which does
+not exist yet). Worker code reaches production only through
+`.github/workflows/deploy-production.yml` (rollbacks through
+`.github/workflows/rollback-production.yml`; production migrations through
+`.github/workflows/db-migrate.yml`), all require `PRODUCTION_DEPLOY_ENABLED` to be
+exactly `true`, and each requires a
+manually authorized dispatch. The workflow accepts only `workflow_dispatch` on
 `main`; it never deploys on push, PR or release. Before the deploy job can start,
 `ci/production-deploy-gate.mjs` requires the repository variable
 `PRODUCTION_DEPLOY_ENABLED` to be exactly `true`, verifies the live GitHub
-Environment `production` has nonempty required reviewers with self-review
-prevented, and rejects the placeholder Hyperdrive id. Admin bypass explicitly
-remains enabled by the owner's provisioning exception; neither the workflow nor
+Environment `production` protection and rejects the placeholder Hyperdrive id.
+By default, protection requires nonempty reviewers with self-review prevented;
+with `PRODUCTION_AUTO_APPROVE=true`, it instead requires a main-only deployment
+policy and successful staging deploy and `e2e-staging` runs on the exact SHA,
+whose `staging-quality` job (Lighthouse budgets and quality scores) must also
+have executed and passed.
+Both modes require successful exact-SHA CI. Admin bypass explicitly remains
+enabled by the owner's provisioning exception; neither the workflow nor
 the preflight claims to prevent an authorized administrator from bypassing review.
 Missing protection, failed
 API access, unset/false flag or any other ref fails closed. Both gate jobs inherit
 `contents: read` and `actions: read`; the latter is required to
 [read an Environment in this private repository](https://docs.github.com/en/rest/deployments/environments#get-an-environment--fine-grained-access-tokens).
-The deploy job uses that Environment, checks the gate again after approval, and
-deploys the dispatch SHA with `wrangler deploy --env production`. It does not
-create resources or run migrations/tests on production. Its post-deploy smoke runs
+The deploy job uses that Environment and checks the gate again after approval.
+It uploads a Worker version tagged with the promoted SHA, GitHub run ID, and
+run attempt (`sha` input, or by default the latest main commit whose post-deploy
+e2e-staging journeys passed), then promotes that exact tag to 100%. Including the
+run and attempt keeps retries of the same SHA unambiguous. `wrangler versions
+upload` and `wrangler versions deploy` change code without re-syncing the
+already-attached apex custom domain or other triggers. The workflow intentionally
+does not reconcile trigger configuration from `wrangler.jsonc`; trigger changes
+must be managed separately via [Production trigger reconciliation](docs/runbook.md#production-trigger-reconciliation-manual-domain-safe)
+(CI pins the literal reviewed `env.production` schedule and consumer values,
+so any change fails CI until the test is updated in the same release PR; the
+authorized principal must still run the reconciliation for the change to take
+effect in production). The workflow does not create resources or run
+migrations/tests on production. Its post-deploy smoke runs
 the same GET-only public-route set as staging
 (`node bin/smoke.mjs https://togetherweown.com --allow-indexable`): `/up`
 requires HTTP 200 with `db:ok` and `pending_migrations:0`, accepting
 degraded/unknown queue states like staging, and the remaining 15 routes assert
 status/body/CSP/nosniff/content-type/redirect plus the apex indexing posture
 (indexable HTML omits the staging noindex). No auth, no writes, no PII.
-The smoke runs only after a separately authorized production deployment; no
-production probe is performed by delivering or testing this template.
+The smoke runs only inside an authorized production deployment run. Routine
+tests and probes stay staging-only; production live checks run only inside the
+authorized cutover (`docs/cutover-check.md`) or incident (`docs/runbook.md`)
+procedures.
 
-`env.production` is a **cutover template**, not a live deployment:
+`env.production` in `wrangler.jsonc` is a cutover template for the production
+Worker, not a live deployment. Never deploy it outside the gated workflow:
 
 - Worker: `two-web-next-production`; workers.dev and preview URLs disabled.
 - Route/origin: `togetherweown.com` / `https://togetherweown.com`, the intended
-  apex **placeholder target**. Defining it does not flip DNS; deploying would
-  claim that custom domain, so do not deploy before W16 authorization.
-- Hyperdrive `DB`: all-zero id `00000000000000000000000000000000` is an inert
-  dry-run placeholder, never the staging Hyperdrive. Provision the separately
-  named `two-web-next-production` Hyperdrive and replace the id in a reviewed
-  cutover PR.
+  apex placeholder target. Defining it does not flip DNS; deploying would
+  claim that custom domain, so deploy only through the gated workflow once
+  cutover is authorized.
+- Hyperdrive `DB`: the separately named `two-web-next-production` Hyperdrive
+  with its provisioned id in `wrangler.jsonc` `env.production`, distinct from
+  the staging Hyperdrive. The all-zero id `00000000000000000000000000000000`
+  is only the inert sentinel `ci/production-deploy-gate.mjs` refuses; it never
+  lives in config or deploys.
 - Queues: `two-web-next-production-sync-event` and
   `two-web-next-production-internal-action` are reserved, unprovisioned names;
   provision both separately from staging before cutover. Producers and consumers
@@ -253,22 +318,33 @@ production probe is performed by delivering or testing this template.
   the production Discord callback; provision secrets for the production Worker
   separately. Never set `QA_AUTH_TOKEN` or a staging `DATABASE_URL` in production.
 
-Before enabling the flag, the authorized provisioning actor must configure the
-live `production` Environment's required reviewers, prevent self-review and
-main-only deployment policy, install the Environment-scoped secrets
+Whoever is authorized to provision production must keep the live `production`
+Environment configured with a main-only deployment branch policy and, by
+default, required reviewers with self-review prevented; with
+`PRODUCTION_AUTO_APPROVE=true` the reviewer requirement is replaced by
+successful staging deploy and `e2e-staging` runs on the exact SHA, with an
+executed, passing `staging-quality` job (which the gate checks), while the branch
+policy stays required. Install the
+Environment-scoped secrets
 `PRODUCTION_CLOUDFLARE_API_TOKEN` and `PRODUCTION_CLOUDFLARE_ACCOUNT_ID`, and
-complete resource/secret provisioning and W16 authorization. These names must
+complete resource/secret provisioning before a deployment is authorized. These names must
 exist only in the `production` Environment, never at repository or organization
 scope. They map to Wrangler's `CLOUDFLARE_API_TOKEN` / `CLOUDFLARE_ACCOUNT_ID`
 variables only in the credential check and deployment steps. Missing/empty values
 are rejected before deployment, so absent production secrets cannot fall back to
 the staging secret names. No secret values are printed.
 
-Keep `PRODUCTION_DEPLOY_ENABLED` unset/false until then, including applicable
-organization and Environment values. The workflow's `vars` expression resolves
-configuration across scopes: repository/Environment absence alone does not
-prove the effective flag is disabled. Verify the organization's value and repo
-visibility before cutover; keep the repository value unset/false while disabled.
+Keep `PRODUCTION_DEPLOY_ENABLED` unset/false except while a deployment,
+rollback, or production migration is authorized, including applicable
+organization and Environment values.
+The deploy, rollback, and db-migrate workflows each require the flag to be
+exactly `true`; `ci/production-deploy-gate.mjs` runs in the deploy and rollback
+workflows, while db-migrate relies on the flag, the main-only ref check, and
+production Environment protection. The
+workflow's `vars` expression resolves configuration across scopes:
+repository/Environment absence alone does not prove the effective flag is
+disabled. Verify the organization's value and repo visibility before
+authorizing a deployment, rollback, or production migration; keep the repository value unset/false otherwise.
 GitHub YAML alone does **not** install review protection.
 A failed protection lookup must be resolved with the existing credential's
 provisioning owner, not by removing the check or substituting credentials.
@@ -282,9 +358,8 @@ npx wrangler deploy --dry-run --env production --outdir dist-production
 
 The selftest proves disabled flags fail before API access, non-main/non-manual
 requests fail, missing/unprotected Environments fail, and the Hyperdrive sentinel
-blocks live deployment. No production deploy, DNS flip or W16 rehearsal is
-performed by adding this template. Actual production rollout and tested rollback
-remain W16 work (plan TOG-9671).
+blocks deployment. Running these checks, or editing this documentation, deploys
+nothing and probes nothing in production.
 
 ## Configuration
 
@@ -316,8 +391,9 @@ images on it. No proxying or resizing is performed.
 
 Only GET/HEAD `/join` permits frames, and only from `https://discord.com` for
 the widget. Other routes have `frame-src 'none'`; `frame-ancestors 'none'` and
-`X-Frame-Options: DENY` still prevent framing this site. CSP continues reporting
-to `/csp-reports` via both `report-uri` and the `csp-endpoint` reporting group.
+`X-Frame-Options: DENY` still prevent framing this site. CSP reports violations
+to `/csp-reports` through the `csp-endpoint` reporting group (`report-to` plus the
+`Reporting-Endpoints` header). The deprecated `report-uri` directive is not sent.
 
 ## Pre-flip probes (W16 rehearsal)
 

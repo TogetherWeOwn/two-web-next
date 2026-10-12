@@ -17,6 +17,7 @@ import { auditPaths, fixtureKey } from "../ci/lighthouse-paths";
 
 const require = createRequire(import.meta.url);
 const config = require("../ci/lighthouserc.cjs").ci;
+const qualityBudget = require("../ci/quality-budget.json");
 const {
   assertFixtureContent,
   probeFixture,
@@ -42,7 +43,7 @@ async function request(path: string, method = "GET") {
 }
 
 describe("performance CI", () => {
-  it("measures all five real public pages, not error pages or redirects", async () => {
+  it("measures all eight real public pages, not error pages or redirects", async () => {
     const outbound = vi
       .spyOn(globalThis, "fetch")
       .mockRejectedValue(new Error("Unexpected outbound fetch"));
@@ -84,6 +85,12 @@ describe("performance CI", () => {
           );
         }
         if (path === "/join") expect(html).not.toContain("<iframe");
+        const staticHeading = {
+          "/faq": "Frequently asked questions",
+          "/rules": "House rules",
+          "/privacy": "Privacy policy",
+        }[path];
+        if (staticHeading) expect(html).toMatch(new RegExp(`<h1\\b[^>]*>${staticHeading}</h1>`));
       }
       expect(outbound).not.toHaveBeenCalled();
     } finally {
@@ -253,9 +260,11 @@ describe("performance CI", () => {
       [...config.collect.url, "http://127.0.0.1:8787/admin"],
       config.collect.url.slice(1),
       [...config.collect.url.slice(0, 4), "http://127.0.0.1:8787/about?probe=1"],
+      config.collect.url.slice(0, 5),
+      config.collect.url.slice(0, 7),
     ]) {
       await expect(probeFixture(urls, fetchPage)).rejects.toThrow(
-        "Only the five local fixture URLs",
+        "Only the audited local fixture URLs",
       );
     }
     expect(fetchPage).not.toHaveBeenCalled();
@@ -339,6 +348,21 @@ describe("performance CI", () => {
       "/about",
       (html: string) => html.replace("About Together We Own</h1>", "Unavailable</h1>"),
     ],
+    [
+      "FAQ error content",
+      "/faq",
+      (html: string) => html.replace("Frequently asked questions</h1>", "Unavailable</h1>"),
+    ],
+    [
+      "rules error content",
+      "/rules",
+      (html: string) => html.replace("House rules</h1>", "Unavailable</h1>"),
+    ],
+    [
+      "privacy error content",
+      "/privacy",
+      (html: string) => html.replace("Privacy policy</h1>", "Unavailable</h1>"),
+    ],
   ])("refuses %s even when the route remains HTTP 200", async (_label, path, mutate) => {
     const before = Date.now();
     const response = await request(path);
@@ -383,7 +407,7 @@ describe("performance CI", () => {
     child.stdout.emit("data", "1:8787\n");
     expect(chunks.join("")).not.toContain(readyPattern);
     await running.admission;
-    expect(fetchPage).toHaveBeenCalledTimes(5);
+    expect(fetchPage).toHaveBeenCalledTimes(8);
     expect(chunks.join("")).toContain(readyPattern);
     expect(stopServer).not.toHaveBeenCalled();
     running.stop();
@@ -446,7 +470,7 @@ describe("performance CI", () => {
     child.emit("exit", 1);
     await expect(running.admission).rejects.toThrow("exited before content admission");
     release();
-    await vi.waitFor(() => expect(fetchPage).toHaveBeenCalledTimes(5));
+    await vi.waitFor(() => expect(fetchPage).toHaveBeenCalledTimes(8));
     expect(chunks.join("")).not.toContain(readyPattern);
     expect(stopServer).toHaveBeenCalledExactlyOnceWith(child);
   });
@@ -487,11 +511,16 @@ describe("performance CI", () => {
   it("pins legacy public thresholds, median sampling and the phone profile", () => {
     expect(config.collect.url).toEqual(auditPaths.map((path) => `http://127.0.0.1:8787${path}`));
     expect(config.collect.numberOfRuns).toBe(3);
+    // The mobile performance category floor is the owner-approved web quality gate (ci/quality-budget.json).
     expect(config.assert.assertions).toEqual({
+      "categories:performance": [
+        "error",
+        { minScore: qualityBudget.mobilePerformance, aggregationMethod: "median-run" },
+      ],
       "largest-contentful-paint": ["error", { maxNumericValue: 2000, aggregationMethod: "median" }],
       "cumulative-layout-shift": ["error", { maxNumericValue: 0.1, aggregationMethod: "median" }],
       "server-response-time": ["error", { maxNumericValue: 600, aggregationMethod: "median" }],
-      "total-blocking-time": ["warn", { maxNumericValue: 300, aggregationMethod: "median" }],
+      "total-blocking-time": ["error", { maxNumericValue: 200, aggregationMethod: "median" }],
       "first-contentful-paint": ["warn", { maxNumericValue: 1800, aggregationMethod: "median" }],
     });
     expect(config.collect.settings.formFactor).toBe("mobile");
@@ -527,7 +556,13 @@ describe("performance CI", () => {
       );
       audits[audit] = { numericValue };
       const report = join(root, "report.json");
-      writeFileSync(report, JSON.stringify({ finalUrl: "http://127.0.0.1:8787/events", audits }));
+      // The categories:performance assertion reads lhr.categories, not audits: give it a passing
+      // score so the run fails on the intended audit instead of a missing category.
+      const categories = { performance: { score: 1 } };
+      writeFileSync(
+        report,
+        JSON.stringify({ finalUrl: "http://127.0.0.1:8787/events", audits, categories }),
+      );
       // Real assertion command and production thresholds; no collection/network.
       const assertion = spawnSync(
         process.execPath,
@@ -612,7 +647,7 @@ describe("performance CI", () => {
     const check = workflow.split("\n  check:\n")[1]!.split("\n  bundle-budget:\n")[0]!;
     expect(check).toContain("name: check");
     expect(check).toContain("needs: [a11y, lighthouse, bundle-budget, docs-links, scope]");
-    expect(check).toContain("if: always()");
+    expect(check).toContain("\n    if: ${{ !cancelled() }}\n");
     expect(check).toContain(
       'node ci/require-performance.mjs "${{ needs.lighthouse.result }}" "${{ needs.bundle-budget.result }}"',
     );

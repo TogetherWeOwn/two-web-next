@@ -234,10 +234,60 @@ describe.skipIf(!process.env.DATABASE_URL)("event write-back through W13 (test c
         const m = delivery(body);
         await consume({ messages: [m] }, deps(bot));
         expect(m.ack).toHaveBeenCalledOnce();
-        expect(bot.cancelEvent).toHaveBeenCalledTimes(operation === "cancel" ? 1 : 0);
+        // A cancel of a never-mirrored event settles locally with no bot call;
+        // mirrored publishes/edits still reach the bot.
+        expect(bot.cancelEvent).toHaveBeenCalledTimes(0);
         expect(bot.upsertEvent).toHaveBeenCalledTimes(operation === "cancel" ? 0 : 1);
+        if (operation === "cancel") {
+          expect(await pgEventStore(sql).needsSync(eventKey)).toBe(false);
+          expect(await sql`select discord_event_id from events`).toEqual([
+            { discord_event_id: null },
+          ]);
+        }
       });
     }
+  }
+
+  for (const mode of ["admin", "json"] as const) {
+    it(`${mode} publish with a blank location dispatches nothing`, async () => {
+      await seed("draft");
+      await sql`update events set location = null where event_key = ${eventKey}`;
+      const response = await request(
+        "POST",
+        `${mode === "admin" ? "/admin" : ""}/events/${eventKey}/publish`,
+        undefined,
+        mode === "admin",
+      );
+      expect(response.status).toBe(mode === "admin" ? 422 : 422);
+      if (mode === "json")
+        expect(await response.json()).toEqual({
+          error: "invalid",
+          fields: { location: "Add a location before publishing." },
+        });
+      else expect(await response.text()).toContain("Add a location before publishing.");
+      expect(sent).toHaveLength(0);
+      expect(await sql`select job_id from queue_jobs`).toHaveLength(0);
+      expect(await sql`select key from job_unique_locks`).toHaveLength(0);
+      expect(await sql`select status from events where event_key = ${eventKey}`).toEqual([
+        { status: "draft" },
+      ]);
+    });
+  }
+
+  for (const mode of ["admin", "json"] as const) {
+    it(`${mode} edit blanking a published location dispatches nothing`, async () => {
+      await seed("published");
+      const response = await request(
+        mode === "admin" ? "POST" : "PATCH",
+        `${mode === "admin" ? "/admin" : ""}/events/${eventKey}`,
+        mode === "admin" ? { ...fields, location: "   " } : { location: "   " },
+        mode === "admin",
+      );
+      expect(response.status).toBe(mode === "admin" ? 422 : 422);
+      expect(sent).toHaveLength(0);
+      expect(await sql`select job_id from queue_jobs`).toHaveLength(0);
+      expect(await sql`select key from job_unique_locks`).toHaveLength(0);
+    });
   }
 
   for (const operation of ["answer", "re-answer", "withdraw"] as const) {
@@ -280,7 +330,9 @@ describe.skipIf(!process.env.DATABASE_URL)("event write-back through W13 (test c
   });
 
   it("publish then cancel during debounce selects cancel at send time, with the built key", async () => {
-    await seed();
+    const eventId = await seed();
+    await sql`insert into rsvps (event_id, user_id, status, updated_at)
+      values (${eventId}, 'test-user', 'going', '2026-01-01T00:00:00Z')`;
     const built = buildSyncMessage(eventKey, "published")!;
     await enqueueSyncEvent(env, built);
     await sql`update events set status = 'cancelled' where event_key = ${eventKey}`;
@@ -289,8 +341,13 @@ describe.skipIf(!process.env.DATABASE_URL)("event write-back through W13 (test c
     expect(body.idempotencyKey).toBe(built.idempotencyKey);
     const bot = botDouble();
     await consume({ messages: [delivery(body)] }, deps(bot));
-    expect(bot.cancelEvent).toHaveBeenCalledExactlyOnceWith({ eventKey }, built.idempotencyKey);
+    // Never-mirrored (no Discord object yet): local settlement, no bot call.
+    expect(bot.cancelEvent).not.toHaveBeenCalled();
     expect(bot.upsertEvent).not.toHaveBeenCalled();
+    expect(await pgEventStore(sql).needsSync(eventKey)).toBe(false);
+    expect(await sql`select synced_to_discord_at from rsvps where event_id = ${eventId}`).toEqual([
+      { synced_to_discord_at: expect.any(Date) },
+    ]);
   });
 
   it("the actual worker drops a row changed to draft before consumption", async () => {
@@ -529,10 +586,8 @@ describe.skipIf(!process.env.DATABASE_URL)("event write-back through W13 (test c
     expect(sent[1]!.body.idempotencyKey).not.toBe(original.idempotencyKey);
     expect(await events.needsSync(eventKey)).toBe(true);
     await consume({ messages: [delivery(sent[1]!.body)] }, deps(bot));
-    expect(bot.cancelEvent).toHaveBeenCalledExactlyOnceWith(
-      { eventKey },
-      sent[1]!.body.idempotencyKey,
-    );
+    // Never-mirrored successor cancel settles locally with no bot call.
+    expect(bot.cancelEvent).not.toHaveBeenCalled();
     expect(await events.needsSync(eventKey)).toBe(false);
     expect(
       await sql`select state, request_attempts from event_sync_attempts order by revision`,

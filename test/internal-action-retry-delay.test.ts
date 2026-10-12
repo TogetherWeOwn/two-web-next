@@ -3,7 +3,15 @@ import { handleCallInternalAction } from "../src/jobs/call-internal-action";
 import { CALL_INTERNAL_ACTION } from "../src/jobs/constants";
 import { consume } from "../src/jobs/consumer";
 import { admitRetryDelay, MAX_RETRY_DELAY_SECONDS } from "../src/jobs/retry-delay";
-import type { BotClient, BotFailure, QueueLedger, UniqueLock } from "../src/jobs/types";
+import { handleSyncEvent } from "../src/jobs/sync-event";
+import type {
+  BotClient,
+  BotFailure,
+  EventStore,
+  QueueLedger,
+  SyncAttempt,
+  UniqueLock,
+} from "../src/jobs/types";
 
 const FALLBACK = 5; // backoffFor(CALL_INTERNAL_ACTION.backoffSeconds, 1)
 
@@ -105,7 +113,7 @@ describe("admitRetryDelay", () => {
   });
 });
 
-describe("handleCallInternalAction retry admission (TOG-11629)", () => {
+describe("handleCallInternalAction retry admission", () => {
   it("keeps Retry-After precedence over backoff for valid delays", async () => {
     const outcome = await handleCallInternalAction({ ...ann }, 1, botWith(42));
     expect(outcome).toEqual({ retryInSeconds: 42 });
@@ -159,5 +167,189 @@ describe("handleCallInternalAction retry admission (TOG-11629)", () => {
     // Attempt 5 with a poisoned delay still fails terminally, not retries.
     const outcome = await handleCallInternalAction({ ...ann }, 5, botWith(NaN));
     expect("failed" in outcome).toBe(true);
+  });
+});
+
+describe("handleSyncEvent retry admission", () => {
+  const clock = Date.parse("2026-10-11T12:00:00Z");
+  const now = () => new Date(clock);
+  const msg = { eventKey: "event-key", idempotencyKey: "00000000-0000-4000-8000-000000000001" };
+  const SYNC_BACKOFF = 10; // backoffFor(SYNC_EVENT.backoffSeconds, 1)
+
+  const attempt = (): SyncAttempt => ({
+    eventKey: "event-key",
+    idempotencyKey: msg.idempotencyKey,
+    revision: 1,
+    mirroredAt: new Date(0),
+    state: "pending",
+    requestAttempts: 0,
+    nextAttemptAt: new Date(0),
+    action: "event.upsert",
+    payload: {
+      eventKey: "event-key",
+      name: "event",
+      startsAt: "2026-10-01T12:00:00Z",
+      endsAt: "2026-10-01T13:00:00Z",
+      location: "room",
+      description: "details",
+    },
+  });
+
+  function syncStore(current: SyncAttempt) {
+    const deferred: Array<Date | null> = [];
+    const events = {
+      prepareSync: async () => current,
+      claimSync: async () => current,
+      deferSync: async (_attempt: SyncAttempt, at: Date | null) => void deferred.push(at),
+      completeSync: async () => {},
+    } as unknown as EventStore;
+    return { events, deferred };
+  }
+
+  function syncBot(retryAfterSeconds: unknown): BotClient {
+    const answer: BotFailure = {
+      ok: false,
+      code: "rate_limited",
+      status: 429,
+      requestId: null,
+      message: "slow down",
+      retryable: true,
+      retryAfterSeconds: retryAfterSeconds as number | null,
+    };
+    return {
+      upsertEvent: async () => answer,
+      cancelEvent: async () => answer,
+    } as unknown as BotClient;
+  }
+
+  it.each([[42], [3600]])(
+    "uses a valid bot Retry-After %s as both the persisted deadline and the queue delay",
+    async (valid) => {
+      const { events, deferred } = syncStore(attempt());
+      const outcome = await handleSyncEvent(msg, 1, { bot: syncBot(valid), events, now });
+      expect(outcome).toEqual({ retryInSeconds: valid });
+      expect(deferred).toEqual([new Date(clock + (valid as number) * 1000)]);
+    },
+  );
+
+  it.each([
+    [2.2, 3],
+    [42.5, 43],
+  ])("rounds a fractional bot Retry-After %s up to %s", async (candidate, admitted) => {
+    const { events, deferred } = syncStore(attempt());
+    const outcome = await handleSyncEvent(msg, 1, { bot: syncBot(candidate), events, now });
+    expect(outcome).toEqual({ retryInSeconds: admitted });
+    expect(deferred).toEqual([new Date(clock + (admitted as number) * 1000)]);
+  });
+
+  it.each([
+    ["zero (outside the retry transport range)", 0],
+    ["above the documented range", 86401],
+    ["a header value too large to be a delay", 1e26],
+    ["an overflowing header value", Infinity],
+    ["NaN", NaN],
+    ["negative", -5],
+    ["string", "30"],
+    ["absent", null],
+  ])("falls back to this attempt's sync backoff for %s", async (_label, candidate) => {
+    const { events, deferred } = syncStore(attempt());
+    const outcome = await handleSyncEvent(msg, 1, { bot: syncBot(candidate), events, now });
+    expect(outcome).toEqual({ retryInSeconds: SYNC_BACKOFF });
+    expect(deferred).toEqual([new Date(clock + SYNC_BACKOFF * 1000)]);
+  });
+
+  describe("persisted wait clamp", () => {
+    function waitingStore(nextAttemptAt: Date) {
+      const current = { ...attempt(), nextAttemptAt };
+      const deferred: Array<Date | null> = [];
+      let claimed = 0;
+      const events = {
+        prepareSync: async () => current,
+        claimSync: async () => {
+          claimed += 1;
+          throw new Error("persisted wait must not claim or call the bot");
+        },
+        deferSync: async (_attempt: SyncAttempt, at: Date | null) => void deferred.push(at),
+        completeSync: async () => {},
+      } as unknown as EventStore;
+      const bot = {
+        upsertEvent: async () => {
+          throw new Error("persisted wait must not call the bot");
+        },
+        cancelEvent: async () => {
+          throw new Error("persisted wait must not call the bot");
+        },
+      } as unknown as BotClient;
+      return { events, deferred, bot, claimed: () => claimed };
+    }
+
+    it.each([[42], [3600]])("keeps a persisted %ss wait unchanged", async (seconds) => {
+      const { events, bot } = waitingStore(new Date(clock + (seconds as number) * 1000));
+      const outcome = await handleSyncEvent(msg, 1, { bot, events, now });
+      expect(outcome).toEqual({ retryInSeconds: seconds });
+    });
+
+    it("rounds a fractional persisted wait up, never sooner", async () => {
+      const { events, bot } = waitingStore(new Date(clock + 42_200));
+      const outcome = await handleSyncEvent(msg, 1, { bot, events, now });
+      expect(outcome).toEqual({ retryInSeconds: 43 });
+    });
+
+    it.each([[86401], [100_000], [1_000_000]])(
+      "caps an out-of-range persisted wait of %ss at 86400",
+      async (seconds) => {
+        const { events, bot } = waitingStore(new Date(clock + (seconds as number) * 1000));
+        const outcome = await handleSyncEvent(msg, 1, { bot, events, now });
+        expect(outcome).toEqual({ retryInSeconds: MAX_RETRY_DELAY_SECONDS });
+        expect(outcome).toMatchObject({ retryInSeconds: 86400 });
+      },
+    );
+
+    it("caps an old persisted out-of-range deadline at the queue boundary via consume", async () => {
+      const nextAttemptAt = new Date(clock + 1_000_000 * 1000);
+      const current = { ...attempt(), nextAttemptAt };
+      const events = {
+        prepareSync: async () => current,
+        claimSync: async () => {
+          throw new Error("persisted wait must not claim");
+        },
+        deferSync: async () => {},
+        completeSync: async () => {},
+        failSync: async () => {},
+        needsSync: async () => false,
+      } as unknown as EventStore;
+      const bot = {
+        upsertEvent: async () => {
+          throw new Error("persisted wait must not call the bot");
+        },
+        cancelEvent: async () => {
+          throw new Error("persisted wait must not call the bot");
+        },
+      } as unknown as BotClient;
+      const { ledger } = memLedger();
+      const body = {
+        kind: "sync-event",
+        eventKey: "event-key",
+        idempotencyKey: msg.idempotencyKey,
+      };
+      const m = {
+        body,
+        attempts: 1,
+        acked: false,
+        retried: undefined as number | undefined,
+        ack() {
+          m.acked = true;
+        },
+        retry(o?: { delaySeconds?: number }) {
+          m.retried = o?.delaySeconds;
+        },
+      };
+      await consume({ messages: [m] }, { bot, events, lock: memLock(), ledger, now });
+      expect(m.retried).toBe(MAX_RETRY_DELAY_SECONDS);
+      expect(Number.isInteger(m.retried)).toBe(true);
+      expect(m.retried).toBeGreaterThanOrEqual(1);
+      expect(m.retried).toBeLessThanOrEqual(86400);
+      expect(m.acked).toBe(false);
+    });
   });
 });

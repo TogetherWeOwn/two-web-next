@@ -10,7 +10,7 @@
 import { type Context, Hono } from "hono";
 import { deleteCookie, getSignedCookie, setSignedCookie } from "hono/cookie";
 import { requestBodyLimit } from "../body-limit";
-import { authStatus, clearAuthStatus } from "../auth-status";
+import { AUTH_STATUS_COOKIE, authStatus, clearAuthStatus } from "../auth-status";
 import {
   addGuildMember,
   authorizeUrl,
@@ -38,8 +38,9 @@ import {
   throttleGuard,
 } from "../throttle";
 import { consumeExpiredWrite, flashExpiredWrite, recoveryLanding } from "../write-recovery";
+import { SESSION_COOKIE } from "../session-cookie";
 
-export const SESSION_COOKIE = "__Host-two_session";
+export { SESSION_COOKIE };
 const STATE_COOKIE = "__Host-two_oauth_state";
 
 type Ctx = Context<{ Bindings: Env }>;
@@ -117,7 +118,7 @@ export function registerAuthRoutes(app: Hono<{ Bindings: Env }>, hooks: AuthHook
     const limited = await throttleGuard(c, "login-callback", AUTH_THROTTLE_PER_MINUTE);
     if (limited) return limited;
     const expected = await getSignedCookie(c, c.env.SESSION_SECRET, STATE_COOKIE);
-    deleteCookie(c, STATE_COOKIE, { path: "/", secure: true });
+    deleteCookie(c, STATE_COOKIE, { path: "/", secure: true, httpOnly: true, sameSite: "Lax" });
     // Consume the return journey on every terminal path — success, denial and
     // failure all clear it (legacy forget on login_next + url.intended).
     const returnTo = await consumeLoginReturn(c);
@@ -180,7 +181,8 @@ export function registerAuthRoutes(app: Hono<{ Bindings: Env }>, hooks: AuthHook
           accessToken,
           c.env.DISCORD_BOT_TOKEN,
         ).catch(() => "failed" as const);
-    if (join === "failed") console.warn("guild auto-join failed", { user: user.id });
+    if (join === "failed")
+      console.warn("guild auto-join failed", { request_id: c.get("requestId") });
 
     // Moderator recompute: roles re-read with the bot token against snowflake IDs
     // (never names). A failed lookup fails closed on the flag, never on sign-in.
@@ -236,13 +238,17 @@ export function registerAuthRoutes(app: Hono<{ Bindings: Env }>, hooks: AuthHook
         try {
           const store = await hooks.storeFor(c);
           await store.revoke(await hashToken(token));
+          const statusHash = await getSignedCookie(c, c.env.SESSION_SECRET, AUTH_STATUS_COOKIE);
+          if (typeof statusHash === "string" && /^[a-f0-9]{64}$/.test(statusHash)) {
+            await store.revokeLineage(statusHash);
+          }
         } catch {
           // Authoritative, not best-effort: a failed revocation must not clear
           // this browser's cookie as if the server row were gone.
           return c.text("Sign-out temporarily unavailable", 503);
         }
       }
-      deleteCookie(c, SESSION_COOKIE, { path: "/", secure: true });
+      deleteCookie(c, SESSION_COOKIE, { path: "/", secure: true, httpOnly: true, sameSite: "Lax" });
       clearAuthStatus(c);
       await consumeExpiredWrite(c);
       return c.redirect("/", 303);

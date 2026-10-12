@@ -143,3 +143,212 @@ test('accept complete guard fixtures without claiming a visual PASS', async t =>
   assert.equal(execution.visualInspectionRequired, true);
   assert.equal(execution.productFixtureSourceHead, sourceHead);
 });
+
+// Featured current-source scope: the workflow must run the proof when any
+// runtime module it renders changes. The walk below follows value imports
+// only (import type and export type are erased before SSR), resolving each
+// relative specifier against the filesystem. Barrel re-exports are followed
+// selectively by imported name, so unused barrel siblings do not widen the
+// scope. No esbuild or TypeScript compiler: plain regex over source text.
+const fsSync = require('node:fs');
+
+const REPO_ROOT = path.join(__dirname, '../..');
+const CURRENT_FIXTURES_PATH = path.join(__dirname, 'current-fixtures.ts');
+const FEATURED_WORKFLOW_PATH = path.join(
+  __dirname,
+  '../../.github/workflows/featured-offline-proof.yml',
+);
+
+function extractScopeGlobs(workflowText) {
+  const marker = 'bash ci/path-scope.sh "$RUNNER_TEMP';
+  const begin = workflowText.indexOf(marker);
+  assert.ok(begin >= 0, 'featured scope invocation exists');
+  const separator = workflowText.indexOf('--', begin);
+  assert.ok(separator >= 0, 'featured scope glob separator exists');
+  const redirect = workflowText.indexOf('>>', separator);
+  const section = workflowText.slice(separator, redirect >= 0 ? redirect : undefined);
+  const globs = [];
+  for (const match of section.matchAll(/"([^"]+)"|'([^']+)'/g)) {
+    const glob = match[1] ?? match[2];
+    if (!glob || glob.startsWith('$')) continue;
+    globs.push(glob);
+  }
+  assert.ok(globs.length > 0, 'featured scope list is not empty');
+  return globs;
+}
+
+function shellPatternToRegExp(pattern) {
+  let out = '';
+  for (const char of pattern) {
+    if (char === '*') out += '.*';
+    else if (char === '?') out += '.';
+    else if ('\\^$.|+()[]{}'.includes(char)) out += `\\${char}`;
+    else out += char;
+  }
+  return new RegExp(`^${out}$`);
+}
+
+function scopePatternCovers(glob, relPosix) {
+  return (
+    shellPatternToRegExp(glob).test(relPosix) ||
+    shellPatternToRegExp(`${glob}/*`).test(relPosix)
+  );
+}
+
+function isCoveredByScopes(relPosix, globs) {
+  return globs.some((glob) => scopePatternCovers(glob, relPosix));
+}
+
+function resolveRelativeImport(fromAbs, spec) {
+  if (!spec.startsWith('.')) return null;
+  const base = path.resolve(path.dirname(fromAbs), spec);
+  const candidates = [
+    base,
+    `${base}.ts`,
+    `${base}.tsx`,
+    `${base}.js`,
+    `${base}.jsx`,
+    path.join(base, 'index.ts'),
+    path.join(base, 'index.tsx'),
+  ];
+  for (const candidate of candidates) {
+    try {
+      if (fsSync.statSync(candidate).isFile()) return candidate;
+    } catch {
+      // Try the next candidate.
+    }
+  }
+  return null;
+}
+
+function parseModuleReferences(content) {
+  const imports = [];
+  for (const match of content.matchAll(
+    /import\s+(type\s+)?(?:[^'"]+?from\s+)?['"]([^'"]+)['"]/g,
+  )) {
+    const isType = Boolean(match[1]);
+    const spec = match[2];
+    const statement = match[0];
+    let srcNames = null;
+    const braces = statement.match(/\{([\s\S]*?)\}/);
+    if (braces) {
+      srcNames = [];
+      for (const part of braces[1].split(',')) {
+        const trimmed = part.trim();
+        if (!trimmed || trimmed.startsWith('type ')) continue;
+        const source = trimmed.split(/\s+as\s+/)[0].trim();
+        if (source) srcNames.push(source);
+      }
+    }
+    imports.push({ spec, isType, srcNames });
+  }
+  const exportsFrom = [];
+  for (const match of content.matchAll(
+    /export\s+(type\s+)?(?:\{([\s\S]*?)\}\s*from\s*['"]([^'"]+)['"]|\*\s*(?:as\s+\w+\s*)?from\s*['"]([^'"]+)['"])/g,
+  )) {
+    const isType = Boolean(match[1]);
+    if (match[3]) {
+      const list = [];
+      for (const part of match[2].split(',')) {
+        const trimmed = part.trim();
+        if (!trimmed || trimmed.startsWith('type ')) continue;
+        const pieces = trimmed.split(/\s+as\s+/);
+        const src = (pieces[0] || '').trim();
+        const exp = (pieces[1] || pieces[0] || '').trim();
+        if (src && exp) list.push({ src, exp });
+      }
+      exportsFrom.push({ spec: match[3], isType, list });
+    } else if (match[4]) {
+      exportsFrom.push({ spec: match[4], isType, star: true });
+    }
+  }
+  return { imports, exportsFrom };
+}
+
+function collectReachableModules(entryAbs) {
+  const neededByFile = new Map();
+  const queue = [{ file: entryAbs, needed: null }];
+  while (queue.length > 0) {
+    const { file, needed } = queue.shift();
+    const previous = neededByFile.get(file);
+    if (previous === null) continue;
+    if (previous !== undefined && needed !== null) {
+      if ([...needed].every((name) => previous.has(name))) continue;
+      for (const name of needed) previous.add(name);
+    } else if (previous === undefined) {
+      neededByFile.set(file, needed === null ? null : new Set(needed));
+    } else if (needed === null) {
+      neededByFile.set(file, null);
+    }
+    const currentNeeded = neededByFile.get(file);
+    let content;
+    try {
+      content = fsSync.readFileSync(file, 'utf8');
+    } catch {
+      continue;
+    }
+    const { imports, exportsFrom } = parseModuleReferences(content);
+    for (const imp of imports) {
+      if (imp.isType || !imp.spec.startsWith('.')) continue;
+      const target = resolveRelativeImport(file, imp.spec);
+      if (!target) continue;
+      if (imp.srcNames === null) queue.push({ file: target, needed: null });
+      else if (imp.srcNames.length > 0)
+        queue.push({ file: target, needed: new Set(imp.srcNames) });
+    }
+    for (const exp of exportsFrom) {
+      if (exp.isType || !exp.spec.startsWith('.')) continue;
+      const target = resolveRelativeImport(file, exp.spec);
+      if (!target) continue;
+      if (exp.star) {
+        queue.push({
+          file: target,
+          needed: currentNeeded === null ? null : new Set(currentNeeded),
+        });
+      } else if (currentNeeded === null) {
+        queue.push({ file: target, needed: new Set(exp.list.map((entry) => entry.src)) });
+      } else {
+        const matched = exp.list.filter((entry) => currentNeeded.has(entry.exp));
+        if (matched.length === 0) continue;
+        queue.push({ file: target, needed: new Set(matched.map((entry) => entry.src)) });
+      }
+    }
+  }
+  return [...neededByFile.keys()];
+}
+
+function findUncoveredModules(reachableRels, globs) {
+  return reachableRels.filter((rel) => !isCoveredByScopes(rel, globs));
+}
+
+test('featured scope covers every runtime src module the current-source proof renders', async () => {
+  const workflow = await fs.readFile(FEATURED_WORKFLOW_PATH, 'utf8');
+  const globs = extractScopeGlobs(workflow);
+  const reachable = collectReachableModules(CURRENT_FIXTURES_PATH)
+    .map((abs) => path.relative(REPO_ROOT, abs).replace(/\\/g, '/'))
+    .filter((rel) => rel.startsWith('src/'))
+    .sort();
+  assert.ok(reachable.length > 0, 'reachable src modules are not empty');
+  const uncovered = findUncoveredModules(reachable, globs);
+  assert.deepEqual(uncovered, [], `Uncovered featured-proof modules: ${uncovered.join(', ')}`);
+});
+
+test('scope check names an uncovered module and passes once it is added (synthetic)', async (t) => {
+  const dir = await scratch(t);
+  await fs.mkdir(path.join(dir, 'src'), { recursive: true });
+  await fs.writeFile(
+    path.join(dir, 'entry.ts'),
+    'import { a } from "./src/used";\nimport { b } from "./src/uncovered";\n',
+  );
+  await fs.writeFile(path.join(dir, 'src', 'used.ts'), 'export const a = 1;\n');
+  await fs.writeFile(path.join(dir, 'src', 'uncovered.ts'), 'export const b = 2;\n');
+  const reachable = collectReachableModules(path.join(dir, 'entry.ts'))
+    .map((abs) => path.relative(dir, abs).replace(/\\/g, '/'))
+    .filter((rel) => rel.startsWith('src/'))
+    .sort();
+  assert.deepEqual(reachable, ['src/uncovered.ts', 'src/used.ts']);
+  const missing = findUncoveredModules(reachable, ['src/used.ts']);
+  assert.deepEqual(missing, ['src/uncovered.ts']);
+  assert.throws(() => assert.deepEqual(missing, []), /src\/uncovered\.ts/);
+  assert.deepEqual(findUncoveredModules(reachable, ['src/used.ts', 'src/uncovered.ts']), []);
+});

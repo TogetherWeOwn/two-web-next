@@ -47,6 +47,14 @@ export async function fixtures(raw: string) {
         startsAt: new Date("2020-11-06T20:00:00Z"),
         endsAt: new Date("2020-11-06T22:00:00Z"),
       },
+      {
+        eventKey: "01J00000000000000000000020",
+        title: "Paused games",
+        status: "published",
+        rsvpOpen: false,
+        startsAt: new Date("2099-11-08T20:00:00Z"),
+        endsAt: new Date("2099-11-08T22:00:00Z"),
+      },
     ]);
     const [waitlisted] = await fixture.db
       .insert(events)

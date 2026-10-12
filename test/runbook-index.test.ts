@@ -13,6 +13,7 @@ function githubSlug(heading: string): string {
 }
 
 const runbook = readFileSync(new URL("../docs/runbook.md", import.meta.url), "utf8");
+const runbookAlerts = readFileSync(new URL("../docs/runbook-alerts.md", import.meta.url), "utf8");
 
 const h2Headings = [...runbook.matchAll(/^##\s+(.+)$/gm)].map((m) => m[1]!.trim());
 const seen = new Map<string, number>();
@@ -82,6 +83,7 @@ describe("runbook first-responder index", () => {
       "degraded",
       "error.alert",
       "queue.failing",
+      "uptime.down",
       "join",
       "events",
       "rollback",
@@ -90,6 +92,42 @@ describe("runbook first-responder index", () => {
     ]) {
       expect(lower, `index misses required symptom: ${phrase}`).toContain(phrase);
     }
+  });
+
+  it("covers uptime.down with destination anchor and diagnostic semantics", () => {
+    const uptimeRow = indexRows(indexBlock).find((cells) =>
+      cells[1]?.toLowerCase().includes("uptime.down"),
+    );
+    expect(uptimeRow, "missing uptime.down row in first-responder index").toBeDefined();
+
+    // Verify destination anchor in runbook-alerts.md
+    const targetLink = uptimeRow![2] ?? "";
+    const match = targetLink.match(/\[(.*?)\]\((runbook-alerts\.md#(.*?))\)/);
+    expect(match, "uptime.down row must link to runbook-alerts.md with an anchor").not.toBeNull();
+    const anchor = match![3]!;
+
+    const alertsHeadings = [...runbookAlerts.matchAll(/^###?\s+(.+)$/gm)].map((m) => m[1]!.trim());
+    const alertsSlugs = alertsHeadings.map((heading) => githubSlug(heading));
+    expect(
+      alertsSlugs,
+      `destination anchor #${anchor} has no matching heading in runbook-alerts.md`,
+    ).toContain(anchor);
+
+    // Verify diagnostic step semantics
+    const diagnostic = uptimeRow![3] ?? "";
+    expect(diagnostic).toMatch(/no corresponding app critical-log line/i);
+    expect(diagnostic).toMatch(/status zero means transport\/timeout/i);
+    expect(diagnostic).toMatch(/not proof of a database failure/i);
+    // Explicit staging/production separation; does not direct operator to staging targets for prod
+    expect(diagnostic).toMatch(/staging vs production/i);
+    // Prober requires HTTP 200 plus x-two-origin and never follows redirects:
+    // a 200 page means the wrong origin served /up, a 3xx page means a redirect.
+    expect(diagnostic).toMatch(/status 200.*x-two-origin/i);
+    expect(diagnostic).toMatch(/3xx.*redirect/i);
+    // Header-checking probe and unambiguous page-source identification.
+    expect(diagnostic).toMatch(/-D -/);
+    expect(diagnostic).toMatch(/check.*x-two-origin/i);
+    expect(diagnostic).toMatch(/two-web-next-alerts-production/);
   });
 
   it("gives every row a first read-only diagnostic step", () => {

@@ -66,7 +66,9 @@ it.each(paths)(
     expect(html).toContain('aria-label="Site"');
     expect(html).toContain(`<link rel="canonical" href="${env.APP_URL}${path}"`);
     expect(html).not.toContain('<meta name="robots"');
-    expect(html).not.toContain("<script");
+    expect(html.match(/<script\b[^>]*>/gi) ?? []).toEqual(
+      path === "/join" ? ['<script src="/islands/join-widget.js" defer="">'] : [],
+    );
     expect(html).not.toContain('action="/logout"');
     if (path !== "/join") {
       expect(html).toContain(`<a href="${path}" aria-current="page">`);
@@ -93,10 +95,9 @@ it("keeps the join targets, guarded return path, widget and fallback in the auth
   expect(html).toMatch(/href="\/auth\/discord"[^>]*data-testid="signin"/);
   expect(html).toContain(`href="/join/discord?next=${encodeURIComponent(next)}"`);
   expect(html).toContain('href="https://discord.gg/fixture" data-testid="join-invite"');
-  expect(html).toContain('title="TWO Discord server preview"');
-  expect(html).toContain(
-    'width="350" height="500" sandbox="allow-scripts allow-same-origin" loading="lazy" referrerpolicy="no-referrer"',
-  );
+  expect(html).toContain('data-testid="join-widget-load"');
+  expect(html).toContain('<script src="/islands/join-widget.js" defer=""></script>');
+  expect(html).not.toContain("<iframe");
   const fallback = await (
     await app.request("/join?next=https://evil.test", {}, { ...env, DISCORD_GUILD_ID: "unset" })
   ).text();

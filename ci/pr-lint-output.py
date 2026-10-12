@@ -47,13 +47,13 @@ def check():
     for key in ("event", "title", "body", "author"):
         os.environ[key.upper()] = metadata[key]
     runpy.run_path(str(Path(__file__).with_name("check-pr-conventions.py")), run_name="__main__")
-    # Upstream body/branch/reference gate (warn mode: never fails today). Pull
-    # requests only: push and workflow_dispatch keep the proven first-checker
-    # behavior. It shares the exact TITLE/BODY/AUTHOR the binding step pinned;
+    # Upstream body/branch/reference gate: the strict title/body subset (tracker IDs,
+    # instance UI links, the internal host) always fails on a public repo; the rest
+    # follows the mode. Pull requests only: push and workflow_dispatch keep the proven
+    # first-checker behavior. It shares the exact TITLE/BODY/AUTHOR the binding step pinned;
     # HEAD_REF and REPO_PRIVATE arrive through the step env. Absent in the
     # hermetic harness, so repo tests keep proving the error-level policy alone.
-    # A nonzero exit here must fail the step, like the checker above: warn mode
-    # only warns, error mode fails.
+    # A nonzero exit here must fail the step, like the checker above.
     if os.environ["EVENT"] == "pull_request" and os.environ.get(
         "PR_STANDARDS_MODE", ""
     ).strip().lower() in ("warn", "error"):
@@ -67,6 +67,8 @@ def check():
             "REPO_PRIVATE": os.environ.get("REPO_PRIVATE", "false"),
             "REQUIRE_CARD_REF": "false",
             "PR_STANDARDS_MODE": os.environ["PR_STANDARDS_MODE"],
+            "PR_NUMBER": os.environ.get("PR_NUMBER", ""),
+            "HEAD_REF_ERROR_FROM_PR": os.environ.get("HEAD_REF_ERROR_FROM_PR", ""),
         }
         completed = subprocess.run([sys.executable, str(standards)], env=env, check=False)
         if completed.returncode != 0:

@@ -1,5 +1,6 @@
 import type postgres from "postgres";
 import { createPostgresSessionStore, type Sql as SessionSql } from "../sessions";
+import { PRUNE_DELETE_BATCH_SIZE } from "./constants";
 import type { SingleFlight } from "./cron";
 import type { AgePrunedTable, PruneStores, QueueLedger, TxClient, UniqueLock } from "./types";
 
@@ -41,29 +42,49 @@ export function pgPruneStores(sql: TxClient | Sql): PruneStores {
   const agentEventAudits: AgePrunedTable = {
     pruneOlderThan: async (cutoff) =>
       (
-        await sql`delete from agent_event_audits where created_at < ${cutoff}
-          and created_at < clock_timestamp() - interval '2160 hours' returning 1`
+        await sql`delete from agent_event_audits where id in (
+          select id from agent_event_audits where created_at < ${cutoff}
+            and created_at < clock_timestamp() - interval '2160 hours'
+          order by id limit ${PRUNE_DELETE_BATCH_SIZE}
+        ) returning 1`
       ).length,
   };
   const accessLog: AgePrunedTable = {
     pruneOlderThan: async (cutoff) =>
       (
-        await sql`delete from member_data_access_logs where occurred_at < ${cutoff}
-          and occurred_at < clock_timestamp() - interval '2160 hours' returning 1`
+        await sql`delete from member_data_access_logs where id in (
+          select id from member_data_access_logs where occurred_at < ${cutoff}
+            and occurred_at < clock_timestamp() - interval '2160 hours'
+          order by id limit ${PRUNE_DELETE_BATCH_SIZE}
+        ) returning 1`
       ).length,
   };
   const joinAttempts: AgePrunedTable = {
     pruneOlderThan: async (cutoff) =>
-      (await sql`delete from join_attempts where created_at < ${cutoff} returning 1`).length,
+      (
+        await sql`delete from join_attempts where id in (
+          select id from join_attempts where created_at < ${cutoff}
+          order by id limit ${PRUNE_DELETE_BATCH_SIZE}
+        ) returning 1`
+      ).length,
   };
   const idempotencyKeys: AgePrunedTable = {
     pruneOlderThan: async (cutoff) =>
-      (await sql`delete from agent_event_idempotency_keys where created_at < ${cutoff} returning 1`)
-        .length,
+      (
+        await sql`delete from agent_event_idempotency_keys where id in (
+          select id from agent_event_idempotency_keys where created_at < ${cutoff}
+          order by id limit ${PRUNE_DELETE_BATCH_SIZE}
+        ) returning 1`
+      ).length,
   };
   const searchLog: AgePrunedTable = {
     pruneOlderThan: async (cutoff) =>
-      (await sql`delete from event_search_logs where occurred_at < ${cutoff} returning 1`).length,
+      (
+        await sql`delete from event_search_logs where id in (
+          select id from event_search_logs where occurred_at < ${cutoff}
+          order by id limit ${PRUNE_DELETE_BATCH_SIZE}
+        ) returning 1`
+      ).length,
   };
   return {
     agentEventAudits,

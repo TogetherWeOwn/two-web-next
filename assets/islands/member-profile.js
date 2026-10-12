@@ -9,11 +9,14 @@
 // with the draft intact, and releases the controls. A late completion after
 // expiry changes nothing; there is no automatic resend.
 // Outcomes: saved → "Profile saved." + re-edit control (or keep a newer draft),
-// focus on the confirmation; Cancel resets to the last accepted values and
-// ignores pending completions, but a newer save waits until the cancelled
+// focus on the confirmation unless the member moved on during the save;
+// Cancel resets to the last accepted values and ignores pending completions,
+// but a newer save waits until the cancelled
 // write settles or its deadline expires. 422 → errors in the alert, input kept; 401/302-to-login/419 → session
 // expired notice with login link, input kept; anything else → save-failed
 // alert, input kept. Copy and testids mirror src/islands/contracts.ts.
+// While a write is unsettled the form is aria-busy and a polite progress line
+// sits just after it; a Save press then says the earlier save is still finishing.
 
 (function () {
   var root = document.querySelector('[data-island="member-profile"]');
@@ -40,6 +43,26 @@
   var canTimeout = typeof setTimeout !== "undefined" && typeof clearTimeout !== "undefined";
   var deadlineTimer = null;
   var currentAbort = null;
+  // editing: the member acted in the editor while the owned save was pending.
+  // saveFocus: the focus owner when that save started.
+  var editing = false;
+  var saveFocus = null;
+  // Raw text the server last accepted; a field still holding it is saved, not dirty.
+  var acceptedDraft = null;
+
+  // Busy state for an unsettled write: aria-busy on the form plus a progress
+  // line. Save stays enabled and focus never moves. Only settlement or the
+  // deadline ends it; Cancel keeps it, because the write is still unsettled.
+  function setPending(on) {
+    pending = on;
+    if (on) {
+      form.setAttribute("aria-busy", "true");
+      progress("profile-pending", "Saving your profile\u2026");
+    } else {
+      form.removeAttribute("aria-busy");
+      drop("profile-pending");
+    }
+  }
 
   function clearDeadline() {
     if (deadlineTimer !== null) {
@@ -50,6 +73,28 @@
   }
 
   var sessionExpired = false;
+  var leavingForRecovery = false;
+
+  function hasUnsavedChanges() {
+    return ["bio", "games_text", "timezone"].some(function (key) {
+      var field = form.elements[key];
+      if (field.value === field.defaultValue) return false;
+      return !acceptedDraft || field.value !== acceptedDraft[key];
+    });
+  }
+
+  if (typeof window !== "undefined")
+    window.addEventListener("beforeunload", function (event) {
+      // Recovery navigation is the explicit escape; the notice keeps the draft
+      // available in this document if the member chooses to stay.
+      if (leavingForRecovery) {
+        leavingForRecovery = false;
+        return;
+      }
+      if (!hasUnsavedChanges()) return;
+      event.preventDefault();
+      event.returnValue = "";
+    });
 
   function expiredNotice() {
     sessionExpired = true;
@@ -59,6 +104,17 @@
       "Your session expired. Your changes are still here.",
       true,
     );
+    var recoveryNotice = root.querySelector('[data-testid="profile-session-expired"]');
+    var recoveryLink = recoveryNotice && recoveryNotice.querySelector("a");
+    if (recoveryLink)
+      recoveryLink.addEventListener("click", function (event) {
+        if (event.button !== 0 || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey)
+          return;
+        leavingForRecovery = true;
+        setTimeout(function () {
+          leavingForRecovery = false;
+        }, 0);
+      });
   }
   if (typeof window !== "undefined")
     window.addEventListener("two:session-expired", function (event) {
@@ -78,10 +134,16 @@
     Object.keys(values).forEach(function (key) {
       if (form.elements[key].value !== body[key]) unchanged = false;
     });
+    acceptedDraft = { bio: body.bio, games_text: body.games_text, timezone: body.timezone };
     Object.keys(values).forEach(function (key) {
+      var field = form.elements[key];
+      // Setting defaultValue rewrites a pristine field, so pin the live text first.
+      if (editing) field.value = field.value;
       // Native Cancel/reset now restores the latest accepted save, not SSR.
-      form.elements[key].defaultValue = values[key];
-      if (unchanged) form.elements[key].value = values[key];
+      field.defaultValue = values[key];
+      // The focused field keeps its caret; untouched fields take the saved value.
+      var kept = editing && field === document.activeElement;
+      if (!kept && field.value === body[key]) field.value = values[key];
     });
     // Empty-state copy mirrors PROFILE_EMPTY_COPY; the binder only runs for the owner.
     var isNew = !values.bio && !games.length && !values.timezone;
@@ -107,19 +169,44 @@
       });
       list.appendChild(content);
     }
-    // If a newer draft was typed while saving, keep it reachable too.
-    form.hidden = unchanged && !!edit && !!editControl;
+    // A newer draft or any member action in the editor keeps it open.
+    form.hidden = unchanged && !editing && !!edit && !!editControl;
     if (editControl) editControl.hidden = !form.hidden;
+    // A successful accept clears obsolete field errors; called only while
+    // the request still owns feedback (generation guard at the call site).
+    clearFieldErrors();
+    return unchanged;
   }
 
   function control(v) {
     return /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/.test(v);
   }
 
+  // Field association: stable ids shared with SSR pages.tsx.
+  // The server `games` key maps to the `games_text` control; any other key
+  // is global and stays in the summary with no fabricated control link.
+  var FIELD_IDS = {
+    bio: "profile-bio",
+    games_text: "profile-games-text",
+    timezone: "profile-timezone",
+  };
+  function fieldForKey(k) {
+    return k === "bio"
+      ? "bio"
+      : k === "games" || k === "games_text"
+        ? "games_text"
+        : k === "timezone"
+          ? "timezone"
+          : null;
+  }
+
   function clientErrors(bio, games, tz) {
     var e = [];
-    if (control(bio) || control(games) || control(tz)) e.push("Remove control characters.");
-    if (Array.from(bio).length > 1000) e.push("Keep your bio to 1000 characters or fewer.");
+    if (control(bio)) e.push({ key: "bio", text: "Remove control characters." });
+    if (control(games)) e.push({ key: "games_text", text: "Remove control characters." });
+    if (control(tz)) e.push({ key: "timezone", text: "Remove control characters." });
+    if (Array.from(bio).length > 1000)
+      e.push({ key: "bio", text: "Keep your bio to 1000 characters or fewer." });
     var seen = new Set();
     var long = false;
     games.split(/\r\n|\r|\n/).forEach(function (l) {
@@ -127,21 +214,25 @@
       if (Array.from(t).length > 80) long = true;
       if (t) seen.add(t);
     });
-    if (long) e.push("Keep each game name to 80 characters or fewer.");
-    if (seen.size > 20) e.push("Add no more than 20 games.");
+    if (long) e.push({ key: "games_text", text: "Keep each game name to 80 characters or fewer." });
+    if (seen.size > 20) e.push({ key: "games_text", text: "Add no more than 20 games." });
     if (tz) {
       try {
         new Intl.DateTimeFormat("en", { timeZone: tz });
       } catch {
-        e.push("Choose a valid IANA timezone, e.g. Europe/London.");
+        e.push({ key: "timezone", text: "Choose a valid IANA timezone, e.g. Europe/London." });
       }
     }
     return e;
   }
 
-  function notice(testid, role, text, loginLink) {
+  function drop(testid) {
     var old = root.querySelector('[data-testid="' + testid + '"]');
     if (old) old.remove();
+  }
+
+  function notice(testid, role, text, loginLink, noFocus, afterForm) {
+    drop(testid);
     var el = document.createElement("div");
     el.setAttribute("data-testid", testid);
     el.setAttribute("role", role);
@@ -155,11 +246,72 @@
       a.textContent = "Log in with Discord";
       el.appendChild(a);
     }
-    form.parentNode.insertBefore(el, form);
-    el.focus();
+    if (afterForm) form.after(el);
+    else form.parentNode.insertBefore(el, form);
+    if (!noFocus) el.focus();
+    return el;
+  }
+
+  // Progress of an unsettled or timed-out save: a polite status, never
+  // focused, placed just after the form: next to Save and outside the busy
+  // form. Inserting it never moves Save.
+  function progress(testid, text) {
+    return notice(testid, "status", text, false, true, true);
+  }
+
+  function errorId(field) {
+    return FIELD_IDS[field] + "-error";
+  }
+
+  function clearFieldErrors() {
+    Object.keys(FIELD_IDS).forEach(function (field) {
+      var id = errorId(field);
+      var node = root.querySelector('[id="' + id + '"]');
+      if (node) node.remove();
+      var input = form.elements[field];
+      if (!input || typeof input.setAttribute !== "function") return;
+      if (typeof input.removeAttribute === "function") {
+        input.removeAttribute("aria-invalid");
+        var described = input.getAttribute("aria-describedby");
+        if (described) {
+          var kept = String(described)
+            .split(/\s+/)
+            .filter(function (t) {
+              return t && t !== id;
+            });
+          if (kept.length) input.setAttribute("aria-describedby", kept.join(" "));
+          else input.removeAttribute("aria-describedby");
+        }
+      }
+    });
+  }
+
+  function wireFieldError(field, text) {
+    var input = form.elements[field];
+    if (!input || typeof input.setAttribute !== "function") return;
+    input.setAttribute("id", FIELD_IDS[field]);
+    input.setAttribute("aria-invalid", "true");
+    var id = errorId(field);
+    var described =
+      typeof input.getAttribute === "function" ? input.getAttribute("aria-describedby") || "" : "";
+    var tokens = String(described).split(/\s+/).filter(Boolean);
+    if (tokens.indexOf(id) < 0) tokens.push(id);
+    input.setAttribute("aria-describedby", tokens.join(" "));
+    var old = root.querySelector('[id="' + id + '"]');
+    var prior = old ? old.textContent + " " : "";
+    if (old) old.remove();
+    var p = document.createElement("p");
+    p.setAttribute("id", id);
+    p.setAttribute("class", "error");
+    // textContent keeps server strings literal; bound by the caller.
+    p.textContent = prior + String(text);
+    // Beside the label, not in it: label text is the control's accessible name.
+    var host = input.parentNode || form;
+    host.parentNode.insertBefore(p, host.nextSibling);
   }
 
   function clearNotices() {
+    clearFieldErrors();
     root.querySelectorAll("[data-testid^='profile-']").forEach(function (n) {
       var t = n.getAttribute("data-testid");
       if (t === "profile-session-expired" && sessionExpired) return;
@@ -194,11 +346,12 @@
       if (bag && typeof bag === "object" && !Array.isArray(bag)) {
         Object.keys(bag).forEach(function (k) {
           var m = bag[k];
-          if (typeof m === "string" && m.trim() !== "") out.push(boundError(m));
+          if (typeof m === "string" && m.trim() !== "")
+            out.push({ key: fieldForKey(k), text: boundError(m) });
         });
       }
     }
-    return out.length ? out : [GENERIC_INVALID_COPY];
+    return out.length ? out : [{ key: null, text: GENERIC_INVALID_COPY }];
   }
 
   function saveFailed() {
@@ -212,7 +365,7 @@
     if (!pending || request !== pendingRequest) return;
     var controller = currentAbort;
     clearDeadline();
-    pending = false;
+    setPending(false);
     if (controller) {
       try {
         controller.abort();
@@ -227,30 +380,50 @@
     // has moved on from this request: focus stays where the member left it.
     // Invalidate the timed-out request so a late completion can never replace
     // newer feedback or mutate the accepted baseline.
+    // The notice takes the place of the progress line the member was watching;
+    // unlike a repeat press it does not scroll, because the member may be typing.
     generation++;
-    var old = root.querySelector('[data-testid="profile-uncertain"]');
-    if (old) old.remove();
-    var el = document.createElement("div");
-    el.setAttribute("data-testid", "profile-uncertain");
-    el.setAttribute("role", "status");
-    el.textContent =
-      "Still saving — this is taking longer than expected. It may still have gone through; wait a moment, then save again if nothing changed.";
-    form.parentNode.insertBefore(el, form);
+    progress(
+      "profile-uncertain",
+      "Still saving — this is taking longer than expected. It may still have gone through; wait a moment, then save again if nothing changed.",
+    );
   }
 
   function errorList(errors) {
+    clearFieldErrors();
     var old = root.querySelector('[data-testid="profile-error"]');
     if (old) old.remove();
-    var list = Array.isArray(errors) && errors.length ? errors : [GENERIC_INVALID_COPY];
+    var list =
+      Array.isArray(errors) && errors.length ? errors : [{ key: null, text: GENERIC_INVALID_COPY }];
+    // Inline errors first so the summary links resolve to live nodes.
+    list.forEach(function (e) {
+      if (e && e.key && FIELD_IDS[e.key]) wireFieldError(e.key, e.text);
+    });
     var alert = document.createElement("div");
     alert.setAttribute("role", "alert");
     alert.setAttribute("tabindex", "-1");
     alert.setAttribute("data-testid", "profile-error");
     var ul = document.createElement("ul");
-    list.forEach(function (m) {
+    list.forEach(function (e) {
       var li = document.createElement("li");
-      // textContent keeps server strings literal; bound above for 422 maps.
-      li.textContent = typeof m === "string" ? boundError(m) : GENERIC_INVALID_COPY;
+      var text = e && typeof e.text === "string" ? boundError(e.text) : GENERIC_INVALID_COPY;
+      if (e && e.key && FIELD_IDS[e.key] && form.elements[e.key]) {
+        var a = document.createElement("a");
+        a.setAttribute("href", "#" + FIELD_IDS[e.key]);
+        // textContent keeps server strings literal; bound above for 422 maps.
+        a.textContent = text;
+        (function (control) {
+          // Summary-link activation focuses the control without changing
+          // values; keyboard Enter fires click, so one handler covers both.
+          a.addEventListener("click", function (ev) {
+            ev.preventDefault();
+            control.focus();
+          });
+        })(form.elements[e.key]);
+        li.appendChild(a);
+      } else {
+        li.textContent = text;
+      }
       ul.appendChild(li);
     });
     alert.appendChild(ul);
@@ -284,9 +457,13 @@
     // the guard holds until it settles or expires.
     var cancelled = ++generation;
     sessionExpired = false;
+    leavingForRecovery = false;
     form.hidden = false;
     if (editControl) editControl.hidden = true;
     clearNotices();
+    // The draft that "still finishing" promised to keep is gone: an unsettled
+    // write goes back to the plain saving line.
+    if (pending) setPending(true);
     setTimeout(function () {
       if (cancelled !== generation) return;
       var h = document.querySelector('[data-testid="profile-name"]');
@@ -294,9 +471,24 @@
     }, 0);
   });
 
+  // Member work in the editor during an owned save: keep their focus, caret and draft.
+  ["keydown", "pointerdown", "focusin", "input"].forEach(function (type) {
+    form.addEventListener(type, function () {
+      if (pending) editing = true;
+    });
+  });
+
   form.addEventListener("submit", function (ev) {
     ev.preventDefault();
-    if (pending) return;
+    // The press is not queued: say so politely, keep focus and the draft. The
+    // member is at Save, so bring the whole line into view (on a phone its end
+    // can fall below the page); the first press never scrolls, so a quick
+    // second click still lands on Save.
+    if (pending)
+      return progress(
+        "profile-pending",
+        "Still finishing your earlier save. Your changes are kept; press Save again in a moment.",
+      ).scrollIntoView({ block: "nearest" });
     if (sessionExpired) return expiredNotice();
     var f = form.elements;
     var body = {
@@ -309,9 +501,11 @@
     clearNotices();
     var errs = clientErrors(body.bio, body.games_text, body.timezone);
     if (errs.length) return errorList(errs);
-    pending = true;
+    editing = false;
+    saveFocus = document.activeElement;
     var request = ++generation;
     pendingRequest = request;
+    setPending(true);
     // The owned deadline covers the whole write: fetch plus response-body
     // completion. On expiry the request no longer owns feedback — late
     // completions are dropped by the generation guard, and the uncertain
@@ -364,8 +558,10 @@
           var admit = function (j) {
             if (request !== generation) return;
             if (isSavedAck(j)) {
-              accepted(body);
-              notice("profile-saved", "status", "Profile saved.");
+              // Read focus before accepted() may collapse a focused editor.
+              var movedOn = editing || document.activeElement !== saveFocus;
+              var unchanged = accepted(body);
+              notice("profile-saved", "status", "Profile saved.", false, movedOn || !unchanged);
             } else {
               saveFailed();
             }
@@ -406,7 +602,7 @@
         // guard and dispose the deadline. An expired request has already
         // released both, and a newer request owns them now.
         if (!pending || pendingRequest !== request) return;
-        pending = false;
+        setPending(false);
         clearDeadline();
       });
   });

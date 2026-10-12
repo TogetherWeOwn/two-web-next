@@ -28,6 +28,10 @@
           "section": "Fixed"
         },
         {
+          "type": "security",
+          "section": "Fixed"
+        },
+        {
           "type": "deps",
           "section": "Changed",
           "hidden": true
@@ -62,7 +66,8 @@
           "section": "Style",
           "hidden": true
         }
-      ]
+      ],
+      "release-as": "1.0.0"
     }
   }
 }

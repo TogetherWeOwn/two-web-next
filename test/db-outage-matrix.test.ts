@@ -56,6 +56,12 @@ const MATRIX: Case[] = [
     route,
     status: 200,
   })),
+  // A2 machine formats are database-free leaves too: same 200, own media type.
+  ...["/about.md", "/faq.md", "/rules.md", "/privacy.md", "/join.md", "/llms.txt"].map((route) => ({
+    method: "GET",
+    route,
+    status: 200,
+  })),
   { method: "GET", route: "/discord", status: 302, location: env.DISCORD_INVITE_URL },
   ...["/sitemap_index.xml", "/robots.txt", "/.well-known/security.txt"].map((route) => ({
     method: "GET",
@@ -114,7 +120,34 @@ const MATRIX: Case[] = [
     format: "html" as const,
     path: route === "/events/:file{.+\\.ics}" ? `/events/${EVENT_KEY}.ics` : undefined,
   })),
+  // A2 event machine formats share the outage: 503 in their own media type,
+  // never the branded HTML envelope, so no `format` assertion applies.
+  ...["/events.md", "/e/:file{.+\\.md}"].map((route) => ({
+    method: "GET",
+    route,
+    status: 503,
+    path: route === "/e/:file{.+\\.md}" ? `/e/${EVENT_KEY}.md` : undefined,
+  })),
   { method: "GET", route: "/events.json", status: 503, actor: "member", format: "json" },
+  // A3 bounded public read API: refused event reads stay machine-readable
+  // (the 503 envelope, never an empty list), the counts degrade to nulls,
+  // and the database-free handoff and spec stay 200.
+  { method: "GET", route: "/api/public/events", status: 503, format: "json" },
+  {
+    method: "GET",
+    route: "/api/public/events/:key",
+    path: `/api/public/events/${EVENT_KEY}`,
+    status: 503,
+    format: "json",
+  },
+  { method: "GET", route: "/api/public/community", status: 200, format: "json" },
+  { method: "GET", route: "/api/public/join", status: 200, format: "json" },
+  { method: "GET", route: "/openapi.json", status: 200, format: "json" },
+  // B2 public MCP: the handler's DNS-rebinding policy rejects the matrix's
+  // same-origin Origin before any database read, so both methods stay 403
+  // with or without the app DB. Origin-less remote clients are unaffected.
+  { method: "POST", route: "/mcp", status: 403, format: "json", body: "{}" },
+  { method: "OPTIONS", route: "/mcp", status: 403, format: "json" },
   // Main #109/#98: JSON event show. Anonymous browsers redirect to the join
   // funnel before any DB read. The member-session outage envelope is pinned
   // below, outside the inventory, so the route string stays unique.
@@ -292,13 +325,15 @@ const MATRIX: Case[] = [
 
 // ALL registrations are not all middleware: the RSVP 405 fallback is a real
 // endpoint. Pin known middleware multiplicity instead of filtering wildcards.
-// Global `*` carries six: the pre-throttle guard, trust-hosts, same-origin,
+// Global `*` carries seven: the pre-throttle guard, trust-hosts, same-origin,
 // the stale-tab auth-status script, the expired-write banner (main #239
-// added those two) and the flag-gated freeze banner. Profile paths carry
-// three registrations each: the session gate, the join-result consumer, and
-// the mandatory access log.
+// added those two), the flag-gated freeze banner and the flag-gated WebMCP
+// pilot script (session-free, 200 HTML on four public paths only). Profile
+// paths carry three registrations each: the session gate, the join-result
+// consumer, and the mandatory access log.
 // Profiles: session gate + keyed read boundary per path (main #145).
 const MIDDLEWARE = [
+  "ALL /*",
   "ALL /*",
   "ALL /*",
   "ALL /*",

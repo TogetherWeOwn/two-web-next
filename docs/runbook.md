@@ -5,17 +5,28 @@ Start here for releases, queue incidents and database recovery; use
 [log-line alerts](runbook-alerts.md) for fingerprints and
 [shared Postgres](db-migrations.md) for migration ownership and backup policy.
 The [parity matrix](parity.md) records what is implemented versus still missing.
-The production cutover and its DNS changes are outside this runbook; only the
-staging rollback and DNS flip-back rehearsal is covered here.
+Operations guidance (the index below, `/up` readiness, queues, deploy and
+rollback pointers, alerts) applies to staging and, where a section names the
+production binding, to production. The production cutover and its DNS changes
+are separately gated. The staging rollback and DNS flip-back rehearsal is covered here. See
+[Staging rehearsal](#staging-rehearsal-worker-rollback-and-dns-flip-back).
+[Final import and reconcile](#final-import-and-reconcile) (including
+[Before the production flip](#before-the-production-flip)) runs only as a
+gated cutover step. [48h post-flip watch](#48h-post-flip-watch) applies only
+in the post-flip window: on a pager storm follow its Sev-1 path (contain,
+then the production rollback workflow).
 
 **First responder index.** Match the symptom, open the section, run the first
 read-only diagnostic, then escalate. Every diagnostic below is a read; do not
 mutate, purge, roll back, migrate, rotate or restore from this table.
 
-Scope: staging (pre-cutover). Every host, Tail Worker and queue name below is
-the staging binding; for a production incident use
-[cutover-rollback.md](cutover-rollback.md) and the production bindings, never
-the staging targets.
+Scope: staging (pre-cutover) targets. Every host, Tail Worker and queue name
+in this index is the staging binding unless a row names production
+(`two-web-next-production`, `two-web-next-alerts-production`, the apex); never
+triage a production incident with the staging targets. For production use the
+[production rollback workflow](../.github/workflows/rollback-production.yml) and the
+production bindings; [cutover-rollback.md](cutover-rollback.md) is the staging
+rehearsal record plus a non-executable production recovery map.
 
 | Symptom or alert | Runbook section | First read-only diagnostic | Escalate to |
 | --- | --- | --- | --- |
@@ -24,6 +35,7 @@ the staging targets.
 | `GET /up` 503 (`db:error`, `pending_migrations` nonzero or `null`, `config:missing`) | [Read `/up` without mistaking liveness for readiness](#read-up-without-mistaking-liveness-for-readiness) | `curl -sS --max-time 10 https://next.togetherweown.com/up`; compare HTTP status, `db`, `pending_migrations` and `config` against the readiness tables | DevOps & Reliability Engineer |
 | `GET /up` queue `degraded` (`pending >= 20`) or `unknown` with HTTP 200 | [Queue containment, drain and failed-job replay](#queue-containment-drain-and-failed-job-replay) | Same `GET /up`; read `queue.status`, `pending`, `oldest_ready_wait_age_seconds` and `ready_wait_severity`; `healthy + unknown` is lack of evidence, not recovery | DevOps & Reliability Engineer |
 | `error.alert` flood or pager storm | [48h post-flip watch](#48h-post-flip-watch) | `npx wrangler tail two-web-next-alerts --search '"delivery":"ops.alert.'`; correlate `request_id` per [runbook-logs.md](runbook-logs.md); fingerprints are in [runbook-alerts.md](runbook-alerts.md) | DevOps & Reliability Engineer |
+| `uptime.down` alert (cron prober failed twice) | [Scheduled `/up` prober: `uptime.down`](runbook-alerts.md#scheduled-up-prober-uptimedown) | Read status in alert; the prober has no corresponding app critical-log line; status zero means transport/timeout, not proof of a database failure; status 200 with missing or wrong `x-two-origin` means `/up` was not served by two-web-next (check DNS and routes), 3xx means a redirect; identify which Tail Worker sent the page (`two-web-next-alerts` vs `two-web-next-alerts-production`) or which webhook channel received it to verify staging vs production target first, then `curl -sS -D - -o /dev/null --max-time 10 https://next.togetherweown.com/up` for staging or apex for production and check `x-two-origin: two-web-next` | DevOps & Reliability Engineer |
 | `queue.failing` or failed-history growth (terminal bot failures, dead-letter backlog) | [Queue containment, drain and failed-job replay](#queue-containment-drain-and-failed-job-replay) | `npx wrangler queues info two-sync-event` and `npx wrangler queues info two-internal-action` (transport metadata only); read the `/up` queue envelope; do not purge or replay | DevOps & Reliability Engineer |
 | Sign-in or join failing (`/auth/discord/callback`, `/join/discord`, `/join/callback`, `/auth/qa/:identity`) | [Neon / Hyperdrive outage behavior](#neon--hyperdrive-outage-behavior) | `GET /up` readiness first; `GET /robots.txt` proves Worker startup only; on an auth failure stop and do not try another credential | DevOps & Reliability Engineer; through the Director to CISO if member data may have leaked |
 | Events page error state (`/events`, `/events.rss`, `/events.ics`, `/e/:key`) | [Neon / Hyperdrive outage behavior](#neon--hyperdrive-outage-behavior) | `GET /up` plus `ready_wait_severity` and `oldest_ready_wait_age_seconds`; filter `http.request` by route and status in Observability per [runbook-logs.md](runbook-logs.md) | DevOps & Reliability Engineer |
@@ -36,7 +48,7 @@ Not an incident entry: [Final import and reconcile](#final-import-and-reconcile)
 (cutover-only authorized import),
 [Secret rotation pointer (procedure only)](#secret-rotation-pointer-procedure-only)
 (no rotation here) and
-[Quarterly moderator access review (revoke-command half)](#quarterly-moderator-access-review-revoke-command-half)
+[Quarterly moderator access review](#quarterly-moderator-access-review)
 (scheduled quarterly review, not incident response) are not incident entries;
 read those sections directly when that work is authorized.
 
@@ -118,21 +130,31 @@ node --import ./bin/ts-hook.mjs bin/revoke-sessions.mjs --discord-id=<snowflake>
 
 `DATABASE_URL` is supplied through the environment only. Remote database URLs—including production-looking ones—require `--target production`; do not add a URL to command arguments or paste it into logs. Accepted form is `postgres://USER:PASSWORD@HOST:5432/DATABASE?sslmode=verify-full` (`sslrootcert=system` is accepted as an alias for `verify-full`); no other query parameters are accepted, so a console URL with extra parameters or `sslmode=require` is refused as missing or invalid until it is reduced to that form. See [moderator admin guide](moderator-admin-guide.md#a-moderator-lost-their-role).
 
-## Quarterly moderator access review (revoke-command half)
+## Quarterly moderator access review
 
 - Cadence: quarterly. Cadence ownership is a CTO/COO call; this section does not change it.
 - Owner: Director of Engineering, with security/access decisions through the CISO (see [Safety and escalation](#safety-and-escalation)).
-- Scope: every person confirmed to have lost the Discord moderator role since the last review. First confirm the Discord moderator role has been removed, as in [A moderator lost their role](#a-moderator-lost-their-role).
-- Procedure: for each such Discord snowflake, dry-run first, verify the active-session count, then apply:
+- Scope: the full Discord-moderator set against the live app-moderator set, plus every person confirmed to have lost the Discord moderator role since the last review. First confirm the Discord moderator role has been removed, as in [A moderator lost their role](#a-moderator-lost-their-role).
+- Procedure: audit first, then revoke, then re-audit until clean:
+  1. Run the read-only role audit. It compares ID lists the operator supplies; it opens no database, calls no network, and reads no tokens or secrets. Build the two inputs with the read-only queries in [moderator role audit](cutover-check.md#moderator-role-audit-w16-pre-flip). Keep variable names in notes, never values; treat ID files as member data, keep them out of the repo, and delete them after the run.
 
-```sh
-node --import ./bin/ts-hook.mjs bin/revoke-sessions.mjs --discord-id=<snowflake> --target production
-node --import ./bin/ts-hook.mjs bin/revoke-sessions.mjs --discord-id=<snowflake> --target production --apply
-```
+     ```sh
+     npm run audit:moderator-roles -- --discord-file=discord-moderators.json --app-file=app-moderators.json
+     npm run audit:moderator-roles -- --discord-ids=<csv> --app-ids=<csv> --json
+     ```
 
-`DATABASE_URL` is supplied through the environment only, as in the procedure above.
-- Evidence of completion: a dated review record with the review date (UTC), the reviewer/operator, each reviewed Discord snowflake with its dry-run active-session count and its apply count, and confirmation that Discord role removal was verified before revocation. The command output is counts only; keep member identifiers in the private review record and never paste database URLs, tokens, or secrets.
-- Non-goal: the role-audit half is a separate future change. This section covers only the revoke-command half.
+     Each side needs exactly one source (`--*-file` or `--*-ids`, not both). Files hold a JSON array of Discord user IDs or newline/comma separated IDs. Exit 0 = sets match (empty-safe: no moderators on either side is a clean pass), 1 = drift, 2 = usage or malformed input. The report shows at most 20 IDs per side with exact counts; the rest is `…and N more`.
+  2. On drift: `discord-only` IDs hold the Discord role but have no live app session. They carry no excess privilege; they gain the panel at next login (login recomputes the flag). Record the count as information. `app-only` IDs carry the flag in a live session without the Discord role, so revoke each with the command below (dry-run first, verify the active-session count, then apply).
+  3. For each such Discord snowflake, dry-run first, verify the active-session count, then apply:
+
+     ```sh
+     node --import ./bin/ts-hook.mjs bin/revoke-sessions.mjs --discord-id=<snowflake> --target production
+     node --import ./bin/ts-hook.mjs bin/revoke-sessions.mjs --discord-id=<snowflake> --target production --apply
+     ```
+
+     `DATABASE_URL` is supplied through the environment only, as in the procedure above.
+  4. Re-run the audit until `app-only` is 0 before closing the review. `discord-only` does not block close: the app set sees live sessions only (120-minute sliding TTL), so it includes every moderator not signed in at audit time. When a moderator is unavailable, record the `discord-only` count and close on `app-only` = 0. A clean audit is one receipt, not permission to change cadence or scope.
+- Evidence of completion: a dated review record with the review date (UTC), the reviewer/operator, the audit counts (`discord`, `app`, `discord-only`, `app-only`), the revoke dry-run/apply counts, and confirmation that Discord role removal was verified before revocation. Record counts only; keep member identifiers, ID-file contents, database URLs, tokens, and secrets out of docs, logs, and the record. The command output is counts with bounded ID lists; do not paste the lists into the record.
 
 ## Deploy and record the rollback pointer
 
@@ -365,6 +387,81 @@ expression interpolation in a shell block. A rollback does **not** undo
 Postgres migrations, data writes, Discord side effects, queue messages or
 external-resource changes; keep the release workflow from redeploying the bad
 head. Record the rollback deployment and previous/current version IDs.
+
+#### Production trigger reconciliation (manual, domain-safe)
+
+Promoting a Worker Version does not apply `wrangler.jsonc` cron schedules or
+queue consumers, and neither `wrangler deploy --env production` nor `wrangler
+triggers deploy --env production` may be used to apply them: both re-sync
+routes and custom domains, retry provisioning the already-attached apex, and
+fail with Cloudflare 100117. `test/probe-workflows.test.ts` pins the
+literal reviewed `env.production` schedules and consumers, so any change
+fails CI until the test is updated in the same release PR; the authorized
+production principal then reconciles
+only the changed trigger kind below and reads back the result. These endpoints
+manage schedules and consumers only and never touch custom domains or DNS.
+Never delete/recreate the apex DNS record or the custom domain, and never
+remove consumers to hide an incident (see [Queue containment](#queue-containment-drain-and-failed-job-replay)).
+
+1. Read the live state (metadata reads, no mutation; approved Cloudflare
+   credentials must already be injected, never supplied on argv). Resolve
+   queue names to IDs first; the consumer endpoints take the queue ID.
+   The token is read from the environment inside node, never placed on
+   argv, so it never appears in `ps` or `/proc/<pid>/cmdline`:
+
+   ```bash
+   (
+     set -euo pipefail
+     : "${CF_ACCOUNT_ID:?production account id}"
+     : "${CLOUDFLARE_API_TOKEN:?injected, never on argv}"
+     CF_TOKEN="$CLOUDFLARE_API_TOKEN" CF_ACCT="$CF_ACCOUNT_ID" node -e '
+       const token = process.env.CF_TOKEN;
+       const acct = process.env.CF_ACCT;
+       (async () => {
+         for (const p of [
+           `/accounts/${acct}/workers/scripts/two-web-next-production/schedules`,
+           `/accounts/${acct}/queues`,
+         ]) {
+           const r = await fetch("https://api.cloudflare.com/client/v4" + p, {
+             headers: { authorization: "Bearer " + token },
+           });
+           const d = await r.json();
+           if (!d.success) { console.error(JSON.stringify(d.errors)); process.exit(1); }
+           console.log(JSON.stringify(d.result));
+         }
+       })();
+     '
+   )
+   ```
+
+   Compare the schedules against `wrangler.jsonc`
+   `env.production.triggers.crons`, and each production queue's consumers
+   (`GET .../queues/<queue_id>/consumers`) against
+   `env.production.queues.consumers`. Identical means nothing to do.
+2. On cron drift only, replace the script schedules with the reviewed crons:
+   `PUT .../workers/scripts/two-web-next-production/schedules` with
+   `[{"cron": "<each env.production cron>"}]`, then repeat the GET read-back
+   until it matches.
+3. On consumer drift only, reconcile that queue's consumer with the
+   reviewed `script_name`, `type: "worker"` and settings, then repeat the
+   list read-back until it matches. Wrangler maps `wrangler.jsonc` keys to
+   API fields: `max_batch_size` → `batch_size`, `max_batch_timeout`
+   (seconds) → `max_wait_time_ms` (milliseconds, so `5` becomes `5000`;
+   copying `5` verbatim would set a 5 ms wait), `max_retries` unchanged.
+   `PUT` replaces the whole consumer, so send every setting every time;
+   if the reviewed config gains `dead_letter_queue`, `max_concurrency` or
+   `retry_delay`, include those too. Consumers attach a queue to a script
+   and survive version promotions; only an actual config change needs this
+   step.
+   - Consumer missing (the read-back lists no worker consumer for this
+     script on the queue): create it with `POST
+     .../queues/<queue_id>/consumers` and this body (current reviewed
+     values): `{"type": "worker", "script_name":
+     "two-web-next-production", "settings": {"batch_size": 10,
+     "max_retries": 10, "max_wait_time_ms": 5000}}`.
+   - Consumer exists: replace it with `PUT
+     .../queues/<queue_id>/consumers/<consumer_id>` and the same body.
+   Record the before/after read-backs with the release evidence.
 
 #### Staging (manual)
 
@@ -1062,7 +1159,7 @@ Never test production; staging E2E needs verified staging bindings.
 
 The table describes the path that reaches the relevant operation; validation,
 authentication, access gates or static asset handling can return earlier.
-Uncaught DB errors use the global **500 HTML** handler, even on event JSON routes.
+Uncaught non-database errors generally use the global **500 HTML** handler, including on event JSON routes. Member-read boundaries instead refuse failed reads with plain-text **503**; classified database-unavailable errors use the shared sanitized **503** response.
 The [parity matrix](parity.md) is a historical snapshot; current source/tests
 below, not its older `/up` row, define these outcomes.
 
@@ -1076,35 +1173,30 @@ below, not its older `/up` row, define these outcomes.
 | `/csp-reports` (POST) | Stays **204**, DB-free sink. |
 | `/db-ping`, `/health`, `/healthz` (GET) | **404**, same as unknown paths; optional event suggestions tolerate DB failure. |
 | `/` (GET) | Stays **200** with guest fallback on session-store setup/migration/read or rotation failure. Unavailable counts are omitted, events show the unavailable state, and failed featured reads are omitted. Missing DB also serves the guest shell. This does not prove an authenticated session or successful persistence. |
-| `/auth/discord/callback` (GET) | With the app DB down before the one-use journey is consumed, **302** to `/?n=signin_failed`. Session-create failure after a successful Discord exchange is **500**; roster-write-only failure is caught. Invalid state or Discord exchange failure redirects **302** before persistence. |
-| `/join/discord`, `/join/callback` (GET) | Configured join-store/throttle/attempt/session errors can be **500**. Discord exchange failure separately gives a **503** recovery page; missing DB uses no-op attempt/throttle stores. |
-| `/auth/qa/:identity` (POST) | Enabled/authorized session failure **500**; disabled/bad credential **404**. QA is never a production recovery mechanism. |
+| `/auth/discord/callback` (GET) | With the app DB down before the one-use journey is consumed, **302** to `/?n=signin_failed`. A classified DB outage during session creation after a successful Discord exchange returns sanitized **503**; roster-write-only failure is caught. Invalid state or Discord exchange failure redirects **302** before persistence. |
+| `/join/discord`, `/join/callback` (GET) | A classified DB outage (the throttle runs first on both routes) returns the branded sanitized **503** before any Discord call; other uncaught join-store, attempt or session errors can be **500**. Discord exchange failure separately gives a **503** recovery page; missing DB uses no-op attempt/throttle stores. |
+| `/auth/qa/:identity` (POST) | Enabled/authorized session failure from a classified DB outage **503**; other uncaught failures **500**; disabled/bad credential **404**. QA is never a production recovery mechanism. |
 | `/logout` (POST) | Without a session cookie, **303** and cookie clearing even when the DB is down. With a session cookie, a store or revocation failure returns **503** `Sign-out temporarily unavailable` and keeps the cookie, because the server row may still be valid. |
-| `/events`, `/events/past`, `/events.rss`, `/events.ics`, `/events/:key.ics`, `/e/:key` (GET) | Uncaught DB/session failure **500 HTML**; missing event DB **503**. Invalid keys can be **404** before DB access. |
-| `/events.json` (GET); `/events` (POST); `/events/:key` (PATCH); publish/cancel (POST) | DB/session failure **500 HTML**; missing event DB **503 JSON**. Auth gates can return **401/403** first. Post-commit enqueue failure leaves normal **201/200**. |
-| `/events/:key/rsvp` (PUT/DELETE) | Session/transaction failure **500 HTML**; missing event DB **503 JSON**, auth gates **401/403**. Honeypot decoys are DB-free **201/204**, not successful attendance. Post-commit enqueue failure does not change success status. |
-| `/profile`, `/members/:user` (GET); member save (PATCH or form-override POST) | Session resolution failure **503**; subsequent read/save failure **500**. Missing store **503**. Default required access-log failure replaces successful reads with **503**; guest **302**, non-member **403**. |
-| Implemented `/admin` routes | Session resolution failure **503**, later resource/dashboard query failure **500**; missing resource DB **503**. Default required access-log failure gives **503**; guest **302**, non-moderator **403**. |
+| `/events`, `/events/past`, `/events.rss`, `/events.ics`, `/events/:key.ics` (GET) | Classified DB outages use the shared sanitized **503** response (HTML, or JSON when negotiated). A missing event DB returns plain-text **503** `Events temporarily unavailable`. Other uncaught failures use **500 HTML**. Invalid keys can be **404** before DB access. |
+| `/e/:key` (GET) | Classified DB outages use the shared sanitized **503** response (HTML, or JSON when negotiated). A missing event DB returns plain-text **503** `Events temporarily unavailable`; other failed reads are refused with plain-text **503** `Member data is temporarily unavailable.` Invalid keys can be **404** before DB access. |
+| `/events.json` (GET); `/events` (POST); `/events/:key` (PATCH); publish/cancel (POST) | Classified DB-outage failures and missing event DB return **503 JSON**. Other uncaught failures use **500 HTML**. Auth gates can return **401/403** first. Post-commit enqueue failure leaves normal **201/200**. |
+| `/events/:key/rsvp` (PUT/DELETE) | Classified DB-outage failures and missing event DB return **503 JSON**. Other uncaught failures use **500 HTML**; auth gates **401/403**. Honeypot decoys are DB-free **201/204**, not successful attendance. Post-commit enqueue failure does not change success status. |
+| `/profile`, `/members/:user` (GET); member save (PATCH or form-override POST) | Session resolution and member-data read failures return sanitized **503**; classified DB outages during saves also return sanitized **503**, while other save failures return plain-text **500** `Could not save your profile.` Missing store **503**. Default required access-log failure replaces successful reads with **503**; guest **302**, non-member **403**. |
+| Implemented `/admin` routes | Session resolution, admin reads and classified DB outages return sanitized **503**; missing resource DB and default required access-log failure also give **503**. Other uncaught admin-write failures use the global **500 HTML** handler; guest **302**, non-moderator **403**. |
 | `/api/agent-events` (POST) | Shared web database (`AGENT_DB` when bound, else `DATABASE_URL`, otherwise `DB`): disabled **404**, enabled without any source **503**, service DB failure **500 JSON** `internal_error` (or **503** `ingress_unavailable` when the database is unreachable). No connection failover. Bot observation failure stays a typed unavailable result; post-commit write-back uses the same optional admin carrier. |
 
 Sources: [src/index.tsx](../src/index.tsx), [auth routes](../src/auth/routes.ts),
 [join routes](../src/join/route.ts),
-[event routes](../src/events/routes.tsx), [profile routes](../src/profiles/routes.tsx),
+[event routes](../src/events/routes.tsx), [profile routes](../src/profiles/routes.tsx) (gate in [`routes-gate.ts`](../src/profiles/routes-gate.ts), saves in [`routes-writes.tsx`](../src/profiles/routes-writes.tsx)),
 [admin guard](../src/admin/guard.ts), [admin routes](../src/admin/routes.tsx),
 [access logging](../src/access-log.ts), [agent ingress](../src/agent-events/route.ts),
-[error handler](../src/errors.tsx). The homepage fallback is already present at
+[error handler](../src/error-responses.tsx). The homepage fallback is already present at
 [`eed3c8b`, `src/index.tsx:271–277`](https://github.com/TogetherWeOwn/two-web-next/blob/eed3c8b8976986d6aeb7f97e1b656d7bbbaf85c7/src/index.tsx#L271-L277),
 not conditional on an unmerged outage fix. Offline evidence:
 [session/event failure fixtures](../test/home-events.test.ts),
 [counts failure fixtures](../test/home-counts.test.ts) and
 [DB-construction/featured failure fixtures](../test/featured-outage.test.ts).
 These are local doubles, not deployed outage acceptance.
-
-Pending [#92](https://github.com/TogetherWeOwn/two-web-next/pull/92), inspected at
-[`826e77d`](https://github.com/TogetherWeOwn/two-web-next/commit/826e77d535325624b00d01c2a702d0617f26323a),
-adds broader sanitized DB-outage 503 responses, homepage session-unavailable UI
-and best-effort logout setup. Those changes are **not shipped in this snapshot**;
-retain the current private-route 500/503 distinctions above until it merges.
 
 Shared human throttles and profile throttles fail open on store error; the shared
 human throttle currently uses only `DATABASE_URL`, not Hyperdrive. Optional
@@ -1249,8 +1341,10 @@ Sync carriers (including waiting deliveries) settle their ledger and ACK at 6
 tries, before transport `max_retries: 10`. Internal-action carriers cap at 5.
 Sync requests independently persist `request_attempts` and `next_attempt_at`:
 claims durably set eligibility to null **before** bot I/O. Only a committed
-result can reopen that fence: backoff (`10,60,300,900,3600`) and authoritative
-Retry-After select the next absolute deadline. A failed deadline write retries
+result can reopen that fence: backoff (`10,60,300,900,3600`) or a bot Retry-After
+above 0 and at most 86400 seconds (fractions round up) selects the next absolute
+deadline; any other Retry-After uses the backoff. An already-persisted wait
+farther than 86400 seconds caps at 86400 before queue admission. A failed deadline write retries
 that same Date (or exhausted null), never shorter generic backoff. If both writes
 fail, the consumer carries the known remaining wait on that delivery, but the
 request remains closed across new carriers and reconciliation. The old
@@ -1323,11 +1417,14 @@ secret is readable by any job without that gate, so delete it there.
 `ci/check-production-secrets.test.mjs` fails any workflow job that reads a
 `PRODUCTION_*` secret without binding `production`.
 
-Implementation naming wins over older examples in `docs/db-migrations.md`:
-for branch `staging`, the actual manifest is
+For branch `staging`, the manifest is
 `neon/staging-staging/MANIFEST.txt`, daily dumps are
-`neon/staging-staging-<UTC>.dump`, weeklies append `-weekly-<UTC>.dump`.
-Retention is newest 7 dailies + 4 weeklies. Member-data dumps belong **only** in
+`neon/staging-staging-<UTC>.dump`, weeklies append `-weekly-<UTC>.dump`
+(see `docs/db-migrations.md` "Backups" for the full layout).
+Retention on the scheduled staging run is newest 7 dailies + 4 weeklies:
+manual dispatches skip the promote-weekly + rotate step, so production
+archives are never promoted or pruned and need an approved manual rotate.
+Member-data dumps belong **only** in
 EU-jurisdiction `two-web-next-backups`, never `paperclip-backups`.
 
 For an approved **operational backup**, not a test, the custodian injects the

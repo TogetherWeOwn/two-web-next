@@ -37,7 +37,10 @@ export const JOURNEY_TTL_SECONDS = 600;
 type Ctx = Context<any>;
 
 const cookieOpts = { path: "/", secure: true, httpOnly: true, sameSite: "Lax" as const };
-const deleteOpts = { path: "/", secure: true };
+// Deletion repeats the set attributes (minus maxAge): a clearing Set-Cookie
+// without HttpOnly/SameSite is flagged by scanners and risks the browser
+// keeping a differently-scoped twin.
+const deleteOpts = { ...cookieOpts };
 
 /**
  * Explicit `?next=` on the sign-in link. A safe value rides OAuth; anything

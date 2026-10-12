@@ -225,11 +225,13 @@ function cookieCalls(text: string): string[] {
 }
 
 // The only modules that may define each lifetime; every other file must import
-// it from one of these under the same name.
+// it from one of these under the same name. The join TTLs live in the shared
+// route leaf; the barrel re-exports them so the historic import path still
+// resolves.
 const PINNED_COOKIE_ORIGINS: Record<string, string[]> = {
   SESSION_TTL_SECONDS: ["src/sessions.ts"],
-  STATE_TTL_SECONDS: ["src/index.tsx", "src/join/route.ts"],
-  JOURNEY_TTL_SECONDS: ["src/join/route.ts", "src/return-journey.ts"],
+  STATE_TTL_SECONDS: ["src/index.tsx", "src/join/route.ts", "src/join/route-shared.ts"],
+  JOURNEY_TTL_SECONDS: ["src/join/route.ts", "src/join/route-shared.ts", "src/return-journey.ts"],
   WRITE_RECOVERY_TTL_SECONDS: ["src/write-recovery.tsx"],
 };
 

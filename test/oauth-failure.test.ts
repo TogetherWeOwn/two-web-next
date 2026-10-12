@@ -21,6 +21,13 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import app from "./app";
 import { withThrottleTx } from "./helpers/throttle-tx-double";
+import {
+  captureDiagnosticStream,
+  channelCounts,
+  expectDiagnosticStreamClean,
+  withheld,
+  type DiagnosticRecord,
+} from "./helpers/diagnostic-stream";
 import { createMemorySessionStore } from "../src/sessions";
 import {
   DiscordError,
@@ -53,22 +60,30 @@ const cookiesFrom = (res: Response) =>
     .map((c) => c.split(";")[0])
     .join("; ");
 
-/** Capture every console.warn/error call so tests can scan the full written stream. */
-function captureLogs() {
-  const lines: { level: string; args: unknown[] }[] = [];
-  for (const level of ["warn", "error"] as const) {
-    vi.spyOn(console, level).mockImplementation((...args: unknown[]) => {
-      lines.push({ level, args });
-    });
-  }
-  return lines;
-}
+const JOIN_LOG = "discord token exchange failed on the join journey";
+const LOGIN_LOG = "discord sign-in failed";
+
+const JOIN_ROUTE = "/join/callback";
+const LOGIN_ROUTE = "/auth/discord/callback";
+
+/** Every console channel and every field: the full stream a failed callback can write. */
+const streamClean = (logs: DiagnosticRecord[], request: string, messages: string[] = []) =>
+  expectDiagnosticStreamClean(logs, [TOK, SECRET], { request, messages });
+
+/** The records a journey writes under one message, marker-free so a failing deep-equal cannot print a leak. */
+const recordsFor = (logs: DiagnosticRecord[], message: string) =>
+  logs
+    .filter((record) => record.args[0] === message)
+    .map((record) => ({
+      channel: record.channel,
+      args: withheld(record.args, [TOK, SECRET]) as unknown[],
+    }));
 
 /** Nothing a member or an operator can read may carry a synthetic secret. */
 const leakFree = (...surfaces: unknown[]) => {
   const text = surfaces.map((s) => JSON.stringify(s) ?? String(s)).join("\n");
-  expect(text).not.toContain(TOK);
-  expect(text).not.toContain(SECRET);
+  expect(text.includes(TOK), "synthetic token in a member-facing surface").toBe(false);
+  expect(text.includes(SECRET), "synthetic secret in a member-facing surface").toBe(false);
 };
 
 /** Stub that answers only the given URL and fails the test on anything else. */
@@ -130,7 +145,7 @@ function isolatedJoin() {
 
 /** Drive /join/discord then its callback with the fixture answer. */
 async function joinRoundTrip(e: Env, handler: (url: string) => Response | Promise<Response>) {
-  const logs = captureLogs();
+  const logs = captureDiagnosticStream();
   const calls = stubFetch(handler);
   const start = await app.request("/join/discord", {}, e);
   const state = new URL(start.headers.get("location")!).searchParams.get("state")!;
@@ -149,7 +164,7 @@ async function loginRoundTrip(
   handler: (url: string) => Response | Promise<Response>,
   query = "code=abc",
 ) {
-  const logs = captureLogs();
+  const logs = captureDiagnosticStream();
   const calls = stubFetch(handler);
   const start = await app.request("/auth/discord", {}, e);
   const state = new URL(start.headers.get("location")!).searchParams.get("state")!;
@@ -404,20 +419,16 @@ describe("malformed HTTP-200 user responses stay inside callback recovery", () =
         "/api/v10/oauth2/token",
         "/api/v10/users/@me",
       ]);
-      expect(logs).toEqual([
-        {
-          level: "warn",
-          args: [
-            "discord token exchange failed on the join journey",
-            { ...rejectedUserMeta, source: null, outcome: "error" },
-          ],
-        },
+      expect(recordsFor(logs, JOIN_LOG).map((r) => r.args)).toEqual([
+        [JOIN_LOG, { ...rejectedUserMeta, source: null, outcome: "error" }],
       ]);
+      expect(channelCounts(logs)).toMatchObject({ info: 0, debug: 0, warn: 1, error: 0 });
       expect(fake.attempts).toEqual([
         { outcome: "error", source: null, requestId: null, discordId: null },
       ]);
       expect(res.headers.getSetCookie().join("\n")).not.toContain("__Host-two_session=");
-      leakFree(html, logs, fake.attempts, [...res.headers], res.headers.getSetCookie());
+      streamClean(logs, JOIN_ROUTE, [JOIN_LOG]);
+      leakFree(html, fake.attempts, [...res.headers], res.headers.getSetCookie());
     },
   );
 
@@ -432,12 +443,16 @@ describe("malformed HTTP-200 user responses stay inside callback recovery", () =
         "/api/v10/oauth2/token",
         "/api/v10/users/@me",
       ]);
-      expect(logs).toEqual([{ level: "warn", args: ["discord sign-in failed", rejectedUserMeta] }]);
+      expect(recordsFor(logs, LOGIN_LOG).map((r) => r.args)).toEqual([
+        [LOGIN_LOG, rejectedUserMeta],
+      ]);
+      expect(channelCounts(logs)).toMatchObject({ info: 0, debug: 0, warn: 1, error: 0 });
       expect(fake.attempts).toEqual([]);
       expect(res.headers.getSetCookie().join("\n")).not.toContain("__Host-two_session=");
       const html = await (await app.request("/?n=signin_failed", {}, e)).text();
       expect(html).toContain("Sign in with Discord");
-      leakFree(html, logs, fake.attempts, [...res.headers], res.headers.getSetCookie());
+      streamClean(logs, LOGIN_ROUTE, [LOGIN_LOG]);
+      leakFree(html, fake.attempts, [...res.headers], res.headers.getSetCookie());
     },
   );
 });
@@ -454,7 +469,7 @@ describe("join callback: expired recovery versus outage 503", () => {
     expect(html).not.toContain("Discord is unreachable");
 
     // One bounded correlation line: class + kind + status + source + outcome.
-    const exchangeLine = logs.filter((l) => JSON.stringify(l.args).includes("join journey"));
+    const exchangeLine = recordsFor(logs, JOIN_LOG);
     expect(exchangeLine).toHaveLength(1);
     expect(exchangeLine[0]!.args[1]).toEqual({
       exception: "DiscordError",
@@ -468,7 +483,8 @@ describe("join callback: expired recovery versus outage 503", () => {
     expect(fake.attempts).toEqual([
       { outcome: "error", source: null, requestId: null, discordId: null },
     ]);
-    leakFree(html, logs, fake.attempts, res.headers.getSetCookie());
+    streamClean(logs, JOIN_ROUTE, [JOIN_LOG]);
+    leakFree(html, fake.attempts, res.headers.getSetCookie());
   });
 
   it.each([
@@ -486,7 +502,7 @@ describe("join callback: expired recovery versus outage 503", () => {
       expect(html).toContain("Discord is unreachable");
       expect(html).not.toContain("approval expired");
       expect(calls).toHaveLength(1); // no user lookup or guild mutation after a rejected exchange
-      const exchangeLine = logs.filter((l) => JSON.stringify(l.args).includes("join journey"));
+      const exchangeLine = recordsFor(logs, JOIN_LOG);
       expect(exchangeLine).toHaveLength(1);
       expect(exchangeLine[0]!.args[1]).toEqual({
         exception: "DiscordError",
@@ -498,7 +514,8 @@ describe("join callback: expired recovery versus outage 503", () => {
       expect(fake.attempts).toEqual([
         { outcome: "error", source: null, requestId: null, discordId: null },
       ]);
-      leakFree(html, logs, fake.attempts, [...res.headers], res.headers.getSetCookie());
+      streamClean(logs, JOIN_ROUTE, [JOIN_LOG]);
+      leakFree(html, fake.attempts, [...res.headers], res.headers.getSetCookie());
     },
   );
 
@@ -509,13 +526,14 @@ describe("join callback: expired recovery versus outage 503", () => {
     });
     expect(res.status).toBe(503);
     expect(html).toContain("Discord is unreachable");
-    const exchangeLine = logs.filter((l) => JSON.stringify(l.args).includes("join journey"));
+    const exchangeLine = recordsFor(logs, JOIN_LOG);
     expect(exchangeLine[0]!.args[1]).toMatchObject({
       exception: "DiscordError",
       kind: "transport_failure",
       outcome: "error",
     });
-    leakFree(html, logs);
+    streamClean(logs, JOIN_ROUTE, [JOIN_LOG]);
+    leakFree(html);
   });
 
   it("an exception that escapes the classifier still leaks nothing: class name only", async () => {
@@ -539,7 +557,7 @@ describe("join callback: expired recovery versus outage 503", () => {
     });
     expect(res.status).toBe(503);
     expect(html).toContain("Discord is unreachable");
-    const exchangeLine = logs.filter((l) => JSON.stringify(l.args).includes("join journey"));
+    const exchangeLine = recordsFor(logs, JOIN_LOG);
     expect(exchangeLine[0]!.args[1]).toEqual({
       exception: "SecretLeakError",
       kind: "unknown",
@@ -547,24 +565,23 @@ describe("join callback: expired recovery versus outage 503", () => {
       source: null,
       outcome: "error",
     });
-    leakFree(html, logs);
+    streamClean(logs, JOIN_ROUTE, [JOIN_LOG]);
+    leakFree(html);
   });
 
   it("lost or replayed state is expired: bounded log, no exchange attempted", async () => {
     const { env: e } = isolatedJoin();
-    const logs = captureLogs();
+    const logs = captureDiagnosticStream();
     const calls = stubFetch(() => new Response("{}", { status: 200 }));
     const res = await app.request("/join/callback?code=abc&state=forged", {}, e);
     expect(res.status).toBe(200);
     expect(await res.text()).toContain("Join link expired");
-    expect(
-      logs.filter((l) => JSON.stringify(l.args).includes("join journey"))[0]!.args[1],
-    ).toMatchObject({
+    expect(recordsFor(logs, JOIN_LOG)[0]!.args[1]).toMatchObject({
       exception: "InvalidState",
       outcome: "expired",
     });
     expect(calls).toHaveLength(0);
-    leakFree(logs);
+    streamClean(logs, JOIN_ROUTE, [JOIN_LOG]);
   });
 });
 
@@ -583,17 +600,19 @@ describe("ordinary login: denial, outage, generic (legacy DiscordLoginTest failu
     expect(html).toContain("You cancelled the Discord sign-in");
     expect(html).not.toContain("did not answer");
     expect(calls).toHaveLength(0); // no exchange is attempted for a consent refusal
-    leakFree(html, logs, res.headers.get("location"));
+    streamClean(logs, LOGIN_ROUTE);
+    leakFree(html, res.headers.get("location"));
   });
 
   it("renders the generic banner for any other OAuth error", async () => {
     const { env: e } = isolatedJoin();
-    const { res } = await loginRoundTrip(
+    const { logs, res } = await loginRoundTrip(
       e,
       () => new Response("{}", { status: 200 }),
       `error=server_error&error_description=${encodeURIComponent(`upstream says ${SECRET}`)}`,
     );
     expect(res.headers.get("location")).toBe("/?n=signin_failed");
+    streamClean(logs, LOGIN_ROUTE);
     leakFree(res.headers.get("location"));
   });
 
@@ -601,14 +620,15 @@ describe("ordinary login: denial, outage, generic (legacy DiscordLoginTest failu
     const { env: e } = isolatedJoin();
     const { logs, res } = await loginRoundTrip(e, () => invalidGrant(400));
     expect(res.headers.get("location")).toBe("/?n=signin_failed");
-    const signLine = logs.filter((l) => JSON.stringify(l.args).includes("sign-in failed"));
+    const signLine = recordsFor(logs, LOGIN_LOG);
     expect(signLine).toHaveLength(1);
     expect(signLine[0]!.args[1]).toEqual({
       exception: "DiscordError",
       kind: "expired_grant",
       status: 400,
     });
-    leakFree(logs, res.headers.get("location"));
+    streamClean(logs, LOGIN_ROUTE, [LOGIN_LOG]);
+    leakFree(res.headers.get("location"));
   });
 
   it("outage on login: the unavailable banner says it is on Discord, not you", async () => {
@@ -619,8 +639,9 @@ describe("ordinary login: denial, outage, generic (legacy DiscordLoginTest failu
     const html = await home.text();
     expect(html).toContain("Discord did not answer just now");
     expect(html).toContain("This is on Discord, not you");
-    expect(logs.filter((l) => JSON.stringify(l.args).includes("sign-in failed"))).toHaveLength(1);
-    leakFree(html, logs);
+    expect(recordsFor(logs, LOGIN_LOG)).toHaveLength(1);
+    streamClean(logs, LOGIN_ROUTE, [LOGIN_LOG]);
+    leakFree(html);
   });
 
   it("transport failure on login: unavailable banner, token dropped from the log", async () => {
@@ -629,7 +650,8 @@ describe("ordinary login: denial, outage, generic (legacy DiscordLoginTest failu
       throw new TypeError(`failed sending ${TOK}`);
     });
     expect(res.headers.get("location")).toBe("/?n=signin_unavailable");
-    leakFree(logs, res.headers.get("location"));
+    streamClean(logs, LOGIN_ROUTE, [LOGIN_LOG]);
+    leakFree(res.headers.get("location"));
   });
 });
 
@@ -640,7 +662,7 @@ describe("adjacent auth log paths stay bounded", () => {
       throw new Error(`insert failed: ${TOK}`);
     }) as unknown as Sql;
     const e = { ...env, SESSION_STORE: store, ROSTER_STORE: throwingRoster } as Env;
-    const logs = captureLogs();
+    const logs = captureDiagnosticStream();
     const calls = stubSignInDiscord(TOK, 201);
     const start = await app.request("/auth/discord", {}, e);
     const state = new URL(start.headers.get("location")!).searchParams.get("state")!;
@@ -653,10 +675,62 @@ describe("adjacent auth log paths stay bounded", () => {
     );
     expect(res.headers.get("location")).toBe("/?n=joined"); // roster failure never blocks sign-in
     expect(calls.some((c) => c.method === "PUT" && c.url.includes("/members/42"))).toBe(true);
-    const rosterLine = logs.filter((l) => JSON.stringify(l.args).includes("roster upsert failed"));
+    const rosterLine = recordsFor(logs, "roster upsert failed");
     expect(rosterLine).toHaveLength(1);
-    expect(rosterLine[0]!.args[1]).toEqual({ user: "42", exception: "Error" });
-    leakFree(logs, res.headers.getSetCookie());
+    expect(rosterLine[0]!.args[1]).toEqual({
+      request_id: res.headers.get("x-request-id"),
+      exception: "Error",
+    });
+    streamClean(logs, LOGIN_ROUTE, ["roster upsert failed"]);
+    leakFree(res.headers.getSetCookie());
+  });
+
+  it("prior session sweep failure: sign-in completes, the log carries request_id and no Discord ID", async () => {
+    const store = createMemorySessionStore();
+    (store as unknown as { revokeUserSessions: () => Promise<never> }).revokeUserSessions =
+      async () => {
+        throw new Error(`sweep failed ${TOK}`);
+      };
+    const e = { ...env, SESSION_STORE: store } as Env;
+    const logs = captureDiagnosticStream();
+    stubSignInDiscord();
+    const start = await app.request("/auth/discord", {}, e);
+    const state = new URL(start.headers.get("location")!).searchParams.get("state")!;
+    const res = await app.request(
+      `/auth/discord/callback?code=abc&state=${state}`,
+      { headers: { cookie: cookiesFrom(start) } },
+      e,
+    );
+    expect(res.headers.get("location")).toBe("/?n=joined");
+    expect(res.headers.getSetCookie().join("\n")).toContain("__Host-two_session=");
+    const sweepLine = recordsFor(logs, "prior session sweep failed");
+    expect(sweepLine).toHaveLength(1);
+    expect(sweepLine[0]!.args[1]).toEqual({
+      request_id: res.headers.get("x-request-id"),
+      exception: "Error",
+    });
+    streamClean(logs, LOGIN_ROUTE, ["prior session sweep failed"]);
+    leakFree(res.headers.getSetCookie());
+  });
+
+  it("guild auto-join failure: sign-in completes and the log carries request_id, never the Discord ID", async () => {
+    const store = createMemorySessionStore();
+    const e = { ...env, SESSION_STORE: store } as Env;
+    const logs = captureDiagnosticStream();
+    stubSignInDiscord(TOK, 500);
+    const start = await app.request("/auth/discord", {}, e);
+    const state = new URL(start.headers.get("location")!).searchParams.get("state")!;
+    const res = await app.request(
+      `/auth/discord/callback?code=abc&state=${state}`,
+      { headers: { cookie: cookiesFrom(start) } },
+      e,
+    );
+    expect(res.headers.getSetCookie().join("\n")).toContain("__Host-two_session=");
+    const joinLine = recordsFor(logs, "guild auto-join failed");
+    expect(joinLine).toHaveLength(1);
+    expect(joinLine[0]!.args[1]).toEqual({ request_id: res.headers.get("x-request-id") });
+    streamClean(logs, LOGIN_ROUTE, ["guild auto-join failed"]);
+    leakFree(res.headers.getSetCookie(), res.headers.get("location"));
   });
 
   it("profiles session gate: a store failure answers 503 and logs the class only", async () => {
@@ -681,7 +755,7 @@ describe("adjacent auth log paths stay bounded", () => {
     (throwing as unknown as { get: () => Promise<never> }).get = async () => {
       throw new Error(`connect ECONNREFUSED postgres://bot:${SECRET}@db.internal:5432/two`);
     };
-    const logs = captureLogs();
+    const logs = captureDiagnosticStream();
     const res = await app.request("/profile", { headers: { cookie } }, {
       ...env,
       SESSION_STORE: throwing,
@@ -695,11 +769,9 @@ describe("adjacent auth log paths stay bounded", () => {
     expect(body).toContain('<a class="brand" href="/"');
     expect(body).not.toMatch(/ECONNREFUSED|postgres:\/\/|db\.internal/);
     expect(body).not.toContain(SECRET);
-    const gateLine = logs.filter((l) =>
-      JSON.stringify(l.args).includes("could not resolve the session"),
-    );
+    const gateLine = recordsFor(logs, "profiles could not resolve the session; refusing.");
     expect(gateLine).toHaveLength(1);
     expect(gateLine[0]!.args[1]).toEqual({ exception: "Error" });
-    leakFree(logs);
+    streamClean(logs, "/profile", ["profiles could not resolve the session; refusing."]);
   });
 });

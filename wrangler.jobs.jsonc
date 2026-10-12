@@ -1,12 +1,14 @@
-// two-web-jobs: queue consumers + cron triggers only, no fetch handler (TOG-12247 spike).
-// Shares src/db and the domain modules with the web front; one wrangler config per Worker.
+// two-web-jobs: queue consumers + cron triggers only, no fetch handler (TOG-12247 spike,
+// staging handoff). Shares src/db and the domain modules with the web
+// front; one wrangler config per Worker.
 //
-// NOT deployed at top level yet. A queue has exactly one consumer, and wrangler.jsonc
-// (two-web-next) still owns two-sync-event / two-internal-action plus the crons. The
-// cutover PR moves the `consumers` and `triggers` blocks from wrangler.jsonc into this
-// top level in one change; until then the top level only produces, never consumes, so
-// an accidental deploy cannot steal staging's consumers or double-run its crons.
-// test/jobs-worker-config.test.ts pins both properties.
+// Staging (top level) consumes two-sync-event / two-internal-action and owns
+// both crons; wrangler.jsonc (two-web-next) only produces after the handoff.
+// A queue has exactly one consumer and a cron exactly one owner:
+// test/jobs-worker-config.test.ts pins the split. Preview envs stay on their
+// own queues. Deploy order is tail, then web, then detach, then jobs: the
+// jobs deploy attaches its consumers, so it must run after the web consumers
+// are detached (see .github/workflows/deploy.yml and docs/jobs-handoff.md).
 {
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "two-web-jobs",
@@ -14,13 +16,37 @@
   "compatibility_date": "2026-09-29",
   "compatibility_flags": ["nodejs_compat"],
   "observability": { "enabled": true },
+  // Staging Neon is eu-central-1 and every statement is a round trip through
+  // Hyperdrive: run the jobs Worker beside it, like the web Worker.
+  "placement": { "region": "aws:eu-central-1" },
+  // Page jobs traces through the same staging Tail pager as the web Worker.
+  // Wrangler never inherits this into env.preview (which pages nothing).
+  "tail_consumers": [{ "service": "two-web-next-alerts" }],
+  // Preserve operator-set vars across redeploys; secrets are retained by
+  // Wrangler separately and never live in this file.
+  "keep_vars": true,
   "workers_dev": false,
   "preview_urls": false,
-  "triggers": { "crons": [] },
+  "triggers": { "crons": ["*/10 * * * *", "0 0 * * *"] },
   "queues": {
     "producers": [
       { "queue": "two-sync-event", "binding": "SYNC_EVENT_QUEUE" },
       { "queue": "two-internal-action", "binding": "INTERNAL_ACTION_QUEUE" }
+    ],
+    // Terminal outcomes are acked by the consumer; max_retries is only a backstop above the largest `tries`.
+    "consumers": [
+      {
+        "queue": "two-sync-event",
+        "max_retries": 10,
+        "max_batch_size": 10,
+        "max_batch_timeout": 5
+      },
+      {
+        "queue": "two-internal-action",
+        "max_retries": 10,
+        "max_batch_size": 10,
+        "max_batch_timeout": 5
+      }
     ]
   },
   "hyperdrive": [{ "binding": "DB", "id": "1d48a54abd3444009b7067c03c63ff9f" }],

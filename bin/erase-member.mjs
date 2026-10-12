@@ -4,20 +4,21 @@
 // member's rows in one transaction across users, profiles, rsvps,
 // web_sessions (signs them out everywhere) and join_attempts.
 //
-//   node --import ./bin/ts-hook.mjs bin/erase-member.mjs --discord-id=<snowflake> [--dry-run | --apply] [--target production]
+//   node --import ./bin/ts-hook.mjs bin/erase-member.mjs --discord-id=<snowflake> [--dry-run | --apply] [--target staging|production]
 //
 // Dry-run is the default: print per-table row counts only, never row
 // contents. --apply deletes. DATABASE_URL is env-only; never argv or logs.
-// A production-looking connection string is refused unless
-// `--target production` is passed explicitly. Exit 0 on success,
-// 2 on usage/config/refusal (including a malformed id), 1 on
-// driver/transaction failure. Driver console output is discarded.
+// A host outside agent-testdb and loopback needs `--target staging` or
+// `--target production`; a production-looking URL needs `--target production`.
+// Remote connections need sslmode=verify-full or sslrootcert=system.
+// Exit 0 on success, 2 on usage/config/refusal (including a malformed id),
+// 1 on driver/transaction failure. Driver console output is discarded.
 import { pathToFileURL } from "node:url";
 import { parseDatabaseUrl } from "./db-ping-core.mjs";
 import { assertDiscordId, eraseMember, InvalidMemberIdError } from "../src/member-erasure.ts";
 
 const USAGE =
-  "Usage: node --import ./bin/ts-hook.mjs bin/erase-member.mjs --discord-id=<snowflake> [--dry-run | --apply] [--target production]. Connection settings come from env only.";
+  "Usage: node --import ./bin/ts-hook.mjs bin/erase-member.mjs --discord-id=<snowflake> [--dry-run | --apply] [--target staging|production]. Connection settings come from env only.";
 
 export function parseEraseArgs(args) {
   if (!Array.isArray(args)) throw new Error(USAGE);
@@ -87,33 +88,49 @@ export function isProductionDatabaseUrl(raw) {
   return false;
 }
 
+const LOCAL_HOSTS = new Set(["agent-testdb", "localhost", "127.0.0.1", "::1"]);
+const TLS_OVERRIDE_REFUSAL = "Refusing: NODE_TLS_REJECT_UNAUTHORIZED=0 disables TLS verification.";
+
 export function validateEraseEnvironment(env, target) {
   const raw = env.DATABASE_URL;
+  let endpoint;
   try {
-    parseDatabaseUrl(raw);
+    endpoint = parseDatabaseUrl(raw);
   } catch {
     throw new Error("Refusing: DATABASE_URL is missing or invalid.");
   }
+  if (env.NODE_TLS_REJECT_UNAUTHORIZED === "0") throw new Error(TLS_OVERRIDE_REFUSAL);
   if (isProductionDatabaseUrl(raw) && target !== "production") {
     throw new Error("Refusing: production database without --target production.");
   }
+  if (LOCAL_HOSTS.has(endpoint.host[0].toLowerCase().replace(/\.$/, "")))
+    return { databaseUrl: raw };
+  if (target !== "staging" && target !== "production")
+    throw new Error("Refusing: remote database needs --target staging or --target production.");
+  const url = new URL(raw);
+  const mode = url.searchParams.get("sslmode");
+  const verified = mode === "verify-full" || (mode === null && url.searchParams.has("sslrootcert"));
+  if (!verified)
+    throw new Error(
+      "Refusing: remote database must use sslmode=verify-full or sslrootcert=system.",
+    );
   return { databaseUrl: raw };
 }
 
 export function createEraseClient(postgres, raw) {
-  const url = new URL(raw);
-  return postgres(raw, {
+  const endpoint = parseDatabaseUrl(raw);
+  const host = endpoint.host[0].toLowerCase().replace(/\.$/, "");
+  if (!LOCAL_HOSTS.has(host) && endpoint.ssl !== "verify-full")
+    throw new Error("Refusing: remote client requires verify-full TLS.");
+  // Only parsed endpoint fields reach the driver: query parameters such as
+  // sslrootcert must never become server startup parameters (Postgres 42704).
+  return postgres({
+    ...endpoint,
+    host: [host],
     max: 1,
     connect_timeout: 10,
     debug: false,
     onnotice: () => {},
-    host: url.hostname.toLowerCase().replace(/\.$/, ""),
-    database: decodeURIComponent(url.pathname.slice(1)),
-    username: decodeURIComponent(url.username),
-    port: Number(url.port || 5432),
-    // Empty passwords and omitted ports must not fall back to PG* credentials.
-    password: () => decodeURIComponent(url.password),
-    ssl: url.searchParams.get("sslmode") || (url.hostname === "agent-testdb" ? false : "require"),
     target_session_attrs: "read-write",
     connection: { timezone: "UTC", search_path: "public", application_name: "erase-member" },
   });
@@ -138,6 +155,8 @@ export async function main(args = process.argv.slice(2), env = process.env) {
   }
   let target;
   try {
+    // Node reads the live process environment at connect time, not the `env` argument.
+    if (process.env.NODE_TLS_REJECT_UNAUTHORIZED === "0") throw new Error(TLS_OVERRIDE_REFUSAL);
     target = validateEraseEnvironment(env, parsed.target);
   } catch (error) {
     console.error(`erase-member: ${error instanceof Error ? error.message : "refusing."}`);
@@ -151,8 +170,9 @@ export async function main(args = process.argv.slice(2), env = process.env) {
   for (const method of ["log", "info", "warn", "error", "debug", "trace"])
     console[method] = () => {};
   const { default: postgres } = await import("postgres");
-  const sql = createEraseClient(postgres, target.databaseUrl);
+  let sql;
   try {
+    sql = createEraseClient(postgres, target.databaseUrl);
     const counts = await eraseMember(sql, parsed.discordId, { dryRun: parsed.mode === "dry-run" });
     // Counts only: never row contents, never the connection string.
     process.stdout.write(`${JSON.stringify({ mode: parsed.mode, counts })}\n`);
@@ -167,7 +187,7 @@ export async function main(args = process.argv.slice(2), env = process.env) {
     );
     return 1;
   } finally {
-    await sql.end({ timeout: 5 }).catch(() => {});
+    await sql?.end({ timeout: 5 }).catch(() => {});
   }
 }
 

@@ -6,7 +6,8 @@
 // a fetch cannot cancel a server transaction, so conflicting writes never overlap.
 // Optimistic saving in flight (`aria-busy` on the mount, clicked control
 // disabled with the saving/removing copy); on success the nodes are patched
-// in place and focus moves to the new state (board-6956), then a
+// in place and focus moves to the new state (board-6956) unless the member
+// has moved focus or pressed outside the widget since the write started, then a
 // `going-count-updated` CustomEvent `{eventKey, viewerState}` is broadcast
 // for the going-count badge — the button re-reads nothing itself.
 // Throttle (429) shows the CM-frozen wait copy (board-7976) in `role="status"`
@@ -136,6 +137,18 @@
 
   var controls = root.querySelector("[data-rsvp-form]") || root;
   var inflight = null;
+  // Outcome focus belongs to the activation that started the write; the member's
+  // outside focus or press ends it, and moving back into the widget does not revive it.
+  var focusOwned = false;
+
+  function releaseFocusOnOutsideInteraction(ev) {
+    if (focusOwned && ev.target && !root.contains(ev.target)) focusOwned = false;
+  }
+  document.addEventListener("focusin", releaseFocusOnOutsideInteraction, true);
+  document.addEventListener("pointerdown", releaseFocusOnOutsideInteraction, true);
+  // Feedback deadline only: it cannot cancel or determine the server write.
+  // Unknown outcomes stay locked until the member refreshes the SSR page.
+  var FEEDBACK_DEADLINE_MS = 8000;
 
   function clearOutcome() {
     [
@@ -201,6 +214,7 @@
   }
 
   function focusTestid(testids) {
+    if (!focusOwned) return false;
     for (var i = 0; i < testids.length; i++) {
       var n = root.querySelector('[data-testid="' + testids[i] + '"]');
       if (n) {
@@ -557,6 +571,14 @@
     clearOutcome();
     var controller = {};
     inflight = controller;
+    focusOwned = true;
+    var watchdog = setTimeout(function () {
+      if (inflight !== controller) return;
+      // Revoke write ownership before rendering recovery so late headers/body
+      // and buffered capacity snapshots cannot guess or replace its outcome.
+      inflight = null;
+      unknownOutcome(button);
+    }, FEEDBACK_DEADLINE_MS);
     // A waitlisted member clicking the claim control: if the locked server
     // keeps them waitlisted, a rival took the freed seat first.
     var claimingFromWaitlist =
@@ -721,7 +743,7 @@
                 going.textContent = COPY.waitlistJoin;
               }
               if (position) focusTestid([TESTID.waitlistPosition]);
-              else if (old && old.focus) old.focus();
+              else if (focusOwned && old && old.focus) old.focus();
             };
             var domRaw = root.getAttribute("data-capacity");
             var domNum = domRaw === null || domRaw === "" ? NaN : Number(domRaw);
@@ -759,8 +781,10 @@
       )
       .finally(function () {
         // Keep ownership through body parsing; header arrival is not completion.
+        clearTimeout(watchdog);
         if (inflight === controller) {
           inflight = null;
+          focusOwned = false;
           var snapshot = pendingCapacity;
           pendingCapacity = null;
           // Only a refused write can reuse the earlier accepted allocation.

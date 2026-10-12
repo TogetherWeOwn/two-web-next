@@ -25,14 +25,25 @@ const ScheduleShell: FC<
     robots?: string;
     member?: boolean;
     loginReturnTo?: string | null;
+    markdownAlternate?: string;
   }>
-> = ({ title, canonical, description, robots, member, loginReturnTo, children }) => (
+> = ({
+  title,
+  canonical,
+  description,
+  robots,
+  member,
+  loginReturnTo,
+  markdownAlternate,
+  children,
+}) => (
   <Layout
     title={`${title} — Together We Own`}
     canonical={canonical}
     shareDescription={description}
     robots={robots}
     theme="schedule"
+    markdownAlternate={markdownAlternate}
   >
     <SiteHeader active="events" loginReturnTo={loginReturnTo}>
       {member ? (
@@ -80,8 +91,21 @@ const EventDetailShell: FC<
     session?: Session | null;
     loginReturnTo?: string | null;
     account?: boolean;
+    markdownAlternate?: string;
+    siteJsonLd?: string;
   }>
-> = ({ title, canonical, robots, description, session, loginReturnTo, account, children }) => (
+> = ({
+  title,
+  canonical,
+  robots,
+  description,
+  session,
+  loginReturnTo,
+  account,
+  markdownAlternate,
+  siteJsonLd,
+  children,
+}) => (
   <Layout
     title={`${title} — Together We Own`}
     canonical={canonical}
@@ -89,6 +113,7 @@ const EventDetailShell: FC<
     shareDescription={description}
     robots={robots}
     theme="event"
+    markdownAlternate={markdownAlternate}
   >
     <SiteHeader session={session} active="event" loginReturnTo={loginReturnTo} account={account} />
     <main id="main" tabindex={-1}>
@@ -96,6 +121,13 @@ const EventDetailShell: FC<
         <a href="/events">← All events</a>
       </nav>
       {children}
+      {siteJsonLd ? (
+        <script
+          type="application/ld+json"
+          data-testid="site-jsonld"
+          dangerouslySetInnerHTML={{ __html: siteJsonLd }}
+        />
+      ) : null}
     </main>
     <SiteFooter />
   </Layout>

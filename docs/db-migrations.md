@@ -18,15 +18,15 @@ bot rewrite, framework ADR pending).
 | Bot path | Container → direct `postgres` driver (no Hyperdrive) → staging Neon pooled URL / production PlanetScale `5432` direct URL |
 | Migrations | direct (non-pooled) URL on port `5432`; pooled endpoints can break DDL transactionally. Staging reads `NEON_STAGING_DATABASE_URL`; production reads `PRODUCTION_DATABASE_URL` (PlanetScale direct `<id>.pg.psdb.cloud:5432`, never `6432`) |
 
-Status 2026-09-29: Neon **not yet provisioned** (host step:
-`Operator:` card under [TOG-9679](/TOG/issues/TOG-9679)). R2 bucket
-`two-web-next-backups` **exists, EU-jurisdiction-pinned** (jurisdiction
-`eu` / location `EEUR`, verified 2026-09-29 on the host track
-[TOG-9836](/TOG/issues/TOG-9836); empty, no data uploaded). The legacy
-`paperclip-backups` bucket (jurisdiction `default` / location `ENAM`)
-is explicitly out of scope for member-data dumps per the CISO condition
-[TOG-9837](/TOG/issues/TOG-9837). Until Neon lands, all DB tests run
-against `agent-testdb` — never prod or staging databases.
+Repository configuration routes the Worker through the `DB`
+Hyperdrive binding ([Wrangler config](../wrangler.jsonc)).
+The [backup workflow](../.github/workflows/neon-backup.yml) schedules nightly
+staging backups using `NEON_STAGING_DATABASE_URL`; an unset target secret skips the backup.
+The [backup script](../bin/neon-backup.sh) defaults to `two-web-next-backups`
+with request jurisdiction `eu`. These defaults do not prove the live bucket's
+jurisdiction or contents, or that a backup has succeeded.
+Tests use only disposable `agent-testdb` databases or the CI Postgres service,
+never staging or production ([safe-test rules](../README.md#database-and-migrations)).
 
 ## Migration numbering (reserved)
 
@@ -189,9 +189,10 @@ yet provisioned; this PR changes no live role or credential):
 
 ## Backups
 
-Nightly `pg_dump -Fc` of the Neon `staging` branch (and the PlanetScale
-`two-production` branch after cutover) to R2 `two-web-next-backups`
-(EU-jurisdiction-pinned, jurisdiction immutable after creation):
+Nightly `pg_dump -Fc` of the Neon `staging` branch to R2 `two-web-next-backups`
+(EU-jurisdiction-pinned, jurisdiction immutable after creation). Staging is
+dumped nightly by the schedule; production is dumped only by manual dispatch
+with `target: production`, behind the `production` Environment:
 
 - Script: `bin/neon-backup.sh` (`backup` | `promote-weekly` |
   `rotate` | `check`). Connection comes from `DATABASE_URL` env only —
@@ -202,17 +203,25 @@ Nightly `pg_dump -Fc` of the Neon `staging` branch (and the PlanetScale
 - `paperclip-backups` is explicitly out of scope for member-data dumps
   (jurisdiction `default` / location `ENAM`; must never receive them).
 - Schedule: `.github/workflows/neon-backup.yml` — nightly `03:17Z` cron
-  + manual `workflow_dispatch`. Staging reads repo secret
-  `NEON_STAGING_DATABASE_URL` (operator-provisioned); the production target
-  reads `PRODUCTION_BACKUP_DATABASE_URL` (a read-only role that inherits
-  `pg_read_all_data` and no write, DDL or admin role, on the PlanetScale direct
-  endpoint, same `pg_dump -Fc` path — direct `5432`, never the pooled `6432`
-  port).
+  binds `environment: ${{ inputs.target || 'staging' }}`, so scheduled runs
+  (which carry no inputs) always dump staging. A production dump is a manual
+  `workflow_dispatch` with `target: production`, which binds the `production`
+  Environment and waits on its required reviewers and main-only branch policy.
+  Staging reads repo secret `NEON_STAGING_DATABASE_URL` (operator-provisioned);
+  the production target reads `PRODUCTION_BACKUP_DATABASE_URL` (a read-only role
+  that inherits `pg_read_all_data` and no write, DDL or admin role, on the
+  PlanetScale direct endpoint, same `pg_dump -Fc` path — direct `5432`, never
+  the pooled `6432` port).
   Also needs `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID`.
-- Layout: `neon-staging/neon-<UTC>.dump` (staging) and
-  `neon-production/neon-<UTC>.dump` (production after cutover); weeklies are
-  `neon-<UTC>-weekly-<UTC>.dump` copies. Retention: newest 7 dailies +
-  newest 4 weeklies (mirrors the `two-web` `pg-backup.sh` policy).
+- Layout: `neon/<branch>-<branch>-<UTC>.dump` dailies (for example
+  `neon/staging-staging-<UTC>.dump`); weeklies are
+  `<daily-without-.dump>-weekly-<UTC>.dump` copies; the manifest is
+  `neon/<branch>-<branch>/MANIFEST.txt` (for example
+  `neon/staging-staging/MANIFEST.txt`). Retention on scheduled runs
+  (staging): newest 7 dailies + newest 4 weeklies (mirrors the `two-web`
+  `pg-backup.sh` policy). Manual dispatches skip the promote-weekly +
+  rotate step, so a production dispatch only backs up and checks — its
+  archives are never promoted or pruned and need an approved manual rotate.
 - Proof: every backup re-lists its key after upload; restore is proved
   by restoring into a scratch database and comparing row counts
   table-by-table (same bar as `two-web` `restore-proof`).

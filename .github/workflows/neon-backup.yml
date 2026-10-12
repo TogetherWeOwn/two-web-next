@@ -1,7 +1,8 @@
 name: neon-backup
 
-# Nightly pg_dump of the Neon staging branch (and the PlanetScale
-# production branch after cutover) to R2 `two-web-next-backups`.
+# Nightly pg_dump of the Neon staging branch to R2 `two-web-next-backups`.
+# Staging is dumped nightly by the schedule; production is dumped only by manual
+# dispatch with `target: production`, behind the `production` Environment.
 # See docs/db-migrations.md and bin/neon-backup.sh.
 # CISO condition (TOG-9837): member-data dumps land ONLY in the
 # EU-jurisdiction-pinned `two-web-next-backups` bucket (every wrangler r2
@@ -81,7 +82,7 @@ jobs:
             echo "Backup target $TARGET not provisioned yet; skipping."
           fi
 
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         if: steps.probe.outputs.ready == 'true'
         with:
           node-version: 24

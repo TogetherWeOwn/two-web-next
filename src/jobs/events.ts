@@ -13,6 +13,7 @@ type AttemptRow = {
   state: SyncAttempt["state"];
   request_attempts: number;
   next_attempt_at: Date | null;
+  discord_event_id?: string | null;
 } & (
   | { action: "event.upsert"; payload: EventUpsert }
   | { action: "event.cancel"; payload: { eventKey: string } }
@@ -27,6 +28,9 @@ function attemptFrom(row: AttemptRow): SyncAttempt {
     state: row.state,
     requestAttempts: row.request_attempts,
     nextAttemptAt: row.next_attempt_at,
+    // Absent on pre-mirror rows (hermetic doubles leave it undefined, which
+    // the consumer treats as mirrored to preserve the bot path).
+    ...("discord_event_id" in row ? { discordEventId: row.discord_event_id ?? null } : {}),
   };
   if (row.action === "event.cancel")
     return { ...base, action: "event.cancel", payload: row.payload };
@@ -99,7 +103,7 @@ export function pgEventStore(
   return {
     async prepareSync(eventKey, idempotencyKey, mirroredAt) {
       const [cached] =
-        await sql`select a.* from event_sync_attempts a join events e on e.id = a.event_id
+        await sql`select a.*, e.discord_event_id from event_sync_attempts a join events e on e.id = a.event_id
         where a.idempotency_key = ${idempotencyKey}::uuid and e.event_key = ${eventKey}`;
       if (cached) return attemptFrom(cached);
       // One atomic snapshot of status/payload/revision. A partial unique index
@@ -121,7 +125,7 @@ export function pgEventStore(
           (status = 'published' and (discord_event_id is null or exists (
             select 1 from rsvps where rsvps.event_id = events.id and synced_to_discord_at is null
           ))))
-        on conflict do nothing returning *`;
+        on conflict do nothing returning *, (select discord_event_id from events where id = event_id) as discord_event_id`;
       if (created) return attemptFrom(created);
       // Clean rows need no further bot call even if redundant jobs were queued
       // while an older attempt was finishing. Dirty conflicts wait, never ACK.
@@ -130,12 +134,14 @@ export function pgEventStore(
     async completeSync(attempt, discordEventId) {
       // Settlement and revision acknowledgement commit together. Only the read
       // revision is clean; later event edits/cancellations remain in the outbox.
+      // Null keeps the stored discord_event_id: a never-mirrored cancel resolves
+      // its revision and stamps RSVPs locally without a bot revision.
       await sql`with settled as (
         update event_sync_attempts set state = 'succeeded'
         where idempotency_key = ${attempt.idempotencyKey}::uuid and state = 'pending'
         returning event_id, revision, mirrored_at
       ), mirrored as (
-        update events set discord_event_id = ${discordEventId},
+        update events set discord_event_id = coalesce(${discordEventId}, discord_event_id),
           synced_revision = greatest(synced_revision, settled.revision)
         from settled where events.id = settled.event_id returning events.id, settled.mirrored_at
       ) update rsvps set synced_to_discord_at = mirrored.mirrored_at
@@ -149,7 +155,7 @@ export function pgEventStore(
       // An ineligible unattempted snapshot retires without consuming a request
       // or acknowledging the event. Attempted replay keeps its payload/key.
       const [row] = await sql`with candidate as (
-        select a.idempotency_key, a.request_attempts = 0 and not (
+        select a.idempotency_key, e.discord_event_id, a.request_attempts = 0 and not (
           e.status in ('published', 'cancelled') and e.sync_revision = a.revision
           and not exists (select 1 from event_sync_attempts rejected
             where rejected.event_id = e.id and rejected.revision = e.sync_revision and rejected.state = 'failed')
@@ -166,7 +172,7 @@ export function pgEventStore(
           request_attempts = a.request_attempts + case when candidate.obsolete then 0 else 1 end,
           next_attempt_at = null
         from candidate where a.idempotency_key = candidate.idempotency_key
-        returning a.*`;
+        returning a.*, candidate.discord_event_id`;
       return row ? attemptFrom(row) : null;
     },
     async deferSync(attempt, nextAttemptAt) {
@@ -195,7 +201,7 @@ export function pgEventStore(
     },
     async pendingSync(eventKey) {
       const [row] =
-        await sql`select a.*${readMarker()} from event_sync_attempts a join events e on e.id = a.event_id
+        await sql`select a.*, e.discord_event_id${readMarker()} from event_sync_attempts a join events e on e.id = a.event_id
         where e.event_key = ${eventKey} and a.state = 'pending'`;
       onSourceRead?.({
         statement: "pending_sync",

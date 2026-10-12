@@ -13,6 +13,7 @@ import { activityLog, events } from "../src/db/admin-schema";
 import { databaseOptions } from "../src/db/connection";
 import type { Env } from "../src/env";
 import type { QueueMessage } from "../src/jobs/types";
+import { uniqueKey } from "../src/jobs/sync-event";
 import { createMemorySessionStore, hashToken, newSessionToken } from "../src/sessions";
 import {
   createMemberDataFixture,
@@ -124,6 +125,7 @@ describe.skipIf(!process.env.DATABASE_URL)(
           startsAt: new Date("2099-01-01T20:00:00Z"),
           endsAt: new Date("2099-01-01T22:00:00Z"),
           timezone: "UTC",
+          location: "Voice",
           status: "draft",
           ...over,
         })
@@ -241,6 +243,114 @@ describe.skipIf(!process.env.DATABASE_URL)(
       expect(sent).toHaveLength(1);
       expect(sent[0]).toMatchObject({ kind: "sync-event", eventKey: row.eventKey });
       expect(await fixture.db.select().from(activityLog)).toHaveLength(1);
+    });
+
+    it("moderator control: cancel moves published to cancelled with a write-back", async () => {
+      const row = await seed({ status: "published" });
+      const res = await app.request(
+        `/events/${row.eventKey}/cancel`,
+        {
+          method: "POST",
+          headers: {
+            cookie: await cookie(true),
+            origin: APP_URL,
+            "content-type": "application/json",
+          },
+        },
+        env,
+      );
+      expect(res.status).toBe(200);
+      expect(await res.json()).toMatchObject({
+        data: { event_key: row.eventKey, status: "cancelled" },
+      });
+      expect((await getEvent(fixture.db, row.eventKey))?.status).toBe("cancelled");
+      expect(sent).toHaveLength(1);
+      expect(sent[0]).toMatchObject({ kind: "sync-event", eventKey: row.eventKey });
+      expect(sent[0]?.jobId).toMatch(/^[0-9a-f-]{36}$/i);
+      expect(await fixture.client`select job_id, key from queue_jobs`).toEqual([
+        { job_id: sent[0]?.jobId, key: uniqueKey(row.eventKey) },
+      ]);
+      expect(await fixture.db.select().from(activityLog)).toHaveLength(1);
+    });
+
+    it("moderator control: reopen restores rsvp_open with a write-back", async () => {
+      const row = await seed({ status: "published", rsvpOpen: false });
+      const res = await app.request(
+        `/events/${row.eventKey}/rsvp-reopen`,
+        {
+          method: "POST",
+          headers: {
+            cookie: await cookie(true),
+            origin: APP_URL,
+            "content-type": "application/json",
+          },
+        },
+        env,
+      );
+      expect(res.status).toBe(200);
+      expect(await res.json()).toMatchObject({
+        data: { event_key: row.eventKey, rsvp_open: true },
+      });
+      expect((await getEvent(fixture.db, row.eventKey))?.rsvpOpen).toBe(true);
+      expect(sent).toHaveLength(1);
+      expect(sent[0]).toMatchObject({ kind: "sync-event", eventKey: row.eventKey });
+      expect(sent[0]?.jobId).toMatch(/^[0-9a-f-]{36}$/i);
+      expect(await fixture.client`select job_id, key from queue_jobs`).toEqual([
+        { job_id: sent[0]?.jobId, key: uniqueKey(row.eventKey) },
+      ]);
+      expect(await fixture.db.select().from(activityLog)).toHaveLength(1);
+    });
+
+    it("refused cancel on a cancelled event dispatches nothing", async () => {
+      const row = await seed({ status: "cancelled" });
+      const before = await getEvent(fixture.db, row.eventKey);
+      const res = await app.request(
+        `/events/${row.eventKey}/cancel`,
+        {
+          method: "POST",
+          headers: {
+            cookie: await cookie(true),
+            origin: APP_URL,
+            "content-type": "application/json",
+          },
+        },
+        env,
+      );
+      expect(res.status).toBe(422);
+      expect(await res.json()).toMatchObject({
+        error: "invalid",
+        fields: { status: expect.stringContaining("stays cancelled") },
+      });
+      expect(await getEvent(fixture.db, row.eventKey)).toEqual(before);
+      expect(await fixture.db.select().from(activityLog)).toEqual([]);
+      expect(sent).toEqual([]);
+      expect(await fixture.client`select job_id from queue_jobs`).toEqual([]);
+    });
+
+    it("refused reopen on a draft dispatches nothing", async () => {
+      const row = await seed({ status: "draft" });
+      const before = await getEvent(fixture.db, row.eventKey);
+      const res = await app.request(
+        `/events/${row.eventKey}/rsvp-reopen`,
+        {
+          method: "POST",
+          headers: {
+            cookie: await cookie(true),
+            origin: APP_URL,
+            "content-type": "application/json",
+          },
+        },
+        env,
+      );
+      expect(res.status).toBe(422);
+      expect(await res.json()).toMatchObject({
+        error: "invalid",
+        fields: { rsvp_open: expect.stringContaining("Only published events") },
+      });
+      expect(await getEvent(fixture.db, row.eventKey)).toEqual(before);
+      expect(await fixture.db.select().from(activityLog)).toEqual([]);
+      expect(sent).toEqual([]);
+      expect(await fixture.client`select job_id from queue_jobs`).toEqual([]);
     });
 
     it("forwards declared action posts without a local helper", async () => {

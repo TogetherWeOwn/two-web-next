@@ -5,12 +5,12 @@ import { describe, expect, it } from "vitest";
 // A required check whose workflow never starts leaves the PR pending forever,
 // and a skipped job counts as passing. These pins keep CONTRIBUTING, the job
 // names the rulesets match on, the unfiltered pull_request triggers and the
-// always-run aggregator guards in agreement.
+// aggregator guards (which run unless their own run was cancelled) in agreement.
 const dir = ".github/workflows";
 const workflows = readdirSync(dir)
   .filter((name) => name.endsWith(".yml"))
   .map((name) => ({ name, text: readFileSync(join(dir, name), "utf8") }));
-const required = ["check", "gitleaks", "pr-lint"];
+const required = ["ci-ok", "gitleaks", "e2e-ok", "pr-lint"];
 const triggers = (text: string) => text.split(/\non:\n/)[1]?.split(/\n\S/)[0] ?? "";
 // Children of the pull_request trigger: filters (paths, branches) live here.
 const pullRequestBlock = (text: string) =>
@@ -49,12 +49,12 @@ describe("required checks always report", () => {
     },
   );
 
-  it("check runs whatever its dependencies concluded and fails when the audit is not green", () => {
+  it("check runs whatever its dependencies concluded unless its run was cancelled, and fails when the audit is not green", () => {
     const check = job(readFileSync(join(dir, "ci.yml"), "utf8"), "check");
     // More gates may join `needs`; the guard below only relies on these two.
     const needs = check.match(/\n    needs: \[([^\]]*)\]\n/)?.[1]?.split(/,\s*/) ?? [];
     expect(needs).toEqual(expect.arrayContaining(["a11y", "scope"]));
-    expect(check).toMatch(/\n    if: always\(\)\n/);
+    expect(check).toMatch(/\n    if: \$\{\{ !cancelled\(\) \}\}\n/);
     expect(check).toContain('run: test "$A11Y_RESULT" = success');
   });
 
@@ -63,14 +63,12 @@ describe("required checks always report", () => {
     expect(gitleaks).toMatch(/\n    if: \$\{\{ !cancelled\(\) \}\}\n/);
   });
 
-  it("ci-ok aggregates the gated jobs but is not itself required yet", () => {
+  it("ci-ok aggregates the gated jobs", () => {
     const ci = readFileSync(join(dir, "ci.yml"), "utf8");
     const ok = job(ci, "ci-ok");
     expect(ok).toMatch(/\n    needs: \[a11y, lighthouse, bundle-budget, check, scope\]\n/);
-    expect(ok).toMatch(/\n    if: always\(\)\n/);
-    // The ruleset cutover is an OPERATOR step after merge + green probes, so
-    // the required-check bullets above still name exactly check, gitleaks and
-    // pr-lint — while the change-gating section below documents ci-ok.
+    expect(ok).toMatch(/\n    if: \$\{\{ !cancelled\(\) \}\}\n/);
+    // ci-ok is required (ruleset protect-main); the change-gating section documents what it aggregates.
     expect(readFileSync("CONTRIBUTING.md", "utf8")).toContain("### Change-gated CI and `ci-ok`");
   });
 });

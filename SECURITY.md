@@ -16,8 +16,17 @@ contents, or member data. Redact them and name the variable or field instead.
 If you find a live secret in the repository or its history, report it
 privately and do not copy the value.
 
+## Threat Model
+
+See the [TWO Web Next threat model](docs/threat-model.md) for the assets, trust boundaries, abuse cases, and repository evidence considered for this application. It is not a penetration-test report or external review.
+
 ## Supported Versions
 
-Security fixes land on `main` and ship with the next release-please release
-(see [CHANGELOG.md](CHANGELOG.md)). Pre-`1.0.0` versions are pre-production;
-upgrade to the latest tagged release.
+Production at <https://togetherweown.com> serves `main` as promoted by the
+production deploy. Security fixes land on `main` and ship with the next
+production promote, which tags a release (see the GitHub Releases page and
+[docs/releases.md](docs/releases.md)).
+
+We accept reports about the live site and the latest tagged release. The
+latest tag as of 2026-10-12 is `v0.4.0`; a tag can trail what is live, so say
+which one your report concerns.
