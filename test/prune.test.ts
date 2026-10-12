@@ -15,6 +15,7 @@ import {
   MEMBER_ACCESS_LOG_RETENTION_DAYS,
   PRUNE_CRON,
   PRUNE_DELETE_BATCH_SIZE,
+  PRUNE_DELETE_MAX_BATCHES,
 } from "../src/jobs/constants";
 import { pruneModelTables, runScheduled } from "../src/jobs/cron";
 import { pgPruneStores } from "../src/jobs/postgres";
@@ -75,9 +76,90 @@ describe("model:prune windows and sweep (memory, no DB)", () => {
   });
 
   it("prune deletes carry a documented fixed per-statement batch bound", () => {
-    // One daily pass removes at most this many rows per age-pruned table;
-    // repeat passes drain a larger backlog. Sessions sweep stays unbounded.
+    // Each statement removes at most this many rows per age-pruned table;
+    // the pass drains per table up to PRUNE_DELETE_MAX_BATCHES batches and
+    // warns when the cap is hit with rows possibly pending. Sessions sweep
+    // stays unbounded.
     expect(PRUNE_DELETE_BATCH_SIZE).toBe(1000);
+    expect(PRUNE_DELETE_MAX_BATCHES).toBe(20);
+  });
+
+  it("drains a multi-batch backlog in one pass and sums the counts", async () => {
+    const now = new Date("2026-09-30T00:00:00Z");
+    const calls: number[] = [];
+    const stubTable = (returns: number[]) => ({
+      async pruneOlderThan(_cutoff: Date): Promise<number> {
+        calls.push(1);
+        return returns.length > 0 ? returns.shift()! : 0;
+      },
+    });
+    const tables = {
+      agentEventAudits: stubTable([PRUNE_DELETE_BATCH_SIZE, 3]),
+      accessLog: stubTable([PRUNE_DELETE_BATCH_SIZE, 3]),
+      joinAttempts: stubTable([PRUNE_DELETE_BATCH_SIZE, 3]),
+      idempotencyKeys: stubTable([PRUNE_DELETE_BATCH_SIZE, 3]),
+      searchLog: stubTable([PRUNE_DELETE_BATCH_SIZE, 3]),
+    };
+    const stores = {
+      ...tables,
+      sessions: createMemorySessionStore(() => now.getTime()),
+    };
+    const counts = await pruneModelTables(stores, now);
+    expect(counts).toMatchObject({
+      agentEventAudits: PRUNE_DELETE_BATCH_SIZE + 3,
+      accessLog: PRUNE_DELETE_BATCH_SIZE + 3,
+      joinAttempts: PRUNE_DELETE_BATCH_SIZE + 3,
+      idempotencyKeys: PRUNE_DELETE_BATCH_SIZE + 3,
+      searchLog: PRUNE_DELETE_BATCH_SIZE + 3,
+    });
+  });
+
+  it("stops at the per-table batch cap and warns with rows possibly pending", async () => {
+    const now = new Date("2026-09-30T00:00:00Z");
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const info = vi.spyOn(console, "info").mockImplementation(() => {});
+    try {
+      const callCounts = { n: 0 };
+      const endless = {
+        async pruneOlderThan(_cutoff: Date): Promise<number> {
+          callCounts.n++;
+          return PRUNE_DELETE_BATCH_SIZE;
+        },
+      };
+      const stores = {
+        agentEventAudits: endless,
+        accessLog: endless,
+        joinAttempts: endless,
+        idempotencyKeys: endless,
+        searchLog: endless,
+        sessions: createMemorySessionStore(() => now.getTime()),
+      };
+      const counts = await pruneModelTables(stores, now);
+      const perTable = PRUNE_DELETE_BATCH_SIZE * PRUNE_DELETE_MAX_BATCHES;
+      expect(counts).toMatchObject({
+        agentEventAudits: perTable,
+        accessLog: perTable,
+        joinAttempts: perTable,
+        idempotencyKeys: perTable,
+        searchLog: perTable,
+      });
+      // Each of the five tables stopped after exactly the max batches.
+      expect(callCounts.n).toBe(5 * PRUNE_DELETE_MAX_BATCHES);
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(warn.mock.calls[0]![0]).toContain("batch cap");
+      const payload = warn.mock.calls[0]![1] as Record<string, unknown>;
+      expect(payload.cappedTables).toEqual([
+        "agentEventAudits",
+        "accessLog",
+        "joinAttempts",
+        "idempotencyKeys",
+        "searchLog",
+      ]);
+      expect(info).not.toHaveBeenCalled();
+    } finally {
+      warn.mockRestore();
+      info.mockRestore();
+    }
   });
 
   it("deletes only rows older than each cutoff; cutoff-exact rows survive", async () => {
@@ -271,7 +353,7 @@ describe.skipIf(!process.env.DATABASE_URL)("model:prune (test Postgres)", () => 
     });
   });
 
-  it("each age-pruned delete is batch-bounded; repeat passes drain the backlog", async () => {
+  it("each age-pruned statement is batch-bounded; one pass drains the backlog", async () => {
     // More expired rows than one batch per table; markers carry a `cap-`
     // prefix so the earlier test's leftover edge/fresh rows stay out of the
     // survivor assertions (the shared fixture drops its schema on dispose).
@@ -310,33 +392,25 @@ describe.skipIf(!process.env.DATABASE_URL)("model:prune (test Postgres)", () => 
     // both the 90-day cutoff and the audit database-clock guard by a full day,
     // so no clock skew can flip them), plus the earlier test's edge/fresh
     // leftovers. Expired backlog per table is therefore above one batch.
-    // First pass removes exactly one batch per age-pruned table and reports it.
+    // One pass drains the whole backlog: each statement stays batch-bounded
+    // while the pass repeats until a short batch. No per-pass total exceeds
+    // the batch cap (batches × size); global totals are not asserted because
+    // the earlier test's leftover edge rows sit exactly on the audit
+    // clock-guard boundary and can flip eligibility between statements — the
+    // marker-scoped checks below are the exact drain proof instead.
     const first = await pruneModelTables(pgPruneStores(sql), now);
-    expect(first).toEqual({
-      agentEventAudits: PRUNE_DELETE_BATCH_SIZE,
-      accessLog: PRUNE_DELETE_BATCH_SIZE,
-      joinAttempts: PRUNE_DELETE_BATCH_SIZE,
-      idempotencyKeys: PRUNE_DELETE_BATCH_SIZE,
-      searchLog: PRUNE_DELETE_BATCH_SIZE,
-      sessions: 0,
-    });
-
-    // Repeat passes drain the rest; no pass exceeds the batch. The loop exits
-    // on a zero pass. Global totals are not asserted: the earlier test's
-    // leftover edge rows sit exactly on the audit clock-guard boundary and can
-    // flip eligibility between statements — the marker-scoped checks below are
-    // the exact drain proof instead.
-    let last = first;
-    for (let i = 0; i < 5; i++) {
-      last = await pruneModelTables(pgPruneStores(sql), now);
-      for (const [name, n] of Object.entries(last)) {
-        expect(n, `pass ${i + 2} ${name}`).toBeLessThanOrEqual(
-          name === "sessions" ? 0 : PRUNE_DELETE_BATCH_SIZE,
-        );
-      }
-      if (Object.values(last).every((n) => n === 0)) break;
+    const perPassCap = PRUNE_DELETE_BATCH_SIZE * PRUNE_DELETE_MAX_BATCHES;
+    for (const [name, n] of Object.entries(first)) {
+      expect(n, `single pass ${name}`).toBeLessThanOrEqual(name === "sessions" ? 0 : perPassCap);
     }
-    expect(last).toEqual({
+    expect(first.agentEventAudits).toBeGreaterThanOrEqual(extra);
+    expect(first.accessLog).toBeGreaterThanOrEqual(extra);
+    expect(first.joinAttempts).toBeGreaterThanOrEqual(extra);
+    expect(first.idempotencyKeys).toBeGreaterThanOrEqual(extra);
+    expect(first.searchLog).toBeGreaterThanOrEqual(extra);
+
+    // A re-run is clean: the backlog drained in the single pass above.
+    expect(await pruneModelTables(pgPruneStores(sql), now)).toEqual({
       agentEventAudits: 0,
       accessLog: 0,
       joinAttempts: 0,

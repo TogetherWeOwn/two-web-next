@@ -27,9 +27,18 @@ export const RECONCILE_CRON = "*/10 * * * *"; // routes/console.php:35 everyTenM
 export const PRUNE_CRON = "0 0 * * *"; // routes/console.php:19 daily() (Laravel daily = 00:00)
 // Max rows one daily pass deletes per age-pruned table. Postgres
 // DELETE takes no LIMIT, so each statement deletes the oldest N ids via a
-// subselect and reports the exact count through RETURNING. A larger backlog
-// drains over repeat passes; the web_sessions expiry sweep stays unbounded.
+// subselect and reports the exact count through RETURNING. The pass repeats
+// the batched statement until a short batch proves the backlog drained, so a
+// backlog above one batch clears in a single pass instead of piling past
+// retention. The loop stops after PRUNE_DELETE_MAX_BATCHES batches per table
+// (20k rows) to bound the `model:prune` single-flight hold; a final full
+// batch logs a warning with rows possibly pending. The web_sessions expiry
+// sweep stays unbounded.
 export const PRUNE_DELETE_BATCH_SIZE = 1000;
+// Max batched statements per age-pruned table per daily pass: 20k rows,
+// covering the documented per-IP worst-case join inflow (14,400/day) with
+// headroom; larger floods warn instead of silently piling past retention.
+export const PRUNE_DELETE_MAX_BATCHES = 20;
 
 /** Gap before the attempt after `attempts` (1-based), holding at the last value (nextDelay / backoffFor). */
 export function backoffFor(backoff: readonly number[], attempts: number): number {
