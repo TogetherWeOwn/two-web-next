@@ -64,20 +64,20 @@
     "audit:moderator-roles": "node --import ./bin/ts-hook.mjs bin/role-audit.mjs"
   },
   "dependencies": {
-    "@modelcontextprotocol/server": "2.0.0",
+    "@modelcontextprotocol/server": "2.3.1",
     "agents": "0.28.0",
-    "drizzle-orm": "^0.45.3",
-    "hono": "^4.13.12",
+    "drizzle-orm": "^0.45.4",
+    "hono": "^4.13.13",
     "postgres": "^3.4.9",
     "zod": "4.6.6"
   },
   "devDependencies": {
     "@axe-core/playwright": "^4.13.0",
     "@biomejs/biome": "2.5.15",
-    "@cloudflare/workers-types": "^5.20261002.1",
+    "@cloudflare/workers-types": "^5.20261009.1",
     "@lhci/cli": "0.15.1",
-    "@playwright/test": "1.63.0",
-    "@types/node": "^26.6.4",
+    "@playwright/test": "1.64.0",
+    "@types/node": "^26.6.5",
     "@vitest/coverage-v8": "^5.0.3",
     "drizzle-kit": "^0.31.11",
     "esbuild": "0.28.2",
@@ -86,7 +86,7 @@
     "playwright": "^1.63.0",
     "typescript": "^7.0.2",
     "vitest": "^5.0.2",
-    "wrangler": "^4.146.0"
+    "wrangler": "^4.149.0"
   },
   "overrides": {
     "@lhci/cli": {
