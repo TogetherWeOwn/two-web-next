@@ -5,17 +5,28 @@ Start here for releases, queue incidents and database recovery; use
 [log-line alerts](runbook-alerts.md) for fingerprints and
 [shared Postgres](db-migrations.md) for migration ownership and backup policy.
 The [parity matrix](parity.md) records what is implemented versus still missing.
-The production cutover and its DNS changes are outside this runbook; only the
+Operations guidance (the index below, `/up` readiness, queues, deploy and
+rollback pointers, alerts) applies to staging and, where a section names the
+production binding, to production. The production cutover and its DNS changes
+are separately gated; only the
 staging rollback and DNS flip-back rehearsal is covered here.
+[Final import and reconcile](#final-import-and-reconcile) (including
+[Before the production flip](#before-the-production-flip)) runs only as a
+gated cutover step. [48h post-flip watch](#48h-post-flip-watch) applies only
+in the post-flip window: on a pager storm follow its Sev-1 path (contain,
+then the production rollback workflow).
 
 **First responder index.** Match the symptom, open the section, run the first
 read-only diagnostic, then escalate. Every diagnostic below is a read; do not
 mutate, purge, roll back, migrate, rotate or restore from this table.
 
-Scope: staging (pre-cutover). Every host, Tail Worker and queue name below is
-the staging binding; for a production incident use
-[cutover-rollback.md](cutover-rollback.md) and the production bindings, never
-the staging targets.
+Scope: staging (pre-cutover) targets. Every host, Tail Worker and queue name
+in this index is the staging binding unless a row names production
+(`two-web-next-production`, `two-web-next-alerts-production`, the apex); never
+triage a production incident with the staging targets. For production use the
+[production rollback workflow](../.github/workflows/rollback-production.yml) and the
+production bindings; [cutover-rollback.md](cutover-rollback.md) is the staging
+rehearsal record plus a non-executable production recovery map.
 
 | Symptom or alert | Runbook section | First read-only diagnostic | Escalate to |
 | --- | --- | --- | --- |
@@ -1260,8 +1271,10 @@ Sync carriers (including waiting deliveries) settle their ledger and ACK at 6
 tries, before transport `max_retries: 10`. Internal-action carriers cap at 5.
 Sync requests independently persist `request_attempts` and `next_attempt_at`:
 claims durably set eligibility to null **before** bot I/O. Only a committed
-result can reopen that fence: backoff (`10,60,300,900,3600`) and authoritative
-Retry-After select the next absolute deadline. A failed deadline write retries
+result can reopen that fence: backoff (`10,60,300,900,3600`) or a bot Retry-After
+above 0 and at most 86400 seconds (fractions round up) selects the next absolute
+deadline; any other Retry-After uses the backoff. An already-persisted wait
+farther than 86400 seconds caps at 86400 before queue admission. A failed deadline write retries
 that same Date (or exhausted null), never shorter generic backoff. If both writes
 fail, the consumer carries the known remaining wait on that delivery, but the
 request remains closed across new carriers and reconciliation. The old

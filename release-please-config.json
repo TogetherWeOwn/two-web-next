@@ -28,6 +28,10 @@
           "section": "Fixed"
         },
         {
+          "type": "security",
+          "section": "Fixed"
+        },
+        {
           "type": "deps",
           "section": "Changed",
           "hidden": true

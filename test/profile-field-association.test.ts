@@ -156,6 +156,11 @@ describe("profile island field association", () => {
       if (before === null) this.children.push(child);
       else this.children.splice(this.children.indexOf(before), 0, child);
     }
+    after(node: Element) {
+      const parent = this.parentNode!;
+      node.parentNode = parent;
+      parent.children.splice(parent.children.indexOf(this) + 1, 0, node);
+    }
     remove() {
       if (this.parentNode)
         this.parentNode.children.splice(this.parentNode.children.indexOf(this), 1);

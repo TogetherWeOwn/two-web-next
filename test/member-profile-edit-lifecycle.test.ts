@@ -3,9 +3,11 @@ import { runInNewContext } from "node:vm";
 import { jsx } from "hono/jsx";
 import { describe, expect, it, vi } from "vitest";
 import {
+  PROFILE_COPY,
   PROFILE_EMPTY_COPY,
   PROFILE_NEW_MEMBER_CTA_TESTID,
   PROFILE_NEW_MEMBER_TESTID,
+  PROFILE_PENDING_TESTID,
 } from "../src/islands/contracts";
 import { ProfilePage } from "../src/profiles/pages";
 
@@ -84,6 +86,15 @@ class Element {
   insertBefore(child: Element, before: Element) {
     child.parentNode = this;
     this.children.splice(this.children.indexOf(before), 0, child);
+  }
+  after(node: Element) {
+    const parent = this.parentNode!;
+    node.parentNode = parent;
+    parent.children.splice(parent.children.indexOf(this) + 1, 0, node);
+  }
+  scrolls: unknown[] = [];
+  scrollIntoView(options: unknown) {
+    this.scrolls.push(options);
   }
   remove() {
     if (this.parentNode) this.parentNode.children.splice(this.parentNode.children.indexOf(this), 1);
@@ -475,6 +486,62 @@ describe("shipped member-profile edit lifecycle", () => {
     await flush();
     expect(store).toEqual(["A", "B"]);
     expect(f.bio.textContent).toBe("B");
+  });
+
+  it("marks the form busy with a polite status while a save is unsettled, then clears both", async () => {
+    const f = fixture();
+    expect(f.form.getAttribute("aria-busy")).toBeNull();
+    f.enter({ bio: "A" });
+    f.form.elements.bio!.focus();
+    f.form.dispatch("submit");
+    expect(f.form.getAttribute("aria-busy")).toBe("true");
+    const status = f.notice(PROFILE_PENDING_TESTID);
+    expect(status?.getAttribute("role")).toBe("status");
+    expect(status?.textContent).toBe(PROFILE_COPY.saving);
+    // Just after the form: next to Save, outside the busy form, and Save does not move.
+    expect(f.root.children.indexOf(status!)).toBe(f.root.children.indexOf(f.form) + 1);
+    // The first press never scrolls, so a quick second click still lands on Save.
+    expect(status?.scrolls).toEqual([]);
+    expect(f.document.activeElement).toBe(f.form.elements.bio);
+    f.requests[0]!.resolve(success());
+    await flush();
+    expect(f.form.getAttribute("aria-busy")).toBeNull();
+    expect(f.notice(PROFILE_PENDING_TESTID)).toBeNull();
+    expect(f.notice("profile-saved")).not.toBeNull();
+  });
+
+  it("tells the member the earlier save is still finishing when Save is pressed while pending", async () => {
+    const f = fixture();
+    f.enter({ bio: "A" });
+    f.form.dispatch("submit");
+    f.cancel();
+    f.enter({ bio: "B" });
+    f.form.elements.bio!.focus();
+    const event = f.form.dispatch("submit");
+    expect(event.preventDefault).toHaveBeenCalled();
+    expect(f.fetch).toHaveBeenCalledOnce();
+    const status = f.notice(PROFILE_PENDING_TESTID);
+    expect(status?.getAttribute("role")).toBe("status");
+    expect(status?.textContent).toBe(PROFILE_COPY.stillSaving);
+    expect(f.root.children.indexOf(status!)).toBe(f.root.children.indexOf(f.form) + 1);
+    // A repeat press brings the whole line into view without moving focus.
+    expect(status?.scrolls).toEqual([{ block: "nearest" }]);
+    expect(f.form.getAttribute("aria-busy")).toBe("true");
+    expect(f.document.activeElement).toBe(f.form.elements.bio);
+    expect(f.form.elements.bio!.value).toBe("B");
+    // Cancel keeps the unsettled write's busy state; only settlement clears it.
+    // The draft is gone, so the line no longer says the changes are kept.
+    f.cancel();
+    expect(f.form.getAttribute("aria-busy")).toBe("true");
+    expect(f.notice(PROFILE_PENDING_TESTID)?.textContent).toBe(PROFILE_COPY.saving);
+    f.requests[0]!.reject(new Error("offline"));
+    await flush();
+    expect(f.form.getAttribute("aria-busy")).toBeNull();
+    expect(f.notice(PROFILE_PENDING_TESTID)).toBeNull();
+    f.enter({ bio: "B" });
+    f.form.dispatch("submit");
+    expect(f.fetch).toHaveBeenCalledTimes(2);
+    expect(f.notice(PROFILE_PENDING_TESTID)?.textContent).toBe(PROFILE_COPY.saving);
   });
 
   it("ignores delayed validation JSON after cancel; newer save waits until it settles", async () => {

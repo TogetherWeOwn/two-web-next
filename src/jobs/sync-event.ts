@@ -1,5 +1,6 @@
 import { SYNC_EVENT, backoffFor } from "./constants";
 import { botRefusalReason, sanitizeQueueScope, terminalFailureReason } from "./queue-error";
+import { admitRetryDelay, MAX_RETRY_DELAY_SECONDS } from "./retry-delay";
 import { BotTerminalError, BotTransportError, SyncRetryPersistenceError } from "./types";
 import type { BotClient, BotFailure, EventStore, UniqueLock } from "./types";
 import { safeRequestId } from "../request-log";
@@ -95,7 +96,11 @@ export async function handleSyncEvent(
   // cannot become eligible again merely because a short lease expired.
   if (!prepared.nextAttemptAt) return waiting(SYNC_EVENT.uniqueForSeconds);
   const remaining = Math.ceil((prepared.nextAttemptAt.getTime() - now().getTime()) / 1000);
-  if (remaining > 0) return waiting(remaining);
+  // An already-persisted deadline can predate admission and lie outside the
+  // queue transport range. Cap it before it becomes the queue delay (and the
+  // ledger availability Date); remaining > 0 keeps the 1s floor, the cap sets
+  // the 86400s ceiling. Both bounds are integers: remaining is ceiled above.
+  if (remaining > 0) return waiting(Math.min(remaining, MAX_RETRY_DELAY_SECONDS));
   // A durable closed claim fences concurrent carriers until its result commits.
   const claimedAt = now();
   const attempt = await deps.events.claimSync(prepared, claimedAt);
@@ -142,7 +147,7 @@ export async function handleSyncEvent(
         };
       // Record the refusal before persistence can throw and obscure its cause.
       reportRetry("BotFailure", answer);
-      return await retry(answer.retryAfterSeconds ?? backoff());
+      return await retry(admitRetryDelay(answer.retryAfterSeconds, backoff()));
     }
     await deps.events.completeSync(attempt, answer.discordEventId);
     return { done: true };

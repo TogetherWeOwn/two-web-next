@@ -217,6 +217,31 @@ describe.skipIf(!url)("upcoming list paging (isolated test DB)", () => {
     }
   });
 
+  it("treats a NUL in the jump key as absent, not a 500", async () => {
+    const fixture = await createMemberDataFixture(url!, { max: 2 });
+    const { client, db } = fixture;
+    try {
+      __resetAnonEventCacheForTests();
+      await seedUpcoming(
+        client,
+        0,
+        EVENTS_UPCOMING_PAGE_SIZE + 5,
+        new Date("2060-07-01T18:00:00Z"),
+      );
+      const application = app();
+      const nulOnly = await application.request("/events?event=%00", {}, routeEnv(db));
+      expect(nulOnly.status).toBe(200);
+      expect(await nulOnly.text()).toContain("Page 1 of 2.");
+      expect(nulOnly.headers.get("x-robots-tag")).toBeNull();
+      const target = key(EVENTS_UPCOMING_PAGE_SIZE + 4);
+      const jumped = await application.request(`/events?event=${target}%00`, {}, routeEnv(db));
+      expect(jumped.status).toBe(200);
+      expect(await jumped.text()).toContain(`id="event-${target}"`);
+    } finally {
+      await fixture.dispose();
+    }
+  });
+
   it("serves one page of cards with pager turns on GET /events", async () => {
     const fixture = await createMemberDataFixture(url!, { max: 2 });
     const { client, db } = fixture;

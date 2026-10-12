@@ -10,6 +10,7 @@ operator command; there is no self-serve path.
 ```sh
 node --import ./bin/ts-hook.mjs bin/erase-member.mjs --discord-id=<snowflake>
 node --import ./bin/ts-hook.mjs bin/erase-member.mjs --discord-id=<snowflake> --apply
+node --import ./bin/ts-hook.mjs bin/erase-member.mjs --discord-id=<snowflake> --target staging
 node --import ./bin/ts-hook.mjs bin/erase-member.mjs --discord-id=<snowflake> --apply --target production
 ```
 
@@ -17,8 +18,22 @@ node --import ./bin/ts-hook.mjs bin/erase-member.mjs --discord-id=<snowflake> --
   contents. `--apply` deletes.
 - `DATABASE_URL` comes from the environment only — never argv, never logs.
   The output is one JSON line (`{"mode","counts"}`); the URL is never printed.
-- A production-looking connection string is refused unless `--target
-  production` is passed explicitly.
+- Any host outside `agent-testdb` and loopback (`localhost`, `127.0.0.1`,
+  `::1`) needs `--target staging` or `--target production`. A
+  production-looking URL needs `--target production`, and `--target staging`
+  on it is refused. The target is an operator assertion: the tool cannot
+  verify which environment a host belongs to.
+- A remote connection must verify the server certificate. The URL needs
+  `sslmode=verify-full` or `sslrootcert=system` (an alias for verify-full).
+  `require`, `verify-ca`, `disable`, and other query parameters are refused.
+  The driver receives only the parsed endpoint fields.
+- A loopback URL without `sslmode` connects without TLS, as
+  `revoke-sessions` does. Add `sslmode=require` when the local server enforces
+  TLS.
+- `NODE_TLS_REJECT_UNAUTHORIZED=0` is refused for every host.
+- Every refusal happens before a connection opens. Refusal messages are
+  fixed strings: the URL, the password, and the Discord id never appear in
+  output.
 - The Discord id is validated before any connection is opened. A malformed id
   exits 2 without touching the database.
 
