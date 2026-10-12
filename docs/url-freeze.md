@@ -200,6 +200,10 @@ Public routes may read optional sessions; this does not promise zero DB queries.
 | `GET /admin/join-attempts` | moderator | admin-reads: join audit viewer |
 | `GET /admin/join-attempts/:id` | moderator | admin-join-attempt: read-only join audit detail |
 | `GET /admin/queue/failed/:id/preview` | staging-operator | queue-preview-route / queue-preview-postgres: one-row snapshot advice only; the guarded apply lives on the redispatch route |
+| `GET /api/public/community` | public | public-data: community snapshot; null counts when collectors are down, public ETag/304 |
+| `GET /api/public/events` | public | public-data: published events, 20-row/32 KiB cap, public ETag/304 |
+| `GET /api/public/events/:key` | public | public-data: one published event; drafts and cancelled rows 404, public ETag/304 |
+| `GET /api/public/join` | public | public-data: Discord join handoff, database-free |
 | `GET /auth/discord` | public | app: OAuth start; legacy `/auth/discord/redirect` now temporarily redirects here |
 | `GET /auth/discord/callback` | oauth-state | app: sign-in callback |
 | `GET /discord` | public | seo: invite redirect |
@@ -218,6 +222,7 @@ Public routes may read optional sessions; this does not promise zero DB queries.
 | `GET /members` | public | profiles: retired bare path, frozen 404 for every role |
 | `GET /members/` | public | profiles: retired trailing-slash path, frozen 404 for every role |
 | `GET /members/:user` | member | profiles: legacy `/members/{user}` |
+| `GET /openapi.json` | public | public-data: OpenAPI 3.1 for the public read API, static |
 | `GET /privacy` | public | privacy: versioned policy |
 | `GET /profile` | member | profiles: current member |
 | `GET /robots.txt` | public | seo: frozen robots |
