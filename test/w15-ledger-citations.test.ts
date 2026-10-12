@@ -5,17 +5,19 @@
 // suite fails when any current-head citation dangles past EOF, so a moved
 // function breaks here instead of going stale in the doc.
 //
-// Scope: backtick-quoted `src/...` / `test/...` refs with line ranges, plus
-// bare `:start-end` continuations resolved against the nearest preceding
-// `test/...` anchor (full `path:range` ref or bare file mention) on the same
-// line. `src/...` refs never anchor a bare continuation: in these rows the
-// bare ranges always continue the test proof while `src/...` refs are
-// parenthetical implementation pointers (resolving against them misattributes
-// the range and either misses drift or flags the wrong file).
+// Scope: backtick-quoted `src/...` / `test/...` / `e2e/...` refs with line
+// ranges, plus bare `:start-end` continuations resolved against the nearest
+// preceding `test/...` or `e2e/...` anchor (full `path:range` ref or bare file
+// mention) on the same line. `src/...` refs never anchor a bare continuation:
+// in these rows the bare ranges continue the test/e2e proof while `src/...`
+// refs are parenthetical implementation pointers (resolving against them
+// misattributes the range and either misses drift or flags the wrong file),
+// so a continuation of a `src/...` range carries its explicit `src/...` prefix
+// (row 116 `:27-52` / `:46-48`, row 120 `:218`). Legacy `*.php` ranges likewise
+// carry an explicit `EventTimezoneTest.php:` prefix, so no bare range ever
+// continues a PHP ref and no legacy skip exists to swallow current-head refs.
 // Excluded: historical pins qualified with `at <sha>` / `at that revision`
-// (they describe a past revision, not current head) and bare continuations in
-// a legacy clause (nearest preceding ref names a `*.php` file: those ranges
-// describe the read-only legacy snapshot, not this repository).
+// (they describe a past revision, not current head).
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -32,58 +34,69 @@ const lineCount = (rel: string): number => {
 const LEDGER = "docs/w15-events-acceptance-ledger.md";
 
 /**
- * Current-head refs: backtick `src/...` / `test/...` paths with one or more
- * :line / :start-end ranges, plus bare `:range` continuations. A bare range
- * inherits the nearest preceding `test/...` anchor on the same ledger line
- * (a full ref or a bare file mention); every ledger line carrying a bare ref
- * also names its file, so same-line resolution is complete. `src/...` refs
- * and non-ref prose never move the anchor, and a bare ref following a legacy
- * `*.php` ref is skipped as a legacy-snapshot citation.
+ * Current-head refs: backtick `src/...` / `test/...` / `e2e/...` paths with one
+ * or more :line / :start-end ranges, plus bare `:range` continuations. A bare
+ * range inherits the nearest preceding `test/...` or `e2e/...` anchor on the
+ * same ledger line (a full ref or a bare file mention); every ledger line
+ * carrying a bare ref also names its file, so same-line resolution is
+ * complete. `src/...` refs and non-ref prose (including legacy `*.php` refs)
+ * never move the anchor. A bare range with no anchor is returned as
+ * unresolved so the suite fails instead of silently dropping it.
  */
-function currentHeadRefs(doc: string): { path: string; spec: string }[] {
-  const out: { path: string; spec: string }[] = [];
+function currentHeadRefs(doc: string): {
+  refs: { path: string; spec: string }[];
+  unresolved: string[];
+} {
+  const refs: { path: string; spec: string }[] = [];
+  const unresolved: string[] = [];
   const historical = (line: string, end: number): boolean =>
     / at (`?[0-9a-f]{7,40}`?|that revision)(?![0-9a-z])/.test(line.slice(end, end + 30));
+  let lineNo = 0;
   for (const line of doc.split("\n")) {
+    lineNo += 1;
     let anchor: string | null = null;
-    let legacy = false;
     for (const m of line.matchAll(/`([^`]*)`/g)) {
       const tok = m[1]!;
       const end = m.index! + m[0].length;
-      const full = tok.match(/^(src|test)\/([A-Za-z0-9_.\-/]+):(\d+(?:-\d+)?(?:,\d+(?:-\d+)?)*)$/);
+      const full = tok.match(
+        /^(src|test|e2e)\/([A-Za-z0-9_.\-/]+):(\d+(?:-\d+)?(?:,\d+(?:-\d+)?)*)$/,
+      );
       if (full) {
         const path = `${full[1]}/${full[2]}`;
-        if (full[1] === "test") anchor = path;
-        legacy = false;
-        if (!historical(line, end)) out.push({ path, spec: full[3]! });
+        if (full[1] !== "src") anchor = path;
+        if (!historical(line, end)) refs.push({ path, spec: full[3]! });
         continue;
       }
-      const file = tok.match(/^(src|test)\/([A-Za-z0-9_.\-/]+)$/);
+      const file = tok.match(/^(src|test|e2e)\/([A-Za-z0-9_.\-/]+)$/);
       if (file) {
-        const path = `${file[1]}/${file[2]}`;
-        if (file[1] === "test") anchor = path;
-        legacy = false;
+        if (file[1] !== "src") anchor = `${file[1]}/${file[2]}`;
         continue;
       }
       const bare = tok.match(/^:(\d+(?:-\d+)?(?:,\d+(?:-\d+)?)*)$/);
       if (bare) {
-        if (!legacy && anchor && !historical(line, end)) out.push({ path: anchor, spec: bare[1]! });
+        if (historical(line, end)) continue;
+        if (anchor) refs.push({ path: anchor, spec: bare[1]! });
+        else unresolved.push(`line ${lineNo} :${bare[1]}`);
         continue;
       }
-      // Any other backticked token leaves the anchor alone, except a legacy
-      // PHP ref, which starts a legacy clause whose bare ranges are skipped.
-      if (/\.php/.test(tok)) legacy = true;
+      // Any other backticked token (legacy *.php refs, prose) is ignored: it
+      // neither anchors nor skips. Legacy ranges carry an explicit PHP prefix
+      // and src continuations carry an explicit src prefix, so no bare range
+      // ever needs to resolve through one of these tokens.
     }
   }
-  return out;
+  return { refs, unresolved };
 }
 
 describe("w15 acceptance-ledger citations resolve within EOF", () => {
-  it("every current-head src/test range ends at or before the file's last line", () => {
+  it("every current-head src/test/e2e range ends at or before the file's last line", () => {
     const doc = read(LEDGER);
-    const refs = currentHeadRefs(doc);
-    // Full refs (~92) plus bare continuations (~130): dropping either class
-    // below the floor fails, so the guard cannot silently narrow again.
+    const { refs, unresolved } = currentHeadRefs(doc);
+    // A bare range with no test/e2e anchor is a gap in the guard, not a
+    // legacy citation: fail instead of skipping it.
+    expect(unresolved, `ledger has unanchored bare refs:\n${unresolved.join("\n")}`).toEqual([]);
+    // Full refs plus bare continuations: dropping either class below the
+    // floor fails, so the guard cannot silently narrow again.
     expect(refs.length, "ledger must keep current-head citations to guard").toBeGreaterThan(150);
     const dangling: string[] = [];
     for (const { path, spec } of refs) {
