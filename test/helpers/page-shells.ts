@@ -66,6 +66,14 @@ export const NON_HTML_READS = [
   "/events.ics",
   "/events.rss",
   "/events/:file{.+\\.ics}",
+  "/llms.txt", // Assistant index of the Markdown alternates, never an HTML document.
+  "/about.md",
+  "/faq.md",
+  "/rules.md",
+  "/privacy.md",
+  "/join.md",
+  "/events.md",
+  "/e/:file{.+\\.md}", // Per-event Markdown alternate; cancelled 410, draft 403, never HTML.
 ];
 
 export const concretePath = (pattern: string) =>

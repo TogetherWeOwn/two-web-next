@@ -151,6 +151,7 @@ export function registerCalendarRoutes(
         appUrl={c.env.APP_URL}
         loginReturnTo={loginReturnTo}
         joinResult={joinResult}
+        markdownAlternate="/events.md"
       />,
     );
     // Settle the shared entry only from an anonymous 200: the header guard

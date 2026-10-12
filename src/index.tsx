@@ -31,6 +31,7 @@ import { dbFor } from "./admin/db";
 import { listVisibleFeatured } from "./featured";
 import { robotsTag, SECURITY_HEADERS } from "./headers";
 import { registerJoinRoutes } from "./join/route";
+import { registerAiFriendlyRoutes } from "./ai-friendly/routes";
 import { registerSeoLeaves } from "./seo-leaves";
 import { registerStaticLeaves } from "./static-leaves";
 import { safeNext } from "./join/service";
@@ -410,6 +411,12 @@ registerStaticLeaves(app);
 // DB-degrades-to-static sitemap policy live there verbatim. Registered before
 // the join journey so the CSP sink keeps its pre-session placement.
 registerSeoLeaves(app);
+
+// AI-friendly machine formats (A2: TOG-22171): `/llms.txt` + curated `.md`
+// alternates. New routes, not Accept negotiation — one media type per route.
+// Viewer-independent by construction (no session read), so the HTML pages
+// above link out with `rel=alternate` and staging noindexes the .md surface.
+registerAiFriendlyRoutes(app);
 
 // The one-click join journey (W6: TOG-9685). /join is the database-free page;
 // /join/discord + /join/callback run the throttled OAuth round trip with the

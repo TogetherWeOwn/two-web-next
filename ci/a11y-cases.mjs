@@ -46,6 +46,14 @@ export const coverage = {
   "/events.ics": skip("Calendar feed, not HTML"),
   "/events.rss": skip("RSS feed, not HTML"),
   "/events/:file{.+\\.ics}": skip("Per-event calendar download, not HTML"),
+  "/llms.txt": skip("Assistant index of the Markdown alternates, not HTML"),
+  "/about.md": skip("Markdown alternate, not HTML"),
+  "/faq.md": skip("Markdown alternate, not HTML"),
+  "/rules.md": skip("Markdown alternate, not HTML"),
+  "/privacy.md": skip("Markdown alternate, not HTML"),
+  "/join.md": skip("Markdown alternate, not HTML"),
+  "/events.md": skip("Markdown event collection, not HTML"),
+  "/e/:file{.+\\.md}": skip("Per-event Markdown alternate, not HTML"),
   "/": {
     cases: [
       { path: "/" },

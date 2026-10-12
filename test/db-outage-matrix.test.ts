@@ -56,6 +56,12 @@ const MATRIX: Case[] = [
     route,
     status: 200,
   })),
+  // A2 machine formats are database-free leaves too: same 200, own media type.
+  ...["/about.md", "/faq.md", "/rules.md", "/privacy.md", "/join.md", "/llms.txt"].map((route) => ({
+    method: "GET",
+    route,
+    status: 200,
+  })),
   { method: "GET", route: "/discord", status: 302, location: env.DISCORD_INVITE_URL },
   ...["/sitemap_index.xml", "/robots.txt", "/.well-known/security.txt"].map((route) => ({
     method: "GET",
@@ -113,6 +119,14 @@ const MATRIX: Case[] = [
     status: 503,
     format: "html" as const,
     path: route === "/events/:file{.+\\.ics}" ? `/events/${EVENT_KEY}.ics` : undefined,
+  })),
+  // A2 event machine formats share the outage: 503 in their own media type,
+  // never the branded HTML envelope, so no `format` assertion applies.
+  ...["/events.md", "/e/:file{.+\\.md}"].map((route) => ({
+    method: "GET",
+    route,
+    status: 503,
+    path: route === "/e/:file{.+\\.md}" ? `/e/${EVENT_KEY}.md` : undefined,
   })),
   { method: "GET", route: "/events.json", status: 503, actor: "member", format: "json" },
   // Main #109/#98: JSON event show. Anonymous browsers redirect to the join

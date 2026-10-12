@@ -1,0 +1,136 @@
+// AI-friendly machine routes (A2): GET /llms.txt + curated .md alternates.
+//
+// New routes, not Accept negotiation: the URL freeze allows one media type
+// per route. Every response is viewer-independent (no session read, no cookie
+// set) so the shared-cache TTLs below are safe. Drafts refuse, cancelled
+// events answer 410, unknown keys 404 — mirroring the HTML detail contract
+// for non-moderators without leaking member data.
+import type { Context, Hono } from "hono";
+import type { Env } from "../env";
+import { dbFor } from "../admin/db";
+import { canonicalEventKey, eventKeyAllowed } from "../events/keys";
+import { getPublicEvent, listFeed } from "../events/reads";
+import { publicReadGuard } from "../events/routes-shared";
+import { isDatabaseUnavailable } from "../db/errors";
+import { robotsTagFor } from "../headers";
+import { rulesLastUpdated } from "../rules-last-updated";
+import {
+  FEED_MD_CACHE,
+  MARKDOWN_MIME,
+  STATIC_MD_CACHE,
+  llmsTxt,
+  mdAbout,
+  mdEvent,
+  mdEventGone,
+  mdEvents,
+  mdFaq,
+  mdJoin,
+  mdPrivacy,
+  mdRules,
+  type MdEvent,
+} from "./md";
+
+type App = Hono<{ Bindings: Env }>;
+
+type Ctx = Context<{ Bindings: Env }>;
+
+const NOINDEX = "noindex, nofollow";
+
+/** Staging/preview/dev builds noindex every machine format (production apex only indexes). */
+function stagingRobots(c: Ctx): string | null {
+  let serving: string | undefined;
+  try {
+    serving = new URL(c.req.url).hostname;
+  } catch {
+    serving = undefined;
+  }
+  return robotsTagFor(c.env.APP_URL, serving);
+}
+
+function mdOk(c: Ctx, body: string, cache: string, robots?: string): Response {
+  const tag = robots ?? stagingRobots(c);
+  if (tag) c.header("x-robots-tag", tag);
+  c.header("cache-control", cache);
+  return c.body(body, 200, { "content-type": MARKDOWN_MIME });
+}
+
+function mdError(c: Ctx, body: string, status: 403 | 404 | 410): Response {
+  c.header("x-robots-tag", NOINDEX);
+  c.header("cache-control", status === 410 ? "private, no-store" : "no-store, private");
+  return c.body(body, status, { "content-type": MARKDOWN_MIME });
+}
+
+/** Outage envelope in the route's own media type: never branded HTML, never driver details. */
+function mdUnavailable(c: Ctx): Response {
+  c.header("cache-control", "no-store, private");
+  return c.body("Events temporarily unavailable", 503, { "content-type": MARKDOWN_MIME });
+}
+
+/** Reads stay inside the markdown envelope: a dead database 503s as Markdown. Other errors rethrow. */
+async function mdRead<T>(c: Ctx, run: () => Promise<T>): Promise<T | Response> {
+  try {
+    return await run();
+  } catch (err) {
+    if (isDatabaseUnavailable(err)) return mdUnavailable(c);
+    throw err;
+  }
+}
+
+const toMdEvent = (e: {
+  eventKey: string;
+  title: string;
+  game: string | null;
+  description: string | null;
+  startsAt: Date;
+  endsAt: Date;
+  timezone: string;
+  location: string | null;
+  capacity: number | null;
+  goingCount?: number | null;
+}): MdEvent => ({ ...e, goingCount: e.goingCount ?? null });
+
+export function registerAiFriendlyRoutes(app: App): void {
+  app.get("/llms.txt", (c) => mdOk(c, llmsTxt(c.env.APP_URL), STATIC_MD_CACHE));
+  app.get("/about.md", (c) => mdOk(c, mdAbout(c.env.APP_URL), STATIC_MD_CACHE));
+  app.get("/faq.md", (c) => mdOk(c, mdFaq(c.env.APP_URL), STATIC_MD_CACHE));
+  app.get("/rules.md", (c) =>
+    mdOk(c, mdRules(c.env.APP_URL, rulesLastUpdated(c.env.RULES_LAST_UPDATED)), STATIC_MD_CACHE),
+  );
+  app.get("/privacy.md", (c) => mdOk(c, mdPrivacy(c.env.APP_URL), STATIC_MD_CACHE));
+  app.get("/join.md", (c) =>
+    mdOk(c, mdJoin(c.env.APP_URL, c.env.DISCORD_INVITE_URL), STATIC_MD_CACHE),
+  );
+
+  app.get("/events.md", async (c) => {
+    const limited = await publicReadGuard(c);
+    if (limited) return limited;
+    const db = await dbFor(c);
+    if (!db) return mdUnavailable(c);
+    const rows = await mdRead(c, () => listFeed(db, ["published"]));
+    if (rows instanceof Response) return rows;
+    return mdOk(c, mdEvents(c.env.APP_URL, rows.map(toMdEvent)), FEED_MD_CACHE);
+  });
+
+  // Same suffix pattern as the per-event ICS export: one canonical key form
+  // per event, forged keys refuse, unknown keys 404.
+  app.get("/e/:file{.+\\.md}", async (c) => {
+    const limited = await publicReadGuard(c);
+    if (limited) return limited;
+    const key = c.req.param("file").slice(0, -3);
+    const canonical = canonicalEventKey(key);
+    if (canonical && canonical !== key) {
+      const search = new URL(c.req.url).search;
+      return c.redirect(`/e/${encodeURIComponent(canonical)}.md${search}`, 301);
+    }
+    if (!eventKeyAllowed(key, c.env.APP_URL)) return mdError(c, "Not found", 404);
+    const db = await dbFor(c);
+    if (!db) return mdUnavailable(c);
+    const e = await mdRead(c, () => getPublicEvent(db, key));
+    if (e instanceof Response) return e;
+    if (!e) return mdError(c, "Not found", 404);
+    if (e.status === "draft") return mdError(c, "Forbidden", 403);
+    if (e.status === "cancelled") return mdError(c, mdEventGone(c.env.APP_URL, e), 410);
+    const robots = e.status === "past" ? NOINDEX : undefined;
+    return mdOk(c, mdEvent(c.env.APP_URL, toMdEvent(e)), FEED_MD_CACHE, robots);
+  });
+}

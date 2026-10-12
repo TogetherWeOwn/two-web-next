@@ -182,6 +182,7 @@ export function registerDetailRoutes(
               member={member}
               answer={answer}
               returnTo={returnTo}
+              markdownAlternate={`/e/${e.eventKey}.md`}
             />,
           );
         };
