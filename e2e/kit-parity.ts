@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
+import { normalizeParityOrigins } from "../ci/kit-parity-origin.mjs";
 import { STAGING_APP_URL } from "../src/qa";
 
 // Shared helpers for the Kit parity project
@@ -58,17 +59,10 @@ export function normalizeOrigin(body: string, origin: string): string {
   // origins: the subscribe link (webcal) and the .ics download link (https)
   // share the /events.ics path, so one shared placeholder would let a Kit
   // page that emits the wrong scheme compare equal. The scheme stays part of
-  // the compared contract.
-  const toWebcal = (url: string) => url.replace(/^https?:\/\//, "webcal://");
-  return body
-    .split(toWebcal(origin))
-    .join("PARITY_WEBCAL_ORIGIN")
-    .split(toWebcal(STAGING_APP_URL))
-    .join("PARITY_WEBCAL_ORIGIN")
-    .split(origin)
-    .join("PARITY_ORIGIN")
-    .split(STAGING_APP_URL)
-    .join("PARITY_ORIGIN");
+  // the compared contract. Single source of truth is
+  // ci/kit-parity-origin.mjs, pinned by node:test without a browser runner,
+  // so reverting to one shared token fails that suite.
+  return normalizeParityOrigins(body, origin, STAGING_APP_URL);
 }
 
 const SECRET_PATTERNS = [/X-TWO-QA-Auth/i, /__Host-two_session\s*=/, /DISCORD_BOT_TOKEN/i];

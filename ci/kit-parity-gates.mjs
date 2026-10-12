@@ -99,22 +99,81 @@ export function expectedMarkerFor(manifestSource, path) {
 }
 
 // Login-journey ownership derives from the shipped manifest, the same way
-// expectedMarkerFor does for /events/past: a path with no entry (or
-// enabled:false) is Hono-owned and ledgers as skipped; enabled:true means the
-// route is Kit-native, so an unexecuted skip would be a quiet green and the
-// gate records a failure instead.
-export function isManifestEnabled(manifestSource, path) {
-  const escaped = path.replace(/[/\\^$.*+?()[\]{}|]/g, "\\$&");
-  const match = manifestSource.match(
-    new RegExp(`path:\\s*"${escaped}"[^}]*enabled:\\s*(true|false)`),
-  );
-  return match !== null && match[1] === "true";
+// expectedMarkerFor does for /events/past: no enabled entry is Hono-owned
+// and ledgers as skipped; any enabled entry means the route is Kit-native,
+// so an unexecuted skip would be a quiet green and the gate records a
+// failure instead.
+//
+// Entries are parsed method-aware and field-order independent: every
+// `{...}` block naming a path must also name its method and enabled flag,
+// whatever the field order, or the gate throws (like expectedMarkerFor)
+// instead of reading it as disabled. Matching is ANY-enabled, never
+// first-match, so GET disabled listed before POST enabled still counts.
+export function parseManifestEntries(manifestSource) {
+  const entries = [];
+  for (const match of manifestSource.matchAll(/\{[^{}]*\}/g)) {
+    const block = match[0];
+    // Only quoted-path blocks are manifest entries: this skips the
+    // OwnedRoute interface (`path: string`) and prose comments mentioning
+    // "path:", while still throwing on a real entry that omits a field.
+    if (!/path:\s*"/.test(block)) continue;
+    const method = block.match(/method:\s*"([^"]+)"/)?.[1];
+    const path = block.match(/path:\s*"([^"]+)"/)?.[1];
+    const enabled = block.match(/enabled:\s*(true|false)/)?.[1];
+    if (method === undefined || path === undefined || enabled === undefined) {
+      throw new Error(`kit-parity-gates: cannot parse ROUTE_MANIFEST entry ${block.slice(0, 120)}`);
+    }
+    entries.push({ method, path, enabled: enabled === "true" });
+  }
+  return entries;
 }
 
+export function isManifestEnabled(manifestSource, path, method = null) {
+  const entries = parseManifestEntries(manifestSource);
+  const wanted = method?.toUpperCase() ?? null;
+  return entries.some(
+    (entry) =>
+      entry.path === path &&
+      (wanted === null || entry.method.toUpperCase() === wanted) &&
+      entry.enabled,
+  );
+}
+
+// Each login journey lists the REAL method+path pairs it exercises — the
+// read pages plus the mutation routes — never a bare page literal:
+// - RSVP: GET /e/:key (detail page), POST /e/:key/rsvp (form override),
+//   PUT + DELETE /events/:key/rsvp (src/events/routes-rsvp.tsx:115-125)
+// - Admin: GET + POST /admin/events, GET + POST /admin/events/:key
+//   (src/admin/routes.tsx:306-448; publish/cancel share the :key POST family)
+// - Profile: GET /profile (read), PATCH + POST /members/:user
+//   (src/profiles/routes-reads.tsx:36, routes-writes.tsx:140-142)
 export const LOGIN_JOURNEYS = [
-  ["member RSVP going/withdraw (/e/:key)", "/e/:key"],
-  ["moderator publish/cancel (/admin/events)", "/admin/events"],
-  ["member profile edit (/profile)", "/profile"],
+  {
+    name: "member RSVP going/withdraw (/e/:key)",
+    routes: [
+      { method: "GET", path: "/e/:key" },
+      { method: "POST", path: "/e/:key/rsvp" },
+      { method: "PUT", path: "/events/:key/rsvp" },
+      { method: "DELETE", path: "/events/:key/rsvp" },
+    ],
+  },
+  {
+    name: "moderator publish/cancel (/admin/events)",
+    routes: [
+      { method: "GET", path: "/admin/events" },
+      { method: "POST", path: "/admin/events" },
+      { method: "GET", path: "/admin/events/:key" },
+      { method: "POST", path: "/admin/events/:key" },
+    ],
+  },
+  {
+    name: "member profile edit (/profile)",
+    routes: [
+      { method: "GET", path: "/profile" },
+      { method: "PATCH", path: "/members/:user" },
+      { method: "POST", path: "/members/:user" },
+    ],
+  },
 ];
 
 const SECRET_PATTERNS = [
@@ -307,12 +366,16 @@ export function runUnitMode({ stdout = process.stdout, manifestSource: manifestO
   // quiet green. The moment the manifest enables a route, the skip becomes a
   // failure (no executed parity journey covers it yet), so the first
   // Kit-native member route can never ship on a green ledger with no run.
-  for (const [name, path] of LOGIN_JOURNEYS) {
-    if (isManifestEnabled(manifestSource, path)) {
+  for (const { name, routes } of LOGIN_JOURNEYS) {
+    const enabled = routes.filter((route) =>
+      isManifestEnabled(manifestSource, route.path, route.method),
+    );
+    if (enabled.length > 0) {
+      const listed = enabled.map((route) => `${route.method} ${route.path}`).join(", ");
       push(
         `parity: ${name}`,
         "failed",
-        `route Kit-native (ROUTE_MANIFEST enabled:true) but no executed parity journey covers ${path}`,
+        `route Kit-native (ROUTE_MANIFEST enabled:true for ${listed}) but no executed parity journey covers it`,
       );
     } else {
       push(`parity: ${name}`, "skipped", "route not Kit-native (ROUTE_MANIFEST enabled:false)");

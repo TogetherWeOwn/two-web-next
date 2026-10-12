@@ -172,13 +172,35 @@ test("login journey ownership derives from the manifest", () => {
   assert.equal(isManifestEnabled(honoManifest, "/profile"), false);
   const enabledManifest =
     `{ method: "GET", path: "/events/past", enabled: false },` +
-    ` { method: "POST", path: "/e/:key", enabled: true },` +
+    ` { method: "POST", path: "/e/:key/rsvp", enabled: true },` +
     ` { method: "GET", path: "/profile", enabled: true }`;
-  assert.equal(isManifestEnabled(enabledManifest, "/e/:key"), true);
-  assert.equal(isManifestEnabled(enabledManifest, "/profile"), true);
+  assert.equal(isManifestEnabled(enabledManifest, "/e/:key/rsvp", "POST"), true);
+  assert.equal(isManifestEnabled(enabledManifest, "/profile", "GET"), true);
   assert.equal(isManifestEnabled(enabledManifest, "/admin/events"), false);
   const disabledManifest = `{ method: "GET", path: "/profile", enabled: false }`;
   assert.equal(isManifestEnabled(disabledManifest, "/profile"), false);
+});
+
+test("manifest lookup is method-aware, order-independent, and fail-closed", () => {
+  // Probe 2: GET disabled listed before POST enabled must not read as disabled.
+  const mixedMethods =
+    `{ method: "GET", path: "/e/:key", enabled: false },` +
+    ` { method: "POST", path: "/e/:key", enabled: true }`;
+  assert.equal(isManifestEnabled(mixedMethods, "/e/:key", "POST"), true);
+  assert.equal(isManifestEnabled(mixedMethods, "/e/:key", "GET"), false);
+  assert.equal(isManifestEnabled(mixedMethods, "/e/:key"), true);
+  // Probe 3: field order never decides — enabled before path still counts.
+  const reordered = `{ method: "GET", enabled: true, path: "/profile" }`;
+  assert.equal(isManifestEnabled(reordered, "/profile", "GET"), true);
+  // Unparseable entries throw like expectedMarkerFor, never read as disabled.
+  assert.throws(
+    () => isManifestEnabled(`{ method: "GET", path: "/profile" }`, "/profile", "GET"),
+    /cannot parse ROUTE_MANIFEST/,
+  );
+  assert.throws(
+    () => isManifestEnabled(`{ path: "/profile", enabled: true }`, "/profile"),
+    /cannot parse ROUTE_MANIFEST/,
+  );
 });
 
 test("an enabled login route fails instead of a quiet skip", () => {
@@ -194,7 +216,7 @@ test("an enabled login route fails instead of a quiet skip", () => {
     stdout: silent,
     manifestSource:
       `{ method: "GET", path: "/events/past", enabled: false },` +
-      ` { method: "POST", path: "/e/:key", enabled: true },` +
+      ` { method: "POST", path: "/e/:key/rsvp", enabled: true },` +
       ` { method: "GET", path: "/profile", enabled: true }`,
   });
   const byName = new Map(enabledJourneys.map((j) => [j.name, j]));
@@ -202,6 +224,64 @@ test("an enabled login route fails instead of a quiet skip", () => {
   assert.equal(byName.get("parity: member profile edit (/profile)").status, "failed");
   assert.equal(byName.get("parity: moderator publish/cancel (/admin/events)").status, "skipped");
   assert.equal(summarizeLedger(enabledJourneys).verdict, "fail");
+});
+
+test("enabling the real mutation routes fails every login journey", () => {
+  const silent = { write: () => {} };
+  const journeys = runUnitMode({
+    stdout: silent,
+    manifestSource:
+      `{ method: "GET", path: "/events/past", enabled: false },` +
+      ` { method: "POST", path: "/e/:key/rsvp", enabled: true },` +
+      ` { method: "PUT", path: "/events/:key/rsvp", enabled: true },` +
+      ` { method: "PATCH", path: "/members/:user", enabled: true },` +
+      ` { method: "POST", path: "/admin/events/:key", enabled: true }`,
+  });
+  const byName = new Map(journeys.map((j) => [j.name, j]));
+  assert.equal(byName.get("parity: member RSVP going/withdraw (/e/:key)").status, "failed");
+  assert.match(
+    byName.get("parity: member RSVP going/withdraw (/e/:key)").reason,
+    /POST \/e\/:key\/rsvp/,
+  );
+  assert.equal(byName.get("parity: member profile edit (/profile)").status, "failed");
+  assert.equal(byName.get("parity: moderator publish/cancel (/admin/events)").status, "failed");
+  assert.equal(summarizeLedger(journeys).verdict, "fail");
+});
+
+test("preview Hono-only break fails with the Hono journey named", () => {
+  const good = (key) =>
+    `<html><head><link rel="canonical" href="https://x.invalid/">` +
+    `<meta name="robots" content="noindex, follow"></head>` +
+    `<body><a class="skip-link" href="#main">Skip</a>` +
+    `<nav aria-label="Primary"></nav><main id="main">` +
+    `<section data-testid="past-events"><div data-testid="past-events-list">` +
+    `<article data-event-key="${key}"></article></div></section></main>` +
+    `<p>Welcome, guest</p><script src="/islands/past-events.js"></script></body></html>`;
+  // Hono side lacks <main> and shows signed-in chrome: passes the old
+  // status+marker-only check, fails the full assertRouteContract.
+  const honoBroken = good("same-key")
+    .replace(/<main id="main">/, '<div id="main">')
+    .replace(/<\/main>/, "</div>")
+    .replace("Welcome, guest", "Sign out");
+  const stub = `
+const good = ${good.toString()};
+const honoBroken = ${JSON.stringify(honoBroken)};
+globalThis.fetch = async (input) => {
+  const url = new URL(String(input.url ?? input));
+  if (url.pathname === "/up") return new Response("{}", { status: 200, headers: { "content-type": "application/json" } });
+  const html = url.host === "kit.invalid.workers.dev" ? good("same-key") : honoBroken;
+  return new Response(html, { status: 200, headers: { "content-type": "text/html" } });
+};
+`;
+  const { status, output } = runScript({
+    env: {
+      KIT_PREVIEW_URL: "https://kit.invalid.workers.dev/",
+      HONO_PREVIEW_URL: "https://hono.invalid.workers.dev/",
+    },
+    stub,
+  });
+  assert.equal(status, 1, `expected exit 1, got ${status}\n${output}`);
+  assert.match(output, /preview Hono/);
 });
 
 test("route contract detects a planted break", () => {
