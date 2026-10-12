@@ -317,7 +317,12 @@ function assertIsolatedBindings(config) {
   assert.equal(production.vars.APP_URL, "https://togetherweown.com");
   assert.equal(production.vars.QA_AUTH_TOKEN, undefined);
   assert.notEqual(production.hyperdrive[0].id, config.hyperdrive[0].id);
-  assert.deepEqual(production.triggers, config.triggers);
+  // Staging handoff: the web Worker owns no crons (both live on two-web-jobs,
+  // wrangler.jobs.jsonc). The production cutover template keeps both schedules
+  // on the web Worker until its own handoff, so assert each side explicitly.
+  // Values must match RECONCILE_CRON/PRUNE_CRON in src/jobs/constants.ts.
+  assert.deepEqual(config.triggers, { crons: [] });
+  assert.deepEqual(production.triggers, { crons: ["*/10 * * * *", "0 0 * * *"] });
   const stagingQueues = config.queues.producers.map((producer) => producer.queue);
   for (const producer of production.queues.producers) {
     assert.ok(!stagingQueues.includes(producer.queue));
