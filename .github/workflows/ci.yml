@@ -352,13 +352,24 @@ jobs:
       # on a partial workspace.
       - name: Install Kit workspace dependencies
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true' || needs.scope.outputs.worker == 'true')
-        run: npm ci --prefix web --no-audit --no-fund
+        run: npm ci --prefix web --include=dev --no-audit --no-fund
       - name: Kit typecheck (svelte-check, warnings fail)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true' || needs.scope.outputs.worker == 'true')
         run: npm run check --prefix web
       - name: Kit archive parity (Hono vs SvelteKit section contract)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true' || needs.scope.outputs.worker == 'true')
         run: node ci/kit-preview-e2e.mjs
+      - name: Kit adapter build
+        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true' || needs.scope.outputs.worker == 'true')
+        run: npm run build --prefix web
+      - name: Kit Worker bundle dry run (no deploy)
+        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true' || needs.scope.outputs.worker == 'true')
+        run: npx wrangler deploy --config web/wrangler.jsonc --dry-run --outdir "$RUNNER_TEMP/kit-worker-dry-run"
+      - name: Kit Worker runtime fixture (disposable Postgres, fake Discord)
+        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true' || needs.scope.outputs.worker == 'true')
+        run: node ci/kit-worker-e2e.mjs
+        env:
+          KIT_WORKER_TEST_DATABASE_URL: postgres://postgres:ci@localhost:5432/postgres
       - name: Staging deployment gate selftest (stubbed, no Cloudflare calls)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
         run: node --test ci/staging-deploy-gate-selftest.mjs
