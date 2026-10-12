@@ -83,6 +83,9 @@ describe("runbook diagnostic and homepage contract", () => {
     expect(health).not.toMatch(/Pending[^\n]*#111/);
     expect(outage).not.toMatch(/Pending[^\n]*#92|not shipped in this snapshot/);
     expect(routeRow("/events/past")).toMatch(/Classified DB outages.*503/);
+    expect(routeRow("/join/discord")).toMatch(
+      /classified DB outage.*503.*other uncaught join-store, attempt or session errors.*500/i,
+    );
     expect(routeRow("/profile")).toMatch(
       /member-data read failures.*503.*other save failures.*500/,
     );
