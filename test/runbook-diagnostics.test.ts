@@ -68,7 +68,10 @@ describe("runbook diagnostic and homepage contract", () => {
     expect(home).not.toMatch(/500|Not guaranteed/);
     expect(home).toMatch(/counts.*events.*featured/i);
     expect(routeRow("/events/past")).toMatch(
-      /DB-outage failures.*503 HTML.*Other uncaught failures.*500 HTML/,
+      /Classified DB outages.*503.*missing event DB.*plain-text.*503.*other uncaught failures.*500 HTML/i,
+    );
+    expect(routeRow("/e/:key")).toMatch(
+      /missing event DB.*plain-text.*503.*other failed reads.*plain-text.*503/,
     );
     expect(outage).toMatch(/public\s+fallback[^.]*not[^.]*private[^.]*writes/i);
   });
@@ -79,9 +82,15 @@ describe("runbook diagnostic and homepage contract", () => {
     );
     expect(health).not.toMatch(/Pending[^\n]*#111/);
     expect(outage).not.toMatch(/Pending[^\n]*#92|not shipped in this snapshot/);
-    expect(routeRow("/events/past")).toMatch(/DB-outage failures.*503 HTML/);
-    expect(routeRow("/profile")).toMatch(/member-data read\/save failures.*503/);
-    expect(routeRow("/admin")).toMatch(/admin data\/query failures.*503/);
+    expect(routeRow("/events/past")).toMatch(/Classified DB outages.*503/);
+    expect(routeRow("/profile")).toMatch(
+      /member-data read failures.*503.*other save failures.*500/,
+    );
+    expect(routeRow("/admin")).toMatch(
+      /admin reads.*503.*other uncaught admin-write failures.*500/i,
+    );
+    const watch = readFileSync(new URL("../docs/48h-watch-spec.md", import.meta.url), "utf8");
+    expect(watch).not.toMatch(/uncaught DB failure is 500 HTML/);
     expect(health).not.toMatch(/curl\s|fetch\(/);
     expect(outage).not.toMatch(/curl\s|fetch\(/);
   });
