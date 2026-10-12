@@ -237,7 +237,8 @@ NO-GO, and `docs/releases.md`: the cutover promote cuts `v1.0.0`, which does
 not exist yet). Worker code reaches production only through
 `.github/workflows/deploy-production.yml` (rollbacks through
 `.github/workflows/rollback-production.yml`; production migrations through
-`.github/workflows/db-migrate.yml`), all behind the same gate, and each requires a
+`.github/workflows/db-migrate.yml`), all require `PRODUCTION_DEPLOY_ENABLED` to be
+exactly `true`, and each requires a
 manually authorized dispatch. The workflow accepts only `workflow_dispatch` on
 `main`; it never deploys on push, PR or release. Before the deploy job can start,
 `ci/production-deploy-gate.mjs` requires the repository variable
@@ -304,13 +305,17 @@ variables only in the credential check and deployment steps. Missing/empty value
 are rejected before deployment, so absent production secrets cannot fall back to
 the staging secret names. No secret values are printed.
 
-Keep `PRODUCTION_DEPLOY_ENABLED` unset/false except while a deployment or
-rollback is authorized, including applicable organization and Environment values.
-Both the deploy and rollback gates require the flag to be exactly `true`. The
+Keep `PRODUCTION_DEPLOY_ENABLED` unset/false except while a deployment,
+rollback, or production migration is authorized, including applicable
+organization and Environment values.
+The deploy, rollback, and db-migrate workflows each require the flag to be
+exactly `true`; `ci/production-deploy-gate.mjs` runs in the deploy and rollback
+workflows, while db-migrate relies on the flag, the main-only ref check, and
+production Environment protection. The
 workflow's `vars` expression resolves configuration across scopes:
 repository/Environment absence alone does not prove the effective flag is
 disabled. Verify the organization's value and repo visibility before
-authorizing a deployment or rollback; keep the repository value unset/false otherwise.
+authorizing a deployment, rollback, or production migration; keep the repository value unset/false otherwise.
 GitHub YAML alone does **not** install review protection.
 A failed protection lookup must be resolved with the existing credential's
 provisioning owner, not by removing the check or substituting credentials.
