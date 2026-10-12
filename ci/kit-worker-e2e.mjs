@@ -152,6 +152,7 @@ for (const stream of [child.stdout, child.stderr]) {
     workerLog += data.toString();
   });
 }
+let failed = false;
 try {
   await listen(child, origin, () => workerLog);
 
@@ -160,7 +161,7 @@ try {
   assert.equal(
     archive.status,
     200,
-    `generated Worker serves the archive route (got ${archive.status}; body: ${archiveHtml.slice(0, 500)}; worker output: ${tail(workerLog)})`,
+    `generated Worker serves the archive route (got ${archive.status}; body: ${archiveHtml.slice(0, 500)})`,
   );
   assert.match(archive.headers.get("content-type") ?? "", /text\/html/);
   assert.match(
@@ -193,7 +194,7 @@ try {
   assert.ok((await asset.arrayBuffer()).byteLength > 0, "favicon response has a body");
   console.log("PASS generated Worker public asset response");
 } catch (error) {
-  process.stderr.write(`Generated Kit Worker output:\n${tail(workerLog)}\n`);
+  failed = true;
   throw error;
 } finally {
   child.kill("SIGTERM");
@@ -202,5 +203,8 @@ try {
     new Promise((resolveExit) => setTimeout(resolveExit, 5_000)),
   ]);
   if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+  // Print after the child has exited so the Worker's own error log has
+  // flushed into the buffer; printing in catch races the log.
+  if (failed) process.stderr.write(`Generated Kit Worker output:\n${tail(workerLog)}\n`);
   await rm(scratch, { recursive: true, force: true });
 }
