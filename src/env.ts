@@ -41,6 +41,12 @@ export type Env = AgentEventsEnv & {
   // Extra exact HTTPS image hosts, comma-separated; shared by admin validation
   // and img-src. No schemes, ports, paths or wildcards. Discord CDN is always allowed.
   FEATURED_IMAGE_HOSTS?: string;
+  // Cutover freeze notice (docs/cutover-freeze.md): only the exact strings
+  // "true"/"1" render the banner; unset or anything else stays invisible.
+  // FREEZE_BANNER_DATES carries the human window (e.g. "12–14 Oct UTC");
+  // the banner needs real dates, so the flag alone never renders.
+  FREEZE_BANNER_ENABLED?: string;
+  FREEZE_BANNER_DATES?: string;
 };
 
 // Worker-only bindings added by W13; the web app (Hono) and its tests only need `Env`.

@@ -155,6 +155,20 @@
       "when": 1790954753240,
       "tag": "1020_event-sync-revisions",
       "breakpoints": true
+    },
+    {
+      "idx": 22,
+      "version": "7",
+      "when": 1791347535034,
+      "tag": "1021_discord-event-snapshots",
+      "breakpoints": true
+    },
+    {
+      "idx": 23,
+      "version": "7",
+      "when": 1791599405342,
+      "tag": "1022_web-sessions-oauth-journeys",
+      "breakpoints": true
     }
   ]
 }

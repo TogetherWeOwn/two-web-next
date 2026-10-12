@@ -76,14 +76,16 @@ syncBuiltinESMExports();
 }
 
 describe("fixture-only check command (stub children, no SQL/network)", () => {
-  it("routes its fixed exclusion only to Vitest and preserves all seven check stages", () => {
+  it("runs Vitest without exclusions and preserves all seven check stages", () => {
     const result = offline();
     expect(result.status, result.output).toBe(0);
     expect(result.calls.map(({ command, args }) => ({ command, args }))).toEqual([
       { command: "npm", args: ["run", "lint"] },
       { command: "npm", args: ["run", "typecheck"] },
       { command: "npm", args: ["run", "config:check"] },
-      { command: "npm", args: ["run", "test", "--", "--exclude", "test/review-p1-verify.test.ts"] },
+      // test/review-p1-verify.test.ts gates its live-DB proofs behind skipIf
+      // and keeps its P1-3 refusal proofs offline, so no exclusion is needed.
+      { command: "npm", args: ["run", "test"] },
       {
         command: process.execPath,
         args: [
