@@ -121,7 +121,7 @@ describe("change-scope gate", () => {
       draft: "false",
     });
     expect(verdict([["web/src/lib/Shell.svelte", ""]])).toEqual({
-      app: "false",
+      app: "true",
       worker: "true",
       db: "false",
       full: "false",
@@ -290,6 +290,7 @@ describe("skip_e2e verdict", () => {
       "public/styles.css",
       "content/policy.md",
       "e2e/admin.spec.ts",
+      "web/src/lib/Shell.svelte",
       "wrangler.jsonc",
       "bin/smoke.mjs",
       "ci/check-config-docs.mjs",
@@ -367,6 +368,27 @@ describe("ci heavy-job scope gates", () => {
     const block = jobBlock("check");
     expect(block).toMatch(/\n    needs: \[a11y, lighthouse, bundle-budget, docs-links, scope\]\n/);
     expect(block).toMatch(/\n    if: \$\{\{ !cancelled\(\) \}\}\n/);
+  });
+
+  it("runs the adapter build, dry run and generated Worker fixture in required check", () => {
+    const block = jobBlock("check");
+    for (const [name, command] of [
+      ["Kit adapter build", "npm run build --prefix web"],
+      [
+        "Kit Worker bundle dry run (no deploy)",
+        "npx wrangler deploy --config web/wrangler.jsonc --dry-run",
+      ],
+      [
+        "Kit Worker runtime fixture (disposable Postgres, fake Discord)",
+        "node ci/kit-worker-e2e.mjs",
+      ],
+    ]) {
+      const step = block.split(`- name: ${name}\n`)[1]?.split("\n      - ")[0] ?? "";
+      expect(step, name).toContain(command);
+      expect(step, name).toContain("needs.scope.outputs.app == 'true'");
+      expect(step, name).toContain("needs.scope.outputs.worker == 'true'");
+      expect(step, name).toContain("needs.scope.outputs.draft != 'true'");
+    }
   });
 
   it("docs-links runs on every PR and check fails unless it passes", () => {
