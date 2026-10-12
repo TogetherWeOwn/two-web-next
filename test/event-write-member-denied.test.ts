@@ -125,6 +125,7 @@ describe.skipIf(!process.env.DATABASE_URL)(
           startsAt: new Date("2099-01-01T20:00:00Z"),
           endsAt: new Date("2099-01-01T22:00:00Z"),
           timezone: "UTC",
+          location: "Voice",
           status: "draft",
           ...over,
         })

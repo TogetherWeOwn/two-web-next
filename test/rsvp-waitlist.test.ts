@@ -227,6 +227,7 @@ describe.skipIf(!process.env.DATABASE_URL)("RSVP waitlist (agent-testdb)", () =>
         startsAt: new Date("2099-01-01T20:00:00Z"),
         endsAt: new Date("2099-01-01T22:00:00Z"),
         timezone: "UTC",
+        location: "Voice",
         status: "published",
         capacity: 1,
         ...over,
@@ -255,6 +256,7 @@ describe.skipIf(!process.env.DATABASE_URL)("RSVP waitlist (agent-testdb)", () =>
         body: new URLSearchParams({
           title: ev.title,
           timezone: "UTC",
+          location: ev.location ?? "Voice",
           starts_at: "2099-01-01T20:00",
           ends_at: "2099-01-01T22:00",
           capacity: capacity === null ? "" : String(capacity),

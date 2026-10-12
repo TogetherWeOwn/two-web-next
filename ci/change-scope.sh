@@ -83,9 +83,13 @@ if [ -s "$files" ]; then
             full=true
             ;;
           # Worker deploy surface: dispatch configs, the Tail worker and the
-          # Kit spike. Observed by `check` (dry runs, Kit typecheck and
-          # parity) and the deploy workflows, not by the audit or perf jobs.
-          wrangler*.jsonc|tail/*|web/*)
+          # Kit spike. Kit UI sources also select the served-app browser and
+          # performance gates; preserve worker checks for all Kit inputs.
+          wrangler*.jsonc|tail/*)
+            worker=true
+            ;;
+          web/*)
+            app=true
             worker=true
             ;;
           # Database: migrations, the journal lock, the drizzle config and the
