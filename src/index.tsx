@@ -185,9 +185,16 @@ type EnvWithRoster = Env & { ROSTER_STORE?: Sql };
 // (drizzle/1022), so the runtime role stays read/write-only. A database that
 // predates that migration surfaces as a query failure, like any other outage.
 async function storeFor(c: Context<{ Bindings: Env }>): Promise<SessionStore> {
-  const injected = (c.env as EnvWithStore).SESSION_STORE;
+  return storeForEnv(c.env);
+}
+
+// Shared with the Kit hook (TOG-22116): the same DB selection Hono uses, so
+// Kit reads the sessions Hono writes. Same lifecycle too — a short-lived
+// per-request client, Hyperdrive pooling underneath, idle_timeout reaping.
+export async function storeForEnv(env: Env): Promise<SessionStore> {
+  const injected = (env as EnvWithStore).SESSION_STORE;
   if (injected) return injected;
-  const url = databaseUrl(c.env);
+  const url = databaseUrl(env);
   // No DB configuration: a fresh memory store per request fails closed to guest.
   if (!url) return createMemorySessionStore();
   // Short-lived per-request client; Hyperdrive pools underneath in the Worker.

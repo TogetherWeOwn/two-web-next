@@ -163,8 +163,11 @@ export interface HookEventLike {
   url: URL;
   route: { id?: string | null } | null | undefined;
   // Kit locals the session bridge merges on the Kit branch only. Hono-owned
-  // requests never touch this: their session stays Hono's own read.
-  locals?: Record<string, unknown>;
+  // requests never touch this: their session stays Hono's own read. Typed
+  // unknown because the core cannot import Kit's App.Locals (web-only,
+  // generated) and an index-signature bag would reject that interface; the
+  // merge below narrows through one documented cast.
+  locals?: unknown;
 }
 
 export interface HookDispatchDeps {
@@ -241,7 +244,8 @@ export async function dispatchHookRequest(
   if (deps.sessionFor) {
     try {
       const bridged = await deps.sessionFor(event);
-      event.locals = { ...(event.locals ?? {}), ...bridged };
+      const prior = (event.locals as Record<string, unknown> | undefined) ?? {};
+      event.locals = { ...prior, ...bridged };
     } catch (err) {
       console.warn("kit session bridge unavailable; rendering without locals.", {
         exception: (err as Error)?.constructor?.name ?? "unknown",

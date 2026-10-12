@@ -37,7 +37,11 @@ import {
   resolveRequestSession,
   type KitLocals,
 } from "../src/kit-session";
-import { dispatchHookRequest, type HookEventLike } from "../src/route-ownership";
+import {
+  dispatchHookRequest,
+  type HookDispatchDeps,
+  type HookEventLike,
+} from "../src/route-ownership";
 
 const SECRET = "test-session-secret-at-least-32-bytes-long";
 const WRONG_SECRET = "a-different-secret-at-least-32-bytes-long";
@@ -95,9 +99,10 @@ describe("resolveRequestSession (one request, one session decision)", () => {
 
   it("reports guest when no session cookie is presented", async () => {
     const store = createMemorySessionStore();
-    expect(
-      await resolveRequestSession(requestWith([]), { sessionSecret: SECRET, store }),
-    ).toEqual({ status: "guest", session: null });
+    expect(await resolveRequestSession(requestWith([]), { sessionSecret: SECRET, store })).toEqual({
+      status: "guest",
+      session: null,
+    });
   });
 
   it("reports guest for a tampered signature, not an outage", async () => {
@@ -315,15 +320,16 @@ describe("readReturnJourney (Kit-visible return state, read-only)", () => {
     expect((await readReturnJourney(requestWith([tampered]), SECRET)).returnTo).toBeNull();
   });
 
-  it.each(["added", "already_member"] as const)("reads the join flash %s without consuming", async (
-    result,
-  ) => {
-    const journey = await readReturnJourney(
-      requestWith([await pair(JOIN_RESULT_COOKIE, result)]),
-      SECRET,
-    );
-    expect(journey.joinResult).toBe(result);
-  });
+  it.each(["added", "already_member"] as const)(
+    "reads the join flash %s without consuming",
+    async (result) => {
+      const journey = await readReturnJourney(
+        requestWith([await pair(JOIN_RESULT_COOKIE, result)]),
+        SECRET,
+      );
+      expect(journey.joinResult).toBe(result);
+    },
+  );
 
   it("a signed-but-unknown join value reads as nothing", async () => {
     const journey = await readReturnJourney(
@@ -381,14 +387,18 @@ describe("dispatchHookRequest session bridge (Kit branch only)", () => {
   // branch pass this override (same convention as hook-route-ownership).
   const KIT_MANIFEST = [{ method: "GET", path: "/events/past", enabled: true }];
 
-  const eventFor = (path: string, pairs: string[] = {}, host = "next.example.test") => {
+  const eventFor = (
+    path: string,
+    pairs: string[] = [],
+    host = "next.example.test",
+  ): HookEventLike => {
     const request = new Request(new URL(path, APP_URL).href, {
       headers: { host, ...(pairs.length ? { cookie: pairs.join("; ") } : {}) },
     });
     return { request, url: new URL(request.url), route: { id: "/events/past" } };
   };
 
-  const depsFor = (overrides: Record<string, unknown> = {}) => ({
+  const depsFor = (overrides: Partial<HookDispatchDeps> = {}): HookDispatchDeps => ({
     appUrl: APP_URL,
     featuredImageHosts: "",
     honoFetch: vi.fn(async () => new Response("hono", { status: 200 })),
@@ -396,15 +406,18 @@ describe("dispatchHookRequest session bridge (Kit branch only)", () => {
     ...overrides,
   });
 
-  const localsOf = (session: string | null): KitLocals => ({
-    status: session ? "authenticated" : "guest",
-    session,
+  const guestLocals = (): KitLocals => ({
+    status: "guest",
+    session: null,
+    returnTo: null,
+    joinResult: null,
+    expiredWrite: null,
   });
 
   it("a Hono-owned request never invokes the session bridge, cookies or not", async () => {
     const store = createMemorySessionStore();
     const { token } = await seedSession(store);
-    const sessionFor = vi.fn(async (_event: HookEventLike) => localsOf("x"));
+    const sessionFor = vi.fn(async (_event: HookEventLike) => guestLocals());
     const event = eventFor("/events/past", [await pair(SESSION_COOKIE, token)]);
     const deps = depsFor({ sessionFor });
     const res = await dispatchHookRequest(event, deps);
@@ -438,14 +451,15 @@ describe("dispatchHookRequest session bridge (Kit branch only)", () => {
     await dispatchHookRequest(event, deps);
     expect(deps.sessionFor).toHaveBeenCalledTimes(1);
     expect(deps.resolve).toHaveBeenCalledTimes(1);
-    expect(seen[0]!.locals?.session).toEqual({
+    const locals = seen[0]!.locals as KitLocals;
+    expect(locals.session).toEqual({
       userId: "42",
       username: "Rick",
       avatar: null,
       member: true,
       moderator: false,
     });
-    expect(seen[0]!.locals?.status).toBe("authenticated");
+    expect(locals.status).toBe("authenticated");
   });
 
   it("a failing bridge never 500s a Kit render: resolve still runs without locals", async () => {
@@ -463,7 +477,7 @@ describe("dispatchHookRequest session bridge (Kit branch only)", () => {
   });
 
   it("an untrusted host bypasses the bridge straight to Hono", async () => {
-    const sessionFor = vi.fn(async (_event: HookEventLike) => localsOf("x"));
+    const sessionFor = vi.fn(async (_event: HookEventLike) => guestLocals());
     const event = eventFor("/events/past", [], "evil.test");
     const deps = depsFor({ manifest: KIT_MANIFEST, sessionFor });
     await dispatchHookRequest(event, deps);
