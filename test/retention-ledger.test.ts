@@ -5,7 +5,7 @@
 //
 // Must not duplicate test/prune.test.ts or edit src/jobs/constants.ts:
 // constants are imported read-only here.
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type postgres from "postgres";
@@ -14,17 +14,27 @@ import {
   JOIN_ATTEMPT_RETENTION_DAYS,
   MEMBER_ACCESS_LOG_RETENTION_DAYS,
 } from "../src/jobs/constants";
-import { THROTTLE_COUNTER_RETENTION_MINUTES } from "../src/join/service";
+import { checkJoinThrottle, THROTTLE_COUNTER_RETENTION_MINUTES } from "../src/join/service";
 import { pruneModelTables } from "../src/jobs/cron";
 import { pgPruneStores } from "../src/jobs/postgres";
 import type { PruneStores } from "../src/jobs/types";
-import { createMemorySessionStore } from "../src/sessions";
+import { createMemorySessionStore, SESSION_TTL_SECONDS } from "../src/sessions";
 import { createJobsFixture, type JobsFixture } from "./helpers/jobs-db";
 
 const root = fileURLToPath(new URL("..", import.meta.url).href);
 const read = (rel: string): string => readFileSync(join(root, rel), "utf8");
 
 const DAY = 86_400_000;
+
+function listTsFiles(dir: string): string[] {
+  const out: string[] = [];
+  for (const entry of readdirSync(dir)) {
+    const full = join(dir, entry);
+    if (statSync(full).isDirectory()) out.push(...listTsFiles(full));
+    else if (full.endsWith(".ts")) out.push(full);
+  }
+  return out;
+}
 
 function memTable() {
   const at: Date[] = [];
@@ -51,6 +61,7 @@ describe("retention ledger constants (read-only)", () => {
     expect(MEMBER_ACCESS_LOG_RETENTION_DAYS).toBe(90);
     expect(JOIN_ATTEMPT_RETENTION_DAYS).toBe(90);
     expect(THROTTLE_COUNTER_RETENTION_MINUTES).toBe(5);
+    expect(SESSION_TTL_SECONDS).toBe(60 * 120);
   });
 });
 
@@ -70,10 +81,19 @@ describe("retention ledger doc rows", () => {
     expect(doc).toContain("JOIN_ATTEMPT_RETENTION_DAYS");
     expect(doc).toContain("THROTTLE_COUNTER_RETENTION_MINUTES");
     expect(doc).toContain("sweepExpired");
+    expect(doc).toContain("SESSION_TTL_SECONDS");
+    expect(doc).toContain("2160 hours");
     expect(doc).toContain("member-erasure.md#what-is-retained-and-why");
     expect(doc).toContain("src/jobs/cron.ts");
     expect(doc).toContain("src/events/rsvp.ts:201-205");
     expect(doc).toContain("Retain indefinitely per CISO decision");
+    // The cited line range must actually hold the prune: shifting rsvp.ts
+    // without re-basing the citation fails here instead of going stale.
+    // Pinned per-line so a one-line shift already breaks (line 201 must open
+    // pruneThrottle, line 203 must hold the delete).
+    const rsvpLines = read("src/events/rsvp.ts").split("\n");
+    expect(rsvpLines[200]).toContain("pruneThrottle");
+    expect(rsvpLines[202]).toContain("delete from web_throttle_hits");
   });
 });
 
@@ -130,11 +150,16 @@ describe("retention ledger mechanisms (memory, no DB)", () => {
 
   it("pins the throttle rolling prune to the 5-minute shared constant", () => {
     const rsvp = read("src/events/rsvp.ts");
-    expect(rsvp).toContain("delete from web_throttle_hits");
-    expect(rsvp).toContain("THROTTLE_COUNTER_RETENTION_MINUTES");
+    expect(rsvp).toContain("async function pruneThrottle");
+    // Full predicate: a 500-minute window or a flipped `at >` stops matching.
+    expect(rsvp).toContain(
+      "where at < clock_timestamp() - make_interval(mins => ${THROTTLE_COUNTER_RETENTION_MINUTES})",
+    );
     const service = read("src/join/service.ts");
     expect(service).toContain("THROTTLE_COUNTER_RETENTION_MINUTES = 5");
-    expect(service).toContain("DELETE FROM web_throttle_hits");
+    expect(service).toContain(
+      "DELETE FROM web_throttle_hits WHERE at < now() - make_interval(mins => ${THROTTLE_COUNTER_RETENTION_MINUTES})",
+    );
     const doc = read("docs/member-erasure.md");
     expect(doc).toContain("THROTTLE_COUNTER_RETENTION_MINUTES = 5");
   });
@@ -144,8 +169,17 @@ describe("retention ledger mechanisms (memory, no DB)", () => {
     expect(docs).toContain("activity_log");
     expect(docs).toContain("retained indefinitely per CISO decision");
     expect(docs).toContain("No job prunes it");
-    expect(read("src/jobs/postgres.ts")).not.toContain("activity_log");
-    expect(read("src/jobs/cron.ts")).not.toContain("activity_log");
+    // Repo-wide: any `delete from activity_log` / `truncate ... activity_log`
+    // under src/ fails, so a new prune file cannot slip past a two-file scan.
+    // Inserts (`insert into activity_log`) are allowed and do not match.
+    const offenders: string[] = [];
+    for (const file of listTsFiles(join(root, "src"))) {
+      const body = readFileSync(file, "utf8");
+      if (/delete\s+from\s+activity_log/i.test(body) || /truncate\s+.*activity_log/i.test(body)) {
+        offenders.push(file);
+      }
+    }
+    expect(offenders, `no src file may prune activity_log: ${offenders.join(", ")}`).toEqual([]);
   });
 });
 
@@ -190,14 +224,15 @@ describe.skipIf(!process.env.DATABASE_URL)("retention ledger (test Postgres)", (
     expect(joins.map((r) => r.request_id)).toEqual(["ledger-r2", "ledger-r3"]);
   });
 
-  it("sweeps expired sessions and rolling-prunes throttle hits older than five minutes", async () => {
+  it("sweeps expired sessions and rolling-prunes throttle hits via the production join path", async () => {
     const now = new Date();
     await sql`insert into web_sessions (token_hash, user_id, username, member, moderator, expires_at)
       values ('ledger-gone','1','a',true,false,${new Date(now.getTime() - 1000)}),
              ('ledger-live','3','c',true,false,${new Date(now.getTime() + 3600_000)})`;
+    const bucket = "ledger-join-throttle";
     await sql`insert into web_throttle_hits (bucket, at)
-      values ('ledger-bucket', clock_timestamp() - make_interval(mins => 10)),
-             ('ledger-bucket', clock_timestamp())`;
+      values (${bucket}, clock_timestamp() - make_interval(mins => 10)),
+             (${bucket}, clock_timestamp())`;
 
     const counts = await pruneModelTables(pgPruneStores(sql), now);
     expect(counts.sessions).toBe(1);
@@ -206,11 +241,19 @@ describe.skipIf(!process.env.DATABASE_URL)("retention ledger (test Postgres)", (
     >`select token_hash from web_sessions where token_hash in ('ledger-gone','ledger-live')`;
     expect(sessions.map((r) => r.token_hash)).toEqual(["ledger-live"]);
 
-    await sql`delete from web_throttle_hits
-      where at < clock_timestamp() - make_interval(mins => ${THROTTLE_COUNTER_RETENTION_MINUTES})`;
+    // Production prune: judges and records first, then expires old rows. A
+    // 5000-minute window or a no-op prune leaves 3 rows and fails here.
+    const verdict = await checkJoinThrottle(
+      sql as unknown as Parameters<typeof checkJoinThrottle>[0],
+      bucket,
+      10,
+    );
+    expect(verdict.limited).toBe(false);
     const hits = await sql<
       { at: Date }[]
-    >`select at from web_throttle_hits where bucket = 'ledger-bucket'`;
-    expect(hits.length).toBe(1);
+    >`select at from web_throttle_hits where bucket = ${bucket} order by at`;
+    expect(hits.length).toBe(2);
+    const floor = Date.now() - THROTTLE_COUNTER_RETENTION_MINUTES * 60_000 - 60_000;
+    for (const h of hits) expect(h.at.getTime()).toBeGreaterThan(floor);
   });
 });
