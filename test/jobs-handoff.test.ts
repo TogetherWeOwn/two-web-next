@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 import { readWranglerConfig } from "../ci/wrangler-config.mjs";
 import { PRUNE_CRON, RECONCILE_CRON } from "../src/jobs/constants";
 
-// TOG-22127: staging handoff invariants. The jobs Worker takes over the exact
+// Staging handoff invariants. The jobs Worker takes over the exact
 // staging queues and cron schedules: no renames, no payload changes, no
 // Effect, exactly one consumer per queue and one cron owner. Queue names are
 // unchanged so Cloudflare retains the backlog across the redeploys; the

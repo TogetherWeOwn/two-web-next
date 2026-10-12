@@ -1,5 +1,5 @@
 // two-web-jobs: queue consumers + cron triggers only, no fetch handler (TOG-12247 spike,
-// staging handoff TOG-22127). Shares src/db and the domain modules with the web
+// staging handoff). Shares src/db and the domain modules with the web
 // front; one wrangler config per Worker.
 //
 // Staging (top level) consumes two-sync-event / two-internal-action and owns

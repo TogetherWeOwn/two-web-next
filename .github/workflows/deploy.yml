@@ -153,8 +153,8 @@ jobs:
       - name: Deploy to Cloudflare Workers
         # The Version is tagged with the CI-verified commit; /up reads the tag
         # back as revision.commit (a full lowercase SHA only). The web Worker
-        # only produces after TOG-22127: deploy it before the jobs Worker so a
-        # handoff detach precedes the attach and two consumers never exist.
+        # only produces after the handoff: deploy it before the jobs Worker so
+        # a detach precedes the attach and two consumers never exist.
         run: npx wrangler deploy --config wrangler.jsonc --tag "${DEPLOY_SHA:?}"
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}

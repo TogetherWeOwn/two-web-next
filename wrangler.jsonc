@@ -22,7 +22,7 @@
   "routes": [{ "pattern": "next.togetherweown.com", "custom_domain": true }],
   // W13: Laravel queue + scheduler parity (TOG-9692). Cron expressions are pinned to
   // src/jobs/constants.ts by test/jobs-constants.test.ts. Staging consumers
-  // and crons live on two-web-jobs (wrangler.jobs.jsonc, TOG-22127): the web
+  // and crons live on two-web-jobs (wrangler.jobs.jsonc): the web
   // Worker only produces after the handoff, so a queue keeps exactly one
   // consumer and a cron exactly one owner. test/jobs-worker-config.test.ts
   // pins the split. env.production below keeps its own cutover template.

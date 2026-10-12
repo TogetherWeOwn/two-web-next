@@ -8,8 +8,8 @@ const MAX_TRACKED = 500;
 
 // Exact app script names this pager accepts. Wrangler does not inherit
 // tail_consumers into named environments, so production traces arrive under
-// the production app name, and the staging jobs Worker (two-web-jobs,
-// TOG-22127) tails separately from the web Worker. Never match by prefix: a
+// the production app name, and the staging jobs Worker (two-web-jobs)
+// tails separately from the web Worker. Never match by prefix: a
 // prefix wildcard would page for foreign Workers in the same account.
 export const APP_SCRIPT_NAMES: ReadonlySet<string> = new Set([
   "two-web-next",

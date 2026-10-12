@@ -392,8 +392,10 @@ describe("deployed revision marker is staging-only", () => {
     );
     expect(verify).toBeLessThan(deploy.indexOf("node bin/smoke.mjs"));
     // The tag and the verified commit come from the same CI-verified expression.
+    // Both staging deploys (web and jobs Workers) share that one tag, so the
+    // expression appears three times: web deploy, jobs deploy, verify step.
     const expr =
       "DEPLOY_SHA: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}";
-    expect(deploy.split(expr)).toHaveLength(3);
+    expect(deploy.split(expr)).toHaveLength(4);
   });
 });

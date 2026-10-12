@@ -93,7 +93,7 @@ probe sends to the internal-action queue) with the same
 `handleQueue`/`handleScheduled` handlers that the jobs-only entry
 ([src/jobs-worker.ts](../src/jobs-worker.ts)) exports. The jobs Worker
 (`two-web-jobs`, [wrangler.jobs.jsonc](../wrangler.jobs.jsonc)) owns both
-staging consumers and both crons after TOG-22127; a queue has exactly one
+staging consumers and both crons after the handoff; a queue has exactly one
 consumer. The handoff sequence, secrets and rollback are in
 [jobs-handoff.md](./jobs-handoff.md).
 
