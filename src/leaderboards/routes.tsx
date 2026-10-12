@@ -3,7 +3,7 @@
 // Order on every layer: the shared member gate (guest → 302 /auth/discord,
 // non-member → 403), then query validation (400 before any read), then the
 // ranking read. Reads run inside the member-read boundary, so the access log
-// records the members listed; the anonymous board-view log is written after
+// records the members whose counts were read; the anonymous board-view log is written after
 // the boundary releases the response and is fail-open. Same ranking read the
 // Kit load calls, per web/src/routes/events/past/ precedent.
 import { dbFor } from "../admin/db";

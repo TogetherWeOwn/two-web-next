@@ -42,15 +42,16 @@ export function parseScopeParam(raw: string | null | undefined): ScopeParse {
 export type ActivityParse = { ok: true; game: string | null } | { ok: false; message: string };
 
 /**
- * `?activity=`: absent/`all` = every game; otherwise one normalized game name
+ * `?activity=`: absent/blank/`all` = every game; otherwise one normalized game name
  * (trimmed, lowercased, 1-64 characters of `[a-z0-9 _-]`). A well-formed name
  * that matches no event is a valid, empty board.
  */
 export function parseActivityParam(raw: string | null | undefined): ActivityParse {
   if (raw === null || raw === undefined) return { ok: true, game: null };
   const game = raw.trim().toLowerCase();
-  if (game === "all") return { ok: true, game: null };
-  if (game.length < 1 || game.length > ACTIVITY_MAX_LENGTH || !ACTIVITY_RE.test(game))
+  // The filter form submits a blank field as `activity=`: that means every game.
+  if (game === "" || game === "all") return { ok: true, game: null };
+  if (game.length > ACTIVITY_MAX_LENGTH || !ACTIVITY_RE.test(game))
     return { ok: false, message: "Unknown activity" };
   return { ok: true, game };
 }
