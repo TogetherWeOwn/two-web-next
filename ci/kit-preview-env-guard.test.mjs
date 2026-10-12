@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
-// TOG-22224: the one-sided preview-URL guard (exactly one of
+// The one-sided preview-URL guard (exactly one of
 // KIT_PREVIEW_URL / HONO_PREVIEW_URL set) must exit 2 with the
 // set-both-or-neither diagnostic before any fetch, and the both-URLs preview
 // path must be able to reject divergent origins with exit 1. The script runs
