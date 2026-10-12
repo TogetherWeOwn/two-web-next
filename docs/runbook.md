@@ -1159,7 +1159,7 @@ Never test production; staging E2E needs verified staging bindings.
 
 The table describes the path that reaches the relevant operation; validation,
 authentication, access gates or static asset handling can return earlier.
-Uncaught non-database errors use the global **500 HTML** handler, even on event JSON routes. Classified database-unavailable errors use the shared sanitized **503** response.
+Uncaught non-database errors use the global **500 HTML** handler, even on event JSON routes, except inside the member-read boundary (`/e/:key` and the member and admin rows), which returns **503**. Classified database-unavailable errors use the shared sanitized **503** response.
 The [parity matrix](parity.md) is a historical snapshot; current source/tests
 below, not its older `/up` row, define these outcomes.
 
@@ -1177,7 +1177,8 @@ below, not its older `/up` row, define these outcomes.
 | `/join/discord`, `/join/callback` (GET) | Configured join-store/throttle/attempt/session errors can be **500**. Discord exchange failure separately gives a **503** recovery page; missing DB uses no-op attempt/throttle stores. |
 | `/auth/qa/:identity` (POST) | Enabled/authorized session failure from a classified DB outage **503**; other uncaught failures **500**; disabled/bad credential **404**. QA is never a production recovery mechanism. |
 | `/logout` (POST) | Without a session cookie, **303** and cookie clearing even when the DB is down. With a session cookie, a store or revocation failure returns **503** `Sign-out temporarily unavailable` and keeps the cookie, because the server row may still be valid. |
-| `/events`, `/events/past`, `/events.rss`, `/events.ics`, `/events/:key.ics`, `/e/:key` (GET) | Classified DB-outage failures and missing event DB return **503 HTML**. Other uncaught failures use **500 HTML**. Invalid keys can be **404** before DB access. |
+| `/events`, `/events/past`, `/events.rss`, `/events.ics`, `/events/:key.ics` (GET) | Classified DB-outage failures return **503 HTML**. A missing event DB returns plain-text **503** `Events temporarily unavailable`. Other uncaught failures use **500 HTML**. Invalid keys can be **404** before DB access. |
+| `/e/:key` (GET) | Classified DB-outage failures return **503 HTML**. A missing event DB returns plain-text **503** `Events temporarily unavailable`. Any other failure inside the member-read boundary returns plain-text **503** `Member data is temporarily unavailable.`. Invalid keys can be **404** before DB access. |
 | `/events.json` (GET); `/events` (POST); `/events/:key` (PATCH); publish/cancel (POST) | Classified DB-outage failures and missing event DB return **503 JSON**. Other uncaught failures use **500 HTML**. Auth gates can return **401/403** first. Post-commit enqueue failure leaves normal **201/200**. |
 | `/events/:key/rsvp` (PUT/DELETE) | Classified DB-outage failures and missing event DB return **503 JSON**. Other uncaught failures use **500 HTML**; auth gates **401/403**. Honeypot decoys are DB-free **201/204**, not successful attendance. Post-commit enqueue failure does not change success status. |
 | `/profile`, `/members/:user` (GET); member save (PATCH or form-override POST) | Session resolution and subsequent member-data read/save failures return sanitized **503**; missing store **503**. Default required access-log failure replaces successful reads with **503**; guest **302**, non-member **403**. |

@@ -79,7 +79,12 @@ describe("runbook diagnostic and homepage contract", () => {
     );
     expect(health).not.toMatch(/Pending[^\n]*#111/);
     expect(outage).not.toMatch(/Pending[^\n]*#92|not shipped in this snapshot/);
-    expect(routeRow("/events/past")).toMatch(/DB-outage failures.*503 HTML/);
+    expect(routeRow("/events/past")).toMatch(
+      /DB-outage failures.*503 HTML.*Events temporarily unavailable/,
+    );
+    expect(routeRow("/e/:key")).toMatch(
+      /DB-outage failures.*503 HTML.*Member data is temporarily unavailable\./,
+    );
     expect(routeRow("/profile")).toMatch(/member-data read\/save failures.*503/);
     expect(routeRow("/admin")).toMatch(/admin data\/query failures.*503/);
     expect(health).not.toMatch(/curl\s|fetch\(/);
