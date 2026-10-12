@@ -81,6 +81,24 @@ Object.defineProperty(PrototypeDataMap.prototype, "detail", {
   configurable: true,
 });
 
+// Two-level chains: the walk must flag prototype state on any intermediate
+// prototype, not just the first or last level.
+class GrandparentToStringMap extends Map<string, string> {
+  toString(): string {
+    return MARK;
+  }
+}
+class ChildOfFormatterGrandparentMap extends GrandparentToStringMap {}
+class CleanParentMap extends Map<string, string> {}
+class ChildFormatterMap extends CleanParentMap {
+  toString(): string {
+    return MARK;
+  }
+}
+class GrandparentTagMap extends Map<string, string> {}
+Object.defineProperty(GrandparentTagMap.prototype, Symbol.toStringTag, { value: MARK });
+class ChildOfTagGrandparentMap extends GrandparentTagMap {}
+
 afterEach(() => {
   vi.restoreAllMocks();
 });
@@ -356,6 +374,30 @@ describe("diagnostic stream capture", () => {
     expect(hits).toEqual([]);
     expect(incomplete).toHaveLength(1);
     expect(incomplete[0]).toContain("opaque");
+  });
+
+  it.each([
+    ["grandparent toString", () => new ChildOfFormatterGrandparentMap([["k", "v"]])],
+    ["child toString over a clean parent", () => new ChildFormatterMap([["k", "v"]])],
+    ["grandparent Symbol.toStringTag", () => new ChildOfTagGrandparentMap([["k", "v"]])],
+  ])("reports a two-level chain %s as opaque, never clean", (_name, value) => {
+    const records = captureDiagnosticStream();
+    console.warn("opaque", value());
+    const { hits, incomplete } = scanDiagnosticStream(records, MARKERS);
+    expect(hits).toEqual([]);
+    expect(incomplete).toHaveLength(1);
+    expect(incomplete[0]).toContain("opaque");
+  });
+
+  it("reports a renamed grandparent constructor in a two-level chain as a hit", () => {
+    class RenamedGrandparentMap extends Map<string, string> {}
+    Object.defineProperty(RenamedGrandparentMap, "name", { value: MARK, configurable: true });
+    class ChildOfRenamedGrandparentMap extends RenamedGrandparentMap {}
+    const records = captureDiagnosticStream();
+    console.warn("opaque", new ChildOfRenamedGrandparentMap([["k", "v"]]));
+    const { hits, incomplete } = scanDiagnosticStream(records, MARKERS);
+    expect(hits).toEqual(["warn[0].args[1].<constructor>"]);
+    expect(incomplete).toEqual([]);
   });
 
   it.each([
