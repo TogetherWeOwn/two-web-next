@@ -60,7 +60,9 @@ async function moderatorEnvs() {
       sameSite: "Lax",
     })
   ).split(";")[0]!;
-  const cookie = `__Host-two_session=${signed}`;
+  // `signed` is already the full name=value pair; wrapping it again would
+  // fail verification and silently test guest-vs-guest.
+  const cookie = signed;
   return {
     anonOff: baseEnv,
     modOff: { ...baseEnv, SESSION_STORE: store, cookie },
