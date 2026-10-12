@@ -282,6 +282,7 @@ exactly once.
 | `src/jobs/` | jobs |
 | `src/jobs-worker.ts` | jobs |
 | `src/join/` | join |
+| `src/kit-session.ts` | auth |
 | `src/mcp/` | content |
 | `src/member-erasure.ts` | profiles |
 | `src/member-reads.ts` | profiles |
