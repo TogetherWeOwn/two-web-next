@@ -200,9 +200,9 @@ function check(label, condition, detail = "") {
 
 function expectShell(document) {
   const count = (pattern) => [...document.matchAll(pattern)].length;
-  check("one document head is assembled", count(/<head(?:\s|>)/g) === 1);
-  check("one semantic main is rendered", count(/<main(?:\s|>)/g) === 1);
-  check("one script element is rendered", count(/<script(?:\s|>)/g) === 1);
+  check("one document head is assembled", count(/<head(?:\s|>)/gi) === 1);
+  check("one semantic main is rendered", count(/<main(?:\s|>)/gi) === 1);
+  check("one script element is rendered", count(/<script(?:\s|>)/gi) === 1);
   check("one canonical URL is rendered", count(/<link rel="canonical"/g) === 1);
   check("archive shell carries the schedule theme", document.includes('data-theme="schedule"'));
   check(
@@ -217,7 +217,7 @@ function expectShell(document) {
   );
   check(
     "app template leaves theme choice to the shared layout",
-    !/<body[^>]*class=/.test(document),
+    !/<body[^>]*class=/i.test(document),
   );
 }
 
