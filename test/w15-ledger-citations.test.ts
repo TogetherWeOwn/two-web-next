@@ -134,6 +134,37 @@ describe("w15 acceptance-ledger lifecycle row", () => {
   });
 });
 
+describe("w15 acceptance-ledger EventGoneTest row", () => {
+  it("pins each cited range at an it() block so within-EOF drift fails", () => {
+    const doc = read(LEDGER);
+    const row = doc.split("\n").find((line) => line.includes("EventGoneTest.php"));
+    expect(row, "ledger keeps the EventGoneTest row").toBeDefined();
+    expect(row!).toContain("test/event-gone-surfaces.test.ts:145-244");
+    for (const sub of [
+      ":145-171",
+      ":173-178",
+      ":180-193",
+      ":195-204",
+      ":206-216",
+      ":218-224",
+      ":226-233",
+      ":235-244",
+    ]) {
+      expect(row!, `gone row must cite ${sub}`).toContain(sub);
+    }
+    const lines = read("test/event-gone-surfaces.test.ts").split("\n");
+    // Each cited range must open on an it() block: a 2-line shift within EOF
+    // (main #790 grew the file 243 -> 245 via the jsonLdOf hunk at line 73)
+    // then fails here instead of landing stale.
+    for (const start of [145, 173, 180, 195, 206, 218, 226, 235]) {
+      expect(
+        lines[start - 1],
+        `gone row range starting :${start}- must open an it() block`,
+      ).toContain("it(");
+    }
+  });
+});
+
 describe("w15 acceptance-ledger A2 row", () => {
   it("cites the occupied-seat capacity error where it now lives", () => {
     const doc = read(LEDGER);
