@@ -76,16 +76,22 @@ export class IcsSequenceRangeError extends RangeError {
  * at 0 rather than leak. The whole valid stored range [0, 2147483647] lands
  * in [0, 447483647] (at most 9 digits), which the scanner's 10-digit unix
  * pattern can never match. One-time effect: emitted SEQUENCE values step down
- * once after deploy (about 1.7B). A client that cached a pre-deploy value and
- * strictly compares SEQUENCE would read post-deploy values as stale until the
- * stored revision re-exceeds the cached one; the feed is METHOD:PUBLISH
+ * once after deploy (about 1.7B) and never recover: post-deploy emitted
+ * values top out at 447483647, so they never re-exceed a pre-deploy cached
+ * value (at least 1700000000 for any event revised after 2023-11-14). A
+ * client that cached a pre-deploy value and strictly compares SEQUENCE by UID
+ * ignores every later update to that UID permanently; the most likely case is
+ * a single /e/:key.ics opened as an import rather than a subscription. No
+ * ZAP-safe mapping avoids this (every int32 at or above the cached values is
+ * a 10-digit run the scanner matches). The feed is METHOD:PUBLISH
  * (full-state replace), no in-repo consumer persists wire SEQUENCE, and the
  * ETag rotates with the new bytes so HTTP caches revalidate.
  */
 export const ICS_SEQUENCE_BASE = 1700000000n; // 2023-11-14T22:13:20Z
 function icsSequence(sequence: bigint): string {
-  // Validate the stored/imported bigint; never clamp, wrap or reset its ordering.
-  // Exhausted revisions fail the export until an explicit identity migration.
+  // Validate the stored/imported bigint; out-of-range values fail the export
+  // until an explicit identity migration (never wrap or reset ordering).
+  // Pre-base revisions saturate at 0 by design (see above).
   if (sequence < 0n || sequence > 2147483647n) throw new IcsSequenceRangeError();
   const shifted = sequence - ICS_SEQUENCE_BASE;
   return (shifted < 0n ? 0n : shifted).toString();
