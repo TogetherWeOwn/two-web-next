@@ -497,6 +497,22 @@ async function previewParity(kitBase, honoBase) {
       );
     }
   }
+  // Expected renderer derives from the shipped manifest
+  // (src/route-ownership.ts ROUTE_MANIFEST), not a hard-coded "kit": with
+  // enabled:false the Kit preview Worker sends /events/past to honoFetch and
+  // never sets the marker — that is the rollback. Flipping enabled flips this
+  // gate for the right reason. Query strings never change ownership.
+  const ownershipSource = readFileSync(
+    new URL("../src/route-ownership.ts", import.meta.url),
+    "utf8",
+  );
+  const manifestMatch = ownershipSource.match(
+    /path:\s*"\/events\/past"[^}]*enabled:\s*(true|false)/,
+  );
+  if (!manifestMatch)
+    throw new Error("preview parity: cannot derive /events/past owner from ROUTE_MANIFEST");
+  const kitOwnsArchive = manifestMatch[1] === "true";
+  const expectedMarker = kitOwnsArchive ? "kit" : null;
   for (const path of ["/events/past", "/events/past?page=2"]) {
     const [kitRes, honoRes] = await Promise.all(
       [kitBase, honoBase].map((base) =>
@@ -505,6 +521,22 @@ async function previewParity(kitBase, honoBase) {
     );
     check(`Kit ${path}: HTTP 200`, kitRes.status === 200, `got ${kitRes.status}`);
     check(`Hono ${path}: HTTP 200`, honoRes.status === 200, `got ${honoRes.status}`);
+    // Renderer marker (src/route-ownership.ts dispatchHookRequest): the Kit
+    // branch sets x-two-renderer=kit; Hono (honoFetch or the catch-all) never
+    // does. Present only when the manifest gives the path to Kit.
+    const kitMarker = kitRes.headers.get("x-two-renderer");
+    check(
+      kitOwnsArchive
+        ? `Kit ${path}: renderer marker proves Kit answered`
+        : `Kit ${path}: no Kit marker (manifest keeps it on Hono)`,
+      kitMarker === expectedMarker,
+      `got ${JSON.stringify(kitMarker)}`,
+    );
+    check(
+      `Hono ${path}: no Kit renderer marker`,
+      honoRes.headers.get("x-two-renderer") === null,
+      `got ${JSON.stringify(honoRes.headers.get("x-two-renderer"))}`,
+    );
     if (kitRes.status !== 200 || honoRes.status !== 200) continue;
     const [kitHtml, honoHtml] = await Promise.all([kitRes, honoRes].map((r) => r.text()));
     const keys = [...kitHtml.matchAll(/data-event-key="([^"]+)"/g)].map((m) => m[1]);
@@ -526,6 +558,13 @@ async function previewParity(kitBase, honoBase) {
     "Kit /api/* reaches Hono (ingress refuses without credentials)",
     [401, 403, 404].includes(apiRes.status),
     `got ${apiRes.status}`,
+  );
+  // Reserved APIs never shadow: the Kit catch-all must not decorate Hono's
+  // answer with the Kit marker, whatever the manifest claims.
+  check(
+    "Kit /api/* carries no Kit renderer marker",
+    apiRes.headers.get("x-two-renderer") === null,
+    `got ${JSON.stringify(apiRes.headers.get("x-two-renderer"))}`,
   );
 }
 
