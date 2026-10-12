@@ -74,11 +74,15 @@ describe("route ownership", () => {
   it("never lets a manifest entry shadow a reserved API", () => {
     const manifest = [
       { method: "POST", path: "/api/agent-events", enabled: true },
+      { method: "GET", path: "/api", enabled: true },
       { method: "GET", path: "/up", enabled: true },
       { method: "POST", path: "/csp-reports", enabled: true },
     ];
     expect(resolveRouteOwner({ method: "POST", path: "/api/agent-events" }, manifest)).toBe("hono");
     expect(resolveRouteOwner({ method: "POST", path: "/api/anything-new" }, manifest)).toBe("hono");
+    // The bare prefix stays reserved after trailing-slash normalization.
+    expect(resolveRouteOwner({ method: "GET", path: "/api" }, manifest)).toBe("hono");
+    expect(resolveRouteOwner({ method: "GET", path: "/api/" }, manifest)).toBe("hono");
     expect(resolveRouteOwner({ method: "GET", path: "/up" }, manifest)).toBe("hono");
     expect(resolveRouteOwner({ method: "POST", path: "/csp-reports" }, manifest)).toBe("hono");
   });
@@ -96,7 +100,8 @@ describe("route ownership", () => {
       { method: "GET", path: "/events/past", enabled: true },
       { method: "POST", path: "/events/past", enabled: false },
     ];
-    expect(allowedMethodsFor("/events/past", manifest)).toEqual(["GET"]);
+    // HEAD is claimed wherever GET is, mirroring the dispatch lookup.
+    expect(allowedMethodsFor("/events/past", manifest)).toEqual(["GET", "HEAD"]);
     expect(allowedMethodsFor("/events/past")).toEqual([]);
     expect(allowedMethodsFor("/up", [{ method: "GET", path: "/up", enabled: true }])).toEqual([]);
   });

@@ -52,7 +52,9 @@ function normalizePath(path: string): string {
 
 function isReserved(path: string): boolean {
   if (RESERVED_EXACT.has(path)) return true;
-  return RESERVED_PREFIXES.some((prefix) => path.startsWith(prefix));
+  // The bare prefix counts too: trailing-slash normalization turns "/api/"
+  // into "/api", which must not escape the reservation.
+  return RESERVED_PREFIXES.some((prefix) => path === prefix.slice(0, -1) || path.startsWith(prefix));
 }
 
 function matchPattern(pattern: string, path: string): boolean {
@@ -103,7 +105,8 @@ export function resolveRouteOwner(
 }
 
 // The exact methods Kit claims for a path. Anything else on that path belongs
-// to Hono, whose own 405/Allow semantics then govern the response.
+// to Hono, whose own 405/Allow semantics then govern the response. HEAD is
+// claimed wherever GET is, mirroring the dispatch lookup.
 export function allowedMethodsFor(path: string, manifest: OwnedRoute[] = ROUTE_MANIFEST): string[] {
   const normalized = normalizePath(path);
   if (isReserved(normalized)) return [];
@@ -112,7 +115,9 @@ export function allowedMethodsFor(path: string, manifest: OwnedRoute[] = ROUTE_M
     if (!entry.enabled) continue;
     const exact = !entry.path.includes(":");
     if (!(exact ? entry.path === normalized : matchPattern(entry.path, normalized))) continue;
-    seen.add(entry.method.toUpperCase());
+    const method = entry.method.toUpperCase();
+    seen.add(method);
+    if (method === "GET") seen.add("HEAD");
   }
   return [...seen].sort();
 }
