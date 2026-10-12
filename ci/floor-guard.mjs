@@ -73,10 +73,13 @@ const flag = (findings, rule, file, text) =>
   findings.push({ rule, file, text: text.trim().slice(0, 120) });
 
 // A .constraintsignore at the repo root (one glob per line, `#` comments)
-// exempts a path from the added-line content rules only — the guard's own
-// pattern lists must name the forms they detect. Thresholds, exception rows
-// and deleted tests are never ignorable: exempting those would silence the
-// bar itself rather than a false positive.
+// exempts a path from the suppression and stub content rules only — the
+// guard's own pattern lists must name the forms they detect. Test skips,
+// thresholds, exception rows and deleted tests are never ignorable:
+// exempting those would silence the bar itself rather than a false positive.
+// The guard's own test file is listed so its pattern literals and fixtures do
+// not trip silenced-checker or unfinished-work; its fixtures avoid the
+// contiguous skip literal so a real skip added there still fails.
 export function globToRegExp(glob) {
   return new RegExp(
     `^${glob
@@ -102,9 +105,13 @@ export function scanAdded(added, ignore = []) {
     // Exception rows are never ignorable, even when the file is listed.
     if (CONSTRAINTS_FILE.test(file) && /^\| *(W|E)\d+ *\|/.test(text))
       flag(findings, "new-exception", file, text);
-    if (ignored.some((re) => re.test(file))) continue;
-    if (SUPPRESSIONS.test(text)) flag(findings, "silenced-checker", file, text);
-    if (CODE_PATH.test(file) && STUBS.test(text)) flag(findings, "unfinished-work", file, text);
+    const isIgnored = ignored.some((re) => re.test(file));
+    if (!isIgnored) {
+      if (SUPPRESSIONS.test(text)) flag(findings, "silenced-checker", file, text);
+      if (CODE_PATH.test(file) && STUBS.test(text)) flag(findings, "unfinished-work", file, text);
+    }
+    // Test skips always run, even for ignored paths: ignoring the guard's own
+    // test file must not hide a real skip added there.
     if (CODE_PATH.test(file) && TEST_PATH.test(file) && TEST_SKIP_CALL.test(text))
       flag(findings, "test-made-easier", file, text);
   }
@@ -118,8 +125,18 @@ export function scanAdded(added, ignore = []) {
 export function parseFloorWaivers(messages) {
   const waivers = new Map();
   for (const line of messages.split(/\r?\n/)) {
+    // threshold-removed names a full table label, which usually has spaces
+    // ("Coverage of changed lines"), so it takes the whole text up to the
+    // reason separator. The path-based rules keep (\S+): their targets are
+    // single paths (test/a.test.ts, .constraintsignore).
+    const labelMatch = line.match(/^Floor-waiver: threshold-removed (.+?) -- (.+)$/);
+    if (labelMatch && labelMatch[1].trim() && labelMatch[2].trim()) {
+      if (!waivers.has("threshold-removed")) waivers.set("threshold-removed", new Set());
+      waivers.get("threshold-removed").add(labelMatch[1].trim());
+      continue;
+    }
     const match = line.match(
-      /^Floor-waiver: (assertion-removed|test-deleted|threshold-removed|new-exemption) (\S+) -- (.+)$/,
+      /^Floor-waiver: (assertion-removed|test-deleted|new-exemption) (\S+) -- (.+)$/,
     );
     if (!match || !match[3].trim()) continue;
     const [, rule, file] = match;
@@ -321,7 +338,13 @@ function main() {
     process.exit(2);
   }
   const untracked = untrackedParts.join("\n");
-  const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+  // The working-tree ignore list comes from the checked-out repo (git top
+  // level), not from this script's location: in CI they coincide, but reading
+  // the script's own tree would miss the branch's ignore edits and break the
+  // new-exemption waiver path under test.
+  const repoRoot =
+    git(["rev-parse", "--show-toplevel"])?.trim() ||
+    resolve(dirname(fileURLToPath(import.meta.url)), "..");
   // The ignore list is pinned to the merge base: entries the branch adds take
   // effect only behind a reasoned new-exemption waiver (flagged by
   // scanIgnoreAdditions otherwise), so an author cannot silently waive the

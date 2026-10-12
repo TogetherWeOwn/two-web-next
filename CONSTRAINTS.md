@@ -20,7 +20,7 @@ numbered dimensions below mirror the gates already wired in this repo.
 
 Checked by `npm run floor-guard` (HARD in the `check` job). Exemptions live
 in `.constraintsignore`, one glob per line with a reason, and never cover
-thresholds, exception rows, or deleted tests. The ignore list is pinned to
+test skips, thresholds, exception rows, or deleted tests. The ignore list is pinned to
 the merge base: lines the branch adds fail as `new-exemption` unless a
 reasoned waiver trailer covers the file. Every active waiver is printed to
 the CI log and the job summary, so exemptions are tracked in the open.

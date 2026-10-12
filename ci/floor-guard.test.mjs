@@ -5,7 +5,7 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -40,6 +40,9 @@ describe("floor-guard", () => {
   });
 
   it("flags test skip calls but not property reads or prose", () => {
+    // Fixture skip calls are built by concatenation so this file's own source
+    // never contains the contiguous skip literal the guard detects.
+    const skipLine = "+it." + 'skip("x", () => {});\n';
     const property = guardDiff(
       diff(
         "--- a/ci/a11y-policy.test.mjs\n+++ b/ci/a11y-policy.test.mjs\n@@ -1,0 +2 @@\n+assert.equal(entry.skip, true);\n",
@@ -60,18 +63,33 @@ describe("floor-guard", () => {
     );
     assert.ok(
       guardDiff(
-        diff(
-          '--- a/test/a.test.ts\n+++ b/test/a.test.ts\n@@ -1,0 +2 @@\n+it.skip("x", () => {});\n',
-        ),
+        diff("--- a/test/a.test.ts\n+++ b/test/a.test.ts\n@@ -1,0 +2 @@\n" + skipLine),
       ).some((f) => f.rule === "test-made-easier"),
     );
   });
 
   it("flags an added skip", () => {
     const findings = guardDiff(
-      diff('--- a/test/a.test.ts\n+++ b/test/a.test.ts\n@@ -1,0 +2 @@\n+it.skip("x", () => {});\n'),
+      diff(
+        "--- a/test/a.test.ts\n+++ b/test/a.test.ts\n@@ -1,0 +2 @@\n+it." +
+          'skip("x", () => {});\n',
+      ),
     );
     assert.ok(findings.some((f) => f.rule === "test-made-easier"));
+  });
+
+  it("still flags a skip added to the guard's own test file", () => {
+    const root = join(dirname(fileURLToPath(import.meta.url)), "..");
+    const ignore = loadIgnore(root);
+    assert.ok(ignore.includes("ci/floor-guard.test.mjs"));
+    const d = diff(
+      "--- a/ci/floor-guard.test.mjs\n+++ b/ci/floor-guard.test.mjs\n@@ -1,0 +2 @@\n+it." +
+        'skip("x", () => {});\n',
+    );
+    assert.ok(
+      guardDiff(d, { ignore }).some((f) => f.rule === "test-made-easier"),
+      "ignore covers suppressions and stubs, never skips",
+    );
   });
 
   it("flags an added not-implemented stub", () => {
@@ -362,6 +380,26 @@ describe("floor-guard", () => {
     assert.deepEqual(guardDiff(ignoreAdd, { waivers: waivedIgnore, baseIgnore: [] }), []);
   });
 
+  it("lets a reasoned waiver name a multi-word threshold dimension", () => {
+    const deletion = diff(
+      "--- a/CONSTRAINTS.md\n+++ b/CONSTRAINTS.md\n@@ -1 +0,0 @@\n-| Coverage of changed lines | Added TS lines ≥ 80% executed | `npm run patch:coverage` | CI |\n",
+    );
+    const waived = parseFloorWaivers(
+      "retire dimension\n\nFloor-waiver: threshold-removed Coverage of changed lines -- moved to the nightly audit\n",
+    );
+    assert.deepEqual(guardDiff(deletion, { waivers: waived }), []);
+    const wrongLabel = parseFloorWaivers(
+      "retire dimension\n\nFloor-waiver: threshold-removed Lint -- moved to the nightly audit\n",
+    );
+    assert.ok(
+      guardDiff(deletion, { waivers: wrongLabel }).some((f) => f.rule === "threshold-removed"),
+      "a waiver for another dimension must not cover the deletion",
+    );
+    assert.ok(
+      guardDiff(deletion, { waivers: new Map() }).some((f) => f.rule === "threshold-removed"),
+    );
+  });
+
   it("sees untracked files end to end (a diff means exit 1, not dropped stdout)", () => {
     // Regression pin: `git diff` exits 1 when a diff exists, so plumbing that
     // drops stdout on non-zero exit reports a violating tree as clean.
@@ -390,6 +428,113 @@ describe("floor-guard", () => {
       const large = run();
       assert.equal(large.status, 1, "large diff still reports the suppression");
       assert.match(large.stderr, /silenced-checker/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("pins .constraintsignore to the merge base end to end", () => {
+    // A branch-added ignore entry must not silence its own suppression:
+    // reading HEAD would exit 0, reading the base exits 1 with new-exemption.
+    const dir = mkdtempSync(join(tmpdir(), "floor-guard-basepin-"));
+    try {
+      const git = (args) => spawnSync("git", args, { cwd: dir, encoding: "utf8" });
+      git(["init", "-q"]);
+      git(["config", "user.email", "test@example.com"]);
+      git(["config", "user.name", "test"]);
+      writeFileSync(join(dir, ".constraintsignore"), "public/**\n");
+      git(["add", "."]);
+      git(["commit", "-qm", "base"]);
+      const base = git(["rev-parse", "HEAD"]).stdout.trim();
+      writeFileSync(join(dir, ".constraintsignore"), "public/**\nsrc/**\n");
+      mkdirSync(join(dir, "src"), { recursive: true });
+      writeFileSync(join(dir, "src", "x.ts"), "// @ts-ignore: probe\n");
+      git(["add", "."]);
+      git(["commit", "-qm", "branch adds exemption and suppression"]);
+      const guard = join(dirname(fileURLToPath(import.meta.url)), "floor-guard.mjs");
+      const bad = spawnSync("node", [guard, "--base", base], {
+        cwd: dir,
+        encoding: "utf8",
+      });
+      assert.equal(bad.status, 1, "branch-added exemption fails");
+      assert.match(bad.stderr, /new-exemption/);
+      assert.match(bad.stderr, /silenced-checker/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("reads waivers from the full branch range end to end", () => {
+    // The waiver lives on an earlier branch commit and the tip is plain: a
+    // last-commit-only log range would miss it and exit 1. An empty waiver
+    // map (unwired parseFloorWaivers) would also exit 1.
+    const dir = mkdtempSync(join(tmpdir(), "floor-guard-waiverrange-"));
+    try {
+      const git = (args) => spawnSync("git", args, { cwd: dir, encoding: "utf8" });
+      git(["init", "-q"]);
+      git(["config", "user.email", "test@example.com"]);
+      git(["config", "user.name", "test"]);
+      mkdirSync(join(dir, "test"), { recursive: true });
+      writeFileSync(join(dir, "test", "a.test.ts"), "expect(x).toBe(1);\n");
+      git(["add", "."]);
+      git(["commit", "-qm", "base"]);
+      const base = git(["rev-parse", "HEAD"]).stdout.trim();
+      git(["rm", "-q", "test/a.test.ts"]);
+      git([
+        "commit",
+        "-qm",
+        "remove obsolete test",
+        "-m",
+        "Floor-waiver: test-deleted test/a.test.ts -- replaced by the new suite",
+      ]);
+      mkdirSync(join(dir, "src"), { recursive: true });
+      writeFileSync(join(dir, "src", "b.ts"), "export const y = 2;\n");
+      git(["add", "."]);
+      git(["commit", "-qm", "plain follow-up"]);
+      const guard = join(dirname(fileURLToPath(import.meta.url)), "floor-guard.mjs");
+      const run = spawnSync("node", [guard, "--base", base], {
+        cwd: dir,
+        encoding: "utf8",
+      });
+      assert.equal(run.status, 0, "non-tip waiver covers the deletion");
+      assert.match(run.stdout, /Floor-waiver: test-deleted test\/a\.test\.ts/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("lets a non-tip new-exemption waiver pass end to end", () => {
+    const dir = mkdtempSync(join(tmpdir(), "floor-guard-ignorewaiver-"));
+    try {
+      const git = (args) => spawnSync("git", args, { cwd: dir, encoding: "utf8" });
+      git(["init", "-q"]);
+      git(["config", "user.email", "test@example.com"]);
+      git(["config", "user.name", "test"]);
+      writeFileSync(join(dir, ".constraintsignore"), "public/**\n");
+      git(["add", "."]);
+      git(["commit", "-qm", "base"]);
+      const base = git(["rev-parse", "HEAD"]).stdout.trim();
+      writeFileSync(join(dir, ".constraintsignore"), "public/**\nsrc/**\n");
+      mkdirSync(join(dir, "src"), { recursive: true });
+      writeFileSync(join(dir, "src", "x.ts"), "// @ts-ignore: probe\n");
+      git(["add", "."]);
+      git([
+        "commit",
+        "-qm",
+        "exempt generated output",
+        "-m",
+        "Floor-waiver: new-exemption .constraintsignore -- generated output reviewed against source",
+      ]);
+      writeFileSync(join(dir, "src", "b.ts"), "export const y = 2;\n");
+      git(["add", "."]);
+      git(["commit", "-qm", "plain follow-up"]);
+      const guard = join(dirname(fileURLToPath(import.meta.url)), "floor-guard.mjs");
+      const run = spawnSync("node", [guard, "--base", base], {
+        cwd: dir,
+        encoding: "utf8",
+      });
+      assert.equal(run.status, 0, "non-tip new-exemption waiver covers the addition");
+      assert.match(run.stdout, /Floor-waiver: new-exemption \.constraintsignore/);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
