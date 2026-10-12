@@ -1,0 +1,215 @@
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { expect, test, type APIRequestContext } from "@playwright/test";
+import {
+  expectedKitMarker,
+  KIT_ORIGIN,
+  normalizeOrigin,
+  parityTargets,
+  PARITY_VIEWPORTS,
+  scrubSecrets,
+  type ParityTarget,
+} from "../kit-parity";
+
+// Kit journey parity (TOG-22120, docs/kit-parity-gates.md): the no-login
+// journeys run against BOTH the Hono worker and the built Kit Worker in one
+// run, and every body comparison is origin-normalized first. Seeded
+// guest-only routes: no QA token, no session, no fixtures — so failure
+// artifacts carry no secrets by construction (the gate script still scrubs).
+// Login journeys (member RSVP, moderator admin, profile edit) stay Hono-only
+// until their routes migrate; they are ledgered as loud skips with reasons by
+// ci/kit-parity-gates.mjs, never as quiet test.skip calls here.
+const targets = parityTargets();
+const contexts = new Map<string, APIRequestContext>();
+
+test.beforeAll(async ({ playwright }) => {
+  for (const target of targets) {
+    contexts.set(
+      target.name,
+      await playwright.request.newContext({
+        baseURL: target.origin,
+        ignoreHTTPSErrors: target.ignoreHTTPSErrors,
+      }),
+    );
+  }
+});
+
+test.afterAll(async () => {
+  for (const context of contexts.values()) await context.dispose();
+});
+
+function api(target: ParityTarget): APIRequestContext {
+  const context = contexts.get(target.name);
+  if (!context) throw new Error(`kit-parity: no API context for ${target.name}`);
+  return context;
+}
+
+function expectNoMarker(headers: Record<string, string>, label: string) {
+  expect(
+    headers["x-two-renderer"] ?? null,
+    `${label}: Hono-owned response carries no Kit marker`,
+  ).toBeNull();
+}
+
+for (const target of targets) {
+  test.describe(`${target.name}: past archive renders the seeded row`, () => {
+    test("page one renders the list with the seeded row", async () => {
+      const response = await api(target).get("/events/past");
+      expect(response.status()).toBe(200);
+      expect(response.headers()["content-type"]).toContain("text/html");
+      expect(response.headers()["x-two-renderer"] ?? null).toBe(expectedKitMarker("/events/past"));
+      const body = await response.text();
+      expect(scrubSecrets(body)).toEqual([]);
+      expect(body).toContain('data-testid="past-events"');
+      expect(body).toContain("E2E Past Night");
+      expect(body).toContain("Welcome, guest");
+      expect(body).not.toContain("Sign out");
+    });
+
+    test("page two renders the out-of-range refusal", async () => {
+      const response = await api(target).get("/events/past?page=2");
+      expect(response.status()).toBe(200);
+      const body = await response.text();
+      expect(body).toContain('data-testid="past-events-out-of-range"');
+      expect(body).toContain("Page 2 is outside the archive. There is 1 page.");
+    });
+  });
+
+  test.describe(`${target.name}: public feeds and SEO answer unauthenticated GETs`, () => {
+    test("sitemap pins the seeded event GUID", async () => {
+      const response = await api(target).get("/sitemap_index.xml");
+      expect(response.status()).toBe(200);
+      expect(response.headers()["content-type"]).toContain("application/xml");
+      expectNoMarker(response.headers(), `${target.name} sitemap`);
+      const body = await response.text();
+      expect(scrubSecrets(body)).toEqual([]);
+      expect(body).toContain("<urlset");
+      expect(body).toContain("/e/01J00000000000000000000001</loc>");
+    });
+
+    test("RSS and ICS carry the contract envelopes with no cookies", async () => {
+      const rss = await api(target).get("/events.rss");
+      expect(rss.status()).toBe(200);
+      expect(rss.headers()["content-type"]).toBe("application/rss+xml; charset=utf-8");
+      expect(rss.headers()["cache-control"]).toBe("max-age=300, public");
+      expect(rss.headers()["set-cookie"] ?? null).toBeNull();
+      expectNoMarker(rss.headers(), `${target.name} rss`);
+      expect(await rss.text()).toContain('<guid isPermaLink="true">');
+
+      const ics = await api(target).get("/events.ics");
+      expect(ics.status()).toBe(200);
+      expect(ics.headers()["content-type"]).toBe("text/calendar; charset=utf-8");
+      expect(ics.headers()["set-cookie"] ?? null).toBeNull();
+      const icsBody = await ics.text();
+      expect(icsBody).toContain("BEGIN:VCALENDAR");
+      expect(icsBody).toContain("UID:01J00000000000000000000001@");
+    });
+  });
+
+  test.describe(`${target.name}: reserved and API surface stays Hono-owned`, () => {
+    test("/up answers without the Kit marker", async () => {
+      const response = await api(target).get("/up");
+      expect(response.status()).toBe(200);
+      expectNoMarker(response.headers(), `${target.name} /up`);
+    });
+
+    test("disabled ingress fails closed without the Kit marker", async () => {
+      const response = await api(target).post("/api/agent-events", { data: {} });
+      expect([401, 403, 404]).toContain(response.status());
+      expectNoMarker(response.headers(), `${target.name} /api/*`);
+    });
+
+    test("cross-origin form POST is refused by the hardened gate", async () => {
+      const response = await api(target).post("/events/past", {
+        headers: {
+          origin: "https://evil.example",
+          "content-type": "application/x-www-form-urlencoded",
+        },
+        data: "title=x",
+      });
+      expect(response.status()).toBe(403);
+      expect(response.headers()["content-type"]).toContain("application/json");
+      expect(await response.json()).toEqual({ error: "cross_origin" });
+      expect(response.headers()["content-security-policy"] ?? "").toContain("default-src 'self'");
+    });
+  });
+
+  for (const viewport of PARITY_VIEWPORTS) {
+    test(`${target.name}: archive ${viewport.name} has no horizontal overflow`, async ({
+      browser,
+    }) => {
+      const context = await browser.newContext({
+        baseURL: target.origin,
+        ignoreHTTPSErrors: target.ignoreHTTPSErrors,
+        viewport: viewport.size,
+      });
+      const pageErrors: string[] = [];
+      try {
+        // Only the two parity loopbacks may be reached; anything else fails
+        // the journey instead of leaking a packet.
+        await context.route("**/*", (route) => {
+          const url = new URL(route.request().url());
+          const allowed = url.origin === "https://localhost:8787" || url.origin === KIT_ORIGIN;
+          return allowed ? route.continue() : route.abort("blockedbyclient");
+        });
+        const page = await context.newPage();
+        page.on("pageerror", (error) => pageErrors.push(error.message));
+        const response = await page.goto("/events/past");
+        expect(response?.status()).toBe(200);
+        await expect(page.getByTestId("past-events")).toBeVisible();
+        // String form: the e2e tsconfig has no DOM lib (same as the
+        // copy-link and skip-link specs), so no document/window names here.
+        const overflow = (await page.evaluate(
+          "({ width: document.documentElement.scrollWidth, viewport: window.innerWidth })",
+        )) as unknown as { width: number; viewport: number };
+        expect(
+          overflow.width,
+          `${target.name} ${viewport.name}: no horizontal overflow`,
+        ).toBeLessThanOrEqual(overflow.viewport);
+        expect(pageErrors, "no uncaught page errors").toEqual([]);
+      } finally {
+        await context.close();
+      }
+    });
+  }
+}
+
+test("cross-target: normalized archive sections match", async () => {
+  const bodies = new Map<string, string>();
+  for (const target of targets) {
+    const response = await api(target).get("/events/past");
+    expect(response.status()).toBe(200);
+    bodies.set(target.name, normalizeOrigin(await response.text(), target.origin));
+  }
+  const sectionOf = (html: string) => {
+    const match = html.match(/<section[^>]*data-testid="past-events"[\s\S]*?<\/section>/);
+    if (!match) throw new Error("archive section is missing");
+    return match[0].replace(/>\s+</g, "><");
+  };
+  expect(
+    sectionOf(bodies.get("kit")!),
+    "Kit section matches Hono section after origin normalization",
+  ).toBe(sectionOf(bodies.get("hono")!));
+});
+
+test("Kit worker first-200 fits the startup budget", async ({ playwright }) => {
+  const budget = JSON.parse(
+    readFileSync(
+      fileURLToPath(new URL("../../ci/kit-perf-budget.json", import.meta.url).href),
+      "utf8",
+    ),
+  ) as { startup: { maxMs: number } };
+  const started = Date.now();
+  const context = await playwright.request.newContext({ baseURL: KIT_ORIGIN });
+  try {
+    const response = await context.get("/favicon.ico");
+    expect(response.status()).toBe(200);
+  } finally {
+    await context.dispose();
+  }
+  const elapsed = Date.now() - started;
+  expect(
+    elapsed,
+    `Kit first-200 ${elapsed}ms fits startup.maxMs ${budget.startup.maxMs}ms`,
+  ).toBeLessThan(budget.startup.maxMs);
+});

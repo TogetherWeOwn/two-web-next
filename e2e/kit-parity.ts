@@ -1,0 +1,64 @@
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { STAGING_APP_URL } from "../src/qa";
+
+// Shared helpers for the Kit parity project
+// (playwright.kit-parity.config.ts, e2e/kit-parity/parity.spec.ts): the same
+// no-login journeys run against the Hono worker and the built Kit Worker,
+// and every comparison is origin-normalized before it can pass.
+//
+// The Hono test worker maps local HTTPS transport to the virtual staging
+// origin (e2e/worker.ts), so Hono bodies pin STAGING_APP_URL. The Kit fixture
+// serves its own APP_URL (ci/kit-worker-dev.mjs). Host strings therefore
+// differ by design; normalize both to one placeholder before comparing, so a
+// host-string diff can never hide a contract diff — or fake a pass.
+export interface ParityTarget {
+  name: "hono" | "kit";
+  origin: string;
+  ignoreHTTPSErrors: boolean;
+}
+
+export const HONO_ORIGIN = "https://localhost:8787";
+export const KIT_ORIGIN = process.env.KIT_WORKER_ORIGIN ?? "http://127.0.0.1:8788";
+
+export function parityTargets(): ParityTarget[] {
+  return [
+    { name: "hono", origin: HONO_ORIGIN, ignoreHTTPSErrors: true },
+    { name: "kit", origin: KIT_ORIGIN, ignoreHTTPSErrors: false },
+  ];
+}
+
+// Expected Kit renderer marker for a path, derived from the shipped manifest
+// (src/route-ownership.ts), never hard-coded: flipping `enabled` flips the
+// gate for the right reason. Hono never carries the marker.
+export function expectedKitMarker(path: string): string | null {
+  const source = readFileSync(
+    fileURLToPath(new URL("../src/route-ownership.ts", import.meta.url).href),
+    "utf8",
+  );
+  const match = source.match(/path:\s*"\/events\/past"[^}]*enabled:\s*(true|false)/);
+  if (!match) throw new Error("kit-parity: cannot derive /events/past owner from ROUTE_MANIFEST");
+  if (!path.startsWith("/events/past")) return null;
+  return match[1] === "true" ? "kit" : null;
+}
+
+export function normalizeOrigin(body: string, origin: string): string {
+  return body.split(origin).join("PARITY_ORIGIN").split(STAGING_APP_URL).join("PARITY_ORIGIN");
+}
+
+const SECRET_PATTERNS = [/X-TWO-QA-Auth/i, /__Host-two_session\s*=/, /DISCORD_BOT_TOKEN/i];
+
+export function scrubSecrets(...bodies: string[]): string[] {
+  const hits: string[] = [];
+  for (const body of bodies) {
+    for (const pattern of SECRET_PATTERNS) {
+      if (pattern.test(body)) hits.push(String(pattern));
+    }
+  }
+  return hits;
+}
+
+export const PARITY_VIEWPORTS = [
+  { name: "desktop", size: { width: 1280, height: 800 } },
+  { name: "mobile", size: { width: 390, height: 844 } },
+] as const;
