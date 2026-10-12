@@ -437,24 +437,97 @@ describe.skipIf(!process.env.DATABASE_URL)("public MCP: /mcp", () => {
     expect(hits).toHaveLength(0);
   });
 
-  it("returns a static error and alerts instead of leaking SQL on tool failure", async () => {
+  it.each([
+    { name: "list_events", args: { per_page: 20, page: 1 }, id: 50 },
+    { name: "get_event", args: { event_key: key(11) }, id: 51 },
+  ])(
+    "returns a static error and alerts instead of leaking SQL on $name failure",
+    async ({ name, args, id }) => {
+      __resetAlertRateLimitForTests();
+      const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+      try {
+        class McpBoomError extends Error {}
+        // Plain fake, not a Proxy around the real Db: memberReadDb passes
+        // non-Postgres adapters through unwrapped, so select reliably throws.
+        const boomDb = {
+          select() {
+            throw new McpBoomError(
+              'Failed query: select "id", "event_key" from "events" params: secret',
+            );
+          },
+        } as unknown as typeof db;
+        const boomEnv = {
+          ...env,
+          get ADMIN_DB() {
+            return boomDb;
+          },
+        } as unknown as Env & EnvWithThrottle;
+        const res = await app.request(
+          "/mcp",
+          {
+            method: "POST",
+            headers: {
+              "content-type": "application/json",
+              accept: "application/json, text/event-stream",
+              "cf-connecting-ip": "192.0.2.79",
+            },
+            body: JSON.stringify({
+              jsonrpc: "2.0",
+              id,
+              method: "tools/call",
+              params: { name, arguments: args },
+            }),
+          },
+          boomEnv,
+        );
+        expect(res.status).toBe(200);
+        const text = await res.text();
+        const message = JSON.parse(
+          text
+            .split("\n")
+            .filter((line) => line.startsWith("data:"))
+            .map((line) => line.slice("data:".length).trim())[0]!,
+        ) as Record<string, unknown>;
+        const result = message["result"] as Record<string, unknown>;
+        expect(result["isError"]).toBe(true);
+        const content = result["content"] as { text: string }[];
+        const body = JSON.parse(content[0]!.text) as {
+          error: { code: string; message: string };
+        };
+        expect(body.error.code).toBe("internal");
+        expect(body.error.message).toBe("Event data could not be read.");
+        expect(content[0]!.text).not.toContain("Failed query");
+        expect(content[0]!.text).not.toContain("event_key");
+        const alerts = spy.mock.calls
+          .map((args) => {
+            try {
+              return JSON.parse(args[0] as string) as Record<string, unknown>;
+            } catch {
+              return null;
+            }
+          })
+          .filter((line) => line?.["event"] === "error.alert");
+        expect(alerts).toHaveLength(1);
+        expect(alerts[0]).toMatchObject({
+          method: "POST",
+          route: "/mcp",
+          fingerprint: "McpBoomError@/mcp",
+        });
+      } finally {
+        spy.mockRestore();
+      }
+    },
+  );
+
+  it("alerts once when the tool factory throws", async () => {
     __resetAlertRateLimitForTests();
     const spy = vi.spyOn(console, "error").mockImplementation(() => {});
     try {
-      class McpBoomError extends Error {}
-      // Plain fake, not a Proxy around the real Db: memberReadDb passes
-      // non-Postgres adapters through unwrapped, so select reliably throws.
-      const boomDb = {
-        select() {
-          throw new McpBoomError(
-            'Failed query: select "id", "event_key" from "events" params: secret',
-          );
-        },
-      } as unknown as typeof db;
-      const boomEnv = {
+      class McpFactoryBoomError extends Error {}
+      const factoryBoomEnv = {
         ...env,
-        get ADMIN_DB() {
-          return boomDb;
+        get ADMIN_DB(): never {
+          throw new McpFactoryBoomError("factory boom");
         },
       } as unknown as Env & EnvWithThrottle;
       const res = await app.request(
@@ -464,35 +537,15 @@ describe.skipIf(!process.env.DATABASE_URL)("public MCP: /mcp", () => {
           headers: {
             "content-type": "application/json",
             accept: "application/json, text/event-stream",
-            "cf-connecting-ip": "192.0.2.79",
+            "cf-connecting-ip": "192.0.2.80",
           },
-          body: JSON.stringify({
-            jsonrpc: "2.0",
-            id: 50,
-            method: "tools/call",
-            params: { name: "list_events", arguments: { per_page: 20, page: 1 } },
-          }),
+          body: JSON.stringify({ jsonrpc: "2.0", id: 60, method: "tools/list", params: {} }),
         },
-        boomEnv,
+        factoryBoomEnv,
       );
-      expect(res.status).toBe(200);
-      const text = await res.text();
-      const message = JSON.parse(
-        text
-          .split("\n")
-          .filter((line) => line.startsWith("data:"))
-          .map((line) => line.slice("data:".length).trim())[0]!,
-      ) as Record<string, unknown>;
-      const result = message["result"] as Record<string, unknown>;
-      expect(result["isError"]).toBe(true);
-      const content = result["content"] as { text: string }[];
-      const body = JSON.parse(content[0]!.text) as {
-        error: { code: string; message: string };
-      };
-      expect(body.error.code).toBe("internal");
-      expect(body.error.message).toBe("Event data could not be read.");
-      expect(content[0]!.text).not.toContain("Failed query");
-      expect(content[0]!.text).not.toContain("event_key");
+      // The SDK answers a factory failure as a 500 JSON-RPC error; the
+      // wrapper above is what raises the single error.alert for it.
+      expect(res.status).toBe(500);
       const alerts = spy.mock.calls
         .map((args) => {
           try {
@@ -506,8 +559,57 @@ describe.skipIf(!process.env.DATABASE_URL)("public MCP: /mcp", () => {
       expect(alerts[0]).toMatchObject({
         method: "POST",
         route: "/mcp",
-        fingerprint: "McpBoomError@/mcp",
+        fingerprint: "McpFactoryBoomError@/mcp",
       });
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it.each([
+    {
+      label: "unknown body",
+      body: { hello: "world" },
+      headers: {} as Record<string, string>,
+      id: 61,
+      ip: "192.0.2.81",
+    },
+    {
+      label: "bad protocol version",
+      body: { jsonrpc: "2.0", id: 62, method: "tools/list", params: {} },
+      headers: { "mcp-protocol-version": "2099-01-01" } as Record<string, string>,
+      id: 62,
+      ip: "192.0.2.82",
+    },
+  ])("stays silent on client protocol error: $label", async ({ body, headers, ip }) => {
+    __resetAlertRateLimitForTests();
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const res = await app.request(
+        "/mcp",
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            accept: "application/json, text/event-stream",
+            "cf-connecting-ip": ip,
+            ...headers,
+          },
+          body: JSON.stringify(body),
+        },
+        env,
+      );
+      expect(res.status).toBe(400);
+      const alerts = spy.mock.calls
+        .map((args) => {
+          try {
+            return JSON.parse(args[0] as string) as Record<string, unknown>;
+          } catch {
+            return null;
+          }
+        })
+        .filter((line) => line?.["event"] === "error.alert");
+      expect(alerts).toHaveLength(0);
     } finally {
       spy.mockRestore();
     }

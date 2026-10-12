@@ -63,17 +63,25 @@ async function refuseMcpBatch(c: Ctx): Promise<Response | null> {
 async function serveMcp(c: Ctx): Promise<Response> {
   // The database resolves inside the factory so OPTIONS preflights never
   // open one; event tools report unavailable when it resolves to null.
-  // onerror pages factory/transport failures through error.alert: tool
-  // errors are already static inside the tools, but the SDK wrapper catches
-  // factory failures as a plain 500 JSON body that never reaches app.onError.
+  // No onerror hook: the SDK calls it for ordinary client protocol
+  // rejections (bad body, bad MCP-Protocol-Version, missing _meta) as well
+  // as server faults, and every other route keeps 4xx silent. Alerting
+  // there would let anonymous callers page ops via the tail /mcp alert
+  // route. Factory failures (dbFor/createPublicMcpServer throwing) are the
+  // only server faults that bypass app.onError here, so alert on those
+  // directly; tool errors already alert inside the tools.
   const requestId = safeRequestId(c.get("requestId"));
   const handler = createMcpHandler(
-    async () => createPublicMcpServer({ env: c.env, db: await dbFor(c) }),
+    async () => {
+      try {
+        return createPublicMcpServer({ env: c.env, db: await dbFor(c) });
+      } catch (err) {
+        alertRequestError(err, { method: "POST", route: "/mcp", requestId });
+        throw err;
+      }
+    },
     {
       route: "/mcp",
-      onerror: (err) => {
-        alertRequestError(err, { method: "POST", route: "/mcp", requestId });
-      },
     },
   );
   // Hono types the context minimally, and app.request (tests) carries
