@@ -69,10 +69,33 @@ group in `.github/workflows/deploy.yml`), the hand-dispatch migration lane
 the Operator queue/cron mutations below. One quiet Actions page or one
 concurrency group never proves the other two are idle.
 
-- Open both Actions pages (deploy and db-migrate) and confirm no run is in
-  flight on either before the first mutation, and re-confirm with the
-  exact-SHA gate (`node ci/staging-deploy-gate.mjs`) before each Cloudflare
+Establish the hold before provisioning any missing BOT secret: the deploy
+workflow fires on every green main CI (`workflow_run` on `ci`), and once
+`node ci/check-jobs-secrets.mjs` sees the three BOT names it detaches the web
+consumers and attaches `two-web-jobs` itself with no pause-delivery step. Treat
+secret provisioning as a covered handoff mutation, not a pre-step outside the
+hold.
+
+- Make the hold enforceable for the window, not just acknowledged: disable the
+  automatic lane (`gh workflow disable deploy`) or leave the `staging`
+  environment approval pending and stop main merges, then re-enable (or release
+  the approval and resume merges) explicitly when the handoff is done or
+  aborted. An acknowledgement on the card thread alone does not stop the lane.
+- Open the deploy, db-migrate and ci Actions pages (the `ci.yml` workflow for
+  the exact main SHA counts: a still-running ci run on main triggers a deploy
+  when it ends and shows on neither of the other two pages) and confirm no run
+  is in flight on any of them before the first mutation, and re-confirm with
+  the exact-SHA gate (`node ci/staging-deploy-gate.mjs`) before each Cloudflare
   mutation.
+- The gate script is Actions-only by default: outside Actions
+  `process.env.GITHUB_EVENT_PATH` is undefined and it exits 1 with a TypeError.
+  Run it by hand from a main checkout at the gate SHA with:
+  `printf '{"repository":{"full_name":"TogetherWeOwn/two-web-next"}}' >
+  /tmp/staging-gate-event.json` then `GITHUB_EVENT_NAME=workflow_dispatch
+  GITHUB_EVENT_PATH=/tmp/staging-gate-event.json
+  GITHUB_REPOSITORY=TogetherWeOwn/two-web-next GITHUB_REF=refs/heads/main
+  GITHUB_SHA=$(git rev-parse HEAD) GITHUB_TOKEN=$(gh auth token) node
+  ci/staging-deploy-gate.mjs`. The checkout SHA must equal `GITHUB_SHA`.
 - Record the hold on the handoff card thread with named owner
   acknowledgements, a start time and an expiry (at most 2h; release explicitly
   when done). An expired hold is not a hold: re-acknowledge before continuing.
@@ -149,7 +172,12 @@ consumers are queue-side attachments and cron schedules are trigger settings
 applied outside versions, so rolling back both Workers alone leaves
 `two-web-jobs` still owning both consumers and both crons. Move them back
 explicitly after the version rollbacks (same pre-handoff settings the web
-Worker ran with: `max_retries` 10, batch 10, timeout 5):
+Worker ran with: `max_retries` 10, batch 10, timeout 5). First freeze the deploy lane
+until the cause is fixed (`gh workflow disable deploy`, or revert the
+consumer/cron move on main) and re-enable it explicitly afterwards: main still
+carries the moved consumers/crons and the three BOT secrets now exist, so the
+next push to main would pass the secrets gate, re-detach the web consumers and
+re-attach `two-web-jobs`, silently reversing the rollback.
 
 ```bash
 # REMOTE MUTATION: run only after the incident's rollback decision.
@@ -244,7 +272,7 @@ is not the rollback. If the handoff fails before the first jobs attach:
   record over these copies. A Worker version rollback alone never restores the
   queue-side consumers or the trigger schedules; move both back explicitly with
   the same commands as the standard rollback above (same `max_retries` 10,
-  batch 10, timeout 5; triggers via the pre-handoff configs).
+  batch 10, timeout 5; triggers via the pre-handoff configs), but skip the `wrangler rollback "$GOOD_JOBS_VERSION" --name two-web-jobs` line and run only the consumer, trigger and verify commands: there is no good jobs version to roll back to, and the command would default to the previous (bad or draft) version instead of failing.
 - Partial detach/attach is idempotent: re-run the list-then-remove/add steps. A
   failed consumer list fails the run instead of reading as empty, and delivery
   resumes only if paused. Bounded delivery resume: run `resume-delivery` only

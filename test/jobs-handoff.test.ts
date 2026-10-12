@@ -125,14 +125,28 @@ describe("staging jobs handoff invariants", () => {
     const runbook = read("docs/jobs-handoff.md");
     // The deploy workflow serializes only deploy-staging while hand-dispatch
     // migrations use neon-web-migrate-*: one quiet page never proves the other
-    // lanes idle.
+    // lanes idle. Pin the workflow facts themselves so a renamed concurrency
+    // group fails here instead of silently staling the runbook.
+    expect(read(".github/workflows/deploy.yml")).toContain("group: deploy-staging");
+    expect(read(".github/workflows/db-migrate.yml")).toContain("group: neon-web-migrate-");
     expect(runbook).toContain("deploy-staging");
     expect(runbook).toContain("neon-web-migrate-staging");
     expect(runbook).toContain("never proves the other two are idle");
     expect(runbook).toContain("acknowledgements");
     expect(runbook).toContain("expiry");
+    expect(runbook).toContain("at most 2h");
     expect(runbook).toContain("staging-deploy-gate.mjs");
     expect(runbook).toContain("aborts the handoff");
+    // The hold is enforceable and starts before the secrets step that arms the
+    // automatic deploy lane; secret provisioning is a covered mutation and an
+    // in-flight ci run on main is part of the idle check.
+    expect(runbook).toContain("gh workflow disable deploy");
+    expect(runbook).toContain("secret provisioning");
+    expect(runbook).toContain("ci.yml");
+    // The required gate command is Actions-only by default; the runbook must
+    // give the manual env recipe so the Operator can satisfy the required step.
+    expect(runbook).toContain("GITHUB_EVENT_PATH");
+    expect(runbook).toContain("GITHUB_EVENT_NAME=workflow_dispatch");
   });
 
   it("pins the first-install rollback from the inert draft (no GOOD_JOBS_VERSION)", () => {
@@ -146,6 +160,11 @@ describe("staging jobs handoff invariants", () => {
     // Partial detach/attach stays idempotent with bounded delivery resume.
     expect(runbook).toContain("fails the run instead of reading as empty");
     expect(runbook).toContain("only if paused");
+    // The first-install path has no usable jobs version to roll back to, so it
+    // must say to skip the jobs rollback line; either rollback must freeze the
+    // automatic deploy lane or the next main push silently redoes the handoff.
+    expect(runbook).toContain("skip the `wrangler rollback");
+    expect(runbook).toContain("freeze the deploy lane");
   });
 
   it("pins staging-only secret custody without values or substitution", () => {
