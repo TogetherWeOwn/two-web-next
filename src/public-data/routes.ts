@@ -9,7 +9,7 @@
 // /events.json contract is untouched.
 import type { Context, Hono } from "hono";
 import { dbFor } from "../admin/db";
-import { readCounts } from "../counts";
+import { readCounts, type Counts } from "../counts";
 import { isDatabaseUnavailable } from "../db/errors";
 import type { Env } from "../env";
 import { getPublicApiEvent, listPublicApiEvents, type PublicApiEvent } from "../events/reads";
@@ -58,7 +58,7 @@ function apiError(
  * shared Retry-After but speaks the new error envelope instead of the legacy
  * /events.json shape.
  */
-async function admitted(c: Ctx): Promise<Response | null> {
+export async function admitted(c: Ctx): Promise<Response | null> {
   const limited = await publicReadGuard(c);
   if (!limited) return null;
   const retryAfter = limited.headers.get("retry-after") ?? "60";
@@ -75,7 +75,7 @@ async function admitted(c: Ctx): Promise<Response | null> {
 }
 
 /** Legacy event-JSON key order, with a nullable going count. */
-function serializeEvent(e: PublicApiEvent): PublicApiEventDto {
+export function serializeEvent(e: PublicApiEvent): PublicApiEventDto {
   const wall = (d: Date) => `${wallDateIso(d, e.timezone)} ${wallTimeHm(d, e.timezone)}`;
   return {
     event_key: e.eventKey as PublicEventId,
@@ -97,12 +97,63 @@ function serializeEvent(e: PublicApiEvent): PublicApiEventDto {
 }
 
 /**
+ * Collection envelope: rows are never dropped, so paging stays stable.
+ * Shared with the MCP tools so the REST and MCP envelopes cannot drift.
+ */
+export function serializeEventCollection(
+  data: PublicApiEventDto[],
+  total: number,
+  page: number,
+  limit: number,
+): PublicApiEventCollectionDto {
+  return {
+    data,
+    page,
+    limit,
+    meta: {
+      current_page: page,
+      per_page: limit,
+      total,
+      last_page: Math.max(1, Math.ceil(total / limit)),
+    },
+  };
+}
+
+/**
+ * Community snapshot projection. Shared with the MCP tools so the REST and
+ * MCP representations cannot drift: null counts when collectors are down,
+ * never 0.
+ */
+export function serializeCommunity(counts: Counts): CommunitySnapshotDto {
+  return {
+    member_count: counts.memberCount,
+    online_count: counts.onlineCount,
+    ranks: counts.ranks.map((rank) => ({
+      key: rank.key,
+      label: rank.label,
+      member_count: rank.memberCount,
+    })),
+  };
+}
+
+/**
+ * Discord join handoff. Shared with the MCP tools; database-free like the
+ * /join leaf, env config only.
+ */
+export function serializeJoin(env: Env): JoinHandoffDto {
+  return {
+    intro: JOIN_INTRO,
+    invite_url: inviteDestination(env.DISCORD_INVITE_URL),
+  };
+}
+
+/**
  * Fits a collection inside the byte cap by halving the longest description
  * until the wrapped body fits. Shortened descriptions end in …; rows are
  * never dropped, so paging stays stable. Always terminates: a one-character
  * description collapses to empty.
  */
-function fitByteBudget(
+export function fitByteBudget(
   rows: PublicApiEventDto[],
   maxBytes: number,
   wrap: (rows: PublicApiEventDto[]) => unknown,
@@ -183,22 +234,11 @@ export function registerPublicApiRoutes(app: Hono<{ Bindings: Env }>): void {
     });
     if (!listed) return apiError(c, "unavailable", "Event data is temporarily unavailable.", 503);
     const { rows, total, page: clamped } = listed;
-    const data = rows.map(serializeEvent);
-    const payload: PublicApiEventCollectionDto = {
-      data,
-      page: clamped,
-      limit,
-      meta: {
-        current_page: clamped,
-        per_page: limit,
-        total,
-        last_page: Math.max(1, Math.ceil(total / limit)),
-      },
-    };
+    const payload = serializeEventCollection(rows.map(serializeEvent), total, clamped, limit);
     return servePublicJson(
       c,
       key,
-      fitByteBudget(data, API_PUBLIC_BOUNDS.maxBodyBytes, (trimmed) => ({
+      fitByteBudget(payload.data, API_PUBLIC_BOUNDS.maxBodyBytes, (trimmed) => ({
         ...payload,
         data: trimmed,
       })),
@@ -240,16 +280,7 @@ export function registerPublicApiRoutes(app: Hono<{ Bindings: Env }>): void {
     const hit = readApiPublicCache(key);
     if (hit) return cachedEntry(c, hit);
     // readCounts never throws: missing collectors degrade to nulls, never 0.
-    const counts = await readCounts(c.env);
-    const payload: CommunitySnapshotDto = {
-      member_count: counts.memberCount,
-      online_count: counts.onlineCount,
-      ranks: counts.ranks.map((rank) => ({
-        key: rank.key,
-        label: rank.label,
-        member_count: rank.memberCount,
-      })),
-    };
+    const payload = serializeCommunity(await readCounts(c.env));
     return servePublicJson(c, key, payload);
   });
 
@@ -260,11 +291,7 @@ export function registerPublicApiRoutes(app: Hono<{ Bindings: Env }>): void {
     const hit = readApiPublicCache(key);
     if (hit) return cachedEntry(c, hit);
     // Database-free like the /join leaf: the handoff is env config only.
-    const payload: JoinHandoffDto = {
-      intro: JOIN_INTRO,
-      invite_url: inviteDestination(c.env.DISCORD_INVITE_URL),
-    };
-    return servePublicJson(c, key, payload);
+    return servePublicJson(c, key, serializeJoin(c.env));
   });
 
   // Static discovery document, database-free like robots.txt: no admission,

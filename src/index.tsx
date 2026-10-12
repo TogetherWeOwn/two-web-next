@@ -37,6 +37,7 @@ import { registerSeoLeaves } from "./seo-leaves";
 import { registerStaticLeaves } from "./static-leaves";
 import { safeNext } from "./join/service";
 import { profilesApp } from "./profiles/routes";
+import { registerMcpRoutes } from "./mcp/routes";
 import { registerPublicApiRoutes } from "./public-data/routes";
 import { takeJoinResult } from "./return-journey";
 import { buildSecurityTxt } from "./security-txt";
@@ -567,6 +568,12 @@ registerEventRoutes(
 // readers: every representation is published-only and identical for all
 // viewers, so the shared isolate-local cache needs no cookie partitioning.
 registerPublicApiRoutes(app);
+
+// B2: stateless public read-only MCP at POST /mcp. Same posture as A3 — no
+// session readers, published-only tools, shared rate budget — behind the
+// exact-path transport guard in ./mcp/routes (the global same-origin rule
+// keeps one exact-path exemption for POST /mcp and is otherwise untouched).
+registerMcpRoutes(app);
 
 registerAlertProbe(app);
 
