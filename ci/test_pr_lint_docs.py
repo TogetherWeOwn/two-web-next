@@ -77,6 +77,22 @@ def row_result(rows, needle):
     raise AssertionError(f"docs table has no row mentioning: {needle}")
 
 
+def assert_no_bare_required_claim(text, name):
+    """Fail when a docs block presents warn-only sections as required.
+
+    Each blank-line-separated block is whitespace-collapsed before matching,
+    so hard-wrapped prose (e.g. the old two-line "`pr-lint` requires the title,
+    the linked issue ..." / "and Verification;" template wording) is caught as
+    well as single-line claims.
+    """
+    for block in re.split(r"\n\s*\n", text):
+        collapsed = re.sub(r"\s+", " ", block).lower()
+        if "linked issue" in collapsed and "verification" in collapsed and "requir" in collapsed:
+            assert "warn" in collapsed, (
+                f"{name} still presents warn-only sections as required: {collapsed.strip()[:200]}"
+            )
+
+
 def assert_fails(rows, needle):
     assert "fail" in row_result(rows, needle).lower(), (
         f"docs must classify '{needle}' as failing pr-lint"
@@ -121,11 +137,19 @@ class DocsClassification(unittest.TestCase):
     def test_no_required_wording_for_warn_only_sections(self):
         """The contract bullets must not call warn-only sections 'required' without the warn qualifier."""
         for path in (DOCS, TEMPLATE):
-            text = path.read_text(encoding="utf-8")
-            for line in text.splitlines():
-                low = line.lower()
-                if "linked issue" in low and "verification" in low and "requir" in low:
-                    self.assertIn("warn", low, f"{path.name} still presents warn-only sections as required: {line}")
+            assert_no_bare_required_claim(path.read_text(encoding="utf-8"), path.name)
+
+    def test_required_scan_catches_wrapped_template_claim(self):
+        """Red case: the pre-fix two-line template wording must fail the scan."""
+        old_wording = (
+            "Write short, plain sentences. `pr-lint` requires the title, "
+            "the linked issue (feat/fix/perf/refactor/security)\n"
+            "and Verification; the other sections are optional context for the reviewer."
+        )
+        with self.assertRaises(AssertionError):
+            assert_no_bare_required_claim(old_wording, "template")
+        with self.assertRaises(AssertionError):
+            assert_no_bare_required_claim(old_wording.replace("\n", " "), "template")
 
     def test_template_states_warn_mode(self):
         """The PR template is read first, so it must carry the same warn-mode contract as CONTRIBUTING.md."""
