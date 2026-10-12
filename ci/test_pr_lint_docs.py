@@ -371,6 +371,17 @@ class CheckerBehaviorMatchesDocs(unittest.TestCase):
     def test_workflow_runs_this_test(self):
         text = WORKFLOW.read_text(encoding="utf-8")
         self.assertIn("test_pr_lint_docs.py", text, "pr-gates.yml must run this drift test")
+        job = text.split("  pr-lint:\n", 1)[1].split("  gitleaks:\n", 1)[0]
+        step = job.split("      - name: Unit-test the lint\n", 1)[1].split("      - name:", 1)[0]
+        # Guarded run so stale heads predating the file skip instead of
+        # exiting 5 with NO TESTS RAN, and deletion heads fail closed.
+        self.assertIn("[ -f ci/test_pr_lint_docs.py ]", step)
+        self.assertIn("python3 -m unittest discover -s ci -p 'test_pr_lint_docs.py'", step)
+        self.assertIn("git log --format=%H -1 HEAD -- ci/test_pr_lint_docs.py", step)
+        self.assertIn("refusing to skip", step)
+        self.assertIn("predates #769", step)
+        self.assertNotIn("continue-on-error", step)
+        self.assertNotIn("if:", step)
 
 
 if __name__ == "__main__":
