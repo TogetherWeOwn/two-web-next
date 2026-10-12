@@ -661,18 +661,21 @@ describe.skipIf(!process.env.DATABASE_URL)("RSVP waitlist (agent-testdb)", () =>
     },
   );
 
-  it("exposes only the viewer's position beside Going attendees, with private caching and position-sensitive ETags", async () => {
+  it("keeps the public JSON collection free of viewer waitlist state while HTML stays personalized", async () => {
     const ev = await fullWithLine(2, PAGE_MEMBER_KEYS);
     await client`insert into users (id, username) values (${PAGE_MEMBER_KEYS[0]!}, 'Current holder'), (${PAGE_MEMBER_KEYS[1]!}, 'First waiter'), (${PAGE_MEMBER_KEYS[2]!}, 'Second waiter')`;
     const first = await request("/events.json", PAGE_MEMBER_KEYS[1]!);
     const data = await collection(first);
-    expect(data.find((e) => e.event_key === ev.eventKey)!.waitlist_position).toBe(1);
+    // A0 public contract: identical fields for every session, no personal state.
+    expect(data.find((e) => e.event_key === ev.eventKey)).not.toHaveProperty("waitlist_position");
     const etag = first.headers.get("etag")!;
     const second = await request("/events.json", PAGE_MEMBER_KEYS[2]!, "GET", undefined, false, {
       "if-none-match": etag,
     });
-    expect(second.status).toBe(200);
-    expect((await collection(second))[0]!.waitlist_position).toBe(2);
+    expect(second.status).toBe(304);
+    expect(
+      (await collection(await request("/events.json", PAGE_MEMBER_KEYS[2]!)))[0],
+    ).not.toHaveProperty("waitlist_position");
     const page = await request(`/e/${ev.eventKey}`, PAGE_MEMBER_KEYS[2]!);
     expect(page.headers.get("cache-control")).toBe("private, no-store");
     expect(page.headers.get("vary")).toBe("Cookie");
@@ -694,8 +697,12 @@ describe.skipIf(!process.env.DATABASE_URL)("RSVP waitlist (agent-testdb)", () =>
     const refresh = await request("/events.json", PAGE_MEMBER_KEYS[2]!, "GET", undefined, false, {
       "if-none-match": second.headers.get("etag")!,
     });
-    expect(refresh.status).toBe(200);
-    expect((await collection(refresh))[0]!.waitlist_position).toBe(1);
+    // Going count is unchanged by the promotion (1 going before and after),
+    // so the depersonalized collection validator settles to 304.
+    expect(refresh.status).toBe(304);
+    expect(
+      (await collection(await request("/events.json", PAGE_MEMBER_KEYS[2]!)))[0],
+    ).not.toHaveProperty("waitlist_position");
     const promotedHtml = await (await request(`/e/${ev.eventKey}`, PAGE_MEMBER_KEYS[2]!)).text();
     expect(promotedHtml).toContain('data-waitlist-position="1"');
     expect(promotedHtml).toContain(`href="/members/${PAGE_MEMBER_KEYS[1]}">First waiter</a>`);

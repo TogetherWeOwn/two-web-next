@@ -237,6 +237,18 @@ describe.skipIf(!url)("upcoming list paging (isolated test DB)", () => {
       const jumped = await application.request(`/events?event=${target}%00`, {}, routeEnv(db));
       expect(jumped.status).toBe(200);
       expect(await jumped.text()).toContain(`id="event-${target}"`);
+      // An overlong key never resolves, but it stays a noindex jump URL — not
+      // an indexable copy of page one.
+      const overlong = await application.request(
+        `/events?event=${"x".repeat(65)}`,
+        {},
+        routeEnv(db),
+      );
+      expect(overlong.status).toBe(200);
+      expect(overlong.headers.get("x-robots-tag")).toBe("noindex, follow");
+      const overlongHtml = await overlong.text();
+      expect(overlongHtml).toContain("Page 1 of 2.");
+      expect(overlongHtml).toContain('name="robots" content="noindex, follow"');
     } finally {
       await fixture.dispose();
     }

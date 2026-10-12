@@ -283,6 +283,7 @@ exactly once.
 | `src/privacy.ts` | content |
 | `src/probes/` | observability |
 | `src/profiles/` | profiles |
+| `src/public-data/` | content |
 | `src/qa.ts` | auth |
 | `src/request-log.ts` | observability |
 | `src/return-journey.ts` | auth |

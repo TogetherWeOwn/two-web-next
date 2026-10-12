@@ -333,7 +333,7 @@ describe.skipIf(!process.env.DATABASE_URL)("events.json exposure (agent-testdb)"
     expect(await res.text()).not.toContain("Game published");
   });
 
-  it("shows a member published, cancelled and past events but no drafts", async () => {
+  it("shows only published events to members", async () => {
     await seedStatuses();
     const res = await app.request(
       "/events.json",
@@ -341,10 +341,10 @@ describe.skipIf(!process.env.DATABASE_URL)("events.json exposure (agent-testdb)"
       env,
     );
     expect(res.status).toBe(200);
-    expect(await statusesOf(res)).toEqual(["cancelled", "past", "published"]);
+    expect(await statusesOf(res)).toEqual(["published"]);
   });
 
-  it("shows a moderator drafts alongside everything else", async () => {
+  it("shows the same published events to moderators", async () => {
     await seedStatuses();
     const res = await app.request(
       "/events.json",
@@ -352,15 +352,15 @@ describe.skipIf(!process.env.DATABASE_URL)("events.json exposure (agent-testdb)"
       env,
     );
     expect(res.status).toBe(200);
-    expect(await statusesOf(res)).toEqual(["cancelled", "draft", "past", "published"]);
+    expect(await statusesOf(res)).toEqual(["published"]);
   });
 
   it("exposes only the allowlisted fields on every row", async () => {
     // Legacy allowlist (EventJsonAccessTest.php:71): event_key, title, game,
     // description, starts_at, ends_at, starts_at_local, ends_at_local,
     // timezone, location, capacity, going_count, status, rsvp_open,
-    // synced_to_discord. Next preserves these fields; waitlist_position rides
-    // along for the member viewer. The invariant pinned is exactness — no
+    // synced_to_discord. Viewer-specific waitlist_position is excluded. The
+    // invariant pinned is exactness — no
     // autoincrement id, no creator id, no raw Discord id may ever leave the server.
     await seedStatuses();
     for (const who of [MEMBER, MOD]) {
@@ -388,7 +388,6 @@ describe.skipIf(!process.env.DATABASE_URL)("events.json exposure (agent-testdb)"
           "synced_to_discord",
           "timezone",
           "title",
-          "waitlist_position",
         ]);
       }
     }

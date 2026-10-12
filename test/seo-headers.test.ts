@@ -242,7 +242,8 @@ describe("static leaves (DB-free floor)", () => {
     expect(html).toContain('data-testid="faq-list"');
     expect(html).toContain('data-testid="faq-join"');
     expect(html).toContain("What is Together We Own?");
-    expect(html).toContain("Sunday Squad, every Sunday at 8pm Eastern");
+    expect(html).not.toContain("Sunday Squad");
+    expect(html).toContain("Game nights are scheduled in Discord");
     expect(html).toContain("How do I open a private support ticket?");
     expect(html).toContain("How do I fill in my profile?");
     expect(html).toContain("How does the game picker work?");
