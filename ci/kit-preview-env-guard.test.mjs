@@ -49,6 +49,19 @@ for (const [name, env] of [
   });
 }
 
+for (const [name, env] of [
+  ["kit URL set, hono empty", { KIT_PREVIEW_URL: "https://kit.invalid/", HONO_PREVIEW_URL: "" }],
+  ["kit empty, hono URL set", { KIT_PREVIEW_URL: "", HONO_PREVIEW_URL: "https://hono.invalid/" }],
+]) {
+  test(`empty-string preview URL (${name}) exits 2 with the diagnostic and no fetch`, () => {
+    const { status, output } = runScript({ env, stub: throwingFetchStub });
+    assert.equal(status, 2, `expected exit 2, got ${status}\n${output}`);
+    assert.match(output, /set both KIT_PREVIEW_URL and HONO_PREVIEW_URL/);
+    assert.doesNotMatch(output, /fetch must not run/);
+    assert.doesNotMatch(output, /all parity assertions passed/);
+  });
+}
+
 test("both preview URLs against divergent origins exit 1 on the section mismatch", () => {
   const page = (key) =>
     `<html><head><meta name="robots" content="noindex, follow"></head>` +

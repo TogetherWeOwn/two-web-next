@@ -341,9 +341,9 @@ async function previewParity(kitBase, honoBase) {
   );
 }
 
-const kitPreview = process.env.KIT_PREVIEW_URL;
-const honoPreview = process.env.HONO_PREVIEW_URL;
-if (((kitPreview ?? null) === null) !== ((honoPreview ?? null) === null)) {
+const kitPreview = process.env.KIT_PREVIEW_URL?.trim() || null;
+const honoPreview = process.env.HONO_PREVIEW_URL?.trim() || null;
+if (Boolean(kitPreview) !== Boolean(honoPreview)) {
   console.error(
     "kit-preview-e2e: set both KIT_PREVIEW_URL and HONO_PREVIEW_URL, or neither (unit mode)",
   );
