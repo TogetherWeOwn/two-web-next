@@ -136,6 +136,73 @@ describe("negotiated 403/410 helpers", () => {
     expect(retired.headers.get("content-type")).toMatch(/text\/plain/);
     expect(await retired.text()).not.toContain("recovery-code");
   });
+
+  it("forbidden and gone release 403/410 inside the member-read boundary", async () => {
+    const { forbidden, gone } = await import("../src/errors");
+    const { memberReadBoundary } = await import("../src/member-reads");
+    const sink = vi.fn(async () => true);
+    const f = new Hono<{ Bindings: Env }>();
+    f.use("*", (c, next) =>
+      memberReadBoundary(
+        c,
+        { resource: "profile", action: "view", route: "test.kit-errors", viewer: null },
+        sink,
+        next,
+      ),
+    );
+    f.get("/forbidden", (c) => forbidden(c));
+    f.get("/gone", (c) => gone(c));
+    f.get("/events/:file{.+\\.ics}", (c) => forbidden(c));
+    f.get("/retired.ics", (c) => gone(c));
+
+    const htmlForbidden = await f.request("/forbidden", {}, env);
+    expect(htmlForbidden.status).toBe(403);
+    expect(htmlForbidden.headers.get("content-type")).toMatch(/text\/html/);
+    expect(htmlForbidden.headers.get("cache-control")).toBe("private, no-store");
+    expect(htmlForbidden.headers.get("vary")).toContain("Accept");
+    expect(await htmlForbidden.text()).toContain("You do not have access");
+
+    const jsonForbidden = await f.request(
+      "/forbidden",
+      { headers: { accept: "application/json" } },
+      env,
+    );
+    expect(jsonForbidden.status).toBe(403);
+    expect(jsonForbidden.headers.get("content-type")).toMatch(/application\/json/);
+    expect(jsonForbidden.headers.get("vary")).toContain("Accept");
+    expect(await jsonForbidden.json()).toEqual({
+      error: "forbidden",
+      message: "You do not have access to this.",
+    });
+
+    const feedForbidden = await f.request("/events/abc.ics", {}, env);
+    expect(feedForbidden.status).toBe(403);
+    expect(feedForbidden.headers.get("content-type")).toMatch(/text\/plain/);
+    expect(feedForbidden.headers.get("vary")).toContain("Accept");
+    expect(await feedForbidden.text()).toBe("Forbidden");
+
+    const htmlGone = await f.request("/gone", {}, env);
+    expect(htmlGone.status).toBe(410);
+    expect(htmlGone.headers.get("content-type")).toMatch(/text\/html/);
+    expect(htmlGone.headers.get("cache-control")).toBe("private, no-store");
+    expect(htmlGone.headers.get("vary")).toContain("Accept");
+    expect(await htmlGone.text()).toContain("This page is gone");
+
+    const jsonGone = await f.request("/gone", { headers: { accept: "application/json" } }, env);
+    expect(jsonGone.status).toBe(410);
+    expect(jsonGone.headers.get("content-type")).toMatch(/application\/json/);
+    expect(jsonGone.headers.get("vary")).toContain("Accept");
+    expect(await jsonGone.json()).toEqual({ reason: "gone", message: "This page is gone." });
+
+    const feedGone = await f.request("/retired.ics", {}, env);
+    expect(feedGone.status).toBe(410);
+    expect(feedGone.headers.get("content-type")).toMatch(/text\/plain/);
+    expect(feedGone.headers.get("vary")).toContain("Accept");
+    expect(await feedGone.text()).toBe("Gone");
+
+    // No member data was read, so recovery is offered with no audit row.
+    expect(sink).not.toHaveBeenCalled();
+  });
 });
 
 describe("unknown and retired URLs stay 404", () => {
@@ -383,5 +450,35 @@ describe("Kit Svelte error shells (text pins; the root suite cannot transform Sv
       headers: { accept: "application/json;q=0, text/html" },
     });
     expect(negotiateKitError(excluded)).toBe("html");
+  });
+
+  it("negotiateKitError keeps browser event GETs as HTML, feeds as text, writes as JSON", async () => {
+    const { negotiateKitError } = await import("../src/kit-errors");
+    const browserAccept = "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8";
+    for (const path of ["/events/past", "/events", "/events/01HXYZ"]) {
+      expect(
+        negotiateKitError(
+          new Request(`https://next.example.test${path}`, {
+            headers: { accept: browserAccept },
+          }),
+        ),
+      ).toBe("html");
+    }
+    expect(
+      negotiateKitError(
+        new Request("https://next.example.test/events/abc.ics", {
+          headers: { accept: browserAccept },
+        }),
+      ),
+    ).toBe("text");
+    expect(negotiateKitError(new Request("https://next.example.test/events/abc.ics"))).toBe("text");
+    expect(
+      negotiateKitError(
+        new Request("https://next.example.test/events", {
+          method: "POST",
+          headers: { accept: "text/html" },
+        }),
+      ),
+    ).toBe("json");
   });
 });
