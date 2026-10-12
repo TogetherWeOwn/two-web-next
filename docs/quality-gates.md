@@ -40,6 +40,12 @@ not fail) unless marked HARD. All of them run on the existing runners only.
   new exception rows, lowered table thresholds, removed enforced-threshold
   rows, and added `.constraintsignore` lines fail `check`. Renamed threshold
   rows pair by their Checked-by cell, so a rename-plus-lowering still fails.
+  Removed threshold rows read the origin path, so moving CONSTRAINTS.md to
+  another name and lowering a row still fails, and deleting CONSTRAINTS.md
+  fails as a threshold removal. Test renames are judged against the runner
+  globs (vitest, Playwright specs under e2e/); e2e safety and ci selftest
+  scripts run via enumerated paths (only ci/a11y-*.test.mjs runs via glob),
+  so any rename of those needs a waiver.
   Waivers are reasoned commit trailers (`test-deleted`, `assertion-removed`,
   `threshold-removed`, `new-exemption`) and every active one is printed to the
   log and the job summary for reviewer visibility. The ignore list is pinned

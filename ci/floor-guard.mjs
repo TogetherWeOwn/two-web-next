@@ -43,30 +43,31 @@ const stripPrefix = (p) => p.replace(/^[ab]\//, "");
 // Runner globs, not name patterns, decide whether a moved test still runs.
 // Vitest includes only test/**/*.test.ts and test/**/*.test.mjs
 // (vitest.config.ts); Playwright e2e specs run via testMatch **/*.spec.ts
-// (playwright*.config.ts) and the e2e safety scripts run via explicit
-// `node --test e2e/*.test.mjs` paths; ci selftests run via explicit
-// `node --test ci/*selftest*` paths. A rename whose source is runnable but
-// whose destination leaves the runner globs (docs/a.test.ts, test/a.test.js)
-// is a deletion from the suite, even though the name still looks like a test.
+// under testDir ./e2e (playwright.config.ts), so a spec moved out of e2e/ no
+// longer runs. The e2e safety scripts run via an explicit list in
+// package.json (`node --test e2e/safety.test.mjs e2e/qa-request.test.mjs
+// ...`); `node --test a b` silently skips a missing path and exits 0, so any
+// rename of a listed script breaks the wiring even when the new name matches
+// the same pattern. Likewise most ci selftests run via explicit single paths
+// (`node --test ci/cutover-check-selftest.mjs`); only ci/a11y-*.test.mjs runs
+// via a shell glob, so only a rename within that glob keeps running. A rename
+// whose source is runnable but whose destination leaves the runner (docs/
+// move, suffix change, out-of-glob rename, or rewiring rename) is a deletion
+// from the suite, even though the name still looks like a test.
 const VITEST_RE = /^test\/.*\.test\.(ts|mjs)$/;
 const E2E_SPEC_RE = /^e2e\/.*\.spec\.ts$/;
 const E2E_SAFETY_RE = /^e2e\/.*\.test\.mjs$/;
+const CI_A11Y_RE = /^ci\/a11y-.*\.test\.mjs$/;
 const isCiSelftest = (p) => p.startsWith("ci/") && TEST_PATH.test(p) && CODE_PATH.test(p);
 
 function stillRunnable(from, to) {
   if (VITEST_RE.test(from)) return VITEST_RE.test(to);
   if (E2E_SPEC_RE.test(from)) return E2E_SPEC_RE.test(to);
-  if (E2E_SAFETY_RE.test(from)) return E2E_SAFETY_RE.test(to);
+  // Enumerated runners fail closed: any rename needs a test-deleted waiver.
+  if (E2E_SAFETY_RE.test(from)) return to === from;
   if (isCiSelftest(from)) {
-    const ext = (s) => s.match(/\.[^.]*$/)?.[0] ?? "";
-    // ci selftests run via explicit paths, so a move out of ci/ or a suffix
-    // change breaks the wiring even when the name still matches.
-    return (
-      TEST_PATH.test(to) &&
-      CODE_PATH.test(to) &&
-      to.split("/")[0] === from.split("/")[0] &&
-      ext(to) === ext(from)
-    );
+    if (CI_A11Y_RE.test(from)) return CI_A11Y_RE.test(to);
+    return to === from;
   }
   return TEST_PATH.test(to) && CODE_PATH.test(to);
 }
@@ -240,6 +241,21 @@ export function scanDeleted(deletedFiles, waivers = new Map()) {
   for (const file of deletedFiles) {
     if (TEST_PATH.test(file) && !waivers.get("test-deleted")?.has(file))
       flag(findings, "test-deleted", file, "(test file deleted)");
+    // Deleting CONSTRAINTS.md removes every enforced threshold at once: the
+    // per-row hunks carry file "" so checkThresholds never sees them, and the
+    // path only lands here. A legitimate removal passes only with a reasoned
+    // `Floor-waiver: threshold-removed CONSTRAINTS.md -- <reason>` trailer.
+    if (
+      CONSTRAINTS_FILE.test(file) &&
+      !waivers.get("threshold-removed")?.has(file) &&
+      !waivers.get("threshold-removed")?.has("CONSTRAINTS.md")
+    )
+      flag(
+        findings,
+        "threshold-removed",
+        file,
+        "(enforced thresholds deleted with CONSTRAINTS.md)",
+      );
   }
   return findings;
 }
@@ -272,7 +288,15 @@ export function checkThresholds(removed, added, waivers = new Map()) {
     const b = nums(before);
     return nums(after).some((n, i) => b[i] !== undefined && n < b[i]);
   };
-  const removedRows = removed.filter((l) => CONSTRAINTS_FILE.test(l.file) && isEnforcedRow(l.text));
+  // Removed rows read the origin: a rename carries the destination as `file`
+  // (the old path is only in `from`), so filtering on `file` would miss a
+  // CONSTRAINTS.md moved to another name. Added rows stay on `file`, so a
+  // move leaves the rows unpaired and they flag as threshold-removed unless
+  // waived; findings name the origin so the waiver target is clear.
+  const originOf = (l) => l.from ?? l.file;
+  const removedRows = removed.filter(
+    (l) => CONSTRAINTS_FILE.test(originOf(l)) && isEnforcedRow(l.text),
+  );
   const addedRows = added.filter((l) => CONSTRAINTS_FILE.test(l.file) && isEnforcedRow(l.text));
   const addedByLabel = new Map();
   const addedByCheckedBy = new Map();
@@ -284,21 +308,22 @@ export function checkThresholds(removed, added, waivers = new Map()) {
   const paired = new Set();
   for (const r of removedRows) {
     const key = label(r.text);
+    const origin = originOf(r);
     const sameLabel = addedByLabel.get(key);
     if (sameLabel) {
       if (isLowered(r.text, sameLabel.text))
-        flag(findings, "threshold-lowered", r.file, `${r.text}  ->  ${sameLabel.text}`);
+        flag(findings, "threshold-lowered", origin, `${r.text}  ->  ${sameLabel.text}`);
       continue;
     }
     const sameCheck = addedByCheckedBy.get(checkedBy(r.text));
     if (sameCheck && !paired.has(sameCheck)) {
       paired.add(sameCheck);
       if (isLowered(r.text, sameCheck.text))
-        flag(findings, "threshold-lowered", r.file, `${r.text}  ->  ${sameCheck.text}`);
+        flag(findings, "threshold-lowered", origin, `${r.text}  ->  ${sameCheck.text}`);
       continue;
     }
     if (waivers.get("threshold-removed")?.has(key)) continue;
-    flag(findings, "threshold-removed", r.file, r.text);
+    flag(findings, "threshold-removed", origin, r.text);
   }
   return findings;
 }

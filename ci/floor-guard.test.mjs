@@ -233,6 +233,185 @@ describe("floor-guard", () => {
     }
   });
 
+  it("flags e2e spec and safety renames out of the runner", () => {
+    // Each runner branch needs its own pin: a mutant returning true for one
+    // branch must fail. Specs run under testDir ./e2e, so docs/ is out; the
+    // safety .txt destination matches no runner at all.
+    for (const [from, to] of [
+      ["e2e/a.spec.ts", "docs/a.spec.ts"],
+      ["e2e/x.test.mjs", "e2e/x.txt"],
+    ]) {
+      const renamed = [
+        `diff --git a/${from} b/${to}`,
+        "similarity index 100%",
+        `rename from ${from}`,
+        `rename to ${to}`,
+      ].join("\n");
+      assert.ok(
+        guardDiff(renamed).some((f) => f.rule === "test-deleted"),
+        `${from} -> ${to} needs a test-deleted waiver`,
+      );
+    }
+  });
+
+  it("flags ci selftest renames out of the wiring", () => {
+    // A move out of ci/ or a suffix change breaks the explicit wiring even
+    // though the name still matches the test pattern.
+    for (const to of ["docs/x-selftest.mjs", "ci/x-selftest.cjs"]) {
+      const renamed = [
+        "diff --git a/ci/x-selftest.mjs b/" + to,
+        "similarity index 100%",
+        "rename from ci/x-selftest.mjs",
+        `rename to ${to}`,
+      ].join("\n");
+      assert.ok(
+        guardDiff(renamed).some((f) => f.rule === "test-deleted"),
+        `ci/x-selftest.mjs -> ${to} needs a test-deleted waiver`,
+      );
+    }
+  });
+
+  it("flags enumerated-runner renames that keep the same pattern", () => {
+    // `node --test a b` silently skips a missing path and exits 0, so a
+    // rename that keeps the pattern still drops tests: e2e:safety falls from
+    // 80 to 66 passing tests, and ci/policy drops out of the a11y glob.
+    for (const [from, to] of [
+      ["e2e/qa-request.test.mjs", "e2e/qa-request2.test.mjs"],
+      ["ci/a11y-policy.test.mjs", "ci/policy.test.mjs"],
+      ["ci/cutover-check-selftest.mjs", "ci/cutover-renamed-selftest.mjs"],
+    ]) {
+      const renamed = [
+        `diff --git a/${from} b/${to}`,
+        "similarity index 100%",
+        `rename from ${from}`,
+        `rename to ${to}`,
+      ].join("\n");
+      assert.ok(
+        guardDiff(renamed).some((f) => f.rule === "test-deleted"),
+        `${from} -> ${to} breaks enumerated wiring and needs a waiver`,
+      );
+    }
+  });
+
+  it("stays silent on an a11y rename within the glob", () => {
+    // ci/a11y-*.test.mjs runs via shell glob, so a rename that keeps the
+    // glob keeps running.
+    const renamed = [
+      "diff --git a/ci/a11y-policy.test.mjs b/ci/a11y-renamed.test.mjs",
+      "similarity index 100%",
+      "rename from ci/a11y-policy.test.mjs",
+      "rename to ci/a11y-renamed.test.mjs",
+    ].join("\n");
+    assert.deepEqual(
+      guardDiff(renamed).filter((f) => f.rule === "test-deleted"),
+      [],
+    );
+  });
+
+  it("clears a renamed-test strip only with a waiver on the old path", () => {
+    // Removed lines carry the destination as pairing key and the origin
+    // separately; the waiver lookup and finding label read the origin.
+    const stripped = [
+      "diff --git a/test/a.test.ts b/test/unit/a.test.ts",
+      "similarity index 90%",
+      "rename from test/a.test.ts",
+      "rename to test/unit/a.test.ts",
+      "--- a/test/a.test.ts",
+      "+++ b/test/unit/a.test.ts",
+      "@@ -1,2 +1 @@",
+      "-expect(1).toBe(1);",
+      "-expect(2).toBe(2);",
+      "+expect(1).toBeLessThan(2);",
+    ].join("\n");
+    const findings = guardDiff(stripped);
+    assert.ok(findings.some((f) => f.rule === "assertion-removed"));
+    assert.equal(
+      findings.find((f) => f.rule === "assertion-removed").file,
+      "test/a.test.ts",
+      "finding names the origin path",
+    );
+    const oldWaiver = parseFloorWaivers(
+      "move suite\n\nFloor-waiver: assertion-removed test/a.test.ts -- assertions moved with the file\n",
+    );
+    assert.deepEqual(
+      guardDiff(stripped, { waivers: oldWaiver }).filter((f) => f.rule === "assertion-removed"),
+      [],
+      "waiver on the old path clears the strip",
+    );
+    const newWaiver = parseFloorWaivers(
+      "move suite\n\nFloor-waiver: assertion-removed test/unit/a.test.ts -- assertions moved with the file\n",
+    );
+    assert.ok(
+      guardDiff(stripped, { waivers: newWaiver }).some((f) => f.rule === "assertion-removed"),
+      "waiver on the new path must not clear the strip",
+    );
+  });
+
+  it("flags a CONSTRAINTS.md move that lowers a threshold", () => {
+    // Removed rows read the origin, so a move to another name leaves the
+    // rows unpaired and they flag as threshold-removed; the finding names
+    // the origin so the waiver target is clear.
+    const moved = [
+      "diff --git a/CONSTRAINTS.md b/docs/QUALITY.md",
+      "similarity index 90%",
+      "rename from CONSTRAINTS.md",
+      "rename to docs/QUALITY.md",
+      "--- a/CONSTRAINTS.md",
+      "+++ b/docs/QUALITY.md",
+      "@@ -1 +1 @@",
+      "-| Coverage of changed lines | Added TS lines ≥ 80% executed | `npm run patch:coverage` | CI |",
+      "+| Coverage of changed lines | Added TS lines ≥ 50% executed | `npm run patch:coverage` | CI |",
+    ].join("\n");
+    const findings = guardDiff(moved);
+    assert.ok(
+      findings.some((f) => f.rule === "threshold-removed"),
+      "moved-and-lowered threshold needs a waiver",
+    );
+    assert.equal(findings.find((f) => f.rule === "threshold-removed").file, "CONSTRAINTS.md");
+  });
+
+  it("stays silent on a CONSTRAINTS.md move with no edit", () => {
+    // A 100% rename carries no hunks, so there are no rows to pair: a pure
+    // move with identical content is silent.
+    const moved = [
+      "diff --git a/CONSTRAINTS.md b/docs/QUALITY.md",
+      "similarity index 100%",
+      "rename from CONSTRAINTS.md",
+      "rename to docs/QUALITY.md",
+    ].join("\n");
+    assert.deepEqual(
+      moved &&
+        guardDiff(moved).filter(
+          (f) => f.rule === "threshold-removed" || f.rule === "threshold-lowered",
+        ),
+      [],
+    );
+  });
+
+  it("flags a deleted CONSTRAINTS.md as a threshold removal", () => {
+    // A deleted file's hunks carry file "" so per-row checks never see them;
+    // the path only lands in deletedFiles, which flags threshold-removed.
+    const d = [
+      "diff --git a/CONSTRAINTS.md b/CONSTRAINTS.md",
+      "deleted file mode 100644",
+      "--- a/CONSTRAINTS.md",
+      "+++ /dev/null",
+      "@@ -1 +0,0 @@",
+      "-| Coverage of changed lines | Added TS lines ≥ 80% executed | `npm run patch:coverage` | CI |",
+    ].join("\n");
+    assert.ok(
+      guardDiff(d).some((f) => f.rule === "threshold-removed"),
+      "deleting CONSTRAINTS.md removes the whole bar",
+    );
+    const waived = parseFloorWaivers(
+      "move thresholds\n\nFloor-waiver: threshold-removed CONSTRAINTS.md -- thresholds moved to docs/QUALITY.md\n",
+    );
+    assert.deepEqual(
+      guardDiff(d, { waivers: waived }).filter((f) => f.rule === "threshold-removed"),
+      [],
+    );
+  });
+
   it("accepts reasoned, path-scoped floor waivers for test removals", () => {
     const deletion = [
       "diff --git a/test/gone.test.ts b/test/gone.test.ts",
