@@ -129,7 +129,7 @@ class Ratchet(unittest.TestCase):
         self.assertEqual(1, self.result()[0])
 
     def test_fixture_exclusions_are_exact_and_reasoned(self):
-        self.assertEqual(3, len(ratchet.LINT_FIXTURE_EXCLUSIONS))
+        self.assertEqual(4, len(ratchet.LINT_FIXTURE_EXCLUSIONS))
         for name, reason in ratchet.LINT_FIXTURE_EXCLUSIONS.items():
             self.assertTrue(reason.strip())
             self.assertNotIn("*", name)
