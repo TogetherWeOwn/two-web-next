@@ -177,11 +177,12 @@ describe("homepage theme", () => {
     );
     const html = await response.text();
     expect(html).toContain('id="join-heading"');
-    expect(html).toContain('src="https://discord.com/widget?id=123456789012345678&amp;theme=dark"');
     expect(html).toContain(
-      'sandbox="allow-scripts allow-same-origin" loading="lazy" referrerpolicy="no-referrer"',
+      'href="https://discord.com/widget?id=123456789012345678&amp;theme=dark"',
     );
-    expect(html).toContain('data-testid="join-widget"');
+    expect(html).toContain('data-testid="join-widget-load"');
+    expect(html).toContain('<script src="/islands/join-widget.js" defer=""></script>');
+    expect(html).not.toContain("<iframe");
   });
 
   it.each([undefined, "guild", "123", "1234567890&evil=1", "https://evil.test"])(

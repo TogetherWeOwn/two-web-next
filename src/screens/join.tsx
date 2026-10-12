@@ -46,16 +46,19 @@ export const Join: FC<{
         </div>
         <div class="join-preview">
           {widgetUrl ? (
-            <iframe
-              title="TWO Discord server preview"
-              src={widgetUrl}
-              width="350"
-              height="500"
-              sandbox="allow-scripts allow-same-origin"
-              loading="lazy"
-              referrerpolicy="no-referrer"
-              data-testid="join-widget"
-            />
+            <div class="strap">
+              <p>Discord&apos;s live server preview loads only when you ask for it.</p>
+              <a
+                class="btn"
+                href={widgetUrl}
+                referrerpolicy="no-referrer"
+                data-join-widget
+                data-testid="join-widget-load"
+              >
+                Show live server preview
+              </a>
+              <script src="/islands/join-widget.js" defer />
+            </div>
           ) : (
             <p class="strap" data-testid="join-widget-fallback">
               Live server preview is unavailable — the join button above still works.

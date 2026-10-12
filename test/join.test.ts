@@ -331,16 +331,13 @@ describe("W15 join landing and recovery parity", () => {
     },
   );
 
-  it("renders the widget with sandbox, lazy loading and no-referrer", async () => {
+  it("defers the widget to a click: a no-referrer link and the island, no iframe", async () => {
     const { env: e } = isolated();
     const html = await (await app.request("/join", {}, e)).text();
-    for (const attr of [
-      'sandbox="allow-scripts allow-same-origin"',
-      'loading="lazy"',
-      'referrerpolicy="no-referrer"',
-    ]) {
-      expect(html).toContain(attr);
-    }
+    expect(html).toContain('data-testid="join-widget-load"');
+    expect(html).toContain('referrerpolicy="no-referrer"');
+    expect(html).toContain('<script src="/islands/join-widget.js" defer=""></script>');
+    expect(html).not.toContain("<iframe");
   });
 
   it.each(["", "javascript:alert(1)", "https://evil.test/invite"])(
