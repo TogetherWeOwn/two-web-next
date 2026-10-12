@@ -439,7 +439,7 @@ describe("security headers per route class", () => {
       expect(res.headers.get("content-type"), path).toContain("text/html");
       const csp = res.headers.get("Content-Security-Policy");
       expect(csp, path).toContain("default-src 'self'");
-      expect(csp, path).toContain("report-uri /csp-reports");
+      expect(csp, path).not.toContain("report-uri");
       expect(csp, path).toContain("report-to csp-endpoint");
       expect(res.headers.get("reporting-endpoints"), path).toBe('csp-endpoint="/csp-reports"');
     }

@@ -25,7 +25,8 @@
     return;
   var active = null;
   var deadlineTimer = null;
-  var renderedUrl = window.location.href;
+  // Path and query of the rendered page; a fragment does not change the page.
+  var renderedAddress = pageAddress(new URL(window.location.href));
   // Owned read deadline for one page turn: fetch plus response-body completion.
   // One shot per read, never a repeat; superseded timers are disarmed and an
   // obsolete timer that still fires cannot touch a newer read.
@@ -33,6 +34,10 @@
   // The deadline needs both timer globals; harnesses without a fake clock keep
   // the pre-deadline admission behavior.
   var canTimeout = typeof setTimeout !== "undefined" && typeof clearTimeout !== "undefined";
+
+  function pageAddress(url) {
+    return url.pathname + url.search;
+  }
 
   function clearDeadline() {
     if (deadlineTimer !== null) {
@@ -54,7 +59,8 @@
     feedback.textContent = root.dataset.loadError;
     // Same reconciliation as an ordinary failure: a click that never pushed its
     // target stays inline, a Back/forward read reloads the SSR document.
-    if (!push || window.location.href !== renderedUrl) window.location.assign(window.location.href);
+    if (!push || pageAddress(new URL(window.location.href)) !== renderedAddress)
+      window.location.assign(window.location.href);
   }
 
   function archiveUrl(href, fromHistory) {
@@ -103,6 +109,8 @@
     if (active) active.abort();
     clearDeadline();
     var controller = new AbortController();
+    // Back/forward reads must not be skipped by the fragment-only popstate rule.
+    controller.fromHistory = !push;
     active = controller;
     // Focus ownership: an uninterrupted page turn lands on the archive heading,
     // but a member who deliberately tabs to a stable header/footer control while
@@ -203,14 +211,14 @@
       live.canonical.href = incoming.href;
       live.og.content = incoming.href;
       if (push) window.history.pushState(null, "", url.pathname + url.search);
-      renderedUrl = url.href;
+      renderedAddress = pageAddress(url);
       feedback.textContent = "";
       if (ownsFocus || focusInsideSwap) heading.focus();
     } catch (error) {
       if (active !== controller || error.name === "AbortError") return;
       feedback.textContent = root.dataset.loadError;
       // A click may have aborted a Back/forward read after the address changed.
-      if (!push || window.location.href !== renderedUrl)
+      if (!push || pageAddress(new URL(window.location.href)) !== renderedAddress)
         window.location.assign(window.location.href);
     } finally {
       document.removeEventListener("focusin", trackFocus);
@@ -250,6 +258,10 @@
   window.addEventListener("popstate", function () {
     // Entry URLs may include tracking parameters, noncanonical pages or fragments.
     var url = archiveUrl(window.location.href, true);
+    // A fragment-only navigation (the skip link to #main) also fires popstate
+    // with the rendered path and query: nothing to restore, so no request.
+    // An in-flight Back/forward read still owns the zones and must be replaced.
+    if (url && pageAddress(url) === renderedAddress && !(active && active.fromHistory)) return;
     if (url) load(url, false);
     else window.location.assign(window.location.href);
   });

@@ -6,18 +6,26 @@ import type { Next } from "hono";
 import { getSignedCookie } from "hono/cookie";
 import { sessionStoreFor } from "../admin/guard";
 import { enableAuthStatus } from "../auth-status";
+import { alertRequestError } from "../alerts";
 import { isDatabaseUnavailable } from "../db/errors";
 import { databaseUnavailable } from "../errors";
 import { bufferedMemberText, memberReadBoundary } from "../member-reads";
 import { bounceToLogin, takeJoinResult } from "../return-journey";
 import { SESSION_COOKIE } from "../session-cookie";
 import { hashToken } from "../sessions";
+import { requestRoute, safeRequestId } from "../request-log";
 import type { Ctx, ProfileApp, ProfileDeps, Viewer } from "./routes-shared";
 import type { ProfileStores } from "./routes-stores";
 
 export function profileError(error: Error, c: Ctx) {
+  alertRequestError(error, {
+    method: c.req.method,
+    route: requestRoute(c),
+    requestId: c.get("requestId"),
+  });
   console.error("Profile request failed; refusing contents.", {
     exception: error.constructor.name,
+    request_id: safeRequestId(c.get("requestId")),
   });
   // Writes have no read boundary: a classified outage gets the shared
   // envelope here. Reads are replaced by the boundary either way.

@@ -2,6 +2,7 @@
 // of src/profiles/routes.tsx. Admission (throttle, owner only) runs first, then
 // the body limit, then the save.
 import { requestBodyLimit } from "../body-limit";
+import { alertRequestError } from "../alerts";
 import { isDatabaseUnavailable } from "../db/errors";
 import { databaseUnavailable } from "../errors";
 import {
@@ -14,6 +15,7 @@ import { ProfilePage } from "./pages";
 import { admitWrite } from "./routes-admission";
 import type { Ctx, ProfileApp, ProfileDeps } from "./routes-shared";
 import type { ProfileStores } from "./routes-stores";
+import { requestRoute, safeRequestId } from "../request-log";
 import { validateProfile } from "./validation";
 
 // UpdateProfileRequest's fields plus the spam-trap pair. Anything else (user_id,
@@ -97,7 +99,15 @@ export function registerWriteRoutes(
     try {
       if (!trapped) await store.save(id, result.attrs);
     } catch (err) {
-      console.error("profile save failed", { exception: (err as Error)?.constructor?.name });
+      alertRequestError(err, {
+        method: c.req.method,
+        route: requestRoute(c),
+        requestId: c.get("requestId"),
+      });
+      console.error("profile save failed", {
+        exception: (err as Error)?.constructor?.name,
+        request_id: safeRequestId(c.get("requestId")),
+      });
       if (isDatabaseUnavailable(err)) return databaseUnavailable(c);
       return c.text("Could not save your profile.", 500);
     }

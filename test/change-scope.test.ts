@@ -367,7 +367,7 @@ describe("ci heavy-job scope gates", () => {
   it("check still runs on every verdict and gates on the audit result", () => {
     const block = jobBlock("check");
     expect(block).toMatch(/\n    needs: \[a11y, lighthouse, bundle-budget, docs-links, scope\]\n/);
-    expect(block).toMatch(/\n    if: always\(\)\n/);
+    expect(block).toMatch(/\n    if: \$\{\{ !cancelled\(\) \}\}\n/);
   });
 
   it("runs the adapter build, dry run and generated Worker fixture in required check", () => {
@@ -402,7 +402,7 @@ describe("ci heavy-job scope gates", () => {
   it("ci-ok aggregates every gated job and fails closed on scope", () => {
     const block = jobBlock("ci-ok");
     expect(block).toMatch(/\n    needs: \[a11y, lighthouse, bundle-budget, check, scope\]\n/);
-    expect(block).toMatch(/\n    if: always\(\)\n/);
+    expect(block).toMatch(/\n    if: \$\{\{ !cancelled\(\) \}\}\n/);
     expect(block).toContain("SCOPE_RESULT: ${{ needs.scope.result }}");
     expect(block).toContain("CHECK_RESULT: ${{ needs.check.result }}");
   });
@@ -517,9 +517,9 @@ describe("e2e-ok aggregator (required check)", () => {
   const e2e = readFileSync(".github/workflows/e2e.yml", "utf8");
   const agg = e2e.split("\n  e2e-ok:\n")[1] ?? "";
 
-  it("runs always and depends on both scope and the smoke", () => {
+  it("runs unless its run was cancelled and depends on both scope and the smoke", () => {
     expect(agg).toMatch(/\n    needs: \[scope, browser-smoke\]\n/);
-    expect(agg).toMatch(/\n    if: always\(\)\n/);
+    expect(agg).toMatch(/\n    if: \$\{\{ !cancelled\(\) \}\}\n/);
   });
 
   it("fails on a failed scope and on a failed or cancelled smoke", () => {
@@ -737,4 +737,46 @@ describe("backup selftest wiring", () => {
     expect(result.docsOnly).toBe("false");
     expect(result.app).toBe("true");
   });
+});
+
+// The QA artifact scrubber is a privacy gate: its offline regressions must run
+// inside the required `check` job, never as an optional extra.
+describe("scrub selftest wiring", () => {
+  const ci = readFileSync(".github/workflows/ci.yml", "utf8");
+  const check = ci.split("\n  check:\n")[1]?.split(/\n  [\w-]+:\n/)[0] ?? "";
+  const steps = check.split("\n    steps:\n")[1]?.split(/\n      - /) ?? [];
+  const command = "python3 ci/scrub-qa-token-selftest";
+  const gate =
+    "if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true')";
+
+  it("check runs the scrub selftest exactly once under the app/full gate", () => {
+    const matching = steps.filter((step) =>
+      step.split("\n").some((line) => line === `        run: ${command}`),
+    );
+    expect(matching).toHaveLength(1);
+    const lines = (matching[0] ?? "").split("\n");
+    expect(lines.filter((line) => line.startsWith("        if:"))).toEqual([`        ${gate}`]);
+  });
+
+  it("lets no scrub step swallow a failure", () => {
+    const scrub = steps.filter((step) => step.includes(command));
+    expect(scrub).toHaveLength(1);
+    for (const step of scrub) {
+      const body = step
+        .split("\n")
+        .filter((line) => !line.startsWith("        if:"))
+        .join("\n");
+      expect(body).not.toMatch(/continue-on-error|\|\||set \+e|; *true\b/);
+    }
+  });
+
+  it.each([["ci/scrub-qa-token.py"], ["ci/scrub-qa-token-selftest"]] as [string][])(
+    "%s selects the app area",
+    (path) => {
+      const result = scope([[path, ""]]);
+      expect(result.docsOnly).toBe("false");
+      expect(result.app).toBe("true");
+      expect(result.draft).toBe("false");
+    },
+  );
 });

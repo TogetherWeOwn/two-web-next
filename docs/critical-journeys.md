@@ -14,8 +14,8 @@ non-Actions execution.
 | QA sign-in → keyboard profile edit | `e2e/profile.spec.ts` | Genuine QA session cookie; tab order and Enter submit; PATCH 200; saved status focused; values survive reload |
 | Events list → event page → RSVP going → withdraw | `e2e/events.spec.ts` | Real going/withdraw controls; PUT 201 and DELETE 204; both states persist after reload |
 | Capacity-1 waitlist join → leave, and promotion on seat-holder withdraw | `e2e/event-waitlist.spec.ts` | Capacity-1 fixtures: moderator fills the seat, member waitlist-joins at `#1 in line`, leaves and the join control returns; second fixture: seat-holder withdraw promotes automatically (`You're in`, `1 of 1 going`, no claim click), persisting across reload; fixtures cancelled in `finally` through the request API |
+| Moderator → create draft → publish → filter admin list → cancel | `e2e/admin-filters.spec.ts` | Real form/redirect; draft hidden from guest (403); publish status; guest view 200 and public calendar navigation; Status draft/published and RSVPs Open/Paused filters each show only matching rows; JSON cancel renders the guest 410 notice, refused RSVP write and STATUS:CANCELLED feed |
 | Pause → refused RSVP with the paused reason → reopen → RSVP restored | `e2e/event-pause.spec.ts` | Moderator pauses through the admin form; member sees the paused notice with no going control; a request-API PUT is refused 403 `event_not_open` with `why: paused` and the seat count is unchanged; both transitions persist across reload; reopen restores the going control and a browser-click PUT answers 201 (`You're in`, `1 of 10 going`), persisting across reload; the fixture is cancelled in `finally` through the request API |
-| Moderator → create draft → publish | `e2e/admin.spec.ts` | Real form/redirect; draft hidden from guest (403); publish status; guest view 200 and public calendar navigation |
 | Blocked join → recovery copy + fallback invite | `e2e/join-blocked.spec.ts` | Bot-refused guild add renders the blocked copy with retry and invite CTA, 200, no session; distinct from denied/outage/expired copy |
 
 RSVP selectors are the frozen `rsvp-going`, `rsvp-confirmed`, `rsvp-withdraw`
@@ -148,7 +148,11 @@ headers in `trace.trace` and `trace.network`) and inside the zip that
 `playwright-report/index.html` embeds as base64 (the report's copy of the error
 text; a plain search of the HTML finds nothing). It then fails the job, and the
 artifact upload runs only after a sweep that finished the whole tree. A token
-found in an artifact is exposed: report it to the COO the same hour.
+found in an artifact is exposed: report it to the COO the same hour. Files the
+sweep could not fully inspect are withheld from the upload too (removed, job
+fails). A withheld-only run means the token was not seen in what could be
+read, not that it is proven absent; only a real token hit prints the exposure
+alarm and needs a COO report.
 
 Blast-radius note: publishing the RSVP fixture and answering RSVPs enqueue
 sync-event carriers (`src/events/sync.ts` enqueues published/cancelled
