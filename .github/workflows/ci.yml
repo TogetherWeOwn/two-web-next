@@ -360,6 +360,9 @@ jobs:
       - name: Kit archive parity (Hono vs SvelteKit section contract)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true' || needs.scope.outputs.worker == 'true')
         run: node ci/kit-preview-e2e.mjs
+      - name: Kit preview env-guard (one-sided URL rejection)
+        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true' || needs.scope.outputs.worker == 'true')
+        run: node --test ci/kit-preview-env-guard.test.mjs
       - name: Staging deployment gate selftest (stubbed, no Cloudflare calls)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
         run: node --test ci/staging-deploy-gate-selftest.mjs

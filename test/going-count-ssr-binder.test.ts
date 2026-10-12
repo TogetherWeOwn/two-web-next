@@ -88,7 +88,7 @@ function fixture(over: Partial<typeof events.$inferSelect> = {}, earlierEvents =
       // Model the same WHERE for the total and rows, before LIMIT/OFFSET.
       let selected = [...earlier, row];
       if (params.includes("published"))
-        selected = selected.filter((event) => event.status !== "draft");
+        selected = selected.filter((event) => event.status === "published");
       const keyParameter = sql.match(/"event_key" = \$(\d+)/)?.[1];
       if (keyParameter)
         selected = selected.filter((event) => event.eventKey === params[Number(keyParameter) - 1]);
@@ -115,14 +115,14 @@ function fixture(over: Partial<typeof events.$inferSelect> = {}, earlierEvents =
     setGoing: (value: number) => {
       going = value;
     },
-    async cookie(moderator = false) {
+    async cookie(moderator = false, member = true) {
       const token = newSessionToken();
       await store.create({
         tokenHash: await hashToken(token),
         userId: "member",
         username: "member",
         avatar: null,
-        member: true,
+        member,
         moderator,
         expiresAt: new Date(Date.now() + 3600_000),
       });
@@ -375,32 +375,47 @@ describe("GoingCount shipped binder over real SSR markup", () => {
     expect(b.announcement.textContent).toContain("You're going.");
   });
 
-  it("preserves session, draft visibility and aggregate-only JSON controls for keyed reads", async () => {
-    const source = fixture({ status: "draft" });
+  it("keeps keyed reads published-only and returns identical public fields for every session role", async () => {
     const url = `/events.json?event_key=${KEY}`;
-    expect((await source.request(undefined, url)).status).toBe(401);
-    const member = await source.cookie();
-    const hidden = await source.request(member, url);
-    expect(hidden.status).toBe(200);
-    const hiddenBody = (await hidden.json()) as { data: unknown[]; meta: { total: number } };
-    expect(hiddenBody.data).toEqual([]);
-    expect(hiddenBody.meta.total).toBe(0);
-    const shown = await source.request(await source.cookie(true), url);
-    expect(shown.status).toBe(200);
-    expect(shown.headers.get("cache-control")).toBe("private, no-cache");
-    expect(shown.headers.get("etag")).toBeTruthy();
-    const body = (await shown.json()) as {
-      data: Record<string, unknown>[];
-      meta: { total: number };
-    };
-    expect(body.data).toHaveLength(1);
-    expect(body.meta.total).toBe(1);
-    expect(body.data[0]).toMatchObject({ event_key: KEY, going_count: 3 });
-    for (const privateField of ["attendees", "user_id", "session", "token"]) {
-      expect(body.data[0]).not.toHaveProperty(privateField);
+    const draft = fixture({ status: "draft" });
+    expect((await draft.request(undefined, url)).status).toBe(401);
+    for (const cookie of [await draft.cookie(), await draft.cookie(true)]) {
+      const hidden = await draft.request(cookie, url);
+      expect(hidden.status).toBe(200);
+      const body = (await hidden.json()) as { data: unknown[]; meta: { total: number } };
+      expect(body.data).toEqual([]);
+      expect(body.meta.total).toBe(0);
     }
-    expect((await source.request(member, "/events.json?event_key=invalid")).status).toBe(422);
-    const missing = await source.request(member, `/events.json?event_key=${"0".repeat(26)}`);
+
+    const source = fixture();
+    const guest = await source.request(await source.cookie(false, false), url);
+    const member = await source.request(await source.cookie(), url);
+    const moderator = await source.request(await source.cookie(true), url);
+    expect(guest.status).toBe(200);
+    expect(member.status).toBe(200);
+    expect(moderator.status).toBe(200);
+    expect(moderator.headers.get("cache-control")).toBe("private, no-cache");
+    expect(moderator.headers.get("etag")).toBeTruthy();
+    const guestBody = (await guest.json()) as { data: Record<string, unknown>[]; meta: object };
+    const memberBody = (await member.json()) as { data: Record<string, unknown>[]; meta: object };
+    const moderatorBody = (await moderator.json()) as {
+      data: Record<string, unknown>[];
+      meta: object;
+    };
+    expect(memberBody).toEqual(guestBody);
+    expect(moderatorBody).toEqual(guestBody);
+    expect(guestBody.data).toHaveLength(1);
+    expect(guestBody.data[0]).toMatchObject({ event_key: KEY, going_count: 3 });
+    for (const privateField of ["attendees", "user_id", "session", "token", "waitlist_position"]) {
+      expect(guestBody.data[0]).not.toHaveProperty(privateField);
+    }
+    expect(
+      (await source.request(await source.cookie(), "/events.json?event_key=invalid")).status,
+    ).toBe(422);
+    const missing = await source.request(
+      await source.cookie(),
+      `/events.json?event_key=${"0".repeat(26)}`,
+    );
     expect(missing.status).toBe(200);
     expect(((await missing.json()) as { data: unknown[] }).data).toEqual([]);
   });

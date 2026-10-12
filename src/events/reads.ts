@@ -1,4 +1,4 @@
-// Public event reads (W8). Published-only unless the caller is a moderator.
+// Public event reads (W8).
 import {
   and,
   asc,
@@ -16,22 +16,21 @@ import {
   type SQL,
 } from "drizzle-orm";
 import type { Db } from "../db/index";
+import { PUBLIC_DATA_BOUNDS, PUBLIC_EVENT_STATUS } from "../public-data/contracts";
 import { events, rsvps } from "../db/admin-schema";
 import { users } from "../db/schema";
 import { keyedMemberRead, nonSensitiveRead } from "../member-reads";
 import {
   calendarGridRange,
-  calendarZone,
   dedupeTransients,
   EVENTS_MONTH_GRID_LIMIT,
   EVENTS_PAST_DRAWER_LIMIT,
   EVENTS_UPCOMING_PAGE_SIZE,
   escapeLikeTerm,
   PAST_EVENTS_PAGE_SIZE,
-  wallDateIso,
-  wallDayStart,
   type DiscordTransient,
 } from "../islands/contracts";
+import { calendarZone, wallDateIso, wallDayStart } from "./date-format";
 import type { DiscordEventsSource } from "./discord-transients-types";
 
 export type PublicEvent = typeof events.$inferSelect & { goingCount: number };
@@ -42,8 +41,8 @@ export type HomeEvent = Pick<
 >;
 
 export const PAGE_SIZE = PAST_EVENTS_PAGE_SIZE;
-export const JSON_DEFAULT_LIMIT = PAST_EVENTS_PAGE_SIZE;
-export const JSON_MAX_LIMIT = 100;
+export const JSON_DEFAULT_LIMIT = PUBLIC_DATA_BOUNDS.defaultPageSize;
+export const JSON_MAX_LIMIT = PUBLIC_DATA_BOUNDS.maxPageSize;
 
 async function withGoing(
   db: Pick<Db, "select">,
@@ -648,16 +647,13 @@ export async function listGoingAttendees(db: Db, eventId: number): Promise<Event
   );
 }
 
-/** Collection for /events.json: offset paging, statuses visible to the viewer only. */
+/** Public JSON collection: only published rows are counted or paginated. */
 export async function listJson(
   db: Db,
-  opts: { limit: number; offset: number; includeDrafts: boolean; eventKey?: string },
+  opts: { limit: number; offset: number; eventKey?: string },
 ): Promise<{ rows: PublicEvent[]; total: number; page: number }> {
-  const visible = opts.includeDrafts
-    ? sql`true`
-    : inArray(events.status, ["published", "cancelled", "past"]);
   const match = opts.eventKey === undefined ? undefined : eq(events.eventKey, opts.eventKey);
-  const predicate = and(visible, match);
+  const predicate = and(eq(events.status, PUBLIC_EVENT_STATUS), match);
   const [total] = await db.select({ n: count() }).from(events).where(predicate);
   const n = Number(total?.n ?? 0);
   // Bound the scan before issuing it: a page past the end clamps to the last

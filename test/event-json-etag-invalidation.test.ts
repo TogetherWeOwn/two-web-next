@@ -3,7 +3,7 @@
 // Ledger EventEtagTest gaps (docs/w15-events-acceptance-ledger.md:99):
 // feed + unchanged-JSON validators are proved elsewhere; this pins the two
 // JSON gaps — legacy title-edit invalidation (EventEtagTest.php:32-46) and
-// member-vs-moderator validator separation when drafts are visible (:48-64).
+// the shared public-collection validator when drafts are hidden from every role (:48-64).
 // Real app + agent-testdb/CI Postgres only.
 import { serializeSigned } from "hono/utils/cookie";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -146,7 +146,7 @@ describe.skipIf(!process.env.DATABASE_URL)("event JSON ETag invalidation (agent-
     expect(settled.headers.get("etag")).toBe(next);
   });
 
-  it("refuses a moderator draft ETag replayed as member, with no cross-role 304", async () => {
+  it("hides drafts from every role in the public collection, so member and moderator share one validator", async () => {
     await seed();
     const mod = await cookieFor(true);
     const member = await cookieFor(false);
@@ -155,18 +155,15 @@ describe.skipIf(!process.env.DATABASE_URL)("event JSON ETag invalidation (agent-
     expect(draft.status).toBe(200);
     const draftEtag = draft.headers.get("etag");
     expect(draftEtag).toMatch(SHA1_ETAG_RE);
-    expect(await draft.text()).toContain(DRAFT_TITLE);
+    const draftBody = await draft.text();
+    expect(draftBody).not.toContain(DRAFT_TITLE);
+    expect(JSON.parse(draftBody).data).toEqual([]);
 
-    // Authorization runs before conditional success: the member replay is a
-    // 200 with an empty draft-filtered body — never 304, never draft bytes.
+    // Identical public fields: the member replay settles to 304, never draft bytes.
     const replay = await jsonGet(DRAFT_KEY, member, draftEtag!);
-    expect(replay.status).toBe(200);
-    const memberEtag = replay.headers.get("etag");
-    expect(memberEtag).toMatch(SHA1_ETAG_RE);
-    expect(memberEtag).not.toBe(draftEtag);
-    const body = await replay.text();
-    expect(body).not.toContain(DRAFT_TITLE);
-    expect(JSON.parse(body).data).toEqual([]);
+    expect(replay.status).toBe(304);
+    expect(await replay.text()).toBe("");
+    expect(replay.headers.get("etag")).toBe(draftEtag);
 
     // The moderator's own unchanged replay still settles to an empty 304.
     const modReplay = await jsonGet(DRAFT_KEY, mod, draftEtag!);

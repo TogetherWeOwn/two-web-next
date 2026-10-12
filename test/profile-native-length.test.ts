@@ -252,6 +252,7 @@ describe("real island binder: oversized synthetic lists", () => {
       setAttribute: ReturnType<typeof vi.fn>;
       appendChild: (child: Element) => void;
       focus: ReturnType<typeof vi.fn>;
+      addEventListener: ReturnType<typeof vi.fn>;
     };
     const element = (): Element => ({
       textContent: "",
@@ -261,6 +262,7 @@ describe("real island binder: oversized synthetic lists", () => {
         this.children.push(child);
       },
       focus: vi.fn(),
+      addEventListener: vi.fn(),
     });
     const insertBefore = vi.fn();
     const fetch = vi.fn();
@@ -323,7 +325,12 @@ describe("real island binder: oversized synthetic lists", () => {
     expect(insertBefore).toHaveBeenCalledOnce();
     const alert = insertBefore.mock.calls[0]![0] as Element;
     expect(alert.setAttribute).toHaveBeenCalledWith("role", "alert");
-    expect(alert.children[0]!.children.map((child) => child.textContent)).toEqual(errors);
+    // Field errors render as summary links; read the link text.
+    expect(
+      alert.children[0]!.children.map(
+        (child) => child.children[0]?.textContent || child.textContent,
+      ),
+    ).toEqual(errors);
     expect(alert.focus).toHaveBeenCalledOnce();
     expect(form.elements.games_text.value).toBe(games);
   });

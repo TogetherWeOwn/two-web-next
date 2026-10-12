@@ -23,7 +23,7 @@ Test aliases:
 | Every registered admin GET | OAuth 302 | 403, no login loop | 403, no login loop | 200 (missing resource 404), private/no-store |
 | Other public pages | Public event/aggregate data only | Same public representation | Same public representation | Same published-event representation |
 | `/e/:key` attendee list | No names/links/list count | No names/links/list count | Going names + profile links, logged, private/no-store | Same member representation; draft view allowed |
-| `/events.json`, `/events/:key` | JSON 401; browser OAuth 302 with guarded `next` | Session gate; no attendee representation | Event data/counts and own waitlist position, not attendee names; draft show 403 | Includes drafts; draft show noindex; no attendee representation |
+| `/events.json`, `/events/:key` | JSON 401; browser OAuth 302 with guarded `next` | Authenticated non-member receives the same published-only collection projection as members/moderators; no attendee representation or viewer state | Same public collection fields and counts; draft show remains 403 | Same published-only collection fields as other sessions; draft show remains moderator-only/noindex; no attendee representation |
 
 `test/event-attendees.test.ts` covers the mounted event page's four roles,
 original RSVP `created_at ASC` ordering (ID tie-break), status/event filtering,

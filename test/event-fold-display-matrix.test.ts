@@ -7,9 +7,10 @@
 // Feature/Events/EventTimezoneDisplayTest.php that TOG-12103 and
 // test/event-fold-display-agreement.test.ts do not port. A 20:00 host wall
 // clock reads 20:00 on both sides of each 2026 DST boundary; the two fold
-// occurrences share one visible wall text ("Sunday, 25 October 2026 at
-// 01:30") while the related-event offset text, member JSON and ICS keep two
-// distinct instants; a New York evening rolls to the next UTC day on every
+// occurrences share one wall clock ("Sunday, 25 October 2026 at 01:30") with
+// distinct GMT offsets on the main When line, while the related-event offset
+// text, member JSON and ICS keep two distinct instants; a New York evening
+// rolls to the next UTC day on every
 // surface while printing the host's 15th; and an Auckland viewer still gets
 // the host bucket and host chip. Display pins only — no src edits here.
 // Clock-only fake (Date): full fake timers hang the postgres-js socket
@@ -35,25 +36,25 @@ const NOW = new Date("2026-03-01T12:00:00.000Z");
 const EVENING_MATRIX = [
   [
     "spring, GMT side",
-    "Saturday, 28 March 2026 at 20:00",
+    "Saturday, 28 March 2026 at 20:00 GMT+00:00 (Europe/London)",
     "Sat 28 Mar, 20:00",
     "2026-03-28T20:00:00.000Z",
   ],
   [
     "spring, BST side",
-    "Monday, 30 March 2026 at 20:00",
+    "Monday, 30 March 2026 at 20:00 GMT+01:00 (Europe/London)",
     "Mon 30 Mar, 20:00",
     "2026-03-30T19:00:00.000Z",
   ],
   [
     "autumn, BST side",
-    "Saturday, 24 October 2026 at 20:00",
+    "Saturday, 24 October 2026 at 20:00 GMT+01:00 (Europe/London)",
     "Sat 24 Oct, 20:00",
     "2026-10-24T19:00:00.000Z",
   ],
   [
     "autumn, GMT side",
-    "Monday, 26 October 2026 at 20:00",
+    "Monday, 26 October 2026 at 20:00 GMT+00:00 (Europe/London)",
     "Mon 26 Oct, 20:00",
     "2026-10-26T20:00:00.000Z",
   ],
@@ -61,10 +62,11 @@ const EVENING_MATRIX = [
 
 const FOLD_FIRST = "2026-10-25T00:30:00.000Z";
 const FOLD_SECOND = "2026-10-25T01:30:00.000Z";
-const FOLD_VISIBLE = "Sunday, 25 October 2026 at 01:30";
+const FOLD_VISIBLE_FIRST = "Sunday, 25 October 2026 at 01:30 GMT+01:00 (Europe/London)";
+const FOLD_VISIBLE_SECOND = "Sunday, 25 October 2026 at 01:30 GMT+00:00 (Europe/London)";
 
 // 20:00 in New York is the next UTC day.
-const NY_WALL = "Wednesday, 15 July 2026 at 20:00";
+const NY_WALL = "Wednesday, 15 July 2026 at 20:00 GMT-04:00 (America/New_York)";
 const NY_CARD = "Wed 15 Jul, 20:00";
 const NY_INSTANT = "2026-07-16T00:00:00.000Z";
 const NY_BUCKET = "2026-07-15";
@@ -196,24 +198,27 @@ describe.skipIf(!process.env.DATABASE_URL)(
       },
     );
 
-    it("the fold pair shares one visible wall text with distinct offset, JSON and ICS instants", async () => {
-      // Same game so each show page links the other as related; the related
-      // link renders fmtWithOffset, which names the GMT offset the main
-      // <time> text omits.
+    it("the fold pair shares one wall clock with distinct offset, JSON and ICS instants", async () => {
+      // Same game so each show page links the other as related; both the main
+      // When line and the related link render fmtWithOffset, so each names its
+      // applicable GMT offset alongside the repeated 01:30 wall clock.
       await seed(21, FOLD_FIRST, { game: "Helldivers 2" });
       await seed(22, FOLD_SECOND, { game: "Helldivers 2" });
 
       const firstHtml = await (await app.request(`/e/${key(21)}`, {}, env)).text();
       const secondHtml = await (await app.request(`/e/${key(22)}`, {}, env)).text();
-      expect(showTime(firstHtml, FOLD_FIRST)?.[1]).toBe(FOLD_VISIBLE);
-      expect(showTime(secondHtml, FOLD_SECOND)?.[1]).toBe(FOLD_VISIBLE);
+      expect(showTime(firstHtml, FOLD_FIRST)?.[1]).toBe(FOLD_VISIBLE_FIRST);
+      expect(showTime(secondHtml, FOLD_SECOND)?.[1]).toBe(FOLD_VISIBLE_SECOND);
 
-      // The visible main texts read identically; the offset texts differ.
+      // The main texts share the wall clock but differ by offset and zone.
+      expect(FOLD_VISIBLE_FIRST).toContain("Sunday, 25 October 2026 at 01:30");
+      expect(FOLD_VISIBLE_SECOND).toContain("Sunday, 25 October 2026 at 01:30");
+      expect(FOLD_VISIBLE_FIRST).not.toBe(FOLD_VISIBLE_SECOND);
       expect(firstHtml).toContain(
-        `<time datetime="${FOLD_SECOND}">${FOLD_VISIBLE} GMT+00:00</time>`,
+        `<time datetime="${FOLD_SECOND}">Sunday, 25 October 2026 at 01:30 GMT+00:00</time>`,
       );
       expect(secondHtml).toContain(
-        `<time datetime="${FOLD_FIRST}">${FOLD_VISIBLE} GMT+01:00</time>`,
+        `<time datetime="${FOLD_FIRST}">Sunday, 25 October 2026 at 01:30 GMT+01:00</time>`,
       );
 
       const json = await app.request(
