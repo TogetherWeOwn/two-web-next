@@ -12,6 +12,8 @@
 // of those are ignored, and the original Request passes through untouched
 // (query preserved, body unread) to whichever renderer owns it.
 
+import { robotsTagFor, securityHeadersFor } from "./headers";
+
 export type RouteOwner = "kit" | "hono";
 
 export interface OwnedRoute {
@@ -34,7 +36,12 @@ export interface RouteDecision {
 // traffic change; the preview Worker moves /events/past from Kit to Hono by
 // design — that is the rollback. Add one entry per migrated route, enabled
 // only when its Kit handler is ready to own the exact method/path.
-const ROUTE_MANIFEST: OwnedRoute[] = [{ method: "GET", path: "/events/past", enabled: false }];
+// Exported so the preview parity script derives its expected renderer from the
+// shipped manifest instead of hard-coding "kit": flipping enabled flips the
+// gate for the right reason.
+export const ROUTE_MANIFEST: OwnedRoute[] = [
+  { method: "GET", path: "/events/past", enabled: false },
+];
 
 // Response header set only on the Kit-rendered branch of the hook, so the
 // preview parity check and worker e2e can prove which renderer answered.
@@ -176,20 +183,45 @@ export interface HookEventLike {
 
 export interface HookDispatchDeps {
   appUrl: string;
+  featuredImageHosts?: string;
   isTrustedHost: (appUrl: string, hosts: Array<string | null | undefined>) => boolean;
   decideOwner: (request: Request) => RouteOwner;
   honoFetch: (request: Request) => Promise<Response>;
   resolve: (event: HookEventLike) => Promise<Response>;
-  decorateKitResponse?: (response: Response, event: HookEventLike) => void | Promise<void>;
 }
 
-function defaultDecorateKitResponse(response: Response): void {
+// Production Kit decoration, owned by the core so the tested path is the
+// production path: the renderer marker (proves Kit answered), the Hono-parity
+// security headers, the text/html charset fix and the staging X-Robots-Tag.
+// web/src/hooks.server.ts is a pure env binding that supplies appUrl and
+// featuredImageHosts; no test needs to import SvelteKit code to pin this.
+function decorateKitResponse(
+  response: Response,
+  event: HookEventLike,
+  appUrl: string,
+  featuredImageHosts?: string,
+): void {
   response.headers.set(KIT_RENDERER_HEADER, KIT_RENDERER_VALUE);
+  for (const [name, value] of securityHeadersFor(
+    { path: event.url.pathname, method: event.request.method },
+    featuredImageHosts,
+  )) {
+    response.headers.set(name, value);
+  }
+  const contentType = response.headers.get("content-type") ?? "";
+  // Kit sends a bare `text/html`; Hono's c.html() names the charset.
+  if (contentType === "text/html") response.headers.set("Content-Type", "text/html; charset=UTF-8");
+  if (contentType.includes("text/html")) {
+    const tag = robotsTagFor(appUrl, event.url.hostname);
+    if (tag) response.headers.set("X-Robots-Tag", tag);
+  }
 }
 
 // Framework-free core of web/src/hooks.server.ts handle(): exactly one
 // renderer runs, decided before resolve and before any auth/body read. A
-// resolve() failure propagates and is never replayed through Hono.
+// resolve() failure propagates and is never replayed through Hono. The
+// catch-all fallback returns undecorated: it is Hono answering through Kit,
+// so it must never carry the Kit marker or Kit security headers.
 export async function dispatchHookRequest(
   event: HookEventLike,
   deps: HookDispatchDeps,
@@ -202,10 +234,6 @@ export async function dispatchHookRequest(
   }
   const response = await deps.resolve(event);
   if (event.route?.id === HONO_FALLBACK_ROUTE_ID) return response;
-  if (deps.decorateKitResponse) {
-    await deps.decorateKitResponse(response, event);
-  } else {
-    defaultDecorateKitResponse(response);
-  }
+  decorateKitResponse(response, event, deps.appUrl, deps.featuredImageHosts);
   return response;
 }
