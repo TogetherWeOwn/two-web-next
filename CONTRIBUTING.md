@@ -25,9 +25,11 @@ version.
 - Search first. Look for an open or recent PR that touches the same area, and link
   what you find.
 - Keep references public-safe. Do not put internal card IDs (`TOG-` or `PAP-`
-  followed by digits), private URLs, tokens or secrets in any title, body, commit,
-  comment or branch name. `pr-lint` warns when it finds a card ID in the title, body
-  or a commit subject, and in the branch name in any letter case (`qa/tog-123-x`).
+  followed by digits), instance UI links, the internal host, private URLs, tokens or
+  secrets in any title, body, commit, comment or branch name. A card ID, instance link
+  or the internal host in the title or body fails `pr-lint`, comments included; other
+  references and the branch name in any letter case (`qa/tog-123-x`) follow the
+  workflow mode.
 - Every PR, including docs-only and draft heads, must not increase the total count of internal card IDs and instance-UI links in tracked files versus its fork point (the merge-base with its base); `pr-lint` enforces this with named lint-fixture exclusions only.
 - Be honest about the tests. Give the exact commands you ran and their results in
   Verification, and say what you did not run. Never claim a green run you did not see.
@@ -80,10 +82,11 @@ title that is not a Conventional Commits header, a title over 100 characters or
 ending in a period, and an empty body; its internal-ID check is a warning
 today, and `INTERNAL_ID_LEVEL` in the workflow turns it into an error), then
 `.github/scripts/pr_standards.py` for pull requests when the workflow sets
-`PR_STANDARDS_MODE`. The upstream body, branch and reference rules start as
-warnings (`PR_STANDARDS_MODE: "warn"`); the flip to `"error"` is a separate
-one-line change once the repo's open PRs are clear. The script is unit-tested
-beside it: `python3 -m unittest discover -s .github/scripts -p
+`PR_STANDARDS_MODE`. A tracker ID, instance UI link or the internal host in a
+public title or body always fails, comments included; the remaining body, branch
+and reference rules follow the mode (`PR_STANDARDS_MODE: "warn"`); the flip to
+`"error"` is a separate one-line change once the repo's open PRs are clear. The
+script is unit-tested beside it: `python3 -m unittest discover -s .github/scripts -p
 'test_pr_standards.py'`.
 
 ### Secret-scan allowlists
