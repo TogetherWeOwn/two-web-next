@@ -415,14 +415,8 @@ describe("production deployment preserves configured triggers", () => {
     expect(config.triggers).toEqual({ crons: ["*/10 * * * *", "0 0 * * *"] });
     const stagingConsumers = config.queues?.consumers ?? [];
     const prodConsumers = config.env?.production?.queues?.consumers ?? [];
-    const pick = (consumer: Consumer) => ({
-      queue: consumer.queue,
-      max_retries: consumer.max_retries,
-      max_batch_size: consumer.max_batch_size,
-      max_batch_timeout: consumer.max_batch_timeout,
-    });
     expect(
-      prodConsumers.map(pick).sort((a, b) => String(a.queue).localeCompare(String(b.queue))),
+      [...prodConsumers].sort((a, b) => String(a.queue).localeCompare(String(b.queue))),
     ).toEqual([
       {
         queue: "two-web-next-production-internal-action",
