@@ -590,6 +590,11 @@ test("workflow wires the tested gate before both mutations and preserves staging
   );
   assert.ok(
     workflow.indexOf("run: node ci/check-jobs-secrets.mjs") <
+      workflow.indexOf("- name: Ensure queues exist"),
+    "Jobs-secrets preflight must run before the first Cloudflare mutation so a missing BOT_* secret fails before any web deploy or detach",
+  );
+  assert.ok(
+    workflow.indexOf("run: node ci/check-jobs-secrets.mjs") <
       workflow.indexOf("- name: Re-verify exact-SHA full CI before jobs Worker deploy"),
     "Jobs-secrets preflight must run before the jobs gate so a missing BOT_* secret fails before any attach",
   );

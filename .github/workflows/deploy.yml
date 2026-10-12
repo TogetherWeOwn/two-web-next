@@ -122,6 +122,18 @@ jobs:
       # unreachable /up, never fails the deploy.
       - name: Record live revision (rollback pointer)
         run: node bin/revision-check.mjs https://next.togetherweown.com
+      - name: Verify jobs Worker BOT secrets exist (fail-closed)
+        # Read-only preflight before the first Cloudflare mutation (queue
+        # creation below). The jobs deploy attaches the jobs consumer
+        # automatically; without its BOT_* secrets every bot job fails
+        # terminally and the consumer acks the message
+        # (src/jobs/consumer.ts), so deliveries leave the queue and need a
+        # manual replay. Fail here, before anything mutates, when a name is
+        # missing. Names only, never values (docs/jobs-handoff.md).
+        run: node ci/check-jobs-secrets.mjs
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
       - name: Ensure queues exist
         # Idempotent: "already exists" is fine; a real permission error surfaces at deploy.
         run: |
@@ -179,7 +191,12 @@ jobs:
           for q in two-sync-event two-internal-action; do
             # Preparation or an earlier mutation may outlive the accepted CI attempt.
             node ci/staging-deploy-gate.mjs || exit 1
-            if npx wrangler queues consumer list "$q" | grep -q "two-web-next"; then
+            # The step shell is dash without pipefail: a failed list piped
+            # into grep reads as "no consumer" and the jobs deploy then
+            # collides with the still-attached web consumer. Capture first so
+            # a failed list fails the job instead.
+            out=$(npx wrangler queues consumer list "$q") || exit 1
+            if printf '%s' "$out" | grep -q "two-web-next"; then
               npx wrangler queues consumer remove "$q" two-web-next
             else
               echo "no two-web-next consumer on $q"
@@ -187,16 +204,6 @@ jobs:
           done
         env:
           GITHUB_TOKEN: ${{ github.token }}
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-      - name: Verify jobs Worker BOT secrets exist (fail-closed)
-        # The jobs deploy below attaches the jobs consumer automatically. Without
-        # its BOT_* secrets every bot job fails terminally and the consumer acks
-        # the message (src/jobs/consumer.ts), so deliveries leave the queue and
-        # need a manual replay. Fail here, before any attach, when a name is
-        # missing. Names only, never values (docs/jobs-handoff.md).
-        run: node ci/check-jobs-secrets.mjs
-        env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
       - name: Re-verify exact-SHA full CI before jobs Worker deploy

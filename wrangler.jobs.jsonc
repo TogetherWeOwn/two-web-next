@@ -6,8 +6,9 @@
 // both crons; wrangler.jsonc (two-web-next) only produces after the handoff.
 // A queue has exactly one consumer and a cron exactly one owner:
 // test/jobs-worker-config.test.ts pins the split. Preview envs stay on their
-// own queues. Deploy order is tail, then jobs, then web (see
-// .github/workflows/deploy.yml and docs/jobs-handoff.md).
+// own queues. Deploy order is tail, then web, then detach, then jobs: the
+// jobs deploy attaches its consumers, so it must run after the web consumers
+// are detached (see .github/workflows/deploy.yml and docs/jobs-handoff.md).
 {
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "two-web-jobs",

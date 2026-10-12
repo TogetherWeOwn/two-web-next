@@ -77,7 +77,11 @@ npx --no-install wrangler queues pause-delivery two-internal-action
 # next step collides with the still-attached worker:two-web-next consumer.
 npx wrangler deploy --config wrangler.jsonc --tag "$DEPLOY_SHA"
 for q in two-sync-event two-internal-action; do
-  if npx --no-install wrangler queues consumer list "$q" | grep -q "two-web-next"; then
+  # Capture before grepping: a failed list piped into grep reads as "no
+  # consumer" without pipefail, and the attach then collides with the
+  # still-attached web consumer. A failed list fails the run instead.
+  out=$(npx --no-install wrangler queues consumer list "$q") || exit 1
+  if printf '%s' "$out" | grep -q "two-web-next"; then
     npx --no-install wrangler queues consumer remove "$q" two-web-next
   else
     echo "no two-web-next consumer on $q"
@@ -133,10 +137,20 @@ npx --no-install wrangler queues consumer add two-internal-action two-web-next \
 # schedules by applying its produce-only config from the same commit.
 # $PRE_HANDOFF_SHA is the pre-handoff main commit: the commit SHA the
 # pre-handoff Versions are tagged with (step-0 record, bin/revision-check.mjs).
-git show "$PRE_HANDOFF_SHA:wrangler.jsonc" > /tmp/rollback-wrangler.jsonc
-git show "$PRE_HANDOFF_SHA:wrangler.jobs.jsonc" > /tmp/rollback-wrangler.jobs.jsonc
-npx --no-install wrangler triggers deploy --config /tmp/rollback-wrangler.jsonc
-npx --no-install wrangler triggers deploy --config /tmp/rollback-wrangler.jobs.jsonc
+# The rollback configs are written inside the checkout, not /tmp: wrangler
+# resolves the web config's assets.directory (./public) relative to the config
+# file, so /tmp/rollback-wrangler.jsonc aborts with "assets.directory ...
+# does not exist: /tmp/public" before any API call. --env "" silences the
+# multi-environment warning for the top-level staging config.
+git show "$PRE_HANDOFF_SHA:wrangler.jsonc" > ./rollback-wrangler.jsonc
+git show "$PRE_HANDOFF_SHA:wrangler.jobs.jsonc" > ./rollback-wrangler.jobs.jsonc
+npx --no-install wrangler triggers deploy --config ./rollback-wrangler.jsonc --env ""
+npx --no-install wrangler triggers deploy --config ./rollback-wrangler.jobs.jsonc --env ""
+
+# Read back the schedules just applied (fails closed when either is unexpected):
+# the web config restores both crons, the jobs config owns none.
+node --input-type=module -e "import { readFileSync } from 'node:fs'; import { readWranglerConfig } from './ci/wrangler-config.mjs'; const web = readWranglerConfig(readFileSync('./rollback-wrangler.jsonc', 'utf8')); const jobs = readWranglerConfig(readFileSync('./rollback-wrangler.jobs.jsonc', 'utf8')); for (const cron of ['*/10 * * * *', '0 0 * * *']) { if (!(web.triggers?.crons ?? []).includes(cron)) { console.error('rollback web config is missing cron ' + cron); process.exit(1); } } if ((jobs.triggers?.crons ?? []).length !== 0) { console.error('rollback jobs config still owns crons'); process.exit(1); } console.log('rollback schedules ok: web owns both crons, jobs owns none');"
+rm -f ./rollback-wrangler.jsonc ./rollback-wrangler.jobs.jsonc
 
 # Verify: exactly one consumer again (worker:two-web-next, once per queue).
 npx --no-install wrangler queues consumer list two-sync-event

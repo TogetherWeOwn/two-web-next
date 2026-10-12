@@ -167,22 +167,23 @@ test("CLI fails closed on a missing secret and on wrangler failure without echoi
   assert.equal(failed.stdout, "");
 });
 
-test("jobs secrets preflight runs after the web deploy and before the jobs gate and deploy", () => {
+test("jobs secrets preflight runs before the first Cloudflare mutation and the jobs gate and deploy", () => {
   const workflow = readFileSync(
     new URL("../.github/workflows/deploy.yml", import.meta.url),
     "utf8",
   );
+  const queues = workflow.indexOf("- name: Ensure queues exist");
   const web = workflow.indexOf("run: npx wrangler deploy --config wrangler.jsonc");
   const secrets = workflow.indexOf("run: node ci/check-jobs-secrets.mjs");
   const gate = workflow.indexOf("- name: Re-verify exact-SHA full CI before jobs Worker deploy");
   const deploy = workflow.indexOf("run: npx wrangler deploy --config wrangler.jobs.jsonc");
   assert.ok(
-    web > 0 && secrets > 0 && gate > 0 && deploy > 0,
-    "expected web deploy, jobs-secrets preflight, jobs gate and jobs deploy steps in deploy.yml",
+    queues > 0 && web > 0 && secrets > 0 && gate > 0 && deploy > 0,
+    "expected queue creation, web deploy, jobs-secrets preflight, jobs gate and jobs deploy steps in deploy.yml",
   );
   assert.ok(
-    web < secrets && secrets < gate && gate < deploy,
-    "order must be web deploy, jobs-secrets preflight, jobs gate, jobs deploy",
+    secrets < queues && secrets < web && secrets < gate && gate < deploy,
+    "order must be jobs-secrets preflight, queue creation, web deploy, jobs gate, jobs deploy",
   );
 });
 
