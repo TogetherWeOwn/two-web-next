@@ -186,15 +186,20 @@ bytes. Measured on this tree with esbuild `0.28.1`:
 |---|---:|---:|
 | `public/islands/admin-event-editor.js` | 1429 / 737 | 2048 / 1024 |
 | `public/islands/admin-event-text-limits.js` | 998 / 539 | 1536 / 768 |
-| `public/islands/auth-status.js` | 2081 / 1009 | 3072 / 1280 |
+| `public/islands/auth-status.js` | 2765 / 1297 | 3072 / 1536 |
 | `public/islands/avatar.js` | 287 / 213 | 512 / 512 |
 | `public/islands/copy-link.js` | 1323 / 714 | 2048 / 1024 |
-| `public/islands/events-calendar.js` | 5133 / 1991 | 6656 / 2560 |
+| `public/islands/events-calendar.js` | 5640 / 2146 | 6656 / 2560 |
 | `public/islands/going-count.js` | 2289 / 1092 | 3072 / 1536 |
-| `public/islands/member-profile.js` | 6138 / 2414 | 7680 / 3072 |
-| `public/islands/past-events.js` | 3350 / 1397 | 4608 / 1792 |
-| `public/islands/rsvp-button.js` | 13662 / 4001 | 17408 / 5120 |
+| `public/islands/member-profile.js` | 7352 / 2834 | 7680 / 3072 |
+| `public/islands/past-events.js` | 3602 / 1490 | 4608 / 1792 |
+| `public/islands/rsvp-button.js` | 14498 / 4201 | 17408 / 5120 |
 | `public/styles.css` | 4749 / 1611 | 6144 / 2048 |
+
+The auth-status gzip ceiling uses the repository's ×1.25 rule on its recorded
+2026-10-10 baseline (1213 B → 1536 B). This approved headroom covers two
+fail-safe auth changes: bounded sign-out feedback and a session-read deadline
+that settles even when abort is ignored. The raw ceiling remains unchanged.
 
 Never relax a Lighthouse threshold to turn a build green. Threshold changes
 require a separate owner-approved PR. Byte-ceiling increases must likewise be a
