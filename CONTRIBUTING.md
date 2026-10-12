@@ -79,8 +79,11 @@ fail it and some only warn. Current mode in
 `.github/workflows/pr-gates.yml`: `INTERNAL_ID_LEVEL: "warning"`,
 `PR_STANDARDS_MODE: "warn"`, `HEAD_REF_ERROR_FROM_PR: "627"`. A finding that
 fails exits the checker nonzero and turns the job red; a warning is annotated
-without failing. Flipping either mode knob to `"error"` turns the rows marked
-"Warns only" into failures, so update this table in the same change.
+without failing. Flipping a knob to `"error"` turns the Warns-only rows that
+name it into failures, so update this table in the same change. An internal ID
+in the PR title or body is covered by both knobs, so either flip makes that
+hit fail; a commit-subject hit needs `INTERNAL_ID_LEVEL`, and the Linked
+Issues, Verification and below-cutoff branch rows need `PR_STANDARDS_MODE`.
 
 | Check | Result today |
 | --- | --- |

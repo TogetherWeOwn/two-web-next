@@ -15,6 +15,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 WORKFLOW = REPO_ROOT / ".github" / "workflows" / "pr-gates.yml"
 DOCS = REPO_ROOT / "CONTRIBUTING.md"
+TEMPLATE = REPO_ROOT / ".github" / "pull_request_template.md"
 
 sys.path.insert(0, str(REPO_ROOT / ".github" / "scripts"))
 sys.path.insert(0, str(REPO_ROOT / "ci"))
@@ -119,11 +120,22 @@ class DocsClassification(unittest.TestCase):
 
     def test_no_required_wording_for_warn_only_sections(self):
         """The contract bullets must not call warn-only sections 'required' without the warn qualifier."""
-        text = DOCS.read_text(encoding="utf-8")
-        for line in text.splitlines():
-            low = line.lower()
-            if "linked issues" in low and "verification" in low and "requir" in low:
-                self.assertIn("warn", low, f"line still presents warn-only sections as required: {line}")
+        for path in (DOCS, TEMPLATE):
+            text = path.read_text(encoding="utf-8")
+            for line in text.splitlines():
+                low = line.lower()
+                if "linked issue" in low and "verification" in low and "requir" in low:
+                    self.assertIn("warn", low, f"{path.name} still presents warn-only sections as required: {line}")
+
+    def test_template_states_warn_mode(self):
+        """The PR template is read first, so it must carry the same warn-mode contract as CONTRIBUTING.md."""
+        text = TEMPLATE.read_text(encoding="utf-8")
+        low = text.lower()
+        self.assertIn("pr_standards_mode", low, "template must name the PR_STANDARDS_MODE knob")
+        self.assertIn("warn", low, "template must state the current warn mode")
+        self.assertIn('"error"', text, 'template must state the flip to "error"')
+        self.assertIn("title", low, "template must note the title always fails")
+        self.assertIn("empty body", low, "template must note an empty body always fails")
 
 
 class CheckerBehaviorMatchesDocs(unittest.TestCase):
