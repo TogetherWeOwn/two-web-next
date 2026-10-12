@@ -66,7 +66,7 @@ it.each(paths)(
     expect(html).toContain('aria-label="Site"');
     expect(html).toContain(`<link rel="canonical" href="${env.APP_URL}${path}"`);
     expect(html).not.toContain('<meta name="robots"');
-    expect(html.match(/<script\b[^>]*>/g) ?? []).toEqual(
+    expect(html.match(/<script\b[^>]*>/gi) ?? []).toEqual(
       path === "/join" ? ['<script src="/islands/join-widget.js" defer="">'] : [],
     );
     expect(html).not.toContain('action="/logout"');
