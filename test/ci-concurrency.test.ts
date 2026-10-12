@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -81,4 +82,109 @@ describe("workflow concurrency", () => {
         .map(({ name }) => name),
     ).toEqual([]);
   });
+});
+
+// Opening a draft PR and marking it ready seconds later starts two pull_request
+// runs on one head (`opened`, then `ready_for_review`), and the concurrency group
+// cancels the older run. GitHub concludes a job whose `if` is false because its
+// run was cancelled as `cancelled`, never `skipped` (as gitleaks shows in
+// cancelled pr-gates runs). A required check passes only on success, skipped or
+// neutral, so a cancelled gate keeps the merge blocked until the newer run's own
+// gate succeeds, without leaving a red failure on the head.
+const PASSING = ["success", "skipped", "neutral"];
+const jobBlock = (text: string, id: string) =>
+  text.split(new RegExp(`\\n  ${id}:\\n`))[1]?.split(/\n  [A-Za-z0-9_-]+:\n/)[0] ?? "";
+// The job's own `run: |` script, dedented.
+const runScript = (block: string) =>
+  (block.split("\n        run: |\n")[1] ?? "exit 99")
+    .split("\n")
+    .map((line) => line.replace(/^ {10}/, ""))
+    .join("\n");
+// Only the conditions modelled here are accepted: any other gate condition fails
+// this suite until its conclusion in a cancelled run is worked out and pinned.
+const conditionHolds = (condition: string, runCancelled: boolean) => {
+  if (condition === "always()") return true;
+  if (condition === "${{ !cancelled() }}") return !runCancelled;
+  throw new Error(`unmodelled gate condition: ${condition}`);
+};
+type Results = { scope: string; downstream: string };
+const ciText = readFileSync(join(dir, "ci.yml"), "utf8");
+const e2eText = readFileSync(join(dir, "e2e.yml"), "utf8");
+const gates = [
+  {
+    gate: "check",
+    block: jobBlock(ciText, "check"),
+    // check's first guard: it fails before any other step reads scope outputs.
+    script: (block: string) =>
+      block.match(
+        /- name: Require successful scope\n        env:\n          SCOPE_RESULT: [^\n]+\n        run: ([^\n]+)\n/,
+      )?.[1] ?? "exit 99",
+    env: ({ scope }: Results) => ({ SCOPE_RESULT: scope }),
+  },
+  {
+    gate: "ci-ok",
+    block: jobBlock(ciText, "ci-ok"),
+    script: runScript,
+    env: ({ scope, downstream }: Results) => ({
+      SCOPE_RESULT: scope,
+      ...{ FULL: "true", APP: "true", WORKER: "true", DB: "true", DRAFT: "false" },
+      CHECK_RESULT: downstream,
+      A11Y_RESULT: downstream,
+      LIGHTHOUSE_RESULT: downstream,
+      BUDGET_RESULT: downstream,
+    }),
+  },
+  {
+    gate: "e2e-ok",
+    block: jobBlock(e2eText, "e2e-ok"),
+    script: runScript,
+    env: ({ scope, downstream }: Results) => ({
+      SCOPE: scope,
+      SMOKE: downstream,
+      SKIP_E2E: "false",
+      DRAFT: "false",
+    }),
+  },
+];
+const conclusion = (gate: (typeof gates)[number], runCancelled: boolean, results: Results) => {
+  const condition = gate.block.match(/\n    if: ([^\n]+)\n/)?.[1] ?? "";
+  if (!conditionHolds(condition, runCancelled)) return runCancelled ? "cancelled" : "skipped";
+  const run = spawnSync("bash", ["-c", gate.script(gate.block)], {
+    env: gate.env(results),
+    encoding: "utf8",
+  });
+  return run.status === 0 ? "success" : "failure";
+};
+
+describe("superseded duplicate pull_request runs", () => {
+  it.each(gates)("$gate passes a green run", (gate) => {
+    expect(conclusion(gate, false, { scope: "success", downstream: "success" })).toBe("success");
+  });
+
+  it.each(gates)("$gate is cancelled, neither failed nor passing, in a cancelled run", (gate) => {
+    const result = conclusion(gate, true, { scope: "cancelled", downstream: "cancelled" });
+    expect(result).toBe("cancelled");
+    expect(PASSING).not.toContain(result);
+  });
+
+  it.each(gates)("$gate still fails when scope fails in a run that was not cancelled", (gate) => {
+    expect(conclusion(gate, false, { scope: "failure", downstream: "skipped" })).toBe("failure");
+  });
+
+  // A job that times out or is cancelled on its own leaves its run uncancelled,
+  // so the gate runs and must reject the cancelled result.
+  it.each(gates)("$gate fails when scope was cancelled but its run was not", (gate) => {
+    expect(conclusion(gate, false, { scope: "cancelled", downstream: "skipped" })).toBe("failure");
+  });
+
+  // Only check's scope guard is modelled here; ci/a11y-policy.test.mjs and
+  // `npm run gate:selftest` pin its other guards rejecting a cancelled job.
+  it.each(gates.filter(({ gate }) => gate !== "check"))(
+    "$gate fails when a gated job was cancelled but its run was not",
+    (gate) => {
+      expect(conclusion(gate, false, { scope: "success", downstream: "cancelled" })).toBe(
+        "failure",
+      );
+    },
+  );
 });

@@ -26,9 +26,8 @@ import {
   EVENTS_UPCOMING_PAGE_SIZE,
   escapeLikeTerm,
   PAST_EVENTS_PAGE_SIZE,
-  wallDateIso,
-  wallDayStart,
 } from "../islands/contracts";
+import { wallDateIso, wallDayStart } from "./date-format";
 
 export type PublicEvent = typeof events.$inferSelect & { goingCount: number };
 

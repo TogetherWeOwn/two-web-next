@@ -176,7 +176,7 @@ test("the required CI job runs after a non-green audit and rejects every non-suc
   const workflow = await readFile(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8");
   const check = workflow.slice(workflow.indexOf("\n  check:\n"));
   assert.match(check, /\n    needs: \[a11y, lighthouse, bundle-budget, docs-links, scope\]\n/);
-  assert.match(check, /\n    if: always\(\)\n/);
+  assert.match(check, /\n    if: \$\{\{ !cancelled\(\) \}\}\n/);
   assert.match(check, /A11Y_RESULT: \$\{\{ needs\.a11y\.result \}\}/);
   const guard = check.match(
     /- name: Require successful accessibility audit\n        if: \(needs\.scope\.outputs\.docs_only != 'true' && needs\.scope\.outputs\.draft != 'true'\)\n        env:\n          A11Y_RESULT: [^\n]+\n          A11Y_SELECTED: [^\n]+\n        run: ([^\n]+)/,

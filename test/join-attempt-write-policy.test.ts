@@ -102,9 +102,15 @@ describe("join-attempt write policy: single controller insert (DB-free source al
 
   it("recordAttempt is defined once and called only from the join callback route", () => {
     // recordAttempt\( matches the definition plus call sites; the import,
-    // comments and docs carry no paren and stay out of this pin.
-    expect(filesMatching(/recordAttempt\(/)).toEqual(["src/join/route.ts", "src/join/service.ts"]);
-    expect(read("src/join/route.ts").match(/await recordAttempt\(/g)).toHaveLength(5);
+    // comments and docs carry no paren and stay out of this pin. route.ts is
+    // a re-export barrel; the five callback calls live in route-callback.ts.
+    expect(filesMatching(/recordAttempt\(/)).toEqual([
+      "src/join/route-callback.ts",
+      "src/join/service.ts",
+    ]);
+    expect(read("src/join/route-callback.ts").match(/await recordAttempt\(/g)).toHaveLength(5);
+    expect(read("src/join/route-callback.ts")).not.toMatch(/INSERT INTO join_attempts/);
+    expect(read("src/join/route.ts")).not.toMatch(/await recordAttempt\(/);
     expect(read("src/join/route.ts")).not.toMatch(/INSERT INTO join_attempts/);
   });
 

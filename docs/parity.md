@@ -4,7 +4,7 @@ Source: legacy [two-web](https://github.com/TogetherWeOwn/two-web) @ `e1e939a`
 (read 2026-09-29: `routes/web.php`, `routes/api.php`, `routes/funnel.php`,
 `routes/console.php`, controllers, Livewire, Filament, jobs, commands,
 policies, middleware, services, config, views, content, public).
-Next side: this repo @ `b46a479a` (2026-10-03) + live card statuses of the same date.
+Next side: this repo @ `56c4502c` (2026-10-10).
 
 Flip gate (owner): re-run before W16; the DNS flip needs **0 unmapped rows**.
 A row is mapped when it names a card or is **dropped, with a reason**.
@@ -107,7 +107,7 @@ production testing, or change the recorded rotating TTL/POST-QA divergences.
 | `GET /about`, `GET /faq` (static, zero-query) | ✅ | W4 ✅ |
 | `GET /privacy` (versioned policy from disk, no session/cache/DB; v1 file retained as history, live page serves `content/privacy-policy-v2.md` via `POLICY_FILE`) | ✅ `src/privacy.ts` + `test/privacy.test.ts` | **N1** ✅ ([TOG-9893](/TOG/issues/TOG-9893)) |
 | `GET /up` (always-200 `{status, queue{pending,…,warn:20,critical:100}}`, unknown-not-500) | ✅ `src/up.ts` + `test/up.test.ts`; sole deploy/uptime endpoint, payload unchanged; queue read covers the ledger (`queue.status: "unknown"` when unconfigured) | **N3** ✅ ([TOG-9895](/TOG/issues/TOG-9895)) + [TOG-10852](/TOG/issues/TOG-10852) ✅ |
-| `POST /csp-reports` (always-204, 8 KB cap, sampled fixed-key log, never stored) | ✅ `src/csp-reports.ts` + `test/csp-reports.test.ts` (funnel posture: no session/cookie/cache/DB, `no-store`); CSP `report-uri` + Reporting API `Reporting-Endpoints`/`Report-To` point at it | [TOG-10107](/TOG/issues/TOG-10107) ✅ |
+| `POST /csp-reports` (always-204, 8 KB cap, sampled fixed-key log, never stored) | ✅ `src/csp-reports.ts` + `test/csp-reports.test.ts` (funnel posture: no session/cookie/cache/DB, `no-store`); CSP `report-to` + the `Reporting-Endpoints` header point at it (no deprecated `report-uri`) | [TOG-10107](/TOG/issues/TOG-10107) ✅ |
 
 ### Diagnostic surface decision ([TOG-10852](/TOG/issues/TOG-10852))
 
@@ -177,7 +177,7 @@ no public version/clock endpoint or redirect alias remains.
 | SyncEventToDiscord (unique per eventKey, tries 6, backoff 10/60/300/900/3600, debounce 10 s, grant recheck, terminal stamp) | ✅ `src/jobs/sync-event.ts` + consumer (`src/jobs/consumer.ts`); shape pinned in `test/jobs.test.ts` (unique/debounce/backoff/terminal), real-SQL timing in `test/jobs-scheduled.test.ts` | W13 ✅ |
 | CallInternalAction (`role.assign`/`announcement.post` only; production web never dispatches it — drill-only) | ✅ runtime handler `src/jobs/call-internal-action.ts` (`test/jobs.test.ts`, retry-delay/handler-deadline tests); staging drill-only script merged (PR #267): `bin/internal-action-drill.mjs` + `src/probes/internal-action-drill.ts`, fixture-pinned in `test/internal-action-drill.test.ts` (staging guard, production host refused); no-web-dispatch pinned in `test/callinternalaction-no-web-dispatch.test.ts` (PR #361) | W13 ✅ + [TOG-11706](/TOG/issues/TOG-11706) ✅ |
 | `events:reconcile` every 10 min (close past, materialize series, re-dispatch stale; single-flight) | ✅ `reconcileEvents` in `src/jobs/cron.ts` (close finished, materialize series, re-dispatch stale) on the pg EventStore (`src/jobs/event-store-pg.ts`); single-flight via `runScheduled` (`test/jobs-scheduled.test.ts`, `test/prune.test.ts`) | W13 ✅ |
-| `model:prune` daily ×3 (MemberDataAccessLog, JoinAttempt + AgentEventIdempotencyKey, EventSearchLog; 90 d windows) | ✅ `pruneModelTables` in `src/jobs/cron.ts` (90 d each, legacy constants; `test/prune.test.ts` memory + real Postgres). Next also prunes `agent_event_audits` at 90 d; legacy never pruned audits | W13 ✅ |
+| `model:prune` daily ×3 (MemberDataAccessLog, JoinAttempt + AgentEventIdempotencyKey, EventSearchLog; 90 d windows) | ✅ `pruneModelTables` in `src/jobs/cron.ts` (90 d each, legacy constants; `test/prune.test.ts` memory + real Postgres). Each statement deletes at most 1000 rows and the pass drains per table up to 100 batches (100k rows), warning when the cap is hit with rows possibly pending; sustained inflow above 100k rows/day on one table stays best-effort and keeps warning. Next also prunes `agent_event_audits` at 90 d; legacy never pruned audits | W13 ✅ |
 | `web_sessions` expiry cleanup (no legacy equivalent — Laravel GC; rows accumulate without one) | ✅ expiry sweep in the same prune pass (`test/prune.test.ts`) | W13 ✅ |
 | Bot write-back after every event mutation (`syncAfterCommit`, drafts/past/unmirrored skip) | ✅ per-mutation `writeBack`/`childWriteBacks` in `src/admin/store-event-writes.ts` (re-exported via the `src/admin/store.ts` barrel; drafts/past/unmirrored skip); tracked write-back via W13 `SYNC_EVENT_QUEUE` with ledger, 10 s debounce + unique lock (PR #68; `test/rsvp-writeback-recovery.test.ts`, `test/rsvp-writeback-outage.test.ts`, PR #247); title-only edit write-back pinned (`test/event-title-edit-writeback.test.ts`). Bot HTTP adapter still pending (no live Discord proof) | [TOG-10815](/TOG/issues/TOG-10815) |
 
@@ -288,4 +288,12 @@ Unmapped rows remaining: **0**. Dropped rows carry reasons above; every other
 row names its card. Re-run 2026-10-03 at `b46a479a`: table scan finds no row
 without a card or drop reason, and no new legacy surface appeared (legacy
 still pinned at `e1e939a`); this refresh records only post-`e2f8969`
-landings, no product code changed. Re-run this matrix before the DNS flip.
+landings, no product code changed. Re-run 2026-10-10 at `56c4502c`: every
+row touched by #615 (admin split), #622 (cookie single-source), #645
+(islands split) and #646/#632 (agent-events split + ingress text rules) was
+re-checked against head source and confirmed with no flip — the three splits
+preserve their export surfaces (10/10 admin pages, 210/210 island contracts,
+12/12 ingress exports), the session cookie value is unchanged behind its
+single source, and the tightened ingress text rules narrow no parity claim.
+Prune/immutability rows and the rows owned by open #620/#582 were not
+touched. Re-run this matrix before the DNS flip.
