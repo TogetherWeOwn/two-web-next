@@ -414,18 +414,20 @@ passwords, tokens, or other credentials while handling the request.
    ticket. Keep the member's Discord user ID inside that private thread.
 2. Hand the Discord user ID to the site maintainers/operator through the
    approved private support process. Do not run database commands, edit rows,
-   or try another endpoint yourself.
-3. Tell the member what happens: the operator deletes their member record,
-   profile, RSVPs, sign-in sessions (this signs them out everywhere), and
-   join attempts in one transaction, following the
-   [member-erasure operator runbook](member-erasure.md). Signing in again
-   later starts a fresh record.
-4. Name the two exceptions, which stay tamper-proof as evidence: past
-   member-data access-log entries (never rewritten for one person; they
-   delete themselves after 90 days) and the moderator edit history (it keeps
-   the name of the moderator who made each change). Discord-side data (roles,
-   messages, tickets) is out of scope here and is handled through Discord's
-   own moderation tools.
+   or try another endpoint yourself. The operator runs both erasures for that
+   ID: the website's and the bot's records for our server.
+3. Tell the member what happens: the operator deletes their website member
+   record, profile, RSVPs, sign-in sessions (this signs them out everywhere),
+   and join attempts in one transaction, following the
+   [member-erasure operator runbook](member-erasure.md). The bot's records that
+   name them are erased for our server through the bot's own operator
+   procedure. Signing in again later starts a fresh website record.
+4. Name the exceptions, which stay as evidence: past member-data access-log
+   entries (never rewritten for one person; they delete themselves after 90
+   days), the moderator edit history (it keeps the name of the moderator who
+   made each change), and the bot's settings and audit history. Messages and
+   attachments on Discord are out of scope here and are handled through
+   Discord's own moderation tools.
 
 Do not promise a completion time; the operator runs the command and confirms
 the per-table counts.

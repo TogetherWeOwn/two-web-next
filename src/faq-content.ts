@@ -112,7 +112,7 @@ export const FAQS: Array<{
     items: [
       [
         "What do you store about me, and what are the rules?",
-        "We store Discord user IDs, timestamps, and channel IDs — enough to count joins honestly. We never store message content, email, location, or voice audio. Ask anytime to be removed and we delete your rows.",
+        "The website keeps your Discord user ID, sign-in details, profile, RSVPs, and join-attempt timestamps and channel IDs. It does not store email, location, voice audio, or message content. The Discord bot keeps membership and invite records, activity and rank data, moderation and safety records, and support-ticket transcripts (message text and attachment links) for 90 days; it never records voice audio. The privacy policy lists the records, retention, and how to ask for deletion.",
       ],
     ],
   },

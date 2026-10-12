@@ -1,7 +1,8 @@
 ## Who we are, and what this covers
 
 Together We Own is an adult gaming community. This policy covers the community
-website: what it stores about you, who can see it, and how to get it deleted.
+website and the community's Discord bot in our server: what they store about
+you, who can see it, what it is never used for, and how to get it deleted.
 Discord itself is governed by Discord's own privacy policy — this page is only
 about what we keep on our side.
 
@@ -50,7 +51,7 @@ Concretely, the website keeps:
   be read within half a second, the stats section is left out and the rest of
   the page still loads.
 
-What we never store, ever — in the website database: email addresses (we never ask for one), passwords (there is no password column — Discord OAuth is the only way in), message content, location, or voice audio. Support-ticket transcripts are the one narrow exception, and they live in Discord, not here: staff-only, kept for 90 days, then deleted.
+What we never store, ever — in the website database: email addresses (we never ask for one), passwords (there is no password column — Discord OAuth is the only way in), message content, location, or voice audio. The website does not keep support-ticket transcripts; the bot does, as described below.
 
 ## Who can see it
 
@@ -69,15 +70,73 @@ down the same way. That access log is kept for 90 days. Changes moderators
 make to events and featured content are kept in an edit history that records
 which moderator made each change and what changed.
 
-Private support-ticket transcripts live in Discord, not in this site's
-database: staff-only, kept for 90 days, then deleted.
+Support-ticket transcripts are visible only to the staff who handle that ticket.
 
 The member leaderboard is members-only. It ranks members by how many events
 they answered going to, optionally for one season or one game, and shows only
 rank, display name and that count. It never counts join attempts and shows no
 dates. When it shows other members, that look is written down in the access
-log like any other look at members' records. You can opt out of leaderboards at any time — switch it off on your profile, or DM a moderator
-or open a private support ticket — and you leave every board and every count.
+log like any other look at members' records. To stay off leaderboards, turn
+off visibility on your profile, DM a moderator, or open a private support ticket;
+you will be removed from every board and every count.
+
+## What the Discord bot keeps
+
+The bot runs features in our server, and it keeps records for them. Most of
+those records are kept in our own database. We do not sell, license, or
+commercialize this data, or share it with advertising networks, data brokers, or
+monetization services (see "Selling and sharing" below).
+
+- **Membership and invites** — your Discord user ID, when you joined and left,
+  which invite link you joined through, and activity milestones.
+- **Levels and ranks** — XP totals earned from your activity in our server, such
+  as posting messages; the awards and cooldowns that produced them; your rank;
+  and any raid exclusion that applies to you.
+- **Events and RSVPs** — the event details we publish to Discord (name, start
+  and end time, location and description), and the RSVP and attendance facts the
+  bot records for events. RSVPs you make on this website are not sent to Discord.
+- **Moderation and safety** — moderation actions taken against you, with the
+  moderator's ID and the reason; automod counts, which store your ID, the
+  message ID and the rule that matched, never the message text; and join-risk
+  evidence (account age, join time, risk score and reasons) and anti-nuke
+  containment records that name you.
+- **Support tickets** — when a ticket is opened in our server, the IDs of the
+  people who opened and claimed it. When the ticket closes, the bot saves a
+  transcript of its messages, including their text and attachment links.
+  Support-ticket transcripts are kept for 90 days after they are saved, then
+  deleted.
+- **Voice rooms** — for temporary voice rooms: the owner's and creator's IDs, the
+  block and grant lists, and vote-kick records (who started a vote and who it
+  targeted). The bot never records audio.
+- **Posts and sign-ups** — looking-for-group posts and who signed up for them,
+  self-role claims, and scheduled and sticky messages, with the IDs of the people
+  who created or edited them.
+- **Audit trail** — a record of configuration changes and operator actions, with
+  the IDs of the people who made them.
+
+The bot keeps message text only in support-ticket transcripts.
+
+Most bot records have no automatic deletion timer. They stay until we erase
+them for you on request, or until the feature that created them removes them.
+Backup copies can also hold them (see "Deletion" below).
+
+## Why the bot asks Discord for sensitive data
+
+Discord sends the bot sensitive data only when we ask for it, and we ask only
+for what these features need:
+
+- **Member list** — always requested. It lets the bot see joins and leaves,
+  match them to invites, and give roles.
+- **Moderation log** — always requested. It lets the bot record moderation
+  actions taken in our server, so moderators can see who did what.
+- **Invites** — always requested. It attributes each join to the invite link used.
+- **Voice state** — always requested. It runs temporary voice rooms: who is in
+  which room. The bot never receives or stores voice audio.
+- **Online status** — requested only when voice rooms use it to name rooms, and
+  only when that feature is switched on.
+- **Message content** — requested only when a feature that needs it is switched
+  on: support tickets, automod or custom text commands. Otherwise the bot never
+  receives message text.
 
 ## Cookies and tracking
 
@@ -124,15 +183,52 @@ served it — never your IP address or who you are.
 
 ## Deletion
 
-Ask anytime to be removed — DM a moderator or open a private support ticket —
-and we delete your rows: your member record, profile, RSVPs, sign-in sessions
-and join attempts. Signing in again later starts a fresh record.
+Ask anytime to be removed. DM a moderator or open a private support ticket in
+our server. A moderator passes the request to the operator, who checks it and
+then deletes:
 
-Two records are the exception, because they are kept tamper-proof as evidence
-and are not edited on request. The access log (who looked at whose records,
-described above) is not rewritten for one person; it deletes itself after 90
-days. The moderator edit history keeps the name of the moderator who made each
-change.
+- on the website: your member record, profile (including leaderboard visibility), RSVPs, sign-in sessions and join
+  attempts. Signing in again later starts a fresh record;
+- in the bot: the records in "What the Discord bot keeps" that name you, which
+  include your membership and invite records, XP and ranks, RSVPs and
+  attendance facts, moderation and safety records, support-ticket transcripts
+  you opened or claimed, voice-room records, and posts and sign-ups.
+
+Deletion covers records from our server only; records from any other Discord
+server are not affected. It removes what is stored when the request is carried
+out. It does not reach:
+
+- backup copies. Backups are kept as a limited set of recent snapshots rather
+  than for a set period, so an older backup can still hold your records until
+  it rotates out. Before restored data is opened to anyone, earlier deletion
+  requests are applied to it again;
+- Discord itself. Messages and attachments you posted on Discord are governed by
+  Discord, and removing them happens through Discord's own tools;
+- logs kept outside our databases.
+
+There is no opt-out switch yet for the bot's records, so a deletion does not stop
+new activity from being recorded while you remain in the server. Deletion is carried out by an
+operator, not instantly, and we do not promise a completion time.
+
+Some records are kept on purpose:
+
+- The access log (who looked at whose records, described above) is not rewritten
+  for one person; it deletes itself after 90 days.
+- The moderator edit history keeps the name of the moderator who made each change.
+- The bot's settings history keeps the IDs of the staff and moderators who changed
+  settings, and active settings keep the staff, raid and test ID lists they were
+  configured with.
+- The bot's deletion receipt records the operator and a time, never your ID.
+- One replay guard for a moderation action may keep an ID that was used as its
+  key, so that a delayed duplicate cannot repeat the action.
+
+## Selling and sharing
+
+We do not sell, license or commercialize any of the data described in this
+policy, including the Discord data the bot receives. We do not share it with
+advertising networks, data brokers or monetization services. The only parties
+that handle it are the infrastructure providers that run the website and the
+bot, and they handle it only to run them.
 
 ## Changes to this policy
 
@@ -140,4 +236,4 @@ A material change ships as a new numbered version of this page, announced in
 Discord. The previous versions stay in the site's public history, so you can
 see exactly what changed.
 
-Version 3 adds the member leaderboard and its opt-out: a members-only board that ranks members by going RSVPs for published events, filterable by season, scope and game, with each view logged without identity like other board views. It never counts join attempts, and opting out removes a member from every board and every count.
+Version 3 adds the member leaderboard and its opt-out: a members-only board that ranks members by going RSVPs for published events, filterable by season, scope and game, with each view logged without identity like other board views. It never counts join attempts, and opting out removes a member from every board and every count. It also describes the community bot's records, data requests, and deletion limits.

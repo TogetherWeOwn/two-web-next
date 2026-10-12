@@ -1,9 +1,10 @@
 # Member erasure
 
-`bin/erase-member.mjs` backs the published deletion promise
-(`src/privacy-content.ts` "Deletion"): "Ask anytime to be removed … and we
-delete your rows." A moderator who receives a removal request runs this
-operator command; there is no self-serve path.
+`bin/erase-member.mjs` backs the website part of the published deletion promise
+(the "Deletion" section of `src/privacy-content.ts`, "Ask anytime to be removed").
+A moderator who receives a removal request hands it to the operator, who runs
+this command; there is no self-serve path. The bot's records are covered
+separately, see [Bot-held records](#bot-held-records).
 
 ## Usage
 
@@ -88,6 +89,15 @@ admitted requests. Both prunes are bounded by
 next counted request anywhere on the site. `test/member-erasure-coverage.test.ts`
 pins this: it fails on any new member-keyed column or `*-write:${...}` bucket
 that is neither erased above nor documented here with its own deletion proof.
+
+## Bot-held records
+
+This command covers the website database only. The bot keeps its own records,
+including ticket transcripts, moderation records and voice-room records, in its
+own database. They are erased for the same Discord id through the bot's separate
+operator command, for our server only. Run both for a removal request. Erasure
+is not an opt-out: while the member stays in the server, the bot can record new
+activity again until an opt-out exists.
 
 ## Scope
 
