@@ -14,11 +14,12 @@ The app writes ONE single-line JSON object on `console.error`, with
 
 | `event` | When | Source fields (internal logs only) |
 | --- | --- | --- |
-| `error.alert` | An unhandled error reached the 500 handler | `fingerprint` (`ExceptionClass@/route/pattern`), `exception`, `method`, `route`, optional `request_id` |
+| `error.alert` | An unexpected non-4xx error reached an HTTP error path, including a member-read refusal or locally handled profile-save failure (the response may remain 503) | `fingerprint` (`ExceptionClass@/route/pattern`), `exception`, `method`, `route`, optional `request_id` |
 | `queue.failing` | A job failed terminally or threw on its final attempt | `connection`, `queue`, `job`, `attempts`, `exception`, optional `request_id` |
 
 - The app mutes `error.alert` per `class@route` for five minutes. Client errors
-  (404, 403, 429, other 4xx and validation errors) stay silent.
+  (404, 403, 429 and other 4xx) and `ZodError` stay silent. A thrown
+  `MemberReadRefused` is a non-4xx boundary failure and does alert.
 - Request alert lines use exception classes, not messages or stacks (a database
   error message can hold bound values); no `unhandled error:` line is emitted.
 - Both alert types carry a validated `request_id` when an HTTP request
