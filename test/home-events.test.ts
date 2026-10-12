@@ -78,6 +78,7 @@ function fixture(
   failAt?: "events" | "rsvps",
   holdAt?: "events" | "rsvps",
   featured = false,
+  discord?: { rows?: import("../src/islands/contracts").DiscordTransient[]; failed?: boolean },
 ) {
   const queries: { sql: string; params: unknown[] }[] = [];
   let started!: () => void;
@@ -111,6 +112,16 @@ function fixture(
         ].filter(([id]) => params.includes(id)),
       };
     }
+    // Hidden-event suppression probe: persisted discord ids for the merge.
+    // The canonical teaser selects every column (including the title); the
+    // probe selects only the discord id, so the title distinguishes them.
+    if (sql.includes("discord_event_id") && !sql.includes('"title"')) {
+      return {
+        rows: rows
+          .filter((r) => r.discordEventId !== null && params.includes(r.discordEventId))
+          .map((r) => [r.discordEventId]),
+      };
+    }
     // Honor the query's bound status, boundary and cap, not the reader's intent.
     let selected = [...rows];
     if (sql.includes('"status" =')) selected = selected.filter((r) => r.status === params[0]);
@@ -131,7 +142,19 @@ function fixture(
   }) as unknown as Db;
   // pg-proxy has no transactions; run the callback on this SQL-recording fixture.
   Object.assign(db, { transaction: async (fn: (tx: Db) => Promise<unknown>) => fn(db) });
-  const env = { ...baseEnv, ADMIN_DB: db } as Env;
+  // Homepage merges Discord snapshot transients like /events: the seam keeps
+  // this suite hermetic (no live Discord fetch, no timer leak under fake
+  // timers). Discord-only coverage passes rows/failed per case below.
+  const discordRows = discord?.rows ?? [];
+  const discordFailed = discord?.failed ?? false;
+  const env = {
+    ...baseEnv,
+    ADMIN_DB: db,
+    DISCORD_EVENTS: {
+      upcoming: async () => discordRows,
+      lastReadFailed: () => discordFailed,
+    },
+  } as Env;
   return {
     db,
     env,
