@@ -158,3 +158,54 @@ export function decideOwner(request: Request, manifest: OwnedRoute[] = ROUTE_MAN
     manifest,
   );
 }
+
+// The Kit catch-all route id that hands the request to the Hono app. Shared
+// here so the hook and its tests agree without importing SvelteKit code.
+export const HONO_FALLBACK_ROUTE_ID = "/[...path]";
+
+// Minimal structural shape of the SvelteKit hook event the dispatch needs.
+// Deliberately framework-free: the root Vitest suite cannot transform
+// web/src/hooks.server.ts (web/tsconfig.json extends the SvelteKit-generated
+// $app/tsconfig, so the vite:oxc transform fails under coverage), hence this
+// helper lives here and the hook test targets it directly.
+export interface HookEventLike {
+  request: Request;
+  url: URL;
+  route: { id?: string | null } | null | undefined;
+}
+
+export interface HookDispatchDeps {
+  appUrl: string;
+  isTrustedHost: (appUrl: string, hosts: Array<string | null | undefined>) => boolean;
+  decideOwner: (request: Request) => RouteOwner;
+  honoFetch: (request: Request) => Promise<Response>;
+  resolve: (event: HookEventLike) => Promise<Response>;
+  decorateKitResponse?: (response: Response, event: HookEventLike) => void | Promise<void>;
+}
+
+function defaultDecorateKitResponse(response: Response): void {
+  response.headers.set(KIT_RENDERER_HEADER, KIT_RENDERER_VALUE);
+}
+
+// Framework-free core of web/src/hooks.server.ts handle(): exactly one
+// renderer runs, decided before resolve and before any auth/body read. A
+// resolve() failure propagates and is never replayed through Hono.
+export async function dispatchHookRequest(
+  event: HookEventLike,
+  deps: HookDispatchDeps,
+): Promise<Response> {
+  if (!deps.isTrustedHost(deps.appUrl, [event.request.headers.get("host"), event.url.host])) {
+    return deps.honoFetch(event.request);
+  }
+  if (deps.decideOwner(event.request) === "hono") {
+    return deps.honoFetch(event.request);
+  }
+  const response = await deps.resolve(event);
+  if (event.route?.id === HONO_FALLBACK_ROUTE_ID) return response;
+  if (deps.decorateKitResponse) {
+    await deps.decorateKitResponse(response, event);
+  } else {
+    defaultDecorateKitResponse(response);
+  }
+  return response;
+}
