@@ -14,7 +14,15 @@
 // The shared section contract (testids, copy, pager, island script) is what
 // the existing E2E and island binders already pin; this script proves the Kit
 // page carries it, not that the two HTML documents are identical files.
-import { mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import {
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { createRequire } from "node:module";
 import { dirname, join, resolve } from "node:path";
@@ -221,9 +229,30 @@ function expectShell(document) {
   );
 }
 
+// The Kit page serves its tokens and Tailwind output from web/src/app.css
+// (compiled by the web vite build into .svelte-kit/output), never from
+// public/theme-tokens.css, which stays Hono-only. Build it here so the
+// fixture injects exactly what Kit serves: a static read of app.css would
+// miss the Tailwind pipeline (Preflight, @theme emission, utilities), which
+// is how the Preflight underline regression went undetected.
+function kitCompiledCss() {
+  execFileSync("npm", ["run", "build", "--prefix", "web"], { stdio: "inherit" });
+  const assets = new URL(
+    "../web/.svelte-kit/output/client/_app/immutable/assets/",
+    import.meta.url,
+  );
+  const names = readdirSync(assets).filter((name) => name.endsWith(".css"));
+  if (names.length === 0) throw new Error("Kit build emitted no CSS assets");
+  return names.map((name) => readFileSync(new URL(name, assets), "utf8")).join("\n");
+}
+
 async function browserShellFixtures(document) {
-  const css = ["styles.css", "theme-tokens.css", "theme.css", "schedule-theme.css"]
-    .map((name) => readFileSync(new URL(`../public/${name}`, import.meta.url), "utf8"))
+  const css = [
+    ...["styles.css", "theme.css", "schedule-theme.css"].map((name) =>
+      readFileSync(new URL(`../public/${name}`, import.meta.url), "utf8"),
+    ),
+    kitCompiledCss(),
+  ]
     .join("\n")
     .replace(/@font-face\s*\{[^}]*\}/g, "");
   const fixture = document
@@ -250,6 +279,20 @@ async function browserShellFixtures(document) {
         .trim(),
     );
     check("schedule theme accepts pluggable semantic token values", accent === "#ff00aa");
+    // Preflight guard: the public sheets never set text-decoration, so content
+    // links rely on the UA underline. A Tailwind Preflight in the Kit cascade
+    // strips it (colour alone distinguishes the link: WCAG 1.4.1).
+    const underline = await page.evaluate(() => {
+      const link = document.querySelector(
+        'main.events-page section[data-testid="past-events"] p a',
+      );
+      return link ? getComputedStyle(link).textDecorationLine : null;
+    });
+    check(
+      "content links keep their underline without Preflight",
+      underline === "underline",
+      `got ${underline}`,
+    );
     const desktop = await page.evaluate(() => ({
       width: document.documentElement.scrollWidth,
       viewport: window.innerWidth,

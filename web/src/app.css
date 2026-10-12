@@ -1,4 +1,12 @@
-@import "tailwindcss";
+/* Tailwind v4 without Preflight: the Hono twin serves unlayered author
+ * sheets with no reset, so Kit must not apply one either. Importing the full
+ * "tailwindcss" entry pulls in Preflight (@layer base), which strips the
+ * underline from every content link (WCAG 1.4.1: colour alone distinguishes
+ * them) and zeroes paragraph margins on the archive page. Import only the
+ * theme and utilities layers the shell uses. */
+@layer theme, base, components, utilities;
+@import "tailwindcss/theme.css" layer(theme);
+@import "tailwindcss/utilities.css" layer(utilities);
 
 /*
  * Open Lobby tokens. Single source of truth for the SvelteKit
