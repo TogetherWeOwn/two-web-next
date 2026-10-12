@@ -1339,7 +1339,10 @@ For branch `staging`, the manifest is
 `neon/staging-staging/MANIFEST.txt`, daily dumps are
 `neon/staging-staging-<UTC>.dump`, weeklies append `-weekly-<UTC>.dump`
 (see `docs/db-migrations.md` "Backups" for the full layout).
-Retention is newest 7 dailies + 4 weeklies. Member-data dumps belong **only** in
+Retention on the scheduled staging run is newest 7 dailies + 4 weeklies:
+manual dispatches skip the promote-weekly + rotate step, so production
+archives are never promoted or pruned and need an approved manual rotate.
+Member-data dumps belong **only** in
 EU-jurisdiction `two-web-next-backups`, never `paperclip-backups`.
 
 For an approved **operational backup**, not a test, the custodian injects the

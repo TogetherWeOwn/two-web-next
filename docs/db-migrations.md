@@ -217,8 +217,11 @@ with `target: production`, behind the `production` Environment:
   `neon/staging-staging-<UTC>.dump`); weeklies are
   `<daily-without-.dump>-weekly-<UTC>.dump` copies; the manifest is
   `neon/<branch>-<branch>/MANIFEST.txt` (for example
-  `neon/staging-staging/MANIFEST.txt`). Retention: newest 7 dailies +
-  newest 4 weeklies (mirrors the `two-web` `pg-backup.sh` policy).
+  `neon/staging-staging/MANIFEST.txt`). Retention on scheduled runs
+  (staging): newest 7 dailies + newest 4 weeklies (mirrors the `two-web`
+  `pg-backup.sh` policy). Manual dispatches skip the promote-weekly +
+  rotate step, so a production dispatch only backs up and checks — its
+  archives are never promoted or pruned and need an approved manual rotate.
 - Proof: every backup re-lists its key after upload; restore is proved
   by restoring into a scratch database and comparing row counts
   table-by-table (same bar as `two-web` `restore-proof`).

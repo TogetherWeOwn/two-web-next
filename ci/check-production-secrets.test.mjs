@@ -401,6 +401,27 @@ test("neon-backup schedule dumps staging; production is manual dispatch only", (
     backups.includes("`production` Environment"),
     "Backups section must name the production Environment gate",
   );
+  // The promote-weekly + rotate step runs on scheduled runs only, so the
+  // docs must scope 7+4 retention to scheduled runs and say a production
+  // dispatch only backs up and checks.
+  assert.ok(
+    workflow.includes("github.event.schedule != ''"),
+    "promote-weekly + rotate must run on scheduled runs only",
+  );
+  assert.ok(
+    backups.includes("Retention on scheduled runs"),
+    "Backups section must scope 7+4 retention to scheduled runs",
+  );
+  assert.ok(
+    backups.includes("only backs up and checks"),
+    "Backups section must state a production dispatch only backs up and checks",
+  );
+
+  const runbook = readFileSync(new URL("../docs/runbook.md", import.meta.url), "utf8");
+  assert.ok(
+    runbook.includes("Retention on the scheduled staging run"),
+    "runbook must scope 7+4 retention to the scheduled staging run",
+  );
 });
 
 test("backup docs name the real R2 key layout from prefix() / manifest_key()", () => {
