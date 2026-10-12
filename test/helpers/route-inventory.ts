@@ -18,6 +18,7 @@ export function routeInventory(router: Router): RouteInventoryEntry[] {
     const { method, path } = registrations.get(name)!;
     let auth = "public";
     if (path === "/*") auth = "middleware";
+    else if (path === "/admin/queue/source-evidence/:id") auth = "evidence-bearer";
     else if (path.startsWith("/admin/queue/") && registrations.has("ALL /admin/queue/*"))
       auth = "staging-operator";
     else if ((path === "/admin" || path.startsWith("/admin/")) && registrations.has("ALL /admin/*"))

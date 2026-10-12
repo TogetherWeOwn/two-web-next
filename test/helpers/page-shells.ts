@@ -54,6 +54,7 @@ export const NON_HTML_READS = [
   "/admin/featured-contents/create",
   "/admin/featured-contents/:id/edit",
   "/admin/queue/failed/:id/preview", // Operational advice is buffered JSON, never HTML.
+  "/admin/queue/source-evidence/:id", // Evidence-only proof is JSON, never HTML.
   "/sitemap_index.xml",
   "/robots.txt",
   "/.well-known/security.txt", // Plain-text RFC 9116 disclosure file, never an HTML document.
