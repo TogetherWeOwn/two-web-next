@@ -65,15 +65,19 @@ function builtinPrototypeFor(value: object): object | null {
 }
 
 /**
- * A subclass can print through a prototype formatter (`%s` calls `toString`,
- * `util.inspect` calls `nodejs.util.inspect.custom`) that own-state reads miss.
- * Walk each intermediate prototype up to the built-in one; any own function or
- * accessor there (other than `constructor`) means the printed form is not fully
- * visible here. Returns a reason when opaque, null when the chain is clean.
+ * A subclass can print through prototype state that own-state reads miss: a
+ * formatter (`%s` calls `toString`, `util.inspect` calls
+ * `nodejs.util.inspect.custom`), a data value (`Symbol.toStringTag` prints as
+ * `[tag]`, any other plain value prints under `%o`), or the constructor name
+ * (Map/Array tag `Name(n)`, Error stack prefix `Name: message`). Walk each
+ * intermediate prototype up to the built-in one; any own key there (other than
+ * `constructor`) means the printed form is not fully visible here. Returns a
+ * reason when opaque, null when the chain is clean.
  * Ruling: Error `name`, `message`, `stack` and `cause` are read explicitly via
  * `Reflect.get` (so a prototype accessor for one of those still reports its hit
- * and is not treated as a hidden formatter); every other prototype function or
- * accessor is opaque. Mark incomplete but keep reading own state, so a covered
+ * and is not treated as hidden state); every other prototype own key is opaque.
+ * Constructor names are read as text separately in `inspect`, so a marker in
+ * the name is a hit. Mark incomplete but keep reading own state, so a covered
  * Error field still reports its hit; either entry alone fails the clean check.
  */
 function prototypeFormatterReason(value: object): string | null {
@@ -114,11 +118,7 @@ function prototypeFormatterReason(value: object): string | null {
         return "prototype unreadable";
       }
       if (!descriptor) continue;
-      if ("value" in descriptor) {
-        if (typeof descriptor.value === "function") return "opaque prototype formatter";
-      } else {
-        return "opaque prototype formatter";
-      }
+      return "opaque prototype formatter";
     }
     try {
       proto = Object.getPrototypeOf(current);
@@ -179,6 +179,74 @@ function inspect(args: unknown[], prefix: string): Pick<DiagnosticRecord, "texts
       if (formatter) stop(path, formatter);
     } catch {
       return stop(path, "prototype unreadable");
+    }
+    // Node prints the subclass constructor name (Map/Array `Name(n)` tag, Error
+    // stack prefix `Name: message`) but own-state reads never see it. Read each
+    // intermediate constructor's `name` as text so a marker there is a hit;
+    // anything unreadable or non-string fails closed.
+    try {
+      const builtinForName = builtinPrototypeFor(value);
+      if (builtinForName !== null) {
+        let protoNode: unknown = Object.getPrototypeOf(value);
+        while (protoNode !== null && protoNode !== builtinForName) {
+          if (
+            (typeof protoNode !== "object" || protoNode === null) &&
+            typeof protoNode !== "function"
+          ) {
+            stop(path, "prototype unreadable");
+            break;
+          }
+          const currentNode = protoNode as object;
+          let ctorDescriptor: PropertyDescriptor | undefined;
+          try {
+            ctorDescriptor = Reflect.getOwnPropertyDescriptor(currentNode, "constructor");
+          } catch {
+            stop(path, "prototype unreadable");
+            break;
+          }
+          if (ctorDescriptor) {
+            if ("value" in ctorDescriptor) {
+              const ctor = ctorDescriptor.value;
+              if (typeof ctor === "function") {
+                let nameDescriptor: PropertyDescriptor | undefined;
+                try {
+                  nameDescriptor = Reflect.getOwnPropertyDescriptor(ctor, "name");
+                } catch {
+                  stop(path, "prototype unreadable");
+                }
+                if (nameDescriptor) {
+                  if ("value" in nameDescriptor) {
+                    if (typeof nameDescriptor.value === "string") {
+                      if (nameDescriptor.value.length > 0) {
+                        texts.push({ path: `${path}.<constructor>`, text: nameDescriptor.value });
+                      }
+                    } else {
+                      stop(path, "opaque prototype formatter");
+                    }
+                  } else {
+                    stop(path, "opaque prototype formatter");
+                  }
+                }
+              } else {
+                if (typeof ctor === "string") {
+                  texts.push({ path: `${path}.<constructor>`, text: ctor });
+                }
+                stop(path, "opaque prototype formatter");
+              }
+            } else {
+              stop(path, "opaque prototype formatter");
+            }
+          }
+          try {
+            protoNode = Object.getPrototypeOf(currentNode);
+          } catch {
+            stop(path, "prototype unreadable");
+            break;
+          }
+        }
+      }
+    } catch {
+      stop(path, "prototype unreadable");
     }
     if (value instanceof RegExp) texts.push({ path, text: value.source });
 

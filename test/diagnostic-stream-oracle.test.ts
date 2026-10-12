@@ -71,6 +71,15 @@ class PrototypeAccessorMap extends Map<string, string> {
     return MARK;
   }
 }
+class PrototypeTagDataMap extends Map<string, string> {}
+Object.defineProperty(PrototypeTagDataMap.prototype, Symbol.toStringTag, { value: MARK });
+class PrototypeDataMap extends Map<string, string> {}
+Object.defineProperty(PrototypeDataMap.prototype, "detail", {
+  value: MARK,
+  enumerable: true,
+  writable: true,
+  configurable: true,
+});
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -329,6 +338,51 @@ describe("diagnostic stream capture", () => {
     expect(hits).toEqual([]);
     expect(incomplete).toHaveLength(1);
     expect(incomplete[0]).toContain("opaque");
+  });
+
+  it("reports a prototype Symbol.toStringTag as opaque, never clean", () => {
+    const records = captureDiagnosticStream();
+    console.warn("opaque", new PrototypeTagDataMap([["k", "v"]]));
+    const { hits, incomplete } = scanDiagnosticStream(records, MARKERS);
+    expect(hits).toEqual([]);
+    expect(incomplete).toHaveLength(1);
+    expect(incomplete[0]).toContain("opaque");
+  });
+
+  it("reports a prototype data property as opaque, never clean", () => {
+    const records = captureDiagnosticStream();
+    console.warn("opaque", new PrototypeDataMap([["k", "v"]]));
+    const { hits, incomplete } = scanDiagnosticStream(records, MARKERS);
+    expect(hits).toEqual([]);
+    expect(incomplete).toHaveLength(1);
+    expect(incomplete[0]).toContain("opaque");
+  });
+
+  it.each([
+    [
+      "Error",
+      () => {
+        class RenamedError extends Error {}
+        Object.defineProperty(RenamedError, "name", { value: MARK, configurable: true });
+        const err = new RenamedError("ok");
+        err.stack = "RenamedError: ok";
+        return err;
+      },
+    ],
+    [
+      "Map",
+      () => {
+        class RenamedMap extends Map<string, string> {}
+        Object.defineProperty(RenamedMap, "name", { value: MARK, configurable: true });
+        return new RenamedMap([["k", "v"]]);
+      },
+    ],
+  ])("reports a renamed %s constructor as a hit, never clean", (_name, value) => {
+    const records = captureDiagnosticStream();
+    console.warn("opaque", value());
+    const { hits, incomplete } = scanDiagnosticStream(records, MARKERS);
+    expect(hits).toEqual(["warn[0].args[1].<constructor>"]);
+    expect(incomplete).toEqual([]);
   });
 });
 
