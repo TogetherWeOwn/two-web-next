@@ -132,6 +132,19 @@ jobs:
           pg_dump --version
           pg_restore --version
           psql --version
+      - name: Map the postgres service name to loopback
+        run: |
+          set -euo pipefail
+          # Steps run on the runner host, outside the service network, so the
+          # `postgres` service hostname does not resolve there; the service is
+          # reachable through its mapped port on loopback (e2e.yml connects to
+          # 127.0.0.1 for the same reason). Point the allowlisted name at
+          # loopback instead of widening the proof's host allowlist, which
+          # refuses loopback addresses by design.
+          echo "127.0.0.1 postgres" | sudo tee -a /etc/hosts >/dev/null
+          # Fail closed when the name resolves anywhere but loopback: a stale
+          # or shadowed entry must never redirect the proof at another server.
+          getent hosts postgres | tee /dev/stderr | grep -q "^127\.0\.0\.1[[:space:]]"
       - name: Wait for the disposable Postgres service
         run: |
           set -euo pipefail

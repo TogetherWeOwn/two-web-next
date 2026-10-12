@@ -54,7 +54,11 @@ on a disposable service named `postgres`, configured with **POSTGRES_USER=agent_
 The job sets no `PG*` or `*DATABASE_URL*` variables, uses no secrets, and touches
 no staging or production server. Docs-only PRs and drafts skip it through the
 same scope gate as the hermetic selftest steps; the proof log uploads as a
-short-retention artifact.
+short-retention artifact. Job steps run on the runner host where the service
+name does not resolve, so the job maps `postgres` to `127.0.0.1` in
+`/etc/hosts` and reaches the service through its mapped port; the allowlist
+still sees the name `postgres`, and loopback stays refused as a `--host`
+value.
 
 ```sh
 # Inside that GitHub Actions job (CI=true, GITHUB_ACTIONS=true arrive from the runner):
