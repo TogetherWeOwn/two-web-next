@@ -26,6 +26,7 @@ import {
   mdJoin,
   mdPrivacy,
   mdRules,
+  mdText,
   type MdEvent,
 } from "../src/ai-friendly/md";
 
@@ -194,6 +195,64 @@ describe("md builders (pure, DB-free)", () => {
     expect(body).toContain("Discord");
     expect(body).not.toMatch(/training/i);
     expect(body).not.toMatch(/member directory/i);
+  });
+
+  it("llms.txt uses explicit labels, never blurb fragments", () => {
+    const body = llmsTxt(APP_URL);
+    for (const label of [
+      "- [About](",
+      "- [FAQ](",
+      "- [House rules](",
+      "- [Privacy policy](",
+      "- [Join](",
+      "- [Upcoming events](",
+    ])
+      expect(body).toContain(label);
+    for (const fragment of [
+      "What the community is]",
+      "Short answers newcomers actually ask]",
+      "Upcoming published events; per-event pages live at /e/",
+    ])
+      expect(body).not.toContain(fragment);
+  });
+
+  it("llms.txt lists the events page once", () => {
+    const body = llmsTxt(APP_URL);
+    const eventsLinks = body.split("\n").filter((line) => line.includes(`(${APP_URL}/events)`));
+    expect(eventsLinks).toHaveLength(1);
+  });
+
+  it("mdText keeps fences, setext underlines and HTML blocks inline", () => {
+    expect(mdText("```\nABC123")).toBe("\\```\nABC123");
+    expect(mdText("~~~\nABC123")).toBe("\\~~~\nABC123");
+    expect(mdText("   ```js")).toBe("\\   ```js");
+    expect(mdText("===")).toBe("\\===");
+    expect(mdText("---")).toBe("\\---");
+    expect(mdText("<!-- hi -->")).toBe("\\<!-- hi -->");
+    expect(mdText("<div>hi</div>")).toBe("\\<div>hi</div>");
+    // Existing contract still holds.
+    expect(mdText("# hi")).toBe("\\# hi");
+    expect(mdText("> quote")).toBe("\\> quote");
+    expect(mdText("- item")).toBe("\\- item");
+    expect(mdText("plain [link]")).toBe("plain \\[link\\]");
+  });
+
+  it("an unclosed fence in one event cannot swallow the next event", () => {
+    const body = mdEvents(APP_URL, [
+      mdRow({ description: "Join code below:\n```\nABC123" }),
+      mdRow({ eventKey: "01J0000000000000000000WXYZ", title: "Second night" }),
+    ]);
+    expect(body).toContain("\\```");
+    expect(body.match(/^## \[/gm)).toHaveLength(2);
+    expect(body).toContain("Second night");
+    expect(body).toContain(`${APP_URL}/e/01J0000000000000000000WXYZ.md`);
+  });
+
+  it("an unclosed fence in detail cannot swallow the calendar links", () => {
+    const body = mdEvent(APP_URL, mdRow({ description: "code:\n```\nABC" }));
+    expect(body).toContain("\\```");
+    expect(body).toContain("[Add to calendar (.ics)]");
+    expect(body).toContain("[See upcoming events]");
   });
 });
 

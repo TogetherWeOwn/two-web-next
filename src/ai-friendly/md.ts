@@ -36,14 +36,18 @@ export interface MdEvent {
   status: "published" | "past";
 }
 
-/** Keep author-written text inline-safe: links can never form, headings can never start. */
+/** Keep author-written text inline-safe: links can never form, blocks can never start. */
+const MD_BLOCK_START =
+  /^\s{0,3}(#{1,6}\s|>\s?|\d+[.)]\s|[-*+]\s|```|~~~|={1,}\s*$|-{1,}\s*$|\*{3,}\s*$|_{3,}\s*$|<)/;
+const MD_INDENTED_CODE = /^( {4}|\t)/;
+
 export function mdText(value: string): string {
   return value
     .replace(/\\/g, "\\\\")
     .replace(/\[/g, "\\[")
     .replace(/\]/g, "\\]")
     .split("\n")
-    .map((line) => (/^\s{0,3}(#{1,6}\s|>\s?|\d+[.)]\s|[-*+]\s)/.test(line) ? `\\${line}` : line))
+    .map((line) => (MD_BLOCK_START.test(line) || MD_INDENTED_CODE.test(line) ? `\\${line}` : line))
     .join("\n");
 }
 
@@ -228,33 +232,37 @@ export function mdEventGone(appUrl: string, e: Pick<MdEvent, "title" | "eventKey
   ].join("\n");
 }
 
-const MD_PAGES: Array<{ path: string; md: string; blurb: string }> = [
+const MD_PAGES: Array<{ path: string; md: string; label: string; blurb: string }> = [
   {
     path: "/about",
     md: "/about.md",
+    label: "About",
     blurb: "What the community is: voice-first, no application, open doors.",
   },
   {
     path: "/faq",
     md: "/faq.md",
+    label: "FAQ",
     blurb:
       "Short answers newcomers actually ask: joining, first week, ranks, events, tickets, profiles.",
   },
-  { path: "/rules", md: "/rules.md", blurb: "The five house rules plus their last-updated stamp." },
+  {
+    path: "/rules",
+    md: "/rules.md",
+    label: "House rules",
+    blurb: "The five house rules plus their last-updated stamp.",
+  },
   {
     path: "/privacy",
     md: "/privacy.md",
+    label: "Privacy policy",
     blurb: "Versioned privacy policy: what the site stores, who can see it, how to be removed.",
   },
   {
     path: "/join",
     md: "/join.md",
+    label: "Join",
     blurb: "Join via the Discord handoff: one-click approve or an invite link.",
-  },
-  {
-    path: "/events",
-    md: "/events.md",
-    blurb: "Upcoming published events; per-event pages live at /e/:key with a .md alternate each.",
   },
 ];
 
@@ -269,7 +277,7 @@ export function llmsTxt(appUrl: string): string {
   ];
   for (const p of MD_PAGES)
     out.push(
-      `- [${p.blurb.split(":")[0]}](${canonicalUrl(appUrl, p.path)}): ${p.blurb} Markdown: ${canonicalUrl(appUrl, p.md)}`,
+      `- [${p.label}](${canonicalUrl(appUrl, p.path)}): ${p.blurb} Markdown: ${canonicalUrl(appUrl, p.md)}`,
     );
   out.push(
     "",
