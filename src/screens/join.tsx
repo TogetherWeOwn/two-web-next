@@ -76,20 +76,11 @@ export const Join: FC<{
                 ) : (
                   <p>No voice channels open right now.</p>
                 )}
-                {widgetSnapshot.members.length > 0 ? (
-                  <>
-                    <h3>Online now</h3>
-                    <ul data-testid="join-widget-members">
-                      {widgetSnapshot.members.map((member, index) => (
-                        <li key={`${member.username}-${index}`}>
-                          {member.username} ({member.status})
-                        </li>
-                      ))}
-                    </ul>
-                  </>
-                ) : (
-                  <p>Members list unavailable right now.</p>
-                )}
+                {/* Public page: aggregate presence only (count + channels). Member
+                    names stay off this logged-out, indexed page per privacy
+                    policy v2 (member names are members-only); the snapshot may
+                    still carry them server-side for a future member-gated use,
+                    but they never render here. */}
               </section>
               {widgetUrl ? (
                 <div class="strap">

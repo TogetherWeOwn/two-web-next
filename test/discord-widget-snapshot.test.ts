@@ -1,7 +1,10 @@
-// Server-side widget.json presence (invite + voice/stage + online
-// count + up to 100 anonymized members). No token in the client bundle; the
-// response never waits on Discord (cache read + waitUntil re-probe, like the
-// existing health verdict); widget-disabled falls back to the static invite.
+// Server-side widget.json presence (invite + voice/stage + online count).
+// The public page renders aggregates only: member names never leave the
+// server on this logged-out, indexed page (privacy policy v2). No token in
+// the client bundle; the response never waits on Discord (cache read +
+// waitUntil re-probe, like the existing health verdict); widget-disabled
+// falls back to the static invite. Presence views keep a 60 s shared-cache
+// TTL matching the verdict TTL.
 import { readFileSync } from "node:fs";
 import { URL as NodeURL } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -135,15 +138,20 @@ describe("/join widget.json presence (server-side cache only)", () => {
       advance: (ms: number) => {
         clock += ms;
       },
-      async join() {
+      async join(bindings: Env = env) {
         const pending: Promise<unknown>[] = [];
         const ctx = {
           waitUntil: (p: Promise<unknown>) => pending.push(p),
           passThroughOnException() {},
           props: {},
         };
-        const res = await app.request("/join", {}, env, ctx);
-        return { status: res.status, html: await res.text(), pending };
+        const res = await app.request("/join", {}, bindings, ctx);
+        return {
+          status: res.status,
+          html: await res.text(),
+          pending,
+          cacheControl: res.headers.get("cache-control"),
+        };
       },
     };
   }
@@ -161,11 +169,24 @@ describe("/join widget.json presence (server-side cache only)", () => {
     expect(second.html).toContain('data-testid="join-widget-presence"');
     expect(second.html).toContain("42");
     expect(second.html).toContain("stage-night");
-    expect(second.html).toContain("rick");
     expect(second.html).toContain("https://discord.gg/widget-invite");
     expect(second.html).not.toContain("opaque-1");
     expect(second.html).not.toContain("bot-token");
     expect(second.html).not.toContain("client-secret");
+    // Privacy: the public page renders aggregates only, never member names.
+    expect(second.html).not.toContain('data-testid="join-widget-members"');
+    expect(second.html).not.toContain("rick");
+    expect(second.html).not.toContain("maria");
+  });
+
+  it("keeps presence under a 60 s shared-cache TTL matching the verdict TTL", async () => {
+    const h = harness(async () => Response.json(widgetPayload()));
+    const first = await h.join();
+    expect(first.cacheControl).toBe("public, max-age=3600");
+    await Promise.all(first.pending);
+    const second = await h.join();
+    expect(second.html).toContain('data-testid="join-widget-presence"');
+    expect(second.cacheControl).toBe("public, max-age=60");
   });
 
   it("falls back to the static invite when the widget is disabled (403)", async () => {
@@ -179,6 +200,54 @@ describe("/join widget.json presence (server-side cache only)", () => {
     expect(degraded.html).toContain('data-testid="join-widget-fallback"');
     expect(degraded.html).not.toContain('data-testid="join-widget-presence"');
     expect(degraded.html).toContain("https://discord.gg/invite");
+  });
+
+  it("keeps the previous snapshot on a 429 (rate limit is no new information)", async () => {
+    let status = 200;
+    const h = harness(async () => new Response(JSON.stringify(widgetPayload()), { status }));
+    await Promise.all((await h.join()).pending);
+    const warm = await h.join();
+    expect(warm.html).toContain('data-testid="join-widget-presence"');
+    expect(warm.html).toContain("stage-night");
+
+    // Rate-limited at the next verdict window: the presence block stays.
+    status = 429;
+    h.advance(60_000);
+    await Promise.all((await h.join()).pending);
+    const limited = await h.join();
+    expect(limited.status).toBe(200);
+    expect(limited.html).toContain('data-testid="join-widget-presence"');
+    expect(limited.html).toContain("stage-night");
+    expect(limited.html).toContain("42");
+  });
+
+  it("hides presence when the guild mismatches the cached verdict", async () => {
+    const h = harness(async () => Response.json(widgetPayload()));
+    await Promise.all((await h.join()).pending);
+    const warm = await h.join();
+    expect(warm.html).toContain('data-testid="join-widget-presence"');
+
+    // Same isolate, different configured guild: no presence block renders.
+    const other = await h.join({ ...env, DISCORD_GUILD_ID: "999999999999999999" });
+    expect(other.status).toBe(200);
+    expect(other.html).not.toContain('data-testid="join-widget-presence"');
+  });
+
+  it("caps rendered channels at 100", async () => {
+    const channels = Array.from({ length: 120 }, (_, i) => ({
+      id: `ch-${i}`,
+      name: `voice-${i}`,
+      position: i,
+    }));
+    const snapshot = parseDiscordWidgetJson(GUILD, widgetPayload({ channels }));
+    expect(snapshot?.channels).toHaveLength(100);
+    // Rendered list matches the parser cap.
+    const h = harness(async () => Response.json(widgetPayload({ channels })));
+    await Promise.all((await h.join()).pending);
+    const warm = await h.join();
+    expect(warm.html).toContain('data-testid="join-widget-presence"');
+    expect(warm.html).toContain("voice-0");
+    expect(warm.html).not.toContain("voice-119");
   });
 
   it("keeps presence server-side: the client island never fetches widget.json", () => {
