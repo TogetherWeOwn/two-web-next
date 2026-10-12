@@ -185,6 +185,28 @@ try {
   assert.equal((await api.json()).reason, "ingress_disabled");
   console.log("PASS generated Worker Hono API dispatch");
 
+  // Kit's built-in form CSRF check is disabled, so a cross-origin form POST
+  // must reach the hardened gate: the Hono cross_origin 403 with security
+  // headers, never Kit's bare "Cross-site POST form submissions" text.
+  const form = await fetch(`${origin}/events/past`, {
+    method: "POST",
+    headers: {
+      origin: "https://evil.example",
+      "content-type": "application/x-www-form-urlencoded",
+    },
+    body: "title=x",
+  });
+  assert.equal(form.status, 403, "cross-origin form POST is refused");
+  assert.match(form.headers.get("content-type") ?? "", /application\/json/);
+  assert.deepEqual(await form.json(), { error: "cross_origin" });
+  assert.equal(form.headers.get("cache-control"), "no-store, private");
+  assert.match(
+    form.headers.get("content-security-policy") ?? "",
+    /default-src 'self'/,
+    "form refusal leaves hardened",
+  );
+  console.log("PASS generated Worker cross-origin form POST refusal");
+
   const asset = await fetch(`${origin}/favicon.ico`);
   assert.equal(asset.status, 200, "public assets are served through the generated Worker");
   assert.match(

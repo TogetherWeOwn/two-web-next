@@ -170,6 +170,60 @@ describe("Kit same-origin parity (unsafe methods, exact exemptions only)", () =>
     expect(dSpoofed.resolve).not.toHaveBeenCalled();
   });
 
+  it("refuses a cross-origin form POST with the hardened envelope, not Kit's bare 403", async () => {
+    // Kit's built-in form check is disabled in web/vite.config.ts, so a form
+    // POST reaches this gate and leaves hardened like every other refusal.
+    const request = new Request(new URL("/events/past", APP_URL).href, {
+      method: "POST",
+      headers: {
+        host: "example.com",
+        origin: "https://evil.example",
+        "content-type": "application/x-www-form-urlencoded",
+      },
+      body: "title=x",
+    });
+    const event = { request, url: new URL(request.url), route: { id: "/events/past" } };
+    const d = deps({
+      manifest: KIT_MANIFEST,
+      resolve: vi.fn(async () => new Response("must not resolve")),
+      honoFetch: vi.fn(async () => new Response("must not hono")),
+    });
+    expect(request.bodyUsed).toBe(false);
+
+    const res = await dispatchHookRequest(event, d);
+    expect(res.status).toBe(403);
+    expect(await res.json()).toEqual({ error: "cross_origin" });
+    expect(res.headers.get("content-type")).toMatch(/application\/json/);
+    expect(res.headers.get("cache-control")).toBe("no-store, private");
+    expect(res.headers.get(KIT_RENDERER_HEADER)).toBe(KIT_RENDERER_VALUE);
+    expect(res.headers.get("Content-Security-Policy")).toMatch(/default-src 'self'/);
+    expect(d.resolve).not.toHaveBeenCalled();
+    expect(d.honoFetch).not.toHaveBeenCalled();
+    expect(request.bodyUsed).toBe(false);
+  });
+
+  it("lets a same-origin fetch-metadata form POST through once Kit's pre-check is off", async () => {
+    // Under Kit's built-in check this form POST never reached the hook even
+    // with a same-origin hint; with the check disabled the hook fallback owns it.
+    const request = new Request(new URL("/events/past", APP_URL).href, {
+      method: "POST",
+      headers: {
+        host: "example.com",
+        "sec-fetch-site": "same-origin",
+        "content-type": "multipart/form-data; boundary=abc",
+      },
+      body: '--abc\r\nContent-Disposition: form-data; name="title"\r\n\r\nx\r\n--abc--',
+    });
+    const event = { request, url: new URL(request.url), route: { id: "/events/past" } };
+    const d = deps({
+      manifest: KIT_MANIFEST,
+      resolve: vi.fn(async () => new Response("kit-form", { status: 200 })),
+    });
+    const res = await dispatchHookRequest(event, d);
+    expect(d.resolve).toHaveBeenCalledOnce();
+    expect(await res.text()).toBe("kit-form");
+  });
+
   it("fails closed on an invalid APP_URL: trust routes to Hono, same-origin refuses", async () => {
     const { isSameOriginAllowed } = await import("../src/route-ownership");
     const request = new Request(new URL("/events/past", APP_URL).href, {
@@ -368,6 +422,51 @@ describe("Kit robots + asset admission parity", () => {
       expect(resolveRouteOwner({ method: "GET", path }, KIT_GET_ONLY)).toBe("hono");
       expect(resolveRouteOwner({ method: "GET", path }, KIT_MANIFEST)).toBe("hono");
     }
+    // The reservation beats the manifest: even entries that explicitly claim
+    // an /_app route (exact plus :param patterns) still resolve to Hono.
+    const claiming = [
+      { method: "GET", path: "/_app/immutable/chunks/abc.js", enabled: true },
+      { method: "GET", path: "/_app/:file", enabled: true },
+      { method: "GET", path: "/:a/:b/:c/:d", enabled: true },
+    ];
+    for (const path of ["/_app/immutable/chunks/abc.js", "/_app/version.json", "/_app/"]) {
+      expect(resolveRouteOwner({ method: "GET", path }, claiming)).toBe("hono");
+    }
+  });
+
+  it("pins web/_headers /_app/* to securityHeadersFor so the adapter boundary cannot drift", async () => {
+    const { securityHeadersFor } = await import("../src/headers");
+    const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+    const raw = readFileSync(resolve(root, "web/_headers"), "utf8");
+    const lines = raw.split("\n");
+    const start = lines.findIndex((line) => line.trim() === "/_app/*");
+    expect(start).toBeGreaterThan(-1);
+    const fileHeaders = new Map<string, string>();
+    for (const line of lines.slice(start + 1)) {
+      if (line.trim() === "" || line.trim().startsWith("#")) continue;
+      if (/^\S/.test(line)) break;
+      const match = line.match(/^\s{2}(\S[^:]*):\s*(.*\S)\s*$/);
+      expect(match, `parseable header line: ${line}`).not.toBeNull();
+      fileHeaders.set(match![1]!, match![2]!);
+    }
+    const expected = new Map(securityHeadersFor({ path: "/_app/x.js", method: "GET" }, ""));
+    for (const [name, value] of expected) {
+      expect(fileHeaders.get(name), name).toBe(value);
+    }
+    // X-Robots-Tag is static-only (robotsTagFor covers HTML); the file pins it
+    // while the builder does not emit it. Nothing else may sneak in.
+    expect(fileHeaders.get("X-Robots-Tag")).toBe("noindex, nofollow");
+    expect(fileHeaders.size).toBe(expected.size + 1);
+  });
+
+  it("disables Kit's pre-hook form check so the hardened gate owns every refusal", () => {
+    // Pinned as text: the root suite cannot import the Vite config through the
+    // Kit plugin. If this option is removed, Kit answers cross-origin form
+    // POSTs with its bare 403 before the hook runs (see the form refusal test
+    // above, which would still pass while production regresses).
+    const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+    const config = readFileSync(resolve(root, "web/vite.config.ts"), "utf8");
+    expect(config).toMatch(/trustedOrigins:\s*\[\s*['"]\*['"]\s*\]/);
   });
 
   it("starts SSR-only: the archive page disables CSR and uses an external island", () => {
