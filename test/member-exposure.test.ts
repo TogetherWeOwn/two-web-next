@@ -111,14 +111,15 @@ function assertReadInventory(router: Parameters<typeof readInventory>[0]) {
       ),
       // ALL includes middleware as well as handlers. Pin their multiplicity;
       // filtering wildcards or deduplicating would hide added ALL endpoints.
-      // The six global ALL /* registrations are the composed security/robots
+      // The seven global ALL /* registrations are the composed security/robots
       // headers, strict per-environment trustHosts guard, same-origin guard,
-      // auth-status controller injection, expired-write banner consumption and
-      // the flag-gated freeze banner.
+      // auth-status controller injection, expired-write banner consumption,
+      // the flag-gated freeze banner and the flag-gated WebMCP pilot script
+      // (no session, cookie or database read).
       // ALL /events/:key/rsvp is the W9 RSVP 405 fallback (PUT/DELETE only), not a read.
-      // Six global ALL /*: headers, trustHosts, same-origin, auth-status injection, expired-write banner and freeze banner.
       // The event read boundary encloses its existing GET handler directly;
       // profile flash consumption stays inside the existing boundary middleware.
+      "ALL /*",
       "ALL /*",
       "ALL /*",
       "ALL /*",
