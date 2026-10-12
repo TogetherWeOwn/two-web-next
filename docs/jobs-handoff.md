@@ -172,7 +172,7 @@ npx --no-install wrangler triggers deploy --config ./rollback-wrangler.jobs.json
         });
         const d = await r.json();
         if (!d.success) { console.error(JSON.stringify(d.errors)); process.exit(1); }
-        const live = (d.result ?? []).map((s) => s.cron).sort();
+        const live = (d.result?.schedules ?? []).map((s) => s.cron).sort();
         if (JSON.stringify(live) !== JSON.stringify([...crons].sort())) {
           console.error(script + " schedules mismatch: " + JSON.stringify(live));
           process.exit(1);
