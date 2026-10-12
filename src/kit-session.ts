@@ -1,4 +1,4 @@
-// Kit session bridge (TOG-22116): the shared request/session service the Kit
+// Read-only Kit session bridge: the shared request/session service the Kit
 // hook uses while Hono retains OAuth/session authority.
 //
 // Read-only by construction. It verifies the signed __Host session cookie with

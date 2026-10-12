@@ -188,7 +188,7 @@ async function storeFor(c: Context<{ Bindings: Env }>): Promise<SessionStore> {
   return storeForEnv(c.env);
 }
 
-// Shared with the Kit hook (TOG-22116): the same DB selection Hono uses, so
+// Shared with the Kit hook: the same DB selection Hono uses, so
 // Kit reads the sessions Hono writes. Same lifecycle too — a short-lived
 // per-request client, Hyperdrive pooling underneath, idle_timeout reaping.
 export async function storeForEnv(env: Env): Promise<SessionStore> {

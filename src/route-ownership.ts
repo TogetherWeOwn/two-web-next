@@ -179,7 +179,7 @@ export interface HookDispatchDeps {
   // always uses the shipped ROUTE_MANIFEST, so there is no swappable owner
   // seam in production wiring to mutate to always-Kit.
   manifest?: OwnedRoute[];
-  // Optional read-only session bridge (TOG-22116). Runs only after a Kit
+  // Optional read-only session bridge. Runs only after a Kit
   // ownership decision and merges its decision into event.locals before
   // resolve, so Kit loads share one session decision. Absent by default:
   // without it the dispatch behaves exactly as before.

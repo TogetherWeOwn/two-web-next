@@ -9,7 +9,7 @@ declare global {
   }
   namespace App {
     // Populated by the read-only session bridge on Kit-owned requests only
-    // (TOG-22116). Hono-owned requests skip the bridge, so every field stays
+    // Hono-owned requests skip the bridge, so every field stays
     // optional. Rotation, logout and OAuth stay Hono-owned: Kit reads these
     // locals but never writes session cookies from them.
     interface Locals {
