@@ -146,6 +146,15 @@ message (which may carry SQL or connection secrets); see
 [the alert runbook](runbook-alerts.md). Do not add those values when
 investigating an incident.
 
+Warning lines follow the same boundary. `roster upsert failed` and
+`prior session sweep failed` (`src/index.tsx`) and `guild auto-join failed`
+(`src/auth/routes.ts`) carry `request_id` and, where there is one, the exception
+class; they never carry a member's Discord ID. `csp.report.violation`
+(`src/csp-reports.ts`) keeps each reported URI's origin and path shape, but a
+17-20 digit run in a path segment (a Discord ID in `/members/:user`) is logged
+as `:id` (`src/csp-report-uri.ts`). `test/console-user-key-guard.test.ts` fails
+the suite if any `console.*` call under `src/` logs a `user` or `userId` key.
+
 This is the application-log contract, not a claim that all platform telemetry
 is sanitized. Cloudflare invocation records may independently include the
 request URL, and existing specialist audit/warning records have their own

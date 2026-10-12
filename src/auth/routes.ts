@@ -181,7 +181,8 @@ export function registerAuthRoutes(app: Hono<{ Bindings: Env }>, hooks: AuthHook
           accessToken,
           c.env.DISCORD_BOT_TOKEN,
         ).catch(() => "failed" as const);
-    if (join === "failed") console.warn("guild auto-join failed", { user: user.id });
+    if (join === "failed")
+      console.warn("guild auto-join failed", { request_id: c.get("requestId") });
 
     // Moderator recompute: roles re-read with the bot token against snowflake IDs
     // (never names). A failed lookup fails closed on the flag, never on sign-in.
