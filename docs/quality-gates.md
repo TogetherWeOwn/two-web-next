@@ -41,8 +41,9 @@ not fail) unless marked HARD. All of them run on the existing runners only.
   rows, and added `.constraintsignore` lines fail `check`. Renamed threshold
   rows pair by their Checked-by cell, so a rename-plus-lowering still fails.
   Removed threshold rows read the origin path, so moving CONSTRAINTS.md to
-  another name and lowering a row still fails, and deleting CONSTRAINTS.md
-  fails as a threshold removal. Test renames are judged against the runner
+  another name and lowering a row still fails; moving CONSTRAINTS.md to a
+  name that no longer matches fails as a threshold removal even with no row
+  edit, and deleting CONSTRAINTS.md fails as a threshold removal. Test renames are judged against the runner
   globs (vitest, Playwright specs under e2e/); e2e safety and ci selftest
   scripts run via enumerated paths (only ci/a11y-*.test.mjs runs via glob),
   so any rename of those needs a waiver.

@@ -370,20 +370,26 @@ describe("floor-guard", () => {
     assert.equal(findings.find((f) => f.rule === "threshold-removed").file, "CONSTRAINTS.md");
   });
 
-  it("stays silent on a CONSTRAINTS.md move with no edit", () => {
-    // A 100% rename carries no hunks, so there are no rows to pair: a pure
-    // move with identical content is silent.
+  it("flags a pure CONSTRAINTS.md move as a threshold removal", () => {
+    // A 100% rename carries no hunks, so no threshold row is ever examined:
+    // leaving the CONSTRAINTS.md name blinds every later CONSTRAINTS check,
+    // so the move flags threshold-removed like a deletion.
     const moved = [
       "diff --git a/CONSTRAINTS.md b/docs/QUALITY.md",
       "similarity index 100%",
       "rename from CONSTRAINTS.md",
       "rename to docs/QUALITY.md",
     ].join("\n");
+    const findings = guardDiff(moved);
+    assert.ok(
+      findings.some((f) => f.rule === "threshold-removed" && f.file === "CONSTRAINTS.md"),
+      "pure move of the floor file needs a waiver",
+    );
+    const waived = parseFloorWaivers(
+      "move thresholds\n\nFloor-waiver: threshold-removed CONSTRAINTS.md -- thresholds moved to docs/QUALITY.md\n",
+    );
     assert.deepEqual(
-      moved &&
-        guardDiff(moved).filter(
-          (f) => f.rule === "threshold-removed" || f.rule === "threshold-lowered",
-        ),
+      guardDiff(moved, { waivers: waived }).filter((f) => f.rule === "threshold-removed"),
       [],
     );
   });

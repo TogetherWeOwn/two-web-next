@@ -107,6 +107,13 @@ export function parseDiff(diff) {
       if (renameFrom && TEST_PATH.test(renameFrom) && !stillRunnable(renameFrom, renameTo)) {
         deletedFiles.push(renameFrom);
       }
+      // A pure move of the floor file carries no hunks, so no threshold row is
+      // ever examined: leaving the CONSTRAINTS.md name blinds every
+      // CONSTRAINTS check on this and later diffs. Treat it as deleting the
+      // floor file, cleared by the same threshold-removed waiver.
+      if (renameFrom && CONSTRAINTS_FILE.test(renameFrom) && !CONSTRAINTS_FILE.test(renameTo)) {
+        deletedFiles.push(renameFrom);
+      }
     } else if (line.startsWith("--- ")) {
       lastMinus = line.slice(4).trim();
     } else if (line.startsWith("+++ ")) {
