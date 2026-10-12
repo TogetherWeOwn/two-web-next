@@ -2,7 +2,7 @@ import type { FC } from "hono/jsx";
 import { canonicalUrl } from "../seo";
 import { JOIN_HREF, Leaf } from "../page-shell";
 
-const FAQS: Array<{ section: string; sectionId: string; items: Array<[string, string]> }> = [
+export const FAQS: Array<{ section: string; sectionId: string; items: Array<[string, string]> }> = [
   {
     section: "Getting in",
     sectionId: "faq-getting-in",

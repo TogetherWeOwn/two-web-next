@@ -176,6 +176,9 @@ export function registerDetailRoutes(
               member={member}
               answer={answer}
               returnTo={returnTo}
+              // Drafts have no Markdown view: the session-free .md route 403s
+              // for every viewer, so only link it where it answers 200.
+              markdownAlternate={e.status === "draft" ? undefined : `/e/${e.eventKey}.md`}
             />,
           );
         };

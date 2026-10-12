@@ -19,6 +19,7 @@ export const Join: FC<{
     canonical={canonicalUrl(appUrl, "/join")}
     shareDescription={JOIN_INTRO}
     theme="join"
+    markdownAlternate="/join.md"
   >
     <SiteHeader />
     <main id="main" tabindex={-1}>

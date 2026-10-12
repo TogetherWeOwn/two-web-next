@@ -13,6 +13,7 @@ export const EventGonePage: FC<{ e: PublicEvent; jsonLd: string; siteJsonLd?: st
     title={e.title}
     robots="noindex, nofollow"
     account={false}
+    markdownAlternate={`/e/${e.eventKey}.md`}
     siteJsonLd={siteJsonLd}
   >
     <section class="event-hero event-gone" aria-label="Cancelled event">

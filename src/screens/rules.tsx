@@ -2,7 +2,7 @@ import type { FC } from "hono/jsx";
 import { canonicalUrl } from "../seo";
 import { JOIN_HREF, Leaf } from "../page-shell";
 
-const RULES: Array<[string, string]> = [
+export const RULES: Array<[string, string]> = [
   [
     "18+ only",
     "Together We Own is an adult gaming community. If you are under 18, this is not your lobby yet.",

@@ -66,6 +66,14 @@ export const NON_HTML_READS = [
   "/events.ics",
   "/events.rss",
   "/events/:file{.+\\.ics}",
+  "/llms.txt", // Assistant index of the Markdown alternates, never an HTML document.
+  "/about.md",
+  "/faq.md",
+  "/rules.md",
+  "/privacy.md",
+  "/join.md",
+  "/events.md",
+  "/e/:file{.+\\.md}", // Per-event Markdown alternate; cancelled 410, draft 403, never HTML.
   "/api/public/events", // Bounded session-free JSON, never an HTML page.
   "/api/public/events/:key",
   "/api/public/community",

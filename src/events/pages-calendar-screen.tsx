@@ -60,6 +60,8 @@ export const EventsCalendarPage: FC<{
   robots?: string;
   /** One-shot join confirmation when this page is the join landing (TOG-10356). */
   joinResult?: JoinResult | null;
+  /** Rooted .md alternate path (A2); omitted where no alternate exists (past archive). */
+  markdownAlternate?: string | null;
 }> = ({
   state,
   upcoming,
@@ -75,6 +77,7 @@ export const EventsCalendarPage: FC<{
   loginReturnTo = null,
   robots,
   joinResult = null,
+  markdownAlternate = null,
 }) => {
   const searching = calendarSearching(state);
   const showPast = calendarShowingPast(state);
@@ -103,6 +106,7 @@ export const EventsCalendarPage: FC<{
       robots={robots}
       member={member}
       loginReturnTo={loginReturnTo}
+      markdownAlternate={markdownAlternate ?? undefined}
     >
       <section
         data-island={EVENTS_CALENDAR_ISLAND}

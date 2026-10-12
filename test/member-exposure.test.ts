@@ -90,6 +90,15 @@ const OTHER_READS = [
   "/events.ics",
   "/events.rss",
   "/events/:file{.+\\.ics}",
+  // A2 machine formats: viewer-independent, no session read, no member access.
+  "/llms.txt",
+  "/about.md",
+  "/faq.md",
+  "/rules.md",
+  "/privacy.md",
+  "/join.md",
+  "/events.md",
+  "/e/:file{.+\\.md}",
   "/api/public/events", // Bounded session-free JSON: published-only, no member access.
   "/api/public/events/:key",
   "/api/public/community",

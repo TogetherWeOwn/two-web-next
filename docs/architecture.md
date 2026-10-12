@@ -236,6 +236,7 @@ exactly once.
 | Path | Area |
 | --- | --- |
 | `src/access-log.ts` | observability |
+| `src/ai-friendly/` | content |
 | `src/admin/` | admin |
 | `src/agent-events/` | agent-events |
 | `src/alert-probe-error.ts` | observability |

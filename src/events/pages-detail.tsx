@@ -46,6 +46,8 @@ export const EventPage: FC<{
   member?: boolean;
   answer?: ViewerRsvp | null;
   returnTo?: string;
+  /** Rooted .md alternate path (A2), e.g. `/e/<key>.md`. */
+  markdownAlternate?: string;
 }> = ({
   e,
   neighbors,
@@ -60,6 +62,7 @@ export const EventPage: FC<{
   member = false,
   answer = null,
   returnTo,
+  markdownAlternate,
 }) => {
   const path = `/e/${e.eventKey}`;
   const canonical = canonicalUrl(appUrl, path);
@@ -71,6 +74,7 @@ export const EventPage: FC<{
       loginReturnTo={path}
       description={e.description || "An event at Together We Own."}
       robots={e.status === "draft" || e.status === "past" ? "noindex, nofollow" : undefined}
+      markdownAlternate={markdownAlternate}
       siteJsonLd={siteJsonLd}
     >
       <section class="event-hero" aria-label="Event overview">
