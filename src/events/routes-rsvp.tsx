@@ -1,4 +1,3 @@
-import { raw } from "hono/html";
 // RSVP member writes: PUT/DELETE /events/:key/rsvp, the POST /e/:key/rsvp
 // HTML adapter and the 405 fallback. Split out of src/events/routes.tsx;
 // behavior unchanged.
@@ -16,6 +15,7 @@ import {
   throttleWaitCopy,
 } from "../islands/contracts";
 import { eventKeyAllowed } from "./keys";
+import { EventDetailShell } from "./pages-shared";
 import { dispatchRsvpSync, isRsvpStatus, withdrawRsvp, writeRsvp, type RsvpAnswer } from "./rsvp";
 import { body, type App, type Ctx, type SessionReader } from "./routes-shared";
 
@@ -132,24 +132,21 @@ export function registerRsvpRoutes(app: App, readFragmentSession: SessionReader)
     if (response.status === 401) return c.redirect(loginUrl(path), 303);
     const retryAfter = response.headers.get("Retry-After");
     if (retryAfter) c.header("Retry-After", retryAfter);
+    // No-JS refusal renders inside the branded event shell (viewport, skip
+    // link, main landmark, stylesheets, header/footer), like every other
+    // event failure page. Status, Retry-After, failure copy and the
+    // return-to-event link are unchanged. Presentational only: like the
+    // branded error shells, it never reads the session for its chrome.
     return c.html(
-      <>
-        {raw("<!doctype html>")}
-        <html lang="en">
-          <head>
-            <title>RSVP not saved</title>
-          </head>
-          <body>
-            <h1>{RSVP_COPY.failedTitle}</h1>
-            <p role="alert">
-              {response.status === 429
-                ? throttleWaitCopy(retryAfter ? Number(retryAfter) : null)
-                : "Nothing changed. Return to the event to check availability and try again."}
-            </p>
-            <a href={path}>Return to the event</a>
-          </body>
-        </html>
-      </>,
+      <EventDetailShell title={RSVP_COPY.failedTitle} loginReturnTo={path}>
+        <h1>{RSVP_COPY.failedTitle}</h1>
+        <p role="alert">
+          {response.status === 429
+            ? throttleWaitCopy(retryAfter ? Number(retryAfter) : null)
+            : "Nothing changed. Return to the event to check availability and try again."}
+        </p>
+        <a href={path}>Return to the event</a>
+      </EventDetailShell>,
       response.status as ContentfulStatusCode,
     );
   });
