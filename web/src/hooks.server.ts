@@ -1,5 +1,6 @@
 import type { Handle } from "@sveltejs/kit/hooks";
 import { env } from "cloudflare:workers";
+import { kitAccessSink } from "../../src/kit-access-sink";
 import { kitSessionBridge } from "../../src/kit-session";
 import { dispatchHookRequest } from "../../src/route-ownership";
 import { honoFetch } from "#lib/server/hono.ts";
@@ -18,4 +19,5 @@ export const handle: Handle = async ({ event, resolve }) =>
     honoFetch,
     resolve: (hookEvent) => resolve(hookEvent as Parameters<typeof resolve>[0]),
     sessionFor: kitSessionBridge(env),
+    accessSink: kitAccessSink(env),
   });
