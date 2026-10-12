@@ -37,6 +37,15 @@ Do not provision on jobs: `DISCORD_CLIENT_SECRET`, `DISCORD_BOT_TOKEN`,
 `QUEUE_RECONCILE_*` (separate authorization). The jobs preview keeps
 `APP_URL https://two-web-jobs-preview.invalid` so `qaEnabled()` stays false.
 
+Custody (names only, never values): the three BOT names come through the
+existing staging-only granted custodian path. Do not rotate or substitute a
+credential to fill a gap, do not copy production or preview guild settings,
+and do not provision `QUEUE_RECONCILE_*` by inference. `QA_AUTH_TOKEN` is
+optional and probe-only: two older host QA-token sources disagree, so do not
+pick the older file merely because it exists. Establish the current approved
+staging QA source through the granted custodian before copying any probe
+token, and record which source was used without pasting a value.
+
 ## Readiness (jobs has no fetch handler)
 
 - `npx wrangler deployments status --name two-web-jobs --json` names the
@@ -50,11 +59,34 @@ Do not provision on jobs: `DISCORD_CLIENT_SECRET`, `DISCORD_BOT_TOKEN`,
   (`bin/internal-action-drill.mjs`, throwaway channel/identity) and the alert
   probe; both refuse production targets.
 
+## Coordinated hold (required before any handoff mutation)
+
+The handoff needs a bounded exclusive hold across three lanes that no single
+workflow serializes: the staging deploy lane (`deploy-staging` concurrency
+group in `.github/workflows/deploy.yml`), the hand-dispatch migration lane
+(`neon-web-migrate-staging` concurrency group in
+`.github/workflows/db-migrate.yml`, which the deploy job does not call), and
+the Operator queue/cron mutations below. One quiet Actions page or one
+concurrency group never proves the other two are idle.
+
+- Open both Actions pages (deploy and db-migrate) and confirm no run is in
+  flight on either before the first mutation, and re-confirm with the
+  exact-SHA gate (`node ci/staging-deploy-gate.mjs`) before each Cloudflare
+  mutation.
+- Record the hold on the handoff card thread with named owner
+  acknowledgements, a start time and an expiry (at most 2h; release explicitly
+  when done). An expired hold is not a hold: re-acknowledge before continuing.
+- While the hold is active, any new deploy or migration run aborts the handoff:
+  stop, re-record the rollback pointers and the backlog, and re-enter under a
+  fresh hold.
+- Source changes to this runbook or the pinned configs need ordinary
+  exact-head CI and an independent review before they count as the packet.
+
 ## Handoff sequence (authorized Operator, serialized)
 
-Run under an exclusive staging deploy/migration hold with no deploy in flight.
-Re-verify exact-SHA CI (`node ci/staging-deploy-gate.mjs`) before each
-Cloudflare mutation. Detach before attach so two consumers never exist.
+Run under the coordinated hold above with no deploy in flight. Re-verify
+exact-SHA CI (`node ci/staging-deploy-gate.mjs`) before each Cloudflare
+mutation. Detach before attach so two consumers never exist.
 
 ```bash
 # 0. Record the rollback pointers and the backlog (read-only).
@@ -195,3 +227,26 @@ curl -fsS https://next.togetherweown.com/up
 
 A Worker rollback does not undo schema, data, Discord side effects or queue
 messages. Keep required bindings in place; never delete a queue to roll back.
+
+### First install: no prior jobs application version
+
+Right now `two-web-jobs` is only the inert bootstrap draft (zero crons, no
+queue bindings) plus the existing staging `BOT_KEY_ID`; `BOT_ENDPOINT_URL` and
+`BOT_SHARED_SECRET` are deliberately absent so the required-secrets gate stays
+fail-closed. There is no good jobs application version yet, so
+`$GOOD_JOBS_VERSION` does not exist and a version rollback of the jobs Worker
+is not the rollback. If the handoff fails before the first jobs attach:
+
+- Keep the web rollback pointers from the step-0 record: the known pre-handoff
+  web pointers recorded 2026-10-12 were version
+  `55c22e8e-b1d4-4137-867f-06bf3ceebae2` and deployment
+  `5a8e6b90-ecaa-48e2-8026-14552066d8f1`, but always prefer the fresh step-0
+  record over these copies. A Worker version rollback alone never restores the
+  queue-side consumers or the trigger schedules; move both back explicitly with
+  the same commands as the standard rollback above (same `max_retries` 10,
+  batch 10, timeout 5; triggers via the pre-handoff configs).
+- Partial detach/attach is idempotent: re-run the list-then-remove/add steps. A
+  failed consumer list fails the run instead of reading as empty, and delivery
+  resumes only if paused. Bounded delivery resume: run `resume-delivery` only
+  when the matching `pause-delivery` ran in this handoff. Never purge,
+  delete/recreate queues, age-delete ledger rows or clear unique locks.

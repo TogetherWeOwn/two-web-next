@@ -121,6 +121,42 @@ describe("staging jobs handoff invariants", () => {
     expect(jobsDiffers.status, "jobs mismatch must exit 1").toBe(1);
   });
 
+  it("requires a bounded exclusive hold across deploy, migrate and operator lanes", () => {
+    const runbook = read("docs/jobs-handoff.md");
+    // The deploy workflow serializes only deploy-staging while hand-dispatch
+    // migrations use neon-web-migrate-*: one quiet page never proves the other
+    // lanes idle.
+    expect(runbook).toContain("deploy-staging");
+    expect(runbook).toContain("neon-web-migrate-staging");
+    expect(runbook).toContain("never proves the other two are idle");
+    expect(runbook).toContain("acknowledgements");
+    expect(runbook).toContain("expiry");
+    expect(runbook).toContain("staging-deploy-gate.mjs");
+    expect(runbook).toContain("aborts the handoff");
+  });
+
+  it("pins the first-install rollback from the inert draft (no GOOD_JOBS_VERSION)", () => {
+    const runbook = read("docs/jobs-handoff.md");
+    expect(runbook).toContain("inert");
+    expect(runbook).toContain("$GOOD_JOBS_VERSION");
+    expect(runbook).toContain("queue-side");
+    // Web rollback pointers are preserved but the fresh step-0 record wins.
+    expect(runbook).toContain("55c22e8e-b1d4-4137-867f-06bf3ceebae2");
+    expect(runbook).toContain("5a8e6b90-ecaa-48e2-8026-14552066d8f1");
+    // Partial detach/attach stays idempotent with bounded delivery resume.
+    expect(runbook).toContain("fails the run instead of reading as empty");
+    expect(runbook).toContain("only if paused");
+  });
+
+  it("pins staging-only secret custody without values or substitution", () => {
+    const runbook = read("docs/jobs-handoff.md");
+    expect(runbook).toContain("granted custodian");
+    expect(runbook).toContain("QUEUE_RECONCILE_*");
+    expect(runbook).toContain("disagree");
+    expect(runbook).toContain("never values");
+    expect(runbook).toContain("do not copy production");
+  });
+
   it("keeps the jobs preview off staging queues and the staging APP_URL", () => {
     const preview = jobs.env?.preview;
     const produced = names(preview?.queues?.producers);
