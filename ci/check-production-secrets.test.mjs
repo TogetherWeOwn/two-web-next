@@ -342,7 +342,7 @@ test("neon-backup selects its environment from the dispatch target, staging by d
 });
 
 // ---------------------------------------------------------------------------
-// Backup docs pin to the implementation (TOG-22084).
+// Backup docs pin to the implementation.
 //
 // docs/db-migrations.md "Backups" and the neon-backup.yml header must state the
 // real schedule (staging nightly; production manual dispatch only) and the real
