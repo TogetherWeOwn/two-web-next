@@ -11,7 +11,7 @@ import { imageHosts } from "./image-policy";
 //   nothing frames this site (CISO bar TOG-5469).
 // - Content-Security-Policy shape + the report sink belong to the CSP-report
 //   slice (TOG-10107, src/csp-reports.ts): secureHeaders emits that policy,
-//   and its tests pin the report-uri/report-to directives. This card asserts
+//   and its tests pin the report-to directive. This card asserts
 //   the static four + the robots tag, never the CSP shape, so the two cards
 //   cannot fight over one header.
 // - Strict-Transport-Security is explicitly disabled in src/index.tsx
@@ -105,7 +105,6 @@ export function securityHeadersFor(
     ["font-src", "'self'"],
     ["frame-ancestors", "'none'"],
     ["form-action", "'self'"],
-    ["report-uri", CSP_REPORT_ENDPOINT],
     ["report-to", CSP_REPORT_GROUP],
   ]
     .map((directive) => directive.join(" "))

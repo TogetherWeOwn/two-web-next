@@ -226,7 +226,7 @@ bytes. Measured on this tree with esbuild `0.28.1`:
 | `public/islands/copy-link.js` | 1323 / 714 | 2048 / 1024 |
 | `public/islands/events-calendar.js` | 5640 / 2146 | 6656 / 2560 |
 | `public/islands/going-count.js` | 2289 / 1092 | 3072 / 1536 |
-| `public/islands/member-profile.js` | 7352 / 2834 | 7680 / 3072 |
+| `public/islands/member-profile.js` | 9471 / 3500 | 12288 / 4608 |
 | `public/islands/past-events.js` | 3602 / 1490 | 4608 / 1792 |
 | `public/islands/rsvp-button.js` | 14498 / 4201 | 17408 / 5120 |
 | `public/styles.css` | 4749 / 1611 | 6144 / 2048 |

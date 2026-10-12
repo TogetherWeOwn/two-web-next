@@ -1273,7 +1273,8 @@ Sync requests independently persist `request_attempts` and `next_attempt_at`:
 claims durably set eligibility to null **before** bot I/O. Only a committed
 result can reopen that fence: backoff (`10,60,300,900,3600`) or a bot Retry-After
 above 0 and at most 86400 seconds (fractions round up) selects the next absolute
-deadline; any other Retry-After uses the backoff. A failed deadline write retries
+deadline; any other Retry-After uses the backoff. An already-persisted wait
+farther than 86400 seconds caps at 86400 before queue admission. A failed deadline write retries
 that same Date (or exhausted null), never shorter generic backoff. If both writes
 fail, the consumer carries the known remaining wait on that delivery, but the
 request remains closed across new carriers and reconciliation. The old

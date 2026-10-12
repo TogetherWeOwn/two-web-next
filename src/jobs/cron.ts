@@ -5,6 +5,8 @@ import {
   JOIN_ATTEMPT_RETENTION_DAYS,
   MEMBER_ACCESS_LOG_RETENTION_DAYS,
   PRUNE_CRON,
+  PRUNE_DELETE_BATCH_SIZE,
+  PRUNE_DELETE_MAX_BATCHES,
   RECONCILE_CRON,
   SYNC_EVENT,
 } from "./constants";
@@ -83,31 +85,79 @@ const cutoff = (now: Date, days: number): Date => new Date(now.getTime() - days 
  * Ports model:prune daily ×3 (routes/console.php) plus the web_sessions expiry
  * sweep (no legacy equivalent — Laravel GC; rows accumulate without one).
  * Every delete is age-only (Laravel MassPrunable shape): strictly older than
- * the cutoff goes, cutoff-exact rows survive. Idempotent: a re-run matches
- * nothing and reports zeros.
+ * the cutoff goes, cutoff-exact rows survive. Each statement deletes at most
+ * PRUNE_DELETE_BATCH_SIZE rows; the pass repeats the statement per table until
+ * a short batch proves the backlog drained, stopping after
+ * PRUNE_DELETE_MAX_BATCHES batches so the single-flight is never held
+ * forever. Idempotent: a re-run matches nothing and reports zeros.
  */
+async function drainPruneTable(
+  prune: (cutoff: Date) => Promise<number>,
+  cutoffDate: Date,
+): Promise<{ total: number; capped: boolean }> {
+  let total = 0;
+  for (let i = 0; i < PRUNE_DELETE_MAX_BATCHES; i++) {
+    const n = await prune(cutoffDate);
+    total += n;
+    if (n < PRUNE_DELETE_BATCH_SIZE) return { total, capped: false };
+  }
+  return { total, capped: true };
+}
+
 export async function pruneModelTables(
   stores: PruneStores,
   now: Date = new Date(),
 ): Promise<PruneCounts> {
   const [agentEventAudits, accessLog, joinAttempts, idempotencyKeys, searchLog, sessions] =
     await Promise.all([
-      stores.agentEventAudits.pruneOlderThan(cutoff(now, AGENT_EVENT_AUDIT_RETENTION_DAYS)),
-      stores.accessLog.pruneOlderThan(cutoff(now, MEMBER_ACCESS_LOG_RETENTION_DAYS)),
-      stores.joinAttempts.pruneOlderThan(cutoff(now, JOIN_ATTEMPT_RETENTION_DAYS)),
-      stores.idempotencyKeys.pruneOlderThan(cutoff(now, IDEMPOTENCY_KEY_RETENTION_DAYS)),
-      stores.searchLog.pruneOlderThan(cutoff(now, EVENT_SEARCH_LOG_RETENTION_DAYS)),
+      drainPruneTable(
+        (c) => stores.agentEventAudits.pruneOlderThan(c),
+        cutoff(now, AGENT_EVENT_AUDIT_RETENTION_DAYS),
+      ),
+      drainPruneTable(
+        (c) => stores.accessLog.pruneOlderThan(c),
+        cutoff(now, MEMBER_ACCESS_LOG_RETENTION_DAYS),
+      ),
+      drainPruneTable(
+        (c) => stores.joinAttempts.pruneOlderThan(c),
+        cutoff(now, JOIN_ATTEMPT_RETENTION_DAYS),
+      ),
+      drainPruneTable(
+        (c) => stores.idempotencyKeys.pruneOlderThan(c),
+        cutoff(now, IDEMPOTENCY_KEY_RETENTION_DAYS),
+      ),
+      drainPruneTable(
+        (c) => stores.searchLog.pruneOlderThan(c),
+        cutoff(now, EVENT_SEARCH_LOG_RETENTION_DAYS),
+      ),
       stores.sessions.sweepExpired(now),
     ]);
   const counts = {
-    agentEventAudits,
-    accessLog,
-    joinAttempts,
-    idempotencyKeys,
-    searchLog,
+    agentEventAudits: agentEventAudits.total,
+    accessLog: accessLog.total,
+    joinAttempts: joinAttempts.total,
+    idempotencyKeys: idempotencyKeys.total,
+    searchLog: searchLog.total,
     sessions,
   };
-  if (Object.values(counts).some((n) => n > 0)) console.info("Model prune pass completed.", counts);
+  const cappedTables = (
+    [
+      ["agentEventAudits", agentEventAudits.capped],
+      ["accessLog", accessLog.capped],
+      ["joinAttempts", joinAttempts.capped],
+      ["idempotencyKeys", idempotencyKeys.capped],
+      ["searchLog", searchLog.capped],
+    ] as const
+  )
+    .filter(([, capped]) => capped)
+    .map(([name]) => name);
+  if (cappedTables.length > 0)
+    console.warn("Model prune pass hit per-table batch cap with rows possibly pending.", {
+      ...counts,
+      cappedTables,
+    });
+  else if (Object.values(counts).some((n) => n > 0))
+    console.info("Model prune pass completed.", counts);
   return counts;
 }
 

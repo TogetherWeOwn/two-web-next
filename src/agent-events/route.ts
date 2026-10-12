@@ -1,5 +1,6 @@
 import type { Context, MiddlewareHandler } from "hono";
 import postgres from "postgres";
+import { alertRequestError } from "../alerts";
 import type { Env } from "../env";
 import { databaseOptions, databaseUrl } from "../db/connection";
 import { dispatchWriteBack } from "../admin/writeback";
@@ -94,6 +95,11 @@ export const agentEventsAdmission: MiddlewareHandler<IngressEnv> = async (c, nex
     await next();
   } catch (err) {
     console.error("agent-events failed", (err as Error).name);
+    alertRequestError(err, {
+      method: "POST",
+      route: "/api/agent-events",
+      requestId: c.get("requestId"),
+    });
     if (isDatabaseUnavailable(err)) {
       c.header("cache-control", "no-store, private");
       c.header("Vary", "Accept");
@@ -125,6 +131,11 @@ export async function agentEventsRoute(c: Context<IngressEnv>): Promise<Response
     return c.json(a.body, a.status as 200, a.headers);
   } catch (err) {
     console.error("agent-events failed", (err as Error).name);
+    alertRequestError(err, {
+      method: "POST",
+      route: "/api/agent-events",
+      requestId: c.get("requestId"),
+    });
     if (isDatabaseUnavailable(err)) {
       c.header("cache-control", "no-store, private");
       c.header("Vary", "Accept");
