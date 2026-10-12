@@ -20,9 +20,11 @@
   var hasProvide = typeof context.provideContext === "function";
   if (!hasRegister && !hasProvide) return;
 
-  // Page lifetime: aborted on navigation so in-flight tool reads never
-  // resolve into a discarded document.
-  var pageFetches = typeof AbortController !== "undefined" ? new AbortController() : null;
+  // Page lifetime: registrations and in-flight reads are aborted on pagehide
+  // so they never resolve into a discarded document. A page restored from the
+  // back-forward cache does not re-run this island, so register() below runs
+  // again on a persisted pageshow with fresh controllers.
+  var pageFetches = null;
   var registrations = [];
 
   function readJson(url) {
@@ -77,7 +79,7 @@
     {
       name: "two_search_events",
       description:
-        "Search published Together We Own community events, newest first. Read-only; paged, at most 20 rows per call.",
+        "List published Together We Own community events, earliest first (includes past events); use page/per_page to walk forward. Read-only; at most 20 rows per call.",
       inputSchema: {
         type: "object",
         properties: {
@@ -118,16 +120,22 @@
     },
   ];
 
-  if (hasRegister) {
-    for (var i = 0; i < tools.length; i++) {
-      var controller = typeof AbortController !== "undefined" ? new AbortController() : null;
-      if (controller) registrations.push(controller);
-      context.registerTool(tools[i], controller ? { signal: controller.signal } : undefined);
+  function register() {
+    pageFetches = typeof AbortController !== "undefined" ? new AbortController() : null;
+    registrations = [];
+    if (hasRegister) {
+      for (var i = 0; i < tools.length; i++) {
+        var controller = typeof AbortController !== "undefined" ? new AbortController() : null;
+        if (controller) registrations.push(controller);
+        context.registerTool(tools[i], controller ? { signal: controller.signal } : undefined);
+      }
+    } else {
+      // Legacy Chrome surface: one batch replacing the page toolset.
+      context.provideContext({ tools: tools });
     }
-  } else {
-    // Legacy Chrome surface: one batch replacing the page toolset.
-    context.provideContext({ tools: tools });
   }
+
+  register();
 
   function teardown() {
     for (var j = 0; j < registrations.length; j++) {
@@ -155,6 +163,11 @@
 
   var scope = typeof window !== "undefined" ? window : doc;
   if (scope && typeof scope.addEventListener === "function") {
-    scope.addEventListener("pagehide", teardown, { once: true });
+    // No once: leaving again after a back-forward-cache restore must tear
+    // down the re-registered tools too. Teardown stays idempotent.
+    scope.addEventListener("pagehide", teardown);
+    scope.addEventListener("pageshow", function (event) {
+      if (event && event.persisted) register();
+    });
   }
 })();

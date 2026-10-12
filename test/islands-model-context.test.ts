@@ -43,7 +43,7 @@ function browser(
   const provided: Array<{ tools: Registered[] }> = [];
   const cleared: unknown[][] = [];
   const fetched: Array<{ url: string; init?: RequestInit }> = [];
-  const listeners = new Map<string, () => void>();
+  const listeners = new Map<string, (event?: { persisted?: boolean }) => void>();
   const fetchImpl = vi.fn(async (url: string, init?: RequestInit) => {
     fetched.push({ url, init });
     return {
@@ -66,7 +66,7 @@ function browser(
     },
     navigator: { modelContext: navigatorContext },
     window: {
-      addEventListener: vi.fn((kind: string, fn: () => void) => {
+      addEventListener: vi.fn((kind: string, fn: (event?: { persisted?: boolean }) => void) => {
         listeners.set(kind, fn);
       }),
       removeEventListener: vi.fn((kind: string) => {
@@ -117,8 +117,11 @@ function browser(
     },
     docCtx,
     navCtx,
-    firePagehide() {
-      listeners.get("pagehide")?.();
+    firePagehide(event?: { persisted?: boolean }) {
+      listeners.get("pagehide")?.(event);
+    },
+    firePageshow(event?: { persisted?: boolean }) {
+      listeners.get("pageshow")?.(event);
     },
   };
 }
@@ -222,6 +225,20 @@ describe("model-context island stub contract", () => {
     expect(fetchImpl.mock.calls[1]![0]).toBe("/api/public/events?page=1&per_page=20");
   });
 
+  it("search_events description states the real API order: earliest first, past events included", () => {
+    const { tools } = withRegisterTool();
+    const tool = tools.find((t) => t.name === "two_search_events")!;
+    // listPublicApiEvents orders asc(startsAt), asc(id) over every published
+    // event with no date filter (src/events/reads.ts); the OpenAPI summary is
+    // "Published events, soonest first". The description is the only order
+    // contract the model sees, so it must not claim newest first, nor call a
+    // paged list without a query a search.
+    expect(tool.description).toMatch(/earliest first/);
+    expect(tool.description).toMatch(/past events/);
+    expect(tool.description).not.toMatch(/newest first/i);
+    expect(tool.description).not.toMatch(/^Search/);
+  });
+
   it("get_event fetches the valid key and rejects junk without a request", async () => {
     const fetchImpl = vi.fn(async () => ({ ok: true, status: 200, json: async () => ({}) }));
     const ctx = { registerTool: vi.fn(), provideContext: vi.fn(), clearContext: vi.fn() };
@@ -312,6 +329,61 @@ describe("model-context island stub contract", () => {
     const b = browser({ documentContext: legacy });
     b.firePagehide();
     expect(legacy.clearContext).toHaveBeenCalledTimes(1);
+  });
+
+  it("persisted pageshow re-registers tools with live signals after pagehide", async () => {
+    const fetchImpl = vi.fn(async (_url: string, _init?: RequestInit) => ({
+      ok: true,
+      status: 200,
+      json: async () => ({}),
+    }));
+    const ctx = { registerTool: vi.fn(), provideContext: vi.fn(), clearContext: vi.fn() };
+    const listeners = new Map<string, (event?: { persisted?: boolean }) => void>();
+    runInNewContext(binder, {
+      AbortController,
+      fetch: fetchImpl,
+      document: { cookie: "", modelContext: ctx },
+      navigator: {},
+      window: {
+        addEventListener: vi.fn((kind: string, fn: (event?: { persisted?: boolean }) => void) => {
+          listeners.set(kind, fn);
+        }),
+        removeEventListener: vi.fn(),
+      },
+    });
+    expect(ctx.registerTool).toHaveBeenCalledTimes(4);
+    // The page enters the back-forward cache: tools are torn down, and the
+    // island does not run again on restore, so pageshow must re-register.
+    listeners.get("pagehide")?.({ persisted: true });
+    listeners.get("pageshow")?.({ persisted: true });
+    expect(ctx.registerTool).toHaveBeenCalledTimes(8);
+    const calls = ctx.registerTool.mock.calls as Array<[Registered, { signal?: AbortSignal }]>;
+    const secondGen = calls.slice(4).map(([, options]) => options.signal!);
+    expect(secondGen).toHaveLength(4);
+    for (const signal of secondGen) expect(signal.aborted).toBe(false);
+    // Reads after restore ride the fresh controller, not the aborted one.
+    const restored = calls[4]![0];
+    await expect(restored.execute({})).resolves.toEqual({});
+    // Teardown is repeatable (no once): leaving again aborts the new set.
+    listeners.get("pagehide")?.({ persisted: true });
+    for (const signal of secondGen) expect(signal.aborted).toBe(true);
+  });
+
+  it("pageshow on first load does not duplicate registrations", () => {
+    const ctx = { registerTool: vi.fn(), provideContext: vi.fn(), clearContext: vi.fn() };
+    const b = browser({ documentContext: ctx });
+    b.firePageshow({ persisted: false });
+    b.firePageshow();
+    expect(ctx.registerTool).toHaveBeenCalledTimes(4);
+  });
+
+  it("legacy path re-provides tools when a persisted page returns", () => {
+    const legacy = { provideContext: vi.fn(), clearContext: vi.fn() };
+    const b = browser({ documentContext: legacy });
+    b.firePagehide({ persisted: true });
+    expect(legacy.clearContext).toHaveBeenCalledTimes(1);
+    b.firePageshow({ persisted: true });
+    expect(legacy.provideContext).toHaveBeenCalledTimes(2);
   });
 
   it("tool errors surface instead of resolving empty", async () => {
