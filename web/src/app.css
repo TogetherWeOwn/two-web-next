@@ -35,15 +35,28 @@
   --font-sans: ui-sans-serif, system-ui, sans-serif;
 }
 
-@layer base {
-  :root {
-    color-scheme: dark;
-  }
+/*
+ * Canvas rule. Unlayered on purpose: layered author styles lose to the
+ * unlayered public sheets Kit still links (styles.css sets
+ * body{background:var(--paper)} cream, #f4efe6). The html background paints
+ * the canvas regardless of the body rule, so it covers overscroll bounce,
+ * pinch zoom-out and mobile bar tinting. `html body` outranks the bare `body`
+ * selector, so the body itself stays dark whichever stylesheet loads first.
+ * Both values flow from the @theme tokens above, so a direction swap stays a
+ * token swap.
+ */
+:root {
+  color-scheme: dark;
+}
 
-  body {
-    background-color: var(--color-lobby-surface);
-    color: var(--color-lobby-ink);
-  }
+html {
+  background-color: var(--color-lobby-surface);
+  color: var(--color-lobby-ink);
+}
+
+html body {
+  background-color: var(--color-lobby-surface);
+  color: var(--color-lobby-ink);
 }
 
 /*

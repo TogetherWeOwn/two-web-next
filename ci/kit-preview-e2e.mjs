@@ -293,6 +293,22 @@ async function browserShellFixtures(document) {
       underline === "underline",
       `got ${underline}`,
     );
+    // Canvas guard: the Kit canvas must stay dark. public/styles.css sets an
+    // unlayered body{background:var(--paper)} cream rule (#f4efe6), so a
+    // layered Kit body rule loses to it in both stylesheet orders and the
+    // canvas shows cream on overscroll bounce, pinch zoom-out and mobile bar
+    // tinting. The unlayered `html` rule paints the canvas regardless, and
+    // `html body` outranks the bare `body` selector whichever sheet loads
+    // first.
+    const canvas = await page.evaluate(() => ({
+      root: getComputedStyle(document.documentElement).backgroundColor,
+      body: getComputedStyle(document.body).backgroundColor,
+    }));
+    check(
+      "lobby canvas paints the dark surface, not cream",
+      canvas.root !== "rgba(0, 0, 0, 0)" && canvas.body !== "rgb(244, 239, 230)",
+      `got html ${canvas.root}, body ${canvas.body}`,
+    );
     const desktop = await page.evaluate(() => ({
       width: document.documentElement.scrollWidth,
       viewport: window.innerWidth,
