@@ -12,6 +12,7 @@ describe("framework-neutral calendar page input", () => {
       past: false,
       page: 1,
       jumpKey: "",
+      jumpRequested: false,
     });
   });
 
@@ -25,13 +26,28 @@ describe("framework-neutral calendar page input", () => {
       past: true,
       page: 1,
       jumpKey: "abc",
+      jumpRequested: true,
     });
   });
 
   it("refuses overlong queries and drops NUL from bounded jump keys", () => {
     const tooLong = resolveCalendarInput({ q: "x".repeat(256) });
     expect(tooLong).toMatchObject({ queryTooLong: true, searching: false, page: 1 });
-    expect(resolveCalendarInput({ event: `a${String.fromCharCode(0)}b` }).jumpKey).toBe("ab");
-    expect(resolveCalendarInput({ event: "x".repeat(65) }).jumpKey).toBe("");
+    expect(resolveCalendarInput({ event: `a${String.fromCharCode(0)}b` })).toMatchObject({
+      jumpKey: "ab",
+      jumpRequested: true,
+    });
+    expect(resolveCalendarInput({ event: "x".repeat(65) })).toMatchObject({
+      jumpKey: "",
+      jumpRequested: true,
+    });
+    expect(resolveCalendarInput({ event: "%00" })).toMatchObject({
+      jumpKey: "%00",
+      jumpRequested: true,
+    });
+    expect(resolveCalendarInput({ event: String.fromCharCode(0) })).toMatchObject({
+      jumpKey: "",
+      jumpRequested: false,
+    });
   });
 });

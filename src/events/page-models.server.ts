@@ -37,6 +37,8 @@ export interface CalendarPageInput {
   past: boolean;
   page: number;
   jumpKey: string;
+  /** NUL-stripped `?event=` was present, even when overlong and unusable for lookup. */
+  jumpRequested: boolean;
   month: string | null;
   queryTooLong: boolean;
 }
@@ -55,7 +57,7 @@ export function resolveCalendarInput(input: {
   const searching = !queryTooLong && matchQuery(q) !== null;
   const view = searching ? "list" : input.view === "calendar" ? "calendar" : "list";
   const parsedPage = Number.parseInt(input.page ?? "1", 10);
-  const jumpKey = (input.event ?? "").replaceAll(String.fromCharCode(0), "");
+  const rawJumpKey = (input.event ?? "").replaceAll(String.fromCharCode(0), "");
 
   return {
     q,
@@ -63,7 +65,8 @@ export function resolveCalendarInput(input: {
     view,
     past: input.past === "1",
     page: normalizeUpcomingPage(parsedPage),
-    jumpKey: jumpKey !== "" && jumpKey.length <= 64 ? jumpKey : "",
+    jumpKey: rawJumpKey !== "" && rawJumpKey.length <= 64 ? rawJumpKey : "",
+    jumpRequested: rawJumpKey !== "",
     month: input.month ?? null,
     queryTooLong,
   };
@@ -94,7 +97,7 @@ export async function loadCalendarPageModel(args: {
 }): Promise<CalendarPageModel> {
   const { db, input, includeDrafts, discord } = args;
   const now = args.now ?? new Date();
-  const { q, searching, view, past, page, jumpKey } = input;
+  const { q, searching, view, past, page, jumpKey, jumpRequested } = input;
   const match = matchQuery(q);
   const opts = { includeDrafts, search: match };
 
@@ -169,7 +172,9 @@ export async function loadCalendarPageModel(args: {
   }
 
   const state = { view, month, q, past, page: listPage };
-  const robots = searching || state.page > 1 || jumpKey !== "" ? "noindex, follow" : undefined;
+  // An overlong `?event=` never resolves, but it is still a jump URL — not an
+  // indexable copy of page one — so the robots decision sees the request flag.
+  const robots = searching || state.page > 1 || jumpRequested ? "noindex, follow" : undefined;
   const emptyState = calendarEmptyState({
     searching,
     upcomingEmpty: totalUpcoming === 0 && transients.length === 0,
