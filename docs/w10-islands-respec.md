@@ -40,7 +40,9 @@ Legacy: `GoingCount.php` + `going-count.blade.php` + `GoingCountTest.php` (TOG-7
   pagination); non-matching island keys fire nothing; missing row keeps last known-good. A newer write owns its refresh even when an
   older fetch/body finishes later. The accepted aggregate emits
   `going-count-refreshed {eventKey, goingCount, capacity}` for capacity reconciliation,
-  without another request. Executable: `test/islands-going-count*.test.ts`.
+  without another request. A hung read aborts at the owned ~5 s deadline
+  (`GOING_COUNT_READ_DEADLINE_MS`, fetch headers plus JSON body); the badge keeps
+  its last known-good value with no announcement. Executable: `test/islands-going-count*.test.ts`.
 
 ## 2. RsvpButton (slice 2, on the frozen W8/W9 routes)
 
