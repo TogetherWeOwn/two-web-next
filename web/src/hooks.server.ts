@@ -3,6 +3,7 @@ import { env } from "cloudflare:workers";
 import { kitAccessSink } from "../../src/kit-access-sink";
 import { kitSessionBridge } from "../../src/kit-session";
 import { dispatchHookRequest } from "../../src/route-ownership";
+import { dispatchPastArchiveRequest } from "../../src/kit-past-events";
 import { honoFetch } from "#lib/server/hono.ts";
 
 // Pure env binding: trust, ownership, decoration and the read-only session
@@ -17,7 +18,12 @@ export const handle: Handle = async ({ event, resolve }) =>
     appUrl: env.APP_URL,
     featuredImageHosts: env.FEATURED_IMAGE_HOSTS,
     honoFetch,
-    resolve: (hookEvent) => resolve(hookEvent as Parameters<typeof resolve>[0]),
+    resolve: (hookEvent) => {
+      const render = () => resolve(hookEvent as Parameters<typeof resolve>[0]);
+      return hookEvent.route?.id === "/events/past"
+        ? dispatchPastArchiveRequest(hookEvent.request, env, render)
+        : render();
+    },
     sessionFor: kitSessionBridge(env),
     accessSink: kitAccessSink(env),
   });

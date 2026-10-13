@@ -44,6 +44,8 @@ import {
   type HookDispatchDeps,
   type HookEventLike,
 } from "../src/route-ownership";
+import type { AccessEntry } from "../src/access-log";
+import { declareMemberResult, keyedMemberRead, memberQueryPermit } from "../src/member-reads";
 
 const SECRET = "test-session-secret-at-least-32-bytes-long";
 const WRONG_SECRET = "a-different-secret-at-least-32-bytes-long";
@@ -385,8 +387,10 @@ describe("readReturnJourney (Kit-visible return state, read-only)", () => {
 
 describe("dispatchHookRequest session bridge (Kit branch only)", () => {
   const APP_URL = "https://next.example.test";
-  // The shipped manifest keeps every route on Hono; tests that need the Kit
-  // branch pass this override (same convention as hook-route-ownership).
+  // Public Kit routes skip the bridge by design (no session, no flash); the
+  // shipped archive is public, so the Kit branch is pinned with an explicit
+  // override (same convention as hook-route-ownership; member merge detail
+  // lives in kit-member-dispatch).
   const KIT_MANIFEST = [
     { method: "GET", path: "/events/past", enabled: true, reads: "public" as const },
   ];
@@ -395,11 +399,12 @@ describe("dispatchHookRequest session bridge (Kit branch only)", () => {
     path: string,
     pairs: string[] = [],
     host = "next.example.test",
+    routeId = "/events/past",
   ): HookEventLike => {
     const request = new Request(new URL(path, APP_URL).href, {
       headers: { host, ...(pairs.length ? { cookie: pairs.join("; ") } : {}) },
     });
-    return { request, url: new URL(request.url), route: { id: "/events/past" } };
+    return { request, url: new URL(request.url), route: { id: routeId } };
   };
 
   const depsFor = (overrides: Partial<HookDispatchDeps> = {}): HookDispatchDeps => ({
@@ -419,10 +424,17 @@ describe("dispatchHookRequest session bridge (Kit branch only)", () => {
   });
 
   it("a Hono-owned request never invokes the session bridge, cookies or not", async () => {
+    // The archive is Kit-owned now, so the Hono-owned half of this pin uses
+    // the still-disabled privacy route with the shipped manifest.
     const store = createMemorySessionStore();
     const { token } = await seedSession(store);
     const sessionFor = vi.fn(async (_event: HookEventLike) => guestLocals());
-    const event = eventFor("/events/past", [await pair(SESSION_COOKIE, token)]);
+    const event = eventFor(
+      "/privacy",
+      [await pair(SESSION_COOKIE, token)],
+      "next.example.test",
+      "/privacy",
+    );
     const deps = depsFor({ sessionFor });
     const res = await dispatchHookRequest(event, deps);
     expect(sessionFor).not.toHaveBeenCalled();
@@ -433,37 +445,28 @@ describe("dispatchHookRequest session bridge (Kit branch only)", () => {
     expect(res.headers.getSetCookie()).toEqual([]);
   });
 
-  it("a Kit-owned request resolves the session exactly once and merges locals", async () => {
+  it("a public Kit-owned request never invokes the session bridge and resolves without locals", async () => {
+    // Public routes render outside the member-read boundary: even a session
+    // cookie must not trigger a bridge read. Member-merge detail is pinned in
+    // kit-member-dispatch; the real-bridge composition is pinned below.
     const store = createMemorySessionStore();
     const { token } = await seedSession(store);
     const seen: HookEventLike[] = [];
+    const sessionFor = vi.fn(async (_event: HookEventLike) => guestLocals());
     const deps = depsFor({
       manifest: KIT_MANIFEST,
-      sessionFor: vi.fn(async (hookEvent: HookEventLike) => {
-        const decision = await resolveRequestSession(hookEvent.request, {
-          sessionSecret: SECRET,
-          store,
-        });
-        return { ...decision, returnTo: null, joinResult: null, expiredWrite: null };
-      }),
+      sessionFor,
       resolve: vi.fn(async (hookEvent: HookEventLike) => {
         seen.push(hookEvent);
         return new Response("kit", { status: 200 });
       }),
     });
     const event = eventFor("/events/past", [await pair(SESSION_COOKIE, token)]);
-    await dispatchHookRequest(event, deps);
-    expect(deps.sessionFor).toHaveBeenCalledTimes(1);
+    const res = await dispatchHookRequest(event, deps);
+    expect(sessionFor).not.toHaveBeenCalled();
     expect(deps.resolve).toHaveBeenCalledTimes(1);
-    const locals = seen[0]!.locals as KitLocals;
-    expect(locals.session).toEqual({
-      userId: "42",
-      username: "Rick",
-      avatar: null,
-      member: true,
-      moderator: false,
-    });
-    expect(locals.status).toBe("authenticated");
+    expect(seen[0]!.locals).toBeUndefined();
+    expect(res.status).toBe(200);
   });
 
   it("a failing bridge never 500s a Kit render: resolve still runs without locals", async () => {
@@ -596,30 +599,56 @@ describe("kitSessionBridge (production hook composition)", () => {
     expect(locals.returnTo).toBeNull();
   });
 
-  it("plugs into the dispatch as sessionFor: a Kit-owned request merges bridge locals", async () => {
+  it("plugs into the dispatch as sessionFor: a member request merges real bridge locals", async () => {
+    // Public routes skip the bridge, so the production composition is pinned
+    // on a member route: the real bridge names the viewer, the keyed read
+    // declares its subject, and the audit row is written before release.
     const store = createMemorySessionStore();
-    const { token } = await seedSession(store);
-    const request = new Request("https://next.example.test/events/past", {
+    const viewer = "100000000000000101";
+    const subject = "100000000000000102";
+    const { token } = await seedSession(store, { userId: viewer });
+    const request = new Request(`https://next.example.test/members/${subject}`, {
       headers: { host: "next.example.test", cookie: await pair(SESSION_COOKIE, token) },
     });
     const event: HookEventLike = {
       request,
       url: new URL(request.url),
-      route: { id: "/events/past" },
+      route: { id: "/members/[id]" },
     };
     const seen: HookEventLike[] = [];
     const resolve = vi.fn(async (hookEvent: HookEventLike) => {
       seen.push(hookEvent);
-      return new Response("kit", { status: 200 });
+      return new Response(
+        await keyedMemberRead(async () => {
+          memberQueryPermit();
+          declareMemberResult([subject]);
+          return "kit";
+        }),
+      );
     });
-    await dispatchHookRequest(event, {
+    const audited: AccessEntry[] = [];
+    const res = await dispatchHookRequest(event, {
       appUrl: "https://next.example.test",
       honoFetch: async () => new Response("hono", { status: 200 }),
       resolve,
-      manifest: [{ method: "GET", path: "/events/past", enabled: true, reads: "public" as const }],
+      manifest: [
+        {
+          method: "GET",
+          path: "/members/:id",
+          enabled: true,
+          reads: { resource: "profile", action: "view" as const, route: "profile" },
+        },
+      ],
       sessionFor: kitSessionBridge(bridgeEnvFor(store)),
+      accessSink: async () => async (entry: AccessEntry) => {
+        audited.push(entry);
+        return true;
+      },
     });
     expect(resolve).toHaveBeenCalledTimes(1);
     expect((seen[0]!.locals as KitLocals).status).toBe("authenticated");
+    expect((seen[0]!.locals as KitLocals).session?.userId).toBe(viewer);
+    expect(res.status).toBe(200);
+    expect(audited).toHaveLength(1);
   });
 });

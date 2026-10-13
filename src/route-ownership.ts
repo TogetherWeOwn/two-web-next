@@ -41,16 +41,16 @@ export interface RouteDecision {
   path: string;
 }
 
-// Native routes stay on Hono until their enablement is reviewed. Production
-// (the Hono Worker) sees no traffic change; the preview Worker moves a
-// Kit-owned path back to Hono by design — that is the rollback. Add one entry
-// per migrated route, enabled only when its Kit handler is ready to own the
-// exact method/path.
+// The archive page renders natively; later routes stay on Hono until their
+// enablement is reviewed. Production (the Hono Worker) sees no traffic change
+// for a disabled path; the preview Worker moves a Kit-owned path back to Hono
+// by design — that is the rollback. Add one entry per migrated route, enabled
+// only when its Kit handler is ready to own the exact method/path.
 // Exported so the preview parity script derives its expected renderer from the
 // shipped manifest instead of hard-coding "kit": flipping enabled flips the
 // gate for the right reason.
 export const ROUTE_MANIFEST: OwnedRoute[] = [
-  { method: "GET", path: "/events/past", enabled: false, reads: "public" },
+  { method: "GET", path: "/events/past", enabled: true, reads: "public" },
   { method: "GET", path: "/privacy", enabled: false, reads: "public" },
 ];
 
@@ -354,7 +354,7 @@ export async function dispatchHookRequest(
   // resolve. A bridge failure must not 500 the render — public Kit pages fail
   // closed to guest-equivalent locals, exactly as if no bridge were wired.
   // It runs outside the member-read boundary: its session read is not member data.
-  if (deps.sessionFor) {
+  if (deps.sessionFor && route.reads !== "public") {
     try {
       const bridged = await deps.sessionFor(event);
       const prior = (event.locals as Record<string, unknown> | undefined) ?? {};

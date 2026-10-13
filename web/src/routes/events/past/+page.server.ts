@@ -11,10 +11,23 @@ export const csr = false;
 
 // Same reads and cache policy as the Hono handler (src/events/routes.tsx).
 export const load: PageServerLoad = async ({ url, setHeaders }) => {
-  const db = await dbFor({ env });
+  setHeaders({ "cache-control": "private, no-store" });
+  let db;
+  try {
+    db = await dbFor({ env });
+  } catch {
+    error(503, "Events temporarily unavailable");
+  }
   if (!db) error(503, "Events temporarily unavailable");
   const page = normalizePastPage(Number.parseInt(url.searchParams.get("page") ?? "1", 10));
-  const { rows, hasMore, totalPages } = await listPast(db, page);
-  setHeaders({ "cache-control": "public, max-age=300" });
-  return { rows, page, hasMore, totalPages, appUrl: env.APP_URL };
+  try {
+    const { rows, hasMore, totalPages } = await listPast(db, page);
+    setHeaders({
+      "cache-control": "public, max-age=300",
+      "x-two-past-cacheable": String(rows.length > 0),
+    });
+    return { rows, page, hasMore, totalPages, appUrl: env.APP_URL };
+  } catch {
+    error(503, "Events temporarily unavailable");
+  }
 };

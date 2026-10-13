@@ -24,8 +24,9 @@ import {
 } from "../src/route-ownership";
 
 const APP_URL = "https://example.com";
-// Kit-owned view of the archive page for tests: the shipped manifest keeps it
-// on Hono, so tests that need the Kit branch pass this override. Production
+// Explicit Kit-owned view of the archive page for tests: the shipped manifest
+// now assigns it to Kit, but these cases pass an override so they pin the
+// dispatch behavior without depending on the shipped default. Production
 // wiring never passes a manifest and always uses the shipped default.
 const KIT_MANIFEST = [{ method: "GET", path: "/events/past", enabled: true, reads: "public" }];
 
@@ -62,9 +63,9 @@ beforeEach(() => {
 });
 
 describe("hooks.server route ownership wiring", () => {
-  it("ships the native archive route disabled", () => {
+  it("ships the native archive route enabled with privacy still on Hono", () => {
     expect(ROUTE_MANIFEST).toEqual([
-      { method: "GET", path: "/events/past", enabled: false, reads: "public" },
+      { method: "GET", path: "/events/past", enabled: true, reads: "public" },
       { method: "GET", path: "/privacy", enabled: false, reads: "public" },
     ]);
   });
@@ -76,7 +77,12 @@ describe("hooks.server route ownership wiring", () => {
   });
 
   it("returns honoFetch before resolve for a Hono-owned path, undecorated", async () => {
-    const event = trustedEvent("/events/past");
+    // The archive is Kit-owned now, so the Hono-owned half of this pin uses
+    // the still-disabled privacy route.
+    const request = new Request(new URL("/privacy", APP_URL).href, {
+      headers: { host: "example.com" },
+    });
+    const event = { request, url: new URL(request.url), route: { id: "/privacy" } };
     const d = deps();
 
     const response = await dispatchHookRequest(event, d);
@@ -176,9 +182,11 @@ describe("hooks.server route ownership wiring", () => {
   });
 
   it("decodes an encoded path before the dispatch decision", async () => {
-    // %70 is "p": /events/%70ast decodes to /events/past, which the shipped
-    // manifest keeps on Hono and KIT_MANIFEST moves to Kit.
-    const shipped = trustedEvent("/events/%70ast");
+    // %70 is "p": /%70rivacy decodes to /privacy, which the shipped manifest
+    // keeps on Hono; /events/%70ast decodes to the Kit-owned archive, which
+    // KIT_MANIFEST also moves to Kit.
+    const shipped = trustedEvent("/%70rivacy");
+    shipped.route = { id: "/privacy" };
     const dShipped = deps();
     const shippedResponse = await dispatchHookRequest(shipped, dShipped);
     expect(dShipped.honoFetch).toHaveBeenCalledOnce();
