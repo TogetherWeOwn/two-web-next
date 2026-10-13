@@ -8,6 +8,7 @@ import { readFileSync } from "node:fs";
 import { join, resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it, vi } from "vitest";
+import { resolveDashboardWidgets } from "../src/admin/kit-dashboard";
 import { decideKitAdminGuard } from "../src/admin/kit-guard";
 import type { KitLocals } from "../src/kit-session";
 
@@ -122,6 +123,23 @@ describe("Kit admin route group: thin guard binding, shared reads", () => {
     expect(load).not.toMatch(/select\(|from\(|sql`/);
   });
 
+  it("dashboard load settles both widgets and maps a classified outage to 503", () => {
+    const load = read("web/src/routes/admin/+page.server.ts");
+    // Promise.all would let the funnel's rethrown outage escape into
+    // SvelteKit's 500 error page; allSettled lets the load decide first.
+    expect(load).toContain("Promise.allSettled");
+    expect(load).toContain("resolveDashboardWidgets");
+    expect(load).toContain("error(503");
+    expect(read("src/admin/kit-dashboard.ts")).toContain("isDatabaseUnavailable");
+  });
+
+  it("parity gates record the unported tab-sync probe as an enablement blocker", () => {
+    const gates = read("docs/kit-parity-gates.md");
+    expect(gates).toContain("tab-sync probe");
+    expect(gates).toContain("auth-status");
+    expect(gates).toContain("`enabled: false`");
+  });
+
   it("dashboard keeps the Hono testids, copy and mixed-mode destinations", () => {
     const page = read("web/src/routes/admin/+page.svelte");
     // The h1 stays "Moderation": e2e/profile.spec.ts and
@@ -156,5 +174,57 @@ describe("Kit admin route group: thin guard binding, shared reads", () => {
     ]) {
       expect(shell).toContain(needle);
     }
+  });
+});
+
+describe("Kit admin dashboard outage mapping: 503 like Hono, never a 500", () => {
+  const refused = (): Error =>
+    Object.assign(new Error("connect ECONNREFUSED 127.0.0.1:5432"), { code: "ECONNREFUSED" });
+  const funnelValue = { added: 3, already_member: 1 };
+  const zeroValue = [{ query: "zzz", searches: 2, lastSearchedAt: "2026-10-01T00:00:00.000Z" }];
+
+  it("a refused funnel read is an outage, even when the widgets settle together", () => {
+    expect(
+      resolveDashboardWidgets(
+        { status: "rejected", reason: refused() },
+        { status: "fulfilled", value: zeroValue },
+      ),
+    ).toEqual({ outage: true });
+  });
+
+  it("a refused zero-search read is an outage too", () => {
+    expect(
+      resolveDashboardWidgets(
+        { status: "fulfilled", value: funnelValue },
+        { status: "rejected", reason: refused() },
+      ),
+    ).toEqual({ outage: true });
+  });
+
+  it("a wrapped transport cause (Drizzle-style) is still an outage", () => {
+    expect(
+      resolveDashboardWidgets(
+        { status: "rejected", reason: new Error("query failed", { cause: refused() }) },
+        { status: "fulfilled", value: zeroValue },
+      ),
+    ).toEqual({ outage: true });
+  });
+
+  it("an ordinary widget failure degrades to an omitted section, not an outage", () => {
+    expect(
+      resolveDashboardWidgets(
+        { status: "rejected", reason: new Error("syntax error at end of input") },
+        { status: "fulfilled", value: zeroValue },
+      ),
+    ).toEqual({ outage: false, funnel: undefined, zeroSearches: zeroValue });
+  });
+
+  it("healthy widgets pass their values through", () => {
+    expect(
+      resolveDashboardWidgets(
+        { status: "fulfilled", value: funnelValue },
+        { status: "fulfilled", value: zeroValue },
+      ),
+    ).toEqual({ outage: false, funnel: funnelValue, zeroSearches: zeroValue });
   });
 });
