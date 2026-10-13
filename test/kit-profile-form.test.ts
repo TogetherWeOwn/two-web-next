@@ -121,7 +121,7 @@ describe("Kit profile view: 422 re-render keeps the Hono form contract", () => {
     // Field errors beside the controls, wired for assistive tech.
     for (const field of ["profile-bio", "profile-games-text", "profile-timezone"]) {
       expect(html).toContain(`id="${field}-error"`);
-      expect(html).toContain("aria-invalid=\"true\"");
+      expect(html).toContain('aria-invalid="true"');
       expect(html).toContain(`aria-describedby="${field}-error"`);
     }
     expect(html).toContain("Keep your bio to 1000 characters or fewer.");
@@ -131,12 +131,16 @@ describe("Kit profile view: 422 re-render keeps the Hono form contract", () => {
   it("keeps unknown error keys global with no fabricated control link", () => {
     const html = renderView(
       baseProps({
-        errors: { fields: "Only your bio, games, timezone and leaderboard setting can be changed." },
+        errors: {
+          fields: "Only your bio, games, timezone and leaderboard setting can be changed.",
+        },
         values: { bio: "", games_text: "", timezone: "", leaderboard_opt_out: false },
       }),
     );
     expect(html).toContain('data-testid="profile-error"');
-    expect(html).toContain("Only your bio, games, timezone and leaderboard setting can be changed.");
+    expect(html).toContain(
+      "Only your bio, games, timezone and leaderboard setting can be changed.",
+    );
     expect(html).not.toContain('href="#profile-bio"');
   });
 
@@ -175,6 +179,25 @@ describe("Kit profile view: 422 re-render keeps the Hono form contract", () => {
     const unchecked = renderView(baseProps());
     expect(unchecked).toContain('name="leaderboard_opt_out"');
     expect(unchecked).not.toMatch(/type="checkbox"[^>]*checked|checked[^>]*type="checkbox"/);
+  });
+
+  it("carries the island binding contract so the binder owns pending/cancel/focus", () => {
+    const html = renderView(baseProps());
+    // Mount point the member-profile.js binder queries, keyed to this member.
+    expect(html).toContain('data-island="member-profile"');
+    expect(html).toContain(`data-member-id="${MEMBER.id}"`);
+    // Unchanged write contract: no-JS posts the PATCH override to Hono, the
+    // binder PATCHes JSON to the same route when script runs.
+    expect(html).toContain(`action="/members/${MEMBER.id}"`);
+    expect(html).toContain('name="_method" value="PATCH"');
+    // Writable fields plus the spam-trap pair the admission gate requires.
+    for (const name of ["bio", "games_text", "timezone", "website", "formOpenedAt"]) {
+      expect(html).toContain(`name="${name}"`);
+    }
+    // Controls the binder and the lifecycle tests address by testid.
+    for (const testid of ["profile-edit", "profile-form", "profile-save", "profile-cancel"]) {
+      expect(html).toContain(`data-testid="${testid}"`);
+    }
   });
 
   it("escapes hostile error and value text instead of interpreting it", () => {
