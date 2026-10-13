@@ -12,6 +12,8 @@ playwright-report/
 test-results/
 playwright-report-visual/
 test-results-visual/
+playwright-report-kit-parity/
+test-results-kit-parity/
 artifacts/
 .lighthouseci/
 dist-tail/
