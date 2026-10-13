@@ -139,6 +139,32 @@ test("expected marker follows the shipped manifest, not a hard-coded kit", () =>
   assert.throws(() => expectedMarkerFor("no manifest here", "/events/past"), /cannot derive/);
 });
 
+test("expected marker derives the join owner from its own entry", () => {
+  assert.equal(
+    expectedMarkerFor('{ method: "GET", path: "/join", enabled: false }', "/join"),
+    null,
+  );
+  assert.equal(
+    expectedMarkerFor('{ method: "GET", path: "/join", enabled: true }', "/join"),
+    "kit",
+  );
+  assert.equal(
+    expectedMarkerFor('{ method: "GET", path: "/join", enabled: true }', "/join?next=%2Fevents"),
+    "kit",
+  );
+  // A prefix entry (/join/discord) is not the /join entry: a parity route
+  // with no manifest entry of its own fails closed, never quiet-Hono.
+  assert.throws(
+    () =>
+      expectedMarkerFor(
+        '{ method: "GET", path: "/events/past", enabled: false },' +
+          ' { method: "GET", path: "/join/discord", enabled: false }',
+        "/join",
+      ),
+    /cannot derive/,
+  );
+});
+
 test("secret scrubber hits token shapes and passes clean text", () => {
   assert.equal(scrubSecrets("hello X-TWO-QA-Auth world").length, 1);
   assert.equal(scrubSecrets("cookie __Host-two_session=abc").length, 1);
@@ -171,11 +197,11 @@ test("unit gate passes on the shipped manifest (no network)", async () => {
 });
 
 test("login journey ownership derives from the manifest", () => {
-  const honoManifest = `{ method: "GET", path: "/events/past", enabled: false }`;
+  const honoManifest = `{ method: "GET", path: "/events/past", enabled: false }, { method: "GET", path: "/join", enabled: false }`;
   assert.equal(isManifestEnabled(honoManifest, "/e/:key"), false);
   assert.equal(isManifestEnabled(honoManifest, "/profile"), false);
   const enabledManifest =
-    `{ method: "GET", path: "/events/past", enabled: false },` +
+    `{ method: "GET", path: "/events/past", enabled: false }, { method: "GET", path: "/join", enabled: false },` +
     ` { method: "POST", path: "/e/:key/rsvp", enabled: true },` +
     ` { method: "GET", path: "/profile", enabled: true }`;
   assert.equal(isManifestEnabled(enabledManifest, "/e/:key/rsvp", "POST"), true);
@@ -211,7 +237,7 @@ test("an enabled login route fails instead of a quiet skip", () => {
   const silent = { write: () => {} };
   const honoJourneys = runUnitMode({
     stdout: silent,
-    manifestSource: `{ method: "GET", path: "/events/past", enabled: false }`,
+    manifestSource: `{ method: "GET", path: "/events/past", enabled: false }, { method: "GET", path: "/join", enabled: false }`,
   });
   for (const journey of honoJourneys.filter((j) => j.name.startsWith("parity: "))) {
     assert.equal(journey.status, "skipped", journey.name);
@@ -219,7 +245,7 @@ test("an enabled login route fails instead of a quiet skip", () => {
   const enabledJourneys = runUnitMode({
     stdout: silent,
     manifestSource:
-      `{ method: "GET", path: "/events/past", enabled: false },` +
+      `{ method: "GET", path: "/events/past", enabled: false }, { method: "GET", path: "/join", enabled: false },` +
       ` { method: "POST", path: "/e/:key/rsvp", enabled: true },` +
       ` { method: "GET", path: "/profile", enabled: true }`,
   });
@@ -235,7 +261,7 @@ test("enabling the real mutation routes fails every login journey", () => {
   const journeys = runUnitMode({
     stdout: silent,
     manifestSource:
-      `{ method: "GET", path: "/events/past", enabled: false },` +
+      `{ method: "GET", path: "/events/past", enabled: false }, { method: "GET", path: "/join", enabled: false },` +
       ` { method: "POST", path: "/e/:key/rsvp", enabled: true },` +
       ` { method: "PUT", path: "/events/:key/rsvp", enabled: true },` +
       ` { method: "PATCH", path: "/members/:user", enabled: true },` +
@@ -279,7 +305,7 @@ test("renamed :params still fail their login journey instead of a quiet skip", (
   const journeys = runUnitMode({
     stdout: silent,
     manifestSource:
-      `{ method: "GET", path: "/events/past", enabled: false },` +
+      `{ method: "GET", path: "/events/past", enabled: false }, { method: "GET", path: "/join", enabled: false },` +
       ` { method: "POST", path: "/e/:id/rsvp", enabled: true },` +
       ` { method: "PATCH", path: "/members/:slug", enabled: true }`,
   });
@@ -311,7 +337,7 @@ test("each admin publish/cancel action route fails the admin journey", () => {
   ]) {
     const journeys = runUnitMode({
       stdout: silent,
-      manifestSource: `{ method: "GET", path: "/events/past", enabled: false }, ${route}`,
+      manifestSource: `{ method: "GET", path: "/events/past", enabled: false }, { method: "GET", path: "/join", enabled: false }, ${route}`,
     });
     const byName = new Map(journeys.map((j) => [j.name, j]));
     assert.equal(
@@ -328,7 +354,7 @@ test("a future scoped route fails its journey even when never listed", () => {
   const journeys = runUnitMode({
     stdout: silent,
     manifestSource:
-      `{ method: "GET", path: "/events/past", enabled: false },` +
+      `{ method: "GET", path: "/events/past", enabled: false }, { method: "GET", path: "/join", enabled: false },` +
       ` { method: "POST", path: "/admin/events/:key/approve", enabled: true }`,
   });
   const byName = new Map(journeys.map((j) => [j.name, j]));
@@ -384,7 +410,7 @@ test("every listed login route alone fails its own journey (no aggregate masking
   for (const journey of LOGIN_JOURNEYS) {
     for (const route of journey.routes) {
       const manifestSource =
-        `{ method: "GET", path: "/events/past", enabled: false },` +
+        `{ method: "GET", path: "/events/past", enabled: false }, { method: "GET", path: "/join", enabled: false },` +
         ` { method: "${route.method}", path: "${route.path}", enabled: true }`;
       const journeys = runUnitMode({ stdout: silent, manifestSource });
       const byName = new Map(journeys.map((j) => [j.name, j]));
@@ -402,6 +428,9 @@ test("every listed login route alone fails its own journey (no aggregate masking
 
 test("enabled routes outside every journey scope fail via the catch-all", () => {
   const silent = { write: () => {} };
+  // GET /join is covered by the executed parity run (PARITY_ROUTES), so it no
+  // longer belongs in this uncovered list; /join/discord proves the funnel
+  // tail stays Hono-owned.
   for (const route of [
     `{ method: "GET", path: "/admin", enabled: true }`,
     `{ method: "GET", path: "/admin/featured", enabled: true }`,
@@ -409,13 +438,13 @@ test("enabled routes outside every journey scope fail via the catch-all", () => 
     `{ method: "GET", path: "/admin/queue/failed/:id/preview", enabled: true }`,
     `{ method: "GET", path: "/events", enabled: true }`,
     `{ method: "GET", path: "/events/:key", enabled: true }`,
-    `{ method: "GET", path: "/join", enabled: true }`,
+    `{ method: "GET", path: "/join/discord", enabled: true }`,
     `{ method: "GET", path: "/", enabled: true }`,
     `{ method: "POST", path: "/events/past", enabled: true }`,
   ]) {
     const journeys = runUnitMode({
       stdout: silent,
-      manifestSource: `{ method: "GET", path: "/events/past", enabled: false }, ${route}`,
+      manifestSource: `{ method: "GET", path: "/events/past", enabled: false }, { method: "GET", path: "/join", enabled: false }, ${route}`,
     });
     assert.equal(summarizeLedger(journeys).verdict, "fail", route);
     const failed = journeys.filter((j) => j.status === "failed");
@@ -427,7 +456,7 @@ test("enabled routes outside every journey scope fail via the catch-all", () => 
   }
 });
 
-test("executed-run coverage is GET/HEAD /events/past only", () => {
+test("executed-run coverage is GET/HEAD /events/past and GET/HEAD /join", () => {
   assert.equal(
     isCoveredByExecutedRun({ method: "GET", path: "/events/past", enabled: true }),
     true,
@@ -442,6 +471,13 @@ test("executed-run coverage is GET/HEAD /events/past only", () => {
   );
   assert.equal(isCoveredByExecutedRun({ method: "GET", path: "/events", enabled: true }), false);
   assert.equal(isCoveredByExecutedRun({ method: "GET", path: "/admin", enabled: true }), false);
+  assert.equal(isCoveredByExecutedRun({ method: "GET", path: "/join", enabled: true }), true);
+  assert.equal(isCoveredByExecutedRun({ method: "HEAD", path: "/join", enabled: true }), true);
+  assert.equal(isCoveredByExecutedRun({ method: "POST", path: "/join", enabled: true }), false);
+  assert.equal(
+    isCoveredByExecutedRun({ method: "GET", path: "/join/discord", enabled: true }),
+    false,
+  );
 });
 
 test("route contract detects a planted break", () => {
@@ -464,4 +500,98 @@ test("route contract detects a planted break", () => {
     expected: { status: 200, marker: null },
   });
   assert.ok(bad.length > 0);
+});
+
+test("join contract proves every widget state, the flash view and hostile next", () => {
+  const headers = (cache) => ({
+    get: (name) =>
+      ({
+        "content-type": "text/html",
+        "x-two-renderer": null,
+        "cache-control": cache,
+        vary: "Cookie",
+      })[name] ?? null,
+  });
+  const shell = (inner) =>
+    `<html><head><link rel="canonical" href="https://x.invalid/join"></head>` +
+    `<body><a class="skip-link" href="#main">Skip</a>` +
+    `<nav aria-label="Primary"></nav><main id="main">` +
+    `<section class="join-layout" aria-labelledby="join-heading">` +
+    `<div class="join-panel"><h1 id="join-heading">Join</h1>` +
+    `<p class="join-actions"><a href="/join/discord" data-testid="join-oneclick">Join</a> ` +
+    `<a href="https://discord.gg/i" data-testid="join-invite">Invite</a></p></div>` +
+    `<div class="join-preview">${inner}</div></section></main>` +
+    `<p>Welcome, guest</p></body></html>`;
+  const facade =
+    `<div class="strap"><a href="https://discord.com/widget?id=1&theme=dark" ` +
+    `referrerpolicy="no-referrer" data-join-widget data-testid="join-widget-load">Show</a>` +
+    `<script src="/islands/join-widget.js" defer></script></div>`;
+  const presence =
+    `<section data-testid="join-widget-presence"><p data-testid="join-widget-online">` +
+    `<strong>42</strong> members online</p></section>` +
+    facade;
+  const fallback =
+    `<p class="strap" data-testid="join-widget-fallback">Live server preview is ` +
+    `unavailable — the join button above still works.</p>`;
+  const goodCases = [
+    ["cold facade", shell(facade), "public, max-age=3600"],
+    ["warm presence", shell(presence), "public, max-age=60"],
+    ["fallback", shell(fallback), "public, max-age=3600"],
+  ];
+  for (const [name, html, cache] of goodCases) {
+    const failures = assertRouteContract({
+      label: `join/${name}`,
+      html,
+      headers: headers(cache),
+      status: 200,
+      expected: { status: 200, marker: null, contract: "join", cache },
+    });
+    assert.equal(failures.length, 0, `${name}: ${failures.join("; ")}`);
+  }
+  // The flash view renders the banner exactly once and answers private.
+  const flashed = shell(facade).replace(
+    '<section class="join-layout"',
+    '<p class="notice" role="status" data-testid="join-result">You are in.</p>' +
+      '<section class="join-layout"',
+  );
+  const flashFailures = assertRouteContract({
+    label: "join/flash",
+    html: flashed,
+    headers: headers("private, no-store"),
+    status: 200,
+    expected: { status: 200, marker: null, contract: "join", cache: "private, no-store" },
+  });
+  assert.equal(flashFailures.length, 0, flashFailures.join("; "));
+  // A flash view served shared-cacheable is a privacy break, not a pass.
+  const sharedFlash = assertRouteContract({
+    label: "join/flash-shared-cache",
+    html: flashed,
+    headers: headers("public, max-age=3600"),
+    status: 200,
+    expected: { status: 200, marker: null, contract: "join", cache: "private, no-store" },
+  });
+  assert.ok(sharedFlash.length > 0, "shared-cache flash must fail");
+  const mutants = [
+    ["no-oneclick", (html) => html.replace('data-testid="join-oneclick"', 'data-testid="x"')],
+    // Facade and fallback together: the page shows exactly one widget zone.
+    ["both-zones", (html) => html.replace("</div></section>", `</div>${fallback}</section>`)],
+    // Presence without its facade link: the live frame has no click target.
+    ["presence-without-facade", (html) => html.replace(facade, "")],
+    // A hostile next must leave no trace in the one-click href.
+    [
+      "hostile-next",
+      (html) =>
+        html.replace('href="/join/discord"', 'href="/join/discord?next=https%3A%2F%2Fevil.test"'),
+    ],
+  ];
+  for (const [name, mutate] of mutants) {
+    const failures = assertRouteContract({
+      label: `join/mutant-${name}`,
+      html: mutate(shell(facade)),
+      headers: headers("public, max-age=3600"),
+      status: 200,
+      expected: { status: 200, marker: null, contract: "join", cache: "public, max-age=3600" },
+    });
+    assert.ok(failures.length > 0, `join mutant ${name} was NOT detected`);
+  }
 });

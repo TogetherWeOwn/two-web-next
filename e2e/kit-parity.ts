@@ -36,15 +36,21 @@ export function parityTargets(): ParityTarget[] {
 
 // Expected Kit renderer marker for a path, derived from the shipped manifest
 // (src/route-ownership.ts), never hard-coded: flipping `enabled` flips the
-// gate for the right reason. Hono never carries the marker.
+// gate for the right reason. Hono never carries the marker. Derived per path
+// (query stripped), field-order independent — the same derivation as
+// ci/kit-parity-gates.mjs expectedMarkerFor, minus its fail-closed throw for
+// entry-less parity routes (this helper only ever asks about listed routes).
 export function expectedKitMarker(path: string): string | null {
   const source = readFileSync(
     fileURLToPath(new URL("../src/route-ownership.ts", import.meta.url).href),
     "utf8",
   );
-  const match = source.match(/path:\s*"\/events\/past"[^}]*enabled:\s*(true|false)/);
-  if (!match) throw new Error("kit-parity: cannot derive /events/past owner from ROUTE_MANIFEST");
-  if (!path.startsWith("/events/past")) return null;
+  const base = path.split(/[?#]/)[0] ?? path;
+  const escaped = base.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const match =
+    source.match(new RegExp(`path:\\s*"${escaped}"[^}]*enabled:\\s*(true|false)`)) ??
+    source.match(new RegExp(`enabled:\\s*(true|false)[^}]*path:\\s*"${escaped}"`));
+  if (!match) return null;
   return match[1] === "true" ? "kit" : null;
 }
 

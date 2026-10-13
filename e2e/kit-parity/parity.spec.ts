@@ -78,6 +78,52 @@ for (const target of targets) {
     });
   });
 
+  // Join landing (GET /join only; /join/discord + /join/callback stay
+  // Hono-owned, covered by e2e/join-blocked.spec.ts on the Hono worker).
+  // Bodies come from raw API fetches with no browser JS executed, so these
+  // assertions ARE the no-JS proof: the funnel content is in the first bytes.
+  test.describe(`${target.name}: join landing keeps its funnel contract`, () => {
+    test("landing keeps its actions, one widget zone and guest chrome", async () => {
+      const response = await api(target).get("/join");
+      expect(response.status()).toBe(200);
+      expect(response.headers()["content-type"]).toContain("text/html");
+      // Renderer ownership is per target: Kit answers with the
+      // manifest-derived marker once enabled, Hono never carries one.
+      const expectedMarker = target.name === "kit" ? expectedKitMarker("/join") : null;
+      expect(response.headers()["x-two-renderer"] ?? null).toBe(expectedMarker);
+      const body = await response.text();
+      expect(scrubSecrets(body)).toEqual([]);
+      expect(body).toContain('data-testid="join-oneclick"');
+      expect(body).toContain('data-testid="join-invite"');
+      expect(body).toContain("Welcome, guest");
+      expect(body).not.toContain("Sign out");
+      expect(body).not.toContain("<iframe");
+      // Exactly one widget zone across the three isolate states (cold facade,
+      // warm presence + facade link, down fallback); presence only rides the
+      // facade link, which owns the click that builds the frame.
+      const hasLoad = body.includes('data-testid="join-widget-load"');
+      const hasFallback = body.includes('data-testid="join-widget-fallback"');
+      expect(hasLoad !== hasFallback, `${target.name} join shows exactly one widget zone`).toBe(
+        true,
+      );
+      if (body.includes('data-testid="join-widget-presence"')) expect(hasLoad).toBe(true);
+      // Public without a flash: no cookies are sent on this journey.
+      expect(["public, max-age=60", "public, max-age=3600"]).toContain(
+        response.headers()["cache-control"],
+      );
+      expect(response.headers()["vary"] ?? "").toMatch(/cookie/i);
+    });
+
+    test("safe next survives onto one-click, hostile next leaves no trace", async () => {
+      const safe = await api(target).get("/join?next=%2Fevents");
+      expect(await safe.text()).toContain("/join/discord?next=%2Fevents");
+      const hostile = await api(target).get("/join?next=https%3A%2F%2Fevil.test");
+      const hostileBody = await hostile.text();
+      expect(hostileBody).toContain('href="/join/discord"');
+      expect(hostileBody).not.toContain("evil.test");
+    });
+  });
+
   test.describe(`${target.name}: public feeds and SEO answer unauthenticated GETs`, () => {
     test("sitemap pins the seeded event GUID", async () => {
       const response = await api(target).get("/sitemap_index.xml");
@@ -175,6 +221,48 @@ for (const target of targets) {
       }
     });
   }
+
+  // Two-width visuals for the join two-column layout (desktop side-by-side,
+  // mobile stacked): no horizontal overflow and no page errors at either
+  // width, on both renderers.
+  for (const viewport of PARITY_VIEWPORTS) {
+    test(`${target.name}: join ${viewport.name} has no horizontal overflow`, async ({
+      browser,
+    }) => {
+      const context = await browser.newContext({
+        baseURL: target.origin,
+        ignoreHTTPSErrors: target.ignoreHTTPSErrors,
+        viewport: viewport.size,
+      });
+      const pageErrors: string[] = [];
+      try {
+        // Only the two parity loopbacks may be reached; anything else fails
+        // the journey instead of leaking a packet.
+        await context.route("**/*", (route) => {
+          const url = new URL(route.request().url());
+          const allowed = url.origin === "https://localhost:8787" || url.origin === KIT_ORIGIN;
+          return allowed ? route.continue() : route.abort("blockedbyclient");
+        });
+        const page = await context.newPage();
+        page.on("pageerror", (error) => pageErrors.push(error.message));
+        const response = await page.goto("/join");
+        expect(response?.status()).toBe(200);
+        await expect(page.getByTestId("join-oneclick")).toBeVisible();
+        // String form: the e2e tsconfig has no DOM lib (same as the
+        // copy-link and skip-link specs), so no document/window names here.
+        const overflow = (await page.evaluate(
+          "({ width: document.documentElement.scrollWidth, viewport: window.innerWidth })",
+        )) as unknown as { width: number; viewport: number };
+        expect(
+          overflow.width,
+          `${target.name} ${viewport.name}: no horizontal overflow`,
+        ).toBeLessThanOrEqual(overflow.viewport);
+        expect(pageErrors, "no uncaught page errors").toEqual([]);
+      } finally {
+        await context.close();
+      }
+    });
+  }
 }
 
 test("cross-target: normalized archive sections match", async () => {
@@ -192,6 +280,26 @@ test("cross-target: normalized archive sections match", async () => {
     sectionOf(bodies.get("kit")!, "past-events"),
     "Kit section matches Hono section after origin normalization",
   ).toBe(sectionOf(bodies.get("hono")!, "past-events"));
+});
+
+test("cross-target: join one-click hrefs agree on the safe next", async () => {
+  // No byte equality: the invite URL and widget zone differ per worker env
+  // (e2e Hono guild vs Kit fixture guild). The next-forwarding guard is
+  // env-independent, so the one-click href must agree exactly.
+  const hrefs = new Map<string, string | null>();
+  for (const target of targets) {
+    const response = await api(target).get("/join?next=%2Fevents");
+    expect(response.status()).toBe(200);
+    const body = await response.text();
+    const match =
+      body.match(/data-testid="join-oneclick"[^>]*href="([^"]+)"/) ??
+      body.match(/href="([^"]+)"[^>]*data-testid="join-oneclick"/);
+    hrefs.set(target.name, match?.[1] ?? null);
+  }
+  expect(hrefs.get("kit"), "Kit one-click href readable").toBe("/join/discord?next=%2Fevents");
+  expect(hrefs.get("kit"), "Kit one-click agrees with Hono on the safe next").toBe(
+    hrefs.get("hono"),
+  );
 });
 
 test("Kit worker answers traffic within the liveness bound", async ({ playwright }) => {
