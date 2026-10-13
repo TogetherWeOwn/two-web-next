@@ -20,8 +20,11 @@ describe("Kit join-attempts manifest: Hono-owned until the enablement review", (
     expect(manifest).toMatch(/\/admin\/join-attempts"[^}]*resource:\s*"join_attempts"/);
     expect(manifest).toMatch(/\/admin\/join-attempts"[^}]*action:\s*"list"/);
     expect(manifest).toMatch(/\/admin\/join-attempts"[^}]*route:\s*"admin\.join-attempts\.index"/);
-    // Off by default: flipping enabled flips ownership, and the parity
-    // ledger fails any enabled route with no executed journey covering it.
+    // Off by default: flipping enabled flips ownership. Note the parity
+    // ledger's uncovered-route catch-all only parses flat manifest entries
+    // (ci/kit-parity-gates.mjs parseManifestEntries), so like the pre-existing
+    // nested /admin and /profile entries this one needs gate coverage extended
+    // before its enablement slice — flipping it today would ledger as skipped.
     expect(manifest).toMatch(/\/admin\/join-attempts"[^}]*enabled:\s*false/);
   });
 
