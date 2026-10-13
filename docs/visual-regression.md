@@ -10,6 +10,7 @@ them with the committed baselines in `e2e/visual/__screenshots__/`.
 | `events` | `/events` | guest | 200 |
 | `event` | `/e/01J00000000000000000000001` (the seeded event) | guest | 200 |
 | `past` | `/events/past` | guest | 200 |
+| `about` | `/about` | guest | 200 |
 | `rules` | `/rules` | guest | 200 |
 | `privacy` | `/privacy` | guest | 200 |
 | `event-paused` | `/e/01J00000000000000000000005` (published, RSVPs paused) | signed-in member | 200 |
