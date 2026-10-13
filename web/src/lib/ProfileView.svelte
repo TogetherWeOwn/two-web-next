@@ -290,7 +290,7 @@ const statsDate = (date: Date) =>
           <button class="btn" type="button" data-testid="profile-edit-again">Edit your profile</button>
         </div>
         {#if errorEntries.length > 0}
-          <div role="alert" tabindex={-1} data-testid={PROFILE_ERROR_TESTID}>
+          <div role="alert" tabindex="-1" data-testid={PROFILE_ERROR_TESTID}>
             <ul>
               {#each errorEntries as entry}
                 <li>
