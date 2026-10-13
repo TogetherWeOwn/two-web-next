@@ -1,29 +1,10 @@
 import type { FC } from "hono/jsx";
 import { canonicalUrl } from "../seo";
 import { JOIN_HREF, Leaf } from "../page-shell";
+import { RULES } from "../rules-content";
 
-export const RULES: Array<[string, string]> = [
-  [
-    "18+ only",
-    "Together We Own is an adult gaming community. If you are under 18, this is not your lobby yet.",
-  ],
-  [
-    "Respect the room",
-    "No harassment, hate, or punching down. Argue about games all you like; never about people.",
-  ],
-  [
-    "Voice-first",
-    "The community lives in voice. Turn up, say hello, and come back — that is the whole membership path.",
-  ],
-  [
-    "Play fair",
-    "No cheating, exploits, or griefing. Do not spoil the game for the people you share it with.",
-  ],
-  [
-    "Moderators have the last word",
-    "If a moderator asks you to stop, stop. Appeals happen in private, not in the lobby.",
-  ],
-];
+// Re-exported so existing importers (the Markdown alternate) keep working.
+export { RULES };
 
 // The stamp carries both the machine date and the human label (ports the
 // legacy "1 September 2026" render): crawlers read datetime, members read words.
