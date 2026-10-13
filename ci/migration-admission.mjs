@@ -1,4 +1,4 @@
-// Staging-only admission containment (TOG-23227).
+// Staging-only admission containment.
 //
 // Host-controlled reversible contract for the staging web-migration path:
 // - STAGING_MIGRATION_HOLD === "false" releases staging; every other value
