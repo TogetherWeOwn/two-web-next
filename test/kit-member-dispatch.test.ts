@@ -263,6 +263,12 @@ describe("decideRoute", () => {
         enabled: false,
         reads: { resource: "dashboard", action: "view", route: "admin.dashboard" },
       },
+      {
+        method: "GET",
+        path: "/admin/join-attempts",
+        enabled: false,
+        reads: { resource: "join_attempts", action: "list", route: "admin.join-attempts.index" },
+      },
       { method: "GET", path: "/auth/recover", enabled: false, reads: "public" },
       {
         method: "GET",
@@ -281,8 +287,12 @@ describe("decideRoute", () => {
     expect(decideRoute(get, ROUTE_MANIFEST)).toBe(archive);
     expect(decideRoute(get, [{ ...archive!, enabled: false }])).toBeUndefined();
     expect(decideRoute(new Request(new URL("/join", APP_URL)), ROUTE_MANIFEST)).toBeUndefined();
-    // The moderator dashboard and recovery page stay Hono-served until their enablement reviews.
+    // The moderator dashboard, the join-attempts list and the recovery page
+    // stay Hono-served until their enablement reviews.
     expect(decideRoute(new Request(new URL("/admin", APP_URL)), ROUTE_MANIFEST)).toBeUndefined();
+    expect(
+      decideRoute(new Request(new URL("/admin/join-attempts", APP_URL)), ROUTE_MANIFEST),
+    ).toBeUndefined();
     expect(decideRoute(new Request(new URL("/profile", APP_URL)), ROUTE_MANIFEST)).toBeUndefined();
     expect(
       decideRoute(new Request(new URL("/auth/recover", APP_URL)), ROUTE_MANIFEST),

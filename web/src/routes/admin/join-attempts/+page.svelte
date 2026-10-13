@@ -1,0 +1,96 @@
+<script lang="ts">
+import type { PageProps } from "./$types";
+
+// Markup contract of JoinAttemptsPage (src/admin/pages/join-attempts.tsx):
+// the filter field ids, the scroll region and table testids, the five scoped
+// columns, the empty testid, the detail hrefs and the paging nav are shared,
+// so the existing admin E2E selectors still apply when this route owns
+// traffic. Dates arrive pre-rendered as ISO strings from the load, exactly
+// as the Hono page emits them. Search stays an exact Discord/request-id
+// match owned by the shared read — no substring scan, no new grammar here.
+// No <script> island: the Hono viewer ships no JavaScript, so this page
+// carries none either (csr=false comes from the admin group layout).
+let { data }: PageProps = $props();
+const { rows, query, hasNext, prevUrl, nextUrl, outcomes, retentionDays } = $derived(data);
+</script>
+
+<svelte:head>
+  <title>Join attempts — TWO admin</title>
+</svelte:head>
+
+<section aria-labelledby="join-attempts-heading">
+  <h1 id="join-attempts-heading">Join attempts</h1>
+  <p class="hint">
+    Read-only. Last {retentionDays} days, newest first. Search is an exact Discord id or request id.
+  </p>
+  <form method="get" action="/admin/join-attempts" class="filters">
+    <div class="field">
+      <label for="q">Discord id or request id</label>
+      <input id="q" name="q" type="search" value={query.q} />
+    </div>
+    <div class="field">
+      <label for="outcome">Outcome</label>
+      <select id="outcome" name="outcome">
+        {#each ["", ...outcomes] as o (o)}
+          <option value={o} selected={o === query.outcome}>{o === "" ? "All" : o}</option>
+        {/each}
+      </select>
+    </div>
+    <div class="field">
+      <button type="submit" class="btn">Filter</button>
+    </div>
+  </form>
+  <p id="join-attempts-scroll-hint">Scroll horizontally to see all columns on smaller screens.</p>
+  <!-- svelte-ignore a11y_no_noninteractive_tabindex: the labelled scroll region stays keyboard-focusable exactly like the Hono viewer (axe scrollable-region-focusable requires a focusable scroller); role="region" names it, tabindex={0} reaches it. -->
+  <div
+    class="admin-table-scroll"
+    role="region"
+    aria-label="Join attempts list"
+    aria-describedby="join-attempts-scroll-hint"
+    tabindex={0}
+    data-testid="join-attempts-table-scroll"
+  >
+    <table class="admin-table" data-testid="join-attempts-table">
+      <thead>
+        <tr>
+          <th scope="col">Outcome</th>
+          <th scope="col">Source</th>
+          <th scope="col">Discord id</th>
+          <th scope="col">Request id</th>
+          <th scope="col">Attempted</th>
+        </tr>
+      </thead>
+      <tbody>
+        {#if rows.length === 0}
+          <tr>
+            <td colspan={5} data-testid="join-attempts-empty">No join attempts.</td>
+          </tr>
+        {:else}
+          {#each rows as r (r.id)}
+            <tr>
+              <td>
+                <a
+                  href={`/admin/join-attempts/${r.id}`}
+                  aria-label={`View join attempt ${r.id}: ${r.outcome}`}>{r.outcome}</a
+                >
+              </td>
+              <td>{r.source ?? ""}</td>
+              <td>{r.discordId ?? ""}</td>
+              <td>{r.requestId ?? ""}</td>
+              <td>{r.createdAt}</td>
+            </tr>
+          {/each}
+        {/if}
+      </tbody>
+    </table>
+  </div>
+  <nav aria-label="Join attempt pages" class="actions">
+    {#if prevUrl}
+      <a rel="prev" href={prevUrl}>Previous</a>
+    {/if}
+    <span>Page {query.page}</span>
+    {#if hasNext && nextUrl}
+      <a rel="next" href={nextUrl}>Next</a>
+    {/if}
+  </nav>
+</section>
