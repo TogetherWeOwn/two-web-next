@@ -1,8 +1,9 @@
 import type { FC } from "hono/jsx";
-import type { Counts, Rank } from "../counts";
+import type { Counts } from "../counts";
 import type { Session } from "../env";
 import type { HomeUpcomingRow } from "../events/reads";
 import type { VisibleFeatured } from "../featured";
+import { FALLBACK_RANKS } from "../home-copy";
 import { inviteDestination } from "../invite";
 import { cardTimeLabel, isValidZone } from "../islands/contracts";
 import type { JoinResult } from "../return-journey";
@@ -17,14 +18,6 @@ import {
   SiteHeader,
 } from "../page-shell";
 import { FeaturedContentItem } from "./featured-item";
-
-const FALLBACK_RANKS: Rank[] = ["Prospect", "Member", "Soldier", "Veteran", "Legend"].map(
-  (label) => ({
-    key: label.toLowerCase(),
-    label,
-    memberCount: null,
-  }),
-);
 
 export const Home: FC<{
   session: Session | null;

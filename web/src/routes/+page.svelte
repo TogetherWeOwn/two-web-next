@@ -1,0 +1,259 @@
+<script lang="ts">
+import Shell from "#lib/Shell.svelte";
+import { featuredImageSrc } from "../../../src/featured-image";
+import {
+  FALLBACK_RANKS,
+  HOME_JOIN_RESULT_COPY,
+  HOME_NOTICES,
+  type HomeNotice,
+} from "../../../src/home-copy";
+import { cardTimeLabel, isValidZone } from "../../../src/islands/contracts";
+import { canonicalUrl } from "../../../src/seo";
+import { siteJsonLd } from "../../../src/seo-json-ld";
+import type { PageProps } from "./$types";
+
+// Markup contract of Home (src/screens/home.tsx): session-aware header,
+// notice slot, hero, counts, featured, community panels, ladder, events and
+// site JSON-LD are shared, so the existing homepage tests still apply. Panel
+// data comes from the shared readers via +page.server.ts — never recomputed
+// here — and copy comes from src/home-copy, never a pasted sentence.
+let { data }: PageProps = $props();
+const {
+  session,
+  sessionUnavailable,
+  notice,
+  joinResult,
+  inviteUrl,
+  appUrl,
+  counts,
+  upcomingEvents,
+  eventsUnavailable,
+  featured,
+  imageHosts,
+} = $derived(data);
+const canonical = $derived(canonicalUrl(appUrl, "/"));
+// The load validates ?n= through parseHomeNotice, so by render time the key
+// is one of the six — the cast only recovers what $derived destructuring widens.
+const noticeText = $derived(notice ? HOME_NOTICES[notice as HomeNotice] : null);
+const ranks = $derived(counts.ranks.length ? counts.ranks : FALLBACK_RANKS);
+// Svelte parses script content as raw text, so {@html} inside one never
+// evaluates (it renders literally): emit the whole JSON-LD element as markup,
+// exactly as the archive island does. The closing tag stays split in source —
+// an intact close tag here would terminate this component script block at
+// parse time. The payload is the shared siteJsonLd string Hono embeds with
+// dangerouslySetInnerHTML — same bytes, same trust.
+const jsonLd = $derived(
+  `<script type="application/ld+json" data-testid="site-jsonld">${siteJsonLd(appUrl)}</` +
+    "script>",
+);
+</script>
+
+{#snippet guestChrome()}
+  <div>
+    <span class="account-caption">Welcome, guest</span>
+    <a class="btn" href="/auth/discord" data-testid="signin">Sign in with Discord</a>
+  </div>
+{/snippet}
+
+{#snippet memberChrome()}
+  <form method="post" action="/logout">
+    <span class="account-caption">Signed in</span>
+    <span class="who">{session?.username}</span>
+    <button type="submit" class="link">Sign out</button>
+  </form>
+{/snippet}
+
+<Shell
+  title="The lobby is open"
+  exactTitle="Together We Own — the lobby is open"
+  {canonical}
+  description="We spent most of our life private. Now you can just turn up."
+  theme="home"
+  activeNav="home"
+  accountChrome={session ? memberChrome : guestChrome}
+>
+  {#if joinResult}
+    <p class="notice" role="status" data-testid="join-result">
+      {#if joinResult === "added"}
+        {HOME_JOIN_RESULT_COPY.added}
+      {:else}
+        {HOME_JOIN_RESULT_COPY.alreadyInServer}
+        {" "}<a href="/discord" data-testid="reinvite-link">{HOME_JOIN_RESULT_COPY.reinvite}</a>
+      {/if}
+    </p>
+  {:else if noticeText}
+    <p class="notice" role="status" data-testid="notice">{noticeText}</p>
+  {/if}
+  <section class="hero" aria-labelledby="home-heading">
+    <div class="hero-detail hero-detail-left" aria-hidden="true">
+      <span></span>
+      <span></span>
+      <span></span>
+    </div>
+    <div class="hero-detail hero-detail-right" aria-hidden="true">
+      <span></span>
+      <span></span>
+      <span></span>
+    </div>
+    <p class="strap">A close-knit gaming clan / mostly evenings / 18+</p>
+    <h1 id="home-heading">The lobby is open.</h1>
+    <p class="lead">We spent most of our life private. Now you can just turn up.</p>
+    {#if sessionUnavailable}
+      <a class="btn" href="/discord" data-testid="discord-join">Join with an invite link</a>
+    {:else if session?.member}
+      <a class="btn" href={inviteUrl}>Open Discord</a>
+    {:else}
+      <a class="btn" href="/auth/discord" data-testid="join">Join with Discord</a>
+    {/if}
+    {#if !session && !sessionUnavailable && eventsUnavailable}
+      <p>
+        <a href="/discord" data-testid="discord-join">Join with an invite link instead</a>
+      </p>
+    {/if}
+    {#if notice === "join_failed"}
+      <p>
+        <a href={inviteUrl}>Join with an invite link instead</a>
+      </p>
+    {/if}
+    {#if counts.memberCount != null}
+      <p class="counts" data-testid="member-count">
+        <strong>{counts.memberCount}</strong> members{#if counts.onlineCount != null && counts.onlineCount > 0}
+          {" · "}<strong>{counts.onlineCount}</strong> online{/if}
+      </p>
+    {/if}
+  </section>
+  {#if featured.length > 0}
+    <section aria-labelledby="featured-heading" data-testid="featured-content">
+      <h2 id="featured-heading">From the community team</h2>
+      <div class="facts">
+        {#each featured as item (item.id)}
+          {@const src = item.imageUrl ? featuredImageSrc(item.imageUrl, appUrl, imageHosts) : null}
+          <article class="card" data-testid="featured-item">
+            <h3>{#if item.url}<a href={item.url}>{item.title}</a>{:else}{item.title}{/if}</h3>
+            {#if item.body}<p>{item.body}</p>{/if}
+            {#if src}
+              <img
+                class="featured-image"
+                {src}
+                alt={item.imageAlt?.trim() || item.title}
+                width="640"
+                height="360"
+                loading="lazy"
+                decoding="async"
+                referrerpolicy="no-referrer"
+              />
+            {/if}
+          </article>
+        {/each}
+      </div>
+    </section>
+  {/if}
+  <div class="community-grid">
+    <section class="community-intro" aria-labelledby="community-heading">
+      <h2 id="community-heading">No application. No interview.</h2>
+      <p>
+        Show up a few times. Play. Become a Member. The ladder records trust and time, not
+        grind.
+      </p>
+      <p>Small enough that people notice when you come back.</p>
+      <h3>Not a crowd. A place that knows your name.</h3>
+      <p>The community is voice-first. Game nights get posted in the Discord first.</p>
+    </section>
+    <section class="discord-preview" aria-labelledby="discord-heading">
+      <h2 id="discord-heading">In the Discord</h2>
+      <p>Visit the join page for the server preview and ways to join.</p>
+      <p>
+        <a href="/join#join-heading" data-testid="home-widget-link">View the Discord lobby</a>
+      </p>
+      <p>
+        <a href="/discord" data-testid="home-discord-invite">Open Discord</a>
+      </p>
+    </section>
+  </div>
+  <section aria-label="Community ladder" class="community-ladder">
+    <h2>Prospect → Member → Soldier → Veteran → Legend</h2>
+    <p>Ranks stack — a Veteran still holds everything below.</p>
+    <dl class="facts rank-stack" data-testid="rank-stack">
+      {#each ranks as rank (rank.key)}
+        <div class="card" data-rank={rank.key}>
+          <dt>{rank.label}</dt>
+          <dd>{rank.memberCount === 0 ? "unclaimed" : rank.memberCount}</dd>
+        </div>
+      {/each}
+    </dl>
+  </section>
+  <section aria-labelledby="home-events-heading">
+    <p class="strap">Next up</p>
+    <h2 id="home-events-heading">Game nights, when they land.</h2>
+    {#if upcomingEvents.length > 0}
+      <ul class="facts home-events" data-testid="home-events-list">
+        {#each upcomingEvents as event (event.source === "discord" ? `discord-${event.discordId}` : `canonical-${event.eventKey}`)}
+          {#if event.source === "discord"}
+            <li class="card" data-source="discord">
+              <a class="home-event-link" href={inviteUrl} data-testid="home-event-discord">
+                <p>
+                  <time datetime={event.startsAt.toISOString()}>
+                    {cardTimeLabel(event.startsAt, event.timezone)} ({isValidZone(event.timezone)
+                      ? event.timezone
+                      : "UTC"})
+                  </time>
+                </p>
+                <h3>{event.title}</h3>
+                {#if event.location}<p>{event.location}</p>{/if}
+                <p>RSVP in Discord</p>
+              </a>
+            </li>
+          {:else}
+            <li class="card" data-source="canonical">
+              <a class="home-event-link" href={`/e/${encodeURIComponent(event.eventKey)}`}>
+                <p>
+                  <time datetime={event.startsAt.toISOString()}>
+                    {cardTimeLabel(event.startsAt, event.timezone)} ({isValidZone(event.timezone)
+                      ? event.timezone
+                      : "UTC"})
+                  </time>
+                </p>
+                <h3>{event.title}</h3>
+                {#if event.location}<p>{event.location}</p>{/if}
+                <p>{event.goingCount} going</p>
+              </a>
+            </li>
+          {/if}
+        {/each}
+      </ul>
+      <p>
+        <a href="/events">See all events <span aria-hidden="true">→</span></a>
+      </p>
+    {:else}
+      <div
+        class="card"
+        data-testid="home-events-empty"
+        data-state={eventsUnavailable ? "unavailable" : "empty"}
+      >
+        <h3>
+          {#if eventsUnavailable}
+            Game nights are unavailable right now.
+          {:else}
+            Nothing scheduled yet.
+          {/if}
+        </h3>
+        <p>
+          {#if eventsUnavailable}
+            We couldn’t load the schedule. The Discord is still open — check there for the next
+            game night.
+          {:else}
+            Game nights get posted here. Join the Discord and you’ll hear about the next one.
+          {/if}
+        </p>
+      </div>
+    {/if}
+    {#if !session}
+      <p>
+        <a class="btn" href="/join" data-testid="home-events-join">
+          Join the Discord <span aria-hidden="true">→</span>
+        </a>
+      </p>
+    {/if}
+  </section>
+  {@html jsonLd}
+</Shell>
