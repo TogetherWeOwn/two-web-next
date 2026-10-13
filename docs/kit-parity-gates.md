@@ -14,6 +14,7 @@ expect Hono for the right reason.
 | `GET /privacy` | `web/src/routes/privacy/+page.svelte` (`csr=false`, shared `POLICY_MARKDOWN`/`POLICY_VERSION` source, no island) | public | Hono (`enabled: false`) |
 | `GET /rules` | `web/src/routes/rules/+page.svelte` (`csr=false`, shared `ContentLeaf.svelte`, `src/rules-content.ts`) | public | Hono (`enabled: false`) |
 | `GET /join` | `web/src/routes/join/+page.svelte` (`csr=false`, shared `/islands/join-widget.js`; `/join/discord` + `/join/callback` stay Hono) | public | Hono (`enabled: false`) |
+| `GET /auth/recover` | `web/src/routes/auth/recover/+page.svelte` (`csr=false`, shared `#lib/Recovery.svelte` over the `RecoveryModel` shape; journey writes + `/join/callback` outcomes stay Hono, rendered through the injected outcome renderer) | public | Hono (`enabled: false`) |
 | everything else | none yet (Kit `[...path]` catch-all → `honoFetch`) | — | Hono |
 
 Add one row per migrated route with its reads class (`public` routes render
@@ -72,11 +73,17 @@ Two modes, one assertion set per parity route:
 Per route the helpers assert: exact status, `content-type: text/html`, the
 renderer marker matching the manifest (Hono side: always null), exactly one
 `<main>`, skip link `href="#main"`, `aria-label="Primary"` nav, one
-canonical link, the archive section testid (no-JS content: the Kit page sets
+canonical link (archive/landing contracts; the recovery contract instead
+asserts no canonical divergence — transient outcome pages ship none on
+either renderer), the archive section testid (no-JS content: the Kit page sets
 `csr=false`, so the contract is in the raw fetch body), archive noindex, the
 shared island binder, no bare Kit CSRF text, guest-only account chrome, and
-no secret-shaped content. Reserved paths (`/up`) and `POST /api/*` must
-never carry the Kit marker.
+no secret-shaped content. The join contract adds the one-click/invite
+actions, exactly one widget zone and the flash privacy invariant; the
+recovery contract adds the shared shell markers (`recovery-heading`,
+`recovery-retry`, `recovery-invite`), safe retry/invite hrefs and an
+unconditional private, no-store pin. Reserved paths (`/up`) and `POST /api/*`
+must never carry the Kit marker.
 
 Exit codes mirror the staging gate: 0 pass, 1 journeys failed, 2
 misconfigured (one-sided URLs, non-allowlisted hosts) or all-skipped/empty

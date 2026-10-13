@@ -57,6 +57,7 @@ export const ROUTE_MANIFEST: OwnedRoute[] = [
   { method: "GET", path: "/privacy", enabled: false, reads: "public" },
   { method: "GET", path: "/rules", enabled: false, reads: "public" },
   { method: "GET", path: "/join", enabled: false, reads: "public" },
+  { method: "GET", path: "/auth/recover", enabled: false, reads: "public" },
 ];
 
 // Response header set only on the Kit-rendered branch of the hook, so the
