@@ -95,15 +95,18 @@ export const Layout: FC<
         )}
         {theme ? (
           <>
-            <link
-              rel="preload"
-              href="/fonts/display-latin-700.woff2"
-              as="font"
-              type="font/woff2"
-              crossorigin="anonymous"
-            />
             {theme === "content" ? null : (
+              // Content leaves render no Display text (the late font swap
+              // became mobile LCP), so the font is neither used nor preloaded
+              // there. Every other theme keeps the preload and stylesheets.
               <>
+                <link
+                  rel="preload"
+                  href="/fonts/display-latin-700.woff2"
+                  as="font"
+                  type="font/woff2"
+                  crossorigin="anonymous"
+                />
                 <link rel="stylesheet" href="/theme-tokens.css" />
                 <link rel="stylesheet" href="/theme.css" />
               </>
