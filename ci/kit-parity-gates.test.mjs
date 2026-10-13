@@ -6,10 +6,12 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import {
+  LOGIN_JOURNEYS,
   assertReservedContract,
   assertRouteContract,
   expectedMarkerFor,
   isAllowlistedHost,
+  isCoveredByExecutedRun,
   isInJourneyScope,
   isManifestEnabled,
   pathsMatchStructurally,
@@ -375,6 +377,71 @@ globalThis.fetch = async (input) => {
   });
   assert.equal(status, 1, `expected exit 1, got ${status}\n${output}`);
   assert.match(output, /preview Hono/);
+});
+
+test("every listed login route alone fails its own journey (no aggregate masking)", () => {
+  const silent = { write: () => {} };
+  for (const journey of LOGIN_JOURNEYS) {
+    for (const route of journey.routes) {
+      const manifestSource =
+        `{ method: "GET", path: "/events/past", enabled: false },` +
+        ` { method: "${route.method}", path: "${route.path}", enabled: true }`;
+      const journeys = runUnitMode({ stdout: silent, manifestSource });
+      const byName = new Map(journeys.map((j) => [j.name, j]));
+      const entry = byName.get(`parity: ${journey.name}`);
+      assert.equal(
+        entry.status,
+        "failed",
+        `${route.method} ${route.path} must fail ${journey.name}`,
+      );
+      assert.match(entry.reason, /no executed parity journey covers it/);
+      assert.equal(summarizeLedger(journeys).verdict, "fail", `${route.method} ${route.path}`);
+    }
+  }
+});
+
+test("enabled routes outside every journey scope fail via the catch-all", () => {
+  const silent = { write: () => {} };
+  for (const route of [
+    `{ method: "GET", path: "/admin", enabled: true }`,
+    `{ method: "GET", path: "/admin/featured", enabled: true }`,
+    `{ method: "GET", path: "/admin/join-attempts", enabled: true }`,
+    `{ method: "GET", path: "/admin/queue/failed/:id/preview", enabled: true }`,
+    `{ method: "GET", path: "/events", enabled: true }`,
+    `{ method: "GET", path: "/events/:key", enabled: true }`,
+    `{ method: "GET", path: "/join", enabled: true }`,
+    `{ method: "GET", path: "/", enabled: true }`,
+    `{ method: "POST", path: "/events/past", enabled: true }`,
+  ]) {
+    const journeys = runUnitMode({
+      stdout: silent,
+      manifestSource: `{ method: "GET", path: "/events/past", enabled: false }, ${route}`,
+    });
+    assert.equal(summarizeLedger(journeys).verdict, "fail", route);
+    const failed = journeys.filter((j) => j.status === "failed");
+    assert.ok(failed.length > 0, route);
+    assert.ok(
+      failed.some((j) => j.reason?.includes(route.match(/path: "([^"]+)"/)[1])),
+      `${route} reason must name the entry`,
+    );
+  }
+});
+
+test("executed-run coverage is GET/HEAD /events/past only", () => {
+  assert.equal(
+    isCoveredByExecutedRun({ method: "GET", path: "/events/past", enabled: true }),
+    true,
+  );
+  assert.equal(
+    isCoveredByExecutedRun({ method: "HEAD", path: "/events/past", enabled: true }),
+    true,
+  );
+  assert.equal(
+    isCoveredByExecutedRun({ method: "POST", path: "/events/past", enabled: true }),
+    false,
+  );
+  assert.equal(isCoveredByExecutedRun({ method: "GET", path: "/events", enabled: true }), false);
+  assert.equal(isCoveredByExecutedRun({ method: "GET", path: "/admin", enabled: true }), false);
 });
 
 test("route contract detects a planted break", () => {

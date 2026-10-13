@@ -153,6 +153,23 @@ export function isManifestEnabled(manifestSource, path, method = null) {
   );
 }
 
+// Coverage: the only executed parity run today is GET/HEAD /events/past via
+// PARITY_ROUTES (unit contract + preview fetch). Any other enabled entry has
+// no run covering it and must fail — the scopes below only choose the journey
+// name for the failure message, never whether it fails.
+export function isCoveredByExecutedRun(entry) {
+  const method = entry.method.toUpperCase();
+  if (method !== "GET" && method !== "HEAD") return false;
+  const base = entry.path.split(/[?#]/)[0];
+  // A `:param` pattern family (e.g. GET /events/:key) is never covered by the
+  // single concrete /events/past run — it owns sibling paths with no run.
+  if (base.includes(":")) return false;
+  return PARITY_ROUTES.some((route) => {
+    const routeBase = route.path.split(/[?#]/)[0];
+    return base === routeBase;
+  });
+}
+
 // Journey ownership scopes: every enabled manifest entry under one of these
 // prefixes means Kit owns traffic in that journey's area, even when the
 // entry is a route the explicit lists below never named (a newly added Hono
@@ -419,6 +436,12 @@ export function runUnitMode({ stdout = process.stdout, manifestSource: manifestO
   // fails it, even when the entry is a route the explicit list never named
   // (renamed :param, new action, legacy redirect). The explicit list names
   // the known routes for a precise reason; the scope is the fail-closed net.
+  // Explicit ownership goes through isManifestEnabled — the same structural,
+  // method-aware primitive its tests pin — so those tests guard the real gate
+  // path instead of a parallel matcher. A final catch-all fails any other
+  // enabled entry no executed run covers (today only GET/HEAD /events/past
+  // via PARITY_ROUTES): GET /admin, /events, /join, / and friends can never
+  // ship green with no journey.
   const manifestEntries = parseManifestEntries(manifestSource);
   for (const { name, routes, scope } of LOGIN_JOURNEYS) {
     const enabledInScope = manifestEntries.filter(
@@ -427,11 +450,7 @@ export function runUnitMode({ stdout = process.stdout, manifestSource: manifestO
     if (enabledInScope.length > 0) {
       const listed = enabledInScope.map((entry) => `${entry.method} ${entry.path}`).join(", ");
       const explicitHits = routes.filter((route) =>
-        enabledInScope.some(
-          (entry) =>
-            entry.method.toUpperCase() === route.method.toUpperCase() &&
-            pathsMatchStructurally(entry.path, route.path),
-        ),
+        isManifestEnabled(manifestSource, route.path, route.method),
       );
       const coverage =
         explicitHits.length > 0
@@ -445,6 +464,20 @@ export function runUnitMode({ stdout = process.stdout, manifestSource: manifestO
     } else {
       push(`parity: ${name}`, "skipped", "route not Kit-native (ROUTE_MANIFEST enabled:false)");
     }
+  }
+
+  const outOfScopeUncovered = manifestEntries.filter(
+    (entry) =>
+      entry.enabled &&
+      !isCoveredByExecutedRun(entry) &&
+      !["rsvp", "admin", "profile"].some((scope) => isInJourneyScope(scope, entry.path)),
+  );
+  for (const entry of outOfScopeUncovered) {
+    push(
+      `parity: uncovered Kit-native route (${entry.method} ${entry.path})`,
+      "failed",
+      `route Kit-native (ROUTE_MANIFEST enabled:true for ${entry.method} ${entry.path}) but no executed parity journey covers it`,
+    );
   }
 
   return journeys;

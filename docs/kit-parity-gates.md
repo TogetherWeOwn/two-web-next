@@ -150,13 +150,15 @@ the archive page is driven at desktop and mobile widths with a horizontal
 overflow assertion and a page-error watch. Seeded rows pin non-empty
 collections so an empty fixture cannot pass silently.
 
-Login journeys (member RSVP, waitlist, pause, admin, profile, featured) stay
-Hono-only until their routes migrate; the gate ledger derives each entry
-from `ROUTE_MANIFEST` and records Hono-owned routes as
+Login journeys (member RSVP, moderator admin, profile edit) stay Hono-only
+until their routes migrate; the gate ledger derives each entry from
+`ROUTE_MANIFEST` and records Hono-owned routes as
 `skipped: <route> not Kit-native` with reason strings — loud, countable,
 never quiet green, and never a `test.skip` call (the floor forbids new
 skips). An enabled route with no executed journey covering it records a
-failure instead of a skip.
+failure instead of a skip: in-scope routes fail their journey (scope net),
+any other enabled route fails the uncovered-route catch-all (today only
+GET/HEAD `/events/past` via `PARITY_ROUTES` is covered).
 
 ## Security
 
