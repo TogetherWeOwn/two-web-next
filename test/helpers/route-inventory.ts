@@ -24,6 +24,8 @@ export function routeInventory(router: Router): RouteInventoryEntry[] {
     else if ((path === "/admin" || path.startsWith("/admin/")) && registrations.has("ALL /admin/*"))
       auth = "moderator";
     else if (path === "/profile" && registrations.has("ALL /profile")) auth = "member";
+    else if (path === "/leaderboards/members" && registrations.has("ALL /leaderboards/members"))
+      auth = "member";
     // Retired index reads stop before the scoped member middleware.
     else if (method === "GET" && (path === "/members" || path === "/members/")) auth = "public";
     else if (path.startsWith("/members/") && registrations.has("ALL /members/*")) {

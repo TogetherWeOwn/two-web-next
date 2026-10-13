@@ -81,6 +81,7 @@ describe.skipIf(!process.env.DATABASE_URL)("postgres single-flight + unique lock
               stores.joinAttempts,
               stores.idempotencyKeys,
               stores.searchLog,
+              stores.boardViews,
             ]) {
               expect(await table.pruneOlderThan(new Date(0))).toBe(0);
             }
