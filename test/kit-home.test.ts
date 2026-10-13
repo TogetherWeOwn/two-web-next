@@ -11,6 +11,7 @@ import {
   HOME_JOIN_RESULT_COPY,
   HOME_NOTICES,
   applyHomeFlashConsumption,
+  applyHomeResponsePolicy,
   parseHomeNotice,
   resolveHomeFlash,
   resolveHomePageState,
@@ -35,9 +36,10 @@ describe("Kit home port: shared server models, no duplicated content", () => {
     expect(server).toContain("listVisibleFeatured");
     expect(server).toContain("dbFor");
     expect(server).toContain("inviteDestination");
-    // Notice/flash decisions ride the framework-free helper (which itself
-    // calls parseHomeNotice/resolveHomeFlash, pinned behaviorally below).
-    expect(server).toContain("resolveHomePageState");
+    // Session, notice, flash and cache policy ride the framework-free
+    // response helper (which itself calls resolveHomePageState and
+    // applyHomeFlashConsumption, pinned behaviorally below).
+    expect(server).toContain("applyHomeResponsePolicy");
   });
 
   it("renders every panel from shared copy and formatting helpers", () => {
@@ -79,20 +81,30 @@ describe("Kit home port: shared server models, no duplicated content", () => {
 });
 
 describe("Kit home port: request posture", () => {
-  it("stays private with no client bundle", () => {
+  it("stays server-rendered with no client bundle", () => {
     const server = read(serverPath);
-    expect(server).toContain("private, no-store");
     expect(server).toContain("csr = false");
+    // private, no-store is asserted behaviorally through
+    // applyHomeResponsePolicy below, not via substring (the load comment also
+    // contains the phrase, so a grep cannot pin the header).
   });
 
-  it("consumes the one-shot flash on GET through the shared helper", () => {
+  it("delegates session, notice, flash and cache policy to the shared helper", () => {
     const server = read(serverPath);
-    // Decisions and consumption live in src/home-copy.ts (behaviorally
-    // pinned below); the load stays a thin binding that delegates to them.
-    expect(server).toContain("locals.joinResult");
-    expect(server).toContain("resolveHomePageState");
-    expect(server).toContain("applyHomeFlashConsumption");
-    expect(server).toContain("JOIN_RESULT_COOKIE");
+    // Call-site pins (with the call paren/keys) so the import line alone
+    // cannot satisfy them.
+    expect(server).toContain("applyHomeResponsePolicy({");
+    expect(server).toContain('noticeRaw: url.searchParams.get("n")');
+    expect(server).toContain("method: request.method");
+    expect(server).toContain("cookieName: JOIN_RESULT_COOKIE");
+    // The load stays a thin binding: no inline session mapping, flash
+    // resolution, consumption call or direct cache header that could drift
+    // from the helper.
+    expect(server).not.toContain("resolveHomePageState({");
+    expect(server).not.toContain("applyHomeFlashConsumption({");
+    expect(server).not.toContain('setHeaders({ "cache-control"');
+    expect(server).not.toContain("locals.status ===");
+    expect(server).not.toContain("locals.joinResult");
   });
 
   it("adds no live Discord call to rendering", () => {
@@ -372,6 +384,154 @@ describe("home flash consumption: Hono takeJoinResult parity", () => {
       cookieName: JOIN_RESULT_COOKIE,
       cookies,
     });
+    expect(deleted).toEqual([]);
+  });
+});
+
+describe("home response policy: the load's session, flash and cache wiring", () => {
+  const memberSession = {
+    userId: "member-1",
+    username: "Member",
+    avatar: null,
+    member: true,
+    moderator: false,
+  };
+
+  function harness() {
+    const deleted: Array<{ name: string; options: Record<string, unknown> }> = [];
+    const headers: Record<string, string> = {};
+    const cookies = {
+      delete: (name: string, options: Record<string, unknown>) => deleted.push({ name, options }),
+    };
+    const setHeaders = (values: Record<string, string>) => Object.assign(headers, values);
+    return { deleted, headers, cookies, setHeaders };
+  }
+
+  it("maps an authenticated session through with a private header and a delete", () => {
+    const { deleted, headers, cookies, setHeaders } = harness();
+    const out = applyHomeResponsePolicy({
+      locals: { status: "authenticated", session: memberSession, joinResult: "added" },
+      noticeRaw: "joined",
+      method: "GET",
+      cookieName: JOIN_RESULT_COOKIE,
+      cookies,
+      setHeaders,
+    });
+    expect(out).toEqual({
+      session: memberSession,
+      sessionUnavailable: false,
+      notice: "joined",
+      joinResult: "added",
+    });
+    expect(headers).toEqual({ "cache-control": "private, no-store" });
+    expect(deleted).toEqual([
+      {
+        name: "__Host-two_join_result",
+        options: { path: "/", secure: true, httpOnly: true, sameSite: "lax" },
+      },
+    ]);
+  });
+
+  it("renders guests and absent bridges without a session but still private", () => {
+    for (const locals of [
+      { status: "guest" as const, session: memberSession, joinResult: null },
+      { status: undefined, session: memberSession, joinResult: null },
+    ]) {
+      const { deleted, headers, cookies, setHeaders } = harness();
+      const out = applyHomeResponsePolicy({
+        locals,
+        noticeRaw: null,
+        method: "GET",
+        cookieName: JOIN_RESULT_COOKIE,
+        cookies,
+        setHeaders,
+      });
+      expect(out.session).toBeNull();
+      expect(out.sessionUnavailable).toBe(false);
+      expect(out.joinResult).toBeNull();
+      expect(headers).toEqual({ "cache-control": "private, no-store" });
+      expect(deleted).toEqual([]);
+    }
+  });
+
+  it("keeps the guest header during an outage while the flash still renders", () => {
+    const { deleted, headers, cookies, setHeaders } = harness();
+    const out = applyHomeResponsePolicy({
+      locals: { status: "unknown", session: memberSession, joinResult: "added" },
+      noticeRaw: "joined",
+      method: "GET",
+      cookieName: JOIN_RESULT_COOKIE,
+      cookies,
+      setHeaders,
+    });
+    expect(out.session).toBeNull();
+    expect(out.sessionUnavailable).toBe(true);
+    expect(out.joinResult).toBe("added");
+    expect(headers).toEqual({ "cache-control": "private, no-store" });
+    expect(deleted).toHaveLength(1);
+  });
+
+  it("consumes the raw flash even when a failure notice suppresses the banner", () => {
+    const { deleted, headers, cookies, setHeaders } = harness();
+    const out = applyHomeResponsePolicy({
+      locals: { status: "guest", session: null, joinResult: "added" },
+      noticeRaw: "join_failed",
+      method: "GET",
+      cookieName: JOIN_RESULT_COOKIE,
+      cookies,
+      setHeaders,
+    });
+    expect(out.notice).toBe("join_failed");
+    expect(out.joinResult).toBeNull();
+    expect(headers).toEqual({ "cache-control": "private, no-store" });
+    expect(deleted).toHaveLength(1);
+  });
+
+  it("rejects a hostile ?n= without dropping the flash or the header", () => {
+    const { deleted, headers, cookies, setHeaders } = harness();
+    const out = applyHomeResponsePolicy({
+      locals: { status: "guest", session: null, joinResult: "added" },
+      noticeRaw: "join_failed;drop",
+      method: "GET",
+      cookieName: JOIN_RESULT_COOKIE,
+      cookies,
+      setHeaders,
+    });
+    expect(out.notice).toBeNull();
+    expect(out.joinResult).toBe("added");
+    expect(headers).toEqual({ "cache-control": "private, no-store" });
+    expect(deleted).toHaveLength(1);
+  });
+
+  it("leaves HEAD and POST flashes pending but keeps every response private", () => {
+    for (const method of ["HEAD", "POST"]) {
+      const { deleted, headers, cookies, setHeaders } = harness();
+      const out = applyHomeResponsePolicy({
+        locals: { status: "guest", session: null, joinResult: "added" },
+        noticeRaw: null,
+        method,
+        cookieName: JOIN_RESULT_COOKIE,
+        cookies,
+        setHeaders,
+      });
+      expect(out.joinResult).toBe("added");
+      expect(headers).toEqual({ "cache-control": "private, no-store" });
+      expect(deleted).toEqual([]);
+    }
+  });
+
+  it("emits no delete without a flash but still stays private", () => {
+    const { deleted, headers, cookies, setHeaders } = harness();
+    const out = applyHomeResponsePolicy({
+      locals: { status: "guest", session: null, joinResult: null },
+      noticeRaw: null,
+      method: "GET",
+      cookieName: JOIN_RESULT_COOKIE,
+      cookies,
+      setHeaders,
+    });
+    expect(out.joinResult).toBeNull();
+    expect(headers).toEqual({ "cache-control": "private, no-store" });
     expect(deleted).toEqual([]);
   });
 });

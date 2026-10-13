@@ -6,7 +6,7 @@
 // auth-discord.php, matched by meaning, not translation key); change them
 // here once and both renderers follow.
 import type { Rank } from "./counts";
-import type { KitSessionStatus } from "./kit-session";
+import type { KitSession, KitSessionStatus } from "./kit-session";
 import type { JoinResult } from "./return-journey";
 
 // One actionable sentence per failure meaning: denied says "you cancelled",
@@ -133,4 +133,56 @@ export function applyHomeFlashConsumption(input: HomeFlashConsumptionInput): voi
     httpOnly: true,
     sameSite: "lax",
   });
+}
+
+// Kit home response policy (SvelteKit migration; zero behavior change).
+//
+// The Kit load (web/src/routes/+page.server.ts) is a thin env binding; the
+// session mapping, notice/flash decisions, one-shot consumption and the
+// viewer-specific cache header live here so the root suite pins them with fake
+// locals, the way src/join/kit-page.ts does for /join via
+// applyJoinPageResponsePolicy. Values mirror the Hono GET / handler exactly:
+// an outage renders the guest header (unknown is never a logout), ?n= accepts
+// exactly the six keys, the raw flash is consumed on the first GET even when a
+// failure notice suppresses the banner, and every response stays
+// viewer-specific (private, no-store).
+export type HomeResponsePolicyLocals = {
+  status?: KitSessionStatus | undefined;
+  session?: KitSession | null;
+  joinResult?: JoinResult | null;
+};
+
+export type HomeResponsePolicyInput = {
+  locals: HomeResponsePolicyLocals;
+  noticeRaw: string | null;
+  method: string;
+  cookieName: string;
+  cookies: HomeFlashConsumptionInput["cookies"];
+  setHeaders: (headers: Record<string, string>) => void;
+};
+
+export type HomeResponsePolicyOutput = {
+  session: KitSession | null;
+  sessionUnavailable: boolean;
+  notice: HomeNotice | null;
+  joinResult: JoinResult | null;
+};
+
+/** Session mapping, flash decisions, one-shot consumption and cache policy. */
+export function applyHomeResponsePolicy(input: HomeResponsePolicyInput): HomeResponsePolicyOutput {
+  const session = input.locals.status === "authenticated" ? (input.locals.session ?? null) : null;
+  const flash = input.locals.joinResult ?? null;
+  const { sessionUnavailable, notice, joinResult } = resolveHomePageState({
+    status: input.locals.status,
+    noticeRaw: input.noticeRaw,
+    flash,
+  });
+  applyHomeFlashConsumption({
+    method: input.method,
+    flash,
+    cookieName: input.cookieName,
+    cookies: input.cookies,
+  });
+  input.setHeaders({ "cache-control": "private, no-store" });
+  return { session, sessionUnavailable, notice, joinResult };
 }
