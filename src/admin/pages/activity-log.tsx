@@ -2,15 +2,14 @@
 
 import type { FC } from "hono/jsx";
 import type { ActivityLogViewerRow } from "../reads";
+import { formatActivityCauser } from "../kit-activity-log";
 import { activityLogEmptyText, activityLogUrl, type ActivityLogQuery } from "../table-list";
 import { Shell } from "./shell";
 
 // Imported rows keep legacy internal causer IDs (docs/data-import.md), which the
-// access-log guard cannot take as subjects (snowflakes only). Label them so a
-// legacy ID never reads as a Discord identity.
-const SNOWFLAKE_ID = /^\d{10,25}$/;
-const formatActivityCauser = (causerId: string | null): string =>
-  causerId === null ? "—" : SNOWFLAKE_ID.test(causerId) ? causerId : `${causerId} (legacy ID)`;
+// access-log guard cannot take as subjects (snowflakes only). The shared
+// formatActivityCauser labels them so a legacy ID never reads as a Discord
+// identity — one copy for the Hono page and the Kit viewer.
 
 export const ActivityLogPage: FC<{
   rows: ActivityLogViewerRow[];
