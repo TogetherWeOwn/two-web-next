@@ -254,7 +254,15 @@ describe("decideRoute", () => {
     expect(ROUTE_MANIFEST).toEqual([
       { method: "GET", path: "/events/past", enabled: false, reads: "public" },
       { method: "GET", path: "/privacy", enabled: false, reads: "public" },
+      {
+        method: "GET",
+        path: "/admin",
+        enabled: false,
+        reads: { resource: "dashboard", action: "view", route: "admin.dashboard" },
+      },
     ]);
     expect(decideRoute(get, ROUTE_MANIFEST)).toBeUndefined();
+    // The moderator dashboard stays Hono-served until its enablement review.
+    expect(decideRoute(new Request(new URL("/admin", APP_URL)), ROUTE_MANIFEST)).toBeUndefined();
   });
 });

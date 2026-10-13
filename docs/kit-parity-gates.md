@@ -12,6 +12,7 @@ expect Hono for the right reason.
 | --- | --- | --- | --- |
 | `GET /events/past` | `web/src/routes/events/past/+page.svelte` (`csr=false`, shared `/islands/past-events.js`) | public | Hono (`enabled: false`) |
 | `GET /privacy` | `web/src/routes/privacy/+page.svelte` (`csr=false`, shared `POLICY_MARKDOWN`/`POLICY_VERSION` source, no island) | public | Hono (`enabled: false`) |
+| `GET /admin` | `web/src/routes/admin/+page.svelte` (`csr=false`, shared `AdminShell.svelte` chrome, `decideKitAdminGuard` layout guard, bounded `dashboardJoinFunnel`/`topZeroResultSearches` widgets, no island) | dashboard/view (`admin.dashboard`, bridged moderator viewer) | Hono (`enabled: false`) |
 | everything else | none yet (Kit `[...path]` catch-all → `honoFetch`) | — | Hono |
 
 Add one row per migrated route with its reads class (`public` routes render
