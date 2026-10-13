@@ -19,9 +19,9 @@ Concretely, the website keeps:
 - **Your Discord identity** — Discord user ID, display name (or username if
   you have no display name), avatar, and whether you are in our server. This
   is a cache of what Discord told us: it is overwritten from Discord on every
-  sign-in, and it renders read-only — only your bio, games and timezone have
-  an edit form.
-- **What you write yourself** — bio, games list, and timezone. This lives in a
+  sign-in, and it renders read-only — only your bio, games, timezone and
+  leaderboard switch have an edit form.
+- **What you write yourself** — bio, games list, timezone and leaderboard visibility. This lives in a
   separate place the sign-in sync never touches, so signing in can never eat
   your bio.
 - **Your sign-in session** — a record holding your Discord ID, name, avatar,
@@ -43,8 +43,8 @@ Concretely, the website keeps:
   address. Kept for 90 days, then deleted.
 - **Leaderboard views** — which board was opened, for which season, and how
   many rows it showed, with nothing that links a view to you: no user, no
-  session, no IP address. Kept for 90 days, then deleted. If you ask to opt
-  out of leaderboards, that choice is kept on your profile.
+  session, no IP address. Kept for 90 days, then deleted. Whether you appear
+  on leaderboards is kept on your profile, and you can switch it yourself.
 - **Activity stats are not stored here at all.** Rank, tenure and milestones
   are read live from the bot's records when a profile loads; if they cannot
   be read within half a second, the stats section is left out and the rest of
@@ -56,7 +56,7 @@ What we never store, ever — in the website database: email addresses (we never
 
 Member profiles are members-only. Signed in with Discord as a member of our
 server, you can view any member's profile; logged out, you get a sign-in
-prompt instead of a profile. Only you can edit your bio, games and timezone.
+prompt instead of a profile. Only you can edit your bio, games, timezone and leaderboard visibility.
 
 On an event page, signed-in members see the names of the people going.
 Moderators see every RSVP through the admin panel. RSVPs are not sent to
@@ -76,7 +76,7 @@ The member leaderboard is members-only. It ranks members by how many events
 they answered going to, optionally for one season or one game, and shows only
 rank, display name and that count. It never counts join attempts and shows no
 dates. When it shows other members, that look is written down in the access
-log like any other look at members' records. You can opt out of leaderboards at any time — DM a moderator
+log like any other look at members' records. You can opt out of leaderboards at any time — switch it off on your profile, or DM a moderator
 or open a private support ticket — and you leave every board and every count.
 
 ## Cookies and tracking
