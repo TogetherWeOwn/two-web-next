@@ -35,7 +35,7 @@ export function parseHomeNotice(value: string | null): HomeNotice | null {
 }
 
 // A failure notice carries its own explanation: a stale success flash from an
-// older journey must never override the current failure (TOG-10356 review).
+// older journey must never override the current failure.
 const FLASH_SUPPRESSED_NOTICES: ReadonlySet<string> = new Set([
   "join_failed",
   "signin_failed",
