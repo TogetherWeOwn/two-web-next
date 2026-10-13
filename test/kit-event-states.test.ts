@@ -500,6 +500,19 @@ describe("Kit cancelled presentation", () => {
     expect(html).not.toMatch(/rel="canonical"|og:|twitter:|event-join-pitch|event-copy-link|rsvp/i);
   });
 
+  it("drops the account area on both renderers: the sessionless page offers no sign-in", async () => {
+    const source = honoFixture();
+    const honoHtml = await (await source.request()).text();
+    expect(honoHtml).not.toContain("header-account");
+    const { store } = fakeStore();
+    const { outcome } = await resolve(KEY, store);
+    if (outcome.kind !== "gone") throw new Error("unreachable");
+    const { renderGone } = await buildKitEventStatesBundle();
+    const kitHtml = renderGone(outcome.model as unknown as Record<string, unknown>);
+    expect(kitHtml).not.toContain("header-account");
+    expect(kitHtml).not.toContain('data-testid="signin"');
+  });
+
   it("keeps the served Hono hero core inside the extended Kit hero", async () => {
     // The Kit hero deliberately extends the Hono one (alternatives + ICS are
     // the new acceptance), so parity is the shared core, not the section.

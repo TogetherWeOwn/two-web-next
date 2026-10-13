@@ -33,7 +33,13 @@ const siteJsonLdTag = $derived(
   <link rel="alternate" type="text/markdown" title="Markdown version" href={model.markdownAlternate} />
 </svelte:head>
 
-<Shell title={model.title} robots="noindex, nofollow" theme="event" activeNav="events">
+<Shell
+  title={model.title}
+  robots="noindex, nofollow"
+  theme="event"
+  activeNav="events"
+  hideAccount
+>
   <nav class="event-back" aria-label="Event calendar">
     <a href="/events">← All events</a>
   </nav>
