@@ -66,6 +66,7 @@ export const ROUTE_MANIFEST: OwnedRoute[] = [
     enabled: false,
     reads: { resource: "dashboard", action: "view", route: "admin.dashboard" },
   },
+  { method: "GET", path: "/auth/recover", enabled: false, reads: "public" },
 ];
 
 // Response header set only on the Kit-rendered branch of the hook, so the
