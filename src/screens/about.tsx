@@ -1,4 +1,5 @@
 import type { FC } from "hono/jsx";
+import { ABOUT_FACTS, ABOUT_LEAD, ABOUT_STRAP } from "../about-content";
 import { canonicalUrl } from "../seo";
 import { JOIN_HREF, Leaf } from "../page-shell";
 
@@ -9,33 +10,15 @@ export const About: FC<{ appUrl: string }> = ({ appUrl }) => (
     headingId="about-heading"
     heading="About Together We Own"
   >
-    <p class="strap">Est. 1998</p>
-    <p class="lead">
-      An adult gaming community that spent most of its life private. Now the doors are open: turn
-      up, say hello, come back.
-    </p>
+    <p class="strap">{ABOUT_STRAP}</p>
+    <p class="lead">{ABOUT_LEAD}</p>
     <dl data-testid="about-facts" class="facts">
-      <div class="card">
-        <dt>Voice-first</dt>
-        <dd>
-          The community lives in voice. Turn up, say hello, and come back — that is the whole
-          membership path.
-        </dd>
-      </div>
-      <div class="card">
-        <dt>No application, no interview</dt>
-        <dd>
-          You start as a Prospect. Show up a few times, play, become a Member. The ladder records
-          trust and time, not grind.
-        </dd>
-      </div>
-      <div class="card">
-        <dt>From forum threads to voice rooms</dt>
-        <dd>
-          Founded in 1998. Forum years, then voice years — duos, trios, quads, squads. Today: doors
-          open.
-        </dd>
-      </div>
+      {ABOUT_FACTS.map(([term, definition]) => (
+        <div class="card" key={term}>
+          <dt>{term}</dt>
+          <dd>{definition}</dd>
+        </div>
+      ))}
     </dl>
     <p>
       <a class="btn" href={JOIN_HREF} data-testid="about-join">
