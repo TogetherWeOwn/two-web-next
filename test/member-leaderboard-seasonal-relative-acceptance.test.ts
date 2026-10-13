@@ -75,6 +75,7 @@ import {
   type MemberDataFixture,
 } from "./helpers/member-data-db";
 import { createMemorySessionStore, hashToken, newSessionToken } from "../src/sessions";
+import { POLICY_FILE } from "../src/privacy";
 
 const APP_URL = "https://next.example.test";
 const SESSION_SECRET = "test-session-secret-at-least-32-bytes-long";
@@ -242,7 +243,7 @@ describe("member leaderboard shells + copy (no DB)", () => {
   });
 
   it("versions one leaderboard opt-out paragraph in the privacy policy", () => {
-    const policy = readFileSync(shell("content/privacy-policy-v2.md"), "utf8");
+    const policy = readFileSync(shell(POLICY_FILE), "utf8");
     expect(policy).toMatch(/leaderboard/i);
     expect(policy).toMatch(/opt.?out/i);
   });

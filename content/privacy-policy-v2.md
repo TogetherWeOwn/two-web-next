@@ -41,10 +41,6 @@ Concretely, the website keeps:
 - **Event searches** — the words searched for and how many results came back,
   with nothing that links a search to you: no user, no session, no IP
   address. Kept for 90 days, then deleted.
-- **Leaderboard views** — which board was opened, for which season, and how
-  many rows it showed, with nothing that links a view to you: no user, no
-  session, no IP address. Kept for 90 days, then deleted. If you ask to opt
-  out of leaderboards, that choice is kept on your profile.
 - **Activity stats are not stored here at all.** Rank, tenure and milestones
   are read live from the bot's records when a profile loads; if they cannot
   be read within half a second, the stats section is left out and the rest of
@@ -71,13 +67,6 @@ which moderator made each change and what changed.
 
 Private support-ticket transcripts live in Discord, not in this site's
 database: staff-only, kept for 90 days, then deleted.
-
-The member leaderboard is members-only. It ranks members by how many events
-they answered going to, optionally for one season or one game, and shows only
-rank, display name and that count. It never counts join attempts and shows no
-dates. When it shows other members, that look is written down in the access
-log like any other look at members' records. You can opt out of leaderboards at any time — DM a moderator
-or open a private support ticket — and you leave every board and every count.
 
 ## Cookies and tracking
 
