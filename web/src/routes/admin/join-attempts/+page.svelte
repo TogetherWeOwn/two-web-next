@@ -1,4 +1,5 @@
 <script lang="ts">
+import AdminShell from "#lib/AdminShell.svelte";
 import type { PageProps } from "./$types";
 
 // Markup contract of JoinAttemptsPage (src/admin/pages/join-attempts.tsx):
@@ -21,6 +22,7 @@ const { rows, query, hasNext, prevUrl, nextUrl, outcomes, retentionDays } = $der
   <title>Join attempts — TWO admin</title>
 </svelte:head>
 
+<AdminShell title="Join attempts">
 <section aria-labelledby="join-attempts-heading">
   <h1 id="join-attempts-heading">Join attempts</h1>
   <p class="hint">
@@ -97,3 +99,4 @@ const { rows, query, hasNext, prevUrl, nextUrl, outcomes, retentionDays } = $der
     {/if}
   </nav>
 </section>
+</AdminShell>

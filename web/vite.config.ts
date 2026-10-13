@@ -18,4 +18,20 @@ import { defineConfig } from "vite";
 // Remote-function origin checks ignore trustedOrigins and stay on.
 export default defineConfig({
   plugins: [tailwindcss(), sveltekit({ adapter: adapter(), csrf: { trustedOrigins: ["*"] } })],
+  environments: {
+    ssr: {
+      build: {
+        rolldownOptions: {
+          output: {
+            // Hono and Kit share the admin modules. Keep them together on the
+            // server instead of emitting separately compressed helper chunks
+            // for each new viewer. This does not change client chunking.
+            codeSplitting: {
+              groups: [{ name: "admin", test: /\/src\/admin\// }],
+            },
+          },
+        },
+      },
+    },
+  },
 });
