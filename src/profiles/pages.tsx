@@ -39,13 +39,13 @@ export const PROFILE_FIELD_IDS = {
   leaderboard_opt_out: "profile-leaderboard-opt-out",
 } as const;
 type ProfileField = keyof typeof PROFILE_FIELD_IDS;
-const PROFILE_ERROR_IDS: Record<ProfileField, string> = {
+export const PROFILE_ERROR_IDS: Record<ProfileField, string> = {
   bio: "profile-bio-error",
   games_text: "profile-games-text-error",
   timezone: "profile-timezone-error",
   leaderboard_opt_out: "profile-leaderboard-opt-out-error",
 };
-const profileFieldForErrorKey = (key: string): ProfileField | null =>
+export const profileFieldForErrorKey = (key: string): ProfileField | null =>
   key === "bio"
     ? "bio"
     : key === "games" || key === "games_text"
@@ -131,6 +131,15 @@ const MemberStatsBlock: FC<{ stats: MemberStats }> = ({ stats }) => (
 // profile HTML renders, so no tags can leak to them.
 export const PROFILE_SHARE_DESCRIPTION = "A member of Together We Own.";
 
+// Failed-save re-render shape, shared with the Svelte view: preserved inputs
+// plus the 422 error bag, so both renderers show the same form.
+export type ProfileFormValues = {
+  bio: string;
+  games_text: string;
+  timezone: string;
+  leaderboard_opt_out: boolean;
+};
+
 export const ProfilePage: FC<{
   member: MemberView;
   isOwner: boolean;
@@ -140,7 +149,7 @@ export const ProfilePage: FC<{
   joinResult?: JoinResult | null;
   stats?: MemberStats | null;
   errors?: Record<string, string>;
-  values?: { bio: string; games_text: string; timezone: string; leaderboard_opt_out: boolean };
+  values?: ProfileFormValues;
 }> = ({ member, isOwner, isModerator, appUrl, joinResult, stats, errors, values }) => {
   const img = profileAvatarSrcset(member.id, member.avatar);
   const joined = profileJoinedMonth(member.joinedAt ?? null);
