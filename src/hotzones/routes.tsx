@@ -52,7 +52,7 @@ async function renderSignal(c: Ctx) {
   const window = parseSeasonParam(raw ?? null);
   if (!window) return badSeason(c);
   const signal = c.req.param("signal") ?? "";
-  if (!isHotzoneSignal(signal)) return c.text("Not found", 404);
+  if (!isHotzoneSignal(signal)) return c.notFound();
   const label = window.kind === "all" ? "all" : window.label;
   void seasonLabel(raw ?? null);
   const db = await dbFor(c);
