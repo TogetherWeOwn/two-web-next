@@ -35,10 +35,18 @@ function sourceOracle(raw: unknown): string | null {
   return /^[a-z0-9][a-z0-9:_-]{0,63}$/i.test(raw) ? raw : null;
 }
 
+/** C0 controls and DEL, checked by code point so no control escape silences a checker. */
+function hasControlByte(value: string): boolean {
+  for (let i = 0; i < value.length; i++) {
+    const code = value.charCodeAt(i);
+    if (code <= 0x1f || code === 0x7f) return true;
+  }
+  return false;
+}
+
 /** Independent oracle for safeNext: the documented SafeRedirect shape. */
 function nextOracle(raw: unknown): string | null {
-  // eslint-disable-next-line no-control-regex
-  if (typeof raw !== "string" || raw === "" || /[\s\x00-\x1f\x7f]/.test(raw)) return null;
+  if (typeof raw !== "string" || raw === "" || /\s/.test(raw) || hasControlByte(raw)) return null;
   if (!raw.startsWith("/") || raw.startsWith("//") || raw.includes("\\")) return null;
   if (/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(raw)) return null;
   try {
