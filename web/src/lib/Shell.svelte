@@ -15,6 +15,7 @@ let {
   mainClass,
   loginReturnTo = null,
   accountChrome,
+  hideAccount = false,
   children,
 }: {
   title: string;
@@ -28,6 +29,8 @@ let {
   loginReturnTo?: string | null;
   /** Explicitly supplied session-aware chrome; the static shell never reads session state. */
   accountChrome?: Snippet;
+  /** Drop the account area entirely, as Hono account={false} does on sessionless pages. */
+  hideAccount?: boolean;
   children: Snippet;
 } = $props();
 
@@ -39,7 +42,7 @@ const themeClass = $derived(theme === "home" ? "homepage-theme" : `${theme}-them
   (bg-lobby-*/text-lobby-*/font-sans); no hard-coded palette values here. A
   restyle is a token swap in that one file. -->
 <div class="base-theme bg-lobby-surface font-sans text-lobby-ink {themeClass}" data-theme={theme}>
-  <SiteHeader {activeNav} {loginReturnTo} {accountChrome} />
+  <SiteHeader {activeNav} {loginReturnTo} {accountChrome} {hideAccount} />
   <main class={mainClass} id="main" tabindex="-1">{@render children()}</main>
   <SiteFooter />
 </div>
