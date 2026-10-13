@@ -1,5 +1,5 @@
 {
-  "$comment": "Kit performance budgets. Measured baseline 2026-10-12 (raw/gzip bytes): worker entry 2551/1219; server JS total (22 files, no sourcemaps) 962157/258300 — dominated by the Hono catch-all bundle (chunks/hono.js 433009); client JS total (11 files) 100252/39302; client CSS total (1 file) 2402/763. Ceilings are measured size x1.25 rounded up (raw to 512B, gzip to 256B), the repository x1.25 rule from ci/bundle-budget.json. Client/server hashed-asset groups are budgeted as totals plus a file-count cap, so a new chunk fails closed instead of escaping enforcement. Startup.maxMs (60s, the same cold-start bound as ci/kit-worker-e2e.mjs's listen) is enforced as the Kit webServer readiness timeout in playwright.kit-parity.config.ts; the parity spec additionally records warm first-200 latency as a report annotation under a 10s liveness bound. Raising a ceiling needs an explicit decision explaining the growth; never relax a budget to make CI green. 2026-10-13 decision (join landing): main measures 31 server files and the /join route adds 5 (2 page entries + 1 SvelteKit node + Vite re-partitioning the shared 437k Hono catch-all into chunks/src.js and splitting chunks/kit-session.js for the flash/widget load) for 36 total; byte totals still fit with ~15% margin (raw 1014543, gzip 275405, branch raw below main's 1025212), so only the file-count cap moves, 32 to 45 (36 x1.25, the repository rule), preserving fail-closed for unexpected chunks.",
+  "$comment": "Kit performance budgets. Measured baseline 2026-10-12 (raw/gzip bytes): worker entry 2551/1219; server JS total (22 files, no sourcemaps) 962157/258300 — dominated by the Hono catch-all bundle (chunks/hono.js 433009); client JS total (11 files) 100252/39302; client CSS total (1 file) 2402/763. Ceilings are measured size x1.25 rounded up (raw to 512B, gzip to 256B), the repository x1.25 rule from ci/bundle-budget.json. Client/server hashed-asset groups are budgeted as totals plus a file-count cap, so a new chunk fails closed instead of escaping enforcement. Startup.maxMs (60s, the same cold-start bound as ci/kit-worker-e2e.mjs's listen) is enforced as the Kit webServer readiness timeout in playwright.kit-parity.config.ts; the parity spec additionally records warm first-200 latency as a report annotation under a 10s liveness bound. Raising a ceiling needs an explicit decision explaining the growth; never relax a budget to make CI green. 2026-10-13 decision (join landing): main measures 31 server files and the /join route adds 5 (2 page entries + 1 SvelteKit node + Vite re-partitioning the shared 437k Hono catch-all into chunks/src.js and splitting chunks/kit-session.js for the flash/widget load) for 36 total; byte totals still fit with ~15% margin (raw 1014543, gzip 275405, branch raw below main's 1025212), so only the file-count cap moves, 32 to 45 (36 x1.25, the repository rule), preserving fail-closed for unexpected chunks. 2026-10-13 decision (admin dashboard): main at e9425bfb measures 40 server files (raw 1026598, gzip 280652) and 16 client files (raw 112502, gzip 45174); the admin dashboard adds 10 server files (4 admin page entries + 2 SvelteKit nodes + 4 shared-chunk splits: db, join-funnel, service, contracts-rsvp-button) for 50 total and 2 client nodes for 18 total; byte totals still fit existing ceilings (server raw 1037989/1203200 ~14% margin, gzip 287126/323072 ~11%; client raw 117005/125440 ~7%, gzip 47301/49152 ~4%), so only the file-count caps move, server 45 to 63 (50 x1.25) and client 16 to 23 (18 x1.25), the repository rule, preserving fail-closed for unexpected chunks.",
   "worker": {
     "_worker.js": {
       "maxRawBytes": 3584,
@@ -10,14 +10,14 @@
     "js": {
       "maxRawBytes": 1203200,
       "maxGzipBytes": 323072,
-      "maxFiles": 45
+      "maxFiles": 63
     }
   },
   "client": {
     "js": {
       "maxRawBytes": 125440,
       "maxGzipBytes": 49152,
-      "maxFiles": 16
+      "maxFiles": 23
     },
     "css": {
       "maxRawBytes": 3072,
