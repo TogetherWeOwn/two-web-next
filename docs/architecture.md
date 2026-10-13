@@ -245,6 +245,7 @@ exactly once.
 | Path | Area |
 | --- | --- |
 | `src/access-log.ts` | observability |
+| `src/about-content.ts` | content |
 | `src/ai-friendly/` | content |
 | `src/admin/` | admin |
 | `src/agent-events/` | agent-events |
