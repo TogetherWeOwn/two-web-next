@@ -1,9 +1,9 @@
-// Tier-0 validator property tests (REPORT-ONLY, TOG-19263): fast-check over the
-// join/events/profiles request schemas, modelled on
-// test/admin-validation.property.test.ts. Seeded and bounded (100 runs) so the
-// report-only CI step stays fast; every oracle below re-states the documented
-// contract with an independent literal, so a refactor that changes behaviour
-// fails here rather than silently.
+// Tier-0 validator property tests (REPORT-ONLY): fast-check over the
+// join/events/profiles request schemas plus the moderator allowlist parser,
+// modelled on test/admin-validation.property.test.ts. Seeded and bounded (100
+// runs) so the report-only CI step stays fast; every oracle below re-states
+// the documented contract with an independent literal, so a refactor that
+// changes behaviour fails here rather than silently.
 //
 // Pure fixtures only: no app, database, network or Discord calls. Modules
 // under test are imported for their pure validators; none of these properties
@@ -301,11 +301,12 @@ describe("tier-0 calendar input resolver", () => {
         const resolved = resolveCalendarInput({ event });
         const stripped = (event ?? "").replaceAll(String.fromCharCode(0), "");
         expect(resolved.jumpKey.includes(String.fromCharCode(0))).toBe(false);
-        expect(resolved.jumpRequested).toBe((event ?? "") !== "");
+        // The flag follows the stripped key: a NUL-only ?event= requests nothing.
+        expect(resolved.jumpRequested).toBe(stripped !== "");
         if (stripped !== "" && stripped.length <= 64) expect(resolved.jumpKey).toBe(stripped);
         else expect(resolved.jumpKey).toBe("");
       }),
-      OPTIONS,
+      { ...OPTIONS, examples: [["\0"], ["\0\0"]] },
     );
   });
 });
@@ -421,7 +422,9 @@ describe("tier-0 profile write validation", () => {
 
   it("rejects oversized, overlong and non-text game entries", () => {
     // Oversized means twenty-one kept games: blanks never survive the trim,
-    // so the arbitrary suffixes every entry with its index to keep them.
+    // so every entry carries its index behind a space terminator. The
+    // terminator makes the prefix unambiguous, so entries cannot collide
+    // back under the twenty-game cap no matter what the names contain.
     const tooMany = fc
       .array(
         safeText(10).filter((name) => name.trim() !== ""),
@@ -430,7 +433,7 @@ describe("tier-0 profile write validation", () => {
           maxLength: 25,
         },
       )
-      .map((games) => games.map((game, i) => `${game.trim()}${i}`));
+      .map((games) => games.map((game, i) => `g${i} ${game.trim()}`));
     fc.assert(
       fc.property(
         fc.oneof(

@@ -1,15 +1,14 @@
-// Tier-0 authz matrix (REPORT-ONLY, TOG-19263): role x route x expected-status
-// over src/roles.ts + src/auth-status.ts x the admin panel and the
-// session-gated event routes. Table-driven so a new protected route adds one
-// row, not one test.
+// Tier-0 authz matrix (REPORT-ONLY): role x route x expected-status over the
+// admin panel, the session-gated event routes and the auth-status probe.
+// Table-driven so a new protected route adds one row, not one test.
 //
 // Memory seams only (no database, no network, no Discord): the matrix pins
 // the AUTHORIZATION decision. Moderators admitted past the guard reach
 // handlers that need Postgres, which is absent here, so those rows pin the
-// deterministic no-DB outcome (200 where the handler is DB-free, else the
-// 503 the app answers when it cannot decide otherwise). The point of each
-// such row is what it is NOT: never a login bounce (302) and never a
-// forbidden (403/401).
+// deterministic no-DB outcome per route (200 where the handler is DB-free,
+// 301 on a legacy alias, else the 503 the app answers when it cannot decide
+// otherwise). The point of each such row is what it is NOT: never a login
+// bounce (302/303) and never a forbidden (403/401).
 import { serializeSigned } from "hono/utils/cookie";
 import { Hono } from "hono";
 import { describe, expect, it, vi } from "vitest";
@@ -92,19 +91,35 @@ function failingStore(): SessionStore {
 }
 
 // ---------------------------------------------------------------------------
-// Admin panel: every GET behind adminGuard.
+// Admin panel: the guard-behind GET surface (dashboard, list, form, detail
+// and legacy-alias reads). The moderator bit arrives via the seeded session
+// row; the pure allowlist behind it (parseModeratorRoleIds/isModerator) is
+// pinned by fast-check in request-validation.property.test.ts.
 // ---------------------------------------------------------------------------
 
-// GET routes whose authorization the matrix pins. POSTs are covered by the
-// single guest-write bounce below; the write envelope (throttle, body limit,
-// origin check) has its own suites.
+const EVENT_KEY = "01ARZ3NDEKTSV4RRFFQ69G5FAV";
+
+// GET routes behind adminGuard whose authorization the matrix pins: guest
+// bounces, member 403s, expired bounces. The queue preview route is absent
+// here on purpose: its operator admission runs before the guard and refuses
+// every role without staging settings (pinned separately below). POSTs are
+// covered by the guest-write rows below; the write envelope (throttle, body
+// limit, origin check) has its own suites.
 const ADMIN_GET_ROUTES = [
   "/",
   "/events",
   "/events/new",
+  `/events/${EVENT_KEY}`,
+  `/events/${EVENT_KEY}/edit`,
+  "/events/create",
   "/featured",
   "/featured/new",
+  "/featured/7",
+  "/featured-contents",
+  "/featured-contents/create",
+  "/featured-contents/7/edit",
   "/join-attempts",
+  "/join-attempts/9",
   "/activity-log",
 ];
 
@@ -140,23 +155,50 @@ describe("tier-0 admin guard matrix", () => {
     });
   }
 
-  it("moderator GET / renders (DB-free dashboard)", async () => {
-    const store = createMemorySessionStore();
-    const res = await adminApp(store).request(
-      "/",
-      { headers: { cookie: await cookieFor(store, MOD) } },
-      env,
-    );
-    expect(res.status).toBe(200);
-  });
+  // Moderator outcomes past the guard with no Postgres: DB-free renders
+  // answer 200, legacy aliases redirect, data reads answer the app's
+  // database-unavailable 503. None may bounce (302/303) or forbid (403).
+  for (const [route, expected, location] of [
+    ["/", 200, null],
+    ["/events/new", 200, null],
+    ["/featured/new", 200, null],
+    ["/events/create", 301, "/admin/events/new"],
+    [`/events/${EVENT_KEY}/edit`, 301, `/admin/events/${EVENT_KEY}`],
+    ["/featured-contents", 301, "/admin/featured"],
+    ["/featured-contents/create", 301, "/admin/featured/new"],
+    ["/events", 503, null],
+    [`/events/${EVENT_KEY}`, 503, null],
+    ["/featured", 503, null],
+    ["/featured/7", 503, null],
+    ["/featured-contents/7/edit", 503, null],
+    ["/join-attempts", 503, null],
+    ["/join-attempts/9", 503, null],
+    ["/activity-log", 503, null],
+  ] as const) {
+    it(`moderator GET ${route} gets ${expected}`, async () => {
+      const store = createMemorySessionStore();
+      const res = await adminApp(store).request(
+        route,
+        { headers: { cookie: await cookieFor(store, MOD) } },
+        env,
+      );
+      expect(res.status).toBe(expected);
+      expect(res.headers.get("location")).toBe(location);
+    });
+  }
 
-  it("moderator admitted past the guard never bounces or 403s, even where Postgres is absent", async () => {
+  it("queue preview without operator admission refuses every role before the guard", async () => {
     const store = createMemorySessionStore();
-    const cookie = await cookieFor(store, MOD);
-    for (const route of ADMIN_GET_ROUTES.filter((r) => r !== "/")) {
-      const res = await adminApp(store).request(route, { headers: { cookie } }, env);
-      expect([200, 503]).toContain(res.status);
-      expect(res.headers.get("location")).toBeNull();
+    const mod = await cookieFor(store, MOD);
+    const mem = await cookieFor(store, MEMBER);
+    for (const cookie of [undefined, mem, mod]) {
+      const res = await adminApp(store).request(
+        "/queue/failed/3/preview",
+        cookie ? { headers: { cookie } } : {},
+        env,
+      );
+      expect(res.status).toBe(404);
+      expect(await res.json()).toEqual({ error: "preview_disabled" });
     }
   });
 
@@ -264,7 +306,7 @@ describe("tier-0 event session-gate matrix", () => {
   ] as const) {
     it(`${role} PUT /events/:key/rsvp gets ${expected}`, async () => {
       const res = await eventsApp(session).request(
-        "/events/01ARZ3NDEKTSV4RRFFQ69G5FAV/rsvp",
+        `/events/${EVENT_KEY}/rsvp`,
         {
           method: "PUT",
           headers: { "content-type": "application/json" },
@@ -278,7 +320,7 @@ describe("tier-0 event session-gate matrix", () => {
 
   it("signed member PUT with an unparsable status gets 422 before Postgres", async () => {
     const res = await eventsApp(memberSession(false)).request(
-      "/events/01ARZ3NDEKTSV4RRFFQ69G5FAV/rsvp",
+      `/events/${EVENT_KEY}/rsvp`,
       {
         method: "PUT",
         headers: { "content-type": "application/json" },
@@ -291,7 +333,7 @@ describe("tier-0 event session-gate matrix", () => {
 
   it("signed member PUT for another member's row gets 403, never their data", async () => {
     const res = await eventsApp(memberSession(false)).request(
-      "/events/01ARZ3NDEKTSV4RRFFQ69G5FAV/rsvp",
+      `/events/${EVENT_KEY}/rsvp`,
       {
         method: "PUT",
         headers: { "content-type": "application/json" },
@@ -317,7 +359,7 @@ describe("tier-0 event session-gate matrix", () => {
 
   it("guest DELETE /events/:key/rsvp gets 401", async () => {
     const res = await eventsApp(null).request(
-      "/events/01ARZ3NDEKTSV4RRFFQ69G5FAV/rsvp",
+      `/events/${EVENT_KEY}/rsvp`,
       {
         method: "DELETE",
         headers: { "content-type": "application/json" },
@@ -330,7 +372,7 @@ describe("tier-0 event session-gate matrix", () => {
 
   it("guest POST /e/:key/rsvp (no-JS adapter) redirects into the join flow", async () => {
     const res = await eventsApp(null).request(
-      "/e/01ARZ3NDEKTSV4RRFFQ69G5FAV/rsvp",
+      `/e/${EVENT_KEY}/rsvp`,
       {
         method: "POST",
         headers: { "content-type": "application/json" },

@@ -1,10 +1,14 @@
-// Tier-0 EXPLAIN seq-scan check (REPORT-ONLY, TOG-19263): default-planner
-// EXPLAIN over the hot shapes the sibling suites do not cover, failing on a
-// Seq Scan of a hot table. Extends the test/hot-path-planner.test.ts pattern:
-// same representative event/RSVP volumes, same owned-schema fixture, but the
+// Tier-0 EXPLAIN seq-scan check (REPORT-ONLY): default-planner EXPLAIN over
+// the hot shapes the sibling suites do not cover, failing on a Seq Scan of a
+// hot table. Extends the test/hot-path-planner.test.ts pattern: same
+// representative event/RSVP volumes, same owned-schema fixture, but the
 // planner runs with production defaults (no enable_seqscan = off) and the
-// shapes are the uncovered ones — member roster by user, event lookup by key,
-// the throttle admission window, and session resolution by token hash.
+// shapes are the uncovered ones — the viewer RSVP point lookup, event lookup
+// by key, the throttle admission windows, and session resolution by token
+// hash. Each shape below is emitted verbatim by the read or write path it
+// names. EXPLAIN plans the bound values directly (one-shot, unprepared), so
+// the suite proves an index path exists; production prepared-statement cache
+// drift is out of scope.
 //
 // New/changed drizzle queries are covered operationally: this suite runs on
 // every PR in CI (report-only), and the CI step prints the changed query
@@ -47,15 +51,8 @@ describe.skipIf(!process.env.DATABASE_URL)("tier-0 hot-path EXPLAIN (report-only
              100000 + g, ${NOW}::timestamptz - g * interval '1 minute',
              case when g % 97 = 0 then null else ${NOW}::timestamptz end
       from events e cross join generate_series(1, 100) g where e.id <= 120 or e.event_key = 'next1'`;
-    await client`
-      create table if not exists web_throttle_hits (
-        id bigserial primary key,
-        bucket text not null,
-        at timestamptz not null default now()
-      )`;
-    await client`
-      create index if not exists web_throttle_hits_bucket_at_idx
-        on web_throttle_hits (bucket, at)`;
+    // web_throttle_hits and its composite index come from the canonical
+    // migrations the fixture already runs; only rows are seeded here.
     await client`
       insert into web_throttle_hits (bucket, at)
       select 'rsvp:' || (g % 7), ${NOW}::timestamptz - (g % 300) * interval '1 second'
@@ -86,31 +83,37 @@ describe.skipIf(!process.env.DATABASE_URL)("tier-0 hot-path EXPLAIN (report-only
     expect(planText, planText).not.toMatch(new RegExp(`Seq Scan on ${table}`));
   }
 
-  it("reaches the member roster through the user index, including the event join", async () => {
+  it("resolves the viewer RSVP lookup through the unique event-user index", async () => {
     expectIndexedOn(
       "rsvps",
-      await plan("select event_id from rsvps where user_id = $1 and status = 'going'", ["member1"]),
+      await plan("select id, status from rsvps where event_id = $1 and user_id = $2", [
+        1,
+        "member1",
+      ]),
     );
-    const joined = await plan(
-      `select e.event_key from rsvps r join events e on e.id = r.event_id
-       where r.user_id = $1 and r.status = 'going'`,
-      ["member1"],
-    );
-    expectIndexedOn("rsvps", joined);
-    expectIndexedOn("events", joined);
   });
 
   it("resolves the event detail lookup through the unique key index", async () => {
     expectIndexedOn("events", await plan("select id from events where event_key = $1", ["next1"]));
   });
 
-  it("counts the throttle admission window through the composite bucket index", async () => {
+  it("counts the throttle admission windows through the composite bucket index", async () => {
     expectIndexedOn(
       "web_throttle_hits",
       await plan(
         `select count(*) from web_throttle_hits
          where bucket = $1 and at > clock_timestamp() - interval '60 seconds'`,
         ["rsvp:1"],
+      ),
+    );
+    // The RSVP write path parameterizes the decay; the index applicability
+    // is the same bucket-equality plus at-range shape.
+    expectIndexedOn(
+      "web_throttle_hits",
+      await plan(
+        `select count(*) from web_throttle_hits
+         where bucket = $1 and at > clock_timestamp() - make_interval(secs => $2)`,
+        ["rsvp:1", 60],
       ),
     );
   });
