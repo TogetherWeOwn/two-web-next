@@ -27,7 +27,10 @@ import type { PageServerLoad } from "./$types";
 // resolve() owns classification and the audit. No new queries: the list and
 // its lookahead are the one shared keyed read, outcomes only plus the
 // retrieved owners as audit subjects.
-export const load: PageServerLoad = async ({ url, setHeaders }) => {
+export const load: PageServerLoad = async ({ url, setHeaders, parent }) => {
+  // Layout and page loads run concurrently; wait for moderator admission
+  // before opening the database or starting the audited member read.
+  await parent();
   const query = parseJoinAttemptsQuery({
     outcome: url.searchParams.get("outcome") ?? undefined,
     q: url.searchParams.get("q") ?? undefined,
