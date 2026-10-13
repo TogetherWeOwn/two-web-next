@@ -1,4 +1,3 @@
-import { jsx } from "hono/jsx";
 import { HtmlEscapedCallbackPhase, resolveCallback } from "hono/utils/html";
 import { EventsCalendarPage, EventsSearchTooLongPage } from "./events/pages";
 import type { KitEventsLoadData } from "./kit-events";
@@ -25,25 +24,27 @@ export async function renderEventsHtml(
   data: KitEventsLoadData | { queryTooLong: true; appUrl: string },
   headers: Record<string, string>,
 ): Promise<KitEventsHtml> {
-  const element = data.queryTooLong
-    ? jsx(EventsSearchTooLongPage, { appUrl: data.appUrl })
-    : jsx(EventsCalendarPage, {
-        state: data.state,
-        upcoming: data.upcoming,
-        past: data.past,
-        zone: data.zone,
-        now: data.now,
-        totalPages: data.totalPages,
-        emptyState: data.emptyState,
-        robots: data.robots,
-        discordFailed: data.discordFailed,
-        member: data.member,
-        inviteUrl: data.inviteUrl,
-        appUrl: data.appUrl,
-        loginReturnTo: data.loginReturnTo,
-        joinResult: data.joinResult,
-        markdownAlternate: "/events.md",
-      });
+  const element = data.queryTooLong ? (
+    <EventsSearchTooLongPage appUrl={data.appUrl} />
+  ) : (
+    <EventsCalendarPage
+      state={data.state}
+      upcoming={data.upcoming}
+      past={data.past}
+      zone={data.zone}
+      now={data.now}
+      totalPages={data.totalPages}
+      emptyState={data.emptyState}
+      robots={data.robots}
+      discordFailed={data.discordFailed}
+      member={data.member}
+      inviteUrl={data.inviteUrl}
+      appUrl={data.appUrl}
+      loginReturnTo={data.loginReturnTo}
+      joinResult={data.joinResult}
+      markdownAlternate="/events.md"
+    />
+  );
   const body = await resolveCallback(element, HtmlEscapedCallbackPhase.Stringify, false, {});
   return {
     status: 200,

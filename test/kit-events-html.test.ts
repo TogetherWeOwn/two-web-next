@@ -81,11 +81,14 @@ describe("Kit events list HTML render", () => {
 
   it("renders the too-long notice without echoing the query", async () => {
     const sentinel = `qq${"z".repeat(300)}`;
-    const rendered = await renderEventsHtml({ queryTooLong: true, appUrl: "https://example.test" }, {
-      "cache-control": "no-store, private",
-      vary: "Cookie, X-Two-Island",
-      "x-two-events-too-long": "true",
-    });
+    const rendered = await renderEventsHtml(
+      { queryTooLong: true, appUrl: "https://example.test" },
+      {
+        "cache-control": "no-store, private",
+        vary: "Cookie, X-Two-Island",
+        "x-two-events-too-long": "true",
+      },
+    );
 
     expect(rendered.status).toBe(200);
     expect(rendered.body).toContain(EVENTS_SEARCH_TOO_LONG_COPY);
