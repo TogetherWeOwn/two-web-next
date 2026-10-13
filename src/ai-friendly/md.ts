@@ -10,7 +10,7 @@ import { POLICY_VERSION } from "../privacy";
 import { POLICY_MARKDOWN } from "../privacy-content";
 import { FAQS } from "../screens/faq";
 import { JOIN_INTRO } from "../screens/join";
-import { RULES } from "../screens/rules";
+import { RULES } from "../rules-content";
 
 export const MARKDOWN_MIME = "text/markdown; charset=utf-8";
 
