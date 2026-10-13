@@ -13,7 +13,10 @@
 .base-theme .brand img { display: block; }
 .base-theme .main-nav { display: flex; gap: 2rem; }
 .base-theme .main-nav a, .base-theme .header-account {
-  font-family: Display, 'Arial Narrow', sans-serif; font-weight: 700; text-transform: uppercase;
+  font-weight: 700; text-transform: uppercase;
+}
+.base-theme:not(.content-theme) .main-nav a, .base-theme:not(.content-theme) .header-account {
+  font-family: Display, 'Arial Narrow', sans-serif;
 }
 .base-theme .main-nav a { color: var(--ink); text-decoration: none; min-height: 44px; display: flex; align-items: center; }
 .base-theme .main-nav a[aria-current], .base-theme .main-nav a:hover { color: var(--brand); }
@@ -28,7 +31,10 @@
 .base-theme main { max-width: 76rem; padding: 0 2rem 4rem; }
 .base-theme section { border-color: var(--line); padding: 3rem 0; }
 .base-theme h1, .base-theme h2, .base-theme h3 {
-  font-family: Display, 'Arial Narrow', sans-serif; font-weight: 700; text-transform: uppercase; letter-spacing: -.03em; line-height: 1.1;
+  font-weight: 700; text-transform: uppercase; letter-spacing: -.03em; line-height: 1.1;
+}
+.base-theme:not(.content-theme) h1, .base-theme:not(.content-theme) h2, .base-theme:not(.content-theme) h3 {
+  font-family: Display, 'Arial Narrow', sans-serif;
 }
 .base-theme h2 { font-size: clamp(1.6rem, 3vw, 2.7rem); margin: 0 0 1rem; }
 .base-theme h3 { font-size: 1.5rem; }
@@ -38,12 +44,15 @@
   display: flex; flex-direction: column; justify-content: center; align-items: center; padding: 4rem 1.5rem;
 }
 .base-theme .hero h1 { font-size: clamp(2.7rem, 6.5vw, 6.375rem); line-height: 1.05; letter-spacing: -.06em; margin: .5rem 0 1.5rem; }
-.base-theme .hero .strap { font-family: Display, 'Arial Narrow', sans-serif; font-size: 1rem; font-weight: 500; color: var(--brand); letter-spacing: .02em; margin: 0; }
+.base-theme:not(.content-theme) .hero .strap { font-family: Display, 'Arial Narrow', sans-serif; font-size: 1rem; font-weight: 500; color: var(--brand); letter-spacing: .02em; margin: 0; }
 .base-theme .lead { max-width: 36rem; margin: 0 0 2rem; }
 .base-theme .btn {
   justify-content: center; min-height: 52px; padding: .65rem 1.8rem; border-radius: 0; border: 1px solid var(--brand);
-  background: var(--brand); color: var(--paper); font: 700 1.1rem/1.2 Display, 'Arial Narrow', sans-serif;
+  background: var(--brand); color: var(--paper); font-weight: 700; font-size: 1.1rem; line-height: 1.2;
   text-transform: uppercase; letter-spacing: -.01em; text-decoration: none;
+}
+.base-theme:not(.content-theme) .btn {
+  font-family: Display, 'Arial Narrow', sans-serif;
 }
 .base-theme .btn:hover { background: #ccff3a; color: var(--paper); }
 .base-theme .btn:active { transform: translateY(1px); }
@@ -84,7 +93,7 @@
 .base-theme .content-page .card dt, .base-theme .content-page .card h2, .base-theme .content-page .card h3 { font-size: 1.5rem; margin-bottom: .75rem; }
 .content-page [data-testid='about-facts'] { gap: 0; }
 .content-page [data-testid='rules-list'] { display: block; list-style: decimal; padding-left: 2rem; }
-.content-page [data-testid='rules-list'] li::marker { color: var(--brand); font: 700 1.5rem Display, sans-serif; }
+.content-page [data-testid='rules-list'] li::marker { color: var(--brand); font-weight: 700; font-size: 1.5rem; }
 .base-theme [data-testid='faq-list'] section { display: grid; grid-template-columns: 11rem minmax(0, 1fr); gap: 0 2rem; }
 /* LCP: render offscreen faq sections only when scrolled near. */
 [data-testid='faq-list']>section{content-visibility:auto;contain-intrinsic-size:auto 20rem}
@@ -137,16 +146,16 @@
   .base-theme section { padding: 2rem 0; }
 }
 .base-theme .recovery-hero h1 { font-size: clamp(2.3rem, 5vw, 4rem); max-width: 22ch; text-wrap: balance; }
-.base-theme .recovery-code { font: 700 clamp(7rem, 15vw, 12rem)/.9 Display, 'Arial Narrow', sans-serif; letter-spacing: -.05em; color: var(--brand); margin: 0 0 1rem; font-variant-numeric: tabular-nums; }
+.base-theme:not(.content-theme) .recovery-code { font: 700 clamp(7rem, 15vw, 12rem)/.9 Display, 'Arial Narrow', sans-serif; letter-spacing: -.05em; color: var(--brand); margin: 0 0 1rem; font-variant-numeric: tabular-nums; }
 .base-theme .recovery-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 1rem 1.5rem; margin: 0; max-width: 100%; }
 .base-theme .recovery-actions a { overflow-wrap: anywhere; }
 .base-theme .recovery-events { max-width: 52rem; margin: auto; }
 .base-theme .recovery-events .facts { grid-template-columns: repeat(auto-fit, minmax(min(100%, 16rem), 1fr)); }
-.base-theme .recovery-events .card > a { font: 700 1.5rem/1.2 Display, 'Arial Narrow', sans-serif; }
+.base-theme:not(.content-theme) .recovery-events .card > a { font: 700 1.5rem/1.2 Display, 'Arial Narrow', sans-serif; }
 .base-theme .error-events-search { margin-top: 2rem; }
 .base-theme .error-events-search input { background: var(--surface); color: var(--ink); border-color: var(--muted); min-height: 52px; }
 .base-theme .error-events-search input::placeholder { color: var(--muted); opacity: 1; }
-.base-theme .error-events-search button { font: 700 1.1rem/1.2 Display, 'Arial Narrow', sans-serif; }
+.base-theme:not(.content-theme) .error-events-search button { font: 700 1.1rem/1.2 Display, 'Arial Narrow', sans-serif; }
 @media (prefers-reduced-motion: no-preference) {
   .base-theme .btn { transition: background-color .15s ease, color .15s ease, transform .15s ease; }
 }
