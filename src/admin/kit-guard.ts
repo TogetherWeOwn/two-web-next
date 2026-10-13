@@ -1,4 +1,4 @@
-// Kit moderator guard decision (TOG-22142). The one guard contract every
+// Kit moderator guard decision. The one guard contract every
 // Kit admin route shares through web/src/routes/admin/+layout.server.ts:
 // guest OAuth bounce with a safe return, signed non-moderator 403, session
 // outage 503 — the same four outcomes as src/admin/guard.ts, minus Hono.

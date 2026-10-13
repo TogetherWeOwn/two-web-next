@@ -1,4 +1,4 @@
-// Kit admin shell + dashboard port (TOG-22142): the Kit (admin) route group
+// Kit admin shell + dashboard port: the Kit (admin) route group
 // shares one moderator guard contract with the Hono panel — guest OAuth
 // bounce with a safe return, signed non-moderator 403, store failure 503 —
 // and GET /admin renders the dashboard from the same bounded, optional

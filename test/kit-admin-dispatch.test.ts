@@ -1,4 +1,4 @@
-// Kit admin dispatch (TOG-22142): GET /admin through dispatchHookRequest
+// Kit admin dispatch: GET /admin through dispatchHookRequest
 // with the shipped dashboard declaration proves the privileged boundary
 // releases exactly what it should — moderator HTML with private/no-store,
 // SvelteKit-converted guest bounce and non-moderator 403 — and refuses the

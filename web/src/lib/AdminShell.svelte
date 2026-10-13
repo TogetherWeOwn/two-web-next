@@ -1,7 +1,7 @@
 <script lang="ts">
 import type { Snippet } from "svelte";
 
-// Moderator chrome (TOG-22142): the Kit twin of the Hono admin Shell
+// Moderator chrome: the Kit twin of the Hono admin Shell
 // (src/admin/pages/shell.tsx). Same brand, same labelled nav, same skip
 // link and footer, same /styles.css author sheet — every admin screen under
 // web/src/routes/admin/ renders inside this, so the guard and the chrome

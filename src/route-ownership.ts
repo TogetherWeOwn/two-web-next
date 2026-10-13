@@ -52,7 +52,7 @@ export interface RouteDecision {
 export const ROUTE_MANIFEST: OwnedRoute[] = [
   { method: "GET", path: "/events/past", enabled: false, reads: "public" },
   { method: "GET", path: "/privacy", enabled: false, reads: "public" },
-  // Moderator dashboard (TOG-22142): member data, so the Kit branch renders
+  // Moderator dashboard: member data, so the Kit branch renders
   // inside the member-read boundary with this declaration and the bridged
   // viewer. Off until the enablement review: the Hono panel answers meanwhile.
   {
