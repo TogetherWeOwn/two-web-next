@@ -54,6 +54,15 @@ jobs:
         with:
           # workflow_run's github.sha is main's tip, not the successful CI SHA.
           ref: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
+      - name: Staging admission hold (before dependencies or mutations)
+        # Staging-only containment (TOG-23227): only exactly "false" releases
+        # the direct staging migration path. Absent, "true" and malformed
+        # values all hold. Never applies to production.
+        env:
+          STAGING_MIGRATION_HOLD: ${{ vars.STAGING_MIGRATION_HOLD }}
+        run: |
+          set -euo pipefail
+          [[ "${STAGING_MIGRATION_HOLD:-}" == false ]] || { printf '%s\n' 'Staging migrations are held (STAGING_MIGRATION_HOLD is not exactly "false").' >&2; exit 1; }
       - name: Require successful exact-SHA full CI
         run: node ci/staging-deploy-gate.mjs
         env:
@@ -95,6 +104,7 @@ jobs:
         run: node ci/neon-migrate.mjs plan
         env: &staging-migration-env
           MIGRATION_TARGET: staging
+          STAGING_MIGRATION_HOLD: ${{ vars.STAGING_MIGRATION_HOLD }}
           # `staging` Environment secret of this job; no DATABASE_URL fallback.
           NEON_STAGING_DATABASE_URL: ${{ secrets.NEON_STAGING_DATABASE_URL }}
           # workflow_run's GITHUB_SHA is main's tip; the receipt must name the CI-verified checkout.
