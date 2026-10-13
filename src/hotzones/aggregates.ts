@@ -16,6 +16,7 @@ import { joinAttempts } from "../db/schema";
 import type { Db } from "../db/index";
 import { JOIN_ATTEMPT_RETENTION_DAYS } from "../jobs/constants";
 import type { SeasonWindow } from "./season";
+import { WEEKDAY_NAMES as WEEKDAY_NAMES_SOURCE } from "./weekday-names";
 
 export const HOTZONE_SIGNALS = ["joins", "voice", "games"] as const;
 export type HotzoneSignal = (typeof HOTZONE_SIGNALS)[number];
@@ -24,15 +25,10 @@ export function isHotzoneSignal(raw: string): raw is HotzoneSignal {
   return (HOTZONE_SIGNALS as readonly string[]).includes(raw);
 }
 
-export const WEEKDAY_NAMES = [
-  "Sunday",
-  "Monday",
-  "Tuesday",
-  "Wednesday",
-  "Thursday",
-  "Friday",
-  "Saturday",
-] as const;
+// Re-exported from the client-safe ./weekday-names module so server readers
+// keep importing from here; Kit pages must import from ./weekday-names
+// directly to avoid bundling drizzle-orm into the client.
+export const WEEKDAY_NAMES = WEEKDAY_NAMES_SOURCE;
 
 export type HeatGrid = number[][];
 

@@ -1,5 +1,5 @@
 {
-  "$comment": "Kit performance budgets. Measured baseline 2026-10-12 (raw/gzip bytes): worker entry 2551/1219; server JS total (22 files, no sourcemaps) 962157/258300 — dominated by the Hono catch-all bundle (chunks/hono.js 433009); client JS total (11 files) 100252/39302; client CSS total (1 file) 2402/763. Ceilings are measured size x1.25 rounded up (raw to 512B, gzip to 256B), the repository x1.25 rule from ci/bundle-budget.json. Client/server hashed-asset groups are budgeted as totals plus a file-count cap, so a new chunk fails closed instead of escaping enforcement. Startup.maxMs (60s, the same cold-start bound as ci/kit-worker-e2e.mjs's listen) is enforced as the Kit webServer readiness timeout in playwright.kit-parity.config.ts; the parity spec additionally records warm first-200 latency as a report annotation under a 10s liveness bound. Raising a ceiling needs an explicit decision explaining the growth; never relax a budget to make CI green.",
+  "$comment": "Kit performance budgets. Measured baseline 2026-10-12 (raw/gzip bytes): worker entry 2551/1219; server JS total (22 files, no sourcemaps) 962157/258300 — dominated by the Hono catch-all bundle (chunks/hono.js 433009); client JS total (11 files) 100252/39302; client CSS total (1 file) 2402/763. Ceilings are measured size x1.25 rounded up (raw to 512B, gzip to 256B), the repository x1.25 rule from ci/bundle-budget.json. Client/server hashed-asset groups are budgeted as totals plus a file-count cap, so a new chunk fails closed instead of escaping enforcement. Startup.maxMs (60s, the same cold-start bound as ci/kit-worker-e2e.mjs's listen) is enforced as the Kit webServer readiness timeout in playwright.kit-parity.config.ts; the parity spec additionally records warm first-200 latency as a report annotation under a 10s liveness bound. Raising a ceiling needs an explicit decision explaining the growth; never relax a budget to make CI green. 2026-10-13 decision (join landing): main measures 31 server files and the /join route adds 5 (2 page entries + 1 SvelteKit node + Vite re-partitioning the shared 437k Hono catch-all into chunks/src.js and splitting chunks/kit-session.js for the flash/widget load) for 36 total; byte totals still fit with ~15% margin (raw 1014543, gzip 275405, branch raw below main's 1025212), so only the file-count cap moves, 32 to 45 (36 x1.25, the repository rule), preserving fail-closed for unexpected chunks. 2026-10-13 decision (hotzones + member leaderboard): this branch adds 3 Kit routes (hotzones main, hotzones [signal], leaderboards/members) on top of main's 36 server / 15 client files; combined build measures 50 server files and 19 client files, byte totals still fit with ~11% margin (server raw 1066638/gzip ~292k under 1203200/323072; client raw 120286/gzip ~48k under 125440/49152 after moving WEEKDAY_NAMES to the client-safe src/hotzones/weekday-names.ts so drizzle-orm no longer bundles into the client — without that fix the client measured 164058/58614), so only the file-count caps move, server 45 to 63 (50 x1.25) and client 16 to 24 (19 x1.25, the repository rule), preserving fail-closed for unexpected chunks.",
   "worker": {
     "_worker.js": {
       "maxRawBytes": 3584,
@@ -10,14 +10,14 @@
     "js": {
       "maxRawBytes": 1203200,
       "maxGzipBytes": 323072,
-      "maxFiles": 32
+      "maxFiles": 63
     }
   },
   "client": {
     "js": {
       "maxRawBytes": 125440,
       "maxGzipBytes": 49152,
-      "maxFiles": 16
+      "maxFiles": 24
     },
     "css": {
       "maxRawBytes": 3072,

@@ -1,7 +1,9 @@
 <script lang="ts">
 import Shell from "#lib/Shell.svelte";
 import { canonicalUrl } from "../../../../src/seo";
-import { WEEKDAY_NAMES } from "../../../../src/hotzones/aggregates";
+// Client-safe weekday names: never import ./aggregates here (it bundles
+// drizzle-orm into the Kit client output); see src/hotzones/weekday-names.ts.
+import { WEEKDAY_NAMES } from "../../../../src/hotzones/weekday-names";
 import type { PageProps } from "./$types";
 
 let { data }: PageProps = $props();
