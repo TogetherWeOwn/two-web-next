@@ -10,7 +10,9 @@
 //   event-store calibration.
 //
 // All grids are aggregates only: 7 weekdays x 24 hours of counts.
-import { sql } from "drizzle-orm";
+import { and, eq, gte, inArray, lt, sql } from "drizzle-orm";
+import { events } from "../db/admin-schema";
+import { joinAttempts } from "../db/schema";
 import type { Db } from "../db/index";
 import { JOIN_ATTEMPT_RETENTION_DAYS } from "../jobs/constants";
 import type { SeasonWindow } from "./season";
@@ -67,27 +69,41 @@ export async function loadJoinsGrid(
   if (!db) return { cells, total: 0, eventCount: 0 };
   const inWindow = window.kind === "all" ? null : { start: window.start, end: window.end };
   // Bound both aggregate statements server-side inside one transaction, like
-  // recordBoardView's write deadline: set_config(..., true) is transaction-local,
-  // so the timeout cannot leak to the pooled session. At most 168 bucket rows
-  // plus one count ever cross the wire, never per-attempt or per-event rows.
+  // recordBoardView's write deadline: SET LOCAL is transaction-local, so the
+  // timeout cannot leak to the pooled session. The grouped joins count emits
+  // at most 168 bucket rows plus one event count, never per-attempt rows.
+  // Built from the joinAttempts/events table objects (not raw table names) so
+  // the join-attempt write-policy pin keeps matching and the query-builder
+  // serializes Date bounds (raw sql`` interpolation does not).
+  const dow = sql`extract(dow from ${joinAttempts.createdAt} at time zone 'UTC')::int`;
+  const hr = sql`extract(hour from ${joinAttempts.createdAt} at time zone 'UTC')::int`;
   const { buckets, eventCount } = await db.transaction(async (tx) => {
+    // SET LOCAL takes a literal, not a bind param; the value is the numeric
+    // constant above, so there is no injection surface.
     await tx.execute(
-      sql`select set_config('statement_timeout', ${`${JOINS_GRID_STATEMENT_TIMEOUT_MS}ms`}, true)`,
+      sql.raw(`SET LOCAL statement_timeout = '${JOINS_GRID_STATEMENT_TIMEOUT_MS}ms'`),
     );
-    const buckets = (inWindow
-      ? await tx.execute(
-          sql`select extract(dow from created_at at time zone 'UTC')::int as dow, extract(hour from created_at at time zone 'UTC')::int as hr, count(*)::int as n from join_attempts where outcome in ('added', 'already_member') and created_at >= ${inWindow.start.toISOString()}::timestamptz and created_at < ${inWindow.end.toISOString()}::timestamptz group by 1, 2`,
-        )
-      : await tx.execute(
-          sql`select extract(dow from created_at at time zone 'UTC')::int as dow, extract(hour from created_at at time zone 'UTC')::int as hr, count(*)::int as n from join_attempts where outcome in ('added', 'already_member') group by 1, 2`,
-        )) as unknown as { dow: number; hr: number; n: number }[];
-    const counted = (inWindow
-      ? await tx.execute(
-          sql`select count(*)::int as n from events where status = 'published' and starts_at >= ${inWindow.start.toISOString()}::timestamptz and starts_at < ${inWindow.end.toISOString()}::timestamptz`,
-        )
-      : await tx.execute(
-          sql`select count(*)::int as n from events where status = 'published'`,
-        )) as unknown as { n: number }[];
+    const buckets = await tx
+      .select({ dow, hr, n: sql`count(*)::int` })
+      .from(joinAttempts)
+      .where(
+        and(
+          inArray(joinAttempts.outcome, [...JOIN_SUCCESS_OUTCOMES]),
+          inWindow ? gte(joinAttempts.createdAt, inWindow.start) : undefined,
+          inWindow ? lt(joinAttempts.createdAt, inWindow.end) : undefined,
+        ),
+      )
+      .groupBy(dow, hr);
+    const counted = await tx
+      .select({ n: sql`count(*)::int` })
+      .from(events)
+      .where(
+        and(
+          eq(events.status, "published"),
+          inWindow ? gte(events.startsAt, inWindow.start) : undefined,
+          inWindow ? lt(events.startsAt, inWindow.end) : undefined,
+        ),
+      );
     return { buckets, eventCount: Number(counted[0]?.n ?? 0) };
   });
   for (const row of buckets) {
