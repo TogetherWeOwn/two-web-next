@@ -24,13 +24,13 @@
     },
     {
       "package": "agents",
-      "range": "<=0.0.0-9631b6d || >=0.2.34",
+      "range": "<=0.0.0-9631b6d || 0.2.34 - 0.28.0",
       "severity": "high",
       "advisoryIds": [1241338, 1241339],
       "lockfile": ".",
       "reviewed": "2026-10-12",
       "expires": "2026-11-11",
-      "reason": "Transitive carrier only: agents 0.28.0 pulls the two vulnerable MCP packages above, but this Worker imports just agents/mcp/server and never touches the client/OAuth paths. Same unreachability rationale and expiry as the direct entries. Reviewed in the stateless public MCP PR."
+      "reason": "Transitive carrier only: agents 0.28.0 pulls the two vulnerable MCP packages above, but this Worker imports just agents/mcp/server and never touches the client/OAuth paths. Same unreachability rationale and expiry as the direct entries. Range string updated 2026-10-13 to match the narrowed upstream advisory (upper bound 0.28.0 added); pinned agents 0.28.0 is still inside, so the rationale is unchanged. Reviewed in the stateless public MCP PR."
     }
   ]
 }
