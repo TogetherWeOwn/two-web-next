@@ -6,8 +6,9 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 // cannot transform that file (web/tsconfig.json extends the
 // SvelteKit-generated $app/tsconfig, so the vite:oxc transform fails under
 // coverage). dispatchHookRequest imports the trust check and the owner
-// decision itself; web/src/hooks.server.ts passes only env, honoFetch and
-// resolve (plus no owner logic), so these cases pin the shipped ordering plus
+// decision itself; web/src/hooks.server.ts passes only env, honoFetch,
+// resolve and the archive binding (plus no owner logic), so these cases pin
+// the shipped ordering plus
 // the production Kit decoration exactly, and the wiring case pins that the
 // hook carries no swappable owner seam.
 vi.mock("cloudflare:workers", () => ({
@@ -24,8 +25,9 @@ import {
 } from "../src/route-ownership";
 
 const APP_URL = "https://example.com";
-// Kit-owned view of the archive page for tests: the shipped manifest keeps it
-// on Hono, so tests that need the Kit branch pass this override. Production
+// Explicit Kit-owned view of the archive page for tests: the shipped manifest
+// now assigns it to Kit, but these cases pass an override so they pin the
+// dispatch behavior without depending on the shipped default. Production
 // wiring never passes a manifest and always uses the shipped default.
 const KIT_MANIFEST = [{ method: "GET", path: "/events/past", enabled: true, reads: "public" }];
 
@@ -62,9 +64,9 @@ beforeEach(() => {
 });
 
 describe("hooks.server route ownership wiring", () => {
-  it("ships the native archive, privacy, rules and join routes disabled", () => {
+  it("ships the native archive route enabled with privacy, rules and join still on Hono", () => {
     expect(ROUTE_MANIFEST).toEqual([
-      { method: "GET", path: "/events/past", enabled: false, reads: "public" },
+      { method: "GET", path: "/events/past", enabled: true, reads: "public" },
       { method: "GET", path: "/privacy", enabled: false, reads: "public" },
       { method: "GET", path: "/rules", enabled: false, reads: "public" },
       { method: "GET", path: "/join", enabled: false, reads: "public" },
@@ -78,7 +80,12 @@ describe("hooks.server route ownership wiring", () => {
   });
 
   it("returns honoFetch before resolve for a Hono-owned path, undecorated", async () => {
-    const event = trustedEvent("/events/past");
+    // The archive is Kit-owned now, so the Hono-owned half of this pin uses
+    // the still-disabled privacy route.
+    const request = new Request(new URL("/privacy", APP_URL).href, {
+      headers: { host: "example.com" },
+    });
+    const event = { request, url: new URL(request.url), route: { id: "/privacy" } };
     const d = deps();
 
     const response = await dispatchHookRequest(event, d);
@@ -178,9 +185,11 @@ describe("hooks.server route ownership wiring", () => {
   });
 
   it("decodes an encoded path before the dispatch decision", async () => {
-    // %70 is "p": /events/%70ast decodes to /events/past, which the shipped
-    // manifest keeps on Hono and KIT_MANIFEST moves to Kit.
-    const shipped = trustedEvent("/events/%70ast");
+    // %70 is "p": /%70rivacy decodes to /privacy, which the shipped manifest
+    // keeps on Hono; /events/%70ast decodes to the Kit-owned archive, which
+    // KIT_MANIFEST also moves to Kit.
+    const shipped = trustedEvent("/%70rivacy");
+    shipped.route = { id: "/privacy" };
     const dShipped = deps();
     const shippedResponse = await dispatchHookRequest(shipped, dShipped);
     expect(dShipped.honoFetch).toHaveBeenCalledOnce();
@@ -383,8 +392,15 @@ describe("hooks.server route ownership wiring", () => {
 
   it("wires hooks.server.ts as a pure env binding with no owner seam", async () => {
     const source = readFileSync(new URL("../web/src/hooks.server.ts", import.meta.url), "utf8");
-    // Delegates to the core with env, fetch and resolve only.
+    // Delegates to the core with env, fetch, resolve and the archive binding.
     expect(source).toContain("dispatchHookRequest");
+    expect(source).toContain("dispatchPastArchiveRequest");
+    // Whole binding: deleting the pastArchive line must fail. The looser
+    // pins above stay green without it (the import carries
+    // dispatchPastArchiveRequest and the comment carries pastArchive).
+    expect(source).toContain(
+      "pastArchive: (request, render) => dispatchPastArchiveRequest(request, env, render)",
+    );
     expect(source).toContain("honoFetch,");
     expect(source).toContain("featuredImageHosts: env.FEATURED_IMAGE_HOSTS");
     expect(source).toContain("appUrl: env.APP_URL");
@@ -403,7 +419,13 @@ describe("hooks.server route ownership wiring", () => {
     // Production trust and ownership live in the core (imported, not
     // injected): the hook must not carry any owner logic to mutate. Each of
     // these mutants stays green without this pin (force kit via an injected
-    // owner, a manifest override, or a hard-coded string).
+    // owner, a manifest override, or a hard-coded string). The archive
+    // guard/cache branch lives in dispatchHookRequest too: changing the
+    // route id so the archive is never wrapped stays green without these
+    // pins (no throttle, no cache).
+    expect(source).not.toContain("/events/past");
+    expect(source).not.toContain("route?.id");
+    expect(source).not.toContain("route.id");
     expect(source).not.toContain("decideOwner");
     expect(source).not.toContain("isTrustedHost");
     expect(source).not.toContain("resolveRouteOwner");
