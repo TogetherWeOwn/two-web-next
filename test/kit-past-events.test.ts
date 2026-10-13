@@ -1,7 +1,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { __resetAnonEventCacheForTests, retireAnonEventCaches } from "../src/events/anon-cache";
-import { dispatchPastArchiveRequest } from "../src/kit-past-events";
-import { dispatchHookRequest, type HookDispatchDeps } from "../src/route-ownership";
+import { dispatchPastArchiveRequest, loadPastArchivePage } from "../src/kit-past-events";
+import {
+  HONO_FALLBACK_ROUTE_ID,
+  dispatchHookRequest,
+  type HookDispatchDeps,
+} from "../src/route-ownership";
 
 const env = {
   APP_URL: "https://example.test",
@@ -208,5 +212,167 @@ describe("Kit past archive response parity", () => {
     );
 
     expect(renders).toBe(1);
+  });
+});
+
+describe("past archive load helper", () => {
+  const headersOf = () => {
+    const headers: Record<string, string> = {};
+    return {
+      headers,
+      setHeaders: (next: Record<string, string>) => Object.assign(headers, next),
+    };
+  };
+  const row = { id: 1 } as never;
+  const fakeDb = {} as never;
+
+  it("marks pages with rows cacheable with the public TTL", async () => {
+    const { headers, setHeaders } = headersOf();
+    const data = await loadPastArchivePage({
+      env,
+      pageParam: "2",
+      setHeaders,
+      dbForFn: async () => fakeDb,
+      listPastFn: async () => ({ rows: [row], hasMore: true, totalPages: 3 }),
+    });
+
+    expect(data).toMatchObject({ page: 2, hasMore: true, totalPages: 3 });
+    expect(data.rows).toEqual([row]);
+    expect(headers["cache-control"]).toBe("public, max-age=300");
+    expect(headers["x-two-past-cacheable"]).toBe("true");
+  });
+
+  it("marks empty pages uncacheable so time-arriving events still render", async () => {
+    const { headers, setHeaders } = headersOf();
+    const data = await loadPastArchivePage({
+      env,
+      pageParam: "1",
+      setHeaders,
+      dbForFn: async () => fakeDb,
+      listPastFn: async () => ({ rows: [], hasMore: false, totalPages: 0 }),
+    });
+
+    expect(data.rows).toEqual([]);
+    expect(headers["cache-control"]).toBe("public, max-age=300");
+    expect(headers["x-two-past-cacheable"]).toBe("false");
+  });
+
+  it("fails closed with private no-store when the database is missing", async () => {
+    const { headers, setHeaders } = headersOf();
+    await expect(
+      loadPastArchivePage({
+        env,
+        pageParam: "1",
+        setHeaders,
+        dbForFn: async () => null,
+        listPastFn: async () => ({ rows: [row], hasMore: false, totalPages: 1 }),
+      }),
+    ).rejects.toMatchObject({ status: 503 });
+    expect(headers["cache-control"]).toBe("private, no-store");
+  });
+
+  it("fails closed with private no-store when the database throws", async () => {
+    const { headers, setHeaders } = headersOf();
+    await expect(
+      loadPastArchivePage({
+        env,
+        pageParam: "1",
+        setHeaders,
+        dbForFn: async () => {
+          throw new Error("db down");
+        },
+        listPastFn: async () => ({ rows: [row], hasMore: false, totalPages: 1 }),
+      }),
+    ).rejects.toMatchObject({ status: 503 });
+    expect(headers["cache-control"]).toBe("private, no-store");
+  });
+
+  it("fails closed with private no-store when the read throws", async () => {
+    const { headers, setHeaders } = headersOf();
+    await expect(
+      loadPastArchivePage({
+        env,
+        pageParam: "1",
+        setHeaders,
+        dbForFn: async () => fakeDb,
+        listPastFn: async () => {
+          throw new Error("read down");
+        },
+      }),
+    ).rejects.toMatchObject({ status: 503 });
+    expect(headers["cache-control"]).toBe("private, no-store");
+  });
+});
+
+describe("hook archive dispatch", () => {
+  const archiveManifest = [
+    { method: "GET", path: "/events/past", enabled: true, reads: "public" },
+  ] as HookDispatchDeps["manifest"];
+
+  it("routes the archive through the guard and cache without rendering on refusal", async () => {
+    const refusal = new Response("limited", { status: 429 });
+    const resolve = vi.fn(async () => cachedResponse());
+    const guard = vi.fn(async () => refusal);
+    const deps: HookDispatchDeps = {
+      appUrl: "https://example.test",
+      honoFetch: vi.fn(async () => new Response("hono")),
+      resolve,
+      manifest: archiveManifest,
+      pastArchive: (req, render) => dispatchPastArchiveRequest(req, env, render, guard, 1000),
+    };
+    const req = request();
+
+    const response = await dispatchHookRequest(
+      { request: req, url: new URL(req.url), route: { id: "/events/past" } },
+      deps,
+    );
+
+    expect(response.status).toBe(429);
+    expect(resolve).not.toHaveBeenCalled();
+    expect(guard).toHaveBeenCalledOnce();
+  });
+
+  it("does not wrap non-archive public routes", async () => {
+    const pastArchive = vi.fn(async (_req: Request, render: () => Promise<Response>) => render());
+    const resolve = vi.fn(async () => new Response("privacy"));
+    const deps: HookDispatchDeps = {
+      appUrl: "https://example.test",
+      honoFetch: vi.fn(async () => new Response("hono")),
+      resolve,
+      manifest: [{ method: "GET", path: "/privacy", enabled: true, reads: "public" }],
+      pastArchive,
+    };
+    const req = new Request("https://example.test/privacy");
+
+    const response = await dispatchHookRequest(
+      { request: req, url: new URL(req.url), route: { id: "/privacy" } },
+      deps,
+    );
+
+    expect(await response.text()).toBe("privacy");
+    expect(pastArchive).not.toHaveBeenCalled();
+    expect(resolve).toHaveBeenCalledOnce();
+  });
+
+  it("does not wrap the Hono fallback", async () => {
+    const pastArchive = vi.fn(async (_req: Request, render: () => Promise<Response>) => render());
+    const resolve = vi.fn(async () => new Response("hono-fallback"));
+    const deps: HookDispatchDeps = {
+      appUrl: "https://example.test",
+      honoFetch: vi.fn(async () => new Response("hono")),
+      resolve,
+      manifest: archiveManifest,
+      pastArchive,
+    };
+    const req = request();
+
+    const response = await dispatchHookRequest(
+      { request: req, url: new URL(req.url), route: { id: HONO_FALLBACK_ROUTE_ID } },
+      deps,
+    );
+
+    expect(await response.text()).toBe("hono-fallback");
+    expect(pastArchive).not.toHaveBeenCalled();
+    expect(resolve).toHaveBeenCalledOnce();
   });
 });

@@ -1,4 +1,5 @@
 import { Hono } from "hono";
+import type { Db } from "./db/index";
 import type { Env } from "./env";
 import {
   ANON_PAST_TTL_MS,
@@ -103,4 +104,68 @@ export async function dispatchPastArchiveRequest(
   }
 
   return cleanResponse;
+}
+
+// Framework-free core of web/src/routes/events/past/+page.server.ts load().
+// The SvelteKit module is a thin binding over this helper so the root Vitest
+// suite can pin every branch without transforming SvelteKit code: rows mean
+// cacheable, empty means served-but-uncacheable (events age into the archive
+// as time passes, so caching emptiness would pin "never ran"), and every
+// database failure is a branded 503 with private, no-store. Exactly one
+// setHeaders call per path: SvelteKit throws `header_already_set` on a
+// double-set, so the caller must not set headers again on a throw.
+export type PastArchiveListPast<Row = never> = (
+  db: Db,
+  page: number,
+) => Promise<{ rows: Row[]; hasMore: boolean; totalPages: number }>;
+
+export interface PastArchiveLoadArgs<Row = never> {
+  env: Env;
+  pageParam: string | null;
+  setHeaders: (headers: Record<string, string>) => void;
+  dbForFn: (c: { env: Env }) => Promise<Db | null>;
+  listPastFn: PastArchiveListPast<Row>;
+}
+
+/** Branded-outage marker: the Kit binding maps every throw to error(503). */
+export function pastArchiveUnavailable(): Error & { status: number } {
+  return Object.assign(new Error("Events temporarily unavailable"), { status: 503 });
+}
+
+export async function loadPastArchivePage<Row>({
+  env,
+  pageParam,
+  setHeaders,
+  dbForFn,
+  listPastFn,
+}: PastArchiveLoadArgs<Row>): Promise<{
+  rows: Row[];
+  page: number;
+  hasMore: boolean;
+  totalPages: number;
+  appUrl: string;
+}> {
+  let db: Db | null;
+  try {
+    db = await dbForFn({ env });
+  } catch {
+    setHeaders({ "cache-control": "private, no-store" });
+    throw pastArchiveUnavailable();
+  }
+  if (!db) {
+    setHeaders({ "cache-control": "private, no-store" });
+    throw pastArchiveUnavailable();
+  }
+  const page = normalizePastPage(Number.parseInt(pageParam ?? "1", 10));
+  try {
+    const { rows, hasMore, totalPages } = await listPastFn(db, page);
+    setHeaders({
+      "cache-control": "public, max-age=300",
+      "x-two-past-cacheable": String(rows.length > 0),
+    });
+    return { rows, page, hasMore, totalPages, appUrl: env.APP_URL };
+  } catch {
+    setHeaders({ "cache-control": "private, no-store" });
+    throw pastArchiveUnavailable();
+  }
 }

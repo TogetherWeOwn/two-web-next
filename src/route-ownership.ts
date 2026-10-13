@@ -212,6 +212,12 @@ export interface HookDispatchDeps {
   sessionFor?: (event: HookEventLike) => Promise<KitLocals>;
   // Access-log sink for member-read Kit routes. Absent or null refuses the read.
   accessSink?: () => Promise<AccessSink | null>;
+  // Native archive guard/cache around Kit SSR. The hook binds env into this
+  // (request, render) => dispatchPastArchiveRequest(request, env, render); the
+  // core decides WHEN it runs, so the route-id branch is pinned here instead
+  // of in web/src/hooks.server.ts. Absent by default: without it the dispatch
+  // behaves exactly as before.
+  pastArchive?: (request: Request, render: () => Promise<Response>) => Promise<Response>;
 }
 
 // Production Kit decoration, owned by the core so the tested path is the
@@ -365,10 +371,18 @@ export async function dispatchHookRequest(
       });
     }
   }
-  const response =
-    route.reads === "public"
-      ? await deps.resolve(event)
-      : await renderMemberRead(event, route.reads, deps);
+  // Native archive reads share the Hono guard and anonymous cache. The route
+  // id owns the branch (SvelteKit sets it before handle runs); the manifest
+  // owns the Kit half above, so an unowned path never reaches the wrapper.
+  const isPastArchivePage = event.route?.id === "/events/past";
+  let response: Response;
+  if (route.reads !== "public") {
+    response = await renderMemberRead(event, route.reads, deps);
+  } else if (isPastArchivePage && deps.pastArchive) {
+    response = await deps.pastArchive(event.request, () => deps.resolve(event));
+  } else {
+    response = await deps.resolve(event);
+  }
   if (event.route?.id === HONO_FALLBACK_ROUTE_ID) return response;
   decorateKitResponse(response, event, deps.appUrl, deps.featuredImageHosts);
   return response;
