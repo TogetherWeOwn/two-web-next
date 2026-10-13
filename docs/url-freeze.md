@@ -186,6 +186,7 @@ Public routes may read optional sessions; this does not promise zero DB queries.
 | `ALL /admin/*` | moderator | member-exposure: mounted admin gate |
 | `ALL /admin/queue/*` | staging-operator | queue-preview-route / queue-redispatch-route: default-off, exact staging origin, explicit Origin (GET preview, POST apply), non-QA dedicated principal, fail-closed operational audit |
 | `ALL /events/:key/rsvp` | public | rsvp: 405 fallback, not a public read |
+| `ALL /leaderboards/members` | member | member-leaderboard-route: member gate + access log on every verb; only GET serves the board |
 | `ALL /members/*` | member | member-exposure: gate + access log |
 | `ALL /profile` | member | member-exposure: gate + access log |
 | `DELETE /admin/queue/source-evidence/:id` | evidence-bearer | source-evidence-route: write verbs refuse before any middleware or source read |
@@ -225,10 +226,13 @@ Public routes may read optional sessions; this does not promise zero DB queries.
 | `GET /events/past` | public | events: archive |
 | `GET /faq` | public | seo: frozen funnel leaf |
 | `GET /faq.md` | public | ai-friendly-md: curated Markdown alternate, `text/markdown`, static TTL, staging noindex |
+| `GET /hotzones` | public | hotzones: aggregate index |
+| `GET /hotzones/:signal` | public | hotzones: per-signal drill-down |
 | `GET /join` | public | join: landing page |
 | `GET /join/callback` | oauth-state | join: one-click callback |
 | `GET /join/discord` | public | join: OAuth start |
 | `GET /join.md` | public | ai-friendly-md: Discord-handoff Markdown alternate, static TTL, staging noindex |
+| `GET /leaderboards/members` | member | leaderboards: seasonal member board; guest 302 → OAuth, non-member 403, `?season=`/`?scope=overall\|relative`/`?activity=` else 400 |
 | `GET /llms.txt` | public | ai-friendly-md: assistant index of every Markdown alternate, static TTL, staging noindex |
 | `GET /members` | public | profiles: retired bare path, frozen 404 for every role |
 | `GET /members/` | public | profiles: retired trailing-slash path, frozen 404 for every role |

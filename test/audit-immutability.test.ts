@@ -318,6 +318,7 @@ describe.skipIf(!process.env.DATABASE_URL)(
         joinAttempts: 0,
         idempotencyKeys: 0,
         searchLog: 0,
+        boardViews: 0,
         sessions: 0,
       });
       const survivors = await owner<
@@ -344,6 +345,7 @@ describe.skipIf(!process.env.DATABASE_URL)(
         joinAttempts: 0,
         idempotencyKeys: 0,
         searchLog: 0,
+        boardViews: 0,
         sessions: 0,
       });
     });

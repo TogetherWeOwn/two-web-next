@@ -204,6 +204,16 @@ const MATRIX: Case[] = [
     body: '{"status":"going"}',
   },
   { method: "ALL", route: "/events/:key/rsvp", status: 405 },
+  // Aggregate heatmaps read Postgres with no member rows; an outage is a 503.
+  { method: "GET", route: "/hotzones", status: 503, format: "html" },
+  {
+    method: "GET",
+    route: "/hotzones/:signal",
+    path: "/hotzones/joins",
+    status: 503,
+    format: "html",
+  },
+  { method: "GET", route: "/leaderboards/members", status: 503, actor: "member", format: "html" },
   ...["/profile", "/members/:user"].map((route) => ({
     method: "GET",
     route,
@@ -344,6 +354,8 @@ const MIDDLEWARE = [
   "ALL /admin/queue/*",
   "ALL /profile",
   "ALL /profile",
+  "ALL /leaderboards/members",
+  "ALL /leaderboards/members",
   "ALL /members/*",
   "ALL /members/*",
 ];
