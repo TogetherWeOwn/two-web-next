@@ -7,6 +7,7 @@
 // every variant: the representation depends on the flash cookie even when the
 // view has nothing to consume.
 import { readFileSync } from "node:fs";
+import { URL as NodeURL } from "node:url";
 import { describe, expect, it } from "vitest";
 import type { DiscordWidgetSnapshot } from "../src/discord-widget";
 import { joinPageCacheControl } from "../src/join/kit-page";
@@ -48,11 +49,11 @@ describe("Kit GET /join cache contract (Hono joinPage parity)", () => {
 // acceptance item is named here, so deleting one fails this file first.
 describe("Kit GET /join markup contract (src/screens/join.tsx parity)", () => {
   const page = readFileSync(
-    new URL("../web/src/routes/join/+page.svelte", import.meta.url),
+    new NodeURL("../web/src/routes/join/+page.svelte", import.meta.url),
     "utf8",
   );
   const load = readFileSync(
-    new URL("../web/src/routes/join/+page.server.ts", import.meta.url),
+    new NodeURL("../web/src/routes/join/+page.server.ts", import.meta.url),
     "utf8",
   );
 
