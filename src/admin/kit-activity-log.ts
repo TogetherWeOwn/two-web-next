@@ -19,13 +19,7 @@ import type { Env } from "../env";
 import { listActivityLog, type ActivityLogViewerRow } from "./reads";
 import { dbFor } from "./db";
 
-const SNOWFLAKE_ID = /^\d{10,25}$/;
-
-/** Who-cell copy: snowflakes verbatim, legacy imports labeled, null as "—". */
-export function formatActivityCauser(causerId: string | null): string {
-  if (causerId === null) return "—";
-  return SNOWFLAKE_ID.test(causerId) ? causerId : `${causerId} (legacy ID)`;
-}
+export { formatActivityCauser } from "./table-list";
 
 /** Kit-serializable viewer row: the stable UTC instant travels as ISO text. */
 export type KitActivityLogRow = Omit<ActivityLogViewerRow, "createdAt"> & {

@@ -1,7 +1,7 @@
 <script lang="ts">
 import AdminShell from "#lib/AdminShell.svelte";
-import { formatActivityCauser } from "../../../../../src/admin/kit-activity-log";
 import {
+  formatActivityCauser,
   activityLogEmptyText,
   activityLogUrl,
   type ActivityLogQuery,
@@ -9,11 +9,11 @@ import {
 import type { PageProps } from "./$types";
 
 // Markup contract of ActivityLogPage (src/admin/pages/activity-log.tsx): the
-// heading, the filter field labels, the table testids, the scroll-region
+// heading, the search field labels, the table testids, the scroll-region
 // wiring, the empty copy and the paging testids are shared, so the existing
 // admin E2E selectors still apply when this route owns traffic. Instants
 // arrive pre-rendered as ISO strings from the load, exactly as the Hono page
-// emits them inside <time datetime>. No island: the filter is a plain GET
+// emits them inside <time datetime>. No island: the search is a plain GET
 // form, so the no-JS viewer keeps working.
 let { data }: PageProps = $props();
 const { rows, query, hasNext } = $derived(data);
@@ -23,7 +23,10 @@ const subjectOf = (row: {
   subjectId: string | null;
   event: string;
 }) => {
-  const base = [row.subjectType, row.subjectId].filter(Boolean).join(" ") || "—";
+  const base =
+    row.subjectType && row.subjectId
+      ? `${row.subjectType} ${row.subjectId}`
+      : row.subjectType || row.subjectId || "—";
   return row.event ? `${base} (${row.event})` : base;
 };
 </script>

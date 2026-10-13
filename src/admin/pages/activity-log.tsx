@@ -2,8 +2,12 @@
 
 import type { FC } from "hono/jsx";
 import type { ActivityLogViewerRow } from "../reads";
-import { formatActivityCauser } from "../kit-activity-log";
-import { activityLogEmptyText, activityLogUrl, type ActivityLogQuery } from "../table-list";
+import {
+  formatActivityCauser,
+  activityLogEmptyText,
+  activityLogUrl,
+  type ActivityLogQuery,
+} from "../table-list";
 import { Shell } from "./shell";
 
 // Imported rows keep legacy internal causer IDs (docs/data-import.md), which the
