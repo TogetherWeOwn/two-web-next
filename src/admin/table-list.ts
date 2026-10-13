@@ -100,6 +100,14 @@ export function rosterEmptyText(query: RosterQuery): string {
   return query.q ? "No RSVPs match this member search." : "No RSVPs yet.";
 }
 
+const SNOWFLAKE_ID = /^\d{10,25}$/;
+
+/** Who-cell copy: snowflakes verbatim, legacy imports labeled, null as "—". */
+export function formatActivityCauser(causerId: string | null): string {
+  if (causerId === null) return "—";
+  return SNOWFLAKE_ID.test(causerId) ? causerId : `${causerId} (legacy ID)`;
+}
+
 /** Zero-row copy for the activity-log viewer. */
 export function activityLogEmptyText(query: ActivityLogQuery): string {
   return query.subject || query.causer ? "No activity matches these filters." : "No activity yet.";

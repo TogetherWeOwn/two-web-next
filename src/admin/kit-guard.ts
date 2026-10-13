@@ -52,19 +52,3 @@ export function decideKitAdminGuard(
     actor: { id: locals.session.userId, username: locals.session.username },
   };
 }
-
-/**
- * Document title per admin section for the shared AdminShell chrome. The
- * group layout renders one `<title>`, so the section maps here — mirroring
- * each Hono screen's Shell title — instead of children duplicating the
- * head. New sections add one arm; the dashboard stays the default. The
- * legacy `/admin/featured-contents` redirects never reach the Kit layout
- * (Hono-owned, no Kit route), and the exact-plus-slash match keeps it that
- * way even if one ever did.
- */
-export function adminSectionTitle(pathname: string): string {
-  if (pathname === "/admin/featured" || pathname.startsWith("/admin/featured/")) {
-    return "Featured content";
-  }
-  return "Dashboard";
-}

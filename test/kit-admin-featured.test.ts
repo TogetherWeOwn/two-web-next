@@ -7,9 +7,14 @@
 // serializes rows (ISO datetimes, shared featuredStatus) for the Svelte
 // view. Publication logic is shared, never copied: every status assertion
 // below derives from featuredStatus itself.
+import { readFileSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it, vi } from "vitest";
-import { adminSectionTitle } from "../src/admin/kit-guard";
 import { featuredStatus } from "../src/featured-status";
+
+const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+const read = (p: string): string => readFileSync(join(root, p), "utf8");
 import { FEATURED_PAGE_SIZE } from "../src/admin/table-list";
 import {
   resolveKitFeaturedList,
@@ -149,13 +154,14 @@ describe("resolveKitFeaturedList", () => {
   });
 });
 
-describe("adminSectionTitle", () => {
-  it("titles the featured section like its Hono Shell, dashboard everywhere else", () => {
-    expect(adminSectionTitle("/admin/featured")).toBe("Featured content");
-    expect(adminSectionTitle("/admin/featured/3")).toBe("Featured content");
-    expect(adminSectionTitle("/admin")).toBe("Dashboard");
-    expect(adminSectionTitle("/admin/events")).toBe("Dashboard");
-    // The legacy alias is Hono-owned; even a Kit render must not claim it.
-    expect(adminSectionTitle("/admin/featured-contents")).toBe("Dashboard");
+describe("featured Kit chrome (per-child AdminShell)", () => {
+  // The admin group outlet carries no chrome of its own (see
+  // test/kit-activity-log.test.ts): each child wraps itself so a new slice
+  // never inherits the wrong tab title during mixed mode. This pins the
+  // featured slice's own title, the Kit twin of its Hono Shell title.
+  it("wraps itself in its own AdminShell title", () => {
+    expect(read("web/src/routes/admin/featured/+page.svelte")).toContain(
+      '<AdminShell title="Featured content">',
+    );
   });
 });

@@ -1,11 +1,12 @@
 <script lang="ts">
-import AdminShell from "#lib/AdminShell.svelte";
-import type { LayoutProps } from "./$types";
+import type { Snippet } from "svelte";
 
-// Admin route group chrome: one shell for the group. The document title
-// arrives from the layout load (adminSectionTitle, src/admin/kit-guard.ts),
-// one title per section, so slices never duplicate the head.
-let { data, children }: LayoutProps = $props();
+// Admin route group outlet: no chrome here. Each child slice wraps itself in
+// the shared AdminShell with its own title (dashboard: "Dashboard",
+// featured: "Featured content", activity-log: "Activity log"), the Kit twin
+// of the Hono Shell titles, so a new slice never inherits the wrong tab
+// title during mixed mode.
+let { children }: { children: Snippet } = $props();
 </script>
 
-<AdminShell title={data.title}>{@render children()}</AdminShell>
+{@render children()}

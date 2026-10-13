@@ -1,4 +1,5 @@
 <script lang="ts">
+import AdminShell from "#lib/AdminShell.svelte";
 import type { PageProps } from "./$types";
 
 // Markup contract of FeaturedPage (src/admin/pages/featured-list.tsx): the
@@ -19,6 +20,7 @@ let { data }: PageProps = $props();
   </th>
 {/snippet}
 
+<AdminShell title="Featured content">
 <section>
   <h1>Featured content</h1>
   <p>
@@ -104,3 +106,4 @@ let { data }: PageProps = $props();
     {/if}
   </nav>
 </section>
+</AdminShell>

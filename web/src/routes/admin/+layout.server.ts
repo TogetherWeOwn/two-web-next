@@ -1,5 +1,5 @@
 import { error, redirect } from "@sveltejs/kit";
-import { adminSectionTitle, decideKitAdminGuard } from "../../../../src/admin/kit-guard";
+import { decideKitAdminGuard } from "../../../../src/admin/kit-guard";
 import type { LayoutServerLoad } from "./$types";
 
 // Server-rendered only: the Hono panel ships no JavaScript, so the Kit admin
@@ -26,5 +26,5 @@ export const load: LayoutServerLoad = async ({ locals, url }) => {
   if (decision.kind === "guest") redirect(302, decision.location);
   if (decision.kind === "forbidden") error(403, "Forbidden");
   if (decision.kind === "unavailable") error(503, "Admin temporarily unavailable");
-  return { actor: decision.actor, title: adminSectionTitle(url.pathname) };
+  return { actor: decision.actor };
 };

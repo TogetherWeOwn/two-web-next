@@ -78,6 +78,16 @@ export const ROUTE_MANIFEST: OwnedRoute[] = [
     enabled: false,
     reads: { resource: "featured_contents", action: "list", route: "admin.featured.index" },
   },
+  // Read-only activity-log viewer: the same bounded subject/causer filters and
+  // newest-first paging as the Hono panel, audited by the member-read boundary
+  // with this declaration and the bridged viewer. Off until the enablement
+  // review: the Hono viewer answers meanwhile.
+  {
+    method: "GET",
+    path: "/admin/activity-log",
+    enabled: false,
+    reads: { resource: "activity_log", action: "list", route: "admin.activity-log.index" },
+  },
   { method: "GET", path: "/auth/recover", enabled: false, reads: "public" },
   // Profile reads: one Svelte view/model behind both Hono handlers. Native
   // rendering stays off until edit parity reviews enablement; write siblings
