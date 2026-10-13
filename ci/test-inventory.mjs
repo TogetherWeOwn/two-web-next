@@ -5,6 +5,8 @@
 // Reachability rules (mirroring vitest.config.ts + package.json + workflows):
 // - test/** matches the vitest `include` globs, except the smoke trio the
 //   config excludes (they run via `npm run test:smoke` instead).
+// - tier0/** matches the Tier-0 config (`tier0/vitest.config.ts`, run via
+//   `npm run test:tier0`); reachable only while that wiring names it.
 // - ci/** and e2e/** have no glob runner: each file must be named in a
 //   package.json script or a .github/workflows/*.yml step.
 // - test/helpers/** and other non-*.test.* files are fixtures, not tests.
@@ -80,6 +82,7 @@ export function inventory(root = repoRoot) {
   const haystack = collectHaystack(root);
   const files = [
     ...VITEST_TEST_DIRS.flatMap((d) => listTestFiles(root, d)),
+    ...listTestFiles(root, "tier0"),
     ...listTestFiles(root, "ci"),
     ...listTestFiles(root, "e2e"),
   ].sort();
@@ -91,6 +94,14 @@ export function inventory(root = repoRoot) {
       via = SMOKE_EXCLUDED.has(file) ? "npm run test:smoke" : "vitest include (test/**/*.test.*)";
       // The smoke trio is reachable only when test:smoke still names it.
       if (SMOKE_EXCLUDED.has(file) && !referencedInCi(file, haystack)) via = null;
+    } else if (file.startsWith("tier0/")) {
+      // Tier-0 suites run only from the report-only step via their own
+      // config: reachable only while that wiring still names the config or
+      // the script (the haystack holds script bodies, not names, so match
+      // the config path the script invokes).
+      via = "npm run test:tier0";
+      if (!haystack.includes("tier0/vitest.config.ts") && !haystack.includes("test:tier0"))
+        via = null;
     } else if (referencedInCi(file, haystack)) {
       // ci/** and e2e/** test files need an explicit CI reference.
       // Playwright *.spec.ts / *.visual.ts are outside this gate's scope.
@@ -150,6 +161,31 @@ function selftest() {
       assert.deepEqual(orphans, ["ci/never-wired.test.mjs"]);
     } finally {
       rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  check("tier0 files resolve via test:tier0, orphans without it", () => {
+    for (const wired of [true, false]) {
+      const dir = mkdtempSync(join(tmpdir(), "test-inventory-"));
+      try {
+        writeFileSync(
+          join(dir, "package.json"),
+          JSON.stringify({
+            scripts: wired ? { "test:tier0": "vitest run --config tier0/vitest.config.ts" } : {},
+          }),
+        );
+        mkdirSync(join(dir, "tier0"), { recursive: true });
+        writeFileSync(join(dir, "tier0", "a.test.ts"), "vitest placeholder\n");
+        const { orphans, reachable } = inventory(dir);
+        if (wired) {
+          assert.deepEqual(orphans, []);
+          assert.equal(reachable[0].via, "npm run test:tier0");
+        } else {
+          assert.deepEqual(orphans, ["tier0/a.test.ts"]);
+        }
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
     }
   });
 

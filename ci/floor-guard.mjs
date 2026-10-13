@@ -42,7 +42,8 @@ const stripPrefix = (p) => p.replace(/^[ab]\//, "");
 
 // Runner globs, not name patterns, decide whether a moved test still runs.
 // Vitest includes only test/**/*.test.ts and test/**/*.test.mjs
-// (vitest.config.ts); Playwright e2e specs run via testMatch **/*.spec.ts
+// (vitest.config.ts); the report-only Tier-0 suites include only
+// tier0/**/*.test.ts (tier0/vitest.config.ts). Playwright e2e specs run via testMatch **/*.spec.ts
 // under testDir ./e2e (playwright.config.ts), so a spec moved out of e2e/ no
 // longer runs. The e2e safety scripts run via an explicit list in
 // package.json (`node --test e2e/safety.test.mjs e2e/qa-request.test.mjs
@@ -55,6 +56,12 @@ const stripPrefix = (p) => p.replace(/^[ab]\//, "");
 // move, suffix change, out-of-glob rename, or rewiring rename) is a deletion
 // from the suite, even though the name still looks like a test.
 const VITEST_RE = /^test\/.*\.test\.(ts|mjs)$/;
+// Tier-0 suites run from tier0/ through their own vitest config
+// (tier0/vitest.config.ts, `npm run test:tier0`), report-only. A move out of
+// tier0/ unwires them, and a move across the test/tier0 boundary promotes
+// report-only to blocking (or demotes blocking to report-only), so every
+// such move trips the same floor as a move out of test/.
+const TIER0_RE = /^tier0\/.*\.test\.ts$/;
 const E2E_SPEC_RE = /^e2e\/.*\.spec\.ts$/;
 const E2E_SAFETY_RE = /^e2e\/.*\.test\.mjs$/;
 const CI_A11Y_RE = /^ci\/a11y-.*\.test\.mjs$/;
@@ -62,6 +69,7 @@ const isCiSelftest = (p) => p.startsWith("ci/") && TEST_PATH.test(p) && CODE_PAT
 
 function stillRunnable(from, to) {
   if (VITEST_RE.test(from)) return VITEST_RE.test(to);
+  if (TIER0_RE.test(from)) return TIER0_RE.test(to);
   if (E2E_SPEC_RE.test(from)) return E2E_SPEC_RE.test(to);
   // Enumerated runners fail closed: any rename needs a test-deleted waiver.
   if (E2E_SAFETY_RE.test(from)) return to === from;
