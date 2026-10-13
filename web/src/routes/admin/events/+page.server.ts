@@ -12,7 +12,7 @@ import type { PageServerLoad } from "./$types";
 // helper (EVENT_PAGE_SIZE + 1 rows, no count query, Going-only seat counts),
 // raw query params in (the helper re-parses them, exactly like the Hono
 // handler passing c.req.query()), and the normalized query out for the
-// filter form and paging links. Authorization stays in the layout guard; the
+// search form and paging links. Authorization stays in the layout guard; the
 // member-read boundary around resolve() owns classification and the audit.
 // No database answers the shared 503, and a classified database outage maps
 // to the same 503 — an uncaught load rejection would render SvelteKit's 500
@@ -20,7 +20,7 @@ import type { PageServerLoad } from "./$types";
 // 500. Exactly one setHeaders call on the success path: SvelteKit throws
 // `header_already_set` on a double-set, so the error paths set none.
 // POST /admin/events, /new and /:key stay Hono-owned: the manifest lists only
-// this GET, so the ported filter/sort forms and the row publish/cancel/RSVP
+// this GET, so the ported search/sort forms and the row publish/cancel/RSVP
 // forms keep submitting to the unchanged Hono handlers during mixed mode.
 export const load: PageServerLoad = async ({ parent, url, setHeaders }) => {
   const { actor } = await parent();

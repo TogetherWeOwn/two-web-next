@@ -5,7 +5,7 @@ import { goingCountText } from "../../../../../src/islands/contracts-going-count
 import type { KitEventListRow } from "../../../../../src/admin/kit-events";
 
 // Markup contract of EventsPage (src/admin/pages/events-list.tsx): the
-// filter form, sort headers, fill badges, row actions, paging nav, empty
+// search form, sort headers, fill badges, row actions, paging nav, empty
 // states and testids are shared, so the existing admin E2E selectors still
 // apply when this route owns traffic. Timestamps arrive pre-rendered as ISO
 // strings from the load, exactly as the Hono page emits them. No island and
