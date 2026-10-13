@@ -291,5 +291,8 @@ describe("Kit /rules parity with Hono", () => {
     // (cookies, locals, request, parent) would be a session/cookie read even
     // under a name the token list above does not know.
     expect(code).toMatch(/async \(\{\s*setHeaders\s*\}\)/);
+    // The stamp is the only config-driven behavior: dropping RULES_LAST_UPDATED
+    // (or APP_URL) must fail this pin rather than silently hide the date.
+    expect(code).toMatch(/rulesPageData\(env\.APP_URL,\s*env\.RULES_LAST_UPDATED\)/);
   });
 });
