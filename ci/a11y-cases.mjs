@@ -101,6 +101,25 @@ export const coverage = {
       { path: "/events/past?page=99", state: "past-page-overflow" },
     ],
   },
+  "/hotzones/:signal": {
+    cases: [
+      { path: "/hotzones/joins" },
+      { path: "/hotzones/voice" },
+      { path: "/hotzones/games" },
+      { path: "/hotzones/bogus", status: 404 },
+    ],
+  },
+  "/leaderboards/members": {
+    cases: [
+      { path: "/leaderboards/members", identity: "member" },
+      { path: "/leaderboards/members?scope=relative", identity: "member", state: "relative" },
+      {
+        path: "/leaderboards/members?season=2026-Q3&activity=zz-no-matches",
+        identity: "member",
+        state: "no-rows",
+      },
+    ],
+  },
   "/profile": {
     cases: [
       { path: "/profile", identity: "member" },

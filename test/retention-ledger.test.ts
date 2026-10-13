@@ -106,6 +106,7 @@ describe("retention ledger mechanisms (memory, no DB)", () => {
       joinAttempts: memTable(),
       idempotencyKeys: memTable(),
       searchLog: memTable(),
+      boardViews: memTable(),
     };
     const stores = {
       ...tables,

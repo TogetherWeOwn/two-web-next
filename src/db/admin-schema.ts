@@ -259,6 +259,27 @@ export const eventSearchLogs = pgTable(
   ],
 );
 
+// Anonymous board-view log (shared with the sibling leaderboards slice —
+// whichever merges first owns the migration, the other reuses it). One row
+// per board render: normalized board key + scope +
+// season + result count only. No user id, session, discord id, IP, or username
+// columns by design; pruned at 90 d like event_search_logs.
+export const boardViewLogs = pgTable(
+  "board_view_logs",
+  {
+    id: serial("id").primaryKey(),
+    normalizedBoardKey: text("normalized_board_key").notNull(),
+    scope: text("scope").notNull(),
+    season: text("season").notNull(),
+    resultCount: integer("result_count").notNull(),
+    occurredAt: timestamp("occurred_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    index("board_view_logs_board_occurred_idx").on(t.normalizedBoardKey, t.occurredAt),
+    index("board_view_logs_occurred_at_idx").on(t.occurredAt),
+  ],
+);
+
 export type Event = typeof events.$inferSelect;
 export type NewEvent = Omit<typeof events.$inferInsert, "icsSequence">;
 export type FeaturedContent = typeof featuredContents.$inferSelect;

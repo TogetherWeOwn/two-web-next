@@ -276,6 +276,7 @@ exactly once.
 | `src/freeze-banner.ts` | http-guard |
 | `src/headers.ts` | http-guard |
 | `src/home-copy.ts` | content |
+| `src/hotzones/` | events |
 | `src/html-outcome.ts` | entry |
 | `src/image-policy.ts` | content |
 | `src/index.tsx` | entry |
@@ -288,6 +289,7 @@ exactly once.
 | `src/kit-errors.ts` | entry |
 | `src/kit-past-events.ts` | events |
 | `src/kit-session.ts` | auth |
+| `src/leaderboards/` | profiles |
 | `src/leaf-critical-css.ts` | content |
 | `src/mcp/` | content |
 | `src/member-erasure.ts` | profiles |

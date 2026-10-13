@@ -142,6 +142,7 @@ export interface PruneStores {
   joinAttempts: AgePrunedTable;
   idempotencyKeys: AgePrunedTable;
   searchLog: AgePrunedTable;
+  boardViews: AgePrunedTable;
   sessions: SessionSweeper;
 }
 

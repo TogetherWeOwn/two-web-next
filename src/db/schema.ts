@@ -193,6 +193,9 @@ export const profiles = pgTable("profiles", {
   bio: text("bio"),
   games: jsonb("games").notNull().$type<string[]>().default([]),
   timezone: text("timezone"),
+  // Member-leaderboard opt-out: an opted-out member never appears in (or moves)
+  // any member-rank aggregate. Default false keeps every existing row ranked.
+  leaderboardOptOut: boolean("leaderboard_opt_out").notNull().default(false),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 });

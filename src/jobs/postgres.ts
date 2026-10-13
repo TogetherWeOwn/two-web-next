@@ -86,12 +86,22 @@ export function pgPruneStores(sql: TxClient | Sql): PruneStores {
         ) returning 1`
       ).length,
   };
+  const boardViews: AgePrunedTable = {
+    pruneOlderThan: async (cutoff) =>
+      (
+        await sql`delete from board_view_logs where id in (
+          select id from board_view_logs where occurred_at < ${cutoff}
+          order by id limit ${PRUNE_DELETE_BATCH_SIZE}
+        ) returning 1`
+      ).length,
+  };
   return {
     agentEventAudits,
     accessLog,
     joinAttempts,
     idempotencyKeys,
     searchLog,
+    boardViews,
     sessions: createPostgresSessionStore(sql as unknown as SessionSql),
   };
 }

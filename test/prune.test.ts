@@ -56,6 +56,7 @@ function memStores(now: Date): Omit<PruneStores, "sessions"> & {
     joinAttempts: memTable(),
     idempotencyKeys: memTable(),
     searchLog: memTable(),
+    boardViews: memTable(),
   };
   return {
     ...tables,
@@ -99,6 +100,7 @@ describe("model:prune windows and sweep (memory, no DB)", () => {
       joinAttempts: stubTable([PRUNE_DELETE_BATCH_SIZE, 3]),
       idempotencyKeys: stubTable([PRUNE_DELETE_BATCH_SIZE, 3]),
       searchLog: stubTable([PRUNE_DELETE_BATCH_SIZE, 3]),
+      boardViews: stubTable([PRUNE_DELETE_BATCH_SIZE, 3]),
     };
     const stores = {
       ...tables,
@@ -111,6 +113,7 @@ describe("model:prune windows and sweep (memory, no DB)", () => {
       joinAttempts: PRUNE_DELETE_BATCH_SIZE + 3,
       idempotencyKeys: PRUNE_DELETE_BATCH_SIZE + 3,
       searchLog: PRUNE_DELETE_BATCH_SIZE + 3,
+      boardViews: PRUNE_DELETE_BATCH_SIZE + 3,
     });
   });
 
@@ -132,6 +135,7 @@ describe("model:prune windows and sweep (memory, no DB)", () => {
         joinAttempts: endless,
         idempotencyKeys: endless,
         searchLog: endless,
+        boardViews: endless,
         sessions: createMemorySessionStore(() => now.getTime()),
       };
       const counts = await pruneModelTables(stores, now);
@@ -142,9 +146,10 @@ describe("model:prune windows and sweep (memory, no DB)", () => {
         joinAttempts: perTable,
         idempotencyKeys: perTable,
         searchLog: perTable,
+        boardViews: perTable,
       });
-      // Each of the five tables stopped after exactly the max batches.
-      expect(callCounts.n).toBe(5 * PRUNE_DELETE_MAX_BATCHES);
+      // Each of the six tables stopped after exactly the max batches.
+      expect(callCounts.n).toBe(6 * PRUNE_DELETE_MAX_BATCHES);
       expect(warn).toHaveBeenCalledTimes(1);
       expect(warn.mock.calls[0]![0]).toContain("batch cap");
       const payload = warn.mock.calls[0]![1] as Record<string, unknown>;
@@ -154,6 +159,7 @@ describe("model:prune windows and sweep (memory, no DB)", () => {
         "joinAttempts",
         "idempotencyKeys",
         "searchLog",
+        "boardViews",
       ]);
       expect(info).not.toHaveBeenCalled();
     } finally {
@@ -177,6 +183,7 @@ describe("model:prune windows and sweep (memory, no DB)", () => {
       joinAttempts: 1,
       idempotencyKeys: 1,
       searchLog: 1,
+      boardViews: 1,
     });
     for (const [name, t] of Object.entries(stores.tables)) {
       expect(t.at, name).toEqual([edge, fresh]);
@@ -226,6 +233,7 @@ describe("model:prune windows and sweep (memory, no DB)", () => {
       joinAttempts: 0,
       idempotencyKeys: 0,
       searchLog: 0,
+      boardViews: 0,
       sessions: 0,
     });
   });
@@ -302,6 +310,8 @@ describe.skipIf(!process.env.DATABASE_URL)("model:prune (test Postgres)", () => 
       values (${grant!.id},'k-old','d',200,'{}',${old}),(${grant!.id},'k-edge','d',200,'{}',${edge}),(${grant!.id},'k-fresh','d',200,'{}',${fresh})`;
     await sql`insert into event_search_logs (normalized_query, result_count, occurred_at)
       values ('old q',3,${old}),('edge q',1,${edge}),('fresh q',0,${fresh})`;
+    await sql`insert into board_view_logs (normalized_board_key, scope, season, result_count, occurred_at)
+      values ('hotzones','overall','all',3,${old}),('hotzones','overall','all',1,${edge}),('hotzones','overall','all',0,${fresh})`;
     await sql`insert into web_sessions (token_hash, user_id, username, member, moderator, expires_at)
       values ('gone','1','a',true,false,${new Date(now.getTime() - 1000)}),
              ('edge','2','b',true,false,${now}),
@@ -314,6 +324,7 @@ describe.skipIf(!process.env.DATABASE_URL)("model:prune (test Postgres)", () => 
       joinAttempts: 1,
       idempotencyKeys: 1,
       searchLog: 1,
+      boardViews: 1,
       sessions: 2,
     });
 
@@ -340,6 +351,10 @@ describe.skipIf(!process.env.DATABASE_URL)("model:prune (test Postgres)", () => 
       { normalized_query: string }[]
     >`select normalized_query from event_search_logs order by id`;
     expect(searches.map((r) => r.normalized_query)).toEqual(["edge q", "fresh q"]);
+    const boardViews = await sql<
+      { result_count: number }[]
+    >`select result_count from board_view_logs order by id`;
+    expect(boardViews.map((r) => r.result_count)).toEqual([1, 0]);
     const sessions = await sql<{ token_hash: string }[]>`select token_hash from web_sessions`;
     expect(sessions.map((r) => r.token_hash)).toEqual(["live"]);
 
@@ -349,6 +364,7 @@ describe.skipIf(!process.env.DATABASE_URL)("model:prune (test Postgres)", () => 
       joinAttempts: 0,
       idempotencyKeys: 0,
       searchLog: 0,
+      boardViews: 0,
       sessions: 0,
     });
   });
@@ -385,8 +401,12 @@ describe.skipIf(!process.env.DATABASE_URL)("model:prune (test Postgres)", () => 
       values (${grant!.id},'cap-k-edge','d',200,'{}',${edge}),(${grant!.id},'cap-k-fresh','d',200,'{}',${fresh})`;
     await sql`insert into event_search_logs (normalized_query, result_count, occurred_at)
       select 'cap q ' || g, 0, ${old} from generate_series(1, ${extra}) g`;
+    await sql`insert into board_view_logs (normalized_board_key, scope, season, result_count, occurred_at)
+      select 'hotzones', 'overall', 'all', 0, ${old} from generate_series(1, ${extra}) g`;
     await sql`insert into event_search_logs (normalized_query, result_count, occurred_at)
       values ('cap q edge',1,${edge}),('cap q fresh',0,${fresh})`;
+    await sql`insert into board_view_logs (normalized_board_key, scope, season, result_count, occurred_at)
+      values ('hotzones','overall','all',1,${edge}),('hotzones','overall','all',0,${fresh})`;
 
     // Each table holds `extra` expired rows of its own (91 days old: past
     // both the 90-day cutoff and the audit database-clock guard by a full day,
@@ -408,6 +428,7 @@ describe.skipIf(!process.env.DATABASE_URL)("model:prune (test Postgres)", () => 
     expect(first.joinAttempts).toBeGreaterThanOrEqual(extra);
     expect(first.idempotencyKeys).toBeGreaterThanOrEqual(extra);
     expect(first.searchLog).toBeGreaterThanOrEqual(extra);
+    expect(first.boardViews).toBeGreaterThanOrEqual(extra);
 
     // A re-run is clean: the backlog drained in the single pass above.
     expect(await pruneModelTables(pgPruneStores(sql), now)).toEqual({
@@ -416,6 +437,7 @@ describe.skipIf(!process.env.DATABASE_URL)("model:prune (test Postgres)", () => 
       joinAttempts: 0,
       idempotencyKeys: 0,
       searchLog: 0,
+      boardViews: 0,
       sessions: 0,
     });
 
@@ -445,6 +467,9 @@ describe.skipIf(!process.env.DATABASE_URL)("model:prune (test Postgres)", () => 
         sql`select count(*)::int as n from event_search_logs
           where normalized_query like 'cap q%' and normalized_query not in ('cap q edge', 'cap q fresh')`,
       ),
+    ).toBe(0);
+    expect(
+      await gone(sql`select count(*)::int as n from board_view_logs where occurred_at < ${old}`),
     ).toBe(0);
     // Access logs carry no text marker; every row this test inserted at `old`
     // (91 days, a full day past cutoff and guard) is gone. The earlier test's
