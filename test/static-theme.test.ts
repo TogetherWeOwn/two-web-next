@@ -67,7 +67,7 @@ it.each(paths)(
       expect(html).toContain(".content-page");
       expect(html).not.toContain('rel="stylesheet"');
     }
-    // TOG-23447: only the join shell still preloads Display; content
+    // Only the join shell still preloads Display; content
     // leaves render no Display text so they preload no font.
     if (path === "/join") {
       expect(html).toContain('href="/fonts/display-latin-700.woff2" as="font"');

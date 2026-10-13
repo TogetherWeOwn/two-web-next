@@ -96,8 +96,8 @@ export const Layout: FC<
         {theme ? (
           <>
             {theme === "content" ? null : (
-              // Content leaves render no Display text (TOG-23447: the late
-              // font swap became mobile LCP), so the font is neither used
+              // Content leaves render no Display text (the late font swap
+              // became mobile LCP), so the font is neither used
               // nor preloaded there. Every other theme keeps the preload.
               <link
                 rel="preload"

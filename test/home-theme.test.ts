@@ -248,8 +248,8 @@ describe("homepage theme", () => {
     expect(css).toContain("prefers-reduced-motion: no-preference");
     expect(css).not.toContain("@import");
     expect(css).not.toContain("https://");
-    // TOG-23447 raised the cap from 12000: scoping every Display text rule
-    // away from the content leaves (late font swap became mobile LCP) costs
+    // Scoping every Display text rule away from the content leaves (late
+    // font swap became mobile LCP) raised the cap from 12000: it costs
     // ~600 bytes of :not(.content-theme) guards. Still no @import, no remote
     // URLs, still one hand-readable file.
     expect(css.length).toBeLessThan(13000);

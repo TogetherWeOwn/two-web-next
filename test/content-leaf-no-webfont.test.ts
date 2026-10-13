@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { LEAF_CRITICAL_CSS } from "../src/leaf-critical-css";
 import { Layout } from "../src/pages";
 
-// TOG-23447: staging mobile LCP on /about, /faq, /rules and /privacy measured
+// Staging mobile LCP on /about, /faq, /rules and /privacy measured
 // 2197–2255 ms against the 2000 ms budget while FCP sat at 1687–1750 ms. The
 // LCP breakdown shows a ~350–1200 ms render delay after a healthy TTFB: the
 // Display webfont arrives after first paint and its swap re-lays-out the
