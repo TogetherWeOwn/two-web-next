@@ -15,10 +15,16 @@ export const csr = false;
 // no-store). This binding owns only the 503 mapping — only error(503) proves
 // what Kit sends, since SvelteKit ignores the helper's status:503 property.
 // Authorization stays in the layout guard; the member-read boundary around
-// resolve() owns classification and the audit. No new queries: the helper
+// resolve() owns classification and the audit. The guard must settle first:
+// SvelteKit starts layout and page loads together, so the read below waits
+// on parent() — a guest 302 or non-moderator 403 propagates before any
+// database work, and no access-log subject is ever declared for a refused
+// request. Keep the await outside the try: only helper failures map to 503.
+// No new queries: the helper
 // calls the shared listActivityLog projection, which never selects
 // `properties`, so raw before/after maps cannot render.
-export const load: PageServerLoad = async ({ url, setHeaders }) => {
+export const load: PageServerLoad = async ({ parent, url, setHeaders }) => {
+  await parent();
   try {
     return await loadActivityLogPage({
       env,

@@ -205,6 +205,19 @@ describe("Kit activity-log binding: thin, shared reads, outage mapped", () => {
     expect(load).not.toMatch(/select\(|from\(|sql`/);
   });
 
+  it("load settles the layout guard before the member-subject read", () => {
+    // SvelteKit starts layout and page loads together: without awaiting
+    // parent(), a guest/non-moderator request reads activity-log subjects
+    // before the 302/403. The runtime order (no read while the guard is
+    // pending, no read on 302/403) is pinned in kit-activity-log-load.test.mjs;
+    // this pins the source contract next to the other binding pins.
+    const load = read("web/src/routes/admin/activity-log/+page.server.ts");
+    expect(load).toContain("await parent()");
+    expect(load.indexOf("await parent()")).toBeLessThan(
+      load.indexOf("return await loadActivityLogPage"),
+    );
+  });
+
   it("the helper defaults to the shared projection that never selects properties", () => {
     const helper = read("src/admin/kit-activity-log.ts");
     expect(helper).toContain("listActivityLog");
