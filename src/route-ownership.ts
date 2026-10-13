@@ -67,6 +67,17 @@ export const ROUTE_MANIFEST: OwnedRoute[] = [
     enabled: false,
     reads: { resource: "dashboard", action: "view", route: "admin.dashboard" },
   },
+  // Moderator featured list: member data, so the Kit branch renders
+  // inside the member-read boundary with this declaration and the bridged
+  // viewer. Off until the enablement review: the Hono panel answers meanwhile.
+  // The new/edit POST siblings and the guarded /admin/featured-contents
+  // legacy redirects stay Hono-owned; the manifest carries GET entries only.
+  {
+    method: "GET",
+    path: "/admin/featured",
+    enabled: false,
+    reads: { resource: "featured_contents", action: "list", route: "admin.featured.index" },
+  },
   { method: "GET", path: "/auth/recover", enabled: false, reads: "public" },
   // Profile reads: one Svelte view/model behind both Hono handlers. Native
   // rendering stays off until edit parity reviews enablement; write siblings
