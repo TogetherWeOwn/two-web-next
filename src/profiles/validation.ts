@@ -27,10 +27,8 @@ export function isIanaTimeZone(tz: string): boolean {
 const OPT_OUT_TRUTHY = new Set(["1", "true", "on", "yes"]);
 const OPT_OUT_FALSY = new Set(["0", "false", "off", "no", ""]);
 
-/**
- * Best-effort read of the leaderboard switch for re-rendering a failed save:
- * a boolean for anything recognizable, undefined for absent or garbage.
- */
+// Best-effort read of the leaderboard switch for re-rendering a failed save:
+// a boolean for anything recognizable, undefined for absent or garbage.
 export function normalizeLeaderboardOptOut(value: unknown): boolean | undefined {
   if (value === undefined || value === null) return undefined;
   const values = Array.isArray(value) ? value : [value];
