@@ -3,11 +3,26 @@ import { env } from "cloudflare:workers";
 import { dbFor } from "../../../../../src/admin/db";
 import { resolveKitFeaturedList } from "../../../../../src/admin/kit-featured";
 import { listFeatured } from "../../../../../src/admin/store-featured";
+import {
+  featuredListUrl,
+  type FeaturedListQuery,
+} from "../../../../../src/admin/featured-list-query";
 import type { PageServerLoad } from "./$types";
+
+function sortHeader(query: FeaturedListQuery, sort: FeaturedListQuery["sort"], label: string) {
+  const active = query.sort === sort;
+  const next = active && query.order === "asc" ? "desc" : "asc";
+  return {
+    href: featuredListUrl(query, { sort, order: next, page: 1 }),
+    ariaSort: active ? (query.order === "asc" ? "ascending" : "descending") : "none",
+    ariaLabel: `Sort by ${label.toLowerCase()} ${next === "asc" ? "ascending" : "descending"}`,
+    text: label + (active ? (query.order === "asc" ? " ↑" : " ↓") : ""),
+  } as const;
+}
 
 // Same reads and failure posture as the Hono GET /admin/featured handler
 // (src/admin/routes.tsx, admin.featured.index): the shared bounded
-// listFeatured read over the moderator's filter/pagination query, sliced to
+// listFeatured read over the moderator's search/pagination query, sliced to
 // one page with a lookahead. A missing database or a classified outage
 // answers the same 503 the Hono dbOr503 path serves (resolveKitFeaturedList,
 // src/admin/kit-featured.ts); an uncaught load rejection would render
@@ -16,14 +31,18 @@ import type { PageServerLoad } from "./$types";
 // New/edit links stay on the existing /admin/featured/* paths, which Hono
 // serves until the form slice migrates, so every link works during mixed
 // mode. No new queries: the list read is the shared store helper.
-export const load: PageServerLoad = async ({ setHeaders, url }) => {
-  // No parent() read: the page shows no actor chrome (like the Hono
-  // FeaturedPage), and the layout guard runs before every child load.
+export const load: PageServerLoad = async ({ parent, setHeaders, url }) => {
+  // Layout and page loads can run concurrently; authorize before acquiring the database.
+  await parent();
   const db = await dbFor({ env });
-  const outcome = await resolveKitFeaturedList(Object.fromEntries(url.searchParams.entries()), {
-    db,
-    list: listFeatured,
-  });
+  // Match Hono's first value for repeated query keys.
+  const outcome = await resolveKitFeaturedList(
+    Object.fromEntries([...url.searchParams].reverse()),
+    {
+      db,
+      list: listFeatured,
+    },
+  );
   if (outcome.kind === "unavailable") error(503, "Admin temporarily unavailable");
   setHeaders({ "cache-control": "private, no-store" });
   return {
@@ -31,5 +50,14 @@ export const load: PageServerLoad = async ({ setHeaders, url }) => {
     query: outcome.query,
     hasNext: outcome.hasNext,
     emptyText: outcome.emptyText,
+    positionHeader: sortHeader(outcome.query, "position", "Position"),
+    updatedHeader: sortHeader(outcome.query, "updated_at", "Last changed"),
+    previousHref:
+      outcome.query.page > 1
+        ? featuredListUrl(outcome.query, { page: outcome.query.page - 1 })
+        : null,
+    nextHref: outcome.hasNext
+      ? featuredListUrl(outcome.query, { page: outcome.query.page + 1 })
+      : null,
   };
 };

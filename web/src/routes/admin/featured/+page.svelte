@@ -1,21 +1,23 @@
 <script lang="ts">
 import type { PageProps } from "./$types";
-import { featuredListUrl } from "../../../../../src/admin/table-list";
 
 // Markup contract of FeaturedPage (src/admin/pages/featured-list.tsx): the
-// new/edit destinations, the GET filter form, the sortable position and
+// new/edit destinations, the GET search form, the sortable position and
 // last-changed headers, the row testids, the UTC window bounds, the
 // scroll-hint region and the prev/next pagination are shared, so the
 // existing admin E2E selectors still apply when this route owns traffic.
 // Rows arrive from the load with datetimes pre-rendered as ISO strings and
 // the publish/window status resolved through the shared featuredStatus(),
-// exactly as the Hono page emits them. No JavaScript: the filter form is a
+// exactly as the Hono page emits them. No JavaScript: the search form is a
 // plain GET and every sort/page change is a link.
 let { data }: PageProps = $props();
-const { rows, query, hasNext, emptyText } = $derived(data);
-const positionNext = $derived(query.sort === "position" && query.order === "asc" ? "desc" : "asc");
-const updatedNext = $derived(query.sort === "updated_at" && query.order === "asc" ? "desc" : "asc");
 </script>
+
+{#snippet sortHeading(header: PageProps["data"]["positionHeader"])}
+  <th scope="col" aria-sort={header.ariaSort}>
+    <a href={header.href} aria-label={header.ariaLabel}>{header.text}</a>
+  </th>
+{/snippet}
 
 <section>
   <h1>Featured content</h1>
@@ -23,18 +25,18 @@ const updatedNext = $derived(query.sort === "updated_at" && query.order === "asc
     <a class="btn" href="/admin/featured/new" data-testid="new-featured">New featured slot</a>
   </p>
   <form method="get" action="/admin/featured" class="filters">
-    <input type="hidden" name="sort" value={query.sort} />
-    <input type="hidden" name="order" value={query.order} />
+    <input type="hidden" name="sort" value={data.query.sort} />
+    <input type="hidden" name="order" value={data.query.order} />
     <div class="field">
       <label for="q">Search titles</label>
-      <input id="q" name="q" type="search" value={query.q} />
+      <input id="q" name="q" type="search" value={data.query.q} />
     </div>
     <div class="field">
       <label for="published">Published</label>
       <select id="published" name="published">
-        <option value="" selected={query.published === ""}>All</option>
-        <option value="1" selected={query.published === "1"}>Published</option>
-        <option value="0" selected={query.published === "0"}>Unpublished</option>
+        <option value="" selected={data.query.published === ""}>All</option>
+        <option value="1" selected={data.query.published === "1"}>Published</option>
+        <option value="0" selected={data.query.published === "0"}>Unpublished</option>
       </select>
     </div>
     <div class="field">
@@ -59,80 +61,46 @@ const updatedNext = $derived(query.sort === "updated_at" && query.order === "asc
         <tr>
           <th scope="col">Title</th>
           <th scope="col">Status</th>
-          <th
-            scope="col"
-            aria-sort={query.sort === "position"
-              ? query.order === "asc"
-                ? "ascending"
-                : "descending"
-              : "none"}
-          >
-            <a
-              href={featuredListUrl(query, { sort: "position", order: positionNext, page: 1 })}
-              aria-label={`Sort by position ${positionNext === "asc" ? "ascending" : "descending"}`}
-            >
-              Position{query.sort === "position" ? (query.order === "asc" ? " ↑" : " ↓") : ""}
-            </a>
-          </th>
+          {@render sortHeading(data.positionHeader)}
           <th scope="col">Window (UTC)</th>
-          <th
-            scope="col"
-            aria-sort={query.sort === "updated_at"
-              ? query.order === "asc"
-                ? "ascending"
-                : "descending"
-              : "none"}
-          >
-            <a
-              href={featuredListUrl(query, { sort: "updated_at", order: updatedNext, page: 1 })}
-              aria-label={`Sort by last changed ${updatedNext === "asc" ? "ascending" : "descending"}`}
-            >
-              Last changed{query.sort === "updated_at"
-                ? query.order === "asc"
-                  ? " ↑"
-                  : " ↓"
-                : ""}
-            </a>
-          </th>
+          {@render sortHeading(data.updatedHeader)}
         </tr>
       </thead>
       <tbody>
-        {#if rows.length === 0}
+        {#each data.rows as r (r.id)}
           <tr>
-            <td colspan={5} data-testid="featured-empty">{emptyText}</td>
+            <td><a href={`/admin/featured/${r.id}`}>{r.title}</a></td>
+            <td data-testid={`featured-status-${r.id}`}>
+              <span class="featured-status featured-status-{r.status}" data-status={r.status}>
+                {r.status}
+              </span>
+            </td>
+            <td data-testid={`featured-position-${r.id}`}>{r.position}</td>
+            <td>
+              <span class="featured-window-bound">
+                {#if r.startsAt}<time datetime={r.startsAt}>{r.startsAt}</time>{:else}—{/if}
+              </span>
+              <span class="featured-window-bound">
+                → {#if r.endsAt}<time datetime={r.endsAt}>{r.endsAt}</time>{:else}—{/if}
+              </span>
+            </td>
+            <td><time datetime={r.updatedAt}>{r.updatedAt}</time></td>
           </tr>
         {:else}
-          {#each rows as r (r.id)}
-            <tr>
-              <td><a href={`/admin/featured/${r.id}`}>{r.title}</a></td>
-              <td data-testid={`featured-status-${r.id}`}>
-                <span class="featured-status featured-status-{r.status}" data-status={r.status}>
-                  {r.status}
-                </span>
-              </td>
-              <td data-testid={`featured-position-${r.id}`}>{r.position}</td>
-              <td>
-                <span class="featured-window-bound">
-                  {#if r.startsAt}<time datetime={r.startsAt}>{r.startsAt}</time>{:else}—{/if}
-                </span>
-                <span class="featured-window-bound">
-                  → {#if r.endsAt}<time datetime={r.endsAt}>{r.endsAt}</time>{:else}—{/if}
-                </span>
-              </td>
-              <td><time datetime={r.updatedAt}>{r.updatedAt}</time></td>
-            </tr>
-          {/each}
-        {/if}
+          <tr>
+            <td colspan={5} data-testid="featured-empty">{data.emptyText}</td>
+          </tr>
+        {/each}
       </tbody>
     </table>
   </div>
   <nav aria-label="Featured content pages" class="actions">
-    {#if query.page > 1}
-      <a rel="prev" href={featuredListUrl(query, { page: query.page - 1 })}>Previous</a>
+    {#if data.previousHref}
+      <a rel="prev" href={data.previousHref}>Previous</a>
     {/if}
-    <span>Page {query.page}</span>
-    {#if hasNext}
-      <a rel="next" href={featuredListUrl(query, { page: query.page + 1 })}>Next</a>
+    <span>Page {data.query.page}</span>
+    {#if data.nextHref}
+      <a rel="next" href={data.nextHref}>Next</a>
     {/if}
   </nav>
 </section>

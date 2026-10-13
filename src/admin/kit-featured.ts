@@ -20,8 +20,8 @@ import {
   featuredEmptyText,
   parseFeaturedListQuery,
   type FeaturedListQuery,
-  type ListParams,
-} from "./table-list";
+} from "./featured-list-query";
+import type { ListParams } from "./table-list";
 
 /** The FeaturedRow fields the list view reads (structural, so this stays light). */
 export type KitFeaturedSourceRow = {

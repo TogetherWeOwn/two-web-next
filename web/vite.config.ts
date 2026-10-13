@@ -18,4 +18,14 @@ import { defineConfig } from "vite";
 // Remote-function origin checks ignore trustedOrigins and stay on.
 export default defineConfig({
   plugins: [tailwindcss(), sveltekit({ adapter: adapter(), csrf: { trustedOrigins: ["*"] } })],
+  // Vite leaves SSR unminified by default; the Worker ships these server chunks too.
+  // Minify whitespace only: exception telemetry relies on constructor.name.
+  environments: {
+    ssr: {
+      build: {
+        minify: true,
+        rolldownOptions: { output: { minify: { mangle: false, compress: false } } },
+      },
+    },
+  },
 });
