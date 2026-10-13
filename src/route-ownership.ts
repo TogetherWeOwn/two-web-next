@@ -55,6 +55,22 @@ export const ROUTE_MANIFEST: OwnedRoute[] = [
   { method: "GET", path: "/events/past", enabled: false, reads: "public" },
   { method: "GET", path: "/privacy", enabled: false, reads: "public" },
   { method: "GET", path: "/join", enabled: false, reads: "public" },
+  // Profile reads: one Svelte view/model behind both Hono handlers.
+  // Native rendering stays off until the edit-parity follow-up
+  // reviews the enablement; POST/PATCH sibling paths have no entries and
+  // stay Hono-owned, and the retired /members directory has none either.
+  {
+    method: "GET",
+    path: "/profile",
+    enabled: false,
+    reads: { resource: "profile", action: "view", route: "profile" },
+  },
+  {
+    method: "GET",
+    path: "/members/:user",
+    enabled: false,
+    reads: { resource: "profile", action: "view", route: "profiles.show" },
+  },
 ];
 
 // Response header set only on the Kit-rendered branch of the hook, so the

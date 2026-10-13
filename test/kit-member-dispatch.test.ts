@@ -249,12 +249,24 @@ describe("decideRoute", () => {
     expect(decideRoute(post, MEMBER_MANIFEST)).toBeUndefined();
   });
 
-  it("the shipped manifest declares the archive, privacy and join pages public and keeps them on Hono", () => {
+  it("the shipped manifest pins the archive, privacy, join and profile entries and keeps them on Hono", () => {
     const get = new Request(new URL("/events/past", APP_URL));
     expect(ROUTE_MANIFEST).toEqual([
       { method: "GET", path: "/events/past", enabled: false, reads: "public" },
       { method: "GET", path: "/privacy", enabled: false, reads: "public" },
       { method: "GET", path: "/join", enabled: false, reads: "public" },
+      {
+        method: "GET",
+        path: "/profile",
+        enabled: false,
+        reads: { resource: "profile", action: "view", route: "profile" },
+      },
+      {
+        method: "GET",
+        path: "/members/:user",
+        enabled: false,
+        reads: { resource: "profile", action: "view", route: "profiles.show" },
+      },
     ]);
     expect(decideRoute(get, ROUTE_MANIFEST)).toBeUndefined();
     expect(decideRoute(new Request(new URL("/join", APP_URL)), ROUTE_MANIFEST)).toBeUndefined();
