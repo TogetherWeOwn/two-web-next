@@ -41,8 +41,10 @@ export interface RouteDecision {
   path: string;
 }
 
-// The archive page renders natively; the privacy leaf, the house-rules leaf
-// and the join leaf stay on Hono until their enablement is reviewed.
+// The archive page renders natively; the events list ships its native handler
+// disabled until the calendar/enhancement companion passes, and the privacy
+// leaf, the house-rules leaf and the join leaf stay on Hono until their
+// enablement is reviewed.
 // Production (the Hono Worker) sees no traffic change for a disabled path;
 // the preview Worker moves a Kit-owned path back to Hono by design — that is
 // the rollback. Add one entry per migrated route, enabled only when its Kit
@@ -54,6 +56,7 @@ export interface RouteDecision {
 // gate for the right reason.
 export const ROUTE_MANIFEST: OwnedRoute[] = [
   { method: "GET", path: "/events/past", enabled: true, reads: "public" },
+  { method: "GET", path: "/events", enabled: false, reads: "public" },
   { method: "GET", path: "/privacy", enabled: false, reads: "public" },
   { method: "GET", path: "/rules", enabled: false, reads: "public" },
   { method: "GET", path: "/join", enabled: false, reads: "public" },
@@ -223,6 +226,10 @@ export interface HookDispatchDeps {
   // of in web/src/hooks.server.ts. Absent by default: without it the dispatch
   // behaves exactly as before.
   pastArchive?: (request: Request, render: () => Promise<Response>) => Promise<Response>;
+  // Native events-list guard/cache around Kit SSR. Same binding shape as the
+  // archive; the list entry ships disabled, so production never reaches this
+  // branch until the companion card enables it.
+  eventsPage?: (request: Request, render: () => Promise<Response>) => Promise<Response>;
 }
 
 // Production Kit decoration, owned by the core so the tested path is the
@@ -376,15 +383,19 @@ export async function dispatchHookRequest(
       });
     }
   }
-  // Native archive reads share the Hono guard and anonymous cache. The route
-  // id owns the branch (SvelteKit sets it before handle runs); the manifest
-  // owns the Kit half above, so an unowned path never reaches the wrapper.
+  // Native archive and list reads share the Hono guard and anonymous cache.
+  // The route id owns the branch (SvelteKit sets it before handle runs); the
+  // manifest owns the Kit half above, so an unowned path never reaches either
+  // wrapper.
   const isPastArchivePage = event.route?.id === "/events/past";
+  const isEventsListPage = event.route?.id === "/events";
   let response: Response;
   if (route.reads !== "public") {
     response = await renderMemberRead(event, route.reads, deps);
   } else if (isPastArchivePage && deps.pastArchive) {
     response = await deps.pastArchive(event.request, () => deps.resolve(event));
+  } else if (isEventsListPage && deps.eventsPage) {
+    response = await deps.eventsPage(event.request, () => deps.resolve(event));
   } else {
     response = await deps.resolve(event);
   }

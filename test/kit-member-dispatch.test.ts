@@ -249,10 +249,11 @@ describe("decideRoute", () => {
     expect(decideRoute(post, MEMBER_MANIFEST)).toBeUndefined();
   });
 
-  it("the shipped manifest assigns the public archive to Kit and keeps privacy, rules and join on Hono", () => {
+  it("the shipped manifest assigns the public archive to Kit and keeps the list, privacy, rules and join on Hono", () => {
     const get = new Request(new URL("/events/past", APP_URL));
     expect(ROUTE_MANIFEST).toEqual([
       { method: "GET", path: "/events/past", enabled: true, reads: "public" },
+      { method: "GET", path: "/events", enabled: false, reads: "public" },
       { method: "GET", path: "/privacy", enabled: false, reads: "public" },
       { method: "GET", path: "/rules", enabled: false, reads: "public" },
       { method: "GET", path: "/join", enabled: false, reads: "public" },

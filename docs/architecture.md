@@ -285,6 +285,7 @@ exactly once.
 | `src/join/` | join |
 | `src/kit-access-sink.ts` | profiles |
 | `src/kit-errors.ts` | entry |
+| `src/kit-events.ts` | events |
 | `src/kit-past-events.ts` | events |
 | `src/kit-session.ts` | auth |
 | `src/leaf-critical-css.ts` | content |
