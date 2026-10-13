@@ -10,15 +10,20 @@ import { listPast, normalizePastPage } from "../../../../../src/events/reads";
 export const csr = false;
 
 // Same reads and cache policy as the Hono handler (src/events/routes.tsx).
+// One setHeaders call per path: SvelteKit throws `header_already_set` when the
+// same header is set twice, so the cache policy is chosen after the read.
 export const load: PageServerLoad = async ({ url, setHeaders }) => {
-  setHeaders({ "cache-control": "private, no-store" });
   let db;
   try {
     db = await dbFor({ env });
   } catch {
+    setHeaders({ "cache-control": "private, no-store" });
     error(503, "Events temporarily unavailable");
   }
-  if (!db) error(503, "Events temporarily unavailable");
+  if (!db) {
+    setHeaders({ "cache-control": "private, no-store" });
+    error(503, "Events temporarily unavailable");
+  }
   const page = normalizePastPage(Number.parseInt(url.searchParams.get("page") ?? "1", 10));
   try {
     const { rows, hasMore, totalPages } = await listPast(db, page);
@@ -28,6 +33,7 @@ export const load: PageServerLoad = async ({ url, setHeaders }) => {
     });
     return { rows, page, hasMore, totalPages, appUrl: env.APP_URL };
   } catch {
+    setHeaders({ "cache-control": "private, no-store" });
     error(503, "Events temporarily unavailable");
   }
 };
