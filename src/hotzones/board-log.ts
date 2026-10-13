@@ -8,19 +8,21 @@
 //
 // Retention: board_view_logs rows older than BOARD_VIEW_LOG_RETENTION_DAYS
 // (90 days, same as event_search_logs) are pruned by age on occurred_at;
-// see pruneBoardViewsOlderThan below and src/jobs/constants.ts.
+// see pruneBoardViewsOlderThan below and src/jobs/constants.ts. The daily
+// model:prune pass drains them via pgPruneStores().boardViews.
 import { sql } from "drizzle-orm";
 import type { Db } from "../db/index";
 import { boardViewLogs } from "../db/admin-schema";
 import { nonSensitiveRead } from "../member-reads";
 
+// Single source of truth lives in src/jobs/constants.ts; re-exported here so
+// existing imports keep working while the prune pass reads the same constant.
+export { BOARD_VIEW_LOG_RETENTION_DAYS } from "../jobs/constants";
+
 /** Write deadline: logging must never hold the response (a locked table would wait forever). */
 export const BOARD_LOG_WRITE_DEADLINE_MS = 500;
 /** DB-side cap, shorter than the response deadline, so a blocked INSERT is cancelled server-side. */
 export const BOARD_LOG_DB_TIMEOUT_MS = 400;
-
-/** 90-day retention window for anonymous board_view_logs, pruned by occurred_at. */
-export const BOARD_VIEW_LOG_RETENTION_DAYS = 90;
 
 /** Never throws, never waits past the deadline. Logs the error class only. */
 export async function recordBoardView(
@@ -81,7 +83,7 @@ export async function pruneBoardViewsOlderThan(
 ): Promise<number> {
   const rows = await db.execute(
     sql`delete from board_view_logs where id in (
-      select id from board_view_logs where occurred_at < ${cutoff}
+      select id from board_view_logs where occurred_at < ${cutoff.toISOString()}::timestamptz
       order by id limit 1000
     ) returning 1`,
   );

@@ -2,7 +2,7 @@ import { error } from "@sveltejs/kit";
 import { env } from "cloudflare:workers";
 import type { PageServerLoad } from "./$types";
 import { dbFor } from "../../../../src/admin/db";
-import { loadJoinsGrid, priorGrid } from "../../../../src/hotzones/aggregates";
+import { joinsRetentionNote, loadJoinsGrid, priorGrid } from "../../../../src/hotzones/aggregates";
 import { parseSeasonParam } from "../../../../src/hotzones/season";
 
 // Server-rendered only: no hydration bundle, so no inline bootstrap script that
@@ -26,6 +26,7 @@ export const load: PageServerLoad = async ({ url, setHeaders }) => {
     eventCount: joins.eventCount,
     voice: voice.cells,
     games: games.cells,
+    retentionNote: joinsRetentionNote(season),
     appUrl: env.APP_URL,
   };
 };

@@ -5,7 +5,8 @@ import { WEEKDAY_NAMES } from "../../../../src/hotzones/aggregates";
 import type { PageProps } from "./$types";
 
 let { data }: PageProps = $props();
-const { season, joins, joinsTotal, eventCount, voice, games, appUrl } = $derived(data);
+const { season, joins, joinsTotal, eventCount, voice, games, retentionNote, appUrl } =
+  $derived(data);
 const destination = $derived(season === "all" ? "/hotzones" : `/hotzones?season=${season}`);
 const hours = Array.from({ length: 24 }, (_, h) => String(h).padStart(2, "0"));
 </script>
@@ -23,6 +24,8 @@ const hours = Array.from({ length: 24 }, (_, h) => String(h).padStart(2, "0"));
   <p class="strap">Activity rhythms</p>
   <h1>Hot zones</h1>
   <p>Aggregate activity by hour and weekday for season {season}: {joinsTotal} joins across {eventCount} scheduled gatherings.</p>
+  <p>Successful joins only (added or already a member); denied, error and degraded attempts never count.</p>
+  {#if retentionNote}<p>{retentionNote}</p>{/if}
   <nav aria-label="Signals">
     <ul>
       <li><a href="/hotzones/joins">Joins heatmap</a></li>

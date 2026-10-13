@@ -4,6 +4,7 @@ import type { PageServerLoad } from "./$types";
 import { dbFor } from "../../../../../src/admin/db";
 import {
   isHotzoneSignal,
+  joinsRetentionNote,
   loadJoinsGrid,
   priorGrid,
   type HotzoneSignal,
@@ -34,6 +35,7 @@ export const load: PageServerLoad = async ({ params, url, setHeaders }) => {
       cells: joins.cells,
       total: joins.total,
       eventCount: joins.eventCount,
+      retentionNote: joinsRetentionNote(season),
       estimated: false,
       appUrl: env.APP_URL,
     };
@@ -46,6 +48,7 @@ export const load: PageServerLoad = async ({ params, url, setHeaders }) => {
     cells: prior.cells,
     total: prior.total,
     eventCount: 0,
+    retentionNote: null,
     estimated: true,
     appUrl: env.APP_URL,
   };

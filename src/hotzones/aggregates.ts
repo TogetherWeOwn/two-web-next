@@ -10,10 +10,9 @@
 //   event-store calibration.
 //
 // All grids are aggregates only: 7 weekdays x 24 hours of counts.
-import { and, eq, gte, lt } from "drizzle-orm";
-import { events } from "../db/admin-schema";
-import { joinAttempts } from "../db/schema";
+import { sql } from "drizzle-orm";
 import type { Db } from "../db/index";
+import { JOIN_ATTEMPT_RETENTION_DAYS } from "../jobs/constants";
 import type { SeasonWindow } from "./season";
 
 export const HOTZONE_SIGNALS = ["joins", "voice", "games"] as const;
@@ -45,10 +44,19 @@ export function gridTotal(cells: HeatGrid): number {
   return total;
 }
 
+/** Outcomes that mean a join succeeded (added or already a member). */
+export const JOIN_SUCCESS_OUTCOMES = ["added", "already_member"] as const;
+
+/** Statement timeout for the public aggregate reads (fail fast, never hold the response). */
+export const JOINS_GRID_STATEMENT_TIMEOUT_MS = 2000;
+
 /**
  * Joins 7x24 cells from real web data in the season window.
- * Reads only `createdAt` (joins) and `startsAt`/`status` (events): never
- * discord_id, source, request_id, titles, or timestamps in the output.
+ * SQL-side aggregation only: one grouped count (at most 168 rows) plus one
+ * event count, never per-user rows. Only `added`/`already_member` outcomes
+ * count as joins; denied/error/degraded attempts never do. Join attempts are
+ * pruned after JOIN_ATTEMPT_RETENTION_DAYS, so windows older than retention
+ * read 0 by design (see joinsRetentionNote).
  * `db = null` (DB-free render) yields an empty grid, never a 500.
  */
 export async function loadJoinsGrid(
@@ -58,40 +66,55 @@ export async function loadJoinsGrid(
   const cells = emptyGrid();
   if (!db) return { cells, total: 0, eventCount: 0 };
   const inWindow = window.kind === "all" ? null : { start: window.start, end: window.end };
-  // Join attempts in the window (createdAt only: aggregate, no identities).
-  const joinRows = inWindow
-    ? await db
-        .select({ createdAt: joinAttempts.createdAt })
-        .from(joinAttempts)
-        .where(
-          and(
-            gte(joinAttempts.createdAt, inWindow.start),
-            lt(joinAttempts.createdAt, inWindow.end),
-          ),
+  // Bound both aggregate statements server-side inside one transaction, like
+  // recordBoardView's write deadline: set_config(..., true) is transaction-local,
+  // so the timeout cannot leak to the pooled session. At most 168 bucket rows
+  // plus one count ever cross the wire, never per-attempt or per-event rows.
+  const { buckets, eventCount } = await db.transaction(async (tx) => {
+    await tx.execute(
+      sql`select set_config('statement_timeout', ${`${JOINS_GRID_STATEMENT_TIMEOUT_MS}ms`}, true)`,
+    );
+    const buckets = (inWindow
+      ? await tx.execute(
+          sql`select extract(dow from created_at at time zone 'UTC')::int as dow, extract(hour from created_at at time zone 'UTC')::int as hr, count(*)::int as n from join_attempts where outcome in ('added', 'already_member') and created_at >= ${inWindow.start.toISOString()}::timestamptz and created_at < ${inWindow.end.toISOString()}::timestamptz group by 1, 2`,
         )
-    : await db.select({ createdAt: joinAttempts.createdAt }).from(joinAttempts);
-  for (const row of joinRows) {
-    const d = row.createdAt instanceof Date ? row.createdAt : new Date(row.createdAt);
-    if (Number.isNaN(d.getTime())) continue;
-    cells[d.getUTCDay()]![d.getUTCHours()]! += 1;
+      : await tx.execute(
+          sql`select extract(dow from created_at at time zone 'UTC')::int as dow, extract(hour from created_at at time zone 'UTC')::int as hr, count(*)::int as n from join_attempts where outcome in ('added', 'already_member') group by 1, 2`,
+        )) as unknown as { dow: number; hr: number; n: number }[];
+    const counted = (inWindow
+      ? await tx.execute(
+          sql`select count(*)::int as n from events where status = 'published' and starts_at >= ${inWindow.start.toISOString()}::timestamptz and starts_at < ${inWindow.end.toISOString()}::timestamptz`,
+        )
+      : await tx.execute(
+          sql`select count(*)::int as n from events where status = 'published'`,
+        )) as unknown as { n: number }[];
+    return { buckets, eventCount: Number(counted[0]?.n ?? 0) };
+  });
+  for (const row of buckets) {
+    const dow = Number(row.dow);
+    const hr = Number(row.hr);
+    const n = Number(row.n);
+    if (!Number.isInteger(dow) || dow < 0 || dow > 6) continue;
+    if (!Number.isInteger(hr) || hr < 0 || hr > 23) continue;
+    if (!Number.isFinite(n) || n <= 0) continue;
+    cells[dow]![hr]! += n;
   }
-  // Published event starts in the window (aggregate count only, never titles).
-  const eventRows = inWindow
-    ? await db
-        .select({ startsAt: events.startsAt })
-        .from(events)
-        .where(
-          and(
-            eq(events.status, "published"),
-            gte(events.startsAt, inWindow.start),
-            lt(events.startsAt, inWindow.end),
-          ),
-        )
-    : await db
-        .select({ startsAt: events.startsAt })
-        .from(events)
-        .where(eq(events.status, "published"));
-  return { cells, total: gridTotal(cells), eventCount: eventRows.length };
+  return { cells, total: gridTotal(cells), eventCount };
+}
+
+/**
+ * Human retention note for the joins grid. Join attempts delete after
+ * JOIN_ATTEMPT_RETENTION_DAYS, so a season window ending before the cutoff
+ * reads 0 joins while events (unpruned) still count; `all` silently covers
+ * only the retention window. Returns null when the window is inside retention.
+ */
+export function joinsRetentionNote(window: SeasonWindow, now: Date = new Date()): string | null {
+  const cutoff = now.getTime() - JOIN_ATTEMPT_RETENTION_DAYS * 86_400_000;
+  if (window.kind === "all")
+    return `Join data is kept ${JOIN_ATTEMPT_RETENTION_DAYS} days, so the all-time view covers the last ${JOIN_ATTEMPT_RETENTION_DAYS} days.`;
+  if (window.end.getTime() < cutoff)
+    return `Join data is kept ${JOIN_ATTEMPT_RETENTION_DAYS} days, so this season shows 0 joins while scheduled gatherings remain.`;
+  return null;
 }
 
 // --- WhatPulse-seeded prior (voice/games, estimates) ---

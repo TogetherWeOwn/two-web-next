@@ -8,7 +8,7 @@
 import { dbFor } from "../admin/db";
 import type { App, Ctx } from "../events/routes-shared";
 import { HotzoneSignalPage, HotzonesIndexPage } from "./pages";
-import { isHotzoneSignal, loadJoinsGrid, priorGrid } from "./aggregates";
+import { isHotzoneSignal, joinsRetentionNote, loadJoinsGrid, priorGrid } from "./aggregates";
 import { recordBoardView } from "./board-log";
 import { parseSeasonParam, seasonLabel } from "./season";
 
@@ -43,6 +43,7 @@ async function renderIndex(c: Ctx) {
       eventCount={joins.eventCount}
       voice={voice.cells}
       games={games.cells}
+      retentionNote={joinsRetentionNote(window)}
     />,
   );
 }
@@ -76,6 +77,7 @@ async function renderSignal(c: Ctx) {
         cells={joins.cells}
         total={joins.total}
         eventCount={joins.eventCount}
+        retentionNote={joinsRetentionNote(window)}
       />,
     );
   }

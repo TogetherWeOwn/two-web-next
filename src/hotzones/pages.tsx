@@ -44,7 +44,8 @@ export const HotzonesIndexPage: FC<{
   eventCount: number;
   voice: HeatGrid;
   games: HeatGrid;
-}> = ({ appUrl, season, joins, joinsTotal, eventCount, voice, games }) => (
+  retentionNote?: string | null;
+}> = ({ appUrl, season, joins, joinsTotal, eventCount, voice, games, retentionNote }) => (
   <Layout
     title="Hot zones — Together We Own"
     canonical={canonicalUrl(appUrl, season === "all" ? "/hotzones" : `/hotzones?season=${season}`)}
@@ -67,6 +68,11 @@ export const HotzonesIndexPage: FC<{
         Aggregate activity by hour and weekday for season {season}: {joinsTotal} joins across{" "}
         {eventCount} scheduled gatherings.
       </p>
+      <p>
+        Successful joins only (added or already a member); denied, error and degraded attempts never
+        count.
+      </p>
+      {retentionNote ? <p>{retentionNote}</p> : null}
       <nav aria-label="Signals">
         <ul>
           <li>
@@ -112,7 +118,8 @@ export const HotzoneSignalPage: FC<{
   cells: HeatGrid;
   total: number;
   eventCount?: number;
-}> = ({ appUrl, signal, season, cells, total, eventCount }) => {
+  retentionNote?: string | null;
+}> = ({ appUrl, signal, season, cells, total, eventCount, retentionNote }) => {
   const path = season === "all" ? `/hotzones/${signal}` : `/hotzones/${signal}?season=${season}`;
   const estimated = signal !== "joins";
   return (
@@ -137,10 +144,17 @@ export const HotzoneSignalPage: FC<{
             calibration). Total estimate: {total}.
           </p>
         ) : (
-          <p>
-            Join activity for season {season}: {total} joins
-            {eventCount !== undefined ? ` across ${eventCount} scheduled gatherings` : ""}.
-          </p>
+          <>
+            <p>
+              Join activity for season {season}: {total} joins
+              {eventCount !== undefined ? ` across ${eventCount} scheduled gatherings` : ""}.
+            </p>
+            <p>
+              Successful joins only (added or already a member); denied, error and degraded attempts
+              never count.
+            </p>
+            {retentionNote ? <p>{retentionNote}</p> : null}
+          </>
         )}
         <p>
           <a href="/hotzones">All hot zones</a> · <a href="/hotzones/joins">joins</a> ·{" "}

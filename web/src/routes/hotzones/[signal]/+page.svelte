@@ -5,7 +5,8 @@ import { WEEKDAY_NAMES } from "../../../../../src/hotzones/aggregates";
 import type { PageProps } from "./$types";
 
 let { data }: PageProps = $props();
-const { signal, season, cells, total, eventCount, estimated, appUrl } = $derived(data);
+const { signal, season, cells, total, eventCount, retentionNote, estimated, appUrl } =
+  $derived(data);
 const destination = $derived(
   season === "all" ? `/hotzones/${signal}` : `/hotzones/${signal}?season=${season}`,
 );
@@ -28,6 +29,8 @@ const hours = Array.from({ length: 24 }, (_, h) => String(h).padStart(2, "0"));
     <p>Estimated {signal} activity for season {season} (estimates until bot event-store calibration). Total estimate: {total}.</p>
   {:else}
     <p>Join activity for season {season}: {total} joins across {eventCount} scheduled gatherings.</p>
+    <p>Successful joins only (added or already a member); denied, error and degraded attempts never count.</p>
+    {#if retentionNote}<p>{retentionNote}</p>{/if}
   {/if}
   <p><a href="/hotzones">All hot zones</a> · <a href="/hotzones/joins">joins</a> · <a href="/hotzones/voice">voice</a> · <a href="/hotzones/games">games</a></p>
   <table>
