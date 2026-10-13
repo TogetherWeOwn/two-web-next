@@ -97,7 +97,7 @@ it("keeps versioned privacy HTML and the rules date unchanged inside the content
   expect(rules.match(/<li class="card">/g)).toHaveLength(5);
 });
 
-it("/faq skips rendering offscreen sections until scrolled near (LCP, TOG-23376)", async () => {
+it("/faq skips rendering offscreen sections until scrolled near (LCP)", async () => {
   // /faq is the stable ~2.3 s LCP outlier because it carries by far the most
   // below-fold DOM (8 sections, 15 cards); its LCP element (h1) sits outside
   // these subtrees, so first paint is unaffected. Sibling leaves showed only
