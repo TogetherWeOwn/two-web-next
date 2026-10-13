@@ -18,14 +18,18 @@ import { defineConfig } from "vite";
 // Remote-function origin checks ignore trustedOrigins and stay on.
 export default defineConfig({
   plugins: [tailwindcss(), sveltekit({ adapter: adapter(), csrf: { trustedOrigins: ["*"] } })],
+  // Vite leaves SSR unminified by default; the Worker ships these server chunks too.
+  // Minify whitespace only: exception telemetry relies on constructor.name.
+  // Hono and Kit share the admin modules. Keep them together on the server
+  // instead of emitting separately compressed helper chunks for each new
+  // viewer. This does not change client chunking.
   environments: {
     ssr: {
       build: {
+        minify: true,
         rolldownOptions: {
           output: {
-            // Hono and Kit share the admin modules. Keep them together on the
-            // server instead of emitting separately compressed helper chunks
-            // for each new viewer. This does not change client chunking.
+            minify: { mangle: false, compress: false },
             codeSplitting: {
               groups: [{ name: "admin", test: /\/src\/admin\// }],
             },
