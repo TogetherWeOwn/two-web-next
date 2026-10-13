@@ -64,13 +64,14 @@ beforeEach(() => {
 });
 
 describe("hooks.server route ownership wiring", () => {
-  it("ships the homepage disabled and the native archive route enabled with privacy, rules and join still on Hono", () => {
+  it("ships the homepage disabled and the native archive route enabled with privacy, rules, join and recover still on Hono", () => {
     expect(ROUTE_MANIFEST).toEqual([
       { method: "GET", path: "/", enabled: false, reads: "public" },
       { method: "GET", path: "/events/past", enabled: true, reads: "public" },
       { method: "GET", path: "/privacy", enabled: false, reads: "public" },
       { method: "GET", path: "/rules", enabled: false, reads: "public" },
       { method: "GET", path: "/join", enabled: false, reads: "public" },
+      { method: "GET", path: "/auth/recover", enabled: false, reads: "public" },
     ]);
   });
 

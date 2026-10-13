@@ -47,6 +47,19 @@ export const PARITY_ROUTES = [
     cache: ["public, max-age=60", "public, max-age=3600"],
     compareSection: null,
   },
+  // GET /auth/recover only: the one-use journey writes stay Hono-owned, so
+  // the cookie-setting controller keeps single OAuth authority. No byte
+  // section compare: the retry href carries the caller's ?next= and the
+  // Set-Cookie values differ per response, so preview proves the structural
+  // contract on both sides instead of equal bytes.
+  {
+    path: "/auth/recover",
+    expectStatus: 200,
+    expectMarker: "manifest",
+    contract: "recovery",
+    cache: "no-store, private",
+    compareSection: null,
+  },
 ];
 
 export const RESERVED_PROBES = [{ path: "/up", expectStatus: 200, expectMarker: null }];
@@ -187,10 +200,11 @@ export function isManifestEnabled(manifestSource, path, method = null) {
   );
 }
 
-// Coverage: the only executed parity runs today are GET/HEAD /events/past
-// and GET/HEAD /join via PARITY_ROUTES (unit contract + preview fetch). Any
-// other enabled entry has no run covering it and must fail — the scopes below
-// only choose the journey name for the failure message, never whether it fails.
+// Coverage: the only executed parity runs today are GET/HEAD /events/past,
+// GET/HEAD /join and GET/HEAD /auth/recover via PARITY_ROUTES (unit contract
+// + preview fetch). Any other enabled entry has no run covering it and must
+// fail — the scopes below only choose the journey name for the failure
+// message, never whether it fails.
 export function isCoveredByExecutedRun(entry) {
   const method = entry.method.toUpperCase();
   if (method !== "GET" && method !== "HEAD") return false;
@@ -324,8 +338,11 @@ export function assertRouteContract({ label, html, headers, status, expected }) 
     failures.push(`${label}: skip link targets #main`);
   if (!html.includes('aria-label="Primary"'))
     failures.push(`${label}: primary nav has an accessible name`);
-  if (!html.includes('<link rel="canonical"')) failures.push(`${label}: one canonical URL`);
   const contract = expected.contract ?? "archive";
+  // Transient outcome pages ship no canonical link on either renderer (unlike
+  // the archive/landing contracts), so only those require one here.
+  if (contract !== "recovery" && !html.includes('<link rel="canonical"'))
+    failures.push(`${label}: one canonical URL`);
   if (contract === "archive") {
     if (!html.includes('data-testid="past-events"'))
       failures.push(`${label}: archive section testid present (no-JS content)`);
@@ -335,6 +352,8 @@ export function assertRouteContract({ label, html, headers, status, expected }) 
       failures.push(`${label}: shared island binder`);
   } else if (contract === "join") {
     failures.push(...assertJoinContract(label, html, get, expected));
+  } else if (contract === "recovery") {
+    failures.push(...assertRecoveryContract(label, html, get, expected));
   } else {
     failures.push(`${label}: unknown contract ${JSON.stringify(contract)}`);
   }
@@ -437,6 +456,86 @@ function assertJoinContract(label, html, get, expected) {
   return failures;
 }
 
+// The retry href must be a bare OAuth start or carry a safe same-origin
+// next. Mirrors safeNext (src/join/service.ts) minus the control-byte check:
+// an HTML attribute value cannot smuggle a header-breaking byte past the
+// serializer, so the redirect guard (single leading slash, no scheme,
+// no backslash) is the check that matters here.
+function recoveryRetryHrefOk(href) {
+  for (const prefix of ["/join/discord", "/auth/discord"]) {
+    if (href === prefix) return true;
+    if (href.startsWith(`${prefix}?next=`)) {
+      let next;
+      try {
+        next = decodeURIComponent(href.slice(prefix.length + "?next=".length));
+      } catch {
+        return false;
+      }
+      return (
+        next.startsWith("/") &&
+        !next.startsWith("//") &&
+        !next.includes("\\") &&
+        !/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(next)
+      );
+    }
+  }
+  return false;
+}
+
+function recoveryHrefOf(html, testid) {
+  const match =
+    html.match(new RegExp(`data-testid="${testid}"[^>]*href="([^"]+)"`)) ??
+    html.match(new RegExp(`href="([^"]+)"[^>]*data-testid="${testid}"`));
+  return match ? match[1] : null;
+}
+
+// Recovery outcome contract (src/screens/recovery.tsx): every recovery
+// outcome — expired session, denied consent, expired link, provider outage —
+// carries the same shell on every renderer (hero chrome, heading, lead
+// message, retry button + invite fallback with stable testids), ships no
+// JavaScript, and always answers private, no-store: recovery views set and
+// clear per-visitor journey cookies, so a shared-cacheable recovery is a
+// privacy break however the expected cache is pinned. The invite fallback is
+// a configured absolute invite or a same-origin path, never a script URL.
+function assertRecoveryContract(label, html, get, expected) {
+  const failures = [];
+  if (expected.cache !== undefined && expected.cache !== null) {
+    const actual = get("cache-control") ?? "";
+    const allowed = Array.isArray(expected.cache) ? expected.cache : [expected.cache];
+    if (!allowed.includes(actual))
+      failures.push(
+        `${label}: cache-control ${JSON.stringify(actual)} not in ${allowed.join(" | ")}`,
+      );
+  }
+  const cacheActual = get("cache-control") ?? "";
+  if (cacheActual !== "no-store, private")
+    failures.push(`${label}: recovery answers private, no-store (per-visitor journey state)`);
+  if (!html.includes('class="hero recovery-hero"'))
+    failures.push(`${label}: recovery hero chrome present (no-JS content)`);
+  // Apostrophe-free: Hono JSX escapes it, Svelte renders it raw.
+  if (!html.includes("get you back to the lobby"))
+    failures.push(`${label}: recovery strap present`);
+  if (!html.includes('<h1 id="recovery-heading">'))
+    failures.push(`${label}: recovery heading present`);
+  if (!html.includes('data-testid="recovery-retry"'))
+    failures.push(`${label}: retry action present`);
+  if (!html.includes('data-testid="recovery-invite"'))
+    failures.push(`${label}: invite fallback action present`);
+  const retry = recoveryHrefOf(html, "recovery-retry");
+  if (retry === null) failures.push(`${label}: retry href readable`);
+  else if (!recoveryRetryHrefOk(retry))
+    failures.push(`${label}: hostile next leaves no trace in the retry href`);
+  const invite = recoveryHrefOf(html, "recovery-invite");
+  if (invite === null) failures.push(`${label}: invite href readable`);
+  else if (/^\s*javascript:/i.test(invite) || /^\s*data:/i.test(invite))
+    failures.push(`${label}: invite fallback is never a script URL`);
+  else if (!(invite.startsWith("/") && !invite.startsWith("//")) && !/^https:\/\//.test(invite))
+    failures.push(`${label}: invite fallback is a safe destination`);
+  if (html.includes("<script")) failures.push(`${label}: recovery ships no JavaScript`);
+  if (html.includes("<iframe")) failures.push(`${label}: no iframe on the recovery page`);
+  return failures;
+}
+
 export function assertReservedContract({ label, status, headers }) {
   const failures = [];
   const get = (name) => headers.get?.(name) ?? headers[name.toLowerCase()] ?? null;
@@ -470,9 +569,11 @@ export function runUnitMode({ stdout = process.stdout, manifestSource: manifestO
     manifestOverride ?? readFileSync(new URL("../src/route-ownership.ts", import.meta.url), "utf8");
   const marker = expectedMarkerFor(manifestSource, "/events/past");
   const joinMarker = expectedMarkerFor(manifestSource, "/join");
+  const recoverMarker = expectedMarkerFor(manifestSource, "/auth/recover");
   stdout.write(
     `kit-parity-gates: manifest expects marker ${JSON.stringify(marker)} for /events/past, ` +
-      `${JSON.stringify(joinMarker)} for /join\n`,
+      `${JSON.stringify(joinMarker)} for /join, ` +
+      `${JSON.stringify(recoverMarker)} for /auth/recover\n`,
   );
 
   // Positive control: the good fixture passes every helper.
@@ -639,6 +740,110 @@ export function runUnitMode({ stdout = process.stdout, manifestSource: manifestO
     );
   }
 
+  // Recovery outcome fixtures: one per entry point (expired session via GET
+  // /auth/recover, denied consent via /join/callback). Both carry the shared
+  // shell and answer private, no-store — recovery views set and clear
+  // per-visitor journey cookies, so a shared-cacheable recovery is a privacy
+  // break however the expected cache is pinned.
+  const recoverShell = (retryHref, inviteHref, title, message) =>
+    `<html><head></head>` +
+    `<body><a class="skip-link" href="#main">Skip</a>` +
+    `<nav aria-label="Primary"><a href="/">Home</a></nav>` +
+    `<main id="main"><section class="hero recovery-hero" aria-labelledby="recovery-heading">` +
+    `<div class="hero-detail hero-detail-left" aria-hidden="true"></div>` +
+    `<p class="strap">Let's get you back to the lobby</p>` +
+    `<h1 id="recovery-heading">${title}</h1>` +
+    `<p class="lead">${message}</p>` +
+    `<p class="recovery-actions"><a class="btn" href="${retryHref}" data-testid="recovery-retry">` +
+    `Retry</a> ` +
+    `<a href="${inviteHref}" data-testid="recovery-invite">` +
+    `Join with an invite link instead</a></p></section></main>` +
+    `<p><span class="account-caption">Welcome, guest</span></p></body></html>`;
+  const recoverCases = [
+    [
+      "unit/recover expired session",
+      recoverShell(
+        "/auth/discord?next=%2Fprofile",
+        "/discord",
+        "Your session expired",
+        "Your earlier changes were not saved.",
+      ),
+    ],
+    [
+      "unit/recover join denied",
+      recoverShell(
+        "/join/discord",
+        "https://discord.gg/invite",
+        "Join cancelled",
+        "You cancelled the Discord approval.",
+      ),
+    ],
+  ];
+  for (const [name, html] of recoverCases) {
+    const failures = assertRouteContract({
+      label: name,
+      html,
+      headers: headerMap({
+        "content-type": "text/html",
+        "x-two-renderer": recoverMarker,
+        "cache-control": "no-store, private",
+      }),
+      status: 200,
+      expected: {
+        status: 200,
+        marker: recoverMarker,
+        contract: "recovery",
+        cache: "no-store, private",
+      },
+    });
+    push(
+      `unit: ${name} passes`,
+      failures.length === 0 ? "passed" : "failed",
+      failures.join("; ") || null,
+    );
+  }
+  // Recovery forced-failure proof: a missing retry action, a hostile retry
+  // href, a missing invite fallback, a script-URL invite and a
+  // shared-cacheable recovery must all FAIL. A gate that cannot fail on a
+  // planted break proves nothing.
+  const recoverGood = recoverCases[0][1];
+  const recoverMutants = [
+    ["no-retry", (html) => html.replace('data-testid="recovery-retry"', 'data-testid="x"')],
+    [
+      "hostile-retry",
+      (html) => html.replace('href="/auth/discord?next=%2Fprofile"', 'href="https://evil.test/"'),
+    ],
+    ["no-invite", (html) => html.replace('data-testid="recovery-invite"', 'data-testid="x"')],
+    ["javascript-invite", (html) => html.replace('href="/discord"', 'href="javascript:alert(1)"')],
+    // A shared-cacheable recovery fails however the expected cache is
+    // pinned (the privacy invariant, like the join flash pin).
+    ["shared-cache", (html) => html],
+  ];
+  for (const [name, mutate] of recoverMutants) {
+    const failures = assertRouteContract({
+      label: `unit/recover-mutant-${name}`,
+      html: mutate(recoverGood),
+      headers: headerMap({
+        "content-type": "text/html",
+        "x-two-renderer": recoverMarker,
+        "cache-control": name === "shared-cache" ? "public, max-age=60" : "no-store, private",
+        vary: "Cookie",
+      }),
+      status: 200,
+      expected: {
+        status: 200,
+        marker: recoverMarker,
+        contract: "recovery",
+        cache: name === "shared-cache" ? "public, max-age=60" : "no-store, private",
+      },
+    });
+    push(
+      `unit: recover mutant ${name} fails`,
+      failures.length > 0 ? "passed" : "failed",
+      failures.length > 0 ? null : "mutant was NOT detected",
+    );
+  }
+
   // Wrong-marker mutant: Hono-owned route carrying the Kit marker must fail.
   const markerFailures = assertRouteContract({
     label: "unit/mutant-marker",
@@ -689,9 +894,10 @@ export function runUnitMode({ stdout = process.stdout, manifestSource: manifestO
   // Explicit ownership goes through isManifestEnabled — the same structural,
   // method-aware primitive its tests pin — so those tests guard the real gate
   // path instead of a parallel matcher. A final catch-all fails any other
-  // enabled entry no executed run covers (today only GET/HEAD /events/past
-  // via PARITY_ROUTES): GET /admin, /events, /join/discord, / and friends can
-  // never ship green with no journey. (GET /join itself is covered.)
+  // enabled entry no executed run covers (today only GET/HEAD /events/past,
+  // /join and /auth/recover via PARITY_ROUTES): GET /admin, /events,
+  // /join/discord, /join/callback and friends can never ship green with no
+  // journey. (GET /join and GET /auth/recover themselves are covered.)
   const manifestEntries = parseManifestEntries(manifestSource);
   for (const { name, routes, scope } of LOGIN_JOURNEYS) {
     const enabledInScope = manifestEntries.filter(

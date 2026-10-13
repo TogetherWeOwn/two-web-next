@@ -165,6 +165,35 @@ test("expected marker derives the join owner from its own entry", () => {
   );
 });
 
+test("expected marker derives the recover owner from its own entry", () => {
+  assert.equal(
+    expectedMarkerFor('{ method: "GET", path: "/auth/recover", enabled: false }', "/auth/recover"),
+    null,
+  );
+  assert.equal(
+    expectedMarkerFor('{ method: "GET", path: "/auth/recover", enabled: true }', "/auth/recover"),
+    "kit",
+  );
+  assert.equal(
+    expectedMarkerFor(
+      '{ method: "GET", path: "/auth/recover", enabled: true }',
+      "/auth/recover?next=%2Fprofile",
+    ),
+    "kit",
+  );
+  // A prefix entry (/auth/discord) is not the /auth/recover entry: a parity
+  // route with no manifest entry of its own fails closed, never quiet-Hono.
+  assert.throws(
+    () =>
+      expectedMarkerFor(
+        '{ method: "GET", path: "/join", enabled: false },' +
+          ' { method: "GET", path: "/auth/discord", enabled: false }',
+        "/auth/recover",
+      ),
+    /cannot derive/,
+  );
+});
+
 test("secret scrubber hits token shapes and passes clean text", () => {
   assert.equal(scrubSecrets("hello X-TWO-QA-Auth world").length, 1);
   assert.equal(scrubSecrets("cookie __Host-two_session=abc").length, 1);
@@ -197,11 +226,11 @@ test("unit gate passes on the shipped manifest (no network)", async () => {
 });
 
 test("login journey ownership derives from the manifest", () => {
-  const honoManifest = `{ method: "GET", path: "/events/past", enabled: false }, { method: "GET", path: "/join", enabled: false }`;
+  const honoManifest = `{ method: "GET", path: "/events/past", enabled: false }, { method: "GET", path: "/join", enabled: false }, { method: "GET", path: "/auth/recover", enabled: false }`;
   assert.equal(isManifestEnabled(honoManifest, "/e/:key"), false);
   assert.equal(isManifestEnabled(honoManifest, "/profile"), false);
   const enabledManifest =
-    `{ method: "GET", path: "/events/past", enabled: false }, { method: "GET", path: "/join", enabled: false },` +
+    `{ method: "GET", path: "/events/past", enabled: false }, { method: "GET", path: "/join", enabled: false }, { method: "GET", path: "/auth/recover", enabled: false },` +
     ` { method: "POST", path: "/e/:key/rsvp", enabled: true },` +
     ` { method: "GET", path: "/profile", enabled: true }`;
   assert.equal(isManifestEnabled(enabledManifest, "/e/:key/rsvp", "POST"), true);
@@ -237,7 +266,7 @@ test("an enabled login route fails instead of a quiet skip", () => {
   const silent = { write: () => {} };
   const honoJourneys = runUnitMode({
     stdout: silent,
-    manifestSource: `{ method: "GET", path: "/events/past", enabled: false }, { method: "GET", path: "/join", enabled: false }`,
+    manifestSource: `{ method: "GET", path: "/events/past", enabled: false }, { method: "GET", path: "/join", enabled: false }, { method: "GET", path: "/auth/recover", enabled: false }`,
   });
   for (const journey of honoJourneys.filter((j) => j.name.startsWith("parity: "))) {
     assert.equal(journey.status, "skipped", journey.name);
@@ -245,7 +274,7 @@ test("an enabled login route fails instead of a quiet skip", () => {
   const enabledJourneys = runUnitMode({
     stdout: silent,
     manifestSource:
-      `{ method: "GET", path: "/events/past", enabled: false }, { method: "GET", path: "/join", enabled: false },` +
+      `{ method: "GET", path: "/events/past", enabled: false }, { method: "GET", path: "/join", enabled: false }, { method: "GET", path: "/auth/recover", enabled: false },` +
       ` { method: "POST", path: "/e/:key/rsvp", enabled: true },` +
       ` { method: "GET", path: "/profile", enabled: true }`,
   });
@@ -261,7 +290,7 @@ test("enabling the real mutation routes fails every login journey", () => {
   const journeys = runUnitMode({
     stdout: silent,
     manifestSource:
-      `{ method: "GET", path: "/events/past", enabled: false }, { method: "GET", path: "/join", enabled: false },` +
+      `{ method: "GET", path: "/events/past", enabled: false }, { method: "GET", path: "/join", enabled: false }, { method: "GET", path: "/auth/recover", enabled: false },` +
       ` { method: "POST", path: "/e/:key/rsvp", enabled: true },` +
       ` { method: "PUT", path: "/events/:key/rsvp", enabled: true },` +
       ` { method: "PATCH", path: "/members/:user", enabled: true },` +
@@ -305,7 +334,7 @@ test("renamed :params still fail their login journey instead of a quiet skip", (
   const journeys = runUnitMode({
     stdout: silent,
     manifestSource:
-      `{ method: "GET", path: "/events/past", enabled: false }, { method: "GET", path: "/join", enabled: false },` +
+      `{ method: "GET", path: "/events/past", enabled: false }, { method: "GET", path: "/join", enabled: false }, { method: "GET", path: "/auth/recover", enabled: false },` +
       ` { method: "POST", path: "/e/:id/rsvp", enabled: true },` +
       ` { method: "PATCH", path: "/members/:slug", enabled: true }`,
   });
@@ -337,7 +366,7 @@ test("each admin publish/cancel action route fails the admin journey", () => {
   ]) {
     const journeys = runUnitMode({
       stdout: silent,
-      manifestSource: `{ method: "GET", path: "/events/past", enabled: false }, { method: "GET", path: "/join", enabled: false }, ${route}`,
+      manifestSource: `{ method: "GET", path: "/events/past", enabled: false }, { method: "GET", path: "/join", enabled: false }, { method: "GET", path: "/auth/recover", enabled: false }, ${route}`,
     });
     const byName = new Map(journeys.map((j) => [j.name, j]));
     assert.equal(
@@ -354,7 +383,7 @@ test("a future scoped route fails its journey even when never listed", () => {
   const journeys = runUnitMode({
     stdout: silent,
     manifestSource:
-      `{ method: "GET", path: "/events/past", enabled: false }, { method: "GET", path: "/join", enabled: false },` +
+      `{ method: "GET", path: "/events/past", enabled: false }, { method: "GET", path: "/join", enabled: false }, { method: "GET", path: "/auth/recover", enabled: false },` +
       ` { method: "POST", path: "/admin/events/:key/approve", enabled: true }`,
   });
   const byName = new Map(journeys.map((j) => [j.name, j]));
@@ -410,7 +439,7 @@ test("every listed login route alone fails its own journey (no aggregate masking
   for (const journey of LOGIN_JOURNEYS) {
     for (const route of journey.routes) {
       const manifestSource =
-        `{ method: "GET", path: "/events/past", enabled: false }, { method: "GET", path: "/join", enabled: false },` +
+        `{ method: "GET", path: "/events/past", enabled: false }, { method: "GET", path: "/join", enabled: false }, { method: "GET", path: "/auth/recover", enabled: false },` +
         ` { method: "${route.method}", path: "${route.path}", enabled: true }`;
       const journeys = runUnitMode({ stdout: silent, manifestSource });
       const byName = new Map(journeys.map((j) => [j.name, j]));
@@ -424,6 +453,82 @@ test("every listed login route alone fails its own journey (no aggregate masking
       assert.equal(summarizeLedger(journeys).verdict, "fail", `${route.method} ${route.path}`);
     }
   }
+});
+
+test("recovery contract proves the shared shell, safe retry hrefs and private no-store", () => {
+  const headers = (cache) => ({
+    get: (name) =>
+      ({
+        "content-type": "text/html",
+        "x-two-renderer": null,
+        "cache-control": cache,
+      })[name] ?? null,
+  });
+  const shell = (retryHref, inviteHref, title, message) =>
+    `<html><head></head>` +
+    `<body><a class="skip-link" href="#main">Skip</a>` +
+    `<nav aria-label="Primary"></nav><main id="main">` +
+    `<section class="hero recovery-hero" aria-labelledby="recovery-heading">` +
+    `<p class="strap">Let's get you back to the lobby</p>` +
+    `<h1 id="recovery-heading">${title}</h1>` +
+    `<p class="lead">${message}</p>` +
+    `<p class="recovery-actions"><a class="btn" href="${retryHref}" data-testid="recovery-retry">Retry</a> ` +
+    `<a href="${inviteHref}" data-testid="recovery-invite">Join with an invite link instead</a></p>` +
+    `</section></main><p><span class="account-caption">Welcome, guest</span></p></body></html>`;
+  const goodCases = [
+    [
+      "expired session",
+      shell("/auth/discord?next=%2Fprofile", "/discord", "Your session expired", "Sign in again."),
+    ],
+    [
+      "join denied",
+      shell("/join/discord", "https://discord.gg/i", "Join cancelled", "You cancelled."),
+    ],
+  ];
+  for (const [name, html] of goodCases) {
+    const failures = assertRouteContract({
+      label: `recover/${name}`,
+      html,
+      headers: headers("no-store, private"),
+      status: 200,
+      expected: { status: 200, marker: null, contract: "recovery", cache: "no-store, private" },
+    });
+    assert.equal(failures.length, 0, `${name}: ${failures.join("; ")}`);
+  }
+  // Forced-failure proof: a missing retry action, a hostile retry href, a
+  // javascript: invite, a missing invite fallback and a shared-cacheable
+  // recovery must all FAIL. A gate that cannot fail on a planted break
+  // proves nothing.
+  const good = goodCases[0][1];
+  const mutants = [
+    ["no-retry", (html) => html.replace('data-testid="recovery-retry"', 'data-testid="x"')],
+    [
+      "hostile-retry",
+      (html) => html.replace('href="/auth/discord?next=%2Fprofile"', 'href="https://evil.test/"'),
+    ],
+    ["no-invite", (html) => html.replace('data-testid="recovery-invite"', 'data-testid="x"')],
+    ["javascript-invite", (html) => html.replace('href="/discord"', 'href="javascript:alert(1)"')],
+  ];
+  for (const [name, mutate] of mutants) {
+    const failures = assertRouteContract({
+      label: `recover-mutant-${name}`,
+      html: mutate(good),
+      headers: headers("no-store, private"),
+      status: 200,
+      expected: { status: 200, marker: null, contract: "recovery", cache: "no-store, private" },
+    });
+    assert.ok(failures.length > 0, `${name} was NOT detected`);
+  }
+  // A shared-cacheable recovery fails however the expected cache is pinned:
+  // recovery views carry per-visitor journey state and never go shared.
+  const sharedFailures = assertRouteContract({
+    label: "recover-mutant-shared-cache",
+    html: good,
+    headers: headers("public, max-age=60"),
+    status: 200,
+    expected: { status: 200, marker: null, contract: "recovery", cache: "public, max-age=60" },
+  });
+  assert.ok(sharedFailures.length > 0, "shared-cache recovery was NOT detected");
 });
 
 test("enabled routes outside every journey scope fail via the catch-all", () => {
@@ -444,7 +549,7 @@ test("enabled routes outside every journey scope fail via the catch-all", () => 
   ]) {
     const journeys = runUnitMode({
       stdout: silent,
-      manifestSource: `{ method: "GET", path: "/events/past", enabled: false }, { method: "GET", path: "/join", enabled: false }, ${route}`,
+      manifestSource: `{ method: "GET", path: "/events/past", enabled: false }, { method: "GET", path: "/join", enabled: false }, { method: "GET", path: "/auth/recover", enabled: false }, ${route}`,
     });
     assert.equal(summarizeLedger(journeys).verdict, "fail", route);
     const failed = journeys.filter((j) => j.status === "failed");
@@ -456,7 +561,7 @@ test("enabled routes outside every journey scope fail via the catch-all", () => 
   }
 });
 
-test("executed-run coverage is GET/HEAD /events/past and GET/HEAD /join", () => {
+test("executed-run coverage is GET/HEAD /events/past, GET/HEAD /join and GET/HEAD /auth/recover", () => {
   assert.equal(
     isCoveredByExecutedRun({ method: "GET", path: "/events/past", enabled: true }),
     true,
@@ -476,6 +581,18 @@ test("executed-run coverage is GET/HEAD /events/past and GET/HEAD /join", () => 
   assert.equal(isCoveredByExecutedRun({ method: "POST", path: "/join", enabled: true }), false);
   assert.equal(
     isCoveredByExecutedRun({ method: "GET", path: "/join/discord", enabled: true }),
+    false,
+  );
+  assert.equal(
+    isCoveredByExecutedRun({ method: "GET", path: "/auth/recover", enabled: true }),
+    true,
+  );
+  assert.equal(
+    isCoveredByExecutedRun({ method: "HEAD", path: "/auth/recover", enabled: true }),
+    true,
+  );
+  assert.equal(
+    isCoveredByExecutedRun({ method: "POST", path: "/auth/recover", enabled: true }),
     false,
   );
 });
