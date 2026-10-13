@@ -36,6 +36,11 @@ const Grid: FC<{ cells: HeatGrid; caption: string }> = ({ cells, caption }) => (
   </table>
 );
 
+// Kit's server-only loaders reuse this escaped JSX, rather than shipping a
+// second table renderer in the client bundle. Never accept pre-rendered input.
+export const renderHotzoneGrid = (cells: HeatGrid, caption: string) =>
+  (<Grid cells={cells} caption={caption} />).toString();
+
 export const HotzonesIndexPage: FC<{
   appUrl: string;
   season: string;

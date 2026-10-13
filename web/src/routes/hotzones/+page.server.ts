@@ -4,6 +4,7 @@ import type { PageServerLoad } from "./$types";
 import { dbFor } from "../../../../src/admin/db";
 import { joinsRetentionNote, loadJoinsGrid, priorGrid } from "../../../../src/hotzones/aggregates";
 import { parseSeasonParam } from "../../../../src/hotzones/season";
+import { renderHotzoneGrid } from "../../../../src/hotzones/pages";
 
 // Server-rendered only: no hydration bundle, so no inline bootstrap script that
 // the CSP (script-src 'self') would block.
@@ -21,11 +22,11 @@ export const load: PageServerLoad = async ({ url, setHeaders }) => {
   setHeaders({ "cache-control": "public, max-age=300" });
   return {
     season: label,
-    joins: joins.cells,
+    joinsHtml: await renderHotzoneGrid(joins.cells, `Join activity for season ${label}`),
     joinsTotal: joins.total,
     eventCount: joins.eventCount,
-    voice: voice.cells,
-    games: games.cells,
+    voiceHtml: await renderHotzoneGrid(voice.cells, `Estimated voice activity for season ${label}`),
+    gamesHtml: await renderHotzoneGrid(games.cells, `Estimated games activity for season ${label}`),
     retentionNote: joinsRetentionNote(season),
     appUrl: env.APP_URL,
   };

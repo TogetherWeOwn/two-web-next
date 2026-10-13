@@ -10,6 +10,7 @@ import {
   type HotzoneSignal,
 } from "../../../../../src/hotzones/aggregates";
 import { parseSeasonParam } from "../../../../../src/hotzones/season";
+import { renderHotzoneGrid } from "../../../../../src/hotzones/pages";
 
 // Server-rendered only: no hydration bundle, so no inline bootstrap script that
 // the CSP (script-src 'self') would block.
@@ -32,7 +33,7 @@ export const load: PageServerLoad = async ({ params, url, setHeaders }) => {
     return {
       signal,
       season: label,
-      cells: joins.cells,
+      gridHtml: await renderHotzoneGrid(joins.cells, `Join activity for season ${label}`),
       total: joins.total,
       eventCount: joins.eventCount,
       retentionNote: joinsRetentionNote(season),
@@ -45,7 +46,10 @@ export const load: PageServerLoad = async ({ params, url, setHeaders }) => {
   return {
     signal,
     season: label,
-    cells: prior.cells,
+    gridHtml: await renderHotzoneGrid(
+      prior.cells,
+      `Estimated ${signal} activity for season ${label}`,
+    ),
     total: prior.total,
     eventCount: 0,
     retentionNote: null,

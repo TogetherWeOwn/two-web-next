@@ -1,18 +1,15 @@
 <script lang="ts">
 import Shell from "#lib/Shell.svelte";
 import { canonicalUrl } from "../../../../../src/seo";
-// Client-safe weekday names: never import ./aggregates here (it bundles
-// drizzle-orm into the Kit client output); see src/hotzones/weekday-names.ts.
-import { WEEKDAY_NAMES } from "../../../../../src/hotzones/weekday-names";
 import type { PageProps } from "./$types";
 
 let { data }: PageProps = $props();
-const { signal, season, cells, total, eventCount, retentionNote, estimated, appUrl } =
+// gridHtml comes only from the escaped server-side renderHotzoneGrid output.
+const { signal, season, gridHtml, total, eventCount, retentionNote, estimated, appUrl } =
   $derived(data);
 const destination = $derived(
   season === "all" ? `/hotzones/${signal}` : `/hotzones/${signal}?season=${season}`,
 );
-const hours = Array.from({ length: 24 }, (_, h) => String(h).padStart(2, "0"));
 </script>
 
 <Shell
@@ -35,13 +32,5 @@ const hours = Array.from({ length: 24 }, (_, h) => String(h).padStart(2, "0"));
     {#if retentionNote}<p>{retentionNote}</p>{/if}
   {/if}
   <p><a href="/hotzones">All hot zones</a> · <a href="/hotzones/joins">joins</a> · <a href="/hotzones/voice">voice</a> · <a href="/hotzones/games">games</a></p>
-  <table>
-    <caption>{estimated ? `Estimated ${signal} activity for season ${season}` : `Join activity for season ${season}`}</caption>
-    <thead><tr><th scope="col">Day</th>{#each hours as h}<th scope="col">{h}</th>{/each}</tr></thead>
-    <tbody>
-      {#each WEEKDAY_NAMES as day, weekday}
-        <tr><th scope="row">{day}</th>{#each cells[weekday] as n}<td>{n}</td>{/each}</tr>
-      {/each}
-    </tbody>
-  </table>
+  {@html gridHtml}
 </Shell>

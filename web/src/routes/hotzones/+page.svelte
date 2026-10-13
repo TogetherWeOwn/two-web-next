@@ -1,16 +1,14 @@
 <script lang="ts">
 import Shell from "#lib/Shell.svelte";
 import { canonicalUrl } from "../../../../src/seo";
-// Client-safe weekday names: never import ./aggregates here (it bundles
-// drizzle-orm into the Kit client output); see src/hotzones/weekday-names.ts.
-import { WEEKDAY_NAMES } from "../../../../src/hotzones/weekday-names";
 import type { PageProps } from "./$types";
 
 let { data }: PageProps = $props();
-const { season, joins, joinsTotal, eventCount, voice, games, retentionNote, appUrl } =
+// Only escaped JSX produced by renderHotzoneGrid in the server loader enters
+// these HTML slots; captions and every cell are escaped by the shared renderer.
+const { season, joinsHtml, joinsTotal, eventCount, voiceHtml, gamesHtml, retentionNote, appUrl } =
   $derived(data);
 const destination = $derived(season === "all" ? "/hotzones" : `/hotzones?season=${season}`);
-const hours = Array.from({ length: 24 }, (_, h) => String(h).padStart(2, "0"));
 </script>
 
 <Shell
@@ -37,40 +35,16 @@ const hours = Array.from({ length: 24 }, (_, h) => String(h).padStart(2, "0"));
   </nav>
   <section aria-labelledby="hotzones-joins-heading">
     <h2 id="hotzones-joins-heading"><a href="/hotzones/joins">Joins</a></h2>
-    <table>
-      <caption>Join activity for season {season}</caption>
-      <thead><tr><th scope="col">Day</th>{#each hours as h}<th scope="col">{h}</th>{/each}</tr></thead>
-      <tbody>
-        {#each WEEKDAY_NAMES as day, weekday}
-          <tr><th scope="row">{day}</th>{#each joins[weekday] as n}<td>{n}</td>{/each}</tr>
-        {/each}
-      </tbody>
-    </table>
+    {@html joinsHtml}
   </section>
   <section aria-labelledby="hotzones-voice-heading">
     <h2 id="hotzones-voice-heading"><a href="/hotzones/voice">Voice</a></h2>
     <p>Estimated voice activity (estimates until calibration).</p>
-    <table>
-      <caption>Estimated voice activity for season {season}</caption>
-      <thead><tr><th scope="col">Day</th>{#each hours as h}<th scope="col">{h}</th>{/each}</tr></thead>
-      <tbody>
-        {#each WEEKDAY_NAMES as day, weekday}
-          <tr><th scope="row">{day}</th>{#each voice[weekday] as n}<td>{n}</td>{/each}</tr>
-        {/each}
-      </tbody>
-    </table>
+    {@html voiceHtml}
   </section>
   <section aria-labelledby="hotzones-games-heading">
     <h2 id="hotzones-games-heading"><a href="/hotzones/games">Games</a></h2>
     <p>Estimated games activity (estimates until calibration).</p>
-    <table>
-      <caption>Estimated games activity for season {season}</caption>
-      <thead><tr><th scope="col">Day</th>{#each hours as h}<th scope="col">{h}</th>{/each}</tr></thead>
-      <tbody>
-        {#each WEEKDAY_NAMES as day, weekday}
-          <tr><th scope="row">{day}</th>{#each games[weekday] as n}<td>{n}</td>{/each}</tr>
-        {/each}
-      </tbody>
-    </table>
+    {@html gamesHtml}
   </section>
 </Shell>
