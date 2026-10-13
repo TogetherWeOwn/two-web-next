@@ -170,6 +170,22 @@ describe("Kit admin events-list load: guard and failure wiring", () => {
     expect(setHeaders).toHaveBeenCalledWith({ "cache-control": "private, no-store" });
   });
 
+  it("duplicate query params resolve first-wins, like the Hono handler", async () => {
+    vi.stubGlobal("__kitAdminEventsDb", rowsDb([]));
+    const data = await load(
+      {
+        parent,
+        url: new URL(
+          "https://next.example.test/admin/events?status=draft&status=past&page=2&page=3",
+        ),
+        setHeaders: vi.fn(),
+      },
+      {},
+    );
+    expect(data.query).toMatchObject({ status: "draft", page: 2 });
+    expect(data.rows).toEqual([]);
+  });
+
   it("slices the over-fetched page and pre-renders timestamps", async () => {
     const events = Array.from({ length: 26 }, (_, i) => eventRow(i + 1));
     vi.stubGlobal("__kitAdminEventsDb", rowsDb(events, [{ eventId: 1, n: "4" }]));

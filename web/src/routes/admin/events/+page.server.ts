@@ -36,7 +36,10 @@ export const load: PageServerLoad = async ({ parent, url, setHeaders }) => {
   await parent();
   const db = await dbFor({ env });
   if (!db) error(503, "Admin temporarily unavailable");
-  const raw = Object.fromEntries(url.searchParams);
+  // First value wins per key, matching the Hono handler's c.req.query():
+  // Object.fromEntries(url.searchParams) would keep the last duplicate.
+  const raw: Record<string, string> = {};
+  for (const [k, v] of url.searchParams) if (!(k in raw)) raw[k] = v;
   const query = parseEventListQuery(raw);
   let fetched;
   try {
