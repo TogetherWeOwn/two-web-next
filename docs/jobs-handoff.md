@@ -182,15 +182,16 @@ explicitly after the version rollbacks (same pre-handoff settings the web
 Worker ran with: `max_retries` 10, batch 10, timeout 5). First freeze the deploy lane
 and the migrate lane until the cause is fixed: run `gh workflow disable deploy`
 and `gh workflow disable db-migrate` before anything else, then list every
-non-terminal `deploy` and `ci` run on main. Address both workflows by file name
-and filter out only `completed`
-(`gh run list --workflow deploy.yml --json databaseId,status,headBranch --jq '.[]
-| select(.status != "completed")'`, same `gh run list` with `--workflow ci.yml`):
-the plain workflow-name lookup stops resolving once the lane is disabled, and
+non-terminal `deploy` and `ci` run on main. Address both workflows by file name,
+scope to main, and filter out only `completed`
+(`gh run list --workflow deploy.yml --branch main --json databaseId,status,headBranch --jq '.[]
+| select(.status != "completed" and .headBranch == "main")'`, `gh run list --workflow ci.yml --branch main --json databaseId,status,headBranch --jq '.[]
+| select(.status != "completed" and .headBranch == "main")'`):
+the plain workflow-name lookup stops resolving once the lane is disabled, an unscoped list would cancel other open PRs' `ci` runs, and
 filtering on a single queued status misses the run the `deploy-staging`
 concurrency group holds as pending behind an executing deploy
-(`cancel-in-progress: false`). Let an in-progress deploy finish rather than cancelling it mid-mutation,
-cancel the rest with `gh run cancel <run-id>`, and only then start the wrangler
+(`cancel-in-progress: false`). Cancel every listed run except an in-progress deploy first — a pending run starts as soon as the executing deploy finishes and would pass the secrets gate and re-attach `two-web-jobs` — then let the in-progress deploy finish rather than cancelling it mid-mutation,
+cancel the remainder with `gh run cancel <run-id>`. Re-list both workflows and confirm only `completed` runs remain, and only then start the wrangler
 commands below. The step-0 record stays immutable:
 never overwrite the pre-handoff version pointers; if a deploy completed in the
 meantime, log its new live version IDs under separate incident names, re-read

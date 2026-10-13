@@ -194,10 +194,35 @@ describe("staging jobs handoff invariants", () => {
     expect(rollbackSection).not.toMatch(/--workflow ci(?!\.yml)/);
     // Filtering on one queued status misses the run the deploy-staging
     // concurrency group holds as pending: list every non-terminal run.
-    expect(rollbackSection).toContain('select(.status != "completed")');
     expect(rollbackSection).toContain("pending");
     expect(rollbackSection).toContain("gh run cancel");
     expect(rollbackSection).toContain("rather than cancelling it mid-mutation");
+    // Scope the run lists to main: ci also runs on PRs, so an unscoped list
+    // would cancel other open PRs' runs, including the fix PR.
+    expect(rollbackSection).toContain("--branch main");
+    expect(rollbackSection).toContain('.headBranch == "main"');
+    expect(rollbackSection).toContain("--json databaseId,status,headBranch");
+    expect(rollbackSection).toContain('select(.status != "completed" and .headBranch == "main")');
+    // Pin the full list commands: a --status flag or a dropped --json field
+    // silently narrows the check, and substring pins stay green through both.
+    expect(rollbackSection).toContain(
+      "gh run list --workflow deploy.yml --branch main --json databaseId,status,headBranch",
+    );
+    expect(rollbackSection).toContain(
+      "gh run list --workflow ci.yml --branch main --json databaseId,status,headBranch",
+    );
+    expect(rollbackSection).not.toContain("--status");
+    // Cancel-before-wait: a pending deploy starts as soon as the executing one
+    // finishes (cancel-in-progress: false) and would re-attach two-web-jobs.
+    expect(rollbackSection).toContain("except an in-progress deploy first");
+    expect(rollbackSection).toContain("Re-list");
+    expect(rollbackSection).toContain("only `completed` runs remain");
+    expect(rollbackSection.indexOf("except an in-progress deploy first")).toBeLessThan(
+      rollbackSection.indexOf("let the in-progress deploy finish"),
+    );
+    expect(rollbackSection.indexOf("Re-list")).toBeLessThan(
+      rollbackSection.indexOf("only then start the wrangler"),
+    );
     // The step-0 record is immutable: re-recording after a mid-rollback deploy
     // would overwrite the good pre-handoff pointers with post-deploy versions.
     expect(rollbackSection).not.toContain("re-recording the step-0 pointers");
