@@ -312,6 +312,32 @@ export const ProfilePage: FC<{
             ) : null}
             <form method="post" action={`/members/${member.id}`} data-testid={PROFILE_FORM_TESTID}>
               <input type="hidden" name="_method" value="PATCH" />
+              {/* Unchecked still submits: the hidden 0 keeps the choice explicit
+                  so an absent key always means "leave the stored choice alone". */}
+              <input type="hidden" name="leaderboard_opt_out" value="0" />
+              <label class="profile-field profile-switch">
+                <input
+                  id={PROFILE_FIELD_IDS.leaderboard_opt_out}
+                  name="leaderboard_opt_out"
+                  type="checkbox"
+                  value="1"
+                  checked={form.leaderboard_opt_out}
+                  aria-invalid={errors?.leaderboard_opt_out ? "true" : undefined}
+                  aria-describedby={
+                    errors?.leaderboard_opt_out ? PROFILE_ERROR_IDS.leaderboard_opt_out : undefined
+                  }
+                />
+                Hide me from the member leaderboard
+              </label>
+              <p class="profile-hint">
+                Opted out, you leave every board and every count. Tick to hide, untick to show
+                again.
+              </p>
+              {errors?.leaderboard_opt_out ? (
+                <p id={PROFILE_ERROR_IDS.leaderboard_opt_out} class="error">
+                  {errors.leaderboard_opt_out}
+                </p>
+              ) : null}
               {/* Native maxlength counts UTF-16 units; code-point limits belong to the validators. */}
               <label class="profile-field">
                 Bio{" "}
@@ -365,32 +391,6 @@ export const ProfilePage: FC<{
               {errors?.timezone ? (
                 <p id={PROFILE_ERROR_IDS.timezone} class="error">
                   {errors.timezone}
-                </p>
-              ) : null}
-              {/* Unchecked still submits: the hidden 0 keeps the choice explicit
-                  so an absent key always means "leave the stored choice alone". */}
-              <input type="hidden" name="leaderboard_opt_out" value="0" />
-              <label class="profile-field profile-switch">
-                <input
-                  id={PROFILE_FIELD_IDS.leaderboard_opt_out}
-                  name="leaderboard_opt_out"
-                  type="checkbox"
-                  value="1"
-                  checked={form.leaderboard_opt_out}
-                  aria-invalid={errors?.leaderboard_opt_out ? "true" : undefined}
-                  aria-describedby={
-                    errors?.leaderboard_opt_out ? PROFILE_ERROR_IDS.leaderboard_opt_out : undefined
-                  }
-                />
-                Hide me from the member leaderboard
-              </label>
-              <p class="profile-hint">
-                Opted out, you leave every board and every count. Tick to hide, untick to show
-                again.
-              </p>
-              {errors?.leaderboard_opt_out ? (
-                <p id={PROFILE_ERROR_IDS.leaderboard_opt_out} class="error">
-                  {errors.leaderboard_opt_out}
                 </p>
               ) : null}
               <div aria-hidden="true" class="sr-only">
