@@ -154,7 +154,7 @@ for (const target of targets) {
       // The Hono controller still owns the one-use journey writes, served
       // undecorated through honoFetch on both targets until enablement.
       const setCookies = (await response.headersArray())
-        .filter((h) => h.name === "set-cookie")
+        .filter((h) => h.name.toLowerCase() === "set-cookie")
         .map((h) => h.value)
         .join("\n");
       expect(setCookies).toContain("__Host-two_login_intended=");
