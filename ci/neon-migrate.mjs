@@ -54,6 +54,15 @@ export function migrationConfig(env, { testDatabase = false } = {}) {
   if (target === "production" && env.PRODUCTION_DEPLOY_ENABLED !== "true") {
     refuse("Production migrations require PRODUCTION_DEPLOY_ENABLED=true.");
   }
+  // Staging-only admission containment: only exactly "false" releases staging;
+  // absent, "true" and malformed values all hold. The hold never applies to
+  // production. Checked here before URL parsing or any database work, and
+  // mirrored in the workflow shell gates before install.
+  if (target === "staging" && env.STAGING_MIGRATION_HOLD !== "false") {
+    refuse(
+      'Staging migrations are held (STAGING_MIGRATION_HOLD is not exactly "false"; absent, "true" and malformed values all hold).',
+    );
+  }
   if (env.GITHUB_REF !== "refs/heads/main") refuse("Migrations require the reviewed main branch.");
   const secret = target === "staging" ? "NEON_STAGING_DATABASE_URL" : "PRODUCTION_DATABASE_URL";
   if (!env[secret]) refuse(`Missing ${secret} Environment secret; no fallback is permitted.`);
