@@ -420,6 +420,9 @@ jobs:
       - name: Staging deployment gate selftest (stubbed, no Cloudflare calls)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
         run: node --test ci/staging-deploy-gate-selftest.mjs
+      - name: Migration admission selftest (stubbed, no DB/Cloudflare calls)
+        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
+        run: node --test ci/migration-admission-selftest.mjs
       - name: Cutover selftest (loopback HTTP/TLS and stub DNS only)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
         run: npm run test:cutover

@@ -20,7 +20,11 @@ import {
   safeMigrationError,
 } from "./neon-migrate.mjs";
 
-const mainEnv = { GITHUB_REF: "refs/heads/main", MIGRATION_TARGET: "staging" };
+const mainEnv = {
+  GITHUB_REF: "refs/heads/main",
+  MIGRATION_TARGET: "staging",
+  STAGING_MIGRATION_HOLD: "false",
+};
 const script = fileURLToPath(new URL("./neon-migrate.mjs", import.meta.url));
 const source = fileURLToPath(new URL("../drizzle", import.meta.url));
 const journal = JSON.parse(readFileSync(join(source, "meta/_journal.json"), "utf8"));

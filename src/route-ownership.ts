@@ -41,12 +41,14 @@ export interface RouteDecision {
   path: string;
 }
 
-// The native routes so far render the archive page, the privacy leaf and the
-// house-rules leaf; all stay on Hono until their enablement is reviewed.
-// Production (the Hono Worker) sees no traffic change; the preview Worker
-// moves an enabled path from Kit back to Hono by design — that is the
-// rollback. Add one entry per migrated route, enabled only when its Kit
-// handler is ready to own the exact method/path.
+// The native routes so far render the archive page, the privacy leaf, the
+// house-rules leaf and the join leaf; all stay on Hono until their enablement
+// is reviewed. Production (the Hono Worker) sees no traffic change; the
+// preview Worker moves an enabled path from Kit back to Hono by design — that
+// is the rollback. Add one entry per migrated route, enabled only when its
+// Kit handler is ready to own the exact method/path. Only GET is listed per
+// page (HEAD follows its GET entry); /join/discord and /join/callback stay
+// Hono-owned, so the funnel keeps one OAuth authority.
 // Exported so the preview parity script derives its expected renderer from the
 // shipped manifest instead of hard-coding "kit": flipping enabled flips the
 // gate for the right reason.
@@ -54,6 +56,7 @@ export const ROUTE_MANIFEST: OwnedRoute[] = [
   { method: "GET", path: "/events/past", enabled: false, reads: "public" },
   { method: "GET", path: "/privacy", enabled: false, reads: "public" },
   { method: "GET", path: "/rules", enabled: false, reads: "public" },
+  { method: "GET", path: "/join", enabled: false, reads: "public" },
 ];
 
 // Response header set only on the Kit-rendered branch of the hook, so the
