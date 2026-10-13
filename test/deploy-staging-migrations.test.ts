@@ -61,6 +61,7 @@ describe("staging deploy applies web migrations before the Worker deploy", () =>
     const env = stepBlock(PLAN).split("        env: &staging-migration-env\n")[1];
     expect(env).toBeDefined();
     expect(env).toContain("          MIGRATION_TARGET: staging\n");
+    expect(env).toContain("          STAGING_MIGRATION_HOLD: ${{ vars.STAGING_MIGRATION_HOLD }}\n");
     expect(env).toContain(
       "          NEON_STAGING_DATABASE_URL: ${{ secrets.NEON_STAGING_DATABASE_URL }}\n",
     );
@@ -80,6 +81,14 @@ describe("staging deploy applies web migrations before the Worker deploy", () =>
     // The migration runs in this exact-SHA job, not in a reusable workflow that
     // would check out main's tip and run before the test suite.
     expect(workflow).not.toMatch(/^\s+uses: \.\/\.github\/workflows\//m);
+  });
+
+  it("pins the staging hold wiring into the hold step and the migration env anchor", () => {
+    const holdBlock = stepBlock("Staging admission hold (before dependencies or mutations)");
+    expect(holdBlock).toContain("STAGING_MIGRATION_HOLD: ${{ vars.STAGING_MIGRATION_HOLD }}");
+    const planEnv = stepBlock(PLAN).split("        env: &staging-migration-env\n")[1];
+    expect(planEnv).toBeDefined();
+    expect(planEnv).toContain("STAGING_MIGRATION_HOLD: ${{ vars.STAGING_MIGRATION_HOLD }}");
   });
 
   it("keeps the staging Environment gate, serialized deploys and read-only token permissions", () => {

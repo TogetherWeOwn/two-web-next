@@ -29,6 +29,7 @@ Only these **method + path** pairs bypass this guard:
 |---|---|---|
 | POST | `/api/agent-events` | Machine ingress authenticates with its own bearer grants, budgets and replay protection, not browser cookies. The bot action boundary retains its HMAC signer. |
 | POST | `/csp-reports` | Browser violation reports cannot reliably provide Origin; this bounded, sampled, non-persistent sink has no session, cookie or DB dependency and always returns 204. |
+| POST | `/mcp` | Stateless, cookie-free JSON-RPC for remote MCP clients that cannot send our Origin; the handler enforces its own Origin/Host transport check instead. |
 
 Other methods on these paths, trailing-slash variants and child paths are not
 exempt. No new exemptions may be added merely to accommodate a browser route
@@ -38,8 +39,8 @@ send a matching Origin; neither Origin nor Fetch Metadata is authentication.
 ## Regression proof
 
 `test/same-origin.test.ts` enumerates `app.routes`, proves a single global guard
-precedes every unsafe/ALL route registration, and pins both exemptions to real
-routes. A mutation case proves a handler inserted before the guard fails the
+precedes every unsafe/ALL route registration, and pins all three exemptions to
+real routes. A mutation case proves a handler inserted before the guard fails the
 audit. It sends a foreign-origin request to every concrete unsafe route/method
 (including the ALL RSVP fallback), with a signed moderator cookie and a filled
 honeypot; each must return the same 403 without reading or changing sessions.
