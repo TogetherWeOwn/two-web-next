@@ -178,7 +178,17 @@ test("db-migrate admits staging and production through one explicit gate before 
   assert.doesNotMatch(gate, /tr \[|tolower|ToLower|trim/i);
   assert.match(dbMigrate, /environment: \$\{\{ inputs\.target \}\}/);
   assert.match(dbMigrate, /cancel-in-progress: false/);
-  assert.match(dbMigrate, /STAGING_MIGRATION_HOLD: \$\{\{ vars\.STAGING_MIGRATION_HOLD \}\}/);
+  // Pin each env wiring site: the gate step and the shared migrator env anchor
+  // must each carry the hold variable, so dropping either line fails this test.
+  assert.match(gate, /STAGING_MIGRATION_HOLD: \$\{\{ vars\.STAGING_MIGRATION_HOLD \}\}/);
+  const migrationEnvAt = dbMigrate.indexOf("env: &migration-env");
+  assert.ok(migrationEnvAt > 0, "db-migrate needs a shared &migration-env anchor");
+  const migrationEnvEnd = dbMigrate.indexOf("\n      - ", migrationEnvAt + 1);
+  const migrationEnv = dbMigrate.slice(
+    migrationEnvAt,
+    migrationEnvEnd > migrationEnvAt ? migrationEnvEnd : undefined,
+  );
+  assert.match(migrationEnv, /STAGING_MIGRATION_HOLD: \$\{\{ vars\.STAGING_MIGRATION_HOLD \}\}/);
   for (const mode of ["plan", "apply", "verify"])
     assert.ok(dbMigrate.includes(`node ci/neon-migrate.mjs ${mode}`));
 });
@@ -205,7 +215,17 @@ test("deploy holds the direct staging migration path before dependencies or muta
   const holdScript = hold.slice(hold.indexOf("run: |"));
   assert.doesNotMatch(holdScript, /\[\[/);
   assert.doesNotMatch(holdScript, /pipefail/);
-  assert.match(deploy, /STAGING_MIGRATION_HOLD: \$\{\{ vars\.STAGING_MIGRATION_HOLD \}\}/);
+  // Pin each env wiring site: the hold step and the shared staging migrator env
+  // anchor must each carry the hold variable, so dropping either line fails.
+  assert.match(hold, /STAGING_MIGRATION_HOLD: \$\{\{ vars\.STAGING_MIGRATION_HOLD \}\}/);
+  const stagingEnvAt = deploy.indexOf("env: &staging-migration-env");
+  assert.ok(stagingEnvAt > 0, "deploy needs a shared &staging-migration-env anchor");
+  const stagingEnvEnd = deploy.indexOf("\n      - ", stagingEnvAt + 1);
+  const stagingEnv = deploy.slice(
+    stagingEnvAt,
+    stagingEnvEnd > stagingEnvAt ? stagingEnvEnd : undefined,
+  );
+  assert.match(stagingEnv, /STAGING_MIGRATION_HOLD: \$\{\{ vars\.STAGING_MIGRATION_HOLD \}\}/);
   assert.match(deploy, /MIGRATION_TARGET: staging/);
 });
 

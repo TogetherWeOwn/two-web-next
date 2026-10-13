@@ -88,6 +88,10 @@ hold.
   An acknowledgement on the card thread alone does not stop the lane. (There
   is no approval gate to leave pending: the `staging` environment has no
   required reviewers, so only the disable commands freeze anything.)
+  The staging migration hold (`vars.STAGING_MIGRATION_HOLD`, exactly `false`
+  to release) is independent of this lane disable: it holds staging
+  migrations and the whole staging deploy even while both workflows are
+  enabled, and the handoff does not change it.
 - Open the deploy, db-migrate and ci Actions pages (the `ci.yml` workflow for
   the exact main SHA counts: a still-running ci run on main triggers a deploy
   when it ends and shows on neither of the other two pages) and confirm no run
