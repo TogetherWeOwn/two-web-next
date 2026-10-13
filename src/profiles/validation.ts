@@ -3,7 +3,13 @@
 // timezone a real IANA zone or blank. `games_text` (one per line) is the form
 // shape; `games` the array shape.
 
-export type ProfileAttrs = { bio: string | null; games: string[]; timezone: string | null };
+export type ProfileAttrs = {
+  bio: string | null;
+  games: string[];
+  timezone: string | null;
+  /** Present only when the request names it; absent preserves the stored choice. */
+  leaderboardOptOut?: boolean;
+};
 export type ProfileInput = Record<string, unknown>;
 
 // Match the MemberProfile browser policy; tab, LF and CR remain allowed.
@@ -16,6 +22,49 @@ export function isIanaTimeZone(tz: string): boolean {
   } catch {
     return false;
   }
+}
+
+const OPT_OUT_TRUTHY = new Set(["1", "true", "on", "yes"]);
+const OPT_OUT_FALSY = new Set(["0", "false", "off", "no", ""]);
+
+/**
+ * Best-effort read of the leaderboard switch for re-rendering a failed save:
+ * a boolean for anything recognizable, undefined for absent or garbage.
+ */
+export function normalizeLeaderboardOptOut(value: unknown): boolean | undefined {
+  if (value === undefined || value === null) return undefined;
+  const values = Array.isArray(value) ? value : [value];
+  let seen: boolean | undefined;
+  for (const v of values) {
+    if (typeof v === "boolean") {
+      seen = v;
+      continue;
+    }
+    if (typeof v === "number") {
+      if (v === 1) {
+        seen = true;
+        continue;
+      }
+      if (v === 0) {
+        seen = false;
+        continue;
+      }
+      return undefined;
+    }
+    if (typeof v === "string") {
+      const t = v.trim().toLowerCase();
+      if (OPT_OUT_TRUTHY.has(t)) {
+        seen = true;
+        continue;
+      }
+      if (OPT_OUT_FALSY.has(t)) {
+        seen = false;
+        continue;
+      }
+    }
+    return undefined;
+  }
+  return seen;
 }
 
 export function validateProfile(
@@ -61,7 +110,25 @@ export function validateProfile(
     else errors.timezone = "Choose a valid IANA timezone, e.g. Europe/London.";
   }
 
+  // The leaderboard switch is optional: an absent key preserves the stored
+  // choice, so clients that predate the switch can never silently opt a
+  // member back in. Present values must be recognizable booleans.
+  const optRaw = input.leaderboard_opt_out;
+  let leaderboardOptOut: boolean | undefined;
+  if (optRaw !== undefined && optRaw !== null) {
+    const normalized = normalizeLeaderboardOptOut(optRaw);
+    if (normalized === undefined)
+      errors.leaderboard_opt_out = "Choose whether to appear on the member leaderboard.";
+    else leaderboardOptOut = normalized;
+  }
+
   if (Object.keys(errors).length > 0) return { ok: false, errors };
   const bio = typeof bioRaw === "string" && bioRaw.trim() !== "" ? bioRaw.trim() : null;
-  return { ok: true, attrs: { bio, games, timezone } };
+  return {
+    ok: true,
+    attrs:
+      leaderboardOptOut === undefined
+        ? { bio, games, timezone }
+        : { bio, games, timezone, leaderboardOptOut },
+  };
 }

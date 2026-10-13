@@ -283,7 +283,9 @@ describe.each(backends)("PATCH /members/:user is self-only ($name)", (backend) =
       );
       expect(res.status).toBe(422);
       expect(await res.json()).toEqual({
-        errors: { fields: "Only your bio, games and timezone can be changed." },
+        errors: {
+          fields: "Only your bio, games, timezone and leaderboard setting can be changed.",
+        },
       });
 
       const form = await send(
@@ -292,7 +294,9 @@ describe.each(backends)("PATCH /members/:user is self-only ($name)", (backend) =
       );
       expect(form.status).toBe(422);
       const html = await form.text();
-      expect(html).toContain("Only your bio, games and timezone can be changed.");
+      expect(html).toContain(
+        "Only your bio, games, timezone and leaderboard setting can be changed.",
+      );
       // The re-rendered form keeps the draft but never echoes the unsupported key.
       expect(html).toContain("rewritten");
       expect(html).not.toContain(`name="${field}"`);

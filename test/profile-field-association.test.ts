@@ -70,8 +70,12 @@ describe("profile SSR field association", () => {
   });
 
   it("unknown/global errors render safely without fabricated associations", () => {
-    const html = render({ fields: "Only your bio, games and timezone can be changed." });
-    expect(html).toContain("Only your bio, games and timezone can be changed.");
+    const html = render({
+      fields: "Only your bio, games, timezone and leaderboard setting can be changed.",
+    });
+    expect(html).toContain(
+      "Only your bio, games, timezone and leaderboard setting can be changed.",
+    );
     expect(html).not.toContain('href="#profile-');
     expect(html).not.toContain("aria-invalid");
     expect(html).not.toContain("profile-bio-error");
@@ -306,12 +310,16 @@ describe("profile island field association", () => {
       ok: false,
       status: 422,
       json: async () => ({
-        errors: { fields: "Only your bio, games and timezone can be changed." },
+        errors: {
+          fields: "Only your bio, games, timezone and leaderboard setting can be changed.",
+        },
       }),
     });
     await flush();
     const summary = f.root.querySelector('[data-testid="profile-error"]');
-    expect(summary?.textContent).toContain("Only your bio, games and timezone can be changed.");
+    expect(summary?.textContent).toContain(
+      "Only your bio, games, timezone and leaderboard setting can be changed.",
+    );
     expect(summary?.querySelector("a")).toBeNull();
     for (const control of ["bio", "games_text", "timezone"])
       expect(f.form.elements[control]!.getAttribute("aria-invalid")).toBeNull();

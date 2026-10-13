@@ -16,7 +16,7 @@ import { admitWrite } from "./routes-admission";
 import type { Ctx, ProfileApp, ProfileDeps } from "./routes-shared";
 import type { ProfileStores } from "./routes-stores";
 import { requestRoute, safeRequestId } from "../request-log";
-import { validateProfile } from "./validation";
+import { normalizeLeaderboardOptOut, validateProfile } from "./validation";
 
 // UpdateProfileRequest's fields plus the spam-trap pair. Anything else (user_id,
 // username, avatar, member…) refuses the whole write: no body key can name
@@ -26,10 +26,11 @@ const WRITABLE_FIELDS = new Set([
   "games",
   "games_text",
   "timezone",
+  "leaderboard_opt_out",
   PROFILE_HONEY_FIELD,
   PROFILE_OPENED_AT_FIELD,
 ]);
-const UNSUPPORTED_FIELDS = "Only your bio, games and timezone can be changed.";
+const UNSUPPORTED_FIELDS = "Only your bio, games, timezone and leaderboard setting can be changed.";
 
 // Media types are case-insensitive (RFC 2045 §5.1) and may carry parameters:
 // compare only the type/subtype before `;`, trimmed and lowercased. Anything
@@ -108,6 +109,11 @@ export function registerWriteRoutes(
                   ? input.games.filter((g): g is string => typeof g === "string").join("\n")
                   : "",
             timezone: typeof input.timezone === "string" ? input.timezone : "",
+            // Keep the switch where the member left it; garbage falls back to stored.
+            leaderboard_opt_out:
+              normalizeLeaderboardOptOut(input.leaderboard_opt_out) ??
+              member.leaderboardOptOut ??
+              false,
           }}
         />,
       );

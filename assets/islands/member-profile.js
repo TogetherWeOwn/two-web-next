@@ -75,12 +75,30 @@
   var sessionExpired = false;
   var leavingForRecovery = false;
 
+  // The leaderboard switch shares its name with a hidden 0 fallback, so
+  // browsers hand back a list there: take the checkbox from it. Absent (an
+  // older page) reads as no switch, and the save omits the key.
+  function optOutField() {
+    var named = form.elements["leaderboard_opt_out"];
+    if (!named) return null;
+    if (typeof named.type === "string") return named.type === "checkbox" ? named : null;
+    if (typeof named.length === "number") {
+      for (var i = 0; i < named.length; i++) {
+        if (named[i] && named[i].type === "checkbox") return named[i];
+      }
+    }
+    return null;
+  }
+
   function hasUnsavedChanges() {
-    return ["bio", "games_text", "timezone"].some(function (key) {
+    var textDirty = ["bio", "games_text", "timezone"].some(function (key) {
       var field = form.elements[key];
       if (field.value === field.defaultValue) return false;
       return !acceptedDraft || field.value !== acceptedDraft[key];
     });
+    if (textDirty) return true;
+    var optOut = optOutField();
+    return !!optOut && optOut.checked !== optOut.defaultChecked;
   }
 
   if (typeof window !== "undefined")
@@ -135,6 +153,14 @@
       if (form.elements[key].value !== body[key]) unchanged = false;
     });
     acceptedDraft = { bio: body.bio, games_text: body.games_text, timezone: body.timezone };
+    // The switch is a checkbox, not text: pin its saved state so Cancel and
+    // the dirty check agree with the server. Absent (an older page) leaves it.
+    var optOut = optOutField();
+    if (optOut && typeof body.leaderboard_opt_out === "boolean") {
+      var keptSwitch = editing && optOut === document.activeElement;
+      optOut.defaultChecked = body.leaderboard_opt_out;
+      if (!keptSwitch) optOut.checked = body.leaderboard_opt_out;
+    }
     Object.keys(values).forEach(function (key) {
       var field = form.elements[key];
       // Setting defaultValue rewrites a pristine field, so pin the live text first.
@@ -189,6 +215,7 @@
     bio: "profile-bio",
     games_text: "profile-games-text",
     timezone: "profile-timezone",
+    leaderboard_opt_out: "profile-leaderboard-opt-out",
   };
   function fieldForKey(k) {
     return k === "bio"
@@ -197,7 +224,9 @@
         ? "games_text"
         : k === "timezone"
           ? "timezone"
-          : null;
+          : k === "leaderboard_opt_out"
+            ? "leaderboard_opt_out"
+            : null;
   }
 
   function clientErrors(bio, games, tz) {
@@ -498,6 +527,10 @@
       website: f.website ? f.website.value : "",
       formOpenedAt: Number(f.formOpenedAt.value),
     };
+    // Always explicit while the switch exists; absent (an older page) omits
+    // the key so the server preserves the stored choice.
+    var switchField = optOutField();
+    if (switchField) body.leaderboard_opt_out = switchField.checked;
     clearNotices();
     var errs = clientErrors(body.bio, body.games_text, body.timezone);
     if (errs.length) return errorList(errs);
