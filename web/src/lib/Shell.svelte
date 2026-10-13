@@ -10,6 +10,7 @@ let {
   robots,
   description,
   shareTitle,
+  exactTitle,
   theme,
   activeNav,
   mainClass,
@@ -23,6 +24,7 @@ let {
   robots?: string;
   description?: string | null;
   shareTitle?: string;
+  exactTitle?: string;
   theme: "home" | "event" | "content" | "join" | "profile" | "schedule";
   activeNav?: "home" | "events";
   mainClass?: string;
@@ -37,7 +39,7 @@ let {
 const themeClass = $derived(theme === "home" ? "homepage-theme" : `${theme}-theme`);
 </script>
 
-<SiteMetadata {title} {canonical} {robots} {description} {shareTitle} {theme} />
+<SiteMetadata {title} {canonical} {robots} {description} {shareTitle} {exactTitle} {theme} />
 <!-- Open Lobby chrome: colours resolve through src/app.css semantic tokens
   (bg-lobby-*/text-lobby-*/font-sans); no hard-coded palette values here. A
   restyle is a token swap in that one file. -->

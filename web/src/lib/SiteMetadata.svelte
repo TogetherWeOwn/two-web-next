@@ -7,6 +7,7 @@ let {
   robots,
   description,
   shareTitle,
+  exactTitle,
   theme,
 }: {
   title: string;
@@ -14,10 +15,14 @@ let {
   robots?: string;
   description?: string | null;
   shareTitle?: string;
+  /** Rendered verbatim with no site-name suffix: pages whose Hono title
+    already carries the site name (the homepage). Absent by default, so every
+    existing page keeps its derived title byte-for-byte. */
+  exactTitle?: string;
   theme: "home" | "event" | "content" | "join" | "profile" | "schedule";
 } = $props();
 
-const fullTitle = $derived(`${title} — ${SITE_NAME}`);
+const fullTitle = $derived(exactTitle ?? `${title} — ${SITE_NAME}`);
 const share = $derived(shareTitle ?? fullTitle);
 const shareDescription = $derived(
   description || "Together We Own: a close-knit adult gaming community, founded 1998.",

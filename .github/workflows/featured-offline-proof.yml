@@ -62,6 +62,7 @@ jobs:
             "src/admin/table-list.ts" \
             "src/featured-image.ts" \
             "src/featured-status.tsx" \
+            "src/home-copy.ts" \
             "src/image-policy.ts" \
             "src/leaf-critical-css.ts" \
             "src/page-shell.tsx" \

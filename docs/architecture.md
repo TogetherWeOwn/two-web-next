@@ -275,6 +275,7 @@ exactly once.
 | `src/featured.ts` | content |
 | `src/freeze-banner.ts` | http-guard |
 | `src/headers.ts` | http-guard |
+| `src/home-copy.ts` | content |
 | `src/hotzones/` | events |
 | `src/html-outcome.ts` | entry |
 | `src/image-policy.ts` | content |

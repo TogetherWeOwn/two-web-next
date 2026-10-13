@@ -1,6 +1,7 @@
 import { raw } from "hono/html";
 import type { FC, PropsWithChildren } from "hono/jsx";
 import type { Session } from "./env";
+import { HOME_JOIN_RESULT_COPY, HOME_NOTICES } from "./home-copy";
 import { LEAF_CRITICAL_CSS } from "./leaf-critical-css";
 import type { JoinResult } from "./return-journey";
 
@@ -265,22 +266,9 @@ export type Notice =
   | "signin_unavailable"
   | null;
 
-// One actionable sentence per failure meaning (legacy auth-discord.php, matched
-// by meaning, not translation key): denied says "you cancelled", unavailable
-// says "this is on Discord, not you — try again in a minute", the generic
-// sentence covers an expired or otherwise incomplete attempt. Nobody's browser
-// ever shows Discord's error_description.
-export const NOTICES: Record<Exclude<Notice, null>, string> = {
-  joined: "You're in. Welcome to the TWO Discord.",
-  already_member: "Signed in. You're already in the TWO Discord.",
-  join_failed:
-    "Signed in, but we couldn't add you to the Discord automatically. Use the invite link below.",
-  signin_failed: "Discord sign-in didn't complete. Please try again.",
-  signin_denied:
-    "You cancelled the Discord sign-in, so we didn't sign you in. Nothing changed — try again whenever you like.",
-  signin_unavailable:
-    "Discord did not answer just now, so we could not sign you in. This is on Discord, not you — please try again in a minute.",
-};
+// Notice sentences live in ./home-copy (shared with the Kit home route);
+// this re-export keeps every existing importer untouched.
+export const NOTICES: Record<Exclude<Notice, null>, string> = HOME_NOTICES;
 
 // One-shot join confirmation (legacy join_result flash → data-testid="join-result",
 // JoinResultCopyTest/AlreadyMemberReinviteTest). A member who was already in the
@@ -289,12 +277,12 @@ export const NOTICES: Record<Exclude<Notice, null>, string> = {
 export const JoinResultBanner: FC<{ result: JoinResult }> = ({ result }) => (
   <p class="notice" role="status" data-testid="join-result">
     {result === "added" ? (
-      <>You are in. Finish Discord's rules screening before you can post.</>
+      <>{HOME_JOIN_RESULT_COPY.added}</>
     ) : (
       <>
-        You are already in the server.{" "}
+        {HOME_JOIN_RESULT_COPY.alreadyInServer}{" "}
         <a href="/discord" data-testid="reinvite-link">
-          Rejoin with the Discord invite
+          {HOME_JOIN_RESULT_COPY.reinvite}
         </a>
       </>
     )}
