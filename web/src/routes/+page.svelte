@@ -1,12 +1,7 @@
 <script lang="ts">
 import Shell from "#lib/Shell.svelte";
 import { featuredImageSrc } from "../../../src/featured-image";
-import {
-  FALLBACK_RANKS,
-  HOME_JOIN_RESULT_COPY,
-  HOME_NOTICES,
-  type HomeNotice,
-} from "../../../src/home-copy";
+import type { HomeNotice } from "../../../src/home-copy";
 import { cardTimeLabel, isValidZone } from "../../../src/islands/contracts";
 import { canonicalUrl } from "../../../src/seo";
 import { siteJsonLd } from "../../../src/seo-json-ld";
@@ -31,6 +26,7 @@ const {
   featured,
   imageHosts,
 } = $derived(data);
+const { HOME_NOTICES, HOME_JOIN_RESULT_COPY, FALLBACK_RANKS } = $derived(data.homeCopy);
 const canonical = $derived(canonicalUrl(appUrl, "/"));
 // The load validates ?n= through parseHomeNotice, so by render time the key
 // is one of the six — the cast only recovers what $derived destructuring widens.

@@ -5,7 +5,13 @@ import { readCounts } from "../../../src/counts";
 import { discordEventsSource } from "../../../src/events/discord-transients-source";
 import { loadHomeUpcomingMerged } from "../../../src/events/reads";
 import { listVisibleFeatured } from "../../../src/featured";
-import { parseHomeNotice, resolveHomeFlash } from "../../../src/home-copy";
+import {
+  FALLBACK_RANKS,
+  HOME_JOIN_RESULT_COPY,
+  HOME_NOTICES,
+  parseHomeNotice,
+  resolveHomeFlash,
+} from "../../../src/home-copy";
 import { inviteDestination } from "../../../src/invite";
 
 // Server-rendered only: the Hono homepage ships no page JavaScript (its
@@ -52,5 +58,7 @@ export const load: PageServerLoad = async ({ url, locals, setHeaders }) => {
     eventsUnavailable: homeUpcoming.unavailable,
     featured,
     imageHosts: env.FEATURED_IMAGE_HOSTS,
+    // SSR-only copy stays on the server, not in an unused shared client chunk.
+    homeCopy: { HOME_NOTICES, HOME_JOIN_RESULT_COPY, FALLBACK_RANKS },
   };
 };
