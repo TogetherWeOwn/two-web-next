@@ -16,12 +16,18 @@ export function registerJoinPageRoutes(app: Hono<{ Bindings: Env }>, render: Joi
     // context; without one (local requests) the last verdict stands. No
     // binding is read here: /join stays a persistence-free leaf.
     const widgetUrl = discordWidgetHealth.url(c.env.DISCORD_GUILD_ID, background(c));
+    // The presence snapshot rides the same verdict: it answers from the last
+    // background probe and never waits on Discord, so the response path stays
+    // synchronous. Read after `url` so the stale verdict schedules its one
+    // re-probe before this read.
+    const widgetSnapshot = discordWidgetHealth.snapshot(c.env.DISCORD_GUILD_ID);
     // A safe `?next=` survives onto the one-click link; a hostile one leaves
     // no trace in the HTML (legacy ReturnToPageTest; safeNext pins the guard).
     const next = safeNext(c.req.query("next"));
     return render.joinPage(c, {
       inviteUrl: c.env.DISCORD_INVITE_URL,
       widgetUrl,
+      widgetSnapshot,
       next,
       appUrl: c.env.APP_URL,
     });

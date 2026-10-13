@@ -34,6 +34,71 @@ Object.defineProperty(AccessorMessageError.prototype, "message", {
   get: () => MARK,
 });
 
+// Local fixtures only: subclasses whose prototype carries a formatter that
+// Node's %s / util.inspect would print, but own-state reads would miss.
+class PrototypeToStringError extends Error {
+  toString(): string {
+    return MARK;
+  }
+}
+class PrototypeToStringMap extends Map<string, string> {
+  toString(): string {
+    return MARK;
+  }
+}
+class PrototypeToStringSet extends Set<string> {
+  toString(): string {
+    return MARK;
+  }
+}
+class PrototypeToStringRegExp extends RegExp {
+  toString(): string {
+    return MARK;
+  }
+}
+class PrototypeToStringArray extends Array<string> {
+  toString(): string {
+    return MARK;
+  }
+}
+class PrototypeCustomInspectError extends Error {
+  [Symbol.for("nodejs.util.inspect.custom")](): string {
+    return MARK;
+  }
+}
+class PrototypeAccessorMap extends Map<string, string> {
+  get detail(): string {
+    return MARK;
+  }
+}
+class PrototypeTagDataMap extends Map<string, string> {}
+Object.defineProperty(PrototypeTagDataMap.prototype, Symbol.toStringTag, { value: MARK });
+class PrototypeDataMap extends Map<string, string> {}
+Object.defineProperty(PrototypeDataMap.prototype, "detail", {
+  value: MARK,
+  enumerable: true,
+  writable: true,
+  configurable: true,
+});
+
+// Two-level chains: the walk must flag prototype state on any intermediate
+// prototype, not just the first or last level.
+class GrandparentToStringMap extends Map<string, string> {
+  toString(): string {
+    return MARK;
+  }
+}
+class ChildOfFormatterGrandparentMap extends GrandparentToStringMap {}
+class CleanParentMap extends Map<string, string> {}
+class ChildFormatterMap extends CleanParentMap {
+  toString(): string {
+    return MARK;
+  }
+}
+class GrandparentTagMap extends Map<string, string> {}
+Object.defineProperty(GrandparentTagMap.prototype, Symbol.toStringTag, { value: MARK });
+class ChildOfTagGrandparentMap extends GrandparentTagMap {}
+
 afterEach(() => {
   vi.restoreAllMocks();
 });
@@ -247,6 +312,149 @@ describe("diagnostic stream capture", () => {
     const records = captureDiagnosticStream();
     console.warn("opaque", value());
     const { incomplete } = scanDiagnosticStream(records, MARKERS);
+    expect(incomplete).toHaveLength(1);
+    expect(incomplete[0]).toContain("opaque");
+  });
+
+  it.each([
+    [
+      "Error subclass",
+      () => {
+        const err = new PrototypeToStringError("ok");
+        err.stack = "PrototypeToStringError: ok";
+        return err;
+      },
+    ],
+    ["Map subclass", () => new PrototypeToStringMap([["k", "v"]])],
+    ["Set subclass", () => new PrototypeToStringSet(["v"])],
+    ["RegExp subclass", () => new PrototypeToStringRegExp("ok")],
+    ["Array subclass", () => new PrototypeToStringArray("ok")],
+  ])("reports a %s toString override as opaque, never clean", (_name, value) => {
+    const records = captureDiagnosticStream();
+    console.warn("opaque", value());
+    const { hits, incomplete } = scanDiagnosticStream(records, MARKERS);
+    expect(hits).toEqual([]);
+    expect(incomplete).toHaveLength(1);
+    expect(incomplete[0]).toContain("opaque");
+  });
+
+  it("reports a prototype nodejs.util.inspect.custom as opaque, never clean", () => {
+    const records = captureDiagnosticStream();
+    const err = new PrototypeCustomInspectError("ok");
+    err.stack = "PrototypeCustomInspectError: ok";
+    console.warn("opaque", err);
+    const { hits, incomplete } = scanDiagnosticStream(records, MARKERS);
+    expect(hits).toEqual([]);
+    expect(incomplete).toHaveLength(1);
+    expect(incomplete[0]).toContain("opaque");
+  });
+
+  it("reports a prototype accessor as opaque, never clean", () => {
+    const records = captureDiagnosticStream();
+    console.warn("opaque", new PrototypeAccessorMap([["k", "v"]]));
+    const { hits, incomplete } = scanDiagnosticStream(records, MARKERS);
+    expect(hits).toEqual([]);
+    expect(incomplete).toHaveLength(1);
+    expect(incomplete[0]).toContain("opaque");
+  });
+
+  it("reports a prototype Symbol.toStringTag as opaque, never clean", () => {
+    const records = captureDiagnosticStream();
+    console.warn("opaque", new PrototypeTagDataMap([["k", "v"]]));
+    const { hits, incomplete } = scanDiagnosticStream(records, MARKERS);
+    expect(hits).toEqual([]);
+    expect(incomplete).toHaveLength(1);
+    expect(incomplete[0]).toContain("opaque");
+  });
+
+  it("reports a prototype data property as opaque, never clean", () => {
+    const records = captureDiagnosticStream();
+    console.warn("opaque", new PrototypeDataMap([["k", "v"]]));
+    const { hits, incomplete } = scanDiagnosticStream(records, MARKERS);
+    expect(hits).toEqual([]);
+    expect(incomplete).toHaveLength(1);
+    expect(incomplete[0]).toContain("opaque");
+  });
+
+  it.each([
+    ["grandparent toString", () => new ChildOfFormatterGrandparentMap([["k", "v"]])],
+    ["child toString over a clean parent", () => new ChildFormatterMap([["k", "v"]])],
+    ["grandparent Symbol.toStringTag", () => new ChildOfTagGrandparentMap([["k", "v"]])],
+  ])("reports a two-level chain %s as opaque, never clean", (_name, value) => {
+    const records = captureDiagnosticStream();
+    console.warn("opaque", value());
+    const { hits, incomplete } = scanDiagnosticStream(records, MARKERS);
+    expect(hits).toEqual([]);
+    expect(incomplete).toHaveLength(1);
+    expect(incomplete[0]).toContain("opaque");
+  });
+
+  it("reports a renamed grandparent constructor in a two-level chain as a hit", () => {
+    class RenamedGrandparentMap extends Map<string, string> {}
+    Object.defineProperty(RenamedGrandparentMap, "name", { value: MARK, configurable: true });
+    class ChildOfRenamedGrandparentMap extends RenamedGrandparentMap {}
+    const records = captureDiagnosticStream();
+    console.warn("opaque", new ChildOfRenamedGrandparentMap([["k", "v"]]));
+    const { hits, incomplete } = scanDiagnosticStream(records, MARKERS);
+    expect(hits).toEqual(["warn[0].args[1].<constructor>"]);
+    expect(incomplete).toEqual([]);
+  });
+
+  it.each([
+    [
+      "Error",
+      () => {
+        class RenamedError extends Error {}
+        Object.defineProperty(RenamedError, "name", { value: MARK, configurable: true });
+        const err = new RenamedError("ok");
+        err.stack = "RenamedError: ok";
+        return err;
+      },
+    ],
+    [
+      "Map",
+      () => {
+        class RenamedMap extends Map<string, string> {}
+        Object.defineProperty(RenamedMap, "name", { value: MARK, configurable: true });
+        return new RenamedMap([["k", "v"]]);
+      },
+    ],
+  ])("reports a renamed %s constructor as a hit, never clean", (_name, value) => {
+    const records = captureDiagnosticStream();
+    console.warn("opaque", value());
+    const { hits, incomplete } = scanDiagnosticStream(records, MARKERS);
+    expect(hits).toEqual(["warn[0].args[1].<constructor>"]);
+    expect(incomplete).toEqual([]);
+  });
+
+  it.each([
+    [
+      "static name method",
+      () => {
+        class StaticNameMethodMap extends Map<string, string> {
+          static name(): string {
+            return MARK;
+          }
+        }
+        return new StaticNameMethodMap([["k", "v"]]);
+      },
+    ],
+    [
+      "static name getter",
+      () => {
+        class StaticNameGetterMap extends Map<string, string> {
+          static get name(): string {
+            return MARK;
+          }
+        }
+        return new StaticNameGetterMap([["k", "v"]]);
+      },
+    ],
+  ])("reports a Map subclass %s as opaque, never clean", (_name, value) => {
+    const records = captureDiagnosticStream();
+    console.warn("opaque", value());
+    const { hits, incomplete } = scanDiagnosticStream(records, MARKERS);
+    expect(hits).toEqual([]);
     expect(incomplete).toHaveLength(1);
     expect(incomplete[0]).toContain("opaque");
   });

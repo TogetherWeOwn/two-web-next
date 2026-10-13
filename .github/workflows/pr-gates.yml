@@ -28,12 +28,12 @@ permissions:
   contents: read
   pull-requests: read
 
-# A PR (or the dispatched release PR) cancels its superseded run. Each push to
-# main keeps its own group: pr-lint checks that push's commits, so a newer push
-# must not cancel it.
+# A pull_request run cancels its superseded run; a manual dispatch never
+# cancels. Each push to main keeps its own group: pr-lint checks that push's
+# commits, so a newer push must not cancel it.
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || inputs.pr_number || github.sha }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   # This repository is public, so internal card IDs (TOG-1234, PAP-1234) must stay out of PR

@@ -37,6 +37,15 @@ Do not provision on jobs: `DISCORD_CLIENT_SECRET`, `DISCORD_BOT_TOKEN`,
 `QUEUE_RECONCILE_*` (separate authorization). The jobs preview keeps
 `APP_URL https://two-web-jobs-preview.invalid` so `qaEnabled()` stays false.
 
+Custody (names only, never values): the three BOT names come through the
+existing staging-only granted custodian path. Do not rotate or substitute a
+credential to fill a gap, do not copy production or preview guild settings,
+and do not provision `QUEUE_RECONCILE_*` by inference. `QA_AUTH_TOKEN` is
+optional and probe-only: two older host QA-token sources disagree, so do not
+pick the older file merely because it exists. Establish the current approved
+staging QA source through the granted custodian before copying any probe
+token, and record which source was used without pasting a value.
+
 ## Readiness (jobs has no fetch handler)
 
 - `npx wrangler deployments status --name two-web-jobs --json` names the
@@ -50,11 +59,64 @@ Do not provision on jobs: `DISCORD_CLIENT_SECRET`, `DISCORD_BOT_TOKEN`,
   (`bin/internal-action-drill.mjs`, throwaway channel/identity) and the alert
   probe; both refuse production targets.
 
+## Coordinated hold (required before any handoff mutation)
+
+The handoff needs a bounded exclusive hold across three lanes that no single
+workflow serializes: the staging deploy lane (`deploy-staging` concurrency
+group in `.github/workflows/deploy.yml`), the hand-dispatch migration lane
+(`neon-web-migrate-staging` concurrency group in
+`.github/workflows/db-migrate.yml`, which the deploy job does not call), and
+the Operator queue/cron mutations below. One quiet Actions page or one
+concurrency group never proves the other two are idle.
+
+Establish the hold before provisioning any missing BOT secret: the deploy
+workflow fires on every green main CI (`workflow_run` on `ci`), and once
+`node ci/check-jobs-secrets.mjs` sees the three BOT names it detaches the web
+consumers and attaches `two-web-jobs` itself with no pause-delivery step. Treat
+secret provisioning as a covered handoff mutation, not a pre-step outside the
+hold.
+
+- Make the hold enforceable for the window, not just acknowledged: disable
+  both automatic lanes before the first mutation —
+  `gh workflow disable deploy` and `gh workflow disable db-migrate` — then
+  re-enable both when the handoff is done or aborted —
+  `gh workflow enable deploy` and `gh workflow enable db-migrate` — unless the
+  handoff rolled back, in which case leave both disabled per Rollback
+  until the cause is fixed. After re-enabling, verify
+  `gh workflow list --all` shows both `deploy` and `db-migrate` as active:
+  a workflow left disabled silently drops later `workflow_run` events.
+  An acknowledgement on the card thread alone does not stop the lane. (There
+  is no approval gate to leave pending: the `staging` environment has no
+  required reviewers, so only the disable commands freeze anything.)
+- Open the deploy, db-migrate and ci Actions pages (the `ci.yml` workflow for
+  the exact main SHA counts: a still-running ci run on main triggers a deploy
+  when it ends and shows on neither of the other two pages) and confirm no run
+  is in flight on any of them before the first mutation, and re-confirm with
+  the exact-SHA gate (`node ci/staging-deploy-gate.mjs`) before each Cloudflare
+  mutation.
+- The gate script is Actions-only by default: outside Actions
+  `process.env.GITHUB_EVENT_PATH` is undefined and it exits 1 with a TypeError.
+  Run it by hand from a main checkout at the gate SHA with:
+  `printf '{"repository":{"full_name":"TogetherWeOwn/two-web-next"}}' >
+  /tmp/staging-gate-event.json` then `GITHUB_EVENT_NAME=workflow_dispatch
+  GITHUB_EVENT_PATH=/tmp/staging-gate-event.json
+  GITHUB_REPOSITORY=TogetherWeOwn/two-web-next GITHUB_REF=refs/heads/main
+  GITHUB_SHA=$(git rev-parse HEAD) GITHUB_TOKEN=$(gh auth token) node
+  ci/staging-deploy-gate.mjs`. The checkout SHA must equal `GITHUB_SHA`.
+- Record the hold on the handoff card thread with named owner
+  acknowledgements, a start time and an expiry (at most 2h; release explicitly
+  when done). An expired hold is not a hold: re-acknowledge before continuing.
+- While the hold is active, any new deploy or migration run aborts the handoff:
+  stop, re-record the rollback pointers and the backlog, and re-enter under a
+  fresh hold.
+- Source changes to this runbook or the pinned configs need ordinary
+  exact-head CI and an independent review before they count as the packet.
+
 ## Handoff sequence (authorized Operator, serialized)
 
-Run under an exclusive staging deploy/migration hold with no deploy in flight.
-Re-verify exact-SHA CI (`node ci/staging-deploy-gate.mjs`) before each
-Cloudflare mutation. Detach before attach so two consumers never exist.
+Run under the coordinated hold above with no deploy in flight. Re-verify
+exact-SHA CI (`node ci/staging-deploy-gate.mjs`) before each Cloudflare
+mutation. Detach before attach so two consumers never exist.
 
 ```bash
 # 0. Record the rollback pointers and the backlog (read-only).
@@ -117,7 +179,40 @@ consumers are queue-side attachments and cron schedules are trigger settings
 applied outside versions, so rolling back both Workers alone leaves
 `two-web-jobs` still owning both consumers and both crons. Move them back
 explicitly after the version rollbacks (same pre-handoff settings the web
-Worker ran with: `max_retries` 10, batch 10, timeout 5):
+Worker ran with: `max_retries` 10, batch 10, timeout 5). First freeze the deploy lane
+and the migrate lane until the cause is fixed: run `gh workflow disable deploy`
+and `gh workflow disable db-migrate` before anything else, then list every
+non-terminal `deploy` and `ci` run on main. Address both workflows by file name,
+scope to main, and filter out only `completed`
+(`gh run list --workflow deploy.yml --branch main --json databaseId,status,headBranch --jq '.[]
+| select(.status != "completed" and .headBranch == "main")'`, `gh run list --workflow ci.yml --branch main --json databaseId,status,headBranch --jq '.[]
+| select(.status != "completed" and .headBranch == "main")'`):
+the plain workflow-name lookup stops resolving once the lane is disabled, an unscoped list would cancel other open PRs' `ci` runs, and
+filtering on a single queued status misses the run the `deploy-staging`
+concurrency group holds as pending behind an executing deploy
+(`cancel-in-progress: false`). Cancel every listed run except an in-progress deploy first — a pending run starts as soon as the executing deploy finishes and would pass the secrets gate and re-attach `two-web-jobs` — then let the in-progress deploy finish rather than cancelling it mid-mutation,
+cancel the remainder with `gh run cancel <run-id>`. Re-list both workflows and confirm only `completed` runs remain, and only then start the wrangler
+commands below. The step-0 record stays immutable:
+never overwrite the pre-handoff version pointers; if a deploy completed in the
+meantime, log its new live version IDs under separate incident names, re-read
+`wrangler queues consumer list` for both queues and the live schedules, and apply
+the moves below against the original pre-handoff pointers. Disabling stops
+future triggers; the hold treats existing runs as surviving the disable, so the rollback
+carries the same in-flight check.
+Re-enable both (`gh workflow enable deploy` and `gh workflow enable db-migrate`)
+explicitly after the cause is fixed and the revert or fix is on main, then
+verify `gh workflow list --all` shows both `deploy` and `db-migrate` as active:
+a lane left disabled silently drops later `workflow_run` events. `db-migrate`
+is the staging recovery path, so a rolled-back handoff must not strand it
+disabled. `db-migrate` serves both `staging` and `production` targets on one
+workflow — production is pre-cutover so nothing is blocked today, but the
+freeze covers the production target too, so re-enable promptly per above. A revert of
+the consumer/cron move on main is not a freeze — a revert is a push to main, so
+it fires the deploy workflow — and is merged only after the manual rollback
+below is complete: main still carries the moved consumers/crons and the three
+BOT secrets now exist, so the next push to main would pass the secrets gate,
+re-detach the web consumers and re-attach `two-web-jobs`, silently reversing
+the rollback.
 
 ```bash
 # REMOTE MUTATION: run only after the incident's rollback decision.
@@ -195,3 +290,26 @@ curl -fsS https://next.togetherweown.com/up
 
 A Worker rollback does not undo schema, data, Discord side effects or queue
 messages. Keep required bindings in place; never delete a queue to roll back.
+
+### First install: no prior jobs application version
+
+Right now `two-web-jobs` is only the inert bootstrap draft (zero crons, no
+queue bindings) plus the existing staging `BOT_KEY_ID`; `BOT_ENDPOINT_URL` and
+`BOT_SHARED_SECRET` are deliberately absent so the required-secrets gate stays
+fail-closed. There is no good jobs application version yet, so
+`$GOOD_JOBS_VERSION` does not exist and a version rollback of the jobs Worker
+is not the rollback. If the handoff fails before the first jobs attach:
+
+- Keep the web rollback pointers from the step-0 record: the known pre-handoff
+  web pointers recorded 2026-10-12 were version
+  `55c22e8e-b1d4-4137-867f-06bf3ceebae2` and deployment
+  `5a8e6b90-ecaa-48e2-8026-14552066d8f1`, but always prefer the fresh step-0
+  record over these copies. A Worker version rollback alone never restores the
+  queue-side consumers or the trigger schedules; move both back explicitly with
+  the same commands as the standard rollback above (same `max_retries` 10,
+  batch 10, timeout 5; triggers via the pre-handoff configs), but skip the `wrangler rollback "$GOOD_JOBS_VERSION" --name two-web-jobs` line and run only the consumer, trigger and verify commands: there is no good jobs version to roll back to, and the command would default to the previous (bad or draft) version instead of failing.
+- Partial detach/attach is idempotent: re-run the list-then-remove/add steps. A
+  failed consumer list fails the run instead of reading as empty, and delivery
+  resumes only if paused. Bounded delivery resume: run `resume-delivery` only
+  when the matching `pause-delivery` ran in this handoff. Never purge,
+  delete/recreate queues, age-delete ledger rows or clear unique locks.

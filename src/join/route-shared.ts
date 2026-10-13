@@ -99,6 +99,7 @@ export type JoinSessionHooks = {
 export type JoinPageProps = {
   inviteUrl: string;
   widgetUrl: string | null;
+  widgetSnapshot?: import("../discord-widget").DiscordWidgetSnapshot | null;
   next?: string | null;
   appUrl: string;
 };
