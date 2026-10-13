@@ -20,8 +20,33 @@ import { fileURLToPath } from "node:url";
 import { sectionOf } from "./kit-section-contract.mjs";
 
 export const PARITY_ROUTES = [
-  { path: "/events/past", expectStatus: 200, expectMarker: "manifest" },
-  { path: "/events/past?page=2", expectStatus: 200, expectMarker: "manifest" },
+  {
+    path: "/events/past",
+    expectStatus: 200,
+    expectMarker: "manifest",
+    contract: "archive",
+    compareSection: "past-events",
+  },
+  {
+    path: "/events/past?page=2",
+    expectStatus: 200,
+    expectMarker: "manifest",
+    contract: "archive",
+    compareSection: "past-events",
+  },
+  // GET /join only: /join/discord + /join/callback stay Hono-owned, so the
+  // funnel keeps one OAuth authority. No byte section compare: the widget
+  // zone is environment-dependent (the guild id — and therefore facade vs
+  // presence vs fallback — differs per worker), so preview proves the
+  // structural contract on both sides instead of equal bytes.
+  {
+    path: "/join",
+    expectStatus: 200,
+    expectMarker: "manifest",
+    contract: "join",
+    cache: ["public, max-age=60", "public, max-age=3600"],
+    compareSection: null,
+  },
 ];
 
 export const RESERVED_PROBES = [{ path: "/up", expectStatus: 200, expectMarker: null }];
@@ -89,13 +114,22 @@ export function validatePreviewPair(kitRaw, honoRaw) {
 
 // Expected renderer derives from the shipped manifest, never a hard-coded
 // "kit": with enabled:false the Kit Worker sends the route to honoFetch and
-// never sets the marker — that is the rollback.
+// never sets the marker — that is the rollback. Derived per queried path
+// (query stripped: /events/past?page=2 follows its page), field-order
+// independent like parseManifestEntries.
 export function expectedMarkerFor(manifestSource, path) {
-  const match = manifestSource.match(/path:\s*"\/events\/past"[^}]*enabled:\s*(true|false)/);
-  if (!match)
-    throw new Error("kit-parity-gates: cannot derive /events/past owner from ROUTE_MANIFEST");
-  if (!path.startsWith("/events/past")) return null;
-  return match[1] === "true" ? "kit" : null;
+  const base = path.split(/[?#]/)[0];
+  const escaped = base.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const match =
+    manifestSource.match(new RegExp(`path:\\s*"${escaped}"[^}]*enabled:\\s*(true|false)`)) ??
+    manifestSource.match(new RegExp(`enabled:\\s*(true|false)[^}]*path:\\s*"${escaped}"`));
+  if (match) return match[1] === "true" ? "kit" : null;
+  // A parity route with no manifest entry is a gate bug, never a quiet Hono:
+  // fail closed so a dropped entry cannot ship as "expected Hono".
+  if (PARITY_ROUTES.some((route) => route.path.split(/[?#]/)[0] === base)) {
+    throw new Error(`kit-parity-gates: cannot derive ${base} owner from ROUTE_MANIFEST`);
+  }
+  return null;
 }
 
 // Login-journey ownership derives from the shipped manifest, the same way
@@ -153,10 +187,10 @@ export function isManifestEnabled(manifestSource, path, method = null) {
   );
 }
 
-// Coverage: the only executed parity run today is GET/HEAD /events/past via
-// PARITY_ROUTES (unit contract + preview fetch). Any other enabled entry has
-// no run covering it and must fail — the scopes below only choose the journey
-// name for the failure message, never whether it fails.
+// Coverage: the only executed parity runs today are GET/HEAD /events/past
+// and GET/HEAD /join via PARITY_ROUTES (unit contract + preview fetch). Any
+// other enabled entry has no run covering it and must fail — the scopes below
+// only choose the journey name for the failure message, never whether it fails.
 export function isCoveredByExecutedRun(entry) {
   const method = entry.method.toUpperCase();
   if (method !== "GET" && method !== "HEAD") return false;
@@ -291,20 +325,113 @@ export function assertRouteContract({ label, html, headers, status, expected }) 
   if (!html.includes('aria-label="Primary"'))
     failures.push(`${label}: primary nav has an accessible name`);
   if (!html.includes('<link rel="canonical"')) failures.push(`${label}: one canonical URL`);
-  if (!html.includes('data-testid="past-events"'))
-    failures.push(`${label}: archive section testid present (no-JS content)`);
-  if (!html.includes('<meta name="robots" content="noindex, follow"'))
-    failures.push(`${label}: archive never indexes`);
-  if (!html.includes('<script src="/islands/past-events.js"'))
-    failures.push(`${label}: shared island binder`);
+  const contract = expected.contract ?? "archive";
+  if (contract === "archive") {
+    if (!html.includes('data-testid="past-events"'))
+      failures.push(`${label}: archive section testid present (no-JS content)`);
+    if (!html.includes('<meta name="robots" content="noindex, follow"'))
+      failures.push(`${label}: archive never indexes`);
+    if (!html.includes('<script src="/islands/past-events.js"'))
+      failures.push(`${label}: shared island binder`);
+  } else if (contract === "join") {
+    failures.push(...assertJoinContract(label, html, get, expected));
+  } else {
+    failures.push(`${label}: unknown contract ${JSON.stringify(contract)}`);
+  }
   if (html.includes("Cross-site POST form submissions"))
     failures.push(`${label}: bare Kit CSRF text (must be the hardened gate)`);
-  // Account chrome: the public archive is guest-only.
+  // Account chrome: the public archive and the join landing are guest-only.
   if (!html.includes("Welcome, guest")) failures.push(`${label}: guest account chrome`);
   if (html.includes("Sign out")) failures.push(`${label}: guest page must not show Sign out`);
   const secretHits = scrubSecrets(html);
   if (secretHits.length)
     failures.push(`${label}: secret-shaped content in HTML (${secretHits.length} patterns)`);
+  return failures;
+}
+
+// The one-click href must be the bare start or carry a safe same-origin next.
+// Mirrors safeNext (src/join/service.ts) minus the control-byte check: an
+// HTML attribute value cannot smuggle a header-breaking byte past the
+// serializer, so the redirect guard (single leading slash, no scheme,
+// no backslash) is the check that matters here.
+function joinOneClickHrefOk(href) {
+  if (href === "/join/discord") return true;
+  const prefix = "/join/discord?next=";
+  if (!href.startsWith(prefix)) return false;
+  let next;
+  try {
+    next = decodeURIComponent(href.slice(prefix.length));
+  } catch {
+    return false;
+  }
+  return (
+    next.startsWith("/") &&
+    !next.startsWith("//") &&
+    !next.includes("\\") &&
+    !/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(next)
+  );
+}
+
+function oneClickHrefOf(html) {
+  const match =
+    html.match(/data-testid="join-oneclick"[^>]*href="([^"]+)"/) ??
+    html.match(/href="([^"]+)"[^>]*data-testid="join-oneclick"/);
+  return match ? match[1] : null;
+}
+
+// Join landing contract (src/screens/join.tsx): the funnel keeps its actions,
+// URLs and testids on every renderer, the widget zone shows exactly one
+// state (cold facade link, warm presence + facade link, or static fallback),
+// and the flash view is private. The presence block renders aggregates only —
+// member names never reach this logged-out page (privacy policy v2).
+function assertJoinContract(label, html, get, expected) {
+  const failures = [];
+  // Cache acceptance: public 3600 only without a flash, otherwise
+  // private/no-store. Vary stays on every variant: the representation depends
+  // on the flash cookie even when the view has nothing to consume.
+  if (expected.cache !== undefined && expected.cache !== null) {
+    const actual = get("cache-control") ?? "";
+    const allowed = Array.isArray(expected.cache) ? expected.cache : [expected.cache];
+    if (!allowed.includes(actual))
+      failures.push(`${label}: cache-control ${JSON.stringify(actual)} not in ${allowed.join(" | ")}`);
+  }
+  const vary = get("vary") ?? "";
+  if (!/cookie/i.test(vary)) failures.push(`${label}: Vary stays on every variant`);
+  if (!html.includes('class="join-layout"'))
+    failures.push(`${label}: join two-column layout present (no-JS content)`);
+  if (!html.includes('data-testid="join-oneclick"'))
+    failures.push(`${label}: one-click action present`);
+  if (!html.includes('data-testid="join-invite"'))
+    failures.push(`${label}: invite fallback action present`);
+  const href = oneClickHrefOf(html);
+  if (href === null) failures.push(`${label}: one-click href readable`);
+  else if (!joinOneClickHrefOk(href))
+    failures.push(`${label}: hostile next leaves no trace in the one-click href`);
+  const hasLoad = html.includes('data-testid="join-widget-load"');
+  const hasFallback = html.includes('data-testid="join-widget-fallback"');
+  const hasPresence = html.includes('data-testid="join-widget-presence"');
+  // Exactly one zone: the facade link and the static fallback never co-render,
+  // and presence rides the facade link (the live frame needs its click target).
+  if (hasLoad === hasFallback)
+    failures.push(`${label}: exactly one widget zone (facade link xor fallback)`);
+  if (hasPresence && !hasLoad)
+    failures.push(`${label}: presence never renders without its facade link`);
+  if (hasLoad && !html.includes('<script src="/islands/join-widget.js"'))
+    failures.push(`${label}: facade zone carries the shared island binder`);
+  if (!hasLoad && html.includes('<script src="/islands/join-widget.js"'))
+    failures.push(`${label}: fallback zone ships no island script`);
+  if (html.includes("<iframe")) failures.push(`${label}: no iframe before a visitor click`);
+  if (html.includes('data-testid="join-widget-members"'))
+    failures.push(`${label}: no member names on the logged-out page`);
+  if (!/\/join"/.test(html)) failures.push(`${label}: canonical points at /join`);
+  // Flash privacy invariant, independent of the expected-cache pin: a view
+  // carrying the one-shot banner is viewer-specific and never shared-cacheable.
+  const cacheActual = get("cache-control") ?? "";
+  const hasFlash = html.includes('data-testid="join-result"');
+  if (hasFlash && cacheActual !== "private, no-store")
+    failures.push(`${label}: flash view answers private, no-store`);
+  if (!hasFlash && cacheActual === "private, no-store")
+    failures.push(`${label}: flash-free view keeps its shared-cache TTL`);
   return failures;
 }
 
@@ -340,8 +467,10 @@ export function runUnitMode({ stdout = process.stdout, manifestSource: manifestO
   const manifestSource =
     manifestOverride ?? readFileSync(new URL("../src/route-ownership.ts", import.meta.url), "utf8");
   const marker = expectedMarkerFor(manifestSource, "/events/past");
+  const joinMarker = expectedMarkerFor(manifestSource, "/join");
   stdout.write(
-    `kit-parity-gates: manifest expects marker ${JSON.stringify(marker)} for /events/past\n`,
+    `kit-parity-gates: manifest expects marker ${JSON.stringify(marker)} for /events/past, ` +
+      `${JSON.stringify(joinMarker)} for /join\n`,
   );
 
   // Positive control: the good fixture passes every helper.
@@ -384,6 +513,123 @@ export function runUnitMode({ stdout = process.stdout, manifestSource: manifestO
     });
     push(
       `unit: mutant ${name} fails`,
+      failures.length > 0 ? "passed" : "failed",
+      failures.length > 0 ? null : "mutant was NOT detected",
+    );
+  }
+
+  // Join landing fixtures: one per widget state plus the one-shot flash view.
+  // The flash view is the privacy pin: a consumed flash answers private, so a
+  // guest can never read another member's banner from a shared cache.
+  const joinShell = (inner) =>
+    `<html><head><link rel="canonical" href="https://next.togetherweown.com/join"></head>` +
+    `<body><a class="skip-link" href="#main">Skip</a>` +
+    `<nav aria-label="Primary"><a href="/">Home</a></nav>` +
+    `<main id="main"><section class="join-layout" aria-labelledby="join-heading">` +
+    `<div class="join-panel"><h1 id="join-heading">Join Together We Own</h1>` +
+    `<p class="join-actions"><a class="btn" href="/join/discord" data-testid="join-oneclick">` +
+    `Join with Discord</a> ` +
+    `<a href="https://discord.gg/invite" data-testid="join-invite">` +
+    `Join with an invite link instead</a></p></div>` +
+    `<div class="join-preview">${inner}</div></section></main>` +
+    `<p><span class="account-caption">Welcome, guest</span></p></body></html>`;
+  const joinFacade =
+    `<div class="strap"><p>Discord's live server preview loads only when you ask for it.</p>` +
+    `<a class="btn" href="https://discord.com/widget?id=326474832151838730&theme=dark" ` +
+    `referrerpolicy="no-referrer" data-join-widget data-testid="join-widget-load">` +
+    `Show live server preview</a><script src="/islands/join-widget.js" defer></script></div>`;
+  const joinPresence =
+    `<section aria-labelledby="discord-presence-heading" data-testid="join-widget-presence">` +
+    `<h2 id="discord-presence-heading">In Together We Own now</h2>` +
+    `<p data-testid="join-widget-online"><strong>42</strong> members online</p>` +
+    `<p><a href="https://discord.gg/widget-invite" data-testid="join-widget-invite">` +
+    `Join with an invite link</a></p><h3>Voice and stage channels</h3>` +
+    `<ul data-testid="join-widget-channels"><li>stage-night</li></ul></section>` + joinFacade;
+  const joinFallback =
+    `<p class="strap" data-testid="join-widget-fallback">Live server preview is ` +
+    `unavailable — the join button above still works.</p>`;
+  const joinCases = [
+    ["unit/join cold facade", joinShell(joinFacade), "public, max-age=3600"],
+    ["unit/join warm presence", joinShell(joinPresence), "public, max-age=60"],
+    ["unit/join fallback", joinShell(joinFallback), "public, max-age=3600"],
+  ];
+  for (const [name, html, cache] of joinCases) {
+    const failures = assertRouteContract({
+      label: name,
+      html,
+      headers: headerMap({
+        "content-type": "text/html",
+        "x-two-renderer": joinMarker,
+        "cache-control": cache,
+        vary: "Cookie",
+      }),
+      status: 200,
+      expected: { status: 200, marker: joinMarker, contract: "join", cache },
+    });
+    push(`unit: ${name} passes`, failures.length === 0 ? "passed" : "failed", failures.join("; ") || null);
+  }
+  // Flash view: the banner renders once and the response goes private.
+  const joinFlashed = joinShell(joinFacade).replace(
+    '<section class="join-layout"',
+    '<p class="notice" role="status" data-testid="join-result">You are in.</p>' +
+      '<section class="join-layout"',
+  );
+  const flashFailures = assertRouteContract({
+    label: "unit/join flash",
+    html: joinFlashed,
+    headers: headerMap({
+      "content-type": "text/html",
+      "x-two-renderer": joinMarker,
+      "cache-control": "private, no-store",
+      vary: "Cookie",
+    }),
+    status: 200,
+    expected: { status: 200, marker: joinMarker, contract: "join", cache: "private, no-store" },
+  });
+  push(
+    "unit: join flash renders once and goes private",
+    flashFailures.length === 0 ? "passed" : "failed",
+    flashFailures.join("; ") || null,
+  );
+  // Join forced-failure proof: facade + fallback together, presence without
+  // its facade link, a missing one-click action, and a hostile next must all
+  // FAIL. A gate that cannot fail on a planted break proves nothing.
+  const joinMutants = [
+    [
+      "both-zones",
+      (html) => html.replace("</div></section>", `</div>${joinFallback}</section>`),
+    ],
+    ["presence-without-facade", (html) => html.replace(joinFacade, "")],
+    ["no-oneclick", (html) => html.replace('data-testid="join-oneclick"', 'data-testid="x"')],
+    [
+      "hostile-next",
+      (html) =>
+        html.replace('href="/join/discord"', 'href="/join/discord?next=https%3A%2F%2Fevil.test"'),
+    ],
+    // A flashed view served shared-cacheable: the privacy invariant fails it
+    // however the expected cache is pinned.
+    ["shared-cache-flash", () => joinFlashed],
+  ];
+  for (const [name, mutate] of joinMutants) {
+    const failures = assertRouteContract({
+      label: `unit/join-mutant-${name}`,
+      html: mutate(joinShell(joinFacade)),
+      headers: headerMap({
+        "content-type": "text/html",
+        "x-two-renderer": joinMarker,
+        "cache-control": "public, max-age=3600",
+        vary: "Cookie",
+      }),
+      status: 200,
+      expected: {
+        status: 200,
+        marker: joinMarker,
+        contract: "join",
+        cache: "public, max-age=3600",
+      },
+    });
+    push(
+      `unit: join mutant ${name} fails`,
       failures.length > 0 ? "passed" : "failed",
       failures.length > 0 ? null : "mutant was NOT detected",
     );
@@ -440,8 +686,8 @@ export function runUnitMode({ stdout = process.stdout, manifestSource: manifestO
   // method-aware primitive its tests pin — so those tests guard the real gate
   // path instead of a parallel matcher. A final catch-all fails any other
   // enabled entry no executed run covers (today only GET/HEAD /events/past
-  // via PARITY_ROUTES): GET /admin, /events, /join, / and friends can never
-  // ship green with no journey.
+  // via PARITY_ROUTES): GET /admin, /events, /join/discord, / and friends can
+  // never ship green with no journey. (GET /join itself is covered.)
   const manifestEntries = parseManifestEntries(manifestSource);
   for (const { name, routes, scope } of LOGIN_JOURNEYS) {
     const enabledInScope = manifestEntries.filter(
@@ -591,12 +837,18 @@ async function runPreviewMode(
     }
     const kitHtml = kitRes.status === 200 ? await kitRes.text() : "";
     const honoHtml = honoRes.status === 200 ? await honoRes.text() : "";
+    const expected = {
+      status: route.expectStatus,
+      marker: expectedMarker,
+      contract: route.contract ?? "archive",
+      cache: route.cache ?? null,
+    };
     const kitFailures = assertRouteContract({
       label: `preview Kit ${route.path}`,
       html: kitHtml,
       headers: kitRes.headers,
       status: kitRes.status,
-      expected: { status: route.expectStatus, marker: expectedMarker },
+      expected,
     });
     journeys.push({
       name: `preview Kit ${route.path}: contract`,
@@ -611,7 +863,7 @@ async function runPreviewMode(
       html: honoHtml,
       headers: honoRes.headers,
       status: honoRes.status,
-      expected: { status: route.expectStatus, marker: null },
+      expected: { ...expected, marker: null },
     });
     journeys.push({
       name: `preview Hono ${route.path}: no Kit marker`,
@@ -619,13 +871,27 @@ async function runPreviewMode(
       reason: honoFailures.join("; ").slice(0, 200) || null,
     });
     if (kitRes.status === 200 && honoRes.status === 200) {
+      // A null compareSection is a loud skip with a reason, never a quiet
+      // green: some routes (join's environment-dependent widget zone) prove
+      // structure on both sides instead of equal bytes.
+      if (route.compareSection === null || route.compareSection === undefined) {
+        journeys.push({
+          name: `preview ${route.path}: sections match`,
+          status: "skipped",
+          reason:
+            "no byte section compare (environment-dependent content differs per worker); structural contract asserted instead",
+        });
+        continue;
+      }
       // Framework-tolerant comparison (ci/kit-section-contract.mjs): raw
       // bytes always differ (hydration markers, boolean attributes, `>`
       // escaping), so compare the normalized contract, not the bytes.
       let same = false;
       let reason = "section HTML differs";
       try {
-        same = sectionOf(kitHtml, "past-events") === sectionOf(honoHtml, "past-events");
+        same =
+          sectionOf(kitHtml, route.compareSection) ===
+          sectionOf(honoHtml, route.compareSection);
         if (same) reason = null;
       } catch (error) {
         reason = String(error?.message ?? error).slice(0, 200);
