@@ -121,8 +121,10 @@ export async function loadJoinsGrid(
 /**
  * Human retention note for the joins grid. Join attempts delete after
  * JOIN_ATTEMPT_RETENTION_DAYS, so a season window ending before the cutoff
- * reads 0 joins while events (unpruned) still count; `all` silently covers
- * only the retention window. Returns null when the window is inside retention.
+ * reads 0 joins while events (unpruned) still count; a window starting
+ * before the cutoff but ending after it undercounts the same way, and `all`
+ * silently covers only the retention window. Returns null only when the
+ * whole window is inside retention.
  */
 export function joinsRetentionNote(window: SeasonWindow, now: Date = new Date()): string | null {
   const cutoff = now.getTime() - JOIN_ATTEMPT_RETENTION_DAYS * 86_400_000;
@@ -130,6 +132,8 @@ export function joinsRetentionNote(window: SeasonWindow, now: Date = new Date())
     return `Join data is kept ${JOIN_ATTEMPT_RETENTION_DAYS} days, so the all-time view covers the last ${JOIN_ATTEMPT_RETENTION_DAYS} days.`;
   if (window.end.getTime() < cutoff)
     return `Join data is kept ${JOIN_ATTEMPT_RETENTION_DAYS} days, so this season shows 0 joins while scheduled gatherings remain.`;
+  if (window.start.getTime() < cutoff)
+    return `Join data is kept ${JOIN_ATTEMPT_RETENTION_DAYS} days, so this season covers only the last ${JOIN_ATTEMPT_RETENTION_DAYS} days; earlier joins are deleted while scheduled gatherings remain.`;
   return null;
 }
 

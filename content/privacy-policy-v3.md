@@ -139,3 +139,5 @@ change.
 A material change ships as a new numbered version of this page, announced in
 Discord. The previous versions stay in the site's public history, so you can
 see exactly what changed.
+
+Version 3 adds the member leaderboard and its opt-out.
