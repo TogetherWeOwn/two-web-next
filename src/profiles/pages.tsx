@@ -55,12 +55,12 @@ export const profileFieldForErrorKey = (key: string): ProfileField | null =>
         : key === "leaderboard_opt_out"
           ? "leaderboard_opt_out"
           : null;
-const statsLabel = (key: string) =>
+export const statsLabel = (key: string) =>
   key.replace(/[_-]+/g, " ").replace(/\b\w/g, (letter) => letter.toUpperCase());
 // Legacy parity: the avatar fallback is the first two code points, uppercased.
 export const profileInitials = (username: string) =>
   [...username].slice(0, 2).join("").toUpperCase() || "?";
-const statsDate = (date: Date) =>
+export const statsDate = (date: Date) =>
   date.toLocaleDateString("en-GB", {
     day: "numeric",
     month: "short",

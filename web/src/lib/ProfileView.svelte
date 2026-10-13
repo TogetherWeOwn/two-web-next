@@ -29,6 +29,8 @@ import {
   PROFILE_SHARE_DESCRIPTION,
   profileFieldForErrorKey,
   profileInitials,
+  statsDate,
+  statsLabel,
   type ProfileFormValues,
 } from "../../../src/profiles/pages";
 import type { MemberStats } from "../../../src/profiles/stats";
@@ -82,31 +84,10 @@ const form: ProfileFormValues = $derived(
     leaderboard_opt_out: member.leaderboardOptOut ?? false,
   },
 );
-// Error summary entries with their resolved control, so unknown keys stay
-// global with no fabricated link (same mapping as the Hono page).
-const errorEntries = $derived(
-  errors && Object.keys(errors).length > 0
-    ? Object.entries(errors).map(([key, message]) => ({
-        key,
-        message,
-        field: profileFieldForErrorKey(key),
-      }))
-    : [],
-);
 const gamesError = $derived(errors?.games ?? errors?.games_text);
 // A component-level <script> is Svelte's own; the island tags are markup.
 const avatarIsland = '<script src="/islands/avatar.js" defer></' + "script>";
 const editorIsland = '<script src="/islands/member-profile.js" defer></' + "script>";
-
-const statsLabel = (key: string) =>
-  key.replace(/[_-]+/g, " ").replace(/\b\w/g, (letter) => letter.toUpperCase());
-const statsDate = (date: Date) =>
-  date.toLocaleDateString("en-GB", {
-    day: "numeric",
-    month: "short",
-    year: "numeric",
-    timeZone: "UTC",
-  });
 </script>
 
 <svelte:head>
@@ -289,15 +270,16 @@ const statsDate = (date: Date) =>
         <div data-testid="profile-edit-control" hidden>
           <button class="btn" type="button" data-testid="profile-edit-again">Edit your profile</button>
         </div>
-        {#if errorEntries.length > 0}
+        {#if errors && Object.keys(errors).length > 0}
           <div role="alert" tabindex="-1" data-testid={PROFILE_ERROR_TESTID}>
             <ul>
-              {#each errorEntries as entry}
+              {#each Object.entries(errors) as [key, message]}
+                {@const field = profileFieldForErrorKey(key)}
                 <li>
-                  {#if entry.field}
-                    <a href={`#${PROFILE_FIELD_IDS[entry.field]}`}>{entry.message}</a>
+                  {#if field}
+                    <a href={`#${PROFILE_FIELD_IDS[field]}`}>{message}</a>
                   {:else}
-                    {entry.message}
+                    {message}
                   {/if}
                 </li>
               {/each}
@@ -334,7 +316,7 @@ const statsDate = (date: Date) =>
             <textarea
               id={PROFILE_FIELD_IDS.bio}
               name="bio"
-              rows={4}
+              rows="4"
               value={form.bio}
               aria-invalid={errors?.bio ? "true" : undefined}
               aria-describedby={errors?.bio ? PROFILE_ERROR_IDS.bio : undefined}
@@ -348,7 +330,7 @@ const statsDate = (date: Date) =>
             <textarea
               id={PROFILE_FIELD_IDS.games_text}
               name="games_text"
-              rows={4}
+              rows="4"
               value={form.games_text}
               aria-invalid={gamesError ? "true" : undefined}
               aria-describedby={gamesError ? PROFILE_ERROR_IDS.games_text : undefined}
@@ -373,7 +355,7 @@ const statsDate = (date: Date) =>
           {/if}
           <div aria-hidden="true" class="sr-only">
             <label>
-              Website <input name={PROFILE_HONEY_FIELD} tabindex={-1} autocomplete="off" />
+              Website <input name={PROFILE_HONEY_FIELD} tabindex="-1" autocomplete="off" />
             </label>
           </div>
           <input type="hidden" name={PROFILE_OPENED_AT_FIELD} value={String(Date.now())} />
