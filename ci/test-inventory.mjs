@@ -96,9 +96,12 @@ export function inventory(root = repoRoot) {
       if (SMOKE_EXCLUDED.has(file) && !referencedInCi(file, haystack)) via = null;
     } else if (file.startsWith("tier0/")) {
       // Tier-0 suites run only from the report-only step via their own
-      // config: reachable only while the test:tier0 wiring still names it.
+      // config: reachable only while that wiring still names the config or
+      // the script (the haystack holds script bodies, not names, so match
+      // the config path the script invokes).
       via = "npm run test:tier0";
-      if (!haystack.includes("test:tier0")) via = null;
+      if (!haystack.includes("tier0/vitest.config.ts") && !haystack.includes("test:tier0"))
+        via = null;
     } else if (referencedInCi(file, haystack)) {
       // ci/** and e2e/** test files need an explicit CI reference.
       // Playwright *.spec.ts / *.visual.ts are outside this gate's scope.
