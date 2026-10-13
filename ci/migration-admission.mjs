@@ -7,8 +7,11 @@
 // - The hold applies to staging ONLY. Production keeps its existing
 //   PRODUCTION_DEPLOY_ENABLED=true gate and ignores the hold entirely, so a
 //   staging hold can never disable the independently authorized production path.
-// - Checked before URL parsing, driver construction, or any database work, and
-//   mirrored in workflow shell gates before dependency install or mutation.
+// - Single source for admission: migrationConfig (ci/neon-migrate.mjs) calls
+//   assertMigrationAdmission below, so these messages are the ones operators
+//   see. Checked before URL parsing, driver construction, or any database
+//   work, and mirrored in workflow shell gates before dependency install or
+//   mutation.
 class AdmissionError extends Error {}
 
 const refuse = (message) => {
@@ -21,16 +24,15 @@ export function stagingHoldState(value) {
 
 export function assertMigrationAdmission(env) {
   const target = env.MIGRATION_TARGET;
-  if (target !== "staging" && target !== "production") refuse("Unknown migration target.");
-  if (env.GITHUB_REF !== "refs/heads/main") refuse("Migrations require main.");
+  if (target !== "staging" && target !== "production")
+    refuse("Target must be staging or production.");
+  if (env.GITHUB_REF !== "refs/heads/main") refuse("Migrations require the reviewed main branch.");
   if (target === "production") {
-    if (env.PRODUCTION_DEPLOY_ENABLED !== "true") refuse("Production migrations are disabled.");
+    if (env.PRODUCTION_DEPLOY_ENABLED !== "true")
+      refuse("Production migrations require PRODUCTION_DEPLOY_ENABLED=true.");
     return { target, held: false };
   }
-  if (env.STAGING_MIGRATION_HOLD !== "false")
-    refuse(
-      'Staging migrations are held (STAGING_MIGRATION_HOLD is not exactly "false"; absent, "true" and malformed values all hold).',
-    );
+  assertStagingDeployHold(env);
   return { target, held: false };
 }
 

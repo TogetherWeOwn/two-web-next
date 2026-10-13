@@ -81,7 +81,7 @@ test("production path ignores the staging hold and keeps the existing enable gat
             STAGING_MIGRATION_HOLD: "false",
           }),
         ),
-      /Production migrations are disabled/,
+      /PRODUCTION_DEPLOY_ENABLED=true/,
     );
   }
 });
@@ -89,19 +89,28 @@ test("production path ignores the staging hold and keeps the existing enable gat
 test("unknown target and non-main ref stay fail-closed", () => {
   assert.throws(
     () => assertMigrationAdmission(env({ MIGRATION_TARGET: "other" })),
-    /Unknown migration target/,
+    /Target must be staging or production/,
   );
   assert.throws(
     () => assertMigrationAdmission(env({ GITHUB_REF: "refs/heads/topic" })),
-    /Migrations require main/,
+    /Migrations require the reviewed main branch/,
   );
   assert.throws(
     () =>
       assertMigrationAdmission(
         env({ MIGRATION_TARGET: "production", GITHUB_REF: "refs/heads/topic" }),
       ),
-    /Migrations require main/,
+    /Migrations require the reviewed main branch/,
   );
+});
+
+test("migrationConfig is wired to the single admission source", () => {
+  const neon = readFileSync(new URL("./neon-migrate.mjs", import.meta.url), "utf8");
+  assert.match(neon, /assertMigrationAdmission/);
+  // migrationConfig must delegate rather than carry a second inline copy.
+  assert.doesNotMatch(neon, /STAGING_MIGRATION_HOLD !== "false"/);
+  const admission = readFileSync(new URL("./migration-admission.mjs", import.meta.url), "utf8");
+  assert.match(admission, /assertStagingDeployHold\(env\)/);
 });
 
 test("deploy direct staging path enforces the same hold without touching production", () => {
@@ -188,6 +197,14 @@ test("deploy holds the direct staging migration path before dependencies or muta
   const hold = deploy.slice(holdIndex, setupIndex);
   assert.match(hold, /STAGING_MIGRATION_HOLD/);
   assert.match(hold, /Staging migrations are held/);
+  // The deploy-staging job runs in a container whose default shell is sh
+  // (dash): the hold script must stay POSIX so it passes under sh and bash.
+  // Scope the bash-ism check to the script body: the comments above it name
+  // the forbidden constructs.
+  assert.match(hold, /shell: bash/);
+  const holdScript = hold.slice(hold.indexOf("run: |"));
+  assert.doesNotMatch(holdScript, /\[\[/);
+  assert.doesNotMatch(holdScript, /pipefail/);
   assert.match(deploy, /STAGING_MIGRATION_HOLD: \$\{\{ vars\.STAGING_MIGRATION_HOLD \}\}/);
   assert.match(deploy, /MIGRATION_TARGET: staging/);
 });
@@ -207,7 +224,7 @@ function shellScript(workflow, marker) {
   return script;
 }
 
-function runShell(script, extra = {}) {
+function runShell(script, extra = {}, shell = "bash") {
   const env = {
     ...process.env,
     GITHUB_REF: "refs/heads/main",
@@ -222,7 +239,7 @@ function runShell(script, extra = {}) {
   // Model an absent variable exactly: never inherit a leaked hold from CI.
   if (!Object.hasOwn(extra, "STAGING_MIGRATION_HOLD")) delete env.STAGING_MIGRATION_HOLD;
   else if (extra.STAGING_MIGRATION_HOLD === undefined) delete env.STAGING_MIGRATION_HOLD;
-  return spawnSync("bash", ["-c", script], { env, encoding: "utf8" });
+  return spawnSync(shell, ["-c", script], { env, encoding: "utf8" });
 }
 
 // The exact shell gates (workflow_dispatch and workflow_call share the same
@@ -272,4 +289,16 @@ test("workflow shells refuse held staging and preserve production/invalid-target
   // Invalid target and non-main ref stay fail-closed.
   assert.equal(runShell(migrateGate, { MIGRATION_TARGET: "other" }).status, 1);
   assert.equal(runShell(migrateGate, { GITHUB_REF: "refs/heads/topic" }).status, 1);
+  // The deploy gate runs in a container whose default shell is sh (dash):
+  // it must refuse held staging and release on exactly "false" under sh too,
+  // so a bash-only construct fails CI here instead of staging deploys.
+  for (const held of [undefined, "", "true", "malformed"]) {
+    const extra =
+      held === undefined ? { STAGING_MIGRATION_HOLD: undefined } : { STAGING_MIGRATION_HOLD: held };
+    if (held === undefined) delete extra.STAGING_MIGRATION_HOLD;
+    const direct = runShell(deployGate, extra, "sh");
+    assert.equal(direct.status, 1, `deploy sh staging hold=${String(held)} must refuse`);
+    assert.match(direct.stderr, /Staging migrations are held/);
+  }
+  assert.equal(runShell(deployGate, { STAGING_MIGRATION_HOLD: "false" }, "sh").status, 0);
 });
