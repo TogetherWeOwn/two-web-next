@@ -1,0 +1,348 @@
+import { Hono } from "hono";
+import type { Db } from "./db/index";
+import type { Env } from "./env";
+import {
+  ANON_EVENTS_TTL_MS,
+  anonCacheGeneration,
+  anonCacheSource,
+  anonEventsKey,
+  isAnonCacheEligible,
+  readAnonCache,
+  writeAnonCache,
+} from "./events/anon-cache";
+import {
+  loadCalendarPageModel,
+  resolveCalendarInput,
+  type CalendarPageInput,
+  type CalendarPageModel,
+} from "./events/page-models.server";
+import { publicReadGuard } from "./events/routes-shared";
+import type { DiscordEventsSource } from "./events/discord-transients-types";
+import { inviteDestination } from "./invite";
+import type { JoinResult } from "./return-journey";
+import { canonicalUrl } from "./seo";
+
+export type KitEventsGuard = (request: Request, env: Env) => Promise<Response | null>;
+
+const guardApp = new Hono<{ Bindings: Env }>();
+guardApp.all("*", async (c) => {
+  const limited = await publicReadGuard(c);
+  return limited ?? c.body(null, 204);
+});
+
+/** Reuse the public Hono read budget for the native Kit route. */
+export async function kitEventsGuard(request: Request, env: Env): Promise<Response | null> {
+  const response = await guardApp.fetch(request, env);
+  return response.status === 204 ? null : response;
+}
+
+/** Viewer bits the Kit list load needs: member chrome plus draft visibility. */
+export interface KitEventsSession {
+  member: boolean;
+  moderator: boolean;
+}
+
+export interface EventsDispatchOverrides {
+  guard?: KitEventsGuard;
+  sessionFor?: (request: Request) => Promise<KitEventsSession | null>;
+  journeyFor?: (request: Request) => Promise<JoinResult | null>;
+  now?: number;
+}
+
+const ISLAND_NAME = "events-calendar";
+const TOO_LONG_MARKER = "x-two-events-too-long";
+const CACHEABLE_MARKER = "x-two-events-cacheable";
+
+function calendarInputOf(url: URL): CalendarPageInput {
+  return resolveCalendarInput({
+    q: url.searchParams.get("q"),
+    view: url.searchParams.get("view"),
+    past: url.searchParams.get("past"),
+    page: url.searchParams.get("page"),
+    event: url.searchParams.get("event"),
+    month: url.searchParams.get("month"),
+  });
+}
+
+/** Rewrite a too-long render to the Hono 422 contract: notice markup, no echo. */
+function rewriteTooLong(response: Response): Response {
+  const headers = new Headers(response.headers);
+  headers.delete(TOO_LONG_MARKER);
+  headers.delete(CACHEABLE_MARKER);
+  return new Response(response.body, {
+    status: 422,
+    statusText: response.statusText,
+    headers,
+  });
+}
+
+/**
+ * Apply the Hono list route's guard and anonymous HTML cache around Kit SSR.
+ *
+ * Mirrors GET /events (src/events/routes-calendar.tsx): the shared public-read
+ * budget runs before any read, only a cookieless session-free search-free
+ * flash-free render serves or settles shared bytes (island fragments key
+ * separately), Kit data requests never settle as HTML, and a render overtaken
+ * by a retire mid-flight never settles. Overlong searches skip the guard and
+ * the cache like Hono (422 before admission) and rewrite to 422 on the way
+ * out; the load marks them so the notice markup still renders.
+ */
+export async function dispatchEventsRequest(
+  request: Request,
+  env: Env,
+  resolve: () => Promise<Response>,
+  overrides: EventsDispatchOverrides = {},
+): Promise<Response> {
+  const {
+    guard = kitEventsGuard,
+    sessionFor = async () => null,
+    journeyFor = async () => null,
+    now = Date.now(),
+  } = overrides;
+  const url = new URL(request.url);
+  const input = calendarInputOf(url);
+  if (input.queryTooLong) return rewriteTooLong(await resolve());
+
+  const limited = await guard(request, env);
+  if (limited) return limited;
+
+  // Kit data requests still execute the read guard/load but their JSON payload
+  // is not the HTML representation cached by Hono.
+  const htmlRequest = url.pathname === "/events";
+  const island = request.headers.get("x-two-island") === ISLAND_NAME;
+  const session = await sessionFor(request);
+  // Island swaps keep their pending flash value like Hono: only full renders
+  // peek at it, so a fragment never eats the banner it cannot display.
+  const flashed = island ? null : await journeyFor(request);
+  const eligible =
+    htmlRequest &&
+    isAnonCacheEligible({
+      method: request.method,
+      hasCookie: request.headers.has("cookie"),
+      hasSession: session !== null,
+      searching: input.searching,
+      flashed: flashed !== null,
+    });
+  const source = eligible ? anonCacheSource(env) : null;
+  let key: string | null = null;
+  if (source) {
+    let pathAndSearch = "/events";
+    try {
+      pathAndSearch = url.pathname + url.search;
+    } catch {
+      pathAndSearch = "/events";
+    }
+    key = anonEventsKey(request.method, pathAndSearch, island);
+    const hit = readAnonCache(key, source, now);
+    if (hit) {
+      const headers = new Headers({ "cache-control": hit.cacheControl });
+      headers.set(
+        "cache-control",
+        hit.cacheControl.replace(/max-age=\d+/, `max-age=${hit.maxAgeSeconds}`),
+      );
+      // The entry stores no content type and a string body defaults to
+      // text/plain; name the cached HTML exactly as Hono's c.html() does so
+      // repeat guests render the page instead of its source.
+      headers.set("content-type", "text/html; charset=UTF-8");
+      if (hit.vary) headers.set("vary", hit.vary);
+      return new Response(hit.body, { status: hit.status, headers });
+    }
+  }
+
+  const generation = source ? anonCacheGeneration() : 0;
+  const response = await resolve();
+  if (response.headers.get(TOO_LONG_MARKER) === "true") return rewriteTooLong(response);
+  const cacheable = response.headers.get(CACHEABLE_MARKER) === "true";
+  const headers = new Headers(response.headers);
+  headers.delete(CACHEABLE_MARKER);
+  const cleanResponse = new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers,
+  });
+
+  if (
+    source &&
+    key &&
+    cacheable &&
+    cleanResponse.status === 200 &&
+    anonCacheGeneration() === generation
+  ) {
+    writeAnonCache(
+      key,
+      source,
+      {
+        status: cleanResponse.status,
+        cacheControl: cleanResponse.headers.get("cache-control") ?? "public, max-age=60",
+        vary: cleanResponse.headers.get("vary"),
+        body: await cleanResponse.clone().text(),
+      },
+      ANON_EVENTS_TTL_MS,
+      now,
+    );
+  }
+
+  return cleanResponse;
+}
+
+/** Branded-outage marker: the Kit binding maps every throw to error(503). */
+export function eventsUnavailable(): Error & { status: number } {
+  return Object.assign(new Error("Events temporarily unavailable"), { status: 503 });
+}
+
+export type KitEventsModelFor = (args: {
+  db: Db;
+  input: CalendarPageInput;
+  includeDrafts: boolean;
+  discord: DiscordEventsSource;
+  now: Date;
+}) => Promise<CalendarPageModel>;
+
+export interface KitEventsLoadArgs {
+  env: Env;
+  url: URL;
+  method: string;
+  island: boolean;
+  request: Request;
+  setHeaders: (headers: Record<string, string>) => void;
+  /** Deletes the one-shot join cookie; called only for full GET renders. */
+  deleteJoinCookie: () => void;
+  dbForFn: (c: { env: Env }) => Promise<Db | null>;
+  sessionForFn: (request: Request) => Promise<KitEventsSession | null>;
+  journeyForFn: (request: Request) => Promise<JoinResult | null>;
+  modelForFn?: KitEventsModelFor;
+  discordForFn: (env: Env) => DiscordEventsSource;
+  now?: Date;
+}
+
+export interface KitEventsLoadData extends CalendarPageModel {
+  /** Request instant, shared by the model and the month-grid today marker. */
+  now: Date;
+  member: boolean;
+  moderator: boolean;
+  inviteUrl: string;
+  appUrl: string;
+  canonical: string;
+  /** Rooted path the guest sign-in link carries as ?next=. */
+  loginReturnTo: string;
+  joinResult: JoinResult | null;
+  queryTooLong: false;
+}
+
+/**
+ * Framework-free core of web/src/routes/events/+page.server.ts load().
+ *
+ * Owns the Hono query-state contract (src/events/page-models.server.ts input
+ * plus src/events/routes-calendar.tsx response policy) so the root Vitest
+ * suite pins every branch without transforming SvelteKit code: overlong
+ * searches return a queryTooLong flag the page renders as the Hono 422 notice
+ * (never echoing the query; the dispatch rewrites the status), anonymous
+ * search-free flash-free renders stay publicly cacheable for the dispatch to
+ * settle, and every database failure is a branded 503 with private, no-store.
+ * Exactly one setHeaders call per path: SvelteKit throws `header_already_set`
+ * on a double-set, so the caller must not set headers again on a throw.
+ *
+ * Session reads are read-only (no rotation, no revocation) and the flash is
+ * consumed only on full renders: fragments keep their pending value exactly
+ * like Hono's island branch, which can never display the banner.
+ */
+export async function loadEventsPage(
+  args: KitEventsLoadArgs,
+): Promise<KitEventsLoadData | { queryTooLong: true; appUrl: string }> {
+  const {
+    env,
+    url,
+    method,
+    island,
+    request,
+    setHeaders,
+    deleteJoinCookie,
+    dbForFn,
+    sessionForFn,
+    journeyForFn,
+    modelForFn = loadCalendarPageModel,
+    discordForFn,
+    now = new Date(),
+  } = args;
+  const vary = "Cookie, X-Two-Island";
+  const input = calendarInputOf(url);
+  if (input.queryTooLong) {
+    setHeaders({
+      "cache-control": "no-store, private",
+      vary,
+      [TOO_LONG_MARKER]: "true",
+    });
+    // The app URL rides along so the notice page keeps the Hono canonical
+    // without echoing the overlong query anywhere.
+    return { queryTooLong: true as const, appUrl: env.APP_URL };
+  }
+
+  let db: Db | null;
+  try {
+    db = await dbForFn({ env });
+  } catch {
+    setHeaders({ "cache-control": "private, no-store", vary });
+    throw eventsUnavailable();
+  }
+  if (!db) {
+    setHeaders({ "cache-control": "private, no-store", vary });
+    throw eventsUnavailable();
+  }
+
+  let session: KitEventsSession | null;
+  try {
+    session = await sessionForFn(request);
+  } catch {
+    session = null;
+  }
+  // Island fragment swaps must not consume the flash: the banner renders
+  // outside the swapped zones, so a fragment would eat it without displaying
+  // it — the pending value survives for the next full load.
+  let joinResult: JoinResult | null = null;
+  if (!island) {
+    try {
+      joinResult = await journeyForFn(request);
+    } catch {
+      joinResult = null;
+    }
+    if (joinResult && method === "GET") deleteJoinCookie();
+    if (method !== "GET") joinResult = null;
+  }
+
+  let model: CalendarPageModel;
+  try {
+    model = await modelForFn({
+      db,
+      input,
+      includeDrafts: session?.moderator ?? false,
+      discord: discordForFn(env),
+      now,
+    });
+  } catch {
+    setHeaders({ "cache-control": "private, no-store", vary });
+    throw eventsUnavailable();
+  }
+
+  const cacheControl =
+    session || input.searching || joinResult ? "private, no-store" : "public, max-age=60";
+  const headers: Record<string, string> = {
+    "cache-control": cacheControl,
+    vary,
+    [CACHEABLE_MARKER]: String(cacheControl.startsWith("public")),
+  };
+  if (model.robots !== undefined) headers["x-robots-tag"] = model.robots;
+  setHeaders(headers);
+
+  return {
+    ...model,
+    now,
+    member: session?.member ?? false,
+    moderator: session?.moderator ?? false,
+    inviteUrl: inviteDestination(env.DISCORD_INVITE_URL),
+    appUrl: env.APP_URL,
+    canonical: canonicalUrl(env.APP_URL, "/events"),
+    loginReturnTo: url.pathname + url.search,
+    joinResult,
+    queryTooLong: false,
+  };
+}
