@@ -94,11 +94,14 @@ export const ROUTE_MANIFEST: OwnedRoute[] = [
   { method: "GET", path: "/hotzones/games", enabled: true, reads: "public" },
   // Member leaderboard: member data, so the Kit branch renders inside the
   // member-read boundary with this declaration and the bridged viewer. Same
-  // gate order, grammar and reads as src/leaderboards/routes.tsx.
+  // gate order, grammar and reads as src/leaderboards/routes.tsx. Held on
+  // Hono until the executed member-board parity journey lands: the parity
+  // gate has no authenticated member-board run, so enabling here would ship
+  // on a green ledger with no proof.
   {
     method: "GET",
     path: "/leaderboards/members",
-    enabled: true,
+    enabled: false,
     reads: { resource: "leaderboard", action: "list", route: "leaderboards.members" },
   },
 ];

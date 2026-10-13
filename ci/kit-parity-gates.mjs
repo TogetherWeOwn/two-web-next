@@ -168,10 +168,88 @@ export function expectedMarkerFor(manifestSource, path) {
 // whatever the field order, or the gate throws (like expectedMarkerFor)
 // instead of reading it as disabled. Matching is ANY-enabled, never
 // first-match, so GET disabled listed before POST enabled still counts.
+//
+// Blocks are extracted brace-aware: a `reads: { ... }` nested object no
+// longer truncates the entry (a flat `\{[^{}]*\}` scan went blind on every
+// nested-reads route — /admin, /profile, /members/:user,
+// /leaderboards/members — and let an enabled member board ship on a green
+// ledger with no run). Strings and comments never contribute braces.
 export function parseManifestEntries(manifestSource) {
   const entries = [];
-  for (const match of manifestSource.matchAll(/\{[^{}]*\}/g)) {
-    const block = match[0];
+  const len = manifestSource.length;
+  let i = 0;
+  while (i < len) {
+    if (manifestSource[i] !== "{") {
+      i += 1;
+      continue;
+    }
+    let depth = 0;
+    let j = i;
+    let quote = null;
+    let escaped = false;
+    let lineComment = false;
+    let blockComment = false;
+    let end = -1;
+    while (j < len) {
+      const ch = manifestSource[j];
+      const nxt = j + 1 < len ? manifestSource[j + 1] : "";
+      if (lineComment) {
+        if (ch === "\n") lineComment = false;
+        j += 1;
+        continue;
+      }
+      if (blockComment) {
+        if (ch === "*" && nxt === "/") {
+          blockComment = false;
+          j += 2;
+          continue;
+        }
+        j += 1;
+        continue;
+      }
+      if (quote !== null) {
+        if (escaped) {
+          escaped = false;
+          j += 1;
+          continue;
+        }
+        if (ch === "\\") {
+          escaped = true;
+          j += 1;
+          continue;
+        }
+        if (ch === quote) quote = null;
+        j += 1;
+        continue;
+      }
+      if (ch === "/" && nxt === "/") {
+        lineComment = true;
+        j += 2;
+        continue;
+      }
+      if (ch === "/" && nxt === "*") {
+        blockComment = true;
+        j += 2;
+        continue;
+      }
+      if (ch === '"' || ch === "'" || ch === "`") {
+        quote = ch;
+        j += 1;
+        continue;
+      }
+      if (ch === "{") depth += 1;
+      else if (ch === "}") {
+        depth -= 1;
+        if (depth === 0) {
+          end = j;
+          break;
+        }
+      }
+      j += 1;
+    }
+    if (end === -1) break;
+    const block = manifestSource.slice(i, end + 1);
+    i = end + 1;
     // Only quoted-path blocks are manifest entries: this skips the
     // OwnedRoute interface (`path: string`) and prose comments mentioning
     // "path:", while still throwing on a real entry that omits a field.

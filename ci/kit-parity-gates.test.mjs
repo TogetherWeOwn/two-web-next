@@ -14,6 +14,7 @@ import {
   isCoveredByExecutedRun,
   isInJourneyScope,
   isManifestEnabled,
+  parseManifestEntries,
   pathsMatchStructurally,
   runGate,
   runUnitMode,
@@ -259,6 +260,56 @@ test("manifest lookup is method-aware, order-independent, and fail-closed", () =
   assert.throws(
     () => isManifestEnabled(`{ path: "/profile", enabled: true }`, "/profile"),
     /cannot parse ROUTE_MANIFEST/,
+  );
+});
+
+test("nested reads objects never blind the manifest parser", () => {
+  // Regression for the flat `\{[^{}]*\}` scan that missed every nested-reads
+  // entry (/admin, /profile, /members/:user, /leaderboards/members) and let
+  // an enabled member board ship on a green ledger with no run.
+  const nestedEnabled =
+    `{ method: "GET", path: "/leaderboards/members", enabled: true, ` +
+    `reads: { resource: "leaderboard", action: "list", route: "leaderboards.members" } }`;
+  const nestedDisabled =
+    `{ method: "GET", path: "/admin", enabled: false, ` +
+    `reads: { resource: "dashboard", action: "view", route: "admin.dashboard" } }`;
+  assert.equal(parseManifestEntries(nestedEnabled).length, 1);
+  assert.equal(parseManifestEntries(nestedEnabled)[0].path, "/leaderboards/members");
+  assert.equal(isManifestEnabled(nestedEnabled, "/leaderboards/members", "GET"), true);
+  assert.equal(isManifestEnabled(nestedDisabled, "/admin", "GET"), false);
+  // Field order never decides, even with the nested object first or last.
+  const reordered =
+    `{ reads: { resource: "profile", action: "view", route: "profile" }, ` +
+    `method: "GET", path: "/profile", enabled: true }`;
+  assert.equal(isManifestEnabled(reordered, "/profile", "GET"), true);
+  // A nested entry missing its flag still throws, never reads as disabled.
+  assert.throws(
+    () =>
+      isManifestEnabled(
+        `{ method: "GET", path: "/leaderboards/members", ` +
+          `reads: { resource: "leaderboard", action: "list", route: "leaderboards.members" } }`,
+        "/leaderboards/members",
+        "GET",
+      ),
+    /cannot parse ROUTE_MANIFEST/,
+  );
+});
+
+test("an enabled nested-reads member board fails via the catch-all, never a quiet skip", () => {
+  const silent = { write: () => {} };
+  const journeys = runUnitMode({
+    stdout: silent,
+    manifestSource:
+      `{ method: "GET", path: "/events/past", enabled: false }, { method: "GET", path: "/join", enabled: false }, { method: "GET", path: "/auth/recover", enabled: false },` +
+      ` { method: "GET", path: "/leaderboards/members", enabled: true, ` +
+      `reads: { resource: "leaderboard", action: "list", route: "leaderboards.members" } }`,
+  });
+  assert.equal(isCoveredByExecutedRun({ method: "GET", path: "/leaderboards/members" }), false);
+  assert.equal(summarizeLedger(journeys).verdict, "fail");
+  const failed = journeys.filter((j) => j.status === "failed");
+  assert.ok(
+    failed.some((j) => j.reason?.includes("/leaderboards/members")),
+    "failure reason must name the member board",
   );
 });
 
