@@ -140,4 +140,4 @@ A material change ships as a new numbered version of this page, announced in
 Discord. The previous versions stay in the site's public history, so you can
 see exactly what changed.
 
-Version 3 adds the member leaderboard and its opt-out.
+Version 3 adds the member leaderboard and its opt-out: a members-only board that ranks members by going RSVPs for published events, filterable by season, scope and game, with each view logged without identity like other board views. It never counts join attempts, and opting out removes a member from every board and every count.
