@@ -86,6 +86,8 @@
 .content-page [data-testid='rules-list'] { display: block; list-style: decimal; padding-left: 2rem; }
 .content-page [data-testid='rules-list'] li::marker { color: var(--brand); font: 700 1.5rem Display, sans-serif; }
 .base-theme [data-testid='faq-list'] section { display: grid; grid-template-columns: 11rem minmax(0, 1fr); gap: 0 2rem; }
+/* TOG-23376 LCP: render offscreen faq sections only when scrolled near. */
+[data-testid='faq-list']>section{content-visibility:auto;contain-intrinsic-size:auto 20rem}
 .base-theme [data-testid='faq-list'] h2 { font-size: 1.5rem; }
 .base-theme [data-testid='faq-list'] .card { padding: 0 0 1.5rem; border: 0; }
 .base-theme [data-testid='faq-list'] .card:last-child { padding-bottom: 0; }
