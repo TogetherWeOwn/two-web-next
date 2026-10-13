@@ -1,4 +1,4 @@
-// Member leaderboard self-serve opt-out (TOG-23147): the owner flips
+// Member leaderboard self-serve opt-out: the owner flips
 // `leaderboard_opt_out` from the profile form; nobody else can.
 // - owner PATCH (JSON or form) writes true/false, creating the profile row
 //   when the roster row has none yet (upsert-safe);
