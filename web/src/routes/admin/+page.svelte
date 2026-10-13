@@ -1,4 +1,5 @@
 <script lang="ts">
+import AdminShell from "#lib/AdminShell.svelte";
 import type { PageProps } from "./$types";
 
 // Markup contract of AdminDashboard (src/admin/pages/dashboard.tsx): the
@@ -11,6 +12,7 @@ const { actor, funnel, zeroSearches, retentionDays } = $derived(data);
 const outcomes = $derived(funnel ? Object.entries(funnel) : []);
 </script>
 
+<AdminShell title="Dashboard">
 <section aria-labelledby="admin-heading">
   <h1 id="admin-heading">Moderation</h1>
   <p class="lead">
@@ -88,3 +90,4 @@ const outcomes = $derived(funnel ? Object.entries(funnel) : []);
     </section>
   {/if}
 </section>
+</AdminShell>
