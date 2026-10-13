@@ -89,6 +89,12 @@ describe("hooks.server route ownership wiring", () => {
         enabled: false,
         reads: { resource: "events", action: "list", route: "admin.events.index" },
       },
+      {
+        method: "GET",
+        path: "/admin/join-attempts",
+        enabled: false,
+        reads: { resource: "join_attempts", action: "list", route: "admin.join-attempts.index" },
+      },
       { method: "GET", path: "/auth/recover", enabled: false, reads: "public" },
       {
         method: "GET",
