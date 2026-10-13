@@ -71,8 +71,8 @@
     "audit:moderator-roles": "node --import ./bin/ts-hook.mjs bin/role-audit.mjs"
   },
   "dependencies": {
-    "@modelcontextprotocol/server": "2.0.0",
-    "agents": "0.28.0",
+    "@modelcontextprotocol/server": "2.3.1",
+    "agents": "0.28.1",
     "drizzle-orm": "^0.45.4",
     "hono": "^4.13.12",
     "postgres": "^3.4.9",
