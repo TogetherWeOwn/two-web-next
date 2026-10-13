@@ -97,6 +97,20 @@ it("keeps versioned privacy HTML and the rules date unchanged inside the content
   expect(rules.match(/<li class="card">/g)).toHaveLength(5);
 });
 
+it("/faq skips rendering offscreen sections until scrolled near (LCP)", async () => {
+  // /faq is the stable ~2.3 s LCP outlier because it carries by far the most
+  // below-fold DOM (8 sections, 15 cards); its LCP element (h1) sits outside
+  // these subtrees, so first paint is unaffected. Sibling leaves showed only
+  // 15-70 ms margins inside demonstrated runner noise (e.g. /about measured
+  // 1003 ms then 2043 ms on consecutive heads with no app change), so no
+  // defect was found there to fix.
+  const html = await (await app.request("/faq", {}, env)).text();
+  const style = html.match(/<style>([\s\S]*?)<\/style>/)?.[1] ?? "";
+  expect(style).toContain("[data-testid='faq-list']>section");
+  expect(style).toContain("content-visibility:auto");
+  expect(style).toContain("contain-intrinsic-size:auto 20rem");
+});
+
 it("keeps the join targets, guarded return path, widget and fallback in the auth layout", async () => {
   const next = "/events?month=2026-10";
   const html = await (await app.request(`/join?next=${encodeURIComponent(next)}`, {}, env)).text();

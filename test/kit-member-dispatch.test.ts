@@ -249,7 +249,7 @@ describe("decideRoute", () => {
     expect(decideRoute(post, MEMBER_MANIFEST)).toBeUndefined();
   });
 
-  it("the shipped manifest assigns the public archive to Kit, keeps privacy, rules, join and recover on Hono, and holds the admin dashboard on Hono", () => {
+  it("the shipped manifest assigns the public archive to Kit, keeps privacy, rules, join and recover on Hono, and holds the admin dashboard and profile reads on Hono", () => {
     const get = new Request(new URL("/events/past", APP_URL));
     expect(ROUTE_MANIFEST).toEqual([
       { method: "GET", path: "/events/past", enabled: true, reads: "public" },
@@ -263,6 +263,18 @@ describe("decideRoute", () => {
         reads: { resource: "dashboard", action: "view", route: "admin.dashboard" },
       },
       { method: "GET", path: "/auth/recover", enabled: false, reads: "public" },
+      {
+        method: "GET",
+        path: "/profile",
+        enabled: false,
+        reads: { resource: "profile", action: "view", route: "profile" },
+      },
+      {
+        method: "GET",
+        path: "/members/:user",
+        enabled: false,
+        reads: { resource: "profile", action: "view", route: "profiles.show" },
+      },
     ]);
     const archive = ROUTE_MANIFEST.find((entry) => entry.path === "/events/past");
     expect(decideRoute(get, ROUTE_MANIFEST)).toBe(archive);
@@ -270,6 +282,7 @@ describe("decideRoute", () => {
     expect(decideRoute(new Request(new URL("/join", APP_URL)), ROUTE_MANIFEST)).toBeUndefined();
     // The moderator dashboard and recovery page stay Hono-served until their enablement reviews.
     expect(decideRoute(new Request(new URL("/admin", APP_URL)), ROUTE_MANIFEST)).toBeUndefined();
+    expect(decideRoute(new Request(new URL("/profile", APP_URL)), ROUTE_MANIFEST)).toBeUndefined();
     expect(
       decideRoute(new Request(new URL("/auth/recover", APP_URL)), ROUTE_MANIFEST),
     ).toBeUndefined();

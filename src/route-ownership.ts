@@ -41,13 +41,13 @@ export interface RouteDecision {
   path: string;
 }
 
-// The archive page renders natively; the privacy leaf, the house-rules leaf
-// and the join leaf stay on Hono until their enablement is reviewed.
-// Production (the Hono Worker) sees no traffic change for a disabled path;
-// the preview Worker moves a Kit-owned path back to Hono by design — that is
-// the rollback. Add one entry per migrated route, enabled only when its Kit
-// handler is ready to own the exact method/path. Only GET is listed per page
-// (HEAD follows its GET entry); /join/discord and /join/callback stay
+// The archive page renders natively; the privacy leaf, house-rules leaf, join,
+// recovery and profile reads stay on Hono until their enablement is reviewed. Production (the Hono Worker) sees no traffic change for a
+// disabled path; the preview Worker moves a Kit-owned path back to Hono by
+// design — that is the rollback. Add one entry per migrated route, enabled
+// only when its Kit handler is ready to own the exact method/path. Only GET
+// is listed per page (HEAD follows its GET entry); /join/discord and
+// /join/callback stay
 // Hono-owned, so the funnel keeps one OAuth authority.
 // Exported so the preview parity script derives its expected renderer from the
 // shipped manifest instead of hard-coding "kit": flipping enabled flips the
@@ -67,6 +67,21 @@ export const ROUTE_MANIFEST: OwnedRoute[] = [
     reads: { resource: "dashboard", action: "view", route: "admin.dashboard" },
   },
   { method: "GET", path: "/auth/recover", enabled: false, reads: "public" },
+  // Profile reads: one Svelte view/model behind both Hono handlers. Native
+  // rendering stays off until edit parity reviews enablement; write siblings
+  // and the retired /members directory have no entries and stay Hono-owned.
+  {
+    method: "GET",
+    path: "/profile",
+    enabled: false,
+    reads: { resource: "profile", action: "view", route: "profile" },
+  },
+  {
+    method: "GET",
+    path: "/members/:user",
+    enabled: false,
+    reads: { resource: "profile", action: "view", route: "profiles.show" },
+  },
 ];
 
 // Response header set only on the Kit-rendered branch of the hook, so the
