@@ -267,13 +267,16 @@ const statsDate = (date: Date) =>
           <input type="hidden" name="_method" value="PATCH" />
           <label class="profile-field">
             Bio{" "}
-            <textarea id={PROFILE_FIELD_IDS.bio} name="bio" rows={4}>{form.bio}</textarea>
+            <textarea id={PROFILE_FIELD_IDS.bio} name="bio" rows={4} value={form.bio}></textarea>
           </label>
           <label class="profile-field">
             Games (one per line){" "}
-            <textarea id={PROFILE_FIELD_IDS.games_text} name="games_text" rows={4}>
-              {form.games_text}</textarea
-            >
+            <textarea
+              id={PROFILE_FIELD_IDS.games_text}
+              name="games_text"
+              rows={4}
+              value={form.games_text}
+            ></textarea>
           </label>
           <label class="profile-field">
             Timezone{" "}
