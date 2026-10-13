@@ -104,6 +104,18 @@ export const ROUTE_MANIFEST: OwnedRoute[] = [
     enabled: false,
     reads: { resource: "profile", action: "view", route: "profiles.show" },
   },
+  // Live event detail: the Kit read model (src/events/kit-detail.ts) mirrors
+  // the served GET /e/:key handler — role checks, member-only attendee
+  // disclosure, related/neighbor content and safe Event JSON-LD — audited by
+  // the member-read boundary with this declaration and the bridged viewer.
+  // Off until the RSVP companion passes: Hono answers meanwhile, and JSON/ICS
+  // stay Hono-owned with no entries of their own.
+  {
+    method: "GET",
+    path: "/e/:key",
+    enabled: false,
+    reads: { resource: "member", action: "list", route: "events.page" },
+  },
 ];
 
 // Response header set only on the Kit-rendered branch of the hook, so the

@@ -22,6 +22,7 @@ expect Hono for the right reason.
 | `GET /auth/recover` | `web/src/routes/auth/recover/+page.svelte` (`csr=false`, shared `#lib/Recovery.svelte` over the `RecoveryModel` shape; journey writes + `/join/callback` outcomes stay Hono, rendered through the injected outcome renderer) | public | Hono (`enabled: false`) |
 | `GET /profile` | `web/src/routes/profile/+page.svelte` (`csr=false`, one shared `web/src/lib/ProfileView.svelte`, member record + optional stats) | member (`profile`/`view`/`profile`) | Hono (`enabled: false`) |
 | `GET /members/:user` | `web/src/routes/members/[user]/+page.svelte` (same shared view; retired `/members` directory has no route) | member (`profile`/`view`/`profiles.show`) | Hono (`enabled: false`) |
+| `GET /e/:key` | `web/src/routes/e/[key]/+page.svelte` (`csr=false`, one shared `web/src/lib/EventDetail.svelte` over the `KitEventDetailModel` shape, existing `/islands/rsvp-button.js` + `/copy-link.js` + `/going-count.js`; JSON/ICS stay Hono-owned) | member (`member`/`list`/`events.page`, bridged viewer; disclosed attendee + own-RSVP subjects audited, anonymous releases with none) | Hono (`enabled: false`; enablement blocked on the RSVP companion) |
 | everything else | none yet (Kit `[...path]` catch-all → `honoFetch`) | — | Hono |
 
 Add one row per migrated route with its reads class (`public` routes render
