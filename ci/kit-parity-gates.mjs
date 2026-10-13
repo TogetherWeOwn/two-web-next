@@ -128,28 +128,69 @@ export function parseManifestEntries(manifestSource) {
   return entries;
 }
 
+// Structural path equality: the runtime router (src/route-ownership.ts
+// matchPattern) treats any `:name` segment as a wildcard and routes on
+// segment structure only, so the gate must too. `entry.path === path` as
+// strings lets `{ method: "POST", path: "/e/:id/rsvp", enabled: true }`
+// ship on a green ledger with no journey run.
+export function pathsMatchStructurally(pattern, path) {
+  const patternParts = pattern.split("/");
+  const pathParts = path.split("/");
+  if (patternParts.length !== pathParts.length) return false;
+  return patternParts.every(
+    (part, i) => part.startsWith(":") || pathParts[i].startsWith(":") || part === pathParts[i],
+  );
+}
+
 export function isManifestEnabled(manifestSource, path, method = null) {
   const entries = parseManifestEntries(manifestSource);
   const wanted = method?.toUpperCase() ?? null;
   return entries.some(
     (entry) =>
-      entry.path === path &&
+      pathsMatchStructurally(entry.path, path) &&
       (wanted === null || entry.method.toUpperCase() === wanted) &&
       entry.enabled,
   );
+}
+
+// Journey ownership scopes: every enabled manifest entry under one of these
+// prefixes means Kit owns traffic in that journey's area, even when the
+// entry is a route the explicit lists below never named (a newly added Hono
+// route, a legacy redirect, a future action). Prefixes are static so `:param`
+// renames cannot escape them; the `/events/` arm pins the `/rsvp` suffix so
+// the public archive `/events/past` never trips the RSVP journey.
+export function isInJourneyScope(scope, entryPath) {
+  if (scope === "rsvp") {
+    if (entryPath === "/e" || entryPath.startsWith("/e/")) return true;
+    const parts = entryPath.split("/");
+    if (parts.length === 4 && parts[1] === "events" && parts[3] === "rsvp") return true;
+    return false;
+  }
+  if (scope === "admin") {
+    return entryPath === "/admin/events" || entryPath.startsWith("/admin/events/");
+  }
+  if (scope === "profile") {
+    if (entryPath === "/profile" || entryPath.startsWith("/profile/")) return true;
+    return entryPath === "/members" || entryPath.startsWith("/members/");
+  }
+  return false;
 }
 
 // Each login journey lists the REAL method+path pairs it exercises — the
 // read pages plus the mutation routes — never a bare page literal:
 // - RSVP: GET /e/:key (detail page), POST /e/:key/rsvp (form override),
 //   PUT + DELETE /events/:key/rsvp (src/events/routes-rsvp.tsx:115-125)
-// - Admin: GET + POST /admin/events, GET + POST /admin/events/:key
-//   (src/admin/routes.tsx:306-448; publish/cancel share the :key POST family)
-// - Profile: GET /profile (read), PATCH + POST /members/:user
-//   (src/profiles/routes-reads.tsx:36, routes-writes.tsx:140-142)
+// - Admin: GET + POST /admin/events, GET /admin/events/new,
+//   GET + POST /admin/events/:key, POST /admin/events/:key/publish,
+//   /cancel, /rsvp-pause, /rsvp-reopen (src/admin/routes.tsx:306-471; each
+//   action is its own route, not the :key POST family)
+// - Profile: GET /profile (own read), GET /members/:user (other read),
+//   PATCH + POST /members/:user
+//   (src/profiles/routes-reads.tsx:36-37, routes-writes.tsx:140-142)
 export const LOGIN_JOURNEYS = [
   {
     name: "member RSVP going/withdraw (/e/:key)",
+    scope: "rsvp",
     routes: [
       { method: "GET", path: "/e/:key" },
       { method: "POST", path: "/e/:key/rsvp" },
@@ -159,17 +200,25 @@ export const LOGIN_JOURNEYS = [
   },
   {
     name: "moderator publish/cancel (/admin/events)",
+    scope: "admin",
     routes: [
       { method: "GET", path: "/admin/events" },
       { method: "POST", path: "/admin/events" },
+      { method: "GET", path: "/admin/events/new" },
       { method: "GET", path: "/admin/events/:key" },
       { method: "POST", path: "/admin/events/:key" },
+      { method: "POST", path: "/admin/events/:key/publish" },
+      { method: "POST", path: "/admin/events/:key/cancel" },
+      { method: "POST", path: "/admin/events/:key/rsvp-pause" },
+      { method: "POST", path: "/admin/events/:key/rsvp-reopen" },
     ],
   },
   {
     name: "member profile edit (/profile)",
+    scope: "profile",
     routes: [
       { method: "GET", path: "/profile" },
+      { method: "GET", path: "/members/:user" },
       { method: "PATCH", path: "/members/:user" },
       { method: "POST", path: "/members/:user" },
     ],
@@ -366,16 +415,32 @@ export function runUnitMode({ stdout = process.stdout, manifestSource: manifestO
   // quiet green. The moment the manifest enables a route, the skip becomes a
   // failure (no executed parity journey covers it yet), so the first
   // Kit-native member route can never ship on a green ledger with no run.
-  for (const { name, routes } of LOGIN_JOURNEYS) {
-    const enabled = routes.filter((route) =>
-      isManifestEnabled(manifestSource, route.path, route.method),
+  // Coverage is scope-first: ANY enabled entry under the journey's scope
+  // fails it, even when the entry is a route the explicit list never named
+  // (renamed :param, new action, legacy redirect). The explicit list names
+  // the known routes for a precise reason; the scope is the fail-closed net.
+  const manifestEntries = parseManifestEntries(manifestSource);
+  for (const { name, routes, scope } of LOGIN_JOURNEYS) {
+    const enabledInScope = manifestEntries.filter(
+      (entry) => entry.enabled && isInJourneyScope(scope, entry.path),
     );
-    if (enabled.length > 0) {
-      const listed = enabled.map((route) => `${route.method} ${route.path}`).join(", ");
+    if (enabledInScope.length > 0) {
+      const listed = enabledInScope.map((entry) => `${entry.method} ${entry.path}`).join(", ");
+      const explicitHits = routes.filter((route) =>
+        enabledInScope.some(
+          (entry) =>
+            entry.method.toUpperCase() === route.method.toUpperCase() &&
+            pathsMatchStructurally(entry.path, route.path),
+        ),
+      );
+      const coverage =
+        explicitHits.length > 0
+          ? `known route${explicitHits.length > 1 ? "s" : ""}`
+          : "scoped route";
       push(
         `parity: ${name}`,
         "failed",
-        `route Kit-native (ROUTE_MANIFEST enabled:true for ${listed}) but no executed parity journey covers it`,
+        `route Kit-native (ROUTE_MANIFEST enabled:true for ${listed}; ${coverage}) but no executed parity journey covers it`,
       );
     } else {
       push(`parity: ${name}`, "skipped", "route not Kit-native (ROUTE_MANIFEST enabled:false)");

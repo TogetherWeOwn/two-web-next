@@ -10,7 +10,9 @@ import {
   assertRouteContract,
   expectedMarkerFor,
   isAllowlistedHost,
+  isInJourneyScope,
   isManifestEnabled,
+  pathsMatchStructurally,
   runGate,
   runUnitMode,
   scrubSecrets,
@@ -246,6 +248,97 @@ test("enabling the real mutation routes fails every login journey", () => {
   assert.equal(byName.get("parity: member profile edit (/profile)").status, "failed");
   assert.equal(byName.get("parity: moderator publish/cancel (/admin/events)").status, "failed");
   assert.equal(summarizeLedger(journeys).verdict, "fail");
+});
+
+test("manifest matching ignores :param names like the runtime router", () => {
+  assert.equal(pathsMatchStructurally("/e/:key/rsvp", "/e/:id/rsvp"), true);
+  assert.equal(pathsMatchStructurally("/members/:user", "/members/:slug"), true);
+  assert.equal(pathsMatchStructurally("/admin/events/:key", "/admin/events/:key/publish"), false);
+  assert.equal(
+    isManifestEnabled(
+      `{ method: "POST", path: "/e/:id/rsvp", enabled: true }`,
+      "/e/:key/rsvp",
+      "POST",
+    ),
+    true,
+  );
+  assert.equal(
+    isManifestEnabled(
+      `{ method: "PATCH", path: "/members/:slug", enabled: true }`,
+      "/members/:user",
+      "PATCH",
+    ),
+    true,
+  );
+});
+
+test("renamed :params still fail their login journey instead of a quiet skip", () => {
+  const silent = { write: () => {} };
+  const journeys = runUnitMode({
+    stdout: silent,
+    manifestSource:
+      `{ method: "GET", path: "/events/past", enabled: false },` +
+      ` { method: "POST", path: "/e/:id/rsvp", enabled: true },` +
+      ` { method: "PATCH", path: "/members/:slug", enabled: true }`,
+  });
+  const byName = new Map(journeys.map((j) => [j.name, j]));
+  assert.equal(byName.get("parity: member RSVP going/withdraw (/e/:key)").status, "failed");
+  assert.match(
+    byName.get("parity: member RSVP going/withdraw (/e/:key)").reason,
+    /POST \/e\/:id\/rsvp/,
+  );
+  assert.equal(byName.get("parity: member profile edit (/profile)").status, "failed");
+  assert.match(
+    byName.get("parity: member profile edit (/profile)").reason,
+    /PATCH \/members\/:slug/,
+  );
+  assert.equal(byName.get("parity: moderator publish/cancel (/admin/events)").status, "skipped");
+  assert.equal(summarizeLedger(journeys).verdict, "fail");
+});
+
+test("each admin publish/cancel action route fails the admin journey", () => {
+  const silent = { write: () => {} };
+  for (const route of [
+    `{ method: "POST", path: "/admin/events/:key/publish", enabled: true }`,
+    `{ method: "POST", path: "/admin/events/:key/cancel", enabled: true }`,
+    `{ method: "POST", path: "/admin/events/:key/rsvp-pause", enabled: true }`,
+    `{ method: "POST", path: "/admin/events/:key/rsvp-reopen", enabled: true }`,
+    `{ method: "GET", path: "/admin/events/new", enabled: true }`,
+    // Renamed :param must not escape the admin journey either.
+    `{ method: "POST", path: "/admin/events/:id/publish", enabled: true }`,
+  ]) {
+    const journeys = runUnitMode({
+      stdout: silent,
+      manifestSource: `{ method: "GET", path: "/events/past", enabled: false }, ${route}`,
+    });
+    const byName = new Map(journeys.map((j) => [j.name, j]));
+    assert.equal(
+      byName.get("parity: moderator publish/cancel (/admin/events)").status,
+      "failed",
+      route,
+    );
+    assert.equal(summarizeLedger(journeys).verdict, "fail", route);
+  }
+});
+
+test("a future scoped route fails its journey even when never listed", () => {
+  const silent = { write: () => {} };
+  const journeys = runUnitMode({
+    stdout: silent,
+    manifestSource:
+      `{ method: "GET", path: "/events/past", enabled: false },` +
+      ` { method: "POST", path: "/admin/events/:key/approve", enabled: true }`,
+  });
+  const byName = new Map(journeys.map((j) => [j.name, j]));
+  assert.equal(byName.get("parity: moderator publish/cancel (/admin/events)").status, "failed");
+  assert.match(
+    byName.get("parity: moderator publish/cancel (/admin/events)").reason,
+    /POST \/admin\/events\/:key\/approve/,
+  );
+  // The public archive never trips the RSVP scope.
+  assert.equal(isInJourneyScope("rsvp", "/events/past"), false);
+  assert.equal(isInJourneyScope("admin", "/admin/events/:key/approve"), true);
+  assert.equal(isInJourneyScope("profile", "/members/:slug"), true);
 });
 
 test("preview Hono-only break fails with the Hono journey named", () => {
