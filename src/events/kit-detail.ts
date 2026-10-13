@@ -26,7 +26,6 @@ import { eventJsonLd, siteJsonLd } from "../seo-json-ld";
 import { isValidZone } from "./date-format";
 import { googleCalendarUrl } from "./feeds";
 import { canonicalEventKey, eventKeyAllowed } from "./keys";
-import { fmt } from "./pages-shared";
 import {
   getEventNeighbors,
   getPublicEvent,
@@ -82,7 +81,8 @@ export interface KitEventDetailModel {
   eventKey: string;
   title: string;
   game: string | null;
-  description: string | null;
+  /** Served share fallback when the event has no description of its own. */
+  description: string;
   location: string | null;
   status: string;
   isDraft: boolean;
@@ -180,10 +180,12 @@ export function formatEventWhen(startsAt: Date, timezone: string): string {
 }
 
 function toLink(link: EventLink): KitEventDetailLink {
+  // Discovery instants use the served long-offset detail format (the hero
+  // format), not the calendar grid format.
   return {
     key: link.eventKey,
     title: link.title,
-    whenText: fmt(link.startsAt, link.timezone),
+    whenText: formatEventWhen(link.startsAt, link.timezone),
     datetime: link.startsAt.toISOString(),
     location: link.location,
   };
@@ -284,7 +286,7 @@ export async function resolveKitEventDetail(
           eventKey: event.eventKey,
           title: event.title,
           game: event.game,
-          description: event.description,
+          description: event.description || "An event at Together We Own.",
           location: event.location,
           status: event.status,
           isDraft: event.status === "draft",
@@ -313,7 +315,9 @@ export async function resolveKitEventDetail(
           },
           related: related.map(toLink),
           showJoinPitch: !viewer,
-          joinReturnTo: pagePath,
+          // The sign-in return keeps the query string, exactly as served;
+          // the join pitch and related-join links use the bare page path.
+          joinReturnTo: `${pagePath}${search}`,
           joinResult,
           viewerMember: member,
           viewerModerator: viewer?.moderator === true,

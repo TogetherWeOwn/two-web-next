@@ -321,6 +321,13 @@ describe("event-detail guest reads", () => {
     // Discovery + share surface.
     expect(model.related).toHaveLength(1);
     expect(model.related[0]).toMatchObject({ key: RELATED[0]!.eventKey, title: "Chess finals" });
+    // Related instants use the served long-offset format, not the grid format.
+    expect(model.related[0]!.whenText).toContain("GMT");
+    // The sign-in return preserves the query string, as served.
+    const queried = await resolve(KEY, fakeStore(), GUEST, null, "?tab=about");
+    expect(queried.outcome.kind).toBe("ok");
+    if (queried.outcome.kind !== "ok") throw new Error("unreachable");
+    expect(queried.outcome.model.joinReturnTo).toBe(`/e/${KEY}?tab=about`);
     expect(model.neighbors.next?.key).toBe(RELATED[0]!.eventKey);
     expect(model.copyLink).toBe(`${APP_URL}/e/${KEY}`);
     expect(model.jsonLd).toContain("https://schema.org/EventScheduled");
@@ -439,6 +446,16 @@ describe("event-detail member reads", () => {
 });
 
 describe("event-detail metadata safety", () => {
+  it("falls back to the served share description when the event has none", async () => {
+    const { outcome } = await resolve(
+      KEY,
+      fakeStore({ event: { ...row({ description: null }), goingCount: 1 } as PublicEvent }),
+    );
+    expect(outcome.kind).toBe("ok");
+    if (outcome.kind !== "ok") throw new Error("unreachable");
+    expect(outcome.model.description).toBe("An event at Together We Own.");
+  });
+
   it("escapes JSON-LD so a hostile title cannot break out of the data block", async () => {
     const hostile = '</script><script>alert("xss")</script>';
     const { outcome } = await resolve(
