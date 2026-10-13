@@ -258,6 +258,16 @@ migration or Neon branch creation is performed by its selftest.
   Both the shell gate and runner reject non-`main` refs, invalid targets and
   production unless `PRODUCTION_DEPLOY_ENABLED` is exactly `true` (the same
   flag used for production Worker deploys). Leave it unset/false until approved.
+- Staging admission hold: `STAGING_MIGRATION_HOLD` must be exactly `false` to
+  release any staging migration or staging deploy. Absent, empty, `true` and
+  malformed values all hold. Set it as a repository variable
+  (`vars.STAGING_MIGRATION_HOLD`), optionally overridden at the `staging`
+  Environment; the `db-migrate` gate step and the `deploy.yml` hold step read
+  it before dependencies, DB or Cloudflare work. The hold gates the whole
+  staging deploy (Worker, queue, Tail and jobs steps never run while held),
+  not only migrations. A staging recovery dispatch per this runbook is refused
+  until the variable is exactly `false`. Rollback is re-hold: set the variable
+  back to `true` (or delete the override so it resolves absent).
 - Provision `NEON_STAGING_DATABASE_URL` **only on the staging Environment** and
   `PRODUCTION_DATABASE_URL` **only on the production Environment**, using
   the authorized operator's secret-provisioning path. Verify the intended
@@ -338,11 +348,16 @@ CI-verified SHA and would run before the test suite. The steps are hard-wired to
 `MIGRATION_TARGET=staging` and never see `PRODUCTION_DATABASE_URL` or
 `PRODUCTION_DEPLOY_ENABLED`; they share the DB advisory lock with `db-migrate`
 (an in-flight hand-dispatch makes the deploy fail with "Another web migration
-holds the database lock"; re-run the deploy after it finishes). The `staging`
+holds the database lock"; re-run the deploy after it finishes). The
+`Staging admission hold` step and the shared `&staging-migration-env` anchor
+both read `vars.STAGING_MIGRATION_HOLD`; only exactly `false` releases the
+deploy, and while held the whole staging deploy stops before dependencies, so
+the Worker, queue, Tail and jobs steps never run. The `staging`
 Environment has no required reviewers, so this adds no second approval. Because
 a migration can commit and a later step still fail, migrations must stay
 backward-compatible (expand/contract) with the Worker they precede. Rollback:
-revert the PR; `db-migrate.yml` stays dispatchable by hand. Never couple
+set `STAGING_MIGRATION_HOLD` back to `true` (re-hold); revert the PR only for
+code changes. `db-migrate.yml` stays dispatchable by hand. Never couple
 production apply to a Worker deploy or enable that by merging schema SQL.
 
 **Local/CI proof (no Neon/API calls):** `npm run db:migrate:selftest` uses only

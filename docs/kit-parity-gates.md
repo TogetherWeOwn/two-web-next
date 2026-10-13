@@ -13,6 +13,7 @@ expect Hono for the right reason.
 | `GET /` | `web/src/routes/+page.svelte` (`csr=false`, shared `src/home-copy` + readers, no island) | public | Hono (`enabled: false`) |
 | `GET /events/past` | `web/src/routes/events/past/+page.svelte` (`csr=false`, shared `/islands/past-events.js`) | public | Hono (`enabled: false`) |
 | `GET /privacy` | `web/src/routes/privacy/+page.svelte` (`csr=false`, shared `POLICY_MARKDOWN`/`POLICY_VERSION` source, no island) | public | Hono (`enabled: false`) |
+| `GET /join` | `web/src/routes/join/+page.svelte` (`csr=false`, shared `/islands/join-widget.js`; `/join/discord` + `/join/callback` stay Hono) | public | Hono (`enabled: false`) |
 | everything else | none yet (Kit `[...path]` catch-all → `honoFetch`) | — | Hono |
 
 Add one row per migrated route with its reads class (`public` routes render
