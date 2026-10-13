@@ -12,6 +12,7 @@ expect Hono for the right reason.
 | --- | --- | --- | --- |
 | `GET /events/past` | `web/src/routes/events/past/+page.svelte` (`csr=false`, shared `/islands/past-events.js`) | public | Hono (`enabled: false`) |
 | `GET /privacy` | `web/src/routes/privacy/+page.svelte` (`csr=false`, shared `POLICY_MARKDOWN`/`POLICY_VERSION` source, no island) | public | Hono (`enabled: false`) |
+| `GET /rules` | `web/src/routes/rules/+page.svelte` (`csr=false`, shared `ContentLeaf.svelte`, `src/rules-content.ts`) | public | Hono (`enabled: false`) |
 | `GET /join` | `web/src/routes/join/+page.svelte` (`csr=false`, shared `/islands/join-widget.js`; `/join/discord` + `/join/callback` stay Hono) | public | Hono (`enabled: false`) |
 | everything else | none yet (Kit `[...path]` catch-all → `honoFetch`) | — | Hono |
 
