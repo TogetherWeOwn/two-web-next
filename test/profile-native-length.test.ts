@@ -471,7 +471,12 @@ describe.skipIf(process.env.A11Y_BROWSER_TESTS !== "true")(
       expect(writes).toHaveLength(1);
       expect(writes[0]).toMatchObject({ method: "PATCH", status: 200 });
       expect(JSON.parse(writes[0]!.body).games_text).toBe(games_text);
-      expect(save).toHaveBeenCalledExactlyOnceWith(ID, { bio: null, games, timezone: null });
+      expect(save).toHaveBeenCalledExactlyOnceWith(ID, {
+        bio: null,
+        games,
+        timezone: null,
+        leaderboardOptOut: false,
+      });
     });
 
     for (const javaScriptEnabled of [false, true]) {
@@ -511,7 +516,12 @@ describe.skipIf(process.env.A11Y_BROWSER_TESTS !== "true")(
               // Native form serialization normalizes textarea LF to CRLF.
               expect(posted.get("games_text")).toBe(games_text.replaceAll("\n", "\r\n"));
             }
-            expect(save).toHaveBeenCalledExactlyOnceWith(ID, { bio, games, timezone: null });
+            expect(save).toHaveBeenCalledExactlyOnceWith(ID, {
+              bio,
+              games,
+              timezone: null,
+              leaderboardOptOut: false,
+            });
           },
         );
 

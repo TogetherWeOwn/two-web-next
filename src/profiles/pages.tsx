@@ -36,12 +36,14 @@ export const PROFILE_FIELD_IDS = {
   bio: "profile-bio",
   games_text: "profile-games-text",
   timezone: "profile-timezone",
+  leaderboard_opt_out: "profile-leaderboard-opt-out",
 } as const;
 type ProfileField = keyof typeof PROFILE_FIELD_IDS;
 const PROFILE_ERROR_IDS: Record<ProfileField, string> = {
   bio: "profile-bio-error",
   games_text: "profile-games-text-error",
   timezone: "profile-timezone-error",
+  leaderboard_opt_out: "profile-leaderboard-opt-out-error",
 };
 const profileFieldForErrorKey = (key: string): ProfileField | null =>
   key === "bio"
@@ -50,7 +52,9 @@ const profileFieldForErrorKey = (key: string): ProfileField | null =>
       ? "games_text"
       : key === "timezone"
         ? "timezone"
-        : null;
+        : key === "leaderboard_opt_out"
+          ? "leaderboard_opt_out"
+          : null;
 const statsLabel = (key: string) =>
   key.replace(/[_-]+/g, " ").replace(/\b\w/g, (letter) => letter.toUpperCase());
 // Legacy parity: the avatar fallback is the first two code points, uppercased.
@@ -136,7 +140,7 @@ export const ProfilePage: FC<{
   joinResult?: JoinResult | null;
   stats?: MemberStats | null;
   errors?: Record<string, string>;
-  values?: { bio: string; games_text: string; timezone: string };
+  values?: { bio: string; games_text: string; timezone: string; leaderboard_opt_out: boolean };
 }> = ({ member, isOwner, isModerator, appUrl, joinResult, stats, errors, values }) => {
   const img = profileAvatarSrcset(member.id, member.avatar);
   const joined = profileJoinedMonth(member.joinedAt ?? null);
@@ -145,6 +149,7 @@ export const ProfilePage: FC<{
     bio: member.bio ?? "",
     games_text: member.games.join("\n"),
     timezone: member.timezone ?? "",
+    leaderboard_opt_out: member.leaderboardOptOut ?? false,
   };
   return (
     <Layout
@@ -307,6 +312,32 @@ export const ProfilePage: FC<{
             ) : null}
             <form method="post" action={`/members/${member.id}`} data-testid={PROFILE_FORM_TESTID}>
               <input type="hidden" name="_method" value="PATCH" />
+              {/* Unchecked still submits: the hidden 0 keeps the choice explicit
+                  so an absent key always means "leave the stored choice alone". */}
+              <input type="hidden" name="leaderboard_opt_out" value="0" />
+              <label class="profile-field profile-switch">
+                <input
+                  id={PROFILE_FIELD_IDS.leaderboard_opt_out}
+                  name="leaderboard_opt_out"
+                  type="checkbox"
+                  value="1"
+                  checked={form.leaderboard_opt_out}
+                  aria-invalid={errors?.leaderboard_opt_out ? "true" : undefined}
+                  aria-describedby={
+                    errors?.leaderboard_opt_out ? PROFILE_ERROR_IDS.leaderboard_opt_out : undefined
+                  }
+                />
+                Hide me from the member leaderboard
+              </label>
+              <p class="profile-hint">
+                Opted out, you leave every board and every count. Tick to hide, untick to show
+                again.
+              </p>
+              {errors?.leaderboard_opt_out ? (
+                <p id={PROFILE_ERROR_IDS.leaderboard_opt_out} class="error">
+                  {errors.leaderboard_opt_out}
+                </p>
+              ) : null}
               {/* Native maxlength counts UTF-16 units; code-point limits belong to the validators. */}
               <label class="profile-field">
                 Bio{" "}

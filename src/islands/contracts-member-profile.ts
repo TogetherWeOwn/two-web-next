@@ -116,6 +116,8 @@ export interface ProfileWriteBody {
   bio: string;
   games_text: string;
   timezone: string;
+  /** Absent only from clients that predate the switch; the server preserves then. */
+  leaderboard_opt_out?: boolean;
   website: string;
   formOpenedAt: number;
 }
