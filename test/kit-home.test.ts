@@ -10,9 +10,12 @@ import {
   FALLBACK_RANKS,
   HOME_JOIN_RESULT_COPY,
   HOME_NOTICES,
+  applyHomeFlashConsumption,
   parseHomeNotice,
   resolveHomeFlash,
+  resolveHomePageState,
 } from "../src/home-copy";
+import { JOIN_RESULT_COOKIE } from "../src/return-journey";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const serverPath = join(root, "web/src/routes/+page.server.ts");
@@ -32,8 +35,9 @@ describe("Kit home port: shared server models, no duplicated content", () => {
     expect(server).toContain("listVisibleFeatured");
     expect(server).toContain("dbFor");
     expect(server).toContain("inviteDestination");
-    expect(server).toContain("parseHomeNotice");
-    expect(server).toContain("resolveHomeFlash");
+    // Notice/flash decisions ride the framework-free helper (which itself
+    // calls parseHomeNotice/resolveHomeFlash, pinned behaviorally below).
+    expect(server).toContain("resolveHomePageState");
   });
 
   it("renders every panel from shared copy and formatting helpers", () => {
@@ -81,10 +85,14 @@ describe("Kit home port: request posture", () => {
     expect(server).toContain("csr = false");
   });
 
-  it("reads the flash read-only: never consumes Hono-owned cookies", () => {
+  it("consumes the one-shot flash on GET through the shared helper", () => {
     const server = read(serverPath);
+    // Decisions and consumption live in src/home-copy.ts (behaviorally
+    // pinned below); the load stays a thin binding that delegates to them.
     expect(server).toContain("locals.joinResult");
-    expect(server).not.toMatch(/takeJoinResult|deleteCookie|cookies\.delete/);
+    expect(server).toContain("resolveHomePageState");
+    expect(server).toContain("applyHomeFlashConsumption");
+    expect(server).toContain("JOIN_RESULT_COOKIE");
   });
 
   it("adds no live Discord call to rendering", () => {
@@ -120,6 +128,10 @@ describe("Kit home port: header, hero and metadata chrome", () => {
     // Session outage keeps the guest header while the hero offers the invite.
     expect(page).toContain("sessionUnavailable");
     expect(page).toContain("Join with an invite link");
+    // The hero gates Open Discord on membership: a bare `{:else if session}`
+    // would hand non-members the member button (the SSR render test pins the
+    // rendered output for both states).
+    expect(page).toMatch(/\{\:else if session\?\.member\}/);
   });
 
   it("renders the hero, notice slot and exact page metadata", () => {
@@ -239,5 +251,127 @@ describe("home-copy: notice validation and flash precedence", () => {
       "You are in. Finish Discord's rules screening before you can post.",
     );
     expect(HOME_JOIN_RESULT_COPY.reinvite).toBe("Rejoin with the Discord invite");
+  });
+});
+
+describe("home page state: the load's session, notice and flash decisions", () => {
+  it("reports an outage as indeterminate, never as a logout", () => {
+    expect(resolveHomePageState({ status: "unknown", noticeRaw: null, flash: null })).toEqual({
+      sessionUnavailable: true,
+      notice: null,
+      joinResult: null,
+    });
+    expect(
+      resolveHomePageState({ status: "guest", noticeRaw: null, flash: null }).sessionUnavailable,
+    ).toBe(false);
+    expect(
+      resolveHomePageState({ status: "authenticated", noticeRaw: null, flash: null })
+        .sessionUnavailable,
+    ).toBe(false);
+    expect(
+      resolveHomePageState({ status: undefined, noticeRaw: null, flash: null }).sessionUnavailable,
+    ).toBe(false);
+  });
+
+  it("validates ?n= to exactly the six Hono keys", () => {
+    expect(resolveHomePageState({ status: "guest", noticeRaw: "joined", flash: null }).notice).toBe(
+      "joined",
+    );
+    expect(
+      resolveHomePageState({ status: "guest", noticeRaw: "join_failed;drop", flash: null }).notice,
+    ).toBeNull();
+    expect(
+      resolveHomePageState({ status: "guest", noticeRaw: "__proto__", flash: null }).notice,
+    ).toBeNull();
+  });
+
+  it("lets a failure notice win over a stale success flash", () => {
+    expect(
+      resolveHomePageState({ status: "guest", noticeRaw: "join_failed", flash: "added" })
+        .joinResult,
+    ).toBeNull();
+    expect(
+      resolveHomePageState({ status: "guest", noticeRaw: "joined", flash: "added" }).joinResult,
+    ).toBe("added");
+    expect(
+      resolveHomePageState({ status: "guest", noticeRaw: null, flash: "already_member" })
+        .joinResult,
+    ).toBe("already_member");
+  });
+
+  it("still resolves the flash during a session outage", () => {
+    // Hono's sessionUnavailable and flash reads are independent: an outage
+    // keeps the guest header while the banner still renders.
+    expect(
+      resolveHomePageState({ status: "unknown", noticeRaw: "joined", flash: "added" }),
+    ).toEqual({ sessionUnavailable: true, notice: "joined", joinResult: "added" });
+  });
+});
+
+describe("home flash consumption: Hono takeJoinResult parity", () => {
+  function harness() {
+    const deleted: Array<{ name: string; options: Record<string, unknown> }> = [];
+    const cookies = {
+      delete: (name: string, options: Record<string, unknown>) => deleted.push({ name, options }),
+    };
+    return { deleted, cookies };
+  }
+
+  it("deletes the flash on the first GET with Hono's cookie attributes", async () => {
+    for (const flash of ["added", "already_member"] as const) {
+      const { deleted, cookies } = harness();
+      applyHomeFlashConsumption({
+        method: "GET",
+        flash,
+        cookieName: JOIN_RESULT_COOKIE,
+        cookies,
+      });
+      expect(deleted).toEqual([
+        {
+          name: "__Host-two_join_result",
+          options: { path: "/", secure: true, httpOnly: true, sameSite: "lax" },
+        },
+      ]);
+    }
+  });
+
+  it("deletes even when a failure notice suppresses the banner", () => {
+    // Hono consumes before the precedence check, so a suppressed flash never
+    // repeats: consumption takes the raw flash, not the resolved banner.
+    const { deleted, cookies } = harness();
+    const state = resolveHomePageState({
+      status: "guest",
+      noticeRaw: "join_failed",
+      flash: "added",
+    });
+    expect(state.joinResult).toBeNull();
+    applyHomeFlashConsumption({
+      method: "GET",
+      flash: "added",
+      cookieName: JOIN_RESULT_COOKIE,
+      cookies,
+    });
+    expect(deleted).toHaveLength(1);
+  });
+
+  it("leaves HEAD and POST flashes pending and emits no delete without a flash", () => {
+    for (const method of ["HEAD", "POST"]) {
+      const { deleted, cookies } = harness();
+      applyHomeFlashConsumption({
+        method,
+        flash: "added",
+        cookieName: JOIN_RESULT_COOKIE,
+        cookies,
+      });
+      expect(deleted).toEqual([]);
+    }
+    const { deleted, cookies } = harness();
+    applyHomeFlashConsumption({
+      method: "GET",
+      flash: null,
+      cookieName: JOIN_RESULT_COOKIE,
+      cookies,
+    });
+    expect(deleted).toEqual([]);
   });
 });

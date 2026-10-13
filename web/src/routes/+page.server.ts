@@ -9,10 +9,11 @@ import {
   FALLBACK_RANKS,
   HOME_JOIN_RESULT_COPY,
   HOME_NOTICES,
-  parseHomeNotice,
-  resolveHomeFlash,
+  applyHomeFlashConsumption,
+  resolveHomePageState,
 } from "../../../src/home-copy";
 import { inviteDestination } from "../../../src/invite";
+import { JOIN_RESULT_COOKIE } from "../../../src/return-journey";
 
 // Server-rendered only: the Hono homepage ships no page JavaScript (its
 // islands are absent here), so the Kit page carries no hydration bundle that
@@ -20,19 +21,34 @@ import { inviteDestination } from "../../../src/invite";
 export const csr = false;
 
 // Same reads and cache policy as the Hono handler (src/index.tsx GET /):
-// session-aware header from the read-only bridge locals, join notice from
-// ?n=, read-only join flash (consumption stays Hono-side until enablement,
-// so a Kit read can never double-spend it), bot-owned counts, merged
-// upcoming events and visible featured rows. Every panel degrades
-// independently — the shared readers never throw — and the response stays
-// viewer-specific (private, no-store).
-export const load: PageServerLoad = async ({ url, locals, setHeaders }) => {
+// session-aware header from the bridge locals, join notice from ?n=,
+// one-shot join flash, bot-owned counts, merged upcoming events and visible
+// featured rows. Every panel degrades independently — the shared readers
+// never throw — and the response stays viewer-specific (private, no-store).
+export const load: PageServerLoad = async ({ url, request, locals, cookies, setHeaders }) => {
   const session = locals.status === "authenticated" ? (locals.session ?? null) : null;
-  // An outage is never reported as a logout: unknown renders the guest
-  // header with the invite-link hero, exactly like Hono's sessionUnavailable.
-  const sessionUnavailable = locals.status === "unknown";
-  const notice = parseHomeNotice(url.searchParams.get("n"));
-  const joinResult = resolveHomeFlash(notice, locals.joinResult ?? null);
+  // Framework-free decisions (src/home-copy.ts, mirroring Hono): an outage is
+  // never reported as a logout — unknown renders the guest header with the
+  // invite-link hero — ?n= validates to the six keys, and a failure notice
+  // drops a stale success flash.
+  const flash = locals.joinResult ?? null;
+  const { sessionUnavailable, notice, joinResult } = resolveHomePageState({
+    status: locals.status,
+    noticeRaw: url.searchParams.get("n"),
+    flash,
+  });
+  // One-shot flash consumption (Hono takeJoinResult parity, like the /join
+  // Kit load's applyJoinPageResponsePolicy): the first GET that can render
+  // the banner deletes it, even when a failure notice suppresses display —
+  // otherwise the banner repeats on every reload until the cookie expires.
+  // HEAD leaves it pending. While this entry is disabled the hook sends GET /
+  // to Hono, which consumes it there; once enabled, this load is the consumer.
+  applyHomeFlashConsumption({
+    method: request.method,
+    flash,
+    cookieName: JOIN_RESULT_COOKIE,
+    cookies,
+  });
   // The counts read degrades to hidden when the bot DB is down — never a 500
   // on the funnel top (the legacy CountsReader never-throw contract).
   const counts = await readCounts(env);

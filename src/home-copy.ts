@@ -6,6 +6,7 @@
 // auth-discord.php, matched by meaning, not translation key); change them
 // here once and both renderers follow.
 import type { Rank } from "./counts";
+import type { KitSessionStatus } from "./kit-session";
 import type { JoinResult } from "./return-journey";
 
 // One actionable sentence per failure meaning: denied says "you cancelled",
@@ -67,3 +68,69 @@ export const HOME_JOIN_RESULT_COPY = {
 export const FALLBACK_RANKS: Rank[] = ["Prospect", "Member", "Soldier", "Veteran", "Legend"].map(
   (label) => ({ key: label.toLowerCase(), label, memberCount: null }),
 );
+
+// Kit homepage decision core (SvelteKit migration; zero behavior change).
+//
+// The Kit load (web/src/routes/+page.server.ts) is a thin env binding; the
+// session, notice and flash decisions live here so the root suite pins them
+// with fake locals, the way src/join/kit-page.ts does for /join. Values mirror
+// the Hono GET / handler in src/index.tsx exactly: an outage is never a logout
+// (unknown renders the guest header with the invite-link hero), ?n= accepts
+// exactly the six keys, and a failure notice drops a stale success flash.
+export type HomePageStateInput = {
+  // Undefined (bridge locals absent) renders as guest, matching the load's
+  // previous inline `=== "authenticated"` / `=== "unknown"` checks.
+  status: KitSessionStatus | undefined;
+  noticeRaw: string | null;
+  flash: JoinResult | null;
+};
+
+export type HomePageState = {
+  sessionUnavailable: boolean;
+  notice: HomeNotice | null;
+  joinResult: JoinResult | null;
+};
+
+/** Session, notice and flash decisions for GET /, framework-free. */
+export function resolveHomePageState(input: HomePageStateInput): HomePageState {
+  const sessionUnavailable = input.status === "unknown";
+  const notice = parseHomeNotice(input.noticeRaw);
+  return { sessionUnavailable, notice, joinResult: resolveHomeFlash(notice, input.flash) };
+}
+
+export type HomeFlashConsumptionInput = {
+  method: string;
+  flash: JoinResult | null;
+  cookieName: string;
+  cookies: {
+    delete: (
+      name: string,
+      options: {
+        path: string;
+        secure: boolean;
+        httpOnly: boolean;
+        sameSite: "lax";
+      },
+    ) => void;
+  };
+};
+
+/**
+ * One-shot flash consumption (Hono takeJoinResult parity): the first GET that
+ * can render the banner deletes the cookie with the same attributes Hono's
+ * deleteOpts sets (path /, Secure, HttpOnly, SameSite Lax) — even when a
+ * failure notice suppresses the banner, otherwise the flash repeats on the
+ * next visit. HEAD/POST reads leave it pending, matching Hono's GET-only
+ * readJoinResult. The cookie name rides in from the caller (the Kit load's
+ * JOIN_RESULT_COOKIE) so this module keeps its type-only return-journey
+ * import and stays runtime-free of Hono cookie helpers.
+ */
+export function applyHomeFlashConsumption(input: HomeFlashConsumptionInput): void {
+  if (input.method !== "GET" || !input.flash) return;
+  input.cookies.delete(input.cookieName, {
+    path: "/",
+    secure: true,
+    httpOnly: true,
+    sameSite: "lax",
+  });
+}
