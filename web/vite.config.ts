@@ -23,11 +23,17 @@ export default defineConfig({
       build: {
         rolldownOptions: {
           output: {
-            // Hono and Kit share the admin modules. Keep them together on the
-            // server instead of emitting separately compressed helper chunks
-            // for each new viewer. This does not change client chunking.
+            // Hono and Kit share these route families. Keep their modules
+            // together on the server instead of compressing each helper chunk
+            // separately. This does not change client chunking.
             codeSplitting: {
-              groups: [{ name: "admin", test: /\/src\/admin\// }],
+              groups: [
+                { name: "admin", test: /\/src\/admin\// },
+                {
+                  name: "events",
+                  test: /\/src\/(?:events\/|kit-(?:past-)?events(?:-html)?\.tsx?$)/,
+                },
+              ],
             },
           },
         },
