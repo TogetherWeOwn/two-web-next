@@ -20,7 +20,7 @@ import {
 
 const APP_URL = "https://example.com";
 const APEX_URL = "https://togetherweown.com";
-// Kit-owned view for tests: shipped manifest keeps /events/past on Hono.
+// Kit-owned view for tests: explicit override, independent of the shipped default.
 const KIT_MANIFEST: OwnedRoute[] = [
   { method: "GET", path: "/events/past", enabled: true, reads: "public" },
   { method: "POST", path: "/events/past", enabled: true, reads: "public" },
