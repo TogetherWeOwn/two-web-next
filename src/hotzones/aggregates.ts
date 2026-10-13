@@ -46,24 +46,22 @@ export function gridTotal(cells: HeatGrid): number {
   return total;
 }
 
-/** Outcomes that mean a join succeeded (added or already a member). */
+// Outcomes that mean a join succeeded (added or already a member).
 export const JOIN_SUCCESS_OUTCOMES = ["added", "already_member"] as const;
 
-/** Statement timeout for the public aggregate reads (fail fast, never hold the response). */
+// Statement timeout for the public aggregate reads (fail fast, never hold the response).
 export const JOINS_GRID_STATEMENT_TIMEOUT_MS = 2000;
 
-/**
- * Joins 7x24 cells from real web data in the season window.
- * SQL-side aggregation only: one grouped count (at most 168 rows) plus one
- * event count, never per-user rows. Only `added`/`already_member` outcomes
- * count as joins; denied/error/degraded attempts never do. Attempts from
- * opted-out members never count: the left join on `profiles` drops rows
- * whose `discord_id` maps to `leaderboard_opt_out = true`, while null
- * discord_ids and absent profile rows still count. Join attempts are
- * pruned after JOIN_ATTEMPT_RETENTION_DAYS, so windows older than retention
- * read 0 by design (see joinsRetentionNote).
- * `db = null` (DB-free render) yields an empty grid, never a 500.
- */
+// Joins 7x24 cells from real web data in the season window.
+// SQL-side aggregation only: one grouped count (at most 168 rows) plus one
+// event count, never per-user rows. Only `added`/`already_member` outcomes
+// count as joins; denied/error/degraded attempts never do. Attempts from
+// opted-out members never count: the left join on `profiles` drops rows
+// whose `discord_id` maps to `leaderboard_opt_out = true`, while null
+// discord_ids and absent profile rows still count. Join attempts are
+// pruned after JOIN_ATTEMPT_RETENTION_DAYS, so windows older than retention
+// read 0 by design (see joinsRetentionNote).
+// `db = null` (DB-free render) yields an empty grid, never a 500.
 export async function loadJoinsGrid(
   db: Db | null,
   window: SeasonWindow,
@@ -123,14 +121,12 @@ export async function loadJoinsGrid(
   return { cells, total: gridTotal(cells), eventCount };
 }
 
-/**
- * Human retention note for the joins grid. Join attempts delete after
- * JOIN_ATTEMPT_RETENTION_DAYS, so a season window ending before the cutoff
- * reads 0 joins while events (unpruned) still count; a window starting
- * before the cutoff but ending after it undercounts the same way, and `all`
- * silently covers only the retention window. Returns null only when the
- * whole window is inside retention.
- */
+// Human retention note for the joins grid. Join attempts delete after
+// JOIN_ATTEMPT_RETENTION_DAYS, so a season window ending before the cutoff
+// reads 0 joins while events (unpruned) still count; a window starting
+// before the cutoff but ending after it undercounts the same way, and `all`
+// silently covers only the retention window. Returns null only when the
+// whole window is inside retention.
 export function joinsRetentionNote(window: SeasonWindow, now: Date = new Date()): string | null {
   const cutoff = now.getTime() - JOIN_ATTEMPT_RETENTION_DAYS * 86_400_000;
   if (window.kind === "all")
@@ -167,13 +163,11 @@ function mulberry32(seed: number): () => number {
   };
 }
 
-/**
- * Deterministic WhatPulse-seeded prior for voice/games with rollup semantics
- * by contract: same 7x24 shape, same seed derivation, same weekly
- * re-weight (each weekday normalized to equal weight so no weekday dominates
- * the week). Pure function of signal; the season window does not move the
- * prior (the seeded priors keep their own re-weight schedule).
- */
+// Deterministic WhatPulse-seeded prior for voice/games with rollup semantics
+// by contract: same 7x24 shape, same seed derivation, same weekly
+// re-weight (each weekday normalized to equal weight so no weekday dominates
+// the week). Pure function of signal; the season window does not move the
+// prior (the seeded priors keep their own re-weight schedule).
 export function priorGrid(signal: "voice" | "games"): { cells: HeatGrid; total: number } {
   const rand = mulberry32((PRIOR_SEED_BASE + hashSignal(signal)) >>> 0);
   const cells = emptyGrid();

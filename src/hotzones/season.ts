@@ -13,11 +13,9 @@ const YEAR_RE = /^(\d{4})$/;
 const MONTH_RE = /^(\d{4})-(0[1-9]|1[0-2])$/;
 const QUARTER_RE = /^(\d{4})-Q([1-4])$/;
 
-/**
- * Parse the raw `?season=` query value. `null`/`undefined` = absent = `all`.
- * Returns `null` when the value is present but invalid (caller answers 400,
- * never a silent fallback window). Empty string is invalid, not absent.
- */
+// Parse the raw `?season=` query value. `null`/`undefined` = absent = `all`.
+// Returns `null` when the value is present but invalid (caller answers 400,
+// never a silent fallback window). Empty string is invalid, not absent.
 export function parseSeasonParam(raw: string | null | undefined): SeasonWindow | null {
   if (raw === null || raw === undefined) return { kind: "all", label: "all" };
   if (raw === "all") return { kind: "all", label: "all" };
