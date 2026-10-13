@@ -1,3 +1,6 @@
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { __resetAnonEventCacheForTests, retireAnonEventCaches } from "../src/events/anon-cache";
 import { dispatchPastArchiveRequest, loadPastArchivePage } from "../src/kit-past-events";
@@ -374,5 +377,21 @@ describe("hook archive dispatch", () => {
     expect(await response.text()).toBe("hono-fallback");
     expect(pastArchive).not.toHaveBeenCalled();
     expect(resolve).toHaveBeenCalledOnce();
+  });
+});
+
+describe("archive load binding", () => {
+  it("maps every helper throw to the branded 503 with the live page and DB args", () => {
+    const root = join(dirname(fileURLToPath(import.meta.url)), "..");
+    const source = readFileSync(join(root, "web/src/routes/events/past/+page.server.ts"), "utf8");
+    // Replacing the catch body with a rethrow stays green without these:
+    // only error(503) proves what Kit sends, since SvelteKit's get_status
+    // ignores the helper's status:503 Error property and renders a 500.
+    expect(source).toContain('error(503, "Events temporarily unavailable")');
+    expect(source).toMatch(/catch\s*\{[^}]*error\(503,\s*"Events temporarily unavailable"\)/s);
+    // pageParam: null pins pagination to page 1 without this.
+    expect(source).toContain('pageParam: url.searchParams.get("page")');
+    expect(source).toContain("dbForFn: dbFor");
+    expect(source).toContain("listPastFn: listPast");
   });
 });

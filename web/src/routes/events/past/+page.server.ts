@@ -12,8 +12,11 @@ export const csr = false;
 
 // Thin binding over the tested helper (src/kit-past-events.ts): the helper
 // owns the reads and the one-setHeaders-per-path cache policy (SvelteKit
-// throws `header_already_set` on a double-set), so this file carries no
-// branch to mutate — a throw below already set private, no-store.
+// throws `header_already_set` on a double-set; a throw below already set
+// private, no-store). This binding owns the 503 mapping and the helper args,
+// each pinned by source tests in test/kit-past-events.test.ts — only
+// error(503) proves what Kit sends, since SvelteKit ignores the helper's
+// status:503 Error property.
 export const load: PageServerLoad = async ({ url, setHeaders }) => {
   try {
     return await loadPastArchivePage({

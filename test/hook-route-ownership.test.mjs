@@ -394,7 +394,12 @@ describe("hooks.server route ownership wiring", () => {
     // Delegates to the core with env, fetch, resolve and the archive binding.
     expect(source).toContain("dispatchHookRequest");
     expect(source).toContain("dispatchPastArchiveRequest");
-    expect(source).toContain("pastArchive");
+    // Whole binding: deleting the pastArchive line must fail. The looser
+    // pins above stay green without it (the import carries
+    // dispatchPastArchiveRequest and the comment carries pastArchive).
+    expect(source).toContain(
+      "pastArchive: (request, render) => dispatchPastArchiveRequest(request, env, render)",
+    );
     expect(source).toContain("honoFetch,");
     expect(source).toContain("featuredImageHosts: env.FEATURED_IMAGE_HOSTS");
     expect(source).toContain("appUrl: env.APP_URL");
