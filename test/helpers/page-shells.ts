@@ -23,6 +23,9 @@ export const HTML_READS = [
   "/auth/recover",
   "/events",
   "/events/past",
+  "/hotzones",
+  "/hotzones/:signal",
+  "/leaderboards/members",
   "/e/:key",
   "/profile",
   "/members/:user",
@@ -83,7 +86,11 @@ export const NON_HTML_READS = [
 ];
 
 export const concretePath = (pattern: string) =>
-  pattern.replace(":key", EVENT_KEY).replace(":user", MEMBER_ID).replace(":id", "1");
+  pattern
+    .replace(":key", EVENT_KEY)
+    .replace(":user", MEMBER_ID)
+    .replace(":id", "1")
+    .replace(":signal", "joins");
 
 export function pageShellFixture(status = "published") {
   const now = new Date("2030-01-01T20:00:00Z");

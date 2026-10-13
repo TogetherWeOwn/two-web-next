@@ -1,5 +1,6 @@
 import {
   AGENT_EVENT_AUDIT_RETENTION_DAYS,
+  BOARD_VIEW_LOG_RETENTION_DAYS,
   EVENT_SEARCH_LOG_RETENTION_DAYS,
   IDEMPOTENCY_KEY_RETENTION_DAYS,
   JOIN_ATTEMPT_RETENTION_DAYS,
@@ -76,6 +77,7 @@ export type PruneCounts = {
   joinAttempts: number;
   idempotencyKeys: number;
   searchLog: number;
+  boardViews: number;
   sessions: number;
 };
 
@@ -108,36 +110,48 @@ export async function pruneModelTables(
   stores: PruneStores,
   now: Date = new Date(),
 ): Promise<PruneCounts> {
-  const [agentEventAudits, accessLog, joinAttempts, idempotencyKeys, searchLog, sessions] =
-    await Promise.all([
-      drainPruneTable(
-        (c) => stores.agentEventAudits.pruneOlderThan(c),
-        cutoff(now, AGENT_EVENT_AUDIT_RETENTION_DAYS),
-      ),
-      drainPruneTable(
-        (c) => stores.accessLog.pruneOlderThan(c),
-        cutoff(now, MEMBER_ACCESS_LOG_RETENTION_DAYS),
-      ),
-      drainPruneTable(
-        (c) => stores.joinAttempts.pruneOlderThan(c),
-        cutoff(now, JOIN_ATTEMPT_RETENTION_DAYS),
-      ),
-      drainPruneTable(
-        (c) => stores.idempotencyKeys.pruneOlderThan(c),
-        cutoff(now, IDEMPOTENCY_KEY_RETENTION_DAYS),
-      ),
-      drainPruneTable(
-        (c) => stores.searchLog.pruneOlderThan(c),
-        cutoff(now, EVENT_SEARCH_LOG_RETENTION_DAYS),
-      ),
-      stores.sessions.sweepExpired(now),
-    ]);
+  const [
+    agentEventAudits,
+    accessLog,
+    joinAttempts,
+    idempotencyKeys,
+    searchLog,
+    boardViews,
+    sessions,
+  ] = await Promise.all([
+    drainPruneTable(
+      (c) => stores.agentEventAudits.pruneOlderThan(c),
+      cutoff(now, AGENT_EVENT_AUDIT_RETENTION_DAYS),
+    ),
+    drainPruneTable(
+      (c) => stores.accessLog.pruneOlderThan(c),
+      cutoff(now, MEMBER_ACCESS_LOG_RETENTION_DAYS),
+    ),
+    drainPruneTable(
+      (c) => stores.joinAttempts.pruneOlderThan(c),
+      cutoff(now, JOIN_ATTEMPT_RETENTION_DAYS),
+    ),
+    drainPruneTable(
+      (c) => stores.idempotencyKeys.pruneOlderThan(c),
+      cutoff(now, IDEMPOTENCY_KEY_RETENTION_DAYS),
+    ),
+    drainPruneTable(
+      (c) => stores.searchLog.pruneOlderThan(c),
+      cutoff(now, EVENT_SEARCH_LOG_RETENTION_DAYS),
+    ),
+    drainPruneTable(
+      (c) => stores.boardViews.pruneOlderThan(c),
+      cutoff(now, BOARD_VIEW_LOG_RETENTION_DAYS),
+    ),
+    stores.sessions.sweepExpired(now),
+  ]);
   const counts = {
     agentEventAudits: agentEventAudits.total,
     accessLog: accessLog.total,
     joinAttempts: joinAttempts.total,
     idempotencyKeys: idempotencyKeys.total,
     searchLog: searchLog.total,
+    boardViews: boardViews.total,
     sessions,
   };
   const cappedTables = (
@@ -147,6 +161,7 @@ export async function pruneModelTables(
       ["joinAttempts", joinAttempts.capped],
       ["idempotencyKeys", idempotencyKeys.capped],
       ["searchLog", searchLog.capped],
+      ["boardViews", boardViews.capped],
     ] as const
   )
     .filter(([, capped]) => capped)

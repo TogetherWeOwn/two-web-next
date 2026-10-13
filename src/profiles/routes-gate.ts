@@ -33,9 +33,9 @@ export function profileError(error: Error, c: Ctx) {
   return bufferedMemberText(c, "Member data is temporarily unavailable.", 503);
 }
 
-export function registerGate(app: ProfileApp, deps: ProfileDeps, { sinkFor }: ProfileStores) {
-  // Gate: guest → OAuth, non-member → 403, store failure → 503 (fail closed).
-  const gate = async (c: Ctx, next: Next) => {
+/** Gate: guest → OAuth, non-member → 403, store failure → 503 (fail closed). */
+export function memberGate(deps: ProfileDeps) {
+  return async (c: Ctx, next: Next) => {
     c.header("cache-control", "private, no-store");
     const token = await getSignedCookie(c, c.env.SESSION_SECRET, SESSION_COOKIE);
     // Guest: record where they were headed (legacy url.intended), then into
@@ -76,6 +76,10 @@ export function registerGate(app: ProfileApp, deps: ProfileDeps, { sinkFor }: Pr
     await next();
     c.header("cache-control", "private, no-store");
   };
+}
+
+export function registerGate(app: ProfileApp, deps: ProfileDeps, { sinkFor }: ProfileStores) {
+  const gate = memberGate(deps);
 
   // Bare /members is retired (URL freeze), not a member index: answer the
   // frozen 404 before the gate below. Registered first so the "/members/*"

@@ -1,0 +1,36 @@
+<script lang="ts">
+import Shell from "#lib/Shell.svelte";
+import { canonicalUrl } from "../../../../../src/seo";
+import type { PageProps } from "./$types";
+
+let { data }: PageProps = $props();
+// gridHtml comes only from the escaped server-side renderHotzoneGrid output.
+const { signal, season, gridHtml, total, eventCount, retentionNote, estimated, appUrl } =
+  $derived(data);
+const destination = $derived(
+  season === "all" ? `/hotzones/${signal}` : `/hotzones/${signal}?season=${season}`,
+);
+</script>
+
+<Shell
+  title="{signal} hot zone"
+  canonical={canonicalUrl(appUrl, destination)}
+  robots="noindex, follow"
+  description="When {signal} activity peaks, by hour and weekday."
+  theme="schedule"
+  activeNav="events"
+  mainClass="events-page"
+  loginReturnTo={destination}
+>
+  <p class="strap">Activity rhythms</p>
+  <h1>{signal} hot zone</h1>
+  {#if estimated}
+    <p>Estimated {signal} activity for season {season} (estimates until bot event-store calibration). Total estimate: {total}.</p>
+  {:else}
+    <p>Join activity for season {season}: {total} joins across {eventCount} scheduled gatherings.</p>
+    <p>Successful joins only (added or already a member); denied, error and degraded attempts never count.</p>
+    {#if retentionNote}<p>{retentionNote}</p>{/if}
+  {/if}
+  <p><a href="/hotzones">All hot zones</a> · <a href="/hotzones/joins">joins</a> · <a href="/hotzones/voice">voice</a> · <a href="/hotzones/games">games</a></p>
+  {@html gridHtml}
+</Shell>

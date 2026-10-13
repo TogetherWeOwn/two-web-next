@@ -25,6 +25,7 @@
 
 import { Hono } from "hono";
 import type { Env } from "../env";
+import { registerMemberLeaderboardRoutes } from "../leaderboards/routes";
 import { profileError, registerGate } from "./routes-gate";
 import { registerReadRoutes } from "./routes-reads";
 import type { ProfileDeps, Vars } from "./routes-shared";
@@ -40,6 +41,7 @@ export function profilesApp(deps: ProfileDeps = {}) {
   const stores = profileStores(deps);
   registerGate(app, deps, stores);
   registerReadRoutes(app, stores);
+  registerMemberLeaderboardRoutes(app, deps, stores);
   registerWriteRoutes(app, deps, stores);
   return app;
 }

@@ -3,6 +3,7 @@
 // modules agree on one request shape; nothing here touches a request.
 import type { Context, Hono } from "hono";
 import type { AccessDecl, AccessSink } from "../access-log";
+import type { Db } from "../db/index";
 import type { Env } from "../env";
 import type { checkJoinThrottle } from "../join/service";
 import type { SessionStore } from "../sessions";
@@ -23,6 +24,19 @@ export type ProfileDeps = {
 };
 
 export type Viewer = { id: string; username: string; member: boolean; moderator: boolean };
-export type Vars = { viewerId: string; access: AccessDecl; viewer: Viewer };
+/** A board view the handler wants logged once its response has left the read boundary. */
+export type BoardViewEntry = {
+  db: Db | null;
+  boardKey: string;
+  scope: string;
+  season: string;
+  resultCount: number;
+};
+export type Vars = {
+  viewerId: string;
+  access: AccessDecl;
+  viewer: Viewer;
+  boardView?: BoardViewEntry;
+};
 export type Ctx = Context<{ Bindings: Env; Variables: Vars }>;
 export type ProfileApp = Hono<{ Bindings: Env; Variables: Vars }>;

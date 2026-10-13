@@ -9,6 +9,7 @@ import {
 } from "../src/join/route";
 import { THROTTLE_COUNTER_RETENTION_MINUTES } from "../src/join/service";
 import {
+  BOARD_VIEW_LOG_RETENTION_DAYS,
   EVENT_SEARCH_LOG_RETENTION_DAYS,
   JOIN_ATTEMPT_RETENTION_DAYS,
   MEMBER_ACCESS_LOG_RETENTION_DAYS,
@@ -111,6 +112,12 @@ const CLAIMS: Claim[] = [
     anchor: "Event searches",
     phrase: `${EVENT_SEARCH_LOG_RETENTION_DAYS} days`,
     pin: "EVENT_SEARCH_LOG_RETENTION_DAYS, src/jobs/constants.ts",
+  },
+  {
+    label: "Leaderboard views",
+    anchor: "Leaderboard views",
+    phrase: `${BOARD_VIEW_LOG_RETENTION_DAYS} days`,
+    pin: "BOARD_VIEW_LOG_RETENTION_DAYS, src/jobs/constants.ts",
   },
   {
     label: "Access log, who looked",
