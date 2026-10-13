@@ -77,7 +77,7 @@ function rewriteTooLong(response: Response): Response {
 }
 
 /**
- * Apply the Hono list route's guard and anonymous HTML cache around Kit SSR.
+ * Apply the Hono list route's guard and anonymous HTML cache around the Kit endpoint render.
  *
  * Mirrors GET /events (src/events/routes-calendar.tsx): the shared public-read
  * budget runs before any read, only a cookieless session-free search-free
@@ -230,7 +230,7 @@ export interface KitEventsLoadData extends CalendarPageModel {
 }
 
 /**
- * Framework-free core of web/src/routes/events/+page.server.ts load().
+ * Framework-free core of web/src/routes/events/+server.ts GET.
  *
  * Owns the Hono query-state contract (src/events/page-models.server.ts input
  * plus src/events/routes-calendar.tsx response policy) so the root Vitest

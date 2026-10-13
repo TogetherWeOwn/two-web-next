@@ -262,7 +262,7 @@ export interface HookDispatchDeps {
   // of in web/src/hooks.server.ts. Absent by default: without it the dispatch
   // behaves exactly as before.
   pastArchive?: (request: Request, render: () => Promise<Response>) => Promise<Response>;
-  // Native events-list guard/cache around Kit SSR. Same binding shape as the
+  // Native events-list guard/cache around the Kit endpoint render. Same binding shape as the
   // archive; the list entry ships disabled, so production never reaches this
   // branch until the companion card enables it.
   eventsPage?: (request: Request, render: () => Promise<Response>) => Promise<Response>;
