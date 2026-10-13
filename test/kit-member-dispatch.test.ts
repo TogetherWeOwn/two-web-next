@@ -254,6 +254,18 @@ describe("decideRoute", () => {
     expect(ROUTE_MANIFEST).toEqual([
       { method: "GET", path: "/events/past", enabled: false, reads: "public" },
       { method: "GET", path: "/privacy", enabled: false, reads: "public" },
+      {
+        method: "GET",
+        path: "/profile",
+        enabled: false,
+        reads: { resource: "profile", action: "view", route: "profile" },
+      },
+      {
+        method: "GET",
+        path: "/members/:user",
+        enabled: false,
+        reads: { resource: "profile", action: "view", route: "profiles.show" },
+      },
     ]);
     expect(decideRoute(get, ROUTE_MANIFEST)).toBeUndefined();
   });
