@@ -12,6 +12,8 @@ export type MemberView = {
   bio: string | null;
   games: string[];
   timezone: string | null;
+  /** Absent in older seeds; read as opted in. */
+  leaderboardOptOut?: boolean;
   joinedAt?: Date | null;
 };
 
@@ -34,6 +36,7 @@ export function createDbProfileStore(connection: Db): ProfileStore {
             bio: profiles.bio,
             games: profiles.games,
             timezone: profiles.timezone,
+            leaderboardOptOut: profiles.leaderboardOptOut,
             joinedAt: users.createdAt,
           })
           .from(users)
@@ -42,13 +45,35 @@ export function createDbProfileStore(connection: Db): ProfileStore {
           .limit(1),
       );
       const r = rows[0];
-      return r ? { ...r, games: r.games ?? [] } : null;
+      // No profile row yet reads as opted in; the save upserts the row.
+      return r
+        ? { ...r, games: r.games ?? [], leaderboardOptOut: r.leaderboardOptOut ?? false }
+        : null;
     },
     async save(id, attrs) {
+      // An absent switch preserves the stored choice: only a named value moves
+      // the column, so older clients can never silently opt a member back in.
+      const optOut =
+        attrs.leaderboardOptOut === undefined ? {} : { leaderboardOptOut: attrs.leaderboardOptOut };
       await db
         .insert(profiles)
-        .values({ userId: id, ...attrs })
-        .onConflictDoUpdate({ target: profiles.userId, set: { ...attrs, updatedAt: sql`now()` } });
+        .values({
+          userId: id,
+          bio: attrs.bio,
+          games: attrs.games,
+          timezone: attrs.timezone,
+          ...optOut,
+        })
+        .onConflictDoUpdate({
+          target: profiles.userId,
+          set: {
+            bio: attrs.bio,
+            games: attrs.games,
+            timezone: attrs.timezone,
+            updatedAt: sql`now()`,
+            ...optOut,
+          },
+        });
     },
   };
 }
@@ -66,8 +91,19 @@ export function createMemoryProfileStore(
       return member;
     },
     async save(id, attrs) {
+      // Mirror the Postgres upsert: a missing row is created, and an absent
+      // switch preserves the stored choice.
       const m = rows.get(id);
-      if (m) rows.set(id, { ...m, ...attrs });
+      rows.set(id, {
+        id,
+        username: m?.username ?? id,
+        avatar: m?.avatar ?? null,
+        joinedAt: m?.joinedAt,
+        bio: attrs.bio,
+        games: attrs.games,
+        timezone: attrs.timezone,
+        leaderboardOptOut: attrs.leaderboardOptOut ?? m?.leaderboardOptOut ?? false,
+      });
     },
   };
 }
