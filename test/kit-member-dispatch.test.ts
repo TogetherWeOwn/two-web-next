@@ -249,10 +249,10 @@ describe("decideRoute", () => {
     expect(decideRoute(post, MEMBER_MANIFEST)).toBeUndefined();
   });
 
-  it("the shipped manifest declares the archive, privacy, rules and join pages public, the admin dashboard, and keeps them on Hono", () => {
+  it("the shipped manifest assigns the public archive to Kit, keeps privacy, rules and join on Hono, and holds the admin dashboard on Hono", () => {
     const get = new Request(new URL("/events/past", APP_URL));
     expect(ROUTE_MANIFEST).toEqual([
-      { method: "GET", path: "/events/past", enabled: false, reads: "public" },
+      { method: "GET", path: "/events/past", enabled: true, reads: "public" },
       { method: "GET", path: "/privacy", enabled: false, reads: "public" },
       { method: "GET", path: "/rules", enabled: false, reads: "public" },
       { method: "GET", path: "/join", enabled: false, reads: "public" },
@@ -263,7 +263,9 @@ describe("decideRoute", () => {
         reads: { resource: "dashboard", action: "view", route: "admin.dashboard" },
       },
     ]);
-    expect(decideRoute(get, ROUTE_MANIFEST)).toBeUndefined();
+    const archive = ROUTE_MANIFEST.find((entry) => entry.path === "/events/past");
+    expect(decideRoute(get, ROUTE_MANIFEST)).toBe(archive);
+    expect(decideRoute(get, [{ ...archive!, enabled: false }])).toBeUndefined();
     expect(decideRoute(new Request(new URL("/join", APP_URL)), ROUTE_MANIFEST)).toBeUndefined();
     // The moderator dashboard stays Hono-served until its enablement review.
     expect(decideRoute(new Request(new URL("/admin", APP_URL)), ROUTE_MANIFEST)).toBeUndefined();

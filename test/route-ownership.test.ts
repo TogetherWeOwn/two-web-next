@@ -15,8 +15,9 @@ describe("route ownership", () => {
     expect(resolveRouteOwner({ method: "POST", path: "/events" })).toBe("hono");
   });
 
-  it("keeps the only native page on Hono until its flag is enabled", () => {
-    expect(resolveRouteOwner({ method: "GET", path: "/events/past" })).toBe("hono");
+  it("ships the archive on Kit with later routes on Hono until enabled", () => {
+    expect(resolveRouteOwner({ method: "GET", path: "/events/past" })).toBe("kit");
+    expect(resolveRouteOwner({ method: "GET", path: "/privacy" })).toBe("hono");
   });
 
   it("routes an enabled native page to Kit", () => {
@@ -44,7 +45,8 @@ describe("route ownership", () => {
   });
 
   it("lets HEAD follow the matching GET entry", () => {
-    expect(resolveRouteOwner({ method: "HEAD", path: "/events/past" })).toBe("hono");
+    expect(resolveRouteOwner({ method: "HEAD", path: "/privacy" })).toBe("hono");
+    expect(resolveRouteOwner({ method: "HEAD", path: "/events/past" })).toBe("kit");
     const manifest = [{ method: "GET", path: "/events/past", enabled: true }];
     expect(resolveRouteOwner({ method: "HEAD", path: "/events/past" }, manifest)).toBe("kit");
   });
@@ -92,7 +94,8 @@ describe("route ownership", () => {
     expect(resolveRouteOwner({ method: "GET", path: "/events/past/__data.json" }, manifest)).toBe(
       "kit",
     );
-    expect(resolveRouteOwner({ method: "GET", path: "/events/past/__data.json" })).toBe("hono");
+    expect(resolveRouteOwner({ method: "GET", path: "/events/past/__data.json" })).toBe("kit");
+    expect(resolveRouteOwner({ method: "GET", path: "/privacy/__data.json" })).toBe("hono");
   });
 
   it("claims a :param pattern only with the same segment count and static segments", () => {
