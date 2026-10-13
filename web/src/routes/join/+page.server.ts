@@ -1,8 +1,9 @@
 import { env, waitUntil } from "cloudflare:workers";
-import { discordWidgetHealth } from "../../../../../src/discord-widget";
-import { joinPageCacheControl } from "../../../../../src/join/kit-page";
-import { safeNext } from "../../../../../src/join/service";
-import { readReturnJourney, JOIN_RESULT_COOKIE } from "../../../../../src/return-journey";
+import { discordWidgetHealth } from "../../../../src/discord-widget";
+import { joinPageCacheControl } from "../../../../src/join/kit-page";
+import { safeNext } from "../../../../src/join/service";
+import { readReturnJourney } from "../../../../src/kit-session";
+import { JOIN_RESULT_COOKIE } from "../../../../src/return-journey";
 import type { PageServerLoad } from "./$types";
 
 // Server-rendered only: no hydration bundle, so no inline bootstrap script that

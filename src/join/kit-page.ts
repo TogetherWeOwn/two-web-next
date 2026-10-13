@@ -13,7 +13,10 @@
 import type { DiscordWidgetSnapshot } from "../discord-widget";
 import type { JoinResult } from "../return-journey";
 
-export type JoinPageCacheControl = "private, no-store" | "public, max-age=60" | "public, max-age=3600";
+export type JoinPageCacheControl =
+  | "private, no-store"
+  | "public, max-age=60"
+  | "public, max-age=3600";
 
 export function joinPageCacheControl(
   joinResult: JoinResult | null,

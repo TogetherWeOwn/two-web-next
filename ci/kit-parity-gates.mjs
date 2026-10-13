@@ -393,7 +393,9 @@ function assertJoinContract(label, html, get, expected) {
     const actual = get("cache-control") ?? "";
     const allowed = Array.isArray(expected.cache) ? expected.cache : [expected.cache];
     if (!allowed.includes(actual))
-      failures.push(`${label}: cache-control ${JSON.stringify(actual)} not in ${allowed.join(" | ")}`);
+      failures.push(
+        `${label}: cache-control ${JSON.stringify(actual)} not in ${allowed.join(" | ")}`,
+      );
   }
   const vary = get("vary") ?? "";
   if (!/cookie/i.test(vary)) failures.push(`${label}: Vary stays on every variant`);
@@ -544,7 +546,8 @@ export function runUnitMode({ stdout = process.stdout, manifestSource: manifestO
     `<p data-testid="join-widget-online"><strong>42</strong> members online</p>` +
     `<p><a href="https://discord.gg/widget-invite" data-testid="join-widget-invite">` +
     `Join with an invite link</a></p><h3>Voice and stage channels</h3>` +
-    `<ul data-testid="join-widget-channels"><li>stage-night</li></ul></section>` + joinFacade;
+    `<ul data-testid="join-widget-channels"><li>stage-night</li></ul></section>` +
+    joinFacade;
   const joinFallback =
     `<p class="strap" data-testid="join-widget-fallback">Live server preview is ` +
     `unavailable — the join button above still works.</p>`;
@@ -566,7 +569,11 @@ export function runUnitMode({ stdout = process.stdout, manifestSource: manifestO
       status: 200,
       expected: { status: 200, marker: joinMarker, contract: "join", cache },
     });
-    push(`unit: ${name} passes`, failures.length === 0 ? "passed" : "failed", failures.join("; ") || null);
+    push(
+      `unit: ${name} passes`,
+      failures.length === 0 ? "passed" : "failed",
+      failures.join("; ") || null,
+    );
   }
   // Flash view: the banner renders once and the response goes private.
   const joinFlashed = joinShell(joinFacade).replace(
@@ -595,10 +602,7 @@ export function runUnitMode({ stdout = process.stdout, manifestSource: manifestO
   // its facade link, a missing one-click action, and a hostile next must all
   // FAIL. A gate that cannot fail on a planted break proves nothing.
   const joinMutants = [
-    [
-      "both-zones",
-      (html) => html.replace("</div></section>", `</div>${joinFallback}</section>`),
-    ],
+    ["both-zones", (html) => html.replace("</div></section>", `</div>${joinFallback}</section>`)],
     ["presence-without-facade", (html) => html.replace(joinFacade, "")],
     ["no-oneclick", (html) => html.replace('data-testid="join-oneclick"', 'data-testid="x"')],
     [
@@ -890,8 +894,7 @@ async function runPreviewMode(
       let reason = "section HTML differs";
       try {
         same =
-          sectionOf(kitHtml, route.compareSection) ===
-          sectionOf(honoHtml, route.compareSection);
+          sectionOf(kitHtml, route.compareSection) === sectionOf(honoHtml, route.compareSection);
         if (same) reason = null;
       } catch (error) {
         reason = String(error?.message ?? error).slice(0, 200);

@@ -1,6 +1,6 @@
 <script lang="ts">
 import Shell from "#lib/Shell.svelte";
-import { canonicalUrl } from "../../../../../src/seo";
+import { canonicalUrl } from "../../../../src/seo";
 import type { PageProps } from "./$types";
 
 // Markup contract of Join (src/screens/join.tsx): test ids, links, copy and
@@ -10,7 +10,9 @@ import type { PageProps } from "./$types";
 // A component-level <script> is Svelte's own; the island tag is emitted as markup.
 let { data }: PageProps = $props();
 const { inviteUrl, widgetUrl, widgetSnapshot, next, appUrl, joinResult } = $derived(data);
-const oneClickHref = $derived(next ? `/join/discord?next=${encodeURIComponent(next)}` : "/join/discord");
+const oneClickHref = $derived(
+  next ? `/join/discord?next=${encodeURIComponent(next)}` : "/join/discord",
+);
 // The island binder is a plain script tag, not hydration: with csr=false the
 // no-JS contract (links, presence or fallback copy in the raw fetch body) holds.
 const island = '<script src="/islands/join-widget.js" defer></' + "script>";

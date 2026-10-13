@@ -505,14 +505,12 @@ test("route contract detects a planted break", () => {
 test("join contract proves every widget state, the flash view and hostile next", () => {
   const headers = (cache) => ({
     get: (name) =>
-      (
-        {
-          "content-type": "text/html",
-          "x-two-renderer": null,
-          "cache-control": cache,
-          vary: "Cookie",
-        }
-      )[name] ?? null,
+      ({
+        "content-type": "text/html",
+        "x-two-renderer": null,
+        "cache-control": cache,
+        vary: "Cookie",
+      })[name] ?? null,
   });
   const shell = (inner) =>
     `<html><head><link rel="canonical" href="https://x.invalid/join"></head>` +
@@ -530,7 +528,8 @@ test("join contract proves every widget state, the flash view and hostile next",
     `<script src="/islands/join-widget.js" defer></script></div>`;
   const presence =
     `<section data-testid="join-widget-presence"><p data-testid="join-widget-online">` +
-    `<strong>42</strong> members online</p></section>` + facade;
+    `<strong>42</strong> members online</p></section>` +
+    facade;
   const fallback =
     `<p class="strap" data-testid="join-widget-fallback">Live server preview is ` +
     `unavailable — the join button above still works.</p>`;
