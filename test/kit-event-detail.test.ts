@@ -453,7 +453,14 @@ describe("event-detail metadata safety", () => {
     );
     expect(outcome.kind).toBe("ok");
     if (outcome.kind !== "ok") throw new Error("unreachable");
-    expect(outcome.model.description).toBe("An event at Together We Own.");
+    // The fallback feeds meta/share tags only: the body keeps the raw null
+    // so no About section renders, exactly as served.
+    expect(outcome.model.description).toBeNull();
+    expect(outcome.model.shareDescription).toBe("An event at Together We Own.");
+    const { renderDetail } = await buildKitEventDetailBundle();
+    const html = renderDetail(outcome.model as unknown as Record<string, unknown>);
+    expect(html).not.toContain("event-description");
+    expect(html).toContain('content="An event at Together We Own."');
   });
 
   it("escapes JSON-LD so a hostile title cannot break out of the data block", async () => {

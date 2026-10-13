@@ -81,8 +81,10 @@ export interface KitEventDetailModel {
   eventKey: string;
   title: string;
   game: string | null;
-  /** Served share fallback when the event has no description of its own. */
-  description: string;
+  /** Raw organizer copy: the About section renders only when set. */
+  description: string | null;
+  /** Meta/share copy: the served fallback when the event has no description. */
+  shareDescription: string;
   location: string | null;
   status: string;
   isDraft: boolean;
@@ -286,7 +288,8 @@ export async function resolveKitEventDetail(
           eventKey: event.eventKey,
           title: event.title,
           game: event.game,
-          description: event.description || "An event at Together We Own.",
+          description: event.description,
+          shareDescription: event.description || "An event at Together We Own.",
           location: event.location,
           status: event.status,
           isDraft: event.status === "draft",

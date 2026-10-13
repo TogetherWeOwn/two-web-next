@@ -86,25 +86,24 @@ const lineup = $derived(
   {/if}
 </svelte:head>
 
+{#snippet memberChrome()}
+  <form method="post" action="/logout">
+    <span class="account-caption">Signed in</span>
+    <span class="who">{model.viewerUsername}</span>
+    <button type="submit" class="link">Sign out</button>
+  </form>
+{/snippet}
 <Shell
   title={model.title}
   canonical={model.canonical}
-  robots={model.robots}
-  description={model.description}
+  robots={model.robots ?? undefined}
+  description={model.shareDescription}
   shareTitle="{model.title} — Together We Own"
   theme="event"
   activeNav="events"
   loginReturnTo={model.path}
   accountChrome={model.viewerUsername ? memberChrome : undefined}
 >
-  {#snippet memberChrome()}
-    <form method="post" action="/logout">
-      <span class="account-caption">Signed in</span>
-      <span class="who">{model.viewerUsername}</span>
-      <button type="submit" class="link">Sign out</button>
-    </form>
-  {/snippet}
-
   <nav class="event-back" aria-label="Event calendar">
     <a href="/events">← All events</a>
   </nav>
@@ -168,11 +167,13 @@ const lineup = $derived(
             <p role="status" data-testid={RSVP_PAUSED_TESTID}>{RSVP_COPY.paused}</p>
           {/if}
           {#if going}
+            <!-- svelte-ignore a11y_no_noninteractive_tabindex: Hono parity — the confirmed notice stays programmatically focusable exactly like the served RSVP button, so the island can move focus to the new state after a write. -->
             <p role="status" tabindex={-1} data-testid={RSVP_CONFIRMED_TESTID}>
               <span aria-hidden="true" data-testid={RSVP_CHECK_TESTID}>✓{" "}</span>{RSVP_COPY.confirmed}
             </p>
             <button type="submit" name="status" value="withdraw" data-testid={RSVP_WITHDRAW_TESTID} data-action="withdraw">{RSVP_COPY.withdraw}</button>
           {:else if waitlisted}
+            <!-- svelte-ignore a11y_no_noninteractive_tabindex: Hono parity — the waitlist notice stays programmatically focusable exactly like the served RSVP button, so the island can move focus to the new state after a write. -->
             <p role="status" tabindex={-1} data-testid={WAITLIST_POSITION_TESTID}>
               {waitlistPositionCopy(model.waitlistPosition)}
             </p>
