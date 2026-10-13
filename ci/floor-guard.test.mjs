@@ -233,6 +233,55 @@ describe("floor-guard", () => {
     }
   });
 
+  it("flags a Tier-0 suite moved out of its report-only runner", () => {
+    // tier0/ runs only through tier0/vitest.config.ts, so docs/ or a
+    // non-test suffix unwires the suite even though the name still matches
+    // the test pattern.
+    for (const dest of ["docs/a.test.ts", "tier0/a.test.ts.disabled"]) {
+      const renamed = [
+        `diff --git a/tier0/a.test.ts b/${dest}`,
+        "similarity index 100%",
+        "rename from tier0/a.test.ts",
+        `rename to ${dest}`,
+      ].join("\n");
+      assert.ok(
+        guardDiff(renamed).some((f) => f.rule === "test-deleted"),
+        `${dest} leaves the Tier-0 runner and needs a test-deleted waiver`,
+      );
+    }
+  });
+
+  it("flags a move across the blocking/report-only boundary either way", () => {
+    // test/ runs inside the blocking coverage step while tier0/ is
+    // report-only: crossing the boundary changes what gates the suite, so
+    // both directions need a test-deleted waiver.
+    for (const [from, to] of [
+      ["tier0/a.test.ts", "test/a.test.ts"],
+      ["test/a.test.ts", "tier0/a.test.ts"],
+    ]) {
+      const renamed = [
+        `diff --git a/${from} b/${to}`,
+        "similarity index 100%",
+        `rename from ${from}`,
+        `rename to ${to}`,
+      ].join("\n");
+      assert.ok(
+        guardDiff(renamed).some((f) => f.rule === "test-deleted"),
+        `${from} to ${to} crosses the blocking/report-only boundary`,
+      );
+    }
+  });
+
+  it("stays silent on a Tier-0 rename inside its runner", () => {
+    const kept = [
+      "diff --git a/tier0/a.test.ts b/tier0/nested/a.test.ts",
+      "similarity index 100%",
+      "rename from tier0/a.test.ts",
+      "rename to tier0/nested/a.test.ts",
+    ].join("\n");
+    assert.deepEqual(guardDiff(kept), []);
+  });
+
   it("flags e2e spec and safety renames out of the runner", () => {
     // Each runner branch needs its own pin: a mutant returning true for one
     // branch must fail. Specs run under testDir ./e2e, so docs/ is out; the
