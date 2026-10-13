@@ -1,5 +1,5 @@
 {
-  "$comment": "Kit performance budgets. Measured baseline 2026-10-12 (raw/gzip bytes): worker entry 2551/1219; server JS total (22 files, no sourcemaps) 962157/258300 — dominated by the Hono catch-all bundle (chunks/hono.js 433009); client JS total (11 files) 100252/39302; client CSS total (1 file) 2402/763. Ceilings are measured size x1.25 rounded up (raw to 512B, gzip to 256B), the repository x1.25 rule from ci/bundle-budget.json. Client/server hashed-asset groups are budgeted as totals plus a file-count cap, so a new chunk fails closed instead of escaping enforcement. Startup.maxMs (60s, the same cold-start bound as ci/kit-worker-e2e.mjs's listen) is enforced as the Kit webServer readiness timeout in playwright.kit-parity.config.ts; the parity spec additionally records warm first-200 latency as a report annotation under a 10s liveness bound. Raising a ceiling needs an explicit decision explaining the growth; never relax a budget to make CI green.",
+  "$comment": "Kit performance budgets. Measured baseline 2026-10-12 (raw/gzip bytes): worker entry 2551/1219; server JS total (22 files, no sourcemaps) 962157/258300 — dominated by the Hono catch-all bundle (chunks/hono.js 433009); client JS total (11 files) 100252/39302; client CSS total (1 file) 2402/763. 2026-10-13 homepage port re-measured: server JS total (37 files, no sourcemaps) 1022328/278333, inside the unchanged byte ceilings. The 6 new files are the home route entries, one route node, and the home-copy/featured/seo-json-ld shared chunks, so server maxFiles moves 32 to 45, the same headroom step as the sibling route-port raise that covered 36 files; any further route still fails closed for review. Ceilings are measured size x1.25 rounded up (raw to 512B, gzip to 256B), the repository x1.25 rule from ci/bundle-budget.json. Client/server hashed-asset groups are budgeted as totals plus a file-count cap, so a new chunk fails closed instead of escaping enforcement. Startup.maxMs (60s, the same cold-start bound as ci/kit-worker-e2e.mjs's listen) is enforced as the Kit webServer readiness timeout in playwright.kit-parity.config.ts; the parity spec additionally records warm first-200 latency as a report annotation under a 10s liveness bound. Raising a ceiling needs an explicit decision explaining the growth; never relax a budget to make CI green.",
   "worker": {
     "_worker.js": {
       "maxRawBytes": 3584,
@@ -10,7 +10,7 @@
     "js": {
       "maxRawBytes": 1203200,
       "maxGzipBytes": 323072,
-      "maxFiles": 32
+      "maxFiles": 45
     }
   },
   "client": {
