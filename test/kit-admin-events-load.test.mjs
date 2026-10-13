@@ -165,7 +165,7 @@ describe("Kit admin events-list load: guard and failure wiring", () => {
     expect(data.rows).toEqual([]);
     expect(data.hasNext).toBe(false);
     expect(data.emptyText).toBe("No events match these filters.");
-    expect(data.sectionTitle).toBe("Events");
+    expect(data).not.toHaveProperty("sectionTitle");
     expect(setHeaders).toHaveBeenCalledOnce();
     expect(setHeaders).toHaveBeenCalledWith({ "cache-control": "private, no-store" });
   });

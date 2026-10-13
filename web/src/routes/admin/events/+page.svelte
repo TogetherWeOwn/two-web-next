@@ -1,4 +1,5 @@
 <script lang="ts">
+import AdminShell from "#lib/AdminShell.svelte";
 import type { PageProps } from "./$types";
 import { eventListUrl, type EventSort } from "../../../../../src/admin/event-list";
 import { goingCountText } from "../../../../../src/islands/contracts-going-count";
@@ -42,6 +43,7 @@ const now = new Date();
   </td>
 {/snippet}
 
+<AdminShell title="Events">
 <section aria-labelledby="events-heading">
   <h1 id="events-heading">Events</h1>
   <form method="get" action="/admin/events" class="filters">
@@ -166,3 +168,4 @@ const now = new Date();
     {/if}
   </nav>
 </section>
+</AdminShell>

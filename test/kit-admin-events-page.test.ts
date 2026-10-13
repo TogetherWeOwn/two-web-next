@@ -57,4 +57,18 @@ describe("Kit events-list page contract", () => {
     expect(source).not.toMatch(/<script src=/);
     expect(source).not.toMatch(/on:[a-z]+=/);
   });
+
+  it("renders inside the admin chrome with its own title and ships no hydration bundle", () => {
+    // Group outlet carries no chrome of its own: children own their titles,
+    // the Kit twin of the Hono Shell titles. csr=false disables hydration on
+    // first load, like the Hono panel that ships no JavaScript.
+    expect(source).toContain('<AdminShell title="Events">');
+    const load = readFileSync(
+      fileURLToPath(
+        new URL("../web/src/routes/admin/events/+page.server.ts", import.meta.url).href,
+      ),
+      "utf8",
+    );
+    expect(load).toContain("csr = false");
+  });
 });
