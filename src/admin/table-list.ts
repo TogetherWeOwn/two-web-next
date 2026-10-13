@@ -2,14 +2,14 @@
 
 export type ListParams = Record<string, string | undefined>;
 export type SortOrder = "asc" | "desc";
-export type FeaturedSort = "position" | "updated_at";
-export type FeaturedListQuery = {
-  published: "" | "1" | "0";
-  q: string;
-  sort: FeaturedSort;
-  order: SortOrder;
-  page: number;
-};
+export {
+  type FeaturedSort,
+  type FeaturedListQuery,
+  FEATURED_PAGE_SIZE,
+  parseFeaturedListQuery,
+  featuredListUrl,
+  featuredEmptyText,
+} from "./featured-list-query";
 export type RosterSort = "status" | "answered";
 export type RosterQuery = { q: string; sort: RosterSort; order: SortOrder; page: number };
 export type JoinAttemptsQuery = { outcome: string; q: string; page: number };
@@ -18,31 +18,11 @@ export type ActivityLogQuery = { subject: string; causer: string; page: number }
 export const ACTIVITY_LOG_PAGE_SIZE = 50;
 /** The RSVP roster reuses the 100-row admin convention. */
 export const ROSTER_PAGE_SIZE = 100;
-/** One extra row is fetched as the next-page lookahead, like events. */
-export const FEATURED_PAGE_SIZE = 25;
 
 // PostgreSQL text cannot contain NUL: drop it so a NUL-only filter reads as absent.
 // Spelled with fromCharCode so the NUL survives transports that decode backslash-u escapes in transit.
 const withoutNul = (raw: string | undefined): string =>
   (raw ?? "").replaceAll(String.fromCharCode(0), "");
-
-export function parseFeaturedListQuery(params: ListParams): FeaturedListQuery {
-  const page = Number(params.page);
-  return {
-    published: params.published === "1" || params.published === "0" ? params.published : "",
-    q: withoutNul(params.q).trim(),
-    sort: params.sort === "updated_at" ? "updated_at" : "position",
-    order: params.order === "desc" ? "desc" : "asc",
-    // Keep the offset within a safe integer, even for adversarial page values.
-    page:
-      /^\d+$/.test(params.page ?? "") &&
-      Number.isSafeInteger(page) &&
-      page > 0 &&
-      Number.isSafeInteger(page * FEATURED_PAGE_SIZE)
-        ? page
-        : 1,
-  };
-}
 
 export function parseRosterQuery(params: ListParams): RosterQuery {
   const page = Number(params.roster_page);
@@ -88,18 +68,6 @@ export function parseActivityLogQuery(params: ListParams): ActivityLogQuery {
   };
 }
 
-export function featuredListUrl(
-  query: FeaturedListQuery,
-  patch: Partial<FeaturedListQuery> = {},
-): string {
-  const q = { ...query, ...patch };
-  const params = new URLSearchParams({ sort: q.sort, order: q.order });
-  if (q.published) params.set("published", q.published);
-  if (q.q) params.set("q", q.q);
-  if (q.page > 1) params.set("page", String(q.page));
-  return `/admin/featured?${params}`;
-}
-
 export function rosterUrl(
   eventKey: string,
   query: RosterQuery,
@@ -125,13 +93,6 @@ export function activityLogUrl(query: ActivityLogQuery, page: number): string {
   if (query.subject) params.set("subject", query.subject);
   if (query.causer) params.set("causer", query.causer);
   return `/admin/activity-log?${params}`;
-}
-
-/** Zero-row copy: filtered empties name the filters, genuine empties invite creation. */
-export function featuredEmptyText(query: FeaturedListQuery): string {
-  return query.q || query.published
-    ? "No featured content matches these filters."
-    : "No featured content yet.";
 }
 
 /** Zero-row copy for the RSVP roster on the event edit page. */
