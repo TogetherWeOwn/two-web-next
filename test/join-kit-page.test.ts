@@ -42,11 +42,13 @@ describe("Kit GET /join cache contract (Hono joinPage parity)", () => {
   });
 });
 
-// The Kit load is a thin binding the root suite cannot execute
-// (cloudflare:workers + SvelteKit imports); these source pins guard its
-// markup contract instead, the same way test/discord-widget-snapshot.test.ts
-// pins the shipped island by reading it as text. Every actions/URLs/testids
-// acceptance item is named here, so deleting one fails this file first.
+// The Kit load is a thin binding around the root-testable response policy
+// (cloudflare:workers + SvelteKit imports stay out of the root test process);
+// these source pins guard its markup contract, the same way
+// test/discord-widget-snapshot.test.ts pins the shipped island by reading it
+// as text. Every actions/URLs/testids acceptance item is named here, so
+// deleting one fails this file first. Signed-flash behavior is exercised in
+// test/join-kit-load.test.ts.
 describe("Kit GET /join markup contract (src/screens/join.tsx parity)", () => {
   const page = readFileSync(
     new NodeURL("../web/src/routes/join/+page.svelte", import.meta.url),
@@ -104,10 +106,10 @@ describe("Kit GET /join markup contract (src/screens/join.tsx parity)", () => {
   it("the load stays server-rendered, DB-free and flash-consuming", () => {
     expect(load).toContain("csr = false");
     expect(load).toContain("safeNext");
-    expect(load).toContain("readReturnJourney");
-    expect(load).toContain("cookies.delete(JOIN_RESULT_COOKIE");
-    expect(load).toContain("joinPageCacheControl");
-    expect(load).toContain('vary: "Cookie"');
+    expect(load).toContain("applyJoinPageResponsePolicy");
+    expect(load).toContain("snapshot: widgetSnapshot");
+    expect(load).toContain("cookies,");
+    expect(load).toContain("setHeaders,");
     expect(load).not.toContain("SESSION_STORE");
     expect(load).not.toContain("ADMIN_DB");
   });

@@ -1,9 +1,7 @@
 import { env, waitUntil } from "cloudflare:workers";
 import { discordWidgetHealth } from "../../../../src/discord-widget";
-import { joinPageCacheControl } from "../../../../src/join/kit-page";
+import { applyJoinPageResponsePolicy } from "../../../../src/join/kit-page";
 import { safeNext } from "../../../../src/join/service";
-import { readReturnJourney } from "../../../../src/kit-session";
-import { JOIN_RESULT_COOKIE } from "../../../../src/return-journey";
 import type { PageServerLoad } from "./$types";
 
 // Server-rendered only: no hydration bundle, so no inline bootstrap script that
@@ -43,22 +41,12 @@ export const load: PageServerLoad = async ({ url, request, cookies, setHeaders }
   // Secure, HttpOnly, SameSite Lax), otherwise the flash would render again
   // on the next visit. HEAD/POST reads leave it pending, matching Hono's
   // GET-only readJoinResult (the bridge already gates on GET).
-  const { joinResult } = await readReturnJourney(request, env.SESSION_SECRET);
-  if (joinResult) {
-    cookies.delete(JOIN_RESULT_COOKIE, {
-      path: "/",
-      secure: true,
-      httpOnly: true,
-      sameSite: "lax",
-    });
-  }
-  // Carrying the flash makes the response viewer-specific: the static page
-  // keeps its shared-cache TTL only when there is nothing to consume.
-  // Vary stays on every variant: the representation depends on the flash
-  // cookie even when this view has nothing to consume.
-  setHeaders({
-    "cache-control": joinPageCacheControl(joinResult, widgetSnapshot),
-    vary: "Cookie",
+  const { joinResult } = await applyJoinPageResponsePolicy({
+    request,
+    sessionSecret: env.SESSION_SECRET,
+    snapshot: widgetSnapshot,
+    cookies,
+    setHeaders,
   });
   return {
     inviteUrl: env.DISCORD_INVITE_URL,

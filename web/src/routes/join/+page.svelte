@@ -99,7 +99,7 @@ const island = '<script src="/islands/join-widget.js" defer></' + "script>";
         {/if}
       {:else if widgetUrl}
         <div class="strap">
-          <p>Discord&rsquo;s live server preview loads only when you ask for it.</p>
+          <p>Discord's live server preview loads only when you ask for it.</p>
           <a
             class="btn"
             href={widgetUrl}

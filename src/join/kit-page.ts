@@ -11,7 +11,8 @@
 // the view has nothing to consume); only the max-age/no-store selection is
 // a pure function, so only it lives here.
 import type { DiscordWidgetSnapshot } from "../discord-widget";
-import type { JoinResult } from "../return-journey";
+import { readReturnJourney } from "../kit-session";
+import { JOIN_RESULT_COOKIE, type JoinResult } from "../return-journey";
 
 export type JoinPageCacheControl =
   | "private, no-store"
@@ -25,4 +26,46 @@ export function joinPageCacheControl(
   if (joinResult) return "private, no-store";
   if (snapshot) return "public, max-age=60";
   return "public, max-age=3600";
+}
+
+type JoinPagePolicyInput = {
+  request: Request;
+  sessionSecret: string;
+  snapshot: DiscordWidgetSnapshot | null | undefined;
+  cookies: {
+    delete: (
+      name: string,
+      options: {
+        path: string;
+        secure: boolean;
+        httpOnly: boolean;
+        sameSite: "lax";
+      },
+    ) => void;
+  };
+  setHeaders: (headers: Record<string, string>) => void;
+};
+
+/** Apply the Kit /join flash-consumption and cache policy for a response. */
+export async function applyJoinPageResponsePolicy({
+  request,
+  sessionSecret,
+  snapshot,
+  cookies,
+  setHeaders,
+}: JoinPagePolicyInput): Promise<{ joinResult: JoinResult | null }> {
+  const { joinResult } = await readReturnJourney(request, sessionSecret);
+  if (joinResult) {
+    cookies.delete(JOIN_RESULT_COOKIE, {
+      path: "/",
+      secure: true,
+      httpOnly: true,
+      sameSite: "lax",
+    });
+  }
+  setHeaders({
+    "cache-control": joinPageCacheControl(joinResult, snapshot),
+    vary: "Cookie",
+  });
+  return { joinResult };
 }
