@@ -6,10 +6,13 @@ let {
   activeNav,
   loginReturnTo = null,
   accountChrome,
+  hideAccount = false,
 }: {
   activeNav?: "home" | "events";
   loginReturnTo?: string | null;
   accountChrome?: Snippet;
+  /** Drop the account area entirely, as Hono account={false} does on sessionless pages. */
+  hideAccount?: boolean;
 } = $props();
 </script>
 
@@ -22,14 +25,16 @@ let {
   <a class="brand" href="/" aria-label="Together We Own homepage">
     <img src="/logo.svg" width="64" height="64" alt="Together We Own" />
   </a>
-  <nav class="header-account" aria-label="Account">
-    {#if accountChrome}
-      {@render accountChrome()}
-    {:else}
-      <div>
-        <span class="account-caption">Welcome, guest</span>
-        <a class="btn" href={loginUrl(loginReturnTo)} data-testid="signin">Sign in with Discord</a>
-      </div>
-    {/if}
-  </nav>
+  {#if !hideAccount}
+    <nav class="header-account" aria-label="Account">
+      {#if accountChrome}
+        {@render accountChrome()}
+      {:else}
+        <div>
+          <span class="account-caption">Welcome, guest</span>
+          <a class="btn" href={loginUrl(loginReturnTo)} data-testid="signin">Sign in with Discord</a>
+        </div>
+      {/if}
+    </nav>
+  {/if}
 </header>

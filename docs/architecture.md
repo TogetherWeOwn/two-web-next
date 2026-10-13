@@ -275,6 +275,7 @@ exactly once.
 | `src/featured.ts` | content |
 | `src/freeze-banner.ts` | http-guard |
 | `src/headers.ts` | http-guard |
+| `src/home-copy.ts` | content |
 | `src/hotzones/` | events |
 | `src/html-outcome.ts` | entry |
 | `src/image-policy.ts` | content |
@@ -286,6 +287,7 @@ exactly once.
 | `src/join/` | join |
 | `src/kit-access-sink.ts` | profiles |
 | `src/kit-errors.ts` | entry |
+| `src/kit-event-states.ts` | events |
 | `src/kit-past-events.ts` | events |
 | `src/kit-session.ts` | auth |
 | `src/leaderboards/` | profiles |
