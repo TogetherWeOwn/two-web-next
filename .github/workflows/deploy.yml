@@ -88,6 +88,10 @@ jobs:
           node-version: 24
           cache: npm
       - run: npm ci
+      # SvelteKit parity suites SSR-compile through web's svelte/compiler at
+      # import time, and `npm run check` below runs the full root vitest, so
+      # the web workspace must exist before the check gate (same as ci.yml).
+      - run: npm ci --prefix web --include=dev --no-audit --no-fund
       - name: Apply test migrations
         run: npm run db:migrate
         env:
