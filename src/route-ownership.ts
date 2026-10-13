@@ -41,9 +41,8 @@ export interface RouteDecision {
   path: string;
 }
 
-// The archive page renders natively; the privacy leaf, the house-rules leaf,
-// the join leaf and the profile reads stay on Hono until their enablement is
-// reviewed. Production (the Hono Worker) sees no traffic change for a
+// The archive page renders natively; the privacy leaf, house-rules leaf, join,
+// recovery and profile reads stay on Hono until their enablement is reviewed. Production (the Hono Worker) sees no traffic change for a
 // disabled path; the preview Worker moves a Kit-owned path back to Hono by
 // design — that is the rollback. Add one entry per migrated route, enabled
 // only when its Kit handler is ready to own the exact method/path. Only GET
@@ -58,10 +57,10 @@ export const ROUTE_MANIFEST: OwnedRoute[] = [
   { method: "GET", path: "/privacy", enabled: false, reads: "public" },
   { method: "GET", path: "/rules", enabled: false, reads: "public" },
   { method: "GET", path: "/join", enabled: false, reads: "public" },
-  // Profile reads: one Svelte view/model behind both Hono handlers.
-  // Native rendering stays off until the edit-parity follow-up
-  // reviews the enablement; POST/PATCH sibling paths have no entries and
-  // stay Hono-owned, and the retired /members directory has none either.
+  { method: "GET", path: "/auth/recover", enabled: false, reads: "public" },
+  // Profile reads: one Svelte view/model behind both Hono handlers. Native
+  // rendering stays off until edit parity reviews enablement; write siblings
+  // and the retired /members directory have no entries and stay Hono-owned.
   {
     method: "GET",
     path: "/profile",

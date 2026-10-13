@@ -249,13 +249,14 @@ describe("decideRoute", () => {
     expect(decideRoute(post, MEMBER_MANIFEST)).toBeUndefined();
   });
 
-  it("the shipped manifest assigns the public archive to Kit and keeps privacy, rules, join and profile entries on Hono", () => {
+  it("the shipped manifest assigns the public archive to Kit and keeps privacy, rules, join, recover, and profile reads on Hono", () => {
     const get = new Request(new URL("/events/past", APP_URL));
     expect(ROUTE_MANIFEST).toEqual([
       { method: "GET", path: "/events/past", enabled: true, reads: "public" },
       { method: "GET", path: "/privacy", enabled: false, reads: "public" },
       { method: "GET", path: "/rules", enabled: false, reads: "public" },
       { method: "GET", path: "/join", enabled: false, reads: "public" },
+      { method: "GET", path: "/auth/recover", enabled: false, reads: "public" },
       {
         method: "GET",
         path: "/profile",
@@ -274,5 +275,8 @@ describe("decideRoute", () => {
     expect(decideRoute(get, [{ ...archive!, enabled: false }])).toBeUndefined();
     expect(decideRoute(new Request(new URL("/join", APP_URL)), ROUTE_MANIFEST)).toBeUndefined();
     expect(decideRoute(new Request(new URL("/profile", APP_URL)), ROUTE_MANIFEST)).toBeUndefined();
+    expect(
+      decideRoute(new Request(new URL("/auth/recover", APP_URL)), ROUTE_MANIFEST),
+    ).toBeUndefined();
   });
 });

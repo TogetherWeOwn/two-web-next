@@ -124,6 +124,51 @@ for (const target of targets) {
     });
   });
 
+  // Auth recovery (GET /auth/recover only; the one-use journey writes stay
+  // Hono-owned, and /join/callback stays Hono-owned with single OAuth
+  // authority). Bodies come from raw API fetches with no browser JS executed,
+  // so these assertions ARE the no-JS proof: the shell, retry and invite
+  // fallback are in the first bytes.
+  test.describe(`${target.name}: auth recovery keeps its outcome contract`, () => {
+    test("expired session renders the shared shell with retry, invite and guest chrome", async () => {
+      const response = await api(target).get("/auth/recover?next=%2Fprofile%3Fedit%3D1");
+      expect(response.status()).toBe(200);
+      expect(response.headers()["content-type"]).toContain("text/html");
+      // Renderer ownership is per target: Kit answers with the
+      // manifest-derived marker once enabled, Hono never carries one.
+      const expectedMarker = target.name === "kit" ? expectedKitMarker("/auth/recover") : null;
+      expect(response.headers()["x-two-renderer"] ?? null).toBe(expectedMarker);
+      const body = await response.text();
+      expect(scrubSecrets(body)).toEqual([]);
+      expect(body).toContain('id="recovery-heading"');
+      expect(body).toContain('data-testid="recovery-retry"');
+      expect(body).toContain('data-testid="recovery-invite"');
+      expect(body).toContain('href="/auth/discord?next=%2Fprofile%3Fedit%3D1"');
+      expect(body).toContain('href="/discord"');
+      expect(body).toContain("Welcome, guest");
+      expect(body).not.toContain("Sign out");
+      expect(body).not.toContain("<script");
+      expect(body).not.toContain("<iframe");
+      // Per-visitor journey state: never shared-cacheable.
+      expect(response.headers()["cache-control"]).toBe("no-store, private");
+      // The Hono controller still owns the one-use journey writes, served
+      // undecorated through honoFetch on both targets until enablement.
+      const setCookies = (await response.headersArray())
+        .filter((h) => h.name.toLowerCase() === "set-cookie")
+        .map((h) => h.value)
+        .join("\n");
+      expect(setCookies).toContain("__Host-two_login_intended=");
+      expect(setCookies).toContain("__Host-two_expired_write=");
+    });
+
+    test("safe next survives onto the login retry, hostile next leaves no trace", async () => {
+      const hostile = await api(target).get("/auth/recover?next=https%3A%2F%2Fevil.test");
+      const hostileBody = await hostile.text();
+      expect(hostileBody).toContain('href="/auth/discord?next=%2Fprofile"');
+      expect(hostileBody).not.toContain("evil.test");
+    });
+  });
+
   test.describe(`${target.name}: public feeds and SEO answer unauthenticated GETs`, () => {
     test("sitemap pins the seeded event GUID", async () => {
       const response = await api(target).get("/sitemap_index.xml");
