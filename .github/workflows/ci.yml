@@ -361,6 +361,13 @@ jobs:
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
         continue-on-error: true
         run: npm run test:inventory:selftest && npm run test:inventory
+      # SvelteKit workspaces (house-rules parity): unit coverage SSR-compiles
+      # .svelte through web's svelte/compiler, so install before Check. Runs
+      # whenever Check runs (docs/draft gate only): coverage runs every test
+      # even on db-only scopes where the area-gated Kit steps stay skipped.
+      - name: Install Kit workspace dependencies
+        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
+        run: npm ci --prefix web --include=dev --no-audit --no-fund
       - name: Check (lint + typecheck + coverage gate)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
         run: npm run lint && npm run typecheck && npm run e2e:typecheck && npm run test:coverage && npm run e2e:safety && node --test ci/a11y-*.test.mjs ci/admin-properties-ci.test.mjs ci/coverage-command.test.mjs ci/kit-preview-e2e-wiring.test.mjs ci/visual-accept.test.mjs
@@ -373,12 +380,6 @@ jobs:
       - name: Web quality gate selftests (standards checks + summary formatter)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
         run: npm run standards:selftest
-      # SvelteKit spike (TOG-12247): the web/ workspace has its own lockfile and
-      # typecheck. web/node_modules is installed here so the Kit steps never run
-      # on a partial workspace.
-      - name: Install Kit workspace dependencies
-        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true' || needs.scope.outputs.worker == 'true')
-        run: npm ci --prefix web --include=dev --no-audit --no-fund
       - name: Kit typecheck (svelte-check, warnings fail)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true' || needs.scope.outputs.worker == 'true')
         run: npm run check --prefix web

@@ -1,7 +1,9 @@
 import type { Context, Next } from "hono";
 import { deleteCookie, getSignedCookie, setSignedCookie } from "hono/cookie";
 import { safeNext } from "./join/service";
-import { Recovery } from "./pages";
+import { renderHtmlOutcome } from "./html-outcome";
+import { honoRecoveryRenderer } from "./recovery-hono";
+import { recoveryOutcome } from "./recovery-outcome";
 
 export const EXPIRED_WRITE_COOKIE = "__Host-two_expired_write";
 const INTENDED_COOKIE = "__Host-two_login_intended";
@@ -75,15 +77,22 @@ export async function recoveryLanding(c: Ctx): Promise<Response> {
   const next = safeNext(c.req.query("next")) ?? "/profile";
   await setSignedCookie(c, INTENDED_COOKIE, next, c.env.SESSION_SECRET, OPTIONS);
   await setSignedCookie(c, EXPIRED_WRITE_COOKIE, `pending|${next}`, c.env.SESSION_SECRET, OPTIONS);
-  c.header("cache-control", "no-store, private");
-  return c.html(
-    <Recovery
-      title="Your session expired"
-      message="Your earlier changes were not saved. Sign in again, then review and submit them when you are ready."
-      retryUrl={`/auth/discord?next=${encodeURIComponent(next)}`}
-      retryLabel="Log in with Discord"
-      inviteUrl="/discord"
-    />,
+  // Same model, status (200) and headers as the direct render: the one-use
+  // journey writes above stay Hono-owned and ride the buffered response (the
+  // injected renderer only changes who turns the model into bytes).
+  return renderHtmlOutcome(
+    c,
+    recoveryOutcome(
+      {
+        title: "Your session expired",
+        message:
+          "Your earlier changes were not saved. Sign in again, then review and submit them when you are ready.",
+        retryUrl: `/auth/discord?next=${encodeURIComponent(next)}`,
+        retryLabel: "Log in with Discord",
+        inviteUrl: "/discord",
+      },
+      honoRecoveryRenderer,
+    ),
   );
 }
 

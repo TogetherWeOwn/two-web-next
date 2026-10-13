@@ -41,20 +41,23 @@ export interface RouteDecision {
   path: string;
 }
 
-// Native routes stay on Hono until their enablement is reviewed. Production
-// (the Hono Worker) sees no traffic change; the preview Worker moves a
-// Kit-owned path back to Hono by design — that is the rollback. Add one entry
-// per migrated route, enabled only when its Kit handler is ready to own the
-// exact method/path. Only GET is listed per page (HEAD follows its GET
-// entry); /join/discord and /join/callback stay Hono-owned, so the funnel
-// keeps one OAuth authority.
+// The archive page renders natively; the privacy leaf, the house-rules leaf
+// and the join leaf stay on Hono until their enablement is reviewed.
+// Production (the Hono Worker) sees no traffic change for a disabled path;
+// the preview Worker moves a Kit-owned path back to Hono by design — that is
+// the rollback. Add one entry per migrated route, enabled only when its Kit
+// handler is ready to own the exact method/path. Only GET is listed per page
+// (HEAD follows its GET entry); /join/discord and /join/callback stay
+// Hono-owned, so the funnel keeps one OAuth authority.
 // Exported so the preview parity script derives its expected renderer from the
 // shipped manifest instead of hard-coding "kit": flipping enabled flips the
 // gate for the right reason.
 export const ROUTE_MANIFEST: OwnedRoute[] = [
-  { method: "GET", path: "/events/past", enabled: false, reads: "public" },
+  { method: "GET", path: "/events/past", enabled: true, reads: "public" },
   { method: "GET", path: "/privacy", enabled: false, reads: "public" },
+  { method: "GET", path: "/rules", enabled: false, reads: "public" },
   { method: "GET", path: "/join", enabled: false, reads: "public" },
+  { method: "GET", path: "/auth/recover", enabled: false, reads: "public" },
 ];
 
 // Response header set only on the Kit-rendered branch of the hook, so the
@@ -215,6 +218,12 @@ export interface HookDispatchDeps {
   sessionFor?: (event: HookEventLike) => Promise<KitLocals>;
   // Access-log sink for member-read Kit routes. Absent or null refuses the read.
   accessSink?: () => Promise<AccessSink | null>;
+  // Native archive guard/cache around Kit SSR. The hook binds env into this
+  // (request, render) => dispatchPastArchiveRequest(request, env, render); the
+  // core decides WHEN it runs, so the route-id branch is pinned here instead
+  // of in web/src/hooks.server.ts. Absent by default: without it the dispatch
+  // behaves exactly as before.
+  pastArchive?: (request: Request, render: () => Promise<Response>) => Promise<Response>;
 }
 
 // Production Kit decoration, owned by the core so the tested path is the
@@ -357,7 +366,7 @@ export async function dispatchHookRequest(
   // resolve. A bridge failure must not 500 the render — public Kit pages fail
   // closed to guest-equivalent locals, exactly as if no bridge were wired.
   // It runs outside the member-read boundary: its session read is not member data.
-  if (deps.sessionFor) {
+  if (deps.sessionFor && route.reads !== "public") {
     try {
       const bridged = await deps.sessionFor(event);
       const prior = (event.locals as Record<string, unknown> | undefined) ?? {};
@@ -368,10 +377,18 @@ export async function dispatchHookRequest(
       });
     }
   }
-  const response =
-    route.reads === "public"
-      ? await deps.resolve(event)
-      : await renderMemberRead(event, route.reads, deps);
+  // Native archive reads share the Hono guard and anonymous cache. The route
+  // id owns the branch (SvelteKit sets it before handle runs); the manifest
+  // owns the Kit half above, so an unowned path never reaches the wrapper.
+  const isPastArchivePage = event.route?.id === "/events/past";
+  let response: Response;
+  if (route.reads !== "public") {
+    response = await renderMemberRead(event, route.reads, deps);
+  } else if (isPastArchivePage && deps.pastArchive) {
+    response = await deps.pastArchive(event.request, () => deps.resolve(event));
+  } else {
+    response = await deps.resolve(event);
+  }
   if (event.route?.id === HONO_FALLBACK_ROUTE_ID) return response;
   decorateKitResponse(response, event, deps.appUrl, deps.featuredImageHosts);
   return response;

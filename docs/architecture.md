@@ -286,6 +286,7 @@ exactly once.
 | `src/join/` | join |
 | `src/kit-access-sink.ts` | profiles |
 | `src/kit-errors.ts` | entry |
+| `src/kit-past-events.ts` | events |
 | `src/kit-session.ts` | auth |
 | `src/leaderboards/` | profiles |
 | `src/leaf-critical-css.ts` | content |
@@ -304,10 +305,12 @@ exactly once.
 | `src/public-data/` | content |
 | `src/qa.ts` | auth |
 | `src/recovery-outcome.ts` | entry |
+| `src/recovery-hono.tsx` | entry |
 | `src/request-log.ts` | observability |
 | `src/return-journey.ts` | auth |
 | `src/roles.ts` | auth |
 | `src/route-ownership.ts` | entry |
+| `src/rules-content.ts` | content |
 | `src/rules-last-updated.ts` | content |
 | `src/same-origin.ts` | http-guard |
 | `src/screens/` | content |
