@@ -34,6 +34,14 @@ not fail) unless marked HARD. All of them run on the existing runners only.
   `*.test.ts` / `*.test.mjs` file is reachable from no CI job. The step
   runs with `continue-on-error` and the `--selftest` is hermetic (fixture
   trees only), so an orphan can never fail the job or skip later steps.
+- **Tier-0 report (WARN):** `npm run test:tier0` runs the fast-check
+  validator properties, the role x route authz matrix and the
+  default-planner EXPLAIN seq-scan check from `tier0/` (own vitest config:
+  every `test/**` file runs inside the blocking coverage step, so Tier-0
+  stays report-only by living outside it). The `check`-job step runs with
+  `continue-on-error` against the job Postgres service and prints the
+  changed query files beside the verdict. Flip to required per-suite only
+  after the production watch decides the false-positive rate is low.
 - **Floor guard (HARD):** `ci/floor-guard.mjs` enforces the CONSTRAINTS.md
   floor on the PR diff: new suppressions, test skip calls, deleted test files
   (including `*-selftest` scripts), net-removed assertions, source-code stubs,
