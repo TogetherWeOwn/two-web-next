@@ -2,7 +2,11 @@
 //
 // - Joins cells aggregate real web data: `join_attempts.createdAt` in the
 //   season window plus published `events.startsAt` in the window (aggregate
-//   counts only, never per-user rows, timestamps, or identities).
+//   counts only, never per-user rows, timestamps, or identities). Attempts
+//   whose `discord_id` links to an opted-out profile
+//   (`profiles.leaderboard_opt_out`) never count, mirroring the member
+//   ranking filter; erased members need no extra filter because erasure
+//   deletes their join_attempts rows.
 // - Voice/games cells are the WhatPulse-seeded prior with rollup semantics by
 //   contract (same 7x24 shape/seed/weekly re-weight), not a crate import:
 //   deterministic seeded base, weekly re-weighted so each weekday
@@ -10,9 +14,9 @@
 //   event-store calibration.
 //
 // All grids are aggregates only: 7 weekdays x 24 hours of counts.
-import { and, eq, gte, inArray, lt, sql } from "drizzle-orm";
+import { and, eq, gte, inArray, isNull, lt, or, sql } from "drizzle-orm";
 import { events } from "../db/admin-schema";
-import { joinAttempts } from "../db/schema";
+import { joinAttempts, profiles } from "../db/schema";
 import type { Db } from "../db/index";
 import { JOIN_ATTEMPT_RETENTION_DAYS } from "../jobs/constants";
 import type { SeasonWindow } from "./season";
@@ -52,7 +56,10 @@ export const JOINS_GRID_STATEMENT_TIMEOUT_MS = 2000;
  * Joins 7x24 cells from real web data in the season window.
  * SQL-side aggregation only: one grouped count (at most 168 rows) plus one
  * event count, never per-user rows. Only `added`/`already_member` outcomes
- * count as joins; denied/error/degraded attempts never do. Join attempts are
+ * count as joins; denied/error/degraded attempts never do. Attempts from
+ * opted-out members never count: the left join on `profiles` drops rows
+ * whose `discord_id` maps to `leaderboard_opt_out = true`, while null
+ * discord_ids and absent profile rows still count. Join attempts are
  * pruned after JOIN_ATTEMPT_RETENTION_DAYS, so windows older than retention
  * read 0 by design (see joinsRetentionNote).
  * `db = null` (DB-free render) yields an empty grid, never a 500.
@@ -82,9 +89,11 @@ export async function loadJoinsGrid(
     const buckets = await tx
       .select({ dow, hr, n: sql`count(*)::int` })
       .from(joinAttempts)
+      .leftJoin(profiles, eq(profiles.userId, joinAttempts.discordId))
       .where(
         and(
           inArray(joinAttempts.outcome, [...JOIN_SUCCESS_OUTCOMES]),
+          or(isNull(profiles.leaderboardOptOut), eq(profiles.leaderboardOptOut, false)),
           inWindow ? gte(joinAttempts.createdAt, inWindow.start) : undefined,
           inWindow ? lt(joinAttempts.createdAt, inWindow.end) : undefined,
         ),

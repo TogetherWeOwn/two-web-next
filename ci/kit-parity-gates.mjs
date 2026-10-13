@@ -60,6 +60,18 @@ export const PARITY_ROUTES = [
     cache: "no-store, private",
     compareSection: null,
   },
+  // Hot-zone heatmaps: public aggregates, Kit-owned with the same
+  // reads as the Hono handlers. No byte section compare: the joins grid reads
+  // live join_attempts/event rows, so Hono vs Kit bytes differ by design;
+  // preview proves the structural contract on both sides instead. Concrete
+  // signal paths only, matching the manifest (no :param pattern).
+  ...["/hotzones", "/hotzones/joins", "/hotzones/voice", "/hotzones/games"].map((path) => ({
+    path,
+    expectStatus: 200,
+    expectMarker: "manifest",
+    contract: "hotzones",
+    compareSection: null,
+  })),
 ];
 
 export const RESERVED_PROBES = [{ path: "/up", expectStatus: 200, expectMarker: null }];
@@ -200,8 +212,8 @@ export function isManifestEnabled(manifestSource, path, method = null) {
   );
 }
 
-// Coverage: the only executed parity runs today are GET/HEAD /events/past,
-// GET/HEAD /join and GET/HEAD /auth/recover via PARITY_ROUTES (unit contract
+// Coverage: the executed parity runs are GET/HEAD /events/past, /join,
+// /auth/recover and the four hot-zone paths via PARITY_ROUTES (unit contract
 // + preview fetch). Any other enabled entry has no run covering it and must
 // fail — the scopes below only choose the journey name for the failure
 // message, never whether it fails.
@@ -354,6 +366,13 @@ export function assertRouteContract({ label, html, headers, status, expected }) 
     failures.push(...assertJoinContract(label, html, get, expected));
   } else if (contract === "recovery") {
     failures.push(...assertRecoveryContract(label, html, get, expected));
+  } else if (contract === "hotzones") {
+    if (!/hot zone/i.test(html)) failures.push(`${label}: hot-zone heading present`);
+    if (!html.includes("<table>")) failures.push(`${label}: 7x24 grid table present`);
+    if (!html.includes('<meta name="robots" content="noindex, follow"'))
+      failures.push(`${label}: hot-zones never index`);
+    if (/discord_id|created_at/i.test(html))
+      failures.push(`${label}: aggregate only, no per-attempt fields`);
   } else {
     failures.push(`${label}: unknown contract ${JSON.stringify(contract)}`);
   }
@@ -894,8 +913,8 @@ export function runUnitMode({ stdout = process.stdout, manifestSource: manifestO
   // Explicit ownership goes through isManifestEnabled — the same structural,
   // method-aware primitive its tests pin — so those tests guard the real gate
   // path instead of a parallel matcher. A final catch-all fails any other
-  // enabled entry no executed run covers (today only GET/HEAD /events/past,
-  // /join and /auth/recover via PARITY_ROUTES): GET /admin, /events,
+  // enabled entry no executed run covers (GET/HEAD /events/past, /join,
+  // /auth/recover and the four hot-zone paths via PARITY_ROUTES): GET /admin, /events,
   // /join/discord, /join/callback and friends can never ship green with no
   // journey. (GET /join and GET /auth/recover themselves are covered.)
   const manifestEntries = parseManifestEntries(manifestSource);

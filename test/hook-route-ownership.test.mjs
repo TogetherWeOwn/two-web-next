@@ -90,6 +90,16 @@ describe("hooks.server route ownership wiring", () => {
         enabled: false,
         reads: { resource: "profile", action: "view", route: "profiles.show" },
       },
+      { method: "GET", path: "/hotzones", enabled: true, reads: "public" },
+      { method: "GET", path: "/hotzones/joins", enabled: true, reads: "public" },
+      { method: "GET", path: "/hotzones/voice", enabled: true, reads: "public" },
+      { method: "GET", path: "/hotzones/games", enabled: true, reads: "public" },
+      {
+        method: "GET",
+        path: "/leaderboards/members",
+        enabled: true,
+        reads: { resource: "leaderboard", action: "list", route: "leaderboards.members" },
+      },
     ]);
   });
 

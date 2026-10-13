@@ -249,7 +249,7 @@ describe("decideRoute", () => {
     expect(decideRoute(post, MEMBER_MANIFEST)).toBeUndefined();
   });
 
-  it("the shipped manifest keeps the homepage, privacy, rules, join and recover on Hono, assigns the public archive to Kit, and holds the admin dashboard and profile reads on Hono", () => {
+  it("the shipped manifest keeps the homepage, privacy, rules, join and recover on Hono, assigns the public archive, hot-zones and member board to Kit, and holds the admin dashboard and profile reads on Hono", () => {
     const get = new Request(new URL("/events/past", APP_URL));
     expect(ROUTE_MANIFEST).toEqual([
       { method: "GET", path: "/", enabled: false, reads: "public" },
@@ -275,6 +275,16 @@ describe("decideRoute", () => {
         path: "/members/:user",
         enabled: false,
         reads: { resource: "profile", action: "view", route: "profiles.show" },
+      },
+      { method: "GET", path: "/hotzones", enabled: true, reads: "public" },
+      { method: "GET", path: "/hotzones/joins", enabled: true, reads: "public" },
+      { method: "GET", path: "/hotzones/voice", enabled: true, reads: "public" },
+      { method: "GET", path: "/hotzones/games", enabled: true, reads: "public" },
+      {
+        method: "GET",
+        path: "/leaderboards/members",
+        enabled: true,
+        reads: { resource: "leaderboard", action: "list", route: "leaderboards.members" },
       },
     ]);
     const archive = ROUTE_MANIFEST.find((entry) => entry.path === "/events/past");
