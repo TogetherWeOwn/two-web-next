@@ -67,6 +67,7 @@ describe("hooks.server route ownership wiring", () => {
       { method: "GET", path: "/events/past", enabled: false, reads: "public" },
       { method: "GET", path: "/privacy", enabled: false, reads: "public" },
       { method: "GET", path: "/join", enabled: false, reads: "public" },
+      { method: "GET", path: "/auth/recover", enabled: false, reads: "public" },
     ]);
   });
 

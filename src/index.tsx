@@ -23,7 +23,10 @@ import { upsertRosterUser } from "./db/roster";
 import { pgQueueDepth } from "./jobs/postgres";
 import type { Env, Session } from "./env";
 import { imageHosts } from "./image-policy";
-import { Join, Recovery, Home, type Notice } from "./pages";
+import { Join, Home, type Notice } from "./pages";
+import { renderHtmlOutcome } from "./html-outcome";
+import { honoRecoveryRenderer } from "./recovery-hono";
+import { recoveryOutcome } from "./recovery-outcome";
 import { internalErrorHandler, registerErrorHandlers } from "./errors";
 import { registerEventRoutes } from "./events/routes";
 import { loadHomeUpcomingMerged } from "./events/reads";
@@ -475,19 +478,13 @@ registerJoinRoutes(
         />,
       );
     },
-    recovery: (c, props, status = 200) => {
-      c.header("cache-control", "no-store, private");
-      c.status(status);
-      return c.html(
-        <Recovery
-          title={props.title}
-          message={props.message}
-          retryUrl={props.retryUrl}
-          retryLabel={props.retryLabel}
-          inviteUrl={props.inviteUrl}
-        />,
-      );
-    },
+    // Same model, status and headers as the direct render: the injected
+    // renderer only changes who turns the model into bytes (the Svelte
+    // adapter consumes the same RecoveryModel). Statuses (200 recovery, 503
+    // outage), the private no-store header and the journey-cookie clearing in
+    // the callback stay exactly as contracted.
+    recovery: (c, props, status = 200) =>
+      renderHtmlOutcome(c, recoveryOutcome(props, honoRecoveryRenderer, { status })),
   },
 );
 
