@@ -67,6 +67,17 @@ export const ROUTE_MANIFEST: OwnedRoute[] = [
     enabled: false,
     reads: { resource: "dashboard", action: "view", route: "admin.dashboard" },
   },
+  // Moderator events list: same declaration as the Hono handler
+  // (admin.events.index, src/admin/routes.tsx). Only this GET migrates:
+  // POST /admin/events, /new and /:key stay Hono-owned, so the create form,
+  // edit form and every publish/cancel/RSVP action keep one authority until
+  // their own slices land. Off until the enablement review.
+  {
+    method: "GET",
+    path: "/admin/events",
+    enabled: false,
+    reads: { resource: "events", action: "list", route: "admin.events.index" },
+  },
   { method: "GET", path: "/auth/recover", enabled: false, reads: "public" },
   // Profile reads: one Svelte view/model behind both Hono handlers. Native
   // rendering stays off until edit parity reviews enablement; write siblings
