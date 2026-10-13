@@ -253,6 +253,7 @@ describe("decideRoute", () => {
     const get = new Request(new URL("/events/past", APP_URL));
     expect(ROUTE_MANIFEST).toEqual([
       { method: "GET", path: "/events/past", enabled: false, reads: "public" },
+      { method: "GET", path: "/privacy", enabled: false, reads: "public" },
     ]);
     expect(decideRoute(get, ROUTE_MANIFEST)).toBeUndefined();
   });
