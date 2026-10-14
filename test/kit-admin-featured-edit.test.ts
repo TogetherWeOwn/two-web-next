@@ -231,6 +231,19 @@ describe("resolveKitFeaturedEdit", () => {
     expect(outcome.view.imageSrc).toBeNull();
   });
 
+  it("keeps an allowlisted-host preview image like the homepage", async () => {
+    const outcome = await resolveKitFeaturedEdit("7", {
+      db: {} as never,
+      get: async () => ({ ...baseRow, imageUrl: "https://images.unsplash.com/x.png" }),
+      now: new Date("2026-09-30T20:00:00.000Z"),
+      appUrl: "https://next.example.test",
+      imageHosts: "images.unsplash.com",
+    });
+    expect(outcome.kind).toBe("ok");
+    if (outcome.kind !== "ok") throw new Error("expected ok");
+    expect(outcome.view.imageSrc).toBe("https://images.unsplash.com/x.png");
+  });
+
   it("rewrites a same-site absolute preview URL to a path with the alt fallback", async () => {
     const outcome = await resolveKitFeaturedEdit("7", {
       db: {} as never,
