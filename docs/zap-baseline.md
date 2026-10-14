@@ -18,6 +18,13 @@ any other host.
 
 - Any **High** alert fails. There is no budget for High, and no `ignore`
   entry (scoped or unscoped) suppresses a High.
+- One exception: a lone **PII Disclosure (10062)** High with nothing else
+  failing is re-scanned once before failing (`ci/zap-retry-decision.mjs`).
+  ZAP's PII rule is a Luhn heuristic prone to false positives on synthetic
+  numbers, and the 3-minute spider covers a varying URL subset per run. A
+  repeated 10062, any other High, or any budget breach still fails.
+- The summary also reports how many sites the scan covered
+  (`Scanned N site(s)`), so a thin-spider run is visible next time.
 - Missing/malformed scan evidence, unknown risk codes and invalid budgets
   fail closed with a public-safe diagnostic instead of passing.
 - **Medium** and **Low** alert-type counts fail above `maxMedium` / `maxLow` in
