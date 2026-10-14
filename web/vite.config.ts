@@ -21,6 +21,7 @@ export default defineConfig({
   environments: {
     ssr: {
       build: {
+        minify: true,
         rolldownOptions: {
           output: {
             // Compact server output without rewrites or name mangling; error

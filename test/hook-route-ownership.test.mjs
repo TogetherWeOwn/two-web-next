@@ -64,7 +64,7 @@ beforeEach(() => {
 });
 
 describe("hooks.server route ownership wiring", () => {
-  it("ships the homepage, events list and about leaf disabled with the native archive enabled, privacy, rules, join, recover, admin and profile reads still on Hono", () => {
+  it("ships the native archive enabled with the homepage, events list, about, privacy, rules, join, recover, admin and profile reads still on Hono", () => {
     expect(ROUTE_MANIFEST).toEqual([
       { method: "GET", path: "/", enabled: false, reads: "public" },
       { method: "GET", path: "/events/past", enabled: true, reads: "public" },
@@ -78,6 +78,12 @@ describe("hooks.server route ownership wiring", () => {
         path: "/admin",
         enabled: false,
         reads: { resource: "dashboard", action: "view", route: "admin.dashboard" },
+      },
+      {
+        method: "GET",
+        path: "/admin/featured",
+        enabled: false,
+        reads: { resource: "featured_contents", action: "list", route: "admin.featured.index" },
       },
       {
         method: "GET",
