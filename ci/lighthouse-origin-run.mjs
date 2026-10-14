@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 // Lighthouse against a deployed origin (the cutover 48h watch, runbook and
-// watch-run-record section 6). GET only: discovery issues two GETs and
-// Lighthouse navigates. Usage: npm run lighthouse:origin -- <origin>
+// watch-run-record section 6). GET only: discovery issues feed/listing GETs
+// plus one verification GET per candidate event, and Lighthouse navigates.
+// Usage: npm run lighthouse:origin -- <origin>
 import { spawn } from "node:child_process";
 import { mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";

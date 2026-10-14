@@ -82,6 +82,20 @@ export const ROUTE_MANIFEST: OwnedRoute[] = [
     enabled: false,
     reads: { resource: "featured_contents", action: "list", route: "admin.featured.index" },
   },
+  // Moderator featured create form: member data, so the Kit branch renders
+  // inside the member-read boundary with this declaration and the bridged
+  // viewer. Same declaration as the Hono handler (admin.featured.create,
+  // src/admin/routes.tsx). Only this GET migrates: POST /admin/featured
+  // stays Hono-owned, so the ported form keeps submitting to the unchanged
+  // create handler (parseFeaturedForm + createFeatured, 422/303) during
+  // mixed mode, and the guarded /admin/featured-contents/create legacy
+  // redirect stays Hono-owned. Off until the enablement review.
+  {
+    method: "GET",
+    path: "/admin/featured/new",
+    enabled: false,
+    reads: { resource: "featured_contents", action: "view", route: "admin.featured.create" },
+  },
   // Read-only activity-log viewer: the same bounded subject/causer filters and
   // newest-first paging as the Hono panel, audited by the member-read boundary
   // with this declaration and the bridged viewer. Off until the enablement
