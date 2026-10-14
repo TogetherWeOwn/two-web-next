@@ -16,7 +16,7 @@ const env: Env = {
   DISCORD_INVITE_URL: "https://discord.gg/invite",
   DISCORD_BOT_TOKEN: "bot-token",
   SESSION_SECRET: "test-session-secret-at-least-32-bytes-long",
-  DISCORD_MODERATOR_ROLE_IDS: "508654771276873729",
+  DISCORD_MODERATOR_ROLE_IDS: "1546777856984481792",
 };
 const exchange = () =>
   exchangeCode("code", "client-id", SECRET, `${env.APP_URL}/auth/discord/callback`);

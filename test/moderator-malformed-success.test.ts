@@ -147,7 +147,7 @@ describe("moderator recompute preserves string-role intersection semantics", () 
     ["valid snowflake intersection", [OTHER_ROLE_ID, ROLE_ID], true],
     ["unmatched snowflake", [OTHER_ROLE_ID], false],
     ["empty role list", [], false],
-    ["display name", ["SySOp"], false],
+    ["display name", ["Moderator"], false],
     [
       "numeric/object roles are not coerced",
       [Number(ROLE_ID), { id: ROLE_ID }, null, false],

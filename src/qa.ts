@@ -9,7 +9,6 @@
 // AND `QA_AUTH_TOKEN` must be set. Anywhere else the route does not exist (404).
 
 export const QA_HEADER = "X-TWO-QA-Auth";
-export const QA_MODERATOR_ROLE_ID = "508654771276873729";
 
 export type QaIdentity = { discordId: string; username: string; moderator: boolean };
 
