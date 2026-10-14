@@ -398,8 +398,8 @@ app.get("/", async (c) => {
   // explanation wins over an older journey's success (TOG-10356 review).
   const flashedPromise = takeJoinResult(c);
   // ExecutionContext is absent outside the Worker (tests, some adapters):
-  // without it the cache still serves in-memory entries, it just cannot
-  // schedule background Cache API writes.
+  // the guest cache is isolate-local memory only, so it needs no background
+  // scheduling; the context is passed through for signature compatibility.
   let executionCtx: ExecutionContext | undefined;
   try {
     executionCtx = c.executionCtx as unknown as ExecutionContext;
