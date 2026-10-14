@@ -12,6 +12,7 @@ import {
   __resetHomeGuestCacheForTests,
   cachedFeatured,
   cachedHomeUpcoming,
+  retireHomeGuestCache,
 } from "../src/home-cache";
 import { createMemorySessionStore, hashToken, newSessionToken } from "../src/sessions";
 import { JOIN_RESULT_COOKIE } from "../src/return-journey";
@@ -79,7 +80,13 @@ function fixture(opts: { events?: (typeof events.$inferSelect)[]; featured?: boo
     if (firstDbQueryAt === 0) firstDbQueryAt = Date.now();
     if (sql.includes('from "featured_contents"')) {
       featuredQueries += 1;
-      return { rows: featured ? [[1, "Community news", "Featured body", null, null, null]] : [] };
+      // Positional projection: id, title, body, url, imageUrl, imageAlt,
+      // startsAt, endsAt. Null bounds stay visible at every instant.
+      return {
+        rows: featured
+          ? [[1, "Community news", "Featured body", null, null, null, null, null]]
+          : [],
+      };
     }
     if (sql.includes("set_config")) return { rows: [] };
     if (sql.includes('"timezone"') && !sql.includes('"title"')) return { rows: [] };
@@ -258,6 +265,7 @@ describe("homepage edge cache layer (production path)", () => {
         put: async (request: Request, response: Response) => {
           bodies.set(request.url, await response.text());
         },
+        delete: async (request: Request) => bodies.delete(request.url),
       },
     };
   }
@@ -325,5 +333,62 @@ describe("homepage edge cache layer (production path)", () => {
       ctx,
     );
     expect(second).toEqual(first);
+  });
+});
+
+describe("homepage guest cache retire", () => {
+  it("re-reads featured after a retire on the same injected database", async () => {
+    // Same injected object before and after: only the generation bump can
+    // turn the second read into a miss (the WeakMap key never changes).
+    let rows: unknown[][] = [[1, "Community news", "Featured body", null, null, null, null, null]];
+    const db = drizzle(async (sql: string) => {
+      if (sql.includes('from "featured_contents"')) return { rows };
+      if (sql.includes("set_config")) return { rows: [] };
+      return { rows: [] };
+    }) as unknown as Db;
+    Object.assign(db, { transaction: async (fn: (tx: Db) => Promise<unknown>) => fn(db) });
+    const env = { ...baseEnv, ADMIN_DB: db } as Env;
+    const first = await cachedFeatured(env, async () => db, NOW, undefined);
+    expect(first).toHaveLength(1);
+    const hit = await cachedFeatured(env, async () => db, NOW, undefined);
+    expect(hit).toHaveLength(1);
+    // A committed mutation retires: the next read re-queries and sees the
+    // emptied table instead of the retired row.
+    rows = [];
+    retireHomeGuestCache();
+    await expect(cachedFeatured(env, async () => db, NOW, undefined)).resolves.toEqual([]);
+  });
+
+  it("deletes the shared edge entries so they cannot re-seed memory", async () => {
+    const bodies = new Map<string, string>();
+    (globalThis as Record<string, unknown>).caches = {
+      default: {
+        match: async (request: Request) => {
+          const body = bodies.get(request.url);
+          return body === undefined
+            ? undefined
+            : new Response(body, { headers: { "content-type": "application/json" } });
+        },
+        put: async (request: Request, response: Response) => {
+          bodies.set(request.url, await response.text());
+        },
+        delete: async (request: Request) => bodies.delete(request.url),
+      },
+    };
+    try {
+      const edgeEnv: Env = {
+        ...baseEnv,
+        DATABASE_URL: "postgres://edge-retire-test.invalid/db",
+      };
+      const f = fixture();
+      const first = await cachedFeatured(edgeEnv, async () => f.db, NOW, undefined);
+      expect(first).toHaveLength(1);
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      expect(bodies.size).toBeGreaterThan(0);
+      retireHomeGuestCache();
+      expect(bodies.size).toBe(0);
+    } finally {
+      delete (globalThis as Record<string, unknown>).caches;
+    }
   });
 });

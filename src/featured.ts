@@ -11,16 +11,35 @@ export type VisibleFeatured = Pick<
 export const FEATURED_READ_DEADLINE_MS = 500;
 const FEATURED_DB_TIMEOUT_MS = 250;
 
+// The lock/statement guard both readers share: cancel lock waits/slow
+// statements in Postgres, not just the HTTP wait, and never alter pooled
+// session settings.
+function featuredTimeoutGuard() {
+  return sql`select set_config('lock_timeout', ${`${FEATURED_DB_TIMEOUT_MS}ms`}, true), set_config('statement_timeout', ${`${FEATURED_DB_TIMEOUT_MS}ms`}, true)`;
+}
+
+async function withFeaturedDeadline<T>(run: () => Promise<T[]>): Promise<T[]> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const read = run().catch(() => [] as T[]);
+  // Also bound connection acquisition/transport stalls before the SQL timeout
+  // can take effect. Late rejection is consumed by the read's catch above.
+  const deadline = new Promise<T[]>((resolve) => {
+    timer = setTimeout(() => resolve([]), FEATURED_READ_DEADLINE_MS);
+  });
+  try {
+    return await Promise.race([read, deadline]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 /** Legacy currentlyVisible: start inclusive, end exclusive; no homepage cap. */
 export async function listVisibleFeatured(db: Db, now = new Date()): Promise<VisibleFeatured[]> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const read = db
-    .transaction(async (tx) => {
+  return withFeaturedDeadline(() =>
+    db.transaction(async (tx) => {
       // Like optional search analytics: cancel lock waits/slow statements in
       // Postgres, not just the HTTP wait, and never alter pooled session settings.
-      await tx.execute(
-        sql`select set_config('lock_timeout', ${`${FEATURED_DB_TIMEOUT_MS}ms`}, true), set_config('statement_timeout', ${`${FEATURED_DB_TIMEOUT_MS}ms`}, true)`,
-      );
+      await tx.execute(featuredTimeoutGuard());
       return tx
         .select({
           id: featuredContents.id,
@@ -39,16 +58,40 @@ export async function listVisibleFeatured(db: Db, now = new Date()): Promise<Vis
           ),
         )
         .orderBy(asc(featuredContents.position), asc(featuredContents.id));
-    })
-    .catch(() => []);
-  // Also bound connection acquisition/transport stalls before the SQL timeout
-  // can take effect. Late rejection is consumed by the read's catch above.
-  const deadline = new Promise<VisibleFeatured[]>((resolve) => {
-    timer = setTimeout(() => resolve([]), FEATURED_READ_DEADLINE_MS);
-  });
-  try {
-    return await Promise.race([read, deadline]);
-  } finally {
-    clearTimeout(timer);
-  }
+    }),
+  );
+}
+
+export type PublishedFeatured = Pick<
+  typeof featuredContents.$inferSelect,
+  "id" | "title" | "body" | "url" | "imageUrl" | "imageAlt" | "startsAt" | "endsAt"
+>;
+
+/**
+ * Published base list for the homepage guest cache: every published row with
+ * its window bounds, same order, same deadline/cancel contract. The homepage
+ * applies the live window per request (currentlyVisible in
+ * `./featured-status`), so boundary instants stay exact while the
+ * time-invariant base is shared across requests.
+ */
+export async function listPublishedFeatured(db: Db): Promise<PublishedFeatured[]> {
+  return withFeaturedDeadline(() =>
+    db.transaction(async (tx) => {
+      await tx.execute(featuredTimeoutGuard());
+      return tx
+        .select({
+          id: featuredContents.id,
+          title: featuredContents.title,
+          body: featuredContents.body,
+          url: featuredContents.url,
+          imageUrl: featuredContents.imageUrl,
+          imageAlt: featuredContents.imageAlt,
+          startsAt: featuredContents.startsAt,
+          endsAt: featuredContents.endsAt,
+        })
+        .from(featuredContents)
+        .where(eq(featuredContents.isPublished, true))
+        .orderBy(asc(featuredContents.position), asc(featuredContents.id));
+    }),
+  );
 }

@@ -1,14 +1,19 @@
-// Homepage guest-invariant short-TTL cache. Counts, upcoming events and
-// featured content are identical for guests and members, so one shared entry
-// serves every viewer; the response stays `private, no-store` because it also
-// embeds the per-viewer session and the one-shot join flash, which are never
-// cached here. Outage fallbacks are preserved: a cache miss or a cache failure
-// falls through to the direct read, and an unavailable upcoming read is never
-// stored (a stored outage would hide recovery behind the TTL).
+// Homepage guest-invariant short-TTL cache. Counts, upcoming events and the
+// published featured base are identical for guests and members, so one shared
+// entry serves every viewer; the response stays `private, no-store` because it
+// also embeds the per-viewer session and the one-shot join flash, which are
+// never cached here. The featured window ([startsAt, endsAt)) is evaluated
+// per request against the cached base, so boundary instants stay exact.
+// Outage fallbacks are preserved: a cache miss or a cache failure falls
+// through to the direct read, and an unavailable upcoming read is never
+// stored (a stored outage would hide recovery behind the TTL). Committed
+// featured and event mutations retire every entry (retireHomeGuestCache), so
+// the next homepage fetch re-reads instead of serving retired rows.
 import { databaseUrl } from "./db/connection";
 import type { Db } from "./db/index";
 import type { Env } from "./env";
-import { listVisibleFeatured, type VisibleFeatured } from "./featured";
+import { listPublishedFeatured, type PublishedFeatured, type VisibleFeatured } from "./featured";
+import { currentlyVisible } from "./featured-status";
 import { loadHomeUpcomingMerged, type HomeUpcomingMerged } from "./events/reads";
 import type { DiscordEventsSource } from "./events/discord-transients-types";
 
@@ -16,8 +21,8 @@ export const HOME_GUEST_CACHE_TTL_MS = 60_000;
 
 type WaitUntilCtx = { waitUntil?: (promise: Promise<unknown>) => void };
 
-type UpcomingEntry = { value: HomeUpcomingMerged; expiresAt: number };
-type FeaturedEntry = { value: VisibleFeatured[]; expiresAt: number };
+type UpcomingEntry = { value: HomeUpcomingMerged; expiresAt: number; gen: number };
+type FeaturedEntry = { value: PublishedFeatured[]; expiresAt: number; gen: number };
 
 // Cross-request sharing in staging is keyed by the web-DB URL (one Hyperdrive
 // binding, stable per environment). Test/dev fixtures inject ADMIN_DB instead:
@@ -26,6 +31,16 @@ const upcomingByUrl = new Map<string, UpcomingEntry>();
 const featuredByUrl = new Map<string, FeaturedEntry>();
 const upcomingByDb = new WeakMap<object, UpcomingEntry>();
 const featuredByDb = new WeakMap<object, FeaturedEntry>();
+
+// A committed featured or event mutation retires every entry at once: the
+// WeakMaps cannot be cleared key by key, and one fixture object is routinely
+// shared across cases (beforeAll + beforeEach), so entries carry the
+// generation they were stored under and older generations always miss.
+let generation = 0;
+// Edge keys ever stored (`<kind>/<fingerprint>`), so a retire can delete the
+// shared edge entries without the request env. Deterministic per environment,
+// so the set stays tiny.
+const edgeKeys = new Set<string>();
 
 type EnvWithAdminDb = Env & { ADMIN_DB?: Db };
 
@@ -37,10 +52,46 @@ function urlKey(env: Env): string {
   return databaseUrl(env) ?? "no-db";
 }
 
-/** Test/dev seam: clear the URL-keyed in-memory entries (Cache API entries are per-test absent; injected-Db WeakMap entries are keyed by fixture object and expire by TTL). */
-export function __resetHomeGuestCacheForTests(): void {
+function clearMemory(): void {
   upcomingByUrl.clear();
   featuredByUrl.clear();
+  generation++;
+}
+
+/**
+ * Retire every homepage guest entry. Called after a committed featured or
+ * event mutation (never on a refusal or a rollback), so the next homepage
+ * fetch re-reads the new rows. Cross-isolate readers converge when their
+ * in-memory TTL (at most HOME_GUEST_CACHE_TTL_MS) lapses; the edge delete
+ * below keeps the shared layer from re-seeding them with retired bytes.
+ */
+export function retireHomeGuestCache(): void {
+  clearMemory();
+  if (edgeKeys.size === 0) return;
+  const keys = [...edgeKeys];
+  try {
+    if (typeof caches === "undefined" || !caches.default) return;
+    const cache = caches.default;
+    for (const key of keys) {
+      try {
+        const deleted = cache.delete(new Request(`https://home-guest-cache.internal/${key}`));
+        if (deleted instanceof Promise) deleted.then(undefined, () => {});
+      } catch {
+        // Cache failures never fail the caller.
+      }
+    }
+  } catch {
+    // Cache failures never fail the caller.
+  }
+}
+
+/**
+ * Hermetic-test reset: drops the isolate-local entries (Cache API entries are
+ * per-test absent) without touching the shared edge layer, so edge round-trip
+ * tests can reset memory and still hit their stubbed edge entry.
+ */
+export function __resetHomeGuestCacheForTests(): void {
+  clearMemory();
 }
 
 // FNV-1a over the key so the Cache API request URL never carries credentials
@@ -106,7 +157,7 @@ async function readUpcomingCache(
 ): Promise<HomeUpcomingMerged | undefined> {
   const now = Date.now();
   const memory = injected ? upcomingByDb.get(injected) : upcomingByUrl.get(key);
-  if (memory && now < memory.expiresAt) return memory.value;
+  if (memory && memory.gen === generation && now < memory.expiresAt) return memory.value;
   const cache = await cacheApi(env);
   if (!cache) return undefined;
   try {
@@ -114,7 +165,7 @@ async function readUpcomingCache(
     if (!hit) return undefined;
     const revived = reviveUpcoming(await hit.json());
     if (!revived || revived.unavailable) return undefined;
-    const entry = { value: revived, expiresAt: now + HOME_GUEST_CACHE_TTL_MS };
+    const entry = { value: revived, expiresAt: now + HOME_GUEST_CACHE_TTL_MS, gen: generation };
     if (injected) upcomingByDb.set(injected, entry);
     else upcomingByUrl.set(key, entry);
     return revived;
@@ -131,7 +182,8 @@ function storeUpcomingCache(
   ctx?: WaitUntilCtx,
 ): void {
   if (value.unavailable) return;
-  const entry = { value, expiresAt: Date.now() + HOME_GUEST_CACHE_TTL_MS };
+  const entry = { value, expiresAt: Date.now() + HOME_GUEST_CACHE_TTL_MS, gen: generation };
+  edgeKeys.add(`upcoming/${fingerprint(key)}`);
   if (injected) upcomingByDb.set(injected, entry);
   else upcomingByUrl.set(key, entry);
   void cacheApi(env).then((cache) => {
@@ -154,23 +206,61 @@ function storeUpcomingCache(
   });
 }
 
+function reviveBound(input: unknown): Date | null | undefined {
+  if (input === null) return null;
+  if (input instanceof Date && Number.isFinite(input.getTime())) return input;
+  if (typeof input === "string") {
+    const parsed = new Date(input);
+    if (Number.isFinite(parsed.getTime())) return parsed;
+  }
+  return undefined;
+}
+
+function reviveFeatured(raw: unknown): PublishedFeatured[] | undefined {
+  if (!raw || typeof raw !== "object") return undefined;
+  const items = (raw as { items?: unknown }).items;
+  if (!Array.isArray(items)) return undefined;
+  const value: PublishedFeatured[] = [];
+  for (const item of items) {
+    if (!item || typeof item !== "object") return undefined;
+    const row = item as Record<string, unknown>;
+    if (typeof row.id !== "number" || typeof row.title !== "string") return undefined;
+    for (const field of ["body", "url", "imageUrl", "imageAlt"] as const) {
+      if (row[field] !== null && typeof row[field] !== "string") return undefined;
+    }
+    const startsAt = reviveBound(row.startsAt);
+    const endsAt = reviveBound(row.endsAt);
+    if (startsAt === undefined || endsAt === undefined) return undefined;
+    value.push({
+      id: row.id,
+      title: row.title,
+      body: row.body as string | null,
+      url: row.url as string | null,
+      imageUrl: row.imageUrl as string | null,
+      imageAlt: row.imageAlt as string | null,
+      startsAt,
+      endsAt,
+    });
+  }
+  return value;
+}
+
 async function readFeaturedCache(
   env: Env,
   key: string,
   injected: Db | undefined,
-): Promise<VisibleFeatured[] | undefined> {
+): Promise<PublishedFeatured[] | undefined> {
   const now = Date.now();
   const memory = injected ? featuredByDb.get(injected) : featuredByUrl.get(key);
-  if (memory && now < memory.expiresAt) return memory.value;
+  if (memory && memory.gen === generation && now < memory.expiresAt) return memory.value;
   const cache = await cacheApi(env);
   if (!cache) return undefined;
   try {
     const hit = await cache.match(cacheRequest("featured", key));
     if (!hit) return undefined;
-    const raw = (await hit.json()) as { items?: unknown };
-    if (!raw || !Array.isArray(raw.items)) return undefined;
-    const value = raw.items as VisibleFeatured[];
-    const entry = { value, expiresAt: now + HOME_GUEST_CACHE_TTL_MS };
+    const value = reviveFeatured(await hit.json());
+    if (!value) return undefined;
+    const entry = { value, expiresAt: now + HOME_GUEST_CACHE_TTL_MS, gen: generation };
     if (injected) featuredByDb.set(injected, entry);
     else featuredByUrl.set(key, entry);
     return value;
@@ -183,10 +273,11 @@ function storeFeaturedCache(
   env: Env,
   key: string,
   injected: Db | undefined,
-  value: VisibleFeatured[],
+  value: PublishedFeatured[],
   ctx?: WaitUntilCtx,
 ): void {
-  const entry = { value, expiresAt: Date.now() + HOME_GUEST_CACHE_TTL_MS };
+  const entry = { value, expiresAt: Date.now() + HOME_GUEST_CACHE_TTL_MS, gen: generation };
+  edgeKeys.add(`featured/${fingerprint(key)}`);
   if (injected) featuredByDb.set(injected, entry);
   else featuredByUrl.set(key, entry);
   void cacheApi(env).then((cache) => {
@@ -243,25 +334,34 @@ export async function cachedHomeUpcoming(
   return value;
 }
 
-/** Guest-invariant featured list with the same short-TTL edge layer. Never throws. */
+/**
+ * Guest-invariant featured list with the same short-TTL edge layer. The
+ * cached base is the published list; the window is evaluated per request, so
+ * consecutive reads at different instants each see their own visibility.
+ * Never throws.
+ */
 export async function cachedFeatured(
   env: Env,
   openDb: () => Promise<Db | null>,
   now = new Date(),
   ctx?: WaitUntilCtx,
 ): Promise<VisibleFeatured[]> {
+  const visibleAt = (rows: PublishedFeatured[]): VisibleFeatured[] =>
+    rows.filter((row) =>
+      currentlyVisible({ isPublished: true, startsAt: row.startsAt, endsAt: row.endsAt }, now),
+    );
   const injected = injectedDb(env);
   const key = urlKey(env);
   try {
     const hit = await readFeaturedCache(env, key, injected);
-    if (hit) return hit;
+    if (hit) return visibleAt(hit);
   } catch {
     // Fall through to the direct read.
   }
-  let value: VisibleFeatured[];
+  let value: PublishedFeatured[];
   try {
     const db = await openDb();
-    value = db ? await listVisibleFeatured(db, now) : [];
+    value = db ? await listPublishedFeatured(db) : [];
   } catch {
     return [];
   }
@@ -270,5 +370,5 @@ export async function cachedFeatured(
   } catch {
     // Cache failures never fail the request.
   }
-  return value;
+  return visibleAt(value);
 }

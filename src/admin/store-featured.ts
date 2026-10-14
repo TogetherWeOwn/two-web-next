@@ -12,6 +12,7 @@ import { nonSensitiveRead } from "../member-reads";
 import { activityLog, featuredContents } from "../db/admin-schema";
 import type { FeaturedFormInput } from "./validation";
 import { audit, dirty, NotFoundError, type Actor } from "./store-shared";
+import { retireHomeGuestCache } from "../home-cache";
 
 export type FeaturedRow = typeof featuredContents.$inferSelect;
 export type FeaturedEditRow = FeaturedRow & {
@@ -47,7 +48,7 @@ export async function createFeatured(
   actor: Actor,
   input: FeaturedFormInput,
 ): Promise<FeaturedRow> {
-  return db.transaction(async (tx) => {
+  const row = await db.transaction(async (tx) => {
     const [row] = await tx
       .insert(featuredContents)
       .values({
@@ -73,6 +74,9 @@ export async function createFeatured(
     });
     return row;
   });
+  // Committed: the new slot is visible to guests on the next homepage fetch.
+  retireHomeGuestCache();
+  return row;
 }
 
 export async function updateFeatured(
@@ -81,7 +85,7 @@ export async function updateFeatured(
   id: number,
   input: FeaturedFormInput,
 ): Promise<FeaturedRow> {
-  return db.transaction(async (tx) => {
+  const row = await db.transaction(async (tx) => {
     const [locked] = await tx
       .select(featuredEditSelection)
       .from(featuredContents)
@@ -118,6 +122,9 @@ export async function updateFeatured(
     }
     return row;
   });
+  // Committed: the edit is visible to guests on the next homepage fetch.
+  retireHomeGuestCache();
+  return row;
 }
 
 /** Deleting featured content is safe — nothing downstream refers to it — one row at a time, audited. */
@@ -139,6 +146,8 @@ export async function deleteFeatured(db: Db, actor: Actor, id: number): Promise<
       properties: { title: { before: locked.title, after: null } },
     });
   });
+  // Committed: the homepage drops the slot on the next fetch.
+  retireHomeGuestCache();
 }
 
 export async function listFeatured(
