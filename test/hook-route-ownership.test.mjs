@@ -64,10 +64,11 @@ beforeEach(() => {
 });
 
 describe("hooks.server route ownership wiring", () => {
-  it("ships the homepage disabled and the native archive route enabled with about, privacy, rules, join, recover and the featured list and activity log still on Hono", () => {
+  it("ships the native archive enabled with the homepage, events list, about, privacy, rules, join, recover, admin and profile reads still on Hono", () => {
     expect(ROUTE_MANIFEST).toEqual([
       { method: "GET", path: "/", enabled: false, reads: "public" },
       { method: "GET", path: "/events/past", enabled: true, reads: "public" },
+      { method: "GET", path: "/events", enabled: false, reads: "public" },
       { method: "GET", path: "/about", enabled: false, reads: "public" },
       { method: "GET", path: "/privacy", enabled: false, reads: "public" },
       { method: "GET", path: "/rules", enabled: false, reads: "public" },
@@ -462,6 +463,13 @@ describe("hooks.server route ownership wiring", () => {
     expect(source).toContain(
       "pastArchive: (request, render) => dispatchPastArchiveRequest(request, env, render)",
     );
+    // The list binding carries the same shape plus its read-only session and
+    // flash peeks: deleting any of these lines must fail, and the hook still
+    // carries no session logic of its own (readers live in kit-session.ts).
+    expect(source).toContain("dispatchEventsRequest");
+    expect(source).toContain("eventsPage: (request, render) =>");
+    expect(source).toContain("kitEventsSessionFor(env)");
+    expect(source).toContain("kitEventsJourneyFor(env)");
     expect(source).toContain("honoFetch,");
     expect(source).toContain("featuredImageHosts: env.FEATURED_IMAGE_HOSTS");
     expect(source).toContain("appUrl: env.APP_URL");
