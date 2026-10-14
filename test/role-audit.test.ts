@@ -11,7 +11,7 @@ import {
   roleAuditJson,
 } from "../src/probes/role-audit";
 
-const A = "508654771276873729";
+const A = "1546777856984481792";
 const B = "100000000000000001";
 const C = "100000000000000002";
 
@@ -56,7 +56,7 @@ describe("moderator role audit (fixture mappings)", () => {
   });
 
   it("malformed IDs are an input error, not silent drift", () => {
-    expect(() => compareModeratorSets(["SySOp"], [A])).toThrow(InvalidRoleAuditInputError);
+    expect(() => compareModeratorSets(["Moderator"], [A])).toThrow(InvalidRoleAuditInputError);
     expect(() => compareModeratorSets([A], ["abc"])).toThrow(InvalidRoleAuditInputError);
     expect(() => compareModeratorSets("not-an-array", [])).toThrow(InvalidRoleAuditInputError);
   });
@@ -142,7 +142,7 @@ describe("role-audit CLI", () => {
     expect(run(["--discord-ids=" + A, "--discord-file=" + good, "--app-file=" + good]).code).toBe(
       2,
     );
-    expect(run(["--discord-ids=SySOp", "--app-ids=" + A]).code).toBe(2);
+    expect(run(["--discord-ids=Moderator", "--app-ids=" + A]).code).toBe(2);
   });
 
   it("never prints tokens or secrets from the environment", () => {

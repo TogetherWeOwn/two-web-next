@@ -55,8 +55,10 @@
     "FEATURED_IMAGE_HOSTS": "",
     "DISCORD_CLIENT_ID": "1539711683898118154",
     "DISCORD_GUILD_ID": "1545644954272137297",
-    // Approved SySOp only. Preflight checks this exact public deployment value.
-    "DISCORD_MODERATOR_ROLE_IDS": "508654771276873729",
+    // Approved staging Owner+Moderator pair only (guild-bound: these IDs exist
+    // solely in the staging guild above, never copy the production pair here).
+    // Preflight checks this exact public deployment value plus the binding.
+    "DISCORD_MODERATOR_ROLE_IDS": "1546211363578191873,1545648550329851946",
     // WEB-HOMEPAGE campaign invite (never expires, unlimited); the fallback when auto-join fails.
     "DISCORD_INVITE_URL": "https://discord.gg/4GwEDNRTtx"
   },
@@ -105,16 +107,17 @@
       // Vars/bindings do not inherit across environments. No QA_AUTH_TOKEN in prod.
       // env.production.vars must repeat every var the worker reads: Wrangler
       // never inherits top-level vars into a named environment. The moderator
-      // list is the same approved SySOp role as staging (TOG-106); without it
-      // production boots with no moderators and admin authorization fails
-      // closed for everyone.
+      // list is the approved Owner+Moderator pair for the production guild
+      // above, unrelated to staging's pair (role IDs are guild-scoped);
+      // without it production boots with no moderators and admin
+      // authorization fails closed for everyone.
       "vars": {
         "APP_URL": "https://togetherweown.com",
         "FEATURED_IMAGE_HOSTS": "",
         "DISCORD_CLIENT_ID": "1539711683898118154",
         "DISCORD_GUILD_ID": "326474832151838730",
-        // Approved SySOp only. Production preflight checks this exact value.
-        "DISCORD_MODERATOR_ROLE_IDS": "508654771276873729",
+        // Approved Owner+Moderator pair only. Production preflight checks this exact value.
+        "DISCORD_MODERATOR_ROLE_IDS": "1546777855801954408,1546777856984481792",
         "DISCORD_INVITE_URL": "https://discord.gg/4GwEDNRTtx"
       }
     }
