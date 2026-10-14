@@ -289,6 +289,12 @@ describe("decideRoute", () => {
         enabled: false,
         reads: { resource: "profile", action: "view", route: "profiles.show" },
       },
+      {
+        method: "GET",
+        path: "/e/:key",
+        enabled: false,
+        reads: { resource: "member", action: "list", route: "events.page" },
+      },
     ]);
     const archive = ROUTE_MANIFEST.find((entry) => entry.path === "/events/past");
     expect(decideRoute(get, ROUTE_MANIFEST)).toBe(archive);
@@ -304,6 +310,8 @@ describe("decideRoute", () => {
       decideRoute(new Request(new URL("/admin/join-attempts", APP_URL)), ROUTE_MANIFEST),
     ).toBeUndefined();
     expect(decideRoute(new Request(new URL("/profile", APP_URL)), ROUTE_MANIFEST)).toBeUndefined();
+    // Live event detail stays Hono-served until the RSVP companion passes.
+    expect(decideRoute(new Request(new URL("/e/abc123", APP_URL)), ROUTE_MANIFEST)).toBeUndefined();
     expect(
       decideRoute(new Request(new URL("/auth/recover", APP_URL)), ROUTE_MANIFEST),
     ).toBeUndefined();

@@ -103,6 +103,12 @@ describe("hooks.server route ownership wiring", () => {
         enabled: false,
         reads: { resource: "profile", action: "view", route: "profiles.show" },
       },
+      {
+        method: "GET",
+        path: "/e/:key",
+        enabled: false,
+        reads: { resource: "member", action: "list", route: "events.page" },
+      },
     ]);
   });
 
