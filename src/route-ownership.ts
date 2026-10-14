@@ -41,8 +41,9 @@ export interface RouteDecision {
   path: string;
 }
 
-// The archive page renders natively; the about leaf, privacy leaf, house-rules leaf, join,
-// recovery and profile reads stay on Hono until their enablement is reviewed. Production (the Hono Worker) sees no traffic change for a
+// The archive page and hot-zone heatmaps render natively. The member board
+// and disabled leaf, admin and profile routes stay on Hono until their
+// enablement is reviewed. Production (the Hono Worker) sees no traffic change for a
 // disabled path; the preview Worker moves a Kit-owned path back to Hono by
 // design — that is the rollback. Add one entry per migrated route, enabled
 // only when its Kit handler is ready to own the exact method/path. Only GET
@@ -139,6 +140,26 @@ export const ROUTE_MANIFEST: OwnedRoute[] = [
     path: "/members/:user",
     enabled: false,
     reads: { resource: "profile", action: "view", route: "profiles.show" },
+  },
+  // Hot-zone heatmaps: public aggregates with the same reads and cache policy
+  // as the Hono handlers (src/hotzones/routes.tsx). Concrete signal paths
+  // only, never a :param pattern: unknown segments must fall through to the
+  // Hono 404, and each path needs its own executed parity run.
+  { method: "GET", path: "/hotzones", enabled: true, reads: "public" },
+  { method: "GET", path: "/hotzones/joins", enabled: true, reads: "public" },
+  { method: "GET", path: "/hotzones/voice", enabled: true, reads: "public" },
+  { method: "GET", path: "/hotzones/games", enabled: true, reads: "public" },
+  // Member leaderboard: member data, so the Kit branch renders inside the
+  // member-read boundary with this declaration and the bridged viewer. Same
+  // gate order, grammar and reads as src/leaderboards/routes.tsx. Held on
+  // Hono until the executed member-board parity journey lands: the parity
+  // gate has no authenticated member-board run, so enabling here would ship
+  // on a green ledger with no proof.
+  {
+    method: "GET",
+    path: "/leaderboards/members",
+    enabled: false,
+    reads: { resource: "leaderboard", action: "list", route: "leaderboards.members" },
   },
 ];
 
