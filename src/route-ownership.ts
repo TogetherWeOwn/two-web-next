@@ -192,6 +192,18 @@ export const ROUTE_MANIFEST: OwnedRoute[] = [
     enabled: false,
     reads: { resource: "leaderboard", action: "list", route: "leaderboards.members" },
   },
+  // Live event detail: the Kit read model (src/events/kit-detail.ts) mirrors
+  // the served GET /e/:key handler — role checks, member-only attendee
+  // disclosure, related/neighbor content and safe Event JSON-LD — audited by
+  // the member-read boundary with this declaration and the bridged viewer.
+  // Off until the RSVP companion passes: Hono answers meanwhile, and JSON/ICS
+  // stay Hono-owned with no entries of their own.
+  {
+    method: "GET",
+    path: "/e/:key",
+    enabled: false,
+    reads: { resource: "member", action: "list", route: "events.page" },
+  },
 ];
 
 // Response header set only on the Kit-rendered branch of the hook, so the
@@ -362,6 +374,13 @@ export interface HookDispatchDeps {
   // archive; the list entry ships disabled, so production never reaches this
   // branch until the companion card enables it.
   eventsPage?: (request: Request, render: () => Promise<Response>) => Promise<Response>;
+  // Native event-detail throttle around the Kit member-read render. Same
+  // binding shape as the archive/list wrappers: the hook binds env into this
+  // (request, render) => dispatchEventDetailRequest(request, env, render); the
+  // core decides WHEN it runs, so the route-id branch is pinned here instead
+  // of in web/src/hooks.server.ts. Absent by default: without it the dispatch
+  // behaves exactly as before.
+  eventDetail?: (request: Request, render: () => Promise<Response>) => Promise<Response>;
 }
 
 // Production Kit decoration, owned by the core so the tested path is the
@@ -504,7 +523,11 @@ export async function dispatchHookRequest(
   // resolve. A bridge failure must not 500 the render — public Kit pages fail
   // closed to guest-equivalent locals, exactly as if no bridge were wired.
   // It runs outside the member-read boundary: its session read is not member data.
-  if (deps.sessionFor && route.reads !== "public") {
+  // Deferred as a closure because the live detail wrapper runs before it (see
+  // below): the bridge still precedes every render, but a throttled detail
+  // client never reaches it.
+  const bridgeSession = async (): Promise<void> => {
+    if (!deps.sessionFor) return;
     try {
       const bridged = await deps.sessionFor(event);
       const prior = (event.locals as Record<string, unknown> | undefined) ?? {};
@@ -514,16 +537,34 @@ export async function dispatchHookRequest(
         exception: (err as Error)?.constructor?.name ?? "unknown",
       });
     }
-  }
+  };
   // Native archive and list reads share the Hono guard and anonymous cache.
   // The route id owns the branch (SvelteKit sets it before handle runs); the
   // manifest owns the Kit half above, so an unowned path never reaches either
   // wrapper.
   const isPastArchivePage = event.route?.id === "/events/past";
   const isEventsListPage = event.route?.id === "/events";
+  // The live detail is a member read, so it renders inside the boundary; the
+  // shared public-read budget runs before the session bridge through the
+  // detail wrapper, exactly as the served handler throttles before any read.
+  // A limited client gets its 429 without costing a Postgres session read;
+  // the bridge and the member-read render run inside the wrapper for the
+  // clients the budget allows through.
+  const isEventDetailPage = event.route?.id === "/e/[key]";
   let response: Response;
   if (route.reads !== "public") {
-    response = await renderMemberRead(event, route.reads, deps);
+    // Narrowed once for the deferred render: the closure below would lose the
+    // branch narrowing on route.reads.
+    const reads = route.reads;
+    if (isEventDetailPage && deps.eventDetail) {
+      response = await deps.eventDetail(event.request, async () => {
+        await bridgeSession();
+        return renderMemberRead(event, reads, deps);
+      });
+    } else {
+      await bridgeSession();
+      response = await renderMemberRead(event, reads, deps);
+    }
   } else if (isPastArchivePage && deps.pastArchive) {
     response = await deps.pastArchive(event.request, () => deps.resolve(event));
   } else if (isEventsListPage && deps.eventsPage) {
