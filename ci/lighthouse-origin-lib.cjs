@@ -95,18 +95,46 @@ function configFromEnv(env = process.env) {
   });
 }
 
-function eventPathsFromRss(xml) {
-  const found = [];
-  for (const [, link] of xml.matchAll(/<link>([^<]+)<\/link>/g)) {
+// Staging-journey fixtures publish transient events titled `Staging E2E ...`
+// (e2e/staging/event-rsvp.spec.ts) and cancel them in `finally`. The feed
+// lists only published rows under a 300-second public cache, so a fixture can
+// be listed while live and be cancelled before Lighthouse navigates (TOG-23862:
+// discovered 01:05:56Z, measured 410 at 01:07:19Z). Feed items carry titles,
+// so discovery filters that prefix with no extra request and no cache change.
+// Thresholds, budgets and the fail-closed unmeasured-route verdict are untouched.
+const STAGING_FIXTURE_TITLE_PREFIX = "Staging E2E ";
+
+function decodeXmlEntities(value) {
+  return value
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&#0?39;/g, "'")
+    .replace(/&apos;/g, "'")
+    .replace(/&amp;/g, "&");
+}
+
+function isStagingFixtureTitle(title) {
+  return typeof title === "string" && title.startsWith(STAGING_FIXTURE_TITLE_PREFIX);
+}
+
+function eventItemsFromRss(xml) {
+  const items = [];
+  for (const [, item] of xml.matchAll(/<item>([\s\S]*?)<\/item>/g)) {
+    const link = item.match(/<link>([^<]+)<\/link>/);
+    if (!link) continue;
+    let path;
     try {
       // Only the path is used: the host is always the validated origin.
-      const path = new URL(link.trim()).pathname;
-      if (EVENT_PATH.test(path)) found.push(path);
+      path = new URL(link[1].trim()).pathname;
     } catch {
-      // Not a URL (the channel link is, but guard anyway).
+      continue; // Not a URL (the channel link is, but guard anyway).
     }
+    if (!EVENT_PATH.test(path)) continue;
+    const title = item.match(/<title>([\s\S]*?)<\/title>/);
+    items.push({ path, title: title ? decodeXmlEntities(title[1]) : "" });
   }
-  return found;
+  return items;
 }
 
 function eventPathsFromListing(html) {
@@ -129,21 +157,76 @@ async function getText(origin, path, fetchImpl) {
   return response.text();
 }
 
+function isStagingFixturePage(html) {
+  return /<h1[^>]*>\s*Staging E2E /.test(html);
+}
+
+async function getCandidate(origin, path, fetchImpl) {
+  // GET only, no credentials; a redirect is a finding, not followed.
+  return fetchImpl(`${origin}${path}`, {
+    method: "GET",
+    redirect: "manual",
+    headers: { "user-agent": "two-web-next-watch-lighthouse" },
+    signal: AbortSignal.timeout(DISCOVERY_TIMEOUT_MS),
+  });
+}
+
 /**
- * Finds one published event on the origin: /events.rss first, then the /events
- * list. Returns `{ path, source }`, or `{ path: null, reason }` when the origin
- * answers 200 but lists no event. A failing request throws: an origin that does
- * not answer is a watch finding, never a skip.
+ * First listed candidate whose page answers 200 with non-fixture content. A
+ * 404/410 means the listing outlived the event (cancelled after the cached
+ * feed was built): try the next listing. Any other status throws: an origin
+ * that does not answer stays a watch finding, never a skip.
+ */
+async function pickStableCandidate(origin, paths, fetchImpl, tally) {
+  for (const path of paths) {
+    const response = await getCandidate(origin, path, fetchImpl);
+    if (response.status === 404 || response.status === 410) {
+      tally.gone += 1;
+      continue;
+    }
+    if (response.status !== 200) {
+      throw new Error(`GET ${origin}${path} returned ${response.status}, expected 200.`);
+    }
+    if (isStagingFixturePage(await response.text())) {
+      tally.fixtures += 1;
+      continue;
+    }
+    return path;
+  }
+  return null;
+}
+
+/**
+ * Finds one stable published event on the origin: /events.rss first, then the
+ * /events list. Staging-journey fixtures (TOG-23862) are filtered by feed
+ * title before any request; each remaining candidate is verified live so a
+ * feed entry cached before a cancel is never measured. Returns `{ path,
+ * source }`, or `{ path: null, reason }` when the origin answers 200 but
+ * lists no stable event. A failing request throws: an origin that does not
+ * answer is a watch finding, never a skip.
  */
 async function discoverEventPath(origin, fetchImpl = fetch) {
   const root = requireAllowedOrigin(origin);
-  const rss = eventPathsFromRss(await getText(root, "/events.rss", fetchImpl));
-  if (rss[0]) return { path: rss[0], source: "/events.rss" };
+  const tally = { fixtures: 0, gone: 0 };
+  const items = eventItemsFromRss(await getText(root, "/events.rss", fetchImpl));
+  const rssPaths = [];
+  for (const item of items) {
+    if (isStagingFixtureTitle(item.title)) tally.fixtures += 1;
+    else rssPaths.push(item.path);
+  }
+  const rssPick = await pickStableCandidate(root, rssPaths, fetchImpl, tally);
+  if (rssPick) return { path: rssPick, source: "/events.rss" };
   const listed = eventPathsFromListing(await getText(root, "/events", fetchImpl));
-  if (listed[0]) return { path: listed[0], source: "/events" };
+  const listedPick = await pickStableCandidate(root, listed, fetchImpl, tally);
+  if (listedPick) return { path: listedPick, source: "/events" };
+  const skipped = [];
+  if (tally.fixtures > 0) skipped.push(`${tally.fixtures} staging fixture(s)`);
+  if (tally.gone > 0) skipped.push(`${tally.gone} cancelled/stale listing(s)`);
   return {
     path: null,
-    reason: "no published event is listed in /events.rss or /events",
+    reason:
+      "no published event is listed in /events.rss or /events" +
+      (skipped.length ? ` (skipped ${skipped.join(", ")})` : ""),
   };
 }
 
@@ -266,10 +349,13 @@ module.exports = {
   ALLOWED_ORIGINS,
   EVENT_PATH,
   SERVER_KEYS,
+  STAGING_FIXTURE_TITLE_PREFIX,
   buildConfig,
   configFromEnv,
   configuredPaths,
   discoverEventPath,
+  eventItemsFromRss,
+  isStagingFixtureTitle,
   plannedPaths,
   renderSummary,
   requireAllowedOrigin,
