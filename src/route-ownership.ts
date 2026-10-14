@@ -96,6 +96,21 @@ export const ROUTE_MANIFEST: OwnedRoute[] = [
     enabled: false,
     reads: { resource: "featured_contents", action: "view", route: "admin.featured.create" },
   },
+  // Moderator featured edit form: member data, so the Kit branch renders
+  // inside the member-read boundary with this declaration and the bridged
+  // viewer. Same declaration as the Hono handler (admin.featured.edit,
+  // src/admin/routes.tsx). Only this GET migrates: POST /admin/featured/:id
+  // and POST /admin/featured/:id/delete stay Hono-owned, so the edit form,
+  // the 422 re-render with preserved values, the 303s and the delete action
+  // keep one authority until a later write slice lands, and the guarded
+  // /admin/featured-contents/:id/edit legacy redirect stays Hono-owned. Off
+  // until the enablement review.
+  {
+    method: "GET",
+    path: "/admin/featured/:id",
+    enabled: false,
+    reads: { resource: "featured_contents", action: "view", route: "admin.featured.edit" },
+  },
   // Read-only activity-log viewer: the same bounded subject/causer filters and
   // newest-first paging as the Hono panel, audited by the member-read boundary
   // with this declaration and the bridged viewer. Off until the enablement
