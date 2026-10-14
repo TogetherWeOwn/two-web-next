@@ -64,10 +64,11 @@ beforeEach(() => {
 });
 
 describe("hooks.server route ownership wiring", () => {
-  it("ships the homepage disabled and the native archive route enabled with privacy, rules, join and recover still on Hono", () => {
+  it("ships the homepage disabled and the native archive route enabled with about, privacy, rules, join, recover and the featured list and activity log still on Hono", () => {
     expect(ROUTE_MANIFEST).toEqual([
       { method: "GET", path: "/", enabled: false, reads: "public" },
       { method: "GET", path: "/events/past", enabled: true, reads: "public" },
+      { method: "GET", path: "/about", enabled: false, reads: "public" },
       { method: "GET", path: "/privacy", enabled: false, reads: "public" },
       { method: "GET", path: "/rules", enabled: false, reads: "public" },
       { method: "GET", path: "/join", enabled: false, reads: "public" },
@@ -76,6 +77,30 @@ describe("hooks.server route ownership wiring", () => {
         path: "/admin",
         enabled: false,
         reads: { resource: "dashboard", action: "view", route: "admin.dashboard" },
+      },
+      {
+        method: "GET",
+        path: "/admin/featured",
+        enabled: false,
+        reads: { resource: "featured_contents", action: "list", route: "admin.featured.index" },
+      },
+      {
+        method: "GET",
+        path: "/admin/activity-log",
+        enabled: false,
+        reads: { resource: "activity_log", action: "list", route: "admin.activity-log.index" },
+      },
+      {
+        method: "GET",
+        path: "/admin/events",
+        enabled: false,
+        reads: { resource: "events", action: "list", route: "admin.events.index" },
+      },
+      {
+        method: "GET",
+        path: "/admin/join-attempts",
+        enabled: false,
+        reads: { resource: "join_attempts", action: "list", route: "admin.join-attempts.index" },
       },
       { method: "GET", path: "/auth/recover", enabled: false, reads: "public" },
       {

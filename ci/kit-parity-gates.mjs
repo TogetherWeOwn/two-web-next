@@ -1106,6 +1106,69 @@ export function runUnitMode({ stdout = process.stdout, manifestSource: manifestO
     );
   }
 
+  // Hot-zone fixtures: the four Kit-owned heatmaps get the same executed
+  // unit contract as /join and /auth/recover, so an enabled hot-zone route
+  // is covered by a run that actually exercises its contract branch — a
+  // missing grid table, heading, noindex or a per-attempt field leak must
+  // fail here, not only in a preview fetch CI never makes.
+  // Partial synthetic manifests in the gate's own tests exercise other
+  // scopes and carry no hot-zone entry; the shipped manifest lists all
+  // four, and there the journeys below always run.
+  const hotzonesListed = parseManifestEntries(manifestSource).some(
+    (entry) => entry.path === "/hotzones",
+  );
+  const hotzoneMarker = hotzonesListed ? expectedMarkerFor(manifestSource, "/hotzones") : null;
+  const hotzoneShell =
+    `<html><head><link rel="canonical" href="https://next.togetherweown.com/hotzones">` +
+    `<meta name="robots" content="noindex, follow"></head>` +
+    `<body><a class="skip-link" href="#main">Skip</a>` +
+    `<nav aria-label="Primary"><a href="/">Home</a></nav>` +
+    `<main id="main"><h1>Hot zones</h1>` +
+    `<table><caption>Join activity</caption></table></main>` +
+    `<p><span class="account-caption">Welcome, guest</span></p></body></html>`;
+  if (hotzonesListed) {
+    const hotzoneFailures = assertRouteContract({
+      label: "unit/hotzones",
+      html: hotzoneShell,
+      headers: headerMap({
+        "content-type": "text/html",
+        "x-two-renderer": hotzoneMarker,
+        "cache-control": "public, max-age=300",
+      }),
+      status: 200,
+      expected: { status: 200, marker: hotzoneMarker, contract: "hotzones" },
+    });
+    push(
+      "unit: hotzones good fixture passes",
+      hotzoneFailures.length === 0 ? "passed" : "failed",
+      hotzoneFailures.join("; ") || null,
+    );
+    const hotzoneMutants = [
+      ["no-table", (html) => html.replace("<table>", "<div>").replace("</table>", "</div>")],
+      ["no-heading", (html) => html.replace("Hot zones", "Activity")],
+      ["indexable", (html) => html.replace('<meta name="robots" content="noindex, follow">', "")],
+      ["per-attempt-leak", (html) => `${html}<p>discord_id: 123</p>`],
+    ];
+    for (const [name, mutate] of hotzoneMutants) {
+      const failures = assertRouteContract({
+        label: `unit/hotzones-mutant-${name}`,
+        html: mutate(hotzoneShell),
+        headers: headerMap({
+          "content-type": "text/html",
+          "x-two-renderer": hotzoneMarker,
+          "cache-control": "public, max-age=300",
+        }),
+        status: 200,
+        expected: { status: 200, marker: hotzoneMarker, contract: "hotzones" },
+      });
+      push(
+        `unit: hotzones mutant ${name} fails`,
+        failures.length > 0 ? "passed" : "failed",
+        failures.length > 0 ? null : "mutant was NOT detected",
+      );
+    }
+  }
+
   // Wrong-marker mutant: Hono-owned route carrying the Kit marker must fail.
   const markerFailures = assertRouteContract({
     label: "unit/mutant-marker",

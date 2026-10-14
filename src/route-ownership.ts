@@ -41,9 +41,9 @@ export interface RouteDecision {
   path: string;
 }
 
-// The archive page, the hot-zone heatmaps and the member leaderboard render
-// natively; the privacy leaf, house-rules leaf, join, recovery and profile
-// reads stay on Hono until their enablement is reviewed. Production (the Hono Worker) sees no traffic change for a
+// The archive page and hot-zone heatmaps render natively. The member board
+// and disabled leaf, admin and profile routes stay on Hono until their
+// enablement is reviewed. Production (the Hono Worker) sees no traffic change for a
 // disabled path; the preview Worker moves a Kit-owned path back to Hono by
 // design — that is the rollback. Add one entry per migrated route, enabled
 // only when its Kit handler is ready to own the exact method/path. Only GET
@@ -56,6 +56,7 @@ export interface RouteDecision {
 export const ROUTE_MANIFEST: OwnedRoute[] = [
   { method: "GET", path: "/", enabled: false, reads: "public" },
   { method: "GET", path: "/events/past", enabled: true, reads: "public" },
+  { method: "GET", path: "/about", enabled: false, reads: "public" },
   { method: "GET", path: "/privacy", enabled: false, reads: "public" },
   { method: "GET", path: "/rules", enabled: false, reads: "public" },
   { method: "GET", path: "/join", enabled: false, reads: "public" },
@@ -67,6 +68,48 @@ export const ROUTE_MANIFEST: OwnedRoute[] = [
     path: "/admin",
     enabled: false,
     reads: { resource: "dashboard", action: "view", route: "admin.dashboard" },
+  },
+  // Moderator featured list: member data, so the Kit branch renders
+  // inside the member-read boundary with this declaration and the bridged
+  // viewer. Off until the enablement review: the Hono panel answers meanwhile.
+  // The new/edit POST siblings and the guarded /admin/featured-contents
+  // legacy redirects stay Hono-owned; the manifest carries GET entries only.
+  {
+    method: "GET",
+    path: "/admin/featured",
+    enabled: false,
+    reads: { resource: "featured_contents", action: "list", route: "admin.featured.index" },
+  },
+  // Read-only activity-log viewer: the same bounded subject/causer filters and
+  // newest-first paging as the Hono panel, audited by the member-read boundary
+  // with this declaration and the bridged viewer. Off until the enablement
+  // review: the Hono viewer answers meanwhile.
+  {
+    method: "GET",
+    path: "/admin/activity-log",
+    enabled: false,
+    reads: { resource: "activity_log", action: "list", route: "admin.activity-log.index" },
+  },
+  // Moderator events list: same declaration as the Hono handler
+  // (admin.events.index, src/admin/routes.tsx). Only this GET migrates:
+  // POST /admin/events, /new and /:key stay Hono-owned, so the create form,
+  // edit form and every publish/cancel/RSVP action keep one authority until
+  // their own slices land. Off until the enablement review.
+  {
+    method: "GET",
+    path: "/admin/events",
+    enabled: false,
+    reads: { resource: "events", action: "list", route: "admin.events.index" },
+  },
+  // Join-attempts audit list: member data, so the Kit branch renders
+  // inside the member-read boundary with this declaration and the bridged
+  // viewer. Off until the enablement review: the Hono viewer answers meanwhile.
+  // The detail page stays Hono-owned until its own slice lands.
+  {
+    method: "GET",
+    path: "/admin/join-attempts",
+    enabled: false,
+    reads: { resource: "join_attempts", action: "list", route: "admin.join-attempts.index" },
   },
   { method: "GET", path: "/auth/recover", enabled: false, reads: "public" },
   // Profile reads: one Svelte view/model behind both Hono handlers. Native

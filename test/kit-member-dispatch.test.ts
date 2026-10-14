@@ -249,11 +249,12 @@ describe("decideRoute", () => {
     expect(decideRoute(post, MEMBER_MANIFEST)).toBeUndefined();
   });
 
-  it("the shipped manifest keeps the homepage, privacy, rules, join and recover on Hono, assigns the public archive and hot-zones to Kit, and holds the admin dashboard, profile reads and member board on Hono", () => {
+  it("the shipped manifest keeps the homepage, about, privacy, rules, join and recover on Hono, assigns the public archive and hot-zones to Kit, and holds the admin dashboard, featured list, activity log, events list, join-attempts, profile reads and member board on Hono", () => {
     const get = new Request(new URL("/events/past", APP_URL));
     expect(ROUTE_MANIFEST).toEqual([
       { method: "GET", path: "/", enabled: false, reads: "public" },
       { method: "GET", path: "/events/past", enabled: true, reads: "public" },
+      { method: "GET", path: "/about", enabled: false, reads: "public" },
       { method: "GET", path: "/privacy", enabled: false, reads: "public" },
       { method: "GET", path: "/rules", enabled: false, reads: "public" },
       { method: "GET", path: "/join", enabled: false, reads: "public" },
@@ -262,6 +263,30 @@ describe("decideRoute", () => {
         path: "/admin",
         enabled: false,
         reads: { resource: "dashboard", action: "view", route: "admin.dashboard" },
+      },
+      {
+        method: "GET",
+        path: "/admin/featured",
+        enabled: false,
+        reads: { resource: "featured_contents", action: "list", route: "admin.featured.index" },
+      },
+      {
+        method: "GET",
+        path: "/admin/activity-log",
+        enabled: false,
+        reads: { resource: "activity_log", action: "list", route: "admin.activity-log.index" },
+      },
+      {
+        method: "GET",
+        path: "/admin/events",
+        enabled: false,
+        reads: { resource: "events", action: "list", route: "admin.events.index" },
+      },
+      {
+        method: "GET",
+        path: "/admin/join-attempts",
+        enabled: false,
+        reads: { resource: "join_attempts", action: "list", route: "admin.join-attempts.index" },
       },
       { method: "GET", path: "/auth/recover", enabled: false, reads: "public" },
       {
@@ -291,8 +316,18 @@ describe("decideRoute", () => {
     expect(decideRoute(get, ROUTE_MANIFEST)).toBe(archive);
     expect(decideRoute(get, [{ ...archive!, enabled: false }])).toBeUndefined();
     expect(decideRoute(new Request(new URL("/join", APP_URL)), ROUTE_MANIFEST)).toBeUndefined();
-    // The moderator dashboard and recovery page stay Hono-served until their enablement reviews.
+    // The moderator dashboard, featured list, activity log, events list,
+    // join-attempts list and recovery page stay Hono-served until their enablement reviews.
     expect(decideRoute(new Request(new URL("/admin", APP_URL)), ROUTE_MANIFEST)).toBeUndefined();
+    expect(
+      decideRoute(new Request(new URL("/admin/featured", APP_URL)), ROUTE_MANIFEST),
+    ).toBeUndefined();
+    expect(
+      decideRoute(new Request(new URL("/admin/activity-log", APP_URL)), ROUTE_MANIFEST),
+    ).toBeUndefined();
+    expect(
+      decideRoute(new Request(new URL("/admin/join-attempts", APP_URL)), ROUTE_MANIFEST),
+    ).toBeUndefined();
     expect(decideRoute(new Request(new URL("/profile", APP_URL)), ROUTE_MANIFEST)).toBeUndefined();
     expect(
       decideRoute(new Request(new URL("/auth/recover", APP_URL)), ROUTE_MANIFEST),
