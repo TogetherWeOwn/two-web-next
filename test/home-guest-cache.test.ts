@@ -355,7 +355,7 @@ describe("homepage guest cache retire", () => {
     // A committed mutation retires: the next read re-queries and sees the
     // emptied table instead of the retired row.
     rows = [];
-    retireHomeGuestCache();
+    await retireHomeGuestCache();
     await expect(cachedFeatured(env, async () => db, NOW, undefined)).resolves.toEqual([]);
   });
 
@@ -385,7 +385,7 @@ describe("homepage guest cache retire", () => {
       expect(first).toHaveLength(1);
       await new Promise((resolve) => setTimeout(resolve, 10));
       expect(bodies.size).toBeGreaterThan(0);
-      retireHomeGuestCache();
+      await retireHomeGuestCache();
       expect(bodies.size).toBe(0);
     } finally {
       delete (globalThis as Record<string, unknown>).caches;

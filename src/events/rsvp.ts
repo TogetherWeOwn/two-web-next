@@ -134,7 +134,7 @@ export async function writeRsvp(
   // (N6). Refusals (closed/limited/not_found) change nothing and keep entries.
   if (result.ok) {
     retireAnonEventCaches();
-    retireHomeGuestCache();
+    await retireHomeGuestCache();
   }
   return result;
 }
@@ -187,7 +187,7 @@ export async function withdrawRsvp(
   // A no-row or limited delete changes nothing and keeps entries.
   if (!result.limited && result.deleted) {
     retireAnonEventCaches();
-    retireHomeGuestCache();
+    await retireHomeGuestCache();
   }
   return result;
 }

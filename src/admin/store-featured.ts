@@ -75,7 +75,7 @@ export async function createFeatured(
     return row;
   });
   // Committed: the new slot is visible to guests on the next homepage fetch.
-  retireHomeGuestCache();
+  await retireHomeGuestCache();
   return row;
 }
 
@@ -123,7 +123,7 @@ export async function updateFeatured(
     return row;
   });
   // Committed: the edit is visible to guests on the next homepage fetch.
-  retireHomeGuestCache();
+  await retireHomeGuestCache();
   return row;
 }
 
@@ -147,7 +147,7 @@ export async function deleteFeatured(db: Db, actor: Actor, id: number): Promise<
     });
   });
   // Committed: the homepage drops the slot on the next fetch.
-  retireHomeGuestCache();
+  await retireHomeGuestCache();
 }
 
 export async function listFeatured(

@@ -276,7 +276,7 @@ async function processAgentEvent(
       (committed.status === 200 || committed.status === 201)
     ) {
       retireAnonEventCaches();
-      retireHomeGuestCache();
+      await retireHomeGuestCache();
     }
     return { status: committed.status, body: committed.body };
   } catch (err) {

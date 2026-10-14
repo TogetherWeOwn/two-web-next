@@ -61,25 +61,30 @@ function clearMemory(): void {
 /**
  * Retire every homepage guest entry. Called after a committed featured or
  * event mutation (never on a refusal or a rollback), so the next homepage
- * fetch re-reads the new rows. Cross-isolate readers converge when their
- * in-memory TTL (at most HOME_GUEST_CACHE_TTL_MS) lapses; the edge delete
- * below keeps the shared layer from re-seeding them with retired bytes.
+ * fetch re-reads the new rows. The edge deletes are awaited so an admin
+ * write's redirect only goes out once the shared layer no longer holds
+ * retired bytes; otherwise the guest fetch right after the write races the
+ * delete and re-seeds memory with the stale edge hit. Cross-isolate readers
+ * converge when their in-memory TTL (at most HOME_GUEST_CACHE_TTL_MS)
+ * lapses. Callers must await this: a fire-and-forget retire reopens the
+ * race the browser suite caught (created slot invisible to the guest).
  */
-export function retireHomeGuestCache(): void {
+export async function retireHomeGuestCache(): Promise<void> {
   clearMemory();
   if (edgeKeys.size === 0) return;
   const keys = [...edgeKeys];
   try {
     if (typeof caches === "undefined" || !caches.default) return;
     const cache = caches.default;
-    for (const key of keys) {
-      try {
-        const deleted = cache.delete(new Request(`https://home-guest-cache.internal/${key}`));
-        if (deleted instanceof Promise) deleted.then(undefined, () => {});
-      } catch {
-        // Cache failures never fail the caller.
-      }
-    }
+    await Promise.all(
+      keys.map(async (key) => {
+        try {
+          await cache.delete(new Request(`https://home-guest-cache.internal/${key}`));
+        } catch {
+          // Cache failures never fail the caller.
+        }
+      }),
+    );
   } catch {
     // Cache failures never fail the caller.
   }
@@ -180,14 +185,21 @@ function storeUpcomingCache(
   injected: Db | undefined,
   value: HomeUpcomingMerged,
   ctx?: WaitUntilCtx,
+  genAtStart?: number,
 ): void {
   if (value.unavailable) return;
-  const entry = { value, expiresAt: Date.now() + HOME_GUEST_CACHE_TTL_MS, gen: generation };
+  // A retire that landed while the DB read was in flight makes this value
+  // stale already: dropping it keeps the retired rows retired instead of
+  // re-seeding memory and the edge with pre-write bytes.
+  if (genAtStart !== undefined && genAtStart !== generation) return;
+  const storedGen = generation;
+  const entry = { value, expiresAt: Date.now() + HOME_GUEST_CACHE_TTL_MS, gen: storedGen };
   edgeKeys.add(`upcoming/${fingerprint(key)}`);
   if (injected) upcomingByDb.set(injected, entry);
   else upcomingByUrl.set(key, entry);
   void cacheApi(env).then((cache) => {
     if (!cache) return;
+    if (storedGen !== generation) return;
     const request = cacheRequest("upcoming", key);
     const response = new Response(JSON.stringify(value), {
       headers: {
@@ -275,13 +287,19 @@ function storeFeaturedCache(
   injected: Db | undefined,
   value: PublishedFeatured[],
   ctx?: WaitUntilCtx,
+  genAtStart?: number,
 ): void {
-  const entry = { value, expiresAt: Date.now() + HOME_GUEST_CACHE_TTL_MS, gen: generation };
+  // Same in-flight retire guard as the upcoming store: a value read before
+  // the write committed must never overwrite the retire.
+  if (genAtStart !== undefined && genAtStart !== generation) return;
+  const storedGen = generation;
+  const entry = { value, expiresAt: Date.now() + HOME_GUEST_CACHE_TTL_MS, gen: storedGen };
   edgeKeys.add(`featured/${fingerprint(key)}`);
   if (injected) featuredByDb.set(injected, entry);
   else featuredByUrl.set(key, entry);
   void cacheApi(env).then((cache) => {
     if (!cache) return;
+    if (storedGen !== generation) return;
     const request = cacheRequest("featured", key);
     const response = new Response(JSON.stringify({ items: value }), {
       headers: {
@@ -320,6 +338,7 @@ export async function cachedHomeUpcoming(
   } catch {
     // Fall through to the direct read.
   }
+  const genAtStart = generation;
   let value: HomeUpcomingMerged;
   try {
     value = await loadHomeUpcomingMerged(openDb, getDiscordSource, now);
@@ -327,7 +346,7 @@ export async function cachedHomeUpcoming(
     return { items: [], unavailable: true, discordFailed: false };
   }
   try {
-    storeUpcomingCache(env, key, injected, value, ctx);
+    storeUpcomingCache(env, key, injected, value, ctx, genAtStart);
   } catch {
     // Cache failures never fail the request.
   }
@@ -358,6 +377,7 @@ export async function cachedFeatured(
   } catch {
     // Fall through to the direct read.
   }
+  const genAtStart = generation;
   let value: PublishedFeatured[];
   try {
     const db = await openDb();
@@ -366,7 +386,7 @@ export async function cachedFeatured(
     return [];
   }
   try {
-    storeFeaturedCache(env, key, injected, value, ctx);
+    storeFeaturedCache(env, key, injected, value, ctx, genAtStart);
   } catch {
     // Cache failures never fail the request.
   }

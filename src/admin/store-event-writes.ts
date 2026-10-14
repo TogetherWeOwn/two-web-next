@@ -88,7 +88,7 @@ export async function createEvent(
   // Committed: a new event can appear on the calendar once published, so the
   // anonymous entries retire here too (N6), never on a throw above.
   retireAnonEventCaches();
-  retireHomeGuestCache();
+  await retireHomeGuestCache();
   return { row, writeBack: null };
 }
 
@@ -263,7 +263,7 @@ export async function updateEvent(
     });
   // Committed: the edit is visible to guests on the next fetch (N6).
   retireAnonEventCaches();
-  retireHomeGuestCache();
+  await retireHomeGuestCache();
   return result;
 }
 
@@ -381,7 +381,7 @@ export async function transitionEvent(
   });
   // Committed: publish/cancel moves the row between guest views (N6).
   retireAnonEventCaches();
-  retireHomeGuestCache();
+  await retireHomeGuestCache();
   return result;
 }
 
@@ -434,6 +434,6 @@ export async function setRsvpOpen(
   });
   // Committed: pausing/reopening can settle the waitlist line (N6).
   retireAnonEventCaches();
-  retireHomeGuestCache();
+  await retireHomeGuestCache();
   return result;
 }
