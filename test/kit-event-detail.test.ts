@@ -234,6 +234,42 @@ describe("event-detail gate order", () => {
     expect(outcome.status).toBe(503);
   });
 
+  it("maps a thrown database binding to 503 before any event read", async () => {
+    const store = fakeStore({ dbError: new Error("pool down") });
+    const getEventFn = vi.fn(store.getEventFn);
+    const { outcome, seen } = await resolve(KEY, { ...store, getEventFn });
+    expect(outcome.kind).toBe("unavailable");
+    if (outcome.kind !== "unavailable") throw new Error("unreachable");
+    expect(outcome.status).toBe(503);
+    expect(outcome.headers).toEqual({ "cache-control": "private, no-store" });
+    expect(getEventFn).not.toHaveBeenCalled();
+    expect(seen).toHaveLength(1);
+  });
+
+  it("maps a valid key with no row to missing with cached suggestions", async () => {
+    const { outcome, seen } = await resolve(KEY, fakeStore({ event: null }));
+    expect(outcome.kind).toBe("missing");
+    if (outcome.kind !== "missing") throw new Error("unreachable");
+    expect(outcome.status).toBe(404);
+    expect(outcome.headers).toEqual({ "x-robots-tag": "noindex, nofollow" });
+    expect(outcome.model.suggestions).toHaveLength(1);
+    expect(seen).toHaveLength(1);
+  });
+
+  it("maps a suggestions outage to missing with no suggestions", async () => {
+    const store = fakeStore({ event: null });
+    const { outcome } = await resolve(KEY, {
+      ...store,
+      suggestionsFn: async () => {
+        throw new Error("suggestions down");
+      },
+    });
+    expect(outcome.kind).toBe("missing");
+    if (outcome.kind !== "missing") throw new Error("unreachable");
+    expect(outcome.status).toBe(404);
+    expect(outcome.model.suggestions).toEqual([]);
+  });
+
   it("refuses an indeterminate session as unavailable after the public lookup", async () => {
     // Mirrors the served handler: the event read and the cancelled branch run
     // before the session read, so an outage there is a 503, never a logout
@@ -336,6 +372,29 @@ describe("event-detail guest reads", () => {
     expect(outcome.headers["cache-control"]).toBe("private, no-store");
     expect(outcome.headers["vary"]).toBe("Cookie");
     expect(outcome.headers["x-robots-tag"]).toBeUndefined();
+  });
+
+  it("links both neighbors through the served discovery format", async () => {
+    const previous = {
+      id: 6,
+      eventKey: "01ARZ3NDEKTSV4RRFFQ69G5FAA",
+      title: "Chess prelims",
+      startsAt: new Date("2030-01-01T19:00:00Z"),
+      timezone: "UTC",
+      location: "The lobby",
+    };
+    const { outcome } = await resolve(
+      KEY,
+      fakeStore({ neighbors: { previous, next: NEIGHBORS.next } }),
+    );
+    expect(outcome.kind).toBe("ok");
+    if (outcome.kind !== "ok") throw new Error("unreachable");
+    expect(outcome.model.neighbors.previous?.key).toBe(previous.eventKey);
+    expect(outcome.model.neighbors.previous?.whenText).toContain("GMT");
+    const lonely = await resolve(KEY, fakeStore({ neighbors: { previous: null, next: null } }));
+    expect(lonely.outcome.kind).toBe("ok");
+    if (lonely.outcome.kind !== "ok") throw new Error("unreachable");
+    expect(lonely.outcome.model.neighbors).toEqual({ previous: null, next: null });
   });
 
   it("marks past rows noindex while keeping their share surface", async () => {
