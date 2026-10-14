@@ -494,7 +494,11 @@ export async function dispatchHookRequest(
   // resolve. A bridge failure must not 500 the render — public Kit pages fail
   // closed to guest-equivalent locals, exactly as if no bridge were wired.
   // It runs outside the member-read boundary: its session read is not member data.
-  if (deps.sessionFor && route.reads !== "public") {
+  // Deferred as a closure because the live detail wrapper runs before it (see
+  // below): the bridge still precedes every render, but a throttled detail
+  // client never reaches it.
+  const bridgeSession = async (): Promise<void> => {
+    if (!deps.sessionFor) return;
     try {
       const bridged = await deps.sessionFor(event);
       const prior = (event.locals as Record<string, unknown> | undefined) ?? {};
@@ -504,7 +508,7 @@ export async function dispatchHookRequest(
         exception: (err as Error)?.constructor?.name ?? "unknown",
       });
     }
-  }
+  };
   // Native archive and list reads share the Hono guard and anonymous cache.
   // The route id owns the branch (SvelteKit sets it before handle runs); the
   // manifest owns the Kit half above, so an unowned path never reaches either
@@ -512,18 +516,26 @@ export async function dispatchHookRequest(
   const isPastArchivePage = event.route?.id === "/events/past";
   const isEventsListPage = event.route?.id === "/events";
   // The live detail is a member read, so it renders inside the boundary; the
-  // shared public-read budget still runs first through the detail wrapper,
-  // exactly as the served handler throttles before any read.
+  // shared public-read budget runs before the session bridge through the
+  // detail wrapper, exactly as the served handler throttles before any read.
+  // A limited client gets its 429 without costing a Postgres session read;
+  // the bridge and the member-read render run inside the wrapper for the
+  // clients the budget allows through.
   const isEventDetailPage = event.route?.id === "/e/[key]";
   let response: Response;
   if (route.reads !== "public") {
     // Narrowed once for the deferred render: the closure below would lose the
     // branch narrowing on route.reads.
     const reads = route.reads;
-    response =
-      isEventDetailPage && deps.eventDetail
-        ? await deps.eventDetail(event.request, () => renderMemberRead(event, reads, deps))
-        : await renderMemberRead(event, reads, deps);
+    if (isEventDetailPage && deps.eventDetail) {
+      response = await deps.eventDetail(event.request, async () => {
+        await bridgeSession();
+        return renderMemberRead(event, reads, deps);
+      });
+    } else {
+      await bridgeSession();
+      response = await renderMemberRead(event, reads, deps);
+    }
   } else if (isPastArchivePage && deps.pastArchive) {
     response = await deps.pastArchive(event.request, () => deps.resolve(event));
   } else if (isEventsListPage && deps.eventsPage) {

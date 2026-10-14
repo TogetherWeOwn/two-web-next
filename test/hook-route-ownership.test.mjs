@@ -469,6 +469,12 @@ describe("hooks.server route ownership wiring", () => {
     expect(source).toContain(
       "pastArchive: (request, render) => dispatchPastArchiveRequest(request, env, render)",
     );
+    // Whole binding: deleting the eventDetail line silently drops the detail
+    // read throttle (the dispatch treats it as optional), so the exact line
+    // must fail. The import and comments alone carry the name.
+    expect(source).toContain(
+      "eventDetail: (request, render) => dispatchEventDetailRequest(request, env, render)",
+    );
     // The list binding carries the same shape plus its read-only session and
     // flash peeks: deleting any of these lines must fail, and the hook still
     // carries no session logic of its own (readers live in kit-session.ts).

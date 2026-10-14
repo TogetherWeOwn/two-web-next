@@ -268,6 +268,9 @@ describe("dispatchHookRequest event detail throttle (Kit branch)", () => {
     const event = detailEventFor("/e/abc123");
     const res = await dispatchHookRequest(event, deps);
     expect(eventDetail).toHaveBeenCalledTimes(1);
+    // Clients the budget allows through still get the bridged session before
+    // the member-read render.
+    expect(deps.sessionFor).toHaveBeenCalledTimes(1);
     expect(eventDetail.mock.calls[0]![0]).toBe(event.request);
     expect(typeof eventDetail.mock.calls[0]![1]).toBe("function");
     expect(resolve).toHaveBeenCalledTimes(1);
@@ -289,6 +292,7 @@ describe("dispatchHookRequest event detail throttle (Kit branch)", () => {
   it("a limited throttle answers 429 without resolving or auditing", async () => {
     const { sink } = recording();
     const resolve = vi.fn(async () => new Response("kit"));
+    const sessionFor = vi.fn(async () => authenticated(VIEWER));
     const eventDetail = vi.fn(
       async () =>
         new Response("slow down", {
@@ -300,10 +304,14 @@ describe("dispatchHookRequest event detail throttle (Kit branch)", () => {
       manifest: DETAIL_MANIFEST,
       accessSink: async () => sink,
       resolve,
+      sessionFor,
       eventDetail,
     });
     const res = await dispatchHookRequest(detailEventFor("/e/abc123"), deps);
     expect(eventDetail).toHaveBeenCalledTimes(1);
+    // Throttle-first: the budget runs before the session bridge, so a
+    // limited client costs no Postgres session read.
+    expect(sessionFor).not.toHaveBeenCalled();
     expect(resolve).not.toHaveBeenCalled();
     expect(sink).not.toHaveBeenCalled();
     expect(res.status).toBe(429);

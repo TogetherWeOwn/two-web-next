@@ -190,6 +190,31 @@ describe("event-detail route ownership", () => {
     expect(resolveRouteOwner({ method: "HEAD", path: `/e/${KEY}` })).toBe("hono");
     expect(resolveRouteOwner({ method: "GET", path: `/e/${KEY.toLowerCase()}` })).toBe("hono");
   });
+
+  it("disables hydration at the layout so the 410/404 error pages ship no script", () => {
+    // SvelteKit error pages inherit csr from the layouts above the failing
+    // page, not from +page.server.ts: without this layout the branded 410/404
+    // responses carry an inline bootstrap script the CSP (script-src 'self')
+    // blocks, while the Hono 410/404 pages carry none.
+    const layout = readFileSync(
+      new URL("../web/src/routes/e/[key]/+layout.server.ts", import.meta.url),
+      "utf8",
+    );
+    // Anchored: a commented-out export must fail too.
+    expect(layout).toMatch(/^export const csr = false;/m);
+  });
+
+  it("wires the load through the branded error payloads and the flash rule", () => {
+    // Deleting the error-payload mapping or the flash delete must fail: a
+    // refactor back to a bare error(410, "...") or a dropped delete would
+    // otherwise go unnoticed.
+    const load = readFileSync(
+      new URL("../web/src/routes/e/[key]/+page.server.ts", import.meta.url),
+      "utf8",
+    );
+    expect(load).toContain("eventDetailErrorPayload(outcome)");
+    expect(load).toContain("cookies.delete(JOIN_RESULT_COOKIE");
+  });
 });
 
 describe("event-detail gate order", () => {
