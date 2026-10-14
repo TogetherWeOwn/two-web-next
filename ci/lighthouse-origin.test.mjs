@@ -176,10 +176,10 @@ const rss = (...links) =>
     .map((link) => `<item><link>${link}</link></item>`)
     .join("")}</channel></rss>`;
 
-// TOG-23862 regression: the staging-journeys job publishes transient fixtures
-// titled `Staging E2E ...` and cancels them in `finally`. Run 38493749194
-// discovered such a fixture live in /events.rss at 01:05:56Z and Lighthouse
-// then measured a 410 at 01:07:19Z (ERRORED_DOCUMENT_REQUEST, 0 runs). The
+// Regression: the staging-journeys job publishes transient fixtures
+// titled `Staging E2E ...` and cancels them in `finally`. One staging-quality
+// run discovered such a fixture live in /events.rss and Lighthouse
+// then measured a 410 (ERRORED_DOCUMENT_REQUEST, 0 runs). The
 // feed carries per-item titles, so discovery can isolate fixtures without any
 // extra request or any change to the 300-second RSS cache contract.
 const rssItem = (link, title) =>
@@ -199,7 +199,7 @@ test("discovery skips live staging fixtures by RSS title without requesting them
       ),
     },
     // The fixture is still live here (200): the title filter must skip it
-    // before any liveness check, or the race in run 38493749194 reopens.
+    // before any liveness check, or the staging race reopens.
     [FIXTURE_EVENT_PATH]: { body: "<h1>Staging E2E RSVP 1760317553000</h1>" },
     [EVENT_PATH]: { body: "<h1>Community game night</h1>" },
   });
@@ -269,7 +269,7 @@ test("discovery is GET-only and reads the first published event from the RSS fee
     path: EVENT_PATH,
     source: "/events.rss",
   });
-  // TOG-23862: the first stable candidate is verified live before selection,
+  // The first stable candidate is verified live before selection,
   // so a feed entry cached before a cancel is never measured.
   assert.deepEqual(
     calls.map((call) => [call.init.method, call.url, call.init.body, call.init.redirect]),

@@ -98,8 +98,8 @@ function configFromEnv(env = process.env) {
 // Staging-journey fixtures publish transient events titled `Staging E2E ...`
 // (e2e/staging/event-rsvp.spec.ts) and cancel them in `finally`. The feed
 // lists only published rows under a 300-second public cache, so a fixture can
-// be listed while live and be cancelled before Lighthouse navigates (TOG-23862:
-// discovered 01:05:56Z, measured 410 at 01:07:19Z). Feed items carry titles,
+// be listed while live and be cancelled before Lighthouse navigates
+// (discovered live, then measured 410). Feed items carry titles,
 // so discovery filters that prefix with no extra request and no cache change.
 // Thresholds, budgets and the fail-closed unmeasured-route verdict are untouched.
 const STAGING_FIXTURE_TITLE_PREFIX = "Staging E2E ";
@@ -198,7 +198,7 @@ async function pickStableCandidate(origin, paths, fetchImpl, tally) {
 
 /**
  * Finds one stable published event on the origin: /events.rss first, then the
- * /events list. Staging-journey fixtures (TOG-23862) are filtered by feed
+ * /events list. Staging-journey fixtures are filtered by feed
  * title before any request; each remaining candidate is verified live so a
  * feed entry cached before a cancel is never measured. Returns `{ path,
  * source }`, or `{ path: null, reason }` when the origin answers 200 but
