@@ -9,7 +9,7 @@
 //
 // Exit status is 0 when nothing FAILs, 1 otherwise. UNKNOWN never fails a run:
 // see the legacy header ("the honest part") for what this cannot check — the
-// live moderator-vs-member login round trip and the SySOp holder count.
+// live moderator-vs-member login round trip and the approved-role holder count.
 
 import { isModerator, parseModeratorRoleIds } from "../roles";
 
@@ -24,24 +24,31 @@ export type ModeratorProbe = {
 };
 
 /**
- * `SySOp` in the TWO guild — one holder, administrator class, signed off on
- * TOG-106 as the entire website staff list. Matched by ID and never by name:
- * SySOp is `KEEP (renamed Owner)` in Wave 6 of the approved server redesign,
- * and the rename preserves the snowflake.
+ * The approved website moderator roles in the TWO guild, matched by ID and
+ * never by name: `Owner` and `Moderator`. This pair replaces the retired
+ * SySOp-only grant; widening or narrowing it needs fresh sign-off.
+ * Verified from the 2026-10-13 role-cleanup census (round6/presnap).
  */
-export const SYSOP_MODERATOR_ROLE_ID = "508654771276873729";
+export const APPROVED_MODERATOR_ROLE_IDS: readonly string[] = [
+  "1546777855801954408", // Owner
+  "1546777856984481792", // Moderator
+];
 
 /**
- * The five other roles that carry ban or kick. They are the *plausible* wrong
- * answer (approved 2026-08-19, reversed by the CEO three minutes later), and
- * all five are deleted by the approved server redesign / role consolidation —
- * a deleted snowflake matches nobody, forever, without erroring, so a list
- * containing them dark-fails exactly like a blank one while looking configured.
+ * Roles that must never appear in the moderator list. The five other roles
+ * that carry ban or kick are the *plausible* wrong answer (approved
+ * 2026-08-19, reversed by the CEO three minutes later), and SySOp is the
+ * retired role this migration removes. All are deleted or scheduled for
+ * deletion by the approved server redesign / role consolidation — a deleted
+ * snowflake matches nobody, forever, without erroring, so a list containing
+ * them dark-fails exactly like a blank one while looking configured.
  */
 export const DOOMED_MODERATOR_ROLE_IDS: Record<string, string> = {
+  "508654771276873729": "SySOp (retired; delete once no config references it)",
   "1078757544169848933": "Officer (3 holders, DELETE in wave 6)",
   "1087192823767515219": "Staff (6 holders, DELETE in wave 6)",
-  "1078757266469175386": "Game Master (1 holder, DELETE in wave 6)",
+  "1078757266469175386":
+    "Game Master (old id, already deleted; live role recreated under a new id)",
   "1078757184021733426": "Captain (0 holders, DELETE in role-consolidation)",
   "1078756990710452365": "Lieutenant (0 holders, DELETE in role-consolidation)",
 };
@@ -74,7 +81,7 @@ export function checkModerators(
     record(
       "FAIL",
       "configured",
-      `moderator_role_ids is empty. Nobody is a moderator and the admin link is offered to no one — silently. Set DISCORD_MODERATOR_ROLE_IDS=${SYSOP_MODERATOR_ROLE_ID} in this environment.`,
+      `moderator_role_ids is empty. Nobody is a moderator and the admin link is offered to no one — silently. Set DISCORD_MODERATOR_ROLE_IDS=${APPROVED_MODERATOR_ROLE_IDS.join(",")} in this environment.`,
     );
   } else {
     record(
@@ -84,55 +91,53 @@ export function checkModerators(
     );
   }
 
-  // None of the five doomed snowflakes may appear.
+  // None of the doomed snowflakes may appear.
   const found = configured.filter((id) => id in DOOMED_MODERATOR_ROLE_IDS);
   if (found.length === 0) {
     record(
       "PASS",
       "no-doomed-roles",
-      "none of the 5 ban/kick roles scheduled for deletion are present",
+      `none of the ${Object.keys(DOOMED_MODERATOR_ROLE_IDS).length} retired/deleted roles are present`,
     );
   } else {
     const described = found.map((id) => `${id} = ${DOOMED_MODERATOR_ROLE_IDS[id]!}`).join("; ");
     record(
       "FAIL",
       "no-doomed-roles",
-      `list contains role(s) that are deleted by the approved server redesign: ${described}. A deleted snowflake matches nobody and never errors, so this grant will silently stop working. TOG-106 narrowed the list to SySOp alone; widening it needs fresh sign-off.`,
+      `list contains role(s) that are deleted by the approved server redesign: ${described}. A deleted snowflake matches nobody and never errors, so this grant will silently stop working. The approved list is exactly Owner+Moderator; changing it needs fresh sign-off.`,
     );
   }
 
-  // The signed-off value is exactly one ID.
+  // The signed-off value is exactly the approved Owner+Moderator pair
+  // (order-insensitive; duplicates do not count twice).
+  const approved = APPROVED_MODERATOR_ROLE_IDS.join(",");
+  const unique = [...new Set(configured)];
   if (configured.length === 0) {
-    record(
-      "UNKNOWN",
-      "is-sysop",
-      "nothing configured, so there is nothing to compare against TOG-106",
-    );
-  } else if (configured.length === 1 && configured[0] === SYSOP_MODERATOR_ROLE_ID) {
-    record(
-      "PASS",
-      "is-sysop",
-      `exactly SySOp (${SYSOP_MODERATOR_ROLE_ID}), which is the value signed off on TOG-106`,
-    );
-  } else if (!configured.includes(SYSOP_MODERATOR_ROLE_ID)) {
-    record(
-      "FAIL",
-      "is-sysop",
-      `SySOp (${SYSOP_MODERATOR_ROLE_ID}) is not in the list. Configured: ${rendered}. The owner holds SySOp, so as configured the owner cannot reach the admin panel.`,
-    );
+    record("UNKNOWN", "is-approved", "nothing configured, so there is nothing to compare");
+  } else if (
+    configured.length === APPROVED_MODERATOR_ROLE_IDS.length &&
+    unique.length === APPROVED_MODERATOR_ROLE_IDS.length &&
+    APPROVED_MODERATOR_ROLE_IDS.every((id) => unique.includes(id))
+  ) {
+    record("PASS", "is-approved", `exactly the approved Owner+Moderator pair (${approved})`);
   } else {
-    const extra = configured.filter((id) => id !== SYSOP_MODERATOR_ROLE_ID).join(",");
+    const missing = APPROVED_MODERATOR_ROLE_IDS.filter((id) => !unique.includes(id));
+    const extra = unique.filter((id) => !APPROVED_MODERATOR_ROLE_IDS.includes(id));
+    const parts: string[] = [];
+    if (missing.length > 0) parts.push(`missing approved role(s): ${missing.join(",")}`);
+    if (extra.length > 0) parts.push(`extra role(s): ${extra.join(",")}`);
+    if (missing.length === 0 && extra.length === 0) parts.push("duplicate entries");
     record(
       "FAIL",
-      "is-sysop",
-      `SySOp is present, but the list is not exactly one ID (extras: ${extra || "duplicate SySOp"}). TOG-106 signed off one ID; widening needs fresh approval.`,
+      "is-approved",
+      `not exactly the approved Owner+Moderator pair (${approved}). Configured: ${rendered} (${parts.join("; ")}). Holders of approved roles would lose or gain the admin panel silently.`,
     );
   }
 
   // Shape, not membership. Deliberate divergence from legacy's /^[0-9]{17,20}$/:
   // the rule here is what this repo's login path actually enforces — an entry
   // parseModeratorRoleIds() drops can never match anything, whatever its
-  // width. A name where an ID belongs (`SySOp`) is the mistake this catches.
+  // width. A name where an ID belongs (`Moderator`) is the mistake this catches.
   if (configured.length === 0) {
     record("UNKNOWN", "shape", "nothing configured, so there is nothing to check the shape of");
   } else {
@@ -157,7 +162,7 @@ export function checkModerators(
   // The fail-closed guarantee, re-derived from the same code the login path
   // reads rather than asserted. Everything above only means something because
   // an empty list denies rather than permits.
-  const grantsOnEmpty = isModerator([SYSOP_MODERATOR_ROLE_ID], parseModeratorRoleIds(""));
+  const grantsOnEmpty = isModerator([...APPROVED_MODERATOR_ROLE_IDS], parseModeratorRoleIds(""));
   record(
     grantsOnEmpty ? "FAIL" : "PASS",
     "fails-closed",
@@ -181,7 +186,7 @@ export function renderModeratorReport(probe: ModeratorProbe): string {
     `  ${probe.findings.length} checks: ${probe.findings.length - probe.failures - probe.unknowns} pass, ${probe.failures} fail, ${probe.unknowns} unknown`,
   );
   lines.push("  Not checkable from here: the live moderator-vs-member login round trip");
-  lines.push("  (needs real Discord consent) and the current SySOp holder count (needs a");
+  lines.push("  (needs real Discord consent) and the current approved-role holder count (needs a");
   lines.push("  bot token, TOG-13). Both are named on TOG-427.");
   return lines.join("\n");
 }

@@ -3,7 +3,8 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { SYSOP_MODERATOR_ROLE_ID as SYSOP } from "../src/probes/check-moderators";
+import { APPROVED_MODERATOR_ROLE_IDS } from "../src/probes/check-moderators";
+const APPROVED = APPROVED_MODERATOR_ROLE_IDS.join(",");
 // @ts-expect-error Standalone tooling has no declaration file.
 import { readWranglerConfig } from "../ci/wrangler-config.mjs";
 
@@ -13,7 +14,7 @@ const smoke = read(".github/workflows/staging-smoke.yml");
 const temp = () =>
   mkdtempSync(join(process.env.PAPERCLIP_RUN_SCRATCH_DIR ?? tmpdir(), "probe-fixture-"));
 
-function configProbe(text: string, envRole = SYSOP) {
+function configProbe(text: string, envRole = APPROVED) {
   const dir = temp();
   try {
     const path = join(dir, "wrangler.jsonc");
@@ -42,8 +43,8 @@ function configProbe(text: string, envRole = SYSOP) {
 describe("source-managed moderator deployment preflight", () => {
   it("validates JSONC vars rather than an unrelated process value", () => {
     const result = configProbe(
-      `{ // public role\n "vars": {"DISCORD_MODERATOR_ROLE_IDS": "${SYSOP}",},}`,
-      "SySOp",
+      `{ // public role\n "vars": {"DISCORD_MODERATOR_ROLE_IDS": "${APPROVED}",},}`,
+      "Moderator",
     );
     expect(result.status).toBe(0);
     expect(JSON.parse(result.stdout)).toMatchObject({ failures: 0, ok: true });
@@ -53,9 +54,9 @@ describe("source-managed moderator deployment preflight", () => {
     "{}",
     '{"vars": {}}',
     '{"vars": {"DISCORD_MODERATOR_ROLE_IDS": ""}}',
-    '{"vars": {"DISCORD_MODERATOR_ROLE_IDS": "SySOp"}}',
-    `{"vars": {"DISCORD_MODERATOR_ROLE_IDS": "${SYSOP},100000000000000001"}}`,
-    `{"env": {"staging": {"vars": {"DISCORD_MODERATOR_ROLE_IDS": "${SYSOP}"}}}}`,
+    '{"vars": {"DISCORD_MODERATOR_ROLE_IDS": "Moderator"}}',
+    `{"vars": {"DISCORD_MODERATOR_ROLE_IDS": "${APPROVED},100000000000000001"}}`,
+    `{"env": {"staging": {"vars": {"DISCORD_MODERATOR_ROLE_IDS": "${APPROVED}"}}}}`,
   ])("fails absent/invalid top-level config despite a valid CI value: %s", (text) => {
     const result = configProbe(text);
     expect(result.status).toBe(1);
@@ -93,7 +94,7 @@ describe("source-managed moderator deployment preflight", () => {
           {
             encoding: "utf8",
             timeout: 30_000,
-            env: { ...process.env, DISCORD_MODERATOR_ROLE_IDS: "SySOp" },
+            env: { ...process.env, DISCORD_MODERATOR_ROLE_IDS: "Moderator" },
           },
         );
       } finally {
@@ -102,7 +103,7 @@ describe("source-managed moderator deployment preflight", () => {
     };
     // Production env configured: passes even when the process value is garbage.
     const ok = envProbe(
-      `{"vars": {}, "env": {"production": {"vars": {"DISCORD_MODERATOR_ROLE_IDS": "${SYSOP}"}}}}`,
+      `{"vars": {}, "env": {"production": {"vars": {"DISCORD_MODERATOR_ROLE_IDS": "${APPROVED}"}}}}`,
       "production",
     );
     expect(ok.status).toBe(0);
@@ -110,20 +111,20 @@ describe("source-managed moderator deployment preflight", () => {
     // Production env missing the var fails even when the top level has it:
     // Wrangler does not inherit top-level vars, so a fallback would lie.
     const noFallback = envProbe(
-      `{"vars": {"DISCORD_MODERATOR_ROLE_IDS": "${SYSOP}"}, "env": {"production": {"vars": {}}}}`,
+      `{"vars": {"DISCORD_MODERATOR_ROLE_IDS": "${APPROVED}"}, "env": {"production": {"vars": {}}}}`,
       "production",
     );
     expect(noFallback.status).toBe(1);
     expect(JSON.parse(noFallback.stdout)).toMatchObject({ ok: false });
     // No env block at all: the named env is unknown in that config, so it is
     // a usage error (exit 2), never a probe pass. The deploy step still fails.
-    const noEnv = envProbe(`{"vars": {"DISCORD_MODERATOR_ROLE_IDS": "${SYSOP}"}}`, "production");
+    const noEnv = envProbe(`{"vars": {"DISCORD_MODERATOR_ROLE_IDS": "${APPROVED}"}}`, "production");
     expect(noEnv.status).toBe(2);
     expect(noEnv.stdout).toBe("");
     expect(noEnv.stderr).toMatch(/unknown environment/);
     // A wrong production value fails even with a valid top level.
     const wrong = envProbe(
-      `{"vars": {"DISCORD_MODERATOR_ROLE_IDS": "${SYSOP}"}, "env": {"production": {"vars": {"DISCORD_MODERATOR_ROLE_IDS": "SySOp"}}}}`,
+      `{"vars": {"DISCORD_MODERATOR_ROLE_IDS": "${APPROVED}"}, "env": {"production": {"vars": {"DISCORD_MODERATOR_ROLE_IDS": "Moderator"}}}}`,
       "production",
     );
     expect(wrong.status).toBe(1);
@@ -136,7 +137,7 @@ describe("source-managed moderator deployment preflight", () => {
       const path = join(dir, "wrangler.jsonc");
       writeFileSync(
         path,
-        `{"vars": {"DISCORD_MODERATOR_ROLE_IDS": "${SYSOP}"}, "env": {"production": {"vars": {"DISCORD_MODERATOR_ROLE_IDS": "${SYSOP}"}}}}`,
+        `{"vars": {"DISCORD_MODERATOR_ROLE_IDS": "${APPROVED}"}, "env": {"production": {"vars": {"DISCORD_MODERATOR_ROLE_IDS": "${APPROVED}"}}}}`,
       );
       const result = spawnSync(
         process.execPath,
@@ -152,13 +153,13 @@ describe("source-managed moderator deployment preflight", () => {
         {
           encoding: "utf8",
           timeout: 30_000,
-          env: { ...process.env, DISCORD_MODERATOR_ROLE_IDS: SYSOP },
+          env: { ...process.env, DISCORD_MODERATOR_ROLE_IDS: APPROVED },
         },
       );
       expect(result.status).toBe(2);
       expect(result.stdout).toBe("");
       expect(result.stderr).toMatch(/unknown environment/);
-      expect(result.stderr).not.toContain(SYSOP);
+      expect(result.stderr).not.toContain(APPROVED);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -178,7 +179,7 @@ describe("source-managed moderator deployment preflight", () => {
       {
         encoding: "utf8",
         timeout: 30_000,
-        env: { ...process.env, DISCORD_MODERATOR_ROLE_IDS: SYSOP },
+        env: { ...process.env, DISCORD_MODERATOR_ROLE_IDS: APPROVED },
       },
     );
     expect(bare.status).toBe(2);
@@ -197,7 +198,7 @@ describe("source-managed moderator deployment preflight", () => {
       {
         encoding: "utf8",
         timeout: 30_000,
-        env: { ...process.env, DISCORD_MODERATOR_ROLE_IDS: SYSOP },
+        env: { ...process.env, DISCORD_MODERATOR_ROLE_IDS: APPROVED },
       },
     );
     expect(empty.status).toBe(2);
@@ -208,7 +209,7 @@ describe("source-managed moderator deployment preflight", () => {
       const path = join(dir, "wrangler.jsonc");
       writeFileSync(
         path,
-        `{"vars": {"DISCORD_MODERATOR_ROLE_IDS": "${SYSOP}"}, "env": {"production": {"vars": {"DISCORD_MODERATOR_ROLE_IDS": "SySOp"}}}}`,
+        `{"vars": {"DISCORD_MODERATOR_ROLE_IDS": "${APPROVED}"}, "env": {"production": {"vars": {"DISCORD_MODERATOR_ROLE_IDS": "Moderator"}}}}`,
       );
       const result = spawnSync(
         process.execPath,
@@ -223,7 +224,7 @@ describe("source-managed moderator deployment preflight", () => {
         {
           encoding: "utf8",
           timeout: 30_000,
-          env: { ...process.env, DISCORD_MODERATOR_ROLE_IDS: "SySOp" },
+          env: { ...process.env, DISCORD_MODERATOR_ROLE_IDS: "Moderator" },
         },
       );
       expect(result.status).toBe(0);
@@ -252,11 +253,11 @@ describe("source-managed moderator deployment preflight", () => {
       production.indexOf("npx wrangler versions upload --env production"),
     );
     expect(production).not.toContain("secrets.DISCORD_MODERATOR_ROLE_IDS");
-    // env.production declares the same approved SySOp role; Wrangler does not
+    // env.production declares the same approved Owner+Moderator pair; Wrangler does not
     // inherit top-level vars, so this entry is the one production boots with.
     const parsed = readWranglerConfig(read("wrangler.jsonc"));
-    expect(parsed.env?.production?.vars?.DISCORD_MODERATOR_ROLE_IDS).toBe(SYSOP);
-    expect(parsed.vars?.DISCORD_MODERATOR_ROLE_IDS).toBe(SYSOP);
+    expect(parsed.env?.production?.vars?.DISCORD_MODERATOR_ROLE_IDS).toBe(APPROVED);
+    expect(parsed.vars?.DISCORD_MODERATOR_ROLE_IDS).toBe(APPROVED);
   });
 
   it("checks the same explicit source config before all Cloudflare mutations", () => {
@@ -274,7 +275,7 @@ describe("source-managed moderator deployment preflight", () => {
     expect(deploy).not.toContain("secrets.DISCORD_MODERATOR_ROLE_IDS");
     expect(smoke).toContain("run: npm run check:worker-moderators");
     // This checks only source declarations, not current vendor isolation/bindings.
-    expect(read("wrangler.jsonc")).toContain(`"DISCORD_MODERATOR_ROLE_IDS": "${SYSOP}"`);
+    expect(read("wrangler.jsonc")).toContain(`"DISCORD_MODERATOR_ROLE_IDS": "${APPROVED}"`);
     expect(read("wrangler.jsonc")).toContain('"keep_vars": true');
   });
 });

@@ -1,16 +1,17 @@
 import { execFileSync } from "node:child_process";
 import { describe, expect, it } from "vitest";
 import {
+  APPROVED_MODERATOR_ROLE_IDS,
   checkModerators,
   DOOMED_MODERATOR_ROLE_IDS,
-  SYSOP_MODERATOR_ROLE_ID,
 } from "../src/probes/check-moderators";
 import { runBotSmoke, stagingEndpoint } from "../src/probes/bot-smoke";
 import { BotTerminalError } from "../src/jobs/types";
 import type { AnnouncementResult, EventUpsertResult, RoleAssignResult } from "../src/bot/client";
 import type { BotFailure } from "../src/jobs/types";
 
-const SYSOP = SYSOP_MODERATOR_ROLE_ID;
+const APPROVED = APPROVED_MODERATOR_ROLE_IDS.join(",");
+const SYSOP = "508654771276873729";
 const fail = (o: Partial<BotFailure>): BotFailure => ({
   ok: false,
   code: "x",
@@ -37,8 +38,8 @@ describe("discord:check-moderators (role-config probe)", () => {
     expect(p.findings.find((f) => f.name === "configured")?.status).toBe("FAIL");
   });
 
-  it("exactly SySOp passes every check", () => {
-    const p = checkModerators(SYSOP, { requireConfigured: true });
+  it("exactly the approved Owner+Moderator pair passes every check", () => {
+    const p = checkModerators(APPROVED, { requireConfigured: true });
     expect(p.ok).toBe(true);
     expect(p.findings).toHaveLength(5);
     expect(p.findings.every((f) => f.status === "PASS")).toBe(true);
@@ -46,41 +47,51 @@ describe("discord:check-moderators (role-config probe)", () => {
 
   it("fails on a doomed role that looks configured and grants nothing", () => {
     const doomed = Object.keys(DOOMED_MODERATOR_ROLE_IDS)[0]!;
-    const p = checkModerators(`${SYSOP},${doomed}`, { requireConfigured: true });
+    const p = checkModerators(`${APPROVED},${doomed}`, { requireConfigured: true });
     expect(p.ok).toBe(false);
     expect(p.findings.find((f) => f.name === "no-doomed-roles")?.status).toBe("FAIL");
   });
 
+  it("retired SySOp alone fails: it is doomed and not approved", () => {
+    expect(DOOMED_MODERATOR_ROLE_IDS[SYSOP]).toBeDefined();
+    const p = checkModerators(SYSOP, { requireConfigured: true });
+    expect(p.ok).toBe(false);
+    expect(p.findings.find((f) => f.name === "no-doomed-roles")?.status).toBe("FAIL");
+    expect(p.findings.find((f) => f.name === "is-approved")?.status).toBe("FAIL");
+  });
+
   it("fails on a role name where an ID belongs", () => {
-    const p = checkModerators("SySOp", { requireConfigured: true });
+    const p = checkModerators("Moderator", { requireConfigured: true });
     expect(p.ok).toBe(false);
     expect(p.findings.find((f) => f.name === "shape")?.status).toBe("FAIL");
-    expect(p.findings.find((f) => f.name === "is-sysop")?.status).toBe("FAIL");
+    expect(p.findings.find((f) => f.name === "is-approved")?.status).toBe("FAIL");
   });
 
-  it("fails when SySOp is missing (the owner cannot reach the panel)", () => {
-    const p = checkModerators("100000000000000001", { requireConfigured: true });
+  it("fails when an approved role is missing", () => {
+    const p = checkModerators(APPROVED_MODERATOR_ROLE_IDS[0], { requireConfigured: true });
     expect(p.ok).toBe(false);
-    expect(p.findings.find((f) => f.name === "is-sysop")?.status).toBe("FAIL");
+    expect(p.findings.find((f) => f.name === "is-approved")?.status).toBe("FAIL");
   });
 
-  it.each([`${SYSOP},100000000000000001`, `${SYSOP},${SYSOP}`])(
-    "refuses a list other than exactly SySOp: %s",
-    (raw) => {
-      const p = checkModerators(raw, { requireConfigured: true });
-      expect(p.ok).toBe(false);
-      expect(p.findings.find((f) => f.name === "is-sysop")?.status).toBe("FAIL");
-      expect(p.unknowns).toBe(0);
-    },
-  );
+  it.each([
+    `${APPROVED},100000000000000001`,
+    `${APPROVED},${APPROVED_MODERATOR_ROLE_IDS[0]}`,
+    APPROVED_MODERATOR_ROLE_IDS[1],
+  ])("refuses a list other than exactly the approved pair: %s", (raw) => {
+    const p = checkModerators(raw, { requireConfigured: true });
+    expect(p.ok).toBe(false);
+    expect(p.findings.find((f) => f.name === "is-approved")?.status).toBe("FAIL");
+    expect(p.unknowns).toBe(0);
+  });
 
   it("trims whitespace and drops empties", () => {
-    const p = checkModerators(`  ${SYSOP} , ,`, { requireConfigured: true });
+    const [owner, moderator] = APPROVED_MODERATOR_ROLE_IDS;
+    const p = checkModerators(`  ${owner} , ${moderator} , ,`, { requireConfigured: true });
     expect(p.ok).toBe(true);
   });
 
   it("malformed garbage alongside a good ID fails shape", () => {
-    const p = checkModerators(`${SYSOP},abc`, { requireConfigured: true });
+    const p = checkModerators(`${APPROVED},abc`, { requireConfigured: true });
     expect(p.ok).toBe(false);
     expect(p.findings.find((f) => f.name === "shape")?.status).toBe("FAIL");
   });
@@ -111,10 +122,11 @@ describe("check-moderators CLI", () => {
     expect(exitOf(["--require-configured"], { DISCORD_MODERATOR_ROLE_IDS: "" })).toBe(1);
   });
 
-  it("exactly SySOp passes with --require-configured and --json", () => {
-    expect(exitOf(["--require-configured"], { DISCORD_MODERATOR_ROLE_IDS: SYSOP })).toBe(0);
-    const out = run(["--require-configured", "--json"], { DISCORD_MODERATOR_ROLE_IDS: SYSOP });
+  it("exactly the approved pair passes with --require-configured and --json", () => {
+    expect(exitOf(["--require-configured"], { DISCORD_MODERATOR_ROLE_IDS: APPROVED })).toBe(0);
+    const out = run(["--require-configured", "--json"], { DISCORD_MODERATOR_ROLE_IDS: APPROVED });
     expect(JSON.parse(out)).toMatchObject({ failures: 0, ok: true });
+    expect(exitOf(["--require-configured"], { DISCORD_MODERATOR_ROLE_IDS: SYSOP })).toBe(1);
   });
 
   it("a doomed role fails the CLI", () => {

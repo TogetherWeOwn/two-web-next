@@ -415,7 +415,7 @@ APP_URL=https://next.togetherweown.com npm run drill:internal-action -- \
 ```
 
 The deployment preflight parses the **top-level** `vars.DISCORD_MODERATOR_ROLE_IDS`
-in `wrangler.jsonc` and requires exactly the approved SySOp ID, before any queue
+in `wrangler.jsonc` and requires exactly the approved Owner+Moderator pair, before any queue
 creation or deployment. `wrangler deploy --config wrangler.jsonc` consumes that
 same source value, without `--env`/`--var` overrides; a separate GitHub moderator
 secret cannot make the gate pass. `keep_vars` retains unrelated remote plaintext

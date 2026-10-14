@@ -29,7 +29,7 @@ const env: Env = {
   DISCORD_CLIENT_SECRET: "client-secret",
   DISCORD_BOT_TOKEN: "bot-token",
   SESSION_SECRET: "test-session-secret-at-least-32-bytes-long",
-  DISCORD_MODERATOR_ROLE_IDS: "508654771276873729",
+  DISCORD_MODERATOR_ROLE_IDS: "1546777856984481792",
 };
 
 const cookiesFrom = (res: Response) =>

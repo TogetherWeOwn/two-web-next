@@ -34,7 +34,7 @@ import joinMigration from "../drizzle/1000_join-attempts-throttle.sql?raw";
 // live member token is used once in the callback stack frame and never lands
 // in a queue table, a row or a log.
 
-const MOD_ROLE = "508654771276873729";
+const MOD_ROLE = "1546777856984481792";
 
 const env: Env = {
   APP_URL: "https://next.example.test",
