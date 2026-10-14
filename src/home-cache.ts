@@ -58,6 +58,19 @@ function clearMemory(): void {
   generation++;
 }
 
+// Cloudflare Workers exposes the shared edge cache as `caches.default`; the
+// DOM CacheStorage type the Kit typecheck sees has no such member, so read it
+// through an optional shape instead of touching the declared type.
+function edgeCache(): Cache | undefined {
+  try {
+    if (typeof caches === "undefined") return undefined;
+    return (caches as unknown as { default?: Cache }).default;
+  } catch {
+    // Cache failures never fail the caller.
+    return undefined;
+  }
+}
+
 /**
  * Retire every homepage guest entry. Called after a committed featured or
  * event mutation (never on a refusal or a rollback), so the next homepage
@@ -74,8 +87,8 @@ export async function retireHomeGuestCache(): Promise<void> {
   if (edgeKeys.size === 0) return;
   const keys = [...edgeKeys];
   try {
-    if (typeof caches === "undefined" || !caches.default) return;
-    const cache = caches.default;
+    const cache = edgeCache();
+    if (!cache) return;
     await Promise.all(
       keys.map(async (key) => {
         try {
@@ -118,8 +131,9 @@ function cacheApi(env: Env): Promise<Cache | undefined> {
     // to the next. Those environments keep isolate-local reuse through the
     // injected-object WeakMap above; the edge layer is production-only.
     if (injectedDb(env)) return Promise.resolve(undefined);
-    if (typeof caches === "undefined" || !caches.default) return Promise.resolve(undefined);
-    return Promise.resolve(caches.default);
+    const edge = edgeCache();
+    if (!edge) return Promise.resolve(undefined);
+    return Promise.resolve(edge);
   } catch {
     return Promise.resolve(undefined);
   }
