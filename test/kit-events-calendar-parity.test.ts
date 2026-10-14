@@ -19,12 +19,15 @@ import {
   CALENDAR_MONTH_TESTID,
   CALENDAR_NEXT_LABEL,
   CALENDAR_PREV_LABEL,
+  EVENTS_CAL_FEEDBACK,
   EVENTS_CALENDAR_GRID_TESTID,
   EVENTS_CALENDAR_TESTID,
+  EVENTS_CONTENT_TESTID,
   EVENTS_LIST_TESTID,
   EVENTS_LOADING_TESTID,
+  EVENTS_OUT_OF_RANGE_TESTID,
   EVENTS_PAST_STATUS_TESTID,
-  EVENTS_SEARCH_CLEAR_TESTID,
+  EVENTS_SEARCH_CLEAR_EMPTY_TESTID,
   EVENTS_SEARCH_MAX_LENGTH,
   EVENTS_SEARCH_STATUS_TESTID,
   EVENTS_SEARCH_TESTID,
@@ -32,6 +35,8 @@ import {
   EVENTS_VIEW_CALENDAR_TESTID,
   EVENTS_VIEW_LIST_TESTID,
   EVENTS_VIEW_STATUS_TESTID,
+  EVENT_CARD_TESTID,
+  EVENTS_EMPTY_SEARCH_TESTID,
   WEEKDAY_HEADINGS,
   calendarJumpUrl,
   calendarMonthLabel,
@@ -45,9 +50,19 @@ const env = {
   DISCORD_INVITE_URL: "https://discord.gg/example",
 } as never;
 
+const sampleRow = () => ({
+  discordId: "parity-1",
+  status: "scheduled" as const,
+  title: "Game night parity",
+  description: null,
+  location: null,
+  startsAt: new Date("2026-10-15T19:00:00Z"),
+  endsAt: new Date("2026-10-15T21:00:00Z"),
+});
+
 const baseData = () => ({
   state: { view: "list", month: "2026-10", q: "", past: false, page: 1 },
-  upcoming: [],
+  upcoming: [sampleRow()],
   past: [],
   zone: "Europe/London",
   now: new Date("2026-10-13T12:00:00Z"),
@@ -64,6 +79,61 @@ const baseData = () => ({
   joinResult: null,
   queryTooLong: false,
 });
+
+const VOID_ELEMENTS = new Set([
+  "area",
+  "base",
+  "br",
+  "col",
+  "embed",
+  "hr",
+  "img",
+  "input",
+  "link",
+  "meta",
+  "param",
+  "source",
+  "track",
+  "wbr",
+]);
+
+// Walk the serialized tags with a depth counter so a stable element moved
+// inside any data-cal-zone fails, not just a missing testid.
+function assertStableOutsideZones(body: string, markers: string[]): void {
+  const tagRe = /<[^>]+>/g;
+  const stack: boolean[] = [];
+  const violations: string[] = [];
+  let match: RegExpExecArray | null;
+  while ((match = tagRe.exec(body)) !== null) {
+    const tag = match[0];
+    if (tag.startsWith("<!--") || tag.startsWith("<!") || tag.startsWith("<?")) continue;
+    const isClosing = tag.startsWith("</");
+    if (isClosing) {
+      stack.pop();
+      continue;
+    }
+    const name =
+      tag
+        .slice(1)
+        .split(/[\s/>]/, 1)[0]
+        ?.toLowerCase() ?? "";
+    const isSelfClosing = tag.endsWith("/>") || VOID_ELEMENTS.has(name);
+    const insideZone = stack.some(Boolean);
+    if (insideZone) {
+      for (const marker of markers) {
+        if (tag.includes(marker)) violations.push(marker);
+      }
+    }
+    if (!isSelfClosing) {
+      stack.push(tag.includes("data-cal-zone="));
+    }
+  }
+  expect(violations).toEqual([]);
+}
+
+function zoneNames(body: string): string[] {
+  return [...body.matchAll(/data-cal-zone="([^"]+)"/g)].map((m) => m[1] as string).sort();
+}
 
 const headers = {
   "cache-control": "public, max-age=60",
@@ -90,10 +160,18 @@ describe("Kit calendar island mount parity", () => {
     for (const zone of ["head", "actions", "miss", "content"]) {
       expect(rendered.body).toContain(`data-cal-zone="${zone}"`);
     }
+    expect(zoneNames(rendered.body)).toEqual(["actions", "content", "head", "miss"]);
     expect(rendered.body).toContain("data-cal-feedback");
+    // A real row renders the list card instead of the out-of-range note.
+    expect(rendered.body).toContain(`data-testid="${EVENT_CARD_TESTID}"`);
+    expect(rendered.body).toContain(`data-testid="${EVENTS_LIST_TESTID}"`);
+    expect(rendered.body).not.toContain(`data-testid="${EVENTS_OUT_OF_RANGE_TESTID}"`);
+    expect(rendered.body).toContain(`data-testid="${EVENTS_CONTENT_TESTID}"`);
     // Skeleton stays hidden until a member-started action shows it.
     expect(rendered.body).toContain(`data-testid="${EVENTS_LOADING_TESTID}"`);
-    expect(rendered.body).toContain("hidden");
+    expect(rendered.body).toMatch(
+      new RegExp(`data-testid="${EVENTS_LOADING_TESTID}"[^>]*\\shidden`),
+    );
     // Live regions stay outside the swapped zones so they are never re-created.
     for (const testid of [
       EVENTS_VIEW_STATUS_TESTID,
@@ -103,6 +181,15 @@ describe("Kit calendar island mount parity", () => {
     ]) {
       expect(rendered.body).toContain(`data-testid="${testid}"`);
     }
+    assertStableOutsideZones(rendered.body, [
+      `data-testid="${EVENTS_VIEW_STATUS_TESTID}"`,
+      `data-testid="${EVENTS_SEARCH_STATUS_TESTID}"`,
+      `data-testid="${EVENTS_PAST_STATUS_TESTID}"`,
+      `data-testid="${CALENDAR_MONTH_STATUS_TESTID}"`,
+      `data-testid="${EVENTS_SEARCH_TESTID}"`,
+      `data-testid="${EVENTS_LOADING_TESTID}"`,
+      EVENTS_CAL_FEEDBACK,
+    ]);
     // The binder itself: one deferred external script, the no-global-hydration deal.
     expect(rendered.body).toContain('<script src="/islands/events-calendar.js"');
     expect(rendered.body).toContain("defer");
@@ -128,9 +215,11 @@ describe("Kit calendar island mount parity", () => {
     for (const day of WEEKDAY_HEADINGS) {
       expect(rendered.body).toContain(`<th scope="col">${day}</th>`);
     }
-    // An empty month of a non-empty schedule still renders day cells.
+    // The fixture row lands in-month, so day cells carry real jump anchors.
     expect(rendered.body).toContain(`data-testid="${CALENDAR_DAY_TESTID}"`);
     expect(rendered.body).toContain(`data-testid="${CALENDAR_MONTH_STATUS_TESTID}"`);
+    expect(rendered.body).toContain("data-cal-jump");
+    expect(rendered.body).toContain("Game night parity");
   });
 
   it("keeps search a GET form with real anchors so no-JS stays functional", async () => {
@@ -147,7 +236,11 @@ describe("Kit calendar island mount parity", () => {
     expect(rendered.body).toContain('name="q"');
     expect(rendered.body).toContain('type="submit"');
     // A settled search names its hit line and offers a real clear navigation.
+    // The shared fixture carries a visible row, so this exercises the hit
+    // branch (hasVisibleResults) rather than the out-of-range branch.
     expect(rendered.body).toContain(eventsSearchHitCopy("chess"));
+    expect(rendered.body).toContain(`data-testid="${EVENT_CARD_TESTID}"`);
+    expect(rendered.body).not.toContain(`data-testid="${EVENTS_OUT_OF_RANGE_TESTID}"`);
     expect(rendered.body).toContain(`data-testid="${EVENTS_VIEW_LIST_TESTID}"`);
     expect(rendered.body).toContain(`data-testid="${EVENTS_VIEW_CALENDAR_TESTID}"`);
   });
@@ -155,17 +248,21 @@ describe("Kit calendar island mount parity", () => {
   it("renders the search-miss block with a clear-empty navigation", async () => {
     // totalPages 0 keeps the screen out of the out-of-range branch: a miss
     // with matches on another page renders the pager note instead, by contract.
+    // upcoming [] overrides the shared visible-row fixture so this renders a
+    // true miss, and the assertion pins the miss block's own clear link.
     const rendered = await renderEventsHtml(
       {
         ...baseData(),
         state: { view: "list", month: "2026-10", q: "xyzzy", past: false, page: 1 },
+        upcoming: [],
         totalPages: 0,
       } as never,
       { ...headers, "cache-control": "private, no-store" },
     );
 
     expect(rendered.body).toContain("Nothing matches that search.");
-    expect(rendered.body).toContain(`data-testid="${EVENTS_SEARCH_CLEAR_TESTID}"`);
+    expect(rendered.body).toContain(`data-testid="${EVENTS_EMPTY_SEARCH_TESTID}"`);
+    expect(rendered.body).toContain(`data-testid="${EVENTS_SEARCH_CLEAR_EMPTY_TESTID}"`);
   });
 
   it("keeps skip-link, main and heading focus targets for keyboard users", async () => {
@@ -248,6 +345,16 @@ describe("Kit calendar fragment auth lineage", () => {
     const journeyForFn = vi.fn(async () => "added" as const);
     const deleteJoinCookie = vi.fn();
     const setHeaders = vi.fn();
+    const modelForFn = vi.fn(async () => ({
+      state: { view: "calendar" as const, month: "2026-10", q: "", past: false, page: 1 },
+      upcoming: [],
+      past: [],
+      zone: "Europe/London",
+      totalPages: 1,
+      emptyState: null,
+      robots: undefined,
+      discordFailed: false,
+    }));
     const data = await loadEventsPage({
       env,
       url: new URL("https://example.test/events?view=calendar&month=2026-10"),
@@ -261,16 +368,7 @@ describe("Kit calendar fragment auth lineage", () => {
       dbForFn: async () => ({}) as never,
       sessionForFn: async () => ({ member: true, moderator: false }),
       journeyForFn,
-      modelForFn: async () => ({
-        state: { view: "calendar" as const, month: "2026-10", q: "", past: false, page: 1 },
-        upcoming: [],
-        past: [],
-        zone: "Europe/London",
-        totalPages: 1,
-        emptyState: null,
-        robots: undefined,
-        discordFailed: false,
-      }),
+      modelForFn,
       discordForFn: () => ({ upcoming: async () => [], lastReadFailed: () => false }) as never,
     });
 
@@ -282,6 +380,47 @@ describe("Kit calendar fragment auth lineage", () => {
     expect(deleteJoinCookie).not.toHaveBeenCalled();
     expect(setHeaders).toHaveBeenCalledWith(
       expect.objectContaining({ "cache-control": "private, no-store" }),
+    );
+    // The Kit-owned translation forwards the shared URL model to the model.
+    expect(modelForFn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        input: expect.objectContaining({ view: "calendar", month: "2026-10", page: 1 }),
+      }),
+    );
+  });
+
+  it("forwards month and page turns to the Kit model", async () => {
+    const modelForFn = vi.fn(async () => ({
+      state: { view: "calendar" as const, month: "2026-10", q: "", past: false, page: 2 },
+      upcoming: [],
+      past: [],
+      zone: "Europe/London",
+      totalPages: 2,
+      emptyState: null,
+      robots: undefined,
+      discordFailed: false,
+    }));
+    await loadEventsPage({
+      env,
+      url: new URL("https://example.test/events?view=calendar&month=2026-10&page=2"),
+      method: "GET",
+      island: true,
+      request: new Request("https://example.test/events?view=calendar&month=2026-10&page=2", {
+        headers: { "x-two-island": "events-calendar" },
+      }),
+      setHeaders: vi.fn(),
+      deleteJoinCookie: vi.fn(),
+      dbForFn: async () => ({}) as never,
+      sessionForFn: async () => null,
+      journeyForFn: async () => null,
+      modelForFn,
+      discordForFn: () => ({ upcoming: async () => [], lastReadFailed: () => false }) as never,
+    });
+
+    expect(modelForFn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        input: expect.objectContaining({ view: "calendar", month: "2026-10", page: 2 }),
+      }),
     );
   });
 });
