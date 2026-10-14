@@ -64,7 +64,7 @@ beforeEach(() => {
 });
 
 describe("hooks.server route ownership wiring", () => {
-  it("ships the homepage disabled and the native archive route enabled with about, privacy, rules, join and recover still on Hono", () => {
+  it("ships the homepage disabled and the native archive route enabled with about, privacy, rules, join, recover and the featured list and activity log still on Hono", () => {
     expect(ROUTE_MANIFEST).toEqual([
       { method: "GET", path: "/", enabled: false, reads: "public" },
       { method: "GET", path: "/events/past", enabled: true, reads: "public" },
@@ -80,9 +80,21 @@ describe("hooks.server route ownership wiring", () => {
       },
       {
         method: "GET",
+        path: "/admin/featured",
+        enabled: false,
+        reads: { resource: "featured_contents", action: "list", route: "admin.featured.index" },
+      },
+      {
+        method: "GET",
         path: "/admin/activity-log",
         enabled: false,
         reads: { resource: "activity_log", action: "list", route: "admin.activity-log.index" },
+      },
+      {
+        method: "GET",
+        path: "/admin/events",
+        enabled: false,
+        reads: { resource: "events", action: "list", route: "admin.events.index" },
       },
       {
         method: "GET",
@@ -102,6 +114,16 @@ describe("hooks.server route ownership wiring", () => {
         path: "/members/:user",
         enabled: false,
         reads: { resource: "profile", action: "view", route: "profiles.show" },
+      },
+      { method: "GET", path: "/hotzones", enabled: true, reads: "public" },
+      { method: "GET", path: "/hotzones/joins", enabled: true, reads: "public" },
+      { method: "GET", path: "/hotzones/voice", enabled: true, reads: "public" },
+      { method: "GET", path: "/hotzones/games", enabled: true, reads: "public" },
+      {
+        method: "GET",
+        path: "/leaderboards/members",
+        enabled: false,
+        reads: { resource: "leaderboard", action: "list", route: "leaderboards.members" },
       },
       {
         method: "GET",
