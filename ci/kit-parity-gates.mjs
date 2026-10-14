@@ -60,6 +60,18 @@ export const PARITY_ROUTES = [
     cache: "no-store, private",
     compareSection: null,
   },
+  // Hot-zone heatmaps: public aggregates, Kit-owned with the same
+  // reads as the Hono handlers. No byte section compare: the joins grid reads
+  // live join_attempts/event rows, so Hono vs Kit bytes differ by design;
+  // preview proves the structural contract on both sides instead. Concrete
+  // signal paths only, matching the manifest (no :param pattern).
+  ...["/hotzones", "/hotzones/joins", "/hotzones/voice", "/hotzones/games"].map((path) => ({
+    path,
+    expectStatus: 200,
+    expectMarker: "manifest",
+    contract: "hotzones",
+    compareSection: null,
+  })),
 ];
 
 export const RESERVED_PROBES = [{ path: "/up", expectStatus: 200, expectMarker: null }];
@@ -156,10 +168,88 @@ export function expectedMarkerFor(manifestSource, path) {
 // whatever the field order, or the gate throws (like expectedMarkerFor)
 // instead of reading it as disabled. Matching is ANY-enabled, never
 // first-match, so GET disabled listed before POST enabled still counts.
+//
+// Blocks are extracted brace-aware: a `reads: { ... }` nested object no
+// longer truncates the entry (a flat `\{[^{}]*\}` scan went blind on every
+// nested-reads route — /admin, /profile, /members/:user,
+// /leaderboards/members — and let an enabled member board ship on a green
+// ledger with no run). Strings and comments never contribute braces.
 export function parseManifestEntries(manifestSource) {
   const entries = [];
-  for (const match of manifestSource.matchAll(/\{[^{}]*\}/g)) {
-    const block = match[0];
+  const len = manifestSource.length;
+  let i = 0;
+  while (i < len) {
+    if (manifestSource[i] !== "{") {
+      i += 1;
+      continue;
+    }
+    let depth = 0;
+    let j = i;
+    let quote = null;
+    let escaped = false;
+    let lineComment = false;
+    let blockComment = false;
+    let end = -1;
+    while (j < len) {
+      const ch = manifestSource[j];
+      const nxt = j + 1 < len ? manifestSource[j + 1] : "";
+      if (lineComment) {
+        if (ch === "\n") lineComment = false;
+        j += 1;
+        continue;
+      }
+      if (blockComment) {
+        if (ch === "*" && nxt === "/") {
+          blockComment = false;
+          j += 2;
+          continue;
+        }
+        j += 1;
+        continue;
+      }
+      if (quote !== null) {
+        if (escaped) {
+          escaped = false;
+          j += 1;
+          continue;
+        }
+        if (ch === "\\") {
+          escaped = true;
+          j += 1;
+          continue;
+        }
+        if (ch === quote) quote = null;
+        j += 1;
+        continue;
+      }
+      if (ch === "/" && nxt === "/") {
+        lineComment = true;
+        j += 2;
+        continue;
+      }
+      if (ch === "/" && nxt === "*") {
+        blockComment = true;
+        j += 2;
+        continue;
+      }
+      if (ch === '"' || ch === "'" || ch === "`") {
+        quote = ch;
+        j += 1;
+        continue;
+      }
+      if (ch === "{") depth += 1;
+      else if (ch === "}") {
+        depth -= 1;
+        if (depth === 0) {
+          end = j;
+          break;
+        }
+      }
+      j += 1;
+    }
+    if (end === -1) break;
+    const block = manifestSource.slice(i, end + 1);
+    i = end + 1;
     // Only quoted-path blocks are manifest entries: this skips the
     // OwnedRoute interface (`path: string`) and prose comments mentioning
     // "path:", while still throwing on a real entry that omits a field.
@@ -200,8 +290,8 @@ export function isManifestEnabled(manifestSource, path, method = null) {
   );
 }
 
-// Coverage: the only executed parity runs today are GET/HEAD /events/past,
-// GET/HEAD /join and GET/HEAD /auth/recover via PARITY_ROUTES (unit contract
+// Coverage: the executed parity runs are GET/HEAD /events/past, /join,
+// /auth/recover and the four hot-zone paths via PARITY_ROUTES (unit contract
 // + preview fetch). Any other enabled entry has no run covering it and must
 // fail — the scopes below only choose the journey name for the failure
 // message, never whether it fails.
@@ -354,6 +444,13 @@ export function assertRouteContract({ label, html, headers, status, expected }) 
     failures.push(...assertJoinContract(label, html, get, expected));
   } else if (contract === "recovery") {
     failures.push(...assertRecoveryContract(label, html, get, expected));
+  } else if (contract === "hotzones") {
+    if (!/hot zone/i.test(html)) failures.push(`${label}: hot-zone heading present`);
+    if (!html.includes("<table>")) failures.push(`${label}: 7x24 grid table present`);
+    if (!html.includes('<meta name="robots" content="noindex, follow"'))
+      failures.push(`${label}: hot-zones never index`);
+    if (/discord_id|created_at/i.test(html))
+      failures.push(`${label}: aggregate only, no per-attempt fields`);
   } else {
     failures.push(`${label}: unknown contract ${JSON.stringify(contract)}`);
   }
@@ -844,6 +941,69 @@ export function runUnitMode({ stdout = process.stdout, manifestSource: manifestO
     );
   }
 
+  // Hot-zone fixtures: the four Kit-owned heatmaps get the same executed
+  // unit contract as /join and /auth/recover, so an enabled hot-zone route
+  // is covered by a run that actually exercises its contract branch — a
+  // missing grid table, heading, noindex or a per-attempt field leak must
+  // fail here, not only in a preview fetch CI never makes.
+  // Partial synthetic manifests in the gate's own tests exercise other
+  // scopes and carry no hot-zone entry; the shipped manifest lists all
+  // four, and there the journeys below always run.
+  const hotzonesListed = parseManifestEntries(manifestSource).some(
+    (entry) => entry.path === "/hotzones",
+  );
+  const hotzoneMarker = hotzonesListed ? expectedMarkerFor(manifestSource, "/hotzones") : null;
+  const hotzoneShell =
+    `<html><head><link rel="canonical" href="https://next.togetherweown.com/hotzones">` +
+    `<meta name="robots" content="noindex, follow"></head>` +
+    `<body><a class="skip-link" href="#main">Skip</a>` +
+    `<nav aria-label="Primary"><a href="/">Home</a></nav>` +
+    `<main id="main"><h1>Hot zones</h1>` +
+    `<table><caption>Join activity</caption></table></main>` +
+    `<p><span class="account-caption">Welcome, guest</span></p></body></html>`;
+  if (hotzonesListed) {
+    const hotzoneFailures = assertRouteContract({
+      label: "unit/hotzones",
+      html: hotzoneShell,
+      headers: headerMap({
+        "content-type": "text/html",
+        "x-two-renderer": hotzoneMarker,
+        "cache-control": "public, max-age=300",
+      }),
+      status: 200,
+      expected: { status: 200, marker: hotzoneMarker, contract: "hotzones" },
+    });
+    push(
+      "unit: hotzones good fixture passes",
+      hotzoneFailures.length === 0 ? "passed" : "failed",
+      hotzoneFailures.join("; ") || null,
+    );
+    const hotzoneMutants = [
+      ["no-table", (html) => html.replace("<table>", "<div>").replace("</table>", "</div>")],
+      ["no-heading", (html) => html.replace("Hot zones", "Activity")],
+      ["indexable", (html) => html.replace('<meta name="robots" content="noindex, follow">', "")],
+      ["per-attempt-leak", (html) => `${html}<p>discord_id: 123</p>`],
+    ];
+    for (const [name, mutate] of hotzoneMutants) {
+      const failures = assertRouteContract({
+        label: `unit/hotzones-mutant-${name}`,
+        html: mutate(hotzoneShell),
+        headers: headerMap({
+          "content-type": "text/html",
+          "x-two-renderer": hotzoneMarker,
+          "cache-control": "public, max-age=300",
+        }),
+        status: 200,
+        expected: { status: 200, marker: hotzoneMarker, contract: "hotzones" },
+      });
+      push(
+        `unit: hotzones mutant ${name} fails`,
+        failures.length > 0 ? "passed" : "failed",
+        failures.length > 0 ? null : "mutant was NOT detected",
+      );
+    }
+  }
+
   // Wrong-marker mutant: Hono-owned route carrying the Kit marker must fail.
   const markerFailures = assertRouteContract({
     label: "unit/mutant-marker",
@@ -894,8 +1054,8 @@ export function runUnitMode({ stdout = process.stdout, manifestSource: manifestO
   // Explicit ownership goes through isManifestEnabled — the same structural,
   // method-aware primitive its tests pin — so those tests guard the real gate
   // path instead of a parallel matcher. A final catch-all fails any other
-  // enabled entry no executed run covers (today only GET/HEAD /events/past,
-  // /join and /auth/recover via PARITY_ROUTES): GET /admin, /events,
+  // enabled entry no executed run covers (GET/HEAD /events/past, /join,
+  // /auth/recover and the four hot-zone paths via PARITY_ROUTES): GET /admin, /events,
   // /join/discord, /join/callback and friends can never ship green with no
   // journey. (GET /join and GET /auth/recover themselves are covered.)
   const manifestEntries = parseManifestEntries(manifestSource);
