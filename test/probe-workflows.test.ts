@@ -3,8 +3,14 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { APPROVED_MODERATOR_ROLE_IDS } from "../src/probes/check-moderators";
+import {
+  APPROVED_MODERATOR_ROLE_IDS,
+  PRODUCTION_GUILD_ID,
+  STAGING_GUILD_ID,
+  STAGING_MODERATOR_ROLE_IDS,
+} from "../src/probes/check-moderators";
 const APPROVED = APPROVED_MODERATOR_ROLE_IDS.join(",");
+const STAGING = STAGING_MODERATOR_ROLE_IDS.join(",");
 // @ts-expect-error Standalone tooling has no declaration file.
 import { readWranglerConfig } from "../ci/wrangler-config.mjs";
 
@@ -131,6 +137,65 @@ describe("source-managed moderator deployment preflight", () => {
     expect(JSON.parse(wrong.stdout)).toMatchObject({ ok: false });
   });
 
+  it("binds each config to its own guild: a production pair in a staging guild fails", () => {
+    const guildProbe = (vars: string) => {
+      const dir = temp();
+      try {
+        const path = join(dir, "wrangler.jsonc");
+        writeFileSync(path, `{"vars": {${vars}}}`);
+        return spawnSync(
+          process.execPath,
+          [
+            "--import",
+            "./bin/ts-hook.mjs",
+            "bin/check-moderators.mjs",
+            `--config=${path}`,
+            "--require-configured",
+            "--json",
+          ],
+          {
+            encoding: "utf8",
+            timeout: 30_000,
+            env: { ...process.env, DISCORD_MODERATOR_ROLE_IDS: "Moderator" },
+          },
+        );
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    };
+    const vars = (guild: string, roles: string) =>
+      `"DISCORD_GUILD_ID": "${guild}", "DISCORD_MODERATOR_ROLE_IDS": "${roles}"`;
+    // Staging pair in the staging guild: the pre-2026-10-14 mismatch, fixed.
+    const staging = guildProbe(vars(STAGING_GUILD_ID, STAGING));
+    expect(staging.status).toBe(0);
+    expect(JSON.parse(staging.stdout)).toMatchObject({ failures: 0, ok: true });
+    // Production pair in the staging guild: every role finding can pass while
+    // the grant matches nobody. The binding finding must fail the run.
+    const mismatched = guildProbe(vars(STAGING_GUILD_ID, APPROVED));
+    expect(mismatched.status).toBe(1);
+    const findings = JSON.parse(mismatched.stdout).results as { name: string; status: string }[];
+    expect(findings.find((f) => f.name === "guild-binding")?.status).toBe("FAIL");
+    // The shipped configs are guild-bound both ways: top level is the
+    // staging deploy, env.production is production.
+    for (const extra of [[], ["--env=production"]]) {
+      const shipped = spawnSync(
+        process.execPath,
+        [
+          "--import",
+          "./bin/ts-hook.mjs",
+          "bin/check-moderators.mjs",
+          "--config=wrangler.jsonc",
+          ...extra,
+          "--require-configured",
+          "--json",
+        ],
+        { encoding: "utf8", timeout: 30_000, env: { ...process.env } },
+      );
+      expect(shipped.status).toBe(0);
+      expect(JSON.parse(shipped.stdout)).toMatchObject({ failures: 0, ok: true });
+    }
+  });
+
   it("refuses an unknown environment without echoing config", () => {
     const dir = temp();
     try {
@@ -253,11 +318,16 @@ describe("source-managed moderator deployment preflight", () => {
       production.indexOf("npx wrangler versions upload --env production"),
     );
     expect(production).not.toContain("secrets.DISCORD_MODERATOR_ROLE_IDS");
-    // env.production declares the same approved Owner+Moderator pair; Wrangler does not
-    // inherit top-level vars, so this entry is the one production boots with.
+    // env.production declares the production approved Owner+Moderator pair;
+    // Wrangler does not inherit top-level vars, so this entry is the one
+    // production boots with. The top level is the staging deploy: it carries
+    // the staging-guild pair, never the production one (role IDs are
+    // guild-scoped).
     const parsed = readWranglerConfig(read("wrangler.jsonc"));
     expect(parsed.env?.production?.vars?.DISCORD_MODERATOR_ROLE_IDS).toBe(APPROVED);
-    expect(parsed.vars?.DISCORD_MODERATOR_ROLE_IDS).toBe(APPROVED);
+    expect(parsed.env?.production?.vars?.DISCORD_GUILD_ID).toBe(PRODUCTION_GUILD_ID);
+    expect(parsed.vars?.DISCORD_MODERATOR_ROLE_IDS).toBe(STAGING);
+    expect(parsed.vars?.DISCORD_GUILD_ID).toBe(STAGING_GUILD_ID);
   });
 
   it("checks the same explicit source config before all Cloudflare mutations", () => {
@@ -275,7 +345,10 @@ describe("source-managed moderator deployment preflight", () => {
     expect(deploy).not.toContain("secrets.DISCORD_MODERATOR_ROLE_IDS");
     expect(smoke).toContain("run: npm run check:worker-moderators");
     // This checks only source declarations, not current vendor isolation/bindings.
+    // Production keeps the production pair; the top-level staging deploy
+    // carries the staging-guild pair (guild binding is asserted below).
     expect(read("wrangler.jsonc")).toContain(`"DISCORD_MODERATOR_ROLE_IDS": "${APPROVED}"`);
+    expect(read("wrangler.jsonc")).toContain(`"DISCORD_MODERATOR_ROLE_IDS": "${STAGING}"`);
     expect(read("wrangler.jsonc")).toContain('"keep_vars": true');
   });
 });

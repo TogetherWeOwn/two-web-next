@@ -24,15 +24,44 @@ export type ModeratorProbe = {
 };
 
 /**
- * The approved website moderator roles in the TWO guild, matched by ID and
- * never by name: `Owner` and `Moderator`. This pair replaces the retired
- * SySOp-only grant; widening or narrowing it needs fresh sign-off.
+ * The approved website moderator roles in the production TWO guild, matched
+ * by ID and never by name: `Owner` and `Moderator`. This pair replaces the
+ * retired SySOp-only grant; widening or narrowing it needs fresh sign-off.
  * Verified from the 2026-10-13 role-cleanup census (round6/presnap).
  */
 export const APPROVED_MODERATOR_ROLE_IDS: readonly string[] = [
   "1546777855801954408", // Owner
   "1546777856984481792", // Moderator
 ];
+
+/** Production guild: TWO `326474832151838730`. */
+export const PRODUCTION_GUILD_ID = "326474832151838730";
+
+/** Staging guild: TWO Staging `1545644954272137297`. */
+export const STAGING_GUILD_ID = "1545644954272137297";
+
+/**
+ * The approved website moderator roles in the staging guild: `Owner` and
+ * `Moderator`. Verified from existing authorized staging snapshots on
+ * TOG-1317 (latest `two-staging-clean-slate-export-2026-09-07.json`,
+ * generated 2026-09-07T00:41:42Z). Discord role IDs are guild-scoped, so
+ * this pair is unrelated to the production pair above — never copy one
+ * guild's IDs into the other's config.
+ */
+export const STAGING_MODERATOR_ROLE_IDS: readonly string[] = [
+  "1546211363578191873", // Owner (staging guild)
+  "1545648550329851946", // Moderator (staging guild)
+];
+
+/**
+ * Guild-bound approved pairs. Each environment's config must carry the pair
+ * for the guild it queries; a production pair in a staging config (or vice
+ * versa) matches nobody while looking configured.
+ */
+export const APPROVED_MODERATOR_ROLE_IDS_BY_GUILD: Record<string, readonly string[]> = {
+  [STAGING_GUILD_ID]: STAGING_MODERATOR_ROLE_IDS,
+  [PRODUCTION_GUILD_ID]: APPROVED_MODERATOR_ROLE_IDS,
+};
 
 /**
  * Roles that must never appear in the moderator list. The five other roles
@@ -64,7 +93,7 @@ export function rawModeratorRoleIds(raw: string | undefined): string[] {
 
 export function checkModerators(
   raw: string | undefined,
-  opts?: { requireConfigured?: boolean },
+  opts?: { requireConfigured?: boolean; guildId?: string },
 ): ModeratorProbe {
   const configured = rawModeratorRoleIds(raw);
   const rendered = configured.length === 0 ? "<empty>" : configured.join(",");
@@ -78,10 +107,14 @@ export function checkModerators(
   if (configured.length > 0) {
     record("PASS", "configured", `moderator_role_ids = ${rendered}`);
   } else if (opts?.requireConfigured) {
+    const hintPair =
+      opts?.guildId !== undefined
+        ? APPROVED_MODERATOR_ROLE_IDS_BY_GUILD[opts.guildId]
+        : APPROVED_MODERATOR_ROLE_IDS;
     record(
       "FAIL",
       "configured",
-      `moderator_role_ids is empty. Nobody is a moderator and the admin link is offered to no one — silently. Set DISCORD_MODERATOR_ROLE_IDS=${APPROVED_MODERATOR_ROLE_IDS.join(",")} in this environment.`,
+      `moderator_role_ids is empty. Nobody is a moderator and the admin link is offered to no one — silently. Set DISCORD_MODERATOR_ROLE_IDS=${hintPair?.join(",") ?? "<pair for this guild>"} in this environment.`,
     );
   } else {
     record(
@@ -108,21 +141,38 @@ export function checkModerators(
     );
   }
 
-  // The signed-off value is exactly the approved Owner+Moderator pair
-  // (order-insensitive; duplicates do not count twice).
-  const approved = APPROVED_MODERATOR_ROLE_IDS.join(",");
+  // The signed-off value is exactly the approved Owner+Moderator pair for
+  // this environment's guild (order-insensitive; duplicates do not count
+  // twice). Without a guild the legacy production pair is the expectation.
+  const expectedPair =
+    opts?.guildId !== undefined
+      ? APPROVED_MODERATOR_ROLE_IDS_BY_GUILD[opts.guildId]
+      : APPROVED_MODERATOR_ROLE_IDS;
+  const approved = expectedPair?.join(",") ?? "<unknown guild>";
   const unique = [...new Set(configured)];
   if (configured.length === 0) {
     record("UNKNOWN", "is-approved", "nothing configured, so there is nothing to compare");
+  } else if (expectedPair === undefined) {
+    record(
+      "FAIL",
+      "is-approved",
+      `unknown guild ${opts?.guildId}: no approved pair exists for it. Configured: ${rendered}. Role IDs are guild-scoped, so an unrecognized guild can never match.`,
+    );
   } else if (
-    configured.length === APPROVED_MODERATOR_ROLE_IDS.length &&
-    unique.length === APPROVED_MODERATOR_ROLE_IDS.length &&
-    APPROVED_MODERATOR_ROLE_IDS.every((id) => unique.includes(id))
+    configured.length === expectedPair.length &&
+    unique.length === expectedPair.length &&
+    expectedPair.every((id) => unique.includes(id))
   ) {
-    record("PASS", "is-approved", `exactly the approved Owner+Moderator pair (${approved})`);
+    record(
+      "PASS",
+      "is-approved",
+      opts?.guildId !== undefined
+        ? `exactly the approved Owner+Moderator pair for guild ${opts.guildId} (${approved})`
+        : `exactly the approved Owner+Moderator pair (${approved})`,
+    );
   } else {
-    const missing = APPROVED_MODERATOR_ROLE_IDS.filter((id) => !unique.includes(id));
-    const extra = unique.filter((id) => !APPROVED_MODERATOR_ROLE_IDS.includes(id));
+    const missing = expectedPair.filter((id) => !unique.includes(id));
+    const extra = unique.filter((id) => !expectedPair.includes(id));
     const parts: string[] = [];
     if (missing.length > 0) parts.push(`missing approved role(s): ${missing.join(",")}`);
     if (extra.length > 0) parts.push(`extra role(s): ${extra.join(",")}`);
@@ -132,6 +182,48 @@ export function checkModerators(
       "is-approved",
       `not exactly the approved Owner+Moderator pair (${approved}). Configured: ${rendered} (${parts.join("; ")}). Holders of approved roles would lose or gain the admin panel silently.`,
     );
+  }
+
+  // Guild binding: the configured pair must belong to the guild this
+  // environment queries. Only emitted when the caller names a guild — legacy
+  // callers without one keep the five findings above. A production pair in a
+  // staging config (the pre-2026-10-14 staging state) fails here even though
+  // every other finding can pass, because the offline checks cannot
+  // otherwise see that the IDs do not exist in the queried guild.
+  if (opts?.guildId !== undefined) {
+    const bound = APPROVED_MODERATOR_ROLE_IDS_BY_GUILD[opts.guildId];
+    if (bound === undefined) {
+      record(
+        "FAIL",
+        "guild-binding",
+        `unknown guild ${opts.guildId}: no approved moderator pair is bound to it, so this config can never grant. Known guilds: ${Object.keys(APPROVED_MODERATOR_ROLE_IDS_BY_GUILD).join(",")}.`,
+      );
+    } else if (configured.length === 0) {
+      record(
+        "UNKNOWN",
+        "guild-binding",
+        "nothing configured, so there is no pair to bind to the guild",
+      );
+    } else {
+      const boundUnique = [...new Set(configured)];
+      const matches =
+        configured.length === bound.length &&
+        boundUnique.length === bound.length &&
+        bound.every((id) => boundUnique.includes(id));
+      if (matches) {
+        record(
+          "PASS",
+          "guild-binding",
+          `configured pair is bound to guild ${opts.guildId} (${bound.join(",")})`,
+        );
+      } else {
+        record(
+          "FAIL",
+          "guild-binding",
+          `configured roles are not the pair bound to guild ${opts.guildId} (expected ${bound.join(",")}; configured ${rendered}). Role IDs are guild-scoped: this grant matches nobody in the queried guild while looking configured.`,
+        );
+      }
+    }
   }
 
   // Shape, not membership. Deliberate divergence from legacy's /^[0-9]{17,20}$/:

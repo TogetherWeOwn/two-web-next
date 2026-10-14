@@ -4,6 +4,9 @@ import {
   APPROVED_MODERATOR_ROLE_IDS,
   checkModerators,
   DOOMED_MODERATOR_ROLE_IDS,
+  PRODUCTION_GUILD_ID,
+  STAGING_GUILD_ID,
+  STAGING_MODERATOR_ROLE_IDS,
 } from "../src/probes/check-moderators";
 import { runBotSmoke, stagingEndpoint } from "../src/probes/bot-smoke";
 import { BotTerminalError } from "../src/jobs/types";
@@ -77,6 +80,10 @@ describe("discord:check-moderators (role-config probe)", () => {
     `${APPROVED},100000000000000001`,
     `${APPROVED},${APPROVED_MODERATOR_ROLE_IDS[0]}`,
     APPROVED_MODERATOR_ROLE_IDS[1],
+    // Two-entry lists with a wrong member: the membership clause (not just
+    // the length) must reject these. Kills the `every(...) => true` mutant.
+    `${APPROVED_MODERATOR_ROLE_IDS[0]},100000000000000001`,
+    `${APPROVED_MODERATOR_ROLE_IDS[0]},${APPROVED_MODERATOR_ROLE_IDS[0]}`,
   ])("refuses a list other than exactly the approved pair: %s", (raw) => {
     const p = checkModerators(raw, { requireConfigured: true });
     expect(p.ok).toBe(false);
@@ -94,6 +101,60 @@ describe("discord:check-moderators (role-config probe)", () => {
     const p = checkModerators(`${APPROVED},abc`, { requireConfigured: true });
     expect(p.ok).toBe(false);
     expect(p.findings.find((f) => f.name === "shape")?.status).toBe("FAIL");
+  });
+});
+
+describe("discord:check-moderators guild binding (staging vs production)", () => {
+  const STAGING = STAGING_MODERATOR_ROLE_IDS.join(",");
+
+  it("staging pair in the staging guild passes every check", () => {
+    const p = checkModerators(STAGING, { requireConfigured: true, guildId: STAGING_GUILD_ID });
+    expect(p.ok).toBe(true);
+    expect(p.findings.find((f) => f.name === "guild-binding")?.status).toBe("PASS");
+    expect(p.findings.every((f) => f.status === "PASS")).toBe(true);
+  });
+
+  it("production pair in the production guild passes every check", () => {
+    const p = checkModerators(APPROVED, {
+      requireConfigured: true,
+      guildId: PRODUCTION_GUILD_ID,
+    });
+    expect(p.ok).toBe(true);
+    expect(p.findings.find((f) => f.name === "guild-binding")?.status).toBe("PASS");
+  });
+
+  it("production pair in the staging guild fails (role IDs are guild-scoped)", () => {
+    const p = checkModerators(APPROVED, {
+      requireConfigured: true,
+      guildId: STAGING_GUILD_ID,
+    });
+    expect(p.ok).toBe(false);
+    expect(p.findings.find((f) => f.name === "guild-binding")?.status).toBe("FAIL");
+    expect(p.findings.find((f) => f.name === "is-approved")?.status).toBe("FAIL");
+  });
+
+  it("staging pair in the production guild fails", () => {
+    const p = checkModerators(STAGING, {
+      requireConfigured: true,
+      guildId: PRODUCTION_GUILD_ID,
+    });
+    expect(p.ok).toBe(false);
+    expect(p.findings.find((f) => f.name === "guild-binding")?.status).toBe("FAIL");
+  });
+
+  it("unknown guild fails closed", () => {
+    const p = checkModerators(APPROVED, {
+      requireConfigured: true,
+      guildId: "100000000000000001",
+    });
+    expect(p.ok).toBe(false);
+    expect(p.findings.find((f) => f.name === "guild-binding")?.status).toBe("FAIL");
+  });
+
+  it("omitted guild keeps the legacy production-pair behavior with no binding finding", () => {
+    const p = checkModerators(APPROVED, { requireConfigured: true });
+    expect(p.ok).toBe(true);
+    expect(p.findings.some((f) => f.name === "guild-binding")).toBe(false);
   });
 });
 
