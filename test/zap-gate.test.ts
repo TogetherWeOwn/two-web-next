@@ -240,4 +240,10 @@ describe("ci/zap-gate.mjs", () => {
     ).not.toBe(0);
     expect(runCli(report([alert(10020, "2")]), nullBudget).exit).toBe(0);
   });
+
+  it("reports the scanned site count without URLs or evidence", () => {
+    const md = markdown(summarize({ site: [{ alerts: [] }, { alerts: [] }] }, nullBudget));
+    expect(md).toMatch(/Scanned 2 site\(s\)/);
+    expect(md).not.toContain("example.invalid");
+  });
 });
