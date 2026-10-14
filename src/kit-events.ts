@@ -110,7 +110,10 @@ export async function dispatchEventsRequest(
   // is not the HTML representation cached by Hono.
   const htmlRequest = url.pathname === "/events";
   const island = request.headers.get("x-two-island") === ISLAND_NAME;
-  const session = await sessionFor(request);
+  // Any Cookie header already excludes the shared cache, and a session needs
+  // its cookie: skip the store read for cookie-bearing requests so every
+  // signed-in view avoids an extra client plus query (the load re-reads).
+  const session = request.headers.has("cookie") ? null : await sessionFor(request);
   // Island swaps keep their pending flash value like Hono: only full renders
   // peek at it, so a fragment never eats the banner it cannot display.
   const flashed = island ? null : await journeyFor(request);
@@ -243,8 +246,9 @@ export interface KitEventsLoadData extends CalendarPageModel {
  * on a double-set, so the caller must not set headers again on a throw.
  *
  * Session reads are read-only (no rotation, no revocation) and the flash is
- * consumed only on full renders: fragments keep their pending value exactly
- * like Hono's island branch, which can never display the banner.
+ * consumed only on full renders after a successful model read: fragments keep
+ * their pending value exactly like Hono's island branch, which can never
+ * display the banner, and a 503 leaves it for the next full load.
  */
 export async function loadEventsPage(
   args: KitEventsLoadArgs,
@@ -305,7 +309,6 @@ export async function loadEventsPage(
     } catch {
       joinResult = null;
     }
-    if (joinResult && method === "GET") deleteJoinCookie();
     if (method !== "GET") joinResult = null;
   }
 
@@ -322,6 +325,11 @@ export async function loadEventsPage(
     setHeaders({ "cache-control": "private, no-store", vary });
     throw eventsUnavailable();
   }
+
+  // Consume the one-shot banner only after the read succeeds, like Hono's
+  // takeJoinResult after loadCalendarPageModel: a branded 503 must leave the
+  // pending flash for the next full load instead of eating it unseen.
+  if (joinResult && method === "GET") deleteJoinCookie();
 
   const cacheControl =
     session || input.searching || joinResult ? "private, no-store" : "public, max-age=60";

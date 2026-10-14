@@ -1,3 +1,6 @@
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { __resetAnonEventCacheForTests, retireAnonEventCaches } from "../src/events/anon-cache";
 import { dispatchEventsRequest, eventsUnavailable, loadEventsPage } from "../src/kit-events";
@@ -139,6 +142,24 @@ describe("Kit events list response parity", () => {
     await dispatchEventsRequest(withCookie(), env, resolve, { now: 2000 });
 
     expect(renders).toBe(2);
+  });
+
+  it("skips the session store read for cookie-bearing requests", async () => {
+    const sessionFor = vi.fn(async () => ({ member: true, moderator: false }));
+    const withCookie = () =>
+      request("https://example.test/events", { headers: { cookie: "session=opaque" } });
+    let renders = 0;
+    const resolve = async () => {
+      renders++;
+      return cachedResponse();
+    };
+    await dispatchEventsRequest(withCookie(), env, resolve, { sessionFor, now: 1000 });
+    await dispatchEventsRequest(withCookie(), env, resolve, { sessionFor, now: 2000 });
+
+    // Any Cookie header already excludes the shared cache, so the store read
+    // can never change the decision: cookie-bearing views must not pay for it.
+    expect(renders).toBe(2);
+    expect(sessionFor).not.toHaveBeenCalled();
   });
 
   it("does not share searches or flashed renders", async () => {
@@ -415,6 +436,19 @@ describe("Kit events list query-state contract", () => {
     expect(journeyFor).not.toHaveBeenCalled();
     expect(fragment.deleteJoinCookie).not.toHaveBeenCalled();
   });
+
+  it("leaves the join flash pending when the model read fails", async () => {
+    const failingModel = loadArgs({
+      journeyForFn: async () => "added" as const,
+      modelForFn: async () => {
+        throw new Error("down");
+      },
+    });
+    // Hono consumes the flash only after loadCalendarPageModel succeeds, so a
+    // branded 503 must not eat the banner the member never saw.
+    await expect(loadEventsPage(failingModel.args)).rejects.toMatchObject({ status: 503 });
+    expect(failingModel.deleteJoinCookie).not.toHaveBeenCalled();
+  });
 });
 
 describe("Kit events list route ownership", () => {
@@ -502,5 +536,37 @@ describe("Kit events list hook branch", () => {
     expect(d.resolve).not.toHaveBeenCalled();
     expect(await response.text()).toBe("hono");
     expect(response.headers.get(KIT_RENDERER_HEADER)).toBeNull();
+  });
+});
+
+describe("Kit events list endpoint binding", () => {
+  it("pins the island, cookie, wiring and 503 contract of +server.ts", () => {
+    const root = join(dirname(fileURLToPath(import.meta.url)), "..");
+    const source = readFileSync(join(root, "web/src/routes/events/+server.ts"), "utf8");
+    // Replacing the catch body with a rethrow stays green without these:
+    // only error(503) proves what Kit sends, since SvelteKit's get_status
+    // ignores the helper's status:503 Error property and renders a 500.
+    expect(source).toContain('error(503, "Events temporarily unavailable")');
+    expect(source).toMatch(/catch\s*\{[\s\S]*?error\(503,\s*"Events temporarily unavailable"\)/);
+    // Island fragments keep their pending flash: only the full-render island
+    // expression preserves the banner the fragment cannot display.
+    expect(source).toContain('request.headers.get("x-two-island") === "events-calendar"');
+    // The browser ignores a __Host- cookie delete without path and secure.
+    expect(source).toContain("cookies.delete(JOIN_RESULT_COOKIE");
+    expect(source).toContain('path: "/"');
+    expect(source).toContain("secure: true");
+    expect(source).toContain("httpOnly: true");
+    expect(source).toContain('sameSite: "lax"');
+    // Helper wiring: the endpoint renders through the tested load and screen.
+    expect(source).toContain("loadEventsPage");
+    expect(source).toContain("renderEventsHtml");
+    expect(source).toContain("dbForFn: dbFor");
+    expect(source).toContain("kitEventsSessionFor(env)");
+    expect(source).toContain("kitEventsJourneyFor(env)");
+    // The helper collects private, no-store + Vary before every 503 throw;
+    // the catch re-applies them so the Kit error page keeps Hono's no-store
+    // contract instead of a cacheable default.
+    expect(source).toContain('collected["cache-control"]');
+    expect(source).toContain("collected.vary");
   });
 });

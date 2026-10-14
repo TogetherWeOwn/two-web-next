@@ -14,7 +14,7 @@ import { JOIN_RESULT_COOKIE } from "../../../../src/return-journey";
 // contract. Only GET is listed in the manifest (HEAD follows it); any other
 // method never reaches here because decideRoute matches the entry GET-only
 // and the hook hands the rest to Hono, so POST /events stays Hono-owned.
-export const GET: RequestHandler = async ({ request, cookies, url }) => {
+export const GET: RequestHandler = async ({ request, cookies, url, setHeaders }) => {
   const collected: Record<string, string> = {};
   try {
     const data = await loadEventsPage({
@@ -39,6 +39,17 @@ export const GET: RequestHandler = async ({ request, cookies, url }) => {
     const rendered = await renderEventsHtml(data, collected);
     return new Response(rendered.body, { status: rendered.status, headers: rendered.headers });
   } catch {
+    // loadEventsPage collects private, no-store + Vary before every 503
+    // throw: re-apply them so the Kit error page keeps Hono's no-store
+    // contract instead of a cacheable default.
+    const cacheControl = collected["cache-control"];
+    const vary = collected.vary;
+    if (cacheControl || vary) {
+      setHeaders({
+        ...(cacheControl ? { "cache-control": cacheControl } : {}),
+        ...(vary ? { vary } : {}),
+      });
+    }
     error(503, "Events temporarily unavailable");
   }
 };
