@@ -7,6 +7,7 @@ import {
   PROFILE_COPY,
   PROFILE_EDIT_TESTID,
   PROFILE_EMPTY_COPY,
+  PROFILE_ERROR_TESTID,
   PROFILE_FORM_TESTID,
   PROFILE_HONEY_FIELD,
   PROFILE_JOINED_TESTID,
@@ -23,9 +24,14 @@ import {
   profileJoinedMonth,
 } from "../../../src/islands/contracts";
 import {
+  PROFILE_ERROR_IDS,
   PROFILE_FIELD_IDS,
   PROFILE_SHARE_DESCRIPTION,
+  profileFieldForErrorKey,
   profileInitials,
+  statsDate,
+  statsLabel,
+  type ProfileFormValues,
 } from "../../../src/profiles/pages";
 import type { MemberStats } from "../../../src/profiles/stats";
 import type { MemberView } from "../../../src/profiles/store";
@@ -45,6 +51,8 @@ let {
   isModerator = false,
   appUrl,
   joinResult = null,
+  errors = null,
+  values = null,
 }: {
   member: MemberView;
   stats?: MemberStats | null;
@@ -52,6 +60,8 @@ let {
   isModerator?: boolean;
   appUrl: string;
   joinResult?: JoinResult | null;
+  errors?: Record<string, string> | null;
+  values?: ProfileFormValues | null;
 } = $props();
 
 const img = $derived(profileAvatarSrcset(member.id, member.avatar));
@@ -63,24 +73,21 @@ const canonical = $derived(canonicalUrl(appUrl, `/members/${member.id}`));
 // would change tab text and share titles, so this head replicates the Hono
 // profile head tag for tag instead.
 const title = $derived(`${member.username} — Member profile`);
-const form = $derived({
-  bio: member.bio ?? "",
-  games_text: member.games.join("\n"),
-  timezone: member.timezone ?? "",
-});
+// A failed save re-renders with the submitted values, never the stored
+// record; a fresh read renders the record. Same shape as the Hono
+// ProfilePage values, so the island binder sees one form contract.
+const form: ProfileFormValues = $derived(
+  values ?? {
+    bio: member.bio ?? "",
+    games_text: member.games.join("\n"),
+    timezone: member.timezone ?? "",
+    leaderboard_opt_out: member.leaderboardOptOut ?? false,
+  },
+);
+const gamesError = $derived(errors?.games ?? errors?.games_text);
 // A component-level <script> is Svelte's own; the island tags are markup.
 const avatarIsland = '<script src="/islands/avatar.js" defer></' + "script>";
 const editorIsland = '<script src="/islands/member-profile.js" defer></' + "script>";
-
-const statsLabel = (key: string) =>
-  key.replace(/[_-]+/g, " ").replace(/\b\w/g, (letter) => letter.toUpperCase());
-const statsDate = (date: Date) =>
-  date.toLocaleDateString("en-GB", {
-    day: "numeric",
-    month: "short",
-    year: "numeric",
-    timeZone: "UTC",
-  });
 </script>
 
 <svelte:head>
@@ -263,21 +270,75 @@ const statsDate = (date: Date) =>
         <div data-testid="profile-edit-control" hidden>
           <button class="btn" type="button" data-testid="profile-edit-again">Edit your profile</button>
         </div>
+        {#if errors && Object.keys(errors).length > 0}
+          <div role="alert" tabindex="-1" data-testid={PROFILE_ERROR_TESTID}>
+            <ul>
+              {#each Object.entries(errors) as [key, message]}
+                {@const field = profileFieldForErrorKey(key)}
+                <li>
+                  {#if field}
+                    <a href={`#${PROFILE_FIELD_IDS[field]}`}>{message}</a>
+                  {:else}
+                    {message}
+                  {/if}
+                </li>
+              {/each}
+            </ul>
+          </div>
+        {/if}
         <form method="post" action={`/members/${member.id}`} data-testid={PROFILE_FORM_TESTID}>
           <input type="hidden" name="_method" value="PATCH" />
+          <input type="hidden" name="leaderboard_opt_out" value="0" />
+          <label class="profile-field profile-switch">
+            <input
+              id={PROFILE_FIELD_IDS.leaderboard_opt_out}
+              name="leaderboard_opt_out"
+              type="checkbox"
+              value="1"
+              checked={form.leaderboard_opt_out}
+              aria-invalid={errors?.leaderboard_opt_out ? "true" : undefined}
+              aria-describedby={errors?.leaderboard_opt_out
+                ? PROFILE_ERROR_IDS.leaderboard_opt_out
+                : undefined}
+            />
+            Hide me from the member leaderboard
+          </label>
+          <p class="profile-hint">
+            Opted out, you leave every board and every count. Tick to hide, untick to show again.
+          </p>
+          {#if errors?.leaderboard_opt_out}
+            <p id={PROFILE_ERROR_IDS.leaderboard_opt_out} class="error">
+              {errors.leaderboard_opt_out}
+            </p>
+          {/if}
           <label class="profile-field">
             Bio{" "}
-            <textarea id={PROFILE_FIELD_IDS.bio} name="bio" rows={4} value={form.bio}></textarea>
+            <textarea
+              id={PROFILE_FIELD_IDS.bio}
+              name="bio"
+              rows="4"
+              value={form.bio}
+              aria-invalid={errors?.bio ? "true" : undefined}
+              aria-describedby={errors?.bio ? PROFILE_ERROR_IDS.bio : undefined}
+            ></textarea>
           </label>
+          {#if errors?.bio}
+            <p id={PROFILE_ERROR_IDS.bio} class="error">{errors.bio}</p>
+          {/if}
           <label class="profile-field">
             Games (one per line){" "}
             <textarea
               id={PROFILE_FIELD_IDS.games_text}
               name="games_text"
-              rows={4}
+              rows="4"
               value={form.games_text}
+              aria-invalid={gamesError ? "true" : undefined}
+              aria-describedby={gamesError ? PROFILE_ERROR_IDS.games_text : undefined}
             ></textarea>
           </label>
+          {#if gamesError}
+            <p id={PROFILE_ERROR_IDS.games_text} class="error">{gamesError}</p>
+          {/if}
           <label class="profile-field">
             Timezone{" "}
             <input
@@ -285,11 +346,16 @@ const statsDate = (date: Date) =>
               name="timezone"
               value={form.timezone}
               placeholder="Europe/London"
+              aria-invalid={errors?.timezone ? "true" : undefined}
+              aria-describedby={errors?.timezone ? PROFILE_ERROR_IDS.timezone : undefined}
             />
           </label>
+          {#if errors?.timezone}
+            <p id={PROFILE_ERROR_IDS.timezone} class="error">{errors.timezone}</p>
+          {/if}
           <div aria-hidden="true" class="sr-only">
             <label>
-              Website <input name={PROFILE_HONEY_FIELD} tabindex={-1} autocomplete="off" />
+              Website <input name={PROFILE_HONEY_FIELD} tabindex="-1" autocomplete="off" />
             </label>
           </div>
           <input type="hidden" name={PROFILE_OPENED_AT_FIELD} value={String(Date.now())} />

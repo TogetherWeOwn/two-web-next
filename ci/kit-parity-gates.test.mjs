@@ -7,6 +7,7 @@ import { test } from "node:test";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import {
   LOGIN_JOURNEYS,
+  assertMembersContract,
   assertReservedContract,
   assertRouteContract,
   expectedMarkerFor,
@@ -311,6 +312,115 @@ test("an enabled nested-reads member board fails via the catch-all, never a quie
     failed.some((j) => j.reason?.includes("/leaderboards/members")),
     "failure reason must name the member board",
   );
+});
+
+test("member-board contract passes a good fixture and fails planted mutants", () => {
+  const goodHtml =
+    `<html><head><link rel="canonical" href="https://next.togetherweown.com/leaderboards/members">` +
+    `<meta name="robots" content="noindex, nofollow"></head>` +
+    `<body><a class="skip-link" href="#main">Skip to content</a>` +
+    `<nav aria-label="Primary"><a href="/">Home</a></nav>` +
+    `<p><span class="who">Rick</span> <button type="submit" class="link">Sign out</button></p>` +
+    `<main id="main" class="events-page"><p class="strap">Members only</p>` +
+    `<h1>Member leaderboard</h1>` +
+    `<nav aria-label="Board scope"><ul><li><a href="/leaderboards/members" aria-current="page">Overall</a></li>` +
+    `<li><a href="/leaderboards/members?scope=relative">Around you</a></li></ul></nav>` +
+    `<form method="get" action="/leaderboards/members" aria-label="Filter the leaderboard">` +
+    `<p><label for="board-season">Season (all, 2026, 2026-09 or 2026-Q3)</label> ` +
+    `<input id="board-season" name="season" type="text" value="all" /></p>` +
+    `<p><label for="board-activity">Game (blank for every game)</label> ` +
+    `<input id="board-activity" name="activity" type="text" value="" /></p>` +
+    `<p><button class="btn" type="submit">Show board</button></p></form>` +
+    `<table><caption>Going counts, season all, every game</caption>` +
+    `<thead><tr><th scope="col">Rank</th><th scope="col">Member</th><th scope="col">Going</th></tr></thead>` +
+    `<tbody><tr><td>1</td><th scope="row">Rick</th><td>3</td></tr></tbody></table>` +
+    `</main></body></html>`;
+  const headers = {
+    get: (name) => {
+      if (name === "content-type") return "text/html; charset=UTF-8";
+      if (name === "x-two-renderer") return null;
+      if (name === "cache-control") return "private, no-store";
+      return null;
+    },
+  };
+  const expected = { status: 200, marker: null, cache: "private, no-store" };
+  assert.equal(
+    assertMembersContract({
+      label: "unit/members-good",
+      html: goodHtml,
+      headers,
+      status: 200,
+      expected,
+    }).length,
+    0,
+  );
+  const mutants = [
+    [
+      "guest-chrome",
+      (html) => html.replace("</main>", "<p>Welcome, guest</p></main>"),
+      "member page must not show guest chrome",
+    ],
+    ["shared-cache", (html) => html, "member board answers private, no-store"],
+    [
+      "no-table-no-status",
+      (html) => html.replace(/<table>[\s\S]*<\/table>/, ""),
+      "board table or empty status present",
+    ],
+    [
+      "follow-index",
+      (html) => html.replace('content="noindex, nofollow"', 'content="index, follow"'),
+      "member board never indexes",
+    ],
+    ["per-attempt-field", (html) => `${html}<!-- discord_id -->`, "no per-attempt fields"],
+    [
+      "profile-link",
+      (html) =>
+        html.replace(
+          '<th scope="row">Rick</th>',
+          '<th scope="row"><a href="/members/rick">Rick</a></th>',
+        ),
+      "board rows never link to profiles",
+    ],
+    [
+      "no-canonical",
+      (html) => html.replace(/<link rel="canonical"[^>]*>/, ""),
+      "canonical points at /leaderboards/members",
+    ],
+    [
+      "canonical-wrong-target",
+      (html) =>
+        html.replace(
+          /<link rel="canonical"[^>]*>/,
+          '<link rel="canonical" href="https://next.togetherweown.com/events">',
+        ),
+      "canonical points at /leaderboards/members",
+    ],
+    ["wrong-renderer", (html) => html, "renderer marker"],
+  ];
+  for (const [name, mutate, want] of mutants) {
+    const failures = assertMembersContract({
+      label: `unit/members-mutant-${name}`,
+      html: mutate(goodHtml),
+      headers: {
+        get: (n) => {
+          if (n === "content-type") return "text/html; charset=UTF-8";
+          if (n === "x-two-renderer") return name === "wrong-renderer" ? "kit" : null;
+          if (n === "cache-control")
+            return name === "shared-cache" ? "public, max-age=300" : "private, no-store";
+          return null;
+        },
+      },
+      status: 200,
+      expected: {
+        ...expected,
+        cache: name === "shared-cache" ? "public, max-age=300" : expected.cache,
+      },
+    });
+    assert.ok(
+      failures.some((f) => f.includes(want)),
+      `member mutant ${name} did not trip "${want}" (got: ${failures.join("; ") || "no failures"})`,
+    );
+  }
 });
 
 test("an enabled login route fails instead of a quiet skip", () => {
