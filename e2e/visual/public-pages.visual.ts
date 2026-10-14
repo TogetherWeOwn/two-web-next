@@ -11,6 +11,7 @@ const ROUTES: Array<[name: string, path: string]> = [
   ["events", "/events"],
   ["event", "/e/01J00000000000000000000001"],
   ["past", "/events/past"],
+  ["about", "/about"],
   ["rules", "/rules"],
   ["privacy", "/privacy"],
 ];
