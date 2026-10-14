@@ -4,6 +4,7 @@ import type { PageServerLoad } from "./$types";
 import { dbFor } from "../../../../../src/admin/db";
 import { loadHotzoneSignalData } from "../../../../../src/kit-hotzones";
 import type { HotzoneSignal } from "../../../../../src/hotzones/aggregates";
+import { parseSeasonParam } from "../../../../../src/hotzones/season";
 import { renderHotzoneGrid } from "../../../../../src/hotzones/pages";
 
 // Locked signal vocabulary: joins | voice | games exactly. Any other segment
@@ -20,6 +21,10 @@ export const csr = false;
 // policy; this binding owns the branded status mapping (400 season grammar,
 // 404 unknown signal, 503 outage) and the grid rendering.
 export const load: PageServerLoad = async ({ params, url, setHeaders }) => {
+  // Hono answers the season grammar before the signal vocabulary
+  // (src/hotzones/routes.tsx); keep that order here too. The helper
+  // re-checks both for its own callers.
+  if (!parseSeasonParam(url.searchParams.get("season"))) error(400, "Unknown season");
   if (!SIGNALS.includes(params.signal as HotzoneSignal)) error(404, "Not found");
   try {
     const data = await loadHotzoneSignalData({

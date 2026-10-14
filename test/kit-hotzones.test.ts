@@ -124,6 +124,22 @@ describe("Kit hot-zone load outage and telemetry parity", () => {
     expect(dbForFn).not.toHaveBeenCalled();
   });
 
+  it("answers the season grammar before the signal vocabulary, like the Hono handler", async () => {
+    const dbForFn = vi.fn(async () => null);
+    await expect(
+      loadHotzoneSignalData({
+        env,
+        seasonParam: "not-a-season",
+        signalParam: "bogus",
+        setHeaders: headers(),
+        dbForFn,
+        loadJoinsGridFn: async () => grid(),
+        recordBoardViewFn: async () => {},
+      }),
+    ).rejects.toMatchObject({ status: 400 });
+    expect(dbForFn).not.toHaveBeenCalled();
+  });
+
   it("rejects an unknown signal before any database work", async () => {
     const dbForFn = vi.fn(async () => null);
     await expect(
