@@ -238,6 +238,123 @@ describe("dispatchHookRequest member reads (Kit branch)", () => {
   });
 });
 
+describe("dispatchHookRequest event detail throttle (Kit branch)", () => {
+  const DETAIL_MANIFEST: OwnedRoute[] = [
+    {
+      method: "GET",
+      path: "/e/:key",
+      enabled: true,
+      reads: { resource: "member", action: "list", route: "events.page" },
+    },
+  ];
+  const detailEventFor = (path: string): HookEventLike => ({
+    ...eventFor(path),
+    route: { id: "/e/[key]" },
+  });
+
+  it("wraps the member-read render with the detail throttle and still audits", async () => {
+    const { entries, sink } = recording();
+    const resolve = vi.fn(async () => {
+      const html = await readOwners([SUBJECT], "<h1>event</h1>");
+      return new Response(html, { headers: { "content-type": "text/html" } });
+    });
+    const eventDetail = vi.fn(async (_req: Request, render: () => Promise<Response>) => render());
+    const deps = depsFor({
+      manifest: DETAIL_MANIFEST,
+      accessSink: async () => sink,
+      resolve,
+      eventDetail,
+    });
+    const event = detailEventFor("/e/abc123");
+    const res = await dispatchHookRequest(event, deps);
+    expect(eventDetail).toHaveBeenCalledTimes(1);
+    // Clients the budget allows through still get the bridged session before
+    // the member-read render.
+    expect(deps.sessionFor).toHaveBeenCalledTimes(1);
+    expect(eventDetail.mock.calls[0]![0]).toBe(event.request);
+    expect(typeof eventDetail.mock.calls[0]![1]).toBe("function");
+    expect(resolve).toHaveBeenCalledTimes(1);
+    expect(res.status).toBe(200);
+    expect(await res.text()).toBe("<h1>event</h1>");
+    expect(res.headers.get(KIT_RENDERER_HEADER)).toBe(KIT_RENDERER_VALUE);
+    expect(entries).toEqual([
+      {
+        viewerDiscordId: VIEWER,
+        viewerUserId: VIEWER,
+        resource: "member",
+        action: "list",
+        route: "events.page",
+        subjectUserIds: [SUBJECT],
+      },
+    ]);
+  });
+
+  it("a limited throttle answers 429 without resolving or auditing", async () => {
+    const { sink } = recording();
+    const resolve = vi.fn(async () => new Response("kit"));
+    const sessionFor = vi.fn(async () => authenticated(VIEWER));
+    const eventDetail = vi.fn(
+      async () =>
+        new Response("slow down", {
+          status: 429,
+          headers: { "cache-control": "no-store, private" },
+        }),
+    );
+    const deps = depsFor({
+      manifest: DETAIL_MANIFEST,
+      accessSink: async () => sink,
+      resolve,
+      sessionFor,
+      eventDetail,
+    });
+    const res = await dispatchHookRequest(detailEventFor("/e/abc123"), deps);
+    expect(eventDetail).toHaveBeenCalledTimes(1);
+    // Throttle-first: the budget runs before the session bridge, so a
+    // limited client costs no Postgres session read.
+    expect(sessionFor).not.toHaveBeenCalled();
+    expect(resolve).not.toHaveBeenCalled();
+    expect(sink).not.toHaveBeenCalled();
+    expect(res.status).toBe(429);
+    expect(res.headers.get("cache-control")).toBe("no-store, private");
+    expect(res.headers.get(KIT_RENDERER_HEADER)).toBe(KIT_RENDERER_VALUE);
+    expect(await res.text()).toBe("slow down");
+  });
+
+  it("other member routes skip the detail wrapper", async () => {
+    const { entries, sink } = recording();
+    const eventDetail = vi.fn(async (_req: Request, render: () => Promise<Response>) => render());
+    const deps = depsFor({
+      accessSink: async () => sink,
+      eventDetail,
+      resolve: vi.fn(async () => {
+        const html = await readOwners([SUBJECT], "<h1>profile</h1>");
+        return new Response(html, { headers: { "content-type": "text/html" } });
+      }),
+    });
+    const res = await dispatchHookRequest(eventFor(`/members/${SUBJECT}`), deps);
+    expect(eventDetail).not.toHaveBeenCalled();
+    expect(res.status).toBe(200);
+    expect(await res.text()).toBe("<h1>profile</h1>");
+    expect(entries.map((entry) => entry.subjectUserIds)).toEqual([[SUBJECT]]);
+  });
+
+  it("renders directly in the boundary when the wrapper is absent", async () => {
+    const { entries, sink } = recording();
+    const deps = depsFor({
+      manifest: DETAIL_MANIFEST,
+      accessSink: async () => sink,
+      resolve: vi.fn(async () => {
+        const html = await readOwners([SUBJECT], "<h1>event</h1>");
+        return new Response(html, { headers: { "content-type": "text/html" } });
+      }),
+    });
+    const res = await dispatchHookRequest(detailEventFor("/e/abc123"), deps);
+    expect(res.status).toBe(200);
+    expect(await res.text()).toBe("<h1>event</h1>");
+    expect(entries.map((entry) => entry.subjectUserIds)).toEqual([[SUBJECT]]);
+  });
+});
+
 describe("decideRoute", () => {
   it("returns the enabled entry, and HEAD follows the GET declaration", () => {
     const head = new Request(new URL("/members/1", APP_URL), { method: "HEAD" });
@@ -324,6 +441,12 @@ describe("decideRoute", () => {
         enabled: false,
         reads: { resource: "leaderboard", action: "list", route: "leaderboards.members" },
       },
+      {
+        method: "GET",
+        path: "/e/:key",
+        enabled: false,
+        reads: { resource: "member", action: "list", route: "events.page" },
+      },
     ]);
     const archive = ROUTE_MANIFEST.find((entry) => entry.path === "/events/past");
     expect(decideRoute(get, ROUTE_MANIFEST)).toBe(archive);
@@ -346,6 +469,8 @@ describe("decideRoute", () => {
       decideRoute(new Request(new URL("/admin/join-attempts", APP_URL)), ROUTE_MANIFEST),
     ).toBeUndefined();
     expect(decideRoute(new Request(new URL("/profile", APP_URL)), ROUTE_MANIFEST)).toBeUndefined();
+    // Live event detail stays Hono-served until the RSVP companion passes.
+    expect(decideRoute(new Request(new URL("/e/abc123", APP_URL)), ROUTE_MANIFEST)).toBeUndefined();
     expect(
       decideRoute(new Request(new URL("/auth/recover", APP_URL)), ROUTE_MANIFEST),
     ).toBeUndefined();

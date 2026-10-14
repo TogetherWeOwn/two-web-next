@@ -145,8 +145,13 @@ async function resolve(
 }
 
 describe("event-state route ownership", () => {
-  it("keeps the /e/:key family on Hono: no manifest entry to enable", () => {
-    expect(ROUTE_MANIFEST.some((entry) => entry.path.startsWith("/e/"))).toBe(false);
+  it("keeps the /e/:key family on Hono: the detail entry stays disabled", () => {
+    // Card 25/43 adds the disabled member-read entry for the live detail; the
+    // renderer decision stays Hono until the RSVP companion passes.
+    const entry = ROUTE_MANIFEST.find(
+      (candidate) => candidate.method === "GET" && candidate.path === "/e/:key",
+    );
+    expect(entry).toMatchObject({ enabled: false });
     expect(resolveRouteOwner({ method: "GET", path: `/e/${KEY}` })).toBe("hono");
     expect(resolveRouteOwner({ method: "HEAD", path: `/e/${KEY}` })).toBe("hono");
     expect(resolveRouteOwner({ method: "GET", path: `/e/${KEY.toLowerCase()}` })).toBe("hono");
