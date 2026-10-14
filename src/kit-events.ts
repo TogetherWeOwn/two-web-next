@@ -208,7 +208,7 @@ export interface KitEventsLoadArgs {
   island: boolean;
   request: Request;
   setHeaders: (headers: Record<string, string>) => void;
-  /** Deletes the one-shot join cookie; called only for full GET renders. */
+  /** Requests one-shot cookie deletion; the endpoint commits it after rendering. */
   deleteJoinCookie: () => void;
   dbForFn: (c: { env: Env }) => Promise<Db | null>;
   sessionForFn: (request: Request) => Promise<KitEventsSession | null>;
@@ -242,13 +242,13 @@ export interface KitEventsLoadData extends CalendarPageModel {
  * (never echoing the query; the dispatch rewrites the status), anonymous
  * search-free flash-free renders stay publicly cacheable for the dispatch to
  * settle, and every database failure is a branded 503 with private, no-store.
- * Exactly one setHeaders call per path: SvelteKit throws `header_already_set`
- * on a double-set, so the caller must not set headers again on a throw.
+ * Exactly one setHeaders call per path, collected by the endpoint until it
+ * knows whether rendering succeeded; error responses always use no-store.
  *
- * Session reads are read-only (no rotation, no revocation) and the flash is
- * consumed only on full renders after a successful model read: fragments keep
- * their pending value exactly like Hono's island branch, which can never
- * display the banner, and a 503 leaves it for the next full load.
+ * Session reads are read-only (no rotation, no revocation). Flash consumption
+ * is requested only for full GET renders after a successful model read, and
+ * the endpoint commits deletion only after constructing the response.
+ * Fragments and failed renders leave the banner for the next full load.
  */
 export async function loadEventsPage(
   args: KitEventsLoadArgs,
@@ -326,9 +326,9 @@ export async function loadEventsPage(
     throw eventsUnavailable();
   }
 
-  // Consume the one-shot banner only after the read succeeds, like Hono's
-  // takeJoinResult after loadCalendarPageModel: a branded 503 must leave the
-  // pending flash for the next full load instead of eating it unseen.
+  // Request consumption after the read succeeds, like Hono's takeJoinResult.
+  // The endpoint defers the deletion until rendering succeeds as well, so a
+  // branded 503 leaves the pending flash for the next full load.
   if (joinResult && method === "GET") deleteJoinCookie();
 
   const cacheControl =

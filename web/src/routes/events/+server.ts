@@ -16,6 +16,7 @@ import { JOIN_RESULT_COOKIE } from "../../../../src/return-journey";
 // and the hook hands the rest to Hono, so POST /events stays Hono-owned.
 export const GET: RequestHandler = async ({ request, cookies, url, setHeaders }) => {
   const collected: Record<string, string> = {};
+  let consumeJoinFlash = false;
   try {
     const data = await loadEventsPage({
       env,
@@ -24,32 +25,34 @@ export const GET: RequestHandler = async ({ request, cookies, url, setHeaders })
       island: request.headers.get("x-two-island") === "events-calendar",
       request,
       setHeaders: (headers) => Object.assign(collected, headers),
-      deleteJoinCookie: () =>
-        cookies.delete(JOIN_RESULT_COOKIE, {
-          path: "/",
-          secure: true,
-          httpOnly: true,
-          sameSite: "lax",
-        }),
+      deleteJoinCookie: () => {
+        consumeJoinFlash = true;
+      },
       dbForFn: dbFor,
       sessionForFn: kitEventsSessionFor(env),
       journeyForFn: kitEventsJourneyFor(env),
       discordForFn: discordEventsSource,
     });
     const rendered = await renderEventsHtml(data, collected);
-    return new Response(rendered.body, { status: rendered.status, headers: rendered.headers });
-  } catch {
-    // loadEventsPage collects private, no-store + Vary before every 503
-    // throw: re-apply them so the Kit error page keeps Hono's no-store
-    // contract instead of a cacheable default.
-    const cacheControl = collected["cache-control"];
-    const vary = collected.vary;
-    if (cacheControl || vary) {
-      setHeaders({
-        ...(cacheControl ? { "cache-control": cacheControl } : {}),
-        ...(vary ? { vary } : {}),
+    const response = new Response(rendered.body, {
+      status: rendered.status,
+      headers: rendered.headers,
+    });
+    // Kit also sends cookie changes on errors: consume only once the HTML and
+    // response are ready, so a render failure leaves the banner for a retry.
+    if (consumeJoinFlash) {
+      cookies.delete(JOIN_RESULT_COOKIE, {
+        path: "/",
+        secure: true,
+        httpOnly: true,
+        sameSite: "lax",
       });
     }
+    return response;
+  } catch {
+    // A render can fail after the load collected public success headers.
+    // Every failure must be uncacheable, regardless of how far it got.
+    setHeaders({ "cache-control": "private, no-store", vary: "Cookie, X-Two-Island" });
     error(503, "Events temporarily unavailable");
   }
 };
