@@ -100,6 +100,20 @@ export const ROUTE_MANIFEST: OwnedRoute[] = [
     enabled: false,
     reads: { resource: "events", action: "list", route: "admin.events.index" },
   },
+  // Moderator event-create form: same declaration as the Hono handler
+  // (admin.events.create, src/admin/routes.tsx). Only this GET migrates:
+  // POST /admin/events stays Hono-owned, so draft-first creation, weekly
+  // recurrence (max 52), wall-time/timezone validation, body cap, throttle,
+  // error aggregation, retained values and the 303 keep one authority until
+  // the write slice lands. The guarded /admin/events/create legacy redirect
+  // stays Hono-owned; the manifest carries this GET entry only. Off until
+  // the enablement review.
+  {
+    method: "GET",
+    path: "/admin/events/new",
+    enabled: false,
+    reads: { resource: "events", action: "view", route: "admin.events.create" },
+  },
   // Join-attempts audit list: member data, so the Kit branch renders
   // inside the member-read boundary with this declaration and the bridged
   // viewer. Off until the enablement review: the Hono viewer answers meanwhile.

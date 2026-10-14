@@ -249,7 +249,7 @@ describe("decideRoute", () => {
     expect(decideRoute(post, MEMBER_MANIFEST)).toBeUndefined();
   });
 
-  it("the shipped manifest keeps the homepage, about, privacy, rules, join and recover on Hono, assigns the public archive to Kit, and holds the admin dashboard, featured list, activity log, events list and profile reads on Hono", () => {
+  it("the shipped manifest keeps the homepage, about, privacy, rules, join and recover on Hono, assigns the public archive to Kit, and holds the admin dashboard, featured list, activity log, events list, event-create form and profile reads on Hono", () => {
     const get = new Request(new URL("/events/past", APP_URL));
     expect(ROUTE_MANIFEST).toEqual([
       { method: "GET", path: "/", enabled: false, reads: "public" },
@@ -281,6 +281,12 @@ describe("decideRoute", () => {
         path: "/admin/events",
         enabled: false,
         reads: { resource: "events", action: "list", route: "admin.events.index" },
+      },
+      {
+        method: "GET",
+        path: "/admin/events/new",
+        enabled: false,
+        reads: { resource: "events", action: "view", route: "admin.events.create" },
       },
       {
         method: "GET",
