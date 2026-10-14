@@ -17,6 +17,7 @@
 import type { Db } from "../db/index";
 import { isDatabaseUnavailable } from "../db/errors";
 import { currentlyVisible, featuredStatus, type FeaturedStatus } from "../featured-status";
+import { featuredImageSrc } from "../featured-image";
 import { parseRecordId } from "./record-id";
 import type { FeaturedEditRow } from "./store-featured";
 
@@ -42,6 +43,12 @@ export type KitFeaturedEditView = {
   startsAt: string | null;
   endsAt: string | null;
   updatedAt: string;
+  /** Evaluation instant featuredStatus() ran at (Hono prints now, not updatedAt). */
+  checkedAt: string;
+  /** Homepage-policy preview src (null when the homepage suppresses the image). */
+  imageSrc: string | null;
+  /** Homepage alt fallback (imageAlt?.trim() || title). */
+  imageAlt: string;
 };
 
 export type KitFeaturedEditOutcome =
@@ -54,6 +61,10 @@ export type KitFeaturedEditDeps = {
   db: Db | null;
   get: (db: Db, id: number) => Promise<FeaturedEditRow | null>;
   now?: Date;
+  /** Site origin for the shared image policy (load passes env.APP_URL). */
+  appUrl?: string;
+  /** Extra allowed image hosts (load passes env.FEATURED_IMAGE_HOSTS). */
+  imageHosts?: string;
 };
 
 export async function resolveKitFeaturedEdit(
@@ -78,6 +89,13 @@ export async function resolveKitFeaturedEdit(
   }
   if (!row) return { kind: "notFound" };
   const now = deps.now ?? new Date();
+  // Homepage preview policy: the Hono panel renders FeaturedContentItem, which
+  // runs the URL through featuredImageSrc() (allowlist + userinfo + // guard,
+  // same-site absolute URLs rewritten to paths). Mirror it here so the preview
+  // cannot show an image the homepage hides or the CSP blocks.
+  const imageSrc = row.imageUrl
+    ? featuredImageSrc(row.imageUrl, deps.appUrl ?? "", deps.imageHosts)
+    : null;
   return {
     kind: "ok",
     view: {
@@ -99,6 +117,9 @@ export async function resolveKitFeaturedEdit(
       startsAt: row.startsAt ? row.startsAt.toISOString() : null,
       endsAt: row.endsAt ? row.endsAt.toISOString() : null,
       updatedAt: row.updatedAt.toISOString(),
+      checkedAt: now.toISOString(),
+      imageSrc,
+      imageAlt: row.imageAlt?.trim() || row.title,
     },
   };
 }

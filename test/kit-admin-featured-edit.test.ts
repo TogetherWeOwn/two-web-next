@@ -79,6 +79,14 @@ describe("Kit featured-edit page contract", () => {
     expect(source).toContain("href={data.view.values.url}");
   });
 
+  it("renders the preview image through the shared policy with the alt fallback and evaluation time", () => {
+    expect(source).toContain("data.view.imageSrc");
+    expect(source).toContain("data.view.imageAlt");
+    expect(source).toContain('referrerpolicy="no-referrer"');
+    expect(source).toContain("data.view.checkedAt");
+    expect(source).not.toContain("src={data.view.values.image_url}");
+  });
+
   it("mounts the progressive dirty-draft/double-submit guard island and no client handlers, so repeat submits cannot apply twice with JS and the page works without it", () => {
     expect(source).toContain('data-event-editor=""');
     expect(source).toContain("/islands/admin-event-editor.js");
@@ -100,6 +108,11 @@ describe("Kit featured-edit page contract", () => {
     expect(load).toContain("503");
     expect(load).toContain("404");
     expect(load).toContain("Featured content not found");
+  });
+
+  it("passes the site origin and image hosts into the preview policy", () => {
+    expect(load).toContain("env.APP_URL");
+    expect(load).toContain("env.FEATURED_IMAGE_HOSTS");
   });
 });
 
@@ -200,5 +213,39 @@ describe("resolveKitFeaturedEdit", () => {
     });
     expect(outcome.view.status).toBe(featuredStatus(baseRow, new Date("2026-09-30T20:00:00.000Z")));
     expect(outcome.view.updatedAt).toBe("2026-10-01T12:00:00.000Z");
+    expect(outcome.view.checkedAt).toBe("2026-09-30T20:00:00.000Z");
+    expect(outcome.view.imageSrc).toBeNull();
+    expect(outcome.view.imageAlt).toBe("Game night");
+  });
+
+  it("suppresses an off-allowlist preview host like the homepage", async () => {
+    const outcome = await resolveKitFeaturedEdit("7", {
+      db: {} as never,
+      get: async () => ({ ...baseRow, imageUrl: "https://evil.example/x.png" }),
+      now: new Date("2026-09-30T20:00:00.000Z"),
+      appUrl: "https://next.example.test",
+      imageHosts: "images.unsplash.com",
+    });
+    expect(outcome.kind).toBe("ok");
+    if (outcome.kind !== "ok") throw new Error("expected ok");
+    expect(outcome.view.imageSrc).toBeNull();
+  });
+
+  it("rewrites a same-site absolute preview URL to a path with the alt fallback", async () => {
+    const outcome = await resolveKitFeaturedEdit("7", {
+      db: {} as never,
+      get: async () => ({
+        ...baseRow,
+        imageUrl: "https://next.example.test/photo.png",
+        imageAlt: "  ",
+      }),
+      now: new Date("2026-09-30T20:00:00.000Z"),
+      appUrl: "https://next.example.test",
+      imageHosts: "images.unsplash.com",
+    });
+    expect(outcome.kind).toBe("ok");
+    if (outcome.kind !== "ok") throw new Error("expected ok");
+    expect(outcome.view.imageSrc).toBe("/photo.png");
+    expect(outcome.view.imageAlt).toBe("Game night");
   });
 });

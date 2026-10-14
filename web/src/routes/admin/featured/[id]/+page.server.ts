@@ -30,7 +30,12 @@ export const load: PageServerLoad = async ({ parent, params, setHeaders }) => {
   // Layout and page loads can run concurrently; authorize before acquiring the database.
   await parent();
   const db = await dbFor({ env });
-  const outcome = await resolveKitFeaturedEdit(params.id, { db, get: getFeatured });
+  const outcome = await resolveKitFeaturedEdit(params.id, {
+    db,
+    get: getFeatured,
+    appUrl: env.APP_URL,
+    imageHosts: env.FEATURED_IMAGE_HOSTS,
+  });
   if (outcome.kind === "unavailable") error(503, "Admin temporarily unavailable");
   if (outcome.kind === "notFound") error(404, "Featured content not found");
   setHeaders({ "cache-control": "private, no-store" });

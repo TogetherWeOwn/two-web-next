@@ -14,7 +14,8 @@ import type { PageProps } from "./$types";
 // last saved status through the shared featuredStatus() the load resolves —
 // never a UI-local copy — with the saved headline, body, link and image when
 // the slot is currently visible (a simplified rendering of the Hono panel's
-// full homepage item) and the same hidden-slot note the Hono panel renders
+// full homepage item, through the shared featuredImageSrc() policy with the
+// homepage alt fallback) and the same hidden-slot note the Hono panel renders
 // when it is not. No JavaScript: plain POSTs
 // and links, like the Hono panel. The edit form mounts the deferred
 // dirty-draft/double-submit guard island as progressive markup (like
@@ -37,7 +38,7 @@ const island = '<script src="/islands/admin-event-editor.js" defer></' + "script
     <h2 id="featured-preview-heading">Homepage preview</h2>
     <p>
       Last saved content, checked at
-      <time datetime={data.view.updatedAt}>{data.view.updatedAt}</time> (UTC). Save changes to
+      <time datetime={data.view.checkedAt}>{data.view.checkedAt}</time> (UTC). Save changes to
       refresh this preview.
     </p>
     <p>
@@ -50,9 +51,10 @@ const island = '<script src="/islands/admin-event-editor.js" defer></' + "script
       <p><strong>{data.view.title}</strong></p>
       {#if data.view.values.body}<p>{data.view.values.body}</p>{/if}
       {#if data.view.values.url}<p><a href={data.view.values.url}>Link</a></p>{/if}
-      {#if data.view.values.image_url}<p><img
-        src={data.view.values.image_url}
-        alt={data.view.values.image_alt}
+      {#if data.view.imageSrc}<p><img
+        src={data.view.imageSrc}
+        alt={data.view.imageAlt}
+        referrerpolicy="no-referrer"
       /></p>{/if}
     {:else}
       <p data-testid="featured-preview-hidden">
