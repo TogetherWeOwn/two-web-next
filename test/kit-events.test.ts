@@ -563,10 +563,9 @@ describe("Kit events list endpoint binding", () => {
     expect(source).toContain("dbForFn: dbFor");
     expect(source).toContain("kitEventsSessionFor(env)");
     expect(source).toContain("kitEventsJourneyFor(env)");
-    // The helper collects private, no-store + Vary before every 503 throw;
-    // the catch re-applies them so the Kit error page keeps Hono's no-store
-    // contract instead of a cacheable default.
-    expect(source).toContain('collected["cache-control"]');
-    expect(source).toContain("collected.vary");
+    // Rendering can fail after the helper collected public success headers.
+    // The catch must fail closed rather than reapply that success policy.
+    expect(source).toMatch(/catch\s*\{[\s\S]*?"cache-control":\s*"private, no-store"/);
+    expect(source).toMatch(/catch\s*\{[\s\S]*?vary:\s*"Cookie, X-Two-Island"/);
   });
 });
