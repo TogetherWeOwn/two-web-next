@@ -87,6 +87,12 @@ describe("hooks.server route ownership wiring", () => {
       },
       {
         method: "GET",
+        path: "/admin/featured/new",
+        enabled: false,
+        reads: { resource: "featured_contents", action: "view", route: "admin.featured.create" },
+      },
+      {
+        method: "GET",
         path: "/admin/activity-log",
         enabled: false,
         reads: { resource: "activity_log", action: "list", route: "admin.activity-log.index" },
