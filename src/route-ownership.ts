@@ -41,8 +41,10 @@ export interface RouteDecision {
   path: string;
 }
 
-// The archive page renders natively; the privacy leaf, house-rules leaf, join,
-// recovery and profile reads stay on Hono until their enablement is reviewed. Production (the Hono Worker) sees no traffic change for a
+// The archive page and hot-zone heatmaps render natively; the events list ships
+// its native handler disabled until the calendar/enhancement companion passes,
+// and the about/privacy/rules/join/recovery/profile reads, member board and
+// admin routes stay on Hono until their enablement is reviewed. Production (the Hono Worker) sees no traffic change for a
 // disabled path; the preview Worker moves a Kit-owned path back to Hono by
 // design — that is the rollback. Add one entry per migrated route, enabled
 // only when its Kit handler is ready to own the exact method/path. Only GET
@@ -55,6 +57,8 @@ export interface RouteDecision {
 export const ROUTE_MANIFEST: OwnedRoute[] = [
   { method: "GET", path: "/", enabled: false, reads: "public" },
   { method: "GET", path: "/events/past", enabled: true, reads: "public" },
+  { method: "GET", path: "/events", enabled: false, reads: "public" },
+  { method: "GET", path: "/about", enabled: false, reads: "public" },
   { method: "GET", path: "/privacy", enabled: false, reads: "public" },
   { method: "GET", path: "/rules", enabled: false, reads: "public" },
   { method: "GET", path: "/join", enabled: false, reads: "public" },
@@ -67,6 +71,17 @@ export const ROUTE_MANIFEST: OwnedRoute[] = [
     enabled: false,
     reads: { resource: "dashboard", action: "view", route: "admin.dashboard" },
   },
+  // Moderator featured list: member data, so the Kit branch renders
+  // inside the member-read boundary with this declaration and the bridged
+  // viewer. Off until the enablement review: the Hono panel answers meanwhile.
+  // The new/edit POST siblings and the guarded /admin/featured-contents
+  // legacy redirects stay Hono-owned; the manifest carries GET entries only.
+  {
+    method: "GET",
+    path: "/admin/featured",
+    enabled: false,
+    reads: { resource: "featured_contents", action: "list", route: "admin.featured.index" },
+  },
   // Read-only activity-log viewer: the same bounded subject/causer filters and
   // newest-first paging as the Hono panel, audited by the member-read boundary
   // with this declaration and the bridged viewer. Off until the enablement
@@ -76,6 +91,17 @@ export const ROUTE_MANIFEST: OwnedRoute[] = [
     path: "/admin/activity-log",
     enabled: false,
     reads: { resource: "activity_log", action: "list", route: "admin.activity-log.index" },
+  },
+  // Moderator events list: same declaration as the Hono handler
+  // (admin.events.index, src/admin/routes.tsx). Only this GET migrates:
+  // POST /admin/events, /new and /:key stay Hono-owned, so the create form,
+  // edit form and every publish/cancel/RSVP action keep one authority until
+  // their own slices land. Off until the enablement review.
+  {
+    method: "GET",
+    path: "/admin/events",
+    enabled: false,
+    reads: { resource: "events", action: "list", route: "admin.events.index" },
   },
   // Join-attempts audit list: member data, so the Kit branch renders
   // inside the member-read boundary with this declaration and the bridged
@@ -102,6 +128,26 @@ export const ROUTE_MANIFEST: OwnedRoute[] = [
     path: "/members/:user",
     enabled: false,
     reads: { resource: "profile", action: "view", route: "profiles.show" },
+  },
+  // Hot-zone heatmaps: public aggregates with the same reads and cache policy
+  // as the Hono handlers (src/hotzones/routes.tsx). Concrete signal paths
+  // only, never a :param pattern: unknown segments must fall through to the
+  // Hono 404, and each path needs its own executed parity run.
+  { method: "GET", path: "/hotzones", enabled: true, reads: "public" },
+  { method: "GET", path: "/hotzones/joins", enabled: true, reads: "public" },
+  { method: "GET", path: "/hotzones/voice", enabled: true, reads: "public" },
+  { method: "GET", path: "/hotzones/games", enabled: true, reads: "public" },
+  // Member leaderboard: member data, so the Kit branch renders inside the
+  // member-read boundary with this declaration and the bridged viewer. Same
+  // gate order, grammar and reads as src/leaderboards/routes.tsx. Held on
+  // Hono until the executed member-board parity journey lands: the parity
+  // gate has no authenticated member-board run, so enabling here would ship
+  // on a green ledger with no proof.
+  {
+    method: "GET",
+    path: "/leaderboards/members",
+    enabled: false,
+    reads: { resource: "leaderboard", action: "list", route: "leaderboards.members" },
   },
 ];
 
@@ -269,6 +315,10 @@ export interface HookDispatchDeps {
   // of in web/src/hooks.server.ts. Absent by default: without it the dispatch
   // behaves exactly as before.
   pastArchive?: (request: Request, render: () => Promise<Response>) => Promise<Response>;
+  // Native events-list guard/cache around the Kit endpoint render. Same binding shape as the
+  // archive; the list entry ships disabled, so production never reaches this
+  // branch until the companion card enables it.
+  eventsPage?: (request: Request, render: () => Promise<Response>) => Promise<Response>;
 }
 
 // Production Kit decoration, owned by the core so the tested path is the
@@ -422,15 +472,19 @@ export async function dispatchHookRequest(
       });
     }
   }
-  // Native archive reads share the Hono guard and anonymous cache. The route
-  // id owns the branch (SvelteKit sets it before handle runs); the manifest
-  // owns the Kit half above, so an unowned path never reaches the wrapper.
+  // Native archive and list reads share the Hono guard and anonymous cache.
+  // The route id owns the branch (SvelteKit sets it before handle runs); the
+  // manifest owns the Kit half above, so an unowned path never reaches either
+  // wrapper.
   const isPastArchivePage = event.route?.id === "/events/past";
+  const isEventsListPage = event.route?.id === "/events";
   let response: Response;
   if (route.reads !== "public") {
     response = await renderMemberRead(event, route.reads, deps);
   } else if (isPastArchivePage && deps.pastArchive) {
     response = await deps.pastArchive(event.request, () => deps.resolve(event));
+  } else if (isEventsListPage && deps.eventsPage) {
+    response = await deps.eventsPage(event.request, () => deps.resolve(event));
   } else {
     response = await deps.resolve(event);
   }

@@ -245,6 +245,7 @@ exactly once.
 | Path | Area |
 | --- | --- |
 | `src/access-log.ts` | observability |
+| `src/about-content.ts` | content |
 | `src/ai-friendly/` | content |
 | `src/admin/` | admin |
 | `src/agent-events/` | agent-events |
@@ -288,6 +289,9 @@ exactly once.
 | `src/kit-access-sink.ts` | profiles |
 | `src/kit-errors.ts` | entry |
 | `src/kit-event-states.ts` | events |
+| `src/kit-events-html.tsx` | events |
+| `src/kit-events.ts` | events |
+| `src/kit-hotzones.ts` | events |
 | `src/kit-past-events.ts` | events |
 | `src/kit-session.ts` | auth |
 | `src/leaderboards/` | profiles |

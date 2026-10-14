@@ -21,13 +21,24 @@ export default defineConfig({
   environments: {
     ssr: {
       build: {
+        minify: true,
         rolldownOptions: {
           output: {
-            // Hono and Kit share the admin modules. Keep them together on the
-            // server instead of emitting separately compressed helper chunks
-            // for each new viewer. This does not change client chunking.
+            // Compact server output without rewrites or name mangling; error
+            // diagnostics depend on constructor names. Keep licenses and maps.
+            minify: { compress: false, mangle: false, codegen: true },
+            comments: { annotation: false, jsdoc: false, legal: true },
+            // Hono and Kit share these route families. Keep their modules
+            // together on the server instead of compressing each helper chunk
+            // separately. This does not change client chunking.
             codeSplitting: {
-              groups: [{ name: "admin", test: /\/src\/admin\// }],
+              groups: [
+                { name: "admin", test: /\/src\/admin\// },
+                {
+                  name: "events",
+                  test: /\/src\/(?:events\/|kit-(?:past-)?events(?:-html)?\.tsx?$)/,
+                },
+              ],
             },
           },
         },

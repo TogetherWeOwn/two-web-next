@@ -185,6 +185,42 @@ export async function readReturnJourney(
  * never throws, a Kit render never 500s on a session outage, and an outage
  * never reads as a logout.
  */
+/**
+ * Read-only viewer bits for the native Kit events list (src/kit-events.ts).
+ * Same decision as the bridge's session half, projected to the member bits
+ * the list load needs: an outage resolves to null (guest render with no
+ * drafts), never to a false logout, and nothing here rotates or revokes.
+ */
+export function kitEventsSessionFor(env: Env): (request: Request) => Promise<{
+  member: boolean;
+  moderator: boolean;
+} | null> {
+  return async (request) => {
+    try {
+      const decision = await resolveRequestSession(request, {
+        sessionSecret: env.SESSION_SECRET,
+        store: await storeForEnv(env),
+      });
+      return decision.status === "authenticated" && decision.session
+        ? { member: decision.session.member, moderator: decision.session.moderator }
+        : null;
+    } catch {
+      return null;
+    }
+  };
+}
+
+/**
+ * Read-only join-flash peek for the native Kit events list. The load consumes
+ * the cookie itself on full renders; this peek only decides shared-cache
+ * eligibility, so it never deletes anything.
+ */
+export function kitEventsJourneyFor(
+  env: Env,
+): (request: Request) => Promise<"added" | "already_member" | null> {
+  return async (request) => (await readReturnJourney(request, env.SESSION_SECRET)).joinResult;
+}
+
 export function kitSessionBridge(env: Env): (event: HookEventLike) => Promise<KitLocals> {
   return async (event) => {
     const [session, journey] = await Promise.all([
