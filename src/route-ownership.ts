@@ -331,6 +331,13 @@ export interface HookDispatchDeps {
   // archive; the list entry ships disabled, so production never reaches this
   // branch until the companion card enables it.
   eventsPage?: (request: Request, render: () => Promise<Response>) => Promise<Response>;
+  // Native event-detail throttle around the Kit member-read render. Same
+  // binding shape as the archive/list wrappers: the hook binds env into this
+  // (request, render) => dispatchEventDetailRequest(request, env, render); the
+  // core decides WHEN it runs, so the route-id branch is pinned here instead
+  // of in web/src/hooks.server.ts. Absent by default: without it the dispatch
+  // behaves exactly as before.
+  eventDetail?: (request: Request, render: () => Promise<Response>) => Promise<Response>;
 }
 
 // Production Kit decoration, owned by the core so the tested path is the
@@ -490,9 +497,19 @@ export async function dispatchHookRequest(
   // wrapper.
   const isPastArchivePage = event.route?.id === "/events/past";
   const isEventsListPage = event.route?.id === "/events";
+  // The live detail is a member read, so it renders inside the boundary; the
+  // shared public-read budget still runs first through the detail wrapper,
+  // exactly as the served handler throttles before any read.
+  const isEventDetailPage = event.route?.id === "/e/[key]";
   let response: Response;
   if (route.reads !== "public") {
-    response = await renderMemberRead(event, route.reads, deps);
+    // Narrowed once for the deferred render: the closure below would lose the
+    // branch narrowing on route.reads.
+    const reads = route.reads;
+    response =
+      isEventDetailPage && deps.eventDetail
+        ? await deps.eventDetail(event.request, () => renderMemberRead(event, reads, deps))
+        : await renderMemberRead(event, reads, deps);
   } else if (isPastArchivePage && deps.pastArchive) {
     response = await deps.pastArchive(event.request, () => deps.resolve(event));
   } else if (isEventsListPage && deps.eventsPage) {

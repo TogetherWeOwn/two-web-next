@@ -32,7 +32,13 @@ import type {
   ViewerRsvp,
 } from "../src/events/reads";
 import type { SuggestedEvent } from "../src/events/suggestions";
-import { resolveKitEventDetail, type KitEventDetailStore } from "../src/events/kit-detail";
+import {
+  dispatchEventDetailRequest,
+  eventDetailConsumesFlash,
+  eventDetailErrorPayload,
+  resolveKitEventDetail,
+  type KitEventDetailStore,
+} from "../src/events/kit-detail";
 import { ROUTE_MANIFEST, resolveRouteOwner } from "../src/route-ownership";
 
 const APP_URL = "https://next.example.test";
@@ -567,6 +573,8 @@ const { compile } = webRequire("svelte/compiler") as {
 // parity bundle: #lib/* resolves through the web alias).
 async function buildKitEventDetailBundle(): Promise<{
   renderDetail: (model: Record<string, unknown>) => string;
+  renderGone: (model: Record<string, unknown>) => string;
+  renderMissing: (model: Record<string, unknown>) => string;
 }> {
   const worktree = fileURLToPath(new URL("../", import.meta.url));
   const scratch = mkdtempSync(join(tmpdir(), "kit-event-detail-"));
@@ -577,8 +585,18 @@ async function buildKitEventDetailBundle(): Promise<{
       `
 import { render } from "svelte/server";
 import Detail from ${JSON.stringify(join(worktree, "web/src/lib/EventDetail.svelte"))};
+import Gone from ${JSON.stringify(join(worktree, "web/src/lib/EventGone.svelte"))};
+import Missing from ${JSON.stringify(join(worktree, "web/src/lib/EventMissing.svelte"))};
 export function renderDetail(model) {
   const { head, body } = render(Detail, { props: { model } });
+  return "<head>" + head + "</head><body>" + body + "</body>";
+}
+export function renderGone(model) {
+  const { head, body } = render(Gone, { props: { model } });
+  return "<head>" + head + "</head><body>" + body + "</body>";
+}
+export function renderMissing(model) {
+  const { head, body } = render(Missing, { props: { model } });
   return "<head>" + head + "</head><body>" + body + "</body>";
 }
 `,
@@ -612,10 +630,14 @@ export function renderDetail(model) {
       ],
     });
     void result;
-    const { renderDetail } = (await import(pathToFileURL(outfile).href)) as {
+    const { renderDetail, renderGone, renderMissing } = (await import(
+      pathToFileURL(outfile).href
+    )) as {
       renderDetail: (model: Record<string, unknown>) => string;
+      renderGone: (model: Record<string, unknown>) => string;
+      renderMissing: (model: Record<string, unknown>) => string;
     };
-    return { renderDetail };
+    return { renderDetail, renderGone, renderMissing };
   } finally {
     rmSync(scratch, { recursive: true, force: true });
   }
@@ -869,5 +891,202 @@ describe("Kit detail presentation", () => {
     if (broken.outcome.kind !== "ok") throw new Error("unreachable");
     expect(broken.outcome.model.zoneLabel).toBe("UTC");
     expect(broken.outcome.model.whenText).toBe("2030-01-10T20:00:00.000Z");
+  });
+});
+
+describe("event-detail gone presentation", () => {
+  it("carries the branded gone model: alternatives, ICS entry and structured data", async () => {
+    const store = fakeStore({
+      event: { ...row({ status: "cancelled" }), goingCount: 3 } as PublicEvent,
+    });
+    const attendeesFn = vi.fn(store.attendeesFn);
+    const viewerRsvpFn = vi.fn(store.viewerRsvpFn);
+    const { outcome } = await resolve(
+      KEY,
+      { ...store, attendeesFn, viewerRsvpFn },
+      memberSession(),
+    );
+    expect(outcome.kind).toBe("gone");
+    if (outcome.kind !== "gone") throw new Error("unreachable");
+    expect(outcome.status).toBe(410);
+    const model = outcome.model;
+    expect(model.title).toBe("Chess night");
+    expect(model.game).toBe("Chess");
+    expect(model.eventKey).toBe(KEY);
+    expect(model.icsUrl).toBe(`/events/${KEY}.ics`);
+    expect(model.markdownAlternate).toBe(`/e/${KEY}.md`);
+    expect(model.upcomingUrl).toBe("/events");
+    expect(model.related).toHaveLength(1);
+    expect(model.related[0]).toMatchObject({
+      key: RELATED[0]!.eventKey,
+      title: "Chess finals",
+      location: "The lobby",
+    });
+    expect(model.related[0]!.whenText).toContain("2030");
+    expect(model.jsonLd).toContain("https://schema.org/EventCancelled");
+    expect(model.jsonLd).toContain("Chess night");
+    expect(model.siteJsonLd).toContain("Together We Own");
+    // Viewer-independent: no session-gated read runs for the static page.
+    expect(attendeesFn).not.toHaveBeenCalled();
+    expect(viewerRsvpFn).not.toHaveBeenCalled();
+  });
+
+  it("degrades to an empty alternatives list when the related read fails", async () => {
+    const store = fakeStore({
+      event: { ...row({ status: "cancelled" }), goingCount: 3 } as PublicEvent,
+    });
+    const { outcome } = await resolve(KEY, {
+      ...store,
+      relatedFn: async () => {
+        throw new Error("related down");
+      },
+    });
+    expect(outcome.kind).toBe("gone");
+    if (outcome.kind !== "gone") throw new Error("unreachable");
+    expect(outcome.status).toBe(410);
+    expect(outcome.model.related).toEqual([]);
+    expect(outcome.model.title).toBe("Chess night");
+  });
+
+  it("renders the branded cancellation, not the generic error shell", async () => {
+    const { outcome } = await resolve(
+      KEY,
+      fakeStore({ event: { ...row({ status: "cancelled" }), goingCount: 3 } as PublicEvent }),
+    );
+    if (outcome.kind !== "gone") throw new Error("unreachable");
+    const { renderGone } = await buildKitEventDetailBundle();
+    const html = renderGone(outcome.model as unknown as Record<string, unknown>);
+    expect(html).toContain('data-testid="event-cancelled"');
+    expect(html).toContain('data-testid="event-cancelled-alternatives"');
+    expect(html).toContain("Chess finals");
+    expect(html).toContain('data-testid="event-cancelled-ics"');
+    expect(html).toContain('data-testid="event-jsonld"');
+    expect(html).not.toContain('data-testid="event-attendees"');
+    expect(html).not.toContain('data-testid="join-result"');
+  });
+
+  it("maps the gone outcome onto the 410 branded error payload", async () => {
+    const { outcome } = await resolve(
+      KEY,
+      fakeStore({ event: { ...row({ status: "cancelled" }), goingCount: 3 } as PublicEvent }),
+    );
+    if (outcome.kind !== "gone") throw new Error("unreachable");
+    const payload = eventDetailErrorPayload(outcome);
+    expect(payload.status).toBe(410);
+    expect(payload.body.message).toBe("This event was cancelled.");
+    expect(payload.body.gone).toBe(outcome.model);
+    expect(payload.body.missing).toBeUndefined();
+  });
+});
+
+describe("event-detail missing presentation", () => {
+  it("carries suggestion locations for the branded recovery section", async () => {
+    const { outcome } = await resolve(KEY, fakeStore({ event: null }));
+    expect(outcome.kind).toBe("missing");
+    if (outcome.kind !== "missing") throw new Error("unreachable");
+    expect(outcome.model.suggestions).toHaveLength(1);
+    expect(outcome.model.suggestions[0]).toMatchObject({
+      key: SUGGESTIONS[0]!.key,
+      title: "Game night",
+      location: "Voice channel",
+    });
+    expect(outcome.model.suggestions[0]!.datetime).toBe("2030-03-01T19:00:00.000Z");
+  });
+
+  it("renders the branded recovery with suggestion locations", async () => {
+    const { outcome } = await resolve(KEY, fakeStore({ event: null }));
+    if (outcome.kind !== "missing") throw new Error("unreachable");
+    const { renderMissing } = await buildKitEventDetailBundle();
+    const html = renderMissing(outcome.model as unknown as Record<string, unknown>);
+    expect(html).toContain('data-testid="error-event-suggestions"');
+    expect(html).toContain("Game night");
+    expect(html).toContain("Voice channel");
+  });
+
+  it("maps the missing outcome onto the 404 branded error payload", async () => {
+    const { outcome } = await resolve(KEY, fakeStore({ event: null }));
+    if (outcome.kind !== "missing") throw new Error("unreachable");
+    const payload = eventDetailErrorPayload(outcome);
+    expect(payload.status).toBe(404);
+    expect(payload.body.message).toBe("Not found");
+    expect(payload.body.missing).toBe(outcome.model);
+    expect(payload.body.gone).toBeUndefined();
+  });
+});
+
+describe("event-detail join flash consumption", () => {
+  it("deletes the cookie only on the GET that renders the banner", async () => {
+    const flashed = await resolve(KEY, fakeStore(), GUEST, "added");
+    if (flashed.outcome.kind !== "ok") throw new Error("unreachable");
+    // The banner renders, so this GET consumes the one-shot flash.
+    expect(eventDetailConsumesFlash(flashed.outcome, "GET")).toBe(true);
+    // A repeat navigation no longer renders the banner: the bridge peek finds
+    // no cookie, so the model carries no flash and nothing is consumed again.
+    const replayed = await resolve(KEY, fakeStore(), GUEST, null);
+    if (replayed.outcome.kind !== "ok") throw new Error("unreachable");
+    expect(eventDetailConsumesFlash(replayed.outcome, "GET")).toBe(false);
+    // Non-rendering requests never consume, even with a pending flash.
+    expect(eventDetailConsumesFlash(flashed.outcome, "HEAD")).toBe(false);
+    expect(eventDetailConsumesFlash(flashed.outcome, "POST")).toBe(false);
+  });
+
+  it("never consumes the flash on non-ok outcomes", async () => {
+    const gone = await resolve(
+      KEY,
+      fakeStore({ event: { ...row({ status: "cancelled" }), goingCount: 3 } as PublicEvent }),
+      GUEST,
+      "added",
+    );
+    expect(eventDetailConsumesFlash(gone.outcome, "GET")).toBe(false);
+    const missing = await resolve(KEY, fakeStore({ event: null }), GUEST, "added");
+    expect(eventDetailConsumesFlash(missing.outcome, "GET")).toBe(false);
+    const forbidden = await resolve(
+      KEY,
+      fakeStore({ event: { ...row({ status: "draft" }), goingCount: 0 } as PublicEvent }),
+      GUEST,
+      "added",
+    );
+    expect(eventDetailConsumesFlash(forbidden.outcome, "GET")).toBe(false);
+  });
+});
+
+describe("event-detail read throttle", () => {
+  const requestFor = (path = `/e/${KEY}`) =>
+    new Request(new URL(path, APP_URL).href, {
+      method: "GET",
+      headers: { host: "next.example.test" },
+    });
+  const testEnv = { APP_URL } as unknown as Env;
+
+  it("runs the shared public-read budget before the render", async () => {
+    const order: string[] = [];
+    const guard = vi.fn(async () => {
+      order.push("guard");
+      return null;
+    });
+    const render = vi.fn(async () => {
+      order.push("render");
+      return new Response("kit");
+    });
+    const res = await dispatchEventDetailRequest(requestFor(), testEnv, render, guard);
+    expect(res.status).toBe(200);
+    expect(await res.text()).toBe("kit");
+    expect(guard).toHaveBeenCalledTimes(1);
+    expect(render).toHaveBeenCalledTimes(1);
+    expect(order).toEqual(["guard", "render"]);
+  });
+
+  it("returns the 429 with its no-store, private headers and never renders", async () => {
+    const render = vi.fn(async () => new Response("kit"));
+    const limited = new Response("slow down", {
+      status: 429,
+      headers: { "cache-control": "no-store, private" },
+    });
+    const guard = vi.fn(async () => limited);
+    const res = await dispatchEventDetailRequest(requestFor(), testEnv, render, guard);
+    expect(res.status).toBe(429);
+    expect(res.headers.get("cache-control")).toBe("no-store, private");
+    expect(await res.text()).toBe("slow down");
+    expect(render).not.toHaveBeenCalled();
   });
 });

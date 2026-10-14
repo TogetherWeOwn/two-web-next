@@ -1,13 +1,16 @@
 // Kit read model for the live GET /e/:key detail: published, past and
 // moderator draft rows with member-only attendee disclosure.
 //
-// Framework-free so the root suite pins it without a SvelteKit transform: the
+// SvelteKit-free so the root suite pins it without a SvelteKit transform: the
 // future +page.server.ts load maps these outcomes onto redirect()/error() and
 // runs inside the hook's memberReadResponse boundary, which audits the
 // declared attendee subjects before any bytes leave. The manifest entry stays
 // disabled until the RSVP companion (card 26/43) passes, so Hono keeps
 // serving; GET /events/:key JSON and the ICS feed stay Hono-owned with no
-// manifest entries and no JSON here.
+// manifest entries and no JSON here. The gone/missing outcomes carry the
+// #838 state models (src/kit-event-states.ts) so the route-level error page
+// renders the branded presentations with the served statuses, never the
+// generic shell.
 //
 // Gate order mirrors src/events/routes-detail.tsx: canonical redirect before
 // any read, key admission before lookup, cancelled before any session-gated
@@ -18,6 +21,12 @@ import { dbFor } from "../admin/db";
 import type { Db } from "../db/index";
 import type { Env } from "../env";
 import type { KitRequestSession } from "../kit-session";
+import type {
+  EventGoneModel,
+  EventMissingModel,
+  EventMissingSuggestion,
+} from "../kit-event-states";
+import { kitPublicReadGuard } from "../kit-past-events";
 import { declareMemberResult } from "../member-reads";
 import { cachedNotFoundSuggestions } from "../not-found-suggestions";
 import type { JoinResult } from "../return-journey";
@@ -26,6 +35,7 @@ import { eventJsonLd, siteJsonLd } from "../seo-json-ld";
 import { isValidZone } from "./date-format";
 import { googleCalendarUrl } from "./feeds";
 import { canonicalEventKey, eventKeyAllowed } from "./keys";
+import { fmt } from "./pages-shared";
 import {
   getEventNeighbors,
   getPublicEvent,
@@ -62,7 +72,8 @@ export interface KitEventDetailRequest {
   env: Env;
   /** Bridged session from locals: unknown is an outage, never a logout. */
   session: KitRequestSession;
-  /** Read-only flash: consumption stays Hono-side, so a Kit read replays it. */
+  /** Bridged flash peek: the load deletes the cookie on the 200 GET that
+   * renders the banner (eventDetailConsumesFlash), so a Kit read never replays it. */
   joinResult: JoinResult | null;
   /** Called exactly once per resolution: SvelteKit throws on a double-set. */
   setHeaders: (headers: Record<string, string>) => void;
@@ -132,16 +143,65 @@ export interface KitEventDetailModel {
 }
 
 export interface KitEventDetailMissing {
-  suggestions: { key: string; title: string; whenText: string; datetime: string }[];
+  suggestions: EventMissingSuggestion[];
 }
 
 export type KitEventDetailOutcome =
   | { kind: "redirect"; location: string }
-  | { kind: "gone"; status: 410; headers: Record<string, string> }
+  | { kind: "gone"; model: EventGoneModel; status: 410; headers: Record<string, string> }
   | { kind: "missing"; model: KitEventDetailMissing; status: 404; headers: Record<string, string> }
   | { kind: "forbidden"; status: 403; headers: Record<string, string> }
   | { kind: "unavailable"; status: 503; headers: Record<string, string> }
   | { kind: "ok"; model: KitEventDetailModel; status: 200; headers: Record<string, string> };
+
+/** Branded-error body the Kit load throws for non-ok detail outcomes. The
+ * route-level error page renders the carried state model, so the status stays
+ * served (410/404) with the #838 presentation instead of the generic shell. */
+export interface EventDetailErrorBody {
+  message: string;
+  gone?: EventGoneModel;
+  missing?: EventMissingModel;
+}
+
+/** Map a gone/missing outcome onto the status and error body the Kit load
+ * throws. Pure so the root suite pins the outcome-to-error mapping without
+ * importing SvelteKit code (the load file itself needs the SvelteKit
+ * transform): every gone/missing outcome must carry its branded model, and
+ * nothing else maps here. */
+export function eventDetailErrorPayload(
+  outcome: Extract<KitEventDetailOutcome, { kind: "gone" | "missing" }>,
+): { status: 410 | 404; body: EventDetailErrorBody } {
+  if (outcome.kind === "gone") {
+    return { status: 410, body: { message: "This event was cancelled.", gone: outcome.model } };
+  }
+  return { status: 404, body: { message: "Not found", missing: outcome.model } };
+}
+
+/** One-shot flash rule for the Kit load: delete the join_result cookie only
+ * on the GET that renders the banner. Any other method or outcome leaves the
+ * pending flash for the next full load, exactly as the served handler consumes
+ * only after its boundary allows a 200 response. */
+export function eventDetailConsumesFlash(outcome: KitEventDetailOutcome, method: string): boolean {
+  return method === "GET" && outcome.kind === "ok" && outcome.model.joinResult !== null;
+}
+
+/** Throttle-first dispatch around the Kit detail render, mirroring the served
+ * GET /e/:key handler (src/events/routes-detail.tsx): the shared public-read
+ * budget runs before any read, and a limited client gets the Hono 429 with its
+ * no-store, private headers instead of the page. The hook binds env into this
+ * (request, render) => dispatchEventDetailRequest(request, env, render); the
+ * core decides WHEN it runs, so the route-id branch is pinned in
+ * src/route-ownership.ts instead of in web/src/hooks.server.ts. */
+export async function dispatchEventDetailRequest(
+  request: Request,
+  env: Env,
+  render: () => Promise<Response>,
+  guard: (request: Request, env: Env) => Promise<Response | null> = kitPublicReadGuard,
+): Promise<Response> {
+  const limited = await guard(request, env);
+  if (limited) return limited;
+  return render();
+}
 
 const NOINDEX = "noindex, nofollow";
 const NO_STORE = "private, no-store";
@@ -234,12 +294,41 @@ export async function resolveKitEventDetail(
     if (event) {
       // Cancelled before any session-gated read: the 410 stays
       // viewer-independent, so a store outage or a rotated cookie can never
-      // turn the static cancellation into a 500. The sessionless states module
-      // owns the gone presentation; this resolver only classifies.
+      // turn the static cancellation into a 500. The outcome carries the #838
+      // gone model (same alternatives/ICS/JSON-LD contract as
+      // resolveEventState), so the route-level error page renders the branded
+      // cancellation instead of the generic shell. A failing alternatives
+      // lookup degrades to an empty list, never an outage.
       if (event.status === "cancelled") {
+        let related: EventLink[] = [];
+        try {
+          related = await store.relatedFn(db, event);
+        } catch {
+          related = [];
+        }
         const headers = { "cache-control": NO_STORE, "x-robots-tag": NOINDEX };
         setHeaders(headers);
-        return { kind: "gone", status: 410, headers };
+        return {
+          kind: "gone",
+          status: 410,
+          headers,
+          model: {
+            title: event.title,
+            game: event.game,
+            eventKey: event.eventKey,
+            icsUrl: `/events/${event.eventKey}.ics`,
+            markdownAlternate: `/e/${event.eventKey}.md`,
+            upcomingUrl: "/events",
+            related: related.map((link) => ({
+              key: link.eventKey,
+              title: link.title,
+              whenText: fmt(link.startsAt, link.timezone),
+              location: link.location,
+            })),
+            jsonLd: eventJsonLd(event, appUrl),
+            siteJsonLd: siteJsonLd(appUrl),
+          },
+        };
       }
       // An indeterminate session is a store outage, never a logout and never
       // a guest render of member state: the served handler throws inside its
@@ -345,11 +434,15 @@ export async function resolveKitEventDetail(
     status: 404,
     headers,
     model: {
+      // Same suggestion shape as the #838 missing model (location included),
+      // so the route-level error page renders the recovery section with the
+      // served per-suggestion detail.
       suggestions: suggestions.map((suggestion) => ({
         key: suggestion.key,
         title: suggestion.title,
         whenText: `${suggestion.startsAt.toISOString().slice(0, 16).replace("T", " ")} UTC`,
         datetime: suggestion.startsAt.toISOString(),
+        location: suggestion.location,
       })),
     },
   };
