@@ -130,7 +130,9 @@ describe("Hono ProfilePage renders the leaderboard error", () => {
     expect(html).toContain('id="profile-leaderboard-opt-out-error"');
     expect(html).toContain('aria-invalid="true"');
     expect(html).toContain('aria-describedby="profile-leaderboard-opt-out-error"');
-    expect(html).toContain(LEADERBOARD_ERROR);
+    expect(html).toContain(
+      `<p id="profile-leaderboard-opt-out-error" class="error">${LEADERBOARD_ERROR}</p>`,
+    );
     // Submitted opt-out (true) keeps the switch ticked, like the other fields
     // keep their drafts.
     expect(html).toMatch(/type="checkbox"[^>]*checked|checked[^>]*type="checkbox"/);
@@ -142,7 +144,9 @@ describe("Hono ProfilePage renders the leaderboard error", () => {
       { bio: "", games_text: "", timezone: "", leaderboard_opt_out: false },
     );
     expect(html).toContain('id="profile-leaderboard-opt-out-error"');
-    expect(html).toContain(LEADERBOARD_ERROR);
+    expect(html).toContain(
+      `<p id="profile-leaderboard-opt-out-error" class="error">${LEADERBOARD_ERROR}</p>`,
+    );
     expect(html).not.toMatch(/type="checkbox"[^>]*checked|checked[^>]*type="checkbox"/);
   });
 });
@@ -160,7 +164,9 @@ describe("Svelte ProfileView renders the leaderboard error", () => {
     expect(html).toContain('id="profile-leaderboard-opt-out-error"');
     expect(html).toContain('aria-invalid="true"');
     expect(html).toContain('aria-describedby="profile-leaderboard-opt-out-error"');
-    expect(html).toContain(LEADERBOARD_ERROR);
+    expect(html).toContain(
+      `<p id="profile-leaderboard-opt-out-error" class="error">${LEADERBOARD_ERROR}</p>`,
+    );
     expect(html).toMatch(/type="checkbox"[^>]*checked|checked[^>]*type="checkbox"/);
   });
 
@@ -172,7 +178,9 @@ describe("Svelte ProfileView renders the leaderboard error", () => {
       }),
     );
     expect(html).toContain('id="profile-leaderboard-opt-out-error"');
-    expect(html).toContain(LEADERBOARD_ERROR);
+    expect(html).toContain(
+      `<p id="profile-leaderboard-opt-out-error" class="error">${LEADERBOARD_ERROR}</p>`,
+    );
     expect(html).not.toMatch(/type="checkbox"[^>]*checked|checked[^>]*type="checkbox"/);
   });
 
