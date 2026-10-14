@@ -1,4 +1,4 @@
-// Featured create outcomes (TOG-22147): the Hono POST /admin/featured
+// Featured create outcomes: the Hono POST /admin/featured
 // controller stays the single write authority while the Kit GET
 // /admin/featured/new form migrates. These pins prove the exact HTTPS
 // image-host policy, window rules, preserved-values 422s, no-JS 303s,
