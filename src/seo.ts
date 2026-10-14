@@ -51,7 +51,7 @@ export const canonicalUrl = (appUrl: string, path: string): string =>
 
 // Static entries come from the public route slots (seo-slots.ts); published
 // /e/{key} rows follow at 0.6. A sitemap must never list a URL that 404s, and
-// /events/past stays out (TOG-7072).
+// /events/past stays out.
 export function buildSitemapUrls(appUrl: string, events: SitemapEvent[]): SitemapUrl[] {
   const base = stripTrailingSlash(appUrl);
   const urls: SitemapUrl[] = Object.entries(PUBLIC_ROUTE_SLOTS).map(([path, slot]) => ({
