@@ -13,7 +13,7 @@ targetRules = ["discord-client-id"]
 regexes = ['''1546777856984481792''']
 
 [[allowlists]]
-description = "Retired SySOp role id: public by design since TOG-106/TOG-427 and still present in git history (pre-migration configs), where a push-to-main full-history scan would flag it without this entry — it no longer grants anything"
+description = "Retired SySOp role id: public by design and still present in git history (pre-migration configs), where a push-to-main full-history scan would flag it without this entry — it no longer grants anything"
 targetRules = ["discord-client-id"]
 regexes = ['''508654771276873729''']
 
