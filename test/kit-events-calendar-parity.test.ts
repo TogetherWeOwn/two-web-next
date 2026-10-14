@@ -1,4 +1,4 @@
-// Kit calendar/search progressive-enhancement parity (TOG-22135).
+// Kit calendar/search progressive-enhancement parity.
 //
 // The native GET /events endpoint renders the Hono calendar screen through
 // renderEventsHtml with no Svelte page and no global hydration; the shipped
