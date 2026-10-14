@@ -97,10 +97,21 @@ if (envs.length > 0) {
     process.exit(2);
   }
 }
-const probe = checkModerators(raw, {
-  requireConfigured: args.has("--require-configured"),
-  guildId,
-});
+const probe = (() => {
+  // Config-file reads with --require-configured must name a guild: a missing
+  // or blank DISCORD_GUILD_ID would otherwise fall back to the legacy
+  // production-pair expectation with no guild-binding finding, so a config
+  // that lost the guild var looks configured while the worker boots with a
+  // blank guild and matches nobody. Pass the miss through as an unknown
+  // guild so the probe reports FAIL guild-binding instead of skipping it.
+  const configRead = envs.length > 0 || configs.length > 0;
+  const effectiveGuildId =
+    args.has("--require-configured") && configRead && guildId === undefined ? "" : guildId;
+  return checkModerators(raw, {
+    requireConfigured: args.has("--require-configured"),
+    guildId: effectiveGuildId,
+  });
+})();
 
 if (args.has("--json")) {
   console.log(

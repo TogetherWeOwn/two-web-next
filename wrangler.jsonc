@@ -107,9 +107,10 @@
       // Vars/bindings do not inherit across environments. No QA_AUTH_TOKEN in prod.
       // env.production.vars must repeat every var the worker reads: Wrangler
       // never inherits top-level vars into a named environment. The moderator
-      // list is the same approved Owner+Moderator pair as staging; without it
-      // production boots with no moderators and admin authorization fails
-      // closed for everyone.
+      // list is the approved Owner+Moderator pair for the production guild
+      // above, unrelated to staging's pair (role IDs are guild-scoped);
+      // without it production boots with no moderators and admin
+      // authorization fails closed for everyone.
       "vars": {
         "APP_URL": "https://togetherweown.com",
         "FEATURED_IMAGE_HOSTS": "",

@@ -49,11 +49,26 @@ function configProbe(text: string, envRole = APPROVED) {
 describe("source-managed moderator deployment preflight", () => {
   it("validates JSONC vars rather than an unrelated process value", () => {
     const result = configProbe(
-      `{ // public role\n "vars": {"DISCORD_MODERATOR_ROLE_IDS": "${APPROVED}",},}`,
+      `{ // public role\n "vars": {"DISCORD_GUILD_ID": "${PRODUCTION_GUILD_ID}", "DISCORD_MODERATOR_ROLE_IDS": "${APPROVED}",},}`,
       "Moderator",
     );
     expect(result.status).toBe(0);
     expect(JSON.parse(result.stdout)).toMatchObject({ failures: 0, ok: true });
+  });
+
+  it.each([
+    `{"vars": {"DISCORD_MODERATOR_ROLE_IDS": "${APPROVED}"}}`,
+    '{"vars": {"DISCORD_MODERATOR_ROLE_IDS": "1546777855801954408,1546777856984481792"}}',
+    `{"vars": {"DISCORD_GUILD_ID": "", "DISCORD_MODERATOR_ROLE_IDS": "${APPROVED}"}}`,
+  ])("fails a config-file read with a missing or blank guild: %s", (text) => {
+    const result = configProbe(text);
+    expect(result.status).toBe(1);
+    const parsed = JSON.parse(result.stdout) as {
+      ok: boolean;
+      results: { name: string; status: string }[];
+    };
+    expect(parsed).toMatchObject({ ok: false });
+    expect(parsed.results.find((f) => f.name === "guild-binding")?.status).toBe("FAIL");
   });
 
   it.each([
@@ -109,11 +124,23 @@ describe("source-managed moderator deployment preflight", () => {
     };
     // Production env configured: passes even when the process value is garbage.
     const ok = envProbe(
-      `{"vars": {}, "env": {"production": {"vars": {"DISCORD_MODERATOR_ROLE_IDS": "${APPROVED}"}}}}`,
+      `{"vars": {}, "env": {"production": {"vars": {"DISCORD_GUILD_ID": "${PRODUCTION_GUILD_ID}", "DISCORD_MODERATOR_ROLE_IDS": "${APPROVED}"}}}}`,
       "production",
     );
     expect(ok.status).toBe(0);
     expect(JSON.parse(ok.stdout)).toMatchObject({ failures: 0, ok: true });
+    // Named env without a guild fails the binding instead of falling back to
+    // the legacy production-pair expectation with no guild-binding finding.
+    const noGuild = envProbe(
+      `{"vars": {}, "env": {"production": {"vars": {"DISCORD_MODERATOR_ROLE_IDS": "${APPROVED}"}}}}`,
+      "production",
+    );
+    expect(noGuild.status).toBe(1);
+    const noGuildFindings = JSON.parse(noGuild.stdout).results as {
+      name: string;
+      status: string;
+    }[];
+    expect(noGuildFindings.find((f) => f.name === "guild-binding")?.status).toBe("FAIL");
     // Production env missing the var fails even when the top level has it:
     // Wrangler does not inherit top-level vars, so a fallback would lie.
     const noFallback = envProbe(
@@ -175,6 +202,53 @@ describe("source-managed moderator deployment preflight", () => {
     expect(mismatched.status).toBe(1);
     const findings = JSON.parse(mismatched.stdout).results as { name: string; status: string }[];
     expect(findings.find((f) => f.name === "guild-binding")?.status).toBe("FAIL");
+    // The --env=production branch reads its own guild: the same mismatches
+    // through --env must fail, pinning the production gate's guild read.
+    const envGuildProbe = (guild: string, roles: string) => {
+      const dir = temp();
+      try {
+        const path = join(dir, "wrangler.jsonc");
+        writeFileSync(
+          path,
+          `{"vars": {${vars(STAGING_GUILD_ID, STAGING)}}, "env": {"production": {"vars": {${vars(guild, roles)}}}}}`,
+        );
+        return spawnSync(
+          process.execPath,
+          [
+            "--import",
+            "./bin/ts-hook.mjs",
+            "bin/check-moderators.mjs",
+            `--config=${path}`,
+            "--env=production",
+            "--require-configured",
+            "--json",
+          ],
+          {
+            encoding: "utf8",
+            timeout: 30_000,
+            env: { ...process.env, DISCORD_MODERATOR_ROLE_IDS: "Moderator" },
+          },
+        );
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    };
+    // Staging guild carrying the production pair: fails the binding.
+    const envMismatched = envGuildProbe(STAGING_GUILD_ID, APPROVED);
+    expect(envMismatched.status).toBe(1);
+    const envFindings = JSON.parse(envMismatched.stdout).results as {
+      name: string;
+      status: string;
+    }[];
+    expect(envFindings.find((f) => f.name === "guild-binding")?.status).toBe("FAIL");
+    // Mirror: production guild carrying the staging pair fails too.
+    const envMirrored = envGuildProbe(PRODUCTION_GUILD_ID, STAGING);
+    expect(envMirrored.status).toBe(1);
+    const mirroredFindings = JSON.parse(envMirrored.stdout).results as {
+      name: string;
+      status: string;
+    }[];
+    expect(mirroredFindings.find((f) => f.name === "guild-binding")?.status).toBe("FAIL");
     // The shipped configs are guild-bound both ways: top level is the
     // staging deploy, env.production is production.
     for (const extra of [[], ["--env=production"]]) {
@@ -274,7 +348,7 @@ describe("source-managed moderator deployment preflight", () => {
       const path = join(dir, "wrangler.jsonc");
       writeFileSync(
         path,
-        `{"vars": {"DISCORD_MODERATOR_ROLE_IDS": "${APPROVED}"}, "env": {"production": {"vars": {"DISCORD_MODERATOR_ROLE_IDS": "Moderator"}}}}`,
+        `{"vars": {"DISCORD_GUILD_ID": "${PRODUCTION_GUILD_ID}", "DISCORD_MODERATOR_ROLE_IDS": "${APPROVED}"}, "env": {"production": {"vars": {"DISCORD_MODERATOR_ROLE_IDS": "Moderator"}}}}`,
       );
       const result = spawnSync(
         process.execPath,
