@@ -334,6 +334,20 @@ describe("homepage edge cache layer (production path)", () => {
     );
     expect(second).toEqual(first);
   });
+
+  it("never stores an empty featured base, so recovery is visible", async () => {
+    stubEdge();
+    // A null database reads as [] exactly like a genuinely empty table (and
+    // exactly like a deadline fallback): storing it would hide the recovery
+    // behind the TTL.
+    const empty = await cachedFeatured(edgeEnv, async () => null, NOW, ctx);
+    expect(empty).toEqual([]);
+    await flushEdge();
+    expect(bodies.size).toBe(0);
+    const f = fixture();
+    const recovered = await cachedFeatured(edgeEnv, async () => f.db, NOW, ctx);
+    expect(recovered).toHaveLength(1);
+  });
 });
 
 describe("homepage guest cache retire", () => {
@@ -357,6 +371,25 @@ describe("homepage guest cache retire", () => {
     rows = [];
     await retireHomeGuestCache();
     await expect(cachedFeatured(env, async () => db, NOW, undefined)).resolves.toEqual([]);
+  });
+
+  it("does not cache an empty featured base, so a later row shows without a retire", async () => {
+    // An empty read (genuinely empty table, or a deadline fallback under
+    // load) must not seed the cache: the next read re-queries and picks up a
+    // row that appeared meanwhile.
+    let rows: unknown[][] = [];
+    const db = drizzle(async (sql: string) => {
+      if (sql.includes('from "featured_contents"')) return { rows };
+      if (sql.includes("set_config")) return { rows: [] };
+      return { rows: [] };
+    }) as unknown as Db;
+    Object.assign(db, { transaction: async (fn: (tx: Db) => Promise<unknown>) => fn(db) });
+    const env = { ...baseEnv, ADMIN_DB: db } as Env;
+    await expect(cachedFeatured(env, async () => db, NOW, undefined)).resolves.toEqual([]);
+    rows = [[2, "Late slot", "Appeared after the empty read", null, null, null, null, null]];
+    const seen = await cachedFeatured(env, async () => db, NOW, undefined);
+    expect(seen).toHaveLength(1);
+    expect(seen[0]?.title).toBe("Late slot");
   });
 
   it("deletes the shared edge entries so they cannot re-seed memory", async () => {

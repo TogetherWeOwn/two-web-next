@@ -289,6 +289,13 @@ function storeFeaturedCache(
   ctx?: WaitUntilCtx,
   genAtStart?: number,
 ): void {
+  // An empty base is never stored: a deadline fallback reads as [] exactly
+  // like a genuinely empty table, and a stored outage would hide recovery
+  // behind the TTL (same principle as the upcoming `unavailable` guard; the
+  // browser suite caught a created slot invisible to the guest under load).
+  // A genuinely empty table simply re-reads until a retire-then-write adds
+  // the first row.
+  if (value.length === 0) return;
   // Same in-flight retire guard as the upcoming store: a value read before
   // the write committed must never overwrite the retire.
   if (genAtStart !== undefined && genAtStart !== generation) return;
