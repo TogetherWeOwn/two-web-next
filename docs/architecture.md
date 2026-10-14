@@ -289,6 +289,7 @@ exactly once.
 | `src/kit-access-sink.ts` | profiles |
 | `src/kit-errors.ts` | entry |
 | `src/kit-event-states.ts` | events |
+| `src/kit-hotzones.ts` | events |
 | `src/kit-past-events.ts` | events |
 | `src/kit-session.ts` | auth |
 | `src/leaderboards/` | profiles |
