@@ -29,6 +29,16 @@ describe("ci/zap-retry-decision.mjs", () => {
     expect(isRetryablePiiFlake(md)).toBe(false);
   });
 
+  it("rejects retry for a lone non-PII High", () => {
+    const md = markdown(summarize(report([alert(40012, "3", "Cross Site Scripting")]), nullBudget));
+    expect(isRetryablePiiFlake(md)).toBe(false);
+  });
+
+  it("rejects retry when a lone PII High sits next to invalid evidence", () => {
+    const md = markdown(summarize(report([alert(10062, "3", "PII Disclosure"), {}]), nullBudget));
+    expect(isRetryablePiiFlake(md)).toBe(false);
+  });
+
   it("rejects retry when Medium or Low are over budget", () => {
     const md = markdown(
       summarize(report([alert(10062, "3", "PII Disclosure"), alert(10021, "1")]), {

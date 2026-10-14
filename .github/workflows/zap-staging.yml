@@ -64,7 +64,7 @@ jobs:
           set -uo pipefail
           if node ci/zap-gate.mjs "$RUNNER_TEMP/zap/zap-report.json" ci/zap-budget.json 2>&1 | tee "$RUNNER_TEMP/zap/gate.md"; test "${PIPESTATUS[0]}" -eq 0; then exit 0; fi
           if node ci/zap-retry-decision.mjs "$RUNNER_TEMP/zap/gate.md"; then
-            echo "Lone PII Disclosure (10062) High looks transient; re-scanning once."
+            echo "::warning::Lone PII Disclosure (10062) High looks transient; re-scanning once."
             # Brief pause lets per-minute throttle buckets decay before the re-scan.
             sleep 30
             mkdir -p "$RUNNER_TEMP/zap" && chmod 777 "$RUNNER_TEMP/zap"
