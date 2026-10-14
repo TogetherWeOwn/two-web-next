@@ -7,13 +7,16 @@ import AdminShell from "#lib/AdminShell.svelte";
 // cancel destination are shared, so the existing admin E2E selectors still
 // apply when this route owns traffic and the Hono POST /admin/featured
 // validator keeps accepting this form unchanged during mixed mode.
-// No JavaScript: a plain POST and a cancel link, like the Hono panel.
+// No JavaScript: a plain POST and a cancel link, like the Hono panel. The
+// deferred dirty-draft/double-submit guard island is progressive markup
+// (like join/+page.svelte): with csr=false the no-JS contract still holds.
+const island = '<script src="/islands/admin-event-editor.js" defer></' + "script>";
 </script>
 
 <AdminShell title="New featured slot">
 <section class="featured-form">
   <h1>New featured slot</h1>
-  <form method="post" action="/admin/featured">
+  <form method="post" action="/admin/featured" data-event-editor="">
     <!-- Native maxlength counts UTF-16 units and truncates supplementary
         characters early; the 255-code-point limits belong to the server
         validator so valid headlines and image descriptions survive. -->
@@ -72,4 +75,5 @@ import AdminShell from "#lib/AdminShell.svelte";
     </div>
   </form>
 </section>
+{@html island}
 </AdminShell>

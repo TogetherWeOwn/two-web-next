@@ -57,9 +57,9 @@ describe("Kit featured-new page contract", () => {
     expect(source).toContain("Show until (UTC");
   });
 
-  it("ships no island script and no client handlers, so the page works with JavaScript disabled", () => {
-    expect(source).not.toMatch(/\/islands\/[a-z0-9-]+\.js/);
-    expect(source).not.toMatch(/<script src=/);
+  it("mounts the progressive dirty-draft guard island and no client handlers, so the page works with JavaScript disabled", () => {
+    expect(source).toContain('data-event-editor=""');
+    expect(source).toContain("/islands/admin-event-editor.js");
     expect(source).not.toMatch(/on:[a-z]+=/);
   });
 
