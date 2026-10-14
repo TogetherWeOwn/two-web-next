@@ -355,23 +355,56 @@ test("member-board contract passes a good fixture and fails planted mutants", ()
     0,
   );
   const mutants = [
-    ["guest-chrome", (html) => html.replace("Sign out", "Welcome, guest")],
-    ["shared-cache", () => goodHtml],
-    ["no-table-no-status", (html) => html.replace(/<table>[\s\S]*<\/table>/, "")],
+    [
+      "guest-chrome",
+      (html) => html.replace("</main>", "<p>Welcome, guest</p></main>"),
+      "member page must not show guest chrome",
+    ],
+    ["shared-cache", (html) => html, "member board answers private, no-store"],
+    [
+      "no-table-no-status",
+      (html) => html.replace(/<table>[\s\S]*<\/table>/, ""),
+      "board table or empty status present",
+    ],
     [
       "follow-index",
       (html) => html.replace('content="noindex, nofollow"', 'content="index, follow"'),
+      "member board never indexes",
     ],
-    ["per-attempt-field", (html) => `${html}<!-- discord_id -->`],
+    ["per-attempt-field", (html) => `${html}<!-- discord_id -->`, "no per-attempt fields"],
+    [
+      "profile-link",
+      (html) =>
+        html.replace(
+          '<th scope="row">Rick</th>',
+          '<th scope="row"><a href="/members/rick">Rick</a></th>',
+        ),
+      "board rows never link to profiles",
+    ],
+    [
+      "no-canonical",
+      (html) => html.replace(/<link rel="canonical"[^>]*>/, ""),
+      "canonical points at /leaderboards/members",
+    ],
+    [
+      "canonical-wrong-target",
+      (html) =>
+        html.replace(
+          /<link rel="canonical"[^>]*>/,
+          '<link rel="canonical" href="https://next.togetherweown.com/events">',
+        ),
+      "canonical points at /leaderboards/members",
+    ],
+    ["wrong-renderer", (html) => html, "renderer marker"],
   ];
-  for (const [name, mutate] of mutants) {
+  for (const [name, mutate, want] of mutants) {
     const failures = assertMembersContract({
       label: `unit/members-mutant-${name}`,
       html: mutate(goodHtml),
       headers: {
         get: (n) => {
           if (n === "content-type") return "text/html; charset=UTF-8";
-          if (n === "x-two-renderer") return null;
+          if (n === "x-two-renderer") return name === "wrong-renderer" ? "kit" : null;
           if (n === "cache-control")
             return name === "shared-cache" ? "public, max-age=300" : "private, no-store";
           return null;
@@ -383,7 +416,10 @@ test("member-board contract passes a good fixture and fails planted mutants", ()
         cache: name === "shared-cache" ? "public, max-age=300" : expected.cache,
       },
     });
-    assert.ok(failures.length > 0, `member mutant ${name} was NOT detected`);
+    assert.ok(
+      failures.some((f) => f.includes(want)),
+      `member mutant ${name} did not trip "${want}" (got: ${failures.join("; ") || "no failures"})`,
+    );
   }
 });
 
