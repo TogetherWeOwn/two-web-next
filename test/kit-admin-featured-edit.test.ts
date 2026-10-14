@@ -73,7 +73,10 @@ describe("Kit featured-edit page contract", () => {
   it("keeps the homepage preview with the shared status and the hidden-slot note", () => {
     expect(source).toContain('data-testid="featured-preview"');
     expect(source).toContain("Homepage preview");
+    expect(source).toContain("refresh this preview");
     expect(source).toContain("featured-preview-hidden");
+    expect(source).toContain("<img");
+    expect(source).toContain("href={data.view.values.url}");
   });
 
   it("mounts the progressive dirty-draft/double-submit guard island and no client handlers, so repeat submits cannot apply twice with JS and the page works without it", () => {
