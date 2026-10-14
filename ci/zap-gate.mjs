@@ -104,12 +104,13 @@ export function summarize(report, budget) {
   const alerts = [];
   if (!report || typeof report !== "object" || Array.isArray(report)) {
     failures.push("invalid scan evidence: report must be an object with a site array");
-    return { alerts, counts: { 3: 0, 2: 0, 1: 0, 0: 0 }, failures };
+    return { alerts, counts: { 3: 0, 2: 0, 1: 0, 0: 0 }, failures, siteCount: 0 };
   }
   if (!Array.isArray(report.site)) {
     failures.push("invalid scan evidence: report must be an object with a site array");
-    return { alerts, counts: { 3: 0, 2: 0, 1: 0, 0: 0 }, failures };
+    return { alerts, counts: { 3: 0, 2: 0, 1: 0, 0: 0 }, failures, siteCount: 0 };
   }
+  const siteCount = report.site.length;
   for (let si = 0; si < report.site.length; si++) {
     const site = report.site[si];
     if (!site || typeof site !== "object" || Array.isArray(site) || !Array.isArray(site.alerts)) {
@@ -216,17 +217,20 @@ export function summarize(report, budget) {
       failures.push(`${counts[risk]} ${RISK[risk]} alert type(s) > budget ${key}=${max}`);
     }
   }
-  return { alerts, counts, failures };
+  return { alerts, counts, failures, siteCount };
 }
 
-export function markdown({ alerts, counts, failures }) {
+export function markdown({ alerts, counts, failures, siteCount }) {
   const rows = alerts
     .sort((a, b) => b.risk - a.risk || a.name.localeCompare(b.name))
     .map((a) => `| ${RISK[a.risk] ?? a.risk} | ${a.pluginId} | ${a.name} | ${a.count} |`);
+  const scanned =
+    Number.isInteger(siteCount) && siteCount >= 0 ? `Scanned ${siteCount} site(s)` : null;
   return [
     "## ZAP baseline (staging, passive)",
     "",
     `High ${counts[3]} · Medium ${counts[2]} · Low ${counts[1]} · Info ${counts[0]} (alert types)`,
+    ...(scanned ? [scanned] : []),
     "",
     failures.length ? `**FAIL:** ${failures.join("; ")}` : "**PASS**",
     "",
