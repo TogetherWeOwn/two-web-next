@@ -89,6 +89,17 @@ export const ROUTE_MANIFEST: OwnedRoute[] = [
     enabled: false,
     reads: { resource: "activity_log", action: "list", route: "admin.activity-log.index" },
   },
+  // Moderator events list: same declaration as the Hono handler
+  // (admin.events.index, src/admin/routes.tsx). Only this GET migrates:
+  // POST /admin/events, /new and /:key stay Hono-owned, so the create form,
+  // edit form and every publish/cancel/RSVP action keep one authority until
+  // their own slices land. Off until the enablement review.
+  {
+    method: "GET",
+    path: "/admin/events",
+    enabled: false,
+    reads: { resource: "events", action: "list", route: "admin.events.index" },
+  },
   // Join-attempts audit list: member data, so the Kit branch renders
   // inside the member-read boundary with this declaration and the bridged
   // viewer. Off until the enablement review: the Hono viewer answers meanwhile.
