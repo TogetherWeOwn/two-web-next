@@ -633,6 +633,93 @@ function assertRecoveryContract(label, html, get, expected) {
   return failures;
 }
 
+// Member-board contract (src/leaderboards/pages.tsx + Kit +page.svelte):
+// authenticated member view only — Hono memberGate then season/scope/activity
+// grammar (400 before any read), Kit load mirrors the order; both answer
+// private, no-store with noindex, nofollow. Rank + display name + count only.
+export function assertMembersContract({ label, html, headers, status, expected }) {
+  const failures = [];
+  const get = (name) => headers.get?.(name) ?? headers[name.toLowerCase()] ?? null;
+  if (status !== expected.status) {
+    failures.push(`${label}: status ${status} !== ${expected.status}`);
+    return failures;
+  }
+  const contentType = get("content-type") ?? "";
+  if (!/text\/html/.test(contentType))
+    failures.push(`${label}: content-type ${contentType} is not HTML`);
+  const marker = get("x-two-renderer");
+  if (marker !== expected.marker) {
+    failures.push(
+      `${label}: renderer marker ${JSON.stringify(marker)} !== ${JSON.stringify(expected.marker)}`,
+    );
+  }
+  if (expected.marker === null && marker !== null) {
+    failures.push(`${label}: Hono-owned route must not carry the Kit marker`);
+  }
+  if (countMatches(html, /<main(?:\s|>)/gi) !== 1) failures.push(`${label}: exactly one <main>`);
+  if (!html.includes('class="skip-link" href="#main"'))
+    failures.push(`${label}: skip link targets #main`);
+  if (!html.includes('aria-label="Primary"'))
+    failures.push(`${label}: primary nav has an accessible name`);
+  if (!/<link\b[^>]*\brel="canonical"[^>]*\/leaderboards\/members[^>]*>/.test(html))
+    failures.push(`${label}: canonical points at /leaderboards/members`);
+  if (!html.includes('<meta name="robots" content="noindex, nofollow"'))
+    failures.push(`${label}: member board never indexes`);
+  if (!html.includes("<h1>Member leaderboard</h1>"))
+    failures.push(`${label}: member-board heading present`);
+  if (!html.includes("Members only")) failures.push(`${label}: members-only strap present`);
+  if (!html.includes('aria-label="Board scope"'))
+    failures.push(`${label}: board scope nav present`);
+  if (!html.includes("Overall") || !html.includes("Around you"))
+    failures.push(`${label}: overall + relative scope links present`);
+  if (!html.includes('aria-label="Filter the leaderboard"'))
+    failures.push(`${label}: board filter form present`);
+  if (!html.includes('name="season"') || !html.includes('name="activity"'))
+    failures.push(`${label}: season + activity inputs present`);
+  const hasTable = html.includes("<table>");
+  const hasEmptyStatus =
+    html.includes("Nobody is ranked for this season and game yet.") ||
+    html.includes("You are not ranked for this season and game yet.") ||
+    html.includes("Rankings are temporarily unavailable.");
+  if (!hasTable && !hasEmptyStatus) failures.push(`${label}: board table or empty status present`);
+  if (hasTable) {
+    if (!html.includes('<th scope="col">Rank</th>')) failures.push(`${label}: rank column present`);
+    if (!html.includes('<th scope="col">Member</th>'))
+      failures.push(`${label}: member column present`);
+    if (!html.includes('<th scope="col">Going</th>'))
+      failures.push(`${label}: going column present`);
+    const tbody = html.split("<tbody>")[1]?.split("</tbody>")[0] ?? "";
+    if (tbody.includes('href="/members/'))
+      failures.push(`${label}: board rows never link to profiles`);
+  }
+  if (/discord_id|created_at/i.test(html))
+    failures.push(`${label}: rank rows only, no per-attempt fields`);
+  // Authenticated member chrome only: a guest banner on this page is a leak.
+  if (!html.includes("Sign out")) failures.push(`${label}: member account chrome`);
+  if (html.includes("Welcome, guest"))
+    failures.push(`${label}: member page must not show guest chrome`);
+  if (html.includes("Cross-site POST form submissions"))
+    failures.push(`${label}: bare Kit CSRF text (must be the hardened gate)`);
+  // Privacy invariant, independent of the expected-cache pin: the board carries
+  // per-viewer rows, so a shared-cacheable board is a privacy break however
+  // the expectation is pinned.
+  if (expected.cache !== undefined && expected.cache !== null) {
+    const actual = get("cache-control") ?? "";
+    const allowed = Array.isArray(expected.cache) ? expected.cache : [expected.cache];
+    if (!allowed.includes(actual))
+      failures.push(
+        `${label}: cache-control ${JSON.stringify(actual)} not in ${allowed.join(" | ")}`,
+      );
+  }
+  const cacheActual = get("cache-control") ?? "";
+  if (cacheActual !== "private, no-store")
+    failures.push(`${label}: member board answers private, no-store`);
+  const secretHits = scrubSecrets(html);
+  if (secretHits.length)
+    failures.push(`${label}: secret-shaped content in HTML (${secretHits.length} patterns)`);
+  return failures;
+}
+
 export function assertReservedContract({ label, status, headers }) {
   const failures = [];
   const get = (name) => headers.get?.(name) ?? headers[name.toLowerCase()] ?? null;
@@ -938,6 +1025,126 @@ export function runUnitMode({ stdout = process.stdout, manifestSource: manifestO
       `unit: recover mutant ${name} fails`,
       failures.length > 0 ? "passed" : "failed",
       failures.length > 0 ? null : "mutant was NOT detected",
+    );
+  }
+
+  // Member-board fixtures: authenticated member view only. The board stays
+  // Hono-held until its executed preview journey lands, so the expected marker
+  // derives from the shipped manifest (null today, "kit" after enablement) and
+  // these unit journeys prove the assertion set passes on a good fixture AND
+  // fails on planted breaks. Admission (302/403/400), the audit row and the
+  // live Hono-vs-Kit fetch remain preview work, not unit work.
+  const membersMarker = isManifestEnabled(manifestSource, "/leaderboards/members", "GET")
+    ? "kit"
+    : null;
+  const membersGood =
+    `<html><head><link rel="canonical" href="https://next.togetherweown.com/leaderboards/members">` +
+    `<meta name="robots" content="noindex, nofollow"></head>` +
+    `<body><a class="skip-link" href="#main">Skip to content</a>` +
+    `<nav aria-label="Primary"><a href="/">Home</a></nav>` +
+    `<p><span class="who">Rick</span> <button type="submit" class="link">Sign out</button></p>` +
+    `<main id="main" class="events-page"><p class="strap">Members only</p>` +
+    `<h1>Member leaderboard</h1>` +
+    `<nav aria-label="Board scope"><ul><li><a href="/leaderboards/members" aria-current="page">Overall</a></li>` +
+    `<li><a href="/leaderboards/members?scope=relative">Around you</a></li></ul></nav>` +
+    `<form method="get" action="/leaderboards/members" aria-label="Filter the leaderboard">` +
+    `<p><label for="board-season">Season (all, 2026, 2026-09 or 2026-Q3)</label> ` +
+    `<input id="board-season" name="season" type="text" value="all" /></p>` +
+    `<p><label for="board-activity">Game (blank for every game)</label> ` +
+    `<input id="board-activity" name="activity" type="text" value="" /></p>` +
+    `<p><button class="btn" type="submit">Show board</button></p></form>` +
+    `<table><caption>Going counts, season all, every game</caption>` +
+    `<thead><tr><th scope="col">Rank</th><th scope="col">Member</th><th scope="col">Going</th></tr></thead>` +
+    `<tbody><tr><td>1</td><th scope="row">Rick</th><td>3</td></tr></tbody></table>` +
+    `</main></body></html>`;
+  const membersFailures = assertMembersContract({
+    label: "unit/members board",
+    html: membersGood,
+    headers: headerMap({
+      "content-type": "text/html; charset=UTF-8",
+      "x-two-renderer": membersMarker,
+      "cache-control": "private, no-store",
+    }),
+    status: 200,
+    expected: { status: 200, marker: membersMarker, cache: "private, no-store" },
+  });
+  push(
+    "unit: members board renders for a member",
+    membersFailures.length === 0 ? "passed" : "failed",
+    membersFailures.join("; ") || null,
+  );
+  // Each mutant trips exactly one contract check, pinned by failure label:
+  // a mutant that trips a neighbouring check (or none) fails its journey.
+  // guest-chrome keeps "Sign out" so only the guest-chrome leak check trips;
+  // no-canonical and canonical-wrong-target pin the <link rel="canonical">
+  // element match (form action and scope links alone must not satisfy it).
+  const membersMutants = [
+    [
+      "guest-chrome",
+      (html) => html.replace("</main>", "<p>Welcome, guest</p></main>"),
+      "member page must not show guest chrome",
+    ],
+    ["shared-cache", (html) => html, "member board answers private, no-store"],
+    [
+      "no-table-no-status",
+      (html) => html.replace(/<table>[\s\S]*<\/table>/, ""),
+      "board table or empty status present",
+    ],
+    [
+      "follow-index",
+      (html) => html.replace('content="noindex, nofollow"', 'content="index, follow"'),
+      "member board never indexes",
+    ],
+    ["per-attempt-field", (html) => `${html}<!-- discord_id -->`, "no per-attempt fields"],
+    [
+      "profile-link",
+      (html) =>
+        html.replace(
+          '<th scope="row">Rick</th>',
+          '<th scope="row"><a href="/members/rick">Rick</a></th>',
+        ),
+      "board rows never link to profiles",
+    ],
+    [
+      "no-canonical",
+      (html) => html.replace(/<link rel="canonical"[^>]*>/, ""),
+      "canonical points at /leaderboards/members",
+    ],
+    [
+      "canonical-wrong-target",
+      (html) =>
+        html.replace(
+          /<link rel="canonical"[^>]*>/,
+          '<link rel="canonical" href="https://next.togetherweown.com/events">',
+        ),
+      "canonical points at /leaderboards/members",
+    ],
+    ["wrong-renderer", (html) => html, "renderer marker"],
+  ];
+  for (const [name, mutate, want] of membersMutants) {
+    const failures = assertMembersContract({
+      label: `unit/members-mutant-${name}`,
+      html: mutate(membersGood),
+      headers: headerMap({
+        "content-type": "text/html; charset=UTF-8",
+        "x-two-renderer":
+          name === "wrong-renderer" ? (membersMarker === "kit" ? null : "kit") : membersMarker,
+        "cache-control": name === "shared-cache" ? "public, max-age=300" : "private, no-store",
+      }),
+      status: 200,
+      expected: {
+        status: 200,
+        marker: membersMarker,
+        cache: name === "shared-cache" ? "public, max-age=300" : "private, no-store",
+      },
+    });
+    const pinned = failures.some((f) => f.includes(want));
+    push(
+      `unit: members mutant ${name} fails`,
+      pinned ? "passed" : "failed",
+      pinned
+        ? null
+        : `mutant did not trip "${want}" (got: ${failures.join("; ") || "no failures"})`,
     );
   }
 
