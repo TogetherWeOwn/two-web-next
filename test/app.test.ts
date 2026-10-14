@@ -9,7 +9,7 @@ import { createMemorySessionStore, type SessionStore } from "../src/sessions";
 import type { Env } from "../src/env";
 import { QA_HEADER } from "../src/qa";
 
-const MOD_ROLE = "508654771276873729";
+const MOD_ROLE = "1546777856984481792";
 
 const env: Env = {
   APP_URL: "https://next.example.test",
@@ -311,7 +311,7 @@ describe("moderator recompute from snowflake role IDs", () => {
   it("pins the recompute to fixture snowflakes: renamed-role confusion changes nothing", async () => {
     const { hashToken } = await import("../src/sessions");
     // Same member, roles that are names or deleted-role IDs: never a moderator.
-    for (const roles of [["SySOp"], ["1078757544169848933"], []]) {
+    for (const roles of [["Moderator"], ["1078757544169848933"], []]) {
       const { store, env: e } = isolated();
       mockDiscord({ memberRoles: roles });
       const { state, cookie } = await startSignIn(e);
