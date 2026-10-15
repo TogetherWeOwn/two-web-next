@@ -66,10 +66,13 @@ The repository rulesets enforce the following on `main`:
 counted lines), `size/M` (up to 400), `size/L` (up to 1000) or `size/XL`, and
 keeps one advisory comment on pull requests over the 400-line threshold.
 Counted lines are additions + deletions excluding lockfiles, generated files
-and fixtures (`.github/scripts/pr_size.py`). This is advisory only: it is not
-a required check and never blocks a merge. A Monday run of the same workflow
-prints the weekly tally of merged pull requests per size; the labels are the
-durable record behind it.
+and fixtures. The labeller lives once in the org
+[TogetherWeOwn/.github](https://github.com/TogetherWeOwn/.github) repository
+(`CI-STANDARD.md`, "Advisory PR-size labels"); the workflow here is a thin
+caller pinned to a central SHA and passes only this repo's generated paths.
+This is advisory only: it is not a required check and never blocks a merge.
+A Monday run of the same workflow prints the weekly tally of merged pull
+requests per size; the labels are the durable record behind it.
 
 ### Change-gated CI and `ci-ok`
 
