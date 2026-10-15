@@ -82,7 +82,18 @@ function honoMemberCookie(): Promise<string> {
 
 async function memberCookie(target: ParityTarget): Promise<string> {
   const pair = await honoMemberCookie();
-  if (target.name !== "kit") return pair;
+  if (target.name !== "kit") {
+    // Freshest wins on Hono: rotating page reads (GET /e/:key) delete the
+    // presented bearer's row and deliver the replacement via Set-Cookie into
+    // this context's jar, so the login pair above is dead from the first
+    // such read. Replay the jar's current pair when it has one; a later
+    // non-rotating read (the event JSON) then stays authenticated instead
+    // of 401ing on the rotated-away token. The board gate never rotates,
+    // which is why only reads ordered after a rotating page hit this.
+    const state = await api(target).storageState();
+    const current = state.cookies.find((cookie) => cookie.name === "__Host-two_session");
+    return current ? `${current.name}=${current.value}` : pair;
+  }
   const eq = pair.indexOf("=");
   const signed = pair.slice(eq + 1);
   const raw = signed.slice(0, signed.lastIndexOf("."));
