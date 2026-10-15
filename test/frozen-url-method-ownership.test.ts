@@ -16,8 +16,8 @@
 // route-inventory: GET /events.ics
 // route-inventory: GET /events/past
 
-// Frozen URLs, APIs, redirects and method ownership (TOG-22153, migration
-// card 40/43): the exhaustive fixture matrix over the mixed Kit/Hono Worker.
+// Frozen URLs, APIs, redirects and method ownership: the exhaustive fixture
+// matrix over the mixed Kit/Hono Worker.
 //
 // Part A pins the ownership decision for EVERY shipped manifest entry in BOTH
 // flag positions (enabled/disabled), every HTTP method, and the query,
