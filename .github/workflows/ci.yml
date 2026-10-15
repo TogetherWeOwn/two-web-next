@@ -573,6 +573,9 @@ jobs:
       - name: Gradual promotion selftest (fixtures, no secrets or network)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
         run: node --test ci/gradual-promote.test.mjs
+      - name: Gradual promotion gate acceptance (real smoke checker, loopback only)
+        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
+        run: node --test ci/gradual-promote-gate-acceptance.test.mjs
       - name: Promotion resolver selftest (stubbed GitHub API, no network)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
         run: node --test ci/resolve-promotion-sha.test.mjs
