@@ -32,8 +32,7 @@ function baseData(overrides: BoardData = {}): BoardData {
     season: "all",
     scope: "overall",
     activity: null,
-    rows: [{ userId: "u-viewer", username: "Vic", count: 3, rank: 1 }],
-    viewerId: "u-viewer",
+    rows: [{ username: "Vic", count: 3, rank: 1, isViewer: true }],
     viewerUsername: "Vic",
     available: true,
     appUrl: "https://example.test",
@@ -101,5 +100,7 @@ describe("Kit member board render", () => {
     expect(html).toContain("Sign out");
     expect(html).not.toContain("Welcome, guest");
     expect(html).not.toContain("Sign in with Discord");
+    // The viewer's own row is marked from the server-side isViewer flag.
+    expect(html).toContain('aria-current="true"');
   });
 });

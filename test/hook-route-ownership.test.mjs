@@ -155,7 +155,7 @@ describe("hooks.server route ownership wiring", () => {
       {
         method: "GET",
         path: "/leaderboards/members",
-        enabled: false,
+        enabled: true,
         reads: { resource: "leaderboard", action: "list", route: "leaderboards.members" },
       },
       {

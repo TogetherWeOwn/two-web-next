@@ -32,7 +32,7 @@ expect Hono for the right reason.
 | `GET /profile` | `web/src/routes/profile/+page.svelte` (`csr=false`, one shared `web/src/lib/ProfileView.svelte`, member record + optional stats) | member (`profile`/`view`/`profile`) | Hono (`enabled: false`) |
 | `GET /members/:user` | `web/src/routes/members/[user]/+page.svelte` (same shared view; retired `/members` directory has no route) | member (`profile`/`view`/`profiles.show`) | Hono (`enabled: false`) |
 | `GET /e/:key` | `web/src/routes/e/[key]/+page.svelte` (`csr=false`, one shared `web/src/lib/EventDetail.svelte` over the `KitEventDetailModel` shape, existing `/islands/rsvp-button.js` + `/copy-link.js` + `/going-count.js`; JSON/ICS stay Hono-owned) | member (`member`/`list`/`events.page`, bridged viewer; disclosed attendee + own-RSVP subjects audited, anonymous releases with none) | Hono (`enabled: false`; enablement blocked on the RSVP companion) |
-| `GET /leaderboards/members` | `web/src/routes/leaderboards/members/+page.svelte` (`csr=false`, thin binding over `src/kit-members.ts`: same gate order, season/scope/activity grammar, ranking read and `private, no-store` as `src/leaderboards/routes.tsx`; the anonymous board-view log is queued by the load and written after the member-read boundary releases a 200, never inside its capture) | leaderboard (`leaderboard`/`list`/`leaderboards.members`, bridged viewer) | Hono (`enabled: false`; held until the executed parity journey below earns a fresh privacy verdict) |
+| `GET /leaderboards/members` | `web/src/routes/leaderboards/members/+page.svelte` (`csr=false`, thin binding over `src/kit-members.ts`: same gate order, season/scope/activity grammar, ranking read and `private, no-store` as `src/leaderboards/routes.tsx`; the anonymous board-view log is queued by the load and written after the member-read boundary releases a 200, never inside its capture) | leaderboard (`leaderboard`/`list`/`leaderboards.members`, bridged viewer) | Kit (`enabled: true`; enabled after the executed parity journey below earned the fresh privacy verdict) |
 | everything else | none yet (Kit `[...path]` catch-all → `honoFetch`) | — | Hono |
 
 Add one row per migrated route with its reads class (`public` routes render
@@ -126,8 +126,10 @@ the Kit target, since the isolated fixture deliberately does not share the
 Hono worker's signing secret. The Kit target answers from the Kit load
 itself: the fixture worker carries `KIT_PARITY_FIXTURE_MEMBER_BOARD=true`,
 which `fixtureManifestFor` (`src/route-ownership.ts`) honours only for an
-http loopback `APP_URL`, enabling just this entry in the fixture's manifest
-while the shipped manifest keeps the route on Hono everywhere deployed.
+http loopback `APP_URL`, enabling just this entry in the fixture's manifest.
+The shipped manifest now owns the board on Kit everywhere deployed, so the
+fixture flag is redundant for this entry; returning the shipped entry to
+`enabled: false` restores Hono ownership as the rollback.
 The spec asserts the `kit` renderer marker on the Kit target for the served
 board, so a fixture that stops owning the route fails the journey instead
 of silently comparing Hono against Hono.

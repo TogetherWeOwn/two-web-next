@@ -100,12 +100,20 @@ export function membersSessionUnknown(): Error & { status: number } {
   return branded("Member data is temporarily unavailable.", 503);
 }
 
+/**
+ * Row as serialized to the page — and to `__data.json`, which SvelteKit
+ * serves from the load's return value even with `csr = false`. Rank, display
+ * name and count only, plus the server-side viewer mark: no Discord IDs ever
+ * leave the load (src/leaderboards/members.ts: "Rows carry rank + display
+ * name + count only").
+ */
+export type MembersBoardRow = Omit<BoardRow, "userId"> & { isViewer: boolean };
+
 export async function loadMembersBoardData(args: MembersBoardArgs): Promise<{
   season: string;
   scope: "overall" | "relative";
   activity: string | null;
-  rows: BoardRow[];
-  viewerId: string;
+  rows: MembersBoardRow[];
   viewerUsername: string;
   available: boolean;
   appUrl: string;
@@ -123,7 +131,11 @@ export async function loadMembersBoardData(args: MembersBoardArgs): Promise<{
   if (!activity.ok) throw branded(activity.message, 400);
   const db = await args.dbForFn({ env: args.env });
   const ranked = await (args.loadRankingFn ?? loadMemberRanking)(db, season, activity.game);
-  const rows = boardRows(ranked, scope.scope, args.session.userId);
+  // Strip every Discord ID here: mark the viewer's own row server-side so
+  // neither the HTML props nor the __data.json payload carry an ID.
+  const rows: MembersBoardRow[] = boardRows(ranked, scope.scope, args.session.userId).map(
+    ({ userId, ...row }) => ({ ...row, isViewer: userId === args.session.userId }),
+  );
   // Queue only (see the header): the write itself runs after the member-read
   // boundary releases this board, outside its capture. Only a served (200)
   // board records a view, and queueing is fail-open like the Hono write.
@@ -143,7 +155,6 @@ export async function loadMembersBoardData(args: MembersBoardArgs): Promise<{
     scope: scope.scope,
     activity: activity.game,
     rows,
-    viewerId: args.session.userId,
     // The board only serves authenticated members (gate above), so the page
     // renders member chrome with this name, mirroring Hono's session header.
     viewerUsername: args.session.username ?? "",

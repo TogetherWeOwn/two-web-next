@@ -67,8 +67,9 @@ writeFileSync(
       // Fixture-only member-board ownership: this generated config serves
       // only the loopback parity worker (APP_URL is http://127.0.0.1 above),
       // and fixtureManifestFor honours the flag only on loopback, so the
-      // executed journey runs the Kit member-board load while the shipped
-      // manifest keeps the route on Hono everywhere deployed.
+      // executed journey runs the Kit member-board load. The shipped
+      // manifest now owns the board on Kit everywhere deployed too, so
+      // this flag is redundant for the entry (rollback is enabled: false).
       KIT_PARITY_FIXTURE_MEMBER_BOARD: "true",
     },
   }),

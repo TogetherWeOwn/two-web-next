@@ -359,7 +359,7 @@ globalThis.fetch = async (input, init = {}) => {
     if (url.search.includes("season=bogus") || url.search.includes("scope=") && !url.search.includes("scope=relative") || url.search.includes("activity=chess")) {
       return new Response("Unknown", { status: 400, headers: { "content-type": "text/plain", "cache-control": "private, no-store" } });
     }
-    return new Response(membersPage, { status: 200, headers: { "content-type": "text/html", "cache-control": "private, no-store" } });
+    return new Response(membersPage, { status: 200, headers: { "content-type": "text/html", "cache-control": "private, no-store", ...(url.hostname.startsWith("kit.") ? { "x-two-renderer": "kit" } : {}) } });
   }
   return new Response(archivePage, { status: 200, headers: { "content-type": "text/html" } });
 };
