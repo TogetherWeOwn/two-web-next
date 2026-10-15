@@ -138,30 +138,53 @@ this catalogue.
 
 `event write-back due but SYNC_EVENT_QUEUE is not bound` (`src/events/sync.ts`,
 `enqueueEventSync`) is a `console.warn`, not one of the `console.error` rows
-above. It means the event write already committed, but the queue carrier was
-never sent: the function logs this line and returns the built message without
-calling the queue, and both callers (`dispatchWriteBack` in
+above. It means the event write already committed, but this Worker did not send
+the queue carrier: the function logs this line and returns the built message
+without calling the queue, and its only callers (`dispatchWriteBack` in
 `src/admin/writeback.ts`, `dispatchRsvpSync` in `src/events/rsvp.ts`) await it
 without sending anything else. The database write remains committed while the
 queue carrier was not sent.
 
+The write-back is late, not lost, as long as only the web Worker lacks the
+binding. The jobs Worker (`two-web-jobs`) runs `reconcileEvents` every 10
+minutes (`wrangler.jobs.jsonc`) and re-dispatches stale events, including
+published or cancelled events with `sync_revision > synced_revision` and
+published events with no `discord_event_id` or unsynced RSVPs
+(`src/jobs/events.ts`). Reconcile never calls `enqueueEventSync`; it dispatches
+through the jobs Worker's own `SYNC_EVENT_QUEUE` binding. If the jobs Worker
+also lacks that binding, nothing re-dispatches the carrier until the binding
+is fixed: treat that case as stuck, not self-healing.
+
 | Field | Meaning and safe values |
 | --- | --- |
-| `eventKey` | The event whose write-back lost its carrier |
-| `request_id` | The validated HTTP request ID (`safeRequestId`: a Cloudflare Ray ID or a generated ULID; absent for scheduled, reconcile or legacy calls). Never a secret or a member identity |
+| `eventKey` | The event whose write-back carrier was not sent |
+| `request_id` | The validated HTTP request ID (`safeRequestId`: a Cloudflare Ray ID or a generated ULID). Absent when the write came through the agent-events ingress (`POST /api/agent-events`, `src/agent-events/route.ts`), which calls `dispatchWriteBack` without the request ID; correlate those by `eventKey` and `agent_event_audits` instead. Never a secret or a member identity |
 
 A successful HTTP response is not evidence of Discord synchronization: the
-request succeeded against the database, but Discord has not been told.
+request succeeded against the database, but Discord has not been told yet.
 
 Read-only diagnostic: filter Workers Logs message/text with the exact warning
-(see [Find a request](#find-a-request)), correlate by `eventKey` and
-`request_id`, then compare the deployed Worker's queue producer bindings with
-`queues.producers` in `wrangler.jsonc` (`SYNC_EVENT_QUEUE`; staging and
-production use separate queues and the production binding is not inherited, so
-check the environment that served the request). Source stays unchanged: route
-any binding fix to the authorized Operator under the existing contract. Never
-run production database tests or replay a sync to investigate; log search,
-source and deployed-config reads only.
+(see [Find a request](#find-a-request)) and correlate by `eventKey` and, when
+present, `request_id`. Then check whether a later sync landed: join through
+`events` (`event_sync_attempts` carries `event_id`, not `event_key`):
+`SELECT * FROM event_sync_attempts JOIN events ON events.id = event_sync_attempts.event_id WHERE events.event_key = '<eventKey>'`,
+or compare revisions with
+`SELECT sync_revision, synced_revision, discord_event_id FROM events WHERE event_key = '<eventKey>'`
+(`synced_revision` catching up to `sync_revision` means reconcile recovered
+it). For an agent-published event, which has no `request_id` on the warning,
+find the ingress request with
+`SELECT * FROM agent_event_audits WHERE event_key = '<eventKey>'`. Then compare
+the deployed Workers' queue producer bindings with `wrangler.jsonc`: the
+top-level `queues.producers` block is staging (`SYNC_EVENT_QUEUE` bound to
+`two-sync-event`); production declares its own at
+`env.production.queues.producers` (`SYNC_EVENT_QUEUE` bound to
+`two-web-next-production-sync-event`) because bindings are not inherited, so
+check the environment that served the request. If reconcile is not recovering
+events, also compare the jobs Worker's bindings with `wrangler.jobs.jsonc`.
+Source stays unchanged: route any binding fix to the authorized Operator under
+the existing contract. Never run production database tests or replay a sync
+to investigate; log search, read-only `SELECT`s, source and deployed-config
+reads only.
 
 ## Privacy and boundaries
 

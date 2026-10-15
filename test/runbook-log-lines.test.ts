@@ -163,6 +163,28 @@ describe("missing sync-queue binding warning docs", () => {
     expect(section).toContain("Operator");
   });
 
+  it("states reconcile recovery, the real request_id gap, and per-env bindings", () => {
+    const section = warningSection();
+    // Delayed, not lost: reconcile re-dispatches, unless jobs also lacks the binding.
+    expect(section).toContain("late, not lost");
+    expect(section).toContain("reconcileEvents");
+    expect(section).toContain("every 10");
+    expect(section).not.toContain("lost its carrier");
+    // Read-only per-event sync-state check, mirroring the enqueue-failed row.
+    expect(section).toContain(
+      "SELECT * FROM event_sync_attempts JOIN events ON events.id = event_sync_attempts.event_id WHERE events.event_key = '<eventKey>'",
+    );
+    expect(section).toContain("sync_revision, synced_revision");
+    // request_id is absent via the agent-events ingress, not scheduled/reconcile.
+    expect(section).toContain("POST /api/agent-events");
+    expect(section).toContain("agent_event_audits");
+    expect(section).not.toContain("absent for scheduled, reconcile");
+    // Top-level producers are staging; production declares its own block.
+    expect(section).toContain("env.production.queues.producers");
+    expect(section).toContain("two-web-next-production-sync-event");
+    expect(section).toContain("two-sync-event");
+  });
+
   it("source still emits the warning with the documented fields", () => {
     const source = readFileSync("src/events/sync.ts", "utf8");
     expect(source).toContain(`console.warn("${WARNING}"`);
