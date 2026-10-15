@@ -202,13 +202,42 @@ export function scanAdded(added, ignore = []) {
 // is a replacement (strengthening), not a strip: only the net excess is
 // flagged, so a vacuous placeholder can be swapped for a real pin without
 // tripping the floor, while a genuine strip stays loud.
+// Merge-queue squash messages hard-wrap the PR body at ~72 columns, so a
+// long `Floor-waiver:` trailer arrives as a first line plus non-blank
+// continuation lines. Unfold those continuations before matching, or a
+// verbatim body waiver would pass pr-lint yet fail floor-guard in the queue.
+// Real paths never contain spaces, so wrap-inserted spaces inside the path
+// are stripped; reason whitespace collapses to single spaces.
+export function unfoldFloorWaiverLines(messages) {
+  const lines = messages.split(/\r?\n/);
+  const unfolded = [];
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    if (/^Floor-waiver:/.test(line)) {
+      let block = line;
+      let j = i + 1;
+      while (j < lines.length && lines[j].trim() !== "" && !/^Floor-waiver:/.test(lines[j])) {
+        block += ` ${lines[j].trim()}`;
+        j++;
+      }
+      unfolded.push(block);
+      i = j - 1;
+    } else {
+      unfolded.push(line);
+    }
+  }
+  return unfolded;
+}
+
 export function parseFloorWaivers(messages) {
   const waivers = new Map();
-  for (const line of messages.split(/\r?\n/)) {
+  for (const raw of unfoldFloorWaiverLines(messages)) {
+    const line = raw.replace(/\s+/g, " ").trim();
     // threshold-removed names a full table label, which usually has spaces
     // ("Coverage of changed lines"), so it takes the whole text up to the
-    // reason separator. The path-based rules keep (\S+): their targets are
-    // single paths (test/a.test.ts, .constraintsignore).
+    // reason separator. The path-based rules target single paths
+    // (test/a.test.ts, .constraintsignore): the middle group allows spaces so
+    // a mid-path wrap still parses, then wrap-inserted spaces are stripped.
     const labelMatch = line.match(/^Floor-waiver: threshold-removed (.+?) -- (.+)$/);
     if (labelMatch && labelMatch[1].trim() && labelMatch[2].trim()) {
       if (!waivers.has("threshold-removed")) waivers.set("threshold-removed", new Set());
@@ -216,10 +245,12 @@ export function parseFloorWaivers(messages) {
       continue;
     }
     const match = line.match(
-      /^Floor-waiver: (assertion-removed|test-deleted|new-exemption) (\S+) -- (.+)$/,
+      /^Floor-waiver: (assertion-removed|test-deleted|new-exemption) (.+?) -- (.+)$/,
     );
     if (!match || !match[3].trim()) continue;
-    const [, rule, file] = match;
+    const [, rule, pathCandidate] = match;
+    const file = pathCandidate.replace(/\s+/g, "");
+    if (!file) continue;
     if (!waivers.has(rule)) waivers.set(rule, new Set());
     waivers.get(rule).add(file);
   }
