@@ -64,6 +64,37 @@ for (const suite of SUITES) {
   });
 }
 
+const RSVP_FILE = "ci/rsvp-focus-browser.test.mjs";
+const RSVP_ENV = "RSVP_FOCUS_BROWSER_TESTS";
+const RSVP_CASES = [
+  "keeps keyboard focus on the field the member tabbed to while the write is pending",
+  "moves focus to the confirmation when the member stays on the control",
+  "keeps focus off the confirmation after a pointer press outside the widget",
+];
+
+test("a11y job runs ci/rsvp-focus-browser.test.mjs with its opt-in after Chromium install", async () => {
+  const step = steps.find((entry) => entry.includes(`node --test ${RSVP_FILE}`));
+  assert(step, `a11y job must run ${RSVP_FILE}`);
+  assert.match(
+    step,
+    new RegExp(`\\n        run: ${RSVP_ENV}=true node --test ${escape(RSVP_FILE)}\\s*$`),
+    "the RSVP step must use the exact enabled workflow command",
+  );
+  assert.doesNotMatch(step, /^\s*(?:- )?(?:if|continue-on-error):/m);
+  assert.doesNotMatch(step, new RegExp(`${RSVP_ENV}=(?!true)`));
+  assert(chromiumInstall >= 0, "a11y job must install Chromium");
+  assert(chromiumInstall < job.indexOf(step), "Chromium install must precede the RSVP step");
+
+  const source = await readFile(new URL(`../${RSVP_FILE}`, import.meta.url), "utf8");
+  assert.match(source, new RegExp(`process\\.env\\.${RSVP_ENV} !== "true"`));
+  for (const title of RSVP_CASES)
+    assert.match(source, new RegExp(`^\\s+it\\("${escape(title)}"`, "m"), title);
+
+  const readme = await readFile(new URL("../README.md", import.meta.url), "utf8");
+  const row = readme.split("\n").find((line) => line.startsWith(`| \`${RSVP_FILE}\` |`));
+  assert.match(row ?? "", /no executed-count verifier yet/);
+});
+
 // Every browser gate is named *_BROWSER_TESTS, so the scan keys on that name.
 async function browserGatedSuites() {
   const found = [];
