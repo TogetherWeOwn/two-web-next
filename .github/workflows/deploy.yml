@@ -120,7 +120,7 @@ jobs:
           MIGRATION_TARGET: staging
           STAGING_MIGRATION_HOLD: ${{ vars.STAGING_MIGRATION_HOLD }}
           # `staging` Environment secret of this job; no DATABASE_URL fallback.
-          NEON_STAGING_DATABASE_URL: ${{ secrets.NEON_STAGING_DATABASE_URL }}
+          PLANETSCALE_STAGING_DATABASE_URL: ${{ secrets.PLANETSCALE_STAGING_DATABASE_URL }}
           # workflow_run's GITHUB_SHA is main's tip; the receipt must name the CI-verified checkout.
           GITHUB_SHA: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
       - name: Re-verify exact-SHA full CI before staging migration

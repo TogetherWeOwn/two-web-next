@@ -124,13 +124,13 @@ describe("staging jobs handoff invariants", () => {
   it("requires a bounded exclusive hold across deploy, migrate and operator lanes", () => {
     const runbook = read("docs/jobs-handoff.md");
     // The deploy workflow serializes only deploy-staging while hand-dispatch
-    // migrations use neon-web-migrate-*: one quiet page never proves the other
+    // migrations use web-migrate-*: one quiet page never proves the other
     // lanes idle. Pin the workflow facts themselves so a renamed concurrency
     // group fails here instead of silently staling the runbook.
     expect(read(".github/workflows/deploy.yml")).toContain("group: deploy-staging");
-    expect(read(".github/workflows/db-migrate.yml")).toContain("group: neon-web-migrate-");
+    expect(read(".github/workflows/db-migrate.yml")).toContain("group: web-migrate-");
     expect(runbook).toContain("deploy-staging");
-    expect(runbook).toContain("neon-web-migrate-staging");
+    expect(runbook).toContain("web-migrate-staging");
     expect(runbook).toContain("never proves the other two are idle");
     expect(runbook).toContain("acknowledgements");
     expect(runbook).toContain("expiry");

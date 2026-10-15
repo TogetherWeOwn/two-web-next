@@ -5,10 +5,15 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 import { assertMigrationAdmission, assertStagingDeployHold } from "./migration-admission.mjs";
-import { migrationConfig, safeMigrationError } from "./neon-migrate.mjs";
+import {
+  PLANETSCALE_STAGING_BRANCH_ID,
+  PLANETSCALE_STAGING_HOST,
+  migrationConfig,
+  safeMigrationError,
+} from "./neon-migrate.mjs";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
-const STAGING_URL = "postgres://user:stub@ep-stub.eu.aws.neon.tech/db?sslmode=require";
+const STAGING_URL = `postgres://role-stub.${PLANETSCALE_STAGING_BRANCH_ID}:stub@${PLANETSCALE_STAGING_HOST}/db?sslmode=require`;
 const PROD_URL = "postgres://user:stub@stub-1.pg.psdb.cloud/db?sslmode=require";
 const mainRef = "refs/heads/main";
 
@@ -50,7 +55,7 @@ test("staging hold refusal withholds secrets and survives repeated attempts", ()
     assertMigrationAdmission(
       env({
         STAGING_MIGRATION_HOLD: "true",
-        NEON_STAGING_DATABASE_URL: "postgres://user:DO_NOT_ECHO@ep-x.eu.aws.neon.tech/db",
+        PLANETSCALE_STAGING_DATABASE_URL: `postgres://user:DO_NOT_ECHO@${PLANETSCALE_STAGING_HOST}/db`,
       }),
     );
     assert.fail("expected hold refusal");
@@ -125,13 +130,16 @@ test("deploy direct staging path enforces the same hold without touching product
 
 test("migrationConfig refuses held staging before URL parsing or connection", () => {
   // Released staging with a valid stub URL passes config (pure, no connection).
-  assert.equal(migrationConfig(env({ NEON_STAGING_DATABASE_URL: STAGING_URL })).target, "staging");
+  assert.equal(
+    migrationConfig(env({ PLANETSCALE_STAGING_DATABASE_URL: STAGING_URL })).target,
+    "staging",
+  );
   // Held staging with an otherwise-valid URL refuses with the hold message.
   for (const held of [undefined, "", "true", "malformed"]) {
     assert.throws(
       () =>
         migrationConfig(
-          env({ STAGING_MIGRATION_HOLD: held, NEON_STAGING_DATABASE_URL: STAGING_URL }),
+          env({ STAGING_MIGRATION_HOLD: held, PLANETSCALE_STAGING_DATABASE_URL: STAGING_URL }),
         ),
       /Staging migrations are held/,
     );
@@ -139,7 +147,9 @@ test("migrationConfig refuses held staging before URL parsing or connection", ()
   // Held staging refuses even when the URL itself is malformed: hold is checked first.
   assert.throws(
     () =>
-      migrationConfig(env({ STAGING_MIGRATION_HOLD: "true", NEON_STAGING_DATABASE_URL: "bad" })),
+      migrationConfig(
+        env({ STAGING_MIGRATION_HOLD: "true", PLANETSCALE_STAGING_DATABASE_URL: "bad" }),
+      ),
     /Staging migrations are held/,
   );
   // Production config still honors the enable gate and ignores the hold.
