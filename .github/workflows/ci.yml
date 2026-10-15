@@ -399,11 +399,9 @@ jobs:
           # dead gate visible as a workflow warning instead of silent green.
           trap 'echo "::warning::Tier-0 WARN step failed before completing the report"' ERR
           tier0_status=0
+          node --test ci/tier0-changed-query-files.test.mjs || tier0_status=$?
           npm run test:tier0 || tier0_status=$?
-          {
-            echo "### Tier-0 changed query files"
-            git diff --name-only 'origin/main...HEAD' -- src/db src/events src/join src/profiles src/admin src/sessions.ts || true
-          } >> "$GITHUB_STEP_SUMMARY"
+          node ci/tier0-changed-query-files.mjs
           exit "$tier0_status"
       - name: Kit parity gate selftests
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
