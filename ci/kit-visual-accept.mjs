@@ -84,19 +84,22 @@ export function acceptBaselines(
     if (!byDest.has(candidate.dest)) byDest.set(candidate.dest, []);
     byDest.get(candidate.dest).push(candidate.src);
   }
+  const resolved = new Map();
   for (const [dest, sources] of byDest) {
-    const distinct = distinctByBytes(sources);
+    const actuals = sources.filter((src) => basename(src).endsWith("-actual.png"));
+    const distinct = distinctByBytes(actuals.length > 0 ? actuals : sources);
     if (distinct.length > 1) {
       return {
         ok: false,
         message: `kit-visual-accept: refusing: ${distinct.length} different sources map to ${dest}`,
       };
     }
+    resolved.set(dest, distinct[0].src);
   }
   const destDir = join(cwd, KIT_SCREENSHOT_DIR);
   mkdir(destDir, { recursive: true });
-  for (const [dest, sources] of byDest) {
-    copy(distinctByBytes(sources)[0].src, join(destDir, dest));
+  for (const [dest, src] of resolved) {
+    copy(src, join(destDir, dest));
   }
   return { ok: true, accepted: [...byDest.keys()].sort() };
 }

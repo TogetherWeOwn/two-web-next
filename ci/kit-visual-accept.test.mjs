@@ -83,6 +83,36 @@ test("colliding sources refuse with nothing written", () => {
   assert.equal(writes, 0);
 });
 
+test("reviewed Kit actual supersedes the committed copy in the artifact", () => {
+  const workspace = scratch();
+  const artifact = scratch();
+  writeBytes(
+    join(artifact, "e2e", "visual", "__screenshots-kit__", "member-board-default-desktop.png"),
+    "stale-committed-bytes",
+  );
+  writeBytes(
+    join(
+      artifact,
+      "test-results-kit-parity",
+      "member-board-default-desktop-actual.png",
+    ),
+    "reviewed-actual-bytes",
+  );
+  const result = acceptBaselines(artifact, {
+    cwd: workspace,
+    copy: (src, dest) => writeBytes(dest, readFileSync(src, "utf8")),
+  });
+  assert.equal(result.ok, true, result.message);
+  assert.deepEqual(result.accepted, ["member-board-default-desktop.png"]);
+  assert.equal(
+    readFileSync(
+      join(workspace, KIT_SCREENSHOT_DIR, "member-board-default-desktop.png"),
+      "utf8",
+    ),
+    "reviewed-actual-bytes",
+  );
+});
+
 test("Hono suite actuals in the shared artifact are ignored", () => {
   const workspace = scratch();
   const artifact = scratch();
