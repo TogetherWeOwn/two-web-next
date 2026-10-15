@@ -288,17 +288,19 @@ describe.skipIf(!raw)("Postgres Discord snapshots, independent request clients",
       const store = pgDiscordSnapshotStore(connect);
       const claim = await store.claim(key);
       await fixture.client`update discord_event_snapshots set lease_expires_at = clock_timestamp() + interval '250 milliseconds' where key = ${key}`;
-      let release!: () => void, entered!: () => void;
-      const gate = new Promise<void>((r) => {
-        release = r;
-      });
+      let entered!: () => void;
       const locked = new Promise<void>((r) => {
         entered = r;
       });
       const holder = fixture.client.begin(async (tx) => {
         await tx`select key from discord_event_snapshots where key = ${key} for update`;
         entered();
-        await gate; // This transaction never modifies the tuple.
+        // This transaction never modifies the tuple. Release on the database
+        // clock, not a JS timer: under parallel-suite load a JS-scheduled
+        // release can land past the store's 350ms lock_timeout and fail the
+        // completion with 55P03 instead of exercising the expiry fence.
+        await tx`select pg_sleep(greatest(0, extract(epoch from (lease_expires_at - clock_timestamp()))) + 0.025)
+        from discord_event_snapshots where key = ${key}`;
       });
       await locked;
       const pending = store.complete(
@@ -324,10 +326,7 @@ describe.skipIf(!raw)("Postgres Discord snapshots, independent request clients",
           await new Promise((r) => setTimeout(r, 5));
         }
         expect(waiting).toBe(true);
-        await fixture.client`select pg_sleep(greatest(0, extract(epoch from (lease_expires_at - clock_timestamp()))) + 0.025)
-        from discord_event_snapshots where key = ${key}`;
       } finally {
-        release();
         await holder;
       }
       const completion = await settled;
