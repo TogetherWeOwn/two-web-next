@@ -218,7 +218,7 @@ class GitHubApi:
         if data is not None:
             req.add_header("Content-Type", "application/json")
         try:
-            with urllib.request.urlopen(req, timeout=30) as resp:  # noqa: S310 - fixed GitHub API base
+            with urllib.request.urlopen(req, timeout=30) as resp:
                 raw = resp.read().decode()
                 return json.loads(raw) if raw else {}
         except urllib.error.HTTPError as exc:
