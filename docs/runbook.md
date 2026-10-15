@@ -7,20 +7,26 @@ Start here for releases, queue incidents and database recovery; use
 The [parity matrix](parity.md) records what is implemented versus still missing.
 Operations guidance (the index below, `/up` readiness, queues, deploy and
 rollback pointers, alerts) applies to staging and, where a section names the
-production binding, to production. The production cutover and its DNS changes
-are separately gated. The staging rollback and DNS flip-back rehearsal is covered here. See
+production binding, to production. Production is live: the apex serves the
+production Worker (`two-web-next-production`) since 2026-10-10, and the
+cutover closed on 2026-10-12 ([archived freeze note](cutover-freeze.md)).
+For a production incident use the
+[production rollback workflow](../.github/workflows/rollback-production.yml)
+and the production bindings. The staging rollback and DNS flip-back rehearsal is covered here. It is the kept pre-live rehearsal record. See
 [Staging rehearsal](#staging-rehearsal-worker-rollback-and-dns-flip-back).
 [Final import and reconcile](#final-import-and-reconcile) (including
-[Before the production flip](#before-the-production-flip)) runs only as a
-gated cutover step. [48h post-flip watch](#48h-post-flip-watch) applies only
-in the post-flip window: on a pager storm follow its Sev-1 path (contain,
-then the production rollback workflow).
+[Before the production flip](#before-the-production-flip)) is the kept
+historical record of the gated cutover steps, not a live procedure. The
+inaugural [48h post-flip watch](#48h-post-flip-watch) ran 2026-10-10 00:52 UTC
+to 2026-10-12 00:52 UTC and is closed; the section remains the watch
+procedure. On a pager storm follow its Sev-1 path (contain, then the
+production rollback workflow).
 
 **First responder index.** Match the symptom, open the section, run the first
 read-only diagnostic, then escalate. Every diagnostic below is a read; do not
 mutate, purge, roll back, migrate, rotate or restore from this table.
 
-Scope: staging (pre-cutover) targets. Every host, Tail Worker and queue name
+Scope: staging (pre-cutover) targets — the staging-first triage scope is retained now that production is live. Every host, Tail Worker and queue name
 in this index is the staging binding unless a row names production
 (`two-web-next-production`, `two-web-next-alerts-production`, the apex); never
 triage a production incident with the staging targets. For production use the
@@ -45,7 +51,7 @@ rehearsal record plus a non-executable production recovery map.
 | Backup and restore (verify archives, plan recovery) | [Backups and restore drill](#backups-and-restore-drill) | Local `bash ci/db-backup-selftest.sh` (no secrets, no network) first; remote `BACKUP_BUCKET=two-web-next-backups BACKUP_JURISDICTION=eu BACKUP_PREFIX=neon WRANGLER_BIN= bash bin/db-backup.sh check staging` re-downloads every manifest archive locally, needs the Cloudflare API token and separate approval; keep dumps inside approved EU custody; never `rotate` or restore without separate approval | DevOps & Reliability Engineer; live-data recovery needs CEO approval via the Director and the authorized custodian |
 
 Not an incident entry: [Final import and reconcile](#final-import-and-reconcile)
-(cutover-only authorized import),
+(historical cutover import record),
 [Secret rotation pointer (procedure only)](#secret-rotation-pointer-procedure-only)
 (no rotation here) and
 [Quarterly moderator access review](#quarterly-moderator-access-review)
@@ -136,7 +142,7 @@ node --import ./bin/ts-hook.mjs bin/revoke-sessions.mjs --discord-id=<snowflake>
 - Owner: Director of Engineering, with security/access decisions through the CISO (see [Safety and escalation](#safety-and-escalation)).
 - Scope: the full Discord-moderator set against the live app-moderator set, plus every person confirmed to have lost the Discord moderator role since the last review. First confirm the Discord moderator role has been removed, as in [A moderator lost their role](#a-moderator-lost-their-role).
 - Procedure: audit first, then revoke, then re-audit until clean:
-  1. Run the read-only role audit. It compares ID lists the operator supplies; it opens no database, calls no network, and reads no tokens or secrets. Build the two inputs with the read-only queries in [moderator role audit](cutover-check.md#moderator-role-audit-w16-pre-flip). Keep variable names in notes, never values; treat ID files as member data, keep them out of the repo, and delete them after the run.
+  1. Run the read-only role audit. It compares ID lists the operator supplies; it opens no database, calls no network, and reads no tokens or secrets. Build the two inputs with the read-only queries in the [standing moderator role audit procedure](cutover-check.md#moderator-role-audit-w16-pre-flip) (the pre-flip rehearsal schedule is kept as history there). Keep variable names in notes, never values; treat ID files as member data, keep them out of the repo, and delete them after the run.
 
      ```sh
      npm run audit:moderator-roles -- --discord-file=discord-moderators.json --app-file=app-moderators.json
@@ -190,7 +196,7 @@ approved account and binding isolation before any remote mutation.
    A Version uploaded before the marker existed reports no `revision`; use
    `wrangler deployments list` for it. If `/up` and `wrangler deployments`
    ever disagree, `wrangler deployments` wins. Production `/up` has no
-   `revision` until a cutover PR declares the binding in `env.production`.
+   `revision`: the binding is not declared in `env.production`.
 
 3. Normal path: merge to `main` invokes
    [.github/workflows/deploy.yml](../.github/workflows/deploy.yml), using the
@@ -507,10 +513,12 @@ and [rollback limits](https://developers.cloudflare.com/workers/versions-and-dep
 
 ### Staging rehearsal: Worker rollback and DNS flip-back
 
-Staging only: host `next.togetherweown.com`, Worker `two-web-next`. Never run
-these steps against `togetherweown.com`, `www` or `two-web-next-production`;
-the production flip belongs to the W17 cutover card. Every command marked
-REMOTE MUTATION changes staging traffic for about 10 seconds.
+Staging only, and a kept historical record: host `next.togetherweown.com`,
+Worker `two-web-next`. Never run these steps against `togetherweown.com`,
+`www` or `two-web-next-production`; the production flip completed with the
+cutover close on 2026-10-12 ([archived freeze note](cutover-freeze.md)).
+Every command marked REMOTE MUTATION changes staging traffic for about
+10 seconds.
 
 Credentials stay in the environment, never on argv. The rollback half needs
 Workers Scripts edit (`CLOUDFLARE_API_TOKEN`). The DNS half also needs Zone
@@ -727,8 +735,8 @@ The telemetry query returns only the newest 100 events. Keep each window to
     the Cloudflare edge answered **522** on `/up` and `/` (the connection to
     the legacy origin timed out; the cause was not established), with
     intermittent 503s in the window. Loss of the `two-web-next` marker, not
-    the legacy status, is the flip signal. For production, see "Before the
-    production flip" below.
+    the legacy status, is the flip signal. The production pre-flip record-set
+    check is kept as history in [Before the production flip](#before-the-production-flip) below.
 12. Re-confirm the hold and unchanged Worker allocation/schema/bindings before
     restoration, including before the fallback below. If exclusion or live
     compatibility has changed, stop and use the collision response rather than
@@ -770,8 +778,9 @@ The telemetry query returns only the newest 100 events. Keep each window to
     the receipt. If verification cannot complete within the held window, stop
     drill mutations and coordinate a safe disposition/hold extension with those
     owners; expiry is not a successful release or automatic recovery authority.
-16. Post the timings, version IDs, smoke results and discrepancies on the W16
-    card, and keep `$RUN_DIR` until the card is closed.
+16. Historical: the rehearsal timings, version IDs, smoke results and
+    discrepancies are kept in the rehearsal record below; do not run new
+    drill mutations from this section as a live procedure.
 
 Rehearsal record:
 
@@ -891,13 +900,14 @@ Notes from the 2026-10-02 run:
 
 ## Final import and reconcile
 
-Cutover plan step 2: the final legacy import into production Neon, with the
-reconcile report. Run it under the write freeze
-([cutover-freeze.md](cutover-freeze.md) in force), with legacy writes paused
-and the import destination quiescent. Both snapshots in this section are
-production mutations through the authorized operator procedure; the steps
-below name only environment variable **names**, never values. Credentials
-stay in the environment, never on argv.
+Historical cutover record: this was cutover plan step 2, the final legacy
+import with the reconcile report. It ran under the then-in-force write
+freeze ([cutover-freeze.md](cutover-freeze.md), now archived), with legacy
+writes paused and the import destination quiescent. Do not run it as a live
+procedure; the importer commands below are kept as the executed record. Both
+snapshots in this section were production mutations through the authorized
+operator procedure; the steps below name only environment variable **names**,
+never values. Credentials stay in the environment, never on argv.
 
 Ordered commands (one shared fixed cutoff for every importer and the
 verifier; the importers derive it from the same retention window):
@@ -921,7 +931,7 @@ Exit codes:
 
 | Exit | Meaning | Operator action |
 | --- | --- | --- |
-| 0 | Complete match for the configured projection | Proceed to the next cutover step |
+| 0 | Complete match for the configured projection | Proceeded to the next cutover step |
 | 1 | Data diff or incomplete mapping | Stop. Triage by named key (`missingKeys`, `extraKeys`, `mismatchKeys`, `mappingGaps`); repair with a same-key importer re-run where the update rules permit, or with separately approved backup/repair recovery |
 | 2 | Configuration, connection, query or output error | Stop. Fix the tool invocation or environment, then re-run |
 
@@ -931,29 +941,35 @@ extras. Stop rule: a re-run is not an undo — it repairs same-key values
 only where the importer update rules permit
 ([cutover-rollback.md row 4](cutover-rollback.md#production-cutover-capability--reverse-map)).
 Wrong identities or keys, extra rows and lost overwritten state need
-separately approved backup/repair recovery under writer holds. Archive the
-counts-only `verification.json` / `verification.md` with the cutover
-evidence; the reports carry keys and counts, never row values.
+separately approved backup/repair recovery under writer holds. The
+counts-only `verification.json` / `verification.md` were archived with the
+cutover evidence; the reports carry keys and counts, never row values.
 
 ### Before the production flip
 
-The production rollback is this same flip back to legacy, so the legacy origin
-must be able to serve the apex when needed. Staging answered 522, which does
-not prove production will. Before the flip, record the legacy record set for
-the apex and `www`, and confirm that the apex answers 200 on `/` and `/up`
-from legacy. The before-phase gate asserts the apex `/up` identity
+Historical cutover record: the production rollback was this same flip back
+to legacy, so the legacy origin had to be able to serve the apex if needed.
+Staging answered 522, which did not prove production would. Before the flip,
+the legacy record set for the apex and `www` was recorded, and the apex
+answering 200 on `/` and `/up` from legacy was confirmed. The before-phase
+gate asserted the apex `/up` identity
 (`X-TWO-Origin: two-web`, see [cutover-check.md](cutover-check.md#phase-contract-and-prerequisites));
-a 522 or other 5xx from the legacy origin, or a missing marker, means the
-rollback path is not proven and the flip does not start.
+a 522 or other 5xx from the legacy origin, or a missing marker, would have
+meant the rollback path was not proven and the flip would not start.
 
 ## 48h post-flip watch
 
-The cutover is not done at the DNS flip: the new site stays under a 48h
-watch with the freeze in [cutover-freeze.md](cutover-freeze.md) in force
-until the watch exits. Everything in this section is read-only or GET-only:
-no production writes, migrations, credential changes or queue purges. Any
-Sev-1 goes to containment below and the production rollback pointer, never
-to a live fix or a credential swap.
+The inaugural watch is closed: it ran 2026-10-10 00:52 UTC to 2026-10-12
+00:52 UTC, and the cutover closed on 2026-10-12
+([archived freeze note](cutover-freeze.md); exit details are on the cutover
+card in the team tracker). This section remains the standing watch
+procedure. The cutover was not done at the DNS flip: the new site stayed
+under a 48h watch with the freeze in
+[cutover-freeze.md](cutover-freeze.md) in force until the watch exited.
+Everything in this section is read-only or GET-only: no production writes,
+migrations, credential changes or queue purges. Any Sev-1 goes to
+containment below and the production rollback pointer, never to a live fix
+or a credential swap.
 
 **What to check:**
 
