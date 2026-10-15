@@ -141,10 +141,12 @@ elif args == ['merge-base', f.get('waiverBaseSha', '${baseSha}'), 'HEAD']:
     if f.get('waiverGitFailure') == 'merge-base':
         sys.exit(1)
     print('${baseSha}')
-elif args == ['log', '--first-parent', '--format=%B', '${baseSha}..HEAD']:
+elif len(args) >= 5 and args[:3] == ['log', '--format=%B', 'HEAD'] and args[3] == '--not' and args[4] == f.get('waiverBaseSha', '${baseSha}'):
     if f.get('waiverGitFailure') == 'log':
         sys.exit(1)
     print(f.get('branchMessages', 'fix(ci): bind lint metadata'))
+elif args[:2] == ['rev-parse', '--verify']:
+    sys.exit(1)
 else:
     sys.exit('Unexpected git invocation: ' + repr(args))
 `,
@@ -164,6 +166,7 @@ else:
       PR_NUMBER: fixture.dispatchNumber,
       // Model the separate head-ref step's output, not the metadata-binding snapshots.
       FLOOR_WAIVER_BASE_SHA: fixture.waiverBaseSha ?? baseSha,
+      FLOOR_WAIVER_BASE_REF: "main",
       EVENT_TITLE: fixture.event.pull_request?.title ?? "",
       EVENT_BODY: fixture.event.pull_request?.body ?? "",
       EVENT_AUTHOR: fixture.event.pull_request?.user.login ?? "",

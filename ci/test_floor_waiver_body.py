@@ -25,6 +25,20 @@ class FloorWaiverBodyTests(unittest.TestCase):
     def test_duplicate_trailers_are_required_only_once(self):
         self.assertEqual(missing_body_waivers(f"{WAIVER}\n{WAIVER}", WAIVER), [])
 
+    def test_wrapped_queue_trailer_still_parses(self):
+        long_waiver = "Floor-waiver: test-deleted test/staging-workflow-secret-mapping.test.ts -- moved to docs"
+        wrapped = "Floor-waiver: test-deleted test/staging-workflow-secret-mapping.test.ts\n-- moved to docs"
+        self.assertEqual(waiver_trailers(wrapped), {long_waiver})
+        self.assertEqual(missing_body_waivers(wrapped, long_waiver), [])
+        self.assertEqual(missing_body_waivers(long_waiver, wrapped), [])
+
+    def test_mid_path_wrap_strips_inserted_space(self):
+        # A 72-column word-wrap can split inside a long path; real paths never
+        # contain spaces, so the inserted space must not break the waiver.
+        wrapped = "Floor-waiver: test-deleted test/staging-workflow-sec\nret-mapping.test.ts -- moved to docs"
+        expected = "Floor-waiver: test-deleted test/staging-workflow-secret-mapping.test.ts -- moved to docs"
+        self.assertEqual(waiver_trailers(wrapped), {expected})
+
 
 if __name__ == "__main__":
     unittest.main()

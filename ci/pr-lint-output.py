@@ -28,13 +28,35 @@ def check_queue_visible_waivers(body):
     if not base_sha:
         print("::error::Missing immutable PR base SHA for floor-waiver validation.")
         sys.exit(2)
+    # The base branch name lets the scan exclude commits already on the base
+    # branch after an update-branch merge, while still including waivers from
+    # a merged side branch that floor-guard honours at the PR head. A
+    # --first-parent scan would skip those side-branch waivers and let pr-lint
+    # pass while the queue squash (which lacks them) fails floor-guard.
+    base_ref = (
+        os.environ.get("FLOOR_WAIVER_BASE_REF", "").strip()
+        or os.environ.get("BASE_BRANCH", "").strip()
+        or "main"
+    )
     try:
-        merge_base = subprocess.run(
+        subprocess.run(
             ["git", "merge-base", base_sha, "HEAD"],
             check=True, capture_output=True, text=True,
-        ).stdout.strip()
+        )
+        # NOTE: a second `--not` toggles back to inclusive, so the base tip
+        # joins the same exclusion list: `HEAD --not <base_sha> <base_tip>`.
+        log_args = ["git", "log", "--format=%B", "HEAD", "--not", base_sha]
+        for candidate in (f"origin/{base_ref}", base_ref):
+            probe = subprocess.run(
+                ["git", "rev-parse", "--verify", candidate],
+                capture_output=True, text=True,
+            )
+            if probe.returncode == 0 and probe.stdout.strip():
+                if probe.stdout.strip() != base_sha:
+                    log_args += [candidate]
+                break
         messages = subprocess.run(
-            ["git", "log", "--first-parent", "--format=%B", f"{merge_base}..HEAD"],
+            log_args,
             check=True, capture_output=True, text=True,
         ).stdout
     except (subprocess.CalledProcessError, OSError):

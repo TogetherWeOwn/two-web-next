@@ -934,6 +934,53 @@ describe("floor-guard", () => {
     }
   });
 
+  it("accepts a 72-column wrapped queue waiver for a long path", () => {
+    // The queue squash hard-wraps the body, so a long trailer arrives split
+    // across lines. The guard must unfold it, or pr-lint stays green while
+    // the queue fails. Uses the reviewer repro path.
+    const dir = mkdtempSync(join(tmpdir(), "floor-guard-wrapped-"));
+    try {
+      const git = (args) => spawnSync("git", args, { cwd: dir, encoding: "utf8" });
+      git(["init", "-q"]);
+      git(["config", "user.email", "test@example.com"]);
+      git(["config", "user.name", "test"]);
+      mkdirSync(join(dir, "test"), { recursive: true });
+      writeFileSync(
+        join(dir, "test", "staging-workflow-secret-mapping.test.ts"),
+        'it("x", () => { expect(1).toBe(1); });\n',
+      );
+      git(["add", "."]);
+      git(["commit", "-qm", "base"]);
+      const base = git(["rev-parse", "HEAD"]).stdout.trim();
+      mkdirSync(join(dir, "docs"), { recursive: true });
+      git(["mv", "test/staging-workflow-secret-mapping.test.ts", "docs/mapping.txt"]);
+      const waiver =
+        "Floor-waiver: test-deleted test/staging-workflow-secret-mapping.test.ts -- moved to docs";
+      git(["commit", "-m", "move long test out of suite", "-m", waiver]);
+      const guard = join(dirname(fileURLToPath(import.meta.url)), "floor-guard.mjs");
+      const run = () => spawnSync("node", [guard, "--base", base], { cwd: dir, encoding: "utf8" });
+      const branch = run();
+      assert.equal(branch.status, 0, branch.stderr);
+
+      // Queue squash: same body wrapped at 72 columns (word wrap), so the
+      // trailer splits before `--`.
+      const wrapped = [
+        "Floor-waiver: test-deleted test/staging-workflow-secret-mapping.test.ts",
+        "-- moved to docs",
+      ].join("\n");
+      git(["reset", "--soft", base]);
+      git(["commit", "-qm", "test: move test", "-m", "PR body", "-m", wrapped]);
+      const waived = run();
+      assert.equal(waived.status, 0, waived.stderr);
+      assert.match(
+        waived.stdout,
+        /Floor-waiver: test-deleted test\/staging-workflow-secret-mapping\.test\.ts/,
+      );
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("catches a git-moved test file end to end", () => {
     // Real `git mv` output uses rename headers (no ---/+++ for a 100% move),
     // so this pins the parser against actual git output, not just fixtures.
