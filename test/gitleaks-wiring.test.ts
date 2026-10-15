@@ -46,7 +46,7 @@ describe("gitleaks job wiring", () => {
     // Context values reach the shell as env vars, never interpolated into `run:`.
     expect(scan).toContain("GITLEAKS_BIN: ${{ runner.temp }}/gitleaks");
     expect(scan).toContain("EVENT_NAME: ${{ github.event_name }}");
-    expect(scan).toContain("BASE_REF: ${{ github.base_ref }}");
+    expect(scan).toContain("BASE_REF: ${{ github.base_ref || github.event.merge_group.base_ref }}");
     const runLines = scan.split("\n").filter((line) => line.trim().startsWith("run:"));
     expect(runLines.filter((line) => line.includes("${{"))).toEqual([]);
 
@@ -80,15 +80,19 @@ describe("gitleaks-scan.sh", () => {
     expect(scanScript.trimEnd().split("\n").pop()).toBe('"${GITLEAKS_BIN}" "${args[@]}"');
   });
 
-  it("applies the base branch's policy files on pull requests", () => {
+  it("applies the base branch's policy files on pull requests and merge groups", () => {
     expect(scanScript).toContain('"${EVENT_NAME:-}" == "pull_request"');
-    expect(scanScript).toContain('base="refs/remotes/origin/${BASE_REF}"');
+    expect(scanScript).toContain('"${EVENT_NAME:-}" == "merge_group"');
+    // merge_group.base_ref arrives as refs/heads/<branch>; strip it before
+    // resolving the fetched base.
+    expect(scanScript).toContain('base_ref="${BASE_REF#refs/heads/}"');
+    expect(scanScript).toContain('base="refs/remotes/origin/${base_ref}"');
     expect(scanScript).toContain('"${base}:.gitleaks.toml"');
     expect(scanScript).toContain('"${base}:.gitleaksignore"');
     expect(scanScript).toContain("--config");
     expect(scanScript).toContain("--gitleaks-ignore-path");
     // An unfetched base branch fails the scan instead of falling back to the PR's files.
-    expect(scanScript).toMatch(/base branch \$\{BASE_REF\} is not fetched[\s\S]*exit 2/);
+    expect(scanScript).toMatch(/base branch \$\{base_ref\} is not fetched[\s\S]*exit 2/);
   });
 
   it("unlinks the PR's ignore file before copying the base policy over it", () => {
@@ -110,6 +114,9 @@ describe("test-gitleaks-scan.sh", () => {
       "base without policy files, PR-added allowlist is ignored",
       "unfetched base branch fails",
       "push: merged allowlist is honoured",
+      "merge_group: allowlist added in .gitleaks.toml does not silence the scan",
+      "merge_group: fingerprint added in .gitleaksignore does not silence the scan",
+      "merge_group: unfetched base branch fails",
     ]) {
       expect(selfTestScript, name).toContain(name);
     }

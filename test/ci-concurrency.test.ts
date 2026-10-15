@@ -1,5 +1,6 @@
 import { spawnSync } from "node:child_process";
-import { readFileSync, readdirSync } from "node:fs";
+import { mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
@@ -14,7 +15,7 @@ const triggers = (text: string) => text.split(/\non:\n/)[1]?.split(/\n\S/)[0] ??
 // trigger the staging deploy); its concurrency group stays per ref so main runs
 // finish in push order and an older SHA never deploys over a newer one.
 const cancels = (text: string) =>
-  /\nconcurrency:\n  group: [^\n]+\n  cancel-in-progress: (true|\$\{\{ github\.ref != 'refs\/heads\/main' \}\}|\$\{\{ github\.event_name == 'pull_request' \}\})\n/.test(
+  /\nconcurrency:\n  group: [^\n]+\n  cancel-in-progress: (true|\$\{\{ github\.ref != 'refs\/heads\/main' && github\.event_name != 'merge_group' \}\}|\$\{\{ github\.event_name == 'pull_request' \}\})\n/.test(
     text,
   );
 // A bare `cancel-in-progress: true` on a workflow that also runs on push to main
@@ -182,6 +183,72 @@ const conclusion = (gate: (typeof gates)[number], runCancelled: boolean, results
   });
   return run.status === 0 ? "success" : "failure";
 };
+
+describe("merge queue validation", () => {
+  it.each(["ci.yml", "pr-gates.yml", "e2e.yml"])(
+    "%s requests checks on the synthetic merge SHA without cancelling the queue run",
+    (name) => {
+      const text = workflows.find((workflow) => workflow.name === name)?.text ?? "";
+      expect(triggers(text)).toMatch(/\n  merge_group:\n    types: \[checks_requested\]/);
+      const cancel = text.match(/\n  cancel-in-progress: ([^\n]+)/)?.[1];
+      expect(cancel).toBe(
+        name === "ci.yml"
+          ? "${{ github.ref != 'refs/heads/main' && github.event_name != 'merge_group' }}"
+          : "${{ github.event_name == 'pull_request' }}",
+      );
+    },
+  );
+
+  it("does not resolve nonexistent PR metadata for a merge group", () => {
+    const text = readFileSync(join(dir, "pr-gates.yml"), "utf8");
+    const lint = jobBlock(text, "pr-lint");
+    for (const name of [
+      "Ratchet tracked internal references",
+      "Resolve PR title/body",
+      "List PR commit subjects",
+      "Resolve PR head ref",
+      "Check title, body and commits",
+    ]) {
+      const step = lint.split(`- name: ${name}\n`)[1]?.split(/\n      - /)[0] ?? "";
+      expect(step).toMatch(/if: [^\n]*github\.event_name != 'merge_group'/);
+    }
+    expect(lint).toContain("if: github.event_name == 'merge_group'");
+    expect(lint).toContain("pr-lint passes for merge_group");
+    expect(jobBlock(text, "gitleaks")).toContain("if: ${{ !cancelled() }}");
+  });
+
+  it("runs full CI and browser smoke without PR API context", () => {
+    for (const text of [ciText, e2eText]) {
+      const scratch = mkdtempSync(join(tmpdir(), "merge-group-scope-"));
+      try {
+        const output = join(scratch, "outputs");
+        const result = spawnSync("bash", ["-c", runScript(jobBlock(text, "scope"))], {
+          env: { EVENT_NAME: "merge_group", GITHUB_OUTPUT: output },
+          encoding: "utf8",
+        });
+        expect(result.status, result.stderr).toBe(0);
+        const verdicts = readFileSync(output, "utf8");
+        expect(verdicts).toContain("docs_only=false");
+        expect(verdicts).not.toContain("skip_e2e=true");
+        if (text === ciText) {
+          expect(verdicts).toContain("full=true");
+          expect(verdicts).toContain("draft=false");
+        }
+      } finally {
+        rmSync(scratch, { recursive: true, force: true });
+      }
+    }
+  });
+
+  it("preserves required check names and keeps deployments out of merge_group", () => {
+    expect(jobBlock(ciText, "ci-ok")).toContain("name: ci-ok");
+    expect(jobBlock(e2eText, "browser-smoke")).toContain("name: browser-smoke");
+    for (const name of ["deploy.yml", "deploy-production.yml"]) {
+      const text = readFileSync(join(dir, name), "utf8");
+      expect(triggers(text)).not.toContain("merge_group:");
+    }
+  });
+});
 
 describe("superseded duplicate pull_request runs", () => {
   it.each(gates)("$gate passes a green run", (gate) => {
