@@ -478,6 +478,63 @@ test("cross-target: join one-click hrefs agree on the safe next", async () => {
   );
 });
 
+// Kit archive visuals: populated + out-of-range states x 2 widths into
+// e2e/visual/__screenshots-kit__/ (snapshotPathTemplate in
+// playwright.kit-parity.config.ts). Guest only, no login: the archive is
+// public, so the qa-login throttle is untouched, and the run stays read-only
+// on the deterministic seeded past row (e2e/seed.mjs "E2E Past Night",
+// totalPages 1 — no new fixture route). Mask <time> like the Hono visual
+// spec, fullPage, soft per width so one diff never hides the other image for
+// ci/kit-visual-accept.mjs.
+const ARCHIVE_VIEWS: Array<{ name: string; path: string; testid: string }> = [
+  { name: "populated", path: "/events/past", testid: "past-events" },
+  {
+    name: "out-of-range",
+    path: "/events/past?page=2",
+    testid: "past-events-out-of-range",
+  },
+];
+
+test.describe("kit: archive visuals", () => {
+  for (const view of ARCHIVE_VIEWS) {
+    test(`${view.name} @ desktop and mobile`, async ({ browser }) => {
+      const kit = targets.find((target) => target.name === "kit")!;
+      const context = await browser.newContext({
+        baseURL: kit.origin,
+        ignoreHTTPSErrors: kit.ignoreHTTPSErrors,
+      });
+      const pageErrors: string[] = [];
+      try {
+        // Only the two parity loopbacks may be reached; anything else fails
+        // the journey instead of leaking a packet.
+        await context.route("**/*", (route) => {
+          const url = new URL(route.request().url());
+          const allowed = url.origin === "https://localhost:8787" || url.origin === KIT_ORIGIN;
+          return allowed ? route.continue() : route.abort("blockedbyclient");
+        });
+        const page = await context.newPage();
+        page.on("pageerror", (error) => pageErrors.push(error.message));
+        for (const viewport of PARITY_VIEWPORTS) {
+          await page.setViewportSize(viewport.size);
+          const response = await page.goto(view.path);
+          expect(response?.status(), `kit ${view.path} @ ${viewport.name}`).toBe(200);
+          await expect(page.getByTestId(view.testid)).toBeVisible();
+          await page.waitForLoadState("networkidle");
+          await expect
+            .soft(page)
+            .toHaveScreenshot(`kit-archive-${view.name}-${viewport.name}.png`, {
+              fullPage: true,
+              mask: [page.locator("time")],
+            });
+        }
+        expect(pageErrors, "no uncaught page errors").toEqual([]);
+      } finally {
+        await context.close();
+      }
+    });
+  }
+});
+
 test("Kit worker answers traffic within the liveness bound", async ({ playwright }) => {
   // Liveness only: true startup (spawn-to-first-200) is enforced by this
   // project's Kit webServer readiness timeout, which derives from
