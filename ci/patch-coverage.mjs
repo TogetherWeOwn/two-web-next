@@ -12,6 +12,10 @@
 // Modes: default WARN prints ::warning:: and exits 0 (new checks start
 // WARN). --strict exits 1 under 80% (a future HARD flip). --base <ref>
 // overrides the diff base (default origin/main). --selftest runs fixtures.
+// A missing coverage input always fails closed (::error::, exit 1): a
+// warn-and-pass would let a broken `test:coverage` step silence its own
+// downstream gate. Docs-only and draft PRs skip via the ci.yml scope guard
+// before this script runs, so the script itself always requires the file.
 import { execFileSync, execSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { resolve, dirname, relative, isAbsolute, join } from "node:path";
@@ -103,6 +107,20 @@ export function score(added, coverage) {
   return { total, hit, pct, missed, skipped };
 }
 
+// Missing input fails closed: returns 1 after an ::error:: annotation so a
+// broken `test:coverage` step can never silence this gate with a skip.
+// Docs-only and draft PRs keep their skip via the ci.yml scope guard, which
+// skips the step before this script runs.
+export function requireCoverageInput(coveragePath, exists = existsSync) {
+  if (!exists(coveragePath)) {
+    console.error(
+      `::error::patch coverage missing input: ${coveragePath} absent (run npm run test:coverage first)`,
+    );
+    return 1;
+  }
+  return 0;
+}
+
 function selftest() {
   let cases = 0;
   const check = (name, fn) => {
@@ -164,6 +182,26 @@ function selftest() {
     assert.equal(score(new Map(), new Map()).pct, 100);
   });
 
+  check("missing coverage input fails closed instead of warn/skip", () => {
+    const errors = [];
+    const original = console.error;
+    console.error = (message) => errors.push(message);
+    try {
+      assert.equal(
+        requireCoverageInput("/nonexistent/coverage-final.json", () => false),
+        1,
+      );
+      assert.equal(
+        requireCoverageInput("/present/coverage-final.json", () => true),
+        0,
+      );
+    } finally {
+      console.error = original;
+    }
+    assert.equal(errors.length, 1);
+    assert.match(errors[0], /::error::patch coverage missing input/);
+  });
+
   check("non-TS lines are out of scope", () => {
     const s = score(
       new Map([
@@ -194,10 +232,8 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
     const baseIdx = args.indexOf("--base");
     const base = baseIdx >= 0 ? args[baseIdx + 1] : "origin/main";
     const coveragePath = join(repoRoot, "coverage", "coverage-final.json");
-    if (!existsSync(coveragePath)) {
-      console.log(
-        `::warning::patch coverage skipped: ${coveragePath} missing (run npm run test:coverage first)`,
-      );
+    if (requireCoverageInput(coveragePath)) {
+      process.exitCode = 1;
     } else {
       const mergeBase = execFileSync("git", ["merge-base", base, "HEAD"], {
         cwd: repoRoot,

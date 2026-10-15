@@ -63,6 +63,39 @@ test("the coverage gate keeps area floors and summary scopes for the high-blast-
   }
 });
 
+test("patch coverage fails closed when its coverage input is missing", async () => {
+  const script = await readFile(new URL("./patch-coverage.mjs", import.meta.url), "utf8");
+  // The old warn-and-skip branch let a broken test:coverage silence its own
+  // downstream gate; a missing input must error the step instead.
+  assert.doesNotMatch(script, /::warning::patch coverage skipped/);
+  assert.match(script, /::error::patch coverage missing input/);
+  assert.match(script, /if \(requireCoverageInput\(coveragePath\)\)/);
+  // The --selftest pins requireCoverageInput behaviorally, so the gate cannot
+  // be reverted without the selftest failing the same step.
+  assert.match(script, /missing coverage input fails closed instead of warn\/skip/);
+});
+
+test("the patch coverage step has no file-presence skip so a missing input fails the job", async () => {
+  const step = check
+    .split(/\n      - /)
+    .find((entry) => entry.startsWith("name: Patch coverage (WARN)\n"));
+  assert(step, "check must keep the patch coverage step");
+  // A hashFiles presence check would skip the step on a missing report and
+  // silence the gate; only the docs-only/draft scope guard may skip it.
+  assert.doesNotMatch(step, /hashFiles\('coverage\/coverage-final\.json'\)/);
+  assert.doesNotMatch(step, /continue-on-error:/);
+  const guards = step.match(/^        if:.*$/gm) ?? [];
+  assert.equal(guards.length, 1);
+  assert.equal(
+    guards[0],
+    "        if: always() && (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')",
+  );
+  assert.equal(
+    step.match(/^        run: (.+)$/m)?.[1],
+    "npm run patch:coverage:selftest && npm run patch:coverage",
+  );
+});
+
 // Exercise the shipped npm script against a local CLI fixture. A successful-looking
 // summary must not turn a failed coverage invocation into a passing required gate.
 for (const [label, body, expected] of [
