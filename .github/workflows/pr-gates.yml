@@ -111,16 +111,12 @@ jobs:
           else
             echo "::warning::pr-lint docs test absent at this head SHA; skipped (predates #769)."
           fi
-          # Same predates/fail-closed shape for the advisory size labeller's
-          # tests: a head may predate them, but may not silently delete them.
-          if [ -f .github/scripts/test_pr_size.py ] && [ -f .github/scripts/pr_size.py ]; then
-            python3 -m unittest discover -s .github/scripts -p 'test_pr_size.py'
-          elif git log --format=%H -1 HEAD -- .github/scripts/pr_size.py .github/scripts/test_pr_size.py | grep -q .; then
-            echo "::error::pr-size script or test deleted at this head; refusing to skip."
-            exit 1
-          else
-            echo "::warning::pr-size tests absent at this head SHA; skipped (predates the advisory labeller)."
-          fi
+          # The advisory size labeller's tests moved with the script to the
+          # org `.github` repository, where its `pr-size selftest` job runs
+          # them in `ci-ok`; this repo only pins the thin caller wiring in
+          # test/pr-size-wiring.test.ts. (The old fail-closed block here had
+          # to go with the deletion: its `git log` probe would otherwise
+          # fail every later head for the one deliberate deletion commit.)
 
       - name: Ratchet tracked internal references
         if: github.event_name != 'push' && github.event_name != 'merge_group'

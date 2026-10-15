@@ -1,23 +1,25 @@
-name: pr-size
+# Advisory pull-request size labels (TogetherWeOwn standard; see
+# CI-STANDARD.md in TogetherWeOwn/.github, "Advisory PR-size labels").
+#
+# Thin caller: all logic lives once in the org `.github` repository
+# (`.github/workflows/pr-size.yml`, `.github/workflows/pr-size-weekly.yml`
+# and `.github/scripts/pr_size.py`) and runs from that repository at the
+# pinned ref - this repo keeps no copy of the script, so a pull request
+# cannot run its own modified labeller or silence its label by deleting
+# the script. Repin both `uses:` refs together to the current
+# TogetherWeOwn/.github `main` SHA to pick up central fixes.
+#
+# ADVISORY ONLY: never make `pr-size` a required check and never add it to
+# a ruleset's required-workflows list. The labeller exits 0 on any API
+# failure, and fork pull requests (read-only token) warn and skip.
+#
+# The weekly tally's schedule lives here, in the caller, because the tally
+# is per-repository. It calls a SEPARATE reusable file so this job can stay
+# read-only: GitHub checks a reusable workflow's nested-job permissions
+# against the caller job's grant when parsing the workflow, ignoring `if:`,
+# so each caller job below grants only what the file it calls requests.
 
-# Advisory pull-request size labels (size/S/M/L/XL) plus one advisory comment
-# when a PR changes more than 400 counted lines (lockfiles, generated files
-# and fixtures excluded; .github/scripts/pr_size.py). ADVISORY ONLY: this
-# workflow is not a required check, is in no ruleset, and its script exits 0
-# on any API failure - it can never block a merge.
-#
-# The write token only ever runs the BASE branch's copy of pr_size.py (same
-# pattern as the internal-reference ratchet in pr-gates.yml): a pull request
-# cannot run its own modified labeller, and cannot silence its own label by
-# deleting the script. On the pull request that first introduces the script
-# the base has no copy yet, so the job warns and skips; labelling starts with
-# the next pull request after merge. Fork pull requests receive a read-only
-# token from GitHub, so labelling warns and skips there too.
-#
-# Weekly counts come from the same script (`weekly` mode): a Monday schedule
-# run and manual dispatches print how many PRs merged in the last 7 days at
-# each size. The labels are the durable record - the same tally is any
-# `is:pr is:merged label:size/L` search.
+name: pr-size
 
 on:
   pull_request:
@@ -38,81 +40,29 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || inputs.pr_number || github.event_name }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
-env:
-  # Counted lines above this post the advisory comment (labels: S <=100,
-  # M <=400, L <=1000, XL above that).
-  PR_SIZE_THRESHOLD: "400"
-  # This repo's generated outputs (ci/minify-assets.mjs builds them from
-  # assets/; drizzle-kit writes a ~2,000-line full-schema snapshot under
-  # drizzle/meta/ per migration): excluded on top of the script's built-in
-  # list. The hand-written drizzle/*.sql migrations stay counted.
-  PR_SIZE_EXCLUDE_EXTRA: "public/islands/**,public/styles.css,drizzle/meta/**"
-
 jobs:
   pr-size:
     name: pr-size
     if: github.event_name == 'pull_request' || inputs.pr_number != ''
-    # Overflow switch: see CI_OVERFLOW_* note in the main CI workflow.
-    runs-on: ${{ fromJSON((!github.event.repository.private && '["ubuntu-latest"]') || (contains(fromJSON(vars.CI_OVERFLOW_JOBS || '[]'), 'pr-size') && contains(fromJSON(vars.CI_OVERFLOW_EVENTS || '[]'), github.event_name) && vars.CI_OVERFLOW_RUNNER) || '["self-hosted","two-selfhosted"]') }}
-    timeout-minutes: 5
     permissions:
       contents: read
       issues: write
       pull-requests: write
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
-          fetch-depth: 0
-          persist-credentials: false
-
-      - name: Extract the base copy of the labeller
-        id: script
-        env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          REPO: ${{ github.repository }}
-          PR_NUMBER: ${{ inputs.pr_number }}
-        run: |
-          set -euo pipefail
-          base_sha="$BASE_SHA"
-          if [ "$GITHUB_EVENT_NAME" = workflow_dispatch ]; then
-            base_sha=$(gh api "repos/$REPO/pulls/$PR_NUMBER" --jq '.base.sha')
-          fi
-          if git cat-file -e "$base_sha:.github/scripts/pr_size.py" 2>/dev/null; then
-            git show "$base_sha:.github/scripts/pr_size.py" > "$RUNNER_TEMP/pr_size.py"
-            echo "available=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "::warning::pr_size.py is not on the base yet; advisory labelling skipped for this PR."
-            echo "available=false" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Label the pull request (advisory)
-        if: steps.script.outputs.available == 'true'
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          REPO: ${{ github.repository }}
-          PR_NUMBER: ${{ github.event.pull_request.number || inputs.pr_number }}
-        run: python3 "$RUNNER_TEMP/pr_size.py" label
+    uses: TogetherWeOwn/.github/.github/workflows/pr-size.yml@82c5b367c6e3e8032666029dc22d206fff39c3f2
+    with:
+      pr-number: ${{ inputs.pr_number || '' }}
+      # This repo's generated outputs (ci/minify-assets.mjs builds them
+      # from assets/; drizzle-kit writes a ~2,000-line full-schema
+      # snapshot under drizzle/meta/ per migration), excluded on top of
+      # the script's built-in lockfile/generated/fixture list. The
+      # hand-written drizzle/*.sql migrations stay counted.
+      exclude-extra: "public/islands/**,public/styles.css,drizzle/meta/**"
 
   pr-size-weekly:
     name: pr-size-weekly
     if: github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.pr_number == '')
-    # Overflow switch: see CI_OVERFLOW_* note in the main CI workflow.
-    runs-on: ${{ fromJSON((!github.event.repository.private && '["ubuntu-latest"]') || (contains(fromJSON(vars.CI_OVERFLOW_JOBS || '[]'), 'pr-size-weekly') && contains(fromJSON(vars.CI_OVERFLOW_EVENTS || '[]'), github.event_name) && vars.CI_OVERFLOW_RUNNER) || '["self-hosted","two-selfhosted"]') }}
-    timeout-minutes: 5
     permissions:
       contents: read
       issues: read
       pull-requests: read
-    steps:
-      # Schedule and dispatch runs execute the default branch's merged copy.
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-
-      - name: Weekly size tally (advisory)
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          REPO: ${{ github.repository }}
-        run: python3 .github/scripts/pr_size.py weekly
+    uses: TogetherWeOwn/.github/.github/workflows/pr-size-weekly.yml@82c5b367c6e3e8032666029dc22d206fff39c3f2
