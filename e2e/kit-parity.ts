@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { normalizeParityOrigins } from "../ci/kit-parity-origin.mjs";
+import { normalizeSection } from "../ci/kit-section-contract.mjs";
 import { STAGING_APP_URL } from "../src/qa";
 
 // Shared helpers for the Kit parity project
@@ -124,6 +125,72 @@ export function scrubSecrets(...bodies: string[]): string[] {
     }
   }
   return hits;
+}
+
+// The member board's ranked table, extracted and given the shared
+// framework-tolerant treatment (ci/kit-section-contract.mjs) so the Hono
+// and Kit tables can be compared as contracts, not bytes. Throws when a
+// body carries no table — an empty board ("Nobody is ranked …") must fail
+// a ranked-content assertion, never pass it by absence.
+export function memberBoardTable(html: string): string {
+  const match = html.match(/<table(?:\s[^>]*)?>[\s\S]*?<\/table>/);
+  if (!match) throw new Error("member board table is missing");
+  return normalizeSection(match[0]);
+}
+
+export interface MemberBoardDataRow {
+  rank: unknown;
+  username: unknown;
+  count: unknown;
+  isViewer: unknown;
+}
+
+// Rows from a SvelteKit `__data.json` body. Kit serves the load's return
+// value devalue-flattened per node (`data: [{rows: 4, …}, …, [5], {rank:
+// 7, …}, …]`): object values are indices into the same flattened array.
+// Resolve exactly one level — the node carrying `rows`, then each row's
+// rank/username/count/isViewer — so a `200 {}` or `rows: []` payload fails
+// the shape assertion instead of passing on status alone.
+export function memberBoardDataRows(text: string): MemberBoardDataRow[] {
+  const payload: unknown = JSON.parse(text);
+  const nodes =
+    payload !== null && typeof payload === "object"
+      ? (payload as { nodes?: unknown }).nodes
+      : undefined;
+  if (!Array.isArray(nodes)) throw new Error("member board __data.json carries no data nodes");
+  for (const node of nodes) {
+    if (node === null || typeof node !== "object") continue;
+    const data = (node as { data?: unknown }).data;
+    if (!Array.isArray(data)) continue;
+    for (const entry of data) {
+      if (entry === null || typeof entry !== "object" || Array.isArray(entry)) continue;
+      const rowsRef = (entry as Record<string, unknown>).rows;
+      if (typeof rowsRef !== "number") continue;
+      const rowRefs: unknown = data[rowsRef];
+      if (!Array.isArray(rowRefs))
+        throw new Error("member board __data.json rows is not a flattened array");
+      return rowRefs.map((ref) => {
+        const row: unknown = typeof ref === "number" ? data[ref] : undefined;
+        if (row === null || typeof row !== "object" || Array.isArray(row))
+          throw new Error("member board __data.json row is not a flattened object");
+        const fields = row as Record<string, unknown>;
+        const resolved: MemberBoardDataRow = {
+          rank: undefined,
+          username: undefined,
+          count: undefined,
+          isViewer: undefined,
+        };
+        for (const key of ["rank", "username", "count", "isViewer"] as const) {
+          const valueRef = fields[key];
+          if (typeof valueRef !== "number")
+            throw new Error(`member board __data.json row carries no ${key}`);
+          resolved[key] = data[valueRef];
+        }
+        return resolved;
+      });
+    }
+  }
+  throw new Error("member board __data.json carries no rows");
 }
 
 export const PARITY_VIEWPORTS = [

@@ -112,43 +112,52 @@ describe("Kit member-board load parity", () => {
 
   it("answers a branded 302 for a guest before any grammar or read", async () => {
     const loadRankingFn = vi.fn(async () => ranked);
+    const setHeaders = headers();
     await expect(
       loadMembersBoardData(
         args({
           session: { status: "guest", userId: null, member: false },
           seasonParam: "bogus",
           loadRankingFn,
+          setHeaders,
         }),
       ),
     ).rejects.toMatchObject({ status: 302 });
     expect(loadRankingFn).not.toHaveBeenCalled();
+    expect(setHeaders).not.toHaveBeenCalled();
   });
 
   it("answers a branded 403 for a signed-in non-member before any grammar or read", async () => {
     const loadRankingFn = vi.fn(async () => ranked);
+    const setHeaders = headers();
     await expect(
       loadMembersBoardData(
         args({
           session: { status: "authenticated", userId: "u-x", member: false },
           seasonParam: "bogus",
           loadRankingFn,
+          setHeaders,
         }),
       ),
     ).rejects.toMatchObject({ status: 403 });
     expect(loadRankingFn).not.toHaveBeenCalled();
+    expect(setHeaders).not.toHaveBeenCalled();
   });
 
   it("answers a branded 503 when the session state is unknown, never a guest bounce", async () => {
     const loadRankingFn = vi.fn(async () => ranked);
+    const setHeaders = headers();
     await expect(
       loadMembersBoardData(
         args({
           session: { status: "unknown", userId: null, member: false },
           loadRankingFn,
+          setHeaders,
         }),
       ),
     ).rejects.toMatchObject({ status: 503 });
     expect(loadRankingFn).not.toHaveBeenCalled();
+    expect(setHeaders).not.toHaveBeenCalled();
   });
 
   it("answers branded 400s for bad season, scope and activity before any read", async () => {
@@ -158,13 +167,19 @@ describe("Kit member-board load parity", () => {
       { scopeParam: "bogus" },
       { activityParam: "chess!" },
     ]) {
+      const dbForFn = vi.fn(async () => ({}) as never);
       const loadRankingFn = vi.fn(async () => ranked);
       const queueBoardViewFn = vi.fn(() => {});
+      const setHeaders = headers();
       await expect(
-        loadMembersBoardData(args({ ...overrides, loadRankingFn, queueBoardViewFn })),
+        loadMembersBoardData(
+          args({ ...overrides, dbForFn, loadRankingFn, queueBoardViewFn, setHeaders }),
+        ),
       ).rejects.toMatchObject({ status: 400 });
+      expect(dbForFn).not.toHaveBeenCalled();
       expect(loadRankingFn).not.toHaveBeenCalled();
       expect(queueBoardViewFn).not.toHaveBeenCalled();
+      expect(setHeaders).not.toHaveBeenCalled();
     }
   });
 
