@@ -681,17 +681,18 @@ describe("EventsCalendar SSR drift", () => {
     expect(html).not.toContain(EVENTS_PAST_TOGGLE_TESTID); // no past rows → no toggle
     expect(html).toContain('src="/islands/events-calendar.js"');
     expect(html).toContain(`rel="canonical" href="${APP_URL}/events"`);
-    // Read order: upcoming page count, one page of rows, their grouped going
-    // aggregate, then the past drawer read (empty page → no aggregate).
-    // Never a per-card query, never more than a page of rows.
+    // Concurrent reads start together (perf(events)): the upcoming page
+    // count and the past drawer read are issued synchronously, then one page
+    // of upcoming rows, then their grouped going aggregate (empty past page
+    // → no aggregate). Never a per-card query, never more than a page of rows.
     expect(source.queries.map((q) => (q.sql.includes("rsvps") ? "rsvps" : "events"))).toEqual([
       "events",
       "events",
-      "rsvps",
       "events",
+      "rsvps",
     ]);
     expect(source.queries[0]!.sql).toMatch(/^select count/i);
-    expect(source.queries[2]!.sql).toContain('group by "rsvps"."event_id"');
+    expect(source.queries[3]!.sql).toContain('group by "rsvps"."event_id"');
   });
 
   it("pins the LIKE: bound, wildcard-escaped, title OR description, drafts gated for guests", async () => {
