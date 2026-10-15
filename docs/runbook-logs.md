@@ -134,6 +134,35 @@ Read-only checks only: a Workers Logs search, a `SELECT`, or a source file.
 The `sync attempt settlement failed` line (`src/jobs/consumer.ts`) is outside
 this catalogue.
 
+### Missing sync-queue binding warning
+
+`event write-back due but SYNC_EVENT_QUEUE is not bound` (`src/events/sync.ts`,
+`enqueueEventSync`) is a `console.warn`, not one of the `console.error` rows
+above. It means the event write already committed, but the queue carrier was
+never sent: the function logs this line and returns the built message without
+calling the queue, and both callers (`dispatchWriteBack` in
+`src/admin/writeback.ts`, `dispatchRsvpSync` in `src/events/rsvp.ts`) await it
+without sending anything else. The database write remains committed while the
+queue carrier was not sent.
+
+| Field | Meaning and safe values |
+| --- | --- |
+| `eventKey` | The event whose write-back lost its carrier |
+| `request_id` | The validated HTTP request ID (`safeRequestId`: a Cloudflare Ray ID or a generated ULID; absent for scheduled, reconcile or legacy calls). Never a secret or a member identity |
+
+A successful HTTP response is not evidence of Discord synchronization: the
+request succeeded against the database, but Discord has not been told.
+
+Read-only diagnostic: filter Workers Logs message/text with the exact warning
+(see [Find a request](#find-a-request)), correlate by `eventKey` and
+`request_id`, then compare the deployed Worker's queue producer bindings with
+`queues.producers` in `wrangler.jsonc` (`SYNC_EVENT_QUEUE`; staging and
+production use separate queues and the production binding is not inherited, so
+check the environment that served the request). Source stays unchanged: route
+any binding fix to the authorized Operator under the existing contract. Never
+run production database tests or replay a sync to investigate; log search,
+source and deployed-config reads only.
+
 ## Privacy and boundaries
 
 Request logs allowlist only `event`, `request_id`, `method`, `route`, `status`,

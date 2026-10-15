@@ -133,3 +133,39 @@ describe("runbook log lines coverage", () => {
     expect(missing).toHaveLength(0);
   });
 });
+
+describe("missing sync-queue binding warning docs", () => {
+  const WARNING = "event write-back due but SYNC_EVENT_QUEUE is not bound";
+  const HEADING = "### Missing sync-queue binding warning";
+
+  /** The new runbook subsection, up to (not including) the next heading. */
+  function warningSection(): string {
+    const docs = readFileSync(DOCS_PATH, "utf8");
+    const start = docs.indexOf(HEADING);
+    expect(start, `missing ${HEADING} in ${DOCS_PATH}`).toBeGreaterThanOrEqual(0);
+    const rest = docs.slice(start + HEADING.length);
+    const next = rest.search(/\n#{1,3} /);
+    return next === -1 ? rest : rest.slice(0, next);
+  }
+
+  it("documents the exact warning at warn severity with its carried fields", () => {
+    const section = warningSection();
+    expect(section).toContain(WARNING);
+    expect(section).toContain("console.warn");
+    expect(section).toContain("eventKey");
+    expect(section).toContain("request_id");
+  });
+
+  it("explains the committed write, the sync gap, and the Operator route", () => {
+    const section = warningSection();
+    expect(section).toContain("remains committed");
+    expect(section).toContain("not evidence of Discord synchronization");
+    expect(section).toContain("Operator");
+  });
+
+  it("source still emits the warning with the documented fields", () => {
+    const source = readFileSync("src/events/sync.ts", "utf8");
+    expect(source).toContain(`console.warn("${WARNING}"`);
+    expect(source).toContain("request_id: message.requestId");
+  });
+});
