@@ -150,12 +150,25 @@ export const ROUTE_MANIFEST: OwnedRoute[] = [
   // Join-attempts audit list: member data, so the Kit branch renders
   // inside the member-read boundary with this declaration and the bridged
   // viewer. Off until the enablement review: the Hono viewer answers meanwhile.
-  // The detail page stays Hono-owned until its own slice lands.
+  // Row detail links target the Kit /admin/join-attempts/:id page below.
   {
     method: "GET",
     path: "/admin/join-attempts",
     enabled: false,
     reads: { resource: "join_attempts", action: "list", route: "admin.join-attempts.index" },
+  },
+  // Join-attempt detail: member data, so the Kit branch renders inside the
+  // member-read boundary with this declaration and the bridged viewer. Same
+  // declaration as the Hono handler (admin.join-attempts.show,
+  // src/admin/routes.tsx): the canonical-ID admission, the shared
+  // getJoinAttempt retention-window lookup, and the outcome/source/time/trace
+  // fields with safe back navigation. Off until the enablement review: the
+  // Hono detail page answers meanwhile.
+  {
+    method: "GET",
+    path: "/admin/join-attempts/:id",
+    enabled: false,
+    reads: { resource: "join_attempts", action: "view", route: "admin.join-attempts.show" },
   },
   { method: "GET", path: "/auth/recover", enabled: false, reads: "public" },
   // Profile reads: one Svelte view/model behind both Hono handlers. Native
