@@ -5,7 +5,16 @@
 //
 // Must not duplicate test/prune.test.ts or edit src/jobs/constants.ts:
 // constants are imported read-only here.
-import { readFileSync, readdirSync, statSync } from "node:fs";
+import {
+  mkdtempSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type postgres from "postgres";
@@ -39,23 +48,15 @@ function listTsFiles(dir: string): string[] {
   return out;
 }
 
-// Whole-statement mutation windows include raw SQL deletes/truncates and the
-// Drizzle delete(table) form. Schema qualification, quoted identifiers and SQL
+// Whole-statement mutation windows include raw SQL deletes/truncates, Drizzle
+// sql-template deletes with an interpolated table object, and the Drizzle
+// delete(table) form. Schema qualification, quoted identifiers and SQL
 // comments must not turn a repo-wide retention pin into a token-only scan.
 function deleteWindows(body: string, table: string): string[] {
   const out: string[] = [];
   const gap = String.raw`(?:\s|/\*[\s\S]*?\*/|--[^\r\n]*(?:\r?\n|$))+`;
   const tableRef = String.raw`(?:(?:"?[a-z_][\w$]*"?)\s*\.\s*)?"?${table}"?`;
   const anyTableRef = String.raw`(?:(?:"?[a-z_][\w$]*"?)\s*\.\s*)?"?[a-z_][\w$]*"?`;
-  const sqlRe = new RegExp(
-    `(?:delete${gap}from${gap}(?:only${gap})?${tableRef}|truncate${gap}(?:table${gap})?(?:only${gap})?(?:${anyTableRef}(?:${gap})?,(?:${gap})?)*${tableRef})`,
-    "gi",
-  );
-  let m: RegExpExecArray | null;
-  while ((m = sqlRe.exec(body)) !== null) {
-    const close = body.indexOf("`", m.index);
-    out.push(body.slice(m.index, close === -1 ? m.index + 600 : close));
-  }
   const symbols: Record<string, string> = {
     activity_log: "activityLog",
     queue_jobs: "queueJobs",
@@ -63,10 +64,20 @@ function deleteWindows(body: string, table: string): string[] {
     job_unique_locks: "jobUniqueLocks",
   };
   const symbol = symbols[table];
+  // Build the symbol and alias set before the SQL pass so interpolated
+  // `delete from ${table}` and `db.delete(alias)` spellings match.
+  const tableNames = new Set<string>();
   if (symbol) {
-    const tableNames = new Set([symbol]);
+    tableNames.add(symbol);
+    let m: RegExpExecArray | null;
     const importedAliases = new RegExp(`\\b${symbol}\\s+as\\s+([\\w$]+)`, "g");
     while ((m = importedAliases.exec(body)) !== null) tableNames.add(m[1]!);
+    // Destructured renames: const { queueJobs: jobs } = schema (or any RHS).
+    const destructured = new RegExp(
+      `(?:const|let|var)\\s*\\{[^}]*?\\b${symbol}\\s*:\\s*([\\w$]+)`,
+      "g",
+    );
+    while ((m = destructured.exec(body)) !== null) tableNames.add(m[1]!);
     let foundAlias = true;
     while (foundAlias) {
       foundAlias = false;
@@ -82,7 +93,40 @@ function deleteWindows(body: string, table: string): string[] {
         }
       }
     }
+  }
+  const sqlRe = new RegExp(
+    `(?:delete${gap}from${gap}(?:only${gap})?${tableRef}|truncate${gap}(?:table${gap})?(?:only${gap})?(?:${anyTableRef}(?:${gap})?,(?:${gap})?)*${tableRef})`,
+    "gi",
+  );
+  let m: RegExpExecArray | null;
+  while ((m = sqlRe.exec(body)) !== null) {
+    const close = body.indexOf("`", m.index);
+    out.push(body.slice(m.index, close === -1 ? m.index + 600 : close));
+  }
+  if (symbol) {
     const names = [...tableNames].join("|");
+    // Drizzle sql-template with an interpolated table object:
+    // sql`delete from ${queueJobs} ...`, sql`delete from ${schema.queueJobs} ...`,
+    // and the same through a destructured/import alias. The repo already
+    // interpolates schema refs into sql templates (src/hotzones/aggregates.ts).
+    const ourInterp = String.raw`\$\{\s*(?:[\w$]+\s*\.\s*)*(?:${names})\s*\}`;
+    const anyInterp = String.raw`\$\{\s*(?:[\w$]+\s*\.\s*)*[a-z_][\w$]*\s*\}`;
+    const interpDeleteRe = new RegExp(
+      String.raw`delete${gap}from${gap}(?:only${gap})?${ourInterp}`,
+      "gi",
+    );
+    while ((m = interpDeleteRe.exec(body)) !== null) {
+      const close = body.indexOf("`", m.index);
+      out.push(body.slice(m.index, close === -1 ? m.index + 600 : close));
+    }
+    const interpTruncateRe = new RegExp(
+      String.raw`truncate${gap}(?:table${gap})?(?:only${gap})?(?:(?:${anyTableRef}|${anyInterp})(?:${gap})?,(?:${gap})?)*${ourInterp}`,
+      "gi",
+    );
+    while ((m = interpTruncateRe.exec(body)) !== null) {
+      const close = body.indexOf("`", m.index);
+      out.push(body.slice(m.index, close === -1 ? m.index + 600 : close));
+    }
     const ormRe = new RegExp(
       `\\.\\s*delete\\s*\\(\\s*(?:[\\w$]+\\s*\\.\\s*)?(?:${names})\\s*\\)`,
       "g",
@@ -286,10 +330,56 @@ describe("retention ledger queue mechanisms (no DB)", () => {
       ["import { queueJobs as q } from './schema'; db.delete(q)", "queue_jobs"],
       ["const q = schema.queueJobs; const q2 = q; db.delete(q2)", "queue_jobs"],
       ["db.delete(activityLog)", "activity_log"],
+      // Drizzle sql-template with an interpolated table object (late-novel).
+      ["db.execute(sql`delete from ${queueJobs} where available_at < ${cutoff}`)", "queue_jobs"],
+      [
+        "db.execute(sql`delete from ${queueFailedJobs} where failed_at < ${cutoff}`)",
+        "queue_failed_jobs",
+      ],
+      [
+        "db.execute(sql`delete from ${jobUniqueLocks} where expires_at < now()`)",
+        "job_unique_locks",
+      ],
+      [
+        "db.execute(sql`delete from ${schema.queueJobs} where available_at < ${cutoff}`)",
+        "queue_jobs",
+      ],
+      ["sql`truncate table ${queueJobs}`", "queue_jobs"],
+      ["const { queueJobs: jobs } = schema; db.delete(jobs)", "queue_jobs"],
+      ["const { queueJobs: jobs } = schema; const q2 = jobs; db.delete(q2)", "queue_jobs"],
     ];
     for (const [body, table] of cases)
       expect(deleteWindows(body, table), `${table}: ${body}`).not.toEqual([]);
     expect(deleteWindows("insert into activity_log values (1)", "activity_log")).toEqual([]);
+    expect(deleteWindows("select * from queue_jobs", "queue_jobs")).toEqual([]);
+  });
+
+  it("pins the .tsx directory walk: listTsFiles covers route/page modules", () => {
+    // src carries 60 .tsx route/page modules; a .ts-only walk would miss a
+    // prune planted in one of them (e.g. src/admin/routes.tsx).
+    const srcFiles = listTsFiles(join(root, "src"));
+    expect(
+      srcFiles.some((f) => f.endsWith(".tsx")),
+      "src must contain .tsx files",
+    ).toBe(true);
+    const tmp = mkdtempSync(join(tmpdir(), "ledger-tsx-"));
+    try {
+      mkdirSync(join(tmp, "nested"), { recursive: true });
+      writeFileSync(join(tmp, "nested", "page.ts"), "export const x = 1;\n");
+      writeFileSync(
+        join(tmp, "nested", "routes.tsx"),
+        "await sql`delete from queue_jobs where available_at < ${cutoff}`\n",
+      );
+      const found = listTsFiles(tmp);
+      expect(
+        found.some((f) => f.endsWith("routes.tsx")),
+        "walk must return nested .tsx",
+      ).toBe(true);
+      const evil = readFileSync(join(tmp, "nested", "routes.tsx"), "utf8");
+      expect(deleteWindows(evil, "queue_jobs")).not.toEqual([]);
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+    }
   });
 
   it("queue_jobs has no age-based delete: every delete is a job_id lifecycle transition", () => {
