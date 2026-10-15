@@ -193,3 +193,23 @@ recorded at all — the gate fails loud (exit 2) with every skipped journey and
 its reason named. Never add a quiet `test.skip` precondition for an empty
 staging fixture without a reason string: the ledger surfaces that reason as
 the failure evidence.
+
+Ledger statuses map Playwright report statuses one to one. `expected`
+becomes `passed` with no reason. `flaky` becomes `flaky` with no reason and
+counts toward `passed` as well as toward a separate `flaky` count, so a run
+with flaky journeys still reads `passed: N` with `flaky: M` alongside it.
+`unexpected` becomes `failed` with the first-line failure message.
+`skipped` becomes `skipped` with the skip annotation or result error, or
+`no reason recorded` when neither names one. Any other status — missing,
+non-string, or an unrecognized string — becomes `failed` with a bounded
+single-line `unknown test status: ...` reason, so an unknown report can never
+pass silently. Exit codes stay `0` pass, `1` failed journeys, `2`
+all-skipped or empty report.
+
+The staging config sets `retries: 0` (`playwright.staging.config.ts`), so a
+`flaky` ledger row describes what the report contained, not a retry that
+recovered the journey in CI. A report that contains flaky results is not an
+observed CI flake: do not read it as proof that the journey is flaky in
+general. Keep the original failure evidence — the ledger row, its reason,
+and the uploaded ledger files — and handle any red run under the red-build
+triage policy. Never rerun-until-green to clear a failure.
