@@ -4,6 +4,7 @@
 // guest-cache convergence bound, and the journey timeout must cover
 // every poll it can spend.
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import {
   FEATURED_GUEST_POLL_INTERVALS_MS,
@@ -20,10 +21,17 @@ test("the guest poll outlasts the cache convergence bound", () => {
   );
 });
 
+function readHomeGuestCacheTtlMs() {
+  const source = readFileSync(new URL("../src/home-cache.ts", import.meta.url), "utf8");
+  const match = source.match(/export const HOME_GUEST_CACHE_TTL_MS\s*=\s*([\d_]+)/);
+  assert.ok(match, "HOME_GUEST_CACHE_TTL_MS not found in src/home-cache.ts");
+  return Number.parseInt(match[1].replaceAll("_", ""), 10);
+}
+
 test("the convergence bound mirrors the homepage guest-cache TTL", () => {
-  // src/home-cache.ts: HOME_GUEST_CACHE_TTL_MS = 60_000. If that TTL
-  // changes, this bound (and the poll above it) must change with it.
-  assert.equal(GUEST_CACHE_CONVERGENCE_BOUND_MS, 60_000);
+  // If the TTL in src/home-cache.ts changes, this bound (and the poll
+  // above it) must change with it — read it from source so drift fails.
+  assert.equal(GUEST_CACHE_CONVERGENCE_BOUND_MS, readHomeGuestCacheTtlMs());
 });
 
 test("the poll keeps the existing cadence and is frozen", () => {
