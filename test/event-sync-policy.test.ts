@@ -74,7 +74,7 @@ function memLedger(): QueueLedger & { rows: Map<string, { state: string; availab
 
 /** Request ledger double: `priorAttempts` request tries already spent before this carrier. */
 function store(over: Partial<EventStore> = {}, priorAttempts = 0) {
-  const stamped: { eventKey: string; discordEventId: string; mirroredAt: Date }[] = [];
+  const stamped: { eventKey: string; discordEventId: string | null; mirroredAt: Date }[] = [];
   const events: EventStore = {
     prepareSync: async (eventKey, idempotencyKey, mirroredAt) => ({
       eventKey,

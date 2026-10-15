@@ -8,7 +8,12 @@ targetRules = ["discord-client-id"]
 regexes = ['''1539711683898118154''', '''326474832151838730''']
 
 [[allowlists]]
-description = "Fixture moderator snowflake: the public SySOp role id (TOG-106/TOG-427), referenced in tests and the QA seam against fixture role lists only — the live grant stays env-only via DISCORD_MODERATOR_ROLE_IDS"
+description = "Fixture moderator snowflake: the public Moderator role id, referenced in tests against fixture role lists only — the live grant stays env-only via DISCORD_MODERATOR_ROLE_IDS"
+targetRules = ["discord-client-id"]
+regexes = ['''1546777856984481792''']
+
+[[allowlists]]
+description = "Retired SySOp role id: public by design and still present in git history (pre-migration configs), where a push-to-main full-history scan would flag it without this entry — it no longer grants anything"
 targetRules = ["discord-client-id"]
 regexes = ['''508654771276873729''']
 

@@ -56,8 +56,18 @@ const MATRIX: Case[] = [
     route,
     status: 200,
   })),
+  // A2 machine formats are database-free leaves too: same 200, own media type.
+  ...["/about.md", "/faq.md", "/rules.md", "/privacy.md", "/join.md", "/llms.txt"].map((route) => ({
+    method: "GET",
+    route,
+    status: 200,
+  })),
   { method: "GET", route: "/discord", status: 302, location: env.DISCORD_INVITE_URL },
-  ...["/sitemap_index.xml", "/robots.txt"].map((route) => ({ method: "GET", route, status: 200 })),
+  ...["/sitemap_index.xml", "/robots.txt", "/.well-known/security.txt"].map((route) => ({
+    method: "GET",
+    route,
+    status: 200,
+  })),
   // Main #111: a failed DB ping is a readiness failure, so /up answers 503
   // with the sanitized readiness body instead of a false healthy 200.
   { method: "GET", route: "/up", status: 503, format: "json" },
@@ -66,6 +76,9 @@ const MATRIX: Case[] = [
   // sending the member through an OAuth round trip that could never be admitted.
   { method: "GET", route: "/auth/discord", status: 302, location: "/?n=signin_failed" },
   { method: "GET", route: "/auth/discord/redirect", status: 302, location: "/auth/discord" },
+  // Vanity aliases: no session, cookie or database read, so the same 302s hold during an outage.
+  { method: "GET", route: "/login", status: 302, location: "/auth/discord" },
+  { method: "GET", route: "/community", status: 302, location: "/" },
   { method: "GET", route: "/auth/discord/callback", status: 302, location: "/?n=signin_failed" },
   // Stale-tab liveness probe and expired-write recovery (main #239): neither
   // reads the DB without a session cookie, so both stay 200 during an outage.
@@ -107,7 +120,34 @@ const MATRIX: Case[] = [
     format: "html" as const,
     path: route === "/events/:file{.+\\.ics}" ? `/events/${EVENT_KEY}.ics` : undefined,
   })),
+  // A2 event machine formats share the outage: 503 in their own media type,
+  // never the branded HTML envelope, so no `format` assertion applies.
+  ...["/events.md", "/e/:file{.+\\.md}"].map((route) => ({
+    method: "GET",
+    route,
+    status: 503,
+    path: route === "/e/:file{.+\\.md}" ? `/e/${EVENT_KEY}.md` : undefined,
+  })),
   { method: "GET", route: "/events.json", status: 503, actor: "member", format: "json" },
+  // A3 bounded public read API: refused event reads stay machine-readable
+  // (the 503 envelope, never an empty list), the counts degrade to nulls,
+  // and the database-free handoff and spec stay 200.
+  { method: "GET", route: "/api/public/events", status: 503, format: "json" },
+  {
+    method: "GET",
+    route: "/api/public/events/:key",
+    path: `/api/public/events/${EVENT_KEY}`,
+    status: 503,
+    format: "json",
+  },
+  { method: "GET", route: "/api/public/community", status: 200, format: "json" },
+  { method: "GET", route: "/api/public/join", status: 200, format: "json" },
+  { method: "GET", route: "/openapi.json", status: 200, format: "json" },
+  // B2 public MCP: the handler's DNS-rebinding policy rejects the matrix's
+  // same-origin Origin before any database read, so both methods stay 403
+  // with or without the app DB. Origin-less remote clients are unaffected.
+  { method: "POST", route: "/mcp", status: 403, format: "json", body: "{}" },
+  { method: "OPTIONS", route: "/mcp", status: 403, format: "json" },
   // Main #109/#98: JSON event show. Anonymous browsers redirect to the join
   // funnel before any DB read. The member-session outage envelope is pinned
   // below, outside the inventory, so the route string stays unique.
@@ -164,6 +204,16 @@ const MATRIX: Case[] = [
     body: '{"status":"going"}',
   },
   { method: "ALL", route: "/events/:key/rsvp", status: 405 },
+  // Aggregate heatmaps read Postgres with no member rows; an outage is a 503.
+  { method: "GET", route: "/hotzones", status: 503, format: "html" },
+  {
+    method: "GET",
+    route: "/hotzones/:signal",
+    path: "/hotzones/joins",
+    status: 503,
+    format: "html",
+  },
+  { method: "GET", route: "/leaderboards/members", status: 503, actor: "member", format: "html" },
   ...["/profile", "/members/:user"].map((route) => ({
     method: "GET",
     route,
@@ -191,6 +241,17 @@ const MATRIX: Case[] = [
   { method: "GET", route: "/admin", status: 503, actor: "moderator", format: "html" },
   // Operational admission is disabled before any session/source/audit lookup.
   { method: "GET", route: "/admin/queue/failed/:id/preview", status: 404, format: "json" },
+  { method: "POST", route: "/admin/queue/failed/:id/redispatch", status: 404, format: "json" },
+  // Evidence-only verifier is inert without runtime-only settings, so the
+  // outage envelope sees the DB-free disabled refusal; write verbs refuse
+  // before any middleware or source read.
+  { method: "GET", route: "/admin/queue/source-evidence/:id", status: 404, format: "json" },
+  ...["POST", "PUT", "PATCH", "DELETE", "OPTIONS"].map((method) => ({
+    method,
+    route: "/admin/queue/source-evidence/:id",
+    status: 405,
+    format: "json" as const,
+  })),
   // Static aliases need a valid moderator session, but no resource lookup.
   {
     method: "GET",
@@ -237,6 +298,7 @@ const MATRIX: Case[] = [
     format: "html" as const,
   })),
   ...[
+    "/admin/activity-log",
     "/admin/join-attempts",
     "/admin/join-attempts/:id",
     "/admin/events",
@@ -273,13 +335,15 @@ const MATRIX: Case[] = [
 
 // ALL registrations are not all middleware: the RSVP 405 fallback is a real
 // endpoint. Pin known middleware multiplicity instead of filtering wildcards.
-// Global `*` carries six: the pre-throttle guard, trust-hosts, same-origin,
+// Global `*` carries seven: the pre-throttle guard, trust-hosts, same-origin,
 // the stale-tab auth-status script, the expired-write banner (main #239
-// added those two) and the flag-gated freeze banner. Profile paths carry
-// three registrations each: the session gate, the join-result consumer, and
-// the mandatory access log.
+// added those two), the flag-gated freeze banner and the flag-gated WebMCP
+// pilot script (session-free, 200 HTML on four public paths only). Profile
+// paths carry three registrations each: the session gate, the join-result
+// consumer, and the mandatory access log.
 // Profiles: session gate + keyed read boundary per path (main #145).
 const MIDDLEWARE = [
+  "ALL /*",
   "ALL /*",
   "ALL /*",
   "ALL /*",
@@ -290,6 +354,8 @@ const MIDDLEWARE = [
   "ALL /admin/queue/*",
   "ALL /profile",
   "ALL /profile",
+  "ALL /leaderboards/members",
+  "ALL /leaderboards/members",
   "ALL /members/*",
   "ALL /members/*",
 ];
@@ -330,6 +396,31 @@ it("an enabled dedicated operator preview refuses a real source socket outage", 
   expect(await res.json()).toEqual({ error: "preview_unavailable" });
   expect(res.headers.get("cache-control")).toBe("private, no-store");
   expect(clients).toHaveLength(1);
+});
+
+it("an enabled dedicated operator redispatch refuses a real source socket outage", async () => {
+  const store = createMemorySessionStore();
+  const bindings = {
+    ...outageEnv(),
+    APP_URL: STAGING_APP_URL,
+    QUEUE_RECONCILE_PREVIEW_ENABLED: "true",
+    QUEUE_RECONCILE_OPERATOR_ID: MODERATOR.userId,
+    SESSION_STORE: store,
+  };
+  const res = await testApp.request(
+    "/admin/queue/failed/7/redispatch",
+    {
+      method: "POST",
+      headers: { origin: STAGING_APP_URL, cookie: await cookieFor(store, MODERATOR) },
+    },
+    bindings,
+  );
+  expect(res.status).toBe(503);
+  expect(await res.json()).toEqual({ error: "redispatch_unavailable" });
+  expect(res.headers.get("cache-control")).toBe("private, no-store");
+  // The write envelope's throttle opens its own refused client before the
+  // candidate read fails; a store failure allows, never refuses.
+  expect(clients).toHaveLength(2);
 });
 
 beforeEach(() => {

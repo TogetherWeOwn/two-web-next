@@ -18,11 +18,14 @@ export function routeInventory(router: Router): RouteInventoryEntry[] {
     const { method, path } = registrations.get(name)!;
     let auth = "public";
     if (path === "/*") auth = "middleware";
+    else if (path === "/admin/queue/source-evidence/:id") auth = "evidence-bearer";
     else if (path.startsWith("/admin/queue/") && registrations.has("ALL /admin/queue/*"))
       auth = "staging-operator";
     else if ((path === "/admin" || path.startsWith("/admin/")) && registrations.has("ALL /admin/*"))
       auth = "moderator";
     else if (path === "/profile" && registrations.has("ALL /profile")) auth = "member";
+    else if (path === "/leaderboards/members" && registrations.has("ALL /leaderboards/members"))
+      auth = "member";
     // Retired index reads stop before the scoped member middleware.
     else if (method === "GET" && (path === "/members" || path === "/members/")) auth = "public";
     else if (path.startsWith("/members/") && registrations.has("ALL /members/*")) {
@@ -31,6 +34,9 @@ export function routeInventory(router: Router): RouteInventoryEntry[] {
       auth = "session";
     else if (path === "/e/:key" || path === "/events/:file{.+\\.ics}")
       auth = "public-draft-moderator";
+    // A2 machine alternate: session-free by construction, so drafts refuse for
+    // every viewer (no moderator bypass) while cancelled answers 410 like HTML.
+    else if (path === "/e/:file{.+\\.md}") auth = "public-draft-403";
     else if (
       (path === "/events/:key/rsvp" && (method === "PUT" || method === "DELETE")) ||
       (path === "/e/:key/rsvp" && method === "POST")

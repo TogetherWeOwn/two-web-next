@@ -1,65 +1,50 @@
 import { type Context, Hono } from "hono";
-import { deleteCookie, getSignedCookie, setSignedCookie } from "hono/cookie";
+import { getSignedCookie, setSignedCookie } from "hono/cookie";
 import { secureHeaders } from "hono/secure-headers";
 import postgres from "postgres";
 import { adminApp } from "./admin/routes";
+import { registerAuthRoutes, SESSION_COOKIE } from "./auth/routes";
 import { agentEventsAdmission, agentEventsRoute } from "./agent-events/route";
 import { registerAlertProbe } from "./alert-probe";
 import { requestBodyLimit } from "./body-limit";
 import { readCounts } from "./counts";
-import { cspReportsRoute } from "./csp-reports";
 import {
   createMemorySessionStore,
   createPostgresSessionStore,
   hashToken,
-  migrate,
   newSessionToken,
   SESSION_TTL_SECONDS,
   type SessionStore,
   type Sql,
 } from "./sessions";
-import {
-  addGuildMember,
-  authorizeUrl,
-  exchangeCode,
-  failureMeta,
-  fetchUser,
-  isProviderOutage,
-} from "./discord";
 import { databaseOptions, databaseUrl } from "./db/connection";
 import { isDatabaseUnavailable } from "./db/errors";
-import { migrateRoster, upsertRosterUser } from "./db/roster";
+import { upsertRosterUser } from "./db/roster";
 import { pgQueueDepth } from "./jobs/postgres";
 import type { Env, Session } from "./env";
-import { inviteDestination } from "./invite";
 import { imageHosts } from "./image-policy";
-import { Join, Recovery, About, Faq, Home, Privacy, Rules, type Notice } from "./pages";
-import { POLICY_VERSION, renderPolicyMarkdown } from "./privacy";
-import { POLICY_MARKDOWN } from "./privacy-content";
+import { Join, Home, type Notice } from "./pages";
+import { renderHtmlOutcome } from "./html-outcome";
+import { honoRecoveryRenderer } from "./recovery-hono";
+import { recoveryOutcome } from "./recovery-outcome";
 import { internalErrorHandler, registerErrorHandlers } from "./errors";
 import { registerEventRoutes } from "./events/routes";
-import { loadHomeUpcoming, sitemapEvents } from "./events/reads";
+import { registerHotzoneRoutes } from "./hotzones/routes";
+import { loadHomeUpcomingMerged } from "./events/reads";
+import { discordEventsSource } from "./events/discord-transients";
 import { dbFor } from "./admin/db";
 import { listVisibleFeatured } from "./featured";
-import { robotsTag, SECURITY_HEADERS } from "./headers";
+import { leafInlineStyleCsp, robotsTag, SECURITY_HEADERS } from "./headers";
 import { registerJoinRoutes } from "./join/route";
+import { registerAiFriendlyRoutes } from "./ai-friendly/routes";
+import { registerSeoLeaves } from "./seo-leaves";
+import { registerStaticLeaves } from "./static-leaves";
 import { safeNext } from "./join/service";
 import { profilesApp } from "./profiles/routes";
-import {
-  AUTH_THROTTLE_PER_MINUTE,
-  WRITE_THROTTLE_PER_MINUTE,
-  throttle,
-  throttleGuard,
-} from "./throttle";
-import { QA_HEADER, qaIdentity, qaEnabled, qaTokenMatches } from "./qa";
-import { parseModeratorRoleIds, recomputeModerator } from "./roles";
-import {
-  consumeLoginReturn,
-  LOGIN_INTENDED_COOKIE,
-  rememberLoginNext,
-  takeJoinResult,
-} from "./return-journey";
-import { buildRobots, buildSitemapUrls, crawlableEvents, renderSitemap } from "./seo";
+import { registerMcpRoutes } from "./mcp/routes";
+import { registerPublicApiRoutes } from "./public-data/routes";
+import { takeJoinResult } from "./return-journey";
+import { buildSecurityTxt } from "./security-txt";
 import {
   configReadiness,
   revisionReadiness,
@@ -70,26 +55,23 @@ import {
 import { requestLog } from "./request-log";
 import { sameOrigin } from "./same-origin";
 import { trustHosts } from "./trust-hosts";
-import { rulesLastUpdated } from "./rules-last-updated";
-import { authStatus, authStatusScript, clearAuthStatus, enableAuthStatus } from "./auth-status";
-import {
-  consumeExpiredWrite,
-  flashExpiredWrite,
-  recoveryLanding,
-  expiredWriteBanner,
-} from "./write-recovery";
+import { authStatusScript, enableAuthStatus } from "./auth-status";
+import { expiredWriteBanner } from "./write-recovery";
 import { freezeBanner } from "./freeze-banner";
+import { webmcpPilot } from "./webmcp-pilot";
 
 export { rulesLastUpdated } from "./rules-last-updated";
 
-const SESSION_COOKIE = "__Host-two_session";
-const STATE_COOKIE = "__Host-two_oauth_state";
-const STATE_TTL_SECONDS = 600;
+// The session cookie name is defined once in ./session-cookie (re-exported by ./auth/routes, which owns logout).
+// The OAuth state lifetime stays defined here: the privacy-numbers pin only
+// allows STATE_TTL_SECONDS to originate from this module (or join/route).
+export const STATE_TTL_SECONDS = 600;
 
 const app = new Hono<{ Bindings: Env }>();
 
-// The violation sink (TOG-10107): report-uri is the legacy fallback;
-// the CSP report-to directive selects the modern Reporting-Endpoints group.
+// The violation sink (TOG-10107): the CSP report-to directive selects the
+// Reporting-Endpoints group. No report-uri: it is deprecated (ZAP 10055
+// notices flag it) and report-to is Baseline in current browsers.
 // Omit the deprecated Report-To header: unlike Reporting-Endpoints, it
 // requires absolute HTTPS URLs, not this same-origin relative destination.
 const CSP_REPORT_ENDPOINT = "/csp-reports";
@@ -107,12 +89,15 @@ const CSP_REPORT_ENDPOINT = "/csp-reports";
 // local dev machines to HTTPS. The absence is pinned in test/seo-headers.
 // One security-header wrapper (the exposure inventory in
 // test/member-exposure.test.ts pins middleware multiplicity): secureHeaders
-// plus the staging X-Robots-Tag. Mounted sub-apps inherit both from this
-// outer dispatch, including refusals from the same-origin guard.
+// plus the staging X-Robots-Tag plus the content-leaf inline-style hash.
+// Mounted sub-apps inherit all three from this outer dispatch, including
+// refusals from the same-origin guard.
 const staticSecurityHeaders = secureHeaders({
   // Edge-owned (TOG-8729): emitting HSTS from the app would pin local dev
   // machines to HTTPS, so the Hono default is explicitly off.
   strictTransportSecurity: false,
+  // ZAP 90004; credentialless, not require-corp: cross-origin embeds are credential-free.
+  crossOriginEmbedderPolicy: "credentialless",
   contentSecurityPolicy: {
     defaultSrc: ["'self'"],
     // Restored legacy directives (W16b TOG-11942): object-src 'none' (no
@@ -138,12 +123,14 @@ const staticSecurityHeaders = secureHeaders({
           ? "https://discord.com/widget"
           : "'none'",
     ],
+    // The static policy stays 'self'-only on every route. Content-leaf
+    // inline styles are allowlisted per-route by leafInlineStyleCsp below,
+    // so the documented policy for non-leaf routes never changes shape.
     styleSrc: ["'self'"],
     scriptSrc: ["'self'"],
     fontSrc: ["'self'"],
     frameAncestors: ["'none'"],
     formAction: ["'self'"],
-    reportUri: CSP_REPORT_ENDPOINT,
     reportTo: "csp-endpoint",
   },
   xContentTypeOptions: SECURITY_HEADERS["X-Content-Type-Options"],
@@ -162,6 +149,7 @@ app.use("*", (c, next) =>
     try {
       await staticSecurityHeaders(c, next);
       await robotsTag(c, async () => {});
+      leafInlineStyleCsp(c);
     } catch (err) {
       // Handler errors already became responses; one thrown by this
       // post-processing would skip requestLog, so settle the final 500 here.
@@ -180,14 +168,17 @@ app.use("*", sameOrigin);
 app.use("*", authStatusScript);
 app.use("*", expiredWriteBanner);
 app.use("*", freezeBanner);
-app.get("/auth/status", (c) => authStatus(c, () => storeFor(c)));
-app.get("/auth/recover", recoveryLanding);
+app.use("*", webmcpPilot);
+
+// OAuth and login routes live in ./auth/routes; the app module only wires them.
+registerAuthRoutes(app, {
+  storeFor: (c) => storeFor(c),
+  issueSession: (c, store, row) => issueSession(c, store, row),
+});
 
 // The Discord invite floor lives in ./invite so the join journey's recovery
 // page can share it (same file the /discord redirect uses).
 export { FALLBACK_INVITE, inviteDestination } from "./invite";
-
-const redirectUri = (env: Env) => `${env.APP_URL}/auth/discord/callback`;
 
 // Test seam: tests carry a SessionStore on the env object (`{...env, SESSION_STORE: store}`,
 // cast at the call site). Production bindings never set it, so this branch is dead in
@@ -201,40 +192,40 @@ type EnvWithRoster = Env & { ROSTER_STORE?: Sql };
 // The cookie never carries identity claims. It carries a random token; the row
 // in Postgres is the session. A stolen DB dump yields hashes, not logins, and
 // rotation/revocation are a row delete, not waiting for a signature to expire.
-const migratedUrls = new Set<string>();
-
+//
+// No DDL here (TOG-19721): web_sessions comes from the migrate workflow
+// (drizzle/1022), so the runtime role stays read/write-only. A database that
+// predates that migration surfaces as a query failure, like any other outage.
 async function storeFor(c: Context<{ Bindings: Env }>): Promise<SessionStore> {
-  const injected = (c.env as EnvWithStore).SESSION_STORE;
+  return storeForEnv(c.env);
+}
+
+// Shared with the Kit hook: the same DB selection Hono uses, so
+// Kit reads the sessions Hono writes. Same lifecycle too — a short-lived
+// per-request client, Hyperdrive pooling underneath, idle_timeout reaping.
+export async function storeForEnv(env: Env): Promise<SessionStore> {
+  const injected = (env as EnvWithStore).SESSION_STORE;
   if (injected) return injected;
-  const url = databaseUrl(c.env);
+  const url = databaseUrl(env);
   // No DB configuration: a fresh memory store per request fails closed to guest.
   if (!url) return createMemorySessionStore();
   // Short-lived per-request client; Hyperdrive pools underneath in the Worker.
   // Keep it alive while the store uses it; idle_timeout closes idle sockets.
   const sql = postgres(url, databaseOptions) as unknown as Sql;
-  if (!migratedUrls.has(url)) {
-    await migrate(sql);
-    migratedUrls.add(url);
-  }
   return createPostgresSessionStore(sql);
 }
 
 // Roster persistence shares storeFor's DB selection so signed-in profiles
 // read the same users sign-in writes. Tests may inject ROSTER_STORE; no DB
 // configuration means a no-op upsert so DB-free sign-in tests still work.
-const migratedRosterUrls = new Set<string>();
-
+// No DDL here either (TOG-19721): the users table is drizzle/0000, owned by
+// the migrate workflow.
 async function rosterSqlFor(c: Context<{ Bindings: Env }>): Promise<Sql | null> {
   const injected = (c.env as EnvWithRoster).ROSTER_STORE;
   if (injected) return injected;
   const url = databaseUrl(c.env);
   if (!url) return null;
-  const sql = postgres(url, databaseOptions) as unknown as Sql;
-  if (!migratedRosterUrls.has(url)) {
-    await migrateRoster(sql);
-    migratedRosterUrls.add(url);
-  }
-  return sql;
+  return postgres(url, databaseOptions) as unknown as Sql;
 }
 
 async function issueSession(
@@ -266,7 +257,7 @@ async function issueSession(
   } catch (err) {
     // Driver messages can carry DSN fragments; the class name is the whole story here.
     console.warn("roster upsert failed", {
-      user: row.userId,
+      request_id: c.get("requestId"),
       exception: (err as Error)?.constructor?.name ?? "unknown",
     });
   }
@@ -295,7 +286,7 @@ async function issueSession(
     await store.revokeUserSessions(row.userId, tokenHash);
   } catch (err) {
     console.warn("prior session sweep failed", {
-      user: row.userId,
+      request_id: c.get("requestId"),
       exception: (err as Error)?.constructor?.name ?? "unknown",
     });
   }
@@ -405,8 +396,11 @@ app.get("/", async (c) => {
   ].includes(notice ?? "")
     ? null
     : flashed;
-  const [upcomingEvents, featured] = await Promise.all([
-    loadHomeUpcoming(() => dbFor(c)),
+  const [homeUpcoming, featured] = await Promise.all([
+    loadHomeUpcomingMerged(
+      () => dbFor(c),
+      () => discordEventsSource(c.env),
+    ),
     dbFor(c)
       .then((db) => (db ? listVisibleFeatured(db) : []))
       .catch(() => []),
@@ -421,58 +415,32 @@ app.get("/", async (c) => {
       inviteUrl={c.env.DISCORD_INVITE_URL}
       appUrl={c.env.APP_URL}
       counts={counts}
-      upcomingEvents={upcomingEvents ?? []}
-      eventsUnavailable={upcomingEvents === null}
+      upcomingEvents={homeUpcoming.items}
+      eventsUnavailable={homeUpcoming.unavailable}
       featured={featured}
       imageHosts={c.env.FEATURED_IMAGE_HOSTS}
     />,
   );
 });
 
-// `/discord` — the front door, and the only web-to-Discord conversion path (ports two-web
-// routes/funnel.php + DiscordInviteController). Database-free floor by design: this handler reads
-// no session, no cookie, no cache, no database — it must stay 200→302 when everything behind it
-// is down. 302, not 301: the door gets retargeted, and a 301 is cached by browsers effectively
-// forever. `no-store` for the same reason at the edge.
-app.get("/discord", (c) => {
-  c.header("cache-control", "no-store, private");
-  return c.redirect(inviteDestination(c.env.DISCORD_INVITE_URL), 302);
-});
+// Database-free static leaves (`/discord`, `/login`, `/community`, `/about`,
+// `/faq`, `/rules`): registered in ./static-leaves so the Worker entry stays
+// under the M3 file-size gate. Paths, status codes, cache headers and the
+// `safeNext` policy live there verbatim.
+registerStaticLeaves(app);
 
-// Static funnel leaves (ports two-web routes/funnel.php's `/about` + `/faq`): dependency-free,
-// no controller, no session, no database — they stay 200 during an app-DB outage. No cookies are
-// read or set here on purpose, for the same reason.
-for (const path of ["/about", "/faq"] as const) {
-  app.get(path, (c) => {
-    c.header("cache-control", "public, max-age=3600");
-    return c.html(
-      path === "/about" ? <About appUrl={c.env.APP_URL} /> : <Faq appUrl={c.env.APP_URL} />,
-    );
-  });
-}
+// Policy/SEO leaves (`/privacy`, `/sitemap_index.xml`, `/robots.txt`,
+// `POST /csp-reports`): registered in ./seo-leaves so the Worker entry stays
+// under the M3 file-size gate. Paths, status codes, cache headers and the
+// DB-degrades-to-static sitemap policy live there verbatim. Registered before
+// the join journey so the CSP sink keeps its pre-session placement.
+registerSeoLeaves(app);
 
-// Static house rules (ports two-web `Route::view('/rules')`, TOG-5147): no database — renders
-// even when the bot's database is down. The last-updated stamp comes from config, and an empty
-// or unparseable value hides the stamp instead of 500ing (TOG-7323).
-app.get("/rules", (c) => {
-  const stamp = rulesLastUpdated(c.env.RULES_LAST_UPDATED);
-  c.header("cache-control", "public, max-age=3600");
-  return c.html(<Rules appUrl={c.env.APP_URL} lastUpdated={stamp} />);
-});
-
-// Versioned privacy policy (N1: TOG-9893 — ports two-web routes/funnel.php's
-// `/privacy` + PrivacyController). Funnel-style: no session, no cookie, no
-// cache, no database — stays 200 during an app-DB outage. The markdown is
-// bundled at build (src/privacy-content.ts, generated from
-// content/privacy-policy-vN.md) and pre-rendered once at module load, so the
-// request path performs zero reads of any kind. CSP comes from the global
-// secureHeaders middleware above.
-const PRIVACY_HTML = renderPolicyMarkdown(POLICY_MARKDOWN);
-
-app.get("/privacy", (c) => {
-  c.header("cache-control", "public, max-age=3600");
-  return c.html(<Privacy appUrl={c.env.APP_URL} version={POLICY_VERSION} html={PRIVACY_HTML} />);
-});
+// AI-friendly machine formats: `/llms.txt` + curated `.md`
+// alternates. New routes, not Accept negotiation — one media type per route.
+// Viewer-independent by construction (no session read), so the HTML pages
+// above link out with `rel=alternate` and staging noindexes the .md surface.
+registerAiFriendlyRoutes(app);
 
 // The one-click join journey (W6: TOG-9685). /join is the database-free page;
 // /join/discord + /join/callback run the throttled OAuth round trip with the
@@ -487,65 +455,48 @@ registerJoinRoutes(
       // the static page keeps its shared-cache TTL only when there is nothing
       // to consume (otherwise a guest could read another member's banner).
       // Vary stays on every variant: the representation depends on the flash
-      // cookie even when this view has nothing to consume.
+      // cookie even when this view has nothing to consume. A rendered presence
+      // snapshot says "now", so it keeps only a 60 s shared-cache TTL to match
+      // the widget verdict TTL; the static page without presence keeps 3600 s.
       const joinResult = await takeJoinResult(c);
-      c.header("cache-control", joinResult ? "private, no-store" : "public, max-age=3600");
+      c.header(
+        "cache-control",
+        joinResult
+          ? "private, no-store"
+          : props.widgetSnapshot
+            ? "public, max-age=60"
+            : "public, max-age=3600",
+      );
       c.header("vary", "Cookie");
       return c.html(
         <Join
           inviteUrl={props.inviteUrl}
           widgetUrl={props.widgetUrl}
+          widgetSnapshot={props.widgetSnapshot}
           next={props.next}
           appUrl={c.env.APP_URL}
           joinResult={joinResult}
         />,
       );
     },
-    recovery: (c, props, status = 200) => {
-      c.header("cache-control", "no-store, private");
-      c.status(status);
-      return c.html(
-        <Recovery
-          title={props.title}
-          message={props.message}
-          retryUrl={props.retryUrl}
-          retryLabel={props.retryLabel}
-          inviteUrl={props.inviteUrl}
-        />,
-      );
-    },
+    // Same model, status and headers as the direct render: the injected
+    // renderer only changes who turns the model into bytes (the Svelte
+    // adapter consumes the same RecoveryModel). Statuses (200 recovery, 503
+    // outage), the private no-store header and the journey-cookie clearing in
+    // the callback stay exactly as contracted.
+    recovery: (c, props, status = 200) =>
+      renderHtmlOutcome(c, recoveryOutcome(props, honoRecoveryRenderer, { status })),
   },
 );
 
-// Sitemap (ports two-web routes/web.php's sitemap closure; crawl set per TOG-7072): published
-// events only. No DB binding yet, so the static entries ship now; the W8 events slice adds the
-// published /e/{key} rows (drafts 403 / cancelled 410 stay out of the index).
-// W6 adds /join (changefreq monthly, priority 0.9 — same as legacy).
-app.get("/sitemap_index.xml", async (c) => {
-  c.header("content-type", "application/xml; charset=UTF-8");
+// RFC 9116 disclosure file. Database-free like robots.txt: no session, cookie or DB read.
+// Stays in the Worker entry: it arrived after the SEO/CSP extraction slice
+// (its own module owns the body builder) and is not part of `registerSeoLeaves`.
+app.get("/.well-known/security.txt", (c) => {
+  c.header("content-type", "text/plain; charset=utf-8");
   c.header("cache-control", "public, max-age=3600");
-  // Published events only; a DB outage degrades to the static entries, never a 500.
-  const db = await dbFor(c).catch(() => null);
-  const rows = db ? await sitemapEvents(db).catch(() => []) : [];
-  return c.body(renderSitemap(buildSitemapUrls(c.env.APP_URL, crawlableEvents(rows))));
+  return c.body(buildSecurityTxt(c.env.APP_URL));
 });
-
-// robots.txt is dynamic, not a static file in public/ (TOG-7071): the Sitemap line names this
-// environment's APP_URL host, so each environment advertises itself.
-app.get("/robots.txt", (c) => {
-  c.header("content-type", "text/plain; charset=UTF-8");
-  c.header("cache-control", "public, max-age=3600");
-  return c.body(buildRobots(c.env.APP_URL));
-});
-
-// CSP violation sink (TOG-10107 — ports two-web routes/funnel.php's
-// `POST /csp-reports`). Funnel posture by placement: registered before any
-// session-touching handler and the handler itself reads no session, no
-// cookie, no cache, no database — it answers 204 during an app-DB outage.
-// Deliberately no throttle: throttle reads the database-backed store, like
-// `/discord`. Flood control lives in the handler instead.
-app.post("/csp-reports", cspReportsRoute);
-
 app.post("/api/agent-events", agentEventsAdmission, requestBodyLimit("agent"), agentEventsRoute);
 
 // `GET /up` — session-free DB/schema and secret-presence readiness plus the
@@ -613,152 +564,6 @@ app.get("/up", async (c) => {
 // Branded error pages (N2: TOG-9906) — DB-free, never echo internals.
 registerErrorHandlers(app);
 
-// Legacy login links: retain only the existing guarded-next value, never OAuth input.
-app.get("/auth/discord/redirect", (c) => {
-  const next = safeNext(c.req.query("next"));
-  c.header("cache-control", "no-store");
-  return c.redirect(next ? `/auth/discord?${new URLSearchParams({ next })}` : "/auth/discord", 302);
-});
-
-app.get("/auth/discord", async (c) => {
-  // Mints the OAuth state and sets its cookie: never cacheable, whatever sits at the edge.
-  c.header("cache-control", "no-store, private");
-  // throttle:10,1 like the other three OAuth routes (TOG-6788 envelope; W15b
-  // TOG-12088 ports OAuthReplayAndThrottleTest's all-four-routes guard). The
-  // guard degrades to allow without a store, so DB-free leaves stay up.
-  const limited = await throttleGuard(c, "login-redirect", AUTH_THROTTLE_PER_MINUTE);
-  if (limited) return limited;
-  const state = crypto.randomUUID();
-  const store = await storeFor(c).catch(() => null);
-  if (!store) return c.redirect("/?n=signin_failed", 302);
-  await store.journeys.sweepExpired();
-  if (!(await store.journeys.issue(await hashToken(state), "auth")))
-    return c.redirect("/?n=signin_failed", 302);
-  // Return journey (TOG-10356, legacy login_next): a safe ?next= rides the
-  // OAuth round trip in a signed cookie; a hostile value leaves no trace.
-  await rememberLoginNext(c, c.req.query("next"));
-  await setSignedCookie(c, STATE_COOKIE, state, c.env.SESSION_SECRET, {
-    path: "/",
-    secure: true,
-    httpOnly: true,
-    sameSite: "Lax",
-    maxAge: STATE_TTL_SECONDS,
-  });
-  return c.redirect(authorizeUrl(c.env.DISCORD_CLIENT_ID, redirectUri(c.env), state), 302);
-});
-
-app.get("/auth/discord/callback", async (c) => {
-  // Clears the state cookie and issues the session on success: every outcome is
-  // per-visitor, so a shared cache must never keep one.
-  c.header("cache-control", "no-store, private");
-  const limited = await throttleGuard(c, "login-callback", AUTH_THROTTLE_PER_MINUTE);
-  if (limited) return limited;
-  const expected = await getSignedCookie(c, c.env.SESSION_SECRET, STATE_COOKIE);
-  deleteCookie(c, STATE_COOKIE, { path: "/", secure: true });
-  // Consume the return journey on every terminal path — success, denial and
-  // failure all clear it (legacy forget on login_next + url.intended).
-  const returnTo = await consumeLoginReturn(c);
-  const expiredWrite = await consumeExpiredWrite(c);
-  const code = c.req.query("code");
-  const state = c.req.query("state");
-  const store =
-    state && typeof expected === "string" && state === expected
-      ? await storeFor(c).catch(() => null)
-      : null;
-  const admitted =
-    store && (await store.journeys.consume(await hashToken(state!), "auth").catch(() => false));
-  // A consent-screen refusal arrives as an `error` param before any code
-  // exists. Denied gets its own sentence (the member chose this); any other
-  // OAuth error keeps the generic one. Legacy DiscordLoginTest: the
-  // error_description is never echoed — we render only our own copy.
-  const oauthError = c.req.query("error");
-  if (oauthError) {
-    return c.redirect(
-      oauthError === "access_denied" ? "/?n=signin_denied" : "/?n=signin_failed",
-      302,
-    );
-  }
-
-  if (!admitted || !store || !code) return c.redirect("/?n=signin_failed", 302);
-
-  let accessToken: string;
-  let user;
-  try {
-    accessToken = await exchangeCode(
-      code,
-      c.env.DISCORD_CLIENT_ID,
-      c.env.DISCORD_CLIENT_SECRET,
-      redirectUri(c.env),
-    );
-    user = await fetchUser(accessToken);
-  } catch (err) {
-    // Bounded like the join route: exception class + kind + status, never the
-    // message (the token-exchange error body can quote the client secret).
-    const meta = failureMeta(err);
-    console.warn("discord sign-in failed", {
-      exception: meta.exception,
-      kind: meta.kind,
-      status: meta.status,
-    });
-    return c.redirect(
-      isProviderOutage(meta.kind) ? "/?n=signin_unavailable" : "/?n=signin_failed",
-      302,
-    );
-  }
-
-  // Auto-join: a guild join failure never blocks sign-in. The access token is used once here and
-  // never stored.
-  const botBlank = c.env.DISCORD_BOT_TOKEN.trim() === "";
-  const join = botBlank
-    ? "failed"
-    : await addGuildMember(
-        c.env.DISCORD_GUILD_ID,
-        user.id,
-        accessToken,
-        c.env.DISCORD_BOT_TOKEN,
-      ).catch(() => "failed" as const);
-  if (join === "failed") console.warn("guild auto-join failed", { user: user.id });
-
-  // Moderator recompute: roles re-read with the bot token against snowflake IDs
-  // (never names). A failed lookup fails closed on the flag, never on sign-in.
-  const moderator = botBlank
-    ? false
-    : await recomputeModerator({
-        guildId: c.env.DISCORD_GUILD_ID,
-        userId: user.id,
-        botToken: c.env.DISCORD_BOT_TOKEN,
-        moderatorRoleIds: parseModeratorRoleIds(c.env.DISCORD_MODERATOR_ROLE_IDS),
-      });
-
-  await issueSession(c, store, {
-    userId: user.id,
-    username: user.global_name ?? user.username,
-    avatar: user.avatar,
-    member: join !== "failed",
-    moderator,
-  });
-  await flashExpiredWrite(c, expiredWrite);
-  // A failed auto-join keeps the recovery landing even when a destination
-  // was remembered: the session is a non-member one, so a member-only gate
-  // (/profile, /members/*) would answer bare 403 and swallow the failure
-  // explanation plus the invite fallback. The intended destination is
-  // re-recorded for the retry instead of being lost. Successful joins keep
-  // the legacy precedence: explicit next, then intended page, then notice.
-  if (join === "failed") {
-    if (returnTo) {
-      await setSignedCookie(c, LOGIN_INTENDED_COOKIE, returnTo, c.env.SESSION_SECRET, {
-        path: "/",
-        secure: true,
-        httpOnly: true,
-        sameSite: "Lax",
-        maxAge: 600,
-      });
-    }
-    return c.redirect("/?n=join_failed", 302);
-  }
-  return c.redirect(returnTo ?? `/?n=${join}`, 302);
-});
-
 // Admin panel (W11 pt1): moderator-only HTML tables + forms. The guard
 // redirects guests to Discord OAuth and 403s signed-in non-moderators.
 app.route("/admin", adminApp());
@@ -774,59 +579,19 @@ registerEventRoutes(
   async (c) => readSession(c, false),
 );
 
-app.post(
-  "/logout",
-  throttle("logout", WRITE_THROTTLE_PER_MINUTE),
-  requestBodyLimit("action"),
-  async (c) => {
-    // The route-scoped same-origin guard runs before throttling or session storage.
-    const token = await getSignedCookie(c, c.env.SESSION_SECRET, SESSION_COOKIE);
-    // No bearer: nothing to revoke — clear cookies and leave without touching
-    // session storage (stays 303 when the store is down; main #239 pins the
-    // authoritative 503 only for a presented token whose revocation fails).
-    if (token) {
-      try {
-        const store = await storeFor(c);
-        await store.revoke(await hashToken(token));
-      } catch {
-        // Authoritative, not best-effort: a failed revocation must not clear
-        // this browser's cookie as if the server row were gone.
-        return c.text("Sign-out temporarily unavailable", 503);
-      }
-    }
-    deleteCookie(c, SESSION_COOKIE, { path: "/", secure: true });
-    clearAuthStatus(c);
-    await consumeExpiredWrite(c);
-    return c.redirect("/", 303);
-  },
-);
+// Hot zones: public aggregate heatmaps.
+registerHotzoneRoutes(app);
 
-// Staging-only QA seam. 404 everywhere that is not the staging host with
-// QA_AUTH_TOKEN set. Unknown identity and bad token are byte-identical 404s.
-app.post(
-  "/auth/qa/:identity",
-  async (c, next) => {
-    if (!qaEnabled(c.env.APP_URL, c.env.QA_AUTH_TOKEN)) return c.notFound();
-    await next();
-  },
-  throttle("qa-login", AUTH_THROTTLE_PER_MINUTE),
-  requestBodyLimit("action"),
-  async (c) => {
-    const presented = c.req.header(QA_HEADER) ?? "";
-    const ok = await qaTokenMatches(c.env.QA_AUTH_TOKEN, presented);
-    const fixture = qaIdentity(c.req.param("identity") ?? "");
-    if (!ok || !fixture) return c.notFound();
-    const store = await storeFor(c);
-    await issueSession(c, store, {
-      userId: fixture.discordId,
-      username: fixture.username,
-      avatar: null,
-      member: true,
-      moderator: fixture.moderator,
-    });
-    return c.body(null, 204);
-  },
-);
+// A3: bounded session-free public read API + OpenAPI spec. No session
+// readers: every representation is published-only and identical for all
+// viewers, so the shared isolate-local cache needs no cookie partitioning.
+registerPublicApiRoutes(app);
+
+// B2: stateless public read-only MCP at POST /mcp. Same posture as A3 — no
+// session readers, published-only tools, shared rate budget — behind the
+// exact-path transport guard in ./mcp/routes (the global same-origin rule
+// keeps one exact-path exemption for POST /mcp and is otherwise untouched).
+registerMcpRoutes(app);
 
 registerAlertProbe(app);
 

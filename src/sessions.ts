@@ -49,6 +49,8 @@ export type SessionStore = {
     replacement: DbSessionRow & { tokenHash: string; expiresAt: Date },
   ) => Promise<boolean>;
   revoke: (tokenHash: string) => Promise<void>;
+  /** Revoke every live token that shares a stable status/lineage hash. */
+  revokeLineage: (statusHash: string) => Promise<void>;
   /** Fresh login (TOG-12284): revoke every live session for this user except
    * the freshly issued token, so a pre-login/pre-join token — and any older
    * concurrent login — cannot survive sign-in. Hash-only, like revoke. */
@@ -68,6 +70,11 @@ export type Sql = (<T = Record<string, unknown>[]>(
   ...values: unknown[]
 ) => Promise<T>) & { unsafe: (query: string) => Promise<unknown> };
 
+// Fixture/backfill helper only (TOG-19721): the canonical DDL for these
+// shapes lives in drizzle/1022_web-sessions-oauth-journeys.sql and is applied
+// by the migrate workflow. The request path must NOT call migrate(): the
+// runtime role holds read/write only, no schema CREATE. Tests use this to
+// build disposable schemas; its statements stay identical to the migration.
 const MIGRATION = [
   `create table if not exists web_sessions (
     token_hash text primary key,
@@ -191,6 +198,11 @@ export function createPostgresSessionStore(sql: Sql): SessionStore {
       await sql`update web_sessions set revoked_at = now()
         where token_hash = ${tokenHash} and revoked_at is null`;
     },
+    async revokeLineage(statusHash) {
+      await sql`update web_sessions set revoked_at = now()
+        where coalesce(status_hash, token_hash) = ${statusHash}
+          and revoked_at is null and expires_at > clock_timestamp()`;
+    },
     async revokeUserSessions(userId, exceptTokenHash) {
       await sql`update web_sessions set revoked_at = now()
         where user_id = ${userId} and token_hash != ${exceptTokenHash} and revoked_at is null`;
@@ -267,6 +279,11 @@ export function createMemorySessionStore(clock: () => number = Date.now): Sessio
     },
     async revoke(hash) {
       rows.delete(hash);
+    },
+    async revokeLineage(statusHash) {
+      for (const [hash, r] of rows) {
+        if (r.statusHash === statusHash) rows.delete(hash);
+      }
     },
     async revokeUserSessions(userId, exceptTokenHash) {
       for (const [hash, r] of rows) {

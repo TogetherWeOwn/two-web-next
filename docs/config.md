@@ -21,10 +21,21 @@ PRs, logs or command arguments.
   `next.togetherweown.com`. The GitHub Environment `staging` is a deployment
   gate, not a Wrangler named environment. Worker name is `two-web-next`;
   Hyperdrive's resource name is not a Worker selector or isolation guarantee.
-- **prod (planned):** configuration requirements below describe intended use at
-  cutover, not existing deployment evidence or permission to deploy. There are
-  currently **no `env.staging` or `env.production` blocks** and no production
-  deployment job. Do not infer isolation from a var's name or these labels.
+- **prod (cutover template, not live):** [`wrangler.jsonc`](../wrangler.jsonc)
+  declares a named **`env.production`** block (isolated Worker name, apex
+  route, queues, Hyperdrive binding and explicit vars; bindings and vars are
+  not inherited), and
+  [`.github/workflows/deploy-production.yml`](../.github/workflows/deploy-production.yml)
+  is a manual `workflow_dispatch`-on-`main` workflow gated by
+  `PRODUCTION_DEPLOY_ENABLED`, the live `production` Environment's protection,
+  exact-SHA CI and the Hyperdrive sentinel check. By default, protection requires
+  reviewers with self-review prevented; with `PRODUCTION_AUTO_APPROVE=true`, the
+  gate instead requires a main-only deployment policy and successful staging
+  deploy and `e2e-staging` runs on the same SHA, with an executed, passing
+  `staging-quality` job. Neither the checked-in template nor the workflow
+  is permission to deploy: production deployment, DNS and database/queue
+  provisioning stay separately gated until cutover authorization. There is no
+  `env.staging` block. Do not infer isolation from a var's name or these labels.
 
 `dev/staging/prod` in the table means the setting is applicable in each, with
 production still planned. Optional settings are not supplied by Wrangler unless
@@ -53,10 +64,17 @@ an actual code fallback or a checked-in Wrangler value, not a recommended value.
 | `DISCORD_BOT_TOKEN` | Secret, required | dev/staging/prod | None | Must belong to the client application; the bot must be in the target guild with Create Instant Invite permission for auto-join. Failed auto-join/role lookup denies member/moderator status but ordinary login continues; join offers invite recovery, calendar reads return an error/empty state. Absent or empty fails `/up` readiness (503, `config: "missing"`). |
 | `SESSION_SECRET` | Secret, required | dev/staging/prod | None; local example recommends 32+ random bytes | Invalid signatures become guest/failed OAuth state. Absent or empty (including whitespace-only) fails `/up` readiness (503, `config: "missing"`); there is no strength check or graceful configuration fallback, and a missing value can break signing. |
 | `DATABASE_URL` | Optional connection string; treat credential-bearing URLs as secrets | dev: test database; staging/prod: optional explicit override, normally use `DB` | None in runtime; local example uses the test container | Normal web selection is explicit URL then `DB`. No source means guest-only sessions, no-op roster persistence and unavailable DB-backed features. Generic human throttles use only this URL and allow requests when missing or failing. Web producers, jobs and `/up` share explicit URL then `DB` selection, with jobs accepting the legacy alias last (below). |
-| `DISCORD_MODERATOR_ROLE_IDS` | Optional public var (comma-separated snowflakes) | dev/staging/prod | Main Wrangler: approved SySOp `508654771276873729`; local/unset: blank, no moderators | Only trimmed 10–25 digit role IDs survive parsing. Blank/invalid allowlist or lookup failure gives `moderator=false`; sign-in continues. Deployment preflight requires exactly SySOp from the same top-level source config published by Wrangler; extras fail. This is source policy, not live binding/isolation evidence. |
+| `BOT_DB` | Optional Hyperdrive binding | dev: unset (use `BOT_DATABASE_URL`); staging/prod: bot-reader Hyperdrive binding | Unbound; staging/prod bindings land with the bot-reader wiring | Homepage counts and profile stats read the bot-owned `web_v1` views through this binding (read-only `two_web_reader` grant). Missing both bot sources hides the counts and the stats block; the web `DB` is never read for them. Connection failures do not retry another source. |
+| `BOT_DATABASE_URL` | Optional connection string; treat credential-bearing URLs as secrets | dev: test database carrying `web_v1`; staging/prod: optional explicit override, normally use `BOT_DB` | None in runtime | Counts and profile-stats selection is explicit URL then `BOT_DB`. No bot source means hidden counts and hidden stats block. Never point tests or local runs at a production or staging bot database. |
+| `DISCORD_MODERATOR_ROLE_IDS` | Optional public var (comma-separated snowflakes) | dev/staging/prod | Main Wrangler top level (staging guild `1545644954272137297`): staging Owner+Moderator pair `1546211363578191873,1545648550329851946`; env.production (guild `326474832151838730`): production pair `1546777855801954408,1546777856984481792`; local/unset: blank, no moderators | Only trimmed 10–25 digit role IDs survive parsing. Blank/invalid allowlist or lookup failure gives `moderator=false`; sign-in continues. Deployment preflight requires exactly the guild-bound Owner+Moderator pair from the same source config published by Wrangler: each environment's pair must belong to the guild it queries, so a production pair in the staging config (or vice versa) fails. Role IDs are guild-scoped and the two pairs are unrelated — never copy one guild's IDs into the other. This is source policy, not live binding/isolation evidence. |
 | `QA_AUTH_TOKEN` | Optional secret | staging only; leave unset in dev/prod | Unset; QA route disabled | QA route requires exact `APP_URL=https://next.togetherweown.com` plus the matching nonempty token. Missing/bad token or unknown identity returns 404. Throttle executes before the gate. |
 | `QUEUE_RECONCILE_PREVIEW_ENABLED` | Optional operational flag var | staging only; leave unset elsewhere | Unset; disabled | Only exact `true`, exact staging `APP_URL`, and a valid non-QA operator ID admit the read-only preview namespace; otherwise DB-free 404. No Worker config sets this flag. Activation requires independent security review and separate authorization. |
 | `QUEUE_RECONCILE_OPERATOR_ID` | Optional operational principal var (Discord snowflake) | staging only; no grant provisioned | Unset; nobody admitted | Exactly one 10–25 digit non-QA identity, plus the live session moderator bit, is required. Invalid/missing configuration disables previews; any other actor gets 403. QA tokens do not grant operational authority. |
+| `SOURCE_EVIDENCE_VERIFIER_ENABLED` | Optional evidence-verifier flag var (runtime-only, never Worker config) | staging only; leave unset elsewhere | Unset; verifier inert | Only exact `true` with exact staging `APP_URL` admits the evidence path; otherwise DB-free 404. Provisioning requires separate execution authorization; teardown removes it. |
+| `SOURCE_EVIDENCE_VERIFIER_TOKEN` | Evidence-verifier one-time bearer secret (runtime-only, never Worker config) | staging only; no grant provisioned | Unset; verifier inert | At least 32 characters, compared timing-safe against the `Authorization` header. Missing/short/mismatched token gets 403 without a source read. |
+| `SOURCE_EVIDENCE_VERIFIER_INCIDENT_ID` | Evidence-verifier authorized incident var (runtime-only, never Worker config) | staging only; no grant provisioned | Unset; verifier inert | Canonical positive ID only, and the request path ID must equal it. Unparseable/mismatched ID gets 403 (non-canonical path IDs get 422) without a source read. |
+| `SOURCE_EVIDENCE_VERIFIER_ISSUED_AT` | Evidence-verifier authorization start, epoch ms (runtime-only, never Worker config) | staging only; no grant provisioned | Unset; verifier inert | With the expiry instant it pins an issued-to-expiry window of at most one hour containing now; otherwise 403 without a source read. |
+| `SOURCE_EVIDENCE_VERIFIER_EXPIRES_AT` | Evidence-verifier authorization end, epoch ms (runtime-only, never Worker config) | staging only; no grant provisioned | Unset; verifier inert | Must be after now and within the one-hour window from the issued instant; otherwise 403 without a source read. |
 | `MEMBER_ACCESS_LOG_ENFORCE` | Optional boolean-like var | dev/staging/prod | On | Trimmed, case-insensitive `false`, `0`, `no` disable enforcement; all other values enable it. Failed access-log writes refuse member/admin reads with 503 by default; disabled enforcement logs and serves instead. |
 | `CSP_REPORT_SAMPLE_RATE` | Optional numeric var | dev/staging/prod | `1.0` | Absent/nonfinite values fall back to 1; parsed values clamp to 0–1 (`parseFloat` accepts numeric prefixes). Violation sampling precedes the shared per-isolate log budget; setting 1 does not bypass that budget. Report sink remains 204. |
 | `BOT_ENDPOINT_URL` | Optional signed bot base URL | dev: stub only; staging: provision separately; prod: no new access implied | None | Missing/non-HTTPS URL fails read observation closed to `bot_unreachable`; redirects are refused. The jobs Worker (`JobsEnv`) uses the same three bindings to send sync/announcement/role jobs; if any is missing the job fails terminally and alerts (`queue.failing`), never acks as success. |
@@ -65,6 +83,7 @@ an actual code fallback or a checked-in Wrangler value, not a recommended value.
 | `FEATURED_IMAGE_HOSTS` | Optional public var (comma-separated exact DNS hosts) | dev/staging/prod | Main Wrangler: blank; Discord CDN always allowed | Additional approved HTTPS image hosts (e.g. `images.unsplash.com`), shared by admin validation, rendering and CSP. Invalid, IP/private/reserved names are ignored; no wildcard or subdomain expansion. Unapproved remote images are rejected on writes and suppressed on reads. See [image policy](../README.md#image-and-frame-policy). |
 | `FREEZE_BANNER_ENABLED` | Optional flag var | dev/staging/prod | Off | Only exact `true` or `1` renders the cutover freeze banner; unset or anything else leaves pages byte-identical. Needs `FREEZE_BANNER_DATES` too — the flag alone never renders. |
 | `FREEZE_BANNER_DATES` | Optional public var | dev/staging/prod | Unset; no banner | Human freeze window carried verbatim into the cutover freeze banner (e.g. `12–14 Oct UTC`). HTML-escaped before render; blank means no banner even when the flag is on. |
+| `WEBMCP_PILOT_ENABLED` | Optional flag var | dev/staging: opt-in; prod: keep disabled pending separate authorization | Off | Only exact `true` or `1` injects the model-context island on the four pilot pages (`/`, `/events`, `/e/:key`, `/join`); unset or anything else leaves pages byte-identical. Reads no session, cookie or database, so it adds no session-dependent markup of its own: every viewer gets the same island. |
 | `AGENT_DB` | Optional connection-string binding | dev: test injection; staging/prod: leave unbound so ingress shares the public events database | Unbound in Wrangler; falls back to the shared web database (`DATABASE_URL`, then `DB`) | When bound it overrides the shared database for ingress only (grants/audits/replays and events must then live there). Unbound with no shared database returns 503 `ingress_unavailable`; DB execution failures return 500 and never fail over. |
 | `AGENT_EVENTS_ENABLED` | Optional flag var | dev/staging: opt-in; prod: keep disabled pending separate authorization | Off | Only exact `true` or `1` enables ingress; otherwise 404 `ingress_disabled`. |
 | `AGENT_EVENTS_CALLER_AGENT_ID` | Optional caller allowlist var | dev/staging: admitted caller; prod: no production grant implied | Empty; nobody admitted | Unset/wrong caller denies grants with 403 `wrong_caller`. |
@@ -75,6 +94,28 @@ an actual code fallback or a checked-in Wrangler value, not a recommended value.
 | `INTERNAL_ACTION_QUEUE` | Required Queue producer binding (`JobsEnv`) | dev: local Queue; staging/prod: provisioned Queue | Main Wrangler: `two-internal-action`; local config: `two-internal-action-local` | Declared/configured but no consumer reads this producer property in current source; both configured queue consumers share the Worker dispatch path. No application-side default. |
 | `HYPERDRIVE` | Optional Hyperdrive legacy alias (`JobsEnv`) | dev/staging/prod | Unbound in Wrangler | Jobs use this only when nonempty `DATABASE_URL` and `DB.connectionString` are both absent/empty. With no usable database source, job DB selection throws. No retry fallback after a connection error. |
 <!-- config-docs:end -->
+
+## Tail Worker inventory
+
+The Tail pager returns silently when its optional configuration is absent,
+so this marked table is machine-checked separately from the app inventory.
+Keep exactly one row for each Tail `TailEnv` key, Tail Wrangler var, Tail
+worker service name, app `tail_consumers` service and accepted app script
+name. Secret names only, never values. Named Tail environments are listed
+explicitly because Wrangler never inherits top-level vars (or
+`tail_consumers`) into a named environment.
+
+<!-- tail-config-docs:start -->
+| Name | Kind | Environments | Default | Failure behaviour |
+| --- | --- | --- | --- | --- |
+| `UPTIME_URL` | Optional public var (Tail) | tail staging/prod (top-level + `env.production`, not inherited) | Tail config staging: `https://next.togetherweown.com/up`; production: `https://togetherweown.com/up` | Unset `UPTIME_URL` makes `scheduled()` return early with no probing work at all. A missing production row silently leaves the production prober with nothing to probe. |
+| `OPS_ALERT_WEBHOOK_URL` | Optional secret (Tail; name only) | tail staging/prod (installed separately per environment) | None; install with `wrangler secret put` on the Tail Worker, never in a file | Missing/invalid webhook makes both `tail()` and `scheduled()` return early with no parsing, logging or outbound work. A missing production binding deploys successfully but pages nothing. |
+| `two-web-next-alerts` | Tail worker name / app `tail_consumers` service | tail staging | Tail config name `two-web-next-alerts`; web top-level and jobs top-level `tail_consumers` service `two-web-next-alerts` | A missing or mismatched staging consumer detaches the Tail pager: app deploys may fail on a missing target, or staging traces never reach the pager. |
+| `two-web-next-alerts-production` | Tail worker name / app `tail_consumers` service | tail production | Tail `env.production` name `two-web-next-alerts-production`; app `env.production` `tail_consumers` service `two-web-next-alerts-production` | A missing or mismatched production consumer silently leaves production traces unpaged; `tail_consumers` are not inherited from the top level. |
+| `two-web-next` | App script name accepted by Tail (`APP_SCRIPT_NAMES`) | app staging web (Tail accepts) | Tail `APP_SCRIPT_NAMES` includes `two-web-next` | Traces from an undocumented script name are ignored by `tail()`; paging for that Worker is silently disabled. Never match by prefix. |
+| `two-web-next-production` | App script name accepted by Tail (`APP_SCRIPT_NAMES`) | app production (Tail accepts) | Tail `APP_SCRIPT_NAMES` includes `two-web-next-production` | Production traces arrive under the production app name; without this exact entry production pages are silently ignored. |
+| `two-web-jobs` | App script name accepted by Tail (`APP_SCRIPT_NAMES`) | app staging jobs (Tail accepts) | Tail `APP_SCRIPT_NAMES` includes `two-web-jobs`; jobs top-level `tail_consumers` service `two-web-next-alerts` | Jobs traces arrive under the jobs app name; without this exact entry staging queue/cron failures page nothing. Never match by prefix. |
+<!-- tail-config-docs:end -->
 
 ### CSP report log budget
 
@@ -113,6 +154,7 @@ Do not assume setting `DATABASE_URL` overrides every binding:
 | `/up` DB/schema readiness and queue-depth read | Nonempty `DATABASE_URL`, then `DB.connectionString` (one client for both reads) | [`src/index.tsx`](../src/index.tsx) |
 | Generic human-route throttle | `DATABASE_URL` only; fail-open on missing/erroring store | [`src/throttle.ts`](../src/throttle.ts) |
 | Agent-event ingress | `AGENT_DB` when bound, otherwise nonempty `DATABASE_URL`, then `DB.connectionString` (same as public events) | [`src/agent-events/route.ts`](../src/agent-events/route.ts) |
+| Homepage bot counts and profile stats (`web_v1`) | Nonempty `BOT_DATABASE_URL`, then `BOT_DB.connectionString`; no web-DB fallback (the web database holds no `web_v1` views) | [`src/db/connection.ts`](../src/db/connection.ts), [`src/counts.ts`](../src/counts.ts), [`src/profiles/routes-stores.ts`](../src/profiles/routes-stores.ts) |
 
 Local development must keep **all** supplied bindings test-only, not just the
 explicit URL. Tests must never use production/staging connections. No database
@@ -130,7 +172,8 @@ Failure/default details are implemented in [`src/index.tsx`](../src/index.tsx),
 [`src/access-log.ts`](../src/access-log.ts),
 [`src/admin/guard.ts`](../src/admin/guard.ts),
 [`src/csp-reports.ts`](../src/csp-reports.ts) and
-[`src/agent-events/service.ts`](../src/agent-events/service.ts).
+[`src/agent-events/types.ts`](../src/agent-events/types.ts) (defaults) and
+[`src/agent-events/ingress.ts`](../src/agent-events/ingress.ts) (admission).
 
 ## Settings outside the checked Worker contract
 
@@ -158,9 +201,18 @@ These names are deliberately **not** extra rows in the marked inventory:
   `ADMIN_DB`, `AGENT_EVENT_SQL`, `THROTTLE_STORE`, `JOIN_DEPS`, `DISCORD_EVENTS` are in-process
   dependency/store objects, not Wrangler string vars or secrets. They are
   absent from normal deployment configuration; tests inject local fixtures.
-- **Alerts:** [`src/alerts.ts`](../src/alerts.ts) uses a fixed five-minute
+- **Alerts (app Worker):** [`src/alerts.ts`](../src/alerts.ts) uses a fixed five-minute
   per-isolate rate window. There are no alert environment variables in the
-  current Worker contract. Do not invent settings from proposed work.
+  app Worker `Env`/`JobsEnv` contract. Do not invent settings from proposed work.
+- **Tail Worker settings (separately machine-checked):** the Tail pager names
+  live in the Tail Worker inventory above, not in the app table. The separate
+  Tail Worker ([`tail/wrangler.jsonc`](../tail/wrangler.jsonc),
+  [`tail/worker.ts`](../tail/worker.ts)) reads public var `UPTIME_URL` and
+  secret `OPS_ALERT_WEBHOOK_URL` (secret name only, never a value; install
+  with `wrangler secret put`, never in a file), attaches via
+  `tail_consumers` services and accepts only the listed app script names.
+  They are not app `Env`/`JobsEnv` keys. See
+  [runbook-alerts](runbook-alerts.md) for the install procedure.
 - **CI/tooling secrets:** deployment uses `CLOUDFLARE_API_TOKEN` and
   `CLOUDFLARE_ACCOUNT_ID`; backup automation additionally references
   `NEON_STAGING_DATABASE_URL`. These are workflow inputs, not Worker bindings,
@@ -182,17 +234,29 @@ npm run config:check
 TypeScript 7 native API to resolve `Env` and `JobsEnv` properties (including
 intersections/inheritance) and parses the actual JSONC Wrangler vars/bindings
 from `wrangler.jsonc` and `wrangler.local.jsonc`, including named-environment
-overrides if added. Binding declarations include name-based Durable Objects,
+overrides if added. It separately resolves Tail `TailEnv` keys from
+`tail/worker.ts`, Tail vars (names only) from `tail/wrangler.jsonc` top level
+and named environments without assuming inheritance, Tail worker service names
+and app `tail_consumers` services, and accepted app script names
+(`APP_SCRIPT_NAMES`) from `tail/worker.ts` against the Tail inventory above.
+It does not read `spike/hyperdrive-semantics/wrangler.probe.jsonc`; those
+settings stay documented under "Settings outside the checked Worker contract"
+above. Binding declarations include name-based Durable Objects,
 email and rate limits; nested JSON var data is not a declaration. It rejects:
 
 - Missing documentation for any required **or optional** property.
 - A marked-table key no longer present in `Env`/`JobsEnv`.
 - An actual Wrangler var/binding absent from the types or documentation.
+- A Tail `TailEnv` key, Tail Wrangler var, Tail worker name, app
+  `tail_consumers` service or accepted app script name absent from the Tail
+  inventory, an obsolete/misspelled Tail row, or an app `tail_consumers`
+  service without its Tail worker (either direction silently disables paging).
 - Duplicate rows, blank metadata, malformed/absent inventory markers or invalid
   source/config input. Mentions in prose and commented-out bindings do not count.
 
 The companion selftest covers inherited/optional/job keys, comments, nested
-fields, JSONC strings/trailing commas, scoped Wrangler keys and both directions
+fields, JSONC strings/trailing commas, scoped Wrangler keys, synthetic Tail
+aliases, top-level/named-environment Tail config and both directions
 of drift using local fixtures only. `npm run check` includes both commands, so
 CI's required `check` job executes them before Vitest. This check proves names
 and row completeness, not the semantic correctness of descriptions or live

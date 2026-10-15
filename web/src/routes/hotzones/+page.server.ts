@@ -1,0 +1,48 @@
+import { error } from "@sveltejs/kit";
+import { env } from "cloudflare:workers";
+import type { PageServerLoad } from "./$types";
+import { dbFor } from "../../../../src/admin/db";
+import { loadHotzonesIndexData } from "../../../../src/kit-hotzones";
+import { renderHotzoneGrid } from "../../../../src/hotzones/pages";
+
+// Server-rendered only: no hydration bundle, so no inline bootstrap script that
+// the CSP (script-src 'self') would block.
+export const csr = false;
+
+// Thin binding over the tested helper (src/kit-hotzones.ts): the helper owns
+// the reads, the board-view log and the cache policy; this binding owns the
+// branded status mapping (400 season grammar, 503 outage) and the grid
+// rendering, mirroring web/src/routes/events/past/+page.server.ts.
+export const load: PageServerLoad = async ({ url, setHeaders }) => {
+  try {
+    const data = await loadHotzonesIndexData({
+      env,
+      seasonParam: url.searchParams.get("season"),
+      setHeaders,
+      dbForFn: dbFor,
+    });
+    return {
+      season: data.season,
+      joinsHtml: await renderHotzoneGrid(
+        data.joins.cells,
+        `Join activity for season ${data.season}`,
+      ),
+      joinsTotal: data.joins.total,
+      eventCount: data.joins.eventCount,
+      voiceHtml: await renderHotzoneGrid(
+        data.voice.cells,
+        `Estimated voice activity for season ${data.season}`,
+      ),
+      gamesHtml: await renderHotzoneGrid(
+        data.games.cells,
+        `Estimated games activity for season ${data.season}`,
+      ),
+      retentionNote: data.retentionNote,
+      appUrl: data.appUrl,
+    };
+  } catch (err) {
+    const status = (err as { status?: number })?.status;
+    if (status === 400) error(400, "Unknown season");
+    error(503, "Hot zones temporarily unavailable");
+  }
+};

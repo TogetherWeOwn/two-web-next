@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 // Offline documentation safety checks; no recovery command is executed.
 const rollback = readFileSync(new URL("../docs/cutover-rollback.md", import.meta.url), "utf8");
 const runbook = readFileSync(new URL("../docs/runbook.md", import.meta.url), "utf8");
+const gates = readFileSync(new URL("../docs/cutover-gates.md", import.meta.url), "utf8");
 const map = rollback
   .split("## Production cutover capability ↔ reverse map")[1]!
   .split("## Pre-apply snapshot")[0]!;
@@ -185,5 +186,49 @@ describe("cutover rollback documentation safety", () => {
     expect(rollback).not.toContain(
       "deployment list differs by more than the two rehearsal deployments",
     );
+  });
+});
+
+function gateRow(id: number) {
+  const row = gates.split("\n").find((line) => line.startsWith(`| ${id} |`));
+  expect(row, `gate row ${id}`).toBeDefined();
+  return row!;
+}
+
+function headerMainSha() {
+  const match = gates.match(/`main`\s+`([0-9a-f]{40})`/);
+  expect(match, "header names a full main SHA").not.toBeNull();
+  return match![1]!;
+}
+
+describe("cutover gates snapshot freshness", () => {
+  it("names a refresh date and full main SHA at top with no stale release SHA", () => {
+    expect(gates).toMatch(/^Snapshot taken \d{4}-\d{2}-\d{2}.*`main`\s+`[0-9a-f]{40}`/m);
+    expect(gates).not.toContain("315e1612");
+    expect(gates).not.toContain("9fc93bb2");
+  });
+
+  it("pins six gate rows with decisions unchanged", () => {
+    expect(gateRow(1)).toContain("**NO-GO**");
+    expect(gateRow(2)).toContain("**GO (staging only)**");
+    expect(gateRow(3)).toContain("**NO-GO**");
+    expect(gateRow(4)).toContain("**NO-GO**");
+    expect(gateRow(5)).toContain("**GO on staging rehearsal evidence;");
+    expect(gateRow(6)).toContain("**NO-GO**");
+  });
+
+  it("shows state at the named main SHA with a linked run or doc in every row", () => {
+    const sha = headerMainSha();
+    const short = sha.slice(0, 8);
+    for (let id = 1; id <= 6; id++) {
+      const row = gateRow(id);
+      expect(row, `gate ${id} names the header main SHA`).toMatch(new RegExp(`${sha}|${short}`));
+      expect(row, `gate ${id} links a run or doc`).toMatch(/\]\((https?:\/\/|\S+\.md[#\S]*)\)/);
+    }
+  });
+
+  it("keeps operator-owned facts unverified", () => {
+    expect(gateRow(3)).toContain("unverified (operator)");
+    expect(gateRow(4)).toContain("unverified (operator)");
   });
 });

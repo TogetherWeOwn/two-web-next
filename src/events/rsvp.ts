@@ -9,8 +9,10 @@ import { and, eq, sql } from "drizzle-orm";
 import type { Db } from "../db/index";
 import { events, rsvps } from "../db/admin-schema";
 import { RSVP_RATE_LIMIT, RSVP_STATUSES, type RsvpWriteStatus } from "../islands/contracts";
+import { THROTTLE_COUNTER_RETENTION_MINUTES } from "../join/service";
 import { enqueueEventSync } from "./sync";
 import { lockWaitlist, promoteWaitlist, waitlistPosition } from "./waitlist";
+import { retireAnonEventCaches } from "./anon-cache";
 import type { Env } from "../env";
 import type { EventStatus } from "../admin/validation";
 
@@ -52,7 +54,7 @@ export async function writeRsvp(
   status: RsvpWriteStatus,
   clock: () => Date = () => new Date(),
 ): Promise<RsvpWriteResult> {
-  return db.transaction(async (tx) => {
+  const result = await db.transaction(async (tx) => {
     // Member lock first, then the event row lock (withdraw takes the same order, so the
     // order cannot deadlock).
     await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${`rsvp-write:${userId}`}))`);
@@ -127,6 +129,10 @@ export async function writeRsvp(
       eventKey: ev.eventKey,
     } as const;
   });
+  // Committed with a new answer: the going count guests read may have moved
+  // (N6). Refusals (closed/limited/not_found) change nothing and keep entries.
+  if (result.ok) retireAnonEventCaches();
+  return result;
 }
 
 /** Quiet by design: no row, unknown event or cancelled event all answer the same. */
@@ -138,7 +144,7 @@ export async function withdrawRsvp(
   | { limited: false; deleted: boolean; status: EventStatus | null }
   | { limited: true; retryAfter: number }
 > {
-  return db.transaction(async (tx) => {
+  const result = await db.transaction(async (tx) => {
     // Same lock order as writeRsvp (member, then event row); the budget hit is stamped and
     // committed together with the delete, after both waits.
     await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${`rsvp-write:${userId}`}))`);
@@ -173,6 +179,10 @@ export async function withdrawRsvp(
       status: gone.length > 0 && mirrorable ? (ev.status as EventStatus) : null,
     } as const;
   });
+  // Committed with a deleted row: the count and the settled line moved (N6).
+  // A no-row or limited delete changes nothing and keeps entries.
+  if (!result.limited && result.deleted) retireAnonEventCaches();
+  return result;
 }
 
 export type Verdict = { limited: false } | { limited: true; retryAfter: number };
@@ -190,7 +200,7 @@ type Tx = Parameters<Parameters<Db["transaction"]>[0]>[0];
  * must run before any accept/charge decision — never between the debit and the write. */
 async function pruneThrottle(tx: Tx): Promise<void> {
   await tx.execute(
-    sql`delete from web_throttle_hits where at < clock_timestamp() - interval '5 minutes'`,
+    sql`delete from web_throttle_hits where at < clock_timestamp() - make_interval(mins => ${THROTTLE_COUNTER_RETENTION_MINUTES})`,
   );
 }
 

@@ -8,7 +8,7 @@ import { createEvent, transitionEvent, updateEvent } from "../src/admin/store";
 import type { EventFormInput } from "../src/admin/validation";
 import { activityLog, events } from "../src/db/admin-schema";
 import type { Env } from "../src/env";
-import { eventIcs, eventsIcsCollection } from "../src/events/feeds";
+import { eventIcs, eventsIcsCollection, ICS_SEQUENCE_BASE } from "../src/events/feeds";
 import { createMemberDataFixture, type MemberDataFixture } from "./helpers/member-data-db";
 
 const APP_URL = "https://next.example.test";
@@ -57,6 +57,8 @@ describe.skipIf(!process.env.DATABASE_URL)("database-owned ICS revisions", () =>
         title: input.title,
         startsAt: input.startsAtUtc,
         endsAt: input.endsAtUtc,
+        timezone: input.timezone,
+        location: input.location,
         status,
         createdAt: NOW,
         updatedAt: NOW,
@@ -89,7 +91,7 @@ describe.skipIf(!process.env.DATABASE_URL)("database-owned ICS revisions", () =>
         expect(response.status).toBe(200);
         const next = await response.text();
         expect(sequence(next)).toBeGreaterThan(sequence(body));
-        expect(sequence(next)).toBe(saved.icsSequence);
+        expect(sequence(next)).toBe(saved.icsSequence - ICS_SEQUENCE_BASE);
         expect(property(next, "UID")).toBe(uid);
         expect(property(next, "SUMMARY")).toBe(title);
         expect(property(next, "DESCRIPTION")).toBe(input.description);
@@ -105,7 +107,7 @@ describe.skipIf(!process.env.DATABASE_URL)("database-owned ICS revisions", () =>
       expect(response.status).toBe(200);
       const latest = await response.text();
       expect(sequence(latest)).toBeGreaterThan(sequence(body));
-      expect(sequence(latest)).toBe(cancelled.icsSequence);
+      expect(sequence(latest)).toBe(cancelled.icsSequence - ICS_SEQUENCE_BASE);
       expect(property(latest, "STATUS")).toBe("CANCELLED");
       expect(property(latest, "UID")).toBe(uid);
       expect(cancelled.updatedAt).toEqual(NOW);
@@ -199,7 +201,7 @@ describe.skipIf(!process.env.DATABASE_URL)("database-owned ICS revisions", () =>
       await restore(2147483647n);
       const valid = await request(path);
       expect(valid.status).toBe(200);
-      expect(sequence(await valid.text())).toBe(2147483647n);
+      expect(sequence(await valid.text())).toBe(2147483647n - ICS_SEQUENCE_BASE);
       const etag = valid.headers.get("etag")!;
       await fixture.client`update events set title = 'Exhausted revision' where event_key = ${KEY}`;
       expect((await read()).icsSequence).toBe(2147483648n);

@@ -36,13 +36,13 @@ import {
   createMemorySessionStore,
   createPostgresSessionStore,
   hashToken,
-  migrate,
   type SessionStore,
   type Sql,
 } from "../sessions";
 import { dbFor } from "./db";
 import { recordAccess } from "./store";
 import { memberReadBoundary } from "../member-reads";
+import { SESSION_COOKIE } from "../session-cookie";
 
 export type Actor = { id: string; username: string };
 
@@ -51,18 +51,14 @@ type EnvWithStore = Env & { SESSION_STORE?: SessionStore };
 // Mirrors src/index.tsx's storeFor (kept local: index does not export it,
 // and the admin slice must not import the site's route module). One pooled
 // connection max, idle sockets close themselves; no binding fails closed.
-const migratedUrls = new Set<string>();
-
+// No DDL here (TOG-19721): web_sessions comes from the migrate workflow
+// (drizzle/1022); the runtime role stays read/write-only.
 export async function sessionStoreFor(c: { env: Env }): Promise<SessionStore | null> {
   const injected = (c.env as EnvWithStore).SESSION_STORE;
   if (injected) return injected;
   const url = databaseUrl(c.env);
   if (!url) return null;
   const sql = postgres(url, databaseOptions) as unknown as Sql;
-  if (!migratedUrls.has(url)) {
-    await migrate(sql);
-    migratedUrls.add(url);
-  }
   return createPostgresSessionStore(sql);
 }
 
@@ -106,7 +102,7 @@ export function adminGuard(overrides?: AdminOverrides | SessionStore) {
     c: Context<{ Bindings: Env; Variables: { adminActor: Actor; access: AccessDecl } }>,
     next: Next,
   ) => {
-    const token = await getSignedCookie(c, c.env.SESSION_SECRET, "__Host-two_session");
+    const token = await getSignedCookie(c, c.env.SESSION_SECRET, SESSION_COOKIE);
     // Guest: into the site Discord OAuth flow, like everyone else. There is
     // no panel login page. The bounce records the page they asked for
     // (legacy url.intended) so the callback returns them to it.

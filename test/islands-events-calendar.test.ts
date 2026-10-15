@@ -27,6 +27,7 @@ import {
   EVENTS_CALENDAR_ISLAND,
   EVENTS_CALENDAR_TESTID,
   EVENTS_CALENDAR_FETCH_FAILED,
+  EVENTS_CALENDAR_READ_DEADLINE_MS,
   EVENTS_EMPTY_COPY,
   EVENTS_EMPTY_ERROR_TESTID,
   EVENTS_EMPTY_GAP_ITEM_TESTID,
@@ -197,6 +198,9 @@ function calendar(
           (r.description ?? "").toLowerCase().includes(term),
       );
     }
+    // The paged upcoming read counts first under the same predicates, then
+    // reads one page: answer the count from the same filtered set.
+    if (/^select count/i.test(sql)) return { rows: [[rows.length]] };
     if (sql.includes("limit")) rows = rows.slice(0, Number(params.at(-1)));
     return { rows: rows.map(encode) };
   });
@@ -405,7 +409,9 @@ describe("EventsCalendar review regressions", () => {
     const e = eventRow({ eventKey: "grid-link", startsAt: new Date(Date.UTC(2030, 0, 15, 20)) });
     const src = calendar([e], [], okSource());
     const grid = await (await src.request("/events?view=calendar&month=2030-01&past=1")).text();
-    expect(grid).toContain('href="/events?past=1#event-grid-link" data-cal-jump');
+    expect(grid).toContain(
+      'href="/events?event=grid-link&amp;past=1#event-grid-link" data-cal-jump',
+    );
     const list = await (await src.request("/events?past=1")).text();
     expect(list).toContain('id="event-grid-link"');
   });
@@ -553,12 +559,13 @@ describe("EventsCalendar contract drift", () => {
     expect(eventsSearchMissCopy("jam")).toBe("Nothing matches “jam”.");
   });
 
-  it("pins URL rules: q raw + non-blank, view/month only for calendar, past flag", () => {
+  it("pins URL rules: q raw + non-blank, view/month only for calendar, past flag, list paging", () => {
     const s = (o: Partial<CalendarState>): CalendarState => ({
       view: "list",
       month: "2026-10",
       q: "",
       past: false,
+      page: 1,
       ...o,
     });
     expect(calendarUrl(s({}))).toBe("/events");
@@ -573,6 +580,15 @@ describe("EventsCalendar contract drift", () => {
     expect(calendarUrl(s({ q: "x" }))).toBe("/events?q=x");
     expect(calendarUrl(s({ q: "x", view: "calendar", month: "2026-10" }))).toBe(
       "/events?q=x&view=calendar&month=2026-10",
+    );
+    // The upcoming list is paged: page one is the canonical URL, later pages
+    // ride along in list view only — the month grid is month-scoped.
+    expect(calendarUrl(s({ page: 1 }))).toBe("/events");
+    expect(calendarUrl(s({ page: 3 }))).toBe("/events?page=3");
+    expect(calendarUrl(s({ page: 2, past: true }))).toBe("/events?past=1&page=2");
+    expect(calendarUrl(s({ q: "x", page: 2 }))).toBe("/events?q=x&page=2");
+    expect(calendarUrl(s({ view: "calendar", month: "2026-11", page: 2 }))).toBe(
+      "/events?view=calendar&month=2026-11",
     );
   });
 
@@ -665,14 +681,17 @@ describe("EventsCalendar SSR drift", () => {
     expect(html).not.toContain(EVENTS_PAST_TOGGLE_TESTID); // no past rows → no toggle
     expect(html).toContain('src="/islands/events-calendar.js"');
     expect(html).toContain(`rel="canonical" href="${APP_URL}/events"`);
-    // Read order: upcoming rows, their grouped going aggregate, then the past
-    // drawer read (empty page → no aggregate). Never a per-card query.
+    // Read order: upcoming page count, one page of rows, their grouped going
+    // aggregate, then the past drawer read (empty page → no aggregate).
+    // Never a per-card query, never more than a page of rows.
     expect(source.queries.map((q) => (q.sql.includes("rsvps") ? "rsvps" : "events"))).toEqual([
+      "events",
       "events",
       "rsvps",
       "events",
     ]);
-    expect(source.queries[1]!.sql).toContain('group by "rsvps"."event_id"');
+    expect(source.queries[0]!.sql).toMatch(/^select count/i);
+    expect(source.queries[2]!.sql).toContain('group by "rsvps"."event_id"');
   });
 
   it("pins the LIKE: bound, wildcard-escaped, title OR description, drafts gated for guests", async () => {
@@ -1084,14 +1103,16 @@ function browser(entry = "/events") {
     reject: (e: Error) => void;
   }[] = [];
   const parsedPages = new Map<string, { querySelector: (s: string) => unknown }>();
-  const timers = new Map<number, () => void>();
+  // Timers keyed by requested delay: fireTimer() drains only the short
+  // search-debounce timers, never the owned multi-second read deadline.
+  const timers = new Map<number, { ms: number; fn: () => void }>();
   let nextTimer = 0;
   runInNewContext(binder, {
     URL,
     AbortController,
-    setTimeout: (fn: () => void) => {
+    setTimeout: (fn: () => void, ms = 0) => {
       const id = ++nextTimer;
-      timers.set(id, fn);
+      timers.set(id, { ms, fn });
       return id;
     },
     clearTimeout: (id: number) => {
@@ -1130,10 +1151,12 @@ function browser(entry = "/events") {
   });
 
   function fireTimer() {
-    const next = timers.entries().next();
-    if (next.done) return;
-    timers.delete(next.value[0]);
-    next.value[1]();
+    // Fire the oldest short (debounce) timer. A pending read keeps its owned
+    // deadline: firing it here would expire a multi-second bound instantly.
+    const next = [...timers.entries()].find(([, t]) => t.ms < EVENTS_CALENDAR_READ_DEADLINE_MS);
+    if (!next) return;
+    timers.delete(next[0]);
+    next[1].fn();
   }
 
   function clickLink(href: string, modifiers: Partial<Click> = {}, attrs: string[] = []) {
@@ -1365,6 +1388,54 @@ describe("EventsCalendar shipped binder request/state drift", () => {
     expect(b.reloads).toEqual([]);
     expect(b.zones.content.childNodes).toEqual(["all events"]);
     expect(b.feedback.textContent).toBe(EVENTS_CALENDAR_FETCH_FAILED);
+  });
+
+  it("ignores a fragment-only popstate: no request, no skeleton, debounce and input untouched", async () => {
+    const b = browser("/events?q=old");
+    b.input.value = "newer";
+    b.inputEvent();
+    b.location.href = APP_URL + "/events?q=old#main"; // skip link to #main
+    b.popstate();
+    expect(b.requests).toHaveLength(0);
+    expect(b.skeleton.hidden).toBe(true);
+    expect(b.input.value).toBe("newer");
+    expect(b.reloads).toEqual([]);
+    b.fireTimer(); // the pending debounce still runs its search
+    expect(b.requests).toHaveLength(1);
+    expect(b.requests[0]!.url).toBe("/events?q=newer");
+  });
+
+  it("ignores a fragment-only popstate while a pushed navigation is in flight", async () => {
+    const b = browser();
+    b.clickLink("/events?past=1");
+    b.location.href = APP_URL + "/events#main";
+    b.popstate();
+    expect(b.requests).toHaveLength(1);
+    expect(b.requests[0]!.init.signal!.aborted).toBe(false);
+    b.finish(0, "/events?past=1", { content: ["past"] });
+    await b.settle();
+    expect(b.history).toEqual(["/events?past=1"]);
+    expect(b.zones.content.childNodes).toEqual(["past"]);
+  });
+
+  it("still reloads on Back and forward whose path or query differs from the rendered page", async () => {
+    const b = browser("/events?q=old");
+    b.location.href = APP_URL + "/events?q=other#main";
+    b.popstate();
+    expect(b.requests.map((r) => r.url)).toEqual(["/events?q=other"]);
+    expect(b.skeleton.hidden).toBe(false);
+  });
+
+  it("still reloads when Forward returns to the rendered address while an earlier Back read is in flight", async () => {
+    const b = browser("/events?q=old");
+    b.location.href = APP_URL + "/events"; // Back
+    b.popstate();
+    b.location.href = APP_URL + "/events?q=old"; // Forward before Back's read settles
+    b.popstate();
+    expect(b.requests).toHaveLength(2);
+    expect(b.requests[0]!.init.signal!.aborted).toBe(true);
+    expect(b.requests[1]!.url).toBe("/events?q=old");
+    expect(b.requests[1]!.init.signal!.aborted).toBe(false);
   });
 
   it("cancels pending debounce before a slow Back restoration", async () => {

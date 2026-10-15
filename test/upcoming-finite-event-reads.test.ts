@@ -53,8 +53,9 @@ describe.skipIf(!url)("upcoming reads refuse non-finite boundaries (isolated tes
 
       const feed = await listFeed(db, ["published", "cancelled"]);
       expect(feed.map((row) => row.eventKey)).toEqual([FINITE]);
-      const upcoming = await listUpcoming(db);
+      const { rows: upcoming, total } = await listUpcoming(db);
       expect(upcoming.map((row) => row.eventKey)).toEqual([FINITE]);
+      expect(total).toBe(1);
     } finally {
       await fixture.dispose();
     }

@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { URL as NodeURL } from "node:url";
 import { runInNewContext } from "node:vm";
 import { describe, expect, it } from "vitest";
+import { EVENTS_CALENDAR_READ_DEADLINE_MS } from "../src/islands/contracts-calendar";
 
 const binder = readFileSync(
   new NodeURL("../public/islands/events-calendar.js", import.meta.url),
@@ -78,7 +79,9 @@ function createZones(content: string) {
 
 // Execute the shipped binder in an isolated VM. Fetches deliberately ignore
 // abort so obsolete completions exercise ownership rather than transport luck.
-function browser() {
+// entry sets the address the island renders at: Back/forward tests start from
+// a search address so the popstate target differs from renderedAddress.
+function browser(entry = "/events") {
   const zones = createZones("last-good content");
   const content = zones[3]!;
   const skeleton = new Node();
@@ -106,7 +109,7 @@ function browser() {
     past: "",
     loadError: "Calendar unavailable. Try again.",
   };
-  const canonical = { href: APP_URL + "/events" };
+  const canonical = { href: APP_URL + entry };
   const og = { content: canonical.href };
   const history: string[] = [];
   const reloads: string[] = [];
@@ -121,16 +124,21 @@ function browser() {
     read: ReturnType<typeof deferred<Response>>;
   }[] = [];
   const pages = new Map<string, unknown>();
-  const timers = new Map<number, () => void>();
+  // Controlled timers: the search debounce (300ms) and the owned overall
+  // read deadline. Firing is explicit per kind so a debounce flush can never
+  // expire a pending read.
+  const READ_DEADLINE_MS = EVENTS_CALENDAR_READ_DEADLINE_MS;
+  const timers = new Map<number, { ms: number; callback: () => void }>();
   let nextTimer = 0;
+  let popstate: () => void = () => {};
   runInNewContext(
     binder,
     {
       URL,
       AbortController,
       setTimeout(callback: () => void, ms: number) {
-        expect(ms).toBe(300);
-        timers.set(++nextTimer, callback);
+        expect([300, READ_DEADLINE_MS]).toContain(ms);
+        timers.set(++nextTimer, { ms, callback });
         return nextTimer;
       },
       clearTimeout: (id: number) => timers.delete(id),
@@ -147,7 +155,9 @@ function browser() {
             location.href = APP_URL + url;
           },
         },
-        addEventListener() {},
+        addEventListener(_type: string, listener: () => void) {
+          popstate = listener;
+        },
       },
       DOMParser: class {
         parseFromString(html: string) {
@@ -173,6 +183,12 @@ function browser() {
     });
   }
 
+  // Back/forward: the browser commits the address before the island's fetch.
+  function back(path = "/events") {
+    location.href = APP_URL + path;
+    popstate();
+  }
+
   function typeSearch() {
     input.value = "chess";
     input.focus();
@@ -180,9 +196,20 @@ function browser() {
   }
 
   function fireSearch() {
-    const callbacks = [...timers.values()];
-    timers.clear();
-    callbacks.forEach((callback) => callback());
+    const due = [...timers.entries()].filter(([, t]) => t.ms === 300);
+    due.forEach(([id]) => timers.delete(id));
+    due.forEach(([, t]) => t.callback());
+  }
+
+  // Fire the next pending read deadline (insertion order). Returns false when
+  // no deadline is pending — a hung read without an armed deadline fails the
+  // test instead of hanging the suite.
+  function fireDeadline() {
+    const next = [...timers.entries()].find(([, t]) => t.ms === READ_DEADLINE_MS);
+    if (!next) return false;
+    timers.delete(next[0]);
+    next[1].callback();
+    return true;
   }
 
   function page(index: number) {
@@ -209,6 +236,13 @@ function browser() {
       );
   }
 
+  // Headers settle but the body never does: the owned deadline must still
+  // restore the last good view. Fetches ignore abort so the late body (if it
+  // ever settles) exercises ownership rather than transport luck.
+  function hangBody(index: number) {
+    requests[index]!.read.resolve({ ok: true, text: () => new Promise<string>(() => {}) });
+  }
+
   return {
     root,
     skeleton,
@@ -218,11 +252,18 @@ function browser() {
     history,
     reloads,
     requests,
+    canonical,
+    og,
+    location,
     navigate,
+    back,
     typeSearch,
     fireSearch,
+    fireDeadline,
     page,
     complete,
+    hangBody,
+    pendingDeadlines: () => [...timers.values()].filter((t) => t.ms === READ_DEADLINE_MS).length,
     start(action: Action) {
       if (action === "navigation") navigate();
       else {
@@ -344,4 +385,138 @@ describe("EventsCalendar loading belongs to the current action", () => {
       expect(b.content.childNodes).toEqual(["response-1"]);
     },
   );
+});
+
+describe("EventsCalendar owned read deadline", () => {
+  it("documents an overall read deadline of at most 10 seconds", () => {
+    expect(EVENTS_CALENDAR_READ_DEADLINE_MS).toBeLessThanOrEqual(10_000);
+    expect(EVENTS_CALENDAR_READ_DEADLINE_MS).toBeGreaterThan(0);
+  });
+
+  it("restores the last good view when hung headers never settle", async () => {
+    const b = browser();
+    const address = b.location.href;
+    const canonical = b.canonical.href;
+    b.navigate();
+    expectLoading(b, true);
+    expect(b.pendingDeadlines()).toBe(1);
+    // Headers never settle: only the owned deadline can release loading.
+    expect(b.fireDeadline()).toBe(true);
+    await settle();
+    expectLoading(b, false);
+    expect(b.content.childNodes).toEqual(["last-good content"]);
+    expect(b.feedback.textContent).toBe(b.root.dataset.loadError);
+    expect(b.history).toEqual([]);
+    expect(b.location.href).toBe(address);
+    expect(b.canonical.href).toBe(canonical);
+    expect(b.reloads).toEqual([]);
+  });
+
+  it("restores the last good view when the body never completes", async () => {
+    const b = browser();
+    b.navigate();
+    expectLoading(b, true);
+    b.hangBody(0);
+    await settle();
+    expectLoading(b, true);
+    expect(b.fireDeadline()).toBe(true);
+    await settle();
+    expectLoading(b, false);
+    expect(b.content.childNodes).toEqual(["last-good content"]);
+    expect(b.feedback.textContent).toBe(b.root.dataset.loadError);
+    expect(b.history).toEqual([]);
+  });
+
+  it("commits a timely response and disarms its deadline", async () => {
+    const b = browser();
+    b.navigate();
+    b.complete(0, "success");
+    await settle();
+    expectLoading(b, false);
+    expect(b.content.childNodes).toEqual(["response-0"]);
+    expect(b.feedback.textContent).toBe("");
+    expect(b.history).toEqual([b.requests[0]!.url]);
+    // The settled request no longer owns a deadline: firing is a no-op.
+    expect(b.fireDeadline()).toBe(false);
+    await settle();
+    expectLoading(b, false);
+    expect(b.content.childNodes).toEqual(["response-0"]);
+  });
+
+  it("keeps a superseded request's deadline silent under newer loading", async () => {
+    const b = browser();
+    b.navigate();
+    b.typeSearch();
+    b.fireSearch();
+    expect(b.requests).toHaveLength(2);
+    expectLoading(b, false); // Search is untargeted: no skeleton while pending.
+    // The obsolete navigation deadline fires first: it must stay silent and
+    // cannot clear the newer search owner's pending state.
+    expect(b.fireDeadline()).toBe(true);
+    await settle();
+    expect(b.feedback.textContent).toBe("");
+    expect(b.content.childNodes).toEqual(["last-good content"]);
+    expect(b.requests[1]!.signal.aborted).toBe(false);
+    // The current search still owns its deadline and can time out itself.
+    expect(b.fireDeadline()).toBe(true);
+    await settle();
+    expect(b.feedback.textContent).toBe(b.root.dataset.loadError);
+    expect(b.content.childNodes).toEqual(["last-good content"]);
+    expect(b.history).toEqual([]);
+  });
+
+  it("drops a late response after the owned timeout and lets a retry commit", async () => {
+    const b = browser();
+    b.navigate();
+    expect(b.fireDeadline()).toBe(true);
+    await settle();
+    expect(b.feedback.textContent).toBe(b.root.dataset.loadError);
+    // The timed-out fetch settles late (abort ignored): it stays silent and
+    // cannot commit its URL, zones or feedback.
+    b.complete(0, "success");
+    await settle();
+    expectLoading(b, false);
+    expect(b.content.childNodes).toEqual(["last-good content"]);
+    expect(b.feedback.textContent).toBe(b.root.dataset.loadError);
+    expect(b.history).toEqual([]);
+    // A new request after the timeout owns the zones again.
+    b.navigate("/events?view=calendar&month=2026-12");
+    expectLoading(b, true);
+    b.complete(1, "success");
+    await settle();
+    expectLoading(b, false);
+    expect(b.content.childNodes).toEqual(["response-1"]);
+    expect(b.history).toEqual([b.requests[1]!.url]);
+  });
+
+  it("reconciles the address when a Back/forward read hits the deadline", async () => {
+    const b = browser("/events?q=old");
+    b.back("/events");
+    expectLoading(b, true);
+    expect(b.fireDeadline()).toBe(true);
+    await settle();
+    expectLoading(b, false);
+    expect(b.content.childNodes).toEqual(["last-good content"]);
+    expect(b.feedback.textContent).toBe(b.root.dataset.loadError);
+    expect(b.reloads).toEqual([`${APP_URL}/events`]);
+  });
+
+  it("reconciles the address when a push supersedes a Back and then times out", async () => {
+    const b = browser("/events?q=old");
+    b.back("/events");
+    b.navigate();
+    expect(b.requests[0]!.signal.aborted).toBe(true);
+    // The superseded Back deadline fires first and stays silent; the push
+    // still owns its deadline and times out itself.
+    expect(b.fireDeadline()).toBe(true);
+    await settle();
+    expectLoading(b, true);
+    expect(b.fireDeadline()).toBe(true);
+    await settle();
+    expectLoading(b, false);
+    expect(b.content.childNodes).toEqual(["last-good content"]);
+    expect(b.feedback.textContent).toBe(b.root.dataset.loadError);
+    expect(b.history).toEqual([]);
+    expect(b.reloads).toEqual([`${APP_URL}/events`]);
+  });
 });

@@ -176,17 +176,201 @@ const rss = (...links) =>
     .map((link) => `<item><link>${link}</link></item>`)
     .join("")}</channel></rss>`;
 
-test("discovery is GET-only and reads the first published event from the RSS feed", async () => {
+// Regression: the staging-journeys job publishes transient fixtures
+// titled `Staging E2E ...` and cancels them in `finally`. One staging-quality
+// run discovered such a fixture live in /events.rss and Lighthouse
+// then measured a 410 (ERRORED_DOCUMENT_REQUEST, 0 runs). The
+// feed carries per-item titles, so discovery can isolate fixtures without any
+// extra request or any change to the 300-second RSS cache contract.
+const rssItem = (link, title) =>
+  `<item><title>${title}</title><link>${link}</link><guid isPermaLink="true">${link}</guid></item>`;
+
+const rssWithTitles = (...items) =>
+  `<?xml version="1.0"?><rss><channel><link>${APEX}/events</link>${items.join("")}</channel></rss>`;
+
+const FIXTURE_EVENT_PATH = "/e/01M4VZ3F94VQ8AS2PF3GJWHERC";
+
+test("discovery skips live staging fixtures by RSS title without requesting them", async () => {
   const { calls, fetchImpl } = stubFetch({
-    "/events.rss": { body: rss(`${APEX}${EVENT_PATH}`, `${APEX}/e/01JBBBBBBBBBBBBBBBBBBBBBBB`) },
+    "/events.rss": {
+      body: rssWithTitles(
+        rssItem(`${APEX}${FIXTURE_EVENT_PATH}`, "Staging E2E RSVP 1760317553000"),
+        rssItem(`${APEX}${EVENT_PATH}`, "Community game night"),
+      ),
+    },
+    // The fixture is still live here (200): the title filter must skip it
+    // before any liveness check, or the staging race reopens.
+    [FIXTURE_EVENT_PATH]: { body: "<h1>Staging E2E RSVP 1760317553000</h1>" },
+    [EVENT_PATH]: { body: "<h1>Community game night</h1>" },
   });
   assert.deepEqual(await lib.discoverEventPath(APEX, fetchImpl), {
     path: EVENT_PATH,
     source: "/events.rss",
   });
+  assert.ok(
+    calls.every((call) => !call.url.endsWith(FIXTURE_EVENT_PATH)),
+    "a staging fixture must never be requested, live or not",
+  );
+});
+
+test("discovery skips stale-cache 410 candidates and keeps real coverage", async () => {
+  const GONE_PATH = "/e/01JBBBBBBBBBBBBBBBBBBBBBBB";
+  const { fetchImpl } = stubFetch({
+    "/events.rss": { body: rss(`${APEX}${GONE_PATH}`, `${APEX}${EVENT_PATH}`) },
+    // Cancelled after the feed was cached: the route answers 410, as
+    // src/events/routes.tsx does for cancelled events.
+    [GONE_PATH]: { status: 410, body: "<h1>Old meetup</h1>" },
+    [EVENT_PATH]: { body: "<h1>Community game night</h1>" },
+  });
+  assert.deepEqual(await lib.discoverEventPath(APEX, fetchImpl), {
+    path: EVENT_PATH,
+    source: "/events.rss",
+  });
+});
+
+test("discovery skips 404 candidates and keeps real coverage", async () => {
+  const GONE_PATH = "/e/01JCCCCCCCCCCCCCCCCCCCCCCC";
+  const { fetchImpl } = stubFetch({
+    "/events.rss": { body: rss(`${APEX}${GONE_PATH}`, `${APEX}${EVENT_PATH}`) },
+    // Unknown after the feed was cached: the route answers 404.
+    [GONE_PATH]: { status: 404, body: "<h1>Missing meetup</h1>" },
+    [EVENT_PATH]: { body: "<h1>Community game night</h1>" },
+  });
+  assert.deepEqual(await lib.discoverEventPath(APEX, fetchImpl), {
+    path: EVENT_PATH,
+    source: "/events.rss",
+  });
+});
+
+test("discovery fails closed on unhealthy candidate statuses", async () => {
+  for (const status of [500, 429, 301]) {
+    const { fetchImpl } = stubFetch({
+      "/events.rss": { body: rss(`${APEX}${EVENT_PATH}`) },
+      [EVENT_PATH]: { status, body: "<h1>Community game night</h1>" },
+    });
+    await assert.rejects(
+      () => lib.discoverEventPath(APEX, fetchImpl),
+      new RegExp(`returned ${status}.*expected 200`),
+      `status ${status} must throw, never measure`,
+    );
+  }
+});
+
+test("discovery reports cancelled listings when only stale candidates remain", async () => {
+  const GONE_PATH = "/e/01JDDDDDDDDDDDDDDDDDDDDDDD";
+  const { calls, fetchImpl } = stubFetch({
+    "/events.rss": { body: rss(`${APEX}${GONE_PATH}`) },
+    [GONE_PATH]: { status: 410, body: "<h1>Old meetup</h1>" },
+    // The listing still links the same stale path: it must not be
+    // re-requested or counted twice.
+    "/events": { body: `<a href="${GONE_PATH}">Old meetup</a>` },
+  });
+  const skipped = await lib.discoverEventPath(APEX, fetchImpl);
+  assert.equal(skipped.path, null);
+  assert.match(skipped.reason, /no published event is listed/);
+  assert.match(skipped.reason, /1 cancelled\/stale listing\(s\)/);
+  assert.equal(
+    calls.filter((call) => call.url.endsWith(GONE_PATH)).length,
+    1,
+    "a stale candidate is verified once, never twice",
+  );
+});
+
+test("discovery skips when the feed lists only staging fixtures", async () => {
+  const { calls, fetchImpl } = stubFetch({
+    "/events.rss": {
+      body: rssWithTitles(
+        rssItem(`${APEX}${FIXTURE_EVENT_PATH}`, "Staging E2E RSVP 1760317553000"),
+      ),
+    },
+    "/events": { body: "<p>No events</p>" },
+  });
+  const skipped = await lib.discoverEventPath(APEX, fetchImpl);
+  assert.equal(skipped.path, null);
+  assert.match(skipped.reason, /no published event is listed/);
+  assert.match(skipped.reason, /staging fixture/);
+  assert.ok(
+    calls.every((call) => !call.url.endsWith(FIXTURE_EVENT_PATH)),
+    "a filtered fixture needs no verification request",
+  );
+});
+
+test("discovery never re-requests a title-filtered fixture in the /events fallback", async () => {
+  const { calls, fetchImpl } = stubFetch({
+    "/events.rss": {
+      body: rssWithTitles(
+        rssItem(`${APEX}${FIXTURE_EVENT_PATH}`, "Staging E2E RSVP 1760317553000"),
+      ),
+    },
+    // The listing links the same fixture path, as the calendar card renders.
+    // It is already rejected by title, so the fallback must skip it unseen.
+    "/events": { body: `<a href="${FIXTURE_EVENT_PATH}">Staging E2E RSVP</a>` },
+    [FIXTURE_EVENT_PATH]: {
+      body: '<h1 data-waitlist-position="">Staging E2E RSVP 1760317553000</h1>',
+    },
+  });
+  const skipped = await lib.discoverEventPath(APEX, fetchImpl);
+  assert.equal(skipped.path, null);
+  assert.match(skipped.reason, /1 staging fixture\(s\)/);
+  assert.equal(
+    calls.filter((call) => call.url.endsWith(FIXTURE_EVENT_PATH)).length,
+    0,
+    "a title-filtered fixture must never be requested, in either pass",
+  );
+  assert.deepEqual(
+    calls.map((call) => new URL(call.url).pathname),
+    ["/events.rss", "/events"],
+  );
+});
+
+test("discovery still filters an /events-only fixture by page content", async () => {
+  const { calls, fetchImpl } = stubFetch({
+    "/events.rss": { body: rss() },
+    "/events": { body: `<a href="${FIXTURE_EVENT_PATH}">Staging E2E RSVP</a>` },
+    [FIXTURE_EVENT_PATH]: {
+      body: '<h1 data-waitlist-position="">Staging E2E RSVP 1760317553000</h1>',
+    },
+  });
+  const skipped = await lib.discoverEventPath(APEX, fetchImpl);
+  assert.equal(skipped.path, null);
+  assert.match(skipped.reason, /1 staging fixture\(s\)/);
+  assert.equal(
+    calls.filter((call) => call.url.endsWith(FIXTURE_EVENT_PATH)).length,
+    1,
+    "an /events-only fixture is verified once, then skipped by its heading",
+  );
+});
+
+test("a measured event route with no completed run still fails closed", async () => {
+  const rows = lib.summarizeRoutes({
+    origin: APEX,
+    eventPath: EVENT_PATH,
+    lhrs: [lhr("/", [1000, 0, 100, 10, 800])],
+    assertions: [],
+  });
+  const event = rows.find((row) => row.path === EVENT_PATH);
+  assert.equal(event.verdict, "fail");
+  assert.equal(event.runs, 0);
+  assert.match(event.note, /no Lighthouse run completed/);
+});
+
+test("discovery is GET-only and reads the first published event from the RSS feed", async () => {
+  const { calls, fetchImpl } = stubFetch({
+    "/events.rss": { body: rss(`${APEX}${EVENT_PATH}`, `${APEX}/e/01JBBBBBBBBBBBBBBBBBBBBBBB`) },
+    [EVENT_PATH]: { body: "<h1>Community game night</h1>" },
+  });
+  assert.deepEqual(await lib.discoverEventPath(APEX, fetchImpl), {
+    path: EVENT_PATH,
+    source: "/events.rss",
+  });
+  // The first stable candidate is verified live before selection,
+  // so a feed entry cached before a cancel is never measured.
   assert.deepEqual(
     calls.map((call) => [call.init.method, call.url, call.init.body, call.init.redirect]),
-    [["GET", `${APEX}/events.rss`, undefined, "manual"]],
+    [
+      ["GET", `${APEX}/events.rss`, undefined, "manual"],
+      ["GET", `${APEX}${EVENT_PATH}`, undefined, "manual"],
+    ],
   );
 });
 
@@ -196,6 +380,7 @@ test("discovery falls back to the /events list, then reports a skip with its rea
     "/events": {
       body: `<a href="/e/seed-calendar-07">Seed</a><a href="/e/${EVENT_PATH.slice(3)}">x</a>`,
     },
+    "/e/seed-calendar-07": { body: "<h1>Seed demo night</h1>" },
   });
   assert.deepEqual(await lib.discoverEventPath(STAGING, listed.fetchImpl), {
     path: "/e/seed-calendar-07",
@@ -223,6 +408,7 @@ test("discovery ignores links that are not event pages and never leaves the orig
         `https://elsewhere.example${EVENT_PATH}`,
       ),
     },
+    [EVENT_PATH]: { body: "<h1>Community game night</h1>" },
   });
   // Only the pathname is kept: the host of a feed link is never visited.
   assert.deepEqual(await lib.discoverEventPath(STAGING, fetchImpl), {
@@ -297,6 +483,9 @@ test("per-route verdicts: pass, warn, fail, missing run and skipped event", () =
     "/events": "fail",
     "/join": "warn",
     "/about": "fail",
+    "/faq": "pass",
+    "/rules": "pass",
+    "/privacy": "pass",
     "/e/<key>": "skipped",
   });
   assert.equal(rows.find((row) => row.path === "/").medians["largest-contentful-paint"], 1100);
@@ -396,7 +585,10 @@ test("a skipped event route is recorded in the output and the run still measures
 
 test("failures are never a pass: a budget error, a crashed run and a dead origin all exit 1", async () => {
   await withDir(async (dir) => {
-    const { fetchImpl } = stubFetch({ "/events.rss": { body: rss(`${APEX}${EVENT_PATH}`) } });
+    const { fetchImpl } = stubFetch({
+      "/events.rss": { body: rss(`${APEX}${EVENT_PATH}`) },
+      [EVENT_PATH]: { body: "<h1>Community game night</h1>" },
+    });
     const crashed = await main([APEX], { fetchImpl, lhci: async () => 1, dir, log: () => {} });
     assert.equal(crashed, 1, "lhci exit code is propagated");
     const noRuns = await main([APEX], { fetchImpl, lhci: async () => 0, dir, log: () => {} });

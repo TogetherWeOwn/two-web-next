@@ -12,6 +12,7 @@ const binder = readFileSync(
   new NodeURL("../public/islands/rsvp-button.js", import.meta.url),
   "utf8",
 );
+let focusSink: ((target: Node) => void) | null = null;
 class Node {
   children: Node[] = [];
   parentNode: Node | null = null;
@@ -59,6 +60,11 @@ class Node {
   }
   focus() {
     this.focused = true;
+    focusSink?.(this);
+  }
+  contains(node: Node | null): boolean {
+    for (let n = node; n; n = n.parentNode) if (n === this) return true;
+    return false;
   }
   addEventListener(type: string, fn: (e: { preventDefault: () => void }) => void) {
     this.listeners.set(type, fn);
@@ -191,9 +197,20 @@ function browser(
   }[] = [];
   const broadcasts: { type: string; detail: unknown }[] = [];
   let reloads = 0;
-  const timers: (() => void)[] = [];
-  const runTimers = () => timers.splice(0).forEach((callback) => callback());
-  const listeners = new Map<string, (event: { type: string; detail: unknown }) => void>();
+  const timers: { callback: () => void; delay: number; cancelled: boolean }[] = [];
+  const runTimers = (delay?: number) => {
+    const due = timers.filter((timer) => delay === undefined || timer.delay === delay);
+    due.forEach((timer) => {
+      timers.splice(timers.indexOf(timer), 1);
+      if (!timer.cancelled) timer.callback();
+    });
+  };
+  const listeners = new Map<
+    string,
+    (event: { type: string; detail: unknown; target?: Node }) => void
+  >();
+  const notifyDocument = (type: string, target: Node) =>
+    listeners.get(type)?.({ type, detail: undefined, target });
   const context = {
     document: {
       querySelector: (selector: string) => page.querySelector(selector),
@@ -228,8 +245,18 @@ function browser(
     },
     fetch: (url: string, init: RequestInit) =>
       new Promise<Response>((resolve, reject) => requests.push({ url, init, resolve, reject })),
-    setTimeout: (callback: () => void) => timers.push(callback),
+    setTimeout: (callback: () => void, delay = 0) => {
+      const timer = { callback, delay, cancelled: false };
+      timers.push(timer);
+      return timer;
+    },
+    clearTimeout: (timer: { cancelled: boolean }) => {
+      timer.cancelled = true;
+      const index = timers.indexOf(timer as (typeof timers)[number]);
+      if (index !== -1) timers.splice(index, 1);
+    },
   };
+  focusSink = (target) => notifyDocument("focusin", target);
   if (integrated)
     runInNewContext(
       readFileSync(new NodeURL("../public/islands/going-count.js", import.meta.url), "utf8"),
@@ -248,7 +275,7 @@ function browser(
     );
   const settle = async (flushTimers = true) => {
     await new Promise((resolve) => setImmediate(resolve));
-    if (flushTimers) runTimers();
+    if (flushTimers) runTimers(0);
   };
   const emit = (type: string, detail: unknown) => context.document.dispatchEvent({ type, detail });
   return {
@@ -263,6 +290,7 @@ function browser(
     timers,
     runTimers,
     emit,
+    pointerDown: (target: Node) => notifyDocument("pointerdown", target),
     reloads: () => reloads,
   };
 }
@@ -459,6 +487,97 @@ describe("RsvpButton shipped binder", () => {
     expect(b.get("rsvp-confirmed")).toBeNull();
     expect(b.broadcasts).toHaveLength(0);
     expect(b.requests).toHaveLength(1);
+  });
+
+  it("keeps focus on a field the member moved to while a going write is pending", async () => {
+    const b = browser();
+    const field = new Node();
+    b.page.appendChild(field);
+    b.get("rsvp-going")!.click();
+    field.focus();
+    b.finish(0, 201);
+    await b.settle();
+    expect(b.get("rsvp-confirmed")?.textContent).toBe("✓ You're in");
+    expect(b.get("rsvp-confirmed")?.focused).toBe(false);
+    expect(b.get("rsvp-syncing")?.getAttribute("role")).toBe("status");
+    expect(field.focused).toBe(true);
+  });
+
+  it("keeps focus off the confirmation after a pointer press outside the widget", async () => {
+    const b = browser();
+    const elsewhere = new Node();
+    b.page.appendChild(elsewhere);
+    b.get("rsvp-going")!.click();
+    b.pointerDown(elsewhere);
+    b.finish(0, 201);
+    await b.settle();
+    expect(b.get("rsvp-confirmed")?.textContent).toBe("✓ You're in");
+    expect(b.get("rsvp-confirmed")?.focused).toBe(false);
+  });
+
+  it("keeps focus on a field the member moved to when the join is waitlisted", async () => {
+    const b = browser();
+    const field = new Node();
+    b.page.appendChild(field);
+    b.get("rsvp-going")!.click();
+    field.focus();
+    b.finish(0, 200, { data: { status: "waitlisted", waitlist_position: 3 } });
+    await b.settle();
+    expect(b.get("waitlist-position")?.textContent).toBe("You're on the waitlist — #3 in line");
+    expect(b.get("waitlist-position")?.focused).toBe(false);
+    expect(field.focused).toBe(true);
+  });
+
+  it("keeps focus on a field the member moved to when a withdrawal settles", async () => {
+    const b = browser("going");
+    const field = new Node();
+    b.page.appendChild(field);
+    b.get("rsvp-withdraw")!.click();
+    field.focus();
+    b.finish(0, 204);
+    await b.settle();
+    expect(b.get("rsvp-going")).not.toBeNull();
+    expect(b.get("rsvp-going")?.focused).toBe(false);
+    expect(field.focused).toBe(true);
+  });
+
+  it("keeps focus on a field the member moved to when a claim conflict settles", async () => {
+    const b = browser("waitlisted");
+    const field = new Node();
+    b.page.appendChild(field);
+    const position = b.get("waitlist-position")!;
+    b.get("waitlist-claim")!.click();
+    field.focus();
+    b.finish(0, 409, { capacity: 4 });
+    await b.settle();
+    expect(b.root.getAttribute("data-full")).toBe("true");
+    expect(position.focused).toBe(false);
+    expect(field.focused).toBe(true);
+  });
+
+  it("does not revive focus ownership when the member moves back into the widget", async () => {
+    const b = browser();
+    const field = new Node();
+    b.page.appendChild(field);
+    const form = b.root.querySelector("[data-rsvp-form]")!;
+    b.get("rsvp-going")!.click();
+    field.focus();
+    form.focus();
+    b.finish(0, 201);
+    await b.settle();
+    expect(b.get("rsvp-confirmed")).not.toBeNull();
+    expect(b.get("rsvp-confirmed")?.focused).toBe(false);
+    expect(form.focused).toBe(true);
+  });
+
+  it("keeps the outcome focus when the member presses inside the widget", async () => {
+    const b = browser();
+    const going = b.get("rsvp-going")!;
+    going.click();
+    b.pointerDown(going);
+    b.finish(0, 201);
+    await b.settle();
+    expect(b.get("rsvp-confirmed")?.focused).toBe(true);
   });
 
   it("mounts an empty polite claim-loss region before updating it in a later task", async () => {
@@ -879,6 +998,117 @@ describe("RsvpButton shipped binder", () => {
     expect(b.get("waitlist-position")).toBeNull();
   });
 
+  it("a paused holder leave keeps the polite paused status, raises no alert and moves no focus", async () => {
+    const b = browser("waitlisted", undefined, false, { rsvpOpen: false });
+    expect(b.get("rsvp-paused")?.getAttribute("role")).toBe("status");
+    b.get("waitlist-leave")!.click();
+    b.finish(0, 204);
+    await b.settle();
+    expect(b.root.querySelectorAll("[data-action]")).toHaveLength(0);
+    expect(b.get("waitlist-position")).toBeNull();
+    expect(b.get("rsvp-paused")?.getAttribute("role")).toBe("status");
+    expect(b.root.querySelectorAll('[role="alert"]')).toHaveLength(0);
+    expect(b.get("rsvp-failed")).toBeNull();
+    expect(b.get("rsvp-unknown")).toBeNull();
+    expect(b.get("rsvp-paused")?.focused).toBe(false);
+  });
+
+  it("a paused-closed refusal reloads into fresh SSR without an alert or focus move", async () => {
+    const b = browser();
+    const button = b.get("rsvp-going")!;
+    button.click();
+    // The event paused (or ended, or was cancelled) while the page was open:
+    // the binder reloads into the fresh SSR instead of announcing a refusal.
+    b.finish(0, 403, { error: "rsvp_closed" });
+    await b.settle();
+    expect(b.reloads()).toBe(1);
+    expect(b.root.querySelectorAll('[role="alert"]')).toHaveLength(0);
+    expect(b.get("rsvp-failed")).toBeNull();
+    expect(b.get("rsvp-unknown")).toBeNull();
+    expect(b.root.getAttribute("aria-busy")).toBeNull();
+  });
+
+  it.each(["headers", "acknowledgement body"] as const)(
+    "shows truthful recovery after the bounded %s deadline and ignores late completion",
+    async (pendingPart) => {
+      const b = browser();
+      const button = b.get("rsvp-going")!;
+      button.click();
+      expect(b.timers.map((timer) => timer.delay)).toContain(8000);
+      let resolveBody: ((body: unknown) => void) | undefined;
+      if (pendingPart === "acknowledgement body")
+        b.requests[0]!.resolve({
+          ok: true,
+          status: 201,
+          json: () => new Promise<unknown>((resolve) => (resolveBody = resolve)),
+        } as Response);
+      await b.settle(false);
+      b.emit("going-count-refreshed", { eventKey: "raid/one", goingCount: 4, capacity: 4 });
+      b.runTimers(8000);
+      expect(b.get(RSVP_UNKNOWN_TESTID)?.getAttribute("role")).toBe("alert");
+      expect(b.get(RSVP_REFRESH_TESTID)?.href).toBe("/e/raid%2Fone");
+      expect(b.root.getAttribute("data-outcome-unknown")).toBe("true");
+      expect(b.root.getAttribute("aria-busy")).toBeNull();
+      expect(b.get("rsvp-failed")).toBeNull();
+      expect(b.get("rsvp-confirmed")).toBeNull();
+      expect(b.get("rsvp-syncing")).toBeNull();
+      expect(b.root.querySelectorAll("[data-action]").every((control) => control.disabled)).toBe(
+        true,
+      );
+      button.click();
+      b.root.querySelector("[data-rsvp-form]")!.listeners.get("submit")!({ preventDefault() {} });
+      expect(b.requests).toHaveLength(1);
+
+      if (pendingPart === "headers") b.finish(0, 201);
+      else resolveBody!({ data: { status: "going", synced_to_discord_at: null } });
+      await b.settle();
+      b.emit("going-count-refreshed", { eventKey: "raid/one", goingCount: 0, capacity: 4 });
+      expect(b.get(RSVP_UNKNOWN_TESTID)).not.toBeNull();
+      expect(b.get("rsvp-confirmed")).toBeNull();
+      expect(b.get("rsvp-syncing")).toBeNull();
+      expect(b.get("rsvp-going")?.disabled).toBe(true);
+      expect(b.root.getAttribute("data-full")).toBe("false");
+      expect(b.root.getAttribute("data-capacity")).toBe("4");
+      expect(b.broadcasts.filter((event) => event.type === "going-count-updated")).toHaveLength(0);
+      expect(b.requests).toHaveLength(1);
+    },
+  );
+
+  it.each([403, 409])(
+    "keeps timeout recovery when a %i refusal body settles late",
+    async (status) => {
+      const b = browser();
+      let resolveBody!: (body: unknown) => void;
+      b.get("rsvp-going")!.click();
+      b.requests[0]!.resolve({
+        ok: false,
+        status,
+        json: () => new Promise<unknown>((resolve) => (resolveBody = resolve)),
+      } as Response);
+      await b.settle(false);
+      b.runTimers(8000);
+      expect(b.get(RSVP_UNKNOWN_TESTID)).not.toBeNull();
+      resolveBody(status === 403 ? { error: "rsvp_closed" } : { capacity: 9 });
+      await b.settle();
+      expect(b.get(RSVP_UNKNOWN_TESTID)).not.toBeNull();
+      expect(b.reloads()).toBe(0);
+      expect(b.get("event-full")).toBeNull();
+      expect(b.get("rsvp-going")?.disabled).toBe(true);
+      expect(b.root.getAttribute("data-capacity")).toBe("4");
+      expect(b.requests).toHaveLength(1);
+    },
+  );
+
+  it("clears the feedback deadline after a timely success", async () => {
+    const b = browser();
+    b.get("rsvp-going")!.click();
+    b.finish(0, 201);
+    await b.settle(false);
+    expect(b.get("rsvp-confirmed")).not.toBeNull();
+    expect(b.timers).toHaveLength(0);
+    expect(b.broadcasts).toHaveLength(1);
+  });
+
   it("keeps every conflicting control disabled through response-body parsing", async () => {
     const b = browser("waitlisted");
     let resolveBody!: (body: unknown) => void;
@@ -1134,5 +1364,26 @@ describe("RsvpButton shipped binder", () => {
     // A one-shot status announcement after a click is not load-time polling.
     expect(b.timers).toHaveLength(0);
     expect(binder).not.toMatch(/setInterval|window\.confirm|website/);
+  });
+
+  it("keeps focus on a field the member moved to when a going request hits a full event", async () => {
+    const b = browser();
+    const field = new Node();
+    b.page.appendChild(field);
+    b.get("rsvp-going")!.click();
+    field.focus();
+    b.finish(0, 409, { capacity: 4 });
+    await b.settle();
+    expect(b.get("event-full")?.textContent).toBe("This one's full. Cap is 4.");
+    expect(b.get("event-full")?.focused).toBe(false);
+    expect(field.focused).toBe(true);
+  });
+
+  it("moves focus to the full message when a going request hits a full event uninterrupted", async () => {
+    const b = browser();
+    b.get("rsvp-going")!.click();
+    b.finish(0, 409, { capacity: 4 });
+    await b.settle();
+    expect(b.get("event-full")?.focused).toBe(true);
   });
 });

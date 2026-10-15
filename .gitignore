@@ -10,7 +10,12 @@ e2e/.dev.vars
 e2e/staging/.auth/
 playwright-report/
 test-results/
+playwright-report-visual/
+test-results-visual/
+playwright-report-kit-parity/
+test-results-kit-parity/
 artifacts/
 .lighthouseci/
 dist-tail/
+dist-tail-production/
 __pycache__/

@@ -29,9 +29,9 @@ the separately approved operator procedure.
 | --- | --- | --- |
 | R readiness | `GET /up` on the apex | 200, `db: "ok"`, `pending_migrations: 0`, no `config` key, `X-TWO-Origin: two-web-next`, `Cache-Control: no-store` |
 | S static DB-free | `GET /`, `/about`, `/faq`, `/rules`, `/privacy`, `/robots.txt`, `/join` (GET), `GET /discord` (302 invite), `POST /csp-reports` (204) | Stay 200/302/204 during a database outage; never 5xx for a DB reason |
-| G guest reads (DB-backed) | `GET /events`, `/events/past`, `/events.rss`, `/events.ics`, `/events/:key.ics`, `/e/:key`, `/sitemap_index.xml` event lookups | 200 guest HTML/RSS/iCal; uncaught DB failure is 500 HTML; missing event store is 503 |
-| M member writes | OAuth callback, join callback, `PUT/DELETE /events/:key/rsvp`, profile read/save, `POST/PATCH /events*` | Auth gates 401/403 first; session/transaction failure 500; missing store 503; post-commit enqueue failure keeps the 2xx |
-| A privileged | Implemented `/admin/*`, `POST /api/agent-events` | Session resolution failure 503; later resource failure 500; guest 302, non-moderator 403; ingress disabled 404, no source 503 |
+| G guest reads (DB-backed) | `GET /events`, `/events/past`, `/events.rss`, `/events.ics`, `/events/:key.ics`, `/e/:key`, `/sitemap_index.xml` event lookups | Event list/feed routes return 200 guest HTML/RSS/iCal when available; missing event DB returns plain-text 503. Classified DB outages use the shared sanitized 503. Other failures use 500 HTML on list/feed routes; `/e/:key` refuses failed reads with plain-text 503. |
+| M member writes | OAuth callback, join callback, `PUT/DELETE /events/:key/rsvp`, profile read/save, `POST/PATCH /events*` | Auth gates 401/403 first; classified DB outage and profile read failure 503; other session, transaction or save failure 500; missing store 503; post-commit enqueue failure keeps the 2xx |
+| A privileged | Implemented `/admin/*`, `POST /api/agent-events` | Session resolution, admin reads, missing resource DB and classified DB outage 503; other uncaught admin-write failure 500 HTML; guest 302, non-moderator 403; agent-events ingress disabled 404, no source 503, service failure 500 JSON |
 | Q async | `two-sync-event`, `two-internal-action` ledger + transport | `pending < 20` healthy; `pending >= 20` degraded; ledger unreadable is `unknown` |
 
 Retired diagnostics (`/health`, `/healthz`, `/db-ping`) stay 404 and never
@@ -48,7 +48,7 @@ Conventions used below: `p95` is the 95th percentile of `duration_ms` in the
 5xx responses divided by all dispatched responses for the class over the
 window. `pending`, `oldest_pending_age_seconds` and `failed` are the `/up`
 queue envelope fields (`warn_at: 20`, `critical_at: 100` reported from
-`src/up.ts`; the code has no separate critical status).
+`src/up-queue.ts`; the code has no separate critical status).
 
 ### Availability and 5xx rate
 

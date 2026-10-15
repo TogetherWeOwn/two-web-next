@@ -1,0 +1,79 @@
+name: zap-staging
+
+# OWASP ZAP baseline (passive) scan of the STAGING Worker (docs/zap-baseline.md).
+# Called by e2e-staging.yml after every successful staging deploy, so a High
+# alert (or Medium/Low above ci/zap-budget.json) fails that run and blocks
+# promotion to production (ci/resolve-promotion-sha.mjs and
+# ci/production-deploy-gate.mjs require a successful e2e-staging run). Also runs
+# nightly for drift. Passive rules only, spider capped at 3 minutes, staging
+# only: the target guard refuses any other host. A lone PII Disclosure (10062)
+# High is re-scanned once before failing: ZAP's Luhn heuristic is prone to
+# false positives on synthetic numbers and the 3-minute spider covers a varying
+# URL subset per run, so a transient single 10062 that vanishes on re-scan is a
+# flake. Any other High, any budget breach, or a repeated 10062 still fails.
+# Public repo: standard GitHub-hosted runners; the job summary lists alert names
+# and counts only and the full report is never uploaded (artifacts are public
+# here).
+
+on:
+  workflow_call:
+  schedule:
+    - cron: '41 3 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: zap-staging-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  zap-baseline:
+    name: zap-baseline
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      TARGET: https://next.togetherweown.com
+      # ghcr.io/zaproxy/zaproxy:stable, pinned by digest.
+      ZAP_IMAGE: ghcr.io/zaproxy/zaproxy@sha256:7aaa659b0d43078febd82e29bad112285c370727e86ab8340444220e17d9f0d2
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+      - name: Staging-only target guard
+        run: |
+          set -euo pipefail
+          [ "$TARGET" = "https://next.togetherweown.com" ] || { echo "refusing non-staging target"; exit 1; }
+      - name: ZAP baseline (passive)
+        run: |
+          set -uo pipefail
+          mkdir -p "$RUNNER_TEMP/zap" && chmod 777 "$RUNNER_TEMP/zap"
+          # -I: warnings never set the exit code; ci/zap-gate.mjs decides. -m 3: spider minutes.
+          docker run --rm -v "$RUNNER_TEMP/zap:/zap/wrk:rw" "$ZAP_IMAGE" \
+            zap-baseline.py -t "$TARGET" -J zap-report.json -I -m 3 >/dev/null 2>&1
+          rc=$?
+          # 0 = no FAIL rules; 3 = scan error (no trustworthy report).
+          if [ "$rc" -ne 0 ] && [ "$rc" -ne 2 ]; then echo "zap-baseline.py exited $rc"; exit 1; fi
+          test -s "$RUNNER_TEMP/zap/zap-report.json"
+      - name: Gate (High never; Medium/Low within ci/zap-budget.json)
+        run: |
+          set -uo pipefail
+          if node ci/zap-gate.mjs "$RUNNER_TEMP/zap/zap-report.json" ci/zap-budget.json 2>&1 | tee "$RUNNER_TEMP/zap/gate.md"; test "${PIPESTATUS[0]}" -eq 0; then exit 0; fi
+          if node ci/zap-retry-decision.mjs "$RUNNER_TEMP/zap/gate.md"; then
+            echo "::warning::Lone PII Disclosure (10062) High looks transient; re-scanning once."
+            # Brief pause lets per-minute throttle buckets decay before the re-scan.
+            sleep 30
+            mkdir -p "$RUNNER_TEMP/zap" && chmod 777 "$RUNNER_TEMP/zap"
+            docker run --rm -v "$RUNNER_TEMP/zap:/zap/wrk:rw" "$ZAP_IMAGE" \
+              zap-baseline.py -t "$TARGET" -J zap-report.json -I -m 3 >/dev/null 2>&1
+            rc=$?
+            if [ "$rc" -ne 0 ] && [ "$rc" -ne 2 ]; then echo "zap-baseline.py exited $rc"; exit 1; fi
+            test -s "$RUNNER_TEMP/zap/zap-report.json"
+            node ci/zap-gate.mjs "$RUNNER_TEMP/zap/zap-report.json" ci/zap-budget.json
+          else
+            exit 1
+          fi

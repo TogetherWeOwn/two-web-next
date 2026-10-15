@@ -44,18 +44,19 @@ jobs:
         env:
           MIGRATION_TARGET: ${{ inputs.target }}
           PRODUCTION_DEPLOY_ENABLED: ${{ vars.PRODUCTION_DEPLOY_ENABLED }}
+          STAGING_MIGRATION_HOLD: ${{ vars.STAGING_MIGRATION_HOLD }}
         run: |
           set -euo pipefail
           [[ "$GITHUB_REF" == refs/heads/main ]] || { printf '%s\n' 'Migrations require main.' >&2; exit 1; }
           case "$MIGRATION_TARGET" in
-            staging) ;;
+            staging) [[ "${STAGING_MIGRATION_HOLD:-}" == false ]] || { printf '%s\n' 'Staging migrations are held (STAGING_MIGRATION_HOLD is not exactly "false").' >&2; exit 1; } ;;
             production) [[ "$PRODUCTION_DEPLOY_ENABLED" == true ]] || { printf '%s\n' 'Production migrations are disabled.' >&2; exit 1; } ;;
             *) printf '%s\n' 'Unknown migration target.' >&2; exit 1 ;;
           esac
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24
           cache: npm
@@ -84,6 +85,7 @@ jobs:
         env: &migration-env
           MIGRATION_TARGET: ${{ inputs.target }}
           PRODUCTION_DEPLOY_ENABLED: ${{ vars.PRODUCTION_DEPLOY_ENABLED }}
+          STAGING_MIGRATION_HOLD: ${{ vars.STAGING_MIGRATION_HOLD }}
           # Provision ONLY as secrets on the matching GitHub Environment.
           # The unselected target is not exposed to the process. No DATABASE_URL fallback.
           NEON_STAGING_DATABASE_URL: ${{ inputs.target == 'staging' && secrets.NEON_STAGING_DATABASE_URL || '' }}

@@ -13,7 +13,11 @@
 // - POST /admin/events/:key/cancel   draft|published → cancelled
 // - GET  /admin/join-attempts        read-only join audit viewer (W12 M8)
 // - GET  /admin/join-attempts/:id    read-only attempt detail
+// - GET  /admin/activity-log         read-only activity-log viewer (R11)
 // - GET  /admin/queue/failed/:id/preview  one-row advice only
+// - GET  /admin/queue/source-evidence/:id  evidence-only source/cache proof (no session, no audit write)
+// - POST /admin/queue/failed/:id/redispatch  one-row guarded re-dispatch
+//   (replay advice only; refusals and stale rows are never deleted here)
 // - GET  /admin/featured             list, position order
 // - GET  /admin/featured/new         create form
 // - POST /admin/featured             create
@@ -30,11 +34,16 @@ import { requestBodyLimit } from "../body-limit";
 import { Hono } from "hono";
 import type { Context } from "hono";
 import { queuePreviewAdmission, queuePreviewHandler, type QueuePreviewVars } from "./queue-preview";
+import { queueRedispatchHandler } from "./queue-redispatch";
+import { sourceEvidenceHandler, sourceEvidenceMethodRefused } from "./source-evidence";
 import { dbFor, type EnvWithAdminDb } from "./db";
 import { bufferedMemberHtml, bufferedMemberText } from "../member-reads";
 import { EVENT_PAGE_SIZE, parseEventListQuery } from "./event-list";
 import {
+  ACTIVITY_LOG_PAGE_SIZE,
+  FEATURED_PAGE_SIZE,
   JOIN_ATTEMPT_PAGE_SIZE,
+  parseActivityLogQuery,
   parseFeaturedListQuery,
   parseJoinAttemptsQuery,
   parseRosterQuery,
@@ -63,12 +72,13 @@ import { JOIN_OUTCOMES } from "../join/service";
 import { databaseUrl } from "../db/connection";
 import { isDatabaseUnavailable } from "../db/errors";
 import { dashboardJoinFunnel, FUNNEL_READ_DEADLINE_MS } from "./join-funnel";
-import { getJoinAttempt, listJoinAttempts, listRoster } from "./reads";
+import { getJoinAttempt, listActivityLog, listJoinAttempts, listRoster } from "./reads";
 import { parseRecordId } from "./record-id";
 import { parseRecurrenceForm } from "./recurrence";
 import { parseEventForm, parseFeaturedForm, utcToWall, ValidationError } from "./validation";
 import { dispatchWriteBack } from "./writeback";
 import {
+  ActivityLogPage,
   AdminDashboard,
   ErrorPage,
   EventFormPage,
@@ -89,6 +99,16 @@ function formData(body: Record<string, string | File>): Record<string, unknown> 
     if (typeof v === "string") out[k] = v;
   }
   return out;
+}
+
+// A malformed multipart body rejects the parse: answer 400 instead of throwing
+// into the alerting 500 path. Null means the caller must refuse the write.
+async function parsedForm(c: Context<Vars>): Promise<Record<string, unknown> | null> {
+  try {
+    return formData(await c.req.parseBody());
+  } catch {
+    return null;
+  }
 }
 
 function declareAccess(c: Context<Vars>, decl: AccessDecl): void {
@@ -140,9 +160,38 @@ function formError(
  */
 export function adminApp(overrides?: AdminOverrides | SessionStore) {
   const admin = new Hono<Vars>();
+  // Evidence-only source/cache verifier: session-free by construction.
+  // Registered before every admin middleware (Hono composes in registration
+  // order and these handlers answer without next()), so no session lookup,
+  // guard, or preview admission runs for this path. The bearer/incident/
+  // one-hour-window admission lives in the GET handler; write verbs are refused on the
+  // same path so the method contract never depends on sibling flags. The
+  // route is inert without the runtime-only settings.
+  admin.get("/queue/source-evidence/:id", sourceEvidenceHandler);
+  // HEAD keeps standard GET-without-body semantics; it is safe here because
+  // the handler has no side effects (read-only snapshot, no audit write).
+  admin.on(
+    ["POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    "/queue/source-evidence/:id",
+    // Same wire cap as every other admin write: oversized attempts refuse
+    // before parsing, and the refusal itself never parses a payload.
+    requestBodyLimit("action"),
+    sourceEvidenceMethodRefused,
+  );
   admin.use("/queue/*", queuePreviewAdmission);
   admin.use("/*", adminGuard(overrides));
   admin.get("/queue/failed/:id/preview", queuePreviewHandler);
+  // Same write envelope as every other admin POST: throttle admits before
+  // buffering (oversized attempts count against the bucket), the wire cap
+  // refuses before parsing, and the handler itself never parses a payload
+  // (dispatch always starts from the reconciled source). Only the dedicated
+  // staging operator principal can reach the handler.
+  admin.post(
+    "/queue/failed/:id/redispatch",
+    throttle("admin-write", WRITE_THROTTLE_PER_MINUTE),
+    requestBodyLimit("action"),
+    queueRedispatchHandler,
+  );
 
   // Legacy Filament bookmarks: guard first, no query forwarding.
   // Only the featured edit alias needs a resource read to resolve the imported ID.
@@ -253,6 +302,27 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
     return bufferedMemberHtml(c, <JoinAttemptPage row={result.attempt} />);
   });
 
+  admin.get("/activity-log", async (c) => {
+    declareAccess(c, {
+      resource: "activity_log",
+      action: "list",
+      route: "admin.activity-log.index",
+    });
+    const db = await dbOr503(c);
+    if (!db) return bufferedMemberText(c, "Admin temporarily unavailable", 503);
+    const query = parseActivityLogQuery(c.req.query());
+    const fetched = await listActivityLog(db, query);
+    const rows = fetched.slice(0, ACTIVITY_LOG_PAGE_SIZE);
+    return bufferedMemberHtml(
+      c,
+      <ActivityLogPage
+        rows={rows}
+        query={query}
+        hasNext={fetched.length > ACTIVITY_LOG_PAGE_SIZE}
+      />,
+    );
+  });
+
   admin.get("/events", async (c) => {
     declareAccess(c, { resource: "events", action: "list", route: "admin.events.index" });
     const db = await dbOr503(c);
@@ -279,7 +349,8 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
     async (c) => {
       const db = await dbOr503(c);
       if (!db) return c.text("Admin temporarily unavailable", 503);
-      const values = formData(await c.req.parseBody());
+      const values = await parsedForm(c);
+      if (!values) return c.text("Bad request", 400);
       let input;
       let recurrence;
       try {
@@ -322,7 +393,7 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
     const row = await getEvent(db, c.req.param("key"));
     if (!row) return errorPage(c, 404, "Event not found");
     const rosterQuery = parseRosterQuery(c.req.query());
-    const roster = await listRoster(db, row.eventKey, rosterQuery);
+    const { rows: roster, total: rosterTotal } = await listRoster(db, row.eventKey, rosterQuery);
     return bufferedMemberHtml(
       c,
       <EventFormPage
@@ -331,6 +402,7 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
         values={eventValues(row)}
         errors={{}}
         roster={roster}
+        rosterTotal={rosterTotal}
         rosterQuery={rosterQuery}
       />,
     );
@@ -346,7 +418,8 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
       const key = c.req.param("key");
       const existing = await getEvent(db, key);
       if (!existing) return errorPage(c, 404, "Event not found");
-      const values = formData(await c.req.parseBody());
+      const values = await parsedForm(c);
+      if (!values) return c.text("Bad request", 400);
       // Hidden carriers: an untouched fold/gap wall time keeps the stored
       // instant (TOG-6805 — see validation.preservedOrParsed).
       const carriers = {
@@ -419,6 +492,21 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
         } catch (err) {
           if (err instanceof NotFoundError) return errorPage(c, 404, "Event not found");
           if (err instanceof ValidationError) {
+            // A blank location blocks publishing: re-render the edit form so the
+            // no-JS moderator sees the error next to the location control and can
+            // fix it, rather than an error page with nowhere to correct it.
+            if (err.fields.location) {
+              const key = c.req.param("key");
+              const row = await getEvent(db, key);
+              if (!row) return errorPage(c, 404, "Event not found");
+              return formError(
+                c,
+                err,
+                (errors, v) =>
+                  c.html(<EventFormPage mode="edit" row={row} values={v} errors={errors} />),
+                eventValues(row),
+              );
+            }
             return errorPage(
               c,
               422,
@@ -441,11 +529,15 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
     const db = await dbOr503(c);
     if (!db) return bufferedMemberText(c, "Admin temporarily unavailable", 503);
     const query = parseFeaturedListQuery(c.req.query());
-    const rows = await listFeatured(db, {
+    const fetched = await listFeatured(db, {
       ...query,
       published: query.published ? query.published === "1" : undefined,
     });
-    return bufferedMemberHtml(c, <FeaturedPage rows={rows} query={query} />);
+    const rows = fetched.slice(0, FEATURED_PAGE_SIZE);
+    return bufferedMemberHtml(
+      c,
+      <FeaturedPage rows={rows} query={query} hasNext={fetched.length > FEATURED_PAGE_SIZE} />,
+    );
   });
 
   admin.get("/featured/new", (c) => {
@@ -473,7 +565,8 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
     async (c) => {
       const db = await dbOr503(c);
       if (!db) return c.text("Admin temporarily unavailable", 503);
-      const values = formData(await c.req.parseBody());
+      const values = await parsedForm(c);
+      if (!values) return c.text("Bad request", 400);
       let input;
       try {
         input = parseFeaturedForm(values, c.env.FEATURED_IMAGE_HOSTS);
@@ -538,7 +631,8 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
       if (!db) return c.text("Admin temporarily unavailable", 503);
       const existing = await getFeatured(db, id);
       if (!existing) return errorPage(c, 404, "Featured content not found");
-      const values = formData(await c.req.parseBody());
+      const values = await parsedForm(c);
+      if (!values) return c.text("Bad request", 400);
       let input;
       try {
         input = parseFeaturedForm(values, c.env.FEATURED_IMAGE_HOSTS);

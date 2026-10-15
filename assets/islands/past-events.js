@@ -1,4 +1,10 @@
 // PastEvents: SSR-first archive; page-turn reads only, never a polling loop.
+//
+// One owned read deadline (READ_DEADLINE_MS, at most 10 seconds) spans response
+// headers plus HTML body settlement. On expiry the read is aborted where
+// possible, busy/loading is released and accessible failure recovery is shown,
+// even when abort is ignored. Late or superseded completions never commit
+// content, history or metadata and never clear a newer read. No repeat read.
 (function () {
   "use strict";
   var root = document.querySelector('[data-island="past-events"]');
@@ -18,7 +24,44 @@
   )
     return;
   var active = null;
-  var renderedUrl = window.location.href;
+  var deadlineTimer = null;
+  // Path and query of the rendered page; a fragment does not change the page.
+  var renderedAddress = pageAddress(new URL(window.location.href));
+  // Owned read deadline for one page turn: fetch plus response-body completion.
+  // One shot per read, never a repeat; superseded timers are disarmed and an
+  // obsolete timer that still fires cannot touch a newer read.
+  var READ_DEADLINE_MS = 10000;
+  // The deadline needs both timer globals; harnesses without a fake clock keep
+  // the pre-deadline admission behavior.
+  var canTimeout = typeof setTimeout !== "undefined" && typeof clearTimeout !== "undefined";
+
+  function pageAddress(url) {
+    return url.pathname + url.search;
+  }
+
+  function clearDeadline() {
+    if (deadlineTimer !== null) {
+      if (canTimeout) clearTimeout(deadlineTimer);
+      deadlineTimer = null;
+    }
+  }
+
+  function expire(controller, push) {
+    // Only the current read owns failure recovery: a superseded timer that
+    // fires during a newer read changes nothing.
+    if (active !== controller) return;
+    deadlineTimer = null;
+    try {
+      controller.abort();
+    } catch {}
+    active = null;
+    root.removeAttribute("aria-busy");
+    feedback.textContent = root.dataset.loadError;
+    // Same reconciliation as an ordinary failure: a click that never pushed its
+    // target stays inline, a Back/forward read reloads the SSR document.
+    if (!push || pageAddress(new URL(window.location.href)) !== renderedAddress)
+      window.location.assign(window.location.href);
+  }
 
   function archiveUrl(href, fromHistory) {
     var url = new URL(href, window.location.href);
@@ -64,10 +107,32 @@
 
   async function load(url, push) {
     if (active) active.abort();
+    clearDeadline();
     var controller = new AbortController();
+    // Back/forward reads must not be skipped by the fragment-only popstate rule.
+    controller.fromHistory = !push;
     active = controller;
+    // Focus ownership: an uninterrupted page turn lands on the archive heading,
+    // but a member who deliberately tabs to a stable header/footer control while
+    // the read is pending keeps that control. Any focusin to another target
+    // marks movement, so moving away and back is remembered explicitly rather
+    // than guessed from the final active element.
+    var focusAtStart = document.activeElement;
+    var focusMoved = false;
+    var trackFocus = function (event) {
+      if (event && event.target !== focusAtStart) focusMoved = true;
+    };
+    document.addEventListener("focusin", trackFocus);
     root.setAttribute("aria-busy", "true");
     feedback.textContent = "Loading past events…";
+    // The owned deadline covers the whole read: headers plus body. On expiry
+    // the read no longer owns content, history or metadata — late completions
+    // are dropped by the active guard. No automatic repeat read.
+    if (canTimeout) {
+      deadlineTimer = setTimeout(function () {
+        expire(controller, push);
+      }, READ_DEADLINE_MS);
+    }
     try {
       var response = await fetch(url.pathname + url.search, {
         method: "GET",
@@ -126,6 +191,17 @@
         };
       });
       if (active !== controller || controller.signal.aborted) return;
+      // Decide focus before the swap detaches the activating pager link: an
+      // uninterrupted turn owns focus and lands on the heading, while deliberate
+      // movement preserves the member's control unless it lives inside a zone
+      // about to be replaced (then the heading avoids a body fallback).
+      var currentFocus = document.activeElement;
+      var ownsFocus = !focusMoved && currentFocus === focusAtStart;
+      var focusInsideSwap =
+        !!currentFocus &&
+        targets.some(function (target) {
+          return target.contains(currentFocus);
+        });
       swaps.forEach(function (swap) {
         swap.target.replaceChildren.apply(swap.target, swap.children);
         swap.target.hidden = swap.hidden;
@@ -135,17 +211,21 @@
       live.canonical.href = incoming.href;
       live.og.content = incoming.href;
       if (push) window.history.pushState(null, "", url.pathname + url.search);
-      renderedUrl = url.href;
+      renderedAddress = pageAddress(url);
       feedback.textContent = "";
-      heading.focus();
+      if (ownsFocus || focusInsideSwap) heading.focus();
     } catch (error) {
       if (active !== controller || error.name === "AbortError") return;
       feedback.textContent = root.dataset.loadError;
       // A click may have aborted a Back/forward read after the address changed.
-      if (!push || window.location.href !== renderedUrl)
+      if (!push || pageAddress(new URL(window.location.href)) !== renderedAddress)
         window.location.assign(window.location.href);
     } finally {
+      document.removeEventListener("focusin", trackFocus);
+      // Settlement owns the deadline only while still current: an expired or
+      // superseded read has already released both, and a newer read owns them.
       if (active === controller) {
+        clearDeadline();
         root.removeAttribute("aria-busy");
         active = null;
       }
@@ -178,6 +258,10 @@
   window.addEventListener("popstate", function () {
     // Entry URLs may include tracking parameters, noncanonical pages or fragments.
     var url = archiveUrl(window.location.href, true);
+    // A fragment-only navigation (the skip link to #main) also fires popstate
+    // with the rendered path and query: nothing to restore, so no request.
+    // An in-flight Back/forward read still owns the zones and must be replaced.
+    if (url && pageAddress(url) === renderedAddress && !(active && active.fromHistory)) return;
     if (url) load(url, false);
     else window.location.assign(window.location.href);
   });

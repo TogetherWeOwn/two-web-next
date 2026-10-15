@@ -32,12 +32,29 @@ export type Env = AgentEventsEnv & {
   // QA seam; unset elsewhere, the route 404s. `MEMBER_ACCESS_LOG_ENFORCE`
   // defaults to true (a log write failure refuses the read; "false" degrades).
   DATABASE_URL?: string;
+  // Bot database for the homepage counts' and profile stats' `web_v1` views
+  // (bot-owned, read-only `two_web_reader` grant). Hyperdrive binding `BOT_DB`
+  // in deployed environments; `BOT_DATABASE_URL` overrides it for local/dev
+  // use. Absent both, counts and stats degrade to hidden — the web `DB` is
+  // never read for them.
+  BOT_DB?: { connectionString: string };
+  BOT_DATABASE_URL?: string;
   DISCORD_MODERATOR_ROLE_IDS?: string;
   QA_AUTH_TOKEN?: string;
   // Separate default-off operational read boundary. No grant or principal is
   // provisioned here; both settings require independent security review.
   QUEUE_RECONCILE_PREVIEW_ENABLED?: string;
   QUEUE_RECONCILE_OPERATOR_ID?: string;
+  // Evidence-only source/cache verifier (runtime-only, never checked-in
+  // config). The bearer token, authorized incident ID, issued instant and
+  // expiry instant are provisioned for one separately authorized invocation
+  // (at most a one-hour issued-to-expiry window) and removed at teardown;
+  // merged main carries no values, leaving the route inert.
+  SOURCE_EVIDENCE_VERIFIER_ENABLED?: string;
+  SOURCE_EVIDENCE_VERIFIER_TOKEN?: string;
+  SOURCE_EVIDENCE_VERIFIER_INCIDENT_ID?: string;
+  SOURCE_EVIDENCE_VERIFIER_ISSUED_AT?: string;
+  SOURCE_EVIDENCE_VERIFIER_EXPIRES_AT?: string;
   // The staging alert probe uses the same internal queue as JobsEnv, without a DB fixture.
   INTERNAL_ACTION_QUEUE?: Queue<QueueMessage>;
   MEMBER_ACCESS_LOG_ENFORCE?: string;
@@ -55,6 +72,10 @@ export type Env = AgentEventsEnv & {
   // the banner needs real dates, so the flag alone never renders.
   FREEZE_BANNER_ENABLED?: string;
   FREEZE_BANNER_DATES?: string;
+  // B1 read-only WebMCP pilot: only the exact strings "true"/"1" inject the
+  // model-context island on the four pilot pages; unset or anything else
+  // leaves pages byte-identical. No session, cookie or database read.
+  WEBMCP_PILOT_ENABLED?: string;
 };
 
 // Worker-only bindings added by W13; the web app (Hono) and its tests only need `Env`.

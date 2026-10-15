@@ -5,14 +5,36 @@ const { spawn } = require("node:child_process");
 
 const origin = "http://127.0.0.1:8787";
 const key = "01ARZ3NDEKTSV4RRFFQ69G5FAV";
-const paths = ["/", "/events", `/e/${key}`, "/join", "/about"];
+const paths = ["/", "/events", `/e/${key}`, "/join", "/about", "/faq", "/rules", "/privacy"];
+// Static leaves have no fixture data: admit the real page heading, not an error or fallback.
+const staticHeadings = {
+  "/join": "Join Together We Own",
+  "/about": "About Together We Own",
+  "/faq": "Frequently asked questions",
+  "/rules": "House rules",
+  "/privacy": "Privacy policy",
+};
 const readyPattern = "Lighthouse fixture content admitted";
 
 function assertFixtureContent(path, response, html, before, after) {
   assert.equal(response.status, 200, `${path}: fixture status`);
   assert.equal(response.redirected, false, `${path}: fixture redirect`);
   assert.match(response.headers.get("content-type") || "", /text\/html/, `${path}: HTML required`);
-  assert.match(html, /<link\b[^>]*href="\/styles\.css"/, `${path}: real app stylesheet`);
+  if (["/about", "/faq", "/rules", "/privacy"].includes(path)) {
+    // Content leaves inline the stylesheets: the real app rules must be
+    // present in the style block instead of a stylesheet link.
+    assert.match(
+      html,
+      /<style>[\s\S]*\.content-page[\s\S]*<\/style>/,
+      `${path}: real app stylesheet`,
+    );
+  } else {
+    assert.match(
+      html,
+      /<link rel="stylesheet" href="\/styles\.css"/,
+      `${path}: real app stylesheet`,
+    );
+  }
   let populated;
   if (path === "/") {
     assert.doesNotMatch(
@@ -69,9 +91,7 @@ function assertFixtureContent(path, response, html, before, after) {
     assert.ok(paths.includes(path), "Unknown fixture path");
     assert.match(
       html,
-      path === "/join"
-        ? /<h1\b[^>]*>Join Together We Own<\/h1>/
-        : /<h1\b[^>]*>About Together We Own<\/h1>/,
+      new RegExp(`<h1\\b[^>]*>${staticHeadings[path]}</h1>`),
       `${path}: real page heading`,
     );
     if (path === "/join") assert.doesNotMatch(html, /<iframe\b/, "Fixture must not embed Discord");
@@ -102,7 +122,7 @@ async function probeFixture(urls, fetchPage = fetch) {
   assert.deepEqual(
     urls,
     paths.map((path) => `${origin}${path}`),
-    "Only the five local fixture URLs may be probed",
+    "Only the audited local fixture URLs may be probed",
   );
   for (const url of urls) {
     const before = Date.now();
@@ -192,7 +212,7 @@ function startFixture(
   return { child, admission, stop };
 }
 
-module.exports = { assertFixtureContent, probeFixture, startFixture, readyPattern };
+module.exports = { assertFixtureContent, probeFixture, startFixture, readyPattern, origin, paths };
 
 if (require.main === module) {
   const { child, admission, stop } = startFixture(require("./lighthouserc.cjs").ci.collect.url);

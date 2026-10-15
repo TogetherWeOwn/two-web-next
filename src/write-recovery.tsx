@@ -1,11 +1,20 @@
 import type { Context, Next } from "hono";
 import { deleteCookie, getSignedCookie, setSignedCookie } from "hono/cookie";
 import { safeNext } from "./join/service";
-import { Recovery } from "./pages";
+import { renderHtmlOutcome } from "./html-outcome";
+import { honoRecoveryRenderer } from "./recovery-hono";
+import { recoveryOutcome } from "./recovery-outcome";
 
 export const EXPIRED_WRITE_COOKIE = "__Host-two_expired_write";
 const INTENDED_COOKIE = "__Host-two_login_intended";
-const OPTIONS = { path: "/", secure: true, httpOnly: true, sameSite: "Lax" as const, maxAge: 600 };
+export const WRITE_RECOVERY_TTL_SECONDS = 600;
+const OPTIONS = {
+  path: "/",
+  secure: true,
+  httpOnly: true,
+  sameSite: "Lax" as const,
+  maxAge: WRITE_RECOVERY_TTL_SECONDS,
+};
 type Ctx = Context<any>;
 
 export const recoveryUrl = (next: string) =>
@@ -68,22 +77,34 @@ export async function recoveryLanding(c: Ctx): Promise<Response> {
   const next = safeNext(c.req.query("next")) ?? "/profile";
   await setSignedCookie(c, INTENDED_COOKIE, next, c.env.SESSION_SECRET, OPTIONS);
   await setSignedCookie(c, EXPIRED_WRITE_COOKIE, `pending|${next}`, c.env.SESSION_SECRET, OPTIONS);
-  c.header("cache-control", "no-store, private");
-  return c.html(
-    <Recovery
-      title="Your session expired"
-      message="Your earlier changes were not saved. Sign in again, then review and submit them when you are ready."
-      retryUrl={`/auth/discord?next=${encodeURIComponent(next)}`}
-      retryLabel="Log in with Discord"
-      inviteUrl="/discord"
-    />,
+  // Same model, status (200) and headers as the direct render: the one-use
+  // journey writes above stay Hono-owned and ride the buffered response (the
+  // injected renderer only changes who turns the model into bytes).
+  return renderHtmlOutcome(
+    c,
+    recoveryOutcome(
+      {
+        title: "Your session expired",
+        message:
+          "Your earlier changes were not saved. Sign in again, then review and submit them when you are ready.",
+        retryUrl: `/auth/discord?next=${encodeURIComponent(next)}`,
+        retryLabel: "Log in with Discord",
+        inviteUrl: "/discord",
+      },
+      honoRecoveryRenderer,
+    ),
   );
 }
 
 /** Every terminal callback clears the pending notice, including denial/failure. */
 export async function consumeExpiredWrite(c: Ctx): Promise<string | null> {
   const raw = await getSignedCookie(c, c.env.SESSION_SECRET, EXPIRED_WRITE_COOKIE);
-  deleteCookie(c, EXPIRED_WRITE_COOKIE, { path: "/", secure: true });
+  deleteCookie(c, EXPIRED_WRITE_COOKIE, {
+    path: "/",
+    secure: true,
+    httpOnly: true,
+    sameSite: "Lax",
+  });
   return typeof raw === "string" && raw.startsWith("pending|") ? safeNext(raw.slice(8)) : null;
 }
 
@@ -112,7 +133,12 @@ export async function expiredWriteBanner(c: Ctx, next: Next): Promise<void> {
     c.res = new Response(html, { status: c.res.status, headers: c.res.headers });
     return;
   }
-  deleteCookie(c, EXPIRED_WRITE_COOKIE, { path: "/", secure: true });
+  deleteCookie(c, EXPIRED_WRITE_COOKIE, {
+    path: "/",
+    secure: true,
+    httpOnly: true,
+    sameSite: "Lax",
+  });
   c.header("cache-control", "no-store, private");
   c.header("vary", "Cookie");
   const banner =

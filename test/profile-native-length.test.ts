@@ -252,6 +252,7 @@ describe("real island binder: oversized synthetic lists", () => {
       setAttribute: ReturnType<typeof vi.fn>;
       appendChild: (child: Element) => void;
       focus: ReturnType<typeof vi.fn>;
+      addEventListener: ReturnType<typeof vi.fn>;
     };
     const element = (): Element => ({
       textContent: "",
@@ -261,6 +262,7 @@ describe("real island binder: oversized synthetic lists", () => {
         this.children.push(child);
       },
       focus: vi.fn(),
+      addEventListener: vi.fn(),
     });
     const insertBefore = vi.fn();
     const fetch = vi.fn();
@@ -323,7 +325,12 @@ describe("real island binder: oversized synthetic lists", () => {
     expect(insertBefore).toHaveBeenCalledOnce();
     const alert = insertBefore.mock.calls[0]![0] as Element;
     expect(alert.setAttribute).toHaveBeenCalledWith("role", "alert");
-    expect(alert.children[0]!.children.map((child) => child.textContent)).toEqual(errors);
+    // Field errors render as summary links; read the link text.
+    expect(
+      alert.children[0]!.children.map(
+        (child) => child.children[0]?.textContent || child.textContent,
+      ),
+    ).toEqual(errors);
     expect(alert.focus).toHaveBeenCalledOnce();
     expect(form.elements.games_text.value).toBe(games);
   });
@@ -464,7 +471,12 @@ describe.skipIf(process.env.A11Y_BROWSER_TESTS !== "true")(
       expect(writes).toHaveLength(1);
       expect(writes[0]).toMatchObject({ method: "PATCH", status: 200 });
       expect(JSON.parse(writes[0]!.body).games_text).toBe(games_text);
-      expect(save).toHaveBeenCalledExactlyOnceWith(ID, { bio: null, games, timezone: null });
+      expect(save).toHaveBeenCalledExactlyOnceWith(ID, {
+        bio: null,
+        games,
+        timezone: null,
+        leaderboardOptOut: false,
+      });
     });
 
     for (const javaScriptEnabled of [false, true]) {
@@ -504,7 +516,12 @@ describe.skipIf(process.env.A11Y_BROWSER_TESTS !== "true")(
               // Native form serialization normalizes textarea LF to CRLF.
               expect(posted.get("games_text")).toBe(games_text.replaceAll("\n", "\r\n"));
             }
-            expect(save).toHaveBeenCalledExactlyOnceWith(ID, { bio, games, timezone: null });
+            expect(save).toHaveBeenCalledExactlyOnceWith(ID, {
+              bio,
+              games,
+              timezone: null,
+              leaderboardOptOut: false,
+            });
           },
         );
 

@@ -8,11 +8,13 @@ const MAX_TRACKED = 500;
 
 // Exact app script names this pager accepts. Wrangler does not inherit
 // tail_consumers into named environments, so production traces arrive under
-// the production app name. Never match by prefix: a prefix wildcard would
-// page for foreign Workers in the same account.
+// the production app name, and the staging jobs Worker (two-web-jobs)
+// tails separately from the web Worker. Never match by prefix: a
+// prefix wildcard would page for foreign Workers in the same account.
 export const APP_SCRIPT_NAMES: ReadonlySet<string> = new Set([
   "two-web-next",
   "two-web-next-production",
+  "two-web-jobs",
 ]);
 
 // Uptime prober: two attempts per cron run, at least 10 s apart, each with a
@@ -34,7 +36,9 @@ export type UptimeAlert = {
 export const ALERT_ROUTES = new Set([
   "/",
   "/about",
+  "/about.md",
   "/admin",
+  "/admin/activity-log",
   "/admin/events",
   "/admin/events/:key",
   "/admin/events/new",
@@ -54,7 +58,13 @@ export const ALERT_ROUTES = new Set([
   "/admin/join-attempts",
   "/admin/join-attempts/:id",
   "/admin/queue/failed/:id/preview",
+  "/admin/queue/failed/:id/redispatch",
+  "/admin/queue/source-evidence/:id",
   "/api/agent-events",
+  "/api/public/community",
+  "/api/public/events",
+  "/api/public/events/:key",
+  "/api/public/join",
   "/auth/discord",
   "/auth/discord/callback",
   "/auth/discord/redirect",
@@ -63,12 +73,15 @@ export const ALERT_ROUTES = new Set([
   "/auth/status",
   "/__probe/alert",
   "/csp-reports",
+  "/community",
   "/discord",
   "/e/:key",
+  "/e/:file{.+\\.md}",
   "/e/:key/rsvp",
   "/events",
   "/events.ics",
   "/events.json",
+  "/events.md",
   "/events.rss",
   "/events/:file{.+\\.ics}",
   "/events/past",
@@ -79,17 +92,29 @@ export const ALERT_ROUTES = new Set([
   "/events/:key/rsvp-pause",
   "/events/:key/rsvp-reopen",
   "/faq",
+  "/faq.md",
+  "/hotzones",
+  "/hotzones/:signal",
   "/join",
   "/join/callback",
   "/join/discord",
+  "/join.md",
+  "/leaderboards/members",
+  "/llms.txt",
+  "/login",
   "/logout",
+  "/mcp",
   "/members",
   "/members/",
   "/members/:user",
+  "/openapi.json",
   "/privacy",
+  "/privacy.md",
   "/profile",
+  "/.well-known/security.txt",
   "/robots.txt",
   "/rules",
+  "/rules.md",
   "/sitemap_index.xml",
   "/up",
 ]);

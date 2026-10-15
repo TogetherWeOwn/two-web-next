@@ -11,6 +11,7 @@ import { transitionEvent, updateEvent } from "../src/admin/store";
 import { parseEventForm, ValidationError } from "../src/admin/validation";
 import type { QueueMessage } from "../src/jobs/types";
 import { createMemorySessionStore } from "../src/sessions";
+import { ICS_SEQUENCE_BASE } from "../src/events/feeds";
 import type { Env } from "../src/env";
 
 type TrackedSync = Extract<QueueMessage, { kind: "sync-event" }>;
@@ -173,6 +174,22 @@ describe.skipIf(!process.env.DATABASE_URL)("shared agent event acceptance (agent
     });
   });
 
+  it("refuses an agent publish when a moderator blanked the draft location", async () => {
+    const event_key = await create();
+    // Drafts may stay blank: a moderator clearing the location is accepted.
+    const actor = { id: "fixture-moderator", username: "Moderator" };
+    await updateEvent(fixture.db, actor, event_key, parseEventForm({ ...fields, location: "" }));
+    const publish = await call("publish", { event_key, idempotency_key: randomUUID() });
+    expect(publish.status).toBe(422);
+    expect(publish.body).toMatchObject({
+      reason: "validation_failed",
+      errors: { location: ["Add a location before publishing."] },
+    });
+    const [row] = await fixture.client`SELECT status FROM events WHERE event_key = ${event_key}`;
+    expect(row!.status).toBe("draft");
+    expect(sent).toHaveLength(0);
+  });
+
   it("dispatches once per accepted lifecycle move/published edit, never for drafts, replays or denials", async () => {
     const event_key = await create();
     expect((await call("update", { event_key, version: 1, fields })).status).toBe(200);
@@ -221,7 +238,7 @@ describe.skipIf(!process.env.DATABASE_URL)("shared agent event acceptance (agent
     expect(published).toBeGreaterThan(created);
     const feed = await app.request("/events.ics", {}, env);
     expect(feed.status).toBe(200);
-    expect(await feed.text()).toContain(`SEQUENCE:${published}\r\n`);
+    expect(await feed.text()).toContain(`SEQUENCE:${published - ICS_SEQUENCE_BASE}\r\n`);
     expect((await call("publish", publish)).body.replayed).toBe(true);
     expect((await call("read", { event_key })).status).toBe(200);
     expect(await revision()).toBe(published);

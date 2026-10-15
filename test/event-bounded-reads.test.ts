@@ -13,7 +13,7 @@ import postgres from "postgres";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { events, featuredContents, rsvps } from "../src/db/admin-schema";
 import { adminSchema, schema, type Db } from "../src/db/index";
-import { getPublicEvent, listHomeUpcoming, listJson } from "../src/events/reads";
+import { getPublicEvent, listHomeUpcoming, listJson, listUpcoming } from "../src/events/reads";
 import { listVisibleFeatured } from "../src/featured";
 import { testDatabaseUrl } from "./helpers/member-data-db";
 
@@ -160,7 +160,7 @@ describe.skipIf(!process.env.DATABASE_URL)("event bounded reads (agent-testdb)",
     const existing = await db.select().from(events);
     if (existing.length < 10) await seedEvents(10 - existing.length, "C");
     roundTrips = [];
-    const { rows } = await listJson(db, { limit: 10, offset: 0, includeDrafts: false });
+    const { rows } = await listJson(db, { limit: 10, offset: 0 });
     expect(rows).toHaveLength(10);
     // One total COUNT + one rows SELECT + one batched going aggregate: no per-row queries.
     expect(roundTrips.length).toBe(3);
@@ -168,10 +168,33 @@ describe.skipIf(!process.env.DATABASE_URL)("event bounded reads (agent-testdb)",
     // Growing the collection keeps the count identical: growth is bounded.
     await seedEvents(10, "C2");
     roundTrips = [];
-    const { rows: grown } = await listJson(db, { limit: 100, offset: 0, includeDrafts: false });
+    const { rows: grown } = await listJson(db, { limit: 100, offset: 0 });
     expect(grown.length).toBeGreaterThan(10);
     expect(roundTrips.length).toBe(3);
     for (const row of grown) expect(row.goingCount).toBe(3);
+  });
+
+  it("upcoming calendar page: three round trips at both sizes, going-only counts", async () => {
+    const existing = await db.select().from(events);
+    if (existing.length < 10) await seedEvents(10 - existing.length, "U");
+    roundTrips = [];
+    const first = await listUpcoming(db, NOW, {}, 1);
+    expect(first.rows.length).toBeGreaterThan(0);
+    expect(first.rows.length).toBeLessThanOrEqual(20);
+    // One total COUNT + one page SELECT + one batched going aggregate: no
+    // per-row queries, and page two costs the same three.
+    expect(roundTrips.length).toBe(3);
+    for (const row of first.rows) expect(row.goingCount).toBe(3);
+    roundTrips = [];
+    const second = await listUpcoming(db, NOW, {}, 2);
+    expect(roundTrips.length).toBe(3);
+    expect(second.total).toBe(first.total);
+    // Growing the collection keeps the count identical: growth is bounded.
+    await seedEvents(10, "U2");
+    roundTrips = [];
+    const regrown = await listUpcoming(db, NOW, {}, 1);
+    expect(regrown.rows).toHaveLength(20);
+    expect(roundTrips.length).toBe(3);
   });
 
   it("single event: two round trips, going count excludes maybe/waitlisted", async () => {

@@ -16,14 +16,16 @@ Guidance for human and AI contributors.
 
 - Work on a branch and open a PR. Never push to `main`.
 - Name branches `type/short-slug`, for example `fix/sudo-window`.
+- The workspace may hand you a local branch named after a tracker card; keep committing to it, never publish that name, push `git push origin HEAD:refs/heads/<type>/<short-slug>` and open the PR from that ref.
 - Squash-merge only. One PR is one logical change.
 - Title the PR with a Conventional Commits header: `type(scope): summary`, at most 100 characters, no trailing period. Release automation reads it.
-- Fill in every section of the PR template, in short, active sentences.
+- Use the PR template, in short, active sentences. Linked Issues and Verification are required; the rest is optional.
 - Keep references public-safe. No internal card IDs (`TOG-`, `PAP-`), private URLs, tokens, or secrets in any title, body, commit, comment, or branch name. Link public GitHub issues with `Closes #123`.
-- Disclose the model you used and the tests you ran. Never claim a green run you did not see.
+- Report the tests you ran. Never claim a green run you did not see.
 - Address every review finding, or reply with why it does not apply.
 - Credit the contributors whose work you build on.
 - Never commit `.dev.vars`, secrets, or `node_modules/`. Use variable names in docs, never values.
+- Read [CONSTRAINTS.md](CONSTRAINTS.md) before writing code. Do not weaken it to make a change pass.
 - Done means merged. Do not leave an orphan PR open: merge it, or close it with a note naming its replacement.
 
 ## Commands
@@ -45,10 +47,21 @@ npx wrangler deploy --dry-run --outdir dist   # bundle check, no deploy
 
 Run tests only against the disposable test database or local fixtures described in the README, with `DATABASE_URL` set to that URL. Apply migrations with `npm run db:migrate` and validate history with `npm run db:check`. Never point tests, probes, or migrations at a production or staging database. If a credential fails, stop and report it. Do not try another one.
 
+## UI changes
+
+A user-visible change to a page, component, CSS, typography, navigation, form, or responsive layout follows this loop. AI contributors apply `frontend-ui-engineering`, then `product-ui-design-loop`, and add `frontend-design` for a new visual direction, whenever those skills are available to them.
+
+1. Write a short design contract before substantial work: audience, screen job, primary action, real content, two or three references (or stated assumptions), layout, typography, tokens, responsive behavior, required states, non-goals.
+2. Build in the stack the route already uses: server-rendered HTML for the current site, Svelte 5 and SvelteKit under `web/`. Do not add a framework because a generator returned one.
+3. Render the real app against local fixtures. Capture desktop (1280×800) and mobile (390×844) screenshots, plus each required state, and open every image. A DOM or accessibility snapshot is not a visual review.
+4. Run the existing gates: `npm run a11y`, `npm run lighthouse`, `npm run lighthouse:quality`, and the visual specs in [docs/visual-regression.md](docs/visual-regression.md). These gates cover the Hono site only: for a `web/` change, the screenshots from step 3 are the visual evidence, and the PR body says the Hono gates did not exercise the Kit route. The visual specs compare reliably only in CI (`browser-smoke` on the pinned runner); accept an intentional diff only through the failure artifact and `node ci/visual-accept.mjs`. Meet each threshold by improving the UI. Loosening any threshold (lowering a score floor, raising a time or pixel budget, adding `skipAudits`), masking more of a page, or regenerating baselines wholesale needs its own PR with a justification.
+5. Put the evidence in the PR body: the contract, reference links, before/after screenshots at both widths, the commands you ran, and each intentional baseline change. Report only what you opened or ran.
+
 ## Definition of done
 
 - Behavior matches the request.
 - Tests pass locally, and `npm run check` is green.
+- A UI change carries the evidence listed under UI changes.
 - CI is green on the exact head SHA that merges: `check`, `gitleaks`, and `pr-lint` are required.
 - A reviewer who did not write the code approved that head SHA.
 - The PR is squash-merged, and the docs it made stale are updated.

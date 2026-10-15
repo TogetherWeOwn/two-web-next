@@ -22,10 +22,18 @@ const overflowSwitch = (job: string) =>
 
 function jobs(text: string) {
   const body = text.slice(text.search(/^jobs:\n/m));
-  const found: { id: string; runsOn: string | undefined }[] = [];
+  const found: { id: string; runsOn: string | undefined; orgReusable: boolean }[] = [];
   for (const block of body.split(/^(?=  [A-Za-z0-9_-]+:\n)/m).slice(1)) {
     const id = block.match(/^  ([A-Za-z0-9_-]+):\n/)?.[1] ?? "";
-    found.push({ id, runsOn: block.match(/^    runs-on: (.*)$/m)?.[1] });
+    // A reusable-workflow call has no runner; the called workflow's jobs are checked.
+    if (/^    uses: \.\/\.github\/workflows\/[\w.-]+\.ya?ml$/m.test(block)) continue;
+    // Same for a pinned org reusable call (full-SHA pin, never a moving tag):
+    // the org workflow pins its own runners, so there is no local label to check.
+    const orgReusable =
+      /^    uses: TogetherWeOwn\/\.github\/\.github\/workflows\/[\w.-]+\.ya?ml@[0-9a-f]{40}$/m.test(
+        block,
+      );
+    found.push({ id, runsOn: block.match(/^    runs-on: (.*)$/m)?.[1], orgReusable });
   }
   return found;
 }
@@ -38,8 +46,18 @@ describe("workflow runner labels", () => {
 
   it("runs every job on GitHub-hosted Linux unless the repo is private", () => {
     for (const { name, text } of workflows) {
-      for (const { id, runsOn } of jobs(text)) {
-        expect([hosted, byVisibility, overflowSwitch(id)], `${name} job ${id}`).toContain(runsOn);
+      for (const { id, runsOn, orgReusable } of jobs(text)) {
+        if (orgReusable) continue;
+        // Visual baselines render body text with the runner's system fonts, so
+        // e2e.yml browser-smoke is deliberately pinned to ubuntu-24.04 and
+        // re-baselined in the same PR on bumps (docs/visual-regression.md).
+        // ubuntu-24.04 is still GitHub-hosted Linux, so the self-hosted
+        // queue-forever risk does not apply.
+        const allowed =
+          name === "e2e.yml" && id === "browser-smoke"
+            ? [hosted, "ubuntu-24.04", byVisibility, overflowSwitch(id)]
+            : [hosted, byVisibility, overflowSwitch(id)];
+        expect(allowed, `${name} job ${id}`).toContain(runsOn);
       }
     }
   });

@@ -13,10 +13,8 @@ on:
     types: [opened, edited, synchronize, reopened, ready_for_review]
   push:
     branches: [main]
-  # Dispatched by the release workflow on release-please branches:
-  # PRs opened with GITHUB_TOKEN trigger no workflows, so the required
-  # `pr-lint` check would never run on the release PR without this path.
-  # The release workflow passes the release PR number; the pr-lint job fetches
+  # Manual validation of an open PR by number (releases no longer dispatch it:
+  # there is no release PR, docs/releases.md). The pr-lint job fetches
   # the title/body via the API and validates them with the same
   # ci/check-pr-conventions.py script as the pull_request path.
   workflow_dispatch:
@@ -30,20 +28,27 @@ permissions:
   contents: read
   pull-requests: read
 
-# A PR (or the dispatched release PR) cancels its superseded run. Each push to
-# main keeps its own group: pr-lint checks that push's commits, so a newer push
-# must not cancel it.
+# A pull_request run cancels its superseded run; a manual dispatch never
+# cancels. Each push to main keeps its own group: pr-lint checks that push's
+# commits, so a newer push must not cancel it.
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || inputs.pr_number || github.sha }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   # This repository is public, so internal card IDs (TOG-1234, PAP-1234) must stay out of PR
   # text. "warning" reports them without failing; flip to "error" once open PRs are clean.
   INTERNAL_ID_LEVEL: "warning"
-  # Upstream body/branch/reference rules (`.github/scripts/pr_standards.py`) start as
-  # warnings; flip to "error" once the repo's open PRs are clear (target 2026-10-10).
+  # Upstream body/branch/reference rules (`.github/scripts/pr_standards.py`): tracker IDs,
+  # instance UI links and the internal host in a public title or body always fail; the rest
+  # start as warnings; flip to "error" once the repo's open PRs are clear (target 2026-10-10).
   PR_STANDARDS_MODE: "warn"
+  # Dedicated cutoff (PR number) for branch-name internal-ID *errors* on public repos.
+  # PRs numbered at/above this value get an error for internal IDs in the head ref;
+  # older open PRs keep the warning (a head ref cannot be renamed after the PR is open).
+  # Set at merge time to (newest open PR number + 1). Strict title/body checks always fail;
+  # the remaining title/body checks stay on PR_STANDARDS_MODE.
+  HEAD_REF_ERROR_FROM_PR: "627"
 
 jobs:
   # Convention for every change that lands on main:
@@ -51,8 +56,9 @@ jobs:
   #     Types: feat fix perf refactor test docs build ci chore revert style security.
   #     Release automation reads these headers.
   #   * PR body follows .github/pull_request_template.md: what changed, why, and how it was tested.
-  #   * No card reference is required. Internal card IDs (TOG-1234, PAP-1234) in the title, body or a
-  #     commit subject draw a warning, because this repository is public.
+  #   * No card reference is required. Internal card IDs (TOG-1234, PAP-1234), instance UI links
+  #     and the internal host in the title or body fail because this repository is public; other
+  #     references and the commit subject draw a warning.
   #   * Repos are squash-merge only and the squash commit title is the PR title, so the history on
   #     main is one conventional commit per PR. The push job below flags any commit that bypasses it
   #     (for example a merge call that passes its own commit_title).
@@ -71,10 +77,104 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ env.PR_LINT_CHECKOUT_SHA }}
+          # Read both immutable tracked trees, including the event's base snapshot.
+          fetch-depth: 0
           persist-credentials: false
 
       - name: Unit-test the lint
-        run: python3 -m unittest discover -s .github/scripts -p 'test_pr_standards.py'
+        run: |
+          python3 -m unittest discover -s .github/scripts -p 'test_pr_standards.py'
+          # Heads cut before #651 lack the ratchet files: the head-SHA checkout
+          # then has nothing for this pattern, and unittest exits 5. Skip with a
+          # warning when the head predates the ratchet; fail closed when the head
+          # deletes the ratchet files so a PR cannot silence its own gate.
+          if [ -f .github/scripts/test_internal_ref_ratchet.py ] && [ -f .github/scripts/internal_ref_ratchet.py ] && [ -f .github/scripts/internal_references.py ]; then
+            python3 -m unittest discover -s .github/scripts -p 'test_internal_ref_ratchet.py'
+          elif git log --format=%H -1 HEAD -- .github/scripts/internal_ref_ratchet.py .github/scripts/test_internal_ref_ratchet.py .github/scripts/internal_references.py | grep -q .; then
+            echo "::error::Ratchet files deleted at this head; refusing to skip."
+            exit 1
+          else
+            echo "::warning::Ratchet tests absent at this head SHA; skipped (predates #651)."
+          fi
+          python3 -m unittest discover -s ci -p 'test_check_pr_conventions.py'
+          # Heads cut before this PR lack the docs drift test: the head-SHA
+          # checkout then has nothing for this pattern, and unittest exits 5.
+          # Skip with a warning when the head predates the test; fail closed
+          # when the head deletes it so a PR cannot silence its own gate.
+          if [ -f ci/test_pr_lint_docs.py ]; then
+            python3 -m unittest discover -s ci -p 'test_pr_lint_docs.py'
+          elif git log --format=%H -1 HEAD -- ci/test_pr_lint_docs.py | grep -q .; then
+            echo "::error::pr-lint docs test deleted at this head; refusing to skip."
+            exit 1
+          else
+            echo "::warning::pr-lint docs test absent at this head SHA; skipped (predates #769)."
+          fi
+
+      - name: Ratchet tracked internal references
+        if: github.event_name != 'push'
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          BASE_REF: ${{ github.base_ref }}
+          HEAD_SHA: ${{ env.PR_LINT_CHECKOUT_SHA }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ inputs.pr_number }}
+        run: |
+          set -euo pipefail
+          # Dispatched runs have no pull_request event snapshot: resolve the
+          # recorded base SHA and the live base branch from the API. PR events
+          # use the snapshot SHA and the event's base ref (usually main).
+          BASE_BRANCH=""
+          if [ "$GITHUB_EVENT_NAME" = workflow_dispatch ]; then
+            BASE_SHA=$(gh api "repos/$REPO/pulls/$PR_NUMBER" --jq '.base.sha')
+            BASE_BRANCH=$(gh api "repos/$REPO/pulls/$PR_NUMBER" --jq '.base.ref')
+          else
+            BASE_BRANCH="${BASE_REF:-main}"
+          fi
+          if [ -z "$BASE_BRANCH" ]; then
+            BASE_BRANCH="main"
+          fi
+          # Heads cut before #651 lack the script at the head-SHA checkout.
+          # The script reads only git objects, so a trusted base copy can still
+          # judge a stale head: run it instead of skipping, otherwise any branch
+          # based before #651 bypasses this required gate. Fail closed when the
+          # head deletes the script so a PR cannot silence its own gate.
+          # (The head-side unittest block above keeps its predates-#651 skip.)
+          if [ ! -f .github/scripts/internal_ref_ratchet.py ] || [ ! -f .github/scripts/internal_references.py ]; then
+            if git log --format=%H -1 HEAD -- .github/scripts/internal_ref_ratchet.py .github/scripts/internal_references.py | grep -q .; then
+              echo "::error::Ratchet script deleted at this head; refusing to skip."
+              exit 1
+            fi
+            echo "::warning::Ratchet script absent at this head SHA; checking with the base copy (predates #651)."
+            mkdir -p "$RUNNER_TEMP/ratchet"
+            RATCHET_SRC=""
+            if git cat-file -e "$BASE_SHA:.github/scripts/internal_ref_ratchet.py" 2>/dev/null && git cat-file -e "$BASE_SHA:.github/scripts/internal_references.py" 2>/dev/null; then
+              RATCHET_SRC="$BASE_SHA"
+            else
+              # Recorded bases can predate #651 too: their snapshot lacks the
+              # ratchet files, so fall back to the live base-branch tip while
+              # keeping --base "$BASE_SHA" for the diff range (for behind-PRs
+              # the recorded base equals the merge-base, so the range stays
+              # correct). The checkout already fetches the base branch, so the
+              # tip is usually present; fetch it when it is not.
+              echo "::warning::Ratchet script absent at recorded base $BASE_SHA (predates #651); using live $BASE_BRANCH tip."
+              LIVE_REF="refs/remotes/origin/$BASE_BRANCH"
+              if ! git cat-file -e "$LIVE_REF:.github/scripts/internal_ref_ratchet.py" 2>/dev/null || ! git cat-file -e "$LIVE_REF:.github/scripts/internal_references.py" 2>/dev/null; then
+                git fetch --no-tags origin "$BASE_BRANCH"
+              fi
+              if git cat-file -e "$LIVE_REF:.github/scripts/internal_ref_ratchet.py" 2>/dev/null && git cat-file -e "$LIVE_REF:.github/scripts/internal_references.py" 2>/dev/null; then
+                RATCHET_SRC="$LIVE_REF"
+              else
+                echo "::error::Ratchet script absent at recorded base and at live $BASE_BRANCH tip; refusing to pass."
+                exit 1
+              fi
+            fi
+            git show "$RATCHET_SRC:.github/scripts/internal_ref_ratchet.py" > "$RUNNER_TEMP/ratchet/internal_ref_ratchet.py"
+            git show "$RATCHET_SRC:.github/scripts/internal_references.py" > "$RUNNER_TEMP/ratchet/internal_references.py"
+            python3 "$RUNNER_TEMP/ratchet/internal_ref_ratchet.py" --base "$BASE_SHA" --head "$HEAD_SHA"
+          else
+            python3 .github/scripts/internal_ref_ratchet.py --base "$BASE_SHA" --head "$HEAD_SHA"
+          fi
 
       - name: Resolve PR title/body
         id: pr
@@ -99,13 +199,38 @@ jobs:
             : > "$RUNNER_TEMP/pr-commit-subjects.txt"
           fi
 
+      - name: Resolve PR head ref
+        id: head-ref
+        if: github.event_name != 'push'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ inputs.pr_number || github.event.pull_request.number }}
+          HEAD_EVENT_REF: ${{ github.event.pull_request.head.ref }}
+        run: |
+          set -euo pipefail
+          # pull_request events carry the head ref; dispatch runs resolve it from
+          # the API so manual runs lint the same branch name.
+          if [ -n "$HEAD_EVENT_REF" ]; then
+            head_ref="$HEAD_EVENT_REF"
+          else
+            head_ref=$(gh api "repos/$REPO/pulls/$PR_NUMBER" --jq '.head.ref')
+          fi
+          if [ -z "$head_ref" ]; then
+            echo "::error::Could not resolve the PR head branch name."
+            exit 1
+          fi
+          printf 'head_ref=%s\n' "$head_ref" >> "$GITHUB_OUTPUT"
+
       - name: Check title, body and commits
         env:
           PR_METADATA_PATH: ${{ steps.pr.outputs.metadata }}
           COMMITS: ${{ toJSON(github.event.commits) }}
           COMMIT_SUBJECTS_PATH: ${{ runner.temp }}/pr-commit-subjects.txt
-          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          HEAD_REF: ${{ steps.head-ref.outputs.head_ref || github.event.pull_request.head.ref }}
           REPO_PRIVATE: ${{ github.event.repository.private }}
+          PR_NUMBER: ${{ github.event.pull_request.number || inputs.pr_number || '0' }}
+          HEAD_REF_ERROR_FROM_PR: ${{ env.HEAD_REF_ERROR_FROM_PR }}
         run: python3 ci/pr-lint-output.py check
 
   # Full-history gitleaks scan; `gitleaks` is a required check on main. Uses

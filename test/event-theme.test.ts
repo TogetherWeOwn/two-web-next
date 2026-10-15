@@ -99,7 +99,8 @@ describe("event detail theme", () => {
     expect(html).toContain('data-testid="event-copy-toast" data-copy-toast');
     expect(html).toContain('src="/islands/copy-link.js" defer');
     expect(html).toContain('src="/islands/going-count.js" defer');
-    expect(html).toContain(`<script type="application/ld+json">${props.jsonLd}</script>`);
+    expect(html).toContain('data-testid="event-jsonld"');
+    expect(html).toContain(props.jsonLd);
     expect(html).not.toContain('data-testid="event-attendees"');
     expect(html).toMatch(/<\/dl><div class="event-rsvp"><section data-island="rsvp-button"/);
     expect(html).toContain('src="/islands/rsvp-button.js" defer');
@@ -165,7 +166,8 @@ describe("event detail theme", () => {
     expect(html).toContain('data-testid="event-cancelled">Cancelled');
     expect(html).toContain("<h1>Chess night</h1>");
     expect(html).toContain('name="robots" content="noindex, nofollow"');
-    expect(html).toContain(`<script type="application/ld+json">${jsonLd}</script>`);
+    expect(html).toContain('data-testid="event-jsonld"');
+    expect(html).toContain(jsonLd);
     expect(html).toContain('href="/events">See upcoming events');
     const visible = html.replace(/<head>[\s\S]*?<\/head>|<script[\s\S]*?<\/script>|<[^>]+>/g, " ");
     expect(visible.match(/cancel/gi)).toEqual(["Cancel"]);

@@ -9,6 +9,7 @@ export const BODY_LIMIT_BYTES = {
   form: 64 * 1024,
   json: 32 * 1024,
   agent: 32 * 1024,
+  mcp: 32 * 1024,
   featured: 256 * 1024,
   action: 4 * 1024,
 } as const;

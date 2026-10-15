@@ -3,6 +3,7 @@ import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { readMigrationFiles } from "drizzle-orm/migrator";
 import postgres from "postgres";
+import { assertMigrationAdmission } from "./migration-admission.mjs";
 
 const migrationsFolder = fileURLToPath(new URL("../drizzle", import.meta.url));
 const ledger = "drizzle.__drizzle_migrations";
@@ -48,13 +49,16 @@ const refuse = (message) => {
 };
 
 export function migrationConfig(env, { testDatabase = false } = {}) {
-  const target = env.MIGRATION_TARGET;
-  if (!["staging", "production"].includes(target)) refuse("Target must be staging or production.");
+  // Single admission source: the contract owner is assertMigrationAdmission
+  // (ci/migration-admission.mjs). Re-throw as MigrationError so CLI masking
+  // in safeMigrationError keeps the specific operator-facing message.
   // Gate before URL parsing, driver construction, or any database work.
-  if (target === "production" && env.PRODUCTION_DEPLOY_ENABLED !== "true") {
-    refuse("Production migrations require PRODUCTION_DEPLOY_ENABLED=true.");
+  try {
+    assertMigrationAdmission(env);
+  } catch (error) {
+    refuse(error instanceof Error ? error.message : "Migration admission refused.");
   }
-  if (env.GITHUB_REF !== "refs/heads/main") refuse("Migrations require the reviewed main branch.");
+  const target = env.MIGRATION_TARGET;
   const secret = target === "staging" ? "NEON_STAGING_DATABASE_URL" : "PRODUCTION_DATABASE_URL";
   if (!env[secret]) refuse(`Missing ${secret} Environment secret; no fallback is permitted.`);
   let url;

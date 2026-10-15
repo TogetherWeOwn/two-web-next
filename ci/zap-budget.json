@@ -1,0 +1,11 @@
+{
+  "maxMedium": 0,
+  "maxLow": 0,
+  "ignore": [
+    {
+      "pluginId": "10096",
+      "uriPrefix": "/cdn-cgi/",
+      "why": "Accepted edge behavior: 10096 matches raw 10-digit unix timestamps inside Cloudflare's challenge-platform JSD bundle (/cdn-cgi/challenge-platform/.../jsd/main.js, e.g. ...:1791713124:...), reached by the spider through the edge-injected challenge script on the staging hostname, not by Worker-rendered HTML (verified 2026-10-11: / /events /login /join /about and the 404 page carry the injector but no raw 10-digit timestamps in bodies; Report-To/NEL/Cache-Control numbers are on ZAP's skip list; ZAP's TimestampDisclosureScanRule regex-matches raw digits only and never decodes the injector's base64 't' param). Scoped to /cdn-cgi/ instance URIs only, so Worker-served 10096 hits still count. Revisit if the injector is ever scoped off staging or Worker HTML starts emitting timestamps."
+    }
+  ]
+}

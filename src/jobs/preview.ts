@@ -2,13 +2,25 @@ import postgres from "postgres";
 import { databaseOptions, databaseUrl } from "../db/connection";
 import type { Env } from "../env";
 import { eventKeyAllowed } from "../events/keys";
-import { pgEventStore } from "./events";
+import { pgEventStore, type SourceReadReport } from "./events";
 import { eventKeyFromFailedJob, reconcileFailedJob, type ReplayDisposition } from "./replay";
 
 export type FailedJobPreview = {
   failure: { id: number; kind: string; failedAt: string };
   observedAt: string;
   disposition: { action: ReplayDisposition["action"]; reason: string };
+};
+
+/**
+ * Server-side replay candidate: the public advice plus the rebuildable source
+ * identity a guarded apply path needs. `eventKey`/`idempotencyKey` never leave
+ * the server — HTTP responses carry the `preview` shape only, which omits the
+ * raw ledger key, pending payload and idempotency key.
+ */
+export type FailedJobReplayCandidate = {
+  preview: FailedJobPreview;
+  eventKey: string | null;
+  idempotencyKey?: string;
 };
 
 /** Canonical positive IDs only; do not round a bigint into a different row. */
@@ -29,6 +41,50 @@ export async function previewFailedJobWithSql(
   failureId: number,
   appUrl: string,
 ): Promise<FailedJobPreview | null> {
+  const candidate = await loadReplayCandidateWithSql(sql, failureId, appUrl);
+  return candidate?.preview ?? null;
+}
+
+/**
+ * Evidence-only verifier support. When provided, every source SELECT executed
+ * inside the snapshot reports its statement name, row count and
+ * `clock_timestamp()` marker. Absent by default; the public advice path never
+ * passes it and its return shape is unchanged.
+ */
+export type SourceEvidenceSink = {
+  onSourceRead?: (report: SourceReadReport) => void;
+};
+
+/**
+ * Source-event existence check with the same statement, isolation and marker
+ * as the inline query it replaces. Reports to the evidence sink when present.
+ */
+async function readSourceEvent(
+  tx: postgres.TransactionSql,
+  eventKey: string,
+  evidence?: SourceEvidenceSink,
+): Promise<{ found: boolean }> {
+  const rows = await tx`select 1, clock_timestamp() as preview_read_at from events
+        where event_key = ${eventKey} limit 1`;
+  evidence?.onSourceRead?.({
+    statement: "events_by_key_exists",
+    rowCount: rows.length,
+    readAt: (rows[0] as { preview_read_at?: unknown } | undefined)?.preview_read_at ?? null,
+  });
+  return { found: rows.length > 0 };
+}
+
+/**
+ * Same read-only snapshot as the advice, plus the rebuildable identity for a
+ * guarded apply. Same statements, same transaction posture; only the return
+ * shape keeps what the public advice strips.
+ */
+export async function loadReplayCandidateWithSql(
+  sql: postgres.Sql,
+  failureId: number,
+  appUrl: string,
+  evidence?: SourceEvidenceSink,
+): Promise<FailedJobReplayCandidate | null> {
   if (parseFailureId(String(failureId)) !== failureId) throw new Error("invalid failure ID");
   return sql.begin("isolation level repeatable read read only", async (tx) => {
     // Never select failure text (which can contain transport diagnostics),
@@ -36,9 +92,17 @@ export async function previewFailedJobWithSql(
     const [row] = await tx`select id, left(kind, 64) as kind, left(key, 128) as key,
       failed_at, transaction_timestamp() as observed_at, clock_timestamp() as preview_read_at
       from queue_failed_jobs where id = ${failureId} limit 1`;
+    evidence?.onSourceRead?.({
+      statement: "queue_failed_jobs_by_id",
+      rowCount: row ? 1 : 0,
+      readAt: (row as { preview_read_at?: unknown } | undefined)?.preview_read_at ?? null,
+    });
     if (!row) return null;
     const failed = { kind: String(row.kind), key: row.key == null ? null : String(row.key) };
-    const events = pgEventStore(tx, { bypassReadCache: true });
+    const events = pgEventStore(tx, {
+      bypassReadCache: true,
+      ...(evidence?.onSourceRead ? { onSourceRead: evidence.onSourceRead } : {}),
+    });
     // EventStore makes this optional for other consumers. Here all three
     // checks are mandatory, even if this particular row would not use one.
     const { needsSync, pendingSync, hasFailedSync } = events;
@@ -59,13 +123,7 @@ export async function previewFailedJobWithSql(
         eventKey: null,
         reason: "invalid source identity; preserve dead row",
       };
-    } else if (
-      eventKey &&
-      !(
-        await tx`select 1, clock_timestamp() as preview_read_at from events
-        where event_key = ${eventKey} limit 1`
-      ).length
-    ) {
+    } else if (eventKey && !(await readSourceEvent(tx, eventKey, evidence)).found) {
       disposition = {
         action: "keep",
         eventKey,
@@ -78,7 +136,7 @@ export async function previewFailedJobWithSql(
         () => row.observed_at as Date,
       );
     }
-    return {
+    const preview: FailedJobPreview = {
       failure: {
         id: failureId,
         kind: failed.kind,
@@ -87,6 +145,13 @@ export async function previewFailedJobWithSql(
       observedAt: (row.observed_at as Date).toISOString(),
       // Omit the raw ledger key, pending payload and idempotency key.
       disposition: { action: disposition.action, reason: disposition.reason },
+    };
+    return {
+      preview,
+      eventKey: disposition.eventKey,
+      ...(disposition.action === "replay" && disposition.idempotencyKey
+        ? { idempotencyKey: disposition.idempotencyKey }
+        : {}),
     };
   });
 }
@@ -105,6 +170,25 @@ export async function previewFailedJob(
   });
   try {
     return await previewFailedJobWithSql(sql, failureId, env.APP_URL);
+  } finally {
+    await sql.end({ timeout: 1 });
+  }
+}
+
+/** Same source database as the advice: the guarded apply reads, never caller SQL. */
+export async function loadRedispatchCandidate(
+  env: Env,
+  failureId: number,
+): Promise<FailedJobReplayCandidate | null> {
+  const url = databaseUrl(env);
+  if (!url) throw new Error("no source database configured");
+  const sql = postgres(url, {
+    ...databaseOptions,
+    connect_timeout: 2,
+    connection: { statement_timeout: 5000 },
+  });
+  try {
+    return await loadReplayCandidateWithSql(sql, failureId, env.APP_URL);
   } finally {
     await sql.end({ timeout: 1 });
   }
