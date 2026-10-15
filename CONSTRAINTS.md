@@ -1,8 +1,9 @@
 # Constraints
 
-Last reviewed: 2026-10-11. No interview ran (non-interactive session), so this
-records the floor plus the measured defaults from the constraint skill; the
-numbered dimensions below mirror the gates already wired in this repo.
+Last reviewed: 2026-10-15, after the floor changes in [#704](https://github.com/TogetherWeOwn/two-web-next/pull/704)
+and [#878](https://github.com/TogetherWeOwn/two-web-next/pull/878). The guard
+rejects the listed floor-lowering changes (`ci/floor-guard.mjs:8-12`); PR lint
+requires queue-visible waiver trailers (`ci/pr-lint-output.py:60-71`).
 
 ## Floor (always enforced, no setup required)
 
@@ -14,6 +15,9 @@ numbered dimensions below mirror the gates already wired in this repo.
   `Floor-waiver: assertion-removed <path> -- <reason>`,
   `Floor-waiver: threshold-removed <Dimension> -- <reason>`, or
   `Floor-waiver: new-exemption .constraintsignore -- <reason>`.
+  For PRs, mirror every recognized branch trailer verbatim in the PR body;
+  missing mirrors fail `pr-lint` so merge-queue validation can see the waivers
+  (`ci/pr-lint-output.py:60-71`; `ci/floor_waiver_body.py:51-62`).
 - No secrets in source.
 - This file does not get weakened to make a change pass: thresholds only move
   up without discussion, and new exception rows fail the gate.
