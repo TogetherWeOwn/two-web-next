@@ -12,6 +12,7 @@ let {
   shareTitle,
   exactTitle,
   theme,
+  leafCss,
   activeNav,
   mainClass,
   loginReturnTo = null,
@@ -26,6 +27,9 @@ let {
   shareTitle?: string;
   exactTitle?: string;
   theme: "home" | "event" | "content" | "join" | "profile" | "schedule";
+  /** Inlined leaf CSS for the content shell; see SiteMetadata for why this
+    arrives as load data instead of an import. */
+  leafCss?: string;
   activeNav?: "home" | "events";
   mainClass?: string;
   loginReturnTo?: string | null;
@@ -39,7 +43,7 @@ let {
 const themeClass = $derived(theme === "home" ? "homepage-theme" : `${theme}-theme`);
 </script>
 
-<SiteMetadata {title} {canonical} {robots} {description} {shareTitle} {exactTitle} {theme} />
+<SiteMetadata {title} {canonical} {robots} {description} {shareTitle} {exactTitle} {theme} {leafCss} />
 <!-- Open Lobby chrome: colours resolve through src/app.css semantic tokens
   (bg-lobby-*/text-lobby-*/font-sans); no hard-coded palette values here. A
   restyle is a token swap in that one file. -->

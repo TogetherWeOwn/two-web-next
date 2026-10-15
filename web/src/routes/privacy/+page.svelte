@@ -9,7 +9,7 @@ import type { PageProps } from "./$types";
 // policy HTML is the shared renderPolicyMarkdown output passed in as data —
 // never a copied text — so hostile Markdown stays escaped paragraph text.
 let { data }: PageProps = $props();
-const { html, version, appUrl } = $derived(data);
+const { html, version, appUrl, leafCss } = $derived(data);
 const canonical = $derived(canonicalUrl(appUrl, "/privacy"));
 </script>
 
@@ -28,6 +28,7 @@ const canonical = $derived(canonicalUrl(appUrl, "/privacy"));
   title="Privacy policy"
   {canonical}
   theme="content"
+  {leafCss}
   accountChrome={joinChrome}
 >
   <div class="content-layout">

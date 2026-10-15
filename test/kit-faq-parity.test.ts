@@ -15,6 +15,7 @@ import { beforeAll, describe, expect, it } from "vitest";
 import { normalizeSection } from "../ci/kit-section-contract.mjs";
 import { resolveRouteOwner, ROUTE_MANIFEST } from "../src/route-ownership";
 import { FAQS, faqPageData } from "../src/faq-content";
+import { LEAF_CRITICAL_CSS } from "../src/leaf-critical-css";
 import { FAQS as screenFaqs } from "../src/screens/faq";
 import { canonicalUrl } from "../src/seo";
 import app from "./app";
@@ -62,8 +63,10 @@ async function buildKitFaqBundle(): Promise<{
       `
 import { render } from "svelte/server";
 import Page from ${JSON.stringify(join(worktree, "web/src/routes/faq/+page.svelte"))};
+import { LEAF_CRITICAL_CSS } from ${JSON.stringify(join(worktree, "src/leaf-critical-css.ts"))};
 export function renderPage(data) {
-  const { head, body } = render(Page, { props: { data } });
+  // Mirror the server load, which merges leafCss into the page data.
+  const { head, body } = render(Page, { props: { data: { ...data, leafCss: LEAF_CRITICAL_CSS } } });
   return "<head>" + head + "</head><body>" + body + "</body>";
 }
 `,
@@ -280,6 +283,17 @@ describe("Kit /faq parity with Hono", () => {
     expect(html).not.toMatch(/DISCORD_BOT_TOKEN/i);
   });
 
+  it("inlines the leaf CSS instead of render-blocking stylesheet links", () => {
+    // Same served contract as the Hono leaf (test/leaf-css-drift.test.ts):
+    // the exact hash-allowlisted block, no stylesheet link. This harness
+    // renders the page without +layout.svelte, so the layout CSS asset the
+    // built worker adds is measured separately (ci/kit-perf-budget.json).
+    const html = renderPage(faqPageData(APP_URL));
+    expect(html).toContain(`<style>${LEAF_CRITICAL_CSS}</style>`);
+    expect(html).not.toContain('rel="stylesheet"');
+    expect(html).not.toMatch(/<link(?=[^>]*rel="preload")(?=[^>]*as="style")/);
+  });
+
   it("pins the server load contract at the source level", () => {
     const raw = readFileSync(
       new URL("../web/src/routes/faq/+page.server.ts", import.meta.url),
@@ -295,6 +309,8 @@ describe("Kit /faq parity with Hono", () => {
     // (cookies, locals, request, parent) would be a session/cookie read even
     // under a name the token list above does not know.
     expect(code).toMatch(/async \(\{\s*setHeaders\s*\}\)/);
+    // The leaf CSS reaches the page only through this load's data merge.
+    expect(code).toContain("leafCss: LEAF_CRITICAL_CSS");
     // APP_URL is the only config-driven behavior: dropping it must fail this
     // pin rather than silently render a wrong canonical.
     expect(code).toMatch(/faqPageData\(env\.APP_URL\)/);
