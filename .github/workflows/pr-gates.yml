@@ -109,6 +109,16 @@ jobs:
           else
             echo "::warning::pr-lint docs test absent at this head SHA; skipped (predates #769)."
           fi
+          # Same predates/fail-closed shape for the advisory size labeller's
+          # tests: a head may predate them, but may not silently delete them.
+          if [ -f .github/scripts/test_pr_size.py ] && [ -f .github/scripts/pr_size.py ]; then
+            python3 -m unittest discover -s .github/scripts -p 'test_pr_size.py'
+          elif git log --format=%H -1 HEAD -- .github/scripts/pr_size.py .github/scripts/test_pr_size.py | grep -q .; then
+            echo "::error::pr-size script or test deleted at this head; refusing to skip."
+            exit 1
+          else
+            echo "::warning::pr-size tests absent at this head SHA; skipped (predates the advisory labeller)."
+          fi
 
       - name: Ratchet tracked internal references
         if: github.event_name != 'push'
