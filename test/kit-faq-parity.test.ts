@@ -15,6 +15,7 @@ import { beforeAll, describe, expect, it } from "vitest";
 import { normalizeSection } from "../ci/kit-section-contract.mjs";
 import { resolveRouteOwner, ROUTE_MANIFEST } from "../src/route-ownership";
 import { FAQS, faqPageData } from "../src/faq-content";
+import { transformContentLeafChunk } from "../src/kit-content-chunk";
 import { LEAF_CRITICAL_CSS } from "../src/leaf-critical-css";
 import { FAQS as screenFaqs } from "../src/screens/faq";
 import { canonicalUrl } from "../src/seo";
@@ -283,15 +284,24 @@ describe("Kit /faq parity with Hono", () => {
     expect(html).not.toMatch(/DISCORD_BOT_TOKEN/i);
   });
 
-  it("inlines the leaf CSS instead of render-blocking stylesheet links", () => {
+  it("serves the leaf CSS with zero render-blocking stylesheet links", () => {
     // Same served contract as the Hono leaf (test/leaf-css-drift.test.ts):
-    // the exact hash-allowlisted block, no stylesheet link. This harness
-    // renders the page without +layout.svelte, so the layout CSS asset the
-    // built worker adds is measured separately (ci/kit-perf-budget.json).
-    const html = renderPage(faqPageData(APP_URL));
+    // the exact hash-allowlisted block, no stylesheet link, and the Hono
+    // body class so the leaf block owns the canvas. This harness renders the
+    // page without +layout.svelte, so the layout asset SvelteKit adds on the
+    // built worker is folded in through the production hook transform
+    // (transformContentLeafChunk, via dispatchHookRequest): the assertion
+    // runs on the transformed document, and ci/kit-worker-e2e.mjs pins the
+    // same contract against the real built worker.
+    const html = transformContentLeafChunk(renderPage(faqPageData(APP_URL)));
     expect(html).toContain(`<style>${LEAF_CRITICAL_CSS}</style>`);
     expect(html).not.toContain('rel="stylesheet"');
     expect(html).not.toMatch(/<link(?=[^>]*rel="preload")(?=[^>]*as="style")/);
+    expect(html).toContain('<body class="base-theme content-theme">');
+    // The content shell must not lean on the stripped layout stylesheet:
+    // no Tailwind utilities in the served class attributes (the leaf block
+    // owns every styled element). Re-adding one stays green nowhere else.
+    expect(html).not.toMatch(/class="[^"]*(lobby-|font-sans)/);
   });
 
   it("pins the server load contract at the source level", () => {

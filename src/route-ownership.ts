@@ -13,7 +13,8 @@
 // (query preserved, body unread) to whichever renderer owns it.
 
 import type { AccessSink } from "./access-log";
-import { robotsTagFor, securityHeadersFor } from "./headers";
+import { isContentLeafPath, robotsTagFor, securityHeadersFor } from "./headers";
+import { transformContentLeafChunk } from "./kit-content-chunk";
 import type { KitLocals } from "./kit-session";
 import { type MemberRead, memberReadResponse } from "./member-reads";
 import { SAME_ORIGIN_EXEMPTIONS, UNSAFE_METHODS } from "./same-origin";
@@ -416,11 +417,19 @@ export interface HookEventLike {
   locals?: unknown;
 }
 
+// SvelteKit resolve options the core forwards for content leaves only.
+// Structural on purpose (no Kit import): transformPageChunk receives the
+// rendered HTML and returns its replacement. Every other route resolves
+// without options, exactly as before, so existing resolve stubs stay valid.
+export interface KitResolveOptions {
+  transformPageChunk?: (input: { html: string }) => string;
+}
+
 export interface HookDispatchDeps {
   appUrl: string;
   featuredImageHosts?: string;
   honoFetch: (request: Request) => Promise<Response>;
-  resolve: (event: HookEventLike) => Promise<Response>;
+  resolve: (event: HookEventLike, opts?: KitResolveOptions) => Promise<Response>;
   // Optional manifest override for tests. Production wiring never passes
   // one: the hook forwards only the loopback parity-fixture flag below and
   // the core alone turns flag + appUrl into the fixture route choice.
@@ -658,6 +667,16 @@ export async function dispatchHookRequest(
     response = await deps.pastArchive(event.request, () => deps.resolve(event));
   } else if (isEventsListPage && deps.eventsPage) {
     response = await deps.eventsPage(event.request, () => deps.resolve(event));
+  } else if (isContentLeafPath(route.path)) {
+    // Content leaves keep #808's zero-stylesheet contract on the served
+    // worker: the root layout's Tailwind asset is stripped after resolve and
+    // <body> gains the Hono body class, so the inlined leaf block owns the
+    // canvas with no render-blocking request. Gated on the manifest path
+    // (not the URL), so only Kit-owned leaves take it; disabled leaves never
+    // reach resolve. Every other public route resolves untouched.
+    response = await deps.resolve(event, {
+      transformPageChunk: ({ html }) => transformContentLeafChunk(html),
+    });
   } else {
     response = await deps.resolve(event);
   }

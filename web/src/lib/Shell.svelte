@@ -41,14 +41,24 @@ let {
 } = $props();
 
 const themeClass = $derived(theme === "home" ? "homepage-theme" : `${theme}-theme`);
+// Content leaves are styled solely by the inlined leaf block (Hono parity):
+// no Tailwind utilities here, so the served page needs nothing from the
+// root-layout stylesheet the hook strips (transformContentLeafChunk). Every
+// other theme keeps the Open Lobby chrome below.
+const shellClass = $derived(
+  theme === "content"
+    ? `base-theme ${themeClass}`
+    : `base-theme bg-lobby-surface font-sans text-lobby-ink ${themeClass}`,
+);
 </script>
 
 <SiteMetadata {title} {canonical} {robots} {description} {shareTitle} {exactTitle} {theme} {leafCss} />
 <!-- Open Lobby chrome: colours resolve through src/app.css semantic tokens
   (bg-lobby-*/text-lobby-*/font-sans); no hard-coded palette values here. A
-  restyle is a token swap in that one file. -->
-<div class="base-theme bg-lobby-surface font-sans text-lobby-ink {themeClass}" data-theme={theme}>
+  restyle is a token swap in that one file. The content theme is the
+  exception: it renders leaf-CSS classes only (see shellClass). -->
+<div class={shellClass} data-theme={theme}>
   <SiteHeader {activeNav} {loginReturnTo} {accountChrome} {hideAccount} />
   <main class={mainClass} id="main" tabindex="-1">{@render children()}</main>
-  <SiteFooter />
+  <SiteFooter {theme} />
 </div>
