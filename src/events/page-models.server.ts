@@ -108,15 +108,17 @@ export async function loadCalendarPageModel(args: {
     if (rank !== null) listPage = Math.floor(rank / EVENTS_UPCOMING_PAGE_SIZE) + 1;
   }
 
-  const {
-    rows: pageRows,
-    totalPages,
-    total: totalUpcoming,
-  } = await listUpcoming(db, now, opts, listPage);
-  const localPast = await listCalendarPast(db, now, opts);
-
+  // Independent reads start together like the homepage (perf(home) #856):
+  // the upcoming page (web DB), the past drawer (web DB) and the Discord
+  // transients (snapshot store, at most one live Discord GET) share nothing,
+  // so sequential awaits would sum every round trip into /events server time.
   // Keep the rows and failure flag on the same resolved source instance.
-  const discordRows = await discord.upcoming(now);
+  const [upcomingPage, localPast, discordRows] = await Promise.all([
+    listUpcoming(db, now, opts, listPage),
+    listCalendarPast(db, now, opts),
+    discord.upcoming(now),
+  ]);
+  const { rows: pageRows, totalPages, total: totalUpcoming } = upcomingPage;
   const persistedIds = await persistedDiscordIds(
     db,
     discordRows.map((row) => row.discordId),

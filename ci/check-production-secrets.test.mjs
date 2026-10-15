@@ -170,7 +170,7 @@ test("CLI fails closed on a missing secret and on wrangler failure without echoi
   assert.equal(failed.stdout, "");
 });
 
-test("required-secrets preflight runs before the moderator preflight and version upload/deploy", () => {
+test("required-secrets preflight runs before the moderator preflight, version upload and gradual promotion", () => {
   const workflow = readFileSync(
     new URL("../.github/workflows/deploy-production.yml", import.meta.url),
     "utf8",
@@ -179,14 +179,14 @@ test("required-secrets preflight runs before the moderator preflight and version
   const secrets = workflow.indexOf("run: node ci/check-production-secrets.mjs");
   const moderator = workflow.indexOf("run: npm run check:worker-moderators-production");
   const upload = workflow.indexOf("npx wrangler versions upload --env production");
-  const deploy = workflow.indexOf("npx wrangler versions deploy --env production");
+  const gradual = workflow.indexOf("uses: ./.github/actions/gradual-promote");
   assert.ok(
-    credentials > 0 && secrets > 0 && moderator > 0 && upload > 0 && deploy > 0,
-    "expected credentials, secrets, moderator and version upload/deploy steps in deploy-production.yml",
+    credentials > 0 && secrets > 0 && moderator > 0 && upload > 0 && gradual > 0,
+    "expected credentials, secrets, moderator, version upload and gradual promotion in deploy-production.yml",
   );
   assert.ok(
-    credentials < secrets && secrets < moderator && moderator < upload && upload < deploy,
-    "order must be credentials check, required-secrets preflight, moderator preflight, upload, deploy",
+    credentials < secrets && secrets < moderator && moderator < upload && upload < gradual,
+    "order must be credentials check, required-secrets preflight, moderator preflight, upload, gradual promotion",
   );
 });
 
@@ -321,6 +321,20 @@ test("every job that reads a PRODUCTION_* secret binds the production environmen
     const text = readFileSync(new URL(file, WORKFLOWS), "utf8");
     if (PRODUCTION_SECRET.test(text)) referencing.push(file);
     violations.push(...productionSecretEnvironmentViolations(text, file));
+  }
+  // Composite actions cannot bind an Environment, so they must never read a
+  // PRODUCTION_* secret themselves: the environment-bound caller passes
+  // values in as inputs. Any direct reference fails closed here.
+  const ACTIONS = new URL("../.github/actions/", import.meta.url);
+  for (const entry of readdirSync(ACTIONS, { withFileTypes: true })) {
+    if (!entry.isDirectory()) continue;
+    const file = `${entry.name}/action.yml`;
+    const text = readFileSync(new URL(file, ACTIONS), "utf8");
+    if (PRODUCTION_SECRET.test(text)) {
+      violations.push(
+        `${file}: PRODUCTION_* secret referenced in a composite action, which cannot bind an environment`,
+      );
+    }
   }
   // The scan is only meaningful if it sees the workflows that carry the secrets.
   for (const expected of [

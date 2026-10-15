@@ -11,6 +11,8 @@ name: pr-gates
 on:
   pull_request:
     types: [opened, edited, synchronize, reopened, ready_for_review]
+  merge_group:
+    types: [checks_requested]
   push:
     branches: [main]
   # Manual validation of an open PR by number (releases no longer dispatch it:
@@ -109,9 +111,19 @@ jobs:
           else
             echo "::warning::pr-lint docs test absent at this head SHA; skipped (predates #769)."
           fi
+          # Same predates/fail-closed shape for the advisory size labeller's
+          # tests: a head may predate them, but may not silently delete them.
+          if [ -f .github/scripts/test_pr_size.py ] && [ -f .github/scripts/pr_size.py ]; then
+            python3 -m unittest discover -s .github/scripts -p 'test_pr_size.py'
+          elif git log --format=%H -1 HEAD -- .github/scripts/pr_size.py .github/scripts/test_pr_size.py | grep -q .; then
+            echo "::error::pr-size script or test deleted at this head; refusing to skip."
+            exit 1
+          else
+            echo "::warning::pr-size tests absent at this head SHA; skipped (predates the advisory labeller)."
+          fi
 
       - name: Ratchet tracked internal references
-        if: github.event_name != 'push'
+        if: github.event_name != 'push' && github.event_name != 'merge_group'
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           BASE_REF: ${{ github.base_ref }}
@@ -176,7 +188,12 @@ jobs:
             python3 .github/scripts/internal_ref_ratchet.py --base "$BASE_SHA" --head "$HEAD_SHA"
           fi
 
+      - name: Accept metadata already linted on the PR
+        if: github.event_name == 'merge_group'
+        run: echo 'pr-lint passes for merge_group; PR title and body were checked before admission.'
+
       - name: Resolve PR title/body
+        if: github.event_name != 'merge_group'
         id: pr
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -186,7 +203,7 @@ jobs:
       # Advisory input for the internal-ID warning. A failed listing must not fail the gate.
       # The subjects go to a job-owned file, never to a step output or the environment.
       - name: List PR commit subjects
-        if: github.event_name != 'push'
+        if: github.event_name != 'push' && github.event_name != 'merge_group'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO: ${{ github.repository }}
@@ -201,7 +218,7 @@ jobs:
 
       - name: Resolve PR head ref
         id: head-ref
-        if: github.event_name != 'push'
+        if: github.event_name != 'push' && github.event_name != 'merge_group'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO: ${{ github.repository }}
@@ -223,6 +240,7 @@ jobs:
           printf 'head_ref=%s\n' "$head_ref" >> "$GITHUB_OUTPUT"
 
       - name: Check title, body and commits
+        if: github.event_name != 'merge_group'
         env:
           PR_METADATA_PATH: ${{ steps.pr.outputs.metadata }}
           COMMITS: ${{ toJSON(github.event.commits) }}
@@ -288,7 +306,11 @@ jobs:
         env:
           GITLEAKS_BIN: ${{ runner.temp }}/gitleaks
           EVENT_NAME: ${{ github.event_name }}
-          BASE_REF: ${{ github.base_ref }}
-        # On pull_request the base branch's .gitleaks.toml / .gitleaksignore
-        # apply, so an allowlist is honoured only after it has merged.
+          # base_ref is empty on merge_group; the queue commit's target
+          # branch arrives as merge_group.base_ref (refs/heads/main), which
+          # gitleaks-scan.sh strips to the branch name.
+          BASE_REF: ${{ github.base_ref || github.event.merge_group.base_ref }}
+        # On pull_request and merge_group the base branch's .gitleaks.toml /
+        # .gitleaksignore apply, so an allowlist is honoured only after it
+        # has merged.
         run: bash .github/scripts/gitleaks-scan.sh

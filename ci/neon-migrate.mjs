@@ -29,19 +29,12 @@ const isProductionIdentity = (url) =>
   (url.hostname === PLANETSCALE_PRODUCTION_HOST ||
     branchIdOf(url.username) === PLANETSCALE_PRODUCTION_BRANCH_ID);
 
-// Staging accepts the direct Neon endpoint or the pinned PlanetScale staging
-// branch during the provider transition; pooled hosts never are.
-const isStagingEndpoint = (url) => {
-  const hostname = url.hostname;
-  if (/^ep-[a-z0-9-]+\.[a-z0-9.-]+\.neon\.tech$/.test(hostname))
-    return !hostname.split(".")[0].endsWith("-pooler");
-  if (
-    hostname === PLANETSCALE_STAGING_HOST &&
-    branchIdOf(url.username) === PLANETSCALE_STAGING_BRANCH_ID
-  )
-    return true;
-  return false;
-};
+// Staging is the pinned PlanetScale staging branch only: the username suffix
+// carries the branch id and the host pin keeps a mis-provisioned production
+// endpoint out. Retired Neon endpoints are refused.
+const isStagingEndpoint = (url) =>
+  url.hostname === PLANETSCALE_STAGING_HOST &&
+  branchIdOf(url.username) === PLANETSCALE_STAGING_BRANCH_ID;
 
 class MigrationError extends Error {}
 const refuse = (message) => {
@@ -59,7 +52,8 @@ export function migrationConfig(env, { testDatabase = false } = {}) {
     refuse(error instanceof Error ? error.message : "Migration admission refused.");
   }
   const target = env.MIGRATION_TARGET;
-  const secret = target === "staging" ? "NEON_STAGING_DATABASE_URL" : "PRODUCTION_DATABASE_URL";
+  const secret =
+    target === "staging" ? "PLANETSCALE_STAGING_DATABASE_URL" : "PRODUCTION_DATABASE_URL";
   if (!env[secret]) refuse(`Missing ${secret} Environment secret; no fallback is permitted.`);
   let url;
   try {
@@ -118,7 +112,7 @@ export function migrationConfig(env, { testDatabase = false } = {}) {
     refuse("Invalid channel binding option; value withheld.");
   // postgres.js forwards unknown URL options as startup settings, not libpq flags,
   // and does not implement SCRAM channel binding. Strip the libpq-only flag here
-  // (including `require`, the Neon default); TLS stays enforced via
+  // (including `require`, a common libpq default); TLS stays enforced via
   // sslmode=require|verify-full + rejectUnauthorized:true in migrationClient.
   url.searchParams.delete("channel_binding");
   url.port = "5432";

@@ -77,22 +77,23 @@ The sanctioned live apply path is the `db-migrate` workflow
 - Dispatch is `workflow_dispatch` with a `staging`/`production` choice
   (default `staging`), or `workflow_call` from an authorized caller.
 - Gates run before any install or database access: the ref must be
-  `refs/heads/main`, and `production` requires the
-  `PRODUCTION_DEPLOY_ENABLED` variable to be true.
+  `refs/heads/main`, staging requires `STAGING_MIGRATION_HOLD` exactly
+  `false`, and `production` requires the `PRODUCTION_DEPLOY_ENABLED`
+  variable to be true.
 - Secrets come from the matching GitHub Environment only
-  (`NEON_STAGING_DATABASE_URL` or `PRODUCTION_DATABASE_URL`); the
+  (`PLANETSCALE_STAGING_DATABASE_URL` or `PRODUCTION_DATABASE_URL`); the
   unselected target is never exposed and no fallback URL exists.
 - Endpoint rules are enforced in code: direct port `5432`, no pooler;
-  staging must be the pinned PlanetScale staging branch and host (direct Neon
-  endpoints still accepted during the transition; the production identity is
-  refused), production must be a direct PlanetScale endpoint
-  (`<id>.pg.psdb.cloud`) with TLS.
+  staging must be the pinned PlanetScale staging branch and host (retired
+  Neon endpoints are refused; the production identity is refused),
+  production must be a direct PlanetScale endpoint (`<id>.pg.psdb.cloud`)
+  with TLS.
 - Steps: numbering guard, read-only `plan` (journal/ledger diff, no
   DDL), `apply` under a Postgres transaction advisory lock with the
   pre-apply PITR timestamp recorded, then `verify` proves zero pending
   web migrations.
 - Applies never cancel each other: the concurrency group is
-  `neon-web-migrate-<target>` with `cancel-in-progress: false`.
+  `web-migrate-<target>` with `cancel-in-progress: false`.
 - Staging Worker deploys apply the same script for `staging` inside the
   deploy job; live production execution always needs its own
   authorization and is never part of a Worker deploy.
