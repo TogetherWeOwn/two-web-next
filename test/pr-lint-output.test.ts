@@ -59,6 +59,7 @@ function transport(
   branchMessages: string[] = [],
   mergedBranchMessages: string[] = [],
   baseAdvanceMessages: string[] = [],
+  originOnlyBaseRef = false,
 ) {
   const scratch = mkdtempSync(
     join(
@@ -114,7 +115,8 @@ function transport(
       encoding: "utf8",
     }).stdout.trim();
     if (baseAdvanceMessages.length) {
-      for (const args of [["checkout", "-b", "main", baseSha]]) {
+      const baseBranch = originOnlyBaseRef ? "base-update" : "main";
+      for (const args of [["checkout", "-b", baseBranch, baseSha]]) {
         const checkedOut = spawnSync(git, args, { cwd: scratch, env: gitEnv, encoding: "utf8" });
         expect(checkedOut.status, checkedOut.stderr).toBe(0);
       }
@@ -127,6 +129,45 @@ function transport(
           const committed = spawnSync(git, args, { cwd: scratch, env: gitEnv, encoding: "utf8" });
           expect(committed.status, committed.stderr).toBe(0);
         }
+      }
+      if (originOnlyBaseRef) {
+        const updated = spawnSync(git, ["update-ref", "refs/remotes/origin/main", "HEAD"], {
+          cwd: scratch,
+          env: gitEnv,
+          encoding: "utf8",
+        });
+        expect(updated.status, updated.stderr).toBe(0);
+        const localMain = spawnSync(git, ["branch", "--list", "main"], {
+          cwd: scratch,
+          env: gitEnv,
+          encoding: "utf8",
+        });
+        expect(localMain.status, localMain.stderr).toBe(0);
+        if (localMain.stdout.trim()) {
+          const removed = spawnSync(git, ["branch", "-D", "main"], {
+            cwd: scratch,
+            env: gitEnv,
+            encoding: "utf8",
+          });
+          expect(removed.status, removed.stderr).toBe(0);
+        }
+        const localMainRef = spawnSync(git, ["rev-parse", "--verify", "refs/heads/main"], {
+          cwd: scratch,
+          env: gitEnv,
+          encoding: "utf8",
+        });
+        expect(localMainRef.status).not.toBe(0);
+        const remoteMainRef = spawnSync(
+          git,
+          ["rev-parse", "--verify", "refs/remotes/origin/main"],
+          {
+            cwd: scratch,
+            env: gitEnv,
+            encoding: "utf8",
+          },
+        );
+        expect(remoteMainRef.status, remoteMainRef.stderr).toBe(0);
+        expect(remoteMainRef.stdout.trim()).not.toBe(baseSha);
       }
     }
     if (mergedBranchMessages.length) {
@@ -177,11 +218,15 @@ function transport(
       expect(merged.status, merged.stderr).toBe(0);
     }
     if (baseAdvanceMessages.length) {
-      const merged = spawnSync(git, ["merge", "--no-ff", "main", "-m", "Merge main"], {
-        cwd: scratch,
-        env: gitEnv,
-        encoding: "utf8",
-      });
+      const merged = spawnSync(
+        git,
+        ["merge", "--no-ff", originOnlyBaseRef ? "origin/main" : "main", "-m", "Merge main"],
+        {
+          cwd: scratch,
+          env: gitEnv,
+          encoding: "utf8",
+        },
+      );
       expect(merged.status, merged.stderr).toBe(0);
     }
     writeFileSync(
@@ -334,6 +379,23 @@ describe.each(["pull_request", "workflow_dispatch"])(
       );
       expect(copied.status, copied.output).toBe(0);
       expect(copied.output).toContain("PR floor-waiver trailers are visible");
+    });
+
+    it("resolves origin/main when no local main exists and the base SHA is stale", () => {
+      const baseWaiver = "Floor-waiver: test-deleted test/earlier.test.ts -- moved in earlier PR";
+      const result = transport(
+        event,
+        title,
+        validBody,
+        "fixture-author",
+        [],
+        [],
+        [],
+        [baseWaiver],
+        true,
+      );
+      expect(result.status, result.output).toBe(0);
+      expect(result.output).not.toContain(baseWaiver);
     });
 
     it("ignores waiver trailers already on the base branch after an update-branch merge", () => {

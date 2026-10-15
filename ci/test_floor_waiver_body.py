@@ -32,6 +32,22 @@ class FloorWaiverBodyTests(unittest.TestCase):
         self.assertEqual(missing_body_waivers(wrapped, long_waiver), [])
         self.assertEqual(missing_body_waivers(long_waiver, wrapped), [])
 
+    def test_adjacent_wrapped_waivers_remain_separate(self):
+        first = "Floor-waiver: test-deleted test/first.test.ts -- moved to docs"
+        second = "Floor-waiver: assertion-removed test/second.test.ts -- assertion moved"
+        third = "Floor-waiver: test-deleted test/staging-workflow-secret-mapping.test.ts -- moved to docs"
+        wrapped = "\n".join(
+            [
+                "Floor-waiver: test-deleted test/first.test.ts",
+                "-- moved to docs",
+                "Floor-waiver: assertion-removed test/second.test.ts",
+                "-- assertion moved",
+                "Floor-waiver: test-deleted test/staging-workflow-secret-mapping.test.ts",
+                "-- moved to docs",
+            ]
+        )
+        self.assertEqual(waiver_trailers(wrapped), {first, second, third})
+
     def test_mid_path_wrap_strips_inserted_space(self):
         # A 72-column word-wrap can split inside a long path; real paths never
         # contain spaces, so the inserted space must not break the waiver.

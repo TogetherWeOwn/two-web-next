@@ -489,6 +489,34 @@ describe("floor-guard", () => {
     );
   });
 
+  it("unfolds adjacent wrapped waivers without joining them together", () => {
+    const waivers = parseFloorWaivers(
+      [
+        "Floor-waiver: test-deleted test/first.test.ts",
+        "-- moved to docs",
+        "Floor-waiver: assertion-removed test/second.test.ts",
+        "-- assertion moved to the replacement suite",
+        "Floor-waiver: test-deleted test/staging-workflow-secret-mapping.test.ts",
+        "-- moved to docs",
+      ].join("\n"),
+    );
+    assert.deepEqual(
+      [...waivers.get("test-deleted")],
+      ["test/first.test.ts", "test/staging-workflow-secret-mapping.test.ts"],
+    );
+    assert.deepEqual([...waivers.get("assertion-removed")], ["test/second.test.ts"]);
+  });
+
+  it("removes wrap-inserted spaces from a path split mid-word", () => {
+    const waivers = parseFloorWaivers(
+      "Floor-waiver: test-deleted test/staging-workflow-sec\nret-mapping.test.ts -- moved to docs",
+    );
+    assert.deepEqual(
+      [...waivers.get("test-deleted")],
+      ["test/staging-workflow-secret-mapping.test.ts"],
+    );
+  });
+
   it("accepts a reasoned assertion-removal waiver only for its named test", () => {
     const d = diff(
       "--- a/test/a.test.ts\n+++ b/test/a.test.ts\n@@ -1 +0,0 @@\n-expect(x).toBe(1);\n",
