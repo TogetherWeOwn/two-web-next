@@ -82,23 +82,21 @@ function honoMemberCookie(): Promise<string> {
 
 async function memberCookie(target: ParityTarget): Promise<string> {
   const pair = await honoMemberCookie();
-  if (target.name !== "kit") {
-    // Freshest wins on Hono: rotating page reads (GET /e/:key) delete the
-    // presented bearer's row and deliver the replacement via Set-Cookie into
-    // this context's jar, so the login pair above is dead from the first
-    // such read. Replay the jar's current pair when it has one; a later
-    // non-rotating read (the event JSON) then stays authenticated instead
-    // of 401ing on the rotated-away token. The board gate never rotates,
-    // which is why only reads ordered after a rotating page hit this.
-    const state = await api(target).storageState();
-    const current = state.cookies.find((cookie) => cookie.name === "__Host-two_session");
-    return current ? `${current.name}=${current.value}` : pair;
-  }
-  const eq = pair.indexOf("=");
-  const signed = pair.slice(eq + 1);
+  // Freshest wins: rotating page reads (GET /e/:key) delete the presented
+  // bearer's row and deliver the replacement via Set-Cookie into Hono's jar.
+  // Kit has a separate cookie signature, but shares that same session row, so
+  // it must re-sign the jar's current pair when a rotation has already run.
+  const hono = targets.find((candidate) => candidate.name === "hono")!;
+  const state = await api(hono).storageState();
+  const current = state.cookies.find((cookie) => cookie.name === "__Host-two_session");
+  const source = current ? `${current.name}=${current.value}` : pair;
+  if (target.name !== "kit") return source;
+
+  const eq = source.indexOf("=");
+  const signed = source.slice(eq + 1);
   const raw = signed.slice(0, signed.lastIndexOf("."));
   const signature = createHmac("sha256", kitFixtureSessionSecret()).update(raw).digest("base64");
-  return `${pair.slice(0, eq + 1)}${raw}.${signature}`;
+  return `${source.slice(0, eq + 1)}${raw}.${signature}`;
 }
 
 function expectNoMarker(headers: Record<string, string>, label: string) {
