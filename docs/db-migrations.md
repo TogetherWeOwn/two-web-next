@@ -213,14 +213,21 @@ with `target: production`, behind the `production` Environment:
   PlanetScale direct endpoint, same `pg_dump -Fc` path — direct `5432`, never
   the pooled `6432` port).
   Also needs `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID`.
-- Layout: `neon/<branch>-<branch>-<UTC>.dump` dailies — the `neon` R2 key prefix is retained deliberately so pre-rename manifests and archives stay addressable; it names the key layout, not the live provider (for example
+- Layout: `neon/<branch>-<branch>-<UTC>.dump` dailies — the `neon` R2 key
+  prefix is retained deliberately so pre-rename manifests and archives stay
+  addressable only until rotation prunes them (retention, below in this
+  bullet); it names the key layout, not the live provider (for example
   `neon/staging-staging-<UTC>.dump`); weeklies are
   `<daily-without-.dump>-weekly-<UTC>.dump` copies; the manifest is
   `neon/<branch>-<branch>/MANIFEST.txt` (for example
   `neon/staging-staging/MANIFEST.txt`). Retention on scheduled runs
   (staging): newest 7 dailies + newest 4 weeklies (mirrors the `two-web`
-  `pg-backup.sh` policy). Manual dispatches skip the promote-weekly +
-  rotate step, so a production dispatch only backs up and checks — its
+  `pg-backup.sh` policy), so pre-flip Neon-era archives under the shared
+  prefix rotate out within about 7 days (dailies) and 4 Sundays (weeklies);
+  any Neon export needed before the Neon staging database is deleted must
+  come from the live database, not from these R2 archives. Manual
+  dispatches skip the promote-weekly + rotate step, so a production dispatch
+  only backs up and checks — its
   archives are never promoted or pruned and need an approved manual rotate.
 - Proof: every backup re-lists its key after upload; restore is proved
   by restoring into a scratch database and comparing row counts
