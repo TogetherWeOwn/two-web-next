@@ -1,21 +1,41 @@
 // Gradual production promotion helpers.
 //
+// Canonical home: this file ships inside the shared composite action, which
+// resolves it from its own path (github.action_path), so every caller repo
+// runs the same traffic math with no copy. Self-contained on purpose: it
+// takes no dependency on the caller repo, so a caller needs only the action
+// reference plus its own smoke checker.
+//
 // Wrangler's `versions deploy` refuses a lone `TAG@5%` spec: the named
 // percentages must total exactly 100 (see validateTrafficSubtotal in the
 // installed wrangler bundle). Every gradual step therefore names both
 // versions: the new tag at N% and the pre-promote version at (100-N)%.
 // The 100% step promotes the tag alone, which replaces the deployment.
 //
-// The workflow pipes `wrangler ... --json` output into this CLI:
+// The action pipes `wrangler ... --json` output into this CLI:
 //   wrangler deployments list --env production --name <worker> --json \
-//     | node ci/gradual-promote.mjs --capture-rollback-target
+//     | node "$ACTION_PATH/gradual-promote.mjs" --capture-rollback-target
 //   wrangler versions list --env production --name <worker> --json \
-//     | node ci/gradual-promote.mjs --resolve-tag <tag>
+//     | node "$ACTION_PATH/gradual-promote.mjs" --resolve-tag <tag>
 // Both commands fail closed on unparseable or ambiguous input and never
 // echo the piped content (it may name infrastructure).
 import { readFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
-import { assertRollbackVersionId } from "./production-deploy-gate.mjs";
+
+// Worker Version IDs are lowercase UUIDs: the same shape the rollback
+// command itself requires. Validated before an id reaches a shell command
+// or the Cloudflare API, so untrusted `wrangler ... --json` output is never
+// trusted as a rollback target or a deploy spec.
+const ROLLBACK_VERSION_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
+export function assertRollbackVersionId(versionId) {
+  if (typeof versionId !== "string" || !ROLLBACK_VERSION_PATTERN.test(versionId)) {
+    throw new Error(
+      "Rollback version_id must be a Worker Version ID (lowercase UUID); list versions with `wrangler versions list`",
+    );
+  }
+  return versionId;
+}
 
 // The card's rollout ladder: canary, half, full.
 export const GRADUAL_STEPS = [5, 50, 100];

@@ -626,15 +626,33 @@ test("shared gradual action promotes 5-50-100 with per-stage gates and auto-roll
   );
   assert.ok(action.includes("npx wrangler versions deploy --env production"));
   assert.ok(action.includes('npx wrangler rollback "$PREV_VERSION"'));
-  // Rollbacks run only on their own stage's gate failure, then fail the job
-  // so later stages never run on a broken promote.
+  // Every rollback runs on any failure or cancellation once a rollback target
+  // is recorded: promote API errors and step timeouts included, not just
+  // gate failures. Later rollbacks stand down when an earlier one already
+  // ran, and retry when one was cancelled before finishing. Each restore is
+  // time-bounded and refuses an unknown target before wrangler ever runs.
   assert.equal(
-    (action.match(/if: failure\(\) && steps\.smoke-\d+\.conclusion == 'failure'/g) ?? []).length,
-    2,
+    (
+      action.match(
+        /if: \(failure\(\) \|\| cancelled\(\)\) && steps\.rollback-target\.conclusion == 'success'/g,
+      ) ?? []
+    ).length,
+    3,
   );
-  assert.match(
-    action,
-    /if: failure\(\) && \(steps\.smoke-100-override\.conclusion == 'failure' \|\| steps\.smoke-100\.conclusion == 'failure'\)/,
+  assert.ok(
+    action.includes(
+      "&& (steps.rollback-5.conclusion == 'skipped' || steps.rollback-5.conclusion == 'cancelled')",
+    ),
+  );
+  assert.ok(
+    action.includes(
+      "&& (steps.rollback-50.conclusion == 'skipped' || steps.rollback-50.conclusion == 'cancelled')",
+    ),
+  );
+  assert.equal((action.match(/timeout 120 npx wrangler rollback/g) ?? []).length, 3);
+  assert.equal(
+    (action.match(/: "\$\{PREV_VERSION:\?missing pre-promote rollback target\}"/g) ?? []).length,
+    3,
   );
   // Four smoke loops exit 0 on success and exit 1 when retries run out;
   // three rollback steps exit 1 after restoring the pre-promote version.
@@ -642,7 +660,13 @@ test("shared gradual action promotes 5-50-100 with per-stage gates and auto-roll
   assert.equal((action.match(/^        exit 1$/gm) ?? []).length, 7);
   // Canary stages probe the new version directly; the final stage also probes
   // live traffic. No curl one-offs, no trigger or full deploys.
-  assert.equal((action.match(/--version-override "\$WORKER_NAME=\$NEW_VERSION"/g) ?? []).length, 3);
+  // The override pins probes to the new version in the checker's quoted
+  // worker="uuid" shape; the checker rejects an unquoted value before any
+  // probe, so an unquoted shell would fail every canary gate into rollback.
+  assert.equal(
+    (action.match(/--version-override "\$WORKER_NAME=\\"\$NEW_VERSION\\""/g) ?? []).length,
+    3,
+  );
   assert.ok(!action.includes("curl "));
   assert.ok(!action.includes("wrangler triggers deploy"));
   assert.ok(!action.includes("wrangler deploy --env production"));

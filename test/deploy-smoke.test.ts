@@ -2,6 +2,7 @@ import { spawnSync } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
 
 // Execute the staging workflow's actual shell block with a fake checker and sleep.
@@ -97,6 +98,7 @@ function productionSmoke(succeedOnAttempt: number) {
       "prod-route-smoke-",
     ),
   );
+  const smokeUrl = pathToFileURL(join(process.cwd(), "bin/smoke.mjs")).href;
   try {
     writeFileSync(
       join(scratch, "node"),
@@ -105,7 +107,18 @@ import { appendFileSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 const attempts = join(process.env.RUNNER_TEMP, "attempts");
 appendFileSync(attempts, "x");
-const expectedOverride = "two-web-next-production=" + process.env.NEW_VERSION;
+// The shell must hand the checker a value the REAL checker accepts. The
+// fake validates the received override with the real assertVersionOverride
+// (not a retyped pattern), so shell/checker drift fails here instead of
+// failing every canary gate into rollback in production.
+const { assertVersionOverride } = await import(${JSON.stringify(smokeUrl)});
+try {
+  assertVersionOverride(process.argv[6]);
+} catch (error) {
+  console.error("checker rejected version override: " + (error instanceof Error ? error.message : error));
+  process.exit(2);
+}
+const expectedOverride = 'two-web-next-production="' + process.env.NEW_VERSION + '"';
 if (process.argv.length !== 7 || process.argv[2] !== "bin/smoke.mjs" || process.argv[3] !== "https://togetherweown.com" || process.argv[4] !== "--allow-indexable" || process.argv[5] !== "--version-override" || process.argv[6] !== expectedOverride) {
   console.error("unexpected checker invocation");
   process.exit(2);
@@ -445,6 +458,10 @@ describe("production deploy smoke (offline)", () => {
       expect(block).toBeDefined();
       expect(block).toContain('node bin/smoke.mjs "https://$DOMAIN" $INDEXABLE');
       expect(block).toContain("--version-override");
+      // The checker override shape carries inner quotes (worker-name="uuid");
+      // an unquoted shell value is rejected before any probe, which would
+      // fail every canary gate into rollback.
+      expect(block).toContain('--version-override "$WORKER_NAME=\\"$NEW_VERSION\\""');
       expect(block).not.toContain("next.togetherweown.com");
       expect(block).not.toContain("https://togetherweown.com --allow-indexable");
     }

@@ -1,7 +1,9 @@
 // Gradual production promotion helpers: deterministic wrangler
 // versions math plus JSON parsing for the rollback target and the promoted
-// version id. No network, no Cloudflare credentials: the workflow pipes
-// `wrangler ... --json` output into the CLI in gradual-promote.mjs.
+// version id. No network, no Cloudflare credentials: the action pipes
+// `wrangler ... --json` output into the CLI vendored alongside it. The
+// helper is exercised through its canonical action path, the same path the
+// composite action resolves, so caller-relative drift fails here first.
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { test } from "node:test";
@@ -12,7 +14,7 @@ import {
   rollbackTarget,
   splitDeploySpecs,
   versionIdForTag,
-} from "./gradual-promote.mjs";
+} from "../.github/actions/gradual-promote/gradual-promote.mjs";
 
 const PREV = "12345678-1234-1234-1234-123456789abc";
 const NEXT = "22345678-1234-1234-1234-123456789abc";
@@ -111,21 +113,27 @@ test("latest deployment wins by created_on, not array order", () => {
 test("CLI resolves a deploy spec for the workflow without shell interpolation", () => {
   const good = spawnSync(
     process.execPath,
-    ["ci/gradual-promote.mjs", "--deploy-spec", TAG, "5", PREV],
+    [".github/actions/gradual-promote/gradual-promote.mjs", "--deploy-spec", TAG, "5", PREV],
     { encoding: "utf8" },
   );
   assert.equal(good.status, 0, good.stderr);
   assert.deepEqual(good.stdout.split("\n").slice(0, 2), [`${PREV}@95`, `${TAG}@5%`]);
   const full = spawnSync(
     process.execPath,
-    ["ci/gradual-promote.mjs", "--deploy-spec", TAG, "100", PREV],
+    [".github/actions/gradual-promote/gradual-promote.mjs", "--deploy-spec", TAG, "100", PREV],
     { encoding: "utf8" },
   );
   assert.equal(full.status, 0, full.stderr);
   assert.deepEqual(full.stdout.split("\n").slice(0, 2), ["", `${TAG}@100%`]);
   const hostile = spawnSync(
     process.execPath,
-    ["ci/gradual-promote.mjs", "--deploy-spec", `${TAG};printf HARMLESS`, "5", PREV],
+    [
+      ".github/actions/gradual-promote/gradual-promote.mjs",
+      "--deploy-spec",
+      `${TAG};printf HARMLESS`,
+      "5",
+      PREV,
+    ],
     { encoding: "utf8" },
   );
   assert.equal(hostile.status, 1);
@@ -136,7 +144,7 @@ test("CLI resolves a deploy spec for the workflow without shell interpolation", 
 test("CLI captures the rollback target and resolves tags from piped wrangler JSON", () => {
   const target = spawnSync(
     process.execPath,
-    ["ci/gradual-promote.mjs", "--capture-rollback-target"],
+    [".github/actions/gradual-promote/gradual-promote.mjs", "--capture-rollback-target"],
     {
       input: JSON.stringify([
         { created_on: "2026-10-15T00:00:00Z", versions: [{ version_id: PREV, percentage: 100 }] },
@@ -148,7 +156,7 @@ test("CLI captures the rollback target and resolves tags from piped wrangler JSO
   assert.equal(target.stdout.trim(), PREV);
   const refused = spawnSync(
     process.execPath,
-    ["ci/gradual-promote.mjs", "--capture-rollback-target"],
+    [".github/actions/gradual-promote/gradual-promote.mjs", "--capture-rollback-target"],
     {
       input: JSON.stringify([{ created_on: "2026-10-15T00:00:00Z", versions: [] }]),
       encoding: "utf8",

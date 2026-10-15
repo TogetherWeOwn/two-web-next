@@ -528,14 +528,18 @@ describe("production deployment preserves configured triggers", () => {
     expect(upload).toBeGreaterThan(-1);
     expect(gradual).toBeGreaterThan(upload);
     // Gradual steps name both versions so traffic totals exactly 100;
-    // the 100% step promotes the uploaded tag alone.
+    // the 100% step promotes the uploaded tag alone. The helper resolves
+    // from the action's own path, never caller-relative, so every repo runs
+    // the same traffic math with no copy.
+    expect(action).not.toContain("node ci/gradual-promote.mjs");
     for (const percentage of [5, 50]) {
       expect(action).toContain(
-        `node ci/gradual-promote.mjs --deploy-spec "$VERSION_TAG" ${percentage} "$PREV_VERSION"`,
+        '"${{ github.action_path }}/gradual-promote.mjs" --deploy-spec "$VERSION_TAG" ' +
+          `${percentage} "$PREV_VERSION"`,
       );
     }
     expect(action).toContain(
-      'node ci/gradual-promote.mjs --deploy-spec "$VERSION_TAG" 100 "$PREV_VERSION"',
+      '"${{ github.action_path }}/gradual-promote.mjs" --deploy-spec "$VERSION_TAG" 100 "$PREV_VERSION"',
     );
     expect(action).toContain("npx wrangler versions deploy --env production");
     expect(workflow).not.toContain("wrangler triggers deploy");
