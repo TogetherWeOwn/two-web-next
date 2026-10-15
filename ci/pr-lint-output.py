@@ -20,6 +20,34 @@ import subprocess
 import sys
 import tempfile
 
+from floor_waiver_body import missing_body_waivers
+
+
+def check_queue_visible_waivers(body):
+    base_sha = os.environ.get("FLOOR_WAIVER_BASE_SHA", "").strip()
+    if not base_sha:
+        print("::error::Missing immutable PR base SHA for floor-waiver validation.")
+        sys.exit(2)
+    try:
+        merge_base = subprocess.run(
+            ["git", "merge-base", base_sha, "HEAD"],
+            check=True, capture_output=True, text=True,
+        ).stdout.strip()
+        messages = subprocess.run(
+            ["git", "log", "--first-parent", "--format=%B", f"{merge_base}..HEAD"],
+            check=True, capture_output=True, text=True,
+        ).stdout
+    except (subprocess.CalledProcessError, OSError):
+        print("::error::Could not read the PR commit range for floor-waiver validation.")
+        sys.exit(2)
+    missing = missing_body_waivers(messages, body)
+    if missing:
+        print("::error::Every Floor-waiver trailer in branch commits must appear verbatim in the PR body for merge-queue validation.")
+        for waiver in missing:
+            print(f"  Missing from PR body: {waiver}")
+        sys.exit(1)
+    print("PR floor-waiver trailers are visible to merge-queue validation.")
+
 
 def resolve():
     # Bind identity/revision before publishing any output, then keep the decoded
@@ -47,6 +75,8 @@ def check():
     for key in ("event", "title", "body", "author"):
         os.environ[key.upper()] = metadata[key]
     runpy.run_path(str(Path(__file__).with_name("check-pr-conventions.py")), run_name="__main__")
+    if metadata["event"] == "pull_request":
+        check_queue_visible_waivers(metadata["body"])
     # Upstream body/branch/reference gate: the strict title/body subset (tracker IDs,
     # instance UI links, the internal host) always fails on a public repo; the rest
     # follows the mode. Pull requests only: push and workflow_dispatch keep the proven

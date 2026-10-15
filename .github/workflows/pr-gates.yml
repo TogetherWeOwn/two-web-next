@@ -99,6 +99,16 @@ jobs:
             echo "::warning::Ratchet tests absent at this head SHA; skipped (predates #651)."
           fi
           python3 -m unittest discover -s ci -p 'test_check_pr_conventions.py'
+          # Heads cut before this PR lack the waiver-body test; fail closed if a head
+          # deletes it so a PR cannot silence the queue-visibility check.
+          if [ -f ci/test_floor_waiver_body.py ]; then
+            python3 -m unittest discover -s ci -p 'test_floor_waiver_body.py'
+          elif git log --format=%H -1 HEAD -- ci/test_floor_waiver_body.py | grep -q .; then
+            echo "::error::Floor-waiver body test deleted at this head; refusing to skip."
+            exit 1
+          else
+            echo "::warning::Floor-waiver body test absent at this head SHA; skipped (predates this change)."
+          fi
           # Heads cut before this PR lack the docs drift test: the head-SHA
           # checkout then has nothing for this pattern, and unittest exits 5.
           # Skip with a warning when the head predates the test; fail closed
@@ -224,20 +234,24 @@ jobs:
           REPO: ${{ github.repository }}
           PR_NUMBER: ${{ inputs.pr_number || github.event.pull_request.number }}
           HEAD_EVENT_REF: ${{ github.event.pull_request.head.ref }}
+          BASE_EVENT_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
           set -euo pipefail
-          # pull_request events carry the head ref; dispatch runs resolve it from
-          # the API so manual runs lint the same branch name.
+          # pull_request events carry both refs; dispatch runs resolve them from
+          # the API so manual runs lint the same branch and immutable base.
           if [ -n "$HEAD_EVENT_REF" ]; then
             head_ref="$HEAD_EVENT_REF"
+            base_sha="$BASE_EVENT_SHA"
           else
             head_ref=$(gh api "repos/$REPO/pulls/$PR_NUMBER" --jq '.head.ref')
+            base_sha=$(gh api "repos/$REPO/pulls/$PR_NUMBER" --jq '.base.sha')
           fi
-          if [ -z "$head_ref" ]; then
-            echo "::error::Could not resolve the PR head branch name."
+          if [ -z "$head_ref" ] || [ -z "$base_sha" ]; then
+            echo "::error::Could not resolve the PR head ref and base SHA."
             exit 1
           fi
           printf 'head_ref=%s\n' "$head_ref" >> "$GITHUB_OUTPUT"
+          printf 'base_sha=%s\n' "$base_sha" >> "$GITHUB_OUTPUT"
 
       - name: Check title, body and commits
         if: github.event_name != 'merge_group'
@@ -249,6 +263,7 @@ jobs:
           REPO_PRIVATE: ${{ github.event.repository.private }}
           PR_NUMBER: ${{ github.event.pull_request.number || inputs.pr_number || '0' }}
           HEAD_REF_ERROR_FROM_PR: ${{ env.HEAD_REF_ERROR_FROM_PR }}
+          FLOOR_WAIVER_BASE_SHA: ${{ steps.head-ref.outputs.base_sha }}
         run: python3 ci/pr-lint-output.py check
 
   # Full-history gitleaks scan; `gitleaks` is a required check on main. Uses

@@ -894,6 +894,46 @@ describe("floor-guard", () => {
     }
   });
 
+  it("accepts queue squash body waivers for a renamed test but still rejects an unwaived deletion", () => {
+    const dir = mkdtempSync(join(tmpdir(), "floor-guard-merge-group-"));
+    try {
+      const git = (args) => spawnSync("git", args, { cwd: dir, encoding: "utf8" });
+      git(["init", "-q"]);
+      git(["config", "user.email", "test@example.com"]);
+      git(["config", "user.name", "test"]);
+      mkdirSync(join(dir, "test"), { recursive: true });
+      writeFileSync(join(dir, "test", "a.test.ts"), 'it("x", () => { expect(1).toBe(1); });\n');
+      git(["add", "."]);
+      git(["commit", "-qm", "base"]);
+      const base = git(["rev-parse", "HEAD"]).stdout.trim();
+      mkdirSync(join(dir, "docs"), { recursive: true });
+      git(["mv", "test/a.test.ts", "docs/a.txt"]);
+      const waiver =
+        "Floor-waiver: test-deleted test/a.test.ts -- moved into docs as documentation";
+      git(["commit", "-m", "move test out of suite", "-m", waiver]);
+      const guard = join(dirname(fileURLToPath(import.meta.url)), "floor-guard.mjs");
+      const run = () => spawnSync("node", [guard, "--base", base], { cwd: dir, encoding: "utf8" });
+      const branch = run();
+      assert.equal(branch.status, 0, branch.stderr);
+      assert.match(branch.stdout, /Floor-waiver: test-deleted test\/a\.test\.ts/);
+
+      // Merge-queue validation sees one squash commit, not the waiver-bearing
+      // branch commit. Its message is the PR title plus body.
+      git(["reset", "--soft", base]);
+      git(["commit", "-qm", "test: move test", "-m", "PR body without waiver"]);
+      const unwaived = run();
+      assert.equal(unwaived.status, 1, "the squash without a waiver fails");
+      assert.match(unwaived.stderr, /test-deleted/);
+
+      git(["commit", "--amend", "-qm", "test: move test", "-m", "PR body", "-m", waiver]);
+      const waived = run();
+      assert.equal(waived.status, 0, waived.stderr);
+      assert.match(waived.stdout, /Floor-waiver: test-deleted test\/a\.test\.ts/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("catches a git-moved test file end to end", () => {
     // Real `git mv` output uses rename headers (no ---/+++ for a 100% move),
     // so this pins the parser against actual git output, not just fixtures.
