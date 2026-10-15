@@ -147,6 +147,28 @@ export const ROUTE_MANIFEST: OwnedRoute[] = [
     enabled: false,
     reads: { resource: "events", action: "view", route: "admin.events.create" },
   },
+  // Moderator event-edit form: same declaration as the Hono handler
+  // (admin.events.edit, src/admin/routes.tsx). Only this GET migrates:
+  // POST /admin/events/:key, the publish/cancel/RSVP-pause/RSVP-reopen
+  // siblings and the guarded /admin/events/:key/edit legacy redirect stay
+  // Hono-owned, so wall-time UTC carriers, future recurrence propagation,
+  // bounded roster paging and postcommit writeback keep one authority until
+  // the write slice lands. Off until the enablement review.
+  // The legacy /admin/events/create bookmark pins to Hono with the exact
+  // disabled entry below: exact entries beat :param patterns in bestMatch,
+  // so without it the :key pattern would capture /create once enabled and
+  // Kit would 404 instead of Hono's redirect to /admin/events/new.
+  {
+    method: "GET",
+    path: "/admin/events/create",
+    enabled: false,
+  },
+  {
+    method: "GET",
+    path: "/admin/events/:key",
+    enabled: false,
+    reads: { resource: "events", action: "view", route: "admin.events.edit" },
+  },
   // Join-attempts audit list: member data, so the Kit branch renders
   // inside the member-read boundary with this declaration and the bridged
   // viewer. Off until the enablement review: the Hono viewer answers meanwhile.

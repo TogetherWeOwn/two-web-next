@@ -116,6 +116,13 @@ describe("hooks.server route ownership wiring", () => {
         enabled: false,
         reads: { resource: "events", action: "view", route: "admin.events.create" },
       },
+      { method: "GET", path: "/admin/events/create", enabled: false },
+      {
+        method: "GET",
+        path: "/admin/events/:key",
+        enabled: false,
+        reads: { resource: "events", action: "view", route: "admin.events.edit" },
+      },
       {
         method: "GET",
         path: "/admin/join-attempts",
