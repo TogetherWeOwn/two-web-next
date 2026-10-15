@@ -245,6 +245,29 @@ for (const target of targets) {
       if (target.name === "kit")
         expect(kitFixtureOwnsMemberBoard(), "Kit fixture owns the member board").toBe(true);
       const expectedMarker = target.name === "kit" ? "kit" : null;
+      // Read-after-write across workers: the session row is committed by the
+      // single shared QA login moments earlier on the Hono worker, and this
+      // suite runs with retries: 0, so one first-read miss (an unknown
+      // session reads as a guest bounce, which the client follows onto Hono)
+      // must not fail the run. Poll the first view briefly; the strict
+      // asserts below still prove the contract on the settled read.
+      await expect
+        .poll(
+          async () => {
+            const ready = await api(target).get("/leaderboards/members", {
+              headers: { cookie },
+            });
+            return (
+              ready.status() === 200 &&
+              (ready.headers()["x-two-renderer"] ?? null) === expectedMarker
+            );
+          },
+          {
+            message: `${target.name} member board session becomes visible`,
+            timeout: 15000,
+          },
+        )
+        .toBe(true);
       for (const path of [
         "/leaderboards/members",
         "/leaderboards/members?scope=relative",
@@ -312,28 +335,41 @@ for (const target of targets) {
     const EVENT_KEY = "01J00000000000000000000001";
     const EVENT_PATH = `/e/${EVENT_KEY}`;
 
-    test("guest renders the published contract with join pitch and no attendees", async () => {
+    test("guest renders the published contract with join pitch and no attendees", async ({
+      playwright,
+    }) => {
       if (target.name === "kit")
         expect(kitFixtureOwnsEventDetail(), "Kit fixture owns the event detail").toBe(true);
       const expectedMarker = target.name === "kit" ? "kit" : null;
-      const response = await api(target).get(EVENT_PATH);
-      expect(response.status(), `${target.name} guest detail`).toBe(200);
-      expect(response.headers()["content-type"]).toContain("text/html");
-      expect(response.headers()["x-two-renderer"] ?? null).toBe(expectedMarker);
-      // Per-viewer page: never shared-cacheable, on either renderer.
-      expect(response.headers()["cache-control"]).toBe("private, no-store");
-      expect(response.headers()["vary"] ?? "").toMatch(/cookie/i);
-      const body = await response.text();
-      expect(scrubSecrets(body)).toEqual([]);
-      expect(body).toContain("E2E Community Night");
-      expect(body).toContain('data-testid="event-join-pitch"');
-      expect(body).toContain('data-testid="event-copy-link"');
-      expect(body).toContain('data-testid="event-jsonld"');
-      expect(body).toContain('rel="canonical"');
-      expect(body).toContain(`/events/${EVENT_KEY}.ics`);
-      expect(body).not.toContain('data-testid="event-attendees"');
-      expect(body).not.toContain("Sign out");
-      expect(body).toContain("Welcome, guest");
+      // Cookie-free by construction: the shared api() context accumulates
+      // session cookies from the earlier QA-login journey, which would render
+      // the member view (no join pitch) instead of the guest contract.
+      const guest = await playwright.request.newContext({
+        baseURL: target.origin,
+        ignoreHTTPSErrors: target.ignoreHTTPSErrors,
+      });
+      try {
+        const response = await guest.get(EVENT_PATH);
+        expect(response.status(), `${target.name} guest detail`).toBe(200);
+        expect(response.headers()["content-type"]).toContain("text/html");
+        expect(response.headers()["x-two-renderer"] ?? null).toBe(expectedMarker);
+        // Per-viewer page: never shared-cacheable, on either renderer.
+        expect(response.headers()["cache-control"]).toBe("private, no-store");
+        expect(response.headers()["vary"] ?? "").toMatch(/cookie/i);
+        const body = await response.text();
+        expect(scrubSecrets(body)).toEqual([]);
+        expect(body).toContain("E2E Community Night");
+        expect(body).toContain('data-testid="event-join-pitch"');
+        expect(body).toContain('data-testid="event-copy-link"');
+        expect(body).toContain('data-testid="event-jsonld"');
+        expect(body).toContain('rel="canonical"');
+        expect(body).toContain(`/events/${EVENT_KEY}.ics`);
+        expect(body).not.toContain('data-testid="event-attendees"');
+        expect(body).not.toContain("Sign out");
+        expect(body).toContain("Welcome, guest");
+      } finally {
+        await guest.dispose();
+      }
     });
 
     test("member renders the no-JS RSVP form posting to the Hono controller", async () => {
@@ -359,7 +395,11 @@ for (const target of targets) {
     });
 
     test("JSON, ICS and RSVP mutations stay Hono-owned without the Kit marker", async () => {
-      const json = await api(target).get(`/events/${EVENT_KEY}`);
+      // The event JSON names its viewer (waitlist position), so it needs the
+      // member session like every other member read; guests get the 401
+      // refusal on both renderers (src/events/routes-detail.tsx jsonSession).
+      const cookie = await memberCookie(target);
+      const json = await api(target).get(`/events/${EVENT_KEY}`, { headers: { cookie } });
       expect(json.status(), `${target.name} event JSON`).toBe(200);
       expectNoMarker(json.headers(), `${target.name} event JSON`);
 
