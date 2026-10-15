@@ -261,12 +261,14 @@ for (const target of targets) {
       // labels; signal pages carry the cross-signal nav.
       const indexBody = await (await api(target).get("/hotzones")).text();
       expect(indexBody).toContain("Hot zones");
+      expect(indexBody).toMatch(/across [1-9]\d* scheduled gatherings/);
       expect(indexBody).toContain('href="/hotzones/joins"');
       expect(indexBody).toContain('href="/hotzones/voice"');
       expect(indexBody).toContain('href="/hotzones/games"');
       expect(indexBody).toContain("Estimated voice activity (estimates until calibration).");
       expect(indexBody).toContain("Estimated games activity (estimates until calibration).");
       const joinsBody = await (await api(target).get("/hotzones/joins")).text();
+      expect(joinsBody).toMatch(/across [1-9]\d* scheduled gatherings/);
       expect(joinsBody).toContain("joins hot zone");
       expect(joinsBody).toContain("Join activity for season");
       expect(joinsBody).toContain("Successful joins only");
