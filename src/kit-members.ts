@@ -43,6 +43,7 @@ import {
 export type MembersBoardSession = {
   status: "authenticated" | "guest" | "unknown";
   userId: string | null;
+  username?: string | null;
   member: boolean;
 };
 
@@ -105,6 +106,7 @@ export async function loadMembersBoardData(args: MembersBoardArgs): Promise<{
   activity: string | null;
   rows: BoardRow[];
   viewerId: string;
+  viewerUsername: string;
   available: boolean;
   appUrl: string;
 }> {
@@ -142,6 +144,9 @@ export async function loadMembersBoardData(args: MembersBoardArgs): Promise<{
     activity: activity.game,
     rows,
     viewerId: args.session.userId,
+    // The board only serves authenticated members (gate above), so the page
+    // renders member chrome with this name, mirroring Hono's session header.
+    viewerUsername: args.session.username ?? "",
     available: db !== null,
     appUrl: args.env.APP_URL,
   };

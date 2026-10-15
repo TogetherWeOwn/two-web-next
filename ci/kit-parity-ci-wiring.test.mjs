@@ -55,7 +55,7 @@ test("the Kit fixture owns the member board only on its loopback worker", () => 
   const worker = readFileSync(new URL("./kit-worker-dev.mjs", import.meta.url), "utf8");
   assert.match(worker, /KIT_PARITY_FIXTURE_MEMBER_BOARD: "true"/);
   const hooks = readFileSync(new URL("../web/src/hooks.server.ts", import.meta.url), "utf8");
-  assert.match(hooks, /manifest: fixtureManifestFor\(env\)/);
+  assert.match(hooks, /fixtureMemberBoard: env\.KIT_PARITY_FIXTURE_MEMBER_BOARD === "true"/);
   assert.match(hooks, /afterMemberRead:/);
   const ownership = readFileSync(new URL("../src/route-ownership.ts", import.meta.url), "utf8");
   // The override is loopback-gated in the tested core, and no deployed Kit

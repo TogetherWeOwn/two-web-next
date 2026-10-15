@@ -109,6 +109,63 @@ describe("fixtureManifestFor (Kit parity fixture only)", () => {
     expect(await res.text()).toBe("kit board");
   });
 
+  it("dispatches the member board to Kit from the fixture flag alone, no manifest passed", async () => {
+    // The hook is a pure env binding (test/hook-route-ownership.test.mjs pins
+    // it carries no manifest seam): it forwards only the boolean flag, and
+    // the core turns flag + loopback appUrl into the fixture route choice.
+    const request = new Request("http://127.0.0.1:8788/leaderboards/members", {
+      headers: { host: "127.0.0.1:8788" },
+    });
+    const resolve = vi.fn(async () => new Response("kit board"));
+    const honoFetch = vi.fn(async () => new Response("hono"));
+    const res = await dispatchHookRequest(
+      { request, url: new URL(request.url), route: { id: "/leaderboards/members" } },
+      {
+        appUrl: "http://127.0.0.1:8788",
+        honoFetch,
+        resolve,
+        fixtureMemberBoard: true,
+        sessionFor: async () => ({
+          status: "authenticated",
+          session: {
+            userId: "100000000000000101",
+            username: "zxq-fixture-member",
+            avatar: null,
+            member: true,
+            moderator: false,
+          },
+          returnTo: null,
+          joinResult: null,
+          expiredWrite: null,
+        }),
+        accessSink: async () => async () => true,
+      },
+    );
+    expect(resolve).toHaveBeenCalledTimes(1);
+    expect(honoFetch).not.toHaveBeenCalled();
+    expect(res.headers.get(KIT_RENDERER_HEADER)).toBe(KIT_RENDERER_VALUE);
+  });
+
+  it("keeps the member board on Hono when the fixture flag meets a deployed appUrl", async () => {
+    const request = new Request("https://next.example.test/leaderboards/members", {
+      headers: { host: "next.example.test" },
+    });
+    const resolve = vi.fn(async () => new Response("kit board"));
+    const honoFetch = vi.fn(async () => new Response("hono"));
+    const res = await dispatchHookRequest(
+      { request, url: new URL(request.url), route: { id: "/leaderboards/members" } },
+      {
+        appUrl: "https://next.example.test",
+        honoFetch,
+        resolve,
+        fixtureMemberBoard: true,
+      },
+    );
+    expect(resolve).not.toHaveBeenCalled();
+    expect(honoFetch).toHaveBeenCalledTimes(1);
+    expect(await res.text()).toBe("hono");
+  });
+
   it("records the board view queued by the load only after the boundary releases the 200", async () => {
     const manifest = fixtureManifestFor({
       APP_URL: "http://127.0.0.1:8788",

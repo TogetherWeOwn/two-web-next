@@ -385,11 +385,16 @@ export interface HookDispatchDeps {
   featuredImageHosts?: string;
   honoFetch: (request: Request) => Promise<Response>;
   resolve: (event: HookEventLike) => Promise<Response>;
-  // Optional manifest override for tests. The hook passes only
-  // fixtureManifestFor(env): the shipped ROUTE_MANIFEST, except on the
-  // loopback Kit parity fixture where the member board is fixture-enabled
-  // so its journey actually executes the Kit load (see fixtureManifestFor).
+  // Optional manifest override for tests. Production wiring never passes
+  // one: the hook forwards only the loopback parity-fixture flag below and
+  // the core alone turns flag + appUrl into the fixture route choice.
   manifest?: OwnedRoute[];
+  // Loopback Kit parity fixture flag, forwarded from env by the hook as a
+  // plain boolean (KIT_PARITY_FIXTURE_MEMBER_BOARD === "true"). Honoured
+  // only through fixtureManifestFor: exact flag plus an http loopback
+  // appUrl, so a deployed Worker can never enable the board through it.
+  // Absent or false leaves the shipped ROUTE_MANIFEST untouched.
+  fixtureMemberBoard?: boolean;
   // Optional read-only session bridge. Runs only after a Kit
   // ownership decision and merges its decision into event.locals before
   // resolve, so Kit loads share one session decision. Absent by default:
@@ -548,7 +553,15 @@ export async function dispatchHookRequest(
   // its method/path/query/decode coverage guards the dispatch too. Inlining
   // resolveRouteOwner here once left mutants (hard-coded GET, hard-coded
   // path, path+search) green against 32 dispatch tests.
-  const route = decideRoute(event.request, deps.manifest ?? ROUTE_MANIFEST);
+  const route = decideRoute(
+    event.request,
+    deps.manifest ??
+      fixtureManifestFor({
+        APP_URL: deps.appUrl,
+        KIT_PARITY_FIXTURE_MEMBER_BOARD: deps.fixtureMemberBoard ? "true" : undefined,
+      }) ??
+      ROUTE_MANIFEST,
+  );
   if (!route) {
     return deps.honoFetch(event.request);
   }

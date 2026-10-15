@@ -27,6 +27,7 @@ export const load: PageServerLoad = async ({ url, locals, setHeaders }) => {
         // guest: the helper answers its branded 503 for "unknown".
         status: locals.status ?? "unknown",
         userId: locals.session?.userId ?? null,
+        username: locals.session?.username ?? null,
         member: locals.session?.member ?? false,
       },
       seasonParam: url.searchParams.get("season"),

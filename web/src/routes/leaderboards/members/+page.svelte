@@ -4,7 +4,8 @@ import { canonicalUrl } from "../../../../../src/seo";
 import type { PageProps } from "./$types";
 
 let { data }: PageProps = $props();
-const { season, scope, activity, rows, viewerId, available, appUrl } = $derived(data);
+const { season, scope, activity, rows, viewerId, viewerUsername, available, appUrl } =
+  $derived(data);
 const label = $derived(activity === null ? "every game" : activity);
 const destination = (nextScope: string) => {
   const params = new URLSearchParams();
@@ -16,6 +17,14 @@ const destination = (nextScope: string) => {
 };
 </script>
 
+{#snippet memberChrome()}
+  <form method="post" action="/logout">
+    <span class="account-caption">Signed in</span>
+    <span class="who">{viewerUsername}</span>
+    <button type="submit" class="link">Sign out</button>
+  </form>
+{/snippet}
+
 <Shell
   title="Member leaderboard"
   canonical={canonicalUrl(appUrl, "/leaderboards/members")}
@@ -25,6 +34,7 @@ const destination = (nextScope: string) => {
   activeNav="events"
   mainClass="events-page"
   loginReturnTo={destination(scope)}
+  accountChrome={memberChrome}
 >
   <p class="strap">Members only</p>
   <h1>Member leaderboard</h1>
