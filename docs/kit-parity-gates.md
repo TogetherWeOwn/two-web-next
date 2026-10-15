@@ -32,6 +32,7 @@ expect Hono for the right reason.
 | `GET /profile` | `web/src/routes/profile/+page.svelte` (`csr=false`, one shared `web/src/lib/ProfileView.svelte`, member record + optional stats) | member (`profile`/`view`/`profile`) | Hono (`enabled: false`) |
 | `GET /members/:user` | `web/src/routes/members/[user]/+page.svelte` (same shared view; retired `/members` directory has no route) | member (`profile`/`view`/`profiles.show`) | Hono (`enabled: false`) |
 | `GET /e/:key` | `web/src/routes/e/[key]/+page.svelte` (`csr=false`, one shared `web/src/lib/EventDetail.svelte` over the `KitEventDetailModel` shape, existing `/islands/rsvp-button.js` + `/copy-link.js` + `/going-count.js`; JSON/ICS stay Hono-owned) | member (`member`/`list`/`events.page`, bridged viewer; disclosed attendee + own-RSVP subjects audited, anonymous releases with none) | Hono (`enabled: false`; enablement blocked on the RSVP companion) |
+| `GET /leaderboards/members` | `web/src/routes/leaderboards/members/+page.svelte` (`csr=false`, thin binding over `src/kit-members.ts`: same gate order, season/scope/activity grammar, ranking read and `private, no-store` as `src/leaderboards/routes.tsx`; the anonymous board-view log is queued by the load and written after the member-read boundary releases a 200, never inside its capture) | leaderboard (`leaderboard`/`list`/`leaderboards.members`, bridged viewer) | Hono (`enabled: false`; held until the executed parity journey below earns a fresh privacy verdict) |
 | everything else | none yet (Kit `[...path]` catch-all → `honoFetch`) | — | Hono |
 
 Add one row per migrated route with its reads class (`public` routes render
@@ -54,8 +55,9 @@ claim of journey parity:
 5. `node ci/kit-worker-e2e.mjs` (built Worker runtime fixture)
 
 In `browser-smoke`, after the critical journeys:
-`e2e:kit-parity` (parameterized no-login journeys vs Hono and the built Kit
-Worker), then `node ci/check-kit-parity.mjs` (loud ledger).
+`e2e:kit-parity` (parameterized journeys vs Hono and the built Kit
+Worker; one shared QA login for the member-board journey), then
+`node ci/check-kit-parity.mjs` (loud ledger).
 
 One baseline integrator owns `e2e/visual/__screenshots__/` and
 `e2e/visual/__screenshots-kit__/`: parallel migration cards never commit
@@ -101,6 +103,34 @@ recovery contract adds the shared shell markers (`recovery-heading`,
 `recovery-retry`, `recovery-invite`), safe retry/invite hrefs and an
 unconditional private, no-store pin. Reserved paths (`/up`) and `POST /api/*`
 must never carry the Kit marker.
+
+The member-board journeys are the authenticated arm. In preview mode they
+run only when `KIT_PARITY_QA_TOKEN` carries the staging QA token: the gate
+spends one QA login per base (`POST /auth/qa/qa-member`), replays the
+session cookie on the board fetches, and asserts the member contract
+(member chrome, `private, no-store`, `noindex, nofollow`, scope nav, filter
+form, rank/member/going table or empty status, no per-attempt fields, no
+profile links) on the overall, relative, season and activity views, plus
+the admission answers (guest 302 to `/auth/discord`, grammar 400s, never a
+board). Without the token — or when a base answers the login without a
+session — those journeys ledger as skipped WITH the reason, never as a
+quiet pass. The signed-in non-member 403 cannot be minted by the QA seam
+(both QA identities are members), so it stays pinned hermetically
+(`test/member-leaderboard-seasonal-relative-acceptance.test.ts`,
+`test/kit-members.test.ts`). The same journey executes in CI against the
+local Hono worker and the built Kit Worker in
+`e2e/kit-parity/parity.spec.ts`, which spends one shared QA login for both
+targets: the session row is shared, and the spec re-signs the bearer token
+with the Kit fixture's own synthetic secret (`ci/kit-worker-dev.mjs`) for
+the Kit target, since the isolated fixture deliberately does not share the
+Hono worker's signing secret. The Kit target answers from the Kit load
+itself: the fixture worker carries `KIT_PARITY_FIXTURE_MEMBER_BOARD=true`,
+which `fixtureManifestFor` (`src/route-ownership.ts`) honours only for an
+http loopback `APP_URL`, enabling just this entry in the fixture's manifest
+while the shipped manifest keeps the route on Hono everywhere deployed.
+The spec asserts the `kit` renderer marker on the Kit target for the served
+board, so a fixture that stops owning the route fails the journey instead
+of silently comparing Hono against Hono.
 
 Exit codes mirror the staging gate: 0 pass, 1 journeys failed, 2
 misconfigured (one-sided URLs, non-allowlisted hosts) or all-skipped/empty
@@ -164,9 +194,11 @@ to 256B — the repository rule from `ci/bundle-budget.json`):
 
 ## Parameterized journeys (`playwright.kit-parity.config.ts`)
 
-`e2e/kit-parity/parity.spec.ts` runs the no-login journeys — past archive
+`e2e/kit-parity/parity.spec.ts` runs the journeys — past archive
 paging/refusals, public feeds/SEO, reserved/API surface, cross-origin
-refusals — against both the Hono worker and the built Kit Worker in one run.
+refusals, and the authenticated member-board journey (guest bounce, member
+views, grammar refusals; one shared QA login) — against both the Hono
+worker and the built Kit Worker in one run.
 Bodies are origin-normalized before comparison (Hono pins the virtual
 staging origin, Kit pins its own `APP_URL`; host strings differ by design).
 The `webcal://` feed origins normalize to a distinct token from the

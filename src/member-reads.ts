@@ -271,6 +271,14 @@ export function memberReadResponse(
   declaration: ReadDeclaration | (() => ReadDeclaration | undefined),
   write: AccessSink,
   render: () => Promise<Response>,
+  // Post-release side effect for work that is not a member read (the Hono
+  // handler's anonymous board-view log is the model: src/leaderboards/
+  // routes.tsx writes it only after memberReadBoundary releases a 200).
+  // Runs only when the boundary released the buffered response, and outside
+  // the capture (captures.exit, like the audit sink), so its writes can
+  // neither be refused by the capture nor refuse it. The hook owns its own
+  // fail-open policy; a throwing hook never replaces a released response.
+  afterRelease?: (response: Response) => Promise<void>,
 ): Promise<Response> {
   const capture: Capture = { subjects: new Set(), failed: false, pending: 0 };
   return captures.run(capture, async () => {
@@ -285,6 +293,13 @@ export function memberReadResponse(
     const release = await releaseAfterAudit(capture, declared, write, meta);
     if (buffered && release.released) {
       buffered.headers.set("cache-control", "private, no-store");
+      if (afterRelease) {
+        try {
+          await captures.exit(() => afterRelease(buffered));
+        } catch {
+          // Fail-open by contract above: the released response still stands.
+        }
+      }
       return buffered;
     }
     return refusedResponse();

@@ -1,7 +1,10 @@
+import { createHmac } from "node:crypto";
 import { expect, test, type APIRequestContext } from "@playwright/test";
 import { sectionOf } from "../../ci/kit-section-contract.mjs";
 import {
   expectedKitMarker,
+  kitFixtureOwnsMemberBoard,
+  kitFixtureSessionSecret,
   KIT_ORIGIN,
   normalizeOrigin,
   parityTargets,
@@ -10,11 +13,13 @@ import {
   type ParityTarget,
 } from "../kit-parity";
 
-// Kit journey parity (docs/kit-parity-gates.md): the no-login
-// journeys run against BOTH the Hono worker and the built Kit Worker in one
-// run, and every body comparison is origin-normalized first. Seeded
-// guest-only routes: no QA token, no session, no fixtures — so failure
-// artifacts carry no secrets by construction (the gate script still scrubs).
+// Kit journey parity (docs/kit-parity-gates.md): the journeys run
+// against BOTH the Hono worker and the built Kit Worker in one run, and
+// every body comparison is origin-normalized first. Guest routes need no
+// session; the member-board journey spends exactly one QA login (below)
+// whose bearer token is replayed to both targets (re-signed for the Kit
+// fixture's own secret) — the token and cookie values never appear in
+// assertions or artifacts, and every body is scrubbed.
 // Login journeys (member RSVP, moderator admin, profile edit) stay Hono-only
 // until their routes migrate; they are ledgered as loud skips with reasons by
 // ci/kit-parity-gates.mjs, never as quiet test.skip calls here.
@@ -41,6 +46,47 @@ function api(target: ParityTarget): APIRequestContext {
   const context = contexts.get(target.name);
   if (!context) throw new Error(`kit-parity: no API context for ${target.name}`);
   return context;
+}
+
+// One QA login for the whole member-board journey, issued by the Hono worker:
+// the session row lives in the shared seeded Postgres, so the same bearer
+// token authenticates on both targets. The cookie signature does not replay
+// across targets — the isolated Kit fixture verifies with its own synthetic
+// secret (ci/kit-worker-dev.mjs, pinned by ci/kit-parity-ci-wiring.test.mjs),
+// so the Kit copy is re-signed with that fixture value below. In production
+// both renderers share one deployed secret and no re-signing exists.
+// POST /auth/qa/:identity shares the qa-login throttle, so exactly one login
+// is spent here however many board fetches follow.
+let memberCookiePromise: Promise<string> | null = null;
+function honoMemberCookie(): Promise<string> {
+  memberCookiePromise ??= (async () => {
+    const token = process.env.E2E_QA_TOKEN;
+    if (!token) throw new Error("Missing ephemeral CI QA token");
+    const hono = targets.find((target) => target.name === "hono")!;
+    const response = await api(hono).post("/auth/qa/qa-member", {
+      headers: { "X-TWO-QA-Auth": token, Origin: "https://localhost:8787" },
+      maxRedirects: 0,
+    });
+    expect(response.status(), "QA login issues a session").toBe(204);
+    const setCookie = (await response.headersArray()).find(
+      (header) =>
+        header.name.toLowerCase() === "set-cookie" &&
+        header.value.startsWith("__Host-two_session="),
+    );
+    if (!setCookie) throw new Error("QA login set no session cookie");
+    return setCookie.value.split(";")[0]!;
+  })();
+  return memberCookiePromise;
+}
+
+async function memberCookie(target: ParityTarget): Promise<string> {
+  const pair = await honoMemberCookie();
+  if (target.name !== "kit") return pair;
+  const eq = pair.indexOf("=");
+  const signed = pair.slice(eq + 1);
+  const raw = signed.slice(0, signed.lastIndexOf("."));
+  const signature = createHmac("sha256", kitFixtureSessionSecret()).update(raw).digest("base64");
+  return `${pair.slice(0, eq + 1)}${raw}.${signature}`;
 }
 
 function expectNoMarker(headers: Record<string, string>, label: string) {
@@ -166,6 +212,74 @@ for (const target of targets) {
       const hostileBody = await hostile.text();
       expect(hostileBody).toContain('href="/auth/discord?next=%2Fprofile"');
       expect(hostileBody).not.toContain("evil.test");
+    });
+  });
+
+  // Member leaderboard (GET /leaderboards/members only): the authenticated
+  // parity journey. Admission and grammar are asserted per target, the served
+  // board carries the member contract (private, no-store, noindex, member
+  // chrome, no profile links), and bodies are secret-scrubbed. A signed-in
+  // non-member 403 cannot be minted by the QA seam (both QA identities are
+  // members), so that arm stays pinned hermetically
+  // (test/member-leaderboard-seasonal-relative-acceptance.test.ts and
+  // test/kit-members.test.ts).
+  test.describe(`${target.name}: member leaderboard keeps its member contract`, () => {
+    test("guest is bounced to Discord sign-in, never the board", async () => {
+      const response = await api(target).get("/leaderboards/members", { maxRedirects: 0 });
+      expect(response.status()).toBe(302);
+      expect(response.headers()["location"] ?? "").toContain("/auth/discord");
+      const body = await response.text();
+      expect(scrubSecrets(body)).toEqual([]);
+      expect(body).not.toContain("Member leaderboard");
+    });
+
+    test("member board serves overall, relative, season and activity views privately", async () => {
+      const cookie = await memberCookie(target);
+      // The Kit target must answer from the Kit load, not the Hono fallback:
+      // the parity fixture owns the board (kitFixtureOwnsMemberBoard), so
+      // its marker is "kit" even though the shipped manifest still holds
+      // the route on Hono for deployed workers. If the fixture ever stops
+      // owning it, this expectation fails instead of proving Hono-vs-Hono.
+      if (target.name === "kit")
+        expect(kitFixtureOwnsMemberBoard(), "Kit fixture owns the member board").toBe(true);
+      const expectedMarker = target.name === "kit" ? "kit" : null;
+      for (const path of [
+        "/leaderboards/members",
+        "/leaderboards/members?scope=relative",
+        "/leaderboards/members?season=2026",
+        "/leaderboards/members?activity=valheim",
+      ]) {
+        const response = await api(target).get(path, { headers: { cookie } });
+        expect(response.status(), `${target.name} ${path}`).toBe(200);
+        expect(response.headers()["content-type"]).toContain("text/html");
+        expect(response.headers()["x-two-renderer"] ?? null).toBe(expectedMarker);
+        // Per-viewer rows: never shared-cacheable, on either renderer.
+        expect(response.headers()["cache-control"]).toBe("private, no-store");
+        const body = await response.text();
+        expect(scrubSecrets(body)).toEqual([]);
+        expect(body).toContain("<h1>Member leaderboard</h1>");
+        expect(body).toContain('<meta name="robots" content="noindex, nofollow"');
+        expect(body).toContain('aria-label="Board scope"');
+        expect(body).toContain("Sign out");
+        expect(body).not.toContain("Welcome, guest");
+        expect(body).not.toContain('href="/members/');
+      }
+    });
+
+    test("bad season, scope and activity answer 400 before any board", async () => {
+      const cookie = await memberCookie(target);
+      for (const path of [
+        "/leaderboards/members?season=bogus",
+        "/leaderboards/members?scope=friends",
+        "/leaderboards/members?scope=bogus",
+        "/leaderboards/members?activity=chess!",
+      ]) {
+        const response = await api(target).get(path, { headers: { cookie } });
+        expect(response.status(), `${target.name} ${path}`).toBe(400);
+        const body = await response.text();
+        expect(scrubSecrets(body)).toEqual([]);
+        expect(body).not.toContain("<h1>Member leaderboard</h1>");
+      }
     });
   });
 

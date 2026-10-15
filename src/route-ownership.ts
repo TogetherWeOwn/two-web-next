@@ -219,9 +219,10 @@ export const ROUTE_MANIFEST: OwnedRoute[] = [
   // Member leaderboard: member data, so the Kit branch renders inside the
   // member-read boundary with this declaration and the bridged viewer. Same
   // gate order, grammar and reads as src/leaderboards/routes.tsx. Held on
-  // Hono until the executed member-board parity journey lands: the parity
-  // gate has no authenticated member-board run, so enabling here would ship
-  // on a green ledger with no proof.
+  // Hono until a fresh privacy verdict follows the executed member-board
+  // parity journey (the loopback Kit fixture owns this entry via
+  // fixtureManifestFor, so the journey executes the Kit load pre-enablement
+  // without shipping it).
   {
     method: "GET",
     path: "/leaderboards/members",
@@ -241,6 +242,36 @@ export const ROUTE_MANIFEST: OwnedRoute[] = [
     reads: { resource: "member", action: "list", route: "events.page" },
   },
 ];
+
+// Fixture-only manifest for the executed member-board parity journey. The
+// shipped manifest holds /leaderboards/members on Hono until the fresh
+// privacy verdict, so the Playwright Kit fixture (ci/kit-worker-dev.mjs)
+// could otherwise only ever compare Hono against Hono. The fixture sets
+// KIT_PARITY_FIXTURE_MEMBER_BOARD=true on its own generated loopback
+// worker; this helper honours it only for an http loopback APP_URL, so a
+// deployed Kit Worker (preview workers.dev, staging, production) can never
+// enable the board through it. Returns undefined in every other case,
+// which leaves dispatch on the shipped manifest untouched and unmutated.
+export function fixtureManifestFor(env: {
+  APP_URL?: string;
+  KIT_PARITY_FIXTURE_MEMBER_BOARD?: string;
+}): OwnedRoute[] | undefined {
+  if (env.KIT_PARITY_FIXTURE_MEMBER_BOARD !== "true") return undefined;
+  let app: URL;
+  try {
+    app = new URL(env.APP_URL ?? "");
+  } catch {
+    return undefined;
+  }
+  if (app.protocol !== "http:") return undefined;
+  // URL keeps the brackets on an IPv6 hostname ("[::1]").
+  if (!["127.0.0.1", "localhost", "::1", "[::1]"].includes(app.hostname)) return undefined;
+  return ROUTE_MANIFEST.map((entry) =>
+    entry.method === "GET" && entry.path === "/leaderboards/members"
+      ? { ...entry, enabled: true }
+      : entry,
+  );
+}
 
 // Response header set only on the Kit-rendered branch of the hook, so the
 // preview parity check and worker e2e can prove which renderer answered.
@@ -389,10 +420,16 @@ export interface HookDispatchDeps {
   featuredImageHosts?: string;
   honoFetch: (request: Request) => Promise<Response>;
   resolve: (event: HookEventLike) => Promise<Response>;
-  // Optional manifest override for tests. The hook never passes this: it
-  // always uses the shipped ROUTE_MANIFEST, so there is no swappable owner
-  // seam in production wiring to mutate to always-Kit.
+  // Optional manifest override for tests. Production wiring never passes
+  // one: the hook forwards only the loopback parity-fixture flag below and
+  // the core alone turns flag + appUrl into the fixture route choice.
   manifest?: OwnedRoute[];
+  // Loopback Kit parity fixture flag, forwarded from env by the hook as a
+  // plain boolean (KIT_PARITY_FIXTURE_MEMBER_BOARD === "true"). Honoured
+  // only through fixtureManifestFor: exact flag plus an http loopback
+  // appUrl, so a deployed Worker can never enable the board through it.
+  // Absent or false leaves the shipped ROUTE_MANIFEST untouched.
+  fixtureMemberBoard?: boolean;
   // Optional read-only session bridge. Runs only after a Kit
   // ownership decision and merges its decision into event.locals before
   // resolve, so Kit loads share one session decision. Absent by default:
@@ -400,6 +437,12 @@ export interface HookDispatchDeps {
   sessionFor?: (event: HookEventLike) => Promise<KitLocals>;
   // Access-log sink for member-read Kit routes. Absent or null refuses the read.
   accessSink?: () => Promise<AccessSink | null>;
+  // Post-release hook for member-read routes: runs only after the boundary
+  // released the buffered response, outside its capture (see
+  // memberReadResponse). The member board uses it to write its anonymous
+  // board-view log, which is not a member read and must neither run inside
+  // the capture nor be refused by it. Absent by default.
+  afterMemberRead?: (event: HookEventLike, response: Response) => Promise<void>;
   // Native archive guard/cache around Kit SSR. The hook binds env into this
   // (request, render) => dispatchPastArchiveRequest(request, env, render); the
   // core decides WHEN it runs, so the route-id branch is pinned here instead
@@ -520,6 +563,7 @@ function renderMemberRead(
       return sink(entry);
     },
     () => deps.resolve(event),
+    (response) => deps.afterMemberRead?.(event, response) ?? Promise.resolve(),
   );
 }
 
@@ -544,7 +588,15 @@ export async function dispatchHookRequest(
   // its method/path/query/decode coverage guards the dispatch too. Inlining
   // resolveRouteOwner here once left mutants (hard-coded GET, hard-coded
   // path, path+search) green against 32 dispatch tests.
-  const route = decideRoute(event.request, deps.manifest ?? ROUTE_MANIFEST);
+  const route = decideRoute(
+    event.request,
+    deps.manifest ??
+      fixtureManifestFor({
+        APP_URL: deps.appUrl,
+        KIT_PARITY_FIXTURE_MEMBER_BOARD: deps.fixtureMemberBoard ? "true" : undefined,
+      }) ??
+      ROUTE_MANIFEST,
+  );
   if (!route) {
     return deps.honoFetch(event.request);
   }
