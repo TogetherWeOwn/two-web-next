@@ -517,19 +517,35 @@ describe("staging smoke workflow safety", () => {
 });
 
 describe("production deployment preserves configured triggers", () => {
-  it("uploads and promotes the exact target version without syncing custom domains", () => {
+  it("uploads the exact target version and promotes it through the shared gradual action", () => {
     const workflow = read(".github/workflows/deploy-production.yml");
+    const action = read(".github/actions/gradual-promote/action.yml");
     const upload = workflow.indexOf(
       'npx wrangler versions upload --env production --tag "${DEPLOY_SHA:?}-${GITHUB_RUN_ID:?}-${GITHUB_RUN_ATTEMPT:?}"',
     );
-    const promote = workflow.indexOf(
-      'npx wrangler versions deploy --env production --name two-web-next-production --version-tag "${DEPLOY_SHA:?}-${GITHUB_RUN_ID:?}-${GITHUB_RUN_ATTEMPT:?}@100%" --yes',
-    );
+    const gradual = workflow.indexOf("uses: ./.github/actions/gradual-promote");
 
     expect(upload).toBeGreaterThan(-1);
-    expect(promote).toBeGreaterThan(upload);
+    expect(gradual).toBeGreaterThan(upload);
+    // Gradual steps name both versions so traffic totals exactly 100;
+    // the 100% step promotes the uploaded tag alone. The helper resolves
+    // from the action's own path, never caller-relative, so every repo runs
+    // the same traffic math with no copy.
+    expect(action).not.toContain("node ci/gradual-promote.mjs");
+    for (const percentage of [5, 50]) {
+      expect(action).toContain(
+        '"${{ github.action_path }}/gradual-promote.mjs" --deploy-spec "$VERSION_TAG" ' +
+          `${percentage} "$PREV_VERSION"`,
+      );
+    }
+    expect(action).toContain(
+      '"${{ github.action_path }}/gradual-promote.mjs" --deploy-spec "$VERSION_TAG" 100 "$PREV_VERSION"',
+    );
+    expect(action).toContain("npx wrangler versions deploy --env production");
     expect(workflow).not.toContain("wrangler triggers deploy");
     expect(workflow).not.toContain("wrangler deploy --env production");
+    expect(action).not.toContain("wrangler triggers deploy");
+    expect(action).not.toContain("wrangler deploy --env production");
   });
 
   it("pins production crons and queue consumers to the reviewed config", () => {

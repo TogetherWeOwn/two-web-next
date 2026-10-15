@@ -563,23 +563,157 @@ test("manual production workflow routes runners by repo visibility and uses prod
     "run: npx wrangler deploy --config tail/wrangler.jsonc --env production",
   );
   const upload = workflow.indexOf("npx wrangler versions upload --env production --tag ");
-  const deploy = workflow.indexOf("npx wrangler versions deploy --env production");
+  const gradual = workflow.indexOf("uses: ./.github/actions/gradual-promote");
   assert.ok(
     credentialCheck > 0 &&
       credentialCheck < requiredSecrets &&
       requiredSecrets < tailDeploy &&
       tailDeploy < upload &&
-      upload < deploy,
+      upload < gradual,
   );
   assert.match(
     workflow,
     /versions upload --env production --tag "\$\{DEPLOY_SHA:\?\}-\$\{GITHUB_RUN_ID:\?\}-\$\{GITHUB_RUN_ATTEMPT:\?\}"/,
   );
+  // Promotion lives in the shared composite action: the caller only passes
+  // the tag built from the exact same three parts as the upload tag above.
+  const call = workflow.slice(gradual, gradual + 800);
+  assert.match(call, /worker-name: two-web-next-production/);
   assert.match(
-    workflow,
-    /versions deploy --env production --name two-web-next-production --version-tag "\$\{DEPLOY_SHA:\?\}-\$\{GITHUB_RUN_ID:\?\}-\$\{GITHUB_RUN_ATTEMPT:\?\}@100%" --yes/,
+    call,
+    /version-tag: \$\{\{ needs\.preflight\.outputs\.sha \}\}-\$\{\{ github\.run_id \}\}-\$\{\{ github\.run_attempt \}\}/,
   );
+  assert.match(call, /domain: togetherweown\.com/);
+  assert.match(call, /api-token: \$\{\{ secrets\.PRODUCTION_CLOUDFLARE_API_TOKEN \}\}/);
+  assert.match(call, /account-id: \$\{\{ secrets\.PRODUCTION_CLOUDFLARE_ACCOUNT_ID \}\}/);
+  assert.ok(!workflow.includes("npx wrangler versions deploy --env production"));
   assert.ok(!workflow.includes("wrangler deploy --env production"));
+});
+
+test("shared gradual action promotes 5-50-100 with per-stage gates and auto-rollback", () => {
+  const action = readFileSync(
+    new URL("../.github/actions/gradual-promote/action.yml", import.meta.url),
+    "utf8",
+  );
+  // Ladder order: record rollback target, resolve the new id, then each
+  // stage deploys, gates, and rolls back before the next stage starts.
+  const order = [
+    "Record pre-promote rollback target",
+    "Resolve promoted version id",
+    "Promote to 5 percent",
+    "Health and SLO gate at 5 percent",
+    "Automatic rollback after 5 percent gate failure",
+    "Promote to 50 percent",
+    "Health and SLO gate at 50 percent",
+    "Automatic rollback after 50 percent gate failure",
+    "Promote to 100 percent",
+    "Health and SLO gate at 100 percent (new version)",
+    "Health and SLO gate at 100 percent (live traffic)",
+    "Automatic rollback after 100 percent gate failure",
+  ];
+  let at = -1;
+  for (const name of order) {
+    const next = action.indexOf(`- name: ${name}\n`);
+    assert.ok(next > at, `stage out of order or missing: ${name}`);
+    at = next;
+  }
+  // Deterministic specs from code, never interpolated percentages: wrangler
+  // refuses a lone TAG@5% (traffic must total 100), so each gradual step
+  // names the pre-promote version alongside the new tag.
+  assert.equal(
+    (action.match(/--deploy-spec "\$VERSION_TAG" (5|50|100) "\$PREV_VERSION"/g) ?? []).length,
+    3,
+  );
+  assert.ok(action.includes("npx wrangler versions deploy --env production"));
+  assert.ok(action.includes('npx wrangler rollback "$PREV_VERSION"'));
+  // Every rollback runs on any failure or cancellation once a rollback target
+  // is recorded: promote API errors and step timeouts included, not just
+  // gate failures. Later rollbacks stand down only when an earlier one
+  // recorded success (outputs.restored == 'true'); a failed restore leaves
+  // the output empty so the next rollback retries (up to three attempts for
+  // free). Each restore is time-bounded and refuses an unknown target before
+  // wrangler ever runs.
+  assert.equal(
+    (
+      action.match(
+        /if: \(failure\(\) \|\| cancelled\(\)\) && steps\.rollback-target\.conclusion == 'success'/g,
+      ) ?? []
+    ).length,
+    3,
+  );
+  // Success is recorded explicitly after each restore; a wrangler failure
+  // under `set -euo pipefail` exits before the echo, leaving no output.
+  assert.equal((action.match(/echo "restored=true" >> "\$GITHUB_OUTPUT"/g) ?? []).length, 3);
+  assert.ok(action.includes("&& steps.rollback-5.outputs.restored != 'true'"));
+  assert.ok(action.includes("&& steps.rollback-50.outputs.restored != 'true'"));
+  // A failed rollback must never count as restored: conclusion-based
+  // stand-down guards would treat failure as done.
+  assert.ok(!action.includes("rollback-5.conclusion == 'skipped'"));
+  assert.ok(!action.includes("rollback-50.conclusion == 'skipped'"));
+  assert.equal((action.match(/timeout 120 npx wrangler rollback/g) ?? []).length, 3);
+  assert.equal(
+    (action.match(/: "\$\{PREV_VERSION:\?missing pre-promote rollback target\}"/g) ?? []).length,
+    3,
+  );
+  // Four smoke loops exit 0 on success and exit 1 when retries run out;
+  // three rollback steps exit 1 after restoring the pre-promote version.
+  assert.equal((action.match(/^            exit 0$/gm) ?? []).length, 4);
+  assert.equal((action.match(/^        exit 1$/gm) ?? []).length, 7);
+  // Canary stages probe the new version directly; the final stage also probes
+  // live traffic. No curl one-offs, no trigger or full deploys.
+  // The override pins probes to the new version in the checker's quoted
+  // worker="uuid" shape; the checker rejects an unquoted value before any
+  // probe, so an unquoted shell would fail every canary gate into rollback.
+  assert.equal(
+    (action.match(/--version-override "\$WORKER_NAME=\\"\$NEW_VERSION\\""/g) ?? []).length,
+    3,
+  );
+  assert.ok(!action.includes("curl "));
+  assert.ok(!action.includes("wrangler triggers deploy"));
+  assert.ok(!action.includes("wrangler deploy --env production"));
+});
+
+test("rollback stand-down retries promote failures, cancellations and failed restores", () => {
+  const action = readFileSync(
+    new URL("../.github/actions/gradual-promote/action.yml", import.meta.url),
+    "utf8",
+  );
+  const guard50 = action.match(
+    /- name: Automatic rollback after 50 percent gate failure\n(?:.*\n)*? {6}if: (.*)\n/,
+  )?.[1];
+  const guard100 = action.match(
+    /- name: Automatic rollback after 100 percent gate failure\n(?:.*\n)*? {6}if: (.*)\n/,
+  )?.[1];
+  assert.ok(guard50, "rollback-50 has an if: guard");
+  assert.ok(guard100, "rollback-100 has an if: guard");
+  // Both guards run on failure or cancellation with a recorded target.
+  for (const guard of [guard50, guard100]) {
+    assert.match(guard, /\(failure\(\) \|\| cancelled\(\)\)/);
+    assert.match(guard, /steps\.rollback-target\.conclusion == 'success'/);
+  }
+  // Stand-down is success-explicit: only outputs.restored == 'true' holds the
+  // next rollback back. Empty means skipped (earlier stage never ran) or a
+  // failed/cancelled restore that never reached the echo.
+  const wouldRun50 = (restored5) => restored5 !== "true";
+  const wouldRun100 = (restored5, restored50) => restored5 !== "true" && restored50 !== "true";
+  assert.ok(guard50.includes("steps.rollback-5.outputs.restored != 'true'"));
+  assert.ok(guard100.includes("steps.rollback-5.outputs.restored != 'true'"));
+  assert.ok(guard100.includes("steps.rollback-50.outputs.restored != 'true'"));
+  const cases = [
+    // [label, restored5, restored50, run50, run100]
+    // A failed or cancelled restore never reaches the echo, so its output is
+    // empty — exactly like a skipped step — and the next rollback retries.
+    ["promote failure before any rollback", "", "", true, true],
+    ["cancelled before any rollback", undefined, undefined, true, true],
+    ["failed 5 percent restore leaves no output so 50 retries", "", "", true, true],
+    ["successful 5 percent restore stands down later steps", "true", "", false, false],
+    ["successful 50 percent restore stands down the last step", "", "true", true, false],
+    ["both restores recorded stand down everything", "true", "true", false, false],
+  ];
+  for (const [label, restored5, restored50, run50, run100] of cases) {
+    assert.equal(wouldRun50(restored5 ?? ""), run50, label);
+    assert.equal(wouldRun100(restored5 ?? "", restored50 ?? ""), run100, label);
+  }
 });
 
 test("rollback workflow reuses the production gate with no wider permissions", () => {
@@ -639,27 +773,42 @@ test("rollback workflow reuses the production gate with no wider permissions", (
   assert.match(workflow, /ROLLBACK_VERSION_ID: \$\{\{ inputs\.version_id \}\}/);
 });
 
-test("rollback smoke enforces the same public-route set as the deploy smoke", () => {
-  const deploy = readFileSync(
-    new URL("../.github/workflows/deploy-production.yml", import.meta.url),
+test("rollback smoke enforces the same public-route set as the gradual live gate", () => {
+  // The deploy-time live gate now lives in the shared gradual action; the
+  // manual rollback keeps its own copy. Both must run the same shared
+  // checker with the same retries, so the two gates cannot drift.
+  const action = readFileSync(
+    new URL("../.github/actions/gradual-promote/action.yml", import.meta.url),
     "utf8",
   );
   const rollback = readFileSync(
     new URL("../.github/workflows/rollback-production.yml", import.meta.url),
     "utf8",
   );
-  const block = (text) =>
-    text.match(
-      /      - name: Smoke test production public routes\n[\s\S]*?        run: \|\n((?:          .*\n)+)/,
-    )?.[1];
-  assert.ok(block(deploy) && block(rollback));
-  // Identical checks and retries; only the failure message names the operation.
-  assert.equal(block(rollback), block(deploy).replaceAll("after deploy", "after rollback"));
-  // GET-only public-route set through the shared checker; no curl /up one-off.
-  for (const step of [block(deploy), block(rollback)]) {
-    assert.match(step, /node bin\/smoke\.mjs https:\/\/togetherweown\.com --allow-indexable/);
+  const live = action.match(
+    /    - name: Health and SLO gate at 100 percent \(live traffic\)\n(?:.*\n)*?      run: \|\n((?:        .*\n)+)/,
+  )?.[1];
+  const manual = rollback.match(
+    /      - name: Smoke test production public routes\n[\s\S]*?        run: \|\n((?:          .*\n)+)/,
+  )?.[1];
+  assert.ok(live && manual);
+  for (const step of [live, manual]) {
+    assert.match(step, /node bin\/smoke\.mjs /);
+    assert.match(step, /for i in 1 2 3 4 5 6/);
     assert.ok(!step.includes("curl "));
   }
+  // The action threads --allow-indexable through env (same flag, same
+  // checker); the manual rollback passes it literally.
+  assert.match(live, /\$INDEXABLE/);
+  assert.match(
+    action,
+    /INDEXABLE: \$\{\{ inputs\.allow-indexable == 'true' && '--allow-indexable' \|\| '' \}\}/,
+  );
+  assert.match(manual, /--allow-indexable/);
+  // The gradual live gate probes the production domain through env, like the
+  // manual rollback probes the literal apex: same origin, same checker.
+  assert.ok(live.includes('node bin/smoke.mjs "https://$DOMAIN"'));
+  assert.match(manual, /node bin\/smoke\.mjs https:\/\/togetherweown\.com --allow-indexable/);
 });
 
 // Automated approval mode (repo variable PRODUCTION_AUTO_APPROVE=true).
@@ -948,4 +1097,6 @@ test("rollback-production passes the checked-out commit as DEPLOY_SHA to both ga
 test("CI runs the promotion resolver selftest beside the production gate selftest", () => {
   const ci = readFileSync(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8");
   assert.match(ci, /run: node --test ci\/resolve-promotion-sha\.test\.mjs\n/);
+  assert.match(ci, /run: node --test ci\/gradual-promote\.test\.mjs\n/);
+  assert.match(ci, /run: node --test ci\/gradual-promote-gate-acceptance\.test\.mjs\n/);
 });

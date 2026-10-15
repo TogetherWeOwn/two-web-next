@@ -1,0 +1,276 @@
+# Shared gradual production promotion for Cloudflare Workers.
+#
+# Promotes an uploaded Worker version 5% -> 50% -> 100%. Every stage pins its
+# health/SLO probes to the NEW version through the version-override header
+# (the caller's bin/smoke.mjs --version-override), so a canary is tested
+# directly instead of through sampled traffic. Any failure or cancellation
+# after the split goes live restores the recorded pre-promote version within
+# a bounded time and fails the job, so later stages never run on a broken
+# promote.
+#
+# Other repos call it directly (durable by default):
+#   uses: TogetherWeOwn/two-web-next/.github/actions/gradual-promote@<sha>
+#   with: { worker-name, version-tag, domain, api-token, account-id }
+# Portable by construction: the traffic-math helper is resolved from this
+# action's own path (github.action_path), never from the caller. The smoke
+# checker is intentionally the CALLER's bin/smoke.mjs, because each repo
+# probes its own routes with the same retry contract (6 attempts, 10s
+# sleeps, fail closed). Repo-specific bits stay in the caller (build,
+# secrets preflight, upload). Only versions upload/promote/rollback run
+# here: nothing may re-sync custom domains or cron triggers as a side effect.
+name: gradual-prod-promote
+description: Promote an uploaded Worker version 5-50-100 percent with per-stage health/SLO gates and automatic rollback
+
+inputs:
+  worker-name:
+    description: Production Worker script name (env.production.name)
+    required: true
+  version-tag:
+    description: Tag of the uploaded version to promote
+    required: true
+  domain:
+    description: Production domain probed by the smoke checker (no scheme)
+    required: true
+  api-token:
+    description: Production-only Cloudflare API token
+    required: true
+  account-id:
+    description: Production-only Cloudflare account id
+    required: true
+  allow-indexable:
+    description: Pass --allow-indexable to the smoke checker (production apex)
+    required: false
+    default: "true"
+
+outputs:
+  rollback-version-id:
+    description: Pre-promote live version; the auto-rollback target
+    value: ${{ steps.rollback-target.outputs.target }}
+  promoted-version-id:
+    description: Resolved version id of version-tag
+    value: ${{ steps.promoted-version.outputs.id }}
+
+runs:
+  using: composite
+  steps:
+    - name: Record pre-promote rollback target
+      id: rollback-target
+      shell: bash
+      run: |
+        set -euo pipefail
+        TARGET="$(npx wrangler deployments list --env production --name "$WORKER_NAME" --json \
+          | node "${{ github.action_path }}/gradual-promote.mjs" --capture-rollback-target)"
+        echo "target=$TARGET" >> "$GITHUB_OUTPUT"
+      env:
+        WORKER_NAME: ${{ inputs.worker-name }}
+        CLOUDFLARE_API_TOKEN: ${{ inputs.api-token }}
+        CLOUDFLARE_ACCOUNT_ID: ${{ inputs.account-id }}
+
+    - name: Resolve promoted version id
+      id: promoted-version
+      shell: bash
+      run: |
+        set -euo pipefail
+        ID="$(npx wrangler versions list --env production --name "$WORKER_NAME" --json \
+          | node "${{ github.action_path }}/gradual-promote.mjs" --resolve-tag "$VERSION_TAG")"
+        echo "id=$ID" >> "$GITHUB_OUTPUT"
+      env:
+        WORKER_NAME: ${{ inputs.worker-name }}
+        VERSION_TAG: ${{ inputs.version-tag }}
+        CLOUDFLARE_API_TOKEN: ${{ inputs.api-token }}
+        CLOUDFLARE_ACCOUNT_ID: ${{ inputs.account-id }}
+
+    - name: Promote to 5 percent
+      id: deploy-5
+      shell: bash
+      run: |
+        set -euo pipefail
+        mapfile -t SPEC < <(node "${{ github.action_path }}/gradual-promote.mjs" --deploy-spec "$VERSION_TAG" 5 "$PREV_VERSION")
+        npx wrangler versions deploy --env production --name "$WORKER_NAME" \
+          "${SPEC[0]}" --version-tag "${SPEC[1]}" --yes
+      env:
+        WORKER_NAME: ${{ inputs.worker-name }}
+        VERSION_TAG: ${{ inputs.version-tag }}
+        PREV_VERSION: ${{ steps.rollback-target.outputs.target }}
+        CLOUDFLARE_API_TOKEN: ${{ inputs.api-token }}
+        CLOUDFLARE_ACCOUNT_ID: ${{ inputs.account-id }}
+
+    - name: Health and SLO gate at 5 percent
+      id: smoke-5
+      shell: bash
+      run: |
+        for i in 1 2 3 4 5 6; do
+          if node bin/smoke.mjs "https://$DOMAIN" $INDEXABLE --version-override "$WORKER_NAME=\"$NEW_VERSION\""; then
+            echo "stage 5 percent smoke ok (attempt $i)"
+            exit 0
+          fi
+          if [ "$i" -lt 6 ]; then
+            echo "attempt $i failed, retrying in 10s..."
+            sleep 10
+          fi
+        done
+        echo "::error::stage 5 percent health/SLO gate failed after smoke retries"
+        exit 1
+      env:
+        DOMAIN: ${{ inputs.domain }}
+        INDEXABLE: ${{ inputs.allow-indexable == 'true' && '--allow-indexable' || '' }}
+        WORKER_NAME: ${{ inputs.worker-name }}
+        NEW_VERSION: ${{ steps.promoted-version.outputs.id }}
+
+    - name: Automatic rollback after 5 percent gate failure
+      id: rollback-5
+      # Any failure or cancellation once the split may be live restores the
+      # recorded pre-promote version, including promote API errors and step
+      # timeouts, not just gate failures. The rollback-target guard keeps an
+      # unknown target from ever reaching the rollback command.
+      if: (failure() || cancelled()) && steps.rollback-target.conclusion == 'success'
+      shell: bash
+      run: |
+        set -euo pipefail
+        : "${PREV_VERSION:?missing pre-promote rollback target}"
+        # Bound the restore: a hung rollback fails the job, never the window.
+        timeout 120 npx wrangler rollback "$PREV_VERSION" --name "$WORKER_NAME" --yes
+        echo "restored=true" >> "$GITHUB_OUTPUT"
+        echo "::error::rolled back to the pre-promote version after the 5 percent health/SLO gate failed"
+        exit 1
+      env:
+        PREV_VERSION: ${{ steps.rollback-target.outputs.target }}
+        WORKER_NAME: ${{ inputs.worker-name }}
+        CLOUDFLARE_API_TOKEN: ${{ inputs.api-token }}
+        CLOUDFLARE_ACCOUNT_ID: ${{ inputs.account-id }}
+
+    - name: Promote to 50 percent
+      id: deploy-50
+      shell: bash
+      run: |
+        set -euo pipefail
+        mapfile -t SPEC < <(node "${{ github.action_path }}/gradual-promote.mjs" --deploy-spec "$VERSION_TAG" 50 "$PREV_VERSION")
+        npx wrangler versions deploy --env production --name "$WORKER_NAME" \
+          "${SPEC[0]}" --version-tag "${SPEC[1]}" --yes
+      env:
+        WORKER_NAME: ${{ inputs.worker-name }}
+        VERSION_TAG: ${{ inputs.version-tag }}
+        PREV_VERSION: ${{ steps.rollback-target.outputs.target }}
+        CLOUDFLARE_API_TOKEN: ${{ inputs.api-token }}
+        CLOUDFLARE_ACCOUNT_ID: ${{ inputs.account-id }}
+
+    - name: Health and SLO gate at 50 percent
+      id: smoke-50
+      shell: bash
+      run: |
+        for i in 1 2 3 4 5 6; do
+          if node bin/smoke.mjs "https://$DOMAIN" $INDEXABLE --version-override "$WORKER_NAME=\"$NEW_VERSION\""; then
+            echo "stage 50 percent smoke ok (attempt $i)"
+            exit 0
+          fi
+          if [ "$i" -lt 6 ]; then
+            echo "attempt $i failed, retrying in 10s..."
+            sleep 10
+          fi
+        done
+        echo "::error::stage 50 percent health/SLO gate failed after smoke retries"
+        exit 1
+      env:
+        DOMAIN: ${{ inputs.domain }}
+        INDEXABLE: ${{ inputs.allow-indexable == 'true' && '--allow-indexable' || '' }}
+        WORKER_NAME: ${{ inputs.worker-name }}
+        NEW_VERSION: ${{ steps.promoted-version.outputs.id }}
+
+    - name: Automatic rollback after 50 percent gate failure
+      id: rollback-50
+      # Stands down only when the 5 percent rollback recorded success; a
+      # failed or cancelled restore falls through here for another attempt.
+      # A skipped step has an empty output, so the guard still holds.
+      if: (failure() || cancelled()) && steps.rollback-target.conclusion == 'success' && steps.rollback-5.outputs.restored != 'true'
+      shell: bash
+      run: |
+        set -euo pipefail
+        : "${PREV_VERSION:?missing pre-promote rollback target}"
+        # Bound the restore: a hung rollback fails the job, never the window.
+        timeout 120 npx wrangler rollback "$PREV_VERSION" --name "$WORKER_NAME" --yes
+        echo "restored=true" >> "$GITHUB_OUTPUT"
+        echo "::error::rolled back to the pre-promote version after the 50 percent health/SLO gate failed"
+        exit 1
+      env:
+        PREV_VERSION: ${{ steps.rollback-target.outputs.target }}
+        WORKER_NAME: ${{ inputs.worker-name }}
+        CLOUDFLARE_API_TOKEN: ${{ inputs.api-token }}
+        CLOUDFLARE_ACCOUNT_ID: ${{ inputs.account-id }}
+
+    - name: Promote to 100 percent
+      id: deploy-100
+      shell: bash
+      run: |
+        set -euo pipefail
+        mapfile -t SPEC < <(node "${{ github.action_path }}/gradual-promote.mjs" --deploy-spec "$VERSION_TAG" 100 "$PREV_VERSION")
+        npx wrangler versions deploy --env production --name "$WORKER_NAME" \
+          --version-tag "${SPEC[1]}" --yes
+      env:
+        WORKER_NAME: ${{ inputs.worker-name }}
+        VERSION_TAG: ${{ inputs.version-tag }}
+        PREV_VERSION: ${{ steps.rollback-target.outputs.target }}
+        CLOUDFLARE_API_TOKEN: ${{ inputs.api-token }}
+        CLOUDFLARE_ACCOUNT_ID: ${{ inputs.account-id }}
+
+    - name: Health and SLO gate at 100 percent (new version)
+      id: smoke-100-override
+      shell: bash
+      run: |
+        for i in 1 2 3 4 5 6; do
+          if node bin/smoke.mjs "https://$DOMAIN" $INDEXABLE --version-override "$WORKER_NAME=\"$NEW_VERSION\""; then
+            echo "stage 100 percent override smoke ok (attempt $i)"
+            exit 0
+          fi
+          if [ "$i" -lt 6 ]; then
+            echo "attempt $i failed, retrying in 10s..."
+            sleep 10
+          fi
+        done
+        echo "::error::stage 100 percent health/SLO gate failed after smoke retries"
+        exit 1
+      env:
+        DOMAIN: ${{ inputs.domain }}
+        INDEXABLE: ${{ inputs.allow-indexable == 'true' && '--allow-indexable' || '' }}
+        WORKER_NAME: ${{ inputs.worker-name }}
+        NEW_VERSION: ${{ steps.promoted-version.outputs.id }}
+
+    - name: Health and SLO gate at 100 percent (live traffic)
+      id: smoke-100
+      shell: bash
+      run: |
+        for i in 1 2 3 4 5 6; do
+          if node bin/smoke.mjs "https://$DOMAIN" $INDEXABLE; then
+            echo "stage 100 percent live smoke ok (attempt $i)"
+            exit 0
+          fi
+          if [ "$i" -lt 6 ]; then
+            echo "attempt $i failed, retrying in 10s..."
+            sleep 10
+          fi
+        done
+        echo "::error::stage 100 percent live health/SLO gate failed after smoke retries"
+        exit 1
+      env:
+        DOMAIN: ${{ inputs.domain }}
+        INDEXABLE: ${{ inputs.allow-indexable == 'true' && '--allow-indexable' || '' }}
+
+    - name: Automatic rollback after 100 percent gate failure
+      id: rollback-100
+      # Stands down only when an earlier rollback recorded success; a failed
+      # or cancelled restore falls through here for another attempt (up to
+      # three attempts for free). Skipped steps have empty outputs.
+      if: (failure() || cancelled()) && steps.rollback-target.conclusion == 'success' && steps.rollback-5.outputs.restored != 'true' && steps.rollback-50.outputs.restored != 'true'
+      shell: bash
+      run: |
+        set -euo pipefail
+        : "${PREV_VERSION:?missing pre-promote rollback target}"
+        # Bound the restore: a hung rollback fails the job, never the window.
+        timeout 120 npx wrangler rollback "$PREV_VERSION" --name "$WORKER_NAME" --yes
+        echo "restored=true" >> "$GITHUB_OUTPUT"
+        echo "::error::rolled back to the pre-promote version after the 100 percent health/SLO gate failed"
+        exit 1
+      env:
+        PREV_VERSION: ${{ steps.rollback-target.outputs.target }}
+        WORKER_NAME: ${{ inputs.worker-name }}
+        CLOUDFLARE_API_TOKEN: ${{ inputs.api-token }}
+        CLOUDFLARE_ACCOUNT_ID: ${{ inputs.account-id }}
