@@ -17,6 +17,8 @@ on:
     # ready_for_review re-runs the smoke when a draft becomes ready (drafts
     # skip it below). `edited` needs no browser run; pr-gates covers it.
     types: [opened, synchronize, reopened, ready_for_review]
+  merge_group:
+    types: [checks_requested]
   push:
     branches: [main]
   # Nightly full smoke (TOG-14880): schedule events run the journeys

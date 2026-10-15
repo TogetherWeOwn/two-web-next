@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       target:
-        description: Approved Neon target (web migrations only)
+        description: Approved migration target (web migrations only)
         type: choice
         options: [staging, production]
         default: staging
@@ -27,7 +27,7 @@ permissions:
 # Never cancel an in-flight schema change. Bot operations must be coordinated
 # separately; the script also serializes web applies at the database level.
 concurrency:
-  group: neon-web-migrate-${{ inputs.target }}
+  group: web-migrate-${{ inputs.target }}
   cancel-in-progress: false
 
 jobs:
@@ -88,7 +88,7 @@ jobs:
           STAGING_MIGRATION_HOLD: ${{ vars.STAGING_MIGRATION_HOLD }}
           # Provision ONLY as secrets on the matching GitHub Environment.
           # The unselected target is not exposed to the process. No DATABASE_URL fallback.
-          NEON_STAGING_DATABASE_URL: ${{ inputs.target == 'staging' && secrets.NEON_STAGING_DATABASE_URL || '' }}
+          PLANETSCALE_STAGING_DATABASE_URL: ${{ inputs.target == 'staging' && secrets.PLANETSCALE_STAGING_DATABASE_URL || '' }}
           PRODUCTION_DATABASE_URL: ${{ inputs.target == 'production' && secrets.PRODUCTION_DATABASE_URL || '' }}
       - name: Record PITR timestamp, apply and verify under database lock
         run: node ci/neon-migrate.mjs apply

@@ -7,6 +7,8 @@ on:
     # deliberately absent: title/body edits need no heavy suite (pr-gates.yml
     # covers them with its own `edited` trigger).
     types: [opened, synchronize, reopened, ready_for_review]
+  merge_group:
+    types: [checks_requested]
   push:
     branches: [main]
   # Nightly full run (TOG-14880): non-PR events select every area, so this runs
@@ -37,7 +39,7 @@ permissions:
 # this.
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || (github.event_name == 'schedule' && 'nightly') || github.ref }}
-  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' && github.event_name != 'merge_group' }}
 
 jobs:
   # Cheap change-scope gate (TOG-11811): a PR that only touches prose
@@ -548,9 +550,14 @@ jobs:
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true' || needs.scope.outputs.worker == 'true')
         run: |
           npm run check:moderators
-          DISCORD_MODERATOR_ROLE_IDS=508654771276873729 npm run check:moderators -- --require-configured
-          if DISCORD_MODERATOR_ROLE_IDS=SySOp npm run check:moderators -- --require-configured; then
+          DISCORD_GUILD_ID=326474832151838730 DISCORD_MODERATOR_ROLE_IDS=1546777855801954408,1546777856984481792 npm run check:moderators -- --require-configured
+          DISCORD_GUILD_ID=1545644954272137297 DISCORD_MODERATOR_ROLE_IDS=1546211363578191873,1545648550329851946 npm run check:moderators -- --require-configured
+          if DISCORD_MODERATOR_ROLE_IDS=Moderator npm run check:moderators -- --require-configured; then
             echo "::error::role probe accepted a role name; expected exit 1"
+            exit 1
+          fi
+          if DISCORD_GUILD_ID=1545644954272137297 DISCORD_MODERATOR_ROLE_IDS=1546777855801954408,1546777856984481792 npm run check:moderators -- --require-configured; then
+            echo "::error::role probe accepted the production pair in the staging guild; expected exit 1"
             exit 1
           fi
           if npm run smoke:internal-action 2>/dev/null; then

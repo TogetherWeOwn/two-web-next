@@ -20,7 +20,7 @@ import usersMigration from "../drizzle/0000_init-users.sql?raw";
 // moderator column, and the flag is recomputed from Discord role IDs into the
 // session row at login.
 
-const MOD_ROLE = "508654771276873729";
+const MOD_ROLE = "1546777856984481792";
 
 const env: Env = {
   APP_URL: "https://next.example.test",

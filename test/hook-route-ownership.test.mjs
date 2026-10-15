@@ -64,13 +64,15 @@ beforeEach(() => {
 });
 
 describe("hooks.server route ownership wiring", () => {
-  it("ships the homepage disabled and the native archive route enabled with about, privacy, rules, join, recover and the featured list and activity log still on Hono", () => {
+  it("ships the native archive enabled with the homepage, events list, about, privacy, rules, faq, join, recover, admin and profile reads still on Hono", () => {
     expect(ROUTE_MANIFEST).toEqual([
       { method: "GET", path: "/", enabled: false, reads: "public" },
       { method: "GET", path: "/events/past", enabled: true, reads: "public" },
+      { method: "GET", path: "/events", enabled: false, reads: "public" },
       { method: "GET", path: "/about", enabled: false, reads: "public" },
       { method: "GET", path: "/privacy", enabled: false, reads: "public" },
       { method: "GET", path: "/rules", enabled: false, reads: "public" },
+      { method: "GET", path: "/faq", enabled: false, reads: "public" },
       { method: "GET", path: "/join", enabled: false, reads: "public" },
       {
         method: "GET",
@@ -86,6 +88,18 @@ describe("hooks.server route ownership wiring", () => {
       },
       {
         method: "GET",
+        path: "/admin/featured/new",
+        enabled: false,
+        reads: { resource: "featured_contents", action: "view", route: "admin.featured.create" },
+      },
+      {
+        method: "GET",
+        path: "/admin/featured/:id",
+        enabled: false,
+        reads: { resource: "featured_contents", action: "view", route: "admin.featured.edit" },
+      },
+      {
+        method: "GET",
         path: "/admin/activity-log",
         enabled: false,
         reads: { resource: "activity_log", action: "list", route: "admin.activity-log.index" },
@@ -95,6 +109,12 @@ describe("hooks.server route ownership wiring", () => {
         path: "/admin/events",
         enabled: false,
         reads: { resource: "events", action: "list", route: "admin.events.index" },
+      },
+      {
+        method: "GET",
+        path: "/admin/events/new",
+        enabled: false,
+        reads: { resource: "events", action: "view", route: "admin.events.create" },
       },
       {
         method: "GET",
@@ -124,6 +144,12 @@ describe("hooks.server route ownership wiring", () => {
         path: "/leaderboards/members",
         enabled: false,
         reads: { resource: "leaderboard", action: "list", route: "leaderboards.members" },
+      },
+      {
+        method: "GET",
+        path: "/e/:key",
+        enabled: false,
+        reads: { resource: "member", action: "list", route: "events.page" },
       },
     ]);
   });
@@ -456,6 +482,19 @@ describe("hooks.server route ownership wiring", () => {
     expect(source).toContain(
       "pastArchive: (request, render) => dispatchPastArchiveRequest(request, env, render)",
     );
+    // Whole binding: deleting the eventDetail line silently drops the detail
+    // read throttle (the dispatch treats it as optional), so the exact line
+    // must fail. The import and comments alone carry the name.
+    expect(source).toContain(
+      "eventDetail: (request, render) => dispatchEventDetailRequest(request, env, render)",
+    );
+    // The list binding carries the same shape plus its read-only session and
+    // flash peeks: deleting any of these lines must fail, and the hook still
+    // carries no session logic of its own (readers live in kit-session.ts).
+    expect(source).toContain("dispatchEventsRequest");
+    expect(source).toContain("eventsPage: (request, render) =>");
+    expect(source).toContain("kitEventsSessionFor(env)");
+    expect(source).toContain("kitEventsJourneyFor(env)");
     expect(source).toContain("honoFetch,");
     expect(source).toContain("featuredImageHosts: env.FEATURED_IMAGE_HOSTS");
     expect(source).toContain("appUrl: env.APP_URL");

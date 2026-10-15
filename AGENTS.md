@@ -47,10 +47,21 @@ npx wrangler deploy --dry-run --outdir dist   # bundle check, no deploy
 
 Run tests only against the disposable test database or local fixtures described in the README, with `DATABASE_URL` set to that URL. Apply migrations with `npm run db:migrate` and validate history with `npm run db:check`. Never point tests, probes, or migrations at a production or staging database. If a credential fails, stop and report it. Do not try another one.
 
+## UI changes
+
+A user-visible change to a page, component, CSS, typography, navigation, form, or responsive layout follows this loop. AI contributors apply `frontend-ui-engineering`, then `product-ui-design-loop`, and add `frontend-design` for a new visual direction, whenever those skills are available to them.
+
+1. Write a short design contract before substantial work: audience, screen job, primary action, real content, two or three references (or stated assumptions), layout, typography, tokens, responsive behavior, required states, non-goals.
+2. Build in the stack the route already uses: server-rendered HTML for the current site, Svelte 5 and SvelteKit under `web/`. Do not add a framework because a generator returned one.
+3. Render the real app against local fixtures. Capture desktop (1280×800) and mobile (390×844) screenshots, plus each required state, and open every image. A DOM or accessibility snapshot is not a visual review.
+4. Run the existing gates: `npm run a11y`, `npm run lighthouse`, `npm run lighthouse:quality`, and the visual specs in [docs/visual-regression.md](docs/visual-regression.md). These gates cover the Hono site only: for a `web/` change, the screenshots from step 3 are the visual evidence, and the PR body says the Hono gates did not exercise the Kit route. The visual specs compare reliably only in CI (`browser-smoke` on the pinned runner); accept an intentional diff only through the failure artifact and `node ci/visual-accept.mjs`. Meet each threshold by improving the UI. Loosening any threshold (lowering a score floor, raising a time or pixel budget, adding `skipAudits`), masking more of a page, or regenerating baselines wholesale needs its own PR with a justification.
+5. Put the evidence in the PR body: the contract, reference links, before/after screenshots at both widths, the commands you ran, and each intentional baseline change. Report only what you opened or ran.
+
 ## Definition of done
 
 - Behavior matches the request.
 - Tests pass locally, and `npm run check` is green.
+- A UI change carries the evidence listed under UI changes.
 - CI is green on the exact head SHA that merges: `check`, `gitleaks`, and `pr-lint` are required.
 - A reviewer who did not write the code approved that head SHA.
 - The PR is squash-merged, and the docs it made stale are updated.

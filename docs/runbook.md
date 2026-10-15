@@ -198,7 +198,7 @@ approved account and binding isolation before any remote mutation.
    migrations to its disposable Postgres, runs `npm run check`, then plans,
    applies and verifies the **staging web migrations** of the CI-verified SHA
    against the staging database — the pinned PlanetScale staging branch
-   (Neon endpoints still accepted during the transition; `ci/neon-migrate.mjs`, see
+   (retired Neon endpoints are refused; `ci/neon-migrate.mjs`, see
    [Neon web schema migrations](#neon-web-schema-migrations-separate-operator-action)),
    ensures `two-sync-event` and `two-internal-action` exist, then deploys. A
    failed migration step fails the job before any Cloudflare mutation. The
@@ -242,7 +242,7 @@ and not a test. It is the hand-dispatch path for staging recovery and the only
 path for production; the staging `deploy.yml` applies staging migrations on its
 own (see *Staging deploy integration* below). This workflow's addition
 does not authorize its execution. No live
-migration or Neon branch creation is performed by its selftest.
+migration is performed by its selftest.
 
 **Before enabling or dispatching:**
 
@@ -268,12 +268,12 @@ migration or Neon branch creation is performed by its selftest.
   not only migrations. A staging recovery dispatch per this runbook is refused
   until the variable is exactly `false`. Rollback is re-hold: set the variable
   back to `true` (or delete the override so it resolves absent).
-- Provision `NEON_STAGING_DATABASE_URL` **only on the staging Environment** and
+- Provision `PLANETSCALE_STAGING_DATABASE_URL` **only on the staging Environment** and
   `PRODUCTION_DATABASE_URL` **only on the production Environment**, using
   the authorized operator's secret-provisioning path. Verify the intended
   project/branch/database and direct endpoint out of band. Staging is the pinned
-  PlanetScale staging branch and host (direct Neon endpoints still accepted
-  during the transition); production is PlanetScale Postgres on its own branch
+  PlanetScale staging branch and host (retired Neon endpoints are refused);
+  production is PlanetScale Postgres on its own branch
   and host (direct `<id>.pg.psdb.cloud:5432` endpoint — never the
   pooled `6432` port). The migrate gate pins the staging host and branch id and
   refuses the production identity in code, so a production URL in the staging
@@ -340,7 +340,7 @@ migration or assume restoring the Worker restores the database.
 **Staging deploy integration:** `deploy.yml` applies the staging web migrations
 itself: `plan`, the exact-SHA CI re-check,
 `apply` and `verify` run in the `deploy-staging` job (Environment `staging`, which
-holds `NEON_STAGING_DATABASE_URL`) after `npm run check` and before the first
+holds `PLANETSCALE_STAGING_DATABASE_URL`) after `npm run check` and before the first
 Cloudflare mutation, so new code never meets the old staging schema and a failed
 or lock-blocked migration leaves the previous Worker serving. It does not call
 `db-migrate.yml`: a reusable-workflow job would check out main's tip instead of the

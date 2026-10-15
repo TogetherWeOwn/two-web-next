@@ -64,7 +64,7 @@ token, and record which source was used without pasting a value.
 The handoff needs a bounded exclusive hold across three lanes that no single
 workflow serializes: the staging deploy lane (`deploy-staging` concurrency
 group in `.github/workflows/deploy.yml`), the hand-dispatch migration lane
-(`neon-web-migrate-staging` concurrency group in
+(`web-migrate-staging` concurrency group in
 `.github/workflows/db-migrate.yml`, which the deploy job does not call), and
 the Operator queue/cron mutations below. One quiet Actions page or one
 concurrency group never proves the other two are idle.

@@ -28,7 +28,7 @@ const env: Env = {
   DISCORD_CLIENT_SECRET: "client-secret",
   DISCORD_BOT_TOKEN: "bot-token",
   SESSION_SECRET: SECRET,
-  DISCORD_MODERATOR_ROLE_IDS: "508654771276873729",
+  DISCORD_MODERATOR_ROLE_IDS: "1546777856984481792",
 };
 
 // In-memory Sql double for the journey's two statements (throttle window +

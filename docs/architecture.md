@@ -276,6 +276,7 @@ exactly once.
 | `src/featured.ts` | content |
 | `src/freeze-banner.ts` | http-guard |
 | `src/headers.ts` | http-guard |
+| `src/home-cache.ts` | content |
 | `src/home-copy.ts` | content |
 | `src/hotzones/` | events |
 | `src/html-outcome.ts` | entry |
@@ -289,6 +290,8 @@ exactly once.
 | `src/kit-access-sink.ts` | profiles |
 | `src/kit-errors.ts` | entry |
 | `src/kit-event-states.ts` | events |
+| `src/kit-events-html.tsx` | events |
+| `src/kit-events.ts` | events |
 | `src/kit-hotzones.ts` | events |
 | `src/kit-past-events.ts` | events |
 | `src/kit-session.ts` | auth |
@@ -314,6 +317,7 @@ exactly once.
 | `src/return-journey.ts` | auth |
 | `src/roles.ts` | auth |
 | `src/route-ownership.ts` | entry |
+| `src/faq-content.ts` | content |
 | `src/rules-content.ts` | content |
 | `src/rules-last-updated.ts` | content |
 | `src/same-origin.ts` | http-guard |
@@ -321,6 +325,7 @@ exactly once.
 | `src/security-txt.ts` | content |
 | `src/seo.ts` | content |
 | `src/seo-json-ld.ts` | content |
+| `src/seo-slots.ts` | content |
 | `src/seo-leaves.tsx` | entry |
 | `src/session-cookie.ts` | auth |
 | `src/session-revocation.ts` | auth |

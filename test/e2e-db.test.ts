@@ -25,7 +25,7 @@ describe.skipIf(!url)("login/logout/rotation against Postgres", () => {
     DISCORD_CLIENT_SECRET: "client-secret",
     DISCORD_BOT_TOKEN: "bot-token",
     SESSION_SECRET: "test-session-secret-at-least-32-bytes-long",
-    DISCORD_MODERATOR_ROLE_IDS: "508654771276873729",
+    DISCORD_MODERATOR_ROLE_IDS: "1546777856984481792",
     SESSION_STORE: createPostgresSessionStore(sql),
   } as Env;
 
@@ -48,7 +48,7 @@ describe.skipIf(!url)("login/logout/rotation against Postgres", () => {
           return new Response(null, { status: 201 });
         if (u.includes("/members/42"))
           return Response.json({
-            roles: ["508654771276873729"],
+            roles: ["1546777856984481792"],
             joined_at: "2024-01-01T00:00:00Z",
           });
         return new Response("unexpected", { status: 500 });

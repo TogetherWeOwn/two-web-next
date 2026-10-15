@@ -41,9 +41,10 @@ export interface RouteDecision {
   path: string;
 }
 
-// The archive page and hot-zone heatmaps render natively. The member board
-// and disabled leaf, admin and profile routes stay on Hono until their
-// enablement is reviewed. Production (the Hono Worker) sees no traffic change for a
+// The archive page and hot-zone heatmaps render natively; the events list ships
+// its native handler disabled until the calendar/enhancement companion passes,
+// and the about/privacy/rules/faq/join/recovery/profile reads, member board and
+// admin routes stay on Hono until their enablement is reviewed. Production (the Hono Worker) sees no traffic change for a
 // disabled path; the preview Worker moves a Kit-owned path back to Hono by
 // design — that is the rollback. Add one entry per migrated route, enabled
 // only when its Kit handler is ready to own the exact method/path. Only GET
@@ -56,9 +57,11 @@ export interface RouteDecision {
 export const ROUTE_MANIFEST: OwnedRoute[] = [
   { method: "GET", path: "/", enabled: false, reads: "public" },
   { method: "GET", path: "/events/past", enabled: true, reads: "public" },
+  { method: "GET", path: "/events", enabled: false, reads: "public" },
   { method: "GET", path: "/about", enabled: false, reads: "public" },
   { method: "GET", path: "/privacy", enabled: false, reads: "public" },
   { method: "GET", path: "/rules", enabled: false, reads: "public" },
+  { method: "GET", path: "/faq", enabled: false, reads: "public" },
   { method: "GET", path: "/join", enabled: false, reads: "public" },
   // Moderator dashboard: member data, so the Kit branch renders
   // inside the member-read boundary with this declaration and the bridged
@@ -80,6 +83,35 @@ export const ROUTE_MANIFEST: OwnedRoute[] = [
     enabled: false,
     reads: { resource: "featured_contents", action: "list", route: "admin.featured.index" },
   },
+  // Moderator featured create form: member data, so the Kit branch renders
+  // inside the member-read boundary with this declaration and the bridged
+  // viewer. Same declaration as the Hono handler (admin.featured.create,
+  // src/admin/routes.tsx). Only this GET migrates: POST /admin/featured
+  // stays Hono-owned, so the ported form keeps submitting to the unchanged
+  // create handler (parseFeaturedForm + createFeatured, 422/303) during
+  // mixed mode, and the guarded /admin/featured-contents/create legacy
+  // redirect stays Hono-owned. Off until the enablement review.
+  {
+    method: "GET",
+    path: "/admin/featured/new",
+    enabled: false,
+    reads: { resource: "featured_contents", action: "view", route: "admin.featured.create" },
+  },
+  // Moderator featured edit form: member data, so the Kit branch renders
+  // inside the member-read boundary with this declaration and the bridged
+  // viewer. Same declaration as the Hono handler (admin.featured.edit,
+  // src/admin/routes.tsx). Only this GET migrates: POST /admin/featured/:id
+  // and POST /admin/featured/:id/delete stay Hono-owned, so the edit form,
+  // the 422 re-render with preserved values, the 303s and the delete action
+  // keep one authority until a later write slice lands, and the guarded
+  // /admin/featured-contents/:id/edit legacy redirect stays Hono-owned. Off
+  // until the enablement review.
+  {
+    method: "GET",
+    path: "/admin/featured/:id",
+    enabled: false,
+    reads: { resource: "featured_contents", action: "view", route: "admin.featured.edit" },
+  },
   // Read-only activity-log viewer: the same bounded subject/causer filters and
   // newest-first paging as the Hono panel, audited by the member-read boundary
   // with this declaration and the bridged viewer. Off until the enablement
@@ -100,6 +132,20 @@ export const ROUTE_MANIFEST: OwnedRoute[] = [
     path: "/admin/events",
     enabled: false,
     reads: { resource: "events", action: "list", route: "admin.events.index" },
+  },
+  // Moderator event-create form: same declaration as the Hono handler
+  // (admin.events.create, src/admin/routes.tsx). Only this GET migrates:
+  // POST /admin/events stays Hono-owned, so draft-first creation, weekly
+  // recurrence (max 52), wall-time/timezone validation, body cap, throttle,
+  // error aggregation, retained values and the 303 keep one authority until
+  // the write slice lands. The guarded /admin/events/create legacy redirect
+  // stays Hono-owned; the manifest carries this GET entry only. Off until
+  // the enablement review.
+  {
+    method: "GET",
+    path: "/admin/events/new",
+    enabled: false,
+    reads: { resource: "events", action: "view", route: "admin.events.create" },
   },
   // Join-attempts audit list: member data, so the Kit branch renders
   // inside the member-read boundary with this declaration and the bridged
@@ -146,6 +192,18 @@ export const ROUTE_MANIFEST: OwnedRoute[] = [
     path: "/leaderboards/members",
     enabled: false,
     reads: { resource: "leaderboard", action: "list", route: "leaderboards.members" },
+  },
+  // Live event detail: the Kit read model (src/events/kit-detail.ts) mirrors
+  // the served GET /e/:key handler — role checks, member-only attendee
+  // disclosure, related/neighbor content and safe Event JSON-LD — audited by
+  // the member-read boundary with this declaration and the bridged viewer.
+  // Off until the RSVP companion passes: Hono answers meanwhile, and JSON/ICS
+  // stay Hono-owned with no entries of their own.
+  {
+    method: "GET",
+    path: "/e/:key",
+    enabled: false,
+    reads: { resource: "member", action: "list", route: "events.page" },
   },
 ];
 
@@ -313,6 +371,17 @@ export interface HookDispatchDeps {
   // of in web/src/hooks.server.ts. Absent by default: without it the dispatch
   // behaves exactly as before.
   pastArchive?: (request: Request, render: () => Promise<Response>) => Promise<Response>;
+  // Native events-list guard/cache around the Kit endpoint render. Same binding shape as the
+  // archive; the list entry ships disabled, so production never reaches this
+  // branch until the companion card enables it.
+  eventsPage?: (request: Request, render: () => Promise<Response>) => Promise<Response>;
+  // Native event-detail throttle around the Kit member-read render. Same
+  // binding shape as the archive/list wrappers: the hook binds env into this
+  // (request, render) => dispatchEventDetailRequest(request, env, render); the
+  // core decides WHEN it runs, so the route-id branch is pinned here instead
+  // of in web/src/hooks.server.ts. Absent by default: without it the dispatch
+  // behaves exactly as before.
+  eventDetail?: (request: Request, render: () => Promise<Response>) => Promise<Response>;
 }
 
 // Production Kit decoration, owned by the core so the tested path is the
@@ -455,7 +524,11 @@ export async function dispatchHookRequest(
   // resolve. A bridge failure must not 500 the render — public Kit pages fail
   // closed to guest-equivalent locals, exactly as if no bridge were wired.
   // It runs outside the member-read boundary: its session read is not member data.
-  if (deps.sessionFor && route.reads !== "public") {
+  // Deferred as a closure because the live detail wrapper runs before it (see
+  // below): the bridge still precedes every render, but a throttled detail
+  // client never reaches it.
+  const bridgeSession = async (): Promise<void> => {
+    if (!deps.sessionFor) return;
     try {
       const bridged = await deps.sessionFor(event);
       const prior = (event.locals as Record<string, unknown> | undefined) ?? {};
@@ -465,16 +538,38 @@ export async function dispatchHookRequest(
         exception: (err as Error)?.constructor?.name ?? "unknown",
       });
     }
-  }
-  // Native archive reads share the Hono guard and anonymous cache. The route
-  // id owns the branch (SvelteKit sets it before handle runs); the manifest
-  // owns the Kit half above, so an unowned path never reaches the wrapper.
+  };
+  // Native archive and list reads share the Hono guard and anonymous cache.
+  // The route id owns the branch (SvelteKit sets it before handle runs); the
+  // manifest owns the Kit half above, so an unowned path never reaches either
+  // wrapper.
   const isPastArchivePage = event.route?.id === "/events/past";
+  const isEventsListPage = event.route?.id === "/events";
+  // The live detail is a member read, so it renders inside the boundary; the
+  // shared public-read budget runs before the session bridge through the
+  // detail wrapper, exactly as the served handler throttles before any read.
+  // A limited client gets its 429 without costing a Postgres session read;
+  // the bridge and the member-read render run inside the wrapper for the
+  // clients the budget allows through.
+  const isEventDetailPage = event.route?.id === "/e/[key]";
   let response: Response;
   if (route.reads !== "public") {
-    response = await renderMemberRead(event, route.reads, deps);
+    // Narrowed once for the deferred render: the closure below would lose the
+    // branch narrowing on route.reads.
+    const reads = route.reads;
+    if (isEventDetailPage && deps.eventDetail) {
+      response = await deps.eventDetail(event.request, async () => {
+        await bridgeSession();
+        return renderMemberRead(event, reads, deps);
+      });
+    } else {
+      await bridgeSession();
+      response = await renderMemberRead(event, reads, deps);
+    }
   } else if (isPastArchivePage && deps.pastArchive) {
     response = await deps.pastArchive(event.request, () => deps.resolve(event));
+  } else if (isEventsListPage && deps.eventsPage) {
+    response = await deps.eventsPage(event.request, () => deps.resolve(event));
   } else {
     response = await deps.resolve(event);
   }

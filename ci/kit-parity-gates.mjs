@@ -661,7 +661,7 @@ export function assertMembersContract({ label, html, headers, status, expected }
     failures.push(`${label}: skip link targets #main`);
   if (!html.includes('aria-label="Primary"'))
     failures.push(`${label}: primary nav has an accessible name`);
-  if (!html.includes("/leaderboards/members"))
+  if (!/<link\b[^>]*\brel="canonical"[^>]*\/leaderboards\/members[^>]*>/.test(html))
     failures.push(`${label}: canonical points at /leaderboards/members`);
   if (!html.includes('<meta name="robots" content="noindex, nofollow"'))
     failures.push(`${label}: member board never indexes`);
@@ -1073,23 +1073,62 @@ export function runUnitMode({ stdout = process.stdout, manifestSource: manifestO
     membersFailures.length === 0 ? "passed" : "failed",
     membersFailures.join("; ") || null,
   );
+  // Each mutant trips exactly one contract check, pinned by failure label:
+  // a mutant that trips a neighbouring check (or none) fails its journey.
+  // guest-chrome keeps "Sign out" so only the guest-chrome leak check trips;
+  // no-canonical and canonical-wrong-target pin the <link rel="canonical">
+  // element match (form action and scope links alone must not satisfy it).
   const membersMutants = [
-    ["guest-chrome", (html) => html.replace("Sign out", "Welcome, guest")],
-    ["shared-cache", (html) => html],
-    ["no-table-no-status", (html) => html.replace(/<table>[\s\S]*<\/table>/, "")],
+    [
+      "guest-chrome",
+      (html) => html.replace("</main>", "<p>Welcome, guest</p></main>"),
+      "member page must not show guest chrome",
+    ],
+    ["shared-cache", (html) => html, "member board answers private, no-store"],
+    [
+      "no-table-no-status",
+      (html) => html.replace(/<table>[\s\S]*<\/table>/, ""),
+      "board table or empty status present",
+    ],
     [
       "follow-index",
       (html) => html.replace('content="noindex, nofollow"', 'content="index, follow"'),
+      "member board never indexes",
     ],
-    ["per-attempt-field", (html) => `${html}<!-- discord_id -->`],
+    ["per-attempt-field", (html) => `${html}<!-- discord_id -->`, "no per-attempt fields"],
+    [
+      "profile-link",
+      (html) =>
+        html.replace(
+          '<th scope="row">Rick</th>',
+          '<th scope="row"><a href="/members/rick">Rick</a></th>',
+        ),
+      "board rows never link to profiles",
+    ],
+    [
+      "no-canonical",
+      (html) => html.replace(/<link rel="canonical"[^>]*>/, ""),
+      "canonical points at /leaderboards/members",
+    ],
+    [
+      "canonical-wrong-target",
+      (html) =>
+        html.replace(
+          /<link rel="canonical"[^>]*>/,
+          '<link rel="canonical" href="https://next.togetherweown.com/events">',
+        ),
+      "canonical points at /leaderboards/members",
+    ],
+    ["wrong-renderer", (html) => html, "renderer marker"],
   ];
-  for (const [name, mutate] of membersMutants) {
+  for (const [name, mutate, want] of membersMutants) {
     const failures = assertMembersContract({
       label: `unit/members-mutant-${name}`,
       html: mutate(membersGood),
       headers: headerMap({
         "content-type": "text/html; charset=UTF-8",
-        "x-two-renderer": membersMarker,
+        "x-two-renderer":
+          name === "wrong-renderer" ? (membersMarker === "kit" ? null : "kit") : membersMarker,
         "cache-control": name === "shared-cache" ? "public, max-age=300" : "private, no-store",
       }),
       status: 200,
@@ -1099,10 +1138,13 @@ export function runUnitMode({ stdout = process.stdout, manifestSource: manifestO
         cache: name === "shared-cache" ? "public, max-age=300" : "private, no-store",
       },
     });
+    const pinned = failures.some((f) => f.includes(want));
     push(
       `unit: members mutant ${name} fails`,
-      failures.length > 0 ? "passed" : "failed",
-      failures.length > 0 ? null : "mutant was NOT detected",
+      pinned ? "passed" : "failed",
+      pinned
+        ? null
+        : `mutant did not trip "${want}" (got: ${failures.join("; ") || "no failures"})`,
     );
   }
 

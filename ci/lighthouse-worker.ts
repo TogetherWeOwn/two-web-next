@@ -20,6 +20,11 @@ const timeoutsSql =
   "select set_config('lock_timeout', $1, true), set_config('statement_timeout', $2, true)";
 const featuredSql =
   'select "id", "title", "body", "url", "image_url", "image_alt" from "featured_contents" where ("featured_contents"."is_published" = $1 and ("featured_contents"."starts_at" is null or "featured_contents"."starts_at" <= $2) and ("featured_contents"."ends_at" is null or "featured_contents"."ends_at" > $3)) order by "featured_contents"."position" asc, "featured_contents"."id" asc';
+// Homepage guest cache base: every published row with its window bounds; the
+// worker applies the live window per request, so the open window here (null
+// bounds) stays visible at every instant.
+const publishedFeaturedSql =
+  'select "id", "title", "body", "url", "image_url", "image_alt", "starts_at", "ends_at" from "featured_contents" where "featured_contents"."is_published" = $1 order by "featured_contents"."position" asc, "featured_contents"."id" asc';
 const goingSql =
   'select "event_id", count(*) from "rsvps" where ("rsvps"."event_id" in ($1) and "rsvps"."status" = $2) group by "rsvps"."event_id"';
 const localOrigin = "http://127.0.0.1:8787";
@@ -213,6 +218,27 @@ export function fixtureEnvForRequest(nowMs: number): Env & Record<string, unknow
                 "Lighthouse fixture community news",
                 "Local community games and upcoming game nights.",
                 "/events",
+                null,
+                null,
+              ],
+            ],
+          };
+        }
+        if (
+          inTransaction &&
+          sql === publishedFeaturedSql &&
+          params.length === 1 &&
+          params[0] === true
+        ) {
+          return {
+            rows: [
+              [
+                1,
+                "Lighthouse fixture community news",
+                "Local community games and upcoming game nights.",
+                "/events",
+                null,
+                null,
                 null,
                 null,
               ],

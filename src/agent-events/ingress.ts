@@ -1,6 +1,7 @@
 import type { Sql } from "postgres";
 import { sha256Hex } from "../bot/signer";
 import { retireAnonEventCaches } from "../events/anon-cache";
+import { retireHomeGuestCache } from "../home-cache";
 import type { Answer, Grant, IngressConfig, IngressEffects, Op } from "./types";
 import { OPS } from "./types";
 import { digest, isPlainObject, PayloadTooDeepError, storedEventKey, ulid } from "./payload";
@@ -273,8 +274,10 @@ async function processAgentEvent(
     if (
       (op === "create" || op === "update" || op === "publish" || op === "cancel") &&
       (committed.status === 200 || committed.status === 201)
-    )
+    ) {
       retireAnonEventCaches();
+      await retireHomeGuestCache();
+    }
     return { status: committed.status, body: committed.body };
   } catch (err) {
     const code = (err as { code?: string }).code;
