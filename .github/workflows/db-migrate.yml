@@ -11,7 +11,7 @@ on:
         required: true
   # deploy.yml does not call this workflow: it applies the staging web
   # migrations itself, in the exact-SHA deploy job, with the same
-  # ci/neon-migrate.mjs. This stays the hand-dispatch path (staging recovery)
+  # ci/db-migrate.mjs. This stays the hand-dispatch path (staging recovery)
   # and the only production path.
   # Environment secrets are loaded here, not passed/inherited from a caller.
   workflow_call:
@@ -81,7 +81,7 @@ jobs:
           GIT_CONFIG_VALUE_1="AUTHORIZATION: basic $auth" \
             bash ci/check-migration-numbers.sh
       - name: Dry-run listing (read-only journal diff, no DDL)
-        run: node ci/neon-migrate.mjs plan
+        run: node ci/db-migrate.mjs plan
         env: &migration-env
           MIGRATION_TARGET: ${{ inputs.target }}
           PRODUCTION_DEPLOY_ENABLED: ${{ vars.PRODUCTION_DEPLOY_ENABLED }}
@@ -91,8 +91,8 @@ jobs:
           PLANETSCALE_STAGING_DATABASE_URL: ${{ inputs.target == 'staging' && secrets.PLANETSCALE_STAGING_DATABASE_URL || '' }}
           PRODUCTION_DATABASE_URL: ${{ inputs.target == 'production' && secrets.PRODUCTION_DATABASE_URL || '' }}
       - name: Record PITR timestamp, apply and verify under database lock
-        run: node ci/neon-migrate.mjs apply
+        run: node ci/db-migrate.mjs apply
         env: *migration-env
       - name: Post-check zero pending web migrations
-        run: node ci/neon-migrate.mjs verify
+        run: node ci/db-migrate.mjs verify
         env: *migration-env

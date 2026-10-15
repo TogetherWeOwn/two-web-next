@@ -6,16 +6,15 @@
   "compatibility_date": "2026-09-29",
   "compatibility_flags": ["nodejs_compat"],
   "observability": { "enabled": true },
-  // Staging is PlanetScale us-east-1 while this Worker stays pinned to
-  // eu-central-1 (a pre-repoint placement beside the retired Neon staging
-  // branch), so every statement is now a transatlantic round trip through
-  // Hyperdrive. Served from CDG/AMS, DB-bound requests had a median of 125-195 ms
-  // against Neon; served from ORD/MSP/DFW/SEA/IAD (where GitHub-hosted runners
-  // land) 0.5-1.8 s, p95 3-4.6 s. Moving placement beside the staging database
-  // is a separate latency decision (follow-up to the PlanetScale repoint).
+  // Staging database is PlanetScale us-east-1, so this Worker is placed
+  // beside it (aws:us-east-1): every statement is a Hyperdrive round trip,
+  // and the pre-repoint eu-central-1 pin (beside the retired Neon branch)
+  // made each one transatlantic. Live /up from this run's host took 1.32 s
+  // under the old pin (2026-10-15); re-measure after the first deploy on
+  // this placement before quoting a new figure.
   // env.production opts out below: its database lives elsewhere and that
   // placement is a cutover decision.
-  "placement": { "region": "aws:eu-central-1" },
+  "placement": { "region": "aws:us-east-1" },
   // Deploy the Tail Worker first; it has no public route and its own optional webhook secret.
   "tail_consumers": [{ "service": "two-web-next-alerts" }],
   "workers_dev": false,

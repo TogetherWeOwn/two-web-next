@@ -153,8 +153,8 @@ describe("change-scope gate", () => {
       "ci/check-migration-history.mjs",
       "ci/check-migration-history-selftest.mjs",
       "ci/check-migration-numbers.sh",
-      "ci/neon-migrate.mjs",
-      "ci/neon-migrate-selftest.mjs",
+      "ci/db-migrate.mjs",
+      "ci/db-migrate-selftest.mjs",
     ]) {
       const r = scope([[path, ""]]);
       expect({ app: r.app, db: r.db, full: r.full }, path).toEqual({
@@ -164,7 +164,7 @@ describe("change-scope gate", () => {
       });
     }
     // Other ci/ tooling is still an app input.
-    const other = scope([["ci/neon-backup-selftest.sh", ""]]);
+    const other = scope([["ci/db-backup-selftest.sh", ""]]);
     expect({ app: other.app, db: other.db }).toEqual({ app: "true", db: "false" });
   });
 
@@ -669,7 +669,7 @@ describe("backup selftest wiring", () => {
   const selftests = [
     "bash ci/backup-integrity-selftest",
     "python3 ci/backup-target-selftest",
-    "bash ci/neon-backup-argv-selftest.sh",
+    "bash ci/db-backup-argv-selftest.sh",
     "python3 ci/backup-manifest-admission-selftest",
     "python3 ci/backup-restore-proof/selftest.py",
   ];
@@ -702,8 +702,8 @@ describe("backup selftest wiring", () => {
       entry.isDirectory() ? walk(join(dir, entry.name)) : [join(dir, entry.name)],
     );
   const inputs = [
-    "bin/neon-backup.sh",
-    "ci/neon-backup-argv-selftest.sh",
+    "bin/db-backup.sh",
+    "ci/db-backup-argv-selftest.sh",
     ...walk("bin/backup"),
     ...readdirSync("ci")
       .filter((name) => name.startsWith("backup-"))
@@ -716,11 +716,11 @@ describe("backup selftest wiring", () => {
   it("finds the backup inputs it is about to check", () => {
     expect(inputs).toEqual(
       expect.arrayContaining([
-        "bin/neon-backup.sh",
+        "bin/db-backup.sh",
         "bin/backup/integrity-helper",
         "ci/backup-integrity-selftest",
         "ci/backup-restore-proof/selftest.py",
-        "ci/neon-backup-argv-selftest.sh",
+        "ci/db-backup-argv-selftest.sh",
       ]),
     );
   });

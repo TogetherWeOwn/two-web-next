@@ -1,15 +1,14 @@
-name: neon-backup
+name: db-backup
 
-# Nightly pg_dump of the Neon staging branch to R2 `two-web-next-backups`.
+# Nightly pg_dump of the PlanetScale staging branch to R2 `two-web-next-backups`.
 # Staging is dumped nightly by the schedule; production is dumped only by manual
 # dispatch with `target: production`, behind the `production` Environment.
-# See docs/db-migrations.md and bin/neon-backup.sh.
+# See docs/db-migrations.md and bin/db-backup.sh.
 # CISO condition (TOG-9837): member-data dumps land ONLY in the
 # EU-jurisdiction-pinned `two-web-next-backups` bucket (every wrangler r2
 # object call passes --jurisdiction eu). The legacy `paperclip-backups`
 # bucket (jurisdiction default / ENAM) is out of scope for member-data dumps.
-# Secrets (operator-provisioned, never in logs): NEON_STAGING_DATABASE_URL
-# (staging), PRODUCTION_BACKUP_DATABASE_URL (production, read-only role on the
+# Secrets (operator-provisioned, never in logs): PLANETSCALE_STAGING_DATABASE_URL (staging), PRODUCTION_BACKUP_DATABASE_URL (production, read-only role on the
 # PlanetScale direct endpoint), CLOUDFLARE_API_TOKEN, CLOUDFLARE_ACCOUNT_ID.
 # While a target is unprovisioned the probe step skips the rest green so the
 # schedule is quiet, not red.
@@ -27,7 +26,7 @@ on:
   workflow_dispatch:
     inputs:
       target:
-        description: "Database to dump (staging = Neon, production = PlanetScale)"
+        description: "Database to dump (staging and production = PlanetScale)"
         default: "staging"
         required: false
         type: choice
@@ -42,7 +41,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: neon-backup
+  group: db-backup
   cancel-in-progress: false
 
 jobs:
@@ -66,7 +65,7 @@ jobs:
       - id: probe
         name: Probe provisioning
         env:
-          STAGING_URL: ${{ secrets.NEON_STAGING_DATABASE_URL }}
+          STAGING_URL: ${{ secrets.PLANETSCALE_STAGING_DATABASE_URL }}
           PRODUCTION_URL: ${{ inputs.target == 'production' && secrets.PRODUCTION_BACKUP_DATABASE_URL || '' }}
         run: |
           set -euo pipefail
@@ -98,12 +97,12 @@ jobs:
       - name: Backup to R2
         if: steps.probe.outputs.ready == 'true'
         env:
-          # Staging reads the Neon secret; production reads the PlanetScale
+          # Staging reads the PlanetScale staging secret; production reads the PlanetScale
           # direct-endpoint secret. The script only ever sees DATABASE_URL.
-          DATABASE_URL: ${{ inputs.target == 'production' && secrets.PRODUCTION_BACKUP_DATABASE_URL || secrets.NEON_STAGING_DATABASE_URL }}
+          DATABASE_URL: ${{ inputs.target == 'production' && secrets.PRODUCTION_BACKUP_DATABASE_URL || secrets.PLANETSCALE_STAGING_DATABASE_URL }}
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-        run: ./bin/neon-backup.sh backup "$BRANCH"
+        run: ./bin/db-backup.sh backup "$BRANCH"
 
       - name: Promote weekly + rotate (Sundays)
         if: steps.probe.outputs.ready == 'true' && github.event.schedule != ''
@@ -113,13 +112,13 @@ jobs:
         run: |
           set -euo pipefail
           if [ "$(date -u +%u)" = 7 ]; then
-            ./bin/neon-backup.sh promote-weekly "$BRANCH"
+            ./bin/db-backup.sh promote-weekly "$BRANCH"
           fi
-          ./bin/neon-backup.sh rotate "$BRANCH"
+          ./bin/db-backup.sh rotate "$BRANCH"
 
       - name: Verify all keys
         if: steps.probe.outputs.ready == 'true'
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-        run: ./bin/neon-backup.sh check "$BRANCH"
+        run: ./bin/db-backup.sh check "$BRANCH"

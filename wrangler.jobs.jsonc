@@ -16,9 +16,9 @@
   "compatibility_date": "2026-09-29",
   "compatibility_flags": ["nodejs_compat"],
   "observability": { "enabled": true },
-  // Staging Neon is eu-central-1 and every statement is a round trip through
-  // Hyperdrive: run the jobs Worker beside it, like the web Worker.
-  "placement": { "region": "aws:eu-central-1" },
+  // Staging database is PlanetScale us-east-1 and every statement is a round
+  // trip through Hyperdrive: run the jobs Worker beside it, like the web Worker.
+  "placement": { "region": "aws:us-east-1" },
   // Page jobs traces through the same staging Tail pager as the web Worker.
   // Wrangler never inherits this into env.preview (which pages nothing).
   "tail_consumers": [{ "service": "two-web-next-alerts" }],

@@ -327,7 +327,7 @@ jobs:
         run: npm run db:migrate
         env:
           DATABASE_URL: postgres://postgres:ci@localhost:5432/postgres
-      - name: Migration workflow selftest (isolated Postgres, no Neon/network APIs)
+      - name: Migration workflow selftest (isolated Postgres, no network APIs)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
         run: npm run db:migrate:selftest
         env:
@@ -497,9 +497,9 @@ jobs:
           path: coverage/
           if-no-files-found: error
           retention-days: 14
-      - name: Neon backup selftest (stubbed, no secrets)
+      - name: Database backup selftest (stubbed, no secrets)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
-        run: bash ci/neon-backup-selftest.sh
+        run: bash ci/db-backup-selftest.sh
       # Hermetic backup fixture suites: fake pg_dump/R2/wrangler on local disk, no
       # secrets, no network, no database. They gate the same `check` as every
       # other step (no continue-on-error), and run when backup inputs change
@@ -512,9 +512,9 @@ jobs:
       - name: Backup target selftest (fixtures, no secrets)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true')
         run: python3 ci/backup-target-selftest
-      - name: Neon backup argv selftest (stubbed, no secrets)
+      - name: Database backup argv selftest (stubbed, no secrets)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true')
-        run: bash ci/neon-backup-argv-selftest.sh
+        run: bash ci/db-backup-argv-selftest.sh
       - name: Backup manifest admission selftest (fixtures, no secrets)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true')
         run: python3 ci/backup-manifest-admission-selftest

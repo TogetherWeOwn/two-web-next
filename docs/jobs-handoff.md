@@ -13,7 +13,7 @@ pin the split: exactly one consumer per queue and one cron owner.
   crons (`*/10 * * * *` reconcile, `0 0 * * *` prune) to the jobs top level.
 - Stays: web producers (`SYNC_EVENT_QUEUE`, `INTERNAL_ACTION_QUEUE`), routes,
   `env.production` cutover template, preview envs and their disjoint queues.
-- Jobs top level adds only `placement` (eu-central-1, beside staging Neon),
+- Jobs top level adds only `placement` (aws:us-east-1, beside PlanetScale staging),
   `tail_consumers` (staging pager), `keep_vars` and `APP_URL`; never preview
   production guild settings and never secrets in source.
 

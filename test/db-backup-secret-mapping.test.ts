@@ -2,16 +2,16 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
 // Pins the read-only production backup mapping: the production dump path in
-// neon-backup.yml must read PRODUCTION_BACKUP_DATABASE_URL (read-only role on
+// db-backup.yml must read PRODUCTION_BACKUP_DATABASE_URL (read-only role on
 // the PlanetScale direct endpoint), never the migration secret
 // PRODUCTION_DATABASE_URL. Grep-level, no YAML parser, no secrets, no network.
-const workflow = readFileSync(".github/workflows/neon-backup.yml", "utf8");
+const workflow = readFileSync(".github/workflows/db-backup.yml", "utf8");
 const code = workflow
   .split("\n")
   .filter((line) => !/^\s*#/.test(line))
   .join("\n");
 
-describe("neon-backup production secret mapping", () => {
+describe("db-backup production secret mapping", () => {
   it("reads production dumps through PRODUCTION_BACKUP_DATABASE_URL, never PRODUCTION_DATABASE_URL", () => {
     // Both the probe gate and the dump mapping reference the read-only secret.
     expect(code).toContain(

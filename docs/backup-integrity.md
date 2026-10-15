@@ -1,6 +1,6 @@
-# Neon backup byte-integrity contract
+# Database backup byte-integrity contract
 
-`bin/neon-backup.sh` now verifies **stored archive bytes**, separately from its
+`bin/db-backup.sh` now verifies **stored archive bytes**, separately from its
 manifest publication proof. A SHA-256 receipt is not a PostgreSQL restore test,
 row comparison, authenticity signature, or proof of recoverability. It does not
 protect against an actor replacing both archive and receipt consistently.
@@ -48,8 +48,8 @@ whole inventory before an upload, promotion PUT or rotation DELETE.
 ## Check outcomes and legacy compatibility
 
 ```sh
-./bin/neon-backup.sh check staging
-./bin/neon-backup.sh check staging --require-verified
+./bin/db-backup.sh check staging
+./bin/db-backup.sh check staging --require-verified
 ```
 
 Both commands download full archives; budget local disk space and read traffic
@@ -98,11 +98,11 @@ failed pair's manifest evidence or redesigning retention.
 ```sh
 bash ci/backup-integrity-selftest
 python3 ci/backup-target-selftest
-bash ci/neon-backup-argv-selftest.sh
+bash ci/db-backup-argv-selftest.sh
 python3 ci/backup-manifest-admission-selftest
 python3 ci/backup-restore-proof/selftest.py
-bash ci/neon-backup-selftest.sh
-bash -n bin/neon-backup.sh ci/backup-integrity-selftest
+bash ci/db-backup-selftest.sh
+bash -n bin/db-backup.sh ci/backup-integrity-selftest
 ```
 
 The dedicated integrity suite uses a binary synthetic file larger than one hash
@@ -117,8 +117,8 @@ The `check` job in `.github/workflows/ci.yml` runs all six suites above, each as
 its own step, so a red one fails the existing required `check` and `ci-ok`. No
 step is `continue-on-error`. The five new suites run when the change scope
 selects `app` or `full` (any path under `bin/` or `ci/`, including
-`bin/neon-backup.sh`, `bin/backup/**`, `ci/backup-*` and
-`ci/neon-backup-argv-selftest.sh`), and on every push to `main`, nightly run and
+`bin/db-backup.sh`, `bin/backup/**`, `ci/backup-*` and
+`ci/db-backup-argv-selftest.sh`), and on every push to `main`, nightly run and
 dispatch. Docs-only and draft runs skip them like every other heavy step.
 `test/change-scope.test.ts` fails if a step is removed, loses its gate, swallows
 its exit code, or if a backup input stops selecting the `app` scope.
@@ -128,7 +128,7 @@ need no secrets, network, R2 or database. A green run proves the fixture behavio
 only; it does **not** prove that a live backup exists or can be restored. The
 suites need `pg_dump` stubs to survive nested Bash: do not run them under a shell
 startup file (`BASH_ENV`) that resets `PATH`, or they stop with
-`neon-backup: pg_dump not found`.
+`db-backup: pg_dump not found`.
 
 API references:
 - [Python SHA-256 streaming update](https://docs.python.org/3/library/hashlib.html#hashlib.hash.update)
