@@ -7,6 +7,8 @@ on:
     # deliberately absent: title/body edits need no heavy suite (pr-gates.yml
     # covers them with its own `edited` trigger).
     types: [opened, synchronize, reopened, ready_for_review]
+  merge_group:
+    types: [checks_requested]
   push:
     branches: [main]
   # Nightly full run (TOG-14880): non-PR events select every area, so this runs
@@ -37,7 +39,7 @@ permissions:
 # this.
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || (github.event_name == 'schedule' && 'nightly') || github.ref }}
-  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' && github.event_name != 'merge_group' }}
 
 jobs:
   # Cheap change-scope gate (TOG-11811): a PR that only touches prose
