@@ -237,8 +237,9 @@ for (const target of targets) {
       const cookie = await memberCookie(target);
       // The Kit target must answer from the Kit load, not the Hono fallback:
       // the parity fixture owns the board (kitFixtureOwnsMemberBoard), so
-      // its marker is "kit" even though the shipped manifest still holds
-      // the route on Hono for deployed workers. If the fixture ever stops
+      // its marker is "kit". The shipped manifest now owns the board on Kit
+      // for deployed workers too, so the fixture flag is redundant for this
+      // entry (rollback is enabled: false). If the fixture ever stops
       // owning it, this expectation fails instead of proving Hono-vs-Hono.
       if (target.name === "kit")
         expect(kitFixtureOwnsMemberBoard(), "Kit fixture owns the member board").toBe(true);
@@ -264,6 +265,22 @@ for (const target of targets) {
         expect(body).not.toContain("Welcome, guest");
         expect(body).not.toContain('href="/members/');
       }
+    });
+
+    test("member board data request carries no Discord IDs", async () => {
+      // SvelteKit serves __data.json from the load's return value even with
+      // csr = false, so the Kit payload must carry rank + name + count +
+      // isViewer only: no ranked member's Discord ID, no viewerId. Hono
+      // never served this path, so its body must carry no IDs either.
+      const cookie = await memberCookie(target);
+      const response = await api(target).get("/leaderboards/members/__data.json", {
+        headers: { cookie },
+      });
+      if (target.name === "kit") expect(response.status()).toBe(200);
+      const body = await response.text();
+      expect(scrubSecrets(body)).toEqual([]);
+      expect(body).not.toContain("userId");
+      expect(body).not.toContain("viewerId");
     });
 
     test("bad season, scope and activity answer 400 before any board", async () => {

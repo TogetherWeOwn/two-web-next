@@ -126,8 +126,10 @@ the Kit target, since the isolated fixture deliberately does not share the
 Hono worker's signing secret. The Kit target answers from the Kit load
 itself: the fixture worker carries `KIT_PARITY_FIXTURE_MEMBER_BOARD=true`,
 which `fixtureManifestFor` (`src/route-ownership.ts`) honours only for an
-http loopback `APP_URL`, enabling just this entry in the fixture's manifest
-while the shipped manifest keeps the route on Hono everywhere deployed.
+http loopback `APP_URL`, enabling just this entry in the fixture's manifest.
+The shipped manifest now owns the board on Kit everywhere deployed, so the
+fixture flag is redundant for this entry; returning the shipped entry to
+`enabled: false` restores Hono ownership as the rollback.
 The spec asserts the `kit` renderer marker on the Kit target for the served
 board, so a fixture that stops owning the route fails the journey instead
 of silently comparing Hono against Hono.

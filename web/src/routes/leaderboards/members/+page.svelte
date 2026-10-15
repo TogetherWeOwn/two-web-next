@@ -4,8 +4,7 @@ import { canonicalUrl } from "../../../../../src/seo";
 import type { PageProps } from "./$types";
 
 let { data }: PageProps = $props();
-const { season, scope, activity, rows, viewerId, viewerUsername, available, appUrl } =
-  $derived(data);
+const { season, scope, activity, rows, viewerUsername, available, appUrl } = $derived(data);
 const label = $derived(activity === null ? "every game" : activity);
 const destination = (nextScope: string) => {
   const params = new URLSearchParams();
@@ -67,7 +66,7 @@ const destination = (nextScope: string) => {
       <thead><tr><th scope="col">Rank</th><th scope="col">Member</th><th scope="col">Going</th></tr></thead>
       <tbody>
         {#each rows as row}
-          <tr aria-current={row.userId === viewerId ? "true" : undefined}>
+          <tr aria-current={row.isViewer ? "true" : undefined}>
             <td>{row.rank}</td><th scope="row">{row.username}</th><td>{row.count}</td>
           </tr>
         {/each}

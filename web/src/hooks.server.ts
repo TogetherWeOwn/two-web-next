@@ -39,8 +39,9 @@ export const handle: Handle = async ({ event, resolve }) =>
     accessSink: kitAccessSink(env),
     // Loopback Kit parity fixture flag only: the core turns this boolean
     // plus a loopback appUrl into the fixture route choice, so the member
-    // board's executed journey runs the Kit load on the fixture worker
-    // while production ownership stays on Hono.
+    // board's executed journey runs the Kit load on the fixture worker.
+    // Production now serves the board from Kit too, so this flag is
+    // redundant for the entry; flipping the entry back restores Hono.
     fixtureMemberBoard: env.KIT_PARITY_FIXTURE_MEMBER_BOARD === "true",
     // The member board's anonymous view log, written only after the
     // member-read boundary released a 200 (no-op for every other route).

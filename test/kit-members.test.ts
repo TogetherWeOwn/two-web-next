@@ -42,9 +42,10 @@ describe("Kit member-board load parity", () => {
     expect(data.season).toBe("all");
     expect(data.scope).toBe("overall");
     expect(data.activity).toBeNull();
-    expect(data.rows.map((row) => row.userId)).toEqual(["u-a", "u-viewer", "u-b"]);
-    expect(data.rows[1]).toMatchObject({ rank: 2, username: "Vic" });
-    expect(data.viewerId).toBe("u-viewer");
+    expect(data.rows.map((row) => row.username)).toEqual(["Ana", "Vic", "Bo"]);
+    expect(data.rows.map((row) => row.isViewer)).toEqual([false, true, false]);
+    expect(data.rows[1]).toMatchObject({ rank: 2, username: "Vic", isViewer: true });
+    expect("viewerId" in data).toBe(false);
     expect(data.available).toBe(true);
     expect(queueBoardViewFn).toHaveBeenCalledWith(db, {
       boardKey: "members",
@@ -60,11 +61,29 @@ describe("Kit member-board load parity", () => {
     const queueBoardViewFn = vi.fn(() => {});
     const data = await loadMembersBoardData(args({ scopeParam: "relative", queueBoardViewFn }));
     expect(data.scope).toBe("relative");
-    expect(data.rows.map((row) => row.userId)).toEqual(["u-a", "u-viewer", "u-b"]);
+    expect(data.rows.map((row) => row.username)).toEqual(["Ana", "Vic", "Bo"]);
+    expect(data.rows.map((row) => row.isViewer)).toEqual([false, true, false]);
     expect(queueBoardViewFn).toHaveBeenCalledWith(
       expect.anything(),
       expect.objectContaining({ scope: "relative", resultCount: 3 }),
     );
+  });
+
+  it("serializes no Discord IDs for the __data.json payload (viewer marked server-side)", async () => {
+    // SvelteKit serves GET /leaderboards/members/__data.json from this load's
+    // return value even with csr = false, so the serialized load output must
+    // carry rank + display name + count + isViewer only: no ranked member's
+    // Discord ID and no viewerId (src/leaderboards/members.ts data rule).
+    const data = await loadMembersBoardData(args());
+    const serialized = JSON.stringify(data);
+    expect(serialized).not.toContain("userId");
+    expect(serialized).not.toContain("viewerId");
+    for (const id of ["u-a", "u-viewer", "u-b"]) expect(serialized).not.toContain(id);
+    expect(data.rows).toEqual([
+      { rank: 1, username: "Ana", count: 5, isViewer: false },
+      { rank: 2, username: "Vic", count: 3, isViewer: true },
+      { rank: 3, username: "Bo", count: 1, isViewer: false },
+    ]);
   });
 
   it("passes the season window and normalized game to the ranking read", async () => {
