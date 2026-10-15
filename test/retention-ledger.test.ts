@@ -34,24 +34,66 @@ function listTsFiles(dir: string): string[] {
   for (const entry of readdirSync(dir)) {
     const full = join(dir, entry);
     if (statSync(full).isDirectory()) out.push(...listTsFiles(full));
-    else if (full.endsWith(".ts")) out.push(full);
+    else if (full.endsWith(".ts") || full.endsWith(".tsx")) out.push(full);
   }
   return out;
 }
 
-// Whole-statement delete windows: slice from each `delete from <table>`
-// match to the closing backtick of its SQL template literal, so a
-// multi-line prune (delete ... in ( + newline + select ... created_at < ...)
-// is judged as one statement instead of one line.
+// Whole-statement mutation windows include raw SQL deletes/truncates and the
+// Drizzle delete(table) form. Schema qualification, quoted identifiers and SQL
+// comments must not turn a repo-wide retention pin into a token-only scan.
 function deleteWindows(body: string, table: string): string[] {
   const out: string[] = [];
-  const re = new RegExp(`delete\\s+from\\s+${table}`, "gi");
+  const gap = String.raw`(?:\s|/\*[\s\S]*?\*/|--[^\r\n]*(?:\r?\n|$))+`;
+  const tableRef = String.raw`(?:(?:"?[a-z_][\w$]*"?)\s*\.\s*)?"?${table}"?`;
+  const anyTableRef = String.raw`(?:(?:"?[a-z_][\w$]*"?)\s*\.\s*)?"?[a-z_][\w$]*"?`;
+  const sqlRe = new RegExp(
+    `(?:delete${gap}from${gap}(?:only${gap})?${tableRef}|truncate${gap}(?:table${gap})?(?:only${gap})?(?:${anyTableRef}(?:${gap})?,(?:${gap})?)*${tableRef})`,
+    "gi",
+  );
   let m: RegExpExecArray | null;
-  while ((m = re.exec(body)) !== null) {
+  while ((m = sqlRe.exec(body)) !== null) {
     const close = body.indexOf("`", m.index);
     out.push(body.slice(m.index, close === -1 ? m.index + 600 : close));
   }
+  const symbols: Record<string, string> = {
+    activity_log: "activityLog",
+    queue_jobs: "queueJobs",
+    queue_failed_jobs: "queueFailedJobs",
+    job_unique_locks: "jobUniqueLocks",
+  };
+  const symbol = symbols[table];
+  if (symbol) {
+    const tableNames = new Set([symbol]);
+    const importedAliases = new RegExp(`\\b${symbol}\\s+as\\s+([\\w$]+)`, "g");
+    while ((m = importedAliases.exec(body)) !== null) tableNames.add(m[1]!);
+    let foundAlias = true;
+    while (foundAlias) {
+      foundAlias = false;
+      const names = [...tableNames].join("|");
+      const assignedAliases = new RegExp(
+        `\\b(?:const|let|var)\\s+([\\w$]+)\\s*=\\s*(?:[\\w$]+\\s*\\.\\s*)?(?:${names})\\b`,
+        "g",
+      );
+      while ((m = assignedAliases.exec(body)) !== null) {
+        if (!tableNames.has(m[1]!)) {
+          tableNames.add(m[1]!);
+          foundAlias = true;
+        }
+      }
+    }
+    const names = [...tableNames].join("|");
+    const ormRe = new RegExp(
+      `\\.\\s*delete\\s*\\(\\s*(?:[\\w$]+\\s*\\.\\s*)?(?:${names})\\s*\\)`,
+      "g",
+    );
+    while ((m = ormRe.exec(body)) !== null) out.push(m[0]);
+  }
   return out;
+}
+
+function normalizeSqlWindow(statement: string): string {
+  return statement.replace(/\s+/g, " ").trim();
 }
 
 function memTable() {
@@ -223,49 +265,54 @@ describe("retention ledger mechanisms (memory, no DB)", () => {
     expect(docs).toContain("activity_log");
     expect(docs).toContain("retained indefinitely per CISO decision");
     expect(docs).toContain("No job prunes it");
-    // Repo-wide: any `delete from activity_log` / `truncate ... activity_log`
-    // under src/ fails, so a new prune file cannot slip past a two-file scan.
-    // Inserts (`insert into activity_log`) are allowed and do not match.
+    // Repo-wide: raw SQL and Drizzle deletes/truncates are forbidden; inserts
+    // remain allowed and do not match the mutation-window scanner.
     const offenders: string[] = [];
     for (const file of listTsFiles(join(root, "src"))) {
       const body = readFileSync(file, "utf8");
-      if (/delete\s+from\s+activity_log/i.test(body) || /truncate\s+.*activity_log/i.test(body)) {
-        offenders.push(file);
-      }
+      if (deleteWindows(body, "activity_log").length > 0) offenders.push(file);
     }
     expect(offenders, `no src file may prune activity_log: ${offenders.join(", ")}`).toEqual([]);
   });
 });
 
 describe("retention ledger queue mechanisms (no DB)", () => {
+  it("detects SQL and Drizzle delete variants in source scans", () => {
+    const cases: [string, string][] = [
+      ["DELETE /* c */ FROM ONLY public.queue_jobs WHERE created_at < cutoff", "queue_jobs"],
+      ["TRUNCATE TABLE other_table, queue_jobs", "queue_jobs"],
+      ['DELETE FROM "public"."queue_failed_jobs" WHERE failed_at < cutoff', "queue_failed_jobs"],
+      ["db.delete(schema.jobUniqueLocks)", "job_unique_locks"],
+      ["import { queueJobs as q } from './schema'; db.delete(q)", "queue_jobs"],
+      ["const q = schema.queueJobs; const q2 = q; db.delete(q2)", "queue_jobs"],
+      ["db.delete(activityLog)", "activity_log"],
+    ];
+    for (const [body, table] of cases)
+      expect(deleteWindows(body, table), `${table}: ${body}`).not.toEqual([]);
+    expect(deleteWindows("insert into activity_log values (1)", "activity_log")).toEqual([]);
+  });
+
   it("queue_jobs has no age-based delete: every delete is a job_id lifecycle transition", () => {
     // The decided behavior is no-sweep: an age predicate on queue_jobs would
     // undercount live depth. dequeued/failed settle by job_id instead.
     const postgresTs = read("src/jobs/postgres.ts");
     expect(postgresTs).toContain("No sweep");
-    // postgres.ts holds exactly the two lifecycle deletes, both the exact
-    // job_id form — a third delete (age prune or otherwise) fails here.
+    // Pin both complete lifecycle statements. Exact whole-window comparisons
+    // reject additional predicates, not just age-based ones.
     const pgWindows = deleteWindows(postgresTs, "queue_jobs");
-    expect(pgWindows.length).toBe(2);
-    for (const w of pgWindows)
-      expect(w, `lifecycle delete must be job_id-scoped: ${w.trim().slice(0, 120)}`).toMatch(
-        /where\s+job_id\s*=\s*\$\{jobId\}::uuid/,
-      );
-    // Repo-wide whole-statement scan: an age predicate anywhere in the
-    // statement fails, even when the repo's batched-prune idiom puts it on
-    // the select line below the delete.
-    const ageDeletes: string[] = [];
-    const nonJobIdDeletes: string[] = [];
-    for (const file of listTsFiles(join(root, "src"))) {
-      const body = readFileSync(file, "utf8");
-      for (const w of deleteWindows(body, "queue_jobs")) {
-        if (/<\s*\$\{|<\s*cutoff|interval|created_at\s*<|available_at\s*<|failed_at\s*</i.test(w))
-          ageDeletes.push(`${file}: ${w.split("\n")[0]!.trim()}`);
-        if (!/job_id/i.test(w)) nonJobIdDeletes.push(`${file}: ${w.split("\n")[0]!.trim()}`);
-      }
-    }
-    expect(ageDeletes, `no age-based delete on queue_jobs`).toEqual([]);
-    expect(nonJobIdDeletes, `every queue_jobs delete is job_id-scoped`).toEqual([]);
+    expect(pgWindows.map(normalizeSqlWindow).sort()).toEqual(
+      [
+        "delete from queue_jobs where job_id = ${jobId}::uuid",
+        "delete from queue_jobs where job_id = ${jobId}::uuid",
+      ].sort(),
+    );
+    const offenders = listTsFiles(join(root, "src")).filter((file) => {
+      if (file.endsWith("src/jobs/postgres.ts")) return false;
+      return deleteWindows(readFileSync(file, "utf8"), "queue_jobs").length > 0;
+    });
+    expect(offenders, `only postgres.ts may delete queue_jobs: ${offenders.join(", ")}`).toEqual(
+      [],
+    );
     const consumer = read("src/jobs/consumer.ts");
     expect(consumer).toContain("deps.ledger.dequeued(jobId)");
     expect(consumer).toContain("deps.ledger.failed(jobId, body.kind, key,");
@@ -273,12 +320,12 @@ describe("retention ledger queue mechanisms (no DB)", () => {
 
   it("queue_failed_jobs leaves only through the one-row library discard", () => {
     const redrive = read("src/jobs/redrive.ts");
-    expect(redrive).toContain("delete from queue_failed_jobs where id = ${failureId}");
-    // redrive.ts holds exactly that one-row delete — a bulk drain added
-    // there fails here instead of slipping past a file skip.
+    // Pin the complete one-row statement, including its return clause, so
+    // adding a second predicate cannot widen the discard into a drain.
     const redriveWindows = deleteWindows(redrive, "queue_failed_jobs");
-    expect(redriveWindows.length).toBe(1);
-    expect(redriveWindows[0]).toMatch(/where\s+id\s*=\s*\$\{failureId\}/);
+    expect(redriveWindows.map(normalizeSqlWindow)).toEqual([
+      "delete from queue_failed_jobs where id = ${failureId} returning 1",
+    ]);
     // Repo-wide: only redrive.ts may delete a dead-letter row, so no
     // operational route can drain history. Redispatch leaves the row alone.
     const offenders: string[] = [];
@@ -301,24 +348,17 @@ describe("retention ledger queue mechanisms (no DB)", () => {
     const postgresTs = read("src/jobs/postgres.ts");
     // Acquire wins only over expired rows; release compare-deletes by token.
     expect(postgresTs).toContain("where job_unique_locks.expires_at < clock_timestamp()");
-    expect(postgresTs).toContain(
-      "delete from job_unique_locks where key = ${key} and owner_token = ${leaseToken}::uuid",
-    );
-    // postgres.ts holds exactly the one fenced release — a sweeper or bulk
-    // expiry added there fails here instead of slipping past a file skip.
+    // Pin the complete fenced statement; appended expiry predicates would
+    // otherwise turn this compare-delete into a bulk sweep.
     const pgWindows = deleteWindows(postgresTs, "job_unique_locks");
-    expect(pgWindows.length).toBe(1);
-    expect(pgWindows[0]).toMatch(
-      /where\s+key\s*=\s*\$\{key\}\s+and\s+owner_token\s*=\s*\$\{leaseToken\}::uuid/,
-    );
-    // Repo-wide: the fenced release in postgres.ts is the only delete, so no
-    // sweeper or bulk expiry can slip in unnoticed.
-    const offenders: string[] = [];
-    for (const file of listTsFiles(join(root, "src"))) {
-      if (file.endsWith("src/jobs/postgres.ts")) continue;
-      const body = readFileSync(file, "utf8");
-      if (deleteWindows(body, "job_unique_locks").length > 0) offenders.push(file);
-    }
+    expect(pgWindows.map(normalizeSqlWindow)).toEqual([
+      "delete from job_unique_locks where key = ${key} and owner_token = ${leaseToken}::uuid",
+    ]);
+    // Repo-wide: postgres.ts is the sole delete site, not an exempt file.
+    const offenders = listTsFiles(join(root, "src")).filter((file) => {
+      if (file.endsWith("src/jobs/postgres.ts")) return false;
+      return deleteWindows(readFileSync(file, "utf8"), "job_unique_locks").length > 0;
+    });
     expect(
       offenders,
       `only postgres.ts may delete job_unique_locks: ${offenders.join(", ")}`,
