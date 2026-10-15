@@ -444,9 +444,27 @@ describe("frozen Hono behavior without a database", () => {
   });
 
   it("exempts only the documented machine endpoints from the same-origin guard", async () => {
-    // POST /mcp is exempt but must still not answer 403; POST /logout is not
-    // exempt and fails closed above. GET is never subject to the guard.
+    // POST /mcp is exempt: a cross-origin POST reaches the MCP handler's own
+    // Origin policy, never the guard's 403. PUT /mcp is not exempt and fails
+    // closed. POST /logout non-exemption is pinned above. GET/OPTIONS never
+    // reach the guard.
     const { env } = fixture();
+    const exempt = await request("/mcp", env, {
+      method: "POST",
+      headers: {
+        origin: "https://evil.test",
+        "content-type": "application/json",
+        accept: "application/json, text/event-stream",
+      },
+      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list", params: {} }),
+    });
+    expect(await exempt.json()).not.toEqual({ error: "cross_origin" });
+    const neighbour = await request("/mcp", env, {
+      method: "PUT",
+      headers: { origin: "https://evil.test" },
+    });
+    expect(neighbour.status).toBe(403);
+    expect(await neighbour.json()).toEqual({ error: "cross_origin" });
     const preflight = await request("/mcp", env, { method: "OPTIONS" });
     expect(preflight.status).not.toBe(403);
     const getter = await request("/events.ics", env);
