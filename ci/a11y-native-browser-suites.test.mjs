@@ -77,8 +77,8 @@ test("a11y job runs ci/rsvp-focus-browser.test.mjs with its opt-in after Chromiu
   assert(step, `a11y job must run ${RSVP_FILE}`);
   assert.match(
     step,
-    new RegExp(`${RSVP_ENV}=true node --test ${escape(RSVP_FILE)}`),
-    "the RSVP step must keep the enabled opt-in on the exact workflow command",
+    new RegExp(`\\n        run: ${RSVP_ENV}=true node --test ${escape(RSVP_FILE)}\\s*$`),
+    "the RSVP step must use the exact enabled workflow command",
   );
   assert.doesNotMatch(step, /^\s*(?:- )?(?:if|continue-on-error):/m);
   assert.doesNotMatch(step, new RegExp(`${RSVP_ENV}=(?!true)`));
@@ -87,7 +87,12 @@ test("a11y job runs ci/rsvp-focus-browser.test.mjs with its opt-in after Chromiu
 
   const source = await readFile(new URL(`../${RSVP_FILE}`, import.meta.url), "utf8");
   assert.match(source, new RegExp(`process\\.env\\.${RSVP_ENV} !== "true"`));
-  for (const title of RSVP_CASES) assert.match(source, new RegExp(escape(title)));
+  for (const title of RSVP_CASES)
+    assert.match(source, new RegExp(`^\\s+it\\("${escape(title)}"`, "m"), title);
+
+  const readme = await readFile(new URL("../README.md", import.meta.url), "utf8");
+  const row = readme.split("\n").find((line) => line.startsWith(`| \`${RSVP_FILE}\` |`));
+  assert.match(row ?? "", /no executed-count verifier yet/);
 });
 
 // Every browser gate is named *_BROWSER_TESTS, so the scan keys on that name.
