@@ -162,6 +162,17 @@ describe("resolveKitEventEdit: Hono edit-read parity", () => {
         }),
       ),
     ).rejects.toBe(bug);
+    await expect(
+      resolveKitEventEdit(
+        "EVTPAST01",
+        {},
+        depsFor({
+          list: async () => {
+            throw bug;
+          },
+        }),
+      ),
+    ).rejects.toBe(bug);
   });
 });
 
