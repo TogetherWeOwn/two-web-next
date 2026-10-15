@@ -4,9 +4,11 @@ import { describe, expect, it } from "vitest";
 // The advisory size labeller moved from a per-repo script to the org central
 // reusable, and this repo keeps only a thin caller. This contract pins the
 // moved behaviour in its new location so deleting the local copy cannot
-// silently drop coverage: either the local script or the central caller must
-// carry the labelling, the exclusions, and the advisory-only wiring. A head
-// with neither fails here first, before the floor guard reports the deletion.
+// silently drop coverage: exactly one of the local script and the central
+// caller must carry the labelling, the exclusions, and the advisory-only
+// wiring. A head with neither fails here first, before the floor guard
+// reports the deletion; a head with both fails too, rejecting a half-finished
+// move that leaves the local copy behind as dead code.
 const workflow = readFileSync(".github/workflows/pr-size.yml", "utf8");
 const contributing = readFileSync("CONTRIBUTING.md", "utf8");
 const job = (id: string) =>
@@ -51,8 +53,12 @@ describe("pr-size moved-behaviour contract", () => {
     const hasCentral = pins.length === 2 && pins[0] === pins[1];
     // Failing-first core: a head that deletes the local script without
     // wiring the central caller fails here, proving the move lost coverage.
-    expect(hasLocal || hasCentral).toBe(true);
+    // XOR: a half-finished move that wires the central caller but leaves the
+    // local script behind as dead code fails here too.
+    expect(hasLocal !== hasCentral).toBe(true);
     if (hasCentral) {
+      expect(job("pr-size")).toMatch(/workflows\/pr-size\.yml@/);
+      expect(job("pr-size-weekly")).toMatch(/workflows\/pr-size-weekly\.yml@/);
       expect(workflow.match(/\n    uses: /g)).toHaveLength(2);
       expect(workflow).not.toContain("secrets:");
       expect(workflow).not.toContain("python3");
