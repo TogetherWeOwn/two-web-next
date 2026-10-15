@@ -46,9 +46,9 @@ describe("staging deploy applies web migrations before the Worker deploy", () =>
   });
 
   it("runs the shared migration script with default success semantics so a failure stops the deploy", () => {
-    expect(stepBlock(PLAN)).toContain("run: node ci/neon-migrate.mjs plan\n");
-    expect(stepBlock(APPLY)).toContain("run: node ci/neon-migrate.mjs apply\n");
-    expect(stepBlock(VERIFY)).toContain("run: node ci/neon-migrate.mjs verify");
+    expect(stepBlock(PLAN)).toContain("run: node ci/db-migrate.mjs plan\n");
+    expect(stepBlock(APPLY)).toContain("run: node ci/db-migrate.mjs apply\n");
+    expect(stepBlock(VERIFY)).toContain("run: node ci/db-migrate.mjs verify");
     expect(stepBlock(GATE)).toContain("run: node ci/staging-deploy-gate.mjs\n");
     for (const name of migration) {
       expect(stepBlock(name)).not.toMatch(/^ {8}(?:if|continue-on-error):/m);

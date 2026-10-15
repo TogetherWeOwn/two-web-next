@@ -18,14 +18,14 @@ import {
   migrationConfig,
   runMigration,
   safeMigrationError,
-} from "./neon-migrate.mjs";
+} from "./db-migrate.mjs";
 
 const mainEnv = {
   GITHUB_REF: "refs/heads/main",
   MIGRATION_TARGET: "staging",
   STAGING_MIGRATION_HOLD: "false",
 };
-const script = fileURLToPath(new URL("./neon-migrate.mjs", import.meta.url));
+const script = fileURLToPath(new URL("./db-migrate.mjs", import.meta.url));
 const source = fileURLToPath(new URL("../drizzle", import.meta.url));
 const journal = JSON.parse(readFileSync(join(source, "meta/_journal.json"), "utf8"));
 
@@ -151,7 +151,7 @@ test("the workflow's actual shell gate denies disabled production and non-main r
   assert.match(workflow, /cancel-in-progress: false/);
   assert.match(workflow, /bash ci\/check-migration-numbers.sh/);
   for (const mode of ["plan", "apply", "verify"])
-    assert.ok(workflow.includes(`node ci/neon-migrate.mjs ${mode}`));
+    assert.ok(workflow.includes(`node ci/db-migrate.mjs ${mode}`));
 });
 
 test("production is denied before connection for unset, false or non-exact flags", async () => {

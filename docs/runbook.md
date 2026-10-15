@@ -42,7 +42,7 @@ rehearsal record plus a non-executable production recovery map.
 | Discord rate limiting (sync backoff, `rate_limited` bot sync refusal) | [Queue containment, drain and failed-job replay](#queue-containment-drain-and-failed-job-replay) | `GET /up` queue envelope plus `sync_retry_code` per [runbook-alerts.md](runbook-alerts.md); `rate_limited` is a retryable bot refusal under backoff, not a database outage; read the retry-cause table before touching delivery; do not purge or replay | DevOps & Reliability Engineer |
 | Bad deploy: need the rollback pointer | [Deploy and record the rollback pointer](#deploy-and-record-the-rollback-pointer) | `npx wrangler deployments status --name two-web-next --json` and `GET /up` `revision.version_id`; `wrangler deployments` wins on disagreement; do not roll back from this table | DevOps & Reliability Engineer; Director of Engineering for the rollback decision |
 | Database or Hyperdrive outage (configured DB unreachable, private 500/503 per the route table) | [Neon / Hyperdrive outage behavior](#neon--hyperdrive-outage-behavior) | `GET /up`, which measures the selected `DATABASE_URL` else `DB.connectionString`; never substitute another backend or credential | Director of Engineering and the authorized custodian; through the Director to CISO if a leak is suspected |
-| Backup and restore (verify archives, plan recovery) | [Backups and restore drill](#backups-and-restore-drill) | Local `bash ci/neon-backup-selftest.sh` (no secrets, no network) first; remote `BACKUP_BUCKET=two-web-next-backups BACKUP_JURISDICTION=eu BACKUP_PREFIX=neon WRANGLER_BIN= bash bin/neon-backup.sh check staging` re-downloads every manifest archive locally, needs the Cloudflare API token and separate approval; keep dumps inside approved EU custody; never `rotate` or restore without separate approval | DevOps & Reliability Engineer; live-data recovery needs CEO approval via the Director and the authorized custodian |
+| Backup and restore (verify archives, plan recovery) | [Backups and restore drill](#backups-and-restore-drill) | Local `bash ci/db-backup-selftest.sh` (no secrets, no network) first; remote `BACKUP_BUCKET=two-web-next-backups BACKUP_JURISDICTION=eu BACKUP_PREFIX=neon WRANGLER_BIN= bash bin/db-backup.sh check staging` re-downloads every manifest archive locally, needs the Cloudflare API token and separate approval; keep dumps inside approved EU custody; never `rotate` or restore without separate approval | DevOps & Reliability Engineer; live-data recovery needs CEO approval via the Director and the authorized custodian |
 
 Not an incident entry: [Final import and reconcile](#final-import-and-reconcile)
 (cutover-only authorized import),
@@ -198,7 +198,7 @@ approved account and binding isolation before any remote mutation.
    migrations to its disposable Postgres, runs `npm run check`, then plans,
    applies and verifies the **staging web migrations** of the CI-verified SHA
    against the staging database — the pinned PlanetScale staging branch
-   (retired Neon endpoints are refused; `ci/neon-migrate.mjs`, see
+   (retired Neon endpoints are refused; `ci/db-migrate.mjs`, see
    [Neon web schema migrations](#neon-web-schema-migrations-separate-operator-action)),
    ensures `two-sync-event` and `two-internal-action` exist, then deploys. A
    failed migration step fails the job before any Cloudflare mutation. The
@@ -286,12 +286,11 @@ migration is performed by its selftest.
 - GitHub's `secrets` context also resolves repository/organization secrets.
   Therefore verify the selected name exists at Environment scope before using
   this workflow; do not rely on an existing repo-scoped backup secret when the
-  Environment copy is missing. The repository backup workflow currently uses
-  `NEON_STAGING_DATABASE_URL` at repo scope; that is **not** migration approval
+  Environment copy is missing. The backup workflow reads
+  `PLANETSCALE_STAGING_DATABASE_URL` from the `staging` Environment; that is **not** migration approval
   or provisioning. YAML cannot attest a resolved secret's scope. Missing
   Environment provisioning is a stop, even if a same-named repo secret exists.
-- Verify backup/PITR eligibility for the target branch (Neon history retention
-  or PlanetScale backups) and a tested recovery procedure before apply. The summary's timestamp is a recovery
+- Verify backup/PITR eligibility for the target branch (PlanetScale backups) and a tested recovery procedure before apply. The summary's timestamp is a recovery
   reference, **not** a snapshot, a restore drill, or proof PITR is available.
 
 **Operator execution after those gates:** select Actions → `db-migrate` → Run
@@ -597,7 +596,7 @@ The telemetry query returns only the newest 100 events. Keep each window to
    telemetry can tell N from N+1. Prefer the newest N whose source differs on
    a public route (`git diff --stat "$N_SHA" "$N1_SHA" -- src public`) and
    that has no migration or binding drift
-   (`git diff --exit-code "$N_SHA" "$N1_SHA" -- drizzle migrations.lock ci/neon-migrate.mjs wrangler.jsonc`).
+   (`git diff --exit-code "$N_SHA" "$N1_SHA" -- drizzle migrations.lock ci/db-migrate.mjs wrangler.jsonc`).
    Set `DISC_PATH` to a public path whose status differs between N and N+1.
    When both versions were deployed with the `/up` revision marker, read
    `revision.version_id` from `/up` instead: it names the serving version
@@ -1412,13 +1411,13 @@ prove exactly-once remote effects. See [consumer error paths](../src/jobs/consum
 
 ## Backups and restore drill
 
-[bin/neon-backup.sh](../bin/neon-backup.sh) supports `backup`, `promote-weekly`,
+[bin/db-backup.sh](../bin/db-backup.sh) supports `backup`, `promote-weekly`,
 `rotate`, `check` — **there is no `restore` subcommand**. `check` downloads
 manifest-listed objects to prove existence, not restorability or row counts.
-The [nightly workflow](../.github/workflows/neon-backup.yml) runs at `03:17Z`
-and can skip green when `NEON_STAGING_DATABASE_URL` is absent. Green/skipped is
+The [nightly workflow](../.github/workflows/db-backup.yml) runs at `03:17Z`
+and can skip green when `PLANETSCALE_STAGING_DATABASE_URL` is absent. Green/skipped is
 not a successful backup. Its `branch` input changes the object prefix only:
-`DATABASE_URL` still comes from `NEON_STAGING_DATABASE_URL`; passing `main`
+`DATABASE_URL` still comes from `PLANETSCALE_STAGING_DATABASE_URL`; passing `main`
 does not select a production connection. The `target` input selects the
 connection: `production` reads `PRODUCTION_BACKUP_DATABASE_URL`, a read-only role.
 
@@ -1455,9 +1454,9 @@ pin the approved bucket/jurisdiction and avoid inherited overrides:
   unset PGHOSTADDR PGSERVICE PGSERVICEFILE PGOPTIONS
   export PGPASSFILE=/dev/null
   BACKUP_BUCKET=two-web-next-backups BACKUP_JURISDICTION=eu BACKUP_PREFIX=neon \
-    WRANGLER_BIN= bash bin/neon-backup.sh backup staging
+    WRANGLER_BIN= bash bin/db-backup.sh backup staging
   BACKUP_BUCKET=two-web-next-backups BACKUP_JURISDICTION=eu BACKUP_PREFIX=neon \
-    WRANGLER_BIN= bash bin/neon-backup.sh check staging
+    WRANGLER_BIN= bash bin/db-backup.sh check staging
 )
 ```
 
@@ -1476,7 +1475,7 @@ First exercise the actual backup script through the existing stub harness:
 
 ```bash
 : "${PAPERCLIP_RUN_SCRATCH_DIR:?Use the run-owned scratch directory}"
-TMPDIR="$PAPERCLIP_RUN_SCRATCH_DIR" bash ci/neon-backup-selftest.sh
+TMPDIR="$PAPERCLIP_RUN_SCRATCH_DIR" bash ci/db-backup-selftest.sh
 ```
 
 This tests upload/manifest proof, 7/4 retention, password hygiene and missing

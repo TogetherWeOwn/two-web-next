@@ -10,7 +10,7 @@ import {
   PLANETSCALE_STAGING_HOST,
   migrationConfig,
   safeMigrationError,
-} from "./neon-migrate.mjs";
+} from "./db-migrate.mjs";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
 const STAGING_URL = `postgres://role-stub.${PLANETSCALE_STAGING_BRANCH_ID}:stub@${PLANETSCALE_STAGING_HOST}/db?sslmode=require`;
@@ -110,7 +110,7 @@ test("unknown target and non-main ref stay fail-closed", () => {
 });
 
 test("migrationConfig is wired to the single admission source", () => {
-  const neon = readFileSync(new URL("./neon-migrate.mjs", import.meta.url), "utf8");
+  const neon = readFileSync(new URL("./db-migrate.mjs", import.meta.url), "utf8");
   assert.match(neon, /assertMigrationAdmission/);
   // migrationConfig must delegate rather than carry a second inline copy.
   assert.doesNotMatch(neon, /STAGING_MIGRATION_HOLD !== "false"/);
@@ -200,7 +200,7 @@ test("db-migrate admits staging and production through one explicit gate before 
   );
   assert.match(migrationEnv, /STAGING_MIGRATION_HOLD: \$\{\{ vars\.STAGING_MIGRATION_HOLD \}\}/);
   for (const mode of ["plan", "apply", "verify"])
-    assert.ok(dbMigrate.includes(`node ci/neon-migrate.mjs ${mode}`));
+    assert.ok(dbMigrate.includes(`node ci/db-migrate.mjs ${mode}`));
 });
 
 test("deploy holds the direct staging migration path before dependencies or mutations", () => {
@@ -210,7 +210,7 @@ test("deploy holds the direct staging migration path before dependencies or muta
   assert.ok(checkoutIndex < holdIndex, "hold step follows the read-only checkout");
   const setupIndex = deploy.indexOf("actions/setup-node");
   assert.ok(holdIndex < setupIndex, "hold must run before dependency install");
-  const planIndex = deploy.indexOf("node ci/neon-migrate.mjs plan");
+  const planIndex = deploy.indexOf("node ci/db-migrate.mjs plan");
   assert.ok(holdIndex < planIndex, "hold must run before the staging DB plan");
   const wranglerIndex = deploy.indexOf("npx wrangler deploy");
   assert.ok(holdIndex < wranglerIndex, "hold must run before any Cloudflare mutation");

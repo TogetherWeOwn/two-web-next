@@ -82,7 +82,7 @@ else:
 
     def backup(self, url, **extra):
         return subprocess.run(
-            ["bash", str(ROOT / "bin/neon-backup.sh"), "backup", "staging"],
+            ["bash", str(ROOT / "bin/db-backup.sh"), "backup", "staging"],
             env={**self.env, "DATABASE_URL": url, **extra},
             capture_output=True, text=True, timeout=10,
         )

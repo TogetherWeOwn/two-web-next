@@ -12,7 +12,7 @@ different ledger and is out of scope here.
 
 Two facts govern every row below. First, all 25 migrations are
 **up-only**: Drizzle ships no down files, and the applier
-(`ci/neon-migrate.mjs`) moves the `drizzle.__drizzle_migrations` ledger
+(`ci/db-migrate.mjs`) moves the `drizzle.__drizzle_migrations` ledger
 forward only, refusing any history that is not an exact prefix of the
 release. Reversal always means a new compensating migration, never a
 built-in down. Second, tag `1015` is absent (the journal goes
