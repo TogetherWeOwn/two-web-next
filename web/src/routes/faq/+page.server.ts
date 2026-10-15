@@ -1,6 +1,7 @@
 import { env } from "cloudflare:workers";
 import type { PageServerLoad } from "./$types";
 import { faqPageData } from "../../../../src/faq-content";
+import { LEAF_CRITICAL_CSS } from "../../../../src/leaf-critical-css";
 
 // Server-rendered only: the strap, lead and question cards are in the raw
 // fetch body, so the no-JS contract holds and there is no inline bootstrap
@@ -12,5 +13,5 @@ export const csr = false;
 // during an app-DB outage, exactly like the Hono leaf.
 export const load: PageServerLoad = async ({ setHeaders }) => {
   setHeaders({ "cache-control": "public, max-age=3600" });
-  return faqPageData(env.APP_URL);
+  return { ...faqPageData(env.APP_URL), leafCss: LEAF_CRITICAL_CSS };
 };
