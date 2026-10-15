@@ -28,6 +28,8 @@ let scratch = "";
 
 const INVITE_URL = "https://discord.gg/invite";
 const APP_URL = "https://example.test";
+const JSON_LD_BLOCK =
+  /<script type="application\/ld\+json" data-testid="([^"]+)">([\s\S]*?)<\/script>/g;
 
 function baseData(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
@@ -240,5 +242,22 @@ describe("Kit home SSR render: independently degraded panels", () => {
     expect(html).toContain("Together We Own — the lobby is open");
     expect(html).toContain(`<link rel="canonical" href="${APP_URL}/"`);
     expect(html).toContain('data-testid="site-jsonld"');
+  });
+});
+
+describe("Kit home SSR render: one escaped structured-data block and one head identity", () => {
+  it("emits exactly one site JSON-LD block that parses to the Organization and WebSite graph", () => {
+    const html = renderPage(baseData({ session: memberSession }));
+    const blocks = [...html.matchAll(JSON_LD_BLOCK)];
+    expect(blocks.map((m) => m[1])).toEqual(["site-jsonld"]);
+    const graph = JSON.parse(blocks[0]![2]!) as { "@graph": { "@type": string; "@id": string }[] };
+    expect(graph["@graph"].map((node) => node["@type"])).toEqual(["Organization", "WebSite"]);
+    expect(graph["@graph"][1]!["@id"]).toBe(`${APP_URL}/#website`);
+  });
+
+  it("renders one canonical link and one og:url in the head", () => {
+    const html = renderPage(baseData());
+    expect(html.match(/rel="canonical"/g)).toHaveLength(1);
+    expect(html.match(/property="og:url"/g)).toHaveLength(1);
   });
 });

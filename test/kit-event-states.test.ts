@@ -486,6 +486,22 @@ function suggestionsSectionOf(html: string): string {
 }
 
 describe("Kit cancelled presentation", () => {
+  it("emits one event block and one site block, each parseable", async () => {
+    const { store } = fakeStore();
+    const { outcome } = await resolve(KEY, store);
+    if (outcome.kind !== "gone") throw new Error("unreachable");
+    const { renderGone } = await buildKitEventStatesBundle();
+    const html = renderGone(outcome.model as unknown as Record<string, unknown>);
+    const blocks = [
+      ...html.matchAll(
+        /<script type="application\/ld\+json" data-testid="([^"]+)">([\s\S]*?)<\/script>/g,
+      ),
+    ].map((m) => ({ testid: m[1], payload: JSON.parse(m[2]!) }));
+    expect(blocks.map((b) => b.testid)).toEqual(["event-jsonld", "site-jsonld"]);
+    expect(blocks[0]!.payload["@type"]).toBe("Event");
+    expect(blocks[1]!.payload["@graph"]).toHaveLength(2);
+  });
+
   it("renders the 410 contract: status copy, title, alternatives, ICS and JSON-LD, never share or RSVP", async () => {
     const { store } = fakeStore();
     const { outcome } = await resolve(KEY, store);

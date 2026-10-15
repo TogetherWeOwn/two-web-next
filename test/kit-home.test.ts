@@ -160,7 +160,7 @@ describe("Kit home port: header, hero and metadata chrome", () => {
     expect(page).toContain('theme="home"');
     expect(page).toContain('activeNav="home"');
     expect(page).toContain("Together We Own — the lobby is open");
-    expect(page).toContain('data-testid="site-jsonld"');
+    expect(page).toContain('testid="site-jsonld"');
   });
 
   it("renders counts, ranks, featured, events and community panels", () => {
@@ -219,7 +219,7 @@ describe("Kit home port: header, hero and metadata chrome", () => {
     const page = read(pagePath);
     // Svelte parses <script> content as raw text: {@html} inside one renders
     // literally, so the shared payload travels in a markup string instead.
-    expect(page).toContain("{@html jsonLd}");
+    expect(page).toContain('<JsonLd testid="site-jsonld" json={siteGraph} />');
     expect(page).not.toContain("{@html siteJsonLd(appUrl)}</script>");
   });
 });

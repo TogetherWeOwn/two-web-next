@@ -683,6 +683,20 @@ async function memberHtml(): Promise<string> {
 }
 
 describe("Kit detail presentation", () => {
+  it("emits one event block and one site block, byte-identical for guest and member", async () => {
+    const jsonLdBlocks = (html: string) =>
+      [
+        ...html.matchAll(
+          /<script type="application\/ld\+json" data-testid="([^"]+)">([\s\S]*?)<\/script>/g,
+        ),
+      ].map((m) => ({ testid: m[1], payload: JSON.parse(m[2]!) }));
+    const guest = jsonLdBlocks(await guestHtml());
+    expect(guest.map((b) => b.testid)).toEqual(["event-jsonld", "site-jsonld"]);
+    expect(guest[0]!.payload["@type"]).toBe("Event");
+    expect(guest[1]!.payload["@graph"]).toHaveLength(2);
+    expect(jsonLdBlocks(await memberHtml())).toEqual(guest);
+  });
+
   it("renders the guest contract: pitch, share, discovery, metadata, never attendees", async () => {
     const html = await guestHtml();
     expect(html).toContain('data-testid="event-join-pitch"');
