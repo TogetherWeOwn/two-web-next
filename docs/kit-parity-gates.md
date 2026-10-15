@@ -61,12 +61,14 @@ claim of journey parity:
 5. `node ci/kit-worker-e2e.mjs` (archive route on the built Worker runtime
    fixture)
 
-Steps 1–5 spend no logins. The only authenticated fetches in the `check`
-job are the preview-mode member-board arm of step 3, which spends one QA
-login per base only when `KIT_PARITY_QA_TOKEN` is set; without it those
-journeys ledger as skipped WITH the reason, never a quiet pass. The
-hot-zone paths have no dedicated browser journey anywhere: their evidence
-is the step-3 unit contract plus the preview fetch.
+Steps 1–5 spend no logins. Step 3 runs in unit mode in CI: no workflow sets
+the preview URLs or `KIT_PARITY_QA_TOKEN`. Preview-mode member-board checks
+are an operator-run gate and spend one QA login per base only when the token
+is set. The only authenticated CI journey is `e2e:kit-parity` in
+`browser-smoke`, which shares one QA login for the member-board journey. The
+hot-zone paths have no dedicated browser journey; CI covers them through the
+fixture-based step-3 unit contract and the hot-zone Vitest suites. Preview
+fetches are operator-run evidence, not CI evidence.
 
 In `browser-smoke`, after the critical journeys:
 `e2e:kit-parity` (parameterized journeys vs Hono and the built Kit
@@ -186,8 +188,9 @@ too: `KIT_WORKER_ORIGIN`, else derived from `KIT_WORKER_PORT` (the port
   `__screenshots-kit__/` holds only `.gitkeep`, while the enabled routes are
   `/events/past`, the four hot-zone paths and `/leaderboards/members`.
   Archive/join DOM parity plus two-width overflow checks run in the parity
-  spec today; the hot-zone pages carry no browser or screenshot evidence yet
-  — unit contract plus preview fetch only.)
+  spec today; the hot-zone pages carry no browser or screenshot evidence yet.
+  CI evidence is limited to the fixture-based unit contract and hot-zone
+  Vitest suites; preview fetch is an operator-run check.)
 - `maxDiffPixels: 300` per screenshot (absolute, not a ratio), `<time>`
   masked, animations disabled, caret hidden. Raising the threshold or masking
   more needs its own PR with justification.
@@ -222,7 +225,8 @@ feeds/SEO, reserved/API surface, cross-origin refusals, and the
 authenticated member-board journey (guest bounce, member views, grammar
 refusals; one shared QA login) — against both the Hono worker and the
 built Kit Worker in one run. The hot-zone paths have no journey in this
-spec: their evidence is the unit contract plus the preview fetch.
+spec: CI evidence is the fixture-based unit contract and hot-zone Vitest
+suites; preview fetch is an operator-run check.
 Bodies are origin-normalized before comparison (Hono pins the virtual
 staging origin, Kit pins its own `APP_URL`; host strings differ by design).
 The `webcal://` feed origins normalize to a distinct token from the
@@ -240,11 +244,12 @@ until their routes migrate; the gate ledger derives each entry from
 never quiet green, and never a `test.skip` call (the floor forbids new
 skips). An enabled route with no executed journey covering it records a
 failure instead of a skip: in-scope routes fail their journey (scope net),
-any other enabled route fails the uncovered-route catch-all. Executed runs
-cover GET/HEAD `/events/past`, `/join`, `/auth/recover`, the four hot-zone
-paths and `/leaderboards/members` via `PARITY_ROUTES` (unit contract +
-preview fetch; the member board also runs authenticated in the Playwright
-journey).
+any other enabled route fails the uncovered-route catch-all. Executed
+browser journeys cover GET/HEAD `/events/past`, `/join`, `/auth/recover` and
+`/leaderboards/members` (the member board also runs authenticated). The four
+hot-zone paths are covered in CI only by the fixture-based `PARITY_ROUTES`
+unit contract and the hot-zone Vitest suites; preview fetch is an
+operator-run check, not CI evidence.
 
 ## Security
 
