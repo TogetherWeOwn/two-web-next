@@ -15,6 +15,7 @@ import {
 } from "../src/sessions";
 import app from "./app";
 import { createMemberDataFixture, type MemberDataFixture } from "./helpers/member-data-db";
+import { __resetHomeGuestCacheForTests } from "../src/home-cache";
 
 const startsAt = new Date("2026-10-01T12:34:56.789Z");
 const endsAt = new Date("2026-10-01T13:45:12.345Z");
@@ -187,6 +188,9 @@ describe.skipIf(!process.env.DATABASE_URL)(
       vi.useRealTimers();
     });
     beforeEach(async () => {
+      // The homepage guest cache is module state: reset it so each case reads
+      // the rows it just inserted, not a previous case's.
+      __resetHomeGuestCacheForTests();
       await fixture.db.delete(featuredContents);
       const [row] = await fixture.db
         .insert(featuredContents)

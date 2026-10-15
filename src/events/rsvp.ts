@@ -13,6 +13,7 @@ import { THROTTLE_COUNTER_RETENTION_MINUTES } from "../join/service";
 import { enqueueEventSync } from "./sync";
 import { lockWaitlist, promoteWaitlist, waitlistPosition } from "./waitlist";
 import { retireAnonEventCaches } from "./anon-cache";
+import { retireHomeGuestCache } from "../home-cache";
 import type { Env } from "../env";
 import type { EventStatus } from "../admin/validation";
 
@@ -131,7 +132,10 @@ export async function writeRsvp(
   });
   // Committed with a new answer: the going count guests read may have moved
   // (N6). Refusals (closed/limited/not_found) change nothing and keep entries.
-  if (result.ok) retireAnonEventCaches();
+  if (result.ok) {
+    retireAnonEventCaches();
+    await retireHomeGuestCache();
+  }
   return result;
 }
 
@@ -181,7 +185,10 @@ export async function withdrawRsvp(
   });
   // Committed with a deleted row: the count and the settled line moved (N6).
   // A no-row or limited delete changes nothing and keeps entries.
-  if (!result.limited && result.deleted) retireAnonEventCaches();
+  if (!result.limited && result.deleted) {
+    retireAnonEventCaches();
+    await retireHomeGuestCache();
+  }
   return result;
 }
 
