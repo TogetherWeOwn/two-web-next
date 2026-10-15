@@ -63,7 +63,7 @@ describe("staging deploy applies web migrations before the Worker deploy", () =>
     expect(env).toContain("          MIGRATION_TARGET: staging\n");
     expect(env).toContain("          STAGING_MIGRATION_HOLD: ${{ vars.STAGING_MIGRATION_HOLD }}\n");
     expect(env).toContain(
-      "          NEON_STAGING_DATABASE_URL: ${{ secrets.NEON_STAGING_DATABASE_URL }}\n",
+      "          PLANETSCALE_STAGING_DATABASE_URL: ${{ secrets.PLANETSCALE_STAGING_DATABASE_URL }}\n",
     );
     // Release receipt names the CI-verified checkout, not workflow_run's main tip.
     expect(env).toContain(
@@ -74,7 +74,7 @@ describe("staging deploy applies web migrations before the Worker deploy", () =>
     }
     // The secret appears only in the shared env anchor (key and expression), and
     // nothing production-shaped or fallback-shaped is reachable from this workflow.
-    expect(workflow.match(/NEON_STAGING_DATABASE_URL/g)).toHaveLength(2);
+    expect(workflow.match(/PLANETSCALE_STAGING_DATABASE_URL/g)).toHaveLength(2);
     expect(workflow).not.toMatch(
       /PRODUCTION_DATABASE_URL|PRODUCTION_DEPLOY_ENABLED|MIGRATION_TARGET: production|target: production|secrets: inherit/,
     );

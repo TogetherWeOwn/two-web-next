@@ -6,11 +6,15 @@
   "compatibility_date": "2026-09-29",
   "compatibility_flags": ["nodejs_compat"],
   "observability": { "enabled": true },
-  // Staging Neon is eu-central-1 and every statement is a round trip through Hyperdrive, so run
-  // the Worker beside it. Served from CDG/AMS, DB-bound requests had a median of 125-195 ms; served
-  // from ORD/MSP/DFW/SEA/IAD (where GitHub-hosted runners land) 0.5-1.8 s, p95 3-4.6 s. A
-  // far-away user now pays one hop to the Worker instead of one per statement. env.production
-  // opts out below: its database lives elsewhere and that placement is a cutover decision.
+  // Staging is PlanetScale us-east-1 while this Worker stays pinned to
+  // eu-central-1 (a pre-repoint placement beside the retired Neon staging
+  // branch), so every statement is now a transatlantic round trip through
+  // Hyperdrive. Served from CDG/AMS, DB-bound requests had a median of 125-195 ms
+  // against Neon; served from ORD/MSP/DFW/SEA/IAD (where GitHub-hosted runners
+  // land) 0.5-1.8 s, p95 3-4.6 s. Moving placement beside the staging database
+  // is a separate latency decision (follow-up to the PlanetScale repoint).
+  // env.production opts out below: its database lives elsewhere and that
+  // placement is a cutover decision.
   "placement": { "region": "aws:eu-central-1" },
   // Deploy the Tail Worker first; it has no public route and its own optional webhook secret.
   "tail_consumers": [{ "service": "two-web-next-alerts" }],
@@ -40,8 +44,8 @@
   "version_metadata": { "binding": "CF_VERSION_METADATA" },
   // Every host, including static requests, must pass the Worker's host guard.
   "assets": { "directory": "./public", "binding": "ASSETS", "run_worker_first": true },
-  // Shared Postgres (S1: TOG-9679): Hyperdrive "two-web-next-staging" → Neon
-  // project two-web-next, staging branch (pooled endpoint). Local dev sets
+  // Shared Postgres: Hyperdrive "two-web-next-staging" → PlanetScale
+  // staging branch (direct endpoint). Local dev sets
   // CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_DB to agent-testdb.
   "hyperdrive": [
     { "binding": "DB", "id": "1d48a54abd3444009b7067c03c63ff9f" },

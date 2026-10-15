@@ -81,7 +81,7 @@ async function fixture(callback) {
       ...mainEnv,
       CI: process.env.CI,
       GITHUB_ACTIONS: process.env.GITHUB_ACTIONS,
-      NEON_STAGING_DATABASE_URL: url.href,
+      PLANETSCALE_STAGING_DATABASE_URL: url.href,
       PRODUCTION_DATABASE_URL: url.href,
     };
     const run = (mode, overrides = {}) =>
@@ -179,7 +179,7 @@ test("target/ref/secret/TLS/direct-endpoint checks are fail-closed without fallb
   assert.throws(() => migrationConfig({ ...mainEnv, GITHUB_REF: "refs/heads/topic" }), /main/);
   assert.throws(
     () => migrationConfig({ ...mainEnv, DATABASE_URL: "unused" }),
-    /Missing NEON_STAGING/,
+    /Missing PLANETSCALE_STAGING/,
   );
   assert.throws(
     () =>
@@ -187,7 +187,7 @@ test("target/ref/secret/TLS/direct-endpoint checks are fail-closed without fallb
         ...mainEnv,
         MIGRATION_TARGET: "production",
         PRODUCTION_DEPLOY_ENABLED: "true",
-        NEON_STAGING_DATABASE_URL: "unused",
+        PLANETSCALE_STAGING_DATABASE_URL: "unused",
       }),
     /Missing PRODUCTION_DATABASE_URL/,
   );
@@ -198,19 +198,21 @@ test("target/ref/secret/TLS/direct-endpoint checks are fail-closed without fallb
     "postgres://user:DO_NOT_ECHO@ep-stub.eu.aws.neon.tech/db?sslmode=disable",
   ]) {
     assert.throws(
-      () => migrationConfig({ ...mainEnv, NEON_STAGING_DATABASE_URL: raw }),
+      () => migrationConfig({ ...mainEnv, PLANETSCALE_STAGING_DATABASE_URL: raw }),
       (error) => {
         assert.doesNotMatch(safeMigrationError(error), /DO_NOT_ECHO|secret-value|postgres:\/\//);
         return true;
       },
     );
   }
-  const staging = "postgres://user:stub@ep-stub.eu.aws.neon.tech/db?sslmode=require";
-  assert.equal(
-    migrationConfig({ ...mainEnv, NEON_STAGING_DATABASE_URL: staging }).target,
-    "staging",
+  // Retired Neon endpoints are refused for staging: only the pinned
+  // PlanetScale staging branch is accepted.
+  const retiredNeon = "postgres://user:stub@ep-stub.eu.aws.neon.tech/db?sslmode=require";
+  assert.throws(
+    () => migrationConfig({ ...mainEnv, PLANETSCALE_STAGING_DATABASE_URL: retiredNeon }),
+    /pinned staging endpoint/,
   );
-  // Production is PlanetScale, not Neon: a Neon URL must be refused, and a
+  // Production is PlanetScale: a retired Neon URL must be refused, and a
   // direct PlanetScale URL (5432, pooled 6432 never) must be accepted.
   const production = "postgres://user:stub@stub-1.pg.psdb.cloud/db?sslmode=require";
   assert.equal(
@@ -228,17 +230,17 @@ test("target/ref/secret/TLS/direct-endpoint checks are fail-closed without fallb
         ...mainEnv,
         MIGRATION_TARGET: "production",
         PRODUCTION_DEPLOY_ENABLED: "true",
-        PRODUCTION_DATABASE_URL: staging,
+        PRODUCTION_DATABASE_URL: retiredNeon,
       }),
     /PlanetScale/,
   );
-  // During the provider transition only the pinned PlanetScale staging
-  // branch is accepted for staging: the username suffix carries the branch id,
-  // so a production URL in the staging secret fails closed even though staging
-  // migrations run automatically on every push to main.
+  // Only the pinned PlanetScale staging branch is accepted for staging: the
+  // username suffix carries the branch id, so a production URL in the staging
+  // secret fails closed even though staging migrations run automatically on
+  // every push to main.
   const stagingPlanetScale = `postgres://role-stub.${PLANETSCALE_STAGING_BRANCH_ID}:stub@${PLANETSCALE_STAGING_HOST}/db?sslmode=require`;
   assert.equal(
-    migrationConfig({ ...mainEnv, NEON_STAGING_DATABASE_URL: stagingPlanetScale }).target,
+    migrationConfig({ ...mainEnv, PLANETSCALE_STAGING_DATABASE_URL: stagingPlanetScale }).target,
     "staging",
   );
   // Production identity is refused explicitly, whether it arrives via the
@@ -250,7 +252,7 @@ test("target/ref/secret/TLS/direct-endpoint checks are fail-closed without fallb
   ];
   for (const raw of productionShaped) {
     assert.throws(
-      () => migrationConfig({ ...mainEnv, NEON_STAGING_DATABASE_URL: raw }),
+      () => migrationConfig({ ...mainEnv, PLANETSCALE_STAGING_DATABASE_URL: raw }),
       (error) => {
         assert.match(safeMigrationError(error), /production database/);
         assert.doesNotMatch(safeMigrationError(error), /stub|postgres:\/\//);
@@ -266,13 +268,25 @@ test("target/ref/secret/TLS/direct-endpoint checks are fail-closed without fallb
     stagingPlanetScale.replace(".pg.psdb.cloud", "-pooler.pg.psdb.cloud"),
   ]) {
     assert.throws(
-      () => migrationConfig({ ...mainEnv, NEON_STAGING_DATABASE_URL: raw }),
+      () => migrationConfig({ ...mainEnv, PLANETSCALE_STAGING_DATABASE_URL: raw }),
       (error) => {
         assert.doesNotMatch(safeMigrationError(error), /stub|postgres:\/\//);
         return true;
       },
     );
   }
+  // A third branch on the pinned staging host is refused as a non-pinned
+  // staging endpoint, not as the production identity: with Neon retired,
+  // the host plus branch-id suffix is the whole staging identity.
+  const thirdBranchOnStagingHost = `postgres://role-stub.9zzz9999zzzz:stub@${PLANETSCALE_STAGING_HOST}/db?sslmode=require`;
+  assert.throws(
+    () =>
+      migrationConfig({
+        ...mainEnv,
+        PLANETSCALE_STAGING_DATABASE_URL: thirdBranchOnStagingHost,
+      }),
+    /pinned staging endpoint/,
+  );
   assert.doesNotMatch(
     safeMigrationError(new Error("DO_NOT_ECHO postgres://credentials/ SQL")),
     /DO_NOT_ECHO|postgres:\/\/credentials|SQL/,
@@ -283,16 +297,19 @@ test("driver configuration strips channel binding and pins the port despite PGPO
   const priorPort = process.env.PGPORT;
   process.env.PGPORT = "5433";
   try {
-    const staging = "postgres://user:stub@ep-stub.eu.aws.neon.tech/db?sslmode=require";
+    const staging = `postgres://role-stub.${PLANETSCALE_STAGING_BRANCH_ID}:stub@${PLANETSCALE_STAGING_HOST}/db?sslmode=require`;
     for (const binding of [
       "",
       "&channel_binding=require",
       "&channel_binding=prefer",
       "&channel_binding=disable",
     ]) {
-      const config = migrationConfig({ ...mainEnv, NEON_STAGING_DATABASE_URL: staging + binding });
+      const config = migrationConfig({
+        ...mainEnv,
+        PLANETSCALE_STAGING_DATABASE_URL: staging + binding,
+      });
       assert.equal(config.url.searchParams.has("channel_binding"), false);
-      const client = migrationClient(config); // Lazy constructor only: no Neon connection.
+      const client = migrationClient(config); // Lazy constructor only: no live connection.
       try {
         assert.deepEqual(client.options.port, [5432]);
         assert.equal(client.options.connection.channel_binding, undefined);
@@ -301,14 +318,14 @@ test("driver configuration strips channel binding and pins the port despite PGPO
         await client.end();
       }
     }
-    // `require` (the Neon default) is accepted wherever it appears and stripped;
-    // only unknown values are still refused.
+    // `require` (a common libpq default) is accepted wherever it appears and
+    // stripped; only unknown values are still refused.
     for (const binding of ["invalid", "prefer&channel_binding=bogus"]) {
       assert.throws(
         () =>
           migrationConfig({
             ...mainEnv,
-            NEON_STAGING_DATABASE_URL: `${staging}&channel_binding=${binding}`,
+            PLANETSCALE_STAGING_DATABASE_URL: `${staging}&channel_binding=${binding}`,
           }),
         /channel binding/,
       );
@@ -322,7 +339,7 @@ test("driver configuration strips channel binding and pins the port despite PGPO
           ...mainEnv,
           CI: process.env.CI,
           GITHUB_ACTIONS: process.env.GITHUB_ACTIONS,
-          NEON_STAGING_DATABASE_URL: url.href,
+          PLANETSCALE_STAGING_DATABASE_URL: url.href,
         },
         { testDatabase: true },
       ),
@@ -453,8 +470,9 @@ test("hostile database search_path cannot misroute canonical DDL into a shadow s
   await fixture(async ({ client, run, output }) => {
     await client`create schema "other"`;
     const [db] = await client`select current_database() as name`;
-    // A hostile role/database default, as Neon staging could carry. The
-    // runner must still apply unqualified canonical SQL to `public`.
+    // A hostile role/database default, as a mis-provisioned staging branch
+    // could carry. The runner must still apply unqualified canonical SQL to
+    // `public`.
     await client.unsafe(`alter database "${db.name}" set search_path = "other", public`);
     await run("apply");
     const columns = await client`select column_name from information_schema.columns
