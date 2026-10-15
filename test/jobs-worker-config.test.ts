@@ -52,9 +52,9 @@ describe("jobs Worker config (wrangler.jobs.jsonc)", () => {
   });
 
   it("keeps staging placement, tail paging and consumer backstops on the jobs Worker", () => {
-    // Same region as the web Worker: staging Neon is eu-central-1 and every
+    // Same region as the web Worker: staging database is PlanetScale us-east-1 and every
     // statement is a round trip through Hyperdrive.
-    expect(jobs.placement).toMatchObject({ region: "aws:eu-central-1" });
+    expect(jobs.placement).toMatchObject({ region: "aws:us-east-1" });
     // Jobs traces page through the same staging Tail pager as the web Worker.
     expect(jobs.tail_consumers).toEqual([{ service: "two-web-next-alerts" }]);
     // Terminal outcomes are acked by the consumer; max_retries is only a

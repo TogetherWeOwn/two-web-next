@@ -7,7 +7,7 @@
 // - The hold applies to staging ONLY. Production keeps its existing
 //   PRODUCTION_DEPLOY_ENABLED=true gate and ignores the hold entirely, so a
 //   staging hold can never disable the independently authorized production path.
-// - Single source for admission: migrationConfig (ci/neon-migrate.mjs) calls
+// - Single source for admission: migrationConfig (ci/db-migrate.mjs) calls
 //   assertMigrationAdmission below, so these messages are the ones operators
 //   see. Checked before URL parsing, driver construction, or any database
 //   work, and mirrored in workflow shell gates before dependency install or

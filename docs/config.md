@@ -215,7 +215,7 @@ These names are deliberately **not** extra rows in the marked inventory:
   [runbook-alerts](runbook-alerts.md) for the install procedure.
 - **CI/tooling secrets:** deployment uses `CLOUDFLARE_API_TOKEN` and
   `CLOUDFLARE_ACCOUNT_ID`; backup automation additionally references
-  `NEON_STAGING_DATABASE_URL`. These are workflow inputs, not Worker bindings,
+  `PLANETSCALE_STAGING_DATABASE_URL`. These are workflow inputs, not Worker bindings,
   have no default and must not be used as test credentials. Their procedures
   are outside this reference.
 

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Hermetic argv regression selftest for bin/neon-backup.sh (TOG-11228).
+# Hermetic argv regression selftest for bin/db-backup.sh (TOG-11228).
 #
 # `--dry-run` is documented for `rotate` only, but the parser accepted it for
 # every command and `backup`/`promote-weekly` then silently ignored it: they
@@ -72,7 +72,7 @@ chmod +x "$T/fakebin/mktemp"
 export PATH="$T/fakebin:$PATH"
 
 # Stub wrangler: logs the call, then emulates `r2 object put|get|delete`
-# against STUB_R2 exactly like ci/neon-backup-selftest.sh.
+# against STUB_R2 exactly like ci/db-backup-selftest.sh.
 cat > "$T/wrangler-stub" <<'STUB'
 #!/usr/bin/env bash
 set -euo pipefail
@@ -114,7 +114,7 @@ export BACKUP_PREFIX="neon"
 # Deliberately NOT exporting DATABASE_URL: the flag rejection must precede the
 # connection setup, so an unset URL must not mask the usage error.
 
-BIN="./bin/neon-backup.sh"
+BIN="./bin/db-backup.sh"
 
 # expect_reject DESC ARGS... — invocation must exit non-zero, print the
 # --dry-run diagnostic plus usage to stderr, and leave zero observed side

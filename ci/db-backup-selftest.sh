@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Stubbed selftest for bin/neon-backup.sh. Runs in CI with no secrets and no
+# Stubbed selftest for bin/db-backup.sh. Runs in CI with no secrets and no
 # network: WRANGLER_BIN points at a stub that emulates `wrangler r2 object
 # put/get/delete` against a local directory, and a fake pg_dump on PATH emits
 # a fixed payload. Proves: backup writes + manifest + upload proof, weekly
@@ -88,7 +88,7 @@ export BACKUP_BUCKET="test-bucket"
 export BACKUP_PREFIX="neon"
 export DATABASE_URL="postgres://tester:s3lf-test-pw-abc123@fake-host:5432/testdb"
 
-BIN="./bin/neon-backup.sh"
+BIN="./bin/db-backup.sh"
 MANIFEST="neon/staging-staging/MANIFEST.txt"
 
 # 1-2. Two backups land with distinct keys + manifest proof.
