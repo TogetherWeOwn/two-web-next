@@ -121,5 +121,10 @@ describe("homepage db clients", () => {
     const clients = await Promise.all(spy.mock.results.map((result) => result.value));
     expect(clients).toHaveLength(2);
     expect(clients[0]).not.toBe(clients[1]);
+
+    const warmResponse = await app.request("/", {}, f.env);
+    expect(warmResponse.status).toBe(200);
+    await warmResponse.text();
+    expect(spy).toHaveBeenCalledTimes(2);
   });
 });
