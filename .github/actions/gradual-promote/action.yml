@@ -130,6 +130,7 @@ runs:
         : "${PREV_VERSION:?missing pre-promote rollback target}"
         # Bound the restore: a hung rollback fails the job, never the window.
         timeout 120 npx wrangler rollback "$PREV_VERSION" --name "$WORKER_NAME" --yes
+        echo "restored=true" >> "$GITHUB_OUTPUT"
         echo "::error::rolled back to the pre-promote version after the 5 percent health/SLO gate failed"
         exit 1
       env:
@@ -177,15 +178,17 @@ runs:
 
     - name: Automatic rollback after 50 percent gate failure
       id: rollback-50
-      # Stands down when the 5 percent rollback already ran; retries when it
-      # was cancelled before it could finish.
-      if: (failure() || cancelled()) && steps.rollback-target.conclusion == 'success' && (steps.rollback-5.conclusion == 'skipped' || steps.rollback-5.conclusion == 'cancelled')
+      # Stands down only when the 5 percent rollback recorded success; a
+      # failed or cancelled restore falls through here for another attempt.
+      # A skipped step has an empty output, so the guard still holds.
+      if: (failure() || cancelled()) && steps.rollback-target.conclusion == 'success' && steps.rollback-5.outputs.restored != 'true'
       shell: bash
       run: |
         set -euo pipefail
         : "${PREV_VERSION:?missing pre-promote rollback target}"
         # Bound the restore: a hung rollback fails the job, never the window.
         timeout 120 npx wrangler rollback "$PREV_VERSION" --name "$WORKER_NAME" --yes
+        echo "restored=true" >> "$GITHUB_OUTPUT"
         echo "::error::rolled back to the pre-promote version after the 50 percent health/SLO gate failed"
         exit 1
       env:
@@ -253,15 +256,17 @@ runs:
 
     - name: Automatic rollback after 100 percent gate failure
       id: rollback-100
-      # Stands down when an earlier rollback already ran; retries when one
-      # was cancelled before it could finish.
-      if: (failure() || cancelled()) && steps.rollback-target.conclusion == 'success' && (steps.rollback-5.conclusion == 'skipped' || steps.rollback-5.conclusion == 'cancelled') && (steps.rollback-50.conclusion == 'skipped' || steps.rollback-50.conclusion == 'cancelled')
+      # Stands down only when an earlier rollback recorded success; a failed
+      # or cancelled restore falls through here for another attempt (up to
+      # three attempts for free). Skipped steps have empty outputs.
+      if: (failure() || cancelled()) && steps.rollback-target.conclusion == 'success' && steps.rollback-5.outputs.restored != 'true' && steps.rollback-50.outputs.restored != 'true'
       shell: bash
       run: |
         set -euo pipefail
         : "${PREV_VERSION:?missing pre-promote rollback target}"
         # Bound the restore: a hung rollback fails the job, never the window.
         timeout 120 npx wrangler rollback "$PREV_VERSION" --name "$WORKER_NAME" --yes
+        echo "restored=true" >> "$GITHUB_OUTPUT"
         echo "::error::rolled back to the pre-promote version after the 100 percent health/SLO gate failed"
         exit 1
       env:

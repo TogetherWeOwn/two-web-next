@@ -628,9 +628,11 @@ test("shared gradual action promotes 5-50-100 with per-stage gates and auto-roll
   assert.ok(action.includes('npx wrangler rollback "$PREV_VERSION"'));
   // Every rollback runs on any failure or cancellation once a rollback target
   // is recorded: promote API errors and step timeouts included, not just
-  // gate failures. Later rollbacks stand down when an earlier one already
-  // ran, and retry when one was cancelled before finishing. Each restore is
-  // time-bounded and refuses an unknown target before wrangler ever runs.
+  // gate failures. Later rollbacks stand down only when an earlier one
+  // recorded success (outputs.restored == 'true'); a failed restore leaves
+  // the output empty so the next rollback retries (up to three attempts for
+  // free). Each restore is time-bounded and refuses an unknown target before
+  // wrangler ever runs.
   assert.equal(
     (
       action.match(
@@ -639,16 +641,15 @@ test("shared gradual action promotes 5-50-100 with per-stage gates and auto-roll
     ).length,
     3,
   );
-  assert.ok(
-    action.includes(
-      "&& (steps.rollback-5.conclusion == 'skipped' || steps.rollback-5.conclusion == 'cancelled')",
-    ),
-  );
-  assert.ok(
-    action.includes(
-      "&& (steps.rollback-50.conclusion == 'skipped' || steps.rollback-50.conclusion == 'cancelled')",
-    ),
-  );
+  // Success is recorded explicitly after each restore; a wrangler failure
+  // under `set -euo pipefail` exits before the echo, leaving no output.
+  assert.equal((action.match(/echo "restored=true" >> "\$GITHUB_OUTPUT"/g) ?? []).length, 3);
+  assert.ok(action.includes("&& steps.rollback-5.outputs.restored != 'true'"));
+  assert.ok(action.includes("&& steps.rollback-50.outputs.restored != 'true'"));
+  // A failed rollback must never count as restored: conclusion-based
+  // stand-down guards would treat failure as done.
+  assert.ok(!action.includes("rollback-5.conclusion == 'skipped'"));
+  assert.ok(!action.includes("rollback-50.conclusion == 'skipped'"));
   assert.equal((action.match(/timeout 120 npx wrangler rollback/g) ?? []).length, 3);
   assert.equal(
     (action.match(/: "\$\{PREV_VERSION:\?missing pre-promote rollback target\}"/g) ?? []).length,
@@ -670,6 +671,49 @@ test("shared gradual action promotes 5-50-100 with per-stage gates and auto-roll
   assert.ok(!action.includes("curl "));
   assert.ok(!action.includes("wrangler triggers deploy"));
   assert.ok(!action.includes("wrangler deploy --env production"));
+});
+
+test("rollback stand-down retries promote failures, cancellations and failed restores", () => {
+  const action = readFileSync(
+    new URL("../.github/actions/gradual-promote/action.yml", import.meta.url),
+    "utf8",
+  );
+  const guard50 = action.match(
+    /- name: Automatic rollback after 50 percent gate failure\n(?:.*\n)*? {6}if: (.*)\n/,
+  )?.[1];
+  const guard100 = action.match(
+    /- name: Automatic rollback after 100 percent gate failure\n(?:.*\n)*? {6}if: (.*)\n/,
+  )?.[1];
+  assert.ok(guard50, "rollback-50 has an if: guard");
+  assert.ok(guard100, "rollback-100 has an if: guard");
+  // Both guards run on failure or cancellation with a recorded target.
+  for (const guard of [guard50, guard100]) {
+    assert.match(guard, /\(failure\(\) \|\| cancelled\(\)\)/);
+    assert.match(guard, /steps\.rollback-target\.conclusion == 'success'/);
+  }
+  // Stand-down is success-explicit: only outputs.restored == 'true' holds the
+  // next rollback back. Empty means skipped (earlier stage never ran) or a
+  // failed/cancelled restore that never reached the echo.
+  const wouldRun50 = (restored5) => restored5 !== "true";
+  const wouldRun100 = (restored5, restored50) => restored5 !== "true" && restored50 !== "true";
+  assert.ok(guard50.includes("steps.rollback-5.outputs.restored != 'true'"));
+  assert.ok(guard100.includes("steps.rollback-5.outputs.restored != 'true'"));
+  assert.ok(guard100.includes("steps.rollback-50.outputs.restored != 'true'"));
+  const cases = [
+    // [label, restored5, restored50, run50, run100]
+    // A failed or cancelled restore never reaches the echo, so its output is
+    // empty — exactly like a skipped step — and the next rollback retries.
+    ["promote failure before any rollback", "", "", true, true],
+    ["cancelled before any rollback", undefined, undefined, true, true],
+    ["failed 5 percent restore leaves no output so 50 retries", "", "", true, true],
+    ["successful 5 percent restore stands down later steps", "true", "", false, false],
+    ["successful 50 percent restore stands down the last step", "", "true", true, false],
+    ["both restores recorded stand down everything", "true", "true", false, false],
+  ];
+  for (const [label, restored5, restored50, run50, run100] of cases) {
+    assert.equal(wouldRun50(restored5 ?? ""), run50, label);
+    assert.equal(wouldRun100(restored5 ?? "", restored50 ?? ""), run100, label);
+  }
 });
 
 test("rollback workflow reuses the production gate with no wider permissions", () => {
