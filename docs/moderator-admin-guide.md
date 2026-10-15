@@ -156,6 +156,40 @@ Five additional GET routes retain legacy bookmarks as 301 redirects:
 All 24 routes (15 GET, 9 POST) use the moderator guard. Legacy redirects drop
 query strings; an invalid or unmapped legacy featured ID returns 404, and an
 unavailable lookup returns 503. Use the canonical links for new instructions.
+
+### Kit admin shells (shipped, Hono serves traffic)
+
+Each of the 10 admin GET routes above also ships a Kit shell behind Hono
+ownership. The mixed-mode truth: Hono owns every handler and serves all
+traffic; the migration is GET-only; all 9 POST form actions stay Hono with
+no manifest entries of their own. Every shell entry in
+`src/route-ownership.ts` (`ROUTE_MANIFEST`) reads `enabled: false`, so what
+you see in the panel today is the Hono page. Kit shells reuse the same guard,
+reads, filters, sort, pagination and copy, which is why the event/featured
+CRUD, RSVP roster, and join-attempts audit workflows below stay accurate
+whichever renderer serves the page.
+
+| Admin path | Kit shell |
+|---|---|
+| `/admin` | `web/src/routes/admin/+page.svelte` |
+| `/admin/events` | `web/src/routes/admin/events/+page.svelte` |
+| `/admin/events/new` | `web/src/routes/admin/events/new/+page.svelte` |
+| `/admin/events/:key` | `web/src/routes/admin/events/[key]/+page.svelte` |
+| `/admin/featured` | `web/src/routes/admin/featured/+page.svelte` |
+| `/admin/featured/new` | `web/src/routes/admin/featured/new/+page.svelte` |
+| `/admin/featured/:id` | `web/src/routes/admin/featured/[id]/+page.svelte` |
+| `/admin/activity-log` | `web/src/routes/admin/activity-log/+page.svelte` |
+| `/admin/join-attempts` | `web/src/routes/admin/join-attempts/+page.svelte` |
+| `/admin/join-attempts/:id` | `web/src/routes/admin/join-attempts/[id]/+page.svelte` |
+
+All shells render inside the shared `web/src/lib/AdminShell.svelte` chrome
+with server-side rendering only (no client takeover). If a shell ever misbehaves
+after enablement, the rollback is a manifest disable: returning its entry to
+`enabled: false` hands the route back to the unchanged Hono handler. The gates
+that prove each shell — renderer marker from the shipped manifest, single
+`<main>`, skip link, canonical link, guest-only chrome, no secret-shaped
+content, and the per-route section contracts — live in the
+[Kit parity gates](kit-parity-gates.md).
 Mutating buttons submit immediately: there is no action-confirmation dialog.
 Double-check the event/slot and intended action before pressing one. The event
 editor's separate browser warning for unsaved changes is not action approval.
@@ -490,3 +524,6 @@ For maintainers checking this guide:
   [error pages](../src/error-pages.tsx): current homepage wiring and diagnostic copy.
 - [Admin tests](../test/admin.test.ts), [admin read tests](../test/admin-reads.test.ts)
   and [event search tests](../test/event-search.test.ts): executable behavior checks.
+- [Route ownership](../src/route-ownership.ts) and the
+  [Kit parity gates](kit-parity-gates.md): which renderer owns each admin GET,
+  the manifest-disable rollback, and the gates proving each Kit shell.
