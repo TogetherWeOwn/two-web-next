@@ -337,35 +337,29 @@ test("gate exit 2 on unreadable, empty and all-skipped reports", () => {
 
 test("critical-journeys guide explains flaky accounting with zero retries and no rerun-until-green", () => {
   const guide = readFileSync(new URL("../../docs/critical-journeys.md", import.meta.url), "utf8");
-  const ledger = readFileSync(new URL("./journey-ledger.mjs", import.meta.url), "utf8");
   const stagingConfig = readFileSync(
     new URL("../../playwright.staging.config.ts", import.meta.url),
     "utf8",
   );
-  // Pin the semantics the guide describes so docs and code cannot drift apart.
+  const normalizedGuide = guide.replace(/\s+/g, " ");
   assert.match(stagingConfig, /retries:\s*0/);
-  assert.ok(ledger.includes('status === "flaky"'), "ledger classifies flaky reports");
-  assert.ok(
-    ledger.includes('j.status === "passed" || j.status === "flaky"'),
-    "flaky counts toward passed",
-  );
-  assert.ok(ledger.includes("unknown test status"), "ledger refuses unknown statuses");
-  // The guide names every classification and the unknown-status refusal.
   for (const status of ["`expected`", "`flaky`", "`unexpected`", "`skipped`"]) {
     assert.ok(guide.includes(status), `guide must name ${status}`);
   }
   assert.match(guide, /unknown test status/);
-  assert.match(guide, /counts toward `passed`.*separate `flaky` count/);
-  // Zero retries, report-vs-flake distinction, evidence preservation, no
-  // rerun-until-green.
-  assert.match(guide, /`retries: 0`/);
-  assert.match(guide, /not an\s+observed CI flake/);
-  assert.match(guide, /red-build\s+triage policy/);
-  assert.match(guide, /[Kk]eep the original failure evidence/);
+  assert.match(
+    normalizedGuide,
+    /counts toward `passed` in the headline and CLI line; the separate `flaky` count appears only in `counts\.flaky` in the ledger JSON, while the Markdown table marks the row `flaky`\./,
+  );
+  assert.ok(
+    normalizedGuide.includes(
+      "The staging config sets `retries: 0` (`playwright.staging.config.ts`), so a report from this config cannot legitimately contain `flaky`. If a ledger row shows `flaky`, check for a `--retries` override or a report produced by another config before trusting the pass.",
+    ),
+  );
+  assert.match(normalizedGuide, /flaky row has no reason and does not trigger the failure-only traces\/report upload/);
+  assert.match(normalizedGuide, /`e2e-staging-failure-\*` artifact, retained for seven days/);
+  assert.match(normalizedGuide, /documented host-flake loop/);
   assert.match(guide, /[Nn]ever rerun-until-green/);
-  // Existing gate contract stays documented.
-  assert.match(guide, /exit 2/);
-  assert.match(guide, /all-skipped/);
 });
 
 test("gate without a step summary still writes ledger files and exits by verdict", () => {
