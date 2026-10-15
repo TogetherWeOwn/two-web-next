@@ -17,17 +17,25 @@ const REVIEWED_CENTRAL_SHA = "82c5b367c6e3e8032666029dc22d206fff39c3f2";
 
 describe("pr-size advisory wiring", () => {
   it("is not a required check", () => {
-    const branchProtection =
-      contributing.split("### Branch protection and required checks")[1]?.split(/\n#{2,3} /)[0] ??
-      "";
+    const branchProtection = contributing
+      .split("### Branch protection and required checks")[1]
+      ?.split(/\n#{2,3} /)[0];
+    expect(branchProtection).toBeTruthy();
+    expect(branchProtection).toContain("`ci-ok`");
     expect(branchProtection).not.toContain("pr-size");
   });
 
   it("grants write scopes only to the labelling job", () => {
-    const topLevel = workflow.split(/\npermissions:\n/)[1]?.split(/\n\S/)[0] ?? "";
-    expect(topLevel).not.toMatch(/\bwrite\b/);
-    expect(job("pr-size").match(/    permissions:\n((?:      [^\n]+\n)+)/)?.[1]).toBe(
-      "      contents: read\n      issues: write\n      pull-requests: write\n",
+    expect(workflow.match(/^permissions:/gm)).toHaveLength(1);
+    const topLevel = workflow.match(/^permissions:\n([\s\S]*?)(?=^[A-Za-z][A-Za-z0-9_-]*:)/m)?.[1];
+    expect(topLevel?.trim()).toBe("contents: read");
+    const labelJob = job("pr-size");
+    expect(labelJob.match(/^    permissions:/gm)).toHaveLength(1);
+    const labelPermissions = labelJob.match(
+      /^    permissions:\n([\s\S]*?)(?=^    [A-Za-z][A-Za-z0-9_-]*:)/m,
+    )?.[1];
+    expect(labelPermissions?.trimEnd()).toBe(
+      "      contents: read\n      issues: write\n      pull-requests: write",
     );
     expect(job("pr-size")).toContain("      issues: write\n");
     expect(job("pr-size")).toContain("      pull-requests: write\n");
@@ -48,7 +56,7 @@ describe("pr-size advisory wiring", () => {
     // No floating refs, no other reusable calls, no secrets passthrough:
     // the caller token stays capped by the job grants above.
     expect(workflow.match(/\n    uses: /g)).toHaveLength(2);
-    expect(workflow).not.toContain("secrets:");
+    expect(workflow).not.toMatch(/secrets\s*:/);
   });
 
   it("keeps no local labeller copy and sets no local threshold", () => {
@@ -59,7 +67,9 @@ describe("pr-size advisory wiring", () => {
   });
 
   it("excludes this repo's generated paths but keeps hand-written SQL counted", () => {
-    const extra = job("pr-size").match(/exclude-extra: "([^"]*)"/)?.[1] ?? "";
+    const labelJob = job("pr-size");
+    expect(labelJob.match(/^      exclude-extra:/gm)).toHaveLength(1);
+    const extra = labelJob.match(/exclude-extra: "([^"]*)"/)?.[1] ?? "";
     expect(extra).toBe("public/islands/**,public/styles.css,drizzle/meta/**");
     expect(extra).not.toContain("drizzle/*.sql");
     expect(extra.split(",")).not.toContain("drizzle/**");
