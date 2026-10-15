@@ -156,11 +156,15 @@ describe("Kit member-board load parity", () => {
 
   it("serves the unavailable board with no rows when no database is configured", async () => {
     const recordBoardViewFn = vi.fn(async () => {});
-    const data = await loadMembersBoardData(args({ dbForFn: async () => null, recordBoardViewFn }));
+    // No loadRankingFn stub: the real ranking read returns [] for a null db.
+    const data = await loadMembersBoardData(
+      args({ dbForFn: async () => null, recordBoardViewFn, loadRankingFn: undefined }),
+    );
     expect(data.available).toBe(false);
+    expect(data.rows).toEqual([]);
     expect(recordBoardViewFn).toHaveBeenCalledWith(
       null,
-      expect.objectContaining({ boardKey: "members", resultCount: 3 }),
+      expect.objectContaining({ boardKey: "members", resultCount: 0 }),
     );
   });
 });
