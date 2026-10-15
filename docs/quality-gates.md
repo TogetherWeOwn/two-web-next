@@ -52,9 +52,11 @@ not fail) unless marked HARD. All of them run on the existing runners only.
   another name and lowering a row still fails; moving CONSTRAINTS.md to a
   name that no longer matches fails as a threshold removal even with no row
   edit, and deleting CONSTRAINTS.md fails as a threshold removal. Test renames are judged against the runner
-  globs (vitest, Playwright specs under e2e/); e2e safety and ci selftest
-  scripts run via enumerated paths (only ci/a11y-*.test.mjs runs via glob),
-  so any rename of those needs a waiver.
+  globs (vitest includes test/** plus ci/a11y-lifecycle.test.mjs, Playwright
+  specs under e2e/); e2e safety and every ci selftest script run via
+  enumerated paths (check lists each node:test file; the a11y job and vitest
+  include name the vitest files exactly), so any rename of those needs a
+  waiver.
   Waivers are reasoned commit trailers (`test-deleted`, `assertion-removed`,
   `threshold-removed`, `new-exemption`) and every active one is printed to the
   log and the job summary for reviewer visibility. The ignore list is pinned

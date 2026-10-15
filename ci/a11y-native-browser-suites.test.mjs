@@ -24,6 +24,12 @@ const SUITES = [
     title: "native calendar search input (real Chromium typing/paste)",
     min: 21,
   },
+  {
+    file: "ci/a11y-lifecycle.test.mjs",
+    env: "A11Y_BROWSER_TESTS",
+    title: "audit lifecycle real Chromium signal cleanup",
+    min: 2,
+  },
 ];
 
 const workflow = await readFile(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8");
@@ -40,7 +46,7 @@ for (const suite of SUITES) {
   test(`a11y job runs ${suite.file} with its opt-in, a JSON report and the executed-count verifier`, async () => {
     const step = stepRunning(suite.file);
     assert(step, `a11y job must run ${suite.file}`);
-    const artifact = `artifacts/a11y/${basename(suite.file, ".test.ts")}.json`;
+    const artifact = `artifacts/a11y/${basename(suite.file).replace(/\.test\.(ts|mjs)$/, "")}.json`;
     assert.match(step, new RegExp(`\\n        env:\\n          ${suite.env}: "true"\\n`));
     assert.match(
       step,

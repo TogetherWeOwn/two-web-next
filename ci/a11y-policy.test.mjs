@@ -251,7 +251,7 @@ test("the required CI job has a bounded coverage allowance without relaxing its 
     "npm run test:smoke",
     "npm run db:migrate",
     "npm run config:check",
-    "npm run lint && npm run typecheck && npm run e2e:typecheck && npm run test:coverage && npm run e2e:safety && node --test ci/a11y-*.test.mjs ci/admin-properties-ci.test.mjs ci/coverage-command.test.mjs ci/kit-preview-e2e-wiring.test.mjs ci/visual-accept.test.mjs",
+    "npm run lint && npm run typecheck && npm run e2e:typecheck && npm run test:coverage && npm run e2e:safety && node --test ci/a11y-admin-native-unicode.test.mjs ci/a11y-build.test.mjs ci/a11y-content.test.mjs ci/a11y-interactions.test.mjs ci/a11y-native-browser-suites.test.mjs ci/a11y-policy.test.mjs ci/a11y-route-validation.test.mjs ci/admin-properties-ci.test.mjs ci/coverage-command.test.mjs ci/kit-preview-e2e-wiring.test.mjs ci/visual-accept.test.mjs",
     "npm run test:cutover",
     "bash ci/db-backup-selftest.sh",
     "bash ci/check-migration-numbers.sh",
