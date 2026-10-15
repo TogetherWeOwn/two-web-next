@@ -10,13 +10,17 @@ rollback pointers, alerts) applies to staging and, where a section names the
 production binding, to production. Production is live: the apex serves the
 production Worker (`two-web-next-production`) since 2026-10-10, and the
 cutover closed on 2026-10-12 ([archived freeze note](cutover-freeze.md)).
-For a production incident use the
+For a production Worker-version rollback use the
 [production rollback workflow](../.github/workflows/rollback-production.yml)
-and the production bindings. The staging rollback and DNS flip-back rehearsal is covered here. It is the kept pre-live rehearsal record. See
+and the production bindings; it does not restore DNS. Production DNS recovery
+to legacy requires the [recovery map](cutover-rollback.md#staging-dns-restoration-and-import-recovery-limits),
+a validated incident procedure and the [standing legacy-origin precondition](#before-the-production-flip).
+The staging rollback and DNS flip-back rehearsal is covered here. It is the kept pre-live rehearsal record. See
 [Staging rehearsal](#staging-rehearsal-worker-rollback-and-dns-flip-back).
-[Final import and reconcile](#final-import-and-reconcile) (including
-[Before the production flip](#before-the-production-flip)) is the kept
-historical record of the gated cutover steps, not a live procedure. The
+[Final import and reconcile](#final-import-and-reconcile) is the kept
+historical record of the gated import, not a live procedure.
+[Before the production flip](#before-the-production-flip) retains the cutover
+context and the standing precondition for DNS recovery to legacy. The
 inaugural [48h post-flip watch](#48h-post-flip-watch) ran 2026-10-10 00:52 UTC
 to 2026-10-12 00:52 UTC and is closed; the section remains the watch
 procedure. On a pager storm follow its Sev-1 path (contain, then the
@@ -31,8 +35,10 @@ in this index is the staging binding unless a row names production
 (`two-web-next-production`, `two-web-next-alerts-production`, the apex); never
 triage a production incident with the staging targets. For production use the
 [production rollback workflow](../.github/workflows/rollback-production.yml) and the
-production bindings; [cutover-rollback.md](cutover-rollback.md) is the staging
-rehearsal record plus a non-executable production recovery map.
+production bindings for Worker-version recovery. For DNS recovery to legacy,
+[cutover-rollback.md](cutover-rollback.md#staging-dns-restoration-and-import-recovery-limits)
+is the staging rehearsal record plus a non-executable production recovery map;
+follow its linked legacy-origin readiness precondition, which still applies.
 
 | Symptom or alert | Runbook section | First read-only diagnostic | Escalate to |
 | --- | --- | --- | --- |
@@ -735,8 +741,9 @@ The telemetry query returns only the newest 100 events. Keep each window to
     the Cloudflare edge answered **522** on `/up` and `/` (the connection to
     the legacy origin timed out; the cause was not established), with
     intermittent 503s in the window. Loss of the `two-web-next` marker, not
-    the legacy status, is the flip signal. The production pre-flip record-set
-    check is kept as history in [Before the production flip](#before-the-production-flip) below.
+    the legacy status, is the flip signal. For production DNS recovery to
+    legacy, the standing readiness precondition remains in
+    [Before the production flip](#before-the-production-flip) below.
 12. Re-confirm the hold and unchanged Worker allocation/schema/bindings before
     restoration, including before the fallback below. If exclusion or live
     compatibility has changed, stop and use the collision response rather than
@@ -901,10 +908,12 @@ Notes from the 2026-10-02 run:
 ## Final import and reconcile
 
 Historical cutover record: this was cutover plan step 2, the final legacy
-import with the reconcile report. It ran under the then-in-force write
-freeze ([cutover-freeze.md](cutover-freeze.md), now archived), with legacy
-writes paused and the import destination quiescent. Do not run it as a live
-procedure; the importer commands below are kept as the executed record. Both
+import with the reconcile report. It required paused legacy writes and a
+quiescent import destination. The [archived freeze note](cutover-freeze.md)
+is a withdrawn proposal, not evidence that its proposed freeze was applied;
+the actual cutover receipts remain on the cutover card in the team tracker.
+Do not run this as a live procedure; the importer commands below are kept
+as the cutover record. Both
 snapshots in this section were production mutations through the authorized
 operator procedure; the steps below name only environment variable **names**,
 never values. Credentials stay in the environment, never on argv.
@@ -947,15 +956,24 @@ cutover evidence; the reports carry keys and counts, never row values.
 
 ### Before the production flip
 
-Historical cutover record: the production rollback was this same flip back
-to legacy, so the legacy origin had to be able to serve the apex if needed.
-Staging answered 522, which did not prove production would. Before the flip,
-the legacy record set for the apex and `www` was recorded, and the apex
-answering 200 on `/` and `/up` from legacy was confirmed. The before-phase
-gate asserted the apex `/up` identity
-(`X-TWO-Origin: two-web`, see [cutover-check.md](cutover-check.md#phase-contract-and-prerequisites));
-a 522 or other 5xx from the legacy origin, or a missing marker, would have
-meant the rollback path was not proven and the flip would not start.
+Historical cutover context: the pre-flip gate required a saved legacy
+record set for the apex and `www`, HTTP 200 on `/` and `/up` from legacy,
+and the apex `/up` identity `X-TWO-Origin: two-web`
+([before-phase contract](cutover-check.md#phase-contract-and-prerequisites)).
+Staging's 522 did not prove production readiness. These were cutover
+requirements, not evidence of the legacy origin's current readiness.
+
+**Standing DNS recovery precondition:** before any separately authorized
+production DNS recovery to legacy, confirm that the legacy origin can serve
+the apex with HTTP 200 on `/` and `/up`, including `X-TWO-Origin: two-web`
+on `/up`. Validate the saved apex/`www` records, proxy/TTL settings and current
+host/attachment inventory under the incident operator's reviewed procedure
+([production recovery map](cutover-rollback.md#staging-dns-restoration-and-import-recovery-limits)).
+A 522 or other 5xx from legacy, or a missing origin marker, means the recovery
+path is not proven: stop before DNS mutation. A response from the currently
+serving Next Worker does not establish legacy readiness. This prerequisite
+does not authorize production probes or DNS changes, and the staging drill
+is not an executable production recovery procedure.
 
 ## 48h post-flip watch
 
@@ -963,9 +981,11 @@ The inaugural watch is closed: it ran 2026-10-10 00:52 UTC to 2026-10-12
 00:52 UTC, and the cutover closed on 2026-10-12
 ([archived freeze note](cutover-freeze.md); exit details are on the cutover
 card in the team tracker). This section remains the standing watch
-procedure. The cutover was not done at the DNS flip: the new site stayed
-under a 48h watch with the freeze in
-[cutover-freeze.md](cutover-freeze.md) in force until the watch exited.
+procedure after a separately authorized (re-)flip; it does not authorize a
+new flip or production probes outside that window. The archived freeze
+note is a withdrawn proposal, not evidence that its proposed freeze was
+applied. No freeze is implied by this watch: any future freeze needs a
+separate declaration with new dates and explicit lift terms.
 Everything in this section is read-only or GET-only: no production writes,
 migrations, credential changes or queue purges. Any Sev-1 goes to
 containment below and the production rollback pointer, never to a live fix
@@ -1010,14 +1030,17 @@ or a credential swap.
 )
 ```
 
-**Cadence:** pager continuously; `/up` every 15 minutes for the first 4h,
-then hourly; the full after-gate at flip+1h, +24h and +48h; Lighthouse and
-the GET-only journeys once within the first 24h.
+**Cadence:** measure from the authorized (re-)flip time (`T0`): pager
+continuously; `/up` every 15 minutes for the first 4h, then hourly; the full
+after-gate at T0+1h, T0+24h and T0+48h; Lighthouse and the GET-only journeys
+once within the first 24h.
 
 **Exit criteria:** 48h elapse with no Sev-1 — no pager storm, `/up` 200
 with `db:ok` and zero pending migrations throughout, after-gates green,
 Lighthouse and guest journeys within budget. The DevOps & Reliability
-Engineer records the exit on the cutover card and lifts the freeze there.
+Engineer records the exit on the incident or release card. If a freeze was
+separately declared for this window, its authorized owner lifts it only
+under that declaration's terms; watch exit alone does not lift a freeze.
 
 **On a Sev-1** (pager storm, `/up` non-200 or `db:error`/pending nonzero,
 a red after-gate, or member-visible breakage): contain per the queue and
