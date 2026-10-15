@@ -40,6 +40,13 @@ describe("pr-size advisory wiring", () => {
     expect(job("pr-size")).toContain("      issues: write\n");
     expect(job("pr-size")).toContain("      pull-requests: write\n");
     expect(job("pr-size-weekly")).not.toMatch(/\bwrite\b/);
+    // Fail closed on any added job or write scope beyond the label job's two.
+    const jobsText = workflow.split("\njobs:\n")[1] ?? "";
+    expect([...jobsText.matchAll(/^  ([A-Za-z0-9_-]+):$/gm)].map((m) => m[1])).toEqual([
+      "pr-size",
+      "pr-size-weekly",
+    ]);
+    expect(workflow.match(/\bwrite\b/g)).toHaveLength(2);
   });
 
   it("calls the central reusables at one pinned full SHA", () => {
