@@ -498,6 +498,13 @@ test("cross-target: join one-click hrefs agree on the safe next", async () => {
 // A broken Older/Newer href lands on the wrong URL or the out-of-range
 // refusal, so row identities and the page URL fail. A stale fragment swap
 // keeps the old rows, so identities and the canonical fail.
+//
+// The island validates the fetched page's canonical against the browser
+// origin. On the Hono target that origin is localhost while APP_URL is the
+// virtual staging URL, so the e2e test worker translates the archive HTML
+// back to localhost (e2e/worker.ts) — the deployed invariant, where
+// APP_URL is the serving origin. The Kit fixture already serves its own
+// origin as APP_URL, so its turns need no translation.
 const ARCHIVE_TURN_COUNT = 24;
 const ARCHIVE_TURN_KEY_PREFIX = "01K000000000000000000000";
 const ARCHIVE_PAST_NIGHT_KEY = "01J00000000000000000000002";
