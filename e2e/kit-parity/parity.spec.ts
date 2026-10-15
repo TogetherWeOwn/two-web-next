@@ -3,6 +3,7 @@ import { expect, test, type APIRequestContext } from "@playwright/test";
 import { sectionOf } from "../../ci/kit-section-contract.mjs";
 import {
   expectedKitMarker,
+  kitFixtureOwnsEventDetail,
   kitFixtureOwnsMemberBoard,
   kitFixtureSessionSecret,
   KIT_ORIGIN,
@@ -297,6 +298,87 @@ for (const target of targets) {
         expect(scrubSecrets(body)).toEqual([]);
         expect(body).not.toContain("<h1>Member leaderboard</h1>");
       }
+    });
+  });
+
+  // Live event detail (GET /e/:key only): the RSVP companion's executed
+  // journey. The shipped manifest keeps the entry disabled until the companion
+  // passes, so the Kit target answers from the Kit load only through the
+  // loopback fixture (kitFixtureOwnsEventDetail); Hono always answers without
+  // the marker. JSON/ICS stay Hono-owned with no manifest entries and every
+  // RSVP mutation keeps Hono as its single authority. Bodies are
+  // origin-normalized before comparison where hosts differ by design.
+  test.describe(`${target.name}: live event detail keeps its RSVP companion contract`, () => {
+    const EVENT_KEY = "01J00000000000000000000001";
+    const EVENT_PATH = `/e/${EVENT_KEY}`;
+
+    test("guest renders the published contract with join pitch and no attendees", async () => {
+      if (target.name === "kit")
+        expect(kitFixtureOwnsEventDetail(), "Kit fixture owns the event detail").toBe(true);
+      const expectedMarker = target.name === "kit" ? "kit" : null;
+      const response = await api(target).get(EVENT_PATH);
+      expect(response.status(), `${target.name} guest detail`).toBe(200);
+      expect(response.headers()["content-type"]).toContain("text/html");
+      expect(response.headers()["x-two-renderer"] ?? null).toBe(expectedMarker);
+      // Per-viewer page: never shared-cacheable, on either renderer.
+      expect(response.headers()["cache-control"]).toBe("private, no-store");
+      expect(response.headers()["vary"] ?? "").toMatch(/cookie/i);
+      const body = await response.text();
+      expect(scrubSecrets(body)).toEqual([]);
+      expect(body).toContain("E2E Community Night");
+      expect(body).toContain('data-testid="event-join-pitch"');
+      expect(body).toContain('data-testid="event-copy-link"');
+      expect(body).toContain('data-testid="event-jsonld"');
+      expect(body).toContain('rel="canonical"');
+      expect(body).toContain(`/events/${EVENT_KEY}.ics`);
+      expect(body).not.toContain('data-testid="event-attendees"');
+      expect(body).not.toContain("Sign out");
+      expect(body).toContain("Welcome, guest");
+    });
+
+    test("member renders the no-JS RSVP form posting to the Hono controller", async () => {
+      if (target.name === "kit")
+        expect(kitFixtureOwnsEventDetail(), "Kit fixture owns the event detail").toBe(true);
+      const expectedMarker = target.name === "kit" ? "kit" : null;
+      const cookie = await memberCookie(target);
+      const response = await api(target).get(EVENT_PATH, { headers: { cookie } });
+      expect(response.status(), `${target.name} member detail`).toBe(200);
+      expect(response.headers()["content-type"]).toContain("text/html");
+      expect(response.headers()["x-two-renderer"] ?? null).toBe(expectedMarker);
+      expect(response.headers()["cache-control"]).toBe("private, no-store");
+      const body = await response.text();
+      expect(scrubSecrets(body)).toEqual([]);
+      expect(body).toContain("E2E Community Night");
+      expect(body).not.toContain('data-testid="event-join-pitch"');
+      // The mutation stays Hono-owned: a native form posts to the unchanged
+      // controller, the islands only enhance it.
+      expect(body).toContain(`action="/e/${EVENT_KEY}/rsvp"`);
+      expect(body).toContain("/islands/rsvp-button.js");
+      expect(body).toContain("Sign out");
+      expect(body).not.toContain("Welcome, guest");
+    });
+
+    test("JSON, ICS and RSVP mutations stay Hono-owned without the Kit marker", async () => {
+      const json = await api(target).get(`/events/${EVENT_KEY}`);
+      expect(json.status(), `${target.name} event JSON`).toBe(200);
+      expectNoMarker(json.headers(), `${target.name} event JSON`);
+
+      const ics = await api(target).get(`/events/${EVENT_KEY}.ics`);
+      expect(ics.status(), `${target.name} event ICS`).toBe(200);
+      expectNoMarker(ics.headers(), `${target.name} event ICS`);
+
+      const put = await api(target).put(`/events/${EVENT_KEY}/rsvp`, { data: {} });
+      expect([401, 403, 404, 422], `${target.name} RSVP PUT refused`).toContain(put.status());
+      expectNoMarker(put.headers(), `${target.name} RSVP PUT`);
+
+      const post = await api(target).post(EVENT_PATH + "/rsvp", {
+        data: "status=going",
+        headers: { "content-type": "application/x-www-form-urlencoded" },
+      });
+      expect([303, 401, 403], `${target.name} RSVP POST refused/redirected`).toContain(
+        post.status(),
+      );
+      expectNoMarker(post.headers(), `${target.name} RSVP POST`);
     });
   });
 

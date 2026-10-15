@@ -37,12 +37,15 @@ export const handle: Handle = async ({ event, resolve }) =>
     eventDetail: (request, render) => dispatchEventDetailRequest(request, env, render),
     sessionFor: kitSessionBridge(env),
     accessSink: kitAccessSink(env),
-    // Loopback Kit parity fixture flag only: the core turns this boolean
+    // Loopback Kit parity fixture flags only: the core turns these booleans
     // plus a loopback appUrl into the fixture route choice, so the member
-    // board's executed journey runs the Kit load on the fixture worker.
-    // Production now serves the board from Kit too, so this flag is
-    // redundant for the entry; flipping the entry back restores Hono.
+    // board's and the live event detail's executed journeys run the Kit loads
+    // on the fixture worker. Production now serves the board from Kit too, so
+    // that flag is redundant for the entry; the detail entry stays on Hono in
+    // the shipped list and the fixture alone turns it to Kit. Flipping either
+    // entry back restores Hono.
     fixtureMemberBoard: env.KIT_PARITY_FIXTURE_MEMBER_BOARD === "true",
+    fixtureEventDetail: env.KIT_PARITY_FIXTURE_EVENT_DETAIL === "true",
     // The member board's anonymous view log, written only after the
     // member-read boundary released a 200 (no-op for every other route).
     afterMemberRead: (event, response) =>
