@@ -596,3 +596,47 @@ test("Kit worker answers traffic within the liveness bound", async ({ playwright
     10_000,
   );
 });
+
+// Kit events-index visuals: populated /events at desktop and mobile widths
+// into e2e/visual/__screenshots-kit__/ (snapshotPathTemplate in
+// playwright.kit-parity.config.ts). Guest only, no login: the index is
+// public, so the qa-login throttle is untouched, and the run stays read-only
+// on the deterministic seeded upcoming row (e2e/seed.mjs "E2E Community
+// Night" — no new fixture route). Mask <time> like the Hono visual spec,
+// fullPage, soft per width so one diff never hides the other image for
+// ci/kit-visual-accept.mjs.
+test.describe("kit: events-index visuals", () => {
+  test("populated @ desktop and mobile", async ({ browser }) => {
+    const kit = targets.find((target) => target.name === "kit")!;
+    const context = await browser.newContext({
+      baseURL: kit.origin,
+      ignoreHTTPSErrors: kit.ignoreHTTPSErrors,
+    });
+    const pageErrors: string[] = [];
+    try {
+      // Only the two parity loopbacks may be reached; anything else fails
+      // the journey instead of leaking a packet.
+      await context.route("**/*", (route) => {
+        const url = new URL(route.request().url());
+        const allowed = url.origin === "https://localhost:8787" || url.origin === KIT_ORIGIN;
+        return allowed ? route.continue() : route.abort("blockedbyclient");
+      });
+      const page = await context.newPage();
+      page.on("pageerror", (error) => pageErrors.push(error.message));
+      for (const viewport of PARITY_VIEWPORTS) {
+        await page.setViewportSize(viewport.size);
+        const response = await page.goto("/events");
+        expect(response?.status(), `kit /events @ ${viewport.name}`).toBe(200);
+        await expect(page.getByTestId("events-calendar")).toBeVisible();
+        await page.waitForLoadState("networkidle");
+        await expect.soft(page).toHaveScreenshot(`kit-events-index-${viewport.name}.png`, {
+          fullPage: true,
+          mask: [page.locator("time")],
+        });
+      }
+      expect(pageErrors, "no uncaught page errors").toEqual([]);
+    } finally {
+      await context.close();
+    }
+  });
+});

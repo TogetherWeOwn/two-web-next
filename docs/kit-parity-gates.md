@@ -165,9 +165,11 @@ too: `KIT_WORKER_ORIGIN`, else derived from `KIT_WORKER_PORT` (the port
   actuals in the shared failure artifact. `ci/visual-accept.mjs` likewise
   ignores Kit suite outputs. An intentional redesign is a reviewed artifact
   committed in the same PR — reviewers treat a baseline change like code —
-  never a silent regeneration. (No Kit screenshots are captured yet: the
-  accept flow is ready for the first enabled route; the DOM/state parity for
-  it runs in the parity spec today.)
+  never a silent regeneration. (Kit baselines pin the events index:
+  `e2e/kit-parity/parity.spec.ts` captures the populated `/events` state at
+  desktop and mobile widths against the built Kit Worker as a guest on the
+  deterministic seeded upcoming row; the DOM/state parity for it runs in the
+  same spec.)
 - `maxDiffPixels: 300` per screenshot (absolute, not a ratio), `<time>`
   masked, animations disabled, caret hidden. Raising the threshold or masking
   more needs its own PR with justification.
