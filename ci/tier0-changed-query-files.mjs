@@ -1,7 +1,8 @@
 import { appendFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 
-appendFileSync(process.env.GITHUB_STEP_SUMMARY, "### Tier-0 changed query files\n");
+const summaryPath = process.env.GITHUB_STEP_SUMMARY;
+if (summaryPath) appendFileSync(summaryPath, "### Tier-0 changed query files\n");
 
 const result = spawnSync(
   "git",
@@ -21,7 +22,10 @@ const result = spawnSync(
 );
 
 if (result.status === 0) {
-  appendFileSync(process.env.GITHUB_STEP_SUMMARY, result.stdout);
+  if (summaryPath) appendFileSync(summaryPath, result.stdout);
+  else process.stdout.write(result.stdout);
 } else {
-  console.log("::warning::changed query files unavailable");
+  const cause =
+    result.error?.code ?? (result.signal ? `signal ${result.signal}` : `exit ${result.status}`);
+  console.log(`::warning::changed query files unavailable (${cause})`);
 }
