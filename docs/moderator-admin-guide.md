@@ -156,6 +156,9 @@ Five additional GET routes retain legacy bookmarks as 301 redirects:
 All 24 routes (15 GET, 9 POST) use the moderator guard. Legacy redirects drop
 query strings; an invalid or unmapped legacy featured ID returns 404, and an
 unavailable lookup returns 503. Use the canonical links for new instructions.
+Mutating buttons submit immediately: there is no action-confirmation dialog.
+Double-check the event/slot and intended action before pressing one. The event
+editor's separate browser warning for unsaved changes is not action approval.
 
 ### Kit admin shells (shipped, Hono serves traffic)
 
@@ -165,9 +168,11 @@ traffic; the migration is GET-only; all 9 POST form actions stay Hono with
 no manifest entries of their own. Every shell entry in
 `src/route-ownership.ts` (`ROUTE_MANIFEST`) reads `enabled: false`, so what
 you see in the panel today is the Hono page. Kit shells reuse the same guard,
-reads, filters, sort, pagination and copy, which is why the event/featured
-CRUD, RSVP roster, and join-attempts audit workflows below stay accurate
-whichever renderer serves the page.
+reads, filters, sort, pagination and copy, mirroring the event/featured
+CRUD, RSVP roster, and join-attempts audit workflows below; enablement stays
+blocked until the slices named in [Kit parity gates](kit-parity-gates.md)
+land (for example the moderator tab-sync probe on `GET /admin` and
+`GET /admin/activity-log`).
 
 | Admin path | Kit shell |
 |---|---|
@@ -183,16 +188,17 @@ whichever renderer serves the page.
 | `/admin/join-attempts/:id` | `web/src/routes/admin/join-attempts/[id]/+page.svelte` |
 
 All shells render inside the shared `web/src/lib/AdminShell.svelte` chrome
-with server-side rendering only (no client takeover). If a shell ever misbehaves
-after enablement, the rollback is a manifest disable: returning its entry to
-`enabled: false` hands the route back to the unchanged Hono handler. The gates
-that prove each shell — renderer marker from the shipped manifest, single
-`<main>`, skip link, canonical link, guest-only chrome, no secret-shaped
-content, and the per-route section contracts — live in the
-[Kit parity gates](kit-parity-gates.md).
-Mutating buttons submit immediately: there is no action-confirmation dialog.
-Double-check the event/slot and intended action before pressing one. The event
-editor's separate browser warning for unsaved changes is not action approval.
+with server-side rendering only (no client takeover): moderator-only pages
+with a skip link, `noindex, nofollow`, no canonical link, and no guest
+chrome. If a shell ever misbehaves after enablement, the rollback is a
+manifest disable: returning its entry to `enabled: false` hands the route
+back to the unchanged Hono handler. Each shell is pinned by its Kit suite —
+`test/kit-admin-*` for dashboard, events and featured,
+`test/kit-join-attempts*` and `test/kit-activity-log*` for those shells — not
+by the Kit parity gates: `PARITY_ROUTES` in `ci/kit-parity-gates.mjs` covers
+only public routes (`/events/past`, `/join`, `/auth/recover`, the hot-zone
+paths and the member leaderboard), and moderator-admin journeys stay
+Hono-only, ledgered as skipped.
 
 ## Create, edit and publish an event
 
