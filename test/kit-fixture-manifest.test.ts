@@ -9,10 +9,11 @@ import {
 } from "../src/route-ownership";
 
 // Fixture-only ownership for the executed member-board parity journey: the
-// shipped manifest holds /leaderboards/members on Hono until the privacy
-// verdict, so the Playwright Kit fixture (ci/kit-worker-dev.mjs, loopback
-// only, never deployed) enables just that entry for its own worker. Any
-// non-loopback APP_URL or a missing flag keeps the shipped manifest.
+// Playwright Kit fixture (ci/kit-worker-dev.mjs, loopback only, never
+// deployed) enables just that entry for its own worker, so the journey
+// executed the Kit load before the shipped manifest enabled the board. Any
+// non-loopback APP_URL or a missing flag keeps the shipped manifest, and
+// the fixture seam still supplies no override on a deployed APP_URL.
 describe("fixtureManifestFor (Kit parity fixture only)", () => {
   it("returns no override without the fixture flag", () => {
     expect(fixtureManifestFor({ APP_URL: "http://127.0.0.1:8788" })).toBeUndefined();
@@ -67,7 +68,7 @@ describe("fixtureManifestFor (Kit parity fixture only)", () => {
     ).toBeDefined();
   });
 
-  it("enables only the member board on loopback and never mutates the shipped manifest", () => {
+  it("clones only the member board on loopback and never mutates the shipped manifest", () => {
     const manifest = fixtureManifestFor({
       APP_URL: "http://127.0.0.1:8788",
       KIT_PARITY_FIXTURE_MEMBER_BOARD: "true",
@@ -80,12 +81,19 @@ describe("fixtureManifestFor (Kit parity fixture only)", () => {
       enabled: true,
       reads: { resource: "leaderboard", action: "list", route: "leaderboards.members" },
     });
-    expect(manifest!.filter((e) => e.enabled)).toEqual(
-      ROUTE_MANIFEST.filter((e) => e.enabled).concat(board!),
+    // The shipped manifest now enables the board itself, so the fixture
+    // manifest's enabled set is identical — no extra entry appears.
+    expect(manifest!.filter((e) => e.enabled)).toEqual(ROUTE_MANIFEST.filter((e) => e.enabled));
+    const shipped = ROUTE_MANIFEST.find(
+      (e) => e.method === "GET" && e.path === "/leaderboards/members",
     );
-    expect(
-      ROUTE_MANIFEST.find((e) => e.method === "GET" && e.path === "/leaderboards/members")?.enabled,
-    ).toBe(false);
+    expect(shipped?.enabled).toBe(true);
+    // No mutation: the fixture board is a clone, and every other entry is
+    // the shipped object untouched.
+    expect(board).not.toBe(shipped);
+    expect(manifest!.filter((e) => e.path !== "/leaderboards/members")).toEqual(
+      ROUTE_MANIFEST.filter((e) => e.path !== "/leaderboards/members"),
+    );
   });
 
   it("dispatches the member board to Kit resolve under the fixture manifest", async () => {
@@ -165,7 +173,15 @@ describe("fixtureManifestFor (Kit parity fixture only)", () => {
     expect(res.headers.get(KIT_RENDERER_HEADER)).toBe(KIT_RENDERER_VALUE);
   });
 
-  it("keeps the member board on Hono when the fixture flag meets a deployed appUrl", async () => {
+  it("supplies no fixture override on a deployed appUrl; shipped ownership serves the board", async () => {
+    // The guard half: the flag still earns no override off loopback, even
+    // though the shipped manifest now owns the board.
+    expect(
+      fixtureManifestFor({
+        APP_URL: "https://next.example.test",
+        KIT_PARITY_FIXTURE_MEMBER_BOARD: "true",
+      }),
+    ).toBeUndefined();
     const request = new Request("https://next.example.test/leaderboards/members", {
       headers: { host: "next.example.test" },
     });
@@ -178,11 +194,28 @@ describe("fixtureManifestFor (Kit parity fixture only)", () => {
         honoFetch,
         resolve,
         fixtureMemberBoard: true,
+        sessionFor: async () => ({
+          status: "authenticated",
+          session: {
+            userId: "100000000000000101",
+            username: "zxq-fixture-member",
+            avatar: null,
+            member: true,
+            moderator: false,
+          },
+          returnTo: null,
+          joinResult: null,
+          expiredWrite: null,
+        }),
+        accessSink: async () => async () => true,
       },
     );
-    expect(resolve).not.toHaveBeenCalled();
-    expect(honoFetch).toHaveBeenCalledTimes(1);
-    expect(await res.text()).toBe("hono");
+    // Served by the shipped manifest (fixtureManifestFor returned no
+    // override above), inside the member-read boundary.
+    expect(resolve).toHaveBeenCalledTimes(1);
+    expect(honoFetch).not.toHaveBeenCalled();
+    expect(res.headers.get(KIT_RENDERER_HEADER)).toBe(KIT_RENDERER_VALUE);
+    expect(await res.text()).toBe("kit board");
   });
 
   it("records the board view queued by the load only after the boundary releases the 200", async () => {

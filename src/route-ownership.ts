@@ -218,15 +218,14 @@ export const ROUTE_MANIFEST: OwnedRoute[] = [
   { method: "GET", path: "/hotzones/games", enabled: true, reads: "public" },
   // Member leaderboard: member data, so the Kit branch renders inside the
   // member-read boundary with this declaration and the bridged viewer. Same
-  // gate order, grammar and reads as src/leaderboards/routes.tsx. Held on
-  // Hono until a fresh privacy verdict follows the executed member-board
-  // parity journey (the loopback Kit fixture owns this entry via
-  // fixtureManifestFor, so the journey executes the Kit load pre-enablement
-  // without shipping it).
+  // gate order, grammar and reads as src/leaderboards/routes.tsx. Enabled
+  // after the executed member-board parity journey earned the fresh
+  // privacy verdict; returning this entry to enabled: false restores Hono
+  // ownership as the rollback.
   {
     method: "GET",
     path: "/leaderboards/members",
-    enabled: false,
+    enabled: true,
     reads: { resource: "leaderboard", action: "list", route: "leaderboards.members" },
   },
   // Live event detail: the Kit read model (src/events/kit-detail.ts) mirrors
@@ -244,7 +243,7 @@ export const ROUTE_MANIFEST: OwnedRoute[] = [
 ];
 
 // Fixture-only manifest for the executed member-board parity journey. The
-// shipped manifest holds /leaderboards/members on Hono until the fresh
+// shipped manifest held /leaderboards/members on Hono until the fresh
 // privacy verdict, so the Playwright Kit fixture (ci/kit-worker-dev.mjs)
 // could otherwise only ever compare Hono against Hono. The fixture sets
 // KIT_PARITY_FIXTURE_MEMBER_BOARD=true on its own generated loopback

@@ -366,7 +366,7 @@ describe("decideRoute", () => {
     expect(decideRoute(post, MEMBER_MANIFEST)).toBeUndefined();
   });
 
-  it("the shipped manifest keeps the homepage, events list, about, privacy, rules, faq, join and recover on Hono, assigns the public archive and hot-zones to Kit, and holds the admin dashboard, featured list, create and edit forms, activity log, events list, event-create and event-edit forms, join-attempts list and detail, profile reads and member board on Hono", () => {
+  it("the shipped manifest keeps the homepage, events list, about, privacy, rules, faq, join and recover on Hono, assigns the public archive, hot-zones and member board to Kit, and holds the admin dashboard, featured list, create and edit forms, activity log, events list, event-create and event-edit forms, join-attempts list and detail and profile reads on Hono", () => {
     const get = new Request(new URL("/events/past", APP_URL));
     expect(ROUTE_MANIFEST).toEqual([
       { method: "GET", path: "/", enabled: false, reads: "public" },
@@ -458,7 +458,7 @@ describe("decideRoute", () => {
       {
         method: "GET",
         path: "/leaderboards/members",
-        enabled: false,
+        enabled: true,
         reads: { resource: "leaderboard", action: "list", route: "leaderboards.members" },
       },
       {
