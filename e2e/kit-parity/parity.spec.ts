@@ -1,6 +1,8 @@
 import { createHmac } from "node:crypto";
 import { expect, test, type APIRequestContext } from "@playwright/test";
+import postgres from "postgres";
 import { sectionOf } from "../../ci/kit-section-contract.mjs";
+import { requireGithubRunner, requireTestDatabase } from "../ci-only.mjs";
 import {
   expectedKitMarker,
   kitFixtureOwnsMemberBoard,
@@ -476,6 +478,235 @@ test("cross-target: join one-click hrefs agree on the safe next", async () => {
   expect(hrefs.get("kit"), "Kit one-click agrees with Hono on the safe next").toBe(
     hrefs.get("hono"),
   );
+});
+
+// Successful archive page turns with browser history restoration.
+//
+// Isolated deterministic fixture: 24 dated rows plus the seeded past night
+// make 25 archived rows at page size 20, so totalPages is 2. Page one holds
+// the 20 newest turns (24 down to 05); page two holds turns 04 down to 01
+// plus the seeded past night as the oldest row. The shared one-row seed is
+// untouched and the existing refusal assertions keep running; this journey
+// only adds rows while it runs and deletes them afterwards.
+//
+// Every read carries a bypass cookie so the shared one-row anonymous entry
+// stays untouched and this journey never settles fixture HTML into it. The
+// cookie is not a session: the journey asserts guest chrome throughout and
+// performs no logins and no RSVP writes. External traffic is aborted like
+// the overflow journeys. Only shipped attributes are used (no new testids).
+//
+// A broken Older/Newer href lands on the wrong URL or the out-of-range
+// refusal, so row identities and the page URL fail. A stale fragment swap
+// keeps the old rows, so identities and the canonical fail.
+const ARCHIVE_TURN_COUNT = 24;
+const ARCHIVE_TURN_KEY_PREFIX = "01K000000000000000000000";
+const ARCHIVE_PAST_NIGHT_KEY = "01J00000000000000000000002";
+const ARCHIVE_BYPASS_COOKIE = "e2e-archive-bypass=1";
+
+function archiveTurnKey(i: number): string {
+  return `${ARCHIVE_TURN_KEY_PREFIX}${String(i).padStart(2, "0")}`;
+}
+
+function archiveTurnTitle(i: number): string {
+  return `E2E Archive Turn ${String(i).padStart(2, "0")}`;
+}
+
+function archiveTurnStartsAt(i: number): string {
+  return `2024-06-${String(i).padStart(2, "0")}T18:00:00Z`;
+}
+
+function archiveTurnEndsAt(i: number): string {
+  return `2024-06-${String(i).padStart(2, "0")}T20:00:00Z`;
+}
+
+async function seedArchiveTurns(): Promise<void> {
+  requireGithubRunner();
+  const url = requireTestDatabase(process.env.DATABASE_URL) as string;
+  const sql = postgres(url, { max: 1 });
+  try {
+    await sql`delete from events where event_key like '01K000000000000000000000%'`;
+    for (let i = 1; i <= ARCHIVE_TURN_COUNT; i++) {
+      await sql`insert into events (event_key, title, description, starts_at, ends_at, timezone, status, capacity, rsvp_open)
+        values (${archiveTurnKey(i)}, ${archiveTurnTitle(i)}, 'Disposable archive page-turn fixture',
+          ${archiveTurnStartsAt(i)}, ${archiveTurnEndsAt(i)}, 'UTC', 'published', 10, true)`;
+    }
+  } finally {
+    await sql.end();
+  }
+}
+
+async function sweepArchiveTurns(): Promise<void> {
+  requireGithubRunner();
+  const url = requireTestDatabase(process.env.DATABASE_URL) as string;
+  const sql = postgres(url, { max: 1 });
+  try {
+    await sql`delete from events where event_key like '01K000000000000000000000%'`;
+  } finally {
+    await sql.end();
+  }
+}
+
+test.describe("archive page turns prove successful paging and history", () => {
+  test.beforeAll(async () => {
+    await seedArchiveTurns();
+  });
+
+  test.afterAll(async () => {
+    await sweepArchiveTurns();
+  });
+
+  for (const target of targets) {
+    test(`${target.name}: Older, Newer and Back restore the archive pages`, async ({ browser }) => {
+      const expectedMarker = target.name === "kit" ? expectedKitMarker("/events/past") : null;
+
+      // Renderer proof on both pages through the enabled entry, bypassing
+      // the shared one-row anonymous entry so the fixture rows are read.
+      const pageOneApi = await api(target).get("/events/past", {
+        headers: { cookie: ARCHIVE_BYPASS_COOKIE },
+      });
+      expect(pageOneApi.status()).toBe(200);
+      expect(pageOneApi.headers()["x-two-renderer"] ?? null).toBe(expectedMarker);
+      const pageOneBody = await pageOneApi.text();
+      expect(scrubSecrets(pageOneBody)).toEqual([]);
+      expect(pageOneBody).toContain("E2E Archive Turn 24");
+      expect(pageOneBody).toContain("E2E Archive Turn 05");
+      expect(pageOneBody).not.toContain("E2E Archive Turn 04");
+      expect(pageOneBody).not.toContain("E2E Past Night");
+
+      const pageTwoApi = await api(target).get("/events/past?page=2", {
+        headers: { cookie: ARCHIVE_BYPASS_COOKIE },
+      });
+      expect(pageTwoApi.status()).toBe(200);
+      expect(pageTwoApi.headers()["x-two-renderer"] ?? null).toBe(expectedMarker);
+      const pageTwoBody = await pageTwoApi.text();
+      expect(scrubSecrets(pageTwoBody)).toEqual([]);
+      expect(pageTwoBody).toContain("E2E Archive Turn 04");
+      expect(pageTwoBody).toContain("E2E Archive Turn 01");
+      expect(pageTwoBody).toContain("E2E Past Night");
+      expect(pageTwoBody).not.toContain("E2E Archive Turn 24");
+      expect(pageTwoBody).not.toContain("E2E Archive Turn 05");
+
+      const context = await browser.newContext({
+        baseURL: target.origin,
+        ignoreHTTPSErrors: target.ignoreHTTPSErrors,
+        viewport: { width: 1280, height: 800 },
+        extraHTTPHeaders: { cookie: ARCHIVE_BYPASS_COOKIE },
+      });
+      const pageErrors: string[] = [];
+      try {
+        // Only the two parity loopbacks may be reached; anything else fails
+        // the journey instead of leaking a packet.
+        await context.route("**/*", (route) => {
+          const url = new URL(route.request().url());
+          const allowed = url.origin === "https://localhost:8787" || url.origin === KIT_ORIGIN;
+          return allowed ? route.continue() : route.abort("blockedbyclient");
+        });
+        const page = await context.newPage();
+        page.on("pageerror", (error) => pageErrors.push(error.message));
+
+        async function archiveKeys(): Promise<string[]> {
+          const items = page.locator('[data-testid="past-events-list"] [data-event-key]');
+          const handles = await items.all();
+          const keys: string[] = [];
+          for (const handle of handles) {
+            const key = await handle.getAttribute("data-event-key");
+            if (key) keys.push(key);
+          }
+          return keys;
+        }
+
+        const response = await page.goto("/events/past");
+        expect(response?.status()).toBe(200);
+        expect(response?.headers()["x-two-renderer"] ?? null).toBe(expectedMarker);
+        await expect(page).toHaveURL(/\/events\/past$/);
+        await expect(page.getByTestId("past-events")).toBeVisible();
+        await expect(page.getByTestId("past-events")).toHaveAttribute("data-page", "1");
+        await expect(page.getByTestId("past-events")).toHaveAttribute("data-total-pages", "2");
+        await expect(page.getByTestId("past-events-list")).toBeVisible();
+        await expect(page.getByTestId("past-events-list")).toContainText("E2E Archive Turn 24");
+        await expect(page.locator('link[rel="canonical"]')).toHaveAttribute(
+          "href",
+          /\/events\/past$/,
+        );
+        await expect(page.locator('meta[name="robots"]')).toHaveAttribute(
+          "content",
+          "noindex, follow",
+        );
+        await expect(page.getByText("Welcome, guest")).toBeVisible();
+        await expect(page.getByText("Sign out")).toHaveCount(0);
+        await expect(page.locator('a[data-archive-page]:has-text("Older")')).toBeVisible();
+        await expect(page.locator('a[data-archive-page]:has-text("Newer")')).toHaveCount(0);
+        let keys = await archiveKeys();
+        expect(keys).toHaveLength(20);
+        expect(keys).toContain(archiveTurnKey(24));
+        expect(keys).toContain(archiveTurnKey(5));
+        expect(keys).not.toContain(archiveTurnKey(4));
+        expect(keys).not.toContain(ARCHIVE_PAST_NIGHT_KEY);
+
+        await page.locator('a[data-archive-page]:has-text("Older")').click();
+        await expect(page).toHaveURL(/\/events\/past\?page=2/);
+        await expect(page.getByTestId("past-events")).toHaveAttribute("data-page", "2");
+        await expect(page.getByTestId("past-events-list")).toContainText("E2E Past Night");
+        await expect(page.locator('link[rel="canonical"]')).toHaveAttribute(
+          "href",
+          /\/events\/past\?page=2/,
+        );
+        await expect(page.locator('meta[name="robots"]')).toHaveAttribute(
+          "content",
+          "noindex, follow",
+        );
+        await expect(page.locator('a[data-archive-page]:has-text("Newer")')).toBeVisible();
+        await expect(page.locator('a[data-archive-page]:has-text("Older")')).toHaveCount(0);
+        keys = await archiveKeys();
+        expect(keys).toHaveLength(5);
+        expect(keys).toContain(archiveTurnKey(4));
+        expect(keys).toContain(archiveTurnKey(1));
+        expect(keys).toContain(ARCHIVE_PAST_NIGHT_KEY);
+        expect(keys).not.toContain(archiveTurnKey(24));
+        expect(keys).not.toContain(archiveTurnKey(5));
+
+        await page.locator('a[data-archive-page]:has-text("Newer")').click();
+        await expect(page).toHaveURL(/\/events\/past$/);
+        await expect(page.getByTestId("past-events")).toHaveAttribute("data-page", "1");
+        await expect(page.getByTestId("past-events-list")).toContainText("E2E Archive Turn 24");
+        await expect(page.locator('link[rel="canonical"]')).toHaveAttribute(
+          "href",
+          /\/events\/past$/,
+        );
+        keys = await archiveKeys();
+        expect(keys).toHaveLength(20);
+        expect(keys).toContain(archiveTurnKey(24));
+        expect(keys).not.toContain(ARCHIVE_PAST_NIGHT_KEY);
+
+        await page.locator('a[data-archive-page]:has-text("Older")').click();
+        await expect(page).toHaveURL(/\/events\/past\?page=2/);
+        await expect(page.getByTestId("past-events-list")).toContainText("E2E Past Night");
+        await page.goBack();
+        await expect(page).toHaveURL(/\/events\/past$/);
+        await expect(page.getByTestId("past-events")).toHaveAttribute("data-page", "1");
+        await expect(page.getByTestId("past-events-list")).toContainText("E2E Archive Turn 24");
+        await expect(page.locator('link[rel="canonical"]')).toHaveAttribute(
+          "href",
+          /\/events\/past$/,
+        );
+        await expect(page.locator('meta[name="robots"]')).toHaveAttribute(
+          "content",
+          "noindex, follow",
+        );
+        keys = await archiveKeys();
+        expect(keys).toHaveLength(20);
+        expect(keys).toContain(archiveTurnKey(24));
+        expect(keys).toContain(archiveTurnKey(5));
+        expect(keys).not.toContain(ARCHIVE_PAST_NIGHT_KEY);
+        await expect(page.getByText("Welcome, guest")).toBeVisible();
+        await expect(page.getByText("Sign out")).toHaveCount(0);
+
+        expect(pageErrors, "no uncaught page errors").toEqual([]);
+      } finally {
+        await context.close();
+      }
+    });
+  }
 });
 
 test("Kit worker answers traffic within the liveness bound", async ({ playwright }) => {
