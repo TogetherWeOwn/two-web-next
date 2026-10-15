@@ -498,3 +498,58 @@ test("Kit worker answers traffic within the liveness bound", async ({ playwright
     10_000,
   );
 });
+
+// Kit member-board visuals: 4 views x 2 widths into
+// e2e/visual/__screenshots-kit__/ (snapshotPathTemplate in
+// playwright.kit-parity.config.ts). Reuses the single shared QA login above
+// (memberCookie, re-signed for Kit): no extra qa-login throttle cost, and the
+// board-view log rows are the journey's own writes like the API views.
+// Mask <time> defensively (the board carries none today), fullPage, soft per
+// width so one diff never hides the other image for ci/kit-visual-accept.mjs.
+const MEMBER_BOARD_VIEWS: Array<[name: string, path: string]> = [
+  ["default", "/leaderboards/members"],
+  ["relative", "/leaderboards/members?scope=relative"],
+  ["season", "/leaderboards/members?season=2026"],
+  ["activity", "/leaderboards/members?activity=valheim"],
+];
+
+test.describe("kit: member-board visuals", () => {
+  for (const [view, path] of MEMBER_BOARD_VIEWS) {
+    test(`${view} @ desktop and mobile`, async ({ browser }) => {
+      const kit = targets.find((target) => target.name === "kit")!;
+      const cookie = await memberCookie(kit);
+      const context = await browser.newContext({
+        baseURL: kit.origin,
+        ignoreHTTPSErrors: kit.ignoreHTTPSErrors,
+        extraHTTPHeaders: { cookie },
+      });
+      const pageErrors: string[] = [];
+      try {
+        // Only the two parity loopbacks may be reached; anything else fails
+        // the journey instead of leaking a packet.
+        await context.route("**/*", (route) => {
+          const url = new URL(route.request().url());
+          const allowed = url.origin === "https://localhost:8787" || url.origin === KIT_ORIGIN;
+          return allowed ? route.continue() : route.abort("blockedbyclient");
+        });
+        const page = await context.newPage();
+        page.on("pageerror", (error) => pageErrors.push(error.message));
+        for (const viewport of PARITY_VIEWPORTS) {
+          await page.setViewportSize(viewport.size);
+          const response = await page.goto(path);
+          expect(response?.status(), `kit ${path} @ ${viewport.name}`).toBe(200);
+          await expect(page.getByRole("heading", { name: "Member leaderboard" })).toBeVisible();
+          await expect(page.getByRole("navigation", { name: "Board scope" })).toBeVisible();
+          await page.waitForLoadState("networkidle");
+          await expect.soft(page).toHaveScreenshot(`member-board-${view}-${viewport.name}.png`, {
+            fullPage: true,
+            mask: [page.locator("time")],
+          });
+        }
+        expect(pageErrors, "no uncaught page errors").toEqual([]);
+      } finally {
+        await context.close();
+      }
+    });
+  }
+});

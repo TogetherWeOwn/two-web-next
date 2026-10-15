@@ -152,10 +152,13 @@ jobs:
         run: node ci/check-kit-parity.mjs
       # A missing visual baseline is written by the visual step (never an
       # existing one); it must be reviewed and committed, so fail here.
+      # Kit member-board baselines come from the kit-parity run into
+      # e2e/visual/__screenshots-kit__/ (docs/kit-parity-gates.md); accept
+      # them with node ci/kit-visual-accept.mjs, never by hand.
       - name: Uncommitted visual baselines
         if: ${{ !cancelled() }}
         run: |
-          new="$(git status --porcelain -- e2e/visual/__screenshots__)"
+          new="$(git status --porcelain -- e2e/visual/__screenshots__ e2e/visual/__screenshots-kit__)"
           if [ -n "$new" ]; then
             echo "New visual baselines were generated; review and commit them (docs/visual-regression.md):"
             echo "$new"
