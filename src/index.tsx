@@ -368,9 +368,9 @@ const NOTICES = new Set([
 app.get("/", async (c) => {
   const n = c.req.query("n");
   const notice = (n && NOTICES.has(n) ? n : null) as Notice;
-  // One shared web-DB client promise: the upcoming and featured reads reuse it
-  // instead of opening a client each.
-  const dbPromise = dbFor(c);
+  // Each homepage read opens its own web-DB client: the two transactions run
+  // on parallel max:1 connections like pre-#856, never serialized behind one
+  // shared client.
   // Independent reads start together: the session (web DB), the counts (bot
   // DB), the one-shot flash (signed cookie only) and the guest-invariant
   // homepage data (shared short-TTL cache, never per-session). Sequential
@@ -408,12 +408,12 @@ app.get("/", async (c) => {
   }
   const homeUpcomingPromise = cachedHomeUpcoming(
     c.env,
-    () => dbPromise,
+    () => dbFor(c),
     () => discordEventsSource(c.env),
     new Date(),
     executionCtx,
   );
-  const featuredPromise = cachedFeatured(c.env, () => dbPromise, new Date(), executionCtx);
+  const featuredPromise = cachedFeatured(c.env, () => dbFor(c), new Date(), executionCtx);
   const [{ session, unavailable: sessionUnavailable }, counts, flashed, homeUpcoming, featured] =
     await Promise.all([
       sessionPromise,
