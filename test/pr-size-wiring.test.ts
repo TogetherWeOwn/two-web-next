@@ -13,6 +13,7 @@ const contributing = readFileSync("CONTRIBUTING.md", "utf8");
 const job = (id: string) =>
   workflow.split(new RegExp(`\\n  ${id}:\\n`))[1]?.split(/\n  [A-Za-z0-9_-]+:\n/)[0] ?? "";
 const CENTRAL = "TogetherWeOwn/.github/.github/workflows";
+const REVIEWED_CENTRAL_SHA = "82c5b367c6e3e8032666029dc22d206fff39c3f2";
 
 describe("pr-size advisory wiring", () => {
   it("is not a required check", () => {
@@ -25,6 +26,9 @@ describe("pr-size advisory wiring", () => {
   it("grants write scopes only to the labelling job", () => {
     const topLevel = workflow.split(/\npermissions:\n/)[1]?.split(/\n\S/)[0] ?? "";
     expect(topLevel).not.toMatch(/\bwrite\b/);
+    expect(job("pr-size").match(/    permissions:\n((?:      [^\n]+\n)+)/)?.[1]).toBe(
+      "      contents: read\n      issues: write\n      pull-requests: write\n",
+    );
     expect(job("pr-size")).toContain("      issues: write\n");
     expect(job("pr-size")).toContain("      pull-requests: write\n");
     expect(job("pr-size-weekly")).not.toMatch(/\bwrite\b/);
@@ -38,6 +42,8 @@ describe("pr-size advisory wiring", () => {
       new RegExp(`uses: ${CENTRAL.replaceAll(".", "\\.")}/pr-size-weekly\\.yml@([0-9a-f]{40})`),
     )?.[1];
     expect(labelPin).toBeTruthy();
+    expect(labelPin).toBe(REVIEWED_CENTRAL_SHA);
+    expect(weeklyPin).toBe(REVIEWED_CENTRAL_SHA);
     expect(weeklyPin).toBe(labelPin);
     // No floating refs, no other reusable calls, no secrets passthrough:
     // the caller token stays capped by the job grants above.
@@ -54,9 +60,7 @@ describe("pr-size advisory wiring", () => {
 
   it("excludes this repo's generated paths but keeps hand-written SQL counted", () => {
     const extra = job("pr-size").match(/exclude-extra: "([^"]*)"/)?.[1] ?? "";
-    expect(extra.split(",")).toContain("public/islands/**");
-    expect(extra.split(",")).toContain("public/styles.css");
-    expect(extra.split(",")).toContain("drizzle/meta/**");
+    expect(extra).toBe("public/islands/**,public/styles.css,drizzle/meta/**");
     expect(extra).not.toContain("drizzle/*.sql");
     expect(extra.split(",")).not.toContain("drizzle/**");
   });
