@@ -72,6 +72,12 @@ export type Env = AgentEventsEnv & {
   // the banner needs real dates, so the flag alone never renders.
   FREEZE_BANNER_ENABLED?: string;
   FREEZE_BANNER_DATES?: string;
+  // Kit parity fixture only (ci/kit-worker-dev.mjs sets it on its generated
+  // loopback worker, never a deployed config): enables the member board in
+  // the fixture manifest so the executed parity journey runs the Kit load
+  // while the shipped manifest holds the route on Hono. Honoured only for
+  // an http loopback APP_URL (src/route-ownership.ts fixtureManifestFor).
+  KIT_PARITY_FIXTURE_MEMBER_BOARD?: string;
   // B1 read-only WebMCP pilot: only the exact strings "true"/"1" inject the
   // model-context island on the four pilot pages; unset or anything else
   // leaves pages byte-identical. No session, cookie or database read.

@@ -68,6 +68,22 @@ export function kitFixtureSessionSecret(): string {
   return secret;
 }
 
+// Whether the Kit parity fixture owns the member board for this journey.
+// The shipped manifest holds the route on Hono until the privacy verdict,
+// so without the fixture flag (ci/kit-worker-dev.mjs, honoured only on
+// loopback by fixtureManifestFor in src/route-ownership.ts) the Kit target
+// would answer through Hono and the "parity" run would compare Hono with
+// Hono. Read from the fixture config's single source, like the session
+// secret above: a fixture that stops owning the board fails loud here
+// instead of silently returning to a Hono-vs-Hono proof.
+export function kitFixtureOwnsMemberBoard(): boolean {
+  const source = readFileSync(
+    fileURLToPath(new URL("../ci/kit-worker-dev.mjs", import.meta.url).href),
+    "utf8",
+  );
+  return /KIT_PARITY_FIXTURE_MEMBER_BOARD: "true"/.test(source);
+}
+
 export function normalizeOrigin(body: string, origin: string): string {
   // Feed links also ship a webcal:// variant (webcalUrl in
   // src/events/feeds.ts rewrites the http(s) scheme to webcal://), so the

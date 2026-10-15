@@ -2,19 +2,22 @@ import { error, redirect } from "@sveltejs/kit";
 import { env } from "cloudflare:workers";
 import type { PageServerLoad } from "./$types";
 import { dbFor } from "../../../../../src/admin/db";
-import { loadMembersBoardData } from "../../../../../src/kit-members";
+import { loadMembersBoardData, queueMembersBoardView } from "../../../../../src/kit-members";
 
 // Server-rendered only: no hydration bundle, so no inline bootstrap script that
 // the CSP (script-src 'self') would block.
 export const csr = false;
 
 // Thin binding over the tested helper (src/kit-members.ts): the helper owns
-// the gate order, grammar, ranking read, board-view log and cache policy;
-// this binding owns the branded status mapping (302 OAuth bounce, 403
-// non-member, 400 grammar, 503 unreadable session), mirroring
-// web/src/routes/hotzones/+page.server.ts. Same behaviour as the Hono handler
-// (src/leaderboards/routes.tsx): scope is overall (default) or relative;
-// season is the shared window grammar; activity is one normalized game.
+// the gate order, grammar and ranking read; this binding owns the branded
+// status mapping (302 OAuth bounce, 403 non-member, 400 grammar, 503
+// unreadable session), mirroring web/src/routes/hotzones/+page.server.ts.
+// Same behaviour as the Hono handler (src/leaderboards/routes.tsx): scope is
+// overall (default) or relative; season is the shared window grammar;
+// activity is one normalized game. The board-view log is only queued here
+// (into locals): this load runs inside the member-read capture, where the
+// INSERT would refuse the board, so the hook records the queued view after
+// the boundary releases a 200 (src/kit-members.ts header).
 export const load: PageServerLoad = async ({ url, locals, setHeaders }) => {
   try {
     return await loadMembersBoardData({
@@ -31,6 +34,7 @@ export const load: PageServerLoad = async ({ url, locals, setHeaders }) => {
       activityParam: url.searchParams.get("activity"),
       setHeaders,
       dbForFn: dbFor,
+      queueBoardViewFn: (db, entry) => queueMembersBoardView(locals, db, entry),
     });
   } catch (err) {
     const status = (err as { status?: number })?.status;

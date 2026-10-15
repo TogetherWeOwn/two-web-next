@@ -3,6 +3,7 @@ import { expect, test, type APIRequestContext } from "@playwright/test";
 import { sectionOf } from "../../ci/kit-section-contract.mjs";
 import {
   expectedKitMarker,
+  kitFixtureOwnsMemberBoard,
   kitFixtureSessionSecret,
   KIT_ORIGIN,
   normalizeOrigin,
@@ -234,8 +235,14 @@ for (const target of targets) {
 
     test("member board serves overall, relative, season and activity views privately", async () => {
       const cookie = await memberCookie(target);
-      const expectedMarker =
-        target.name === "kit" ? expectedKitMarker("/leaderboards/members") : null;
+      // The Kit target must answer from the Kit load, not the Hono fallback:
+      // the parity fixture owns the board (kitFixtureOwnsMemberBoard), so
+      // its marker is "kit" even though the shipped manifest still holds
+      // the route on Hono for deployed workers. If the fixture ever stops
+      // owning it, this expectation fails instead of proving Hono-vs-Hono.
+      if (target.name === "kit")
+        expect(kitFixtureOwnsMemberBoard(), "Kit fixture owns the member board").toBe(true);
+      const expectedMarker = target.name === "kit" ? "kit" : null;
       for (const path of [
         "/leaderboards/members",
         "/leaderboards/members?scope=relative",

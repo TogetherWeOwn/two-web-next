@@ -64,6 +64,12 @@ writeFileSync(
       DISCORD_MODERATOR_ROLE_IDS: "",
       DISCORD_INVITE_URL: "https://example.invalid/invite",
       AGENT_EVENTS_ENABLED: "false",
+      // Fixture-only member-board ownership: this generated config serves
+      // only the loopback parity worker (APP_URL is http://127.0.0.1 above),
+      // and fixtureManifestFor honours the flag only on loopback, so the
+      // executed journey runs the Kit member-board load while the shipped
+      // manifest keeps the route on Hono everywhere deployed.
+      KIT_PARITY_FIXTURE_MEMBER_BOARD: "true",
     },
   }),
 );

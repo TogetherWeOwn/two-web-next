@@ -1,6 +1,13 @@
 import type { Db } from "./db/index";
 import type { Env } from "./env";
-import { recordBoardView } from "./hotzones/board-log";
+import {
+  queueBoardView,
+  recordBoardView,
+  recordQueuedBoardView,
+  type BoardViewEntry,
+  type QueueBoardView,
+  type RecordBoardView,
+} from "./hotzones/board-log";
 import { parseSeasonParam, type SeasonWindow } from "./hotzones/season";
 import {
   boardRows,
@@ -18,10 +25,20 @@ import {
 // Behaviour preserved from the Hono handler (src/leaderboards/routes.tsx):
 // the member gate first (guest 302, non-member 403, unreadable session 503),
 // then the season/scope/activity grammar (400 before any read), then the
-// ranking read, and every served board records its anonymous board view
-// fail-open. Exactly one setHeaders call per served board: SvelteKit throws
+// ranking read. Exactly one setHeaders call per served board: SvelteKit throws
 // `header_already_set` on a double-set, so the binding must not set headers
 // again on a throw.
+//
+// The board-view log is NOT written here. This load runs inside the Kit
+// member-read capture (memberReadResponse via renderMemberRead), and the
+// board_view_logs INSERT has no read permit there — writing it inside the
+// capture refuses every served board (503). Like the Hono handler, which
+// writes the view only after memberReadBoundary releases a 200, this helper
+// only queues the anonymous entry (queueMembersBoardView into the request
+// locals); the dispatch records it after the boundary releases a 200
+// (recordQueuedMembersBoardView, run as memberReadResponse's post-release
+// hook, outside the capture). Fail-open at both stages: a queue or write
+// failure never blocks or breaks the board.
 
 export type MembersBoardSession = {
   status: "authenticated" | "guest" | "unknown";
@@ -34,10 +51,22 @@ export type LoadRanking = (
   window: SeasonWindow,
   game: string | null,
 ) => Promise<RankedMember[]>;
-export type RecordBoardView = (
-  db: Db | null,
-  opts: { boardKey: string; scope: string; season: string; resultCount: number },
-) => Promise<void>;
+
+export type { BoardViewEntry, QueueBoardView, RecordBoardView };
+
+/** Queue the anonymous board view for the post-release record (src/hotzones/board-log.ts). */
+export function queueMembersBoardView(locals: unknown, db: Db | null, entry: BoardViewEntry): void {
+  queueBoardView(locals, db, entry);
+}
+
+/** Record the queued board view after a released 200 (src/hotzones/board-log.ts). */
+export async function recordQueuedMembersBoardView(
+  locals: unknown,
+  status: number,
+  recordFn: RecordBoardView = recordBoardView,
+): Promise<void> {
+  return recordQueuedBoardView(locals, status, recordFn);
+}
 
 export interface MembersBoardArgs {
   env: Env;
@@ -48,7 +77,7 @@ export interface MembersBoardArgs {
   setHeaders: (headers: Record<string, string>) => void;
   dbForFn: (c: { env: Env }) => Promise<Db | null>;
   loadRankingFn?: LoadRanking;
-  recordBoardViewFn?: RecordBoardView;
+  queueBoardViewFn?: QueueBoardView;
 }
 
 function branded(message: string, status: number): Error & { status: number } {
@@ -93,14 +122,19 @@ export async function loadMembersBoardData(args: MembersBoardArgs): Promise<{
   const db = await args.dbForFn({ env: args.env });
   const ranked = await (args.loadRankingFn ?? loadMemberRanking)(db, season, activity.game);
   const rows = boardRows(ranked, scope.scope, args.session.userId);
-  // Fail-open, exactly as on the Hono handler: a logging failure never
-  // blocks or breaks the board. Only a served (200) board records a view.
-  await (args.recordBoardViewFn ?? recordBoardView)(db, {
-    boardKey: "members",
-    scope: scope.scope,
-    season: season.label,
-    resultCount: rows.length,
-  }).catch(() => {});
+  // Queue only (see the header): the write itself runs after the member-read
+  // boundary releases this board, outside its capture. Only a served (200)
+  // board records a view, and queueing is fail-open like the Hono write.
+  try {
+    args.queueBoardViewFn?.(db, {
+      boardKey: "members",
+      scope: scope.scope,
+      season: season.label,
+      resultCount: rows.length,
+    });
+  } catch {
+    // A logging failure never blocks or breaks the board.
+  }
   args.setHeaders({ "cache-control": "private, no-store" });
   return {
     season: season.label,
