@@ -381,7 +381,9 @@ for (const target of targets) {
       }
     });
 
-    test("member renders the no-JS RSVP form posting to the Hono controller", async () => {
+    test("member renders the no-JS RSVP form posting to the Hono controller", async ({
+      playwright,
+    }) => {
       if (target.name === "kit")
         expect(kitFixtureOwnsEventDetail(), "Kit fixture owns the event detail").toBe(true);
       const expectedMarker = target.name === "kit" ? "kit" : null;
@@ -401,6 +403,50 @@ for (const target of targets) {
       expect(body).toContain("/islands/rsvp-button.js");
       expect(body).toContain("Sign out");
       expect(body).not.toContain("Welcome, guest");
+      // Session rotation contract (docs/parity.md section 12, session row):
+      // Hono GET /e/:key reads through the rotating readSession
+      // (src/index.tsx: every authenticated page view mints a fresh token,
+      // deletes the old row and re-stamps the 120-minute sliding expiry), so
+      // a member read sets a __Host-two_session replacement with
+      // Max-Age=7200 and the presented bearer is dead afterwards. The Kit
+      // detail load uses the read-only bridge (src/kit-session.ts: it never
+      // rotates or sets cookies), so it emits no session Set-Cookie and the
+      // presented bearer stays live. That divergence is recorded in
+      // docs/parity.md and docs/kit-parity-gates.md as an explicit blocker
+      // for enabling GET /e/:key: members who only browse Kit event pages
+      // would otherwise lose the sliding renewal.
+      const sessionSets = (await response.headersArray())
+        .filter((header) => header.name.toLowerCase() === "set-cookie")
+        .map((header) => header.value)
+        .filter((value) => value.startsWith("__Host-two_session="));
+      // Cookie-free replay: the shared api() jars accumulate the rotated
+      // replacements above, so replaying the presented bearer runs in a
+      // fresh context with exactly one Cookie header.
+      const replay = await playwright.request.newContext({
+        baseURL: target.origin,
+        ignoreHTTPSErrors: target.ignoreHTTPSErrors,
+      });
+      try {
+        const again = await replay.get(EVENT_PATH, { headers: { cookie } });
+        expect(again.status(), `${target.name} replayed bearer`).toBe(200);
+        const againBody = await again.text();
+        expect(scrubSecrets(againBody)).toEqual([]);
+        if (target.name === "kit") {
+          expect(sessionSets, "kit detail keeps the read-only bridge: no rotation").toEqual([]);
+          // Never retired: the same bearer still renders the member view.
+          expect(againBody).not.toContain('data-testid="event-join-pitch"');
+          expect(againBody).toContain("Sign out");
+        } else {
+          expect(sessionSets.length, "hono detail rotates the session").toBe(1);
+          expect(sessionSets[0]!, "rotation re-stamps 120 minutes").toMatch(/max-age=7200/i);
+          // The retired bearer finds no row: the guest contract renders.
+          expect(againBody).toContain('data-testid="event-join-pitch"');
+          expect(againBody).not.toContain("Sign out");
+          expect(againBody).toContain("Welcome, guest");
+        }
+      } finally {
+        await replay.dispose();
+      }
     });
 
     test("JSON, ICS and RSVP mutations stay Hono-owned without the Kit marker", async () => {
