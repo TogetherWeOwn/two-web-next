@@ -39,6 +39,25 @@ describe("fixtureManifestFor (Kit parity fixture only)", () => {
     ).toBeUndefined();
   });
 
+  it("requires both guards: https loopback and http non-loopback each stay rejected", () => {
+    // Each case satisfies exactly one guard, so deleting either the http-only
+    // protocol check or the loopback hostname allowlist alone turns one of
+    // these into an override and fails this test.
+    for (const APP_URL of [
+      "https://127.0.0.1:8788",
+      "https://localhost:8788",
+      "https://[::1]:8788",
+      "http://two-web-next-kit-preview.5150.workers.dev",
+      "http://next.togetherweown.com",
+      "http://192.168.1.10:8788",
+    ]) {
+      expect(
+        fixtureManifestFor({ APP_URL, KIT_PARITY_FIXTURE_MEMBER_BOARD: "true" }),
+        APP_URL,
+      ).toBeUndefined();
+    }
+  });
+
   it("accepts the bracketed IPv6 loopback hostname URL parsing produces", () => {
     expect(
       fixtureManifestFor({

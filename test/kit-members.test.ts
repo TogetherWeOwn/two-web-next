@@ -256,4 +256,24 @@ describe("Kit member-board load parity", () => {
     expect(refused.status).toBe(503);
     expect(refusedAfter).not.toHaveBeenCalled();
   });
+
+  it("a throwing post-release hook never replaces the released 200", async () => {
+    const sink = vi.fn(async () => true);
+    const released = await memberReadResponse(
+      { method: "GET", route: "/leaderboards/members" },
+      {
+        resource: "leaderboard",
+        action: "list",
+        route: "leaderboards.members",
+        viewer: "100000000000000101",
+      },
+      sink,
+      async () => new Response("<h1>Member leaderboard</h1>", { status: 200 }),
+      async () => {
+        throw new Error("board-view write failed");
+      },
+    );
+    expect(released.status).toBe(200);
+    expect(await released.text()).toBe("<h1>Member leaderboard</h1>");
+  });
 });

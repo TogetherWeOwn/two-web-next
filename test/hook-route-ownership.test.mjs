@@ -501,6 +501,24 @@ describe("hooks.server route ownership wiring", () => {
     expect(source).toContain(
       "eventDetail: (request, render) => dispatchEventDetailRequest(request, env, render)",
     );
+    // Whole binding: the member board's post-release view log lives on this
+    // closure. Making it a no-op or passing a fixed status instead of
+    // response.status silently drops every Kit board view, so the exact call
+    // must fail (mirrors the pastArchive/eventDetail pins above).
+    expect(source).toContain(
+      "recordQueuedBoardView(event.locals, response.status, recordBoardView)",
+    );
+    expect(source).toContain('fixtureMemberBoard: env.KIT_PARITY_FIXTURE_MEMBER_BOARD === "true"');
+    // Same pin on the other half of the wiring: the members load binding
+    // hands the queue to locals. Deleting that line queues nothing, so the
+    // hook above records nothing and every Kit board view is dropped.
+    const membersLoad = readFileSync(
+      new URL("../web/src/routes/leaderboards/members/+page.server.ts", import.meta.url),
+      "utf8",
+    );
+    expect(membersLoad).toContain(
+      "queueBoardViewFn: (db, entry) => queueMembersBoardView(locals, db, entry)",
+    );
     // The list binding carries the same shape plus its read-only session and
     // flash peeks: deleting any of these lines must fail, and the hook still
     // carries no session logic of its own (readers live in kit-session.ts).
