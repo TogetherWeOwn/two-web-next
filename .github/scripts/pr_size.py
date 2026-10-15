@@ -320,8 +320,18 @@ def label_pr(api, number, threshold, extra_globs, log=print):
     return label, counted
 
 
+def weekly_since(now):
+    """Start of the weekly window: a true 7 days before `now` (UTC).
+
+    A date-only value would be searched as `merged:>=YYYY-MM-DD` (midnight),
+    so a Monday 07:17 run would cover 7 days + 7 hours and the next run
+    would recount that morning's merges. Keep the full timestamp.
+    """
+    return (now - timedelta(days=7)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
 def weekly(api, log=print):
-    since = (datetime.now(timezone.utc) - timedelta(days=7)).date().isoformat()
+    since = weekly_since(datetime.now(timezone.utc))
     report = weekly_report(tally(api.merged_since(since)), since)
     log(report)
     summary = os.environ.get("GITHUB_STEP_SUMMARY")

@@ -5,6 +5,7 @@ Also wired into the `Unit-test the lint` step in .github/workflows/pr-gates.yml.
 """
 
 import unittest
+from datetime import datetime, timezone
 
 import pr_size
 
@@ -50,10 +51,19 @@ class Exclusions(unittest.TestCase):
             self.assertFalse(pr_size.is_excluded(path), path)
 
     def test_repo_extra_globs(self):
-        extra = ["public/islands/**", "public/styles.css"]
+        extra = ["public/islands/**", "public/styles.css", "drizzle/meta/**"]
         self.assertTrue(pr_size.is_excluded("public/islands/going.js", extra))
         self.assertTrue(pr_size.is_excluded("public/styles.css", extra))
         self.assertFalse(pr_size.is_excluded("public/theme.css", extra))
+        # Generated drizzle-kit snapshots (~2,000 lines each) must not inflate
+        # a migration PR, but the hand-written SQL beside them still counts.
+        self.assertTrue(
+            pr_size.is_excluded("drizzle/meta/1025_snapshot.json", extra)
+        )
+        self.assertTrue(pr_size.is_excluded("drizzle/meta/_journal.json", extra))
+        self.assertFalse(
+            pr_size.is_excluded("drizzle/1026_add_table.sql", extra)
+        )
 
 
 class Sizing(unittest.TestCase):
@@ -162,6 +172,13 @@ class Weekly(unittest.TestCase):
         self.assertEqual(counts["size/XL"], 1)
         self.assertEqual(counts["size/M"], 0)
         self.assertEqual(counts["unlabelled"], 1)
+
+    def test_weekly_window_is_a_true_seven_days(self):
+        # A date-only `merged:>=YYYY-MM-DD` from a Monday 07:17 run covers
+        # 7 days + 7 hours, double-counting early-Monday merges in the next
+        # tally. The window must carry the full UTC timestamp.
+        now = datetime(2026, 10, 14, 7, 17, 30, tzinfo=timezone.utc)
+        self.assertEqual(pr_size.weekly_since(now), "2026-10-07T07:17:30Z")
 
     def test_report_names_the_total_and_over_threshold(self):
         report = pr_size.weekly_report(

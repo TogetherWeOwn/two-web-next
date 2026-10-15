@@ -34,6 +34,13 @@ describe("pr-size advisory wiring", () => {
     expect(labelJob).not.toContain("python3 .github/scripts/pr_size.py");
   });
 
+  it("excludes generated drizzle snapshots but keeps hand-written SQL counted", () => {
+    const extra = workflow.match(/PR_SIZE_EXCLUDE_EXTRA: "([^"]*)"/)?.[1] ?? "";
+    expect(extra.split(",")).toContain("drizzle/meta/**");
+    expect(extra).not.toContain("drizzle/*.sql");
+    expect(extra.split(",")).not.toContain("drizzle/**");
+  });
+
   it("keeps the 400-line advisory threshold and the weekly tally", () => {
     expect(workflow).toContain('PR_SIZE_THRESHOLD: "400"');
     expect(job("pr-size-weekly")).toContain("python3 .github/scripts/pr_size.py weekly");

@@ -43,8 +43,10 @@ env:
   # M <=400, L <=1000, XL above that).
   PR_SIZE_THRESHOLD: "400"
   # This repo's generated outputs (ci/minify-assets.mjs builds them from
-  # assets/): excluded on top of the script's built-in list.
-  PR_SIZE_EXCLUDE_EXTRA: "public/islands/**,public/styles.css"
+  # assets/; drizzle-kit writes a ~2,000-line full-schema snapshot under
+  # drizzle/meta/ per migration): excluded on top of the script's built-in
+  # list. The hand-written drizzle/*.sql migrations stay counted.
+  PR_SIZE_EXCLUDE_EXTRA: "public/islands/**,public/styles.css,drizzle/meta/**"
 
 jobs:
   pr-size:
