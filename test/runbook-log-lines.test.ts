@@ -183,6 +183,11 @@ describe("missing sync-queue binding warning docs", () => {
     expect(section).toContain("env.production.queues.producers");
     expect(section).toContain("two-web-next-production-sync-event");
     expect(section).toContain("two-sync-event");
+    // Production reconcile runs on the web Worker: a missing binding there is stuck.
+    expect(section).toContain("two-web-next-production");
+    expect(section).toContain("stuck, not late");
+    expect(section).toContain("same `env.SYNC_EVENT_QUEUE`");
+    expect(section).toContain("which has no production env");
   });
 
   it("source still emits the warning with the documented fields", () => {
