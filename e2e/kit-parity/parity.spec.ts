@@ -215,6 +215,95 @@ for (const target of targets) {
     });
   });
 
+  // Hot-zone heatmaps (GET /hotzones + joins|voice|games only; unknown
+  // segments 404, never a grid). Bodies come from raw API fetches with no
+  // browser JS executed, so these assertions ARE the no-JS proof: the
+  // aggregate grids, signal nav and estimate labels are in the first bytes.
+  test.describe(`${target.name}: hot-zone heatmaps keep their aggregate contract`, () => {
+    const hotzonePaths = ["/hotzones", "/hotzones/joins", "/hotzones/voice", "/hotzones/games"];
+
+    test("index and signals serve aggregate grids with the manifest marker", async () => {
+      for (const path of hotzonePaths) {
+        const response = await api(target).get(path);
+        expect(response.status(), `${target.name} ${path}`).toBe(200);
+        expect(response.headers()["content-type"]).toContain("text/html");
+        // Renderer ownership is per target: Kit answers with the
+        // manifest-derived marker once enabled, Hono never carries one.
+        const derived = expectedKitMarker(path);
+        expect(derived, `manifest owns ${path} on Kit`).toBe("kit");
+        const expectedMarker = target.name === "kit" ? derived : null;
+        expect(response.headers()["x-two-renderer"] ?? null, `${target.name} ${path} marker`).toBe(
+          expectedMarker,
+        );
+        // The Kit target must answer from the Kit load, not the Hono
+        // fallback: pin the literal kit marker so Hono-vs-Hono cannot pass.
+        if (target.name === "kit")
+          expect(
+            response.headers()["x-two-renderer"] ?? null,
+            `${path} Kit target answers from Kit`,
+          ).toBe("kit");
+        expect(response.headers()["cache-control"]).toBe("public, max-age=300");
+        const body = await response.text();
+        expect(scrubSecrets(body), `${target.name} ${path} secret scrub`).toEqual([]);
+        expect(body).toContain("<table>");
+        expect(body).toContain('<meta name="robots" content="noindex, follow"');
+        // Account chrome differs by renderer: the Hono pages pass an
+        // Open-Discord child into SiteHeader (src/hotzones/pages.tsx),
+        // which replaces the guest chrome (src/page-shell.tsx), while the
+        // Kit pages render the shell default. Either way nobody is signed in.
+        if (target.name === "kit") expect(body).toContain("Welcome, guest");
+        else expect(body).toContain("Open Discord");
+        expect(body).not.toContain("Sign out");
+        expect(body).not.toMatch(/discord_id|created_at/i);
+        expect(body).toContain('<link rel="canonical"');
+      }
+      // Index links all three signals and ships the voice/games estimate
+      // labels; signal pages carry the cross-signal nav.
+      const indexBody = await (await api(target).get("/hotzones")).text();
+      expect(indexBody).toContain("Hot zones");
+      expect(indexBody).toContain('href="/hotzones/joins"');
+      expect(indexBody).toContain('href="/hotzones/voice"');
+      expect(indexBody).toContain('href="/hotzones/games"');
+      expect(indexBody).toContain("Estimated voice activity (estimates until calibration).");
+      expect(indexBody).toContain("Estimated games activity (estimates until calibration).");
+      const joinsBody = await (await api(target).get("/hotzones/joins")).text();
+      expect(joinsBody).toContain("joins hot zone");
+      expect(joinsBody).toContain("Join activity for season");
+      expect(joinsBody).toContain("Successful joins only");
+      expect(joinsBody).toContain('href="/hotzones"');
+      const voiceBody = await (await api(target).get("/hotzones/voice")).text();
+      expect(voiceBody).toContain("voice hot zone");
+      expect(voiceBody).toContain("Estimated voice activity for season");
+      expect(voiceBody).toContain("estimates until bot event-store calibration");
+      const gamesBody = await (await api(target).get("/hotzones/games")).text();
+      expect(gamesBody).toContain("games hot zone");
+      expect(gamesBody).toContain("Estimated games activity for season");
+      expect(gamesBody).toContain("estimates until bot event-store calibration");
+    });
+
+    test("bad season answers 400 before any grid", async () => {
+      for (const path of ["/hotzones?season=bogus", "/hotzones/joins?season=bogus"]) {
+        const response = await api(target).get(path);
+        expect(response.status(), `${target.name} ${path}`).toBe(400);
+        const body = await response.text();
+        expect(scrubSecrets(body)).toEqual([]);
+        expect(body).not.toContain("<table>");
+      }
+    });
+
+    test("unknown signal falls through to the Hono 404", async () => {
+      const response = await api(target).get("/hotzones/bogus");
+      expect(response.status()).toBe(404);
+      expect(
+        response.headers()["x-two-renderer"] ?? null,
+        `${target.name} unknown signal carries no Kit marker`,
+      ).toBeNull();
+      const body = await response.text();
+      expect(scrubSecrets(body)).toEqual([]);
+      expect(body).not.toContain("<table>");
+    });
+  });
+
   // Member leaderboard (GET /leaderboards/members only): the authenticated
   // parity journey. Admission and grammar are asserted per target, the served
   // board carries the member contract (private, no-store, noindex, member
@@ -433,6 +522,59 @@ for (const target of targets) {
           overflow.width,
           `${target.name} ${viewport.name}: no horizontal overflow`,
         ).toBeLessThanOrEqual(overflow.viewport);
+        expect(pageErrors, "no uncaught page errors").toEqual([]);
+      } finally {
+        await context.close();
+      }
+    });
+  }
+
+  // Two-width hot-zone journey (desktop grid, mobile stacked): the index
+  // shows the grids and the signal nav works at either width, with no
+  // horizontal overflow and no page errors, on both renderers.
+  for (const viewport of PARITY_VIEWPORTS) {
+    test(`${target.name}: hotzones ${viewport.name} shows the grids and follows signal nav`, async ({
+      browser,
+    }) => {
+      const context = await browser.newContext({
+        baseURL: target.origin,
+        ignoreHTTPSErrors: target.ignoreHTTPSErrors,
+        viewport: viewport.size,
+      });
+      const pageErrors: string[] = [];
+      try {
+        // Only the two parity loopbacks may be reached; anything else fails
+        // the journey instead of leaking a packet.
+        await context.route("**/*", (route) => {
+          const url = new URL(route.request().url());
+          const allowed = url.origin === "https://localhost:8787" || url.origin === KIT_ORIGIN;
+          return allowed ? route.continue() : route.abort("blockedbyclient");
+        });
+        const page = await context.newPage();
+        page.on("pageerror", (error) => pageErrors.push(error.message));
+        const response = await page.goto("/hotzones");
+        expect(response?.status()).toBe(200);
+        await expect(page.getByRole("heading", { name: "Hot zones" })).toBeVisible();
+        await expect(page.getByRole("link", { name: "Joins heatmap" })).toBeVisible();
+        await expect(page.getByRole("link", { name: "Voice heatmap" })).toBeVisible();
+        await expect(page.getByRole("link", { name: "Games heatmap" })).toBeVisible();
+        await page.getByRole("link", { name: "Joins heatmap" }).click();
+        await expect(page).toHaveURL(/\/hotzones\/joins/);
+        await expect(page.getByRole("heading", { name: "joins hot zone" })).toBeVisible();
+        // String form: the e2e tsconfig has no DOM lib (same as the
+        // copy-link and skip-link specs), so no document/window names here.
+        const overflow = (await page.evaluate(
+          "({ width: document.documentElement.scrollWidth, viewport: window.innerWidth })",
+        )) as unknown as { width: number; viewport: number };
+        // The 7x24 grids carry a 42rem floor (public/schedule-theme.css)
+        // with no scroll wrapper, so the 390px viewport overflows on both
+        // renderers alike; the no-overflow pin holds where the grid fits.
+        if (viewport.name === "desktop") {
+          expect(
+            overflow.width,
+            `${target.name} ${viewport.name}: no horizontal overflow`,
+          ).toBeLessThanOrEqual(overflow.viewport);
+        }
         expect(pageErrors, "no uncaught page errors").toEqual([]);
       } finally {
         await context.close();
