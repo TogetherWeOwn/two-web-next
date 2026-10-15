@@ -64,8 +64,9 @@ claim of journey parity:
 Steps 1–5 spend no logins. Step 3 runs in unit mode in CI: no workflow sets
 the preview URLs or `KIT_PARITY_QA_TOKEN`. Preview-mode member-board checks
 are an operator-run gate and spend one QA login per base only when the token
-is set. The only authenticated CI journey is `e2e:kit-parity` in
-`browser-smoke`, which shares one QA login for the member-board journey. The
+is set. The only authenticated Kit-parity journey in CI is `e2e:kit-parity` in
+`browser-smoke` (member board, one shared QA login); the critical `npm run e2e`
+journeys in the same job log in separately. The
 hot-zone paths have no dedicated browser journey; CI covers them through the
 fixture-based step-3 unit contract and the hot-zone Vitest suites. Preview
 fetches are operator-run evidence, not CI evidence.
@@ -254,8 +255,9 @@ operator-run check, not CI evidence.
 ## Security
 
 No tokens, session cookies, Discord secrets or PII in any artifact, log or
-ledger. Public journeys (archive, join, recovery, hot-zone, feeds/SEO,
-reserved/API) send no QA token and run with no logins; the one shared
+ledger. Public journeys (archive, join, recovery, feeds/SEO,
+reserved/API) send no QA token and run with no logins; the hot-zone unit
+contract also sends no token; the one shared
 authenticated journey is the member board — one shared QA login in
 `e2e:kit-parity` (bearer replayed to both targets, re-signed for the Kit
 fixture secret) and one login per base in preview-gate mode only when
