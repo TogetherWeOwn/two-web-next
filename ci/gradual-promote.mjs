@@ -1,4 +1,4 @@
-// Gradual production promotion helpers (TOG-24384).
+// Gradual production promotion helpers.
 //
 // Wrangler's `versions deploy` refuses a lone `TAG@5%` spec: the named
 // percentages must total exactly 100 (see validateTrafficSubtotal in the

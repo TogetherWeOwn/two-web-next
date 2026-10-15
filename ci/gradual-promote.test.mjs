@@ -1,4 +1,4 @@
-// Gradual production promotion helpers (TOG-24384): deterministic wrangler
+// Gradual production promotion helpers: deterministic wrangler
 // versions math plus JSON parsing for the rollback target and the promoted
 // version id. No network, no Cloudflare credentials: the workflow pipes
 // `wrangler ... --json` output into the CLI in gradual-promote.mjs.
