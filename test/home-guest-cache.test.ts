@@ -407,4 +407,126 @@ describe("homepage guest cache retire", () => {
     expect(seen).toHaveLength(1);
     expect(seen[0]?.title).toBe("Late slot");
   });
+
+  it("drops a featured read that was in flight when a retire landed", async () => {
+    // The genAtStart guard in storeFeaturedMemory is the only thing stopping
+    // a read that began before a write from storing its pre-write rows after
+    // the retire. Hold the DB read open on the Old snapshot, commit New,
+    // retire, then release: the stale value must not settle into the cache.
+    const oldRow = [1, "Old slot", "Old body", null, null, null, null, null];
+    const newRow = [2, "New slot", "New body", null, null, null, null, null];
+    let rows: unknown[][] = [oldRow];
+    let featuredQueries = 0;
+    let hold = true;
+    let entered = false;
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const db = drizzle(async (sql: string) => {
+      if (sql.includes('from "featured_contents"')) {
+        featuredQueries += 1;
+        const frozen = rows;
+        if (hold) {
+          entered = true;
+          await gate;
+        }
+        return { rows: frozen };
+      }
+      if (sql.includes("set_config")) return { rows: [] };
+      return { rows: [] };
+    }) as unknown as Db;
+    Object.assign(db, { transaction: async (fn: (tx: Db) => Promise<unknown>) => fn(db) });
+    const env = { ...baseEnv, ADMIN_DB: db } as Env;
+    const pending = cachedFeatured(env, async () => db, NOW, undefined);
+    for (let i = 0; i < 100 && !entered; i++) {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    if (!entered) {
+      release();
+      throw new Error("featured read never reached the driver");
+    }
+    // A write commits New and retires while the Old read is still in flight.
+    rows = [newRow];
+    await retireHomeGuestCache();
+    hold = false;
+    release();
+    const settled = await pending;
+    expect(settled.map((row) => row.title)).toEqual(["Old slot"]);
+    // The dropped store forces a re-query: the next request sees New, and the
+    // query counter proves it re-read instead of serving a cached Old row.
+    const next = await cachedFeatured(env, async () => db, NOW, undefined);
+    expect(next.map((row) => row.title)).toEqual(["New slot"]);
+    expect(featuredQueries).toBe(2);
+  });
+
+  it("drops an upcoming read that was in flight when a retire landed", async () => {
+    // Same in-flight retire guard as the featured store, exercised through the
+    // merged upcoming read. The gate holds the canonical events query on the
+    // Old snapshot; every events query in the in-flight read answers from the
+    // latched snapshot so statement timing after the flip cannot leak New or
+    // Old bytes into the assertions the wrong way.
+    const columns = Object.keys(getTableColumns(events)) as (keyof typeof events.$inferSelect)[];
+    const toRows = (list: (typeof events.$inferSelect)[]) =>
+      list.map((row) =>
+        columns.map((key) => {
+          const value = row[key];
+          return value instanceof Date ? value.toISOString() : value;
+        }),
+      );
+    let rows = toRows([eventRow(1)]);
+    let eventQueries = 0;
+    let hold = true;
+    let entered = false;
+    let latched: ReturnType<typeof toRows> | null = null;
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const db = drizzle(async (sql: string) => {
+      if (sql.includes('from "featured_contents"')) return { rows: [] };
+      if (sql.includes("set_config")) return { rows: [] };
+      if (sql.includes('"timezone"') && !sql.includes('"title"')) return { rows: [] };
+      if (sql.includes("discord_event_id") && !sql.includes('"title"')) return { rows: [] };
+      if (sql.includes('from "rsvps"')) return { rows: [] };
+      if (sql.includes('from "events"')) {
+        eventQueries += 1;
+        latched ??= rows;
+        const mine = latched;
+        if (hold) {
+          entered = true;
+          await gate;
+        }
+        return { rows: mine };
+      }
+      return { rows: [] };
+    }) as unknown as Db;
+    Object.assign(db, { transaction: async (fn: (tx: Db) => Promise<unknown>) => fn(db) });
+    const env = { ...baseEnv, ADMIN_DB: db } as Env;
+    const discordSource = () => ({ upcoming: async () => [], lastReadFailed: () => false });
+    const pending = cachedHomeUpcoming(env, async () => db, discordSource, NOW);
+    for (let i = 0; i < 100 && !entered; i++) {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    if (!entered) {
+      release();
+      throw new Error("upcoming read never reached the driver");
+    }
+    // A write commits New and retires while the Old read is still in flight.
+    rows = toRows([eventRow(2)]);
+    await retireHomeGuestCache();
+    hold = false;
+    latched = null;
+    release();
+    const settled = await pending;
+    expect(settled.unavailable).toBe(false);
+    expect(settled.items.map((item) => item.title)).toEqual(["Game night 1"]);
+    const afterPending = eventQueries;
+    // The dropped store forces a re-query: the next request sees New, and the
+    // advanced counter proves it re-read instead of serving a cached Old row.
+    const next = await cachedHomeUpcoming(env, async () => db, discordSource, NOW);
+    expect(next.unavailable).toBe(false);
+    expect(next.items.map((item) => item.title)).toEqual(["Game night 2"]);
+    expect(eventQueries).toBeGreaterThan(afterPending);
+  });
 });
