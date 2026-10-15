@@ -366,7 +366,7 @@ describe("decideRoute", () => {
     expect(decideRoute(post, MEMBER_MANIFEST)).toBeUndefined();
   });
 
-  it("the shipped manifest keeps the homepage, events list, about, privacy, rules, faq, join and recover on Hono, assigns the public archive and hot-zones to Kit, and holds the admin dashboard, featured list, create and edit forms, activity log, events list, event-create form, join-attempts, profile reads and member board on Hono", () => {
+  it("the shipped manifest keeps the homepage, events list, about, privacy, rules, faq, join and recover on Hono, assigns the public archive and hot-zones to Kit, and holds the admin dashboard, featured list, create and edit forms, activity log, events list, event-create and event-edit forms, join-attempts, profile reads and member board on Hono", () => {
     const get = new Request(new URL("/events/past", APP_URL));
     expect(ROUTE_MANIFEST).toEqual([
       { method: "GET", path: "/", enabled: false, reads: "public" },
@@ -418,6 +418,12 @@ describe("decideRoute", () => {
         path: "/admin/events/new",
         enabled: false,
         reads: { resource: "events", action: "view", route: "admin.events.create" },
+      },
+      {
+        method: "GET",
+        path: "/admin/events/:key",
+        enabled: false,
+        reads: { resource: "events", action: "view", route: "admin.events.edit" },
       },
       {
         method: "GET",
