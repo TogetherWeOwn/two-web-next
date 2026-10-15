@@ -318,9 +318,13 @@ test("CI resolves PR base and push-before SHA, not checked-out HEAD", (t) => {
   put(
     f.root,
     "event.json",
-    JSON.stringify({ before: f.base, pull_request: { base: { sha: f.base } } }),
+    JSON.stringify({
+      before: f.base,
+      pull_request: { base: { sha: f.base } },
+      merge_group: { base_sha: f.base },
+    }),
   );
-  for (const name of ["pull_request", "push"]) {
+  for (const name of ["pull_request", "push", "merge_group"]) {
     assert.equal(
       resolveBaseline(f.root, {
         GITHUB_ACTIONS: "true",
