@@ -193,3 +193,28 @@ recorded at all — the gate fails loud (exit 2) with every skipped journey and
 its reason named. Never add a quiet `test.skip` precondition for an empty
 staging fixture without a reason string: the ledger surfaces that reason as
 the failure evidence.
+
+Ledger statuses map Playwright report statuses one to one. `expected`
+becomes `passed` with no reason. `flaky` becomes `flaky` with no reason and
+counts toward `passed` in the headline and CLI line; the separate `flaky`
+count appears only in `counts.flaky` in the ledger JSON, while the Markdown
+table marks the row `flaky`. `unexpected` becomes `failed` with the first-line
+failure message. `skipped` becomes `skipped` with the skip annotation or result
+error, or `no reason recorded` when neither names one. Any other status —
+missing, non-string, or an unrecognized string — becomes `failed` with a
+bounded single-line `unknown test status: ...` reason, so an unknown report can
+never pass silently. Exit codes stay `0` pass, `1` failed journeys, `2`
+all-skipped or empty report.
+
+The staging config sets `retries: 0` (`playwright.staging.config.ts`), so a
+report from this config cannot legitimately contain `flaky`. If a ledger row
+shows `flaky`, check for a `--retries` override or a report produced by another
+config before trusting the pass. A flaky row has no reason and does not trigger
+the failure-only traces/report upload; a green run uploads only the ledger
+files, so this workflow does not preserve the first-attempt failure evidence
+for that row. Do not treat the row or ledger artifacts as the original
+failure evidence. For a failed row, keep its first-line ledger reason and the
+`e2e-staging-failure-*` artifact, retained for seven days. For a failed run on
+`main`, follow the [documented host-flake loop](rum-web-vitals.md): it reruns
+once, then opens a private main-red card for the Web Engineer if it fails
+again. Never rerun-until-green to clear a failure.
