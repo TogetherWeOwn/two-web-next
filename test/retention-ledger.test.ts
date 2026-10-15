@@ -39,6 +39,21 @@ function listTsFiles(dir: string): string[] {
   return out;
 }
 
+// Whole-statement delete windows: slice from each `delete from <table>`
+// match to the closing backtick of its SQL template literal, so a
+// multi-line prune (delete ... in ( + newline + select ... created_at < ...)
+// is judged as one statement instead of one line.
+function deleteWindows(body: string, table: string): string[] {
+  const out: string[] = [];
+  const re = new RegExp(`delete\\s+from\\s+${table}`, "gi");
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(body)) !== null) {
+    const close = body.indexOf("`", m.index);
+    out.push(body.slice(m.index, close === -1 ? m.index + 600 : close));
+  }
+  return out;
+}
+
 function memTable() {
   const at: Date[] = [];
   const cutoffs: Date[] = [];
@@ -124,6 +139,14 @@ describe("retention ledger doc rows", () => {
     expect(doc).toContain("pgUniqueLock");
     expect(doc).toContain("src/jobs/consumer.ts");
     expect(doc).toContain("src/jobs/sync-event.ts");
+    // Accurate bounds: orphans outlive message lifetime; TTL bounds lease
+    // validity, not row lifetime.
+    expect(doc).not.toContain("settles every message");
+    expect(doc).toContain("orphaned rows");
+    expect(doc).toContain("reviewed operator correction");
+    expect(doc).toContain("runbook.md#queue-containment-drain-and-failed-job-replay");
+    expect(doc).toContain("until the next acquire of the same key");
+    expect(doc).toContain("unbounded for keys never re-dispatched");
   });
 });
 
@@ -220,16 +243,25 @@ describe("retention ledger queue mechanisms (no DB)", () => {
     // undercount live depth. dequeued/failed settle by job_id instead.
     const postgresTs = read("src/jobs/postgres.ts");
     expect(postgresTs).toContain("No sweep");
+    // postgres.ts holds exactly the two lifecycle deletes, both the exact
+    // job_id form — a third delete (age prune or otherwise) fails here.
+    const pgWindows = deleteWindows(postgresTs, "queue_jobs");
+    expect(pgWindows.length).toBe(2);
+    for (const w of pgWindows)
+      expect(w, `lifecycle delete must be job_id-scoped: ${w.trim().slice(0, 120)}`).toMatch(
+        /where\s+job_id\s*=\s*\$\{jobId\}::uuid/,
+      );
+    // Repo-wide whole-statement scan: an age predicate anywhere in the
+    // statement fails, even when the repo's batched-prune idiom puts it on
+    // the select line below the delete.
     const ageDeletes: string[] = [];
     const nonJobIdDeletes: string[] = [];
     for (const file of listTsFiles(join(root, "src"))) {
       const body = readFileSync(file, "utf8");
-      for (const line of body.split("\n")) {
-        if (/delete\s+from\s+queue_jobs/i.test(line)) {
-          if (/<\s*\$\{|<\s*cutoff|interval/i.test(line))
-            ageDeletes.push(`${file}: ${line.trim()}`);
-          if (!/job_id/i.test(line)) nonJobIdDeletes.push(`${file}: ${line.trim()}`);
-        }
+      for (const w of deleteWindows(body, "queue_jobs")) {
+        if (/<\s*\$\{|<\s*cutoff|interval|created_at\s*<|available_at\s*<|failed_at\s*</i.test(w))
+          ageDeletes.push(`${file}: ${w.split("\n")[0]!.trim()}`);
+        if (!/job_id/i.test(w)) nonJobIdDeletes.push(`${file}: ${w.split("\n")[0]!.trim()}`);
       }
     }
     expect(ageDeletes, `no age-based delete on queue_jobs`).toEqual([]);
@@ -242,13 +274,18 @@ describe("retention ledger queue mechanisms (no DB)", () => {
   it("queue_failed_jobs leaves only through the one-row library discard", () => {
     const redrive = read("src/jobs/redrive.ts");
     expect(redrive).toContain("delete from queue_failed_jobs where id = ${failureId}");
+    // redrive.ts holds exactly that one-row delete — a bulk drain added
+    // there fails here instead of slipping past a file skip.
+    const redriveWindows = deleteWindows(redrive, "queue_failed_jobs");
+    expect(redriveWindows.length).toBe(1);
+    expect(redriveWindows[0]).toMatch(/where\s+id\s*=\s*\$\{failureId\}/);
     // Repo-wide: only redrive.ts may delete a dead-letter row, so no
     // operational route can drain history. Redispatch leaves the row alone.
     const offenders: string[] = [];
     for (const file of listTsFiles(join(root, "src"))) {
       if (file.endsWith("src/jobs/redrive.ts")) continue;
       const body = readFileSync(file, "utf8");
-      if (/delete\s+from\s+queue_failed_jobs/i.test(body)) offenders.push(file);
+      if (deleteWindows(body, "queue_failed_jobs").length > 0) offenders.push(file);
     }
     expect(
       offenders,
@@ -267,13 +304,20 @@ describe("retention ledger queue mechanisms (no DB)", () => {
     expect(postgresTs).toContain(
       "delete from job_unique_locks where key = ${key} and owner_token = ${leaseToken}::uuid",
     );
+    // postgres.ts holds exactly the one fenced release — a sweeper or bulk
+    // expiry added there fails here instead of slipping past a file skip.
+    const pgWindows = deleteWindows(postgresTs, "job_unique_locks");
+    expect(pgWindows.length).toBe(1);
+    expect(pgWindows[0]).toMatch(
+      /where\s+key\s*=\s*\$\{key\}\s+and\s+owner_token\s*=\s*\$\{leaseToken\}::uuid/,
+    );
     // Repo-wide: the fenced release in postgres.ts is the only delete, so no
     // sweeper or bulk expiry can slip in unnoticed.
     const offenders: string[] = [];
     for (const file of listTsFiles(join(root, "src"))) {
       if (file.endsWith("src/jobs/postgres.ts")) continue;
       const body = readFileSync(file, "utf8");
-      if (/delete\s+from\s+job_unique_locks/i.test(body)) offenders.push(file);
+      if (deleteWindows(body, "job_unique_locks").length > 0) offenders.push(file);
     }
     expect(
       offenders,
