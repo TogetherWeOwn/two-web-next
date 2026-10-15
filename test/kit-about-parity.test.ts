@@ -129,24 +129,24 @@ async function honoAbout() {
 }
 
 describe("about manifest ownership", () => {
-  it("ships the native about route disabled as public reads", () => {
+  it("ships the native about route enabled as public reads", () => {
     expect(ROUTE_MANIFEST).toContainEqual({
       method: "GET",
       path: "/about",
-      enabled: false,
+      enabled: true,
       reads: "public",
     });
   });
 
-  it("keeps /about on Hono until enablement flips the manifest", () => {
-    expect(resolveRouteOwner({ method: "GET", path: "/about" })).toBe("hono");
-    expect(resolveRouteOwner({ method: "HEAD", path: "/about" })).toBe("hono");
+  it("owns /about on Kit with Hono as the rollback", () => {
+    expect(resolveRouteOwner({ method: "GET", path: "/about" })).toBe("kit");
+    expect(resolveRouteOwner({ method: "HEAD", path: "/about" })).toBe("kit");
     expect(resolveRouteOwner({ method: "POST", path: "/about" })).toBe("hono");
     expect(
       resolveRouteOwner({ method: "GET", path: "/about" }, [
-        { method: "GET", path: "/about", enabled: true, reads: "public" },
+        { method: "GET", path: "/about", enabled: false, reads: "public" },
       ]),
-    ).toBe("kit");
+    ).toBe("hono");
   });
 });
 

@@ -149,24 +149,24 @@ async function honoFaq() {
 }
 
 describe("faq manifest ownership", () => {
-  it("ships the native faq route disabled as public reads", () => {
+  it("ships the native faq route enabled as public reads", () => {
     expect(ROUTE_MANIFEST).toContainEqual({
       method: "GET",
       path: "/faq",
-      enabled: false,
+      enabled: true,
       reads: "public",
     });
   });
 
-  it("keeps /faq on Hono until enablement flips the manifest", () => {
-    expect(resolveRouteOwner({ method: "GET", path: "/faq" })).toBe("hono");
-    expect(resolveRouteOwner({ method: "HEAD", path: "/faq" })).toBe("hono");
+  it("owns /faq on Kit with Hono as the rollback", () => {
+    expect(resolveRouteOwner({ method: "GET", path: "/faq" })).toBe("kit");
+    expect(resolveRouteOwner({ method: "HEAD", path: "/faq" })).toBe("kit");
     expect(resolveRouteOwner({ method: "POST", path: "/faq" })).toBe("hono");
     expect(
       resolveRouteOwner({ method: "GET", path: "/faq" }, [
-        { method: "GET", path: "/faq", enabled: true, reads: "public" },
+        { method: "GET", path: "/faq", enabled: false, reads: "public" },
       ]),
-    ).toBe("kit");
+    ).toBe("hono");
   });
 });
 

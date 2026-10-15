@@ -101,8 +101,11 @@ no secret-shaped content. The join contract adds the one-click/invite
 actions, exactly one widget zone and the flash privacy invariant; the
 recovery contract adds the shared shell markers (`recovery-heading`,
 `recovery-retry`, `recovery-invite`), safe retry/invite hrefs and an
-unconditional private, no-store pin. Reserved paths (`/up`) and `POST /api/*`
-must never carry the Kit marker.
+unconditional private, no-store pin. The static-leaf contracts (`about`,
+`faq`) add the shared Leaf markers (h1 heading id, strap, `about-facts` /
+`faq-list` testids with the first question group, the same-origin `/join`
+action) and the public 3600s cache both handlers set. Reserved paths
+(`/up`) and `POST /api/*` must never carry the Kit marker.
 
 The member-board journeys are the authenticated arm. In preview mode they
 run only when `KIT_PARITY_QA_TOKEN` carries the staging QA token: the gate
@@ -218,8 +221,9 @@ until their routes migrate; the gate ledger derives each entry from
 never quiet green, and never a `test.skip` call (the floor forbids new
 skips). An enabled route with no executed journey covering it records a
 failure instead of a skip: in-scope routes fail their journey (scope net),
-any other enabled route fails the uncovered-route catch-all (today only
-GET/HEAD `/events/past` via `PARITY_ROUTES` is covered).
+any other enabled route fails the uncovered-route catch-all (covered via
+`PARITY_ROUTES`: GET/HEAD `/events/past`, `/join`, `/auth/recover`, the four
+hot-zone paths, `/leaderboards/members`, `/about` and `/faq`).
 
 ## Security
 

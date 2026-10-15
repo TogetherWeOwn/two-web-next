@@ -41,10 +41,12 @@ export interface RouteDecision {
   path: string;
 }
 
-// The archive page and hot-zone heatmaps render natively; the events list ships
-// its native handler disabled until the calendar/enhancement companion passes,
-// and the about/privacy/rules/faq/join/recovery/profile reads, member board and
-// admin routes stay on Hono until their enablement is reviewed. Production (the Hono Worker) sees no traffic change for a
+// The archive page, hot-zone heatmaps, member board and the about/faq leaves
+// render natively; the events list ships its native handler disabled until
+// the calendar/enhancement companion passes, and the privacy/rules/join/
+// recovery/profile reads and admin routes stay on Hono until their enablement
+// is reviewed. Returning an enabled entry to `enabled: false` restores Hono
+// ownership as the rollback. Production (the Hono Worker) sees no traffic change for a
 // disabled path; the preview Worker moves a Kit-owned path back to Hono by
 // design — that is the rollback. Add one entry per migrated route, enabled
 // only when its Kit handler is ready to own the exact method/path. Only GET
@@ -58,10 +60,10 @@ export const ROUTE_MANIFEST: OwnedRoute[] = [
   { method: "GET", path: "/", enabled: false, reads: "public" },
   { method: "GET", path: "/events/past", enabled: true, reads: "public" },
   { method: "GET", path: "/events", enabled: false, reads: "public" },
-  { method: "GET", path: "/about", enabled: false, reads: "public" },
+  { method: "GET", path: "/about", enabled: true, reads: "public" },
   { method: "GET", path: "/privacy", enabled: false, reads: "public" },
   { method: "GET", path: "/rules", enabled: false, reads: "public" },
-  { method: "GET", path: "/faq", enabled: false, reads: "public" },
+  { method: "GET", path: "/faq", enabled: true, reads: "public" },
   { method: "GET", path: "/join", enabled: false, reads: "public" },
   // Moderator dashboard: member data, so the Kit branch renders
   // inside the member-read boundary with this declaration and the bridged
