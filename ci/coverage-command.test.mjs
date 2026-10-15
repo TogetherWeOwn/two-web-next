@@ -79,37 +79,35 @@ test("patch coverage fails closed when its coverage input is missing", async () 
 // script into a bare fixture leaves <fixture>/coverage/ absent, so running
 // it must exit 1 with the ::error:: annotation. A source-text assertion
 // alone would still pass if `process.exitCode = 1` were flipped to 0.
-test(
-  "the patch coverage CLI exits 1 when its coverage input is missing",
-  { timeout: 20000 },
-  async (t) => {
-    const fixture = await mkdtemp(
-      join(process.env.PAPERCLIP_RUN_SCRATCH_DIR || tmpdir(), "patch-coverage-missing-"),
-    );
-    t.after(() => rm(fixture, { recursive: true, force: true }));
-    // repoRoot is derived from the script location, so <fixture>/coverage/
-    // does not exist and the missing-input branch runs.
-    await mkdir(join(fixture, "ci"), { recursive: true });
-    await copyFile(
-      new URL("./patch-coverage.mjs", import.meta.url),
-      join(fixture, "ci", "patch-coverage.mjs"),
-    );
-    const child = spawn(process.execPath, [join(fixture, "ci", "patch-coverage.mjs")], {
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-    let stderr = "";
-    child.stderr.on("data", (data) => {
-      stderr += data;
-    });
-    const [code, signal] = await new Promise((resolve, reject) => {
-      child.once("error", reject);
-      child.once("close", (code, signal) => resolve([code, signal]));
-    });
-    assert.equal(signal, null, stderr);
-    assert.equal(code, 1, stderr);
-    assert.match(stderr, /::error::patch coverage missing input/);
-  },
-);
+test("the patch coverage CLI exits 1 when its coverage input is missing", {
+  timeout: 20000,
+}, async (t) => {
+  const fixture = await mkdtemp(
+    join(process.env.PAPERCLIP_RUN_SCRATCH_DIR || tmpdir(), "patch-coverage-missing-"),
+  );
+  t.after(() => rm(fixture, { recursive: true, force: true }));
+  // repoRoot is derived from the script location, so <fixture>/coverage/
+  // does not exist and the missing-input branch runs.
+  await mkdir(join(fixture, "ci"), { recursive: true });
+  await copyFile(
+    new URL("./patch-coverage.mjs", import.meta.url),
+    join(fixture, "ci", "patch-coverage.mjs"),
+  );
+  const child = spawn(process.execPath, [join(fixture, "ci", "patch-coverage.mjs")], {
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  let stderr = "";
+  child.stderr.on("data", (data) => {
+    stderr += data;
+  });
+  const [code, signal] = await new Promise((resolve, reject) => {
+    child.once("error", reject);
+    child.once("close", (code, signal) => resolve([code, signal]));
+  });
+  assert.equal(signal, null, stderr);
+  assert.equal(code, 1, stderr);
+  assert.match(stderr, /::error::patch coverage missing input/);
+});
 
 test("the patch coverage step has no file-presence skip so a missing input fails the job", async () => {
   const step = check
