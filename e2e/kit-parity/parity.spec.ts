@@ -622,6 +622,18 @@ test.describe("archive page turns prove successful paging and history", () => {
           return keys;
         }
 
+        // The island turns pages with pushState (no document navigation); a
+        // missing, 404ing or CSP-blocked island falls back to full loads
+        // with the same end state. String form: the e2e tsconfig has no DOM
+        // lib, so no window names here. A full navigation replaces the
+        // document and drops this marker; island turns keep it.
+        async function expectSameDoc(): Promise<void> {
+          expect(
+            await page.evaluate("window.__archiveSameDoc ?? null"),
+            "island kept the document (no full navigation)",
+          ).toBe(1);
+        }
+
         const response = await page.goto("/events/past");
         expect(response?.status()).toBe(200);
         expect(response?.headers()["x-two-renderer"] ?? null).toBe(expectedMarker);
@@ -649,9 +661,11 @@ test.describe("archive page turns prove successful paging and history", () => {
         expect(keys).toContain(archiveTurnKey(5));
         expect(keys).not.toContain(archiveTurnKey(4));
         expect(keys).not.toContain(ARCHIVE_PAST_NIGHT_KEY);
+        await page.evaluate("window.__archiveSameDoc = 1");
 
         await page.locator('a[data-archive-page]:has-text("Older")').click();
         await expect(page).toHaveURL(/\/events\/past\?page=2/);
+        await expectSameDoc();
         await expect(page.getByTestId("past-events")).toHaveAttribute("data-page", "2");
         await expect(page.getByTestId("past-events-list")).toContainText("E2E Past Night");
         await expect(page.locator('link[rel="canonical"]')).toHaveAttribute(
@@ -674,6 +688,7 @@ test.describe("archive page turns prove successful paging and history", () => {
 
         await page.locator('a[data-archive-page]:has-text("Newer")').click();
         await expect(page).toHaveURL(/\/events\/past$/);
+        await expectSameDoc();
         await expect(page.getByTestId("past-events")).toHaveAttribute("data-page", "1");
         await expect(page.getByTestId("past-events-list")).toContainText("E2E Archive Turn 24");
         await expect(page.locator('link[rel="canonical"]')).toHaveAttribute(
@@ -687,9 +702,11 @@ test.describe("archive page turns prove successful paging and history", () => {
 
         await page.locator('a[data-archive-page]:has-text("Older")').click();
         await expect(page).toHaveURL(/\/events\/past\?page=2/);
+        await expectSameDoc();
         await expect(page.getByTestId("past-events-list")).toContainText("E2E Past Night");
         await page.goBack();
         await expect(page).toHaveURL(/\/events\/past$/);
+        await expectSameDoc();
         await expect(page.getByTestId("past-events")).toHaveAttribute("data-page", "1");
         await expect(page.getByTestId("past-events-list")).toContainText("E2E Archive Turn 24");
         await expect(page.locator('link[rel="canonical"]')).toHaveAttribute(
