@@ -11,12 +11,15 @@ import { fileURLToPath } from "node:url";
 import type postgres from "postgres";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
+  backoffFor,
   JOIN_ATTEMPT_RETENTION_DAYS,
   MEMBER_ACCESS_LOG_RETENTION_DAYS,
+  SYNC_EVENT,
 } from "../src/jobs/constants";
 import { checkJoinThrottle, THROTTLE_COUNTER_RETENTION_MINUTES } from "../src/join/service";
 import { pruneModelTables } from "../src/jobs/cron";
-import { pgPruneStores } from "../src/jobs/postgres";
+import { pgPruneStores, pgQueueLedger, pgUniqueLock } from "../src/jobs/postgres";
+import { discardFailedJob } from "../src/jobs/redrive";
 import type { PruneStores } from "../src/jobs/types";
 import { createMemorySessionStore, SESSION_TTL_SECONDS } from "../src/sessions";
 import { createJobsFixture, type JobsFixture } from "./helpers/jobs-db";
@@ -63,6 +66,15 @@ describe("retention ledger constants (read-only)", () => {
     expect(THROTTLE_COUNTER_RETENTION_MINUTES).toBe(5);
     expect(SESSION_TTL_SECONDS).toBe(60 * 120);
   });
+
+  it("pins the queue retry and lock-TTL constants", () => {
+    expect(SYNC_EVENT.uniqueForSeconds).toBe(300);
+    expect(SYNC_EVENT.tries).toBe(6);
+    expect(SYNC_EVENT.backoffSeconds).toEqual([10, 60, 300, 900, 3600]);
+    expect(SYNC_EVENT.debounceSeconds).toBe(10);
+    // The retry gap holds at the last value past the budget.
+    expect(backoffFor(SYNC_EVENT.backoffSeconds, 99)).toBe(3600);
+  });
 });
 
 describe("retention ledger doc rows", () => {
@@ -94,6 +106,24 @@ describe("retention ledger doc rows", () => {
     const rsvpLines = read("src/events/rsvp.ts").split("\n");
     expect(rsvpLines[207]).toContain("pruneThrottle");
     expect(rsvpLines[209]).toContain("delete from web_throttle_hits");
+  });
+
+  it("publishes one row per queue/lock table with window, mechanism, and proof", () => {
+    const doc = read("docs/retention-ledger.md");
+    for (const table of ["queue_jobs", "queue_failed_jobs", "job_unique_locks"]) {
+      expect(doc, `ledger must row ${table}`).toContain(table);
+    }
+    expect(doc).toContain("No age prune by design");
+    expect(doc).toContain("No sweep");
+    expect(doc).toContain("pgQueueLedger");
+    expect(doc).toContain("library-only");
+    expect(doc).toContain("discardFailedJob");
+    expect(doc).toContain("listFailedJobs");
+    expect(doc).toContain("queue-redrive-runbook.md");
+    expect(doc).toContain("uniqueForSeconds = 300");
+    expect(doc).toContain("pgUniqueLock");
+    expect(doc).toContain("src/jobs/consumer.ts");
+    expect(doc).toContain("src/jobs/sync-event.ts");
   });
 });
 
@@ -184,6 +214,80 @@ describe("retention ledger mechanisms (memory, no DB)", () => {
   });
 });
 
+describe("retention ledger queue mechanisms (no DB)", () => {
+  it("queue_jobs has no age-based delete: every delete is a job_id lifecycle transition", () => {
+    // The decided behavior is no-sweep: an age predicate on queue_jobs would
+    // undercount live depth. dequeued/failed settle by job_id instead.
+    const postgresTs = read("src/jobs/postgres.ts");
+    expect(postgresTs).toContain("No sweep");
+    const ageDeletes: string[] = [];
+    const nonJobIdDeletes: string[] = [];
+    for (const file of listTsFiles(join(root, "src"))) {
+      const body = readFileSync(file, "utf8");
+      for (const line of body.split("\n")) {
+        if (/delete\s+from\s+queue_jobs/i.test(line)) {
+          if (/<\s*\$\{|<\s*cutoff|interval/i.test(line))
+            ageDeletes.push(`${file}: ${line.trim()}`);
+          if (!/job_id/i.test(line)) nonJobIdDeletes.push(`${file}: ${line.trim()}`);
+        }
+      }
+    }
+    expect(ageDeletes, `no age-based delete on queue_jobs`).toEqual([]);
+    expect(nonJobIdDeletes, `every queue_jobs delete is job_id-scoped`).toEqual([]);
+    const consumer = read("src/jobs/consumer.ts");
+    expect(consumer).toContain("deps.ledger.dequeued(jobId)");
+    expect(consumer).toContain("deps.ledger.failed(jobId, body.kind, key,");
+  });
+
+  it("queue_failed_jobs leaves only through the one-row library discard", () => {
+    const redrive = read("src/jobs/redrive.ts");
+    expect(redrive).toContain("delete from queue_failed_jobs where id = ${failureId}");
+    // Repo-wide: only redrive.ts may delete a dead-letter row, so no
+    // operational route can drain history. Redispatch leaves the row alone.
+    const offenders: string[] = [];
+    for (const file of listTsFiles(join(root, "src"))) {
+      if (file.endsWith("src/jobs/redrive.ts")) continue;
+      const body = readFileSync(file, "utf8");
+      if (/delete\s+from\s+queue_failed_jobs/i.test(body)) offenders.push(file);
+    }
+    expect(
+      offenders,
+      `only redrive.ts may delete queue_failed_jobs: ${offenders.join(", ")}`,
+    ).toEqual([]);
+    const runbook = read("docs/queue-redrive-runbook.md");
+    expect(runbook).toContain("never touched here");
+    expect(runbook).toContain("only a later confirmed recovery discards");
+    expect(runbook).toContain("library-only");
+  });
+
+  it("job_unique_locks are TTL leases with fenced release and no sweeper", () => {
+    const postgresTs = read("src/jobs/postgres.ts");
+    // Acquire wins only over expired rows; release compare-deletes by token.
+    expect(postgresTs).toContain("where job_unique_locks.expires_at < clock_timestamp()");
+    expect(postgresTs).toContain(
+      "delete from job_unique_locks where key = ${key} and owner_token = ${leaseToken}::uuid",
+    );
+    // Repo-wide: the fenced release in postgres.ts is the only delete, so no
+    // sweeper or bulk expiry can slip in unnoticed.
+    const offenders: string[] = [];
+    for (const file of listTsFiles(join(root, "src"))) {
+      if (file.endsWith("src/jobs/postgres.ts")) continue;
+      const body = readFileSync(file, "utf8");
+      if (/delete\s+from\s+job_unique_locks/i.test(body)) offenders.push(file);
+    }
+    expect(
+      offenders,
+      `only postgres.ts may delete job_unique_locks: ${offenders.join(", ")}`,
+    ).toEqual([]);
+    // Dispatch holds the lease for exactly the pinned TTL; the consumer says
+    // stuck rows self-heal through that TTL instead of a cleanup job.
+    const dispatch = read("src/jobs/sync-event.ts");
+    expect(dispatch).toContain("lock.acquire(key, SYNC_EVENT.uniqueForSeconds)");
+    const consumer = read("src/jobs/consumer.ts");
+    expect(consumer).toContain("self-heals via its TTL");
+  });
+});
+
 // Live round-trips use a guarded disposable schema on agent-testdb or the
 // explicitly allowed GitHub CI Postgres service.
 describe.skipIf(!process.env.DATABASE_URL)("retention ledger (test Postgres)", () => {
@@ -256,5 +360,77 @@ describe.skipIf(!process.env.DATABASE_URL)("retention ledger (test Postgres)", (
     expect(hits.length).toBe(2);
     const floor = Date.now() - THROTTLE_COUNTER_RETENTION_MINUTES * 60_000 - 60_000;
     for (const h of hits) expect(h.at.getTime()).toBeGreaterThan(floor);
+  });
+
+  it("queue ledger settles rows by lifecycle: dequeued removes, failed moves to the dead letter", async () => {
+    const ledger = pgQueueLedger(sql);
+    const tag = `ledger-${Date.now()}`;
+    const done = crypto.randomUUID();
+    const dead = crypto.randomUUID();
+    const past = new Date(Date.now() - 1000);
+    await ledger.enqueued({
+      jobId: done,
+      kind: "sync-event",
+      key: `sync-event:${tag}`,
+      availableAt: past,
+    });
+    await ledger.enqueued({
+      jobId: dead,
+      kind: "sync-event",
+      key: `sync-event:${tag}`,
+      availableAt: past,
+    });
+
+    await ledger.reserved(done);
+    await ledger.released(done, new Date(Date.now() + 300_000));
+    await ledger.dequeued(done);
+    await ledger.failed(dead, "sync-event", `sync-event:${tag}`, "carrier exhausted");
+
+    const live = await sql<
+      { job_id: string }[]
+    >`select job_id from queue_jobs where job_id in (${done}::uuid, ${dead}::uuid)`;
+    expect(live).toEqual([]);
+    const buried = await sql<
+      { job_id: string; reason: string }[]
+    >`select job_id, reason from queue_failed_jobs where job_id in (${done}::uuid, ${dead}::uuid)`;
+    expect(buried.map((r) => r.job_id)).toEqual([dead]);
+    expect(buried[0]!.reason).toContain("carrier exhausted");
+
+    // Confirmed recovery discards exactly one dead-letter row.
+    const failureId = (
+      await sql<{ id: number }[]>`select id from queue_failed_jobs where job_id = ${dead}::uuid`
+    )[0]!.id;
+    expect(await discardFailedJob(sql, failureId)).toBe(true);
+    expect(await discardFailedJob(sql, failureId)).toBe(false);
+    const remaining = await sql<
+      { job_id: string }[]
+    >`select job_id from queue_failed_jobs where job_id = ${dead}::uuid`;
+    expect(remaining).toEqual([]);
+  });
+
+  it("unique lock holds for its TTL, supersedes only expired leases, releases by token", async () => {
+    const lock = pgUniqueLock(sql);
+    const key = `ledger-lock-${Date.now()}-${Math.floor(Math.random() * 1e6)}`;
+    const first = await lock.acquire(key, SYNC_EVENT.uniqueForSeconds);
+    expect(first).not.toBeNull();
+    // Still held: a second holder loses.
+    expect(await lock.acquire(key, SYNC_EVENT.uniqueForSeconds)).toBeNull();
+    // A wrong token cannot release the holder's lease.
+    await lock.release(key, crypto.randomUUID());
+    expect(await lock.acquire(key, SYNC_EVENT.uniqueForSeconds)).toBeNull();
+    await lock.release(key, first!);
+    const second = await lock.acquire(key, SYNC_EVENT.uniqueForSeconds);
+    expect(second).not.toBeNull();
+    expect(second).not.toBe(first);
+    await lock.release(key, second!);
+
+    // An expired lease is superseded on the next acquire (TTL self-heal).
+    const staleKey = `ledger-lock-stale-${Date.now()}-${Math.floor(Math.random() * 1e6)}`;
+    const stale = await lock.acquire(staleKey, -1);
+    expect(stale).not.toBeNull();
+    const heir = await lock.acquire(staleKey, SYNC_EVENT.uniqueForSeconds);
+    expect(heir).not.toBeNull();
+    expect(heir).not.toBe(stale);
+    await lock.release(staleKey, heir!);
   });
 });
