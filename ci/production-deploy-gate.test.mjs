@@ -1098,4 +1098,5 @@ test("CI runs the promotion resolver selftest beside the production gate selftes
   const ci = readFileSync(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8");
   assert.match(ci, /run: node --test ci\/resolve-promotion-sha\.test\.mjs\n/);
   assert.match(ci, /run: node --test ci\/gradual-promote\.test\.mjs\n/);
+  assert.match(ci, /run: node --test ci\/gradual-promote-gate-acceptance\.test\.mjs\n/);
 });
