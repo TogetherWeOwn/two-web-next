@@ -91,11 +91,7 @@ test("reviewed Kit actual supersedes the committed copy in the artifact", () => 
     "stale-committed-bytes",
   );
   writeBytes(
-    join(
-      artifact,
-      "test-results-kit-parity",
-      "member-board-default-desktop-actual.png",
-    ),
+    join(artifact, "test-results-kit-parity", "member-board-default-desktop-actual.png"),
     "reviewed-actual-bytes",
   );
   const result = acceptBaselines(artifact, {
@@ -105,10 +101,7 @@ test("reviewed Kit actual supersedes the committed copy in the artifact", () => 
   assert.equal(result.ok, true, result.message);
   assert.deepEqual(result.accepted, ["member-board-default-desktop.png"]);
   assert.equal(
-    readFileSync(
-      join(workspace, KIT_SCREENSHOT_DIR, "member-board-default-desktop.png"),
-      "utf8",
-    ),
+    readFileSync(join(workspace, KIT_SCREENSHOT_DIR, "member-board-default-desktop.png"), "utf8"),
     "reviewed-actual-bytes",
   );
 });
