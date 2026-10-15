@@ -22,3 +22,7 @@ await writeFile(
   { mode: 0o600 },
 );
 await appendFile(process.env.GITHUB_ENV, `E2E_QA_TOKEN=${qaToken}\n`);
+// The Kit parity worker (ci/kit-worker-dev.mjs) must verify the session
+// cookies the Hono worker issues during the authenticated journeys, so it
+// needs the same signing secret; publish it next to the QA token.
+await appendFile(process.env.GITHUB_ENV, `E2E_SESSION_SECRET=${sessionSecret}\n`);

@@ -72,6 +72,49 @@ export const PARITY_ROUTES = [
     contract: "hotzones",
     compareSection: null,
   })),
+  // Member leaderboard: authenticated member view only, so the preview
+  // journeys carry a QA session (auth: "member") or none (auth: "guest").
+  // No byte section compare: rows are per-viewer, so preview proves the
+  // structural contract on both sides instead. Admission answers (guest
+  // 302, grammar 400s) pin status + no-board + secret scrub only; the 403
+  // non-member arm cannot be minted by the QA seam (both QA identities are
+  // members) and stays pinned hermetically.
+  {
+    path: "/leaderboards/members",
+    label: "members guest bounce",
+    expectStatus: 302,
+    expectMarker: "manifest",
+    contract: "members-admission",
+    compareSection: null,
+    auth: "guest",
+  },
+  ...[
+    "/leaderboards/members",
+    "/leaderboards/members?scope=relative",
+    "/leaderboards/members?season=2026",
+    "/leaderboards/members?activity=valheim",
+  ].map((path) => ({
+    path,
+    expectStatus: 200,
+    expectMarker: "manifest",
+    contract: "members",
+    cache: "private, no-store",
+    compareSection: null,
+    auth: "member",
+  })),
+  ...[
+    ["/leaderboards/members?season=bogus", "members bad season"],
+    ["/leaderboards/members?scope=friends", "members deferred scope"],
+    ["/leaderboards/members?activity=chess%21", "members bad activity"],
+  ].map(([path, label]) => ({
+    path,
+    label,
+    expectStatus: 400,
+    expectMarker: "manifest",
+    contract: "members-admission",
+    compareSection: null,
+    auth: "member",
+  })),
 ];
 
 export const RESERVED_PROBES = [{ path: "/up", expectStatus: 200, expectMarker: null }];
@@ -291,8 +334,10 @@ export function isManifestEnabled(manifestSource, path, method = null) {
 }
 
 // Coverage: the executed parity runs are GET/HEAD /events/past, /join,
-// /auth/recover and the four hot-zone paths via PARITY_ROUTES (unit contract
-// + preview fetch). Any other enabled entry has no run covering it and must
+// /auth/recover, the four hot-zone paths and /leaderboards/members via
+// PARITY_ROUTES (unit contract + preview fetch; the member board also runs
+// authenticated in the Playwright Hono-vs-Kit journey). Any other enabled
+// entry has no run covering it and must
 // fail — the scopes below only choose the journey name for the failure
 // message, never whether it fails.
 export function isCoveredByExecutedRun(entry) {
@@ -720,6 +765,31 @@ export function assertMembersContract({ label, html, headers, status, expected }
   return failures;
 }
 
+// Member-board admission contract: the gate and grammar answers that never
+// serve a board. Status is exact, a guest bounce lands on the Discord
+// sign-in, no board heading leaks, and the body stays secret-free. Renderer
+// marker and cache pins live on the served-board contract instead: error
+// and redirect answers are decorated differently per framework.
+export function assertMembersAdmission({ label, html, headers, status, expected }) {
+  const failures = [];
+  const get = (name) => headers.get?.(name) ?? headers[name.toLowerCase()] ?? null;
+  if (status !== expected.status)
+    failures.push(`${label}: status ${status} !== ${expected.status}`);
+  if (expected.status === 302) {
+    const location = get("location") ?? "";
+    if (!location.includes("/auth/discord"))
+      failures.push(
+        `${label}: guest bounce lands on /auth/discord (got ${JSON.stringify(location)})`,
+      );
+  }
+  if (html.includes("<h1>Member leaderboard</h1>"))
+    failures.push(`${label}: admission answer never serves the board`);
+  const secretHits = scrubSecrets(html);
+  if (secretHits.length)
+    failures.push(`${label}: secret-shaped content in HTML (${secretHits.length} patterns)`);
+  return failures;
+}
+
 export function assertReservedContract({ label, status, headers }) {
   const failures = [];
   const get = (name) => headers.get?.(name) ?? headers[name.toLowerCase()] ?? null;
@@ -1028,12 +1098,12 @@ export function runUnitMode({ stdout = process.stdout, manifestSource: manifestO
     );
   }
 
-  // Member-board fixtures: authenticated member view only. The board stays
-  // Hono-held until its executed preview journey lands, so the expected marker
-  // derives from the shipped manifest (null today, "kit" after enablement) and
-  // these unit journeys prove the assertion set passes on a good fixture AND
-  // fails on planted breaks. Admission (302/403/400), the audit row and the
-  // live Hono-vs-Kit fetch remain preview work, not unit work.
+  // Member-board fixtures: authenticated member view only. The expected
+  // marker derives from the shipped manifest (null today, "kit" after
+  // enablement) and these unit journeys prove the assertion set passes on a
+  // good fixture AND fails on planted breaks. Admission (302/400), the audit
+  // row and the live Hono-vs-Kit fetch are executed by the preview journeys
+  // in PARITY_ROUTES and the Playwright kit-parity journey, not unit work.
   const membersMarker = isManifestEnabled(manifestSource, "/leaderboards/members", "GET")
     ? "kit"
     : null;
@@ -1381,26 +1451,90 @@ export function writeLedger(
 async function runPreviewMode(
   kitBase,
   honoBase,
-  { stdout = process.stdout, fetchImpl = fetch } = {},
+  { stdout = process.stdout, fetchImpl = fetch, qaToken = null } = {},
 ) {
   const manifestSource = readFileSync(
     new URL("../src/route-ownership.ts", import.meta.url),
     "utf8",
   );
   const journeys = [];
+  // Authenticated journeys share one QA login per base (the qa-login
+  // throttle is per-minute), issued lazily and replayed as a Cookie header.
+  // The token and cookie values never reach the ledger: reasons name only
+  // the host and the HTTP status, and every journey body is secret-scrubbed
+  // by its contract helper.
+  const memberCookies = new Map();
+  async function memberCookieFor(base) {
+    if (memberCookies.has(base)) return memberCookies.get(base);
+    let result;
+    try {
+      const res = await fetchImpl(new URL("/auth/qa/qa-member", base), {
+        method: "POST",
+        redirect: "manual",
+        signal: AbortSignal.timeout(15_000),
+        headers: { "x-two-qa-auth": qaToken, origin: base },
+      });
+      const setCookie =
+        res.headers.getSetCookie?.().join("\n") ?? res.headers.get("set-cookie") ?? "";
+      const session = setCookie
+        .split("\n")
+        .map((line) => line.split(";")[0])
+        .find((line) => line?.startsWith("__Host-two_session="));
+      result =
+        res.status === 204 && session
+          ? { cookie: session }
+          : {
+              unavailable: `QA login answered ${res.status} on ${new URL(base).host} (staging QA seam unavailable or token rejected)`,
+            };
+    } catch (error) {
+      result = {
+        unavailable: `QA login failed on ${new URL(base).host}: ${String(error?.message ?? error).slice(0, 120)}`,
+      };
+    }
+    memberCookies.set(base, result);
+    return result;
+  }
   for (const route of PARITY_ROUTES) {
+    const routeName = route.label ?? route.path;
     const expectedMarker =
       route.expectMarker === "manifest"
         ? expectedMarkerFor(manifestSource, route.path)
         : route.expectMarker;
     let kitRes;
     let honoRes;
+    let headersFor = () => undefined;
+    if (route.auth === "member") {
+      if (!qaToken) {
+        journeys.push({
+          name: `preview ${routeName}: authenticated fetch`,
+          status: "skipped",
+          reason:
+            "authenticated preview journey needs KIT_PARITY_QA_TOKEN (the staging QA token); unset, so no member fetch was executed",
+        });
+        continue;
+      }
+      const [kitLogin, honoLogin] = await Promise.all(
+        [kitBase, honoBase].map((base) => memberCookieFor(base)),
+      );
+      const unavailable = [kitLogin, honoLogin].find((login) => login.unavailable);
+      if (unavailable) {
+        journeys.push({
+          name: `preview ${routeName}: authenticated fetch`,
+          status: "skipped",
+          reason: unavailable.unavailable,
+        });
+        continue;
+      }
+      const cookies = [kitLogin.cookie, honoLogin.cookie];
+      headersFor = (index) => ({ cookie: cookies[index] });
+    }
     try {
       [kitRes, honoRes] = await Promise.all(
-        [kitBase, honoBase].map((base) =>
+        [kitBase, honoBase].map((base, index) =>
           fetchImpl(new URL(route.path, base), {
             redirect: "manual",
             signal: AbortSignal.timeout(15_000),
+            headers: headersFor(index),
           }),
         ),
       );
@@ -1412,15 +1546,21 @@ async function runPreviewMode(
       });
       continue;
     }
-    const kitHtml = kitRes.status === 200 ? await kitRes.text() : "";
-    const honoHtml = honoRes.status === 200 ? await honoRes.text() : "";
+    const kitHtml = kitRes.status === route.expectStatus ? await kitRes.text() : "";
+    const honoHtml = honoRes.status === route.expectStatus ? await honoRes.text() : "";
     const expected = {
       status: route.expectStatus,
       marker: expectedMarker,
       contract: route.contract ?? "archive",
       cache: route.cache ?? null,
     };
-    const kitFailures = assertRouteContract({
+    const assertContract =
+      route.contract === "members"
+        ? assertMembersContract
+        : route.contract === "members-admission"
+          ? assertMembersAdmission
+          : assertRouteContract;
+    const kitFailures = assertContract({
       label: `preview Kit ${route.path}`,
       html: kitHtml,
       headers: kitRes.headers,
@@ -1435,7 +1575,7 @@ async function runPreviewMode(
     // The Hono side runs the same contract helpers (expected marker null):
     // a Hono-side regression outside the section would otherwise go
     // unflagged in preview mode.
-    const honoFailures = assertRouteContract({
+    const honoFailures = assertContract({
       label: `preview Hono ${route.path}`,
       html: honoHtml,
       headers: honoRes.headers,
@@ -1520,7 +1660,11 @@ export async function runGate({
   }
   const journeys =
     pair.mode === "preview"
-      ? await runPreviewMode(pair.kitBase, pair.honoBase, { stdout, fetchImpl })
+      ? await runPreviewMode(pair.kitBase, pair.honoBase, {
+          stdout,
+          fetchImpl,
+          qaToken: env.KIT_PARITY_QA_TOKEN?.trim() || null,
+        })
       : runUnitMode({ stdout });
   return writeLedger(summarizeLedger(journeys), { stdout });
 }
