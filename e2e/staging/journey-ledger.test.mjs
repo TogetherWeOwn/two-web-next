@@ -356,7 +356,10 @@ test("critical-journeys guide explains flaky accounting with zero retries and no
       "The staging config sets `retries: 0` (`playwright.staging.config.ts`), so a report from this config cannot legitimately contain `flaky`. If a ledger row shows `flaky`, check for a `--retries` override or a report produced by another config before trusting the pass.",
     ),
   );
-  assert.match(normalizedGuide, /flaky row has no reason and does not trigger the failure-only traces\/report upload/);
+  assert.match(
+    normalizedGuide,
+    /flaky row has no reason and does not trigger the failure-only traces\/report upload/,
+  );
   assert.match(normalizedGuide, /`e2e-staging-failure-\*` artifact, retained for seven days/);
   assert.match(normalizedGuide, /documented host-flake loop/);
   assert.match(guide, /[Nn]ever rerun-until-green/);
