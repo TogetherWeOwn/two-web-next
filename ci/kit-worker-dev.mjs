@@ -56,10 +56,7 @@ writeFileSync(
       APP_URL: `http://127.0.0.1:${port}`,
       DATABASE_URL: databaseUrl,
       FEATURED_IMAGE_HOSTS: "",
-      // The authenticated Kit parity journeys replay session cookies issued
-      // by the Hono worker (e2e/prepare.mjs), so both workers must share one
-      // signing secret in CI; the fixture value remains the local default.
-      SESSION_SECRET: process.env.E2E_SESSION_SECRET ?? "ci-fixture-secret",
+      SESSION_SECRET: "ci-fixture-secret",
       DISCORD_CLIENT_ID: "ci-fixture-client",
       DISCORD_CLIENT_SECRET: "ci-fixture-secret",
       DISCORD_BOT_TOKEN: "ci-fixture-token",

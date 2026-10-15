@@ -54,6 +54,20 @@ export function expectedKitMarker(path: string): string | null {
   return match[1] === "true" ? "kit" : null;
 }
 
+// The Kit fixture's synthetic session secret, read from its single source
+// (ci/kit-worker-dev.mjs), never duplicated here: rotating the fixture value
+// rotates what the member-board journey re-signs with, and a fixture that
+// stops supplying a literal fails loud instead of as a guest bounce.
+export function kitFixtureSessionSecret(): string {
+  const source = readFileSync(
+    fileURLToPath(new URL("../ci/kit-worker-dev.mjs", import.meta.url).href),
+    "utf8",
+  );
+  const secret = source.match(/SESSION_SECRET: "([^"]+)"/)?.[1];
+  if (!secret) throw new Error("kit-parity: ci/kit-worker-dev.mjs supplies no SESSION_SECRET");
+  return secret;
+}
+
 export function normalizeOrigin(body: string, origin: string): string {
   // Feed links also ship a webcal:// variant (webcalUrl in
   // src/events/feeds.ts rewrites the http(s) scheme to webcal://), so the

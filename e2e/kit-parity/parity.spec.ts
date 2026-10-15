@@ -1,7 +1,9 @@
+import { createHmac } from "node:crypto";
 import { expect, test, type APIRequestContext } from "@playwright/test";
 import { sectionOf } from "../../ci/kit-section-contract.mjs";
 import {
   expectedKitMarker,
+  kitFixtureSessionSecret,
   KIT_ORIGIN,
   normalizeOrigin,
   parityTargets,
@@ -14,8 +16,9 @@ import {
 // against BOTH the Hono worker and the built Kit Worker in one run, and
 // every body comparison is origin-normalized first. Guest routes need no
 // session; the member-board journey spends exactly one QA login (below)
-// whose cookie is replayed to both targets — the token and cookie values
-// never appear in assertions or artifacts, and every body is scrubbed.
+// whose bearer token is replayed to both targets (re-signed for the Kit
+// fixture's own secret) — the token and cookie values never appear in
+// assertions or artifacts, and every body is scrubbed.
 // Login journeys (member RSVP, moderator admin, profile edit) stay Hono-only
 // until their routes migrate; they are ledgered as loud skips with reasons by
 // ci/kit-parity-gates.mjs, never as quiet test.skip calls here.
@@ -44,14 +47,17 @@ function api(target: ParityTarget): APIRequestContext {
   return context;
 }
 
-// One QA login for the whole member-board journey, issued by the Hono worker
-// and replayed to both targets: the session row lives in the shared seeded
-// Postgres and both workers verify the signed cookie with the same secret
-// (e2e/prepare.mjs publishes E2E_SESSION_SECRET for ci/kit-worker-dev.mjs).
+// One QA login for the whole member-board journey, issued by the Hono worker:
+// the session row lives in the shared seeded Postgres, so the same bearer
+// token authenticates on both targets. The cookie signature does not replay
+// across targets — the isolated Kit fixture verifies with its own synthetic
+// secret (ci/kit-worker-dev.mjs, pinned by ci/kit-parity-ci-wiring.test.mjs),
+// so the Kit copy is re-signed with that fixture value below. In production
+// both renderers share one deployed secret and no re-signing exists.
 // POST /auth/qa/:identity shares the qa-login throttle, so exactly one login
 // is spent here however many board fetches follow.
 let memberCookiePromise: Promise<string> | null = null;
-function memberCookie(): Promise<string> {
+function honoMemberCookie(): Promise<string> {
   memberCookiePromise ??= (async () => {
     const token = process.env.E2E_QA_TOKEN;
     if (!token) throw new Error("Missing ephemeral CI QA token");
@@ -70,6 +76,16 @@ function memberCookie(): Promise<string> {
     return setCookie.value.split(";")[0]!;
   })();
   return memberCookiePromise;
+}
+
+async function memberCookie(target: ParityTarget): Promise<string> {
+  const pair = await honoMemberCookie();
+  if (target.name !== "kit") return pair;
+  const eq = pair.indexOf("=");
+  const signed = pair.slice(eq + 1);
+  const raw = signed.slice(0, signed.lastIndexOf("."));
+  const signature = createHmac("sha256", kitFixtureSessionSecret()).update(raw).digest("base64");
+  return `${pair.slice(0, eq + 1)}${raw}.${signature}`;
 }
 
 function expectNoMarker(headers: Record<string, string>, label: string) {
@@ -217,7 +233,7 @@ for (const target of targets) {
     });
 
     test("member board serves overall, relative, season and activity views privately", async () => {
-      const cookie = await memberCookie();
+      const cookie = await memberCookie(target);
       const expectedMarker =
         target.name === "kit" ? expectedKitMarker("/leaderboards/members") : null;
       for (const path of [
@@ -244,7 +260,7 @@ for (const target of targets) {
     });
 
     test("bad season, scope and activity answer 400 before any board", async () => {
-      const cookie = await memberCookie();
+      const cookie = await memberCookie(target);
       for (const path of [
         "/leaderboards/members?season=bogus",
         "/leaderboards/members?scope=friends",

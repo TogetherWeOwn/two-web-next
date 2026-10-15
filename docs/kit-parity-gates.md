@@ -118,9 +118,10 @@ quiet pass. The signed-in non-member 403 cannot be minted by the QA seam
 `test/kit-members.test.ts`). The same journey executes in CI against the
 local Hono worker and the built Kit Worker in
 `e2e/kit-parity/parity.spec.ts`, which spends one shared QA login for both
-targets; the two workers verify the cookie with one signing secret
-(`e2e/prepare.mjs` publishes `E2E_SESSION_SECRET`, consumed by
-`ci/kit-worker-dev.mjs`).
+targets: the session row is shared, and the spec re-signs the bearer token
+with the Kit fixture's own synthetic secret (`ci/kit-worker-dev.mjs`) for
+the Kit target, since the isolated fixture deliberately does not share the
+Hono worker's signing secret.
 
 Exit codes mirror the staging gate: 0 pass, 1 journeys failed, 2
 misconfigured (one-sided URLs, non-allowlisted hosts) or all-skipped/empty
