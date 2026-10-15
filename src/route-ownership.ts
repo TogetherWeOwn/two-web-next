@@ -154,6 +154,15 @@ export const ROUTE_MANIFEST: OwnedRoute[] = [
   // Hono-owned, so wall-time UTC carriers, future recurrence propagation,
   // bounded roster paging and postcommit writeback keep one authority until
   // the write slice lands. Off until the enablement review.
+  // The legacy /admin/events/create bookmark pins to Hono with the exact
+  // disabled entry below: exact entries beat :param patterns in bestMatch,
+  // so without it the :key pattern would capture /create once enabled and
+  // Kit would 404 instead of Hono's redirect to /admin/events/new.
+  {
+    method: "GET",
+    path: "/admin/events/create",
+    enabled: false,
+  },
   {
     method: "GET",
     path: "/admin/events/:key",

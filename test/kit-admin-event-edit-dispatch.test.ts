@@ -166,6 +166,31 @@ describe("Kit admin event-edit dispatch: privileged boundary releases and routin
     expect(res.headers.get(KIT_RENDERER_HEADER)).toBeNull();
   });
 
+  it("the legacy /admin/events/create bookmark stays Hono-owned once :key is enabled", async () => {
+    const shippedCreate = ROUTE_MANIFEST.find(
+      (e) => e.method === "GET" && e.path === "/admin/events/create",
+    );
+    if (!shippedCreate) throw new Error("shipped GET /admin/events/create manifest entry missing");
+    expect(shippedCreate.enabled).toBe(false);
+    const manifest = ROUTE_MANIFEST.map((e) =>
+      e.method === "GET" && e.path === "/admin/events/:key" ? { ...e, enabled: true } : e,
+    );
+    const honoFetch = vi.fn(async () => new Response("hono"));
+    const resolve = vi.fn(async () => new Response("kit"));
+    const request = new Request(`${APP_URL}/admin/events/create`, {
+      method: "GET",
+      headers: { host: "next.example.test" },
+    });
+    const res = await dispatchHookRequest(
+      { request, url: new URL(request.url), route: { id: "/admin/events/[key]" } },
+      { ...depsFor(), manifest, honoFetch, resolve },
+    );
+    expect(honoFetch).toHaveBeenCalledOnce();
+    expect(resolve).not.toHaveBeenCalled();
+    expect(await res.text()).toBe("hono");
+    expect(res.headers.get(KIT_RENDERER_HEADER)).toBeNull();
+  });
+
   it("no event delete exists: mutating deletes stay Hono-owned like every other method", async () => {
     for (const method of ["DELETE", "POST"]) {
       const request = new Request(`${APP_URL}/admin/events/EVT1/delete`, {

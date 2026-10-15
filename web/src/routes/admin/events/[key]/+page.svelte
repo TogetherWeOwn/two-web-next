@@ -11,7 +11,7 @@ import type { PageProps } from "./$types";
 // route owns traffic. Values and field errors arrive from the load in the
 // Hono eventValues shape (retained input, per-field messages, empty on a
 // fresh GET). No island and no event handlers of its own: the edit, status
-// and transition forms post to the Hono-owned POST /admin/events/:key,
+// and status-change forms post to the Hono-owned POST /admin/events/:key,
 // .../publish, .../cancel, .../rsvp-pause and .../rsvp-reopen endpoints, so
 // the page works with JavaScript disabled, exactly like the Hono panel. The
 // text-limit and editor islands enhance it when JavaScript runs. There is
