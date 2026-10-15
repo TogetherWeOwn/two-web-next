@@ -10,13 +10,13 @@ bot rewrite, framework ADR pending).
 
 | Piece | Value |
 |---|---|
-| Staging provider / plan | Neon, Launch (`$0.106`/CU-hr + `$0.35`/GB-mo, no minimum, scale-to-zero) |
+| Staging provider / plan | PlanetScale Postgres, AWS `us-east-1` (N. Virginia), staging branch |
 | Production provider / plan | PlanetScale Postgres HA, PS-10 arm, AWS `us-east-1` (N. Virginia), PG17 — per CEO region decision 2026-10-03 on [TOG-12212](/TOG/issues/TOG-12212) (supersedes [TOG-12178](/TOG/issues/TOG-12178#document-decision) rev 2 Frankfurt) |
-| Staging region and Worker placement | Neon `eu-central-1` (Frankfurt). The staging Worker is pinned beside it with `placement.region = "aws:eu-central-1"` in `wrangler.jsonc`: from US colos each statement was a transatlantic Hyperdrive round trip (DB-bound requests: median 0.5-1.8 s, p95 3-4.6 s), from CDG/AMS 125-195 ms. `env.production` sets `placement.mode = "off"`; pick its placement (likely `aws:us-east-1`) at cutover |
-| Branches | Neon `staging` (all pre-cutover work) + PlanetScale `two-production` (prod, at cutover) |
-| Web path | Workers → Hyperdrive (`DB` binding) → staging Neon pooled URL / production PlanetScale `6432` (PgBouncer) URL |
+| Staging region and Worker placement | PlanetScale staging database is `us-east-1` (N. Virginia). The staging Worker placement stays `aws:eu-central-1` in `wrangler.jsonc` (pre-repoint placement beside the retired Neon staging branch in `eu-central-1`; moving it beside the staging database is a separate latency decision): from US colos each statement is a transatlantic Hyperdrive round trip (DB-bound requests against Neon: median 0.5-1.8 s, p95 3-4.6 s), from CDG/AMS 125-195 ms. `env.production` sets `placement.mode = "off"`; pick its placement (likely `aws:us-east-1`) at cutover |
+| Branches | PlanetScale staging branch (username suffix `4vmu64sp52p4`) + PlanetScale production branch (username suffix `mmzi498bs6m5`) |
+| Web path | Workers → Hyperdrive (`DB` binding) → PlanetScale staging branch / production PlanetScale |
 | Bot path | Container → direct `postgres` driver (no Hyperdrive) → staging Neon pooled URL / production PlanetScale `5432` direct URL |
-| Migrations | direct (non-pooled) URL on port `5432`; pooled endpoints can break DDL transactionally. Staging reads `NEON_STAGING_DATABASE_URL`; production reads `PRODUCTION_DATABASE_URL` (PlanetScale direct `<id>.pg.psdb.cloud:5432`, never `6432`) |
+| Migrations | direct (non-pooled) URL on port `5432`; pooled endpoints can break DDL transactionally. Staging reads `PLANETSCALE_STAGING_DATABASE_URL` (pinned staging host and branch id; retired Neon endpoints are refused); production reads `PRODUCTION_DATABASE_URL` (PlanetScale direct `<id>.pg.psdb.cloud:5432`, never `6432`) |
 
 Repository configuration routes the Worker through the `DB`
 Hyperdrive binding ([Wrangler config](../wrangler.jsonc)).

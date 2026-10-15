@@ -275,6 +275,18 @@ test("target/ref/secret/TLS/direct-endpoint checks are fail-closed without fallb
       },
     );
   }
+  // A third branch on the pinned staging host is refused as a non-pinned
+  // staging endpoint, not as the production identity: with Neon retired,
+  // the host plus branch-id suffix is the whole staging identity.
+  const thirdBranchOnStagingHost = `postgres://role-stub.9zzz9999zzzz:stub@${PLANETSCALE_STAGING_HOST}/db?sslmode=require`;
+  assert.throws(
+    () =>
+      migrationConfig({
+        ...mainEnv,
+        PLANETSCALE_STAGING_DATABASE_URL: thirdBranchOnStagingHost,
+      }),
+    /pinned staging endpoint/,
+  );
   assert.doesNotMatch(
     safeMigrationError(new Error("DO_NOT_ECHO postgres://credentials/ SQL")),
     /DO_NOT_ECHO|postgres:\/\/credentials|SQL/,
