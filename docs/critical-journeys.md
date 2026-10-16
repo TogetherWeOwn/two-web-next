@@ -37,7 +37,9 @@ journeys: see [visual-regression.md](visual-regression.md).
 
 After these journeys, the same job runs the Kit parity project
 (`playwright.kit-parity.config.ts`, `e2e/kit-parity/parity.spec.ts`): the
-no-login journeys above, parameterized to run against both the Hono worker
+no-login journeys above plus the authenticated member-board journey (guest
+bounce, member views, grammar refusals; one shared QA login replayed to both
+targets), parameterized to run against both the Hono worker
 and the adapter-built Kit Worker on the same seeded database, with
 origin-normalized body comparison, manifest-derived renderer expectations,
 mobile/desktop viewports and a startup probe. The JSON report feeds
