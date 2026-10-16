@@ -52,7 +52,23 @@ test("the coverage gate keeps area floors and summary scopes for the high-blast-
     );
     assert.ok(summary.includes(`"${area}/"`), `coverage summary must report ${area}/`);
   }
-  for (const file of ["src/invite.ts", "src/return-journey.ts", "src/write-recovery.tsx"]) {
+  for (const glob of ["src/kit-*"]) {
+    const escaped = glob.replace("*", "\\*");
+    assert.match(
+      config,
+      new RegExp(
+        `"${escaped}": \\{ statements: [0-9.]+, branches: [0-9.]+, functions: [0-9.]+, lines: [0-9.]+ \\}`,
+      ),
+    );
+    assert.ok(summary.includes(`"${glob}"`), `coverage summary must report ${glob}`);
+  }
+  for (const file of [
+    "src/invite.ts",
+    "src/return-journey.ts",
+    "src/write-recovery.tsx",
+    "src/counts.ts",
+    "src/seo.ts",
+  ]) {
     assert.match(
       config,
       new RegExp(
