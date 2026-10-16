@@ -60,6 +60,20 @@ describe("required checks always report", () => {
     expect(job(ci, "ci-ok")).toContain('run: test "$A11Y_RESULT" = success');
   });
 
+  it("documents ci-ok as the result gate for accessibility and performance", () => {
+    const performance = readFileSync("docs/performance-budgets.md", "utf8");
+    const accessibility = readFileSync("docs/a11y-ci.md", "utf8");
+    for (const doc of [performance, accessibility]) {
+      expect(doc).toMatch(/required\s+`ci-ok` job/);
+      expect(doc).toContain("standalone `check`");
+    }
+    expect(performance).toMatch(/both `lighthouse` and `bundle-budget`\s+must succeed/);
+    expect(performance).toContain("fails `ci-ok`");
+    expect(accessibility).toMatch(/fails\s+`ci-ok`/);
+    expect(performance).not.toMatch(/required `check` job depends on \*\*both\*\*/);
+    expect(accessibility).not.toMatch(/required `check` job/);
+  });
+
   it("gitleaks scans even when pr-lint failed", () => {
     const gitleaks = job(readFileSync(join(dir, "pr-gates.yml"), "utf8"), "gitleaks");
     expect(gitleaks).toMatch(/\n    if: \$\{\{ !cancelled\(\) \}\}\n/);
