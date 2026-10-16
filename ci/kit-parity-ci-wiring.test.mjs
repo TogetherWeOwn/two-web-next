@@ -135,6 +135,18 @@ test("visual tests re-seed and verify the board state after worker restarts", ()
   assert.match(visuals, /test\.setTimeout\(120_000\)/);
 });
 
+test("the member RSVP cleanup flag is armed before parsing the response", () => {
+  const spec = readFileSync(new URL("../e2e/kit-parity/parity.spec.ts", import.meta.url), "utf8");
+  const memberGoingRsvp = spec.match(
+    /function memberGoingRsvp\(\): Promise<void> \{([\s\S]*?)\n\}/,
+  )?.[1];
+  assert(memberGoingRsvp, "memberGoingRsvp must exist");
+  assert.match(
+    memberGoingRsvp,
+    /expect\(\[200, 201\], "ranked RSVP created or refreshed"\)\.toContain\(response\.status\(\)\);\s*memberRsvpCreated = true;\s*const body = \(await response\.json\(\)\)/,
+  );
+});
+
 test("the required check runs the parity selftests in their own fail-closed step", () => {
   const step = job
     .split(/\n      - /)

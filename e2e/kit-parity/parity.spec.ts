@@ -145,9 +145,9 @@ function memberGoingRsvp(): Promise<void> {
       data: { status: "going" },
     });
     expect([200, 201], "ranked RSVP created or refreshed").toContain(response.status());
+    memberRsvpCreated = true;
     const body = (await response.json()) as { data?: { status?: string } };
     expect(body.data?.status, "ranked RSVP holds a seat, not the waitlist").toBe("going");
-    memberRsvpCreated = true;
   })().catch((error: unknown) => {
     memberRsvpPromise = null;
     throw error;

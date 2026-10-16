@@ -90,7 +90,7 @@ jobs:
       - run: npm ci
         if: steps.probe.outputs.ready == 'true'
 
-      - name: Install pg_dump 17 (PGDG)
+      - name: Install pg_dump 18 (PGDG)
         if: steps.probe.outputs.ready == 'true'
         run: bash bin/backup-bootstrap.sh
 
