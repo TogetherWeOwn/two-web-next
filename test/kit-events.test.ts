@@ -452,12 +452,20 @@ describe("Kit events list query-state contract", () => {
 });
 
 describe("Kit events list route ownership", () => {
-  it("keeps GET, HEAD, POST and the JSON contract on Hono while the flag is off", () => {
-    expect(resolveRouteOwner({ method: "GET", path: "/events" })).toBe("hono");
-    expect(resolveRouteOwner({ method: "HEAD", path: "/events" })).toBe("hono");
+  it("ships GET and HEAD on Kit with POST and the JSON contract on Hono", () => {
+    expect(resolveRouteOwner({ method: "GET", path: "/events" })).toBe("kit");
+    expect(resolveRouteOwner({ method: "HEAD", path: "/events" })).toBe("kit");
     expect(resolveRouteOwner({ method: "POST", path: "/events" })).toBe("hono");
     expect(resolveRouteOwner({ method: "GET", path: "/events.json" })).toBe("hono");
-    expect(decideOwner(new Request("https://example.test/events"))).toBe("hono");
+    expect(decideOwner(new Request("https://example.test/events"))).toBe("kit");
+  });
+
+  it("rolls back to Hono through a disabled manifest entry", () => {
+    const manifest: OwnedRoute[] = [
+      { method: "GET", path: "/events", enabled: false, reads: "public" },
+    ];
+    expect(resolveRouteOwner({ method: "GET", path: "/events" }, manifest)).toBe("hono");
+    expect(resolveRouteOwner({ method: "HEAD", path: "/events" }, manifest)).toBe("hono");
   });
 
   it("ignores the fragment header in the ownership decision", () => {

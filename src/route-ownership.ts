@@ -41,9 +41,8 @@ export interface RouteDecision {
   path: string;
 }
 
-// The archive page and hot-zone heatmaps render natively; the events list ships
-// its native handler disabled until the calendar/enhancement companion passes,
-// and the about/privacy/rules/faq/join/recovery/profile reads, member board and
+// The archive page, the events list and hot-zone heatmaps render natively;
+// the about/privacy/rules/faq/join/recovery/profile reads, member board and
 // admin routes stay on Hono until their enablement is reviewed. Production (the Hono Worker) sees no traffic change for a
 // disabled path; the preview Worker moves a Kit-owned path back to Hono by
 // design — that is the rollback. Add one entry per migrated route, enabled
@@ -57,7 +56,7 @@ export interface RouteDecision {
 export const ROUTE_MANIFEST: OwnedRoute[] = [
   { method: "GET", path: "/", enabled: false, reads: "public" },
   { method: "GET", path: "/events/past", enabled: true, reads: "public" },
-  { method: "GET", path: "/events", enabled: false, reads: "public" },
+  { method: "GET", path: "/events", enabled: true, reads: "public" },
   { method: "GET", path: "/about", enabled: false, reads: "public" },
   { method: "GET", path: "/privacy", enabled: false, reads: "public" },
   { method: "GET", path: "/rules", enabled: false, reads: "public" },

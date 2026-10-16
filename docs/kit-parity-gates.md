@@ -12,7 +12,7 @@ expect Hono for the right reason.
 | --- | --- | --- | --- |
 | `GET /` | `web/src/routes/+page.svelte` (`csr=false`, shared `src/home-copy` + readers, no island) | public | Hono (`enabled: false`) |
 | `GET /events/past` | `web/src/routes/events/past/+page.svelte` (`csr=false`, shared `/islands/past-events.js`) | public | Kit (`enabled: true`) |
-| `GET /events` | `web/src/routes/events/+server.ts` (no Svelte page, so no client entries/node; Hono calendar screen bytes via `src/kit-events-html.tsx`, shared `/islands/events-calendar.js`; `POST /events` and `/events.json` stay Hono) | public | Hono (`enabled: false`) |
+| `GET /events` | `web/src/routes/events/+server.ts` (no Svelte page, so no client entries/node; Hono calendar screen bytes via `src/kit-events-html.tsx`, shared `/islands/events-calendar.js`; `POST /events` and `/events.json` stay Hono) | public | Kit (`enabled: true`) |
 | `GET /about` | `web/src/routes/about/+page.svelte` (`csr=false`, shared `ContentLeaf.svelte`, `src/about-content.ts`) | public | Hono (`enabled: false`) |
 | `GET /privacy` | `web/src/routes/privacy/+page.svelte` (`csr=false`, shared `POLICY_MARKDOWN`/`POLICY_VERSION` source, no island) | public | Hono (`enabled: false`) |
 | `GET /rules` | `web/src/routes/rules/+page.svelte` (`csr=false`, shared `ContentLeaf.svelte`, `src/rules-content.ts`) | public | Hono (`enabled: false`) |
@@ -97,8 +97,10 @@ asserts no canonical divergence — transient outcome pages ship none on
 either renderer), the archive section testid (no-JS content: the Kit page sets
 `csr=false`, so the contract is in the raw fetch body), archive noindex, the
 shared island binder, no bare Kit CSRF text, guest-only account chrome, and
-no secret-shaped content. The join contract adds the one-click/invite
-actions, exactly one widget zone and the flash privacy invariant; the
+no secret-shaped content. The events contract adds the calendar island
+identity, view toggles, search GET form, archive/subscribe links, markdown
+alternate and the flash privacy invariant; the join contract adds the
+one-click/invite actions, exactly one widget zone and the flash privacy invariant; the
 recovery contract adds the shared shell markers (`recovery-heading`,
 `recovery-retry`, `recovery-invite`), safe retry/invite hrefs and an
 unconditional private, no-store pin. Reserved paths (`/up`) and `POST /api/*`
@@ -197,7 +199,9 @@ to 256B — the repository rule from `ci/bundle-budget.json`):
 ## Parameterized journeys (`playwright.kit-parity.config.ts`)
 
 `e2e/kit-parity/parity.spec.ts` runs the journeys — past archive
-paging/refusals, public feeds/SEO, reserved/API surface, cross-origin
+paging/refusals, the events list (seeded row, calendar island contract,
+POST/JSON staying Hono-owned, normalized calendar-section equality),
+public feeds/SEO, reserved/API surface, cross-origin
 refusals, and the authenticated member-board journey (guest bounce, member
 views, grammar refusals; one shared QA login) — against both the Hono
 worker and the built Kit Worker in one run.
@@ -218,8 +222,9 @@ until their routes migrate; the gate ledger derives each entry from
 never quiet green, and never a `test.skip` call (the floor forbids new
 skips). An enabled route with no executed journey covering it records a
 failure instead of a skip: in-scope routes fail their journey (scope net),
-any other enabled route fails the uncovered-route catch-all (today only
-GET/HEAD `/events/past` via `PARITY_ROUTES` is covered).
+any other enabled route fails the uncovered-route catch-all (today
+GET/HEAD `/events/past` and GET/HEAD `/events` via `PARITY_ROUTES` are
+covered).
 
 ## Security
 
