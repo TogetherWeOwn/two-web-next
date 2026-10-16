@@ -110,10 +110,11 @@ function honoMemberCookie(): Promise<string> {
 
 async function memberCookie(target: ParityTarget): Promise<string> {
   const pair = await honoMemberCookie();
-  // Freshest wins: rotating page reads (GET /e/:key) delete the presented
-  // bearer's row and deliver the replacement via Set-Cookie into Hono's jar.
-  // Kit has a separate cookie signature, but shares that same session row, so
-  // it must re-sign the jar's current pair when a rotation has already run.
+  // Freshest wins: rotating page reads (GET /events, GET /e/:key) delete the
+  // presented bearer's row and deliver the replacement via Set-Cookie into
+  // Hono's jar. Kit has a separate cookie signature, but shares that same
+  // session row, so it must re-sign the jar's current pair when a rotation
+  // has already run.
   const hono = targets.find((candidate) => candidate.name === "hono")!;
   const state = await api(hono).storageState();
   const current = state.cookies.find((cookie) => cookie.name === "__Host-two_session");
@@ -189,6 +190,65 @@ for (const target of targets) {
       const body = await response.text();
       expect(body).toContain('data-testid="past-events-out-of-range"');
       expect(body).toContain("Page 2 is outside the archive. There is 1 page.");
+    });
+  });
+
+  // Events index (GET /events only; POST /events and /events.json stay
+  // Hono-owned, covered by e2e/events-create-validation.spec.ts on Hono).
+  // Bodies come from raw API fetches with no browser JS executed, so these
+  // assertions ARE the no-JS proof: the calendar content is in the first bytes.
+  test.describe(`${target.name}: events index renders the seeded row`, () => {
+    test("list renders the calendar island with the seeded row", async () => {
+      const response = await api(target).get("/events");
+      expect(response.status()).toBe(200);
+      expect(response.headers()["content-type"]).toContain("text/html");
+      // Renderer ownership is per target: Kit answers with the
+      // manifest-derived marker once enabled, Hono never carries one.
+      const expectedMarker = target.name === "kit" ? expectedKitMarker("/events") : null;
+      expect(response.headers()["x-two-renderer"] ?? null).toBe(expectedMarker);
+      expect(response.headers()["cache-control"]).toMatch(/^public, max-age=(?:[1-9]|[1-5]\d|60)$/);
+      // Full and island-fragment representations share the URL and differ by
+      // X-Two-Island, so Vary carries both tokens.
+      const eventsVaryTokens = (response.headers()["vary"] ?? "")
+        .split(",")
+        .map((token) => token.trim().toLowerCase());
+      expect(eventsVaryTokens).toContain("cookie");
+      expect(eventsVaryTokens).not.toContain("x-cookie");
+      expect(eventsVaryTokens).toContain("x-two-island");
+      const body = await response.text();
+      expect(scrubSecrets(body)).toEqual([]);
+      expect(body).toContain('data-island="events-calendar"');
+      expect(body).toContain('data-testid="events-calendar"');
+      const canonicalHref = body.match(
+        /<link\b[^>]*\brel="canonical"[^>]*\bhref="([^"]+)"[^>]*>/,
+      )?.[1];
+      expect(canonicalHref).toBeDefined();
+      const canonical = new URL(canonicalHref!, target.origin);
+      expect(canonical.pathname).toBe("/events");
+      expect(canonical.search).toBe("");
+      expect(canonical.hash).toBe("");
+      expect(body).toContain('data-testid="events-list"');
+      expect(body).toContain('data-testid="events-view-list"');
+      expect(body).toContain('data-testid="events-view-calendar"');
+      expect(body).toContain('data-testid="events-search"');
+      expect(body).toContain('data-testid="events-past-archive-link"');
+      expect(body).toContain('data-testid="events-subscribe"');
+      expect(body).toContain("E2E Community Night");
+      expect(body).toContain("Welcome, guest");
+      expect(body).not.toContain("Sign out");
+    });
+
+    test("POST and the JSON contract stay Hono-owned without the Kit marker", async () => {
+      const post = await api(target).post("/events", {
+        headers: { origin: target.origin },
+        data: { title: "Seed swap" },
+      });
+      expect(post.status()).toBe(401);
+      expect(post.headers()["x-two-renderer"] ?? null).toBeNull();
+      const json = await api(target).get("/events.json");
+      expect(json.status()).toBe(401);
+      expect(json.headers()["x-two-renderer"] ?? null).toBeNull();
+      expect(await json.json()).toEqual({ error: "unauthenticated" });
     });
   });
 
@@ -885,6 +945,37 @@ test("cross-target: normalized archive sections match", async () => {
     sectionOf(bodies.get("kit")!, "past-events"),
     "Kit section matches Hono section after origin normalization",
   ).toBe(sectionOf(bodies.get("hono")!, "past-events"));
+});
+
+test("cross-target: normalized events-calendar sections match", async ({ playwright }) => {
+  const bodies = new Map<string, string>();
+  for (const target of targets) {
+    // Cookie-free by construction: the shared api() context accumulates the
+    // session cookie from the earlier QA-login journey, which would render
+    // the member view (no join pitch, no sign-in links) on Hono instead of
+    // the guest contract. A fresh context renders the guest view on both.
+    const guest = await playwright.request.newContext({
+      baseURL: target.origin,
+      ignoreHTTPSErrors: target.ignoreHTTPSErrors,
+    });
+    try {
+      const response = await guest.get("/events");
+      expect(response.status()).toBe(200);
+      bodies.set(target.name, normalizeOrigin(await response.text(), target.origin));
+    } finally {
+      await guest.dispose();
+    }
+  }
+  // Non-vacuous equality: the compared sections carry the seeded row, so
+  // two empty lists cannot pass for parity.
+  expect(
+    sectionOf(bodies.get("hono")!, "events-calendar"),
+    "Hono events-calendar section carries the seeded row",
+  ).toContain("E2E Community Night");
+  expect(
+    sectionOf(bodies.get("kit")!, "events-calendar"),
+    "Kit section matches Hono section after origin normalization",
+  ).toBe(sectionOf(bodies.get("hono")!, "events-calendar"));
 });
 
 test("cross-target: normalized member-board tables match", async () => {

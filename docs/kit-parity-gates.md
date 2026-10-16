@@ -12,7 +12,7 @@ expect Hono for the right reason.
 | --- | --- | --- | --- |
 | `GET /` | `web/src/routes/+page.svelte` (`csr=false`, shared `src/home-copy` + readers, no island) | public | Hono (`enabled: false`) |
 | `GET /events/past` | `web/src/routes/events/past/+page.svelte` (`csr=false`, shared `/islands/past-events.js`) | public | Kit (`enabled: true`) |
-| `GET /events` | `web/src/routes/events/+server.ts` (no Svelte page, so no client entries/node; Hono calendar screen bytes via `src/kit-events-html.tsx`, shared `/islands/events-calendar.js`; `POST /events` and `/events.json` stay Hono) | public | Hono (`enabled: false`) |
+| `GET /events` | `web/src/routes/events/+server.ts` (no Svelte page, so no client entries/node; Hono calendar screen bytes via `src/kit-events-html.tsx`, shared `/islands/events-calendar.js`; `POST /events` and `/events.json` stay Hono) | public | Kit (`enabled: true`) |
 | `GET /about` | `web/src/routes/about/+page.svelte` (`csr=false`, shared `ContentLeaf.svelte`, `src/about-content.ts`) | public | Kit (`enabled: true`) |
 | `GET /privacy` | `web/src/routes/privacy/+page.svelte` (`csr=false`, shared `POLICY_MARKDOWN`/`POLICY_VERSION` source, no island) | public | Hono (`enabled: false`) |
 | `GET /rules` | `web/src/routes/rules/+page.svelte` (`csr=false`, shared `ContentLeaf.svelte`, `src/rules-content.ts`) | public | Hono (`enabled: false`) |
@@ -129,8 +129,10 @@ asserts no canonical divergence — transient outcome pages ship none on
 either renderer), the archive section testid (no-JS content: the Kit page sets
 `csr=false`, so the contract is in the raw fetch body), archive noindex, the
 shared island binder, no bare Kit CSRF text, guest-only account chrome, and
-no secret-shaped content. The join contract adds the one-click/invite
-actions, exactly one widget zone and the flash privacy invariant; the
+no secret-shaped content. The events contract adds the calendar island
+identity, view toggles, search GET form, archive/subscribe links, markdown
+alternate and the flash privacy invariant; the join contract adds the
+one-click/invite actions, exactly one widget zone and the flash privacy invariant; the
 recovery contract adds the shared shell markers (`recovery-heading`,
 `recovery-retry`, `recovery-invite`), safe retry/invite hrefs and an
 unconditional private, no-store pin. The static-leaf contracts (`about`,
@@ -243,8 +245,10 @@ to 256B — the repository rule from `ci/bundle-budget.json`):
 
 `e2e/kit-parity/parity.spec.ts` runs the journeys — past-archive
 paging and refusals (including successful Older/Newer/Back turns over 24
-seeded rows that `afterAll` sweeps), join-landing funnel, auth-recovery outcome, hot-zone grids
-and signal navigation, public feeds/SEO, reserved/API surface, cross-origin
+seeded rows that `afterAll` sweeps), the events list (seeded row, calendar
+island contract, POST/JSON staying Hono-owned, normalized calendar-section
+equality), join-landing funnel, auth-recovery outcome, hot-zone grids and
+signal navigation, public feeds/SEO, reserved/API surface, cross-origin
 refusals, and the authenticated member-board journey (guest bounce, member
 views, grammar refusals; one shared QA login) — against both the Hono worker
 and the built Kit Worker in one run. The fixture-based unit contract and
@@ -270,17 +274,16 @@ declaration alone does not prove a browser journey ran. `/about`, `/faq`
 and the four hot-zone paths clear the catch-all because their base paths are
 listed, not because that catch-all checks an executed journey; the step-3
 fixtures and operator-run preview are separate contract evidence. Executed
-parity journeys cover GET/HEAD
-`/events/past`, `/join`, `/auth/recover` and `/leaderboards/members` (the
-member board also runs authenticated). Hot-zone coverage is distinct: the
-suite performs raw no-JavaScript API checks for all four paths and renders
-`/hotzones` plus `/hotzones/joins`; it does not render the voice or games
-pages. The unit contract
-exercises shared contract branches on canonical fixtures (one synthetic
-`/hotzones` shell, one member-board fixture, the `/about` and `/faq` leaves);
-per-path coverage of the four hot-zone signals comes from those API checks
-(and from preview mode when an operator runs it). Hot-zone Vitest suites run
-in CI. Preview fetch is an operator-run check, not CI evidence.
+parity journeys cover GET/HEAD `/events/past`, `/events`, `/join`,
+`/auth/recover` and `/leaderboards/members` (the member board also runs
+authenticated). Hot-zone coverage is distinct: the suite performs raw
+no-JavaScript API checks for all four paths and renders `/hotzones` plus
+`/hotzones/joins`; it does not render the voice or games pages. The unit
+contract exercises shared contract branches on canonical fixtures (one
+synthetic `/hotzones` shell, one member-board fixture, the `/about` and `/faq`
+leaves); per-path coverage of the four hot-zone signals comes from those API
+checks (and from preview mode when an operator runs it). Hot-zone Vitest
+suites run in CI. Preview fetch is an operator-run check, not CI evidence.
 
 ## Security
 

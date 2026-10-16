@@ -309,8 +309,9 @@ export async function loadEventsPage(
     } catch {
       joinResult = null;
     }
-    if (method !== "GET") joinResult = null;
   }
+  const hasPendingJoinResult = joinResult !== null;
+  if (method !== "GET") joinResult = null;
 
   let model: CalendarPageModel;
   try {
@@ -332,7 +333,7 @@ export async function loadEventsPage(
   if (joinResult && method === "GET") deleteJoinCookie();
 
   const cacheControl =
-    session || input.searching || joinResult ? "private, no-store" : "public, max-age=60";
+    session || input.searching || hasPendingJoinResult ? "private, no-store" : "public, max-age=60";
   const headers: Record<string, string> = {
     "cache-control": cacheControl,
     vary,

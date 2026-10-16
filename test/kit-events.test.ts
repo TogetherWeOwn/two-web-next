@@ -437,6 +437,19 @@ describe("Kit events list query-state contract", () => {
     expect(fragment.deleteJoinCookie).not.toHaveBeenCalled();
   });
 
+  it("keeps flashed HEAD responses private without consuming the flash", async () => {
+    const journeyForFn = vi.fn(async () => "added" as const);
+    const head = loadArgs({ method: "HEAD", journeyForFn });
+    const data = await loadEventsPage(head.args);
+
+    expect(journeyForFn).toHaveBeenCalledOnce();
+    expect(data).toMatchObject({ joinResult: null });
+    expect(head.deleteJoinCookie).not.toHaveBeenCalled();
+    expect(head.setHeaders).toHaveBeenCalledWith(
+      expect.objectContaining({ "cache-control": "private, no-store" }),
+    );
+  });
+
   it("leaves the join flash pending when the model read fails", async () => {
     const failingModel = loadArgs({
       journeyForFn: async () => "added" as const,
@@ -452,12 +465,20 @@ describe("Kit events list query-state contract", () => {
 });
 
 describe("Kit events list route ownership", () => {
-  it("keeps GET, HEAD, POST and the JSON contract on Hono while the flag is off", () => {
-    expect(resolveRouteOwner({ method: "GET", path: "/events" })).toBe("hono");
-    expect(resolveRouteOwner({ method: "HEAD", path: "/events" })).toBe("hono");
+  it("ships GET and HEAD on Kit with POST and the JSON contract on Hono", () => {
+    expect(resolveRouteOwner({ method: "GET", path: "/events" })).toBe("kit");
+    expect(resolveRouteOwner({ method: "HEAD", path: "/events" })).toBe("kit");
     expect(resolveRouteOwner({ method: "POST", path: "/events" })).toBe("hono");
     expect(resolveRouteOwner({ method: "GET", path: "/events.json" })).toBe("hono");
-    expect(decideOwner(new Request("https://example.test/events"))).toBe("hono");
+    expect(decideOwner(new Request("https://example.test/events"))).toBe("kit");
+  });
+
+  it("rolls back to Hono through a disabled manifest entry", () => {
+    const manifest: OwnedRoute[] = [
+      { method: "GET", path: "/events", enabled: false, reads: "public" },
+    ];
+    expect(resolveRouteOwner({ method: "GET", path: "/events" }, manifest)).toBe("hono");
+    expect(resolveRouteOwner({ method: "HEAD", path: "/events" }, manifest)).toBe("hono");
   });
 
   it("ignores the fragment header in the ownership decision", () => {
