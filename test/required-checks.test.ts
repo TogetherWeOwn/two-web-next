@@ -49,13 +49,26 @@ describe("required checks always report", () => {
     },
   );
 
-  it("check runs whatever its dependencies concluded unless its run was cancelled, and fails when the audit is not green", () => {
-    const check = job(readFileSync(join(dir, "ci.yml"), "utf8"), "check");
-    // More gates may join `needs`; the guard below only relies on these two.
-    const needs = check.match(/\n    needs: \[([^\]]*)\]\n/)?.[1]?.split(/,\s*/) ?? [];
-    expect(needs).toEqual(expect.arrayContaining(["a11y", "scope"]));
+  it("check starts independently while ci-ok waits for check and both audits", () => {
+    const ci = readFileSync(join(dir, "ci.yml"), "utf8");
+    const check = job(ci, "check");
+    const checkNeeds = check.match(/\n    needs: \[([^\]]*)\]\n/)?.[1]?.split(/,\s*/) ?? [];
+    expect(checkNeeds).toEqual(["scope"]);
     expect(check).toMatch(/\n    if: \$\{\{ !cancelled\(\) \}\}\n/);
-    expect(check).toContain('run: test "$A11Y_RESULT" = success');
+
+    const ciOk = job(ci, "ci-ok");
+    const ciOkNeeds = ciOk.match(/\n    needs: \[([^\]]*)\]\n/)?.[1]?.split(/,\s*/) ?? [];
+    expect(ciOkNeeds).toEqual([
+      "a11y",
+      "lighthouse",
+      "bundle-budget",
+      "docs-links",
+      "check",
+      "scope",
+    ]);
+    expect(ciOk).toMatch(/\n    if: \$\{\{ !cancelled\(\) \}\}\n/);
+    expect(ciOk).toContain("CHECK_RESULT: ${{ needs.check.result }}");
+    expect(ciOk).toContain('fail "check did not succeed."');
   });
 
   it("gitleaks scans even when pr-lint failed", () => {
@@ -66,7 +79,9 @@ describe("required checks always report", () => {
   it("ci-ok aggregates the gated jobs", () => {
     const ci = readFileSync(join(dir, "ci.yml"), "utf8");
     const ok = job(ci, "ci-ok");
-    expect(ok).toMatch(/\n    needs: \[a11y, lighthouse, bundle-budget, check, scope\]\n/);
+    expect(ok).toMatch(
+      /\n    needs: \[a11y, lighthouse, bundle-budget, docs-links, check, scope\]\n/,
+    );
     expect(ok).toMatch(/\n    if: \$\{\{ !cancelled\(\) \}\}\n/);
     // ci-ok is required (ruleset protect-main); the change-gating section documents what it aggregates.
     expect(readFileSync("CONTRIBUTING.md", "utf8")).toContain("### Change-gated CI and `ci-ok`");
