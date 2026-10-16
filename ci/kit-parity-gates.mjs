@@ -665,9 +665,11 @@ function assertEventsContract(label, html, get, expected) {
         `${label}: cache-control ${JSON.stringify(cacheActual)} not in ${allowed.join(" | ")}`,
       );
   }
-  const vary = get("vary") ?? "";
-  if (!/cookie/i.test(vary)) failures.push(`${label}: Vary stays on every variant`);
-  if (!/x-two-island/i.test(vary))
+  const varyTokens = new Set(
+    (get("vary") ?? "").split(",").map((token) => token.trim().toLowerCase()),
+  );
+  if (!varyTokens.has("cookie")) failures.push(`${label}: Vary stays on every variant`);
+  if (!varyTokens.has("x-two-island"))
     failures.push(
       `${label}: Vary distinguishes full vs island-fragment representations (Cookie, X-Two-Island)`,
     );
@@ -688,14 +690,38 @@ function assertEventsContract(label, html, get, expected) {
   if (!html.includes('<form method="get" action="/events"'))
     failures.push(`${label}: search stays a GET form (no-JS fallback)`);
   if (!html.includes('name="q"')) failures.push(`${label}: search field keeps its query name`);
-  if (!html.includes('data-testid="events-past-archive-link"'))
+  if (
+    !/<a\b(?=[^>]*\bdata-testid="events-past-archive-link")(?=[^>]*\bhref="\/events\/past")[^>]*>/.test(
+      html,
+    )
+  )
     failures.push(`${label}: past-archive link present`);
-  if (!html.includes('data-testid="events-subscribe"'))
-    failures.push(`${label}: subscribe action present`);
+  const canonicalHref = html.match(
+    /<link\b(?=[^>]*\brel="canonical")(?=[^>]*\bhref="([^"]+)")[^>]*>/,
+  )?.[1];
+  const subscribeHref = html.match(
+    /<a\b(?=[^>]*\bdata-testid="events-subscribe")(?=[^>]*\bhref="([^"]+)")[^>]*>/,
+  )?.[1];
+  let subscribeMatchesCanonicalHost = false;
+  try {
+    const canonicalUrl = canonicalHref ? new URL(canonicalHref) : null;
+    const subscribeUrl = subscribeHref ? new URL(subscribeHref) : null;
+    subscribeMatchesCanonicalHost =
+      canonicalUrl !== null &&
+      subscribeUrl !== null &&
+      subscribeUrl.protocol === "webcal:" &&
+      subscribeUrl.host === canonicalUrl.host &&
+      subscribeUrl.pathname === "/events.ics" &&
+      subscribeUrl.search === "" &&
+      subscribeUrl.hash === "";
+  } catch {}
+  if (!subscribeMatchesCanonicalHost) failures.push(`${label}: subscribe action present`);
   if (!html.includes('<script src="/islands/events-calendar.js"'))
     failures.push(`${label}: shared island binder`);
   if (!html.includes('href="/events.md"')) failures.push(`${label}: markdown alternate present`);
-  if (!/<link\b[^>]*\brel="canonical"[^>]*href="[^"]*\/events"[^>]*>/.test(html))
+  if (
+    !/<link\b(?=[^>]*\brel="canonical")(?=[^>]*\bhref="https?:\/\/[^/"]+\/events")[^>]*>/.test(html)
+  )
     failures.push(`${label}: canonical points at /events`);
   // Flash privacy invariant, independent of the expected-cache pin: a view
   // carrying the one-shot banner is viewer-specific and never shared-cacheable.
@@ -1237,6 +1263,24 @@ export function runUnitMode({ stdout = process.stdout, manifestSource: manifestO
       "no-archive-link",
       (html) => html.replace('data-testid="events-past-archive-link"', 'data-testid="x"'),
     ],
+    ["archive-wrong-destination", (html) => html.replace('href="/events/past"', 'href="/events"')],
+    [
+      "archive-suffixed-destination",
+      (html) => html.replace('href="/events/past"', 'href="/events/past-extra"'),
+    ],
+    [
+      "subscribe-wrong-destination",
+      (html) =>
+        html.replace('href="webcal://next.togetherweown.com/events.ics"', 'href="/events.ics"'),
+    ],
+    [
+      "subscribe-wrong-host",
+      (html) =>
+        html.replace(
+          'href="webcal://next.togetherweown.com/events.ics"',
+          'href="webcal://evil.example/events.ics"',
+        ),
+    ],
     // A canonical pointing at the archive (or the site root) must FAIL: the
     // <link rel="canonical"> element itself has to name /events, so nav and
     // form `/events"` substrings alone never satisfy it.
@@ -1254,6 +1298,14 @@ export function runUnitMode({ stdout = process.stdout, manifestSource: manifestO
         html.replace(
           '<link rel="canonical" href="https://next.togetherweown.com/events">',
           '<link rel="canonical" href="https://next.togetherweown.com/">',
+        ),
+    ],
+    [
+      "canonical-suffixed-target",
+      (html) =>
+        html.replace(
+          '<link rel="canonical" href="https://next.togetherweown.com/events">',
+          '<link rel="canonical" href="https://next.togetherweown.com/events-extra">',
         ),
     ],
     // A flashed view served shared-cacheable: the privacy invariant fails it
@@ -1297,6 +1349,7 @@ export function runUnitMode({ stdout = process.stdout, manifestSource: manifestO
   for (const [name, vary] of [
     ["vary-cookie-only", "Cookie"],
     ["vary-island-only", "X-Two-Island"],
+    ["vary-cookie-substring-only", "X-Cookie, X-Two-Island"],
   ]) {
     const failures = assertRouteContract({
       label: `unit/events-mutant-${name}`,
