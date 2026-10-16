@@ -54,9 +54,13 @@ claim of journey parity:
    generated-asset budgets against the measured baselines)
 5. `node ci/kit-worker-e2e.mjs` (built Worker runtime fixture)
 
-In `browser-smoke`, after the critical journeys:
-`e2e:kit-parity` (parameterized journeys vs Hono and the built Kit
-Worker; one shared QA login for the member-board journey), then
+In `browser-smoke`, after the seed and before any browser journey mutates
+shared state, the dedicated `events-index.visual.spec.ts` captures the Kit
+`/events` page. Kit dependencies/build and this visual run precede the Hono
+visual suite and critical browser journeys. The full `parity.spec.ts` run stays
+after the critical journeys; it spends one shared QA login and writes then
+withdraws one RSVP on the seeded event. This ordering keeps both visual suites
+on the clean seed state. The parity run is followed by
 `node ci/check-kit-parity.mjs` (loud ledger).
 
 One baseline integrator owns `e2e/visual/__screenshots__/` and
@@ -164,13 +168,21 @@ too: `KIT_WORKER_ORIGIN`, else derived from `KIT_WORKER_PORT` (the port
   `ci/kit-visual-accept.mjs` writes ONLY under that directory — the
   destination is fixed, not derived from artifact paths, so it can never
   touch the Hono baselines — and reads ONLY the Kit suite's own folders
-  (`test-results-kit-parity/`, `__screenshots-kit__/`), ignoring Hono
-  actuals in the shared failure artifact. `ci/visual-accept.mjs` likewise
-  ignores Kit suite outputs. An intentional redesign is a reviewed artifact
+  (`test-results-kit-visual/`, `test-results-kit-parity/`,
+  `__screenshots-kit__/`), ignoring Hono actuals in the shared failure
+  artifact. The Kit visual config has its own Playwright output directory so
+  the later parity run cannot clear visual actuals before artifact upload.
+  When an actual and its stale committed baseline share a destination, the
+  reviewed actual wins; distinct actuals still refuse. `ci/visual-accept.mjs`
+  likewise ignores Kit suite outputs. An intentional redesign is a reviewed artifact
   committed in the same PR — reviewers treat a baseline change like code —
-  never a silent regeneration. (No Kit screenshots are captured yet: the
-  accept flow is ready for the first enabled route; the DOM/state parity for
-  it runs in the parity spec today.)
+  never a silent regeneration. (Kit baselines pin the events index:
+  `e2e/kit-parity/events-index.visual.spec.ts` captures the populated `/events`
+  state at desktop and mobile widths against the built Kit Worker as a guest.
+  It runs before mutable journeys and asserts exactly the three seeded upcoming
+  event rows plus the zero-RSVP count, so fixture leftovers cannot silently
+  become the reference image. The DOM/state parity journeys remain in
+  `e2e/kit-parity/parity.spec.ts`.)
 - `maxDiffPixels: 300` per screenshot (absolute, not a ratio), `<time>`
   masked, animations disabled, caret hidden. Raising the threshold or masking
   more needs its own PR with justification.
