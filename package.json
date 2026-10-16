@@ -8,7 +8,7 @@
     "deploy": "wrangler deploy",
     "typecheck": "tsc --noEmit && tsc --noEmit -p ci/tsconfig.json",
     "test": "vitest run",
-    "e2e": "playwright test",
+    "e2e": "NODE_OPTIONS=--import=tsx playwright test",
     "e2e:staging": "playwright test --config playwright.staging.config.ts",
     "e2e:watch": "playwright test --config playwright.watch.config.ts",
     "e2e:typecheck": "tsc --noEmit -p e2e/tsconfig.json",
