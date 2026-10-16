@@ -133,14 +133,15 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ secrets.PRODUCTION_CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.PRODUCTION_CLOUDFLARE_ACCOUNT_ID }}
           DEPLOY_SHA: ${{ needs.preflight.outputs.sha }}
-      # Gradual promotion lives in the shared composite action
-      # (.github/actions/gradual-promote): 5% -> 50% -> 100% with per-stage
-      # health/SLO gates pinned to the new version, and automatic rollback to
-      # the recorded pre-promote version on any stage failure. Other repos
-      # call the same action; repo-specific build/upload stays above.
+      # Gradual promotion lives in the shared central composite action
+      # (TogetherWeOwn/.github/actions/gradual-promote, pinned below): 5% ->
+      # 50% -> 100% with per-stage health/SLO gates pinned to the new version,
+      # and automatic rollback to the recorded pre-promote version on any stage
+      # failure. Other repos call the same action; repo-specific build/upload
+      # stays above.
       - name: Gradual promotion 5-50-100 with automatic rollback
         id: gradual
-        uses: ./.github/actions/gradual-promote
+        uses: TogetherWeOwn/.github/actions/gradual-promote@1dcce452d9066c02e4ab3d99931edf75d50388d7
         with:
           worker-name: two-web-next-production
           version-tag: ${{ needs.preflight.outputs.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
