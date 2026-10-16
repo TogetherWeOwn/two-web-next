@@ -56,7 +56,11 @@ not fail) unless marked HARD. All of them run on the existing runners only.
   specs under e2e/); e2e safety and every ci selftest script run via
   enumerated paths (check lists each node:test file; the a11y job and vitest
   include name the vitest files exactly), so any rename of those needs a
-  waiver.
+  waiver. Merge-queue squash messages hard-wrap PR bodies at ~72 columns,
+  so `unfoldFloorWaiverLines` joins nonblank continuation lines after each
+  `Floor-waiver:` line before matching; path-based waiver parsing removes
+  wrap-inserted spaces within the path
+  (`ci/floor-guard.mjs:206-230, 233-254`).
   Waivers are reasoned commit trailers (`test-deleted`, `assertion-removed`,
   `threshold-removed`, `new-exemption`) and every active one is printed to the
   log and the job summary for reviewer visibility. The ignore list is pinned

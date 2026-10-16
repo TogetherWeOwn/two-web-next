@@ -27,7 +27,12 @@ export const handle: Handle = async ({ event, resolve }) =>
     appUrl: env.APP_URL,
     featuredImageHosts: env.FEATURED_IMAGE_HOSTS,
     honoFetch,
-    resolve: (hookEvent) => resolve(hookEvent as Parameters<typeof resolve>[0]),
+    // Forwards the core's resolve options untouched: content-leaf renders
+    // pass transformPageChunk here (the zero-stylesheet strip), every other
+    // route passes none. The hook carries no route logic of its own — the
+    // core alone decides when the option is set.
+    resolve: (hookEvent, opts) =>
+      resolve(hookEvent as Parameters<typeof resolve>[0], opts as Parameters<typeof resolve>[1]),
     pastArchive: (request, render) => dispatchPastArchiveRequest(request, env, render),
     eventsPage: (request, render) =>
       dispatchEventsRequest(request, env, render, {

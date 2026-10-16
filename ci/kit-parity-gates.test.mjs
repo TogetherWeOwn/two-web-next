@@ -507,6 +507,123 @@ test("member-board contract passes a good fixture and fails planted mutants", ()
   }
 });
 
+test("static-leaf contracts pass good fixtures and fail planted mutants", () => {
+  const shell = (path, inner) =>
+    `<html><head><link rel="canonical" href="https://next.togetherweown.com${path}"></head>` +
+    `<body><a class="skip-link" href="#main">Skip</a>` +
+    `<nav aria-label="Primary"><a href="/">Home</a></nav>` +
+    `<main id="main"><section class="content-page">${inner}</section></main>` +
+    `<p><span class="account-caption">Welcome, guest</span></p></body></html>`;
+  const cases = [
+    {
+      contract: "about",
+      path: "/about",
+      html: shell(
+        "/about",
+        `<h1 id="about-heading">About Together We Own</h1>` +
+          `<p class="strap">Est. 1998</p>` +
+          `<dl data-testid="about-facts" class="facts"></dl>` +
+          `<p><a class="btn" href="/join" data-testid="about-join">Join with Discord</a></p>`,
+      ),
+      mutants: [
+        [
+          "no-facts",
+          (html) => html.replace('data-testid="about-facts"', 'data-testid="x"'),
+          "leaf section about-facts present",
+        ],
+        [
+          "hostile-join",
+          (html) => html.replace('href="/join"', 'href="https://evil.test/"'),
+          "join action stays same-origin /join",
+        ],
+      ],
+    },
+    {
+      contract: "faq",
+      path: "/faq",
+      html: shell(
+        "/faq",
+        `<h1 id="faq-heading">Frequently asked questions</h1>` +
+          `<p class="strap">New here? Start here</p>` +
+          `<div data-testid="faq-list">` +
+          `<section aria-labelledby="faq-getting-in"><h2 id="faq-getting-in">Getting in</h2></section></div>` +
+          `<p><a class="btn" href="/join" data-testid="faq-join">Join with Discord</a></p>`,
+      ),
+      mutants: [
+        [
+          "no-list",
+          (html) => html.replace('data-testid="faq-list"', 'data-testid="x"'),
+          "leaf section faq-list present",
+        ],
+        [
+          "no-first-group",
+          (html) => html.replace(/<section aria-labelledby="faq-getting-in">.*?<\/section>/, ""),
+          "first question group present",
+        ],
+      ],
+    },
+  ];
+  for (const { contract, html, mutants } of cases) {
+    const headers = {
+      get: (name) => {
+        if (name === "content-type") return "text/html; charset=UTF-8";
+        if (name === "x-two-renderer") return "kit";
+        if (name === "cache-control") return "public, max-age=3600";
+        return null;
+      },
+    };
+    const expected = { status: 200, marker: "kit", contract, cache: "public, max-age=3600" };
+    assert.equal(
+      assertRouteContract({
+        label: `unit/leaves-${contract}-good`,
+        html,
+        headers,
+        status: 200,
+        expected,
+      }).length,
+      0,
+    );
+    for (const [name, mutate, want] of mutants) {
+      const failures = assertRouteContract({
+        label: `unit/leaves-${contract}-mutant-${name}`,
+        html: mutate(html),
+        headers,
+        status: 200,
+        expected,
+      });
+      assert.ok(
+        failures.some((f) => f.includes(want)),
+        `leaf mutant ${contract}/${name} did not trip "${want}" (got: ${failures.join("; ") || "no failures"})`,
+      );
+    }
+  }
+});
+
+test("enabled static leaves are covered by the executed parity run", () => {
+  // The catch-all no longer fails the leaves: PARITY_ROUTES carries their
+  // contracts, so the shipped enabled entries are covered runs, and a
+  // synthetic manifest with the leaves disabled keeps the leaf journeys out.
+  assert.equal(isCoveredByExecutedRun({ method: "GET", path: "/about" }), true);
+  assert.equal(isCoveredByExecutedRun({ method: "GET", path: "/faq" }), true);
+  const silent = { write: () => {} };
+  const heldJourneys = runUnitMode({
+    stdout: silent,
+    manifestSource:
+      `{ method: "GET", path: "/events/past", enabled: false }, { method: "GET", path: "/join", enabled: false }, { method: "GET", path: "/auth/recover", enabled: false },` +
+      ` { method: "GET", path: "/about", enabled: false, reads: "public" },` +
+      ` { method: "GET", path: "/faq", enabled: false, reads: "public" },`,
+  });
+  // The leaf unit journeys run against any manifest that lists the leaves
+  // (the expected marker derives from it: null while held, kit once
+  // enabled); the coverage catch-all only fails enabled entries, so the
+  // held leaves stay quiet here.
+  const failed = heldJourneys.filter((j) => j.status === "failed");
+  assert.ok(
+    !failed.some((j) => j.reason?.includes("/about") || j.reason?.includes("/faq")),
+    "no failure may name the held leaves",
+  );
+});
+
 test("an enabled login route fails instead of a quiet skip", () => {
   const silent = { write: () => {} };
   const honoJourneys = runUnitMode({

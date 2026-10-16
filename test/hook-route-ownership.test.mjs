@@ -64,15 +64,15 @@ beforeEach(() => {
 });
 
 describe("hooks.server route ownership wiring", () => {
-  it("ships the native archive enabled with the homepage, events list, about, privacy, rules, faq, join, recover, admin and profile reads still on Hono", () => {
+  it("ships the native archive and the about/faq leaves enabled with the homepage, events list, privacy, rules, join, recover, admin and profile reads still on Hono", () => {
     expect(ROUTE_MANIFEST).toEqual([
       { method: "GET", path: "/", enabled: false, reads: "public" },
       { method: "GET", path: "/events/past", enabled: true, reads: "public" },
       { method: "GET", path: "/events", enabled: false, reads: "public" },
-      { method: "GET", path: "/about", enabled: false, reads: "public" },
+      { method: "GET", path: "/about", enabled: true, reads: "public" },
       { method: "GET", path: "/privacy", enabled: false, reads: "public" },
       { method: "GET", path: "/rules", enabled: false, reads: "public" },
-      { method: "GET", path: "/faq", enabled: false, reads: "public" },
+      { method: "GET", path: "/faq", enabled: true, reads: "public" },
       { method: "GET", path: "/join", enabled: false, reads: "public" },
       {
         method: "GET",
@@ -316,6 +316,50 @@ describe("hooks.server route ownership wiring", () => {
     expect(await response.text()).toBe("kit");
   });
 
+  it("passes the zero-stylesheet transform on Kit-owned content leaves only", async () => {
+    // Kills two mutants: dropping the transform (or gating it on the URL
+    // instead of the manifest path) serves the layout stylesheet on /about
+    // while every unit pin stays green; passing it for every route reshapes
+    // non-content pages the leaf contract does not own.
+    const manifest = [
+      { method: "GET", path: "/about", enabled: true, reads: "public" },
+      { method: "GET", path: "/", enabled: true, reads: "public" },
+    ];
+    const layoutHtml =
+      '<html><head><link href="/_app/immutable/assets/0.x.css" rel="stylesheet">' +
+      "<style>a{}</style></head><body><p>hi</p></body></html>";
+    const leafEvent = (path) => {
+      const request = new Request(new URL(path, APP_URL).href, {
+        headers: { host: "example.com" },
+      });
+      return { request, url: new URL(request.url), route: { id: path } };
+    };
+    const d = deps({
+      manifest,
+      resolve: vi.fn(
+        async () =>
+          new Response(layoutHtml, { status: 200, headers: { "content-type": "text/html" } }),
+      ),
+    });
+
+    const leafResponse = await dispatchHookRequest(leafEvent("/about"), d);
+    expect(d.resolve).toHaveBeenCalledOnce();
+    const leafOpts = d.resolve.mock.calls[0][1];
+    expect(typeof leafOpts?.transformPageChunk).toBe("function");
+    // The forwarded transform is the production strip, proved on the
+    // fixture: stylesheet gone, Hono body class on, leaf style intact.
+    const shaped = leafOpts.transformPageChunk({ html: layoutHtml });
+    expect(shaped).not.toContain('rel="stylesheet"');
+    expect(shaped).toContain('<body class="base-theme content-theme">');
+    expect(shaped).toContain("<style>a{}</style>");
+    expect(leafResponse.headers.get(KIT_RENDERER_HEADER)).toBe(KIT_RENDERER_VALUE);
+
+    d.resolve.mockClear();
+    await dispatchHookRequest(leafEvent("/"), d);
+    expect(d.resolve).toHaveBeenCalledOnce();
+    expect(d.resolve.mock.calls[0][1]).toBeUndefined();
+  });
+
   it("answers an untrusted URL host via Hono with the body unread, even with a trusted Host header", async () => {
     // Pins the event.url.host half of the trust guard: the manifest below
     // makes POST Kit-owned, so dropping event.url.host from the check would
@@ -527,6 +571,12 @@ describe("hooks.server route ownership wiring", () => {
     expect(source).toContain("kitEventsSessionFor(env)");
     expect(source).toContain("kitEventsJourneyFor(env)");
     expect(source).toContain("honoFetch,");
+    // The content-leaf zero-stylesheet strip travels as a resolve option:
+    // the hook must forward it untouched. Dropping the second argument
+    // serves the layout stylesheet on /about and /faq while every dispatch
+    // pin stays green (the core passes the option; only the hook can lose
+    // it on the way to Kit's resolve).
+    expect(source).toContain("opts as Parameters<typeof resolve>[1]");
     expect(source).toContain("featuredImageHosts: env.FEATURED_IMAGE_HOSTS");
     expect(source).toContain("appUrl: env.APP_URL");
     expect(source).toContain("sessionFor: kitSessionBridge(env)");
