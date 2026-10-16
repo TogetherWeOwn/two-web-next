@@ -662,6 +662,10 @@ function assertEventsContract(label, html, get, expected) {
   }
   const vary = get("vary") ?? "";
   if (!/cookie/i.test(vary)) failures.push(`${label}: Vary stays on every variant`);
+  if (!/x-two-island/i.test(vary))
+    failures.push(
+      `${label}: Vary distinguishes full vs island-fragment representations (Cookie, X-Two-Island)`,
+    );
   if (!html.includes('data-island="events-calendar"'))
     failures.push(`${label}: calendar island identity present (no-JS content)`);
   if (!html.includes('data-testid="events-calendar"'))
@@ -686,7 +690,8 @@ function assertEventsContract(label, html, get, expected) {
   if (!html.includes('<script src="/islands/events-calendar.js"'))
     failures.push(`${label}: shared island binder`);
   if (!html.includes('href="/events.md"')) failures.push(`${label}: markdown alternate present`);
-  if (!/\/events"/.test(html)) failures.push(`${label}: canonical points at /events`);
+  if (!/<link\b[^>]*\brel="canonical"[^>]*href="[^"]*\/events"[^>]*>/.test(html))
+    failures.push(`${label}: canonical points at /events`);
   // Flash privacy invariant, independent of the expected-cache pin: a view
   // carrying the one-shot banner is viewer-specific and never shared-cacheable.
   // Only this direction is pinned — a flash-free member view is legitimately
@@ -1209,7 +1214,8 @@ export function runUnitMode({ stdout = process.stdout, manifestSource: manifestO
     eventsFailures.join("; ") || null,
   );
   // Events forced-failure proof: a missing island binder, a GET form turned
-  // into a POST, a dropped archive link and a flashed view served
+  // into a POST, a dropped archive link, a canonical pointing at the archive
+  // or the site root, a Vary missing either token and a flashed view served
   // shared-cacheable must all FAIL. A gate that cannot fail on a planted
   // break proves nothing.
   const eventsMutants = [
@@ -1226,6 +1232,25 @@ export function runUnitMode({ stdout = process.stdout, manifestSource: manifestO
     [
       "no-archive-link",
       (html) => html.replace('data-testid="events-past-archive-link"', 'data-testid="x"'),
+    ],
+    // A canonical pointing at the archive (or the site root) must FAIL: the
+    // <link rel="canonical"> element itself has to name /events, so nav and
+    // form `/events"` substrings alone never satisfy it.
+    [
+      "canonical-archive-target",
+      (html) =>
+        html.replace(
+          '<link rel="canonical" href="https://next.togetherweown.com/events">',
+          '<link rel="canonical" href="https://next.togetherweown.com/events/past">',
+        ),
+    ],
+    [
+      "canonical-root-target",
+      (html) =>
+        html.replace(
+          '<link rel="canonical" href="https://next.togetherweown.com/events">',
+          '<link rel="canonical" href="https://next.togetherweown.com/">',
+        ),
     ],
     // A flashed view served shared-cacheable: the privacy invariant fails it
     // however the expected cache is pinned.
@@ -1247,6 +1272,36 @@ export function runUnitMode({ stdout = process.stdout, manifestSource: manifestO
         "x-two-renderer": eventsMarker,
         "cache-control": "public, max-age=60",
         vary: "Cookie, X-Two-Island",
+      }),
+      status: 200,
+      expected: {
+        status: 200,
+        marker: eventsMarker,
+        contract: "events",
+        cache: "public, max-age=60",
+      },
+    });
+    push(
+      `unit: events mutant ${name} fails`,
+      failures.length > 0 ? "passed" : "failed",
+      failures.length > 0 ? null : "mutant was NOT detected",
+    );
+  }
+  // Vary forced-failure proof: full and island-fragment representations share
+  // the URL and differ by X-Two-Island (src/kit-events.ts sets
+  // `Cookie, X-Two-Island`), so dropping either token must FAIL.
+  for (const [name, vary] of [
+    ["vary-cookie-only", "Cookie"],
+    ["vary-island-only", "X-Two-Island"],
+  ]) {
+    const failures = assertRouteContract({
+      label: `unit/events-mutant-${name}`,
+      html: eventsShell(""),
+      headers: headerMap({
+        "content-type": "text/html",
+        "x-two-renderer": eventsMarker,
+        "cache-control": "public, max-age=60",
+        vary,
       }),
       status: 200,
       expected: {

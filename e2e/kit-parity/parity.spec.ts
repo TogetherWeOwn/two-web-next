@@ -205,7 +205,11 @@ for (const target of targets) {
       const expectedMarker = target.name === "kit" ? expectedKitMarker("/events") : null;
       expect(response.headers()["x-two-renderer"] ?? null).toBe(expectedMarker);
       expect(response.headers()["cache-control"]).toBe("public, max-age=60");
-      expect(response.headers()["vary"] ?? "").toMatch(/cookie/i);
+      // Full and island-fragment representations share the URL and differ by
+      // X-Two-Island, so Vary carries both tokens.
+      const eventsVary = response.headers()["vary"] ?? "";
+      expect(eventsVary).toMatch(/cookie/i);
+      expect(eventsVary).toMatch(/x-two-island/i);
       const body = await response.text();
       expect(scrubSecrets(body)).toEqual([]);
       expect(body).toContain('data-island="events-calendar"');

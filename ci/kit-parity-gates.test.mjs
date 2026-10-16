@@ -1148,12 +1148,54 @@ test("events contract proves the calendar island, search form, archive link and 
     ],
     ["no-subscribe", (html) => html.replace('data-testid="events-subscribe"', 'data-testid="x"')],
     ["no-markdown", (html) => html.replace('href="/events.md"', 'href="/x.md"')],
+    // The <link rel="canonical"> element itself must name /events: nav and
+    // form `/events"` substrings alone never satisfy it, so a canonical at
+    // the archive or the site root must FAIL.
+    [
+      "canonical-archive-target",
+      (html) =>
+        html.replace(
+          '<link rel="canonical" href="https://x.invalid/events">',
+          '<link rel="canonical" href="https://x.invalid/events/past">',
+        ),
+    ],
+    [
+      "canonical-root-target",
+      (html) =>
+        html.replace(
+          '<link rel="canonical" href="https://x.invalid/events">',
+          '<link rel="canonical" href="https://x.invalid/">',
+        ),
+    ],
   ];
   for (const [name, mutate] of mutants) {
     const failures = assertRouteContract({
       label: `events/mutant-${name}`,
       html: mutate(shell("")),
       headers: headers("public, max-age=60"),
+      status: 200,
+      expected: { status: 200, marker: null, contract: "events", cache: "public, max-age=60" },
+    });
+    assert.ok(failures.length > 0, `events mutant ${name} was NOT detected`);
+  }
+  // Vary pins both tokens: full and island-fragment representations share the
+  // URL and differ by X-Two-Island, so dropping either token must FAIL.
+  for (const [name, vary] of [
+    ["vary-cookie-only", "Cookie"],
+    ["vary-island-only", "X-Two-Island"],
+  ]) {
+    const failures = assertRouteContract({
+      label: `events/mutant-${name}`,
+      html: shell(""),
+      headers: {
+        get: (header) =>
+          ({
+            "content-type": "text/html",
+            "x-two-renderer": null,
+            "cache-control": "public, max-age=60",
+            vary,
+          })[header] ?? null,
+      },
       status: 200,
       expected: { status: 200, marker: null, contract: "events", cache: "public, max-age=60" },
     });
