@@ -164,7 +164,7 @@ jobs:
         run: |
           new="$(git status --porcelain -- e2e/visual/__screenshots__ e2e/visual/__screenshots-kit__)"
           if [ -n "$new" ]; then
-            echo "New visual baselines were generated; review and commit them (docs/visual-regression.md):"
+            echo "New visual baselines were generated; review and commit them using docs/visual-regression.md or docs/kit-parity-gates.md:"
             echo "$new"
             exit 1
           fi
