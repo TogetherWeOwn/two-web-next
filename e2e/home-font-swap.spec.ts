@@ -16,8 +16,13 @@ type FontSwapMetrics = {
   clsAfter: number;
 };
 
-async function captureFontSwap(page: Page, html: string, csp: string): Promise<FontSwapMetrics> {
-  await page.setViewportSize({ width: 390, height: 844 });
+async function captureFontSwap(
+  page: Page,
+  html: string,
+  csp: string,
+  width: number,
+): Promise<FontSwapMetrics> {
+  await page.setViewportSize({ width, height: 844 });
   await page.addInitScript(() => {
     type ShiftEntry = { hadRecentInput: boolean; value: number };
     const browser = globalThis as any;
@@ -121,11 +126,20 @@ async function homepageFixture() {
 
 test("homepage mobile Display font swap preserves hero layout after FCP", async ({ page }) => {
   const { html, csp } = await homepageFixture();
-  const metrics = await captureFontSwap(page, html, csp);
 
-  expect(metrics.linesBefore).toBeGreaterThan(0);
-  expect(metrics.linesAfter).toBe(metrics.linesBefore);
-  expect(metrics.clsAfter - metrics.clsBefore).toBeLessThanOrEqual(0.01);
+  for (const width of [340, 360, 390, 412]) {
+    const metrics = await captureFontSwap(page, html, csp, width);
+
+    expect(metrics.linesBefore, `hero should render at ${width}px`).toBeGreaterThan(0);
+    expect(
+      metrics.linesAfter,
+      `hero line count should remain stable at ${width}px; got ${JSON.stringify(metrics)}`,
+    ).toBe(metrics.linesBefore);
+    expect(
+      metrics.clsAfter - metrics.clsBefore,
+      `font swap CLS should stay within budget at ${width}px; got ${JSON.stringify(metrics)}`,
+    ).toBeLessThanOrEqual(0.01);
+  }
 });
 
 test("font-swap acceptance detects a deliberately incorrect fallback metric", async ({ page }) => {
@@ -138,9 +152,15 @@ test("font-swap acceptance detects a deliberately incorrect fallback metric", as
   const brokenHtml = html.replace(style![0], `<style>${brokenCss}</style>`);
   const brokenCsp = csp.replace(LEAF_CRITICAL_CSS_SHA256, brokenHash);
 
-  const metrics = await captureFontSwap(page, brokenHtml, brokenCsp);
+  const sensitiveWidthMetrics = [];
+  for (const width of [340, 360]) {
+    sensitiveWidthMetrics.push(await captureFontSwap(page, brokenHtml, brokenCsp, width));
+  }
   expect(
-    metrics.linesAfter !== metrics.linesBefore || metrics.clsAfter - metrics.clsBefore > 0.01,
-    `bad fallback should cause a measurable line-count or CLS regression; got ${JSON.stringify(metrics)}`,
+    sensitiveWidthMetrics.some(
+      (metrics) =>
+        metrics.linesAfter !== metrics.linesBefore || metrics.clsAfter - metrics.clsBefore > 0.01,
+    ),
+    `bad fallback should regress at 340px or 360px; got ${JSON.stringify(sensitiveWidthMetrics)}`,
   ).toBe(true);
 });
