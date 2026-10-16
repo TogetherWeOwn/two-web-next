@@ -79,6 +79,12 @@ export type Env = AgentEventsEnv & {
   // redundant for this entry (rollback is enabled: false). Honoured only
   // for an http loopback APP_URL (src/route-ownership.ts fixtureManifestFor).
   KIT_PARITY_FIXTURE_MEMBER_BOARD?: string;
+  // Kit parity fixture only (same loopback worker, never deployed): enables
+  // the live event detail (GET /e/:key) in the fixture manifest so the RSVP
+  // companion's executed journey runs the Kit load. The shipped detail entry
+  // stays disabled until the companion passes; honoured only for an http
+  // loopback APP_URL (src/route-ownership.ts fixtureManifestFor).
+  KIT_PARITY_FIXTURE_EVENT_DETAIL?: string;
   // B1 read-only WebMCP pilot: only the exact strings "true"/"1" inject the
   // model-context island on the four pilot pages; unset or anything else
   // leaves pages byte-identical. No session, cookie or database read.

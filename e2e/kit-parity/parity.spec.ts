@@ -3,6 +3,7 @@ import { expect, test, type APIRequestContext } from "@playwright/test";
 import { normalizeSection, sectionOf } from "../../ci/kit-section-contract.mjs";
 import {
   expectedKitMarker,
+  kitFixtureOwnsEventDetail,
   kitFixtureOwnsMemberBoard,
   kitFixtureSessionSecret,
   KIT_ORIGIN,
@@ -545,6 +546,150 @@ for (const target of targets) {
         expect(scrubSecrets(body)).toEqual([]);
         expect(body).not.toContain("<h1>Member leaderboard</h1>");
       }
+    });
+  });
+
+  // Live event detail (GET /e/:key only): the RSVP companion's executed
+  // journey. The shipped manifest keeps the entry disabled until the companion
+  // passes, so the Kit target answers from the Kit load only through the
+  // loopback fixture (kitFixtureOwnsEventDetail); Hono always answers without
+  // the marker. JSON/ICS stay Hono-owned with no manifest entries and every
+  // RSVP mutation keeps Hono as its single authority. Bodies are
+  // origin-normalized before comparison where hosts differ by design.
+  test.describe(`${target.name}: live event detail keeps its RSVP companion contract`, () => {
+    const EVENT_KEY = "01J00000000000000000000001";
+    const EVENT_PATH = `/e/${EVENT_KEY}`;
+
+    test("guest renders the published contract with join pitch and no attendees", async ({
+      playwright,
+    }) => {
+      if (target.name === "kit")
+        expect(kitFixtureOwnsEventDetail(), "Kit fixture owns the event detail").toBe(true);
+      const expectedMarker = target.name === "kit" ? "kit" : null;
+      // Cookie-free by construction: the shared api() context accumulates
+      // session cookies from the earlier QA-login journey, which would render
+      // the member view (no join pitch) instead of the guest contract.
+      const guest = await playwright.request.newContext({
+        baseURL: target.origin,
+        ignoreHTTPSErrors: target.ignoreHTTPSErrors,
+      });
+      try {
+        const response = await guest.get(EVENT_PATH);
+        expect(response.status(), `${target.name} guest detail`).toBe(200);
+        expect(response.headers()["content-type"]).toContain("text/html");
+        expect(response.headers()["x-two-renderer"] ?? null).toBe(expectedMarker);
+        // Per-viewer page: never shared-cacheable, on either renderer.
+        expect(response.headers()["cache-control"]).toBe("private, no-store");
+        expect(response.headers()["vary"] ?? "").toMatch(/cookie/i);
+        const body = await response.text();
+        expect(scrubSecrets(body)).toEqual([]);
+        expect(body).toContain("E2E Community Night");
+        expect(body).toContain('data-testid="event-join-pitch"');
+        expect(body).toContain('data-testid="event-copy-link"');
+        expect(body).toContain('data-testid="event-jsonld"');
+        expect(body).toContain('rel="canonical"');
+        expect(body).toContain(`/events/${EVENT_KEY}.ics`);
+        expect(body).not.toContain('data-testid="event-attendees"');
+        expect(body).not.toContain("Sign out");
+        expect(body).toContain("Welcome, guest");
+      } finally {
+        await guest.dispose();
+      }
+    });
+
+    test("member renders the no-JS RSVP form posting to the Hono controller", async ({
+      playwright,
+    }) => {
+      if (target.name === "kit")
+        expect(kitFixtureOwnsEventDetail(), "Kit fixture owns the event detail").toBe(true);
+      const expectedMarker = target.name === "kit" ? "kit" : null;
+      const cookie = await memberCookie(target);
+      const response = await api(target).get(EVENT_PATH, { headers: { cookie } });
+      expect(response.status(), `${target.name} member detail`).toBe(200);
+      expect(response.headers()["content-type"]).toContain("text/html");
+      expect(response.headers()["x-two-renderer"] ?? null).toBe(expectedMarker);
+      expect(response.headers()["cache-control"]).toBe("private, no-store");
+      const body = await response.text();
+      expect(scrubSecrets(body)).toEqual([]);
+      expect(body).toContain("E2E Community Night");
+      expect(body).not.toContain('data-testid="event-join-pitch"');
+      // The mutation stays Hono-owned: a native form posts to the unchanged
+      // controller, the islands only enhance it.
+      expect(body).toContain(`action="/e/${EVENT_KEY}/rsvp"`);
+      expect(body).toContain("/islands/rsvp-button.js");
+      expect(body).toContain("Sign out");
+      expect(body).not.toContain("Welcome, guest");
+      // Session rotation contract (docs/parity.md section 12, session row):
+      // Hono GET /e/:key reads through the rotating readSession
+      // (src/index.tsx: every authenticated page view mints a fresh token,
+      // deletes the old row and re-stamps the 120-minute sliding expiry), so
+      // a member read sets a __Host-two_session replacement with
+      // Max-Age=7200 and the presented bearer is dead afterwards. The Kit
+      // detail load uses the read-only bridge (src/kit-session.ts: it never
+      // rotates or sets cookies), so it emits no session Set-Cookie and the
+      // presented bearer stays live. That divergence is recorded in
+      // docs/parity.md and docs/kit-parity-gates.md as an explicit blocker
+      // for enabling GET /e/:key: members who only browse Kit event pages
+      // would otherwise lose the sliding renewal.
+      const sessionSets = (await response.headersArray())
+        .filter((header) => header.name.toLowerCase() === "set-cookie")
+        .map((header) => header.value)
+        .filter((value) => value.startsWith("__Host-two_session="));
+      // Cookie-free replay: the shared api() jars accumulate the rotated
+      // replacements above, so replaying the presented bearer runs in a
+      // fresh context with exactly one Cookie header.
+      const replay = await playwright.request.newContext({
+        baseURL: target.origin,
+        ignoreHTTPSErrors: target.ignoreHTTPSErrors,
+      });
+      try {
+        const again = await replay.get(EVENT_PATH, { headers: { cookie } });
+        expect(again.status(), `${target.name} replayed bearer`).toBe(200);
+        const againBody = await again.text();
+        expect(scrubSecrets(againBody)).toEqual([]);
+        if (target.name === "kit") {
+          expect(sessionSets, "kit detail keeps the read-only bridge: no rotation").toEqual([]);
+          // Never retired: the same bearer still renders the member view.
+          expect(againBody).not.toContain('data-testid="event-join-pitch"');
+          expect(againBody).toContain("Sign out");
+        } else {
+          expect(sessionSets.length, "hono detail rotates the session").toBe(1);
+          expect(sessionSets[0]!, "rotation re-stamps 120 minutes").toMatch(/max-age=7200/i);
+          // The retired bearer finds no row: the guest contract renders.
+          expect(againBody).toContain('data-testid="event-join-pitch"');
+          expect(againBody).not.toContain("Sign out");
+          expect(againBody).toContain("Welcome, guest");
+        }
+      } finally {
+        await replay.dispose();
+      }
+    });
+
+    test("JSON, ICS and RSVP mutations stay Hono-owned without the Kit marker", async () => {
+      // The event JSON names its viewer (waitlist position), so it needs the
+      // member session like every other member read; guests get the 401
+      // refusal on both renderers (src/events/routes-detail.tsx jsonSession).
+      const cookie = await memberCookie(target);
+      const json = await api(target).get(`/events/${EVENT_KEY}`, { headers: { cookie } });
+      expect(json.status(), `${target.name} event JSON`).toBe(200);
+      expectNoMarker(json.headers(), `${target.name} event JSON`);
+
+      const ics = await api(target).get(`/events/${EVENT_KEY}.ics`);
+      expect(ics.status(), `${target.name} event ICS`).toBe(200);
+      expectNoMarker(ics.headers(), `${target.name} event ICS`);
+
+      const put = await api(target).put(`/events/${EVENT_KEY}/rsvp`, { data: {} });
+      expect([401, 403, 404, 422], `${target.name} RSVP PUT refused`).toContain(put.status());
+      expectNoMarker(put.headers(), `${target.name} RSVP PUT`);
+
+      const post = await api(target).post(EVENT_PATH + "/rsvp", {
+        data: "status=going",
+        headers: { "content-type": "application/x-www-form-urlencoded" },
+      });
+      expect([303, 401, 403], `${target.name} RSVP POST refused/redirected`).toContain(
+        post.status(),
+      );
+      expectNoMarker(post.headers(), `${target.name} RSVP POST`);
     });
   });
 

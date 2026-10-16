@@ -553,6 +553,7 @@ describe("hooks.server route ownership wiring", () => {
       "recordQueuedBoardView(event.locals, response.status, recordBoardView)",
     );
     expect(source).toContain('fixtureMemberBoard: env.KIT_PARITY_FIXTURE_MEMBER_BOARD === "true"');
+    expect(source).toContain('fixtureEventDetail: env.KIT_PARITY_FIXTURE_EVENT_DETAIL === "true"');
     // Same pin on the other half of the wiring: the members load binding
     // hands the queue to locals. Deleting that line queues nothing, so the
     // hook above records nothing and every Kit board view is dropped.
