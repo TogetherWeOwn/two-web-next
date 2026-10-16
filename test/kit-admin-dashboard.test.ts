@@ -133,9 +133,9 @@ describe("Kit admin route group: thin guard binding, shared reads", () => {
     expect(read("src/admin/kit-dashboard.ts")).toContain("isDatabaseUnavailable");
   });
 
-  it("parity gates record the unported tab-sync probe as an enablement blocker", () => {
+  it("parity gates record the Kit tab-sync probe without enabling admin routes", () => {
     const gates = read("docs/kit-parity-gates.md");
-    expect(gates).toContain("tab-sync probe");
+    expect(gates).toContain("tab-sync controller");
     expect(gates).toContain("auth-status");
     expect(gates).toContain("`enabled: false`");
   });
