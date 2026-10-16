@@ -655,16 +655,20 @@ describe("performance CI", () => {
     expect(loaded.status, loaded.stdout + loaded.stderr).toBe(0);
   });
 
-  it("wires both performance results into the always-running required check", () => {
+  it("wires both performance results into the always-running required ci-ok gate", () => {
     const workflow = readFileSync(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8");
     const check = workflow.split("\n  check:\n")[1]!.split("\n  bundle-budget:\n")[0]!;
-    expect(check).toContain("name: check");
-    expect(check).toContain("needs: [a11y, lighthouse, bundle-budget, docs-links, scope]");
-    expect(check).toContain("\n    if: ${{ !cancelled() }}\n");
-    expect(check).toContain(
+    const ciOk = workflow.split("\n  ci-ok:\n")[1]!;
+    expect(ciOk).toContain("name: ci-ok");
+    expect(ciOk).toContain("needs: [a11y, lighthouse, bundle-budget, docs-links, check, scope]");
+    expect(ciOk).toContain("\n    if: ${{ !cancelled() }}\n");
+    expect(ciOk).toContain(
       'node ci/require-performance.mjs "${{ needs.lighthouse.result }}" "${{ needs.bundle-budget.result }}"',
     );
-    expect(check).toContain("if: always() && (needs.scope.outputs.docs_only != 'true'");
+    expect(ciOk).toContain("if: always() && (needs.scope.outputs.docs_only != 'true'");
+    // check starts from scope alone and keeps the gate's selftests.
+    expect(check).toContain("needs: [scope]");
+    expect(check).toContain("run: node ci/require-performance.mjs --selftest");
     expect(check).toContain("run: npm run deps:audit:selftest");
     expect(check).toContain("run: npm run deps:audit");
   });

@@ -49,13 +49,15 @@ describe("required checks always report", () => {
     },
   );
 
-  it("check runs whatever its dependencies concluded unless its run was cancelled, and fails when the audit is not green", () => {
-    const check = job(readFileSync(join(dir, "ci.yml"), "utf8"), "check");
-    // More gates may join `needs`; the guard below only relies on these two.
+  it("check needs only scope so it starts with the heavy jobs, and ci-ok fails when the audit is not green", () => {
+    const ci = readFileSync(join(dir, "ci.yml"), "utf8");
+    const check = job(ci, "check");
+    // Exactly [scope]: any heavier need re-serializes check behind that job,
+    // which is what made merge-queue ci take ~26 minutes.
     const needs = check.match(/\n    needs: \[([^\]]*)\]\n/)?.[1]?.split(/,\s*/) ?? [];
-    expect(needs).toEqual(expect.arrayContaining(["a11y", "scope"]));
+    expect(needs).toEqual(["scope"]);
     expect(check).toMatch(/\n    if: \$\{\{ !cancelled\(\) \}\}\n/);
-    expect(check).toContain('run: test "$A11Y_RESULT" = success');
+    expect(job(ci, "ci-ok")).toContain('run: test "$A11Y_RESULT" = success');
   });
 
   it("gitleaks scans even when pr-lint failed", () => {
@@ -66,7 +68,9 @@ describe("required checks always report", () => {
   it("ci-ok aggregates the gated jobs", () => {
     const ci = readFileSync(join(dir, "ci.yml"), "utf8");
     const ok = job(ci, "ci-ok");
-    expect(ok).toMatch(/\n    needs: \[a11y, lighthouse, bundle-budget, check, scope\]\n/);
+    expect(ok).toMatch(
+      /\n    needs: \[a11y, lighthouse, bundle-budget, docs-links, check, scope\]\n/,
+    );
     expect(ok).toMatch(/\n    if: \$\{\{ !cancelled\(\) \}\}\n/);
     // ci-ok is required (ruleset protect-main); the change-gating section documents what it aggregates.
     expect(readFileSync("CONTRIBUTING.md", "utf8")).toContain("### Change-gated CI and `ci-ok`");
