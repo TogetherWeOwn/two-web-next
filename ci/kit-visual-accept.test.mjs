@@ -130,14 +130,8 @@ test("changed Kit actual wins over its stale baseline and keeps unchanged baseli
     join(artifact, "test-results-kit-parity", "past-desktop-actual.png"),
     "updated-kit-bytes",
   );
-  writeBytes(
-    join(artifact, KIT_SCREENSHOT_DIR, "past-desktop.png"),
-    "stale-kit-bytes",
-  );
-  writeBytes(
-    join(artifact, KIT_SCREENSHOT_DIR, "events-desktop.png"),
-    "unchanged-kit-bytes",
-  );
+  writeBytes(join(artifact, KIT_SCREENSHOT_DIR, "past-desktop.png"), "stale-kit-bytes");
+  writeBytes(join(artifact, KIT_SCREENSHOT_DIR, "events-desktop.png"), "unchanged-kit-bytes");
 
   const result = acceptBaselines(artifact, {
     cwd: workspace,
@@ -160,7 +154,9 @@ test("changed Kit actual wins over its stale baseline and keeps unchanged baseli
 function workflowStep(workflow, name) {
   const escapedName = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const match = workflow.match(
-    new RegExp(`      - name: ${escapedName}\\n([\\s\\S]*?)(?=      - (?:name:|uses:|run:)|    jobs:|$)`),
+    new RegExp(
+      `      - name: ${escapedName}\\n([\\s\\S]*?)(?=      - (?:name:|uses:|run:)|    jobs:|$)`,
+    ),
   );
   assert.ok(match, `workflow is missing the ${name} step`);
   return match[1];
@@ -206,9 +202,15 @@ test("failure artifact retains outputs from both visual invocations", () => {
   const failureStep = workflowStep(workflow, "Failure traces and report");
 
   assert.ok(failureStep.includes(outputDir(kitConfig)), "failure artifact must retain Kit actuals");
-  assert.ok(failureStep.includes(outputDir(honoConfig)), "failure artifact must retain Hono actuals");
+  assert.ok(
+    failureStep.includes(outputDir(honoConfig)),
+    "failure artifact must retain Hono actuals",
+  );
   assert.ok(failureStep.includes(KIT_SCREENSHOT_DIR), "failure artifact must retain Kit baselines");
-  assert.ok(failureStep.includes(HONO_SCREENSHOT_DIR), "failure artifact must retain Hono baselines");
+  assert.ok(
+    failureStep.includes(HONO_SCREENSHOT_DIR),
+    "failure artifact must retain Hono baselines",
+  );
   assert.match(failureStep, /retention-days:\s*7/);
 });
 
