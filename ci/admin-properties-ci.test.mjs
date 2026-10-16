@@ -33,7 +33,7 @@ test("the required check runs the identical property suite without npm startup, 
       guards[0].includes("needs.scope.outputs.draft != 'true'"),
     `Step guard must stay scope-gated: ${guards[0]}`,
   );
-  assert.match(check, /node --test [^\n]*ci\/admin-properties-ci\.test\.mjs/);
+  assert.match(check, /node --test ci\/a11y-\*\.test\.mjs ci\/admin-properties-ci\.test\.mjs/);
 });
 
 // Execute the actual workflow command with a local CLI fixture, not the app or

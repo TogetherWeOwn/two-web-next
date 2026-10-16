@@ -10,7 +10,7 @@ import { createAuditLifecycle, stopChildProcess } from "./a11y-lifecycle.mjs";
 const deferred = () => Promise.withResolvers();
 
 // Runs in the a11y job after Chromium installation, not the browser-free check job.
-// A11Y_BROWSER_TESTS=true npx vitest run ci/a11y-lifecycle.test.mjs
+// A11Y_BROWSER_TESTS=true npx vitest run ci/audit-lifecycle.test.mjs
 describe.skipIf(process.env.A11Y_BROWSER_TESTS !== "true")(
   "audit lifecycle real Chromium signal cleanup",
   () => {

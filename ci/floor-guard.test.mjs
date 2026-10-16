@@ -323,13 +323,13 @@ describe("floor-guard", () => {
   it("flags enumerated-runner renames that keep the same pattern", () => {
     // `node --test a b` silently skips a missing path and exits 0, so a
     // rename that keeps the pattern still drops tests: e2e:safety falls from
-    // 80 to 66 passing tests, and the explicitly listed ci suites drop out of
-    // check (or the a11y job for the vitest file).
+    // 80 to 66 passing tests, and ci/policy drops out of the a11y glob. The
+    // vitest-run audit lifecycle suite is named exactly by the a11y job, so
+    // any rename of it breaks the wiring too.
     for (const [from, to] of [
       ["e2e/qa-request.test.mjs", "e2e/qa-request2.test.mjs"],
       ["ci/a11y-policy.test.mjs", "ci/policy.test.mjs"],
-      ["ci/a11y-policy.test.mjs", "ci/a11y-renamed.test.mjs"],
-      ["ci/a11y-lifecycle.test.mjs", "ci/a11y-lifecycle-renamed.test.mjs"],
+      ["ci/audit-lifecycle.test.mjs", "ci/audit-lifecycle-renamed.test.mjs"],
       ["ci/cutover-check-selftest.mjs", "ci/cutover-renamed-selftest.mjs"],
     ]) {
       const renamed = [
@@ -345,20 +345,18 @@ describe("floor-guard", () => {
     }
   });
 
-  it("flags an a11y rename even within the old filename pattern", () => {
-    // No a11y suite runs via shell glob anymore (check lists each node:test
-    // file; the a11y job and vitest include name the vitest files exactly),
-    // so a rename that keeps the old ci/a11y-*.test.mjs pattern still breaks
-    // the enumerated wiring and needs a waiver.
+  it("stays silent on an a11y rename within the glob", () => {
+    // ci/a11y-*.test.mjs runs via shell glob, so a rename that keeps the
+    // glob keeps running.
     const renamed = [
-      "diff --git a/ci/a11y-content.test.mjs b/ci/a11y-renamed.test.mjs",
+      "diff --git a/ci/a11y-policy.test.mjs b/ci/a11y-renamed.test.mjs",
       "similarity index 100%",
-      "rename from ci/a11y-content.test.mjs",
+      "rename from ci/a11y-policy.test.mjs",
       "rename to ci/a11y-renamed.test.mjs",
     ].join("\n");
-    assert.ok(
-      guardDiff(renamed).some((f) => f.rule === "test-deleted"),
-      "ci/a11y-content.test.mjs -> ci/a11y-renamed.test.mjs breaks enumerated wiring and needs a waiver",
+    assert.deepEqual(
+      guardDiff(renamed).filter((f) => f.rule === "test-deleted"),
+      [],
     );
   });
 

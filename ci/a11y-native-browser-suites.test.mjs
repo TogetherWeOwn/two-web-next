@@ -25,7 +25,7 @@ const SUITES = [
     min: 21,
   },
   {
-    file: "ci/a11y-lifecycle.test.mjs",
+    file: "ci/audit-lifecycle.test.mjs",
     env: "A11Y_BROWSER_TESTS",
     title: "audit lifecycle real Chromium signal cleanup",
     min: 2,

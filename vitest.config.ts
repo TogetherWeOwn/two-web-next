@@ -2,7 +2,7 @@ import { configDefaults, defineConfig } from "vitest/config";
 
 export default defineConfig({
   test: {
-    include: ["test/**/*.test.ts", "test/**/*.test.mjs", "ci/a11y-lifecycle.test.mjs"],
+    include: ["test/**/*.test.ts", "test/**/*.test.mjs", "ci/audit-lifecycle.test.mjs"],
     // Smoke fixtures use node:test and run separately through test:smoke.
     exclude: [
       ...configDefaults.exclude,

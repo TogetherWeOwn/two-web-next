@@ -66,9 +66,8 @@ function collectHaystack(root) {
 }
 
 // A file outside test/ is reachable when some script or workflow step names
-// its full relative path, or a `*`-glob covering it (e.g. the check job lists
-// each ci/a11y node:test file explicitly and the a11y job names its vitest
-// files exactly, which covers the whole a11y family).
+// its full relative path, or a `*`-glob covering it (e.g. the check job runs
+// `node --test ci/a11y-*.test.mjs`, which covers the whole a11y family).
 function globToRegExp(glob) {
   return new RegExp(`^${glob.replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*/g, "[^/]*")}$`);
 }

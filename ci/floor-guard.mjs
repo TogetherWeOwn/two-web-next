@@ -42,7 +42,7 @@ const stripPrefix = (p) => p.replace(/^[ab]\//, "");
 
 // Runner globs, not name patterns, decide whether a moved test still runs.
 // Vitest includes test/**/*.test.ts, test/**/*.test.mjs and
-// ci/a11y-lifecycle.test.mjs (vitest.config.ts); the report-only Tier-0
+// ci/audit-lifecycle.test.mjs (vitest.config.ts); the report-only Tier-0
 // suites include only tier0/**/*.test.ts (tier0/vitest.config.ts). Playwright
 // e2e specs run via testMatch **/*.spec.ts under testDir ./e2e
 // (playwright.config.ts), so a spec moved out of e2e/ no longer runs. The e2e
@@ -50,12 +50,15 @@ const stripPrefix = (p) => p.replace(/^[ab]\//, "");
 // (`node --test e2e/safety.test.mjs e2e/qa-request.test.mjs ...`); `node
 // --test a b` silently skips a missing path and exits 0, so any rename of a
 // listed script breaks the wiring even when the new name matches the same
-// pattern. All ci suites run via explicit enumerated paths (the check step
-// lists each ci/a11y-*.test.mjs file; the a11y job names its vitest files
-// exactly), so any rename of a listed ci file breaks the wiring. A rename
-// whose source is runnable but whose destination leaves the runner (docs/
-// move, suffix change, out-of-glob rename, or rewiring rename) is a deletion
-// from the suite, even though the name still looks like a test.
+// pattern. Likewise most ci selftests run via explicit single paths
+// (`node --test ci/cutover-check-selftest.mjs`); only ci/a11y-*.test.mjs runs
+// via a shell glob, so only a rename within that glob keeps running. The
+// vitest-run audit lifecycle suite (ci/audit-lifecycle.test.mjs) is named
+// exactly by the a11y job and the vitest include, so any rename of it breaks
+// the wiring. A rename whose source is runnable but whose destination leaves
+// the runner (docs/ move, suffix change, out-of-glob rename, or rewiring
+// rename) is a deletion from the suite, even though the name still looks
+// like a test.
 const VITEST_RE = /^test\/.*\.test\.(ts|mjs)$/;
 // Tier-0 suites run from tier0/ through their own vitest config
 // (tier0/vitest.config.ts, `npm run test:tier0`), report-only. A move out of
@@ -65,6 +68,7 @@ const VITEST_RE = /^test\/.*\.test\.(ts|mjs)$/;
 const TIER0_RE = /^tier0\/.*\.test\.ts$/;
 const E2E_SPEC_RE = /^e2e\/.*\.spec\.ts$/;
 const E2E_SAFETY_RE = /^e2e\/.*\.test\.mjs$/;
+const CI_A11Y_RE = /^ci\/a11y-.*\.test\.mjs$/;
 const isCiSelftest = (p) => p.startsWith("ci/") && TEST_PATH.test(p) && CODE_PATH.test(p);
 
 function stillRunnable(from, to) {
@@ -72,12 +76,11 @@ function stillRunnable(from, to) {
   if (TIER0_RE.test(from)) return TIER0_RE.test(to);
   if (E2E_SPEC_RE.test(from)) return E2E_SPEC_RE.test(to);
   // Enumerated runners fail closed: any rename needs a test-deleted waiver.
-  // All ci suites run via explicit paths (check lists each node:test file; the
-  // a11y job and vitest include name the vitest files exactly), so every ci
-  // rename breaks the wiring, even one that keeps the old a11y filename
-  // pattern.
   if (E2E_SAFETY_RE.test(from)) return to === from;
-  if (isCiSelftest(from)) return to === from;
+  if (isCiSelftest(from)) {
+    if (CI_A11Y_RE.test(from)) return CI_A11Y_RE.test(to);
+    return to === from;
+  }
   return TEST_PATH.test(to) && CODE_PATH.test(to);
 }
 
