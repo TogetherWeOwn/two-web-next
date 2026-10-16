@@ -183,12 +183,19 @@ function snapshotPathTemplate(config) {
 test("Kit and Hono visual configs keep output and snapshot paths separate", () => {
   const kitConfig = visualConfig("playwright.kit-visual.config.ts");
   const honoConfig = visualConfig("playwright.visual.config.ts");
+  const parityConfig = visualConfig("playwright.kit-parity.config.ts");
   const kitOutputDir = outputDir(kitConfig);
   const honoOutputDir = outputDir(honoConfig);
+  const parityOutputDir = outputDir(parityConfig);
   const kitSnapshots = snapshotPathTemplate(kitConfig);
   const honoSnapshots = snapshotPathTemplate(honoConfig);
 
   assert.notEqual(kitOutputDir, honoOutputDir, "Playwright clears outputDir between invocations");
+  assert.notEqual(
+    kitOutputDir,
+    parityOutputDir,
+    "Parity journeys clear outputDir and would wipe Kit visual actuals",
+  );
   assert.notEqual(kitSnapshots, honoSnapshots, "Kit and Hono baselines must stay separate");
   assert.match(kitSnapshots, /__screenshots-kit__/);
   assert.match(honoSnapshots, /__screenshots__/);
