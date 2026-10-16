@@ -465,12 +465,10 @@ jobs:
       - name: Patch coverage (WARN)
         if: always() && (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && hashFiles('coverage/coverage-final.json') != ''
         run: npm run patch:coverage:selftest && npm run patch:coverage
-      # Semgrep WARN gate (quality-gates.md): TS sinks + secret-shaped
-      # literals. A planted warning must be detected before scanning the tree;
-      # failures stay advisory but emit a visible workflow warning.
-      - name: Semgrep (WARN)
+      # Semgrep HARD gate (quality-gates.md): TS sinks + secret-shaped
+      # literals. The planted-finding selftest and strict scan both fail closed.
+      - name: Semgrep (HARD)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
-        continue-on-error: true
         # Container steps run under sh (dash here: no pipefail), so pin bash
         # for `set -euo pipefail` like the migration-numbering step does.
         shell: bash
@@ -478,16 +476,10 @@ jobs:
           SEMGREP_SEND_METRICS: "off"
         run: |
           set -euo pipefail
-          # continue-on-error keeps the step green on failure; the trap keeps a
-          # dead gate visible as a workflow warning instead of silent green.
-          trap 'echo "::warning::Semgrep WARN step failed before completing the scan"' ERR
           python3 -m venv "$RUNNER_TEMP/semgrep"
           "$RUNNER_TEMP/semgrep/bin/pip" install --quiet 'semgrep==1.180.0'
-          if ! node ci/semgrep-warn-selftest.mjs "$RUNNER_TEMP/semgrep/bin/semgrep"; then
-            echo "::warning::Semgrep WARN selftest failed; scan may be unavailable"
-            exit 1
-          fi
-          "$RUNNER_TEMP/semgrep/bin/semgrep" --config ci/semgrep-rules.yml --quiet --metrics=off
+          node ci/semgrep-warn-selftest.mjs "$RUNNER_TEMP/semgrep/bin/semgrep"
+          "$RUNNER_TEMP/semgrep/bin/semgrep" --strict --error --config ci/semgrep-rules.yml --metrics=off
       - name: Coverage job summary
         if: always() && (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && hashFiles('coverage/coverage-summary.json') != ''
         run: node ci/coverage-summary.mjs >> "$GITHUB_STEP_SUMMARY"
