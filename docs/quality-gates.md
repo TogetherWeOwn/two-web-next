@@ -69,8 +69,8 @@ not fail) unless marked HARD. All of them run on the existing runners only.
   `.constraintsignore`. An assertion paired with one added in the same test
   file reads as a replacement. Failed or oversized diffs exit 2 rather than
   looking clean.
-  Mirror every `Floor-waiver:` trailer from branch commits verbatim in the PR
-  body: `check_queue_visible_waivers` (`ci/pr-lint-output.py:26-71`) scans
+  Mirror every `Floor-waiver:` trailer from branch commits in canonical form
+  in the PR body: `check_queue_visible_waivers` (`ci/pr-lint-output.py:26-71`) scans
   branch commit messages (`git log --format=%B HEAD --not <base>`,
   `ci/pr-lint-output.py:48-61`) and fails the PR (`sys.exit(1)`,
   `ci/pr-lint-output.py:65-70`) when `missing_body_waivers`
