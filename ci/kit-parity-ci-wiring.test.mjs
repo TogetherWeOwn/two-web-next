@@ -105,7 +105,9 @@ test("Kit snapshot updates are pinned and generated Kit baselines fail the CI gu
 
 test("visual tests re-seed and verify the board state after worker restarts", () => {
   const spec = readFileSync(new URL("../e2e/kit-parity/parity.spec.ts", import.meta.url), "utf8");
-  const rsvpHelper = spec.match(/function memberGoingRsvp\(\): Promise<void> \{([\s\S]*?)\n\}/)?.[1];
+  const rsvpHelper = spec.match(
+    /function memberGoingRsvp\(\): Promise<void> \{([\s\S]*?)\n\}/,
+  )?.[1];
   assert(rsvpHelper, "member RSVP helper must exist");
   assert.match(
     rsvpHelper,
