@@ -150,13 +150,17 @@ describe("frozen URL method ownership matrix", () => {
     },
   );
 
-  it("ships the archive and hot-zone heatmaps on Kit with later routes on Hono", () => {
+  it("ships the enabled leaves on Kit with later routes on Hono", () => {
     expect(resolveRouteOwner({ method: "GET", path: "/events/past" })).toBe("kit");
     expect(resolveRouteOwner({ method: "GET", path: "/hotzones/joins" })).toBe("kit");
+    expect(resolveRouteOwner({ method: "GET", path: "/about" })).toBe("kit");
+    expect(resolveRouteOwner({ method: "GET", path: "/faq" })).toBe("kit");
+    expect(resolveRouteOwner({ method: "GET", path: "/leaderboards/members" })).toBe("kit");
     expect(resolveRouteOwner({ method: "GET", path: "/events" })).toBe("hono");
     expect(resolveRouteOwner({ method: "GET", path: "/e/spring-fete" })).toBe("hono");
+    expect(resolveRouteOwner({ method: "GET", path: "/privacy" })).toBe("hono");
+    expect(resolveRouteOwner({ method: "GET", path: "/rules" })).toBe("hono");
     expect(resolveRouteOwner({ method: "GET", path: "/profile" })).toBe("hono");
-    expect(resolveRouteOwner({ method: "GET", path: "/leaderboards/members" })).toBe("hono");
   });
 
   it("keeps /events/past distinct from an /events/:key pattern in both positions", () => {
