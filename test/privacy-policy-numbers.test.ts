@@ -193,7 +193,8 @@ const CLAIMS: Claim[] = [
   },
 ];
 
-// Bot-owned: the transcripts live in Discord and the support bot deletes them, outside this repository.
+// Bot-owned: ticket transcripts are stored and purged by two-bot-next,
+// outside this repository.
 const OUT_OF_SCOPE = [
   {
     anchor: "Support-ticket transcripts are kept for 90 days",

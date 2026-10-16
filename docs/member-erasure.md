@@ -94,10 +94,11 @@ that is neither erased above nor documented here with its own deletion proof.
 
 This command covers the website database only. The bot keeps its own records,
 including ticket transcripts, moderation records and voice-room records, in its
-own database. They are erased for the same Discord id through the bot's separate
-operator command, for our server only. Run both for a removal request. Erasure
-is not an opt-out: while the member stays in the server, the bot can record new
-activity again until an opt-out exists.
+own database. They are erased for the same Discord id and guild through the
+bot's separate [`two-bot erase-member` operator procedure](https://github.com/TogetherWeOwn/two-bot-next/blob/main/docs/privacy.md#procedure),
+for our server only. Run both for a removal request. Erasure is not an opt-out:
+while the member stays in the server, the bot can record new activity again
+until an opt-out exists.
 
 ## Scope
 

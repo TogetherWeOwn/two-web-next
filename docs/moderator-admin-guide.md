@@ -421,13 +421,16 @@ passwords, tokens, or other credentials while handling the request.
    and join attempts in one transaction, following the
    [member-erasure operator runbook](member-erasure.md). The bot's records that
    name them are erased for our server through the bot's own operator
-   procedure. Signing in again later starts a fresh website record.
-4. Name the exceptions, which stay as evidence: past member-data access-log
-   entries (never rewritten for one person; they delete themselves after 90
-   days), the moderator edit history (it keeps the name of the moderator who
-   made each change), and the bot's settings and audit history. Messages and
-   attachments on Discord are out of scope here and are handled through
-   Discord's own moderation tools.
+   [bot member-erasure procedure](https://github.com/TogetherWeOwn/two-bot-next/blob/main/docs/privacy.md#procedure).
+   Signing in again later starts a fresh website record.
+4. Name what remains after erasure: past member-data access-log entries
+   (never rewritten for one person; they delete themselves after 90 days), the
+   moderator edit history (it keeps the name of the moderator who made each
+   change), the bot's settings and audit history, and the bot's deletion receipt
+   (operator and time, never the member's ID). A moderation replay-guard key
+   may also retain an ID used for its action so a delayed duplicate cannot repeat
+   it. Messages and attachments on Discord are out of scope here and are handled
+   through Discord's own moderation tools.
 
 Do not promise a completion time; the operator runs the command and confirms
 the per-table counts.
