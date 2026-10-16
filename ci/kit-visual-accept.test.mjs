@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -158,11 +158,18 @@ test("changed Kit actual wins over its stale baseline and keeps unchanged baseli
 });
 
 function workflowStep(workflow, name) {
+  const escapedName = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const match = workflow.match(
-    new RegExp(`      - name: ${name}\\n([\\s\\S]*?)(?=      - name: |      - uses: |    jobs:|$)`),
+    new RegExp(`      - name: ${escapedName}\\n([\\s\\S]*?)(?=      - (?:name:|uses:|run:)|    jobs:|$)`),
   );
   assert.ok(match, `workflow is missing the ${name} step`);
   return match[1];
+}
+
+function visualConfig(name) {
+  const path = new URL(`../${name}`, import.meta.url);
+  assert.ok(existsSync(path), `${name} must exist`);
+  return readFileSync(path, "utf8");
 }
 
 function outputDir(config) {
@@ -171,23 +178,38 @@ function outputDir(config) {
   return match[1];
 }
 
-test("Kit and Hono visual invocations keep outputs in separate retained directories", () => {
-  const workflow = readFileSync(new URL("../.github/workflows/e2e.yml", import.meta.url), "utf8");
-  const kitStep = workflowStep(workflow, "Kit visual regression");
-  const honoStep = workflowStep(workflow, "Visual regression");
-  const kitConfigPath = kitStep.match(/--config\s+([^\s]+)/)?.[1];
-  const honoConfigPath = honoStep.match(/--config\s+([^\s]+)/)?.[1];
-  assert.ok(kitConfigPath, "Kit visual step must run a Playwright config");
-  assert.ok(honoConfigPath, "Hono visual step must run a Playwright config");
-  const kitConfig = readFileSync(new URL(`../${kitConfigPath}`, import.meta.url), "utf8");
-  const honoConfig = readFileSync(new URL(`../${honoConfigPath}`, import.meta.url), "utf8");
+function snapshotPathTemplate(config) {
+  const match = config.match(/snapshotPathTemplate:\s*["']([^"']+)["']/);
+  assert.ok(match, "visual config must set a dedicated snapshotPathTemplate");
+  return match[1];
+}
+
+test("Kit and Hono visual configs keep output and snapshot paths separate", () => {
+  const kitConfig = visualConfig("playwright.kit-visual.config.ts");
+  const honoConfig = visualConfig("playwright.visual.config.ts");
   const kitOutputDir = outputDir(kitConfig);
   const honoOutputDir = outputDir(honoConfig);
+  const kitSnapshots = snapshotPathTemplate(kitConfig);
+  const honoSnapshots = snapshotPathTemplate(honoConfig);
 
   assert.notEqual(kitOutputDir, honoOutputDir, "Playwright clears outputDir between invocations");
+  assert.notEqual(kitSnapshots, honoSnapshots, "Kit and Hono baselines must stay separate");
+  assert.match(kitSnapshots, /__screenshots-kit__/);
+  assert.match(honoSnapshots, /__screenshots__/);
+  assert.doesNotMatch(honoSnapshots, /__screenshots-kit__/);
+});
+
+test("failure artifact retains outputs from both visual invocations", () => {
+  const workflow = readFileSync(new URL("../.github/workflows/e2e.yml", import.meta.url), "utf8");
+  const kitConfig = visualConfig("playwright.kit-visual.config.ts");
+  const honoConfig = visualConfig("playwright.visual.config.ts");
   const failureStep = workflowStep(workflow, "Failure traces and report");
-  assert.ok(failureStep.includes(kitOutputDir), `failure artifact must retain ${kitOutputDir}`);
-  assert.ok(failureStep.includes(honoOutputDir), `failure artifact must retain ${honoOutputDir}`);
+
+  assert.ok(failureStep.includes(outputDir(kitConfig)), "failure artifact must retain Kit actuals");
+  assert.ok(failureStep.includes(outputDir(honoConfig)), "failure artifact must retain Hono actuals");
+  assert.ok(failureStep.includes(KIT_SCREENSHOT_DIR), "failure artifact must retain Kit baselines");
+  assert.ok(failureStep.includes(HONO_SCREENSHOT_DIR), "failure artifact must retain Hono baselines");
+  assert.match(failureStep, /retention-days:\s*7/);
 });
 
 test("Hono visuals still run after a Kit visual failure", () => {
@@ -196,8 +218,5 @@ test("Hono visuals still run after a Kit visual failure", () => {
   const honoStepIndex = workflow.indexOf("- name: Visual regression");
   assert.ok(kitStepIndex >= 0, "workflow must run Kit visuals");
   assert.ok(honoStepIndex > kitStepIndex, "Hono visuals must run after Kit visuals");
-  assert.match(
-    workflowStep(workflow, "Visual regression"),
-    /if:\s*\\$\\{\\{\s*!cancelled\\(\\)\s*\\}\\}/,
-  );
+  assert.match(workflowStep(workflow, "Visual regression"), /if:\s*\$\{\{\s*!cancelled\(\)\s*\}\}/);
 });
