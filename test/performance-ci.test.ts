@@ -54,11 +54,13 @@ describe("performance CI", () => {
         expect(response.headers.get("location"), path).toBeNull();
         expect(response.headers.get("content-type"), path).toContain("text/html");
         const html = await response.text();
-        if (["/about", "/faq", "/rules", "/privacy"].includes(path)) {
-          // Content leaves inline the stylesheets: the real app rules must
-          // be present in the style block instead of a link.
+        if (["/", "/about", "/faq", "/rules", "/privacy"].includes(path)) {
+          // Inline-critical pages carry the stylesheets in a style block
+          // instead of a link: the homepage reuses the leaf bundle (hero
+          // rules), the leaves carry the content rules.
           expect(html, path).toContain("<style>");
-          expect(html, path).toContain(".content-page");
+          expect(html, path).toContain(path === "/" ? ".hero h1" : ".content-page");
+          expect(html, path).not.toContain('rel="stylesheet"');
         } else {
           expect(html, path).toContain("/styles.css");
         }
@@ -342,8 +344,7 @@ describe("performance CI", () => {
     [
       "missing real app CSS",
       "/",
-      (html: string) =>
-        html.replace('rel="stylesheet" href="/styles.css"', 'rel="stylesheet" href="/missing.css"'),
+      (html: string) => html.replace(/<style>[\s\S]*?<\/style>/, ""),
     ],
     [
       "missing inlined leaf CSS",

@@ -23,6 +23,15 @@ export const Layout: FC<
     theme?: "home" | "event" | "content" | "join" | "profile" | "schedule";
     /** Rooted path of the curated Markdown alternate (A2), e.g. `/about.md`. */
     markdownAlternate?: string;
+    /**
+     * Inline the shared critical-CSS bundle instead of linking it. Only the
+     * homepage sets this: it reuses the exact leaf bundle (styles.css +
+     * theme-tokens.css + theme.css), so first paint needs zero render-blocking
+     * stylesheet requests. Recovery/error shells keep theme="home" without the
+     * flag and stay on external stylesheets, so the CSP hash allowlist stays
+     * scoped to "/" plus the content leaves.
+     */
+    inlineCriticalCss?: boolean;
   }>
 > = ({
   title,
@@ -32,6 +41,7 @@ export const Layout: FC<
   robots,
   theme,
   markdownAlternate,
+  inlineCriticalCss,
   children,
 }) => (
   <>
@@ -84,10 +94,13 @@ export const Layout: FC<
             href={markdownAlternate}
           />
         ) : null}
-        {theme === "content" ? (
+        {theme === "content" || inlineCriticalCss ? (
           // Content leaves inline the three stylesheets: the mobile audit
           // measured ~150 ms of render-blocking savings on /rules, while
-          // preload hints for the same files measured zero. The block is
+          // preload hints for the same files measured zero. The homepage
+          // reuses the exact same bundle: its hero paints at first paint
+          // (LCP equals FCP every staging run), so the three stylesheets plus
+          // the Display-700 preload are the whole FCP bottleneck. The block is
           // allowlisted by hash in style-src (no unsafe-inline).
           <style dangerouslySetInnerHTML={{ __html: LEAF_CRITICAL_CSS }} />
         ) : (
@@ -95,10 +108,15 @@ export const Layout: FC<
         )}
         {theme ? (
           <>
-            {theme === "content" ? null : (
+            {theme === "content" || inlineCriticalCss ? null : (
               // Content leaves render no Display text (the late font swap
               // became mobile LCP), so the font is neither used nor preloaded
-              // there. Every other theme keeps the preload and stylesheets.
+              // there. The homepage keeps Display (hero/nav/buttons) but drops
+              // the preload: with font-display swap the hero paints in the
+              // fallback stack first (LCP equals FCP), so the 15 KB preload
+              // only contends with first paint on the simulated mobile profile
+              // and the @font-face swap still settles the same final pixels.
+              // Every other theme keeps the preload and stylesheets.
               <>
                 <link
                   rel="preload"

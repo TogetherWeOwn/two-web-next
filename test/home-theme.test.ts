@@ -60,8 +60,14 @@ describe("homepage theme", () => {
   it("opts the homepage into the theme without changing unthemed layouts", () => {
     const html = render();
     expect(html).toContain('<body class="base-theme homepage-theme"><a class="skip-link"');
-    expect(html).toContain('href="/theme.css"');
-    expect(html).toContain('href="/fonts/display-latin-700.woff2" as="font"');
+    // The homepage inlines the shared critical-CSS bundle and drops the
+    // Display-700 preload, so first paint needs zero render-blocking requests.
+    // The @font-face rules still ship inside the inlined block, so the swap
+    // settles the same final pixels.
+    expect(html).toContain("<style>");
+    expect(html).toContain(".hero h1");
+    expect(html).not.toContain('rel="stylesheet"');
+    expect(html).not.toContain('.woff2" as="font"');
     expect(html).toContain('src="/logo.svg" width="64" height="64" alt="Together We Own"');
     expect(html).toContain('data-testid="site-jsonld"');
     const withoutJsonLd = html.replace(
