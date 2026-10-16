@@ -168,9 +168,13 @@ too: `KIT_WORKER_ORIGIN`, else derived from `KIT_WORKER_PORT` (the port
   `ci/kit-visual-accept.mjs` writes ONLY under that directory — the
   destination is fixed, not derived from artifact paths, so it can never
   touch the Hono baselines — and reads ONLY the Kit suite's own folders
-  (`test-results-kit-parity/`, `__screenshots-kit__/`), ignoring Hono
-  actuals in the shared failure artifact. `ci/visual-accept.mjs` likewise
-  ignores Kit suite outputs. An intentional redesign is a reviewed artifact
+  (`test-results-kit-visual/`, `test-results-kit-parity/`,
+  `__screenshots-kit__/`), ignoring Hono actuals in the shared failure
+  artifact. The Kit visual config has its own Playwright output directory so
+  the later parity run cannot clear visual actuals before artifact upload.
+  When an actual and its stale committed baseline share a destination, the
+  reviewed actual wins; distinct actuals still refuse. `ci/visual-accept.mjs`
+  likewise ignores Kit suite outputs. An intentional redesign is a reviewed artifact
   committed in the same PR — reviewers treat a baseline change like code —
   never a silent regeneration. (Kit baselines pin the events index:
   `e2e/kit-parity/events-index.visual.spec.ts` captures the populated `/events`

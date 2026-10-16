@@ -85,7 +85,7 @@ test("the Kit fixture owns the live event detail only on its loopback worker", (
 
 test("Kit visual baselines run on the clean seed before mutating browser journeys", () => {
   const step = (name) => e2eWorkflow.indexOf(`- name: ${name}`);
-  const kitVisual = step("Kit events-index visual");
+  const kitVisual = step("Kit visual regression");
   const honoVisual = step("Visual regression");
   const browserJourneys = step("Critical browser journeys");
   const parityJourneys = step("Kit journey parity (Hono vs built Kit Worker)");
@@ -95,7 +95,7 @@ test("Kit visual baselines run on the clean seed before mutating browser journey
   assert(browserJourneys < parityJourneys, "parity journeys remain after browser mutations");
   assert.match(
     e2eWorkflow,
-    /name: Kit events-index visual\n\s+run: >-\n\s+npx playwright test --config playwright\.kit-parity\.config\.ts\s+e2e\/kit-parity\/events-index\.visual\.spec\.ts/,
+    /name: Kit visual regression\n\s+run: npx playwright test --config playwright\.kit-visual\.config\.ts/,
   );
   assert.match(
     e2eWorkflow,

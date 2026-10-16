@@ -131,20 +131,20 @@ jobs:
         run: npm ci --prefix web --include=dev --no-audit --no-fund
       - name: Build Kit worker
         run: npm run build --prefix web
-      - name: Kit events-index visual
-        run: >-
-          npx playwright test --config playwright.kit-parity.config.ts
-          e2e/kit-parity/events-index.visual.spec.ts
+      - name: Kit visual regression
+        run: npx playwright test --config playwright.kit-visual.config.ts
       # Hono visual regression also runs before the mutating journeys.
       - name: Visual regression
         id: visual
+        if: ${{ !cancelled() }}
         run: npx playwright test --config playwright.visual.config.ts
       - name: Critical browser journeys
         if: ${{ !cancelled() }}
         run: npm run e2e
       # Kit journey parity (docs/kit-parity-gates.md): these parity journeys
       # run against Hono and the built Kit Worker on the same seeded disposable
-      # Postgres after the browser suite. Read-only apart from the
+      # Postgres after the browser suite. The Kit workspace is rebuilt here
+      # for the parity run. Read-only apart from the
       # member-board journey's single shared QA login and its one going RSVP
       # (withdrawn in afterAll) and the archive journey's 24 seeded rows
       # (swept in afterAll), so they neither contaminate either visual suite
@@ -167,7 +167,7 @@ jobs:
         run: node ci/check-kit-parity.mjs
       # A missing visual baseline is written by the visual step (never an
       # existing one); it must be reviewed and committed, so fail here.
-      # Kit events-index baselines come from the kit-parity run into
+      # Kit events-index baselines come from the dedicated Kit visual run into
       # e2e/visual/__screenshots-kit__/ (docs/kit-parity-gates.md); accept
       # them with node ci/kit-visual-accept.mjs, never by hand.
       - name: Uncommitted visual baselines
@@ -189,6 +189,7 @@ jobs:
             playwright-report/
             test-results-visual/
             playwright-report-visual/
+            test-results-kit-visual/
             test-results-kit-parity/
             playwright-report-kit-parity/
             e2e/visual/__screenshots__/
