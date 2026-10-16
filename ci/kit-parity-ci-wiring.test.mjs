@@ -82,6 +82,16 @@ test("the Kit fixture owns the live event detail only on its loopback worker", (
   assert.match(helper, /kitFixtureOwnsEventDetail/);
 });
 
+test("the member RSVP cleanup flag is armed before parsing the response", () => {
+  const spec = readFileSync(new URL("../e2e/kit-parity/parity.spec.ts", import.meta.url), "utf8");
+  const memberGoingRsvp = spec.match(/function memberGoingRsvp\(\): Promise<void> \{([\s\S]*?)\n\}/)?.[1];
+  assert(memberGoingRsvp, "memberGoingRsvp must exist");
+  assert.match(
+    memberGoingRsvp,
+    /expect\(response\.status\(\), "ranked RSVP created"\)\.toBe\(201\);\s*memberRsvpCreated = true;\s*const body = \(await response\.json\(\)\)/,
+  );
+});
+
 test("the required check runs the parity selftests in their own fail-closed step", () => {
   const step = job
     .split(/\n      - /)
