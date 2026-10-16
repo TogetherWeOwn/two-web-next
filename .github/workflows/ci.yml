@@ -179,6 +179,8 @@ jobs:
         run: |
           npx vitest run ci/a11y-lifecycle.test.mjs --reporter=default --reporter=json --outputFile.json=artifacts/a11y/a11y-lifecycle.json
           node ci/a11y-require-executed.mjs artifacts/a11y/a11y-lifecycle.json "audit lifecycle real Chromium signal cleanup" 2
+      - name: RSVP keyboard-focus proof (real Chromium, loopback fixtures)
+        run: RSVP_FOCUS_BROWSER_TESTS=true node --test ci/rsvp-focus-browser.test.mjs
       - name: Session recovery (local two-tab fixture, mocked OAuth)
         run: timeout 120s npm run test:auth-browser
       - name: Session recovery evidence

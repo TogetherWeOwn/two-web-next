@@ -516,9 +516,16 @@ describe("unchanged convention policy and workflow gates", () => {
   });
 
   it.each([
-    ["writes the listed PR commit subjects to the job file", 0, "fix(ci): one\nfix(ci): two\n", ""],
-    ["survives a failed listing with a warning and an empty file", 1, "", "::warning::"],
-  ])("commit-subject step %s", (_name, ghExit, expectedFile, expectedOutput) => {
+    [
+      "writes the listed PR commit subjects to the job file",
+      "ok",
+      0,
+      "fix(ci): one\nfix(ci): two\n",
+      "",
+    ],
+    ["passes a genuinely empty listing with an empty file", "empty", 0, "", ""],
+    ["fails closed on a failed listing without leaving a file", "fail", 1, null, "::error::"],
+  ])("commit-subject step %s", (_name, ghMode, expectedStatus, expectedFile, expectedOutput) => {
     const scratch = mkdtempSync(
       join(
         process.env.PAPERCLIP_RUN_SCRATCH_DIR ?? process.env.PAPERCLIP_SCRATCH_DIR ?? tmpdir(),
@@ -527,11 +534,13 @@ describe("unchanged convention policy and workflow gates", () => {
     );
     try {
       mkdirSync(join(scratch, "bin"));
-      writeFileSync(
-        join(scratch, "bin/gh"),
-        `#!/bin/bash\nif [ "${ghExit}" != 0 ]; then exit 1; fi\nprintf 'fix(ci): one\\nfix(ci): two\\n'\n`,
-        { mode: 0o755 },
-      );
+      const ghStub =
+        ghMode === "fail"
+          ? "#!/bin/bash\nexit 1\n"
+          : ghMode === "empty"
+            ? "#!/bin/bash\nexit 0\n"
+            : "#!/bin/bash\nprintf 'fix(ci): one\\nfix(ci): two\\n'\n";
+      writeFileSync(join(scratch, "bin/gh"), ghStub, { mode: 0o755 });
       const listing = step("List PR commit subjects");
       expect(listing.text).toContain("if: github.event_name != 'push'");
       const result = spawnSync("bash", ["-c", listing.run], {
@@ -544,8 +553,12 @@ describe("unchanged convention policy and workflow gates", () => {
         encoding: "utf8",
         timeout: 5000,
       });
-      expect(result.status, result.stdout + result.stderr).toBe(0);
-      expect(readFileSync(join(scratch, "pr-commit-subjects.txt"), "utf8")).toBe(expectedFile);
+      expect(result.status, result.stdout + result.stderr).toBe(expectedStatus);
+      if (expectedFile === null) {
+        expect(existsSync(join(scratch, "pr-commit-subjects.txt"))).toBe(false);
+      } else {
+        expect(readFileSync(join(scratch, "pr-commit-subjects.txt"), "utf8")).toBe(expectedFile);
+      }
       if (expectedOutput) expect(result.stdout).toContain(expectedOutput);
     } finally {
       rmSync(scratch, { recursive: true, force: true });

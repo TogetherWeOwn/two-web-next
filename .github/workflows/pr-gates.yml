@@ -206,8 +206,11 @@ jobs:
           PR_NUMBER: ${{ inputs.pr_number }}
         run: python3 ci/pr-lint-output.py resolve
 
-      # Advisory input for the internal-ID warning. A failed listing must not fail the gate.
-      # The subjects go to a job-owned file, never to a step output or the environment.
+      # Fail-closed input for the internal-ID warning. A failed listing fails
+      # the step so the gate never scans an empty file as if it were clean.
+      # A genuinely empty PR (zero commits) still succeeds here with an empty
+      # file. The subjects go to a job-owned file, never to a step output or
+      # the environment.
       - name: List PR commit subjects
         if: github.event_name != 'push' && github.event_name != 'merge_group'
         env:
@@ -218,8 +221,9 @@ jobs:
           set -uo pipefail
           if ! gh api "repos/$REPO/pulls/$PR_NUMBER/commits" --paginate \
             --jq '.[].commit.message | split("\n")[0]' > "$RUNNER_TEMP/pr-commit-subjects.txt"; then
-            echo "::warning::Could not list the PR commits; skipped the commit-subject check."
-            : > "$RUNNER_TEMP/pr-commit-subjects.txt"
+            echo "::error::Could not list the PR commits; failing closed instead of scanning an empty subject list."
+            rm -f "$RUNNER_TEMP/pr-commit-subjects.txt"
+            exit 1
           fi
 
       - name: Resolve PR head ref

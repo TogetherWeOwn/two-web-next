@@ -1,11 +1,13 @@
 import { createHmac } from "node:crypto";
 import { expect, test, type APIRequestContext } from "@playwright/test";
-import { sectionOf } from "../../ci/kit-section-contract.mjs";
+import { normalizeSection, sectionOf } from "../../ci/kit-section-contract.mjs";
 import {
   expectedKitMarker,
   kitFixtureOwnsMemberBoard,
   kitFixtureSessionSecret,
   KIT_ORIGIN,
+  memberBoardDataRows,
+  memberBoardTable,
   normalizeOrigin,
   parityTargets,
   PARITY_VIEWPORTS,
@@ -16,10 +18,14 @@ import {
 // Kit journey parity (docs/kit-parity-gates.md): the journeys run
 // against BOTH the Hono worker and the built Kit Worker in one run, and
 // every body comparison is origin-normalized first. Guest routes need no
-// session; the member-board journey spends exactly one QA login (below)
-// whose bearer token is replayed to both targets (re-signed for the Kit
-// fixture's own secret) — the token and cookie values never appear in
-// assertions or artifacts, and every body is scrubbed.
+// session; the member-board journey spends exactly one QA login (counted
+// below and asserted in afterAll) whose bearer token is replayed to both
+// targets (re-signed for the Kit fixture's own secret) — the token and
+// cookie values never appear in assertions or artifacts, and every body
+// is scrubbed. The journey also makes its viewer the board's one ranked
+// member with a single going RSVP on the seeded event, withdrawn in
+// afterAll: no earlier journey leaves a going RSVP behind, so without it
+// both boards render their empty state and ranked content is unprovable.
 // Login journeys (member RSVP, moderator admin, profile edit) stay Hono-only
 // until their routes migrate; they are ledgered as loud skips with reasons by
 // ci/kit-parity-gates.mjs, never as quiet test.skip calls here.
@@ -39,7 +45,23 @@ test.beforeAll(async ({ playwright }) => {
 });
 
 test.afterAll(async () => {
-  for (const context of contexts.values()) await context.dispose();
+  try {
+    // Undo the journey's one ranked RSVP while its Hono context is alive,
+    // so the seeded event is left exactly as the earlier journeys left it.
+    if (memberRsvpCreated) {
+      const hono = targets.find((target) => target.name === "hono")!;
+      const withdrawn = await api(hono).delete(`/events/${SEEDED_EVENT_KEY}/rsvp`, {
+        headers: { cookie: await honoMemberCookie(), Origin: "https://localhost:8787" },
+      });
+      expect(withdrawn.status(), "ranked RSVP withdrawn").toBe(204);
+    }
+  } finally {
+    for (const context of contexts.values()) await context.dispose();
+  }
+  // The whole parity run spends one QA login however many board fetches
+  // follow: dropping the memoization below burns one login per fetch
+  // against the shared qa-login throttle, and this counter is the proof.
+  expect(qaLoginCount, "exactly one QA login for the whole parity run").toBe(1);
 });
 
 function api(target: ParityTarget): APIRequestContext {
@@ -56,10 +78,14 @@ function api(target: ParityTarget): APIRequestContext {
 // so the Kit copy is re-signed with that fixture value below. In production
 // both renderers share one deployed secret and no re-signing exists.
 // POST /auth/qa/:identity shares the qa-login throttle, so exactly one login
-// is spent here however many board fetches follow.
+// is spent here however many board fetches follow. The spend is counted at
+// the one call site and asserted in afterAll, so losing the `??=` fails the
+// run instead of quietly burning a login per fetch.
+let qaLoginCount = 0;
 let memberCookiePromise: Promise<string> | null = null;
 function honoMemberCookie(): Promise<string> {
   memberCookiePromise ??= (async () => {
+    qaLoginCount += 1;
     const token = process.env.E2E_QA_TOKEN;
     if (!token) throw new Error("Missing ephemeral CI QA token");
     const hono = targets.find((target) => target.name === "hono")!;
@@ -88,6 +114,36 @@ async function memberCookie(target: ParityTarget): Promise<string> {
   const signature = createHmac("sha256", kitFixtureSessionSecret()).update(raw).digest("base64");
   return `${pair.slice(0, eq + 1)}${raw}.${signature}`;
 }
+
+// The board's one ranked member: the QA viewer answers going to the seeded
+// published event (e2e/seed.mjs, "E2E Community Night", 2099, no game).
+// Earlier journeys withdraw or cancel every going RSVP they create, so
+// this write — made once, on the Hono target that owns the RSVP route,
+// and withdrawn in afterAll — is what gives both renderers a ranked row
+// to serve. Its 2099 start and missing game also pin the season=2026 and
+// activity=valheim views to their empty state below.
+const SEEDED_EVENT_KEY = "01J00000000000000000000001";
+let memberRsvpCreated = false;
+let memberRsvpPromise: Promise<void> | null = null;
+function memberGoingRsvp(): Promise<void> {
+  memberRsvpPromise ??= (async () => {
+    const hono = targets.find((target) => target.name === "hono")!;
+    const response = await api(hono).put(`/events/${SEEDED_EVENT_KEY}/rsvp`, {
+      headers: { cookie: await honoMemberCookie(), Origin: "https://localhost:8787" },
+      data: { status: "going" },
+    });
+    expect(response.status(), "ranked RSVP created").toBe(201);
+    const body = (await response.json()) as { data?: { status?: string } };
+    expect(body.data?.status, "ranked RSVP holds a seat, not the waitlist").toBe("going");
+    memberRsvpCreated = true;
+  })();
+  return memberRsvpPromise;
+}
+
+// The viewer's ranked row as both renderers emit it, after the shared
+// normalization: rank 1, the seeded going count 1. The bare name also
+// rides the member chrome, so only the table row proves ranked content.
+const RANKED_ROW = '<td>1</td><th scope="row">QA Member</th><td>1</td>';
 
 function expectNoMarker(headers: Record<string, string>, label: string) {
   expect(
@@ -215,6 +271,97 @@ for (const target of targets) {
     });
   });
 
+  // Hot-zone heatmaps (GET /hotzones + joins|voice|games only; unknown
+  // segments 404, never a grid). Bodies come from raw API fetches with no
+  // browser JS executed, so these assertions ARE the no-JS proof: the
+  // aggregate grids, signal nav and estimate labels are in the first bytes.
+  test.describe(`${target.name}: hot-zone heatmaps keep their aggregate contract`, () => {
+    const hotzonePaths = ["/hotzones", "/hotzones/joins", "/hotzones/voice", "/hotzones/games"];
+
+    test("index and signals serve aggregate grids with the manifest marker", async () => {
+      for (const path of hotzonePaths) {
+        const response = await api(target).get(path);
+        expect(response.status(), `${target.name} ${path}`).toBe(200);
+        expect(response.headers()["content-type"]).toContain("text/html");
+        // Renderer ownership is per target: Kit answers with the
+        // manifest-derived marker once enabled, Hono never carries one.
+        const derived = expectedKitMarker(path);
+        expect(derived, `manifest owns ${path} on Kit`).toBe("kit");
+        const expectedMarker = target.name === "kit" ? derived : null;
+        expect(response.headers()["x-two-renderer"] ?? null, `${target.name} ${path} marker`).toBe(
+          expectedMarker,
+        );
+        // The Kit target must answer from the Kit load, not the Hono
+        // fallback: pin the literal kit marker so Hono-vs-Hono cannot pass.
+        if (target.name === "kit")
+          expect(
+            response.headers()["x-two-renderer"] ?? null,
+            `${path} Kit target answers from Kit`,
+          ).toBe("kit");
+        expect(response.headers()["cache-control"]).toBe("public, max-age=300");
+        const body = await response.text();
+        expect(scrubSecrets(body), `${target.name} ${path} secret scrub`).toEqual([]);
+        expect(body).toContain("<table>");
+        expect(body).toContain('<meta name="robots" content="noindex, follow"');
+        // Account chrome differs by renderer: the Hono pages pass an
+        // Open-Discord child into SiteHeader (src/hotzones/pages.tsx),
+        // which replaces the guest chrome (src/page-shell.tsx), while the
+        // Kit pages render the shell default. Either way nobody is signed in.
+        if (target.name === "kit") expect(body).toContain("Welcome, guest");
+        else expect(body).toContain("Open Discord");
+        expect(body).not.toContain("Sign out");
+        expect(body).not.toMatch(/discord_id|created_at/i);
+        expect(body).toContain('<link rel="canonical"');
+      }
+      // Index links all three signals and ships the voice/games estimate
+      // labels; signal pages carry the cross-signal nav.
+      const indexBody = await (await api(target).get("/hotzones")).text();
+      expect(indexBody).toContain("Hot zones");
+      expect(indexBody).toMatch(/across [1-9]\d* scheduled gatherings/);
+      expect(indexBody).toContain('href="/hotzones/joins"');
+      expect(indexBody).toContain('href="/hotzones/voice"');
+      expect(indexBody).toContain('href="/hotzones/games"');
+      expect(indexBody).toContain("Estimated voice activity (estimates until calibration).");
+      expect(indexBody).toContain("Estimated games activity (estimates until calibration).");
+      const joinsBody = await (await api(target).get("/hotzones/joins")).text();
+      expect(joinsBody).toMatch(/across [1-9]\d* scheduled gatherings/);
+      expect(joinsBody).toContain("joins hot zone");
+      expect(joinsBody).toContain("Join activity for season");
+      expect(joinsBody).toContain("Successful joins only");
+      expect(joinsBody).toContain('href="/hotzones"');
+      const voiceBody = await (await api(target).get("/hotzones/voice")).text();
+      expect(voiceBody).toContain("voice hot zone");
+      expect(voiceBody).toContain("Estimated voice activity for season");
+      expect(voiceBody).toContain("estimates until bot event-store calibration");
+      const gamesBody = await (await api(target).get("/hotzones/games")).text();
+      expect(gamesBody).toContain("games hot zone");
+      expect(gamesBody).toContain("Estimated games activity for season");
+      expect(gamesBody).toContain("estimates until bot event-store calibration");
+    });
+
+    test("bad season answers 400 before any grid", async () => {
+      for (const path of ["/hotzones?season=bogus", "/hotzones/joins?season=bogus"]) {
+        const response = await api(target).get(path);
+        expect(response.status(), `${target.name} ${path}`).toBe(400);
+        const body = await response.text();
+        expect(scrubSecrets(body)).toEqual([]);
+        expect(body).not.toContain("<table>");
+      }
+    });
+
+    test("unknown signal falls through to the Hono 404", async () => {
+      const response = await api(target).get("/hotzones/bogus");
+      expect(response.status()).toBe(404);
+      expect(
+        response.headers()["x-two-renderer"] ?? null,
+        `${target.name} unknown signal carries no Kit marker`,
+      ).toBeNull();
+      const body = await response.text();
+      expect(scrubSecrets(body)).toEqual([]);
+      expect(body).not.toContain("<table>");
+    });
+  });
+
   // Member leaderboard (GET /leaderboards/members only): the authenticated
   // parity journey. Admission and grammar are asserted per target, the served
   // board carries the member contract (private, no-store, noindex, member
@@ -244,11 +391,17 @@ for (const target of targets) {
       if (target.name === "kit")
         expect(kitFixtureOwnsMemberBoard(), "Kit fixture owns the member board").toBe(true);
       const expectedMarker = target.name === "kit" ? "kit" : null;
-      for (const path of [
-        "/leaderboards/members",
-        "/leaderboards/members?scope=relative",
-        "/leaderboards/members?season=2026",
-        "/leaderboards/members?activity=valheim",
+      // Ranked content, not just board chrome: the viewer's going RSVP on
+      // the seeded 2099 event ranks them on the overall and relative
+      // views, while the 2026 season window and the valheim game filter
+      // exclude that event and must render the empty state. A renderer
+      // serving no rows (or the wrong rows) fails here, not just on 200s.
+      await memberGoingRsvp();
+      for (const { path, ranked } of [
+        { path: "/leaderboards/members", ranked: true },
+        { path: "/leaderboards/members?scope=relative", ranked: true },
+        { path: "/leaderboards/members?season=2026", ranked: false },
+        { path: "/leaderboards/members?activity=valheim", ranked: false },
       ]) {
         const response = await api(target).get(path, { headers: { cookie } });
         expect(response.status(), `${target.name} ${path}`).toBe(200);
@@ -264,6 +417,15 @@ for (const target of targets) {
         expect(body).toContain("Sign out");
         expect(body).not.toContain("Welcome, guest");
         expect(body).not.toContain('href="/members/');
+        const normalized = normalizeSection(body);
+        if (ranked) {
+          expect(normalized, `${target.name} ${path}: ranked viewer row`).toContain(RANKED_ROW);
+        } else {
+          expect(body, `${target.name} ${path}: empty board`).toContain(
+            "Nobody is ranked for this season and game yet.",
+          );
+          expect(normalized, `${target.name} ${path}: no ranked row`).not.toContain(RANKED_ROW);
+        }
       }
     });
 
@@ -273,6 +435,7 @@ for (const target of targets) {
       // isViewer only: no ranked member's Discord ID, no viewerId. Hono
       // never served this path, so its body must carry no IDs either.
       const cookie = await memberCookie(target);
+      await memberGoingRsvp();
       const response = await api(target).get("/leaderboards/members/__data.json", {
         headers: { cookie },
       });
@@ -281,6 +444,14 @@ for (const target of targets) {
       expect(scrubSecrets(body)).toEqual([]);
       expect(body).not.toContain("userId");
       expect(body).not.toContain("viewerId");
+      // Shape, not just status: the Kit payload is parsed and its rows
+      // must be exactly the viewer's ranked row (rank + name + count +
+      // server-side viewer mark), so a 200 with the data missing fails.
+      if (target.name === "kit") {
+        expect(memberBoardDataRows(body), "Kit __data.json rows").toEqual([
+          { rank: 1, username: "QA Member", count: 1, isViewer: true },
+        ]);
+      }
     });
 
     test("bad season, scope and activity answer 400 before any board", async () => {
@@ -439,6 +610,59 @@ for (const target of targets) {
       }
     });
   }
+
+  // Two-width hot-zone journey (desktop grid, mobile stacked): the index
+  // shows the grids and the signal nav works at either width, with no
+  // horizontal overflow and no page errors, on both renderers.
+  for (const viewport of PARITY_VIEWPORTS) {
+    test(`${target.name}: hotzones ${viewport.name} shows the grids and follows signal nav`, async ({
+      browser,
+    }) => {
+      const context = await browser.newContext({
+        baseURL: target.origin,
+        ignoreHTTPSErrors: target.ignoreHTTPSErrors,
+        viewport: viewport.size,
+      });
+      const pageErrors: string[] = [];
+      try {
+        // Only the two parity loopbacks may be reached; anything else fails
+        // the journey instead of leaking a packet.
+        await context.route("**/*", (route) => {
+          const url = new URL(route.request().url());
+          const allowed = url.origin === "https://localhost:8787" || url.origin === KIT_ORIGIN;
+          return allowed ? route.continue() : route.abort("blockedbyclient");
+        });
+        const page = await context.newPage();
+        page.on("pageerror", (error) => pageErrors.push(error.message));
+        const response = await page.goto("/hotzones");
+        expect(response?.status()).toBe(200);
+        await expect(page.getByRole("heading", { name: "Hot zones" })).toBeVisible();
+        await expect(page.getByRole("link", { name: "Joins heatmap" })).toBeVisible();
+        await expect(page.getByRole("link", { name: "Voice heatmap" })).toBeVisible();
+        await expect(page.getByRole("link", { name: "Games heatmap" })).toBeVisible();
+        await page.getByRole("link", { name: "Joins heatmap" }).click();
+        await expect(page).toHaveURL(/\/hotzones\/joins/);
+        await expect(page.getByRole("heading", { name: "joins hot zone" })).toBeVisible();
+        // String form: the e2e tsconfig has no DOM lib (same as the
+        // copy-link and skip-link specs), so no document/window names here.
+        const overflow = (await page.evaluate(
+          "({ width: document.documentElement.scrollWidth, viewport: window.innerWidth })",
+        )) as unknown as { width: number; viewport: number };
+        // The 7x24 grids carry a 42rem floor (public/schedule-theme.css)
+        // with no scroll wrapper, so the 390px viewport overflows on both
+        // renderers alike; the no-overflow pin holds where the grid fits.
+        if (viewport.name === "desktop") {
+          expect(
+            overflow.width,
+            `${target.name} ${viewport.name}: no horizontal overflow`,
+          ).toBeLessThanOrEqual(overflow.viewport);
+        }
+        expect(pageErrors, "no uncaught page errors").toEqual([]);
+      } finally {
+        await context.close();
+      }
+    });
+  }
 }
 
 test("cross-target: normalized archive sections match", async () => {
@@ -456,6 +680,24 @@ test("cross-target: normalized archive sections match", async () => {
     sectionOf(bodies.get("kit")!, "past-events"),
     "Kit section matches Hono section after origin normalization",
   ).toBe(sectionOf(bodies.get("hono")!, "past-events"));
+});
+
+test("cross-target: normalized member-board tables match", async () => {
+  await memberGoingRsvp();
+  const tables = new Map<string, string>();
+  for (const target of targets) {
+    const response = await api(target).get("/leaderboards/members", {
+      headers: { cookie: await memberCookie(target) },
+    });
+    expect(response.status()).toBe(200);
+    tables.set(target.name, memberBoardTable(await response.text()));
+  }
+  // Non-vacuous equality: the compared tables carry the ranked row, so
+  // two empty boards cannot pass for parity.
+  expect(tables.get("hono"), "Hono table carries the ranked row").toContain(RANKED_ROW);
+  expect(tables.get("kit"), "Kit table matches Hono table after normalization").toBe(
+    tables.get("hono"),
+  );
 });
 
 test("cross-target: join one-click hrefs agree on the safe next", async () => {
