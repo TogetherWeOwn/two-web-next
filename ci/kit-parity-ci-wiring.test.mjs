@@ -83,7 +83,10 @@ test("the Kit fixture owns the live event detail only on its loopback worker", (
 });
 
 test("Kit snapshot updates are pinned and generated Kit baselines fail the CI guard", () => {
-  const config = readFileSync(new URL("../playwright.kit-parity.config.ts", import.meta.url), "utf8");
+  const config = readFileSync(
+    new URL("../playwright.kit-parity.config.ts", import.meta.url),
+    "utf8",
+  );
   assert.match(config, /^  updateSnapshots: "missing",$/m);
   // A missing template would send new images outside the workflow's checked directory.
   assert.ok(
