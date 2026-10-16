@@ -8,11 +8,17 @@ probe, or change production state as part of diagnosis.
 
 ## From a notification to the cause
 
-1. Open the Cloudflare dashboard and select **Workers & Pages → the Worker named
-   in the alert → Observability → Logs**. Select the environment and time window
-   from the alert. The alert's route/job and timestamp are safe summary fields.
-   The source error class is logged internally, but neither the class nor an
-   exception is sent to Discord.
+1. Identify the environment first from the delivering Tail Worker or the
+   webhook channel that received the page (`two-web-next-alerts` is staging,
+   `two-web-next-alerts-production` is production); when in doubt, check both
+   Tail receipt streams. Discord summaries carry only event, fingerprint,
+   route/job (status for `uptime.down`), and timestamp — no Worker or
+   environment — so never infer the source Worker from the alert content. Then
+   open the Cloudflare dashboard at **Workers & Pages → the source Worker from
+   the step-2 mapping → Observability → Logs** for that environment and the
+   alert's time window. The alert's route/job (or status) and timestamp are safe
+   summary fields. The source error class is logged internally, but neither
+   the class nor an exception is sent to Discord.
 2. Search the source stream for the incident's environment. Staging HTTP request
    failures come from `two-web-next`; staging terminal queue failures come from
    `two-web-jobs`. In production, both HTTP request and queue failures come from
@@ -47,7 +53,7 @@ probe, or change production state as part of diagnosis.
    in [GitHub Actions → deploy-production](https://github.com/TogetherWeOwn/two-web-next/actions/workflows/deploy-production.yml),
    then confirm its resolved `DEPLOY_SHA` matches the tag's SHA. For staging,
    use the staging `/up` version tag and the corresponding
-   [GitHub Actions → deploy-staging](https://github.com/TogetherWeOwn/two-web-next/actions/workflows/deploy.yml)
+   [GitHub Actions → deploy.yml (`deploy-staging` job)](https://github.com/TogetherWeOwn/two-web-next/actions/workflows/deploy.yml)
    run. The dispatch run's head can differ from the promoted commit; its head SHA
    is not deployment evidence. The production workflow creates the GitHub Release
    only after a successful promote. Open the deployed commit's PR list or inspect
