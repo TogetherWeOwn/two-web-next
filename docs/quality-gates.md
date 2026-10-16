@@ -16,7 +16,10 @@ not fail) unless marked HARD. All of them run on the existing runners only.
   in `sg-tests/fetch-await*.yml` and run under `npm run scan:rules-test`.
 - **Changed-lines coverage (WARN, 80%):** `ci/patch-coverage.mjs` intersects
   the PR diff with `coverage-final.json`; added TS lines nobody executes warn.
-  Aggregate floors in `vitest.config.ts` stay. Flip to `--strict` for HARD.
+  A missing `coverage-final.json` fails the step instead of skipping, so a
+  broken coverage run cannot silence the gate (docs-only and draft PRs skip
+  via the scope guard). Aggregate floors in `vitest.config.ts` stay. Flip to
+  `--strict` for HARD.
 - **Semgrep TS + secrets (HARD):** `ci/semgrep-rules.yml` flags dangerous
   sinks (`eval`, string `setTimeout`, `innerHTML`, `document.write`) and
   secret-shaped literals. CI installs the pinned CLI into a Python virtual

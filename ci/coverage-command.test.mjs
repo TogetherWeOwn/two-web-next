@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { chmod, mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, copyFile, mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -75,6 +75,73 @@ test("the coverage gate keeps area floors and summary scopes for the high-blast-
     );
     assert.ok(summary.includes(`"${file}"`), `coverage summary must report ${file}`);
   }
+});
+
+test("patch coverage fails closed when its coverage input is missing", async () => {
+  const script = await readFile(new URL("./patch-coverage.mjs", import.meta.url), "utf8");
+  // The old warn-and-skip branch let a broken test:coverage silence its own
+  // downstream gate; a missing input must error the step instead.
+  assert.doesNotMatch(script, /::warning::patch coverage skipped/);
+  assert.match(script, /::error::patch coverage missing input/);
+  assert.match(script, /if \(requireCoverageInput\(coveragePath\)\)/);
+  // The --selftest pins requireCoverageInput behaviorally, so the gate cannot
+  // be reverted without the selftest failing the same step.
+  assert.match(script, /missing coverage input fails closed instead of warn\/skip/);
+});
+
+// Pin the CLI's fail-closed exit status behaviorally: copying the shipped
+// script into a bare fixture leaves <fixture>/coverage/ absent, so running
+// it must exit 1 with the ::error:: annotation. A source-text assertion
+// alone would still pass if `process.exitCode = 1` were flipped to 0.
+test("the patch coverage CLI exits 1 when its coverage input is missing", {
+  timeout: 20000,
+}, async (t) => {
+  const fixture = await mkdtemp(
+    join(process.env.PAPERCLIP_RUN_SCRATCH_DIR || tmpdir(), "patch-coverage-missing-"),
+  );
+  t.after(() => rm(fixture, { recursive: true, force: true }));
+  // repoRoot is derived from the script location, so <fixture>/coverage/
+  // does not exist and the missing-input branch runs.
+  await mkdir(join(fixture, "ci"), { recursive: true });
+  await copyFile(
+    new URL("./patch-coverage.mjs", import.meta.url),
+    join(fixture, "ci", "patch-coverage.mjs"),
+  );
+  const child = spawn(process.execPath, [join(fixture, "ci", "patch-coverage.mjs")], {
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  let stderr = "";
+  child.stderr.on("data", (data) => {
+    stderr += data;
+  });
+  const [code, signal] = await new Promise((resolve, reject) => {
+    child.once("error", reject);
+    child.once("close", (code, signal) => resolve([code, signal]));
+  });
+  assert.equal(signal, null, stderr);
+  assert.equal(code, 1, stderr);
+  assert.match(stderr, /::error::patch coverage missing input/);
+});
+
+test("the patch coverage step has no file-presence skip so a missing input fails the job", async () => {
+  const step = check
+    .split(/\n      - /)
+    .find((entry) => entry.startsWith("name: Patch coverage (WARN)\n"));
+  assert(step, "check must keep the patch coverage step");
+  // A hashFiles presence check would skip the step on a missing report and
+  // silence the gate; only the docs-only/draft scope guard may skip it.
+  assert.doesNotMatch(step, /hashFiles\('coverage\/coverage-final\.json'\)/);
+  assert.doesNotMatch(step, /continue-on-error:/);
+  const guards = step.match(/^        if:.*$/gm) ?? [];
+  assert.equal(guards.length, 1);
+  assert.equal(
+    guards[0],
+    "        if: always() && (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')",
+  );
+  assert.equal(
+    step.match(/^        run: (.+)$/m)?.[1],
+    "npm run patch:coverage:selftest && npm run patch:coverage",
+  );
 });
 
 // Exercise the shipped npm script against a local CLI fixture. A successful-looking
