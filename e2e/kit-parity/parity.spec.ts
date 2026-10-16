@@ -790,9 +790,10 @@ for (const target of targets) {
     });
   }
 
-  // Two-width hot-zone journey (desktop grid, mobile stacked): the index
-  // shows the grids and the signal nav works at either width, with no
-  // horizontal overflow and no page errors, on both renderers.
+  // Two-width hot-zone journey: the index shows the grids and the signal nav
+  // works at either width, on both renderers. All four paths hold the page
+  // inside the viewport (no horizontal overflow); at 390px the 7x24 grid's
+  // 42rem floor scrolls inside its labelled region instead of the page.
   for (const viewport of PARITY_VIEWPORTS) {
     test(`${target.name}: hotzones ${viewport.name} shows the grids and follows signal nav`, async ({
       browser,
@@ -819,22 +820,43 @@ for (const target of targets) {
         await expect(page.getByRole("link", { name: "Joins heatmap" })).toBeVisible();
         await expect(page.getByRole("link", { name: "Voice heatmap" })).toBeVisible();
         await expect(page.getByRole("link", { name: "Games heatmap" })).toBeVisible();
+        // String form: the e2e tsconfig has no DOM lib (same as the
+        // copy-link and skip-link specs), so no document/window names here.
+        const expectContained = async (path: string, regions: number) => {
+          const overflow = (await page.evaluate(
+            "({ width: document.documentElement.scrollWidth, viewport: window.innerWidth })",
+          )) as unknown as { width: number; viewport: number };
+          expect(
+            overflow.width,
+            `${target.name} ${viewport.name} ${path}: no horizontal overflow`,
+          ).toBeLessThanOrEqual(overflow.viewport);
+          const scroll = page.locator("[data-hotzone-scroll]");
+          await expect(scroll, `${target.name} ${viewport.name} ${path}: grid regions`).toHaveCount(
+            regions,
+          );
+          if (viewport.name === "mobile") {
+            // Contained, not clipped: every region scrolls the grid's 42rem
+            // floor inside itself, so the page stays put and the cells remain
+            // reachable by panning the region.
+            const scrollable = (await scroll.evaluateAll(
+              "(nodes) => nodes.map((node) => node.scrollWidth > node.clientWidth)",
+            )) as unknown as boolean[];
+            expect(
+              scrollable,
+              `${target.name} mobile ${path}: each grid scrolls inside its region`,
+            ).toEqual(Array.from({ length: regions }, () => true));
+          }
+        };
+        await expectContained("/hotzones", 3);
         await page.getByRole("link", { name: "Joins heatmap" }).click();
         await expect(page).toHaveURL(/\/hotzones\/joins/);
         await expect(page.getByRole("heading", { name: "joins hot zone" })).toBeVisible();
-        // String form: the e2e tsconfig has no DOM lib (same as the
-        // copy-link and skip-link specs), so no document/window names here.
-        const overflow = (await page.evaluate(
-          "({ width: document.documentElement.scrollWidth, viewport: window.innerWidth })",
-        )) as unknown as { width: number; viewport: number };
-        // The 7x24 grids carry a 42rem floor (public/schedule-theme.css)
-        // with no scroll wrapper, so the 390px viewport overflows on both
-        // renderers alike; the no-overflow pin holds where the grid fits.
-        if (viewport.name === "desktop") {
-          expect(
-            overflow.width,
-            `${target.name} ${viewport.name}: no horizontal overflow`,
-          ).toBeLessThanOrEqual(overflow.viewport);
+        await expectContained("/hotzones/joins", 1);
+        for (const signal of ["voice", "games"]) {
+          const signalResponse = await page.goto(`/hotzones/${signal}`);
+          expect(signalResponse?.status()).toBe(200);
+          await expect(page.getByRole("heading", { name: `${signal} hot zone` })).toBeVisible();
+          await expectContained(`/hotzones/${signal}`, 1);
         }
         expect(pageErrors, "no uncaught page errors").toEqual([]);
       } finally {
