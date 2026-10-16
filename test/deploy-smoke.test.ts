@@ -444,7 +444,9 @@ describe("production deploy smoke (offline)", () => {
 
   it("probes the apex origin with the indexable posture, never staging", () => {
     const workflow = readFileSync(".github/workflows/deploy-production.yml", "utf8");
-    expect(workflow).toContain("uses: ./.github/actions/gradual-promote");
+    expect(workflow).toContain(
+      "uses: TogetherWeOwn/.github/actions/gradual-promote@1dcce452d9066c02e4ab3d99931edf75d50388d7",
+    );
     expect(workflow).toContain("domain: togetherweown.com");
     expect(workflow).not.toContain("next.togetherweown.com");
     const action = readFileSync(".github/actions/gradual-promote/action.yml", "utf8");

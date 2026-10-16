@@ -179,7 +179,9 @@ test("required-secrets preflight runs before the moderator preflight, version up
   const secrets = workflow.indexOf("run: node ci/check-production-secrets.mjs");
   const moderator = workflow.indexOf("run: npm run check:worker-moderators-production");
   const upload = workflow.indexOf("npx wrangler versions upload --env production");
-  const gradual = workflow.indexOf("uses: ./.github/actions/gradual-promote");
+  const gradual = workflow.indexOf(
+    "uses: TogetherWeOwn/.github/actions/gradual-promote@1dcce452d9066c02e4ab3d99931edf75d50388d7",
+  );
   assert.ok(
     credentials > 0 && secrets > 0 && moderator > 0 && upload > 0 && gradual > 0,
     "expected credentials, secrets, moderator, version upload and gradual promotion in deploy-production.yml",
