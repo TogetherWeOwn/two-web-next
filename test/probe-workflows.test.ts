@@ -523,7 +523,9 @@ describe("production deployment preserves configured triggers", () => {
     const upload = workflow.indexOf(
       'npx wrangler versions upload --env production --tag "${DEPLOY_SHA:?}-${GITHUB_RUN_ID:?}-${GITHUB_RUN_ATTEMPT:?}"',
     );
-    const gradual = workflow.indexOf("uses: ./.github/actions/gradual-promote");
+    const gradual = workflow.indexOf(
+      "uses: TogetherWeOwn/.github/actions/gradual-promote@1dcce452d9066c02e4ab3d99931edf75d50388d7",
+    );
 
     expect(upload).toBeGreaterThan(-1);
     expect(gradual).toBeGreaterThan(upload);

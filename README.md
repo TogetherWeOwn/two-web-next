@@ -110,7 +110,8 @@ Coverage includes every
 `src/**/*.{ts,tsx}` file, even if no test imports it. Global and aggregate
 area floors (`src/admin`, `src/events`, `src/join`, `src/sessions.ts`, `src/jobs`,
 `src/bot`, `src/agent-events`, `src/profiles`, `src/auth`, `src/invite.ts`,
-`src/return-journey.ts`, `src/write-recovery.tsx`) live in `vitest.config.ts`. The
+`src/return-journey.ts`, `src/write-recovery.tsx`, `src/kit-*`, `src/counts.ts`,
+`src/seo.ts`) live in `vitest.config.ts`. The
 baseline uses the full suite with the test database; without it, skipped live
 suites may put coverage below the floors. CI's
 required `check` job runs the configuration drift check, Biome lint/format gate,
@@ -178,8 +179,8 @@ passed. Run any listed command locally to execute the same Chromium proof.
 | `test/featured-native-length.test.ts` | `FEATURED_NATIVE_BROWSER_TESTS` | `FEATURED_NATIVE_BROWSER_TESTS=true npx vitest run test/featured-native-length.test.ts` |
 | `test/calendar-search-unicode-boundaries.test.ts` | `CALENDAR_SEARCH_BROWSER_TESTS` | `CALENDAR_SEARCH_BROWSER_TESTS=true npx vitest run test/calendar-search-unicode-boundaries.test.ts` |
 | `test/profile-native-length.test.ts` | `A11Y_BROWSER_TESTS` | `A11Y_BROWSER_TESTS=true npx vitest run test/profile-native-length.test.ts` |
-| `ci/a11y-lifecycle.test.mjs` | `A11Y_BROWSER_TESTS` | `A11Y_BROWSER_TESTS=true node --test ci/a11y-lifecycle.test.mjs` (real Chromium signal cases; no executed-count verifier yet) |
-| `ci/rsvp-focus-browser.test.mjs` | `RSVP_FOCUS_BROWSER_TESTS` | `RSVP_FOCUS_BROWSER_TESTS=true node --test ci/rsvp-focus-browser.test.mjs` (real Chromium focus proof; runs in the `a11y` job; no executed-count verifier yet) |
+| `ci/audit-lifecycle.test.mjs` | `A11Y_BROWSER_TESTS` | `A11Y_BROWSER_TESTS=true npx vitest run ci/audit-lifecycle.test.mjs` |
+| `ci/rsvp-focus-browser.test.mjs` | `RSVP_FOCUS_BROWSER_TESTS` | `RSVP_FOCUS_BROWSER_TESTS=true node --test ci/rsvp-focus-browser.test.mjs` (real Chromium focus proof; no executed-count verifier yet; runs in the `a11y` job) |
 
 The admin, featured and calendar suites use intercepted synthetic fixtures or
 loopback servers with mocked reads, and the profile suite uses loopback fixtures
@@ -228,16 +229,15 @@ guest 401 refusals for `/events.json` and `/events/:key`, the collection paging
 envelope (`data/page/limit` plus `meta.current_page/per_page/total/last_page`),
 the JSON show shape for the first collection row (or the exact cancelled 410
 envelope when that row is cancelled), a 410 probe against a cancelled fixture
-when the first page has one, and the malformed-key 422/404 refusals. Until
-PR #109 (`GET /events/:key` show route plus the collection `meta` envelope)
-is deployed, the checker detects the missing show route (guest probe gets the
-app's branded 404) and skips the five contract-dependent checks visibly
-instead of failing the deploy; probes that already hold on main (guest
-collection 401, QA login, malformed `event_key` 422) stay unconditional. The
-step retries six times like the public smoke, refuses any non-staging origin
-(production included), and never logs the token, cookies or response bodies.
-It needs the `staging`-environment `QA_AUTH_TOKEN` secret; without it the step
-reports its skip and passes, so a missing token never fails a deploy.
+when the first page has one, and the malformed-key 422/404 refusals. Every
+listed contract check runs on each probe; a missing route or malformed response
+fails the smoke rather than being treated as pending. Data-dependent checks
+still report their skips when staging has no events or no cancelled fixture,
+and the loud-skip ledger records those results. The step retries six times like
+the public smoke, refuses any non-staging origin (production included), and
+never logs the token, cookies or response bodies. It needs the
+`staging`-environment `QA_AUTH_TOKEN` secret; without it the step reports its
+skip and passes, so a missing token never fails a deploy.
 
 Deployment context: the top-level Wrangler configuration names Worker
 `two-web-next` and the `next.togetherweown.com` route; it has no named

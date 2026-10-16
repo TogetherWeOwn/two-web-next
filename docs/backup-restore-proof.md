@@ -10,7 +10,7 @@ workflows, fetch live archives, or prove a live backup's recoverability.
 
 Prerequisites: Python 3 (standard library only), Bash, `psql`, `pg_dump` and
 `pg_restore` on PATH, with a client major version compatible with the test server
-(PostgreSQL 17 currently). No npm install, application migrations, Wrangler
+(PostgreSQL 18 currently). No npm install, application migrations, Wrangler
 installation or Cloudflare credentials are needed.
 
 ```sh

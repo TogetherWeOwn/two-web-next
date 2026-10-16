@@ -52,13 +52,14 @@ not fail) unless marked HARD. All of them run on the existing runners only.
   another name and lowering a row still fails; moving CONSTRAINTS.md to a
   name that no longer matches fails as a threshold removal even with no row
   edit, and deleting CONSTRAINTS.md fails as a threshold removal. Test renames are judged against the runner
-  globs (vitest, Playwright specs under e2e/); e2e safety and ci selftest
-  scripts run via enumerated paths (only ci/a11y-*.test.mjs runs via glob),
-  so any rename of those needs a waiver. Merge-queue squash messages hard-wrap
-  PR bodies at ~72 columns, so `unfoldFloorWaiverLines` joins nonblank
-  continuation lines after each `Floor-waiver:` line before matching;
-  path-based waiver parsing removes wrap-inserted spaces within the path
-  (`ci/floor-guard.mjs:205-229, 232-253`).
+  globs (vitest includes test/** plus ci/audit-lifecycle.test.mjs, Playwright
+  specs under e2e/); e2e safety and ci selftest scripts run via enumerated
+  paths (only ci/a11y-*.test.mjs runs via glob), so any rename of those needs
+  a waiver. Merge-queue squash messages hard-wrap PR bodies at ~72 columns,
+  so `unfoldFloorWaiverLines` joins nonblank continuation lines after each
+  `Floor-waiver:` line before matching; path-based waiver parsing removes
+  wrap-inserted spaces within the path
+  (`ci/floor-guard.mjs:215-234, 236-262`).
   Waivers are reasoned commit trailers (`test-deleted`, `assertion-removed`,
   `threshold-removed`, `new-exemption`) and every active one is printed to the
   log and the job summary for reviewer visibility. The ignore list is pinned
@@ -68,8 +69,8 @@ not fail) unless marked HARD. All of them run on the existing runners only.
   `.constraintsignore`. An assertion paired with one added in the same test
   file reads as a replacement. Failed or oversized diffs exit 2 rather than
   looking clean.
-  Mirror every `Floor-waiver:` trailer from branch commits verbatim in the PR
-  body: `check_queue_visible_waivers` (`ci/pr-lint-output.py:26-71`) scans
+  Mirror every `Floor-waiver:` trailer from branch commits in canonical form
+  in the PR body: `check_queue_visible_waivers` (`ci/pr-lint-output.py:26-71`) scans
   branch commit messages (`git log --format=%B HEAD --not <base>`,
   `ci/pr-lint-output.py:48-61`) and fails the PR (`sys.exit(1)`,
   `ci/pr-lint-output.py:65-70`) when `missing_body_waivers`

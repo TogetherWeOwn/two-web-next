@@ -41,20 +41,24 @@ const ASSERTIONS = /\b(expect|assert|should)\b/;
 const stripPrefix = (p) => p.replace(/^[ab]\//, "");
 
 // Runner globs, not name patterns, decide whether a moved test still runs.
-// Vitest includes only test/**/*.test.ts and test/**/*.test.mjs
-// (vitest.config.ts); the report-only Tier-0 suites include only
-// tier0/**/*.test.ts (tier0/vitest.config.ts). Playwright e2e specs run via testMatch **/*.spec.ts
-// under testDir ./e2e (playwright.config.ts), so a spec moved out of e2e/ no
-// longer runs. The e2e safety scripts run via an explicit list in
-// package.json (`node --test e2e/safety.test.mjs e2e/qa-request.test.mjs
-// ...`); `node --test a b` silently skips a missing path and exits 0, so any
-// rename of a listed script breaks the wiring even when the new name matches
-// the same pattern. Likewise most ci selftests run via explicit single paths
+// Vitest includes test/**/*.test.ts, test/**/*.test.mjs and
+// ci/audit-lifecycle.test.mjs (vitest.config.ts); the report-only Tier-0
+// suites include only tier0/**/*.test.ts (tier0/vitest.config.ts). Playwright
+// e2e specs run via testMatch **/*.spec.ts under testDir ./e2e
+// (playwright.config.ts), so a spec moved out of e2e/ no longer runs. The e2e
+// safety scripts run via an explicit list in package.json
+// (`node --test e2e/safety.test.mjs e2e/qa-request.test.mjs ...`); `node
+// --test a b` silently skips a missing path and exits 0, so any rename of a
+// listed script breaks the wiring even when the new name matches the same
+// pattern. Likewise most ci selftests run via explicit single paths
 // (`node --test ci/cutover-check-selftest.mjs`); only ci/a11y-*.test.mjs runs
-// via a shell glob, so only a rename within that glob keeps running. A rename
-// whose source is runnable but whose destination leaves the runner (docs/
-// move, suffix change, out-of-glob rename, or rewiring rename) is a deletion
-// from the suite, even though the name still looks like a test.
+// via a shell glob, so only a rename within that glob keeps running. The
+// vitest-run audit lifecycle suite (ci/audit-lifecycle.test.mjs) is named
+// exactly by the a11y job and the vitest include, so any rename of it breaks
+// the wiring. A rename whose source is runnable but whose destination leaves
+// the runner (docs/ move, suffix change, out-of-glob rename, or rewiring
+// rename) is a deletion from the suite, even though the name still looks
+// like a test.
 const VITEST_RE = /^test\/.*\.test\.(ts|mjs)$/;
 // Tier-0 suites run from tier0/ through their own vitest config
 // (tier0/vitest.config.ts, `npm run test:tier0`), report-only. A move out of
