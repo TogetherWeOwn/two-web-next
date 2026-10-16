@@ -58,8 +58,9 @@ claim of journey parity:
    four hot-zone paths and the member board)
 4. `npm run build --prefix web`, then `node ci/check-kit-perf.mjs` (worker +
    generated-asset budgets against the measured baselines)
-5. `node ci/kit-worker-e2e.mjs` (archive route on the built Worker runtime
-   fixture)
+5. `node ci/kit-worker-e2e.mjs` (built Worker archive route; `/about` and
+   `/faq` Kit marker, public cache header, CSP leaf hash and zero-stylesheet
+   contract; API dispatch, cross-origin form refusal and public favicon)
 
 Steps 1–5 spend no logins. Step 3 runs in unit mode in CI: no workflow sets
 the preview URLs or `KIT_PARITY_QA_TOKEN`. Preview-mode member-board checks
