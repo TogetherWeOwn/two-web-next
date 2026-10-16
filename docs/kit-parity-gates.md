@@ -87,7 +87,7 @@ Worker; one shared QA login for the member-board journey), then
 One baseline integrator owns `e2e/visual/__screenshots__/` and
 `e2e/visual/__screenshots-kit__/`: parallel migration cards never commit
 baselines directly; they attach `*-actual.png` evidence and the integrator
-reviews and commits. This keeps the 16 Hono baselines attributable.
+reviews and commits. This keeps the 18 Hono baselines attributable.
 
 ## Journey gates (`ci/kit-parity-gates.mjs`)
 
@@ -184,7 +184,7 @@ too: `KIT_WORKER_ORIGIN`, else derived from `KIT_WORKER_PORT` (the port
 
 ## Visual gates
 
-- The 16 Hono baselines in `e2e/visual/__screenshots__/` remain attributable:
+- The 18 Hono baselines in `e2e/visual/__screenshots__/` remain attributable:
   `playwright.visual.config.ts` keeps `updateSnapshots: "missing"` (CI never
   rewrites an existing baseline) and the wiring test pins the spec's baseline
   directory. See `docs/visual-regression.md` for the accept flow.
