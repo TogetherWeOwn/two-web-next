@@ -721,7 +721,7 @@ export function assertMembersContract({ label, html, headers, status, expected }
     failures.push(`${label}: board filter form present`);
   if (!html.includes('name="season"') || !html.includes('name="activity"'))
     failures.push(`${label}: season + activity inputs present`);
-  const hasTable = html.includes("<table>");
+  const hasTable = /<table[\s>]/.test(html);
   const hasEmptyStatus =
     html.includes("Nobody is ranked for this season and game yet.") ||
     html.includes("You are not ranked for this season and game yet.") ||
@@ -1123,7 +1123,7 @@ export function runUnitMode({ stdout = process.stdout, manifestSource: manifestO
     `<p><label for="board-activity">Game (blank for every game)</label> ` +
     `<input id="board-activity" name="activity" type="text" value="" /></p>` +
     `<p><button class="btn" type="submit">Show board</button></p></form>` +
-    `<table><caption>Going counts, season all, every game</caption>` +
+    `<table class="member-board-table"><caption>Going counts, season all, every game</caption>` +
     `<thead><tr><th scope="col">Rank</th><th scope="col">Member</th><th scope="col">Going</th></tr></thead>` +
     `<tbody><tr><td>1</td><th scope="row">Rick</th><td>3</td></tr></tbody></table>` +
     `</main></body></html>`;
@@ -1157,7 +1157,7 @@ export function runUnitMode({ stdout = process.stdout, manifestSource: manifestO
     ["shared-cache", (html) => html, "member board answers private, no-store"],
     [
       "no-table-no-status",
-      (html) => html.replace(/<table>[\s\S]*<\/table>/, ""),
+      (html) => html.replace(/<table[^>]*>[\s\S]*<\/table>/, ""),
       "board table or empty status present",
     ],
     [
