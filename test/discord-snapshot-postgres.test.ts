@@ -308,21 +308,17 @@ describe.skipIf(!raw)("Postgres Discord snapshots, independent request clients",
               () => ({ released: true as const }),
               (error: unknown) => ({ error }),
             );
-        // Readiness uses the backend's active statement and granted relation
-        // lock, not the transient PgSleep wait_event. These persist while the
-        // statement holds its row lock, even if the observer is descheduled.
+        // Readiness waits for the holder's pg_sleep: it runs only after the
+        // subquery's FOR UPDATE has taken the tuple lock, so wait_event =
+        // 'PgSleep' proves the row is held. The sleep lasts ~250ms, so a 5ms
+        // poll cannot miss it; a stall past the sleep fails under any gate.
         let holding = false;
         for (let i = 0; i < 200 && !holding; i++) {
           const [activity] = await fixture.client`select exists(
-            select 1 from pg_stat_activity a
-            join pg_locks l on l.pid = a.pid
-            where a.pid = ${holderPid}
-              and a.state = 'active'
-              and a.query like '%discord_snapshot_fence_holder%'
-              and l.locktype = 'relation'
-              and l.relation = 'discord_event_snapshots'::regclass
-              and l.mode = 'RowShareLock'
-              and l.granted
+            select 1 from pg_stat_activity
+            where pid = ${holderPid}
+              and state = 'active'
+              and wait_event = 'PgSleep'
           ) as holding`;
           holding = activity!.holding;
           if (!holding) await new Promise((r) => setTimeout(r, 5));
