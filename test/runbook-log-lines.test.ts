@@ -1,6 +1,9 @@
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join, extname } from "node:path";
 import { describe, expect, it } from "vitest";
+// @ts-expect-error Standalone CI tooling has no declaration file.
+import { readWranglerConfig } from "../ci/wrangler-config.mjs";
+import { RECONCILE_CRON } from "../src/jobs/constants";
 
 const SRC_DIR = "src";
 const DOCS_PATH = "docs/runbook-logs.md";
@@ -184,10 +187,29 @@ describe("missing sync-queue binding warning docs", () => {
     expect(section).toContain("two-web-next-production-sync-event");
     expect(section).toContain("two-sync-event");
     // Production reconcile runs on the web Worker: a missing binding there is stuck.
-    expect(section).toContain("two-web-next-production");
+    // Pin the ownership claim itself, not just the Worker name (which is a
+    // substring of the production queue name asserted above), and tie it to
+    // the wrangler configs so a handoff that moves the cron fails here.
+    expect(section).toContain(
+      "In the production cutover template this self-healing does not apply:",
+    );
+    expect(section).toContain("Worker `two-web-next-production` owns both");
+    expect(section).toContain("`*/10 * * * *` reconcile");
+    expect(section).toContain("cron (`env.production.triggers`, `wrangler.jsonc`)");
     expect(section).toContain("stuck, not late");
     expect(section).toContain("same `env.SYNC_EVENT_QUEUE`");
     expect(section).toContain("which has no production env");
+    const production = readWranglerConfig(readFileSync("wrangler.jsonc", "utf8")).env?.production;
+    expect(production?.name).toBe("two-web-next-production");
+    expect(section).toContain(`Worker \`${production.name}\` owns both`);
+    expect(production?.triggers?.crons).toContain(RECONCILE_CRON);
+    expect(section).toContain(`\`${RECONCILE_CRON}\` reconcile`);
+    expect(production?.queues?.producers).toContainEqual({
+      queue: "two-web-next-production-sync-event",
+      binding: "SYNC_EVENT_QUEUE",
+    });
+    const jobsConfig = readWranglerConfig(readFileSync("wrangler.jobs.jsonc", "utf8"));
+    expect(jobsConfig.env ?? {}).not.toHaveProperty("production");
   });
 
   it("source still emits the warning with the documented fields", () => {
