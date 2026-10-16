@@ -196,8 +196,9 @@ back to the unchanged Hono handler. Each shell is pinned by its Kit suite —
 `test/kit-admin-*` for dashboard, events and featured,
 `test/kit-join-attempt*` and `test/kit-activity-log*` for those shells — not
 by the Kit parity gates: `PARITY_ROUTES` in `ci/kit-parity-gates.mjs` covers
-only public routes (`/events/past`, `/join`, `/auth/recover`, the hot-zone
-paths and the member leaderboard), and moderator-admin journeys stay
+public routes (`/events/past`, `/join`, `/auth/recover`, the hot-zone
+paths) plus the authenticated member leaderboard
+(`/leaderboards/members`), and moderator-admin journeys stay
 Hono-only, ledgered as skipped.
 
 ## Create, edit and publish an event
