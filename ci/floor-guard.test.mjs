@@ -323,10 +323,13 @@ describe("floor-guard", () => {
   it("flags enumerated-runner renames that keep the same pattern", () => {
     // `node --test a b` silently skips a missing path and exits 0, so a
     // rename that keeps the pattern still drops tests: e2e:safety falls from
-    // 80 to 66 passing tests, and ci/policy drops out of the a11y glob.
+    // 80 to 66 passing tests, and ci/policy drops out of the a11y glob. The
+    // vitest-run audit lifecycle suite is named exactly by the a11y job, so
+    // any rename of it breaks the wiring too.
     for (const [from, to] of [
       ["e2e/qa-request.test.mjs", "e2e/qa-request2.test.mjs"],
       ["ci/a11y-policy.test.mjs", "ci/policy.test.mjs"],
+      ["ci/audit-lifecycle.test.mjs", "ci/audit-lifecycle-renamed.test.mjs"],
       ["ci/cutover-check-selftest.mjs", "ci/cutover-renamed-selftest.mjs"],
     ]) {
       const renamed = [
