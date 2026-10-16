@@ -41,24 +41,30 @@ probe, or change production state as part of diagnosis.
    preserve their `request_id`; scheduled jobs and older queue messages may not
    have one. See [alert source lines](runbook-alerts.md#source-lines) and
    [sync retry diagnostics](runbook-alerts.md#sync-event-retry-cause-diagnostics).
-5. Determine the deployed revision using the staging `/up` response when
-   available, or the deployed version in Cloudflare. Staging `/up` exposes the
-   Worker version tag and version ID. Production currently has no
-   `CF_VERSION_METADATA` binding, so its `/up` response does not provide a
-   revision marker. Do not infer a deployed SHA from the current `main` branch.
+5. Determine the deployed revision from the affected Worker's deployed version,
+   not from a different Worker's health response. Staging `/up` exposes only the
+   web Worker's version tag and version ID; it says nothing about the separately
+   deployed `two-web-jobs` Worker. For a staging queue incident, open the deployed
+   `two-web-jobs` version in Cloudflare and use its tag. The staging web and jobs
+   Workers are normally tagged with the same SHA by one deploy run, but can
+   diverge after a partial deploy or an independent rollback, so check both tags
+   when the incident spans both Workers or their versions may differ. Production
+   currently has no `CF_VERSION_METADATA` binding, so `/up` has no revision
+   marker. Do not infer a deployed SHA from the current `main` branch.
 6. In Cloudflare, open the production Worker's deployed version and read its
    tag, which is `<40-hex-sha>-<GitHub-run-id>-<run-attempt>`. Use the first
    component as the deployed source SHA and the second as the production deploy
    workflow run ID; do not compare the full tag to the SHA. Open that exact run
    in [GitHub Actions → deploy-production](https://github.com/TogetherWeOwn/two-web-next/actions/workflows/deploy-production.yml),
    then confirm its resolved `DEPLOY_SHA` matches the tag's SHA. For staging,
-   use the staging `/up` version tag and the corresponding
+   use the affected Worker's deployed tag, then find the matching
    [GitHub Actions → deploy.yml (`deploy-staging` job)](https://github.com/TogetherWeOwn/two-web-next/actions/workflows/deploy.yml)
-   run. The dispatch run's head can differ from the promoted commit; its head SHA
-   is not deployment evidence. The production workflow creates the GitHub Release
-   only after a successful promote. Open the deployed commit's PR list or inspect
-   its commit message and changed files to identify the change that introduced
-   the error. The
+   run by its title, `deploy <SHA>`. Confirm the `deploy-staging` job succeeded
+   and the title SHA matches the Worker tag; a run title alone is not proof of a
+   successful deploy. The production workflow creates the GitHub
+   Release only after a successful promote. Open the deployed commit's PR list or
+   inspect its commit message and changed files to identify the change that
+   introduced the error. The
    [releases page](https://github.com/TogetherWeOwn/two-web-next/releases)
    provides release notes and links back to merged pull requests.
 7. If the notification has no matching receipt, check the Tail Worker's own
