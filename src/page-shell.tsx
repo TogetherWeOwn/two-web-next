@@ -99,8 +99,9 @@ export const Layout: FC<
           // measured ~150 ms of render-blocking savings on /rules, while
           // preload hints for the same files measured zero. The homepage
           // reuses the exact same bundle: its hero paints at first paint
-          // (LCP equals FCP every staging run), so the three stylesheets plus
-          // the Display-700 preload are the whole FCP bottleneck. The block is
+          // (LCP equals FCP every staging run), so removing the three external
+          // stylesheet requests is the primary FCP improvement. Keep the Display-700 preload: delayed-font
+          // testing showed it prevents a cold-load hero reflow. The block is
           // allowlisted by hash in style-src (no unsafe-inline).
           <style dangerouslySetInnerHTML={{ __html: LEAF_CRITICAL_CSS }} />
         ) : (
@@ -108,27 +109,21 @@ export const Layout: FC<
         )}
         {theme ? (
           <>
-            {theme === "content" || inlineCriticalCss ? null : (
-              // Content leaves render no Display text (the late font swap
-              // became mobile LCP), so the font is neither used nor preloaded
-              // there. The homepage keeps Display (hero/nav/buttons) but drops
-              // the preload: with font-display swap the hero paints in the
-              // fallback stack first (LCP equals FCP), so the 15 KB preload
-              // only contends with first paint on the simulated mobile profile
-              // and the @font-face swap still settles the same final pixels.
-              // Every other theme keeps the preload and stylesheets.
+            {theme !== "content" ? (
+              <link
+                rel="preload"
+                href="/fonts/display-latin-700.woff2"
+                as="font"
+                type="font/woff2"
+                crossorigin="anonymous"
+              />
+            ) : null}
+            {!inlineCriticalCss && theme !== "content" ? (
               <>
-                <link
-                  rel="preload"
-                  href="/fonts/display-latin-700.woff2"
-                  as="font"
-                  type="font/woff2"
-                  crossorigin="anonymous"
-                />
                 <link rel="stylesheet" href="/theme-tokens.css" />
                 <link rel="stylesheet" href="/theme.css" />
               </>
-            )}
+            ) : null}
             {theme === "event" ? <link rel="stylesheet" href="/event-theme.css" /> : null}
             {theme === "profile" ? <link rel="stylesheet" href="/profile-theme.css" /> : null}
             {theme === "schedule" ? <link rel="stylesheet" href="/schedule-theme.css" /> : null}

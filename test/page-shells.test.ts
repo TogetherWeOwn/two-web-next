@@ -34,12 +34,12 @@ function assertShell(html: string) {
   } else if (html.includes("<style>")) {
     // Only "/" inlines among the homepage-theme shells (recovery/error shells
     // keep theme="home" without the flag and stay external). The inlined
-    // block reuses the leaf bundle, so the hero rules must be present and no
-    // render-blocking request may remain.
+    // block reuses the leaf bundle, so the hero rules must be present. The
+    // Display preload remains to prevent reflow after a delayed font response.
     expect(html).toContain("base-theme homepage-theme");
     expect(html).toContain(".hero h1");
     expect(html).not.toContain('rel="stylesheet"');
-    expect(html).not.toContain('.woff2" as="font"');
+    expect(html).toContain('href="/fonts/display-latin-700.woff2" as="font"');
   } else {
     expect(html).toContain('rel="stylesheet" href="/styles.css"');
   }
