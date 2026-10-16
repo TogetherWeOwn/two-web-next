@@ -79,8 +79,10 @@ seconds and 2 MiB; redirects are measured without following them, including
 Discord. No secrets, OAuth codes or session cookies are supplied or persisted.
 No DNS, deploy, config, database client or write HTTP method is invoked by the
 checker. **GET is not side-effect-free:** OAuth start/callback routes can record
-throttles/failed join attempts. Execute live checks only in the authorized
-cutover procedure; no live checks were run as part of this card's tests.
+throttles/failed join attempts; `/join/discord` and `/auth/discord` also sweep
+expired and issue one-use OAuth journey records. Execute live checks only in
+the authorized cutover procedure; no live checks were run as part of this
+card's tests.
 
 ## Frozen coverage and limits
 

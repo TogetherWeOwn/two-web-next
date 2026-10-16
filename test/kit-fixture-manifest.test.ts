@@ -274,3 +274,127 @@ describe("fixtureManifestFor (Kit parity fixture only)", () => {
     });
   });
 });
+
+describe("fixtureManifestFor (event-detail RSVP companion)", () => {
+  it("returns no override without either fixture flag", () => {
+    expect(fixtureManifestFor({ APP_URL: "http://127.0.0.1:8788" })).toBeUndefined();
+    expect(
+      fixtureManifestFor({
+        APP_URL: "http://127.0.0.1:8788",
+        KIT_PARITY_FIXTURE_EVENT_DETAIL: "false",
+      }),
+    ).toBeUndefined();
+  });
+
+  it("returns no override for a deployed APP_URL even with the detail flag", () => {
+    expect(
+      fixtureManifestFor({
+        APP_URL: "https://two-web-next-kit-preview.5150.workers.dev",
+        KIT_PARITY_FIXTURE_EVENT_DETAIL: "true",
+      }),
+    ).toBeUndefined();
+    expect(
+      fixtureManifestFor({
+        APP_URL: "https://next.togetherweown.com",
+        KIT_PARITY_FIXTURE_EVENT_DETAIL: "true",
+      }),
+    ).toBeUndefined();
+  });
+
+  it("enables only the live detail entry on loopback and never mutates the shipped manifest", () => {
+    const manifest = fixtureManifestFor({
+      APP_URL: "http://127.0.0.1:8788",
+      KIT_PARITY_FIXTURE_EVENT_DETAIL: "true",
+    });
+    expect(manifest).toBeDefined();
+    const detail = manifest!.find((e) => e.method === "GET" && e.path === "/e/:key");
+    expect(detail).toEqual({
+      method: "GET",
+      path: "/e/:key",
+      enabled: true,
+      reads: { resource: "member", action: "list", route: "events.page" },
+    });
+    // The shipped entry stays disabled: Hono keeps serving until the flip slice.
+    expect(ROUTE_MANIFEST.find((e) => e.method === "GET" && e.path === "/e/:key")?.enabled).toBe(
+      false,
+    );
+    expect(detail).not.toBe(ROUTE_MANIFEST.find((e) => e.method === "GET" && e.path === "/e/:key"));
+    // No JSON/ICS/mutation entries appear through the fixture.
+    expect(manifest!.filter((e) => /ics|json|rss|rsvp|__data/i.test(e.path))).toEqual([]);
+  });
+
+  it("enables board and detail together when both flags are set", () => {
+    const manifest = fixtureManifestFor({
+      APP_URL: "http://127.0.0.1:8788",
+      KIT_PARITY_FIXTURE_MEMBER_BOARD: "true",
+      KIT_PARITY_FIXTURE_EVENT_DETAIL: "true",
+    });
+    expect(
+      manifest!.find((e) => e.method === "GET" && e.path === "/leaderboards/members")?.enabled,
+    ).toBe(true);
+    expect(manifest!.find((e) => e.method === "GET" && e.path === "/e/:key")?.enabled).toBe(true);
+  });
+
+  it("dispatches the live detail to Kit resolve under the fixture manifest", async () => {
+    const manifest = fixtureManifestFor({
+      APP_URL: "http://127.0.0.1:8788",
+      KIT_PARITY_FIXTURE_EVENT_DETAIL: "true",
+    });
+    const request = new Request("http://127.0.0.1:8788/e/01ARZ3NDEKTSV4RRFFQ69G5FAV", {
+      headers: { host: "127.0.0.1:8788" },
+    });
+    const resolve = vi.fn(async () => new Response("kit detail"));
+    const honoFetch = vi.fn(async () => new Response("hono"));
+    const res = await dispatchHookRequest(
+      { request, url: new URL(request.url), route: { id: "/e/[key]" } },
+      {
+        appUrl: "http://127.0.0.1:8788",
+        honoFetch,
+        resolve,
+        manifest,
+        eventDetail: async (_req, render) => render(),
+        sessionFor: async () => ({
+          status: "guest",
+          session: null,
+          returnTo: null,
+          joinResult: null,
+          expiredWrite: null,
+        }),
+        accessSink: async () => async () => true,
+      },
+    );
+    expect(resolve).toHaveBeenCalledTimes(1);
+    expect(honoFetch).not.toHaveBeenCalled();
+    expect(res.headers.get(KIT_RENDERER_HEADER)).toBe(KIT_RENDERER_VALUE);
+    expect(await res.text()).toBe("kit detail");
+  });
+
+  it("dispatches the live detail to Kit from the fixture flag alone, no manifest passed", async () => {
+    const request = new Request("http://127.0.0.1:8788/e/01ARZ3NDEKTSV4RRFFQ69G5FAV", {
+      headers: { host: "127.0.0.1:8788" },
+    });
+    const resolve = vi.fn(async () => new Response("kit detail"));
+    const honoFetch = vi.fn(async () => new Response("hono"));
+    const res = await dispatchHookRequest(
+      { request, url: new URL(request.url), route: { id: "/e/[key]" } },
+      {
+        appUrl: "http://127.0.0.1:8788",
+        honoFetch,
+        resolve,
+        fixtureEventDetail: true,
+        eventDetail: async (_req, render) => render(),
+        sessionFor: async () => ({
+          status: "guest",
+          session: null,
+          returnTo: null,
+          joinResult: null,
+          expiredWrite: null,
+        }),
+        accessSink: async () => async () => true,
+      },
+    );
+    expect(resolve).toHaveBeenCalledTimes(1);
+    expect(honoFetch).not.toHaveBeenCalled();
+    expect(res.headers.get(KIT_RENDERER_HEADER)).toBe(KIT_RENDERER_VALUE);
+  });
+});

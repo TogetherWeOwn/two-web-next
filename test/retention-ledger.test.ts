@@ -5,18 +5,30 @@
 //
 // Must not duplicate test/prune.test.ts or edit src/jobs/constants.ts:
 // constants are imported read-only here.
-import { readFileSync, readdirSync, statSync } from "node:fs";
+import {
+  mkdtempSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type postgres from "postgres";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
+  backoffFor,
   JOIN_ATTEMPT_RETENTION_DAYS,
   MEMBER_ACCESS_LOG_RETENTION_DAYS,
+  SYNC_EVENT,
 } from "../src/jobs/constants";
 import { checkJoinThrottle, THROTTLE_COUNTER_RETENTION_MINUTES } from "../src/join/service";
 import { pruneModelTables } from "../src/jobs/cron";
-import { pgPruneStores } from "../src/jobs/postgres";
+import { pgPruneStores, pgQueueLedger, pgUniqueLock } from "../src/jobs/postgres";
+import { discardFailedJob } from "../src/jobs/redrive";
 import type { PruneStores } from "../src/jobs/types";
 import { createMemorySessionStore, SESSION_TTL_SECONDS } from "../src/sessions";
 import { createJobsFixture, type JobsFixture } from "./helpers/jobs-db";
@@ -31,9 +43,101 @@ function listTsFiles(dir: string): string[] {
   for (const entry of readdirSync(dir)) {
     const full = join(dir, entry);
     if (statSync(full).isDirectory()) out.push(...listTsFiles(full));
-    else if (full.endsWith(".ts")) out.push(full);
+    else if (full.endsWith(".ts") || full.endsWith(".tsx")) out.push(full);
   }
   return out;
+}
+
+// Whole-statement mutation windows include raw SQL deletes/truncates, Drizzle
+// sql-template deletes with an interpolated table object, and the Drizzle
+// delete(table) form. Schema qualification, quoted identifiers and SQL
+// comments must not turn a repo-wide retention pin into a token-only scan.
+function deleteWindows(body: string, table: string): string[] {
+  const out: string[] = [];
+  const gap = String.raw`(?:\s|/\*[\s\S]*?\*/|--[^\r\n]*(?:\r?\n|$))+`;
+  const tableRef = String.raw`(?:(?:"?[a-z_][\w$]*"?)\s*\.\s*)?"?${table}"?`;
+  const anyTableRef = String.raw`(?:(?:"?[a-z_][\w$]*"?)\s*\.\s*)?"?[a-z_][\w$]*"?`;
+  const symbols: Record<string, string> = {
+    activity_log: "activityLog",
+    queue_jobs: "queueJobs",
+    queue_failed_jobs: "queueFailedJobs",
+    job_unique_locks: "jobUniqueLocks",
+  };
+  const symbol = symbols[table];
+  // Build the symbol and alias set before the SQL pass so interpolated
+  // `delete from ${table}` and `db.delete(alias)` spellings match.
+  const tableNames = new Set<string>();
+  if (symbol) {
+    tableNames.add(symbol);
+    let m: RegExpExecArray | null;
+    const importedAliases = new RegExp(`\\b${symbol}\\s+as\\s+([\\w$]+)`, "g");
+    while ((m = importedAliases.exec(body)) !== null) tableNames.add(m[1]!);
+    // Destructured renames: const { queueJobs: jobs } = schema (or any RHS).
+    const destructured = new RegExp(
+      `(?:const|let|var)\\s*\\{[^}]*?\\b${symbol}\\s*:\\s*([\\w$]+)`,
+      "g",
+    );
+    while ((m = destructured.exec(body)) !== null) tableNames.add(m[1]!);
+    let foundAlias = true;
+    while (foundAlias) {
+      foundAlias = false;
+      const names = [...tableNames].join("|");
+      const assignedAliases = new RegExp(
+        `\\b(?:const|let|var)\\s+([\\w$]+)\\s*=\\s*(?:[\\w$]+\\s*\\.\\s*)?(?:${names})\\b`,
+        "g",
+      );
+      while ((m = assignedAliases.exec(body)) !== null) {
+        if (!tableNames.has(m[1]!)) {
+          tableNames.add(m[1]!);
+          foundAlias = true;
+        }
+      }
+    }
+  }
+  const sqlRe = new RegExp(
+    `(?:delete${gap}from${gap}(?:only${gap})?${tableRef}|truncate${gap}(?:table${gap})?(?:only${gap})?(?:${anyTableRef}(?:${gap})?,(?:${gap})?)*${tableRef})`,
+    "gi",
+  );
+  let m: RegExpExecArray | null;
+  while ((m = sqlRe.exec(body)) !== null) {
+    const close = body.indexOf("`", m.index);
+    out.push(body.slice(m.index, close === -1 ? m.index + 600 : close));
+  }
+  if (symbol) {
+    const names = [...tableNames].join("|");
+    // Drizzle sql-template with an interpolated table object:
+    // sql`delete from ${queueJobs} ...`, sql`delete from ${schema.queueJobs} ...`,
+    // and the same through a destructured/import alias. The repo already
+    // interpolates schema refs into sql templates (src/hotzones/aggregates.ts).
+    const ourInterp = String.raw`\$\{\s*(?:[\w$]+\s*\.\s*)*(?:${names})\s*\}`;
+    const anyInterp = String.raw`\$\{\s*(?:[\w$]+\s*\.\s*)*[a-z_][\w$]*\s*\}`;
+    const interpDeleteRe = new RegExp(
+      String.raw`delete${gap}from${gap}(?:only${gap})?${ourInterp}`,
+      "gi",
+    );
+    while ((m = interpDeleteRe.exec(body)) !== null) {
+      const close = body.indexOf("`", m.index);
+      out.push(body.slice(m.index, close === -1 ? m.index + 600 : close));
+    }
+    const interpTruncateRe = new RegExp(
+      String.raw`truncate${gap}(?:table${gap})?(?:only${gap})?(?:(?:${anyTableRef}|${anyInterp})(?:${gap})?,(?:${gap})?)*${ourInterp}`,
+      "gi",
+    );
+    while ((m = interpTruncateRe.exec(body)) !== null) {
+      const close = body.indexOf("`", m.index);
+      out.push(body.slice(m.index, close === -1 ? m.index + 600 : close));
+    }
+    const ormRe = new RegExp(
+      `\\.\\s*delete\\s*\\(\\s*(?:[\\w$]+\\s*\\.\\s*)?(?:${names})\\s*\\)`,
+      "g",
+    );
+    while ((m = ormRe.exec(body)) !== null) out.push(m[0]);
+  }
+  return out;
+}
+
+function normalizeSqlWindow(statement: string): string {
+  return statement.replace(/\s+/g, " ").trim();
 }
 
 function memTable() {
@@ -62,6 +166,15 @@ describe("retention ledger constants (read-only)", () => {
     expect(JOIN_ATTEMPT_RETENTION_DAYS).toBe(90);
     expect(THROTTLE_COUNTER_RETENTION_MINUTES).toBe(5);
     expect(SESSION_TTL_SECONDS).toBe(60 * 120);
+  });
+
+  it("pins the queue retry and lock-TTL constants", () => {
+    expect(SYNC_EVENT.uniqueForSeconds).toBe(300);
+    expect(SYNC_EVENT.tries).toBe(6);
+    expect(SYNC_EVENT.backoffSeconds).toEqual([10, 60, 300, 900, 3600]);
+    expect(SYNC_EVENT.debounceSeconds).toBe(10);
+    // The retry gap holds at the last value past the budget.
+    expect(backoffFor(SYNC_EVENT.backoffSeconds, 99)).toBe(3600);
   });
 });
 
@@ -94,6 +207,32 @@ describe("retention ledger doc rows", () => {
     const rsvpLines = read("src/events/rsvp.ts").split("\n");
     expect(rsvpLines[207]).toContain("pruneThrottle");
     expect(rsvpLines[209]).toContain("delete from web_throttle_hits");
+  });
+
+  it("publishes one row per queue/lock table with window, mechanism, and proof", () => {
+    const doc = read("docs/retention-ledger.md");
+    for (const table of ["queue_jobs", "queue_failed_jobs", "job_unique_locks"]) {
+      expect(doc, `ledger must row ${table}`).toContain(table);
+    }
+    expect(doc).toContain("No age prune by design");
+    expect(doc).toContain("No sweep");
+    expect(doc).toContain("pgQueueLedger");
+    expect(doc).toContain("library-only");
+    expect(doc).toContain("discardFailedJob");
+    expect(doc).toContain("listFailedJobs");
+    expect(doc).toContain("queue-redrive-runbook.md");
+    expect(doc).toContain("uniqueForSeconds = 300");
+    expect(doc).toContain("pgUniqueLock");
+    expect(doc).toContain("src/jobs/consumer.ts");
+    expect(doc).toContain("src/jobs/sync-event.ts");
+    // Accurate bounds: orphans outlive message lifetime; TTL bounds lease
+    // validity, not row lifetime.
+    expect(doc).not.toContain("settles every message");
+    expect(doc).toContain("orphaned rows");
+    expect(doc).toContain("reviewed operator correction");
+    expect(doc).toContain("runbook.md#queue-containment-drain-and-failed-job-replay");
+    expect(doc).toContain("until the next acquire of the same key");
+    expect(doc).toContain("unbounded for keys never re-dispatched");
   });
 });
 
@@ -170,17 +309,156 @@ describe("retention ledger mechanisms (memory, no DB)", () => {
     expect(docs).toContain("activity_log");
     expect(docs).toContain("retained indefinitely per CISO decision");
     expect(docs).toContain("No job prunes it");
-    // Repo-wide: any `delete from activity_log` / `truncate ... activity_log`
-    // under src/ fails, so a new prune file cannot slip past a two-file scan.
-    // Inserts (`insert into activity_log`) are allowed and do not match.
+    // Repo-wide: raw SQL and Drizzle deletes/truncates are forbidden; inserts
+    // remain allowed and do not match the mutation-window scanner.
     const offenders: string[] = [];
     for (const file of listTsFiles(join(root, "src"))) {
       const body = readFileSync(file, "utf8");
-      if (/delete\s+from\s+activity_log/i.test(body) || /truncate\s+.*activity_log/i.test(body)) {
-        offenders.push(file);
-      }
+      if (deleteWindows(body, "activity_log").length > 0) offenders.push(file);
     }
     expect(offenders, `no src file may prune activity_log: ${offenders.join(", ")}`).toEqual([]);
+  });
+});
+
+describe("retention ledger queue mechanisms (no DB)", () => {
+  it("detects SQL and Drizzle delete variants in source scans", () => {
+    const cases: [string, string][] = [
+      ["DELETE /* c */ FROM ONLY public.queue_jobs WHERE created_at < cutoff", "queue_jobs"],
+      ["TRUNCATE TABLE other_table, queue_jobs", "queue_jobs"],
+      ['DELETE FROM "public"."queue_failed_jobs" WHERE failed_at < cutoff', "queue_failed_jobs"],
+      ["db.delete(schema.jobUniqueLocks)", "job_unique_locks"],
+      ["import { queueJobs as q } from './schema'; db.delete(q)", "queue_jobs"],
+      ["const q = schema.queueJobs; const q2 = q; db.delete(q2)", "queue_jobs"],
+      ["db.delete(activityLog)", "activity_log"],
+      // Drizzle sql-template with an interpolated table object (late-novel).
+      ["db.execute(sql`delete from ${queueJobs} where available_at < ${cutoff}`)", "queue_jobs"],
+      [
+        "db.execute(sql`delete from ${queueFailedJobs} where failed_at < ${cutoff}`)",
+        "queue_failed_jobs",
+      ],
+      [
+        "db.execute(sql`delete from ${jobUniqueLocks} where expires_at < now()`)",
+        "job_unique_locks",
+      ],
+      [
+        "db.execute(sql`delete from ${schema.queueJobs} where available_at < ${cutoff}`)",
+        "queue_jobs",
+      ],
+      ["sql`truncate table ${queueJobs}`", "queue_jobs"],
+      ["const { queueJobs: jobs } = schema; db.delete(jobs)", "queue_jobs"],
+      ["const { queueJobs: jobs } = schema; const q2 = jobs; db.delete(q2)", "queue_jobs"],
+    ];
+    for (const [body, table] of cases)
+      expect(deleteWindows(body, table), `${table}: ${body}`).not.toEqual([]);
+    expect(deleteWindows("insert into activity_log values (1)", "activity_log")).toEqual([]);
+    expect(deleteWindows("select * from queue_jobs", "queue_jobs")).toEqual([]);
+  });
+
+  it("pins the .tsx directory walk: listTsFiles covers route/page modules", () => {
+    // src carries 60 .tsx route/page modules; a .ts-only walk would miss a
+    // prune planted in one of them (e.g. src/admin/routes.tsx).
+    const srcFiles = listTsFiles(join(root, "src"));
+    expect(
+      srcFiles.some((f) => f.endsWith(".tsx")),
+      "src must contain .tsx files",
+    ).toBe(true);
+    const tmp = mkdtempSync(join(tmpdir(), "ledger-tsx-"));
+    try {
+      mkdirSync(join(tmp, "nested"), { recursive: true });
+      writeFileSync(join(tmp, "nested", "page.ts"), "export const x = 1;\n");
+      writeFileSync(
+        join(tmp, "nested", "routes.tsx"),
+        "await sql`delete from queue_jobs where available_at < ${cutoff}`\n",
+      );
+      const found = listTsFiles(tmp);
+      expect(
+        found.some((f) => f.endsWith("routes.tsx")),
+        "walk must return nested .tsx",
+      ).toBe(true);
+      const evil = readFileSync(join(tmp, "nested", "routes.tsx"), "utf8");
+      expect(deleteWindows(evil, "queue_jobs")).not.toEqual([]);
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it("queue_jobs has no age-based delete: every delete is a job_id lifecycle transition", () => {
+    // The decided behavior is no-sweep: an age predicate on queue_jobs would
+    // undercount live depth. dequeued/failed settle by job_id instead.
+    const postgresTs = read("src/jobs/postgres.ts");
+    expect(postgresTs).toContain("No sweep");
+    // Pin both complete lifecycle statements. Exact whole-window comparisons
+    // reject additional predicates, not just age-based ones.
+    const pgWindows = deleteWindows(postgresTs, "queue_jobs");
+    expect(pgWindows.map(normalizeSqlWindow).sort()).toEqual(
+      [
+        "delete from queue_jobs where job_id = ${jobId}::uuid",
+        "delete from queue_jobs where job_id = ${jobId}::uuid",
+      ].sort(),
+    );
+    const offenders = listTsFiles(join(root, "src")).filter((file) => {
+      if (file.endsWith("src/jobs/postgres.ts")) return false;
+      return deleteWindows(readFileSync(file, "utf8"), "queue_jobs").length > 0;
+    });
+    expect(offenders, `only postgres.ts may delete queue_jobs: ${offenders.join(", ")}`).toEqual(
+      [],
+    );
+    const consumer = read("src/jobs/consumer.ts");
+    expect(consumer).toContain("deps.ledger.dequeued(jobId)");
+    expect(consumer).toContain("deps.ledger.failed(jobId, body.kind, key,");
+  });
+
+  it("queue_failed_jobs leaves only through the one-row library discard", () => {
+    const redrive = read("src/jobs/redrive.ts");
+    // Pin the complete one-row statement, including its return clause, so
+    // adding a second predicate cannot widen the discard into a drain.
+    const redriveWindows = deleteWindows(redrive, "queue_failed_jobs");
+    expect(redriveWindows.map(normalizeSqlWindow)).toEqual([
+      "delete from queue_failed_jobs where id = ${failureId} returning 1",
+    ]);
+    // Repo-wide: only redrive.ts may delete a dead-letter row, so no
+    // operational route can drain history. Redispatch leaves the row alone.
+    const offenders: string[] = [];
+    for (const file of listTsFiles(join(root, "src"))) {
+      if (file.endsWith("src/jobs/redrive.ts")) continue;
+      const body = readFileSync(file, "utf8");
+      if (deleteWindows(body, "queue_failed_jobs").length > 0) offenders.push(file);
+    }
+    expect(
+      offenders,
+      `only redrive.ts may delete queue_failed_jobs: ${offenders.join(", ")}`,
+    ).toEqual([]);
+    const runbook = read("docs/queue-redrive-runbook.md");
+    expect(runbook).toContain("never touched here");
+    expect(runbook).toContain("only a later confirmed recovery discards");
+    expect(runbook).toContain("library-only");
+  });
+
+  it("job_unique_locks are TTL leases with fenced release and no sweeper", () => {
+    const postgresTs = read("src/jobs/postgres.ts");
+    // Acquire wins only over expired rows; release compare-deletes by token.
+    expect(postgresTs).toContain("where job_unique_locks.expires_at < clock_timestamp()");
+    // Pin the complete fenced statement; appended expiry predicates would
+    // otherwise turn this compare-delete into a bulk sweep.
+    const pgWindows = deleteWindows(postgresTs, "job_unique_locks");
+    expect(pgWindows.map(normalizeSqlWindow)).toEqual([
+      "delete from job_unique_locks where key = ${key} and owner_token = ${leaseToken}::uuid",
+    ]);
+    // Repo-wide: postgres.ts is the sole delete site, not an exempt file.
+    const offenders = listTsFiles(join(root, "src")).filter((file) => {
+      if (file.endsWith("src/jobs/postgres.ts")) return false;
+      return deleteWindows(readFileSync(file, "utf8"), "job_unique_locks").length > 0;
+    });
+    expect(
+      offenders,
+      `only postgres.ts may delete job_unique_locks: ${offenders.join(", ")}`,
+    ).toEqual([]);
+    // Dispatch holds the lease for exactly the pinned TTL; the consumer says
+    // stuck rows self-heal through that TTL instead of a cleanup job.
+    const dispatch = read("src/jobs/sync-event.ts");
+    expect(dispatch).toContain("lock.acquire(key, SYNC_EVENT.uniqueForSeconds)");
+    const consumer = read("src/jobs/consumer.ts");
+    expect(consumer).toContain("self-heals via its TTL");
   });
 });
 
@@ -256,5 +534,77 @@ describe.skipIf(!process.env.DATABASE_URL)("retention ledger (test Postgres)", (
     expect(hits.length).toBe(2);
     const floor = Date.now() - THROTTLE_COUNTER_RETENTION_MINUTES * 60_000 - 60_000;
     for (const h of hits) expect(h.at.getTime()).toBeGreaterThan(floor);
+  });
+
+  it("queue ledger settles rows by lifecycle: dequeued removes, failed moves to the dead letter", async () => {
+    const ledger = pgQueueLedger(sql);
+    const tag = `ledger-${Date.now()}`;
+    const done = crypto.randomUUID();
+    const dead = crypto.randomUUID();
+    const past = new Date(Date.now() - 1000);
+    await ledger.enqueued({
+      jobId: done,
+      kind: "sync-event",
+      key: `sync-event:${tag}`,
+      availableAt: past,
+    });
+    await ledger.enqueued({
+      jobId: dead,
+      kind: "sync-event",
+      key: `sync-event:${tag}`,
+      availableAt: past,
+    });
+
+    await ledger.reserved(done);
+    await ledger.released(done, new Date(Date.now() + 300_000));
+    await ledger.dequeued(done);
+    await ledger.failed(dead, "sync-event", `sync-event:${tag}`, "carrier exhausted");
+
+    const live = await sql<
+      { job_id: string }[]
+    >`select job_id from queue_jobs where job_id in (${done}::uuid, ${dead}::uuid)`;
+    expect(live).toEqual([]);
+    const buried = await sql<
+      { job_id: string; reason: string }[]
+    >`select job_id, reason from queue_failed_jobs where job_id in (${done}::uuid, ${dead}::uuid)`;
+    expect(buried.map((r) => r.job_id)).toEqual([dead]);
+    expect(buried[0]!.reason).toContain("carrier exhausted");
+
+    // Confirmed recovery discards exactly one dead-letter row.
+    const failureId = (
+      await sql<{ id: number }[]>`select id from queue_failed_jobs where job_id = ${dead}::uuid`
+    )[0]!.id;
+    expect(await discardFailedJob(sql, failureId)).toBe(true);
+    expect(await discardFailedJob(sql, failureId)).toBe(false);
+    const remaining = await sql<
+      { job_id: string }[]
+    >`select job_id from queue_failed_jobs where job_id = ${dead}::uuid`;
+    expect(remaining).toEqual([]);
+  });
+
+  it("unique lock holds for its TTL, supersedes only expired leases, releases by token", async () => {
+    const lock = pgUniqueLock(sql);
+    const key = `ledger-lock-${Date.now()}-${Math.floor(Math.random() * 1e6)}`;
+    const first = await lock.acquire(key, SYNC_EVENT.uniqueForSeconds);
+    expect(first).not.toBeNull();
+    // Still held: a second holder loses.
+    expect(await lock.acquire(key, SYNC_EVENT.uniqueForSeconds)).toBeNull();
+    // A wrong token cannot release the holder's lease.
+    await lock.release(key, crypto.randomUUID());
+    expect(await lock.acquire(key, SYNC_EVENT.uniqueForSeconds)).toBeNull();
+    await lock.release(key, first!);
+    const second = await lock.acquire(key, SYNC_EVENT.uniqueForSeconds);
+    expect(second).not.toBeNull();
+    expect(second).not.toBe(first);
+    await lock.release(key, second!);
+
+    // An expired lease is superseded on the next acquire (TTL self-heal).
+    const staleKey = `ledger-lock-stale-${Date.now()}-${Math.floor(Math.random() * 1e6)}`;
+    const stale = await lock.acquire(staleKey, -1);
+    expect(stale).not.toBeNull();
+    const heir = await lock.acquire(staleKey, SYNC_EVENT.uniqueForSeconds);
+    expect(heir).not.toBeNull();
+    expect(heir).not.toBe(stale);
+    await lock.release(staleKey, heir!);
   });
 });

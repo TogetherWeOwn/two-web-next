@@ -61,7 +61,7 @@ const destination = (nextScope: string) => {
   {:else if rows.length === 0}
     <p role="status">{scope === "relative" ? "You are not ranked for this season and game yet." : "Nobody is ranked for this season and game yet."}</p>
   {:else}
-    <table>
+    <table class="member-board-table">
       <caption>Going counts, season {season}, {label}</caption>
       <thead><tr><th scope="col">Rank</th><th scope="col">Member</th><th scope="col">Going</th></tr></thead>
       <tbody>

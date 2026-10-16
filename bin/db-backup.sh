@@ -60,7 +60,7 @@
 # DATABASE_URL is a hard error, so a half-configured box can never silently
 # dump the wrong database. Tests run against agent-testdb only, never prod.
 #
-# Needs: pg_dump + psql (CI: postgres:17 image service / apt), wrangler with
+# Needs: pg_dump + psql (CI: postgres:18 image service / apt), wrangler with
 # CLOUDFLARE_API_TOKEN + CLOUDFLARE_ACCOUNT_ID.
 #
 # Env overrides (mirroring two-web pg-backup.sh):

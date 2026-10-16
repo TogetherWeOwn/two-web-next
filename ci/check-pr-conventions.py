@@ -90,14 +90,22 @@ def check_pr(title, body, author, subjects=(), level="warning"):
 
 
 def read_subjects(path):
-    """Commit subjects the workflow listed for the PR; missing or unreadable means none."""
+    """Commit subjects the workflow listed for the PR.
+
+    An unset path means no listing was configured (hermetic runs): no subjects.
+    A configured path that is missing or unreadable means the listing failed:
+    fail closed instead of scanning an empty list as clean. An existing but
+    empty file is a genuinely empty PR (zero commits) and returns no subjects.
+    """
     if not path:
         return []
     try:
         with open(path, encoding="utf-8") as listing:
             return [line.rstrip("\r\n") for line in listing if line.strip()]
     except OSError:
-        return []
+        print("::error::Could not read the PR commit-subject listing; "
+              "refusing to pass with an unchecked subject list.")
+        sys.exit(2)
 
 
 def main():

@@ -1,10 +1,10 @@
 #!/usr/bin/env node
 // Accept Kit redesign baselines from a kit-parity failure artifact:
 //   node ci/kit-visual-accept.mjs <unzipped kit-parity-failure artifact dir>
-// Copies every `*-actual.png` under test-results-kit-parity/ (a changed Kit
-// page) over the matching baseline in e2e/visual/__screenshots-kit__/, and
-// every new baseline the run wrote under a `__screenshots-kit__` path, into
-// place. An intentional redesign is a reviewed artifact committed in the same
+// Copies every Kit `*-actual.png` under test-results-kit-visual/ or
+// test-results-kit-parity/ (a changed Kit page) over the matching baseline in
+// e2e/visual/__screenshots-kit__/, and every new baseline the run wrote under
+// a `__screenshots-kit__` path, into place. An intentional redesign is a reviewed artifact committed in the same
 // PR; reviewers treat a baseline change like code.
 //
 // Hard boundary: this script writes ONLY under e2e/visual/__screenshots-kit__/
@@ -24,12 +24,14 @@ export const HONO_SCREENSHOT_DIR = "e2e/visual/__screenshots__";
 
 // Source-scoped: the shared e2e-failure artifact carries both suites, so an
 // admitted candidate must come from the Kit suite's own folders —
-// `test-results-kit-parity/` (reviewed actuals) or a `__screenshots-kit__`
-// path (new baselines). A Hono `*-actual.png` at any other path is ignored,
+// `test-results-kit-visual/` or `test-results-kit-parity/` (reviewed actuals),
+// or a `__screenshots-kit__` path (new baselines). A Hono `*-actual.png` at any other path is ignored,
 // never copied into the Kit baselines.
 export function destinationName(entry, fullPath) {
   const fromKitSuite =
-    fullPath.includes("test-results-kit-parity") || fullPath.includes("__screenshots-kit__");
+    fullPath.includes("test-results-kit-visual") ||
+    fullPath.includes("test-results-kit-parity") ||
+    fullPath.includes("__screenshots-kit__");
   if (entry.endsWith("-actual.png")) {
     if (!fromKitSuite) return null;
     return basename(entry).replace(/-actual\.png$/, ".png");
@@ -84,19 +86,22 @@ export function acceptBaselines(
     if (!byDest.has(candidate.dest)) byDest.set(candidate.dest, []);
     byDest.get(candidate.dest).push(candidate.src);
   }
+  const resolved = new Map();
   for (const [dest, sources] of byDest) {
-    const distinct = distinctByBytes(sources);
+    const actuals = sources.filter((src) => basename(src).endsWith("-actual.png"));
+    const distinct = distinctByBytes(actuals.length > 0 ? actuals : sources);
     if (distinct.length > 1) {
       return {
         ok: false,
         message: `kit-visual-accept: refusing: ${distinct.length} different sources map to ${dest}`,
       };
     }
+    resolved.set(dest, distinct[0].src);
   }
   const destDir = join(cwd, KIT_SCREENSHOT_DIR);
   mkdir(destDir, { recursive: true });
-  for (const [dest, sources] of byDest) {
-    copy(distinctByBytes(sources)[0].src, join(destDir, dest));
+  for (const [dest, src] of resolved) {
+    copy(src, join(destDir, dest));
   }
   return { ok: true, accepted: [...byDest.keys()].sort() };
 }

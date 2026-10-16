@@ -334,9 +334,8 @@ describe("check job", () => {
     const unguarded = steps.filter(
       (step) =>
         !step.includes("Docs-only fast pass") &&
-        // The scope and doc-link guards are deliberately unconditional: pinned below.
+        // The scope guard is deliberately unconditional: pinned below.
         !step.includes("Require successful scope") &&
-        !step.includes("Require successful docs-links") &&
         !step.includes("needs.scope.outputs.docs_only != 'true'"),
     );
     expect(unguarded.map((step) => step.split("\n")[0])).toEqual([]);
@@ -364,9 +363,9 @@ describe("ci heavy-job scope gates", () => {
     expect(block).toContain("needs.scope.outputs.app == 'true'");
   });
 
-  it("check still runs on every verdict and gates on the audit result", () => {
+  it("check still runs on every verdict, from scope alone so it starts with the heavy jobs", () => {
     const block = jobBlock("check");
-    expect(block).toMatch(/\n    needs: \[a11y, lighthouse, bundle-budget, docs-links, scope\]\n/);
+    expect(block).toMatch(/\n    needs: \[scope\]\n/);
     expect(block).toMatch(/\n    if: \$\{\{ !cancelled\(\) \}\}\n/);
   });
 
@@ -391,17 +390,35 @@ describe("ci heavy-job scope gates", () => {
     }
   });
 
-  it("docs-links runs on every PR and check fails unless it passes", () => {
+  it("docs-links runs on every PR and ci-ok fails unless it passes", () => {
     const block = jobBlock("docs-links");
     expect(block).toMatch(/(^|\n)    needs: scope\n/);
     expect(block).not.toMatch(/\n    if: /);
     expect(block).toContain("run: npm run docs:links");
-    expect(jobBlock("check")).toContain('run: test "$DOCS_LINKS_RESULT" = success');
+    const guard = jobBlock("ci-ok").match(
+      /- name: Require successful docs-links\n        env:\n          DOCS_LINKS_RESULT: \$\{\{ needs\.docs-links\.result \}\}\n        run: ([^\n]+)\n/,
+    )?.[1];
+    expect(guard, "docs-links guard must sit in ci-ok").toBeDefined();
+    for (const [result, expected] of [
+      ["success", 0],
+      ["failure", 1],
+      ["cancelled", 1],
+      ["skipped", 1],
+      ["", 1],
+    ] as const) {
+      const run = spawnSync("bash", ["-c", guard ?? "exit 99"], {
+        env: { DOCS_LINKS_RESULT: result },
+        encoding: "utf8",
+      });
+      expect(run.status, `docs-links result ${result || "missing"}`).toBe(expected);
+    }
   });
 
   it("ci-ok aggregates every gated job and fails closed on scope", () => {
     const block = jobBlock("ci-ok");
-    expect(block).toMatch(/\n    needs: \[a11y, lighthouse, bundle-budget, check, scope\]\n/);
+    expect(block).toMatch(
+      /\n    needs: \[a11y, lighthouse, bundle-budget, docs-links, check, scope\]\n/,
+    );
     expect(block).toMatch(/\n    if: \$\{\{ !cancelled\(\) \}\}\n/);
     expect(block).toContain("SCOPE_RESULT: ${{ needs.scope.result }}");
     expect(block).toContain("CHECK_RESULT: ${{ needs.check.result }}");

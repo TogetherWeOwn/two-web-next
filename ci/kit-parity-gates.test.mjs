@@ -7,6 +7,7 @@ import { test } from "node:test";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import {
   LOGIN_JOURNEYS,
+  PARITY_ROUTES,
   assertMembersContract,
   assertReservedContract,
   assertRouteContract,
@@ -228,11 +229,11 @@ test("unit gate passes on the shipped manifest (no network)", async () => {
 });
 
 test("login journey ownership derives from the manifest", () => {
-  const honoManifest = `{ method: "GET", path: "/events/past", enabled: false }, { method: "GET", path: "/join", enabled: false }, { method: "GET", path: "/auth/recover", enabled: false }`;
+  const honoManifest = `{ method: "GET", path: "/events/past", enabled: false }, { method: "GET", path: "/events", enabled: false }, { method: "GET", path: "/join", enabled: false }, { method: "GET", path: "/auth/recover", enabled: false }`;
   assert.equal(isManifestEnabled(honoManifest, "/e/:key"), false);
   assert.equal(isManifestEnabled(honoManifest, "/profile"), false);
   const enabledManifest =
-    `{ method: "GET", path: "/events/past", enabled: false }, { method: "GET", path: "/join", enabled: false }, { method: "GET", path: "/auth/recover", enabled: false },` +
+    `{ method: "GET", path: "/events/past", enabled: false }, { method: "GET", path: "/events", enabled: false }, { method: "GET", path: "/join", enabled: false }, { method: "GET", path: "/auth/recover", enabled: false },` +
     ` { method: "POST", path: "/e/:key/rsvp", enabled: true },` +
     ` { method: "GET", path: "/profile", enabled: true }`;
   assert.equal(isManifestEnabled(enabledManifest, "/e/:key/rsvp", "POST"), true);
@@ -305,7 +306,7 @@ test("an enabled nested-reads member board is covered by the executed parity run
   const journeys = runUnitMode({
     stdout: silent,
     manifestSource:
-      `{ method: "GET", path: "/events/past", enabled: false }, { method: "GET", path: "/join", enabled: false }, { method: "GET", path: "/auth/recover", enabled: false },` +
+      `{ method: "GET", path: "/events/past", enabled: false }, { method: "GET", path: "/events", enabled: false }, { method: "GET", path: "/join", enabled: false }, { method: "GET", path: "/auth/recover", enabled: false },` +
       ` { method: "GET", path: "/leaderboards/members", enabled: true, ` +
       `reads: { resource: "leaderboard", action: "list", route: "leaderboards.members" } }`,
   });
@@ -415,7 +416,7 @@ test("member-board contract passes a good fixture and fails planted mutants", ()
     `<p><label for="board-activity">Game (blank for every game)</label> ` +
     `<input id="board-activity" name="activity" type="text" value="" /></p>` +
     `<p><button class="btn" type="submit">Show board</button></p></form>` +
-    `<table><caption>Going counts, season all, every game</caption>` +
+    `<table class="member-board-table"><caption>Going counts, season all, every game</caption>` +
     `<thead><tr><th scope="col">Rank</th><th scope="col">Member</th><th scope="col">Going</th></tr></thead>` +
     `<tbody><tr><td>1</td><th scope="row">Rick</th><td>3</td></tr></tbody></table>` +
     `</main></body></html>`;
@@ -447,7 +448,7 @@ test("member-board contract passes a good fixture and fails planted mutants", ()
     ["shared-cache", (html) => html, "member board answers private, no-store"],
     [
       "no-table-no-status",
-      (html) => html.replace(/<table>[\s\S]*<\/table>/, ""),
+      (html) => html.replace(/<table[^>]*>[\s\S]*<\/table>/, ""),
       "board table or empty status present",
     ],
     [
@@ -507,11 +508,128 @@ test("member-board contract passes a good fixture and fails planted mutants", ()
   }
 });
 
+test("static-leaf contracts pass good fixtures and fail planted mutants", () => {
+  const shell = (path, inner) =>
+    `<html><head><link rel="canonical" href="https://next.togetherweown.com${path}"></head>` +
+    `<body><a class="skip-link" href="#main">Skip</a>` +
+    `<nav aria-label="Primary"><a href="/">Home</a></nav>` +
+    `<main id="main"><section class="content-page">${inner}</section></main>` +
+    `<p><span class="account-caption">Welcome, guest</span></p></body></html>`;
+  const cases = [
+    {
+      contract: "about",
+      path: "/about",
+      html: shell(
+        "/about",
+        `<h1 id="about-heading">About Together We Own</h1>` +
+          `<p class="strap">Est. 1998</p>` +
+          `<dl data-testid="about-facts" class="facts"></dl>` +
+          `<p><a class="btn" href="/join" data-testid="about-join">Join with Discord</a></p>`,
+      ),
+      mutants: [
+        [
+          "no-facts",
+          (html) => html.replace('data-testid="about-facts"', 'data-testid="x"'),
+          "leaf section about-facts present",
+        ],
+        [
+          "hostile-join",
+          (html) => html.replace('href="/join"', 'href="https://evil.test/"'),
+          "join action stays same-origin /join",
+        ],
+      ],
+    },
+    {
+      contract: "faq",
+      path: "/faq",
+      html: shell(
+        "/faq",
+        `<h1 id="faq-heading">Frequently asked questions</h1>` +
+          `<p class="strap">New here? Start here</p>` +
+          `<div data-testid="faq-list">` +
+          `<section aria-labelledby="faq-getting-in"><h2 id="faq-getting-in">Getting in</h2></section></div>` +
+          `<p><a class="btn" href="/join" data-testid="faq-join">Join with Discord</a></p>`,
+      ),
+      mutants: [
+        [
+          "no-list",
+          (html) => html.replace('data-testid="faq-list"', 'data-testid="x"'),
+          "leaf section faq-list present",
+        ],
+        [
+          "no-first-group",
+          (html) => html.replace(/<section aria-labelledby="faq-getting-in">.*?<\/section>/, ""),
+          "first question group present",
+        ],
+      ],
+    },
+  ];
+  for (const { contract, html, mutants } of cases) {
+    const headers = {
+      get: (name) => {
+        if (name === "content-type") return "text/html; charset=UTF-8";
+        if (name === "x-two-renderer") return "kit";
+        if (name === "cache-control") return "public, max-age=3600";
+        return null;
+      },
+    };
+    const expected = { status: 200, marker: "kit", contract, cache: "public, max-age=3600" };
+    assert.equal(
+      assertRouteContract({
+        label: `unit/leaves-${contract}-good`,
+        html,
+        headers,
+        status: 200,
+        expected,
+      }).length,
+      0,
+    );
+    for (const [name, mutate, want] of mutants) {
+      const failures = assertRouteContract({
+        label: `unit/leaves-${contract}-mutant-${name}`,
+        html: mutate(html),
+        headers,
+        status: 200,
+        expected,
+      });
+      assert.ok(
+        failures.some((f) => f.includes(want)),
+        `leaf mutant ${contract}/${name} did not trip "${want}" (got: ${failures.join("; ") || "no failures"})`,
+      );
+    }
+  }
+});
+
+test("enabled static leaves are covered by the executed parity run", () => {
+  // The catch-all no longer fails the leaves: PARITY_ROUTES carries their
+  // contracts, so the shipped enabled entries are covered runs, and a
+  // synthetic manifest with the leaves disabled keeps the leaf journeys out.
+  assert.equal(isCoveredByExecutedRun({ method: "GET", path: "/about" }), true);
+  assert.equal(isCoveredByExecutedRun({ method: "GET", path: "/faq" }), true);
+  const silent = { write: () => {} };
+  const heldJourneys = runUnitMode({
+    stdout: silent,
+    manifestSource:
+      `{ method: "GET", path: "/events/past", enabled: false }, { method: "GET", path: "/events", enabled: false }, { method: "GET", path: "/join", enabled: false }, { method: "GET", path: "/auth/recover", enabled: false },` +
+      ` { method: "GET", path: "/about", enabled: false, reads: "public" },` +
+      ` { method: "GET", path: "/faq", enabled: false, reads: "public" },`,
+  });
+  // The leaf unit journeys run against any manifest that lists the leaves
+  // (the expected marker derives from it: null while held, kit once
+  // enabled); the coverage catch-all only fails enabled entries, so the
+  // held leaves stay quiet here.
+  const failed = heldJourneys.filter((j) => j.status === "failed");
+  assert.ok(
+    !failed.some((j) => j.reason?.includes("/about") || j.reason?.includes("/faq")),
+    "no failure may name the held leaves",
+  );
+});
+
 test("an enabled login route fails instead of a quiet skip", () => {
   const silent = { write: () => {} };
   const honoJourneys = runUnitMode({
     stdout: silent,
-    manifestSource: `{ method: "GET", path: "/events/past", enabled: false }, { method: "GET", path: "/join", enabled: false }, { method: "GET", path: "/auth/recover", enabled: false }`,
+    manifestSource: `{ method: "GET", path: "/events/past", enabled: false }, { method: "GET", path: "/events", enabled: false }, { method: "GET", path: "/join", enabled: false }, { method: "GET", path: "/auth/recover", enabled: false }`,
   });
   for (const journey of honoJourneys.filter((j) => j.name.startsWith("parity: "))) {
     assert.equal(journey.status, "skipped", journey.name);
@@ -519,7 +637,7 @@ test("an enabled login route fails instead of a quiet skip", () => {
   const enabledJourneys = runUnitMode({
     stdout: silent,
     manifestSource:
-      `{ method: "GET", path: "/events/past", enabled: false }, { method: "GET", path: "/join", enabled: false }, { method: "GET", path: "/auth/recover", enabled: false },` +
+      `{ method: "GET", path: "/events/past", enabled: false }, { method: "GET", path: "/events", enabled: false }, { method: "GET", path: "/join", enabled: false }, { method: "GET", path: "/auth/recover", enabled: false },` +
       ` { method: "POST", path: "/e/:key/rsvp", enabled: true },` +
       ` { method: "GET", path: "/profile", enabled: true }`,
   });
@@ -535,7 +653,7 @@ test("enabling the real mutation routes fails every login journey", () => {
   const journeys = runUnitMode({
     stdout: silent,
     manifestSource:
-      `{ method: "GET", path: "/events/past", enabled: false }, { method: "GET", path: "/join", enabled: false }, { method: "GET", path: "/auth/recover", enabled: false },` +
+      `{ method: "GET", path: "/events/past", enabled: false }, { method: "GET", path: "/events", enabled: false }, { method: "GET", path: "/join", enabled: false }, { method: "GET", path: "/auth/recover", enabled: false },` +
       ` { method: "POST", path: "/e/:key/rsvp", enabled: true },` +
       ` { method: "PUT", path: "/events/:key/rsvp", enabled: true },` +
       ` { method: "PATCH", path: "/members/:user", enabled: true },` +
@@ -579,7 +697,7 @@ test("renamed :params still fail their login journey instead of a quiet skip", (
   const journeys = runUnitMode({
     stdout: silent,
     manifestSource:
-      `{ method: "GET", path: "/events/past", enabled: false }, { method: "GET", path: "/join", enabled: false }, { method: "GET", path: "/auth/recover", enabled: false },` +
+      `{ method: "GET", path: "/events/past", enabled: false }, { method: "GET", path: "/events", enabled: false }, { method: "GET", path: "/join", enabled: false }, { method: "GET", path: "/auth/recover", enabled: false },` +
       ` { method: "POST", path: "/e/:id/rsvp", enabled: true },` +
       ` { method: "PATCH", path: "/members/:slug", enabled: true }`,
   });
@@ -611,7 +729,7 @@ test("each admin publish/cancel action route fails the admin journey", () => {
   ]) {
     const journeys = runUnitMode({
       stdout: silent,
-      manifestSource: `{ method: "GET", path: "/events/past", enabled: false }, { method: "GET", path: "/join", enabled: false }, { method: "GET", path: "/auth/recover", enabled: false }, ${route}`,
+      manifestSource: `{ method: "GET", path: "/events/past", enabled: false }, { method: "GET", path: "/events", enabled: false }, { method: "GET", path: "/join", enabled: false }, { method: "GET", path: "/auth/recover", enabled: false }, ${route}`,
     });
     const byName = new Map(journeys.map((j) => [j.name, j]));
     assert.equal(
@@ -628,7 +746,7 @@ test("a future scoped route fails its journey even when never listed", () => {
   const journeys = runUnitMode({
     stdout: silent,
     manifestSource:
-      `{ method: "GET", path: "/events/past", enabled: false }, { method: "GET", path: "/join", enabled: false }, { method: "GET", path: "/auth/recover", enabled: false },` +
+      `{ method: "GET", path: "/events/past", enabled: false }, { method: "GET", path: "/events", enabled: false }, { method: "GET", path: "/join", enabled: false }, { method: "GET", path: "/auth/recover", enabled: false },` +
       ` { method: "POST", path: "/admin/events/:key/approve", enabled: true }`,
   });
   const byName = new Map(journeys.map((j) => [j.name, j]));
@@ -679,12 +797,48 @@ globalThis.fetch = async (input) => {
   assert.match(output, /preview Hono/);
 });
 
+test("preview events journey enforces the shipped cache TTL pattern", () => {
+  const events = PARITY_ROUTES.find((route) => route.path === "/events");
+  assert.ok(events?.cachePattern instanceof RegExp, "events route pins a cache pattern");
+  const html =
+    '<html><head><link rel="canonical" href="https://x.invalid/events">' +
+    '<link rel="alternate" type="text/markdown" href="/events.md"></head>' +
+    '<body><a class="skip-link" href="#main">Skip</a>' +
+    '<nav aria-label="Primary"><a href="/events" aria-current="page">Events</a></nav>' +
+    '<main id="main"><section data-testid="events-calendar" data-island="events-calendar">' +
+    '<div data-testid="events-content"><div data-testid="events-list"></div></div>' +
+    '<div role="group" aria-label="View"><button data-testid="events-view-list">L</button>' +
+    '<button data-testid="events-view-calendar">C</button></div>' +
+    '<form method="get" action="/events"><input type="search" name="q" data-testid="events-search"></form>' +
+    '<a href="/events/past" data-testid="events-past-archive-link">Past</a>' +
+    '<a href="webcal://x.invalid/events.ics" data-testid="events-subscribe">Sub</a>' +
+    '</section></main><p>Welcome, guest</p><script src="/islands/events-calendar.js"></script></body></html>';
+  const stub = `
+const html = ${JSON.stringify(html)};
+globalThis.fetch = async (input) => {
+  const url = new URL(String(input.url ?? input));
+  if (url.pathname === "/up") return new Response("{}", { status: 200, headers: { "content-type": "application/json" } });
+  if (url.pathname === "/events") return new Response(html, { status: 200, headers: { "content-type": "text/html", "cache-control": "public, max-age=9999", vary: "Cookie, X-Two-Island", ...(url.host.startsWith("kit.") ? { "x-two-renderer": "kit" } : {}) } });
+  return new Response("", { status: 404 });
+};
+`;
+  const { status, output } = runScript({
+    env: {
+      KIT_PREVIEW_URL: "https://kit.invalid.workers.dev/",
+      HONO_PREVIEW_URL: "https://hono.invalid.workers.dev/",
+    },
+    stub,
+  });
+  assert.equal(status, 1, `expected preview contract failure, got ${status}\\n${output}`);
+  assert.match(output, /preview Kit \/events: contract.*cache-control.*does not match/);
+});
+
 test("every listed login route alone fails its own journey (no aggregate masking)", () => {
   const silent = { write: () => {} };
   for (const journey of LOGIN_JOURNEYS) {
     for (const route of journey.routes) {
       const manifestSource =
-        `{ method: "GET", path: "/events/past", enabled: false }, { method: "GET", path: "/join", enabled: false }, { method: "GET", path: "/auth/recover", enabled: false },` +
+        `{ method: "GET", path: "/events/past", enabled: false }, { method: "GET", path: "/events", enabled: false }, { method: "GET", path: "/join", enabled: false }, { method: "GET", path: "/auth/recover", enabled: false },` +
         ` { method: "${route.method}", path: "${route.path}", enabled: true }`;
       const journeys = runUnitMode({ stdout: silent, manifestSource });
       const byName = new Map(journeys.map((j) => [j.name, j]));
@@ -778,15 +932,14 @@ test("recovery contract proves the shared shell, safe retry hrefs and private no
 
 test("enabled routes outside every journey scope fail via the catch-all", () => {
   const silent = { write: () => {} };
-  // GET /join is covered by the executed parity run (PARITY_ROUTES), so it no
-  // longer belongs in this uncovered list; /join/discord proves the funnel
-  // tail stays Hono-owned.
+  // GET /join and GET /events are covered by the executed parity run
+  // (PARITY_ROUTES), so neither belongs in this uncovered list;
+  // /join/discord proves the funnel tail stays Hono-owned.
   for (const route of [
     `{ method: "GET", path: "/admin", enabled: true }`,
     `{ method: "GET", path: "/admin/featured", enabled: true }`,
     `{ method: "GET", path: "/admin/join-attempts", enabled: true }`,
     `{ method: "GET", path: "/admin/queue/failed/:id/preview", enabled: true }`,
-    `{ method: "GET", path: "/events", enabled: true }`,
     `{ method: "GET", path: "/events/:key", enabled: true }`,
     `{ method: "GET", path: "/join/discord", enabled: true }`,
     `{ method: "GET", path: "/", enabled: true }`,
@@ -794,7 +947,7 @@ test("enabled routes outside every journey scope fail via the catch-all", () => 
   ]) {
     const journeys = runUnitMode({
       stdout: silent,
-      manifestSource: `{ method: "GET", path: "/events/past", enabled: false }, { method: "GET", path: "/join", enabled: false }, { method: "GET", path: "/auth/recover", enabled: false }, ${route}`,
+      manifestSource: `{ method: "GET", path: "/events/past", enabled: false }, { method: "GET", path: "/events", enabled: false }, { method: "GET", path: "/join", enabled: false }, { method: "GET", path: "/auth/recover", enabled: false }, ${route}`,
     });
     assert.equal(summarizeLedger(journeys).verdict, "fail", route);
     const failed = journeys.filter((j) => j.status === "failed");
@@ -806,7 +959,7 @@ test("enabled routes outside every journey scope fail via the catch-all", () => 
   }
 });
 
-test("executed-run coverage is GET/HEAD /events/past, GET/HEAD /join and GET/HEAD /auth/recover", () => {
+test("executed-run coverage is GET/HEAD /events/past, GET/HEAD /events, GET/HEAD /join and GET/HEAD /auth/recover", () => {
   assert.equal(
     isCoveredByExecutedRun({ method: "GET", path: "/events/past", enabled: true }),
     true,
@@ -819,7 +972,9 @@ test("executed-run coverage is GET/HEAD /events/past, GET/HEAD /join and GET/HEA
     isCoveredByExecutedRun({ method: "POST", path: "/events/past", enabled: true }),
     false,
   );
-  assert.equal(isCoveredByExecutedRun({ method: "GET", path: "/events", enabled: true }), false);
+  assert.equal(isCoveredByExecutedRun({ method: "GET", path: "/events", enabled: true }), true);
+  assert.equal(isCoveredByExecutedRun({ method: "HEAD", path: "/events", enabled: true }), true);
+  assert.equal(isCoveredByExecutedRun({ method: "POST", path: "/events", enabled: true }), false);
   assert.equal(isCoveredByExecutedRun({ method: "GET", path: "/admin", enabled: true }), false);
   assert.equal(isCoveredByExecutedRun({ method: "GET", path: "/join", enabled: true }), true);
   assert.equal(isCoveredByExecutedRun({ method: "HEAD", path: "/join", enabled: true }), true);
@@ -955,5 +1110,168 @@ test("join contract proves every widget state, the flash view and hostile next",
       expected: { status: 200, marker: null, contract: "join", cache: "public, max-age=3600" },
     });
     assert.ok(failures.length > 0, `join mutant ${name} was NOT detected`);
+  }
+});
+
+test("events contract proves the calendar island, search form, archive link and flash privacy", () => {
+  const headers = (cache) => ({
+    get: (name) =>
+      ({
+        "content-type": "text/html",
+        "x-two-renderer": null,
+        "cache-control": cache,
+        vary: "Cookie, X-Two-Island",
+      })[name] ?? null,
+  });
+  const shell = (inner) =>
+    `<html><head><link rel="canonical" href="https://x.invalid/events">` +
+    `<link rel="alternate" type="text/markdown" href="/events.md"></head>` +
+    `<body><a class="skip-link" href="#main">Skip</a>` +
+    `<nav aria-label="Primary"><a href="/events" aria-current="page">Events</a></nav>` +
+    `<main id="main"><section data-testid="events-calendar" data-island="events-calendar">` +
+    `<div data-testid="events-content"><div data-testid="events-list">${inner}</div></div>` +
+    `<div role="group" aria-label="View"><button data-testid="events-view-list">L</button>` +
+    `<button data-testid="events-view-calendar">C</button></div>` +
+    `<form method="get" action="/events"><input type="search" name="q" data-testid="events-search">` +
+    `</form><a href="/events/past" data-testid="events-past-archive-link">Past</a>` +
+    `<a href="webcal://x.invalid/events.ics" data-testid="events-subscribe">Sub</a>` +
+    `</section></main><p>Welcome, guest</p>` +
+    `<script src="/islands/events-calendar.js"></script></body></html>`;
+  const eventsRoute = PARITY_ROUTES.find((route) => route.path === "/events");
+  assert.ok(eventsRoute?.cachePattern instanceof RegExp, "events route pins a cache pattern");
+  const good = assertRouteContract({
+    label: "events/good",
+    html: shell(""),
+    headers: headers("public, max-age=60"),
+    status: 200,
+    expected: {
+      status: 200,
+      marker: null,
+      contract: eventsRoute.contract,
+      cachePattern: eventsRoute.cachePattern,
+    },
+  });
+  assert.equal(good.length, 0, good.join("; "));
+  const ttlExpectation = {
+    status: 200,
+    marker: null,
+    contract: eventsRoute.contract,
+    cachePattern: eventsRoute.cachePattern,
+  };
+  assert.equal(
+    assertRouteContract({
+      label: "events/remaining-cache-ttl",
+      html: shell(""),
+      headers: headers("public, max-age=59"),
+      status: 200,
+      expected: ttlExpectation,
+    }).length,
+    0,
+    "remaining public cache TTL is valid",
+  );
+  for (const privateCache of ["private, no-store", "no-store, private"]) {
+    assert.ok(
+      assertRouteContract({
+        label: `events/mutant-private-cache-${privateCache}`,
+        html: shell(""),
+        headers: headers(privateCache),
+        status: 200,
+        expected: ttlExpectation,
+      }).some((failure) => failure.includes("cache-control")),
+      `${privateCache} must not satisfy the guest cache contract`,
+    );
+  }
+  // A flash view served shared-cacheable is a privacy break, not a pass.
+  const flashed = shell("").replace(
+    '<section data-testid="events-calendar"',
+    '<p class="notice" role="status" data-testid="join-result">You are in.</p>' +
+      '<section data-testid="events-calendar"',
+  );
+  const sharedFlash = assertRouteContract({
+    label: "events/flash-shared-cache",
+    html: flashed,
+    headers: headers("public, max-age=60"),
+    status: 200,
+    expected: { status: 200, marker: null, contract: "events", cache: "public, max-age=60" },
+  });
+  assert.ok(sharedFlash.length > 0, "shared-cache flash must fail");
+  // The same flashed view answers private with no failure.
+  const privateFlash = assertRouteContract({
+    label: "events/flash-private",
+    html: flashed,
+    headers: headers("private, no-store"),
+    status: 200,
+    expected: { status: 200, marker: null, contract: "events", cache: "private, no-store" },
+  });
+  assert.equal(privateFlash.length, 0, privateFlash.join("; "));
+  const mutants = [
+    [
+      "no-island-binder",
+      (html) =>
+        html.replace('<script src="/islands/events-calendar.js"', '<script src="/islands/x.js"'),
+    ],
+    [
+      "post-search-form",
+      (html) =>
+        html.replace('<form method="get" action="/events"', '<form method="post" action="/events"'),
+    ],
+    [
+      "no-archive-link",
+      (html) => html.replace('data-testid="events-past-archive-link"', 'data-testid="x"'),
+    ],
+    ["no-subscribe", (html) => html.replace('data-testid="events-subscribe"', 'data-testid="x"')],
+    ["no-markdown", (html) => html.replace('href="/events.md"', 'href="/x.md"')],
+    // The <link rel="canonical"> element itself must name /events: nav and
+    // form `/events"` substrings alone never satisfy it, so a canonical at
+    // the archive or the site root must FAIL.
+    [
+      "canonical-archive-target",
+      (html) =>
+        html.replace(
+          '<link rel="canonical" href="https://x.invalid/events">',
+          '<link rel="canonical" href="https://x.invalid/events/past">',
+        ),
+    ],
+    [
+      "canonical-root-target",
+      (html) =>
+        html.replace(
+          '<link rel="canonical" href="https://x.invalid/events">',
+          '<link rel="canonical" href="https://x.invalid/">',
+        ),
+    ],
+  ];
+  for (const [name, mutate] of mutants) {
+    const failures = assertRouteContract({
+      label: `events/mutant-${name}`,
+      html: mutate(shell("")),
+      headers: headers("public, max-age=60"),
+      status: 200,
+      expected: { status: 200, marker: null, contract: "events", cache: "public, max-age=60" },
+    });
+    assert.ok(failures.length > 0, `events mutant ${name} was NOT detected`);
+  }
+  // Vary pins both tokens: full and island-fragment representations share the
+  // URL and differ by X-Two-Island, so dropping either token must FAIL.
+  for (const [name, vary] of [
+    ["vary-cookie-only", "Cookie"],
+    ["vary-island-only", "X-Two-Island"],
+  ]) {
+    const failures = assertRouteContract({
+      label: `events/mutant-${name}`,
+      html: shell(""),
+      headers: {
+        get: (header) =>
+          ({
+            "content-type": "text/html",
+            "x-two-renderer": null,
+            "cache-control": "public, max-age=60",
+            vary,
+          })[header] ?? null,
+      },
+      status: 200,
+      expected: { status: 200, marker: null, contract: "events", cache: "public, max-age=60" },
+    });
+    assert.ok(failures.length > 0, `events mutant ${name} was NOT detected`);
   }
 });

@@ -118,6 +118,140 @@ describe("dispatchHookRequest member reads (Kit branch)", () => {
     ]);
   });
 
+  it("adds the probe only to successful moderator admin documents", async () => {
+    const { sink } = recording();
+    const probeCookie =
+      "__Host-two_session_status=signed-probe; Path=/; Secure; HttpOnly; SameSite=Lax";
+    const manifest: OwnedRoute[] = [
+      {
+        method: "GET",
+        path: "/admin",
+        enabled: true,
+        reads: { resource: "dashboard", action: "view", route: "admin.dashboard" },
+      },
+    ];
+    const adminEvent = (): HookEventLike => {
+      const request = new Request(`${APP_URL}/admin`, { headers: { host: "next.example.test" } });
+      return { request, url: new URL(request.url), route: { id: "/admin" } };
+    };
+    const moderator: KitLocals = {
+      ...authenticated(VIEWER),
+      session: { userId: VIEWER, username: "Rick", avatar: null, member: true, moderator: true },
+    };
+    const authStatusCookieFor = vi.fn(async () => probeCookie);
+    const deps = depsFor({
+      manifest,
+      sessionFor: vi.fn(async () => moderator),
+      authStatusCookieFor,
+      accessSink: async () => sink,
+      resolve: vi.fn(
+        async () =>
+          new Response(await readOwners([VIEWER], "<h1>admin</h1>"), {
+            headers: { "content-type": "text/html" },
+          }),
+      ),
+    });
+    const res = await dispatchHookRequest(adminEvent(), deps);
+    expect(res.headers.getSetCookie()).toContain(probeCookie);
+    expect(authStatusCookieFor).toHaveBeenCalledTimes(1);
+
+    const nonModeratorProbe = vi.fn(async () => probeCookie);
+    const nonModerator = await dispatchHookRequest(
+      adminEvent(),
+      depsFor({
+        manifest,
+        sessionFor: vi.fn(async () => authenticated(VIEWER)),
+        authStatusCookieFor: nonModeratorProbe,
+        accessSink: async () => sink,
+        resolve: vi.fn(
+          async () =>
+            new Response(await readOwners([VIEWER], "<h1>admin</h1>"), {
+              headers: { "content-type": "text/html" },
+            }),
+        ),
+      }),
+    );
+    expect(nonModerator.headers.getSetCookie()).toEqual([]);
+    expect(nonModeratorProbe).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { label: "non-200 HTML", status: 302, contentType: "text/html" },
+    { label: "200 JSON data", status: 200, contentType: "application/json" },
+  ])("does not add a probe to $label admin responses", async ({ status, contentType }) => {
+    const probeCookie =
+      "__Host-two_session_status=signed-probe; Path=/; Secure; HttpOnly; SameSite=Lax";
+    const authStatusCookieFor = vi.fn(async () => probeCookie);
+    const deps = depsFor({
+      manifest: [
+        {
+          method: "GET",
+          path: "/admin",
+          enabled: true,
+          reads: "public",
+        },
+      ],
+      authStatusCookieFor,
+      resolve: vi.fn(
+        async () =>
+          new Response("admin response", { status, headers: { "content-type": contentType } }),
+      ),
+    });
+
+    const request = new Request(`${APP_URL}/admin`, { headers: { host: "next.example.test" } });
+    const admin = {
+      request,
+      url: new URL(request.url),
+      route: { id: "/admin" },
+      locals: {
+        ...authenticated(VIEWER),
+        session: { userId: VIEWER, username: "Rick", avatar: null, member: true, moderator: true },
+      },
+    };
+    const res = await dispatchHookRequest(admin, deps);
+
+    expect(res.status).toBe(status);
+    expect(res.headers.get("content-type")).toContain(contentType);
+    expect(res.headers.getSetCookie()).toEqual([]);
+    expect(authStatusCookieFor).not.toHaveBeenCalled();
+  });
+
+  it("keeps an authorized admin response when the probe rejects", async () => {
+    const body = "<h1>admin</h1>";
+    const authStatusCookieFor = vi.fn(async () => {
+      throw new Error("probe unavailable");
+    });
+    const deps = depsFor({
+      manifest: [{ method: "GET", path: "/admin", enabled: true, reads: "public" }],
+      authStatusCookieFor,
+      resolve: vi.fn(async () => new Response(body, { headers: { "content-type": "text/html" } })),
+    });
+    const request = new Request(`${APP_URL}/admin`, { headers: { host: "next.example.test" } });
+    const res = await dispatchHookRequest(
+      {
+        request,
+        url: new URL(request.url),
+        route: { id: "/admin" },
+        locals: {
+          ...authenticated(VIEWER),
+          session: {
+            userId: VIEWER,
+            username: "Rick",
+            avatar: null,
+            member: true,
+            moderator: true,
+          },
+        },
+      },
+      deps,
+    );
+
+    expect(res.status).toBe(200);
+    expect(await res.text()).toBe(body);
+    expect(res.headers.getSetCookie()).toEqual([]);
+    expect(authStatusCookieFor).toHaveBeenCalledTimes(1);
+  });
+
   it("an anonymous viewer is refused with a sanitized Kit-marked 503", async () => {
     const { sink } = recording();
     const deps = depsFor({
@@ -366,16 +500,16 @@ describe("decideRoute", () => {
     expect(decideRoute(post, MEMBER_MANIFEST)).toBeUndefined();
   });
 
-  it("the shipped manifest keeps the homepage, events list, about, privacy, rules, faq, join and recover on Hono, assigns the public archive, hot-zones and member board to Kit, and holds the admin dashboard, featured list, create and edit forms, activity log, events list, event-create and event-edit forms, join-attempts list and detail and profile reads on Hono", () => {
+  it("the shipped manifest keeps the homepage, privacy, rules, join and recover on Hono, assigns the public archive, events list, hot-zones, about and faq leaves and member board to Kit, and holds the admin dashboard, featured list, create and edit forms, activity log, event-create and event-edit forms, join-attempts list and detail and profile reads on Hono", () => {
     const get = new Request(new URL("/events/past", APP_URL));
     expect(ROUTE_MANIFEST).toEqual([
       { method: "GET", path: "/", enabled: false, reads: "public" },
       { method: "GET", path: "/events/past", enabled: true, reads: "public" },
-      { method: "GET", path: "/events", enabled: false, reads: "public" },
-      { method: "GET", path: "/about", enabled: false, reads: "public" },
+      { method: "GET", path: "/events", enabled: true, reads: "public" },
+      { method: "GET", path: "/about", enabled: true, reads: "public" },
       { method: "GET", path: "/privacy", enabled: false, reads: "public" },
       { method: "GET", path: "/rules", enabled: false, reads: "public" },
-      { method: "GET", path: "/faq", enabled: false, reads: "public" },
+      { method: "GET", path: "/faq", enabled: true, reads: "public" },
       { method: "GET", path: "/join", enabled: false, reads: "public" },
       {
         method: "GET",

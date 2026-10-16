@@ -64,13 +64,16 @@ writeFileSync(
       DISCORD_MODERATOR_ROLE_IDS: "",
       DISCORD_INVITE_URL: "https://example.invalid/invite",
       AGENT_EVENTS_ENABLED: "false",
-      // Fixture-only member-board ownership: this generated config serves
+      // Fixture-only parity ownership: this generated config serves
       // only the loopback parity worker (APP_URL is http://127.0.0.1 above),
-      // and fixtureManifestFor honours the flag only on loopback, so the
-      // executed journey runs the Kit member-board load. The shipped
+      // and fixtureManifestFor honours the flags only on loopback, so the
+      // executed journeys run the Kit loads. The shipped
       // manifest now owns the board on Kit everywhere deployed too, so
-      // this flag is redundant for the entry (rollback is enabled: false).
+      // that flag is redundant for the entry (rollback is enabled: false);
+      // the live detail entry stays disabled in the shipped manifest and the
+      // fixture alone enables it for the RSVP companion journey.
       KIT_PARITY_FIXTURE_MEMBER_BOARD: "true",
+      KIT_PARITY_FIXTURE_EVENT_DETAIL: "true",
     },
   }),
 );
