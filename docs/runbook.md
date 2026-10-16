@@ -986,8 +986,9 @@ new flip or production probes outside that window. The archived freeze
 note is a withdrawn proposal, not evidence that its proposed freeze was
 applied. No freeze is implied by this watch: any future freeze needs a
 separate declaration with new dates and explicit lift terms.
-Everything in this section is read-only or GET-only: no production writes,
-migrations, credential changes or queue purges. Any Sev-1 goes to
+Everything in this section is read-only or GET-only except that the OAuth
+start/callback routes may write throttle records; there are no other production
+writes, migrations, credential changes or queue purges. Any Sev-1 goes to
 containment below and the production rollback pointer, never to a live fix
 or a credential swap.
 

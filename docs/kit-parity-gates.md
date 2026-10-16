@@ -13,10 +13,10 @@ expect Hono for the right reason.
 | `GET /` | `web/src/routes/+page.svelte` (`csr=false`, shared `src/home-copy` + readers, no island) | public | Hono (`enabled: false`) |
 | `GET /events/past` | `web/src/routes/events/past/+page.svelte` (`csr=false`, shared `/islands/past-events.js`) | public | Kit (`enabled: true`) |
 | `GET /events` | `web/src/routes/events/+server.ts` (no Svelte page, so no client entries/node; Hono calendar screen bytes via `src/kit-events-html.tsx`, shared `/islands/events-calendar.js`; `POST /events` and `/events.json` stay Hono) | public | Hono (`enabled: false`) |
-| `GET /about` | `web/src/routes/about/+page.svelte` (`csr=false`, shared `ContentLeaf.svelte`, `src/about-content.ts`) | public | Hono (`enabled: false`) |
+| `GET /about` | `web/src/routes/about/+page.svelte` (`csr=false`, shared `ContentLeaf.svelte`, `src/about-content.ts`) | public | Kit (`enabled: true`) |
 | `GET /privacy` | `web/src/routes/privacy/+page.svelte` (`csr=false`, shared `POLICY_MARKDOWN`/`POLICY_VERSION` source, no island) | public | Hono (`enabled: false`) |
 | `GET /rules` | `web/src/routes/rules/+page.svelte` (`csr=false`, shared `ContentLeaf.svelte`, `src/rules-content.ts`) | public | Hono (`enabled: false`) |
-| `GET /faq` | `web/src/routes/faq/+page.svelte` (`csr=false`, shared `ContentLeaf.svelte`, `src/faq-content.ts`) | public | Hono (`enabled: false`) |
+| `GET /faq` | `web/src/routes/faq/+page.svelte` (`csr=false`, shared `ContentLeaf.svelte`, `src/faq-content.ts`) | public | Kit (`enabled: true`) |
 | `GET /join` | `web/src/routes/join/+page.svelte` (`csr=false`, shared `/islands/join-widget.js`; `/join/discord` + `/join/callback` stay Hono) | public | Hono (`enabled: false`) |
 | `GET /admin` | `web/src/routes/admin/+page.svelte` (`csr=false`, shared `AdminShell.svelte` chrome, `decideKitAdminGuard` layout guard, bounded `dashboardJoinFunnel`/`topZeroResultSearches` widgets with a classified-outage 503 mapping, no island; enablement blockers: the moderator tab-sync probe — signed auth-status cookie plus `/islands/auth-status.js` script, `src/auth-status.ts` — is not ported, and the layout guard stays read-only with no cookie writes until the enablement slice lands it) | dashboard/view (`admin.dashboard`, bridged moderator viewer) | Hono (`enabled: false`) |
 | `GET /admin/featured` | `web/src/routes/admin/featured/+page.svelte` (`csr=false`, shared `AdminShell.svelte` chrome per-child title, `decideKitAdminGuard` layout guard, bounded shared `listFeatured` read with the Hono filter/sort/page shape and a classified-outage 503 mapping, publish/window status via the shared `featuredStatus()`, no island; the new link targets the Kit `/admin/featured/new` page, the edit links target the Kit `/admin/featured/:id` page, and the guarded `/admin/featured-contents` legacy redirects stay Hono) | featured_contents/list (`admin.featured.index`, bridged moderator viewer) | Hono (`enabled: false`) |
@@ -191,7 +191,8 @@ too: `KIT_WORKER_ORIGIN`, else derived from `KIT_WORKER_PORT` (the port
   committed in the same PR — reviewers treat a baseline change like code —
   never a silent regeneration. (No Kit baselines are committed yet:
   `__screenshots-kit__/` holds only `.gitkeep`, while the enabled routes are
-  `/events/past`, the four hot-zone paths and `/leaderboards/members`.
+  `/events/past`, `/about`, `/faq`, the four hot-zone paths and
+  `/leaderboards/members`.
   Archive/join DOM parity plus two-width overflow checks run in the parity
   spec today; the hot-zone pages also have browser journey and responsive
   navigation coverage there. CI additionally runs the fixture-based unit
