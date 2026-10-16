@@ -18,7 +18,7 @@ const result = spawnSync(
     "src/admin",
     "src/sessions.ts",
   ],
-  { encoding: "utf8" },
+  { encoding: "utf8", stdio: ["ignore", "pipe", "inherit"] },
 );
 
 if (result.status === 0) {
