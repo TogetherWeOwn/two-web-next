@@ -46,10 +46,17 @@ const scopes = [
   "src/invite.ts",
   "src/return-journey.ts",
   "src/write-recovery.tsx",
+  "src/kit-*",
+  "src/counts.ts",
+  "src/seo.ts",
 ];
 const scoped = scopes.map((scope) => {
   const entries = files.filter(({ file }) =>
-    scope.endsWith("/") ? file.startsWith(scope) : file === scope,
+    scope.endsWith("*")
+      ? file.startsWith(scope.slice(0, -1))
+      : scope.endsWith("/")
+        ? file.startsWith(scope)
+        : file === scope,
   );
   if (entries.length === 0) throw new Error(`Coverage report is missing required scope: ${scope}`);
   return { file: scope, coverage: aggregate(entries) };

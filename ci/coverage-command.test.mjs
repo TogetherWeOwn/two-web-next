@@ -23,7 +23,7 @@ test("the required check keeps full coverage in isolated serial threads inside m
   );
   assert.equal(
     step?.[1].match(/^        run: (.+)$/m)?.[1],
-    "npm run lint && npm run typecheck && npm run e2e:typecheck && npm run test:coverage && npm run e2e:safety && node --test ci/a11y-admin-native-unicode.test.mjs ci/a11y-build.test.mjs ci/a11y-content.test.mjs ci/a11y-interactions.test.mjs ci/a11y-native-browser-suites.test.mjs ci/a11y-policy.test.mjs ci/a11y-route-validation.test.mjs ci/admin-properties-ci.test.mjs ci/coverage-command.test.mjs ci/kit-preview-e2e-wiring.test.mjs ci/visual-accept.test.mjs",
+    "npm run lint && npm run typecheck && npm run e2e:typecheck && npm run test:coverage && npm run e2e:safety && node --test ci/a11y-admin-native-unicode.test.mjs ci/a11y-build.test.mjs ci/a11y-content.test.mjs ci/a11y-interactions.test.mjs ci/a11y-native-browser-suites.test.mjs ci/a11y-policy.test.mjs ci/a11y-route-validation.test.mjs ci/admin-properties-ci.test.mjs ci/coverage-command.test.mjs ci/kit-preview-e2e-wiring.test.mjs ci/visual-accept.test.mjs ci/tier0-changed-query-files.test.mjs",
   );
   // Only the docs-only/draft scope gate (TOG-11811/TOG-14880) may guard the step; nothing may bypass it.
   assert.doesNotMatch(step[1], /continue-on-error:/);
@@ -55,7 +55,18 @@ test("the coverage gate keeps area floors and summary scopes for the high-blast-
     );
     assert.ok(summary.includes(`"${area}/"`), `coverage summary must report ${area}/`);
   }
-  for (const file of ["src/invite.ts", "src/return-journey.ts", "src/write-recovery.tsx"]) {
+  assert.match(
+    config,
+    /"src\/kit-\*": \{ statements: [0-9.]+, branches: [0-9.]+, functions: [0-9.]+, lines: [0-9.]+ \}/,
+  );
+  assert.ok(summary.includes('"src/kit-*"'), "coverage summary must report src/kit-*");
+  for (const file of [
+    "src/invite.ts",
+    "src/return-journey.ts",
+    "src/write-recovery.tsx",
+    "src/counts.ts",
+    "src/seo.ts",
+  ]) {
     assert.match(
       config,
       new RegExp(

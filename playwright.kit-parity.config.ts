@@ -20,7 +20,8 @@ const kitOrigin =
 // specs are read-only apart from the member-board journey's own writes —
 // its single shared QA login (session row and anonymous board-view rows,
 // counted like any other journey's) and its one going RSVP on the seeded
-// event, withdrawn in afterAll — so they cannot skew the teardown sweep.
+// event, withdrawn in afterAll — and the archive journey's 24 seeded rows
+// (swept in afterAll), so they cannot skew the teardown sweep.
 // The JSON report feeds ci/check-kit-parity.mjs, which fails loud when
 // nothing passed (Playwright exits 0 on all-skipped).
 export default defineConfig({

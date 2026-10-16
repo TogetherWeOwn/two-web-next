@@ -1,8 +1,11 @@
 import { createHmac } from "node:crypto";
 import { expect, test, type APIRequestContext } from "@playwright/test";
+import postgres from "postgres";
 import { normalizeSection, sectionOf } from "../../ci/kit-section-contract.mjs";
+import { requireGithubRunner, requireTestDatabase } from "../ci-only.mjs";
 import {
   expectedKitMarker,
+  kitFixtureOwnsEventDetail,
   kitFixtureOwnsMemberBoard,
   kitFixtureSessionSecret,
   KIT_ORIGIN,
@@ -51,7 +54,7 @@ test.afterAll(async () => {
     if (memberRsvpCreated) {
       const hono = targets.find((target) => target.name === "hono")!;
       const withdrawn = await api(hono).delete(`/events/${SEEDED_EVENT_KEY}/rsvp`, {
-        headers: { cookie: await honoMemberCookie(), Origin: "https://localhost:8787" },
+        headers: { cookie: await memberCookie(hono), Origin: "https://localhost:8787" },
       });
       expect(withdrawn.status(), "ranked RSVP withdrawn").toBe(204);
     }
@@ -107,12 +110,21 @@ function honoMemberCookie(): Promise<string> {
 
 async function memberCookie(target: ParityTarget): Promise<string> {
   const pair = await honoMemberCookie();
-  if (target.name !== "kit") return pair;
-  const eq = pair.indexOf("=");
-  const signed = pair.slice(eq + 1);
+  // Freshest wins: rotating page reads (GET /e/:key) delete the presented
+  // bearer's row and deliver the replacement via Set-Cookie into Hono's jar.
+  // Kit has a separate cookie signature, but shares that same session row, so
+  // it must re-sign the jar's current pair when a rotation has already run.
+  const hono = targets.find((candidate) => candidate.name === "hono")!;
+  const state = await api(hono).storageState();
+  const current = state.cookies.find((cookie) => cookie.name === "__Host-two_session");
+  const source = current ? `${current.name}=${current.value}` : pair;
+  if (target.name !== "kit") return source;
+
+  const eq = source.indexOf("=");
+  const signed = source.slice(eq + 1);
   const raw = signed.slice(0, signed.lastIndexOf("."));
   const signature = createHmac("sha256", kitFixtureSessionSecret()).update(raw).digest("base64");
-  return `${pair.slice(0, eq + 1)}${raw}.${signature}`;
+  return `${source.slice(0, eq + 1)}${raw}.${signature}`;
 }
 
 // The board's one ranked member: the QA viewer answers going to the seeded
@@ -391,6 +403,29 @@ for (const target of targets) {
       if (target.name === "kit")
         expect(kitFixtureOwnsMemberBoard(), "Kit fixture owns the member board").toBe(true);
       const expectedMarker = target.name === "kit" ? "kit" : null;
+      // Read-after-write across workers: the session row is committed by the
+      // single shared QA login moments earlier on the Hono worker, and this
+      // suite runs with retries: 0, so one first-read miss (an unknown
+      // session reads as a guest bounce, which the client follows onto Hono)
+      // must not fail the run. Poll the first view briefly; the strict
+      // asserts below still prove the contract on the settled read.
+      await expect
+        .poll(
+          async () => {
+            const ready = await api(target).get("/leaderboards/members", {
+              headers: { cookie },
+            });
+            return (
+              ready.status() === 200 &&
+              (ready.headers()["x-two-renderer"] ?? null) === expectedMarker
+            );
+          },
+          {
+            message: `${target.name} member board session becomes visible`,
+            timeout: 15000,
+          },
+        )
+        .toBe(true);
       // Ranked content, not just board chrome: the viewer's going RSVP on
       // the seeded 2099 event ranks them on the overall and relative
       // views, while the 2026 season window and the valheim game filter
@@ -468,6 +503,150 @@ for (const target of targets) {
         expect(scrubSecrets(body)).toEqual([]);
         expect(body).not.toContain("<h1>Member leaderboard</h1>");
       }
+    });
+  });
+
+  // Live event detail (GET /e/:key only): the RSVP companion's executed
+  // journey. The shipped manifest keeps the entry disabled until the companion
+  // passes, so the Kit target answers from the Kit load only through the
+  // loopback fixture (kitFixtureOwnsEventDetail); Hono always answers without
+  // the marker. JSON/ICS stay Hono-owned with no manifest entries and every
+  // RSVP mutation keeps Hono as its single authority. Bodies are
+  // origin-normalized before comparison where hosts differ by design.
+  test.describe(`${target.name}: live event detail keeps its RSVP companion contract`, () => {
+    const EVENT_KEY = "01J00000000000000000000001";
+    const EVENT_PATH = `/e/${EVENT_KEY}`;
+
+    test("guest renders the published contract with join pitch and no attendees", async ({
+      playwright,
+    }) => {
+      if (target.name === "kit")
+        expect(kitFixtureOwnsEventDetail(), "Kit fixture owns the event detail").toBe(true);
+      const expectedMarker = target.name === "kit" ? "kit" : null;
+      // Cookie-free by construction: the shared api() context accumulates
+      // session cookies from the earlier QA-login journey, which would render
+      // the member view (no join pitch) instead of the guest contract.
+      const guest = await playwright.request.newContext({
+        baseURL: target.origin,
+        ignoreHTTPSErrors: target.ignoreHTTPSErrors,
+      });
+      try {
+        const response = await guest.get(EVENT_PATH);
+        expect(response.status(), `${target.name} guest detail`).toBe(200);
+        expect(response.headers()["content-type"]).toContain("text/html");
+        expect(response.headers()["x-two-renderer"] ?? null).toBe(expectedMarker);
+        // Per-viewer page: never shared-cacheable, on either renderer.
+        expect(response.headers()["cache-control"]).toBe("private, no-store");
+        expect(response.headers()["vary"] ?? "").toMatch(/cookie/i);
+        const body = await response.text();
+        expect(scrubSecrets(body)).toEqual([]);
+        expect(body).toContain("E2E Community Night");
+        expect(body).toContain('data-testid="event-join-pitch"');
+        expect(body).toContain('data-testid="event-copy-link"');
+        expect(body).toContain('data-testid="event-jsonld"');
+        expect(body).toContain('rel="canonical"');
+        expect(body).toContain(`/events/${EVENT_KEY}.ics`);
+        expect(body).not.toContain('data-testid="event-attendees"');
+        expect(body).not.toContain("Sign out");
+        expect(body).toContain("Welcome, guest");
+      } finally {
+        await guest.dispose();
+      }
+    });
+
+    test("member renders the no-JS RSVP form posting to the Hono controller", async ({
+      playwright,
+    }) => {
+      if (target.name === "kit")
+        expect(kitFixtureOwnsEventDetail(), "Kit fixture owns the event detail").toBe(true);
+      const expectedMarker = target.name === "kit" ? "kit" : null;
+      const cookie = await memberCookie(target);
+      const response = await api(target).get(EVENT_PATH, { headers: { cookie } });
+      expect(response.status(), `${target.name} member detail`).toBe(200);
+      expect(response.headers()["content-type"]).toContain("text/html");
+      expect(response.headers()["x-two-renderer"] ?? null).toBe(expectedMarker);
+      expect(response.headers()["cache-control"]).toBe("private, no-store");
+      const body = await response.text();
+      expect(scrubSecrets(body)).toEqual([]);
+      expect(body).toContain("E2E Community Night");
+      expect(body).not.toContain('data-testid="event-join-pitch"');
+      // The mutation stays Hono-owned: a native form posts to the unchanged
+      // controller, the islands only enhance it.
+      expect(body).toContain(`action="/e/${EVENT_KEY}/rsvp"`);
+      expect(body).toContain("/islands/rsvp-button.js");
+      expect(body).toContain("Sign out");
+      expect(body).not.toContain("Welcome, guest");
+      // Session rotation contract (docs/parity.md section 12, session row):
+      // Hono GET /e/:key reads through the rotating readSession
+      // (src/index.tsx: every authenticated page view mints a fresh token,
+      // deletes the old row and re-stamps the 120-minute sliding expiry), so
+      // a member read sets a __Host-two_session replacement with
+      // Max-Age=7200 and the presented bearer is dead afterwards. The Kit
+      // detail load uses the read-only bridge (src/kit-session.ts: it never
+      // rotates or sets cookies), so it emits no session Set-Cookie and the
+      // presented bearer stays live. That divergence is recorded in
+      // docs/parity.md and docs/kit-parity-gates.md as an explicit blocker
+      // for enabling GET /e/:key: members who only browse Kit event pages
+      // would otherwise lose the sliding renewal.
+      const sessionSets = (await response.headersArray())
+        .filter((header) => header.name.toLowerCase() === "set-cookie")
+        .map((header) => header.value)
+        .filter((value) => value.startsWith("__Host-two_session="));
+      // Cookie-free replay: the shared api() jars accumulate the rotated
+      // replacements above, so replaying the presented bearer runs in a
+      // fresh context with exactly one Cookie header.
+      const replay = await playwright.request.newContext({
+        baseURL: target.origin,
+        ignoreHTTPSErrors: target.ignoreHTTPSErrors,
+      });
+      try {
+        const again = await replay.get(EVENT_PATH, { headers: { cookie } });
+        expect(again.status(), `${target.name} replayed bearer`).toBe(200);
+        const againBody = await again.text();
+        expect(scrubSecrets(againBody)).toEqual([]);
+        if (target.name === "kit") {
+          expect(sessionSets, "kit detail keeps the read-only bridge: no rotation").toEqual([]);
+          // Never retired: the same bearer still renders the member view.
+          expect(againBody).not.toContain('data-testid="event-join-pitch"');
+          expect(againBody).toContain("Sign out");
+        } else {
+          expect(sessionSets.length, "hono detail rotates the session").toBe(1);
+          expect(sessionSets[0]!, "rotation re-stamps 120 minutes").toMatch(/max-age=7200/i);
+          // The retired bearer finds no row: the guest contract renders.
+          expect(againBody).toContain('data-testid="event-join-pitch"');
+          expect(againBody).not.toContain("Sign out");
+          expect(againBody).toContain("Welcome, guest");
+        }
+      } finally {
+        await replay.dispose();
+      }
+    });
+
+    test("JSON, ICS and RSVP mutations stay Hono-owned without the Kit marker", async () => {
+      // The event JSON names its viewer (waitlist position), so it needs the
+      // member session like every other member read; guests get the 401
+      // refusal on both renderers (src/events/routes-detail.tsx jsonSession).
+      const cookie = await memberCookie(target);
+      const json = await api(target).get(`/events/${EVENT_KEY}`, { headers: { cookie } });
+      expect(json.status(), `${target.name} event JSON`).toBe(200);
+      expectNoMarker(json.headers(), `${target.name} event JSON`);
+
+      const ics = await api(target).get(`/events/${EVENT_KEY}.ics`);
+      expect(ics.status(), `${target.name} event ICS`).toBe(200);
+      expectNoMarker(ics.headers(), `${target.name} event ICS`);
+
+      const put = await api(target).put(`/events/${EVENT_KEY}/rsvp`, { data: {} });
+      expect([401, 403, 404, 422], `${target.name} RSVP PUT refused`).toContain(put.status());
+      expectNoMarker(put.headers(), `${target.name} RSVP PUT`);
+
+      const post = await api(target).post(EVENT_PATH + "/rsvp", {
+        data: "status=going",
+        headers: { "content-type": "application/x-www-form-urlencoded" },
+      });
+      expect([303, 401, 403], `${target.name} RSVP POST refused/redirected`).toContain(
+        post.status(),
+      );
+      expectNoMarker(post.headers(), `${target.name} RSVP POST`);
     });
   });
 
@@ -718,6 +897,267 @@ test("cross-target: join one-click hrefs agree on the safe next", async () => {
   expect(hrefs.get("kit"), "Kit one-click agrees with Hono on the safe next").toBe(
     hrefs.get("hono"),
   );
+});
+
+// Successful archive page turns with browser history restoration.
+//
+// Isolated deterministic fixture: 24 dated rows plus the seeded past night
+// make 25 archived rows at page size 20, so totalPages is 2. Page one holds
+// the 20 newest turns (24 down to 05); page two holds turns 04 down to 01
+// plus the seeded past night as the oldest row. The shared one-row seed is
+// untouched and the existing refusal assertions keep running; this journey
+// only adds rows while it runs and deletes them afterwards.
+//
+// Every read carries a bypass cookie so the shared one-row anonymous entry
+// stays untouched and this journey never settles fixture HTML into it. The
+// cookie is not a session: the journey asserts guest chrome throughout and
+// performs no logins and no RSVP writes. External traffic is aborted like
+// the overflow journeys. Only shipped attributes are used (no new testids).
+//
+// A broken Older/Newer href lands on the wrong URL or the out-of-range
+// refusal, so row identities and the page URL fail. A stale fragment swap
+// keeps the old rows, so identities and the canonical fail.
+//
+// The island validates the fetched page's canonical against the browser
+// origin. On the Hono target that origin is localhost while APP_URL is the
+// virtual staging URL, so the e2e test worker translates the archive HTML
+// back to localhost (e2e/worker.ts) — the deployed invariant, where
+// APP_URL is the serving origin. The Kit fixture already serves its own
+// origin as APP_URL, so its turns need no translation.
+const ARCHIVE_TURN_COUNT = 24;
+const ARCHIVE_TURN_KEY_PREFIX = "01K000000000000000000000";
+const ARCHIVE_PAST_NIGHT_KEY = "01J00000000000000000000002";
+const ARCHIVE_BYPASS_COOKIE = "e2e-archive-bypass=1";
+
+function archiveTurnKey(i: number): string {
+  return `${ARCHIVE_TURN_KEY_PREFIX}${String(i).padStart(2, "0")}`;
+}
+
+function archiveTurnTitle(i: number): string {
+  return `E2E Archive Turn ${String(i).padStart(2, "0")}`;
+}
+
+function archiveTurnStartsAt(i: number): string {
+  return `2024-06-${String(i).padStart(2, "0")}T18:00:00Z`;
+}
+
+function archiveTurnEndsAt(i: number): string {
+  return `2024-06-${String(i).padStart(2, "0")}T20:00:00Z`;
+}
+
+async function seedArchiveTurns(): Promise<void> {
+  requireGithubRunner();
+  const url = requireTestDatabase(process.env.DATABASE_URL) as string;
+  const sql = postgres(url, { max: 1 });
+  try {
+    await sql`delete from events where event_key like '01K000000000000000000000%'`;
+    for (let i = 1; i <= ARCHIVE_TURN_COUNT; i++) {
+      await sql`insert into events (event_key, title, description, starts_at, ends_at, timezone, status, capacity, rsvp_open)
+        values (${archiveTurnKey(i)}, ${archiveTurnTitle(i)}, 'Disposable archive page-turn fixture',
+          ${archiveTurnStartsAt(i)}, ${archiveTurnEndsAt(i)}, 'UTC', 'published', 10, true)`;
+    }
+  } finally {
+    await sql.end();
+  }
+}
+
+async function sweepArchiveTurns(): Promise<void> {
+  requireGithubRunner();
+  const url = requireTestDatabase(process.env.DATABASE_URL) as string;
+  const sql = postgres(url, { max: 1 });
+  try {
+    await sql`delete from events where event_key like '01K000000000000000000000%'`;
+  } finally {
+    await sql.end();
+  }
+}
+
+test.describe("archive page turns prove successful paging and history", () => {
+  test.beforeAll(async () => {
+    await seedArchiveTurns();
+  });
+
+  test.afterAll(async () => {
+    await sweepArchiveTurns();
+  });
+
+  for (const target of targets) {
+    test(`${target.name}: Older, Newer and Back restore the archive pages`, async ({ browser }) => {
+      const expectedMarker = target.name === "kit" ? expectedKitMarker("/events/past") : null;
+
+      // Renderer proof on both pages through the enabled entry, bypassing
+      // the shared one-row anonymous entry so the fixture rows are read.
+      const pageOneApi = await api(target).get("/events/past", {
+        headers: { cookie: ARCHIVE_BYPASS_COOKIE },
+      });
+      expect(pageOneApi.status()).toBe(200);
+      expect(pageOneApi.headers()["x-two-renderer"] ?? null).toBe(expectedMarker);
+      const pageOneBody = await pageOneApi.text();
+      expect(scrubSecrets(pageOneBody)).toEqual([]);
+      expect(pageOneBody).toContain("E2E Archive Turn 24");
+      expect(pageOneBody).toContain("E2E Archive Turn 05");
+      expect(pageOneBody).not.toContain("E2E Archive Turn 04");
+      expect(pageOneBody).not.toContain("E2E Past Night");
+
+      const pageTwoApi = await api(target).get("/events/past?page=2", {
+        headers: { cookie: ARCHIVE_BYPASS_COOKIE },
+      });
+      expect(pageTwoApi.status()).toBe(200);
+      expect(pageTwoApi.headers()["x-two-renderer"] ?? null).toBe(expectedMarker);
+      const pageTwoBody = await pageTwoApi.text();
+      expect(scrubSecrets(pageTwoBody)).toEqual([]);
+      expect(pageTwoBody).toContain("E2E Archive Turn 04");
+      expect(pageTwoBody).toContain("E2E Archive Turn 01");
+      expect(pageTwoBody).toContain("E2E Past Night");
+      expect(pageTwoBody).not.toContain("E2E Archive Turn 24");
+      expect(pageTwoBody).not.toContain("E2E Archive Turn 05");
+
+      const context = await browser.newContext({
+        baseURL: target.origin,
+        ignoreHTTPSErrors: target.ignoreHTTPSErrors,
+        viewport: { width: 1280, height: 800 },
+        extraHTTPHeaders: { cookie: ARCHIVE_BYPASS_COOKIE },
+      });
+      const pageErrors: string[] = [];
+      try {
+        // Only the two parity loopbacks may be reached; anything else fails
+        // the journey instead of leaking a packet.
+        await context.route("**/*", (route) => {
+          const url = new URL(route.request().url());
+          const allowed = url.origin === "https://localhost:8787" || url.origin === KIT_ORIGIN;
+          return allowed ? route.continue() : route.abort("blockedbyclient");
+        });
+        const page = await context.newPage();
+        page.on("pageerror", (error) => pageErrors.push(error.message));
+
+        async function archiveKeys(): Promise<string[]> {
+          const items = page.locator('[data-testid="past-events-list"] [data-event-key]');
+          const handles = await items.all();
+          const keys: string[] = [];
+          for (const handle of handles) {
+            const key = await handle.getAttribute("data-event-key");
+            if (key) keys.push(key);
+          }
+          return keys;
+        }
+
+        // The island turns pages with pushState (no document navigation); a
+        // missing, 404ing or CSP-blocked island falls back to full loads
+        // with the same end state. String form: the e2e tsconfig has no DOM
+        // lib, so no window names here. A full navigation replaces the
+        // document and drops this marker; island turns keep it.
+        async function expectSameDoc(): Promise<void> {
+          expect(
+            await page.evaluate("window.__archiveSameDoc ?? null"),
+            "island kept the document (no full navigation)",
+          ).toBe(1);
+        }
+
+        const response = await page.goto("/events/past");
+        expect(response?.status()).toBe(200);
+        expect(response?.headers()["x-two-renderer"] ?? null).toBe(expectedMarker);
+        await expect(page).toHaveURL(/\/events\/past$/);
+        await expect(page.getByTestId("past-events")).toBeVisible();
+        await expect(page.getByTestId("past-events")).toHaveAttribute("data-page", "1");
+        await expect(page.getByTestId("past-events")).toHaveAttribute("data-total-pages", "2");
+        await expect(page.getByTestId("past-events-list")).toBeVisible();
+        await expect(page.getByTestId("past-events-list")).toContainText("E2E Archive Turn 24");
+        await expect(page.locator('link[rel="canonical"]')).toHaveAttribute(
+          "href",
+          /\/events\/past$/,
+        );
+        await expect(page.locator('meta[name="robots"]')).toHaveAttribute(
+          "content",
+          "noindex, follow",
+        );
+        await expect(page.getByText("Welcome, guest")).toBeVisible();
+        await expect(page.getByText("Sign out")).toHaveCount(0);
+        await expect(page.locator('a[data-archive-page]:has-text("Older")')).toBeVisible();
+        await expect(page.locator('a[data-archive-page]:has-text("Newer")')).toHaveCount(0);
+        let keys = await archiveKeys();
+        expect(keys).toHaveLength(20);
+        expect(keys).toContain(archiveTurnKey(24));
+        expect(keys).toContain(archiveTurnKey(5));
+        expect(keys).not.toContain(archiveTurnKey(4));
+        expect(keys).not.toContain(ARCHIVE_PAST_NIGHT_KEY);
+        await page.evaluate("window.__archiveSameDoc = 1");
+
+        await page.locator('a[data-archive-page]:has-text("Older")').click();
+        await expect(page).toHaveURL(/\/events\/past\?page=2/);
+        await expectSameDoc();
+        await expect(page.getByTestId("past-events")).toHaveAttribute("data-page", "2");
+        await expect(page.getByTestId("past-events-list")).toContainText("E2E Past Night");
+        await expect(page.locator('link[rel="canonical"]')).toHaveAttribute(
+          "href",
+          /\/events\/past\?page=2/,
+        );
+        await expect(page.locator('meta[name="robots"]')).toHaveAttribute(
+          "content",
+          "noindex, follow",
+        );
+        await expect(page.locator('a[data-archive-page]:has-text("Newer")')).toBeVisible();
+        await expect(page.locator('a[data-archive-page]:has-text("Older")')).toHaveCount(0);
+        keys = await archiveKeys();
+        expect(keys).toHaveLength(5);
+        expect(keys).toContain(archiveTurnKey(4));
+        expect(keys).toContain(archiveTurnKey(1));
+        expect(keys).toContain(ARCHIVE_PAST_NIGHT_KEY);
+        expect(keys).not.toContain(archiveTurnKey(24));
+        expect(keys).not.toContain(archiveTurnKey(5));
+
+        await page.locator('a[data-archive-page]:has-text("Newer")').click();
+        await expect(page).toHaveURL(/\/events\/past$/);
+        await expectSameDoc();
+        await expect(page.getByTestId("past-events")).toHaveAttribute("data-page", "1");
+        await expect(page.getByTestId("past-events-list")).toContainText("E2E Archive Turn 24");
+        await expect(page.locator('link[rel="canonical"]')).toHaveAttribute(
+          "href",
+          /\/events\/past$/,
+        );
+        keys = await archiveKeys();
+        expect(keys).toHaveLength(20);
+        expect(keys).toContain(archiveTurnKey(24));
+        expect(keys).not.toContain(ARCHIVE_PAST_NIGHT_KEY);
+
+        await page.locator('a[data-archive-page]:has-text("Older")').click();
+        await expect(page).toHaveURL(/\/events\/past\?page=2/);
+        await expectSameDoc();
+        await expect(page.getByTestId("past-events-list")).toContainText("E2E Past Night");
+        await page.goBack();
+        await expect(page).toHaveURL(/\/events\/past$/);
+        // goBack restores the URL synchronously, before the island's popstate
+        // read settles; a failed read falls back to a full reload only once
+        // its fetch settles. data-page flips to 1 only at the island swap (or
+        // on the reloaded document) and aria-busy clears when the read
+        // finishes, so read the same-document marker only after both — and
+        // again after the last content assertions below, before pageErrors.
+        await expect(page.getByTestId("past-events")).toHaveAttribute("data-page", "1");
+        await expect(page.getByTestId("past-events")).not.toHaveAttribute("aria-busy");
+        await expectSameDoc();
+        await expect(page.getByTestId("past-events-list")).toContainText("E2E Archive Turn 24");
+        await expect(page.locator('link[rel="canonical"]')).toHaveAttribute(
+          "href",
+          /\/events\/past$/,
+        );
+        await expect(page.locator('meta[name="robots"]')).toHaveAttribute(
+          "content",
+          "noindex, follow",
+        );
+        keys = await archiveKeys();
+        expect(keys).toHaveLength(20);
+        expect(keys).toContain(archiveTurnKey(24));
+        expect(keys).toContain(archiveTurnKey(5));
+        expect(keys).not.toContain(ARCHIVE_PAST_NIGHT_KEY);
+        await expect(page.getByText("Welcome, guest")).toBeVisible();
+        await expect(page.getByText("Sign out")).toHaveCount(0);
+        await expectSameDoc();
+
+        expect(pageErrors, "no uncaught page errors").toEqual([]);
+      } finally {
+        await context.close();
+      }
+    });
+  }
 });
 
 test("Kit worker answers traffic within the liveness bound", async ({ playwright }) => {

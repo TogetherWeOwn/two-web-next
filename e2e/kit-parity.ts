@@ -85,6 +85,19 @@ export function kitFixtureOwnsMemberBoard(): boolean {
   return /KIT_PARITY_FIXTURE_MEMBER_BOARD: "true"/.test(source);
 }
 
+// Whether the Kit parity fixture owns the live event detail for its journey.
+// The shipped manifest keeps GET /e/:key disabled until the RSVP companion
+// passes, so the fixture flag alone enables the Kit load on the loopback
+// worker; the journey asserts the Kit marker on that target, so a fixture
+// that stops owning the route fails loud instead of proving Hono-vs-Hono.
+export function kitFixtureOwnsEventDetail(): boolean {
+  const source = readFileSync(
+    fileURLToPath(new URL("../ci/kit-worker-dev.mjs", import.meta.url).href),
+    "utf8",
+  );
+  return /KIT_PARITY_FIXTURE_EVENT_DETAIL: "true"/.test(source);
+}
+
 export function normalizeOrigin(body: string, origin: string): string {
   // Feed links also ship a webcal:// variant (webcalUrl in
   // src/events/feeds.ts rewrites the http(s) scheme to webcal://), so the
