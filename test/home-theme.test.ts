@@ -61,7 +61,8 @@ describe("homepage theme", () => {
     const html = render();
     expect(html).toContain('<body class="base-theme homepage-theme"><a class="skip-link"');
     // The homepage inlines the shared critical-CSS bundle and retains the
-    // Display-700 preload to prevent a delayed-font hero reflow.
+    // Display-700 preload for an early font fetch; the metric-matched
+    // 'Display Fallback' keeps a delayed-font swap reflow-free.
     expect(html).toContain("<style>");
     expect(html).toContain(".hero h1");
     expect(html).not.toContain('rel="stylesheet"');
