@@ -170,9 +170,8 @@ no manifest entries of their own. Every shell entry in
 you see in the panel today is the Hono page. Kit shells reuse the same guard,
 reads, filters, sort, pagination and copy, mirroring the event/featured
 CRUD, RSVP roster, and join-attempts audit workflows below; enablement stays
-blocked until the slices named in [Kit parity gates](kit-parity-gates.md)
-land (for example the moderator tab-sync probe on `GET /admin` and
-`GET /admin/activity-log`).
+disabled pending the enablement review described in
+[Kit parity gates](kit-parity-gates.md).
 
 | Admin path | Kit shell |
 |---|---|
@@ -196,8 +195,8 @@ back to the unchanged Hono handler. Each shell is pinned by its Kit suite —
 `test/kit-admin-*` for dashboard, events and featured,
 `test/kit-join-attempt*` and `test/kit-activity-log*` for those shells — not
 by the Kit parity gates: `PARITY_ROUTES` in `ci/kit-parity-gates.mjs` covers
-public routes (`/events/past`, `/join`, `/auth/recover`, the hot-zone
-paths) plus the authenticated member leaderboard
+public routes (including `/events/past`, `/join`, `/auth/recover`, `/about`,
+`/faq`, and the hot-zone paths) plus the authenticated member leaderboard
 (`/leaderboards/members`), and moderator-admin journeys stay
 Hono-only, ledgered as skipped.
 
