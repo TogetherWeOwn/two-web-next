@@ -191,7 +191,11 @@ test("Kit suite outputs in the shared artifact are ignored", () => {
   // must never regenerate a Hono baseline.
   writeBytes(
     join(artifact, "test-results-kit-parity", "past", "past-desktop-actual.png"),
-    "kit-bytes",
+    "kit-parity-bytes",
+  );
+  writeBytes(
+    join(artifact, "test-results-kit-visual", "past", "past-desktop-actual.png"),
+    "kit-visual-bytes",
   );
   writeBytes(
     join(artifact, "e2e", "visual", "__screenshots-kit__", "past-desktop.png"),
