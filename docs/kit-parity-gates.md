@@ -102,9 +102,9 @@ Two modes, one assertion set per parity route:
   member-chrome fragment from guest chrome, and ledgers the login journeys
   (member RSVP, moderator admin, profile edit) from the manifest: Hono-owned
   routes ledger as skipped WITH reasons — loud and countable until their
-  routes migrate — while an enabled route with no executed journey covering
-  it records a failure, so the first Kit-native member route can never ship
-  on a green ledger with no run. The heavyweight SSR
+  routes migrate. The route-coverage catch-all considers any path listed in
+  `PARITY_ROUTES` covered; that declaration is not proof of an executed
+  browser journey. The heavyweight SSR
   byte-comparison stays in `ci/kit-preview-e2e.mjs`, which runs right before.
 - **Preview mode** (`KIT_PREVIEW_URL` + `HONO_PREVIEW_URL`): fetches each
   `PARITY_ROUTES` entry from both deployed Workers and applies the same
@@ -256,13 +256,18 @@ until their routes migrate; the gate ledger derives each entry from
 `ROUTE_MANIFEST` and records Hono-owned routes as
 `skipped: <route> not Kit-native` with reason strings — loud, countable,
 never quiet green, and never a `test.skip` call (the floor forbids new
-skips). An enabled route with no executed journey covering it records a
-failure instead of a skip: in-scope routes fail their journey (scope net),
-any other enabled route fails the uncovered-route catch-all. Executed parity
-journeys cover GET/HEAD `/events/past`, `/join`, `/auth/recover` and
-`/leaderboards/members` (the member board also runs authenticated). The suite separately performs raw no-JavaScript API checks
-for all four hot-zone paths; its rendered-page journey loads `/hotzones` and
-follows `/hotzones/joins`, not the voice or games pages. The unit contract
+skips). The uncovered-route catch-all considers a route covered when its
+base path appears in `PARITY_ROUTES` (`isCoveredByExecutedRun`); this
+declaration alone does not prove a browser journey ran. `/about`, `/faq`
+and the four hot-zone paths clear the catch-all because their base paths are
+listed, not because that catch-all checks an executed journey; the step-3
+fixtures and operator-run preview are separate contract evidence. Executed
+parity journeys cover GET/HEAD
+`/events/past`, `/join`, `/auth/recover` and `/leaderboards/members` (the
+member board also runs authenticated). Hot-zone coverage is distinct: the
+suite performs raw no-JavaScript API checks for all four paths and renders
+`/hotzones` plus `/hotzones/joins`; it does not render the voice or games
+pages. The unit contract
 exercises shared contract branches on canonical fixtures (one synthetic
 `/hotzones` shell, one member-board fixture, the `/about` and `/faq` leaves);
 per-path coverage of the four hot-zone signals comes from those API checks
