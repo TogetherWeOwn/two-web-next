@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 const repo = fileURLToPath(new URL("../", import.meta.url));
 const workflow = readFileSync(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8");
 const job = workflow.split("\n  check:\n")[1]?.split(/\n  [\w-]+:\n/)[0] ?? "";
+const e2eWorkflow = readFileSync(new URL("../.github/workflows/e2e.yml", import.meta.url), "utf8");
 
 test("the Playwright loader links the parity config before the runner guard refuses local execution", () => {
   const env = { ...process.env };
@@ -65,6 +66,26 @@ test("the Kit fixture owns the member board only on its loopback worker", () => 
   assert.doesNotMatch(deployed, /KIT_PARITY_FIXTURE_MEMBER_BOARD/);
   const spec = readFileSync(new URL("../e2e/kit-parity/parity.spec.ts", import.meta.url), "utf8");
   assert.match(spec, /kitFixtureOwnsMemberBoard/);
+});
+
+test("Kit visual baselines run on the clean seed before mutating browser journeys", () => {
+  const step = (name) => e2eWorkflow.indexOf(`- name: ${name}`);
+  const kitVisual = step("Kit events-index visual");
+  const honoVisual = step("Visual regression");
+  const browserJourneys = step("Critical browser journeys");
+  const parityJourneys = step("Kit journey parity (Hono vs built Kit Worker)");
+  assert(kitVisual >= 0, "the dedicated Kit events-index visual step must exist");
+  assert(kitVisual < honoVisual, "Kit visual must run before Hono visual fixture setup");
+  assert(honoVisual < browserJourneys, "Hono visual must run before mutating journeys");
+  assert(browserJourneys < parityJourneys, "parity journeys remain after browser mutations");
+  assert.match(
+    e2eWorkflow,
+    /name: Kit events-index visual\n\s+run: >-\n\s+npx playwright test --config playwright\.kit-parity\.config\.ts\s+e2e\/kit-parity\/events-index\.visual\.spec\.ts/,
+  );
+  assert.match(
+    e2eWorkflow,
+    /name: Kit journey parity \(Hono vs built Kit Worker\)[\s\S]*?run: >-\n\s+npx playwright test --config playwright\.kit-parity\.config\.ts\s+e2e\/kit-parity\/parity\.spec\.ts/,
+  );
 });
 
 test("the required check runs the parity selftests in their own fail-closed step", () => {
