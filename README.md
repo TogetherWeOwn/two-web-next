@@ -228,16 +228,15 @@ guest 401 refusals for `/events.json` and `/events/:key`, the collection paging
 envelope (`data/page/limit` plus `meta.current_page/per_page/total/last_page`),
 the JSON show shape for the first collection row (or the exact cancelled 410
 envelope when that row is cancelled), a 410 probe against a cancelled fixture
-when the first page has one, and the malformed-key 422/404 refusals. Until
-PR #109 (`GET /events/:key` show route plus the collection `meta` envelope)
-is deployed, the checker detects the missing show route (guest probe gets the
-app's branded 404) and skips the five contract-dependent checks visibly
-instead of failing the deploy; probes that already hold on main (guest
-collection 401, QA login, malformed `event_key` 422) stay unconditional. The
-step retries six times like the public smoke, refuses any non-staging origin
-(production included), and never logs the token, cookies or response bodies.
-It needs the `staging`-environment `QA_AUTH_TOKEN` secret; without it the step
-reports its skip and passes, so a missing token never fails a deploy.
+when the first page has one, and the malformed-key 422/404 refusals. Every
+listed contract check runs on each probe; a missing route or malformed response
+fails the smoke rather than being treated as pending. Data-dependent checks
+still report their skips when staging has no events or no cancelled fixture,
+and the loud-skip ledger records those results. The step retries six times like
+the public smoke, refuses any non-staging origin (production included), and
+never logs the token, cookies or response bodies. It needs the
+`staging`-environment `QA_AUTH_TOKEN` secret; without it the step reports its
+skip and passes, so a missing token never fails a deploy.
 
 Deployment context: the top-level Wrangler configuration names Worker
 `two-web-next` and the `next.togetherweown.com` route; it has no named

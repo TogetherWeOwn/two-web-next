@@ -2,8 +2,8 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 
-// Staging-only post-deploy probe for the session-gated event JSON contract
-// (TOG-11769; route contract from PR #109): collection paging envelope,
+// Staging-only post-deploy probe for the session-gated event JSON contract:
+// collection paging envelope,
 // JSON show shape, cancelled 410 envelope. Authenticates through the staging
 // QA seam (POST /auth/qa/qa-member with X-TWO-QA-Auth, same-origin POST) as
 // the non-moderator qa-member identity, so drafts stay hidden and the first
@@ -18,12 +18,6 @@ import { pathToFileURL } from "node:url";
 // QA bad-token 404 is indistinguishable from a missing-route 404. Failure
 // output names attributes and states only, never a token or cookie value.
 //
-// Contract gate: PR #109 (GET /events/:key show route + collection `meta`
-// envelope) may not be deployed yet. The collection response decides: a 200
-// without the `meta` envelope means the contract is pending, so the
-// contract-dependent checks SKIP visibly instead of failing the deploy.
-// Probes that already hold on main (guest collection 401, QA login, malformed
-// event_key 422) stay unconditional.
 
 export const STAGING_ORIGIN = "https://next.togetherweown.com";
 const QA_IDENTITY = "qa-member";
@@ -36,7 +30,7 @@ const MISSING_ROUTE = "/auth/json-smoke-missing-route";
 // Well-formed Crockford key with no fixture behind it: the guest gate runs
 // before the row lookup, so this proves guest 401 without staging data.
 const ABSENT_KEY = "0".repeat(26);
-// PR #109 row shape, asserted as a required subset (never exact order) so
+// Show row shape, asserted as a required subset (never exact order) so
 // additive fields stay deploy-safe. `id` must never leave the server.
 const REQUIRED_SHOW_KEYS = [
   "event_key",
@@ -339,10 +333,7 @@ export async function jsonSmoke(
       },
     });
 
-  // Guest refusals run before login and carry no cookie. The collection 401
-  // gate exists on main already; the show 401 only exists once PR #109's
-  // GET /events/:key route is deployed (before that, an unknown path returns
-  // the app's branded 404), so it is contract-gated below.
+  // Guest refusals run before login and carry no cookie.
   try {
     const response = await get("/events.json");
     const body = parseBody(await response.text());
@@ -366,12 +357,6 @@ export async function jsonSmoke(
     );
   }
 
-  // Contract probe: PR #109's show route. 401 means the route (and its auth
-  // gate) is deployed; the app's branded 404 means the route is not there yet
-  // and the contract-dependent checks below must skip instead of fail. Any
-  // other outcome (503, timeout, …) is a real failure, never a pass.
-  let contractPending = false;
-  const contractPendingNote = "event JSON contract not deployed yet (PR #109 pending)";
   try {
     const response = await get(`/events/${ABSENT_KEY}`);
     const body = parseBody(await response.text());
@@ -382,9 +367,6 @@ export async function jsonSmoke(
       response.headers.get("location") === null
     ) {
       pass("guest show refusal");
-    } else if (response.status === 404) {
-      contractPending = true;
-      skip("guest show refusal", contractPendingNote);
     } else {
       fail(
         "guest show refusal",
@@ -436,32 +418,11 @@ export async function jsonSmoke(
   const authed = [];
   const checkAuthed = (label, fn) => authed.push([label, fn]);
 
-  // PR #109 pending means the collection has no `meta` paginator. A healthy
-  // pre-contract 200 ({data, page, limit}) skips visibly; anything else still
-  // fails so a genuinely broken staging deploy stays red.
   checkAuthed("collection paging envelope", async () => {
     try {
       const response = await get("/events.json", cookie);
       const body = parseBody(await response.text());
       const meta = body?.meta;
-      if (contractPending) {
-        if (
-          response.status === 200 &&
-          isJson(response) &&
-          Array.isArray(body?.data) &&
-          typeof body?.page === "number" &&
-          typeof body?.limit === "number"
-        ) {
-          skip("collection paging envelope", contractPendingNote);
-        } else {
-          fail(
-            "collection paging envelope",
-            "HTTP 200 {data, page, limit} pre-contract envelope",
-            `HTTP ${response.status}`,
-          );
-        }
-        return null;
-      }
       const ok =
         response.status === 200 &&
         isJson(response) &&
@@ -517,10 +478,6 @@ export async function jsonSmoke(
   });
 
   checkAuthed("JSON show", async (collection) => {
-    if (contractPending) {
-      skip("JSON show", contractPendingNote);
-      return;
-    }
     const rows = collection?.data ?? [];
     if (!rows.length) {
       const empty = collection && collection.meta?.total === 0 && collection.meta?.last_page === 1;
@@ -583,10 +540,6 @@ export async function jsonSmoke(
   });
 
   checkAuthed("cancelled show", async () => {
-    if (contractPending) {
-      skip("cancelled show", contractPendingNote);
-      return;
-    }
     try {
       const response = await get("/events.json?per_page=100", cookie);
       const body = parseBody(await response.text());
@@ -627,12 +580,6 @@ export async function jsonSmoke(
   });
 
   checkAuthed("malformed show key", async () => {
-    // Pre-contract this path hits the app's branded HTML 404, not the JSON
-    // show route's {error: not_found}.
-    if (contractPending) {
-      skip("malformed show key", contractPendingNote);
-      return;
-    }
     try {
       const response = await get("/events/bad-key", cookie);
       const body = parseBody(await response.text());

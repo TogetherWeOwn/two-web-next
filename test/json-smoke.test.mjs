@@ -20,17 +20,15 @@ import {
   skippedLedgerEntries,
 } from "../bin/json-smoke.mjs";
 
-// Loopback implementation of the PR #109 JSON contract plus the staging QA
+// Loopback implementation of the event JSON contract plus the staging QA
 // seam: same-origin POST login issuing the session and status cookies, guest
 // 401 refusals, paging envelope, show shape, the cancelled 410 envelope, page
 // view rotation, /auth/status and logout revocation. Never touches a Worker,
 // database or external network. Secret-bearing values carry a marker
 // so every test can prove they never reach the output.
 //
-// Pre-contract mode: until PR #109 deploys, the show route does not exist, so
-// guests get the app's branded HTML 404 there and the collection has no
-// `meta` paginator. Tests opt in via `preContract(result)`, which rewrites the
-// guest-show and collection responses to that shape.
+// `missingShowRoute` mode verifies the show-route probes fail rather than
+// skipping when the JSON endpoint is unexpectedly absent.
 const TOKEN = "qa-token-never-log-this";
 const SESSION = "session-never-log-this";
 const ROTATED = "rotated-session-never-log-this";
@@ -158,6 +156,8 @@ function route(request, origin, state, options) {
     }
     return ["home", html(200, "<html>home</html>")];
   }
+  if (options.missingShowRoute && /^\/events\/(?!\.json$)/.test(url.pathname))
+    return ["missing-show", notFound()];
   if (!authed) {
     if (url.pathname === "/events.json")
       return ["guest-collection", json(401, '{"error":"unauthenticated"}')];
@@ -183,7 +183,7 @@ function route(request, origin, state, options) {
 async function stub(
   t,
   change = () => {},
-  { preContract = false, rotate = true, revoke = true } = {},
+  { missingShowRoute = false, rotate = true, revoke = true } = {},
 ) {
   const requests = [];
   const state = { live: new Set(), rays: 0 };
@@ -209,19 +209,7 @@ async function stub(
         qa: request.headers["x-two-qa-auth"],
         cookie: request.headers.cookie,
       });
-      const [id, result] = route(request, origin, state, { rotate, revoke });
-      if (preContract) {
-        // The show route does not exist yet: branded HTML 404, and the
-        // collection has no `meta` paginator (main's {data, page, limit}).
-        if (id === "guest-show") {
-          result.status = 404;
-          result.headers = { "content-type": "text/html; charset=utf-8" };
-          result.body = "<html>not found</html>";
-        }
-        if (id === "collection" || id === "gone-scan") {
-          result.body = JSON.stringify({ data: [pub, goneRow], page: 1, limit: 20 });
-        }
-      }
+      const [id, result] = route(request, origin, state, { rotate, revoke, missingShowRoute });
       change(id, result, {
         originHeader: request.headers.origin,
         qaHeader: request.headers["x-two-qa-auth"],
@@ -499,47 +487,40 @@ test("accepts a staging page with no cancelled event", async (t) => {
   );
 });
 
-test("skips visibly while the show route is undeployed (PR #109 pending)", async (t) => {
-  const { url } = await stub(t, () => {}, { preContract: true });
+test("fails every show probe when the show route is unexpectedly missing", async (t) => {
+  const { url, requests } = await stub(t, () => {}, { missingShowRoute: true });
   const result = await run(url);
-  assert.equal(result.ok, true, result.output);
-  assert.match(result.output, /json-smoke: 14 checks, 0 failed, 5 skipped/);
-  for (const label of ["guest collection refusal", "QA login", "malformed event_key filter"]) {
-    assert.ok(result.output.includes(`PASS ${label}`), `${label}: ${result.output}`);
+  assert.equal(result.ok, false, result.output);
+  assert.match(result.output, /json-smoke: 14 checks, 4 failed, 0 skipped/);
+  for (const label of ["guest show refusal", "JSON show", "cancelled show", "malformed show key"]) {
+    assert.ok(result.output.includes(`FAIL ${label}`), `${label}: ${result.output}`);
   }
-  for (const label of [
-    "guest show refusal",
-    "collection paging envelope",
-    "JSON show",
-    "cancelled show",
-    "malformed show key",
+  for (const path of [
+    `/events/${"0".repeat(26)}`,
+    `/events/${PUB_KEY}`,
+    `/events/${GONE_KEY}`,
+    "/events/bad-key",
   ]) {
     assert.ok(
-      result.output.includes(
-        `SKIP ${label}: event JSON contract not deployed yet (PR #109 pending)`,
-      ),
-      `${label}: ${result.output}`,
+      requests.some((request) => request.path === path),
+      `${path}: ${JSON.stringify(requests)}`,
     );
   }
   assert.ok(!result.output.includes("never-log-this"), result.output);
 });
 
-test("still fails a broken pre-contract collection instead of skipping", async (t) => {
-  const { url } = await stub(
-    t,
-    (id, result) => {
-      if (id === "collection") {
-        result.status = 503;
-        result.body = "upstream fallback";
-      }
-    },
-    { preContract: true },
-  );
+test("fails a broken collection contract instead of skipping", async (t) => {
+  const { url } = await stub(t, (id, result) => {
+    if (id === "collection") {
+      result.status = 503;
+      result.body = "upstream fallback";
+    }
+  });
   const result = await run(url);
   assert.equal(result.ok, false, result.output);
   assert.ok(
     result.output.includes(
-      "FAIL collection paging envelope: expected HTTP 200 {data, page, limit} pre-contract envelope",
+      "FAIL collection paging envelope: expected HTTP 200 {data, page, limit, meta.current_page/per_page/total/last_page}",
     ),
     result.output,
   );
@@ -1233,10 +1214,18 @@ test("the probe writes a per-check JSON ledger without secrets", async (t) => {
   assert.ok(!JSON.stringify(ledger).includes("never-log-this"), JSON.stringify(ledger));
 });
 
-test("the ledger records skipped exposure guards with their reason", async (t) => {
+test("the ledger records legitimate skipped exposure guards with their reason", async (t) => {
   const dir = scratchDir(t);
   const ledgerPath = join(dir, "ledger.json");
-  const { url } = await stub(t, () => {}, { preContract: true });
+  const empty = {
+    data: [],
+    page: 1,
+    limit: 20,
+    meta: { current_page: 1, per_page: 20, total: 0, last_page: 1 },
+  };
+  const { url } = await stub(t, (id, result) => {
+    if (id === "collection" || id === "gone-scan") result.body = JSON.stringify(empty);
+  });
   const output = [];
   const ok = await jsonSmoke(url, {
     token: TOKEN,
@@ -1245,21 +1234,16 @@ test("the ledger records skipped exposure guards with their reason", async (t) =
   });
   assert.equal(ok, true, output.join("\n"));
   const ledger = JSON.parse(readFileSync(ledgerPath, "utf8"));
-  assert.deepEqual(ledger.summary, { total: 14, passed: 9, failed: 0, skipped: 5 });
+  assert.deepEqual(ledger.summary, { total: 14, passed: 12, failed: 0, skipped: 2 });
   const guards = skippedExposureGuards(ledger.checks);
   assert.deepEqual(
     guards.map((entry) => entry.check),
-    [
-      "guest show refusal",
-      "collection paging envelope",
-      "JSON show",
-      "cancelled show",
-      "malformed show key",
-    ],
+    ["JSON show", "cancelled show"],
   );
-  for (const guard of guards) {
-    assert.equal(guard.reason, "event JSON contract not deployed yet (PR #109 pending)");
-  }
+  assert.deepEqual(
+    guards.map((entry) => entry.reason),
+    ["staging has no events", "no cancelled event on the first page"],
+  );
   // Non-guard skips never surface as exposure guards.
   assert.deepEqual(
     skippedExposureGuards([
