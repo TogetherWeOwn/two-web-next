@@ -82,6 +82,24 @@ test("the Kit fixture owns the live event detail only on its loopback worker", (
   assert.match(helper, /kitFixtureOwnsEventDetail/);
 });
 
+test("Kit snapshot updates are pinned and generated Kit baselines fail the CI guard", () => {
+  const config = readFileSync(new URL("../playwright.kit-parity.config.ts", import.meta.url), "utf8");
+  assert.match(config, /^  updateSnapshots: "missing",$/m);
+  // A missing template would send new images outside the workflow's checked directory.
+  assert.ok(
+    config.includes('snapshotPathTemplate: "{testDir}/../visual/__screenshots-kit__/{arg}{ext}"'),
+  );
+  const e2e = readFileSync(new URL("../.github/workflows/e2e.yml", import.meta.url), "utf8");
+  const step = e2e
+    .split(/\n      - /)
+    .find((entry) => entry.startsWith("name: Uncommitted visual baselines\n"));
+  assert(step, "browser-smoke must reject uncommitted visual baselines");
+  assert.match(
+    step,
+    /git status --porcelain -- e2e\/visual\/__screenshots__ e2e\/visual\/__screenshots-kit__/,
+  );
+});
+
 test("the required check runs the parity selftests in their own fail-closed step", () => {
   const step = job
     .split(/\n      - /)
