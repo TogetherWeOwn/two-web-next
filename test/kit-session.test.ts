@@ -715,25 +715,66 @@ describe("kitAuthStatusCookieFor (moderator admin documents only)", () => {
     const request = new Request("https://next.example.test/admin", {
       headers: { cookie: await pair(SESSION_COOKIE, token) },
     });
+    const moderatorLocals: KitLocals = {
+      status: "authenticated",
+      session: { userId: "42", username: "Rick", avatar: null, member: true, moderator: true },
+      returnTo: null,
+      joinResult: null,
+      expiredWrite: null,
+    };
     const base: HookEventLike = {
       request,
       url: new URL(request.url),
       route: { id: "/admin" },
-      locals: {
-        status: "authenticated",
-        session: { userId: "42", username: "Rick", avatar: null, member: true, moderator: false },
-        returnTo: null,
-        joinResult: null,
-        expiredWrite: null,
-      },
+      locals: moderatorLocals,
     };
-    expect(await writeCookie(base)).toBeNull();
+    expect(
+      await writeCookie({
+        ...base,
+        locals: {
+          ...moderatorLocals,
+          session: { ...moderatorLocals.session!, moderator: false },
+        },
+      }),
+    ).toBeNull();
     expect(
       await writeCookie({
         ...base,
         url: new URL("https://next.example.test/events/past"),
       }),
     ).toBeNull();
+    expect(
+      await writeCookie({
+        ...base,
+        request: new Request(request.url, { method: "POST", headers: request.headers }),
+      }),
+    ).toBeNull();
     expect(statusHash).not.toHaveBeenCalled();
+  });
+
+  it("returns no probe when the status hash lookup throws", async () => {
+    const store = createMemorySessionStore();
+    const { token } = await seedSession(store, { moderator: true });
+    const statusHash = vi.spyOn(store, "statusHash").mockRejectedValueOnce(new Error("store down"));
+    const request = requestWith([await pair(SESSION_COOKIE, token)], "GET", "/admin");
+    const event: HookEventLike = {
+      request,
+      url: new URL(request.url),
+      route: { id: "/admin" },
+      locals: {
+        status: "authenticated",
+        session: { userId: "42", username: "Rick", avatar: null, member: true, moderator: true },
+        returnTo: null,
+        joinResult: null,
+        expiredWrite: null,
+      },
+    };
+    const writeCookie = kitAuthStatusCookieFor({
+      SESSION_SECRET: SECRET,
+      SESSION_STORE: store,
+    } as unknown as Env);
+
+    expect(await writeCookie(event)).toBeNull();
+    expect(statusHash).toHaveBeenCalledTimes(1);
   });
 });
