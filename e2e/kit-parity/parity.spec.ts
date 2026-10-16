@@ -51,7 +51,7 @@ test.afterAll(async () => {
     if (memberRsvpCreated) {
       const hono = targets.find((target) => target.name === "hono")!;
       const withdrawn = await api(hono).delete(`/events/${SEEDED_EVENT_KEY}/rsvp`, {
-        headers: { cookie: await honoMemberCookie(), Origin: "https://localhost:8787" },
+        headers: { cookie: await memberCookie(hono), Origin: "https://localhost:8787" },
       });
       expect(withdrawn.status(), "ranked RSVP withdrawn").toBe(204);
     }
@@ -107,12 +107,22 @@ function honoMemberCookie(): Promise<string> {
 
 async function memberCookie(target: ParityTarget): Promise<string> {
   const pair = await honoMemberCookie();
-  if (target.name !== "kit") return pair;
-  const eq = pair.indexOf("=");
-  const signed = pair.slice(eq + 1);
+  // Freshest wins: rotating page reads (GET /events, GET /e/:key) delete the
+  // presented bearer's row and deliver the replacement via Set-Cookie into
+  // Hono's jar. Kit has a separate cookie signature, but shares that same
+  // session row, so it must re-sign the jar's current pair when a rotation
+  // has already run.
+  const hono = targets.find((candidate) => candidate.name === "hono")!;
+  const state = await api(hono).storageState();
+  const current = state.cookies.find((cookie) => cookie.name === "__Host-two_session");
+  const source = current ? `${current.name}=${current.value}` : pair;
+  if (target.name !== "kit") return source;
+
+  const eq = source.indexOf("=");
+  const signed = source.slice(eq + 1);
   const raw = signed.slice(0, signed.lastIndexOf("."));
   const signature = createHmac("sha256", kitFixtureSessionSecret()).update(raw).digest("base64");
-  return `${pair.slice(0, eq + 1)}${raw}.${signature}`;
+  return `${source.slice(0, eq + 1)}${raw}.${signature}`;
 }
 
 // The board's one ranked member: the QA viewer answers going to the seeded
@@ -435,6 +445,29 @@ for (const target of targets) {
       if (target.name === "kit")
         expect(kitFixtureOwnsMemberBoard(), "Kit fixture owns the member board").toBe(true);
       const expectedMarker = target.name === "kit" ? "kit" : null;
+      // Read-after-write across workers: the session row is committed by the
+      // single shared QA login moments earlier on the Hono worker, and this
+      // suite runs with retries: 0, so one first-read miss (an unknown
+      // session reads as a guest bounce, which the client follows onto Hono)
+      // must not fail the run. Poll the first view briefly; the strict
+      // asserts below still prove the contract on the settled read.
+      await expect
+        .poll(
+          async () => {
+            const ready = await api(target).get("/leaderboards/members", {
+              headers: { cookie },
+            });
+            return (
+              ready.status() === 200 &&
+              (ready.headers()["x-two-renderer"] ?? null) === expectedMarker
+            );
+          },
+          {
+            message: `${target.name} member board session becomes visible`,
+            timeout: 15000,
+          },
+        )
+        .toBe(true);
       // Ranked content, not just board chrome: the viewer's going RSVP on
       // the seeded 2099 event ranks them on the overall and relative
       // views, while the 2026 season window and the valheim game filter
@@ -726,12 +759,24 @@ test("cross-target: normalized archive sections match", async () => {
   ).toBe(sectionOf(bodies.get("hono")!, "past-events"));
 });
 
-test("cross-target: normalized events-calendar sections match", async () => {
+test("cross-target: normalized events-calendar sections match", async ({ playwright }) => {
   const bodies = new Map<string, string>();
   for (const target of targets) {
-    const response = await api(target).get("/events");
-    expect(response.status()).toBe(200);
-    bodies.set(target.name, normalizeOrigin(await response.text(), target.origin));
+    // Cookie-free by construction: the shared api() context accumulates the
+    // session cookie from the earlier QA-login journey, which would render
+    // the member view (no join pitch, no sign-in links) on Hono instead of
+    // the guest contract. A fresh context renders the guest view on both.
+    const guest = await playwright.request.newContext({
+      baseURL: target.origin,
+      ignoreHTTPSErrors: target.ignoreHTTPSErrors,
+    });
+    try {
+      const response = await guest.get("/events");
+      expect(response.status()).toBe(200);
+      bodies.set(target.name, normalizeOrigin(await response.text(), target.origin));
+    } finally {
+      await guest.dispose();
+    }
   }
   // Non-vacuous equality: the compared sections carry the seeded row, so
   // two empty lists cannot pass for parity.
