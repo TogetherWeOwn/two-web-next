@@ -25,6 +25,7 @@ expect Hono for the right reason.
 | `GET /admin/activity-log` | `web/src/routes/admin/activity-log/+page.svelte` (`csr=false`, shared `AdminShell.svelte` chrome per-child title, `decideKitAdminGuard` layout guard, shared `listActivityLog` projection with bounded subject/causer filters and newest-first paging plus a one-row lookahead, shared `formatActivityCauser` legacy labeling, ISO `<time datetime>` instants, no `properties` selection or render, no island; enablement blockers: same tab-sync probe as `GET /admin`) | activity_log/list (`admin.activity-log.index`, bridged moderator viewer; snowflake causers audited, legacy/null causers contribute no subject) | Hono (`enabled: false`) |
 | `GET /admin/events` | `web/src/routes/admin/events/+page.svelte` (`csr=false`, shared `AdminShell.svelte` chrome per-child title, `decideKitAdminGuard` layout guard, shared bounded `listEvents` helper with a classified-outage 503 mapping, no island; only this GET migrates — `POST /admin/events`, `/new` and `/:key` stay Hono-owned, so the row forms keep submitting to the unchanged Hono handlers) | events/list (`admin.events.index`, bridged moderator viewer; subject-free `events` + `going-counts` reads, like the Hono handler) | Hono (`enabled: false`) |
 | `GET /admin/events/new` | `web/src/routes/admin/events/new/+page.svelte` (`csr=false`, shared `AdminShell.svelte` chrome per-child title, `decideKitAdminGuard` layout guard, empty `buildEventCreateView` with the Hono 422 values/errors shape, private no-store, shared `/islands/admin-event-text-limits.js` + `/islands/admin-event-editor.js` progressive islands; only this GET migrates — `POST /admin/events` stays Hono-owned, so draft-first creation, weekly recurrence (max 52), wall-time/timezone validation, body cap, throttle, error aggregation, retained values and the 303 keep one authority, and the guarded `/admin/events/create` legacy redirect stays Hono) | events/view (`admin.events.create`, bridged moderator viewer; no store read on fresh GET, like the Hono handler) | Hono (`enabled: false`) |
+| `GET /admin/events/create` | none (exact disabled manifest pin, no Kit handler; the guarded legacy redirect stays Hono-owned so the `:key` pattern cannot capture `/create` once enabled) | — (no declaration; Hono-owned) | Hono (`enabled: false`) |
 | `GET /admin/events/:key` | `web/src/routes/admin/events/[key]/+page.svelte` (`csr=false`, shared `AdminShell.svelte` chrome per-child title, `decideKitAdminGuard` layout guard, shared `getEvent` read with the Hono wall-value/status/series shape plus the Hono 422 values/errors shape, shared bounded `listRoster` page with the Hono search/sort/paging copy and a classified-outage 503 mapping, private no-store, plain POST forms to the Hono-owned edit/publish/cancel/RSVP-pause/RSVP-reopen endpoints, shared `/islands/admin-event-text-limits.js` + `/islands/admin-event-editor.js` progressive islands, no removal affordance; only this GET migrates — the update, transition and guarded `/:key/edit` legacy routes stay Hono-owned, so UTC carriers, future recurrence propagation and postcommit writeback keep one authority) | events/view (`admin.events.edit`, bridged moderator viewer; roster members audited, failed audit refuses the whole render) | Hono (`enabled: false`) |
 | `GET /admin/join-attempts` | `web/src/routes/admin/join-attempts/+page.svelte` (`csr=false` via the group layout, shared `listJoinAttempts`/`parseJoinAttemptsQuery`/`joinAttemptsUrl` reads with the retention window and exact Discord/request-id search, classified-outage 503 mapping, private no-store, no island; the detail links target the Kit detail page below) | join_attempts/list (`admin.join-attempts.index`, bridged moderator viewer) | Hono (`enabled: false`) |
 | `GET /admin/join-attempts/:id` | `web/src/routes/admin/join-attempts/[id]/+page.svelte` (`csr=false` via the group layout, shared `getJoinAttempt` retention-window lookup with the Hono canonical-ID admission, classified-outage 503 mapping, private no-store, no island; same outcome/source/time/trace fields, em-dash fallbacks and back navigation as the Hono detail, no raw provider/token payload) | join_attempts/view (`admin.join-attempts.show`, bridged moderator viewer) | Hono (`enabled: false`) |
@@ -32,6 +33,10 @@ expect Hono for the right reason.
 | `GET /profile` | `web/src/routes/profile/+page.svelte` (`csr=false`, one shared `web/src/lib/ProfileView.svelte`, member record + optional stats) | member (`profile`/`view`/`profile`) | Hono (`enabled: false`) |
 | `GET /members/:user` | `web/src/routes/members/[user]/+page.svelte` (same shared view; retired `/members` directory has no route) | member (`profile`/`view`/`profiles.show`) | Hono (`enabled: false`) |
 | `GET /e/:key` | `web/src/routes/e/[key]/+page.svelte` (`csr=false`, one shared `web/src/lib/EventDetail.svelte` over the `KitEventDetailModel` shape, existing `/islands/rsvp-button.js` + `/copy-link.js` + `/going-count.js`; JSON/ICS stay Hono-owned) | member (`member`/`list`/`events.page`, bridged viewer; disclosed attendee + own-RSVP subjects audited, anonymous releases with none) | Hono (`enabled: false`; enablement blocked on the RSVP companion) |
+| `GET /hotzones` | `web/src/routes/hotzones/+page.svelte` (`csr=false`, thin binding over `loadHotzonesIndexData` in `src/kit-hotzones.ts`, shared `renderHotzoneGrid`; season grammar 400s before any read, outage 503, anonymous board-view log, same `public, max-age=300` as the Hono handler) | public | Kit (`enabled: true`) |
+| `GET /hotzones/joins` | `web/src/routes/hotzones/[signal]/+page.svelte` (`csr=false`, thin binding over `loadHotzoneSignalData` in `src/kit-hotzones.ts`, shared `renderHotzoneGrid`; locked joins/voice/games vocabulary with unknown segments 404, live joins aggregate, same 400/503/log/cache shape as the Hono handler) | public | Kit (`enabled: true`) |
+| `GET /hotzones/voice` | `web/src/routes/hotzones/[signal]/+page.svelte` (same binding; serves the estimated prior grid, never a live aggregate) | public | Kit (`enabled: true`) |
+| `GET /hotzones/games` | `web/src/routes/hotzones/[signal]/+page.svelte` (same binding; serves the estimated prior grid, never a live aggregate) | public | Kit (`enabled: true`) |
 | `GET /leaderboards/members` | `web/src/routes/leaderboards/members/+page.svelte` (`csr=false`, thin binding over `src/kit-members.ts`: same gate order, season/scope/activity grammar, ranking read and `private, no-store` as `src/leaderboards/routes.tsx`; the anonymous board-view log is queued by the load and written after the member-read boundary releases a 200, never inside its capture) | leaderboard (`leaderboard`/`list`/`leaderboards.members`, bridged viewer) | Kit (`enabled: true`; enabled after the executed parity journey below earned the fresh privacy verdict) |
 | everything else | none yet (Kit `[...path]` catch-all → `honoFetch`) | — | Hono |
 
@@ -46,13 +51,26 @@ In the `check` job, Kit gates run after shell/runtime basics and before any
 claim of journey parity:
 
 1. Kit workspace install + `svelte-check` (shell basics)
-2. `node ci/kit-preview-e2e.mjs` (existing archive section contract, Hono
-   pg-proxy bundle vs Kit SSR bundle, plus the browser shell fixture)
-3. `node ci/kit-parity-gates.mjs` (this card: unit by default, preview when
-   both preview URLs are set)
+2. `node ci/kit-preview-e2e.mjs` (archive route only: section contract,
+   Hono pg-proxy bundle vs Kit SSR bundle, plus the browser shell fixture)
+3. `node ci/kit-parity-gates.mjs` (unit by default, preview when both
+   preview URLs are set; covers every `PARITY_ROUTES` entry including the
+   four hot-zone paths and the member board)
 4. `npm run build --prefix web`, then `node ci/check-kit-perf.mjs` (worker +
    generated-asset budgets against the measured baselines)
-5. `node ci/kit-worker-e2e.mjs` (built Worker runtime fixture)
+5. `node ci/kit-worker-e2e.mjs` (archive route on the built Worker runtime
+   fixture)
+
+Steps 1–5 spend no logins. Step 3 runs in unit mode in CI: no workflow sets
+the preview URLs or `KIT_PARITY_QA_TOKEN`. Preview-mode member-board checks
+are an operator-run gate and spend one QA login per base only when the token
+is set. The only authenticated Kit-parity journey in CI is `e2e:kit-parity` in
+`browser-smoke` (member board, one shared QA login); the critical `npm run e2e`
+journeys in the same job log in separately. The four hot-zone paths also
+have a dedicated browser journey in `e2e/kit-parity/parity.spec.ts`; CI
+additionally covers them through the
+fixture-based step-3 unit contract and the hot-zone Vitest suites. Preview
+fetches are operator-run evidence, not CI evidence.
 
 In `browser-smoke`, after the critical journeys:
 `e2e:kit-parity` (parameterized journeys vs Hono and the built Kit
@@ -82,12 +100,15 @@ Two modes, one assertion set per parity route:
   on a green ledger with no run. The heavyweight SSR
   byte-comparison stays in `ci/kit-preview-e2e.mjs`, which runs right before.
 - **Preview mode** (`KIT_PREVIEW_URL` + `HONO_PREVIEW_URL`): fetches each
-  parity route from both deployed Workers and applies the same helpers to
-  both (Kit: manifest-derived marker, Hono: always null),
-  plus a framework-tolerant section comparison
+  `PARITY_ROUTES` entry from both deployed Workers and applies the same
+  helpers to both (Kit: manifest-derived marker, Hono: always null),
+  plus a framework-tolerant section comparison on the archive paths only
   (`ci/kit-section-contract.mjs`, same treatment as `kit-preview-e2e.mjs`:
   hydration markers, boolean attributes and `>` escaping are
-  serializer-owned, never contract).
+  serializer-owned, never contract). Join, recovery, hot-zone and
+  member-board entries carry `compareSection: null`: widget state, retry
+  hrefs, live aggregates and per-viewer rows differ by design, so preview
+  proves their structural contracts instead of equal bytes.
 
 Per route the helpers assert: exact status, `content-type: text/html`, the
 renderer marker matching the manifest (Hono side: always null), exactly one
@@ -168,9 +189,13 @@ too: `KIT_WORKER_ORIGIN`, else derived from `KIT_WORKER_PORT` (the port
   actuals in the shared failure artifact. `ci/visual-accept.mjs` likewise
   ignores Kit suite outputs. An intentional redesign is a reviewed artifact
   committed in the same PR — reviewers treat a baseline change like code —
-  never a silent regeneration. (No Kit screenshots are captured yet: the
-  accept flow is ready for the first enabled route; the DOM/state parity for
-  it runs in the parity spec today.)
+  never a silent regeneration. (No Kit baselines are committed yet:
+  `__screenshots-kit__/` holds only `.gitkeep`, while the enabled routes are
+  `/events/past`, the four hot-zone paths and `/leaderboards/members`.
+  Archive/join DOM parity plus two-width overflow checks run in the parity
+  spec today; the hot-zone pages also have browser journey and responsive
+  navigation coverage there. CI additionally runs the fixture-based unit
+  contract and hot-zone Vitest suites; preview fetch is an operator-run check.)
 - `maxDiffPixels: 300` per screenshot (absolute, not a ratio), `<time>`
   masked, animations disabled, caret hidden. Raising the threshold or masking
   more needs its own PR with justification.
@@ -199,11 +224,13 @@ to 256B — the repository rule from `ci/bundle-budget.json`):
 
 ## Parameterized journeys (`playwright.kit-parity.config.ts`)
 
-`e2e/kit-parity/parity.spec.ts` runs the journeys — past archive
-paging/refusals, public feeds/SEO, reserved/API surface, cross-origin
+`e2e/kit-parity/parity.spec.ts` runs the journeys — past-archive
+paging/refusals, join-landing funnel, auth-recovery outcome, hot-zone grids
+and signal navigation, public feeds/SEO, reserved/API surface, cross-origin
 refusals, and the authenticated member-board journey (guest bounce, member
-views, grammar refusals; one shared QA login) — against both the Hono
-worker and the built Kit Worker in one run.
+views, grammar refusals; one shared QA login) — against both the Hono worker
+and the built Kit Worker in one run. The fixture-based unit contract and
+hot-zone Vitest suites also run in CI; preview fetch is an operator-run check.
 Bodies are origin-normalized before comparison (Hono pins the virtual
 staging origin, Kit pins its own `APP_URL`; host strings differ by design).
 The `webcal://` feed origins normalize to a distinct token from the
@@ -221,15 +248,24 @@ until their routes migrate; the gate ledger derives each entry from
 never quiet green, and never a `test.skip` call (the floor forbids new
 skips). An enabled route with no executed journey covering it records a
 failure instead of a skip: in-scope routes fail their journey (scope net),
-any other enabled route fails the uncovered-route catch-all (covered via
-`PARITY_ROUTES`: GET/HEAD `/events/past`, `/join`, `/auth/recover`, the four
-hot-zone paths, `/leaderboards/members`, `/about` and `/faq`).
+any other enabled route fails the uncovered-route catch-all. Executed
+browser journeys cover GET/HEAD `/events/past`, `/join`, `/auth/recover`, the
+four hot-zone paths and `/leaderboards/members` (the member board also runs
+authenticated). The unit contract also covers every `PARITY_ROUTES` entry,
+including `/about` and `/faq`; hot-zone Vitest suites run in CI. Preview fetch
+is an operator-run check, not CI evidence.
 
 ## Security
 
 No tokens, session cookies, Discord secrets or PII in any artifact, log or
-ledger. The parity specs send no QA token (no logins) and scrub every body;
-the gate ledgers are scanned for token shapes before upload. Token-bearing
-requests elsewhere go through `e2e/qa-request.mjs`; the failure-only scrub
+ledger. Public journeys (archive, join, recovery, feeds/SEO,
+reserved/API) send no QA token and run with no logins; the hot-zone unit
+contract also sends no token; the one shared
+authenticated journey is the member board — one shared QA login in
+`e2e:kit-parity` (bearer replayed to both targets, re-signed for the Kit
+fixture secret) and one login per base in preview-gate mode only when
+`KIT_PARITY_QA_TOKEN` is set. Every compared body is scrubbed and the gate
+ledgers are scanned for token shapes before upload. Token-bearing requests
+elsewhere go through `e2e/qa-request.mjs`; the failure-only scrub
 (`ci/scrub-qa-token.py` pattern) is the backstop. A token found in an
 artifact is exposed: report it to the COO the same hour.
