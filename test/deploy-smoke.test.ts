@@ -1,9 +1,27 @@
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
+
+// Tie the hermetic action mirror to the immutable production ref. A pin change
+// needs verified upstream hashes so local tests cannot cover stale code.
+const gradualPromoteHashesByRef: Record<string, { helper: string; manifest: string }> = {
+  "1dcce452d9066c02e4ab3d99931edf75d50388d7": {
+    helper: "435bbaddd824c6f6308dcf49a0036d746392b58b2df9468fd09c7a30f95756b6",
+    manifest: "f36dd63fa0651667768975268378538ac744e39811932970017ac66abed539b6",
+  },
+};
+
+function actionManifestSha256(content: string) {
+  const executableContent = content
+    .split(/\r?\n/)
+    .filter((line) => !/^\s*#/.test(line) && line.trim() !== "")
+    .join("\n");
+  return createHash("sha256").update(executableContent).digest("hex");
+}
 
 // Execute the staging workflow's actual shell block with a fake checker and sleep.
 // The checker itself has loopback-fixture coverage in smoke.test.mjs.
@@ -447,9 +465,19 @@ describe("production deploy smoke (offline)", () => {
     expect(workflow).toContain(
       "uses: TogetherWeOwn/.github/actions/gradual-promote@1dcce452d9066c02e4ab3d99931edf75d50388d7",
     );
+    const centralActionRef = workflow.match(
+      /uses: TogetherWeOwn\/\.github\/actions\/gradual-promote@([0-9a-f]{40})/,
+    )?.[1];
+    const expectedHashes = gradualPromoteHashesByRef[centralActionRef ?? ""];
+    expect(expectedHashes).toBeDefined();
+    const helperSha256 = createHash("sha256")
+      .update(readFileSync(".github/actions/gradual-promote/gradual-promote.mjs"))
+      .digest("hex");
+    expect(helperSha256).toBe(expectedHashes?.helper);
+    const action = readFileSync(".github/actions/gradual-promote/action.yml", "utf8");
+    expect(actionManifestSha256(action)).toBe(expectedHashes?.manifest);
     expect(workflow).toContain("domain: togetherweown.com");
     expect(workflow).not.toContain("next.togetherweown.com");
-    const action = readFileSync(".github/actions/gradual-promote/action.yml", "utf8");
     expect(action).toContain('default: "true"');
     for (const stage of ["5", "50", "100"]) {
       const block = action.match(
