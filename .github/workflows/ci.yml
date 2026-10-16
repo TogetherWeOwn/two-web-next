@@ -461,9 +461,11 @@ jobs:
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
         run: npm run test:shadow
       # Changed-lines WARN gate (quality-gates.md): added TS lines should be
-      # executed (80%). Reads the coverage this job just produced; warns only.
+      # executed (80%). Reads the coverage this job just produced; a missing
+      # report fails the step (fail closed). Docs-only and draft PRs skip via
+      # the scope guard in `if:`, never a file-presence check.
       - name: Patch coverage (WARN)
-        if: always() && (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && hashFiles('coverage/coverage-final.json') != ''
+        if: always() && (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
         run: npm run patch:coverage:selftest && npm run patch:coverage
       # Semgrep WARN gate (quality-gates.md): TS sinks + secret-shaped
       # literals. A planted warning must be detected before scanning the tree;
