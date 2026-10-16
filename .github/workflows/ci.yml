@@ -174,7 +174,11 @@ jobs:
             playwright-chromium-${{ runner.os }}-
       - run: npx playwright install --with-deps chromium
       - name: Chromium cancellation regressions
-        run: A11Y_BROWSER_TESTS=true node --test ci/a11y-lifecycle.test.mjs
+        env:
+          A11Y_BROWSER_TESTS: "true"
+        run: |
+          npx vitest run ci/audit-lifecycle.test.mjs --reporter=default --reporter=json --outputFile.json=artifacts/a11y/audit-lifecycle.json
+          node ci/a11y-require-executed.mjs artifacts/a11y/audit-lifecycle.json "audit lifecycle real Chromium signal cleanup" 2
       - name: RSVP keyboard-focus proof (real Chromium, loopback fixtures)
         run: RSVP_FOCUS_BROWSER_TESTS=true node --test ci/rsvp-focus-browser.test.mjs
       - name: Session recovery (local two-tab fixture, mocked OAuth)
