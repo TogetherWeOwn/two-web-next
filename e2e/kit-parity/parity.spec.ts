@@ -837,10 +837,14 @@ for (const target of targets) {
           if (viewport.name === "mobile") {
             // Contained, not clipped: every region scrolls the grid's 42rem
             // floor inside itself, so the page stays put and the cells remain
-            // reachable by panning the region.
-            const scrollable = (await scroll.evaluateAll(
-              "(nodes) => nodes.map((node) => node.scrollWidth > node.clientWidth)",
-            )) as unknown as boolean[];
+            // reachable by panning the region. The e2e tsconfig has no DOM lib,
+            // so type the element metrics structurally inside the callback.
+            const scrollable = await scroll.evaluateAll((nodes) =>
+              nodes.map((node) => {
+                const element = node as unknown as { scrollWidth: number; clientWidth: number };
+                return element.scrollWidth > element.clientWidth;
+              }),
+            );
             expect(
               scrollable,
               `${target.name} mobile ${path}: each grid scrolls inside its region`,
