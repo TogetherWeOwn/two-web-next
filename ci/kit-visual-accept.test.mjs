@@ -83,6 +83,60 @@ test("colliding sources refuse with nothing written", () => {
   assert.equal(writes, 0);
 });
 
+test("reviewed Kit actual supersedes the committed copy in the artifact", () => {
+  const workspace = scratch();
+  const artifact = scratch();
+  writeBytes(
+    join(artifact, "e2e", "visual", "__screenshots-kit__", "member-board-default-desktop.png"),
+    "stale-committed-bytes",
+  );
+  writeBytes(
+    join(artifact, "test-results-kit-parity", "member-board-default-desktop-actual.png"),
+    "reviewed-actual-bytes",
+  );
+  const result = acceptBaselines(artifact, {
+    cwd: workspace,
+    copy: (src, dest) => writeBytes(dest, readFileSync(src, "utf8")),
+  });
+  assert.equal(result.ok, true, result.message);
+  assert.deepEqual(result.accepted, ["member-board-default-desktop.png"]);
+  assert.equal(
+    readFileSync(join(workspace, KIT_SCREENSHOT_DIR, "member-board-default-desktop.png"), "utf8"),
+    "reviewed-actual-bytes",
+  );
+});
+
+test("reviewed actual and committed-only baselines are both accepted", () => {
+  const workspace = scratch();
+  const artifact = scratch();
+  writeBytes(
+    join(artifact, "test-results-kit-parity", "x", "a-actual.png"),
+    "changed-actual-bytes",
+  );
+  writeBytes(
+    join(artifact, "e2e", "visual", "__screenshots-kit__", "a.png"),
+    "stale-committed-bytes",
+  );
+  writeBytes(
+    join(artifact, "e2e", "visual", "__screenshots-kit__", "b.png"),
+    "committed-only-bytes",
+  );
+  const result = acceptBaselines(artifact, {
+    cwd: workspace,
+    copy: (src, dest) => writeBytes(dest, readFileSync(src, "utf8")),
+  });
+  assert.equal(result.ok, true, result.message);
+  assert.deepEqual(result.accepted, ["a.png", "b.png"]);
+  assert.equal(
+    readFileSync(join(workspace, KIT_SCREENSHOT_DIR, "a.png"), "utf8"),
+    "changed-actual-bytes",
+  );
+  assert.equal(
+    readFileSync(join(workspace, KIT_SCREENSHOT_DIR, "b.png"), "utf8"),
+    "committed-only-bytes",
+  );
+});
+
 test("Kit visual actuals in the shared artifact are admitted", () => {
   const workspace = scratch();
   const artifact = scratch();

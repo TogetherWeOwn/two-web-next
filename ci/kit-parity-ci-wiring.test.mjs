@@ -83,6 +83,59 @@ test("the Kit fixture owns the live event detail only on its loopback worker", (
   assert.match(helper, /kitFixtureOwnsEventDetail/);
 });
 
+test("Kit snapshot updates are pinned and generated Kit baselines fail the CI guard", () => {
+  const config = readFileSync(
+    new URL("../playwright.kit-parity.config.ts", import.meta.url),
+    "utf8",
+  );
+  assert.match(config, /^  updateSnapshots: "missing",$/m);
+  // A missing template would send new images outside the workflow's checked directory.
+  assert.ok(
+    config.includes('snapshotPathTemplate: "{testDir}/../visual/__screenshots-kit__/{arg}{ext}"'),
+  );
+  const e2e = readFileSync(new URL("../.github/workflows/e2e.yml", import.meta.url), "utf8");
+  const step = e2e
+    .split(/\n      - /)
+    .find((entry) => entry.startsWith("name: Uncommitted visual baselines\n"));
+  assert(step, "browser-smoke must reject uncommitted visual baselines");
+  assert.match(
+    step,
+    /git status --porcelain -- e2e\/visual\/__screenshots__ e2e\/visual\/__screenshots-kit__/,
+  );
+});
+
+test("visual tests re-seed and verify the board state after worker restarts", () => {
+  const spec = readFileSync(new URL("../e2e/kit-parity/parity.spec.ts", import.meta.url), "utf8");
+  const rsvpHelper = spec.match(
+    /function memberGoingRsvp\(\): Promise<void> \{([\s\S]*?)\n\}/,
+  )?.[1];
+  assert(rsvpHelper, "member RSVP helper must exist");
+  assert.match(
+    rsvpHelper,
+    /expect\(\[200, 201\], "ranked RSVP created or refreshed"\)\.toContain\(response\.status\(\)\)/,
+  );
+  assert.match(rsvpHelper, /memberCookie\(hono\)/);
+  assert.match(rsvpHelper, /\.catch\(\(error: unknown\) => \{\s*memberRsvpPromise = null;/);
+
+  const visuals = spec.match(
+    /test\.describe\("kit: member-board visuals", \(\) => \{([\s\S]*?)\n\}\);/,
+  )?.[1];
+  assert(visuals, "Kit member-board visual tests must exist");
+  const honoPoll = visuals.indexOf("api(hono).get(");
+  const seedRsvp = visuals.indexOf("await memberGoingRsvp();");
+  const kitPoll = visuals.indexOf("api(kit).get(");
+  const loadComplete = visuals.indexOf('await page.waitForLoadState("networkidle");');
+  const rankedRow = visuals.indexOf("const rankedRow");
+  const emptyBoard = visuals.indexOf("Nobody is ranked for this season and game yet.");
+  const screenshot = visuals.indexOf("toHaveScreenshot(");
+  assert(honoPoll >= 0 && honoPoll < seedRsvp && seedRsvp < kitPoll);
+  assert(loadComplete >= 0 && loadComplete < rankedRow && rankedRow < screenshot);
+  assert(emptyBoard >= 0 && emptyBoard < screenshot);
+  assert.match(visuals, /getByRole\("rowheader", \{ name: "QA Member" \}\)/);
+  assert.match(visuals, /rankedRow\.getByRole\("cell"\)\)\.toHaveText\(\["1", "1"\]\)/);
+  assert.match(visuals, /test\.setTimeout\(120_000\)/);
+});
+
 test("Kit visual baselines run on the clean seed before mutating browser journeys", () => {
   const step = (name) => e2eWorkflow.indexOf(`- name: ${name}`);
   const kitVisual = step("Kit visual regression");
@@ -111,7 +164,7 @@ test("the member RSVP cleanup flag is armed before parsing the response", () => 
   assert(memberGoingRsvp, "memberGoingRsvp must exist");
   assert.match(
     memberGoingRsvp,
-    /expect\(response\.status\(\), "ranked RSVP created"\)\.toBe\(201\);\s*memberRsvpCreated = true;\s*const body = \(await response\.json\(\)\)/,
+    /expect\(\[200, 201\], "ranked RSVP created or refreshed"\)\.toContain\(response\.status\(\)\);\s*memberRsvpCreated = true;\s*const body = \(await response\.json\(\)\)/,
   );
 });
 
