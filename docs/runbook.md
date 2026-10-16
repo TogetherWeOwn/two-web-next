@@ -987,10 +987,11 @@ note is a withdrawn proposal, not evidence that its proposed freeze was
 applied. No freeze is implied by this watch: any future freeze needs a
 separate declaration with new dates and explicit lift terms.
 Everything in this section is read-only or GET-only except that OAuth
-start/callback routes may write throttle records, and OAuth starts may issue or
-sweep one-use journey records; there are no other production writes, migrations,
-credential changes or queue purges. Any Sev-1 goes to containment below and the
-production rollback pointer, never to a live fix or a credential swap.
+start/callback routes may write throttle records, OAuth starts may issue or
+sweep one-use journey records, and OAuth callbacks may consume them; there are
+no other production writes, migrations, credential changes or queue purges. Any
+Sev-1 goes to containment below and the production rollback pointer, never to a
+live fix or a credential swap.
 
 **What to check:**
 
