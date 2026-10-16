@@ -54,8 +54,11 @@ claim of journey parity:
 2. `node ci/kit-preview-e2e.mjs` (archive route only: section contract,
    Hono pg-proxy bundle vs Kit SSR bundle, plus the browser shell fixture)
 3. `node ci/kit-parity-gates.mjs` (unit by default, preview when both
-   preview URLs are set; covers every `PARITY_ROUTES` entry including the
-   four hot-zone paths and the member board)
+   preview URLs are set; unit mode exercises the hot-zone and
+   member-board contract branches on canonical fixtures — per-entry
+   iteration over every `PARITY_ROUTES` entry, including the four
+   hot-zone paths, `?page=2` and the admission variants, happens only
+   in preview mode)
 4. `npm run build --prefix web`, then `node ci/check-kit-perf.mjs` (worker +
    generated-asset budgets against the measured baselines)
 5. `node ci/kit-worker-e2e.mjs` (built Worker archive route; `/about` and
@@ -68,10 +71,12 @@ are an operator-run gate and spend one QA login per base only when the token
 is set. The only authenticated Kit-parity journey in CI is `e2e:kit-parity` in
 `browser-smoke` (member board, one shared QA login); the critical `npm run e2e`
 journeys in the same job log in separately. The four hot-zone paths also
-have a dedicated browser journey in `e2e/kit-parity/parity.spec.ts`; CI
-additionally covers them through the
-fixture-based step-3 unit contract and the hot-zone Vitest suites. Preview
-fetches are operator-run evidence, not CI evidence.
+have a dedicated browser journey in `e2e/kit-parity/parity.spec.ts`
+(`parity.spec.ts:291-350` iterates all four signal paths on both
+targets); CI additionally covers the shared contract branch through
+the canonical-`/hotzones` fixture in the step-3 unit contract plus
+the hot-zone Vitest suites. Preview fetches are operator-run
+evidence, not CI evidence.
 
 In `browser-smoke`, after the critical journeys:
 `e2e:kit-parity` (parameterized journeys vs Hono and the built Kit
@@ -253,9 +258,12 @@ failure instead of a skip: in-scope routes fail their journey (scope net),
 any other enabled route fails the uncovered-route catch-all. Executed
 browser journeys cover GET/HEAD `/events/past`, `/join`, `/auth/recover`, the
 four hot-zone paths and `/leaderboards/members` (the member board also runs
-authenticated). The unit contract also covers every `PARITY_ROUTES` entry,
-including `/about` and `/faq`; hot-zone Vitest suites run in CI. Preview fetch
-is an operator-run check, not CI evidence.
+authenticated). The unit contract exercises the shared contract branches
+on canonical fixtures (one synthetic `/hotzones` shell, one member-board
+fixture, the `/about` and `/faq` leaves); per-path coverage of the four
+hot-zone signals comes from the executed browser journey above (and from
+preview mode when an operator runs it). Hot-zone Vitest suites run in CI.
+Preview fetch is an operator-run check, not CI evidence.
 
 ## Security
 
