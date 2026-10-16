@@ -75,8 +75,10 @@ async function buildKitRulesBundle(): Promise<{
       `
 import { render } from "svelte/server";
 import Page from ${JSON.stringify(join(worktree, "web/src/routes/rules/+page.svelte"))};
+import { LEAF_CRITICAL_CSS } from ${JSON.stringify(join(worktree, "src/leaf-critical-css.ts"))};
 export function renderPage(data) {
-  const { head, body } = render(Page, { props: { data } });
+  // Mirror the server load, which merges leafCss into the page data.
+  const { head, body } = render(Page, { props: { data: { ...data, leafCss: LEAF_CRITICAL_CSS } } });
   return "<head>" + head + "</head><body>" + body + "</body>";
 }
 `,
@@ -291,6 +293,8 @@ describe("Kit /rules parity with Hono", () => {
     // (cookies, locals, request, parent) would be a session/cookie read even
     // under a name the token list above does not know.
     expect(code).toMatch(/async \(\{\s*setHeaders\s*\}\)/);
+    // The leaf CSS reaches the page only through this load's data merge.
+    expect(code).toContain("leafCss: LEAF_CRITICAL_CSS");
     // The stamp is the only config-driven behavior: dropping RULES_LAST_UPDATED
     // (or APP_URL) must fail this pin rather than silently hide the date.
     expect(code).toMatch(/rulesPageData\(env\.APP_URL,\s*env\.RULES_LAST_UPDATED\)/);

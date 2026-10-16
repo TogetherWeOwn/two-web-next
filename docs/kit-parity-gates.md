@@ -13,10 +13,10 @@ expect Hono for the right reason.
 | `GET /` | `web/src/routes/+page.svelte` (`csr=false`, shared `src/home-copy` + readers, no island) | public | Hono (`enabled: false`) |
 | `GET /events/past` | `web/src/routes/events/past/+page.svelte` (`csr=false`, shared `/islands/past-events.js`) | public | Kit (`enabled: true`) |
 | `GET /events` | `web/src/routes/events/+server.ts` (no Svelte page, so no client entries/node; Hono calendar screen bytes via `src/kit-events-html.tsx`, shared `/islands/events-calendar.js`; `POST /events` and `/events.json` stay Hono) | public | Kit (`enabled: true`) |
-| `GET /about` | `web/src/routes/about/+page.svelte` (`csr=false`, shared `ContentLeaf.svelte`, `src/about-content.ts`) | public | Hono (`enabled: false`) |
+| `GET /about` | `web/src/routes/about/+page.svelte` (`csr=false`, shared `ContentLeaf.svelte`, `src/about-content.ts`) | public | Kit (`enabled: true`) |
 | `GET /privacy` | `web/src/routes/privacy/+page.svelte` (`csr=false`, shared `POLICY_MARKDOWN`/`POLICY_VERSION` source, no island) | public | Hono (`enabled: false`) |
 | `GET /rules` | `web/src/routes/rules/+page.svelte` (`csr=false`, shared `ContentLeaf.svelte`, `src/rules-content.ts`) | public | Hono (`enabled: false`) |
-| `GET /faq` | `web/src/routes/faq/+page.svelte` (`csr=false`, shared `ContentLeaf.svelte`, `src/faq-content.ts`) | public | Hono (`enabled: false`) |
+| `GET /faq` | `web/src/routes/faq/+page.svelte` (`csr=false`, shared `ContentLeaf.svelte`, `src/faq-content.ts`) | public | Kit (`enabled: true`) |
 | `GET /join` | `web/src/routes/join/+page.svelte` (`csr=false`, shared `/islands/join-widget.js`; `/join/discord` + `/join/callback` stay Hono) | public | Hono (`enabled: false`) |
 | `GET /admin` | `web/src/routes/admin/+page.svelte` (`csr=false`, shared `AdminShell.svelte` chrome, `decideKitAdminGuard` layout guard, bounded `dashboardJoinFunnel`/`topZeroResultSearches` widgets with a classified-outage 503 mapping, no island; enablement blockers: the moderator tab-sync probe — signed auth-status cookie plus `/islands/auth-status.js` script, `src/auth-status.ts` — is not ported, and the layout guard stays read-only with no cookie writes until the enablement slice lands it) | dashboard/view (`admin.dashboard`, bridged moderator viewer) | Hono (`enabled: false`) |
 | `GET /admin/featured` | `web/src/routes/admin/featured/+page.svelte` (`csr=false`, shared `AdminShell.svelte` chrome per-child title, `decideKitAdminGuard` layout guard, bounded shared `listFeatured` read with the Hono filter/sort/page shape and a classified-outage 503 mapping, publish/window status via the shared `featuredStatus()`, no island; the new link targets the Kit `/admin/featured/new` page, the edit links target the Kit `/admin/featured/:id` page, and the guarded `/admin/featured-contents` legacy redirects stay Hono) | featured_contents/list (`admin.featured.index`, bridged moderator viewer) | Hono (`enabled: false`) |
@@ -103,8 +103,11 @@ alternate and the flash privacy invariant; the join contract adds the
 one-click/invite actions, exactly one widget zone and the flash privacy invariant; the
 recovery contract adds the shared shell markers (`recovery-heading`,
 `recovery-retry`, `recovery-invite`), safe retry/invite hrefs and an
-unconditional private, no-store pin. Reserved paths (`/up`) and `POST /api/*`
-must never carry the Kit marker.
+unconditional private, no-store pin. The static-leaf contracts (`about`,
+`faq`) add the shared Leaf markers (h1 heading id, strap, `about-facts` /
+`faq-list` testids with the first question group, the same-origin `/join`
+action) and the public 3600s cache both handlers set. Reserved paths
+(`/up`) and `POST /api/*` must never carry the Kit marker.
 
 The member-board journeys are the authenticated arm. In preview mode they
 run only when `KIT_PARITY_QA_TOKEN` carries the staging QA token: the gate
@@ -222,9 +225,9 @@ until their routes migrate; the gate ledger derives each entry from
 never quiet green, and never a `test.skip` call (the floor forbids new
 skips). An enabled route with no executed journey covering it records a
 failure instead of a skip: in-scope routes fail their journey (scope net),
-any other enabled route fails the uncovered-route catch-all (today
-GET/HEAD `/events/past` and GET/HEAD `/events` via `PARITY_ROUTES` are
-covered).
+any other enabled route fails the uncovered-route catch-all (covered via
+`PARITY_ROUTES`: GET/HEAD `/events/past`, `/events`, `/join`, `/auth/recover`,
+the four hot-zone paths, `/leaderboards/members`, `/about` and `/faq`).
 
 ## Security
 

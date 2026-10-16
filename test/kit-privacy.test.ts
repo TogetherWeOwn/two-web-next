@@ -46,6 +46,8 @@ describe("Kit privacy port: single policy source", () => {
     expect(server).not.toMatch(/dbFor|ADMIN_DB|SESSION_STORE|kitSessionBridge|memberRead/);
     expect(server).toContain("public, max-age=3600");
     expect(server).toContain("csr = false");
+    // The leaf CSS reaches the page only through this load's data merge.
+    expect(server).toContain("leafCss: LEAF_CRITICAL_CSS");
   });
 
   it("registers a public, Hono-owned manifest entry", () => {

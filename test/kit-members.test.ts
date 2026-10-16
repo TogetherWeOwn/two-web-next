@@ -86,6 +86,15 @@ describe("Kit member-board load parity", () => {
     ]);
   });
 
+  it("moves the viewer mark when a different viewer loads the board", async () => {
+    const data = await loadMembersBoardData(args({ session: { ...memberSession, userId: "u-a" } }));
+    expect(data.rows.map((row) => row.username)).toEqual(["Ana", "Vic", "Bo"]);
+    expect(data.rows.map((row) => row.isViewer)).toEqual([true, false, false]);
+    expect(data.rows[0]).toMatchObject({ rank: 1, username: "Ana", isViewer: true });
+    expect("viewerId" in data).toBe(false);
+    expect(JSON.stringify(data)).not.toContain("u-a");
+  });
+
   it("passes the season window and normalized game to the ranking read", async () => {
     const loadRankingFn = vi.fn(async () => ranked);
     const queueBoardViewFn = vi.fn(() => {});

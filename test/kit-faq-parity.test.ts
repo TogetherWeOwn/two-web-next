@@ -15,6 +15,8 @@ import { beforeAll, describe, expect, it } from "vitest";
 import { normalizeSection } from "../ci/kit-section-contract.mjs";
 import { resolveRouteOwner, ROUTE_MANIFEST } from "../src/route-ownership";
 import { FAQS, faqPageData } from "../src/faq-content";
+import { transformContentLeafChunk } from "../src/kit-content-chunk";
+import { LEAF_CRITICAL_CSS } from "../src/leaf-critical-css";
 import { FAQS as screenFaqs } from "../src/screens/faq";
 import { canonicalUrl } from "../src/seo";
 import app from "./app";
@@ -62,8 +64,10 @@ async function buildKitFaqBundle(): Promise<{
       `
 import { render } from "svelte/server";
 import Page from ${JSON.stringify(join(worktree, "web/src/routes/faq/+page.svelte"))};
+import { LEAF_CRITICAL_CSS } from ${JSON.stringify(join(worktree, "src/leaf-critical-css.ts"))};
 export function renderPage(data) {
-  const { head, body } = render(Page, { props: { data } });
+  // Mirror the server load, which merges leafCss into the page data.
+  const { head, body } = render(Page, { props: { data: { ...data, leafCss: LEAF_CRITICAL_CSS } } });
   return "<head>" + head + "</head><body>" + body + "</body>";
 }
 `,
@@ -149,24 +153,24 @@ async function honoFaq() {
 }
 
 describe("faq manifest ownership", () => {
-  it("ships the native faq route disabled as public reads", () => {
+  it("ships the native faq route enabled as public reads", () => {
     expect(ROUTE_MANIFEST).toContainEqual({
       method: "GET",
       path: "/faq",
-      enabled: false,
+      enabled: true,
       reads: "public",
     });
   });
 
-  it("keeps /faq on Hono until enablement flips the manifest", () => {
-    expect(resolveRouteOwner({ method: "GET", path: "/faq" })).toBe("hono");
-    expect(resolveRouteOwner({ method: "HEAD", path: "/faq" })).toBe("hono");
+  it("owns /faq on Kit with Hono as the rollback", () => {
+    expect(resolveRouteOwner({ method: "GET", path: "/faq" })).toBe("kit");
+    expect(resolveRouteOwner({ method: "HEAD", path: "/faq" })).toBe("kit");
     expect(resolveRouteOwner({ method: "POST", path: "/faq" })).toBe("hono");
     expect(
       resolveRouteOwner({ method: "GET", path: "/faq" }, [
-        { method: "GET", path: "/faq", enabled: true, reads: "public" },
+        { method: "GET", path: "/faq", enabled: false, reads: "public" },
       ]),
-    ).toBe("kit");
+    ).toBe("hono");
   });
 });
 
@@ -280,6 +284,26 @@ describe("Kit /faq parity with Hono", () => {
     expect(html).not.toMatch(/DISCORD_BOT_TOKEN/i);
   });
 
+  it("serves the leaf CSS with zero render-blocking stylesheet links", () => {
+    // Same served contract as the Hono leaf (test/leaf-css-drift.test.ts):
+    // the exact hash-allowlisted block, no stylesheet link, and the Hono
+    // body class so the leaf block owns the canvas. This harness renders the
+    // page without +layout.svelte, so the layout asset SvelteKit adds on the
+    // built worker is folded in through the production hook transform
+    // (transformContentLeafChunk, via dispatchHookRequest): the assertion
+    // runs on the transformed document, and ci/kit-worker-e2e.mjs pins the
+    // same contract against the real built worker.
+    const html = transformContentLeafChunk(renderPage(faqPageData(APP_URL)));
+    expect(html).toContain(`<style>${LEAF_CRITICAL_CSS}</style>`);
+    expect(html).not.toContain('rel="stylesheet"');
+    expect(html).not.toMatch(/<link(?=[^>]*rel="preload")(?=[^>]*as="style")/);
+    expect(html).toContain('<body class="base-theme content-theme">');
+    // The content shell must not lean on the stripped layout stylesheet:
+    // no Tailwind utilities in the served class attributes (the leaf block
+    // owns every styled element). Re-adding one stays green nowhere else.
+    expect(html).not.toMatch(/class="[^"]*(lobby-|font-sans)/);
+  });
+
   it("pins the server load contract at the source level", () => {
     const raw = readFileSync(
       new URL("../web/src/routes/faq/+page.server.ts", import.meta.url),
@@ -295,6 +319,8 @@ describe("Kit /faq parity with Hono", () => {
     // (cookies, locals, request, parent) would be a session/cookie read even
     // under a name the token list above does not know.
     expect(code).toMatch(/async \(\{\s*setHeaders\s*\}\)/);
+    // The leaf CSS reaches the page only through this load's data merge.
+    expect(code).toContain("leafCss: LEAF_CRITICAL_CSS");
     // APP_URL is the only config-driven behavior: dropping it must fail this
     // pin rather than silently render a wrong canonical.
     expect(code).toMatch(/faqPageData\(env\.APP_URL\)/);

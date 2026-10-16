@@ -74,6 +74,28 @@ export const PARITY_ROUTES = [
     cache: "no-store, private",
     compareSection: null,
   },
+  // Static public leaves: DB-free reads from the shared content modules,
+  // Kit-owned with the same public 3600s cache as the Hono handlers
+  // (csr=false, no hydration bundle). No byte section compare: the
+  // frameworks serialize the shared sections differently, so preview proves
+  // the structural contract (heading, strap, testids, same-origin join
+  // action) on both sides instead of equal bytes.
+  {
+    path: "/about",
+    expectStatus: 200,
+    expectMarker: "manifest",
+    contract: "about",
+    cache: "public, max-age=3600",
+    compareSection: null,
+  },
+  {
+    path: "/faq",
+    expectStatus: 200,
+    expectMarker: "manifest",
+    contract: "faq",
+    cache: "public, max-age=3600",
+    compareSection: null,
+  },
   // Hot-zone heatmaps: public aggregates, Kit-owned with the same
   // reads as the Hono handlers. No byte section compare: the joins grid reads
   // live join_attempts/event rows, so Hono vs Kit bytes differ by design;
@@ -504,6 +526,10 @@ export function assertRouteContract({ label, html, headers, status, expected }) 
     failures.push(...assertJoinContract(label, html, get, expected));
   } else if (contract === "recovery") {
     failures.push(...assertRecoveryContract(label, html, get, expected));
+  } else if (contract === "about") {
+    failures.push(...assertAboutContract(label, html, get, expected));
+  } else if (contract === "faq") {
+    failures.push(...assertFaqContract(label, html, get, expected));
   } else if (contract === "hotzones") {
     if (!/hot zone/i.test(html)) failures.push(`${label}: hot-zone heading present`);
     if (!html.includes("<table>")) failures.push(`${label}: 7x24 grid table present`);
@@ -749,6 +775,77 @@ function assertRecoveryContract(label, html, get, expected) {
   if (html.includes("<script")) failures.push(`${label}: recovery ships no JavaScript`);
   if (html.includes("<iframe")) failures.push(`${label}: no iframe on the recovery page`);
   return failures;
+}
+
+// Static-leaf contracts (src/screens/about.tsx, src/screens/faq.tsx and
+// their Kit twins web/src/routes/about/, web/src/routes/faq/): DB-free
+// public reads from the shared content modules, csr=false so the contract
+// is in the raw fetch body. Both renderers share the Leaf shell — one h1
+// the content nav labels, the strap and lead, the fact/question testids
+// and the join action — with the public 3600s cache both handlers set.
+// The join action stays same-origin (/join): a leaf must never carry a
+// hostile outbound href.
+function leafJoinHrefOf(html, testid) {
+  const match =
+    html.match(new RegExp(`href="([^"]+)"[^>]*data-testid="${testid}"`)) ??
+    html.match(new RegExp(`data-testid="${testid}"[^>]*href="([^"]+)"`));
+  return match ? match[1] : null;
+}
+
+function assertLeafContract(label, html, get, expected, leaf) {
+  const failures = [];
+  if (expected.cache !== undefined && expected.cache !== null) {
+    const actual = get("cache-control") ?? "";
+    const allowed = Array.isArray(expected.cache) ? expected.cache : [expected.cache];
+    if (!allowed.includes(actual))
+      failures.push(
+        `${label}: cache-control ${JSON.stringify(actual)} not in ${allowed.join(" | ")}`,
+      );
+  }
+  const cacheActual = get("cache-control") ?? "";
+  if (cacheActual !== "public, max-age=3600")
+    failures.push(`${label}: leaf keeps the shared public cache contract`);
+  if (!html.includes(`<h1 id="${leaf.headingId}">${leaf.heading}</h1>`))
+    failures.push(`${label}: leaf heading present`);
+  if (!html.includes(`<p class="strap">${leaf.strap}</p>`))
+    failures.push(`${label}: leaf strap present`);
+  for (const testid of leaf.testids) {
+    if (!html.includes(`data-testid="${testid}"`))
+      failures.push(`${label}: leaf section ${testid} present (no-JS content)`);
+  }
+  const join = leafJoinHrefOf(html, leaf.joinTestid);
+  if (join === null) failures.push(`${label}: join action readable`);
+  else if (join !== "/join") failures.push(`${label}: join action stays same-origin /join`);
+  for (const extra of leaf.extras ?? []) {
+    if (!html.includes(extra[0])) failures.push(`${label}: ${extra[1]}`);
+  }
+  if (html.includes("<script")) failures.push(`${label}: leaf ships no JavaScript`);
+  if (html.includes("<iframe")) failures.push(`${label}: no iframe on the leaf page`);
+  return failures;
+}
+
+function assertAboutContract(label, html, get, expected) {
+  return assertLeafContract(label, html, get, expected, {
+    headingId: "about-heading",
+    heading: "About Together We Own",
+    strap: "Est. 1998",
+    testids: ["about-facts"],
+    joinTestid: "about-join",
+    extras: [],
+  });
+}
+
+function assertFaqContract(label, html, get, expected) {
+  return assertLeafContract(label, html, get, expected, {
+    headingId: "faq-heading",
+    heading: "Frequently asked questions",
+    strap: "New here? Start here",
+    testids: ["faq-list"],
+    joinTestid: "faq-join",
+    // The first question group proves the shared FAQ source renders, not an
+    // empty shell around the join action.
+    extras: [[`id="faq-getting-in"`, "first question group present"]],
+  });
 }
 
 // Member-board contract (src/leaderboards/pages.tsx + Kit +page.svelte):
@@ -1449,6 +1546,123 @@ export function runUnitMode({ stdout = process.stdout, manifestSource: manifestO
         `unit: hotzones mutant ${name} fails`,
         failures.length > 0 ? "passed" : "failed",
         failures.length > 0 ? null : "mutant was NOT detected",
+      );
+    }
+  }
+
+  // Static-leaf fixtures: the two Kit-owned leaves get the same executed
+  // unit contract as the other parity routes, so an enabled leaf is covered
+  // by a run that actually exercises its contract branch — a missing facts
+  // list, join action or heading, a hostile join href, a missing first
+  // question group or a wrong cache TTL must fail here, not only in a
+  // preview fetch CI may never make.
+  const leavesListed = parseManifestEntries(manifestSource).some(
+    (entry) => entry.path === "/about" || entry.path === "/faq",
+  );
+  const leafShell = (path, inner) =>
+    `<html><head><link rel="canonical" href="https://next.togetherweown.com${path}"></head>` +
+    `<body><a class="skip-link" href="#main">Skip</a>` +
+    `<nav aria-label="Primary"><a href="/">Home</a></nav>` +
+    `<main id="main"><nav class="content-nav" aria-label="Community information"></nav>` +
+    `<section class="content-page">${inner}</section></main>` +
+    `<p><span class="account-caption">Welcome, guest</span></p></body></html>`;
+  const leafCases = [
+    [
+      "about",
+      "/about",
+      leafShell(
+        "/about",
+        `<h1 id="about-heading">About Together We Own</h1>` +
+          `<p class="strap">Est. 1998</p><p class="lead">An adult gaming community</p>` +
+          `<dl data-testid="about-facts" class="facts"></dl>` +
+          `<p><a class="btn" href="/join" data-testid="about-join">Join with Discord</a></p>`,
+      ),
+      [
+        ["no-facts", (html) => html.replace('data-testid="about-facts"', 'data-testid="x"')],
+        ["no-join", (html) => html.replace('data-testid="about-join"', 'data-testid="x"')],
+        ["wrong-heading", (html) => html.replace("About Together We Own", "About Us")],
+        ["hostile-join", (html) => html.replace('href="/join"', 'href="https://evil.test/"')],
+      ],
+    ],
+    [
+      "faq",
+      "/faq",
+      leafShell(
+        "/faq",
+        `<h1 id="faq-heading">Frequently asked questions</h1>` +
+          `<p class="strap">New here? Start here</p><p class="lead">Short answers</p>` +
+          `<div data-testid="faq-list">` +
+          `<section aria-labelledby="faq-getting-in"><h2 id="faq-getting-in">Getting in</h2></section></div>` +
+          `<p><a class="btn" href="/join" data-testid="faq-join">Join with Discord</a></p>`,
+      ),
+      [
+        ["no-list", (html) => html.replace('data-testid="faq-list"', 'data-testid="x"')],
+        ["no-join", (html) => html.replace('data-testid="faq-join"', 'data-testid="x"')],
+        ["wrong-heading", (html) => html.replace("Frequently asked questions", "Questions")],
+        ["hostile-join", (html) => html.replace('href="/join"', 'href="https://evil.test/"')],
+        [
+          "no-first-group",
+          (html) => html.replace(/<section aria-labelledby="faq-getting-in">.*?<\/section>/, ""),
+        ],
+      ],
+    ],
+  ];
+  if (leavesListed) {
+    for (const [contract, path, shell, mutants] of leafCases) {
+      const leafMarker = expectedMarkerFor(manifestSource, path);
+      const leafFailures = assertRouteContract({
+        label: `unit/leaves ${path}`,
+        html: shell,
+        headers: headerMap({
+          "content-type": "text/html",
+          "x-two-renderer": leafMarker,
+          "cache-control": "public, max-age=3600",
+        }),
+        status: 200,
+        expected: { status: 200, marker: leafMarker, contract, cache: "public, max-age=3600" },
+      });
+      push(
+        `unit: leaves ${path} good fixture passes`,
+        leafFailures.length === 0 ? "passed" : "failed",
+        leafFailures.join("; ") || null,
+      );
+      for (const [name, mutate] of mutants) {
+        const failures = assertRouteContract({
+          label: `unit/leaves-mutant-${contract}-${name}`,
+          html: mutate(shell),
+          headers: headerMap({
+            "content-type": "text/html",
+            "x-two-renderer": leafMarker,
+            "cache-control": "public, max-age=3600",
+          }),
+          status: 200,
+          expected: { status: 200, marker: leafMarker, contract, cache: "public, max-age=3600" },
+        });
+        push(
+          `unit: leaves mutant ${contract} ${name} fails`,
+          failures.length > 0 ? "passed" : "failed",
+          failures.length > 0 ? null : "mutant was NOT detected",
+        );
+      }
+      // A shared-cacheable leaf served private must fail however the
+      // expected cache is pinned (the inverse of the join-flash pin: the
+      // leaf contract is public by design, and going private would break
+      // the shared-cache TTL both handlers set).
+      const privateFailures = assertRouteContract({
+        label: `unit/leaves-mutant-${contract}-private-cache`,
+        html: shell,
+        headers: headerMap({
+          "content-type": "text/html",
+          "x-two-renderer": leafMarker,
+          "cache-control": "private, no-store",
+        }),
+        status: 200,
+        expected: { status: 200, marker: leafMarker, contract, cache: "private, no-store" },
+      });
+      push(
+        `unit: leaves mutant ${contract} private-cache fails`,
+        privateFailures.length > 0 ? "passed" : "failed",
+        privateFailures.length > 0 ? null : "mutant was NOT detected",
       );
     }
   }

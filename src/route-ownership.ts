@@ -13,7 +13,8 @@
 // (query preserved, body unread) to whichever renderer owns it.
 
 import type { AccessSink } from "./access-log";
-import { robotsTagFor, securityHeadersFor } from "./headers";
+import { isContentLeafPath, robotsTagFor, securityHeadersFor } from "./headers";
+import { transformContentLeafChunk } from "./kit-content-chunk";
 import type { KitLocals } from "./kit-session";
 import { type MemberRead, memberReadResponse } from "./member-reads";
 import { SAME_ORIGIN_EXEMPTIONS, UNSAFE_METHODS } from "./same-origin";
@@ -41,9 +42,11 @@ export interface RouteDecision {
   path: string;
 }
 
-// The archive page, the events list and hot-zone heatmaps render natively;
-// the about/privacy/rules/faq/join/recovery/profile reads, member board and
-// admin routes stay on Hono until their enablement is reviewed. Production (the Hono Worker) sees no traffic change for a
+// The archive page, events list, hot-zone heatmaps, member board and the
+// about/faq leaves render natively; privacy/rules/join/recovery/profile reads
+// and admin routes stay on Hono until their enablement is reviewed. Returning
+// an enabled entry to `enabled: false` restores Hono ownership as the rollback.
+// Production (the Hono Worker) sees no traffic change for a
 // disabled path; the preview Worker moves a Kit-owned path back to Hono by
 // design — that is the rollback. Add one entry per migrated route, enabled
 // only when its Kit handler is ready to own the exact method/path. Only GET
@@ -57,10 +60,10 @@ export const ROUTE_MANIFEST: OwnedRoute[] = [
   { method: "GET", path: "/", enabled: false, reads: "public" },
   { method: "GET", path: "/events/past", enabled: true, reads: "public" },
   { method: "GET", path: "/events", enabled: true, reads: "public" },
-  { method: "GET", path: "/about", enabled: false, reads: "public" },
+  { method: "GET", path: "/about", enabled: true, reads: "public" },
   { method: "GET", path: "/privacy", enabled: false, reads: "public" },
   { method: "GET", path: "/rules", enabled: false, reads: "public" },
-  { method: "GET", path: "/faq", enabled: false, reads: "public" },
+  { method: "GET", path: "/faq", enabled: true, reads: "public" },
   { method: "GET", path: "/join", enabled: false, reads: "public" },
   // Moderator dashboard: member data, so the Kit branch renders
   // inside the member-read boundary with this declaration and the bridged
@@ -413,11 +416,19 @@ export interface HookEventLike {
   locals?: unknown;
 }
 
+// SvelteKit resolve options the core forwards for content leaves only.
+// Structural on purpose (no Kit import): transformPageChunk receives the
+// rendered HTML and returns its replacement. Every other route resolves
+// without options, exactly as before, so existing resolve stubs stay valid.
+export interface KitResolveOptions {
+  transformPageChunk?: (input: { html: string }) => string;
+}
+
 export interface HookDispatchDeps {
   appUrl: string;
   featuredImageHosts?: string;
   honoFetch: (request: Request) => Promise<Response>;
-  resolve: (event: HookEventLike) => Promise<Response>;
+  resolve: (event: HookEventLike, opts?: KitResolveOptions) => Promise<Response>;
   // Optional manifest override for tests. Production wiring never passes
   // one: the hook forwards only the loopback parity-fixture flag below and
   // the core alone turns flag + appUrl into the fixture route choice.
@@ -655,6 +666,16 @@ export async function dispatchHookRequest(
     response = await deps.pastArchive(event.request, () => deps.resolve(event));
   } else if (isEventsListPage && deps.eventsPage) {
     response = await deps.eventsPage(event.request, () => deps.resolve(event));
+  } else if (isContentLeafPath(route.path)) {
+    // Content leaves keep #808's zero-stylesheet contract on the served
+    // worker: the root layout's Tailwind asset is stripped after resolve and
+    // <body> gains the Hono body class, so the inlined leaf block owns the
+    // canvas with no render-blocking request. Gated on the manifest path
+    // (not the URL), so only Kit-owned leaves take it; disabled leaves never
+    // reach resolve. Every other public route resolves untouched.
+    response = await deps.resolve(event, {
+      transformPageChunk: ({ html }) => transformContentLeafChunk(html),
+    });
   } else {
     response = await deps.resolve(event);
   }
