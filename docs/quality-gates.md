@@ -54,7 +54,11 @@ not fail) unless marked HARD. All of them run on the existing runners only.
   edit, and deleting CONSTRAINTS.md fails as a threshold removal. Test renames are judged against the runner
   globs (vitest, Playwright specs under e2e/); e2e safety and ci selftest
   scripts run via enumerated paths (only ci/a11y-*.test.mjs runs via glob),
-  so any rename of those needs a waiver.
+  so any rename of those needs a waiver. Merge-queue squash messages hard-wrap
+  PR bodies at ~72 columns, so `unfoldFloorWaiverLines` joins nonblank
+  continuation lines after each `Floor-waiver:` line before matching;
+  path-based waiver parsing removes wrap-inserted spaces within the path
+  (`ci/floor-guard.mjs:205-229, 232-253`).
   Waivers are reasoned commit trailers (`test-deleted`, `assertion-removed`,
   `threshold-removed`, `new-exemption`) and every active one is printed to the
   log and the job summary for reviewer visibility. The ignore list is pinned
