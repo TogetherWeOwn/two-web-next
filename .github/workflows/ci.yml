@@ -709,7 +709,8 @@ jobs:
       # The result gates that used to sit in `check`, unchanged: a failing,
       # cancelled or (when selected) skipped upstream job fails this required
       # check. They moved here so `check` can start in parallel with those
-      # jobs; the aggregate step below still re-checks every verdict.
+      # jobs; the aggregate step below still re-checks the scope, check,
+      # audit and performance verdicts.
       - name: Require successful docs-links
         env:
           DOCS_LINKS_RESULT: ${{ needs.docs-links.result }}
