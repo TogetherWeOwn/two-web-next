@@ -104,6 +104,19 @@ def ok(message):
     PASS += 1
     print(f"ok: {message}")
 
+# Pin the live production default: db-backup.yml runs the script with no
+# PGDG_CLIENT_BIN override, so a stale default would fail the nightly backup
+# while every override-based case above still passes (mutant M1).
+HELPER_TEXT = HELPER.read_text()
+assert '${PGDG_CLIENT_BIN:-/usr/lib/postgresql/18/bin}' in HELPER_TEXT, "script default must be pg 18"
+assert 'postgresql-client-18' in HELPER_TEXT, "script must install pg 18 client"
+assert 'postgresql-client-17' not in HELPER_TEXT and '/17/bin' not in HELPER_TEXT, "stale pg 17 default"
+ok("script default installs/selects pg_dump 18")
+WORKFLOW_TEXT = (ROOT / ".github/workflows/db-backup.yml").read_text()
+assert 'PGDG_CLIENT_BIN' not in WORKFLOW_TEXT, "workflow must use the script default client"
+assert 'bash bin/backup-bootstrap.sh' in WORKFLOW_TEXT, "workflow must run the bootstrap script"
+ok("workflow uses the script default client with no override")
+
 with tempfile.TemporaryDirectory(prefix="backup-bootstrap-", dir=os.environ.get("PAPERCLIP_RUN_SCRATCH_DIR") or os.environ.get("PAPERCLIP_SCRATCH_DIR")) as tmp:
     root = Path(tmp)
     for directory in ("fakebin", "scratch", "keyrings", "sources", "client18"):
