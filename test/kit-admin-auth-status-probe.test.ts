@@ -34,7 +34,7 @@ const env: Env = {
   APP_URL,
   DISCORD_CLIENT_ID: "client-id",
   DISCORD_CLIENT_SECRET: "client-secret",
-  DISCORD_GUILD_ID: "326474832151838730",
+  DISCORD_GUILD_ID: "guild-id",
   DISCORD_INVITE_URL: "https://discord.gg/invite",
   DISCORD_BOT_TOKEN: "bot-token",
   DISCORD_MODERATOR_ROLE_IDS: "",
