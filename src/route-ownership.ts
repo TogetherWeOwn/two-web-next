@@ -245,20 +245,26 @@ export const ROUTE_MANIFEST: OwnedRoute[] = [
   },
 ];
 
-// Fixture-only manifest for the executed member-board parity journey. The
-// shipped manifest held /leaderboards/members on Hono until the fresh
-// privacy verdict, so the Playwright Kit fixture (ci/kit-worker-dev.mjs)
-// could otherwise only ever compare Hono against Hono. The fixture sets
-// KIT_PARITY_FIXTURE_MEMBER_BOARD=true on its own generated loopback
-// worker; this helper honours it only for an http loopback APP_URL, so a
-// deployed Kit Worker (preview workers.dev, staging, production) can never
-// enable the board through it. Returns undefined in every other case,
-// which leaves dispatch on the shipped manifest untouched and unmutated.
+// Fixture-only manifest for the executed parity journeys (member board +
+// live event detail). The shipped manifest held /leaderboards/members on Hono
+// until the fresh privacy verdict, so the Playwright Kit fixture
+// (ci/kit-worker-dev.mjs) could otherwise only ever compare Hono against
+// Hono; the live detail entry stays disabled until the RSVP companion passes,
+// so the same fixture enables it for its executed journey. The fixture sets
+// KIT_PARITY_FIXTURE_MEMBER_BOARD=true and/or
+// KIT_PARITY_FIXTURE_EVENT_DETAIL=true on its own generated loopback worker;
+// this helper honours them only for an http loopback APP_URL, so a deployed
+// Kit Worker (preview workers.dev, staging, production) can never enable
+// either route through them. Returns undefined when neither flag is set, which
+// leaves dispatch on the shipped manifest untouched and unmutated.
 export function fixtureManifestFor(env: {
   APP_URL?: string;
   KIT_PARITY_FIXTURE_MEMBER_BOARD?: string;
+  KIT_PARITY_FIXTURE_EVENT_DETAIL?: string;
 }): OwnedRoute[] | undefined {
-  if (env.KIT_PARITY_FIXTURE_MEMBER_BOARD !== "true") return undefined;
+  const wantBoard = env.KIT_PARITY_FIXTURE_MEMBER_BOARD === "true";
+  const wantDetail = env.KIT_PARITY_FIXTURE_EVENT_DETAIL === "true";
+  if (!wantBoard && !wantDetail) return undefined;
   let app: URL;
   try {
     app = new URL(env.APP_URL ?? "");
@@ -268,11 +274,13 @@ export function fixtureManifestFor(env: {
   if (app.protocol !== "http:") return undefined;
   // URL keeps the brackets on an IPv6 hostname ("[::1]").
   if (!["127.0.0.1", "localhost", "::1", "[::1]"].includes(app.hostname)) return undefined;
-  return ROUTE_MANIFEST.map((entry) =>
-    entry.method === "GET" && entry.path === "/leaderboards/members"
-      ? { ...entry, enabled: true }
-      : entry,
-  );
+  return ROUTE_MANIFEST.map((entry) => {
+    if (wantBoard && entry.method === "GET" && entry.path === "/leaderboards/members")
+      return { ...entry, enabled: true };
+    if (wantDetail && entry.method === "GET" && entry.path === "/e/:key")
+      return { ...entry, enabled: true };
+    return entry;
+  });
 }
 
 // Response header set only on the Kit-rendered branch of the hook, so the
@@ -434,12 +442,16 @@ export interface HookDispatchDeps {
   // one: the hook forwards only the loopback parity-fixture flag below and
   // the core alone turns flag + appUrl into the fixture route choice.
   manifest?: OwnedRoute[];
-  // Loopback Kit parity fixture flag, forwarded from env by the hook as a
-  // plain boolean (KIT_PARITY_FIXTURE_MEMBER_BOARD === "true"). Honoured
-  // only through fixtureManifestFor: exact flag plus an http loopback
-  // appUrl, so a deployed Worker can never enable the board through it.
-  // Absent or false leaves the shipped ROUTE_MANIFEST untouched.
+  // Loopback Kit parity fixture flags, forwarded from env by the hook as
+  // plain booleans (KIT_PARITY_FIXTURE_MEMBER_BOARD / _EVENT_DETAIL ===
+  // "true"). Honoured only through fixtureManifestFor: exact flags plus an
+  // http loopback appUrl, so a deployed Worker can never enable either route
+  // through them. Absent or false leaves the shipped ROUTE_MANIFEST untouched.
   fixtureMemberBoard?: boolean;
+  // Live event-detail fixture flag for the RSVP companion's executed journey:
+  // same loopback-only honouring as the board flag above. The shipped detail
+  // entry stays disabled; the fixture worker alone enables it.
+  fixtureEventDetail?: boolean;
   // Optional read-only session bridge. Runs only after a Kit
   // ownership decision and merges its decision into event.locals before
   // resolve, so Kit loads share one session decision. Absent by default:
@@ -604,6 +616,7 @@ export async function dispatchHookRequest(
       fixtureManifestFor({
         APP_URL: deps.appUrl,
         KIT_PARITY_FIXTURE_MEMBER_BOARD: deps.fixtureMemberBoard ? "true" : undefined,
+        KIT_PARITY_FIXTURE_EVENT_DETAIL: deps.fixtureEventDetail ? "true" : undefined,
       }) ??
       ROUTE_MANIFEST,
   );
