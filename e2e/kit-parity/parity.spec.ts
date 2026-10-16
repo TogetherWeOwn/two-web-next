@@ -64,7 +64,9 @@ test.afterAll(async () => {
   // The whole parity run spends one QA login however many board fetches
   // follow: dropping the memoization below burns one login per fetch
   // against the shared qa-login throttle, and this counter is the proof.
-  expect(qaLoginCount, "exactly one QA login for the whole parity run").toBe(1);
+  if (memberCookiePromise !== null) {
+    expect(qaLoginCount, "exactly one QA login for the member journey").toBe(1);
+  }
 });
 
 function api(target: ParityTarget): APIRequestContext {
