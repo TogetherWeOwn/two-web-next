@@ -208,14 +208,17 @@ too: `KIT_WORKER_ORIGIN`, else derived from `KIT_WORKER_PORT` (the port
   `test-results-kit-parity/`, as well as baselines under `__screenshots-kit__/`.
   An intentional redesign is a reviewed artifact
   committed in the same PR — reviewers treat a baseline change like code —
-  never a silent regeneration. Kit baselines pin the events index and member board:
-  `e2e/kit-parity/events-index.visual.spec.ts` captures the populated `/events`
-  state at desktop and mobile widths against the built Kit Worker as a guest.
-  It runs before mutable journeys and asserts exactly the three seeded upcoming
-  event rows plus the zero-RSVP count, so fixture leftovers cannot silently
-  become the reference image. `e2e/kit-parity/parity.spec.ts` captures member-board
-  default, relative, season and activity views at desktop and mobile widths,
-  reusing the journey's single shared QA login.
+  never a silent regeneration. Kit baselines pin the events index, member board,
+  and archive. `e2e/kit-parity/events-index.visual.spec.ts` captures the populated
+  `/events` state at desktop and mobile widths against the built Kit Worker as a
+  guest. It runs before mutable journeys and asserts exactly the three seeded
+  upcoming event rows plus the zero-RSVP count, so fixture leftovers cannot
+  silently become the reference image. `e2e/kit-parity/parity.spec.ts` captures
+  member-board default, relative, season and activity views at desktop and mobile
+  widths, reusing the journey's single shared QA login. The archive visual case
+  captures populated and out-of-range `/events/past` at desktop and mobile widths
+  against the built Kit Worker as a guest on the deterministic seeded past row;
+  its DOM/state parity runs in the same spec.
 - `maxDiffPixels: 300` per screenshot (absolute, not a ratio), `<time>`
   masked, animations disabled, caret hidden. Raising the threshold or masking
   more needs its own PR with justification.

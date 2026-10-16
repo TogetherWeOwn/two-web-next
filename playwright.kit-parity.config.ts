@@ -38,12 +38,12 @@ export default defineConfig({
     ["html", { open: "never", outputFolder: "playwright-report-kit-parity" }],
     ["json", { outputFile: "test-results/kit-parity-journeys.json" }],
   ],
-  // Kit visual baselines (docs/kit-parity-gates.md): events-index and member-board
-  // screenshots land in e2e/visual/__screenshots-kit__/, never the Hono directory.
-  // CI never rewrites an existing baseline ("missing" only creates absent ones);
-  // new baselines fail the uncommitted-baselines check for review via
-  // node ci/kit-visual-accept.mjs. Same absolute pixel budget as the Hono visual
-  // spec (playwright.visual.config.ts).
+  // Kit visual baselines (docs/kit-parity-gates.md): archive, events-index, and
+  // member-board screenshots land in e2e/visual/__screenshots-kit__/, never the
+  // Hono directory. CI never rewrites an existing baseline ("missing" only
+  // creates absent ones); new baselines fail the uncommitted-baselines check
+  // for review via node ci/kit-visual-accept.mjs. Same absolute pixel budget as
+  // the Hono visual spec (playwright.visual.config.ts).
   updateSnapshots: "missing",
   snapshotPathTemplate: "{testDir}/../visual/__screenshots-kit__/{arg}{ext}",
   expect: {
