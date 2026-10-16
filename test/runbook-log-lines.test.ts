@@ -1,6 +1,9 @@
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join, extname } from "node:path";
 import { describe, expect, it } from "vitest";
+// @ts-expect-error Standalone CI tooling has no declaration file.
+import { readWranglerConfig } from "../ci/wrangler-config.mjs";
+import { RECONCILE_CRON } from "../src/jobs/constants";
 
 const SRC_DIR = "src";
 const DOCS_PATH = "docs/runbook-logs.md";
@@ -131,5 +134,87 @@ describe("runbook log lines coverage", () => {
     }
 
     expect(missing).toHaveLength(0);
+  });
+});
+
+describe("missing sync-queue binding warning docs", () => {
+  const WARNING = "event write-back due but SYNC_EVENT_QUEUE is not bound";
+  const HEADING = "### Missing sync-queue binding warning";
+
+  /** The new runbook subsection, up to (not including) the next heading. */
+  function warningSection(): string {
+    const docs = readFileSync(DOCS_PATH, "utf8");
+    const start = docs.indexOf(HEADING);
+    expect(start, `missing ${HEADING} in ${DOCS_PATH}`).toBeGreaterThanOrEqual(0);
+    const rest = docs.slice(start + HEADING.length);
+    const next = rest.search(/\n#{1,3} /);
+    return next === -1 ? rest : rest.slice(0, next);
+  }
+
+  it("documents the exact warning at warn severity with its carried fields", () => {
+    const section = warningSection();
+    expect(section).toContain(WARNING);
+    expect(section).toContain("console.warn");
+    expect(section).toContain("eventKey");
+    expect(section).toContain("request_id");
+  });
+
+  it("explains the committed write, the sync gap, and the Operator route", () => {
+    const section = warningSection();
+    expect(section).toContain("remains committed");
+    expect(section).toContain("not evidence of Discord synchronization");
+    expect(section).toContain("Operator");
+  });
+
+  it("states reconcile recovery, the real request_id gap, and per-env bindings", () => {
+    const section = warningSection();
+    // Delayed, not lost: reconcile re-dispatches, unless jobs also lacks the binding.
+    expect(section).toContain("late, not lost");
+    expect(section).toContain("reconcileEvents");
+    expect(section).toContain("every 10");
+    expect(section).not.toContain("lost its carrier");
+    // Read-only per-event sync-state check, mirroring the enqueue-failed row.
+    expect(section).toContain(
+      "SELECT * FROM event_sync_attempts JOIN events ON events.id = event_sync_attempts.event_id WHERE events.event_key = '<eventKey>'",
+    );
+    expect(section).toContain("sync_revision, synced_revision");
+    // request_id is absent via the agent-events ingress, not scheduled/reconcile.
+    expect(section).toContain("POST /api/agent-events");
+    expect(section).toContain("agent_event_audits");
+    expect(section).not.toContain("absent for scheduled, reconcile");
+    // Top-level producers are staging; production declares its own block.
+    expect(section).toContain("env.production.queues.producers");
+    expect(section).toContain("two-web-next-production-sync-event");
+    expect(section).toContain("two-sync-event");
+    // Production reconcile runs on the web Worker: a missing binding there is stuck.
+    // Pin the ownership claim itself, not just the Worker name (which is a
+    // substring of the production queue name asserted above), and tie it to
+    // the wrangler configs so a handoff that moves the cron fails here.
+    expect(section).toContain(
+      "In the production cutover template this self-healing does not apply:",
+    );
+    expect(section).toContain("Worker `two-web-next-production` owns both");
+    expect(section).toContain("`*/10 * * * *` reconcile");
+    expect(section).toContain("cron (`env.production.triggers`, `wrangler.jsonc`)");
+    expect(section).toContain("stuck, not late");
+    expect(section).toContain("same `env.SYNC_EVENT_QUEUE`");
+    expect(section).toContain("which has no production env");
+    const production = readWranglerConfig(readFileSync("wrangler.jsonc", "utf8")).env?.production;
+    expect(production?.name).toBe("two-web-next-production");
+    expect(section).toContain(`Worker \`${production.name}\` owns both`);
+    expect(production?.triggers?.crons).toContain(RECONCILE_CRON);
+    expect(section).toContain(`\`${RECONCILE_CRON}\` reconcile`);
+    expect(production?.queues?.producers).toContainEqual({
+      queue: "two-web-next-production-sync-event",
+      binding: "SYNC_EVENT_QUEUE",
+    });
+    const jobsConfig = readWranglerConfig(readFileSync("wrangler.jobs.jsonc", "utf8"));
+    expect(jobsConfig.env ?? {}).not.toHaveProperty("production");
+  });
+
+  it("source still emits the warning with the documented fields", () => {
+    const source = readFileSync("src/events/sync.ts", "utf8");
+    expect(source).toContain(`console.warn("${WARNING}"`);
+    expect(source).toContain("request_id: message.requestId");
   });
 });
