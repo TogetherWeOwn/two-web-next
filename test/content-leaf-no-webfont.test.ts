@@ -22,7 +22,8 @@ describe("content leaves render without the Display webfont", () => {
       const selector = rule.slice(0, rule.indexOf("{"));
       const declarations = rule.slice(rule.indexOf("{"));
       if (!/Display/.test(declarations)) continue;
-      if (/^@font-face/.test(selector.trim())) continue;
+      const selectorWithoutComments = selector.replace(/\/\*[\s\S]*?\*\//g, "").trim();
+      if (/^@font-face/.test(selectorWithoutComments)) continue;
       if (!/:not\(\.content-theme\)/.test(selector)) offenders.push(selector.trim());
     }
     expect(offenders).toEqual([]);
