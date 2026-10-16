@@ -209,13 +209,24 @@ for (const target of targets) {
       expect(response.headers()["cache-control"]).toMatch(/^public, max-age=(?:[1-9]|[1-5]\d|60)$/);
       // Full and island-fragment representations share the URL and differ by
       // X-Two-Island, so Vary carries both tokens.
-      const eventsVary = response.headers()["vary"] ?? "";
-      expect(eventsVary).toMatch(/cookie/i);
-      expect(eventsVary).toMatch(/x-two-island/i);
+      const eventsVaryTokens = (response.headers()["vary"] ?? "")
+        .split(",")
+        .map((token) => token.trim().toLowerCase());
+      expect(eventsVaryTokens).toContain("cookie");
+      expect(eventsVaryTokens).not.toContain("x-cookie");
+      expect(eventsVaryTokens).toContain("x-two-island");
       const body = await response.text();
       expect(scrubSecrets(body)).toEqual([]);
       expect(body).toContain('data-island="events-calendar"');
       expect(body).toContain('data-testid="events-calendar"');
+      const canonicalHref = body.match(
+        /<link\b[^>]*\brel="canonical"[^>]*\bhref="([^"]+)"[^>]*>/,
+      )?.[1];
+      expect(canonicalHref).toBeDefined();
+      const canonical = new URL(canonicalHref!, target.origin);
+      expect(canonical.pathname).toBe("/events");
+      expect(canonical.search).toBe("");
+      expect(canonical.hash).toBe("");
       expect(body).toContain('data-testid="events-list"');
       expect(body).toContain('data-testid="events-view-list"');
       expect(body).toContain('data-testid="events-view-calendar"');
@@ -957,9 +968,10 @@ test("cross-target: normalized events-calendar sections match", async ({ playwri
   }
   // Non-vacuous equality: the compared sections carry the seeded row, so
   // two empty lists cannot pass for parity.
-  expect(bodies.get("hono"), "Hono section carries the seeded row").toContain(
-    "E2E Community Night",
-  );
+  expect(
+    sectionOf(bodies.get("hono")!, "events-calendar"),
+    "Hono events-calendar section carries the seeded row",
+  ).toContain("E2E Community Night");
   expect(
     sectionOf(bodies.get("kit")!, "events-calendar"),
     "Kit section matches Hono section after origin normalization",

@@ -437,6 +437,19 @@ describe("Kit events list query-state contract", () => {
     expect(fragment.deleteJoinCookie).not.toHaveBeenCalled();
   });
 
+  it("keeps flashed HEAD responses private without consuming the flash", async () => {
+    const journeyForFn = vi.fn(async () => "added" as const);
+    const head = loadArgs({ method: "HEAD", journeyForFn });
+    const data = await loadEventsPage(head.args);
+
+    expect(journeyForFn).toHaveBeenCalledOnce();
+    expect(data).toMatchObject({ joinResult: null });
+    expect(head.deleteJoinCookie).not.toHaveBeenCalled();
+    expect(head.setHeaders).toHaveBeenCalledWith(
+      expect.objectContaining({ "cache-control": "private, no-store" }),
+    );
+  });
+
   it("leaves the join flash pending when the model read fails", async () => {
     const failingModel = loadArgs({
       journeyForFn: async () => "added" as const,

@@ -49,10 +49,16 @@ import {
 const APP_URL = "https://next.example.test";
 const SESSION_SECRET = "test-session-secret-at-least-32-bytes-long";
 
+const expectCookieVaryToken = (value: string): void => {
+  const tokens = value.split(",").map((token) => token.trim().toLowerCase());
+  expect(tokens).toContain("cookie");
+  expect(tokens).not.toContain("x-cookie");
+};
+
 const baseEnv = {
   APP_URL,
   DISCORD_CLIENT_ID: "client-id",
-  DISCORD_GUILD_ID: "326474832151838730",
+  DISCORD_GUILD_ID: "test-guild-id",
   DISCORD_INVITE_URL: "https://discord.gg/invite",
   DISCORD_CLIENT_SECRET: "client-secret",
   DISCORD_BOT_TOKEN: "bot-token",
@@ -63,6 +69,12 @@ const baseEnv = {
 const key = (n: number): string => String(n).padStart(26, "0");
 
 describe("events index ownership under Kit (failing-first)", () => {
+  it("matches Cookie as an exact case-insensitive Vary token", () => {
+    expectCookieVaryToken("Cookie, X-Two-Island");
+    expectCookieVaryToken("cOoKiE, X-Two-Island");
+    expect(() => expectCookieVaryToken("X-Cookie, X-Two-Island")).toThrow();
+  });
+
   it("ships GET /events enabled as public reads", () => {
     expect(ROUTE_MANIFEST).toContainEqual({
       method: "GET",
@@ -261,7 +273,7 @@ describe.skipIf(!process.env.DATABASE_URL)("events index journey (agent-testdb)"
     expect(res.status).toBe(200);
     expect(res.headers.get("content-type")).toContain("text/html");
     expect(res.headers.get("cache-control")).toBe("public, max-age=60");
-    expect(res.headers.get("vary")).toBe("Cookie, X-Two-Island");
+    expectCookieVaryToken(res.headers.get("vary") ?? "");
     expect(res.headers.getSetCookie()).toHaveLength(0);
     expect(res.headers.get(KIT_RENDERER_HEADER)).toBeNull();
 
@@ -323,6 +335,7 @@ describe.skipIf(!process.env.DATABASE_URL)("events index journey (agent-testdb)"
     const rendered = await renderEventsHtml(data as never, collected);
     expect(rendered.status).toBe(200);
     expect(rendered.headers["content-type"]).toBe("text/html; charset=UTF-8");
+    expectCookieVaryToken(rendered.headers.vary ?? "");
 
     const html = rendered.body;
     expect(html).toContain("Acceptance list seed Alpha");
