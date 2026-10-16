@@ -170,7 +170,7 @@ test("CLI fails closed on a missing secret and on wrangler failure without echoi
   assert.equal(failed.stdout, "");
 });
 
-test("required-secrets preflight runs before the moderator preflight and version upload/deploy", () => {
+test("required-secrets preflight runs before the moderator preflight, version upload and gradual promotion", () => {
   const workflow = readFileSync(
     new URL("../.github/workflows/deploy-production.yml", import.meta.url),
     "utf8",
@@ -179,14 +179,14 @@ test("required-secrets preflight runs before the moderator preflight and version
   const secrets = workflow.indexOf("run: node ci/check-production-secrets.mjs");
   const moderator = workflow.indexOf("run: npm run check:worker-moderators-production");
   const upload = workflow.indexOf("npx wrangler versions upload --env production");
-  const deploy = workflow.indexOf("npx wrangler versions deploy --env production");
+  const gradual = workflow.indexOf("uses: ./.github/actions/gradual-promote");
   assert.ok(
-    credentials > 0 && secrets > 0 && moderator > 0 && upload > 0 && deploy > 0,
-    "expected credentials, secrets, moderator and version upload/deploy steps in deploy-production.yml",
+    credentials > 0 && secrets > 0 && moderator > 0 && upload > 0 && gradual > 0,
+    "expected credentials, secrets, moderator, version upload and gradual promotion in deploy-production.yml",
   );
   assert.ok(
-    credentials < secrets && secrets < moderator && moderator < upload && upload < deploy,
-    "order must be credentials check, required-secrets preflight, moderator preflight, upload, deploy",
+    credentials < secrets && secrets < moderator && moderator < upload && upload < gradual,
+    "order must be credentials check, required-secrets preflight, moderator preflight, upload, gradual promotion",
   );
 });
 
@@ -322,20 +322,34 @@ test("every job that reads a PRODUCTION_* secret binds the production environmen
     if (PRODUCTION_SECRET.test(text)) referencing.push(file);
     violations.push(...productionSecretEnvironmentViolations(text, file));
   }
+  // Composite actions cannot bind an Environment, so they must never read a
+  // PRODUCTION_* secret themselves: the environment-bound caller passes
+  // values in as inputs. Any direct reference fails closed here.
+  const ACTIONS = new URL("../.github/actions/", import.meta.url);
+  for (const entry of readdirSync(ACTIONS, { withFileTypes: true })) {
+    if (!entry.isDirectory()) continue;
+    const file = `${entry.name}/action.yml`;
+    const text = readFileSync(new URL(file, ACTIONS), "utf8");
+    if (PRODUCTION_SECRET.test(text)) {
+      violations.push(
+        `${file}: PRODUCTION_* secret referenced in a composite action, which cannot bind an environment`,
+      );
+    }
+  }
   // The scan is only meaningful if it sees the workflows that carry the secrets.
   for (const expected of [
     "deploy-production.yml",
     "rollback-production.yml",
     "db-migrate.yml",
-    "neon-backup.yml",
+    "db-backup.yml",
   ]) {
     assert.ok(referencing.includes(expected), `expected ${expected} to reference PRODUCTION_*`);
   }
   assert.deepEqual(violations, []);
 });
 
-test("neon-backup selects its environment from the dispatch target, staging by default", () => {
-  const { jobs } = splitWorkflow(readFileSync(new URL("neon-backup.yml", WORKFLOWS), "utf8"));
+test("db-backup selects its environment from the dispatch target, staging by default", () => {
+  const { jobs } = splitWorkflow(readFileSync(new URL("db-backup.yml", WORKFLOWS), "utf8"));
   const backup = jobs.find((job) => job.id === "backup");
   assert.ok(backup, "expected a backup job");
   // Scheduled runs carry no inputs, so they fall back to staging.
@@ -345,17 +359,17 @@ test("neon-backup selects its environment from the dispatch target, staging by d
 // ---------------------------------------------------------------------------
 // Backup docs pin to the implementation.
 //
-// docs/db-migrations.md "Backups" and the neon-backup.yml header must state the
+// docs/db-migrations.md "Backups" and the db-backup.yml header must state the
 // real schedule (staging nightly; production manual dispatch only) and the real
-// R2 key layout from bin/neon-backup.sh prefix() / manifest_key(). No workflow
+// R2 key layout from bin/db-backup.sh prefix() / manifest_key(). No workflow
 // or script behavior changes here.
 // ---------------------------------------------------------------------------
 
-test("neon-backup schedule dumps staging; production is manual dispatch only", () => {
-  const workflow = readFileSync(new URL("neon-backup.yml", WORKFLOWS), "utf8");
+test("db-backup schedule dumps staging; production is manual dispatch only", () => {
+  const workflow = readFileSync(new URL("db-backup.yml", WORKFLOWS), "utf8");
   // The 03:17Z schedule carries no inputs, so `inputs.target || 'staging'`
   // resolves to staging; production needs a manual dispatch with a target.
-  assert.ok(workflow.includes("17 3 * * *"), "expected the 03:17Z cron in neon-backup.yml");
+  assert.ok(workflow.includes("17 3 * * *"), "expected the 03:17Z cron in db-backup.yml");
   assert.ok(
     workflow.includes("environment: ${{ inputs.target || 'staging' }}"),
     "schedule path must resolve to staging via the inputs.target fallback",
@@ -426,11 +440,11 @@ test("neon-backup schedule dumps staging; production is manual dispatch only", (
 });
 
 test("backup docs name the real R2 key layout from prefix() / manifest_key()", () => {
-  const script = readFileSync(new URL("../bin/neon-backup.sh", import.meta.url), "utf8");
+  const script = readFileSync(new URL("../bin/db-backup.sh", import.meta.url), "utf8");
   assert.match(
     script,
     /prefix\(\) \{ printf '%s\/%s-%s'/,
-    "expected prefix() to build <prefix>/<branch>-<branch> in bin/neon-backup.sh",
+    "expected prefix() to build <prefix>/<branch>-<branch> in bin/db-backup.sh",
   );
   assert.match(
     script,
@@ -477,7 +491,7 @@ on:
         options: [staging, production]
 `;
 
-test("production secret in a job with no environment is a violation (the pre-fix neon-backup shape)", () => {
+test("production secret in a job with no environment is a violation (the pre-fix db-backup shape)", () => {
   const text = `${FIXTURE_HEAD}jobs:
   backup:
     runs-on: ubuntu-latest

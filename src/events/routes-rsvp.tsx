@@ -6,17 +6,12 @@ import { dbFor } from "../admin/db";
 import { requestBodyLimit } from "../body-limit";
 import type { Session } from "../env";
 import { rateLimitExceeded } from "../errors";
-import {
-  RSVP_COPY,
-  RSVP_HONEY_FIELD,
-  loginUrl,
-  rsvpHoneyFilled,
-  rsvpTrapTripped,
-  throttleWaitCopy,
-} from "../islands/contracts";
+import { RSVP_HONEY_FIELD, loginUrl, rsvpHoneyFilled, rsvpTrapTripped } from "../islands/contracts";
+import { renderHtmlOutcome } from "../html-outcome";
 import { eventKeyAllowed } from "./keys";
-import { EventDetailShell } from "./pages-shared";
 import { dispatchRsvpSync, isRsvpStatus, withdrawRsvp, writeRsvp, type RsvpAnswer } from "./rsvp";
+import { renderRsvpRefusal } from "./rsvp-refusal-hono";
+import { rsvpRefusalModelFor, rsvpRefusalOutcome } from "./rsvp-refusal";
 import { body, type App, type Ctx, type SessionReader } from "./routes-shared";
 
 // One answer per member per event: a singular resource. PUT 201 first / 200 re-answer,
@@ -127,29 +122,31 @@ export function registerRsvpRoutes(app: App, readFragmentSession: SessionReader)
     const response = await (input.status === "withdraw"
       ? deleteRsvp(c, input, readFragmentSession)
       : putRsvp(c, input, readFragmentSession));
-    const path = `/e/${encodeURIComponent(c.req.param("key"))}`;
+    const key = c.req.param("key");
+    const path = `/e/${encodeURIComponent(key)}`;
     if (response.ok) return c.redirect(path, 303);
     if (response.status === 401) return c.redirect(loginUrl(path), 303);
     const retryAfter = response.headers.get("Retry-After");
-    if (retryAfter) c.header("Retry-After", retryAfter);
     // No-JS refusal renders inside the branded event shell (viewport, skip
     // link, main landmark, stylesheets, header/footer), like every other
     // event failure page. Status, Retry-After, failure copy and the
     // return-to-event link are unchanged. Only signed-in members reach this
     // page (a missing session redirects to login above), so the shell stays
     // presentational with account={false} — like the cancelled (410) event
-    // page — instead of rendering guest sign-in chrome for a member.
-    return c.html(
-      <EventDetailShell title={RSVP_COPY.failedTitle} account={false}>
-        <h1>{RSVP_COPY.failedTitle}</h1>
-        <p role="alert">
-          {response.status === 429
-            ? throttleWaitCopy(retryAfter ? Number(retryAfter) : null)
-            : "Nothing changed. Return to the event to check availability and try again."}
-        </p>
-        <a href={path}>Return to the event</a>
-      </EventDetailShell>,
-      response.status as ContentfulStatusCode,
+    // page — instead of rendering guest sign-in chrome for a member. The
+    // refusal renders once through the shared outcome interface: the mutation
+    // above already ran exactly once, and a re-read of the outcome object
+    // reuses its bytes instead of re-rendering.
+    return renderHtmlOutcome(
+      c,
+      rsvpRefusalOutcome(
+        rsvpRefusalModelFor({ status: response.status, retryAfter, eventKey: key }),
+        renderRsvpRefusal,
+        {
+          status: response.status as ContentfulStatusCode,
+          ...(retryAfter ? { headers: { "Retry-After": retryAfter } } : {}),
+        },
+      ),
     );
   });
 

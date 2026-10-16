@@ -110,7 +110,8 @@ Coverage includes every
 `src/**/*.{ts,tsx}` file, even if no test imports it. Global and aggregate
 area floors (`src/admin`, `src/events`, `src/join`, `src/sessions.ts`, `src/jobs`,
 `src/bot`, `src/agent-events`, `src/profiles`, `src/auth`, `src/invite.ts`,
-`src/return-journey.ts`, `src/write-recovery.tsx`) live in `vitest.config.ts`. The
+`src/return-journey.ts`, `src/write-recovery.tsx`, `src/kit-*`, `src/counts.ts`,
+`src/seo.ts`) live in `vitest.config.ts`. The
 baseline uses the full suite with the test database; without it, skipped live
 suites may put coverage below the floors. CI's
 required `check` job runs the configuration drift check, Biome lint/format gate,
@@ -164,12 +165,13 @@ npx wrangler deploy --dry-run --outdir dist   # bundle check; does not deploy
 ### Browser regressions
 
 These suites skip their browser cases unless the opt-in variable is `"true"`, so
-a run without it can pass without executing them. For the suites wired into CI,
-the `a11y` job sets each variable, writes a Vitest JSON report and runs
+a run without it can pass without executing them. For the Vitest suites wired
+into CI, the `a11y` job sets each variable, writes a Vitest JSON report and runs
 `ci/a11y-require-executed.mjs`, which fails the step unless every case in the
 named suite passed and at least the minimum ran. The minimums live in
-`.github/workflows/ci.yml`. The RSVP focus suite below is not wired into CI yet;
-run its listed command locally to execute the Chromium proof.
+`.github/workflows/ci.yml`. The `node --test` suites below run directly in the
+`a11y` job with their opt-in set; their step logs list each named case as
+passed. Run any listed command locally to execute the same Chromium proof.
 
 | Suite | Opt-in variable | Local command |
 | --- | --- | --- |
@@ -178,7 +180,7 @@ run its listed command locally to execute the Chromium proof.
 | `test/calendar-search-unicode-boundaries.test.ts` | `CALENDAR_SEARCH_BROWSER_TESTS` | `CALENDAR_SEARCH_BROWSER_TESTS=true npx vitest run test/calendar-search-unicode-boundaries.test.ts` |
 | `test/profile-native-length.test.ts` | `A11Y_BROWSER_TESTS` | `A11Y_BROWSER_TESTS=true npx vitest run test/profile-native-length.test.ts` |
 | `ci/a11y-lifecycle.test.mjs` | `A11Y_BROWSER_TESTS` | `A11Y_BROWSER_TESTS=true node --test ci/a11y-lifecycle.test.mjs` (real Chromium signal cases; no executed-count verifier yet) |
-| `ci/rsvp-focus-browser.test.mjs` | `RSVP_FOCUS_BROWSER_TESTS` | `RSVP_FOCUS_BROWSER_TESTS=true node --test ci/rsvp-focus-browser.test.mjs` (real Chromium focus proof; not run by CI) |
+| `ci/rsvp-focus-browser.test.mjs` | `RSVP_FOCUS_BROWSER_TESTS` | `RSVP_FOCUS_BROWSER_TESTS=true node --test ci/rsvp-focus-browser.test.mjs` (real Chromium focus proof; runs in the `a11y` job; no executed-count verifier yet) |
 
 The admin, featured and calendar suites use intercepted synthetic fixtures or
 loopback servers with mocked reads, and the profile suite uses loopback fixtures
@@ -415,14 +417,19 @@ APP_URL=https://next.togetherweown.com npm run drill:internal-action -- \
 ```
 
 The deployment preflight parses the **top-level** `vars.DISCORD_MODERATOR_ROLE_IDS`
-in `wrangler.jsonc` and requires exactly the approved SySOp ID, before any queue
+and `vars.DISCORD_GUILD_ID` in `wrangler.jsonc` and requires exactly the
+guild-bound Owner+Moderator pair (staging guild `1545644954272137297`:
+`1546211363578191873,1545648550329851946`; production guild
+`326474832151838730`: `1546777855801954408,1546777856984481792`), before any queue
 creation or deployment. `wrangler deploy --config wrangler.jsonc` consumes that
 same source value, without `--env`/`--var` overrides; a separate GitHub moderator
 secret cannot make the gate pass. `keep_vars` retains unrelated remote plaintext
 vars, and Wrangler retains remote secrets. No binding values are read back or
 copied. The preflight proves source configuration, **not live isolation or a
 successful deployment**. Blank config remains a valid local revocation state,
-but unapproved extra roles (including duplicates) fail the probe.
+but unapproved extra roles (including duplicates) fail the probe, as does a
+pair that belongs to the other guild — role IDs are guild-scoped, so a
+production pair in the staging config matches nobody while looking configured.
 
 The live smoke runs manually via the `staging-smoke` workflow in a job container
 (`[self-hosted, two-selfhosted]` while the repo is private, GitHub-hosted while

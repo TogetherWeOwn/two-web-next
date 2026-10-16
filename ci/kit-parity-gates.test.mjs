@@ -7,6 +7,7 @@ import { test } from "node:test";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import {
   LOGIN_JOURNEYS,
+  assertMembersContract,
   assertReservedContract,
   assertRouteContract,
   expectedMarkerFor,
@@ -295,7 +296,11 @@ test("nested reads objects never blind the manifest parser", () => {
   );
 });
 
-test("an enabled nested-reads member board fails via the catch-all, never a quiet skip", () => {
+test("an enabled nested-reads member board is covered by the executed parity run", () => {
+  // The parser still sees the nested-reads entry (the original blindness
+  // regression), but the board now has executed runs — the unit contract
+  // above, the authenticated preview journeys in PARITY_ROUTES and the
+  // Playwright Hono-vs-Kit journey — so the catch-all no longer fails it.
   const silent = { write: () => {} };
   const journeys = runUnitMode({
     stdout: silent,
@@ -304,12 +309,318 @@ test("an enabled nested-reads member board fails via the catch-all, never a quie
       ` { method: "GET", path: "/leaderboards/members", enabled: true, ` +
       `reads: { resource: "leaderboard", action: "list", route: "leaderboards.members" } }`,
   });
-  assert.equal(isCoveredByExecutedRun({ method: "GET", path: "/leaderboards/members" }), false);
-  assert.equal(summarizeLedger(journeys).verdict, "fail");
+  assert.equal(isCoveredByExecutedRun({ method: "GET", path: "/leaderboards/members" }), true);
+  assert.equal(summarizeLedger(journeys).verdict, "pass");
   const failed = journeys.filter((j) => j.status === "failed");
   assert.ok(
-    failed.some((j) => j.reason?.includes("/leaderboards/members")),
-    "failure reason must name the member board",
+    !failed.some((j) => j.reason?.includes("/leaderboards/members")),
+    "no failure may name the covered member board",
+  );
+});
+
+const membersPreviewStub = `
+const archivePage =
+  \`<html><head><link rel="canonical" href="https://x.invalid/"></head>\` +
+  \`<body><a class="skip-link" href="#main">Skip</a>\` +
+  \`<nav aria-label="Primary"></nav><main id="main">\` +
+  \`<section data-testid="past-events"><div data-testid="past-events-list">\` +
+  \`<article data-event-key="k1"></article></div></section></main>\` +
+  \`<p>Welcome, guest</p><script src="/islands/past-events.js"></script></body></html>\`;
+const membersPage =
+  \`<html><head><link rel="canonical" href="https://next.togetherweown.com/leaderboards/members">\` +
+  \`<meta name="robots" content="noindex, nofollow"></head>\` +
+  \`<body><a class="skip-link" href="#main">Skip to content</a>\` +
+  \`<nav aria-label="Primary"><a href="/">Home</a></nav>\` +
+  \`<p><span class="who">QA Member</span> <button type="submit" class="link">Sign out</button></p>\` +
+  \`<main id="main" class="events-page"><p class="strap">Members only</p>\` +
+  \`<h1>Member leaderboard</h1>\` +
+  \`<nav aria-label="Board scope"><ul><li><a href="/leaderboards/members" aria-current="page">Overall</a></li>\` +
+  \`<li><a href="/leaderboards/members?scope=relative">Around you</a></li></ul></nav>\` +
+  \`<form method="get" action="/leaderboards/members" aria-label="Filter the leaderboard">\` +
+  \`<p><input id="board-season" name="season" type="text" value="all" /></p>\` +
+  \`<p><input id="board-activity" name="activity" type="text" value="" /></p>\` +
+  \`<p><button class="btn" type="submit">Show board</button></p></form>\` +
+  \`<table><thead><tr><th scope="col">Rank</th><th scope="col">Member</th><th scope="col">Going</th></tr></thead>\` +
+  \`<tbody><tr><td>1</td><th scope="row">QA Member</th><td>3</td></tr></tbody></table>\` +
+  \`</main></body></html>\`;
+globalThis.fetch = async (input, init = {}) => {
+  const url = new URL(String(input.url ?? input));
+  const headers = init.headers ?? {};
+  if (url.pathname === "/up") return new Response("{}", { status: 200, headers: { "content-type": "application/json" } });
+  if (url.pathname === "/auth/qa/qa-member") {
+    if (headers["x-two-qa-auth"] !== "test-token") return new Response("no", { status: 404 });
+    return new Response(null, { status: 204, headers: { "set-cookie": "__Host-two_session=two_test; Path=/; HttpOnly" } });
+  }
+  if (url.pathname === "/leaderboards/members") {
+    const cookie = headers.cookie ?? "";
+    if (!cookie.includes("__Host-two_session=")) {
+      return new Response("", { status: 302, headers: { location: "/auth/discord?next=%2Fleaderboards%2Fmembers", "cache-control": "private, no-store" } });
+    }
+    if (url.search.includes("season=bogus") || url.search.includes("scope=") && !url.search.includes("scope=relative") || url.search.includes("activity=chess")) {
+      return new Response("Unknown", { status: 400, headers: { "content-type": "text/plain", "cache-control": "private, no-store" } });
+    }
+    return new Response(membersPage, { status: 200, headers: { "content-type": "text/html", "cache-control": "private, no-store", ...(url.hostname.startsWith("kit.") ? { "x-two-renderer": "kit" } : {}) } });
+  }
+  return new Response(archivePage, { status: 200, headers: { "content-type": "text/html" } });
+};
+`;
+
+test("preview member-board journeys execute with a QA session and pass", () => {
+  const { status, output } = runScript({
+    env: {
+      KIT_PREVIEW_URL: "https://kit.invalid.workers.dev/",
+      HONO_PREVIEW_URL: "https://hono.invalid.workers.dev/",
+      KIT_PARITY_QA_TOKEN: "test-token",
+    },
+    stub: membersPreviewStub,
+  });
+  // The stub serves only the archive + member-board contracts, so other
+  // routes fail in this run; the member journeys themselves must all pass.
+  assert.match(output, /\[passed\] preview Kit \/leaderboards\/members: contract/);
+  assert.match(output, /\[passed\] preview Hono \/leaderboards\/members: no Kit marker/);
+  assert.doesNotMatch(output, /\[failed\] preview [^\n]*leaderboards\/members/);
+  void status;
+});
+
+test("preview member-board journeys skip loud without a QA token", () => {
+  const { status, output } = runScript({
+    env: {
+      KIT_PREVIEW_URL: "https://kit.invalid.workers.dev/",
+      HONO_PREVIEW_URL: "https://hono.invalid.workers.dev/",
+      KIT_PARITY_QA_TOKEN: "",
+    },
+    stub: membersPreviewStub,
+  });
+  assert.match(output, /\[skipped\] preview [^\n]*leaderboards\/members[^\n]*KIT_PARITY_QA_TOKEN/);
+  // The guest bounce needs no session and still executes; only the
+  // authenticated board fetches skip.
+  assert.doesNotMatch(output, /\[passed\] preview [^\n]*scope=relative: contract/);
+  void status;
+});
+
+test("member-board contract passes a good fixture and fails planted mutants", () => {
+  const goodHtml =
+    `<html><head><link rel="canonical" href="https://next.togetherweown.com/leaderboards/members">` +
+    `<meta name="robots" content="noindex, nofollow"></head>` +
+    `<body><a class="skip-link" href="#main">Skip to content</a>` +
+    `<nav aria-label="Primary"><a href="/">Home</a></nav>` +
+    `<p><span class="who">Rick</span> <button type="submit" class="link">Sign out</button></p>` +
+    `<main id="main" class="events-page"><p class="strap">Members only</p>` +
+    `<h1>Member leaderboard</h1>` +
+    `<nav aria-label="Board scope"><ul><li><a href="/leaderboards/members" aria-current="page">Overall</a></li>` +
+    `<li><a href="/leaderboards/members?scope=relative">Around you</a></li></ul></nav>` +
+    `<form method="get" action="/leaderboards/members" aria-label="Filter the leaderboard">` +
+    `<p><label for="board-season">Season (all, 2026, 2026-09 or 2026-Q3)</label> ` +
+    `<input id="board-season" name="season" type="text" value="all" /></p>` +
+    `<p><label for="board-activity">Game (blank for every game)</label> ` +
+    `<input id="board-activity" name="activity" type="text" value="" /></p>` +
+    `<p><button class="btn" type="submit">Show board</button></p></form>` +
+    `<table><caption>Going counts, season all, every game</caption>` +
+    `<thead><tr><th scope="col">Rank</th><th scope="col">Member</th><th scope="col">Going</th></tr></thead>` +
+    `<tbody><tr><td>1</td><th scope="row">Rick</th><td>3</td></tr></tbody></table>` +
+    `</main></body></html>`;
+  const headers = {
+    get: (name) => {
+      if (name === "content-type") return "text/html; charset=UTF-8";
+      if (name === "x-two-renderer") return null;
+      if (name === "cache-control") return "private, no-store";
+      return null;
+    },
+  };
+  const expected = { status: 200, marker: null, cache: "private, no-store" };
+  assert.equal(
+    assertMembersContract({
+      label: "unit/members-good",
+      html: goodHtml,
+      headers,
+      status: 200,
+      expected,
+    }).length,
+    0,
+  );
+  const mutants = [
+    [
+      "guest-chrome",
+      (html) => html.replace("</main>", "<p>Welcome, guest</p></main>"),
+      "member page must not show guest chrome",
+    ],
+    ["shared-cache", (html) => html, "member board answers private, no-store"],
+    [
+      "no-table-no-status",
+      (html) => html.replace(/<table>[\s\S]*<\/table>/, ""),
+      "board table or empty status present",
+    ],
+    [
+      "follow-index",
+      (html) => html.replace('content="noindex, nofollow"', 'content="index, follow"'),
+      "member board never indexes",
+    ],
+    ["per-attempt-field", (html) => `${html}<!-- discord_id -->`, "no per-attempt fields"],
+    [
+      "profile-link",
+      (html) =>
+        html.replace(
+          '<th scope="row">Rick</th>',
+          '<th scope="row"><a href="/members/rick">Rick</a></th>',
+        ),
+      "board rows never link to profiles",
+    ],
+    [
+      "no-canonical",
+      (html) => html.replace(/<link rel="canonical"[^>]*>/, ""),
+      "canonical points at /leaderboards/members",
+    ],
+    [
+      "canonical-wrong-target",
+      (html) =>
+        html.replace(
+          /<link rel="canonical"[^>]*>/,
+          '<link rel="canonical" href="https://next.togetherweown.com/events">',
+        ),
+      "canonical points at /leaderboards/members",
+    ],
+    ["wrong-renderer", (html) => html, "renderer marker"],
+  ];
+  for (const [name, mutate, want] of mutants) {
+    const failures = assertMembersContract({
+      label: `unit/members-mutant-${name}`,
+      html: mutate(goodHtml),
+      headers: {
+        get: (n) => {
+          if (n === "content-type") return "text/html; charset=UTF-8";
+          if (n === "x-two-renderer") return name === "wrong-renderer" ? "kit" : null;
+          if (n === "cache-control")
+            return name === "shared-cache" ? "public, max-age=300" : "private, no-store";
+          return null;
+        },
+      },
+      status: 200,
+      expected: {
+        ...expected,
+        cache: name === "shared-cache" ? "public, max-age=300" : expected.cache,
+      },
+    });
+    assert.ok(
+      failures.some((f) => f.includes(want)),
+      `member mutant ${name} did not trip "${want}" (got: ${failures.join("; ") || "no failures"})`,
+    );
+  }
+});
+
+test("static-leaf contracts pass good fixtures and fail planted mutants", () => {
+  const shell = (path, inner) =>
+    `<html><head><link rel="canonical" href="https://next.togetherweown.com${path}"></head>` +
+    `<body><a class="skip-link" href="#main">Skip</a>` +
+    `<nav aria-label="Primary"><a href="/">Home</a></nav>` +
+    `<main id="main"><section class="content-page">${inner}</section></main>` +
+    `<p><span class="account-caption">Welcome, guest</span></p></body></html>`;
+  const cases = [
+    {
+      contract: "about",
+      path: "/about",
+      html: shell(
+        "/about",
+        `<h1 id="about-heading">About Together We Own</h1>` +
+          `<p class="strap">Est. 1998</p>` +
+          `<dl data-testid="about-facts" class="facts"></dl>` +
+          `<p><a class="btn" href="/join" data-testid="about-join">Join with Discord</a></p>`,
+      ),
+      mutants: [
+        [
+          "no-facts",
+          (html) => html.replace('data-testid="about-facts"', 'data-testid="x"'),
+          "leaf section about-facts present",
+        ],
+        [
+          "hostile-join",
+          (html) => html.replace('href="/join"', 'href="https://evil.test/"'),
+          "join action stays same-origin /join",
+        ],
+      ],
+    },
+    {
+      contract: "faq",
+      path: "/faq",
+      html: shell(
+        "/faq",
+        `<h1 id="faq-heading">Frequently asked questions</h1>` +
+          `<p class="strap">New here? Start here</p>` +
+          `<div data-testid="faq-list">` +
+          `<section aria-labelledby="faq-getting-in"><h2 id="faq-getting-in">Getting in</h2></section></div>` +
+          `<p><a class="btn" href="/join" data-testid="faq-join">Join with Discord</a></p>`,
+      ),
+      mutants: [
+        [
+          "no-list",
+          (html) => html.replace('data-testid="faq-list"', 'data-testid="x"'),
+          "leaf section faq-list present",
+        ],
+        [
+          "no-first-group",
+          (html) => html.replace(/<section aria-labelledby="faq-getting-in">.*?<\/section>/, ""),
+          "first question group present",
+        ],
+      ],
+    },
+  ];
+  for (const { contract, html, mutants } of cases) {
+    const headers = {
+      get: (name) => {
+        if (name === "content-type") return "text/html; charset=UTF-8";
+        if (name === "x-two-renderer") return "kit";
+        if (name === "cache-control") return "public, max-age=3600";
+        return null;
+      },
+    };
+    const expected = { status: 200, marker: "kit", contract, cache: "public, max-age=3600" };
+    assert.equal(
+      assertRouteContract({
+        label: `unit/leaves-${contract}-good`,
+        html,
+        headers,
+        status: 200,
+        expected,
+      }).length,
+      0,
+    );
+    for (const [name, mutate, want] of mutants) {
+      const failures = assertRouteContract({
+        label: `unit/leaves-${contract}-mutant-${name}`,
+        html: mutate(html),
+        headers,
+        status: 200,
+        expected,
+      });
+      assert.ok(
+        failures.some((f) => f.includes(want)),
+        `leaf mutant ${contract}/${name} did not trip "${want}" (got: ${failures.join("; ") || "no failures"})`,
+      );
+    }
+  }
+});
+
+test("enabled static leaves are covered by the executed parity run", () => {
+  // The catch-all no longer fails the leaves: PARITY_ROUTES carries their
+  // contracts, so the shipped enabled entries are covered runs, and a
+  // synthetic manifest with the leaves disabled keeps the leaf journeys out.
+  assert.equal(isCoveredByExecutedRun({ method: "GET", path: "/about" }), true);
+  assert.equal(isCoveredByExecutedRun({ method: "GET", path: "/faq" }), true);
+  const silent = { write: () => {} };
+  const heldJourneys = runUnitMode({
+    stdout: silent,
+    manifestSource:
+      `{ method: "GET", path: "/events/past", enabled: false }, { method: "GET", path: "/join", enabled: false }, { method: "GET", path: "/auth/recover", enabled: false },` +
+      ` { method: "GET", path: "/about", enabled: false, reads: "public" },` +
+      ` { method: "GET", path: "/faq", enabled: false, reads: "public" },`,
+  });
+  // The leaf unit journeys run against any manifest that lists the leaves
+  // (the expected marker derives from it: null while held, kit once
+  // enabled); the coverage catch-all only fails enabled entries, so the
+  // held leaves stay quiet here.
+  const failed = heldJourneys.filter((j) => j.status === "failed");
+  assert.ok(
+    !failed.some((j) => j.reason?.includes("/about") || j.reason?.includes("/faq")),
+    "no failure may name the held leaves",
   );
 });
 

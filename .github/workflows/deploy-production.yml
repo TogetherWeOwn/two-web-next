@@ -133,33 +133,20 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ secrets.PRODUCTION_CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.PRODUCTION_CLOUDFLARE_ACCOUNT_ID }}
           DEPLOY_SHA: ${{ needs.preflight.outputs.sha }}
-      - name: Promote reviewed production version to 100 percent
-        run: npx wrangler versions deploy --env production --name two-web-next-production --version-tag "${DEPLOY_SHA:?}-${GITHUB_RUN_ID:?}-${GITHUB_RUN_ATTEMPT:?}@100%" --yes
-        env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.PRODUCTION_CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.PRODUCTION_CLOUDFLARE_ACCOUNT_ID }}
-          DEPLOY_SHA: ${{ needs.preflight.outputs.sha }}
-      - name: Smoke test production public routes
-        # Same GET-only public-route set as staging (bin/smoke.mjs), so the two
-        # gates cannot drift. Manual redirects keep the checks unauthenticated
-        # and never visit Discord: no auth, no writes, no PII. Indexable apex
-        # HTML omits the staging noindex (src/headers.ts); the archive and the
-        # branded 404 stay meta-noindex and skip the header assertion inside
-        # the checker. DB/schema readiness is mandatory via the /up envelope;
-        # queue-only degraded/unknown is allowed.
-        run: |
-          for i in 1 2 3 4 5 6; do
-            if node bin/smoke.mjs https://togetherweown.com --allow-indexable; then
-              echo "production smoke ok (attempt $i)"
-              exit 0
-            fi
-            if [ "$i" -lt 6 ]; then
-              echo "attempt $i failed, retrying in 10s..."
-              sleep 10
-            fi
-          done
-          echo "::error::production public-route smoke failed after deploy"
-          exit 1
+      # Gradual promotion lives in the shared composite action
+      # (.github/actions/gradual-promote): 5% -> 50% -> 100% with per-stage
+      # health/SLO gates pinned to the new version, and automatic rollback to
+      # the recorded pre-promote version on any stage failure. Other repos
+      # call the same action; repo-specific build/upload stays above.
+      - name: Gradual promotion 5-50-100 with automatic rollback
+        id: gradual
+        uses: ./.github/actions/gradual-promote
+        with:
+          worker-name: two-web-next-production
+          version-tag: ${{ needs.preflight.outputs.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          domain: togetherweown.com
+          api-token: ${{ secrets.PRODUCTION_CLOUDFLARE_API_TOKEN }}
+          account-id: ${{ secrets.PRODUCTION_CLOUDFLARE_ACCOUNT_ID }}
 
   release:
     name: release

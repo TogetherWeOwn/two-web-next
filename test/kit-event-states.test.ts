@@ -145,8 +145,13 @@ async function resolve(
 }
 
 describe("event-state route ownership", () => {
-  it("keeps the /e/:key family on Hono: no manifest entry to enable", () => {
-    expect(ROUTE_MANIFEST.some((entry) => entry.path.startsWith("/e/"))).toBe(false);
+  it("keeps the /e/:key family on Hono: the detail entry stays disabled", () => {
+    // Card 25/43 adds the disabled member-read entry for the live detail; the
+    // renderer decision stays Hono until the RSVP companion passes.
+    const entry = ROUTE_MANIFEST.find(
+      (candidate) => candidate.method === "GET" && candidate.path === "/e/:key",
+    );
+    expect(entry).toMatchObject({ enabled: false });
     expect(resolveRouteOwner({ method: "GET", path: `/e/${KEY}` })).toBe("hono");
     expect(resolveRouteOwner({ method: "HEAD", path: `/e/${KEY}` })).toBe("hono");
     expect(resolveRouteOwner({ method: "GET", path: `/e/${KEY.toLowerCase()}` })).toBe("hono");
@@ -481,6 +486,22 @@ function suggestionsSectionOf(html: string): string {
 }
 
 describe("Kit cancelled presentation", () => {
+  it("emits one event block and one site block, each parseable", async () => {
+    const { store } = fakeStore();
+    const { outcome } = await resolve(KEY, store);
+    if (outcome.kind !== "gone") throw new Error("unreachable");
+    const { renderGone } = await buildKitEventStatesBundle();
+    const html = renderGone(outcome.model as unknown as Record<string, unknown>);
+    const blocks = [
+      ...html.matchAll(
+        /<script type="application\/ld\+json" data-testid="([^"]+)">([\s\S]*?)<\/script>/g,
+      ),
+    ].map((m) => ({ testid: m[1], payload: JSON.parse(m[2]!) }));
+    expect(blocks.map((b) => b.testid)).toEqual(["event-jsonld", "site-jsonld"]);
+    expect(blocks[0]!.payload["@type"]).toBe("Event");
+    expect(blocks[1]!.payload["@graph"]).toHaveLength(2);
+  });
+
   it("renders the 410 contract: status copy, title, alternatives, ICS and JSON-LD, never share or RSVP", async () => {
     const { store } = fakeStore();
     const { outcome } = await resolve(KEY, store);

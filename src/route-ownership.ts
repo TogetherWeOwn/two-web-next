@@ -13,7 +13,8 @@
 // (query preserved, body unread) to whichever renderer owns it.
 
 import type { AccessSink } from "./access-log";
-import { robotsTagFor, securityHeadersFor } from "./headers";
+import { isContentLeafPath, robotsTagFor, securityHeadersFor } from "./headers";
+import { transformContentLeafChunk } from "./kit-content-chunk";
 import type { KitLocals } from "./kit-session";
 import { type MemberRead, memberReadResponse } from "./member-reads";
 import { SAME_ORIGIN_EXEMPTIONS, UNSAFE_METHODS } from "./same-origin";
@@ -41,10 +42,12 @@ export interface RouteDecision {
   path: string;
 }
 
-// The archive page and hot-zone heatmaps render natively; the events list ships
-// its native handler disabled until the calendar/enhancement companion passes,
-// and the about/privacy/rules/join/recovery/profile reads, member board and
-// admin routes stay on Hono until their enablement is reviewed. Production (the Hono Worker) sees no traffic change for a
+// The archive page, hot-zone heatmaps, member board and the about/faq leaves
+// render natively; the events list ships its native handler disabled until
+// the calendar/enhancement companion passes, and the privacy/rules/join/
+// recovery/profile reads and admin routes stay on Hono until their enablement
+// is reviewed. Returning an enabled entry to `enabled: false` restores Hono
+// ownership as the rollback. Production (the Hono Worker) sees no traffic change for a
 // disabled path; the preview Worker moves a Kit-owned path back to Hono by
 // design — that is the rollback. Add one entry per migrated route, enabled
 // only when its Kit handler is ready to own the exact method/path. Only GET
@@ -58,9 +61,10 @@ export const ROUTE_MANIFEST: OwnedRoute[] = [
   { method: "GET", path: "/", enabled: false, reads: "public" },
   { method: "GET", path: "/events/past", enabled: true, reads: "public" },
   { method: "GET", path: "/events", enabled: false, reads: "public" },
-  { method: "GET", path: "/about", enabled: false, reads: "public" },
+  { method: "GET", path: "/about", enabled: true, reads: "public" },
   { method: "GET", path: "/privacy", enabled: false, reads: "public" },
   { method: "GET", path: "/rules", enabled: false, reads: "public" },
+  { method: "GET", path: "/faq", enabled: true, reads: "public" },
   { method: "GET", path: "/join", enabled: false, reads: "public" },
   // Moderator dashboard: member data, so the Kit branch renders
   // inside the member-read boundary with this declaration and the bridged
@@ -81,6 +85,35 @@ export const ROUTE_MANIFEST: OwnedRoute[] = [
     path: "/admin/featured",
     enabled: false,
     reads: { resource: "featured_contents", action: "list", route: "admin.featured.index" },
+  },
+  // Moderator featured create form: member data, so the Kit branch renders
+  // inside the member-read boundary with this declaration and the bridged
+  // viewer. Same declaration as the Hono handler (admin.featured.create,
+  // src/admin/routes.tsx). Only this GET migrates: POST /admin/featured
+  // stays Hono-owned, so the ported form keeps submitting to the unchanged
+  // create handler (parseFeaturedForm + createFeatured, 422/303) during
+  // mixed mode, and the guarded /admin/featured-contents/create legacy
+  // redirect stays Hono-owned. Off until the enablement review.
+  {
+    method: "GET",
+    path: "/admin/featured/new",
+    enabled: false,
+    reads: { resource: "featured_contents", action: "view", route: "admin.featured.create" },
+  },
+  // Moderator featured edit form: member data, so the Kit branch renders
+  // inside the member-read boundary with this declaration and the bridged
+  // viewer. Same declaration as the Hono handler (admin.featured.edit,
+  // src/admin/routes.tsx). Only this GET migrates: POST /admin/featured/:id
+  // and POST /admin/featured/:id/delete stay Hono-owned, so the edit form,
+  // the 422 re-render with preserved values, the 303s and the delete action
+  // keep one authority until a later write slice lands, and the guarded
+  // /admin/featured-contents/:id/edit legacy redirect stays Hono-owned. Off
+  // until the enablement review.
+  {
+    method: "GET",
+    path: "/admin/featured/:id",
+    enabled: false,
+    reads: { resource: "featured_contents", action: "view", route: "admin.featured.edit" },
   },
   // Read-only activity-log viewer: the same bounded subject/causer filters and
   // newest-first paging as the Hono panel, audited by the member-read boundary
@@ -103,15 +136,64 @@ export const ROUTE_MANIFEST: OwnedRoute[] = [
     enabled: false,
     reads: { resource: "events", action: "list", route: "admin.events.index" },
   },
+  // Moderator event-create form: same declaration as the Hono handler
+  // (admin.events.create, src/admin/routes.tsx). Only this GET migrates:
+  // POST /admin/events stays Hono-owned, so draft-first creation, weekly
+  // recurrence (max 52), wall-time/timezone validation, body cap, throttle,
+  // error aggregation, retained values and the 303 keep one authority until
+  // the write slice lands. The guarded /admin/events/create legacy redirect
+  // stays Hono-owned; the manifest carries this GET entry only. Off until
+  // the enablement review.
+  {
+    method: "GET",
+    path: "/admin/events/new",
+    enabled: false,
+    reads: { resource: "events", action: "view", route: "admin.events.create" },
+  },
+  // Moderator event-edit form: same declaration as the Hono handler
+  // (admin.events.edit, src/admin/routes.tsx). Only this GET migrates:
+  // POST /admin/events/:key, the publish/cancel/RSVP-pause/RSVP-reopen
+  // siblings and the guarded /admin/events/:key/edit legacy redirect stay
+  // Hono-owned, so wall-time UTC carriers, future recurrence propagation,
+  // bounded roster paging and postcommit writeback keep one authority until
+  // the write slice lands. Off until the enablement review.
+  // The legacy /admin/events/create bookmark pins to Hono with the exact
+  // disabled entry below: exact entries beat :param patterns in bestMatch,
+  // so without it the :key pattern would capture /create once enabled and
+  // Kit would 404 instead of Hono's redirect to /admin/events/new.
+  {
+    method: "GET",
+    path: "/admin/events/create",
+    enabled: false,
+  },
+  {
+    method: "GET",
+    path: "/admin/events/:key",
+    enabled: false,
+    reads: { resource: "events", action: "view", route: "admin.events.edit" },
+  },
   // Join-attempts audit list: member data, so the Kit branch renders
   // inside the member-read boundary with this declaration and the bridged
   // viewer. Off until the enablement review: the Hono viewer answers meanwhile.
-  // The detail page stays Hono-owned until its own slice lands.
+  // Row detail links target the Kit /admin/join-attempts/:id page below.
   {
     method: "GET",
     path: "/admin/join-attempts",
     enabled: false,
     reads: { resource: "join_attempts", action: "list", route: "admin.join-attempts.index" },
+  },
+  // Join-attempt detail: member data, so the Kit branch renders inside the
+  // member-read boundary with this declaration and the bridged viewer. Same
+  // declaration as the Hono handler (admin.join-attempts.show,
+  // src/admin/routes.tsx): the canonical-ID admission, the shared
+  // getJoinAttempt retention-window lookup, and the outcome/source/time/trace
+  // fields with safe back navigation. Off until the enablement review: the
+  // Hono detail page answers meanwhile.
+  {
+    method: "GET",
+    path: "/admin/join-attempts/:id",
+    enabled: false,
+    reads: { resource: "join_attempts", action: "view", route: "admin.join-attempts.show" },
   },
   { method: "GET", path: "/auth/recover", enabled: false, reads: "public" },
   // Profile reads: one Svelte view/model behind both Hono handlers. Native
@@ -139,17 +221,67 @@ export const ROUTE_MANIFEST: OwnedRoute[] = [
   { method: "GET", path: "/hotzones/games", enabled: true, reads: "public" },
   // Member leaderboard: member data, so the Kit branch renders inside the
   // member-read boundary with this declaration and the bridged viewer. Same
-  // gate order, grammar and reads as src/leaderboards/routes.tsx. Held on
-  // Hono until the executed member-board parity journey lands: the parity
-  // gate has no authenticated member-board run, so enabling here would ship
-  // on a green ledger with no proof.
+  // gate order, grammar and reads as src/leaderboards/routes.tsx. Enabled
+  // after the executed member-board parity journey earned the fresh
+  // privacy verdict; returning this entry to enabled: false restores Hono
+  // ownership as the rollback.
   {
     method: "GET",
     path: "/leaderboards/members",
-    enabled: false,
+    enabled: true,
     reads: { resource: "leaderboard", action: "list", route: "leaderboards.members" },
   },
+  // Live event detail: the Kit read model (src/events/kit-detail.ts) mirrors
+  // the served GET /e/:key handler — role checks, member-only attendee
+  // disclosure, related/neighbor content and safe Event JSON-LD — audited by
+  // the member-read boundary with this declaration and the bridged viewer.
+  // Off until the RSVP companion passes: Hono answers meanwhile, and JSON/ICS
+  // stay Hono-owned with no entries of their own.
+  {
+    method: "GET",
+    path: "/e/:key",
+    enabled: false,
+    reads: { resource: "member", action: "list", route: "events.page" },
+  },
 ];
+
+// Fixture-only manifest for the executed parity journeys (member board +
+// live event detail). The shipped manifest held /leaderboards/members on Hono
+// until the fresh privacy verdict, so the Playwright Kit fixture
+// (ci/kit-worker-dev.mjs) could otherwise only ever compare Hono against
+// Hono; the live detail entry stays disabled until the RSVP companion passes,
+// so the same fixture enables it for its executed journey. The fixture sets
+// KIT_PARITY_FIXTURE_MEMBER_BOARD=true and/or
+// KIT_PARITY_FIXTURE_EVENT_DETAIL=true on its own generated loopback worker;
+// this helper honours them only for an http loopback APP_URL, so a deployed
+// Kit Worker (preview workers.dev, staging, production) can never enable
+// either route through them. Returns undefined when neither flag is set, which
+// leaves dispatch on the shipped manifest untouched and unmutated.
+export function fixtureManifestFor(env: {
+  APP_URL?: string;
+  KIT_PARITY_FIXTURE_MEMBER_BOARD?: string;
+  KIT_PARITY_FIXTURE_EVENT_DETAIL?: string;
+}): OwnedRoute[] | undefined {
+  const wantBoard = env.KIT_PARITY_FIXTURE_MEMBER_BOARD === "true";
+  const wantDetail = env.KIT_PARITY_FIXTURE_EVENT_DETAIL === "true";
+  if (!wantBoard && !wantDetail) return undefined;
+  let app: URL;
+  try {
+    app = new URL(env.APP_URL ?? "");
+  } catch {
+    return undefined;
+  }
+  if (app.protocol !== "http:") return undefined;
+  // URL keeps the brackets on an IPv6 hostname ("[::1]").
+  if (!["127.0.0.1", "localhost", "::1", "[::1]"].includes(app.hostname)) return undefined;
+  return ROUTE_MANIFEST.map((entry) => {
+    if (wantBoard && entry.method === "GET" && entry.path === "/leaderboards/members")
+      return { ...entry, enabled: true };
+    if (wantDetail && entry.method === "GET" && entry.path === "/e/:key")
+      return { ...entry, enabled: true };
+    return entry;
+  });
+}
 
 // Response header set only on the Kit-rendered branch of the hook, so the
 // preview parity check and worker e2e can prove which renderer answered.
@@ -293,15 +425,33 @@ export interface HookEventLike {
   locals?: unknown;
 }
 
+// SvelteKit resolve options the core forwards for content leaves only.
+// Structural on purpose (no Kit import): transformPageChunk receives the
+// rendered HTML and returns its replacement. Every other route resolves
+// without options, exactly as before, so existing resolve stubs stay valid.
+export interface KitResolveOptions {
+  transformPageChunk?: (input: { html: string }) => string;
+}
+
 export interface HookDispatchDeps {
   appUrl: string;
   featuredImageHosts?: string;
   honoFetch: (request: Request) => Promise<Response>;
-  resolve: (event: HookEventLike) => Promise<Response>;
-  // Optional manifest override for tests. The hook never passes this: it
-  // always uses the shipped ROUTE_MANIFEST, so there is no swappable owner
-  // seam in production wiring to mutate to always-Kit.
+  resolve: (event: HookEventLike, opts?: KitResolveOptions) => Promise<Response>;
+  // Optional manifest override for tests. Production wiring never passes
+  // one: the hook forwards only the loopback parity-fixture flag below and
+  // the core alone turns flag + appUrl into the fixture route choice.
   manifest?: OwnedRoute[];
+  // Loopback Kit parity fixture flags, forwarded from env by the hook as
+  // plain booleans (KIT_PARITY_FIXTURE_MEMBER_BOARD / _EVENT_DETAIL ===
+  // "true"). Honoured only through fixtureManifestFor: exact flags plus an
+  // http loopback appUrl, so a deployed Worker can never enable either route
+  // through them. Absent or false leaves the shipped ROUTE_MANIFEST untouched.
+  fixtureMemberBoard?: boolean;
+  // Live event-detail fixture flag for the RSVP companion's executed journey:
+  // same loopback-only honouring as the board flag above. The shipped detail
+  // entry stays disabled; the fixture worker alone enables it.
+  fixtureEventDetail?: boolean;
   // Optional read-only session bridge. Runs only after a Kit
   // ownership decision and merges its decision into event.locals before
   // resolve, so Kit loads share one session decision. Absent by default:
@@ -309,6 +459,12 @@ export interface HookDispatchDeps {
   sessionFor?: (event: HookEventLike) => Promise<KitLocals>;
   // Access-log sink for member-read Kit routes. Absent or null refuses the read.
   accessSink?: () => Promise<AccessSink | null>;
+  // Post-release hook for member-read routes: runs only after the boundary
+  // released the buffered response, outside its capture (see
+  // memberReadResponse). The member board uses it to write its anonymous
+  // board-view log, which is not a member read and must neither run inside
+  // the capture nor be refused by it. Absent by default.
+  afterMemberRead?: (event: HookEventLike, response: Response) => Promise<void>;
   // Native archive guard/cache around Kit SSR. The hook binds env into this
   // (request, render) => dispatchPastArchiveRequest(request, env, render); the
   // core decides WHEN it runs, so the route-id branch is pinned here instead
@@ -319,6 +475,13 @@ export interface HookDispatchDeps {
   // archive; the list entry ships disabled, so production never reaches this
   // branch until the companion card enables it.
   eventsPage?: (request: Request, render: () => Promise<Response>) => Promise<Response>;
+  // Native event-detail throttle around the Kit member-read render. Same
+  // binding shape as the archive/list wrappers: the hook binds env into this
+  // (request, render) => dispatchEventDetailRequest(request, env, render); the
+  // core decides WHEN it runs, so the route-id branch is pinned here instead
+  // of in web/src/hooks.server.ts. Absent by default: without it the dispatch
+  // behaves exactly as before.
+  eventDetail?: (request: Request, render: () => Promise<Response>) => Promise<Response>;
 }
 
 // Production Kit decoration, owned by the core so the tested path is the
@@ -422,6 +585,7 @@ function renderMemberRead(
       return sink(entry);
     },
     () => deps.resolve(event),
+    (response) => deps.afterMemberRead?.(event, response) ?? Promise.resolve(),
   );
 }
 
@@ -446,7 +610,16 @@ export async function dispatchHookRequest(
   // its method/path/query/decode coverage guards the dispatch too. Inlining
   // resolveRouteOwner here once left mutants (hard-coded GET, hard-coded
   // path, path+search) green against 32 dispatch tests.
-  const route = decideRoute(event.request, deps.manifest ?? ROUTE_MANIFEST);
+  const route = decideRoute(
+    event.request,
+    deps.manifest ??
+      fixtureManifestFor({
+        APP_URL: deps.appUrl,
+        KIT_PARITY_FIXTURE_MEMBER_BOARD: deps.fixtureMemberBoard ? "true" : undefined,
+        KIT_PARITY_FIXTURE_EVENT_DETAIL: deps.fixtureEventDetail ? "true" : undefined,
+      }) ??
+      ROUTE_MANIFEST,
+  );
   if (!route) {
     return deps.honoFetch(event.request);
   }
@@ -461,7 +634,11 @@ export async function dispatchHookRequest(
   // resolve. A bridge failure must not 500 the render — public Kit pages fail
   // closed to guest-equivalent locals, exactly as if no bridge were wired.
   // It runs outside the member-read boundary: its session read is not member data.
-  if (deps.sessionFor && route.reads !== "public") {
+  // Deferred as a closure because the live detail wrapper runs before it (see
+  // below): the bridge still precedes every render, but a throttled detail
+  // client never reaches it.
+  const bridgeSession = async (): Promise<void> => {
+    if (!deps.sessionFor) return;
     try {
       const bridged = await deps.sessionFor(event);
       const prior = (event.locals as Record<string, unknown> | undefined) ?? {};
@@ -471,20 +648,48 @@ export async function dispatchHookRequest(
         exception: (err as Error)?.constructor?.name ?? "unknown",
       });
     }
-  }
+  };
   // Native archive and list reads share the Hono guard and anonymous cache.
   // The route id owns the branch (SvelteKit sets it before handle runs); the
   // manifest owns the Kit half above, so an unowned path never reaches either
   // wrapper.
   const isPastArchivePage = event.route?.id === "/events/past";
   const isEventsListPage = event.route?.id === "/events";
+  // The live detail is a member read, so it renders inside the boundary; the
+  // shared public-read budget runs before the session bridge through the
+  // detail wrapper, exactly as the served handler throttles before any read.
+  // A limited client gets its 429 without costing a Postgres session read;
+  // the bridge and the member-read render run inside the wrapper for the
+  // clients the budget allows through.
+  const isEventDetailPage = event.route?.id === "/e/[key]";
   let response: Response;
   if (route.reads !== "public") {
-    response = await renderMemberRead(event, route.reads, deps);
+    // Narrowed once for the deferred render: the closure below would lose the
+    // branch narrowing on route.reads.
+    const reads = route.reads;
+    if (isEventDetailPage && deps.eventDetail) {
+      response = await deps.eventDetail(event.request, async () => {
+        await bridgeSession();
+        return renderMemberRead(event, reads, deps);
+      });
+    } else {
+      await bridgeSession();
+      response = await renderMemberRead(event, reads, deps);
+    }
   } else if (isPastArchivePage && deps.pastArchive) {
     response = await deps.pastArchive(event.request, () => deps.resolve(event));
   } else if (isEventsListPage && deps.eventsPage) {
     response = await deps.eventsPage(event.request, () => deps.resolve(event));
+  } else if (isContentLeafPath(route.path)) {
+    // Content leaves keep #808's zero-stylesheet contract on the served
+    // worker: the root layout's Tailwind asset is stripped after resolve and
+    // <body> gains the Hono body class, so the inlined leaf block owns the
+    // canvas with no render-blocking request. Gated on the manifest path
+    // (not the URL), so only Kit-owned leaves take it; disabled leaves never
+    // reach resolve. Every other public route resolves untouched.
+    response = await deps.resolve(event, {
+      transformPageChunk: ({ html }) => transformContentLeafChunk(html),
+    });
   } else {
     response = await deps.resolve(event);
   }

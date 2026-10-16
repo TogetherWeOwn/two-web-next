@@ -7,6 +7,8 @@ on:
     # deliberately absent: title/body edits need no heavy suite (pr-gates.yml
     # covers them with its own `edited` trigger).
     types: [opened, synchronize, reopened, ready_for_review]
+  merge_group:
+    types: [checks_requested]
   push:
     branches: [main]
   # Nightly full run (TOG-14880): non-PR events select every area, so this runs
@@ -37,7 +39,7 @@ permissions:
 # this.
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || (github.event_name == 'schedule' && 'nightly') || github.ref }}
-  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' && github.event_name != 'merge_group' }}
 
 jobs:
   # Cheap change-scope gate (TOG-11811): a PR that only touches prose
@@ -173,15 +175,23 @@ jobs:
       - run: npx playwright install --with-deps chromium
       - name: Chromium cancellation regressions
         run: A11Y_BROWSER_TESTS=true node --test ci/a11y-lifecycle.test.mjs
+      - name: RSVP keyboard-focus proof (real Chromium, loopback fixtures)
+        run: RSVP_FOCUS_BROWSER_TESTS=true node --test ci/rsvp-focus-browser.test.mjs
       - name: Session recovery (local two-tab fixture, mocked OAuth)
         run: timeout 120s npm run test:auth-browser
+      # The suite has no opt-out: it always runs, so missing evidence on the
+      # green path means the run executed nothing. Default conditions on
+      # purpose: when the suite itself fails this step skips and the upload
+      # below (if: always()) still ships the partial evidence for debugging.
+      - name: Session recovery evidence must exist
+        run: node ci/require-session-recovery-evidence.mjs artifacts/session-recovery
       - name: Session recovery evidence
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: session-recovery-evidence
           path: artifacts/session-recovery/
-          if-no-files-found: warn
+          if-no-files-found: error
           retention-days: 14
       # Each browser-gated suite skips unless its opt-in is "true"; the verifier
       # fails the step when any of its cases skipped or went missing.
@@ -327,7 +337,7 @@ jobs:
         run: npm run db:migrate
         env:
           DATABASE_URL: postgres://postgres:ci@localhost:5432/postgres
-      - name: Migration workflow selftest (isolated Postgres, no Neon/network APIs)
+      - name: Migration workflow selftest (isolated Postgres, no network APIs)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
         run: npm run db:migrate:selftest
         env:
@@ -370,7 +380,7 @@ jobs:
         run: npm ci --prefix web --include=dev --no-audit --no-fund
       - name: Check (lint + typecheck + coverage gate)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
-        run: npm run lint && npm run typecheck && npm run e2e:typecheck && npm run test:coverage && npm run e2e:safety && node --test ci/a11y-*.test.mjs ci/admin-properties-ci.test.mjs ci/coverage-command.test.mjs ci/kit-preview-e2e-wiring.test.mjs ci/visual-accept.test.mjs
+        run: npm run lint && npm run typecheck && npm run e2e:typecheck && npm run test:coverage && npm run e2e:safety && node --test ci/a11y-*.test.mjs ci/admin-properties-ci.test.mjs ci/coverage-command.test.mjs ci/kit-preview-e2e-wiring.test.mjs ci/visual-accept.test.mjs ci/tier0-changed-query-files.test.mjs
         env:
           DATABASE_URL: postgres://postgres:ci@localhost:5432/postgres
           AUDIT_IMPORT_TEST_DATABASE_URL: postgres://postgres:ci@localhost:5432/postgres
@@ -397,11 +407,14 @@ jobs:
           # dead gate visible as a workflow warning instead of silent green.
           trap 'echo "::warning::Tier-0 WARN step failed before completing the report"' ERR
           tier0_status=0
-          npm run test:tier0 || tier0_status=$?
-          {
-            echo "### Tier-0 changed query files"
-            git diff --name-only 'origin/main...HEAD' -- src/db src/events src/join src/profiles src/admin src/sessions.ts || true
-          } >> "$GITHUB_STEP_SUMMARY"
+          remember_tier0_failure() {
+            local status=$?
+            if [ "$tier0_status" -eq 0 ]; then
+              tier0_status=$status
+            fi
+          }
+          npm run test:tier0 || remember_tier0_failure
+          node ci/tier0-changed-query-files.mjs || remember_tier0_failure
           exit "$tier0_status"
       - name: Kit parity gate selftests
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
@@ -497,9 +510,9 @@ jobs:
           path: coverage/
           if-no-files-found: error
           retention-days: 14
-      - name: Neon backup selftest (stubbed, no secrets)
+      - name: Database backup selftest (stubbed, no secrets)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
-        run: bash ci/neon-backup-selftest.sh
+        run: bash ci/db-backup-selftest.sh
       # Hermetic backup fixture suites: fake pg_dump/R2/wrangler on local disk, no
       # secrets, no network, no database. They gate the same `check` as every
       # other step (no continue-on-error), and run when backup inputs change
@@ -512,9 +525,9 @@ jobs:
       - name: Backup target selftest (fixtures, no secrets)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true')
         run: python3 ci/backup-target-selftest
-      - name: Neon backup argv selftest (stubbed, no secrets)
+      - name: Database backup argv selftest (stubbed, no secrets)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true')
-        run: bash ci/neon-backup-argv-selftest.sh
+        run: bash ci/db-backup-argv-selftest.sh
       - name: Backup manifest admission selftest (fixtures, no secrets)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true')
         run: python3 ci/backup-manifest-admission-selftest
@@ -548,9 +561,14 @@ jobs:
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true' || needs.scope.outputs.worker == 'true')
         run: |
           npm run check:moderators
-          DISCORD_MODERATOR_ROLE_IDS=508654771276873729 npm run check:moderators -- --require-configured
-          if DISCORD_MODERATOR_ROLE_IDS=SySOp npm run check:moderators -- --require-configured; then
+          DISCORD_GUILD_ID=326474832151838730 DISCORD_MODERATOR_ROLE_IDS=1546777855801954408,1546777856984481792 npm run check:moderators -- --require-configured
+          DISCORD_GUILD_ID=1545644954272137297 DISCORD_MODERATOR_ROLE_IDS=1546211363578191873,1545648550329851946 npm run check:moderators -- --require-configured
+          if DISCORD_MODERATOR_ROLE_IDS=Moderator npm run check:moderators -- --require-configured; then
             echo "::error::role probe accepted a role name; expected exit 1"
+            exit 1
+          fi
+          if DISCORD_GUILD_ID=1545644954272137297 DISCORD_MODERATOR_ROLE_IDS=1546777855801954408,1546777856984481792 npm run check:moderators -- --require-configured; then
+            echo "::error::role probe accepted the production pair in the staging guild; expected exit 1"
             exit 1
           fi
           if npm run smoke:internal-action 2>/dev/null; then
@@ -565,6 +583,12 @@ jobs:
       - name: Production deploy gate selftest (fixtures, no secrets or network)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
         run: node --test ci/production-deploy-gate.test.mjs
+      - name: Gradual promotion selftest (fixtures, no secrets or network)
+        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
+        run: node --test ci/gradual-promote.test.mjs
+      - name: Gradual promotion gate acceptance (real smoke checker, loopback only)
+        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
+        run: node --test ci/gradual-promote-gate-acceptance.test.mjs
       - name: Promotion resolver selftest (stubbed GitHub API, no network)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
         run: node --test ci/resolve-promotion-sha.test.mjs

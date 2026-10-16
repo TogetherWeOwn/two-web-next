@@ -16,15 +16,23 @@ expect Hono for the right reason.
 | `GET /about` | `web/src/routes/about/+page.svelte` (`csr=false`, shared `ContentLeaf.svelte`, `src/about-content.ts`) | public | Hono (`enabled: false`) |
 | `GET /privacy` | `web/src/routes/privacy/+page.svelte` (`csr=false`, shared `POLICY_MARKDOWN`/`POLICY_VERSION` source, no island) | public | Hono (`enabled: false`) |
 | `GET /rules` | `web/src/routes/rules/+page.svelte` (`csr=false`, shared `ContentLeaf.svelte`, `src/rules-content.ts`) | public | Hono (`enabled: false`) |
+| `GET /faq` | `web/src/routes/faq/+page.svelte` (`csr=false`, shared `ContentLeaf.svelte`, `src/faq-content.ts`) | public | Hono (`enabled: false`) |
 | `GET /join` | `web/src/routes/join/+page.svelte` (`csr=false`, shared `/islands/join-widget.js`; `/join/discord` + `/join/callback` stay Hono) | public | Hono (`enabled: false`) |
 | `GET /admin` | `web/src/routes/admin/+page.svelte` (`csr=false`, shared `AdminShell.svelte` chrome, `decideKitAdminGuard` layout guard, bounded `dashboardJoinFunnel`/`topZeroResultSearches` widgets with a classified-outage 503 mapping, no island; enablement blockers: the moderator tab-sync probe — signed auth-status cookie plus `/islands/auth-status.js` script, `src/auth-status.ts` — is not ported, and the layout guard stays read-only with no cookie writes until the enablement slice lands it) | dashboard/view (`admin.dashboard`, bridged moderator viewer) | Hono (`enabled: false`) |
-| `GET /admin/featured` | `web/src/routes/admin/featured/+page.svelte` (`csr=false`, shared `AdminShell.svelte` chrome per-child title, `decideKitAdminGuard` layout guard, bounded shared `listFeatured` read with the Hono filter/sort/page shape and a classified-outage 503 mapping, publish/window status via the shared `featuredStatus()`, no island; new/edit links stay on the Hono `/admin/featured/*` paths and the guarded `/admin/featured-contents` legacy redirects stay Hono until the form slice migrates) | featured_contents/list (`admin.featured.index`, bridged moderator viewer) | Hono (`enabled: false`) |
+| `GET /admin/featured` | `web/src/routes/admin/featured/+page.svelte` (`csr=false`, shared `AdminShell.svelte` chrome per-child title, `decideKitAdminGuard` layout guard, bounded shared `listFeatured` read with the Hono filter/sort/page shape and a classified-outage 503 mapping, publish/window status via the shared `featuredStatus()`, no island; the new link targets the Kit `/admin/featured/new` page, the edit links target the Kit `/admin/featured/:id` page, and the guarded `/admin/featured-contents` legacy redirects stay Hono) | featured_contents/list (`admin.featured.index`, bridged moderator viewer) | Hono (`enabled: false`) |
+| `GET /admin/featured/new` | `web/src/routes/admin/featured/new/+page.svelte` (`csr=false`, shared `AdminShell.svelte` chrome per-child title, `decideKitAdminGuard` layout guard, private no-store, no database read, plain POST form to the Hono-owned `POST /admin/featured` with the exact Hono field names and hint copy, the deferred dirty-draft/double-submit guard island (`data-event-editor` + `/islands/admin-event-editor.js`, progressive with `csr=false`); the create handler — `parseFeaturedForm` + `createFeatured`, 422 re-render / 303 redirect — and the guarded `/admin/featured-contents/create` legacy redirect stay Hono) | featured_contents/view (`admin.featured.create`, bridged moderator viewer) | Hono (`enabled: false`) |
+| `GET /admin/featured/:id` | `web/src/routes/admin/featured/[id]/+page.svelte` (`csr=false`, shared `AdminShell.svelte` chrome per-child title, `decideKitAdminGuard` layout guard, private no-store, shared `getFeatured` read with the Hono canonical-ID admission and a classified-outage 503 mapping, form values in the exact Hono `featuredValues()` shape, preview status via the shared `featuredStatus()`, plain POST forms to the Hono-owned `POST /admin/featured/:id` and `POST /admin/featured/:id/delete` with the exact Hono field names and hint copy, the deferred dirty-draft/double-submit guard island (`data-event-editor` + `/islands/admin-event-editor.js`, progressive with `csr=false`) on the edit form, the delete action as a POST form (never a link); the edit/delete handlers — `parseFeaturedForm` + `updateFeatured`/`deleteFeatured`, 422 re-render / 303 redirect — and the guarded `/admin/featured-contents/:id/edit` legacy redirect stay Hono) | featured_contents/view (`admin.featured.edit`, bridged moderator viewer) | Hono (`enabled: false`) |
 | `GET /admin/activity-log` | `web/src/routes/admin/activity-log/+page.svelte` (`csr=false`, shared `AdminShell.svelte` chrome per-child title, `decideKitAdminGuard` layout guard, shared `listActivityLog` projection with bounded subject/causer filters and newest-first paging plus a one-row lookahead, shared `formatActivityCauser` legacy labeling, ISO `<time datetime>` instants, no `properties` selection or render, no island; enablement blockers: same tab-sync probe as `GET /admin`) | activity_log/list (`admin.activity-log.index`, bridged moderator viewer; snowflake causers audited, legacy/null causers contribute no subject) | Hono (`enabled: false`) |
 | `GET /admin/events` | `web/src/routes/admin/events/+page.svelte` (`csr=false`, shared `AdminShell.svelte` chrome per-child title, `decideKitAdminGuard` layout guard, shared bounded `listEvents` helper with a classified-outage 503 mapping, no island; only this GET migrates — `POST /admin/events`, `/new` and `/:key` stay Hono-owned, so the row forms keep submitting to the unchanged Hono handlers) | events/list (`admin.events.index`, bridged moderator viewer; subject-free `events` + `going-counts` reads, like the Hono handler) | Hono (`enabled: false`) |
-| `GET /admin/join-attempts` | `web/src/routes/admin/join-attempts/+page.svelte` (`csr=false` via the group layout, shared `listJoinAttempts`/`parseJoinAttemptsQuery`/`joinAttemptsUrl` reads with the retention window and exact Discord/request-id search, classified-outage 503 mapping, private no-store, no island; detail links stay Hono-owned until the detail slice lands) | join_attempts/list (`admin.join-attempts.index`, bridged moderator viewer) | Hono (`enabled: false`) |
+| `GET /admin/events/new` | `web/src/routes/admin/events/new/+page.svelte` (`csr=false`, shared `AdminShell.svelte` chrome per-child title, `decideKitAdminGuard` layout guard, empty `buildEventCreateView` with the Hono 422 values/errors shape, private no-store, shared `/islands/admin-event-text-limits.js` + `/islands/admin-event-editor.js` progressive islands; only this GET migrates — `POST /admin/events` stays Hono-owned, so draft-first creation, weekly recurrence (max 52), wall-time/timezone validation, body cap, throttle, error aggregation, retained values and the 303 keep one authority, and the guarded `/admin/events/create` legacy redirect stays Hono) | events/view (`admin.events.create`, bridged moderator viewer; no store read on fresh GET, like the Hono handler) | Hono (`enabled: false`) |
+| `GET /admin/events/:key` | `web/src/routes/admin/events/[key]/+page.svelte` (`csr=false`, shared `AdminShell.svelte` chrome per-child title, `decideKitAdminGuard` layout guard, shared `getEvent` read with the Hono wall-value/status/series shape plus the Hono 422 values/errors shape, shared bounded `listRoster` page with the Hono search/sort/paging copy and a classified-outage 503 mapping, private no-store, plain POST forms to the Hono-owned edit/publish/cancel/RSVP-pause/RSVP-reopen endpoints, shared `/islands/admin-event-text-limits.js` + `/islands/admin-event-editor.js` progressive islands, no removal affordance; only this GET migrates — the update, transition and guarded `/:key/edit` legacy routes stay Hono-owned, so UTC carriers, future recurrence propagation and postcommit writeback keep one authority) | events/view (`admin.events.edit`, bridged moderator viewer; roster members audited, failed audit refuses the whole render) | Hono (`enabled: false`) |
+| `GET /admin/join-attempts` | `web/src/routes/admin/join-attempts/+page.svelte` (`csr=false` via the group layout, shared `listJoinAttempts`/`parseJoinAttemptsQuery`/`joinAttemptsUrl` reads with the retention window and exact Discord/request-id search, classified-outage 503 mapping, private no-store, no island; the detail links target the Kit detail page below) | join_attempts/list (`admin.join-attempts.index`, bridged moderator viewer) | Hono (`enabled: false`) |
+| `GET /admin/join-attempts/:id` | `web/src/routes/admin/join-attempts/[id]/+page.svelte` (`csr=false` via the group layout, shared `getJoinAttempt` retention-window lookup with the Hono canonical-ID admission, classified-outage 503 mapping, private no-store, no island; same outcome/source/time/trace fields, em-dash fallbacks and back navigation as the Hono detail, no raw provider/token payload) | join_attempts/view (`admin.join-attempts.show`, bridged moderator viewer) | Hono (`enabled: false`) |
 | `GET /auth/recover` | `web/src/routes/auth/recover/+page.svelte` (`csr=false`, shared `#lib/Recovery.svelte` over the `RecoveryModel` shape; journey writes + `/join/callback` outcomes stay Hono, rendered through the injected outcome renderer) | public | Hono (`enabled: false`) |
 | `GET /profile` | `web/src/routes/profile/+page.svelte` (`csr=false`, one shared `web/src/lib/ProfileView.svelte`, member record + optional stats) | member (`profile`/`view`/`profile`) | Hono (`enabled: false`) |
 | `GET /members/:user` | `web/src/routes/members/[user]/+page.svelte` (same shared view; retired `/members` directory has no route) | member (`profile`/`view`/`profiles.show`) | Hono (`enabled: false`) |
+| `GET /e/:key` | `web/src/routes/e/[key]/+page.svelte` (`csr=false`, one shared `web/src/lib/EventDetail.svelte` over the `KitEventDetailModel` shape, existing `/islands/rsvp-button.js` + `/copy-link.js` + `/going-count.js`; JSON/ICS stay Hono-owned) | member (`member`/`list`/`events.page`, bridged viewer; disclosed attendee + own-RSVP subjects audited, anonymous releases with none) | Hono (`enabled: false`; enablement blockers: the RSVP companion, plus the session-rotation divergence — the Kit detail load never rotates or re-stamps the sliding session (`docs/parity.md` section 12) — until the Kit detail path rotates) |
+| `GET /leaderboards/members` | `web/src/routes/leaderboards/members/+page.svelte` (`csr=false`, thin binding over `src/kit-members.ts`: same gate order, season/scope/activity grammar, ranking read and `private, no-store` as `src/leaderboards/routes.tsx`; the anonymous board-view log is queued by the load and written after the member-read boundary releases a 200, never inside its capture) | leaderboard (`leaderboard`/`list`/`leaderboards.members`, bridged viewer) | Kit (`enabled: true`; enabled after the executed parity journey below earned the fresh privacy verdict) |
 | everything else | none yet (Kit `[...path]` catch-all → `honoFetch`) | — | Hono |
 
 Add one row per migrated route with its reads class (`public` routes render
@@ -47,8 +55,9 @@ claim of journey parity:
 5. `node ci/kit-worker-e2e.mjs` (built Worker runtime fixture)
 
 In `browser-smoke`, after the critical journeys:
-`e2e:kit-parity` (parameterized no-login journeys vs Hono and the built Kit
-Worker), then `node ci/check-kit-parity.mjs` (loud ledger).
+`e2e:kit-parity` (parameterized journeys vs Hono and the built Kit
+Worker; one shared QA login for the member-board journey), then
+`node ci/check-kit-parity.mjs` (loud ledger).
 
 One baseline integrator owns `e2e/visual/__screenshots__/` and
 `e2e/visual/__screenshots-kit__/`: parallel migration cards never commit
@@ -92,8 +101,41 @@ no secret-shaped content. The join contract adds the one-click/invite
 actions, exactly one widget zone and the flash privacy invariant; the
 recovery contract adds the shared shell markers (`recovery-heading`,
 `recovery-retry`, `recovery-invite`), safe retry/invite hrefs and an
-unconditional private, no-store pin. Reserved paths (`/up`) and `POST /api/*`
-must never carry the Kit marker.
+unconditional private, no-store pin. The static-leaf contracts (`about`,
+`faq`) add the shared Leaf markers (h1 heading id, strap, `about-facts` /
+`faq-list` testids with the first question group, the same-origin `/join`
+action) and the public 3600s cache both handlers set. Reserved paths
+(`/up`) and `POST /api/*` must never carry the Kit marker.
+
+The member-board journeys are the authenticated arm. In preview mode they
+run only when `KIT_PARITY_QA_TOKEN` carries the staging QA token: the gate
+spends one QA login per base (`POST /auth/qa/qa-member`), replays the
+session cookie on the board fetches, and asserts the member contract
+(member chrome, `private, no-store`, `noindex, nofollow`, scope nav, filter
+form, rank/member/going table or empty status, no per-attempt fields, no
+profile links) on the overall, relative, season and activity views, plus
+the admission answers (guest 302 to `/auth/discord`, grammar 400s, never a
+board). Without the token — or when a base answers the login without a
+session — those journeys ledger as skipped WITH the reason, never as a
+quiet pass. The signed-in non-member 403 cannot be minted by the QA seam
+(both QA identities are members), so it stays pinned hermetically
+(`test/member-leaderboard-seasonal-relative-acceptance.test.ts`,
+`test/kit-members.test.ts`). The same journey executes in CI against the
+local Hono worker and the built Kit Worker in
+`e2e/kit-parity/parity.spec.ts`, which spends one shared QA login for both
+targets: the session row is shared, and the spec re-signs the bearer token
+with the Kit fixture's own synthetic secret (`ci/kit-worker-dev.mjs`) for
+the Kit target, since the isolated fixture deliberately does not share the
+Hono worker's signing secret. The Kit target answers from the Kit load
+itself: the fixture worker carries `KIT_PARITY_FIXTURE_MEMBER_BOARD=true`,
+which `fixtureManifestFor` (`src/route-ownership.ts`) honours only for an
+http loopback `APP_URL`, enabling just this entry in the fixture's manifest.
+The shipped manifest now owns the board on Kit everywhere deployed, so the
+fixture flag is redundant for this entry; returning the shipped entry to
+`enabled: false` restores Hono ownership as the rollback.
+The spec asserts the `kit` renderer marker on the Kit target for the served
+board, so a fixture that stops owning the route fails the journey instead
+of silently comparing Hono against Hono.
 
 Exit codes mirror the staging gate: 0 pass, 1 journeys failed, 2
 misconfigured (one-sided URLs, non-allowlisted hosts) or all-skipped/empty
@@ -157,9 +199,11 @@ to 256B — the repository rule from `ci/bundle-budget.json`):
 
 ## Parameterized journeys (`playwright.kit-parity.config.ts`)
 
-`e2e/kit-parity/parity.spec.ts` runs the no-login journeys — past archive
+`e2e/kit-parity/parity.spec.ts` runs the journeys — past archive
 paging/refusals, public feeds/SEO, reserved/API surface, cross-origin
-refusals — against both the Hono worker and the built Kit Worker in one run.
+refusals, and the authenticated member-board journey (guest bounce, member
+views, grammar refusals; one shared QA login) — against both the Hono
+worker and the built Kit Worker in one run.
 Bodies are origin-normalized before comparison (Hono pins the virtual
 staging origin, Kit pins its own `APP_URL`; host strings differ by design).
 The `webcal://` feed origins normalize to a distinct token from the
@@ -177,8 +221,9 @@ until their routes migrate; the gate ledger derives each entry from
 never quiet green, and never a `test.skip` call (the floor forbids new
 skips). An enabled route with no executed journey covering it records a
 failure instead of a skip: in-scope routes fail their journey (scope net),
-any other enabled route fails the uncovered-route catch-all (today only
-GET/HEAD `/events/past` via `PARITY_ROUTES` is covered).
+any other enabled route fails the uncovered-route catch-all (covered via
+`PARITY_ROUTES`: GET/HEAD `/events/past`, `/join`, `/auth/recover`, the four
+hot-zone paths, `/leaderboards/members`, `/about` and `/faq`).
 
 ## Security
 

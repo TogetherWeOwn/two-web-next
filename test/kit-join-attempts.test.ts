@@ -28,8 +28,8 @@ describe("Kit join-attempts manifest: Hono-owned until the enablement review", (
     expect(manifest).toMatch(/\/admin\/join-attempts"[^}]*enabled:\s*false/);
   });
 
-  it("leaves the detail page Hono-owned: no manifest entry names the :id route", () => {
-    expect(read("src/route-ownership.ts")).not.toMatch(/\/admin\/join-attempts\//);
+  it("leaves the detail page Hono-served: its own slice registers the :id entry disabled", () => {
+    expect(read("src/route-ownership.ts")).toMatch(/path:\s*"\/admin\/join-attempts\/:id"/);
   });
 
   it("records the list in the parity-gate inventory as Hono-owned", () => {

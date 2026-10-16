@@ -1,14 +1,30 @@
-// Homepage guest-invariant short-TTL cache. Counts, upcoming events and the
-// published featured base are identical for guests and members, so one shared
-// entry serves every viewer; the response stays `private, no-store` because it
-// also embeds the per-viewer session and the one-shot join flash, which are
-// never cached here. The featured window ([startsAt, endsAt)) is evaluated
-// per request against the cached base, so boundary instants stay exact.
+// Homepage guest-invariant short-TTL cache (isolate-local). Counts, upcoming
+// events and the published featured base are identical for guests and members,
+// so one shared entry serves every viewer; the response stays
+// `private, no-store` because it also embeds the per-viewer session and the
+// one-shot join flash, which are never cached here. The featured window
+// ([startsAt, endsAt)) is evaluated per request against the cached base, so
+// boundary instants stay exact.
 // Outage fallbacks are preserved: a cache miss or a cache failure falls
 // through to the direct read, and an unavailable upcoming read is never
-// stored (a stored outage would hide recovery behind the TTL). Committed
-// featured and event mutations retire every entry (retireHomeGuestCache), so
-// the next homepage fetch re-reads instead of serving retired rows.
+// stored (a stored outage would hide recovery behind the TTL). A
+// Discord-degraded upcoming read is never stored either: with canonical rows
+// present but Discord failed or timed out, storing the degraded list would
+// hide Discord recovery for the full TTL on top of the snapshot store's own
+// failure hold. Committed featured and event mutations retire every entry
+// (retireHomeGuestCache), so the next homepage fetch re-reads instead of
+// serving retired rows.
+//
+// Entries are isolate-local, like `src/events/anon-cache.ts` and `src/counts.ts`:
+// the mutating isolate retires immediately, every other isolate converges on
+// expiry (at most HOME_GUEST_CACHE_TTL_MS from the last write). Hits never
+// extend the entry's expiry. A read already in flight when a retire lands
+// never settles its pre-retire bytes: each read captures the retire
+// generation before its DB lookup and stores only when the generation is
+// unchanged. The Worker Cache API would share entries across isolates, but a
+// shared retire is not provable here (retire-by-enumeration needs `keys()`,
+// and a retire from an isolate that never stored a key would leave the shared
+// entry in place to re-seed memory), so there is no edge layer — memory only.
 import { databaseUrl } from "./db/connection";
 import type { Db } from "./db/index";
 import type { Env } from "./env";
@@ -37,10 +53,6 @@ const featuredByDb = new WeakMap<object, FeaturedEntry>();
 // shared across cases (beforeAll + beforeEach), so entries carry the
 // generation they were stored under and older generations always miss.
 let generation = 0;
-// Edge keys ever stored (`<kind>/<fingerprint>`), so a retire can delete the
-// shared edge entries without the request env. Deterministic per environment,
-// so the set stays tiny.
-const edgeKeys = new Set<string>();
 
 type EnvWithAdminDb = Env & { ADMIN_DB?: Db };
 
@@ -61,248 +73,83 @@ function clearMemory(): void {
 /**
  * Retire every homepage guest entry. Called after a committed featured or
  * event mutation (never on a refusal or a rollback), so the next homepage
- * fetch re-reads the new rows. Cross-isolate readers converge when their
- * in-memory TTL (at most HOME_GUEST_CACHE_TTL_MS) lapses; the edge delete
- * below keeps the shared layer from re-seeding them with retired bytes.
+ * fetch in this isolate re-reads the new rows. Other isolates converge when
+ * their in-memory TTL (at most HOME_GUEST_CACHE_TTL_MS) lapses, the same
+ * bound `src/events/anon-cache.ts` accepts. Callers must await this so the
+ * generation bump lands before the write's redirect goes out.
  */
-export function retireHomeGuestCache(): void {
+export async function retireHomeGuestCache(): Promise<void> {
   clearMemory();
-  if (edgeKeys.size === 0) return;
-  const keys = [...edgeKeys];
-  try {
-    if (typeof caches === "undefined" || !caches.default) return;
-    const cache = caches.default;
-    for (const key of keys) {
-      try {
-        const deleted = cache.delete(new Request(`https://home-guest-cache.internal/${key}`));
-        if (deleted instanceof Promise) deleted.then(undefined, () => {});
-      } catch {
-        // Cache failures never fail the caller.
-      }
-    }
-  } catch {
-    // Cache failures never fail the caller.
-  }
 }
 
 /**
- * Hermetic-test reset: drops the isolate-local entries (Cache API entries are
- * per-test absent) without touching the shared edge layer, so edge round-trip
- * tests can reset memory and still hit their stubbed edge entry.
+ * Hermetic-test reset: drops the isolate-local entries without a mutation.
  */
 export function __resetHomeGuestCacheForTests(): void {
   clearMemory();
 }
 
-// FNV-1a over the key so the Cache API request URL never carries credentials
-// (the Hyperdrive connection string) in plaintext.
-function fingerprint(input: string): string {
-  let hash = 0x811c9dc5;
-  for (let i = 0; i < input.length; i++) {
-    hash ^= input.charCodeAt(i);
-    hash = Math.imul(hash, 0x01000193);
-  }
-  return (hash >>> 0).toString(16);
-}
-
-function cacheApi(env: Env): Promise<Cache | undefined> {
-  try {
-    // Hermetic fixtures inject ADMIN_DB with request-scoped doubles (the
-    // Lighthouse fixture worker builds request-relative event dates per
-    // request): a cross-request edge entry would serve one request's fixture
-    // to the next. Those environments keep isolate-local reuse through the
-    // injected-object WeakMap above; the edge layer is production-only.
-    if (injectedDb(env)) return Promise.resolve(undefined);
-    if (typeof caches === "undefined" || !caches.default) return Promise.resolve(undefined);
-    return Promise.resolve(caches.default);
-  } catch {
-    return Promise.resolve(undefined);
-  }
-}
-
-function cacheRequest(kind: "upcoming" | "featured", key: string): Request {
-  return new Request(`https://home-guest-cache.internal/${kind}/${fingerprint(key)}`);
-}
-
-function reviveUpcoming(raw: unknown): HomeUpcomingMerged | undefined {
-  if (!raw || typeof raw !== "object") return undefined;
-  const value = raw as HomeUpcomingMerged;
-  if (!Array.isArray(value.items) || typeof value.unavailable !== "boolean") return undefined;
-  const reviveDate = (input: unknown): Date | undefined => {
-    if (input instanceof Date && Number.isFinite(input.getTime())) return input;
-    if (typeof input === "string") {
-      const parsed = new Date(input);
-      if (Number.isFinite(parsed.getTime())) return parsed;
-    }
-    return undefined;
-  };
-  const items: HomeUpcomingMerged["items"] = [];
-  for (const row of value.items) {
-    if (!row || typeof row !== "object") return undefined;
-    const startsAt = reviveDate((row as { startsAt?: unknown }).startsAt);
-    if (!startsAt) return undefined;
-    items.push({ ...(row as object), startsAt } as HomeUpcomingMerged["items"][number]);
-  }
-  return {
-    items,
-    unavailable: value.unavailable,
-    discordFailed: value.discordFailed === true,
-  };
-}
-
-async function readUpcomingCache(
-  env: Env,
-  key: string,
-  injected: Db | undefined,
-): Promise<HomeUpcomingMerged | undefined> {
+function readUpcomingMemory(key: string, injected: Db | undefined): HomeUpcomingMerged | undefined {
   const now = Date.now();
   const memory = injected ? upcomingByDb.get(injected) : upcomingByUrl.get(key);
   if (memory && memory.gen === generation && now < memory.expiresAt) return memory.value;
-  const cache = await cacheApi(env);
-  if (!cache) return undefined;
-  try {
-    const hit = await cache.match(cacheRequest("upcoming", key));
-    if (!hit) return undefined;
-    const revived = reviveUpcoming(await hit.json());
-    if (!revived || revived.unavailable) return undefined;
-    const entry = { value: revived, expiresAt: now + HOME_GUEST_CACHE_TTL_MS, gen: generation };
-    if (injected) upcomingByDb.set(injected, entry);
-    else upcomingByUrl.set(key, entry);
-    return revived;
-  } catch {
-    return undefined;
-  }
-}
-
-function storeUpcomingCache(
-  env: Env,
-  key: string,
-  injected: Db | undefined,
-  value: HomeUpcomingMerged,
-  ctx?: WaitUntilCtx,
-): void {
-  if (value.unavailable) return;
-  const entry = { value, expiresAt: Date.now() + HOME_GUEST_CACHE_TTL_MS, gen: generation };
-  edgeKeys.add(`upcoming/${fingerprint(key)}`);
-  if (injected) upcomingByDb.set(injected, entry);
-  else upcomingByUrl.set(key, entry);
-  void cacheApi(env).then((cache) => {
-    if (!cache) return;
-    const request = cacheRequest("upcoming", key);
-    const response = new Response(JSON.stringify(value), {
-      headers: {
-        "content-type": "application/json",
-        "cache-control": `public, max-age=${Math.floor(HOME_GUEST_CACHE_TTL_MS / 1000)}`,
-      },
-    });
-    try {
-      const put = cache.put(request, response);
-      if (ctx?.waitUntil) ctx.waitUntil(put);
-      // A late Cache API failure must not even warn: the read already returned.
-      else put.then(undefined, () => {});
-    } catch {
-      // Cache failures never fail the request.
-    }
-  });
-}
-
-function reviveBound(input: unknown): Date | null | undefined {
-  if (input === null) return null;
-  if (input instanceof Date && Number.isFinite(input.getTime())) return input;
-  if (typeof input === "string") {
-    const parsed = new Date(input);
-    if (Number.isFinite(parsed.getTime())) return parsed;
-  }
   return undefined;
 }
 
-function reviveFeatured(raw: unknown): PublishedFeatured[] | undefined {
-  if (!raw || typeof raw !== "object") return undefined;
-  const items = (raw as { items?: unknown }).items;
-  if (!Array.isArray(items)) return undefined;
-  const value: PublishedFeatured[] = [];
-  for (const item of items) {
-    if (!item || typeof item !== "object") return undefined;
-    const row = item as Record<string, unknown>;
-    if (typeof row.id !== "number" || typeof row.title !== "string") return undefined;
-    for (const field of ["body", "url", "imageUrl", "imageAlt"] as const) {
-      if (row[field] !== null && typeof row[field] !== "string") return undefined;
-    }
-    const startsAt = reviveBound(row.startsAt);
-    const endsAt = reviveBound(row.endsAt);
-    if (startsAt === undefined || endsAt === undefined) return undefined;
-    value.push({
-      id: row.id,
-      title: row.title,
-      body: row.body as string | null,
-      url: row.url as string | null,
-      imageUrl: row.imageUrl as string | null,
-      imageAlt: row.imageAlt as string | null,
-      startsAt,
-      endsAt,
-    });
-  }
-  return value;
-}
-
-async function readFeaturedCache(
-  env: Env,
+function storeUpcomingMemory(
   key: string,
   injected: Db | undefined,
-): Promise<PublishedFeatured[] | undefined> {
+  value: HomeUpcomingMerged,
+  genAtStart?: number,
+): void {
+  // A degraded or unavailable read is never stored: a stored outage or a
+  // stored Discord failure would hide recovery behind the TTL (the browser
+  // suite caught a created slot invisible to the guest under load, and a slow
+  // Discord read would hide Discord events the same way).
+  if (value.unavailable || value.discordFailed) return;
+  // A retire that landed while the DB read was in flight makes this value
+  // stale already: dropping it keeps the retired rows retired instead of
+  // re-seeding memory with pre-write bytes.
+  if (genAtStart !== undefined && genAtStart !== generation) return;
+  const entry = { value, expiresAt: Date.now() + HOME_GUEST_CACHE_TTL_MS, gen: generation };
+  if (injected) upcomingByDb.set(injected, entry);
+  else upcomingByUrl.set(key, entry);
+}
+
+function readFeaturedMemory(
+  key: string,
+  injected: Db | undefined,
+): PublishedFeatured[] | undefined {
   const now = Date.now();
   const memory = injected ? featuredByDb.get(injected) : featuredByUrl.get(key);
   if (memory && memory.gen === generation && now < memory.expiresAt) return memory.value;
-  const cache = await cacheApi(env);
-  if (!cache) return undefined;
-  try {
-    const hit = await cache.match(cacheRequest("featured", key));
-    if (!hit) return undefined;
-    const value = reviveFeatured(await hit.json());
-    if (!value) return undefined;
-    const entry = { value, expiresAt: now + HOME_GUEST_CACHE_TTL_MS, gen: generation };
-    if (injected) featuredByDb.set(injected, entry);
-    else featuredByUrl.set(key, entry);
-    return value;
-  } catch {
-    return undefined;
-  }
+  return undefined;
 }
 
-function storeFeaturedCache(
-  env: Env,
+function storeFeaturedMemory(
   key: string,
   injected: Db | undefined,
   value: PublishedFeatured[],
-  ctx?: WaitUntilCtx,
+  genAtStart?: number,
 ): void {
+  // An empty base is never stored: a deadline fallback reads as [] exactly
+  // like a genuinely empty table, and a stored outage would hide recovery
+  // behind the TTL (same principle as the upcoming `unavailable` guard; the
+  // browser suite caught a created slot invisible to the guest under load).
+  // A genuinely empty table simply re-reads until a retire-then-write adds
+  // the first row.
+  if (value.length === 0) return;
+  // Same in-flight retire guard as the upcoming store: a value read before
+  // the write committed must never overwrite the retire.
+  if (genAtStart !== undefined && genAtStart !== generation) return;
   const entry = { value, expiresAt: Date.now() + HOME_GUEST_CACHE_TTL_MS, gen: generation };
-  edgeKeys.add(`featured/${fingerprint(key)}`);
   if (injected) featuredByDb.set(injected, entry);
   else featuredByUrl.set(key, entry);
-  void cacheApi(env).then((cache) => {
-    if (!cache) return;
-    const request = cacheRequest("featured", key);
-    const response = new Response(JSON.stringify({ items: value }), {
-      headers: {
-        "content-type": "application/json",
-        "cache-control": `public, max-age=${Math.floor(HOME_GUEST_CACHE_TTL_MS / 1000)}`,
-      },
-    });
-    try {
-      const put = cache.put(request, response);
-      if (ctx?.waitUntil) ctx.waitUntil(put);
-      // A late Cache API failure must not even warn: the read already returned.
-      else put.then(undefined, () => {});
-    } catch {
-      // Cache failures never fail the request.
-    }
-  });
 }
 
 /**
- * Guest-invariant homepage teaser with a short-TTL edge layer. The merged
- * read keeps its own deadline/degrade contract; this wrapper only adds
+ * Guest-invariant homepage teaser with a short-TTL isolate-local layer. The
+ * merged read keeps its own deadline/degrade contract; this wrapper only adds
  * cross-request reuse and never throws.
  */
 export async function cachedHomeUpcoming(
@@ -312,14 +159,16 @@ export async function cachedHomeUpcoming(
   now = new Date(),
   ctx?: WaitUntilCtx,
 ): Promise<HomeUpcomingMerged> {
+  void ctx;
   const injected = injectedDb(env);
   const key = urlKey(env);
   try {
-    const hit = await readUpcomingCache(env, key, injected);
+    const hit = readUpcomingMemory(key, injected);
     if (hit) return hit;
   } catch {
     // Fall through to the direct read.
   }
+  const genAtStart = generation;
   let value: HomeUpcomingMerged;
   try {
     value = await loadHomeUpcomingMerged(openDb, getDiscordSource, now);
@@ -327,7 +176,7 @@ export async function cachedHomeUpcoming(
     return { items: [], unavailable: true, discordFailed: false };
   }
   try {
-    storeUpcomingCache(env, key, injected, value, ctx);
+    storeUpcomingMemory(key, injected, value, genAtStart);
   } catch {
     // Cache failures never fail the request.
   }
@@ -335,9 +184,9 @@ export async function cachedHomeUpcoming(
 }
 
 /**
- * Guest-invariant featured list with the same short-TTL edge layer. The
- * cached base is the published list; the window is evaluated per request, so
- * consecutive reads at different instants each see their own visibility.
+ * Guest-invariant featured list with the same short-TTL isolate-local layer.
+ * The cached base is the published list; the window is evaluated per request,
+ * so consecutive reads at different instants each see their own visibility.
  * Never throws.
  */
 export async function cachedFeatured(
@@ -346,6 +195,7 @@ export async function cachedFeatured(
   now = new Date(),
   ctx?: WaitUntilCtx,
 ): Promise<VisibleFeatured[]> {
+  void ctx;
   const visibleAt = (rows: PublishedFeatured[]): VisibleFeatured[] =>
     rows.filter((row) =>
       currentlyVisible({ isPublished: true, startsAt: row.startsAt, endsAt: row.endsAt }, now),
@@ -353,11 +203,12 @@ export async function cachedFeatured(
   const injected = injectedDb(env);
   const key = urlKey(env);
   try {
-    const hit = await readFeaturedCache(env, key, injected);
+    const hit = readFeaturedMemory(key, injected);
     if (hit) return visibleAt(hit);
   } catch {
     // Fall through to the direct read.
   }
+  const genAtStart = generation;
   let value: PublishedFeatured[];
   try {
     const db = await openDb();
@@ -366,7 +217,7 @@ export async function cachedFeatured(
     return [];
   }
   try {
-    storeFeaturedCache(env, key, injected, value, ctx);
+    storeFeaturedMemory(key, injected, value, genAtStart);
   } catch {
     // Cache failures never fail the request.
   }

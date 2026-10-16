@@ -6,12 +6,15 @@
   "compatibility_date": "2026-09-29",
   "compatibility_flags": ["nodejs_compat"],
   "observability": { "enabled": true },
-  // Staging Neon is eu-central-1 and every statement is a round trip through Hyperdrive, so run
-  // the Worker beside it. Served from CDG/AMS, DB-bound requests had a median of 125-195 ms; served
-  // from ORD/MSP/DFW/SEA/IAD (where GitHub-hosted runners land) 0.5-1.8 s, p95 3-4.6 s. A
-  // far-away user now pays one hop to the Worker instead of one per statement. env.production
-  // opts out below: its database lives elsewhere and that placement is a cutover decision.
-  "placement": { "region": "aws:eu-central-1" },
+  // Staging database is PlanetScale us-east-1, so this Worker is placed
+  // beside it (aws:us-east-1): every statement is a Hyperdrive round trip,
+  // and the pre-repoint eu-central-1 pin (beside the retired Neon branch)
+  // made each one transatlantic. Live /up from this run's host took 1.32 s
+  // under the old pin (2026-10-15); re-measure after the first deploy on
+  // this placement before quoting a new figure.
+  // env.production opts out below: its database lives elsewhere and that
+  // placement is a cutover decision.
+  "placement": { "region": "aws:us-east-1" },
   // Deploy the Tail Worker first; it has no public route and its own optional webhook secret.
   "tail_consumers": [{ "service": "two-web-next-alerts" }],
   "workers_dev": false,
@@ -40,8 +43,8 @@
   "version_metadata": { "binding": "CF_VERSION_METADATA" },
   // Every host, including static requests, must pass the Worker's host guard.
   "assets": { "directory": "./public", "binding": "ASSETS", "run_worker_first": true },
-  // Shared Postgres (S1: TOG-9679): Hyperdrive "two-web-next-staging" → Neon
-  // project two-web-next, staging branch (pooled endpoint). Local dev sets
+  // Shared Postgres: Hyperdrive "two-web-next-staging" → PlanetScale
+  // staging branch (direct endpoint). Local dev sets
   // CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_DB to agent-testdb.
   "hyperdrive": [
     { "binding": "DB", "id": "1d48a54abd3444009b7067c03c63ff9f" },
@@ -55,8 +58,10 @@
     "FEATURED_IMAGE_HOSTS": "",
     "DISCORD_CLIENT_ID": "1539711683898118154",
     "DISCORD_GUILD_ID": "1545644954272137297",
-    // Approved SySOp only. Preflight checks this exact public deployment value.
-    "DISCORD_MODERATOR_ROLE_IDS": "508654771276873729",
+    // Approved staging Owner+Moderator pair only (guild-bound: these IDs exist
+    // solely in the staging guild above, never copy the production pair here).
+    // Preflight checks this exact public deployment value plus the binding.
+    "DISCORD_MODERATOR_ROLE_IDS": "1546211363578191873,1545648550329851946",
     // WEB-HOMEPAGE campaign invite (never expires, unlimited); the fallback when auto-join fails.
     "DISCORD_INVITE_URL": "https://discord.gg/4GwEDNRTtx"
   },
@@ -105,16 +110,17 @@
       // Vars/bindings do not inherit across environments. No QA_AUTH_TOKEN in prod.
       // env.production.vars must repeat every var the worker reads: Wrangler
       // never inherits top-level vars into a named environment. The moderator
-      // list is the same approved SySOp role as staging (TOG-106); without it
-      // production boots with no moderators and admin authorization fails
-      // closed for everyone.
+      // list is the approved Owner+Moderator pair for the production guild
+      // above, unrelated to staging's pair (role IDs are guild-scoped);
+      // without it production boots with no moderators and admin
+      // authorization fails closed for everyone.
       "vars": {
         "APP_URL": "https://togetherweown.com",
         "FEATURED_IMAGE_HOSTS": "",
         "DISCORD_CLIENT_ID": "1539711683898118154",
         "DISCORD_GUILD_ID": "326474832151838730",
-        // Approved SySOp only. Production preflight checks this exact value.
-        "DISCORD_MODERATOR_ROLE_IDS": "508654771276873729",
+        // Approved Owner+Moderator pair only. Production preflight checks this exact value.
+        "DISCORD_MODERATOR_ROLE_IDS": "1546777855801954408,1546777856984481792",
         "DISCORD_INVITE_URL": "https://discord.gg/4GwEDNRTtx"
       }
     }

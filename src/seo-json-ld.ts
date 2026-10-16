@@ -113,18 +113,21 @@ export function buildEventNode(e: JsonLdEventInput, appUrl: string): Record<stri
   };
 }
 
-// Safe serialization for <script type="application/ld+json">: escape every
-// character that could close the script element or start an HTML comment, the
-// same breakout class the legacy Blade block stopped with
+// Escapes the characters that could close the script element or start an HTML
+// comment, the breakout class the legacy Blade block stopped with
 // JSON_HEX_TAG|HEX_APOS|HEX_AMP|HEX_QUOT. Each replacement is a valid JSON
-// string escape so JSON.parse returns the original text.
-export function safeJsonLd(value: unknown): string {
-  return JSON.stringify(value)
+// string escape, and the function is idempotent: once escaped, nothing matches.
+export function escapeJsonLdText(serialized: string): string {
+  return serialized
     .replace(/</g, "\\u003c")
     .replace(/>/g, "\\u003e")
     .replace(/&/g, "\\u0026")
     .replace(/\u2028/g, "\\u2028")
     .replace(/\u2029/g, "\\u2029");
+}
+
+export function safeJsonLd(value: unknown): string {
+  return escapeJsonLdText(JSON.stringify(value));
 }
 
 /** Serialized site-identity graph for homepage and event pages. */

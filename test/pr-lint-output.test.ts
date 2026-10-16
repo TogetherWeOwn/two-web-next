@@ -56,6 +56,10 @@ function transport(
   body: string,
   author = "fixture-author",
   commits: unknown[] = [],
+  branchMessages: string[] = [],
+  mergedBranchMessages: string[] = [],
+  baseAdvanceMessages: string[] = [],
+  originOnlyBaseRef = false,
 ) {
   const scratch = mkdtempSync(
     join(
@@ -67,15 +71,164 @@ function transport(
     mkdirSync(join(scratch, "ci"));
     mkdirSync(join(scratch, "bin"));
     // Only local Python/bash and a fixture gh are executable; no inherited credentials.
-    const commands = spawnSync("bash", ["-c", "command -v python3; command -v bash"], {
-      encoding: "utf8",
-      env: { PATH: "/usr/local/bin:/usr/bin:/bin" },
-    });
+    const commands = spawnSync(
+      "bash",
+      ["-c", "command -v python3; command -v bash; command -v git"],
+      {
+        encoding: "utf8",
+        env: { PATH: "/usr/local/bin:/usr/bin:/bin" },
+      },
+    );
     expect(commands.status).toBe(0);
-    const [python, bash] = commands.stdout.trim().split("\n") as [string, string];
+    const [python, bash, git] = commands.stdout.trim().split("\n") as [string, string, string];
     symlinkSync(python, join(scratch, "bin/python3"));
+    symlinkSync(git, join(scratch, "bin/git"));
+    const gitEnv = {
+      ...process.env,
+      GIT_AUTHOR_NAME: "test",
+      GIT_AUTHOR_EMAIL: "test@example.com",
+      GIT_COMMITTER_NAME: "test",
+      GIT_COMMITTER_EMAIL: "test@example.com",
+    };
     copyFileSync(checker, join(scratch, "ci/conventions.py"));
     if (existsSync(helper)) copyFileSync(helper, join(scratch, helper));
+    copyFileSync("ci/floor_waiver_body.py", join(scratch, "ci/floor_waiver_body.py"));
+    for (const args of [
+      ["init", "-q"],
+      ["config", "user.email", "test@example.com"],
+      ["config", "user.name", "test"],
+    ]) {
+      const initialized = spawnSync(git, args, { cwd: scratch, env: gitEnv, encoding: "utf8" });
+      expect(initialized.status, initialized.stderr).toBe(0);
+    }
+    writeFileSync(join(scratch, "base.txt"), "base\n");
+    for (const args of [
+      ["add", "."],
+      ["commit", "-qm", "base"],
+    ]) {
+      const committed = spawnSync(git, args, { cwd: scratch, env: gitEnv, encoding: "utf8" });
+      expect(committed.status, committed.stderr).toBe(0);
+    }
+    const baseSha = spawnSync(git, ["rev-parse", "HEAD"], {
+      cwd: scratch,
+      env: gitEnv,
+      encoding: "utf8",
+    }).stdout.trim();
+    if (baseAdvanceMessages.length) {
+      const baseBranch = originOnlyBaseRef ? "base-update" : "main";
+      for (const args of [["checkout", "-b", baseBranch, baseSha]]) {
+        const checkedOut = spawnSync(git, args, { cwd: scratch, env: gitEnv, encoding: "utf8" });
+        expect(checkedOut.status, checkedOut.stderr).toBe(0);
+      }
+      for (const [index, message] of baseAdvanceMessages.entries()) {
+        writeFileSync(join(scratch, `main-${index}.txt`), `${message}\n`);
+        for (const args of [
+          ["add", "."],
+          ["commit", "-m", `main ${index}`, "-m", message],
+        ]) {
+          const committed = spawnSync(git, args, { cwd: scratch, env: gitEnv, encoding: "utf8" });
+          expect(committed.status, committed.stderr).toBe(0);
+        }
+      }
+      if (originOnlyBaseRef) {
+        const updated = spawnSync(git, ["update-ref", "refs/remotes/origin/main", "HEAD"], {
+          cwd: scratch,
+          env: gitEnv,
+          encoding: "utf8",
+        });
+        expect(updated.status, updated.stderr).toBe(0);
+        const localMain = spawnSync(git, ["branch", "--list", "main"], {
+          cwd: scratch,
+          env: gitEnv,
+          encoding: "utf8",
+        });
+        expect(localMain.status, localMain.stderr).toBe(0);
+        if (localMain.stdout.trim()) {
+          const removed = spawnSync(git, ["branch", "-D", "main"], {
+            cwd: scratch,
+            env: gitEnv,
+            encoding: "utf8",
+          });
+          expect(removed.status, removed.stderr).toBe(0);
+        }
+        const localMainRef = spawnSync(git, ["rev-parse", "--verify", "refs/heads/main"], {
+          cwd: scratch,
+          env: gitEnv,
+          encoding: "utf8",
+        });
+        expect(localMainRef.status).not.toBe(0);
+        const remoteMainRef = spawnSync(
+          git,
+          ["rev-parse", "--verify", "refs/remotes/origin/main"],
+          {
+            cwd: scratch,
+            env: gitEnv,
+            encoding: "utf8",
+          },
+        );
+        expect(remoteMainRef.status, remoteMainRef.stderr).toBe(0);
+        expect(remoteMainRef.stdout.trim()).not.toBe(baseSha);
+      }
+    }
+    if (mergedBranchMessages.length) {
+      for (const args of [["checkout", "-b", "upstream", baseSha]]) {
+        const checkedOut = spawnSync(git, args, { cwd: scratch, env: gitEnv, encoding: "utf8" });
+        expect(checkedOut.status, checkedOut.stderr).toBe(0);
+      }
+      for (const [index, message] of mergedBranchMessages.entries()) {
+        writeFileSync(join(scratch, `upstream-${index}.txt`), `${message}\n`);
+        for (const args of [
+          ["add", "."],
+          ["commit", "-m", `upstream ${index}`, "-m", message],
+        ]) {
+          const committed = spawnSync(git, args, { cwd: scratch, env: gitEnv, encoding: "utf8" });
+          expect(committed.status, committed.stderr).toBe(0);
+        }
+      }
+      const checkedOut = spawnSync(git, ["checkout", "-b", "pr", baseSha], {
+        cwd: scratch,
+        env: gitEnv,
+        encoding: "utf8",
+      });
+      expect(checkedOut.status, checkedOut.stderr).toBe(0);
+    } else if (baseAdvanceMessages.length) {
+      const checkedOut = spawnSync(git, ["checkout", "-b", "pr", baseSha], {
+        cwd: scratch,
+        env: gitEnv,
+        encoding: "utf8",
+      });
+      expect(checkedOut.status, checkedOut.stderr).toBe(0);
+    }
+    for (const [index, message] of branchMessages.entries()) {
+      writeFileSync(join(scratch, `branch-${index}.txt`), `${message}\n`);
+      for (const args of [
+        ["add", "."],
+        ["commit", "-m", `branch ${index}`, "-m", message],
+      ]) {
+        const committed = spawnSync(git, args, { cwd: scratch, env: gitEnv, encoding: "utf8" });
+        expect(committed.status, committed.stderr).toBe(0);
+      }
+    }
+    if (mergedBranchMessages.length) {
+      const merged = spawnSync(git, ["merge", "--no-ff", "upstream", "-m", "Merge upstream"], {
+        cwd: scratch,
+        env: gitEnv,
+        encoding: "utf8",
+      });
+      expect(merged.status, merged.stderr).toBe(0);
+    }
+    if (baseAdvanceMessages.length) {
+      const merged = spawnSync(
+        git,
+        ["merge", "--no-ff", originOnlyBaseRef ? "origin/main" : "main", "-m", "Merge main"],
+        {
+          cwd: scratch,
+          env: gitEnv,
+          encoding: "utf8",
+        },
+      );
+      expect(merged.status, merged.stderr).toBe(0);
+    }
     writeFileSync(
       join(scratch, checker),
       `import json, os, runpy
@@ -108,6 +261,8 @@ print(json.dumps({"event": "pull_request" if event == "workflow_dispatch" else e
       GITHUB_REPOSITORY: "TogetherWeOwn/fixture",
       GITHUB_EVENT_NAME: event,
       PR_NUMBER: "28",
+      FLOOR_WAIVER_BASE_SHA: baseSha,
+      FLOOR_WAIVER_BASE_REF: "main",
       COMMITS: JSON.stringify(commits),
     };
     const resolve = step("Resolve PR title/body");
@@ -207,10 +362,88 @@ describe.each(["pull_request", "workflow_dispatch"])(
       expect(result.status, result.output).toBe(0);
       expect(result.received.AUTHOR).toBe("github-actions[bot]");
     });
+
+    it("requires waivers from a merged side branch in the PR body", () => {
+      const sideWaiver = "Floor-waiver: test-deleted test/b.test.ts -- moved to docs";
+      const missing = transport(event, title, validBody, "fixture-author", [], [], [sideWaiver]);
+      expect(missing.status, missing.output).toBe(1);
+      expect(missing.output).toContain("must appear verbatim in the PR body");
+      const copied = transport(
+        event,
+        title,
+        `${validBody}\n\n${sideWaiver}`,
+        "fixture-author",
+        [],
+        [],
+        [sideWaiver],
+      );
+      expect(copied.status, copied.output).toBe(0);
+      expect(copied.output).toContain("PR floor-waiver trailers are visible");
+    });
+
+    it("resolves origin/main when no local main exists and the base SHA is stale", () => {
+      const baseWaiver = "Floor-waiver: test-deleted test/earlier.test.ts -- moved in earlier PR";
+      const result = transport(
+        event,
+        title,
+        validBody,
+        "fixture-author",
+        [],
+        [],
+        [],
+        [baseWaiver],
+        true,
+      );
+      expect(result.status, result.output).toBe(0);
+      expect(result.output).not.toContain(baseWaiver);
+    });
+
+    it("ignores waiver trailers already on the base branch after an update-branch merge", () => {
+      const baseWaiver = "Floor-waiver: test-deleted test/earlier.test.ts -- moved in earlier PR";
+      const result = transport(event, title, validBody, "fixture-author", [], [], [], [baseWaiver]);
+      expect(result.status, result.output).toBe(0);
+      expect(result.output).not.toContain(baseWaiver);
+    });
+
+    it("requires every branch waiver in the PR body", () => {
+      const waiver = "Floor-waiver: test-deleted test/a.test.ts -- moved to docs";
+      const missing = transport(event, title, validBody, "fixture-author", [], [waiver]);
+      expect(missing.status, missing.output).toBe(1);
+      expect(missing.output).toContain("must appear verbatim in the PR body");
+      const copied = transport(
+        event,
+        title,
+        `${validBody}\n\n${waiver}`,
+        "fixture-author",
+        [],
+        [waiver],
+      );
+      expect(copied.status, copied.output).toBe(0);
+      expect(copied.output).toContain("PR floor-waiver trailers are visible");
+    });
   },
 );
 
 describe("unchanged convention policy and workflow gates", () => {
+  it("keeps the waiver self-test fail-closed for old and deleting heads", () => {
+    const unit = step("Unit-test the lint");
+    expect(unit.text).toContain("if [ -f ci/test_floor_waiver_body.py ]; then");
+    expect(unit.text).toContain("git log --format=%H -1 HEAD -- ci/test_floor_waiver_body.py");
+    expect(unit.text).toContain("Floor-waiver body test deleted at this head; refusing to skip.");
+  });
+
+  it("passes the immutable PR base SHA to waiver validation for event and dispatch runs", () => {
+    const refs = step("Resolve PR head ref");
+    expect(refs.text).toContain("BASE_EVENT_SHA: ${{ github.event.pull_request.base.sha }}");
+    expect(refs.text).toContain(".base.sha");
+    expect(refs.text).toContain('base_sha="$BASE_EVENT_SHA"');
+    expect(refs.text).toContain("BASE_EVENT_REF");
+    expect(refs.text).toContain(".base.ref");
+    const check = step("Check title, body and commits");
+    expect(check.text).toContain("FLOOR_WAIVER_BASE_SHA: ${{ steps.head-ref.outputs.base_sha }}");
+    expect(check.text).toContain("FLOOR_WAIVER_BASE_REF:");
+  });
+
   it("keeps a large Unicode API body in the job-owned file rather than an encoded env value", () => {
     const body = `${validBody}\n${"🧪".repeat(30_000)}`;
     const result = transport("workflow_dispatch", title, body);
@@ -283,9 +516,16 @@ describe("unchanged convention policy and workflow gates", () => {
   });
 
   it.each([
-    ["writes the listed PR commit subjects to the job file", 0, "fix(ci): one\nfix(ci): two\n", ""],
-    ["survives a failed listing with a warning and an empty file", 1, "", "::warning::"],
-  ])("commit-subject step %s", (_name, ghExit, expectedFile, expectedOutput) => {
+    [
+      "writes the listed PR commit subjects to the job file",
+      "ok",
+      0,
+      "fix(ci): one\nfix(ci): two\n",
+      "",
+    ],
+    ["passes a genuinely empty listing with an empty file", "empty", 0, "", ""],
+    ["fails closed on a failed listing without leaving a file", "fail", 1, null, "::error::"],
+  ])("commit-subject step %s", (_name, ghMode, expectedStatus, expectedFile, expectedOutput) => {
     const scratch = mkdtempSync(
       join(
         process.env.PAPERCLIP_RUN_SCRATCH_DIR ?? process.env.PAPERCLIP_SCRATCH_DIR ?? tmpdir(),
@@ -294,11 +534,13 @@ describe("unchanged convention policy and workflow gates", () => {
     );
     try {
       mkdirSync(join(scratch, "bin"));
-      writeFileSync(
-        join(scratch, "bin/gh"),
-        `#!/bin/bash\nif [ "${ghExit}" != 0 ]; then exit 1; fi\nprintf 'fix(ci): one\\nfix(ci): two\\n'\n`,
-        { mode: 0o755 },
-      );
+      const ghStub =
+        ghMode === "fail"
+          ? "#!/bin/bash\nexit 1\n"
+          : ghMode === "empty"
+            ? "#!/bin/bash\nexit 0\n"
+            : "#!/bin/bash\nprintf 'fix(ci): one\\nfix(ci): two\\n'\n";
+      writeFileSync(join(scratch, "bin/gh"), ghStub, { mode: 0o755 });
       const listing = step("List PR commit subjects");
       expect(listing.text).toContain("if: github.event_name != 'push'");
       const result = spawnSync("bash", ["-c", listing.run], {
@@ -311,8 +553,12 @@ describe("unchanged convention policy and workflow gates", () => {
         encoding: "utf8",
         timeout: 5000,
       });
-      expect(result.status, result.stdout + result.stderr).toBe(0);
-      expect(readFileSync(join(scratch, "pr-commit-subjects.txt"), "utf8")).toBe(expectedFile);
+      expect(result.status, result.stdout + result.stderr).toBe(expectedStatus);
+      if (expectedFile === null) {
+        expect(existsSync(join(scratch, "pr-commit-subjects.txt"))).toBe(false);
+      } else {
+        expect(readFileSync(join(scratch, "pr-commit-subjects.txt"), "utf8")).toBe(expectedFile);
+      }
       if (expectedOutput) expect(result.stdout).toContain(expectedOutput);
     } finally {
       rmSync(scratch, { recursive: true, force: true });

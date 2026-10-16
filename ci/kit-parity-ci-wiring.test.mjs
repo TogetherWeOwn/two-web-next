@@ -51,6 +51,37 @@ test("the isolated Kit fixture config supplies every secret required by the /up 
   assert.match(worker, /CLOUDFLARE_INCLUDE_PROCESS_ENV: "false"/);
 });
 
+test("the Kit fixture owns the member board only on its loopback worker", () => {
+  const worker = readFileSync(new URL("./kit-worker-dev.mjs", import.meta.url), "utf8");
+  assert.match(worker, /KIT_PARITY_FIXTURE_MEMBER_BOARD: "true"/);
+  const hooks = readFileSync(new URL("../web/src/hooks.server.ts", import.meta.url), "utf8");
+  assert.match(hooks, /fixtureMemberBoard: env\.KIT_PARITY_FIXTURE_MEMBER_BOARD === "true"/);
+  assert.match(hooks, /afterMemberRead:/);
+  const ownership = readFileSync(new URL("../src/route-ownership.ts", import.meta.url), "utf8");
+  // The override is loopback-gated in the tested core, and no deployed Kit
+  // config (web/wrangler.jsonc, the preview Worker) sets the flag.
+  assert.match(ownership, /fixtureManifestFor/);
+  const deployed = readFileSync(new URL("../web/wrangler.jsonc", import.meta.url), "utf8");
+  assert.doesNotMatch(deployed, /KIT_PARITY_FIXTURE_MEMBER_BOARD/);
+  const spec = readFileSync(new URL("../e2e/kit-parity/parity.spec.ts", import.meta.url), "utf8");
+  assert.match(spec, /kitFixtureOwnsMemberBoard/);
+});
+
+test("the Kit fixture owns the live event detail only on its loopback worker", () => {
+  const worker = readFileSync(new URL("./kit-worker-dev.mjs", import.meta.url), "utf8");
+  assert.match(worker, /KIT_PARITY_FIXTURE_EVENT_DETAIL: "true"/);
+  const hooks = readFileSync(new URL("../web/src/hooks.server.ts", import.meta.url), "utf8");
+  assert.match(hooks, /fixtureEventDetail: env\.KIT_PARITY_FIXTURE_EVENT_DETAIL === "true"/);
+  const ownership = readFileSync(new URL("../src/route-ownership.ts", import.meta.url), "utf8");
+  assert.match(ownership, /KIT_PARITY_FIXTURE_EVENT_DETAIL/);
+  const deployed = readFileSync(new URL("../web/wrangler.jsonc", import.meta.url), "utf8");
+  assert.doesNotMatch(deployed, /KIT_PARITY_FIXTURE_EVENT_DETAIL/);
+  const spec = readFileSync(new URL("../e2e/kit-parity/parity.spec.ts", import.meta.url), "utf8");
+  assert.match(spec, /kitFixtureOwnsEventDetail/);
+  const helper = readFileSync(new URL("../e2e/kit-parity.ts", import.meta.url), "utf8");
+  assert.match(helper, /kitFixtureOwnsEventDetail/);
+});
+
 test("the required check runs the parity selftests in their own fail-closed step", () => {
   const step = job
     .split(/\n      - /)

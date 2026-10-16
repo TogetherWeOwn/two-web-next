@@ -5,10 +5,15 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 import { assertMigrationAdmission, assertStagingDeployHold } from "./migration-admission.mjs";
-import { migrationConfig, safeMigrationError } from "./neon-migrate.mjs";
+import {
+  PLANETSCALE_STAGING_BRANCH_ID,
+  PLANETSCALE_STAGING_HOST,
+  migrationConfig,
+  safeMigrationError,
+} from "./db-migrate.mjs";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
-const STAGING_URL = "postgres://user:stub@ep-stub.eu.aws.neon.tech/db?sslmode=require";
+const STAGING_URL = `postgres://role-stub.${PLANETSCALE_STAGING_BRANCH_ID}:stub@${PLANETSCALE_STAGING_HOST}/db?sslmode=require`;
 const PROD_URL = "postgres://user:stub@stub-1.pg.psdb.cloud/db?sslmode=require";
 const mainRef = "refs/heads/main";
 
@@ -50,7 +55,7 @@ test("staging hold refusal withholds secrets and survives repeated attempts", ()
     assertMigrationAdmission(
       env({
         STAGING_MIGRATION_HOLD: "true",
-        NEON_STAGING_DATABASE_URL: "postgres://user:DO_NOT_ECHO@ep-x.eu.aws.neon.tech/db",
+        PLANETSCALE_STAGING_DATABASE_URL: `postgres://user:DO_NOT_ECHO@${PLANETSCALE_STAGING_HOST}/db`,
       }),
     );
     assert.fail("expected hold refusal");
@@ -105,7 +110,7 @@ test("unknown target and non-main ref stay fail-closed", () => {
 });
 
 test("migrationConfig is wired to the single admission source", () => {
-  const neon = readFileSync(new URL("./neon-migrate.mjs", import.meta.url), "utf8");
+  const neon = readFileSync(new URL("./db-migrate.mjs", import.meta.url), "utf8");
   assert.match(neon, /assertMigrationAdmission/);
   // migrationConfig must delegate rather than carry a second inline copy.
   assert.doesNotMatch(neon, /STAGING_MIGRATION_HOLD !== "false"/);
@@ -125,13 +130,16 @@ test("deploy direct staging path enforces the same hold without touching product
 
 test("migrationConfig refuses held staging before URL parsing or connection", () => {
   // Released staging with a valid stub URL passes config (pure, no connection).
-  assert.equal(migrationConfig(env({ NEON_STAGING_DATABASE_URL: STAGING_URL })).target, "staging");
+  assert.equal(
+    migrationConfig(env({ PLANETSCALE_STAGING_DATABASE_URL: STAGING_URL })).target,
+    "staging",
+  );
   // Held staging with an otherwise-valid URL refuses with the hold message.
   for (const held of [undefined, "", "true", "malformed"]) {
     assert.throws(
       () =>
         migrationConfig(
-          env({ STAGING_MIGRATION_HOLD: held, NEON_STAGING_DATABASE_URL: STAGING_URL }),
+          env({ STAGING_MIGRATION_HOLD: held, PLANETSCALE_STAGING_DATABASE_URL: STAGING_URL }),
         ),
       /Staging migrations are held/,
     );
@@ -139,7 +147,9 @@ test("migrationConfig refuses held staging before URL parsing or connection", ()
   // Held staging refuses even when the URL itself is malformed: hold is checked first.
   assert.throws(
     () =>
-      migrationConfig(env({ STAGING_MIGRATION_HOLD: "true", NEON_STAGING_DATABASE_URL: "bad" })),
+      migrationConfig(
+        env({ STAGING_MIGRATION_HOLD: "true", PLANETSCALE_STAGING_DATABASE_URL: "bad" }),
+      ),
     /Staging migrations are held/,
   );
   // Production config still honors the enable gate and ignores the hold.
@@ -190,7 +200,7 @@ test("db-migrate admits staging and production through one explicit gate before 
   );
   assert.match(migrationEnv, /STAGING_MIGRATION_HOLD: \$\{\{ vars\.STAGING_MIGRATION_HOLD \}\}/);
   for (const mode of ["plan", "apply", "verify"])
-    assert.ok(dbMigrate.includes(`node ci/neon-migrate.mjs ${mode}`));
+    assert.ok(dbMigrate.includes(`node ci/db-migrate.mjs ${mode}`));
 });
 
 test("deploy holds the direct staging migration path before dependencies or mutations", () => {
@@ -200,7 +210,7 @@ test("deploy holds the direct staging migration path before dependencies or muta
   assert.ok(checkoutIndex < holdIndex, "hold step follows the read-only checkout");
   const setupIndex = deploy.indexOf("actions/setup-node");
   assert.ok(holdIndex < setupIndex, "hold must run before dependency install");
-  const planIndex = deploy.indexOf("node ci/neon-migrate.mjs plan");
+  const planIndex = deploy.indexOf("node ci/db-migrate.mjs plan");
   assert.ok(holdIndex < planIndex, "hold must run before the staging DB plan");
   const wranglerIndex = deploy.indexOf("npx wrangler deploy");
   assert.ok(holdIndex < wranglerIndex, "hold must run before any Cloudflare mutation");

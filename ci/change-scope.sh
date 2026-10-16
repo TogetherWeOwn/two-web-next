@@ -99,7 +99,7 @@ if [ -s "$files" ]; then
           # migrations), not by the perf jobs. Listed before the `ci/*` app
           # arm below, which would otherwise claim these paths.
           drizzle/*|migrations.lock|drizzle.config.ts|\
-          ci/check-migration-*|ci/neon-migrate*)
+          ci/check-migration-*|ci/db-migrate*)
             db=true
             ;;
           # App: everything the served worker, its assets, the test suites

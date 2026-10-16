@@ -196,16 +196,16 @@ describe("W15 Discord login and callback boundaries", () => {
 });
 
 describe("W15 moderator role configuration", () => {
-  it.each([undefined, "", "SySOp", "123", "not-a-snowflake"])("fails closed for %s", (raw) => {
+  it.each([undefined, "", "Moderator", "123", "not-a-snowflake"])("fails closed for %s", (raw) => {
     expect(parseModeratorRoleIds(raw)).toEqual([]);
-    expect(isModerator(["508654771276873729"], parseModeratorRoleIds(raw))).toBe(false);
+    expect(isModerator(["1546777856984481792"], parseModeratorRoleIds(raw))).toBe(false);
   });
 
   it("parses multiple snowflakes with padding and a trailing comma, never granting by role name", () => {
-    const ids = parseModeratorRoleIds(" 508654771276873729, 1078757544169848933, SySOp, ");
-    expect(ids).toEqual(["508654771276873729", "1078757544169848933"]);
+    const ids = parseModeratorRoleIds(" 1546777856984481792, 1078757544169848933, Moderator, ");
+    expect(ids).toEqual(["1546777856984481792", "1078757544169848933"]);
     expect(isModerator(["1078757544169848933"], ids)).toBe(true);
-    expect(isModerator(["SySOp"], ids)).toBe(false);
+    expect(isModerator(["Moderator"], ids)).toBe(false);
   });
 });
 

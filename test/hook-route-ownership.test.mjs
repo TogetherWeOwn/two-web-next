@@ -64,14 +64,15 @@ beforeEach(() => {
 });
 
 describe("hooks.server route ownership wiring", () => {
-  it("ships the native archive enabled with the homepage, events list, about, privacy, rules, join, recover, admin and profile reads still on Hono", () => {
+  it("ships the native archive and the about/faq leaves enabled with the homepage, events list, privacy, rules, join, recover, admin and profile reads still on Hono", () => {
     expect(ROUTE_MANIFEST).toEqual([
       { method: "GET", path: "/", enabled: false, reads: "public" },
       { method: "GET", path: "/events/past", enabled: true, reads: "public" },
       { method: "GET", path: "/events", enabled: false, reads: "public" },
-      { method: "GET", path: "/about", enabled: false, reads: "public" },
+      { method: "GET", path: "/about", enabled: true, reads: "public" },
       { method: "GET", path: "/privacy", enabled: false, reads: "public" },
       { method: "GET", path: "/rules", enabled: false, reads: "public" },
+      { method: "GET", path: "/faq", enabled: true, reads: "public" },
       { method: "GET", path: "/join", enabled: false, reads: "public" },
       {
         method: "GET",
@@ -87,6 +88,18 @@ describe("hooks.server route ownership wiring", () => {
       },
       {
         method: "GET",
+        path: "/admin/featured/new",
+        enabled: false,
+        reads: { resource: "featured_contents", action: "view", route: "admin.featured.create" },
+      },
+      {
+        method: "GET",
+        path: "/admin/featured/:id",
+        enabled: false,
+        reads: { resource: "featured_contents", action: "view", route: "admin.featured.edit" },
+      },
+      {
+        method: "GET",
         path: "/admin/activity-log",
         enabled: false,
         reads: { resource: "activity_log", action: "list", route: "admin.activity-log.index" },
@@ -99,9 +112,28 @@ describe("hooks.server route ownership wiring", () => {
       },
       {
         method: "GET",
+        path: "/admin/events/new",
+        enabled: false,
+        reads: { resource: "events", action: "view", route: "admin.events.create" },
+      },
+      { method: "GET", path: "/admin/events/create", enabled: false },
+      {
+        method: "GET",
+        path: "/admin/events/:key",
+        enabled: false,
+        reads: { resource: "events", action: "view", route: "admin.events.edit" },
+      },
+      {
+        method: "GET",
         path: "/admin/join-attempts",
         enabled: false,
         reads: { resource: "join_attempts", action: "list", route: "admin.join-attempts.index" },
+      },
+      {
+        method: "GET",
+        path: "/admin/join-attempts/:id",
+        enabled: false,
+        reads: { resource: "join_attempts", action: "view", route: "admin.join-attempts.show" },
       },
       { method: "GET", path: "/auth/recover", enabled: false, reads: "public" },
       {
@@ -123,8 +155,14 @@ describe("hooks.server route ownership wiring", () => {
       {
         method: "GET",
         path: "/leaderboards/members",
-        enabled: false,
+        enabled: true,
         reads: { resource: "leaderboard", action: "list", route: "leaderboards.members" },
+      },
+      {
+        method: "GET",
+        path: "/e/:key",
+        enabled: false,
+        reads: { resource: "member", action: "list", route: "events.page" },
       },
     ]);
   });
@@ -276,6 +314,50 @@ describe("hooks.server route ownership wiring", () => {
     expect(d.honoFetch).not.toHaveBeenCalled();
     expect(event.request.url).toContain("?page=2");
     expect(await response.text()).toBe("kit");
+  });
+
+  it("passes the zero-stylesheet transform on Kit-owned content leaves only", async () => {
+    // Kills two mutants: dropping the transform (or gating it on the URL
+    // instead of the manifest path) serves the layout stylesheet on /about
+    // while every unit pin stays green; passing it for every route reshapes
+    // non-content pages the leaf contract does not own.
+    const manifest = [
+      { method: "GET", path: "/about", enabled: true, reads: "public" },
+      { method: "GET", path: "/", enabled: true, reads: "public" },
+    ];
+    const layoutHtml =
+      '<html><head><link href="/_app/immutable/assets/0.x.css" rel="stylesheet">' +
+      "<style>a{}</style></head><body><p>hi</p></body></html>";
+    const leafEvent = (path) => {
+      const request = new Request(new URL(path, APP_URL).href, {
+        headers: { host: "example.com" },
+      });
+      return { request, url: new URL(request.url), route: { id: path } };
+    };
+    const d = deps({
+      manifest,
+      resolve: vi.fn(
+        async () =>
+          new Response(layoutHtml, { status: 200, headers: { "content-type": "text/html" } }),
+      ),
+    });
+
+    const leafResponse = await dispatchHookRequest(leafEvent("/about"), d);
+    expect(d.resolve).toHaveBeenCalledOnce();
+    const leafOpts = d.resolve.mock.calls[0][1];
+    expect(typeof leafOpts?.transformPageChunk).toBe("function");
+    // The forwarded transform is the production strip, proved on the
+    // fixture: stylesheet gone, Hono body class on, leaf style intact.
+    const shaped = leafOpts.transformPageChunk({ html: layoutHtml });
+    expect(shaped).not.toContain('rel="stylesheet"');
+    expect(shaped).toContain('<body class="base-theme content-theme">');
+    expect(shaped).toContain("<style>a{}</style>");
+    expect(leafResponse.headers.get(KIT_RENDERER_HEADER)).toBe(KIT_RENDERER_VALUE);
+
+    d.resolve.mockClear();
+    await dispatchHookRequest(leafEvent("/"), d);
+    expect(d.resolve).toHaveBeenCalledOnce();
+    expect(d.resolve.mock.calls[0][1]).toBeUndefined();
   });
 
   it("answers an untrusted URL host via Hono with the body unread, even with a trusted Host header", async () => {
@@ -457,6 +539,31 @@ describe("hooks.server route ownership wiring", () => {
     expect(source).toContain(
       "pastArchive: (request, render) => dispatchPastArchiveRequest(request, env, render)",
     );
+    // Whole binding: deleting the eventDetail line silently drops the detail
+    // read throttle (the dispatch treats it as optional), so the exact line
+    // must fail. The import and comments alone carry the name.
+    expect(source).toContain(
+      "eventDetail: (request, render) => dispatchEventDetailRequest(request, env, render)",
+    );
+    // Whole binding: the member board's post-release view log lives on this
+    // closure. Making it a no-op or passing a fixed status instead of
+    // response.status silently drops every Kit board view, so the exact call
+    // must fail (mirrors the pastArchive/eventDetail pins above).
+    expect(source).toContain(
+      "recordQueuedBoardView(event.locals, response.status, recordBoardView)",
+    );
+    expect(source).toContain('fixtureMemberBoard: env.KIT_PARITY_FIXTURE_MEMBER_BOARD === "true"');
+    expect(source).toContain('fixtureEventDetail: env.KIT_PARITY_FIXTURE_EVENT_DETAIL === "true"');
+    // Same pin on the other half of the wiring: the members load binding
+    // hands the queue to locals. Deleting that line queues nothing, so the
+    // hook above records nothing and every Kit board view is dropped.
+    const membersLoad = readFileSync(
+      new URL("../web/src/routes/leaderboards/members/+page.server.ts", import.meta.url),
+      "utf8",
+    );
+    expect(membersLoad).toContain(
+      "queueBoardViewFn: (db, entry) => queueMembersBoardView(locals, db, entry)",
+    );
     // The list binding carries the same shape plus its read-only session and
     // flash peeks: deleting any of these lines must fail, and the hook still
     // carries no session logic of its own (readers live in kit-session.ts).
@@ -465,6 +572,12 @@ describe("hooks.server route ownership wiring", () => {
     expect(source).toContain("kitEventsSessionFor(env)");
     expect(source).toContain("kitEventsJourneyFor(env)");
     expect(source).toContain("honoFetch,");
+    // The content-leaf zero-stylesheet strip travels as a resolve option:
+    // the hook must forward it untouched. Dropping the second argument
+    // serves the layout stylesheet on /about and /faq while every dispatch
+    // pin stays green (the core passes the option; only the hook can lose
+    // it on the way to Kit's resolve).
+    expect(source).toContain("opts as Parameters<typeof resolve>[1]");
     expect(source).toContain("featuredImageHosts: env.FEATURED_IMAGE_HOSTS");
     expect(source).toContain("appUrl: env.APP_URL");
     expect(source).toContain("sessionFor: kitSessionBridge(env)");

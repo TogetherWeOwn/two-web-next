@@ -17,6 +17,8 @@ on:
     # ready_for_review re-runs the smoke when a draft becomes ready (drafts
     # skip it below). `edited` needs no browser run; pr-gates covers it.
     types: [opened, synchronize, reopened, ready_for_review]
+  merge_group:
+    types: [checks_requested]
   push:
     branches: [main]
   # Nightly full smoke (TOG-14880): schedule events run the journeys
@@ -131,10 +133,12 @@ jobs:
       - name: Critical browser journeys
         if: ${{ !cancelled() }}
         run: npm run e2e
-      # Kit journey parity (docs/kit-parity-gates.md): the no-login
-      # journeys run against Hono and the built Kit Worker on the same seeded
-      # disposable Postgres. Read-only specs (no fixtures, no QA logins), so
-      # they run after the journeys without skewing the teardown sweep.
+      # Kit journey parity (docs/kit-parity-gates.md): the journeys run
+      # against Hono and the built Kit Worker on the same seeded disposable
+      # Postgres. Read-only apart from the member-board journey's single
+      # shared QA login and its one going RSVP (withdrawn in afterAll) and
+      # the archive journey's 24 seeded rows (swept in afterAll), so they
+      # run after the journeys without skewing the teardown sweep.
       - name: Install Kit workspace dependencies
         if: ${{ !cancelled() }}
         run: npm ci --prefix web --include=dev --no-audit --no-fund

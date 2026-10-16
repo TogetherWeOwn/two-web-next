@@ -8,7 +8,7 @@ import { canonicalUrl } from "../seo";
 import { fmt } from "../events/pages-shared";
 import { POLICY_VERSION } from "../privacy";
 import { POLICY_MARKDOWN } from "../privacy-content";
-import { FAQS } from "../screens/faq";
+import { FAQS } from "../faq-content";
 import { JOIN_INTRO } from "../screens/join";
 import { RULES } from "../rules-content";
 

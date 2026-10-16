@@ -241,62 +241,31 @@ describe("homepage guest-invariant cache", () => {
   });
 });
 
-describe("homepage edge cache layer (production path)", () => {
-  const bodies = new Map<string, string>();
-  const pending: Promise<unknown>[] = [];
-  const ctx = { waitUntil: (promise: Promise<unknown>) => void pending.push(promise) };
-  const edgeEnv: Env = {
+describe("homepage production memory path (non-injected)", () => {
+  // Production has no injected ADMIN_DB: entries key on the web-DB URL and are
+  // isolate-local (no edge layer — a shared retire is not provable, so the
+  // module keeps memory only, like src/events/anon-cache.ts). Each case uses
+  // its own DATABASE_URL so entries never leak across cases.
+  let envCounter = 0;
+  const prodEnv = (): Env => ({
     ...baseEnv,
-    DATABASE_URL: "postgres://edge-cache-test.invalid/db",
-  };
+    DATABASE_URL: `postgres://prod-mem-test.invalid/db-${(envCounter += 1)}`,
+  });
   const discordSource = () => ({ upcoming: async () => [], lastReadFailed: () => false });
 
-  function stubEdge() {
-    bodies.clear();
-    pending.length = 0;
-    (globalThis as Record<string, unknown>).caches = {
-      default: {
-        match: async (request: Request) => {
-          const body = bodies.get(request.url);
-          return body === undefined
-            ? undefined
-            : new Response(body, { headers: { "content-type": "application/json" } });
-        },
-        put: async (request: Request, response: Response) => {
-          bodies.set(request.url, await response.text());
-        },
-        delete: async (request: Request) => bodies.delete(request.url),
-      },
-    };
-  }
-
-  async function flushEdge() {
-    await Promise.all(pending.splice(0));
-    await Promise.resolve();
-  }
-
-  afterEach(() => {
-    delete (globalThis as Record<string, unknown>).caches;
-  });
-
-  it("serves upcoming from the edge entry with revived dates and no second DB read", async () => {
-    stubEdge();
+  it("serves upcoming from memory with live dates and no second DB read", async () => {
+    const env = prodEnv();
     const f = fixture();
-    const first = await cachedHomeUpcoming(edgeEnv, async () => f.db, discordSource, NOW, ctx);
+    const first = await cachedHomeUpcoming(env, async () => f.db, discordSource, NOW);
     expect(first.unavailable).toBe(false);
     expect(first.items).toHaveLength(1);
-    await flushEdge();
-    expect(bodies.size).toBeGreaterThan(0);
-    // Drop the isolate-local entries: the next read can only hit the edge.
-    __resetHomeGuestCacheForTests();
     const second = await cachedHomeUpcoming(
-      edgeEnv,
+      env,
       async () => {
-        throw new Error("DB must not be touched on an edge hit");
+        throw new Error("DB must not be touched on a memory hit");
       },
       discordSource,
       NOW,
-      ctx,
     );
     expect(second.unavailable).toBe(false);
     expect(second.items).toHaveLength(1);
@@ -305,38 +274,99 @@ describe("homepage edge cache layer (production path)", () => {
   });
 
   it("never stores an unavailable upcoming read, so recovery is visible", async () => {
-    stubEdge();
-    const down = await cachedHomeUpcoming(edgeEnv, async () => null, discordSource, NOW, ctx);
+    const env = prodEnv();
+    const down = await cachedHomeUpcoming(env, async () => null, discordSource, NOW);
     expect(down.unavailable).toBe(true);
-    await flushEdge();
-    expect(bodies.size).toBe(0);
     const f = fixture();
-    const recovered = await cachedHomeUpcoming(edgeEnv, async () => f.db, discordSource, NOW, ctx);
+    const recovered = await cachedHomeUpcoming(env, async () => f.db, discordSource, NOW);
     expect(recovered.unavailable).toBe(false);
     expect(recovered.items).toHaveLength(1);
   });
 
-  it("round-trips featured through the edge entry", async () => {
-    stubEdge();
+  it("round-trips featured through memory", async () => {
+    const env = prodEnv();
     const f = fixture();
-    const first = await cachedFeatured(edgeEnv, async () => f.db, NOW, ctx);
+    const first = await cachedFeatured(env, async () => f.db, NOW);
     expect(first).toHaveLength(1);
-    await flushEdge();
-    expect(bodies.size).toBeGreaterThan(0);
-    __resetHomeGuestCacheForTests();
     const second = await cachedFeatured(
-      edgeEnv,
+      env,
       async () => {
-        throw new Error("DB must not be touched on an edge hit");
+        throw new Error("DB must not be touched on a memory hit");
       },
       NOW,
-      ctx,
     );
     expect(second).toEqual(first);
+  });
+
+  it("never stores an empty featured base, so recovery is visible", async () => {
+    const env = prodEnv();
+    // A null database reads as [] exactly like a genuinely empty table (and
+    // exactly like a deadline fallback): storing it would hide the recovery
+    // behind the TTL.
+    const empty = await cachedFeatured(env, async () => null, NOW);
+    expect(empty).toEqual([]);
+    const f = fixture();
+    const recovered = await cachedFeatured(env, async () => f.db, NOW);
+    expect(recovered).toHaveLength(1);
+  });
+
+  it("never uses the shared edge cache", async () => {
+    // A shared edge entry would re-seed memory after a retire from an isolate
+    // that never stored a key, so the module must not touch caches.default.
+    const env = prodEnv();
+    const f = fixture();
+    let edgeTouched = false;
+    (globalThis as Record<string, unknown>).caches = {
+      default: new Proxy(
+        {},
+        {
+          get: () => {
+            edgeTouched = true;
+            throw new Error("edge cache must not be touched");
+          },
+        },
+      ),
+    };
+    try {
+      await cachedHomeUpcoming(env, async () => f.db, discordSource, NOW);
+      await cachedFeatured(env, async () => f.db, NOW);
+      await retireHomeGuestCache();
+    } finally {
+      delete (globalThis as Record<string, unknown>).caches;
+    }
+    expect(edgeTouched).toBe(false);
   });
 });
 
 describe("homepage guest cache retire", () => {
+  it("never stores a discord-failed upcoming read, so recovery is visible", async () => {
+    // Canonical rows exist but the Discord read failed: the degraded list
+    // must not seed the cache, or one slow Discord read would hide Discord
+    // recovery behind the TTL.
+    const f = fixture();
+    let discordCalls = 0;
+    const failedSource = () => ({
+      upcoming: async () => {
+        discordCalls++;
+        return [];
+      },
+      lastReadFailed: () => true,
+    });
+    const first = await cachedHomeUpcoming(f.env, async () => f.db, failedSource, NOW);
+    expect(first.unavailable).toBe(false);
+    expect(first.discordFailed).toBe(true);
+    const recoveredSource = () => ({
+      upcoming: async () => {
+        discordCalls++;
+        return [];
+      },
+      lastReadFailed: () => false,
+    });
+    const second = await cachedHomeUpcoming(f.env, async () => f.db, recoveredSource, NOW);
+    expect(discordCalls).toBe(2);
+    expect(second.discordFailed).toBe(false);
+  });
+
   it("re-reads featured after a retire on the same injected database", async () => {
     // Same injected object before and after: only the generation bump can
     // turn the second read into a miss (the WeakMap key never changes).
@@ -355,40 +385,148 @@ describe("homepage guest cache retire", () => {
     // A committed mutation retires: the next read re-queries and sees the
     // emptied table instead of the retired row.
     rows = [];
-    retireHomeGuestCache();
+    await retireHomeGuestCache();
     await expect(cachedFeatured(env, async () => db, NOW, undefined)).resolves.toEqual([]);
   });
 
-  it("deletes the shared edge entries so they cannot re-seed memory", async () => {
-    const bodies = new Map<string, string>();
-    (globalThis as Record<string, unknown>).caches = {
-      default: {
-        match: async (request: Request) => {
-          const body = bodies.get(request.url);
-          return body === undefined
-            ? undefined
-            : new Response(body, { headers: { "content-type": "application/json" } });
-        },
-        put: async (request: Request, response: Response) => {
-          bodies.set(request.url, await response.text());
-        },
-        delete: async (request: Request) => bodies.delete(request.url),
-      },
-    };
-    try {
-      const edgeEnv: Env = {
-        ...baseEnv,
-        DATABASE_URL: "postgres://edge-retire-test.invalid/db",
-      };
-      const f = fixture();
-      const first = await cachedFeatured(edgeEnv, async () => f.db, NOW, undefined);
-      expect(first).toHaveLength(1);
+  it("does not cache an empty featured base, so a later row shows without a retire", async () => {
+    // An empty read (genuinely empty table, or a deadline fallback under
+    // load) must not seed the cache: the next read re-queries and picks up a
+    // row that appeared meanwhile.
+    let rows: unknown[][] = [];
+    const db = drizzle(async (sql: string) => {
+      if (sql.includes('from "featured_contents"')) return { rows };
+      if (sql.includes("set_config")) return { rows: [] };
+      return { rows: [] };
+    }) as unknown as Db;
+    Object.assign(db, { transaction: async (fn: (tx: Db) => Promise<unknown>) => fn(db) });
+    const env = { ...baseEnv, ADMIN_DB: db } as Env;
+    await expect(cachedFeatured(env, async () => db, NOW, undefined)).resolves.toEqual([]);
+    rows = [[2, "Late slot", "Appeared after the empty read", null, null, null, null, null]];
+    const seen = await cachedFeatured(env, async () => db, NOW, undefined);
+    expect(seen).toHaveLength(1);
+    expect(seen[0]?.title).toBe("Late slot");
+  });
+
+  it("drops a featured read that was in flight when a retire landed", async () => {
+    // The genAtStart guard in storeFeaturedMemory is the only thing stopping
+    // a read that began before a write from storing its pre-write rows after
+    // the retire. Hold the DB read open on the Old snapshot, commit New,
+    // retire, then release: the stale value must not settle into the cache.
+    const oldRow = [1, "Old slot", "Old body", null, null, null, null, null];
+    const newRow = [2, "New slot", "New body", null, null, null, null, null];
+    let rows: unknown[][] = [oldRow];
+    let featuredQueries = 0;
+    let hold = true;
+    let entered = false;
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const db = drizzle(async (sql: string) => {
+      if (sql.includes('from "featured_contents"')) {
+        featuredQueries += 1;
+        const frozen = rows;
+        if (hold) {
+          entered = true;
+          await gate;
+        }
+        return { rows: frozen };
+      }
+      if (sql.includes("set_config")) return { rows: [] };
+      return { rows: [] };
+    }) as unknown as Db;
+    Object.assign(db, { transaction: async (fn: (tx: Db) => Promise<unknown>) => fn(db) });
+    const env = { ...baseEnv, ADMIN_DB: db } as Env;
+    const pending = cachedFeatured(env, async () => db, NOW, undefined);
+    for (let i = 0; i < 100 && !entered; i++) {
       await new Promise((resolve) => setTimeout(resolve, 10));
-      expect(bodies.size).toBeGreaterThan(0);
-      retireHomeGuestCache();
-      expect(bodies.size).toBe(0);
-    } finally {
-      delete (globalThis as Record<string, unknown>).caches;
     }
+    if (!entered) {
+      release();
+      throw new Error("featured read never reached the driver");
+    }
+    // A write commits New and retires while the Old read is still in flight.
+    rows = [newRow];
+    await retireHomeGuestCache();
+    hold = false;
+    release();
+    const settled = await pending;
+    expect(settled.map((row) => row.title)).toEqual(["Old slot"]);
+    // The dropped store forces a re-query: the next request sees New, and the
+    // query counter proves it re-read instead of serving a cached Old row.
+    const next = await cachedFeatured(env, async () => db, NOW, undefined);
+    expect(next.map((row) => row.title)).toEqual(["New slot"]);
+    expect(featuredQueries).toBe(2);
+  });
+
+  it("drops an upcoming read that was in flight when a retire landed", async () => {
+    // Same in-flight retire guard as the featured store, exercised through the
+    // merged upcoming read. The gate holds the canonical events query on the
+    // Old snapshot; every events query in the in-flight read answers from the
+    // latched snapshot so statement timing after the flip cannot leak New or
+    // Old bytes into the assertions the wrong way.
+    const columns = Object.keys(getTableColumns(events)) as (keyof typeof events.$inferSelect)[];
+    const toRows = (list: (typeof events.$inferSelect)[]) =>
+      list.map((row) =>
+        columns.map((key) => {
+          const value = row[key];
+          return value instanceof Date ? value.toISOString() : value;
+        }),
+      );
+    let rows = toRows([eventRow(1)]);
+    let eventQueries = 0;
+    let hold = true;
+    let entered = false;
+    let latched: ReturnType<typeof toRows> | null = null;
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const db = drizzle(async (sql: string) => {
+      if (sql.includes('from "featured_contents"')) return { rows: [] };
+      if (sql.includes("set_config")) return { rows: [] };
+      if (sql.includes('"timezone"') && !sql.includes('"title"')) return { rows: [] };
+      if (sql.includes("discord_event_id") && !sql.includes('"title"')) return { rows: [] };
+      if (sql.includes('from "rsvps"')) return { rows: [] };
+      if (sql.includes('from "events"')) {
+        eventQueries += 1;
+        latched ??= rows;
+        const mine = latched;
+        if (hold) {
+          entered = true;
+          await gate;
+        }
+        return { rows: mine };
+      }
+      return { rows: [] };
+    }) as unknown as Db;
+    Object.assign(db, { transaction: async (fn: (tx: Db) => Promise<unknown>) => fn(db) });
+    const env = { ...baseEnv, ADMIN_DB: db } as Env;
+    const discordSource = () => ({ upcoming: async () => [], lastReadFailed: () => false });
+    const pending = cachedHomeUpcoming(env, async () => db, discordSource, NOW);
+    for (let i = 0; i < 100 && !entered; i++) {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    if (!entered) {
+      release();
+      throw new Error("upcoming read never reached the driver");
+    }
+    // A write commits New and retires while the Old read is still in flight.
+    rows = toRows([eventRow(2)]);
+    await retireHomeGuestCache();
+    hold = false;
+    latched = null;
+    release();
+    const settled = await pending;
+    expect(settled.unavailable).toBe(false);
+    expect(settled.items.map((item) => item.title)).toEqual(["Game night 1"]);
+    const afterPending = eventQueries;
+    // The dropped store forces a re-query: the next request sees New, and the
+    // advanced counter proves it re-read instead of serving a cached Old row.
+    const next = await cachedHomeUpcoming(env, async () => db, discordSource, NOW);
+    expect(next.unavailable).toBe(false);
+    expect(next.items.map((item) => item.title)).toEqual(["Game night 2"]);
+    expect(eventQueries).toBeGreaterThan(afterPending);
   });
 });

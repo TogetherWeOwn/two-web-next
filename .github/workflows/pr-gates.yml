@@ -11,6 +11,8 @@ name: pr-gates
 on:
   pull_request:
     types: [opened, edited, synchronize, reopened, ready_for_review]
+  merge_group:
+    types: [checks_requested]
   push:
     branches: [main]
   # Manual validation of an open PR by number (releases no longer dispatch it:
@@ -97,6 +99,16 @@ jobs:
             echo "::warning::Ratchet tests absent at this head SHA; skipped (predates #651)."
           fi
           python3 -m unittest discover -s ci -p 'test_check_pr_conventions.py'
+          # Heads cut before this PR lack the waiver-body test; fail closed if a head
+          # deletes it so a PR cannot silence the queue-visibility check.
+          if [ -f ci/test_floor_waiver_body.py ]; then
+            python3 -m unittest discover -s ci -p 'test_floor_waiver_body.py'
+          elif git log --format=%H -1 HEAD -- ci/test_floor_waiver_body.py | grep -q .; then
+            echo "::error::Floor-waiver body test deleted at this head; refusing to skip."
+            exit 1
+          else
+            echo "::warning::Floor-waiver body test absent at this head SHA; skipped (predates this change)."
+          fi
           # Heads cut before this PR lack the docs drift test: the head-SHA
           # checkout then has nothing for this pattern, and unittest exits 5.
           # Skip with a warning when the head predates the test; fail closed
@@ -109,9 +121,15 @@ jobs:
           else
             echo "::warning::pr-lint docs test absent at this head SHA; skipped (predates #769)."
           fi
+          # The advisory size labeller's tests moved with the script to the
+          # org `.github` repository, where its `pr-size selftest` job runs
+          # them in `ci-ok`; this repo only pins the thin caller wiring in
+          # test/pr-size-wiring.test.ts. (The old fail-closed block here had
+          # to go with the deletion: its `git log` probe would otherwise
+          # fail every later head for the one deliberate deletion commit.)
 
       - name: Ratchet tracked internal references
-        if: github.event_name != 'push'
+        if: github.event_name != 'push' && github.event_name != 'merge_group'
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           BASE_REF: ${{ github.base_ref }}
@@ -176,17 +194,25 @@ jobs:
             python3 .github/scripts/internal_ref_ratchet.py --base "$BASE_SHA" --head "$HEAD_SHA"
           fi
 
+      - name: Accept metadata already linted on the PR
+        if: github.event_name == 'merge_group'
+        run: echo 'pr-lint passes for merge_group; PR title and body were checked before admission.'
+
       - name: Resolve PR title/body
+        if: github.event_name != 'merge_group'
         id: pr
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PR_NUMBER: ${{ inputs.pr_number }}
         run: python3 ci/pr-lint-output.py resolve
 
-      # Advisory input for the internal-ID warning. A failed listing must not fail the gate.
-      # The subjects go to a job-owned file, never to a step output or the environment.
+      # Fail-closed input for the internal-ID warning. A failed listing fails
+      # the step so the gate never scans an empty file as if it were clean.
+      # A genuinely empty PR (zero commits) still succeeds here with an empty
+      # file. The subjects go to a job-owned file, never to a step output or
+      # the environment.
       - name: List PR commit subjects
-        if: github.event_name != 'push'
+        if: github.event_name != 'push' && github.event_name != 'merge_group'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO: ${{ github.repository }}
@@ -195,34 +221,47 @@ jobs:
           set -uo pipefail
           if ! gh api "repos/$REPO/pulls/$PR_NUMBER/commits" --paginate \
             --jq '.[].commit.message | split("\n")[0]' > "$RUNNER_TEMP/pr-commit-subjects.txt"; then
-            echo "::warning::Could not list the PR commits; skipped the commit-subject check."
-            : > "$RUNNER_TEMP/pr-commit-subjects.txt"
+            echo "::error::Could not list the PR commits; failing closed instead of scanning an empty subject list."
+            rm -f "$RUNNER_TEMP/pr-commit-subjects.txt"
+            exit 1
           fi
 
       - name: Resolve PR head ref
         id: head-ref
-        if: github.event_name != 'push'
+        if: github.event_name != 'push' && github.event_name != 'merge_group'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO: ${{ github.repository }}
           PR_NUMBER: ${{ inputs.pr_number || github.event.pull_request.number }}
           HEAD_EVENT_REF: ${{ github.event.pull_request.head.ref }}
+          BASE_EVENT_SHA: ${{ github.event.pull_request.base.sha }}
+          BASE_EVENT_REF: ${{ github.base_ref }}
         run: |
           set -euo pipefail
-          # pull_request events carry the head ref; dispatch runs resolve it from
-          # the API so manual runs lint the same branch name.
+          # pull_request events carry both refs; dispatch runs resolve them from
+          # the API so manual runs lint the same branch and immutable base.
           if [ -n "$HEAD_EVENT_REF" ]; then
             head_ref="$HEAD_EVENT_REF"
+            base_sha="$BASE_EVENT_SHA"
+            base_ref="${BASE_EVENT_REF:-main}"
           else
             head_ref=$(gh api "repos/$REPO/pulls/$PR_NUMBER" --jq '.head.ref')
+            base_sha=$(gh api "repos/$REPO/pulls/$PR_NUMBER" --jq '.base.sha')
+            base_ref=$(gh api "repos/$REPO/pulls/$PR_NUMBER" --jq '.base.ref')
           fi
-          if [ -z "$head_ref" ]; then
-            echo "::error::Could not resolve the PR head branch name."
+          if [ -z "$head_ref" ] || [ -z "$base_sha" ]; then
+            echo "::error::Could not resolve the PR head ref and base SHA."
             exit 1
           fi
+          if [ -z "${base_ref:-}" ]; then
+            base_ref="main"
+          fi
           printf 'head_ref=%s\n' "$head_ref" >> "$GITHUB_OUTPUT"
+          printf 'base_sha=%s\n' "$base_sha" >> "$GITHUB_OUTPUT"
+          printf 'base_ref=%s\n' "$base_ref" >> "$GITHUB_OUTPUT"
 
       - name: Check title, body and commits
+        if: github.event_name != 'merge_group'
         env:
           PR_METADATA_PATH: ${{ steps.pr.outputs.metadata }}
           COMMITS: ${{ toJSON(github.event.commits) }}
@@ -231,6 +270,8 @@ jobs:
           REPO_PRIVATE: ${{ github.event.repository.private }}
           PR_NUMBER: ${{ github.event.pull_request.number || inputs.pr_number || '0' }}
           HEAD_REF_ERROR_FROM_PR: ${{ env.HEAD_REF_ERROR_FROM_PR }}
+          FLOOR_WAIVER_BASE_SHA: ${{ steps.head-ref.outputs.base_sha }}
+          FLOOR_WAIVER_BASE_REF: ${{ steps.head-ref.outputs.base_ref || github.base_ref || 'main' }}
         run: python3 ci/pr-lint-output.py check
 
   # Full-history gitleaks scan; `gitleaks` is a required check on main. Uses
@@ -288,7 +329,11 @@ jobs:
         env:
           GITLEAKS_BIN: ${{ runner.temp }}/gitleaks
           EVENT_NAME: ${{ github.event_name }}
-          BASE_REF: ${{ github.base_ref }}
-        # On pull_request the base branch's .gitleaks.toml / .gitleaksignore
-        # apply, so an allowlist is honoured only after it has merged.
+          # base_ref is empty on merge_group; the queue commit's target
+          # branch arrives as merge_group.base_ref (refs/heads/main), which
+          # gitleaks-scan.sh strips to the branch name.
+          BASE_REF: ${{ github.base_ref || github.event.merge_group.base_ref }}
+        # On pull_request and merge_group the base branch's .gitleaks.toml /
+        # .gitleaksignore apply, so an allowlist is honoured only after it
+        # has merged.
         run: bash .github/scripts/gitleaks-scan.sh

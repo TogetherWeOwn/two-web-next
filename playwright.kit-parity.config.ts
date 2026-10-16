@@ -11,14 +11,17 @@ requireGithubRunner();
 const kitOrigin =
   process.env.KIT_WORKER_ORIGIN ?? `http://127.0.0.1:${process.env.KIT_WORKER_PORT ?? "8788"}`;
 
-// Kit journey parity (docs/kit-parity-gates.md): the no-login
-// journeys in e2e/kit-parity/ run against BOTH the Hono worker
+// Kit journey parity (docs/kit-parity-gates.md): the journeys in
+// e2e/kit-parity/ run against BOTH the Hono worker
 // (https://localhost:8787, same entrypoint as the browser smoke) and the
 // adapter-built Kit Worker (http://127.0.0.1:8788 via ci/kit-worker-dev.mjs,
 // same fixture shape as ci/kit-worker-e2e.mjs). Runs in the browser-smoke job
-// AFTER the critical journeys, on the same seeded disposable Postgres — the
-// specs are read-only (no fixtures, no writes, no QA logins), so journey
-// mutations cannot skew them and they cannot skew the teardown sweep.
+// AFTER the critical journeys, on the same seeded disposable Postgres. The
+// specs are read-only apart from the member-board journey's own writes —
+// its single shared QA login (session row and anonymous board-view rows,
+// counted like any other journey's) and its one going RSVP on the seeded
+// event, withdrawn in afterAll — and the archive journey's 24 seeded rows
+// (swept in afterAll), so they cannot skew the teardown sweep.
 // The JSON report feeds ci/check-kit-parity.mjs, which fails loud when
 // nothing passed (Playwright exits 0 on all-skipped).
 export default defineConfig({

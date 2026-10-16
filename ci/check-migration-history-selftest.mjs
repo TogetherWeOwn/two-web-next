@@ -315,12 +315,16 @@ test("CI resolves PR base and push-before SHA, not checked-out HEAD", (t) => {
   git(f.root, "add", ".");
   git(f.root, "commit", "-qm", "candidate");
   const eventPath = join(f.root, "event.json");
-  put(
-    f.root,
-    "event.json",
-    JSON.stringify({ before: f.base, pull_request: { base: { sha: f.base } } }),
-  );
-  for (const name of ["pull_request", "push"]) {
+  // Each event gets a payload with ONLY its own real field, so a branch that
+  // reads the wrong field resolves undefined and fails closed instead of
+  // accidentally passing on a shared fixture SHA.
+  const payloads = {
+    pull_request: { pull_request: { base: { sha: f.base } } },
+    push: { before: f.base },
+    merge_group: { merge_group: { base_sha: f.base } },
+  };
+  for (const [name, payload] of Object.entries(payloads)) {
+    put(f.root, "event.json", JSON.stringify(payload));
     assert.equal(
       resolveBaseline(f.root, {
         GITHUB_ACTIONS: "true",
@@ -330,6 +334,17 @@ test("CI resolves PR base and push-before SHA, not checked-out HEAD", (t) => {
       f.base,
     );
   }
+  // A merge_group payload without base_sha fails closed, not silently main.
+  put(f.root, "event.json", "{}");
+  assert.throws(
+    () =>
+      resolveBaseline(f.root, {
+        GITHUB_ACTIONS: "true",
+        GITHUB_EVENT_NAME: "merge_group",
+        GITHUB_EVENT_PATH: eventPath,
+      }),
+    /missing\/invalid CI base SHA/,
+  );
   put(f.root, "event.json", "{}");
   assert.throws(
     () =>

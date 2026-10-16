@@ -14,6 +14,7 @@ import { dirname, join } from "node:path";
 import { URL, fileURLToPath, pathToFileURL } from "node:url";
 import { build } from "esbuild";
 import { beforeAll, describe, expect, it } from "vitest";
+import { LEAF_CRITICAL_CSS } from "../src/leaf-critical-css";
 
 type Theme = "home" | "event" | "content" | "join" | "profile" | "schedule";
 
@@ -31,7 +32,7 @@ const { compile } = webRequire("svelte/compiler") as {
 // The real SiteMetadata component, SSR-compiled with the web workspace's own
 // svelte/compiler and bundled by esbuild.
 async function buildSiteMetadataBundle(): Promise<{
-  renderMeta: (props: { title: string; theme: Theme }) => string;
+  renderMeta: (props: { title: string; theme: Theme; leafCss?: string }) => string;
 }> {
   const worktree = fileURLToPath(new URL("../", import.meta.url));
   const scratch = mkdtempSync(join(tmpdir(), "kit-sitemetadata-"));
@@ -76,7 +77,7 @@ export function renderMeta(props) {
       ],
     });
     const { renderMeta } = (await import(pathToFileURL(outfile).href)) as {
-      renderMeta: (props: { title: string; theme: Theme }) => string;
+      renderMeta: (props: { title: string; theme: Theme; leafCss?: string }) => string;
     };
     return { renderMeta };
   } finally {
@@ -85,7 +86,7 @@ export function renderMeta(props) {
 }
 
 describe("Kit content shell preloads no Display webfont", () => {
-  let renderMeta: (props: { title: string; theme: Theme }) => string;
+  let renderMeta: (props: { title: string; theme: Theme; leafCss?: string }) => string;
 
   beforeAll(async () => {
     ({ renderMeta } = await buildSiteMetadataBundle());
@@ -101,6 +102,21 @@ describe("Kit content shell preloads no Display webfont", () => {
       const html = renderMeta({ title: "Fixture", theme });
       expect(html).toContain('href="/fonts/display-latin-700.woff2" as="font"');
       expect(html).toContain('crossorigin="anonymous"');
+    }
+  });
+
+  it("inlines the leaf CSS for the content theme instead of stylesheet links", () => {
+    const html = renderMeta({ title: "Fixture", theme: "content", leafCss: LEAF_CRITICAL_CSS });
+    expect(html).toContain(`<style>${LEAF_CRITICAL_CSS}</style>`);
+    expect(html).not.toContain('rel="stylesheet"');
+  });
+
+  it("leaves every other theme on external stylesheets", () => {
+    for (const theme of ["home", "event", "join", "profile", "schedule"] as const) {
+      const html = renderMeta({ title: "Fixture", theme });
+      expect(html).toContain('rel="stylesheet" href="/styles.css"');
+      expect(html).toContain('rel="stylesheet" href="/theme.css"');
+      expect(html).not.toContain("<style>");
     }
   });
 });

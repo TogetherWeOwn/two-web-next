@@ -341,11 +341,7 @@ describe("performance CI", () => {
       "/",
       (html: string) => html.replace(/datetime="[^"]+"/g, 'datetime="1970-01-08T00:00:00.000Z"'),
     ],
-    [
-      "missing real app CSS",
-      "/",
-      (html: string) => html.replace(/<style>[\s\S]*?<\/style>/, ""),
-    ],
+    ["missing real app CSS", "/", (html: string) => html.replace(/<style>[\s\S]*?<\/style>/, "")],
     [
       "missing inlined leaf CSS",
       "/rules",

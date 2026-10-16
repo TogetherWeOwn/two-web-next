@@ -1,4 +1,5 @@
 <script lang="ts">
+import JsonLd from "#lib/JsonLd.svelte";
 import Shell from "#lib/Shell.svelte";
 import { featuredImageSrc } from "../../../src/featured-image";
 import type { HomeNotice } from "../../../src/home-copy";
@@ -32,16 +33,7 @@ const canonical = $derived(canonicalUrl(appUrl, "/"));
 // is one of the six — the cast only recovers what $derived destructuring widens.
 const noticeText = $derived(notice ? HOME_NOTICES[notice as HomeNotice] : null);
 const ranks = $derived(counts.ranks.length ? counts.ranks : FALLBACK_RANKS);
-// Svelte parses script content as raw text, so {@html} inside one never
-// evaluates (it renders literally): emit the whole JSON-LD element as markup,
-// exactly as the archive island does. The closing tag stays split in source —
-// an intact close tag here would terminate this component script block at
-// parse time. The payload is the shared siteJsonLd string Hono embeds with
-// dangerouslySetInnerHTML — same bytes, same trust.
-const jsonLd = $derived(
-  `<script type="application/ld+json" data-testid="site-jsonld">${siteJsonLd(appUrl)}</` +
-    "script>",
-);
+const siteGraph = $derived(siteJsonLd(appUrl));
 </script>
 
 {#snippet guestChrome()}
@@ -251,5 +243,5 @@ const jsonLd = $derived(
       </p>
     {/if}
   </section>
-  {@html jsonLd}
+  <JsonLd testid="site-jsonld" json={siteGraph} />
 </Shell>
