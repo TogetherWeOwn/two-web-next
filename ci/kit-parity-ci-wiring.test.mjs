@@ -103,6 +103,36 @@ test("Kit snapshot updates are pinned and generated Kit baselines fail the CI gu
   );
 });
 
+test("visual tests re-seed and verify the board state after worker restarts", () => {
+  const spec = readFileSync(new URL("../e2e/kit-parity/parity.spec.ts", import.meta.url), "utf8");
+  const rsvpHelper = spec.match(/function memberGoingRsvp\(\): Promise<void> \{([\s\S]*?)\n\}/)?.[1];
+  assert(rsvpHelper, "member RSVP helper must exist");
+  assert.match(
+    rsvpHelper,
+    /expect\(\[200, 201\], "ranked RSVP created or refreshed"\)\.toContain\(response\.status\(\)\)/,
+  );
+  assert.match(rsvpHelper, /memberCookie\(hono\)/);
+  assert.match(rsvpHelper, /\.catch\(\(error: unknown\) => \{\s*memberRsvpPromise = null;/);
+
+  const visuals = spec.match(
+    /test\.describe\("kit: member-board visuals", \(\) => \{([\s\S]*?)\n\}\);/,
+  )?.[1];
+  assert(visuals, "Kit member-board visual tests must exist");
+  const honoPoll = visuals.indexOf("api(hono).get(");
+  const seedRsvp = visuals.indexOf("await memberGoingRsvp();");
+  const kitPoll = visuals.indexOf("api(kit).get(");
+  const loadComplete = visuals.indexOf('await page.waitForLoadState("networkidle");');
+  const rankedRow = visuals.indexOf("const rankedRow");
+  const emptyBoard = visuals.indexOf("Nobody is ranked for this season and game yet.");
+  const screenshot = visuals.indexOf("toHaveScreenshot(");
+  assert(honoPoll >= 0 && honoPoll < seedRsvp && seedRsvp < kitPoll);
+  assert(loadComplete >= 0 && loadComplete < rankedRow && rankedRow < screenshot);
+  assert(emptyBoard >= 0 && emptyBoard < screenshot);
+  assert.match(visuals, /getByRole\("rowheader", \{ name: "QA Member" \}\)/);
+  assert.match(visuals, /rankedRow\.getByRole\("cell"\)\)\.toHaveText\(\["1", "1"\]\)/);
+  assert.match(visuals, /test\.setTimeout\(120_000\)/);
+});
+
 test("the required check runs the parity selftests in their own fail-closed step", () => {
   const step = job
     .split(/\n      - /)

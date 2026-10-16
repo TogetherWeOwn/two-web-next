@@ -130,10 +130,10 @@ async function memberCookie(target: ParityTarget): Promise<string> {
 // The board's one ranked member: the QA viewer answers going to the seeded
 // published event (e2e/seed.mjs, "E2E Community Night", 2099, no game).
 // Earlier journeys withdraw or cancel every going RSVP they create, so
-// this write — made once, on the Hono target that owns the RSVP route,
-// and withdrawn in afterAll — is what gives both renderers a ranked row
-// to serve. Its 2099 start and missing game also pin the season=2026 and
-// activity=valheim views to their empty state below.
+// this idempotent write — memoized within a worker, replayed after a restart,
+// and withdrawn in afterAll — gives both renderers a ranked row to serve.
+// Its 2099 start and missing game also pin the season=2026 and activity=valheim
+// views to their empty state below.
 const SEEDED_EVENT_KEY = "01J00000000000000000000001";
 let memberRsvpCreated = false;
 let memberRsvpPromise: Promise<void> | null = null;
@@ -141,14 +141,17 @@ function memberGoingRsvp(): Promise<void> {
   memberRsvpPromise ??= (async () => {
     const hono = targets.find((target) => target.name === "hono")!;
     const response = await api(hono).put(`/events/${SEEDED_EVENT_KEY}/rsvp`, {
-      headers: { cookie: await honoMemberCookie(), Origin: "https://localhost:8787" },
+      headers: { cookie: await memberCookie(hono), Origin: "https://localhost:8787" },
       data: { status: "going" },
     });
-    expect(response.status(), "ranked RSVP created").toBe(201);
+    expect([200, 201], "ranked RSVP created or refreshed").toContain(response.status());
     const body = (await response.json()) as { data?: { status?: string } };
     expect(body.data?.status, "ranked RSVP holds a seat, not the waitlist").toBe("going");
     memberRsvpCreated = true;
-  })();
+  })().catch((error: unknown) => {
+    memberRsvpPromise = null;
+    throw error;
+  });
   return memberRsvpPromise;
 }
 
@@ -1224,8 +1227,43 @@ const MEMBER_BOARD_VIEWS: Array<[name: string, path: string]> = [
 test.describe("kit: member-board visuals", () => {
   for (const [view, path] of MEMBER_BOARD_VIEWS) {
     test(`${view} @ desktop and mobile`, async ({ browser }) => {
+      test.setTimeout(120_000);
       const kit = targets.find((target) => target.name === "kit")!;
+      const hono = targets.find((target) => target.name === "hono")!;
+      const honoCookie = await memberCookie(hono);
+      await expect
+        .poll(
+          async () => {
+            const ready = await api(hono).get("/leaderboards/members", {
+              headers: { cookie: honoCookie },
+            });
+            return (
+              ready.status() === 200 &&
+              (ready.headers()["x-two-renderer"] ?? null) === null &&
+              (await ready.text()).includes("Sign out")
+            );
+          },
+          { message: "Hono member board session becomes visible", timeout: 15000 },
+        )
+        .toBe(true);
+      await memberGoingRsvp();
       const cookie = await memberCookie(kit);
+      await expect
+        .poll(
+          async () => {
+            const ready = await api(kit).get("/leaderboards/members", {
+              headers: { cookie },
+            });
+            return (
+              ready.status() === 200 &&
+              (ready.headers()["x-two-renderer"] ?? null) ===
+                expectedKitMarker("/leaderboards/members") &&
+              (await ready.text()).includes("Sign out")
+            );
+          },
+          { message: "Kit member board session becomes visible", timeout: 15000 },
+        )
+        .toBe(true);
       const context = await browser.newContext({
         baseURL: kit.origin,
         ignoreHTTPSErrors: kit.ignoreHTTPSErrors,
@@ -1249,6 +1287,17 @@ test.describe("kit: member-board visuals", () => {
           await expect(page.getByRole("heading", { name: "Member leaderboard" })).toBeVisible();
           await expect(page.getByRole("navigation", { name: "Board scope" })).toBeVisible();
           await page.waitForLoadState("networkidle");
+          if (view === "default" || view === "relative") {
+            const rankedRow = page.getByRole("row").filter({
+              has: page.getByRole("rowheader", { name: "QA Member" }),
+            });
+            await expect(rankedRow.getByRole("cell")).toHaveText(["1", "1"]);
+          } else {
+            await expect(
+              page.getByText("Nobody is ranked for this season and game yet."),
+            ).toBeVisible();
+            await expect(page.getByRole("rowheader", { name: "QA Member" })).toHaveCount(0);
+          }
           await expect.soft(page).toHaveScreenshot(`member-board-${view}-${viewport.name}.png`, {
             fullPage: true,
             mask: [page.locator("time")],
