@@ -92,7 +92,7 @@ export const MemberLeaderboardPage: FC<{
               : "Nobody is ranked for this season and game yet."}
           </p>
         ) : (
-          <table>
+          <table class="member-board-table">
             <caption>
               Going counts, season {query.season}, {label}
             </caption>
