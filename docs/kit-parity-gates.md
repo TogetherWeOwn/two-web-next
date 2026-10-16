@@ -70,13 +70,14 @@ the preview URLs or `KIT_PARITY_QA_TOKEN`. Preview-mode member-board checks
 are an operator-run gate and spend one QA login per base only when the token
 is set. The only authenticated Kit-parity journey in CI is `e2e:kit-parity` in
 `browser-smoke` (member board, one shared QA login); the critical `npm run e2e`
-journeys in the same job log in separately. The four hot-zone paths also
-have a dedicated browser journey in `e2e/kit-parity/parity.spec.ts`
-(`parity.spec.ts:291-350` iterates all four signal paths on both
-targets); CI additionally covers the shared contract branch through
-the canonical-`/hotzones` fixture in the step-3 unit contract plus
-the hot-zone Vitest suites. Preview fetches are operator-run
-evidence, not CI evidence.
+journeys in the same job log in separately. The parity suite's raw
+no-JavaScript API checks fetch all four hot-zone paths on both targets
+(`e2e/kit-parity/parity.spec.ts:291-350`). Its
+rendered-page journey loads `/hotzones` and follows `/hotzones/joins` at
+desktop and mobile widths; it does not render the voice or games pages.
+CI additionally covers the shared contract branch through the
+canonical-`/hotzones` fixture in the step-3 unit contract plus the hot-zone
+Vitest suites. Preview fetches are operator-run evidence, not CI evidence.
 
 In `browser-smoke`, after the critical journeys:
 `e2e:kit-parity` (parameterized journeys vs Hono and the built Kit
@@ -200,9 +201,11 @@ too: `KIT_WORKER_ORIGIN`, else derived from `KIT_WORKER_PORT` (the port
   `/events/past`, `/about`, `/faq`, the four hot-zone paths and
   `/leaderboards/members`.
   Archive/join DOM parity plus two-width overflow checks run in the parity
-  spec today; the hot-zone pages also have browser journey and responsive
-  navigation coverage there. CI additionally runs the fixture-based unit
-  contract and hot-zone Vitest suites; preview fetch is an operator-run check.)
+  spec today. Hot-zone raw API checks fetch all four paths; the rendered-page
+  journey loads `/hotzones` and follows `/hotzones/joins` at desktop and mobile
+  widths, without rendering the voice or games pages. CI additionally runs the
+  fixture-based unit contract and hot-zone Vitest suites; preview fetch is an
+  operator-run check.)
 - `maxDiffPixels: 300` per screenshot (absolute, not a ratio), `<time>`
   masked, animations disabled, caret hidden. Raising the threshold or masking
   more needs its own PR with justification.
@@ -255,15 +258,16 @@ until their routes migrate; the gate ledger derives each entry from
 never quiet green, and never a `test.skip` call (the floor forbids new
 skips). An enabled route with no executed journey covering it records a
 failure instead of a skip: in-scope routes fail their journey (scope net),
-any other enabled route fails the uncovered-route catch-all. Executed
-browser journeys cover GET/HEAD `/events/past`, `/join`, `/auth/recover`, the
-four hot-zone paths and `/leaderboards/members` (the member board also runs
-authenticated). The unit contract exercises the shared contract branches
-on canonical fixtures (one synthetic `/hotzones` shell, one member-board
-fixture, the `/about` and `/faq` leaves); per-path coverage of the four
-hot-zone signals comes from the executed browser journey above (and from
-preview mode when an operator runs it). Hot-zone Vitest suites run in CI.
-Preview fetch is an operator-run check, not CI evidence.
+any other enabled route fails the uncovered-route catch-all. Executed parity
+journeys cover GET/HEAD `/events/past`, `/join`, `/auth/recover` and
+`/leaderboards/members` (the member board also runs authenticated). The suite separately performs raw no-JavaScript API checks
+for all four hot-zone paths; its rendered-page journey loads `/hotzones` and
+follows `/hotzones/joins`, not the voice or games pages. The unit contract
+exercises shared contract branches on canonical fixtures (one synthetic
+`/hotzones` shell, one member-board fixture, the `/about` and `/faq` leaves);
+per-path coverage of the four hot-zone signals comes from those API checks
+(and from preview mode when an operator runs it). Hot-zone Vitest suites run
+in CI. Preview fetch is an operator-run check, not CI evidence.
 
 ## Security
 
