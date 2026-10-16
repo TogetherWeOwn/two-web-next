@@ -301,23 +301,33 @@ describe.skipIf(!raw)("Postgres Discord snapshots, independent request clients",
         // postgres.js template queries are lazy: .execute() dispatches the
         // statement now and returns the promise awaited below.
         const released =
-          holderClient`select pg_sleep(greatest(0, extract(epoch from (s.lease_expires_at - clock_timestamp()))) + 0.025)
+          holderClient`select /* discord_snapshot_fence_holder */ pg_sleep(greatest(0, extract(epoch from (s.lease_expires_at - clock_timestamp()))) + 0.025)
           from (select lease_expires_at from discord_event_snapshots where key = ${key} for update) s`
             .execute()
             .then(
               () => ({ released: true as const }),
               (error: unknown) => ({ error }),
             );
-        // Readiness: a backend waiting in PgSleep has taken the row lock and
-        // holds it until the sleep ends on the database clock.
-        let sleeping = false;
-        for (let i = 0; i < 200 && !sleeping; i++) {
-          const [activity] =
-            await fixture.client`select exists(select 1 from pg_stat_activity where pid = ${holderPid} and wait_event = 'PgSleep') as sleeping`;
-          sleeping = activity!.sleeping;
-          if (!sleeping) await new Promise((r) => setTimeout(r, 5));
+        // Readiness uses the backend's active statement and granted relation
+        // lock, not the transient PgSleep wait_event. These persist while the
+        // statement holds its row lock, even if the observer is descheduled.
+        let holding = false;
+        for (let i = 0; i < 200 && !holding; i++) {
+          const [activity] = await fixture.client`select exists(
+            select 1 from pg_stat_activity a
+            join pg_locks l on l.pid = a.pid
+            where a.pid = ${holderPid}
+              and a.state = 'active'
+              and a.query like '%discord_snapshot_fence_holder%'
+              and l.locktype = 'relation'
+              and l.relation = 'discord_event_snapshots'::regclass
+              and l.mode = 'RowShareLock'
+              and l.granted
+          ) as holding`;
+          holding = activity!.holding;
+          if (!holding) await new Promise((r) => setTimeout(r, 5));
         }
-        expect(sleeping).toBe(true);
+        expect(holding).toBe(true);
         const pending = store.complete(
           key,
           claim.token!,
