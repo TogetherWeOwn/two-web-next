@@ -174,16 +174,28 @@ jobs:
             playwright-chromium-${{ runner.os }}-
       - run: npx playwright install --with-deps chromium
       - name: Chromium cancellation regressions
-        run: A11Y_BROWSER_TESTS=true node --test ci/a11y-lifecycle.test.mjs
+        env:
+          A11Y_BROWSER_TESTS: "true"
+        run: |
+          npx vitest run ci/audit-lifecycle.test.mjs --reporter=default --reporter=json --outputFile.json=artifacts/a11y/audit-lifecycle.json
+          node ci/a11y-require-executed.mjs artifacts/a11y/audit-lifecycle.json "audit lifecycle real Chromium signal cleanup" 2
+      - name: RSVP keyboard-focus proof (real Chromium, loopback fixtures)
+        run: RSVP_FOCUS_BROWSER_TESTS=true node --test ci/rsvp-focus-browser.test.mjs
       - name: Session recovery (local two-tab fixture, mocked OAuth)
         run: timeout 120s npm run test:auth-browser
+      # The suite has no opt-out: it always runs, so missing evidence on the
+      # green path means the run executed nothing. Default conditions on
+      # purpose: when the suite itself fails this step skips and the upload
+      # below (if: always()) still ships the partial evidence for debugging.
+      - name: Session recovery evidence must exist
+        run: node ci/require-session-recovery-evidence.mjs artifacts/session-recovery
       - name: Session recovery evidence
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: session-recovery-evidence
           path: artifacts/session-recovery/
-          if-no-files-found: warn
+          if-no-files-found: error
           retention-days: 14
       # Each browser-gated suite skips unless its opt-in is "true"; the verifier
       # fails the step when any of its cases skipped or went missing.
@@ -372,7 +384,7 @@ jobs:
         run: npm ci --prefix web --include=dev --no-audit --no-fund
       - name: Check (lint + typecheck + coverage gate)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
-        run: npm run lint && npm run typecheck && npm run e2e:typecheck && npm run test:coverage && npm run e2e:safety && node --test ci/a11y-*.test.mjs ci/admin-properties-ci.test.mjs ci/coverage-command.test.mjs ci/kit-preview-e2e-wiring.test.mjs ci/visual-accept.test.mjs
+        run: npm run lint && npm run typecheck && npm run e2e:typecheck && npm run test:coverage && npm run e2e:safety && node --test ci/a11y-*.test.mjs ci/admin-properties-ci.test.mjs ci/coverage-command.test.mjs ci/kit-preview-e2e-wiring.test.mjs ci/visual-accept.test.mjs ci/tier0-changed-query-files.test.mjs
         env:
           DATABASE_URL: postgres://postgres:ci@localhost:5432/postgres
           AUDIT_IMPORT_TEST_DATABASE_URL: postgres://postgres:ci@localhost:5432/postgres
@@ -399,11 +411,14 @@ jobs:
           # dead gate visible as a workflow warning instead of silent green.
           trap 'echo "::warning::Tier-0 WARN step failed before completing the report"' ERR
           tier0_status=0
-          npm run test:tier0 || tier0_status=$?
-          {
-            echo "### Tier-0 changed query files"
-            git diff --name-only 'origin/main...HEAD' -- src/db src/events src/join src/profiles src/admin src/sessions.ts || true
-          } >> "$GITHUB_STEP_SUMMARY"
+          remember_tier0_failure() {
+            local status=$?
+            if [ "$tier0_status" -eq 0 ]; then
+              tier0_status=$status
+            fi
+          }
+          npm run test:tier0 || remember_tier0_failure
+          node ci/tier0-changed-query-files.mjs || remember_tier0_failure
           exit "$tier0_status"
       - name: Kit parity gate selftests
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')

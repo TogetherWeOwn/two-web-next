@@ -67,6 +67,21 @@ test("the Kit fixture owns the member board only on its loopback worker", () => 
   assert.match(spec, /kitFixtureOwnsMemberBoard/);
 });
 
+test("the Kit fixture owns the live event detail only on its loopback worker", () => {
+  const worker = readFileSync(new URL("./kit-worker-dev.mjs", import.meta.url), "utf8");
+  assert.match(worker, /KIT_PARITY_FIXTURE_EVENT_DETAIL: "true"/);
+  const hooks = readFileSync(new URL("../web/src/hooks.server.ts", import.meta.url), "utf8");
+  assert.match(hooks, /fixtureEventDetail: env\.KIT_PARITY_FIXTURE_EVENT_DETAIL === "true"/);
+  const ownership = readFileSync(new URL("../src/route-ownership.ts", import.meta.url), "utf8");
+  assert.match(ownership, /KIT_PARITY_FIXTURE_EVENT_DETAIL/);
+  const deployed = readFileSync(new URL("../web/wrangler.jsonc", import.meta.url), "utf8");
+  assert.doesNotMatch(deployed, /KIT_PARITY_FIXTURE_EVENT_DETAIL/);
+  const spec = readFileSync(new URL("../e2e/kit-parity/parity.spec.ts", import.meta.url), "utf8");
+  assert.match(spec, /kitFixtureOwnsEventDetail/);
+  const helper = readFileSync(new URL("../e2e/kit-parity.ts", import.meta.url), "utf8");
+  assert.match(helper, /kitFixtureOwnsEventDetail/);
+});
+
 test("the required check runs the parity selftests in their own fail-closed step", () => {
   const step = job
     .split(/\n      - /)

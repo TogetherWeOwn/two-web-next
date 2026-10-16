@@ -3,8 +3,9 @@
 // database. This must never inherit the preview config's Hyperdrive binding.
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
+import { createHash } from "node:crypto";
 import { createServer } from "node:net";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -175,6 +176,45 @@ try {
     "archive load reads the empty disposable event database",
   );
   console.log("PASS generated Worker archive request");
+
+  // Content leaves keep #808's zero-stylesheet contract on the served
+  // worker. The unit parity harness renders pages without +layout.svelte,
+  // so it passes while the served page carries the layout asset link —
+  // this is the built-worker pin: both Kit-owned leaves answer from Kit
+  // with the exact inlined leaf block (its sha256 equals the
+  // CSP-allowlisted hash), zero stylesheet links, and the Hono body class
+  // so the leaf block owns the canvas.
+  const leafModule = await readFile(join(repo, "src", "leaf-critical-css.ts"), "utf8");
+  const leafHash = leafModule.match(/LEAF_CRITICAL_CSS_SHA256: string = "([^"]+)"/)?.[1];
+  assert.ok(leafHash, "leaf CSS hash is generated");
+  for (const leaf of ["/about", "/faq"]) {
+    const page = await fetch(`${origin}${leaf}`);
+    const html = await page.text();
+    assert.equal(page.status, 200, `generated Worker serves ${leaf} (got ${page.status})`);
+    assert.equal(page.headers.get("x-two-renderer"), "kit", `${leaf} is Kit-owned`);
+    assert.equal(
+      page.headers.get("cache-control"),
+      "public, max-age=3600",
+      `${leaf} keeps the Hono cache contract`,
+    );
+    // includes, not a RegExp: the base64 hash carries +/=, which read as
+    // quantifiers and never match literally.
+    assert.ok(
+      (page.headers.get("content-security-policy") ?? "").includes(`'sha256-${leafHash}'`),
+      `${leaf} CSP allowlists the leaf style hash`,
+    );
+    assert.doesNotMatch(html, /rel="stylesheet"/, `${leaf} ships zero stylesheet links`);
+    assert.match(
+      html,
+      /<body[^>]*class="[^"]*base-theme content-theme/,
+      `${leaf} paints the Hono body class`,
+    );
+    const styleBlocks = [...html.matchAll(/<style>([\s\S]*?)<\/style>/g)];
+    assert.equal(styleBlocks.length, 1, `${leaf} inlines exactly one style block`);
+    const servedHash = createHash("sha256").update(styleBlocks[0][1], "utf8").digest("base64");
+    assert.equal(servedHash, leafHash, `${leaf} style block matches the CSP hash`);
+  }
+  console.log("PASS generated Worker content-leaf zero-stylesheet contract");
 
   const api = await fetch(`${origin}/api/agent-events`, {
     method: "POST",
