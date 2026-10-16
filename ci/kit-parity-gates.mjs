@@ -714,7 +714,9 @@ function assertEventsContract(label, html, get, expected) {
       subscribeUrl.pathname === "/events.ics" &&
       subscribeUrl.search === "" &&
       subscribeUrl.hash === "";
-  } catch {}
+  } catch {
+    subscribeMatchesCanonicalHost = false;
+  }
   if (!subscribeMatchesCanonicalHost) failures.push(`${label}: subscribe action present`);
   if (!html.includes('<script src="/islands/events-calendar.js"'))
     failures.push(`${label}: shared island binder`);
