@@ -7,6 +7,7 @@ import { test } from "node:test";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import {
   LOGIN_JOURNEYS,
+  PARITY_ROUTES,
   assertMembersContract,
   assertReservedContract,
   assertRouteContract,
@@ -796,6 +797,42 @@ globalThis.fetch = async (input) => {
   assert.match(output, /preview Hono/);
 });
 
+test("preview events journey enforces the shipped cache TTL pattern", () => {
+  const events = PARITY_ROUTES.find((route) => route.path === "/events");
+  assert.ok(events?.cachePattern instanceof RegExp, "events route pins a cache pattern");
+  const html =
+    '<html><head><link rel="canonical" href="https://x.invalid/events">' +
+    '<link rel="alternate" type="text/markdown" href="/events.md"></head>' +
+    '<body><a class="skip-link" href="#main">Skip</a>' +
+    '<nav aria-label="Primary"><a href="/events" aria-current="page">Events</a></nav>' +
+    '<main id="main"><section data-testid="events-calendar" data-island="events-calendar">' +
+    '<div data-testid="events-content"><div data-testid="events-list"></div></div>' +
+    '<div role="group" aria-label="View"><button data-testid="events-view-list">L</button>' +
+    '<button data-testid="events-view-calendar">C</button></div>' +
+    '<form method="get" action="/events"><input type="search" name="q" data-testid="events-search"></form>' +
+    '<a href="/events/past" data-testid="events-past-archive-link">Past</a>' +
+    '<a href="webcal://x.invalid/events.ics" data-testid="events-subscribe">Sub</a>' +
+    '</section></main><p>Welcome, guest</p><script src="/islands/events-calendar.js"></script></body></html>';
+  const stub = `
+const html = ${JSON.stringify(html)};
+globalThis.fetch = async (input) => {
+  const url = new URL(String(input.url ?? input));
+  if (url.pathname === "/up") return new Response("{}", { status: 200, headers: { "content-type": "application/json" } });
+  if (url.pathname === "/events") return new Response(html, { status: 200, headers: { "content-type": "text/html", "cache-control": "public, max-age=9999", vary: "Cookie, X-Two-Island", ...(url.host.startsWith("kit.") ? { "x-two-renderer": "kit" } : {}) } });
+  return new Response("", { status: 404 });
+};
+`;
+  const { status, output } = runScript({
+    env: {
+      KIT_PREVIEW_URL: "https://kit.invalid.workers.dev/",
+      HONO_PREVIEW_URL: "https://hono.invalid.workers.dev/",
+    },
+    stub,
+  });
+  assert.equal(status, 1, `expected preview contract failure, got ${status}\\n${output}`);
+  assert.match(output, /preview Kit \/events: contract.*cache-control.*does not match/);
+});
+
 test("every listed login route alone fails its own journey (no aggregate masking)", () => {
   const silent = { write: () => {} };
   for (const journey of LOGIN_JOURNEYS) {
@@ -1100,6 +1137,8 @@ test("events contract proves the calendar island, search form, archive link and 
     `<a href="webcal://x.invalid/events.ics" data-testid="events-subscribe">Sub</a>` +
     `</section></main><p>Welcome, guest</p>` +
     `<script src="/islands/events-calendar.js"></script></body></html>`;
+  const eventsRoute = PARITY_ROUTES.find((route) => route.path === "/events");
+  assert.ok(eventsRoute?.cachePattern instanceof RegExp, "events route pins a cache pattern");
   const good = assertRouteContract({
     label: "events/good",
     html: shell(""),
@@ -1108,16 +1147,16 @@ test("events contract proves the calendar island, search form, archive link and 
     expected: {
       status: 200,
       marker: null,
-      contract: "events",
-      cachePattern: /^public, max-age=(?:[1-9]|[1-5]\d|60)$/,
+      contract: eventsRoute.contract,
+      cachePattern: eventsRoute.cachePattern,
     },
   });
   assert.equal(good.length, 0, good.join("; "));
   const ttlExpectation = {
     status: 200,
     marker: null,
-    contract: "events",
-    cachePattern: /^public, max-age=(?:[1-9]|[1-5]\d|60)$/,
+    contract: eventsRoute.contract,
+    cachePattern: eventsRoute.cachePattern,
   };
   assert.equal(
     assertRouteContract({

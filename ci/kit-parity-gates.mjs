@@ -1999,6 +1999,7 @@ async function runPreviewMode(
       marker: expectedMarker,
       contract: route.contract ?? "archive",
       cache: route.cache ?? null,
+      cachePattern: route.cachePattern,
     };
     const assertContract =
       route.contract === "members"
