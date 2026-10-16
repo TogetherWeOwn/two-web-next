@@ -211,7 +211,7 @@ fs.writeFileSync(
     'case "$*" in',
     '  "api repos/o/r/releases/tags/v1.0.1"*)',
     '    case "$FAKE_GH_MODE" in',
-    '      absent) echo "gh: Not Found (HTTP 404)" >&2; exit 1 ;;',
+    '      absent|create-fails) echo "gh: Not Found (HTTP 404)" >&2; exit 1 ;;',
     '      exists) echo "{}"; exit 0 ;;',
     '      outage) echo "gh: Service Unavailable (HTTP 503)" >&2; exit 1 ;;',
     '      limited) echo "gh: API rate limit exceeded (HTTP 403)" >&2; exit 1 ;;',
@@ -219,7 +219,11 @@ fs.writeFileSync(
     '      offline) echo "dial tcp: lookup api.github.com: no such host" >&2; exit 1 ;;',
     "      silent) exit 1 ;;",
     "    esac ;;",
-    '  "release create "*) exit 0 ;;',
+    '  "release create "*)',
+    '    case "$FAKE_GH_MODE" in',
+    '      create-fails) echo "gh: release create failed (HTTP 500)" >&2; exit 1 ;;',
+    "      *) exit 0 ;;",
+    "    esac ;;",
     "esac",
     'echo "unexpected gh call: $*" >&2',
     "exit 2",
@@ -264,6 +268,46 @@ for (const mode of ["outage", "limited", "unauthorized", "offline", "silent"]) {
   assert.doesNotMatch(stopped.gh, /^release create /m, mode);
   assert.equal(stopped.out, "", mode);
 }
+// A failed `release create` must fail the promote without reporting a release,
+// and retrying the exact promoted SHA must intend the same tag and target: no
+// additional version bump. The fake create never writes a git tag, so the retry
+// recomputes the version from the same history.
+const failed = publish("create-fails");
+assert.notEqual(failed.status, 0, "a failed release create must fail the promote");
+assert.doesNotMatch(failed.stdout, /released=true/, "failed create must not report released=true");
+assert.doesNotMatch(failed.out, /released=true/, "failed create must not report released=true");
+assert.equal(failed.out, "", "failed create must leave GITHUB_OUTPUT empty");
+assert.match(failed.gh, /^release create v1\.0\.1 /m, "failed create still attempted v1.0.1");
+assert.match(
+  failed.gh,
+  new RegExp(`--target ${later}\\b`),
+  "failed create targeted the promoted SHA",
+);
+const repair = publish("absent");
+assert.equal(repair.status, 0, repair.stderr);
+assert.equal(
+  repair.out,
+  "tag_name=v1.0.1\nreleased=true\n",
+  "same-SHA retry repairs with the same tag",
+);
+assert.match(
+  repair.gh,
+  /^release create v1\.0\.1 /m,
+  "repair still intends v1.0.1, no version bump",
+);
+assert.match(repair.gh, new RegExp(`--target ${later}\\b`), "repair targets the same promoted SHA");
+assert.match(repair.stdout, /released=true/, "repair reports released=true");
+assert.equal(g("tag", "--list", "v1.0.2"), "", "repair must not bump to v1.0.2");
+// A tag present without its release repairs with that tag: reuse, same target,
+// still no bump.
+g("tag", "v1.0.1", later);
+const tagged = publish("absent");
+assert.equal(tagged.status, 0, tagged.stderr);
+assert.equal(tagged.out, "tag_name=v1.0.1\nreleased=true\n", "present tag repairs with that tag");
+assert.match(tagged.gh, /^release create v1\.0\.1 /m, "present tag reuses v1.0.1, no bump");
+assert.match(tagged.gh, new RegExp(`--target ${later}\\b`), "present tag targets the promoted SHA");
+assert.equal(g("tag", "--list", "v1.0.2"), "", "present-tag repair must not bump to v1.0.2");
+g("tag", "-d", "v1.0.1");
 fs.rmSync(ghBin, { recursive: true, force: true });
 fs.rmSync(dir, { recursive: true, force: true });
 

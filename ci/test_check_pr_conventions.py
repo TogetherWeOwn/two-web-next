@@ -96,9 +96,20 @@ class PrConventionsTests(unittest.TestCase):
             clean.write_text("feat(ci): clean subject\n", encoding="utf-8")
             self.assertNotIn("::warning", self.run_checker(COMMIT_SUBJECTS_PATH=str(clean)))
 
-    def test_missing_commit_subject_listing_is_ignored(self):
-        output = self.run_checker(COMMIT_SUBJECTS_PATH="/nonexistent/subjects.txt")
-        self.assertNotIn("::warning", output)
+    def test_missing_commit_subject_listing_fails_closed(self):
+        output = self.run_checker(2, COMMIT_SUBJECTS_PATH="/nonexistent/subjects.txt")
+        self.assertIn("::error", output)
+        self.assertIn("commit-subject listing", output)
+
+    def test_empty_commit_subject_listing_passes(self):
+        # A genuinely empty PR (zero commits) lists zero subjects: the listing
+        # step succeeds with an empty file, and the check must not fail.
+        with tempfile.TemporaryDirectory() as scratch:
+            listing = Path(scratch) / "subjects.txt"
+            listing.write_text("", encoding="utf-8")
+            output = self.run_checker(COMMIT_SUBJECTS_PATH=str(listing))
+            self.assertNotIn("::error", output)
+            self.assertNotIn("::warning", output)
 
     def test_error_level_fails_on_internal_ids(self):
         for level in ("error", "bogus", ""):
@@ -190,6 +201,42 @@ class PrConventionsTests(unittest.TestCase):
                     1, EVENT="push", COMMITS=json.dumps([{"id": "a" * 40, "message": message}])
                 )
                 self.assertIn("::error title=Commit on main::", output)
+
+
+class PrCommitSubjectListingWiringTests(unittest.TestCase):
+    """Pin the fail-closed listing wiring in pr-gates.yml.
+
+    Removing the guard (warn-and-truncate to an empty file) must fail this
+    test, which the `Unit-test the lint` step runs on every PR.
+    """
+
+    WORKFLOW = Path(__file__).resolve().parent.parent / ".github" / "workflows" / "pr-gates.yml"
+
+    def listing_step(self):
+        text = self.WORKFLOW.read_text(encoding="utf-8")
+        marker = "- name: List PR commit subjects\n"
+        self.assertIn(marker, text, "List PR commit subjects step is missing")
+        step = text.split(marker, 1)[1].split("      - name:", 1)[0]
+        return step
+
+    def test_listing_failure_fails_the_step(self):
+        step = self.listing_step()
+        self.assertIn("::error::Could not list", step)
+        self.assertIn("exit 1", step)
+        self.assertNotIn("::warning::Could not list", step)
+        self.assertNotIn("continue-on-error", step)
+        # The failure handler must not truncate the listing to an empty file
+        # that the subject check would then scan as clean.
+        self.assertNotIn(': > "$RUNNER_TEMP/pr-commit-subjects.txt"', step)
+
+    def test_subject_check_still_receives_the_listing(self):
+        text = self.WORKFLOW.read_text(encoding="utf-8")
+        self.assertIn("COMMIT_SUBJECTS_PATH", text)
+        self.assertIn("pr-commit-subjects.txt", text)
+
+    def test_workflow_runs_this_pin(self):
+        text = self.WORKFLOW.read_text(encoding="utf-8")
+        self.assertIn("test_check_pr_conventions.py", text)
 
 
 if __name__ == "__main__":
