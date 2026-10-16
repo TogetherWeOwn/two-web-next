@@ -52,7 +52,7 @@ test.afterAll(async () => {
     if (memberRsvpCreated) {
       const hono = targets.find((target) => target.name === "hono")!;
       const withdrawn = await api(hono).delete(`/events/${SEEDED_EVENT_KEY}/rsvp`, {
-        headers: { cookie: await honoMemberCookie(), Origin: "https://localhost:8787" },
+        headers: { cookie: await memberCookie(hono), Origin: "https://localhost:8787" },
       });
       expect(withdrawn.status(), "ranked RSVP withdrawn").toBe(204);
     }
