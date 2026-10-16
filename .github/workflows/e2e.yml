@@ -136,8 +136,9 @@ jobs:
       # Kit journey parity (docs/kit-parity-gates.md): the journeys run
       # against Hono and the built Kit Worker on the same seeded disposable
       # Postgres. Read-only apart from the member-board journey's single
-      # shared QA login and its one going RSVP (withdrawn in afterAll), so
-      # they run after the journeys without skewing the teardown sweep.
+      # shared QA login and its one going RSVP (withdrawn in afterAll) and
+      # the archive journey's 24 seeded rows (swept in afterAll), so they
+      # run after the journeys without skewing the teardown sweep.
       - name: Install Kit workspace dependencies
         if: ${{ !cancelled() }}
         run: npm ci --prefix web --include=dev --no-audit --no-fund

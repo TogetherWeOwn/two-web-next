@@ -13,11 +13,8 @@ export const csr = false;
 // boundary releases it, so the guest bounce and the 403/503 stay exact.
 // Children read the actor via parent(): they never re-decide the session.
 //
-// Enablement blocker (docs/kit-parity-gates.md, GET /admin row): the Hono
-// panel's moderator tab-sync probe (signed auth-status cookie plus the
-// /islands/auth-status.js script, src/auth-status.ts) is not ported here.
-// The guard stays read-only until the enablement slice lands the probe, so
-// flipping the manifest entry must wait for it.
+// The hook attaches the shared signed auth-status probe only to successful
+// moderator admin documents; this read-only guard never writes session cookies.
 export const load: LayoutServerLoad = async ({ locals, url }) => {
   const decision = decideKitAdminGuard(
     { status: locals.status, session: locals.session },
