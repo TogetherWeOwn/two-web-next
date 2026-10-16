@@ -2,7 +2,8 @@
 
 This is the Cloudflare Worker runbook, not the frozen Laravel/VPS runbook.
 Start here for releases, queue incidents and database recovery; use
-[log-line alerts](runbook-alerts.md) for fingerprints and
+[observability triage](runbook-observability.md) to go from a notification to a
+likely PR, [log-line alerts](runbook-alerts.md) for fingerprints and
 [shared Postgres](db-migrations.md) for migration ownership and backup policy.
 The [parity matrix](parity.md) records what is implemented versus still missing.
 Operations guidance (the index below, `/up` readiness, queues, deploy and
