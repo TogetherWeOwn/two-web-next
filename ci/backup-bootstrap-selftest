@@ -117,6 +117,16 @@ assert 'PGDG_CLIENT_BIN' not in WORKFLOW_TEXT, "workflow must use the script def
 assert 'bash bin/backup-bootstrap.sh' in WORKFLOW_TEXT, "workflow must run the bootstrap script"
 ok("workflow uses the script default client with no override")
 
+PROOF_WORKFLOW_TEXT = (ROOT / ".github/workflows/backup-restore-proof.yml").read_text()
+assert 'image: postgres:18' in PROOF_WORKFLOW_TEXT, "restore proof service must use postgres 18"
+assert 'sudo apt-get install -y -qq --no-install-recommends postgresql-client-18' in PROOF_WORKFLOW_TEXT, "restore proof must install pg 18 client"
+assert 'PG18_BIN=/usr/lib/postgresql/18/bin' in PROOF_WORKFLOW_TEXT, "restore proof must select pg 18 binaries"
+assert 'version="$($PG18_BIN/$client --version)"' in PROOF_WORKFLOW_TEXT, "restore proof must invoke explicit pg 18 binaries"
+assert 'must be PostgreSQL 18' in PROOF_WORKFLOW_TEXT, "restore proof must assert client major 18"
+assert 'echo "$PG18_BIN" >> "$GITHUB_PATH"' in PROOF_WORKFLOW_TEXT, "restore proof must select pg 18 on later steps"
+assert 'postgres:17' not in PROOF_WORKFLOW_TEXT and 'postgresql-client-17' not in PROOF_WORKFLOW_TEXT, "stale pg 17 restore proof"
+ok("restore proof pins PostgreSQL 18 server and explicitly asserts PG18 clients")
+
 with tempfile.TemporaryDirectory(prefix="backup-bootstrap-", dir=os.environ.get("PAPERCLIP_RUN_SCRATCH_DIR") or os.environ.get("PAPERCLIP_SCRATCH_DIR")) as tmp:
     root = Path(tmp)
     for directory in ("fakebin", "scratch", "keyrings", "sources", "client18"):
