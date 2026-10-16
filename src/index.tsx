@@ -122,9 +122,9 @@ const staticSecurityHeaders = secureHeaders({
           ? "https://discord.com/widget"
           : "'none'",
     ],
-    // The static policy stays 'self'-only on every route. Content-leaf
-    // inline styles are allowlisted per-route by leafInlineStyleCsp below,
-    // so the documented policy for non-leaf routes never changes shape.
+    // The static policy stays 'self'-only on every route. Inline styles on /
+    // and content leaves are allowlisted per-route by leafInlineStyleCsp
+    // below; other routes keep the self-only style policy.
     styleSrc: ["'self'"],
     scriptSrc: ["'self'"],
     fontSrc: ["'self'"],
