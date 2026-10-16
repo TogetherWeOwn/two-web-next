@@ -12,28 +12,37 @@ import type { HotzoneSignal } from "./aggregates";
 
 const HOURS = Array.from({ length: 24 }, (_, h) => h);
 
+// The 7x24 grid keeps its 42rem floor (public/schedule-theme.css) for the
+// desktop presentation; the scroll wrapper contains it so the 390px viewport
+// scrolls inside the region instead of overflowing the page. The table tag
+// stays bare: ci/kit-parity-gates.mjs pins a literal "<table>" in the HTML.
+// The region mirrors the calendar scroll wrapper (focusable with a label) so
+// keyboard users can pan the grid. Both renderers share this markup through
+// renderHotzoneGrid.
 const Grid: FC<{ cells: HeatGrid; caption: string }> = ({ cells, caption }) => (
-  <table>
-    <caption>{caption}</caption>
-    <thead>
-      <tr>
-        <th scope="col">Day</th>
-        {HOURS.map((h) => (
-          <th scope="col">{String(h).padStart(2, "0")}</th>
-        ))}
-      </tr>
-    </thead>
-    <tbody>
-      {WEEKDAY_NAMES.map((day, weekday) => (
+  <div data-hotzone-scroll role="region" aria-label={caption} tabindex={0}>
+    <table>
+      <caption>{caption}</caption>
+      <thead>
         <tr>
-          <th scope="row">{day}</th>
+          <th scope="col">Day</th>
           {HOURS.map((h) => (
-            <td>{cells[weekday]![h]}</td>
+            <th scope="col">{String(h).padStart(2, "0")}</th>
           ))}
         </tr>
-      ))}
-    </tbody>
-  </table>
+      </thead>
+      <tbody>
+        {WEEKDAY_NAMES.map((day, weekday) => (
+          <tr>
+            <th scope="row">{day}</th>
+            {HOURS.map((h) => (
+              <td>{cells[weekday]![h]}</td>
+            ))}
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  </div>
 );
 
 // Kit's server-only loaders reuse this escaped JSX, rather than shipping a

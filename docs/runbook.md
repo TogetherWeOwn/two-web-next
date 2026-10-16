@@ -986,10 +986,12 @@ new flip or production probes outside that window. The archived freeze
 note is a withdrawn proposal, not evidence that its proposed freeze was
 applied. No freeze is implied by this watch: any future freeze needs a
 separate declaration with new dates and explicit lift terms.
-Everything in this section is read-only or GET-only: no production writes,
-migrations, credential changes or queue purges. Any Sev-1 goes to
-containment below and the production rollback pointer, never to a live fix
-or a credential swap.
+Everything in this section is read-only or GET-only except that OAuth
+start/callback routes may write throttle records, OAuth starts may issue or
+sweep one-use journey records, and OAuth callbacks may consume them; there are
+no other production writes, migrations, credential changes or queue purges. Any
+Sev-1 goes to containment below and the production rollback pointer, never to a
+live fix or a credential swap.
 
 **What to check:**
 
@@ -1003,8 +1005,8 @@ or a credential swap.
 - `node ci/cutover-check.mjs --phase after --target togetherweown.com --json`
   (the [after gate](cutover-check.md#phase-contract-and-prerequisites)):
   unauthenticated, GET-only, no database client. OAuth start/callback
-  routes can record throttles, so run it only inside this watch, never as
-  a casual probe.
+  routes can record throttles, and OAuth starts can issue or sweep one-use
+  journey records, so run it only inside this watch, never as a casual probe.
 - Lighthouse against the production origin once within 24h, held to the
   repo thresholds in [ci/lighthouserc.cjs](../ci/lighthouserc.cjs) (LCP,
   CLS, server response time); thresholds are never relaxed to turn a

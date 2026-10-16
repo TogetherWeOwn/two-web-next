@@ -35,7 +35,10 @@ test("the required check keeps full coverage in isolated serial threads inside m
     `Step guard must stay scope-gated: ${guards[0]}`,
   );
   const config = await readFile(new URL("../vitest.config.ts", import.meta.url), "utf8");
-  assert.match(config, /include: \["test\/\*\*\/\*\.test\.ts", "test\/\*\*\/\*\.test\.mjs"\]/);
+  assert.match(
+    config,
+    /include: \["test\/\*\*\/\*\.test\.ts", "test\/\*\*\/\*\.test\.mjs", "ci\/audit-lifecycle\.test\.mjs"\]/,
+  );
   assert.match(config, /fileParallelism: false/);
   assert.doesNotMatch(config, /\bisolate:\s*false/);
 });
