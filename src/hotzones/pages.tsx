@@ -13,7 +13,7 @@ import type { HotzoneSignal } from "./aggregates";
 const HOURS = Array.from({ length: 24 }, (_, h) => h);
 
 const Grid: FC<{ cells: HeatGrid; caption: string }> = ({ cells, caption }) => (
-  <table class="hotzone-grid-table">
+  <table>
     <caption>{caption}</caption>
     <thead>
       <tr>
