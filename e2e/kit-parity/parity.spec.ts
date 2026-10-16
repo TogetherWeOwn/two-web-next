@@ -917,6 +917,7 @@ for (const target of targets) {
         await expectContained("/hotzones", 3);
         await page.getByRole("link", { name: "Joins heatmap" }).click();
         await expect(page).toHaveURL(/\/hotzones\/joins/);
+        await page.waitForLoadState("load");
         await expect(page.getByRole("heading", { name: "joins hot zone" })).toBeVisible();
         await expectContained("/hotzones/joins", 1);
         for (const signal of ["voice", "games"]) {
