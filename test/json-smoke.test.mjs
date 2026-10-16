@@ -509,6 +509,40 @@ test("fails every show probe when the show route is unexpectedly missing", async
   assert.ok(!result.output.includes("never-log-this"), result.output);
 });
 
+for (const [failure, change] of [
+  [
+    "HTTP 503",
+    (result) => {
+      result.status = 503;
+      result.body = "upstream fallback";
+    },
+  ],
+  [
+    "non-JSON response",
+    (result) => {
+      result.headers["content-type"] = "text/html";
+      result.body = "upstream fallback";
+    },
+  ],
+  [
+    "missing data array",
+    (result) => {
+      result.body = JSON.stringify({ page: 1, limit: 100 });
+    },
+  ],
+]) {
+  test(`fails a cancelled-event scan with ${failure} instead of skipping`, async (t) => {
+    const { url } = await stub(t, (id, result) => {
+      if (id === "gone-scan") change(result);
+    });
+    const result = await run(url);
+    assert.equal(result.ok, false, result.output);
+    assert.ok(result.output.includes("FAIL cancelled show: expected"), result.output);
+    assert.ok(!result.output.includes("SKIP cancelled show:"), result.output);
+    assert.ok(!result.output.includes("upstream fallback"), result.output);
+  });
+}
+
 test("fails a broken collection contract instead of skipping", async (t) => {
   const { url } = await stub(t, (id, result) => {
     if (id === "collection") {

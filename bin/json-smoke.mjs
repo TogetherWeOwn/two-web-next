@@ -543,9 +543,17 @@ export async function jsonSmoke(
     try {
       const response = await get("/events.json?per_page=100", cookie);
       const body = parseBody(await response.text());
-      const cancelled = Array.isArray(body?.data)
-        ? body.data.find((row) => row?.status === "cancelled" && typeof row?.event_key === "string")
-        : undefined;
+      if (response.status !== 200 || !isJson(response) || !Array.isArray(body?.data)) {
+        fail(
+          "cancelled show",
+          "HTTP 200 JSON {data: array} from cancelled-event scan",
+          `HTTP ${response.status}`,
+        );
+        return;
+      }
+      const cancelled = body.data.find(
+        (row) => row?.status === "cancelled" && typeof row?.event_key === "string",
+      );
       if (!cancelled) {
         skip("cancelled show", "no cancelled event on the first page");
         return;
