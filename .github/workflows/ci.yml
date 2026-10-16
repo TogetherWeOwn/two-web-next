@@ -183,13 +183,19 @@ jobs:
         run: RSVP_FOCUS_BROWSER_TESTS=true node --test ci/rsvp-focus-browser.test.mjs
       - name: Session recovery (local two-tab fixture, mocked OAuth)
         run: timeout 120s npm run test:auth-browser
+      # The suite has no opt-out: it always runs, so missing evidence on the
+      # green path means the run executed nothing. Default conditions on
+      # purpose: when the suite itself fails this step skips and the upload
+      # below (if: always()) still ships the partial evidence for debugging.
+      - name: Session recovery evidence must exist
+        run: node ci/require-session-recovery-evidence.mjs artifacts/session-recovery
       - name: Session recovery evidence
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: session-recovery-evidence
           path: artifacts/session-recovery/
-          if-no-files-found: warn
+          if-no-files-found: error
           retention-days: 14
       # Each browser-gated suite skips unless its opt-in is "true"; the verifier
       # fails the step when any of its cases skipped or went missing.
