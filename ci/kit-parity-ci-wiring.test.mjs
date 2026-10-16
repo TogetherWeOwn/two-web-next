@@ -136,7 +136,6 @@ test("visual tests re-seed and verify the board state after worker restarts", ()
   assert.match(visuals, /test\.setTimeout\(120_000\)/);
 });
 
-
 test("Kit visual baselines run on the clean seed before mutating browser journeys", () => {
   const step = (name) => e2eWorkflow.indexOf(`- name: ${name}`);
   const kitVisual = step("Kit visual regression");
