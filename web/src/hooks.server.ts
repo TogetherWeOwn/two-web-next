@@ -2,7 +2,12 @@ import type { Handle } from "@sveltejs/kit/hooks";
 import { env } from "cloudflare:workers";
 import { recordBoardView, recordQueuedBoardView } from "../../src/hotzones/board-log";
 import { kitAccessSink } from "../../src/kit-access-sink";
-import { kitEventsJourneyFor, kitEventsSessionFor, kitSessionBridge } from "../../src/kit-session";
+import {
+  kitAuthStatusCookieFor,
+  kitEventsJourneyFor,
+  kitEventsSessionFor,
+  kitSessionBridge,
+} from "../../src/kit-session";
 import { dispatchHookRequest } from "../../src/route-ownership";
 import { dispatchEventDetailRequest } from "../../src/events/kit-detail";
 import { dispatchEventsRequest } from "../../src/kit-events";
@@ -36,6 +41,7 @@ export const handle: Handle = async ({ event, resolve }) =>
       }),
     eventDetail: (request, render) => dispatchEventDetailRequest(request, env, render),
     sessionFor: kitSessionBridge(env),
+    authStatusCookieFor: kitAuthStatusCookieFor(env),
     accessSink: kitAccessSink(env),
     // Loopback Kit parity fixture flag only: the core turns this boolean
     // plus a loopback appUrl into the fixture route choice, so the member

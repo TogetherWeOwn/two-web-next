@@ -434,6 +434,8 @@ export interface HookDispatchDeps {
   // resolve, so Kit loads share one session decision. Absent by default:
   // without it the dispatch behaves exactly as before.
   sessionFor?: (event: HookEventLike) => Promise<KitLocals>;
+  // Optional moderator-only auth-status probe cookie for successful Kit admin documents.
+  authStatusCookieFor?: (event: HookEventLike) => Promise<string | null>;
   // Access-log sink for member-read Kit routes. Absent or null refuses the read.
   accessSink?: () => Promise<AccessSink | null>;
   // Post-release hook for member-read routes: runs only after the boundary
@@ -660,6 +662,33 @@ export async function dispatchHookRequest(
     response = await deps.resolve(event);
   }
   if (event.route?.id === HONO_FALLBACK_ROUTE_ID) return response;
+  const locals = event.locals as Partial<KitLocals> | undefined;
+  if (
+    deps.authStatusCookieFor &&
+    event.request.method === "GET" &&
+    /^\/admin(?:\/|$)/.test(event.url.pathname) &&
+    response.status === 200 &&
+    response.headers.get("content-type")?.includes("text/html") &&
+    locals?.status === "authenticated" &&
+    locals.session?.moderator
+  ) {
+    try {
+      const cookie = await deps.authStatusCookieFor(event);
+      if (cookie) {
+        const headers = new Headers(response.headers);
+        headers.append("set-cookie", cookie);
+        response = new Response(response.body, {
+          status: response.status,
+          statusText: response.statusText,
+          headers,
+        });
+      }
+    } catch (err) {
+      console.warn("kit auth-status probe unavailable; rendering without probe cookie.", {
+        exception: (err as Error)?.constructor?.name ?? "unknown",
+      });
+    }
+  }
   decorateKitResponse(response, event, deps.appUrl, deps.featuredImageHosts);
   return response;
 }

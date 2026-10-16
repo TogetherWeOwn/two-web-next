@@ -118,6 +118,63 @@ describe("dispatchHookRequest member reads (Kit branch)", () => {
     ]);
   });
 
+  it("adds the probe only to successful moderator admin documents", async () => {
+    const { sink } = recording();
+    const probeCookie =
+      "__Host-two_session_status=signed-probe; Path=/; Secure; HttpOnly; SameSite=Lax";
+    const manifest: OwnedRoute[] = [
+      {
+        method: "GET",
+        path: "/admin",
+        enabled: true,
+        reads: { resource: "dashboard", action: "view", route: "admin.dashboard" },
+      },
+    ];
+    const adminEvent = (): HookEventLike => {
+      const request = new Request(`${APP_URL}/admin`, { headers: { host: "next.example.test" } });
+      return { request, url: new URL(request.url), route: { id: "/admin" } };
+    };
+    const moderator: KitLocals = {
+      ...authenticated(VIEWER),
+      session: { userId: VIEWER, username: "Rick", avatar: null, member: true, moderator: true },
+    };
+    const authStatusCookieFor = vi.fn(async () => probeCookie);
+    const deps = depsFor({
+      manifest,
+      sessionFor: vi.fn(async () => moderator),
+      authStatusCookieFor,
+      accessSink: async () => sink,
+      resolve: vi.fn(
+        async () =>
+          new Response(await readOwners([VIEWER], "<h1>admin</h1>"), {
+            headers: { "content-type": "text/html" },
+          }),
+      ),
+    });
+    const res = await dispatchHookRequest(adminEvent(), deps);
+    expect(res.headers.getSetCookie()).toContain(probeCookie);
+    expect(authStatusCookieFor).toHaveBeenCalledTimes(1);
+
+    const nonModeratorProbe = vi.fn(async () => probeCookie);
+    const nonModerator = await dispatchHookRequest(
+      adminEvent(),
+      depsFor({
+        manifest,
+        sessionFor: vi.fn(async () => authenticated(VIEWER)),
+        authStatusCookieFor: nonModeratorProbe,
+        accessSink: async () => sink,
+        resolve: vi.fn(
+          async () =>
+            new Response(await readOwners([VIEWER], "<h1>admin</h1>"), {
+              headers: { "content-type": "text/html" },
+            }),
+        ),
+      }),
+    );
+    expect(nonModerator.headers.getSetCookie()).toEqual([]);
+    expect(nonModeratorProbe).not.toHaveBeenCalled();
+  });
+
   it("an anonymous viewer is refused with a sanitized Kit-marked 503", async () => {
     const { sink } = recording();
     const deps = depsFor({
