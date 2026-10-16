@@ -9,6 +9,18 @@ import { fileURLToPath } from "node:url";
 const script = fileURLToPath(new URL("./tier0-changed-query-files.mjs", import.meta.url));
 const workflow = readFileSync(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8");
 const warning = "::warning::changed query files unavailable";
+const expectedGitArgs = [
+  "diff",
+  "--name-only",
+  "origin/main...HEAD",
+  "--",
+  "src/db",
+  "src/events",
+  "src/join",
+  "src/profiles",
+  "src/admin",
+  "src/sessions.ts",
+];
 
 function runDiff(stdout, status, includeSummary = true, stderr = "") {
   const dir = mkdtempSync(join(tmpdir(), "tier0-query-files-"));
@@ -16,18 +28,21 @@ function runDiff(stdout, status, includeSummary = true, stderr = "") {
     const bin = join(dir, "bin");
     mkdirSync(bin);
     const git = join(bin, "git");
+    const argsPath = join(dir, "git-args.txt");
     writeFileSync(
       git,
-      `#!/bin/sh\nprintf '%s' '${stdout}'\nprintf '%s' '${stderr}' >&2\nexit ${status}\n`,
+      `#!/bin/sh\nprintf '%s\\n' "$@" > "$GIT_ARGS_FILE"\nprintf '%s' '${stdout}'\nprintf '%s' '${stderr}' >&2\nexit ${status}\n`,
     );
     chmodSync(git, 0o755);
     const summary = join(dir, "summary.md");
-    const env = { ...process.env, PATH: `${bin}:${process.env.PATH}` };
+    const env = { ...process.env, GIT_ARGS_FILE: argsPath, PATH: `${bin}:${process.env.PATH}` };
     if (includeSummary) env.GITHUB_STEP_SUMMARY = summary;
     else delete env.GITHUB_STEP_SUMMARY;
     const result = spawnSync(process.execPath, [script], { encoding: "utf8", env });
     assert.equal(result.error, undefined);
     assert.equal(result.status, 0);
+    const args = readFileSync(argsPath, "utf8").trimEnd().split("\n");
+    assert.deepEqual(args, expectedGitArgs);
     return {
       log: result.stdout,
       stderr: result.stderr,
@@ -70,7 +85,13 @@ test("the blocking Check step runs this selftest and the Tier-0 reporter stays W
   );
   assert(tier0Step, "the Tier-0 WARN step must exist");
   assert.match(tier0Step, /^        continue-on-error: true$/m);
-  assert.match(tier0Step, /node ci\/tier0-changed-query-files\.mjs/);
-  assert.match(tier0Step, /remember_tier0_failure/);
+  const tier0Lines = tier0Step.split("\n");
+  assert(tier0Lines.includes("          npm run test:tier0 || remember_tier0_failure"));
+  assert(
+    tier0Lines.includes(
+      "          node ci/tier0-changed-query-files.mjs || remember_tier0_failure",
+    ),
+  );
+  assert(tier0Step.split("\n").includes('          exit "$tier0_status"'));
   assert.doesNotMatch(tier0Step, /tier0-changed-query-files\.test\.mjs/);
 });
