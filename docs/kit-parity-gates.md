@@ -202,7 +202,9 @@ too: `KIT_WORKER_ORIGIN`, else derived from `KIT_WORKER_PORT` (the port
   the later parity run cannot clear visual actuals before artifact upload.
   When an actual and its stale committed baseline share a destination, the
   reviewed actual wins; distinct actuals still refuse. `ci/visual-accept.mjs`
-  likewise ignores Kit suite outputs. An intentional redesign is a reviewed artifact
+  ignores actuals from both `test-results-kit-visual/` and
+  `test-results-kit-parity/`, as well as baselines under `__screenshots-kit__/`.
+  An intentional redesign is a reviewed artifact
   committed in the same PR — reviewers treat a baseline change like code —
   never a silent regeneration. Kit baselines pin the events index:
   `e2e/kit-parity/events-index.visual.spec.ts` captures the populated `/events`

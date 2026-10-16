@@ -83,6 +83,28 @@ test("colliding sources refuse with nothing written", () => {
   assert.equal(writes, 0);
 });
 
+test("Kit visual actuals in the shared artifact are admitted", () => {
+  const workspace = scratch();
+  const artifact = scratch();
+  writeBytes(
+    join(artifact, "test-results-kit-visual", "past", "past-desktop-actual.png"),
+    "kit-visual-bytes",
+  );
+
+  const result = acceptBaselines(artifact, {
+    cwd: workspace,
+    mkdir: mkdirSync,
+    copy: (src, dest) => writeBytes(dest, readFileSync(src, "utf8")),
+  });
+
+  assert.equal(result.ok, true, result.message);
+  assert.deepEqual(result.accepted, ["past-desktop.png"]);
+  assert.equal(
+    readFileSync(join(workspace, KIT_SCREENSHOT_DIR, "past-desktop.png"), "utf8"),
+    "kit-visual-bytes",
+  );
+});
+
 test("Hono suite actuals in the shared artifact are ignored", () => {
   const workspace = scratch();
   const artifact = scratch();
