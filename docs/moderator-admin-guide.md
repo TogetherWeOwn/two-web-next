@@ -194,7 +194,7 @@ chrome. If a shell ever misbehaves after enablement, the rollback is a
 manifest disable: returning its entry to `enabled: false` hands the route
 back to the unchanged Hono handler. Each shell is pinned by its Kit suite —
 `test/kit-admin-*` for dashboard, events and featured,
-`test/kit-join-attempts*` and `test/kit-activity-log*` for those shells — not
+`test/kit-join-attempt*` and `test/kit-activity-log*` for those shells — not
 by the Kit parity gates: `PARITY_ROUTES` in `ci/kit-parity-gates.mjs` covers
 only public routes (`/events/past`, `/join`, `/auth/recover`, the hot-zone
 paths and the member leaderboard), and moderator-admin journeys stay
@@ -531,5 +531,6 @@ For maintainers checking this guide:
 - [Admin tests](../test/admin.test.ts), [admin read tests](../test/admin-reads.test.ts)
   and [event search tests](../test/event-search.test.ts): executable behavior checks.
 - [Route ownership](../src/route-ownership.ts) and the
-  [Kit parity gates](kit-parity-gates.md): which renderer owns each admin GET,
-  the manifest-disable rollback, and the gates proving each Kit shell.
+  [Kit parity gates](kit-parity-gates.md): which renderer owns each admin GET
+  and the manifest-disable rollback. The `test/kit-*` suites pin each Kit
+  shell; the parity gates ledger admin journeys as skipped.
