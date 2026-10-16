@@ -143,9 +143,20 @@ jobs:
         if: ${{ !cancelled() }}
         run: npm run e2e
       # Kit journey parity (docs/kit-parity-gates.md): these parity journeys
-      # run against Hono and the built Kit Worker on the same disposable
-      # Postgres after the browser suite; the member-board journey's one RSVP
-      # is withdrawn in afterAll and must not contaminate either visual suite.
+      # run against Hono and the built Kit Worker on the same seeded disposable
+      # Postgres after the browser suite. Read-only apart from the
+      # member-board journey's single shared QA login and its one going RSVP
+      # (withdrawn in afterAll) and the archive journey's 24 seeded rows
+      # (swept in afterAll), so they neither contaminate either visual suite
+      # nor skew the teardown sweep. The visual spec above stays pinned to its
+      # file: the parity run below must not re-run it after the mutating
+      # journeys.
+      - name: Install Kit workspace dependencies
+        if: ${{ !cancelled() }}
+        run: npm ci --prefix web --include=dev --no-audit --no-fund
+      - name: Build Kit worker
+        if: ${{ !cancelled() }}
+        run: npm run build --prefix web
       - name: Kit journey parity (Hono vs built Kit Worker)
         if: ${{ !cancelled() }}
         run: >-
