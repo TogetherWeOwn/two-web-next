@@ -204,7 +204,9 @@ for (const target of targets) {
       // manifest-derived marker once enabled, Hono never carries one.
       const expectedMarker = target.name === "kit" ? expectedKitMarker("/events") : null;
       expect(response.headers()["x-two-renderer"] ?? null).toBe(expectedMarker);
-      expect(response.headers()["cache-control"]).toBe("public, max-age=60");
+      expect(response.headers()["cache-control"]).toMatch(
+        /^public, max-age=(?:[1-9]|[1-5]\d|60)$/,
+      );
       // Full and island-fragment representations share the URL and differ by
       // X-Two-Island, so Vary carries both tokens.
       const eventsVary = response.headers()["vary"] ?? "";

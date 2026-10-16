@@ -1105,9 +1105,43 @@ test("events contract proves the calendar island, search form, archive link and 
     html: shell(""),
     headers: headers("public, max-age=60"),
     status: 200,
-    expected: { status: 200, marker: null, contract: "events", cache: "public, max-age=60" },
+    expected: {
+      status: 200,
+      marker: null,
+      contract: "events",
+      cachePattern: /^public, max-age=(?:[1-9]|[1-5]\d|60)$/,
+    },
   });
   assert.equal(good.length, 0, good.join("; "));
+  const ttlExpectation = {
+    status: 200,
+    marker: null,
+    contract: "events",
+    cachePattern: /^public, max-age=(?:[1-9]|[1-5]\d|60)$/,
+  };
+  assert.equal(
+    assertRouteContract({
+      label: "events/remaining-cache-ttl",
+      html: shell(""),
+      headers: headers("public, max-age=59"),
+      status: 200,
+      expected: ttlExpectation,
+    }).length,
+    0,
+    "remaining public cache TTL is valid",
+  );
+  for (const privateCache of ["private, no-store", "no-store, private"]) {
+    assert.ok(
+      assertRouteContract({
+        label: `events/mutant-private-cache-${privateCache}`,
+        html: shell(""),
+        headers: headers(privateCache),
+        status: 200,
+        expected: ttlExpectation,
+      }).some((failure) => failure.includes("cache-control")),
+      `${privateCache} must not satisfy the guest cache contract`,
+    );
+  }
   // A flash view served shared-cacheable is a privacy break, not a pass.
   const flashed = shell("").replace(
     '<section data-testid="events-calendar"',

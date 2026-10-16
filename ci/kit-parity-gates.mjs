@@ -45,7 +45,7 @@ export const PARITY_ROUTES = [
     expectStatus: 200,
     expectMarker: "manifest",
     contract: "events",
-    cache: "public, max-age=60",
+    cachePattern: /^public, max-age=(?:[1-9]|[1-5]\d|60)$/,
     compareSection: null,
   },
   // GET /join only: /join/discord + /join/callback stay Hono-owned, so the
@@ -652,12 +652,17 @@ function assertJoinContract(label, html, get, expected) {
 // viewer-specific and never shared-cacheable.
 function assertEventsContract(label, html, get, expected) {
   const failures = [];
-  if (expected.cache !== undefined && expected.cache !== null) {
-    const actual = get("cache-control") ?? "";
-    const allowed = Array.isArray(expected.cache) ? expected.cache : [expected.cache];
-    if (!allowed.includes(actual))
+  const cacheActual = get("cache-control") ?? "";
+  if (expected.cachePattern instanceof RegExp) {
+    if (!expected.cachePattern.test(cacheActual))
       failures.push(
-        `${label}: cache-control ${JSON.stringify(actual)} not in ${allowed.join(" | ")}`,
+        `${label}: cache-control ${JSON.stringify(cacheActual)} does not match ${expected.cachePattern}`,
+      );
+  } else if (expected.cache !== undefined && expected.cache !== null) {
+    const allowed = Array.isArray(expected.cache) ? expected.cache : [expected.cache];
+    if (!allowed.includes(cacheActual))
+      failures.push(
+        `${label}: cache-control ${JSON.stringify(cacheActual)} not in ${allowed.join(" | ")}`,
       );
   }
   const vary = get("vary") ?? "";
@@ -696,7 +701,6 @@ function assertEventsContract(label, html, get, expected) {
   // carrying the one-shot banner is viewer-specific and never shared-cacheable.
   // Only this direction is pinned — a flash-free member view is legitimately
   // private, so the reverse would false-fail signed-in renders.
-  const cacheActual = get("cache-control") ?? "";
   if (html.includes('data-testid="join-result"') && cacheActual !== "private, no-store")
     failures.push(`${label}: flash view answers private, no-store`);
   return failures;
@@ -1205,7 +1209,7 @@ export function runUnitMode({ stdout = process.stdout, manifestSource: manifestO
       status: 200,
       marker: eventsMarker,
       contract: "events",
-      cache: "public, max-age=60",
+      cachePattern: /^public, max-age=(?:[1-9]|[1-5]\d|60)$/,
     },
   });
   push(
