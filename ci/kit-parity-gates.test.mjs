@@ -1074,3 +1074,64 @@ test("join contract proves every widget state, the flash view and hostile next",
     assert.ok(failures.length > 0, `join mutant ${name} was NOT detected`);
   }
 });
+
+const eventsContractFixture = (canonical, vary) => {
+  const html =
+    `<html><head><link rel="canonical" href="${canonical}"></head>` +
+    `<body><a class="skip-link" href="#main">Skip</a>` +
+    `<nav aria-label="Primary"><a href="/events">Events</a></nav>` +
+    `<main id="main"><section data-island="events-calendar" data-testid="events-calendar">` +
+    `<div data-testid="events-content"><div data-testid="events-list"></div></div>` +
+    `<button data-testid="events-view-list">List</button>` +
+    `<button data-testid="events-view-calendar">Calendar</button>` +
+    `<input data-testid="events-search" name="q">` +
+    `<form method="get" action="/events"></form>` +
+    `<a data-testid="events-past-archive-link">Past</a>` +
+    `<a data-testid="events-subscribe">Subscribe</a>` +
+    `</section></main><p>Welcome, guest</p>` +
+    `<script src="/islands/events-calendar.js"></script></body></html>`;
+  const headers = {
+    get: (name) =>
+      ({
+        "content-type": "text/html",
+        "x-two-renderer": null,
+        "cache-control": "public, max-age=60",
+        vary,
+      })[name] ?? null,
+  };
+  return assertRouteContract({
+    label: "events contract",
+    html,
+    headers,
+    status: 200,
+    expected: {
+      status: 200,
+      marker: null,
+      contract: "events",
+      cache: "public, max-age=60",
+    },
+  });
+};
+
+test("events contract accepts Cookie as an exact case-insensitive Vary token", () => {
+  assert.deepEqual(eventsContractFixture("https://example.test/events", "aCcEpT, cOoKiE"), []);
+});
+
+test("events contract rejects X-Cookie as a substitute for the Cookie Vary token", () => {
+  const failures = eventsContractFixture("https://example.test/events", "X-Cookie, X-Two-Island");
+  assert.ok(
+    failures.some((failure) => failure.includes("Vary stays on every variant")),
+    "X-Cookie must not satisfy the Cookie Vary token",
+  );
+});
+
+test("events contract requires a canonical href despite unrelated /events links", () => {
+  const failures = eventsContractFixture(
+    "https://example.test/events/past",
+    "Cookie, X-Two-Island",
+  );
+  assert.ok(
+    failures.some((failure) => failure.includes("canonical points at /events")),
+    "unrelated /events navigation and form text must not satisfy the canonical link",
+  );
+});

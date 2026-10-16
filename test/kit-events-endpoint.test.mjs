@@ -235,6 +235,18 @@ describe("Kit events endpoint flash-consumption controls", () => {
     ]);
   });
 
+  it("keeps a successful HEAD flash peek private without consuming the flash", async () => {
+    const { event, deleteCookie } = requestEvent({ flash: true, method: "HEAD" });
+
+    const response = await GET(event);
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("cache-control")).toBe("private, no-store");
+    expect(response.headers.get("vary")).toBe("Cookie, X-Two-Island");
+    expect(seams.render.mock.calls[0][0]).toMatchObject({ joinResult: null });
+    expect(deleteCookie).not.toHaveBeenCalled();
+  });
+
   it.each([
     { method: "HEAD", island: false },
     { method: "GET", island: true },
