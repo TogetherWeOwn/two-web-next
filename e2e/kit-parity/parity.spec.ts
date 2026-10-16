@@ -804,8 +804,15 @@ test.describe("archive page turns prove successful paging and history", () => {
         await expect(page.getByTestId("past-events-list")).toContainText("E2E Past Night");
         await page.goBack();
         await expect(page).toHaveURL(/\/events\/past$/);
-        await expectSameDoc();
+        // goBack restores the URL synchronously, before the island's popstate
+        // read settles; a failed read falls back to a full reload only once
+        // its fetch settles. data-page flips to 1 only at the island swap (or
+        // on the reloaded document) and aria-busy clears when the read
+        // finishes, so read the same-document marker only after both — and
+        // again after the last content assertions below, before pageErrors.
         await expect(page.getByTestId("past-events")).toHaveAttribute("data-page", "1");
+        await expect(page.getByTestId("past-events")).not.toHaveAttribute("aria-busy");
+        await expectSameDoc();
         await expect(page.getByTestId("past-events-list")).toContainText("E2E Archive Turn 24");
         await expect(page.locator('link[rel="canonical"]')).toHaveAttribute(
           "href",
@@ -822,6 +829,7 @@ test.describe("archive page turns prove successful paging and history", () => {
         expect(keys).not.toContain(ARCHIVE_PAST_NIGHT_KEY);
         await expect(page.getByText("Welcome, guest")).toBeVisible();
         await expect(page.getByText("Sign out")).toHaveCount(0);
+        await expectSameDoc();
 
         expect(pageErrors, "no uncaught page errors").toEqual([]);
       } finally {
