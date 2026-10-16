@@ -29,11 +29,16 @@ const MAX_SOURCES_SHOWN = 5;
 // `__screenshots__` path keep their filename.
 //
 // Suite boundary: the shared e2e-failure artifact also carries the Kit
-// parity outputs (`test-results-kit-parity/`, `__screenshots-kit__/`), which
-// belong to ci/kit-visual-accept.mjs. Anything from those paths is ignored
-// here, so a Kit redesign can never regenerate a Hono baseline.
+// outputs (`test-results-kit-visual/`, `test-results-kit-parity/`,
+// `__screenshots-kit__/`), which belong to ci/kit-visual-accept.mjs. Anything
+// from those paths is ignored here, so a Kit redesign can never regenerate a
+// Hono baseline.
 export function destinationName(entry, fullPath) {
-  if (fullPath.includes("test-results-kit-parity") || fullPath.includes("__screenshots-kit__")) {
+  if (
+    fullPath.includes("test-results-kit-visual") ||
+    fullPath.includes("test-results-kit-parity") ||
+    fullPath.includes("__screenshots-kit__")
+  ) {
     return null;
   }
   if (entry.endsWith("-actual.png")) {

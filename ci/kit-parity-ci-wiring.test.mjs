@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 const repo = fileURLToPath(new URL("../", import.meta.url));
 const workflow = readFileSync(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8");
 const job = workflow.split("\n  check:\n")[1]?.split(/\n  [\w-]+:\n/)[0] ?? "";
+const e2eWorkflow = readFileSync(new URL("../.github/workflows/e2e.yml", import.meta.url), "utf8");
 
 test("the Playwright loader links the parity config before the runner guard refuses local execution", () => {
   const env = { ...process.env };
@@ -80,6 +81,26 @@ test("the Kit fixture owns the live event detail only on its loopback worker", (
   assert.match(spec, /kitFixtureOwnsEventDetail/);
   const helper = readFileSync(new URL("../e2e/kit-parity.ts", import.meta.url), "utf8");
   assert.match(helper, /kitFixtureOwnsEventDetail/);
+});
+
+test("Kit visual baselines run on the clean seed before mutating browser journeys", () => {
+  const step = (name) => e2eWorkflow.indexOf(`- name: ${name}`);
+  const kitVisual = step("Kit visual regression");
+  const honoVisual = step("Visual regression");
+  const browserJourneys = step("Critical browser journeys");
+  const parityJourneys = step("Kit journey parity (Hono vs built Kit Worker)");
+  assert(kitVisual >= 0, "the dedicated Kit events-index visual step must exist");
+  assert(kitVisual < honoVisual, "Kit visual must run before Hono visual fixture setup");
+  assert(honoVisual < browserJourneys, "Hono visual must run before mutating journeys");
+  assert(browserJourneys < parityJourneys, "parity journeys remain after browser mutations");
+  assert.match(
+    e2eWorkflow,
+    /name: Kit visual regression\n\s+run: npx playwright test --config playwright\.kit-visual\.config\.ts/,
+  );
+  assert.match(
+    e2eWorkflow,
+    /name: Kit journey parity \(Hono vs built Kit Worker\)[\s\S]*?run: >-\n\s+npx playwright test --config playwright\.kit-parity\.config\.ts\s+e2e\/kit-parity\/parity\.spec\.ts/,
+  );
 });
 
 test("the member RSVP cleanup flag is armed before parsing the response", () => {
