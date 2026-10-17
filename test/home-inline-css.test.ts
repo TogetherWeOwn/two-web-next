@@ -37,9 +37,16 @@ describe("homepage inlined critical CSS", () => {
   it("uses an Arial-metric fallback ahead of Arial Narrow for delayed font swaps", () => {
     // The preload alone cannot close the cold-mobile FCP/font gap; the
     // size-adjusted fallback uses the measured uppercase heading ratio.
+    // Ascent/descent overrides normalize to Display's 93%/34.6% em metrics
+    // (at the 77% size-adjust) plus margin, so the fallback hero paints at
+    // least as large as the swapped-in text and the swap is not a larger
+    // repaint that re-times LCP after FCP.
     expect(LEAF_CRITICAL_CSS).toContain("@font-face { font-family: 'Display Fallback'");
     expect(LEAF_CRITICAL_CSS).toContain("local('Liberation Sans'), local('Arimo'), local('Arial')");
     expect(LEAF_CRITICAL_CSS).toContain("size-adjust: 77%");
+    expect(LEAF_CRITICAL_CSS).toContain("ascent-override: 123%");
+    expect(LEAF_CRITICAL_CSS).toContain("descent-override: 46%");
+    expect(LEAF_CRITICAL_CSS).toContain("line-gap-override: 0%");
     expect(LEAF_CRITICAL_CSS).toContain("Display, 'Display Fallback', 'Arial Narrow'");
     expect(LEAF_CRITICAL_CSS).not.toMatch(/Display, 'Arial Narrow'/);
     const html = Layout({ title: "Fixture", theme: "home", inlineCriticalCss: true })!.toString();
