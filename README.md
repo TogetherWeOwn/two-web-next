@@ -31,6 +31,8 @@ Operations (deploy/rollback, `/up`, queues, outages and restore drills):
 
 - [Moderator admin guide](docs/moderator-admin-guide.md): Next admin routes,
   event and featured-content workflows, dashboard diagnostics, and safe escalation.
+- [Weekly TWO Community event run-of-show](docs/weekly-event-run-of-show.md):
+  preparation, preflight, cancellation, and closeout evidence.
 - [Troubleshooting join and Discord sign-in](docs/troubleshooting-join.md):
   current notices, recovery pages, and the invite fallback.
 
