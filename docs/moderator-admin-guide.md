@@ -270,6 +270,11 @@ leave-page warning for unsaved changes (including after a rejected Save).
   Discord write-back; draft/past saves do not. Saving a series parent can also
   shift children and enqueue their write-backs, regardless of the parent's status
   (see **Weekly series** below). Do not repeatedly save/publish to force a queue repair.
+- Cancellation records the event's cancelled status; it does not record who attended
+  or whether an RSVP holder showed up. Retained RSVP answers (including `going`) are
+  responses, not attendance evidence. Do not count cancelled events or their RSVP
+  rows as verified attendance. No-show treatment is unsupported by the stored data;
+  leave it unknown rather than inferring absence from an RSVP or lack of an RSVP.
 - There is **no event delete, restore, unpublish, bulk action or cover-image
   upload** in this panel. Repeat rules are available on creation, not as editable
   recurrence fields afterward. Escalate needs outside the visible controls
@@ -319,6 +324,31 @@ Reads of other members are access-logged; empty rosters and self-only reads crea
 no access row. Audit-write failures always refuse protected contents, including
 when the legacy `MEMBER_ACCESS_LOG_ENFORCE` setting is false. Stop and escalate any
 reported audit failure; do not try disabling enforcement or another access path.
+
+### RSVP is not attendance
+
+An RSVP is a member's answer for an event, not a check-in. The supported answers
+are `going`, `maybe`, `not_going`, and `waitlisted`; the roster's **Answered**
+time is when that answer was last updated, not when the member attended. Event
+status (`draft`, `published`, or `cancelled`) is separate from RSVP status.
+
+The current records provide no check-in or attendance field. Therefore they do
+not establish that a member attended, and absence of an RSVP does not establish
+that they did not attend. Cancellation is terminal and existing answers are
+retained, but cancellation does not establish attendance or a no-show. Keep these
+outcomes distinct:
+
+| Record evidence | Supported conclusion | Not established |
+| --- | --- | --- |
+| Event status `cancelled`, with any retained RSVP (including `going`) | The event is cancelled; the answer remains a recorded response | Attendance, no-show, or whether a planned replacement occurred |
+| Event remains scheduled/published and member has `going` | The member recorded a `going` RSVP | Attendance or later cancellation/no-show |
+| An explicit attendance/check-in record from a separately documented source | Attendance only to the extent that source's identity, event, timestamp, and verification are documented | Anything beyond that source's coverage; this repository defines no such attendance source |
+
+Do not turn RSVP counts, the read-only roster, event end times, or Discord
+write-back state into attendance totals. The repository documents RSVP persistence
+and event lifecycle, not attendance verification or no-show policy. If attendance
+is needed, treat it as unknown unless a separately approved, source-backed
+attendance record is available; do not add or infer a product policy here.
 
 ## Featured content settings and homepage delivery
 
