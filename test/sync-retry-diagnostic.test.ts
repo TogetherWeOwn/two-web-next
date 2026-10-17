@@ -35,7 +35,18 @@ const diagnosticKeys = [
   "sync_retry_code",
   "sync_snapshot_age_at_claim_seconds",
 ];
-const alertKeys = ["attempts", "connection", "event", "exception", "job", "level", "queue"];
+const alertKeys = [
+  "attempts",
+  "build_sha",
+  "connection",
+  "error_class",
+  "event",
+  "exception",
+  "job",
+  "level",
+  "queue",
+  "release",
+];
 const codes = [
   "in_progress",
   "rate_limited",
@@ -494,6 +505,9 @@ describe("retry diagnostics preserve behavior and survive carrier exhaustion", (
             job: "SyncEventToDiscord",
             attempts: 6,
             exception: "carrier exhausted; unresolved identity retained",
+            error_class: "carrier exhausted; unresolved identity retained",
+            build_sha: null,
+            release: null,
             ...receipt,
           },
         ]);

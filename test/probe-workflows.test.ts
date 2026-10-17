@@ -629,15 +629,18 @@ describe("production deployment preserves configured triggers", () => {
   });
 });
 
-describe("deployed revision marker is staging-only", () => {
+describe("deployed revision marker is bound per environment", () => {
   const config = readWranglerConfig(read("wrangler.jsonc"));
 
-  it("binds version_metadata on the staging Worker and not in env.production", () => {
+  it("binds version_metadata on staging, env.production and the jobs Worker", () => {
     expect(config.version_metadata).toEqual({ binding: "CF_VERSION_METADATA" });
-    // Bindings are not inherited. A production /up marker is a reviewed
-    // cutover decision: declare the binding in env.production in that PR and
-    // update this pin with it.
-    expect(config.env?.production?.version_metadata).toBeUndefined();
+    // Bindings are not inherited, so production declares its own copy: its
+    // /up revision marker and release-tagged log lines depend on it.
+    expect(config.env?.production?.version_metadata).toEqual({
+      binding: "CF_VERSION_METADATA",
+    });
+    const jobs = readWranglerConfig(read("wrangler.jobs.jsonc"));
+    expect(jobs.version_metadata).toEqual({ binding: "CF_VERSION_METADATA" });
   });
 
   it("logs the live revision before any mutation and verifies the deployed commit after", () => {

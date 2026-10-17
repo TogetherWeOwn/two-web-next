@@ -89,8 +89,11 @@ describe("error-alert:probe drill", () => {
       event: "error.alert",
       fingerprint: "DrillBoomError@/drill-probe",
       exception: "DrillBoomError",
+      error_class: "DrillBoomError",
       method: "POST",
       route: "/drill-probe",
+      build_sha: null,
+      release: null,
     });
   });
 

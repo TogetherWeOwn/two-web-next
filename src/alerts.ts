@@ -12,6 +12,7 @@
 // ID rather than logging exception messages or stacks.
 
 import { AlertProbeError } from "./alert-probe-error";
+import { currentReleaseFields } from "./release-tag";
 import { safeRequestId } from "./request-log";
 import { projectSyncRetryDiagnostic, type SyncRetryDiagnostic } from "./jobs/sync-retry-diagnostic";
 
@@ -90,15 +91,18 @@ export function alertRequestError(
   if (!shouldReport(err)) return false;
   const fingerprint = fingerprintOf(err, req.route);
   if (!(opts.limiter ?? limiter).allow(fingerprint)) return false;
+  const errorClass = exceptionClass(err);
   (opts.sink ?? consoleSink)(
     JSON.stringify({
       level: "critical",
       event: "error.alert",
       fingerprint,
-      exception: exceptionClass(err),
+      exception: errorClass,
+      error_class: errorClass,
       method: req.method,
       route: req.route,
       request_id: safeRequestId(req.requestId),
+      ...currentReleaseFields(),
       ...(err instanceof AlertProbeError && err.probeId ? { probeId: err.probeId } : {}),
     }),
   );
@@ -133,8 +137,10 @@ export function alertQueueFailing(job: FailedJob, sink: Sink = consoleSink): voi
       job: job.job,
       attempts: job.attempts,
       exception: job.exception,
+      error_class: job.exception,
       probeId: job.probeId,
       request_id: safeRequestId(job.requestId),
+      ...currentReleaseFields(),
       ...syncRetry,
     }),
   );

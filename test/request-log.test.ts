@@ -86,6 +86,9 @@ describe("structured request logs (local fixtures only)", () => {
         status: 200,
         duration_ms: expect.any(Number),
         colo: "LHR",
+        error_class: null,
+        build_sha: null,
+        release: null,
       },
     ]);
     expect(logs(log)[0].duration_ms).toBeGreaterThanOrEqual(0);
