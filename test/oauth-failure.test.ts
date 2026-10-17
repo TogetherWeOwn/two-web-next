@@ -585,6 +585,91 @@ describe("join callback: expired recovery versus outage 503", () => {
   });
 });
 
+describe("join callback: post-exchange bot failures stay redacted (degraded recovery)", () => {
+  const botRefusalWithMarkers = (url: string) => {
+    if (url.endsWith("/oauth2/token")) return Response.json({ access_token: TOK });
+    if (url.endsWith("/users/@me"))
+      return Response.json({ id: "42", username: "rick", global_name: "Rick", avatar: null });
+    if (url.includes("/members/42"))
+      return new Response(JSON.stringify({ message: `forbidden ${TOK} ${SECRET}`, code: 50013 }), {
+        status: 403,
+        headers: { "content-type": "application/json" },
+      });
+    throw new Error("unexpected Discord call");
+  };
+
+  const botTransportThrowWithCanaries = (url: string) => {
+    if (url.endsWith("/oauth2/token")) return Response.json({ access_token: TOK });
+    if (url.endsWith("/users/@me"))
+      return Response.json({ id: "42", username: "rick", global_name: "Rick", avatar: null });
+    if (url.includes("/members/42"))
+      throw new TypeError(`failed sending ${TOK}`, { cause: new Error(`nested ${SECRET}`) });
+    throw new Error("unexpected Discord call");
+  };
+
+  it("bot refusal with a marker-bearing body: 200 recovery, no session, one degraded attempt, clean stream", async () => {
+    const { fake, env: e } = isolatedJoin();
+    const { logs, calls, res, html } = await joinRoundTrip(e, botRefusalWithMarkers);
+    expect(res.status).toBe(200);
+    expect(html).toContain("We couldn&#39;t add you automatically");
+    expect(html).toContain("use the invite link below");
+    expect(html).toContain('href="/join/discord"');
+    expect(html).toContain("Try again");
+    expect(html).toContain("https://discord.gg/invite");
+    expect(res.headers.getSetCookie().join("\n")).not.toContain("__Host-two_session=");
+    expect(fake.attempts).toEqual([
+      { outcome: "degraded", source: null, requestId: null, discordId: "42" },
+    ]);
+    expect(calls.map((url) => new URL(url).pathname)).toEqual([
+      "/api/v10/oauth2/token",
+      "/api/v10/users/@me",
+      "/api/v10/guilds/326474832151838730/members/42",
+    ]);
+    expect(channelCounts(logs)).toMatchObject({ info: 0, debug: 0, warn: 0, error: 0 });
+    streamClean(logs, JOIN_ROUTE);
+    leakFree(html, fake.attempts, [...res.headers], res.headers.getSetCookie());
+  });
+
+  it("bot transport throw carrying canaries: 200 recovery, no session, one degraded attempt, clean stream", async () => {
+    const { fake, env: e } = isolatedJoin();
+    const { logs, calls, res, html } = await joinRoundTrip(e, botTransportThrowWithCanaries);
+    expect(res.status).toBe(200);
+    expect(html).toContain("We couldn&#39;t add you automatically");
+    expect(html).toContain("use the invite link below");
+    expect(html).toContain('href="/join/discord"');
+    expect(html).toContain("Try again");
+    expect(html).toContain("https://discord.gg/invite");
+    expect(res.headers.getSetCookie().join("\n")).not.toContain("__Host-two_session=");
+    expect(fake.attempts).toEqual([
+      { outcome: "degraded", source: null, requestId: null, discordId: "42" },
+    ]);
+    expect(calls.map((url) => new URL(url).pathname)).toEqual([
+      "/api/v10/oauth2/token",
+      "/api/v10/users/@me",
+      "/api/v10/guilds/326474832151838730/members/42",
+    ]);
+    expect(channelCounts(logs)).toMatchObject({ info: 0, debug: 0, warn: 0, error: 0 });
+    streamClean(logs, JOIN_ROUTE);
+    leakFree(html, fake.attempts, [...res.headers], res.headers.getSetCookie());
+  });
+
+  it("negative control: a planted marker fails the same inspection without printing marker bytes", async () => {
+    const { env: e } = isolatedJoin();
+    const { logs } = await joinRoundTrip(e, botRefusalWithMarkers);
+    console.warn("planted leak", { detail: TOK });
+    let failure: unknown;
+    try {
+      streamClean(logs, JOIN_ROUTE);
+    } catch (error) {
+      failure = error;
+    }
+    expect(failure).toBeInstanceOf(Error);
+    expect((failure as Error).message).toContain("marker found in diagnostic stream");
+    expect((failure as Error).message).not.toContain(TOK);
+    expect((failure as Error).message).not.toContain(SECRET);
+  });
+});
+
 describe("ordinary login: denial, outage, generic (legacy DiscordLoginTest failure rows)", () => {
   it("renders the denied banner for access_denied and never echoes the description", async () => {
     const { env: e } = isolatedJoin();
