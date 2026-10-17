@@ -80,24 +80,31 @@ const CASES: Array<{ code: KitErrorStatus; links: ExpectedLink[] }> = [
 
 type RenderErrorShell = (code: KitErrorStatus) => { head: string; body: string };
 
-let renderErrorShell: RenderErrorShell;
-let browser: Browser;
-let page: Page;
-let servedCss: string;
+// Opt in with KIT_ERROR_SHELL_BROWSER_TESTS=true after installing Playwright
+// Chromium and the Kit workspace dependencies. The a11y CI job sets the
+// opt-in and verifies every case executed (ci/a11y-require-executed.mjs);
+// the check job installs no browser, so an ungated launch fails there.
+describe.skipIf(process.env.KIT_ERROR_SHELL_BROWSER_TESTS !== "true")(
+  "Kit error shell rendered accessibility",
+  () => {
+    let renderErrorShell: RenderErrorShell;
+    let browser: Browser;
+    let page: Page;
+    let servedCss: string;
 
-beforeAll(async () => {
-  const worktree = fileURLToPath(new URL("../", import.meta.url));
-  servedCss = ["public/styles.css", "public/theme.css"]
-    .map((path) => readFileSync(join(worktree, path), "utf8"))
-    .join("\n");
-  // Inlining is only safe while the served sheets cannot close the style tag.
-  expect(servedCss).not.toContain("</style");
+    beforeAll(async () => {
+      const worktree = fileURLToPath(new URL("../", import.meta.url));
+      servedCss = ["public/styles.css", "public/theme.css"]
+        .map((path) => readFileSync(join(worktree, path), "utf8"))
+        .join("\n");
+      // Inlining is only safe while the served sheets cannot close the style tag.
+      expect(servedCss).not.toContain("</style");
 
-  const scratch = mkdtempSync(join(tmpdir(), "kit-error-shell-"));
-  const entry = join(scratch, "kit-error-shell-entry.mjs");
-  writeFileSync(
-    entry,
-    `
+      const scratch = mkdtempSync(join(tmpdir(), "kit-error-shell-"));
+      const entry = join(scratch, "kit-error-shell-entry.mjs");
+      writeFileSync(
+        entry,
+        `
 import { render } from "svelte/server";
 import ErrorShell from ${JSON.stringify(join(worktree, "web/src/lib/ErrorShell.svelte"))};
 export function renderErrorShell(code) {
@@ -105,89 +112,88 @@ export function renderErrorShell(code) {
   return { head, body };
 }
 `,
-  );
-  const outfile = join(scratch, "kit-error-shell.mjs");
-  await build({
-    entryPoints: [entry],
-    bundle: true,
-    platform: "node",
-    format: "esm",
-    outfile,
-    logLevel: "warning",
-    absWorkingDir: worktree,
-    nodePaths: [join(worktree, "web/node_modules"), join(worktree, "node_modules")],
-    alias: { "#lib": fileURLToPath(new URL("../web/src/lib/", import.meta.url)) },
-    plugins: [
-      {
-        name: "kit-error-shell-svelte-ssr",
-        setup(plugin) {
-          plugin.onLoad({ filter: /\.svelte$/ }, (args) => {
-            const source = readFileSync(args.path, "utf8");
-            const { js } = compile(source, {
-              generate: "server",
-              dev: false,
-              filename: args.path,
-            });
-            return { contents: js.code, loader: "js", resolveDir: dirname(args.path) };
-          });
-        },
-      },
-    ],
-  });
-  ({ renderErrorShell } = (await import(pathToFileURL(outfile).href)) as {
-    renderErrorShell: RenderErrorShell;
-  });
-  rmSync(scratch, { recursive: true, force: true });
+      );
+      const outfile = join(scratch, "kit-error-shell.mjs");
+      await build({
+        entryPoints: [entry],
+        bundle: true,
+        platform: "node",
+        format: "esm",
+        outfile,
+        logLevel: "warning",
+        absWorkingDir: worktree,
+        nodePaths: [join(worktree, "web/node_modules"), join(worktree, "node_modules")],
+        alias: { "#lib": fileURLToPath(new URL("../web/src/lib/", import.meta.url)) },
+        plugins: [
+          {
+            name: "kit-error-shell-svelte-ssr",
+            setup(plugin) {
+              plugin.onLoad({ filter: /\.svelte$/ }, (args) => {
+                const source = readFileSync(args.path, "utf8");
+                const { js } = compile(source, {
+                  generate: "server",
+                  dev: false,
+                  filename: args.path,
+                });
+                return { contents: js.code, loader: "js", resolveDir: dirname(args.path) };
+              });
+            },
+          },
+        ],
+      });
+      ({ renderErrorShell } = (await import(pathToFileURL(outfile).href)) as {
+        renderErrorShell: RenderErrorShell;
+      });
+      rmSync(scratch, { recursive: true, force: true });
 
-  browser = await chromium.launch();
-  page = await (await browser.newContext()).newPage();
-}, 120000);
+      browser = await chromium.launch();
+      page = await (await browser.newContext()).newPage();
+    }, 120000);
 
-afterAll(async () => {
-  await browser?.close();
-});
+    afterAll(async () => {
+      await browser?.close();
+    });
 
-async function loadShell(code: KitErrorStatus): Promise<void> {
-  // The shell offers recovery with no session, DB or network reads: rendering
-  // must succeed with fetch refusing every call, and never invoke it.
-  const fetchSpy = vi.fn(() => {
-    throw new Error("kit error shell fixtures must remain offline");
-  });
-  vi.stubGlobal("fetch", fetchSpy);
-  let rendered: { head: string; body: string };
-  try {
-    rendered = renderErrorShell(code);
-  } finally {
-    vi.unstubAllGlobals();
-  }
-  expect(fetchSpy).not.toHaveBeenCalled();
-  await page.setContent(
-    `<!doctype html><html lang="en"><head><meta charset="utf-8" />` +
-      `<meta name="viewport" content="width=device-width, initial-scale=1" />` +
-      `${rendered.head}<style>${servedCss}</style></head><body>${rendered.body}</body></html>`,
-  );
-}
+    async function loadShell(code: KitErrorStatus): Promise<void> {
+      // The shell offers recovery with no session, DB or network reads: rendering
+      // must succeed with fetch refusing every call, and never invoke it.
+      const fetchSpy = vi.fn(() => {
+        throw new Error("kit error shell fixtures must remain offline");
+      });
+      vi.stubGlobal("fetch", fetchSpy);
+      let rendered: { head: string; body: string };
+      try {
+        rendered = renderErrorShell(code);
+      } finally {
+        vi.unstubAllGlobals();
+      }
+      expect(fetchSpy).not.toHaveBeenCalled();
+      await page.setContent(
+        `<!doctype html><html lang="en"><head><meta charset="utf-8" />` +
+          `<meta name="viewport" content="width=device-width, initial-scale=1" />` +
+          `${rendered.head}<style>${servedCss}</style></head><body>${rendered.body}</body></html>`,
+      );
+    }
 
-describe("Kit error shell rendered accessibility", () => {
-  for (const { code, links } of CASES) {
-    it(`${code}: one heading, named recovery links in focus order, no echoed failure, axe clean`, async () => {
-      await loadShell(code);
-      const copy = kitErrorCopy(code);
+    for (const { code, links } of CASES) {
+      it(`${code}: one heading, named recovery links in focus order, no echoed failure, axe clean`, async () => {
+        await loadShell(code);
+        const copy = kitErrorCopy(code);
 
-      // String evaluate (the featured-native-length pattern): the root
-      // tsconfig has no DOM lib, so the callback runs untyped in the page
-      // and its shape is declared here.
-      const dom = await page.evaluate<{
-        title: string;
-        robots: string | null | undefined;
-        headings: Array<{ tag: string; id: string; text: string }>;
-        labelledBy: string | null | undefined;
-        labelTargetTag: string | null;
-        recoveryCodeHidden: string | null | undefined;
-        recoveryCodeText: string | null;
-        mainLinks: Array<{ testid: string | null; href: string | null; text: string }>;
-        sectionText: string;
-      }>(`(() => {
+        // String evaluate (the featured-native-length pattern): the root
+        // tsconfig has no DOM lib, so the callback runs untyped in the page
+        // and its shape is declared here.
+        const dom = await page.evaluate<{
+          title: string;
+          robots: string | null | undefined;
+          headings: Array<{ tag: string; id: string; text: string }>;
+          labelledBy: string | null | undefined;
+          labelTargetTag: string | null;
+          recoveryCodeHidden: string | null | undefined;
+          recoveryCodeText: string | null;
+          mainLinks: Array<{ testid: string | null; href: string | null; text: string }>;
+          sectionText: string;
+        }>(`(() => {
         const headings = [...document.querySelectorAll("h1, h2, h3, h4, h5, h6")].map((el) => ({
           tag: el.tagName,
           id: el.id,
@@ -215,59 +221,60 @@ describe("Kit error shell rendered accessibility", () => {
         };
       })()`);
 
-      // Exactly one heading in the whole rendered page, and it is the
-      // section's accessible label.
-      expect(dom.headings).toEqual([{ tag: "H1", id: "error-heading", text: copy.title }]);
-      expect(dom.labelledBy).toBe("error-heading");
-      expect(dom.labelTargetTag).toBe("H1");
-      expect(dom.title).toBe(`${copy.title} — Together We Own`);
-      expect(dom.robots).toBe("noindex, nofollow");
-      // The big status numeral is decorative: visible, but out of the a11y tree.
-      expect(dom.recoveryCodeHidden).toBe("true");
-      expect(dom.recoveryCodeText).toBe(copy.code);
+        // Exactly one heading in the whole rendered page, and it is the
+        // section's accessible label.
+        expect(dom.headings).toEqual([{ tag: "H1", id: "error-heading", text: copy.title }]);
+        expect(dom.labelledBy).toBe("error-heading");
+        expect(dom.labelTargetTag).toBe("H1");
+        expect(dom.title).toBe(`${copy.title} — Together We Own`);
+        expect(dom.robots).toBe("noindex, nofollow");
+        // The big status numeral is decorative: visible, but out of the a11y tree.
+        expect(dom.recoveryCodeHidden).toBe("true");
+        expect(dom.recoveryCodeText).toBe(copy.code);
 
-      // Recovery links: exact set, hrefs and visible text, in DOM order.
-      expect(dom.mainLinks).toEqual(
-        links.map((link) => ({ testid: link.testid, href: link.href, text: link.name })),
-      );
-      // Each link's accessible name (as computed for assistive tech) is its
-      // expected name and resolves to exactly that link.
-      for (const link of links) {
-        const byRole = page.getByRole("link", { name: link.name, exact: true });
-        expect(await byRole.count()).toBe(1);
-        expect(await byRole.getAttribute("data-testid")).toBe(link.testid);
-      }
-
-      // No echoed failure: the section's visible text is exactly the static
-      // code, title, lead and link names — nothing else can be leaking in.
-      // innerText reflects the CSS text-transform, so compare case-folded;
-      // exact-case copy is already pinned via textContent above.
-      expect(
-        dom.sectionText
-          .split("\n")
-          .map((line) => line.trim().toLowerCase())
-          .filter(Boolean),
-      ).toEqual(
-        [copy.code, copy.title, copy.lead, ...links.map((link) => link.name)].map((line) =>
-          line.toLowerCase(),
-        ),
-      );
-
-      // Focus order: tabbing through the page reaches the recovery links in
-      // the same order they are read.
-      await page.evaluate("document.activeElement?.blur()");
-      const tabbed: string[] = [];
-      for (let i = 0; i < 20 && tabbed.length < links.length; i++) {
-        await page.keyboard.press("Tab");
-        const testid = await page.evaluate<string | null>(
-          "document.activeElement?.getAttribute('data-testid') ?? null",
+        // Recovery links: exact set, hrefs and visible text, in DOM order.
+        expect(dom.mainLinks).toEqual(
+          links.map((link) => ({ testid: link.testid, href: link.href, text: link.name })),
         );
-        if (testid?.startsWith("error-")) tabbed.push(testid);
-      }
-      expect(tabbed).toEqual(links.map((link) => link.testid));
+        // Each link's accessible name (as computed for assistive tech) is its
+        // expected name and resolves to exactly that link.
+        for (const link of links) {
+          const byRole = page.getByRole("link", { name: link.name, exact: true });
+          expect(await byRole.count()).toBe(1);
+          expect(await byRole.getAttribute("data-testid")).toBe(link.testid);
+        }
 
-      const results = await new AxeBuilder({ page }).withTags(WCAG_AA_TAGS).analyze();
-      assertNoViolations(results, `kit error shell ${code}`);
-    });
-  }
-});
+        // No echoed failure: the section's visible text is exactly the static
+        // code, title, lead and link names — nothing else can be leaking in.
+        // innerText reflects the CSS text-transform, so compare case-folded;
+        // exact-case copy is already pinned via textContent above.
+        expect(
+          dom.sectionText
+            .split("\n")
+            .map((line) => line.trim().toLowerCase())
+            .filter(Boolean),
+        ).toEqual(
+          [copy.code, copy.title, copy.lead, ...links.map((link) => link.name)].map((line) =>
+            line.toLowerCase(),
+          ),
+        );
+
+        // Focus order: tabbing through the page reaches the recovery links in
+        // the same order they are read.
+        await page.evaluate("document.activeElement?.blur()");
+        const tabbed: string[] = [];
+        for (let i = 0; i < 20 && tabbed.length < links.length; i++) {
+          await page.keyboard.press("Tab");
+          const testid = await page.evaluate<string | null>(
+            "document.activeElement?.getAttribute('data-testid') ?? null",
+          );
+          if (testid?.startsWith("error-")) tabbed.push(testid);
+        }
+        expect(tabbed).toEqual(links.map((link) => link.testid));
+
+        const results = await new AxeBuilder({ page }).withTags(WCAG_AA_TAGS).analyze();
+        assertNoViolations(results, `kit error shell ${code}`);
+      });
+    }
+  },
+);
