@@ -24,24 +24,21 @@ export const PROOF_RUN_MODES = ["success", "rollback"];
 const FORBIDDEN_WORKER_NAMES = new Set(["two-web-next", "two-web-next-production"]);
 const FORBIDDEN_HOST_SUFFIXES = ["togetherweown.com"];
 
-// Binding/route keys that would give the synthetic Worker data, traffic or
-// side effects. Presence anywhere in the top-level or env.production scope
-// refuses the config.
-const FORBIDDEN_CONFIG_KEYS = new Set([
-  "assets",
-  "d1_databases",
-  "durable_objects",
-  "hyperdrive",
-  "kv_namespaces",
-  "queues",
-  "r2_buckets",
-  "routes",
-  "route",
-  "services",
-  "service_bindings",
-  "tail_consumers",
-  "triggers",
+// Exact key allowlists per scope. A denylist of binding keys cannot keep up
+// with Wrangler (workflows, ai, and future binding kinds would slip past it),
+// and an environment-specific override such as env.production.main changes
+// what `--env production` uploads, so anything not listed here refuses.
+const PROOF_FIXTURE_MAIN = "ci/gradual-promote-proof/fixture.mjs";
+const PROOF_COMPATIBILITY_DATE = "2026-09-29";
+const SCOPE_KEYS = ["name", "workers_dev", "preview_urls", "version_metadata", "vars"];
+const TOP_LEVEL_CONFIG_KEYS = new Set([
+  ...SCOPE_KEYS,
+  "main",
+  "compatibility_date",
+  "observability",
+  "env",
 ]);
+const ENV_CONFIG_KEYS = new Set(SCOPE_KEYS);
 
 const VERSION_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const LABEL_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
@@ -113,8 +110,8 @@ export function buildProofConfig({ mode, label }) {
   assertProofLabel(label);
   const config = {
     ...proofScope(mode, label),
-    main: "ci/gradual-promote-proof/fixture.mjs",
-    compatibility_date: "2026-09-29",
+    main: PROOF_FIXTURE_MAIN,
+    compatibility_date: PROOF_COMPATIBILITY_DATE,
     observability: { enabled: false },
     env: { production: proofScope(mode, label) },
   };
@@ -122,38 +119,57 @@ export function buildProofConfig({ mode, label }) {
   return config;
 }
 
-function assertScope(scope, where) {
-  if (!scope || typeof scope !== "object" || Array.isArray(scope)) {
-    throw new Error(`${where} must be an object`);
-  }
-  for (const key of Object.keys(scope)) {
-    if (FORBIDDEN_CONFIG_KEYS.has(key)) {
+function assertOnlyKeys(object, allowedKeys, where) {
+  for (const key of Object.keys(object)) {
+    if (!allowedKeys.has(key)) {
       throw new Error(
-        `refusing proof config: ${where}.${key} would bind data, routes or side effects`,
+        `refusing proof config: ${where}.${key} is not allowlisted for the isolated proof Worker`,
       );
     }
   }
+}
+
+function assertScope(scope, where, allowedKeys) {
+  if (!scope || typeof scope !== "object" || Array.isArray(scope)) {
+    throw new Error(`${where} must be an object`);
+  }
+  assertOnlyKeys(scope, allowedKeys, where);
   assertProofWorkerName(scope.name);
   if (scope.workers_dev !== true) {
     throw new Error(`${where}.workers_dev must be true (the proof has no custom domain)`);
   }
-  if (scope.version_metadata?.binding !== "CF_VERSION_METADATA") {
+  if (scope.preview_urls !== false) {
+    throw new Error(`${where}.preview_urls must be false (the proof publishes no preview URLs)`);
+  }
+  if (
+    !scope.version_metadata ||
+    typeof scope.version_metadata !== "object" ||
+    Array.isArray(scope.version_metadata)
+  ) {
     throw new Error(`${where} must bind CF_VERSION_METADATA for version attribution`);
   }
-  if (!PROOF_MODES.includes(scope.vars?.PROOF_MODE)) {
+  assertOnlyKeys(scope.version_metadata, new Set(["binding"]), `${where}.version_metadata`);
+  if (scope.version_metadata.binding !== "CF_VERSION_METADATA") {
+    throw new Error(`${where} must bind CF_VERSION_METADATA for version attribution`);
+  }
+  if (!scope.vars || typeof scope.vars !== "object" || Array.isArray(scope.vars)) {
+    throw new Error(`${where}.vars must set exactly PROOF_MODE and PROOF_LABEL`);
+  }
+  assertOnlyKeys(scope.vars, new Set(["PROOF_MODE", "PROOF_LABEL"]), `${where}.vars`);
+  if (!PROOF_MODES.includes(scope.vars.PROOF_MODE)) {
     throw new Error(`${where}.vars.PROOF_MODE must be one of ${PROOF_MODES.join(", ")}`);
   }
-  assertProofLabel(scope.vars?.PROOF_LABEL);
+  assertProofLabel(scope.vars.PROOF_LABEL);
 }
 
 export function assertProofConfig(config) {
   if (!config || typeof config !== "object" || Array.isArray(config)) {
     throw new Error("proof config must be a JSON object");
   }
-  assertScope(config, "config");
+  assertScope(config, "config", TOP_LEVEL_CONFIG_KEYS);
   // The action's rollback step omits --env, so the top-level scope and
   // env.production must be the same Worker with the same fixture vars.
-  assertScope(config.env?.production, "config.env.production");
+  assertScope(config.env?.production, "config.env.production", ENV_CONFIG_KEYS);
   const envKeys = Object.keys(config.env ?? {});
   if (envKeys.length !== 1 || envKeys[0] !== "production") {
     throw new Error("proof config must define exactly one environment: production");
@@ -164,8 +180,22 @@ export function assertProofConfig(config) {
   ) {
     throw new Error("top-level and env.production fixture vars must match");
   }
-  if (config.main !== "ci/gradual-promote-proof/fixture.mjs") {
+  if (config.main !== PROOF_FIXTURE_MAIN) {
     throw new Error("proof config main must be the synthetic fixture entrypoint");
+  }
+  if (config.compatibility_date !== PROOF_COMPATIBILITY_DATE) {
+    throw new Error(`proof config compatibility_date must be ${PROOF_COMPATIBILITY_DATE}`);
+  }
+  if (
+    !config.observability ||
+    typeof config.observability !== "object" ||
+    Array.isArray(config.observability)
+  ) {
+    throw new Error("proof config observability must be exactly { enabled: false }");
+  }
+  assertOnlyKeys(config.observability, new Set(["enabled"]), "config.observability");
+  if (config.observability.enabled !== false) {
+    throw new Error("proof config observability must be exactly { enabled: false }");
   }
   return config;
 }

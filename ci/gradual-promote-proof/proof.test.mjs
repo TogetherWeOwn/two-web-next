@@ -156,6 +156,33 @@ test("generated config isolates both action halves on the synthetic Worker", () 
     (c) => {
       c.main = "src/worker.ts";
     },
+    // An environment-specific entrypoint would change what the action's
+    // `--env production` steps upload while rollback targets the top level.
+    (c) => {
+      c.env.production.main = "src/worker.ts";
+    },
+    // Binding kinds absent from any denylist are still not allowlisted.
+    (c) => {
+      c.env.production.workflows = [{ name: "w", binding: "W", class_name: "W" }];
+    },
+    (c) => {
+      c.ai = { binding: "AI" };
+    },
+    (c) => {
+      c.preview_urls = true;
+    },
+    (c) => {
+      c.env.production.preview_urls = true;
+    },
+    (c) => {
+      c.compatibility_date = "2024-01-01";
+    },
+    (c) => {
+      c.vars.EXTRA = "x";
+    },
+    (c) => {
+      c.observability.enabled = true;
+    },
   ];
   for (const mutate of drifted) {
     const copy = JSON.parse(JSON.stringify(config));
@@ -234,9 +261,7 @@ test("workflow pins the exact central action and keeps production unreachable", 
     "utf8",
   );
   // The unchanged pinned action, invoked exactly once.
-  assert.deepEqual(workflow.match(new RegExp(PINNED_ACTION.replace(/[/.]/g, "\\$&"), "g")), [
-    PINNED_ACTION,
-  ]);
+  assert.equal(workflow.split(PINNED_ACTION).length - 1, 1);
   assert.match(PINNED_ACTION, /@1dcce452d9066c02e4ab3d99931edf75d50388d7$/);
   // Manual dispatch from main only: no other trigger keys in the on: block.
   const onBlock = workflow.match(/^on:\n([\s\S]*?)\n\npermissions:/m)?.[1] ?? "";
