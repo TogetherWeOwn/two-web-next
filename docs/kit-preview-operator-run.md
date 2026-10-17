@@ -22,6 +22,13 @@ not a pass.
 
 - Clean checkout on the head under test; Node on the repo floor (22.23.0+ on
   the 22.x line, or 24+).
+- Dependencies installed: `npm ci --include=dev` at the repo root and
+  `npm ci --prefix web --include=dev` for the Kit workspace.
+  `ci/kit-preview-e2e.mjs` imports `esbuild`, `playwright`, and the web
+  workspace's `svelte/compiler` at module load, so a clean checkout without
+  these installs fails with `ERR_MODULE_NOT_FOUND` (exit 1) before any
+  fetch — even in preview mode. No browser download is needed: neither
+  preview path launches Chromium.
 - No secrets in the repo, in shell history, or in any pasted output. Variable
   names only, never values.
 - Both preview URLs known: the Kit Worker under test (currently
