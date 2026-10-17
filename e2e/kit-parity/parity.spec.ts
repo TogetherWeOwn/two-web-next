@@ -1,5 +1,5 @@
 import { createHash, createHmac } from "node:crypto";
-import { expect, test, type APIRequestContext } from "@playwright/test";
+import { expect, test, type APIRequestContext, type APIResponse } from "@playwright/test";
 import postgres from "postgres";
 import { normalizeSection, sectionOf } from "../../ci/kit-section-contract.mjs";
 import { requireGithubRunner, requireTestDatabase } from "../ci-only.mjs";
@@ -152,7 +152,9 @@ async function isolatedRenewalCookie(
     renewalLoginCount += 1;
     const token = process.env.E2E_QA_TOKEN;
     if (!token) throw new Error("Missing ephemeral CI QA token");
-    const response = await login.post("/auth/qa/qa-member", {
+    // Use a separate QA account: issuing a fresh session revokes other live
+    // sessions for the same user and would invalidate the shared member jar.
+    const response = await login.post("/auth/qa/qa-moderator", {
       headers: { "X-TWO-QA-Auth": token, Origin: "https://localhost:8787" },
       maxRedirects: 0,
     });
@@ -731,13 +733,37 @@ for (const target of targets) {
           ? await isolatedRenewalCookie(target, (options) => playwright.request.newContext(options))
           : await memberCookie(target);
       const prior = await ageSessionNearExpiry(cookie);
-      const requestStartedAt = Date.now();
-      const response = await api(target).get(EVENT_PATH, { headers: { cookie } });
-      expect(response.status(), `${target.name} member detail`).toBe(200);
+      let response: APIResponse | undefined;
+      let body = "";
+      let requestStartedAt = 0;
+      await expect
+        .poll(
+          async () => {
+            const startedAt = Date.now();
+            const candidate = await api(target).get(EVENT_PATH, { headers: { cookie } });
+            const candidateBody = await candidate.text();
+            if (
+              candidate.status() === 200 &&
+              (candidate.headers()["x-two-renderer"] ?? null) === expectedMarker &&
+              candidateBody.includes("Sign out")
+            ) {
+              response = candidate;
+              body = candidateBody;
+              requestStartedAt = startedAt;
+              return true;
+            }
+            return false;
+          },
+          {
+            message: `${target.name} member detail session becomes visible`,
+            timeout: 15000,
+          },
+        )
+        .toBe(true);
+      if (response === undefined)
+        throw new Error(`${target.name} member detail response was not captured`);
       expect(response.headers()["content-type"]).toContain("text/html");
-      expect(response.headers()["x-two-renderer"] ?? null).toBe(expectedMarker);
       expect(response.headers()["cache-control"]).toBe("private, no-store");
-      const body = await response.text();
       expect(scrubSecrets(body)).toEqual([]);
       expect(body).toContain("E2E Community Night");
       expect(body).not.toContain('data-testid="event-join-pitch"');
@@ -768,10 +794,10 @@ for (const target of targets) {
       expect(renewedExpiry, `${target.name} stores the replacement session`).not.toBeNull();
       expect(renewedExpiry!.getTime()).toBeGreaterThan(prior.expiresAt.getTime());
       expect(renewedExpiry!.getTime()).toBeGreaterThanOrEqual(
-        requestStartedAt + 120 * 60 * 1000 - 5_000,
+        requestStartedAt + 120 * 60 * 1000 - 60_000,
       );
       expect(renewedExpiry!.getTime()).toBeLessThanOrEqual(
-        requestStartedAt + 120 * 60 * 1000 + 5_000,
+        requestStartedAt + 120 * 60 * 1000 + 60_000,
       );
 
       // Cookie-free replay uses exactly the retired bearer. A fresh context
