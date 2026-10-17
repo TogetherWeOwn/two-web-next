@@ -14,9 +14,10 @@ token travels as the `staging` Environment secret `QA_AUTH_TOKEN` (secret name
 only here, never a value), masked in logs, sent only as the `X-TWO-QA-Auth`
 header. See [Critical journeys](critical-journeys.md#staging-post-deploy-journeys)
 for the custody rule and [Config](config.md) for the `QA_AUTH_TOKEN` row.
-Anyone without that access runs the guest-only pass and ledgers the
-authenticated journeys as skipped with reasons; that is a valid partial run,
-not a pass.
+While the Kit preview Worker has no QA seam (see Authenticated preview
+below), every operator runs the guest-only pass without the token and
+ledgers the authenticated journeys as skipped with reasons; that is the
+valid run, not a partial one.
 
 ## Prerequisites
 
@@ -50,9 +51,10 @@ not a pass.
     throws and surfaces as exit 1, not exit 2. A self-pair here fetches the
     same host twice and compares it against itself — a false green — so verify
     the two hosts differ by eye before running it.
-- Optional: `KIT_PARITY_QA_TOKEN` carrying the staging QA token for the
-  authenticated member-board arm. Without it those journeys ledger as skipped
-  with the reason, never as a quiet pass.
+- Not today: `KIT_PARITY_QA_TOKEN` carrying the staging QA token is reserved
+  for a future Kit host with the staging `APP_URL` and QA secret (see
+  Authenticated preview). Do not pass it: the authenticated journeys ledger
+  as skipped with the reason, never as a quiet pass.
 
 ## Exact commands
 
@@ -114,8 +116,8 @@ node ci/kit-parity-gates.mjs --selftest
 
 Copy this list into the card or PR comment and check every box:
 
-- [ ] Both commands pasted with their redacted environment (host names only,
-      token shown as `$QA_AUTH_TOKEN`, never its value).
+- [ ] Both guest-only commands pasted with their redacted environment (host
+      names only, never a token value).
 - [ ] Exit code of each command, read per script:
       `kit-parity-gates.mjs`: 0 pass, 1 journeys failed (or secret-shaped
       content in the ledger), 2 misconfigured or all-skipped/empty ledger.
