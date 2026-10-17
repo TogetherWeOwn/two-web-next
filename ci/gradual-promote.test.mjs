@@ -264,6 +264,13 @@ test("error-rate query refuses untrusted identifiers and inverted windows", () =
     () => buildErrorRateQuery({ ...base, scriptName: 'x",datetime_geq:"0' }),
     /script name/,
   );
+  // Valid Cloudflare names the gate must ACCEPT: underscores and lengths
+  // past the workers.dev-only 63-char cap, up to the API's 255. A stricter
+  // pattern would fail-close every promotion for such a Worker.
+  for (const scriptName of ["my_worker", "a".repeat(100), "a".repeat(255)]) {
+    assert.equal(buildErrorRateQuery({ ...base, scriptName }).variables.scriptName, scriptName);
+  }
+  assert.throws(() => buildErrorRateQuery({ ...base, scriptName: "a".repeat(256) }), /script name/);
   assert.throws(() => buildErrorRateQuery({ ...base, versionId: "not-a-uuid" }), /Version ID/);
   assert.throws(() => buildErrorRateQuery({ ...base, sinceIso: UNTIL, untilIso: SINCE }), /window/);
   assert.throws(() => buildErrorRateQuery({ ...base, sinceIso: "soon" }), /window/);

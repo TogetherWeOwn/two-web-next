@@ -1169,5 +1169,7 @@ test("each gradual stage also judges the new version's live error rate before ro
       assert.ok(block.includes(envLine), `gate ${pct} env: ${envLine}`);
     }
     assert.ok(!block.includes("rollback-target"), `gate ${pct} must not read the rollback target`);
+    // A swallowed failure would never reach the rollback step.
+    assert.ok(!block.includes("continue-on-error"), `gate ${pct} must not swallow its failure`);
   }
 });

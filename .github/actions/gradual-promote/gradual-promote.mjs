@@ -141,8 +141,11 @@ export function versionIdForTag(versions, tag) {
 
 // Cloudflare account ids are 32 lowercase hex chars.
 const ACCOUNT_ID_PATTERN = /^[0-9a-f]{32}$/;
-// Worker script names: lowercase letters, digits and dashes.
-const SCRIPT_NAME_PATTERN = /^[a-z0-9][a-z0-9-]{0,62}$/;
+// Worker script names, per Cloudflare's API rule: start with a lowercase
+// letter, digit or underscore, then lowercase letters, digits, dashes or
+// underscores, up to 255 characters (the 63-char cap applies only when
+// workers.dev is enabled, which this gate does not judge).
+const SCRIPT_NAME_PATTERN = /^[a-z0-9_][a-z0-9_-]{0,254}$/;
 
 // Static gate identifiers, validated before any soak or fetch so a
 // misconfiguration fails in seconds instead of after the retry delays.
@@ -151,7 +154,7 @@ export function assertErrorRateIdentifiers({ accountId, scriptName, versionId })
     throw new Error("account id must be a 32-character lowercase hex Cloudflare account id");
   }
   if (typeof scriptName !== "string" || !SCRIPT_NAME_PATTERN.test(scriptName)) {
-    throw new Error("script name must be lowercase letters, digits or dashes");
+    throw new Error("script name must be lowercase letters, digits, dashes or underscores");
   }
   assertRollbackVersionId(versionId);
 }
