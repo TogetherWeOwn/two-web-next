@@ -31,6 +31,42 @@ export type UptimeAlert = {
   timestamp: string;
 };
 
+// Synthetic main-flow checks: the same cron also probes the sign-in entry
+// and the main public pages, because a healthy /up does not prove members
+// can load the site or start Discord sign-in. Every check is an anonymous
+// GET with manual redirects: never a login attempt, form post or fault
+// injection, and no probe changes application data. The sign-in check
+// stops at /login on purpose: the next hop (/auth/discord) mints OAuth
+// state, writing a login-redirect throttle hit and an OAuth journey row
+// per attempt, so probing it would not stay passive in production.
+// /events records one rate-limit counter hit (the events-read bucket) per
+// admitted attempt, exactly like any anonymous visitor; the existing
+// throttle expiry sweep deletes those counters. Expected values were
+// verified against staging: /login redirects to /auth/discord on the same
+// host. The redirect Location is compared by host/path only and never
+// logged, so nothing from its query can reach a page or log line.
+export type SyntheticCheck = {
+  path: "/" | "/events" | "/login";
+  status: number;
+  contentType?: string;
+  locationPath?: string;
+};
+
+export const SYNTHETIC_CHECKS: readonly SyntheticCheck[] = [
+  { path: "/", status: 200, contentType: "text/html" },
+  { path: "/events", status: 200, contentType: "text/html" },
+  { path: "/login", status: 302, locationPath: "/auth/discord" },
+];
+
+export type SyntheticAlert = {
+  event: "synthetic.down";
+  check: SyntheticCheck["path"];
+  /** Public host of the configured target: identifies the environment. */
+  target: string;
+  status: number;
+  timestamp: string;
+};
+
 // Only registered templates may leave the account. Never fall back to a raw
 // request path, query string, exception, job payload or trace event.request.
 export const ALERT_ROUTES = new Set([
@@ -273,6 +309,110 @@ export function createTailWorker(
       return { ok: false, status: 0 };
     }
   }
+
+  /** One bounded synthetic probe. Transport errors and timeouts are status 0. */
+  async function probeCheck(
+    base: URL,
+    check: SyntheticCheck,
+  ): Promise<{ ok: boolean; status: number }> {
+    try {
+      const response = await send(new URL(check.path, base).toString(), {
+        method: "GET",
+        redirect: "manual", // Never follow into Discord or a login flow.
+        signal: AbortSignal.timeout(UPTIME_TIMEOUT_MS),
+      });
+      let ok = response.status === check.status;
+      if (ok && check.contentType) {
+        ok = (response.headers.get("content-type") ?? "").startsWith(check.contentType);
+      }
+      if (ok && check.locationPath) {
+        // Compare host/path only; any Location query is discarded here and
+        // never reaches a log line or the webhook. The one redirect check
+        // (/login) must stay on the probed host.
+        const location = response.headers.get("location");
+        let target: URL | null = null;
+        try {
+          target = location ? new URL(location, base) : null;
+        } catch {
+          target = null;
+        }
+        ok = target !== null && target.pathname === check.locationPath && target.host === base.host;
+      }
+      await response.body?.cancel(); // Never read or log the body.
+      return { ok, status: response.status };
+    } catch {
+      return { ok: false, status: 0 };
+    }
+  }
+
+  /** Deliver one scheduled-prober page through the shared mute + receipt. */
+  async function deliverScheduled(
+    url: URL,
+    alert: UptimeAlert | SyntheticAlert,
+    key: string,
+  ): Promise<void> {
+    if (!mute.begin(key)) return;
+    let delivered = false;
+    try {
+      const response = await send(url.toString(), {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          content: JSON.stringify(alert),
+          allowed_mentions: { parse: [] },
+        }),
+        redirect: "manual", // Workers fetch rejects "error"; a 3xx is never ok, so it fails closed.
+        signal: AbortSignal.timeout(5000),
+      });
+      delivered = response.ok;
+      await response.body?.cancel();
+    } catch {
+      /* Transport/timeout: do not log the URL or exception. */
+    } finally {
+      mute.finish(key, delivered);
+    }
+    sink(
+      JSON.stringify({
+        ...alert,
+        delivery: delivered ? "ops.alert.delivered" : "ops.alert.delivery_failed",
+      }),
+    );
+  }
+
+  /**
+   * Probe every synthetic check once; re-probe only the failures after the
+   * retry delay and page each check that still fails. The base origin comes
+   * from the configured UPTIME_URL, so staging and production each probe
+   * their own public host with no extra configuration.
+   */
+  async function runSynthetics(url: URL, uptimeUrl: string): Promise<void> {
+    let base: URL;
+    try {
+      base = new URL(uptimeUrl);
+    } catch {
+      return; // Misconfigured target: no synthetic probing work at all.
+    }
+    if (base.protocol !== "https:") return;
+    const failures: SyntheticCheck[] = [];
+    for (const check of SYNTHETIC_CHECKS) {
+      const result = await probeCheck(base, check);
+      if (!result.ok) failures.push(check);
+    }
+    if (failures.length === 0) return;
+    await sleep(UPTIME_RETRY_DELAY_MS);
+    for (const check of failures) {
+      const second = await probeCheck(base, check);
+      if (second.ok) continue;
+      const alert: SyntheticAlert = {
+        event: "synthetic.down",
+        check: check.path,
+        target: base.host,
+        status: second.status,
+        timestamp: new Date().toISOString(),
+      };
+      await deliverScheduled(url, alert, `${alert.event}:${alert.check}:${alert.status}`);
+    }
+  }
   return {
     async tail(events: readonly Trace[], env: TailEnv): Promise<void> {
       const url = webhookUrl(env.OPS_ALERT_WEBHOOK_URL);
@@ -325,42 +465,21 @@ export function createTailWorker(
       const url = webhookUrl(env.OPS_ALERT_WEBHOOK_URL);
       if (!url) return; // No secret: no probing, no logging, no outbound work.
       const first = await probeOnce(env.UPTIME_URL);
-      if (first.ok) return;
-      await sleep(UPTIME_RETRY_DELAY_MS);
-      const second = await probeOnce(env.UPTIME_URL);
-      if (second.ok) return;
-      const alert: UptimeAlert = {
-        event: "uptime.down",
-        status: second.status,
-        timestamp: new Date().toISOString(),
-      };
-      const key = `${alert.event}:${alert.status}`;
-      if (!mute.begin(key)) return;
-      let delivered = false;
-      try {
-        const response = await send(url.toString(), {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({
-            content: JSON.stringify(alert),
-            allowed_mentions: { parse: [] },
-          }),
-          redirect: "manual", // Workers fetch rejects "error"; a 3xx is never ok, so it fails closed.
-          signal: AbortSignal.timeout(5000),
-        });
-        delivered = response.ok;
-        await response.body?.cancel();
-      } catch {
-        /* Transport/timeout: do not log the URL or exception. */
-      } finally {
-        mute.finish(key, delivered);
+      if (!first.ok) {
+        await sleep(UPTIME_RETRY_DELAY_MS);
+        const second = await probeOnce(env.UPTIME_URL);
+        if (!second.ok) {
+          const alert: UptimeAlert = {
+            event: "uptime.down",
+            status: second.status,
+            timestamp: new Date().toISOString(),
+          };
+          await deliverScheduled(url, alert, `${alert.event}:${alert.status}`);
+        }
       }
-      sink(
-        JSON.stringify({
-          ...alert,
-          delivery: delivered ? "ops.alert.delivered" : "ops.alert.delivery_failed",
-        }),
-      );
+      // Synthetics run even when /up is down: each failing main-flow check
+      // is its own signal, muted independently of the uptime page.
+      await runSynthetics(url, env.UPTIME_URL);
     },
   };
 }
