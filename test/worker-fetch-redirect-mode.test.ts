@@ -37,6 +37,9 @@ describe("Worker fetch redirect mode", () => {
 const PINNED_MANUAL_SITES = [
   { file: "src/bot/client-transport.ts", minManual: 1 },
   { file: "src/bot/event-read.ts", minManual: 1 },
+  // Tail: probeOnce, probeCheck, the shared deliver() helper and
+  // deliverScheduled (the aggregator stub fetch is a binding call, not a
+  // global fetch redirect site).
   { file: "tail/worker.ts", minManual: 4 },
 ] as const;
 
@@ -227,35 +230,45 @@ describe("Worker redirect-manual behavior", () => {
         new Response(null, { status: 200, headers: { "x-two-origin": "two-web-next" } }),
     });
     const lines: string[] = [];
+    let now = Date.parse("2030-07-01T00:00:00Z");
     const worker = createTailWorker({
       fetch: fetchFn,
       sink: (line) => lines.push(line),
-      mute: new DeliveryMute(() => Date.parse("2030-07-01T00:00:00Z")),
+      mute: new DeliveryMute(() => now),
+      now: () => now,
       sleep: async () => {},
     });
-    await worker.scheduled(
-      { cron: "*/5 * * * *", scheduledTime: Date.parse("2030-07-01T00:00:00Z"), noRetry() {} },
-      {
-        OPS_ALERT_WEBHOOK_URL: "https://discord.com/api/webhooks/123456789/test-only-token",
-        UPTIME_URL: "https://next.togetherweown.com/up",
-      },
-    );
+    // Health must stay red for over two minutes before the page: three
+    // one-minute runs, two failed probes each.
+    for (const step of [0, 60_000, 61_000]) {
+      now += step;
+      await worker.scheduled(
+        { cron: "* * * * *", scheduledTime: now, noRetry() {} },
+        {
+          OPS_ALERT_WEBHOOK_URL: "https://discord.com/api/webhooks/123456789/test-only-token",
+          UPTIME_URL: "https://next.togetherweown.com/up",
+        },
+      );
+    }
     const gets = seen.filter((init) => init?.method === "GET");
     const posts = seen.filter((init) => init?.method === "POST");
-    // Two failed /up probes plus two failed attempts per synthetic check,
-    // then one page each: every 302 is a failure with its status, not a
-    // throw (status 0) and not a silent success. A "follow" revert would
-    // see the healthy followed() response and stay silent instead.
-    expect(gets).toHaveLength(8);
+    // Per run two failed /up probes; synthetics only on the first run (the
+    // five-minute boundary), two failed attempts per check: 6 + 6 GETs.
+    // Every 302 is a failure with its status, not a throw (status 0) and
+    // not a silent success. A "follow" revert would see the healthy
+    // followed() response and stay silent instead.
+    expect(gets).toHaveLength(12);
     for (const init of seen) expect(init?.redirect).toBe("manual");
     expect(posts).toHaveLength(4);
     expect(lines).toHaveLength(4);
-    expect(JSON.parse(lines[0]!)).toMatchObject({
+    // Synthetic pages land on the first run; the uptime page follows once
+    // health has stayed red for over two minutes.
+    expect(JSON.parse(lines[3]!)).toMatchObject({
       event: "uptime.down",
       status: 302,
       delivery: "ops.alert.delivery_failed",
     });
-    const syntheticLines = lines.slice(1).map((line) => JSON.parse(line));
+    const syntheticLines = lines.slice(0, 3).map((line) => JSON.parse(line));
     expect(syntheticLines.map((line) => line.check)).toEqual(["/", "/events", "/login"]);
     for (const line of syntheticLines) {
       expect(line).toMatchObject({

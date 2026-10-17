@@ -181,14 +181,30 @@ describe("Tail delivery", () => {
       JSON.parse(JSON.parse(init.body as string).content),
     );
     const [request, queue] = summaries;
-    expect(Object.keys(request).sort()).toEqual(["event", "fingerprint", "route", "timestamp"]);
-    expect(request).toMatchObject({ event: "error.alert", route: "/join" });
+    expect(Object.keys(request).sort()).toEqual([
+      "event",
+      "fingerprint",
+      "logs",
+      "route",
+      "script",
+      "timestamp",
+    ]);
+    expect(request).toMatchObject({
+      event: "error.alert",
+      route: "/join",
+      script: "two-web-next",
+      logs: "Workers & Pages > two-web-next > Observability > Logs",
+    });
+    // This fixture trace carries no version tag, so no SHA is claimed.
+    expect(request).not.toHaveProperty("build_sha");
     expect(request.fingerprint).toMatch(/^[a-f0-9]{64}$/);
     expect(Object.keys(queue).sort()).toEqual([
       "attempts",
       "event",
       "fingerprint",
       "job",
+      "logs",
+      "script",
       "timestamp",
     ]);
     expect(queue).toMatchObject({
@@ -451,6 +467,7 @@ describe("Tail scheduled uptime prober", () => {
     let now = timestamp;
     const sleeps: number[] = [];
     const queue = [...probes];
+    let last: Probe = { status: 500 };
     const syntheticQueues = new Map(
       Object.entries(synthetic).map(([path, list]) => [path, [...(list ?? [])]]),
     );
@@ -458,10 +475,14 @@ describe("Tail scheduled uptime prober", () => {
       const [target, init] = args;
       if (init?.method === "POST") return new Response(null, { status: 200 });
       const path = new URL(target).pathname;
-      const next =
-        path === "/up"
-          ? (queue.shift() ?? { status: 500 })
-          : (syntheticQueues.get(path)?.shift() ?? healthySynthetic(path));
+      let next: Probe;
+      if (path === "/up") {
+        // Later cron runs repeat the last probe shape: health stays as set up.
+        next = queue.shift() ?? last;
+        last = next;
+      } else {
+        next = syntheticQueues.get(path)?.shift() ?? healthySynthetic(path);
+      }
       if (next.throw) throw next.throw;
       const headers: Record<string, string> = {};
       if (next.origin != null) headers["x-two-origin"] = next.origin;
@@ -477,11 +498,12 @@ describe("Tail scheduled uptime prober", () => {
       fetch: send as unknown as typeof fetch,
       sink,
       mute: new DeliveryMute(() => now),
+      now: () => now,
       sleep: async (ms: number) => {
         sleeps.push(ms);
       },
     });
-    const event = { cron: "*/5 * * * *", scheduledTime: timestamp, noRetry() {} };
+    const event = { cron: "* * * * *", scheduledTime: timestamp, noRetry() {} };
     return {
       worker,
       send,
@@ -490,6 +512,7 @@ describe("Tail scheduled uptime prober", () => {
       event,
       advance: (ms: number) => {
         now += ms;
+        event.scheduledTime += ms; // The next cron slot is later by the same step.
       },
     };
   }
@@ -505,6 +528,15 @@ describe("Tail scheduled uptime prober", () => {
       ([, init]) => init?.method === "POST",
     );
 
+  // Three failing one-minute runs: health red for 121 s, past the >2 min gate.
+  async function runDownPastGate(fx: ReturnType<typeof uptimeFixture>) {
+    await fx.worker.scheduled(fx.event, upEnv);
+    fx.advance(60_000);
+    await fx.worker.scheduled(fx.event, upEnv);
+    fx.advance(61_000);
+    await fx.worker.scheduled(fx.event, upEnv);
+  }
+
   it("one failure then a success sends no page, with the retry at least 10 s later", async () => {
     const { worker, send, sink, sleeps, event } = uptimeFixture([
       { status: 500 },
@@ -517,9 +549,16 @@ describe("Tail scheduled uptime prober", () => {
     expect(sink).not.toHaveBeenCalled();
   });
 
-  it("two failures send one allowlisted page", async () => {
-    const { worker, send, sink, event } = uptimeFixture([{ status: 500 }, { status: 503 }]);
-    await worker.scheduled(event, upEnv);
+  it("health red for over two minutes sends one allowlisted page", async () => {
+    const fx = uptimeFixture([{ status: 500 }, { status: 503 }]);
+    const { send, sink } = fx;
+    await fx.worker.scheduled(fx.event, upEnv);
+    expect(pagePosts(send)).toHaveLength(0); // First red run: window just opened.
+    fx.advance(60_000);
+    await fx.worker.scheduled(fx.event, upEnv);
+    expect(pagePosts(send)).toHaveLength(0);
+    fx.advance(61_000);
+    await fx.worker.scheduled(fx.event, upEnv);
     const pages = pagePosts(send);
     expect(pages).toHaveLength(1);
     expect(pages[0]![0]).toBe(`${secret}?wait=true`);
@@ -528,6 +567,7 @@ describe("Tail scheduled uptime prober", () => {
     expect(JSON.parse(payload.content)).toEqual({
       event: "uptime.down",
       status: 503,
+      down_seconds: 121,
       timestamp: expect.any(String),
     });
     expect(sink).toHaveBeenCalledOnce();
@@ -537,16 +577,13 @@ describe("Tail scheduled uptime prober", () => {
     });
   });
 
-  it("a muted second run does not page", async () => {
-    const { worker, send, event } = uptimeFixture([
-      { status: 500 },
-      { status: 500 },
-      { status: 500 },
-      { status: 500 },
-    ]);
-    await worker.scheduled(event, upEnv);
-    await worker.scheduled(event, upEnv);
-    expect(pagePosts(send)).toHaveLength(1);
+  it("a still-red run inside the cooldown does not re-page", async () => {
+    const fx = uptimeFixture([{ status: 500 }, { status: 500 }]);
+    await runDownPastGate(fx);
+    expect(pagePosts(fx.send)).toHaveLength(1);
+    fx.advance(60_000);
+    await fx.worker.scheduled(fx.event, upEnv);
+    expect(pagePosts(fx.send)).toHaveLength(1);
   });
 
   it.each([
@@ -562,13 +599,14 @@ describe("Tail scheduled uptime prober", () => {
 
   it("a timeout counts as a failure", async () => {
     const timeout = new DOMException("The operation timed out.", "TimeoutError");
-    const { worker, send, event } = uptimeFixture([{ throw: timeout }, { throw: timeout }]);
-    await worker.scheduled(event, upEnv);
-    const pages = pagePosts(send);
+    const fx = uptimeFixture([{ throw: timeout }, { throw: timeout }]);
+    await runDownPastGate(fx);
+    const pages = pagePosts(fx.send);
     expect(pages).toHaveLength(1);
     expect(JSON.parse(JSON.parse(pages[0]![1].body as string).content)).toEqual({
       event: "uptime.down",
       status: 0,
+      down_seconds: 121,
       timestamp: expect.any(String),
     });
   });
@@ -578,14 +616,14 @@ describe("Tail scheduled uptime prober", () => {
     { status: 200, origin: "evil.test", label: "wrong x-two-origin" },
     { status: 503, origin: "two-web-next", label: "non-200 status" },
   ])(
-    "a 200 without the origin header or $label pages after two failures",
+    "a 200 without the origin header or $label pages once red over two minutes",
     async ({ status, origin }) => {
-      const { worker, send, event } = uptimeFixture([
+      const fx = uptimeFixture([
         { status, origin },
         { status, origin },
       ]);
-      await worker.scheduled(event, upEnv);
-      const pages = pagePosts(send);
+      await runDownPastGate(fx);
+      const pages = pagePosts(fx.send);
       expect(pages).toHaveLength(1);
       expect(JSON.parse(JSON.parse(pages[0]![1].body as string).content).status).toBe(status);
     },
@@ -724,17 +762,39 @@ describe("Tail scheduled uptime prober", () => {
   });
 
   it("synthetic checks still run and page when /up is down", async () => {
-    const { worker, send, event } = uptimeFixture([{ status: 500 }, { status: 500 }], {
+    const fx = uptimeFixture([{ status: 500 }, { status: 500 }], {
       "/login": [
         { status: 302, location: "/" },
         { status: 302, location: "/" },
       ],
     });
-    await worker.scheduled(event, upEnv);
-    const events = pagePosts(send).map(
+    // The synthetic page lands on the first (five-minute-boundary) run; the
+    // uptime page follows once health has stayed red for over two minutes.
+    await runDownPastGate(fx);
+    const events = pagePosts(fx.send).map(
       (page) => JSON.parse(JSON.parse(page[1].body as string).content).event,
     );
     expect(events.sort()).toEqual(["synthetic.down", "uptime.down"]);
+  });
+
+  it("a run off the five-minute boundary probes /up only, not the synthetics", async () => {
+    const fx = uptimeFixture([{ status: 200, origin: "two-web-next" }]);
+    fx.advance(60_000); // 00:01 — inside the five-minute synthetic interval.
+    await fx.worker.scheduled(fx.event, upEnv);
+    expect(probeGets(fx.send).map(([target]) => new URL(target).pathname)).toEqual(["/up"]);
+    expect(pagePosts(fx.send)).toHaveLength(0);
+  });
+
+  it("a boundary run that starts late still probes the synthetics, keyed to the scheduled slot", async () => {
+    const fx = uptimeFixture([{ status: 200, origin: "two-web-next" }]);
+    fx.advance(60_000); // Handler starts at 00:01 for the 00:00 cron slot.
+    await fx.worker.scheduled({ ...fx.event, scheduledTime: timestamp }, upEnv);
+    expect(probeGets(fx.send).map(([target]) => new URL(target).pathname)).toEqual([
+      "/up",
+      "/",
+      "/events",
+      "/login",
+    ]);
   });
 });
 
