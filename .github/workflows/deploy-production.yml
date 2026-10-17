@@ -64,7 +64,9 @@ jobs:
     # The org's two-selfhosted runner group refuses public repos (TOG-12326):
     # GitHub-hosted while public, the self-hosted fleet while private.
     runs-on: ${{ github.event.repository.private && fromJSON('["self-hosted","two-selfhosted"]') || 'ubuntu-latest' }}
-    timeout-minutes: 15
+    # 30 minutes: the gradual stages now also soak and judge the new
+    # version's live error rate (worst case about 4 extra minutes a stage).
+    timeout-minutes: 30
     # Required reviewers + prevent-self-review are live repo settings unless
     # vars.PRODUCTION_AUTO_APPROVE is true, in which case the gate requires green
     # staging deploy + e2e-staging on this exact SHA instead, with the e2e-staging
@@ -141,7 +143,7 @@ jobs:
       # stays above.
       - name: Gradual promotion 5-50-100 with automatic rollback
         id: gradual
-        uses: TogetherWeOwn/.github/actions/gradual-promote@1dcce452d9066c02e4ab3d99931edf75d50388d7
+        uses: TogetherWeOwn/.github/actions/gradual-promote@89c290be20c0044efaf6916f28341c76e75fff06
         with:
           worker-name: two-web-next-production
           version-tag: ${{ needs.preflight.outputs.sha }}-${{ github.run_id }}-${{ github.run_attempt }}

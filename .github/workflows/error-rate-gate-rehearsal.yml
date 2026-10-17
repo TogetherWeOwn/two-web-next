@@ -1,0 +1,83 @@
+name: error-rate-gate-rehearsal
+
+# Staging proof for the gradual-promote live error-rate gate
+# (.github/actions/gradual-promote/error-rate-gate.mjs). Manual only.
+# Two halves, both staging-only:
+#   1. LIVE: run the gate against the staging Worker's current live
+#      version with the staging Cloudflare credentials. Proves the
+#      token can read account analytics and the per-version query
+#      answers on the real staging signal (pass or insufficient).
+#   2. SIMULATED: run the same gate code over a fixture envelope with
+#      an elevated error rate for that same version. The job requires
+#      the gate to judge that exact sample verdict=fail (any other
+#      non-zero exit, e.g. verdict=error, does not count): in the
+#      promotion action that refusal is a failed stage, and the
+#      existing rollback steps restore the pre-promote version.
+# No deploys, no version changes, production untouched.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: error-rate-gate-rehearsal
+  cancel-in-progress: false
+
+jobs:
+  rehearsal:
+    name: error-rate-gate-rehearsal
+    # The org's two-selfhosted runner group refuses public repos:
+    # GitHub-hosted while public, the self-hosted fleet while private.
+    runs-on: ${{ github.event.repository.private && fromJSON('["self-hosted","two-selfhosted"]') || 'ubuntu-latest' }}
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci --include=dev
+      - name: Resolve the staging Worker's live version id
+        id: staging-version
+        run: |
+          set -euo pipefail
+          VERSION="$(npx wrangler deployments list --name two-web-next --json \
+            | node ".github/actions/gradual-promote/gradual-promote.mjs" --capture-rollback-target)"
+          echo "id=$VERSION" >> "$GITHUB_OUTPUT"
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      - name: Live gate against the staging signal (must pass)
+        run: node ".github/actions/gradual-promote/error-rate-gate.mjs"
+        env:
+          WORKER_NAME: two-web-next
+          NEW_VERSION: ${{ steps.staging-version.outputs.id }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          ERROR_RATE_SOAK_SECONDS: "0"
+      - name: Simulated elevated rate for the staging version (must halt)
+        run: |
+          set -euo pipefail
+          export SIM_VERSION="${{ steps.staging-version.outputs.id }}"
+          node -e 'const fs=require("node:fs");fs.writeFileSync("error-rate-fixture.json",JSON.stringify({data:{viewer:{accounts:[{workersInvocationsAdaptive:[{sum:{requests:200,errors:80},dimensions:{scriptVersion:process.env.SIM_VERSION}}]}]}},errors:null}))'
+          if ERROR_RATE_FIXTURE=error-rate-fixture.json ERROR_RATE_SOAK_SECONDS=0 ERROR_RATE_ATTEMPTS=1 \
+              WORKER_NAME=two-web-next NEW_VERSION="$SIM_VERSION" \
+              node ".github/actions/gradual-promote/error-rate-gate.mjs" > gate-output.txt 2>&1; then
+            cat gate-output.txt
+            echo "::error::simulated elevated error rate did not halt the gate"
+            exit 1
+          fi
+          cat gate-output.txt
+          # A malformed fixture also exits non-zero (verdict=error); only the
+          # judged elevated sample proves the threshold decision halts.
+          if ! grep -F "error-rate requests=200 errors=80 rate=0.4000 verdict=fail" gate-output.txt > /dev/null; then
+            echo "::error::gate halted without judging the simulated elevated rate"
+            exit 1
+          fi
+          echo "simulated elevated error rate halted the gate as required"
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}

@@ -41,6 +41,26 @@ inputs:
     description: Pass --allow-indexable to the smoke checker (production apex)
     required: false
     default: "true"
+  error-rate-gate:
+    description: Judge the new version's live invocation error rate at every stage (needs an api-token that can read account analytics)
+    required: false
+    default: "true"
+  error-rate-threshold:
+    description: Fail a stage when errors/requests for the new version exceeds this rate
+    required: false
+    default: "0.05"
+  error-rate-min-requests:
+    description: Minimum invocations of the new version after the stage's smoke gate before its error rate is judged
+    required: false
+    default: "20"
+  error-rate-window-minutes:
+    description: Maximum lookback for the post-smoke analytics window judged at each stage
+    required: false
+    default: "10"
+  error-rate-soak-seconds:
+    description: Wait after the smoke gate before the first error-rate query
+    required: false
+    default: "60"
 
 outputs:
   rollback-version-id:
@@ -102,6 +122,13 @@ runs:
         for i in 1 2 3 4 5 6; do
           if node bin/smoke.mjs "https://$DOMAIN" $INDEXABLE --version-override "$WORKER_NAME=\"$NEW_VERSION\""; then
             echo "stage 5 percent smoke ok (attempt $i)"
+            # Window start for the error-rate gate: 1s past the finish, so
+            # probes from the final second stay outside the inclusive
+            # analytics bound. Node (already required above), not GNU date;
+            # an empty stamp fails the step instead of passing silently.
+            finished_at=$(node -e "process.stdout.write(new Date(Date.now() + 1000).toISOString())")
+            if [ -z "$finished_at" ]; then echo "::error::could not stamp the smoke finish time" >&2; exit 1; fi
+            echo "finished-at=$finished_at" >> "$GITHUB_OUTPUT"
             exit 0
           fi
           if [ "$i" -lt 6 ]; then
@@ -117,6 +144,29 @@ runs:
         WORKER_NAME: ${{ inputs.worker-name }}
         NEW_VERSION: ${{ steps.promoted-version.outputs.id }}
 
+    - name: Live error-rate gate at 5 percent
+      id: error-rate-5
+      # Live aggregate signal, per promoted version: the gate script asks
+      # Cloudflare GraphQL Analytics for the new version's invocation
+      # errors/requests since this stage's smoke gate finished (so the
+      # smoke probes themselves never count) and fails the stage when
+      # the rate is over threshold. The rollback step below already runs
+      # on any failure, so an elevated live rate restores the pre-promote
+      # version exactly like a failed smoke gate.
+      if: inputs.error-rate-gate == 'true'
+      shell: bash
+      run: node "${{ github.action_path }}/error-rate-gate.mjs"
+      env:
+        WORKER_NAME: ${{ inputs.worker-name }}
+        NEW_VERSION: ${{ steps.promoted-version.outputs.id }}
+        CLOUDFLARE_API_TOKEN: ${{ inputs.api-token }}
+        CLOUDFLARE_ACCOUNT_ID: ${{ inputs.account-id }}
+        ERROR_RATE_THRESHOLD: ${{ inputs.error-rate-threshold }}
+        ERROR_RATE_MIN_REQUESTS: ${{ inputs.error-rate-min-requests }}
+        ERROR_RATE_WINDOW_MINUTES: ${{ inputs.error-rate-window-minutes }}
+        ERROR_RATE_SOAK_SECONDS: ${{ inputs.error-rate-soak-seconds }}
+        ERROR_RATE_WINDOW_START: ${{ steps.smoke-5.outputs.finished-at }}
+
     - name: Automatic rollback after 5 percent gate failure
       id: rollback-5
       # Any failure or cancellation once the split may be live restores the
@@ -131,7 +181,7 @@ runs:
         # Bound the restore: a hung rollback fails the job, never the window.
         timeout 120 npx wrangler rollback "$PREV_VERSION" --name "$WORKER_NAME" --yes
         echo "restored=true" >> "$GITHUB_OUTPUT"
-        echo "::error::rolled back to the pre-promote version after the 5 percent health/SLO gate failed"
+        echo "::error::rolled back to the pre-promote version after the 5 percent stage gate (health/SLO or live error-rate) failed"
         exit 1
       env:
         PREV_VERSION: ${{ steps.rollback-target.outputs.target }}
@@ -161,6 +211,13 @@ runs:
         for i in 1 2 3 4 5 6; do
           if node bin/smoke.mjs "https://$DOMAIN" $INDEXABLE --version-override "$WORKER_NAME=\"$NEW_VERSION\""; then
             echo "stage 50 percent smoke ok (attempt $i)"
+            # Window start for the error-rate gate: 1s past the finish, so
+            # probes from the final second stay outside the inclusive
+            # analytics bound. Node (already required above), not GNU date;
+            # an empty stamp fails the step instead of passing silently.
+            finished_at=$(node -e "process.stdout.write(new Date(Date.now() + 1000).toISOString())")
+            if [ -z "$finished_at" ]; then echo "::error::could not stamp the smoke finish time" >&2; exit 1; fi
+            echo "finished-at=$finished_at" >> "$GITHUB_OUTPUT"
             exit 0
           fi
           if [ "$i" -lt 6 ]; then
@@ -176,6 +233,22 @@ runs:
         WORKER_NAME: ${{ inputs.worker-name }}
         NEW_VERSION: ${{ steps.promoted-version.outputs.id }}
 
+    - name: Live error-rate gate at 50 percent
+      id: error-rate-50
+      if: inputs.error-rate-gate == 'true'
+      shell: bash
+      run: node "${{ github.action_path }}/error-rate-gate.mjs"
+      env:
+        WORKER_NAME: ${{ inputs.worker-name }}
+        NEW_VERSION: ${{ steps.promoted-version.outputs.id }}
+        CLOUDFLARE_API_TOKEN: ${{ inputs.api-token }}
+        CLOUDFLARE_ACCOUNT_ID: ${{ inputs.account-id }}
+        ERROR_RATE_THRESHOLD: ${{ inputs.error-rate-threshold }}
+        ERROR_RATE_MIN_REQUESTS: ${{ inputs.error-rate-min-requests }}
+        ERROR_RATE_WINDOW_MINUTES: ${{ inputs.error-rate-window-minutes }}
+        ERROR_RATE_SOAK_SECONDS: ${{ inputs.error-rate-soak-seconds }}
+        ERROR_RATE_WINDOW_START: ${{ steps.smoke-50.outputs.finished-at }}
+
     - name: Automatic rollback after 50 percent gate failure
       id: rollback-50
       # Stands down only when the 5 percent rollback recorded success; a
@@ -189,7 +262,7 @@ runs:
         # Bound the restore: a hung rollback fails the job, never the window.
         timeout 120 npx wrangler rollback "$PREV_VERSION" --name "$WORKER_NAME" --yes
         echo "restored=true" >> "$GITHUB_OUTPUT"
-        echo "::error::rolled back to the pre-promote version after the 50 percent health/SLO gate failed"
+        echo "::error::rolled back to the pre-promote version after the 50 percent stage gate (health/SLO or live error-rate) failed"
         exit 1
       env:
         PREV_VERSION: ${{ steps.rollback-target.outputs.target }}
@@ -241,6 +314,13 @@ runs:
         for i in 1 2 3 4 5 6; do
           if node bin/smoke.mjs "https://$DOMAIN" $INDEXABLE; then
             echo "stage 100 percent live smoke ok (attempt $i)"
+            # Window start for the error-rate gate: 1s past the finish, so
+            # probes from the final second stay outside the inclusive
+            # analytics bound. Node (already required above), not GNU date;
+            # an empty stamp fails the step instead of passing silently.
+            finished_at=$(node -e "process.stdout.write(new Date(Date.now() + 1000).toISOString())")
+            if [ -z "$finished_at" ]; then echo "::error::could not stamp the smoke finish time" >&2; exit 1; fi
+            echo "finished-at=$finished_at" >> "$GITHUB_OUTPUT"
             exit 0
           fi
           if [ "$i" -lt 6 ]; then
@@ -253,6 +333,22 @@ runs:
       env:
         DOMAIN: ${{ inputs.domain }}
         INDEXABLE: ${{ inputs.allow-indexable == 'true' && '--allow-indexable' || '' }}
+
+    - name: Live error-rate gate at 100 percent
+      id: error-rate-100
+      if: inputs.error-rate-gate == 'true'
+      shell: bash
+      run: node "${{ github.action_path }}/error-rate-gate.mjs"
+      env:
+        WORKER_NAME: ${{ inputs.worker-name }}
+        NEW_VERSION: ${{ steps.promoted-version.outputs.id }}
+        CLOUDFLARE_API_TOKEN: ${{ inputs.api-token }}
+        CLOUDFLARE_ACCOUNT_ID: ${{ inputs.account-id }}
+        ERROR_RATE_THRESHOLD: ${{ inputs.error-rate-threshold }}
+        ERROR_RATE_MIN_REQUESTS: ${{ inputs.error-rate-min-requests }}
+        ERROR_RATE_WINDOW_MINUTES: ${{ inputs.error-rate-window-minutes }}
+        ERROR_RATE_SOAK_SECONDS: ${{ inputs.error-rate-soak-seconds }}
+        ERROR_RATE_WINDOW_START: ${{ steps.smoke-100.outputs.finished-at }}
 
     - name: Automatic rollback after 100 percent gate failure
       id: rollback-100
@@ -267,7 +363,7 @@ runs:
         # Bound the restore: a hung rollback fails the job, never the window.
         timeout 120 npx wrangler rollback "$PREV_VERSION" --name "$WORKER_NAME" --yes
         echo "restored=true" >> "$GITHUB_OUTPUT"
-        echo "::error::rolled back to the pre-promote version after the 100 percent health/SLO gate failed"
+        echo "::error::rolled back to the pre-promote version after the 100 percent stage gate (health/SLO or live error-rate) failed"
         exit 1
       env:
         PREV_VERSION: ${{ steps.rollback-target.outputs.target }}

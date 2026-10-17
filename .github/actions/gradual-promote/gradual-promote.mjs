@@ -127,6 +127,181 @@ export function versionIdForTag(versions, tag) {
   return matches[0].id;
 }
 
+// --- Live error-rate signal (Cloudflare GraphQL Analytics) ---
+//
+// `workersInvocationsAdaptive` aggregates invocation counts per
+// scriptVersion: `sum.errors` counts invocations that ended in an
+// unhandled exception, exceeded resources or an internal error (see
+// "Invocation statuses" in the Workers metrics docs). Filtering by the
+// promoted version id judges the NEW version's live traffic at a canary
+// stage, not a script-wide average the old version would dilute. All
+// identifiers travel as GraphQL variables; the query text is static, so
+// nothing untrusted is interpolated. These helpers stay pure (no network,
+// no credentials): error-rate-gate.mjs performs the fetch.
+
+// Cloudflare account ids are 32 lowercase hex chars.
+const ACCOUNT_ID_PATTERN = /^[0-9a-f]{32}$/;
+// Worker script names, per Cloudflare's API rule: start with a lowercase
+// letter, digit or underscore, then lowercase letters, digits, dashes or
+// underscores, up to 255 characters (the 63-char cap applies only when
+// workers.dev is enabled, which this gate does not judge).
+const SCRIPT_NAME_PATTERN = /^[a-z0-9_][a-z0-9_-]{0,254}$/;
+
+// Static gate identifiers, validated before any soak or fetch so a
+// misconfiguration fails in seconds instead of after the retry delays.
+export function assertErrorRateIdentifiers({ accountId, scriptName, versionId }) {
+  if (typeof accountId !== "string" || !ACCOUNT_ID_PATTERN.test(accountId)) {
+    throw new Error("account id must be a 32-character lowercase hex Cloudflare account id");
+  }
+  if (typeof scriptName !== "string" || !SCRIPT_NAME_PATTERN.test(scriptName)) {
+    throw new Error("script name must be lowercase letters, digits, dashes or underscores");
+  }
+  assertRollbackVersionId(versionId);
+}
+
+const WINDOW_START_PATTERN =
+  /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/;
+
+// Strict on purpose: Date.parse alone reads a timezone-less timestamp in
+// the runner's local timezone (judging the wrong interval) and rolls
+// impossible calendar dates over (Feb 31 becomes Mar 3).
+export function parseWindowStartIso(windowStartIso) {
+  const match =
+    typeof windowStartIso === "string" ? WINDOW_START_PATTERN.exec(windowStartIso) : null;
+  if (!match) {
+    throw new Error("error-rate window start must be an ISO timestamp with a timezone");
+  }
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const leap = year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
+  const daysInMonth = [31, leap ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+  if (
+    month < 1 ||
+    month > 12 ||
+    day < 1 ||
+    day > daysInMonth[month - 1] ||
+    Number(match[4]) > 23 ||
+    Number(match[5]) > 59 ||
+    Number(match[6]) > 59
+  ) {
+    throw new Error("error-rate window start must be a valid calendar date and time");
+  }
+  const start = Date.parse(windowStartIso);
+  if (!Number.isFinite(start)) {
+    throw new Error("error-rate window start must be an ISO timestamp with a timezone");
+  }
+  return start;
+}
+
+// The judged window starts when the stage's smoke gate finished
+// (windowStartIso, recorded by the action), so that stage's own probes —
+// version-pinned Worker invocations — never satisfy the minimum sample
+// or dilute the rate. The lookback caps how far the window can stretch
+// across the soak and retries. Without a recorded start (direct CLI
+// use) the window is the trailing lookback.
+export function errorRateWindowSince({ windowStartIso, until, windowMinutes }) {
+  if (!(until instanceof Date) || !Number.isFinite(until.getTime())) {
+    throw new Error("error-rate window end must be a valid Date");
+  }
+  if (!Number.isSafeInteger(windowMinutes) || windowMinutes < 1) {
+    throw new Error("windowMinutes must be a positive integer");
+  }
+  const floor = until.getTime() - windowMinutes * 60_000;
+  if (windowStartIso === undefined || windowStartIso === "") return new Date(floor);
+  return new Date(Math.max(parseWindowStartIso(windowStartIso), floor));
+}
+
+export function buildErrorRateQuery({ accountId, scriptName, versionId, sinceIso, untilIso }) {
+  assertErrorRateIdentifiers({ accountId, scriptName, versionId });
+  const since = Date.parse(sinceIso ?? "");
+  const until = Date.parse(untilIso ?? "");
+  if (!Number.isFinite(since) || !Number.isFinite(until) || since >= until) {
+    throw new Error("error-rate window must be ISO timestamps with since before until");
+  }
+  return {
+    query: [
+      "query ErrorRate($accountTag: String!, $scriptName: String!, $versionId: String!, $since: Time!, $until: Time!) {",
+      "  viewer {",
+      "    accounts(filter: { accountTag: $accountTag }) {",
+      "      workersInvocationsAdaptive(",
+      "        limit: 1",
+      "        filter: { scriptName: $scriptName, scriptVersion: $versionId, datetime_geq: $since, datetime_leq: $until }",
+      "      ) {",
+      "        sum { requests errors }",
+      "        dimensions { scriptVersion }",
+      "      }",
+      "    }",
+      "  }",
+      "}",
+    ].join("\n"),
+    variables: { accountTag: accountId, scriptName, versionId, since: sinceIso, until: untilIso },
+  };
+}
+
+// Parses one GraphQL envelope into { requests, errors }. Fails closed on
+// GraphQL errors, a malformed shape, or a row for a different version than
+// the one being promoted. Error messages never echo the payload: a
+// GraphQL error may carry request detail.
+export function parseErrorRateResponse(payload, versionId) {
+  assertRollbackVersionId(versionId);
+  if (!payload || typeof payload !== "object") {
+    throw new Error("error-rate response is not an object");
+  }
+  if (Array.isArray(payload.errors) && payload.errors.length > 0) {
+    throw new Error("error-rate GraphQL query returned errors");
+  }
+  const accounts = payload.data?.viewer?.accounts;
+  if (!Array.isArray(accounts) || accounts.length !== 1) {
+    throw new Error("error-rate response does not contain exactly one account");
+  }
+  const rows = accounts[0]?.workersInvocationsAdaptive;
+  if (!Array.isArray(rows) || rows.length > 1) {
+    throw new Error("error-rate response rows are malformed");
+  }
+  if (rows.length === 0) return { requests: 0, errors: 0 };
+  const row = rows[0];
+  if (row?.dimensions?.scriptVersion !== versionId) {
+    throw new Error("error-rate response is for a different Worker version");
+  }
+  const { requests, errors } = row?.sum ?? {};
+  if (
+    !Number.isSafeInteger(requests) ||
+    !Number.isSafeInteger(errors) ||
+    requests < 0 ||
+    errors < 0 ||
+    errors > requests
+  ) {
+    throw new Error("error-rate response sums are malformed");
+  }
+  return { requests, errors };
+}
+
+// A stage is judged only once the new version served `minRequests`
+// invocations in the post-smoke window; below that the verdict is
+// "insufficient" (the gate retries while analytics aggregates catch
+// up). At or below the threshold the version passes; strictly above
+// it, it fails.
+export function evaluateErrorRate({ requests, errors, threshold, minRequests }) {
+  if (typeof threshold !== "number" || !(threshold >= 0 && threshold <= 1)) {
+    throw new Error("threshold must be a number between 0 and 1");
+  }
+  if (!Number.isSafeInteger(minRequests) || minRequests < 1) {
+    throw new Error("minRequests must be a positive integer");
+  }
+  if (
+    !Number.isSafeInteger(requests) ||
+    !Number.isSafeInteger(errors) ||
+    requests < 0 ||
+    errors < 0
+  ) {
+    throw new Error("requests and errors must be non-negative integers");
+  }
+  const rate = requests === 0 ? 0 : errors / requests;
+  if (requests < minRequests) return { verdict: "insufficient", rate };
+  return { verdict: rate > threshold ? "fail" : "pass", rate };
+}
+
 function readStdin() {
   return readFileSync(0, "utf8");
 }

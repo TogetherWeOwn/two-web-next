@@ -564,7 +564,7 @@ test("manual production workflow routes runners by repo visibility and uses prod
   );
   const upload = workflow.indexOf("npx wrangler versions upload --env production --tag ");
   const gradual = workflow.indexOf(
-    "uses: TogetherWeOwn/.github/actions/gradual-promote@1dcce452d9066c02e4ab3d99931edf75d50388d7",
+    "uses: TogetherWeOwn/.github/actions/gradual-promote@89c290be20c0044efaf6916f28341c76e75fff06",
   );
   assert.ok(
     credentialCheck > 0 &&
@@ -1101,4 +1101,123 @@ test("CI runs the promotion resolver selftest beside the production gate selftes
   assert.match(ci, /run: node --test ci\/resolve-promotion-sha\.test\.mjs\n/);
   assert.match(ci, /run: node --test ci\/gradual-promote\.test\.mjs\n/);
   assert.match(ci, /run: node --test ci\/gradual-promote-gate-acceptance\.test\.mjs\n/);
+});
+
+test("each gradual stage also judges the new version's live error rate before rollback stand-down", () => {
+  const action = readFileSync(
+    new URL("../.github/actions/gradual-promote/action.yml", import.meta.url),
+    "utf8",
+  );
+  // The live gate sits between the stage's smoke gate and its rollback
+  // step, so a fail verdict reaches the same failure-driven rollback.
+  const order = [
+    "Health and SLO gate at 5 percent",
+    "Live error-rate gate at 5 percent",
+    "Automatic rollback after 5 percent gate failure",
+    "Health and SLO gate at 50 percent",
+    "Live error-rate gate at 50 percent",
+    "Automatic rollback after 50 percent gate failure",
+    "Health and SLO gate at 100 percent (live traffic)",
+    "Live error-rate gate at 100 percent",
+    "Automatic rollback after 100 percent gate failure",
+  ];
+  let at = -1;
+  for (const name of order) {
+    const next = action.indexOf(`- name: ${name}\n`);
+    assert.ok(next > at, `error-rate stage out of order or missing: ${name}`);
+    at = next;
+  }
+  assert.equal((action.match(/id: error-rate-(5|50|100)\n/g) ?? []).length, 3);
+  // End-of-line anchor: a trailing `|| true` on the run line would
+  // neutralize the gate while an unanchored count stays green.
+  assert.equal(
+    (action.match(/node "\$\{\{ github\.action_path \}\}\/error-rate-gate\.mjs"$/gm) ?? []).length,
+    3,
+  );
+  // The gate reads analytics with the same caller-supplied token/account
+  // pair as the wrangler steps; the rehearsal-only fixture override must
+  // never be reachable from the production promotion path.
+  assert.equal(
+    (action.match(/ERROR_RATE_THRESHOLD: \$\{\{ inputs\.error-rate-threshold \}\}/g) ?? []).length,
+    3,
+  );
+  assert.ok(!action.includes("ERROR_RATE_FIXTURE"));
+  // Per-step wiring: enabled-only guard (whole line, so `&& false` fails),
+  // the promoted version (never the rollback target), and the exact env
+  // names configFromEnv parses. Count pins alone let a renamed env var or
+  // a repointed NEW_VERSION merge green.
+  const stepBlock = (name) => {
+    const start = action.indexOf(`    - name: ${name}\n`);
+    assert.ok(start >= 0, `step missing: ${name}`);
+    const rest = action.slice(start + 1);
+    const next = rest.indexOf("\n    - name: ");
+    return next < 0 ? rest : rest.slice(0, next);
+  };
+  // Each smoke gate records when it finished, 1s past the finish: a
+  // whole-second stamp would round down, and the analytics lower bound
+  // is inclusive, so probes sent in the final second would still count.
+  // The error-rate gate starts its judged window there, so the stage's
+  // own probes never count. The stamp must fail closed: an empty value
+  // would read as "no recorded start" and revive the trailing window.
+  assert.equal(
+    (
+      action.match(
+        /finished_at=\$\(node -e "process\.stdout\.write\(new Date\(Date\.now\(\) \+ 1000\)\.toISOString\(\)\)"\)/g,
+      ) ?? []
+    ).length,
+    3,
+  );
+  assert.equal(
+    (
+      action.match(
+        /if \[ -z "\$finished_at" \]; then echo "::error::could not stamp the smoke finish time" >&2; exit 1; fi/g,
+      ) ?? []
+    ).length,
+    3,
+  );
+  assert.equal(
+    (action.match(/echo "finished-at=\$finished_at" >> "\$GITHUB_OUTPUT"/g) ?? []).length,
+    3,
+  );
+  for (const [pct, smoke] of [
+    [5, "smoke-5"],
+    [50, "smoke-50"],
+    [100, "smoke-100"],
+  ]) {
+    const block = stepBlock(`Live error-rate gate at ${pct} percent`);
+    assert.ok(block.includes("if: inputs.error-rate-gate == 'true'\n"), `gate ${pct} if guard`);
+    for (const envLine of [
+      "WORKER_NAME: ${{ inputs.worker-name }}",
+      "NEW_VERSION: ${{ steps.promoted-version.outputs.id }}",
+      "CLOUDFLARE_API_TOKEN: ${{ inputs.api-token }}",
+      "CLOUDFLARE_ACCOUNT_ID: ${{ inputs.account-id }}",
+      "ERROR_RATE_THRESHOLD: ${{ inputs.error-rate-threshold }}",
+      "ERROR_RATE_MIN_REQUESTS: ${{ inputs.error-rate-min-requests }}",
+      "ERROR_RATE_WINDOW_MINUTES: ${{ inputs.error-rate-window-minutes }}",
+      "ERROR_RATE_SOAK_SECONDS: ${{ inputs.error-rate-soak-seconds }}",
+      `ERROR_RATE_WINDOW_START: \${{ steps.${smoke}.outputs.finished-at }}`,
+    ]) {
+      assert.ok(block.includes(envLine), `gate ${pct} env: ${envLine}`);
+    }
+    assert.ok(!block.includes("rollback-target"), `gate ${pct} must not read the rollback target`);
+    // A swallowed failure would never reach the rollback step.
+    assert.ok(!block.includes("continue-on-error"), `gate ${pct} must not swallow its failure`);
+  }
+});
+
+test("the staging rehearsal requires the elevated-rate verdict, not any non-zero exit", () => {
+  const rehearsal = readFileSync(
+    new URL("../.github/workflows/error-rate-gate-rehearsal.yml", import.meta.url),
+    "utf8",
+  );
+  // Manual-only staging proof; it must never gain an automatic trigger.
+  assert.match(rehearsal, /on:\n  workflow_dispatch:\n/);
+  // The simulated half counts as a halt only when the gate judged the
+  // fixture's exact elevated sample (200 requests, 80 errors): a malformed
+  // fixture also exits non-zero, with verdict=error, and must not read as
+  // a successful rehearsal.
+  assert.ok(
+    rehearsal.includes('grep -F "error-rate requests=200 errors=80 rate=0.4000 verdict=fail"'),
+    "rehearsal must require the elevated-rate fail verdict line",
+  );
 });
