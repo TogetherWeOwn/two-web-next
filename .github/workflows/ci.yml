@@ -373,18 +373,15 @@ jobs:
         env:
           DATABASE_URL: postgres://postgres:ci@localhost:5432/postgres
           AUDIT_IMPORT_TEST_DATABASE_URL: postgres://postgres:ci@localhost:5432/postgres
-      # Tier-0 report (WARN): validator properties, the role x route authz
-      # matrix and the default-planner EXPLAIN seq-scan check. Non-blocking
-      # until the parent flip decides the low-false-positive suites are
-      # required: continue-on-error keeps the step green on failure, and the
-      # trap keeps a dead gate visible as a workflow warning instead of
-      # silent green. The step always prints the query files this PR touches
-      # beside the verdict, even when the suites fail. Tier-0 lives in tier0/
-      # (own vitest config) because every test/** file runs inside the
-      # blocking coverage step above.
-      - name: Tier-0 report (validators + authz + EXPLAIN, WARN)
+      # Tier-0 check: validator properties, the role x route authz matrix and
+      # the default-planner EXPLAIN seq-scan check. This existing check is
+      # required; the trap keeps a failure before the report visible in logs.
+      # The step always prints the query files this PR touches beside the
+      # verdict, even when the suites fail. Tier-0 lives in tier0/ (own vitest
+      # config) because every test/** file runs inside the blocking coverage
+      # step above.
+      - name: Tier-0 check (validators + authz + EXPLAIN)
         if: always() && (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
-        continue-on-error: true
         # Container steps run under sh (dash here: no pipefail, no ERR trap),
         # so pin bash like the Semgrep WARN step does.
         shell: bash
@@ -392,9 +389,7 @@ jobs:
           DATABASE_URL: postgres://postgres:ci@localhost:5432/postgres
         run: |
           set -euo pipefail
-          # continue-on-error keeps the step green on failure; the trap keeps a
-          # dead gate visible as a workflow warning instead of silent green.
-          trap 'echo "::warning::Tier-0 WARN step failed before completing the report"' ERR
+          trap 'echo "::warning::Tier-0 check failed before completing the report"' ERR
           tier0_status=0
           remember_tier0_failure() {
             local status=$?
