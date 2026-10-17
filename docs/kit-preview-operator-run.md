@@ -78,11 +78,18 @@ node ci/kit-parity-gates.mjs
 
 Expected limitation: the QA seam is disabled on the Kit preview Worker
 (`APP_URL` there is the workers.dev host, not staging, and no secrets
-are set — see `src/qa.ts` `qaEnabled` and `web/wrangler.jsonc`), so the
-Kit-side member-board arm ledgers as skipped with
-`QA login answered 404 on two-web-next-kit-preview.5150.workers.dev ...`.
-Only the Hono side authenticates today; the Kit 404 skip is the correct
-evidence, not a failure to retry.
+are set — see `src/qa.ts` `qaEnabled` and `web/wrangler.jsonc`), so with
+the token set every member/moderator journey ledgers as a single skipped
+`preview <route>: authenticated fetch` with
+`QA login answered 404 on two-web-next-kit-preview.5150.workers.dev ...`
+and neither base performs an authenticated fetch
+(`ci/kit-parity-gates.mjs` skips the whole journey when either login is
+unavailable). The skip is the correct evidence, not a failure to retry —
+but it also means the token-bearing run proves nothing beyond the
+guest-only run while spending Hono QA logins and sending the token to the
+Kit host. Until a Kit host with the staging `APP_URL` and QA secret
+exists, treat the guest-only pass as the valid run and do not pass the
+token.
 
 Read the token from the approved binding into the environment; never place the
 value in `argv`, a URL, a file in the repo, or a comment. Set exactly one
@@ -147,12 +154,12 @@ as preview proof:
 - The signed-in non-member 403 arm cannot be minted by the QA seam (both QA
   identities are members) and stays pinned hermetically; preview never covers
   it.
-- Authenticated Kit member-board parity is not proven by any preview run
-  today: the Kit preview Worker has no QA seam, so its member-board arm
-  always ledgers as skipped (see Authenticated preview above). A passing
-  preview proves guest parity plus Hono-side authenticated parity only;
-  proving Kit-side authenticated parity needs a Kit host with the staging
-  `APP_URL` and QA secret, which does not exist yet.
+- Authenticated member-board parity on either base is not proven by any
+  preview run today: the Kit preview Worker has no QA seam, so every
+  member/moderator journey ledgers as skipped and no authenticated fetch
+  runs on either base (see Authenticated preview above). A passing preview
+  proves guest parity only; proving authenticated parity needs a Kit host
+  with the staging `APP_URL` and QA secret, which does not exist yet.
 - Visual baselines, performance budgets, and the built-Worker runtime fixture
   are separate gates with their own evidence; a preview pass does not stand in
   for them.
