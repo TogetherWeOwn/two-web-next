@@ -2,8 +2,8 @@ import type { APIRequestContext, APIResponse } from "@playwright/test";
 import { sendTokenRequest } from "../qa-request.mjs";
 import {
   parseRetryAfterSeconds,
+  qaLoginRetryBudgetMs,
   QA_LOGIN_MAX_ATTEMPTS,
-  QA_LOGIN_RETRY_AFTER_CAP_SECONDS,
   sleep,
 } from "../qa-login-retry.mjs";
 import { test, expect, stagingOrigin, emptyStorageState, moderatorStorageState } from "./fixtures";
@@ -20,6 +20,9 @@ test.use({ trace: "off", screenshot: "off", video: "off" });
 // moderator journey reads this file's own moderator session, so it stays
 // order-independent.
 test.beforeAll(async () => {
+  // Hook timeout: the config's 30s covers the logins themselves; their
+  // bounded 429 waits get their own budget (qa-login-retry.mjs), two logins.
+  test.setTimeout(30_000 + qaLoginRetryBudgetMs(2));
   await loginQaIdentities();
 });
 
@@ -68,11 +71,9 @@ async function probeQaStatus(
 test.describe("negative QA cases", () => {
   test("staging QA rejects a bad token and an unknown identity with 404", async ({ browser }) => {
     // The config's 30s covers the probes themselves; the bounded 429 retries
-    // get their own budget: up to QA_LOGIN_MAX_ATTEMPTS - 1 capped waits per
-    // probe, times two probes (events-list/featured setTimeout precedent).
-    test.setTimeout(
-      30_000 + 2 * (QA_LOGIN_MAX_ATTEMPTS - 1) * QA_LOGIN_RETRY_AFTER_CAP_SECONDS * 1000,
-    );
+    // get their own budget: qaLoginRetryBudgetMs(2) prices two probes, each
+    // with up to QA_LOGIN_MAX_ATTEMPTS - 1 capped waits.
+    test.setTimeout(30_000 + qaLoginRetryBudgetMs(2));
     const origin = stagingOrigin;
     // Explicitly empty: a bare newContext() inherits the member storageState
     // from the staging config, and these probes must not present a session.
