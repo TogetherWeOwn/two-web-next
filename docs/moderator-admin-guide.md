@@ -290,6 +290,23 @@ settings attempt asynchronous Discord write-back, not immediate delivery.
 Drafts, cancelled events and ended events cannot use these controls. If a
 transition is refused, check status and end time rather than retrying another API.
 
+### Host RSVP and waitlist procedure
+
+Use the member-facing event page to understand each answer:
+
+- **Going:** the member sees **You're in** and **Can't make it**. Going holds a place under the event's capacity rules; it is not proof that the member attended.
+- **Waitlisted:** the member sees their position in line when available (otherwise a general waitlist notice) and **Leave the waitlist**. A waitlisted answer is not a seat or attendance.
+- **Withdrawn:** withdrawing removes the member's answer. Their page returns to the RSVP action allowed by current availability (join the waitlist when full); the host does not need to remove or replace the answer.
+- **Automatically promoted:** on a published, open, not-ended event, a freed seat or an increase in capacity is assigned to the FIFO waitlist head automatically. After reloading, that member sees **You're in**; the Going count reflects the occupied seat. Hosts must not manually claim or assign a seat for anyone.
+
+To handle a capacity change, edit the event in `/admin/events` and save the intended capacity. A blank capacity means unlimited. The editor refuses a finite capacity below the current Going count and leaves the event unchanged; Maybe, Not going, and Waitlisted answers do not count toward that floor. Increasing capacity can promote queued members in FIFO order. Paused, draft, cancelled, or ended events do not promote the line; reopening an eligible event can promote it. If a save is refused or the displayed state is unclear, stop and ask the maintainers rather than editing RSVP rows or using another route.
+
+A complete host check is on-screen and event-level: confirm the correct event, its start/timezone and published status, whether RSVPs are open or paused, the intended capacity, and the public Going count. After changing capacity or reopening RSVPs, reload the event page and confirm the visible count and status. Use the admin roster only in place when authorized; it is read-only, its total includes every answer status, and it is not an attendance register. Do not export or copy the roster, member names, IDs, or waitlist details into notes or public channels. Record only the event-level outcome, check time, and visible aggregate counts. Count attendance only from verified actual participation, not from Going or Waitlisted answers.
+
+**Capacity-one dry run:** one member answers Going and fills the single seat. A second member joins and sees **#1 in line**. When the first withdraws, the second is promoted automatically; after reload they see **You're in**, and the count is **1 of 1 going**. No host seat claim is needed.
+
+Sources: [critical browser journeys](critical-journeys.md#critical-browser-journeys), [waitlist browser journey](../e2e/event-waitlist.spec.ts), [RSVP/waitlist tests](../test/rsvp-waitlist.test.ts), [RSVP write behavior](../src/events/rsvp.ts), and [capacity and promotion rules](../src/events/waitlist.ts).
+
 ### Weekly series
 
 Choose **Weekly** only for an approved series and review its count/end date
