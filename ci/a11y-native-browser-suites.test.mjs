@@ -30,6 +30,12 @@ const SUITES = [
     title: "audit lifecycle real Chromium signal cleanup",
     min: 2,
   },
+  {
+    file: "test/kit-error-shell-render.test.ts",
+    env: "KIT_ERROR_SHELL_BROWSER_TESTS",
+    title: "Kit error shell rendered accessibility",
+    min: 6,
+  },
 ];
 
 const workflow = await readFile(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8");
