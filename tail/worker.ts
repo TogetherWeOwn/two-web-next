@@ -31,6 +31,44 @@ export function shaFromVersionTag(tag: unknown): string | undefined {
   return VERSION_TAG.exec(tag)?.[1];
 }
 
+const BUILD_SHA = /^[0-9a-f]{40}$/;
+
+// Live traces do not populate scriptVersion.tag: in the 2026-10-17 staging
+// drill the active version tag was the bare deploy SHA, yet delivered
+// summaries omitted build_sha. The app's release-tagged log lines
+// (http.request, error.alert, queue.failing) carry build_sha from its own
+// version_metadata binding, always paired with an equal release field, so
+// read the SHA from the trace's own logs when the version tag is absent.
+// Only that exact pair passes; nothing else from the line is ever read.
+function buildShaFromLogs(logs: TraceLike["logs"]): string | undefined {
+  if (!Array.isArray(logs)) return undefined;
+  for (const log of logs.slice(0, 100)) {
+    const messages = Array.isArray(log?.message) ? log.message.slice(0, 20) : [];
+    for (const message of messages) {
+      if (
+        typeof message !== "string" ||
+        message.length > 16_384 ||
+        !message.includes('"build_sha"')
+      )
+        continue;
+      try {
+        const line: unknown = JSON.parse(message);
+        if (!line || typeof line !== "object" || Array.isArray(line)) continue;
+        const { build_sha, release } = line as Record<string, unknown>;
+        if (typeof build_sha === "string" && build_sha === release && BUILD_SHA.test(build_sha))
+          return build_sha;
+      } catch {
+        continue;
+      }
+    }
+  }
+  return undefined;
+}
+
+function traceBuildSha(trace: TraceLike): string | undefined {
+  return shaFromVersionTag(trace.scriptVersion?.tag) ?? buildShaFromLogs(trace.logs);
+}
+
 export function logsPath(script: string): string {
   return `Workers & Pages > ${script} > Observability > Logs`;
 }
@@ -505,7 +543,7 @@ function batchForTrace(trace: TraceLike, fallbackAt: number): TraceBatch | null 
     typeof trace.eventTimestamp === "number" && Number.isFinite(trace.eventTimestamp)
       ? trace.eventTimestamp
       : fallbackAt;
-  const buildSha = shaFromVersionTag(trace.scriptVersion?.tag);
+  const buildSha = traceBuildSha(trace);
   return {
     script: trace.scriptName,
     ...(buildSha ? { buildSha } : {}),
@@ -950,7 +988,7 @@ export function createTailWorker(
       }
       for (const trace of events) {
         if (!trace.scriptName || !APP_SCRIPT_NAMES.has(trace.scriptName)) continue;
-        const buildSha = shaFromVersionTag(trace.scriptVersion?.tag);
+        const buildSha = traceBuildSha(trace);
         for (const log of trace.logs) {
           if (log.level !== "error") continue;
           for (const argument of log.message) {

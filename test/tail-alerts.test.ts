@@ -173,6 +173,28 @@ describe("Tail delivery", () => {
     ]);
   });
 
+  it("takes build_sha from the alert line's release fields when the trace has no version tag", async () => {
+    // Live traces do not populate scriptVersion.tag (staging drill
+    // 2026-10-17): summaries omitted build_sha while the active version
+    // tag was the bare deploy SHA. The release-tagged critical line is
+    // the surviving SHA source; only an exact 40-hex value passes.
+    const sha = "0123456789abcdef0123456789abcdef01234567";
+    const { worker, send } = fixture();
+    await worker.tail([trace([{ ...requestAlert, build_sha: sha, release: sha }])], env);
+    const summary = JSON.parse(
+      JSON.parse((send.mock.calls[0] as unknown as [string, RequestInit])[1].body as string)
+        .content,
+    );
+    expect(summary.build_sha).toBe(sha);
+
+    const bogus = fixture();
+    await bogus.worker.tail([trace([{ ...requestAlert, build_sha: "manual-never-send" }])], env);
+    const bogusBody = (bogus.send.mock.calls[0] as unknown as [string, RequestInit])[1]
+      .body as string;
+    expect(JSON.parse(JSON.parse(bogusBody).content)).not.toHaveProperty("build_sha");
+    expect(bogusBody).not.toContain("manual-never-send");
+  });
+
   it("outbound summaries carry only the allowlisted fields for one request and one queue alert", async () => {
     const { worker, send } = fixture();
     await worker.tail([trace([requestAlert, queueAlert])], env);
@@ -195,7 +217,8 @@ describe("Tail delivery", () => {
       script: "two-web-next",
       logs: "Workers & Pages > two-web-next > Observability > Logs",
     });
-    // This fixture trace carries no version tag, so no SHA is claimed.
+    // This fixture trace carries no version tag and its log lines carry no
+    // release fields, so no SHA is claimed.
     expect(request).not.toHaveProperty("build_sha");
     expect(request.fingerprint).toMatch(/^[a-f0-9]{64}$/);
     expect(Object.keys(queue).sort()).toEqual([
