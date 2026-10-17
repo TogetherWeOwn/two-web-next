@@ -1,6 +1,6 @@
 # TOG-9689 — W10: Livewire → islands re-spec + drift tests
 
-**Status:** slice 1 merged; slices 2–5 as gated child cards.
+**Status:** slices 1–5 done, incl. slice-2 PR #98.
 **Source of truth for behavior:** two-web (maintenance-only) `app/Livewire/*.php`,
 `resources/views/livewire/*.blade.php`, `tests/Feature/Livewire/*`, `tests/Feature/Events/*`,
 `tests/Feature/Profile/*`. This doc re-expresses them; nothing is ported verbatim
