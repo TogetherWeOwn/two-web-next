@@ -72,12 +72,61 @@ is set. The only authenticated Kit-parity journey in CI is `e2e:kit-parity` in
 `browser-smoke` (member board, one shared QA login); the critical `npm run e2e`
 journeys in the same job log in separately. The parity suite's raw
 no-JavaScript API checks fetch all four hot-zone paths on both targets
-(`e2e/kit-parity/parity.spec.ts:293-352`). Its
-rendered-page journey loads `/hotzones` and follows `/hotzones/joins` at
-desktop and mobile widths; it does not render the voice or games pages.
-CI additionally covers the shared contract branch through the
-canonical-`/hotzones` fixture in the step-3 unit contract plus the hot-zone
-Vitest suites. Preview fetches are operator-run evidence, not CI evidence.
+(`e2e/kit-parity/parity.spec.ts:351-431`). Its rendered browser journey currently
+loads `/hotzones`, follows `/hotzones/joins`, and directly loads `/hotzones/voice`
+and `/hotzones/games` at desktop (1280×800) and mobile (390×844) widths
+(`parity.spec.ts:858-936`). That proves each page responds and contains a
+heading/grid region, but voice and games still need the content-specific
+assertions in the acceptance contract below. CI also covers shared helper
+branches through the canonical `/hotzones` fixture in the step-3 unit contract
+and the hot-zone Vitest suites. Preview fetches are operator-run evidence, not
+CI evidence.
+
+### Voice and games rendered acceptance contract
+
+The next implementation slice is limited to strengthening the existing public,
+read-only browser journey in `e2e/kit-parity/parity.spec.ts`; it does not add a
+new fixture, credential, staging/production data dependency, login, screenshot
+baseline, or route. Run it on both the local Hono worker and built Kit Worker,
+for each viewport above. Assertions are observable rendered-page behavior:
+
+- **Voice page:** direct load `/hotzones/voice` returns 200 HTML; the visible
+  heading is `voice hot zone`; the page explains that voice activity for the
+  displayed season is estimated pending bot event-store calibration and shows a
+  numeric total estimate. The one rendered grid is a labelled, focusable
+  scroll region containing a table with weekday rows and hour columns; its
+  caption is `Estimated voice activity for season all` for the fixture URL.
+- **Games page:** same contract for `/hotzones/games`, with `games` substituted
+  for `voice` in the heading, estimate copy and caption.
+- **Navigation:** from `/hotzones`, each Voice heatmap and Games heatmap link
+  is visible and navigates to its matching page. Each signal page's visible
+  cross-signal links include All hot zones, joins, voice and games. Preserve
+  the existing Joins heatmap path as a control; it remains a live aggregate,
+  not an estimate.
+- **Desktop and mobile layout:** each page has exactly one grid region and no
+  document-level horizontal overflow. At 390×844, its 42rem-wide table remains
+  horizontally scrollable inside the labelled region (not the page); at
+  1280×800 the region remains rendered without clipping the page.
+- **Public/privacy contract:** each target is guest rendered, has no sign-out
+  control or member identifiers, retains `noindex, follow`, a canonical link,
+  and `public, max-age=300`; the Kit response carries the manifest-derived
+  Kit marker (pinned as `kit`) and Hono carries no renderer marker. Voice and
+  games remain estimates even when the joins fixture has live data.
+- **Failure/empty boundaries:** malformed `?season=bogus` returns 400 before
+  a grid, an unknown signal returns 404, and a database outage maps to 503;
+  these are status/error contracts, not alternative rendered success screens.
+  Existing raw API/unit checks cover malformed season and unknown signal;
+  injected loader tests cover the outage mapping. No deterministic empty-data
+  browser state is currently seeded, so zero-join rendered behavior is outside
+  this browser contract (the shared helper's null-DB branch is unit-test scope).
+
+The existing loopback workers and parity fixture already serve these anonymous
+GET pages; the browser context blocks external requests. The current journey
+needs no QA login (the single shared login belongs to the member-board tests).
+Keep data assertions fixture-stable: pin semantic labels, grid dimensions and
+nonnegative numeric totals rather than the seeded WhatPulse cells or a live
+join-count value. Do not claim the new content contract is executed until the
+assertions are merged and the parity browser job is green on that head.
 
 In `browser-smoke`, after the seed and before any browser journey mutates
 shared state, the dedicated `events-index.visual.spec.ts` captures the Kit
@@ -281,13 +330,17 @@ fixtures and operator-run preview are separate contract evidence. Executed
 parity journeys cover GET/HEAD `/events/past`, `/events`, `/join`,
 `/auth/recover` and `/leaderboards/members` (the member board also runs
 authenticated). Hot-zone coverage is distinct: the suite performs raw
-no-JavaScript API checks for all four paths and renders `/hotzones` plus
-`/hotzones/joins`; it does not render the voice or games pages. The unit
-contract exercises shared contract branches on canonical fixtures (one
-synthetic `/hotzones` shell, one member-board fixture, the `/about` and `/faq`
-leaves); per-path coverage of the four hot-zone signals comes from those API
-checks (and from preview mode when an operator runs it). Hot-zone Vitest
-suites run in CI. Preview fetch is an operator-run check, not CI evidence.
+no-JavaScript API checks for all four paths and the two-width browser journey
+renders `/hotzones`, `/hotzones/joins`, `/hotzones/voice` and
+`/hotzones/games`. The latter two currently have only shared heading/grid/layout
+assertions; see [Voice and games rendered acceptance contract](#voice-and-games-rendered-acceptance-contract)
+for the content-specific browser assertions that remain the next implementation
+slice. The unit contract exercises shared contract branches on canonical
+fixtures (one synthetic `/hotzones` shell, one member-board fixture, the
+`/about` and `/faq` leaves); per-path coverage of all four hot-zone signals
+also comes from API checks (and preview mode when an operator runs it).
+Hot-zone Vitest suites run in CI. Preview fetch is an operator-run check, not
+CI evidence.
 
 ## Security
 
