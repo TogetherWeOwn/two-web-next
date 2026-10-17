@@ -599,3 +599,188 @@ test("target-selected environment requires every mapping to be guarded on inputs
   const opaque = guarded.replace("inputs.target || 'staging'", "vars.ENVIRONMENT_NAME");
   assert.equal(productionSecretEnvironmentViolations(opaque, "fixture.yml").length, 1);
 });
+
+// ---------------------------------------------------------------------------
+// Production secret set pins to Env.
+//
+// REQUIRED_PRODUCTION_SECRETS must equal the required (non-optional) secret
+// fields of `Env` in src/env.ts. "Secret" here means the name carries
+// SECRET or TOKEN: today that is DISCORD_CLIENT_SECRET, DISCORD_BOT_TOKEN and
+// SESSION_SECRET. Public required config (APP_URL, DISCORD_CLIENT_ID,
+// DISCORD_GUILD_ID, DISCORD_INVITE_URL) never matches and stays out.
+// Optional SECRET/TOKEN fields (QA_AUTH_TOKEN, SOURCE_EVIDENCE_VERIFIER_TOKEN,
+// BOT_SHARED_SECRET via AgentEventsEnv) stay out until made required.
+// BOT_ENDPOINT_URL and BOT_KEY_ID carry no SECRET/TOKEN marker; they stay
+// covered by the same-change note in check-production-secrets.mjs, pinned
+// below, not by this equality.
+// ---------------------------------------------------------------------------
+
+const ENV_SECRET_NAME = /(SECRET|TOKEN)/;
+
+function extractTypeBlock(source, typeName) {
+  const decl = new RegExp(`\\btype\\s+${typeName}\\b`).exec(source);
+  assert.ok(decl, `expected type ${typeName}`);
+  const start = source.indexOf("{", decl.index);
+  assert.ok(start >= 0, `expected body for type ${typeName}`);
+  let depth = 0;
+  let single = false;
+  let double = false;
+  let backtick = false;
+  let lineComment = false;
+  let blockComment = false;
+  let escaped = false;
+  for (let i = start; i < source.length; i++) {
+    const c = source[i];
+    const next = source[i + 1];
+    if (lineComment) {
+      if (c === "\n") lineComment = false;
+      continue;
+    }
+    if (blockComment) {
+      if (c === "*" && next === "/") {
+        blockComment = false;
+        i++;
+      }
+      continue;
+    }
+    if (single) {
+      if (escaped) escaped = false;
+      else if (c === "\\") escaped = true;
+      else if (c === "'") single = false;
+      continue;
+    }
+    if (double) {
+      if (escaped) escaped = false;
+      else if (c === "\\") escaped = true;
+      else if (c === '"') double = false;
+      continue;
+    }
+    if (backtick) {
+      if (escaped) escaped = false;
+      else if (c === "\\") escaped = true;
+      else if (c === "`") backtick = false;
+      continue;
+    }
+    if (c === "/" && next === "/") {
+      lineComment = true;
+      i++;
+      continue;
+    }
+    if (c === "/" && next === "*") {
+      blockComment = true;
+      i++;
+      continue;
+    }
+    if (c === "'") {
+      single = true;
+      continue;
+    }
+    if (c === '"') {
+      double = true;
+      continue;
+    }
+    if (c === "`") {
+      backtick = true;
+      continue;
+    }
+    if (c === "{") depth++;
+    if (c === "}") {
+      depth--;
+      if (depth === 0) return source.slice(start, i + 1);
+    }
+  }
+  throw new Error(`Unterminated ${typeName} body`);
+}
+
+export function requiredEnvSecretNames(source) {
+  // Env is `AgentEventsEnv & {...}`: both halves contribute required keys.
+  // JobsEnv is deliberately out of scope: it belongs to the jobs Worker.
+  const blocks = [extractTypeBlock(source, "AgentEventsEnv"), extractTypeBlock(source, "Env")];
+  const names = new Set();
+  for (const block of blocks) {
+    const field = /\b([A-Z][A-Z0-9_]*)\s*(\?)?\s*:/g;
+    let match;
+    while ((match = field.exec(block)) !== null) {
+      const [, name, optional] = match;
+      if (optional) continue;
+      if (!ENV_SECRET_NAME.test(name)) continue;
+      names.add(name);
+    }
+  }
+  return [...names].sort();
+}
+
+const FIXTURE_ENV_BASE = `export type AgentEventsEnv = {
+  BOT_ENDPOINT_URL?: string;
+  BOT_KEY_ID?: string;
+  BOT_SHARED_SECRET?: string;
+};
+export type Env = AgentEventsEnv & {
+  APP_URL: string;
+  DISCORD_CLIENT_SECRET: string;
+  DISCORD_BOT_TOKEN: string;
+  SESSION_SECRET: string;
+};
+`;
+
+test("REQUIRED_PRODUCTION_SECRETS equals the required secret fields of Env", () => {
+  const source = readFileSync(new URL("../src/env.ts", import.meta.url), "utf8");
+  assert.deepEqual([...REQUIRED_PRODUCTION_SECRETS].sort(), requiredEnvSecretNames(source));
+});
+
+test("fixture Env round-trip: new required secret diverges until the gate set is updated", () => {
+  assert.deepEqual(requiredEnvSecretNames(FIXTURE_ENV_BASE), [
+    "DISCORD_BOT_TOKEN",
+    "DISCORD_CLIENT_SECRET",
+    "SESSION_SECRET",
+  ]);
+  const withDummy = FIXTURE_ENV_BASE.replace(
+    "SESSION_SECRET: string;",
+    "SESSION_SECRET: string;\n  DUMMY_REQUIRED_SECRET: string;",
+  );
+  const extracted = requiredEnvSecretNames(withDummy);
+  assert.ok(extracted.includes("DUMMY_REQUIRED_SECRET"), "extraction must see the dummy secret");
+  assert.notDeepEqual(
+    [...REQUIRED_PRODUCTION_SECRETS].sort(),
+    extracted,
+    "a new required Env secret must fail the pin",
+  );
+  assert.deepEqual(
+    [...REQUIRED_PRODUCTION_SECRETS, "DUMMY_REQUIRED_SECRET"].sort(),
+    extracted,
+    "updating the gate set to include it must pass",
+  );
+});
+
+test("fixture Env keeps optional secrets and public config out of the pin", () => {
+  const withOptional = FIXTURE_ENV_BASE.replace(
+    "SESSION_SECRET: string;",
+    "SESSION_SECRET: string;\n  DUMMY_OPTIONAL_SECRET?: string;",
+  );
+  assert.deepEqual(
+    requiredEnvSecretNames(withOptional),
+    requiredEnvSecretNames(FIXTURE_ENV_BASE),
+    "an optional SECRET field must not change the pin",
+  );
+  const extracted = requiredEnvSecretNames(FIXTURE_ENV_BASE);
+  assert.ok(!extracted.includes("APP_URL"), "public required config stays out");
+  for (const name of ["BOT_ENDPOINT_URL", "BOT_KEY_ID", "BOT_SHARED_SECRET"]) {
+    assert.ok(!extracted.includes(name), `${name} stays out while optional`);
+    assert.ok(!REQUIRED_PRODUCTION_SECRETS.includes(name), `${name} stays out of the gate set`);
+  }
+  const real = readFileSync(new URL("../src/env.ts", import.meta.url), "utf8");
+  for (const name of ["BOT_ENDPOINT_URL", "BOT_SHARED_SECRET", "BOT_KEY_ID"]) {
+    assert.match(real, new RegExp(`${name}\\s*\\?:`), `${name} must stay optional in Env`);
+  }
+});
+
+test("gate keeps the BOT_* same-change note", () => {
+  const gate = readFileSync(new URL("./check-production-secrets.mjs", import.meta.url), "utf8");
+  assert.ok(gate.includes("BOT_ENDPOINT_URL"), "gate must still name BOT_ENDPOINT_URL");
+  assert.ok(gate.includes("BOT_SHARED_SECRET"), "gate must still name BOT_SHARED_SECRET");
+  assert.ok(gate.includes("BOT_KEY_ID"), "gate must still name BOT_KEY_ID");
+  assert.ok(
+    gate.includes("If the Worker ever reads them from Env"),
+    "gate must keep the same-change note",
+  );
+});
