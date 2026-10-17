@@ -20,16 +20,16 @@ not fail) unless marked HARD. All of them run on the existing runners only.
   broken coverage run cannot silence the gate (docs-only and draft PRs skip
   via the scope guard). Aggregate floors in `vitest.config.ts` stay. Flip to
   `--strict` for HARD.
-- **Semgrep TS + secrets (WARN):** `ci/semgrep-rules.yml` flags dangerous
+- **Semgrep TS + secrets (HARD):** `ci/semgrep-rules.yml` flags dangerous
   sinks (`eval`, string `setTimeout`, `innerHTML`, `document.write`) and
   secret-shaped literals. CI installs the pinned CLI into a Python virtual
-  environment and runs `ci/semgrep-warn-selftest.mjs` against a planted warning
-  before scanning the tree. The step pins `shell: bash` (container steps run
-  under dash, which has no `pipefail`) and traps failures into an explicit
-  `::warning::`, so a dark scanner shows up as a visible workflow warning
-  without promoting WARN findings to merge blockers. The selftest matches the
-  rule id by suffix because semgrep prefixes it with the config path.
-  Full-history leak scanning stays with gitleaks.
+  environment and runs `ci/semgrep-warn-selftest.mjs` against a planted finding
+  before scanning the tree. Setup, selftest, partial-parse errors, scanner
+  failures, and findings block the required `check` job; the scan uses
+  `--strict --error`. The regression test in `test/workflow-hardening.test.ts`
+  pins the fail-closed workflow wiring. The selftest matches the rule id by
+  suffix because Semgrep prefixes it with the config path. Full-history leak
+  scanning stays with gitleaks.
 - **Mutation nightly (non-blocking):** `ci/mutation-sessions-join.mjs` weakens
   one auth check at a time and runs the hermetic kill suite; survivors are
   coverage gaps in the report artifact, never a red build.

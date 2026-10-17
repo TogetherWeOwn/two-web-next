@@ -160,17 +160,18 @@ Mutating buttons submit immediately: there is no action-confirmation dialog.
 Double-check the event/slot and intended action before pressing one. The event
 editor's separate browser warning for unsaved changes is not action approval.
 
-### Kit admin shells (shipped, Hono serves traffic)
+### Kit admin shells (shipped; join-attempts pair Kit-served)
 
-Each of the 10 admin GET routes above also ships a Kit shell behind Hono
-ownership. The mixed-mode truth: Hono owns every handler and serves all
-traffic; the migration is GET-only; all 9 POST form actions stay Hono with
-no manifest entries of their own. Every shell entry in
-`src/route-ownership.ts` (`ROUTE_MANIFEST`) reads `enabled: false`, so what
-you see in the panel today is the Hono page. Kit shells reuse the same guard,
+Each of the 10 admin GET routes above also ships a Kit shell. The
+mixed-mode truth: the migration is GET-only; all 9 POST form actions stay
+Hono with no manifest entries of their own. Most shell entries in
+`src/route-ownership.ts` (`ROUTE_MANIFEST`) still read `enabled: false`, so
+Hono serves those pages; the join-attempts list and detail entries read
+`enabled: true`, so Kit serves those two pages wherever the Kit handler
+runs. Kit shells reuse the same guard,
 reads, filters, sort, pagination and copy, mirroring the event/featured
-CRUD, RSVP roster, and join-attempts audit workflows below; enablement stays
-disabled pending the enablement review described in
+CRUD, RSVP roster, and join-attempts audit workflows below; the remaining
+shells stay disabled pending their enablement reviews described in
 [Kit parity gates](kit-parity-gates.md).
 
 | Admin path | Kit shell |
@@ -193,12 +194,13 @@ chrome. If a shell ever misbehaves after enablement, the rollback is a
 manifest disable: returning its entry to `enabled: false` hands the route
 back to the unchanged Hono handler. Each shell is pinned by its Kit suite —
 `test/kit-admin-*` for dashboard, events and featured,
-`test/kit-join-attempt*` and `test/kit-activity-log*` for those shells — not
-by the Kit parity gates: `PARITY_ROUTES` in `ci/kit-parity-gates.mjs` covers
-public routes (including `/events/past`, `/join`, `/auth/recover`, `/about`,
-`/faq`, and the hot-zone paths) plus the authenticated member leaderboard
-(`/leaderboards/members`), and moderator-admin journeys stay
-Hono-only, ledgered as skipped.
+`test/kit-join-attempt*` and `test/kit-activity-log*` for those shells. The
+Kit parity gates additionally cover the enabled join-attempts pair:
+`PARITY_ROUTES` in `ci/kit-parity-gates.mjs` covers public routes
+(including `/events/past`, `/join`, `/auth/recover`, `/about`, `/faq`, and
+the hot-zone paths), the authenticated member leaderboard
+(`/leaderboards/members`) and the moderator join-attempts list and detail;
+the remaining moderator-admin journeys stay Hono-only, ledgered as skipped.
 
 ## Create, edit and publish an event
 

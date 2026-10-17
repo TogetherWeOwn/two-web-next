@@ -37,10 +37,10 @@ describe("Worker fetch redirect mode", () => {
 const PINNED_MANUAL_SITES = [
   { file: "src/bot/client-transport.ts", minManual: 1 },
   { file: "src/bot/event-read.ts", minManual: 1 },
-  // Tail: probeOnce plus the shared deliver() helper (one call site serves
-  // every Discord summary type; the aggregator stub fetch is a binding call,
-  // not a global fetch redirect site).
-  { file: "tail/worker.ts", minManual: 2 },
+  // Tail: probeOnce, probeCheck, the shared deliver() helper and
+  // deliverScheduled (the aggregator stub fetch is a binding call, not a
+  // global fetch redirect site).
+  { file: "tail/worker.ts", minManual: 4 },
 ] as const;
 
 describe("Worker redirect-manual pin", () => {
@@ -252,16 +252,30 @@ describe("Worker redirect-manual behavior", () => {
     }
     const gets = seen.filter((init) => init?.method === "GET");
     const posts = seen.filter((init) => init?.method === "POST");
-    // Failed probes, then one page: the 302 is a failure with its status, not a throw
-    // (status 0) and not a silent success.
-    expect(gets).toHaveLength(6);
+    // Per run two failed /up probes; synthetics only on the first run (the
+    // five-minute boundary), two failed attempts per check: 6 + 6 GETs.
+    // Every 302 is a failure with its status, not a throw (status 0) and
+    // not a silent success. A "follow" revert would see the healthy
+    // followed() response and stay silent instead.
+    expect(gets).toHaveLength(12);
     for (const init of seen) expect(init?.redirect).toBe("manual");
-    expect(posts).toHaveLength(1);
-    expect(lines).toHaveLength(1);
-    expect(JSON.parse(lines[0]!)).toMatchObject({
+    expect(posts).toHaveLength(4);
+    expect(lines).toHaveLength(4);
+    // Synthetic pages land on the first run; the uptime page follows once
+    // health has stayed red for over two minutes.
+    expect(JSON.parse(lines[3]!)).toMatchObject({
       event: "uptime.down",
       status: 302,
       delivery: "ops.alert.delivery_failed",
     });
+    const syntheticLines = lines.slice(0, 3).map((line) => JSON.parse(line));
+    expect(syntheticLines.map((line) => line.check)).toEqual(["/", "/events", "/login"]);
+    for (const line of syntheticLines) {
+      expect(line).toMatchObject({
+        event: "synthetic.down",
+        status: 302,
+        delivery: "ops.alert.delivery_failed",
+      });
+    }
   });
 });

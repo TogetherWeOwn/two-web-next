@@ -14,12 +14,20 @@ const dir = mkdtempSync(join(tmpdir(), "semgrep-warn-selftest-"));
 try {
   const fixture = join(dir, "warn-fixture.ts");
   writeFileSync(fixture, 'eval("1 + 1");\n');
-  const result = spawnSync(semgrep, ["--config", "ci/semgrep-rules.yml", "--json", fixture], {
-    encoding: "utf8",
-    env: { ...process.env, SEMGREP_SEND_METRICS: "off" },
-  });
-  if (result.error || result.status !== 0) {
-    throw new Error(result.stderr || result.error?.message || "Semgrep selftest exited non-zero");
+  const result = spawnSync(
+    semgrep,
+    ["--strict", "--error", "--config", "ci/semgrep-rules.yml", "--json", fixture],
+    {
+      encoding: "utf8",
+      env: { ...process.env, SEMGREP_SEND_METRICS: "off" },
+    },
+  );
+  if (result.error || result.status !== 1) {
+    throw new Error(
+      result.stderr ||
+        result.error?.message ||
+        "Semgrep selftest did not fail on the planted finding",
+    );
   }
   let report;
   try {
@@ -36,7 +44,7 @@ try {
   ) {
     throw new Error("Semgrep selftest did not report the planted warning rule");
   }
-  console.log("Semgrep WARN selftest: planted ts-no-eval reported with exit 0");
+  console.log("Semgrep HARD selftest: planted ts-no-eval blocked the scan");
 } finally {
   rmSync(dir, { recursive: true, force: true });
 }

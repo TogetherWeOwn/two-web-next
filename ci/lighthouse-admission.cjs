@@ -20,12 +20,15 @@ function assertFixtureContent(path, response, html, before, after) {
   assert.equal(response.status, 200, `${path}: fixture status`);
   assert.equal(response.redirected, false, `${path}: fixture redirect`);
   assert.match(response.headers.get("content-type") || "", /text\/html/, `${path}: HTML required`);
-  if (["/about", "/faq", "/rules", "/privacy"].includes(path)) {
-    // Content leaves inline the stylesheets: the real app rules must be
-    // present in the style block instead of a stylesheet link.
+  if (["/", "/about", "/faq", "/rules", "/privacy"].includes(path)) {
+    // Content leaves and the homepage inline the stylesheets: the real app
+    // rules must be present in the style block instead of a stylesheet link.
+    // The homepage reuses the leaf bundle, so it carries the hero rules.
     assert.match(
       html,
-      /<style>[\s\S]*\.content-page[\s\S]*<\/style>/,
+      path === "/"
+        ? /<style>[\s\S]*\.hero h1[\s\S]*<\/style>/
+        : /<style>[\s\S]*\.content-page[\s\S]*<\/style>/,
       `${path}: real app stylesheet`,
     );
   } else {

@@ -16,6 +16,18 @@ import {
 // @ts-expect-error JSONC comment/trailing-comma stripper has no declaration file.
 import { readWranglerConfig } from "../ci/wrangler-config.mjs";
 
+// Scheduled runs on a five-minute boundary also probe the synthetic main
+// flows; health fixtures answer those paths healthily so only /up drives
+// the assertions. Returns null for the /up probe itself.
+const healthySynthetic = (target: string): Response | null => {
+  const path = new URL(target).pathname;
+  if (path === "/up") return null;
+  if (path === "/login") {
+    return new Response(null, { status: 302, headers: { location: "/auth/discord" } });
+  }
+  return new Response(null, { status: 200, headers: { "content-type": "text/html" } });
+};
+
 const t0 = Date.parse("2026-10-01T00:00:00Z");
 const sha = "0123456789abcdef0123456789abcdef01234567";
 const secret = "https://discord.com/api/webhooks/123456789/test-only-token";
@@ -312,9 +324,9 @@ describe("health red for more than two minutes", () => {
   function healthFixture(probeStatus: () => Response) {
     let now = t0;
     const send = vi.fn(async (...args: [string, RequestInit?]) => {
-      const [, init] = args;
+      const [target, init] = args;
       if (init?.method === "POST") return new Response(null, { status: 200 });
-      return probeStatus();
+      return healthySynthetic(target) ?? probeStatus();
     });
     const sink = vi.fn();
     const worker = createTailWorker({
@@ -524,8 +536,10 @@ describe("durable aggregator (Durable Object)", () => {
     let now = t0;
     let posts = 0;
     const send = vi.fn(async (...args: [string, RequestInit?]) => {
-      const [, init] = args;
-      if (init?.method !== "POST") return new Response(null, { status: 503 });
+      const [target, init] = args;
+      if (init?.method !== "POST") {
+        return healthySynthetic(target) ?? new Response(null, { status: 503 });
+      }
       posts += 1;
       return new Response(null, { status: posts === 1 ? 500 : 200 });
     });
@@ -561,8 +575,10 @@ describe("delivery-failure and boundary semantics", () => {
     let now = t0;
     let posts = 0;
     const send = vi.fn(async (...args: [string, RequestInit?]) => {
-      const [, init] = args;
-      if (init?.method !== "POST") return new Response(null, { status: 503 });
+      const [target, init] = args;
+      if (init?.method !== "POST") {
+        return healthySynthetic(target) ?? new Response(null, { status: 503 });
+      }
       posts += 1;
       return new Response(null, { status: posts === 1 ? 500 : 200 });
     });
