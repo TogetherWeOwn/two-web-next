@@ -130,3 +130,95 @@ describe("policy versioning contract", () => {
     expect(html).toContain("&lt;script&gt;");
   });
 });
+
+describe("policy v3 discloses the Discord bot's records", () => {
+  const flat = POLICY_MARKDOWN.replace(/\s+/g, " ");
+  const section = (heading: string): string => {
+    const start = POLICY_MARKDOWN.indexOf(`## ${heading}\n`);
+    expect(start, `missing section "${heading}"`).toBeGreaterThanOrEqual(0);
+    const next = POLICY_MARKDOWN.indexOf("\n## ", start + 1);
+    return POLICY_MARKDOWN.slice(start, next === -1 ? undefined : next).replace(/\s+/g, " ");
+  };
+
+  it("names each category of bot record", () => {
+    const bot = section("What the Discord bot keeps");
+    for (const category of [
+      "**Membership and invites**",
+      "**Levels and ranks**",
+      "**Events and RSVPs**",
+      "**Moderation and safety**",
+      "**Support tickets**",
+      "**Voice rooms**",
+      "**Posts and sign-ups**",
+      "**Audit trail**",
+    ]) {
+      expect(bot, category).toContain(category);
+    }
+  });
+
+  it("says message text and online status are read only when a feature needs them", () => {
+    const why = section("Why the bot asks Discord for sensitive data");
+    expect(why).toContain("only when a feature that needs it is switched on");
+    expect(why).toContain("Message content");
+    expect(why).toContain("Online status");
+    expect(why).toContain("never receives or stores voice audio");
+  });
+
+  it("gives the reason for each sensitive Discord permission", () => {
+    const why = section("Why the bot asks Discord for sensitive data");
+    for (const scope of [
+      "Member list",
+      "Message content",
+      "Online status",
+      "Moderation log",
+      "Invites",
+    ]) {
+      expect(why, scope).toContain(`**${scope}**`);
+    }
+  });
+
+  it("states retention truthfully: no timer for most bot records, 90 days for ticket transcripts", () => {
+    const bot = section("What the Discord bot keeps");
+    expect(bot).toContain("Most bot records have no automatic deletion timer");
+    expect(bot).toContain(
+      "Support-ticket transcripts are kept for 90 days after they are saved, then deleted",
+    );
+    expect(flat).not.toMatch(/automatically (?:deleted|removed|purged|expired)/i);
+  });
+
+  it("does not claim an opt-out switch or suppression exists yet", () => {
+    expect(flat).toContain("There is no opt-out switch yet");
+    expect(flat).not.toMatch(
+      /\/privacy opt-out|opt-out command|self-serve opt|opt out at any time/i,
+    );
+  });
+
+  it("commits to no sale, licensing, advertising or data-broker transfer", () => {
+    const sharing = section("Selling and sharing");
+    expect(sharing).toContain("We do not sell, license or commercialize");
+    expect(sharing).toContain("advertising networks, data brokers or monetization services");
+  });
+
+  it("names the request intake and the limits of a deletion", () => {
+    const del = section("Deletion");
+    expect(del).toContain("DM a moderator or open a private support ticket in our server");
+    expect(del).toContain("our server only");
+    expect(del).toContain("backup copies");
+    expect(del).toContain("access log");
+    expect(del).toContain("moderator edit history");
+    expect(del).toContain("settings history");
+    expect(del).toContain("deletion receipt");
+  });
+
+  it("keeps internal tracker IDs, repository and agent names out of the public text", () => {
+    expect(POLICY_MARKDOWN).not.toMatch(
+      /TOG-|PAP-|Paperclip|two-bot|two-web|CISO|agent-|https?:\/\//,
+    );
+  });
+
+  it("keeps the FAQ's storage answer consistent with the policy", async () => {
+    const html = await (await app.request("/faq", {}, noDbEnv)).text();
+    expect(html).not.toContain("We never store message content");
+    expect(html).toContain('href="/privacy"');
+  });
+});

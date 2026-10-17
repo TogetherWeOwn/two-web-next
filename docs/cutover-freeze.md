@@ -81,8 +81,10 @@ The banner links to the relative path `/privacy`, never a pasted URL.
 
 ## Privacy policy version 2 note (historical draft)
 
-The live source is [content/privacy-policy-v2.md](../content/privacy-policy-v2.md),
-served at `/privacy` and bundled via `src/privacy-content.ts`. Member words:
+The version 2 source is [content/privacy-policy-v2.md](../content/privacy-policy-v2.md)
+and stays in history. The live source since version 3 is
+[content/privacy-policy-v3.md](../content/privacy-policy-v3.md), served at `/privacy`
+and bundled via `src/privacy-content.ts`. Member words (version 2):
 
 > Version 2 says in plain terms what the site keeps: your Discord identity
 > (ID, display name, avatar, server membership, refreshed from Discord on
