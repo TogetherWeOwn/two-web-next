@@ -72,7 +72,7 @@ test("successful changed-query listing remains visible without a GitHub summary 
   assert.equal(result.summary, undefined);
 });
 
-test("the blocking Check step runs this selftest and the Tier-0 reporter stays WARN-only", () => {
+test("the blocking Check step runs this selftest and the Tier-0 check is required", () => {
   const steps = workflow.split(/\n      - /);
   const checkStep = steps.find((entry) =>
     entry.startsWith("name: Check (lint + typecheck + coverage gate)\n"),
@@ -81,10 +81,10 @@ test("the blocking Check step runs this selftest and the Tier-0 reporter stays W
   assert.match(checkStep, /node --test[^\n]*ci\/tier0-changed-query-files\.test\.mjs/);
 
   const tier0Step = steps.find((entry) =>
-    entry.startsWith("name: Tier-0 report (validators + authz + EXPLAIN, WARN)\n"),
+    entry.startsWith("name: Tier-0 check (validators + authz + EXPLAIN)\n"),
   );
-  assert(tier0Step, "the Tier-0 WARN step must exist");
-  assert.match(tier0Step, /^        continue-on-error: true$/m);
+  assert(tier0Step, "the Tier-0 required check must exist");
+  assert.doesNotMatch(tier0Step, /^        continue-on-error:/m);
   const tier0Lines = tier0Step.split("\n");
   assert(tier0Lines.includes("          npm run test:tier0 || remember_tier0_failure"));
   assert(

@@ -261,6 +261,8 @@ leave-page warning for unsaved changes (including after a rejected Save).
   published events. Cancellation is terminal: no reopen or republish. Make an
   approved replacement event if needed. Check carefully; there is no confirmation
   dialog. Old public links remain a cancelled-event page, not a missing record.
+  Use the [event cancellation and reschedule communication checklist](events-communications.md)
+  after verifying the site state.
 - `past` is a list filter/status, not something moderators set with a button.
   Public pages can classify an event as past by its end time even while the stored
   status still says `published`; the admin `past` filter need not include every
@@ -270,6 +272,11 @@ leave-page warning for unsaved changes (including after a rejected Save).
   Discord write-back; draft/past saves do not. Saving a series parent can also
   shift children and enqueue their write-backs, regardless of the parent's status
   (see **Weekly series** below). Do not repeatedly save/publish to force a queue repair.
+- Cancellation records the event's cancelled status; it does not record who attended
+  or whether an RSVP holder showed up. Retained RSVP answers (including `going`) are
+  responses, not attendance evidence. Do not count cancelled events or their RSVP
+  rows as verified attendance. No-show treatment is unsupported by the stored data;
+  leave it unknown rather than inferring absence from an RSVP or lack of an RSVP.
 - There is **no event delete, restore, unpublish, bulk action or cover-image
   upload** in this panel. Repeat rules are available on creation, not as editable
   recurrence fields afterward. Escalate needs outside the visible controls
@@ -284,6 +291,23 @@ waiting members into available seats in first-in-first-out order. Both changed
 settings attempt asynchronous Discord write-back, not immediate delivery.
 Drafts, cancelled events and ended events cannot use these controls. If a
 transition is refused, check status and end time rather than retrying another API.
+
+### Host RSVP and waitlist procedure
+
+Use the member-facing event page to understand each answer:
+
+- **Going:** the member sees **You're in** and **Can't make it**. Going holds a place under the event's capacity rules; it is not proof that the member attended.
+- **Waitlisted:** the member sees their position in line when available (otherwise a general waitlist notice) and **Leave the waitlist**. A waitlisted answer is not a seat or attendance.
+- **Withdrawn:** withdrawing removes the member's answer. Their page returns to the RSVP action allowed by current availability (join the waitlist when full); the host does not need to remove or replace the answer.
+- **Automatically promoted:** on a published, open, not-ended event, a freed seat or an increase in capacity is assigned to the FIFO waitlist head automatically. After reloading, that member sees **You're in**; the Going count reflects the occupied seat. Hosts must not manually claim or assign a seat for anyone.
+
+To handle a capacity change, edit the event in `/admin/events` and save the intended capacity. A blank capacity means unlimited. The editor refuses a finite capacity below the current Going count and leaves the event unchanged; Maybe, Not going, and Waitlisted answers do not count toward that floor. Increasing capacity can promote queued members in FIFO order. Paused, draft, cancelled, or ended events do not promote the line; reopening an eligible event can promote it. If a save is refused or the displayed state is unclear, stop and ask the maintainers rather than editing RSVP rows or using another route.
+
+A complete host check is on-screen and event-level: confirm the correct event, its start/timezone and published status, whether RSVPs are open or paused, the intended capacity, and the public Going count. After changing capacity or reopening RSVPs, reload the event page and confirm the visible count and status. Use the admin roster only in place when authorized; it is read-only, its total includes every answer status, and it is not an attendance register. Do not export or copy the roster, member names, IDs, or waitlist details into notes or public channels. Record only the event-level outcome, check time, and visible aggregate counts. Count attendance only from verified actual participation, not from Going or Waitlisted answers.
+
+**Capacity-one dry run:** one member answers Going and fills the single seat. A second member joins and sees **#1 in line**. When the first withdraws, the second is promoted automatically; after reload they see **You're in**, and the count is **1 of 1 going**. No host seat claim is needed.
+
+Sources: [critical browser journeys](critical-journeys.md#critical-browser-journeys), [waitlist browser journey](../e2e/event-waitlist.spec.ts), [RSVP/waitlist tests](../test/rsvp-waitlist.test.ts), [RSVP write behavior](../src/events/rsvp.ts), and [capacity and promotion rules](../src/events/waitlist.ts).
 
 ### Weekly series
 
@@ -319,6 +343,31 @@ Reads of other members are access-logged; empty rosters and self-only reads crea
 no access row. Audit-write failures always refuse protected contents, including
 when the legacy `MEMBER_ACCESS_LOG_ENFORCE` setting is false. Stop and escalate any
 reported audit failure; do not try disabling enforcement or another access path.
+
+### RSVP is not attendance
+
+An RSVP is a member's answer for an event, not a check-in. The supported answers
+are `going`, `maybe`, `not_going`, and `waitlisted`; the roster's **Answered**
+time is when that answer was last updated, not when the member attended. Event
+status (`draft`, `published`, or `cancelled`) is separate from RSVP status.
+
+The current records provide no check-in or attendance field. Therefore they do
+not establish that a member attended, and absence of an RSVP does not establish
+that they did not attend. Cancellation is terminal and existing answers are
+retained, but cancellation does not establish attendance or a no-show. Keep these
+outcomes distinct:
+
+| Record evidence | Supported conclusion | Not established |
+| --- | --- | --- |
+| Event status `cancelled`, with any retained RSVP (including `going`) | The event is cancelled; the answer remains a recorded response | Attendance, no-show, or whether a planned replacement occurred |
+| Event remains scheduled/published and member has `going` | The member recorded a `going` RSVP | Attendance or later cancellation/no-show |
+| An explicit attendance/check-in record from a separately documented source | Attendance only to the extent that source's identity, event, timestamp, and verification are documented | Anything beyond that source's coverage; this repository defines no such attendance source |
+
+Do not turn RSVP counts, the read-only roster, event end times, or Discord
+write-back state into attendance totals. The repository documents RSVP persistence
+and event lifecycle, not attendance verification or no-show policy. If attendance
+is needed, treat it as unknown unless a separately approved, source-backed
+attendance record is available; do not add or infer a product policy here.
 
 ## Featured content settings and homepage delivery
 

@@ -33,6 +33,8 @@ Operations (deploy/rollback, `/up`, queues, outages and restore drills):
   event and featured-content workflows, dashboard diagnostics, and safe escalation.
 - [Event host privacy and safety checklist](docs/event-host-privacy-safety-checklist.md):
   least-privilege event hosting and routing concerns to an authorized moderator.
+- [Weekly event retrospective template](docs/event-retrospective-template.md):
+  qualitative event learning, separate from attendance and activity counts.
 - [Troubleshooting join and Discord sign-in](docs/troubleshooting-join.md):
   current notices, recovery pages, and the invite fallback.
 

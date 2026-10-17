@@ -10,6 +10,7 @@
 // with esbuild instead, stubbing only its framework and database-binding
 // imports.
 import { build } from "esbuild";
+import { PgDialect } from "drizzle-orm/pg-core";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { fileURLToPath } from "node:url";
 
@@ -103,25 +104,36 @@ const rosterRow = () => ({
  * (event read, roster count, roster page). */
 function rowsDb(eventRows, countRows, rosterRows) {
   const outstanding = [eventRows, countRows, rosterRows];
-  const chain = {};
-  for (const m of [
-    "from",
-    "where",
-    "orderBy",
-    "limit",
-    "offset",
-    "innerJoin",
-    "leftJoin",
-    "groupBy",
-  ]) {
-    chain[m] = () => chain;
-  }
-  chain.then = (resolve, reject) =>
-    Promise.resolve(outstanding.length > 1 ? outstanding.shift() : outstanding[0]).then(
-      resolve,
-      reject,
-    );
-  return { select: () => chain };
+  const queries = [];
+  return {
+    queries,
+    select: () => {
+      const query = {};
+      queries.push(query);
+      const chain = {};
+      for (const method of [
+        "from",
+        "where",
+        "orderBy",
+        "limit",
+        "offset",
+        "innerJoin",
+        "leftJoin",
+        "groupBy",
+      ]) {
+        chain[method] = (...args) => {
+          (query[method] ??= []).push(args);
+          return chain;
+        };
+      }
+      chain.then = (resolve, reject) =>
+        Promise.resolve(outstanding.length > 1 ? outstanding.shift() : outstanding[0]).then(
+          resolve,
+          reject,
+        );
+      return chain;
+    },
+  };
 }
 
 function throwingDb(err) {
@@ -266,6 +278,49 @@ describe("Kit admin event-edit load: guard and failure wiring", () => {
       {},
     );
     expect(data.view.roster.query).toMatchObject({ sort: "status", page: 2 });
+  });
+
+  it("passes roster filters to a bounded, stably ordered page read", async () => {
+    const db = rowsDb([eventRow()], [{ n: 101 }], [rosterRow()]);
+    vi.stubGlobal("__kitAdminEventEditDb", db);
+    const data = await load(
+      {
+        parent: async () => ({ actor }),
+        params: { key: "EVT1" },
+        url: editUrl("?roster_q=alice&roster_sort=status&roster_order=asc&roster_page=2"),
+        setHeaders: vi.fn(),
+      },
+      {},
+    );
+
+    expect(data.view.roster.query).toMatchObject({
+      q: "alice",
+      sort: "status",
+      order: "asc",
+      page: 2,
+    });
+    expect(data.view.roster.total).toBe(101);
+    expect(data.view.roster.entries).toHaveLength(1);
+
+    const [, countRead, rosterRead] = db.queries;
+    const dialect = new PgDialect();
+    const countPredicate = dialect.sqlToQuery(countRead.where[0][0]);
+    expect(countPredicate.sql).toContain('"events"."event_key" =');
+    expect(countPredicate.sql).toContain('"users"."username" ilike');
+    expect(countPredicate.params).toContain("EVT1");
+    expect(countPredicate.params).toContain("%alice%");
+    const predicate = dialect.sqlToQuery(rosterRead.where[0][0]);
+    expect(predicate.sql).toContain('"events"."event_key" =');
+    expect(predicate.sql).toContain('"users"."username" ilike');
+    expect(predicate.params).toContain("EVT1");
+    expect(predicate.params).toContain("%alice%");
+    const ordering = rosterRead.orderBy[0].map(
+      (expression) => dialect.sqlToQuery(expression.getSQL?.() ?? expression).sql,
+    );
+    expect(ordering[0]).toContain('"rsvps"."status" asc');
+    expect(ordering[1]).toBe('"rsvps"."user_id"');
+    expect(rosterRead.limit).toEqual([[100]]);
+    expect(rosterRead.offset).toEqual([[100]]);
   });
 
   it("shapes the stored row and roster page for the Svelte contract", async () => {
