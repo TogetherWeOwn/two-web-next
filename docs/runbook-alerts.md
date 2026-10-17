@@ -123,8 +123,11 @@ The webhook URL and webhook response bodies are never logged.
 
 Per-fingerprint pages cannot say "half of traffic is failing", so the Tail
 Worker also counts **every** accepted trace outcome — fetch responses by
-status class and exception outcomes — without reading request URLs, headers,
-exception text or log bodies. Counts live in one `AlertAggregator` Durable
+status class and crash outcomes — without reading request URLs, headers,
+exception text or log bodies. A crash outcome is `exception`, `exceededCpu`,
+`exceededMemory` or `scriptNotFound`, or any trace with a non-empty
+`exceptions` list; the client-disconnect outcomes `canceled` and
+`responseStreamDisconnected` never count as crashes. Counts live in one `AlertAggregator` Durable
 Object per Tail Worker environment (`ALERT_AGGREGATOR`, migration tag `v1`),
 so cold starts and multiple isolates cannot split a spike; storage holds only
 30-second bucket counts, timestamps and the allowlisted build SHA. Without
@@ -134,8 +137,9 @@ In a rolling five-minute window per script, one `error.spike` page fires when
 either gate crosses, then a 15-minute cooldown applies:
 
 - **Error rate:** at least 5 error responses (HTTP 5xx, or a fetch that ended
-  in an exception) **and** at least 50% of that script's requests in the window.
-- **Crash loop:** at least 5 exception outcomes, including queue, cron and
+  in a crash outcome — a CPU/memory limit kill has no response status at all)
+  **and** at least 50% of that script's requests in the window.
+- **Crash loop:** at least 5 crash outcomes, including queue, cron and
   other non-fetch invocations that produce no `error.alert` line at all.
 
 Like the per-fingerprint mute, the cooldown arms only when the page is

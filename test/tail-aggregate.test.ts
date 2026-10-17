@@ -44,6 +44,18 @@ const crashTrace = (at = t0, scriptName = "two-web-next") => ({
   logs: [],
 });
 
+// A runtime-killed fetch invocation: no exceptions entry and no response.
+const killedFetchTrace = (outcome: string, at = t0) => ({
+  scriptName: "two-web-next",
+  scriptVersion: { tag: sha },
+  outcome,
+  eventTimestamp: at,
+  event: {
+    request: { method: "GET", url: "https://example.test/private?token=never-send" },
+  },
+  logs: [],
+});
+
 function fixture(nowStart = t0) {
   let now = nowStart;
   const send = vi.fn(async () => new Response(null, { status: 200 }));
@@ -190,6 +202,8 @@ describe("unhandled-exception / crash-loop coverage", () => {
       event: "error.spike",
       crashes: SPIKE_MIN_CRASHES,
       requests: 0,
+      errors: 0,
+      error_rate: 0,
     });
     expect(JSON.stringify(f.contents())).not.toMatch(/never-send|BoomError|private-queue/);
   });
@@ -199,6 +213,38 @@ describe("unhandled-exception / crash-loop coverage", () => {
     await f.worker.tail([crashTrace()], env);
     expect(f.contents()).toEqual([]);
   });
+
+  it.each(["exception", "exceededCpu", "exceededMemory", "scriptNotFound"])(
+    "pages when fetch invocations end with outcome %s and carry no exceptions entry",
+    async (outcome) => {
+      const f = fixture();
+      await f.worker.tail(
+        Array.from({ length: SPIKE_MIN_CRASHES }, () => killedFetchTrace(outcome)),
+        env,
+      );
+      expect(f.contents()).toHaveLength(1);
+      expect(f.contents()[0]).toMatchObject({
+        event: "error.spike",
+        crashes: SPIKE_MIN_CRASHES,
+        errors: SPIKE_MIN_CRASHES,
+        requests: SPIKE_MIN_CRASHES,
+        error_rate: 1,
+      });
+      expect(JSON.stringify(f.contents())).not.toMatch(/never-send|example\.test/);
+    },
+  );
+
+  it.each(["canceled", "responseStreamDisconnected"])(
+    "never pages on the client-disconnect outcome %s",
+    async (outcome) => {
+      const f = fixture();
+      await f.worker.tail(
+        Array.from({ length: SPIKE_MIN_CRASHES * 2 }, () => killedFetchTrace(outcome)),
+        env,
+      );
+      expect(f.contents()).toEqual([]);
+    },
+  );
 });
 
 describe("release tagging on the existing summaries", () => {
@@ -424,6 +470,89 @@ describe("durable aggregator (Durable Object)", () => {
       ),
     ).resolves.toBeUndefined();
     expect(send).toHaveBeenCalledTimes(1);
+  });
+
+  // Observe calls fail over to the per-isolate tracker, but result calls reach
+  // the recovered Durable Object. The local pending marker must still clear,
+  // or a failed delivery could not retry until it ages out.
+  function flappyAggregatorEnv() {
+    return {
+      OPS_ALERT_WEBHOOK_URL: secret,
+      UPTIME_URL: "https://next.togetherweown.com/up",
+      ALERT_AGGREGATOR: {
+        idFromName: () => ({}),
+        get: () => ({
+          fetch: async (url: string) =>
+            url.endsWith("/observe") || url.endsWith("/health")
+              ? new Response(null, { status: 503 })
+              : new Response("{}", { status: 200 }),
+        }),
+      },
+    };
+  }
+
+  it("a recovered spike-result call clears the local pending marker, so a failed delivery retries", async () => {
+    let now = t0;
+    let posts = 0;
+    const send = vi.fn(async () => {
+      posts += 1;
+      return new Response(null, { status: posts === 1 ? 500 : 200 });
+    });
+    const sink = vi.fn();
+    const worker = createTailWorker({
+      fetch: send as unknown as typeof fetch,
+      sink,
+      mute: new DeliveryMute(() => now),
+      tracker: new AggregateTracker(() => now),
+      now: () => now,
+      sleep: async () => {},
+    });
+    const flappy = flappyAggregatorEnv();
+    const burst = (at: number) =>
+      Array.from({ length: SPIKE_MIN_ERRORS }, () => fetchTrace(500, at));
+    await worker.tail(burst(t0), flappy as never);
+    now = t0 + 60_000;
+    await worker.tail(burst(t0 + 60_000), flappy as never);
+    const receipts = sink.mock.calls.map(([line]) => JSON.parse(line as string));
+    expect(receipts).toMatchObject([
+      { event: "error.spike", delivery: "ops.alert.delivery_failed" },
+      { event: "error.spike", delivery: "ops.alert.delivered" },
+    ]);
+  });
+
+  it("a recovered health-result call clears the local pending marker, so a failed delivery retries", async () => {
+    let now = t0;
+    let posts = 0;
+    const send = vi.fn(async (...args: [string, RequestInit?]) => {
+      const [, init] = args;
+      if (init?.method !== "POST") return new Response(null, { status: 503 });
+      posts += 1;
+      return new Response(null, { status: posts === 1 ? 500 : 200 });
+    });
+    const sink = vi.fn();
+    const worker = createTailWorker({
+      fetch: send as unknown as typeof fetch,
+      sink,
+      mute: new DeliveryMute(() => now),
+      tracker: new AggregateTracker(() => now),
+      health: new HealthTracker(() => now),
+      now: () => now,
+      sleep: async () => {},
+    });
+    const flappy = flappyAggregatorEnv();
+    const event = { cron: "* * * * *", scheduledTime: t0, noRetry() {} };
+    await worker.scheduled(event, flappy as never);
+    now += 61_000;
+    await worker.scheduled(event, flappy as never);
+    now += 60_000;
+    await worker.scheduled(event, flappy as never); // 121 s red: page attempt, POST 500.
+    now += 60_000;
+    await worker.scheduled(event, flappy as never);
+    const receipts = sink.mock.calls.map(([line]) => JSON.parse(line as string));
+    expect(receipts).toMatchObject([
+      { event: "uptime.down", delivery: "ops.alert.delivery_failed" },
+      { event: "uptime.down", delivery: "ops.alert.delivered" },
+    ]);
   });
 });
 

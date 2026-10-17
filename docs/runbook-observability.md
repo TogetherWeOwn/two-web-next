@@ -86,8 +86,9 @@ probe, or change production state as part of diagnosis.
 - `error.spike` is the aggregate alarm: the Tail Worker counts every trace
   outcome per script in a Durable Object and pages once (15-minute cooldown)
   when a rolling five-minute window holds at least 5 error responses that are
-  at least half of requests, or at least 5 exception outcomes (crash loops,
-  including invocations that emit no `error.alert` line). On a quiet site the
+  at least half of requests, or at least 5 crash outcomes (`exception`,
+  `exceededCpu`, `exceededMemory`, `scriptNotFound` — crash loops, including
+  invocations that emit no `error.alert` line). On a quiet site the
   count floor dominates; see the
   [aggregate alarm section](runbook-alerts.md#aggregate-spike-alarm-errorspike).
 - `queue.failing` covers terminal queue failures. Retryable failures do not page

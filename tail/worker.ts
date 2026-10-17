@@ -53,6 +53,9 @@ export const APP_SCRIPT_NAMES: ReadonlySet<string> = new Set([
 const UPTIME_TIMEOUT_MS = 10_000;
 const UPTIME_RETRY_DELAY_MS = 10_000;
 const EXPECTED_ORIGIN = "two-web-next";
+// Bound every aggregator call: aggregation runs before per-fingerprint paging
+// in the tail handler, so a stalled Durable Object must not stall that pager.
+const AGGREGATOR_TIMEOUT_MS = 5_000;
 
 export type UptimeAlert = {
   event: "uptime.down";
@@ -355,7 +358,7 @@ export class AggregateTracker {
       requests,
       errors,
       crashes,
-      error_rate: requests > 0 ? Math.round((errors / requests) * 1000) / 1000 : 1,
+      error_rate: requests > 0 ? Math.round((errors / requests) * 1000) / 1000 : 0,
       timestamp: date.toISOString(),
     });
   }
@@ -429,11 +432,23 @@ function isFetchTrace(event: unknown): event is TraceItemFetchEventInfo {
 type TraceLike = Pick<TraceItem, "scriptName" | "logs"> &
   Partial<Pick<TraceItem, "scriptVersion" | "outcome" | "exceptions" | "event" | "eventTimestamp">>;
 
+// Tail outcomes that mean the invocation died before it could log an alert
+// line: an unhandled exception, a CPU/memory limit kill (error 1102 to the
+// client, no response), or a missing script. The client-disconnect outcomes
+// ("canceled", "responseStreamDisconnected") are deliberately not crashes.
+// https://developers.cloudflare.com/workers/runtime-apis/handlers/tail/
+const CRASH_OUTCOMES: ReadonlySet<string> = new Set([
+  "exception",
+  "exceededCpu",
+  "exceededMemory",
+  "scriptNotFound",
+]);
+
 /** Count one trace without ever reading its request URL, headers or exception text. */
 function batchForTrace(trace: TraceLike, fallbackAt: number): TraceBatch | null {
   if (!trace.scriptName || !APP_SCRIPT_NAMES.has(trace.scriptName)) return null;
   const crashes =
-    trace.outcome === "exception" ||
+    (typeof trace.outcome === "string" && CRASH_OUTCOMES.has(trace.outcome)) ||
     (Array.isArray(trace.exceptions) && trace.exceptions.length > 0)
       ? 1
       : 0;
@@ -669,6 +684,7 @@ export function createTailWorker(
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify(batch),
+        signal: AbortSignal.timeout(AGGREGATOR_TIMEOUT_MS),
       });
       if (!response.ok) return tracker.observe(batch);
       return (await response.json()) as SpikeAlert | null;
@@ -683,30 +699,35 @@ export function createTailWorker(
     const stub = aggregator(env);
     if (!stub) return tracker.resolve(script, delivered);
     try {
-      const response = await stub.fetch("https://aggregator.invalid/spike-result", {
+      await stub.fetch("https://aggregator.invalid/spike-result", {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ script, delivered }),
+        signal: AbortSignal.timeout(AGGREGATOR_TIMEOUT_MS),
       });
-      if (!response.ok) tracker.resolve(script, delivered);
     } catch {
-      tracker.resolve(script, delivered);
+      /* The local resolve below still runs. */
     }
+    // Resolve locally too, whatever the aggregator answered: the observation
+    // may have fallen back to this tracker while the result call recovered,
+    // and a leftover local pending would suppress a failed delivery's retry.
+    tracker.resolve(script, delivered);
   }
 
   async function resolveHealth(env: TailEnv, delivered: boolean): Promise<void> {
     const stub = aggregator(env);
     if (!stub) return health.resolve(delivered);
     try {
-      const response = await stub.fetch("https://aggregator.invalid/health-result", {
+      await stub.fetch("https://aggregator.invalid/health-result", {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ delivered }),
+        signal: AbortSignal.timeout(AGGREGATOR_TIMEOUT_MS),
       });
-      if (!response.ok) health.resolve(delivered);
     } catch {
-      health.resolve(delivered);
+      /* The local resolve below still runs. */
     }
+    health.resolve(delivered);
   }
 
   async function observeHealth(env: TailEnv, ok: boolean, at: number): Promise<number | null> {
@@ -717,6 +738,7 @@ export function createTailWorker(
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ ok, at }),
+        signal: AbortSignal.timeout(AGGREGATOR_TIMEOUT_MS),
       });
       if (!response.ok) return health.observe(ok, at);
       const result = (await response.json()) as { downMs?: unknown } | null;
