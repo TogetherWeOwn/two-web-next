@@ -6,8 +6,10 @@
 // bearer, and makes exactly one store.get per request — one decision per
 // request, shared with Kit loads through locals (createRequestSessionCache
 // shares one decision across concurrent readers of the same Request where
-// several readers are wired). It never rotates, revokes, issues,
-// or sets cookies: rotation stays route-specific inside Hono's readSession
+// several readers are wired). The bridge never rotates, revokes, or issues
+// a session; the one cookie this module writes is the signed auth-status
+// probe below, attached by the hook only to successful moderator admin
+// documents. Rotation stays route-specific inside Hono's readSession
 // (no blanket rotating layout load; fragments and JSON keep nonrotating
 // reads), logout stays the authoritative Hono POST /logout, and flashes stay
 // Hono-consumed until a Kit route needs to consume them.
@@ -269,7 +271,10 @@ export function kitAuthStatusCookieFor(env: Env): (event: HookEventLike) => Prom
       if (typeof token !== "string" || !token.startsWith("two_")) return null;
       const store = await storeForEnv(env);
       const key = await store.statusHash(await hashToken(token));
-      if (!key) return null;
+      // Assert the 64-hex shape before signing (the recorded cookie-write
+      // boundary): a value outside the shape the read path accepts
+      // (src/auth-status.ts) must never be signed into a probe cookie.
+      if (!key || !/^[a-f0-9]{64}$/.test(key)) return null;
       return generateSignedCookie(AUTH_STATUS_COOKIE, key, env.SESSION_SECRET, AUTH_STATUS_OPTIONS);
     } catch {
       // A probe-store outage must not fail the already-authorized page render.
