@@ -425,6 +425,92 @@ describe("durable aggregator (Durable Object)", () => {
   });
 });
 
+describe("delivery-failure and boundary semantics", () => {
+  function failingFirstFixture() {
+    let now = t0;
+    let posts = 0;
+    const send = vi.fn(async (...args: [string, RequestInit?]) => {
+      const [, init] = args;
+      if (init?.method !== "POST") return new Response(null, { status: 503 });
+      posts += 1;
+      return new Response(null, { status: posts === 1 ? 500 : 200 });
+    });
+    const sink = vi.fn();
+    const worker = createTailWorker({
+      fetch: send as unknown as typeof fetch,
+      sink,
+      mute: new DeliveryMute(() => now),
+      tracker: new AggregateTracker(() => now),
+      now: () => now,
+      sleep: async () => {},
+    });
+    const receipts = () => sink.mock.calls.map(([line]) => JSON.parse(line as string));
+    return {
+      worker,
+      receipts,
+      advance: (ms: number) => {
+        now += ms;
+      },
+    };
+  }
+
+  it("a failed spike delivery does not consume the cooldown: the next burst retries", async () => {
+    const f = failingFirstFixture();
+    const burst = (at: number) =>
+      Array.from({ length: SPIKE_MIN_ERRORS }, () => fetchTrace(500, at));
+    await f.worker.tail(burst(t0), env);
+    expect(f.receipts()).toMatchObject([
+      { event: "error.spike", delivery: "ops.alert.delivery_failed" },
+    ]);
+    await f.worker.tail(burst(t0 + 60_000), env);
+    expect(f.receipts()[1]).toMatchObject({
+      event: "error.spike",
+      delivery: "ops.alert.delivered",
+    });
+  });
+
+  it("a failed uptime delivery re-pages on the next red run instead of waiting out the cooldown", async () => {
+    const f = failingFirstFixture();
+    const upEnv = {
+      OPS_ALERT_WEBHOOK_URL: secret,
+      UPTIME_URL: "https://next.togetherweown.com/up",
+    };
+    const event = { cron: "* * * * *", scheduledTime: t0, noRetry() {} };
+    await f.worker.scheduled(event, upEnv);
+    f.advance(61_000);
+    await f.worker.scheduled(event, upEnv);
+    f.advance(60_000);
+    await f.worker.scheduled(event, upEnv); // 121 s red: page attempt, POST 500.
+    expect(f.receipts()).toMatchObject([
+      { event: "uptime.down", delivery: "ops.alert.delivery_failed" },
+    ]);
+    f.advance(60_000);
+    await f.worker.scheduled(event, upEnv);
+    expect(f.receipts()[1]).toMatchObject({
+      event: "uptime.down",
+      delivery: "ops.alert.delivered",
+    });
+  });
+
+  it("exactly two minutes red does not page yet (the gate is over, not at)", async () => {
+    const f = failingFirstFixture();
+    const upEnv = {
+      OPS_ALERT_WEBHOOK_URL: secret,
+      UPTIME_URL: "https://next.togetherweown.com/up",
+    };
+    const event = { cron: "* * * * *", scheduledTime: t0, noRetry() {} };
+    await f.worker.scheduled(event, upEnv);
+    f.advance(60_000);
+    await f.worker.scheduled(event, upEnv);
+    f.advance(60_000); // Exactly 120 s red.
+    await f.worker.scheduled(event, upEnv);
+    expect(f.receipts()).toEqual([]);
+    f.advance(1_000);
+    await f.worker.scheduled(event, upEnv);
+    expect(f.receipts()[0]).toMatchObject({ event: "uptime.down", down_seconds: 121 });
+  });
+});
+
 describe("tail wrangler wiring for the aggregate alarm", () => {
   const tail = readWranglerConfig(readFileSync("tail/wrangler.jsonc", "utf8")) as Record<
     string,

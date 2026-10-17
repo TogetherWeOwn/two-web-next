@@ -242,7 +242,16 @@ export async function parseAlert(
 }
 
 type Bucket = { at: number; requests: number; errors: number; crashes: number };
-type ScriptState = { buckets: Bucket[]; cooldownUntil: number; buildSha?: string };
+type ScriptState = {
+  buckets: Bucket[];
+  cooldownUntil: number;
+  // A page attempt is outstanding: set by observe, cleared by resolve. The
+  // cooldown arms only when resolve reports a delivered page, mirroring the
+  // per-fingerprint mute; an unresolved attempt stops blocking after one
+  // cooldown so a crashed delivery cannot mute the alarm forever.
+  pendingAt?: number;
+  buildSha?: string;
+};
 
 function orderSpike(alert: SpikeAlert): SpikeAlert {
   // Fixed field order keeps Discord summaries and receipts diff-stable.
@@ -291,6 +300,7 @@ export class AggregateTracker {
       this.scripts.set(script, {
         buckets: buckets.slice(-MAX_BUCKETS),
         cooldownUntil: Number.isSafeInteger(state.cooldownUntil) ? state.cooldownUntil! : 0,
+        pendingAt: Number.isSafeInteger(state.pendingAt) ? state.pendingAt : undefined,
         buildSha: shaFromVersionTag(state.buildSha),
       });
     }
@@ -332,9 +342,10 @@ export class AggregateTracker {
       errors >= SPIKE_MIN_ERRORS && requests > 0 && errors / requests >= SPIKE_MIN_RATE;
     const crashGate = crashes >= SPIKE_MIN_CRASHES;
     if (!rateGate && !crashGate) return null;
-    state.cooldownUntil = at + SPIKE_COOLDOWN_MS;
+    if (state.pendingAt !== undefined && at - state.pendingAt < SPIKE_COOLDOWN_MS) return null;
     const date = new Date(at);
     if (!Number.isFinite(date.getTime())) return null;
+    state.pendingAt = at;
     return orderSpike({
       event: "error.spike",
       script: batch.script,
@@ -348,38 +359,63 @@ export class AggregateTracker {
       timestamp: date.toISOString(),
     });
   }
+
+  /** Arm the cooldown only for a delivered page; a failed POST may retry on the next batch. */
+  resolve(script: string, delivered: boolean): void {
+    const state = this.scripts.get(script);
+    if (!state || state.pendingAt === undefined) return;
+    if (delivered) state.cooldownUntil = state.pendingAt + SPIKE_COOLDOWN_MS;
+    state.pendingAt = undefined;
+  }
 }
 
 /** Continuous-red health window: pages only after HEALTH_DOWN_MS, then cools down. */
 export class HealthTracker {
   private downSince: number | null = null;
   private cooldownUntil = 0;
+  private pendingAt: number | null = null;
   constructor(private readonly now: () => number = Date.now) {}
 
-  snapshot(): { downSince: number | null; cooldownUntil: number } {
-    return { downSince: this.downSince, cooldownUntil: this.cooldownUntil };
+  snapshot(): { downSince: number | null; cooldownUntil: number; pendingAt: number | null } {
+    return {
+      downSince: this.downSince,
+      cooldownUntil: this.cooldownUntil,
+      pendingAt: this.pendingAt,
+    };
   }
 
   restore(value: unknown): void {
     if (!value || typeof value !== "object" || Array.isArray(value)) return;
-    const state = value as { downSince?: unknown; cooldownUntil?: unknown };
+    const state = value as { downSince?: unknown; cooldownUntil?: unknown; pendingAt?: unknown };
     this.downSince = Number.isSafeInteger(state.downSince) ? (state.downSince as number) : null;
     this.cooldownUntil = Number.isSafeInteger(state.cooldownUntil)
       ? (state.cooldownUntil as number)
       : 0;
+    this.pendingAt = Number.isSafeInteger(state.pendingAt) ? (state.pendingAt as number) : null;
   }
 
   /** Returns how long health has been red when a page is due, else null. */
   observe(ok: boolean, at = this.now()): number | null {
     if (ok) {
       this.downSince = null;
+      this.pendingAt = null;
       return null;
     }
     if (this.downSince === null) this.downSince = at;
+    if (this.pendingAt !== null) return null; // A page attempt is awaiting its result.
     const downMs = at - this.downSince;
-    if (downMs < HEALTH_DOWN_MS || at < this.cooldownUntil) return null;
-    this.cooldownUntil = at + HEALTH_COOLDOWN_MS;
+    // Strictly over two minutes: exactly HEALTH_DOWN_MS red does not page yet.
+    if (downMs <= HEALTH_DOWN_MS || at < this.cooldownUntil) return null;
+    this.pendingAt = at;
     return downMs;
+  }
+
+  /** Arm the cooldown only for a delivered page; a failed POST re-pages next run. */
+  resolve(delivered: boolean): void {
+    if (delivered && this.pendingAt !== null) {
+      this.cooldownUntil = this.pendingAt + HEALTH_COOLDOWN_MS;
+    }
+    this.pendingAt = null;
   }
 }
 
@@ -464,7 +500,10 @@ export class AlertAggregator {
 
   async fetch(request: Request): Promise<Response> {
     const { pathname } = new URL(request.url);
-    if (request.method !== "POST" || (pathname !== "/observe" && pathname !== "/health")) {
+    if (
+      request.method !== "POST" ||
+      !["/observe", "/health", "/spike-result", "/health-result"].includes(pathname)
+    ) {
       return new Response(null, { status: 404 });
     }
     let body: unknown;
@@ -480,6 +519,28 @@ export class AlertAggregator {
       const alert = this.tracker.observe(batch);
       await this.state.storage.put("scripts", this.tracker.snapshot());
       return Response.json(alert);
+    }
+    if (pathname === "/spike-result") {
+      const result = body as { script?: unknown; delivered?: unknown };
+      if (
+        typeof result?.script !== "string" ||
+        !APP_SCRIPT_NAMES.has(result.script) ||
+        typeof result.delivered !== "boolean"
+      ) {
+        return new Response(null, { status: 400 });
+      }
+      this.tracker.resolve(result.script, result.delivered);
+      await this.state.storage.put("scripts", this.tracker.snapshot());
+      return Response.json(null);
+    }
+    if (pathname === "/health-result") {
+      const result = body as { delivered?: unknown };
+      if (typeof result?.delivered !== "boolean") {
+        return new Response(null, { status: 400 });
+      }
+      this.health.resolve(result.delivered);
+      await this.state.storage.put("health", this.health.snapshot());
+      return Response.json(null);
     }
     const probe = body as { ok?: unknown; at?: unknown };
     if (typeof probe?.ok !== "boolean" || !Number.isSafeInteger(probe.at)) {
@@ -615,6 +676,34 @@ export function createTailWorker(
     }
   }
 
+  async function resolveSpike(env: TailEnv, script: string, delivered: boolean): Promise<void> {
+    const stub = aggregator(env);
+    if (!stub) return tracker.resolve(script, delivered);
+    try {
+      await stub.fetch("https://aggregator.invalid/spike-result", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ script, delivered }),
+      });
+    } catch {
+      tracker.resolve(script, delivered);
+    }
+  }
+
+  async function resolveHealth(env: TailEnv, delivered: boolean): Promise<void> {
+    const stub = aggregator(env);
+    if (!stub) return health.resolve(delivered);
+    try {
+      await stub.fetch("https://aggregator.invalid/health-result", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ delivered }),
+      });
+    } catch {
+      health.resolve(delivered);
+    }
+  }
+
   async function observeHealth(env: TailEnv, ok: boolean, at: number): Promise<number | null> {
     const stub = aggregator(env);
     if (!stub) return health.observe(ok, at);
@@ -673,6 +762,7 @@ export function createTailWorker(
         const spike = await observeBatch(env, batch);
         if (!spike) continue;
         const delivered = await deliver(url, spike);
+        await resolveSpike(env, spike.script, delivered);
         sink(
           JSON.stringify({
             ...spike,
@@ -741,6 +831,7 @@ export function createTailWorker(
         timestamp: new Date(at).toISOString(),
       };
       const delivered = await deliver(url, alert);
+      await resolveHealth(env, delivered);
       sink(
         JSON.stringify({
           ...alert,

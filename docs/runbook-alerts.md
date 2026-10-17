@@ -138,6 +138,10 @@ either gate crosses, then a 15-minute cooldown applies:
 - **Crash loop:** at least 5 exception outcomes, including queue, cron and
   other non-fetch invocations that produce no `error.alert` line at all.
 
+Like the per-fingerprint mute, the cooldown arms only when the page is
+actually delivered; a failed Discord POST leaves the alarm ready to retry on
+the next batch.
+
 The summary is allowlisted like the other events: `event`, `script`, optional
 `build_sha` (same version-tag rule as above), the fixed `logs` dashboard path,
 `window_seconds`, `requests`, `errors`, `crashes`, `error_rate` and
@@ -155,8 +159,9 @@ from its own `/up` prober when `UPTIME_URL` and a valid webhook are configured.
 The cron runs every minute; each run probes once and retries a failure after
 ten seconds, with a ten-second timeout per attempt. A run is red only if
 **both attempts fail**, and the page fires only when health has stayed red
-across runs for **over two minutes**; a healthy run clears the window, and a
-15-minute cooldown follows a page. The red window lives in the same
+across runs for **over two minutes** (exactly two minutes is not enough); a
+healthy run clears the window, and a 15-minute cooldown follows a delivered
+page (a failed POST re-pages on the next red run). The red window lives in the same
 `AlertAggregator` Durable Object (per-isolate fallback without the binding).
 Healthy means HTTP 200 with `x-two-origin: two-web-next`, not merely a
 reachable endpoint.
