@@ -31,6 +31,8 @@ Operations (deploy/rollback, `/up`, queues, outages and restore drills):
 
 - [Moderator admin guide](docs/moderator-admin-guide.md): Next admin routes,
   event and featured-content workflows, dashboard diagnostics, and safe escalation.
+- [Monthly event-planning cadence](docs/event-planning-cadence.md): rolling
+  four-week planning, cancellation/reschedule handling, and cycle completion.
 - [Weekly event retrospective template](docs/event-retrospective-template.md):
   qualitative event learning, separate from attendance and activity counts.
 - [Troubleshooting join and Discord sign-in](docs/troubleshooting-join.md):
