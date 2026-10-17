@@ -63,8 +63,9 @@ Not an incident entry: [Final import and reconcile](#final-import-and-reconcile)
 [Secret rotation pointer (procedure only)](#secret-rotation-pointer-procedure-only)
 (no rotation here) and
 [Quarterly moderator access review](#quarterly-moderator-access-review)
-(scheduled quarterly review, not incident response) are not incident entries;
-read those sections directly when that work is authorized.
+(scheduled quarterly review, not incident response) and
+[security.txt expiry review and renewal](#securitytxt-expiry-review-and-renewal)
+are not incident entries; read those sections directly when that work is authorized.
 
 ## Safety and escalation
 
@@ -179,6 +180,85 @@ node --import ./bin/ts-hook.mjs bin/revoke-sessions.mjs --discord-id=<snowflake>
      `DATABASE_URL` is supplied through the environment only, as in the procedure above.
   4. Re-run the audit until `app-only` is 0 before closing the review. `discord-only` does not block close: the app set sees live sessions only (120-minute sliding TTL), so it includes every moderator not signed in at audit time. When a moderator is unavailable, record the `discord-only` count and close on `app-only` = 0. A clean audit is one receipt, not permission to change cadence or scope.
 - Evidence of completion: a dated review record with the review date (UTC), the reviewer/operator, the audit counts (`discord`, `app`, `discord-only`, `app-only`), the revoke dry-run/apply counts, and confirmation that Discord role removal was verified before revocation. Record counts only; keep member identifiers, ID-file contents, database URLs, tokens, and secrets out of docs, logs, and the record. The command output is counts with bounded ID lists; do not paste the lists into the record.
+
+## security.txt expiry review and renewal
+
+**Owner:** the CISO owns the disclosure-channel review and its dated renewal
+record; a repository maintainer implements the expiry-only PR, and the authorized
+release operator owns deployment and publication evidence. This is maintenance of
+`/.well-known/security.txt`, not permission to change reporting channels.
+[RFC 9116 §5.3](https://www.rfc-editor.org/rfc/rfc9116.html#section-5.3) warns that
+stale contacts can lose reports or send vulnerabilities to third parties.
+
+**Trigger:** start the review **at least 90 days before** `SECURITY_TXT_EXPIRES`.
+The current pin is `2027-10-01T00:00:00Z`, so the latest review start is
+**`2027-07-03T00:00:00Z`** (90 × 24 hours earlier). The CISO keeps a dated reminder
+for that deadline and replaces it after every renewal; this procedure does not
+install an automated reminder. Review immediately if a listed destination stops
+working or its ownership changes, or if the deadline has already passed. The
+real-clock expiry test is a last-resort failure at expiry, not a 90-day warning.
+
+1. Read [`src/security-txt.ts`](../src/security-txt.ts), the independent
+   `PINNED_EXPIRES` in [`test/security-txt.test.ts`](../test/security-txt.test.ts),
+   and [SECURITY.md](../SECURITY.md). Confirm with an authorized repository
+   maintainer that private vulnerability reporting remains enabled and monitored,
+   and that the existing `Contact` and `Policy` URLs are accessible, controlled by
+   the organization, and still match the policy. View Security → Report a
+   vulnerability while signed in; do not submit a dummy report. Keep vulnerability
+   details, credentials and member data out of the renewal record.
+2. Record the review date, reviewer, channel checks and proposed new expiry.
+   **Any Contact or Policy URL change needs a separate, recorded CISO decision
+   before implementation; it must not ride along in the expiry-only PR.** An
+   unavailable or unverified reporting channel blocks routine renewal; escalate
+   it to the CISO rather than extending the date to hide stale contact data.
+3. Choose a fixed RFC 3339 UTC timestamp (`YYYY-MM-DDTHH:mm:ssZ`, no fractional
+   seconds) in the future, later than the current pin and less than one year
+   after the review, allowing time to deploy before the old expiry. [RFC 9116 §2.5.5](https://www.rfc-editor.org/rfc/rfc9116.html#section-2.5.5)
+   recommends a horizon shorter than a year. Update `SECURITY_TXT_EXPIRES` and
+   `PINNED_EXPIRES` together; retain the real-clock future/less-than-one-year
+   assertions and fixed-date behavior. Never replace the pin with a rolling clock
+   or disable the test to clear an expired date. Update the current pin and
+   90-day trigger above in the same PR. Leave contacts, policy URL, route and
+   headers unchanged.
+4. Follow [the PR contract](../CONTRIBUTING.md). Run the fixture-only test and
+   link check below; record the results and verify the two dates above against
+   the source pin and `expiry - 90 × 24 hours` in UTC. Required checks under that
+   contract and independent Paperclip Review 5/5 must pass on the exact head
+   before the existing merge automation proceeds. No database is needed:
+
+   ```sh
+   env -u DATABASE_URL -u CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_DB npx --no-install vitest run test/security-txt.test.ts
+   npm run docs:links
+   ```
+5. Use the existing [release flow](releases.md) and
+   [deployment procedure](#deploy-and-record-the-rollback-pointer), preserving
+   the approved artifact, staging evidence, production gates and rollback pointer.
+   A merged PR alone does not renew the published file. After staging deployment,
+   then after the authorized production promotion, fetch the public file for the
+   corresponding target (read-only publication checks, not database tests):
+
+   ```sh
+   # After staging deployment only:
+   curl --fail --silent --show-error --max-time 10 --dump-header - https://next.togetherweown.com/.well-known/security.txt
+   # After authorized production promotion only:
+   curl --fail --silent --show-error --max-time 10 --dump-header - https://togetherweown.com/.well-known/security.txt
+   ```
+
+   Inspect the printed status line, headers and body; curl exit 0 alone is not
+   acceptance. Require HTTP 200 without redirect, `Content-Type: text/plain; charset=utf-8`,
+   exactly one `Expires` equal to the reviewed pin and still in the future, the
+   unchanged approved `Contact` and `Policy`, and `Canonical` matching that
+   target's HTTPS URL. Keep `Cache-Control: public, max-age=3600`; a cached old
+   response can persist for up to an hour. Recheck after that window rather than
+   weakening cache/header behavior or declaring success from source alone.
+6. Close the renewal record only with the PR/merged SHA, deployment workflow and
+   Worker version evidence (release/deployment metadata, not production `/up`),
+   UTC fetch times, observed `Expires` for both targets, and the next review
+   deadline/reminder. If publication still differs or expiry
+   is reached, keep the renewal open and route deployment failures to the release
+   operator and stale disclosure data to the CISO. Do not bypass failed gates or
+   silently extend an unreviewed file. Use the existing rollback procedure if
+   needed, but an expired rollback version is not a successful renewal.
 
 ## Deploy and record the rollback pointer
 
