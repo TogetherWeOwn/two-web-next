@@ -33,6 +33,38 @@ test("budget covers at least the member-RSVP and moderator-admin journeys", () =
   }
 });
 
+test("ceilings never relax above their shipped values (tightening stays green)", () => {
+  const budget = JSON.parse(
+    readFileSync(new URL("./auth-perf-budget.json", import.meta.url), "utf8"),
+  );
+  // Shipped M4.4 ceilings (ci/auth-perf-budget.json): a 10x bump must go red,
+  // a decrease (planned tightening) must stay green, so pin an upper bound,
+  // not an exact value. Threshold changes need their own reviewed PR and must
+  // never relax a ceiling to make CI green.
+  const SHIPPED = {
+    "member-rsvp": { maxMedianMs: 1500, maxSingleMs: 3000 },
+    "moderator-admin": { maxMedianMs: 1500, maxSingleMs: 3000 },
+  };
+  for (const [id, shipped] of Object.entries(SHIPPED)) {
+    const entry = budget.journeys[id];
+    assert.ok(entry, `${id} must be budgeted`);
+    assert.ok(
+      entry.maxMedianMs <= shipped.maxMedianMs,
+      `${id} maxMedianMs ${entry.maxMedianMs} exceeds shipped ${shipped.maxMedianMs}: threshold changes need their own reviewed PR, never relax a ceiling to make CI green`,
+    );
+    assert.ok(
+      entry.maxSingleMs <= shipped.maxSingleMs,
+      `${id} maxSingleMs ${entry.maxSingleMs} exceeds shipped ${shipped.maxSingleMs}: threshold changes need their own reviewed PR, never relax a ceiling to make CI green`,
+    );
+  }
+});
+
+test("threshold-change policy stays documented, not weakened", () => {
+  const doc = readFileSync(new URL("../docs/performance-budgets.md", import.meta.url), "utf8");
+  assert.match(doc, /Never relax these ceilings to turn a build green/);
+  assert.match(doc, /threshold changes need\s+their own reviewed PR/i);
+});
+
 test("live run without an origin fails closed, never green", () => {
   const result = spawnSync(process.execPath, [scriptPath], {
     encoding: "utf8",
