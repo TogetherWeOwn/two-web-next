@@ -20,6 +20,7 @@ import { PUBLIC_DATA_BOUNDS, PUBLIC_EVENT_STATUS } from "../public-data/contract
 import { events, rsvps } from "../db/admin-schema";
 import { users } from "../db/schema";
 import { keyedMemberRead, nonSensitiveRead } from "../member-reads";
+import { safeRequestId } from "../request-log";
 import {
   calendarGridRange,
   dedupeTransients,
@@ -353,6 +354,17 @@ export interface HomeUpcomingMerged {
   discordFailed: boolean;
 }
 
+/** Bounded exception class plus the validated request_id, so a fallback line joins to its request log; never driver text, SQL or identities. */
+function warnHomeFallback(err: unknown, requestId?: string): void {
+  console.warn("Home events unavailable; serving the fallback.", {
+    request_id: safeRequestId(requestId),
+    exception:
+      err instanceof Error && err.message === "HomeEventsDeadline"
+        ? "HomeEventsDeadline"
+        : "ReadFailure",
+  });
+}
+
 /**
  * Source-aware homepage read: canonical teaser rows plus eligible Discord
  * snapshot transients, deduplicated with hidden-event suppression. Reuses the
@@ -364,6 +376,7 @@ export async function loadHomeUpcomingMerged(
   openDb: () => Promise<Db | null>,
   getDiscordSource: () => DiscordEventsSource,
   now = new Date(),
+  requestId?: string,
 ): Promise<HomeUpcomingMerged> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   const read: Promise<HomeUpcomingMerged> = (async () => {
@@ -409,12 +422,7 @@ export async function loadHomeUpcomingMerged(
   try {
     return await Promise.race([read, deadline]);
   } catch (err) {
-    console.warn("Home events unavailable; serving the fallback.", {
-      exception:
-        err instanceof Error && err.message === "HomeEventsDeadline"
-          ? "HomeEventsDeadline"
-          : "ReadFailure",
-    });
+    warnHomeFallback(err, requestId);
     return { items: [], unavailable: true, discordFailed: false };
   } finally {
     clearTimeout(timer);
@@ -424,6 +432,7 @@ export async function loadHomeUpcomingMerged(
 /** Bound connection setup as well as both optional reads; never log driver messages/SQL/identities. */
 export async function loadHomeUpcoming(
   openDb: () => Promise<Db | null>,
+  requestId?: string,
 ): Promise<HomeEvent[] | null> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   const read = Promise.resolve()
@@ -435,12 +444,7 @@ export async function loadHomeUpcoming(
   try {
     return await Promise.race([read, deadline]);
   } catch (err) {
-    console.warn("Home events unavailable; serving the fallback.", {
-      exception:
-        err instanceof Error && err.message === "HomeEventsDeadline"
-          ? "HomeEventsDeadline"
-          : "ReadFailure",
-    });
+    warnHomeFallback(err, requestId);
     return null;
   } finally {
     clearTimeout(timer);
