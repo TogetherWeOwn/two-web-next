@@ -777,4 +777,34 @@ describe("kitAuthStatusCookieFor (moderator admin documents only)", () => {
     expect(await writeCookie(event)).toBeNull();
     expect(statusHash).toHaveBeenCalledTimes(1);
   });
+
+  it("refuses to sign a probe value that is not a 64-hex status hash", async () => {
+    const store = createMemorySessionStore();
+    const { token } = await seedSession(store, { moderator: true });
+    const request = requestWith([await pair(SESSION_COOKIE, token)], "GET", "/admin");
+    const event: HookEventLike = {
+      request,
+      url: new URL(request.url),
+      route: { id: "/admin" },
+      locals: {
+        status: "authenticated",
+        session: { userId: "42", username: "Rick", avatar: null, member: true, moderator: true },
+        returnTo: null,
+        joinResult: null,
+        expiredWrite: null,
+      },
+    };
+    const writeCookie = kitAuthStatusCookieFor({
+      SESSION_SECRET: SECRET,
+      SESSION_STORE: store,
+    } as unknown as Env);
+    // The recorded cookie-write boundary: the writer asserts the 64-hex
+    // shape before signing, so a bearer, short value, or uppercase hash a
+    // broken store might return is never signed into a probe cookie (the
+    // read path accepts only lowercase 64-hex, src/auth-status.ts).
+    for (const bad of [token, "abc123", "A".repeat(64), "g".repeat(64), `${"a".repeat(63)} `]) {
+      vi.spyOn(store, "statusHash").mockResolvedValueOnce(bad);
+      expect(await writeCookie(event)).toBeNull();
+    }
+  });
 });
