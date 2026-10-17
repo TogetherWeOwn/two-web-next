@@ -15,11 +15,18 @@ CI runs two independent jobs in `.github/workflows/ci.yml`:
   assertion results (also on failure) are uploaded as the `lighthouse-<sha>` GitHub
   artifact for 14 days in the repository artifact store, not a public LHCI server.
 
-The required `check` job depends on **both** performance jobs and runs with
-`if: ${{ !cancelled() }}`: whatever they concluded, unless its own run was
-cancelled (then it concludes cancelled, which still blocks a merge). Its first
-gate explicitly rejects failed, cancelled, skipped or missing results; a skipped
-required check alone is not a safe merge gate.
+The required `ci-ok` job is the result gate; the standalone `check` job depends
+only on `scope` and runs alongside the audit and performance jobs. `ci-ok`
+aggregates `scope`, `check`, `docs-links` and the selected audit/performance
+results. For an in-scope, non-draft run, both `lighthouse` and `bundle-budget`
+must succeed. A failed or cancelled selected job, an unexpected skip, a failed
+`scope`/`check`/`docs-links` result, or an invalid scope verdict fails `ci-ok`.
+A skipped audit or performance job passes only when `scope` marks it out of
+scope or the PR is a draft. `ci-ok` runs unless the workflow is cancelled; a
+cancelled run must be followed by a run with a successful `ci-ok` result before
+merge. Since GitHub can treat a skipped required check as mergeable, `ci-ok`
+validates the selected job results and scope verdict instead of relying on check
+skips to enforce the gate.
 `test/performance-ci.test.ts` sends synthetic over-budget LCP/CLS reports through
 the real LHCI assertion command, proves its nonzero exit fails this gate, and pins
 the workflow wiring. `npm run gate:selftest` covers result-state handling offline.
