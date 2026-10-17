@@ -1173,3 +1173,20 @@ test("each gradual stage also judges the new version's live error rate before ro
     assert.ok(!block.includes("continue-on-error"), `gate ${pct} must not swallow its failure`);
   }
 });
+
+test("the staging rehearsal requires the elevated-rate verdict, not any non-zero exit", () => {
+  const rehearsal = readFileSync(
+    new URL("../.github/workflows/error-rate-gate-rehearsal.yml", import.meta.url),
+    "utf8",
+  );
+  // Manual-only staging proof; it must never gain an automatic trigger.
+  assert.match(rehearsal, /on:\n  workflow_dispatch:\n/);
+  // The simulated half counts as a halt only when the gate judged the
+  // fixture's exact elevated sample (200 requests, 80 errors): a malformed
+  // fixture also exits non-zero, with verdict=error, and must not read as
+  // a successful rehearsal.
+  assert.ok(
+    rehearsal.includes('grep -F "error-rate requests=200 errors=80 rate=0.4000 verdict=fail"'),
+    "rehearsal must require the elevated-rate fail verdict line",
+  );
+});

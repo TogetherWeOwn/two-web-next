@@ -9,9 +9,10 @@ name: error-rate-gate-rehearsal
 #      answers on the real staging signal (pass or insufficient).
 #   2. SIMULATED: run the same gate code over a fixture envelope with
 #      an elevated error rate for that same version. The job requires
-#      the gate to refuse (non-zero): in the promotion action that
-#      refusal is a failed stage, and the existing rollback steps
-#      restore the pre-promote version.
+#      the gate to judge that exact sample verdict=fail (any other
+#      non-zero exit, e.g. verdict=error, does not count): in the
+#      promotion action that refusal is a failed stage, and the
+#      existing rollback steps restore the pre-promote version.
 # No deploys, no version changes, production untouched.
 
 on:
@@ -65,8 +66,16 @@ jobs:
           node -e 'const fs=require("node:fs");fs.writeFileSync("error-rate-fixture.json",JSON.stringify({data:{viewer:{accounts:[{workersInvocationsAdaptive:[{sum:{requests:200,errors:80},dimensions:{scriptVersion:process.env.SIM_VERSION}}]}]}},errors:null}))'
           if ERROR_RATE_FIXTURE=error-rate-fixture.json ERROR_RATE_SOAK_SECONDS=0 ERROR_RATE_ATTEMPTS=1 \
               WORKER_NAME=two-web-next NEW_VERSION="$SIM_VERSION" \
-              node ".github/actions/gradual-promote/error-rate-gate.mjs"; then
+              node ".github/actions/gradual-promote/error-rate-gate.mjs" > gate-output.txt 2>&1; then
+            cat gate-output.txt
             echo "::error::simulated elevated error rate did not halt the gate"
+            exit 1
+          fi
+          cat gate-output.txt
+          # A malformed fixture also exits non-zero (verdict=error); only the
+          # judged elevated sample proves the threshold decision halts.
+          if ! grep -F "error-rate requests=200 errors=80 rate=0.4000 verdict=fail" gate-output.txt > /dev/null; then
+            echo "::error::gate halted without judging the simulated elevated rate"
             exit 1
           fi
           echo "simulated elevated error rate halted the gate as required"
