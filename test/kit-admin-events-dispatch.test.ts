@@ -124,16 +124,42 @@ describe("Kit admin events-list dispatch: privileged boundary releases and routi
     expect(res.headers.get(KIT_RENDERER_HEADER)).toBeNull();
   });
 
-  it("POST /admin/events is not a Kit route, so creates keep one Hono authority", async () => {
-    const request = new Request(`${APP_URL}/admin/events`, {
-      method: "POST",
-      headers: { host: "next.example.test" },
-    });
-    const res = await dispatchHookRequest(
-      { request, url: new URL(request.url), route: { id: "/admin/events" } },
-      depsFor(),
+  it("event writes stay Hono-owned when the matching Kit GET routes are enabled", async () => {
+    const enabledEventsManifest = ROUTE_MANIFEST.map((entry) =>
+      entry.method === "GET" && entry.path.startsWith("/admin/events")
+        ? { ...entry, enabled: true }
+        : entry,
     );
-    expect(await res.text()).toBe("hono");
-    expect(res.headers.get(KIT_RENDERER_HEADER)).toBeNull();
+    for (const path of ["/admin/events", "/admin/events/new", "/admin/events/:key"]) {
+      expect(enabledEventsManifest).toContainEqual(
+        expect.objectContaining({ method: "GET", path, enabled: true }),
+      );
+    }
+    const routes = [
+      { path: "/admin/events", routeId: "/admin/events" },
+      { path: "/admin/events/new", routeId: "/admin/events/new" },
+      { path: "/admin/events/EVT1", routeId: "/admin/events/[key]" },
+      { path: "/admin/events/EVT1/publish", routeId: "/[...path]" },
+      { path: "/admin/events/EVT1/cancel", routeId: "/[...path]" },
+      { path: "/admin/events/EVT1/rsvp-pause", routeId: "/[...path]" },
+      { path: "/admin/events/EVT1/rsvp-reopen", routeId: "/[...path]" },
+    ];
+
+    for (const { path, routeId } of routes) {
+      const request = new Request(`${APP_URL}${path}`, {
+        method: "POST",
+        headers: { host: "next.example.test" },
+      });
+      const honoFetch = vi.fn(async () => new Response("hono"));
+      const resolve = vi.fn(async () => new Response("kit"));
+      const res = await dispatchHookRequest(
+        { request, url: new URL(request.url), route: { id: routeId } },
+        depsFor({ manifest: enabledEventsManifest, honoFetch, resolve }),
+      );
+      expect(honoFetch).toHaveBeenCalledOnce();
+      expect(resolve).not.toHaveBeenCalled();
+      expect(await res.text()).toBe("hono");
+      expect(res.headers.get(KIT_RENDERER_HEADER)).toBeNull();
+    }
   });
 });

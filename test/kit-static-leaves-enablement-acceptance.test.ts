@@ -1,11 +1,11 @@
 // Static public leaves enablement acceptance: the shipped manifest owns
-// GET /about and GET /faq on Kit.
+// GET /events, GET /about, and GET /faq on Kit.
 //
-// Enablement flips exactly two entries (`enabled: false` -> `true`) with the
-// same public-read declaration; every other entry stays unchanged, and
-// returning both entries to `enabled: false` restores Hono ownership as the
-// rollback. These cases pin the shipped manifest (no override) so they fail
-// while the leaves are held on Hono and pass once the enablement lands.
+// The combined enablement keeps these entries' public-read declarations;
+// every other entry stays unchanged, and returning the three entries to
+// `enabled: false` restores Hono ownership as the rollback. These cases pin
+// the shipped manifest (no override) so they fail while the routes are held
+// on Hono and pass once the enablement lands.
 // Hermetic: manifest + gate derivation + dispatch with mocked resolve/hono,
 // no network, no staging/production. Test files only: no source changes here.
 import { describe, expect, it, vi } from "vitest";
@@ -39,6 +39,10 @@ const depsFor = () => ({
 });
 
 describe("static leaves enablement acceptance (shipped manifest)", () => {
+  it("owns GET /events on Kit", () => {
+    expect(resolveRouteOwner({ method: "GET", path: "/events" })).toBe("kit");
+  });
+
   it("owns GET /about on Kit", () => {
     expect(resolveRouteOwner({ method: "GET", path: "/about" })).toBe("kit");
   });
@@ -48,6 +52,8 @@ describe("static leaves enablement acceptance (shipped manifest)", () => {
   });
 
   it("lets HEAD follow the GET entries to Kit and keeps POST on Hono", () => {
+    expect(resolveRouteOwner({ method: "HEAD", path: "/events" })).toBe("kit");
+    expect(resolveRouteOwner({ method: "POST", path: "/events" })).toBe("hono");
     expect(resolveRouteOwner({ method: "HEAD", path: "/about" })).toBe("kit");
     expect(resolveRouteOwner({ method: "HEAD", path: "/faq" })).toBe("kit");
     expect(resolveRouteOwner({ method: "POST", path: "/about" })).toBe("hono");
@@ -55,17 +61,19 @@ describe("static leaves enablement acceptance (shipped manifest)", () => {
   });
 
   it("treats the Kit data requests like their pages", () => {
+    expect(resolveRouteOwner({ method: "GET", path: "/events/__data.json" })).toBe("kit");
     expect(resolveRouteOwner({ method: "GET", path: "/about/__data.json" })).toBe("kit");
     expect(resolveRouteOwner({ method: "GET", path: "/faq/__data.json" })).toBe("kit");
   });
 
-  it("declares the exact public read on both Kit decisions", () => {
+  it("declares the exact public read on all three Kit decisions", () => {
+    expect(decideRoute(get("/events"))?.reads).toBe("public");
     expect(decideRoute(get("/about"))?.reads).toBe("public");
     expect(decideRoute(get("/faq"))?.reads).toBe("public");
   });
 
-  it("ships both enabled entries with the exact method/path/reads", () => {
-    for (const path of ["/about", "/faq"]) {
+  it("ships all three enabled entries with the exact method/path/reads", () => {
+    for (const path of ["/events", "/about", "/faq"]) {
       const entry = ROUTE_MANIFEST.find((e) => e.method === "GET" && e.path === path);
       expect(entry, `missing manifest entry GET ${path}`).toBeDefined();
       expect(entry?.enabled).toBe(true);
@@ -73,11 +81,11 @@ describe("static leaves enablement acceptance (shipped manifest)", () => {
     }
   });
 
-  it("ships the full manifest with only /about and /faq flipped to enabled", () => {
+  it("ships the full manifest with the three Kit-owned entries enabled", () => {
     expect(ROUTE_MANIFEST).toEqual([
       { method: "GET", path: "/", enabled: false, reads: "public" },
       { method: "GET", path: "/events/past", enabled: true, reads: "public" },
-      { method: "GET", path: "/events", enabled: false, reads: "public" },
+      { method: "GET", path: "/events", enabled: true, reads: "public" },
       { method: "GET", path: "/about", enabled: true, reads: "public" },
       { method: "GET", path: "/privacy", enabled: false, reads: "public" },
       { method: "GET", path: "/rules", enabled: false, reads: "public" },
@@ -135,13 +143,13 @@ describe("static leaves enablement acceptance (shipped manifest)", () => {
       {
         method: "GET",
         path: "/admin/join-attempts",
-        enabled: false,
+        enabled: true,
         reads: { resource: "join_attempts", action: "list", route: "admin.join-attempts.index" },
       },
       {
         method: "GET",
         path: "/admin/join-attempts/:id",
-        enabled: false,
+        enabled: true,
         reads: { resource: "join_attempts", action: "view", route: "admin.join-attempts.show" },
       },
       { method: "GET", path: "/auth/recover", enabled: false, reads: "public" },
@@ -176,6 +184,15 @@ describe("static leaves enablement acceptance (shipped manifest)", () => {
     ]);
   });
 
+  it("dispatches /events to resolve with the Kit marker, never to Hono", async () => {
+    const event = eventFor("/events");
+    const deps = depsFor();
+    const response = await dispatchHookRequest(event, deps);
+    expect(deps.resolve).toHaveBeenCalledOnce();
+    expect(deps.honoFetch).not.toHaveBeenCalled();
+    expect(response.headers.get(KIT_RENDERER_HEADER)).toBe(KIT_RENDERER_VALUE);
+  });
+
   it("dispatches /about to resolve with the Kit marker, never to Hono", async () => {
     const event = eventFor("/about");
     const deps = depsFor();
@@ -206,15 +223,20 @@ describe("static leaves enablement acceptance (shipped manifest)", () => {
     expect(await response.text()).toBe("hono");
   });
 
-  it("rollback: a disabled copy restores Hono ownership for both leaves", async () => {
+  it("rollback: a disabled copy restores Hono ownership for all three entries", async () => {
     const rolledBack: OwnedRoute[] = ROUTE_MANIFEST.map((entry) =>
-      entry.method === "GET" && (entry.path === "/about" || entry.path === "/faq")
+      entry.method === "GET" &&
+      (entry.path === "/events" || entry.path === "/about" || entry.path === "/faq")
         ? { ...entry, enabled: false }
         : entry,
     );
+    expect(rolledBack.find((e) => e.method === "GET" && e.path === "/events")?.enabled).toBe(false);
     expect(rolledBack.find((e) => e.method === "GET" && e.path === "/about")?.enabled).toBe(false);
     expect(rolledBack.find((e) => e.method === "GET" && e.path === "/faq")?.enabled).toBe(false);
     for (const decision of [
+      { method: "GET", path: "/events" },
+      { method: "HEAD", path: "/events" },
+      { method: "GET", path: "/events/__data.json" },
       { method: "GET", path: "/about" },
       { method: "HEAD", path: "/about" },
       { method: "GET", path: "/about/__data.json" },
@@ -228,7 +250,7 @@ describe("static leaves enablement acceptance (shipped manifest)", () => {
     }
     expect(decideRoute(get("/about"), rolledBack)).toBeUndefined();
     expect(decideRoute(get("/faq"), rolledBack)).toBeUndefined();
-    for (const path of ["/about", "/faq"]) {
+    for (const path of ["/events", "/about", "/faq"]) {
       const event = eventFor(path);
       const deps = { ...depsFor(), manifest: rolledBack };
       const response = await dispatchHookRequest(event, deps);

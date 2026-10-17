@@ -155,13 +155,27 @@ describe("resolveKitFeaturedEdit", () => {
     endsAtText: null,
   };
 
-  it("404s a non-canonical ID before any record lookup, like the Hono admission", async () => {
-    const get = vi.fn(async () => baseRow);
-    const outcome = await resolveKitFeaturedEdit("0x1", { db: {} as never, get });
-    expect(outcome).toEqual({ kind: "notFound" });
-    expect(get).not.toHaveBeenCalled();
-    expect(parseRecordId("0x1")).toBeNull();
-  });
+  it.each(["1", "7", "2147483647"])(
+    "admits canonical ID %s and reads that record",
+    async (rawId) => {
+      const get = vi.fn(async () => ({ ...baseRow, id: Number(rawId) }));
+      const outcome = await resolveKitFeaturedEdit(rawId, { db: {} as never, get });
+      expect(outcome.kind).toBe("ok");
+      expect(get).toHaveBeenCalledOnce();
+      expect(get).toHaveBeenCalledWith(expect.anything(), Number(rawId));
+    },
+  );
+
+  it.each(["", "0", "07", "+7", "7.0", " 7", "7 ", "1e1", "0x1", "-7", "2147483648"])(
+    "404s malformed or non-canonical ID %j before any record lookup",
+    async (rawId) => {
+      const get = vi.fn(async () => baseRow);
+      const outcome = await resolveKitFeaturedEdit(rawId, { db: {} as never, get });
+      expect(outcome).toEqual({ kind: "notFound" });
+      expect(get).not.toHaveBeenCalled();
+      expect(parseRecordId(rawId)).toBeNull();
+    },
+  );
 
   it("answers unavailable with no database, like the Hono dbOr503 503", async () => {
     const get = vi.fn(async () => baseRow);

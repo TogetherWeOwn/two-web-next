@@ -16,17 +16,20 @@ not fail) unless marked HARD. All of them run on the existing runners only.
   in `sg-tests/fetch-await*.yml` and run under `npm run scan:rules-test`.
 - **Changed-lines coverage (WARN, 80%):** `ci/patch-coverage.mjs` intersects
   the PR diff with `coverage-final.json`; added TS lines nobody executes warn.
-  Aggregate floors in `vitest.config.ts` stay. Flip to `--strict` for HARD.
-- **Semgrep TS + secrets (WARN):** `ci/semgrep-rules.yml` flags dangerous
+  A missing `coverage-final.json` fails the step instead of skipping, so a
+  broken coverage run cannot silence the gate (docs-only and draft PRs skip
+  via the scope guard). Aggregate floors in `vitest.config.ts` stay. Flip to
+  `--strict` for HARD.
+- **Semgrep TS + secrets (HARD):** `ci/semgrep-rules.yml` flags dangerous
   sinks (`eval`, string `setTimeout`, `innerHTML`, `document.write`) and
   secret-shaped literals. CI installs the pinned CLI into a Python virtual
-  environment and runs `ci/semgrep-warn-selftest.mjs` against a planted warning
-  before scanning the tree. The step pins `shell: bash` (container steps run
-  under dash, which has no `pipefail`) and traps failures into an explicit
-  `::warning::`, so a dark scanner shows up as a visible workflow warning
-  without promoting WARN findings to merge blockers. The selftest matches the
-  rule id by suffix because semgrep prefixes it with the config path.
-  Full-history leak scanning stays with gitleaks.
+  environment and runs `ci/semgrep-warn-selftest.mjs` against a planted finding
+  before scanning the tree. Setup, selftest, partial-parse errors, scanner
+  failures, and findings block the required `check` job; the scan uses
+  `--strict --error`. The regression test in `test/workflow-hardening.test.ts`
+  pins the fail-closed workflow wiring. The selftest matches the rule id by
+  suffix because Semgrep prefixes it with the config path. Full-history leak
+  scanning stays with gitleaks.
 - **Mutation nightly (non-blocking):** `ci/mutation-sessions-join.mjs` weakens
   one auth check at a time and runs the hermetic kill suite; survivors are
   coverage gaps in the report artifact, never a red build.
@@ -34,14 +37,12 @@ not fail) unless marked HARD. All of them run on the existing runners only.
   `*.test.ts` / `*.test.mjs` file is reachable from no CI job. The step
   runs with `continue-on-error` and the `--selftest` is hermetic (fixture
   trees only), so an orphan can never fail the job or skip later steps.
-- **Tier-0 report (WARN):** `npm run test:tier0` runs the fast-check
+- **Tier-0 check (required):** `npm run test:tier0` runs the fast-check
   validator properties, the role x route authz matrix and the
   default-planner EXPLAIN seq-scan check from `tier0/` (own vitest config:
   every `test/**` file runs inside the blocking coverage step, so Tier-0
-  stays report-only by living outside it). The `check`-job step runs with
-  `continue-on-error` against the job Postgres service and prints the
-  changed query files beside the verdict. Flip to required per-suite only
-  after the production watch decides the false-positive rate is low.
+  stays isolated in its own runner). The `check`-job step runs against the
+  job Postgres service and prints the changed query files beside the verdict.
 - **Floor guard (HARD):** `ci/floor-guard.mjs` enforces the CONSTRAINTS.md
   floor on the PR diff: new suppressions, test skip calls, deleted test files
   (including `*-selftest` scripts), net-removed assertions, source-code stubs,
@@ -52,13 +53,14 @@ not fail) unless marked HARD. All of them run on the existing runners only.
   another name and lowering a row still fails; moving CONSTRAINTS.md to a
   name that no longer matches fails as a threshold removal even with no row
   edit, and deleting CONSTRAINTS.md fails as a threshold removal. Test renames are judged against the runner
-  globs (vitest, Playwright specs under e2e/); e2e safety and ci selftest
-  scripts run via enumerated paths (only ci/a11y-*.test.mjs runs via glob),
-  so any rename of those needs a waiver. Merge-queue squash messages hard-wrap
-  PR bodies at ~72 columns, so `unfoldFloorWaiverLines` joins nonblank
-  continuation lines after each `Floor-waiver:` line before matching;
-  path-based waiver parsing removes wrap-inserted spaces within the path
-  (`ci/floor-guard.mjs:205-229, 232-253`).
+  globs (vitest includes test/** plus ci/audit-lifecycle.test.mjs, Playwright
+  specs under e2e/); e2e safety and ci selftest scripts run via enumerated
+  paths (only ci/a11y-*.test.mjs runs via glob), so any rename of those needs
+  a waiver. Merge-queue squash messages hard-wrap PR bodies at ~72 columns,
+  so `unfoldFloorWaiverLines` joins nonblank continuation lines after each
+  `Floor-waiver:` line before matching; path-based waiver parsing removes
+  wrap-inserted spaces within the path
+  (`ci/floor-guard.mjs:215-234, 236-262`).
   Waivers are reasoned commit trailers (`test-deleted`, `assertion-removed`,
   `threshold-removed`, `new-exemption`) and every active one is printed to the
   log and the job summary for reviewer visibility. The ignore list is pinned
@@ -68,8 +70,8 @@ not fail) unless marked HARD. All of them run on the existing runners only.
   `.constraintsignore`. An assertion paired with one added in the same test
   file reads as a replacement. Failed or oversized diffs exit 2 rather than
   looking clean.
-  Mirror every `Floor-waiver:` trailer from branch commits verbatim in the PR
-  body: `check_queue_visible_waivers` (`ci/pr-lint-output.py:26-71`) scans
+  Mirror every `Floor-waiver:` trailer from branch commits in canonical form
+  in the PR body: `check_queue_visible_waivers` (`ci/pr-lint-output.py:26-71`) scans
   branch commit messages (`git log --format=%B HEAD --not <base>`,
   `ci/pr-lint-output.py:48-61`) and fails the PR (`sys.exit(1)`,
   `ci/pr-lint-output.py:65-70`) when `missing_body_waivers`

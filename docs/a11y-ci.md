@@ -6,15 +6,23 @@ Run `npm ci --include=dev`, `npx playwright install --with-deps chromium`, then
 GitHub Actions uses its own Postgres 17 service container. The runner rejects
 all other databases before connecting; do not pass staging/production URLs.
 
-The `a11y` job is a dependency of the existing required `check` job. The required
-job runs even after a failed/skipped audit and explicitly rejects any result
-other than `success`; GitHub's mergeable skipped-check behavior cannot bypass it.
+The `a11y` job is selected by `scope`; it does not gate the standalone `check`
+job, which depends only on `scope` and runs alongside the audit. The required
+`ci-ok` job aggregates `scope`, `check`, `docs-links` and the selected audit and
+performance results. For an in-scope, non-draft run, `a11y` must succeed; a
+failed or cancelled audit, or a skipped audit that `scope` selected, fails
+`ci-ok`. A skipped audit is accepted only when it is out of scope or the PR is a
+draft. Scope/check/docs-links failures and other failed or unexpectedly skipped
+selected jobs also fail the aggregate gate, so GitHub's mergeable skipped-check
+behavior cannot bypass these results.
+
 Local Wrangler startup polls the existing DB-free `/robots.txt` route. The
 fixture worker has no normal DB binding or migration ledger, so `/up` correctly
 returns 503 there; staging deploy smoke still requires `/up` DB/schema readiness.
-Any axe violation, unexpected HTTP status, redirect, non-HTML response, missing dynamic
-fixture, or failed negative control prevents `check` from passing. Reports and
-screenshots are uploaded as `a11y-evidence` even on failure (14-day retention).
+Any axe violation, unexpected HTTP status, redirect, non-HTML response, missing
+dynamic fixture, or failed negative control fails the `a11y` job and therefore
+`ci-ok` when the audit is selected. Reports and screenshots are uploaded as
+`a11y-evidence` even on failure (14-day retention).
 
 ## Coverage and fixtures
 

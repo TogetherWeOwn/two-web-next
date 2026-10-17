@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 // Foreground dev server for the adapter-built Kit Worker, for the kit-parity
-// Playwright project's webServer slot. Same fixture shape as
-// ci/kit-worker-e2e.mjs (disposable loopback Postgres, fake Discord secrets,
-// never the preview Hyperdrive binding): that script asserts and exits, this
-// one serves until killed. Runs only in CI; refuses non-loopback databases.
+// Playwright project's webServer slot. Like ci/kit-worker-e2e.mjs, it uses a
+// disposable loopback Postgres, fake Discord secrets, and never the preview
+// Hyperdrive binding. This dev fixture also stubs Discord fetches for callback
+// coverage, then serves until killed. Runs only in CI; refuses non-loopback databases.
 import { spawn } from "node:child_process";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -44,11 +44,46 @@ const scratch = mkdtempSync(
   join(process.env.PAPERCLIP_RUN_SCRATCH_DIR ?? tmpdir(), "kit-worker-dev-"),
 );
 const config = join(scratch, "wrangler.jsonc");
+const testWorker = join(scratch, "kit-worker.mjs");
+writeFileSync(
+  testWorker,
+  [
+    `import worker from ${JSON.stringify(worker)};`,
+    "globalThis.fetch = async (input, init) => {",
+    "  const request = new Request(input, init);",
+    "  const url = new URL(request.url);",
+    '  if (url.origin !== "https://discord.com") {',
+    '    throw new Error("E2E blocked unmocked outbound fetch: " + request.method + " " + url.origin + url.pathname);',
+    "  }",
+    '  if (request.method === "POST" && url.pathname === "/api/v10/oauth2/token") {',
+    '    const code = new URLSearchParams(await request.clone().text()).get("code") ?? "";',
+    '    if (code === "e2e-blocked-code") return Response.json({ access_token: "e2e-blocked-token" });',
+    '    if (code === "e2e-outage-code") return new Response("fixture outage", { status: 500 });',
+    '    return Response.json({ access_token: "e2e-member-token" });',
+    "  }",
+    '  if (request.method === "GET" && url.pathname === "/api/v10/users/@me") {',
+    '    return Response.json({ id: "900000000000001398", username: "E2E Discord Member", global_name: "E2E Discord Member", avatar: null });',
+    "  }",
+    '  if (request.method === "GET" && url.pathname === "/api/v10/guilds/ci-fixture-guild/widget.json") {',
+    '    return Response.json({ id: "ci-fixture-guild" });',
+    "  }",
+    '  if (url.pathname === "/api/v10/guilds/ci-fixture-guild/members/900000000000001398") {',
+    '    if (request.method === "PUT") {',
+    "      const body = await request.clone().json().catch(() => ({}));",
+    '      return body.access_token === "e2e-blocked-token" ? new Response(null, { status: 403 }) : new Response(null, { status: 204 });',
+    "    }",
+    '    if (request.method === "GET") return Response.json({ roles: [] });',
+    "  }",
+    '  throw new Error("E2E blocked unmocked Discord fetch: " + request.method + " " + url.pathname);',
+    "};",
+    "export default worker;",
+  ].join("\n"),
+);
 writeFileSync(
   config,
   JSON.stringify({
     name: "two-web-kit-parity-fixture",
-    main: worker,
+    main: testWorker,
     compatibility_date: "2026-09-29",
     compatibility_flags: ["nodejs_compat"],
     assets: { directory: assets, binding: "ASSETS", run_worker_first: true },
@@ -110,5 +145,3 @@ for (const signal of ["SIGINT", "SIGTERM"]) {
   process.once(signal, () => child.kill("SIGTERM"));
 }
 child.once("exit", (code) => process.exit(code ?? 1));
-
-void fileURLToPath;

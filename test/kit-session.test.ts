@@ -15,7 +15,7 @@
 //   is never reported as a logout, so the UI can show "unknown" instead of
 //   flipping a member to logged-out.
 // Local fixtures only: memory store, serializeSigned-minted cookies, no DB.
-import { serializeSigned } from "hono/utils/cookie";
+import { parseSigned, serializeSigned } from "hono/utils/cookie";
 import { describe, expect, it, vi } from "vitest";
 import { AUTH_STATUS_COOKIE } from "../src/auth-status";
 import { SESSION_COOKIE } from "../src/session-cookie";
@@ -24,6 +24,7 @@ import {
   createMemorySessionStore,
   hashToken,
   newSessionToken,
+  SESSION_TTL_SECONDS,
   type SessionStore,
 } from "../src/sessions";
 import {
@@ -34,6 +35,7 @@ import {
 import { EXPIRED_WRITE_COOKIE } from "../src/write-recovery";
 import {
   createRequestSessionCache,
+  kitAuthStatusCookieFor,
   kitSessionBridge,
   readReturnJourney,
   resolveRequestSession,
@@ -650,5 +652,159 @@ describe("kitSessionBridge (production hook composition)", () => {
     expect((seen[0]!.locals as KitLocals).session?.userId).toBe(viewer);
     expect(res.status).toBe(200);
     expect(audited).toHaveLength(1);
+  });
+});
+
+describe("kitAuthStatusCookieFor (moderator admin documents only)", () => {
+  it("signs the live session lineage with the Hono cookie scope", async () => {
+    const store = createMemorySessionStore();
+    const { token, row } = await seedSession(store, { moderator: true });
+    const request = new Request("https://next.example.test/admin", {
+      headers: { cookie: await pair(SESSION_COOKIE, token) },
+    });
+    const event: HookEventLike = {
+      request,
+      url: new URL(request.url),
+      route: { id: "/admin" },
+      locals: {
+        status: "authenticated",
+        session: {
+          userId: row.userId,
+          username: row.username,
+          avatar: row.avatar,
+          member: row.member,
+          moderator: true,
+        },
+        returnTo: null,
+        joinResult: null,
+        expiredWrite: null,
+      },
+    };
+    expect((await parseSigned(request.headers.get("cookie") ?? "", SECRET))[SESSION_COOKIE]).toBe(
+      token,
+    );
+    expect(await store.statusHash(row.tokenHash)).not.toBeNull();
+    const write = await kitAuthStatusCookieFor({
+      SESSION_SECRET: SECRET,
+      SESSION_STORE: store,
+    } as unknown as Env)(event);
+
+    expect(write).toContain(`${AUTH_STATUS_COOKIE}=`);
+    for (const flag of [
+      "Path=/",
+      "Secure",
+      "HttpOnly",
+      "SameSite=Lax",
+      `Max-Age=${SESSION_TTL_SECONDS}`,
+    ]) {
+      expect(write).toContain(flag);
+    }
+    expect(write).not.toMatch(/Domain=/i);
+    const cookies = await parseSigned(write!, SECRET);
+    expect(cookies[AUTH_STATUS_COOKIE]).toBe(await store.statusHash(row.tokenHash));
+  });
+
+  it("does not read or sign a probe for non-moderators or non-admin routes", async () => {
+    const store = createMemorySessionStore();
+    const { token } = await seedSession(store, { moderator: true });
+    const statusHash = vi.spyOn(store, "statusHash");
+    const writeCookie = kitAuthStatusCookieFor({
+      SESSION_SECRET: SECRET,
+      SESSION_STORE: store,
+    } as unknown as Env);
+    const request = new Request("https://next.example.test/admin", {
+      headers: { cookie: await pair(SESSION_COOKIE, token) },
+    });
+    const moderatorLocals: KitLocals = {
+      status: "authenticated",
+      session: { userId: "42", username: "Rick", avatar: null, member: true, moderator: true },
+      returnTo: null,
+      joinResult: null,
+      expiredWrite: null,
+    };
+    const base: HookEventLike = {
+      request,
+      url: new URL(request.url),
+      route: { id: "/admin" },
+      locals: moderatorLocals,
+    };
+    expect(
+      await writeCookie({
+        ...base,
+        locals: {
+          ...moderatorLocals,
+          session: { ...moderatorLocals.session!, moderator: false },
+        },
+      }),
+    ).toBeNull();
+    expect(
+      await writeCookie({
+        ...base,
+        url: new URL("https://next.example.test/events/past"),
+      }),
+    ).toBeNull();
+    expect(
+      await writeCookie({
+        ...base,
+        request: new Request(request.url, { method: "POST", headers: request.headers }),
+      }),
+    ).toBeNull();
+    expect(statusHash).not.toHaveBeenCalled();
+  });
+
+  it("returns no probe when the status hash lookup throws", async () => {
+    const store = createMemorySessionStore();
+    const { token } = await seedSession(store, { moderator: true });
+    const statusHash = vi.spyOn(store, "statusHash").mockRejectedValueOnce(new Error("store down"));
+    const request = requestWith([await pair(SESSION_COOKIE, token)], "GET", "/admin");
+    const event: HookEventLike = {
+      request,
+      url: new URL(request.url),
+      route: { id: "/admin" },
+      locals: {
+        status: "authenticated",
+        session: { userId: "42", username: "Rick", avatar: null, member: true, moderator: true },
+        returnTo: null,
+        joinResult: null,
+        expiredWrite: null,
+      },
+    };
+    const writeCookie = kitAuthStatusCookieFor({
+      SESSION_SECRET: SECRET,
+      SESSION_STORE: store,
+    } as unknown as Env);
+
+    expect(await writeCookie(event)).toBeNull();
+    expect(statusHash).toHaveBeenCalledTimes(1);
+  });
+
+  it("refuses to sign a probe value that is not a 64-hex status hash", async () => {
+    const store = createMemorySessionStore();
+    const { token } = await seedSession(store, { moderator: true });
+    const request = requestWith([await pair(SESSION_COOKIE, token)], "GET", "/admin");
+    const event: HookEventLike = {
+      request,
+      url: new URL(request.url),
+      route: { id: "/admin" },
+      locals: {
+        status: "authenticated",
+        session: { userId: "42", username: "Rick", avatar: null, member: true, moderator: true },
+        returnTo: null,
+        joinResult: null,
+        expiredWrite: null,
+      },
+    };
+    const writeCookie = kitAuthStatusCookieFor({
+      SESSION_SECRET: SECRET,
+      SESSION_STORE: store,
+    } as unknown as Env);
+    // The recorded cookie-write boundary: the writer asserts the 64-hex
+    // shape before signing, so a bearer, short value, or uppercase hash a
+    // broken store might return is never signed into a probe cookie (the
+    // read path accepts only lowercase 64-hex, src/auth-status.ts).
+    for (const bad of [token, "abc123", "A".repeat(64), "g".repeat(64), `${"a".repeat(63)} `]) {
+      vi.spyOn(store, "statusHash").mockResolvedValueOnce(bad);
+      expect(await writeCookie(event)).toBeNull();
+    }
   });
 });

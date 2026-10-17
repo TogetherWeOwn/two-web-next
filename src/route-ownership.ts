@@ -42,12 +42,11 @@ export interface RouteDecision {
   path: string;
 }
 
-// The archive page, hot-zone heatmaps, member board and the about/faq leaves
-// render natively; the events list ships its native handler disabled until
-// the calendar/enhancement companion passes, and the privacy/rules/join/
-// recovery/profile reads and admin routes stay on Hono until their enablement
-// is reviewed. Returning an enabled entry to `enabled: false` restores Hono
-// ownership as the rollback. Production (the Hono Worker) sees no traffic change for a
+// The archive page, events list, hot-zone heatmaps, member board and the
+// about/faq leaves render natively; privacy/rules/join/recovery/profile reads
+// and admin routes stay on Hono until their enablement is reviewed. Returning
+// an enabled entry to `enabled: false` restores Hono ownership as the rollback.
+// Production (the Hono Worker) sees no traffic change for a
 // disabled path; the preview Worker moves a Kit-owned path back to Hono by
 // design — that is the rollback. Add one entry per migrated route, enabled
 // only when its Kit handler is ready to own the exact method/path. Only GET
@@ -60,7 +59,7 @@ export interface RouteDecision {
 export const ROUTE_MANIFEST: OwnedRoute[] = [
   { method: "GET", path: "/", enabled: false, reads: "public" },
   { method: "GET", path: "/events/past", enabled: true, reads: "public" },
-  { method: "GET", path: "/events", enabled: false, reads: "public" },
+  { method: "GET", path: "/events", enabled: true, reads: "public" },
   { method: "GET", path: "/about", enabled: true, reads: "public" },
   { method: "GET", path: "/privacy", enabled: false, reads: "public" },
   { method: "GET", path: "/rules", enabled: false, reads: "public" },
@@ -174,12 +173,13 @@ export const ROUTE_MANIFEST: OwnedRoute[] = [
   },
   // Join-attempts audit list: member data, so the Kit branch renders
   // inside the member-read boundary with this declaration and the bridged
-  // viewer. Off until the enablement review: the Hono viewer answers meanwhile.
+  // viewer. Enabled after the enablement review; returning this entry to
+  // enabled: false restores Hono ownership as the rollback.
   // Row detail links target the Kit /admin/join-attempts/:id page below.
   {
     method: "GET",
     path: "/admin/join-attempts",
-    enabled: false,
+    enabled: true,
     reads: { resource: "join_attempts", action: "list", route: "admin.join-attempts.index" },
   },
   // Join-attempt detail: member data, so the Kit branch renders inside the
@@ -187,12 +187,13 @@ export const ROUTE_MANIFEST: OwnedRoute[] = [
   // declaration as the Hono handler (admin.join-attempts.show,
   // src/admin/routes.tsx): the canonical-ID admission, the shared
   // getJoinAttempt retention-window lookup, and the outcome/source/time/trace
-  // fields with safe back navigation. Off until the enablement review: the
-  // Hono detail page answers meanwhile.
+  // fields with safe back navigation. Enabled after the enablement review;
+  // returning this entry to enabled: false restores Hono ownership as the
+  // rollback.
   {
     method: "GET",
     path: "/admin/join-attempts/:id",
-    enabled: false,
+    enabled: true,
     reads: { resource: "join_attempts", action: "view", route: "admin.join-attempts.show" },
   },
   { method: "GET", path: "/auth/recover", enabled: false, reads: "public" },
@@ -457,6 +458,8 @@ export interface HookDispatchDeps {
   // resolve, so Kit loads share one session decision. Absent by default:
   // without it the dispatch behaves exactly as before.
   sessionFor?: (event: HookEventLike) => Promise<KitLocals>;
+  // Optional moderator-only auth-status probe cookie for successful Kit admin documents.
+  authStatusCookieFor?: (event: HookEventLike) => Promise<string | null>;
   // Access-log sink for member-read Kit routes. Absent or null refuses the read.
   accessSink?: () => Promise<AccessSink | null>;
   // Post-release hook for member-read routes: runs only after the boundary
@@ -694,6 +697,33 @@ export async function dispatchHookRequest(
     response = await deps.resolve(event);
   }
   if (event.route?.id === HONO_FALLBACK_ROUTE_ID) return response;
+  const locals = event.locals as Partial<KitLocals> | undefined;
+  if (
+    deps.authStatusCookieFor &&
+    event.request.method === "GET" &&
+    /^\/admin(?:\/|$)/.test(event.url.pathname) &&
+    response.status === 200 &&
+    response.headers.get("content-type")?.includes("text/html") &&
+    locals?.status === "authenticated" &&
+    locals.session?.moderator
+  ) {
+    try {
+      const cookie = await deps.authStatusCookieFor(event);
+      if (cookie) {
+        const headers = new Headers(response.headers);
+        headers.append("set-cookie", cookie);
+        response = new Response(response.body, {
+          status: response.status,
+          statusText: response.statusText,
+          headers,
+        });
+      }
+    } catch (err) {
+      console.warn("kit auth-status probe unavailable; rendering without probe cookie.", {
+        exception: (err as Error)?.constructor?.name ?? "unknown",
+      });
+    }
+  }
   decorateKitResponse(response, event, deps.appUrl, deps.featuredImageHosts);
   return response;
 }

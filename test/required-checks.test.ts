@@ -49,13 +49,29 @@ describe("required checks always report", () => {
     },
   );
 
-  it("check runs whatever its dependencies concluded unless its run was cancelled, and fails when the audit is not green", () => {
-    const check = job(readFileSync(join(dir, "ci.yml"), "utf8"), "check");
-    // More gates may join `needs`; the guard below only relies on these two.
+  it("check needs only scope so it starts with the heavy jobs, and ci-ok fails when the audit is not green", () => {
+    const ci = readFileSync(join(dir, "ci.yml"), "utf8");
+    const check = job(ci, "check");
+    // Exactly [scope]: any heavier need re-serializes check behind that job,
+    // which is what made merge-queue ci take ~26 minutes.
     const needs = check.match(/\n    needs: \[([^\]]*)\]\n/)?.[1]?.split(/,\s*/) ?? [];
-    expect(needs).toEqual(expect.arrayContaining(["a11y", "scope"]));
+    expect(needs).toEqual(["scope"]);
     expect(check).toMatch(/\n    if: \$\{\{ !cancelled\(\) \}\}\n/);
-    expect(check).toContain('run: test "$A11Y_RESULT" = success');
+    expect(job(ci, "ci-ok")).toContain('run: test "$A11Y_RESULT" = success');
+  });
+
+  it("documents ci-ok as the result gate for accessibility and performance", () => {
+    const performance = readFileSync("docs/performance-budgets.md", "utf8");
+    const accessibility = readFileSync("docs/a11y-ci.md", "utf8");
+    for (const doc of [performance, accessibility]) {
+      expect(doc).toMatch(/required\s+`ci-ok` job/);
+      expect(doc).toContain("standalone `check`");
+    }
+    expect(performance).toMatch(/both `lighthouse` and `bundle-budget`\s+must succeed/);
+    expect(performance).toContain("fails `ci-ok`");
+    expect(accessibility).toMatch(/fails\s+`ci-ok`/);
+    expect(performance).not.toMatch(/required `check` job depends on \*\*both\*\*/);
+    expect(accessibility).not.toMatch(/required `check` job/);
   });
 
   it("gitleaks scans even when pr-lint failed", () => {
@@ -66,9 +82,37 @@ describe("required checks always report", () => {
   it("ci-ok aggregates the gated jobs", () => {
     const ci = readFileSync(join(dir, "ci.yml"), "utf8");
     const ok = job(ci, "ci-ok");
-    expect(ok).toMatch(/\n    needs: \[a11y, lighthouse, bundle-budget, check, scope\]\n/);
+    expect(ok).toMatch(
+      /\n    needs: \[a11y, lighthouse, bundle-budget, docs-links, check, node22-compat, scope\]\n/,
+    );
     expect(ok).toMatch(/\n    if: \$\{\{ !cancelled\(\) \}\}\n/);
     // ci-ok is required (ruleset protect-main); the change-gating section documents what it aggregates.
     expect(readFileSync("CONTRIBUTING.md", "utf8")).toContain("### Change-gated CI and `ci-ok`");
+  });
+
+  // package.json declares `^22.23.0 || >=24` (22.23.0 is the 22.x floor
+  // verified end to end against this repo's suite and lockfile); the 24
+  // jobs alone ship the 22 range to developers unverified. The compat leg
+  // pins the exact engines floor and ci-ok fails unless it succeeded, so
+  // the leg cannot silently drift to a newer 22.x or report skipped.
+  it("node22-compat runs lint, typecheck and unit tests on the exact Node 22.23.0 floor", () => {
+    const ci = readFileSync(join(dir, "ci.yml"), "utf8");
+    const leg = job(ci, "node22-compat");
+    expect(leg).toContain("name: node22-compat");
+    expect(leg).toMatch(/\n    needs: \[scope\]\n/);
+    expect(leg).toMatch(/\n    if: \$\{\{ !cancelled\(\) \}\}\n/);
+    expect(leg).toContain("image: node:22.23.0-bookworm");
+    expect(leg).toMatch(/node-version: 22\.23\.0\n/);
+    expect(leg).toContain('test "$(node --version)" = "v22.23.0"');
+    expect(leg).toContain("npm run lint && npm run typecheck && npm test");
+    // Like `check`, the leg always reports: its first step fails on a red
+    // scope, and docs-only or draft PRs fast-pass instead of skipping.
+    const steps = leg.split("\n    steps:\n")[1] ?? "";
+    expect(steps).toMatch(/^      - name: Require successful scope\n/);
+    expect(leg).toContain(
+      "needs.scope.outputs.docs_only == 'true' || needs.scope.outputs.draft == 'true'",
+    );
+    expect(leg).toContain("needs.scope.outputs.draft != 'true'");
+    expect(job(ci, "ci-ok")).toContain("Require successful Node 22 compatibility leg");
   });
 });

@@ -1,7 +1,7 @@
 // Kit join-attempt detail port: the Kit route reuses the Hono detail's
 // reads and keeps its privacy posture — moderator-only trace identifiers,
 // audited subjects, private/no-store/noindex, safe back navigation, no raw
-// provider/token payload. Hono-owned until the enablement review.
+// provider/token payload. Kit-owned since the enablement review.
 import { readFileSync } from "node:fs";
 import { join, resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -17,8 +17,8 @@ const read = (p: string): string => readFileSync(join(root, p), "utf8");
 const load = () => read("web/src/routes/admin/join-attempts/[id]/+page.server.ts");
 const page = () => read("web/src/routes/admin/join-attempts/[id]/+page.svelte");
 
-describe("Kit join-attempt detail manifest: Hono-owned until the enablement review", () => {
-  it("registers GET /admin/join-attempts/:id as a join_attempts view member read, still Hono-served", () => {
+describe("Kit join-attempt detail manifest: Kit-owned since the enablement review", () => {
+  it("registers GET /admin/join-attempts/:id as a join_attempts view member read, Kit-served", () => {
     const manifest = read("src/route-ownership.ts");
     expect(manifest).toMatch(/path:\s*"\/admin\/join-attempts\/:id"/);
     expect(manifest).toMatch(/\/admin\/join-attempts\/:id"[^}]*resource:\s*"join_attempts"/);
@@ -26,15 +26,16 @@ describe("Kit join-attempt detail manifest: Hono-owned until the enablement revi
     expect(manifest).toMatch(
       /\/admin\/join-attempts\/:id"[^}]*route:\s*"admin\.join-attempts\.show"/,
     );
-    // Off by default: flipping enabled flips ownership.
-    expect(manifest).toMatch(/\/admin\/join-attempts\/:id"[^}]*enabled:\s*false/);
+    // Enabled: flipping enabled flips ownership, so returning this entry to
+    // enabled: false restores the Hono detail as the rollback.
+    expect(manifest).toMatch(/\/admin\/join-attempts\/:id"[^}]*enabled:\s*true/);
   });
 
-  it("records the detail in the parity-gate inventory as Hono-owned", () => {
+  it("records the detail in the parity-gate inventory as Kit-owned", () => {
     const gates = read("docs/kit-parity-gates.md");
     expect(gates).toContain("GET /admin/join-attempts/:id");
     expect(gates).toContain("admin.join-attempts.show");
-    expect(gates).toContain("`enabled: false`");
+    expect(gates).toContain("`enabled: true`");
   });
 });
 

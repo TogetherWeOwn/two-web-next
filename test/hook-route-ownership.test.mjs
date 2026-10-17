@@ -64,11 +64,11 @@ beforeEach(() => {
 });
 
 describe("hooks.server route ownership wiring", () => {
-  it("ships the native archive and the about/faq leaves enabled with the homepage, events list, privacy, rules, join, recover, admin and profile reads still on Hono", () => {
+  it("ships the native archive, events list, about/faq leaves and join-attempts pair enabled with the homepage, privacy, rules, join, recover, remaining admin and profile reads still on Hono", () => {
     expect(ROUTE_MANIFEST).toEqual([
       { method: "GET", path: "/", enabled: false, reads: "public" },
       { method: "GET", path: "/events/past", enabled: true, reads: "public" },
-      { method: "GET", path: "/events", enabled: false, reads: "public" },
+      { method: "GET", path: "/events", enabled: true, reads: "public" },
       { method: "GET", path: "/about", enabled: true, reads: "public" },
       { method: "GET", path: "/privacy", enabled: false, reads: "public" },
       { method: "GET", path: "/rules", enabled: false, reads: "public" },
@@ -126,13 +126,13 @@ describe("hooks.server route ownership wiring", () => {
       {
         method: "GET",
         path: "/admin/join-attempts",
-        enabled: false,
+        enabled: true,
         reads: { resource: "join_attempts", action: "list", route: "admin.join-attempts.index" },
       },
       {
         method: "GET",
         path: "/admin/join-attempts/:id",
-        enabled: false,
+        enabled: true,
         reads: { resource: "join_attempts", action: "view", route: "admin.join-attempts.show" },
       },
       { method: "GET", path: "/auth/recover", enabled: false, reads: "public" },
@@ -581,6 +581,7 @@ describe("hooks.server route ownership wiring", () => {
     expect(source).toContain("featuredImageHosts: env.FEATURED_IMAGE_HOSTS");
     expect(source).toContain("appUrl: env.APP_URL");
     expect(source).toContain("sessionFor: kitSessionBridge(env)");
+    expect(source).toContain("authStatusCookieFor: kitAuthStatusCookieFor(env)");
     expect(source.match(/dispatchHookRequest\(event,/g)?.length).toBe(1);
     // Production session composition lives in kitSessionBridge
     // (src/kit-session.ts), pinned by test/kit-session.test.ts: the hook must

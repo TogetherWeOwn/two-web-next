@@ -563,7 +563,9 @@ test("manual production workflow routes runners by repo visibility and uses prod
     "run: npx wrangler deploy --config tail/wrangler.jsonc --env production",
   );
   const upload = workflow.indexOf("npx wrangler versions upload --env production --tag ");
-  const gradual = workflow.indexOf("uses: ./.github/actions/gradual-promote");
+  const gradual = workflow.indexOf(
+    "uses: TogetherWeOwn/.github/actions/gradual-promote@1dcce452d9066c02e4ab3d99931edf75d50388d7",
+  );
   assert.ok(
     credentialCheck > 0 &&
       credentialCheck < requiredSecrets &&

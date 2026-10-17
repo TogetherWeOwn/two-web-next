@@ -1,13 +1,13 @@
 name: backup-restore-proof
 
 # Full dump-to-restore proof (docs/backup-restore-proof.md) on a disposable
-# PostgreSQL 17 service. The hermetic selftests in the required `check` job
+# PostgreSQL 18 service. The hermetic selftests in the required `check` job
 # (ci/backup-restore-proof/selftest.py) prove fixtures with fake clients; this
 # workflow proves a real pg_dump archive restores with real pg_restore.
 # The Postgres service is disposable per job; the proof script itself refuses
 # any inherited PG* or *DATABASE_URL* variable, non-allowlisted hosts, users
 # and ports, so this workflow sets none of them: no staging or production
-# URLs, no secrets, no shared databases. The service shape (postgres:17 with
+# URLs, no secrets, no shared databases. The service shape (postgres:18 with
 # a trust-auth test role) is modeled on .github/workflows/e2e.yml.
 # The pull_request trigger stays unfiltered so this workflow always reports;
 # relevance is decided per PR by the `scope` job below (ci/change-scope.sh
@@ -96,7 +96,7 @@ jobs:
     timeout-minutes: 15
     services:
       postgres:
-        image: postgres:17
+        image: postgres:18
         env:
           POSTGRES_USER: agent_test
           POSTGRES_DB: agent_test
@@ -113,10 +113,10 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - name: Install PostgreSQL 17 client (pg_dump/pg_restore on PATH)
+      - name: Install PostgreSQL 18 client (pg_dump/pg_restore on PATH)
         run: |
           set -euo pipefail
-          # The runner's default client predates the postgres:17 service and
+          # The runner's default client predates the postgres:18 service and
           # pg_dump refuses an older major, so install the matching PGDG
           # client instead of relying on the preinstalled one.
           sudo apt-get update -qq
@@ -128,9 +128,17 @@ jobs:
           echo "deb [signed-by=/usr/share/keyrings/postgresql.gpg] https://apt.postgresql.org/pub/repos/apt ${VERSION_CODENAME}-pgdg main" \
             | sudo tee /etc/apt/sources.list.d/pgdg.list >/dev/null
           sudo apt-get update -qq
-          sudo apt-get install -y -qq --no-install-recommends postgresql-client-17
-          pg_dump --version
-          pg_restore --version
+          sudo apt-get install -y -qq --no-install-recommends postgresql-client-18
+          PG18_BIN=/usr/lib/postgresql/18/bin
+          for client in pg_dump pg_restore; do
+            version="$($PG18_BIN/$client --version)"
+            if [[ ! "$version" =~ ^$client\ \(PostgreSQL\)\ 18([.[:space:]]|$) ]]; then
+              echo "::error::$client must be PostgreSQL 18; got: $version"
+              exit 1
+            fi
+            printf '%s\n' "$version"
+          done
+          echo "$PG18_BIN" >> "$GITHUB_PATH"
           psql --version
       - name: Map the postgres service name to loopback
         run: |

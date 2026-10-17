@@ -1,7 +1,7 @@
 // Kit join-attempts audit-list port: the Kit route reuses the Hono viewer's
 // reads and keeps its privacy posture — moderator-only trace identifiers,
 // audited subjects, private/no-store/noindex, accessible scroll and paging,
-// no wildcard search expansion. Hono-owned until the enablement review.
+// no wildcard search expansion. Kit-owned since the enablement review.
 import { readFileSync } from "node:fs";
 import { join, resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -13,30 +13,27 @@ const read = (p: string): string => readFileSync(join(root, p), "utf8");
 const load = () => read("web/src/routes/admin/join-attempts/+page.server.ts");
 const page = () => read("web/src/routes/admin/join-attempts/+page.svelte");
 
-describe("Kit join-attempts manifest: Hono-owned until the enablement review", () => {
-  it("registers GET /admin/join-attempts as a join_attempts list member read, still Hono-served", () => {
+describe("Kit join-attempts manifest: Kit-owned since the enablement review", () => {
+  it("registers GET /admin/join-attempts as a join_attempts list member read, Kit-served", () => {
     const manifest = read("src/route-ownership.ts");
     expect(manifest).toMatch(/path:\s*"\/admin\/join-attempts"/);
     expect(manifest).toMatch(/\/admin\/join-attempts"[^}]*resource:\s*"join_attempts"/);
     expect(manifest).toMatch(/\/admin\/join-attempts"[^}]*action:\s*"list"/);
     expect(manifest).toMatch(/\/admin\/join-attempts"[^}]*route:\s*"admin\.join-attempts\.index"/);
-    // Off by default: flipping enabled flips ownership. Note the parity
-    // ledger's uncovered-route catch-all only parses flat manifest entries
-    // (ci/kit-parity-gates.mjs parseManifestEntries), so like the pre-existing
-    // nested /admin and /profile entries this one needs gate coverage extended
-    // before its enablement slice — flipping it today would ledger as skipped.
-    expect(manifest).toMatch(/\/admin\/join-attempts"[^}]*enabled:\s*false/);
+    // Enabled: flipping enabled flips ownership, so returning this entry to
+    // enabled: false restores the Hono viewer as the rollback.
+    expect(manifest).toMatch(/\/admin\/join-attempts"[^}]*enabled:\s*true/);
   });
 
-  it("leaves the detail page Hono-served: its own slice registers the :id entry disabled", () => {
+  it("registers the detail page alongside: its own slice registers the :id entry", () => {
     expect(read("src/route-ownership.ts")).toMatch(/path:\s*"\/admin\/join-attempts\/:id"/);
   });
 
-  it("records the list in the parity-gate inventory as Hono-owned", () => {
+  it("records the list in the parity-gate inventory as Kit-owned", () => {
     const gates = read("docs/kit-parity-gates.md");
     expect(gates).toContain("GET /admin/join-attempts");
     expect(gates).toContain("admin.join-attempts.index");
-    expect(gates).toContain("`enabled: false`");
+    expect(gates).toContain("`enabled: true`");
   });
 });
 
@@ -117,7 +114,7 @@ describe("Kit join-attempts page: the Hono markup contract, no JavaScript", () =
     expect(html.match(/<th\b(?![^>]*scope="col")/g)).toBeNull();
   });
 
-  it("links rows to the Hono-owned detail pages with the same accessible names", () => {
+  it("links rows to the Kit-owned detail pages with the same accessible names", () => {
     const html = page();
     expect(html).toContain("`/admin/join-attempts/${r.id}`");
     expect(html).toContain("View join attempt");

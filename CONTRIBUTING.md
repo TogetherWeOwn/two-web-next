@@ -83,8 +83,13 @@ worker, the Kit spike), `db` (migrations) — plus `full` (lockfiles,
 `.github/**`, shared config, or anything unknown: run everything) and `draft`.
 `a11y` runs on app/db, `lighthouse` and `bundle-budget` on app, and `docs-links`
 checks relative links and anchors on every PR. `check` runs unless its run was
-cancelled, skips its heavy steps on docs-only and draft PRs, and requires
-`docs-links`; the `ci-ok` aggregator reports the overall conclusion. In a run
+cancelled, starts from `scope` alone so it runs in parallel with the audit
+and performance jobs, and skips its heavy steps on docs-only and draft PRs.
+`node22-compat` reports the same way on the exact Node 22.23.0 `engines`
+floor — the version asserted in its log — running lint, typecheck and the
+unit suite, so the declared 22 range is verified beside the Node 24 jobs;
+the `ci-ok` aggregator requires `docs-links`, `node22-compat` and every
+selected job's result, and reports the overall conclusion. In a run
 cancelled by a newer run on the same PR, both conclude cancelled rather than
 failed, and the newer run's `ci-ok` decides the merge. Main pushes and the nightly schedule
 run the full suite. The `ci-ok`-as-required-check ruleset cutover is an

@@ -6,8 +6,10 @@
 // bearer, and makes exactly one store.get per request — one decision per
 // request, shared with Kit loads through locals (createRequestSessionCache
 // shares one decision across concurrent readers of the same Request where
-// several readers are wired). It never rotates, revokes, issues,
-// or sets cookies: rotation stays route-specific inside Hono's readSession
+// several readers are wired). The bridge never rotates, revokes, or issues
+// a session; the one cookie this module writes is the signed auth-status
+// probe below, attached by the hook only to successful moderator admin
+// documents. Rotation stays route-specific inside Hono's readSession
 // (no blanket rotating layout load; fragments and JSON keep nonrotating
 // reads), logout stays the authoritative Hono POST /logout, and flashes stay
 // Hono-consumed until a Kit route needs to consume them.
@@ -18,7 +20,9 @@
 // never reported as a logout, so Kit renders "unknown" instead of flipping a
 // member to logged-out). The auth-status probe cookie is deliberately never
 // accepted here: it proves liveness only and is not a login token.
+import { generateSignedCookie } from "hono/cookie";
 import { parseSigned } from "hono/utils/cookie";
+import { AUTH_STATUS_COOKIE } from "./auth-status";
 import type { Env } from "./env";
 import { storeForEnv } from "./index";
 import { safeNext } from "./join/service";
@@ -30,7 +34,7 @@ import {
 } from "./return-journey";
 import type { HookEventLike } from "./route-ownership";
 import { SESSION_COOKIE } from "./session-cookie";
-import { hashToken, type SessionStore } from "./sessions";
+import { hashToken, SESSION_TTL_SECONDS, type SessionStore } from "./sessions";
 import { EXPIRED_WRITE_COOKIE } from "./write-recovery";
 
 export type KitSession = {
@@ -237,5 +241,44 @@ export function kitSessionBridge(env: Env): (event: HookEventLike) => Promise<Ki
       readReturnJourney(event.request, env.SESSION_SECRET),
     ]);
     return { ...session, ...journey };
+  };
+}
+
+const AUTH_STATUS_OPTIONS = {
+  path: "/",
+  secure: true,
+  httpOnly: true,
+  sameSite: "Lax" as const,
+  maxAge: SESSION_TTL_SECONDS,
+};
+
+/** Signs the read-only probe only for a successful moderator admin document. */
+export function kitAuthStatusCookieFor(env: Env): (event: HookEventLike) => Promise<string | null> {
+  return async (event) => {
+    const locals = event.locals as Partial<KitLocals> | undefined;
+    if (
+      event.request.method !== "GET" ||
+      !/^\/admin(?:\/|$)/.test(event.url.pathname) ||
+      locals?.status !== "authenticated" ||
+      !locals.session?.moderator ||
+      !env.SESSION_SECRET
+    )
+      return null;
+
+    try {
+      const cookies = await verifiedCookies(event.request, env.SESSION_SECRET);
+      const token = cookies?.[SESSION_COOKIE];
+      if (typeof token !== "string" || !token.startsWith("two_")) return null;
+      const store = await storeForEnv(env);
+      const key = await store.statusHash(await hashToken(token));
+      // Assert the 64-hex shape before signing (the recorded cookie-write
+      // boundary): a value outside the shape the read path accepts
+      // (src/auth-status.ts) must never be signed into a probe cookie.
+      if (!key || !/^[a-f0-9]{64}$/.test(key)) return null;
+      return generateSignedCookie(AUTH_STATUS_COOKIE, key, env.SESSION_SECRET, AUTH_STATUS_OPTIONS);
+    } catch {
+      // A probe-store outage must not fail the already-authorized page render.
+      return null;
+    }
   };
 }

@@ -48,6 +48,10 @@ export const load: PageServerLoad = async ({ url, request, locals, cookies, setH
     loadHomeUpcomingMerged(
       () => dbFor({ env }),
       () => discordEventsSource(env),
+      undefined,
+      // Same correlation source as the Hono request log: the validated
+      // cf-ray (safeRequestId inside the reader drops anything else).
+      request.headers.get("cf-ray") ?? undefined,
     ),
     dbFor({ env })
       .then((db) => (db ? listVisibleFeatured(db) : []))

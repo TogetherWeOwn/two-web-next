@@ -156,7 +156,9 @@ describe("frozen URL method ownership matrix", () => {
     expect(resolveRouteOwner({ method: "GET", path: "/about" })).toBe("kit");
     expect(resolveRouteOwner({ method: "GET", path: "/faq" })).toBe("kit");
     expect(resolveRouteOwner({ method: "GET", path: "/leaderboards/members" })).toBe("kit");
-    expect(resolveRouteOwner({ method: "GET", path: "/events" })).toBe("hono");
+    expect(resolveRouteOwner({ method: "GET", path: "/events" })).toBe("kit");
+    expect(resolveRouteOwner({ method: "POST", path: "/events" })).toBe("hono");
+    expect(resolveRouteOwner({ method: "GET", path: "/events.json" })).toBe("hono");
     expect(resolveRouteOwner({ method: "GET", path: "/e/spring-fete" })).toBe("hono");
     expect(resolveRouteOwner({ method: "GET", path: "/privacy" })).toBe("hono");
     expect(resolveRouteOwner({ method: "GET", path: "/rules" })).toBe("hono");

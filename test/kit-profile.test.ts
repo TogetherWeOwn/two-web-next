@@ -168,6 +168,13 @@ describe("Kit profile model: reads declare the retrieved subject", () => {
     expect(outcome).toEqual({ kind: "notFound" });
   });
 
+  it("missing public-member lookup resolves to a generic not-found outcome", async () => {
+    const outcome = await resolveKitProfile(reqFor(memberSession(BOB), "999999999999999998"), {
+      store: createMemoryProfileStore([]),
+    });
+    expect(outcome).toEqual({ kind: "notFound" });
+  });
+
   it("stats absence resolves with a null block instead of failing the read", async () => {
     const outcome = await resolveKitProfile(reqFor(memberSession(BOB), ALICE), depsFor());
     expect(outcome.kind).toBe("ok");

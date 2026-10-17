@@ -412,6 +412,7 @@ app.get("/", async (c) => {
     () => discordEventsSource(c.env),
     new Date(),
     executionCtx,
+    c.get("requestId"),
   );
   const featuredPromise = cachedFeatured(c.env, () => dbFor(c), new Date(), executionCtx);
   const [{ session, unavailable: sessionUnavailable }, counts, flashed, homeUpcoming, featured] =

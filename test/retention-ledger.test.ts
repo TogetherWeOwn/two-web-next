@@ -21,6 +21,7 @@ import type postgres from "postgres";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
   backoffFor,
+  EVENT_SEARCH_LOG_RETENTION_DAYS,
   JOIN_ATTEMPT_RETENTION_DAYS,
   MEMBER_ACCESS_LOG_RETENTION_DAYS,
   SYNC_EVENT,
@@ -207,6 +208,31 @@ describe("retention ledger doc rows", () => {
     const rsvpLines = read("src/events/rsvp.ts").split("\n");
     expect(rsvpLines[207]).toContain("pruneThrottle");
     expect(rsvpLines[209]).toContain("delete from web_throttle_hits");
+  });
+
+  it("publishes the event-search table, access paths, and established prune window", () => {
+    const doc = read("docs/retention-ledger.md");
+    expect(EVENT_SEARCH_LOG_RETENTION_DAYS).toBe(90);
+    for (const claim of [
+      "`event_search_logs` (`public`, Drizzle `eventSearchLogs`)",
+      "EVENT_SEARCH_LOG_RETENTION_DAYS = 90",
+      "occurred_at < cutoff",
+      "1,000",
+      "100 batches per table per pass",
+      "recordSearch",
+      "bin/import/content-funnel.mjs",
+      "topZeroResultSearches",
+      "src/admin/routes.tsx",
+      "src/db/read-classification.ts",
+    ]) {
+      expect(doc, `ledger must pin event-search claim: ${claim}`).toContain(claim);
+    }
+    expect(read("src/jobs/postgres.ts")).toContain(
+      "select id from event_search_logs where occurred_at < ${cutoff}",
+    );
+    expect(read("src/jobs/cron.ts")).toContain(
+      "drainPruneTable(\n      (c) => stores.searchLog.pruneOlderThan(c),\n      cutoff(now, EVENT_SEARCH_LOG_RETENTION_DAYS),",
+    );
   });
 
   it("publishes one row per queue/lock table with window, mechanism, and proof", () => {
