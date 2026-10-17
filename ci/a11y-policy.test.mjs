@@ -188,7 +188,7 @@ test("the required ci-ok gate runs after a non-green audit and rejects every non
   const ciOk = workflow.split("\n  ci-ok:\n")[1];
   assert.match(
     ciOk,
-    /\n    needs: \[a11y, lighthouse, bundle-budget, docs-links, check, scope\]\n/,
+    /\n    needs: \[a11y, lighthouse, bundle-budget, docs-links, check, node22-compat, scope\]\n/,
   );
   assert.match(ciOk, /\n    if: \$\{\{ !cancelled\(\) \}\}\n/);
   assert.match(ciOk, /A11Y_RESULT: \$\{\{ needs\.a11y\.result \}\}/);

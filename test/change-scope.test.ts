@@ -414,10 +414,30 @@ describe("ci heavy-job scope gates", () => {
     }
   });
 
+  it("ci-ok fails unless the Node 22 compatibility leg passes", () => {
+    const guard = jobBlock("ci-ok").match(
+      /- name: Require successful Node 22 compatibility leg\n        env:\n          NODE22_COMPAT_RESULT: \$\{\{ needs\.node22-compat\.result \}\}\n        run: ([^\n]+)\n/,
+    )?.[1];
+    expect(guard, "node22-compat guard must sit in ci-ok").toBeDefined();
+    for (const [result, expected] of [
+      ["success", 0],
+      ["failure", 1],
+      ["cancelled", 1],
+      ["skipped", 1],
+      ["", 1],
+    ] as const) {
+      const run = spawnSync("bash", ["-c", guard ?? "exit 99"], {
+        env: { NODE22_COMPAT_RESULT: result },
+        encoding: "utf8",
+      });
+      expect(run.status, `node22-compat result ${result || "missing"}`).toBe(expected);
+    }
+  });
+
   it("ci-ok aggregates every gated job and fails closed on scope", () => {
     const block = jobBlock("ci-ok");
     expect(block).toMatch(
-      /\n    needs: \[a11y, lighthouse, bundle-budget, docs-links, check, scope\]\n/,
+      /\n    needs: \[a11y, lighthouse, bundle-budget, docs-links, check, node22-compat, scope\]\n/,
     );
     expect(block).toMatch(/\n    if: \$\{\{ !cancelled\(\) \}\}\n/);
     expect(block).toContain("SCOPE_RESULT: ${{ needs.scope.result }}");
