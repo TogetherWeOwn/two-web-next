@@ -18,9 +18,10 @@
 // and never echoed. ERROR_RATE_FIXTURE points at a saved GraphQL
 // envelope instead of the network: the staging rehearsal uses it to
 // prove a simulated elevated rate halts through this exact code path.
-import { readFileSync } from "node:fs";
-import { pathToFileURL } from "node:url";
+import { readFileSync, realpathSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import {
+  assertErrorRateIdentifiers,
   buildErrorRateQuery,
   evaluateErrorRate,
   parseErrorRateResponse,
@@ -57,6 +58,16 @@ export async function runErrorRateGate(config, deps = {}) {
     deps.sleep ?? ((seconds) => new Promise((resolve) => setTimeout(resolve, seconds * 1000)));
   const fetchJson = deps.fetchJson ?? ((body) => defaultFetchJson(body, config.apiToken));
   const log = deps.log ?? ((line) => console.log(line));
+
+  if (config.fixturePayload !== undefined) {
+    // A fixture verdict must never be mistaken for a live one: composite
+    // steps inherit the caller's job env, so ERROR_RATE_FIXTURE could be
+    // set without any action input naming it.
+    log(
+      "::warning::error-rate gate is judging a rehearsal fixture " +
+        "(ERROR_RATE_FIXTURE), not live Cloudflare analytics",
+    );
+  }
 
   if (config.soakSeconds > 0) {
     log(`error-rate soak_seconds=${config.soakSeconds} before first query`);
@@ -108,12 +119,18 @@ export async function runErrorRateGate(config, deps = {}) {
   return { code: 1, attempts: config.attempts, ...last };
 }
 
-function numberFromEnv(env, name, fallback, { integer = false, min = 0 } = {}) {
+function numberFromEnv(env, name, fallback, { integer = false, min = 0, max } = {}) {
   const raw = env[name];
   if (raw === undefined || raw === "") return fallback;
   const value = Number(raw);
-  if (!Number.isFinite(value) || value < min || (integer && !Number.isSafeInteger(value))) {
-    throw new Error(`${name} must be ${integer ? "an integer" : "a number"} >= ${min}`);
+  if (
+    !Number.isFinite(value) ||
+    value < min ||
+    (max !== undefined && value > max) ||
+    (integer && !Number.isSafeInteger(value))
+  ) {
+    const range = max === undefined ? `>= ${min}` : `between ${min} and ${max}`;
+    throw new Error(`${name} must be ${integer ? "an integer" : "a number"} ${range}`);
   }
   return value;
 }
@@ -124,13 +141,20 @@ export function configFromEnv(env) {
   if (!fixturePath && !apiToken) {
     throw new Error("CLOUDFLARE_API_TOKEN is required unless ERROR_RATE_FIXTURE is set");
   }
+  const accountId = env.CLOUDFLARE_ACCOUNT_ID ?? "";
+  const scriptName = env.WORKER_NAME ?? "";
+  const versionId = env.NEW_VERSION ?? "";
+  // Fail fast on static misconfiguration: this runs before the soak, so a
+  // typo (threshold 5 for 5 percent, an empty id) surfaces in seconds
+  // instead of after the soak and retry sleeps.
+  assertErrorRateIdentifiers({ accountId, scriptName, versionId });
   return {
-    accountId: env.CLOUDFLARE_ACCOUNT_ID ?? "",
-    scriptName: env.WORKER_NAME ?? "",
-    versionId: env.NEW_VERSION ?? "",
+    accountId,
+    scriptName,
+    versionId,
     apiToken,
     fixturePayload: fixturePath ? JSON.parse(readFileSync(fixturePath, "utf8")) : undefined,
-    threshold: numberFromEnv(env, "ERROR_RATE_THRESHOLD", 0.05),
+    threshold: numberFromEnv(env, "ERROR_RATE_THRESHOLD", 0.05, { max: 1 }),
     minRequests: numberFromEnv(env, "ERROR_RATE_MIN_REQUESTS", 20, { integer: true, min: 1 }),
     windowMinutes: numberFromEnv(env, "ERROR_RATE_WINDOW_MINUTES", 10, { integer: true, min: 1 }),
     soakSeconds: numberFromEnv(env, "ERROR_RATE_SOAK_SECONDS", 60, { integer: true }),
@@ -139,7 +163,20 @@ export function configFromEnv(env) {
   };
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+// Node realpath-resolves the main module for import.meta.url but leaves
+// argv[1] as given, so compare realpaths: the naive URL comparison no-ops
+// (a silent pass for a safety gate) when the action path has a symlinked
+// component, as on self-hosted runners with a symlinked _work directory.
+function isMainModule() {
+  if (!process.argv[1]) return false;
+  try {
+    return realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url));
+  } catch {
+    return false;
+  }
+}
+
+if (isMainModule()) {
   try {
     const result = await runErrorRateGate(configFromEnv(process.env));
     process.exitCode = result.code;

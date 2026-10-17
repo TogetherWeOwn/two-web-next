@@ -1128,8 +1128,10 @@ test("each gradual stage also judges the new version's live error rate before ro
     at = next;
   }
   assert.equal((action.match(/id: error-rate-(5|50|100)\n/g) ?? []).length, 3);
+  // End-of-line anchor: a trailing `|| true` on the run line would
+  // neutralize the gate while an unanchored count stays green.
   assert.equal(
-    (action.match(/node "\$\{\{ github\.action_path \}\}\/error-rate-gate\.mjs"/g) ?? []).length,
+    (action.match(/node "\$\{\{ github\.action_path \}\}\/error-rate-gate\.mjs"$/gm) ?? []).length,
     3,
   );
   // The gate reads analytics with the same caller-supplied token/account
@@ -1140,4 +1142,32 @@ test("each gradual stage also judges the new version's live error rate before ro
     3,
   );
   assert.ok(!action.includes("ERROR_RATE_FIXTURE"));
+  // Per-step wiring: enabled-only guard (whole line, so `&& false` fails),
+  // the promoted version (never the rollback target), and the exact env
+  // names configFromEnv parses. Count pins alone let a renamed env var or
+  // a repointed NEW_VERSION merge green.
+  const stepBlock = (name) => {
+    const start = action.indexOf(`    - name: ${name}\n`);
+    assert.ok(start >= 0, `step missing: ${name}`);
+    const rest = action.slice(start + 1);
+    const next = rest.indexOf("\n    - name: ");
+    return next < 0 ? rest : rest.slice(0, next);
+  };
+  for (const pct of [5, 50, 100]) {
+    const block = stepBlock(`Live error-rate gate at ${pct} percent`);
+    assert.ok(block.includes("if: inputs.error-rate-gate == 'true'\n"), `gate ${pct} if guard`);
+    for (const envLine of [
+      "WORKER_NAME: ${{ inputs.worker-name }}",
+      "NEW_VERSION: ${{ steps.promoted-version.outputs.id }}",
+      "CLOUDFLARE_API_TOKEN: ${{ inputs.api-token }}",
+      "CLOUDFLARE_ACCOUNT_ID: ${{ inputs.account-id }}",
+      "ERROR_RATE_THRESHOLD: ${{ inputs.error-rate-threshold }}",
+      "ERROR_RATE_MIN_REQUESTS: ${{ inputs.error-rate-min-requests }}",
+      "ERROR_RATE_WINDOW_MINUTES: ${{ inputs.error-rate-window-minutes }}",
+      "ERROR_RATE_SOAK_SECONDS: ${{ inputs.error-rate-soak-seconds }}",
+    ]) {
+      assert.ok(block.includes(envLine), `gate ${pct} env: ${envLine}`);
+    }
+    assert.ok(!block.includes("rollback-target"), `gate ${pct} must not read the rollback target`);
+  }
 });

@@ -6,11 +6,15 @@
 // composite action resolves, so caller-relative drift fails here first.
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdtempSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import { runErrorRateGate } from "../.github/actions/gradual-promote/error-rate-gate.mjs";
+import { fileURLToPath } from "node:url";
+import {
+  configFromEnv,
+  runErrorRateGate,
+} from "../.github/actions/gradual-promote/error-rate-gate.mjs";
 import {
   GRADUAL_STEPS,
   assertVersionTag,
@@ -23,6 +27,10 @@ import {
   versionIdForTag,
 } from "../.github/actions/gradual-promote/gradual-promote.mjs";
 
+const GATE_PATH = fileURLToPath(
+  new URL("../.github/actions/gradual-promote/error-rate-gate.mjs", import.meta.url),
+);
+const GATE_DIR = fileURLToPath(new URL("../.github/actions/gradual-promote/", import.meta.url));
 const PREV = "12345678-1234-1234-1234-123456789abc";
 const NEXT = "22345678-1234-1234-1234-123456789abc";
 const TAG = "abc123-456-1";
@@ -379,8 +387,10 @@ test("gate CLI in fixture mode halts on a simulated elevated rate, passes health
     writeFileSync(path, JSON.stringify(envelope(sum)));
     return path;
   };
-  const run = (path) =>
-    spawnSync(process.execPath, [".github/actions/gradual-promote/error-rate-gate.mjs"], {
+  // Pin every gate setting: the child inherits the shell env, and an
+  // ambient ERROR_RATE_* value must not change the fixture verdict.
+  const run = (path, script = GATE_PATH) =>
+    spawnSync(process.execPath, [script], {
       encoding: "utf8",
       env: {
         ...process.env,
@@ -390,12 +400,48 @@ test("gate CLI in fixture mode halts on a simulated elevated rate, passes health
         ERROR_RATE_FIXTURE: path,
         ERROR_RATE_SOAK_SECONDS: "0",
         ERROR_RATE_ATTEMPTS: "1",
+        ERROR_RATE_RETRY_SECONDS: "0",
+        ERROR_RATE_THRESHOLD: "0.05",
+        ERROR_RATE_MIN_REQUESTS: "20",
+        ERROR_RATE_WINDOW_MINUTES: "10",
       },
     });
   const elevated = run(fixture("elevated.json", { requests: 100, errors: 40 }));
   assert.equal(elevated.status, 1, elevated.stdout + elevated.stderr);
   assert.match(elevated.stdout, /verdict=fail/);
+  // A fixture verdict announces itself, so it cannot pass as a live one.
+  assert.match(elevated.stdout, /::warning::.*fixture/);
   const healthy = run(fixture("healthy.json", { requests: 100, errors: 0 }));
   assert.equal(healthy.status, 0, healthy.stdout + healthy.stderr);
   assert.match(healthy.stdout, /verdict=pass/);
+  assert.match(healthy.stdout, /::warning::.*fixture/);
+  // Through a symlinked action path (self-hosted runners with a symlinked
+  // _work directory) the CLI must still run: a no-op exits 0 silently,
+  // indistinguishable from a pass.
+  const link = join(dir, "link");
+  symlinkSync(GATE_DIR, link, "dir");
+  const viaSymlink = run(
+    fixture("elevated2.json", { requests: 100, errors: 40 }),
+    join(link, "error-rate-gate.mjs"),
+  );
+  assert.equal(viaSymlink.status, 1, viaSymlink.stdout + viaSymlink.stderr);
+  assert.match(viaSymlink.stdout, /verdict=fail/);
+});
+
+test("gate config rejects static misconfiguration before any soak", () => {
+  const base = {
+    CLOUDFLARE_API_TOKEN: "t",
+    CLOUDFLARE_ACCOUNT_ID: ACCOUNT,
+    WORKER_NAME: "two-web-next-production",
+    NEW_VERSION: NEXT,
+  };
+  assert.equal(configFromEnv(base).threshold, 0.05);
+  assert.throws(
+    () => configFromEnv({ ...base, ERROR_RATE_THRESHOLD: "5" }),
+    /ERROR_RATE_THRESHOLD/,
+  );
+  assert.throws(() => configFromEnv({ ...base, CLOUDFLARE_ACCOUNT_ID: "" }), /account id/);
+  assert.throws(() => configFromEnv({ ...base, WORKER_NAME: "" }), /script name/);
+  assert.throws(() => configFromEnv({ ...base, NEW_VERSION: "not-a-uuid" }), /Version ID/);
+  assert.throws(() => configFromEnv({ ...base, CLOUDFLARE_API_TOKEN: "" }), /CLOUDFLARE_API_TOKEN/);
 });

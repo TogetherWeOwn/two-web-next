@@ -144,7 +144,9 @@ const ACCOUNT_ID_PATTERN = /^[0-9a-f]{32}$/;
 // Worker script names: lowercase letters, digits and dashes.
 const SCRIPT_NAME_PATTERN = /^[a-z0-9][a-z0-9-]{0,62}$/;
 
-export function buildErrorRateQuery({ accountId, scriptName, versionId, sinceIso, untilIso }) {
+// Static gate identifiers, validated before any soak or fetch so a
+// misconfiguration fails in seconds instead of after the retry delays.
+export function assertErrorRateIdentifiers({ accountId, scriptName, versionId }) {
   if (typeof accountId !== "string" || !ACCOUNT_ID_PATTERN.test(accountId)) {
     throw new Error("account id must be a 32-character lowercase hex Cloudflare account id");
   }
@@ -152,6 +154,10 @@ export function buildErrorRateQuery({ accountId, scriptName, versionId, sinceIso
     throw new Error("script name must be lowercase letters, digits or dashes");
   }
   assertRollbackVersionId(versionId);
+}
+
+export function buildErrorRateQuery({ accountId, scriptName, versionId, sinceIso, untilIso }) {
+  assertErrorRateIdentifiers({ accountId, scriptName, versionId });
   const since = Date.parse(sinceIso ?? "");
   const until = Date.parse(untilIso ?? "");
   if (!Number.isFinite(since) || !Number.isFinite(until) || since >= until) {
