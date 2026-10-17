@@ -34,16 +34,21 @@ export type UptimeAlert = {
 // Synthetic main-flow checks: the same cron also probes the sign-in entry
 // and the main public pages, because a healthy /up does not prove members
 // can load the site or start Discord sign-in. Every check is an anonymous
-// GET with manual redirects — read-only in production too, never a login
-// attempt, form post or fault injection. Expected values were verified
-// against staging: /login redirects to /auth/discord, which redirects to
-// Discord's OAuth authorize endpoint. The redirect Location is compared
-// by host/path only and never logged: its query carries the OAuth state.
+// GET with manual redirects: never a login attempt, form post or fault
+// injection, and no probe changes application data. The sign-in check
+// stops at /login on purpose: the next hop (/auth/discord) mints OAuth
+// state, writing a login-redirect throttle hit and an OAuth journey row
+// per attempt, so probing it would not stay passive in production.
+// /events records one rate-limit counter hit (the events-read bucket) per
+// admitted attempt, exactly like any anonymous visitor; the existing
+// throttle expiry sweep deletes those counters. Expected values were
+// verified against staging: /login redirects to /auth/discord on the same
+// host. The redirect Location is compared by host/path only and never
+// logged, so nothing from its query can reach a page or log line.
 export type SyntheticCheck = {
-  path: "/" | "/events" | "/login" | "/auth/discord";
+  path: "/" | "/events" | "/login";
   status: number;
   contentType?: string;
-  locationHost?: string;
   locationPath?: string;
 };
 
@@ -51,12 +56,6 @@ export const SYNTHETIC_CHECKS: readonly SyntheticCheck[] = [
   { path: "/", status: 200, contentType: "text/html" },
   { path: "/events", status: 200, contentType: "text/html" },
   { path: "/login", status: 302, locationPath: "/auth/discord" },
-  {
-    path: "/auth/discord",
-    status: 302,
-    locationHost: "discord.com",
-    locationPath: "/oauth2/authorize",
-  },
 ];
 
 export type SyntheticAlert = {
@@ -327,8 +326,9 @@ export function createTailWorker(
         ok = (response.headers.get("content-type") ?? "").startsWith(check.contentType);
       }
       if (ok && check.locationPath) {
-        // Compare host/path only; the Location query (OAuth state) is
-        // discarded here and never reaches a log line or the webhook.
+        // Compare host/path only; any Location query is discarded here and
+        // never reaches a log line or the webhook. The one redirect check
+        // (/login) must stay on the probed host.
         const location = response.headers.get("location");
         let target: URL | null = null;
         try {
@@ -336,10 +336,7 @@ export function createTailWorker(
         } catch {
           target = null;
         }
-        ok =
-          target !== null &&
-          target.pathname === check.locationPath &&
-          target.host === (check.locationHost ?? base.host);
+        ok = target !== null && target.pathname === check.locationPath && target.host === base.host;
       }
       await response.body?.cancel(); // Never read or log the body.
       return { ok, status: response.status };

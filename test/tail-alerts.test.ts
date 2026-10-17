@@ -439,15 +439,11 @@ describe("Tail scheduled uptime prober", () => {
   };
 
   // Healthy synthetic answers per path, mirroring the verified staging
-  // responses. The /auth/discord Location carries a fixture OAuth state so
-  // tests can prove it never reaches a page or a log line.
+  // responses. There is deliberately no /auth/discord answer: the prober
+  // must never request that state-minting hop (the healthy-run test below
+  // pins the exact probed path list).
   const healthySynthetic = (path: string): Probe => {
     if (path === "/login") return { status: 302, location: "/auth/discord" };
-    if (path === "/auth/discord")
-      return {
-        status: 302,
-        location: "https://discord.com/oauth2/authorize?state=fixture-state-value",
-      };
     return { status: 200, contentType: "text/html; charset=UTF-8" };
   };
 
@@ -614,10 +610,11 @@ describe("Tail scheduled uptime prober", () => {
       "/",
       "/events",
       "/login",
-      "/auth/discord",
     ]);
-    // Every probe is a read-only GET that never follows a redirect into a
-    // login flow: production probing stays passive.
+    // Every probe is an anonymous GET that never follows a redirect into a
+    // login flow, and the sign-in check stops at /login: /auth/discord
+    // mints OAuth state (throttle hit + journey row), so probing it would
+    // not stay passive in production.
     for (const [, init] of probeGets(send)) {
       expect(init?.method).toBe("GET");
       expect(init?.redirect).toBe("manual");
@@ -678,12 +675,12 @@ describe("Tail scheduled uptime prober", () => {
       label: "login no longer redirecting to sign-in",
     },
     {
-      path: "/auth/discord",
+      path: "/login",
       probe: {
         status: 302,
-        location: "https://evil.example/oauth2/authorize?state=fixture-state-value",
+        location: "https://evil.example/auth/discord?state=fixture-state-value",
       },
-      label: "sign-in entry redirecting to a foreign host",
+      label: "login redirecting the sign-in entry to a foreign host",
     },
     {
       path: "/",
@@ -699,7 +696,7 @@ describe("Tail scheduled uptime prober", () => {
     expect(pages).toHaveLength(1);
     const content = JSON.parse(pages[0]![1].body as string).content as string;
     expect(JSON.parse(content)).toMatchObject({ event: "synthetic.down", check: path });
-    // The OAuth state from any Location header never leaves the account:
+    // Nothing from a Location header's query ever leaves the account:
     // not in the page, not in the delivery receipt.
     expect(content).not.toContain("fixture-state-value");
     expect(sink.mock.calls[0]![0]).not.toContain("fixture-state-value");

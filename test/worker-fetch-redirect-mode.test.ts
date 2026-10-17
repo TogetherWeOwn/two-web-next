@@ -246,22 +246,17 @@ describe("Worker redirect-manual behavior", () => {
     // then one page each: every 302 is a failure with its status, not a
     // throw (status 0) and not a silent success. A "follow" revert would
     // see the healthy followed() response and stay silent instead.
-    expect(gets).toHaveLength(10);
+    expect(gets).toHaveLength(8);
     for (const init of seen) expect(init?.redirect).toBe("manual");
-    expect(posts).toHaveLength(5);
-    expect(lines).toHaveLength(5);
+    expect(posts).toHaveLength(4);
+    expect(lines).toHaveLength(4);
     expect(JSON.parse(lines[0]!)).toMatchObject({
       event: "uptime.down",
       status: 302,
       delivery: "ops.alert.delivery_failed",
     });
     const syntheticLines = lines.slice(1).map((line) => JSON.parse(line));
-    expect(syntheticLines.map((line) => line.check)).toEqual([
-      "/",
-      "/events",
-      "/login",
-      "/auth/discord",
-    ]);
+    expect(syntheticLines.map((line) => line.check)).toEqual(["/", "/events", "/login"]);
     for (const line of syntheticLines) {
       expect(line).toMatchObject({
         event: "synthetic.down",
