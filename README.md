@@ -31,6 +31,8 @@ Operations (deploy/rollback, `/up`, queues, outages and restore drills):
 
 - [Moderator admin guide](docs/moderator-admin-guide.md): Next admin routes,
   event and featured-content workflows, dashboard diagnostics, and safe escalation.
+- [Monthly event-planning cadence](docs/event-planning-cadence.md): rolling
+  four-week planning, cancellation/reschedule handling, and cycle completion.
 - [Weekly TWO Community event run-of-show](docs/weekly-event-run-of-show.md):
   preparation, preflight, cancellation, and closeout evidence.
 - [Event host privacy and safety checklist](docs/event-host-privacy-safety-checklist.md):
