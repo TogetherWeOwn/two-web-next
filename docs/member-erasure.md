@@ -93,7 +93,8 @@ already run the shared prune (an unknown-event id exits before the prune);
 the join admission path (`checkJoinThrottle`
 in `src/join/service.ts`, shared by the profile path) judges and records
 first, then prunes expired rows only for admitted requests — a refused join
-or profile write triggers no cleanup there. Both prunes are bounded by
+or throttle-refused profile write triggers no cleanup there (a throttle-admitted
+profile write still prunes before the owner check can refuse it). Both prunes are bounded by
 `THROTTLE_COUNTER_RETENTION_MINUTES = 5`. `test/member-erasure-coverage.test.ts`
 pins this: it fails on any new member-keyed column or `*-write:${...}` bucket
 that is neither erased above nor documented here with its own deletion proof.
