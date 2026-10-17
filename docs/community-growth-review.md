@@ -2,7 +2,9 @@
 
 ## Rule
 
-Review growth spend after eight weeks of events. If the result is <20 weekly-active humans at that review, end growth spend. A kill ends growth spend, never the community.
+Review growth spend after 8 weeks of events. Kill rule (goal verbatim): `<20 weekly-active humans after 8 weeks of events` ends growth spend. A kill ends growth spend, never the community.
+
+The goal does not specify which weekly-active-human count is compared with 20 (eighth event week, eight-week mean, or another aggregation), nor the event-week boundary. The review must record which count was compared — the week, its date range, and source — so the decision is reproducible.
 
 A weekly-active human is a human with at least one message or at least 10 voice-minutes during the week. Bot traffic does not count.
 
