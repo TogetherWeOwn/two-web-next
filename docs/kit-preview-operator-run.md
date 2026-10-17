@@ -25,9 +25,18 @@ not a pass.
 - No secrets in the repo, in shell history, or in any pasted output. Variable
   names only, never values.
 - Both preview URLs known: the Kit Worker under test and the Hono reference.
-  Each must be an `https:` origin with no credentials, port, path, query or
-  fragment, hosted on `next.togetherweown.com` (staging) or `*.workers.dev`
-  (preview), and the two must differ. Anything else exits 2 before any fetch.
+  Pair them carefully — the two scripts guard the pair differently:
+  - `ci/kit-parity-gates.mjs` enforces the strict rule and exits 2 before any
+    fetch when it fails: each URL must be an `https:` origin with no
+    credentials, port, path, query or fragment, hosted on
+    `next.togetherweown.com` (staging) or `*.workers.dev` (preview), and the
+    two must differ (a self-pair proves nothing).
+  - `ci/kit-preview-e2e.mjs` checks far less: it exits 2 only when exactly one
+    URL is set, accepts `http:` as well as `https:`, and does not check the
+    port, the host allowlist, or that the two bases differ. A malformed shape
+    throws and surfaces as exit 1, not exit 2. A self-pair here fetches the
+    same host twice and compares it against itself — a false green — so verify
+    the two hosts differ by eye before running it.
 - Optional: `KIT_PARITY_QA_TOKEN` carrying the staging QA token for the
   authenticated member-board arm. Without it those journeys ledger as skipped
   with the reason, never as a quiet pass.
@@ -48,7 +57,8 @@ HONO_PREVIEW_URL=https://next.togetherweown.com/ \
 node ci/kit-parity-gates.mjs
 ```
 
-Authenticated preview (one QA login per base, replayed as a cookie; the token
+Authenticated preview (up to two QA logins per base — the member and
+moderator identities — each replayed as a cookie; the token
 and cookie values never reach the ledger):
 
 ```sh
@@ -59,9 +69,9 @@ node ci/kit-parity-gates.mjs
 ```
 
 Read the token from the approved binding into the environment; never place the
-value in `argv`, a URL, a file in the repo, or a comment. Omit either preview
-URL and both scripts exit 2 with the set-both-or-neither diagnostic before any
-fetch; set exactly one and the same thing happens. Unit mode (neither URL set)
+value in `argv`, a URL, a file in the repo, or a comment. Set exactly one
+preview URL and both scripts exit 2 with the set-both-or-neither diagnostic
+before any fetch. Unit mode (neither URL set)
 is the CI path and proves nothing about the deployed pair.
 
 Optional sanity check before a run (no network, no token):
@@ -76,8 +86,12 @@ Copy this list into the card or PR comment and check every box:
 
 - [ ] Both commands pasted with their redacted environment (host names only,
       token shown as `$QA_AUTH_TOKEN`, never its value).
-- [ ] Exit code of each command (0 pass, 1 journeys failed, 2 misconfigured or
-      all-skipped/empty ledger).
+- [ ] Exit code of each command, read per script:
+      `kit-parity-gates.mjs`: 0 pass, 1 journeys failed (or secret-shaped
+      content in the ledger), 2 misconfigured or all-skipped/empty ledger.
+      `kit-preview-e2e.mjs`: 0 pass, 1 failed assertions (URL-shape errors
+      also surface here as exit 1 exceptions), 2 only for one-sided URLs.
+      The first script has no ledger and no all-skipped verdict.
 - [ ] `test-results/kit-parity-ledger.json` and
       `test-results/kit-parity-ledger.md` attached or linked: verdict plus
       passed/failed/skipped/total counts. An `empty` or `all-skipped` verdict
@@ -105,7 +119,8 @@ as preview proof:
   login journeys from the manifest — it fetches nothing deployed.
 - Per-entry iteration over every parity route (all four hot-zone paths,
   `?page=2`, admission variants) happens only in preview mode.
-- Preview-mode member-board checks spend one QA login per base and run only
+- Preview-mode member-board checks spend up to two QA logins per base (member
+  plus moderator identities) and run only
   with the token; in CI those journeys ledger as skipped. The only
   authenticated Kit-parity journey in CI is the `browser-smoke` member-board
   run with one shared QA login, which does not replace the preview matrix.
@@ -122,15 +137,19 @@ as preview proof:
 
 ## Troubleshooting
 
-- Exit 2 naming a URL rule: re-read the pairing rule above (both or neither,
-  `https:` origin, allowlisted host, differing hosts). Fix the environment,
-  not the gate.
+- Exit 2 naming a URL rule: that is the gates script's strict pairing rule
+  (both or neither, `https:` origin, allowlisted host, differing hosts). Fix
+  the environment, not the gate. The e2e script exits 2 only for one-sided
+  URLs; its URL-shape failures throw and surface as exit 1.
 - Exit 1 with a section mismatch: the two Workers served different archive
   sections. Record both revisions and the failing journey name; do not rerun
-  until the divergence is understood.
+  until the divergence is understood. On the e2e script, exit 1 can also mean
+  a malformed preview URL or two identical bases — check the pair before
+  assuming a product divergence.
 - QA login answers non-204 or no session cookie: the journey ledgers as
   skipped naming the host and status. The QA seam allows 10 logins per minute
-  shared across callers; on a throttle wait, honor the retry delay without
+  per client-IP bucket, so callers behind the same egress share it; on a
+  throttle wait, honor the retry delay without
   retrying refused credentials, and never run a second concurrent preview
   against the same bases.
 - Staging reads are live: an empty staging database changes row content but
