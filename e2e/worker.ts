@@ -25,6 +25,7 @@ globalThis.fetch = async (input, init) => {
         code = "";
       }
       if (code === "e2e-blocked-code") return Response.json({ access_token: "e2e-blocked-token" });
+      if (code === "e2e-outage-code") return new Response("fixture outage", { status: 500 });
       return Response.json({ access_token: "e2e-member-token" });
     }
     if (request.method === "GET" && url.pathname === "/api/v10/users/@me") {

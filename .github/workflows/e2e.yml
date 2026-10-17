@@ -161,7 +161,7 @@ jobs:
         if: ${{ !cancelled() }}
         run: >-
           npx playwright test --config playwright.kit-parity.config.ts
-          e2e/kit-parity/parity.spec.ts
+          e2e/kit-parity/parity.spec.ts e2e/kit-parity/auth-boundaries.spec.ts
       - name: Kit parity ledger (no quiet green)
         if: ${{ !cancelled() }}
         run: node ci/check-kit-parity.mjs
