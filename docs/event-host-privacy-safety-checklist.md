@@ -22,8 +22,10 @@ or authorize production moderation actions.
    first. Do not put yourself or another attendee at risk.
 2. Route the concern promptly to an **authorized moderator** through the
    approved private support process. If the concern is about that moderator,
-   use the established alternate moderator/support contact. The moderator owns
-   the moderation decision and will decide whether further escalation is needed.
+   send it through the approved private support process to the site
+   maintainers/operator instead of that moderator. The authorized recipient
+   owns the moderation decision and will decide whether further escalation is
+   needed.
 3. Share only what the moderator needs to locate and assess the concern: the
    event, approximate time and timezone, a short neutral description, and where
    the original information can be accessed through the approved channel. Do
