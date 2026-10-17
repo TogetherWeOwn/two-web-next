@@ -512,6 +512,7 @@ describe("Tail scheduled uptime prober", () => {
       event,
       advance: (ms: number) => {
         now += ms;
+        event.scheduledTime += ms; // The next cron slot is later by the same step.
       },
     };
   }
@@ -782,6 +783,18 @@ describe("Tail scheduled uptime prober", () => {
     await fx.worker.scheduled(fx.event, upEnv);
     expect(probeGets(fx.send).map(([target]) => new URL(target).pathname)).toEqual(["/up"]);
     expect(pagePosts(fx.send)).toHaveLength(0);
+  });
+
+  it("a boundary run that starts late still probes the synthetics, keyed to the scheduled slot", async () => {
+    const fx = uptimeFixture([{ status: 200, origin: "two-web-next" }]);
+    fx.advance(60_000); // Handler starts at 00:01 for the 00:00 cron slot.
+    await fx.worker.scheduled({ ...fx.event, scheduledTime: timestamp }, upEnv);
+    expect(probeGets(fx.send).map(([target]) => new URL(target).pathname)).toEqual([
+      "/up",
+      "/",
+      "/events",
+      "/login",
+    ]);
   });
 });
 

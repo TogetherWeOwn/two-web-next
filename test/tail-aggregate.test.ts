@@ -144,6 +144,19 @@ describe("aggregate 5xx/error-rate spike alert", () => {
     });
   });
 
+  it("omits build_sha when the triggering batch has no valid tag, instead of blaming the previous build", async () => {
+    const f = fixture();
+    // Below-threshold errors from a tagged build record its SHA...
+    await f.worker.tail(
+      Array.from({ length: SPIKE_MIN_ERRORS - 1 }, () => fetchTrace(500)),
+      env,
+    );
+    // ...then a redeploy without a valid version tag crosses the threshold.
+    await f.worker.tail([fetchTrace(500, t0, "two-web-next", "manual-tag")], env);
+    expect(f.contents()).toHaveLength(1);
+    expect(f.contents()[0]).not.toHaveProperty("build_sha");
+  });
+
   it("stays silent below the error minimum, and when errors are a small share of traffic", async () => {
     const below = fixture();
     await below.worker.tail(
@@ -562,6 +575,96 @@ describe("durable aggregator (Durable Object)", () => {
     await worker.scheduled(event, flappy as never); // 121 s red: page attempt, POST 500.
     now += 60_000;
     await worker.scheduled(event, flappy as never);
+    const receipts = sink.mock.calls.map(([line]) => JSON.parse(line as string));
+    expect(receipts).toMatchObject([
+      { event: "uptime.down", delivery: "ops.alert.delivery_failed" },
+      { event: "uptime.down", delivery: "ops.alert.delivered" },
+    ]);
+  });
+
+  // The first result call to the real Durable Object fails in flight; the
+  // pending marker it would clear must not suppress the delivery retry.
+  function failingResultEnv(resultPath: string) {
+    const { state } = fakeState();
+    const aggregator = new AlertAggregator(state as never);
+    let failed = false;
+    return {
+      OPS_ALERT_WEBHOOK_URL: secret,
+      UPTIME_URL: "https://next.togetherweown.com/up",
+      ALERT_AGGREGATOR: {
+        idFromName: () => ({}),
+        get: () => ({
+          fetch: async (url: string, init?: RequestInit) => {
+            if (url.endsWith(resultPath) && !failed) {
+              failed = true;
+              return new Response(null, { status: 503 });
+            }
+            return aggregator.fetch(new Request(url, init));
+          },
+        }),
+      },
+    };
+  }
+
+  it("retries a failed spike-result call, so a failed delivery pages again on the next burst", async () => {
+    let now = t0;
+    let posts = 0;
+    const send = vi.fn(async () => {
+      posts += 1;
+      return new Response(null, { status: posts === 1 ? 500 : 200 });
+    });
+    const sink = vi.fn();
+    const worker = createTailWorker({
+      fetch: send as unknown as typeof fetch,
+      sink,
+      mute: new DeliveryMute(() => now),
+      tracker: new AggregateTracker(() => now),
+      now: () => now,
+      sleep: async () => {},
+    });
+    const aggEnv = failingResultEnv("/spike-result");
+    const burst = (at: number) =>
+      Array.from({ length: SPIKE_MIN_ERRORS }, () => fetchTrace(500, at));
+    await worker.tail(burst(t0), aggEnv as never);
+    now = t0 + 60_000;
+    await worker.tail(burst(t0 + 60_000), aggEnv as never);
+    const receipts = sink.mock.calls.map(([line]) => JSON.parse(line as string));
+    expect(receipts).toMatchObject([
+      { event: "error.spike", delivery: "ops.alert.delivery_failed" },
+      { event: "error.spike", delivery: "ops.alert.delivered" },
+    ]);
+  });
+
+  it("retries a failed health-result call, so a failed delivery re-pages on the next red run", async () => {
+    let now = t0;
+    let posts = 0;
+    const send = vi.fn(async (...args: [string, RequestInit?]) => {
+      const [target, init] = args;
+      if (init?.method !== "POST") {
+        return healthySynthetic(target) ?? new Response(null, { status: 503 });
+      }
+      posts += 1;
+      return new Response(null, { status: posts === 1 ? 500 : 200 });
+    });
+    const sink = vi.fn();
+    const worker = createTailWorker({
+      fetch: send as unknown as typeof fetch,
+      sink,
+      mute: new DeliveryMute(() => now),
+      tracker: new AggregateTracker(() => now),
+      health: new HealthTracker(() => now),
+      now: () => now,
+      sleep: async () => {},
+    });
+    const aggEnv = failingResultEnv("/health-result");
+    const event = { cron: "* * * * *", scheduledTime: t0, noRetry() {} };
+    await worker.scheduled(event, aggEnv as never);
+    now += 61_000;
+    await worker.scheduled(event, aggEnv as never);
+    now += 60_000;
+    await worker.scheduled(event, aggEnv as never); // 121 s red: page attempt, POST 500.
+    now += 60_000;
+    await worker.scheduled(event, aggEnv as never);
     const receipts = sink.mock.calls.map(([line]) => JSON.parse(line as string));
     expect(receipts).toMatchObject([
       { event: "uptime.down", delivery: "ops.alert.delivery_failed" },

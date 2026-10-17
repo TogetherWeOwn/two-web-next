@@ -358,8 +358,9 @@ export class AggregateTracker {
       state = { buckets: [], cooldownUntil: 0 };
       this.scripts.set(batch.script, state);
     }
-    const buildSha = shaFromVersionTag(batch.buildSha);
-    if (buildSha) state.buildSha = buildSha;
+    // The latest batch owns the attribution: a batch with no valid tag
+    // clears a previous build's SHA rather than blaming that build.
+    state.buildSha = shaFromVersionTag(batch.buildSha);
     const bucketAt = Math.floor(at / BUCKET_MS) * BUCKET_MS;
     let bucket = state.buckets.at(-1);
     if (!bucket || bucket.at !== bucketAt) {
@@ -736,19 +737,33 @@ export function createTailWorker(
     }
   }
 
+  // Result calls clear the Durable Object's pending marker; a lost result
+  // would suppress the next due page until the marker ages out, so a thrown
+  // or non-ok attempt gets exactly one retry. Resolving twice is a no-op.
+  async function postAggregatorResult(
+    stub: DurableObjectStub,
+    path: string,
+    body: unknown,
+  ): Promise<void> {
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      try {
+        const response = await stub.fetch(`https://aggregator.invalid${path}`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(body),
+          signal: AbortSignal.timeout(AGGREGATOR_TIMEOUT_MS),
+        });
+        if (response.ok) return;
+      } catch {
+        /* Fall through to the single retry, then give up. */
+      }
+    }
+  }
+
   async function resolveSpike(env: TailEnv, script: string, delivered: boolean): Promise<void> {
     const stub = aggregator(env);
     if (!stub) return tracker.resolve(script, delivered);
-    try {
-      await stub.fetch("https://aggregator.invalid/spike-result", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ script, delivered }),
-        signal: AbortSignal.timeout(AGGREGATOR_TIMEOUT_MS),
-      });
-    } catch {
-      /* The local resolve below still runs. */
-    }
+    await postAggregatorResult(stub, "/spike-result", { script, delivered });
     // Resolve locally too, whatever the aggregator answered: the observation
     // may have fallen back to this tracker while the result call recovered,
     // and a leftover local pending would suppress a failed delivery's retry.
@@ -758,16 +773,7 @@ export function createTailWorker(
   async function resolveHealth(env: TailEnv, delivered: boolean): Promise<void> {
     const stub = aggregator(env);
     if (!stub) return health.resolve(delivered);
-    try {
-      await stub.fetch("https://aggregator.invalid/health-result", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ delivered }),
-        signal: AbortSignal.timeout(AGGREGATOR_TIMEOUT_MS),
-      });
-    } catch {
-      /* The local resolve below still runs. */
-    }
+    await postAggregatorResult(stub, "/health-result", { delivered });
     health.resolve(delivered);
   }
 
@@ -978,7 +984,7 @@ export function createTailWorker(
         }
       }
     },
-    async scheduled(_controller: ScheduledController, env: TailEnv): Promise<void> {
+    async scheduled(controller: ScheduledController, env: TailEnv): Promise<void> {
       if (!env.UPTIME_URL) return; // Unconfigured: no probing work at all.
       const url = webhookUrl(env.OPS_ALERT_WEBHOOK_URL);
       if (!url) return; // No secret: no probing, no logging, no outbound work.
@@ -1017,8 +1023,11 @@ export function createTailWorker(
       // is its own signal, muted independently of the uptime page. They keep
       // their five-minute cadence: only runs landing on a five-minute
       // boundary probe the main flows, so the per-minute health loop does
-      // not multiply synthetic probe load (or /events throttle hits).
-      if (new Date(at).getUTCMinutes() % SYNTHETIC_INTERVAL_MINUTES === 0) {
+      // not multiply synthetic probe load (or /events throttle hits). The
+      // gate reads the scheduled slot, not the invocation time, so a
+      // boundary run that starts a minute late still probes.
+      const slot = Number.isFinite(controller.scheduledTime) ? controller.scheduledTime : at;
+      if (new Date(slot).getUTCMinutes() % SYNTHETIC_INTERVAL_MINUTES === 0) {
         await runSynthetics(url, env.UPTIME_URL);
       }
     },
