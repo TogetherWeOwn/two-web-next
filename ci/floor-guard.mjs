@@ -41,20 +41,24 @@ const ASSERTIONS = /\b(expect|assert|should)\b/;
 const stripPrefix = (p) => p.replace(/^[ab]\//, "");
 
 // Runner globs, not name patterns, decide whether a moved test still runs.
-// Vitest includes only test/**/*.test.ts and test/**/*.test.mjs
-// (vitest.config.ts); the report-only Tier-0 suites include only
-// tier0/**/*.test.ts (tier0/vitest.config.ts). Playwright e2e specs run via testMatch **/*.spec.ts
-// under testDir ./e2e (playwright.config.ts), so a spec moved out of e2e/ no
-// longer runs. The e2e safety scripts run via an explicit list in
-// package.json (`node --test e2e/safety.test.mjs e2e/qa-request.test.mjs
-// ...`); `node --test a b` silently skips a missing path and exits 0, so any
-// rename of a listed script breaks the wiring even when the new name matches
-// the same pattern. Likewise most ci selftests run via explicit single paths
+// Vitest includes test/**/*.test.ts, test/**/*.test.mjs and
+// ci/audit-lifecycle.test.mjs (vitest.config.ts); the report-only Tier-0
+// suites include only tier0/**/*.test.ts (tier0/vitest.config.ts). Playwright
+// e2e specs run via testMatch **/*.spec.ts under testDir ./e2e
+// (playwright.config.ts), so a spec moved out of e2e/ no longer runs. The e2e
+// safety scripts run via an explicit list in package.json
+// (`node --test e2e/safety.test.mjs e2e/qa-request.test.mjs ...`); `node
+// --test a b` silently skips a missing path and exits 0, so any rename of a
+// listed script breaks the wiring even when the new name matches the same
+// pattern. Likewise most ci selftests run via explicit single paths
 // (`node --test ci/cutover-check-selftest.mjs`); only ci/a11y-*.test.mjs runs
-// via a shell glob, so only a rename within that glob keeps running. A rename
-// whose source is runnable but whose destination leaves the runner (docs/
-// move, suffix change, out-of-glob rename, or rewiring rename) is a deletion
-// from the suite, even though the name still looks like a test.
+// via a shell glob, so only a rename within that glob keeps running. The
+// vitest-run audit lifecycle suite (ci/audit-lifecycle.test.mjs) is named
+// exactly by the a11y job and the vitest include, so any rename of it breaks
+// the wiring. A rename whose source is runnable but whose destination leaves
+// the runner (docs/ move, suffix change, out-of-glob rename, or rewiring
+// rename) is a deletion from the suite, even though the name still looks
+// like a test.
 const VITEST_RE = /^test\/.*\.test\.(ts|mjs)$/;
 // Tier-0 suites run from tier0/ through their own vitest config
 // (tier0/vitest.config.ts, `npm run test:tier0`), report-only. A move out of
@@ -202,13 +206,42 @@ export function scanAdded(added, ignore = []) {
 // is a replacement (strengthening), not a strip: only the net excess is
 // flagged, so a vacuous placeholder can be swapped for a real pin without
 // tripping the floor, while a genuine strip stays loud.
+// Merge-queue squash messages hard-wrap the PR body at ~72 columns, so a
+// long `Floor-waiver:` trailer arrives as a first line plus non-blank
+// continuation lines. Unfold those continuations before matching, or a
+// verbatim body waiver would pass pr-lint yet fail floor-guard in the queue.
+// Real paths never contain spaces, so wrap-inserted spaces inside the path
+// are stripped; reason whitespace collapses to single spaces.
+export function unfoldFloorWaiverLines(messages) {
+  const lines = messages.split(/\r?\n/);
+  const unfolded = [];
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    if (/^Floor-waiver:/.test(line)) {
+      let block = line;
+      let j = i + 1;
+      while (j < lines.length && lines[j].trim() !== "" && !/^Floor-waiver:/.test(lines[j])) {
+        block += ` ${lines[j].trim()}`;
+        j++;
+      }
+      unfolded.push(block);
+      i = j - 1;
+    } else {
+      unfolded.push(line);
+    }
+  }
+  return unfolded;
+}
+
 export function parseFloorWaivers(messages) {
   const waivers = new Map();
-  for (const line of messages.split(/\r?\n/)) {
+  for (const raw of unfoldFloorWaiverLines(messages)) {
+    const line = raw.replace(/\s+/g, " ").trim();
     // threshold-removed names a full table label, which usually has spaces
     // ("Coverage of changed lines"), so it takes the whole text up to the
-    // reason separator. The path-based rules keep (\S+): their targets are
-    // single paths (test/a.test.ts, .constraintsignore).
+    // reason separator. The path-based rules target single paths
+    // (test/a.test.ts, .constraintsignore): the middle group allows spaces so
+    // a mid-path wrap still parses, then wrap-inserted spaces are stripped.
     const labelMatch = line.match(/^Floor-waiver: threshold-removed (.+?) -- (.+)$/);
     if (labelMatch && labelMatch[1].trim() && labelMatch[2].trim()) {
       if (!waivers.has("threshold-removed")) waivers.set("threshold-removed", new Set());
@@ -216,10 +249,12 @@ export function parseFloorWaivers(messages) {
       continue;
     }
     const match = line.match(
-      /^Floor-waiver: (assertion-removed|test-deleted|new-exemption) (\S+) -- (.+)$/,
+      /^Floor-waiver: (assertion-removed|test-deleted|new-exemption) (.+?) -- (.+)$/,
     );
     if (!match || !match[3].trim()) continue;
-    const [, rule, file] = match;
+    const [, rule, pathCandidate] = match;
+    const file = pathCandidate.replace(/\s+/g, "");
+    if (!file) continue;
     if (!waivers.has(rule)) waivers.set(rule, new Set());
     waivers.get(rule).add(file);
   }

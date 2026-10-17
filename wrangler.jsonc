@@ -6,12 +6,15 @@
   "compatibility_date": "2026-09-29",
   "compatibility_flags": ["nodejs_compat"],
   "observability": { "enabled": true },
-  // Staging Neon is eu-central-1 and every statement is a round trip through Hyperdrive, so run
-  // the Worker beside it. Served from CDG/AMS, DB-bound requests had a median of 125-195 ms; served
-  // from ORD/MSP/DFW/SEA/IAD (where GitHub-hosted runners land) 0.5-1.8 s, p95 3-4.6 s. A
-  // far-away user now pays one hop to the Worker instead of one per statement. env.production
-  // opts out below: its database lives elsewhere and that placement is a cutover decision.
-  "placement": { "region": "aws:eu-central-1" },
+  // Staging database is PlanetScale us-east-1, so this Worker is placed
+  // beside it (aws:us-east-1): every statement is a Hyperdrive round trip,
+  // and the pre-repoint eu-central-1 pin (beside the retired Neon branch)
+  // made each one transatlantic. Live /up from this run's host took 1.32 s
+  // under the old pin (2026-10-15); re-measure after the first deploy on
+  // this placement before quoting a new figure.
+  // env.production opts out below: its database lives elsewhere and that
+  // placement is a cutover decision.
+  "placement": { "region": "aws:us-east-1" },
   // Deploy the Tail Worker first; it has no public route and its own optional webhook secret.
   "tail_consumers": [{ "service": "two-web-next-alerts" }],
   "workers_dev": false,
@@ -33,15 +36,16 @@
       { "queue": "two-internal-action", "binding": "INTERNAL_ACTION_QUEUE" }
     ]
   },
-  // Revision marker for `/up` (staging only). Bindings are not inherited by
-  // `env.production`, so production stays unmarked until a reviewed cutover PR
-  // declares this binding there. The deploy workflow tags each Version with its
-  // commit SHA; `/up` reads both back so a rollback target is provable live.
+  // Revision marker for `/up` and the release fields on structured log
+  // lines. Bindings are not inherited by `env.production`, which declares
+  // its own copy below. The deploy workflows tag each Version with its
+  // commit SHA; `/up` and the log emitters read it back so a rollback
+  // target and every log line's build are provable live.
   "version_metadata": { "binding": "CF_VERSION_METADATA" },
   // Every host, including static requests, must pass the Worker's host guard.
   "assets": { "directory": "./public", "binding": "ASSETS", "run_worker_first": true },
-  // Shared Postgres (S1: TOG-9679): Hyperdrive "two-web-next-staging" → Neon
-  // project two-web-next, staging branch (pooled endpoint). Local dev sets
+  // Shared Postgres: Hyperdrive "two-web-next-staging" → PlanetScale
+  // staging branch (direct endpoint). Local dev sets
   // CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_DB to agent-testdb.
   "hyperdrive": [
     { "binding": "DB", "id": "1d48a54abd3444009b7067c03c63ff9f" },
@@ -72,6 +76,9 @@
       // tail_consumers are not inherited from the top level: Wrangler needs
       // this repeated in every named environment that must page.
       "tail_consumers": [{ "service": "two-web-next-alerts-production" }],
+      // Not inherited from the top level: without this copy a production
+      // `/up` has no revision marker and its log lines carry no build SHA.
+      "version_metadata": { "binding": "CF_VERSION_METADATA" },
       // Cutover target only, NOT a DNS change or authorization to claim the apex.
       "routes": [{ "pattern": "togetherweown.com", "custom_domain": true }],
       "triggers": { "crons": ["*/10 * * * *", "0 0 * * *"] },

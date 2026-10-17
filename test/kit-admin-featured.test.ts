@@ -7,20 +7,73 @@
 // serializes rows (ISO datetimes, shared featuredStatus) for the Svelte
 // view. Publication logic is shared, never copied: every status assertion
 // below derives from featuredStatus itself.
-import { readFileSync } from "node:fs";
+import { build } from "esbuild";
+import { createRequire } from "node:module";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
-import { describe, expect, it, vi } from "vitest";
+import { fileURLToPath, pathToFileURL } from "node:url";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { featuredStatus } from "../src/featured-status";
-
-const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const read = (p: string): string => readFileSync(join(root, p), "utf8");
 import { FEATURED_PAGE_SIZE } from "../src/admin/table-list";
 import {
   resolveKitFeaturedList,
   type KitFeaturedDeps,
   type KitFeaturedSourceRow,
 } from "../src/admin/kit-featured";
+
+const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+const read = (p: string): string => readFileSync(join(root, p), "utf8");
+const webRequire = createRequire(join(root, "web/package.json"));
+const { compile } = webRequire("svelte/compiler") as {
+  compile: (source: string, options: Record<string, unknown>) => { js: { code: string } };
+};
+type RenderPage = (data: Record<string, unknown>) => string;
+let renderPage: RenderPage;
+let scratch = "";
+
+beforeAll(async () => {
+  scratch = mkdtempSync(join(tmpdir(), "kit-admin-featured-render-"));
+  const entry = join(scratch, "entry.mjs");
+  writeFileSync(
+    entry,
+    `
+import { render } from "svelte/server";
+import Page from ${JSON.stringify(join(root, "web/src/routes/admin/featured/+page.svelte"))};
+export function renderPage(data) { return render(Page, { props: { data } }).body; }
+`,
+  );
+  const outfile = join(scratch, "bundle.mjs");
+  await build({
+    entryPoints: [entry],
+    bundle: true,
+    platform: "node",
+    format: "esm",
+    outfile,
+    logLevel: "warning",
+    absWorkingDir: root,
+    nodePaths: [join(root, "web/node_modules"), join(root, "node_modules")],
+    alias: { "#lib": join(root, "web/src/lib/") },
+    plugins: [
+      {
+        name: "kit-featured-ssr",
+        setup(plugin) {
+          plugin.onLoad({ filter: /\.svelte$/ }, (args) => {
+            const source = readFileSync(args.path, "utf8");
+            const { js } = compile(source, { generate: "server", dev: false, filename: args.path });
+            return { contents: js.code, loader: "js", resolveDir: dirname(args.path) };
+          });
+        },
+      },
+    ],
+  });
+  const mod = (await import(pathToFileURL(outfile).href)) as unknown as { renderPage: RenderPage };
+  renderPage = mod.renderPage;
+}, 60000);
+
+afterAll(() => {
+  if (scratch) rmSync(scratch, { recursive: true, force: true });
+});
 
 function row(overrides: Partial<KitFeaturedSourceRow> = {}): KitFeaturedSourceRow {
   return {
@@ -91,7 +144,7 @@ describe("resolveKitFeaturedList", () => {
     });
   });
 
-  it("slices to one page and reports the lookahead, mirroring the Hono slice", async () => {
+  it("slices to one page, reports the lookahead, and projects only list-safe fields", async () => {
     const many = Array.from({ length: FEATURED_PAGE_SIZE + 1 }, (_, i) =>
       row({ id: i + 1, title: `Slot ${i + 1}` }),
     );
@@ -100,6 +153,50 @@ describe("resolveKitFeaturedList", () => {
     expect(outcome.rows).toHaveLength(FEATURED_PAGE_SIZE);
     expect(outcome.rows[0]?.id).toBe(1);
     expect(outcome.hasNext).toBe(true);
+    expect(Object.keys(outcome.rows[0]!)).toEqual([
+      "id",
+      "title",
+      "status",
+      "position",
+      "startsAt",
+      "endsAt",
+      "updatedAt",
+    ]);
+  });
+
+  it("does not render image or token fields even if a store row includes them", () => {
+    const secretImage = "IMAGE_FIELD_SHOULD_NOT_RENDER";
+    const secretToken = "TOKEN_FIELD_SHOULD_NOT_RENDER";
+    const html = renderPage({
+      rows: [
+        {
+          ...row(),
+          status: "live",
+          startsAt: null,
+          endsAt: null,
+          updatedAt: "2026-10-01T12:00:00.000Z",
+          imageUrl: secretImage,
+          image_url: secretImage,
+          token: secretToken,
+          accessToken: secretToken,
+        },
+      ],
+      query: { q: "", published: "", sort: "position", order: "asc", page: 1 },
+      hasNext: false,
+      emptyText: "No featured content yet.",
+      positionHeader: { href: "#", ariaSort: "none", ariaLabel: "Sort position", text: "Position" },
+      updatedHeader: {
+        href: "#",
+        ariaSort: "none",
+        ariaLabel: "Sort update",
+        text: "Last changed",
+      },
+      previousHref: null,
+      nextHref: null,
+    });
+    expect(html).toContain("Game night");
+    expect(html).not.toContain(secretImage);
+    expect(html).not.toContain(secretToken);
   });
 
   it("serializes datetimes as UTC ISO strings with null bounds kept null", async () => {
@@ -151,6 +248,15 @@ describe("resolveKitFeaturedList", () => {
     const bare = await resolveKitFeaturedList({}, empty);
     if (bare.kind !== "ok") throw new Error("expected ok");
     expect(bare.emptyText).toBe("No featured content yet.");
+  });
+});
+
+describe("featured Kit read boundaries", () => {
+  it("sets private no-store on both list and edit loads", () => {
+    const listLoad = read("web/src/routes/admin/featured/+page.server.ts");
+    const editLoad = read("web/src/routes/admin/featured/[id]/+page.server.ts");
+    expect(listLoad).toContain('setHeaders({ "cache-control": "private, no-store" });');
+    expect(editLoad).toContain('setHeaders({ "cache-control": "private, no-store" });');
   });
 });
 

@@ -276,6 +276,7 @@ exactly once.
 | `src/featured.ts` | content |
 | `src/freeze-banner.ts` | http-guard |
 | `src/headers.ts` | http-guard |
+| `src/home-cache.ts` | content |
 | `src/home-copy.ts` | content |
 | `src/hotzones/` | events |
 | `src/html-outcome.ts` | entry |
@@ -287,11 +288,13 @@ exactly once.
 | `src/jobs-worker.ts` | jobs |
 | `src/join/` | join |
 | `src/kit-access-sink.ts` | profiles |
+| `src/kit-content-chunk.ts` | entry |
 | `src/kit-errors.ts` | entry |
 | `src/kit-event-states.ts` | events |
 | `src/kit-events-html.tsx` | events |
 | `src/kit-events.ts` | events |
 | `src/kit-hotzones.ts` | events |
+| `src/kit-members.ts` | profiles |
 | `src/kit-past-events.ts` | events |
 | `src/kit-session.ts` | auth |
 | `src/leaderboards/` | profiles |
@@ -312,6 +315,7 @@ exactly once.
 | `src/qa.ts` | auth |
 | `src/recovery-outcome.ts` | entry |
 | `src/recovery-hono.tsx` | entry |
+| `src/release-tag.ts` | observability |
 | `src/request-log.ts` | observability |
 | `src/return-journey.ts` | auth |
 | `src/roles.ts` | auth |
@@ -324,6 +328,7 @@ exactly once.
 | `src/security-txt.ts` | content |
 | `src/seo.ts` | content |
 | `src/seo-json-ld.ts` | content |
+| `src/seo-slots.ts` | content |
 | `src/seo-leaves.tsx` | entry |
 | `src/session-cookie.ts` | auth |
 | `src/session-revocation.ts` | auth |

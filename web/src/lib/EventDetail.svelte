@@ -1,4 +1,5 @@
 <script lang="ts">
+import JsonLd from "#lib/JsonLd.svelte";
 import Shell from "#lib/Shell.svelte";
 import type { KitEventDetailModel } from "../../../src/events/kit-detail";
 import { HOME_JOIN_RESULT_COPY } from "../../../src/home-copy";
@@ -34,23 +35,6 @@ import {
 // them to members alone, so anonymous HTML can never hold member names.
 let { model }: { model: KitEventDetailModel } = $props();
 
-// JSON-LD travels as data blocks, never executable script: the CSP
-// (script-src 'self') gates execution, not data-block parsing, exactly as on
-// the Hono page. The tag strings below are split so this file never holds a
-// literal script element closer (not even in a comment: the Svelte parser
-// ends the instance script at the first closer it scans).
-const eventJsonLdTag = $derived(
-  '<script type="application/ld+json" data-testid="event-jsonld">' +
-    model.jsonLd +
-    "</" +
-    "script>",
-);
-const siteJsonLdTag = $derived(
-  '<script type="application/ld+json" data-testid="site-jsonld">' +
-    model.siteJsonLd +
-    "</" +
-    "script>",
-);
 // A component-level <script> is Svelte's own; the island tags are emitted as
 // markup so the existing E2E and islands apply unchanged (past-page pattern).
 const rsvpIsland = '<script src="/islands/rsvp-button.js" defer></' + "script>";
@@ -266,8 +250,8 @@ const lineup = $derived(
   {/if}
   {@html copyLinkIsland}
   {@html goingCountIsland}
-  {@html eventJsonLdTag}
-  {@html siteJsonLdTag}
+  <JsonLd testid="event-jsonld" json={model.jsonLd} />
+  <JsonLd testid="site-jsonld" json={model.siteJsonLd} />
   <div class="event-discovery">
     {#if model.neighbors.previous || model.neighbors.next}
       <nav class="event-pagination" aria-label="More events" data-testid="event-pagination">

@@ -198,7 +198,7 @@ def run(args):
                         "WRANGLER_BIN": str(fake), "BACKUP_BUCKET": "synthetic-proof",
                         "BACKUP_PREFIX": "proof", "BACKUP_JURISDICTION": "eu",
                         "DATABASE_URL": f"postgres://agent_test@{args.host}:5432/{source}"}
-            command([tools["bash"], str(ROOT / "bin/neon-backup.sh"), "backup", "synthetic"],
+            command([tools["bash"], str(ROOT / "bin/db-backup.sh"), "backup", "synthetic"],
                     fake_env, "backup CLI")
             manifest = scratch / "manifest.txt"
             command([str(fake), "r2", "object", "get",

@@ -7,6 +7,8 @@
 // sitemap side: only published keys are ever emitted, and /events/past is
 // never a sitemap entry.
 
+import { PUBLIC_ROUTE_SLOTS } from "./seo-slots";
+
 export type SitemapUrl = {
   loc: string;
   lastmod?: string;
@@ -47,20 +49,16 @@ export const stripTrailingSlash = (url: string) => url.replace(/\/+$/, "");
 export const canonicalUrl = (appUrl: string, path: string): string =>
   `${stripTrailingSlash(appUrl)}${path}`;
 
-// Static entries for the routes live today (parity matrix §1: home 1.0, join
-// 0.9, events.index 0.8 daily, leaves 0.7, published /e/{key} 0.6). A sitemap
-// must never list a URL that 404s, and /events/past stays out (TOG-7072).
+// Static entries come from the public route slots (seo-slots.ts); published
+// /e/{key} rows follow at 0.6. A sitemap must never list a URL that 404s, and
+// /events/past stays out.
 export function buildSitemapUrls(appUrl: string, events: SitemapEvent[]): SitemapUrl[] {
   const base = stripTrailingSlash(appUrl);
-  const urls: SitemapUrl[] = [
-    { loc: `${base}/`, changefreq: "weekly", priority: "1.0" },
-    { loc: `${base}/join`, changefreq: "monthly", priority: "0.9" },
-    { loc: `${base}/events`, changefreq: "daily", priority: "0.8" },
-    { loc: `${base}/about`, changefreq: "monthly", priority: "0.7" },
-    { loc: `${base}/faq`, changefreq: "monthly", priority: "0.7" },
-    { loc: `${base}/rules`, changefreq: "monthly", priority: "0.7" },
-    { loc: `${base}/privacy`, changefreq: "monthly", priority: "0.7" },
-  ];
+  const urls: SitemapUrl[] = Object.entries(PUBLIC_ROUTE_SLOTS).map(([path, slot]) => ({
+    loc: `${base}${path}`,
+    changefreq: slot.changefreq,
+    priority: slot.priority,
+  }));
   for (const e of events) {
     urls.push({
       loc: `${base}/e/${e.key}`,

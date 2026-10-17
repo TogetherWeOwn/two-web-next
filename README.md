@@ -31,13 +31,28 @@ Operations (deploy/rollback, `/up`, queues, outages and restore drills):
 
 - [Moderator admin guide](docs/moderator-admin-guide.md): Next admin routes,
   event and featured-content workflows, dashboard diagnostics, and safe escalation.
+- [Monthly event-planning cadence](docs/event-planning-cadence.md): rolling
+  four-week planning, cancellation/reschedule handling, and cycle completion.
+- [Weekly TWO Community event run-of-show](docs/weekly-event-run-of-show.md):
+  preparation, preflight, cancellation, and closeout evidence.
+- [Event host privacy and safety checklist](docs/event-host-privacy-safety-checklist.md):
+  least-privilege event hosting and routing concerns to an authorized moderator.
+- [Weekly event retrospective template](docs/event-retrospective-template.md):
+  qualitative event learning, separate from attendance and activity counts.
 - [Troubleshooting join and Discord sign-in](docs/troubleshooting-join.md):
   current notices, recovery pages, and the invite fallback.
 
 ## Develop and test safely
 
-Use Node **22.18.0+ on the 22.x line, or 24+** (CI uses Node 24; the probe CLIs
+Use Node **22.23.0+ on the 22.x line, or 24+** (CI uses Node 24; the probe CLIs
 require default native TypeScript stripping, not early Node 22/23 releases).
+The 22 floor is 22.23.0, the 22.x release verified end to end here:
+its bundled npm 10.9.8 installs the committed lockfile, and ICU 78
+renders a zero UTC offset as `GMT+00:00`, as the test suite pins.
+Node 22.18.0 fails the suite (ICU 77 renders `GMT`) and its bundled
+npm 10.9.3 could not install the lockfile until its optional-peer
+entries were completed. The `node22-compat` CI leg proves the floor
+on every non-draft, non-docs-only pull request.
 Install development dependencies even when
 `NODE_ENV` is inherited as `production`:
 
@@ -110,7 +125,8 @@ Coverage includes every
 `src/**/*.{ts,tsx}` file, even if no test imports it. Global and aggregate
 area floors (`src/admin`, `src/events`, `src/join`, `src/sessions.ts`, `src/jobs`,
 `src/bot`, `src/agent-events`, `src/profiles`, `src/auth`, `src/invite.ts`,
-`src/return-journey.ts`, `src/write-recovery.tsx`) live in `vitest.config.ts`. The
+`src/return-journey.ts`, `src/write-recovery.tsx`, `src/kit-*`, `src/counts.ts`,
+`src/seo.ts`) live in `vitest.config.ts`. The
 baseline uses the full suite with the test database; without it, skipped live
 suites may put coverage below the floors. CI's
 required `check` job runs the configuration drift check, Biome lint/format gate,
@@ -164,12 +180,13 @@ npx wrangler deploy --dry-run --outdir dist   # bundle check; does not deploy
 ### Browser regressions
 
 These suites skip their browser cases unless the opt-in variable is `"true"`, so
-a run without it can pass without executing them. For the suites wired into CI,
-the `a11y` job sets each variable, writes a Vitest JSON report and runs
+a run without it can pass without executing them. For the Vitest suites wired
+into CI, the `a11y` job sets each variable, writes a Vitest JSON report and runs
 `ci/a11y-require-executed.mjs`, which fails the step unless every case in the
 named suite passed and at least the minimum ran. The minimums live in
-`.github/workflows/ci.yml`. The RSVP focus suite below is not wired into CI yet;
-run its listed command locally to execute the Chromium proof.
+`.github/workflows/ci.yml`. The `node --test` suites below run directly in the
+`a11y` job with their opt-in set; their step logs list each named case as
+passed. Run any listed command locally to execute the same Chromium proof.
 
 | Suite | Opt-in variable | Local command |
 | --- | --- | --- |
@@ -177,8 +194,9 @@ run its listed command locally to execute the Chromium proof.
 | `test/featured-native-length.test.ts` | `FEATURED_NATIVE_BROWSER_TESTS` | `FEATURED_NATIVE_BROWSER_TESTS=true npx vitest run test/featured-native-length.test.ts` |
 | `test/calendar-search-unicode-boundaries.test.ts` | `CALENDAR_SEARCH_BROWSER_TESTS` | `CALENDAR_SEARCH_BROWSER_TESTS=true npx vitest run test/calendar-search-unicode-boundaries.test.ts` |
 | `test/profile-native-length.test.ts` | `A11Y_BROWSER_TESTS` | `A11Y_BROWSER_TESTS=true npx vitest run test/profile-native-length.test.ts` |
-| `ci/a11y-lifecycle.test.mjs` | `A11Y_BROWSER_TESTS` | `A11Y_BROWSER_TESTS=true node --test ci/a11y-lifecycle.test.mjs` (real Chromium signal cases; no executed-count verifier yet) |
-| `ci/rsvp-focus-browser.test.mjs` | `RSVP_FOCUS_BROWSER_TESTS` | `RSVP_FOCUS_BROWSER_TESTS=true node --test ci/rsvp-focus-browser.test.mjs` (real Chromium focus proof; not run by CI) |
+| `test/kit-error-shell-render.test.ts` | `KIT_ERROR_SHELL_BROWSER_TESTS` | `KIT_ERROR_SHELL_BROWSER_TESTS=true npx vitest run test/kit-error-shell-render.test.ts` (also needs `npm ci --prefix web --include=dev` once) |
+| `ci/audit-lifecycle.test.mjs` | `A11Y_BROWSER_TESTS` | `A11Y_BROWSER_TESTS=true npx vitest run ci/audit-lifecycle.test.mjs` |
+| `ci/rsvp-focus-browser.test.mjs` | `RSVP_FOCUS_BROWSER_TESTS` | `RSVP_FOCUS_BROWSER_TESTS=true node --test ci/rsvp-focus-browser.test.mjs` (real Chromium focus proof; no executed-count verifier yet; runs in the `a11y` job) |
 
 The admin, featured and calendar suites use intercepted synthetic fixtures or
 loopback servers with mocked reads, and the profile suite uses loopback fixtures
@@ -227,16 +245,15 @@ guest 401 refusals for `/events.json` and `/events/:key`, the collection paging
 envelope (`data/page/limit` plus `meta.current_page/per_page/total/last_page`),
 the JSON show shape for the first collection row (or the exact cancelled 410
 envelope when that row is cancelled), a 410 probe against a cancelled fixture
-when the first page has one, and the malformed-key 422/404 refusals. Until
-PR #109 (`GET /events/:key` show route plus the collection `meta` envelope)
-is deployed, the checker detects the missing show route (guest probe gets the
-app's branded 404) and skips the five contract-dependent checks visibly
-instead of failing the deploy; probes that already hold on main (guest
-collection 401, QA login, malformed `event_key` 422) stay unconditional. The
-step retries six times like the public smoke, refuses any non-staging origin
-(production included), and never logs the token, cookies or response bodies.
-It needs the `staging`-environment `QA_AUTH_TOKEN` secret; without it the step
-reports its skip and passes, so a missing token never fails a deploy.
+when the first page has one, and the malformed-key 422/404 refusals. Every
+listed contract check runs on each probe; a missing route or malformed response
+fails the smoke rather than being treated as pending. Data-dependent checks
+still report their skips when staging has no events or no cancelled fixture,
+and the loud-skip ledger records those results. The step retries six times like
+the public smoke, refuses any non-staging origin (production included), and
+never logs the token, cookies or response bodies. It needs the
+`staging`-environment `QA_AUTH_TOKEN` secret; without it the step reports its
+skip and passes, so a missing token never fails a deploy.
 
 Deployment context: the top-level Wrangler configuration names Worker
 `two-web-next` and the `next.togetherweown.com` route; it has no named

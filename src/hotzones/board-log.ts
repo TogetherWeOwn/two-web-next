@@ -89,3 +89,43 @@ export async function pruneBoardViewsOlderThan(
   );
   return Array.isArray(rows) ? rows.length : 0;
 }
+
+export type BoardViewEntry = {
+  boardKey: string;
+  scope: string;
+  season: string;
+  resultCount: number;
+};
+export type QueueBoardView = (db: Db | null, entry: BoardViewEntry) => void;
+export type RecordBoardView = (db: Db | null, entry: BoardViewEntry) => Promise<void>;
+
+// Request-locals slot carrying a queued board view from a Kit member-board
+// load to the member-read boundary's post-release hook (src/kit-members.ts
+// header has the full story). The db handle travels with the entry (as the
+// Hono handler's c.set("boardView", ...) carries it): it never enters page
+// data, so nothing database-shaped is serialized to the client.
+const BOARD_VIEW_LOCAL = "membersBoardView";
+
+export function queueBoardView(locals: unknown, db: Db | null, entry: BoardViewEntry): void {
+  if (!locals || typeof locals !== "object") return;
+  (locals as Record<string, unknown>)[BOARD_VIEW_LOCAL] = { db, entry };
+}
+
+/**
+ * Post-release record: writes the queued anonymous board view only for a
+ * released 200, consumes the queue either way (a refused response must not
+ * leak its view into a later request sharing the locals object), and never
+ * throws — the board is already served, so a logging failure is dropped.
+ */
+export async function recordQueuedBoardView(
+  locals: unknown,
+  status: number,
+  recordFn: RecordBoardView = recordBoardView,
+): Promise<void> {
+  if (!locals || typeof locals !== "object") return;
+  const bag = locals as Record<string, unknown>;
+  const queued = bag[BOARD_VIEW_LOCAL] as { db: Db | null; entry: BoardViewEntry } | undefined;
+  delete bag[BOARD_VIEW_LOCAL];
+  if (!queued || status !== 200) return;
+  await recordFn(queued.db, queued.entry).catch(() => {});
+}

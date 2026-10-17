@@ -14,8 +14,8 @@ The app writes ONE single-line JSON object on `console.error`, with
 
 | `event` | When | Source fields (internal logs only) |
 | --- | --- | --- |
-| `error.alert` | An unexpected non-4xx error reached an HTTP error path, including a member-read refusal or locally handled profile-save failure (the response may remain 503) | `fingerprint` (`ExceptionClass@/route/pattern`), `exception`, `method`, `route`, optional `request_id` |
-| `queue.failing` | A job failed terminally or threw on its final attempt | `connection`, `queue`, `job`, `attempts`, `exception`, optional `request_id` |
+| `error.alert` | An unexpected non-4xx error reached an HTTP error path, including a member-read refusal or locally handled profile-save failure (the response may remain 503) | `fingerprint` (`ExceptionClass@/route/pattern`), `exception`, `error_class` (same class), `method`, `route`, optional `request_id`, `build_sha`, `release` |
+| `queue.failing` | A job failed terminally or threw on its final attempt | `connection`, `queue`, `job`, `attempts`, `exception`, `error_class` (same value), optional `request_id`, `build_sha`, `release` |
 
 - The app mutes `error.alert` per `class@route` for five minutes. Client errors
   (404, 403, 429 and other 4xx) and `ZodError` stay silent. A thrown
@@ -27,6 +27,9 @@ The app writes ONE single-line JSON object on `console.error`, with
   Correlate it with the `http.request` record, see
   [request-log queries](runbook-logs.md). Request IDs do not change the
   fingerprint or mute window, and the Tail Worker does not forward them.
+  Both alert types also carry `build_sha`/`release` (the emitting Worker's
+  deploy commit, `null` without a `version_metadata` binding); the Tail
+  Worker does not forward those either.
 - Queue source lines are not muted: one per terminal job failure. **Their
   `exception` can be a bot refusal message**, not just a class. Neither that field
   nor any trace exception/request/header/body is forwarded by the Tail Worker.
@@ -133,6 +136,43 @@ for each unmuted delivery attempt, so the delivery-receipt query below also
 catches these pages. **There is no matching app source-log line by design**:
 the event originates in the Tail Worker, not an `error.alert` or `queue.failing`
 source emission. A receipt without a source alert is therefore expected.
+
+### Synthetic main-flow checks: `synthetic.down`
+
+The same scheduled run also probes the main flow on the `UPTIME_URL` origin,
+because a healthy `/up` does not prove members can load the site or start
+sign-in. Each check is an anonymous GET with manual redirects and a
+ten-second timeout; response bodies are never read. Checks run even when
+`/up` is down, and each failing check is retried once after ten seconds
+before it can page:
+
+| Check | Healthy means |
+|-------|---------------|
+| `/` | HTTP 200 with an HTML content type |
+| `/events` | HTTP 200 with an HTML content type |
+| `/login` | HTTP 302 redirecting to `/auth/discord` on the same host |
+
+The summary contains only `event`, `check` (the probed path), `target`
+(the public host of the configured `UPTIME_URL`, which identifies the
+environment), `status` (the second attempt's HTTP status, or `0` for a
+transport error/timeout) and `timestamp`. Redirect targets are compared by
+host and path only: any Location query is discarded inside the probe and
+never appears in a page or log line.
+Delivery uses the same five-minute, per-isolate mute, keyed by
+`synthetic.down:<check>:<status>`, and the same delivery receipts as
+`uptime.down`.
+
+No check authenticates, posts a form, injects a fault, or changes
+application data, so the production prober stays passive. The sign-in
+check stops at `/login` on purpose: the next hop, `/auth/discord`, mints
+OAuth state and would write a login-redirect throttle hit and an OAuth
+journey row on every probe attempt. Like any anonymous visitor, the
+`/events` probe records one rate-limit counter hit (the `events-read`
+bucket) per admitted attempt; the existing throttle expiry sweep deletes
+those counters. Staging and production each probe their own configured
+host; no extra configuration exists beyond `UPTIME_URL`. The checks prove
+the sign-in entry redirects onward correctly, not that the Discord
+authorize hop or a full OAuth round trip completes.
 
 ## Configure/deploy (staging first)
 

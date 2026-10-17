@@ -186,6 +186,9 @@ export function resolveBaseline(root, env = process.env) {
     const event = JSON.parse(readFileSync(env.GITHUB_EVENT_PATH, "utf8"));
     if (env.GITHUB_EVENT_NAME === "pull_request") base = event.pull_request?.base?.sha;
     else if (env.GITHUB_EVENT_NAME === "push") base = event.before;
+    // A queue commit is unmerged: baseline it against the exact parent the
+    // queue will merge onto, same role as the PR base SHA above.
+    else if (env.GITHUB_EVENT_NAME === "merge_group") base = event.merge_group?.base_sha;
     // Dispatch and the nightly schedule have no event base: both check main's tip.
     else if (env.GITHUB_EVENT_NAME !== "workflow_dispatch" && env.GITHUB_EVENT_NAME !== "schedule")
       throw new Error("unsupported CI event for historical baseline");

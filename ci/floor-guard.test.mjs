@@ -323,10 +323,13 @@ describe("floor-guard", () => {
   it("flags enumerated-runner renames that keep the same pattern", () => {
     // `node --test a b` silently skips a missing path and exits 0, so a
     // rename that keeps the pattern still drops tests: e2e:safety falls from
-    // 80 to 66 passing tests, and ci/policy drops out of the a11y glob.
+    // 80 to 66 passing tests, and ci/policy drops out of the a11y glob. The
+    // vitest-run audit lifecycle suite is named exactly by the a11y job, so
+    // any rename of it breaks the wiring too.
     for (const [from, to] of [
       ["e2e/qa-request.test.mjs", "e2e/qa-request2.test.mjs"],
       ["ci/a11y-policy.test.mjs", "ci/policy.test.mjs"],
+      ["ci/audit-lifecycle.test.mjs", "ci/audit-lifecycle-renamed.test.mjs"],
       ["ci/cutover-check-selftest.mjs", "ci/cutover-renamed-selftest.mjs"],
     ]) {
       const renamed = [
@@ -486,6 +489,34 @@ describe("floor-guard", () => {
         waivers: parseFloorWaivers("Floor-waiver: test-deleted test/gone.test.ts"),
       }).some((f) => f.rule === "test-deleted"),
       "waiver without a reason is ignored",
+    );
+  });
+
+  it("unfolds adjacent wrapped waivers without joining them together", () => {
+    const waivers = parseFloorWaivers(
+      [
+        "Floor-waiver: test-deleted test/first.test.ts",
+        "-- moved to docs",
+        "Floor-waiver: assertion-removed test/second.test.ts",
+        "-- assertion moved to the replacement suite",
+        "Floor-waiver: test-deleted test/staging-workflow-secret-mapping.test.ts",
+        "-- moved to docs",
+      ].join("\n"),
+    );
+    assert.deepEqual(
+      [...waivers.get("test-deleted")],
+      ["test/first.test.ts", "test/staging-workflow-secret-mapping.test.ts"],
+    );
+    assert.deepEqual([...waivers.get("assertion-removed")], ["test/second.test.ts"]);
+  });
+
+  it("removes wrap-inserted spaces from a path split mid-word", () => {
+    const waivers = parseFloorWaivers(
+      "Floor-waiver: test-deleted test/staging-workflow-sec\nret-mapping.test.ts -- moved to docs",
+    );
+    assert.deepEqual(
+      [...waivers.get("test-deleted")],
+      ["test/staging-workflow-secret-mapping.test.ts"],
     );
   });
 
@@ -889,6 +920,93 @@ describe("floor-guard", () => {
       });
       assert.equal(run.status, 0, "non-tip new-exemption waiver covers the addition");
       assert.match(run.stdout, /Floor-waiver: new-exemption \.constraintsignore/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("accepts queue squash body waivers for a renamed test but still rejects an unwaived deletion", () => {
+    const dir = mkdtempSync(join(tmpdir(), "floor-guard-merge-group-"));
+    try {
+      const git = (args) => spawnSync("git", args, { cwd: dir, encoding: "utf8" });
+      git(["init", "-q"]);
+      git(["config", "user.email", "test@example.com"]);
+      git(["config", "user.name", "test"]);
+      mkdirSync(join(dir, "test"), { recursive: true });
+      writeFileSync(join(dir, "test", "a.test.ts"), 'it("x", () => { expect(1).toBe(1); });\n');
+      git(["add", "."]);
+      git(["commit", "-qm", "base"]);
+      const base = git(["rev-parse", "HEAD"]).stdout.trim();
+      mkdirSync(join(dir, "docs"), { recursive: true });
+      git(["mv", "test/a.test.ts", "docs/a.txt"]);
+      const waiver =
+        "Floor-waiver: test-deleted test/a.test.ts -- moved into docs as documentation";
+      git(["commit", "-m", "move test out of suite", "-m", waiver]);
+      const guard = join(dirname(fileURLToPath(import.meta.url)), "floor-guard.mjs");
+      const run = () => spawnSync("node", [guard, "--base", base], { cwd: dir, encoding: "utf8" });
+      const branch = run();
+      assert.equal(branch.status, 0, branch.stderr);
+      assert.match(branch.stdout, /Floor-waiver: test-deleted test\/a\.test\.ts/);
+
+      // Merge-queue validation sees one squash commit, not the waiver-bearing
+      // branch commit. Its message is the PR title plus body.
+      git(["reset", "--soft", base]);
+      git(["commit", "-qm", "test: move test", "-m", "PR body without waiver"]);
+      const unwaived = run();
+      assert.equal(unwaived.status, 1, "the squash without a waiver fails");
+      assert.match(unwaived.stderr, /test-deleted/);
+
+      git(["commit", "--amend", "-qm", "test: move test", "-m", "PR body", "-m", waiver]);
+      const waived = run();
+      assert.equal(waived.status, 0, waived.stderr);
+      assert.match(waived.stdout, /Floor-waiver: test-deleted test\/a\.test\.ts/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("accepts a 72-column wrapped queue waiver for a long path", () => {
+    // The queue squash hard-wraps the body, so a long trailer arrives split
+    // across lines. The guard must unfold it, or pr-lint stays green while
+    // the queue fails. Uses the reviewer repro path.
+    const dir = mkdtempSync(join(tmpdir(), "floor-guard-wrapped-"));
+    try {
+      const git = (args) => spawnSync("git", args, { cwd: dir, encoding: "utf8" });
+      git(["init", "-q"]);
+      git(["config", "user.email", "test@example.com"]);
+      git(["config", "user.name", "test"]);
+      mkdirSync(join(dir, "test"), { recursive: true });
+      writeFileSync(
+        join(dir, "test", "staging-workflow-secret-mapping.test.ts"),
+        'it("x", () => { expect(1).toBe(1); });\n',
+      );
+      git(["add", "."]);
+      git(["commit", "-qm", "base"]);
+      const base = git(["rev-parse", "HEAD"]).stdout.trim();
+      mkdirSync(join(dir, "docs"), { recursive: true });
+      git(["mv", "test/staging-workflow-secret-mapping.test.ts", "docs/mapping.txt"]);
+      const waiver =
+        "Floor-waiver: test-deleted test/staging-workflow-secret-mapping.test.ts -- moved to docs";
+      git(["commit", "-m", "move long test out of suite", "-m", waiver]);
+      const guard = join(dirname(fileURLToPath(import.meta.url)), "floor-guard.mjs");
+      const run = () => spawnSync("node", [guard, "--base", base], { cwd: dir, encoding: "utf8" });
+      const branch = run();
+      assert.equal(branch.status, 0, branch.stderr);
+
+      // Queue squash: same body wrapped at 72 columns (word wrap), so the
+      // trailer splits before `--`.
+      const wrapped = [
+        "Floor-waiver: test-deleted test/staging-workflow-secret-mapping.test.ts",
+        "-- moved to docs",
+      ].join("\n");
+      git(["reset", "--soft", base]);
+      git(["commit", "-qm", "test: move test", "-m", "PR body", "-m", wrapped]);
+      const waived = run();
+      assert.equal(waived.status, 0, waived.stderr);
+      assert.match(
+        waived.stdout,
+        /Floor-waiver: test-deleted test\/staging-workflow-secret-mapping\.test\.ts/,
+      );
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

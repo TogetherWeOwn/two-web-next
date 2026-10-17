@@ -1,8 +1,10 @@
 # Constraints
 
-Last reviewed: 2026-10-11. No interview ran (non-interactive session), so this
-records the floor plus the measured defaults from the constraint skill; the
-numbered dimensions below mirror the gates already wired in this repo.
+Last reviewed: 2026-10-15, after the floor changes in [#704](https://github.com/TogetherWeOwn/two-web-next/pull/704),
+[#835](https://github.com/TogetherWeOwn/two-web-next/pull/835) and
+[#878](https://github.com/TogetherWeOwn/two-web-next/pull/878). The guard
+rejects the listed floor-lowering changes (`ci/floor-guard.mjs:8-12`); PR lint
+requires queue-visible waiver trailers (`ci/pr-lint-output.py:26-71`).
 
 ## Floor (always enforced, no setup required)
 
@@ -14,6 +16,9 @@ numbered dimensions below mirror the gates already wired in this repo.
   `Floor-waiver: assertion-removed <path> -- <reason>`,
   `Floor-waiver: threshold-removed <Dimension> -- <reason>`, or
   `Floor-waiver: new-exemption .constraintsignore -- <reason>`.
+  For PRs, mirror every recognized branch trailer verbatim in the PR body;
+  missing mirrors fail `pr-lint` so merge-queue validation can see the waivers
+  (`ci/pr-lint-output.py:65-70`; `ci/floor_waiver_body.py:51-62`).
 - No secrets in source.
 - This file does not get weakened to make a change pass: thresholds only move
   up without discussion, and new exception rows fail the gate.
@@ -37,7 +42,8 @@ while lowering it, or deleting the row, fails the gate.
 | Shared ast-grep rules | Vendored `sg-rules/ts-*.yml` report only; fixtures in `sg-tests/` pass | `npm run scan:rules-test` (fixtures) inside the fetch-await CI step | every PR (`check` job; scan WARN, fixtures HARD) |
 | Secrets | No secrets in source | `bash .github/scripts/gitleaks-scan.sh` | every PR (`gitleaks` required check) |
 | Coverage of changed lines | Added TS lines ≥ 80% executed | `npm run patch:coverage` (`--strict` flips it HARD) | every PR (`check` job, WARN: reports only) |
-| Security: code | No high findings | Semgrep WARN step in `.github/workflows/ci.yml` (planted-warning selftest + scan) | every PR (`check` job, WARN: reports only) |
+| Project coverage | Zero threshold violations: statements 90.8, branches 84.2, functions 92.3, lines 94.4, plus per-area floors (`vitest.config.ts:40`) | `npm run test:coverage` | every PR (`check` job) |
+| Security: code | No sink or secret-literal findings; scanner and partial-parse errors fail closed | Semgrep HARD step in `.github/workflows/ci.yml` (`--strict --error`, planted-finding selftest) | every PR (`check` job) |
 | Test inventory | Every test file reachable from CI | `npm run test:inventory` (`--strict` flips it HARD) | every PR (`check` job, WARN: reports only) |
 | Bundle size | Served assets within budget | `npm run budget` | `bundle-budget` job, blocks merge |
 | Page quality | Lighthouse categories within `ci/quality-budget.json`; security headers, HTML basics, internal links | `npm run lighthouse:quality`, `npm run standards` | `lighthouse` job, blocks merge |
@@ -50,7 +56,6 @@ number and no command here is an aspiration, not a constraint.
 
 | Metric | Today | Direction |
 |--------|-------|-----------|
-| Project coverage | Unmeasured; the first green `check` run on this branch records it via `coverage/coverage-summary.json` | must not fall (0.5% tolerance absorbs drift) |
 | Mutation signal | Nightly, non-blocking; `R4`–`R7` and `W1`–`W3` targeted mutants proposed as the first blocking subset (see `docs/quality-gates.md`) | toward blocking the ~3s subset |
 
 ## Exceptions

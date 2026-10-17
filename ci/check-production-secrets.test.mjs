@@ -343,15 +343,15 @@ test("every job that reads a PRODUCTION_* secret binds the production environmen
     "deploy-production.yml",
     "rollback-production.yml",
     "db-migrate.yml",
-    "neon-backup.yml",
+    "db-backup.yml",
   ]) {
     assert.ok(referencing.includes(expected), `expected ${expected} to reference PRODUCTION_*`);
   }
   assert.deepEqual(violations, []);
 });
 
-test("neon-backup selects its environment from the dispatch target, staging by default", () => {
-  const { jobs } = splitWorkflow(readFileSync(new URL("neon-backup.yml", WORKFLOWS), "utf8"));
+test("db-backup selects its environment from the dispatch target, staging by default", () => {
+  const { jobs } = splitWorkflow(readFileSync(new URL("db-backup.yml", WORKFLOWS), "utf8"));
   const backup = jobs.find((job) => job.id === "backup");
   assert.ok(backup, "expected a backup job");
   // Scheduled runs carry no inputs, so they fall back to staging.
@@ -361,17 +361,17 @@ test("neon-backup selects its environment from the dispatch target, staging by d
 // ---------------------------------------------------------------------------
 // Backup docs pin to the implementation.
 //
-// docs/db-migrations.md "Backups" and the neon-backup.yml header must state the
+// docs/db-migrations.md "Backups" and the db-backup.yml header must state the
 // real schedule (staging nightly; production manual dispatch only) and the real
-// R2 key layout from bin/neon-backup.sh prefix() / manifest_key(). No workflow
+// R2 key layout from bin/db-backup.sh prefix() / manifest_key(). No workflow
 // or script behavior changes here.
 // ---------------------------------------------------------------------------
 
-test("neon-backup schedule dumps staging; production is manual dispatch only", () => {
-  const workflow = readFileSync(new URL("neon-backup.yml", WORKFLOWS), "utf8");
+test("db-backup schedule dumps staging; production is manual dispatch only", () => {
+  const workflow = readFileSync(new URL("db-backup.yml", WORKFLOWS), "utf8");
   // The 03:17Z schedule carries no inputs, so `inputs.target || 'staging'`
   // resolves to staging; production needs a manual dispatch with a target.
-  assert.ok(workflow.includes("17 3 * * *"), "expected the 03:17Z cron in neon-backup.yml");
+  assert.ok(workflow.includes("17 3 * * *"), "expected the 03:17Z cron in db-backup.yml");
   assert.ok(
     workflow.includes("environment: ${{ inputs.target || 'staging' }}"),
     "schedule path must resolve to staging via the inputs.target fallback",
@@ -442,11 +442,11 @@ test("neon-backup schedule dumps staging; production is manual dispatch only", (
 });
 
 test("backup docs name the real R2 key layout from prefix() / manifest_key()", () => {
-  const script = readFileSync(new URL("../bin/neon-backup.sh", import.meta.url), "utf8");
+  const script = readFileSync(new URL("../bin/db-backup.sh", import.meta.url), "utf8");
   assert.match(
     script,
     /prefix\(\) \{ printf '%s\/%s-%s'/,
-    "expected prefix() to build <prefix>/<branch>-<branch> in bin/neon-backup.sh",
+    "expected prefix() to build <prefix>/<branch>-<branch> in bin/db-backup.sh",
   );
   assert.match(
     script,
@@ -493,7 +493,7 @@ on:
         options: [staging, production]
 `;
 
-test("production secret in a job with no environment is a violation (the pre-fix neon-backup shape)", () => {
+test("production secret in a job with no environment is a violation (the pre-fix db-backup shape)", () => {
   const text = `${FIXTURE_HEAD}jobs:
   backup:
     runs-on: ubuntu-latest

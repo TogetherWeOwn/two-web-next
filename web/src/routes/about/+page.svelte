@@ -17,7 +17,7 @@ import type { PageProps } from "./$types";
 // text while Hono JSX collapses it, so only compact markup renders the same
 // bytes (same precedent as the archive page).
 let { data }: PageProps = $props();
-const { appUrl, strap, lead, facts } = $derived(data);
+const { appUrl, strap, lead, facts, leafCss } = $derived(data);
 </script>
 
 <svelte:head>
@@ -29,6 +29,7 @@ const { appUrl, strap, lead, facts } = $derived(data);
   title="About"
   canonical={canonicalUrl(appUrl, "/about")}
   theme="content"
+  {leafCss}
   accountChrome={accountJoin}
 >
   <ContentLeaf navCurrent="about" headingId="about-heading" heading="About Together We Own">

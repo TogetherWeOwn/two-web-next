@@ -30,10 +30,9 @@ import { recoveryOutcome } from "./recovery-outcome";
 import { internalErrorHandler, registerErrorHandlers } from "./errors";
 import { registerEventRoutes } from "./events/routes";
 import { registerHotzoneRoutes } from "./hotzones/routes";
-import { loadHomeUpcomingMerged } from "./events/reads";
 import { discordEventsSource } from "./events/discord-transients";
 import { dbFor } from "./admin/db";
-import { listVisibleFeatured } from "./featured";
+import { cachedFeatured, cachedHomeUpcoming } from "./home-cache";
 import { leafInlineStyleCsp, robotsTag, SECURITY_HEADERS } from "./headers";
 import { registerJoinRoutes } from "./join/route";
 import { registerAiFriendlyRoutes } from "./ai-friendly/routes";
@@ -123,9 +122,9 @@ const staticSecurityHeaders = secureHeaders({
           ? "https://discord.com/widget"
           : "'none'",
     ],
-    // The static policy stays 'self'-only on every route. Content-leaf
-    // inline styles are allowlisted per-route by leafInlineStyleCsp below,
-    // so the documented policy for non-leaf routes never changes shape.
+    // The static policy stays 'self'-only on every route. Inline styles on /
+    // and content leaves are allowlisted per-route by leafInlineStyleCsp
+    // below; other routes keep the self-only style policy.
     styleSrc: ["'self'"],
     scriptSrc: ["'self'"],
     fontSrc: ["'self'"],
@@ -367,27 +366,63 @@ const NOTICES = new Set([
 ]);
 
 app.get("/", async (c) => {
-  // A DB outage must not break the funnel, including session setup. Fail closed to guest.
-  let sessionUnavailable = false;
-  const session = await readSession(c).catch((err) => {
-    // Keep the opaque session-failure fallback, not named non-outage exceptions.
-    if (err instanceof Error && err.name !== "Error" && !isDatabaseUnavailable(err)) throw err;
-    // Driver messages can contain DSNs or session identifiers; only a fixed diagnostic is safe.
-    console.warn("Home session unavailable; serving as guest.", {
-      exception: "SessionReadFailure",
-    });
-    sessionUnavailable = true;
-    return null;
-  });
   const n = c.req.query("n");
   const notice = (n && NOTICES.has(n) ? n : null) as Notice;
+  // Each homepage read opens its own web-DB client: the two transactions run
+  // on parallel max:1 connections like pre-#856, never serialized behind one
+  // shared client.
+  // Independent reads start together: the session (web DB), the counts (bot
+  // DB), the one-shot flash (signed cookie only) and the guest-invariant
+  // homepage data (shared short-TTL cache, never per-session). Sequential
+  // awaits summed every round trip into the server time here.
+  // A DB outage must not break the funnel, including session setup. Fail closed to guest.
+  const sessionPromise: Promise<{ session: Session | null; unavailable: boolean }> = readSession(
+    c,
+  ).then(
+    (session) => ({ session, unavailable: false }),
+    (err) => {
+      // Keep the opaque session-failure fallback, not named non-outage exceptions.
+      if (err instanceof Error && err.name !== "Error" && !isDatabaseUnavailable(err)) throw err;
+      // Driver messages can contain DSNs or session identifiers; only a fixed diagnostic is safe.
+      console.warn("Home session unavailable; serving as guest.", {
+        exception: "SessionReadFailure",
+      });
+      return { session: null as Session | null, unavailable: true };
+    },
+  );
   // The counts read degrades to the empty state when the bot DB is down — never a 500 on the
   // funnel top (ports two-web CountsReader::remember's never-throw contract).
-  const counts = await readCounts(c.env);
+  const countsPromise = readCounts(c.env);
   // One-shot join confirmation (legacy join_result flash): first render consumes it.
   // A failure landing drops a stale success flash instead — the current failure
   // explanation wins over an older journey's success (TOG-10356 review).
-  const flashed = await takeJoinResult(c);
+  const flashedPromise = takeJoinResult(c);
+  // ExecutionContext is absent outside the Worker (tests, some adapters):
+  // the guest cache is isolate-local memory only, so it needs no background
+  // scheduling; the context is passed through for signature compatibility.
+  let executionCtx: ExecutionContext | undefined;
+  try {
+    executionCtx = c.executionCtx as unknown as ExecutionContext;
+  } catch {
+    executionCtx = undefined;
+  }
+  const homeUpcomingPromise = cachedHomeUpcoming(
+    c.env,
+    () => dbFor(c),
+    () => discordEventsSource(c.env),
+    new Date(),
+    executionCtx,
+    c.get("requestId"),
+  );
+  const featuredPromise = cachedFeatured(c.env, () => dbFor(c), new Date(), executionCtx);
+  const [{ session, unavailable: sessionUnavailable }, counts, flashed, homeUpcoming, featured] =
+    await Promise.all([
+      sessionPromise,
+      countsPromise,
+      flashedPromise,
+      homeUpcomingPromise,
+      featuredPromise,
+    ]);
   const joinResult = [
     "join_failed",
     "signin_failed",
@@ -396,15 +431,6 @@ app.get("/", async (c) => {
   ].includes(notice ?? "")
     ? null
     : flashed;
-  const [homeUpcoming, featured] = await Promise.all([
-    loadHomeUpcomingMerged(
-      () => dbFor(c),
-      () => discordEventsSource(c.env),
-    ),
-    dbFor(c)
-      .then((db) => (db ? listVisibleFeatured(db) : []))
-      .catch(() => []),
-  ]);
   c.header("cache-control", "private, no-store");
   return c.html(
     <Home

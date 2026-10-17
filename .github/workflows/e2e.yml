@@ -17,6 +17,8 @@ on:
     # ready_for_review re-runs the smoke when a draft becomes ready (drafts
     # skip it below). `edited` needs no browser run; pr-gates covers it.
     types: [opened, synchronize, reopened, ready_for_review]
+  merge_group:
+    types: [checks_requested]
   push:
     branches: [main]
   # Nightly full smoke (TOG-14880): schedule events run the journeys
@@ -123,18 +125,32 @@ jobs:
             playwright-chromium-${{ runner.os }}-
       - name: Install Chromium
         run: npx playwright install --with-deps chromium
-      # Visual regression runs first, on the freshly seeded state: the journeys
-      # below mutate events and RSVPs (docs/visual-regression.md).
+      # Kit visuals run against the freshly seeded state before browser
+      # journeys create disposable events and RSVPs (docs/kit-parity-gates.md).
+      - name: Install Kit workspace dependencies
+        run: npm ci --prefix web --include=dev --no-audit --no-fund
+      - name: Build Kit worker
+        run: npm run build --prefix web
+      - name: Kit visual regression
+        run: npx playwright test --config playwright.kit-visual.config.ts
+      # Hono visual regression also runs before the mutating journeys.
       - name: Visual regression
         id: visual
+        if: ${{ !cancelled() }}
         run: npx playwright test --config playwright.visual.config.ts
       - name: Critical browser journeys
         if: ${{ !cancelled() }}
         run: npm run e2e
-      # Kit journey parity (docs/kit-parity-gates.md): the no-login
-      # journeys run against Hono and the built Kit Worker on the same seeded
-      # disposable Postgres. Read-only specs (no fixtures, no QA logins), so
-      # they run after the journeys without skewing the teardown sweep.
+      # Kit journey parity (docs/kit-parity-gates.md): these parity journeys
+      # run against Hono and the built Kit Worker on the same seeded disposable
+      # Postgres after the browser suite. The Kit workspace is rebuilt here
+      # for the parity run. Read-only apart from the
+      # member-board journey's single shared QA login and its one going RSVP
+      # (withdrawn in afterAll) and the archive journey's 24 seeded rows
+      # (swept in afterAll), so they neither contaminate either visual suite
+      # nor skew the teardown sweep. The visual spec above stays pinned to its
+      # file: the parity run below must not re-run it after the mutating
+      # journeys.
       - name: Install Kit workspace dependencies
         if: ${{ !cancelled() }}
         run: npm ci --prefix web --include=dev --no-audit --no-fund
@@ -143,18 +159,23 @@ jobs:
         run: npm run build --prefix web
       - name: Kit journey parity (Hono vs built Kit Worker)
         if: ${{ !cancelled() }}
-        run: npx playwright test --config playwright.kit-parity.config.ts
+        run: >-
+          npx playwright test --config playwright.kit-parity.config.ts
+          e2e/kit-parity/parity.spec.ts e2e/kit-parity/auth-boundaries.spec.ts
       - name: Kit parity ledger (no quiet green)
         if: ${{ !cancelled() }}
         run: node ci/check-kit-parity.mjs
       # A missing visual baseline is written by the visual step (never an
       # existing one); it must be reviewed and committed, so fail here.
+      # Kit visual and parity baselines land in e2e/visual/__screenshots-kit__/
+      # (docs/kit-parity-gates.md); accept
+      # them with node ci/kit-visual-accept.mjs, never by hand.
       - name: Uncommitted visual baselines
         if: ${{ !cancelled() }}
         run: |
-          new="$(git status --porcelain -- e2e/visual/__screenshots__)"
+          new="$(git status --porcelain -- e2e/visual/__screenshots__ e2e/visual/__screenshots-kit__)"
           if [ -n "$new" ]; then
-            echo "New visual baselines were generated; review and commit them (docs/visual-regression.md):"
+            echo "New visual baselines were generated; review and commit them using docs/visual-regression.md or docs/kit-parity-gates.md:"
             echo "$new"
             exit 1
           fi
@@ -168,6 +189,7 @@ jobs:
             playwright-report/
             test-results-visual/
             playwright-report-visual/
+            test-results-kit-visual/
             test-results-kit-parity/
             playwright-report-kit-parity/
             e2e/visual/__screenshots__/

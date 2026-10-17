@@ -85,6 +85,14 @@ describe("Kit admin dashboard load: outage wiring", () => {
     expect(err?.status).toBe(503);
   });
 
+  it("a moderator dashboard load succeeds when optional database widgets are unavailable", async () => {
+    vi.stubGlobal("__kitAdminDashboardDb", null);
+    const data = await load({ parent }, {});
+    expect(data.actor).toEqual(actor);
+    expect(data.funnel).toBeUndefined();
+    expect(data.zeroSearches).toBeUndefined();
+  });
+
   it("an ordinary widget failure resolves with omitted sections, never 503", async () => {
     const fakeDb = {
       transaction: async () => {

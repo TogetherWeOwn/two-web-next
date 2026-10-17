@@ -13,7 +13,7 @@ pin the split: exactly one consumer per queue and one cron owner.
   crons (`*/10 * * * *` reconcile, `0 0 * * *` prune) to the jobs top level.
 - Stays: web producers (`SYNC_EVENT_QUEUE`, `INTERNAL_ACTION_QUEUE`), routes,
   `env.production` cutover template, preview envs and their disjoint queues.
-- Jobs top level adds only `placement` (eu-central-1, beside staging Neon),
+- Jobs top level adds only `placement` (aws:us-east-1, beside PlanetScale staging),
   `tail_consumers` (staging pager), `keep_vars` and `APP_URL`; never preview
   production guild settings and never secrets in source.
 
@@ -64,7 +64,7 @@ token, and record which source was used without pasting a value.
 The handoff needs a bounded exclusive hold across three lanes that no single
 workflow serializes: the staging deploy lane (`deploy-staging` concurrency
 group in `.github/workflows/deploy.yml`), the hand-dispatch migration lane
-(`neon-web-migrate-staging` concurrency group in
+(`web-migrate-staging` concurrency group in
 `.github/workflows/db-migrate.yml`, which the deploy job does not call), and
 the Operator queue/cron mutations below. One quiet Actions page or one
 concurrency group never proves the other two are idle.

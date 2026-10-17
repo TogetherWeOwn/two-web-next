@@ -427,6 +427,33 @@ describe("Kit Svelte error shells (text pins; the root suite cannot transform Sv
     expect(page).toContain("noindex");
   });
 
+  it("+error.svelte falls unknown statuses back to the 500 shell, no echo, noindex intact", async () => {
+    const { isKitErrorStatus, kitErrorCopy } = await import("../src/kit-errors");
+    const page = read("web/src/routes/+error.svelte");
+    // Svelte cannot be transformed here, so pin the exact fallback expression
+    // and evaluate its semantics: a pass-through (`: page.status`), a wider
+    // status set, a dropped shell, an echoed failure or a dropped noindex
+    // each fail below instead of silently rendering nothing or leaking.
+    expect(page).toContain(
+      "const status = $derived(isKitErrorStatus(page.status) ? page.status : 500);",
+    );
+    expect(page).toContain("<ErrorShell code={status} inviteUrl={FALLBACK_INVITE} />");
+    expect(page).toContain('<meta name="robots" content="noindex, nofollow" />');
+    expect(page).not.toMatch(/page\.error/);
+    for (const unknown of [400, 401, 418, 502, 999]) {
+      const status = isKitErrorStatus(unknown) ? unknown : 500;
+      expect(status).toBe(500);
+      expect(kitErrorCopy(status)).toEqual({
+        code: "500",
+        title: "Something broke on our side",
+        lead: "It is not you. We have logged the failure and the team will take a look.",
+      });
+    }
+    for (const known of [404, 403, 410, 429, 500, 503] as const) {
+      expect(isKitErrorStatus(known) ? known : 500).toBe(known);
+    }
+  });
+
   it("kit-errors copy matches the Hono shells and negotiates without swallowing machine contracts", async () => {
     const { kitErrorCopy, negotiateKitError } = await import("../src/kit-errors");
     expect(kitErrorCopy(404).title).toBe("We cannot find that page");

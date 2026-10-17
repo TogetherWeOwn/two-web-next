@@ -6,7 +6,7 @@ mounted routers, so redirects, denials, 404s, handled 500s and downstream respon
 replacements have the same log/header contract.
 
 ```json
-{"event":"http.request","request_id":"0123456789abcdef-LHR","method":"GET","route":"/e/:key","status":200,"duration_ms":12.34,"colo":"LHR"}
+{"event":"http.request","request_id":"0123456789abcdef-LHR","method":"GET","route":"/e/:key","status":200,"duration_ms":12.34,"colo":"LHR","error_class":null,"build_sha":"0123456789abcdef0123456789abcdef01234567","release":"0123456789abcdef0123456789abcdef01234567"}
 ```
 
 ## Find a request
@@ -28,6 +28,12 @@ replacements have the same log/header contract.
 4. The `http.request` record gives the method, registered route pattern,
    final status, wall-clock `duration_ms` and edge colo (`null` locally).
    Unknown URLs use `unmatched`; URL parameters and query strings are absent.
+   Every structured record (`http.request`, `error.alert`, `queue.failing`)
+   also carries `build_sha` and `release`: the deploy commit parsed from the
+   Worker Version tag (`null` where no `version_metadata` binding exists, as
+   locally), and `error_class` (the exception class on error records, `null`
+   on `http.request`). Filter on `build_sha` to ask whether an error predates
+   or postdates a specific deploy.
 5. Search the same ID across `error.alert` and `queue.failing` records to connect
    an HTTP failure or a later queued failure with the request that produced it.
    Error alerts still mute duplicate exception-class/route fingerprints for
@@ -134,10 +140,73 @@ Read-only checks only: a Workers Logs search, a `SELECT`, or a source file.
 The `sync attempt settlement failed` line (`src/jobs/consumer.ts`) is outside
 this catalogue.
 
+### Missing sync-queue binding warning
+
+`event write-back due but SYNC_EVENT_QUEUE is not bound` (`src/events/sync.ts`,
+`enqueueEventSync`) is a `console.warn`, not one of the `console.error` rows
+above. It means the event write already committed, but this Worker did not send
+the queue carrier: the function logs this line and returns the built message
+without calling the queue, and its only callers (`dispatchWriteBack` in
+`src/admin/writeback.ts`, `dispatchRsvpSync` in `src/events/rsvp.ts`) await it
+without sending anything else. The database write remains committed while the
+queue carrier was not sent.
+
+On staging the write-back is late, not lost, as long as only the web Worker
+lacks the binding. The jobs Worker (`two-web-jobs`) runs `reconcileEvents`
+every 10 minutes (`wrangler.jobs.jsonc`) and re-dispatches stale events,
+including published or cancelled events with `sync_revision > synced_revision`
+and published events with no `discord_event_id` or unsynced RSVPs
+(`src/jobs/events.ts`). Reconcile never calls `enqueueEventSync`; it dispatches
+through the jobs Worker's own `SYNC_EVENT_QUEUE` binding. If the staging jobs
+Worker also lacks that binding, nothing re-dispatches the carrier until the
+binding is fixed: treat that case as stuck, not self-healing.
+
+In the production cutover template this self-healing does not apply: the web
+Worker `two-web-next-production` owns both the `SYNC_EVENT_QUEUE` producer
+binding (`env.production.queues.producers`) and the `*/10 * * * *` reconcile
+cron (`env.production.triggers`, `wrangler.jsonc`), and its `scheduled`
+handler (`src/worker.ts`) builds its queue from the same `env.SYNC_EVENT_QUEUE`.
+A missing binding there also stops reconcile, so the carrier stays unsent until
+the binding is fixed: treat a production warning as stuck, not late.
+
+| Field | Meaning and safe values |
+| --- | --- |
+| `eventKey` | The event whose write-back carrier was not sent |
+| `request_id` | The validated HTTP request ID (`safeRequestId`: a Cloudflare Ray ID or a generated ULID). Absent when the write came through the agent-events ingress (`POST /api/agent-events`, `src/agent-events/route.ts`), which calls `dispatchWriteBack` without the request ID; correlate those by `eventKey` and `agent_event_audits` instead. Never a secret or a member identity |
+
+A successful HTTP response is not evidence of Discord synchronization: the
+request succeeded against the database, but Discord has not been told yet.
+
+Read-only diagnostic: filter Workers Logs message/text with the exact warning
+(see [Find a request](#find-a-request)) and correlate by `eventKey` and, when
+present, `request_id`. Then check whether a later sync landed: join through
+`events` (`event_sync_attempts` carries `event_id`, not `event_key`):
+`SELECT * FROM event_sync_attempts JOIN events ON events.id = event_sync_attempts.event_id WHERE events.event_key = '<eventKey>'`,
+or compare revisions with
+`SELECT sync_revision, synced_revision, discord_event_id FROM events WHERE event_key = '<eventKey>'`
+(`synced_revision` catching up to `sync_revision` means reconcile recovered
+it). For an agent-published event, which has no `request_id` on the warning,
+find the ingress request with
+`SELECT * FROM agent_event_audits WHERE event_key = '<eventKey>'`. Then compare
+the deployed Workers' queue producer bindings with `wrangler.jsonc`: the
+top-level `queues.producers` block is staging (`SYNC_EVENT_QUEUE` bound to
+`two-sync-event`); production declares its own at
+`env.production.queues.producers` (`SYNC_EVENT_QUEUE` bound to
+`two-web-next-production-sync-event`) because bindings are not inherited, so
+check the environment that served the request. On staging, if reconcile is not
+recovering events, also compare the jobs Worker's bindings with
+`wrangler.jobs.jsonc` (which has no production env).
+Source stays unchanged: route any binding fix to the authorized Operator under
+the existing contract. Never run production database tests or replay a sync
+to investigate; log search, read-only `SELECT`s, source and deployed-config
+reads only.
+
 ## Privacy and boundaries
 
 Request logs allowlist only `event`, `request_id`, `method`, `route`, `status`,
-`duration_ms` and `colo`. They never include headers, cookies, tokens, bodies,
+`duration_ms`, `colo`, `error_class`, `build_sha` and `release`. The last two
+are the parsed 40-hex deploy commit or `null` — never the raw version tag.
+They never include headers, cookies, tokens, bodies,
 query strings, IPs, resolved URL paths or Discord IDs. Error alerts include the
 exception class, not its message or stack (which may contain SQL bindings or
 personal data). Queue failure lines carry the class for an unexpected throw, or a

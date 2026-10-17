@@ -2,36 +2,50 @@
 
 This is the Cloudflare Worker runbook, not the frozen Laravel/VPS runbook.
 Start here for releases, queue incidents and database recovery; use
-[log-line alerts](runbook-alerts.md) for fingerprints and
+[observability triage](runbook-observability.md) to go from a notification to a
+likely PR, [log-line alerts](runbook-alerts.md) for fingerprints and
 [shared Postgres](db-migrations.md) for migration ownership and backup policy.
 The [parity matrix](parity.md) records what is implemented versus still missing.
 Operations guidance (the index below, `/up` readiness, queues, deploy and
 rollback pointers, alerts) applies to staging and, where a section names the
-production binding, to production. The production cutover and its DNS changes
-are separately gated. The staging rollback and DNS flip-back rehearsal is covered here. See
+production binding, to production. Production is live: the apex serves the
+production Worker (`two-web-next-production`) since 2026-10-10, and the
+cutover closed on 2026-10-12 ([archived freeze note](cutover-freeze.md)).
+For a production Worker-version rollback use the
+[production rollback workflow](../.github/workflows/rollback-production.yml)
+and the production bindings; it does not restore DNS. Production DNS recovery
+to legacy requires the [recovery map](cutover-rollback.md#staging-dns-restoration-and-import-recovery-limits),
+a validated incident procedure and the [standing legacy-origin precondition](#before-the-production-flip).
+The staging rollback and DNS flip-back rehearsal is covered here. It is the kept pre-live rehearsal record. See
 [Staging rehearsal](#staging-rehearsal-worker-rollback-and-dns-flip-back).
-[Final import and reconcile](#final-import-and-reconcile) (including
-[Before the production flip](#before-the-production-flip)) runs only as a
-gated cutover step. [48h post-flip watch](#48h-post-flip-watch) applies only
-in the post-flip window: on a pager storm follow its Sev-1 path (contain,
-then the production rollback workflow).
+[Final import and reconcile](#final-import-and-reconcile) is the kept
+historical record of the gated import, not a live procedure.
+[Before the production flip](#before-the-production-flip) retains the cutover
+context and the standing precondition for DNS recovery to legacy. The
+inaugural [48h post-flip watch](#48h-post-flip-watch) ran 2026-10-10 00:52 UTC
+to 2026-10-12 00:52 UTC and is closed; the section remains the watch
+procedure. On a pager storm follow its Sev-1 path (contain, then the
+production rollback workflow).
 
 **First responder index.** Match the symptom, open the section, run the first
 read-only diagnostic, then escalate. Every diagnostic below is a read; do not
 mutate, purge, roll back, migrate, rotate or restore from this table.
 
-Scope: staging (pre-cutover) targets. Every host, Tail Worker and queue name
+Scope: staging (pre-cutover) targets — the staging-first triage scope is retained now that production is live. Every host, Tail Worker and queue name
 in this index is the staging binding unless a row names production
 (`two-web-next-production`, `two-web-next-alerts-production`, the apex); never
 triage a production incident with the staging targets. For production use the
 [production rollback workflow](../.github/workflows/rollback-production.yml) and the
-production bindings; [cutover-rollback.md](cutover-rollback.md) is the staging
-rehearsal record plus a non-executable production recovery map.
+production bindings for Worker-version recovery. For DNS recovery to legacy,
+[cutover-rollback.md](cutover-rollback.md#staging-dns-restoration-and-import-recovery-limits)
+is the staging rehearsal record plus a non-executable production recovery map;
+follow its linked legacy-origin readiness precondition, which still applies.
 
 | Symptom or alert | Runbook section | First read-only diagnostic | Escalate to |
 | --- | --- | --- | --- |
 | Any incident: start here | [Safety and escalation](#safety-and-escalation) | Re-read the authorization box; confirm staging-vs-production scope first (staging targets below do not triage production); record UTC time, commit, Worker version IDs, route/job and redacted error class; keep logs private | DevOps & Reliability Engineer; Director of Engineering for technical dead-ends |
 | Moderator lost their Discord role but sessions still authenticate | [A moderator lost their role](#a-moderator-lost-their-role) | Confirm the Discord role removal first; dry-run `node --import ./bin/ts-hook.mjs bin/revoke-sessions.mjs --discord-id=<snowflake> --target production` to read the active-session count (idle sessions expire within two hours); do not `--apply` from this table | DevOps & Reliability Engineer |
+| Still signed in elsewhere after a fresh sign-in (`prior session sweep failed`) | [Still signed in elsewhere after a fresh sign-in](#still-signed-in-elsewhere-after-a-fresh-sign-in) | Read the `prior session sweep failed` warning by `request_id` in Observability per [runbook-logs.md](runbook-logs.md#privacy-and-boundaries); dry-run `node --import ./bin/ts-hook.mjs bin/revoke-sessions.mjs --discord-id=<snowflake> --target production` to read the active-session count; do not `--apply` from this table | DevOps & Reliability Engineer |
 | `GET /up` 503 (`db:error`, `pending_migrations` nonzero or `null`, `config:missing`) | [Read `/up` without mistaking liveness for readiness](#read-up-without-mistaking-liveness-for-readiness) | `curl -sS --max-time 10 https://next.togetherweown.com/up`; compare HTTP status, `db`, `pending_migrations` and `config` against the readiness tables | DevOps & Reliability Engineer |
 | `GET /up` queue `degraded` (`pending >= 20`) or `unknown` with HTTP 200 | [Queue containment, drain and failed-job replay](#queue-containment-drain-and-failed-job-replay) | Same `GET /up`; read `queue.status`, `pending`, `oldest_ready_wait_age_seconds` and `ready_wait_severity`; `healthy + unknown` is lack of evidence, not recovery | DevOps & Reliability Engineer |
 | `error.alert` flood or pager storm | [48h post-flip watch](#48h-post-flip-watch) | `npx wrangler tail two-web-next-alerts --search '"delivery":"ops.alert.'`; correlate `request_id` per [runbook-logs.md](runbook-logs.md); fingerprints are in [runbook-alerts.md](runbook-alerts.md) | DevOps & Reliability Engineer |
@@ -42,15 +56,16 @@ rehearsal record plus a non-executable production recovery map.
 | Discord rate limiting (sync backoff, `rate_limited` bot sync refusal) | [Queue containment, drain and failed-job replay](#queue-containment-drain-and-failed-job-replay) | `GET /up` queue envelope plus `sync_retry_code` per [runbook-alerts.md](runbook-alerts.md); `rate_limited` is a retryable bot refusal under backoff, not a database outage; read the retry-cause table before touching delivery; do not purge or replay | DevOps & Reliability Engineer |
 | Bad deploy: need the rollback pointer | [Deploy and record the rollback pointer](#deploy-and-record-the-rollback-pointer) | `npx wrangler deployments status --name two-web-next --json` and `GET /up` `revision.version_id`; `wrangler deployments` wins on disagreement; do not roll back from this table | DevOps & Reliability Engineer; Director of Engineering for the rollback decision |
 | Database or Hyperdrive outage (configured DB unreachable, private 500/503 per the route table) | [Neon / Hyperdrive outage behavior](#neon--hyperdrive-outage-behavior) | `GET /up`, which measures the selected `DATABASE_URL` else `DB.connectionString`; never substitute another backend or credential | Director of Engineering and the authorized custodian; through the Director to CISO if a leak is suspected |
-| Backup and restore (verify archives, plan recovery) | [Backups and restore drill](#backups-and-restore-drill) | Local `bash ci/neon-backup-selftest.sh` (no secrets, no network) first; remote `BACKUP_BUCKET=two-web-next-backups BACKUP_JURISDICTION=eu BACKUP_PREFIX=neon WRANGLER_BIN= bash bin/neon-backup.sh check staging` re-downloads every manifest archive locally, needs the Cloudflare API token and separate approval; keep dumps inside approved EU custody; never `rotate` or restore without separate approval | DevOps & Reliability Engineer; live-data recovery needs CEO approval via the Director and the authorized custodian |
+| Backup and restore (verify archives, plan recovery) | [Backups and restore drill](#backups-and-restore-drill) | Local `bash ci/db-backup-selftest.sh` (no secrets, no network) first; remote `BACKUP_BUCKET=two-web-next-backups BACKUP_JURISDICTION=eu BACKUP_PREFIX=neon WRANGLER_BIN= bash bin/db-backup.sh check staging` re-downloads every manifest archive locally, needs the Cloudflare API token and separate approval; keep dumps inside approved EU custody; never `rotate` or restore without separate approval | DevOps & Reliability Engineer; live-data recovery needs CEO approval via the Director and the authorized custodian |
 
 Not an incident entry: [Final import and reconcile](#final-import-and-reconcile)
-(cutover-only authorized import),
+(historical cutover import record),
 [Secret rotation pointer (procedure only)](#secret-rotation-pointer-procedure-only)
 (no rotation here) and
 [Quarterly moderator access review](#quarterly-moderator-access-review)
-(scheduled quarterly review, not incident response) are not incident entries;
-read those sections directly when that work is authorized.
+(scheduled quarterly review, not incident response) and
+[security.txt expiry review and renewal](#securitytxt-expiry-review-and-renewal)
+are not incident entries; read those sections directly when that work is authorized.
 
 ## Safety and escalation
 
@@ -130,13 +145,23 @@ node --import ./bin/ts-hook.mjs bin/revoke-sessions.mjs --discord-id=<snowflake>
 
 `DATABASE_URL` is supplied through the environment only. Remote database URLs—including production-looking ones—require `--target production`; do not add a URL to command arguments or paste it into logs. Accepted form is `postgres://USER:PASSWORD@HOST:5432/DATABASE?sslmode=verify-full` (`sslrootcert=system` is accepted as an alias for `verify-full`); no other query parameters are accepted, so a console URL with extra parameters or `sslmode=require` is refused as missing or invalid until it is reduced to that form. See [moderator admin guide](moderator-admin-guide.md#a-moderator-lost-their-role).
 
+## Still signed in elsewhere after a fresh sign-in
+
+**Symptom.** A member signs in again — a new browser, device or browser profile — but an older browser still shows them signed in, including a shared terminal they used earlier. The same incident can appear in the logs as the warning line `prior session sweep failed`.
+
+**What it means.** A fresh sign-in first creates the new session, then revokes every other live session for that member, so normally only the newest session survives (`revokeUserSessions` in [src/sessions.ts](../src/sessions.ts), called from [src/index.tsx](../src/index.tsx)). That revocation sweep is deliberately fail-open: if it fails, the sign-in still succeeds and the new session works — a sweep failure must never turn into a failed sign-in — but the older sessions were not revoked by that sign-in. The warning line carries only `request_id` and the exception class, never a Discord ID (see [the log contract](runbook-logs.md#privacy-and-boundaries)); correlate it by `request_id`, and treat repeated lines as session-store or database trouble to escalate to the DevOps & Reliability Engineer.
+
+**What to tell the member.** Their new sign-in worked, and nothing about it is broken. Normally a fresh sign-in signs out their older sessions; this time that cleanup did not run, so an older browser can stay signed in until it has been idle for 120 minutes after its last session-refreshing page view (normal browsing there can extend that window). Signing in again from a device they control reruns the sweep and usually ends the older sessions.
+
+**If an older session must end now** — the terminal is shared, lost or not under the member's control, or the member is a moderator who lost the Discord role — revoke the member's sessions with the command in [A moderator lost their role](#a-moderator-lost-their-role) (dry-run first, verify the active-session count, then apply; the same procedure is in the [moderator admin guide](moderator-admin-guide.md#a-moderator-lost-their-role)). That command revokes every active session for the member, including the new one, so tell the member to sign in again afterwards; that fresh sign-in then leaves only the newest session.
+
 ## Quarterly moderator access review
 
 - Cadence: quarterly. Cadence ownership is a CTO/COO call; this section does not change it.
 - Owner: Director of Engineering, with security/access decisions through the CISO (see [Safety and escalation](#safety-and-escalation)).
 - Scope: the full Discord-moderator set against the live app-moderator set, plus every person confirmed to have lost the Discord moderator role since the last review. First confirm the Discord moderator role has been removed, as in [A moderator lost their role](#a-moderator-lost-their-role).
 - Procedure: audit first, then revoke, then re-audit until clean:
-  1. Run the read-only role audit. It compares ID lists the operator supplies; it opens no database, calls no network, and reads no tokens or secrets. Build the two inputs with the read-only queries in [moderator role audit](cutover-check.md#moderator-role-audit-w16-pre-flip). Keep variable names in notes, never values; treat ID files as member data, keep them out of the repo, and delete them after the run.
+  1. Run the read-only role audit. It compares ID lists the operator supplies; it opens no database, calls no network, and reads no tokens or secrets. Build the two inputs with the read-only queries in the [standing moderator role audit procedure](cutover-check.md#moderator-role-audit-w16-pre-flip) (the pre-flip rehearsal schedule is kept as history there). Keep variable names in notes, never values; treat ID files as member data, keep them out of the repo, and delete them after the run.
 
      ```sh
      npm run audit:moderator-roles -- --discord-file=discord-moderators.json --app-file=app-moderators.json
@@ -155,6 +180,85 @@ node --import ./bin/ts-hook.mjs bin/revoke-sessions.mjs --discord-id=<snowflake>
      `DATABASE_URL` is supplied through the environment only, as in the procedure above.
   4. Re-run the audit until `app-only` is 0 before closing the review. `discord-only` does not block close: the app set sees live sessions only (120-minute sliding TTL), so it includes every moderator not signed in at audit time. When a moderator is unavailable, record the `discord-only` count and close on `app-only` = 0. A clean audit is one receipt, not permission to change cadence or scope.
 - Evidence of completion: a dated review record with the review date (UTC), the reviewer/operator, the audit counts (`discord`, `app`, `discord-only`, `app-only`), the revoke dry-run/apply counts, and confirmation that Discord role removal was verified before revocation. Record counts only; keep member identifiers, ID-file contents, database URLs, tokens, and secrets out of docs, logs, and the record. The command output is counts with bounded ID lists; do not paste the lists into the record.
+
+## security.txt expiry review and renewal
+
+**Owner:** the CISO owns the disclosure-channel review and its dated renewal
+record; a repository maintainer implements the expiry-only PR, and the authorized
+release operator owns deployment and publication evidence. This is maintenance of
+`/.well-known/security.txt`, not permission to change reporting channels.
+[RFC 9116 §5.3](https://www.rfc-editor.org/rfc/rfc9116.html#section-5.3) warns that
+stale contacts can lose reports or send vulnerabilities to third parties.
+
+**Trigger:** start the review **at least 90 days before** `SECURITY_TXT_EXPIRES`.
+The current pin is `2027-10-01T00:00:00Z`, so the latest review start is
+**`2027-07-03T00:00:00Z`** (90 × 24 hours earlier). The CISO keeps a dated reminder
+for that deadline and replaces it after every renewal; this procedure does not
+install an automated reminder. Review immediately if a listed destination stops
+working or its ownership changes, or if the deadline has already passed. The
+real-clock expiry test is a last-resort failure at expiry, not a 90-day warning.
+
+1. Read [`src/security-txt.ts`](../src/security-txt.ts), the independent
+   `PINNED_EXPIRES` in [`test/security-txt.test.ts`](../test/security-txt.test.ts),
+   and [SECURITY.md](../SECURITY.md). Confirm with an authorized repository
+   maintainer that private vulnerability reporting remains enabled and monitored,
+   and that the existing `Contact` and `Policy` URLs are accessible, controlled by
+   the organization, and still match the policy. View Security → Report a
+   vulnerability while signed in; do not submit a dummy report. Keep vulnerability
+   details, credentials and member data out of the renewal record.
+2. Record the review date, reviewer, channel checks and proposed new expiry.
+   **Any Contact or Policy URL change needs a separate, recorded CISO decision
+   before implementation; it must not ride along in the expiry-only PR.** An
+   unavailable or unverified reporting channel blocks routine renewal; escalate
+   it to the CISO rather than extending the date to hide stale contact data.
+3. Choose a fixed RFC 3339 UTC timestamp (`YYYY-MM-DDTHH:mm:ssZ`, no fractional
+   seconds) in the future, later than the current pin and less than one year
+   after the review, allowing time to deploy before the old expiry. [RFC 9116 §2.5.5](https://www.rfc-editor.org/rfc/rfc9116.html#section-2.5.5)
+   recommends a horizon shorter than a year. Update `SECURITY_TXT_EXPIRES` and
+   `PINNED_EXPIRES` together; retain the real-clock future/less-than-one-year
+   assertions and fixed-date behavior. Never replace the pin with a rolling clock
+   or disable the test to clear an expired date. Update the current pin and
+   90-day trigger above in the same PR. Leave contacts, policy URL, route and
+   headers unchanged.
+4. Follow [the PR contract](../CONTRIBUTING.md). Run the fixture-only test and
+   link check below; record the results and verify the two dates above against
+   the source pin and `expiry - 90 × 24 hours` in UTC. Required checks under that
+   contract and independent Paperclip Review 5/5 must pass on the exact head
+   before the existing merge automation proceeds. No database is needed:
+
+   ```sh
+   env -u DATABASE_URL -u CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_DB npx --no-install vitest run test/security-txt.test.ts
+   npm run docs:links
+   ```
+5. Use the existing [release flow](releases.md) and
+   [deployment procedure](#deploy-and-record-the-rollback-pointer), preserving
+   the approved artifact, staging evidence, production gates and rollback pointer.
+   A merged PR alone does not renew the published file. After staging deployment,
+   then after the authorized production promotion, fetch the public file for the
+   corresponding target (read-only publication checks, not database tests):
+
+   ```sh
+   # After staging deployment only:
+   curl --fail --silent --show-error --max-time 10 --dump-header - https://next.togetherweown.com/.well-known/security.txt
+   # After authorized production promotion only:
+   curl --fail --silent --show-error --max-time 10 --dump-header - https://togetherweown.com/.well-known/security.txt
+   ```
+
+   Inspect the printed status line, headers and body; curl exit 0 alone is not
+   acceptance. Require HTTP 200 without redirect, `Content-Type: text/plain; charset=utf-8`,
+   exactly one `Expires` equal to the reviewed pin and still in the future, the
+   unchanged approved `Contact` and `Policy`, and `Canonical` matching that
+   target's HTTPS URL. Keep `Cache-Control: public, max-age=3600`; a cached old
+   response can persist for up to an hour. Recheck after that window rather than
+   weakening cache/header behavior or declaring success from source alone.
+6. Close the renewal record only with the PR/merged SHA, deployment workflow and
+   Worker version evidence (release/deployment metadata, not production `/up`),
+   UTC fetch times, observed `Expires` for both targets, and the next review
+   deadline/reminder. If publication still differs or expiry
+   is reached, keep the renewal open and route deployment failures to the release
+   operator and stale disclosure data to the CISO. Do not bypass failed gates or
+   silently extend an unreviewed file. Use the existing rollback procedure if
+   needed, but an expired rollback version is not a successful renewal.
 
 ## Deploy and record the rollback pointer
 
@@ -190,7 +294,7 @@ approved account and binding isolation before any remote mutation.
    A Version uploaded before the marker existed reports no `revision`; use
    `wrangler deployments list` for it. If `/up` and `wrangler deployments`
    ever disagree, `wrangler deployments` wins. Production `/up` has no
-   `revision` until a cutover PR declares the binding in `env.production`.
+   `revision`: the binding is not declared in `env.production`.
 
 3. Normal path: merge to `main` invokes
    [.github/workflows/deploy.yml](../.github/workflows/deploy.yml), using the
@@ -198,7 +302,7 @@ approved account and binding isolation before any remote mutation.
    migrations to its disposable Postgres, runs `npm run check`, then plans,
    applies and verifies the **staging web migrations** of the CI-verified SHA
    against the staging database — the pinned PlanetScale staging branch
-   (Neon endpoints still accepted during the transition; `ci/neon-migrate.mjs`, see
+   (retired Neon endpoints are refused; `ci/db-migrate.mjs`, see
    [Neon web schema migrations](#neon-web-schema-migrations-separate-operator-action)),
    ensures `two-sync-event` and `two-internal-action` exist, then deploys. A
    failed migration step fails the job before any Cloudflare mutation. The
@@ -242,7 +346,7 @@ and not a test. It is the hand-dispatch path for staging recovery and the only
 path for production; the staging `deploy.yml` applies staging migrations on its
 own (see *Staging deploy integration* below). This workflow's addition
 does not authorize its execution. No live
-migration or Neon branch creation is performed by its selftest.
+migration is performed by its selftest.
 
 **Before enabling or dispatching:**
 
@@ -268,12 +372,12 @@ migration or Neon branch creation is performed by its selftest.
   not only migrations. A staging recovery dispatch per this runbook is refused
   until the variable is exactly `false`. Rollback is re-hold: set the variable
   back to `true` (or delete the override so it resolves absent).
-- Provision `NEON_STAGING_DATABASE_URL` **only on the staging Environment** and
+- Provision `PLANETSCALE_STAGING_DATABASE_URL` **only on the staging Environment** and
   `PRODUCTION_DATABASE_URL` **only on the production Environment**, using
   the authorized operator's secret-provisioning path. Verify the intended
   project/branch/database and direct endpoint out of band. Staging is the pinned
-  PlanetScale staging branch and host (direct Neon endpoints still accepted
-  during the transition); production is PlanetScale Postgres on its own branch
+  PlanetScale staging branch and host (retired Neon endpoints are refused);
+  production is PlanetScale Postgres on its own branch
   and host (direct `<id>.pg.psdb.cloud:5432` endpoint — never the
   pooled `6432` port). The migrate gate pins the staging host and branch id and
   refuses the production identity in code, so a production URL in the staging
@@ -286,12 +390,11 @@ migration or Neon branch creation is performed by its selftest.
 - GitHub's `secrets` context also resolves repository/organization secrets.
   Therefore verify the selected name exists at Environment scope before using
   this workflow; do not rely on an existing repo-scoped backup secret when the
-  Environment copy is missing. The repository backup workflow currently uses
-  `NEON_STAGING_DATABASE_URL` at repo scope; that is **not** migration approval
+  Environment copy is missing. The backup workflow reads
+  `PLANETSCALE_STAGING_DATABASE_URL` from the `staging` Environment; that is **not** migration approval
   or provisioning. YAML cannot attest a resolved secret's scope. Missing
   Environment provisioning is a stop, even if a same-named repo secret exists.
-- Verify backup/PITR eligibility for the target branch (Neon history retention
-  or PlanetScale backups) and a tested recovery procedure before apply. The summary's timestamp is a recovery
+- Verify backup/PITR eligibility for the target branch (PlanetScale backups) and a tested recovery procedure before apply. The summary's timestamp is a recovery
   reference, **not** a snapshot, a restore drill, or proof PITR is available.
 
 **Operator execution after those gates:** select Actions → `db-migrate` → Run
@@ -340,7 +443,7 @@ migration or assume restoring the Worker restores the database.
 **Staging deploy integration:** `deploy.yml` applies the staging web migrations
 itself: `plan`, the exact-SHA CI re-check,
 `apply` and `verify` run in the `deploy-staging` job (Environment `staging`, which
-holds `NEON_STAGING_DATABASE_URL`) after `npm run check` and before the first
+holds `PLANETSCALE_STAGING_DATABASE_URL`) after `npm run check` and before the first
 Cloudflare mutation, so new code never meets the old staging schema and a failed
 or lock-blocked migration leaves the previous Worker serving. It does not call
 `db-migrate.yml`: a reusable-workflow job would check out main's tip instead of the
@@ -508,10 +611,12 @@ and [rollback limits](https://developers.cloudflare.com/workers/versions-and-dep
 
 ### Staging rehearsal: Worker rollback and DNS flip-back
 
-Staging only: host `next.togetherweown.com`, Worker `two-web-next`. Never run
-these steps against `togetherweown.com`, `www` or `two-web-next-production`;
-the production flip belongs to the W17 cutover card. Every command marked
-REMOTE MUTATION changes staging traffic for about 10 seconds.
+Staging only, and a kept historical record: host `next.togetherweown.com`,
+Worker `two-web-next`. Never run these steps against `togetherweown.com`,
+`www` or `two-web-next-production`; the production flip completed with the
+cutover close on 2026-10-12 ([archived freeze note](cutover-freeze.md)).
+Every command marked REMOTE MUTATION changes staging traffic for about
+10 seconds.
 
 Credentials stay in the environment, never on argv. The rollback half needs
 Workers Scripts edit (`CLOUDFLARE_API_TOKEN`). The DNS half also needs Zone
@@ -597,7 +702,7 @@ The telemetry query returns only the newest 100 events. Keep each window to
    telemetry can tell N from N+1. Prefer the newest N whose source differs on
    a public route (`git diff --stat "$N_SHA" "$N1_SHA" -- src public`) and
    that has no migration or binding drift
-   (`git diff --exit-code "$N_SHA" "$N1_SHA" -- drizzle migrations.lock ci/neon-migrate.mjs wrangler.jsonc`).
+   (`git diff --exit-code "$N_SHA" "$N1_SHA" -- drizzle migrations.lock ci/db-migrate.mjs wrangler.jsonc`).
    Set `DISC_PATH` to a public path whose status differs between N and N+1.
    When both versions were deployed with the `/up` revision marker, read
    `revision.version_id` from `/up` instead: it names the serving version
@@ -728,8 +833,9 @@ The telemetry query returns only the newest 100 events. Keep each window to
     the Cloudflare edge answered **522** on `/up` and `/` (the connection to
     the legacy origin timed out; the cause was not established), with
     intermittent 503s in the window. Loss of the `two-web-next` marker, not
-    the legacy status, is the flip signal. For production, see "Before the
-    production flip" below.
+    the legacy status, is the flip signal. For production DNS recovery to
+    legacy, the standing readiness precondition remains in
+    [Before the production flip](#before-the-production-flip) below.
 12. Re-confirm the hold and unchanged Worker allocation/schema/bindings before
     restoration, including before the fallback below. If exclusion or live
     compatibility has changed, stop and use the collision response rather than
@@ -771,8 +877,9 @@ The telemetry query returns only the newest 100 events. Keep each window to
     the receipt. If verification cannot complete within the held window, stop
     drill mutations and coordinate a safe disposition/hold extension with those
     owners; expiry is not a successful release or automatic recovery authority.
-16. Post the timings, version IDs, smoke results and discrepancies on the W16
-    card, and keep `$RUN_DIR` until the card is closed.
+16. Historical: the rehearsal timings, version IDs, smoke results and
+    discrepancies are kept in the rehearsal record below; do not run new
+    drill mutations from this section as a live procedure.
 
 Rehearsal record:
 
@@ -892,13 +999,16 @@ Notes from the 2026-10-02 run:
 
 ## Final import and reconcile
 
-Cutover plan step 2: the final legacy import into production Neon, with the
-reconcile report. Run it under the write freeze
-([cutover-freeze.md](cutover-freeze.md) in force), with legacy writes paused
-and the import destination quiescent. Both snapshots in this section are
-production mutations through the authorized operator procedure; the steps
-below name only environment variable **names**, never values. Credentials
-stay in the environment, never on argv.
+Historical cutover record: this was cutover plan step 2, the final legacy
+import with the reconcile report. It required paused legacy writes and a
+quiescent import destination. The [archived freeze note](cutover-freeze.md)
+is a withdrawn proposal, not evidence that its proposed freeze was applied;
+the actual cutover receipts remain on the cutover card in the team tracker.
+Do not run this as a live procedure; the importer commands below are kept
+as the cutover record. Both
+snapshots in this section were production mutations through the authorized
+operator procedure; the steps below name only environment variable **names**,
+never values. Credentials stay in the environment, never on argv.
 
 Ordered commands (one shared fixed cutoff for every importer and the
 verifier; the importers derive it from the same retention window):
@@ -922,7 +1032,7 @@ Exit codes:
 
 | Exit | Meaning | Operator action |
 | --- | --- | --- |
-| 0 | Complete match for the configured projection | Proceed to the next cutover step |
+| 0 | Complete match for the configured projection | Proceeded to the next cutover step |
 | 1 | Data diff or incomplete mapping | Stop. Triage by named key (`missingKeys`, `extraKeys`, `mismatchKeys`, `mappingGaps`); repair with a same-key importer re-run where the update rules permit, or with separately approved backup/repair recovery |
 | 2 | Configuration, connection, query or output error | Stop. Fix the tool invocation or environment, then re-run |
 
@@ -932,29 +1042,48 @@ extras. Stop rule: a re-run is not an undo — it repairs same-key values
 only where the importer update rules permit
 ([cutover-rollback.md row 4](cutover-rollback.md#production-cutover-capability--reverse-map)).
 Wrong identities or keys, extra rows and lost overwritten state need
-separately approved backup/repair recovery under writer holds. Archive the
-counts-only `verification.json` / `verification.md` with the cutover
-evidence; the reports carry keys and counts, never row values.
+separately approved backup/repair recovery under writer holds. The
+counts-only `verification.json` / `verification.md` were archived with the
+cutover evidence; the reports carry keys and counts, never row values.
 
 ### Before the production flip
 
-The production rollback is this same flip back to legacy, so the legacy origin
-must be able to serve the apex when needed. Staging answered 522, which does
-not prove production will. Before the flip, record the legacy record set for
-the apex and `www`, and confirm that the apex answers 200 on `/` and `/up`
-from legacy. The before-phase gate asserts the apex `/up` identity
-(`X-TWO-Origin: two-web`, see [cutover-check.md](cutover-check.md#phase-contract-and-prerequisites));
-a 522 or other 5xx from the legacy origin, or a missing marker, means the
-rollback path is not proven and the flip does not start.
+Historical cutover context: the pre-flip gate required a saved legacy
+record set for the apex and `www`, HTTP 200 on `/` and `/up` from legacy,
+and the apex `/up` identity `X-TWO-Origin: two-web`
+([before-phase contract](cutover-check.md#phase-contract-and-prerequisites)).
+Staging's 522 did not prove production readiness. These were cutover
+requirements, not evidence of the legacy origin's current readiness.
+
+**Standing DNS recovery precondition:** before any separately authorized
+production DNS recovery to legacy, confirm that the legacy origin can serve
+the apex with HTTP 200 on `/` and `/up`, including `X-TWO-Origin: two-web`
+on `/up`. Validate the saved apex/`www` records, proxy/TTL settings and current
+host/attachment inventory under the incident operator's reviewed procedure
+([production recovery map](cutover-rollback.md#staging-dns-restoration-and-import-recovery-limits)).
+A 522 or other 5xx from legacy, or a missing origin marker, means the recovery
+path is not proven: stop before DNS mutation. A response from the currently
+serving Next Worker does not establish legacy readiness. This prerequisite
+does not authorize production probes or DNS changes, and the staging drill
+is not an executable production recovery procedure.
 
 ## 48h post-flip watch
 
-The cutover is not done at the DNS flip: the new site stays under a 48h
-watch with the freeze in [cutover-freeze.md](cutover-freeze.md) in force
-until the watch exits. Everything in this section is read-only or GET-only:
-no production writes, migrations, credential changes or queue purges. Any
-Sev-1 goes to containment below and the production rollback pointer, never
-to a live fix or a credential swap.
+The inaugural watch is closed: it ran 2026-10-10 00:52 UTC to 2026-10-12
+00:52 UTC, and the cutover closed on 2026-10-12
+([archived freeze note](cutover-freeze.md); exit details are on the cutover
+card in the team tracker). This section remains the standing watch
+procedure after a separately authorized (re-)flip; it does not authorize a
+new flip or production probes outside that window. The archived freeze
+note is a withdrawn proposal, not evidence that its proposed freeze was
+applied. No freeze is implied by this watch: any future freeze needs a
+separate declaration with new dates and explicit lift terms.
+Everything in this section is read-only or GET-only except that OAuth
+start/callback routes may write throttle records, OAuth starts may issue or
+sweep one-use journey records, and OAuth callbacks may consume them; there are
+no other production writes, migrations, credential changes or queue purges. Any
+Sev-1 goes to containment below and the production rollback pointer, never to a
+live fix or a credential swap.
 
 **What to check:**
 
@@ -968,8 +1097,8 @@ to a live fix or a credential swap.
 - `node ci/cutover-check.mjs --phase after --target togetherweown.com --json`
   (the [after gate](cutover-check.md#phase-contract-and-prerequisites)):
   unauthenticated, GET-only, no database client. OAuth start/callback
-  routes can record throttles, so run it only inside this watch, never as
-  a casual probe.
+  routes can record throttles, and OAuth starts can issue or sweep one-use
+  journey records, so run it only inside this watch, never as a casual probe.
 - Lighthouse against the production origin once within 24h, held to the
   repo thresholds in [ci/lighthouserc.cjs](../ci/lighthouserc.cjs) (LCP,
   CLS, server response time); thresholds are never relaxed to turn a
@@ -995,14 +1124,17 @@ to a live fix or a credential swap.
 )
 ```
 
-**Cadence:** pager continuously; `/up` every 15 minutes for the first 4h,
-then hourly; the full after-gate at flip+1h, +24h and +48h; Lighthouse and
-the GET-only journeys once within the first 24h.
+**Cadence:** measure from the authorized (re-)flip time (`T0`): pager
+continuously; `/up` every 15 minutes for the first 4h, then hourly; the full
+after-gate at T0+1h, T0+24h and T0+48h; Lighthouse and the GET-only journeys
+once within the first 24h.
 
 **Exit criteria:** 48h elapse with no Sev-1 — no pager storm, `/up` 200
 with `db:ok` and zero pending migrations throughout, after-gates green,
 Lighthouse and guest journeys within budget. The DevOps & Reliability
-Engineer records the exit on the cutover card and lifts the freeze there.
+Engineer records the exit on the incident or release card. If a freeze was
+separately declared for this window, its authorized owner lifts it only
+under that declaration's terms; watch exit alone does not lift a freeze.
 
 **On a Sev-1** (pager storm, `/up` non-200 or `db:error`/pending nonzero,
 a red after-gate, or member-visible breakage): contain per the queue and
@@ -1025,11 +1157,13 @@ prove deployment readiness.
 ping and web migration-ledger read, plus the unchanged queue object. It has `Cache-Control: no-store`, no session/auth
 lookup, and no cookies. No migration is run or repaired by this endpoint.
 
-On staging only, a ready or failing body also carries
-`revision: { version_id, commit }` from the `version_metadata` binding
-`CF_VERSION_METADATA`. It is informational and never changes the HTTP status.
-`version_id` is the Worker Version ID (the `wrangler rollback` argument).
-`commit` is the version tag, shown only when it is a full lowercase 40-hex SHA
+Wherever the `version_metadata` binding `CF_VERSION_METADATA` is declared
+(the staging and production web Workers), a ready or failing body also carries
+`revision: { version_id, commit }`. It is informational and never changes the
+HTTP status. `version_id` is the Worker Version ID (the `wrangler rollback`
+argument). `commit` is the deploy commit parsed from the version tag (the
+bare staging SHA or the first component of the production
+`<sha>-<run-id>-<run-attempt>` tag), shown only as a full lowercase 40-hex SHA
 and `null` otherwise, so an arbitrary manual tag never reaches the public body.
 `node bin/revision-check.mjs <origin> [<sha>]` reads it: with a SHA it fails
 unless that commit is live, without one it only logs what is live.
@@ -1214,7 +1348,8 @@ not conditional on an unmerged outage fix. Offline evidence:
 These are local doubles, not deployed outage acceptance.
 
 Shared human throttles and profile throttles fail open on store error; the shared
-human throttle currently uses only `DATABASE_URL`, not Hyperdrive. Optional
+human throttle selects nonempty `DATABASE_URL`, then the `DB` Hyperdrive binding,
+and never retries the other source after a connection failure. Optional
 search-log/widget reads fail open but do not protect primary DB reads. Do not
 relax `MEMBER_ACCESS_LOG_ENFORCE` to force a recovery: required logging defaults
 to fail closed. Diagnose from redacted platform errors/config metadata; a code
@@ -1412,13 +1547,13 @@ prove exactly-once remote effects. See [consumer error paths](../src/jobs/consum
 
 ## Backups and restore drill
 
-[bin/neon-backup.sh](../bin/neon-backup.sh) supports `backup`, `promote-weekly`,
+[bin/db-backup.sh](../bin/db-backup.sh) supports `backup`, `promote-weekly`,
 `rotate`, `check` — **there is no `restore` subcommand**. `check` downloads
 manifest-listed objects to prove existence, not restorability or row counts.
-The [nightly workflow](../.github/workflows/neon-backup.yml) runs at `03:17Z`
-and can skip green when `NEON_STAGING_DATABASE_URL` is absent. Green/skipped is
+The [nightly workflow](../.github/workflows/db-backup.yml) runs at `03:17Z`
+and can skip green when `PLANETSCALE_STAGING_DATABASE_URL` is absent. Green/skipped is
 not a successful backup. Its `branch` input changes the object prefix only:
-`DATABASE_URL` still comes from `NEON_STAGING_DATABASE_URL`; passing `main`
+`DATABASE_URL` still comes from `PLANETSCALE_STAGING_DATABASE_URL`; passing `main`
 does not select a production connection. The `target` input selects the
 connection: `production` reads `PRODUCTION_BACKUP_DATABASE_URL`, a read-only role.
 
@@ -1455,9 +1590,9 @@ pin the approved bucket/jurisdiction and avoid inherited overrides:
   unset PGHOSTADDR PGSERVICE PGSERVICEFILE PGOPTIONS
   export PGPASSFILE=/dev/null
   BACKUP_BUCKET=two-web-next-backups BACKUP_JURISDICTION=eu BACKUP_PREFIX=neon \
-    WRANGLER_BIN= bash bin/neon-backup.sh backup staging
+    WRANGLER_BIN= bash bin/db-backup.sh backup staging
   BACKUP_BUCKET=two-web-next-backups BACKUP_JURISDICTION=eu BACKUP_PREFIX=neon \
-    WRANGLER_BIN= bash bin/neon-backup.sh check staging
+    WRANGLER_BIN= bash bin/db-backup.sh check staging
 )
 ```
 
@@ -1476,7 +1611,7 @@ First exercise the actual backup script through the existing stub harness:
 
 ```bash
 : "${PAPERCLIP_RUN_SCRATCH_DIR:?Use the run-owned scratch directory}"
-TMPDIR="$PAPERCLIP_RUN_SCRATCH_DIR" bash ci/neon-backup-selftest.sh
+TMPDIR="$PAPERCLIP_RUN_SCRATCH_DIR" bash ci/db-backup-selftest.sh
 ```
 
 This tests upload/manifest proof, 7/4 retention, password hygiene and missing

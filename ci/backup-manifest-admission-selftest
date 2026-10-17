@@ -118,7 +118,7 @@ class ManifestAdmission(unittest.TestCase):
         manifest.write_text("".join(key + "\n" for key in [*keys, *(k + RECEIPT_SUFFIX for k in receipts)]))
 
     def run_backup(self, command, *args, branch="staging"):
-        return subprocess.run(["bash", str(ROOT / "bin/neon-backup.sh"), command, branch, *args],
+        return subprocess.run(["bash", str(ROOT / "bin/db-backup.sh"), command, branch, *args],
                               cwd=ROOT, env=self.env, capture_output=True, text=True)
 
     def calls(self):

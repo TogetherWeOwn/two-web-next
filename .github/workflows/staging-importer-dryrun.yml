@@ -50,8 +50,8 @@ jobs:
         env:
           # Staging Environment secrets; never echoed, never written to a file.
           # GitHub masks secret values in logs automatically.
-          # DATABASE_URL is the staging Neon destination.
-          DATABASE_URL: ${{ secrets.NEON_STAGING_DATABASE_URL }}
+          # DATABASE_URL is the PlanetScale staging destination.
+          DATABASE_URL: ${{ secrets.PLANETSCALE_STAGING_DATABASE_URL }}
           # Staging-safe legacy snapshot source. The operator must provision
           # this on the staging environment before dispatch; it must be a
           # snapshot taken for staging, never the production legacy database
@@ -61,7 +61,7 @@ jobs:
         run: |
           set -uo pipefail
           if [ -z "${DATABASE_URL:-}" ]; then
-            echo "::error::NEON_STAGING_DATABASE_URL is not configured on the staging environment"
+            echo "::error::PLANETSCALE_STAGING_DATABASE_URL is not configured on the staging environment"
             exit 1
           fi
           if [ -z "${LEGACY_DATABASE_URL:-}" ]; then

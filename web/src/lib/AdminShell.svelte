@@ -9,9 +9,6 @@ import type { Snippet } from "svelte";
 // paths, which Hono serves until each child slice migrates, so every link
 // works during mixed mode. Admin is never indexed.
 //
-// No tab-sync script yet: the Hono shell injects /islands/auth-status.js for
-// moderators (src/auth-status.ts), and porting it is an enablement blocker
-// (docs/kit-parity-gates.md, GET /admin row). It lands with the probe.
 let { title, children }: { title: string; children: Snippet } = $props();
 </script>
 
@@ -19,6 +16,7 @@ let { title, children }: { title: string; children: Snippet } = $props();
   <title>{title} — TWO admin</title>
   <meta name="robots" content="noindex, nofollow" />
   <link rel="stylesheet" href="/styles.css" />
+  <script src="/islands/auth-status.js" defer data-testid="auth-tab-sync"></script>
 </svelte:head>
 
 <a class="skip-link" href="#main">Skip to content</a>

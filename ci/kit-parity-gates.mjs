@@ -34,6 +34,20 @@ export const PARITY_ROUTES = [
     contract: "archive",
     compareSection: "past-events",
   },
+  // GET /events only: POST /events and /events.json stay Hono-owned, so the
+  // write and JSON contracts keep one authority. No byte section compare:
+  // rows are live database reads (staging is often empty), so preview proves
+  // the structural contract on both sides instead of equal bytes; the
+  // hermetic calendar-parity and acceptance suites pin byte-identity from
+  // the same model.
+  {
+    path: "/events",
+    expectStatus: 200,
+    expectMarker: "manifest",
+    contract: "events",
+    cachePattern: /^public, max-age=(?:[1-9]|[1-5]\d|60)$/,
+    compareSection: null,
+  },
   // GET /join only: /join/discord + /join/callback stay Hono-owned, so the
   // funnel keeps one OAuth authority. No byte section compare: the widget
   // zone is environment-dependent (the guild id — and therefore facade vs
@@ -60,6 +74,28 @@ export const PARITY_ROUTES = [
     cache: "no-store, private",
     compareSection: null,
   },
+  // Static public leaves: DB-free reads from the shared content modules,
+  // Kit-owned with the same public 3600s cache as the Hono handlers
+  // (csr=false, no hydration bundle). No byte section compare: the
+  // frameworks serialize the shared sections differently, so preview proves
+  // the structural contract (heading, strap, testids, same-origin join
+  // action) on both sides instead of equal bytes.
+  {
+    path: "/about",
+    expectStatus: 200,
+    expectMarker: "manifest",
+    contract: "about",
+    cache: "public, max-age=3600",
+    compareSection: null,
+  },
+  {
+    path: "/faq",
+    expectStatus: 200,
+    expectMarker: "manifest",
+    contract: "faq",
+    cache: "public, max-age=3600",
+    compareSection: null,
+  },
   // Hot-zone heatmaps: public aggregates, Kit-owned with the same
   // reads as the Hono handlers. No byte section compare: the joins grid reads
   // live join_attempts/event rows, so Hono vs Kit bytes differ by design;
@@ -72,6 +108,95 @@ export const PARITY_ROUTES = [
     contract: "hotzones",
     compareSection: null,
   })),
+  // Member leaderboard: authenticated member view only, so the preview
+  // journeys carry a QA session (auth: "member") or none (auth: "guest").
+  // No byte section compare: rows are per-viewer, so preview proves the
+  // structural contract on both sides instead. Admission answers (guest
+  // 302, grammar 400s) pin status + no-board + secret scrub only; the 403
+  // non-member arm cannot be minted by the QA seam (both QA identities are
+  // members) and stays pinned hermetically.
+  {
+    path: "/leaderboards/members",
+    label: "members guest bounce",
+    expectStatus: 302,
+    expectMarker: "manifest",
+    contract: "members-admission",
+    compareSection: null,
+    auth: "guest",
+  },
+  ...[
+    "/leaderboards/members",
+    "/leaderboards/members?scope=relative",
+    "/leaderboards/members?season=2026",
+    "/leaderboards/members?activity=valheim",
+  ].map((path) => ({
+    path,
+    expectStatus: 200,
+    expectMarker: "manifest",
+    contract: "members",
+    cache: "private, no-store",
+    compareSection: null,
+    auth: "member",
+  })),
+  ...[
+    ["/leaderboards/members?season=bogus", "members bad season"],
+    ["/leaderboards/members?scope=friends", "members deferred scope"],
+    ["/leaderboards/members?activity=chess%21", "members bad activity"],
+  ].map(([path, label]) => ({
+    path,
+    label,
+    expectStatus: 400,
+    expectMarker: "manifest",
+    contract: "members-admission",
+    compareSection: null,
+    auth: "member",
+  })),
+  // Moderator join-attempts audit: moderator-only member data, so the
+  // preview journeys carry a QA moderator session (auth: "moderator"), a
+  // QA member session for the refusal (auth: "member"), or none (auth:
+  // "guest"). No byte section compare: rows are live audit reads, so
+  // preview proves the structural contract on both sides instead. The
+  // detail journey pins a canonical missing id: no seeded attempt id is
+  // stable on staging (the retention window prunes old rows), so the
+  // served-detail contract is proven by the unit fixtures here and the
+  // hermetic Kit suites, while preview pins the 404 admission on both
+  // renderers so a missing row never leaks a detail page.
+  {
+    path: "/admin/join-attempts",
+    label: "join-attempts guest bounce",
+    expectStatus: 302,
+    expectMarker: "manifest",
+    contract: "join-attempts-admission",
+    compareSection: null,
+    auth: "guest",
+  },
+  {
+    path: "/admin/join-attempts",
+    label: "join-attempts member refusal",
+    expectStatus: 403,
+    expectMarker: "manifest",
+    contract: "join-attempts-admission",
+    compareSection: null,
+    auth: "member",
+  },
+  {
+    path: "/admin/join-attempts",
+    expectStatus: 200,
+    expectMarker: "manifest",
+    contract: "join-attempts",
+    cache: "private, no-store",
+    compareSection: null,
+    auth: "moderator",
+  },
+  {
+    path: "/admin/join-attempts/999999",
+    label: "join-attempt detail missing",
+    expectStatus: 404,
+    expectMarker: "manifest",
+    contract: "join-attempts-admission",
+    compareSection: null,
+    auth: "moderator",
+  },
 ];
 
 export const RESERVED_PROBES = [{ path: "/up", expectStatus: 200, expectMarker: null }];
@@ -149,6 +274,13 @@ export function expectedMarkerFor(manifestSource, path) {
     manifestSource.match(new RegExp(`path:\\s*"${escaped}"[^}]*enabled:\\s*(true|false)`)) ??
     manifestSource.match(new RegExp(`enabled:\\s*(true|false)[^}]*path:\\s*"${escaped}"`));
   if (match) return match[1] === "true" ? "kit" : null;
+  // A concrete instance of a `:param` entry (/admin/join-attempts/999999 for
+  // /admin/join-attempts/:id) derives from its pattern entry, structurally
+  // like the runtime router: the literal scan above cannot see it.
+  const structural = parseManifestEntries(manifestSource).find(
+    (entry) => entry.method.toUpperCase() === "GET" && pathsMatchStructurally(entry.path, base),
+  );
+  if (structural) return structural.enabled ? "kit" : null;
   // A parity route with no manifest entry is a gate bug, never a quiet Hono:
   // fail closed so a dropped entry cannot ship as "expected Hono".
   if (PARITY_ROUTES.some((route) => route.path.split(/[?#]/)[0] === base)) {
@@ -290,21 +422,33 @@ export function isManifestEnabled(manifestSource, path, method = null) {
   );
 }
 
-// Coverage: the executed parity runs are GET/HEAD /events/past, /join,
-// /auth/recover and the four hot-zone paths via PARITY_ROUTES (unit contract
-// + preview fetch). Any other enabled entry has no run covering it and must
+// Coverage: the executed parity runs are GET/HEAD /events/past, GET/HEAD
+// /events, /join, /auth/recover, the four hot-zone paths,
+// /leaderboards/members and the moderator /admin/join-attempts pair via
+// PARITY_ROUTES (unit contract + preview fetch,
+// with the member-board journey also running authenticated in the Playwright
+// Hono-vs-Kit journey). Any other enabled
+// entry has no run covering it and must
 // fail — the scopes below only choose the journey name for the failure
 // message, never whether it fails.
 export function isCoveredByExecutedRun(entry) {
   const method = entry.method.toUpperCase();
   if (method !== "GET" && method !== "HEAD") return false;
   const base = entry.path.split(/[?#]/)[0];
-  // A `:param` pattern family (e.g. GET /events/:key) is never covered by the
-  // single concrete /events/past run — it owns sibling paths with no run.
-  if (base.includes(":")) return false;
-  return PARITY_ROUTES.some((route) => {
-    const routeBase = route.path.split(/[?#]/)[0];
-    return base === routeBase;
+  const routeBases = PARITY_ROUTES.map((route) => route.path.split(/[?#]/)[0]);
+  if (!base.includes(":")) return routeBases.some((routeBase) => base === routeBase);
+  // A `:param` pattern family (e.g. GET /events/:key) is never covered by a
+  // static sibling run (/events/past owns its own handler): only a concrete
+  // parity instance of the pattern itself covers it, and only when every
+  // `:param` position carries a numeric id segment — an id instance of the
+  // pattern handler, never a static word that names a different page.
+  const patternParts = base.split("/");
+  return routeBases.some((routeBase) => {
+    if (!pathsMatchStructurally(base, routeBase)) return false;
+    const routeParts = routeBase.split("/");
+    return patternParts.every(
+      (part, i) => !part.startsWith(":") || /^\d+$/.test(routeParts[i] ?? ""),
+    );
   });
 }
 
@@ -444,6 +588,10 @@ export function assertRouteContract({ label, html, headers, status, expected }) 
     failures.push(...assertJoinContract(label, html, get, expected));
   } else if (contract === "recovery") {
     failures.push(...assertRecoveryContract(label, html, get, expected));
+  } else if (contract === "about") {
+    failures.push(...assertAboutContract(label, html, get, expected));
+  } else if (contract === "faq") {
+    failures.push(...assertFaqContract(label, html, get, expected));
   } else if (contract === "hotzones") {
     if (!/hot zone/i.test(html)) failures.push(`${label}: hot-zone heading present`);
     if (!html.includes("<table>")) failures.push(`${label}: 7x24 grid table present`);
@@ -451,6 +599,8 @@ export function assertRouteContract({ label, html, headers, status, expected }) 
       failures.push(`${label}: hot-zones never index`);
     if (/discord_id|created_at/i.test(html))
       failures.push(`${label}: aggregate only, no per-attempt fields`);
+  } else if (contract === "events") {
+    failures.push(...assertEventsContract(label, html, get, expected));
   } else {
     failures.push(`${label}: unknown contract ${JSON.stringify(contract)}`);
   }
@@ -553,6 +703,99 @@ function assertJoinContract(label, html, get, expected) {
   return failures;
 }
 
+// Events-list contract (src/events/pages-calendar-screen.tsx via
+// src/kit-events-html.tsx): the native endpoint renders the Hono calendar
+// screen, so the island identity, view toggles, search form, archive and
+// subscribe links and markdown alternate ride both renderers. Rows are live
+// reads (staging is often empty), so cards are never required here — the
+// hermetic calendar-parity and acceptance suites pin seeded rows. Cache
+// acceptance: public 60 only without a flash, session or search, otherwise
+// private/no-store; Vary stays on every variant. A flashed view is
+// viewer-specific and never shared-cacheable.
+function assertEventsContract(label, html, get, expected) {
+  const failures = [];
+  const cacheActual = get("cache-control") ?? "";
+  if (expected.cachePattern instanceof RegExp) {
+    if (!expected.cachePattern.test(cacheActual))
+      failures.push(
+        `${label}: cache-control ${JSON.stringify(cacheActual)} does not match ${expected.cachePattern}`,
+      );
+  } else if (expected.cache !== undefined && expected.cache !== null) {
+    const allowed = Array.isArray(expected.cache) ? expected.cache : [expected.cache];
+    if (!allowed.includes(cacheActual))
+      failures.push(
+        `${label}: cache-control ${JSON.stringify(cacheActual)} not in ${allowed.join(" | ")}`,
+      );
+  }
+  const varyTokens = new Set(
+    (get("vary") ?? "").split(",").map((token) => token.trim().toLowerCase()),
+  );
+  if (!varyTokens.has("cookie")) failures.push(`${label}: Vary stays on every variant`);
+  if (!varyTokens.has("x-two-island"))
+    failures.push(
+      `${label}: Vary distinguishes full vs island-fragment representations (Cookie, X-Two-Island)`,
+    );
+  if (!html.includes('data-island="events-calendar"'))
+    failures.push(`${label}: calendar island identity present (no-JS content)`);
+  if (!html.includes('data-testid="events-calendar"'))
+    failures.push(`${label}: calendar section testid present (no-JS content)`);
+  if (!html.includes('data-testid="events-list"'))
+    failures.push(`${label}: list section testid present (no-JS content)`);
+  if (!html.includes('data-testid="events-content"'))
+    failures.push(`${label}: content section testid present (no-JS content)`);
+  if (!html.includes('data-testid="events-view-list"'))
+    failures.push(`${label}: list view toggle present`);
+  if (!html.includes('data-testid="events-view-calendar"'))
+    failures.push(`${label}: calendar view toggle present`);
+  if (!html.includes('data-testid="events-search"'))
+    failures.push(`${label}: search control present`);
+  if (!html.includes('<form method="get" action="/events"'))
+    failures.push(`${label}: search stays a GET form (no-JS fallback)`);
+  if (!html.includes('name="q"')) failures.push(`${label}: search field keeps its query name`);
+  if (
+    !/<a\b(?=[^>]*\bdata-testid="events-past-archive-link")(?=[^>]*\bhref="\/events\/past")[^>]*>/.test(
+      html,
+    )
+  )
+    failures.push(`${label}: past-archive link present`);
+  const canonicalHref = html.match(
+    /<link\b(?=[^>]*\brel="canonical")(?=[^>]*\bhref="([^"]+)")[^>]*>/,
+  )?.[1];
+  const subscribeHref = html.match(
+    /<a\b(?=[^>]*\bdata-testid="events-subscribe")(?=[^>]*\bhref="([^"]+)")[^>]*>/,
+  )?.[1];
+  let subscribeMatchesCanonicalHost = false;
+  try {
+    const canonicalUrl = canonicalHref ? new URL(canonicalHref) : null;
+    const subscribeUrl = subscribeHref ? new URL(subscribeHref) : null;
+    subscribeMatchesCanonicalHost =
+      canonicalUrl !== null &&
+      subscribeUrl !== null &&
+      subscribeUrl.protocol === "webcal:" &&
+      subscribeUrl.host === canonicalUrl.host &&
+      subscribeUrl.pathname === "/events.ics" &&
+      subscribeUrl.search === "" &&
+      subscribeUrl.hash === "";
+  } catch {
+    subscribeMatchesCanonicalHost = false;
+  }
+  if (!subscribeMatchesCanonicalHost) failures.push(`${label}: subscribe action present`);
+  if (!html.includes('<script src="/islands/events-calendar.js"'))
+    failures.push(`${label}: shared island binder`);
+  if (!html.includes('href="/events.md"')) failures.push(`${label}: markdown alternate present`);
+  if (
+    !/<link\b(?=[^>]*\brel="canonical")(?=[^>]*\bhref="https?:\/\/[^/"]+\/events")[^>]*>/.test(html)
+  )
+    failures.push(`${label}: canonical points at /events`);
+  // Flash privacy invariant, independent of the expected-cache pin: a view
+  // carrying the one-shot banner is viewer-specific and never shared-cacheable.
+  // Only this direction is pinned — a flash-free member view is legitimately
+  // private, so the reverse would false-fail signed-in renders.
+  if (html.includes('data-testid="join-result"') && cacheActual !== "private, no-store")
+    failures.push(`${label}: flash view answers private, no-store`);
+  return failures;
+}
+
 // The retry href must be a bare OAuth start or carry a safe same-origin
 // next. Mirrors safeNext (src/join/service.ts) minus the control-byte check:
 // an HTML attribute value cannot smuggle a header-breaking byte past the
@@ -633,6 +876,77 @@ function assertRecoveryContract(label, html, get, expected) {
   return failures;
 }
 
+// Static-leaf contracts (src/screens/about.tsx, src/screens/faq.tsx and
+// their Kit twins web/src/routes/about/, web/src/routes/faq/): DB-free
+// public reads from the shared content modules, csr=false so the contract
+// is in the raw fetch body. Both renderers share the Leaf shell — one h1
+// the content nav labels, the strap and lead, the fact/question testids
+// and the join action — with the public 3600s cache both handlers set.
+// The join action stays same-origin (/join): a leaf must never carry a
+// hostile outbound href.
+function leafJoinHrefOf(html, testid) {
+  const match =
+    html.match(new RegExp(`href="([^"]+)"[^>]*data-testid="${testid}"`)) ??
+    html.match(new RegExp(`data-testid="${testid}"[^>]*href="([^"]+)"`));
+  return match ? match[1] : null;
+}
+
+function assertLeafContract(label, html, get, expected, leaf) {
+  const failures = [];
+  if (expected.cache !== undefined && expected.cache !== null) {
+    const actual = get("cache-control") ?? "";
+    const allowed = Array.isArray(expected.cache) ? expected.cache : [expected.cache];
+    if (!allowed.includes(actual))
+      failures.push(
+        `${label}: cache-control ${JSON.stringify(actual)} not in ${allowed.join(" | ")}`,
+      );
+  }
+  const cacheActual = get("cache-control") ?? "";
+  if (cacheActual !== "public, max-age=3600")
+    failures.push(`${label}: leaf keeps the shared public cache contract`);
+  if (!html.includes(`<h1 id="${leaf.headingId}">${leaf.heading}</h1>`))
+    failures.push(`${label}: leaf heading present`);
+  if (!html.includes(`<p class="strap">${leaf.strap}</p>`))
+    failures.push(`${label}: leaf strap present`);
+  for (const testid of leaf.testids) {
+    if (!html.includes(`data-testid="${testid}"`))
+      failures.push(`${label}: leaf section ${testid} present (no-JS content)`);
+  }
+  const join = leafJoinHrefOf(html, leaf.joinTestid);
+  if (join === null) failures.push(`${label}: join action readable`);
+  else if (join !== "/join") failures.push(`${label}: join action stays same-origin /join`);
+  for (const extra of leaf.extras ?? []) {
+    if (!html.includes(extra[0])) failures.push(`${label}: ${extra[1]}`);
+  }
+  if (html.includes("<script")) failures.push(`${label}: leaf ships no JavaScript`);
+  if (html.includes("<iframe")) failures.push(`${label}: no iframe on the leaf page`);
+  return failures;
+}
+
+function assertAboutContract(label, html, get, expected) {
+  return assertLeafContract(label, html, get, expected, {
+    headingId: "about-heading",
+    heading: "About Together We Own",
+    strap: "Est. 1998",
+    testids: ["about-facts"],
+    joinTestid: "about-join",
+    extras: [],
+  });
+}
+
+function assertFaqContract(label, html, get, expected) {
+  return assertLeafContract(label, html, get, expected, {
+    headingId: "faq-heading",
+    heading: "Frequently asked questions",
+    strap: "New here? Start here",
+    testids: ["faq-list"],
+    joinTestid: "faq-join",
+    // The first question group proves the shared FAQ source renders, not an
+    // empty shell around the join action.
+    extras: [[`id="faq-getting-in"`, "first question group present"]],
+  });
+}
+
 // Member-board contract (src/leaderboards/pages.tsx + Kit +page.svelte):
 // authenticated member view only — Hono memberGate then season/scope/activity
 // grammar (400 before any read), Kit load mirrors the order; both answer
@@ -676,7 +990,7 @@ export function assertMembersContract({ label, html, headers, status, expected }
     failures.push(`${label}: board filter form present`);
   if (!html.includes('name="season"') || !html.includes('name="activity"'))
     failures.push(`${label}: season + activity inputs present`);
-  const hasTable = html.includes("<table>");
+  const hasTable = /<table[\s>]/.test(html);
   const hasEmptyStatus =
     html.includes("Nobody is ranked for this season and game yet.") ||
     html.includes("You are not ranked for this season and game yet.") ||
@@ -720,6 +1034,160 @@ export function assertMembersContract({ label, html, headers, status, expected }
   return failures;
 }
 
+// Member-board admission contract: the gate and grammar answers that never
+// serve a board. Status is exact, a guest bounce lands on the Discord
+// sign-in, no board heading leaks, and the body stays secret-free. Renderer
+// marker and cache pins live on the served-board contract instead: error
+// and redirect answers are decorated differently per framework.
+export function assertMembersAdmission({ label, html, headers, status, expected }) {
+  const failures = [];
+  const get = (name) => headers.get?.(name) ?? headers[name.toLowerCase()] ?? null;
+  if (status !== expected.status)
+    failures.push(`${label}: status ${status} !== ${expected.status}`);
+  if (expected.status === 302) {
+    const location = get("location") ?? "";
+    if (!location.includes("/auth/discord"))
+      failures.push(
+        `${label}: guest bounce lands on /auth/discord (got ${JSON.stringify(location)})`,
+      );
+  }
+  if (html.includes("<h1>Member leaderboard</h1>"))
+    failures.push(`${label}: admission answer never serves the board`);
+  const secretHits = scrubSecrets(html);
+  if (secretHits.length)
+    failures.push(`${label}: secret-shaped content in HTML (${secretHits.length} patterns)`);
+  return failures;
+}
+
+// Moderator join-attempts contracts: the audit list and detail share one
+// markup contract on both renderers (src/admin/pages/join-attempts.tsx and
+// web/src/routes/admin/join-attempts/**): admin chrome (Administration nav,
+// no canonical, no guest chrome), private no-store, the exact-search filter
+// form, the accessible scroll region with five scoped columns, and the
+// outcome/source/time/trace detail with safe back navigation. Trace
+// identifiers are moderator-only member data, so a shared-cacheable or
+// guest-chromed answer is a privacy break however the expectation is pinned.
+// The raw provider/token payload never renders: only the recorded
+// outcome/source/request-id/discord-id fields appear, so OAuth-shaped field
+// names in the HTML fail here.
+function adminPageFailures({ label, html, headers, status, expected }) {
+  const failures = [];
+  const get = (name) => headers.get?.(name) ?? headers[name.toLowerCase()] ?? null;
+  if (status !== expected.status) {
+    failures.push(`${label}: status ${status} !== ${expected.status}`);
+    return failures;
+  }
+  const contentType = get("content-type") ?? "";
+  if (!/text\/html/.test(contentType))
+    failures.push(`${label}: content-type ${contentType} is not HTML`);
+  const marker = get("x-two-renderer");
+  if (marker !== expected.marker) {
+    failures.push(
+      `${label}: renderer marker ${JSON.stringify(marker)} !== ${JSON.stringify(expected.marker)}`,
+    );
+  }
+  if (expected.marker === null && marker !== null) {
+    failures.push(`${label}: Hono-owned route must not carry the Kit marker`);
+  }
+  if (countMatches(html, /<main(?:\s|>)/gi) !== 1) failures.push(`${label}: exactly one <main>`);
+  if (!html.includes('class="skip-link" href="#main"'))
+    failures.push(`${label}: skip link targets #main`);
+  if (!html.includes('aria-label="Administration"'))
+    failures.push(`${label}: administration nav has an accessible name`);
+  if (!html.includes("moderators only")) failures.push(`${label}: moderator footer present`);
+  // Admin pages carry no account chrome on either renderer: a guest banner
+  // or a canonical URL on this surface is a shell mix-up.
+  if (html.includes("Welcome, guest"))
+    failures.push(`${label}: admin page must not show guest chrome`);
+  if (html.includes('<link rel="canonical"'))
+    failures.push(`${label}: admin page carries no canonical URL`);
+  if (html.includes("Cross-site POST form submissions"))
+    failures.push(`${label}: bare Kit CSRF text (must be the hardened gate)`);
+  if (/access_token|refresh_token|error_description/i.test(html))
+    failures.push(`${label}: recorded fields only, no raw provider payload`);
+  const cacheActual = get("cache-control") ?? "";
+  if (cacheActual !== "private, no-store")
+    failures.push(`${label}: admin page answers private, no-store`);
+  const secretHits = scrubSecrets(html);
+  if (secretHits.length)
+    failures.push(`${label}: secret-shaped content in HTML (${secretHits.length} patterns)`);
+  return failures;
+}
+
+export function assertJoinAttemptsContract({ label, html, headers, status, expected }) {
+  const failures = adminPageFailures({ label, html, headers, status, expected });
+  if (status !== expected.status) return failures;
+  if (!/<h1[^>]*>Join attempts<\/h1>/.test(html))
+    failures.push(`${label}: join-attempts heading present`);
+  if (!html.includes("Search is an exact Discord id or"))
+    failures.push(`${label}: exact-search hint present`);
+  if (!html.includes('<form method="get" action="/admin/join-attempts" class="filters">'))
+    failures.push(`${label}: filter form posts back to the list as GET`);
+  if (!html.includes('id="q" name="q" type="search"'))
+    failures.push(`${label}: exact-search input present`);
+  if (!html.includes('id="outcome" name="outcome"'))
+    failures.push(`${label}: outcome filter present`);
+  if (!html.includes('aria-label="Join attempts list"'))
+    failures.push(`${label}: labelled scroll region present`);
+  if (!html.includes('data-testid="join-attempts-table"'))
+    failures.push(`${label}: attempts table present`);
+  for (const column of ["Outcome", "Source", "Discord id", "Request id", "Attempted"]) {
+    if (!html.includes(`<th scope="col">${column}</th>`))
+      failures.push(`${label}: ${column} column present`);
+  }
+  const hasRowLink = /href="\/admin\/join-attempts\/\d+"/.test(html);
+  const hasEmpty = html.includes('data-testid="join-attempts-empty"');
+  if (!hasRowLink && !hasEmpty) failures.push(`${label}: attempt rows or empty state present`);
+  if (!html.includes('aria-label="Join attempt pages"'))
+    failures.push(`${label}: paging nav present`);
+  return failures;
+}
+
+export function assertJoinAttemptDetailContract({ label, html, headers, status, expected }) {
+  const failures = adminPageFailures({ label, html, headers, status, expected });
+  if (status !== expected.status) return failures;
+  if (!/<h1[^>]*>Join attempt \d+<\/h1>/.test(html))
+    failures.push(`${label}: join-attempt heading present`);
+  if (!html.includes('<a href="/admin/join-attempts">Back to join attempts</a>'))
+    failures.push(`${label}: back navigation targets the list`);
+  if (!html.includes("<h2>Outcome</h2>")) failures.push(`${label}: outcome section present`);
+  if (!html.includes("<h2>Trace</h2>")) failures.push(`${label}: trace section present`);
+  for (const term of ["Outcome", "Source", "Attempted at (UTC)", "Request ID", "Discord ID"]) {
+    if (!html.includes(`<dt>${term}</dt>`)) failures.push(`${label}: ${term} term present`);
+  }
+  if (!/<time datetime="[^"]+">/.test(html))
+    failures.push(`${label}: attempted-at instant present`);
+  return failures;
+}
+
+// Join-attempts admission contract: the answers that never serve an audit
+// row (guest bounce, non-moderator refusal, missing detail). Status is
+// exact, a guest bounce lands on the Discord sign-in, no list or detail
+// markup leaks, and the body stays secret-free. Renderer marker and cache
+// pins live on the served-page contracts instead: error and redirect
+// answers are decorated differently per framework.
+export function assertJoinAttemptsAdmission({ label, html, headers, status, expected }) {
+  const failures = [];
+  const get = (name) => headers.get?.(name) ?? headers[name.toLowerCase()] ?? null;
+  if (status !== expected.status)
+    failures.push(`${label}: status ${status} !== ${expected.status}`);
+  if (expected.status === 302) {
+    const location = get("location") ?? "";
+    if (!location.includes("/auth/discord"))
+      failures.push(
+        `${label}: guest bounce lands on /auth/discord (got ${JSON.stringify(location)})`,
+      );
+  }
+  if (html.includes('data-testid="join-attempts-table"'))
+    failures.push(`${label}: admission answer never serves the list`);
+  if (/<h1[^>]*>Join attempt \d+<\/h1>/.test(html))
+    failures.push(`${label}: admission answer never serves the detail`);
+  const secretHits = scrubSecrets(html);
+  if (secretHits.length)
+    failures.push(`${label}: secret-shaped content in HTML (${secretHits.length} patterns)`);
+  return failures;
+}
+
 export function assertReservedContract({ label, status, headers }) {
   const failures = [];
   const get = (name) => headers.get?.(name) ?? headers[name.toLowerCase()] ?? null;
@@ -752,10 +1220,12 @@ export function runUnitMode({ stdout = process.stdout, manifestSource: manifestO
   const manifestSource =
     manifestOverride ?? readFileSync(new URL("../src/route-ownership.ts", import.meta.url), "utf8");
   const marker = expectedMarkerFor(manifestSource, "/events/past");
+  const eventsMarker = expectedMarkerFor(manifestSource, "/events");
   const joinMarker = expectedMarkerFor(manifestSource, "/join");
   const recoverMarker = expectedMarkerFor(manifestSource, "/auth/recover");
   stdout.write(
     `kit-parity-gates: manifest expects marker ${JSON.stringify(marker)} for /events/past, ` +
+      `${JSON.stringify(eventsMarker)} for /events, ` +
       `${JSON.stringify(joinMarker)} for /join, ` +
       `${JSON.stringify(recoverMarker)} for /auth/recover\n`,
   );
@@ -924,6 +1394,180 @@ export function runUnitMode({ stdout = process.stdout, manifestSource: manifestO
     );
   }
 
+  // Events-list fixture: the guest flash-free render both renderers serve —
+  // island identity, view toggles, search form, archive + subscribe links,
+  // markdown alternate and the events canonical. Rows are live reads, so the
+  // fixture carries no cards; seeded rows are pinned hermetically instead
+  // (test/kit-events-calendar-parity.test.ts, acceptance journey).
+  const eventsShell = (inner) =>
+    `<html><head><link rel="canonical" href="https://next.togetherweown.com/events">` +
+    `<link rel="alternate" type="text/markdown" href="/events.md"></head>` +
+    `<body><a class="skip-link" href="#main">Skip</a>` +
+    `<nav aria-label="Primary"><a href="/events" aria-current="page">Events</a></nav>` +
+    `<main id="main" class="events-page"><section data-testid="events-calendar" data-island="events-calendar">` +
+    `<div data-testid="events-content"><div data-testid="events-list">${inner}</div></div>` +
+    `<div role="group" aria-label="View"><button data-testid="events-view-list">List</button>` +
+    `<button data-testid="events-view-calendar">Calendar</button></div>` +
+    `<form method="get" action="/events"><input type="search" name="q" data-testid="events-search">` +
+    `<button type="submit">Search</button></form>` +
+    `<a href="/events/past" data-testid="events-past-archive-link">Past events</a>` +
+    `<a href="webcal://next.togetherweown.com/events.ics" data-testid="events-subscribe">Subscribe</a>` +
+    `</section></main><p>Welcome, guest</p>` +
+    `<script src="/islands/events-calendar.js"></script></body></html>`;
+  const eventsFailures = assertRouteContract({
+    label: "unit/events guest list",
+    html: eventsShell(""),
+    headers: headerMap({
+      "content-type": "text/html",
+      "x-two-renderer": eventsMarker,
+      "cache-control": "public, max-age=60",
+      vary: "Cookie, X-Two-Island",
+    }),
+    status: 200,
+    expected: {
+      status: 200,
+      marker: eventsMarker,
+      contract: "events",
+      cachePattern: /^public, max-age=(?:[1-9]|[1-5]\d|60)$/,
+    },
+  });
+  push(
+    "unit: events guest list passes",
+    eventsFailures.length === 0 ? "passed" : "failed",
+    eventsFailures.join("; ") || null,
+  );
+  // Events forced-failure proof: a missing island binder, a GET form turned
+  // into a POST, a dropped archive link, a canonical pointing at the archive
+  // or the site root, a Vary missing either token and a flashed view served
+  // shared-cacheable must all FAIL. A gate that cannot fail on a planted
+  // break proves nothing.
+  const eventsMutants = [
+    [
+      "no-island-binder",
+      (html) =>
+        html.replace('<script src="/islands/events-calendar.js"', '<script src="/islands/x.js"'),
+    ],
+    [
+      "post-search-form",
+      (html) =>
+        html.replace('<form method="get" action="/events"', '<form method="post" action="/events"'),
+    ],
+    [
+      "no-archive-link",
+      (html) => html.replace('data-testid="events-past-archive-link"', 'data-testid="x"'),
+    ],
+    ["archive-wrong-destination", (html) => html.replace('href="/events/past"', 'href="/events"')],
+    [
+      "archive-suffixed-destination",
+      (html) => html.replace('href="/events/past"', 'href="/events/past-extra"'),
+    ],
+    [
+      "subscribe-wrong-destination",
+      (html) =>
+        html.replace('href="webcal://next.togetherweown.com/events.ics"', 'href="/events.ics"'),
+    ],
+    [
+      "subscribe-wrong-host",
+      (html) =>
+        html.replace(
+          'href="webcal://next.togetherweown.com/events.ics"',
+          'href="webcal://evil.example/events.ics"',
+        ),
+    ],
+    // A canonical pointing at the archive (or the site root) must FAIL: the
+    // <link rel="canonical"> element itself has to name /events, so nav and
+    // form `/events"` substrings alone never satisfy it.
+    [
+      "canonical-archive-target",
+      (html) =>
+        html.replace(
+          '<link rel="canonical" href="https://next.togetherweown.com/events">',
+          '<link rel="canonical" href="https://next.togetherweown.com/events/past">',
+        ),
+    ],
+    [
+      "canonical-root-target",
+      (html) =>
+        html.replace(
+          '<link rel="canonical" href="https://next.togetherweown.com/events">',
+          '<link rel="canonical" href="https://next.togetherweown.com/">',
+        ),
+    ],
+    [
+      "canonical-suffixed-target",
+      (html) =>
+        html.replace(
+          '<link rel="canonical" href="https://next.togetherweown.com/events">',
+          '<link rel="canonical" href="https://next.togetherweown.com/events-extra">',
+        ),
+    ],
+    // A flashed view served shared-cacheable: the privacy invariant fails it
+    // however the expected cache is pinned.
+    [
+      "shared-cache-flash",
+      (html) =>
+        html.replace(
+          '<section data-testid="events-calendar"',
+          '<p class="notice" role="status" data-testid="join-result">You are in.</p><section data-testid="events-calendar"',
+        ),
+    ],
+  ];
+  for (const [name, mutate] of eventsMutants) {
+    const failures = assertRouteContract({
+      label: `unit/events-mutant-${name}`,
+      html: mutate(eventsShell("")),
+      headers: headerMap({
+        "content-type": "text/html",
+        "x-two-renderer": eventsMarker,
+        "cache-control": "public, max-age=60",
+        vary: "Cookie, X-Two-Island",
+      }),
+      status: 200,
+      expected: {
+        status: 200,
+        marker: eventsMarker,
+        contract: "events",
+        cache: "public, max-age=60",
+      },
+    });
+    push(
+      `unit: events mutant ${name} fails`,
+      failures.length > 0 ? "passed" : "failed",
+      failures.length > 0 ? null : "mutant was NOT detected",
+    );
+  }
+  // Vary forced-failure proof: full and island-fragment representations share
+  // the URL and differ by X-Two-Island (src/kit-events.ts sets
+  // `Cookie, X-Two-Island`), so dropping either token must FAIL.
+  for (const [name, vary] of [
+    ["vary-cookie-only", "Cookie"],
+    ["vary-island-only", "X-Two-Island"],
+    ["vary-cookie-substring-only", "X-Cookie, X-Two-Island"],
+  ]) {
+    const failures = assertRouteContract({
+      label: `unit/events-mutant-${name}`,
+      html: eventsShell(""),
+      headers: headerMap({
+        "content-type": "text/html",
+        "x-two-renderer": eventsMarker,
+        "cache-control": "public, max-age=60",
+        vary,
+      }),
+      status: 200,
+      expected: {
+        status: 200,
+        marker: eventsMarker,
+        contract: "events",
+        cache: "public, max-age=60",
+      },
+    });
+    push(
+      `unit: events mutant ${name} fails`,
+      failures.length > 0 ? "passed" : "failed",
+      failures.length > 0 ? null : "mutant was NOT detected",
+    );
+  }
+
   // Recovery outcome fixtures: one per entry point (expired session via GET
   // /auth/recover, denied consent via /join/callback). Both carry the shared
   // shell and answer private, no-store — recovery views set and clear
@@ -1028,12 +1672,12 @@ export function runUnitMode({ stdout = process.stdout, manifestSource: manifestO
     );
   }
 
-  // Member-board fixtures: authenticated member view only. The board stays
-  // Hono-held until its executed preview journey lands, so the expected marker
-  // derives from the shipped manifest (null today, "kit" after enablement) and
-  // these unit journeys prove the assertion set passes on a good fixture AND
-  // fails on planted breaks. Admission (302/403/400), the audit row and the
-  // live Hono-vs-Kit fetch remain preview work, not unit work.
+  // Member-board fixtures: authenticated member view only. The expected
+  // marker derives from the shipped manifest (null today, "kit" after
+  // enablement) and these unit journeys prove the assertion set passes on a
+  // good fixture AND fails on planted breaks. Admission (302/400), the audit
+  // row and the live Hono-vs-Kit fetch are executed by the preview journeys
+  // in PARITY_ROUTES and the Playwright kit-parity journey, not unit work.
   const membersMarker = isManifestEnabled(manifestSource, "/leaderboards/members", "GET")
     ? "kit"
     : null;
@@ -1053,7 +1697,7 @@ export function runUnitMode({ stdout = process.stdout, manifestSource: manifestO
     `<p><label for="board-activity">Game (blank for every game)</label> ` +
     `<input id="board-activity" name="activity" type="text" value="" /></p>` +
     `<p><button class="btn" type="submit">Show board</button></p></form>` +
-    `<table><caption>Going counts, season all, every game</caption>` +
+    `<table class="member-board-table"><caption>Going counts, season all, every game</caption>` +
     `<thead><tr><th scope="col">Rank</th><th scope="col">Member</th><th scope="col">Going</th></tr></thead>` +
     `<tbody><tr><td>1</td><th scope="row">Rick</th><td>3</td></tr></tbody></table>` +
     `</main></body></html>`;
@@ -1087,7 +1731,7 @@ export function runUnitMode({ stdout = process.stdout, manifestSource: manifestO
     ["shared-cache", (html) => html, "member board answers private, no-store"],
     [
       "no-table-no-status",
-      (html) => html.replace(/<table>[\s\S]*<\/table>/, ""),
+      (html) => html.replace(/<table[^>]*>[\s\S]*<\/table>/, ""),
       "board table or empty status present",
     ],
     [
@@ -1141,6 +1785,181 @@ export function runUnitMode({ stdout = process.stdout, manifestSource: manifestO
     const pinned = failures.some((f) => f.includes(want));
     push(
       `unit: members mutant ${name} fails`,
+      pinned ? "passed" : "failed",
+      pinned
+        ? null
+        : `mutant did not trip "${want}" (got: ${failures.join("; ") || "no failures"})`,
+    );
+  }
+
+  // Join-attempts fixtures: moderator-only audit views. The expected
+  // marker derives from the shipped manifest and these unit journeys prove
+  // the assertion sets pass on good fixtures AND fail on planted breaks.
+  // Admission answers (guest 302, member 403, missing detail 404), the
+  // audit row and the live Hono-vs-Kit fetch are executed by the preview
+  // journeys in PARITY_ROUTES; the served detail is pinned here because no
+  // seeded attempt id is stable on staging.
+  const joinAttemptsMarker = isManifestEnabled(manifestSource, "/admin/join-attempts", "GET")
+    ? "kit"
+    : null;
+  const adminShellOpen =
+    `<html><head><title>Join attempts — TWO admin</title></head>` +
+    `<body><a class="skip-link" href="#main">Skip to content</a>` +
+    `<header class="bar"><a class="brand" href="/admin">TWO admin</a>` +
+    `<nav aria-label="Administration"><a href="/admin/join-attempts">Join attempts</a></nav></header>`;
+  const adminShellClose = `<footer>Together We Own · moderators only</footer></body></html>`;
+  const joinAttemptsGood =
+    adminShellOpen +
+    `<main id="main"><section><h1>Join attempts</h1>` +
+    `<p class="hint">Read-only. Last 90 days, newest first. Search is an exact Discord id or request id.</p>` +
+    `<form method="get" action="/admin/join-attempts" class="filters">` +
+    `<div class="field"><label for="q">Discord id or request id</label>` +
+    `<input id="q" name="q" type="search" value="" /></div>` +
+    `<div class="field"><label for="outcome">Outcome</label>` +
+    `<select id="outcome" name="outcome"><option value="">All</option></select></div>` +
+    `<div class="field"><button type="submit" class="btn">Filter</button></div></form>` +
+    `<div class="admin-table-scroll" role="region" aria-label="Join attempts list" data-testid="join-attempts-table-scroll">` +
+    `<table class="admin-table" data-testid="join-attempts-table"><thead><tr>` +
+    `<th scope="col">Outcome</th><th scope="col">Source</th><th scope="col">Discord id</th>` +
+    `<th scope="col">Request id</th><th scope="col">Attempted</th></tr></thead>` +
+    `<tbody><tr><td><a href="/admin/join-attempts/7" aria-label="View join attempt 7: added">added</a></td>` +
+    `<td>join</td><td>100000000000000201</td><td>req-7</td><td>2026-10-01T00:00:00.000Z</td></tr></tbody></table></div>` +
+    `<nav aria-label="Join attempt pages" class="actions"><span>Page 1</span></nav>` +
+    `</section></main>` +
+    adminShellClose;
+  const joinAttemptsFailures = assertJoinAttemptsContract({
+    label: "unit/join-attempts list",
+    html: joinAttemptsGood,
+    headers: headerMap({
+      "content-type": "text/html; charset=UTF-8",
+      "x-two-renderer": joinAttemptsMarker,
+      "cache-control": "private, no-store",
+    }),
+    status: 200,
+    expected: { status: 200, marker: joinAttemptsMarker, cache: "private, no-store" },
+  });
+  push(
+    "unit: join-attempts list renders for a moderator",
+    joinAttemptsFailures.length === 0 ? "passed" : "failed",
+    joinAttemptsFailures.join("; ") || null,
+  );
+  const joinAttemptsMutants = [
+    [
+      "guest-chrome",
+      (html) => html.replace("</main>", "<p>Welcome, guest</p></main>"),
+      "admin page must not show guest chrome",
+    ],
+    ["shared-cache", (html) => html, "admin page answers private, no-store"],
+    [
+      "no-table-no-empty",
+      (html) => html.replace(/<table[^>]*>[\s\S]*<\/table>/, ""),
+      "attempts table present",
+    ],
+    ["provider-payload", (html) => `${html}<!-- access_token -->`, "no raw provider payload"],
+    [
+      "canonical",
+      (html) =>
+        html.replace(
+          "</title>",
+          '</title><link rel="canonical" href="https://next.togetherweown.com/admin/join-attempts">',
+        ),
+      "admin page carries no canonical URL",
+    ],
+    ["wrong-renderer", (html) => html, "renderer marker"],
+  ];
+  for (const [name, mutate, want] of joinAttemptsMutants) {
+    const failures = assertJoinAttemptsContract({
+      label: `unit/join-attempts-mutant-${name}`,
+      html: mutate(joinAttemptsGood),
+      headers: headerMap({
+        "content-type": "text/html; charset=UTF-8",
+        "x-two-renderer":
+          name === "wrong-renderer"
+            ? joinAttemptsMarker === "kit"
+              ? null
+              : "kit"
+            : joinAttemptsMarker,
+        "cache-control": name === "shared-cache" ? "public, max-age=300" : "private, no-store",
+      }),
+      status: 200,
+      expected: { status: 200, marker: joinAttemptsMarker, cache: "private, no-store" },
+    });
+    const pinned = failures.some((f) => f.includes(want));
+    push(
+      `unit: join-attempts mutant ${name} fails`,
+      pinned ? "passed" : "failed",
+      pinned
+        ? null
+        : `mutant did not trip "${want}" (got: ${failures.join("; ") || "no failures"})`,
+    );
+  }
+  const joinAttemptDetailMarker = isManifestEnabled(
+    manifestSource,
+    "/admin/join-attempts/:id",
+    "GET",
+  )
+    ? "kit"
+    : null;
+  const joinAttemptDetailGood =
+    adminShellOpen +
+    `<main id="main"><section><p><a href="/admin/join-attempts">Back to join attempts</a></p>` +
+    `<h1>Join attempt 7</h1>` +
+    `<p class="hint">Read-only. Attempted at and trace identifiers are shown as recorded.</p>` +
+    `<h2>Outcome</h2><dl><dt>Outcome</dt><dd>added</dd><dt>Source</dt><dd>—</dd>` +
+    `<dt>Attempted at (UTC)</dt><dd><time datetime="2026-10-01T00:00:00.000Z">2026-10-01T00:00:00.000Z</time></dd></dl>` +
+    `<h2>Trace</h2><dl><dt>Request ID</dt><dd>req-7</dd><dt>Discord ID</dt><dd>100000000000000201</dd></dl>` +
+    `</section></main>` +
+    adminShellClose;
+  const joinAttemptDetailFailures = assertJoinAttemptDetailContract({
+    label: "unit/join-attempt detail",
+    html: joinAttemptDetailGood,
+    headers: headerMap({
+      "content-type": "text/html; charset=UTF-8",
+      "x-two-renderer": joinAttemptDetailMarker,
+      "cache-control": "private, no-store",
+    }),
+    status: 200,
+    expected: { status: 200, marker: joinAttemptDetailMarker, cache: "private, no-store" },
+  });
+  push(
+    "unit: join-attempt detail renders for a moderator",
+    joinAttemptDetailFailures.length === 0 ? "passed" : "failed",
+    joinAttemptDetailFailures.join("; ") || null,
+  );
+  const joinAttemptDetailMutants = [
+    [
+      "no-back-link",
+      (html) => html.replace('<a href="/admin/join-attempts">Back to join attempts</a>', ""),
+      "back navigation targets the list",
+    ],
+    [
+      "no-trace",
+      (html) => html.replace(/<h2>Trace<\/h2>[\s\S]*<\/dl>/, ""),
+      "trace section present",
+    ],
+    ["shared-cache", (html) => html, "admin page answers private, no-store"],
+    ["wrong-renderer", (html) => html, "renderer marker"],
+  ];
+  for (const [name, mutate, want] of joinAttemptDetailMutants) {
+    const failures = assertJoinAttemptDetailContract({
+      label: `unit/join-attempt-detail-mutant-${name}`,
+      html: mutate(joinAttemptDetailGood),
+      headers: headerMap({
+        "content-type": "text/html; charset=UTF-8",
+        "x-two-renderer":
+          name === "wrong-renderer"
+            ? joinAttemptDetailMarker === "kit"
+              ? null
+              : "kit"
+            : joinAttemptDetailMarker,
+        "cache-control": name === "shared-cache" ? "public, max-age=300" : "private, no-store",
+      }),
+      status: 200,
+      expected: { status: 200, marker: joinAttemptDetailMarker, cache: "private, no-store" },
+    });
+    const pinned = failures.some((f) => f.includes(want));
+    push(
+      `unit: join-attempt detail mutant ${name} fails`,
       pinned ? "passed" : "failed",
       pinned
         ? null
@@ -1211,6 +2030,123 @@ export function runUnitMode({ stdout = process.stdout, manifestSource: manifestO
     }
   }
 
+  // Static-leaf fixtures: the two Kit-owned leaves get the same executed
+  // unit contract as the other parity routes, so an enabled leaf is covered
+  // by a run that actually exercises its contract branch — a missing facts
+  // list, join action or heading, a hostile join href, a missing first
+  // question group or a wrong cache TTL must fail here, not only in a
+  // preview fetch CI may never make.
+  const leavesListed = parseManifestEntries(manifestSource).some(
+    (entry) => entry.path === "/about" || entry.path === "/faq",
+  );
+  const leafShell = (path, inner) =>
+    `<html><head><link rel="canonical" href="https://next.togetherweown.com${path}"></head>` +
+    `<body><a class="skip-link" href="#main">Skip</a>` +
+    `<nav aria-label="Primary"><a href="/">Home</a></nav>` +
+    `<main id="main"><nav class="content-nav" aria-label="Community information"></nav>` +
+    `<section class="content-page">${inner}</section></main>` +
+    `<p><span class="account-caption">Welcome, guest</span></p></body></html>`;
+  const leafCases = [
+    [
+      "about",
+      "/about",
+      leafShell(
+        "/about",
+        `<h1 id="about-heading">About Together We Own</h1>` +
+          `<p class="strap">Est. 1998</p><p class="lead">An adult gaming community</p>` +
+          `<dl data-testid="about-facts" class="facts"></dl>` +
+          `<p><a class="btn" href="/join" data-testid="about-join">Join with Discord</a></p>`,
+      ),
+      [
+        ["no-facts", (html) => html.replace('data-testid="about-facts"', 'data-testid="x"')],
+        ["no-join", (html) => html.replace('data-testid="about-join"', 'data-testid="x"')],
+        ["wrong-heading", (html) => html.replace("About Together We Own", "About Us")],
+        ["hostile-join", (html) => html.replace('href="/join"', 'href="https://evil.test/"')],
+      ],
+    ],
+    [
+      "faq",
+      "/faq",
+      leafShell(
+        "/faq",
+        `<h1 id="faq-heading">Frequently asked questions</h1>` +
+          `<p class="strap">New here? Start here</p><p class="lead">Short answers</p>` +
+          `<div data-testid="faq-list">` +
+          `<section aria-labelledby="faq-getting-in"><h2 id="faq-getting-in">Getting in</h2></section></div>` +
+          `<p><a class="btn" href="/join" data-testid="faq-join">Join with Discord</a></p>`,
+      ),
+      [
+        ["no-list", (html) => html.replace('data-testid="faq-list"', 'data-testid="x"')],
+        ["no-join", (html) => html.replace('data-testid="faq-join"', 'data-testid="x"')],
+        ["wrong-heading", (html) => html.replace("Frequently asked questions", "Questions")],
+        ["hostile-join", (html) => html.replace('href="/join"', 'href="https://evil.test/"')],
+        [
+          "no-first-group",
+          (html) => html.replace(/<section aria-labelledby="faq-getting-in">.*?<\/section>/, ""),
+        ],
+      ],
+    ],
+  ];
+  if (leavesListed) {
+    for (const [contract, path, shell, mutants] of leafCases) {
+      const leafMarker = expectedMarkerFor(manifestSource, path);
+      const leafFailures = assertRouteContract({
+        label: `unit/leaves ${path}`,
+        html: shell,
+        headers: headerMap({
+          "content-type": "text/html",
+          "x-two-renderer": leafMarker,
+          "cache-control": "public, max-age=3600",
+        }),
+        status: 200,
+        expected: { status: 200, marker: leafMarker, contract, cache: "public, max-age=3600" },
+      });
+      push(
+        `unit: leaves ${path} good fixture passes`,
+        leafFailures.length === 0 ? "passed" : "failed",
+        leafFailures.join("; ") || null,
+      );
+      for (const [name, mutate] of mutants) {
+        const failures = assertRouteContract({
+          label: `unit/leaves-mutant-${contract}-${name}`,
+          html: mutate(shell),
+          headers: headerMap({
+            "content-type": "text/html",
+            "x-two-renderer": leafMarker,
+            "cache-control": "public, max-age=3600",
+          }),
+          status: 200,
+          expected: { status: 200, marker: leafMarker, contract, cache: "public, max-age=3600" },
+        });
+        push(
+          `unit: leaves mutant ${contract} ${name} fails`,
+          failures.length > 0 ? "passed" : "failed",
+          failures.length > 0 ? null : "mutant was NOT detected",
+        );
+      }
+      // A shared-cacheable leaf served private must fail however the
+      // expected cache is pinned (the inverse of the join-flash pin: the
+      // leaf contract is public by design, and going private would break
+      // the shared-cache TTL both handlers set).
+      const privateFailures = assertRouteContract({
+        label: `unit/leaves-mutant-${contract}-private-cache`,
+        html: shell,
+        headers: headerMap({
+          "content-type": "text/html",
+          "x-two-renderer": leafMarker,
+          "cache-control": "private, no-store",
+        }),
+        status: 200,
+        expected: { status: 200, marker: leafMarker, contract, cache: "private, no-store" },
+      });
+      push(
+        `unit: leaves mutant ${contract} private-cache fails`,
+        privateFailures.length > 0 ? "passed" : "failed",
+        privateFailures.length > 0 ? null : "mutant was NOT detected",
+      );
+    }
+  }
+
   // Wrong-marker mutant: Hono-owned route carrying the Kit marker must fail.
   const markerFailures = assertRouteContract({
     label: "unit/mutant-marker",
@@ -1261,10 +2197,11 @@ export function runUnitMode({ stdout = process.stdout, manifestSource: manifestO
   // Explicit ownership goes through isManifestEnabled — the same structural,
   // method-aware primitive its tests pin — so those tests guard the real gate
   // path instead of a parallel matcher. A final catch-all fails any other
-  // enabled entry no executed run covers (GET/HEAD /events/past, /join,
-  // /auth/recover and the four hot-zone paths via PARITY_ROUTES): GET /admin, /events,
-  // /join/discord, /join/callback and friends can never ship green with no
-  // journey. (GET /join and GET /auth/recover themselves are covered.)
+  // enabled entry no executed run covers (GET/HEAD /events/past, GET/HEAD
+  // /events, /join, /auth/recover and the four hot-zone paths via
+  // PARITY_ROUTES): GET /admin, /join/discord, /join/callback and friends can
+  // never ship green with no journey. (GET /join, GET /events and GET
+  // /auth/recover themselves are covered.)
   const manifestEntries = parseManifestEntries(manifestSource);
   for (const { name, routes, scope } of LOGIN_JOURNEYS) {
     const enabledInScope = manifestEntries.filter(
@@ -1381,26 +2318,90 @@ export function writeLedger(
 async function runPreviewMode(
   kitBase,
   honoBase,
-  { stdout = process.stdout, fetchImpl = fetch } = {},
+  { stdout = process.stdout, fetchImpl = fetch, qaToken = null } = {},
 ) {
   const manifestSource = readFileSync(
     new URL("../src/route-ownership.ts", import.meta.url),
     "utf8",
   );
   const journeys = [];
+  // Authenticated journeys share one QA login per base (the qa-login
+  // throttle is per-minute), issued lazily and replayed as a Cookie header.
+  // The token and cookie values never reach the ledger: reasons name only
+  // the host and the HTTP status, and every journey body is secret-scrubbed
+  // by its contract helper.
+  const qaCookies = new Map();
+  async function qaCookieFor(base, identity) {
+    const cacheKey = `${identity}:${base}`;
+    if (qaCookies.has(cacheKey)) return qaCookies.get(cacheKey);
+    let result;
+    try {
+      const res = await fetchImpl(new URL(`/auth/qa/qa-${identity}`, base), {
+        method: "POST",
+        redirect: "manual",
+        signal: AbortSignal.timeout(15_000),
+        headers: { "x-two-qa-auth": qaToken, origin: base },
+      });
+      const setCookie =
+        res.headers.getSetCookie?.().join("\n") ?? res.headers.get("set-cookie") ?? "";
+      const session = setCookie
+        .split("\n")
+        .map((line) => line.split(";")[0])
+        .find((line) => line?.startsWith("__Host-two_session="));
+      result =
+        res.status === 204 && session
+          ? { cookie: session }
+          : {
+              unavailable: `QA login answered ${res.status} on ${new URL(base).host} (staging QA seam unavailable or token rejected)`,
+            };
+    } catch (error) {
+      result = {
+        unavailable: `QA login failed on ${new URL(base).host}: ${String(error?.message ?? error).slice(0, 120)}`,
+      };
+    }
+    qaCookies.set(cacheKey, result);
+    return result;
+  }
   for (const route of PARITY_ROUTES) {
+    const routeName = route.label ?? route.path;
     const expectedMarker =
       route.expectMarker === "manifest"
         ? expectedMarkerFor(manifestSource, route.path)
         : route.expectMarker;
     let kitRes;
     let honoRes;
+    let headersFor = () => undefined;
+    if (route.auth === "member" || route.auth === "moderator") {
+      if (!qaToken) {
+        journeys.push({
+          name: `preview ${routeName}: authenticated fetch`,
+          status: "skipped",
+          reason: `authenticated preview journey needs KIT_PARITY_QA_TOKEN (the staging QA token); unset, so no ${route.auth} fetch was executed`,
+        });
+        continue;
+      }
+      const [kitLogin, honoLogin] = await Promise.all(
+        [kitBase, honoBase].map((base) => qaCookieFor(base, route.auth)),
+      );
+      const unavailable = [kitLogin, honoLogin].find((login) => login.unavailable);
+      if (unavailable) {
+        journeys.push({
+          name: `preview ${routeName}: authenticated fetch`,
+          status: "skipped",
+          reason: unavailable.unavailable,
+        });
+        continue;
+      }
+      const cookies = [kitLogin.cookie, honoLogin.cookie];
+      headersFor = (index) => ({ cookie: cookies[index] });
+    }
     try {
       [kitRes, honoRes] = await Promise.all(
-        [kitBase, honoBase].map((base) =>
+        [kitBase, honoBase].map((base, index) =>
           fetchImpl(new URL(route.path, base), {
             redirect: "manual",
             signal: AbortSignal.timeout(15_000),
+            headers: headersFor(index),
           }),
         ),
       );
@@ -1412,15 +2413,26 @@ async function runPreviewMode(
       });
       continue;
     }
-    const kitHtml = kitRes.status === 200 ? await kitRes.text() : "";
-    const honoHtml = honoRes.status === 200 ? await honoRes.text() : "";
+    const kitHtml = kitRes.status === route.expectStatus ? await kitRes.text() : "";
+    const honoHtml = honoRes.status === route.expectStatus ? await honoRes.text() : "";
     const expected = {
       status: route.expectStatus,
       marker: expectedMarker,
       contract: route.contract ?? "archive",
       cache: route.cache ?? null,
+      cachePattern: route.cachePattern,
     };
-    const kitFailures = assertRouteContract({
+    const assertContract =
+      route.contract === "members"
+        ? assertMembersContract
+        : route.contract === "members-admission"
+          ? assertMembersAdmission
+          : route.contract === "join-attempts"
+            ? assertJoinAttemptsContract
+            : route.contract === "join-attempts-admission"
+              ? assertJoinAttemptsAdmission
+              : assertRouteContract;
+    const kitFailures = assertContract({
       label: `preview Kit ${route.path}`,
       html: kitHtml,
       headers: kitRes.headers,
@@ -1435,7 +2447,7 @@ async function runPreviewMode(
     // The Hono side runs the same contract helpers (expected marker null):
     // a Hono-side regression outside the section would otherwise go
     // unflagged in preview mode.
-    const honoFailures = assertRouteContract({
+    const honoFailures = assertContract({
       label: `preview Hono ${route.path}`,
       html: honoHtml,
       headers: honoRes.headers,
@@ -1520,7 +2532,11 @@ export async function runGate({
   }
   const journeys =
     pair.mode === "preview"
-      ? await runPreviewMode(pair.kitBase, pair.honoBase, { stdout, fetchImpl })
+      ? await runPreviewMode(pair.kitBase, pair.honoBase, {
+          stdout,
+          fetchImpl,
+          qaToken: env.KIT_PARITY_QA_TOKEN?.trim() || null,
+        })
       : runUnitMode({ stdout });
   return writeLedger(summarizeLedger(journeys), { stdout });
 }

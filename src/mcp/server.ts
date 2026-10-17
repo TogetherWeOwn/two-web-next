@@ -41,6 +41,8 @@ export type PublicMcpDeps = {
   env: Env;
   /** Null when no database is configured: event tools report unavailable. */
   db: Db | null;
+  /** The HTTP request's validated correlation ID, for error.alert lines. */
+  requestId?: string;
 };
 
 const READ_ONLY = { readOnlyHint: true } as const;
@@ -66,13 +68,14 @@ const UNAVAILABLE = "Event data is temporarily unavailable.";
 // exposing internals; the real error goes to error.alert only.
 const INTERNAL = "Event data could not be read.";
 
-function internalError(err: unknown) {
-  alertRequestError(err, { method: "POST", route: "/mcp" });
-  return toolError("internal", INTERNAL);
-}
-
 export function createPublicMcpServer(deps: PublicMcpDeps): McpServer {
   const { env, db } = deps;
+  // Per-request server (see src/mcp/routes.ts), so the closure's request ID
+  // is the one on this POST's http.request line: tool failures correlate.
+  const internalError = (err: unknown) => {
+    alertRequestError(err, { method: "POST", route: "/mcp", requestId: deps.requestId });
+    return toolError("internal", INTERNAL);
+  };
   const server = new McpServer({ name: MCP_SERVER_NAME, version: MCP_SERVER_VERSION });
 
   server.registerTool(

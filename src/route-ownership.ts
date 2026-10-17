@@ -13,7 +13,8 @@
 // (query preserved, body unread) to whichever renderer owns it.
 
 import type { AccessSink } from "./access-log";
-import { robotsTagFor, securityHeadersFor } from "./headers";
+import { isContentLeafPath, robotsTagFor, securityHeadersFor } from "./headers";
+import { transformContentLeafChunk } from "./kit-content-chunk";
 import type { KitLocals } from "./kit-session";
 import { type MemberRead, memberReadResponse } from "./member-reads";
 import { SAME_ORIGIN_EXEMPTIONS, UNSAFE_METHODS } from "./same-origin";
@@ -41,10 +42,11 @@ export interface RouteDecision {
   path: string;
 }
 
-// The archive page and hot-zone heatmaps render natively; the events list ships
-// its native handler disabled until the calendar/enhancement companion passes,
-// and the about/privacy/rules/faq/join/recovery/profile reads, member board and
-// admin routes stay on Hono until their enablement is reviewed. Production (the Hono Worker) sees no traffic change for a
+// The archive page, events list, hot-zone heatmaps, member board and the
+// about/faq leaves render natively; privacy/rules/join/recovery/profile reads
+// and admin routes stay on Hono until their enablement is reviewed. Returning
+// an enabled entry to `enabled: false` restores Hono ownership as the rollback.
+// Production (the Hono Worker) sees no traffic change for a
 // disabled path; the preview Worker moves a Kit-owned path back to Hono by
 // design — that is the rollback. Add one entry per migrated route, enabled
 // only when its Kit handler is ready to own the exact method/path. Only GET
@@ -57,11 +59,11 @@ export interface RouteDecision {
 export const ROUTE_MANIFEST: OwnedRoute[] = [
   { method: "GET", path: "/", enabled: false, reads: "public" },
   { method: "GET", path: "/events/past", enabled: true, reads: "public" },
-  { method: "GET", path: "/events", enabled: false, reads: "public" },
-  { method: "GET", path: "/about", enabled: false, reads: "public" },
+  { method: "GET", path: "/events", enabled: true, reads: "public" },
+  { method: "GET", path: "/about", enabled: true, reads: "public" },
   { method: "GET", path: "/privacy", enabled: false, reads: "public" },
   { method: "GET", path: "/rules", enabled: false, reads: "public" },
-  { method: "GET", path: "/faq", enabled: false, reads: "public" },
+  { method: "GET", path: "/faq", enabled: true, reads: "public" },
   { method: "GET", path: "/join", enabled: false, reads: "public" },
   // Moderator dashboard: member data, so the Kit branch renders
   // inside the member-read boundary with this declaration and the bridged
@@ -147,15 +149,52 @@ export const ROUTE_MANIFEST: OwnedRoute[] = [
     enabled: false,
     reads: { resource: "events", action: "view", route: "admin.events.create" },
   },
+  // Moderator event-edit form: same declaration as the Hono handler
+  // (admin.events.edit, src/admin/routes.tsx). Only this GET migrates:
+  // POST /admin/events/:key, the publish/cancel/RSVP-pause/RSVP-reopen
+  // siblings and the guarded /admin/events/:key/edit legacy redirect stay
+  // Hono-owned, so wall-time UTC carriers, future recurrence propagation,
+  // bounded roster paging and postcommit writeback keep one authority until
+  // the write slice lands. Off until the enablement review.
+  // The legacy /admin/events/create bookmark pins to Hono with the exact
+  // disabled entry below: exact entries beat :param patterns in bestMatch,
+  // so without it the :key pattern would capture /create once enabled and
+  // Kit would 404 instead of Hono's redirect to /admin/events/new.
+  {
+    method: "GET",
+    path: "/admin/events/create",
+    enabled: false,
+  },
+  {
+    method: "GET",
+    path: "/admin/events/:key",
+    enabled: false,
+    reads: { resource: "events", action: "view", route: "admin.events.edit" },
+  },
   // Join-attempts audit list: member data, so the Kit branch renders
   // inside the member-read boundary with this declaration and the bridged
-  // viewer. Off until the enablement review: the Hono viewer answers meanwhile.
-  // The detail page stays Hono-owned until its own slice lands.
+  // viewer. Enabled after the enablement review; returning this entry to
+  // enabled: false restores Hono ownership as the rollback.
+  // Row detail links target the Kit /admin/join-attempts/:id page below.
   {
     method: "GET",
     path: "/admin/join-attempts",
-    enabled: false,
+    enabled: true,
     reads: { resource: "join_attempts", action: "list", route: "admin.join-attempts.index" },
+  },
+  // Join-attempt detail: member data, so the Kit branch renders inside the
+  // member-read boundary with this declaration and the bridged viewer. Same
+  // declaration as the Hono handler (admin.join-attempts.show,
+  // src/admin/routes.tsx): the canonical-ID admission, the shared
+  // getJoinAttempt retention-window lookup, and the outcome/source/time/trace
+  // fields with safe back navigation. Enabled after the enablement review;
+  // returning this entry to enabled: false restores Hono ownership as the
+  // rollback.
+  {
+    method: "GET",
+    path: "/admin/join-attempts/:id",
+    enabled: true,
+    reads: { resource: "join_attempts", action: "view", route: "admin.join-attempts.show" },
   },
   { method: "GET", path: "/auth/recover", enabled: false, reads: "public" },
   // Profile reads: one Svelte view/model behind both Hono handlers. Native
@@ -183,14 +222,14 @@ export const ROUTE_MANIFEST: OwnedRoute[] = [
   { method: "GET", path: "/hotzones/games", enabled: true, reads: "public" },
   // Member leaderboard: member data, so the Kit branch renders inside the
   // member-read boundary with this declaration and the bridged viewer. Same
-  // gate order, grammar and reads as src/leaderboards/routes.tsx. Held on
-  // Hono until the executed member-board parity journey lands: the parity
-  // gate has no authenticated member-board run, so enabling here would ship
-  // on a green ledger with no proof.
+  // gate order, grammar and reads as src/leaderboards/routes.tsx. Enabled
+  // after the executed member-board parity journey earned the fresh
+  // privacy verdict; returning this entry to enabled: false restores Hono
+  // ownership as the rollback.
   {
     method: "GET",
     path: "/leaderboards/members",
-    enabled: false,
+    enabled: true,
     reads: { resource: "leaderboard", action: "list", route: "leaderboards.members" },
   },
   // Live event detail: the Kit read model (src/events/kit-detail.ts) mirrors
@@ -206,6 +245,44 @@ export const ROUTE_MANIFEST: OwnedRoute[] = [
     reads: { resource: "member", action: "list", route: "events.page" },
   },
 ];
+
+// Fixture-only manifest for the executed parity journeys (member board +
+// live event detail). The shipped manifest held /leaderboards/members on Hono
+// until the fresh privacy verdict, so the Playwright Kit fixture
+// (ci/kit-worker-dev.mjs) could otherwise only ever compare Hono against
+// Hono; the live detail entry stays disabled until the RSVP companion passes,
+// so the same fixture enables it for its executed journey. The fixture sets
+// KIT_PARITY_FIXTURE_MEMBER_BOARD=true and/or
+// KIT_PARITY_FIXTURE_EVENT_DETAIL=true on its own generated loopback worker;
+// this helper honours them only for an http loopback APP_URL, so a deployed
+// Kit Worker (preview workers.dev, staging, production) can never enable
+// either route through them. Returns undefined when neither flag is set, which
+// leaves dispatch on the shipped manifest untouched and unmutated.
+export function fixtureManifestFor(env: {
+  APP_URL?: string;
+  KIT_PARITY_FIXTURE_MEMBER_BOARD?: string;
+  KIT_PARITY_FIXTURE_EVENT_DETAIL?: string;
+}): OwnedRoute[] | undefined {
+  const wantBoard = env.KIT_PARITY_FIXTURE_MEMBER_BOARD === "true";
+  const wantDetail = env.KIT_PARITY_FIXTURE_EVENT_DETAIL === "true";
+  if (!wantBoard && !wantDetail) return undefined;
+  let app: URL;
+  try {
+    app = new URL(env.APP_URL ?? "");
+  } catch {
+    return undefined;
+  }
+  if (app.protocol !== "http:") return undefined;
+  // URL keeps the brackets on an IPv6 hostname ("[::1]").
+  if (!["127.0.0.1", "localhost", "::1", "[::1]"].includes(app.hostname)) return undefined;
+  return ROUTE_MANIFEST.map((entry) => {
+    if (wantBoard && entry.method === "GET" && entry.path === "/leaderboards/members")
+      return { ...entry, enabled: true };
+    if (wantDetail && entry.method === "GET" && entry.path === "/e/:key")
+      return { ...entry, enabled: true };
+    return entry;
+  });
+}
 
 // Response header set only on the Kit-rendered branch of the hook, so the
 // preview parity check and worker e2e can prove which renderer answered.
@@ -349,22 +426,48 @@ export interface HookEventLike {
   locals?: unknown;
 }
 
+// SvelteKit resolve options the core forwards for content leaves only.
+// Structural on purpose (no Kit import): transformPageChunk receives the
+// rendered HTML and returns its replacement. Every other route resolves
+// without options, exactly as before, so existing resolve stubs stay valid.
+export interface KitResolveOptions {
+  transformPageChunk?: (input: { html: string }) => string;
+}
+
 export interface HookDispatchDeps {
   appUrl: string;
   featuredImageHosts?: string;
   honoFetch: (request: Request) => Promise<Response>;
-  resolve: (event: HookEventLike) => Promise<Response>;
-  // Optional manifest override for tests. The hook never passes this: it
-  // always uses the shipped ROUTE_MANIFEST, so there is no swappable owner
-  // seam in production wiring to mutate to always-Kit.
+  resolve: (event: HookEventLike, opts?: KitResolveOptions) => Promise<Response>;
+  // Optional manifest override for tests. Production wiring never passes
+  // one: the hook forwards only the loopback parity-fixture flag below and
+  // the core alone turns flag + appUrl into the fixture route choice.
   manifest?: OwnedRoute[];
+  // Loopback Kit parity fixture flags, forwarded from env by the hook as
+  // plain booleans (KIT_PARITY_FIXTURE_MEMBER_BOARD / _EVENT_DETAIL ===
+  // "true"). Honoured only through fixtureManifestFor: exact flags plus an
+  // http loopback appUrl, so a deployed Worker can never enable either route
+  // through them. Absent or false leaves the shipped ROUTE_MANIFEST untouched.
+  fixtureMemberBoard?: boolean;
+  // Live event-detail fixture flag for the RSVP companion's executed journey:
+  // same loopback-only honouring as the board flag above. The shipped detail
+  // entry stays disabled; the fixture worker alone enables it.
+  fixtureEventDetail?: boolean;
   // Optional read-only session bridge. Runs only after a Kit
   // ownership decision and merges its decision into event.locals before
   // resolve, so Kit loads share one session decision. Absent by default:
   // without it the dispatch behaves exactly as before.
   sessionFor?: (event: HookEventLike) => Promise<KitLocals>;
+  // Optional moderator-only auth-status probe cookie for successful Kit admin documents.
+  authStatusCookieFor?: (event: HookEventLike) => Promise<string | null>;
   // Access-log sink for member-read Kit routes. Absent or null refuses the read.
   accessSink?: () => Promise<AccessSink | null>;
+  // Post-release hook for member-read routes: runs only after the boundary
+  // released the buffered response, outside its capture (see
+  // memberReadResponse). The member board uses it to write its anonymous
+  // board-view log, which is not a member read and must neither run inside
+  // the capture nor be refused by it. Absent by default.
+  afterMemberRead?: (event: HookEventLike, response: Response) => Promise<void>;
   // Native archive guard/cache around Kit SSR. The hook binds env into this
   // (request, render) => dispatchPastArchiveRequest(request, env, render); the
   // core decides WHEN it runs, so the route-id branch is pinned here instead
@@ -485,6 +588,7 @@ function renderMemberRead(
       return sink(entry);
     },
     () => deps.resolve(event),
+    (response) => deps.afterMemberRead?.(event, response) ?? Promise.resolve(),
   );
 }
 
@@ -509,7 +613,16 @@ export async function dispatchHookRequest(
   // its method/path/query/decode coverage guards the dispatch too. Inlining
   // resolveRouteOwner here once left mutants (hard-coded GET, hard-coded
   // path, path+search) green against 32 dispatch tests.
-  const route = decideRoute(event.request, deps.manifest ?? ROUTE_MANIFEST);
+  const route = decideRoute(
+    event.request,
+    deps.manifest ??
+      fixtureManifestFor({
+        APP_URL: deps.appUrl,
+        KIT_PARITY_FIXTURE_MEMBER_BOARD: deps.fixtureMemberBoard ? "true" : undefined,
+        KIT_PARITY_FIXTURE_EVENT_DETAIL: deps.fixtureEventDetail ? "true" : undefined,
+      }) ??
+      ROUTE_MANIFEST,
+  );
   if (!route) {
     return deps.honoFetch(event.request);
   }
@@ -570,10 +683,47 @@ export async function dispatchHookRequest(
     response = await deps.pastArchive(event.request, () => deps.resolve(event));
   } else if (isEventsListPage && deps.eventsPage) {
     response = await deps.eventsPage(event.request, () => deps.resolve(event));
+  } else if (isContentLeafPath(route.path)) {
+    // Content leaves keep #808's zero-stylesheet contract on the served
+    // worker: the root layout's Tailwind asset is stripped after resolve and
+    // <body> gains the Hono body class, so the inlined leaf block owns the
+    // canvas with no render-blocking request. Gated on the manifest path
+    // (not the URL), so only Kit-owned leaves take it; disabled leaves never
+    // reach resolve. Every other public route resolves untouched.
+    response = await deps.resolve(event, {
+      transformPageChunk: ({ html }) => transformContentLeafChunk(html),
+    });
   } else {
     response = await deps.resolve(event);
   }
   if (event.route?.id === HONO_FALLBACK_ROUTE_ID) return response;
+  const locals = event.locals as Partial<KitLocals> | undefined;
+  if (
+    deps.authStatusCookieFor &&
+    event.request.method === "GET" &&
+    /^\/admin(?:\/|$)/.test(event.url.pathname) &&
+    response.status === 200 &&
+    response.headers.get("content-type")?.includes("text/html") &&
+    locals?.status === "authenticated" &&
+    locals.session?.moderator
+  ) {
+    try {
+      const cookie = await deps.authStatusCookieFor(event);
+      if (cookie) {
+        const headers = new Headers(response.headers);
+        headers.append("set-cookie", cookie);
+        response = new Response(response.body, {
+          status: response.status,
+          statusText: response.statusText,
+          headers,
+        });
+      }
+    } catch (err) {
+      console.warn("kit auth-status probe unavailable; rendering without probe cookie.", {
+        exception: (err as Error)?.constructor?.name ?? "unknown",
+      });
+    }
+  }
   decorateKitResponse(response, event, deps.appUrl, deps.featuredImageHosts);
   return response;
 }

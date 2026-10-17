@@ -25,6 +25,7 @@ globalThis.fetch = async (input, init) => {
         code = "";
       }
       if (code === "e2e-blocked-code") return Response.json({ access_token: "e2e-blocked-token" });
+      if (code === "e2e-outage-code") return new Response("fixture outage", { status: 500 });
       return Response.json({ access_token: "e2e-member-token" });
     }
     if (request.method === "GET" && url.pathname === "/api/v10/users/@me") {
@@ -69,7 +70,7 @@ globalThis.fetch = async (input, init) => {
 };
 
 export default {
-  fetch(request: Request, env: JobsEnv, ctx: ExecutionContext) {
+  async fetch(request: Request, env: JobsEnv, ctx: ExecutionContext) {
     const url = new URL(request.url);
     if (url.origin !== localOrigin) return new Response("Local CI only", { status: 403 });
     if (url.pathname === "/__e2e/network") return Response.json({ outbound, forbidden });
@@ -105,7 +106,7 @@ export default {
       body: request.body,
       redirect: "manual",
     });
-    return worker.fetch(
+    const response = await worker.fetch(
       mapped,
       {
         ...env,
@@ -113,5 +114,29 @@ export default {
       } as JobsEnv,
       ctx,
     );
+    // Complete the virtual-origin translation on the way back for the one
+    // route whose browser island validates it: the past-events island
+    // (assets/islands/past-events.js) requires the fetched page's canonical
+    // and og:url on window.location's origin. Deployed, APP_URL is that
+    // origin (TrustHosts refuses any other Host), so the check holds; here
+    // the browser origin is localhost while APP_URL stays the staging URL
+    // above, so every island page turn would be rejected as an invalid
+    // archive page. Translating the archive HTML's absolute staging URLs
+    // back to the local origin restores the deployed invariant for the
+    // browser. Other responses keep pinning the staging APP_URL, and the
+    // app worker's own bytes (and its anonymous cache) are untouched.
+    if (request.method !== "GET" || url.pathname !== "/events/past") return response;
+    const contentType = response.headers.get("content-type") ?? "";
+    if (!contentType.includes("text/html")) return response;
+    const body = (await response.text()).replaceAll(STAGING_APP_URL, localOrigin);
+    const responseHeaders = new Headers(response.headers);
+    responseHeaders.delete("content-encoding");
+    responseHeaders.delete("content-length");
+    responseHeaders.delete("etag");
+    return new Response(body, {
+      status: response.status,
+      statusText: response.statusText,
+      headers: responseHeaders,
+    });
   },
 };

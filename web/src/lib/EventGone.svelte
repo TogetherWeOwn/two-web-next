@@ -1,4 +1,5 @@
 <script lang="ts">
+import JsonLd from "#lib/JsonLd.svelte";
 import Shell from "#lib/Shell.svelte";
 import type { EventGoneModel } from "../../../src/kit-event-states";
 
@@ -9,24 +10,6 @@ import type { EventGoneModel } from "../../../src/kit-event-states";
 // calendar download. No canonical link (so no og:/twitter: share tags, as
 // served), no RSVP, join-pitch, copy-link or attendee surface anywhere.
 let { model }: { model: EventGoneModel } = $props();
-
-// JSON-LD travels as data blocks, never executable script: the CSP
-// (script-src 'self') gates execution, not data-block parsing, exactly as on
-// the Hono page. The tag strings below are split so this file never holds a
-// literal script element closer (not even in a comment: the Svelte parser
-// ends the instance script at the first closer it scans).
-const eventJsonLdTag = $derived(
-  '<script type="application/ld+json" data-testid="event-jsonld">' +
-    model.jsonLd +
-    "</" +
-    "script>",
-);
-const siteJsonLdTag = $derived(
-  '<script type="application/ld+json" data-testid="site-jsonld">' +
-    model.siteJsonLd +
-    "</" +
-    "script>",
-);
 </script>
 
 <svelte:head>
@@ -67,6 +50,6 @@ const siteJsonLdTag = $derived(
       <a href={model.icsUrl} data-testid="event-cancelled-ics">Download calendar entry (.ics)</a>
     </p>
   </section>
-  {@html eventJsonLdTag}
-  {@html siteJsonLdTag}
+  <JsonLd testid="event-jsonld" json={model.jsonLd} />
+  <JsonLd testid="site-jsonld" json={model.siteJsonLd} />
 </Shell>

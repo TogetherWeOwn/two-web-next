@@ -58,6 +58,9 @@ type Fixture = {
   mergeCommit?: { sha: string; parents: { sha: string }[] };
   mergeApiExit?: number;
   mergeApiRaw?: string;
+  waiverBaseSha?: string;
+  branchMessages?: string;
+  waiverGitFailure?: "merge-base" | "log";
 };
 
 function dispatch(): Fixture {
@@ -134,6 +137,16 @@ elif args == ['cat-file', '-p', 'HEAD']:
     for parent in f['parents']:
         print('parent ' + parent)
     print('\\nauthor fixture\\n\\nparent ' + 'f' * 40)
+elif args == ['merge-base', f.get('waiverBaseSha', '${baseSha}'), 'HEAD']:
+    if f.get('waiverGitFailure') == 'merge-base':
+        sys.exit(1)
+    print('${baseSha}')
+elif len(args) >= 5 and args[:3] == ['log', '--format=%B', 'HEAD'] and args[3] == '--not' and args[4] == f.get('waiverBaseSha', '${baseSha}'):
+    if f.get('waiverGitFailure') == 'log':
+        sys.exit(1)
+    print(f.get('branchMessages', 'fix(ci): bind lint metadata'))
+elif args[:2] == ['rev-parse', '--verify']:
+    sys.exit(1)
 else:
     sys.exit('Unexpected git invocation: ' + repr(args))
 `,
@@ -151,6 +164,9 @@ else:
       GITHUB_OUTPUT: join(dir, "output"),
       RUNNER_TEMP: dir,
       PR_NUMBER: fixture.dispatchNumber,
+      // Model the separate head-ref step's output, not the metadata-binding snapshots.
+      FLOOR_WAIVER_BASE_SHA: fixture.waiverBaseSha ?? baseSha,
+      FLOOR_WAIVER_BASE_REF: "main",
       EVENT_TITLE: fixture.event.pull_request?.title ?? "",
       EVENT_BODY: fixture.event.pull_request?.body ?? "",
       EVENT_AUTHOR: fixture.event.pull_request?.user.login ?? "",
@@ -229,7 +245,7 @@ describe("PR lint dispatch binding (hermetic workflow/API fixtures)", () => {
     const fixture = dispatch();
     fixture.live.title = "chore(main): release '0.3.0'";
     const result = runWorkflow(fixture);
-    expect(result.status, result.stderr).toBe(0);
+    expect(result.status, result.stdout + result.stderr).toBe(0);
     expect(result.stdout).toContain("PR conventions OK");
     expect(JSON.parse(result.output)).toEqual({
       title: fixture.live.title,
@@ -245,6 +261,43 @@ describe("PR lint dispatch binding (hermetic workflow/API fixtures)", () => {
     ).toEqual([["api", "repos/TogetherWeOwn/two-web-next/pulls/28"]]);
   });
 
+  describe.each(["workflow_dispatch", "pull_request"])("queue-visible waivers (%s)", (event) => {
+    const fixtureForEvent = () => (event === "workflow_dispatch" ? dispatch() : pullRequest(true));
+
+    it("rejects a branch-only waiver and accepts the same trailer in the bound body", () => {
+      const fixture = fixtureForEvent();
+      const waiver = "Floor-waiver: test-deleted test/old.test.ts -- moved into the new suite";
+      fixture.branchMessages = `fix(test): move coverage\n\n${waiver}\n`;
+      const missing = runWorkflow(fixture);
+      expect(missing.status, missing.stdout + missing.stderr).toBe(1);
+      expect(missing.stdout).toContain("PR conventions OK");
+      expect(missing.stdout).toContain(`Missing from PR body: ${waiver}`);
+
+      fixture.live.body += `\n\n${waiver}\n`;
+      const copied = runWorkflow(fixture);
+      expect(copied.status, copied.stdout + copied.stderr).toBe(0);
+      expect(copied.stdout).toContain("PR floor-waiver trailers are visible");
+    });
+
+    it.each(["missing base", "merge-base", "log"] as const)(
+      "fails closed when the waiver range is unavailable: %s",
+      (failure) => {
+        const fixture = fixtureForEvent();
+        if (failure === "missing base") fixture.waiverBaseSha = "";
+        else fixture.waiverGitFailure = failure;
+        const result = runWorkflow(fixture);
+        expect(result.status, result.stdout + result.stderr).toBe(2);
+        expect(result.stdout).toContain("PR conventions OK");
+        expect(result.stdout).toContain(
+          failure === "missing base"
+            ? "Missing immutable PR base SHA"
+            : "Could not read the PR commit range",
+        );
+        expect(result.stdout).not.toContain("PR floor-waiver trailers are visible");
+      },
+    );
+  });
+
   it.each(["workflow_dispatch", "pull_request"])(
     "preserves bound metadata through file transport (%s)",
     (eventName) => {
@@ -252,7 +305,7 @@ describe("PR lint dispatch binding (hermetic workflow/API fixtures)", () => {
       fixture.live.body +=
         "\r\nPR_EOF\r\nbody=not-an-output\nauthor=renovate[bot]\n$(not-a-command)\nUnicode: café 日本語 🧪\r\n\n\n";
       const result = runWorkflow(fixture);
-      expect(result.status, result.stderr).toBe(0);
+      expect(result.status, result.stdout + result.stderr).toBe(0);
       expect(JSON.parse(result.output)).toEqual({
         title: fixture.live.title,
         body: fixture.live.body,
@@ -379,7 +432,7 @@ describe("PR lint dispatch binding (hermetic workflow/API fixtures)", () => {
     // The edited trigger can carry older metadata, but not a different head.
     fixture.event.pull_request!.title = "old event title";
     const result = runWorkflow(fixture);
-    expect(result.status, result.stderr).toBe(0);
+    expect(result.status, result.stdout + result.stderr).toBe(0);
     expect(result.output).toContain(fixture.live.title);
     expect(result.output).not.toContain("old event title");
     expect(result.stdout).toContain("PR conventions OK");
@@ -394,7 +447,7 @@ describe("PR lint dispatch binding (hermetic workflow/API fixtures)", () => {
       fixture.checkedSha = headSha;
       fixture.parents = [baseSha];
       const result = runWorkflow(fixture);
-      expect(result.status, result.stderr).toBe(0);
+      expect(result.status, result.stdout + result.stderr).toBe(0);
       expect(result.stdout).toContain("PR conventions OK");
       expect(workflow).toContain(
         "PR_LINT_CHECKOUT_SHA: ${{ github.event.pull_request.head.sha || github.sha }}",
@@ -471,7 +524,7 @@ describe("PR lint dispatch binding (hermetic workflow/API fixtures)", () => {
       fixture.event.pull_request!.base.sha = eventBase;
       fixture.live.base.sha = liveBase;
       const result = runWorkflow(fixture);
-      expect(result.status, result.stderr).toBe(0);
+      expect(result.status, result.stdout + result.stderr).toBe(0);
       expect(result.stdout).toContain("PR conventions OK");
       expect(
         result.calls
@@ -491,7 +544,7 @@ describe("PR lint dispatch binding (hermetic workflow/API fixtures)", () => {
     Object.assign(fixture.event.pull_request!, { merge_commit_sha: mergeSha });
     fixture.live.base.sha = "e".repeat(40);
     const result = runWorkflow(fixture);
-    expect(result.status, result.stderr).toBe(0);
+    expect(result.status, result.stdout + result.stderr).toBe(0);
     expect(result.stdout).toContain("PR conventions OK");
   });
 
@@ -572,7 +625,7 @@ describe("PR lint dispatch binding (hermetic workflow/API fixtures)", () => {
     fixture.live.base.repo.full_name = repository.toLowerCase();
     fixture.live.head.repo.full_name = fixture.live.head.repo.full_name.toUpperCase();
     const result = runWorkflow(fixture);
-    expect(result.status, result.stderr).toBe(0);
+    expect(result.status, result.stdout + result.stderr).toBe(0);
     expect(result.stdout).toContain("PR conventions OK");
   });
 
@@ -715,7 +768,7 @@ describe("PR lint dispatch binding (hermetic workflow/API fixtures)", () => {
         fixture.parents = [newerBase];
       } else fixture.mergeCommit!.parents[0]!.sha = newerBase;
       const result = runWorkflow(fixture);
-      expect(result.status, result.stderr).toBe(0);
+      expect(result.status, result.stdout + result.stderr).toBe(0);
       expect(result.stdout).toContain("PR conventions OK");
       expect(result.stderr).not.toContain("pr.binding_failed");
     },
@@ -824,7 +877,7 @@ describe("PR lint dispatch binding (hermetic workflow/API fixtures)", () => {
     fixture.event.pull_request!.base.sha = "::error::UNUSED_EVENT_BASE\r\n";
     fixture.live.base.sha = "::error::UNUSED_API_BASE\r\n";
     const result = runWorkflow(fixture);
-    expect(result.status, result.stderr).toBe(0);
+    expect(result.status, result.stdout + result.stderr).toBe(0);
     expect(result.stdout).toContain("PR conventions OK");
     expect(result.stderr).not.toContain("pr.binding_failed");
     expect(result.stderr).not.toContain("UNUSED_");
@@ -942,7 +995,7 @@ runpy.run_path('ci/resolve-pr-metadata.py')['binding_diagnostic'](*json.load(sys
           ]),
         },
       );
-      expect(result.status, result.stderr).toBe(0);
+      expect(result.status, result.stdout + result.stderr).toBe(0);
       expect(result.stdout).toBe("");
       expect(result.stderr.trim().split("\n")).toHaveLength(1);
       expect(Buffer.byteLength(result.stderr.trim())).toBeLessThanOrEqual(2048);
@@ -972,7 +1025,7 @@ runpy.run_path('ci/resolve-pr-metadata.py')['binding_diagnostic'](*json.load(sys
     const fixture = dispatch();
     fixture.eventName = "push";
     const result = runWorkflow(fixture);
-    expect(result.status, result.stderr).toBe(0);
+    expect(result.status, result.stdout + result.stderr).toBe(0);
     expect(result.calls).toBe("");
     expect(JSON.parse(result.output).event).toBe("push");
     expect(result.stdout).toContain("PR conventions OK");

@@ -73,13 +73,13 @@ def connection_env(url):
 
 def main():
     if len(sys.argv) != 2:
-        print("neon-backup: connection helper requires an output file", file=sys.stderr)
+        print("db-backup: connection helper requires an output file", file=sys.stderr)
         return 2
     try:
         settings = connection_env(os.environ.get("DATABASE_URL", ""))
     except (ValueError, UnicodeError):
         # Parser exceptions may contain URL/password fragments. Never print them.
-        print("neon-backup: refusing: invalid DATABASE_URL target or options", file=sys.stderr)
+        print("db-backup: refusing: invalid DATABASE_URL target or options", file=sys.stderr)
         return 1
     env = {key: value for key, value in os.environ.items()
            if not key.startswith("PG") and key != "DATABASE_URL"}
@@ -87,7 +87,7 @@ def main():
     try:
         os.execvpe("pg_dump", ["pg_dump", "-w", "-Fc", "-f", sys.argv[1]], env)
     except OSError:
-        print("neon-backup: could not execute pg_dump", file=sys.stderr)
+        print("db-backup: could not execute pg_dump", file=sys.stderr)
         return 1
 
 

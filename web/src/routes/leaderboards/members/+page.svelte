@@ -4,7 +4,7 @@ import { canonicalUrl } from "../../../../../src/seo";
 import type { PageProps } from "./$types";
 
 let { data }: PageProps = $props();
-const { season, scope, activity, rows, viewerId, available, appUrl } = $derived(data);
+const { season, scope, activity, rows, viewerUsername, available, appUrl } = $derived(data);
 const label = $derived(activity === null ? "every game" : activity);
 const destination = (nextScope: string) => {
   const params = new URLSearchParams();
@@ -16,6 +16,14 @@ const destination = (nextScope: string) => {
 };
 </script>
 
+{#snippet memberChrome()}
+  <form method="post" action="/logout">
+    <span class="account-caption">Signed in</span>
+    <span class="who">{viewerUsername}</span>
+    <button type="submit" class="link">Sign out</button>
+  </form>
+{/snippet}
+
 <Shell
   title="Member leaderboard"
   canonical={canonicalUrl(appUrl, "/leaderboards/members")}
@@ -25,6 +33,7 @@ const destination = (nextScope: string) => {
   activeNav="events"
   mainClass="events-page"
   loginReturnTo={destination(scope)}
+  accountChrome={memberChrome}
 >
   <p class="strap">Members only</p>
   <h1>Member leaderboard</h1>
@@ -52,12 +61,12 @@ const destination = (nextScope: string) => {
   {:else if rows.length === 0}
     <p role="status">{scope === "relative" ? "You are not ranked for this season and game yet." : "Nobody is ranked for this season and game yet."}</p>
   {:else}
-    <table>
+    <table class="member-board-table">
       <caption>Going counts, season {season}, {label}</caption>
       <thead><tr><th scope="col">Rank</th><th scope="col">Member</th><th scope="col">Going</th></tr></thead>
       <tbody>
         {#each rows as row}
-          <tr aria-current={row.userId === viewerId ? "true" : undefined}>
+          <tr aria-current={row.isViewer ? "true" : undefined}>
             <td>{row.rank}</td><th scope="row">{row.username}</th><td>{row.count}</td>
           </tr>
         {/each}

@@ -1,7 +1,8 @@
 // Dispatch ownership proof for the hot-zone Kit migration.
 //
 // Kit SSR serves /hotzones and /hotzones/:signal (joins|voice|games); the
-// member board stays Hono-owned until its executed parity journey lands.
+// member board is Kit-owned since its executed parity journey landed and
+// earned the fresh privacy verdict.
 // Shell existence does not prove ownership: only the shipped ROUTE_MANIFEST
 // decision does. These cases pin the shipped manifest (no override) so
 // flipping `enabled` flips the gate for the right reason. They fail while
@@ -44,8 +45,8 @@ describe("hot-zone Kit ownership (shipped manifest)", () => {
     },
   );
 
-  it("holds GET /leaderboards/members on Hono until its parity journey lands", () => {
-    expect(resolveRouteOwner({ method: "GET", path: "/leaderboards/members" })).toBe("hono");
+  it("owns GET /leaderboards/members on Kit", () => {
+    expect(resolveRouteOwner({ method: "GET", path: "/leaderboards/members" })).toBe("kit");
   });
 
   it("keeps the control /events/past on Kit and still-disabled leaves on Hono", () => {
@@ -54,27 +55,24 @@ describe("hot-zone Kit ownership (shipped manifest)", () => {
     expect(resolveRouteOwner({ method: "GET", path: "/join" })).toBe("hono");
   });
 
-  it("declares public reads for hot-zones and keeps the board declaration Hono-held", () => {
+  it("declares public reads for hot-zones and the member read for the board", () => {
     expect(decideRoute(get("/hotzones"))?.reads).toBe("public");
     expect(decideRoute(get("/hotzones/joins"))?.reads).toBe("public");
     expect(decideRoute(get("/hotzones/voice"))?.reads).toBe("public");
     expect(decideRoute(get("/hotzones/games"))?.reads).toBe("public");
-    // Held on Hono: no Kit decision, but the manifest still declares the
-    // member read the future enablement will render inside.
-    expect(decideRoute(get("/leaderboards/members"))).toBeUndefined();
-    expect(
-      ROUTE_MANIFEST.find((e) => e.method === "GET" && e.path === "/leaderboards/members"),
-    ).toEqual({
+    // Kit-owned: the decision carries the member-read declaration the board
+    // renders inside the audited boundary.
+    expect(decideRoute(get("/leaderboards/members"))).toEqual({
       method: "GET",
       path: "/leaderboards/members",
-      enabled: false,
+      enabled: true,
       reads: { resource: "leaderboard", action: "list", route: "leaderboards.members" },
     });
   });
 
   it("lets HEAD follow the GET entry and keeps POST on Hono", () => {
     expect(resolveRouteOwner({ method: "HEAD", path: "/hotzones" })).toBe("kit");
-    expect(resolveRouteOwner({ method: "HEAD", path: "/leaderboards/members" })).toBe("hono");
+    expect(resolveRouteOwner({ method: "HEAD", path: "/leaderboards/members" })).toBe("kit");
     expect(resolveRouteOwner({ method: "POST", path: "/hotzones" })).toBe("hono");
     expect(resolveRouteOwner({ method: "POST", path: "/leaderboards/members" })).toBe("hono");
   });
@@ -82,7 +80,7 @@ describe("hot-zone Kit ownership (shipped manifest)", () => {
   it("treats Kit data requests like their pages", () => {
     expect(resolveRouteOwner({ method: "GET", path: "/hotzones/__data.json" })).toBe("kit");
     expect(resolveRouteOwner({ method: "GET", path: "/leaderboards/members/__data.json" })).toBe(
-      "hono",
+      "kit",
     );
   });
 
@@ -102,7 +100,7 @@ describe("hot-zone Kit ownership (shipped manifest)", () => {
     expect(await response.text()).toBe("kit");
   });
 
-  it("dispatches the held member board to honoFetch and Hono control to honoFetch", async () => {
+  it("dispatches the enabled member board to resolve and Hono control to honoFetch", async () => {
     const board = eventFor("/leaderboards/members");
     const boardDeps = {
       ...depsFor(),
@@ -119,14 +117,15 @@ describe("hot-zone Kit ownership (shipped manifest)", () => {
         joinResult: null,
         expiredWrite: null,
       }),
-      accessSink: async () => null,
+      accessSink: async () => async () => true,
     };
-    // Held on Hono until the parity journey lands: the request never reaches
-    // resolve, even for an authenticated member.
-    const held = await dispatchHookRequest(board, boardDeps);
-    expect(boardDeps.honoFetch).toHaveBeenCalledOnce();
-    expect(boardDeps.resolve).not.toHaveBeenCalled();
-    expect(held.headers.get(KIT_RENDERER_HEADER)).toBeNull();
+    // Enabled by the shipped manifest: an authenticated member reaches
+    // resolve inside the member-read boundary.
+    const served = await dispatchHookRequest(board, boardDeps);
+    expect(boardDeps.resolve).toHaveBeenCalledOnce();
+    expect(boardDeps.honoFetch).not.toHaveBeenCalled();
+    expect(served.headers.get(KIT_RENDERER_HEADER)).toBe(KIT_RENDERER_VALUE);
+    expect(await served.text()).toBe("kit");
 
     const control = eventFor("/privacy");
     const controlDeps = depsFor();
@@ -146,6 +145,6 @@ describe("hot-zone Kit ownership (shipped manifest)", () => {
       (e) => e.method === "GET" && e.path === "/leaderboards/members",
     );
     expect(board, "missing manifest entry GET /leaderboards/members").toBeDefined();
-    expect(board?.enabled).toBe(false);
+    expect(board?.enabled).toBe(true);
   });
 });

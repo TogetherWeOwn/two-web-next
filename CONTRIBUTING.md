@@ -60,6 +60,20 @@ The repository rulesets enforce the following on `main`:
 
 - `pr-conventions`: `pr-lint` must pass.
 
+### Pull-request size labels (advisory)
+
+`.github/workflows/pr-size.yml` labels every pull request `size/S` (up to 100
+counted lines), `size/M` (up to 400), `size/L` (up to 1000) or `size/XL`, and
+keeps one advisory comment on pull requests over the 400-line threshold.
+Counted lines are additions + deletions excluding lockfiles, generated files
+and fixtures. The labeller lives once in the org
+[TogetherWeOwn/.github](https://github.com/TogetherWeOwn/.github) repository
+(`CI-STANDARD.md`, "Advisory PR-size labels"); the workflow here is a thin
+caller pinned to a central SHA and passes only this repo's generated paths.
+This is advisory only: it is not a required check and never blocks a merge.
+A Monday run of the same workflow prints the weekly tally of merged pull
+requests per size; the labels are the durable record behind it.
+
 ### Change-gated CI and `ci-ok`
 
 Heavy CI jobs run only when their inputs changed (TOG-14877 CI standard). The
@@ -69,8 +83,13 @@ worker, the Kit spike), `db` (migrations) — plus `full` (lockfiles,
 `.github/**`, shared config, or anything unknown: run everything) and `draft`.
 `a11y` runs on app/db, `lighthouse` and `bundle-budget` on app, and `docs-links`
 checks relative links and anchors on every PR. `check` runs unless its run was
-cancelled, skips its heavy steps on docs-only and draft PRs, and requires
-`docs-links`; the `ci-ok` aggregator reports the overall conclusion. In a run
+cancelled, starts from `scope` alone so it runs in parallel with the audit
+and performance jobs, and skips its heavy steps on docs-only and draft PRs.
+`node22-compat` reports the same way on the exact Node 22.23.0 `engines`
+floor — the version asserted in its log — running lint, typecheck and the
+unit suite, so the declared 22 range is verified beside the Node 24 jobs;
+the `ci-ok` aggregator requires `docs-links`, `node22-compat` and every
+selected job's result, and reports the overall conclusion. In a run
 cancelled by a newer run on the same PR, both conclude cancelled rather than
 failed, and the newer run's `ci-ok` decides the merge. Main pushes and the nightly schedule
 run the full suite. The `ci-ok`-as-required-check ruleset cutover is an

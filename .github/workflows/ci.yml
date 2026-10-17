@@ -7,6 +7,8 @@ on:
     # deliberately absent: title/body edits need no heavy suite (pr-gates.yml
     # covers them with its own `edited` trigger).
     types: [opened, synchronize, reopened, ready_for_review]
+  merge_group:
+    types: [checks_requested]
   push:
     branches: [main]
   # Nightly full run (TOG-14880): non-PR events select every area, so this runs
@@ -37,15 +39,15 @@ permissions:
 # this.
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || (github.event_name == 'schedule' && 'nightly') || github.ref }}
-  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' && github.event_name != 'merge_group' }}
 
 jobs:
   # Cheap change-scope gate (TOG-11811): a PR that only touches prose
   # (`docs/**`, root `*.md`) that no gate, test or build reads fast-passes the
   # heavy jobs below instead of occupying two runner slots for 20 minutes.
   # ci/change-scope.sh fails closed. `check` still reports success under its
-  # own name, so the required check keeps gating merges (paths-ignore would
-  # leave it missing and block the PR, so it is deliberately not used here).
+  # own name, so the required `ci-ok` gate keeps gating merges (paths-ignore
+  # would leave it missing and block the PR, so it is deliberately not used).
   scope:
     name: scope
     # Overflow switch: see CI_OVERFLOW_* note on the a11y job.
@@ -172,16 +174,28 @@ jobs:
             playwright-chromium-${{ runner.os }}-
       - run: npx playwright install --with-deps chromium
       - name: Chromium cancellation regressions
-        run: A11Y_BROWSER_TESTS=true node --test ci/a11y-lifecycle.test.mjs
+        env:
+          A11Y_BROWSER_TESTS: "true"
+        run: |
+          npx vitest run ci/audit-lifecycle.test.mjs --reporter=default --reporter=json --outputFile.json=artifacts/a11y/audit-lifecycle.json
+          node ci/a11y-require-executed.mjs artifacts/a11y/audit-lifecycle.json "audit lifecycle real Chromium signal cleanup" 2
+      - name: RSVP keyboard-focus proof (real Chromium, loopback fixtures)
+        run: RSVP_FOCUS_BROWSER_TESTS=true node --test ci/rsvp-focus-browser.test.mjs
       - name: Session recovery (local two-tab fixture, mocked OAuth)
         run: timeout 120s npm run test:auth-browser
+      # The suite has no opt-out: it always runs, so missing evidence on the
+      # green path means the run executed nothing. Default conditions on
+      # purpose: when the suite itself fails this step skips and the upload
+      # below (if: always()) still ships the partial evidence for debugging.
+      - name: Session recovery evidence must exist
+        run: node ci/require-session-recovery-evidence.mjs artifacts/session-recovery
       - name: Session recovery evidence
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: session-recovery-evidence
           path: artifacts/session-recovery/
-          if-no-files-found: warn
+          if-no-files-found: error
           retention-days: 14
       # Each browser-gated suite skips unless its opt-in is "true"; the verifier
       # fails the step when any of its cases skipped or went missing.
@@ -209,6 +223,14 @@ jobs:
         run: |
           npx vitest run test/calendar-search-unicode-boundaries.test.ts --reporter=default --reporter=json --outputFile.json=artifacts/a11y/calendar-search-unicode-boundaries.json
           node ci/a11y-require-executed.mjs artifacts/a11y/calendar-search-unicode-boundaries.json "native calendar search input (real Chromium typing/paste)" 21
+      - name: Install Kit workspace dependencies (Kit error shell render)
+        run: npm ci --prefix web --include=dev --no-audit --no-fund
+      - name: Kit error shell rendered accessibility (SSR fixtures, no network or DB)
+        env:
+          KIT_ERROR_SHELL_BROWSER_TESTS: "true"
+        run: |
+          npx vitest run test/kit-error-shell-render.test.ts --reporter=default --reporter=json --outputFile.json=artifacts/a11y/kit-error-shell-render.json
+          node ci/a11y-require-executed.mjs artifacts/a11y/kit-error-shell-render.json "Kit error shell rendered accessibility" 6
       - name: WCAG 2.2 AA (local fixtures, no external services)
         env:
           DEBUG: pw:browser
@@ -221,18 +243,18 @@ jobs:
           path: artifacts/a11y/
           if-no-files-found: error
           retention-days: 14
-  # name pinned equal to the id: `check` is a required check on main.
-  # Run the required gate even when performance jobs fail or are skipped;
-  # GitHub treats a skipped required check as successful.
-  # A failing audit must also prevent the existing required check from passing.
+  # Name pinned equal to the id. `check` feeds the required `ci-ok` gate.
+  # It needs only `scope`, so it starts alongside a11y, lighthouse and
+  # bundle-budget instead of after them; the steps that gated those jobs'
+  # results (docs-links, the accessibility audit and the performance gate)
+  # live in `ci-ok`, which already needs every one of them.
   # `scope` is not a required check, so a red scope must fail `check` itself
   # (first step): without its outputs every area reads as unselected, and the
-  # audit guard would accept a skipped a11y and leave `check` green.
+  # docs-only fast pass would leave `check` green on a broken verdict.
   check:
     name: check
-    needs: [a11y, lighthouse, bundle-budget, docs-links, scope]
-    # A skipped required check is mergeable; explicitly fail when the audit is
-    # not green. `!cancelled()`, not `always()`: see the note on ci-ok.
+    needs: [scope]
+    # `!cancelled()`, not `always()`: see the note on ci-ok.
     if: ${{ !cancelled() }}
     # Overflow switch: see CI_OVERFLOW_* note on the first job above.
     runs-on: ${{ fromJSON((!github.event.repository.private && '["ubuntu-latest"]') || (contains(fromJSON(vars.CI_OVERFLOW_JOBS || '[]'), 'check') && contains(fromJSON(vars.CI_OVERFLOW_EVENTS || '[]'), github.event_name) && vars.CI_OVERFLOW_RUNNER) || '["self-hosted","two-selfhosted"]') }}
@@ -258,20 +280,9 @@ jobs:
         env:
           SCOPE_RESULT: ${{ needs.scope.result }}
         run: test "$SCOPE_RESULT" = success
-      - name: Require successful docs-links
-        env:
-          DOCS_LINKS_RESULT: ${{ needs.docs-links.result }}
-        run: test "$DOCS_LINKS_RESULT" = success
       - name: Docs-only fast pass (no code changed)
         if: needs.scope.outputs.docs_only == 'true' || needs.scope.outputs.draft == 'true'
         run: echo "Docs-only or draft change per the scope job; required check passes without the heavy suite."
-      - name: Require successful accessibility audit
-        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
-        env:
-          A11Y_RESULT: ${{ needs.a11y.result }}
-          A11Y_SELECTED: ${{ needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true' || needs.scope.outputs.db == 'true' }}
-        run: test "$A11Y_RESULT" = success || { test "$A11Y_SELECTED" = false && test "$A11Y_RESULT" = skipped; }
-      # Always check out so the always-run performance gate below can report.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
         with:
@@ -300,10 +311,6 @@ jobs:
           cache-dependency-path: |
             package-lock.json
             web/package-lock.json
-      # Only explicit success from both performance jobs may read green.
-      - name: Performance gate (lighthouse + bundle-budget must succeed)
-        if: always() && (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true')
-        run: node ci/require-performance.mjs "${{ needs.lighthouse.result }}" "${{ needs.bundle-budget.result }}"
       - name: Performance gate selftest
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
         run: node ci/require-performance.mjs --selftest
@@ -327,7 +334,7 @@ jobs:
         run: npm run db:migrate
         env:
           DATABASE_URL: postgres://postgres:ci@localhost:5432/postgres
-      - name: Migration workflow selftest (isolated Postgres, no Neon/network APIs)
+      - name: Migration workflow selftest (isolated Postgres, no network APIs)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
         run: npm run db:migrate:selftest
         env:
@@ -370,22 +377,19 @@ jobs:
         run: npm ci --prefix web --include=dev --no-audit --no-fund
       - name: Check (lint + typecheck + coverage gate)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
-        run: npm run lint && npm run typecheck && npm run e2e:typecheck && npm run test:coverage && npm run e2e:safety && node --test ci/a11y-*.test.mjs ci/admin-properties-ci.test.mjs ci/coverage-command.test.mjs ci/kit-preview-e2e-wiring.test.mjs ci/visual-accept.test.mjs
+        run: npm run lint && npm run typecheck && npm run e2e:typecheck && npm run test:coverage && npm run e2e:safety && node --test ci/a11y-*.test.mjs ci/admin-properties-ci.test.mjs ci/coverage-command.test.mjs ci/kit-preview-e2e-wiring.test.mjs ci/visual-accept.test.mjs ci/tier0-changed-query-files.test.mjs
         env:
           DATABASE_URL: postgres://postgres:ci@localhost:5432/postgres
           AUDIT_IMPORT_TEST_DATABASE_URL: postgres://postgres:ci@localhost:5432/postgres
-      # Tier-0 report (WARN): validator properties, the role x route authz
-      # matrix and the default-planner EXPLAIN seq-scan check. Non-blocking
-      # until the parent flip decides the low-false-positive suites are
-      # required: continue-on-error keeps the step green on failure, and the
-      # trap keeps a dead gate visible as a workflow warning instead of
-      # silent green. The step always prints the query files this PR touches
-      # beside the verdict, even when the suites fail. Tier-0 lives in tier0/
-      # (own vitest config) because every test/** file runs inside the
-      # blocking coverage step above.
-      - name: Tier-0 report (validators + authz + EXPLAIN, WARN)
+      # Tier-0 check: validator properties, the role x route authz matrix and
+      # the default-planner EXPLAIN seq-scan check. This existing check is
+      # required; the trap keeps a failure before the report visible in logs.
+      # The step always prints the query files this PR touches beside the
+      # verdict, even when the suites fail. Tier-0 lives in tier0/ (own vitest
+      # config) because every test/** file runs inside the blocking coverage
+      # step above.
+      - name: Tier-0 check (validators + authz + EXPLAIN)
         if: always() && (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
-        continue-on-error: true
         # Container steps run under sh (dash here: no pipefail, no ERR trap),
         # so pin bash like the Semgrep WARN step does.
         shell: bash
@@ -393,15 +397,16 @@ jobs:
           DATABASE_URL: postgres://postgres:ci@localhost:5432/postgres
         run: |
           set -euo pipefail
-          # continue-on-error keeps the step green on failure; the trap keeps a
-          # dead gate visible as a workflow warning instead of silent green.
-          trap 'echo "::warning::Tier-0 WARN step failed before completing the report"' ERR
+          trap 'echo "::warning::Tier-0 check failed before completing the report"' ERR
           tier0_status=0
-          npm run test:tier0 || tier0_status=$?
-          {
-            echo "### Tier-0 changed query files"
-            git diff --name-only 'origin/main...HEAD' -- src/db src/events src/join src/profiles src/admin src/sessions.ts || true
-          } >> "$GITHUB_STEP_SUMMARY"
+          remember_tier0_failure() {
+            local status=$?
+            if [ "$tier0_status" -eq 0 ]; then
+              tier0_status=$status
+            fi
+          }
+          npm run test:tier0 || remember_tier0_failure
+          node ci/tier0-changed-query-files.mjs || remember_tier0_failure
           exit "$tier0_status"
       - name: Kit parity gate selftests
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
@@ -459,16 +464,16 @@ jobs:
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
         run: npm run test:shadow
       # Changed-lines WARN gate (quality-gates.md): added TS lines should be
-      # executed (80%). Reads the coverage this job just produced; warns only.
+      # executed (80%). Reads the coverage this job just produced; a missing
+      # report fails the step (fail closed). Docs-only and draft PRs skip via
+      # the scope guard in `if:`, never a file-presence check.
       - name: Patch coverage (WARN)
-        if: always() && (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && hashFiles('coverage/coverage-final.json') != ''
+        if: always() && (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
         run: npm run patch:coverage:selftest && npm run patch:coverage
-      # Semgrep WARN gate (quality-gates.md): TS sinks + secret-shaped
-      # literals. A planted warning must be detected before scanning the tree;
-      # failures stay advisory but emit a visible workflow warning.
-      - name: Semgrep (WARN)
+      # Semgrep HARD gate (quality-gates.md): TS sinks + secret-shaped
+      # literals. The planted-finding selftest and strict scan both fail closed.
+      - name: Semgrep (HARD)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
-        continue-on-error: true
         # Container steps run under sh (dash here: no pipefail), so pin bash
         # for `set -euo pipefail` like the migration-numbering step does.
         shell: bash
@@ -476,16 +481,10 @@ jobs:
           SEMGREP_SEND_METRICS: "off"
         run: |
           set -euo pipefail
-          # continue-on-error keeps the step green on failure; the trap keeps a
-          # dead gate visible as a workflow warning instead of silent green.
-          trap 'echo "::warning::Semgrep WARN step failed before completing the scan"' ERR
           python3 -m venv "$RUNNER_TEMP/semgrep"
           "$RUNNER_TEMP/semgrep/bin/pip" install --quiet 'semgrep==1.180.0'
-          if ! node ci/semgrep-warn-selftest.mjs "$RUNNER_TEMP/semgrep/bin/semgrep"; then
-            echo "::warning::Semgrep WARN selftest failed; scan may be unavailable"
-            exit 1
-          fi
-          "$RUNNER_TEMP/semgrep/bin/semgrep" --config ci/semgrep-rules.yml --quiet --metrics=off
+          node ci/semgrep-warn-selftest.mjs "$RUNNER_TEMP/semgrep/bin/semgrep"
+          "$RUNNER_TEMP/semgrep/bin/semgrep" --strict --error --config ci/semgrep-rules.yml --metrics=off
       - name: Coverage job summary
         if: always() && (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && hashFiles('coverage/coverage-summary.json') != ''
         run: node ci/coverage-summary.mjs >> "$GITHUB_STEP_SUMMARY"
@@ -497,9 +496,9 @@ jobs:
           path: coverage/
           if-no-files-found: error
           retention-days: 14
-      - name: Neon backup selftest (stubbed, no secrets)
+      - name: Database backup selftest (stubbed, no secrets)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
-        run: bash ci/neon-backup-selftest.sh
+        run: bash ci/db-backup-selftest.sh
       # Hermetic backup fixture suites: fake pg_dump/R2/wrangler on local disk, no
       # secrets, no network, no database. They gate the same `check` as every
       # other step (no continue-on-error), and run when backup inputs change
@@ -512,9 +511,9 @@ jobs:
       - name: Backup target selftest (fixtures, no secrets)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true')
         run: python3 ci/backup-target-selftest
-      - name: Neon backup argv selftest (stubbed, no secrets)
+      - name: Database backup argv selftest (stubbed, no secrets)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true')
-        run: bash ci/neon-backup-argv-selftest.sh
+        run: bash ci/db-backup-argv-selftest.sh
       - name: Backup manifest admission selftest (fixtures, no secrets)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true')
         run: python3 ci/backup-manifest-admission-selftest
@@ -603,6 +602,99 @@ jobs:
       - name: Production build (wrangler dry run, no deployment)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true' || needs.scope.outputs.worker == 'true')
         run: npx wrangler deploy --dry-run --env production --outdir dist-production
+
+  # Node 22 compatibility leg: package.json `engines` declares a 22 range
+  # beside `>=24`, but every other job runs Node 24, so the 22 range shipped
+  # to developers unverified. Building this leg proved the old 22.18.0 floor
+  # wrong (its bundled npm 10.9.3 refused the lockfile's incomplete
+  # optional-peer tree, and its ICU 77 renders a zero UTC offset as `GMT`
+  # where the suite and Node 24 pin `GMT+00:00`), so the floor is corrected
+  # to 22.23.0, the 22.x release verified end to end (npm 10.9.8, ICU 78).
+  # This leg
+  # pins that exact floor (container image and setup-node), asserts the
+  # running version, and runs lint, typecheck and the unit suite against the
+  # same migrated Postgres `check` uses. Name pinned equal to the id. It
+  # always reports like `check` (docs-only and draft PRs fast-pass) and
+  # `ci-ok` fails unless it succeeds, so a red or skipped leg blocks the
+  # merge instead of reading green. test/required-checks.test.ts pins the
+  # floor and the surface.
+  node22-compat:
+    name: node22-compat
+    needs: [scope]
+    # `!cancelled()`, not `always()`: see the note on ci-ok.
+    if: ${{ !cancelled() }}
+    # Overflow switch: see CI_OVERFLOW_* note on the a11y job.
+    runs-on: ${{ fromJSON((!github.event.repository.private && '["ubuntu-latest"]') || (contains(fromJSON(vars.CI_OVERFLOW_JOBS || '[]'), 'node22-compat') && contains(fromJSON(vars.CI_OVERFLOW_EVENTS || '[]'), github.event_name) && vars.CI_OVERFLOW_RUNNER) || '["self-hosted","two-selfhosted"]') }}
+    timeout-minutes: 30
+    # Same container/service isolation as `check` (own network namespace, so
+    # localhost:5432 cannot collide on the shared Docker host), at the exact
+    # engines floor instead of Node 24.
+    container:
+      image: node:22.23.0-bookworm
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_PASSWORD: ci
+        options: >-
+          --health-cmd "pg_isready -U postgres" --health-interval 5s --health-timeout 5s --health-retries 10
+    steps:
+      - name: Require successful scope
+        env:
+          SCOPE_RESULT: ${{ needs.scope.result }}
+        run: test "$SCOPE_RESULT" = success
+      - name: Docs-only fast pass (no code changed)
+        if: needs.scope.outputs.docs_only == 'true' || needs.scope.outputs.draft == 'true'
+        run: echo "Docs-only or draft change per the scope job; Node 22 compatibility leg passes without the suite."
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
+        with:
+          persist-credentials: false
+      - name: Job-private localhost:5432 forward to the Postgres service
+        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
+        run: |
+          # On hosted/overflow runners the job container's root does not own the
+          # runner-owned checkout, so Git refuses it as dubious ownership.
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          apt-get update -qq && apt-get install -y -qq --no-install-recommends socat postgresql-client >/dev/null
+          nohup setsid socat TCP-LISTEN:5432,bind=127.0.0.1,reuseaddr,fork TCP:postgres:5432 >/dev/null 2>&1 &
+          for i in $(seq 1 30); do pg_isready -q -h 127.0.0.1 -U postgres && exit 0; sleep 1; done
+          exit 1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
+        with:
+          node-version: 22.23.0
+          cache: npm
+          # The Kit install below reads web/package-lock.json, a separate
+          # graph from the root lockfile (same note as the `check` job).
+          cache-dependency-path: |
+            package-lock.json
+            web/package-lock.json
+      # The test plan for this leg is the version in the log: fail here, before
+      # any suite runs, if the runner is not the exact engines floor.
+      - name: Assert the exact Node 22.23.0 engines floor
+        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
+        run: |
+          node --version
+          test "$(node --version)" = "v22.23.0"
+      - run: npm ci --no-audit --no-fund
+        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
+      # Unit files SSR-compile .svelte through web's svelte/compiler, so the
+      # Kit workspace installs before the suite (same reason as `check`).
+      - name: Install Kit workspace dependencies
+        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
+        run: npm ci --prefix web --include=dev --no-audit --no-fund
+      - name: Apply migrations
+        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
+        run: npm run db:migrate
+        env:
+          DATABASE_URL: postgres://postgres:ci@localhost:5432/postgres
+      - name: Lint + typecheck + unit tests on Node 22.23.0
+        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
+        run: npm run lint && npm run typecheck && npm test
+        env:
+          DATABASE_URL: postgres://postgres:ci@localhost:5432/postgres
+          AUDIT_IMPORT_TEST_DATABASE_URL: postgres://postgres:ci@localhost:5432/postgres
 
   bundle-budget:
     needs: scope
@@ -702,12 +794,47 @@ jobs:
   # ci-ok succeeds. test/ci-concurrency.test.ts pins both outcomes.
   ci-ok:
     name: ci-ok
-    needs: [a11y, lighthouse, bundle-budget, check, scope]
+    needs: [a11y, lighthouse, bundle-budget, docs-links, check, node22-compat, scope]
     if: ${{ !cancelled() }}
     # Overflow switch: see CI_OVERFLOW_* note on the a11y job.
     runs-on: ${{ fromJSON((!github.event.repository.private && '["ubuntu-latest"]') || (contains(fromJSON(vars.CI_OVERFLOW_JOBS || '[]'), 'ci-ok') && contains(fromJSON(vars.CI_OVERFLOW_EVENTS || '[]'), github.event_name) && vars.CI_OVERFLOW_RUNNER) || '["self-hosted","two-selfhosted"]') }}
     timeout-minutes: 5
     steps:
+      # The result gates that used to sit in `check`, unchanged: a failing,
+      # cancelled or (when selected) skipped upstream job fails this required
+      # check. They moved here so `check` can start in parallel with those
+      # jobs; the aggregate step below still re-checks the scope, check,
+      # audit and performance verdicts.
+      - name: Require successful docs-links
+        env:
+          DOCS_LINKS_RESULT: ${{ needs.docs-links.result }}
+        run: test "$DOCS_LINKS_RESULT" = success
+      # node22-compat always reports like `check` (docs-only and draft PRs
+      # fast-pass inside the leg), so only an explicit success reads green.
+      - name: Require successful Node 22 compatibility leg
+        env:
+          NODE22_COMPAT_RESULT: ${{ needs.node22-compat.result }}
+        run: test "$NODE22_COMPAT_RESULT" = success
+      - name: Require successful accessibility audit
+        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
+        env:
+          A11Y_RESULT: ${{ needs.a11y.result }}
+          A11Y_SELECTED: ${{ needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true' || needs.scope.outputs.db == 'true' }}
+        run: test "$A11Y_RESULT" = success || { test "$A11Y_SELECTED" = false && test "$A11Y_RESULT" = skipped; }
+      # Check out so the always-run performance gate below can report, even
+      # when a gate above already failed.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: always() && (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true')
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        if: always() && (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true')
+        with:
+          node-version: 24
+      # Only explicit success from both performance jobs may read green.
+      - name: Performance gate (lighthouse + bundle-budget must succeed)
+        if: always() && (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true')
+        run: node ci/require-performance.mjs "${{ needs.lighthouse.result }}" "${{ needs.bundle-budget.result }}"
       - name: Aggregate change-gated conclusions
         env:
           SCOPE_RESULT: ${{ needs.scope.result }}

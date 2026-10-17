@@ -1,8 +1,8 @@
 # Synthetic backup-to-restore proof
 
 This standalone harness proves that a **real custom-format PostgreSQL archive
-transported by `bin/neon-backup.sh`** can be downloaded and restored. It supplements
-`ci/neon-backup-selftest.sh`, whose fixed dump payload tests transport/retention,
+transported by `bin/db-backup.sh`** can be downloaded and restored. It supplements
+`ci/db-backup-selftest.sh`, whose fixed dump payload tests transport/retention,
 not recoverability. It does not add a production restore command, exercise nightly
 workflows, fetch live archives, or prove a live backup's recoverability.
 
@@ -10,7 +10,7 @@ workflows, fetch live archives, or prove a live backup's recoverability.
 
 Prerequisites: Python 3 (standard library only), Bash, `psql`, `pg_dump` and
 `pg_restore` on PATH, with a client major version compatible with the test server
-(PostgreSQL 17 currently). No npm install, application migrations, Wrangler
+(PostgreSQL 18 currently). No npm install, application migrations, Wrangler
 installation or Cloudflare credentials are needed.
 
 ```sh

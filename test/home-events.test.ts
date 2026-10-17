@@ -346,13 +346,14 @@ describe("homepage upcoming events", () => {
     async (failAt) => {
       freezeNow();
       const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-      const html = await expectEmpty(await fixture([event(1)], failAt).request(), "unavailable");
+      const response = await fixture([event(1)], failAt).request();
+      const html = await expectEmpty(response, "unavailable");
       expect(html).toContain("Game nights are unavailable right now.");
       expect(html).not.toContain("Nothing scheduled yet.");
       expect(html).not.toContain("Game night 1");
       expect(warn).toHaveBeenCalledExactlyOnceWith(
         "Home events unavailable; serving the fallback.",
-        { exception: "ReadFailure" },
+        { request_id: response.headers.get("x-request-id"), exception: "ReadFailure" },
       );
       for (const secret of [
         "postgres://",
@@ -375,10 +376,11 @@ describe("homepage upcoming events", () => {
       const request = f.request();
       await f.waitForStall;
       await vi.advanceTimersByTimeAsync(HOME_EVENTS_DEADLINE_MS);
-      await expectEmpty(await request, "unavailable");
+      const response = await request;
+      await expectEmpty(response, "unavailable");
       expect(warn).toHaveBeenCalledExactlyOnceWith(
         "Home events unavailable; serving the fallback.",
-        { exception: "HomeEventsDeadline" },
+        { request_id: response.headers.get("x-request-id"), exception: "HomeEventsDeadline" },
       );
       expect(vi.getTimerCount()).toBe(0);
       f.rejectRead();

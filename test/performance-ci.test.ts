@@ -54,11 +54,13 @@ describe("performance CI", () => {
         expect(response.headers.get("location"), path).toBeNull();
         expect(response.headers.get("content-type"), path).toContain("text/html");
         const html = await response.text();
-        if (["/about", "/faq", "/rules", "/privacy"].includes(path)) {
-          // Content leaves inline the stylesheets: the real app rules must
-          // be present in the style block instead of a link.
+        if (["/", "/about", "/faq", "/rules", "/privacy"].includes(path)) {
+          // Inline-critical pages carry the stylesheets in a style block
+          // instead of a link: the homepage reuses the leaf bundle (hero
+          // rules), the leaves carry the content rules.
           expect(html, path).toContain("<style>");
-          expect(html, path).toContain(".content-page");
+          expect(html, path).toContain(path === "/" ? ".hero h1" : ".content-page");
+          expect(html, path).not.toContain('rel="stylesheet"');
         } else {
           expect(html, path).toContain("/styles.css");
         }
@@ -339,12 +341,7 @@ describe("performance CI", () => {
       "/",
       (html: string) => html.replace(/datetime="[^"]+"/g, 'datetime="1970-01-08T00:00:00.000Z"'),
     ],
-    [
-      "missing real app CSS",
-      "/",
-      (html: string) =>
-        html.replace('rel="stylesheet" href="/styles.css"', 'rel="stylesheet" href="/missing.css"'),
-    ],
+    ["missing real app CSS", "/", (html: string) => html.replace(/<style>[\s\S]*?<\/style>/, "")],
     [
       "missing inlined leaf CSS",
       "/rules",
@@ -613,9 +610,13 @@ describe("performance CI", () => {
     expect(pkg.overrides["@lhci/cli"]).toEqual({ tmp: "0.2.7", "@puppeteer/browsers": "3.2.3" });
     // GHSA-c475-qrg2-pj4r: only LHCI's proxy chain pulls basic-ftp in.
     expect(pkg.overrides["basic-ftp"]).toBe("6.2.1");
-    // Main's engines floor (^22.18.0 || >=24) satisfies the ESM-only browser
+    // Main's engines floor (^22.23.0 || >=24) satisfies the ESM-only browser
     // helper's own >=22.12.0 requirement; pin the merged value, not the floor.
-    expect(pkg.engines.node).toBe("^22.18.0 || >=24");
+    // 22.23.0 is the verified floor: its ICU 78 renders the suite's pinned
+    // `GMT+00:00` zero offset and its bundled npm 10 accepts the lockfile
+    // with the puppeteer-core proxy-agent override below.
+    expect(pkg.engines.node).toBe("^22.23.0 || >=24");
+    expect(pkg.overrides["puppeteer-core"]).toEqual({ "proxy-agent": "6.5.0" });
     // Exercise both module entry points used by LHCI and Lighthouse, without Chrome/network.
     const loaded = spawnSync(
       process.execPath,
@@ -655,16 +656,43 @@ describe("performance CI", () => {
     expect(loaded.status, loaded.stdout + loaded.stderr).toBe(0);
   });
 
-  it("wires both performance results into the always-running required check", () => {
+  it("wires both performance results into the always-running required ci-ok gate", () => {
     const workflow = readFileSync(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8");
     const check = workflow.split("\n  check:\n")[1]!.split("\n  bundle-budget:\n")[0]!;
-    expect(check).toContain("name: check");
-    expect(check).toContain("needs: [a11y, lighthouse, bundle-budget, docs-links, scope]");
-    expect(check).toContain("\n    if: ${{ !cancelled() }}\n");
-    expect(check).toContain(
-      'node ci/require-performance.mjs "${{ needs.lighthouse.result }}" "${{ needs.bundle-budget.result }}"',
+    const ciOk = workflow.split("\n  ci-ok:\n")[1]!;
+    const performanceGateMarker =
+      "\n      - name: Performance gate (lighthouse + bundle-budget must succeed)\n";
+    const performanceGateIndex = ciOk.indexOf(performanceGateMarker);
+    const ciOkBeforePerformanceGate = ciOk.slice(0, performanceGateIndex);
+    const performanceGate =
+      ciOk.slice(performanceGateIndex + performanceGateMarker.length).split("\n      - name:")[0] ??
+      "";
+    const performanceGateCondition =
+      "always() && (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true')";
+    const checkoutStep =
+      ciOkBeforePerformanceGate
+        .split("\n      - uses: actions/checkout@")[1]
+        ?.split("\n      - ")[0] ?? "";
+    const setupNodeStep =
+      ciOkBeforePerformanceGate
+        .split("\n      - uses: actions/setup-node@")[1]
+        ?.split("\n      - ")[0] ?? "";
+
+    expect(performanceGateIndex).toBeGreaterThan(-1);
+    expect(ciOk).toContain("name: ci-ok");
+    expect(ciOk).toContain(
+      "needs: [a11y, lighthouse, bundle-budget, docs-links, check, node22-compat, scope]",
     );
-    expect(check).toContain("if: always() && (needs.scope.outputs.docs_only != 'true'");
+    expect(ciOk).toContain("\n    if: ${{ !cancelled() }}\n");
+    expect(performanceGate).toContain(`if: ${performanceGateCondition}`);
+    expect(performanceGate).toContain(
+      'run: node ci/require-performance.mjs "${{ needs.lighthouse.result }}" "${{ needs.bundle-budget.result }}"',
+    );
+    expect(checkoutStep).toContain(`\n        if: ${performanceGateCondition}\n`);
+    expect(setupNodeStep).toContain(`\n        if: ${performanceGateCondition}\n`);
+    // check starts from scope alone and keeps the gate's selftests.
+    expect(check).toContain("needs: [scope]");
+    expect(check).toContain("run: node ci/require-performance.mjs --selftest");
     expect(check).toContain("run: npm run deps:audit:selftest");
     expect(check).toContain("run: npm run deps:audit");
   });

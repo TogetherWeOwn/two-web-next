@@ -8,6 +8,7 @@
 // resolve the route's generated `$app/tsconfig`. Bundle the real route with
 // esbuild instead, stubbing only its framework and database-binding imports.
 import { build } from "esbuild";
+import { PgDialect } from "drizzle-orm/pg-core";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { fileURLToPath } from "node:url";
 
@@ -76,16 +77,27 @@ const refused = () =>
 /** Drizzle builders are lazy thenables: one chain per select, queued results. */
 function rowsDb(eventRows, countRows = []) {
   let outstanding = [eventRows, countRows];
-  const chain = {};
-  for (const m of ["from", "where", "orderBy", "limit", "offset", "groupBy"]) {
-    chain[m] = () => chain;
-  }
-  chain.then = (resolve, reject) =>
-    Promise.resolve(outstanding.length > 1 ? outstanding.shift() : outstanding[0]).then(
-      resolve,
-      reject,
-    );
-  return { select: () => chain };
+  const queries = [];
+  return {
+    queries,
+    select: () => {
+      const query = {};
+      queries.push(query);
+      const chain = {};
+      for (const method of ["from", "where", "orderBy", "limit", "offset", "groupBy"]) {
+        chain[method] = (...args) => {
+          (query[method] ??= []).push(args);
+          return chain;
+        };
+      }
+      chain.then = (resolve, reject) =>
+        Promise.resolve(outstanding.length > 1 ? outstanding.shift() : outstanding[0]).then(
+          resolve,
+          reject,
+        );
+      return chain;
+    },
+  };
 }
 
 function throwingDb(err) {
@@ -186,18 +198,28 @@ describe("Kit admin events-list load: guard and failure wiring", () => {
     expect(data.rows).toEqual([]);
   });
 
-  it("slices the over-fetched page and pre-renders timestamps", async () => {
+  it("passes filters to a bounded, stably ordered reader and slices its lookahead", async () => {
     const events = Array.from({ length: 26 }, (_, i) => eventRow(i + 1));
-    vi.stubGlobal("__kitAdminEventsDb", rowsDb(events, [{ eventId: 1, n: "4" }]));
+    const db = rowsDb(events, [{ eventId: 1, n: "4" }]);
+    vi.stubGlobal("__kitAdminEventsDb", db);
     const data = await load(
       {
         parent,
-        url: new URL("https://next.example.test/admin/events?page=2"),
+        url: new URL(
+          "https://next.example.test/admin/events?q=Games&status=published&sort=title&order=asc&page=2",
+        ),
         setHeaders: vi.fn(),
       },
       {},
     );
-    expect(data.query.page).toBe(2);
+
+    expect(data.query).toMatchObject({
+      q: "Games",
+      status: "published",
+      sort: "title",
+      order: "asc",
+      page: 2,
+    });
     expect(data.rows).toHaveLength(25);
     expect(data.rows[0]).toMatchObject({
       eventKey: "EVT1",
@@ -206,5 +228,26 @@ describe("Kit admin events-list load: guard and failure wiring", () => {
     });
     expect(data.rows[0].goingCount).toBe(4);
     expect(data.hasNext).toBe(true);
+
+    const [eventsRead, goingRead] = db.queries;
+    const dialect = new PgDialect();
+    const predicate = dialect.sqlToQuery(eventsRead.where[0][0]);
+    expect(predicate.sql).toContain('"events"."title" ilike');
+    expect(predicate.sql).toContain('"events"."status" =');
+    expect(predicate.params).toEqual(["%Games%", "published"]);
+    const goingPredicate = dialect.sqlToQuery(goingRead.where[0][0]);
+    expect(goingPredicate.sql).toContain('"rsvps"."event_id" in');
+    expect(goingPredicate.sql).toContain('"rsvps"."status" =');
+    expect(goingPredicate.params).toEqual([
+      ...Array.from({ length: 26 }, (_, i) => i + 1),
+      "going",
+    ]);
+    const ordering = eventsRead.orderBy[0].map(
+      (expression) => dialect.sqlToQuery(expression.getSQL?.() ?? expression).sql,
+    );
+    expect(ordering[0]).toContain('"events"."title" asc');
+    expect(ordering[1]).toBe('"events"."id" asc');
+    expect(eventsRead.limit).toEqual([[26]]);
+    expect(eventsRead.offset).toEqual([[25]]);
   });
 });

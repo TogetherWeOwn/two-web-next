@@ -288,29 +288,51 @@ describe.skipIf(!raw)("Postgres Discord snapshots, independent request clients",
       const store = pgDiscordSnapshotStore(connect);
       const claim = await store.claim(key);
       await fixture.client`update discord_event_snapshots set lease_expires_at = clock_timestamp() + interval '250 milliseconds' where key = ${key}`;
-      let release!: () => void, entered!: () => void;
-      const gate = new Promise<void>((r) => {
-        release = r;
-      });
-      const locked = new Promise<void>((r) => {
-        entered = r;
-      });
-      const holder = fixture.client.begin(async (tx) => {
-        await tx`select key from discord_event_snapshots where key = ${key} for update`;
-        entered();
-        await gate; // This transaction never modifies the tuple.
-      });
-      await locked;
-      const pending = store.complete(
-        key,
-        claim.token!,
-        success ? { payload: "[]" } : { retryMs: 90_000 },
-      );
-      const settled = pending.then(
-        (result) => ({ result }),
-        (error: unknown) => ({ error }),
-      );
+      // Hold the row with a single autocommit statement: the subquery's
+      // FOR UPDATE lock is held for the statement's duration and freed by
+      // the server's implicit commit when pg_sleep returns. No client-sent
+      // COMMIT means no JS scheduling hop between expiry and release, so an
+      // event-loop stall cannot push the completion's lock wait past the
+      // store's 350ms lock_timeout (55P03) instead of exercising the fence.
+      const holderClient = connect();
       try {
+        const [backend] = await holderClient`select pg_backend_pid() as pid`;
+        const holderPid: number = backend!.pid;
+        // postgres.js template queries are lazy: .execute() dispatches the
+        // statement now and returns the promise awaited below.
+        const released =
+          holderClient`select /* discord_snapshot_fence_holder */ pg_sleep(greatest(0, extract(epoch from (s.lease_expires_at - clock_timestamp()))) + 0.025)
+          from (select lease_expires_at from discord_event_snapshots where key = ${key} for update) s`
+            .execute()
+            .then(
+              () => ({ released: true as const }),
+              (error: unknown) => ({ error }),
+            );
+        // Readiness waits for the holder's pg_sleep: it runs only after the
+        // subquery's FOR UPDATE has taken the tuple lock, so wait_event =
+        // 'PgSleep' proves the row is held. The sleep lasts ~250ms, so a 5ms
+        // poll cannot miss it; a stall past the sleep fails under any gate.
+        let holding = false;
+        for (let i = 0; i < 200 && !holding; i++) {
+          const [activity] = await fixture.client`select exists(
+            select 1 from pg_stat_activity
+            where pid = ${holderPid}
+              and state = 'active'
+              and wait_event = 'PgSleep'
+          ) as holding`;
+          holding = activity!.holding;
+          if (!holding) await new Promise((r) => setTimeout(r, 5));
+        }
+        expect(holding).toBe(true);
+        const pending = store.complete(
+          key,
+          claim.token!,
+          success ? { payload: "[]" } : { retryMs: 90_000 },
+        );
+        const settled = pending.then(
+          (result) => ({ result }),
+          (error: unknown) => ({ error }),
+        );
         let waiting = false;
         for (let i = 0; i < 30; i++) {
           const [state] = await fixture.client`select lease_expires_at > clock_timestamp() as live,
@@ -323,21 +345,22 @@ describe.skipIf(!raw)("Postgres Discord snapshots, independent request clients",
           }
           await new Promise((r) => setTimeout(r, 5));
         }
+        // Awaited on every path that reaches here; the wrapped promise never
+        // rejects, so a failing expect above cannot leave it unobserved.
+        const outcome = await released;
         expect(waiting).toBe(true);
-        await fixture.client`select pg_sleep(greatest(0, extract(epoch from (lease_expires_at - clock_timestamp()))) + 0.025)
-        from discord_event_snapshots where key = ${key}`;
+        if ("error" in outcome) throw outcome.error;
+        const completion = await settled;
+        if ("error" in completion) throw completion.error;
+        const [row] =
+          await fixture.client`select payload, succeeded_at, retry_at, lease_token from discord_event_snapshots where key = ${key}`;
+        expect(row!.payload).toBeNull();
+        expect(row!.succeeded_at).toBeNull();
+        expect(new Date(row!.retry_at).getTime()).toBe(0);
+        expect(row!.lease_token).toBe(claim.token);
       } finally {
-        release();
-        await holder;
+        await holderClient.end({ timeout: 0 });
       }
-      const completion = await settled;
-      if ("error" in completion) throw completion.error;
-      const [row] =
-        await fixture.client`select payload, succeeded_at, retry_at, lease_token from discord_event_snapshots where key = ${key}`;
-      expect(row!.payload).toBeNull();
-      expect(row!.succeeded_at).toBeNull();
-      expect(new Date(row!.retry_at).getTime()).toBe(0);
-      expect(row!.lease_token).toBe(claim.token);
     },
   );
   it("rechecks a formerly missing key before rejecting it at full capacity", async () => {

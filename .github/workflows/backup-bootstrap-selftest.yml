@@ -57,8 +57,9 @@ jobs:
           bash ci/path-scope.sh "$RUNNER_TEMP/pr-files.tsv" "$CHANGED_FILES" -- \
             "bin/backup-bootstrap.sh" \
             "ci/backup-bootstrap-selftest" \
-            ".github/workflows/neon-backup.yml" \
-            ".github/workflows/backup-bootstrap-selftest.yml" >> "$GITHUB_OUTPUT"
+            ".github/workflows/db-backup.yml" \
+            ".github/workflows/backup-bootstrap-selftest.yml" \
+            ".github/workflows/backup-restore-proof.yml" >> "$GITHUB_OUTPUT"
 
   bootstrap-selftest:
     needs: scope

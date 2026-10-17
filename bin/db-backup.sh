@@ -1,15 +1,17 @@
 #!/usr/bin/env bash
 #
-# Nightly Neon Postgres backup to R2 `two-web-next-backups` (EU jurisdiction),
+# Nightly Postgres backup to R2 `two-web-next-backups` (EU jurisdiction),
 # with the proof that the backup restores.
 #
-# The Cloudflare build (bot + web) shares one Neon Postgres (see
+# The Cloudflare build (bot + web) shares one PlanetScale Postgres (see
 # docs/db-migrations.md). A backup with no restore test is a rumour, so this
 # script takes the dump the same way every time (`pg_dump -Fc`) and can prove
 # the dump restores into a scratch database by comparing every table's row
 # count before and after.
 #
-# Backup target naming: neon/<branch>-<branch>-<UTC>.dump inside R2
+# Backup target naming: neon/<branch>-<branch>-<UTC>.dump inside R2 (the
+# `neon` R2 key prefix is retained deliberately so pre-rename manifests and
+# archives stay addressable; it names the key layout, not the live provider)
 # `two-web-next-backups` (EU-jurisdiction-pinned; jurisdiction immutable after
 # creation). Weeklies are `promote-weekly` copies named
 # <daily-without-.dump>-weekly-<UTC>.dump. Retention (rotate): newest 7 dailies + newest
@@ -30,36 +32,35 @@
 # printed: pg_dump reads the password from the PGPASSWORD env var only.
 #
 # Usage:
-#   ./bin/neon-backup.sh backup [branch]
+#   ./bin/db-backup.sh backup [branch]
 #     Dumps branch (default: staging) with pg_dump -Fc to a temp file, uploads
 #     it and a digest receipt to the branch prefix, verifies read-back bytes,
 #     then rewrites and re-downloads the manifest as the publication proof.
 #     Never leaves a partial file under the final name: the dump lands in a
 #     temp file first and is moved into place only on success.
 #
-#   ./bin/neon-backup.sh promote-weekly [branch]
+#   ./bin/db-backup.sh promote-weekly [branch]
 #     Verifies the newest daily's receipt, copies it to a weekly name with a
 #     new receipt, verifies read-back, then rewrites the paired manifest.
 #
-#   ./bin/neon-backup.sh rotate [branch] [--dry-run]
+#   ./bin/db-backup.sh rotate [branch] [--dry-run]
 #     Deletes dumps beyond newest-7-daily/newest-4-weekly via
 #     `wrangler r2 object delete --remote --force`, then rewrites the manifest.
 #     --dry-run prints keep:/delete: lines and deletes nothing.
 #
-#   ./bin/neon-backup.sh check [branch] [--require-verified]
+#   ./bin/db-backup.sh check [branch] [--require-verified]
 #     Re-downloads each archive and verifies its digest receipt. Legacy archives
 #     without a paired receipt are explicitly unverified; --require-verified
 #     also fails those. Missing new receipts always fail. See docs/backup-integrity.md.
 #
-# Connection: DATABASE_URL env only (e.g. NEON_STAGING_DATABASE_URL or
+# Connection: DATABASE_URL env only (e.g. PLANETSCALE_STAGING_DATABASE_URL or
 # PRODUCTION_BACKUP_DATABASE_URL exported as DATABASE_URL by the caller or the
 # CI workflow; production is the PlanetScale direct 5432 endpoint, never 6432).
 # There is no argv, file, or default-credential fallback: an unset
 # DATABASE_URL is a hard error, so a half-configured box can never silently
-# dump the wrong database. Tests run against agent-testdb / the Neon staging
-# branch only, never prod.
+# dump the wrong database. Tests run against agent-testdb only, never prod.
 #
-# Needs: pg_dump + psql (CI: postgres:17 image service / apt), wrangler with
+# Needs: pg_dump + psql (CI: postgres:18 image service / apt), wrangler with
 # CLOUDFLARE_API_TOKEN + CLOUDFLARE_ACCOUNT_ID.
 #
 # Env overrides (mirroring two-web pg-backup.sh):
@@ -98,7 +99,7 @@ for arg in "$@"; do
   case "$arg" in
     --dry-run) DRY_RUN=1 ;;
     --require-verified) [ "$CMD" = check ] || usage; REQUIRE_VERIFIED=1 ;;
-    -*) echo "neon-backup: unknown flag '$arg'" >&2; usage ;;
+    -*) echo "db-backup: unknown flag '$arg'" >&2; usage ;;
     *) BRANCH="$arg" ;;
   esac
 done
@@ -109,7 +110,7 @@ done
 # Reject it here, before any connection, pg_dump, wrangler, temp-dir or
 # manifest work can happen.
 if [ "$DRY_RUN" = 1 ] && [ "$CMD" != "rotate" ]; then
-  echo "neon-backup: --dry-run is only supported for 'rotate'" >&2
+  echo "db-backup: --dry-run is only supported for 'rotate'" >&2
   usage
 fi
 
@@ -117,7 +118,7 @@ fi
 # a dump must never guess which database it is reading.
 require_database_url() {
   if [ -z "${DATABASE_URL:-}" ]; then
-    echo "neon-backup: refusing: DATABASE_URL is unset. Export it (e.g. from NEON_STAGING_DATABASE_URL) before running." >&2
+    echo "db-backup: refusing: DATABASE_URL is unset. Export it (e.g. from PLANETSCALE_STAGING_DATABASE_URL) before running." >&2
     exit 1
   fi
 }
@@ -125,13 +126,13 @@ require_database_url() {
 # pg_dump must never see a password on argv: split DATABASE_URL into
 # PGHOST/PGPORT/PGUSER/PGPASSWORD/PGDATABASE via python (present everywhere
 # this script runs: CI image, operator boxes) and exec pg_dump with PG* env.
-# The password may be empty (agent-testdb trust auth, Neon passwords): only
+# The password may be empty (agent-testdb trust auth): only
 # unset DATABASE_URL refuses. An empty PGPASSWORD is exported so libpq never
 # falls back to prompting.
 dump_to_file() {
   local out="$1"
   require_database_url
-  command -v pg_dump >/dev/null || { echo "neon-backup: pg_dump not found" >&2; exit 1; }
+  command -v pg_dump >/dev/null || { echo "db-backup: pg_dump not found" >&2; exit 1; }
   # No eval or parent-shell credential exports. The helper validates before
   # exec and isolates libpq from ambient PG* target/service/password settings.
   # Exit here on failure while do_backup's local temp-file trap is still in scope.
@@ -141,7 +142,7 @@ dump_to_file() {
 prefix() { printf '%s/%s-%s' "$BACKUP_PREFIX" "$BRANCH" "$BRANCH"; }
 manifest_key() { printf '%s/%s-%s/MANIFEST.txt' "$BACKUP_PREFIX" "$BRANCH" "$BRANCH"; }
 
-# WRANGLER_BIN overrides the wrangler invocation (ci/neon-backup-selftest.sh
+# WRANGLER_BIN overrides the wrangler invocation (ci/db-backup-selftest.sh
 # points it at a stub; production uses the real CLI). Never a token: auth is
 # ambient (CLOUDFLARE_API_TOKEN + CLOUDFLARE_ACCOUNT_ID env).
 wr() {
@@ -177,7 +178,7 @@ fetch_manifest() {
     # GET may create partial output; discard it instead of admitting its bytes.
     : > "$out"
   else
-    echo "neon-backup: manifest read failed; refusing remote mutation" >&2
+    echo "db-backup: manifest read failed; refusing remote mutation" >&2
     exit 1
   fi
 }
@@ -197,7 +198,7 @@ upload_verified() {
   integrity verify "$dir/read-back.dump" "$key" "$dir/receipt.json"
   wr r2 object put "$BACKUP_BUCKET/$receipt" --file "$dir/receipt.json" --remote --force --jurisdiction "$BACKUP_JURISDICTION" >/dev/null
   wr r2 object get "$BACKUP_BUCKET/$receipt" --file "$dir/read-back.json" --remote --jurisdiction "$BACKUP_JURISDICTION" >/dev/null
-  cmp -s "$dir/receipt.json" "$dir/read-back.json" || { echo "neon-backup: receipt read-back failed: $key" >&2; exit 1; }
+  cmp -s "$dir/receipt.json" "$dir/read-back.json" || { echo "db-backup: receipt read-back failed: $key" >&2; exit 1; }
 }
 
 do_backup() {
@@ -212,7 +213,7 @@ do_backup() {
   # new archive + receipt keys before any remote mutation (archive upload,
   # receipt upload, manifest rewrite).
   dump_to_file "$dir/local.dump"
-  [ -s "$dir/local.dump" ] || { echo "neon-backup: refusing to upload an empty dump" >&2; exit 1; }
+  [ -s "$dir/local.dump" ] || { echo "db-backup: refusing to upload an empty dump" >&2; exit 1; }
   fetch_manifest "$dir/MANIFEST.txt" 1
   admit_manifest append "$dir/MANIFEST.txt" "$key" "$(receipt_key "$key")"
   upload_verified "$key" "$dir/local.dump" "$dir"
@@ -220,7 +221,7 @@ do_backup() {
   write_manifest "$dir/MANIFEST.txt"
   fetch_manifest "$dir/PROOF.txt"
   for published in "$key" "$(receipt_key "$key")"; do
-    grep -qxF "$published" "$dir/PROOF.txt" || { echo "neon-backup: upload proof failed: $published missing from re-downloaded manifest" >&2; exit 1; }
+    grep -qxF "$published" "$dir/PROOF.txt" || { echo "db-backup: upload proof failed: $published missing from re-downloaded manifest" >&2; exit 1; }
   done
   rm -rf "$dir"
   trap - EXIT
@@ -238,13 +239,13 @@ do_promote_weekly() {
   trap '[ -n "${dir:-}" ] && rm -rf "$dir"' EXIT
   fetch_manifest "$dir/MANIFEST.txt"
   src="$(newest_daily "$dir/MANIFEST.txt")"
-  [ -n "$src" ] || { echo "neon-backup: no daily to promote under branch '$BRANCH'" >&2; exit 1; }
+  [ -n "$src" ] || { echo "db-backup: no daily to promote under branch '$BRANCH'" >&2; exit 1; }
   ts="$(date -u +%Y%m%dT%H%M%SZ)"
   weekly="${src%.dump}-weekly-${ts}.dump"
   admit_manifest append "$dir/MANIFEST.txt" "$weekly" "$(receipt_key "$weekly")"
   wr r2 object get "$BACKUP_BUCKET/$src" --file "$dir/dl.dump" --remote --jurisdiction "$BACKUP_JURISDICTION" >/dev/null
   if ! wr r2 object get "$BACKUP_BUCKET/$(receipt_key "$src")" --file "$dir/source.json" --remote --jurisdiction "$BACKUP_JURISDICTION" >/dev/null 2>&1; then
-    echo "neon-backup: unverified: $src (receipt unavailable); refusing promotion" >&2
+    echo "db-backup: unverified: $src (receipt unavailable); refusing promotion" >&2
     exit 1
   fi
   integrity verify "$dir/dl.dump" "$src" "$dir/source.json"
@@ -261,11 +262,11 @@ delete_archive_pair() {
   local key="$1" manifest="$2" receipt
   receipt="$(receipt_key "$key")"
   if ! wr r2 object delete "$BACKUP_BUCKET/$key" --remote --force --jurisdiction "$BACKUP_JURISDICTION" >/dev/null; then
-    echo "neon-backup: delete failed: $key" >&2
+    echo "db-backup: delete failed: $key" >&2
     exit 1
   fi
   if grep -qxF "$receipt" "$manifest"; then
-    wr r2 object delete "$BACKUP_BUCKET/$receipt" --remote --force --jurisdiction "$BACKUP_JURISDICTION" >/dev/null || { echo "neon-backup: delete failed: $receipt" >&2; exit 1; }
+    wr r2 object delete "$BACKUP_BUCKET/$receipt" --remote --force --jurisdiction "$BACKUP_JURISDICTION" >/dev/null || { echo "db-backup: delete failed: $receipt" >&2; exit 1; }
   fi
   echo "delete: $key"
 }
@@ -346,7 +347,7 @@ do_check() {
   done < "$dir/MANIFEST.txt"
   rm -rf "$dir"
   trap - EXIT
-  [ "$failed" = 0 ] || { echo "neon-backup: check failed" >&2; exit 1; }
+  [ "$failed" = 0 ] || { echo "db-backup: check failed" >&2; exit 1; }
   if [ "$unverified" = 0 ]; then
     echo "check: all manifest archives byte-verified"
   else
