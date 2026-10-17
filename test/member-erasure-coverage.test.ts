@@ -49,8 +49,8 @@ const isMemberKeyed = (table: string, column: string): boolean =>
 /** Retained (not erased) member-keyed columns, each named in
  * docs/member-erasure.md with its retention reason. */
 const RETAINED = new Map<string, string>([
-  ["events.created_by", "moderator authorship, not member data"],
-  ["featured_contents.created_by", "moderator authorship, not member data"],
+  ["events.created_by", "identifying authorship mark, retained with the content row"],
+  ["featured_contents.created_by", "identifying authorship mark, retained with the content row"],
   ["member_data_access_logs.viewer_discord_id", "append-only access evidence, 90-day prune"],
   ["member_data_access_logs.viewer_user_id", "append-only access evidence, 90-day prune"],
   ["member_data_access_logs.subject_user_ids", "append-only access evidence, 90-day prune"],

@@ -59,9 +59,13 @@ A second apply is a no-op: every count returns 0.
 
 ## What is retained and why
 
-- `events.created_by` / `featured_contents.created_by` stay in place. They
-  record authorship of moderator content, not member data; removing them
-  would rewrite community history without removing anything about the member.
+- `events.created_by` / `featured_contents.created_by` stay in place. Each
+  holds the author's Discord ID, which is identifying data, retained as the
+  authorship mark on moderator content; removing it would rewrite community
+  history. The mark is not rewritten per erasure request and has no separate
+  TTL: it lasts as long as its content row does (deleting a featured row
+  takes its mark with it; this command never deletes event rows). This
+  affects only authors with a populated field, not every erased member.
 - `member_data_access_logs` is immutable with a 90-day prune
   (`drizzle/1018_audit-immutability.sql`, W13 `model:prune`). Past access
   records are compliance evidence and cannot be rewritten per request.
@@ -79,15 +83,23 @@ A second apply is a no-op: every count returns 0.
 `web_throttle_hits.bucket` embeds a Discord id in two write budgets:
 `rsvp-write:<discord id>` (`src/events/rsvp.ts`) and
 `profile-write:<discord id>` (`src/profiles/routes-admission.ts`). These rows are not
-deleted by `eraseMember`: the rsvp path prunes counters older than five
-minutes before judging the budget (`pruneThrottle` in `src/events/rsvp.ts`);
-the join admission path (`checkJoinThrottle` in `src/join/service.ts`, shared
-by the profile path) judges and records first, then prunes expired rows for
-admitted requests. Both prunes are bounded by
-`THROTTLE_COUNTER_RETENTION_MINUTES = 5`, so a member's buckets age out on the
-next counted request anywhere on the site. `test/member-erasure-coverage.test.ts`
+deleted by `eraseMember`. Five minutes is an age cutoff, not a physical
+deletion deadline: an expired row survives until a later cleanup deletes it,
+so a quiet site can hold expired rows past the five-minute mark — there is no
+exact-five-minute deletion guarantee. Cleanup is lazy and path-dependent: the
+rsvp path prunes expired rows before judging the budget (`pruneThrottle` in
+`src/events/rsvp.ts`), so a request refused on budget or a closed event has
+already run the shared prune (an unknown-event id exits before the prune);
+the join admission path (`checkJoinThrottle`
+in `src/join/service.ts`, shared by the profile path) judges and records
+first, then prunes expired rows only for admitted requests — a refused join
+or profile write triggers no cleanup there. Both prunes are bounded by
+`THROTTLE_COUNTER_RETENTION_MINUTES = 5`. `test/member-erasure-coverage.test.ts`
 pins this: it fails on any new member-keyed column or `*-write:${...}` bucket
 that is neither erased above nor documented here with its own deletion proof.
+`test/privacy-deletion-exceptions.test.ts` pins the public Deletion wording:
+creator marks and residual Discord-keyed counters are named without promising
+immediate erasure of either.
 
 ## Scope
 
