@@ -8,10 +8,14 @@ import { describe, expect, it } from "vitest";
 
 // Tie the hermetic action mirror to the immutable production ref. A pin change
 // needs verified upstream hashes so local tests cannot cover stale code.
-const gradualPromoteHashesByRef: Record<string, { helper: string; manifest: string }> = {
-  "1dcce452d9066c02e4ab3d99931edf75d50388d7": {
-    helper: "435bbaddd824c6f6308dcf49a0036d746392b58b2df9468fd09c7a30f95756b6",
-    manifest: "f36dd63fa0651667768975268378538ac744e39811932970017ac66abed539b6",
+const gradualPromoteHashesByRef: Record<
+  string,
+  { helper: string; manifest: string; gate: string }
+> = {
+  daaff9bce84823965c627b8a2bf468ad334e7eb1: {
+    helper: "ef9a51f51ac0dd8945ed1c59a70f0d272629411ba73ca26b092a94f5015bf400",
+    manifest: "8ff02aadd237c00abcd64b9692ef7b0c7b7858861ae1fe4902a221aead88c68c",
+    gate: "69c377e6bf1b2c602e6ce4d7c5a973d139dbd914396d5bdb0c9781580dd3efb9",
   },
 };
 
@@ -463,7 +467,7 @@ describe("production deploy smoke (offline)", () => {
   it("probes the apex origin with the indexable posture, never staging", () => {
     const workflow = readFileSync(".github/workflows/deploy-production.yml", "utf8");
     expect(workflow).toContain(
-      "uses: TogetherWeOwn/.github/actions/gradual-promote@1dcce452d9066c02e4ab3d99931edf75d50388d7",
+      "uses: TogetherWeOwn/.github/actions/gradual-promote@daaff9bce84823965c627b8a2bf468ad334e7eb1",
     );
     const centralActionRef = workflow.match(
       /uses: TogetherWeOwn\/\.github\/actions\/gradual-promote@([0-9a-f]{40})/,
@@ -474,6 +478,10 @@ describe("production deploy smoke (offline)", () => {
       .update(readFileSync(".github/actions/gradual-promote/gradual-promote.mjs"))
       .digest("hex");
     expect(helperSha256).toBe(expectedHashes?.helper);
+    const gateSha256 = createHash("sha256")
+      .update(readFileSync(".github/actions/gradual-promote/error-rate-gate.mjs"))
+      .digest("hex");
+    expect(gateSha256).toBe(expectedHashes?.gate);
     const action = readFileSync(".github/actions/gradual-promote/action.yml", "utf8");
     expect(actionManifestSha256(action)).toBe(expectedHashes?.manifest);
     expect(workflow).toContain("domain: togetherweown.com");
