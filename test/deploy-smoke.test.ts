@@ -12,10 +12,10 @@ const gradualPromoteHashesByRef: Record<
   string,
   { helper: string; manifest: string; gate: string }
 > = {
-  daaff9bce84823965c627b8a2bf468ad334e7eb1: {
-    helper: "ef9a51f51ac0dd8945ed1c59a70f0d272629411ba73ca26b092a94f5015bf400",
-    manifest: "8ff02aadd237c00abcd64b9692ef7b0c7b7858861ae1fe4902a221aead88c68c",
-    gate: "69c377e6bf1b2c602e6ce4d7c5a973d139dbd914396d5bdb0c9781580dd3efb9",
+  "89c290be20c0044efaf6916f28341c76e75fff06": {
+    helper: "8f87a83d79cc24dacdb5a7247eb1ad67afa0dde71ce3d210980927fe681a320a",
+    manifest: "3ec491a337a484c5cdcb25695c6d0d9c48576a76a13c94453bd5ff98aa59b13a",
+    gate: "973d48bd7a0ee0c130a4842e4bd2441451791d1483abdef37fcd7a0895766914",
   },
 };
 
@@ -128,6 +128,14 @@ function productionSmoke(succeedOnAttempt: number) {
 import { appendFileSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 const attempts = join(process.env.RUNNER_TEMP, "attempts");
+// On success the smoke block stamps its finish time with \`node -e ...\` for
+// the error-rate gate's window start. Run that snippet like real node (a
+// broken stamp throws here and fails the step) without counting it as a
+// checker attempt.
+if (process.argv[2] === "-e") {
+  (0, eval)(process.argv[3]);
+  process.exit(0);
+}
 appendFileSync(attempts, "x");
 // The shell must hand the checker a value the REAL checker accepts. The
 // fake validates the received override with the real assertVersionOverride
@@ -159,6 +167,7 @@ process.exit(pass ? 0 : 1);
     );
     writeFileSync(join(scratch, "sleeps"), "");
     writeFileSync(join(scratch, "attempts"), "");
+    writeFileSync(join(scratch, "github-output"), "");
     const bash = spawnSync("bash", ["-c", "command -v bash"], { encoding: "utf8" });
     expect(bash.status).toBe(0);
     // Only our fakes are on PATH: no real network request or retry delay.
@@ -167,6 +176,8 @@ process.exit(pass ? 0 : 1);
       timeout: 5000,
       env: {
         ...process.env,
+        // The block appends its finished-at step output here on success.
+        GITHUB_OUTPUT: join(scratch, "github-output"),
         // This container exports BASH_ENV pointing at a profile that
         // reassigns PATH, which would drop the fakes below and send real
         // network requests plus real 10s sleeps. Neutralize both profile
@@ -190,6 +201,7 @@ process.exit(pass ? 0 : 1);
       output: result.stdout + result.stderr,
       attempts: readFileSync(join(scratch, "attempts"), "utf8").length,
       sleeps: readFileSync(join(scratch, "sleeps"), "utf8").length,
+      stepOutput: readFileSync(join(scratch, "github-output"), "utf8"),
     };
   } finally {
     rmSync(scratch, { recursive: true, force: true });
@@ -450,6 +462,12 @@ describe("production deploy smoke (offline)", () => {
     expect(result.output).toContain(`stage 5 percent smoke ok (attempt ${attempt})`);
     expect(result.output).not.toContain("unexpected checker invocation");
     expect(result.output).not.toContain("::error::");
+    // The error-rate gate's window starts at this stamp, so a successful
+    // smoke must emit a parseable finished-at step output.
+    expect(result.stepOutput).toMatch(/^finished-at=\d{4}-\d{2}-\d{2}T[\d:.]+Z\n$/);
+    expect(Number.isNaN(Date.parse(result.stepOutput.trim().slice("finished-at=".length)))).toBe(
+      false,
+    );
   });
 
   it("fails closed after six failed checker runs without a final sleep", () => {
@@ -462,12 +480,13 @@ describe("production deploy smoke (offline)", () => {
       "::error::stage 5 percent health/SLO gate failed after smoke retries",
     );
     expect(result.output).not.toContain("unexpected checker invocation");
+    expect(result.stepOutput).toBe("");
   });
 
   it("probes the apex origin with the indexable posture, never staging", () => {
     const workflow = readFileSync(".github/workflows/deploy-production.yml", "utf8");
     expect(workflow).toContain(
-      "uses: TogetherWeOwn/.github/actions/gradual-promote@daaff9bce84823965c627b8a2bf468ad334e7eb1",
+      "uses: TogetherWeOwn/.github/actions/gradual-promote@89c290be20c0044efaf6916f28341c76e75fff06",
     );
     const centralActionRef = workflow.match(
       /uses: TogetherWeOwn\/\.github\/actions\/gradual-promote@([0-9a-f]{40})/,

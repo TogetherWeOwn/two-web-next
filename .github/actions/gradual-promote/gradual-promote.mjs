@@ -159,6 +159,59 @@ export function assertErrorRateIdentifiers({ accountId, scriptName, versionId })
   assertRollbackVersionId(versionId);
 }
 
+const WINDOW_START_PATTERN =
+  /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/;
+
+// Strict on purpose: Date.parse alone reads a timezone-less timestamp in
+// the runner's local timezone (judging the wrong interval) and rolls
+// impossible calendar dates over (Feb 31 becomes Mar 3).
+export function parseWindowStartIso(windowStartIso) {
+  const match =
+    typeof windowStartIso === "string" ? WINDOW_START_PATTERN.exec(windowStartIso) : null;
+  if (!match) {
+    throw new Error("error-rate window start must be an ISO timestamp with a timezone");
+  }
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const leap = year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
+  const daysInMonth = [31, leap ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+  if (
+    month < 1 ||
+    month > 12 ||
+    day < 1 ||
+    day > daysInMonth[month - 1] ||
+    Number(match[4]) > 23 ||
+    Number(match[5]) > 59 ||
+    Number(match[6]) > 59
+  ) {
+    throw new Error("error-rate window start must be a valid calendar date and time");
+  }
+  const start = Date.parse(windowStartIso);
+  if (!Number.isFinite(start)) {
+    throw new Error("error-rate window start must be an ISO timestamp with a timezone");
+  }
+  return start;
+}
+
+// The judged window starts when the stage's smoke gate finished
+// (windowStartIso, recorded by the action), so that stage's own probes —
+// version-pinned Worker invocations — never satisfy the minimum sample
+// or dilute the rate. The lookback caps how far the window can stretch
+// across the soak and retries. Without a recorded start (direct CLI
+// use) the window is the trailing lookback.
+export function errorRateWindowSince({ windowStartIso, until, windowMinutes }) {
+  if (!(until instanceof Date) || !Number.isFinite(until.getTime())) {
+    throw new Error("error-rate window end must be a valid Date");
+  }
+  if (!Number.isSafeInteger(windowMinutes) || windowMinutes < 1) {
+    throw new Error("windowMinutes must be a positive integer");
+  }
+  const floor = until.getTime() - windowMinutes * 60_000;
+  if (windowStartIso === undefined || windowStartIso === "") return new Date(floor);
+  return new Date(Math.max(parseWindowStartIso(windowStartIso), floor));
+}
+
 export function buildErrorRateQuery({ accountId, scriptName, versionId, sinceIso, untilIso }) {
   assertErrorRateIdentifiers({ accountId, scriptName, versionId });
   const since = Date.parse(sinceIso ?? "");
@@ -224,10 +277,11 @@ export function parseErrorRateResponse(payload, versionId) {
   return { requests, errors };
 }
 
-// A stage is judged only once the new version served `minRequests` live
-// invocations in the window; below that the verdict is "insufficient"
-// (the gate retries while analytics aggregates catch up). At or above the
-// threshold boundary the version passes; strictly above it, it fails.
+// A stage is judged only once the new version served `minRequests`
+// invocations in the post-smoke window; below that the verdict is
+// "insufficient" (the gate retries while analytics aggregates catch
+// up). At or below the threshold the version passes; strictly above
+// it, it fails.
 export function evaluateErrorRate({ requests, errors, threshold, minRequests }) {
   if (typeof threshold !== "number" || !(threshold >= 0 && threshold <= 1)) {
     throw new Error("threshold must be a number between 0 and 1");

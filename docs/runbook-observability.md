@@ -121,10 +121,12 @@ probe, or change production state as part of diagnosis.
   per-stage health/SLO gates and automatic rollback on a failed gate. Each
   stage also judges a live error-rate signal: after a soak, the gate queries
   Cloudflare GraphQL Analytics (`workersInvocationsAdaptive`, filtered to the
-  promoted `scriptVersion`) over a trailing window and fails the stage — into
-  the same automatic rollback — when the new version's invocation error rate
-  exceeds the configured threshold (defaults: rate 0.05, at least 20 live
-  invocations, 10-minute window). Invocation errors are unhandled exceptions,
+  promoted `scriptVersion`) over the window since that stage's smoke gate
+  finished — so the smoke probes themselves never count toward the sample or
+  the rate — and fails the stage — into the same automatic rollback — when
+  the new version's invocation error rate exceeds the configured threshold
+  (defaults: rate 0.05, at least 20 post-smoke invocations, window capped at
+  a 10-minute lookback). Invocation errors are unhandled exceptions,
   exceeded resources and internal errors; a handled HTTP 500 response does not
   count, so this complements rather than replaces the smoke gate. Below the
   minimum sample the gate retries while analytics aggregates catch up, then

@@ -19,6 +19,7 @@ import {
   GRADUAL_STEPS,
   assertVersionTag,
   buildErrorRateQuery,
+  errorRateWindowSince,
   evaluateErrorRate,
   latestDeployment,
   parseErrorRateResponse,
@@ -251,6 +252,57 @@ test("error-rate query filters invocations to the promoted version in a window",
   });
 });
 
+test("error-rate window starts at the smoke finish, capped by the lookback", () => {
+  const until = new Date(UNTIL);
+  // The stage's smoke probes ran before the recorded start, so they sit
+  // outside the judged window: they neither satisfy the minimum sample
+  // nor dilute the rate.
+  assert.equal(
+    errorRateWindowSince({
+      windowStartIso: "2026-10-17T00:08:00.000Z",
+      until,
+      windowMinutes: 10,
+    }).toISOString(),
+    "2026-10-17T00:08:00.000Z",
+  );
+  // A long soak/retry ladder never stretches the window past the lookback.
+  assert.equal(
+    errorRateWindowSince({
+      windowStartIso: SINCE,
+      until: new Date("2026-10-17T00:25:00.000Z"),
+      windowMinutes: 10,
+    }).toISOString(),
+    "2026-10-17T00:15:00.000Z",
+  );
+  // No recorded start (direct CLI use): the trailing window, as before.
+  assert.equal(errorRateWindowSince({ until, windowMinutes: 10 }).toISOString(), SINCE);
+  assert.throws(
+    () => errorRateWindowSince({ windowStartIso: "soon", until, windowMinutes: 10 }),
+    /window start/,
+  );
+  // No timezone: Date.parse would read it in the runner's local timezone,
+  // judging the wrong interval.
+  assert.throws(
+    () => errorRateWindowSince({ windowStartIso: "2026-10-17T00:08:00", until, windowMinutes: 10 }),
+    /window start/,
+  );
+  // Not a calendar date: Date.parse rolls Feb 31 into March.
+  assert.throws(
+    () =>
+      errorRateWindowSince({ windowStartIso: "2026-02-31T00:08:00Z", until, windowMinutes: 10 }),
+    /window start/,
+  );
+  // An explicit offset is fine and names the same instant as its Z form.
+  assert.equal(
+    errorRateWindowSince({
+      windowStartIso: "2026-10-17T02:08:00+02:00",
+      until,
+      windowMinutes: 10,
+    }).toISOString(),
+    "2026-10-17T00:08:00.000Z",
+  );
+});
+
 test("error-rate query refuses untrusted identifiers and inverted windows", () => {
   const base = {
     accountId: ACCOUNT,
@@ -365,6 +417,32 @@ test("live gate halts on an elevated error rate and passes a healthy version", a
   assert.equal(passed.verdict, "pass");
 });
 
+test("live gate judges only post-smoke invocations when a window start is given", async () => {
+  const seen = [];
+  const depsFor = (sum) => ({
+    now: () => new Date(UNTIL),
+    sleep: async () => {},
+    fetchJson: async (body) => {
+      seen.push(body.variables);
+      return envelope(sum);
+    },
+    log: () => {},
+  });
+  const config = gateConfig({ attempts: 1, windowStartIso: "2026-10-17T00:08:00.000Z" });
+  // 10 post-smoke requests with 2 errors is a 20% live rate, but the sample
+  // is below the floor: the verdict must be the warned "insufficient", never
+  // a judged pass padded by the smoke probes that ran before the start.
+  const warned = await runErrorRateGate(config, depsFor({ requests: 10, errors: 2 }));
+  assert.equal(seen[0].since, "2026-10-17T00:08:00.000Z");
+  assert.equal(warned.verdict, "insufficient");
+  assert.equal(warned.code, 0);
+  // Once post-smoke traffic alone clears the floor, its rate decides: 4/25
+  // is 16%, over the 5% threshold, so the stage halts.
+  const halted = await runErrorRateGate(config, depsFor({ requests: 25, errors: 4 }));
+  assert.equal(halted.verdict, "fail");
+  assert.equal(halted.code, 1);
+});
+
 test("live gate retries an insufficient sample, then warns instead of blocking", async () => {
   const warming = gateDeps([
     envelope({ requests: 2, errors: 0 }),
@@ -443,6 +521,23 @@ test("gate config rejects static misconfiguration before any soak", () => {
     NEW_VERSION: NEXT,
   };
   assert.equal(configFromEnv(base).threshold, 0.05);
+  assert.equal(
+    configFromEnv({ ...base, ERROR_RATE_WINDOW_START: "2026-10-17T00:08:00Z" }).windowStartIso,
+    "2026-10-17T00:08:00Z",
+  );
+  assert.equal(configFromEnv({ ...base, ERROR_RATE_WINDOW_START: "" }).windowStartIso, undefined);
+  assert.throws(
+    () => configFromEnv({ ...base, ERROR_RATE_WINDOW_START: "soon" }),
+    /ERROR_RATE_WINDOW_START/,
+  );
+  assert.throws(
+    () => configFromEnv({ ...base, ERROR_RATE_WINDOW_START: "2026-10-17T00:08:00" }),
+    /ERROR_RATE_WINDOW_START/,
+  );
+  assert.throws(
+    () => configFromEnv({ ...base, ERROR_RATE_WINDOW_START: "2026-02-31T00:08:00Z" }),
+    /ERROR_RATE_WINDOW_START/,
+  );
   assert.throws(
     () => configFromEnv({ ...base, ERROR_RATE_THRESHOLD: "5" }),
     /ERROR_RATE_THRESHOLD/,
