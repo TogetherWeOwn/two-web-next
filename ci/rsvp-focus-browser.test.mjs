@@ -154,6 +154,39 @@ describe("RSVP outcome focus in Chromium", {
     assert.equal(await member.focused(), "rsvp-confirmed");
   });
 
+  for (const [status, body, noticeTestid] of [
+    [500, "", "rsvp-failed"],
+    [429, "", "rsvp-rate-limited"],
+    [403, JSON.stringify({ error: "forbidden" }), "rsvp-failed"],
+  ]) {
+    it(`restores focus to the re-enabled control after a refused ${status} write`, async (t) => {
+      const member = await openMember();
+      t.after(() => member.context.close());
+      const { page } = member;
+      await page.getByTestId("rsvp-going").focus();
+      await page.keyboard.press("Enter");
+      const route = await member.pending();
+      await route.fulfill({ status, contentType: "application/json", body });
+      await page.getByTestId(noticeTestid).waitFor();
+      assert.equal(await page.getByTestId("rsvp-going").isEnabled(), true);
+      assert.equal(await member.focused(), "rsvp-going");
+    });
+  }
+
+  it("does not steal focus back after a refused write when the member tabbed away", async (t) => {
+    const member = await openMember();
+    t.after(() => member.context.close());
+    const { page } = member;
+    await page.getByTestId("rsvp-going").focus();
+    await page.keyboard.press("Enter");
+    const route = await member.pending();
+    await page.keyboard.press("Tab");
+    assert.equal(await member.focused(), "outside");
+    await route.fulfill({ status: 500, contentType: "application/json", body: "" });
+    await page.getByTestId("rsvp-failed").waitFor();
+    assert.equal(await member.focused(), "outside");
+  });
+
   it("keeps focus off the confirmation after a pointer press outside the widget", async (t) => {
     const member = await openMember();
     t.after(() => member.context.close());

@@ -12,7 +12,8 @@
 // for the going-count badge — the button re-reads nothing itself.
 // Throttle (429) shows the CM-frozen wait copy (board-7976) in `role="status"`
 // with the button left enabled; refused writes show the failure alert with
-// retry enabled and focus untouched. Response-less transport requires SSR
+// retry enabled and focus restored to that control (disabling it in flight
+// drops focus to BODY). Response-less transport requires SSR
 // recovery with mutations disabled; 401/419/302-to-login shows
 // the session-expired notice with the SSR login link (`?next=` return path,
 // never the update endpoint, board-8135, board-9254) — never the native confirm
@@ -187,9 +188,10 @@
       el.appendChild(a);
     }
     controls.appendChild(el);
-    // Focus is opt-in (board-6956): failure/throttle keep focus put (null
-    // target) — the alert announces without stealing focus. Only the
-    // session-expired notice moves focus to the login path.
+    // Focus is opt-in (board-6956): failure/throttle notices never take
+    // focus themselves — the alert announces, and the caller restores focus
+    // to the re-enabled control. Only the session-expired notice moves
+    // focus to the login path.
     if (shouldFocus === true && el.focus) el.focus();
     return el;
   }
@@ -211,6 +213,15 @@
         button.removeAttribute("data-label");
       }
     }
+  }
+
+  // A refused write keeps the same control, but setBusy disabled it while it
+  // held focus and the browser dropped focus to BODY at that moment. Put
+  // focus back on the re-enabled control — only while this activation still
+  // owns outcome focus, so a member who moved on mid-write is left alone.
+  function restoreFocus(button) {
+    if (!focusOwned || !button || button.disabled || !root.contains(button)) return;
+    if (button.focus) button.focus();
   }
 
   function focusTestid(testids) {
@@ -493,6 +504,15 @@
     // Neither a withdrawal nor a refresh may reopen a paused event.
     if (root.getAttribute("data-paused") === "true") {
       if (conf && conf.parentNode) conf.parentNode.removeChild(conf);
+      // No control may reopen a paused event, so the paused status is the
+      // only deliberate landing spot: make it programmatically focusable at
+      // settle time (SSR keeps it out of the tab order on browse) and move
+      // focus there when this write still owns it, never leaving BODY.
+      var paused = root.querySelector('[data-testid="' + TESTID.paused + '"]');
+      if (paused) {
+        if (!paused.getAttribute("tabindex")) paused.setAttribute("tabindex", "-1");
+        focusTestid([TESTID.paused]);
+      }
       return;
     }
     var full = root.getAttribute("data-full") === "true";
@@ -667,6 +687,7 @@
               false,
               false,
             );
+            restoreFocus(button);
             return;
           }
           if (res.status === 403) {
@@ -695,6 +716,7 @@
                         false,
                         false,
                       );
+                      restoreFocus(button);
                     } else {
                       reloadClosed();
                     }
@@ -769,9 +791,10 @@
           }
           controller.refused = res.status >= 400 && res.status < 500;
           setBusy(false, button);
-          // Failure keeps the control enabled and focus stays put (null focus
-          // target, board-6956): the alert announces without stealing focus.
+          // Failure keeps the control enabled; the alert announces without
+          // taking focus, and focus returns to the control it started on.
           notice(TESTID.failed, "alert", COPY.failedTitle + " " + COPY.failedAction, false, false);
+          restoreFocus(button);
         },
         function () {
           if (controller && inflight !== controller) return;

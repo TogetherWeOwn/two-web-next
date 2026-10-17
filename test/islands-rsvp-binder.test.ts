@@ -998,7 +998,7 @@ describe("RsvpButton shipped binder", () => {
     expect(b.get("waitlist-position")).toBeNull();
   });
 
-  it("a paused holder leave keeps the polite paused status, raises no alert and moves no focus", async () => {
+  it("a paused holder leave keeps the polite paused status, raises no alert and lands focus on it", async () => {
     const b = browser("waitlisted", undefined, false, { rsvpOpen: false });
     expect(b.get("rsvp-paused")?.getAttribute("role")).toBe("status");
     b.get("waitlist-leave")!.click();
@@ -1010,7 +1010,25 @@ describe("RsvpButton shipped binder", () => {
     expect(b.root.querySelectorAll('[role="alert"]')).toHaveLength(0);
     expect(b.get("rsvp-failed")).toBeNull();
     expect(b.get("rsvp-unknown")).toBeNull();
+    // The leave control is gone and no join control may reopen a paused
+    // event, so the paused status is the deliberate in-widget focus landing.
+    expect(b.get("rsvp-paused")?.getAttribute("tabindex")).toBe("-1");
+    expect(b.get("rsvp-paused")?.focused).toBe(true);
+  });
+
+  it("a paused going holder withdraw lands focus on the paused status, never BODY", async () => {
+    const b = browser("going", undefined, false, { rsvpOpen: false });
     expect(b.get("rsvp-paused")?.focused).toBe(false);
+    b.get("rsvp-withdraw")!.click();
+    expect(b.requests[0]!.init.method).toBe("DELETE");
+    b.finish(0, 204);
+    await b.settle();
+    expect(b.root.querySelectorAll("[data-action]")).toHaveLength(0);
+    expect(b.get("rsvp-confirmed")).toBeNull();
+    expect(b.get("rsvp-going")).toBeNull();
+    expect(b.get("rsvp-paused")?.getAttribute("tabindex")).toBe("-1");
+    expect(b.get("rsvp-paused")?.focused).toBe(true);
+    expect(b.broadcasts[0]!.detail).toEqual({ eventKey: "raid/one", viewerState: "none" });
   });
 
   it("a paused-closed refusal reloads into fresh SSR without an alert or focus move", async () => {
