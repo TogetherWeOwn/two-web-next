@@ -196,6 +196,18 @@
     return el;
   }
 
+  // SSR paints the full notice before the waitlist button; keep that DOM
+  // order when the island paints (or re-paints) it, so Tab from the focused
+  // notice reaches the button instead of leaving the widget.
+  function placeBefore(el, anchor) {
+    // Already in place: re-inserting would move the node and drop focus
+    // from it (a capacity refresh can land right after a 409 focused it).
+    if (anchor && el.nextSibling === anchor) return;
+    if (anchor && anchor.parentNode && anchor.parentNode.insertBefore)
+      anchor.parentNode.insertBefore(el, anchor);
+    else controls.appendChild(el);
+  }
+
   function setBusy(on, button, busyText) {
     if (on) root.setAttribute("aria-busy", "true");
     else root.removeAttribute("aria-busy");
@@ -474,8 +486,8 @@
         message = document.createElement("p");
         message.setAttribute("role", "status");
         message.setAttribute("data-testid", TESTID.full);
-        controls.appendChild(message);
       }
+      placeBefore(message, join);
       message.textContent = COPY.full + " " + fullCapCopy(detail.capacity);
     } else if (message) message.remove();
   }
@@ -529,14 +541,18 @@
     join.addEventListener("click", function (ev) {
       onAction(join.getAttribute("data-action"), join, ev);
     });
-    if (full && !root.querySelector('[data-testid="' + TESTID.full + '"]')) {
-      var message = document.createElement("p");
-      message.setAttribute("role", "status");
-      message.setAttribute("data-testid", TESTID.full);
-      var capRaw = root.getAttribute("data-capacity");
-      var capNum = capRaw === null || capRaw === "" ? NaN : Number(capRaw);
-      message.textContent = COPY.full + (Number.isFinite(capNum) ? " " + fullCapCopy(capNum) : "");
-      controls.appendChild(message);
+    if (full) {
+      var message = root.querySelector('[data-testid="' + TESTID.full + '"]');
+      if (!message) {
+        message = document.createElement("p");
+        message.setAttribute("role", "status");
+        message.setAttribute("data-testid", TESTID.full);
+        var capRaw = root.getAttribute("data-capacity");
+        var capNum = capRaw === null || capRaw === "" ? NaN : Number(capRaw);
+        message.textContent =
+          COPY.full + (Number.isFinite(capNum) ? " " + fullCapCopy(capNum) : "");
+      }
+      placeBefore(message, join);
     }
     focusTestid([TESTID.going, TESTID.waitlistJoin]);
   }
@@ -749,7 +765,6 @@
                   old.setAttribute("role", "status");
                   old.setAttribute("data-testid", TESTID.full);
                   old.setAttribute("tabindex", "-1");
-                  controls.appendChild(old);
                 }
                 old.textContent =
                   COPY.full + (Number.isFinite(capNum) ? " " + fullCapCopy(capNum) : "");
@@ -764,6 +779,11 @@
                 going.setAttribute("value", "waitlisted");
                 going.textContent = COPY.waitlistJoin;
               }
+              if (!position && old)
+                placeBefore(
+                  old,
+                  going || root.querySelector('[data-testid="' + TESTID.waitlistJoin + '"]'),
+                );
               if (position) focusTestid([TESTID.waitlistPosition]);
               else if (focusOwned && old && old.focus) old.focus();
             };

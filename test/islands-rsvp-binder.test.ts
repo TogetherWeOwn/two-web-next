@@ -46,6 +46,13 @@ class Node {
     this.children.push(n);
     return n;
   }
+  insertBefore(n: Node, anchor: Node) {
+    if (n === anchor) return n;
+    if (n.parentNode) n.parentNode.children = n.parentNode.children.filter((c) => c !== n);
+    n.parentNode = this;
+    this.children.splice(this.children.indexOf(anchor), 0, n);
+    return n;
+  }
   removeChild(n: Node) {
     this.children = this.children.filter((child) => child !== n);
     n.parentNode = null;
@@ -1403,5 +1410,41 @@ describe("RsvpButton shipped binder", () => {
     b.finish(0, 409, { capacity: 4 });
     await b.settle();
     expect(b.get("event-full")?.focused).toBe(true);
+  });
+
+  // SSR paints the full notice before the waitlist button
+  // (src/events/rsvp-button.tsx, web/src/lib/EventDetail.svelte), so Tab
+  // from the focused notice reaches "Join the waitlist". Every island path
+  // that paints the notice must keep that DOM order.
+  const formTestidOrder = (b: ReturnType<typeof browser>) =>
+    b.root
+      .querySelector("[data-rsvp-form]")!
+      .children.map((n) => n.getAttribute("data-testid"))
+      .filter((t) => t !== null);
+
+  it("paints the 409 full notice before the waitlist button, matching SSR order", async () => {
+    const b = browser();
+    b.get("rsvp-going")!.click();
+    b.finish(0, 409, { capacity: 4 });
+    await b.settle();
+    expect(b.get("event-full")?.focused).toBe(true);
+    expect(formTestidOrder(b)).toEqual(["event-full", "waitlist-join"]);
+  });
+
+  it("paints the refreshed full notice before the waitlist button, matching SSR order", async () => {
+    const b = browser();
+    b.emit("going-count-refreshed", { eventKey: "raid/one", goingCount: 4, capacity: 4 });
+    await b.settle();
+    expect(b.get("event-full")?.textContent).toBe("This one's full. Cap is 4.");
+    expect(formTestidOrder(b)).toEqual(["event-full", "waitlist-join"]);
+  });
+
+  it("paints the post-withdraw full notice before the waitlist button, matching SSR order", async () => {
+    const b = browser("going-full");
+    b.get("rsvp-withdraw")!.click();
+    b.finish(0, 204);
+    await b.settle();
+    expect(b.get("event-full")?.textContent).toBe("This one's full. Cap is 4.");
+    expect(formTestidOrder(b)).toEqual(["event-full", "waitlist-join"]);
   });
 });
