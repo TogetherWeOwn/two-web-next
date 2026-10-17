@@ -1157,11 +1157,13 @@ prove deployment readiness.
 ping and web migration-ledger read, plus the unchanged queue object. It has `Cache-Control: no-store`, no session/auth
 lookup, and no cookies. No migration is run or repaired by this endpoint.
 
-On staging only, a ready or failing body also carries
-`revision: { version_id, commit }` from the `version_metadata` binding
-`CF_VERSION_METADATA`. It is informational and never changes the HTTP status.
-`version_id` is the Worker Version ID (the `wrangler rollback` argument).
-`commit` is the version tag, shown only when it is a full lowercase 40-hex SHA
+Wherever the `version_metadata` binding `CF_VERSION_METADATA` is declared
+(the staging and production web Workers), a ready or failing body also carries
+`revision: { version_id, commit }`. It is informational and never changes the
+HTTP status. `version_id` is the Worker Version ID (the `wrangler rollback`
+argument). `commit` is the deploy commit parsed from the version tag (the
+bare staging SHA or the first component of the production
+`<sha>-<run-id>-<run-attempt>` tag), shown only as a full lowercase 40-hex SHA
 and `null` otherwise, so an arbitrary manual tag never reaches the public body.
 `node bin/revision-check.mjs <origin> [<sha>]` reads it: with a SHA it fails
 unless that commit is live, without one it only logs what is live.

@@ -31,9 +31,10 @@ probe, or change production state as part of diagnosis.
    reference when the response provides one to find the `http.request` record and
    then any `error.alert` or `queue.failing` record with the same `request_id`.
    Query serialized JSON log messages with a contains filter; do not assume
-   `request_id` is indexed. MCP tool errors on `/mcp` are an exception: the SDK
-   returns an `isError` result instead of throwing, and the alert call does not
-   receive the request ID, so there is no same-ID error-alert record to correlate.
+   `request_id` is indexed. MCP tool errors on `/mcp` correlate the same way:
+   the SDK returns an `isError` result instead of throwing, but the tool server
+   is built per request with that POST's request ID, so its `error.alert`
+   record carries the same `request_id` as the `http.request` record.
    See [request correlation in Workers Logs](runbook-logs.md#find-a-request).
 4. For a queue incident, filter the environment's source Worker (`two-web-jobs`
    in staging, `two-web-next-production` in production) by the safe job class and
@@ -48,9 +49,11 @@ probe, or change production state as part of diagnosis.
    `two-web-jobs` version in Cloudflare and use its tag. The staging web and jobs
    Workers are normally tagged with the same SHA by one deploy run, but can
    diverge after a partial deploy or an independent rollback, so check both tags
-   when the incident spans both Workers or their versions may differ. Production
-   currently has no `CF_VERSION_METADATA` binding, so `/up` has no revision
-   marker. Do not infer a deployed SHA from the current `main` branch.
+   when the incident spans both Workers or their versions may differ. Every
+   structured source record also carries its emitting Worker's `build_sha` and
+   `release`, so one Worker's line never borrows the other's build. Production
+   declares `CF_VERSION_METADATA` too, so its `/up` carries the same revision
+   marker staging does. Do not infer a deployed SHA from the current `main` branch.
 6. In Cloudflare, open the production Worker's deployed version and read its
    tag, which is `<40-hex-sha>-<GitHub-run-id>-<run-attempt>`. Use the first
    component as the deployed source SHA and the second as the production deploy
@@ -93,8 +96,9 @@ probe, or change production state as part of diagnosis.
   logs and the deployed version in Cloudflare.
 - Cloudflare Workers Observability is the configured error/logging surface; this
   repository does not configure a Sentry SDK. The production GitHub Release
-  identifies the promoted commit, but request/error log lines are not currently
-  tagged with that SHA. Staging `/up` exposes its deploy version metadata.
+  identifies the promoted commit, and structured request/error/queue log lines
+  are tagged with that same commit as `build_sha` and `release`. Staging and
+  production `/up` expose their deploy version metadata.
 - Production rollout uses the shared 5/50/100 gradual promotion action with
   per-stage health/SLO gates and automatic rollback on a failed gate. This
   rollback is driven by the promotion gates, not a live aggregate error-rate

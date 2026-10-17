@@ -14,8 +14,8 @@ The app writes ONE single-line JSON object on `console.error`, with
 
 | `event` | When | Source fields (internal logs only) |
 | --- | --- | --- |
-| `error.alert` | An unexpected non-4xx error reached an HTTP error path, including a member-read refusal or locally handled profile-save failure (the response may remain 503) | `fingerprint` (`ExceptionClass@/route/pattern`), `exception`, `method`, `route`, optional `request_id` |
-| `queue.failing` | A job failed terminally or threw on its final attempt | `connection`, `queue`, `job`, `attempts`, `exception`, optional `request_id` |
+| `error.alert` | An unexpected non-4xx error reached an HTTP error path, including a member-read refusal or locally handled profile-save failure (the response may remain 503) | `fingerprint` (`ExceptionClass@/route/pattern`), `exception`, `error_class` (same class), `method`, `route`, optional `request_id`, `build_sha`, `release` |
+| `queue.failing` | A job failed terminally or threw on its final attempt | `connection`, `queue`, `job`, `attempts`, `exception`, `error_class` (same value), optional `request_id`, `build_sha`, `release` |
 
 - The app mutes `error.alert` per `class@route` for five minutes. Client errors
   (404, 403, 429 and other 4xx) and `ZodError` stay silent. A thrown
@@ -27,6 +27,9 @@ The app writes ONE single-line JSON object on `console.error`, with
   Correlate it with the `http.request` record, see
   [request-log queries](runbook-logs.md). Request IDs do not change the
   fingerprint or mute window, and the Tail Worker does not forward them.
+  Both alert types also carry `build_sha`/`release` (the emitting Worker's
+  deploy commit, `null` without a `version_metadata` binding); the Tail
+  Worker does not forward those either.
 - Queue source lines are not muted: one per terminal job failure. **Their
   `exception` can be a bot refusal message**, not just a class. Neither that field
   nor any trace exception/request/header/body is forwarded by the Tail Worker.

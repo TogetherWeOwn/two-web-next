@@ -74,7 +74,7 @@ async function serveMcp(c: Ctx): Promise<Response> {
   const handler = createMcpHandler(
     async () => {
       try {
-        return createPublicMcpServer({ env: c.env, db: await dbFor(c) });
+        return createPublicMcpServer({ env: c.env, db: await dbFor(c), requestId });
       } catch (err) {
         alertRequestError(err, { method: "POST", route: "/mcp", requestId });
         throw err;
