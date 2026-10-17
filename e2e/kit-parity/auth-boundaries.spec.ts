@@ -45,7 +45,9 @@ for (const target of targets) {
       const oauth = await oauthResponse;
       expect(oauth.status()).toBe(302);
       expect(oauth.headers()["x-two-renderer"] ?? null).toBeNull();
-      const authorize = new URL(page.url());
+      const location = oauth.headers()["location"];
+      expect(location).toBeTruthy();
+      const authorize = new URL(location!);
       expect(authorize.origin + authorize.pathname).toBe(AUTHORIZE_URL);
       expect(authorize.searchParams.get("scope")).toBe("identify guilds.join");
       expect(authorize.searchParams.get("state")).toBeTruthy();
@@ -86,7 +88,9 @@ for (const target of targets) {
       const start = await context.request.get(`${target.origin}/join/discord`, { maxRedirects: 0 });
       expect(start.status()).toBe(302);
       expect(start.headers()["x-two-renderer"] ?? null).toBeNull();
-      const authorize = new URL(start.headers()["location"]!);
+      const startLocation = start.headers()["location"];
+      expect(startLocation).toBeTruthy();
+      const authorize = new URL(startLocation!);
       const state = authorize.searchParams.get("state");
       expect(state).toBeTruthy();
 
@@ -120,12 +124,14 @@ for (const target of targets) {
         "__Host-two_session=",
       );
 
-      // Inject the deterministic bot-refusal fixture as another recovery
-      // outcome. The Kit target still delegates the callback to Hono.
+      // Both the Hono and Kit E2E workers install deterministic outbound
+      // Discord stubs, so callback outcomes never make upstream requests.
       const blockedStart = await context.request.get(`${target.origin}/join/discord`, {
         maxRedirects: 0,
       });
-      const blockedState = new URL(blockedStart.headers()["location"]!).searchParams.get("state");
+      const blockedLocation = blockedStart.headers()["location"];
+      expect(blockedLocation).toBeTruthy();
+      const blockedState = new URL(blockedLocation!).searchParams.get("state");
       expect(blockedState).toBeTruthy();
       const blocked = await page.goto(
         `${target.origin}/join/callback?code=e2e-blocked-code&state=${encodeURIComponent(blockedState!)}`,
@@ -148,7 +154,9 @@ for (const target of targets) {
       const outageStart = await context.request.get(`${target.origin}/join/discord`, {
         maxRedirects: 0,
       });
-      const outageState = new URL(outageStart.headers()["location"]!).searchParams.get("state");
+      const outageLocation = outageStart.headers()["location"];
+      expect(outageLocation).toBeTruthy();
+      const outageState = new URL(outageLocation!).searchParams.get("state");
       expect(outageState).toBeTruthy();
       const outage = await page.goto(
         `${target.origin}/join/callback?code=e2e-outage-code&state=${encodeURIComponent(outageState!)}`,
