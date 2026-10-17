@@ -1,18 +1,18 @@
-import type { APIRequestContext, APIResponse } from "@playwright/test";
-import { sendTokenRequest } from "../qa-request.mjs";
+import { fetchTokenRequest } from "../qa-request.mjs";
 import {
   parseRetryAfterSeconds,
   QA_LOGIN_MAX_ATTEMPTS,
   QA_LOGIN_RETRY_AFTER_CAP_SECONDS,
   sleep,
 } from "../qa-login-retry.mjs";
-import { test, expect, stagingOrigin, emptyStorageState, moderatorStorageState } from "./fixtures";
+import { test, expect, stagingOrigin, moderatorStorageState } from "./fixtures";
 import { loginQaIdentities } from "./qa-login";
 
-// The real token travels in a request header here. Traces record request
-// headers, and the failure artifacts are public, so this spec records no
-// trace/video/screenshot artifacts (the sweep in ci/scrub-qa-token.py is the
-// backstop).
+// The real token travels in a request header here, but only over Node fetch
+// (qa-request.mjs): Playwright records request headers into retained traces,
+// and the failure artifacts are public. This spec still records no
+// trace/video/screenshot artifacts as defense in depth, and the sweep in
+// ci/scrub-qa-token.py remains the backstop.
 test.use({ trace: "off", screenshot: "off", video: "off" });
 
 // Fresh sessions per file: event pages rotate the bearer on read, so a stored
@@ -45,28 +45,38 @@ test("staging QA moderator session opens the admin event list", async ({ browser
 // the token/identity check — so a probe can answer 429 when the run's burst
 // lands in one window. A 429 names the budget, not the verdict: honor
 // Retry-After into a fresh window and re-probe, then assert the authoritative
-// 404. Bounded like the login retry (qa-login-retry.mjs).
+// 404. Bounded like the login retry (qa-login-retry.mjs). Fetch presents no
+// session cookies, so the probes stay unauthenticated by construction, and
+// fetchTokenRequest keeps any transport error reason-only.
 async function probeQaStatus(
-  request: APIRequestContext,
+  label: string,
+  token: string,
   identity: string,
   headers: Record<string, string>,
-): Promise<APIResponse> {
-  let response = await request.post(`/auth/qa/${identity}`, {
+): Promise<number> {
+  let response = await fetchTokenRequest(label, token, `${stagingOrigin}/auth/qa/${identity}`, {
+    method: "POST",
     headers,
-    maxRedirects: 0,
   });
-  for (let attempt = 1; attempt < QA_LOGIN_MAX_ATTEMPTS && response.status() === 429; attempt++) {
-    await sleep(parseRetryAfterSeconds(response.headers()) * 1000);
-    response = await request.post(`/auth/qa/${identity}`, {
+  for (let attempt = 1; attempt < QA_LOGIN_MAX_ATTEMPTS && response.status === 429; attempt++) {
+    const retryAfter = response.headers.get("retry-after");
+    const retryAfterSeconds = parseRetryAfterSeconds(
+      retryAfter === null ? undefined : { "retry-after": retryAfter },
+    );
+    await response.body?.cancel().catch(() => {});
+    await sleep(retryAfterSeconds * 1000);
+    response = await fetchTokenRequest(label, token, `${stagingOrigin}/auth/qa/${identity}`, {
+      method: "POST",
       headers,
-      maxRedirects: 0,
     });
   }
-  return response;
+  const { status } = response;
+  await response.body?.cancel().catch(() => {});
+  return status;
 }
 
 test.describe("negative QA cases", () => {
-  test("staging QA rejects a bad token and an unknown identity with 404", async ({ browser }) => {
+  test("staging QA rejects a bad token and an unknown identity with 404", async () => {
     // The config's 30s covers the probes themselves; the bounded 429 retries
     // get their own budget: up to QA_LOGIN_MAX_ATTEMPTS - 1 capped waits per
     // probe, times two probes (events-list/featured setTimeout precedent).
@@ -74,35 +84,26 @@ test.describe("negative QA cases", () => {
       30_000 + 2 * (QA_LOGIN_MAX_ATTEMPTS - 1) * QA_LOGIN_RETRY_AFTER_CAP_SECONDS * 1000,
     );
     const origin = stagingOrigin;
-    // Explicitly empty: a bare newContext() inherits the member storageState
-    // from the staging config, and these probes must not present a session.
-    const context = await browser.newContext({
-      baseURL: origin,
-      storageState: emptyStorageState,
-    });
-    try {
-      const bad = await sendTokenRequest(
-        "staging QA bad-token probe",
-        "staging-e2e-wrong-token",
-        () =>
-          probeQaStatus(context.request, "qa-member", {
-            "X-TWO-QA-Auth": "staging-e2e-wrong-token",
-            Origin: origin,
-          }),
-      );
-      expect(bad.status()).toBe(404);
-      const token = process.env.QA_AUTH_TOKEN ?? "";
-      // A transport error's text carries the request headers; keep them out of
-      // the report.
-      const unknown = await sendTokenRequest("staging QA unknown-identity probe", token, () =>
-        probeQaStatus(context.request, "no-such-identity", {
-          "X-TWO-QA-Auth": token,
-          Origin: origin,
-        }),
-      );
-      expect(unknown.status()).toBe(404);
-    } finally {
-      await context.close();
-    }
+    const bad = await probeQaStatus(
+      "staging QA bad-token probe",
+      "staging-e2e-wrong-token",
+      "qa-member",
+      {
+        "X-TWO-QA-Auth": "staging-e2e-wrong-token",
+        Origin: origin,
+      },
+    );
+    expect(bad).toBe(404);
+    const token = process.env.QA_AUTH_TOKEN ?? "";
+    const unknown = await probeQaStatus(
+      "staging QA unknown-identity probe",
+      token,
+      "no-such-identity",
+      {
+        "X-TWO-QA-Auth": token,
+        Origin: origin,
+      },
+    );
+    expect(unknown).toBe(404);
   });
 });
