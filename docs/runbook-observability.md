@@ -96,14 +96,26 @@ probe, or change production state as part of diagnosis.
   identifies the promoted commit, but request/error log lines are not currently
   tagged with that SHA. Staging `/up` exposes its deploy version metadata.
 - Production rollout uses the shared 5/50/100 gradual promotion action with
-  per-stage health/SLO gates and automatic rollback on a failed gate. This
-  rollback is driven by the promotion gates, not a live aggregate error-rate
-  monitor. See [production promotion and rollback](runbook.md).
+  per-stage health/SLO gates and automatic rollback on a failed gate. Each
+  stage also judges a live error-rate signal: after a soak, the gate queries
+  Cloudflare GraphQL Analytics (`workersInvocationsAdaptive`, filtered to the
+  promoted `scriptVersion`) over a trailing window and fails the stage — into
+  the same automatic rollback — when the new version's invocation error rate
+  exceeds the configured threshold (defaults: rate 0.05, at least 20 live
+  invocations, 10-minute window). Invocation errors are unhandled exceptions,
+  exceeded resources and internal errors; a handled HTTP 500 response does not
+  count, so this complements rather than replaces the smoke gate. Below the
+  minimum sample the gate retries while analytics aggregates catch up, then
+  passes with a warning; a failing analytics query fails the stage closed.
+  Prove changes to this gate with the manual `error-rate-gate-rehearsal`
+  workflow (live staging signal plus a simulated elevated rate), never
+  against production. See [production promotion and rollback](runbook.md).
 
 These limitations are explicit: do not treat a healthy `/up`, an absent Discord
-page, or a GitHub Release as proof that the full user journey is healthy or that
-an error-rate threshold is being monitored. Expand detection only through a
-reviewed change with staging evidence and passive production verification.
+page, or a GitHub Release as proof that the full user journey is healthy. The
+error-rate gate watches only promotion stages, not steady-state traffic.
+Expand detection only through a reviewed change with staging evidence and
+passive production verification.
 
 ## Safe verification
 

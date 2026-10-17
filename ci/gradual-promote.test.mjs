@@ -6,11 +6,18 @@
 // composite action resolves, so caller-relative drift fails here first.
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
+import { mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { test } from "node:test";
+import { runErrorRateGate } from "../.github/actions/gradual-promote/error-rate-gate.mjs";
 import {
   GRADUAL_STEPS,
   assertVersionTag,
+  buildErrorRateQuery,
+  evaluateErrorRate,
   latestDeployment,
+  parseErrorRateResponse,
   rollbackTarget,
   splitDeploySpecs,
   versionIdForTag,
@@ -190,4 +197,205 @@ test("tag resolution needs exactly one matching version", () => {
     /matches multiple versions/,
   );
   assert.throws(() => versionIdForTag([], TAG), /No deployable version/);
+});
+
+// --- Live error-rate gate (workersInvocationsAdaptive, per scriptVersion) ---
+
+const ACCOUNT = "0123456789abcdef0123456789abcdef";
+const SINCE = "2026-10-17T00:00:00.000Z";
+const UNTIL = "2026-10-17T00:10:00.000Z";
+
+function envelope(sum, version = NEXT) {
+  return {
+    data: {
+      viewer: {
+        accounts: [
+          {
+            workersInvocationsAdaptive: sum
+              ? [{ sum, dimensions: { scriptVersion: version } }]
+              : [],
+          },
+        ],
+      },
+    },
+    errors: null,
+  };
+}
+
+test("error-rate query filters invocations to the promoted version in a window", () => {
+  const body = buildErrorRateQuery({
+    accountId: ACCOUNT,
+    scriptName: "two-web-next-production",
+    versionId: NEXT,
+    sinceIso: SINCE,
+    untilIso: UNTIL,
+  });
+  assert.match(body.query, /workersInvocationsAdaptive/);
+  assert.match(body.query, /scriptVersion:\s*\$versionId/);
+  assert.ok(!body.query.includes(NEXT), "version id travels as a variable, never interpolated");
+  assert.ok(!body.query.includes(ACCOUNT), "account id travels as a variable");
+  assert.deepEqual(body.variables, {
+    accountTag: ACCOUNT,
+    scriptName: "two-web-next-production",
+    versionId: NEXT,
+    since: SINCE,
+    until: UNTIL,
+  });
+});
+
+test("error-rate query refuses untrusted identifiers and inverted windows", () => {
+  const base = {
+    accountId: ACCOUNT,
+    scriptName: "two-web-next-production",
+    versionId: NEXT,
+    sinceIso: SINCE,
+    untilIso: UNTIL,
+  };
+  assert.throws(() => buildErrorRateQuery({ ...base, accountId: "nope" }), /account id/);
+  assert.throws(
+    () => buildErrorRateQuery({ ...base, scriptName: 'x",datetime_geq:"0' }),
+    /script name/,
+  );
+  assert.throws(() => buildErrorRateQuery({ ...base, versionId: "not-a-uuid" }), /Version ID/);
+  assert.throws(() => buildErrorRateQuery({ ...base, sinceIso: UNTIL, untilIso: SINCE }), /window/);
+  assert.throws(() => buildErrorRateQuery({ ...base, sinceIso: "soon" }), /window/);
+});
+
+test("error-rate response parser reads sums and fails closed on bad payloads", () => {
+  assert.deepEqual(parseErrorRateResponse(envelope({ requests: 200, errors: 3 }), NEXT), {
+    requests: 200,
+    errors: 3,
+  });
+  assert.deepEqual(parseErrorRateResponse(envelope(null), NEXT), { requests: 0, errors: 0 });
+  assert.throws(
+    () =>
+      parseErrorRateResponse(
+        { data: null, errors: [{ message: "auth detail must not leak" }] },
+        NEXT,
+      ),
+    (error) => /GraphQL/.test(error.message) && !error.message.includes("auth detail"),
+  );
+  assert.throws(() => parseErrorRateResponse({}, NEXT), /error-rate response/);
+  assert.throws(() => parseErrorRateResponse("nope", NEXT), /error-rate response/);
+  assert.throws(
+    () => parseErrorRateResponse(envelope({ requests: -1, errors: 0 }), NEXT),
+    /error-rate response/,
+  );
+  assert.throws(
+    () => parseErrorRateResponse(envelope({ requests: 10, errors: 1 }, PREV), NEXT),
+    /version/,
+  );
+});
+
+test("error-rate evaluation needs a minimum sample, then judges the rate", () => {
+  const gate = { threshold: 0.05, minRequests: 20 };
+  assert.equal(evaluateErrorRate({ requests: 19, errors: 19, ...gate }).verdict, "insufficient");
+  assert.equal(evaluateErrorRate({ requests: 100, errors: 5, ...gate }).verdict, "pass");
+  assert.equal(evaluateErrorRate({ requests: 100, errors: 6, ...gate }).verdict, "fail");
+  assert.equal(evaluateErrorRate({ requests: 100, errors: 5, ...gate }).rate, 0.05);
+  assert.throws(
+    () => evaluateErrorRate({ requests: 1, errors: 0, threshold: 2, minRequests: 1 }),
+    /threshold/,
+  );
+  assert.throws(
+    () => evaluateErrorRate({ requests: 1, errors: 0, threshold: 0.1, minRequests: 0 }),
+    /minRequests/,
+  );
+});
+
+function gateConfig(overrides = {}) {
+  return {
+    accountId: ACCOUNT,
+    scriptName: "two-web-next-production",
+    versionId: NEXT,
+    threshold: 0.05,
+    minRequests: 20,
+    windowMinutes: 10,
+    soakSeconds: 0,
+    attempts: 3,
+    retrySeconds: 0,
+    ...overrides,
+  };
+}
+
+function gateDeps(responses) {
+  const sleeps = [];
+  let call = 0;
+  return {
+    sleeps,
+    deps: {
+      now: () => new Date(UNTIL),
+      sleep: async (seconds) => {
+        sleeps.push(seconds);
+      },
+      fetchJson: async () => {
+        const next = responses[Math.min(call, responses.length - 1)];
+        call += 1;
+        if (next instanceof Error) throw next;
+        return next;
+      },
+      log: () => {},
+    },
+  };
+}
+
+test("live gate halts on an elevated error rate and passes a healthy version", async () => {
+  const elevated = gateDeps([envelope({ requests: 100, errors: 40 })]);
+  const halted = await runErrorRateGate(gateConfig(), elevated.deps);
+  assert.equal(halted.code, 1);
+  assert.equal(halted.verdict, "fail");
+  const healthy = gateDeps([envelope({ requests: 100, errors: 1 })]);
+  const passed = await runErrorRateGate(gateConfig(), healthy.deps);
+  assert.equal(passed.code, 0);
+  assert.equal(passed.verdict, "pass");
+});
+
+test("live gate retries an insufficient sample, then warns instead of blocking", async () => {
+  const warming = gateDeps([
+    envelope({ requests: 2, errors: 0 }),
+    envelope({ requests: 3, errors: 0 }),
+    envelope({ requests: 50, errors: 0 }),
+  ]);
+  const passed = await runErrorRateGate(gateConfig(), warming.deps);
+  assert.equal(passed.code, 0);
+  assert.equal(passed.attempts, 3);
+  const quiet = gateDeps([envelope(null)]);
+  const warned = await runErrorRateGate(gateConfig({ attempts: 2 }), quiet.deps);
+  assert.equal(warned.code, 0);
+  assert.equal(warned.verdict, "insufficient");
+});
+
+test("live gate fails closed when the analytics query keeps failing", async () => {
+  const down = gateDeps([new Error("socket detail must not leak")]);
+  const result = await runErrorRateGate(gateConfig({ attempts: 2 }), down.deps);
+  assert.equal(result.code, 1);
+  assert.equal(result.verdict, "error");
+});
+
+test("gate CLI in fixture mode halts on a simulated elevated rate, passes healthy", () => {
+  const dir = mkdtempSync(join(tmpdir(), "error-rate-gate-"));
+  const fixture = (name, sum) => {
+    const path = join(dir, name);
+    writeFileSync(path, JSON.stringify(envelope(sum)));
+    return path;
+  };
+  const run = (path) =>
+    spawnSync(process.execPath, [".github/actions/gradual-promote/error-rate-gate.mjs"], {
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        WORKER_NAME: "two-web-next-production",
+        NEW_VERSION: NEXT,
+        CLOUDFLARE_ACCOUNT_ID: ACCOUNT,
+        ERROR_RATE_FIXTURE: path,
+        ERROR_RATE_SOAK_SECONDS: "0",
+        ERROR_RATE_ATTEMPTS: "1",
+      },
+    });
+  const elevated = run(fixture("elevated.json", { requests: 100, errors: 40 }));
+  assert.equal(elevated.status, 1, elevated.stdout + elevated.stderr);
+  assert.match(elevated.stdout, /verdict=fail/);
+  const healthy = run(fixture("healthy.json", { requests: 100, errors: 0 }));
+  assert.equal(healthy.status, 0, healthy.stdout + healthy.stderr);
+  assert.match(healthy.stdout, /verdict=pass/);
 });

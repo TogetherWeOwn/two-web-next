@@ -127,6 +127,118 @@ export function versionIdForTag(versions, tag) {
   return matches[0].id;
 }
 
+// --- Live error-rate signal (Cloudflare GraphQL Analytics) ---
+//
+// `workersInvocationsAdaptive` aggregates invocation counts per
+// scriptVersion: `sum.errors` counts invocations that ended in an
+// unhandled exception, exceeded resources or an internal error (see
+// "Invocation statuses" in the Workers metrics docs). Filtering by the
+// promoted version id judges the NEW version's live traffic at a canary
+// stage, not a script-wide average the old version would dilute. All
+// identifiers travel as GraphQL variables; the query text is static, so
+// nothing untrusted is interpolated. These helpers stay pure (no network,
+// no credentials): error-rate-gate.mjs performs the fetch.
+
+// Cloudflare account ids are 32 lowercase hex chars.
+const ACCOUNT_ID_PATTERN = /^[0-9a-f]{32}$/;
+// Worker script names: lowercase letters, digits and dashes.
+const SCRIPT_NAME_PATTERN = /^[a-z0-9][a-z0-9-]{0,62}$/;
+
+export function buildErrorRateQuery({ accountId, scriptName, versionId, sinceIso, untilIso }) {
+  if (typeof accountId !== "string" || !ACCOUNT_ID_PATTERN.test(accountId)) {
+    throw new Error("account id must be a 32-character lowercase hex Cloudflare account id");
+  }
+  if (typeof scriptName !== "string" || !SCRIPT_NAME_PATTERN.test(scriptName)) {
+    throw new Error("script name must be lowercase letters, digits or dashes");
+  }
+  assertRollbackVersionId(versionId);
+  const since = Date.parse(sinceIso ?? "");
+  const until = Date.parse(untilIso ?? "");
+  if (!Number.isFinite(since) || !Number.isFinite(until) || since >= until) {
+    throw new Error("error-rate window must be ISO timestamps with since before until");
+  }
+  return {
+    query: [
+      "query ErrorRate($accountTag: String!, $scriptName: String!, $versionId: String!, $since: Time!, $until: Time!) {",
+      "  viewer {",
+      "    accounts(filter: { accountTag: $accountTag }) {",
+      "      workersInvocationsAdaptive(",
+      "        limit: 1",
+      "        filter: { scriptName: $scriptName, scriptVersion: $versionId, datetime_geq: $since, datetime_leq: $until }",
+      "      ) {",
+      "        sum { requests errors }",
+      "        dimensions { scriptVersion }",
+      "      }",
+      "    }",
+      "  }",
+      "}",
+    ].join("\n"),
+    variables: { accountTag: accountId, scriptName, versionId, since: sinceIso, until: untilIso },
+  };
+}
+
+// Parses one GraphQL envelope into { requests, errors }. Fails closed on
+// GraphQL errors, a malformed shape, or a row for a different version than
+// the one being promoted. Error messages never echo the payload: a
+// GraphQL error may carry request detail.
+export function parseErrorRateResponse(payload, versionId) {
+  assertRollbackVersionId(versionId);
+  if (!payload || typeof payload !== "object") {
+    throw new Error("error-rate response is not an object");
+  }
+  if (Array.isArray(payload.errors) && payload.errors.length > 0) {
+    throw new Error("error-rate GraphQL query returned errors");
+  }
+  const accounts = payload.data?.viewer?.accounts;
+  if (!Array.isArray(accounts) || accounts.length !== 1) {
+    throw new Error("error-rate response does not contain exactly one account");
+  }
+  const rows = accounts[0]?.workersInvocationsAdaptive;
+  if (!Array.isArray(rows) || rows.length > 1) {
+    throw new Error("error-rate response rows are malformed");
+  }
+  if (rows.length === 0) return { requests: 0, errors: 0 };
+  const row = rows[0];
+  if (row?.dimensions?.scriptVersion !== versionId) {
+    throw new Error("error-rate response is for a different Worker version");
+  }
+  const { requests, errors } = row?.sum ?? {};
+  if (
+    !Number.isSafeInteger(requests) ||
+    !Number.isSafeInteger(errors) ||
+    requests < 0 ||
+    errors < 0 ||
+    errors > requests
+  ) {
+    throw new Error("error-rate response sums are malformed");
+  }
+  return { requests, errors };
+}
+
+// A stage is judged only once the new version served `minRequests` live
+// invocations in the window; below that the verdict is "insufficient"
+// (the gate retries while analytics aggregates catch up). At or above the
+// threshold boundary the version passes; strictly above it, it fails.
+export function evaluateErrorRate({ requests, errors, threshold, minRequests }) {
+  if (typeof threshold !== "number" || !(threshold >= 0 && threshold <= 1)) {
+    throw new Error("threshold must be a number between 0 and 1");
+  }
+  if (!Number.isSafeInteger(minRequests) || minRequests < 1) {
+    throw new Error("minRequests must be a positive integer");
+  }
+  if (
+    !Number.isSafeInteger(requests) ||
+    !Number.isSafeInteger(errors) ||
+    requests < 0 ||
+    errors < 0
+  ) {
+    throw new Error("requests and errors must be non-negative integers");
+  }
+  const rate = requests === 0 ? 0 : errors / requests;
+  if (requests < minRequests) return { verdict: "insufficient", rate };
+  return { verdict: rate > threshold ? "fail" : "pass", rate };
+}
+
 function readStdin() {
   return readFileSync(0, "utf8");
 }

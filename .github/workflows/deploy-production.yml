@@ -64,7 +64,9 @@ jobs:
     # The org's two-selfhosted runner group refuses public repos (TOG-12326):
     # GitHub-hosted while public, the self-hosted fleet while private.
     runs-on: ${{ github.event.repository.private && fromJSON('["self-hosted","two-selfhosted"]') || 'ubuntu-latest' }}
-    timeout-minutes: 15
+    # 30 minutes: the gradual stages now also soak and judge the new
+    # version's live error rate (worst case about 4 extra minutes a stage).
+    timeout-minutes: 30
     # Required reviewers + prevent-self-review are live repo settings unless
     # vars.PRODUCTION_AUTO_APPROVE is true, in which case the gate requires green
     # staging deploy + e2e-staging on this exact SHA instead, with the e2e-staging

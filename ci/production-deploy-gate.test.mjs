@@ -1102,3 +1102,42 @@ test("CI runs the promotion resolver selftest beside the production gate selftes
   assert.match(ci, /run: node --test ci\/gradual-promote\.test\.mjs\n/);
   assert.match(ci, /run: node --test ci\/gradual-promote-gate-acceptance\.test\.mjs\n/);
 });
+
+test("each gradual stage also judges the new version's live error rate before rollback stand-down", () => {
+  const action = readFileSync(
+    new URL("../.github/actions/gradual-promote/action.yml", import.meta.url),
+    "utf8",
+  );
+  // The live gate sits between the stage's smoke gate and its rollback
+  // step, so a fail verdict reaches the same failure-driven rollback.
+  const order = [
+    "Health and SLO gate at 5 percent",
+    "Live error-rate gate at 5 percent",
+    "Automatic rollback after 5 percent gate failure",
+    "Health and SLO gate at 50 percent",
+    "Live error-rate gate at 50 percent",
+    "Automatic rollback after 50 percent gate failure",
+    "Health and SLO gate at 100 percent (live traffic)",
+    "Live error-rate gate at 100 percent",
+    "Automatic rollback after 100 percent gate failure",
+  ];
+  let at = -1;
+  for (const name of order) {
+    const next = action.indexOf(`- name: ${name}\n`);
+    assert.ok(next > at, `error-rate stage out of order or missing: ${name}`);
+    at = next;
+  }
+  assert.equal((action.match(/id: error-rate-(5|50|100)\n/g) ?? []).length, 3);
+  assert.equal(
+    (action.match(/node "\$\{\{ github\.action_path \}\}\/error-rate-gate\.mjs"/g) ?? []).length,
+    3,
+  );
+  // The gate reads analytics with the same caller-supplied token/account
+  // pair as the wrangler steps; the rehearsal-only fixture override must
+  // never be reachable from the production promotion path.
+  assert.equal(
+    (action.match(/ERROR_RATE_THRESHOLD: \$\{\{ inputs\.error-rate-threshold \}\}/g) ?? []).length,
+    3,
+  );
+  assert.ok(!action.includes("ERROR_RATE_FIXTURE"));
+});
