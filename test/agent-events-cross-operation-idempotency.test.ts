@@ -136,16 +136,36 @@ describe.skipIf(!process.env.DATABASE_URL)(
       expect(result.status).toBe(201);
       return { token, grantId: grant!.id as string, eventKey: result.body.event_key as string };
     }
-    async function waitForLock(role: string) {
+    // handleAgentEvent takes locks before the statement under test (shield
+    // advisory + prune, rate-limit advisory + cleanup DELETE, idempotency
+    // advisory). Under load any of those can be the first Lock wait seen on
+    // the connection, so only accept a wait whose statement matches the one
+    // under test — and whose blocker is the expected holder, when known.
+    // Returning the first wait of any kind made this file flake on main.
+    async function waitForLock(role: string, queryPattern: string, blockerPid?: number) {
+      const matches = new RegExp(queryPattern);
       const deadline = Date.now() + 5000;
+      let lastWait: string | undefined;
       while (Date.now() < deadline) {
         const [row] = await admin`SELECT pid, query, wait_event, pg_blocking_pids(pid) AS blockers
         FROM pg_stat_activity WHERE application_name = ${`${schemaName}_${role}`}
         AND state = 'active' AND wait_event_type = 'Lock'`;
-        if (row && row.blockers.length > 0) return row;
+        if (row) {
+          lastWait = row.query;
+          if (
+            matches.test(row.query) &&
+            row.blockers.length > 0 &&
+            (blockerPid === undefined || row.blockers.includes(blockerPid))
+          )
+            return row;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 20));
       }
-      throw new Error(`No observed lock wait for ${role}`);
+      throw new Error(
+        `No observed lock wait for ${role} matching ${queryPattern}; last wait: ${lastWait ?? "none"}`,
+      );
     }
+    const EVENTS_FOR_UPDATE = String.raw`SELECT \* FROM events .*FOR UPDATE`;
 
     it.each([true, false])(
       "update then read sharing K return success/conflict (explicit read key: %s)",
@@ -190,7 +210,7 @@ describe.skipIf(!process.env.DATABASE_URL)(
               token,
             ),
           );
-          const updateWait = await waitForLock(`update-${n}`);
+          const updateWait = await waitForLock(`update-${n}`, EVENTS_FOR_UPDATE, holderPid);
           expect(updateWait.query).toMatch(/SELECT \* FROM events .*FOR UPDATE/);
           expect(updateWait.blockers).toContain(holderPid);
           read = attempt(
@@ -205,7 +225,11 @@ describe.skipIf(!process.env.DATABASE_URL)(
               token,
             ),
           );
-          const readWait = await waitForLock(`read-${n}`);
+          const readWait = await waitForLock(
+            `read-${n}`,
+            `${EVENTS_FOR_UPDATE}|pg_advisory_xact_lock`,
+            updateWait.pid,
+          );
           // Pre-fix read passed the transactional replay lookup and waits in the
           // row/tuple queue. With key serialization, it waits on the writer's lock.
           expect(readWait.query).toMatch(
@@ -318,9 +342,13 @@ describe.skipIf(!process.env.DATABASE_URL)(
         (tx) => tx`SELECT event_key FROM events WHERE event_key = ${eventKey} FOR UPDATE`,
         async () => {
           first = attempt(handleAgentEvent(writer, cfg, request, token));
-          const owner = await waitForLock(`duplicate-first-${n}`);
+          const owner = await waitForLock(`duplicate-first-${n}`, EVENTS_FOR_UPDATE);
           second = attempt(handleAgentEvent(reader, cfg, request, token));
-          const waiter = await waitForLock(`duplicate-second-${n}`);
+          const waiter = await waitForLock(
+            `duplicate-second-${n}`,
+            "pg_advisory_xact_lock",
+            owner.pid,
+          );
           expect(waiter.query).toContain("pg_advisory_xact_lock");
           expect(waiter.blockers).toContain(owner.pid);
         },
@@ -361,7 +389,10 @@ describe.skipIf(!process.env.DATABASE_URL)(
             const pending = attempt(
               handleAgentEvent(writer, { ...cfg, lockWaitMs: 200 }, request, token),
             );
-            const waited = await waitForLock(role);
+            const waited = await waitForLock(
+              role,
+              lock === "key" ? "pg_advisory_xact_lock" : EVENTS_FOR_UPDATE,
+            );
             expect(waited.query).toMatch(lock === "key" ? /pg_advisory_xact_lock/ : /FOR UPDATE/);
             const denied = await pending;
             expect(denied).toMatchObject({
@@ -407,7 +438,7 @@ describe.skipIf(!process.env.DATABASE_URL)(
               owned.token,
             ),
           );
-          await waitForLock(role);
+          await waitForLock(role, EVENTS_FOR_UPDATE);
           // A global key lock would time out while the first call is still held.
           expect(
             await handleAgentEvent(
