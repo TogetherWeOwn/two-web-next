@@ -79,26 +79,40 @@ export async function robotsTag(c: Context<{ Bindings: Env }>, next: Next): Prom
 }
 
 // The only pages whose shell inlines the stylesheets instead of linking
-// them (theme="content" in src/page-shell.tsx): the stylesheets must be
-// inlined to remove their render-blocking requests on slow mobile audits,
-// and the inlined block is allowlisted by hash so style-src keeps no
-// 'unsafe-inline'. Any other response carrying the hash would be inert, but
-// the allowlist stays scoped to these paths so the documented policy for
-// every other route never changes shape.
-const CONTENT_LEAF_PATHS: ReadonlySet<string> = new Set(["/about", "/faq", "/rules", "/privacy"]);
+// them (theme="content" plus the homepage's inlineCriticalCss flag in
+// src/page-shell.tsx): the stylesheets must be inlined to remove their
+// render-blocking requests on slow mobile audits, and the inlined block is
+// allowlisted by hash so style-src keeps no 'unsafe-inline'. "/" reuses the
+// exact leaf bundle byte for byte (same LEAF_CRITICAL_CSS hash, no generator
+// change); recovery/error shells keep theme="home" without the flag and stay
+// on external stylesheets. Any other response carrying the hash would be
+// inert, but the allowlist stays scoped to these paths so the documented
+// policy for every other route never changes shape.
+const INLINE_CRITICAL_CSS_PATHS: ReadonlySet<string> = new Set([
+  "/",
+  "/about",
+  "/faq",
+  "/rules",
+  "/privacy",
+]);
 
 export function isContentLeafPath(path: string): boolean {
-  return CONTENT_LEAF_PATHS.has(path);
+  return INLINE_CRITICAL_CSS_PATHS.has(path) && path !== "/";
 }
 
-// Per-route twin of the static secureHeaders() policy in src/index.tsx: on a
-// content-leaf path, widen the already-emitted `style-src 'self'` with the
-// inlined block's hash. Runs inside the existing header wrapper after
+export function isInlineCriticalCssPath(path: string): boolean {
+  return INLINE_CRITICAL_CSS_PATHS.has(path);
+}
+
+// Per-route twin of the static secureHeaders() policy in src/index.tsx: on an
+// inline-critical path (/ plus the content leaves), widen the already-emitted
+// `style-src 'self'` with the inlined block's hash. Runs inside the existing
+// header wrapper after
 // secureHeaders (same pattern as robotsTag), so no extra middleware is
 // registered. String replacement keeps the directive order byte-identical to
 // securityHeadersFor for the same path.
 export function leafInlineStyleCsp(c: Context): void {
-  if (!isContentLeafPath(c.req.path)) return;
+  if (!isInlineCriticalCssPath(c.req.path)) return;
   const csp = c.res.headers.get("Content-Security-Policy");
   if (!csp || !csp.includes("style-src 'self'")) return;
   c.res.headers.set(
@@ -123,11 +137,13 @@ export function securityHeadersFor(
   const images = imageHosts(featuredImageHosts)
     .map((host) => `https://${host}`)
     .join(" ");
-  // Only the content leaves (about/faq/rules/privacy) emit an inlined
-  // <style> block, so only they carry its hash allowlist. Every other path
-  // keeps the exact documented policy byte-identical, which the adapter
+  // Only the inline-critical pages (/ plus about/faq/rules/privacy) emit an
+  // inlined <style> block, so only they carry its hash allowlist. Every other
+  // path keeps the exact documented policy byte-identical, which the adapter
   // _headers parity and Kit parity tests pin.
-  const leafStyle = isContentLeafPath(request.path) ? [`'sha256-${LEAF_CRITICAL_CSS_SHA256}'`] : [];
+  const leafStyle = isInlineCriticalCssPath(request.path)
+    ? [`'sha256-${LEAF_CRITICAL_CSS_SHA256}'`]
+    : [];
   const csp = [
     ["default-src", "'self'"],
     ["base-uri", "'self'"],

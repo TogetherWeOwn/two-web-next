@@ -10,6 +10,7 @@
 
 import { describe, expect, it } from "vitest";
 import app from "./app";
+import { LEAF_CRITICAL_CSS_SHA256 } from "../src/leaf-critical-css";
 import { Home } from "../src/pages";
 import { robotsTagFor, SECURITY_HEADERS } from "../src/headers";
 import { buildRobots } from "../src/seo";
@@ -132,7 +133,10 @@ describe("row 18: CSP deltas from legacy, each pinned with its reason", () => {
   it("drops unsafe-inline/unsafe-eval: no inline code survives", async () => {
     const csp = directives(await app.request("/", {}, staging));
     expect(csp["script-src"]).toBe("'self'");
-    expect(csp["style-src"]).toBe("'self'");
+    // The homepage inlines the shared critical-CSS bundle for first paint;
+    // the block is allowlisted by hash, never by unsafe-inline.
+    expect(csp["style-src"]).toBe(`'self' 'sha256-${LEAF_CRITICAL_CSS_SHA256}'`);
+    expect(csp["style-src"]).not.toContain("unsafe-inline");
     // Event JSON-LD <script type="application/ld+json"> blocks are data, not
     // code — never executed — and <script src> islands load same-origin, so
     // script-src 'self' stays sound with both. Only a src-less non-JSON-LD

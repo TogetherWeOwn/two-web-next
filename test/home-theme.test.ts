@@ -60,7 +60,12 @@ describe("homepage theme", () => {
   it("opts the homepage into the theme without changing unthemed layouts", () => {
     const html = render();
     expect(html).toContain('<body class="base-theme homepage-theme"><a class="skip-link"');
-    expect(html).toContain('href="/theme.css"');
+    // The homepage inlines the shared critical-CSS bundle and retains the
+    // Display-700 preload for an early font fetch; the Arial-metric
+    // 'Display Fallback' reduces delayed-font layout shift.
+    expect(html).toContain("<style>");
+    expect(html).toContain(".hero h1");
+    expect(html).not.toContain('rel="stylesheet"');
     expect(html).toContain('href="/fonts/display-latin-700.woff2" as="font"');
     expect(html).toContain('src="/logo.svg" width="64" height="64" alt="Together We Own"');
     expect(html).toContain('data-testid="site-jsonld"');
