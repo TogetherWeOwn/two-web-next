@@ -116,8 +116,11 @@ describe("alert capacity mute", () => {
       event: "error.alert",
       fingerprint: "BoomError@/a",
       exception: "BoomError",
+      error_class: "BoomError",
       method: "GET",
       route: "/a",
+      build_sha: null,
+      release: null,
     });
   });
 

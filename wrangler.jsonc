@@ -36,10 +36,11 @@
       { "queue": "two-internal-action", "binding": "INTERNAL_ACTION_QUEUE" }
     ]
   },
-  // Revision marker for `/up` (staging only). Bindings are not inherited by
-  // `env.production`, so production stays unmarked until a reviewed cutover PR
-  // declares this binding there. The deploy workflow tags each Version with its
-  // commit SHA; `/up` reads both back so a rollback target is provable live.
+  // Revision marker for `/up` and the release fields on structured log
+  // lines. Bindings are not inherited by `env.production`, which declares
+  // its own copy below. The deploy workflows tag each Version with its
+  // commit SHA; `/up` and the log emitters read it back so a rollback
+  // target and every log line's build are provable live.
   "version_metadata": { "binding": "CF_VERSION_METADATA" },
   // Every host, including static requests, must pass the Worker's host guard.
   "assets": { "directory": "./public", "binding": "ASSETS", "run_worker_first": true },
@@ -75,6 +76,9 @@
       // tail_consumers are not inherited from the top level: Wrangler needs
       // this repeated in every named environment that must page.
       "tail_consumers": [{ "service": "two-web-next-alerts-production" }],
+      // Not inherited from the top level: without this copy a production
+      // `/up` has no revision marker and its log lines carry no build SHA.
+      "version_metadata": { "binding": "CF_VERSION_METADATA" },
       // Cutover target only, NOT a DNS change or authorization to claim the apex.
       "routes": [{ "pattern": "togetherweown.com", "custom_domain": true }],
       "triggers": { "crons": ["*/10 * * * *", "0 0 * * *"] },

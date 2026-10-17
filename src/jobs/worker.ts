@@ -2,6 +2,7 @@ import postgres from "postgres";
 import { createBotClient } from "../bot/client";
 import type { Env, JobsEnv } from "../env";
 import { databaseOptions, databaseUrl } from "../db/connection";
+import { setReleaseMetadata } from "../release-tag";
 import { qaEnabled } from "../qa";
 import { pruneModelTables, reconcileEvents, runScheduled } from "./cron";
 import { consume } from "./consumer";
@@ -110,6 +111,8 @@ export async function handleQueue(
   env: JobsEnv,
   ctx?: ExecutionContext,
 ): Promise<void> {
+  // Seed before consume() so queue.failing lines carry this Worker's build.
+  setReleaseMetadata(env.CF_VERSION_METADATA);
   const sql = sqlFor(env);
   // Promise.race bounds waiting, not SQL execution. Isolate all best-effort
   // ledger/lock traffic from the max:1 handler pool: a timed-out statement can
@@ -161,6 +164,7 @@ export async function handleScheduled(
   controller: ScheduledController,
   env: JobsEnv,
 ): Promise<void> {
+  setReleaseMetadata(env.CF_VERSION_METADATA);
   const sql = sqlFor(env);
   // Dispatch commits its ledger row and uniqueness lock before the external
   // queue send. A later reconciliation rollback must not erase accepted jobs,

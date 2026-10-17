@@ -27,8 +27,8 @@ expect Hono for the right reason.
 | `GET /admin/events/new` | `web/src/routes/admin/events/new/+page.svelte` (`csr=false`, shared `AdminShell.svelte` chrome per-child title, `decideKitAdminGuard` layout guard, empty `buildEventCreateView` with the Hono 422 values/errors shape, private no-store, shared `/islands/auth-status.js` shell tab-sync controller plus `/islands/admin-event-text-limits.js` + `/islands/admin-event-editor.js` progressive islands; only this GET migrates — `POST /admin/events` stays Hono-owned, so draft-first creation, weekly recurrence (max 52), wall-time/timezone validation, body cap, throttle, error aggregation, retained values and the 303 keep one authority, and the guarded `/admin/events/create` legacy redirect stays Hono) | events/view (`admin.events.create`, bridged moderator viewer; no store read on fresh GET, like the Hono handler) | Hono (`enabled: false`) |
 | `GET /admin/events/create` | none (exact disabled manifest pin, no Kit handler; the guarded legacy redirect stays Hono-owned so the `:key` pattern cannot capture `/create` once enabled) | — (no declaration; Hono-owned) | Hono (`enabled: false`) |
 | `GET /admin/events/:key` | `web/src/routes/admin/events/[key]/+page.svelte` (`csr=false`, shared `AdminShell.svelte` chrome per-child title, `decideKitAdminGuard` layout guard, shared `getEvent` read with the Hono wall-value/status/series shape plus the Hono 422 values/errors shape, shared bounded `listRoster` page with the Hono search/sort/paging copy and a classified-outage 503 mapping, private no-store, plain POST forms to the Hono-owned edit/publish/cancel/RSVP-pause/RSVP-reopen endpoints, shared `/islands/auth-status.js` shell tab-sync controller plus `/islands/admin-event-text-limits.js` + `/islands/admin-event-editor.js` progressive islands, no removal affordance; only this GET migrates — the update, transition and guarded `/:key/edit` legacy routes stay Hono-owned, so UTC carriers, future recurrence propagation and postcommit writeback keep one authority) | events/view (`admin.events.edit`, bridged moderator viewer; roster members audited, failed audit refuses the whole render) | Hono (`enabled: false`) |
-| `GET /admin/join-attempts` | `web/src/routes/admin/join-attempts/+page.svelte` (`csr=false` via the group layout, shared `listJoinAttempts`/`parseJoinAttemptsQuery`/`joinAttemptsUrl` reads with the retention window and exact Discord/request-id search, classified-outage 503 mapping, private no-store, no page-specific island beyond the shared `/islands/auth-status.js` shell tab-sync controller; the detail links target the Kit detail page below) | join_attempts/list (`admin.join-attempts.index`, bridged moderator viewer) | Hono (`enabled: false`) |
-| `GET /admin/join-attempts/:id` | `web/src/routes/admin/join-attempts/[id]/+page.svelte` (`csr=false` via the group layout, shared `getJoinAttempt` retention-window lookup with the Hono canonical-ID admission, classified-outage 503 mapping, private no-store, no page-specific island beyond the shared `/islands/auth-status.js` shell tab-sync controller; same outcome/source/time/trace fields, em-dash fallbacks and back navigation as the Hono detail, no raw provider/token payload) | join_attempts/view (`admin.join-attempts.show`, bridged moderator viewer) | Hono (`enabled: false`) |
+| `GET /admin/join-attempts` | `web/src/routes/admin/join-attempts/+page.svelte` (`csr=false` via the group layout, shared `listJoinAttempts`/`parseJoinAttemptsQuery`/`joinAttemptsUrl` reads with the retention window and exact Discord/request-id search, classified-outage 503 mapping, private no-store, no page-specific island beyond the shared `/islands/auth-status.js` shell tab-sync controller; the detail links target the Kit detail page below) | join_attempts/list (`admin.join-attempts.index`, bridged moderator viewer) | Kit (`enabled: true`) |
+| `GET /admin/join-attempts/:id` | `web/src/routes/admin/join-attempts/[id]/+page.svelte` (`csr=false` via the group layout, shared `getJoinAttempt` retention-window lookup with the Hono canonical-ID admission, classified-outage 503 mapping, private no-store, no page-specific island beyond the shared `/islands/auth-status.js` shell tab-sync controller; same outcome/source/time/trace fields, em-dash fallbacks and back navigation as the Hono detail, no raw provider/token payload) | join_attempts/view (`admin.join-attempts.show`, bridged moderator viewer) | Kit (`enabled: true`) |
 | `GET /auth/recover` | `web/src/routes/auth/recover/+page.svelte` (`csr=false`, shared `#lib/Recovery.svelte` over the `RecoveryModel` shape; journey writes + `/join/callback` outcomes stay Hono, rendered through the injected outcome renderer) | public | Hono (`enabled: false`) |
 | `GET /profile` | `web/src/routes/profile/+page.svelte` (`csr=false`, one shared `web/src/lib/ProfileView.svelte`, member record + optional stats) | member (`profile`/`view`/`profile`) | Hono (`enabled: false`) |
 | `GET /members/:user` | `web/src/routes/members/[user]/+page.svelte` (same shared view; retired `/members` directory has no route) | member (`profile`/`view`/`profiles.show`) | Hono (`enabled: false`) |
@@ -322,14 +322,19 @@ until their routes migrate; the gate ledger derives each entry from
 `skipped: <route> not Kit-native` with reason strings — loud, countable,
 never quiet green, and never a `test.skip` call (the floor forbids new
 skips). The uncovered-route catch-all considers a route covered when its
-base path appears in `PARITY_ROUTES` (`isCoveredByExecutedRun`); this
-declaration alone does not prove a browser journey ran. `/about`, `/faq`
+base path appears in `PARITY_ROUTES` (`isCoveredByExecutedRun`); a `:param`
+pattern is covered only by a concrete numeric-id instance of the pattern
+itself (never by a static sibling). This declaration alone does not prove a
+browser journey ran. `/about`, `/faq`
 and the four hot-zone paths clear the catch-all because their base paths are
 listed, not because that catch-all checks an executed journey; the step-3
 fixtures and operator-run preview are separate contract evidence. Executed
 parity journeys cover GET/HEAD `/events/past`, `/events`, `/join`,
-`/auth/recover` and `/leaderboards/members` (the member board also runs
-authenticated). Hot-zone coverage is distinct: the suite performs raw
+`/auth/recover`, `/leaderboards/members` (the member board also runs
+authenticated) and the moderator `/admin/join-attempts` pair (guest bounce,
+member refusal, moderator list, and a canonical missing detail id in
+preview; the served detail is pinned by the unit fixtures and the hermetic
+Kit suites because no seeded attempt id is stable on staging). Hot-zone coverage is distinct: the suite performs raw
 no-JavaScript API checks for all four paths and the two-width browser journey
 renders `/hotzones`, `/hotzones/joins`, `/hotzones/voice` and
 `/hotzones/games`. The latter two currently have only shared heading/grid/layout

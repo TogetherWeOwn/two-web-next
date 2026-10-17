@@ -187,17 +187,24 @@ describe("acceptance: detail route classification and audited release", () => {
     return entry!;
   };
 
-  it("ships disabled as a join_attempts view member read, so Hono still serves it", () => {
+  it("ships enabled as a join_attempts view member read, so Kit serves it", () => {
     const entry = detailEntry();
     expect(entry).toEqual({
       method: "GET",
       path: "/admin/join-attempts/:id",
-      enabled: false,
+      enabled: true,
       reads: { resource: "join_attempts", action: "view", route: "admin.join-attempts.show" },
     });
-    // Disabled means the hook hands the request to Hono, never to Kit.
+    // Enabled means the hook dispatches the request to Kit inside the
+    // member-read boundary; returning the entry to enabled: false hands it
+    // back to Hono as the rollback.
     expect(
       decideRoute(new Request(new URL("/admin/join-attempts/7", APP_URL)), ROUTE_MANIFEST),
+    ).toBe(entry);
+    expect(
+      decideRoute(new Request(new URL("/admin/join-attempts/7", APP_URL)), [
+        { ...entry, enabled: false },
+      ]),
     ).toBeUndefined();
   });
 

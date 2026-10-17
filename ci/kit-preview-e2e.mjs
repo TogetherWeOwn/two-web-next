@@ -174,7 +174,7 @@ function stripHydrationMarkers(html) {
   let previous;
   do {
     previous = html;
-    html = html.replace(/<!--\[[\d-]*-->|<!--\]-->/g, "");
+    html = html.replace(/\x3c!--\[[\d-]*-->|\x3c!--\]-->/g, "");
   } while (html !== previous);
   return html;
 }

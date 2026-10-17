@@ -59,3 +59,22 @@ export function qaLoginThrottleError(identity, retryAfterSeconds, attempts, scop
 export function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
+
+/**
+ * Longest the Retry-After waits can take across `loginCount` sequential
+ * logins: each login sleeps at most QA_LOGIN_MAX_ATTEMPTS - 1 times, bounded
+ * by QA_LOGIN_RETRY_AFTER_CAP_SECONDS. Callers running under a test or hook
+ * timeout add this to their normal allowance — the staging config's 30 s
+ * timeout also bounds beforeAll hooks, and one capped wait is 65 s, so a
+ * login under the bare timeout dies as a hook timeout on the first 429
+ * instead of completing its retry (or failing with qaLoginThrottleError).
+ * Inside a hook, test.setTimeout raises that hook's own timeout.
+ *
+ * @param {number} loginCount sequential logins (2 for both QA identities)
+ */
+export function qaLoginRetryBudgetMs(loginCount) {
+  if (!Number.isInteger(loginCount) || loginCount < 1) {
+    throw new RangeError(`qaLoginRetryBudgetMs needs a positive login count, got ${loginCount}`);
+  }
+  return loginCount * (QA_LOGIN_MAX_ATTEMPTS - 1) * QA_LOGIN_RETRY_AFTER_CAP_SECONDS * 1000;
+}

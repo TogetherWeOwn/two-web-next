@@ -8,7 +8,7 @@
     "deploy": "wrangler deploy",
     "typecheck": "tsc --noEmit && tsc --noEmit -p ci/tsconfig.json",
     "test": "vitest run",
-    "e2e": "playwright test",
+    "e2e": "NODE_OPTIONS=--import=tsx playwright test",
     "e2e:staging": "playwright test --config playwright.staging.config.ts",
     "e2e:watch": "playwright test --config playwright.watch.config.ts",
     "e2e:typecheck": "tsc --noEmit -p e2e/tsconfig.json",
@@ -91,6 +91,7 @@
     "fast-check": "4.10.2",
     "miniflare": "5.20260926.1-alpha",
     "playwright": "^1.63.0",
+    "tsx": "^4.23.15",
     "typescript": "^7.0.2",
     "vitest": "^5.0.2",
     "wrangler": "^4.149.0"

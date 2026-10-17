@@ -399,6 +399,85 @@ test("preview member-board journeys skip loud without a QA token", () => {
   void status;
 });
 
+const joinAttemptsPreviewStub = `
+const archivePage =
+  \`<html><head><link rel="canonical" href="https://x.invalid/"></head>\` +
+  \`<body><a class="skip-link" href="#main">Skip</a>\` +
+  \`<nav aria-label="Primary"></nav><main id="main">\` +
+  \`<section data-testid="past-events"><div data-testid="past-events-list">\` +
+  \`<article data-event-key="k1"></article></div></section></main>\` +
+  \`<p>Welcome, guest</p><script src="/islands/past-events.js"></script></body></html>\`;
+const attemptsPage =
+  \`<html><head><title>Join attempts — TWO admin</title></head>\` +
+  \`<body><a class="skip-link" href="#main">Skip to content</a>\` +
+  \`<header class="bar"><nav aria-label="Administration"></nav></header>\` +
+  \`<main id="main"><section><h1>Join attempts</h1>\` +
+  \`<p class="hint">Read-only. Last 90 days, newest first. Search is an exact Discord id or request id.</p>\` +
+  \`<form method="get" action="/admin/join-attempts" class="filters">\` +
+  \`<input id="q" name="q" type="search" value="" />\` +
+  \`<select id="outcome" name="outcome"></select></form>\` +
+  \`<div aria-label="Join attempts list"><table data-testid="join-attempts-table"><thead><tr>\` +
+  \`<th scope="col">Outcome</th><th scope="col">Source</th><th scope="col">Discord id</th>\` +
+  \`<th scope="col">Request id</th><th scope="col">Attempted</th></tr></thead>\` +
+  \`<tbody><tr><td data-testid="join-attempts-empty">No join attempts.</td></tr></tbody></table></div>\` +
+  \`<nav aria-label="Join attempt pages"><span>Page 1</span></nav></section></main>\` +
+  \`<footer>Together We Own · moderators only</footer></body></html>\`;
+globalThis.fetch = async (input, init = {}) => {
+  const url = new URL(String(input.url ?? input));
+  const headers = init.headers ?? {};
+  if (url.pathname === "/up") return new Response("{}", { status: 200, headers: { "content-type": "application/json" } });
+  if (url.pathname === "/auth/qa/qa-member" || url.pathname === "/auth/qa/qa-moderator") {
+    if (headers["x-two-qa-auth"] !== "test-token") return new Response("no", { status: 404 });
+    const kind = url.pathname.endsWith("qa-moderator") ? "mod" : "member";
+    return new Response(null, { status: 204, headers: { "set-cookie": "__Host-two_session=two_" + kind + "; Path=/; HttpOnly" } });
+  }
+  if (url.pathname === "/admin/join-attempts" || url.pathname.startsWith("/admin/join-attempts/")) {
+    const cookie = headers.cookie ?? "";
+    if (!cookie.includes("__Host-two_session=")) {
+      return new Response("", { status: 302, headers: { location: "/auth/discord?next=%2Fadmin%2Fjoin-attempts", "cache-control": "private, no-store" } });
+    }
+    if (cookie.includes("two_member")) {
+      return new Response("Forbidden", { status: 403, headers: { "content-type": "text/plain" } });
+    }
+    if (url.pathname !== "/admin/join-attempts") {
+      return new Response("Not found", { status: 404, headers: { "content-type": "text/plain" } });
+    }
+    return new Response(attemptsPage, { status: 200, headers: { "content-type": "text/html", "cache-control": "private, no-store", ...(url.hostname.startsWith("kit.") ? { "x-two-renderer": "kit" } : {}) } });
+  }
+  return new Response(archivePage, { status: 200, headers: { "content-type": "text/html" } });
+};
+`;
+
+test("preview join-attempts journeys execute with QA sessions and pass", () => {
+  const { status, output } = runScript({
+    env: {
+      KIT_PREVIEW_URL: "https://kit.invalid.workers.dev/",
+      HONO_PREVIEW_URL: "https://hono.invalid.workers.dev/",
+      KIT_PARITY_QA_TOKEN: "test-token",
+    },
+    stub: joinAttemptsPreviewStub,
+  });
+  // The stub serves only the archive + join-attempts contracts, so other
+  // routes fail in this run; the join-attempts journeys must all pass.
+  assert.match(output, /\[passed\] preview Kit \/admin\/join-attempts: contract/);
+  assert.match(output, /\[passed\] preview Hono \/admin\/join-attempts: no Kit marker/);
+  assert.doesNotMatch(output, /\[failed\] preview [^\n]*join-attempts/);
+  void status;
+});
+
+test("preview join-attempts journeys skip loud without a QA token", () => {
+  const { status, output } = runScript({
+    env: {
+      KIT_PREVIEW_URL: "https://kit.invalid.workers.dev/",
+      HONO_PREVIEW_URL: "https://hono.invalid.workers.dev/",
+      KIT_PARITY_QA_TOKEN: "",
+    },
+    stub: joinAttemptsPreviewStub,
+  });
+  assert.match(output, /\[skipped\] preview [^\n]*join-attempts[^\n]*KIT_PARITY_QA_TOKEN/);
+  void status;
+});
+
 test("member-board contract passes a good fixture and fails planted mutants", () => {
   const goodHtml =
     `<html><head><link rel="canonical" href="https://next.togetherweown.com/leaderboards/members">` +
@@ -932,13 +1011,13 @@ test("recovery contract proves the shared shell, safe retry hrefs and private no
 
 test("enabled routes outside every journey scope fail via the catch-all", () => {
   const silent = { write: () => {} };
-  // GET /join and GET /events are covered by the executed parity run
-  // (PARITY_ROUTES), so neither belongs in this uncovered list;
-  // /join/discord proves the funnel tail stays Hono-owned.
+  // GET /join, GET /events and the moderator join-attempts pair are covered
+  // by the executed parity run (PARITY_ROUTES), so none belongs in this
+  // uncovered list; /join/discord proves the funnel tail stays Hono-owned.
   for (const route of [
     `{ method: "GET", path: "/admin", enabled: true }`,
     `{ method: "GET", path: "/admin/featured", enabled: true }`,
-    `{ method: "GET", path: "/admin/join-attempts", enabled: true }`,
+    `{ method: "GET", path: "/admin/featured/:id", enabled: true }`,
     `{ method: "GET", path: "/admin/queue/failed/:id/preview", enabled: true }`,
     `{ method: "GET", path: "/events/:key", enabled: true }`,
     `{ method: "GET", path: "/join/discord", enabled: true }`,
@@ -994,6 +1073,66 @@ test("executed-run coverage is GET/HEAD /events/past, GET/HEAD /events, GET/HEAD
   assert.equal(
     isCoveredByExecutedRun({ method: "POST", path: "/auth/recover", enabled: true }),
     false,
+  );
+});
+
+test("executed-run coverage includes the moderator join-attempts pair via its numeric detail instance", () => {
+  assert.equal(
+    isCoveredByExecutedRun({ method: "GET", path: "/admin/join-attempts", enabled: true }),
+    true,
+  );
+  assert.equal(
+    isCoveredByExecutedRun({ method: "HEAD", path: "/admin/join-attempts", enabled: true }),
+    true,
+  );
+  assert.equal(
+    isCoveredByExecutedRun({ method: "POST", path: "/admin/join-attempts", enabled: true }),
+    false,
+  );
+  assert.equal(
+    isCoveredByExecutedRun({ method: "GET", path: "/admin/join-attempts/:id", enabled: true }),
+    true,
+  );
+  // A renamed :param is the same pattern family to the runtime router, so
+  // the numeric instance still covers it; a static sibling never does.
+  assert.equal(
+    isCoveredByExecutedRun({
+      method: "GET",
+      path: "/admin/join-attempts/:attemptId",
+      enabled: true,
+    }),
+    true,
+  );
+  assert.equal(
+    isCoveredByExecutedRun({ method: "GET", path: "/events/:key", enabled: true }),
+    false,
+  );
+  assert.equal(
+    isCoveredByExecutedRun({ method: "GET", path: "/admin/featured/:id", enabled: true }),
+    false,
+  );
+  assert.equal(
+    isCoveredByExecutedRun({ method: "POST", path: "/admin/join-attempts/:id", enabled: true }),
+    false,
+  );
+});
+
+test("an enabled nested-reads join-attempts pair is covered by the executed parity run", () => {
+  const silent = { write: () => {} };
+  const journeys = runUnitMode({
+    stdout: silent,
+    manifestSource:
+      `{ method: "GET", path: "/events/past", enabled: false }, { method: "GET", path: "/events", enabled: false }, { method: "GET", path: "/join", enabled: false }, { method: "GET", path: "/auth/recover", enabled: false },` +
+      ` { method: "GET", path: "/admin/join-attempts", enabled: true, ` +
+      `reads: { resource: "join_attempts", action: "list", route: "admin.join-attempts.index" } },` +
+      ` { method: "GET", path: "/admin/join-attempts/:id", enabled: true, ` +
+      `reads: { resource: "join_attempts", action: "view", route: "admin.join-attempts.show" } }`,
+  });
+  assert.equal(summarizeLedger(journeys).verdict, "pass");
+  const failed = journeys.filter((j) => j.status === "failed");
+  assert.ok(
+    !failed.some((j) => j.reason?.includes("/admin/join-attempts")),
+    "no failure may name the covered join-attempts pair",
   );
 });
 

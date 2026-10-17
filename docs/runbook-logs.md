@@ -6,7 +6,7 @@ mounted routers, so redirects, denials, 404s, handled 500s and downstream respon
 replacements have the same log/header contract.
 
 ```json
-{"event":"http.request","request_id":"0123456789abcdef-LHR","method":"GET","route":"/e/:key","status":200,"duration_ms":12.34,"colo":"LHR"}
+{"event":"http.request","request_id":"0123456789abcdef-LHR","method":"GET","route":"/e/:key","status":200,"duration_ms":12.34,"colo":"LHR","error_class":null,"build_sha":"0123456789abcdef0123456789abcdef01234567","release":"0123456789abcdef0123456789abcdef01234567"}
 ```
 
 ## Find a request
@@ -28,6 +28,12 @@ replacements have the same log/header contract.
 4. The `http.request` record gives the method, registered route pattern,
    final status, wall-clock `duration_ms` and edge colo (`null` locally).
    Unknown URLs use `unmatched`; URL parameters and query strings are absent.
+   Every structured record (`http.request`, `error.alert`, `queue.failing`)
+   also carries `build_sha` and `release`: the deploy commit parsed from the
+   Worker Version tag (`null` where no `version_metadata` binding exists, as
+   locally), and `error_class` (the exception class on error records, `null`
+   on `http.request`). Filter on `build_sha` to ask whether an error predates
+   or postdates a specific deploy.
 5. Search the same ID across `error.alert` and `queue.failing` records to connect
    an HTTP failure or a later queued failure with the request that produced it.
    Error alerts still mute duplicate exception-class/route fingerprints for
@@ -198,7 +204,9 @@ reads only.
 ## Privacy and boundaries
 
 Request logs allowlist only `event`, `request_id`, `method`, `route`, `status`,
-`duration_ms` and `colo`. They never include headers, cookies, tokens, bodies,
+`duration_ms`, `colo`, `error_class`, `build_sha` and `release`. The last two
+are the parsed 40-hex deploy commit or `null` — never the raw version tag.
+They never include headers, cookies, tokens, bodies,
 query strings, IPs, resolved URL paths or Discord IDs. Error alerts include the
 exception class, not its message or stack (which may contain SQL bindings or
 personal data). Queue failure lines carry the class for an unexpected throw, or a

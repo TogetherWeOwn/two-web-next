@@ -53,6 +53,7 @@ export const Home: FC<{
       canonical={canonicalUrl(appUrl, "/")}
       shareDescription="We spent most of our life private. Now you can just turn up."
       theme="home"
+      inlineCriticalCss
     >
       <SiteHeader session={session} active="home" />
       <main id="main" tabindex={-1}>

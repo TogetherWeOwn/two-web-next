@@ -61,6 +61,16 @@ function topLevelPermissions(lines: string[]) {
 }
 
 describe("workflow supply-chain hardening", () => {
+  it("makes the Semgrep sink and secret scan fail closed", () => {
+    const workflow = readFileSync(".github/workflows/ci.yml", "utf8");
+    const step = workflow.match(/      - name: Semgrep \(HARD\)([\s\S]*?)(?=      - name:|$)/)?.[1];
+
+    expect(step, "Semgrep HARD step exists in the check workflow").toBeDefined();
+    expect(step).not.toMatch(/^\s+continue-on-error:/m);
+    expect(step).toContain("semgrep==1.180.0");
+    expect(step).toContain("node ci/semgrep-warn-selftest.mjs");
+    expect(step).toContain("--strict --error --config ci/semgrep-rules.yml");
+  });
   it("finds the workflows and their action refs", () => {
     expect(workflows.length).toBeGreaterThan(0);
     for (const { name, lines } of workflows)

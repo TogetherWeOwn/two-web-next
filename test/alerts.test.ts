@@ -69,8 +69,11 @@ describe("rate limit", () => {
       event: "error.alert",
       fingerprint: "BoomError@/join",
       exception: "BoomError",
+      error_class: "BoomError",
       method: "POST",
       route: "/join",
+      build_sha: null,
+      release: null,
     });
     expect(fingerprintOf(new BoomError(), "/join")).toBe("BoomError@/join");
   });
@@ -161,6 +164,9 @@ describe("queue.failing", () => {
         job: "CallInternalAction",
         attempts: 2,
         exception: "BotTerminalError",
+        error_class: "BotTerminalError",
+        build_sha: null,
+        release: null,
       },
     ]);
   });

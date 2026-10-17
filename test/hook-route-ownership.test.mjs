@@ -64,7 +64,7 @@ beforeEach(() => {
 });
 
 describe("hooks.server route ownership wiring", () => {
-  it("ships the native archive, events list and about/faq leaves enabled with the homepage, privacy, rules, join, recover, admin and profile reads still on Hono", () => {
+  it("ships the native archive, events list, about/faq leaves and join-attempts pair enabled with the homepage, privacy, rules, join, recover, remaining admin and profile reads still on Hono", () => {
     expect(ROUTE_MANIFEST).toEqual([
       { method: "GET", path: "/", enabled: false, reads: "public" },
       { method: "GET", path: "/events/past", enabled: true, reads: "public" },
@@ -126,13 +126,13 @@ describe("hooks.server route ownership wiring", () => {
       {
         method: "GET",
         path: "/admin/join-attempts",
-        enabled: false,
+        enabled: true,
         reads: { resource: "join_attempts", action: "list", route: "admin.join-attempts.index" },
       },
       {
         method: "GET",
         path: "/admin/join-attempts/:id",
-        enabled: false,
+        enabled: true,
         reads: { resource: "join_attempts", action: "view", route: "admin.join-attempts.show" },
       },
       { method: "GET", path: "/auth/recover", enabled: false, reads: "public" },

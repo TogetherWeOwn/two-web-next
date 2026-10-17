@@ -315,6 +315,7 @@ exactly once.
 | `src/qa.ts` | auth |
 | `src/recovery-outcome.ts` | entry |
 | `src/recovery-hono.tsx` | entry |
+| `src/release-tag.ts` | observability |
 | `src/request-log.ts` | observability |
 | `src/return-journey.ts` | auth |
 | `src/roles.ts` | auth |
