@@ -30,7 +30,7 @@ Guidance for human and AI contributors.
 
 ## Commands
 
-Use Node 22.18.0+ on the 22.x line, or 24+ (CI uses Node 24).
+Use Node 22.23.0+ on the 22.x line, or 24+ (CI uses Node 24).
 
 ```sh
 npm ci --include=dev

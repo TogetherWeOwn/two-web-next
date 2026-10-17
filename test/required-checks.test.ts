@@ -83,10 +83,36 @@ describe("required checks always report", () => {
     const ci = readFileSync(join(dir, "ci.yml"), "utf8");
     const ok = job(ci, "ci-ok");
     expect(ok).toMatch(
-      /\n    needs: \[a11y, lighthouse, bundle-budget, docs-links, check, scope\]\n/,
+      /\n    needs: \[a11y, lighthouse, bundle-budget, docs-links, check, node22-compat, scope\]\n/,
     );
     expect(ok).toMatch(/\n    if: \$\{\{ !cancelled\(\) \}\}\n/);
     // ci-ok is required (ruleset protect-main); the change-gating section documents what it aggregates.
     expect(readFileSync("CONTRIBUTING.md", "utf8")).toContain("### Change-gated CI and `ci-ok`");
+  });
+
+  // package.json declares `^22.23.0 || >=24` (22.23.0 is the 22.x floor
+  // verified end to end against this repo's suite and lockfile); the 24
+  // jobs alone ship the 22 range to developers unverified. The compat leg
+  // pins the exact engines floor and ci-ok fails unless it succeeded, so
+  // the leg cannot silently drift to a newer 22.x or report skipped.
+  it("node22-compat runs lint, typecheck and unit tests on the exact Node 22.23.0 floor", () => {
+    const ci = readFileSync(join(dir, "ci.yml"), "utf8");
+    const leg = job(ci, "node22-compat");
+    expect(leg).toContain("name: node22-compat");
+    expect(leg).toMatch(/\n    needs: \[scope\]\n/);
+    expect(leg).toMatch(/\n    if: \$\{\{ !cancelled\(\) \}\}\n/);
+    expect(leg).toContain("image: node:22.23.0-bookworm");
+    expect(leg).toMatch(/node-version: 22\.23\.0\n/);
+    expect(leg).toContain('test "$(node --version)" = "v22.23.0"');
+    expect(leg).toContain("npm run lint && npm run typecheck && npm test");
+    // Like `check`, the leg always reports: its first step fails on a red
+    // scope, and docs-only or draft PRs fast-pass instead of skipping.
+    const steps = leg.split("\n    steps:\n")[1] ?? "";
+    expect(steps).toMatch(/^      - name: Require successful scope\n/);
+    expect(leg).toContain(
+      "needs.scope.outputs.docs_only == 'true' || needs.scope.outputs.draft == 'true'",
+    );
+    expect(leg).toContain("needs.scope.outputs.draft != 'true'");
+    expect(job(ci, "ci-ok")).toContain("Require successful Node 22 compatibility leg");
   });
 });
