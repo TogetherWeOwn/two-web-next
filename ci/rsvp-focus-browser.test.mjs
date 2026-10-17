@@ -43,6 +43,7 @@ describe("RSVP outcome focus in Chromium", {
   let origin;
   let browser;
   let html;
+  const holderPages = {};
 
   before(async () => {
     scratch = await mkdtemp(join(process.env.PAPERCLIP_RUN_SCRATCH_DIR || tmpdir(), "rsvp-focus-"));
@@ -72,10 +73,28 @@ describe("RSVP outcome focus in Chromium", {
         now: new Date("2029-01-01T00:00:00Z"),
       }),
     );
+    // Seat-holder variants for the withdraw paths: paused events render the
+    // withdraw/leave control beside the paused status and no join control.
+    const holder = (rsvpOpen, status) =>
+      pageHtml(
+        renderRsvp({
+          e: { ...event, rsvpOpen },
+          member: true,
+          answer: { status, syncedToDiscordAt: null },
+          returnTo: "/e/raid/one",
+          waitlistPosition: status === "waitlisted" ? 2 : null,
+          now: new Date("2029-01-01T00:00:00Z"),
+        }),
+      );
+    holderPages["/paused-going"] = holder(false, "going");
+    holderPages["/paused-waitlisted"] = holder(false, "waitlisted");
+    holderPages["/open-going"] = holder(true, "going");
     server = createServer(async (req, res) => {
       const { pathname } = new URL(req.url, "http://localhost");
-      if (pathname === "/") {
-        res.writeHead(200, { "content-type": "text/html; charset=utf-8" }).end(html);
+      if (pathname === "/" || holderPages[pathname]) {
+        res
+          .writeHead(200, { "content-type": "text/html; charset=utf-8" })
+          .end(holderPages[pathname] || html);
       } else if (pathname === "/islands/rsvp-button.js") {
         res
           .writeHead(200, { "content-type": "text/javascript; charset=utf-8" })
@@ -95,7 +114,7 @@ describe("RSVP outcome focus in Chromium", {
     await rm(scratch, { recursive: true, force: true });
   });
 
-  async function openMember() {
+  async function openMember(path = "/") {
     const context = await browser.newContext();
     const page = await context.newPage();
     const writes = [];
@@ -107,7 +126,7 @@ describe("RSVP outcome focus in Chromium", {
         arrive.resolve();
       },
     );
-    await page.goto(`${origin}/`);
+    await page.goto(`${origin}${path}`);
     const pending = async () => {
       await arrive.promise;
       arrive = Promise.withResolvers();
@@ -198,5 +217,46 @@ describe("RSVP outcome focus in Chromium", {
     await member.succeed(route);
     await page.getByTestId("rsvp-confirmed").waitFor();
     assert.equal(await member.focused(), "BODY");
+  });
+
+  // A paused event may render no join control after a withdraw, so the
+  // paused status itself is the focus landing spot — never the body.
+  for (const [path, control] of [
+    ["/paused-going", "rsvp-withdraw"],
+    ["/paused-waitlisted", "waitlist-leave"],
+  ]) {
+    it(`lands focus on the paused status after a keyboard withdraw at ${path}`, async (t) => {
+      const member = await openMember(path);
+      t.after(() => member.context.close());
+      const { page } = member;
+      await page.getByTestId(control).focus();
+      await page.keyboard.press("Enter");
+      const route = await member.pending();
+      assert.equal(route.request().method(), "DELETE");
+      await route.fulfill({ status: 204, body: "" });
+      await page.getByTestId("rsvp-paused").waitFor();
+      await page.waitForFunction(
+        () => document.activeElement?.getAttribute("data-testid") === "rsvp-paused",
+        null,
+        { timeout: 5000 },
+      );
+      assert.equal(await page.getByTestId("rsvp-paused").getAttribute("role"), "status");
+      assert.equal(await page.getByTestId("rsvp-paused").getAttribute("tabindex"), "-1");
+      assert.equal(await page.locator("[data-action]").count(), 0);
+      assert.equal(await member.focused(), "rsvp-paused");
+    });
+  }
+
+  it("still lands focus on the restored join control after an open-event withdraw", async (t) => {
+    const member = await openMember("/open-going");
+    t.after(() => member.context.close());
+    const { page } = member;
+    await page.getByTestId("rsvp-withdraw").focus();
+    await page.keyboard.press("Enter");
+    const route = await member.pending();
+    assert.equal(route.request().method(), "DELETE");
+    await route.fulfill({ status: 204, body: "" });
+    await page.getByTestId("rsvp-going").waitFor();
+    assert.equal(await member.focused(), "rsvp-going");
   });
 });
