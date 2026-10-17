@@ -146,8 +146,18 @@ test("font-swap acceptance detects a deliberately incorrect fallback metric", as
   const { html, csp } = await homepageFixture();
   const style = html.match(/<style>([\s\S]*?)<\/style>/);
   expect(style).not.toBeNull();
-  const brokenCss = style![1]!.replace("size-adjust: 83.8%", "size-adjust: 100%");
-  expect(brokenCss).not.toBe(style![1]);
+  // Break whatever metric the fallback ships with, rather than pinning one
+  // tuned value: a hard-coded metric silently stops mutating anything the
+  // day the fallback is retuned, and the control passes without testing it.
+  const fallbackMetric = /size-adjust:\s*[\d.]+%/;
+  expect(style![1], "inline CSS should carry a size-adjust fallback metric to break").toMatch(
+    fallbackMetric,
+  );
+  const brokenCss = style![1]!.replace(fallbackMetric, "size-adjust: 100%");
+  expect(brokenCss, "breaking the fallback metric should change the inline CSS").not.toBe(
+    style![1],
+  );
+  expect(brokenCss).toContain("size-adjust: 100%");
   const brokenHash = createHash("sha256").update(brokenCss).digest("base64");
   const brokenHtml = html.replace(style![0], `<style>${brokenCss}</style>`);
   const brokenCsp = csp.replace(LEAF_CRITICAL_CSS_SHA256, brokenHash);
