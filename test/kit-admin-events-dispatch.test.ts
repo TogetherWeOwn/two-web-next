@@ -124,16 +124,26 @@ describe("Kit admin events-list dispatch: privileged boundary releases and routi
     expect(res.headers.get(KIT_RENDERER_HEADER)).toBeNull();
   });
 
-  it("POST /admin/events is not a Kit route, so creates keep one Hono authority", async () => {
-    const request = new Request(`${APP_URL}/admin/events`, {
-      method: "POST",
-      headers: { host: "next.example.test" },
-    });
-    const res = await dispatchHookRequest(
-      { request, url: new URL(request.url), route: { id: "/admin/events" } },
-      depsFor(),
-    );
-    expect(await res.text()).toBe("hono");
-    expect(res.headers.get(KIT_RENDERER_HEADER)).toBeNull();
+  it("event writes stay Hono-owned and never receive the Kit marker", async () => {
+    for (const path of [
+      "/admin/events",
+      "/admin/events/new",
+      "/admin/events/EVT1",
+      "/admin/events/EVT1/publish",
+      "/admin/events/EVT1/cancel",
+      "/admin/events/EVT1/rsvp-pause",
+      "/admin/events/EVT1/rsvp-reopen",
+    ]) {
+      const request = new Request(`${APP_URL}${path}`, {
+        method: "POST",
+        headers: { host: "next.example.test" },
+      });
+      const res = await dispatchHookRequest(
+        { request, url: new URL(request.url), route: { id: path } },
+        depsFor({ manifest: ROUTE_MANIFEST }),
+      );
+      expect(await res.text()).toBe("hono");
+      expect(res.headers.get(KIT_RENDERER_HEADER)).toBeNull();
+    }
   });
 });
