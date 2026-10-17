@@ -102,7 +102,7 @@ test("extra fields that resemble values are ignored and never surface", () => {
   );
 });
 
-function cliWithStubbedWrangler(stubStdout, { exitCode = 0 } = {}) {
+function cliWithStubbedWrangler(stubStdout, { exitCode = 0, stubStderr = "" } = {}) {
   const scratch = mkdtempSync(
     join(
       process.env.PAPERCLIP_RUN_SCRATCH_DIR ?? process.env.PAPERCLIP_SCRATCH_DIR ?? tmpdir(),
@@ -113,13 +113,14 @@ function cliWithStubbedWrangler(stubStdout, { exitCode = 0 } = {}) {
     writeFileSync(
       join(scratch, "npx"),
       `#!${process.execPath}
-import { writeFileSync } from "node:fs";
+import { writeSync } from "node:fs";
 const expected = ["wrangler", "secret", "list", "--config", "wrangler.jobs.jsonc", "--format", "json"];
 if (JSON.stringify(process.argv.slice(2)) !== JSON.stringify(expected)) {
   console.error("unexpected wrangler invocation: " + process.argv.slice(2).join(" "));
   process.exit(2);
 }
-process.stdout.write(process.env.STUB_STDOUT);
+if (process.env.STUB_STDERR) writeSync(2, process.env.STUB_STDERR);
+writeSync(1, process.env.STUB_STDOUT);
 process.exit(Number(process.env.STUB_EXIT));
 `,
       { mode: 0o700 },
@@ -131,6 +132,7 @@ process.exit(Number(process.env.STUB_EXIT));
         ...process.env,
         PATH: `${scratch}:${process.env.PATH}`,
         STUB_STDOUT: stubStdout,
+        STUB_STDERR: stubStderr,
         STUB_EXIT: String(exitCode),
       },
     });
@@ -165,6 +167,65 @@ test("CLI fails closed on a missing secret and on wrangler failure without echoi
   assert.match(failed.stderr, /Could not verify jobs Worker secrets/);
   assert.ok(!failed.stderr.includes("fixture denied"), "wrangler output is never echoed");
   assert.equal(failed.stdout, "");
+});
+
+// Child-stream boundary: the fake wrangler's stdout/stderr are untrusted
+// input. Only validated required names and locally constructed diagnostics
+// may reach the preflight's own stdout/stderr, on every outcome. Canaries
+// are synthetic strings, never real values.
+function assertNoChildCanary(result, ...canaries) {
+  for (const canary of canaries) {
+    assert.ok(!result.stdout.includes(canary), `parent stdout must not forward child output ${canary}`);
+    assert.ok(!result.stderr.includes(canary), `parent stderr must not forward child output ${canary}`);
+  }
+}
+
+test("CLI keeps child stderr out of both parent streams on success", () => {
+  const canary = "synthetic-child-stderr-canary-success";
+  const result = cliWithStubbedWrangler(allPresent, { stubStderr: `${canary}\n` });
+  assert.equal(result.status, 0);
+  for (const name of REQUIRED_JOBS_SECRETS) {
+    assert.ok(result.stdout.includes(name), `stdout must list ${name}`);
+  }
+  assert.ok(!result.stdout.includes('"name"'), "stdout must not forward the raw child JSON");
+  assert.equal(result.stderr, "");
+  assertNoChildCanary(result, canary);
+});
+
+test("CLI keeps child stdout and stderr out of both parent streams on nonzero exit", () => {
+  const stdoutCanary = "synthetic-child-stdout-canary-nonzero";
+  const stderrCanary = "synthetic-child-stderr-canary-nonzero";
+  const result = cliWithStubbedWrangler(`${stdoutCanary}\n`, {
+    exitCode: 42,
+    stubStderr: `${stderrCanary}\n`,
+  });
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /Could not verify jobs Worker secrets/);
+  assert.equal(result.stdout, "");
+  assertNoChildCanary(result, stdoutCanary, stderrCanary);
+});
+
+test("CLI keeps child stdout and stderr out of both parent streams on malformed JSON", () => {
+  const stdoutCanary = "synthetic-child-stdout-canary-malformed";
+  const stderrCanary = "synthetic-child-stderr-canary-malformed";
+  const result = cliWithStubbedWrangler(`not json ${stdoutCanary}`, {
+    stubStderr: `${stderrCanary}\n`,
+  });
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /Could not verify jobs Worker secrets/);
+  assert.equal(result.stdout, "");
+  assertNoChildCanary(result, stdoutCanary, stderrCanary);
+});
+
+test("CLI keeps child stderr out of both parent streams when a required secret is missing", () => {
+  const canary = "synthetic-child-stderr-canary-missing";
+  const result = cliWithStubbedWrangler(JSON.stringify([{ name: "BOT_ENDPOINT_URL" }]), {
+    stubStderr: `${canary}\n`,
+  });
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /Missing jobs Worker secret.*BOT_KEY_ID.*BOT_SHARED_SECRET/);
+  assert.equal(result.stdout, "");
+  assertNoChildCanary(result, canary);
 });
 
 test("jobs secrets preflight runs before the first Cloudflare mutation and the jobs gate and deploy", () => {
