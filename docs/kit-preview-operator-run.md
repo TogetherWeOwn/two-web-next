@@ -24,8 +24,14 @@ not a pass.
   the 22.x line, or 24+).
 - No secrets in the repo, in shell history, or in any pasted output. Variable
   names only, never values.
-- Both preview URLs known: the Kit Worker under test and the Hono reference.
-  Pair them carefully — the two scripts guard the pair differently:
+- Both preview URLs known: the Kit Worker under test (currently
+  `https://two-web-next-kit-preview.5150.workers.dev/` per
+  `web/wrangler.jsonc`) and the Hono reference
+  (`https://next.togetherweown.com/`). Never point either URL at a
+  Worker outside this project: `ci/kit-parity-gates.mjs` sends
+  `KIT_PARITY_QA_TOKEN` to both bases, and its host guard accepts any
+  `*.workers.dev` hostname, so a foreign host would receive the staging
+  token. Pair them carefully — the two scripts guard the pair differently:
   - `ci/kit-parity-gates.mjs` enforces the strict rule and exits 2 before any
     fetch when it fails: each URL must be an `https:` origin with no
     credentials, port, path, query or fragment, hosted on
@@ -46,27 +52,37 @@ not a pass.
 Guest-only preview (no logins, no token):
 
 ```sh
-KIT_PREVIEW_URL=https://<kit-preview-host>/ \
+KIT_PREVIEW_URL=https://two-web-next-kit-preview.5150.workers.dev/ \
 HONO_PREVIEW_URL=https://next.togetherweown.com/ \
 node ci/kit-preview-e2e.mjs
 ```
 
 ```sh
-KIT_PREVIEW_URL=https://<kit-preview-host>/ \
+KIT_PREVIEW_URL=https://two-web-next-kit-preview.5150.workers.dev/ \
 HONO_PREVIEW_URL=https://next.togetherweown.com/ \
 node ci/kit-parity-gates.mjs
 ```
 
 Authenticated preview (up to two QA logins per base — the member and
 moderator identities — each replayed as a cookie; the token
-and cookie values never reach the ledger):
+and cookie values never reach the ledger). The script sends the token
+to both bases, so run this only against the project-owned pair above —
+never with an unverified `*.workers.dev` host:
 
 ```sh
-KIT_PREVIEW_URL=https://<kit-preview-host>/ \
+KIT_PREVIEW_URL=https://two-web-next-kit-preview.5150.workers.dev/ \
 HONO_PREVIEW_URL=https://next.togetherweown.com/ \
 KIT_PARITY_QA_TOKEN="$QA_AUTH_TOKEN" \
 node ci/kit-parity-gates.mjs
 ```
+
+Expected limitation: the QA seam is disabled on the Kit preview Worker
+(`APP_URL` there is the workers.dev host, not staging, and no secrets
+are set — see `src/qa.ts` `qaEnabled` and `web/wrangler.jsonc`), so the
+Kit-side member-board arm ledgers as skipped with
+`QA login answered 404 on two-web-next-kit-preview.5150.workers.dev ...`.
+Only the Hono side authenticates today; the Kit 404 skip is the correct
+evidence, not a failure to retry.
 
 Read the token from the approved binding into the environment; never place the
 value in `argv`, a URL, a file in the repo, or a comment. Set exactly one
@@ -91,7 +107,7 @@ Copy this list into the card or PR comment and check every box:
       content in the ledger), 2 misconfigured or all-skipped/empty ledger.
       `kit-preview-e2e.mjs`: 0 pass, 1 failed assertions (URL-shape errors
       also surface here as exit 1 exceptions), 2 only for one-sided URLs.
-      The first script has no ledger and no all-skipped verdict.
+      `kit-preview-e2e.mjs` has no ledger and no all-skipped verdict.
 - [ ] `test-results/kit-parity-ledger.json` and
       `test-results/kit-parity-ledger.md` attached or linked: verdict plus
       passed/failed/skipped/total counts. An `empty` or `all-skipped` verdict
@@ -131,6 +147,12 @@ as preview proof:
 - The signed-in non-member 403 arm cannot be minted by the QA seam (both QA
   identities are members) and stays pinned hermetically; preview never covers
   it.
+- Authenticated Kit member-board parity is not proven by any preview run
+  today: the Kit preview Worker has no QA seam, so its member-board arm
+  always ledgers as skipped (see Authenticated preview above). A passing
+  preview proves guest parity plus Hono-side authenticated parity only;
+  proving Kit-side authenticated parity needs a Kit host with the staging
+  `APP_URL` and QA secret, which does not exist yet.
 - Visual baselines, performance budgets, and the built-Worker runtime fixture
   are separate gates with their own evidence; a preview pass does not stand in
   for them.
