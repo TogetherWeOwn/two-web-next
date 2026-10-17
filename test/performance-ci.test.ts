@@ -613,9 +613,13 @@ describe("performance CI", () => {
     expect(pkg.overrides["@lhci/cli"]).toEqual({ tmp: "0.2.7", "@puppeteer/browsers": "3.2.3" });
     // GHSA-c475-qrg2-pj4r: only LHCI's proxy chain pulls basic-ftp in.
     expect(pkg.overrides["basic-ftp"]).toBe("6.2.1");
-    // Main's engines floor (^22.18.0 || >=24) satisfies the ESM-only browser
+    // Main's engines floor (^22.23.0 || >=24) satisfies the ESM-only browser
     // helper's own >=22.12.0 requirement; pin the merged value, not the floor.
-    expect(pkg.engines.node).toBe("^22.18.0 || >=24");
+    // 22.23.0 is the first 22.x whose ICU 78 renders the suite's pinned
+    // `GMT+00:00` zero offset and whose bundled npm 10 accepts the lockfile
+    // with the puppeteer-core proxy-agent override below.
+    expect(pkg.engines.node).toBe("^22.23.0 || >=24");
+    expect(pkg.overrides["puppeteer-core"]).toEqual({ "proxy-agent": "6.5.0" });
     // Exercise both module entry points used by LHCI and Lighthouse, without Chrome/network.
     const loaded = spawnSync(
       process.execPath,
@@ -679,7 +683,9 @@ describe("performance CI", () => {
 
     expect(performanceGateIndex).toBeGreaterThan(-1);
     expect(ciOk).toContain("name: ci-ok");
-    expect(ciOk).toContain("needs: [a11y, lighthouse, bundle-budget, docs-links, check, scope]");
+    expect(ciOk).toContain(
+      "needs: [a11y, lighthouse, bundle-budget, docs-links, check, node22-compat, scope]",
+    );
     expect(ciOk).toContain("\n    if: ${{ !cancelled() }}\n");
     expect(performanceGate).toContain(`if: ${performanceGateCondition}`);
     expect(performanceGate).toContain(

@@ -38,8 +38,12 @@ Operations (deploy/rollback, `/up`, queues, outages and restore drills):
 
 ## Develop and test safely
 
-Use Node **22.18.0+ on the 22.x line, or 24+** (CI uses Node 24; the probe CLIs
+Use Node **22.23.0+ on the 22.x line, or 24+** (CI uses Node 24; the probe CLIs
 require default native TypeScript stripping, not early Node 22/23 releases).
+The 22 floor is 22.23.0 because older 22.x releases ship bundled npm 10,
+which cannot install the committed lockfile, and ICU 77, which renders a
+zero UTC offset as `GMT` where the test suite pins `GMT+00:00`; the
+`node22-compat` CI leg proves the floor on every pull request.
 Install development dependencies even when
 `NODE_ENV` is inherited as `production`:
 
