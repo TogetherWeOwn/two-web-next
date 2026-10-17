@@ -198,6 +198,9 @@
   // order when the island paints (or re-paints) it, so Tab from the focused
   // notice reaches the button instead of leaving the widget.
   function placeBefore(el, anchor) {
+    // Already in place: re-inserting would move the node and drop focus
+    // from it (a capacity refresh can land right after a 409 focused it).
+    if (anchor && el.nextSibling === anchor) return;
     if (anchor && anchor.parentNode && anchor.parentNode.insertBefore)
       anchor.parentNode.insertBefore(el, anchor);
     else controls.appendChild(el);

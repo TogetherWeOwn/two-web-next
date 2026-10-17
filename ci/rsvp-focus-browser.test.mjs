@@ -172,6 +172,32 @@ describe("RSVP outcome focus in Chromium", {
     assert.equal(await member.focused(), "waitlist-join");
   });
 
+  it("keeps focus on the 409 full notice when a full capacity refresh lands after it", async (t) => {
+    const member = await openMember();
+    t.after(() => member.context.close());
+    const { page } = member;
+    await page.getByTestId("rsvp-going").focus();
+    await page.keyboard.press("Enter");
+    const route = await member.pending();
+    await route.fulfill({
+      status: 409,
+      contentType: "application/json",
+      body: JSON.stringify({ error: "event_full", capacity: 4 }),
+    });
+    await page.getByTestId("event-full").waitFor();
+    assert.equal(await member.focused(), "event-full");
+    await page.evaluate(() => {
+      document.dispatchEvent(
+        new CustomEvent("going-count-refreshed", {
+          detail: { eventKey: "raid/one", goingCount: 4, capacity: 4 },
+        }),
+      );
+    });
+    assert.equal(await member.focused(), "event-full");
+    await page.keyboard.press("Tab");
+    assert.equal(await member.focused(), "waitlist-join");
+  });
+
   it("keeps focus off the confirmation after a pointer press outside the widget", async (t) => {
     const member = await openMember();
     t.after(() => member.context.close());
