@@ -85,9 +85,12 @@ probe, or change production state as part of diagnosis.
   5xx/error-rate alarm.
 - `queue.failing` covers terminal queue failures. Retryable failures do not page
   until terminal; inspect the retry-cause records for context.
-- The scheduled Tail Worker probe checks `/up` every five minutes and alerts
-  after two failed attempts in one run. It detects sustained unavailability,
-  not a two-minute SLO window or the full sign-in/member journey.
+- The scheduled Tail Worker probe checks `/up` plus synthetic main-flow
+  checks (`/`, `/events`, `/login`, `/auth/discord`) every five minutes and
+  alerts after two failed attempts in one run per check (see the
+  [alert runbook](runbook-alerts.md#synthetic-main-flow-checks-syntheticdown)).
+  It detects sustained unavailability and a broken sign-in entry redirect,
+  not a two-minute SLO window or a full Discord OAuth round trip.
 - Discord notifications are allowlisted, redacted summaries. They do not contain
   a request ID, exception text, URL, or build SHA; correlate them with source
   logs and the deployed version in Cloudflare.

@@ -134,6 +134,38 @@ catches these pages. **There is no matching app source-log line by design**:
 the event originates in the Tail Worker, not an `error.alert` or `queue.failing`
 source emission. A receipt without a source alert is therefore expected.
 
+### Synthetic main-flow checks: `synthetic.down`
+
+The same scheduled run also probes the main flow on the `UPTIME_URL` origin,
+because a healthy `/up` does not prove members can load the site or start
+sign-in. Each check is an anonymous GET with manual redirects and a
+ten-second timeout; response bodies are never read. Checks run even when
+`/up` is down, and each failing check is retried once after ten seconds
+before it can page:
+
+| Check | Healthy means |
+|-------|---------------|
+| `/` | HTTP 200 with an HTML content type |
+| `/events` | HTTP 200 with an HTML content type |
+| `/login` | HTTP 302 redirecting to `/auth/discord` on the same host |
+| `/auth/discord` | HTTP 302 redirecting to `discord.com/oauth2/authorize` |
+
+The summary contains only `event`, `check` (the probed path), `target`
+(the public host of the configured `UPTIME_URL`, which identifies the
+environment), `status` (the second attempt's HTTP status, or `0` for a
+transport error/timeout) and `timestamp`. Redirect targets are compared by
+host and path only: the OAuth `state` in the `/auth/discord` Location query
+is discarded inside the probe and never appears in a page or log line.
+Delivery uses the same five-minute, per-isolate mute, keyed by
+`synthetic.down:<check>:<status>`, and the same delivery receipts as
+`uptime.down`.
+
+All checks are read-only: no login attempt, form post, or fault injection,
+so the production prober stays passive. Staging and production each probe
+their own configured host; no extra configuration exists beyond
+`UPTIME_URL`. The checks prove the sign-in entry redirects correctly, not
+that a full Discord OAuth round trip completes.
+
 ## Configure/deploy (staging first)
 
 The Tail Worker has no public route, Workers.dev endpoint, database binding or

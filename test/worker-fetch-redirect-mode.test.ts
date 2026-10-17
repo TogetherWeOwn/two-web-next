@@ -37,7 +37,7 @@ describe("Worker fetch redirect mode", () => {
 const PINNED_MANUAL_SITES = [
   { file: "src/bot/client-transport.ts", minManual: 1 },
   { file: "src/bot/event-read.ts", minManual: 1 },
-  { file: "tail/worker.ts", minManual: 3 },
+  { file: "tail/worker.ts", minManual: 4 },
 ] as const;
 
 describe("Worker redirect-manual pin", () => {
@@ -242,16 +242,32 @@ describe("Worker redirect-manual behavior", () => {
     );
     const gets = seen.filter((init) => init?.method === "GET");
     const posts = seen.filter((init) => init?.method === "POST");
-    // Two failed probes, then one page: the 302 is a failure with its status, not a throw
-    // (status 0) and not a silent success.
-    expect(gets).toHaveLength(2);
+    // Two failed /up probes plus two failed attempts per synthetic check,
+    // then one page each: every 302 is a failure with its status, not a
+    // throw (status 0) and not a silent success. A "follow" revert would
+    // see the healthy followed() response and stay silent instead.
+    expect(gets).toHaveLength(10);
     for (const init of seen) expect(init?.redirect).toBe("manual");
-    expect(posts).toHaveLength(1);
-    expect(lines).toHaveLength(1);
+    expect(posts).toHaveLength(5);
+    expect(lines).toHaveLength(5);
     expect(JSON.parse(lines[0]!)).toMatchObject({
       event: "uptime.down",
       status: 302,
       delivery: "ops.alert.delivery_failed",
     });
+    const syntheticLines = lines.slice(1).map((line) => JSON.parse(line));
+    expect(syntheticLines.map((line) => line.check)).toEqual([
+      "/",
+      "/events",
+      "/login",
+      "/auth/discord",
+    ]);
+    for (const line of syntheticLines) {
+      expect(line).toMatchObject({
+        event: "synthetic.down",
+        status: 302,
+        delivery: "ops.alert.delivery_failed",
+      });
+    }
   });
 });

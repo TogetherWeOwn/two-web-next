@@ -430,19 +430,51 @@ describe("Tail delivery", () => {
 describe("Tail scheduled uptime prober", () => {
   const uptime = "https://next.togetherweown.com/up";
   const upEnv = { OPS_ALERT_WEBHOOK_URL: secret, UPTIME_URL: uptime };
-  type Probe = { status?: number; origin?: string | null; throw?: unknown };
+  type Probe = {
+    status?: number;
+    origin?: string | null;
+    contentType?: string | null;
+    location?: string | null;
+    throw?: unknown;
+  };
 
-  function uptimeFixture(probes: Probe[]) {
+  // Healthy synthetic answers per path, mirroring the verified staging
+  // responses. The /auth/discord Location carries a fixture OAuth state so
+  // tests can prove it never reaches a page or a log line.
+  const healthySynthetic = (path: string): Probe => {
+    if (path === "/login") return { status: 302, location: "/auth/discord" };
+    if (path === "/auth/discord")
+      return {
+        status: 302,
+        location: "https://discord.com/oauth2/authorize?state=fixture-state-value",
+      };
+    return { status: 200, contentType: "text/html; charset=UTF-8" };
+  };
+
+  function uptimeFixture(probes: Probe[], synthetic: Partial<Record<string, Probe[]>> = {}) {
     let now = timestamp;
     const sleeps: number[] = [];
     const queue = [...probes];
+    const syntheticQueues = new Map(
+      Object.entries(synthetic).map(([path, list]) => [path, [...(list ?? [])]]),
+    );
     const send = vi.fn(async (...args: [string, RequestInit?]) => {
-      const [, init] = args;
+      const [target, init] = args;
       if (init?.method === "POST") return new Response(null, { status: 200 });
-      const next = queue.shift() ?? { status: 500 };
+      const path = new URL(target).pathname;
+      const next =
+        path === "/up"
+          ? (queue.shift() ?? { status: 500 })
+          : (syntheticQueues.get(path)?.shift() ?? healthySynthetic(path));
       if (next.throw) throw next.throw;
-      const headers = next.origin == null ? undefined : { "x-two-origin": next.origin };
-      return new Response(null, { status: next.status ?? 200, headers });
+      const headers: Record<string, string> = {};
+      if (next.origin != null) headers["x-two-origin"] = next.origin;
+      if (next.contentType != null) headers["content-type"] = next.contentType;
+      if (next.location != null) headers.location = next.location;
+      return new Response(null, {
+        status: next.status ?? 200,
+        headers: Object.keys(headers).length ? headers : undefined,
+      });
     });
     const sink = vi.fn();
     const worker = createTailWorker({
@@ -470,6 +502,8 @@ describe("Tail scheduled uptime prober", () => {
     (send.mock.calls as unknown as [string, RequestInit][]).filter(
       ([, init]) => init?.method !== "POST",
     );
+  const getsFor = (send: ReturnType<typeof vi.fn>, path: string) =>
+    probeGets(send).filter(([target]) => new URL(target).pathname === path);
   const pagePosts = (send: ReturnType<typeof vi.fn>) =>
     (send.mock.calls as unknown as [string, RequestInit][]).filter(
       ([, init]) => init?.method === "POST",
@@ -481,7 +515,7 @@ describe("Tail scheduled uptime prober", () => {
       { status: 200, origin: "two-web-next" },
     ]);
     await worker.scheduled(event, upEnv);
-    expect(probeGets(send)).toHaveLength(2);
+    expect(getsFor(send, "/up")).toHaveLength(2);
     expect(pagePosts(send)).toHaveLength(0);
     expect(sleeps).toEqual([10_000]);
     expect(sink).not.toHaveBeenCalled();
@@ -566,8 +600,144 @@ describe("Tail scheduled uptime prober", () => {
       { status: 200, origin: "two-web-next" },
     ]);
     await worker.scheduled(event, upEnv);
-    expect(probeGets(send)).toHaveLength(1);
+    expect(getsFor(send, "/up")).toHaveLength(1);
     expect(sleeps).toHaveLength(0);
+  });
+
+  it("a fully healthy run probes /up and every synthetic check once and stays silent", async () => {
+    const { worker, send, sink, sleeps, event } = uptimeFixture([
+      { status: 200, origin: "two-web-next" },
+    ]);
+    await worker.scheduled(event, upEnv);
+    expect(probeGets(send).map(([target]) => new URL(target).pathname)).toEqual([
+      "/up",
+      "/",
+      "/events",
+      "/login",
+      "/auth/discord",
+    ]);
+    // Every probe is a read-only GET that never follows a redirect into a
+    // login flow: production probing stays passive.
+    for (const [, init] of probeGets(send)) {
+      expect(init?.method).toBe("GET");
+      expect(init?.redirect).toBe("manual");
+    }
+    expect(pagePosts(send)).toHaveLength(0);
+    expect(sink).not.toHaveBeenCalled();
+    expect(sleeps).toHaveLength(0);
+  });
+
+  it("one synthetic failure then a success sends no page, retrying only that check", async () => {
+    const { worker, send, sink, sleeps, event } = uptimeFixture(
+      [{ status: 200, origin: "two-web-next" }],
+      { "/events": [{ status: 500 }, { status: 200, contentType: "text/html" }] },
+    );
+    await worker.scheduled(event, upEnv);
+    expect(getsFor(send, "/events")).toHaveLength(2);
+    expect(getsFor(send, "/")).toHaveLength(1);
+    expect(getsFor(send, "/login")).toHaveLength(1);
+    expect(sleeps).toEqual([10_000]);
+    expect(pagePosts(send)).toHaveLength(0);
+    expect(sink).not.toHaveBeenCalled();
+  });
+
+  it("a synthetic check failing twice pages synthetic.down with the target host", async () => {
+    const { worker, send, sink, event } = uptimeFixture([{ status: 200, origin: "two-web-next" }], {
+      "/events": [{ status: 500 }, { status: 503 }],
+    });
+    await worker.scheduled(event, upEnv);
+    const pages = pagePosts(send);
+    expect(pages).toHaveLength(1);
+    expect(pages[0]![0]).toBe(`${secret}?wait=true`);
+    const payload = JSON.parse(pages[0]![1].body as string);
+    expect(payload.allowed_mentions).toEqual({ parse: [] });
+    expect(JSON.parse(payload.content)).toEqual({
+      event: "synthetic.down",
+      check: "/events",
+      target: "next.togetherweown.com",
+      status: 503,
+      timestamp: expect.any(String),
+    });
+    expect(sink).toHaveBeenCalledOnce();
+    expect(JSON.parse(sink.mock.calls[0]![0])).toMatchObject({
+      event: "synthetic.down",
+      check: "/events",
+      delivery: "ops.alert.delivered",
+    });
+  });
+
+  it.each([
+    {
+      path: "/login",
+      probe: { status: 302, location: "/" },
+      label: "login redirecting somewhere other than the Discord sign-in entry",
+    },
+    {
+      path: "/login",
+      probe: { status: 200, contentType: "text/html" },
+      label: "login no longer redirecting to sign-in",
+    },
+    {
+      path: "/auth/discord",
+      probe: {
+        status: 302,
+        location: "https://evil.example/oauth2/authorize?state=fixture-state-value",
+      },
+      label: "sign-in entry redirecting to a foreign host",
+    },
+    {
+      path: "/",
+      probe: { status: 200, contentType: "application/json" },
+      label: "homepage answering non-HTML",
+    },
+  ])("$label pages synthetic.down for $path", async ({ path, probe }) => {
+    const { worker, send, sink, event } = uptimeFixture([{ status: 200, origin: "two-web-next" }], {
+      [path]: [probe, probe],
+    });
+    await worker.scheduled(event, upEnv);
+    const pages = pagePosts(send);
+    expect(pages).toHaveLength(1);
+    const content = JSON.parse(pages[0]![1].body as string).content as string;
+    expect(JSON.parse(content)).toMatchObject({ event: "synthetic.down", check: path });
+    // The OAuth state from any Location header never leaves the account:
+    // not in the page, not in the delivery receipt.
+    expect(content).not.toContain("fixture-state-value");
+    expect(sink.mock.calls[0]![0]).not.toContain("fixture-state-value");
+  });
+
+  it("each persistently failing synthetic check pages once, independently muted", async () => {
+    const { worker, send, event } = uptimeFixture(
+      [
+        { status: 200, origin: "two-web-next" },
+        { status: 200, origin: "two-web-next" },
+      ],
+      {
+        "/": [{ status: 500 }, { status: 500 }, { status: 500 }, { status: 500 }],
+        "/events": [{ status: 500 }, { status: 500 }, { status: 500 }, { status: 500 }],
+      },
+    );
+    await worker.scheduled(event, upEnv);
+    await worker.scheduled(event, upEnv);
+    const pages = pagePosts(send);
+    expect(pages).toHaveLength(2);
+    const checks = pages.map(
+      (page) => JSON.parse(JSON.parse(page[1].body as string).content).check,
+    );
+    expect(checks.sort()).toEqual(["/", "/events"]);
+  });
+
+  it("synthetic checks still run and page when /up is down", async () => {
+    const { worker, send, event } = uptimeFixture([{ status: 500 }, { status: 500 }], {
+      "/login": [
+        { status: 302, location: "/" },
+        { status: 302, location: "/" },
+      ],
+    });
+    await worker.scheduled(event, upEnv);
+    const events = pagePosts(send).map(
+      (page) => JSON.parse(JSON.parse(page[1].body as string).content).event,
+    );
+    expect(events.sort()).toEqual(["synthetic.down", "uptime.down"]);
   });
 });
 
