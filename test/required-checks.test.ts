@@ -109,7 +109,10 @@ describe("required checks always report", () => {
     // scope, and docs-only or draft PRs fast-pass instead of skipping.
     const steps = leg.split("\n    steps:\n")[1] ?? "";
     expect(steps).toMatch(/^      - name: Require successful scope\n/);
-    expect(leg).toContain("needs.scope.outputs.docs_only == 'true'");
+    expect(leg).toContain(
+      "needs.scope.outputs.docs_only == 'true' || needs.scope.outputs.draft == 'true'",
+    );
+    expect(leg).toContain("needs.scope.outputs.draft != 'true'");
     expect(job(ci, "ci-ok")).toContain("Require successful Node 22 compatibility leg");
   });
 });
