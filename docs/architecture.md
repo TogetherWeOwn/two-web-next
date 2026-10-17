@@ -124,9 +124,11 @@ exact app script names `two-web-next`, `two-web-next-production` and
 allowlisted log lines — `error.alert` on registered routes and
 `queue.failing` for known job names — and posts a small allowlisted JSON
 summary to the optional ops webhook, muted per isolate for five minutes.
-Its cron (`*/5 * * * *` in [tail/wrangler.jsonc](../tail/wrangler.jsonc))
+It also counts every trace outcome in an `AlertAggregator` Durable Object
+and pages a release-tagged `error.spike` on an aggregate 5xx/error-rate or
+crash spike. Its cron (`* * * * *` in [tail/wrangler.jsonc](../tail/wrangler.jsonc))
 probes the app's `/up` twice per run and pages `uptime.down` only when both
-probes fail.
+probes fail and health has stayed red for over two minutes.
 
 ## 5. Data ownership: web-owned tables versus bot-owned views
 

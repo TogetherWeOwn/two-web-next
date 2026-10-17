@@ -2,9 +2,38 @@
 // https://developers.cloudflare.com/workers/observability/logs/tail-workers/
 import { validProbeId } from "../src/alert-probe-error";
 
-export type TailEnv = { OPS_ALERT_WEBHOOK_URL?: string; UPTIME_URL?: string };
+export type TailEnv = {
+  OPS_ALERT_WEBHOOK_URL?: string;
+  UPTIME_URL?: string;
+  ALERT_AGGREGATOR?: DurableObjectNamespace;
+};
 export const MUTE_MS = 5 * 60 * 1000;
+// Aggregate spike alarm: one page per script when errors cross these gates in a
+// rolling window, then a cooldown. Per-fingerprint pages alone cannot say
+// "half of traffic is 5xx", so the Tail Worker counts every trace outcome.
+export const SPIKE_WINDOW_MS = 5 * 60 * 1000;
+export const SPIKE_MIN_ERRORS = 5;
+export const SPIKE_MIN_RATE = 0.5;
+export const SPIKE_MIN_CRASHES = 5;
+export const SPIKE_COOLDOWN_MS = 15 * 60 * 1000;
+// Health must stay red continuously past this threshold before uptime.down pages.
+export const HEALTH_DOWN_MS = 2 * 60 * 1000;
+export const HEALTH_COOLDOWN_MS = 15 * 60 * 1000;
 const MAX_TRACKED = 500;
+const MAX_BUCKETS = 40;
+const BUCKET_MS = 30_000;
+// A deployed version tag is the staging SHA, or <sha>-<run-id>-<attempt> in
+// production. Accept only that leading 40-hex SHA; arbitrary tags never leave.
+const VERSION_TAG = /^([0-9a-f]{40})(?:-\d+-\d+)?$/;
+
+export function shaFromVersionTag(tag: unknown): string | undefined {
+  if (typeof tag !== "string") return undefined;
+  return VERSION_TAG.exec(tag)?.[1];
+}
+
+export function logsPath(script: string): string {
+  return `Workers & Pages > ${script} > Observability > Logs`;
+}
 
 // Exact app script names this pager accepts. Wrangler does not inherit
 // tail_consumers into named environments, so production traces arrive under
@@ -24,11 +53,37 @@ export const APP_SCRIPT_NAMES: ReadonlySet<string> = new Set([
 const UPTIME_TIMEOUT_MS = 10_000;
 const UPTIME_RETRY_DELAY_MS = 10_000;
 const EXPECTED_ORIGIN = "two-web-next";
+// Bound every aggregator call: aggregation runs before per-fingerprint paging
+// in the tail handler, so a stalled Durable Object must not stall that pager.
+const AGGREGATOR_TIMEOUT_MS = 5_000;
 
 export type UptimeAlert = {
   event: "uptime.down";
   status: number;
+  down_seconds: number;
   timestamp: string;
+};
+
+export type SpikeAlert = {
+  event: "error.spike";
+  script: string;
+  build_sha?: string;
+  logs: string;
+  window_seconds: number;
+  requests: number;
+  errors: number;
+  crashes: number;
+  error_rate: number;
+  timestamp: string;
+};
+
+export type TraceBatch = {
+  script: string;
+  buildSha?: string;
+  at: number;
+  requests: number;
+  errors: number;
+  crashes: number;
 };
 
 // Synthetic main-flow checks: the same cron also probes the sign-in entry
@@ -66,6 +121,11 @@ export type SyntheticAlert = {
   status: number;
   timestamp: string;
 };
+
+// The cron fires every minute for the /up health window; synthetics keep
+// their original five-minute cadence (see the scheduled handler), so the
+// main-flow probe load does not grow with the faster health loop.
+const SYNTHETIC_INTERVAL_MINUTES = 5;
 
 // Only registered templates may leave the account. Never fall back to a raw
 // request path, query string, exception, job payload or trace event.request.
@@ -159,6 +219,9 @@ const JOB_NAMES = new Set(["SyncEventToDiscord", "CallInternalAction", "AlertPro
 export type AlertSummary = {
   event: "error.alert" | "queue.failing";
   fingerprint: string;
+  script?: string;
+  build_sha?: string;
+  logs?: string;
   route?: string;
   job?: string;
   attempts?: number;
@@ -222,6 +285,333 @@ export async function parseAlert(
   return null;
 }
 
+type Bucket = { at: number; requests: number; errors: number; crashes: number };
+type ScriptState = {
+  buckets: Bucket[];
+  cooldownUntil: number;
+  // A page attempt is outstanding: set by observe, cleared by resolve. The
+  // cooldown arms only when resolve reports a delivered page, mirroring the
+  // per-fingerprint mute; an unresolved attempt stops blocking after one
+  // cooldown so a crashed delivery cannot mute the alarm forever.
+  pendingAt?: number;
+  buildSha?: string;
+};
+
+function orderSpike(alert: SpikeAlert): SpikeAlert {
+  // Fixed field order keeps Discord summaries and receipts diff-stable.
+  return {
+    event: alert.event,
+    script: alert.script,
+    ...(alert.build_sha ? { build_sha: alert.build_sha } : {}),
+    logs: alert.logs,
+    window_seconds: alert.window_seconds,
+    requests: alert.requests,
+    errors: alert.errors,
+    crashes: alert.crashes,
+    error_rate: alert.error_rate,
+    timestamp: alert.timestamp,
+  };
+}
+
+/**
+ * Rolling per-script counts behind the aggregate alarm. Used inside the
+ * AlertAggregator Durable Object (durable, one instance per environment) and
+ * directly when no binding is configured (per-isolate best effort).
+ */
+export class AggregateTracker {
+  private readonly scripts = new Map<string, ScriptState>();
+  constructor(private readonly now: () => number = Date.now) {}
+
+  snapshot(): Record<string, ScriptState> {
+    return Object.fromEntries(this.scripts);
+  }
+
+  restore(value: unknown): void {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return;
+    for (const [script, raw] of Object.entries(value as Record<string, unknown>)) {
+      if (!APP_SCRIPT_NAMES.has(script) || !raw || typeof raw !== "object") continue;
+      const state = raw as Partial<ScriptState>;
+      const buckets = Array.isArray(state.buckets)
+        ? state.buckets.filter(
+            (b): b is Bucket =>
+              !!b &&
+              typeof b === "object" &&
+              [b.at, b.requests, b.errors, b.crashes].every(
+                (n) => Number.isSafeInteger(n) && (n as number) >= 0,
+              ),
+          )
+        : [];
+      this.scripts.set(script, {
+        buckets: buckets.slice(-MAX_BUCKETS),
+        cooldownUntil: Number.isSafeInteger(state.cooldownUntil) ? state.cooldownUntil! : 0,
+        pendingAt: Number.isSafeInteger(state.pendingAt) ? state.pendingAt : undefined,
+        buildSha: shaFromVersionTag(state.buildSha),
+      });
+    }
+  }
+
+  observe(batch: TraceBatch): SpikeAlert | null {
+    if (!APP_SCRIPT_NAMES.has(batch.script)) return null;
+    const at = Number.isFinite(batch.at) ? batch.at : this.now();
+    let state = this.scripts.get(batch.script);
+    if (!state) {
+      state = { buckets: [], cooldownUntil: 0 };
+      this.scripts.set(batch.script, state);
+    }
+    // The latest batch owns the attribution: a batch with no valid tag
+    // clears a previous build's SHA rather than blaming that build.
+    state.buildSha = shaFromVersionTag(batch.buildSha);
+    const bucketAt = Math.floor(at / BUCKET_MS) * BUCKET_MS;
+    let bucket = state.buckets.at(-1);
+    if (!bucket || bucket.at !== bucketAt) {
+      bucket = { at: bucketAt, requests: 0, errors: 0, crashes: 0 };
+      state.buckets.push(bucket);
+      if (state.buckets.length > MAX_BUCKETS)
+        state.buckets.splice(0, state.buckets.length - MAX_BUCKETS);
+    }
+    bucket.requests += batch.requests;
+    bucket.errors += batch.errors;
+    bucket.crashes += batch.crashes;
+    const cutoff = at - SPIKE_WINDOW_MS;
+    state.buckets = state.buckets.filter((b) => b.at + BUCKET_MS > cutoff);
+    if (at < state.cooldownUntil) return null;
+    let requests = 0;
+    let errors = 0;
+    let crashes = 0;
+    for (const b of state.buckets) {
+      requests += b.requests;
+      errors += b.errors;
+      crashes += b.crashes;
+    }
+    const rateGate =
+      errors >= SPIKE_MIN_ERRORS && requests > 0 && errors / requests >= SPIKE_MIN_RATE;
+    const crashGate = crashes >= SPIKE_MIN_CRASHES;
+    if (!rateGate && !crashGate) return null;
+    if (state.pendingAt !== undefined && at - state.pendingAt < SPIKE_COOLDOWN_MS) return null;
+    const date = new Date(at);
+    if (!Number.isFinite(date.getTime())) return null;
+    state.pendingAt = at;
+    return orderSpike({
+      event: "error.spike",
+      script: batch.script,
+      ...(state.buildSha ? { build_sha: state.buildSha } : {}),
+      logs: logsPath(batch.script),
+      window_seconds: SPIKE_WINDOW_MS / 1000,
+      requests,
+      errors,
+      crashes,
+      error_rate: requests > 0 ? Math.round((errors / requests) * 1000) / 1000 : 0,
+      timestamp: date.toISOString(),
+    });
+  }
+
+  /** Arm the cooldown only for a delivered page; a failed POST may retry on the next batch. */
+  resolve(script: string, delivered: boolean): void {
+    const state = this.scripts.get(script);
+    if (!state || state.pendingAt === undefined) return;
+    if (delivered) state.cooldownUntil = state.pendingAt + SPIKE_COOLDOWN_MS;
+    state.pendingAt = undefined;
+  }
+}
+
+/** Continuous-red health window: pages only after HEALTH_DOWN_MS, then cools down. */
+export class HealthTracker {
+  private downSince: number | null = null;
+  private cooldownUntil = 0;
+  private pendingAt: number | null = null;
+  constructor(private readonly now: () => number = Date.now) {}
+
+  snapshot(): { downSince: number | null; cooldownUntil: number; pendingAt: number | null } {
+    return {
+      downSince: this.downSince,
+      cooldownUntil: this.cooldownUntil,
+      pendingAt: this.pendingAt,
+    };
+  }
+
+  restore(value: unknown): void {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return;
+    const state = value as { downSince?: unknown; cooldownUntil?: unknown; pendingAt?: unknown };
+    this.downSince = Number.isSafeInteger(state.downSince) ? (state.downSince as number) : null;
+    this.cooldownUntil = Number.isSafeInteger(state.cooldownUntil)
+      ? (state.cooldownUntil as number)
+      : 0;
+    this.pendingAt = Number.isSafeInteger(state.pendingAt) ? (state.pendingAt as number) : null;
+  }
+
+  /** Returns how long health has been red when a page is due, else null. */
+  observe(ok: boolean, at = this.now()): number | null {
+    if (ok) {
+      this.downSince = null;
+      this.pendingAt = null;
+      return null;
+    }
+    if (this.downSince === null) this.downSince = at;
+    // A page attempt is awaiting its result; a lost result ages out after one
+    // cooldown (same bound as the spike pending) instead of wedging the alarm.
+    if (this.pendingAt !== null && at - this.pendingAt < HEALTH_COOLDOWN_MS) return null;
+    this.pendingAt = null;
+    const downMs = at - this.downSince;
+    // Strictly over two minutes: exactly HEALTH_DOWN_MS red does not page yet.
+    if (downMs <= HEALTH_DOWN_MS || at < this.cooldownUntil) return null;
+    this.pendingAt = at;
+    return downMs;
+  }
+
+  /** Arm the cooldown only for a delivered page; a failed POST re-pages next run. */
+  resolve(delivered: boolean): void {
+    if (delivered && this.pendingAt !== null) {
+      this.cooldownUntil = this.pendingAt + HEALTH_COOLDOWN_MS;
+    }
+    this.pendingAt = null;
+  }
+}
+
+function isFetchTrace(event: unknown): event is TraceItemFetchEventInfo {
+  return !!event && typeof event === "object" && "request" in (event as Record<string, unknown>);
+}
+
+type TraceLike = Pick<TraceItem, "scriptName" | "logs"> &
+  Partial<Pick<TraceItem, "scriptVersion" | "outcome" | "exceptions" | "event" | "eventTimestamp">>;
+
+// Tail outcomes that mean the invocation died before it could log an alert
+// line: an unhandled exception, a CPU/memory limit kill (error 1102 to the
+// client, no response), or a missing script. The client-disconnect outcomes
+// ("canceled", "responseStreamDisconnected") are deliberately not crashes.
+// https://developers.cloudflare.com/workers/runtime-apis/handlers/tail/
+const CRASH_OUTCOMES: ReadonlySet<string> = new Set([
+  "exception",
+  "exceededCpu",
+  "exceededMemory",
+  "scriptNotFound",
+]);
+
+/** Count one trace without ever reading its request URL, headers or exception text. */
+function batchForTrace(trace: TraceLike, fallbackAt: number): TraceBatch | null {
+  if (!trace.scriptName || !APP_SCRIPT_NAMES.has(trace.scriptName)) return null;
+  const crashes =
+    (typeof trace.outcome === "string" && CRASH_OUTCOMES.has(trace.outcome)) ||
+    (Array.isArray(trace.exceptions) && trace.exceptions.length > 0)
+      ? 1
+      : 0;
+  let requests = 0;
+  let errors = 0;
+  if (isFetchTrace(trace.event)) {
+    requests = 1;
+    const status = trace.event.response?.status;
+    if (crashes > 0 || (typeof status === "number" && status >= 500)) errors = 1;
+  }
+  const at =
+    typeof trace.eventTimestamp === "number" && Number.isFinite(trace.eventTimestamp)
+      ? trace.eventTimestamp
+      : fallbackAt;
+  const buildSha = shaFromVersionTag(trace.scriptVersion?.tag);
+  return {
+    script: trace.scriptName,
+    ...(buildSha ? { buildSha } : {}),
+    at,
+    requests,
+    errors,
+    crashes,
+  };
+}
+
+function validBatch(value: unknown): TraceBatch | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const b = value as Record<string, unknown>;
+  if (typeof b.script !== "string" || !APP_SCRIPT_NAMES.has(b.script)) return null;
+  if (
+    ![b.at, b.requests, b.errors, b.crashes].every(
+      (n) => Number.isSafeInteger(n) && (n as number) >= 0,
+    )
+  )
+    return null;
+  if ((b.errors as number) > (b.requests as number) + (b.crashes as number)) return null;
+  const buildSha = shaFromVersionTag(b.buildSha);
+  return {
+    script: b.script,
+    ...(buildSha ? { buildSha } : {}),
+    at: b.at as number,
+    requests: b.requests as number,
+    errors: b.errors as number,
+    crashes: b.crashes as number,
+  };
+}
+
+/**
+ * Durable aggregate state: one instance per Tail Worker environment keeps the
+ * rolling counts and the health window across isolate churn. Storage holds
+ * only counts, timestamps and an allowlisted build SHA — never request data.
+ */
+export class AlertAggregator {
+  private readonly tracker = new AggregateTracker();
+  private readonly health = new HealthTracker();
+  private loaded: Promise<void> | undefined;
+
+  constructor(private readonly state: DurableObjectState) {}
+
+  private load(): Promise<void> {
+    this.loaded ??= (async () => {
+      this.tracker.restore(await this.state.storage.get("scripts"));
+      this.health.restore(await this.state.storage.get("health"));
+    })();
+    return this.loaded;
+  }
+
+  async fetch(request: Request): Promise<Response> {
+    const { pathname } = new URL(request.url);
+    if (
+      request.method !== "POST" ||
+      !["/observe", "/health", "/spike-result", "/health-result"].includes(pathname)
+    ) {
+      return new Response(null, { status: 404 });
+    }
+    let body: unknown;
+    try {
+      body = await request.json();
+    } catch {
+      return new Response(null, { status: 400 });
+    }
+    await this.load();
+    if (pathname === "/observe") {
+      const batch = validBatch(body);
+      if (!batch) return new Response(null, { status: 400 });
+      const alert = this.tracker.observe(batch);
+      await this.state.storage.put("scripts", this.tracker.snapshot());
+      return Response.json(alert);
+    }
+    if (pathname === "/spike-result") {
+      const result = body as { script?: unknown; delivered?: unknown };
+      if (
+        typeof result?.script !== "string" ||
+        !APP_SCRIPT_NAMES.has(result.script) ||
+        typeof result.delivered !== "boolean"
+      ) {
+        return new Response(null, { status: 400 });
+      }
+      this.tracker.resolve(result.script, result.delivered);
+      await this.state.storage.put("scripts", this.tracker.snapshot());
+      return Response.json(null);
+    }
+    if (pathname === "/health-result") {
+      const result = body as { delivered?: unknown };
+      if (typeof result?.delivered !== "boolean") {
+        return new Response(null, { status: 400 });
+      }
+      this.health.resolve(result.delivered);
+      await this.state.storage.put("health", this.health.snapshot());
+      return Response.json(null);
+    }
+    const probe = body as { ok?: unknown; at?: unknown };
+    if (typeof probe?.ok !== "boolean" || !Number.isSafeInteger(probe.at)) {
+      return new Response(null, { status: 400 });
+    }
+    const downMs = this.health.observe(probe.ok, probe.at as number);
+    await this.state.storage.put("health", this.health.snapshot());
+    return Response.json(downMs === null ? null : { downMs });
+  }
+}
+
 /** Bounded, per-isolate five-minute mute. Failed deliveries can be attempted again. */
 export class DeliveryMute {
   private readonly sent = new Map<string, number>();
@@ -277,7 +667,6 @@ function webhookUrl(secret: string | undefined): URL | null {
   }
 }
 
-type Trace = Pick<TraceItem, "scriptName" | "logs">;
 type Sink = (line: string) => void;
 
 export function createTailWorker(
@@ -286,12 +675,125 @@ export function createTailWorker(
     mute?: DeliveryMute;
     sink?: Sink;
     sleep?: (ms: number) => Promise<void>;
+    tracker?: AggregateTracker;
+    health?: HealthTracker;
+    now?: () => number;
   } = {},
 ) {
-  const mute = opts.mute ?? new DeliveryMute();
+  const now = opts.now ?? Date.now;
+  const mute = opts.mute ?? new DeliveryMute(now);
   const send = opts.fetch ?? fetch;
   const sink = opts.sink ?? ((line: string) => console.log(line));
   const sleep = opts.sleep ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
+  const tracker = opts.tracker ?? new AggregateTracker(now);
+  const health = opts.health ?? new HealthTracker(now);
+
+  async function deliver(url: URL, summary: object): Promise<boolean> {
+    try {
+      // wait=true confirms message persistence; disable all mentions.
+      // https://docs.discord.com/developers/resources/webhook#execute-webhook
+      const response = await send(url.toString(), {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          content: JSON.stringify(summary),
+          allowed_mentions: { parse: [] },
+        }),
+        redirect: "manual", // Workers fetch rejects "error"; a 3xx is never ok, so it fails closed.
+        signal: AbortSignal.timeout(5000),
+      });
+      await response.body?.cancel(); // Never read/log the message or credential-bearing error response.
+      return response.ok;
+    } catch {
+      /* Transport/timeout: do not log the URL or exception. */
+      return false;
+    }
+  }
+
+  function aggregator(env: TailEnv): DurableObjectStub | null {
+    try {
+      return env.ALERT_AGGREGATOR?.get(env.ALERT_AGGREGATOR.idFromName("alerts")) ?? null;
+    } catch {
+      return null;
+    }
+  }
+
+  async function observeBatch(env: TailEnv, batch: TraceBatch): Promise<SpikeAlert | null> {
+    const stub = aggregator(env);
+    if (!stub) return tracker.observe(batch);
+    try {
+      const response = await stub.fetch("https://aggregator.invalid/observe", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(batch),
+        signal: AbortSignal.timeout(AGGREGATOR_TIMEOUT_MS),
+      });
+      if (!response.ok) return tracker.observe(batch);
+      return (await response.json()) as SpikeAlert | null;
+    } catch {
+      // Aggregation is additive: a broken binding falls back to local counts
+      // and must never suppress the per-fingerprint pager.
+      return tracker.observe(batch);
+    }
+  }
+
+  // Result calls clear the Durable Object's pending marker; a lost result
+  // would suppress the next due page until the marker ages out, so a thrown
+  // or non-ok attempt gets exactly one retry. Resolving twice is a no-op.
+  async function postAggregatorResult(
+    stub: DurableObjectStub,
+    path: string,
+    body: unknown,
+  ): Promise<void> {
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      try {
+        const response = await stub.fetch(`https://aggregator.invalid${path}`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(body),
+          signal: AbortSignal.timeout(AGGREGATOR_TIMEOUT_MS),
+        });
+        if (response.ok) return;
+      } catch {
+        /* Fall through to the single retry, then give up. */
+      }
+    }
+  }
+
+  async function resolveSpike(env: TailEnv, script: string, delivered: boolean): Promise<void> {
+    const stub = aggregator(env);
+    if (!stub) return tracker.resolve(script, delivered);
+    await postAggregatorResult(stub, "/spike-result", { script, delivered });
+    // Resolve locally too, whatever the aggregator answered: the observation
+    // may have fallen back to this tracker while the result call recovered,
+    // and a leftover local pending would suppress a failed delivery's retry.
+    tracker.resolve(script, delivered);
+  }
+
+  async function resolveHealth(env: TailEnv, delivered: boolean): Promise<void> {
+    const stub = aggregator(env);
+    if (!stub) return health.resolve(delivered);
+    await postAggregatorResult(stub, "/health-result", { delivered });
+    health.resolve(delivered);
+  }
+
+  async function observeHealth(env: TailEnv, ok: boolean, at: number): Promise<number | null> {
+    const stub = aggregator(env);
+    if (!stub) return health.observe(ok, at);
+    try {
+      const response = await stub.fetch("https://aggregator.invalid/health", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ ok, at }),
+        signal: AbortSignal.timeout(AGGREGATOR_TIMEOUT_MS),
+      });
+      if (!response.ok) return health.observe(ok, at);
+      const result = (await response.json()) as { downMs?: unknown } | null;
+      return typeof result?.downMs === "number" ? result.downMs : null;
+    } catch {
+      return health.observe(ok, at);
+    }
+  }
 
   /** One bounded /up probe. Transport errors and timeouts are status 0. */
   async function probeOnce(target: string): Promise<{ ok: boolean; status: number }> {
@@ -414,39 +916,61 @@ export function createTailWorker(
     }
   }
   return {
-    async tail(events: readonly Trace[], env: TailEnv): Promise<void> {
+    async tail(events: readonly TraceLike[], env: TailEnv): Promise<void> {
       const url = webhookUrl(env.OPS_ALERT_WEBHOOK_URL);
       if (!url) return; // No secret: no parsing, no logging, no outbound work.
+      // Merge same-script traces so one invocation makes at most one
+      // aggregation call per script; SHA is per-trace version metadata.
+      const batches = new Map<string, TraceBatch>();
+      for (const trace of events) {
+        const batch = batchForTrace(trace, now());
+        if (!batch) continue;
+        const prior = batches.get(batch.script);
+        if (!prior) {
+          batches.set(batch.script, { ...batch });
+        } else {
+          prior.requests += batch.requests;
+          prior.errors += batch.errors;
+          prior.crashes += batch.crashes;
+          prior.at = Math.max(prior.at, batch.at);
+          if (batch.buildSha) prior.buildSha = batch.buildSha;
+        }
+      }
+      for (const batch of batches.values()) {
+        const spike = await observeBatch(env, batch);
+        if (!spike) continue;
+        const delivered = await deliver(url, spike);
+        await resolveSpike(env, spike.script, delivered);
+        sink(
+          JSON.stringify({
+            ...spike,
+            delivery: delivered ? "ops.alert.delivered" : "ops.alert.delivery_failed",
+          }),
+        );
+      }
       for (const trace of events) {
         if (!trace.scriptName || !APP_SCRIPT_NAMES.has(trace.scriptName)) continue;
+        const buildSha = shaFromVersionTag(trace.scriptVersion?.tag);
         for (const log of trace.logs) {
           if (log.level !== "error") continue;
           for (const argument of log.message) {
-            const alert = await parseAlert(argument, log.timestamp);
-            if (!alert) continue;
+            const parsed = await parseAlert(argument, log.timestamp);
+            if (!parsed) continue;
+            const alert: AlertSummary = {
+              event: parsed.event,
+              fingerprint: parsed.fingerprint,
+              script: trace.scriptName,
+              ...(buildSha ? { build_sha: buildSha } : {}),
+              logs: logsPath(trace.scriptName),
+              ...(parsed.route ? { route: parsed.route } : {}),
+              ...(parsed.job ? { job: parsed.job } : {}),
+              ...(parsed.attempts !== undefined ? { attempts: parsed.attempts } : {}),
+              timestamp: parsed.timestamp,
+            };
             const key = `${alert.event}:${alert.fingerprint}`;
             if (!mute.begin(key, log.timestamp)) continue;
-            let delivered = false;
-            try {
-              // wait=true confirms message persistence; disable all mentions.
-              // https://docs.discord.com/developers/resources/webhook#execute-webhook
-              const response = await send(url.toString(), {
-                method: "POST",
-                headers: { "content-type": "application/json" },
-                body: JSON.stringify({
-                  content: JSON.stringify(alert),
-                  allowed_mentions: { parse: [] },
-                }),
-                redirect: "manual", // Workers fetch rejects "error"; a 3xx is never ok, so it fails closed.
-                signal: AbortSignal.timeout(5000),
-              });
-              delivered = response.ok;
-              await response.body?.cancel(); // Never read/log the message or credential-bearing error response.
-            } catch {
-              /* Transport/timeout: do not log the URL or exception. */
-            } finally {
-              mute.finish(key, delivered);
-            }
+            const delivered = await deliver(url, alert);
+            mute.finish(key, delivered);
             // Probe correlation is receipt-only: never send it to the webhook or split the mute key.
             const probeId = receiptProbeId(argument, alert);
             sink(
@@ -460,26 +984,52 @@ export function createTailWorker(
         }
       }
     },
-    async scheduled(_controller: ScheduledController, env: TailEnv): Promise<void> {
+    async scheduled(controller: ScheduledController, env: TailEnv): Promise<void> {
       if (!env.UPTIME_URL) return; // Unconfigured: no probing work at all.
       const url = webhookUrl(env.OPS_ALERT_WEBHOOK_URL);
       if (!url) return; // No secret: no probing, no logging, no outbound work.
+      const at = now();
       const first = await probeOnce(env.UPTIME_URL);
-      if (!first.ok) {
+      if (first.ok) {
+        await observeHealth(env, true, at);
+      } else {
         await sleep(UPTIME_RETRY_DELAY_MS);
         const second = await probeOnce(env.UPTIME_URL);
-        if (!second.ok) {
-          const alert: UptimeAlert = {
-            event: "uptime.down",
-            status: second.status,
-            timestamp: new Date().toISOString(),
-          };
-          await deliverScheduled(url, alert, `${alert.event}:${alert.status}`);
+        if (second.ok) {
+          await observeHealth(env, true, at);
+        } else {
+          const downMs = await observeHealth(env, false, at);
+          // Red, but not yet red for over two minutes (or cooling down):
+          // no uptime page this run; synthetics below still run.
+          if (downMs !== null) {
+            const alert: UptimeAlert = {
+              event: "uptime.down",
+              status: second.status,
+              down_seconds: Math.floor(downMs / 1000),
+              timestamp: new Date(at).toISOString(),
+            };
+            const delivered = await deliver(url, alert);
+            await resolveHealth(env, delivered);
+            sink(
+              JSON.stringify({
+                ...alert,
+                delivery: delivered ? "ops.alert.delivered" : "ops.alert.delivery_failed",
+              }),
+            );
+          }
         }
       }
       // Synthetics run even when /up is down: each failing main-flow check
-      // is its own signal, muted independently of the uptime page.
-      await runSynthetics(url, env.UPTIME_URL);
+      // is its own signal, muted independently of the uptime page. They keep
+      // their five-minute cadence: only runs landing on a five-minute
+      // boundary probe the main flows, so the per-minute health loop does
+      // not multiply synthetic probe load (or /events throttle hits). The
+      // gate reads the scheduled slot, not the invocation time, so a
+      // boundary run that starts a minute late still probes.
+      const slot = Number.isFinite(controller.scheduledTime) ? controller.scheduledTime : at;
+      if (new Date(slot).getUTCMinutes() % SYNTHETIC_INTERVAL_MINUTES === 0) {
+        await runSynthetics(url, env.UPTIME_URL);
+      }
     },
   };
 }
