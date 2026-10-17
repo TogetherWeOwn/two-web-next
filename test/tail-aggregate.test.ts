@@ -1,0 +1,450 @@
+import { readFileSync } from "node:fs";
+import { describe, expect, it, vi } from "vitest";
+import {
+  AggregateTracker,
+  AlertAggregator,
+  DeliveryMute,
+  HEALTH_DOWN_MS,
+  SPIKE_COOLDOWN_MS,
+  SPIKE_MIN_CRASHES,
+  SPIKE_MIN_ERRORS,
+  createTailWorker,
+  shaFromVersionTag,
+} from "../tail/worker";
+// @ts-expect-error JSONC comment/trailing-comma stripper has no declaration file.
+import { readWranglerConfig } from "../ci/wrangler-config.mjs";
+
+const t0 = Date.parse("2026-10-01T00:00:00Z");
+const sha = "0123456789abcdef0123456789abcdef01234567";
+const secret = "https://discord.com/api/webhooks/123456789/test-only-token";
+const env = { OPS_ALERT_WEBHOOK_URL: secret };
+
+const fetchTrace = (status: number, at = t0, scriptName = "two-web-next", tag: string = sha) => ({
+  scriptName,
+  scriptVersion: { tag },
+  outcome: "ok",
+  exceptions: [],
+  eventTimestamp: at,
+  event: {
+    request: { method: "GET", url: "https://example.test/private?token=never-send" },
+    response: { status },
+  },
+  logs: [],
+});
+
+const crashTrace = (at = t0, scriptName = "two-web-next") => ({
+  scriptName,
+  scriptVersion: { tag: sha },
+  outcome: "exception",
+  exceptions: [{ name: "BoomError", message: "password=never-send", timestamp: at }],
+  eventTimestamp: at,
+  event: { queue: "private-queue", batchSize: 1 },
+  logs: [],
+});
+
+function fixture(nowStart = t0) {
+  let now = nowStart;
+  const send = vi.fn(async () => new Response(null, { status: 200 }));
+  const sink = vi.fn();
+  const tracker = new AggregateTracker(() => now);
+  const worker = createTailWorker({
+    fetch: send as unknown as typeof fetch,
+    sink,
+    mute: new DeliveryMute(() => now),
+    tracker,
+    now: () => now,
+    sleep: async () => {},
+  });
+  const posts = () =>
+    (send.mock.calls as unknown as [string, RequestInit][]).filter(
+      ([url]) => url === `${secret}?wait=true`,
+    );
+  const contents = () =>
+    posts().map(([, init]) => JSON.parse(JSON.parse(init.body as string).content));
+  return {
+    worker,
+    send,
+    sink,
+    tracker,
+    posts,
+    contents,
+    advance: (ms: number) => {
+      now += ms;
+    },
+    now: () => now,
+  };
+}
+
+describe("shaFromVersionTag", () => {
+  it("accepts the staging tag (a bare SHA) and the production tag (SHA-run-attempt)", () => {
+    expect(shaFromVersionTag(sha)).toBe(sha);
+    expect(shaFromVersionTag(`${sha}-123456789-2`)).toBe(sha);
+  });
+
+  it.each([undefined, "", "manual-tag", sha.toUpperCase(), `${sha}extra`, `v1-${sha}`])(
+    "rejects a non-SHA tag %j instead of forwarding arbitrary text",
+    (tag) => {
+      expect(shaFromVersionTag(tag)).toBeUndefined();
+    },
+  );
+});
+
+describe("aggregate 5xx/error-rate spike alert", () => {
+  it("pages once when at least the minimum errors are at least half of requests in the window", async () => {
+    const { worker, contents, sink } = fixture();
+    await worker.tail(
+      Array.from({ length: SPIKE_MIN_ERRORS }, () => fetchTrace(500)),
+      env,
+    );
+    expect(contents()).toEqual([
+      {
+        event: "error.spike",
+        script: "two-web-next",
+        build_sha: sha,
+        logs: "Workers & Pages > two-web-next > Observability > Logs",
+        window_seconds: 300,
+        requests: SPIKE_MIN_ERRORS,
+        errors: SPIKE_MIN_ERRORS,
+        crashes: 0,
+        error_rate: 1,
+        timestamp: "2026-10-01T00:00:00.000Z",
+      },
+    ]);
+    expect(JSON.stringify(contents())).not.toMatch(/never-send|example\.test/);
+    expect(JSON.parse(sink.mock.calls.at(-1)![0])).toMatchObject({
+      event: "error.spike",
+      build_sha: sha,
+      delivery: "ops.alert.delivered",
+    });
+  });
+
+  it("stays silent below the error minimum, and when errors are a small share of traffic", async () => {
+    const below = fixture();
+    await below.worker.tail(
+      Array.from({ length: SPIKE_MIN_ERRORS - 1 }, () => fetchTrace(503)),
+      env,
+    );
+    expect(below.contents()).toEqual([]);
+
+    const diluted = fixture();
+    await diluted.worker.tail(
+      [
+        ...Array.from({ length: SPIKE_MIN_ERRORS }, () => fetchTrace(500)),
+        ...Array.from({ length: SPIKE_MIN_ERRORS * 4 }, () => fetchTrace(200)),
+      ],
+      env,
+    );
+    expect(diluted.contents()).toEqual([]);
+  });
+
+  it("4xx responses are traffic, not errors", async () => {
+    const { worker, contents } = fixture();
+    await worker.tail(
+      Array.from({ length: 10 }, () => fetchTrace(404)),
+      env,
+    );
+    expect(contents()).toEqual([]);
+  });
+
+  it("cools down after a spike, then can page again after the cooldown", async () => {
+    const f = fixture();
+    const burst = (at: number) =>
+      Array.from({ length: SPIKE_MIN_ERRORS }, () => fetchTrace(500, at));
+    await f.worker.tail(burst(t0), env);
+    await f.worker.tail(burst(t0 + 60_000), env);
+    expect(f.contents()).toHaveLength(1);
+    const later = t0 + SPIKE_COOLDOWN_MS + 60_000;
+    await f.worker.tail(burst(later), env);
+    expect(f.contents()).toHaveLength(2);
+    expect(f.contents()[1].timestamp).toBe(new Date(later).toISOString());
+  });
+
+  it("tracks each app script separately and ignores foreign Workers", async () => {
+    const f = fixture();
+    await f.worker.tail(
+      Array.from({ length: SPIKE_MIN_ERRORS }, () => fetchTrace(500, t0, "other-worker")),
+      env,
+    );
+    await f.worker.tail(
+      Array.from({ length: SPIKE_MIN_ERRORS - 1 }, () => fetchTrace(500, t0, "two-web-jobs")),
+      env,
+    );
+    expect(f.contents()).toEqual([]);
+    await f.worker.tail([fetchTrace(500, t0, "two-web-jobs")], env);
+    expect(f.contents()).toHaveLength(1);
+    expect(f.contents()[0].script).toBe("two-web-jobs");
+  });
+});
+
+describe("unhandled-exception / crash-loop coverage", () => {
+  it("pages on repeated exception outcomes even when no error.alert line or fetch response exists", async () => {
+    const f = fixture();
+    await f.worker.tail(
+      Array.from({ length: SPIKE_MIN_CRASHES }, () => crashTrace()),
+      env,
+    );
+    expect(f.contents()).toHaveLength(1);
+    expect(f.contents()[0]).toMatchObject({
+      event: "error.spike",
+      crashes: SPIKE_MIN_CRASHES,
+      requests: 0,
+    });
+    expect(JSON.stringify(f.contents())).not.toMatch(/never-send|BoomError|private-queue/);
+  });
+
+  it("a single crash does not page the aggregate alarm", async () => {
+    const f = fixture();
+    await f.worker.tail([crashTrace()], env);
+    expect(f.contents()).toEqual([]);
+  });
+});
+
+describe("release tagging on the existing summaries", () => {
+  it("error.alert summaries carry the allowlisted script, logs path and deployed SHA", async () => {
+    const f = fixture();
+    const line = JSON.stringify({
+      level: "critical",
+      event: "error.alert",
+      fingerprint: "TypeError@/join",
+      route: "/join",
+      exception: "TypeError",
+    });
+    await f.worker.tail(
+      [
+        {
+          ...fetchTrace(200, t0, "two-web-next-production", `${sha}-123456789-1`),
+          logs: [{ message: [line], timestamp: t0, level: "error" }],
+        },
+      ],
+      env,
+    );
+    expect(f.contents()).toHaveLength(1);
+    expect(f.contents()[0]).toMatchObject({
+      event: "error.alert",
+      script: "two-web-next-production",
+      build_sha: sha,
+      logs: "Workers & Pages > two-web-next-production > Observability > Logs",
+      route: "/join",
+    });
+  });
+
+  it("an arbitrary version tag is omitted, never forwarded", async () => {
+    const f = fixture();
+    const line = JSON.stringify({
+      level: "critical",
+      event: "queue.failing",
+      job: "SyncEventToDiscord",
+      attempts: 3,
+      exception: "refused",
+    });
+    await f.worker.tail(
+      [
+        {
+          scriptName: "two-web-jobs",
+          scriptVersion: { tag: "manual-never-send" },
+          logs: [{ message: [line], timestamp: t0, level: "error" }],
+        },
+      ],
+      env,
+    );
+    expect(f.contents()).toHaveLength(1);
+    expect(f.contents()[0]).toMatchObject({ event: "queue.failing", script: "two-web-jobs" });
+    expect(f.contents()[0]).not.toHaveProperty("build_sha");
+    expect(JSON.stringify(f.contents())).not.toMatch(/never-send/);
+  });
+});
+
+describe("health red for more than two minutes", () => {
+  const upEnv = {
+    OPS_ALERT_WEBHOOK_URL: secret,
+    UPTIME_URL: "https://next.togetherweown.com/up",
+  };
+  const event = { cron: "* * * * *", scheduledTime: t0, noRetry() {} };
+
+  function healthFixture(probeStatus: () => Response) {
+    let now = t0;
+    const send = vi.fn(async (...args: [string, RequestInit?]) => {
+      const [, init] = args;
+      if (init?.method === "POST") return new Response(null, { status: 200 });
+      return probeStatus();
+    });
+    const sink = vi.fn();
+    const worker = createTailWorker({
+      fetch: send as unknown as typeof fetch,
+      sink,
+      mute: new DeliveryMute(() => now),
+      tracker: new AggregateTracker(() => now),
+      now: () => now,
+      sleep: async () => {},
+    });
+    const posts = () =>
+      (send.mock.calls as unknown as [string, RequestInit][]).filter(
+        ([, init]) => init?.method === "POST",
+      );
+    return {
+      worker,
+      sink,
+      posts,
+      advance: (ms: number) => {
+        now += ms;
+      },
+    };
+  }
+
+  it("does not page on the first red runs; pages once health has been red over two minutes", async () => {
+    const f = healthFixture(() => new Response(null, { status: 503 }));
+    await f.worker.scheduled(event, upEnv);
+    f.advance(60_000);
+    await f.worker.scheduled(event, upEnv);
+    expect(f.posts()).toHaveLength(0);
+    f.advance(HEALTH_DOWN_MS - 60_000 + 1_000);
+    await f.worker.scheduled(event, upEnv);
+    expect(f.posts()).toHaveLength(1);
+    const content = JSON.parse(JSON.parse(f.posts()[0]![1].body as string).content);
+    expect(content).toMatchObject({ event: "uptime.down", status: 503 });
+    expect(content.down_seconds).toBeGreaterThanOrEqual(120);
+    // Still down one minute later: no re-page inside the cooldown.
+    f.advance(60_000);
+    await f.worker.scheduled(event, upEnv);
+    expect(f.posts()).toHaveLength(1);
+  });
+
+  it("a healthy run clears the red window, so a later blip starts over", async () => {
+    let healthy = false;
+    const f = healthFixture(() =>
+      healthy
+        ? new Response(null, { status: 200, headers: { "x-two-origin": "two-web-next" } })
+        : new Response(null, { status: 500 }),
+    );
+    await f.worker.scheduled(event, upEnv);
+    f.advance(HEALTH_DOWN_MS + 1_000);
+    healthy = true;
+    await f.worker.scheduled(event, upEnv);
+    healthy = false;
+    await f.worker.scheduled(event, upEnv);
+    expect(f.posts()).toHaveLength(0);
+  });
+});
+
+describe("durable aggregator (Durable Object)", () => {
+  function fakeState() {
+    const store = new Map<string, unknown>();
+    return {
+      store,
+      state: {
+        storage: {
+          get: async (key: string) => store.get(key),
+          put: async (key: string, value: unknown) => {
+            store.set(key, structuredClone(value));
+          },
+        },
+      },
+    };
+  }
+
+  it("keeps counts across instances through storage, so isolate churn cannot split a spike", async () => {
+    const { state, store } = fakeState();
+    const post = (aggregator: AlertAggregator, body: unknown) =>
+      aggregator.fetch(
+        new Request("https://aggregator.invalid/observe", {
+          method: "POST",
+          body: JSON.stringify(body),
+        }),
+      );
+    const batch = {
+      script: "two-web-next",
+      buildSha: sha,
+      at: t0,
+      requests: 3,
+      errors: 3,
+      crashes: 0,
+    };
+    const first = new AlertAggregator(state as never);
+    expect(await (await post(first, batch)).json()).toBeNull();
+    const revived = new AlertAggregator(state as never);
+    const alert = (await (await post(revived, { ...batch, requests: 2, errors: 2 })).json()) as {
+      event: string;
+      errors: number;
+    };
+    expect(alert).toMatchObject({ event: "error.spike", errors: SPIKE_MIN_ERRORS });
+    expect(store.size).toBeGreaterThan(0);
+  });
+
+  it("rejects unknown routes and malformed batches without recording them", async () => {
+    const { state } = fakeState();
+    const aggregator = new AlertAggregator(state as never);
+    expect((await aggregator.fetch(new Request("https://aggregator.invalid/nope"))).status).toBe(
+      404,
+    );
+    const bad = await aggregator.fetch(
+      new Request("https://aggregator.invalid/observe", { method: "POST", body: "{nope" }),
+    );
+    expect(bad.status).toBe(400);
+    const badShape = await aggregator.fetch(
+      new Request("https://aggregator.invalid/observe", {
+        method: "POST",
+        body: JSON.stringify({ script: "evil", at: t0, requests: -1, errors: 0, crashes: 0 }),
+      }),
+    );
+    expect(badShape.status).toBe(400);
+  });
+
+  it("a failing aggregator binding never breaks the existing per-fingerprint paging", async () => {
+    const send = vi.fn(async () => new Response(null, { status: 200 }));
+    const sink = vi.fn();
+    const worker = createTailWorker({ fetch: send as unknown as typeof fetch, sink });
+    const line = JSON.stringify({
+      level: "critical",
+      event: "error.alert",
+      fingerprint: "TypeError@/join",
+      route: "/join",
+    });
+    const broken = {
+      OPS_ALERT_WEBHOOK_URL: secret,
+      ALERT_AGGREGATOR: {
+        idFromName: () => ({}),
+        get: () => ({
+          fetch: async () => {
+            throw new Error("aggregator down");
+          },
+        }),
+      },
+    };
+    await expect(
+      worker.tail(
+        [
+          {
+            scriptName: "two-web-next",
+            logs: [{ message: [line], timestamp: t0, level: "error" }],
+          },
+        ],
+        broken as never,
+      ),
+    ).resolves.toBeUndefined();
+    expect(send).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("tail wrangler wiring for the aggregate alarm", () => {
+  const tail = readWranglerConfig(readFileSync("tail/wrangler.jsonc", "utf8")) as Record<
+    string,
+    unknown
+  >;
+
+  it("probes health every minute so a two-minute outage is detected in minutes", () => {
+    expect(tail.triggers).toEqual({ crons: ["* * * * *"] });
+  });
+
+  it("binds the AlertAggregator Durable Object in staging and production with one migration tag", () => {
+    const binding = [{ name: "ALERT_AGGREGATOR", class_name: "AlertAggregator" }];
+    expect((tail.durable_objects as { bindings: unknown }).bindings).toEqual(binding);
+    const production = (tail.env as Record<string, Record<string, unknown>>).production;
+    expect((production?.durable_objects as { bindings: unknown } | undefined)?.bindings).toEqual(
+      binding,
+    );
+    expect(tail.migrations).toEqual([{ tag: "v1", new_sqlite_classes: ["AlertAggregator"] }]);
+    expect(production?.migrations).toEqual([
+      { tag: "v1", new_sqlite_classes: ["AlertAggregator"] },
+    ]);
+  });
+});

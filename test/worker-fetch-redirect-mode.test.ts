@@ -37,7 +37,10 @@ describe("Worker fetch redirect mode", () => {
 const PINNED_MANUAL_SITES = [
   { file: "src/bot/client-transport.ts", minManual: 1 },
   { file: "src/bot/event-read.ts", minManual: 1 },
-  { file: "tail/worker.ts", minManual: 3 },
+  // Tail: probeOnce plus the shared deliver() helper (one call site serves
+  // every Discord summary type; the aggregator stub fetch is a binding call,
+  // not a global fetch redirect site).
+  { file: "tail/worker.ts", minManual: 2 },
 ] as const;
 
 describe("Worker redirect-manual pin", () => {
@@ -227,24 +230,31 @@ describe("Worker redirect-manual behavior", () => {
         new Response(null, { status: 200, headers: { "x-two-origin": "two-web-next" } }),
     });
     const lines: string[] = [];
+    let now = Date.parse("2030-07-01T00:00:00Z");
     const worker = createTailWorker({
       fetch: fetchFn,
       sink: (line) => lines.push(line),
-      mute: new DeliveryMute(() => Date.parse("2030-07-01T00:00:00Z")),
+      mute: new DeliveryMute(() => now),
+      now: () => now,
       sleep: async () => {},
     });
-    await worker.scheduled(
-      { cron: "*/5 * * * *", scheduledTime: Date.parse("2030-07-01T00:00:00Z"), noRetry() {} },
-      {
-        OPS_ALERT_WEBHOOK_URL: "https://discord.com/api/webhooks/123456789/test-only-token",
-        UPTIME_URL: "https://next.togetherweown.com/up",
-      },
-    );
+    // Health must stay red for over two minutes before the page: three
+    // one-minute runs, two failed probes each.
+    for (const step of [0, 60_000, 61_000]) {
+      now += step;
+      await worker.scheduled(
+        { cron: "* * * * *", scheduledTime: now, noRetry() {} },
+        {
+          OPS_ALERT_WEBHOOK_URL: "https://discord.com/api/webhooks/123456789/test-only-token",
+          UPTIME_URL: "https://next.togetherweown.com/up",
+        },
+      );
+    }
     const gets = seen.filter((init) => init?.method === "GET");
     const posts = seen.filter((init) => init?.method === "POST");
-    // Two failed probes, then one page: the 302 is a failure with its status, not a throw
+    // Failed probes, then one page: the 302 is a failure with its status, not a throw
     // (status 0) and not a silent success.
-    expect(gets).toHaveLength(2);
+    expect(gets).toHaveLength(6);
     for (const init of seen) expect(init?.redirect).toBe("manual");
     expect(posts).toHaveLength(1);
     expect(lines).toHaveLength(1);

@@ -84,6 +84,9 @@ events, malformed arguments, other Workers and recursive Tail logs are ignored.
 | --- | --- |
 | `event` | Only the two critical event types |
 | `fingerprint` | Request: SHA-256 of the source fingerprint; queue: `queue.failing@JobClass` |
+| `script` | The exact allowlisted app script name from the trace (staging web, staging jobs, or production); the reliable environment discriminator |
+| `build_sha` | Optional: the deployed 40-hex source SHA parsed from the trace's version tag (a bare SHA in staging, `<sha>-<run-id>-<attempt>` in production); any other tag is omitted, never forwarded |
+| `logs` | Fixed dashboard path for that script: `Workers & Pages > <script> > Observability > Logs`; a navigation path, never a URL with parameters |
 | `route` | Request only: a reviewed registered route template; unknown/raw paths and query-bearing routes become `[redacted]` |
 | `job`, `attempts` | Queue only: known job class and positive integer attempt count |
 | `timestamp` | ISO timestamp from the source console log, never a user-supplied field |
@@ -116,20 +119,53 @@ can retry, but the current event is not durably retried. Source request muting
 can delay that next attempt. Review Tail logs when delivery is suspected lost.
 The webhook URL and webhook response bodies are never logged.
 
+### Aggregate spike alarm: `error.spike`
+
+Per-fingerprint pages cannot say "half of traffic is failing", so the Tail
+Worker also counts **every** accepted trace outcome — fetch responses by
+status class and exception outcomes — without reading request URLs, headers,
+exception text or log bodies. Counts live in one `AlertAggregator` Durable
+Object per Tail Worker environment (`ALERT_AGGREGATOR`, migration tag `v1`),
+so cold starts and multiple isolates cannot split a spike; storage holds only
+30-second bucket counts, timestamps and the allowlisted build SHA. Without
+the binding the same thresholds run per isolate as a best effort.
+
+In a rolling five-minute window per script, one `error.spike` page fires when
+either gate crosses, then a 15-minute cooldown applies:
+
+- **Error rate:** at least 5 error responses (HTTP 5xx, or a fetch that ended
+  in an exception) **and** at least 50% of that script's requests in the window.
+- **Crash loop:** at least 5 exception outcomes, including queue, cron and
+  other non-fetch invocations that produce no `error.alert` line at all.
+
+The summary is allowlisted like the other events: `event`, `script`, optional
+`build_sha` (same version-tag rule as above), the fixed `logs` dashboard path,
+`window_seconds`, `requests`, `errors`, `crashes`, `error_rate` and
+`timestamp`. It is recorded with the usual `ops.alert.delivered` /
+`ops.alert.delivery_failed` receipt. Aggregation is additive: a failing
+aggregator falls back to local counts and never suppresses the per-fingerprint
+pager. Tune the gates in `tail/worker.ts` (`SPIKE_MIN_ERRORS`,
+`SPIKE_MIN_RATE`, `SPIKE_MIN_CRASHES`, `SPIKE_COOLDOWN_MS`) only with staging
+evidence; on a quiet site the count floor, not the rate, is what fires.
+
 ### Scheduled `/up` prober: `uptime.down`
 
 The Tail Worker's scheduled handler generates a third event, `uptime.down`,
 from its own `/up` prober when `UPTIME_URL` and a valid webhook are configured.
-Each cron run probes once and retries a failure after ten seconds, with a
-ten-second timeout per attempt. It pages only if **both attempts in that run
-fail**; a healthy first or second attempt stays silent. Healthy means HTTP 200
-with `x-two-origin: two-web-next`, not merely a reachable endpoint.
+The cron runs every minute; each run probes once and retries a failure after
+ten seconds, with a ten-second timeout per attempt. A run is red only if
+**both attempts fail**, and the page fires only when health has stayed red
+across runs for **over two minutes**; a healthy run clears the window, and a
+15-minute cooldown follows a page. The red window lives in the same
+`AlertAggregator` Durable Object (per-isolate fallback without the binding).
+Healthy means HTTP 200 with `x-two-origin: two-web-next`, not merely a
+reachable endpoint.
 
 The summary contains only `event`, `status` (the second attempt's HTTP status,
-or `0` for a transport error/timeout) and `timestamp`. It uses the same
-five-minute, per-isolate delivery mute, keyed by `uptime.down:<status>`.
+or `0` for a transport error/timeout), `down_seconds` (how long health has
+been continuously red) and `timestamp`.
 The Tail Worker records `ops.alert.delivered` or `ops.alert.delivery_failed`
-for each unmuted delivery attempt, so the delivery-receipt query below also
+for each delivery attempt, so the delivery-receipt query below also
 catches these pages. **There is no matching app source-log line by design**:
 the event originates in the Tail Worker, not an `error.alert` or `queue.failing`
 source emission. A receipt without a source alert is therefore expected.
@@ -137,7 +173,9 @@ source emission. A receipt without a source alert is therefore expected.
 ## Configure/deploy (staging first)
 
 The Tail Worker has no public route, Workers.dev endpoint, database binding or
-queue consumer. `OPS_ALERT_WEBHOOK_URL` is an **optional secret on the Tail
+queue consumer; its only binding is the `ALERT_AGGREGATOR` Durable Object
+(counts and the health window; declared in both environments because bindings
+are not inherited). `OPS_ALERT_WEBHOOK_URL` is an **optional secret on the Tail
 Worker only**, not an app `Env`/`JobsEnv` variable. Only an HTTPS Discord webhook
 URL at `discord.com/api[/vN]/webhooks/<id>/<token>` is accepted. Invalid/unset
 configuration silently drops outbound work; it is not a successful probe.
@@ -226,6 +264,26 @@ nonzero and claims no delivery. Stop the live tail and remove the private raw
 stream after the drill; retain only the script's redacted JSON result plus the
 tested SHA as evidence. A missing operator secret leaves this live drill
 unverified; local fixture tests still cover the chain.
+
+## Aggregate threshold drill (staging only)
+
+This exercises the `error.spike` gate end to end without touching production:
+
+1. Wait out any cooldown (15 minutes after the last staging `error.spike`
+   receipt) and connect the Tail receipt stream first, as in the probe drill.
+2. Send at least five authorized `POST /__probe/alert` calls (each returns the
+   expected 500) inside five minutes, with no other staging traffic in
+   between where practical, so 5xx responses are at least half of the web
+   Worker's requests. The shared QA throttle allows 10/minute; five calls fit
+   one minute. Each call also emits its usual per-fingerprint receipts.
+3. Require exactly one fresh `error.spike` receipt
+   (`ops.alert.delivered`) whose `script` is `two-web-next` and whose
+   `build_sha` equals the deployed staging version tag. A spike receipt
+   without the correct SHA, or only the per-fingerprint receipts, is a failed
+   drill — check the `ALERT_AGGREGATOR` binding on the staging Tail Worker.
+4. Retain only the redacted receipt line and the tested SHA as evidence, per
+   the probe drill's handling rules. Never run this against production; the
+   production check is passive (binding present, receipts flow on real errors).
 
 ## Tailing and fallback
 
