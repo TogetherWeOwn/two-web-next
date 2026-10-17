@@ -108,17 +108,59 @@ const depsFor = (overrides: Partial<HookDispatchDeps> = {}): HookDispatchDeps =>
 });
 
 describe("Kit admin dispatch: privileged boundary releases and refusals", () => {
-  it("moderator dashboard releases with private/no-store and the Kit marker", async () => {
+  it("moderator dashboard releases with private/no-store and the signed probe cookie", async () => {
     const { entries, sink } = recordingSink();
-    const res = await dispatchHookRequest(eventFor(), depsFor({ accessSink: async () => sink }));
+    const probe = "__Host-two_session_status=signed.value; Path=/; Secure; HttpOnly; SameSite=Lax";
+    const res = await dispatchHookRequest(
+      eventFor(),
+      depsFor({
+        accessSink: async () => sink,
+        authStatusCookieFor: async () => probe,
+      }),
+    );
     expect(res.status).toBe(200);
     expect(res.headers.get("cache-control")).toBe("private, no-store");
     expect(res.headers.get(KIT_RENDERER_HEADER)).toBe(KIT_RENDERER_VALUE);
+    expect(res.headers.get("set-cookie")).toBe(probe);
     expect(await res.text()).toContain('data-testid="admin-actor"');
     // Subject-free dashboard: classified reads, zero audit rows, one sink
     // decision path — no duplicate audits.
     expect(entries).toEqual([]);
     expect(sink).not.toHaveBeenCalled();
+  });
+
+  it("appends no probe cookie to failed or non-moderator admin documents", async () => {
+    const probe = "__Host-two_session_status=signed.value; Path=/; Secure; HttpOnly; SameSite=Lax";
+    for (const { status, actorStatus, moderator, contentType } of [
+      { status: 503, actorStatus: "authenticated", moderator: true, contentType: undefined },
+      { status: 403, actorStatus: "authenticated", moderator: false, contentType: undefined },
+      { status: 302, actorStatus: "guest", moderator: false, contentType: undefined },
+      { status: 200, actorStatus: "guest", moderator: false, contentType: "text/html" },
+      { status: 200, actorStatus: "authenticated", moderator: false, contentType: "text/html" },
+      {
+        status: 200,
+        actorStatus: "authenticated",
+        moderator: true,
+        contentType: "application/json",
+      },
+    ] as const) {
+      const res = await dispatchHookRequest(
+        eventFor(),
+        depsFor({
+          authStatusCookieFor: async () => probe,
+          sessionFor: vi.fn(async () => localsFor(actorStatus, moderator ? MOD_ID : MEMBER_ID)),
+          resolve: vi.fn(
+            async () =>
+              new Response(status === 200 ? "<main>ok</main>" : null, {
+                status,
+                headers: contentType ? { "content-type": contentType } : undefined,
+              }),
+          ),
+        }),
+      );
+      expect(res.status).toBe(status);
+      expect(res.headers.get("set-cookie")).toBeNull();
+    }
   });
 
   it("SvelteKit-converted guest bounce and non-moderator 403 pass through", async () => {
