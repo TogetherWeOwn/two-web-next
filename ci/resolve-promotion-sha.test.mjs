@@ -165,3 +165,247 @@ test("a deploy whose web quality gate failed is never promoted", async () => {
 test("a deploy without the web quality gate (older runs) is not promotable", async () => {
   assert.equal(await resolve([run(2, A)], { 2: { journeys: "success", quality: null } }), null);
 });
+
+// Evidence-failure refusal contract: HTTP, transport, and decoding failures must
+// reject instead of silently falling back to an older SHA or null. Test-only pin
+// of ci/resolve-promotion-sha.mjs:22-62; no promotion-policy change.
+const EVIDENCE_HTTP_STATUSES = [401, 403, 429, 500];
+
+function failingRunsFetch(status, requested) {
+  return async (url) => {
+    const { pathname } = new URL(url);
+    requested.push(pathname);
+    if (pathname.endsWith("/actions/workflows/e2e-staging.yml/runs")) {
+      return { ok: false, status, json: async () => ({}) };
+    }
+    assert.fail(`no job lookup should occur after workflow-list HTTP ${status}`);
+  };
+}
+
+function failingJobsFetch(runsList, status, requestedJobIds) {
+  return async (url) => {
+    const { pathname, searchParams } = new URL(url);
+    if (pathname.endsWith("/actions/workflows/e2e-staging.yml/runs")) {
+      const page = Number(searchParams.get("page"));
+      const size = Number(searchParams.get("per_page"));
+      return {
+        ok: true,
+        json: async () => ({ workflow_runs: runsList.slice((page - 1) * size, page * size) }),
+      };
+    }
+    const id = pathname.match(/\/actions\/runs\/(\d+)\/jobs$/)?.[1];
+    if (id) {
+      requestedJobIds.push(id);
+      if (id === "3") return { ok: false, status, json: async () => ({}) };
+      return {
+        ok: true,
+        json: async () => ({
+          jobs: [
+            { name: "staging-journeys", conclusion: "success" },
+            { name: "staging-quality / quality", conclusion: "success" },
+          ],
+        }),
+      };
+    }
+    assert.fail(`unexpected ${pathname}`);
+  };
+}
+
+test("workflow-list HTTP failures refuse promotion selection without a job lookup", async () => {
+  for (const status of EVIDENCE_HTTP_STATUSES) {
+    const requested = [];
+    await assert.rejects(
+      resolvePromotionSha({
+        repository: "o/r",
+        token: "t",
+        fetchImpl: failingRunsFetch(status, requested),
+      }),
+      new RegExp(`Promotion lookup failed \\(HTTP ${status}\\)`),
+      `workflow-list HTTP ${status}`,
+    );
+    assert.deepEqual(
+      requested,
+      ["/repos/o/r/actions/workflows/e2e-staging.yml/runs"],
+      `no job lookup after workflow-list HTTP ${status}`,
+    );
+  }
+});
+
+test("per-run job-list HTTP failures refuse promotion instead of falling back to the older SHA", async () => {
+  for (const status of EVIDENCE_HTTP_STATUSES) {
+    const runs = [run(3, A), run(2, B)];
+    const requestedJobIds = [];
+    await assert.rejects(
+      resolvePromotionSha({
+        repository: "o/r",
+        token: "t",
+        fetchImpl: failingJobsFetch(runs, status, requestedJobIds),
+      }),
+      new RegExp(`Promotion lookup failed \\(HTTP ${status}\\)`),
+      `job-list HTTP ${status}`,
+    );
+    assert.deepEqual(
+      requestedJobIds,
+      ["3"],
+      `older SHA must not be looked up after newest job-list HTTP ${status}`,
+    );
+  }
+  // Positive control: the same evidence with successful lookups selects the newest
+  // deployed run-name SHA, and valid ineligibility (not transport failure) falls back.
+  assert.equal(await resolve([run(3, A), run(2, B)], { 3: "success", 2: "success" }), A);
+  assert.equal(
+    await resolve([run(3, A), run(2, B)], {
+      3: { journeys: "failure", quality: "success" },
+      2: "success",
+    }),
+    B,
+    "valid failure evidence for the newest candidate still falls back to the older SHA",
+  );
+});
+
+test("a later workflow-list page failure refuses selection instead of returning null", async () => {
+  const newestUnfinished = run(3, A, null, "in_progress");
+  const olderEligible = run(2, B);
+  const failingPageTwo = async (url) => {
+    const { pathname, searchParams } = new URL(url);
+    if (pathname.endsWith("/actions/workflows/e2e-staging.yml/runs")) {
+      if (searchParams.get("page") === "2")
+        return { ok: false, status: 500, json: async () => ({}) };
+      return { ok: true, json: async () => ({ workflow_runs: [newestUnfinished] }) };
+    }
+    assert.fail("no job lookup should occur when the later workflow-list page fails");
+  };
+  await assert.rejects(
+    resolvePromotionSha({ repository: "o/r", token: "t", fetchImpl: failingPageTwo }),
+    /Promotion lookup failed \(HTTP 500\)/,
+  );
+  // Positive control: the same two pages with a successful second page select the
+  // older deployed run-name SHA once the newest is unfinished.
+  const succeedingPageTwo = stub([newestUnfinished, olderEligible], { 2: "success" });
+  assert.equal(
+    await resolvePromotionSha({ repository: "o/r", token: "t", fetchImpl: succeedingPageTwo }),
+    B,
+  );
+});
+
+test("fetch rejection refuses promotion selection on both lookups", async () => {
+  const runsFetchRejected = [];
+  await assert.rejects(
+    resolvePromotionSha({
+      repository: "o/r",
+      token: "t",
+      fetchImpl: async (url) => {
+        runsFetchRejected.push(new URL(url).pathname);
+        throw new TypeError("fetch failed");
+      },
+    }),
+    /fetch failed/,
+  );
+  assert.deepEqual(runsFetchRejected, ["/repos/o/r/actions/workflows/e2e-staging.yml/runs"]);
+
+  const requestedJobIds = [];
+  const jobsFetchRejected = async (url) => {
+    const { pathname, searchParams } = new URL(url);
+    if (pathname.endsWith("/actions/workflows/e2e-staging.yml/runs")) {
+      const page = Number(searchParams.get("page"));
+      const size = Number(searchParams.get("per_page"));
+      const runs = [run(3, A), run(2, B)];
+      return {
+        ok: true,
+        json: async () => ({ workflow_runs: runs.slice((page - 1) * size, page * size) }),
+      };
+    }
+    const id = pathname.match(/\/actions\/runs\/(\d+)\/jobs$/)?.[1];
+    if (id) {
+      requestedJobIds.push(id);
+      throw new TypeError("fetch failed");
+    }
+    assert.fail(`unexpected ${pathname}`);
+  };
+  await assert.rejects(
+    resolvePromotionSha({ repository: "o/r", token: "t", fetchImpl: jobsFetchRejected }),
+    /fetch failed/,
+  );
+  assert.deepEqual(requestedJobIds, ["3"], "older SHA must not be looked up after fetch rejection");
+});
+
+test("JSON decoding rejection refuses promotion selection on both lookups", async () => {
+  await assert.rejects(
+    resolvePromotionSha({
+      repository: "o/r",
+      token: "t",
+      fetchImpl: async (url) => {
+        const { pathname } = new URL(url);
+        if (pathname.endsWith("/actions/workflows/e2e-staging.yml/runs")) {
+          return {
+            ok: true,
+            json: async () => {
+              throw new SyntaxError("Unexpected token in JSON");
+            },
+          };
+        }
+        assert.fail("no job lookup should occur after workflow-list JSON failure");
+      },
+    }),
+    /Unexpected token in JSON/,
+  );
+
+  const requestedJobIds = [];
+  const jobsJsonRejected = async (url) => {
+    const { pathname, searchParams } = new URL(url);
+    if (pathname.endsWith("/actions/workflows/e2e-staging.yml/runs")) {
+      const page = Number(searchParams.get("page"));
+      const size = Number(searchParams.get("per_page"));
+      const runs = [run(3, A), run(2, B)];
+      return {
+        ok: true,
+        json: async () => ({ workflow_runs: runs.slice((page - 1) * size, page * size) }),
+      };
+    }
+    const id = pathname.match(/\/actions\/runs\/(\d+)\/jobs$/)?.[1];
+    if (id) {
+      requestedJobIds.push(id);
+      if (id === "3") {
+        return {
+          ok: true,
+          json: async () => {
+            throw new SyntaxError("Unexpected token in JSON");
+          },
+        };
+      }
+      return {
+        ok: true,
+        json: async () => ({
+          jobs: [
+            { name: "staging-journeys", conclusion: "success" },
+            { name: "staging-quality / quality", conclusion: "success" },
+          ],
+        }),
+      };
+    }
+    assert.fail(`unexpected ${pathname}`);
+  };
+  await assert.rejects(
+    resolvePromotionSha({ repository: "o/r", token: "t", fetchImpl: jobsJsonRejected }),
+    /Unexpected token in JSON/,
+  );
+  assert.deepEqual(requestedJobIds, ["3"], "older SHA must not be looked up after JSON failure");
+});
+
+test("negative control: catch-and-continue would silently return the older SHA", async () => {
+  // Proves the newest-failure/older-eligible scenario above is discriminating: a
+  // resolver that swallowed the newest job-lookup failure and continued would
+  // return B, so the assert.rejects refusal tests detect that mutation.
+  const runs = [run(3, A), run(2, B)];
+  const requestedJobIds = [];
+  const fetchImpl = failingJobsFetch(runs, 500, requestedJobIds);
+  async function catchAndContinue() {
+    try {
+      return await resolvePromotionSha({ repository: "o/r", token: "t", fetchImpl });
+    } catch {
+      return B;
+    }
+  }
+  assert.equal(await catchAndContinue(), B);
+  assert.deepEqual(requestedJobIds, ["3"]);
+});
