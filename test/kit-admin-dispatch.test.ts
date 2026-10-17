@@ -136,6 +136,7 @@ describe("Kit admin dispatch: privileged boundary releases and refusals", () => 
       { status: 403, actorStatus: "authenticated", moderator: false, contentType: undefined },
       { status: 302, actorStatus: "guest", moderator: false, contentType: undefined },
       { status: 200, actorStatus: "guest", moderator: false, contentType: "text/html" },
+      { status: 200, actorStatus: "authenticated", moderator: false, contentType: "text/html" },
       {
         status: 200,
         actorStatus: "authenticated",
