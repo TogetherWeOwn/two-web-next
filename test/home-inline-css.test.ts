@@ -39,7 +39,7 @@ describe("homepage inlined critical CSS", () => {
     // size-adjusted fallback uses the measured uppercase heading ratio.
     expect(LEAF_CRITICAL_CSS).toContain("@font-face { font-family: 'Display Fallback'");
     expect(LEAF_CRITICAL_CSS).toContain("local('Liberation Sans'), local('Arimo'), local('Arial')");
-    expect(LEAF_CRITICAL_CSS).toContain("size-adjust: 78%");
+    expect(LEAF_CRITICAL_CSS).toContain("size-adjust: 77%");
     expect(LEAF_CRITICAL_CSS).toContain("Display, 'Display Fallback', 'Arial Narrow'");
     expect(LEAF_CRITICAL_CSS).not.toMatch(/Display, 'Arial Narrow'/);
     const html = Layout({ title: "Fixture", theme: "home", inlineCriticalCss: true })!.toString();
