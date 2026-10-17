@@ -31,6 +31,8 @@ Operations (deploy/rollback, `/up`, queues, outages and restore drills):
 
 - [Moderator admin guide](docs/moderator-admin-guide.md): Next admin routes,
   event and featured-content workflows, dashboard diagnostics, and safe escalation.
+- [Event host privacy and safety checklist](docs/event-host-privacy-safety-checklist.md):
+  least-privilege event hosting and routing concerns to an authorized moderator.
 - [Troubleshooting join and Discord sign-in](docs/troubleshooting-join.md):
   current notices, recovery pages, and the invite fallback.
 
