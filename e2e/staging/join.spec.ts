@@ -1,3 +1,4 @@
+import { qaLoginRetryBudgetMs } from "../qa-login-retry.mjs";
 import { test, expect, emptyStorageState, memberStorageState } from "./fixtures";
 import { loginQaMember } from "./qa-login";
 
@@ -55,6 +56,9 @@ test("staging join funnel answers without a session and entries redirect to Disc
 // recorded as a report annotation (the runner sets GITHUB_SHA), so a result
 // names the Worker build it ran against.
 test("staging QA member session opens the member profile after the funnel", async ({ browser }) => {
+  // The config's 30s covers the login and the reads below; the login's
+  // bounded 429 waits get their own budget (qa-login-retry.mjs), one login.
+  test.setTimeout(30_000 + qaLoginRetryBudgetMs(1));
   await loginQaMember();
   test.info().annotations.push({
     type: "staging-revision",

@@ -1,4 +1,5 @@
 import { featuredGuestPoll, featuredJourneyTimeoutMs } from "../featured-guest-poll.mjs";
+import { qaLoginRetryBudgetMs } from "../qa-login-retry.mjs";
 import { cleanupFeaturedFixture, homeHasHeadline } from "./featured-checks";
 import { emptyStorageState, expect, moderatorStorageState, stagingOrigin, test } from "./fixtures";
 import { loginQaModerator } from "./qa-login";
@@ -8,6 +9,9 @@ test.use({ storageState: moderatorStorageState });
 // Fresh moderator session per file: admin page views rotate the bearer, so a
 // stored token is single-use across files. Moderator only — one login.
 test.beforeAll(async () => {
+  // Hook timeout: the config's 30s covers the login itself; its bounded 429
+  // waits get their own budget (qa-login-retry.mjs), one login here.
+  test.setTimeout(30_000 + qaLoginRetryBudgetMs(1));
   await loginQaModerator();
 });
 
