@@ -261,6 +261,8 @@ leave-page warning for unsaved changes (including after a rejected Save).
   published events. Cancellation is terminal: no reopen or republish. Make an
   approved replacement event if needed. Check carefully; there is no confirmation
   dialog. Old public links remain a cancelled-event page, not a missing record.
+  Use the [event cancellation and reschedule communication checklist](events-communications.md)
+  after verifying the site state.
 - `past` is a list filter/status, not something moderators set with a button.
   Public pages can classify an event as past by its end time even while the stored
   status still says `published`; the admin `past` filter need not include every
