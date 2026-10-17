@@ -9,10 +9,16 @@
 //
 // The document wrapper (`<html lang="en">`, charset, viewport) mirrors
 // web/src/app.html, which supplies those at runtime around %sveltekit.head% /
-// %sveltekit.body%. The head links /styles.css and /theme.css; setContent
-// cannot load them from about:blank, so the identical public/ bytes are
-// inlined — contrast and target-size then evaluate against the served CSS,
-// exactly as in ci/a11y.mjs. The axe gate is the shared one: WCAG_AA_TAGS +
+// %sveltekit.body%. The head links /styles.css and /theme.css, and every Kit
+// page also loads web/src/app.css through +layout.svelte — that file defines
+// the Open Lobby tokens and dark canvas the shell colours resolve through.
+// setContent cannot load any of them from about:blank, so the identical
+// public/ bytes are inlined and app.css is compiled with the web workspace's
+// @tailwindcss/node (class candidates taken from the rendered markup) and
+// inlined with them — contrast and target-size then evaluate against the CSS
+// Kit actually serves, exactly as in ci/a11y.mjs. A computed-style pin on the
+// dark body background keeps the fixture from silently falling back to the
+// light Hono palette. The axe gate is the shared one: WCAG_AA_TAGS +
 // assertNoViolations from ci/a11y-policy.mjs, no rule exclusions.
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
@@ -39,6 +45,12 @@ const { compile } = webRequire("svelte/compiler") as {
     source: string,
     options: { generate: string; dev: boolean; filename: string },
   ) => { js: { code: string } };
+};
+const { compile: compileTailwind } = webRequire("@tailwindcss/node") as {
+  compile: (
+    css: string,
+    options: { base: string; onDependency: (path: string) => void },
+  ) => Promise<{ build: (candidates: string[]) => string }>;
 };
 
 const INVITE = "https://discord.gg/fixture-invite";
@@ -146,6 +158,29 @@ export function renderErrorShell(code) {
       });
       rmSync(scratch, { recursive: true, force: true });
 
+      // Compile the Kit stylesheet +layout.svelte loads on every page. Class
+      // candidates come from the rendered markup of every status, so the
+      // utilities the shell uses (bg-lobby-*, text-lobby-*) are generated
+      // exactly as the Kit build generates them; the unlayered canvas and
+      // .base-theme token mapping in app.css ride along regardless.
+      const candidates = new Set<string>();
+      for (const { code } of CASES) {
+        const { head, body } = renderErrorShell(code);
+        for (const match of `${head}\n${body}`.matchAll(/class="([^"]+)"/g)) {
+          for (const token of (match[1] ?? "").split(/\s+/).filter(Boolean)) {
+            candidates.add(token);
+          }
+        }
+      }
+      const kitCompiler = await compileTailwind(
+        readFileSync(join(worktree, "web/src/app.css"), "utf8"),
+        { base: join(worktree, "web/src"), onDependency: () => {} },
+      );
+      const kitCss = kitCompiler.build([...candidates]);
+      // Inlining is only safe while the compiled sheet cannot close the style tag.
+      expect(kitCss).not.toContain("</style");
+      servedCss = `${servedCss}\n${kitCss}`;
+
       browser = await chromium.launch();
       page = await (await browser.newContext()).newPage();
     }, 120000);
@@ -193,6 +228,7 @@ export function renderErrorShell(code) {
           recoveryCodeText: string | null;
           mainLinks: Array<{ testid: string | null; href: string | null; text: string }>;
           sectionText: string;
+          bodyBackground: string;
         }>(`(() => {
         const headings = [...document.querySelectorAll("h1, h2, h3, h4, h5, h6")].map((el) => ({
           tag: el.tagName,
@@ -218,6 +254,7 @@ export function renderErrorShell(code) {
           recoveryCodeText: recoveryCode?.textContent?.trim() ?? null,
           mainLinks,
           sectionText: section?.innerText ?? "",
+          bodyBackground: getComputedStyle(document.body).backgroundColor,
         };
       })()`);
 
@@ -226,6 +263,11 @@ export function renderErrorShell(code) {
         expect(dom.headings).toEqual([{ tag: "H1", id: "error-heading", text: copy.title }]);
         expect(dom.labelledBy).toBe("error-heading");
         expect(dom.labelTargetTag).toBe("H1");
+        // Palette guard: the page must be evaluating in the dark Open Lobby
+        // colours members see (--color-lobby-surface, #121719, from the
+        // compiled app.css), never the light Hono canvas — otherwise the axe
+        // contrast run below checks a page nobody is served.
+        expect(dom.bodyBackground).toBe("rgb(18, 23, 25)");
         expect(dom.title).toBe(`${copy.title} — Together We Own`);
         expect(dom.robots).toBe("noindex, nofollow");
         // The big status numeral is decorative: visible, but out of the a11y tree.
