@@ -615,8 +615,8 @@ describe("performance CI", () => {
     expect(pkg.overrides["basic-ftp"]).toBe("6.2.1");
     // Main's engines floor (^22.23.0 || >=24) satisfies the ESM-only browser
     // helper's own >=22.12.0 requirement; pin the merged value, not the floor.
-    // 22.23.0 is the first 22.x whose ICU 78 renders the suite's pinned
-    // `GMT+00:00` zero offset and whose bundled npm 10 accepts the lockfile
+    // 22.23.0 is the verified floor: its ICU 78 renders the suite's pinned
+    // `GMT+00:00` zero offset and its bundled npm 10 accepts the lockfile
     // with the puppeteer-core proxy-agent override below.
     expect(pkg.engines.node).toBe("^22.23.0 || >=24");
     expect(pkg.overrides["puppeteer-core"]).toEqual({ "proxy-agent": "6.5.0" });

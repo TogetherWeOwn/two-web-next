@@ -606,9 +606,11 @@ jobs:
   # Node 22 compatibility leg: package.json `engines` declares a 22 range
   # beside `>=24`, but every other job runs Node 24, so the 22 range shipped
   # to developers unverified. Building this leg proved the old 22.18.0 floor
-  # wrong (its bundled npm 10 refused the lockfile, and its ICU 77 renders a
-  # zero UTC offset as `GMT` where the suite and Node 24 pin `GMT+00:00`), so
-  # the floor is corrected to 22.23.0, the first 22.x with ICU 78. This leg
+  # wrong (its bundled npm 10.9.3 refused the lockfile's incomplete
+  # optional-peer tree, and its ICU 77 renders a zero UTC offset as `GMT`
+  # where the suite and Node 24 pin `GMT+00:00`), so the floor is corrected
+  # to 22.23.0, the 22.x release verified end to end (npm 10.9.8, ICU 78).
+  # This leg
   # pins that exact floor (container image and setup-node), asserts the
   # running version, and runs lint, typecheck and the unit suite against the
   # same migrated Postgres `check` uses. Name pinned equal to the id. It

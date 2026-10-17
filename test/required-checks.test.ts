@@ -90,8 +90,8 @@ describe("required checks always report", () => {
     expect(readFileSync("CONTRIBUTING.md", "utf8")).toContain("### Change-gated CI and `ci-ok`");
   });
 
-  // package.json declares `^22.23.0 || >=24` (22.23.0 is the first 22.x
-  // whose ICU and bundled npm pass this repo's suite and lockfile); the 24
+  // package.json declares `^22.23.0 || >=24` (22.23.0 is the 22.x floor
+  // verified end to end against this repo's suite and lockfile); the 24
   // jobs alone ship the 22 range to developers unverified. The compat leg
   // pins the exact engines floor and ci-ok fails unless it succeeded, so
   // the leg cannot silently drift to a newer 22.x or report skipped.
