@@ -35,8 +35,8 @@ function assertShell(html: string) {
     // Only "/" inlines among the homepage-theme shells (recovery/error shells
     // keep theme="home" without the flag and stay external). The inlined
     // block reuses the leaf bundle, so the hero rules must be present. The
-    // Display preload remains for an early font fetch; the metric-matched
-    // fallback keeps a delayed font swap reflow-free.
+    // Display preload remains for an early font fetch; the Arial-metric
+    // fallback reduces delayed-font layout shift.
     expect(html).toContain("base-theme homepage-theme");
     expect(html).toContain(".hero h1");
     expect(html).not.toContain('rel="stylesheet"');

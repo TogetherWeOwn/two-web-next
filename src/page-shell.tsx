@@ -101,8 +101,8 @@ export const Layout: FC<
           // reuses the exact same bundle: its hero paints at first paint
           // (LCP equals FCP every staging run), so removing the three external
           // stylesheet requests is the primary FCP improvement. Keep the Display-700 preload for an early font
-          // fetch; the metric-matched 'Display Fallback' (size-adjust 83.8%) keeps a delayed-font swap
-          // reflow-free (the preload alone cannot close the FCP/font gap on cold mobile). The block is
+          // fetch; the Arial-metric 'Display Fallback' reduces delayed-font layout shift
+          // (the preload alone cannot close the FCP/font gap on cold mobile). The block is
           // allowlisted by hash in style-src (no unsafe-inline).
           <style dangerouslySetInnerHTML={{ __html: LEAF_CRITICAL_CSS }} />
         ) : (

@@ -1,7 +1,7 @@
 @font-face { font-family: Display; font-style: normal; font-weight: 500; font-display: swap; src: url('/fonts/display-latin-500.woff2') format('woff2'); }
 @font-face { font-family: Display; font-style: normal; font-weight: 700; font-display: swap; src: url('/fonts/display-latin-700.woff2') format('woff2'); }
-/* Latin-only fallback: reflow-free delayed Display swap; arrows (U+2192) keep prior rendering. */
-@font-face { font-family: 'Display Fallback'; font-style: normal; font-weight: 500 700; font-display: swap; src: local('DejaVu Sans Condensed'), local('Arimo'), local('Arial'); size-adjust: 83.8%; unicode-range: U+0000-00FF; }
+/* Latin-only, Arial-metric fallback; arrows (U+2192) keep prior rendering. */
+@font-face { font-family: 'Display Fallback'; font-style: normal; font-weight: 500 700; font-display: swap; src: local('Liberation Sans'), local('Arimo'), local('Arial'); size-adjust: 78%; unicode-range: U+0000-00FF; }
 .base-theme { min-height: 100vh; background: var(--color-page); color: var(--color-text); font: 17px/1.65 system-ui, sans-serif; }
 .base-theme a { color: var(--brand); text-underline-offset: .25em; }
 .base-theme a:hover { color: var(--ink); }

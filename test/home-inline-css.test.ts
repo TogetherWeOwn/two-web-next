@@ -5,7 +5,7 @@ import { pageShellFixture } from "./helpers/page-shells";
 
 // Homepage paint path: "/" reuses the leaf critical-CSS bundle inline while
 // retaining the Display-700 preload for an early font fetch; the
-// metric-matched 'Display Fallback' keeps a delayed-font swap reflow-free.
+// Arial-metric 'Display Fallback' limits layout changes during delayed swaps.
 // Recovery/error shells keep theme="home" without the flag and stay external.
 describe("homepage inlined critical CSS", () => {
   it("inlines critical CSS and retains the font preload on the flagged home shell", () => {
@@ -34,11 +34,12 @@ describe("homepage inlined critical CSS", () => {
     expect(csp).not.toContain("unsafe-inline");
   });
 
-  it("keeps a metric-matched fallback ahead of Arial Narrow so a delayed font stays reflow-free", () => {
+  it("uses an Arial-metric fallback ahead of Arial Narrow for delayed font swaps", () => {
     // The preload alone cannot close the cold-mobile FCP/font gap; the
-    // size-adjusted fallback (measured Display/Arial width ratio) does.
+    // size-adjusted fallback uses the measured uppercase heading ratio.
     expect(LEAF_CRITICAL_CSS).toContain("@font-face { font-family: 'Display Fallback'");
-    expect(LEAF_CRITICAL_CSS).toContain("size-adjust: 83.8%");
+    expect(LEAF_CRITICAL_CSS).toContain("local('Liberation Sans'), local('Arimo'), local('Arial')");
+    expect(LEAF_CRITICAL_CSS).toContain("size-adjust: 78%");
     expect(LEAF_CRITICAL_CSS).toContain("Display, 'Display Fallback', 'Arial Narrow'");
     expect(LEAF_CRITICAL_CSS).not.toMatch(/Display, 'Arial Narrow'/);
     const html = Layout({ title: "Fixture", theme: "home", inlineCriticalCss: true })!.toString();
