@@ -202,6 +202,8 @@ Hono-only, ledgered as skipped.
 
 ## Create, edit and publish an event
 
+Before publishing, use the [event page content readiness checklist](event-content-readiness.md) to confirm members can decide whether and how to attend.
+
 1. Open `/admin/events`, choose **New event**, or open an existing event by its
    title. **Search** matches title only; **Status** filters `draft`, `published`,
    `cancelled` or `past`. **RSVPs** filters Open/Paused; **Series** filters

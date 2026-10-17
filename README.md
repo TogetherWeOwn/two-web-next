@@ -33,6 +33,8 @@ Operations (deploy/rollback, `/up`, queues, outages and restore drills):
   event and featured-content workflows, dashboard diagnostics, and safe escalation.
 - [Weekly TWO Community event run-of-show](docs/weekly-event-run-of-show.md):
   preparation, preflight, cancellation, and closeout evidence.
+- [Event host privacy and safety checklist](docs/event-host-privacy-safety-checklist.md):
+  least-privilege event hosting and routing concerns to an authorized moderator.
 - [Weekly event retrospective template](docs/event-retrospective-template.md):
   qualitative event learning, separate from attendance and activity counts.
 - [Troubleshooting join and Discord sign-in](docs/troubleshooting-join.md):
