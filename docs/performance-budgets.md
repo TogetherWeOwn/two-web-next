@@ -162,6 +162,40 @@ admission list disagree, or when any of them drops one of the eight routes. The
 post-cutover watch (`npm run lighthouse:origin`) reuses the LHCI route list, so it
 measures the same eight routes on its allowlisted origin with the same thresholds.
 
+## Authenticated session-cookie journeys
+
+The guest gates above never cover member/admin latency: the fixture worker
+refuses authenticated requests by design, so the personalized reads get their
+own gate in the browser-smoke job (`.github/workflows/e2e.yml`), after the
+critical journeys on the same seeded disposable Postgres:
+
+| Journey | Request | Session | Budget (server response) |
+|---|---|---|---|
+| member-rsvp | `GET /e/:key` (seeded published event) | member (`qa-member`) | median 1500 ms, slowest sample 3000 ms |
+| moderator-admin | `GET /admin/events` | moderator (`qa-moderator`) | median 1500 ms, slowest sample 3000 ms |
+
+`ci/check-auth-perf.mjs` (budgets in `ci/auth-perf-budget.json`, 3 samples
+each) mints exactly one QA session per identity, replays the
+`__Host-two_session` cookie with rotation like the browser journeys, and
+asserts status 200 **plus** authenticated content (signed-in account chrome on
+the detail page, administration nav on the admin list — a published event
+answers 200 to guests too, so status alone is not session proof) before it
+measures. Ceilings are initial fail-closed budgets for the local worker;
+tightening is follow-up work. The hermetic test `ci/check-auth-perf.test.mjs` (which runs the
+`--selftest`: good fixtures pass, slow samples and cookie-stripped guest
+bodies fail, malformed budgets fail closed) runs in the `check` job; the
+live gate runs in browser-smoke and fails `e2e-ok` with it. Cookie stripped (`--mutant no-cookie`) goes red:
+the detail renders the guest banner and the admin list bounces to sign-in.
+Local verification (hermetic only):
+
+```sh
+npm run auth-perf:selftest
+node --test ci/check-auth-perf.test.mjs
+```
+
+Never relax these ceilings to turn a build green; threshold changes need
+their own reviewed PR, like the Lighthouse thresholds above.
+
 ## Staging quality and journey gates
 
 The staging checks run after deployment and serve different purposes:

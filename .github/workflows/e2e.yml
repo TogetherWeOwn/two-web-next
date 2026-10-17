@@ -165,6 +165,29 @@ jobs:
       - name: Kit parity ledger (no quiet green)
         if: ${{ !cancelled() }}
         run: node ci/check-kit-parity.mjs
+      # Authenticated perf budgets (docs/performance-budgets.md): the guest
+      # Lighthouse gate refuses authenticated requests, so the member-RSVP
+      # detail read and the moderator-admin list read get their own
+      # server-response gate with a real session cookie. Read-only (no RSVP
+      # writes, no fixtures to cancel) and exactly two QA logins, placed
+      # after the browser suite so the shared qa-login throttle window holds
+      # at most this step's pair plus the parity journey's one. The ledger
+      # lands in test-results/ and rides the failure-traces upload below.
+      - name: Authenticated perf budgets (session-cookie journeys)
+        if: ${{ !cancelled() }}
+        env:
+          AUTH_PERF_URL: https://localhost:8787
+        run: |
+          set -euo pipefail
+          npx wrangler dev --config e2e/wrangler.jsonc --local --local-protocol https --ip localhost --port 8787 >"$RUNNER_TEMP/auth-perf-worker.log" 2>&1 &
+          WORKER_PID=$!
+          trap 'kill $WORKER_PID' EXIT
+          for _ in $(seq 1 90); do
+            if curl -sk https://localhost:8787/up >/dev/null 2>&1; then break; fi
+            sleep 1
+          done
+          curl -sk https://localhost:8787/up >/dev/null
+          NODE_TLS_REJECT_UNAUTHORIZED=0 npm run auth-perf
       # A missing visual baseline is written by the visual step (never an
       # existing one); it must be reviewed and committed, so fail here.
       # Kit visual and parity baselines land in e2e/visual/__screenshots-kit__/
