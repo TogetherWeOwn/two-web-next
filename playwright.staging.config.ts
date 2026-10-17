@@ -20,18 +20,25 @@ export default defineConfig({
   // The JSON report feeds ci/check-staging-journeys.mjs, which ledgers every
   // journey pass/skip/fail and fails loud when nothing passed (Playwright
   // exits 0 on all-skipped, so without the gate that run looks green).
-  reporter: [
-    ["list"],
-    ["html", { open: "never" }],
-    ["json", { outputFile: "test-results/staging-journeys.json" }],
-  ],
+  // No HTML report: it embeds each API call's raw step error, and a
+  // token-bearing QA call's step error carries its request headers. This
+  // repo is public and its failure artifacts are downloadable, so that
+  // recording surface stays off (e2e/qa-artifacts.test.mjs); the sweep in
+  // ci/scrub-qa-token.py remains the fail-closed backstop.
+  reporter: [["list"], ["json", { outputFile: "test-results/staging-journeys.json" }]],
   use: {
     baseURL: stagingOrigin,
     serviceWorkers: "block",
     // Written by each spec file's beforeAll from real QA logins (global-setup
     // no longer signs in); never a checked-in session.
     storageState: "e2e/staging/.auth/member.json",
-    trace: "retain-on-failure",
+    // No traces on the staging journeys: a trace records the token-bearing
+    // QA calls themselves (action parameters and network headers), even
+    // when the call succeeds and the journey fails later for another
+    // reason, so any retained trace would carry the QA header into the
+    // public failure artifact. Screenshots and the ledger stay as the
+    // failure evidence; they cannot hold request data.
+    trace: "off",
     screenshot: "only-on-failure",
   },
   projects: [

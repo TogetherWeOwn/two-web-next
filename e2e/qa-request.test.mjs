@@ -307,6 +307,9 @@ test("the sweep runs on failure, before the upload, with the token in its own en
   // A sweep that crashed or could not delete a file leaves no `swept` output,
   // and then nothing is uploaded.
   assert.match(steps[upload], /\n\s+if: failure\(\) && steps\.scrub\.outputs\.swept == 'true'\n/);
-  // The upload still covers exactly the two swept directories.
-  assert.match(steps[upload], /test-results\/\n\s+playwright-report\//);
+  // The sweep still scans both trees as a backstop, but the upload ships
+  // only test-results/: the staging config records no traces and no HTML
+  // report, so there is no playwright-report tree to publish.
+  assert.match(steps[upload], /path: \|\n\s+test-results\/\n/);
+  assert.doesNotMatch(steps[upload], /\n\s+playwright-report\/\n/);
 });

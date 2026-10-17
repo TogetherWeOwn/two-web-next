@@ -142,14 +142,18 @@ jobs:
         run: python3 ci/scrub-qa-token.py test-results playwright-report
         env:
           QA_AUTH_TOKEN: ${{ secrets.QA_AUTH_TOKEN }}
-      - name: Failure traces and report
+      - name: Failure artifacts
+        # playwright.staging.config.ts records no traces and no HTML report
+        # (both would carry the token-bearing QA calls), so the failure
+        # evidence is test-results/ only: screenshots, the JSON report and
+        # the ledger inputs. The scrub above still sweeps a playwright-report
+        # directory too, as a backstop if one is ever produced again.
         if: failure() && steps.scrub.outputs.swept == 'true'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: e2e-staging-failure-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
             test-results/
-            playwright-report/
           if-no-files-found: ignore
           retention-days: 7
       - name: Journey ledger artifact

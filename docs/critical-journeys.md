@@ -156,13 +156,15 @@ throttle waits within a shared five-minute deadline; it honors `Retry-After`
 without retrying refused credentials. The staging sweep allows four passes and
 at most four cancellation throttle waits within its five-minute sweep bound. An exhausted bound fails the run rather than claiming cleanup
 succeeded.
-On failure the job
-uploads `test-results/` traces/screenshots and the HTML report for seven days.
+On failure the job uploads `test-results/` (screenshots and the JSON report)
+for seven days. The staging config records no traces and no HTML report: a
+trace holds the token-bearing QA calls themselves (action parameters and
+network headers, even for a call that succeeds before the journey fails
+elsewhere), and the HTML report embeds each call's raw step error.
 The repo is public, so artifacts are world-readable and log masking does not
-cover them. Playwright puts request headers (including `X-TWO-QA-Auth`) into a
-transport-level request error, so token-bearing requests go through
-`e2e/qa-request.mjs`, which rethrows a reason-only message, and the one browser
-test that sends the real token records no trace. A failure-only step
+cover them. Playwright also puts request headers (including `X-TWO-QA-Auth`)
+into a transport-level request error, so token-bearing requests go through
+`e2e/qa-request.mjs`, which rethrows a reason-only message. A failure-only step
 (`ci/scrub-qa-token.py`) is the backstop: it deletes any artifact file that
 still contains the token, looking inside every `*.zip` (traces hold request
 headers in `trace.trace` and `trace.network`) and inside the zip that
@@ -212,7 +214,7 @@ The staging config sets `retries: 0` (`playwright.staging.config.ts`), so a
 report from this config cannot legitimately contain `flaky`. If a ledger row
 shows `flaky`, check for a `--retries` override or a report produced by another
 config before trusting the pass. A flaky row has no reason and does not trigger
-the failure-only traces/report upload; a green run uploads only the ledger
+the failure-only artifact upload; a green run uploads only the ledger
 files, so this workflow does not preserve the first-attempt failure evidence
 for that row. Do not treat the row or ledger artifacts as the original
 failure evidence. For a failed row, keep its first-line ledger reason and the

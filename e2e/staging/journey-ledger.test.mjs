@@ -358,7 +358,7 @@ test("critical-journeys guide explains flaky accounting with zero retries and no
   );
   assert.match(
     normalizedGuide,
-    /flaky row has no reason and does not trigger the failure-only traces\/report upload/,
+    /flaky row has no reason and does not trigger the failure-only artifact upload/,
   );
   assert.match(normalizedGuide, /`e2e-staging-failure-\*` artifact, retained for seven days/);
   assert.match(normalizedGuide, /documented host-flake loop/);
