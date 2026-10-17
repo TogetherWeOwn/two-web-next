@@ -190,8 +190,10 @@ export function throttleWaitCopy(retryAfterSeconds: number | null): string {
 /**
  * Focus targets after the re-render swap (TOG-6956). A successful write
  * replaces the focused control, so the binder moves focus to the new state;
- * on failure the button stays put and focus stays (null). Withdraw falls
- * back down the list to whichever join control rendered.
+ * on failure there is no swap and no new-state target (null) — the binder
+ * instead restores focus to the re-enabled control, because disabling it
+ * in flight drops focus to the document body. Withdraw falls back down
+ * the list to whichever join control rendered.
  */
 export function rsvpFocusTargets(
   outcome: "confirmed" | "waitlisted" | "withdrawn" | "failed",
