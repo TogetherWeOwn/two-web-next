@@ -4,7 +4,9 @@ import {
   AggregateTracker,
   AlertAggregator,
   DeliveryMute,
+  HEALTH_COOLDOWN_MS,
   HEALTH_DOWN_MS,
+  HealthTracker,
   SPIKE_COOLDOWN_MS,
   SPIKE_MIN_CRASHES,
   SPIKE_MIN_ERRORS,
@@ -508,6 +510,21 @@ describe("delivery-failure and boundary semantics", () => {
     f.advance(1_000);
     await f.worker.scheduled(event, upEnv);
     expect(f.receipts()[0]).toMatchObject({ event: "uptime.down", down_seconds: 121 });
+  });
+});
+
+describe("health pending age-out", () => {
+  it("an unresolved page attempt stops blocking after one cooldown, like the spike pending", () => {
+    const health = new HealthTracker(() => t0);
+    expect(health.observe(false, t0)).toBeNull();
+    const due = t0 + HEALTH_DOWN_MS + 1_000;
+    expect(health.observe(false, due)).toBe(HEALTH_DOWN_MS + 1_000);
+    // Result never arrives (lost RPC): still blocked while the attempt is fresh...
+    expect(health.observe(false, due + 60_000)).toBeNull();
+    // ...but after one cooldown the stale pending ages out and a page is due again.
+    expect(health.observe(false, due + HEALTH_COOLDOWN_MS + 1_000)).toBe(
+      HEALTH_DOWN_MS + HEALTH_COOLDOWN_MS + 2_000,
+    );
   });
 });
 

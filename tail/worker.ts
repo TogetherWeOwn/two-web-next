@@ -402,7 +402,10 @@ export class HealthTracker {
       return null;
     }
     if (this.downSince === null) this.downSince = at;
-    if (this.pendingAt !== null) return null; // A page attempt is awaiting its result.
+    // A page attempt is awaiting its result; a lost result ages out after one
+    // cooldown (same bound as the spike pending) instead of wedging the alarm.
+    if (this.pendingAt !== null && at - this.pendingAt < HEALTH_COOLDOWN_MS) return null;
+    this.pendingAt = null;
     const downMs = at - this.downSince;
     // Strictly over two minutes: exactly HEALTH_DOWN_MS red does not page yet.
     if (downMs <= HEALTH_DOWN_MS || at < this.cooldownUntil) return null;
@@ -680,11 +683,12 @@ export function createTailWorker(
     const stub = aggregator(env);
     if (!stub) return tracker.resolve(script, delivered);
     try {
-      await stub.fetch("https://aggregator.invalid/spike-result", {
+      const response = await stub.fetch("https://aggregator.invalid/spike-result", {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ script, delivered }),
       });
+      if (!response.ok) tracker.resolve(script, delivered);
     } catch {
       tracker.resolve(script, delivered);
     }
@@ -694,11 +698,12 @@ export function createTailWorker(
     const stub = aggregator(env);
     if (!stub) return health.resolve(delivered);
     try {
-      await stub.fetch("https://aggregator.invalid/health-result", {
+      const response = await stub.fetch("https://aggregator.invalid/health-result", {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ delivered }),
       });
+      if (!response.ok) health.resolve(delivered);
     } catch {
       health.resolve(delivered);
     }
