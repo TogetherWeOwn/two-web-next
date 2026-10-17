@@ -99,13 +99,10 @@ describe("Kit activity-log rendered output", () => {
       .match(/<tr[^>]*>[\s\S]*?<\/tr>/g)
       ?.find((candidate) => candidate.includes("system sweep"));
     expect(systemRow).toBeDefined();
-    const cells = [...(systemRow ?? "").matchAll(/<td[^>]*>([\s\S]*?)<\/td>/g)].map(([, cell]) =>
-      (cell ?? "")
-        .replace(/<!--[\s\S]*?-->/g, "")
-        .replace(/<[^>]*>/g, "")
-        .trim(),
+    expect(systemRow).toContain("<td>—</td><td>system sweep</td>");
+    expect(systemRow).toContain(
+      '<time datetime="2026-10-01T10:00:00.000Z">2026-10-01T10:00:00.000Z</time></td><td>—</td>',
     );
-    expect(cells).toEqual(["—", "system sweep", "2026-10-01T10:00:00.000Z", "—"]);
   });
 
   it("never renders activity properties values supplied on a row", () => {
