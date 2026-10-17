@@ -46,6 +46,8 @@
     "kit-parity:test": "node --test ci/kit-parity-gates.test.mjs ci/kit-parity-origin.test.mjs ci/check-kit-parity.test.mjs ci/kit-visual-accept.test.mjs",
     "kit-perf": "node ci/check-kit-perf.mjs",
     "kit-perf:selftest": "node ci/check-kit-perf.mjs --selftest",
+    "auth-perf": "node ci/check-auth-perf.mjs",
+    "auth-perf:selftest": "node ci/check-auth-perf.mjs --selftest",
     "e2e:kit-parity": "playwright test --config playwright.kit-parity.config.ts",
     "build:assets": "node ci/minify-assets.mjs",
     "build:assets:selftest": "node ci/minify-assets.mjs --selftest",

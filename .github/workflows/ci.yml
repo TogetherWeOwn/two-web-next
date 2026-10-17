@@ -437,6 +437,9 @@ jobs:
       - name: Kit journey parity gates (unit, loud ledger)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true' || needs.scope.outputs.worker == 'true')
         run: node ci/kit-parity-gates.mjs
+      - name: Authenticated perf gate selftest (session-cookie budgets, hermetic)
+        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
+        run: node --test ci/check-auth-perf.test.mjs
       - name: Kit adapter build
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true' || needs.scope.outputs.worker == 'true')
         run: npm run build --prefix web
