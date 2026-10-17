@@ -4,8 +4,12 @@ import { expectedKitMarker, KIT_ORIGIN, parityTargets } from "../kit-parity";
 const targets = parityTargets();
 const AUTHORIZE_URL = "https://discord.com/oauth2/authorize";
 
-async function isolatedPage(browser: Browser, origin: string) {
-  const context = await browser.newContext({ baseURL: origin });
+async function isolatedPage(browser: Browser, target: (typeof targets)[number]) {
+  const { origin } = target;
+  const context = await browser.newContext({
+    baseURL: origin,
+    ignoreHTTPSErrors: target.ignoreHTTPSErrors,
+  });
   await context.route("**/*", async (route) => {
     const url = new URL(route.request().url());
     if (url.origin === origin || url.origin === KIT_ORIGIN) return route.continue();
@@ -23,7 +27,7 @@ async function isolatedPage(browser: Browser, origin: string) {
 
 for (const target of targets) {
   test(`${target.name}: guest join CTA enters the Hono-owned OAuth flow`, async ({ browser }) => {
-    const context = await isolatedPage(browser, target.origin);
+    const context = await isolatedPage(browser, target);
     try {
       const page = await context.newPage();
       const oauthResponse = page.waitForResponse(
@@ -56,7 +60,7 @@ for (const target of targets) {
   test(`${target.name}: recovery and failed callback preserve Hono status/cache without a session`, async ({
     browser,
   }) => {
-    const context = await isolatedPage(browser, target.origin);
+    const context = await isolatedPage(browser, target);
     try {
       const page = await context.newPage();
       const query = "?next=%2Fprofile%3Fedit%3D1";
