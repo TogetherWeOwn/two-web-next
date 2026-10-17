@@ -131,7 +131,8 @@ jobs:
           node ci/gradual-promote-proof/proof-lib.mjs --assert-deployed \
             --version "$ORIGINAL_VERSION" < proof-evidence/baseline-deployments.json
           node ci/gradual-promote-proof/probe.mjs "https://$DOMAIN" "$ORIGINAL_VERSION" \
-            | tee proof-evidence/probe-original-live.json
+            --attempts 6 --delay-ms 5000 \
+            | tee proof-evidence/probe-original-live.jsonl
           echo "original_version=$ORIGINAL_VERSION" >> "$GITHUB_OUTPUT"
           echo "original_tag=$ORIGINAL_TAG" >> "$GITHUB_OUTPUT"
         env:
@@ -140,7 +141,13 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
 
-      - name: Upload the candidate version (no traffic yet)
+      # Cloudflare applies a version override only to a version that is in
+      # the current deployment; an uploaded-but-undeployed candidate would
+      # silently fall back to normal routing and the original would answer
+      # the probe. Deploying the candidate at 0% (Cloudflare's documented
+      # smoke-test pattern) puts it in the deployment without moving any
+      # live traffic, so the override below can truly pin to it.
+      - name: Upload the candidate and deploy it at 0 percent (no live traffic)
         id: candidate
         shell: bash
         run: |
@@ -153,16 +160,22 @@ jobs:
           npx wrangler versions upload --env production --tag "$CANDIDATE_TAG"
           CANDIDATE_VERSION="$(npx wrangler versions list --env production --name "$WORKER_NAME" --json \
             | node ci/gradual-promote-proof/proof-lib.mjs --resolve-tag --tag "$CANDIDATE_TAG")"
+          npx wrangler versions deploy --env production --name "$WORKER_NAME" \
+            "${ORIGINAL_VERSION}@100" --version-tag "${CANDIDATE_TAG}@0%" --yes
+          npx wrangler deployments list --env production --name "$WORKER_NAME" --json \
+            > proof-evidence/candidate-zero-deployments.json
           echo "candidate_version=$CANDIDATE_VERSION" >> "$GITHUB_OUTPUT"
           echo "candidate_tag=$CANDIDATE_TAG" >> "$GITHUB_OUTPUT"
         env:
           WORKER_NAME: two-gradual-promote-proof
           RUN_MODE: ${{ inputs.mode }}
+          ORIGINAL_VERSION: ${{ steps.baseline.outputs.original_version }}
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
 
       # Before any traffic moves, prove the version-override header truly
-      # pins probes to the candidate (attribution header, not just a 200)
+      # pins probes to the candidate (attribution header, not just a 200;
+      # the candidate is in the deployment at 0%, so the override applies)
       # and that the candidate's health matches the run mode. A rollback
       # run whose candidate passes smoke here would make the forced
       # failure fake, so it stops before the action.
@@ -172,7 +185,8 @@ jobs:
           set -euo pipefail
           node ci/gradual-promote-proof/probe.mjs "https://$DOMAIN" "$CANDIDATE_VERSION" \
             --version-override "$WORKER_NAME=\"$CANDIDATE_VERSION\"" \
-            | tee proof-evidence/probe-candidate-override.json
+            --attempts 6 --delay-ms 5000 \
+            | tee proof-evidence/probe-candidate-override.jsonl
           set +e
           node bin/smoke.mjs "https://$DOMAIN" \
             --version-override "$WORKER_NAME=\"$CANDIDATE_VERSION\"" \
@@ -194,6 +208,29 @@ jobs:
           RUN_MODE: ${{ inputs.mode }}
           CANDIDATE_VERSION: ${{ steps.candidate.outputs.candidate_version }}
 
+      # The action records its rollback target from the live deployment and
+      # refuses to start from a split, so the 0% candidate split used for
+      # the probe must collapse back to the captured original alone at
+      # 100% first. This is a pre-action reset to the run's own baseline,
+      # not a post-action restore: after the action runs, only the
+      # action's own rollback may move traffic.
+      - name: Restore the single-version original before the action
+        shell: bash
+        run: |
+          set -euo pipefail
+          npx wrangler versions deploy --env production --name "$WORKER_NAME" \
+            --version-tag "${ORIGINAL_TAG}@100%" --yes
+          npx wrangler deployments list --env production --name "$WORKER_NAME" --json \
+            > proof-evidence/pre-action-deployments.json
+          node ci/gradual-promote-proof/proof-lib.mjs --assert-deployed \
+            --version "$ORIGINAL_VERSION" < proof-evidence/pre-action-deployments.json
+        env:
+          WORKER_NAME: two-gradual-promote-proof
+          ORIGINAL_VERSION: ${{ steps.baseline.outputs.original_version }}
+          ORIGINAL_TAG: ${{ steps.baseline.outputs.original_tag }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+
       # The unmodified pinned central action: 5% -> 50% -> 100% with the
       # real smoke checker per stage, and its own automatic rollback to
       # the version it records before promoting. In rollback mode this
@@ -213,8 +250,9 @@ jobs:
       # Independent readback (not the action's helper): the final live
       # deployment must be the candidate at 100% after a successful
       # action, or the captured original at 100% after a failed one.
-      # There is no restore step in this workflow: restoration can only
-      # be the action's own automatic rollback. Manual restore, if this
+      # There is no post-action restore step in this workflow (the only
+      # redeploy is the pre-action baseline reset above): restoration can
+      # only be the action's own automatic rollback. Manual restore, if this
       # readback ever fails, is a documented operator action
       # (docs/gradual-promote-proof.md), never a hidden step here.
       - name: Independent readback and evidence record
@@ -240,7 +278,8 @@ jobs:
           node ci/gradual-promote-proof/proof-lib.mjs --assert-deployed \
             --version "$EXPECTED" < proof-evidence/post-deployments.json
           node ci/gradual-promote-proof/probe.mjs "https://$DOMAIN" "$EXPECTED" \
-            | tee proof-evidence/probe-final-live.json
+            --attempts 6 --delay-ms 5000 \
+            | tee proof-evidence/probe-final-live.jsonl
           # The action must have recorded the same original we captured.
           [ "$ACTION_ROLLBACK_ID" = "$ORIGINAL_VERSION" ] || {
             echo "::error::action rollback target $ACTION_ROLLBACK_ID != captured original $ORIGINAL_VERSION"

@@ -41,25 +41,39 @@ other environment.
    On the first ever run, one plain deploy creates the synthetic Worker
    before that baseline.
 4. The candidate (`proof-candidate-<run>-<attempt>-<mode>`) is uploaded
-   with no traffic. In `rollback` mode its `/up` answers 503; in
-   `success` mode it is healthy. The fixture mode is derived from the run
-   mode, so the two cannot be mixed up.
+   and deployed at 0% alongside the original at 100%. Cloudflare applies
+   a version override only to a version in the current deployment, so
+   0% (Cloudflare's documented smoke-test pattern) is what makes the
+   override probe below reach the candidate at all; no live traffic
+   moves. In `rollback` mode its `/up` answers 503; in `success` mode it
+   is healthy. The fixture mode is derived from the run mode, so the two
+   cannot be mixed up.
 5. Pre-promote attribution: the probe requires the
    `x-proof-version-id` header (from the version-metadata binding) to
    equal the candidate id under the version-override header, and the
    real smoke checker must agree with the run mode (pass for `success`,
    fail for `rollback`). A healthy rollback candidate stops the run
-   before the action, because its forced failure would be fake.
-6. The pinned action promotes 5% -> 50% -> 100%, running the real smoke
+   before the action, because its forced failure would be fake. Every
+   live probe in the workflow retries 6 times, 5s apart, and records
+   each attempt, because a deployment change can take a couple of
+   seconds to reach every edge.
+6. The 0% split collapses back to the captured original alone at 100%
+   (asserted by readback), because the action records its rollback
+   target from the live deployment and refuses to start from a split.
+   This pre-action reset to the run's own baseline is the workflow's
+   only redeploy; after the action runs, only its own rollback may move
+   traffic.
+7. The pinned action promotes 5% -> 50% -> 100%, running the real smoke
    checker (pinned to the candidate by version override) at every stage.
-7. Independent readback (always): the final deployment must be the
+8. Independent readback (always): the final deployment must be the
    candidate at 100% after a successful action, or the captured original
    at 100% after a failed one; the live probe must be served by that same
    version; and the action's `rollback-version-id` / `promoted-version-id`
    outputs must equal the captured original and candidate ids.
 
-There is no restore step in the workflow. In a rollback run the action
-step is expected to fail and the job stays red: that failure plus the
+There is no post-action restore step in the workflow (only the
+pre-action baseline reset in step 6). In a rollback run the action step
+is expected to fail and the job stays red: that failure plus the
 readback is the evidence that restoration was the action's own automatic
 rollback, not manual cleanup.
 
@@ -93,13 +107,17 @@ Each run uploads `gradual-promote-proof-<mode>-<run>-<attempt>` with:
   and `sightings` (every deployment's per-version traffic share in
   creation order, so the 5% and 50% stages are visible after the run).
 - `pre-deployments.json`, `baseline-deployments.json`,
+  `candidate-zero-deployments.json`, `pre-action-deployments.json`,
   `post-deployments.json`, `post-versions.json`: raw
   `wrangler ... --json` readbacks.
 - `config-original.json`, `config-candidate.json`: the exact generated
   configs (synthetic Worker, fixture entrypoint, no data bindings).
-- `probe-original-live.json`, `probe-candidate-override.json`,
-  `probe-final-live.json`: version-attribution probe records (status,
-  served version id/tag/label/mode, whether an override was requested).
+- `probe-original-live.jsonl`, `probe-candidate-override.jsonl`,
+  `probe-final-live.jsonl`: version-attribution probe records, one JSON
+  line per attempt (attempt number, status, served version
+  id/tag/label/mode, whether an override was requested; a network-error
+  attempt records `error` with a null served version instead; the probe
+  stops at the first attributed attempt and fails only after the last).
 - `smoke-candidate-override.txt`: the pre-promote real-checker output.
 
 Acceptance for the pair of runs: the success run is green with the
@@ -145,8 +163,10 @@ report the gap instead of broadening access.
    will fail at the first wrangler call, before any traffic moves.
 3. The `staging` GitHub Environment admits this workflow (its
    protection rules apply to the dispatch as they do to staging
-   deploys), and version overrides are honored on the workers.dev URL.
-   The pre-promote attribution probe proves the override on the day:
-   if overrides fall back to live routing, the probe fails before the
-   action runs rather than letting a sampled canary masquerade as a
-   pinned one.
+   deploys). Version overrides themselves are documented Cloudflare
+   behaviour, applied only to a version in the current deployment; the
+   harness deploys the candidate at 0% to satisfy that rule, and the
+   retried pre-promote attribution probe proves the workers.dev URL
+   honors the header on the day: if the override ever falls back to
+   live routing, the probe fails before the action runs rather than
+   letting a sampled canary masquerade as a pinned one.
