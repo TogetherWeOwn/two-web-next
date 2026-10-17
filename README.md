@@ -33,6 +33,8 @@ Operations (deploy/rollback, `/up`, queues, outages and restore drills):
   event and featured-content workflows, dashboard diagnostics, and safe escalation.
 - [Monthly event-planning cadence](docs/event-planning-cadence.md): rolling
   four-week planning, cancellation/reschedule handling, and cycle completion.
+- [Weekly TWO Community event run-of-show](docs/weekly-event-run-of-show.md):
+  preparation, preflight, cancellation, and closeout evidence.
 - [Event host privacy and safety checklist](docs/event-host-privacy-safety-checklist.md):
   least-privilege event hosting and routing concerns to an authorized moderator.
 - [Weekly event retrospective template](docs/event-retrospective-template.md):

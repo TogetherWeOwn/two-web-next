@@ -158,6 +158,7 @@ export async function cachedHomeUpcoming(
   getDiscordSource: () => DiscordEventsSource,
   now = new Date(),
   ctx?: WaitUntilCtx,
+  requestId?: string,
 ): Promise<HomeUpcomingMerged> {
   void ctx;
   const injected = injectedDb(env);
@@ -171,7 +172,7 @@ export async function cachedHomeUpcoming(
   const genAtStart = generation;
   let value: HomeUpcomingMerged;
   try {
-    value = await loadHomeUpcomingMerged(openDb, getDiscordSource, now);
+    value = await loadHomeUpcomingMerged(openDb, getDiscordSource, now, requestId);
   } catch {
     return { items: [], unavailable: true, discordFailed: false };
   }

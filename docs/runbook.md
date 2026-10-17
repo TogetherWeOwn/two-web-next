@@ -45,6 +45,7 @@ follow its linked legacy-origin readiness precondition, which still applies.
 | --- | --- | --- | --- |
 | Any incident: start here | [Safety and escalation](#safety-and-escalation) | Re-read the authorization box; confirm staging-vs-production scope first (staging targets below do not triage production); record UTC time, commit, Worker version IDs, route/job and redacted error class; keep logs private | DevOps & Reliability Engineer; Director of Engineering for technical dead-ends |
 | Moderator lost their Discord role but sessions still authenticate | [A moderator lost their role](#a-moderator-lost-their-role) | Confirm the Discord role removal first; dry-run `node --import ./bin/ts-hook.mjs bin/revoke-sessions.mjs --discord-id=<snowflake> --target production` to read the active-session count (idle sessions expire within two hours); do not `--apply` from this table | DevOps & Reliability Engineer |
+| Still signed in elsewhere after a fresh sign-in (`prior session sweep failed`) | [Still signed in elsewhere after a fresh sign-in](#still-signed-in-elsewhere-after-a-fresh-sign-in) | Read the `prior session sweep failed` warning by `request_id` in Observability per [runbook-logs.md](runbook-logs.md#privacy-and-boundaries); dry-run `node --import ./bin/ts-hook.mjs bin/revoke-sessions.mjs --discord-id=<snowflake> --target production` to read the active-session count; do not `--apply` from this table | DevOps & Reliability Engineer |
 | `GET /up` 503 (`db:error`, `pending_migrations` nonzero or `null`, `config:missing`) | [Read `/up` without mistaking liveness for readiness](#read-up-without-mistaking-liveness-for-readiness) | `curl -sS --max-time 10 https://next.togetherweown.com/up`; compare HTTP status, `db`, `pending_migrations` and `config` against the readiness tables | DevOps & Reliability Engineer |
 | `GET /up` queue `degraded` (`pending >= 20`) or `unknown` with HTTP 200 | [Queue containment, drain and failed-job replay](#queue-containment-drain-and-failed-job-replay) | Same `GET /up`; read `queue.status`, `pending`, `oldest_ready_wait_age_seconds` and `ready_wait_severity`; `healthy + unknown` is lack of evidence, not recovery | DevOps & Reliability Engineer |
 | `error.alert` flood or pager storm | [48h post-flip watch](#48h-post-flip-watch) | `npx wrangler tail two-web-next-alerts --search '"delivery":"ops.alert.'`; correlate `request_id` per [runbook-logs.md](runbook-logs.md); fingerprints are in [runbook-alerts.md](runbook-alerts.md) | DevOps & Reliability Engineer |
@@ -62,8 +63,9 @@ Not an incident entry: [Final import and reconcile](#final-import-and-reconcile)
 [Secret rotation pointer (procedure only)](#secret-rotation-pointer-procedure-only)
 (no rotation here) and
 [Quarterly moderator access review](#quarterly-moderator-access-review)
-(scheduled quarterly review, not incident response) are not incident entries;
-read those sections directly when that work is authorized.
+(scheduled quarterly review, not incident response) and
+[security.txt expiry review and renewal](#securitytxt-expiry-review-and-renewal)
+are not incident entries; read those sections directly when that work is authorized.
 
 ## Safety and escalation
 
@@ -143,6 +145,16 @@ node --import ./bin/ts-hook.mjs bin/revoke-sessions.mjs --discord-id=<snowflake>
 
 `DATABASE_URL` is supplied through the environment only. Remote database URLs—including production-looking ones—require `--target production`; do not add a URL to command arguments or paste it into logs. Accepted form is `postgres://USER:PASSWORD@HOST:5432/DATABASE?sslmode=verify-full` (`sslrootcert=system` is accepted as an alias for `verify-full`); no other query parameters are accepted, so a console URL with extra parameters or `sslmode=require` is refused as missing or invalid until it is reduced to that form. See [moderator admin guide](moderator-admin-guide.md#a-moderator-lost-their-role).
 
+## Still signed in elsewhere after a fresh sign-in
+
+**Symptom.** A member signs in again — a new browser, device or browser profile — but an older browser still shows them signed in, including a shared terminal they used earlier. The same incident can appear in the logs as the warning line `prior session sweep failed`.
+
+**What it means.** A fresh sign-in first creates the new session, then revokes every other live session for that member, so normally only the newest session survives (`revokeUserSessions` in [src/sessions.ts](../src/sessions.ts), called from [src/index.tsx](../src/index.tsx)). That revocation sweep is deliberately fail-open: if it fails, the sign-in still succeeds and the new session works — a sweep failure must never turn into a failed sign-in — but the older sessions were not revoked by that sign-in. The warning line carries only `request_id` and the exception class, never a Discord ID (see [the log contract](runbook-logs.md#privacy-and-boundaries)); correlate it by `request_id`, and treat repeated lines as session-store or database trouble to escalate to the DevOps & Reliability Engineer.
+
+**What to tell the member.** Their new sign-in worked, and nothing about it is broken. Normally a fresh sign-in signs out their older sessions; this time that cleanup did not run, so an older browser can stay signed in until it has been idle for 120 minutes after its last session-refreshing page view (normal browsing there can extend that window). Signing in again from a device they control reruns the sweep and usually ends the older sessions.
+
+**If an older session must end now** — the terminal is shared, lost or not under the member's control, or the member is a moderator who lost the Discord role — revoke the member's sessions with the command in [A moderator lost their role](#a-moderator-lost-their-role) (dry-run first, verify the active-session count, then apply; the same procedure is in the [moderator admin guide](moderator-admin-guide.md#a-moderator-lost-their-role)). That command revokes every active session for the member, including the new one, so tell the member to sign in again afterwards; that fresh sign-in then leaves only the newest session.
+
 ## Quarterly moderator access review
 
 - Cadence: quarterly. Cadence ownership is a CTO/COO call; this section does not change it.
@@ -168,6 +180,85 @@ node --import ./bin/ts-hook.mjs bin/revoke-sessions.mjs --discord-id=<snowflake>
      `DATABASE_URL` is supplied through the environment only, as in the procedure above.
   4. Re-run the audit until `app-only` is 0 before closing the review. `discord-only` does not block close: the app set sees live sessions only (120-minute sliding TTL), so it includes every moderator not signed in at audit time. When a moderator is unavailable, record the `discord-only` count and close on `app-only` = 0. A clean audit is one receipt, not permission to change cadence or scope.
 - Evidence of completion: a dated review record with the review date (UTC), the reviewer/operator, the audit counts (`discord`, `app`, `discord-only`, `app-only`), the revoke dry-run/apply counts, and confirmation that Discord role removal was verified before revocation. Record counts only; keep member identifiers, ID-file contents, database URLs, tokens, and secrets out of docs, logs, and the record. The command output is counts with bounded ID lists; do not paste the lists into the record.
+
+## security.txt expiry review and renewal
+
+**Owner:** the CISO owns the disclosure-channel review and its dated renewal
+record; a repository maintainer implements the expiry-only PR, and the authorized
+release operator owns deployment and publication evidence. This is maintenance of
+`/.well-known/security.txt`, not permission to change reporting channels.
+[RFC 9116 §5.3](https://www.rfc-editor.org/rfc/rfc9116.html#section-5.3) warns that
+stale contacts can lose reports or send vulnerabilities to third parties.
+
+**Trigger:** start the review **at least 90 days before** `SECURITY_TXT_EXPIRES`.
+The current pin is `2027-10-01T00:00:00Z`, so the latest review start is
+**`2027-07-03T00:00:00Z`** (90 × 24 hours earlier). The CISO keeps a dated reminder
+for that deadline and replaces it after every renewal; this procedure does not
+install an automated reminder. Review immediately if a listed destination stops
+working or its ownership changes, or if the deadline has already passed. The
+real-clock expiry test is a last-resort failure at expiry, not a 90-day warning.
+
+1. Read [`src/security-txt.ts`](../src/security-txt.ts), the independent
+   `PINNED_EXPIRES` in [`test/security-txt.test.ts`](../test/security-txt.test.ts),
+   and [SECURITY.md](../SECURITY.md). Confirm with an authorized repository
+   maintainer that private vulnerability reporting remains enabled and monitored,
+   and that the existing `Contact` and `Policy` URLs are accessible, controlled by
+   the organization, and still match the policy. View Security → Report a
+   vulnerability while signed in; do not submit a dummy report. Keep vulnerability
+   details, credentials and member data out of the renewal record.
+2. Record the review date, reviewer, channel checks and proposed new expiry.
+   **Any Contact or Policy URL change needs a separate, recorded CISO decision
+   before implementation; it must not ride along in the expiry-only PR.** An
+   unavailable or unverified reporting channel blocks routine renewal; escalate
+   it to the CISO rather than extending the date to hide stale contact data.
+3. Choose a fixed RFC 3339 UTC timestamp (`YYYY-MM-DDTHH:mm:ssZ`, no fractional
+   seconds) in the future, later than the current pin and less than one year
+   after the review, allowing time to deploy before the old expiry. [RFC 9116 §2.5.5](https://www.rfc-editor.org/rfc/rfc9116.html#section-2.5.5)
+   recommends a horizon shorter than a year. Update `SECURITY_TXT_EXPIRES` and
+   `PINNED_EXPIRES` together; retain the real-clock future/less-than-one-year
+   assertions and fixed-date behavior. Never replace the pin with a rolling clock
+   or disable the test to clear an expired date. Update the current pin and
+   90-day trigger above in the same PR. Leave contacts, policy URL, route and
+   headers unchanged.
+4. Follow [the PR contract](../CONTRIBUTING.md). Run the fixture-only test and
+   link check below; record the results and verify the two dates above against
+   the source pin and `expiry - 90 × 24 hours` in UTC. Required checks under that
+   contract and independent Paperclip Review 5/5 must pass on the exact head
+   before the existing merge automation proceeds. No database is needed:
+
+   ```sh
+   env -u DATABASE_URL -u CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_DB npx --no-install vitest run test/security-txt.test.ts
+   npm run docs:links
+   ```
+5. Use the existing [release flow](releases.md) and
+   [deployment procedure](#deploy-and-record-the-rollback-pointer), preserving
+   the approved artifact, staging evidence, production gates and rollback pointer.
+   A merged PR alone does not renew the published file. After staging deployment,
+   then after the authorized production promotion, fetch the public file for the
+   corresponding target (read-only publication checks, not database tests):
+
+   ```sh
+   # After staging deployment only:
+   curl --fail --silent --show-error --max-time 10 --dump-header - https://next.togetherweown.com/.well-known/security.txt
+   # After authorized production promotion only:
+   curl --fail --silent --show-error --max-time 10 --dump-header - https://togetherweown.com/.well-known/security.txt
+   ```
+
+   Inspect the printed status line, headers and body; curl exit 0 alone is not
+   acceptance. Require HTTP 200 without redirect, `Content-Type: text/plain; charset=utf-8`,
+   exactly one `Expires` equal to the reviewed pin and still in the future, the
+   unchanged approved `Contact` and `Policy`, and `Canonical` matching that
+   target's HTTPS URL. Keep `Cache-Control: public, max-age=3600`; a cached old
+   response can persist for up to an hour. Recheck after that window rather than
+   weakening cache/header behavior or declaring success from source alone.
+6. Close the renewal record only with the PR/merged SHA, deployment workflow and
+   Worker version evidence (release/deployment metadata, not production `/up`),
+   UTC fetch times, observed `Expires` for both targets, and the next review
+   deadline/reminder. If publication still differs or expiry
+   is reached, keep the renewal open and route deployment failures to the release
+   operator and stale disclosure data to the CISO. Do not bypass failed gates or
+   silently extend an unreviewed file. Use the existing rollback procedure if
+   needed, but an expired rollback version is not a successful renewal.
 
 ## Deploy and record the rollback pointer
 
@@ -1255,7 +1346,8 @@ not conditional on an unmerged outage fix. Offline evidence:
 These are local doubles, not deployed outage acceptance.
 
 Shared human throttles and profile throttles fail open on store error; the shared
-human throttle currently uses only `DATABASE_URL`, not Hyperdrive. Optional
+human throttle selects nonempty `DATABASE_URL`, then the `DB` Hyperdrive binding,
+and never retries the other source after a connection failure. Optional
 search-log/widget reads fail open but do not protect primary DB reads. Do not
 relax `MEMBER_ACCESS_LOG_ENFORCE` to force a recovery: required logging defaults
 to fail closed. Diagnose from redacted platform errors/config metadata; a code
