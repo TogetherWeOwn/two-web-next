@@ -38,11 +38,7 @@ const member: MemberView = {
   leaderboardOptOut: true,
 };
 function visibleContract(html: string): string[] {
-  const text = (value: string | undefined) =>
-    value
-      ?.replace(/<[^>]+>/g, "")
-      .replace(/\s+/g, " ")
-      .trim() ?? "";
+  const text = (value: string | undefined) => value?.replace(/\s+/g, " ").trim() ?? "";
   const capture = (pattern: RegExp) => {
     const match = html.match(pattern);
     expect(match, pattern.source).not.toBeNull();
@@ -50,6 +46,10 @@ function visibleContract(html: string): string[] {
   };
   const games = [...html.matchAll(/<div data-testid="profile-games">([\s\S]*?)<\/div>/g)];
   expect(games).toHaveLength(1);
+  const gameNames = [...(games[0]?.[1] ?? "").matchAll(/<li[^>]*>([^<]*)<\/li>/g)].map((match) =>
+    text(match[1]),
+  );
+  expect(gameNames).toHaveLength(member.games.length);
   const avatar = html.match(/<span data-testid="profile-avatar"[^>]*>([\s\S]*?)<\/span>/);
   expect(avatar).not.toBeNull();
   const image = avatar?.[1]?.match(/<img src="([^"]+)"/);
@@ -59,7 +59,7 @@ function visibleContract(html: string): string[] {
     capture(/data-testid="profile-name"[^>]*>([\s\S]*?)<\/h1>/),
     capture(/data-testid="profile-handle"[^>]*>([\s\S]*?)<\/p>/),
     capture(/data-testid="profile-bio"[^>]*>([\s\S]*?)<\/p>/),
-    text(games[0]?.[1]),
+    gameNames.join(" "),
     capture(/data-testid="profile-timezone"[^>]*>([\s\S]*?)<\/p>/),
     capture(/data-testid="profile-joined"[^>]*>([\s\S]*?)<\/p>/),
   ];
