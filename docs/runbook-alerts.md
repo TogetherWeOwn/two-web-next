@@ -29,7 +29,7 @@ The app writes ONE single-line JSON object on `console.error`, with
   fingerprint or mute window, and the Tail Worker does not forward them.
   Both alert types also carry `build_sha`/`release` (the emitting Worker's
   deploy commit, `null` without a `version_metadata` binding); the Tail
-  Worker does not forward those either.
+  Worker forwards only a validated `build_sha`, never `release`.
 - Queue source lines are not muted: one per terminal job failure. **Their
   `exception` can be a bot refusal message**, not just a class. Neither that field
   nor any trace exception/request/header/body is forwarded by the Tail Worker.
@@ -88,7 +88,7 @@ events, malformed arguments, other Workers and recursive Tail logs are ignored.
 | `event` | Only the two critical event types |
 | `fingerprint` | Request: SHA-256 of the source fingerprint; queue: `queue.failing@JobClass` |
 | `script` | The exact allowlisted app script name from the trace (staging web, staging jobs, or production); the reliable environment discriminator |
-| `build_sha` | Optional: the deployed 40-hex source SHA parsed from the trace's version tag (a bare SHA in staging, `<sha>-<run-id>-<attempt>` in production); any other tag is omitted, never forwarded |
+| `build_sha` | Optional: the deployed 40-hex source SHA, parsed from the trace's version tag when present (a bare SHA in staging, `<sha>-<run-id>-<attempt>` in production), else from the trace's own release-tagged log lines (only an exact 40-hex `build_sha` paired with an equal `release` passes — live traces do not populate the version tag, per the 2026-10-17 staging drill); anything else is omitted, never forwarded |
 | `logs` | Fixed dashboard path for that script: `Workers & Pages > <script> > Observability > Logs`; a navigation path, never a URL with parameters |
 | `route` | Request only: a reviewed registered route template; unknown/raw paths and query-bearing routes become `[redacted]` |
 | `job`, `attempts` | Queue only: known job class and positive integer attempt count |

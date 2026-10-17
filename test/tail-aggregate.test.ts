@@ -144,6 +144,67 @@ describe("aggregate 5xx/error-rate spike alert", () => {
     });
   });
 
+  it("takes build_sha from release-tagged log lines when traces carry no version tag", async () => {
+    // Live Cloudflare traces do not populate scriptVersion.tag: in the
+    // 2026-10-17 staging drill the active version tag was the bare deploy
+    // SHA, yet delivered summaries omitted build_sha. The app's own
+    // http.request line carries a validated build_sha instead.
+    const { worker, contents } = fixture();
+    const liveTrace = () => ({
+      scriptName: "two-web-next",
+      outcome: "ok",
+      exceptions: [],
+      eventTimestamp: t0,
+      event: {
+        request: { method: "GET", url: "https://example.test/private?token=never-send" },
+        response: { status: 500 },
+      },
+      logs: [
+        {
+          level: "info",
+          timestamp: t0,
+          message: [
+            JSON.stringify({ event: "http.request", status: 500, build_sha: sha, release: sha }),
+          ],
+        },
+      ],
+    });
+    await worker.tail(Array.from({ length: SPIKE_MIN_ERRORS }, liveTrace), env);
+    expect(contents()).toHaveLength(1);
+    expect(contents()[0]).toMatchObject({ event: "error.spike", build_sha: sha });
+    expect(JSON.stringify(contents())).not.toMatch(/never-send|example\.test/);
+  });
+
+  it("omits build_sha when log lines carry no valid 40-hex value", async () => {
+    const { worker, contents } = fixture();
+    const bogusTrace = () => ({
+      scriptName: "two-web-next",
+      outcome: "ok",
+      exceptions: [],
+      eventTimestamp: t0,
+      event: {
+        request: { method: "GET", url: "https://example.test/" },
+        response: { status: 500 },
+      },
+      logs: [
+        {
+          level: "info",
+          timestamp: t0,
+          message: [
+            JSON.stringify({ event: "http.request", build_sha: "manual-never-send" }),
+            // A 40-hex build_sha without the app's equal release pair is
+            // not an app release line and must not be trusted either.
+            JSON.stringify({ event: "http.request", build_sha: sha, release: "f".repeat(40) }),
+          ],
+        },
+      ],
+    });
+    await worker.tail(Array.from({ length: SPIKE_MIN_ERRORS }, bogusTrace), env);
+    expect(contents()).toHaveLength(1);
+    expect(contents()[0]).not.toHaveProperty("build_sha");
+    expect(JSON.stringify(contents())).not.toContain("manual-never-send");
+  });
+
   it("omits build_sha when the triggering batch has no valid tag, instead of blaming the previous build", async () => {
     const f = fixture();
     // Below-threshold errors from a tagged build record its SHA...
