@@ -1,0 +1,39 @@
+# Community metrics: source and access boundary
+
+This document maps community-goal measures to aggregate evidence already described in this repository. It does not authorize new data collection, change the privacy policy, or grant access to a database or member-level records. A metric without a supported aggregate source is **unavailable**, not zero and not permission to export members.
+
+## Metric sources and limits
+
+| Goal measure | Existing aggregate evidence | What it does not establish |
+| --- | --- | --- |
+| Current human-member population | The bot-owned, read-only `web_v1.live_counts.human_member_count` snapshot excludes bots. Null or stale snapshots are unknown; the homepage hides them. See [web-v1 contract](web-v1-contract.md#web_v1live_counts) and `src/counts.ts`. | Weekly active humans. It is a current population snapshot, not an activity window. It does not authorize reading the producer's underlying member records. |
+| Joins | The website's `join_attempts` aggregate paths count `added` and `already_member` outcomes, without returning per-attempt identities. See `src/hotzones/aggregates.ts` and the bounded, 90-day `/admin` join-funnel description in [join diagnostics](troubleshooting-join.md#moderator-diagnostics-and-escalation). | A count of newly acquired members: `already_member` is not a new join, not every sign-in or join is recorded, and older attempts are pruned after 90 days. Label these as recorded successful join-attempt outcomes, not complete joins, unless a separately approved source supports the stronger claim. |
+| Human messages per week | No aggregate source for this measure is documented here. | The website privacy disclosure says message content is not stored in the website database; do not infer message volume from website records or obtain message-level exports. |
+| Event attendance | Published-event counts and RSVP counts are not attendance evidence. No aggregate attendance source is documented here. | RSVP is intent, not proof of presence. Attendee names and RSVP records are member-level data; do not export them to make an attendance total. |
+| Voice activity | `/hotzones/voice` is a deterministic seeded estimate, explicitly labeled as an estimate pending bot event-store calibration (`src/hotzones/aggregates.ts`). | Measured voice minutes or weekly active humans. Do not report this estimate as observed activity. |
+
+The bot-owned `web_v1.rank_counts` view is also aggregate-only and supports the homepage rank display; it is not a substitute for any community-goal measure. Its narrow column and null semantics are defined in the [web-v1 contract](web-v1-contract.md#web_v1rank_counts).
+
+## Default access boundary
+
+- Prefer an existing, documented aggregate/read model whose fields and purpose are explicit. Use only its aggregate output for that stated purpose. Do not select, export, retain, or publish member-level rows, identifiers, profiles, RSVP lists, join-attempt details, or message/voice content for community scorecards.
+- Existing access to a view or aggregate route is not blanket approval for a new metric, query, audience, retention period, or downstream use. In particular, the homepage `web_v1` consumer is a read-only consumer of bot-owned views; it does not own their schema or authorize direct access to the producer's underlying records.
+- If a goal measure has no supported aggregate source, report it as unavailable and record the limitation. Do not derive it by scraping, joining member-level data, or treating a synthetic estimate as observed activity.
+- Keep publicly displayed and operational aggregates to their documented scope. The `/admin` join funnel is a moderator diagnostic, is optional/failure-degrading, and does not bypass admin session or audit checks. Do not copy its identifier-bearing detail rows to public channels.
+
+## Tests and probes
+
+Tests, local probes, and verification must use local fixtures or the disposable test database/service described in [README safe-test guidance](../README.md#database-and-migrations). **Never point tests, probes, or verification at production or staging databases.** Do not use production/staging credentials or live database access as a substitute for fixtures. The `web_v1` test fixture is rollback-only and refuses non-test URLs ([contract](web-v1-contract.md#test-fixture-not-producer-ddl)); it is not producer DDL or authorization to probe the bot database.
+
+## Escalation
+
+Stop and request CISO review before any proposal or work that would access/export member-level or personal data for a new purpose, identify members in a report, introduce a new data source or recipient, change access/retention/sharing policy, or turn an estimate into a measured claim. Provide the proposed purpose, minimum fields and aggregation, audience, retention, source, and deletion/access controls for review. A request or this document alone is not approval. Preserve existing consent, opt-out, access-log, and product-policy boundaries; escalate ambiguous classification rather than widening access by default.
+
+## Evidence reviewed
+
+- `README.md` — disposable test database and production/staging prohibition.
+- `docs/web-v1-contract.md` — bot-owned aggregate views, homepage consumer boundary, fixture rules.
+- `docs/troubleshooting-join.md` — bounded moderator diagnostics and join-funnel limitations.
+- `docs/member-erasure.md` and `src/privacy-content.ts` — member data, retention, and published privacy commitments.
+- `src/hotzones/aggregates.ts` — aggregate joins semantics and estimated voice/games priors.
+- Goal-level metric wording — weekly active humans, human messages/week, joins/week, and event attendance; bot traffic does not count.
