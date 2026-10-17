@@ -233,6 +233,7 @@ describe("Kit admin events-list load: guard and failure wiring", () => {
     const dialect = new PgDialect();
     const predicate = dialect.sqlToQuery(eventsRead.where[0][0]);
     expect(predicate.sql).toContain('"events"."title" ilike');
+    expect(predicate.sql).toContain('"events"."status" =');
     expect(predicate.params).toEqual(["%Games%", "published"]);
     const goingPredicate = dialect.sqlToQuery(goingRead.where[0][0]);
     expect(goingPredicate.sql).toContain('"rsvps"."event_id" in');
