@@ -9,6 +9,7 @@ export const ISLANDS = [
   "going-count",
   "rsvp-button",
   "member-profile",
+  "attendees-live",
 ] as const;
 
 export type IslandName = (typeof ISLANDS)[number];
@@ -42,5 +43,12 @@ export const POLLING: Record<IslandName, { pollMs: number | null; reason: string
   "member-profile": {
     pollMs: null,
     reason: "Edit/save/cancel PATCH flow; no read loop.",
+  },
+  "attendees-live": {
+    pollMs: null,
+    reason:
+      "Event-driven fragment refresh on the going-count-updated CustomEvent; one non-rotating " +
+      "GET /e/:key (x-two-island fragment header) per answered event with a single bounded " +
+      "retry, non-matching keys fire no request.",
   },
 };

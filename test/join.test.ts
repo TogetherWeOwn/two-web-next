@@ -554,10 +554,9 @@ describe("GET /join/discord (throttled OAuth start)", () => {
     expect(
       (await app.request("/join/callback?error=access_denied", as("198.51.100.99"), e)).status,
     ).not.toBe(429);
-    // The bucket names the client and the minute, never a site-wide key.
-    const minute = Math.floor(1_791_000_000_000 / 60000);
+    // The bucket names only the client, never a site-wide key or a minute.
     expect(new Set(fake.throttle.map((r) => r.bucket))).toEqual(
-      new Set([`join:203.0.113.7:${minute}`, `join:198.51.100.99:${minute}`]),
+      new Set(["join:203.0.113.7", "join:198.51.100.99"]),
     );
   });
 
@@ -569,11 +568,7 @@ describe("GET /join/discord (throttled OAuth start)", () => {
       e,
     );
     await app.request("/join/discord", {}, e);
-    const minute = Math.floor(1_791_000_000_000 / 60000);
-    expect(fake.throttle.map((r) => r.bucket)).toEqual([
-      `join:192.0.2.5:${minute}`,
-      `join:anon:${minute}`,
-    ]);
+    expect(fake.throttle.map((r) => r.bucket)).toEqual(["join:192.0.2.5", "join:anon"]);
   });
 });
 

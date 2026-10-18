@@ -171,6 +171,7 @@ describe.skipIf(!process.env.DATABASE_URL)("event mutation admission (agent-test
         expect(await res.json()).toEqual({
           error: "invalid",
           fields: { body: "Send a JSON object." },
+          request_id: res.headers.get("x-request-id"),
         });
         await expectUnchanged(before);
       },
@@ -181,7 +182,11 @@ describe.skipIf(!process.env.DATABASE_URL)("event mutation admission (agent-test
     const before = await snapshot();
     const res = await write("PATCH", '{"title":', "Application/Json; charset=utf-8");
     expect(res.status).toBe(422);
-    expect(await res.json()).toEqual({ error: "invalid", fields: { body: "Send a JSON object." } });
+    expect(await res.json()).toEqual({
+      error: "invalid",
+      fields: { body: "Send a JSON object." },
+      request_id: res.headers.get("x-request-id"),
+    });
     await expectUnchanged(before);
   });
 
@@ -209,6 +214,7 @@ describe.skipIf(!process.env.DATABASE_URL)("event mutation admission (agent-test
     expect(await res.json()).toEqual({
       error: "invalid",
       fields: { timezone: "Unknown timezone: Not/AZone." },
+      request_id: res.headers.get("x-request-id"),
     });
     await expectUnchanged(before);
   });
@@ -343,6 +349,7 @@ describe.skipIf(!process.env.DATABASE_URL)("event mutation admission (agent-test
           [field]:
             "That time never occurred in Europe/London — clocks skipped forward over it. Pick a time outside the gap.",
         },
+        request_id: res.headers.get("x-request-id"),
       });
       await expectUnchanged(before);
     },

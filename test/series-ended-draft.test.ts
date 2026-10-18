@@ -214,7 +214,11 @@ describe.skipIf(!process.env.DATABASE_URL)("series ended-draft publication (agen
     const before = await state(parent.eventKey);
     const response = await json("POST", `/events/${parent.eventKey}/publish`);
     expect(response.status).toBe(422);
-    expect(await response.json()).toEqual({ error: "invalid", fields: { ends_at: ENDED } });
+    expect(await response.json()).toEqual({
+      error: "invalid",
+      fields: { ends_at: ENDED },
+      request_id: response.headers.get("x-request-id"),
+    });
     // No mutation, no announcement, no write-back: the parent stays a draft and
     // the refused publish materialises no child rows of its own.
     expect(await state(parent.eventKey)).toEqual(before);
@@ -260,7 +264,11 @@ describe.skipIf(!process.env.DATABASE_URL)("series ended-draft publication (agen
     const beforeChild = await state(child.eventKey);
     const response = await json("POST", `/events/${child.eventKey}/publish`);
     expect(response.status).toBe(422);
-    expect(await response.json()).toEqual({ error: "invalid", fields: { ends_at: ENDED } });
+    expect(await response.json()).toEqual({
+      error: "invalid",
+      fields: { ends_at: ENDED },
+      request_id: response.headers.get("x-request-id"),
+    });
     // Neither the child nor its parent moves, and nothing is announced.
     expect(await state(child.eventKey)).toEqual(beforeChild);
     expect(await state(parent.eventKey)).toEqual(beforeParent);

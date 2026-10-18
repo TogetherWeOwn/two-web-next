@@ -28,6 +28,10 @@ export const JOURNEY_TTL_SECONDS = 600;
 export type JoinRouteDeps = {
   store?: () => Promise<Sql | null>;
   bot?: (botToken: string) => BotAdd;
+  // Unused since the minute-boundary fix (S1): kept so older callers and
+  // fixtures that still pass `now` keep typechecking. The bucket no longer
+  // carries a minute segment; admission is the sliding 60 s window in
+  // checkJoinThrottle.
   now?: () => number;
 };
 export type EnvWithJoin = Env & { JOIN_DEPS?: JoinRouteDeps };
@@ -59,19 +63,15 @@ export function background(c: Ctx): ((work: Promise<void>) => void) | undefined 
 
 export const joinRedirectUri = (env: Env) => `${env.APP_URL}/join/callback`;
 
-export function currentMinute(now: () => number): number {
-  return Math.floor(now() / 60000);
-}
-
-// The budget is per client: `join:<client>:<minute>`, the same client key every
+// The budget is per client: `join:<client>`, the same client-key shape every
 // other human-route throttle uses. /join/discord and /join/callback draw on one
-// bucket per client (legacy `throttle:10,1` keyed guests by IP), but no client
-// can spend another's budget.
+// minute-free bucket per client (legacy `throttle:10,1` keyed guests by IP), so
+// a burst straddling a wall-clock minute still spends one sliding 60 s budget.
+// No client can spend another's budget.
 export async function throttled(c: Ctx): Promise<Response | null> {
-  const deps = (c.env as EnvWithJoin).JOIN_DEPS;
   const verdict = await checkJoinThrottle(
     await joinStore(c),
-    `${JOIN_THROTTLE_BUCKET}:${clientKey(c)}:${currentMinute(deps?.now ?? Date.now)}`,
+    `${JOIN_THROTTLE_BUCKET}:${clientKey(c)}`,
     JOIN_THROTTLE_PER_MINUTE,
   );
   if (!verdict.limited) return null;
@@ -109,6 +109,10 @@ export type RecoveryProps = {
   retryUrl: string;
   retryLabel: string;
   inviteUrl: string;
+  // Validated request ID for the member to quote to support (the same value
+  // as the response's x-request-id). Optional so non-request callers keep
+  // working; the join render boundary always supplies it.
+  supportReference?: string;
 };
 
 // Rendering lives with the app module (it owns the JSX runtime); this module
