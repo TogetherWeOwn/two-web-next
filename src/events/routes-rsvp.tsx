@@ -17,7 +17,7 @@ import { body, type App, type Ctx, type SessionReader } from "./routes-shared";
 
 // One answer per member per event: a singular resource. PUT 201 first / 200 re-answer,
 // DELETE 204 on a real withdrawal and 404 when it deletes nothing, any other verb 405.
-// A valid key in another letter case 301s to the canonical RSVP URL before any
+// A valid key in another letter case 308s to the canonical RSVP URL before any
 // honeypot, session or DB read. One shared 12/min budget per member.
 const rsvpBody = (a: RsvpAnswer) => ({
   data: {
@@ -121,17 +121,21 @@ const deleteRsvp = async (
 };
 
 // One canonical key form per event, mirroring the read routes: a valid key in
-// another letter case 301s to the canonical RSVP URL before any honeypot,
-// session or DB read. Seed/demo keys and unparsable keys keep their current
-// path (forged keys still refuse, unknown keys still 404). Scoped to the
-// /events/:key/rsvp verbs so the POST /e/:key/rsvp HTML adapter below keeps
-// its exact session, decoy and refusal paths.
+// another letter case redirects to the canonical RSVP URL before any
+// honeypot, session or DB read. Seed/demo keys and unparsable keys keep
+// their current path (forged keys still refuse, unknown keys still 404).
+// Scoped to the /events/:key/rsvp verbs so the POST /e/:key/rsvp HTML
+// adapter below keeps its exact session, decoy and refusal paths. The status
+// is 308, not the read routes' 301: these are unsafe verbs, and common
+// non-browser clients (Go net/http, reqwest) replay a 301/302/303 as a
+// body-less GET that would land on the 405 catch-all, losing the write.
+// RFC 9110 §15.4.9 keeps the method and body on 308.
 const canonicalRsvpRedirect = (c: Ctx): Response | null => {
   const key = c.req.param("key") ?? "";
   const canonical = canonicalEventKey(key);
   if (canonical && canonical !== key) {
     const search = new URL(c.req.url).search;
-    return c.redirect(`/events/${encodeURIComponent(canonical)}/rsvp${search}`, 301);
+    return c.redirect(`/events/${encodeURIComponent(canonical)}/rsvp${search}`, 308);
   }
   return null;
 };

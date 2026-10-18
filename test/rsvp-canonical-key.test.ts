@@ -3,11 +3,13 @@
 // RSVP writes tell the truth on every key spelling.
 //
 // ULIDs are stored uppercase and the per-key read routes (detail, .ics)
-// 301 a valid key in another letter case to the canonical URL before any
-// session or DB read. The RSVP resource must do the same on PUT and
+// redirect a valid key in another letter case to the canonical URL before
+// any session or DB read. The RSVP resource must do the same on PUT and
 // DELETE: a lowercased or mixed-case spelling of a live event key is one
 // redirect hop away from the canonical RSVP URL, never a 404 against an
-// event that exists and never a write against the wrong spelling.
+// event that exists and never a write against the wrong spelling. The write
+// redirect is 308 (not the reads' 301) so unsafe verbs keep their method and
+// body on every client (RFC 9110 §15.4.9).
 //
 // A DELETE that deletes nothing must also say so. When the caller has no
 // RSVP row for the key — the event exists but they never answered, only
@@ -182,11 +184,11 @@ describe.skipIf(!process.env.DATABASE_URL)(
     }
 
     describe("non-canonical key spellings redirect before any lookup", () => {
-      it("PUT a lowercase ULID 301s to the canonical RSVP URL, writes nothing, then succeeds there", async () => {
+      it("PUT a lowercase ULID 308s to the canonical RSVP URL, writes nothing, then succeeds there", async () => {
         const ev = await seed();
         const user = "lower-put";
         const moved = await put(ev.key.toLowerCase(), user);
-        expect(moved.status).toBe(301);
+        expect(moved.status).toBe(308);
         expect(moved.headers.get("location")).toBe(`/events/${ev.key}/rsvp`);
         // The redirect is not a write: no row, no budget spent, no sync queued.
         expect(await rows(ev.id)).toHaveLength(0);
@@ -203,23 +205,23 @@ describe.skipIf(!process.env.DATABASE_URL)(
         expect(await rowUsers(ev.id)).toEqual([user]);
       });
 
-      it("PUT a mixed-case ULID 301s to the canonical RSVP URL and writes nothing", async () => {
+      it("PUT a mixed-case ULID 308s to the canonical RSVP URL and writes nothing", async () => {
         const ev = await seed();
         const user = "mixed-put";
         const spelling = mixedCase(ev.key);
         expect(spelling).not.toBe(ev.key);
         expect(spelling).not.toBe(ev.key.toLowerCase());
         const moved = await put(spelling, user);
-        expect(moved.status).toBe(301);
+        expect(moved.status).toBe(308);
         expect(moved.headers.get("location")).toBe(`/events/${ev.key}/rsvp`);
         expect(await rows(ev.id)).toHaveLength(0);
         expect(await hits(user)).toBe(0);
       });
 
-      it("PUT a percent-encoded lowercase ULID 301s to the plain canonical RSVP URL in one hop", async () => {
+      it("PUT a percent-encoded lowercase ULID 308s to the plain canonical RSVP URL in one hop", async () => {
         const ev = await seed();
         const moved = await put(encodedLower(ev.key), "encoded-put");
-        expect(moved.status).toBe(301);
+        expect(moved.status).toBe(308);
         expect(moved.headers.get("location")).toBe(`/events/${ev.key}/rsvp`);
         expect(await rows(ev.id)).toHaveLength(0);
       });
@@ -227,14 +229,14 @@ describe.skipIf(!process.env.DATABASE_URL)(
       it("the canonical redirect preserves the query string", async () => {
         const ev = await seed();
         const moved = await put(ev.key.toLowerCase(), "query-put", "going", "?src=share");
-        expect(moved.status).toBe(301);
+        expect(moved.status).toBe(308);
         expect(moved.headers.get("location")).toBe(`/events/${ev.key}/rsvp?src=share`);
       });
 
-      it("PUT a lowercase ULID redirects before auth: a guest gets 301, not 401, and nothing is written", async () => {
+      it("PUT a lowercase ULID redirects before auth: a guest gets 308, not 401, and nothing is written", async () => {
         const ev = await seed();
         const moved = await put(ev.key.toLowerCase(), null);
-        expect(moved.status).toBe(301);
+        expect(moved.status).toBe(308);
         expect(moved.headers.get("location")).toBe(`/events/${ev.key}/rsvp`);
         expect(await rows(ev.id)).toHaveLength(0);
       });
@@ -242,7 +244,7 @@ describe.skipIf(!process.env.DATABASE_URL)(
       it("PUT a lowercase ULID redirects before lookup even when no such event exists", async () => {
         const user = "lower-unknown-put";
         const moved = await put(UNKNOWN_KEY.toLowerCase(), user);
-        expect(moved.status).toBe(301);
+        expect(moved.status).toBe(308);
         expect(moved.headers.get("location")).toBe(`/events/${UNKNOWN_KEY}/rsvp`);
         expect(await hits(user)).toBe(0);
         // The canonical spelling then answers the ordinary not-found.
@@ -257,7 +259,7 @@ describe.skipIf(!process.env.DATABASE_URL)(
         const ev = await seed({ status: "cancelled" });
         const user = "lower-closed-put";
         const moved = await put(ev.key.toLowerCase(), user);
-        expect(moved.status).toBe(301);
+        expect(moved.status).toBe(308);
         expect(moved.headers.get("location")).toBe(`/events/${ev.key}/rsvp`);
         const landed = await request(moved.headers.get("location")!, "PUT", user, {
           status: "going",
@@ -267,7 +269,7 @@ describe.skipIf(!process.env.DATABASE_URL)(
         expect(await rows(ev.id)).toHaveLength(0);
       });
 
-      it("DELETE a lowercase ULID 301s to the canonical RSVP URL with the row intact, then deletes there", async () => {
+      it("DELETE a lowercase ULID 308s to the canonical RSVP URL with the row intact, then deletes there", async () => {
         const ev = await seed();
         const user = "lower-delete";
         expect((await put(ev.key, user)).status).toBe(201);
@@ -275,7 +277,7 @@ describe.skipIf(!process.env.DATABASE_URL)(
         sent.length = 0;
 
         const moved = await del(ev.key.toLowerCase(), user);
-        expect(moved.status).toBe(301);
+        expect(moved.status).toBe(308);
         expect(moved.headers.get("location")).toBe(`/events/${ev.key}/rsvp`);
         // The redirect is not a withdrawal: the row survives, no budget spent.
         expect(await rowUsers(ev.id)).toEqual([user]);
@@ -287,21 +289,21 @@ describe.skipIf(!process.env.DATABASE_URL)(
         expect(await rows(ev.id)).toHaveLength(0);
       });
 
-      it("DELETE a mixed-case ULID 301s to the canonical RSVP URL with the row intact", async () => {
+      it("DELETE a mixed-case ULID 308s to the canonical RSVP URL with the row intact", async () => {
         const ev = await seed();
         const user = "mixed-delete";
         expect((await put(ev.key, user)).status).toBe(201);
         const moved = await del(mixedCase(ev.key), user);
-        expect(moved.status).toBe(301);
+        expect(moved.status).toBe(308);
         expect(moved.headers.get("location")).toBe(`/events/${ev.key}/rsvp`);
         expect(await rowUsers(ev.id)).toEqual([user]);
       });
 
-      it("DELETE a lowercase ULID redirects before auth: a guest gets 301, not 401, and the row survives", async () => {
+      it("DELETE a lowercase ULID redirects before auth: a guest gets 308, not 401, and the row survives", async () => {
         const ev = await seed();
         expect((await put(ev.key, "row-owner")).status).toBe(201);
         const moved = await del(ev.key.toLowerCase(), null);
-        expect(moved.status).toBe(301);
+        expect(moved.status).toBe(308);
         expect(moved.headers.get("location")).toBe(`/events/${ev.key}/rsvp`);
         expect(await rowUsers(ev.id)).toEqual(["row-owner"]);
       });
