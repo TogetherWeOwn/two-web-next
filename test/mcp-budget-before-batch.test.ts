@@ -179,7 +179,7 @@ describe.skipIf(!process.env.DATABASE_URL)(
       expect(hits).toHaveLength(BUDGET);
     });
 
-    it("still refuses an under-budget batch with -32600/400 and burns no budget (control)", async () => {
+    it("still refuses an under-budget batch with -32600/400, burning one admission hit", async () => {
       const res = await post(BATCH, "192.0.2.92");
       expect(res.status).toBe(400);
       expect(res.messages).toHaveLength(1);
@@ -188,7 +188,11 @@ describe.skipIf(!process.env.DATABASE_URL)(
         error: { code: -32600 },
       });
       expect(res.messages[0]).not.toHaveProperty("result");
-      expect(hits).toHaveLength(0);
+      // Admission runs first, so an admitted batch burns exactly one hit —
+      // the same as every other admitted POST /mcp. Batch-only callers
+      // therefore spend budget and eventually meet the 429 back-pressure
+      // instead of receiving unlimited -32600 refusals for free.
+      expect(hits).toHaveLength(1);
     });
 
     it("still answers OPTIONS preflight while the caller is over budget (control)", async () => {
