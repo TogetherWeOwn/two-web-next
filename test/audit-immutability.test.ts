@@ -293,6 +293,7 @@ describe.skipIf(!process.env.DATABASE_URL)(
         await insert.agent_event_audits(app!, when);
         await insert.member_data_access_logs(app!, when);
       }
+      await app!`delete from job_unique_locks`;
       const flight = pgSingleFlight(app!);
       const name = `w15-audit-prune-${randomUUID()}`;
       let release!: () => void;
@@ -320,6 +321,7 @@ describe.skipIf(!process.env.DATABASE_URL)(
         searchLog: 0,
         boardViews: 0,
         sessions: 0,
+        jobUniqueLocks: 0,
       });
       const survivors = await owner<
         { occurred_at: Date }[]
@@ -347,6 +349,7 @@ describe.skipIf(!process.env.DATABASE_URL)(
         searchLog: 0,
         boardViews: 0,
         sessions: 0,
+        jobUniqueLocks: 0,
       });
     });
 

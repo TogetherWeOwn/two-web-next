@@ -79,17 +79,19 @@ export type PruneCounts = {
   searchLog: number;
   boardViews: number;
   sessions: number;
+  jobUniqueLocks: number;
 };
 
 const cutoff = (now: Date, days: number): Date => new Date(now.getTime() - days * 86_400_000);
 
 /**
  * Ports model:prune daily ×3 (routes/console.php) plus the web_sessions expiry
- * sweep (no legacy equivalent — Laravel GC; rows accumulate without one).
+ * sweep (no legacy equivalent — Laravel GC; rows accumulate without one) and
+ * the job_unique_locks expiry sweep (expired leases linger without one).
  * Age deletes are age-only (Laravel MassPrunable shape): strictly older than
- * the cutoff goes, cutoff-exact rows survive. The session sweep deletes by
- * expiry (`expires_at <= now`, matching what reads can see): expiry-exact
- * rows go, live rows stay. Each statement deletes at most
+ * the cutoff goes, cutoff-exact rows survive. The session and lock sweeps
+ * delete by expiry (`expires_at <= now`, matching what reads/acquire can see):
+ * expiry-exact rows go, live rows stay. Each statement deletes at most
  * PRUNE_DELETE_BATCH_SIZE rows; the pass repeats the statement per table until
  * a short batch proves the backlog drained, stopping after
  * PRUNE_DELETE_MAX_BATCHES batches so the single-flight is never held
@@ -120,6 +122,7 @@ export async function pruneModelTables(
     searchLog,
     boardViews,
     sessions,
+    jobUniqueLocks,
   ] = await Promise.all([
     drainPruneTable(
       (c) => stores.agentEventAudits.pruneOlderThan(c),
@@ -146,6 +149,7 @@ export async function pruneModelTables(
       cutoff(now, BOARD_VIEW_LOG_RETENTION_DAYS),
     ),
     drainPruneTable((d) => stores.sessions.sweepExpired(d), now),
+    drainPruneTable((d) => stores.jobUniqueLocks.sweepExpired(d), now),
   ]);
   const counts = {
     agentEventAudits: agentEventAudits.total,
@@ -155,6 +159,7 @@ export async function pruneModelTables(
     searchLog: searchLog.total,
     boardViews: boardViews.total,
     sessions: sessions.total,
+    jobUniqueLocks: jobUniqueLocks.total,
   };
   const cappedTables = (
     [
@@ -165,6 +170,7 @@ export async function pruneModelTables(
       ["searchLog", searchLog.capped],
       ["boardViews", boardViews.capped],
       ["sessions", sessions.capped],
+      ["jobUniqueLocks", jobUniqueLocks.capped],
     ] as const
   )
     .filter(([, capped]) => capped)
