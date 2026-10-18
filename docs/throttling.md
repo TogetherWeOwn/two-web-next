@@ -6,10 +6,15 @@ the 60-second window, and the shared 429 response do not change.
 
 ## Address selection
 
-The address is `CF-Connecting-IP` when present, otherwise the trimmed first hop
-of `X-Forwarded-For`, otherwise `anon`. Cloudflare supplies `CF-Connecting-IP`
-on edge requests; the other cases support off-edge tests and local runs. This
-change does not make other forwarded headers trusted or change their precedence.
+The address is the trimmed `CF-Connecting-IP` when it is non-empty, otherwise
+the first non-empty trimmed `X-Forwarded-For` hop, otherwise `anon`. Empty or
+whitespace-only `CF-Connecting-IP` falls through to `X-Forwarded-For`; empty
+hops are skipped, so an empty first hop never collapses clients into a shared
+empty-suffix bucket. Only a request with no usable identity in either header
+lands in the existing documented `anon` fallback bucket, exactly like a
+headerless request. Cloudflare supplies `CF-Connecting-IP` on edge requests;
+the other cases support off-edge tests and local runs. This change does not
+make other forwarded headers trusted or change their precedence.
 
 ## Normalization
 
@@ -23,8 +28,16 @@ change does not make other forwarded headers trusted or change their precedence.
   produce the same key for the same prefix. The runtime's
   [URL IPv6 parser](https://url.spec.whatwg.org/#concept-ipv6-parser)
   validates addresses before the canonical pieces are expanded.
-- Missing addresses still share `anon`. Malformed off-edge values retain their
-  existing key; a parse failure never skips the throttle store.
+- Missing or wholly empty addresses share the documented `anon` fallback, never
+  an empty-suffix bucket. Malformed off-edge values retain their existing key;
+  a parse failure never skips the throttle store.
+- The normalized client segment is capped at 64 characters
+  (`MAX_CLIENT_KEY_SEGMENT` in [`src/throttle.ts`](../src/throttle.ts)),
+  applied before any store call. The longest valid IP text form is 45
+  characters, so the cap never truncates a valid address; only over-bound
+  malformed or hostile values are truncated, deterministically, with values
+  differing inside the bound keeping distinct buckets. No header bytes are
+  logged.
 
 This limits address rotation within one /64. It does not prevent clients with
 multiple /64 allocations from consuming multiple budgets. Devices sharing a
