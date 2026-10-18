@@ -48,9 +48,10 @@ export function parseEventForm(
   if (!title) fields.title = "Give the event a title.";
   else if ([...title].length > 100) fields.title = "Keep the title to 100 characters.";
   // A supplied non-string must never silently clear saved text: null, blank
-  // and omitted stay empty, but objects, arrays, booleans and numbers are
-  // refused with the existing field-specific 422 shape.
-  for (const field of ["game", "description", "location"] as const) {
+  // and omitted stay empty (timezone keeps its Europe/London default), but
+  // objects, arrays, booleans and numbers are refused with the existing
+  // field-specific 422 shape.
+  for (const field of ["game", "description", "location", "timezone"] as const) {
     const raw = data[field];
     if (raw !== undefined && raw !== null && typeof raw !== "string") {
       fields[field] = `The ${field} must be text.`;
