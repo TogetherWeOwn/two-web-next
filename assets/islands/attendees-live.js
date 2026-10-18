@@ -363,24 +363,40 @@
   }
 
   function attempt(state) {
-    var controller = canAbort ? new AbortController() : null;
+    // Per-attempt ownership: capture the attempt number this read belongs
+    // to. onFailure increments state.attempt exactly once for the winning
+    // settlement, so every late header/body/rejection from an older attempt
+    // sees a mismatch and returns before touching roster state, timers,
+    // retries or stale feedback. No new state fields: the existing counter
+    // doubles as the generation.
+    var ownedAttempt = state.attempt;
+    var controller = null;
+    if (canAbort) {
+      try {
+        controller = new AbortController();
+      } catch (_abortConstructIgnored) {
+        // Fall through with controller still null: the read is still issued
+        // and the deadline below still settles it, so a throwing host never
+        // suppresses the refresh.
+      }
+    }
     state.controller = controller;
     if (canTimeout) {
       state.timeout = setTimeout(function () {
-        if (current !== state) return;
+        if (current !== state || state.attempt !== ownedAttempt) return;
         // Abort first so a real transport rejects into the failure path;
-        // harnesses without abort support still get the bounded retry via
-        // the direct failure below only when no controller exists.
+        // then settle here regardless: an abort-ignoring transport (or a
+        // throwing abort) must not hang recovery past the deadline. The
+        // later abort rejection re-enters onFailure with a stale attempt
+        // number and is fenced there. Abort stays best effort.
         if (controller) {
           try {
             controller.abort();
           } catch (_deadlineAbortIgnored) {
-            // Fall through: without abort support the owned fetch still
-            // rejects into the failure path via the controller-less branch.
+            // Fall through to the owned failure below.
           }
-        } else {
-          onFailure(state);
         }
+        onFailure(state);
       }, READ_DEADLINE_MS);
     }
     var options = {
@@ -398,7 +414,10 @@
     if (controller) options.signal = controller.signal;
     fetch("/e/" + encodeURIComponent(state.key) + pageQuery(), options).then(
       function (res) {
-        if (current !== state) return;
+        // Fence stale attempts: only the attempt that owns the current
+        // counter may settle. Late headers from a timed-out or superseded
+        // attempt return here before touching roster state or timers.
+        if (current !== state || state.attempt !== ownedAttempt) return;
         // The deadline stays armed past the headers: it clears only once the
         // body is read (below) or fails (onFailure), so a stalled body still
         // retries instead of hanging silently.
@@ -420,7 +439,10 @@
         }
         text.then(
           function (html) {
-            if (current !== state) return;
+            // Late bodies from a timed-out or superseded attempt cannot
+            // swap the roster, clear the newer deadline or clear stale
+            // feedback: only the owning attempt settles.
+            if (current !== state || state.attempt !== ownedAttempt) return;
             clearStateTimeout(state);
             var ok = false;
             try {
@@ -438,13 +460,17 @@
             current = null;
           },
           function () {
-            if (current !== state) return;
+            // A late rejection (including the abort rejection that follows
+            // a deadline abort) must not clear the newer deadline, add a
+            // retry or surface stale feedback: the winning settlement
+            // already advanced state.attempt, so the stale number fences it.
+            if (current !== state || state.attempt !== ownedAttempt) return;
             onFailure(state);
           },
         );
       },
       function () {
-        if (current !== state) return;
+        if (current !== state || state.attempt !== ownedAttempt) return;
         onFailure(state);
       },
     );
