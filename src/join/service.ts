@@ -202,7 +202,29 @@ export async function migrateJoin(sql: Sql): Promise<void> {
   for (const stmt of JOIN_MIGRATION) await sql.unsafe(stmt);
 }
 
-/** One queryable row per terminal join path. Null store = no-op (funnel stays up). */
+/**
+ * Named wait for the best-effort attempt write: the join answers after at most
+ * this long, whether or not the database cancels the statement.
+ */
+const ATTEMPT_ANALYTICS_WAIT_MS = 2_000;
+
+type CancellableWrite = Promise<unknown> & { cancel?: () => void };
+
+function exceptionClass(err: unknown): string {
+  return err instanceof Error
+    ? err.name
+    : ((err as { constructor?: { name?: string } })?.constructor?.name ?? "unknown");
+}
+
+/**
+ * One queryable row per terminal join path. Null store = no-op (funnel stays up).
+ * Analytics must never break the join: the answer waits at most
+ * ATTEMPT_ANALYTICS_WAIT_MS. A write that outlasts the wait is cancelled where the
+ * driver supports it and reported once; a late settlement changes nothing.
+ * Logs only the exception class (never the message, which can quote the live
+ * token or statement text) plus the validated request_id, so the line joins to
+ * request logs. Absent/malformed IDs are omitted, never raw.
+ */
 export async function recordAttempt(
   sql: Sql | null,
   attempt: {
@@ -213,25 +235,37 @@ export async function recordAttempt(
   },
 ): Promise<void> {
   if (!sql) return;
-  try {
-    await sql`INSERT INTO join_attempts (outcome, source, request_id, discord_id)
-    VALUES (${attempt.outcome}, ${attempt.source}, ${attempt.requestId}, ${attempt.discordId})`;
-  } catch (err) {
-    // Analytics must never break the join: a throwing INSERT still resolves,
-    // logging only the exception class (never the message, which can quote
-    // the live token or statement text) plus the validated request_id so the
-    // line joins to request logs (the admin viewer queries by exact
-    // request_id). Absent/malformed IDs are omitted, never raw; no
-    // discordId/source is added.
+  const warn = (exception: string) => {
     const requestId = safeRequestId(attempt.requestId);
     console.warn("join attempt write failed", {
-      exception:
-        err instanceof Error
-          ? err.name
-          : ((err as { constructor?: { name?: string } })?.constructor?.name ?? "unknown"),
+      exception,
       outcome: attempt.outcome,
       ...(requestId !== undefined ? { request_id: requestId } : {}),
     });
+  };
+  let insert: CancellableWrite;
+  try {
+    insert = sql`INSERT INTO join_attempts (outcome, source, request_id, discord_id)
+    VALUES (${attempt.outcome}, ${attempt.source}, ${attempt.requestId}, ${attempt.discordId})`;
+  } catch (err) {
+    warn(exceptionClass(err));
+    return;
+  }
+  const write = insert.then(
+    () => null,
+    (err: unknown) => ({ err }),
+  );
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const deadline = new Promise<"deadline">((resolve) => {
+    timer = setTimeout(() => resolve("deadline"), ATTEMPT_ANALYTICS_WAIT_MS);
+  });
+  try {
+    const failure = await Promise.race([write, deadline]);
+    if (failure === null) return;
+    if (failure === "deadline") insert.cancel?.();
+    warn(failure === "deadline" ? "AnalyticsWriteDeadline" : exceptionClass(failure.err));
+  } finally {
+    clearTimeout(timer);
   }
 }
 
