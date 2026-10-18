@@ -137,12 +137,13 @@ describe("W15 Discord login and callback boundaries", () => {
       e,
     );
     expect(result.status).toBe(302);
-    // A consent refusal (error=access_denied) gets its own user-visible
-    // meaning — "you cancelled" — distinct from the generic failure banner
-    // (TOG-10355, legacy DiscordLoginTest denial row). None of these rows
-    // may reach Discord.
-    const notice = query.includes("error=access_denied") ? "signin_denied" : "signin_failed";
-    expect(result.headers.get("location")).toBe(`/?n=${notice}`);
+    // State admission gates the OAuth-error mapping: a denial without a
+    // presented, admitted state is a failed sign-in, not a cancelled consent.
+    // None of these rows presents an admitted state (no state param, or a
+    // forged one), so all keep the generic banner; the admitted-denial copy
+    // is pinned in auth-admission.test.ts. None of these rows may reach
+    // Discord.
+    expect(result.headers.get("location")).toBe("/?n=signin_failed");
     expect(fetch).not.toHaveBeenCalled();
     expect(result.headers.getSetCookie().join("\n")).toContain(
       "__Host-two_oauth_state=; Max-Age=0",
