@@ -18,7 +18,11 @@ the separately approved operator procedure.
 - Log correlation: [runbook-logs.md](runbook-logs.md).
 - Queue dead-letter loop:
   [queue-redrive-runbook.md](queue-redrive-runbook.md).
-- Freeze text: [cutover-freeze.md](cutover-freeze.md).
+- Freeze text: [cutover-freeze.md](cutover-freeze.md) is an archived
+  withdrawn proposal, not a live instruction. The current rule lives in
+  [runbook.md](runbook.md#48h-post-flip-watch): no freeze is implied by this
+  watch; any future freeze needs a separate declaration with new dates, an
+  owner and explicit lift terms.
 - After-gate contract: [cutover-check.md](cutover-check.md#phase-contract-and-prerequisites).
 - Readiness contract source: [`src/up.ts`](../src/up.ts).
   Queue measurement source: [`src/jobs/postgres.ts`](../src/jobs/postgres.ts).
@@ -96,23 +100,27 @@ Engineer, never a silent threshold relaxation.
 
 No new infrastructure, no Logpush, no external shipper, no new pager.
 
-1. **Cloudflare dashboard, Workers & Pages, `two-web-next`, Observability.**
-   Workers Logs is enabled on the app and on both Tail Workers. Use the log
-   message contains filter (records are serialized JSON strings):
+1. **Cloudflare dashboard, Workers & Pages, `two-web-next-production`, Observability.**
+   Workers Logs is enabled on the production app and on its Tail Worker
+   (`two-web-next-alerts-production` per `wrangler.jsonc` `env.production`).
+   Use the log message contains filter (records are serialized JSON strings):
    - `http.request` with `route`, `status`, `duration_ms`, `colo` for
      availability, p95 and 5xx rate per class above.
    - `"event":"error.alert"` with `fingerprint` (`ExceptionClass@/route/pattern`)
      for 5xx attribution; correlate by `request_id` with the `http.request` record.
    - `"event":"queue.failing"` with job class and attempts for queue failure spikes.
-   - On the Tail Worker, `"delivery":"ops.alert.delivered"` and
+   - On the production Tail Worker, `"delivery":"ops.alert.delivered"` and
      `"delivery":"ops.alert.delivery_failed"` for pager proof versus loss.
-2. **Live tail (authorized Cloudflare access only).**
+2. **Live tail on production (authorized Cloudflare access only).**
    ```sh
-   npx wrangler tail two-web-next --format json \
+   npx wrangler tail two-web-next-production --format json \
      | jq -c 'select(.logs[]?.message[]? | tostring | test("\"event\":\"(error.alert|queue.failing)\""))'
-   npx wrangler tail two-web-next-alerts --search '"delivery":"ops.alert.'
+   npx wrangler tail two-web-next-alerts-production --search '"delivery":"ops.alert.'
    ```
    Raw source traces stay the diagnostic fallback; never publish them.
+   Staging comparison only: dashboard `two-web-next`, and
+   `npx wrangler tail two-web-next` plus
+   `npx wrangler tail two-web-next-alerts` with the same filters.
 3. **`GET /up` on the apex.** Readiness, not liveness: HTTP status, `db`,
    `pending_migrations`, optional `config`, and the full queue envelope with
    `warn_at`/`critical_at`. Preserve the JSON plus timestamp per checkpoint.
@@ -123,10 +131,20 @@ No new infrastructure, no Logpush, no external shipper, no new pager.
    ```sh
    node ci/cutover-check.mjs --phase after --target togetherweown.com --json
    ```
-5. **Public-route smoke.** Sixteen public routes (also the deploy smoke shape).
+5. **Public-route smoke on the apex.** Seventeen public routes (the
+   `bin/smoke.mjs` shape: `/up` JSON readiness plus `/`, `/about`, `/faq`,
+   `/rules`, `/privacy`, `/events`, `/events/past`, `/join`, `/events.rss`,
+   `/events.ics`, `/sitemap_index.xml`, `/robots.txt`, `/discord` (302),
+   `/profile` (302), `/admin` (302/403) and `/__smoke_unknown_route__`
+   (404), with CSP/nosniff/content-type/indexing/redirect assertions).
    ```sh
-   node bin/smoke.mjs https://togetherweown.com
+   node bin/smoke.mjs https://togetherweown.com --allow-indexable
    ```
+   Without `--allow-indexable` the apex probe fails its indexing assertions
+   (the apex omits `X-Robots-Tag noindex` on indexable leaves; see the
+   loopback apex fixture in `test/smoke.test.mjs`). Staging keeps the
+   default posture without the flag:
+   `node bin/smoke.mjs https://next.togetherweown.com`.
 6. **Lighthouse artifact.** The `lighthouse-<sha>` GitHub artifact (14 days)
    with assertion results; thresholds live in `ci/lighthouserc.cjs`.
 7. **GitHub Actions.** Required `check`, `gitleaks`, `pr-lint` on the exact
@@ -135,7 +153,8 @@ No new infrastructure, no Logpush, no external shipper, no new pager.
    `rollback-production` workflow to the recorded version ID.
 8. **Version-settle telemetry (rollback proof only).** The `served_versions`
    helper in the runbook queries Worker telemetry by `$metadata.service`
-   `two-web-next` over windows of 40 s or less. Use it to prove which version
+   `two-web-next-production` on production (staging: `two-web-next`) over
+   windows of 40 s or less. Use it to prove which version
    served during a rollback, not as a routine latency panel.
 
 ## Mute windows
@@ -185,4 +204,7 @@ the GET-only guest journeys once within the first 24h. Exit after 48h with
 no Sev-1: no pager storm, `/up` 200 with `db:ok` and zero pending
 migrations throughout, after-gates green, Lighthouse and guest journeys
 within budget. The DevOps & Reliability Engineer records the exit on the
-cutover card and lifts the freeze there.
+cutover card. The archived [cutover-freeze.md](cutover-freeze.md) proposal
+is withdrawn: watch exit alone does not lift a freeze. If a freeze was
+separately declared for this window, its authorized owner lifts it only
+under that declaration's terms.
