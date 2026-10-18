@@ -168,6 +168,7 @@ describe("prune drain past SKIP LOCKED short batches (hermetic stubs)", () => {
       searchLog: 2 * PRUNE_DELETE_BATCH_SIZE + 37,
       boardViews: 2 * PRUNE_DELETE_BATCH_SIZE + 37,
       sessions: PRUNE_DELETE_BATCH_SIZE + 5,
+      jobUniqueLocks: 0,
     });
   });
 
@@ -186,6 +187,7 @@ describe("prune drain past SKIP LOCKED short batches (hermetic stubs)", () => {
       searchLog: 0,
       boardViews: 0,
       sessions: 0,
+      jobUniqueLocks: 0,
     });
     expect(second.capped).toBe(false);
   });
