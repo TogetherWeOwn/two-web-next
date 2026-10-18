@@ -537,6 +537,44 @@ test("both Environment gate jobs inherit contents and Actions read permissions",
   }
 });
 
+test("preflight checkouts materialize ci and wrangler.jsonc for the production gate", () => {
+  const workflow = readFileSync(
+    new URL("../.github/workflows/deploy-production.yml", import.meta.url),
+    "utf8",
+  );
+  // The gate's main path reads the repo-root Wrangler config, so the sparse
+  // preflight tree must contain it (ci/production-deploy-gate.mjs:260).
+  const gate = readFileSync(new URL("./production-deploy-gate.mjs", import.meta.url), "utf8");
+  assert.match(gate, /\.\.\/wrangler\.jsonc/);
+  // Negative control: the promotion resolver needs only ci/ files, so it
+  // succeeds on the same sparse tree — only the gate's file scope was broken.
+  const resolver = readFileSync(new URL("./resolve-promotion-sha.mjs", import.meta.url), "utf8");
+  assert.ok(!resolver.includes("wrangler"), "resolver must not need wrangler.jsonc");
+  assert.ok(!resolver.includes("../"), "resolver must not read outside ci/");
+  // Every checkout in preflight runs at the same workspace path, so each one
+  // must widen the sparse scope to both ci/ and wrangler.jsonc (cone-mode off
+  // so the file pattern applies); a missing sparse-checkout inherits the
+  // ci-only cone and the gate fails with ENOENT.
+  const preflight = workflow.slice(
+    workflow.indexOf("\n  preflight:\n"),
+    workflow.indexOf("\n  deploy-production:\n"),
+  );
+  assert.ok(preflight.includes("preflight"), "preflight job missing");
+  const checkouts = preflight.split("- uses: actions/checkout@").slice(1);
+  assert.ok(checkouts.length >= 2, `expected >=2 preflight checkouts, found ${checkouts.length}`);
+  for (const block of checkouts) {
+    const step = block.split("\n      - ")[0];
+    assert.match(step, /sparse-checkout:/, "preflight checkout must set sparse-checkout");
+    assert.match(
+      step,
+      /sparse-checkout-cone-mode: false/,
+      "preflight checkout must disable cone mode so the wrangler.jsonc file pattern applies",
+    );
+    assert.match(step, /\bci\b/, "preflight sparse scope must include ci/");
+    assert.ok(step.includes("wrangler.jsonc"), "preflight sparse scope must include wrangler.jsonc");
+  }
+});
+
 test("manual production workflow routes runners by repo visibility and uses production-only secrets", () => {
   const workflow = readFileSync(
     new URL("../.github/workflows/deploy-production.yml", import.meta.url),
