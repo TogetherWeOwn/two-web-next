@@ -13,6 +13,7 @@ import {
   ulid,
 } from "./payload";
 import { audit } from "./audit";
+import { normalizeClientIp } from "../throttle";
 import { checkGrant, findGrant } from "./grants";
 import { shield } from "./shield";
 import { lookupReplay, replayAnswer } from "./idempotency";
@@ -47,8 +48,11 @@ export async function admitAgentEvent(
   // and ahead of payload canonicalization, so a spent bucket is refused
   // without ever running the recursive digest over untrusted JSON. A presented
   // credential buckets on its own hash (one guess never spends another's);
-  // anonymous hits bucket per IP. Refused hits write nothing.
-  const shieldKey = credential ? await sha256Hex(credential) : `ip:${clientIp ?? "unknown"}`;
+  // anonymous hits bucket per normalized IP, like human throttles (IPv6 /64,
+  // mapped-IPv4, malformed verbatim). Refused hits write nothing.
+  const shieldKey = credential
+    ? await sha256Hex(credential)
+    : `ip:${normalizeClientIp(clientIp ?? "unknown")}`;
   const shielded = await shield(sql, cfg, shieldKey, requestId);
   if (shielded) return shielded;
   return { handle: (body) => processAgentEvent(sql, cfg, body, credential, requestId, effects) };
