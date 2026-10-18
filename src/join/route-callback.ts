@@ -74,10 +74,15 @@ export function registerJoinCallbackRoutes(
     // hardcoded fallback, never a hostile or relative href (legacy
     // JoinCallbackFailureTest "recovery uses static invite when none is configured").
     const invite = inviteDestination(c.env.DISCORD_INVITE_URL);
+    // The callback clears the journey cookies, so the retry href is the only
+    // place the return target survives: a safe next re-mints the start URL
+    // (mirroring GET /join?next=), while a hostile or absent value keeps the
+    // bare URL. `next` already passed safeNext above, so hostile stays dropped.
+    const retryUrl = next ? `/join/discord?next=${encodeURIComponent(next)}` : "/join/discord";
     const recover = (title: string, message: string, status: 200 | 503 = 200) =>
       render.recovery(
         c,
-        { title, message, retryUrl: "/join/discord", retryLabel: "Try again", inviteUrl: invite },
+        { title, message, retryUrl, retryLabel: "Try again", inviteUrl: invite },
         status,
       );
 
