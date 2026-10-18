@@ -207,6 +207,28 @@ describe("join-widget island", () => {
     expect(message.focus).toHaveBeenCalledOnce();
   });
 
+  it("does not steal focus on failure when the visitor moved elsewhere since the click", async () => {
+    const p = page();
+    await p.click();
+    p.moveFocusTo({ tag: "header-link" });
+    p.frame.fire("error");
+    const message = p.messageOf(1)!;
+    expect(message.attrs["data-testid"]).toBe("join-widget-error");
+    expect(message.children[0]!.focus).not.toHaveBeenCalled();
+    expect(message.focus).not.toHaveBeenCalled();
+  });
+
+  it("does not steal focus on timeout when the visitor moved elsewhere since the click", async () => {
+    const p = page();
+    await p.click();
+    p.moveFocusTo({ tag: "header-link" });
+    p.fireTimers();
+    const message = p.messageOf(1)!;
+    expect(message.attrs["data-testid"]).toBe("join-widget-error");
+    expect(message.children[0]!.focus).not.toHaveBeenCalled();
+    expect(message.focus).not.toHaveBeenCalled();
+  });
+
   it("on error keeps focus put and guides to the invite fallback", async () => {
     const p = page();
     await p.click();

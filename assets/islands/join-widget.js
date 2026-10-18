@@ -50,9 +50,14 @@
       preview.replaceChildren(message);
       // The clicked link is gone, so focus fell to <body>: move it onto the
       // guidance (prefer the invite link) so the next Tab reaches forward
-      // instead of restarting from the top of the page.
-      if (fallback && typeof fallback.focus === "function") fallback.focus();
-      else if (typeof message.focus === "function") message.focus();
+      // instead of restarting from the top of the page. Same guard as the
+      // load handler: a late failure never steals focus the visitor moved
+      // elsewhere; the role=status message still announces the fallback.
+      const active = document.activeElement;
+      if (!active || active === document.body) {
+        if (fallback && typeof fallback.focus === "function") fallback.focus();
+        else if (typeof message.focus === "function") message.focus();
+      }
     };
     // Browsers fire `load` for a cross-origin frame even when its navigation
     // was blocked (X-Frame-Options, CSP, DNS, refused connection, content
