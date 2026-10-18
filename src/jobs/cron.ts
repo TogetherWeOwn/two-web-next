@@ -13,6 +13,7 @@ import {
   SYNC_EVENT,
 } from "./constants";
 import { dispatchSyncEvent } from "./sync-event";
+import { queueExceptionClass } from "./queue-error";
 import type { EventStore, PruneStores, TxClient, UniqueLock } from "./types";
 
 /**
@@ -40,7 +41,7 @@ export async function reconcileEvents(deps: {
   writeTransaction?: (
     work: (events: EventStore) => Promise<ReconcilePreparation>,
   ) => Promise<ReconcilePreparation>;
-}): Promise<{ closed: number; materialized: number; resynced: number }> {
+}): Promise<{ closed: number; materialized: number; resynced: number; failed: number }> {
   const prepare = async (events: EventStore): Promise<ReconcilePreparation> => ({
     closed: await events.closeFinished((deps.now ?? (() => new Date()))()),
     materialized: await events.materializeSeries(),
@@ -52,24 +53,34 @@ export async function reconcileEvents(deps: {
     ? deps.writeTransaction(prepare)
     : prepare(deps.events));
   let resynced = 0;
+  let failed = 0;
   for (const key of stale) {
-    // A carrier can be stranded, delayed or exhausted. Only recover a due
-    // request with budget left, always under its original immutable key.
-    const pending = await deps.events.pendingSync(key);
-    if (
-      pending &&
-      (pending.requestAttempts >= SYNC_EVENT.tries ||
-        !pending.nextAttemptAt ||
-        pending.nextAttemptAt > (deps.now ?? (() => new Date()))())
-    )
-      continue;
-    await dispatchSyncEvent(deps.queue, deps.lock, key, pending?.idempotencyKey);
-    resynced++; // Laravel counts stale rows, not accepted dispatches
+    try {
+      // A carrier can be stranded, delayed or exhausted. Only recover a due
+      // request with budget left, always under its original immutable key.
+      const pending = await deps.events.pendingSync(key);
+      if (
+        pending &&
+        (pending.requestAttempts >= SYNC_EVENT.tries ||
+          !pending.nextAttemptAt ||
+          pending.nextAttemptAt > (deps.now ?? (() => new Date()))())
+      )
+        continue;
+      await dispatchSyncEvent(deps.queue, deps.lock, key, pending?.idempotencyKey);
+      resynced++; // Laravel counts stale rows, not accepted dispatches
+    } catch (err) {
+      // One bad key must not starve the rest of the pass: count it and keep
+      // going. Class-only: messages can carry SQL or tokens, and the key
+      // itself stays out of the line. Never console.error: a skipped key is
+      // not a failed pass.
+      failed++;
+      console.warn("Event reconcile key failed.", { error_class: queueExceptionClass(err) });
+    }
   }
-  if (closed > 0 || materialized > 0 || resynced > 0) {
-    console.info("Event reconcile pass completed.", { closed, materialized, resynced });
+  if (closed > 0 || materialized > 0 || resynced > 0 || failed > 0) {
+    console.info("Event reconcile pass completed.", { closed, materialized, resynced, failed });
   }
-  return { closed, materialized, resynced };
+  return { closed, materialized, resynced, failed };
 }
 
 export type PruneCounts = {

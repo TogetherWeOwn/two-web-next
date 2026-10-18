@@ -165,7 +165,7 @@ describe.skipIf(!process.env.DATABASE_URL)(
         writeTransaction: (work) => sql.begin(async (tx) => work(pgEventStore(tx as never))),
       });
 
-      expect(r).toEqual({ closed: 2, materialized: 0, resynced: 3 });
+      expect(r).toEqual({ closed: 2, materialized: 0, resynced: 3, failed: 0 });
       expect(await statuses()).toMatchObject({
         [finishedStale.eventKey]: "past",
         [finishedMirrored.eventKey]: "past",
@@ -191,7 +191,7 @@ describe.skipIf(!process.env.DATABASE_URL)(
         lock: memLock(),
         now: () => NOW,
       });
-      expect(again).toEqual({ closed: 0, materialized: 0, resynced: 3 });
+      expect(again).toEqual({ closed: 0, materialized: 0, resynced: 3, failed: 0 });
       expect(sent.map((b) => b.eventKey).sort()).toEqual(stale);
     });
   },
