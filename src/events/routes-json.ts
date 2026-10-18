@@ -22,7 +22,12 @@ export function registerJsonRoutes(app: App, readFragmentSession: SessionReader)
     const limit = /^[+-]?\d+$/.test(limitRaw)
       ? Math.max(1, Math.min(Number(limitRaw), JSON_MAX_LIMIT))
       : JSON_DEFAULT_LIMIT;
-    const page = Math.max(1, Number.parseInt(c.req.query("page") ?? "1", 10) || 1);
+    const pageRaw = c.req.query("page") ?? "1";
+    // Strict like parseAttendeePageParam and the admin table viewers: the full
+    // string must be a positive integer (parseInt would accept "2x" as 2).
+    // Missing, malformed, nonpositive, fractional, padded or hex values fall
+    // back to page 1; listJson still clamps valid past-end pages to the last.
+    const page = /^[1-9]\d*$/.test(pageRaw) ? Number(pageRaw) : 1;
     const eventKey = c.req.query("event_key");
     if (eventKey !== undefined && !eventKeyAllowed(eventKey, c.env.APP_URL))
       return c.json({ error: "invalid_event_key" }, 422);

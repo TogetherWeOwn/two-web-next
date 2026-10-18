@@ -7,6 +7,7 @@ import type { EnvWithAdminDb } from "../src/admin/db";
 import type { AccessEntry } from "../src/access-log";
 import { profilesApp, type ProfileDeps } from "../src/profiles/routes";
 import {
+  MEMBER_MILESTONES_CAP,
   MEMBER_STATS_BUDGET_MS,
   memberStatsWithBudget,
   readMemberStats,
@@ -72,6 +73,7 @@ describe("readMemberStats (local SQL-result fixtures)", () => {
       tenureDays: 637,
       rankKey: "community_regular",
       isCurrentMember: true,
+      milestonesTruncated: false,
       milestones: milestones.map((row) => ({
         type: row.milestone,
         occurredAt: new Date(row.occurred_at),
@@ -84,6 +86,31 @@ describe("readMemberStats (local SQL-result fixtures)", () => {
     expect(queries[0]!.sql).toContain("from web_v1.members where member_id = $1 limit 1");
     expect(queries[1]!.sql).toContain("where member_id = $1 order by occurred_at desc");
     expect(queries.map((query) => query.params)).toEqual([[MEMBER], [MEMBER]]);
+  });
+
+  it("caps an over-cap milestone list at the pinned cap and marks it truncated", async () => {
+    // Fixture returns rows as-is (SQL ordering happens in the real DB), so feed
+    // newest-first like the ordered query would: the probe row is the oldest.
+    const rows = Array.from({ length: MEMBER_MILESTONES_CAP + 1 }, (_, i) => {
+      const n = MEMBER_MILESTONES_CAP - i;
+      return {
+        member_id: MEMBER,
+        milestone: `m${String(n).padStart(3, "0")}`,
+        occurred_at: new Date(Date.UTC(2025, 0, 1) + n * 86_400_000).toISOString(),
+        detail: null,
+      };
+    });
+    const { db, execute } = fixture([fullMember], rows);
+    const stats = await readMemberStats(db, MEMBER);
+    expect(stats?.milestones).toHaveLength(MEMBER_MILESTONES_CAP);
+    expect(stats?.milestonesTruncated).toBe(true);
+    // The extra oldest row proves the SQL probed past the cap.
+    expect(stats?.milestones[0]?.type).toBe(`m${String(MEMBER_MILESTONES_CAP).padStart(3, "0")}`);
+    expect(stats?.milestones.at(-1)?.type).toBe("m001");
+    const queries = execute.mock.calls.map(
+      ([query]) => query as { sql: string; params: unknown[] },
+    );
+    expect(queries[1]!.sql).toContain("limit 101");
   });
 
   it("returns no block for no row, without reading milestones", async () => {
@@ -213,6 +240,7 @@ describe("readMemberStats (local SQL-result fixtures)", () => {
       tenureDays: 0,
       rankKey: null,
       isCurrentMember: false,
+      milestonesTruncated: false,
       milestones: [{ type: "joined", occurredAt: new Date("2025-01-01T00:00:00Z"), detail: null }],
     });
     const missing = fixture([{ joined_at: null, tenure_days: null, rank_key: null }], []);
@@ -302,6 +330,26 @@ describe("profile stats route wiring (local fixtures, no external DB)", () => {
       viewerUserId: VIEWER,
       route: "profiles.show",
     });
+  });
+
+  it("marks an over-cap milestone list as truncated instead of reporting the cap as a total", async () => {
+    const rows = Array.from({ length: MEMBER_MILESTONES_CAP + 1 }, (_, i) => ({
+      member_id: MEMBER,
+      milestone: `m${String(i).padStart(3, "0")}`,
+      occurred_at: new Date(Date.UTC(2025, 0, 1) + i * 86_400_000).toISOString(),
+      detail: null,
+    }));
+    const { db } = fixture([fullMember], rows);
+    const { app, cookieFor, bindings } = await harness(db);
+    const res = await app.request(
+      `/members/${MEMBER}`,
+      { headers: { cookie: await cookieFor() } },
+      bindings,
+    );
+    expect(res.status).toBe(200);
+    const html = await res.text();
+    expect(html).toContain(`<dt>Milestones</dt><dd>${MEMBER_MILESTONES_CAP}+</dd>`);
+    expect(html).not.toContain(`<dt>Milestones</dt><dd>${MEMBER_MILESTONES_CAP}</dd>`);
   });
 
   it.each([undefined, "invalid-owner", "123"])(

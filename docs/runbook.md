@@ -325,19 +325,23 @@ approved account and binding isolation before any remote mutation.
    ensures `two-sync-event` and `two-internal-action` exist, then deploys. A
    failed migration step fails the job before any Cloudflare mutation. The
    queue-create step currently suppresses errors; it is not permission/provisioning evidence.
-   The final staging smoke runs `node bin/smoke.mjs https://next.togetherweown.com`
+   The final staging smoke runs `node bin/smoke.mjs https://next.togetherweown.com --fail-on-ready-wait-critical`
    ([smoke checker](../bin/smoke.mjs)), covering 18 public routes: `/up`
-   (HTTP 200, `application/json`, `status` healthy/degraded with `queue.status`
-   healthy/degraded/unknown) plus `/`, `/about`, `/faq`, `/rules`, `/privacy`,
+   (HTTP 200, `application/json`, `db:ok`, `pending_migrations:0`, `status`
+   healthy/degraded, `queue.status` healthy/degraded/unknown, `warn_at:20`,
+   `critical_at:100`) plus `/`, `/about`, `/faq`, `/rules`, `/privacy`,
    `/events`, `/events/past`, `/join`, `/events.rss`, `/events.ics`,
    `/sitemap_index.xml`, `/robots.txt`, `/.well-known/security.txt`,
    `/discord` (302), `/profile` (302),
    `/admin` (302/403) and `/__smoke_unknown_route__` (404)
-   with CSP/nosniff/content-type/noindex/redirect assertions; queue
-   `degraded` or `unknown` is allowed. This is public-route liveness only,
-   not DB/schema readiness or queue-drain acceptance. The apex production
-   smoke uses the same 18-route shape with `--allow-indexable`
-   (`node bin/smoke.mjs https://togetherweown.com --allow-indexable`).
+   with CSP/nosniff/content-type/noindex/redirect assertions. The `/up` assertions
+   are DB/schema readiness, not liveness only; with the staging strict flag a literal
+   `unknown` in `queue.status` or `ready_wait_severity`, or a `critical`
+   `ready_wait_severity`, fails the deploy even though `/up` itself still returns 200.
+   Queue `degraded` passes. The strict flag is staging-only: the apex production
+   smoke uses the same 18-route shape with `--allow-indexable` and without the strict flag
+   (`node bin/smoke.mjs https://togetherweown.com --allow-indexable`), so `critical`
+   queue readiness only warns and `unknown` passes there.
 4. An explicitly authorized manual deployment of the reviewed release uses:
 
    ```bash
@@ -1305,9 +1309,12 @@ Queue-only degradation or `unknown` **still returns 200 when DB/schema is ready*
 | Read rejects or reaches a server/response limit | `healthy` | `unknown`, all seven measurements `null`, `ready_wait_severity: unknown`, `detail: null` |
 | No usable queue client/configuration | `healthy` | `unknown`, measurements `null`, `detail: "queue ledger is not configured."` |
 
-The deploy smoke requires **HTTP 200 + `db:ok` + `pending_migrations:0`** and the
-existing queue envelope. HTTP 503 (including pending migrations) fails the deploy;
-queue-only `unknown` does not. The workflow's `Apply test migrations` step affects
+The staging deploy smoke requires **HTTP 200 + `db:ok` + `pending_migrations:0`**
+and the existing queue envelope, invoked as `node bin/smoke.mjs https://next.togetherweown.com --fail-on-ready-wait-critical`.
+HTTP 503 (including pending migrations) fails the deploy. Queue-only `unknown` still
+returns 200 from `/up` itself, but the staging smoke fails closed on a literal `unknown`
+in `queue.status` or `ready_wait_severity` and on a `critical` `ready_wait_severity`;
+flag-less production/rollback smoke only warns on `critical` and passes on `unknown`. The workflow's `Apply test migrations` step affects
 only disposable CI Postgres, **not the staging schema**. A failed readiness smoke
 requires a recorded, authorized staging schema/rollback action, not weakening the
 probe or running migrations through `/up`.

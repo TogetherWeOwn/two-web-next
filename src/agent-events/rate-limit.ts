@@ -3,13 +3,14 @@ import { ulid } from "./payload";
 import type { Answer, Grant, IngressConfig, Op } from "./types";
 
 /** One 429 shape for every throttle on this ingress (two-web TOG-6788). */
-export function throttleEnvelope(retryAfterSeconds: number): Answer {
+export function throttleEnvelope(retryAfterSeconds: number, requestId: string): Answer {
   const retry = Math.max(1, retryAfterSeconds);
   return {
     status: 429,
     body: {
       reason: "rate_limited",
       message: `Too many requests. Try again in ${retry} seconds.`,
+      request_id: requestId,
       retry_after: retry,
     },
     headers: { "Retry-After": String(retry) },
@@ -60,7 +61,7 @@ export async function rateLimit(
                              FROM agent_event_hits WHERE bucket = ${bucket} AND at > now() - interval '60 seconds'`;
         if (r!.n >= max) retry = Math.max(retry, Math.max(1, r!.wait));
       }
-      if (retry > 0) return throttleEnvelope(retry);
+      if (retry > 0) return throttleEnvelope(retry, requestId ?? ulid());
       for (const [bucket] of buckets)
         await tx`INSERT INTO agent_event_hits (bucket) VALUES (${bucket})`;
       return null;

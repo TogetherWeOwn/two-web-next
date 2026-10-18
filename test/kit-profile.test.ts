@@ -188,6 +188,7 @@ describe("Kit profile model: reads declare the retrieved subject", () => {
       tenureDays: 10,
       rankKey: "regular",
       isCurrentMember: true,
+      milestonesTruncated: false,
       milestones: [],
     };
     const outcome = await resolveKitProfile(reqFor(memberSession(BOB), ALICE), {

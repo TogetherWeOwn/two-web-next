@@ -74,5 +74,5 @@ export async function shield(
   const operation = bucketClass.kind === "credential" ? "shield:credential" : "shield:anonymous";
   const dig = bucketClass.kind === "credential" ? bucketClass.hash : null;
   await audit(sql, null, operation, null, null, dig, requestId, "denied", "rate_limited");
-  return throttleEnvelope(retryAfter ?? 1);
+  return throttleEnvelope(retryAfter ?? 1, requestId);
 }
