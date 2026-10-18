@@ -1,5 +1,6 @@
 import type { Db } from "./db/index";
 import type { Env } from "./env";
+import { alertRequestError } from "./alerts";
 import {
   queueBoardView,
   recordBoardView,
@@ -100,6 +101,23 @@ export function membersSessionUnknown(): Error & { status: number } {
   return branded("Member data is temporarily unavailable.", 503);
 }
 
+/** Branded outage marker for a failed board read: the binding maps it to error(503). */
+export function membersBoardUnavailable(): Error & { status: number } {
+  return branded("Member data is temporarily unavailable.", 503);
+}
+
+// A code bug (no branded status) must never look like a downstream outage:
+// emit the leak-free error.alert diagnostic before mapping to the branded
+// 503, mirroring the Hono member-read boundary (src/member-reads.ts). Branded
+// throws pass through untouched so the binding maps them once.
+function reportBoardFailure(err: unknown, args: MembersBoardArgs): never {
+  const status = (err as { status?: unknown })?.status;
+  if (typeof status === "number") throw err;
+  alertRequestError(err, { method: "GET", route: "/leaderboards/members" });
+  args.setHeaders({ "cache-control": "private, no-store" });
+  throw membersBoardUnavailable();
+}
+
 /**
  * Row as serialized to the page — and to `__data.json`, which SvelteKit
  * serves from the load's return value even with `csr = false`. Rank, display
@@ -129,8 +147,14 @@ export async function loadMembersBoardData(args: MembersBoardArgs): Promise<{
   if (!scope.ok) throw branded(scope.message, 400);
   const activity = parseActivityParam(args.activityParam);
   if (!activity.ok) throw branded(activity.message, 400);
-  const db = await args.dbForFn({ env: args.env });
-  const ranked = await (args.loadRankingFn ?? loadMemberRanking)(db, season, activity.game);
+  let db: Db | null;
+  let ranked: RankedMember[];
+  try {
+    db = await args.dbForFn({ env: args.env });
+    ranked = await (args.loadRankingFn ?? loadMemberRanking)(db, season, activity.game);
+  } catch (err) {
+    reportBoardFailure(err, args);
+  }
   // Strip every Discord ID here: mark the viewer's own row server-side so
   // neither the HTML props nor the __data.json payload carry an ID.
   const rows: MembersBoardRow[] = boardRows(ranked, scope.scope, args.session.userId).map(
