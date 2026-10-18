@@ -20,16 +20,19 @@ function executableText(stepChunk) {
 }
 
 // A constant-false `if:` disables the step (or job) without deleting the
-// command. Covers the spellings GitHub accepts: `if: false`, quoted
-// `if: 'false'` / `if: "false"`, and the expression form this file already
-// uses (`if: ${{ !cancelled() }}`) with a false constant. A trailing YAML
-// comment (`if: false # off`) does not re-enable anything — YAML strips it —
-// so the match allows one.
-const DISABLED_IF = /^\s*if:\s*(?:false|['"]false['"]|\$\{\{\s*false\s*\}\})\s*(?:#.*)?$/m;
+// command. Covers the spellings GitHub accepts: `if: false` (quoted or not)
+// and the expression form this file already uses (`if: ${{ !cancelled() }}`)
+// with a false constant — including the quoted expression YAML loads as the
+// same string (`if: "${{ false }}"`). A trailing YAML comment
+// (`if: false # off`) does not re-enable anything — YAML strips it — so the
+// match allows one.
+const DISABLED_IF = /^\s*if:\s*(["']?)(?:\$\{\{\s*false\s*\}\}|false)\1\s*(?:#.*)?$/m;
 
-// `continue-on-error: true` keeps the job green after a perf-budget breach.
+// `continue-on-error: true` keeps the job green after a perf-budget breach,
+// including the `${{ true }}` expression form GitHub accepts (quoted or not).
 // Same trailing-comment handling: YAML strips `# flaky`.
-const CONTINUE_ON_ERROR = /^\s*continue-on-error:\s*['"]?true['"]?\s*(?:#.*)?$/m;
+const CONTINUE_ON_ERROR =
+  /^\s*continue-on-error:\s*(["']?)(?:\$\{\{\s*true\s*\}\}|true)\1\s*(?:#.*)?$/m;
 
 function stepRunBody(stepChunk) {
   const lines = executableText(stepChunk).split("\n");
@@ -57,10 +60,14 @@ function stepExecutesLiveGate(stepChunk) {
   const origin = code.match(/AUTH_PERF_URL:\s*["']?(\S+?)["']?\s*$/m)?.[1];
   if (origin !== LIVE_ORIGIN) return false;
   const body = stepRunBody(stepChunk);
-  // Command evidence: executable lines only. Inline `#` comments are not
+  // Command evidence: executable lines only. A backslash-newline continuation
+  // joins two physical lines into one shell command (`npm run auth-perf \` +
+  // `|| true`), so continuations are joined before splitting — otherwise the
+  // `|| true` on the next line is never examined. Inline `#` comments are not
   // commands, and an `echo` of the command string executes nothing, so both
   // are excluded before matching.
   const commandLines = body
+    .replace(/\\\n[ \t]*/g, " ")
     .split("\n")
     .map((line) => line.replace(/\s+#.*$/, ""))
     .filter((line) => line.trim() !== "" && !/^\s*echo(\s|$)/.test(line));
@@ -71,13 +78,12 @@ function stepExecutesLiveGate(stepChunk) {
   if (!commandLines.some((line) => /npm run auth-perf(?![\w:-])/.test(line))) return false;
   // The live command must stand alone on its line. Any chained shell
   // operator after it (`|| true`, `|| exit 0`, `|| echo ignored`,
-  // `; true`, `&& ...`) can keep the step green after a budget breach, so a
-  // blocklist of spellings is not enough — reject all chaining on the
-  // command line. (Inline `#` comments are already stripped above.)
+  // `; true`, `&& ...`, background `&`) can keep the step green after a
+  // budget breach, so a blocklist of spellings is not enough — reject all
+  // chaining on the command line. (Inline `#` comments are already stripped
+  // above; backslash continuations are already joined.)
   if (
-    commandLines.some(
-      (line) => /npm run auth-perf(?![\w:-])/.test(line) && /(\|\||;|&&)/.test(line),
-    )
+    commandLines.some((line) => /npm run auth-perf(?![\w:-])/.test(line) && /(\|\||;|&)/.test(line))
   )
     return false;
   // The hermetic selftest never exercises the live worker.
@@ -232,6 +238,9 @@ test("disabling the live step with expression or quoted false fails", () => {
     'name: Authenticated perf budgets (session-cookie journeys)\n        if: "false"',
     "name: Authenticated perf budgets (session-cookie journeys)\n        if: false # temporarily off",
     "name: Authenticated perf budgets (session-cookie journeys)\n        if: ${{ false }} # off",
+    'name: Authenticated perf budgets (session-cookie journeys)\n        if: "${{ false }}"',
+    "name: Authenticated perf budgets (session-cookie journeys)\n        if: '${{ false }}'",
+    'name: Authenticated perf budgets (session-cookie journeys)\n        if: "${{ false }}" # off',
   ]) {
     const mutant = liveWorkflow().replace(
       "name: Authenticated perf budgets (session-cookie journeys)\n        if: ${{ !cancelled() }}",
@@ -243,7 +252,12 @@ test("disabling the live step with expression or quoted false fails", () => {
 });
 
 test("disabling the browser-smoke job fails while the command remains", () => {
-  for (const suffix of ["\n    if: false", "\n    if: false # off"]) {
+  for (const suffix of [
+    "\n    if: false",
+    "\n    if: false # off",
+    "\n    if: ${{ false }}",
+    '\n    if: "${{ false }}"',
+  ]) {
     const mutant = liveWorkflow().replace(
       "  browser-smoke:\n    name: browser-smoke",
       `  browser-smoke:\n    name: browser-smoke${suffix}`,
@@ -262,6 +276,8 @@ test("chaining after the live command fails instead of swallowing a breach", () 
     "NODE_TLS_REJECT_UNAUTHORIZED=0 npm run auth-perf || /bin/true",
     "NODE_TLS_REJECT_UNAUTHORIZED=0 npm run auth-perf; true",
     'NODE_TLS_REJECT_UNAUTHORIZED=0 npm run auth-perf && echo "budgets ok"',
+    "NODE_TLS_REJECT_UNAUTHORIZED=0 npm run auth-perf &",
+    "NODE_TLS_REJECT_UNAUTHORIZED=0 npm run auth-perf \\\n          || true",
   ]) {
     const mutant = liveWorkflow().replace(
       "NODE_TLS_REJECT_UNAUTHORIZED=0 npm run auth-perf",
@@ -276,6 +292,9 @@ test("continue-on-error on the live step fails", () => {
   for (const suffix of [
     "\n        continue-on-error: true",
     "\n        continue-on-error: true # flaky",
+    "\n        continue-on-error: ${{ true }}",
+    '\n        continue-on-error: "${{ true }}"',
+    "\n        continue-on-error: '${{ true }}' # flaky",
   ]) {
     const mutant = liveWorkflow().replace(
       "      - name: Authenticated perf budgets (session-cookie journeys)\n        if: ${{ !cancelled() }}",
@@ -287,12 +306,18 @@ test("continue-on-error on the live step fails", () => {
 });
 
 test("continue-on-error on the browser-smoke job fails", () => {
-  const mutant = liveWorkflow().replace(
-    "  browser-smoke:\n    name: browser-smoke",
-    "  browser-smoke:\n    name: browser-smoke\n    continue-on-error: true",
-  );
-  assert.match(mutant, /npm run auth-perf/);
-  assert.throws(() => assertAuthPerfLiveGate(mutant), /browser-smoke/);
+  for (const setting of [
+    "continue-on-error: true",
+    "continue-on-error: ${{ true }}",
+    'continue-on-error: "${{ true }}"',
+  ]) {
+    const mutant = liveWorkflow().replace(
+      "  browser-smoke:\n    name: browser-smoke",
+      `  browser-smoke:\n    name: browser-smoke\n    ${setting}`,
+    );
+    assert.match(mutant, /npm run auth-perf/);
+    assert.throws(() => assertAuthPerfLiveGate(mutant), /browser-smoke/);
+  }
 });
 
 test("downgrading the local origin away from HTTPS fails", () => {
