@@ -13,6 +13,17 @@ export type DiscordUser = {
   avatar: string | null;
 };
 
+// Documented bounds for provider identity values carried into session and
+// roster rows. Discord usernames and display names stay well under 128
+// characters and avatar hashes under 512 in practice; anything longer is a
+// hostile or broken provider payload, not a member. Oversized values are
+// rejected (never truncated) in fetchUser before any session or roster
+// write, so both callbacks keep their existing generic failure outcome.
+// Only `.length` is inspected — values are never logged, echoed, or stored.
+export const DISCORD_USERNAME_MAX_LENGTH = 128;
+export const DISCORD_DISPLAY_NAME_MAX_LENGTH = 128;
+export const DISCORD_AVATAR_MAX_LENGTH = 512;
+
 export function authorizeUrl(clientId: string, redirectUri: string, state: string): string {
   const q = new URLSearchParams({
     response_type: "code",
@@ -231,6 +242,18 @@ export async function fetchUser(accessToken: string): Promise<DiscordUser> {
     !user.username ||
     (user.global_name !== null && typeof user.global_name !== "string") ||
     (user.avatar !== null && typeof user.avatar !== "string")
+  ) {
+    throw new DiscordError("fetch_user", res.status, "provider_reject");
+  }
+  // Bound identity lengths before any session or roster write. Rejection
+  // keeps the callbacks' existing bounded provider_reject path: no session
+  // cookie, no roster statement, no further Discord calls, and the fixed
+  // error carries no provider bytes.
+  if (
+    user.username.length > DISCORD_USERNAME_MAX_LENGTH ||
+    (typeof user.global_name === "string" &&
+      user.global_name.length > DISCORD_DISPLAY_NAME_MAX_LENGTH) ||
+    (typeof user.avatar === "string" && user.avatar.length > DISCORD_AVATAR_MAX_LENGTH)
   ) {
     throw new DiscordError("fetch_user", res.status, "provider_reject");
   }
