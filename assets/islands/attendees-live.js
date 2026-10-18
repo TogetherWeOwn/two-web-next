@@ -151,6 +151,23 @@
     }
   }
 
+  // Adopt a node parsed from the re-read document into the live document.
+  // Prefers an explicit cross-document import when the host provides it
+  // (same contract as the events-calendar island); otherwise moves the node
+  // directly, which the DOM auto-adopts on insert. Either way no markup
+  // string is re-serialized into the live tree.
+  function adopt(node) {
+    try {
+      if (typeof document.importNode === "function") {
+        var imported = document.importNode(node, true);
+        if (imported) return imported;
+      }
+    } catch (_importIgnored) {
+      // Fall through to the direct move below.
+    }
+    return node;
+  }
+
   // Swap the roster section from a re-rendered event page. Returns true when
   // the DOM now matches the server truth (including both-missing as no-op).
   function swapFromHtml(html) {
@@ -167,24 +184,12 @@
     var old = findSection();
     if (fresh && old) {
       // Replace the node so attributes (counts in the heading, list order)
-      // match the server exactly. The holder bridges documents without
-      // importNode, which minimal harnesses may not provide.
+      // match the server exactly; the insert adopts across documents.
       try {
-        var holder = document.createElement("div");
-        holder.innerHTML = fresh.outerHTML;
-        var node = holder.querySelector(SECTION);
-        if (node && old.parentNode) {
-          old.parentNode.replaceChild(node, old);
-          return true;
-        }
-      } catch (_replaceIgnored) {
-        // Fall through to the innerHTML fallback below, which needs no
-        // cross-document adoption.
-      }
-      try {
-        old.innerHTML = fresh.innerHTML;
+        if (!old.parentNode) return false;
+        old.parentNode.replaceChild(adopt(fresh), old);
         return true;
-      } catch (_innerHtmlIgnored) {
+      } catch (_replaceIgnored) {
         // Fall through to false: the roster keeps server page-load truth and
         // the caller runs the bounded retry/stale path.
         return false;
@@ -192,10 +197,7 @@
     }
     if (fresh && !old) {
       try {
-        var holder2 = document.createElement("div");
-        holder2.innerHTML = fresh.outerHTML;
-        var node2 = holder2.querySelector(SECTION);
-        if (!node2) return false;
+        var node2 = adopt(fresh);
         var anchor = null;
         try {
           anchor = document.querySelector(".event-discovery");
