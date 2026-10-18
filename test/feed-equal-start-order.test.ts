@@ -3,7 +3,7 @@
 // a content change. It now orders by `(startsAt, id)` like `listUpcoming`
 // already does (TOG-12440). Equal-start seed asserts stable id order plus
 // byte/ETag stability across a heap rewrite, with projection, visibility and
-// (uncapped) shape unchanged. Isolated test DB only.
+// shape unchanged under the egress cap. Isolated test DB only.
 import { createHash } from "node:crypto";
 import { asc } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/pg-proxy";
@@ -60,7 +60,7 @@ it("requests an explicit total order in SQL, with starts_at before the immutable
   }) as unknown as Db;
   await listFeed(db, ["published"], NOW);
   expect(queries).toHaveLength(1);
-  expect(queries[0]).toMatch(/order by "events"\."starts_at" asc, "events"\."id" asc$/);
+  expect(queries[0]).toMatch(/order by "events"\."starts_at" asc, "events"\."id" asc( limit .+)?$/);
 });
 
 describe.skipIf(!url)("equal-start subscription feeds (isolated test DB)", () => {
