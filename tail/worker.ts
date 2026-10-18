@@ -28,6 +28,14 @@ export const HEALTH_COOLDOWN_MS = 15 * 60 * 1000;
 const MAX_TRACKED = 500;
 const MAX_BUCKETS = 40;
 const BUCKET_MS = 30_000;
+// Future-skew slack: a batch stamped more than this far beyond the wall
+// clock is rejected at ingest (dropped on the tail path, 400 on the
+// aggregator wire) so one far-future batch cannot advance the eviction
+// cutoff and wipe every in-window bucket. Two buckets cover ordinary
+// clock drift and bucket quantization (a one-bucket +30s skew still
+// counts); merely-late batches (stamped in the past) are unaffected and
+// still count when inside the rolling window.
+export const BATCH_FUTURE_SLACK_MS = 2 * BUCKET_MS;
 // A deployed version tag is the staging SHA, or <sha>-<run-id>-<attempt> in
 // production. Accept only that leading 40-hex SHA; arbitrary tags never leave.
 const VERSION_TAG = /^([0-9a-f]{40})(?:-\d+-\d+)?$/;
@@ -939,6 +947,12 @@ function batchForTrace(trace: TraceLike, fallbackAt: number): TraceBatch | null 
   };
 }
 
+// Future-skew slack bound: a wire batch stamped beyond now plus
+// BATCH_FUTURE_SLACK_MS is rejected (null -> 400) so it can neither wipe
+// in-window buckets nor future-date an alert or pending/cooldown marker.
+// Merely-late batches (stamped in the past) are allowed and still count
+// when inside the rolling window; a one-bucket (+30s) skew is within the
+// slack and also counts.
 function validBatch(value: unknown): TraceBatch | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
   const b = value as Record<string, unknown>;
@@ -950,6 +964,7 @@ function validBatch(value: unknown): TraceBatch | null {
   )
     return null;
   if ((b.errors as number) > (b.requests as number) + (b.crashes as number)) return null;
+  if ((b.at as number) > Date.now() + BATCH_FUTURE_SLACK_MS) return null;
   const buildSha = shaFromVersionTag(b.buildSha);
   return {
     script: b.script,
@@ -1600,10 +1615,16 @@ export function createTailWorker(
       // invocation shares one validated SHA. An untagged or invalid trace,
       // or a second validated build, clears it to unknown: the last tag
       // must never speak for the whole invocation.
+      // Drop traces skewed beyond now plus the documented slack before the
+      // merge: keeping one would let Math.max lift the merged batch into
+      // the future and wipe in-window buckets. Merely-late traces still
+      // count; a one-bucket future skew stays within the slack.
+      const wallNow = now();
       const batches = new Map<string, TraceBatch>();
       for (const trace of events) {
-        const batch = batchForTrace(trace, now());
+        const batch = batchForTrace(trace, wallNow);
         if (!batch) continue;
+        if (batch.at > wallNow + BATCH_FUTURE_SLACK_MS) continue;
         const prior = batches.get(batch.script);
         if (!prior) {
           batches.set(batch.script, { ...batch });

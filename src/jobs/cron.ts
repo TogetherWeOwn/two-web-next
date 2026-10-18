@@ -1,4 +1,4 @@
-import { alertScheduledFailing } from "../alerts";
+import { alertScheduledFailing, exceptionClass } from "../alerts";
 import {
   AGENT_EVENT_AUDIT_RETENTION_DAYS,
   BOARD_VIEW_LOG_RETENTION_DAYS,
@@ -13,7 +13,6 @@ import {
   SYNC_EVENT,
 } from "./constants";
 import { dispatchSyncEvent } from "./sync-event";
-import { queueExceptionClass } from "./queue-error";
 import type { EventStore, PruneStores, TxClient, UniqueLock } from "./types";
 
 /**
@@ -41,7 +40,13 @@ export async function reconcileEvents(deps: {
   writeTransaction?: (
     work: (events: EventStore) => Promise<ReconcilePreparation>,
   ) => Promise<ReconcilePreparation>;
-}): Promise<{ closed: number; materialized: number; resynced: number; failed: number }> {
+}): Promise<{
+  closed: number;
+  materialized: number;
+  resynced: number;
+  absorbed: number;
+  failed: number;
+}> {
   const prepare = async (events: EventStore): Promise<ReconcilePreparation> => ({
     closed: await events.closeFinished((deps.now ?? (() => new Date()))()),
     materialized: await events.materializeSeries(),
@@ -53,7 +58,9 @@ export async function reconcileEvents(deps: {
     ? deps.writeTransaction(prepare)
     : prepare(deps.events));
   let resynced = 0;
+  let absorbed = 0;
   let failed = 0;
+  let firstError: unknown;
   for (const key of stale) {
     try {
       // A carrier can be stranded, delayed or exhausted. Only recover a due
@@ -66,21 +73,33 @@ export async function reconcileEvents(deps: {
           pending.nextAttemptAt > (deps.now ?? (() => new Date()))())
       )
         continue;
-      await dispatchSyncEvent(deps.queue, deps.lock, key, pending?.idempotencyKey);
-      resynced++; // Laravel counts stale rows, not accepted dispatches
+      const accepted = await dispatchSyncEvent(deps.queue, deps.lock, key, pending?.idempotencyKey);
+      if (accepted) resynced++;
+      else absorbed++;
     } catch (err) {
-      // One bad key must not starve the rest of the pass: count it and keep
-      // going. Class-only: messages can carry SQL or tokens, and the key
-      // itself stays out of the line. Never console.error: a skipped key is
-      // not a failed pass.
+      // One poison key must not starve the rest of the pass. Keep the first
+      // error for a total-outage rethrow below; log the key with only its
+      // redacted class (DB messages can carry bound values).
       failed++;
-      console.warn("Event reconcile key failed.", { error_class: queueExceptionClass(err) });
+      firstError ??= err;
+      console.warn("Event reconcile key failed.", { key, error_class: exceptionClass(err) });
     }
   }
-  if (closed > 0 || materialized > 0 || resynced > 0 || failed > 0) {
-    console.info("Event reconcile pass completed.", { closed, materialized, resynced, failed });
+  // A fully failed multi-key pass is a systemic outage (queue/DB down), not a
+  // single poison key: rethrow so handleScheduled still emits its
+  // scheduled.failing page for events:reconcile. A single failed key keeps
+  // resolving per the acceptance pin (failed-only single-key pass logs once).
+  if (failed > 1 && resynced + absorbed === 0) throw firstError;
+  if (closed > 0 || materialized > 0 || resynced > 0 || absorbed > 0 || failed > 0) {
+    console.info("Event reconcile pass completed.", {
+      closed,
+      materialized,
+      resynced,
+      absorbed,
+      failed,
+    });
   }
-  return { closed, materialized, resynced, failed };
+  return { closed, materialized, resynced, absorbed, failed };
 }
 
 export type PruneCounts = {

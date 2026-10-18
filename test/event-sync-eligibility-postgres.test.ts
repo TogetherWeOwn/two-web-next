@@ -277,7 +277,13 @@ describe.skipIf(!process.env.DATABASE_URL)("event sync eligibility (native Postg
       }
       await makeDue();
       expect(await events.needsSync(eventKey)).toBe(true);
-      expect(await reconcile()).toEqual({ closed: 0, materialized: 0, resynced: 1, failed: 0 });
+      expect(await reconcile()).toEqual({
+        closed: 0,
+        materialized: 0,
+        resynced: 1,
+        absorbed: 0,
+        failed: 0,
+      });
       expect(sent[1]!.idempotencyKey).toBe(original.idempotencyKey);
       await consume({ messages: [delivery(sent[1]!)] }, deps(bot));
       expect(bot.upsertEvent.mock.calls[1]).toEqual([pending.payload, original.idempotencyKey]);
@@ -338,6 +344,7 @@ describe.skipIf(!process.env.DATABASE_URL)("event sync eligibility (native Postg
         closed: ended ? 1 : 0,
         materialized: 0,
         resynced: 1,
+        absorbed: 0,
         failed: 0,
       });
       expect((await sql`select status from events`)[0]!.status).toBe(
@@ -385,7 +392,13 @@ describe.skipIf(!process.env.DATABASE_URL)("event sync eligibility (native Postg
         request_attempts = ${blocked === "six requests" ? 6 : 1},
         next_attempt_at = ${blocked === "null deadline" ? null : deadline}
         where idempotency_key = ${original.idempotencyKey}::uuid`;
-      expect(await reconcile()).toEqual({ closed: 1, materialized: 0, resynced: 0, failed: 0 });
+      expect(await reconcile()).toEqual({
+        closed: 1,
+        materialized: 0,
+        resynced: 0,
+        absorbed: 0,
+        failed: 0,
+      });
       // Candidate selection is clock-free; reconciliation owns the exact due
       // check (including injected scheduler clocks). NULL/capped requests have
       // no automatic recovery eligibility at all.
@@ -412,12 +425,12 @@ describe.skipIf(!process.env.DATABASE_URL)("event sync eligibility (native Postg
             lock: pgUniqueLock(sql),
             now: () => new Date(deadline.getTime() - 1),
           }),
-        ).toEqual({ closed: 0, materialized: 0, resynced: 0, failed: 0 });
+        ).toEqual({ closed: 0, materialized: 0, resynced: 0, absorbed: 0, failed: 0 });
         expect(sent).toHaveLength(1);
         expect((await events.pendingSync(eventKey))!.nextAttemptAt).toEqual(deadline);
         expect(
           await reconcileEvents({ events, queue, lock: pgUniqueLock(sql), now: () => deadline }),
-        ).toEqual({ closed: 0, materialized: 0, resynced: 1, failed: 0 });
+        ).toEqual({ closed: 0, materialized: 0, resynced: 1, absorbed: 0, failed: 0 });
         expect(sent[1]!.idempotencyKey).toBe(original.idempotencyKey);
         const dueDeps = { ...deps(bot), now: () => deadline };
         await consume({ messages: [delivery(sent[1]!)] }, dueDeps);
@@ -438,7 +451,13 @@ describe.skipIf(!process.env.DATABASE_URL)("event sync eligibility (native Postg
         await sql`update events set status = ${status}`;
         expect(await events.needsSync(eventKey)).toBe(false);
         expect(await events.staleEventKeys()).toEqual([]);
-        expect(await reconcile()).toEqual({ closed: 0, materialized: 0, resynced: 0, failed: 0 });
+        expect(await reconcile()).toEqual({
+          closed: 0,
+          materialized: 0,
+          resynced: 0,
+          absorbed: 0,
+          failed: 0,
+        });
         const bot = botDouble();
         const message = delivery(original);
         await consume({ messages: [message] }, deps(bot));
