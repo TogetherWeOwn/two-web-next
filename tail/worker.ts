@@ -1319,7 +1319,11 @@ export function createTailWorker(
         let raw: unknown;
         try {
           raw = await response.json();
-        } catch {
+        } catch (error) {
+          // Only malformed JSON warns: a body stream error, dropped
+          // connection, or abort/timeout mid-body rethrows to the silent
+          // outer fallback so on-call chases latency/resets, not parsing.
+          if (!(error instanceof SyntaxError)) throw error;
           return { fallback: true as const, failure: "unparseable" as const };
         }
         const spike = normalizeSpikeObservation(raw);
@@ -1454,7 +1458,10 @@ export function createTailWorker(
         let data: unknown;
         try {
           data = await response.json();
-        } catch {
+        } catch (error) {
+          // Same contract as the spike path: only SyntaxError is
+          // unparseable; stream/abort failures stay silent.
+          if (!(error instanceof SyntaxError)) throw error;
           return { fallback: true as const, failure: "unparseable" as const };
         }
         // Well-formed answers are exactly null or an object with a numeric
