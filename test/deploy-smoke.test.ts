@@ -410,9 +410,9 @@ describe("deploy event-JSON smoke (offline)", () => {
     expect(result.summary).toContain("Skipped exposure guards: none.");
   });
 
-  it("names every skipped exposure guard without the token instead of failing the deploy", () => {
+  it("fails closed without the token while keeping the skip ledger as evidence", () => {
     const result = stagingJsonSmoke(0, false);
-    expect(result.status, result.output).toBe(0);
+    expect(result.status, result.output).toBe(1);
     expect(result.attempts).toBe(0);
     expect(result.output).toContain("json-smoke skipped: staging QA_AUTH_TOKEN is not configured");
     for (const guard of [
@@ -429,7 +429,9 @@ describe("deploy event-JSON smoke (offline)", () => {
       "::warning::staging json-smoke skipped with unverified exposure guards",
     );
     expect(result.output).toContain("Tracked follow-up: #531");
-    expect(result.output).not.toContain("::error::");
+    expect(result.output).toContain(
+      "::error::staging event-JSON smoke missing QA token: exposure guards unverified",
+    );
     expect(result.output).not.toContain("never-log-this");
     expect(result.ledger?.summary).toEqual({ total: 14, passed: 0, failed: 0, skipped: 14 });
     expect(result.summary).toContain("## Staging event-JSON smoke: skipped (no QA token)");
@@ -464,6 +466,7 @@ describe("deploy event-JSON smoke (offline)", () => {
       "#531",
       "ledger write failed",
       "::error::staging event-JSON smoke failed after deploy",
+      "::error::staging event-JSON smoke missing QA token: exposure guards unverified",
     ]) {
       expect(block).toContain(marker);
     }
