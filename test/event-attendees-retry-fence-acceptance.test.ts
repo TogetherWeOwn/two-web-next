@@ -959,6 +959,64 @@ describe("roster read attempts settle at their deadline and stay fenced", () => 
     expect(att(b)).toHaveLength(2);
   });
 
+  it("fences a late body rejection after the deadline: retry still runs, no premature stale", async () => {
+    const { b } = await start();
+    let rejectBody: (e: unknown) => void = () => {};
+    const body = new Promise<string>((_resolve, reject) => {
+      rejectBody = reject;
+    });
+    const fake = {
+      ok: true,
+      status: 200,
+      statusText: "OK",
+      headers: {
+        get: (name: string) => (name.toLowerCase() === "content-type" ? "text/html" : null),
+        has: (name: string) => name.toLowerCase() === "content-type",
+      },
+      text: () => body,
+      json: async () => ({}),
+      clone() {
+        return this;
+      },
+    };
+    answer(b, 0, fake);
+    await b.settle();
+    b.runTimers(5000);
+    await b.settle();
+    expect(timerDelays(b), "deadline must schedule the existing retry delay").toContain(1000);
+    const abort = new Error("aborted");
+    abort.name = "AbortError";
+    rejectBody(abort);
+    await b.settle();
+    expect(staleShown(b), "late body rejection must not surface stale early").toBe(false);
+    expect(att(b)).toHaveLength(1);
+    b.runTimers(1000);
+    await b.settle();
+    expect(att(b), "the retry must still run after a late body rejection").toHaveLength(2);
+    answer(b, 1, okHtml([HOST, VIEWER]));
+    await b.settle();
+    expect(rosterNames(b)).toEqual([HOST.name, VIEWER.name]);
+    expect(staleShown(b)).toBe(false);
+  });
+
+  it("fences late headers from a timed-out attempt while the retry is pending", async () => {
+    const { b } = await start({ abortMode: "missing" });
+    b.runTimers(5000);
+    await b.settle();
+    b.runTimers(1000);
+    await b.settle();
+    expect(att(b)).toHaveLength(2);
+    answer(b, 0, fail500());
+    await b.settle();
+    expect(staleShown(b), "late 500 must not surface stale while the retry is pending").toBe(false);
+    expect(timerDelays(b), "late 500 must not clear the newer deadline").toContain(5000);
+    expect(att(b)).toHaveLength(2);
+    answer(b, 1, okHtml([HOST, VIEWER]));
+    await b.settle();
+    expect(rosterNames(b)).toEqual([HOST.name, VIEWER.name]);
+    expect(staleShown(b)).toBe(false);
+  });
+
   it("fences attempts superseded by a newer RSVP broadcast", async () => {
     const { b } = await start();
     expect(att(b)).toHaveLength(1);
