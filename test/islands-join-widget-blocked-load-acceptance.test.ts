@@ -25,9 +25,15 @@ import { describe, expect, it, type Mock, vi } from "vitest";
 //  3. That guidance is beside the frame, not a replacement: the frame is
 //     still in the preview slot afterwards, so a widget that really did
 //     render keeps working.
-//  4. Blocked end state: after the timer guidance appears, focus is not
-//     left inside the frame when the visitor has not moved it since the
-//     island placed it there (focus the guidance/invite, or blur the frame).
+//  4. Post-load timer guidance is announcement-only: it never moves focus
+//     out of a loaded frame. A blocked `load` and a rendered `load` are
+//     indistinguishable, so rescuing focus from a possibly dead frame
+//     would steal it from every working preview still in use when the
+//     timer fires. Guidance is announced (live region) beside the frame;
+//     a stranded keyboard visitor Tabs once from frame to invite. Revised
+//     2026-10-18: the original rescue-focus pin demanded the opposite end
+//     state for identical inputs; never move focus on a timer that cannot
+//     prove the frame is dead.
 //  5. Anti-steal: if the visitor has moved focus elsewhere after load, the
 //     timer guidance appears without moving focus at all.
 //  6. A signaled `error` still guides immediately, without the timer.
@@ -315,18 +321,26 @@ describe("join-widget acceptance: blocked navigation that fires load", () => {
     expect(f && p.preview.contains(f), "the frame stays in the preview slot").toBe(true);
   });
 
-  it("blocked end state: focus is not left inside the frame once guidance appears", () => {
+  it("post-load timer guidance is announcement-only: focus stays in the loaded frame", () => {
     const p = page();
     p.click();
     const f = p.frame();
     f?.fire("load");
     expect(p.document.activeElement).toBe(f);
-    p.fireTimers();
+    const calls = p.focusCallsDuring(() => p.fireTimers());
     expect(p.guidance()).toBe(true);
+    expect(calls, "a timer that cannot prove the frame is dead must not move focus at all").toBe(0);
     expect(
       p.document.activeElement,
-      "focus must end on the guidance/invite or the page, not stranded in a dead frame",
-    ).not.toBe(f);
+      "focus stays in the frame; a working preview keeps its visitor",
+    ).toBe(f);
+    const announced = p.created.some(
+      (n) =>
+        n.attrs.role === "status" ||
+        n.attrs["aria-live"] === "polite" ||
+        n.attrs["aria-live"] === "assertive",
+    );
+    expect(announced, "guidance is announced via a live region, not by moving focus").toBe(true);
   });
 
   it("anti-steal: timer guidance does not move focus the visitor has moved elsewhere", () => {
