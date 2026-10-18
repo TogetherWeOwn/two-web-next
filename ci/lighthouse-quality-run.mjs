@@ -1,0 +1,399 @@
+#!/usr/bin/env node
+// Hardened desktop Lighthouse quality collection: one retry plus a diagnosis
+// that tells a transient collect failure apart from a real floor breach.
+//
+// `lhci autorun` has no collect retry, so one transient Chrome/collect error
+// (NO_NAVSTART, a Chrome crash, a staging timeout) yields partial or zero
+// LHRs, and the gate then fails closed with "No Lighthouse LHRs loaded" —
+// indistinguishable from a real floor breach, holding the staging deploy.
+// This wrapper keeps the same config, floors and evidence, and adds:
+//   1. a tee of the full lhci output to stdout (job log) AND
+//      .lighthouseci/quality-collect.log (uploaded artifact);
+//   2. an LHR count vs expected (routes x numberOfRuns from
+//      ci/lighthouserc.quality.cjs: 21 on a deployed origin, 24 on the fixture worker);
+//   3. ONE whole-run retry when lhci fails with short evidence (transient
+//      suspected); a full-evidence assert failure (real breach) never retries;
+//   4. .lighthouseci/quality-collect-diagnosis.md classifying COLLECT FAILURE
+//      (short evidence: re-run the step, do NOT lower floors) vs BUDGET
+//      BREACH (full evidence plus an evaluated assertion failure: see
+//      quality-summary.md) vs an unclassified step failure (full evidence but
+//      no assertion verdict: the tails below name it).
+// ci/quality-budget.json floors are never touched here.
+// Usage: npm run lighthouse:quality [-- <extra lhci args>]
+// Selftest: node ci/lighthouse-quality-run.mjs --selftest (hermetic: injected
+// lhci stub and temp dirs, no network or browser).
+import { spawn } from "node:child_process";
+import assert from "node:assert/strict";
+import { createRequire } from "node:module";
+import { mkdtempSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { pathToFileURL } from "node:url";
+
+const require = createRequire(import.meta.url);
+
+const QUALITY_DIR = ".lighthouseci/quality";
+const LOG_FILE = ".lighthouseci/quality-collect.log";
+const DIAGNOSIS_FILE = ".lighthouseci/quality-collect-diagnosis.md";
+// One retry: the flake hit 3 runs in 3 days against many greens, so a single
+// consecutive-failure needs two bad runs in a row; more attempts would not fit
+// the quality job's timeout (mobile + desktop + standards share it).
+const MAX_ATTEMPTS = 2;
+const DIAGNOSIS_TAIL_LINES = 60;
+// The exact line `lhci assert` prints (to stderr) when it evaluated the
+// assertions and at least one error-level assertion missed (verified against
+// @lhci/cli 0.15.1: `Assertion failed. Exiting with status code 1.`). A
+// non-zero exit WITHOUT this marker means no floor was ever evaluated (the
+// failure came from collect, upload or config), so it must not read as a
+// floor breach.
+export const ASSERT_FAILURE_MARKER = "Assertion failed. Exiting with status code 1.";
+
+export function hasAssertFailure(output) {
+  return output.includes(ASSERT_FAILURE_MARKER);
+}
+
+function lhciCli() {
+  return require.resolve("@lhci/cli/src/cli.js");
+}
+
+// One `lhci autorun` attempt. Streams combined output to the parent's stdout
+// (the CI job log) and returns the exit code plus the captured text for the
+// artifact log, so a collect error is visible in both places.
+export function runAutorun({ env = process.env, extraArgs = [] } = {}) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(
+      process.execPath,
+      [lhciCli(), "autorun", "--config=ci/lighthouserc.quality.cjs", ...extraArgs],
+      { env },
+    );
+    let text = "";
+    const pump = (chunk) => {
+      text += chunk;
+      process.stdout.write(chunk);
+    };
+    if (child.stdout) child.stdout.on("data", pump);
+    if (child.stderr) child.stderr.on("data", pump);
+    child.on("error", reject);
+    child.on("close", (code) => resolve({ exitCode: code ?? 1, output: text }));
+  });
+}
+
+// Expected LHRs, read from the same config lhci runs: every configured URL
+// measured numberOfRuns times. Requiring the config also fails closed on an
+// unallowlisted QUALITY_ORIGIN, exactly as the bare `lhci autorun` would.
+export function expectedLhrs({ env = process.env } = {}) {
+  const saved = process.env.QUALITY_ORIGIN;
+  try {
+    if (env.QUALITY_ORIGIN !== undefined) process.env.QUALITY_ORIGIN = env.QUALITY_ORIGIN;
+    else delete process.env.QUALITY_ORIGIN;
+    delete require.cache[require.resolve("./lighthouserc.quality.cjs")];
+    const { ci } = require("./lighthouserc.quality.cjs");
+    return {
+      expected: ci.collect.url.length * ci.collect.numberOfRuns,
+      runsPerRoute: ci.collect.numberOfRuns,
+      mode: process.env.QUALITY_ORIGIN ? `deployed (${process.env.QUALITY_ORIGIN})` : "fixture",
+    };
+  } finally {
+    if (saved !== undefined) process.env.QUALITY_ORIGIN = saved;
+    else delete process.env.QUALITY_ORIGIN;
+    delete require.cache[require.resolve("./lighthouserc.quality.cjs")];
+  }
+}
+
+export function routeOf(url) {
+  try {
+    return new URL(url).pathname.replace(/\/$/, "") || "/";
+  } catch {
+    return url;
+  }
+}
+
+// Same LHR filter as ci/lighthouse-summary.mjs: parsed JSON reports that carry
+// categories (manifest.json and non-report files excluded).
+export function loadLhrs(dir) {
+  let names;
+  try {
+    names = readdirSync(dir);
+  } catch {
+    return [];
+  }
+  const lhrs = [];
+  for (const name of names) {
+    if (!name.endsWith(".json") || name === "manifest.json") continue;
+    try {
+      const parsed = JSON.parse(readFileSync(join(dir, name), "utf8"));
+      if (parsed.categories) lhrs.push(parsed);
+    } catch {
+      // A half-written report from a crashed run is missing evidence, not a
+      // parse to hide: it simply does not count toward the expected total.
+    }
+  }
+  return lhrs;
+}
+
+export function shortfalls(lhrs, { runsPerRoute }) {
+  const byRoute = new Map();
+  for (const lhr of lhrs) {
+    const route = routeOf(lhr.finalDisplayedUrl || lhr.requestedUrl || "");
+    byRoute.set(route, (byRoute.get(route) ?? 0) + 1);
+  }
+  return [...byRoute.entries()]
+    .filter(([, count]) => count < runsPerRoute)
+    .sort(([a], [b]) => (a < b ? -1 : 1));
+}
+
+export function buildDiagnosis({ mode, expected, attempts }) {
+  const last = attempts[attempts.length - 1];
+  const collected = last.lhrs;
+  const lines = [
+    "## Lighthouse quality collection diagnosis",
+    "",
+    `- mode: ${mode}`,
+    `- expected LHRs: ${expected}`,
+    ...attempts.map((a) => `- attempt ${a.n}: exit ${a.exitCode}, ${a.lhrs} LHRs`),
+  ];
+  let verdict;
+  if (collected >= expected && last.assertFailed) {
+    verdict =
+      "BUDGET BREACH: full evidence collected and an assertion vs " +
+      "ci/quality-budget.json missed. See quality-summary.md for the route and " +
+      "the failing audits. Fix the cause; do not lower the floors.";
+  } else if (collected >= expected) {
+    verdict =
+      "UNCLASSIFIED STEP FAILURE: full evidence collected but `lhci autorun` " +
+      "exited non-zero with no evaluated assertion failure, so no floor breach " +
+      "was evidenced. The failure came from a collect, upload or config step — " +
+      "read the tails below. Do not lower ci/quality-budget.json.";
+  } else {
+    verdict =
+      `COLLECT FAILURE (transient/infra suspected): only ${collected}/${expected} LHRs ` +
+      "collected, so no floor breach is evidenced. Re-run the failed step; do not " +
+      "lower ci/quality-budget.json. If this recurs, the tail below names the " +
+      "collect error (Chrome crash, NO_NAVSTART, timeout) to chase next.";
+  }
+  lines.push(`- verdict: ${verdict}`, "");
+  const short = shortfalls(last.lhrObjects, { runsPerRoute: last.runsPerRoute });
+  if (short.length) {
+    lines.push("### Routes short of evidence", "");
+    for (const [route, count] of short)
+      lines.push(`- ${route}: ${count}/${last.runsPerRoute} runs`);
+    lines.push("");
+  }
+  lines.push("### Collect-error tails (last lines of each attempt)", "");
+  for (const a of attempts) {
+    lines.push(`#### Attempt ${a.n} (exit ${a.exitCode})`, "", "```", a.tail.trimEnd(), "```", "");
+  }
+  return { text: `${lines.join("\n")}\n`, verdict };
+}
+
+export async function main(
+  argv,
+  {
+    env = process.env,
+    run = runAutorun,
+    qualityDir = QUALITY_DIR,
+    logFile = LOG_FILE,
+    diagnosisFile = DIAGNOSIS_FILE,
+    log = console.log,
+  } = {},
+) {
+  const { expected, runsPerRoute, mode } = expectedLhrs({ env });
+  const extraArgs = argv.filter((a) => a !== "--selftest");
+  mkdirSync(join(logFile, ".."), { recursive: true });
+  writeFileSync(logFile, "");
+
+  const attempts = [];
+  for (let n = 1; n <= MAX_ATTEMPTS; n += 1) {
+    if (n > 1) {
+      // Clean accounting for the retry: stale LHRs from the failed attempt
+      // must not masquerade as fresh evidence (the log and any earlier
+      // diagnosis stay, since they live outside the quality dir).
+      log(
+        `Collect short (${attempts[0].lhrs}/${expected} LHRs): retrying (attempt ${n}/${MAX_ATTEMPTS}).`,
+      );
+      rmSync(qualityDir, { recursive: true, force: true });
+    }
+    log(
+      `Lighthouse quality collect: attempt ${n}/${MAX_ATTEMPTS} (${mode}, expecting ${expected} LHRs).`,
+    );
+    const started = Date.now();
+    // Sequential by design: attempt 2 runs only when attempt 1 came up short.
+    const { exitCode, output } = await run({ env, extraArgs });
+    const elapsed = Math.round((Date.now() - started) / 1000);
+    writeFileSync(logFile, `\n=== attempt ${n}: exit ${exitCode}, ${elapsed}s ===\n${output}`, {
+      flag: "a",
+    });
+    const lhrObjects = loadLhrs(qualityDir);
+    attempts.push({
+      n,
+      exitCode,
+      lhrs: lhrObjects.length,
+      lhrObjects,
+      runsPerRoute,
+      assertFailed: hasAssertFailure(output),
+      tail: output.split("\n").slice(-DIAGNOSIS_TAIL_LINES).join("\n"),
+    });
+    if (exitCode === 0) {
+      log(`Collect complete: exit 0 with ${lhrObjects.length}/${expected} LHRs in ${elapsed}s.`);
+      return 0;
+    }
+    if (lhrObjects.length >= expected) {
+      const { text, verdict } = buildDiagnosis({ mode, expected, attempts });
+      writeFileSync(diagnosisFile, text);
+      log(verdict);
+      return exitCode;
+    }
+    if (n === MAX_ATTEMPTS) {
+      const { text, verdict } = buildDiagnosis({ mode, expected, attempts });
+      writeFileSync(diagnosisFile, text);
+      log(verdict);
+      log(`Diagnosis written to ${diagnosisFile}; full output in ${logFile}.`);
+      return exitCode;
+    }
+  }
+  return 1;
+}
+
+function selftest() {
+  // expectedLhrs reads the real configs (no network): fixture mode lists 8
+  // routes (one is the fixture event), the staging deployed mode lists 7,
+  // both at 3 runs each.
+  const fixture = expectedLhrs({ env: {} });
+  assert.equal(fixture.mode, "fixture");
+  assert.equal(fixture.expected, 8 * 3); // 8 fixture routes (incl. the fixture event)
+  const staging = expectedLhrs({ env: { QUALITY_ORIGIN: "https://next.togetherweown.com" } });
+  assert.match(staging.mode, /deployed/);
+  assert.equal(staging.expected, 7 * 3);
+  assert.throws(
+    () => expectedLhrs({ env: { QUALITY_ORIGIN: "https://evil.example/" } }),
+    /allowlist|runs only against/,
+  );
+
+  // The breach marker is the exact line lhci assert prints on an evaluated
+  // miss (verified by running `lhci assert` on a below-floor LHR: the run
+  // exits 1 after this line). Plain stderr chatter must not count as a breach.
+  assert.equal(hasAssertFailure("noise\nAssertion failed. Exiting with status code 1.\n"), true);
+  assert.equal(hasAssertFailure("All results processed!\n"), false);
+  assert.equal(hasAssertFailure(""), false);
+  // Pin the marker against the installed lhci: if a future @lhci/cli rewords
+  // the assert line, this fails loudly here instead of silently mislabeling a
+  // real breach as UNCLASSIFIED.
+  const installedAssert = readFileSync(require.resolve("@lhci/cli/src/assert/assert.js"), "utf8");
+  assert.ok(
+    installedAssert.includes(ASSERT_FAILURE_MARKER),
+    "ASSERT_FAILURE_MARKER drifted from the installed @lhci/cli assert output",
+  );
+
+  // loadLhrs counts only parsed reports carrying categories.
+  const dir = mkdtempSync(join(tmpdir(), "lh-quality-"));
+  const lhr = (url) => ({ requestedUrl: url, categories: { performance: { score: 1 } } });
+  writeFileSync(join(dir, "a-report.json"), JSON.stringify(lhr("https://h/")));
+  writeFileSync(join(dir, "manifest.json"), "{}");
+  writeFileSync(join(dir, "half.json"), "{truncated");
+  assert.equal(loadLhrs(dir).length, 1);
+  assert.equal(loadLhrs(join(dir, "missing")).length, 0);
+  assert.deepEqual(
+    shortfalls([lhr("https://h/"), lhr("https://h/")], { runsPerRoute: 3 }).map(([r]) => r),
+    ["/"],
+  );
+  assert.deepEqual(
+    shortfalls([lhr("https://h/"), lhr("https://h/"), lhr("https://h/")], { runsPerRoute: 3 }),
+    [],
+  );
+
+  // Retry matrix with a stubbed lhci (hermetic: temp dirs, no browser).
+  const runCase = async (script) => {
+    const caseDir = mkdtempSync(join(tmpdir(), "lh-quality-case-"));
+    const qdir = join(caseDir, "quality");
+    mkdirSync(qdir, { recursive: true });
+    let calls = 0;
+    const run = async () => {
+      calls += 1;
+      const step = script[calls - 1];
+      rmSync(qdir, { recursive: true, force: true });
+      mkdirSync(qdir, { recursive: true });
+      for (let i = 0; i < step.lhrs; i += 1) {
+        writeFileSync(
+          join(qdir, `r${calls}-${i}.json`),
+          JSON.stringify(lhr(`https://h/p${i % 2}/`)),
+        );
+      }
+      const marker = step.assertFailed ? `\n${ASSERT_FAILURE_MARKER}\n` : "";
+      return {
+        exitCode: step.exitCode,
+        output: `stub attempt ${calls} ${step.note ?? ""}${marker}`,
+      };
+    };
+    const code = await main([], {
+      env: {},
+      run,
+      qualityDir: qdir,
+      logFile: join(caseDir, "collect.log"),
+      diagnosisFile: join(caseDir, "diagnosis.md"),
+    });
+    return { code, calls, caseDir };
+  };
+
+  (async () => {
+    // Green first attempt: no retry, no diagnosis, exit 0.
+    {
+      const { code, calls, caseDir } = await runCase([{ exitCode: 0, lhrs: 24 }]);
+      assert.equal(code, 0);
+      assert.equal(calls, 1);
+      assert.equal(loadLhrs(join(caseDir, "quality")).length, 24);
+    }
+    // Transient short failure then green: exactly one retry, exit 0.
+    {
+      const { code, calls } = await runCase([
+        { exitCode: 1, lhrs: 4 },
+        { exitCode: 0, lhrs: 24 },
+      ]);
+      assert.equal(code, 0);
+      assert.equal(calls, 2);
+    }
+    // Full evidence plus the evaluated-assertion marker: real breach, NO
+    // retry, BUDGET BREACH.
+    {
+      const { code, calls, caseDir } = await runCase([
+        { exitCode: 1, lhrs: 24, assertFailed: true },
+      ]);
+      assert.equal(code, 1);
+      assert.equal(calls, 1);
+      assert.match(readFileSync(join(caseDir, "diagnosis.md"), "utf8"), /BUDGET BREACH/);
+    }
+    // Full evidence but no assertion verdict (upload/config blew up): NO
+    // retry, and the verdict must NOT claim a floor breached.
+    {
+      const { code, calls, caseDir } = await runCase([{ exitCode: 1, lhrs: 24 }]);
+      assert.equal(code, 1);
+      assert.equal(calls, 1);
+      const diagnosis = readFileSync(join(caseDir, "diagnosis.md"), "utf8");
+      assert.match(diagnosis, /UNCLASSIFIED STEP FAILURE/);
+      assert.doesNotMatch(diagnosis, /BUDGET BREACH/);
+    }
+    // Short twice: COLLECT FAILURE, last exit code preserved, tail recorded.
+    {
+      const { code, calls, caseDir } = await runCase([
+        { exitCode: 2, lhrs: 0, note: "NO_NAVSTART boom" },
+        { exitCode: 3, lhrs: 6, note: "chrome crash boom" },
+      ]);
+      assert.equal(code, 3);
+      assert.equal(calls, 2);
+      const diagnosis = readFileSync(join(caseDir, "diagnosis.md"), "utf8");
+      assert.match(diagnosis, /COLLECT FAILURE/);
+      assert.match(diagnosis, /chrome crash boom/);
+      assert.match(diagnosis, /attempt 1: exit 2, 0 LHRs/);
+      assert.match(diagnosis, /attempt 2: exit 3, 6 LHRs/);
+      assert.match(readFileSync(join(caseDir, "collect.log"), "utf8"), /stub attempt 1/);
+    }
+    console.log("lighthouse-quality-run selftest: ok");
+  })().catch((error) => {
+    console.error(error);
+    process.exitCode = 1;
+  });
+}
+
+if (process.argv.includes("--selftest")) selftest();
+else if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
+  process.exitCode = await main(process.argv.slice(2));
+}

@@ -213,6 +213,17 @@ staging database, so a staging DB outage fails `staging-quality` and blocks
 promotion. Every check listed above blocks: a failure in any of them fails
 `staging-quality` and blocks promotion.
 
+Desktop collection survives one transient: `npm run lighthouse:quality` runs
+`ci/lighthouse-quality-run.mjs`, which reruns the whole `lhci autorun` a single
+time when it fails with fewer LHRs than configured (7 routes x 3 runs = 21 on a
+deployed origin). A full-evidence assert failure never retries. Every run writes
+`.lighthouseci/quality-collect.log` (full lhci output) and, on failure,
+`.lighthouseci/quality-collect-diagnosis.md`, which says COLLECT FAILURE
+(short evidence: re-run the step, floors untouched), BUDGET BREACH (full
+evidence plus an evaluated assertion miss: see `quality-summary.md`), or an
+unclassified step failure (full evidence, no assertion verdict). Both files
+ship in the `web-quality-origin-*` artifact.
+
 The byte ceilings are specific to Next's unbundled assets, based on the measured
 2026-09-30 sizes documented in `ci/bundle-budget.json`, with roughly 25–45%
 headroom. They are not copied from legacy Vite/Filament bundles that Next does not
