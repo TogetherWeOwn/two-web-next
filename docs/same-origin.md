@@ -29,7 +29,7 @@ Only these **method + path** pairs bypass this guard:
 |---|---|---|
 | POST | `/api/agent-events` | Machine ingress authenticates with its own bearer grants, budgets and replay protection, not browser cookies. The bot action boundary retains its HMAC signer. |
 | POST | `/csp-reports` | Browser violation reports cannot reliably provide Origin; this bounded, sampled, non-persistent sink has no session, cookie or DB dependency and always returns 204. |
-| POST | `/mcp` | Stateless, cookie-free JSON-RPC for remote MCP clients that cannot send our Origin; the handler enforces its own Origin/Host transport check instead. |
+| POST | `/mcp` | Stateless, cookie-free JSON-RPC for remote MCP clients that cannot send our Origin; the handler validates supplied Origins, while global TrustHosts pins Host before routing (`src/mcp/routes.ts:7-13`, `src/index.tsx:160-166`, `src/trust-hosts.ts:72-85`). |
 
 Other methods on these paths, trailing-slash variants and child paths are not
 exempt. No new exemptions may be added merely to accommodate a browser route
