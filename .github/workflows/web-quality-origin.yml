@@ -30,7 +30,9 @@ jobs:
     name: quality
     # Public repo: standard GitHub-hosted Linux only.
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # 45 covers one desktop-collect retry (ci/lighthouse-quality-run.mjs makes a
+    # second whole-run attempt when the first comes up short of LHRs).
+    timeout-minutes: 45
     env:
       ORIGIN: ${{ inputs.origin || 'https://next.togetherweown.com' }}
     steps:
