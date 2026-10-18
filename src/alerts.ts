@@ -5,11 +5,18 @@
 // The app emits logs only; tail/worker.ts delivers allowlisted summaries to
 // the optional ops Discord webhook (see docs/runbook-alerts.md). Every alert is
 // ONE single-line JSON object on
-// console.error with `event` set to "error.alert" or "queue.failing".
+// console.error with `event` set to "error.alert", "queue.failing" or
+// "scheduled.failing".
 //
 // Alert lines carry the exception CLASS, never its message: a database error
 // message can carry the failed statement's bound values. Correlate by request
 // ID rather than logging exception messages or stacks.
+
+// Allowlisted scheduled-job discriminators for the direct scheduled.failing
+// paging signal. Sparse cron invocations can never trip the crash-loop gate
+// on their own, so one failed known reconcile/prune run pages directly.
+export const SCHEDULED_FAILING_JOBS = ["events:reconcile", "model:prune"] as const;
+export type ScheduledFailingJob = (typeof SCHEDULED_FAILING_JOBS)[number];
 
 import { AlertProbeError } from "./alert-probe-error";
 import { currentReleaseFields } from "./release-tag";
@@ -119,6 +126,25 @@ export type FailedJob = {
   requestId?: string;
   syncRetry?: SyncRetryDiagnostic;
 };
+
+/** Failed scheduled reconcile/prune run: one redacted scheduled.failing line per invocation, no mute. */
+export function alertScheduledFailing(
+  job: ScheduledFailingJob,
+  err: unknown,
+  sink: Sink = consoleSink,
+): void {
+  const errorClass = exceptionClass(err);
+  sink(
+    JSON.stringify({
+      level: "critical",
+      event: "scheduled.failing",
+      job,
+      exception: errorClass,
+      error_class: errorClass,
+      ...currentReleaseFields(),
+    }),
+  );
+}
 
 /** Failing queue job (ports Queue::failing): connection, queue, job class, attempts, exception. */
 export function alertQueueFailing(job: FailedJob, sink: Sink = consoleSink): void {

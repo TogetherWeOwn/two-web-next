@@ -1,9 +1,9 @@
 import postgres from "postgres";
-import { exceptionClass } from "../alerts";
+import { alertScheduledFailing, type ScheduledFailingJob } from "../alerts";
 import { createBotClient } from "../bot/client";
 import type { Env, JobsEnv } from "../env";
 import { databaseOptions, databaseUrl } from "../db/connection";
-import { currentReleaseFields, setReleaseMetadata } from "../release-tag";
+import { setReleaseMetadata } from "../release-tag";
 import { qaEnabled } from "../qa";
 import { PRUNE_CRON, RECONCILE_CRON } from "./constants";
 import { pruneModelTables, reconcileEvents, runScheduled } from "./cron";
@@ -166,7 +166,7 @@ export async function handleQueue(
 // two jobs emit the scheduled.failing paging signal: sparse invocations that
 // can never trip the crash-loop gate on their own. Unknown crons still fail
 // loudly but stay silent here.
-const SCHEDULED_JOB_FOR_CRON: Record<string, string> = {
+const SCHEDULED_JOB_FOR_CRON: Record<string, ScheduledFailingJob> = {
   [RECONCILE_CRON]: "events:reconcile",
   [PRUNE_CRON]: "model:prune",
 };
@@ -206,17 +206,7 @@ export async function handleScheduled(
     const job = SCHEDULED_JOB_FOR_CRON[controller.cron];
     if (job !== undefined) {
       try {
-        const errorClass = exceptionClass(err);
-        console.error(
-          JSON.stringify({
-            level: "critical",
-            event: "scheduled.failing",
-            job,
-            exception: errorClass,
-            error_class: errorClass,
-            ...currentReleaseFields(),
-          }),
-        );
+        alertScheduledFailing(job, err);
       } catch {
         // A throwing alert sink must not replace the original rejection.
       }
