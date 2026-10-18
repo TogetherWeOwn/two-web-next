@@ -37,11 +37,15 @@ import { googleCalendarUrl } from "./feeds";
 import { canonicalEventKey, eventKeyAllowed } from "./keys";
 import { fmt } from "./pages-shared";
 import {
+  ATTENDEE_PAGE_SIZE,
+  attendeePageHref,
   getEventNeighbors,
   getPublicEvent,
   getViewerRsvp,
   listGoingAttendees,
   listRelatedEvents,
+  nextAttendeePage,
+  parseAttendeePageParam,
   type EventAttendee,
   type EventLink,
   type EventNeighbors,
@@ -56,7 +60,9 @@ export interface KitEventDetailStore {
   getEventFn: (db: Db, key: string) => Promise<PublicEvent | null>;
   neighborsFn: (db: Db, event: Pick<PublicEvent, "id">) => Promise<EventNeighbors>;
   relatedFn: (db: Db, event: Pick<PublicEvent, "id" | "game">) => Promise<EventLink[]>;
-  attendeesFn: (db: Db, eventId: number) => Promise<EventAttendee[]>;
+  /** Bounded attendee window for one native page: the page plus the first row
+   * of the next page (lookahead, never rendered) that powers Next. */
+  attendeesFn: (db: Db, eventId: number, page: number) => Promise<EventAttendee[]>;
   viewerRsvpFn: (db: Db, eventId: number, userId: string) => Promise<ViewerRsvp | null>;
   waitlistFn: (db: Db, eventId: number, userId: string | null) => Promise<number | null>;
   suggestionsFn: (env: Env, path: string) => Promise<SuggestedEvent[]>;
@@ -123,6 +129,8 @@ export interface KitEventDetailModel {
   timeDatetime: string;
   /** Member-only projection: always [] for anonymous viewers. */
   attendees: EventAttendee[];
+  /** Native attendee page window for the rendered page, mirroring Hono. */
+  attendeesPaging: { page: number; prevHref: string | null; nextHref: string | null };
   /** The caller's own RSVP row only; null for guests and non-members. */
   answer: ViewerRsvp | null;
   waitlistPosition: number | null;
@@ -213,7 +221,20 @@ export function kitEventDetailStore(env: Env): KitEventDetailStore {
     getEventFn: (db, key) => getPublicEvent(db, key),
     neighborsFn: (db, event) => getEventNeighbors(db, event),
     relatedFn: (db, event) => listRelatedEvents(db, event),
-    attendeesFn: (db, eventId) => listGoingAttendees(db, eventId),
+    attendeesFn: async (db, eventId, page) => {
+      // Same bounded window as the served handler: the requested page plus
+      // the first row of the next page (lookahead, never rendered) that
+      // powers Next. The probe runs only from a full page — a partial page
+      // cannot have a successor. The resolver declares every retrieved
+      // owner, lookahead included, so the hook boundary audits exactly the
+      // disclosed subjects.
+      const rows = await listGoingAttendees(db, eventId, page);
+      const lookahead =
+        rows.length === ATTENDEE_PAGE_SIZE
+          ? await listGoingAttendees(db, eventId, nextAttendeePage(page), 1)
+          : [];
+      return [...rows, ...lookahead];
+    },
     viewerRsvpFn: (db, eventId, userId) => getViewerRsvp(db, eventId, userId),
     waitlistFn: (db, eventId, userId) =>
       // The waitlist read keys on the session user; without one there is no
@@ -345,21 +366,36 @@ export async function resolveKitEventDetail(
         return { kind: "forbidden", status: 403, headers };
       }
       const member = viewer?.member === true;
+      // Native attendee page from the query (?attendees=<n>), same strict
+      // fallback as the served handler: malformed values stay on page 1.
+      const attendeePage = parseAttendeePageParam(new URLSearchParams(search).get("attendees"));
       // Member-only projections, mirroring the served Promise.all: attendees
       // and the viewer's own answer never run for anonymous viewers, so an
       // anonymous capture holds no subjects and releases with no audit row.
-      const [neighbors, related, attendees, position, answer] = await Promise.all([
+      const [neighbors, related, attendeeRows, position, answer] = await Promise.all([
         store.neighborsFn(db, event),
         store.relatedFn(db, event),
-        member ? store.attendeesFn(db, event.id) : Promise.resolve([]),
+        member ? store.attendeesFn(db, event.id, attendeePage) : Promise.resolve([]),
         viewer ? store.waitlistFn(db, event.id, viewer.userId) : Promise.resolve(null),
         viewer && member ? store.viewerRsvpFn(db, event.id, viewer.userId) : Promise.resolve(null),
       ]);
       // Declare the retrieved attendee owners so the hook boundary audits
       // exactly the disclosed subjects. Non-SQL fakes declare nothing on
       // their own; the SQL reads declare through the observed adapter and
-      // this set-merge is idempotent. Guests declare nothing.
-      if (member) declareMemberResult(attendees.map((attendee) => attendee.id));
+      // this set-merge is idempotent. Guests declare nothing. The lookahead
+      // (first row of the next page) is declared but never rendered.
+      if (member) declareMemberResult(attendeeRows.map((attendee) => attendee.id));
+      // Like listPast, the render keeps one page while the lookahead powers
+      // Next; a partial page is never labeled as the total.
+      const attendees = attendeeRows.slice(0, ATTENDEE_PAGE_SIZE);
+      const attendeesPaging = {
+        page: attendeePage,
+        prevHref: attendeePage > 1 ? attendeePageHref(event.eventKey, attendeePage - 1) : null,
+        nextHref:
+          attendeeRows.length > ATTENDEE_PAGE_SIZE
+            ? attendeePageHref(event.eventKey, attendeePage + 1)
+            : null,
+      };
       const pagePath = `/e/${event.eventKey}`;
       const pageCanonical = canonicalUrl(appUrl, pagePath);
       const robots = event.status === "draft" || event.status === "past" ? NOINDEX : null;
@@ -399,6 +435,7 @@ export async function resolveKitEventDetail(
           zoneLabel: isValidZone(event.timezone) ? event.timezone : "UTC",
           timeDatetime: event.startsAt.toISOString(),
           attendees,
+          attendeesPaging,
           answer,
           waitlistPosition: position,
           neighbors: {

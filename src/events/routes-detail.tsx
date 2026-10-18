@@ -8,11 +8,15 @@ import { eventJsonLd, siteJsonLd } from "../seo-json-ld";
 import { canonicalEventKey, eventKeyAllowed } from "./keys";
 import { cachedNotFoundSuggestions } from "../not-found-suggestions";
 import {
+  ATTENDEE_PAGE_SIZE,
+  attendeePageHref,
   getEventNeighbors,
   getPublicEvent,
   getViewerRsvp,
   listGoingAttendees,
   listRelatedEvents,
+  nextAttendeePage,
+  parseAttendeePageParam,
   type PublicEvent,
 } from "./reads";
 import { waitlistPosition } from "./waitlist";
@@ -152,13 +156,31 @@ export function registerDetailRoutes(
           // consume only after the boundary allows a visible response.
           const joinResult = await readJoinResult(c);
           const member = session?.member === true;
+          // Bounded member attendee window: the requested page plus the first
+          // row of the next page (lookahead, never rendered) that powers Next.
+          // Both go through the keyed read, so every retrieved identity —
+          // lookahead included — is audited before any private bytes release.
+          const attendeePage = parseAttendeePageParam(c.req.query("attendees"));
           const [neighbors, related, attendees, position, answer] = await Promise.all([
             getEventNeighbors(db, e),
             listRelatedEvents(db, e),
-            session?.member ? listGoingAttendees(db, e.id) : Promise.resolve([]),
+            session?.member ? listGoingAttendees(db, e.id, attendeePage) : Promise.resolve([]),
             session ? waitlistPosition(db, e.id, session.id) : Promise.resolve(null),
             session && member ? getViewerRsvp(db, e.id, session.id) : Promise.resolve(null),
           ]);
+          // One-row lookahead probe that powers Next, only from a full page:
+          // a partial page cannot have a successor, so the probe (and its
+          // audit subject) is skipped there.
+          const attendeeLookahead =
+            session?.member && attendees.length === ATTENDEE_PAGE_SIZE
+              ? await listGoingAttendees(db, e.id, nextAttendeePage(attendeePage), 1)
+              : [];
+          const attendeesPaging = {
+            page: attendeePage,
+            prevHref: attendeePage > 1 ? attendeePageHref(e.eventKey, attendeePage - 1) : null,
+            nextHref:
+              attendeeLookahead.length > 0 ? attendeePageHref(e.eventKey, attendeePage + 1) : null,
+          };
           const returnTo = c.req.path + new URL(c.req.url).search;
           return bufferedMemberHtml(
             c,
@@ -167,6 +189,7 @@ export function registerDetailRoutes(
               neighbors={neighbors}
               related={related}
               attendees={attendees}
+              attendeesPaging={attendeesPaging}
               appUrl={c.env.APP_URL}
               jsonLd={jsonLd(e, c.env.APP_URL)}
               siteJsonLd={siteIdentities(c.env.APP_URL)}
