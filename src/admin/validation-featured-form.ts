@@ -48,6 +48,9 @@ export function parseFeaturedForm(
   const url = str(data.url);
   if (url && (url.length > 255 || !isHttpUrl(url)))
     fields.url = "Link is a full http(s) URL, or empty for no link.";
+  // Postgres text cannot store NUL, and new URL() percent-encodes it (so
+  // isHttpUrl still passes): reject it here for a field-level 422.
+  if (url?.includes("\0")) fields.url = "Link cannot contain NUL characters.";
   const imageUrl = str(data.image_url);
   if (imageUrl && (imageUrl.length > 255 || !isFeaturedImageUrl(imageUrl, imageHosts))) {
     fields.image_url =
