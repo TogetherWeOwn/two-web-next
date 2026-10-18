@@ -614,6 +614,12 @@ jobs:
       - name: Production build (wrangler dry run, no deployment)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true' || needs.scope.outputs.worker == 'true')
         run: npx wrangler deploy --dry-run --env production --outdir dist-production
+      - name: Main Worker bundle budget selftest (offline fixtures, no deploy)
+        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true' || needs.scope.outputs.worker == 'true')
+        run: node ci/check-worker-bundle.mjs --selftest
+      - name: Main Worker bundle budget (dry-run output vs ceiling)
+        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true' || needs.scope.outputs.worker == 'true')
+        run: node ci/check-worker-bundle.mjs
 
   # Node 22 compatibility leg: package.json `engines` declares a 22 range
   # beside `>=24`, but every other job runs Node 24, so the 22 range shipped
