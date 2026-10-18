@@ -141,8 +141,25 @@ function calendar(inner: string[]): string {
 
 export const eventIcs = (e: EventRow, appUrl: string): string => calendar(vevent(e, appUrl));
 
-export const eventsIcsCollection = (rows: EventRow[], appUrl: string): string =>
-  calendar(rows.flatMap((e) => vevent(e, appUrl)));
+export const eventsIcsCollection = (rows: EventRow[], appUrl: string): string => {
+  // One out-of-range stored revision must not fail the whole export: skip
+  // that row and log the count. Only the sequence-range failure is
+  // skippable; any other builder error still throws for the collection.
+  let skipped = 0;
+  const inner = rows.flatMap((e) => {
+    try {
+      return vevent(e, appUrl);
+    } catch (error) {
+      if (!(error instanceof IcsSequenceRangeError)) throw error;
+      skipped += 1;
+      return [];
+    }
+  });
+  if (skipped > 0) {
+    console.warn("eventsIcsCollection skipped out-of-range SEQUENCE rows.", { skipped });
+  }
+  return calendar(inner);
+};
 
 export function eventsRss(rows: EventRow[], appUrl: string, lastBuild: Date): string {
   const base = feedBase(appUrl);

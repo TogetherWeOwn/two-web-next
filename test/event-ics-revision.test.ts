@@ -187,7 +187,7 @@ describe.skipIf(!process.env.DATABASE_URL)("database-owned ICS revisions", () =>
   });
 
   it.each(["/events.ics", `/events/${KEY}.ics`])(
-    "exhaustion preserves storage but suspends calendar export: %s",
+    "exhaustion preserves storage but skips the poison row instead of 503ing: %s",
     async (path) => {
       await insert();
       // Simulate restored legacy counters only inside this disposable, owned schema.
@@ -208,12 +208,11 @@ describe.skipIf(!process.env.DATABASE_URL)("database-owned ICS revisions", () =>
       for (const revision of [2147483648n, 9007199254740993n, -1n]) {
         await restore(revision);
         const response = await request(path, { headers: { "if-none-match": etag } });
-        expect(response.status).toBe(503);
-        expect(response.headers.get("cache-control")).toBe("no-store");
-        expect(response.headers.get("content-type")).toContain("text/plain");
-        expect(response.headers.get("etag")).toBeNull();
-        expect(response.headers.get("content-disposition")).toBeNull();
-        expect(await response.text()).toBe("Calendar revision unavailable");
+        expect(response.status).toBe(200);
+        const skipped = await response.text();
+        expect(skipped).toContain("BEGIN:VCALENDAR");
+        expect(skipped).not.toContain("BEGIN:VEVENT");
+        expect(response.headers.get("etag")).not.toBe(etag);
         expect((await read()).icsSequence).toBe(revision);
       }
       await fixture.client`update events set status = 'draft' where event_key = ${KEY}`;
