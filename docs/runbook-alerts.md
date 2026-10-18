@@ -160,7 +160,15 @@ The summary is allowlisted like the other events: `event`, `script`, optional
 `timestamp`. It is recorded with the usual `ops.alert.delivered` /
 `ops.alert.delivery_failed` receipt. Aggregation is additive: a failing
 aggregator falls back to local counts and never suppresses the per-fingerprint
-pager. If the first storage load rejects with a transient fault, that request
+pager. Each malfunction fallback (non-OK, unparseable, or wrong-shape 200 on
+`/observe` and `/health`) also emits one `console.warn` JSON line naming path
+and failure class, with no payload bytes or secrets: `{"event":
+"aggregator.fallback", "path": "spike" | "health", "fallback":
+"aggregator-fallback", "reason": "non-ok-status" | "unparseable-json" |
+"wrong-shape", "status"?: number}`. Well-formed aggregator answers stay
+silent; thrown or stalled operations fall back silently. Query:
+`npx wrangler tail two-web-next-alerts --search '"event":"aggregator.fallback"'`.
+If the first storage load rejects with a transient fault, that request
 fails and the caller falls back; a later request on the same instance retries
 the load and recovers the persisted counts/cooldowns and the health window
 coherently. A failed load applies nothing and writes nothing, so the retry
