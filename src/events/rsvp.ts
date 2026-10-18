@@ -155,7 +155,7 @@ export async function withdrawRsvp(
     await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${`rsvp-write:${userId}`}))`);
     const [ev] = await tx.select().from(events).where(eq(events.eventKey, eventKey)).for("update");
     // Unknown keys change nothing, so they cost nothing: return before the
-    // throttle prune/charge, mirroring writeRsvp's not_found path (TOG-30034).
+    // throttle prune/charge, mirroring writeRsvp's not_found path.
     if (!ev) return { limited: false, deleted: false, status: null } as const;
     // Own row, promotion rows and maintenance can all wait on other writers.
     // Take them before the hit is stamped so an accepted debit stays fresh.

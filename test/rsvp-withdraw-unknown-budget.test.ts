@@ -1,4 +1,4 @@
-// TOG-30034 S7: unknown-event withdraw must not spend throttle budget.
+// Unknown-event withdraw must not spend throttle budget.
 //
 // Hermetic unit kill for `withdrawRsvp` in src/events/rsvp.ts: an event key
 // that resolves to no event row must return quietly WITHOUT stamping a
@@ -105,7 +105,7 @@ function fakeUnknownEventDb() {
   };
 }
 
-describe("withdrawRsvp unknown-event budget (TOG-30034)", () => {
+describe("withdrawRsvp unknown-event budget", () => {
   it("an unknown-key withdraw burst stamps zero throttle hits", async () => {
     const { db, stats } = fakeUnknownEventDb();
     for (let i = 0; i < 3; i++) {
