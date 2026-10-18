@@ -7,6 +7,7 @@
 import type { Context } from "hono";
 import postgres from "postgres";
 import { rateLimitExceeded } from "../errors";
+import { isDatabaseUnavailable } from "../db/errors";
 import type { Env } from "../env";
 import { databaseOptions, databaseUrl } from "../db/connection";
 import { clientKey } from "../throttle";
@@ -70,15 +71,19 @@ export const joinRedirectUri = (env: Env) => `${env.APP_URL}/join/callback`;
 // No client can spend another's budget.
 //
 // A throwing store degrades to allow — the same verdict as throttleGuard
-// ("a missed count beats a 500"). The funnel top must not 500 on a store
-// outage. Silent by design: the error can carry connection detail, so nothing
-// is logged here.
+// ("a missed count beats a 500") — unless the throw is a classified database
+// outage, which stays fail-closed: the global handler renders the branded 503
+// the outage matrix pins for both join routes. Silent by design: the error can
+// carry connection detail, so nothing is logged here.
 export async function throttled(c: Ctx): Promise<Response | null> {
   const verdict = await joinStore(c)
     .then((sql) =>
       checkJoinThrottle(sql, `${JOIN_THROTTLE_BUCKET}:${clientKey(c)}`, JOIN_THROTTLE_PER_MINUTE),
     )
-    .catch(() => ({ limited: false }) as const);
+    .catch((err: unknown) => {
+      if (isDatabaseUnavailable(err)) throw err;
+      return { limited: false } as const;
+    });
   if (!verdict.limited) return null;
   return rateLimitExceeded(c, verdict.retryAfter);
 }

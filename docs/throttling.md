@@ -51,16 +51,16 @@ differs by call site:
   [`throttleGuard`](../src/throttle.ts) catches any throw from store
   acquisition or the count/insert and allows — a missed count beats a 500 on
   that path.
-- Direct join propagates configured-store failures:
+- Direct join allows unclassified store failures, propagates outages:
   [`throttled`](../src/join/route-shared.ts) awaits the configured store and
-  [`checkJoinThrottle`](../src/join/service.ts) with no catch. A
-  configured-but-unreachable store throws; the global handler maps only
-  classified transport/server outages to the shared 503 envelope (see
-  [`isDatabaseUnavailable`](../src/db/errors.ts) and
-  [`internalErrorHandler`](../src/error-responses.tsx)) and leaves other
-  errors as 500s. The outage matrix pins the classified case:
-  `GET /join/discord` and `GET /join/callback` answer 503 on a refused
-  Postgres socket (see [`test/db-outage-matrix.test.ts`](../test/db-outage-matrix.test.ts)).
+  [`checkJoinThrottle`](../src/join/service.ts) and allows on any throw
+  except a classified transport/server outage (see
+  [`isDatabaseUnavailable`](../src/db/errors.ts)), which it rethrows so the
+  global handler renders the shared 503 envelope (see
+  [`internalErrorHandler`](../src/error-responses.tsx)). The outage matrix pins
+  the classified case: `GET /join/discord` and `GET /join/callback` answer 503
+  on a refused Postgres socket (see
+  [`test/db-outage-matrix.test.ts`](../test/db-outage-matrix.test.ts)).
 - Prune is best-effort: [`checkJoinThrottle`](../src/join/service.ts) logs a
   one-line warning and swallows a throwing expiry DELETE, then returns the
   decided verdict, so a prune failure never flips a refusal into an admission
