@@ -8,7 +8,7 @@ import type { Session } from "../env";
 import { rateLimitExceeded } from "../errors";
 import { RSVP_HONEY_FIELD, loginUrl, rsvpHoneyFilled } from "../islands/contracts";
 import { renderHtmlOutcome } from "../html-outcome";
-import { eventKeyAllowed } from "./keys";
+import { canonicalEventKey, eventKeyAllowed } from "./keys";
 import { dispatchRsvpSync, isRsvpStatus, withdrawRsvp, writeRsvp, type RsvpAnswer } from "./rsvp";
 import { resolveNativeRsvpPage, rsvpPageReturnPath } from "./reads";
 import { renderRsvpRefusal } from "./rsvp-refusal-hono";
@@ -16,7 +16,9 @@ import { rsvpRefusalModelFor, rsvpRefusalOutcome } from "./rsvp-refusal";
 import { body, type App, type Ctx, type SessionReader } from "./routes-shared";
 
 // One answer per member per event: a singular resource. PUT 201 first / 200 re-answer,
-// DELETE 204 always (quiet), any other verb 405. One shared 12/min budget per member.
+// DELETE 204 on a real withdrawal and 404 when it deletes nothing, any other verb 405.
+// A valid key in another letter case 301s to the canonical RSVP URL before any
+// honeypot, session or DB read. One shared 12/min budget per member.
 const rsvpBody = (a: RsvpAnswer) => ({
   data: {
     status: a.status,
@@ -110,18 +112,42 @@ const deleteRsvp = async (
   const key = c.req.param("key") ?? "";
   const r = await withdrawRsvp(db, eventKeyAllowed(key, c.env.APP_URL) ? key : "", who.id);
   if (r.limited) return rateLimitExceeded(c, r.retryAfter);
+  // Honest withdrawal: no caller row (never answered, only another member
+  // answered, unknown or forged key) is the same not-found the PUT answers,
+  // never a 204 that implies a withdrawal happened.
+  if (!r.deleted) return c.json({ error: "not_found" }, 404);
   await dispatchRsvpSync(c.env, key, r.status, c.get("requestId"));
   return c.body(null, 204);
 };
 
-export function registerRsvpRoutes(app: App, readFragmentSession: SessionReader): void {
-  app.put("/events/:key/rsvp", requestBodyLimit("action"), async (c) =>
-    putRsvp(c, await body(c), readFragmentSession),
-  );
+// One canonical key form per event, mirroring the read routes: a valid key in
+// another letter case 301s to the canonical RSVP URL before any honeypot,
+// session or DB read. Seed/demo keys and unparsable keys keep their current
+// path (forged keys still refuse, unknown keys still 404). Scoped to the
+// /events/:key/rsvp verbs so the POST /e/:key/rsvp HTML adapter below keeps
+// its exact session, decoy and refusal paths.
+const canonicalRsvpRedirect = (c: Ctx): Response | null => {
+  const key = c.req.param("key") ?? "";
+  const canonical = canonicalEventKey(key);
+  if (canonical && canonical !== key) {
+    const search = new URL(c.req.url).search;
+    return c.redirect(`/events/${encodeURIComponent(canonical)}/rsvp${search}`, 301);
+  }
+  return null;
+};
 
-  app.delete("/events/:key/rsvp", requestBodyLimit("action"), async (c) =>
-    deleteRsvp(c, await body(c).catch(() => ({})), readFragmentSession),
-  );
+export function registerRsvpRoutes(app: App, readFragmentSession: SessionReader): void {
+  app.put("/events/:key/rsvp", requestBodyLimit("action"), async (c) => {
+    const moved = canonicalRsvpRedirect(c);
+    if (moved) return moved;
+    return putRsvp(c, await body(c), readFragmentSession);
+  });
+
+  app.delete("/events/:key/rsvp", requestBodyLimit("action"), async (c) => {
+    const moved = canonicalRsvpRedirect(c);
+    if (moved) return moved;
+    return deleteRsvp(c, await body(c).catch(() => ({})), readFragmentSession);
+  });
 
   // HTML adapter only: reuse the exact session, decoy, shared budget and
   // locked service paths above. The frozen JSON resource still refuses POST.
