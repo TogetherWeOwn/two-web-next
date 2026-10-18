@@ -103,6 +103,40 @@ describe.skipIf(!process.env.DATABASE_URL)("scheduled worker (test Postgres)", (
     expect(await sql`select job_id from queue_jobs`).toHaveLength(1);
   });
 
+  it("a fully failed multi-key pass rethrows to preserve the scheduled.failing page", async () => {
+    state.keys = ["down1", "down2"];
+    const errorCalls: unknown[][] = [];
+    const errorSpy = vi
+      .spyOn(console, "error")
+      .mockImplementation((...args: unknown[]) => void errorCalls.push(args));
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const infoSpy = vi.spyOn(console, "info").mockImplementation(() => {});
+    try {
+      const env = envFor(async () => {
+        throw new Error("queue down");
+      });
+      // Total outage (every key fails, nothing accepted/absorbed) must reject
+      // so handleScheduled emits its redacted scheduled.failing page instead
+      // of resolving silently. A single poison key still resolves (acceptance
+      // pin); this multi-key threshold keeps that contract intact.
+      await expect(handleScheduled(controller(RECONCILE_CRON), env)).rejects.toThrow("queue down");
+      const lines = errorCalls
+        .filter((args) => args.length === 1 && typeof args[0] === "string")
+        .map((args) => JSON.parse(args[0] as string) as Record<string, unknown>)
+        .filter((line) => line.event === "scheduled.failing");
+      expect(lines).toHaveLength(1);
+      expect(lines[0]).toMatchObject({ job: "events:reconcile", exception: "Error" });
+      // Per-key redacted warns fired; the info pass log is skipped on throw.
+      expect(warnSpy).toHaveBeenCalledTimes(2);
+      expect(infoSpy).not.toHaveBeenCalled();
+      expect(await sql`select job_id from queue_jobs`).toHaveLength(0);
+    } finally {
+      errorSpy.mockRestore();
+      warnSpy.mockRestore();
+      infoSpy.mockRestore();
+    }
+  });
+
   it("an early consumer sees and settles committed rows before flight completion", async () => {
     state.keys = ["first"];
     let consumed = false;
