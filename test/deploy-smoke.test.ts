@@ -258,6 +258,86 @@ describe("deploy public-route smoke (offline)", () => {
     expect(rollbackBlock).not.toContain("--fail-on-ready-wait-critical");
   });
 
+  it("hands the pre-deploy dead-letter baseline to staging smoke after capture", () => {
+    // S7: staging /up serves retained queue.failed rows today, so the smoke
+    // fails only on growth past this baseline. Dropping the env handoff
+    // silently restores the absolute failed > 0 gate and reds every deploy.
+    const workflow = readFileSync(".github/workflows/deploy.yml", "utf8");
+    const captureAt = workflow.indexOf("- name: Capture pre-deploy dead-letter baseline");
+    const smokeAt = workflow.indexOf("- name: Smoke test staging public routes");
+    const migrateAt = workflow.indexOf("- name: Apply staging web migrations");
+    expect(captureAt).toBeGreaterThan(-1);
+    expect(migrateAt).toBeGreaterThan(captureAt);
+    expect(smokeAt).toBeGreaterThan(migrateAt);
+    const captureBlock = workflow.match(
+      /- name: Capture pre-deploy dead-letter baseline\n[\s\S]*?run: \|\n((?:          .*\n)+)/,
+    )?.[1];
+    expect(captureBlock).toBeDefined();
+    expect(captureBlock).toContain("for i in 1 2 3 4 5");
+    expect(captureBlock).toContain('fetch("https://next.togetherweown.com/up"');
+    expect(captureBlock).toContain("::warning::dead-letter baseline unreadable");
+    expect(captureBlock).toContain('echo "failed=$baseline" >> "$GITHUB_OUTPUT"');
+    const smokeSection = workflow.slice(smokeAt, smokeAt + 2000);
+    expect(smokeSection).toContain(
+      "SMOKE_FAILED_BASELINE: ${{ steps.dead-letter-baseline.outputs.failed }}",
+    );
+    expect(smokeSection).toContain('SMOKE_ALLOW_MISSING_BASELINE: "1"');
+  });
+
+  it("hands the pre-promote dead-letter baseline to every promote smoke via GITHUB_ENV", () => {
+    // The gradual-promote action runs this repo's bin/smoke.mjs in the same
+    // job, so the $GITHUB_ENV export scopes every stage gate plus the
+    // post-promotion verify to growth past the retained count.
+    const workflow = readFileSync(".github/workflows/deploy-production.yml", "utf8");
+    const jobAt = workflow.indexOf("\n  deploy-production:\n");
+    const releaseAt = workflow.indexOf("\n  release:\n");
+    expect(jobAt).toBeGreaterThan(-1);
+    expect(releaseAt).toBeGreaterThan(jobAt);
+    const job = workflow.slice(jobAt, releaseAt);
+    const captureAt = job.indexOf("- name: Capture pre-promote dead-letter baseline");
+    const gradualAt = job.indexOf("- name: Gradual promotion 5-50-100 with automatic rollback");
+    const verifyAt = job.indexOf("- name: Verify public routes on the promoted version");
+    expect(captureAt).toBeGreaterThan(-1);
+    expect(gradualAt).toBeGreaterThan(captureAt);
+    expect(verifyAt).toBeGreaterThan(gradualAt);
+    const captureBlock = job.match(
+      /- name: Capture pre-promote dead-letter baseline\n[\s\S]*?run: \|\n((?:          .*\n)+)/,
+    )?.[1];
+    expect(captureBlock).toBeDefined();
+    expect(captureBlock).toContain("for i in 1 2 3 4 5");
+    expect(captureBlock).toContain('fetch("https://togetherweown.com/up"');
+    expect(captureBlock).toContain("::warning::dead-letter baseline unreadable");
+    expect(captureBlock).toContain('echo "SMOKE_FAILED_BASELINE=$baseline" >> "$GITHUB_ENV"');
+    expect(captureBlock).toContain('echo "SMOKE_ALLOW_MISSING_BASELINE=1" >> "$GITHUB_ENV"');
+  });
+
+  it("hands the pre-rollback dead-letter baseline to rollback smoke after capture", () => {
+    // The emergency path must never go red on retained history: growth past
+    // the pre-rollback baseline fails, an unreadable capture skips the gate.
+    const workflow = readFileSync(".github/workflows/rollback-production.yml", "utf8");
+    const captureAt = workflow.indexOf("- name: Capture pre-rollback dead-letter baseline");
+    const smokeAt = workflow.indexOf("- name: Smoke test production public routes");
+    const rollbackAt = workflow.indexOf(
+      "- name: Roll back to the recorded production Worker Version",
+    );
+    expect(captureAt).toBeGreaterThan(-1);
+    expect(rollbackAt).toBeGreaterThan(captureAt);
+    expect(smokeAt).toBeGreaterThan(rollbackAt);
+    const captureBlock = workflow.match(
+      /- name: Capture pre-rollback dead-letter baseline\n[\s\S]*?run: \|\n((?:          .*\n)+)/,
+    )?.[1];
+    expect(captureBlock).toBeDefined();
+    expect(captureBlock).toContain("for i in 1 2 3 4 5");
+    expect(captureBlock).toContain('fetch("https://togetherweown.com/up"');
+    expect(captureBlock).toContain("::warning::dead-letter baseline unreadable");
+    expect(captureBlock).toContain('echo "failed=$baseline" >> "$GITHUB_OUTPUT"');
+    const smokeSection = workflow.slice(smokeAt, smokeAt + 2000);
+    expect(smokeSection).toContain(
+      "SMOKE_FAILED_BASELINE: ${{ steps.dead-letter-baseline.outputs.failed }}",
+    );
+    expect(smokeSection).toContain('SMOKE_ALLOW_MISSING_BASELINE: "1"');
+  });
+
   it("runs the loopback selftest in required CI as well as pre-deploy check", () => {
     const ci = readFileSync(".github/workflows/ci.yml", "utf8");
     const checkJob = ci.slice(ci.indexOf("  check:\n"));
@@ -267,7 +347,7 @@ describe("deploy public-route smoke (offline)", () => {
     const pkg = JSON.parse(readFileSync("package.json", "utf8"));
     expect(pkg.scripts.check).toContain("npm run test:smoke");
     expect(pkg.scripts["test:smoke"]).toBe(
-      "node --test test/smoke.test.mjs test/json-smoke.test.mjs test/revision-check.test.mjs",
+      "node --test test/smoke.test.mjs test/json-smoke.test.mjs test/revision-check.test.mjs test/smoke-ordinary-traffic-identity-acceptance.test.mjs",
     );
   });
 });
@@ -620,7 +700,7 @@ if (process.argv.length !== 5 || process.argv[2] !== "bin/smoke.mjs" || process.
 }
 const count = readFileSync(attempts, "utf8").length;
 const pass = count === Number(process.env.SMOKE_SUCCEED_ON_ATTEMPT);
-console.log(pass ? "smoke: 17 routes, 0 failed assertions" : "FAIL /join: expected HTTP 200; actual HTTP 503");
+console.log(pass ? "smoke: 18 routes, 0 failed assertions" : "FAIL /join: expected HTTP 200; actual HTTP 503");
 process.exit(pass ? 0 : 1);
 `,
       { mode: 0o700 },

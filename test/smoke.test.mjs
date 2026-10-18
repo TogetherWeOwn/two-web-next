@@ -4,7 +4,38 @@ import { once } from "node:events";
 import { createServer } from "node:http";
 import { test } from "node:test";
 import { build } from "esbuild";
-import { SMOKE_QUEUE_CRITICAL_AT, SMOKE_QUEUE_WARN_AT, smoke } from "../bin/smoke.mjs";
+import {
+  SMOKE_QUEUE_CRITICAL_AT,
+  SMOKE_QUEUE_WARN_AT,
+  SMOKE_SECURITY_TXT_EXPIRES,
+  securityTxtAssertions,
+  smoke,
+} from "../bin/smoke.mjs";
+
+// Producer-derived security.txt body: buildSecurityTxt bundled once from
+// src/security-txt.ts (same in-memory esbuild pattern as the rendering tests
+// below), so the passing fixture is the exact producer output for the loopback
+// origin and cannot drift from it. The loopback stub has no TLS, so like the
+// real Worker on an http origin the body carries no Canonical line; the https
+// Canonical path is covered by the securityTxtAssertions unit tests.
+let securityTxtBuilderPromise = null;
+function securityTxtBuilder() {
+  securityTxtBuilderPromise ??= build({
+    entryPoints: ["src/security-txt.ts"],
+    bundle: true,
+    write: false,
+    format: "esm",
+    platform: "node",
+  }).then(
+    async (bundle) =>
+      (
+        await import(
+          `data:text/javascript;base64,${Buffer.from(bundle.outputFiles[0].text).toString("base64")}`
+        )
+      ).buildSecurityTxt,
+  );
+  return securityTxtBuilderPromise;
+}
 
 // Independent local responses matching the route contracts, not a live Worker/DB.
 // The /up fixture carries the candidate revision the version-override tests
@@ -41,6 +72,14 @@ const fixtures = {
     "text/plain",
     (origin) => `User-agent: *\nDisallow:\nSitemap: ${origin}/sitemap_index.xml\n`,
   ],
+  // RFC 9116 publication (S8): the body is rendered per request from the real
+  // producer (see stub below), so the probe's Expires-pin and no-Canonical-on-
+  // http assertions exercise a true positive. The pin itself stays hardcoded
+  // in bin/smoke.mjs like the queue thresholds in /up above; the drift guard
+  // at the bottom of this file pins SMOKE_SECURITY_TXT_EXPIRES to
+  // src/security-txt.ts, so a pin change fails here first. Body is unused (the
+  // stub renders the producer); status and type still drive the generic loops.
+  "/.well-known/security.txt": [200, "text/plain", null],
   "/discord": [302, null, "", "https://discord.gg/fixture"],
   "/profile": [302, null, "", "/auth/discord"],
   "/admin": [302, null, "", "/auth/discord"],
@@ -53,6 +92,7 @@ const fixtures = {
 
 async function stub(t, change = () => {}) {
   const requests = [];
+  const buildSecurityTxt = await securityTxtBuilder();
   const server = createServer((request, response) => {
     requests.push({
       path: request.url,
@@ -69,9 +109,15 @@ async function stub(t, change = () => {}) {
     const [status, type, body, location] = fixture;
     // Origin-aware SEO fixtures (W16b TOG-11942): the stub advertises its own
     // origin the way the Worker advertises APP_URL, so the probe's
-    // same-origin robots/sitemap assertions exercise a true positive.
+    // same-origin robots/sitemap assertions exercise a true positive. The
+    // security.txt body is rendered from the real producer for that origin.
     const origin = `http://${request.headers.host}`;
-    const resolved = typeof body === "function" ? body(origin) : body;
+    const resolved =
+      request.url === "/.well-known/security.txt"
+        ? buildSecurityTxt(origin)
+        : typeof body === "function"
+          ? body(origin)
+          : body;
     const result = {
       status,
       body: resolved,
@@ -131,7 +177,7 @@ test("CLI passes every route without following redirects or carrying cookies", a
   const { url, requests } = await stub(t);
   const result = await cli([url]);
   assert.equal(result.code, 0, result.output);
-  assert.match(result.output, /17 routes, 0 failed assertions/);
+  assert.match(result.output, /18 routes, 0 failed assertions/);
   assert.deepEqual(
     requests.map((r) => r.path),
     Object.keys(fixtures),
@@ -145,8 +191,8 @@ test("version override pins every gradual-promotion probe to the new version", a
   const override = 'two-web-next-production="22345678-1234-1234-1234-123456789abc"';
   const result = await cli([url, "--version-override", override]);
   assert.equal(result.code, 0, result.output);
-  assert.match(result.output, /17 routes, 0 failed assertions/);
-  assert.equal(requests.length, 17);
+  assert.match(result.output, /18 routes, 0 failed assertions/);
+  assert.equal(requests.length, 18);
   assert.ok(requests.every((r) => r.override === override));
 });
 
@@ -169,7 +215,7 @@ test("version override refuses a healthy /up that identifies another Worker vers
   const result = await run(url, { versionOverride: override });
   assert.equal(result.ok, false, result.output);
   assert.match(result.output, /FAIL \/up: expected revision\.version_id/);
-  assert.equal(requests.length, 17);
+  assert.equal(requests.length, 18);
   assert.ok(requests.every((r) => r.override === override));
 });
 
@@ -258,7 +304,7 @@ test("version override passes when the candidate version answers healthy", async
   const result = await run(url, { versionOverride: override });
   assert.equal(result.ok, true, result.output);
   assert.ok(result.output.includes("PASS /up"), result.output);
-  assert.equal(requests.length, 17);
+  assert.equal(requests.length, 18);
   assert.ok(requests.every((r) => r.override === override));
 });
 
@@ -295,7 +341,7 @@ for (const path of Object.keys(fixtures)) {
     assert.equal(result.ok, false);
     assert.ok(result.output.includes(`FAIL ${path}: expected HTTP`), result.output);
     assert.match(result.output, /actual HTTP 503/);
-    assert.equal(requests.length, 17);
+    assert.equal(requests.length, 18);
   });
 }
 
@@ -366,6 +412,135 @@ test("rejects foreign sitemap locs and an empty sitemap", async (t) => {
       result.output,
     );
     assert.doesNotMatch(result.output, /togetherweown\.com/);
+  }
+});
+
+test("rejects a stale security.txt Expires pin without leaking the body", async (t) => {
+  const { url } = await stub(t, (route, result) => {
+    if (route === "/.well-known/security.txt")
+      result.body = result.body.replace(
+        `Expires: ${SMOKE_SECURITY_TXT_EXPIRES}`,
+        "Expires: 2026-10-01T00:00:00Z",
+      );
+  });
+  const result = await run(url);
+  assert.equal(result.ok, false);
+  assert.ok(
+    result.output.includes(
+      `FAIL /.well-known/security.txt: expected security Expires: ${SMOKE_SECURITY_TXT_EXPIRES}; actual Expires line missing or stale`,
+    ),
+    result.output,
+  );
+  assert.doesNotMatch(result.output, /2026-10-01T00:00:00Z/);
+});
+
+test("rejects a Canonical line on http origins, where the producer omits it", async (t) => {
+  const { url } = await stub(t, (route, result) => {
+    if (route === "/.well-known/security.txt")
+      result.body += "Canonical: https://togetherweown.com/.well-known/security.txt\n";
+  });
+  const result = await run(url);
+  assert.equal(result.ok, false);
+  assert.match(
+    result.output,
+    /FAIL \/.well-known\/security\.txt: expected security no Canonical on http origin; actual unexpected Canonical line/,
+  );
+  assert.doesNotMatch(result.output, /togetherweown\.com/);
+});
+
+test("security.txt assertions parse fields on both protocols", () => {
+  const contact = "Contact: https://github.com/TogetherWeOwn/two-web-next/security/advisories/new";
+  const policy = "Policy: https://github.com/TogetherWeOwn/two-web-next/blob/main/SECURITY.md";
+  const https = new URL("https://example.test");
+  const http = new URL("http://127.0.0.1:9");
+  const httpsBody = [
+    contact,
+    `Expires: ${SMOKE_SECURITY_TXT_EXPIRES}`,
+    "Preferred-Languages: en",
+    "Canonical: https://example.test/.well-known/security.txt",
+    policy,
+    "",
+  ].join("\n");
+  const httpBody = [
+    contact,
+    `Expires: ${SMOKE_SECURITY_TXT_EXPIRES}`,
+    "Preferred-Languages: en",
+    policy,
+    "",
+  ].join("\n");
+  // Exact producer output passes on both protocols.
+  assert.deepEqual(securityTxtAssertions(httpsBody, https), []);
+  assert.deepEqual(securityTxtAssertions(httpBody, http), []);
+  // A commented-out correct line cannot satisfy a missing or stale field.
+  assert.equal(
+    securityTxtAssertions(
+      `# Expires: ${SMOKE_SECURITY_TXT_EXPIRES}\nExpires: 2026-10-01T00:00:00Z\nCanonical: https://example.test/.well-known/security.txt\n`,
+      https,
+    ).length,
+    1,
+  );
+  assert.equal(
+    securityTxtAssertions(
+      `${httpsBody}\n# Canonical: https://example.test/.well-known/security.txt\nCanonical: https://other.test/.well-known/security.txt\n`,
+      https,
+    ).length,
+    1,
+  );
+  // RFC 9116 permits only one Expires field; a duplicate fails even when one
+  // value matches the pin.
+  assert.equal(
+    securityTxtAssertions(`${httpsBody}Expires: ${SMOKE_SECURITY_TXT_EXPIRES}\n`, https).length,
+    1,
+  );
+  // A previous reviewed pin passes when listed, and fails when it is not.
+  const rotated = httpsBody.replace(
+    `Expires: ${SMOKE_SECURITY_TXT_EXPIRES}`,
+    "Expires: 2026-10-01T00:00:00Z",
+  );
+  assert.deepEqual(securityTxtAssertions(rotated, https, ["2026-10-01T00:00:00Z"]), []);
+  assert.equal(securityTxtAssertions(rotated, https).length, 1);
+  // https requires the same-origin Canonical; http rejects any Canonical.
+  assert.equal(
+    securityTxtAssertions(
+      httpsBody.replace(
+        "Canonical: https://example.test/.well-known/security.txt",
+        "Canonical: https://other.test/.well-known/security.txt",
+      ),
+      https,
+    ).length,
+    1,
+  );
+  assert.equal(
+    securityTxtAssertions(
+      httpBody.replace(
+        "Policy:",
+        "Canonical: http://127.0.0.1:9/.well-known/security.txt\nPolicy:",
+      ),
+      http,
+    ).length,
+    1,
+  );
+});
+
+test("security.txt passes in both indexing modes", async (t) => {
+  for (const allowIndexable of [false, true]) {
+    const { url } = await stub(t, (route, result) => {
+      // Apex posture for the indexable run: strip the staging noindex from
+      // indexable HTML leaves; the archive and branded 404 keep theirs.
+      // security.txt is text/plain, so neither mode touches its headers.
+      if (allowIndexable && (route === "/events/past" || route === "/__smoke_unknown_route__"))
+        return;
+      if (allowIndexable && result.headers["content-type"]?.startsWith("text/html"))
+        delete result.headers["x-robots-tag"];
+    });
+    const result = await run(url, { allowIndexable });
+    assert.equal(result.ok, true, `allowIndexable=${allowIndexable}: ${result.output}`);
+    // The security.txt route itself passes in both modes: a failure here
+    // would name it explicitly.
+    assert.ok(
+      result.output.includes("PASS /.well-known/security.txt"),
+      `allowIndexable=${allowIndexable}: ${result.output}`,
+    );
   }
 });
 
@@ -505,7 +680,7 @@ test("past events accepts rendered Archive but rejects rendered Upcoming with ar
     });
     const result = await run(url);
     assert.equal(result.ok, expected, result.output);
-    assert.equal(requests.length, 17);
+    assert.equal(requests.length, 18);
     if (!expected) {
       assert.match(
         result.output,
@@ -652,6 +827,166 @@ test("CLI --fail-on-ready-wait-critical gates staging while the flag-less CLI pa
   );
 });
 
+// Acceptance: a blind queue-observability path must not pass the staging
+// fail-closed gate. /up itself is unchanged (unknown stays HTTP 200 /
+// healthy at the route); only the staging smoke verdict changes, and only
+// with failOnReadyWaitCritical. Without the flag the legacy pass is kept
+// so production/rollback smokes can still ship a fix for a blind queue.
+test("fails closed on rendered unknown queue/readiness with the staging flag; flag-less passes", async (t) => {
+  const bundle = await build({
+    entryPoints: ["src/up.ts"],
+    bundle: true,
+    write: false,
+    format: "esm",
+    platform: "node",
+  });
+  const { upBody } = await import(
+    `data:text/javascript;base64,${Buffer.from(bundle.outputFiles[0].text).toString("base64")}`
+  );
+  const unknownQueue = {
+    status: "unknown",
+    pending: null,
+    delayed: null,
+    reserved: null,
+    total: null,
+    failed: null,
+    oldest_pending_age_seconds: null,
+    oldest_ready_wait_age_seconds: null,
+    ready_wait_severity: "unknown",
+    warn_at: 20,
+    critical_at: 100,
+    detail: null,
+  };
+  // Throwing measureQueue (broken observability) and unconfigured ledger
+  // (null) are the two real producers of the unknown envelope.
+  const measureQueue = async () => {
+    throw new Error("fixture outage");
+  };
+  for (const [state, measure, detail] of [
+    ["throwing measureQueue", measureQueue, null],
+    ["unconfigured", null, "queue ledger is not configured."],
+  ]) {
+    const body = await upBody(measure);
+    const ready = { ...body, db: "ok", pending_migrations: 0 };
+    // /up payload unchanged: queue slice is exactly the unknown envelope.
+    assert.deepEqual(ready.queue, { ...unknownQueue, detail }, state);
+    assert.equal(ready.queue.status, "unknown", state);
+    assert.equal(ready.queue.ready_wait_severity, "unknown", state);
+    const { url } = await stub(t, (route, result) => {
+      if (route === "/up") result.body = JSON.stringify(ready);
+    });
+    const gated = await run(url, { failOnReadyWaitCritical: true });
+    assert.equal(gated.ok, false, `${state}: ${gated.output}`);
+    assert.match(gated.output, /FAIL \/up:[^\n]*unknown/, state);
+    assert.ok(!gated.output.includes("PASS /up"), `${state}: ${gated.output}`);
+    const ungated = await run(url);
+    assert.equal(ungated.ok, true, `${state}: ${ungated.output}`);
+    assert.ok(ungated.output.includes("PASS /up"), `${state}: ${ungated.output}`);
+  }
+});
+
+test("staging flag fails closed when either queue.status or ready_wait_severity alone is unknown", async (t) => {
+  // The smoke consumes JSON, not the renderer, so each readiness field is
+  // gated independently: either one reporting unknown (including an older
+  // envelope with no severity field at all) is a blind queue.
+  const base = { status: "healthy", db: "ok", pending_migrations: 0 };
+  const cases = [
+    [
+      "queue.status unknown, severity healthy",
+      {
+        status: "unknown",
+        warn_at: 20,
+        critical_at: 100,
+        ready_wait_severity: "healthy",
+        oldest_ready_wait_age_seconds: null,
+      },
+    ],
+    ["queue.status unknown, severity absent", { status: "unknown", warn_at: 20, critical_at: 100 }],
+    [
+      "queue.status healthy, severity unknown",
+      {
+        status: "healthy",
+        warn_at: 20,
+        critical_at: 100,
+        ready_wait_severity: "unknown",
+        oldest_ready_wait_age_seconds: null,
+      },
+    ],
+    [
+      "queue.status degraded, severity unknown",
+      {
+        status: "degraded",
+        warn_at: 20,
+        critical_at: 100,
+        ready_wait_severity: "unknown",
+        oldest_ready_wait_age_seconds: null,
+      },
+    ],
+  ];
+  for (const [state, queue] of cases) {
+    const { url } = await stub(t, (route, result) => {
+      if (route === "/up") result.body = JSON.stringify({ ...base, queue });
+    });
+    const gated = await run(url, { failOnReadyWaitCritical: true });
+    assert.equal(gated.ok, false, `${state}: ${gated.output}`);
+    assert.match(gated.output, /FAIL \/up:[^\n]*unknown/, state);
+    assert.ok(!gated.output.includes("PASS /up"), `${state}: ${gated.output}`);
+    const ungated = await run(url);
+    assert.equal(ungated.ok, true, `${state}: ${ungated.output}`);
+    assert.ok(ungated.output.includes("PASS /up"), `${state}: ${ungated.output}`);
+  }
+});
+
+test("healthy, warning and degraded rendered envelopes still pass with the staging flag", async (t) => {
+  const bundle = await build({
+    entryPoints: ["src/up.ts"],
+    bundle: true,
+    write: false,
+    format: "esm",
+    platform: "node",
+  });
+  const { upBody } = await import(
+    `data:text/javascript;base64,${Buffer.from(bundle.outputFiles[0].text).toString("base64")}`
+  );
+  for (const state of ["healthy", "warning", "degraded"]) {
+    const body = await upBody(async () => {
+      const pending = state === "degraded" ? 20 : 0;
+      return {
+        pending,
+        delayed: 0,
+        reserved: 0,
+        total: pending,
+        failed: 0,
+        oldestPendingAgeSeconds: null,
+        oldestReadyWaitAgeSeconds: state === "warning" ? 300.1 : null,
+      };
+    });
+    const ready = { ...body, db: "ok", pending_migrations: 0 };
+    assert.notEqual(ready.queue.status, "unknown", state);
+    assert.notEqual(ready.queue.ready_wait_severity, "unknown", state);
+    const { url } = await stub(t, (route, result) => {
+      if (route === "/up") result.body = JSON.stringify(ready);
+    });
+    const gated = await run(url, { failOnReadyWaitCritical: true });
+    assert.equal(gated.ok, true, `${state}: ${gated.output}`);
+    assert.ok(gated.output.includes("PASS /up"), `${state}: ${gated.output}`);
+  }
+});
+
+test("CLI --fail-on-ready-wait-critical fails an unknown queue envelope while the flag-less CLI passes", async (t) => {
+  const { url } = await stub(t, (route, result) => {
+    if (route === "/up")
+      result.body =
+        '{"status":"healthy","db":"ok","pending_migrations":0,"queue":{"status":"unknown","pending":null,"delayed":null,"reserved":null,"total":null,"failed":null,"oldest_pending_age_seconds":null,"oldest_ready_wait_age_seconds":null,"ready_wait_severity":"unknown","warn_at":20,"critical_at":100,"detail":null}}';
+  });
+  const gated = await cli([url, "--fail-on-ready-wait-critical"]);
+  assert.equal(gated.code, 1, gated.output);
+  assert.match(gated.output, /FAIL \/up:[^\n]*unknown/);
+  const ungated = await cli([url]);
+  assert.equal(ungated.code, 0, ungated.output);
+  assert.ok(ungated.output.includes("PASS /up"), ungated.output);
+});
+
 test("smoke queue thresholds track src/up.ts QUEUE_WARN_AT / QUEUE_CRITICAL_AT", async () => {
   // Drift guard: bin/smoke.mjs runs on plain node with no TS loader, so its
   // expected warn_at/critical_at are duplicated from src/up-queue.ts
@@ -677,6 +1012,29 @@ test("smoke queue thresholds track src/up.ts QUEUE_WARN_AT / QUEUE_CRITICAL_AT",
     SMOKE_QUEUE_CRITICAL_AT,
     QUEUE_CRITICAL_AT,
     `smoke queue critical_at drifted from src/up.ts: smoke=${SMOKE_QUEUE_CRITICAL_AT} src=${QUEUE_CRITICAL_AT}; update SMOKE_QUEUE_CRITICAL_AT in bin/smoke.mjs`,
+  );
+});
+
+test("smoke security.txt expiry tracks src/security-txt.ts SECURITY_TXT_EXPIRES", async () => {
+  // Drift guard: bin/smoke.mjs runs on plain node with no TS loader, so its
+  // expected Expires is duplicated from src/security-txt.ts and pinned here.
+  // An expiry change in src fails this test at PR time (npm run test:smoke is
+  // in the required check job); update SMOKE_SECURITY_TXT_EXPIRES in
+  // bin/smoke.mjs to match.
+  const bundle = await build({
+    entryPoints: ["src/security-txt.ts"],
+    bundle: true,
+    write: false,
+    format: "esm",
+    platform: "node",
+  });
+  const { SECURITY_TXT_EXPIRES } = await import(
+    `data:text/javascript;base64,${Buffer.from(bundle.outputFiles[0].text).toString("base64")}`
+  );
+  assert.equal(
+    SMOKE_SECURITY_TXT_EXPIRES,
+    SECURITY_TXT_EXPIRES,
+    `smoke security Expires drifted from src/security-txt.ts: smoke=${SMOKE_SECURITY_TXT_EXPIRES} src=${SECURITY_TXT_EXPIRES}; update SMOKE_SECURITY_TXT_EXPIRES in bin/smoke.mjs`,
   );
 });
 
@@ -717,6 +1075,233 @@ test("accepts a critical backlog as degraded, never down", async (t) => {
   const result = await run(url);
   assert.equal(result.ok, true, result.output);
   assert.ok(result.output.includes("PASS /up"), result.output);
+});
+
+test("fails closed on a dead-letter failed count with the count in the output", async (t) => {
+  for (const failed of [1, 3]) {
+    const { url } = await stub(t, (route, result) => {
+      if (route === "/up")
+        result.body = `{"status":"healthy","db":"ok","pending_migrations":0,"queue":{"status":"healthy","warn_at":20,"critical_at":100,"failed":${failed}}}`;
+    });
+    const result = await run(url);
+    assert.equal(result.ok, false, `${failed}: ${result.output}`);
+    assert.match(
+      result.output,
+      new RegExp(
+        `FAIL /up: expected queue\\.failed 0 \\(no dead letters\\); actual queue\\.failed ${failed}`,
+      ),
+    );
+    assert.ok(!result.output.includes("PASS /up"), result.output);
+  }
+});
+
+test("fails closed on dead letters from the real /up renderer", async (t) => {
+  const bundle = await build({
+    entryPoints: ["src/up.ts"],
+    bundle: true,
+    write: false,
+    format: "esm",
+    platform: "node",
+  });
+  const { upBody } = await import(
+    `data:text/javascript;base64,${Buffer.from(bundle.outputFiles[0].text).toString("base64")}`
+  );
+  const body = await upBody(async () => ({
+    pending: 0,
+    delayed: 0,
+    reserved: 0,
+    total: 0,
+    failed: 2,
+    oldestPendingAgeSeconds: null,
+    oldestReadyWaitAgeSeconds: null,
+  }));
+  const ready = { ...body, db: "ok", pending_migrations: 0 };
+  assert.equal(ready.queue.failed, 2);
+  const { url } = await stub(t, (route, result) => {
+    if (route === "/up") result.body = JSON.stringify(ready);
+  });
+  const result = await run(url);
+  assert.equal(result.ok, false, result.output);
+  assert.match(
+    result.output,
+    /FAIL \/up: expected queue\.failed 0 \(no dead letters\); actual queue\.failed 2/,
+  );
+  assert.ok(!result.output.includes("PASS /up"), result.output);
+});
+
+test("failed 0, null and missing do not fail the dead-letter gate on their own", async (t) => {
+  for (const queue of ['"failed":0', '"failed":null', '"pending":0']) {
+    const { url } = await stub(t, (route, result) => {
+      if (route === "/up")
+        result.body = `{"status":"healthy","db":"ok","pending_migrations":0,"queue":{"status":"unknown","warn_at":20,"critical_at":100,${queue}}}`;
+    });
+    const result = await run(url);
+    assert.equal(result.ok, true, `${queue}: ${result.output}`);
+    assert.ok(result.output.includes("PASS /up"), result.output);
+  }
+});
+
+test("retained dead letters pass when the pre-deploy baseline covers them", async (t) => {
+  // Staging serves retained rows (queue.failed 19 on 2026-10-18): the
+  // promotion workflows capture that count before mutating, so history
+  // passes and only growth fails.
+  for (const [failed, failedBaseline] of [
+    [19, 19],
+    [19, 25],
+    [0, 0],
+  ]) {
+    const { url } = await stub(t, (route, result) => {
+      if (route === "/up")
+        result.body = `{"status":"healthy","db":"ok","pending_migrations":0,"queue":{"status":"healthy","warn_at":20,"critical_at":100,"failed":${failed}}}`;
+    });
+    const result = await run(url, { failedBaseline });
+    assert.equal(result.ok, true, `${failed}/${failedBaseline}: ${result.output}`);
+    assert.ok(result.output.includes("PASS /up"), result.output);
+  }
+});
+
+test("dead letters past the baseline fail with the count in the output", async (t) => {
+  const { url } = await stub(t, (route, result) => {
+    if (route === "/up")
+      result.body =
+        '{"status":"healthy","db":"ok","pending_migrations":0,"queue":{"status":"healthy","warn_at":20,"critical_at":100,"failed":20}}';
+  });
+  const result = await run(url, { failedBaseline: 19 });
+  assert.equal(result.ok, false, result.output);
+  assert.match(
+    result.output,
+    /FAIL \/up: expected queue\.failed <= 19 \(no new dead letters; baseline 19\); actual queue\.failed 20/,
+  );
+  assert.ok(!result.output.includes("PASS /up"), result.output);
+});
+
+test("CLI --failed-baseline and SMOKE_FAILED_BASELINE cover retained rows", async (t) => {
+  const { url } = await stub(t, (route, result) => {
+    if (route === "/up")
+      result.body =
+        '{"status":"healthy","db":"ok","pending_migrations":0,"queue":{"status":"healthy","warn_at":20,"critical_at":100,"failed":19}}';
+  });
+  const flagged = await cli([url, "--failed-baseline", "19"]);
+  assert.equal(flagged.code, 0, flagged.output);
+  const grown = await cli([url, "--failed-baseline", "18"]);
+  assert.equal(grown.code, 1, grown.output);
+  assert.match(grown.output, /actual queue\.failed 19/);
+  const unflagged = await cli([url]);
+  assert.equal(unflagged.code, 1, unflagged.output);
+  const previous = process.env.SMOKE_FAILED_BASELINE;
+  process.env.SMOKE_FAILED_BASELINE = "19";
+  try {
+    const fromEnv = await cli([url]);
+    assert.equal(fromEnv.code, 0, fromEnv.output);
+  } finally {
+    if (previous === undefined) delete process.env.SMOKE_FAILED_BASELINE;
+    else process.env.SMOKE_FAILED_BASELINE = previous;
+  }
+  // An empty SMOKE_FAILED_BASELINE is the workflows' unreadable-/up fallback:
+  // it maps to no baseline, so ad-hoc runs keep the absolute gate.
+  const previousEmpty = process.env.SMOKE_FAILED_BASELINE;
+  process.env.SMOKE_FAILED_BASELINE = "";
+  try {
+    const fromEmpty = await cli([url]);
+    assert.equal(fromEmpty.code, 1, fromEmpty.output);
+    assert.match(
+      fromEmpty.output,
+      /FAIL \/up: expected queue\.failed 0 \(no dead letters\); actual queue\.failed 19/,
+    );
+  } finally {
+    if (previousEmpty === undefined) delete process.env.SMOKE_FAILED_BASELINE;
+    else process.env.SMOKE_FAILED_BASELINE = previousEmpty;
+  }
+  // An explicit flag wins over the environment in either direction.
+  const previousBoth = process.env.SMOKE_FAILED_BASELINE;
+  process.env.SMOKE_FAILED_BASELINE = "18";
+  try {
+    const flagWins = await cli([url, "--failed-baseline", "19"]);
+    assert.equal(flagWins.code, 0, flagWins.output);
+  } finally {
+    if (previousBoth === undefined) delete process.env.SMOKE_FAILED_BASELINE;
+    else process.env.SMOKE_FAILED_BASELINE = previousBoth;
+  }
+  process.env.SMOKE_FAILED_BASELINE = "19";
+  try {
+    const envLoses = await cli([url, "--failed-baseline", "18"]);
+    assert.equal(envLoses.code, 1, envLoses.output);
+    assert.match(envLoses.output, /actual queue\.failed 19/);
+  } finally {
+    if (previousBoth === undefined) delete process.env.SMOKE_FAILED_BASELINE;
+    else process.env.SMOKE_FAILED_BASELINE = previousBoth;
+  }
+});
+
+test("allow-missing-baseline skips the dead-letter gate when the baseline is unreadable", async (t) => {
+  const { url } = await stub(t, (route, result) => {
+    if (route === "/up")
+      result.body =
+        '{"status":"healthy","db":"ok","pending_migrations":0,"queue":{"status":"healthy","warn_at":20,"critical_at":100,"failed":19}}';
+  });
+  // Unit surface: no baseline + opt-in skips, without it the absolute gate fires.
+  const skipped = await run(url, { allowMissingBaseline: true });
+  assert.equal(skipped.ok, true, skipped.output);
+  assert.ok(skipped.output.includes("SKIP /up dead-letter gate"), skipped.output);
+  assert.ok(skipped.output.includes("PASS /up"), skipped.output);
+  const strict = await run(url);
+  assert.equal(strict.ok, false, strict.output);
+  // CLI surface: empty env (the workflow fallback) + opt-in skips.
+  const previousBaseline = process.env.SMOKE_FAILED_BASELINE;
+  const previousAllow = process.env.SMOKE_ALLOW_MISSING_BASELINE;
+  process.env.SMOKE_FAILED_BASELINE = "";
+  process.env.SMOKE_ALLOW_MISSING_BASELINE = "1";
+  try {
+    const fromEnv = await cli([url]);
+    assert.equal(fromEnv.code, 0, fromEnv.output);
+    assert.match(fromEnv.output, /SKIP \/up dead-letter gate/);
+  } finally {
+    if (previousBaseline === undefined) delete process.env.SMOKE_FAILED_BASELINE;
+    else process.env.SMOKE_FAILED_BASELINE = previousBaseline;
+    if (previousAllow === undefined) delete process.env.SMOKE_ALLOW_MISSING_BASELINE;
+    else process.env.SMOKE_ALLOW_MISSING_BASELINE = previousAllow;
+  }
+  const flagged = await cli([url, "--allow-missing-baseline"]);
+  assert.equal(flagged.code, 0, flagged.output);
+  assert.match(flagged.output, /SKIP \/up dead-letter gate/);
+  // A readable baseline with allow-missing still enforces growth: the
+  // workflows set both together, so `if (allowMissingBaseline)` alone would
+  // silently disable the gate. Growth fails, at-baseline passes without SKIP.
+  const { url: grownUrl } = await stub(t, (route, result) => {
+    if (route === "/up")
+      result.body =
+        '{"status":"healthy","db":"ok","pending_migrations":0,"queue":{"status":"healthy","warn_at":20,"critical_at":100,"failed":20}}';
+  });
+  const grownWithBaseline = await run(grownUrl, {
+    failedBaseline: 19,
+    allowMissingBaseline: true,
+  });
+  assert.equal(grownWithBaseline.ok, false, grownWithBaseline.output);
+  assert.match(
+    grownWithBaseline.output,
+    /FAIL \/up: expected queue\.failed <= 19 \(no new dead letters; baseline 19\); actual queue\.failed 20/,
+  );
+  assert.ok(
+    !grownWithBaseline.output.includes("SKIP /up dead-letter gate"),
+    grownWithBaseline.output,
+  );
+  const { url: atUrl } = await stub(t, (route, result) => {
+    if (route === "/up")
+      result.body =
+        '{"status":"healthy","db":"ok","pending_migrations":0,"queue":{"status":"healthy","warn_at":20,"critical_at":100,"failed":19}}';
+  });
+  const atBaseline = await run(atUrl, { failedBaseline: 19, allowMissingBaseline: true });
+  assert.equal(atBaseline.ok, true, atBaseline.output);
+  assert.ok(atBaseline.output.includes("PASS /up"), atBaseline.output);
+  assert.ok(!atBaseline.output.includes("SKIP /up dead-letter gate"), atBaseline.output);
+});
+
+test("rejects a non-integer failed baseline", async (t) => {
+  const { url } = await stub(t);
+  await assert.rejects(() => smoke(url, { failedBaseline: -1 }), /failed-baseline/);
+  const badFlag = await cli([url, "--failed-baseline", "many"]);
+  assert.equal(badFlag.code, 2, badFlag.output);
+  assert.match(badFlag.output, /failed-baseline/);
 });
 
 test("rejects /up without the cutover origin marker", async (t) => {
@@ -835,7 +1420,7 @@ for (const [robotsTag, expected] of [
     });
     const result = await run(url);
     assert.equal(result.ok, expected, result.output);
-    assert.equal(requests.length, 17);
+    assert.equal(requests.length, 18);
     if (!expected) {
       for (const path of ["/about", "/admin"]) {
         assert.ok(
@@ -920,7 +1505,7 @@ for (const [location, expected] of [
     });
     const result = await run(url);
     assert.equal(result.ok, expected, result.output);
-    assert.equal(requests.length, 17);
+    assert.equal(requests.length, 18);
     assert.ok(!result.output.includes("never-log-this"));
     if (!expected) {
       assert.match(
@@ -966,7 +1551,7 @@ test("connection failures include route and expected versus actual", async (t) =
     result.output,
     /FAIL \/up: expected HTTP response and body within timeout; actual TypeError/,
   );
-  assert.match(result.output, /17 routes, 17 failed assertions/);
+  assert.match(result.output, /18 routes, 18 failed assertions/);
 });
 
 test("invalid input is rejected before making requests", async () => {
@@ -994,7 +1579,7 @@ test("allowIndexable passes apex HTML without the staging noindex", async (t) =>
   });
   const result = await run(url, { allowIndexable: true });
   assert.equal(result.ok, true, result.output);
-  assert.equal(requests.length, 17);
+  assert.equal(requests.length, 18);
   assert.ok(requests.every((r) => r.method === "GET" && r.cookie === undefined));
 });
 
@@ -1030,5 +1615,5 @@ test("CLI --allow-indexable reaches the apex posture", async (t) => {
   });
   const result = await cli([url, "--allow-indexable"]);
   assert.equal(result.code, 0, result.output);
-  assert.match(result.output, /17 routes, 0 failed assertions/);
+  assert.match(result.output, /18 routes, 0 failed assertions/);
 });

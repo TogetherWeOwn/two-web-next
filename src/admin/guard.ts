@@ -36,6 +36,7 @@ import {
   createMemorySessionStore,
   createPostgresSessionStore,
   hashToken,
+  isValidSessionToken,
   type SessionStore,
   type Sql,
 } from "../sessions";
@@ -105,8 +106,9 @@ export function adminGuard(overrides?: AdminOverrides | SessionStore) {
     const token = await getSignedCookie(c, c.env.SESSION_SECRET, SESSION_COOKIE);
     // Guest: into the site Discord OAuth flow, like everyone else. There is
     // no panel login page. The bounce records the page they asked for
-    // (legacy url.intended) so the callback returns them to it.
-    if (!token) return bounceToLogin(c);
+    // (legacy url.intended) so the callback returns them to it. Malformed
+    // bearers are guests too, with zero store reads.
+    if (!isValidSessionToken(token)) return bounceToLogin(c);
 
     // A bare SessionStore keeps working as the single override (guard pins).
     const isStore = (o: unknown): o is SessionStore =>

@@ -1,3 +1,4 @@
+import { alertScheduledFailing } from "../alerts";
 import {
   AGENT_EVENT_AUDIT_RETENTION_DAYS,
   BOARD_VIEW_LOG_RETENTION_DAYS,
@@ -103,6 +104,7 @@ const cutoff = (now: Date, days: number): Date => new Date(now.getTime() - days 
  * inside the flight its row locks would be held until the whole pass commits
  * and block concurrent acquires). Either client satisfies the stores shape.
  */
+
 async function drainPruneTable(
   prune: (cutoff: Date) => Promise<number>,
   cutoffDate: Date,
@@ -116,9 +118,23 @@ async function drainPruneTable(
   return { total, capped: true };
 }
 
+/**
+ * Cap-hit signal: a full final prune batch means rows may still be pending
+ * past the per-pass ceiling, so sustained over-cap inflow would violate
+ * retention indefinitely with no page. Only the class reaches the page line
+ * (never a message): table names, counts and SQL stay out of it.
+ */
+export class PruneBatchCapError extends Error {
+  constructor() {
+    super("prune batch cap hit with rows possibly pending");
+    this.name = "PruneBatchCapError";
+  }
+}
+
 export async function pruneModelTables(
   stores: PruneStores,
   now: Date = new Date(),
+  opts?: { reportCap?: (capped: boolean) => void },
 ): Promise<PruneCounts> {
   const [
     agentEventAudits,
@@ -181,12 +197,26 @@ export async function pruneModelTables(
   )
     .filter(([, capped]) => capped)
     .map(([name]) => name);
-  if (cappedTables.length > 0)
-    console.warn("Model prune pass hit per-table batch cap with rows possibly pending.", {
-      ...counts,
-      cappedTables,
-    });
-  else if (Object.values(counts).some((n) => n > 0))
+  const capped = cappedTables.length > 0;
+  // Scheduled path (worker.ts): report the cap without paging inside the
+  // advisory-lock transaction. The caller pages after the flight commits, so
+  // a commit failure after a capped drain cannot leave a cap page muting the
+  // real failure page (both share the Tail mute key
+  // scheduled.failing@model:prune).
+  opts?.reportCap?.(capped);
+  const deferred = opts?.reportCap !== undefined;
+  if (capped && !deferred) {
+    // Page once per capped pass instead of warning: sustained over-cap
+    // inflow would otherwise violate retention indefinitely with no page.
+    // The line is redacted to the scheduled.failing shape (no tables,
+    // counts or messages); the pass still returns its counts and never
+    // throws on a cap hit.
+    try {
+      alertScheduledFailing("model:prune", new PruneBatchCapError());
+    } catch {
+      // A throwing alert sink must not change the counts or fail the pass.
+    }
+  } else if (!capped && Object.values(counts).some((n) => n > 0))
     console.info("Model prune pass completed.", counts);
   return counts;
 }

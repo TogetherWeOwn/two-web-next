@@ -32,6 +32,11 @@ export function shaFromVersionTag(tag: unknown): string | undefined {
 }
 
 const BUILD_SHA = /^[0-9a-f]{40}$/;
+// Cloudflare Worker Version IDs are lowercase UUIDs (see src/up-revision.ts:
+// version_id is the exact value `wrangler rollback` takes). Anything else is
+// not echoed: a raw non-UUID string could push the page past Discord's
+// 2,000-character limit and turn the page into a delivery_failed.
+const VERSION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
 // Live traces do not populate scriptVersion.tag: in the 2026-10-17 staging
 // drill the active version tag was the bare deploy SHA, yet delivered
@@ -69,6 +74,39 @@ function traceBuildSha(trace: TraceLike): string | undefined {
   return shaFromVersionTag(trace.scriptVersion?.tag) ?? buildShaFromLogs(trace.logs);
 }
 
+export type UpAttribution = {
+  build_sha?: string;
+  version_id?: string;
+};
+
+/**
+ * Build attribution from a prober-observed `/up` body. The public body
+ * carries `revision: { version_id, commit }` (see src/up-revision.ts);
+ * `commit` passes only through the existing exact 40-hex SHA allowlist and
+ * `version_id` only through the UUID allowlist for Worker Version IDs.
+ * Anything unreadable yields absent attribution, never a throw and never an
+ * echo of the raw value.
+ */
+export function upAttributionFromBody(body: unknown): UpAttribution {
+  if (typeof body !== "string" || body === "" || body.length > 64_000) return {};
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(body);
+  } catch {
+    return {};
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
+  const revision = (parsed as Record<string, unknown>).revision;
+  if (!revision || typeof revision !== "object" || Array.isArray(revision)) return {};
+  const fields = revision as Record<string, unknown>;
+  const commit = fields.commit;
+  const build_sha = typeof commit === "string" && BUILD_SHA.test(commit) ? commit : undefined;
+  if (!build_sha) return {};
+  const version = fields.version_id;
+  const version_id = typeof version === "string" && VERSION_ID.test(version) ? version : undefined;
+  return version_id ? { build_sha, version_id } : { build_sha };
+}
+
 export function logsPath(script: string): string {
   return `Workers & Pages > ${script} > Observability > Logs`;
 }
@@ -91,6 +129,16 @@ export const APP_SCRIPT_NAMES: ReadonlySet<string> = new Set([
 const UPTIME_TIMEOUT_MS = 10_000;
 const UPTIME_RETRY_DELAY_MS = 10_000;
 const EXPECTED_ORIGIN = "two-web-next";
+// Bound the /up attribution read: headers already arrived, so only the body
+// read needs a budget, and it must not ride the cooperative fetch signal
+// (a body that stalls after its headers would stall the whole scheduled
+// run: no uptime page and no synthetic checks). Expiry yields absent
+// attribution and cleanup still runs.
+const ATTRIBUTION_TIMEOUT_MS = 2_000;
+// Largest /up body prefix worth parsing: upAttributionFromBody rejects
+// anything over 64_000 characters, so stop reading there instead of
+// buffering an unbounded body into the pager.
+const ATTRIBUTION_READ_CAP = 64_000;
 // Bound every aggregator call: aggregation runs before per-fingerprint paging
 // in the tail handler, so a stalled Durable Object must not stall that pager.
 // Each complete operation (request plus body parsing) settles within
@@ -174,6 +222,8 @@ export type UptimeAlert = {
   event: "uptime.down";
   status: number;
   down_seconds: number;
+  build_sha?: string;
+  version_id?: string;
   timestamp: string;
 };
 
@@ -236,6 +286,8 @@ export type SyntheticAlert = {
   /** Public host of the configured target: identifies the environment. */
   target: string;
   status: number;
+  build_sha?: string;
+  version_id?: string;
   timestamp: string;
 };
 
@@ -431,6 +483,22 @@ export async function parseAlert(
   return null;
 }
 
+// Internal attempt identity for fencing retried results. One UUID per
+// admitted spike/health page attempt, persisted with the pending marker and
+// carried only on the aggregator wire (never in external alert payloads).
+// A result settles only the attempt whose identity it carries.
+function newAttemptId(): string {
+  try {
+    return crypto.randomUUID();
+  } catch {
+    return `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  }
+}
+
+function validAttemptId(value: unknown): string | undefined {
+  return typeof value === "string" && value.length >= 8 && value.length <= 128 ? value : undefined;
+}
+
 type Bucket = { at: number; requests: number; errors: number; crashes: number };
 type ScriptState = {
   buckets: Bucket[];
@@ -440,6 +508,9 @@ type ScriptState = {
   // per-fingerprint mute; an unresolved attempt stops blocking after one
   // cooldown so a crashed delivery cannot mute the alarm forever.
   pendingAt?: number;
+  // Fences retried results to the attempt they settle. Restored legacy state
+  // has a pendingAt without an identity and still suppresses until age-out.
+  pendingAttemptId?: string;
   buildSha?: string;
 };
 
@@ -469,7 +540,20 @@ export class AggregateTracker {
   constructor(private readonly now: () => number = Date.now) {}
 
   snapshot(): Record<string, ScriptState> {
-    return Object.fromEntries(this.scripts);
+    return Object.fromEntries(
+      [...this.scripts].map(([script, state]) => [
+        script,
+        {
+          buckets: state.buckets,
+          cooldownUntil: state.cooldownUntil,
+          ...(state.pendingAt !== undefined ? { pendingAt: state.pendingAt } : {}),
+          ...(state.pendingAttemptId !== undefined
+            ? { pendingAttemptId: state.pendingAttemptId }
+            : {}),
+          ...(state.buildSha ? { buildSha: state.buildSha } : {}),
+        },
+      ]),
+    );
   }
 
   restore(value: unknown): void {
@@ -507,9 +591,21 @@ export class AggregateTracker {
         buckets: merged.slice(-MAX_BUCKETS),
         cooldownUntil: Number.isSafeInteger(state.cooldownUntil) ? state.cooldownUntil! : 0,
         pendingAt: Number.isSafeInteger(state.pendingAt) ? state.pendingAt : undefined,
+        pendingAttemptId: validAttemptId(state.pendingAttemptId),
         buildSha: shaFromVersionTag(state.buildSha),
       });
     }
+  }
+
+  // Identity of the current pending spike attempt for one script, if any.
+  // Direct observe() callers keep the long-standing plain alert shape; the
+  // fencing identity travels via this accessor (local) and the aggregator
+  // wire (Durable Object), never in external alert payloads.
+  pendingAttemptId(script: string): string | null {
+    const state = this.scripts.get(script);
+    return state?.pendingAt !== undefined && state.pendingAttemptId !== undefined
+      ? state.pendingAttemptId
+      : null;
   }
 
   observe(batch: TraceBatch): SpikeAlert | null {
@@ -557,6 +653,7 @@ export class AggregateTracker {
     const date = new Date(at);
     if (!Number.isFinite(date.getTime())) return null;
     state.pendingAt = at;
+    state.pendingAttemptId = newAttemptId();
     return orderSpike({
       event: "error.spike",
       script: batch.script,
@@ -571,12 +668,23 @@ export class AggregateTracker {
     });
   }
 
-  /** Arm the cooldown only for a delivered page; a failed POST may retry on the next batch. */
-  resolve(script: string, delivered: boolean): void {
+  /**
+   * Settle one pending spike attempt. A result carrying an attempt identity
+   * settles only that attempt: a duplicate or stale retry never clears, nor
+   * arms a cooldown for, a newer attempt. A result without an identity is a
+   * legacy caller and still settles any pending attempt; stored legacy state
+   * without an identity is settled by any result so upgrades keep retrying.
+   */
+  resolve(script: string, delivered: boolean, attemptId?: unknown): void {
     const state = this.scripts.get(script);
     if (!state || state.pendingAt === undefined) return;
+    const resultId = validAttemptId(attemptId);
+    if (resultId !== undefined && state.pendingAttemptId !== undefined) {
+      if (resultId !== state.pendingAttemptId) return;
+    }
     if (delivered) state.cooldownUntil = state.pendingAt + SPIKE_COOLDOWN_MS;
     state.pendingAt = undefined;
+    state.pendingAttemptId = undefined;
   }
 }
 
@@ -585,24 +693,45 @@ export class HealthTracker {
   private downSince: number | null = null;
   private cooldownUntil = 0;
   private pendingAt: number | null = null;
+  // Fences retried results to the attempt they settle; see AggregateTracker.
+  private pendingAttemptId: string | undefined;
   constructor(private readonly now: () => number = Date.now) {}
 
-  snapshot(): { downSince: number | null; cooldownUntil: number; pendingAt: number | null } {
+  snapshot(): {
+    downSince: number | null;
+    cooldownUntil: number;
+    pendingAt: number | null;
+    pendingAttemptId?: string;
+  } {
     return {
       downSince: this.downSince,
       cooldownUntil: this.cooldownUntil,
       pendingAt: this.pendingAt,
+      ...(this.pendingAttemptId !== undefined ? { pendingAttemptId: this.pendingAttemptId } : {}),
     };
   }
 
   restore(value: unknown): void {
     if (!value || typeof value !== "object" || Array.isArray(value)) return;
-    const state = value as { downSince?: unknown; cooldownUntil?: unknown; pendingAt?: unknown };
+    const state = value as {
+      downSince?: unknown;
+      cooldownUntil?: unknown;
+      pendingAt?: unknown;
+      pendingAttemptId?: unknown;
+    };
     this.downSince = Number.isSafeInteger(state.downSince) ? (state.downSince as number) : null;
     this.cooldownUntil = Number.isSafeInteger(state.cooldownUntil)
       ? (state.cooldownUntil as number)
       : 0;
     this.pendingAt = Number.isSafeInteger(state.pendingAt) ? (state.pendingAt as number) : null;
+    this.pendingAttemptId = validAttemptId(state.pendingAttemptId);
+  }
+
+  /** Identity of the current pending health attempt, if any. */
+  pendingAttempt(): string | null {
+    return this.pendingAt !== null && this.pendingAttemptId !== undefined
+      ? this.pendingAttemptId
+      : null;
   }
 
   /** Returns how long health has been red when a page is due, else null. */
@@ -610,6 +739,7 @@ export class HealthTracker {
     if (ok) {
       this.downSince = null;
       this.pendingAt = null;
+      this.pendingAttemptId = undefined;
       return null;
     }
     if (this.downSince === null) this.downSince = at;
@@ -617,19 +747,26 @@ export class HealthTracker {
     // cooldown (same bound as the spike pending) instead of wedging the alarm.
     if (this.pendingAt !== null && at - this.pendingAt < HEALTH_COOLDOWN_MS) return null;
     this.pendingAt = null;
+    this.pendingAttemptId = undefined;
     const downMs = at - this.downSince;
     // Strictly over two minutes: exactly HEALTH_DOWN_MS red does not page yet.
     if (downMs <= HEALTH_DOWN_MS || at < this.cooldownUntil) return null;
     this.pendingAt = at;
+    this.pendingAttemptId = newAttemptId();
     return downMs;
   }
 
   /** Arm the cooldown only for a delivered page; a failed POST re-pages next run. */
-  resolve(delivered: boolean): void {
+  resolve(delivered: boolean, attemptId?: unknown): void {
+    const resultId = validAttemptId(attemptId);
+    if (resultId !== undefined && this.pendingAttemptId !== undefined) {
+      if (resultId !== this.pendingAttemptId) return;
+    }
     if (delivered && this.pendingAt !== null) {
       this.cooldownUntil = this.pendingAt + HEALTH_COOLDOWN_MS;
     }
     this.pendingAt = null;
+    this.pendingAttemptId = undefined;
   }
 }
 
@@ -744,27 +881,37 @@ export class AlertAggregator {
       if (!batch) return new Response(null, { status: 400 });
       const alert = this.tracker.observe(batch);
       await this.state.storage.put("scripts", this.tracker.snapshot());
-      return Response.json(alert);
+      if (alert === null) return Response.json(null);
+      const attemptId = this.tracker.pendingAttemptId(batch.script);
+      return Response.json(attemptId ? { ...alert, attemptId } : alert);
     }
     if (pathname === "/spike-result") {
-      const result = body as { script?: unknown; delivered?: unknown };
+      const result = body as { script?: unknown; delivered?: unknown; attemptId?: unknown };
       if (
         typeof result?.script !== "string" ||
         !APP_SCRIPT_NAMES.has(result.script) ||
-        typeof result.delivered !== "boolean"
+        typeof result.delivered !== "boolean" ||
+        (result.attemptId !== undefined &&
+          result.attemptId !== null &&
+          validAttemptId(result.attemptId) === undefined)
       ) {
         return new Response(null, { status: 400 });
       }
-      this.tracker.resolve(result.script, result.delivered);
+      this.tracker.resolve(result.script, result.delivered, result.attemptId);
       await this.state.storage.put("scripts", this.tracker.snapshot());
       return Response.json(null);
     }
     if (pathname === "/health-result") {
-      const result = body as { delivered?: unknown };
-      if (typeof result?.delivered !== "boolean") {
+      const result = body as { delivered?: unknown; attemptId?: unknown };
+      if (
+        typeof result?.delivered !== "boolean" ||
+        (result.attemptId !== undefined &&
+          result.attemptId !== null &&
+          validAttemptId(result.attemptId) === undefined)
+      ) {
         return new Response(null, { status: 400 });
       }
-      this.health.resolve(result.delivered);
+      this.health.resolve(result.delivered, result.attemptId);
       await this.state.storage.put("health", this.health.snapshot());
       return Response.json(null);
     }
@@ -774,7 +921,8 @@ export class AlertAggregator {
     }
     const downMs = this.health.observe(probe.ok, probe.at as number);
     await this.state.storage.put("health", this.health.snapshot());
-    return Response.json(downMs === null ? null : { downMs });
+    if (downMs === null) return Response.json(null);
+    return Response.json({ downMs, attemptId: this.health.pendingAttempt() });
   }
 }
 
@@ -887,9 +1035,30 @@ export function createTailWorker(
     }
   }
 
-  async function observeBatch(env: TailEnv, batch: TraceBatch): Promise<SpikeAlert | null> {
+  type ObservationSource = "aggregator" | "local";
+  type SpikeObservation = SpikeAlert & { attemptId?: string; source: ObservationSource };
+  function normalizeSpikeObservation(value: unknown): SpikeObservation | null {
+    if (value === null) return null;
+    if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+    const record = value as Record<string, unknown> & SpikeAlert;
+    if (record.event !== "error.spike" || typeof record.script !== "string") return null;
+    const attemptId = validAttemptId((record as { attemptId?: unknown }).attemptId);
+    return {
+      ...(record as SpikeAlert),
+      ...(attemptId ? { attemptId } : {}),
+      source: "aggregator",
+    };
+  }
+
+  async function observeBatch(env: TailEnv, batch: TraceBatch): Promise<SpikeObservation | null> {
+    const localObserve = (): SpikeObservation | null => {
+      const alert = tracker.observe(batch);
+      if (alert === null) return null;
+      const attemptId = tracker.pendingAttemptId(batch.script);
+      return attemptId ? { ...alert, attemptId, source: "local" } : { ...alert, source: "local" };
+    };
     const stub = aggregator(env);
-    if (!stub) return tracker.observe(batch);
+    if (!stub) return localObserve();
     try {
       // One independent deadline covers request plus body parsing: headers
       // followed by a stalled JSON body expire as a single operation.
@@ -901,15 +1070,15 @@ export function createTailWorker(
           signal: AbortSignal.timeout(AGGREGATOR_TIMEOUT_MS),
         });
         if (!response.ok) return { fallback: true as const };
-        return { data: (await response.json()) as SpikeAlert | null };
+        return { data: normalizeSpikeObservation(await response.json()) };
       })();
       const result = await withAggregatorDeadline(operation);
-      if ("fallback" in result) return tracker.observe(batch);
+      if ("fallback" in result) return localObserve();
       return result.data;
     } catch {
       // Aggregation is additive: a broken binding falls back to local counts
       // and must never suppress the per-fingerprint pager.
-      return tracker.observe(batch);
+      return localObserve();
     }
   }
 
@@ -942,26 +1111,66 @@ export function createTailWorker(
     }
   }
 
-  async function resolveSpike(env: TailEnv, script: string, delivered: boolean): Promise<void> {
+  async function resolveSpike(
+    env: TailEnv,
+    script: string,
+    delivered: boolean,
+    attemptId?: string,
+    source?: ObservationSource,
+  ): Promise<void> {
     const stub = aggregator(env);
-    if (!stub) return tracker.resolve(script, delivered);
-    await postAggregatorResult(stub, "/spike-result", { script, delivered });
+    if (!stub) return tracker.resolve(script, delivered, attemptId);
+    // A locally-originated page never matches the DO's pending attempt, so it
+    // posts without an identity: an applied-but-unacknowledged DO attempt
+    // still settles (legacy settle-any) instead of suppressing the failed
+    // delivery's retry for a full cooldown. The local tracker settles with
+    // its own identity.
+    await postAggregatorResult(
+      stub,
+      "/spike-result",
+      source === "local" ? { script, delivered } : { script, delivered, attemptId },
+    );
     // Resolve locally too, whatever the aggregator answered: the observation
     // may have fallen back to this tracker while the result call recovered,
     // and a leftover local pending would suppress a failed delivery's retry.
-    tracker.resolve(script, delivered);
+    tracker.resolve(script, delivered, attemptId);
   }
 
-  async function resolveHealth(env: TailEnv, delivered: boolean): Promise<void> {
+  async function resolveHealth(
+    env: TailEnv,
+    delivered: boolean,
+    attemptId?: string | null,
+    source?: ObservationSource,
+  ): Promise<void> {
     const stub = aggregator(env);
-    if (!stub) return health.resolve(delivered);
-    await postAggregatorResult(stub, "/health-result", { delivered });
-    health.resolve(delivered);
+    if (!stub) return health.resolve(delivered, attemptId ?? undefined);
+    await postAggregatorResult(
+      stub,
+      "/health-result",
+      source === "local" ? { delivered } : { delivered, attemptId },
+    );
+    health.resolve(delivered, attemptId ?? undefined);
   }
 
-  async function observeHealth(env: TailEnv, ok: boolean, at: number): Promise<number | null> {
+  async function observeHealth(
+    env: TailEnv,
+    ok: boolean,
+    at: number,
+  ): Promise<{ downMs: number | null; attemptId: string | null; source: ObservationSource }> {
+    const local = (): {
+      downMs: number | null;
+      attemptId: string | null;
+      source: ObservationSource;
+    } => {
+      const downMs = health.observe(ok, at);
+      return {
+        downMs,
+        attemptId: downMs === null ? null : health.pendingAttempt(),
+        source: "local",
+      };
+    };
     const stub = aggregator(env);
-    if (!stub) return health.observe(ok, at);
+    if (!stub) return local();
     try {
       // One independent deadline covers request plus body parsing, matching
       // observeBatch: expiry takes the existing local fallback.
@@ -973,20 +1182,63 @@ export function createTailWorker(
           signal: AbortSignal.timeout(AGGREGATOR_TIMEOUT_MS),
         });
         if (!response.ok) return { fallback: true as const };
+        const data = (await response.json()) as { downMs?: unknown; attemptId?: unknown } | null;
+        if (!data || typeof data.downMs !== "number")
+          return { downMs: null, attemptId: null, source: "aggregator" as const };
         return {
-          data: (await response.json()) as { downMs?: unknown } | null,
+          downMs: data.downMs,
+          attemptId: validAttemptId(data.attemptId) ?? null,
+          source: "aggregator" as const,
         };
       })();
       const result = await withAggregatorDeadline(operation);
-      if ("fallback" in result) return health.observe(ok, at);
-      return typeof result.data?.downMs === "number" ? result.data.downMs : null;
+      if ("fallback" in result) return local();
+      return result;
     } catch {
-      return health.observe(ok, at);
+      return local();
+    }
+  }
+
+  /**
+   * Read the already-fetched /up body for the public revision marker only.
+   * Stops at ATTRIBUTION_READ_CAP so a corrupt or hostile body cannot buffer
+   * unboundedly; a stalled stream simply never resolves and the caller's
+   * independent deadline wins. Returns "" when the body is unavailable, so
+   * the caller yields absent attribution, never a throw. Never logs.
+   */
+  async function readAttributionBody(response: Response): Promise<string> {
+    if (typeof response.text !== "function") return "";
+    const stream = response.body;
+    if (!stream || typeof stream.getReader !== "function") return response.text();
+    const reader = stream.getReader();
+    const decoder = new TextDecoder();
+    let text = "";
+    try {
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        if (value) {
+          text += decoder.decode(value, { stream: true });
+          if (text.length > ATTRIBUTION_READ_CAP) return "";
+        }
+      }
+      text += decoder.decode();
+      return text;
+    } finally {
+      try {
+        reader.releaseLock();
+      } catch {
+        /* A pending stalled read stays with the stream; cancel below settles it. */
+      }
     }
   }
 
   /** One bounded /up probe. Transport errors and timeouts are status 0. */
-  async function probeOnce(target: string): Promise<{ ok: boolean; status: number }> {
+  async function probeOnce(target: string): Promise<{
+    ok: boolean;
+    status: number;
+    attribution: UpAttribution;
+  }> {
     try {
       const response = await send(target, {
         method: "GET",
@@ -995,10 +1247,26 @@ export function createTailWorker(
       });
       const ok =
         response.status === 200 && response.headers.get("x-two-origin") === EXPECTED_ORIGIN;
-      cleanupResponse(response); // Never read or log the body; cleanup stays inert.
-      return { ok, status: response.status };
+      // Read the already-fetched body for the public revision marker only.
+      // No extra fetch: health still depends on status + origin alone, and an
+      // unreadable body yields absent attribution, never a throw. The read
+      // races an independent setTimeout deadline (not the cooperative fetch
+      // signal), so a body that stalls after its headers cannot stall the
+      // scheduled run. Cleanup stays inert (see #1095): its outcome can
+      // never flip this verdict.
+      let attribution: UpAttribution = {};
+      try {
+        attribution = await withDeliveryDeadline(
+          readAttributionBody(response).then(upAttributionFromBody),
+          ATTRIBUTION_TIMEOUT_MS,
+        );
+      } catch {
+        attribution = {};
+      }
+      cleanupResponse(response); // Never read or log beyond the marker; cleanup stays inert.
+      return { ok, status: response.status, attribution };
     } catch {
-      return { ok: false, status: 0 };
+      return { ok: false, status: 0, attribution: {} };
     }
   }
 
@@ -1079,7 +1347,11 @@ export function createTailWorker(
    * from the configured UPTIME_URL, so staging and production each probe
    * their own public host with no extra configuration.
    */
-  async function runSynthetics(url: URL, uptimeUrl: string): Promise<void> {
+  async function runSynthetics(
+    url: URL,
+    uptimeUrl: string,
+    attribution: UpAttribution = {},
+  ): Promise<void> {
     let base: URL;
     try {
       base = new URL(uptimeUrl);
@@ -1102,11 +1374,14 @@ export function createTailWorker(
         check: check.path,
         target: base.host,
         status: second.status,
+        ...(attribution.build_sha ? { build_sha: attribution.build_sha } : {}),
+        ...(attribution.version_id ? { version_id: attribution.version_id } : {}),
         timestamp: new Date().toISOString(),
       };
-      // Mute on check identity only: the status rides in the payload but
-      // must not split the mute, or one flapping check re-pages on every
-      // status change. One instance probes one host, so no target segment.
+      // Mute on check identity only: the status and the build attribution ride
+      // in the payload but must not split the mute, or one flapping check (or
+      // a deploy mid-incident) re-pages on every change. One instance probes
+      // one host, so no target segment.
       await deliverScheduled(url, alert, `${alert.event}:${alert.check}`);
     }
   }
@@ -1132,10 +1407,14 @@ export function createTailWorker(
         }
       }
       for (const batch of batches.values()) {
-        const spike = await observeBatch(env, batch);
-        if (!spike) continue;
+        const observed = await observeBatch(env, batch);
+        if (!observed) continue;
+        // The fencing identity and observation source stay internal: strip
+        // both before delivery and receipts so external payloads keep
+        // their long-standing shape.
+        const { attemptId, source, ...spike } = observed;
         const delivered = await deliver(url, spike);
-        await resolveSpike(env, spike.script, delivered);
+        await resolveSpike(env, spike.script, delivered, attemptId, source);
         sink(
           JSON.stringify({
             ...spike,
@@ -1187,16 +1466,24 @@ export function createTailWorker(
       const url = webhookUrl(env.OPS_ALERT_WEBHOOK_URL);
       if (!url) return; // No secret: no probing, no logging, no outbound work.
       const at = now();
+      // Attribution is read from the /up body already fetched in this run —
+      // never a cached build, never an extra fetch. A healthy run names the
+      // first body's build; a red run names the second attempt's build, so an
+      // unreadable paging-run body pages unattributed instead of blaming the
+      // previous build.
+      let upAttribution: UpAttribution = {};
       const first = await probeOnce(env.UPTIME_URL);
       if (first.ok) {
+        upAttribution = first.attribution;
         await observeHealth(env, true, at);
       } else {
         await sleep(UPTIME_RETRY_DELAY_MS);
         const second = await probeOnce(env.UPTIME_URL);
+        upAttribution = second.attribution;
         if (second.ok) {
           await observeHealth(env, true, at);
         } else {
-          const downMs = await observeHealth(env, false, at);
+          const { downMs, attemptId, source } = await observeHealth(env, false, at);
           // Red, but not yet red for over two minutes (or cooling down):
           // no uptime page this run; synthetics below still run.
           if (downMs !== null) {
@@ -1204,10 +1491,12 @@ export function createTailWorker(
               event: "uptime.down",
               status: second.status,
               down_seconds: Math.floor(downMs / 1000),
+              ...(upAttribution.build_sha ? { build_sha: upAttribution.build_sha } : {}),
+              ...(upAttribution.version_id ? { version_id: upAttribution.version_id } : {}),
               timestamp: new Date(at).toISOString(),
             };
             const delivered = await deliver(url, alert);
-            await resolveHealth(env, delivered);
+            await resolveHealth(env, delivered, attemptId, source);
             sink(
               JSON.stringify({
                 ...alert,
@@ -1226,7 +1515,7 @@ export function createTailWorker(
       // boundary run that starts a minute late still probes.
       const slot = Number.isFinite(controller.scheduledTime) ? controller.scheduledTime : at;
       if (new Date(slot).getUTCMinutes() % SYNTHETIC_INTERVAL_MINUTES === 0) {
-        await runSynthetics(url, env.UPTIME_URL);
+        await runSynthetics(url, env.UPTIME_URL, upAttribution);
       }
     },
   };

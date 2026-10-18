@@ -310,7 +310,7 @@ describe("retention ledger doc rows", () => {
       "cutoff-exact and newer rows survive",
       "at most 1,000 rows (`PRUNE_DELETE_BATCH_SIZE = 1000`)",
       "up to 100 batches per table per pass (`PRUNE_DELETE_MAX_BATCHES = 100`)",
-      "full final batch emits a cap warning with `cappedTables`",
+      "full final batch pages once via `scheduled.failing@model:prune`",
       "older rows may remain until a later pass",
       "../src/db/admin-schema.ts",
       "../src/hotzones/board-log.ts",
@@ -337,6 +337,13 @@ describe("retention ledger doc rows", () => {
       ["src/hotzones/board-log.ts", "if (!queued || status !== 200) return;"],
       ["src/leaderboards/routes.tsx", "if (!view || c.res.status !== 200) return;"],
       ["src/jobs/worker.ts", "jobUniqueLocks: pgPruneStores(dispatchClient).jobUniqueLocks"],
+      ["src/jobs/worker.ts", "...pgPruneStores(db),"],
+      // The cap page fires only after the flight commits: the scheduled
+      // prune reports the cap without paging inside the transaction, and the
+      // handler pages post-commit so a commit failure cannot leave a cap page
+      // muting the real failure page.
+      ["src/jobs/worker.ts", "reportCap: (capped) => {"],
+      ["src/jobs/worker.ts", 'alertScheduledFailing("model:prune", new PruneBatchCapError())'],
     ] as const) {
       expect(read(path), `board-view call path: ${path}`).toContain(call);
     }
@@ -348,9 +355,7 @@ describe("retention ledger doc rows", () => {
       "drainPruneTable(\n      (c) => stores.boardViews.pruneOlderThan(c),\n      cutoff(now, BOARD_VIEW_LOG_RETENTION_DAYS),",
     );
     expect(cron).toContain('["boardViews", boardViews.capped]');
-    expect(cron).toContain(
-      'console.warn("Model prune pass hit per-table batch cap with rows possibly pending.", {',
-    );
+    expect(cron).toContain('alertScheduledFailing("model:prune", new PruneBatchCapError())');
     expect(normalizeSqlWindow(read("src/jobs/postgres.ts"))).toContain(
       "delete from board_view_logs where id in ( select id from board_view_logs where occurred_at < ${cutoff} order by id limit ${PRUNE_DELETE_BATCH_SIZE} for update skip locked ) returning 1",
     );
@@ -358,7 +363,7 @@ describe("retention ledger doc rows", () => {
     for (const name of [
       "prunes each table by age, sweeps expired sessions, and re-runs clean",
       "drains a multi-batch backlog in one pass and sums the counts",
-      "stops at the per-table batch cap and warns with rows possibly pending",
+      "stops at the per-table batch cap and pages once for the pass",
       "each age-pruned statement obeys its per-statement batch bound",
     ]) {
       expect(proof, `existing prune proof: ${name}`).toContain(`it("${name}"`);

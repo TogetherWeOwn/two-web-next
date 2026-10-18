@@ -42,6 +42,12 @@ const SUITES = [
     title: "Kit error shell rendered accessibility",
     min: 6,
   },
+  {
+    file: "test/admin-editor-expiry-departure.test.ts",
+    env: "ADMIN_EDITOR_EXPIRY_BROWSER_TESTS",
+    title: "admin editor expiry departure in Chromium",
+    min: 4,
+  },
 ];
 
 const workflow = await readFile(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8");

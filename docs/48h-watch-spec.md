@@ -131,10 +131,11 @@ No new infrastructure, no Logpush, no external shipper, no new pager.
    ```sh
    node ci/cutover-check.mjs --phase after --target togetherweown.com --json
    ```
-5. **Public-route smoke on the apex.** Seventeen public routes (the
+5. **Public-route smoke on the apex.** Eighteen public routes (the
    `bin/smoke.mjs` shape: `/up` JSON readiness plus `/`, `/about`, `/faq`,
    `/rules`, `/privacy`, `/events`, `/events/past`, `/join`, `/events.rss`,
-   `/events.ics`, `/sitemap_index.xml`, `/robots.txt`, `/discord` (302),
+   `/events.ics`, `/sitemap_index.xml`, `/robots.txt`,
+   `/.well-known/security.txt`, `/discord` (302),
    `/profile` (302), `/admin` (302/403) and `/__smoke_unknown_route__`
    (404), with CSP/nosniff/content-type/indexing/redirect assertions).
    ```sh

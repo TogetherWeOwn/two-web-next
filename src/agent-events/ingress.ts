@@ -20,6 +20,14 @@ import { lookupReplay, replayAnswer } from "./idempotency";
 import { rateLimit } from "./rate-limit";
 import { execute } from "./dispatch";
 
+// The longest captured Bearer credential the ingress will hash, look up or
+// count. Anything longer dies here as unauthenticated before the shield hash,
+// the hit insert and the grant lookup — and it is never demoted to the
+// anonymous bucket, so a rotation flood mints no buckets and spends no
+// budget. The refusal carries the existing 401 envelope and nothing of the
+// credential, exactly as an unknown short credential is answered.
+export const MAX_BEARER_CREDENTIAL_LENGTH = 512;
+
 export async function handleAgentEvent(
   sql: Sql,
   cfg: IngressConfig,
@@ -41,6 +49,21 @@ export async function admitAgentEvent(
   effects: IngressEffects = {},
 ): Promise<Answer | { handle: (body: unknown) => Promise<Answer> }> {
   const requestId = ulid();
+
+  // Overlong credentials never reach the hash: no shield bucket, no hit row,
+  // no verifier lookup, no payload digest and no audit write — the same
+  // envelope an unknown credential receives, so a granted overlong bearer is
+  // indistinguishable from an unknown short one.
+  if (credential !== null && credential.length > MAX_BEARER_CREDENTIAL_LENGTH) {
+    return {
+      status: 401,
+      body: {
+        reason: "unauthenticated",
+        message: "A valid machine credential is required.",
+        request_id: requestId,
+      },
+    };
+  }
 
   // The outer shield (two-web TOG-8402): every hit per credential per minute,
   // counted before auth, the grant lookup and the audit write — ahead of the

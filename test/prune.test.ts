@@ -84,8 +84,8 @@ describe("model:prune windows and sweep (memory, no DB)", () => {
   it("prune deletes carry a documented fixed per-statement batch bound", () => {
     // Each statement removes at most this many rows per pruned table,
     // including the scheduled session expiry sweep; the pass drains per
-    // table up to PRUNE_DELETE_MAX_BATCHES batches and warns when the cap
-    // is hit with rows possibly pending.
+    // table up to PRUNE_DELETE_MAX_BATCHES batches and pages once per pass
+    // when the cap is hit with rows possibly pending.
     expect(PRUNE_DELETE_BATCH_SIZE).toBe(1000);
     expect(PRUNE_DELETE_MAX_BATCHES).toBe(100);
   });
@@ -128,9 +128,10 @@ describe("model:prune windows and sweep (memory, no DB)", () => {
     });
   });
 
-  it("stops at the per-table batch cap and warns with rows possibly pending", async () => {
+  it("stops at the per-table batch cap and pages once for the pass", async () => {
     const now = new Date("2026-09-30T00:00:00Z");
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
     const info = vi.spyOn(console, "info").mockImplementation(() => {});
     try {
       const callCounts = { n: 0 };
@@ -167,20 +168,36 @@ describe("model:prune windows and sweep (memory, no DB)", () => {
       });
       // Each of the six tables stopped after exactly the max batches.
       expect(callCounts.n).toBe(6 * PRUNE_DELETE_MAX_BATCHES);
-      expect(warn).toHaveBeenCalledTimes(1);
-      expect(warn.mock.calls[0]![0]).toContain("batch cap");
-      const payload = warn.mock.calls[0]![1] as Record<string, unknown>;
-      expect(payload.cappedTables).toEqual([
-        "agentEventAudits",
-        "accessLog",
-        "joinAttempts",
-        "idempotencyKeys",
-        "searchLog",
-        "boardViews",
+      // The capped pass pages once for the whole pass instead of warning.
+      expect(warn).not.toHaveBeenCalled();
+      expect(error).toHaveBeenCalledTimes(1);
+      const raw = error.mock.calls[0]![0];
+      expect(typeof raw).toBe("string");
+      expect(raw as string).not.toContain("\n");
+      const line = JSON.parse(raw as string) as Record<string, unknown>;
+      expect(Object.keys(line).sort()).toEqual([
+        "build_sha",
+        "error_class",
+        "event",
+        "exception",
+        "job",
+        "level",
+        "release",
       ]);
+      expect(line).toMatchObject({
+        level: "critical",
+        event: "scheduled.failing",
+        job: "model:prune",
+      });
+      expect(line.error_class).toBe(line.exception);
+      expect(line.release).toBe(line.build_sha);
+      // The page line carries no table or count detail.
+      expect(raw as string).not.toContain("agentEventAudits");
+      expect(raw as string).not.toContain("cappedTables");
       expect(info).not.toHaveBeenCalled();
     } finally {
       warn.mockRestore();
+      error.mockRestore();
       info.mockRestore();
     }
   });

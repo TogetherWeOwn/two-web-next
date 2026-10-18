@@ -6,10 +6,11 @@ import { dbFor } from "../admin/db";
 import { requestBodyLimit } from "../body-limit";
 import type { Session } from "../env";
 import { rateLimitExceeded } from "../errors";
-import { RSVP_HONEY_FIELD, loginUrl, rsvpHoneyFilled, rsvpTrapTripped } from "../islands/contracts";
+import { RSVP_HONEY_FIELD, loginUrl, rsvpHoneyFilled } from "../islands/contracts";
 import { renderHtmlOutcome } from "../html-outcome";
 import { eventKeyAllowed } from "./keys";
 import { dispatchRsvpSync, isRsvpStatus, withdrawRsvp, writeRsvp, type RsvpAnswer } from "./rsvp";
+import { resolveNativeRsvpPage, rsvpPageReturnPath } from "./reads";
 import { renderRsvpRefusal } from "./rsvp-refusal-hono";
 import { rsvpRefusalModelFor, rsvpRefusalOutcome } from "./rsvp-refusal";
 import { body, type App, type Ctx, type SessionReader } from "./routes-shared";
@@ -40,10 +41,17 @@ const putRsvp = async (
   readFragmentSession: SessionReader,
 ): Promise<Response> => {
   c.header("cache-control", "private, no-store");
-  // Decoy (TOG-8715): a filled honeypot answers the byte-identical first-write success
+  // Decoy: a filled honeypot answers the byte-identical first-write success
   // without touching limiter, auth or DB, and logs nothing. Present non-string
   // values count as filled (fail-closed); absent/empty inputs are genuine.
-  if (rsvpTrapTripped(input)) {
+  // Both sources are evaluated independently, with ALL values preserved:
+  // `query()` is first-wins, so duplicates use `queries()` — an empty query
+  // value must not mask a filled sibling or a filled body decoy, and a
+  // non-string body value trips like a filled string. The status echo reads
+  // the body only; no other query parameter influences the trap or the echo.
+  const queryHoney = c.req.queries(RSVP_HONEY_FIELD);
+  const bodyHoney = input[RSVP_HONEY_FIELD];
+  if (rsvpHoneyFilled(queryHoney) || rsvpHoneyFilled(bodyHoney)) {
     return c.json(
       rsvpBody({
         status: isRsvpStatus(input.status) ? input.status : "going",
@@ -123,7 +131,16 @@ export function registerRsvpRoutes(app: App, readFragmentSession: SessionReader)
       ? deleteRsvp(c, input, readFragmentSession)
       : putRsvp(c, input, readFragmentSession));
     const key = c.req.param("key");
-    const path = `/e/${encodeURIComponent(key)}`;
+    // Native page context comes only from the validated action-query and body
+    // carriers (both normalized, agreement required); the Referer is never a
+    // carrier. Invalid/unsafe values fall back to the bare event page, and the
+    // destination is rebuilt locally so nothing submitted can escape it.
+    const attendeePage = resolveNativeRsvpPage(
+      new URL(c.req.url).searchParams.getAll("attendees"),
+      input["attendees"],
+      "attendees" in input,
+    );
+    const path = rsvpPageReturnPath(key, attendeePage);
     if (response.ok) return c.redirect(path, 303);
     if (response.status === 401) return c.redirect(loginUrl(path), 303);
     const retryAfter = response.headers.get("Retry-After");
@@ -140,7 +157,7 @@ export function registerRsvpRoutes(app: App, readFragmentSession: SessionReader)
     return renderHtmlOutcome(
       c,
       rsvpRefusalOutcome(
-        rsvpRefusalModelFor({ status: response.status, retryAfter, eventKey: key }),
+        rsvpRefusalModelFor({ status: response.status, retryAfter, eventKey: key, attendeePage }),
         renderRsvpRefusal,
         {
           status: response.status as ContentfulStatusCode,

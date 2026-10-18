@@ -12,6 +12,7 @@ import {
   createMemorySessionStore,
   createPostgresSessionStore,
   hashToken,
+  isValidSessionToken,
   newSessionToken,
   SESSION_TTL_SECONDS,
   type SessionStore,
@@ -228,6 +229,73 @@ async function rosterSqlFor(c: Context<{ Bindings: Env }>): Promise<Sql | null> 
   return postgres(url, databaseOptions) as unknown as Sql;
 }
 
+/** Fresh-login mutual exclusion, per user: overlapping callbacks for the same
+ * user run their insert+sweep one at a time, so insert A, insert B, sweep A,
+ * sweep B cannot revoke both fresh tokens. Keys are user ids only — never a
+ * global lock, so different users stay concurrent. Process-wide (not
+ * per-store) so per-request store instances still serialize the same user;
+ * entries are removed when their tail has no waiter. Holds no session data and
+ * no live database connection while waiting (per-request clients connect
+ * lazily on first query, inside the lock body — a queued waiter adds no
+ * socket beyond the client its own request already owns). Single call site
+ * (issueSession below); not reentrant — never wrap it in itself.
+ *
+ * Cross-isolate note: this chain serializes only within one isolate. Two
+ * callbacks for the same user on different isolates still overlap; that case
+ * stays fail-closed (re-login, no leak) until a store-coordinated follow-up
+ * lands behind the same per-user scope. */
+const freshLoginChains = new Map<string, Promise<void>>();
+
+/** Bound on waiting for the previous same-user issuance (see
+ * withFreshLoginUserLock): a holder that never settles its tail — a hung
+ * store query (no statement timeout is configured) or a disconnect-cancelled
+ * callback — would otherwise hang that user's future logins on the isolate
+ * indefinitely. Normal insert+sweep work is millisecond-scale and the
+ * barrier-test hold is 1.5 s, so 10 s (matching the DB connect timeout) only
+ * fires on a genuinely stuck holder; the bound must stay above the worst
+ * legitimate hold or waiters time out into the very overlap the lock exists
+ * to prevent. A timeout overlap stays fail-closed (re-login, no leak), never
+ * wedged — trading a both-dead window after a >10 s stall for eliminating
+ * the indefinite hang. Exported for tests; production callers use the
+ * default. */
+export const FRESH_LOGIN_LOCK_WAIT_MS = 10_000;
+
+export async function withFreshLoginUserLock<T>(
+  userId: string,
+  fn: () => Promise<T>,
+  waitMs = FRESH_LOGIN_LOCK_WAIT_MS,
+): Promise<T> {
+  const prev = freshLoginChains.get(userId) ?? Promise.resolve();
+  let releaseTail!: () => void;
+  const tail = new Promise<void>((resolve) => {
+    releaseTail = resolve;
+  });
+  const cur = prev.then(() => tail);
+  freshLoginChains.set(userId, cur);
+  // Bounded wait: skip waiting on a stuck predecessor, never unlink the
+  // chain — later waiters still queue behind this tail, preserving FIFO
+  // order. The timer is cleared on the fast path so settled waits hold no
+  // resources. `prev` never rejects (tails only resolve), so the race cannot
+  // throw here.
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await Promise.race([
+      prev,
+      new Promise<void>((resolve) => {
+        timer = setTimeout(resolve, waitMs);
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+  try {
+    return await fn();
+  } finally {
+    releaseTail();
+    if (freshLoginChains.get(userId) === cur) freshLoginChains.delete(userId);
+  }
+}
+
 async function issueSession(
   c: Context<{ Bindings: Env }>,
   store: SessionStore,
@@ -269,27 +337,46 @@ async function issueSession(
     expiresAt: new Date(Date.now() + SESSION_TTL_SECONDS * 1000),
   };
   const prior = await getSignedCookie(c, c.env.SESSION_SECRET, SESSION_COOKIE);
-  // Fresh authentication revokes the presented pre-login/pre-join token
-  // atomically with the insert (a failed insert leaves the prior session
-  // intact; see store.replace). The token is revoked by hash because it can
-  // belong to a different user (shared terminal).
-  if (typeof prior === "string" && prior.startsWith("two_")) {
-    await store.replace(await hashToken(prior), replacement);
-  } else {
-    await store.create(replacement);
-  }
-  // Session fixation (TOG-12284): additionally revoke every other live
-  // session for this user so only the newest survives. The fresh row already
-  // exists: a sweep failure warns and sign-in still succeeds (fail-open on the
-  // sweep, never a logout-on-login). Token-hash-only.
-  try {
-    await store.revokeUserSessions(row.userId, tokenHash);
-  } catch (err) {
-    console.warn("prior session sweep failed", {
-      request_id: c.get("requestId"),
-      exception: (err as Error)?.constructor?.name ?? "unknown",
-    });
-  }
+  // Malformed pre-login bearers never reach the store: the shared
+  // minted-shape gate rejects them before hashing (malformed prior =>
+  // create, never replace).
+  const priorHash = isValidSessionToken(prior) ? await hashToken(prior) : null;
+  // Serialize the insert+sweep per user (see withFreshLoginUserLock): the
+  // second overlapping issuance waits for the first to finish, so the final
+  // state equals a serialized order — newest live, previous revoked. The wait
+  // is bounded: a holder stuck past FRESH_LOGIN_LOCK_WAIT_MS (for example a
+  // disconnect-cancelled callback that never settles its tail) no longer wedges
+  // later logins; the overlap stays fail-closed. A sweep failure still
+  // completes sign-in (fail-open wins over strict newest-wins: both stay live
+  // rather than failing the login). A degenerate empty user id runs unlocked;
+  // Discord ids are never empty.
+  const runLocked =
+    typeof row.userId === "string" && row.userId
+      ? (fn: () => Promise<void>) => withFreshLoginUserLock(row.userId, fn)
+      : (fn: () => Promise<void>) => fn();
+  await runLocked(async () => {
+    // Fresh authentication revokes the presented pre-login/pre-join token
+    // atomically with the insert (a failed insert leaves the prior session
+    // intact; see store.replace). The token is revoked by hash because it can
+    // belong to a different user (shared terminal).
+    if (priorHash) {
+      await store.replace(priorHash, replacement);
+    } else {
+      await store.create(replacement);
+    }
+    // Session fixation: additionally revoke every other live session for this
+    // user so only the newest survives. The fresh row already exists: a sweep
+    // failure warns and sign-in still succeeds (fail-open on the sweep, never
+    // a logout-on-login). Token-hash-only.
+    try {
+      await store.revokeUserSessions(row.userId, tokenHash);
+    } catch (err) {
+      console.warn("prior session sweep failed", {
+        request_id: c.get("requestId"),
+        exception: (err as Error)?.constructor?.name ?? "unknown",
+      });
+    }
+  });
   await setSignedCookie(c, SESSION_COOKIE, token, c.env.SESSION_SECRET, {
     path: "/",
     secure: true,
@@ -305,7 +392,7 @@ async function readSession(
   rotateToken = true,
 ): Promise<Session | null> {
   const token = await getSignedCookie(c, c.env.SESSION_SECRET, SESSION_COOKIE);
-  if (!token || !token.startsWith("two_")) return null;
+  if (!isValidSessionToken(token)) return null;
   // Anonymous public pages must not depend on session storage or its startup DDL.
   const store = await storeFor(c);
   const row = await store.get(await hashToken(token));
@@ -322,19 +409,27 @@ async function readSession(
     };
   }
   // Rotation: every authenticated page view mints a fresh token and deletes
-  // the old row in the same statement. A replayed cookie finds no row: guest.
+  // the old row in the same statement. A replayed cookie finds no row: guest
+  // (rotate resolves false for a revoked/expired/missing source — row
+  // ineligible stays guest, never an outage). Any rotation *error* is an
+  // outage, never a silent guest: classified database failures propagate as
+  // themselves, generic errors normalize to a plain Error so the callers'
+  // existing opaque-fallback boundary (plain Error => outage, named
+  // non-outage => 500) renders the honest outage treatment without leaking
+  // driver details or swallowing genuine programming errors from other reads.
   const statusKey = await store.statusHash(await hashToken(token));
   const replacement = newSessionToken();
-  const rotated = await store
-    .rotate(await hashToken(token), {
+  let rotated: boolean;
+  try {
+    rotated = await store.rotate(await hashToken(token), {
       tokenHash: await hashToken(replacement),
       ...row,
       expiresAt: new Date(Date.now() + SESSION_TTL_SECONDS * 1000),
-    })
-    .catch((err) => {
-      if (isDatabaseUnavailable(err)) throw err;
-      return false;
     });
+  } catch (err) {
+    if (isDatabaseUnavailable(err)) throw err;
+    throw new Error("Session rotation unavailable");
+  }
   if (!rotated) return null;
   await enableAuthStatus(c, store, await hashToken(replacement), statusKey);
   await setSignedCookie(c, SESSION_COOKIE, replacement, c.env.SESSION_SECRET, {
@@ -383,6 +478,9 @@ app.get("/", async (c) => {
     (session) => ({ session, unavailable: false }),
     (err) => {
       // Keep the opaque session-failure fallback, not named non-outage exceptions.
+      // Rotation errors arrive already normalized (classified outage or plain
+      // Error), so they render sessionUnavailable here; a revoked/expired row
+      // already returned null above (guest) without reaching rotation.
       if (err instanceof Error && err.name !== "Error" && !isDatabaseUnavailable(err)) throw err;
       // Driver messages can contain DSNs or session identifiers; only a fixed diagnostic is safe.
       console.warn("Home session unavailable; serving as guest.", {
