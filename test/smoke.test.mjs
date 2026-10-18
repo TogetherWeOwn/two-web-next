@@ -987,6 +987,121 @@ test("CLI --fail-on-ready-wait-critical fails an unknown queue envelope while th
   assert.ok(ungated.output.includes("PASS /up"), ungated.output);
 });
 
+// Acceptance: with the staging flag, ready_wait_severity admits only the
+// documented passing strings (healthy / warning; src/up-queue.ts
+// ReadyWaitSeverity, docs/runbook.md). Every other field in these fixtures
+// is valid, and the positive controls below change nothing but the
+// severity, so a failure here can only come from the severity contract.
+// Absent, null, wrong-type and unrecognized severities fail closed on
+// either a healthy or a degraded queue.status; without the flag the
+// legacy production/rollback pass is preserved. Diagnostics must stay
+// fixed safe metadata: a severity drawn from the response body (the
+// sentinel strings) must never appear in the output.
+test("staging flag fails closed on absent or malformed ready_wait_severity with an otherwise-valid queue", async (t) => {
+  const stringSentinel = "malformedseveritysentinel9x7";
+  const objectSentinel = "objectseveritysentinel9x7";
+  const severities = [
+    ["absent", undefined, null],
+    ["null", null, null],
+    ["numeric", 42, null],
+    ["boolean", true, null],
+    ["object", { probe: objectSentinel }, objectSentinel],
+    ["array", ["healthy"], null],
+    ["misspelled", `healty-${stringSentinel}`, stringSentinel],
+    ["empty string", "", null],
+    ["uppercase", "HEALTHY", null],
+  ];
+  for (const queueStatus of ["healthy", "degraded"]) {
+    for (const [label, severity, sentinel] of severities) {
+      const state = `queue.status ${queueStatus}, severity ${label}`;
+      const queue = {
+        status: queueStatus,
+        failed: 0,
+        warn_at: 20,
+        critical_at: 100,
+        oldest_ready_wait_age_seconds: null,
+      };
+      if (label !== "absent") queue.ready_wait_severity = severity;
+      assert.equal(Object.hasOwn(queue, "ready_wait_severity"), label !== "absent", state);
+      const body = JSON.stringify({
+        status: queueStatus,
+        db: "ok",
+        pending_migrations: 0,
+        queue,
+      });
+      const { url } = await stub(t, (route, result) => {
+        if (route === "/up") result.body = body;
+      });
+      const gated = await run(url, { failOnReadyWaitCritical: true });
+      assert.equal(gated.ok, false, `${state}: ${gated.output}`);
+      assert.match(gated.output, /FAIL \/up:/, state);
+      assert.ok(!gated.output.includes("PASS /up"), `${state}: ${gated.output}`);
+      if (sentinel !== null) {
+        assert.ok(!gated.output.includes(sentinel), `${state}: diagnostic leaked the body value`);
+      }
+      const ungated = await run(url);
+      assert.equal(ungated.ok, true, `${state} flag-less: ${ungated.output}`);
+      assert.ok(ungated.output.includes("PASS /up"), `${state} flag-less: ${ungated.output}`);
+    }
+  }
+});
+
+test("staging flag admits only healthy/warning severities on an otherwise-valid queue", async (t) => {
+  // Paired controls on the exact fixture shape above: healthy and warning
+  // pass with the flag on either queue.status, and the literal
+  // critical/unknown refusals are retained (their exact diagnostics are
+  // pinned by the earlier tests).
+  const controls = [
+    ["healthy", null, true],
+    ["warning", 301, true],
+    ["critical", 612000, false],
+    ["unknown", null, false],
+  ];
+  for (const queueStatus of ["healthy", "degraded"]) {
+    for (const [severity, readyAge, shouldPass] of controls) {
+      const state = `queue.status ${queueStatus}, severity ${severity}`;
+      const { url } = await stub(t, (route, result) => {
+        if (route === "/up")
+          result.body = JSON.stringify({
+            status: queueStatus,
+            db: "ok",
+            pending_migrations: 0,
+            queue: {
+              status: queueStatus,
+              failed: 0,
+              warn_at: 20,
+              critical_at: 100,
+              ready_wait_severity: severity,
+              oldest_ready_wait_age_seconds: readyAge,
+            },
+          });
+      });
+      const gated = await run(url, { failOnReadyWaitCritical: true });
+      assert.equal(gated.ok, shouldPass, `${state}: ${gated.output}`);
+      if (shouldPass) {
+        assert.ok(gated.output.includes("PASS /up"), `${state}: ${gated.output}`);
+      } else {
+        assert.match(gated.output, /FAIL \/up:/, state);
+        assert.ok(!gated.output.includes("PASS /up"), `${state}: ${gated.output}`);
+      }
+    }
+  }
+});
+
+test("CLI --fail-on-ready-wait-critical fails an absent-severity envelope while the flag-less CLI passes", async (t) => {
+  const { url } = await stub(t, (route, result) => {
+    if (route === "/up")
+      result.body =
+        '{"status":"healthy","db":"ok","pending_migrations":0,"queue":{"status":"healthy","failed":0,"warn_at":20,"critical_at":100,"oldest_ready_wait_age_seconds":null}}';
+  });
+  const gated = await cli([url, "--fail-on-ready-wait-critical"]);
+  assert.equal(gated.code, 1, gated.output);
+  assert.match(gated.output, /FAIL \/up:/);
+  const ungated = await cli([url]);
+  assert.equal(ungated.code, 0, ungated.output);
+  assert.ok(ungated.output.includes("PASS /up"), ungated.output);
+});
+
 test("smoke queue thresholds track src/up.ts QUEUE_WARN_AT / QUEUE_CRITICAL_AT", async () => {
   // Drift guard: bin/smoke.mjs runs on plain node with no TS loader, so its
   // expected warn_at/critical_at are duplicated from src/up-queue.ts
