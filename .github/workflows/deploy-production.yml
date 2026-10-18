@@ -74,6 +74,14 @@ jobs:
     # 30 minutes: the gradual stages now also soak and judge the new
     # version's live error rate (worst case about 4 extra minutes a stage).
     timeout-minutes: 30
+    # Shared production Worker mutation lock with the manual rollback job:
+    # one static non-cancelling group serializes promotion and rollback
+    # mutations to the same Worker. Workflow-level groups stay distinct so
+    # the run never nests this group and the release job below never holds
+    # it while publishing notes.
+    concurrency:
+      group: production-worker-mutation
+      cancel-in-progress: false
     # Required reviewers + prevent-self-review are live repo settings unless
     # vars.PRODUCTION_AUTO_APPROVE is true, in which case the gate requires green
     # staging deploy + e2e-staging on this exact SHA instead, with the e2e-staging

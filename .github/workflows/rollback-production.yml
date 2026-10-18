@@ -56,6 +56,13 @@ jobs:
     # GitHub-hosted while public, the self-hosted fleet while private.
     runs-on: ${{ github.event.repository.private && fromJSON('["self-hosted","two-selfhosted"]') || 'ubuntu-latest' }}
     timeout-minutes: 15
+    # Shared production Worker mutation lock with the promotion job: the same
+    # static non-cancelling group serializes rollback and promotion mutations
+    # to the same Worker. Workflow-level groups stay distinct so the run never
+    # nests this group.
+    concurrency:
+      group: production-worker-mutation
+      cancel-in-progress: false
     # Required reviewers + prevent-self-review are live repo settings. Preflight
     # refuses a missing/unprotected Environment before GitHub can auto-create it.
     environment:

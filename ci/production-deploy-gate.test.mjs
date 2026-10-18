@@ -869,6 +869,98 @@ test("rollback workflow reuses the production gate with no wider permissions", (
   assert.match(workflow, /ROLLBACK_VERSION_ID: \$\{\{ inputs\.version_id \}\}/);
 });
 
+const sharedMutationGroup = "production-worker-mutation";
+
+function jobConcurrencyBlocks(workflow) {
+  return [
+    ...workflow.matchAll(
+      /^    concurrency:\n      group: (.+)\n      cancel-in-progress: (true|false)\n/gm,
+    ),
+  ].map((match) => ({ group: match[1].trim(), cancel: match[2] }));
+}
+
+test("production promotion and rollback mutations share one static non-cancelling lock", () => {
+  const deploy = readFileSync(
+    new URL("../.github/workflows/deploy-production.yml", import.meta.url),
+    "utf8",
+  );
+  const rollback = readFileSync(
+    new URL("../.github/workflows/rollback-production.yml", import.meta.url),
+    "utf8",
+  );
+  for (const [label, workflow] of [
+    ["deploy-production.yml", deploy],
+    ["rollback-production.yml", rollback],
+  ]) {
+    const blocks = jobConcurrencyBlocks(workflow);
+    // Exactly one job-level mutation lock per workflow: deleting it fails here.
+    assert.equal(blocks.length, 1, `${label} must hold exactly one job-level mutation lock`);
+    assert.equal(blocks[0].group, sharedMutationGroup, `${label} mutation lock diverged`);
+    // A cancelling lock would let a queued run kill the active Worker mutation.
+    assert.equal(blocks[0].cancel, "false", `${label} mutation lock must not cancel`);
+    // The lock is independent of run/ref: no expression and no run-specific suffix.
+    assert.ok(!blocks[0].group.includes("${{"), `${label} mutation lock must be static`);
+    for (const suffix of ["github.", "run_id", "run_number", "run_attempt", "ref", "sha"]) {
+      assert.ok(
+        !blocks[0].group.toLowerCase().includes(suffix),
+        `${label} mutation lock must not carry a run-specific suffix (${suffix})`,
+      );
+    }
+  }
+  const deployGroup = jobConcurrencyBlocks(deploy)[0].group;
+  const rollbackGroup = jobConcurrencyBlocks(rollback)[0].group;
+  assert.equal(deployGroup, rollbackGroup, "promotion and rollback locks must match exactly");
+});
+
+test("shared production mutation lock never nests at workflow level nor leaks into release", () => {
+  const deploy = readFileSync(
+    new URL("../.github/workflows/deploy-production.yml", import.meta.url),
+    "utf8",
+  );
+  const rollback = readFileSync(
+    new URL("../.github/workflows/rollback-production.yml", import.meta.url),
+    "utf8",
+  );
+  // Workflow-level groups stay distinct and non-cancelling, so the run never
+  // nests the shared job-level group.
+  for (const [label, workflow, expected] of [
+    ["deploy-production.yml", deploy, "deploy-production"],
+    ["rollback-production.yml", rollback, "rollback-production"],
+  ]) {
+    const header = workflow.slice(0, workflow.indexOf("\njobs:"));
+    assert.match(
+      header,
+      new RegExp(`^concurrency:\\n  group: ${expected}\\n  cancel-in-progress: false\\n`, "m"),
+      `${label} keeps its own non-cancelling workflow-level group`,
+    );
+    assert.ok(
+      !header.includes(sharedMutationGroup),
+      `${label} must not nest the shared mutation lock at workflow level`,
+    );
+  }
+  // Only the Worker-mutating jobs hold the critical lock: preflight gates and
+  // the release-notes call must never hold it.
+  const deployMutation = deploy.slice(
+    deploy.indexOf("\n  deploy-production:\n"),
+    deploy.indexOf("\n  release:\n"),
+  );
+  const release = deploy.slice(deploy.indexOf("\n  release:\n"));
+  assert.ok(deployMutation.includes(sharedMutationGroup), "promotion job must hold the lock");
+  assert.ok(!release.includes(sharedMutationGroup), "release notes must not hold the lock");
+  const rollbackMutation = rollback.slice(rollback.indexOf("\n  rollback-production:\n"));
+  assert.ok(rollbackMutation.includes(sharedMutationGroup), "rollback job must hold the lock");
+  for (const [label, workflow, next] of [
+    ["deploy-production.yml", deploy, "\n  deploy-production:\n"],
+    ["rollback-production.yml", rollback, "\n  rollback-production:\n"],
+  ]) {
+    const preflight = workflow.slice(workflow.indexOf("\n  preflight:\n"), workflow.indexOf(next));
+    assert.ok(
+      !preflight.includes(sharedMutationGroup),
+      `${label} preflight must not hold the lock`,
+    );
+  }
+});
+
 test("rollback smoke enforces the same public-route set as the gradual live gate", () => {
   // The deploy-time live gate now lives in the shared gradual action; the
   // manual rollback keeps its own copy. Both must run the same shared
