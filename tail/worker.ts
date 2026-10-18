@@ -1251,6 +1251,21 @@ export function createTailWorker(
     if (!value || typeof value !== "object" || Array.isArray(value)) return null;
     const record = value as Record<string, unknown> & SpikeAlert;
     if (record.event !== "error.spike" || typeof record.script !== "string") return null;
+    // A verdict built from a non-finite, negative, or mistyped count would
+    // page garbage while the local tracker never counts the burst: every
+    // numeric field the alert is built from must be a finite, non-negative
+    // number, otherwise the observation is malformed and falls back.
+    for (const field of [
+      "requests",
+      "errors",
+      "crashes",
+      "error_rate",
+      "window_seconds",
+    ] as const) {
+      const fieldValue = record[field];
+      if (typeof fieldValue !== "number" || !Number.isFinite(fieldValue) || fieldValue < 0)
+        return null;
+    }
     const attemptId = validAttemptId((record as { attemptId?: unknown }).attemptId);
     return {
       ...(record as SpikeAlert),
@@ -1406,7 +1421,13 @@ export function createTailWorker(
         if (typeof data !== "object" || data === null || Array.isArray(data))
           return { fallback: true as const };
         const { downMs, attemptId } = data as { downMs?: unknown; attemptId?: unknown };
-        if (typeof downMs !== "number") return { fallback: true as const };
+        // typeof NaN === "number", so a shape check alone waves NaN,
+        // ±Infinity, and negative durations through as authoritative and
+        // pages a garbage down_seconds. Only a finite, non-negative downMs
+        // is well-formed; anything else falls back to the local health
+        // observation.
+        if (typeof downMs !== "number" || !Number.isFinite(downMs) || downMs < 0)
+          return { fallback: true as const };
         return {
           downMs,
           attemptId: validAttemptId(attemptId) ?? null,
