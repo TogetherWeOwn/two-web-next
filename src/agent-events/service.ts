@@ -16,6 +16,15 @@
 // authoritative — ingress.ts preserves it verbatim at runtime.
 export type { Answer, IngressConfig, IngressEffects } from "./types";
 export { DEFAULT_CONFIG } from "./types";
-export { digest, MAX_DIGEST_DEPTH, PayloadTooDeepError, ulid, validateFields } from "./payload";
+export {
+  digest,
+  INT4_MAX,
+  INT4_MIN,
+  isAgentVersion,
+  MAX_DIGEST_DEPTH,
+  PayloadTooDeepError,
+  ulid,
+  validateFields,
+} from "./payload";
 export { throttleEnvelope } from "./rate-limit";
 export { admitAgentEvent, handleAgentEvent } from "./ingress";

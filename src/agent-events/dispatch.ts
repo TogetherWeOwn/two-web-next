@@ -6,7 +6,7 @@ import { utcToWall, wallToUtc, type EventStatus } from "../admin/validation";
 import type { WriteBack } from "../admin/store";
 import { observeDiscordEvent, type ObservationEvent } from "../bot/event-read";
 import type { Grant, IngressEffects, Op, Outcome, Row, Tx } from "./types";
-import { storedEventKey, ulid, validateFields } from "./payload";
+import { isAgentVersion, storedEventKey, ulid, validateFields } from "./payload";
 import { audit } from "./audit";
 import { checkGrant } from "./grants";
 
@@ -131,7 +131,10 @@ export async function execute(
   }
 
   if (op === "update") {
-    if (!Number.isInteger(doc.version))
+    // agent_version is PostgreSQL integer: outside int4 the bind would fail
+    // as a driver range error, so refuse before any event SQL runs. In-range
+    // values keep the existing current/stale behavior below.
+    if (!isAgentVersion(doc.version))
       return denyOutcome(
         422,
         "validation_failed",
