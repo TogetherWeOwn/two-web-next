@@ -105,9 +105,12 @@ export async function checkJoinThrottle(
     await tx`INSERT INTO web_throttle_hits (bucket, at) VALUES (${bucket}, clock_timestamp())`;
     return { limited: false };
   });
-  // Global expiry cleanup must not prolong the per-bucket admission lock.
-  if (!verdict.limited)
-    await sql`DELETE FROM web_throttle_hits WHERE at < now() - make_interval(mins => ${THROTTLE_COUNTER_RETENTION_MINUTES})`;
+  // Global expiry cleanup stays outside the per-bucket admission lock so it
+  // never prolongs it. Refused requests prune too: a bucket under sustained
+  // refused load would otherwise accumulate expired rows until some request
+  // is admitted. The prune is age-only, so it records no hit and never moves
+  // a request across the admit/refuse boundary.
+  await sql`DELETE FROM web_throttle_hits WHERE at < now() - make_interval(mins => ${THROTTLE_COUNTER_RETENTION_MINUTES})`;
   return verdict;
 }
 

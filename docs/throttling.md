@@ -108,10 +108,13 @@ charges in [`withdrawRsvp`](../src/events/rsvp.ts).
 There is no background job. Expired rows are deleted piggyback on admissions at
 two call sites, both with a 5-minute bound:
 
-- [`src/join/service.ts`](../src/join/service.ts) (`checkJoinThrottle`): after a
-  successful admission only, outside the per-bucket admission lock transaction,
+- [`src/join/service.ts`](../src/join/service.ts) (`checkJoinThrottle`): after
+  the admission verdict — admitted or refused — outside the per-bucket
+  admission lock transaction,
   `DELETE FROM web_throttle_hits WHERE at < now() - interval '5 minutes'`.
-  Denied requests skip this cleanup so it never prolongs the lock.
+  The cleanup stays outside the lock so it never prolongs it; refused
+  requests prune the same age-only rows instead of letting expired rows
+  accumulate until some request is admitted.
 - [`src/events/rsvp.ts`](../src/events/rsvp.ts) (`pruneThrottle`, called from
   `writeRsvp` and both `withdrawRsvp` paths): inside the same transaction,
   before the budget charge and the write,
