@@ -3,7 +3,7 @@
 // Throttle, then 302 to Discord with identify+guilds.join. Issues the journey
 // (ten-minute state + optional source/next cookies) before redirecting.
 import type { Hono } from "hono";
-import { setSignedCookie } from "hono/cookie";
+import { deleteCookie, setSignedCookie } from "hono/cookie";
 import { authorizeUrl } from "../discord";
 import type { Env } from "../env";
 import { hashToken } from "../sessions";
@@ -39,6 +39,11 @@ export function registerJoinStartRoutes(app: Hono<{ Bindings: Env }>, hooks: Joi
       c.header("cache-control", "no-store");
       return c.redirect("/join", 302);
     }
+    // Each admitted journey owns its optional intent: a missing or rejected
+    // value expires a stale cookie from an abandoned earlier start (same
+    // shape as the callback's clearing), so the new state can never inherit
+    // another journey's return target or attribution. Mirrors
+    // rememberLoginNext for the auth flow.
     if (source) {
       await setSignedCookie(c, JOIN_SOURCE_COOKIE, source, c.env.SESSION_SECRET, {
         path: "/",
@@ -46,6 +51,13 @@ export function registerJoinStartRoutes(app: Hono<{ Bindings: Env }>, hooks: Joi
         httpOnly: true,
         sameSite: "Lax",
         maxAge: JOURNEY_TTL_SECONDS,
+      });
+    } else {
+      deleteCookie(c, JOIN_SOURCE_COOKIE, {
+        path: "/",
+        secure: true,
+        httpOnly: true,
+        sameSite: "Lax",
       });
     }
     if (next) {
@@ -55,6 +67,13 @@ export function registerJoinStartRoutes(app: Hono<{ Bindings: Env }>, hooks: Joi
         httpOnly: true,
         sameSite: "Lax",
         maxAge: JOURNEY_TTL_SECONDS,
+      });
+    } else {
+      deleteCookie(c, JOIN_NEXT_COOKIE, {
+        path: "/",
+        secure: true,
+        httpOnly: true,
+        sameSite: "Lax",
       });
     }
     await setSignedCookie(c, JOIN_STATE_COOKIE, state, c.env.SESSION_SECRET, {

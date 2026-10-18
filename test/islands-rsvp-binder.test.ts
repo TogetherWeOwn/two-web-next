@@ -587,6 +587,129 @@ describe("RsvpButton shipped binder", () => {
     expect(b.get("rsvp-confirmed")?.focused).toBe(true);
   });
 
+  it("focuses unknown recovery on an uninterrupted transport failure", async () => {
+    const b = browser();
+    b.get("rsvp-going")!.click();
+    b.requests[0]!.reject(new Error("response transport lost"));
+    await b.settle();
+    expect(b.get("rsvp-unknown")?.getAttribute("role")).toBe("alert");
+    expect(b.get("rsvp-unknown")?.focused).toBe(true);
+    expect(b.get("rsvp-refresh")?.href).toBe("/e/raid%2Fone");
+    expect(b.root.getAttribute("data-outcome-unknown")).toBe("true");
+    expect(b.root.getAttribute("aria-busy")).toBeNull();
+    expect(b.root.querySelectorAll("[data-action]").every((n) => n.disabled)).toBe(true);
+    expect(b.requests).toHaveLength(1);
+    expect(b.broadcasts).toHaveLength(0);
+  });
+
+  it("keeps focus on the outside field when transport fails after moving away", async () => {
+    const b = browser();
+    const field = new Node();
+    b.page.appendChild(field);
+    b.get("rsvp-going")!.click();
+    field.focus();
+    b.requests[0]!.reject(new Error("response transport lost"));
+    await b.settle();
+    expect(b.get("rsvp-unknown")?.getAttribute("role")).toBe("alert");
+    expect(b.get("rsvp-unknown")?.focused).toBe(false);
+    expect(b.get("rsvp-refresh")?.href).toBe("/e/raid%2Fone");
+    expect(b.root.getAttribute("data-outcome-unknown")).toBe("true");
+    expect(b.root.querySelectorAll("[data-action]").every((n) => n.disabled)).toBe(true);
+    expect(field.focused).toBe(true);
+    expect(b.requests).toHaveLength(1);
+  });
+
+  it("keeps focus off unknown recovery after a pointer press outside during a header wait", async () => {
+    const b = browser();
+    const elsewhere = new Node();
+    b.page.appendChild(elsewhere);
+    const field = new Node();
+    b.page.appendChild(field);
+    b.get("rsvp-going")!.click();
+    field.focus();
+    b.pointerDown(elsewhere);
+    await b.settle(false);
+    b.runTimers(8000);
+    expect(b.get("rsvp-unknown")?.getAttribute("role")).toBe("alert");
+    expect(b.get("rsvp-unknown")?.focused).toBe(false);
+    expect(b.get("rsvp-refresh")?.href).toBe("/e/raid%2Fone");
+    expect(b.root.getAttribute("data-outcome-unknown")).toBe("true");
+    expect(field.focused).toBe(true);
+    expect(b.requests).toHaveLength(1);
+  });
+
+  it("keeps focus off unknown recovery after moving away during a pending body", async () => {
+    const b = browser();
+    const field = new Node();
+    b.page.appendChild(field);
+    b.get("rsvp-going")!.click();
+    field.focus();
+    b.requests[0]!.resolve({
+      ok: true,
+      status: 201,
+      json: () => new Promise<unknown>(() => {}),
+    } as Response);
+    await b.settle(false);
+    b.runTimers(8000);
+    expect(b.get("rsvp-unknown")?.getAttribute("role")).toBe("alert");
+    expect(b.get("rsvp-unknown")?.focused).toBe(false);
+    expect(b.get("rsvp-refresh")?.href).toBe("/e/raid%2Fone");
+    expect(b.root.getAttribute("data-outcome-unknown")).toBe("true");
+    expect(field.focused).toBe(true);
+    expect(b.requests).toHaveLength(1);
+  });
+
+  it("keeps focus on the outside field when a deferred 401 arrives after moving away", async () => {
+    const b = browser();
+    const field = new Node();
+    b.page.appendChild(field);
+    const button = b.get("rsvp-going")!;
+    button.click();
+    field.focus();
+    b.finish(0, 401);
+    await b.settle();
+    const notice = b.get("rsvp-session-expired")!;
+    expect(notice.getAttribute("role")).toBe("alert");
+    expect(notice.focused).toBe(false);
+    expect(notice.children[1]!.href).toBe("/join/discord?next=%2Fe%2Fraid%2Fone");
+    expect(field.focused).toBe(true);
+    expect(button.disabled).toBe(false);
+    expect(b.root.getAttribute("data-outcome-unknown")).toBeNull();
+    expect(b.requests).toHaveLength(1);
+    expect(b.broadcasts).toHaveLength(0);
+  });
+
+  it.each([
+    ["unknown", "reject"],
+    ["expired-session", "401"],
+  ] as const)(
+    "does not revive focus ownership when moving back inside before %s recovery",
+    async (kind, mode) => {
+      const b = browser();
+      const field = new Node();
+      b.page.appendChild(field);
+      const form = b.root.querySelector("[data-rsvp-form]")!;
+      b.get("rsvp-going")!.click();
+      field.focus();
+      form.focus();
+      if (mode === "reject") b.requests[0]!.reject(new Error("response transport lost"));
+      else b.finish(0, 401);
+      await b.settle();
+      if (kind === "unknown") {
+        expect(b.get("rsvp-unknown")?.getAttribute("role")).toBe("alert");
+        expect(b.get("rsvp-unknown")?.focused).toBe(false);
+        expect(b.get("rsvp-refresh")?.href).toBe("/e/raid%2Fone");
+      } else {
+        const notice = b.get("rsvp-session-expired")!;
+        expect(notice.getAttribute("role")).toBe("alert");
+        expect(notice.focused).toBe(false);
+        expect(notice.children[1]!.href).toBe("/join/discord?next=%2Fe%2Fraid%2Fone");
+      }
+      expect(form.focused).toBe(true);
+      expect(b.requests).toHaveLength(1);
+    },
+  );
+
   it("mounts an empty polite claim-loss region before updating it in a later task", async () => {
     const b = browser("waitlisted");
     b.get("waitlist-claim")!.click();

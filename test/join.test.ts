@@ -508,7 +508,11 @@ describe("GET /join/discord (throttled OAuth start)", () => {
     expect(set).toContain("__Host-two_join_next=");
     const hostile = await startJoin(e, "?source=a/b&next=https://evil.test/");
     expect(hostile.res.status).toBe(302);
-    expect(hostile.res.headers.getSetCookie().join("\n")).not.toContain("__Host-two_join_source=");
+    // Hostile values leave no live value: a deletion (`=; Max-Age=0`) expires
+    // stale intent from an abandoned earlier start, so match live values only.
+    const hostileSet = hostile.res.headers.getSetCookie().join("\n");
+    expect(hostileSet).not.toMatch(/__Host-two_join_source=[^;]/);
+    expect(hostileSet).not.toMatch(/__Host-two_join_next=[^;]/);
   });
 
   it("refuses the 11th start in one minute with 429 + Retry-After", async () => {

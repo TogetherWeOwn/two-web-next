@@ -39,9 +39,33 @@ bucket stamped in the last 60 seconds; at or over budget refuses with the
 shared 429 response and a `Retry-After` of at least 1 second (the ceiling of
 oldest-hit-plus-window minus now), otherwise the admission inserts one hit row
 and lets the request through. The count-then-insert runs under a per-bucket
-Postgres advisory lock so concurrent bursts cannot overshoot. A missing store
-or a store failure degrades to allow: a missed count beats a 500. The generic
-path is [`checkJoinThrottle`](../src/join/service.ts); RSVP writes use
+Postgres advisory lock so concurrent bursts cannot overshoot. Failure posture
+differs by call site:
+
+- Absent store allows: [`checkJoinThrottle`](../src/join/service.ts) returns
+  `{ limited: false }` for a null store, so a missing database URL/binding
+  with no injected test store lets the request through. This holds for both
+  the generic middleware (via [`throttleStore`](../src/throttle.ts)) and the
+  direct join helper (via [`joinStore`](../src/join/route-shared.ts)).
+- Generic middleware catches count failures:
+  [`throttleGuard`](../src/throttle.ts) catches any throw from store
+  acquisition or the count/insert and allows — a missed count beats a 500 on
+  that path.
+- Direct join propagates configured-store failures:
+  [`throttled`](../src/join/route-shared.ts) awaits the configured store and
+  [`checkJoinThrottle`](../src/join/service.ts) with no catch. A
+  configured-but-unreachable store throws; the global handler maps only
+  classified transport/server outages to the shared 503 envelope (see
+  [`isDatabaseUnavailable`](../src/db/errors.ts) and
+  [`internalErrorHandler`](../src/error-responses.tsx)) and leaves other
+  errors as 500s. The outage matrix pins the classified case:
+  `GET /join/discord` and `GET /join/callback` answer 503 on a refused
+  Postgres socket (see [`test/db-outage-matrix.test.ts`](../test/db-outage-matrix.test.ts)).
+- Allowance is admission only: passing the throttle does not guarantee the
+  downstream handler succeeds — the journey store, bot call, or session mint
+  can still refuse or fail.
+
+RSVP writes use
 [`chargeThrottle`](../src/events/rsvp.ts) with the same shape.
 
 | Budget | Value | Constant | Buckets and routes |
@@ -97,11 +121,15 @@ two call sites, both with a 5-minute bound:
 
 The admission window reads `clock_timestamp()` (the lock wait does not stretch
 the window); the join-path prune uses `now()`. The table and its
-`(bucket, at)` index are created in
+`(bucket, at)` index are owned by the migrate workflow in
 [`drizzle/1000_join-attempts-throttle.sql`](../drizzle/1000_join-attempts-throttle.sql),
-mirrored by the `web_throttle_hits` runtime DDL in
-[`src/join/service.ts`](../src/join/service.ts) and the Drizzle shape in
-[`src/db/schema.ts`](../src/db/schema.ts). The 5-minute retention is five times
+with the Drizzle shape in
+[`src/db/schema.ts`](../src/db/schema.ts). The request path performs no DDL
+and the runtime role stays read/write-only (see
+[`throttleStore`](../src/throttle.ts) and [`joinStore`](../src/join/route-shared.ts)).
+[`migrateJoin`](../src/join/service.ts) is a fixture helper only: it replays
+the same shape so disposable test schemas match migrated databases, and
+production must not call it. The 5-minute retention is five times
 the 60-second admission window, so live-window rows are never pruned early and
 steady-state storage holds roughly five minutes of admitted hits.
 
