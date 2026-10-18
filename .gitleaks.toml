@@ -68,3 +68,11 @@ regexes = ['''01J2ZB2X5X3Q8T1V9W4Y6Z7A8[BC]''']
 description = "Event key of an orphaned staging E2E fixture, kept in git history by an earlier spec; ULID-shaped, not a credential"
 targetRules = ["generic-api-key"]
 regexes = ['''01M41G95P1M3EWP30VWZPFYSG9''']
+
+[[allowlists]]
+description = "Synthetic idempotency-key fixtures in the agent replay corrupt-body test, not credentials"
+targetRules = ["generic-api-key"]
+condition = "AND"
+regexTarget = "secret"
+paths = ['''^test/agent-replay-corrupt\.test\.ts$''']
+regexes = ['''^corrupt-mismatch-001$''', '''^corrupt-legacy-001$''', '''^corrupt-healthy-001$''', '''^corrupt-fresh-001$''']
