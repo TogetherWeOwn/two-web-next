@@ -170,6 +170,17 @@ been observed. Tune the gates in `tail/worker.ts` (`SPIKE_MIN_ERRORS`,
 `SPIKE_MIN_RATE`, `SPIKE_MIN_CRASHES`, `SPIKE_COOLDOWN_MS`) only with staging
 evidence; on a quiet site the count floor, not the rate, is what fires.
 
+Future-skew drop observability: a batch stamped beyond now plus the
+`BATCH_FUTURE_SLACK_MS` slack is dropped on the tail path and rejected with
+400 on the aggregator `/observe` wire — the slack bound and drop semantics
+are unchanged, only the accounting is new. Each `tail()` invocation that
+drops skewed traces emits one `tail.skew_drop` sink line reporting that
+invocation's dropped count; a 400 for a future-skewed but otherwise valid
+batch logs a skew-rejection line, while a 400 for a structurally invalid or
+unparseable batch logs a malformed-payload line (status stays 400 either
+way). A skew line means a poisoned clock is eating traffic; a malformed
+line means payload corruption. No threshold or slack change.
+
 Attribution is honest about the whole counted window. `build_sha` is present
 only on a homogeneous page: every counted bucket in the window carries the
 same validated build, through the same 40-hex version-tag and release-log

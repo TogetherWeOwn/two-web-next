@@ -996,6 +996,26 @@ function validBatch(value: unknown): TraceBatch | null {
   };
 }
 
+// Skew-vs-malformed classifier for the /observe 400: true only for a batch
+// that would have counted but for its stamp. Every structural check mirrors
+// validBatch exactly, so a batch that is both malformed and future-stamped
+// (unknown script, bad counts, missing timestamp) reads as malformed, never
+// skew. Drop semantics and the slack bound live in validBatch; this function
+// only names the rejection reason for the log line.
+function isFutureSkewedBatch(value: unknown): boolean {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const b = value as Record<string, unknown>;
+  if (typeof b.script !== "string" || !APP_SCRIPT_NAMES.has(b.script)) return false;
+  if (
+    ![b.at, b.requests, b.errors, b.crashes].every(
+      (n) => Number.isSafeInteger(n) && (n as number) >= 0,
+    )
+  )
+    return false;
+  if ((b.errors as number) > (b.requests as number) + (b.crashes as number)) return false;
+  return (b.at as number) > Date.now() + BATCH_FUTURE_SLACK_MS;
+}
+
 /**
  * Durable aggregate state: one instance per Tail Worker environment keeps the
  * rolling counts and the health window across isolate churn. Storage holds
@@ -1062,12 +1082,23 @@ export class AlertAggregator {
     try {
       body = await request.json();
     } catch {
+      // Unparseable body: malformed, never skew. No payload bytes in the line.
+      console.warn("tail observe rejected malformed batch: invalid body");
       return new Response(null, { status: 400 });
     }
     await this.load();
     if (pathname === "/observe") {
       const batch = validBatch(body);
-      if (!batch) return new Response(null, { status: 400 });
+      if (!batch) {
+        // Status stays 400 either way; the line names the reason so
+        // operators can tell clock skew from payload corruption.
+        if (isFutureSkewedBatch(body)) {
+          console.warn("tail observe rejected future-skewed batch: timestamp beyond slack");
+        } else {
+          console.warn("tail observe rejected malformed batch: invalid payload");
+        }
+        return new Response(null, { status: 400 });
+      }
       return this.enqueue(async () => {
         // Deep-clone: snapshot() shares its bucket arrays with the live
         // tracker, so an alias would observe the very mutation it must undo.
@@ -1660,10 +1691,17 @@ export function createTailWorker(
       // count; a one-bucket future skew stays within the slack.
       const wallNow = now();
       const batches = new Map<string, TraceBatch>();
+      // Future-skew drop accounting: one line per invocation reporting that
+      // invocation's dropped count (not a running total). Drop semantics and
+      // the slack bound are unchanged; this counter only names the drops.
+      let skewDropped = 0;
       for (const trace of events) {
         const batch = batchForTrace(trace, wallNow);
         if (!batch) continue;
-        if (batch.at > wallNow + BATCH_FUTURE_SLACK_MS) continue;
+        if (batch.at > wallNow + BATCH_FUTURE_SLACK_MS) {
+          skewDropped += 1;
+          continue;
+        }
         const prior = batches.get(batch.script);
         if (!prior) {
           batches.set(batch.script, { ...batch });
@@ -1688,6 +1726,13 @@ export function createTailWorker(
           prior.crashes += batch.crashes;
           prior.at = Math.max(prior.at, batch.at);
         }
+      }
+      // One accounting line per invocation that dropped skewed traces,
+      // reporting that invocation's count. Goes to the log sink like the
+      // delivery receipts — never to the webhook — and carries no trace
+      // payload data. Zero-drop invocations stay silent.
+      if (skewDropped > 0) {
+        sink(JSON.stringify({ event: "tail.skew_drop", dropped: skewDropped }));
       }
       for (const batch of batches.values()) {
         const observed = await observeBatch(env, batch);
