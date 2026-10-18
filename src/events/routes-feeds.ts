@@ -1,7 +1,8 @@
 // Feeds/sitemap event routes: GET /events.rss, GET /events.ics and
 // GET /events/:file.ics. Split out of src/events/routes.tsx; unchanged.
 import { dbFor } from "../admin/db";
-import { notFoundHandler } from "../errors";
+import { isDatabaseUnavailable } from "../db/errors";
+import { databaseUnavailable, notFoundHandler } from "../errors";
 import { IcsSequenceRangeError, eventIcs, eventsIcsCollection, eventsRss } from "./feeds";
 import { canonicalEventKey, eventKeyAllowed } from "./keys";
 import { getEventRow, listFeed } from "./reads";
@@ -99,7 +100,22 @@ export function registerFeedRoutes(app: App, readSession: SessionReader): void {
       return notFoundHandler(c);
     }
     if (e.status === "draft") {
-      const session = await readSession(c);
+      let session;
+      try {
+        session = await readSession(c);
+      } catch (err) {
+        // Rotation errors arrive already normalized (classified outage or
+        // plain Error) and answer 503, never a silent guest; rotate resolving
+        // false (row ineligible) already returned null and stays the 403
+        // guest refusal below. Named non-outage exceptions are genuine
+        // programming errors, not outages, so they rethrow to 500 like home.
+        // Class-only log: driver messages can carry DSN fragments.
+        if (err instanceof Error && err.name !== "Error" && !isDatabaseUnavailable(err)) throw err;
+        console.error("draft ICS could not resolve the session; refusing.", {
+          exception: err instanceof Error ? err.constructor.name : "unknown",
+        });
+        return databaseUnavailable(c);
+      }
       if (!session?.moderator) return c.text("Forbidden", 403);
     }
     return calendarFeedResponse(c, () => eventIcs(e, c.env.APP_URL), {

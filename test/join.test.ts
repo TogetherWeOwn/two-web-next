@@ -428,8 +428,9 @@ describe("W15 join landing and recovery parity", () => {
       expect(res.status).toBe(200);
       expect(await res.text()).not.toContain("never-echo");
       expect(calls).toHaveLength(0);
+      const requestId = res.headers.get("x-request-id");
       expect(fake.attempts).toEqual([
-        { outcome: "denied", source: "web-homepage", requestId: null, discordId: null },
+        { outcome: "denied", source: "web-homepage", requestId, discordId: null },
       ]);
       for (const name of ["state", "source", "next"]) {
         expect(res.headers.getSetCookie().join("\n")).toContain(
@@ -628,8 +629,9 @@ describe("GET /join/callback (synchronous bot add + sign-in)", () => {
     expect(html).toContain("Join cancelled");
     expect(html).not.toContain("ashould-never-appear");
     expect(calls).toHaveLength(0);
+    const requestId = res.headers.get("x-request-id");
     expect(fake.attempts).toEqual([
-      { outcome: "denied", source: null, requestId: null, discordId: null },
+      { outcome: "denied", source: null, requestId, discordId: null },
     ]);
   });
 

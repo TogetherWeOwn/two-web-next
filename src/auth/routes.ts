@@ -10,6 +10,7 @@
 import { type Context, Hono } from "hono";
 import { deleteCookie, getSignedCookie, setSignedCookie } from "hono/cookie";
 import { requestBodyLimit } from "../body-limit";
+import { hasOversizedOAuthParams } from "../oauth-code-state-length";
 import { AUTH_STATUS_COOKIE, authStatus, clearAuthStatus } from "../auth-status";
 import {
   addGuildMember,
@@ -132,6 +133,12 @@ export function registerAuthRoutes(app: Hono<{ Bindings: Env }>, hooks: AuthHook
     const expiredWrite = await consumeExpiredWrite(c);
     const code = c.req.query("code");
     const state = c.req.query("state");
+    // Inbound length bound: refuse oversized code/state before any journey
+    // consume, exchange, or session work. Refusals keep today's path, so the
+    // error param is peeked first and oversized maps to the generic failure.
+    if (!c.req.query("error") && hasOversizedOAuthParams(code, state)) {
+      return c.redirect("/?n=signin_failed", 302);
+    }
     const store =
       state && typeof expected === "string" && state === expected
         ? await hooks.storeFor(c).catch(() => null)

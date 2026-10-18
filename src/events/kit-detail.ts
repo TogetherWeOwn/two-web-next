@@ -113,6 +113,9 @@ export interface KitEventDetailModel {
   canonical: string;
   /** Rooted page path, e.g. `/e/<key>`: the join return destination. */
   path: string;
+  /** Validated roster-refresh href: the bare page path on page 1,
+   * `?attendees=N` on a valid N > 1, never raw query text. */
+  attendeesRefreshHref: string;
   /** Meta robots + x-robots-tag value for draft/past rows; null when indexable. */
   robots: string | null;
   /** Rooted .md alternate path; drafts have no Markdown view. */
@@ -430,6 +433,10 @@ export async function resolveKitEventDetail(
           rsvpOpen: event.rsvpOpen,
           canonical: pageCanonical,
           path: pagePath,
+          // Stale-roster refresh keeps the validated attendee page (page 1
+          // stays bare); never the raw query, so foreign params and malformed
+          // values fall back to the bare event path.
+          attendeesRefreshHref: attendeePageHref(event.eventKey, attendeePage),
           robots,
           // Drafts have no Markdown view: the session-free .md route 403s for
           // every viewer, so only link it where it answers 200.
