@@ -5,8 +5,9 @@
 // (src/admin/routes.tsx GET /admin/activity-log): the bounded subject/causer
 // filters, newest-first paging with a one-row lookahead, and the explicit
 // projection that never selects `properties`. The hook's member-read boundary
-// owns classification and the audit; this only decides which HTTP posture the
-// Hono route keeps.
+// owns the audit; this classifies load failures for the alert path (code bugs
+// alert, classified outages stay silent) and maps every failure to the branded
+// 503 the Hono route keeps.
 //
 // Imported rows keep legacy internal causer IDs (docs/data-import.md): they
 // render with an explicit legacy label and never become access-log subjects,
@@ -15,7 +16,9 @@
 // em dash and likewise contribute no subject.
 import { ACTIVITY_LOG_PAGE_SIZE, parseActivityLogQuery } from "./table-list";
 import type { Db } from "../db/index";
+import { isDatabaseUnavailable } from "../db/errors";
 import type { Env } from "../env";
+import { alertRequestError } from "../alerts";
 import { listActivityLog, type ActivityLogViewerRow } from "./reads";
 import { dbFor } from "./db";
 
@@ -49,6 +52,24 @@ export function activityLogUnavailable(): Error & { status: number } {
 const PRIVATE_NO_STORE = { "cache-control": "private, no-store" };
 
 /**
+ * Classify a load failure before mapping it to the branded 503. A classified
+ * database outage (transport or Postgres server-unavailable code) keeps the
+ * silent 503; a code bug (no branded status, not database-unavailable) emits
+ * the leak-free error.alert diagnostic first so it never looks like a
+ * downstream outage, mirroring src/kit-hotzones.ts.
+ */
+function reportLoadFailure(
+  err: unknown,
+  setHeaders: (headers: Record<string, string>) => void,
+): never {
+  if (!isDatabaseUnavailable(err)) {
+    alertRequestError(err, { method: "GET", route: "GET /admin/activity-log" });
+  }
+  setHeaders(PRIVATE_NO_STORE);
+  throw activityLogUnavailable();
+}
+
+/**
  * Load the viewer page. Exactly one setHeaders call per path: SvelteKit
  * throws `header_already_set` on a double-set, so the caller must not set
  * headers again on a throw. Rows arrive pre-rendered with ISO instants,
@@ -70,9 +91,8 @@ export async function loadActivityLogPage({
   let db: Db | null;
   try {
     db = await dbForFn({ env });
-  } catch {
-    setHeaders(PRIVATE_NO_STORE);
-    throw activityLogUnavailable();
+  } catch (err) {
+    reportLoadFailure(err, setHeaders);
   }
   if (!db) {
     setHeaders(PRIVATE_NO_STORE);
@@ -91,8 +111,7 @@ export async function loadActivityLogPage({
     }));
     setHeaders(PRIVATE_NO_STORE);
     return { rows, query, hasNext: fetched.length > ACTIVITY_LOG_PAGE_SIZE };
-  } catch {
-    setHeaders(PRIVATE_NO_STORE);
-    throw activityLogUnavailable();
+  } catch (err) {
+    reportLoadFailure(err, setHeaders);
   }
 }
