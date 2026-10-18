@@ -249,7 +249,11 @@
         var source = page.querySelector('[data-testid="' + LIVE_TESTIDS[i] + '"]');
         if (source) node.textContent = source.textContent;
       });
-      if (opts.syncInput && input.value === inputAtStart) {
+      if (
+        opts.syncInput &&
+        input.value === inputAtStart &&
+        inputRevision === inputRevisionAtStart
+      ) {
         var sourceInput = page.querySelector('[data-testid="events-search"]');
         if (sourceInput) input.value = sourceInput.getAttribute("value") || "";
       }
