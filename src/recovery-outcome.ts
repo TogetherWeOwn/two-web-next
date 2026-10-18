@@ -18,6 +18,10 @@ export interface RecoveryModel {
   retryUrl: string;
   retryLabel: string;
   inviteUrl: string;
+  // Validated request ID for the member to quote to support (the same value
+  // as the response's x-request-id). Absent on models whose controller never
+  // had a request ID to thread; renderers omit the line then.
+  supportReference?: string;
 }
 
 export interface RecoveryOutcomeOptions {

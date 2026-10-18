@@ -61,6 +61,10 @@ differs by call site:
   errors as 500s. The outage matrix pins the classified case:
   `GET /join/discord` and `GET /join/callback` answer 503 on a refused
   Postgres socket (see [`test/db-outage-matrix.test.ts`](../test/db-outage-matrix.test.ts)).
+- Prune is best-effort: [`checkJoinThrottle`](../src/join/service.ts) logs a
+  one-line warning and swallows a throwing expiry DELETE, then returns the
+  decided verdict, so a prune failure never flips a refusal into an admission
+  on the generic path or a 500 on the direct join path.
 - Allowance is admission only: passing the throttle does not guarantee the
   downstream handler succeeds — the journey store, bot call, or session mint
   can still refuse or fail.
@@ -101,17 +105,25 @@ policy refusals (`not_found`, closed events) return before the charge in
 before policy is judged — the generic middleware charges before the handler
 runs, profile-write 403s charge before the owner check in
 [`admitWrite`](../src/profiles/routes-admission.ts), and RSVP DELETE on a missing event
-charges in [`withdrawRsvp`](../src/events/rsvp.ts).
+charges in [`withdrawRsvp`](../src/events/rsvp.ts). The QA seam is the
+exception: its identity/token gate runs before `throttle("qa-login", …)` (same
+shape as `/__probe/alert` in [`src/alert-probe.ts`](../src/alert-probe.ts)),
+so unauthenticated probes 404 without spending the shared `qa-login` bucket and
+a probe flood can never lock out legitimate QA logins. Only gated QA logins
+charge the bucket.
 
 ## Prune and storage bound
 
-There is no background job. Expired rows are deleted piggyback on admissions at
+There is no background job. Expired rows are deleted piggyback on throttle checks at
 two call sites, both with a 5-minute bound:
 
-- [`src/join/service.ts`](../src/join/service.ts) (`checkJoinThrottle`): after a
-  successful admission only, outside the per-bucket admission lock transaction,
+- [`src/join/service.ts`](../src/join/service.ts) (`checkJoinThrottle`): after
+  the admission verdict — admitted or refused — outside the per-bucket
+  admission lock transaction,
   `DELETE FROM web_throttle_hits WHERE at < now() - interval '5 minutes'`.
-  Denied requests skip this cleanup so it never prolongs the lock.
+  The cleanup stays outside the lock so it never prolongs it; refused
+  requests prune the same age-only rows instead of letting expired rows
+  accumulate until some request is admitted.
 - [`src/events/rsvp.ts`](../src/events/rsvp.ts) (`pruneThrottle`, called from
   `writeRsvp` and both `withdrawRsvp` paths): inside the same transaction,
   before the budget charge and the write,

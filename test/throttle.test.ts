@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import rawApp from "../src/index";
 import app from "./app";
 import type { Env } from "../src/env";
+import { QA_HEADER } from "../src/qa";
 import { isThrottleMiddleware, throttle, type EnvWithThrottle } from "../src/throttle";
 import { Hono } from "hono";
 
@@ -150,8 +151,20 @@ describe("budgets on the legacy paths", () => {
     const json = { method: "POST", headers: { origin: e.APP_URL, accept: "application/json" } };
     for (let i = 0; i < 30; i++) expect((await app.request("/logout", json, e)).status).toBe(303);
     expect((await app.request("/logout", json, e)).status).toBe(429);
+    // Only gated QA logins spend the shared qa-login bucket (S4): the pin
+    // uses a valid identity + token, and an unauthenticated probe stays a 404
+    // even once the bucket is exhausted.
+    const qa = {
+      method: "POST",
+      headers: {
+        origin: e.APP_URL,
+        accept: "application/json",
+        [QA_HEADER]: "test-only-qa-token",
+      },
+    };
     for (let i = 0; i < 10; i++)
-      expect((await app.request("/auth/qa/x", json, e)).status).not.toBe(429);
-    expect((await app.request("/auth/qa/x", json, e)).status).toBe(429);
+      expect((await app.request("/auth/qa/qa-member", qa, e)).status).toBe(204);
+    expect((await app.request("/auth/qa/qa-member", qa, e)).status).toBe(429);
+    expect((await app.request("/auth/qa/x", json, e)).status).toBe(404);
   });
 });

@@ -148,7 +148,10 @@ jobs:
         # queue-only degraded/unknown is allowed. Dead letters fail only on
         # growth past the pre-rollback baseline, never on retained history;
         # when the baseline capture could not read /up the gate is skipped
-        # instead of failing on history.
+        # instead of failing on history. Critical ready-wait warns and passes
+        # here by design (--fail-on-ready-wait-critical is staging-only): the
+        # age reflects shared queue_jobs state, not the rolled-back version,
+        # so it must not fail a good rollback.
         env:
           SMOKE_FAILED_BASELINE: ${{ steps.dead-letter-baseline.outputs.failed }}
           SMOKE_ALLOW_MISSING_BASELINE: "1"

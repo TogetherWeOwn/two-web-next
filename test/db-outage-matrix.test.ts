@@ -645,6 +645,7 @@ it("member event show fails closed to the outage envelope during an outage", asy
     expect(await res.json()).toEqual({
       error: "db_unavailable",
       message: "The service is temporarily unavailable. Try again shortly.",
+      request_id: res.headers.get("x-request-id"),
     });
   }
 });

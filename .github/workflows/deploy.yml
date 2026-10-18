@@ -296,19 +296,22 @@ jobs:
           bash ci/change-scope.sh "$RUNNER_TEMP/deployed-files.tsv" "$EXPECTED" >> "$GITHUB_OUTPUT"
       - name: Smoke test staging public routes
         if: steps.smoke-scope.outputs.skip_e2e != 'true'
-        # bin/smoke.mjs requires /up db:ok + pending_migrations:0 and fails
-        # only on new dead letters: a positive numeric queue.failed above the
-        # pre-deploy baseline fails the deploy with the count, while a null or
-        # missing count does not fail it on its own. When the baseline capture
-        # could not read /up, the gate is skipped (SMOKE_ALLOW_MISSING_BASELINE)
-        # instead of failing on retained history. Queue-only degraded/unknown
-        # still pass.
+        # bin/smoke.mjs requires /up db:ok + pending_migrations:0, fails
+        # only on new dead letters (a positive numeric queue.failed above the
+        # pre-deploy baseline fails the deploy with the count; null/missing
+        # never fails on its own; an unreadable baseline skips the gate via
+        # SMOKE_ALLOW_MISSING_BASELINE instead of failing on history), and
+        # fails closed on a stuck queue via --fail-on-ready-wait-critical
+        # (S6, staging-only: the age reflects the shared queue_jobs table,
+        # not the version under test, so production promote and post-rollback
+        # smoke omit the flag and stay warn-only). Queue-only
+        # degraded/unknown still pass.
         env:
           SMOKE_FAILED_BASELINE: ${{ steps.dead-letter-baseline.outputs.failed }}
           SMOKE_ALLOW_MISSING_BASELINE: "1"
         run: |
           for i in 1 2 3 4 5 6; do
-            if node bin/smoke.mjs https://next.togetherweown.com; then
+            if node bin/smoke.mjs https://next.togetherweown.com --fail-on-ready-wait-critical; then
               echo "staging smoke ok (attempt $i)"
               exit 0
             fi

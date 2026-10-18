@@ -303,4 +303,58 @@ describe("RSVP outcome focus in Chromium", {
     await page.getByTestId("rsvp-going").waitFor();
     assert.equal(await member.focused(), "rsvp-going");
   });
+
+  it("focuses the unknown-outcome notice when the write times out with focus held", async (t) => {
+    const member = await openMember();
+    t.after(() => member.context.close());
+    const { page } = member;
+    await page.getByTestId("rsvp-going").focus();
+    await page.keyboard.press("Enter");
+    await member.pending();
+    await page.getByTestId("rsvp-unknown").waitFor({ timeout: 15000 });
+    assert.equal(await page.getByTestId("rsvp-unknown").getAttribute("role"), "alert");
+    assert.equal(await member.focused(), "rsvp-unknown");
+  });
+
+  it("keeps focus on the outside field when the write times out after tabbing away", async (t) => {
+    const member = await openMember();
+    t.after(() => member.context.close());
+    const { page } = member;
+    await page.getByTestId("rsvp-going").focus();
+    await page.keyboard.press("Enter");
+    await member.pending();
+    await page.keyboard.press("Tab");
+    assert.equal(await member.focused(), "outside");
+    await page.getByTestId("rsvp-unknown").waitFor({ timeout: 15000 });
+    assert.equal(await page.getByTestId("rsvp-unknown").getAttribute("role"), "alert");
+    assert.equal(await member.focused(), "outside");
+  });
+
+  it("focuses the session-expired notice on a deferred 401 when focus stays", async (t) => {
+    const member = await openMember();
+    t.after(() => member.context.close());
+    const { page } = member;
+    await page.getByTestId("rsvp-going").focus();
+    await page.keyboard.press("Enter");
+    const route = await member.pending();
+    await route.fulfill({ status: 401, contentType: "application/json", body: "" });
+    await page.getByTestId("rsvp-session-expired").waitFor();
+    assert.equal(await page.getByTestId("rsvp-session-expired").getAttribute("role"), "alert");
+    assert.equal(await member.focused(), "rsvp-session-expired");
+  });
+
+  it("keeps focus on the outside field when a deferred 401 arrives after moving away", async (t) => {
+    const member = await openMember();
+    t.after(() => member.context.close());
+    const { page } = member;
+    await page.getByTestId("rsvp-going").focus();
+    await page.keyboard.press("Enter");
+    const route = await member.pending();
+    await page.keyboard.press("Tab");
+    assert.equal(await member.focused(), "outside");
+    await route.fulfill({ status: 401, contentType: "application/json", body: "" });
+    await page.getByTestId("rsvp-session-expired").waitFor();
+    assert.equal(await page.getByTestId("rsvp-session-expired").getAttribute("role"), "alert");
+    assert.equal(await member.focused(), "outside");
+  });
 });

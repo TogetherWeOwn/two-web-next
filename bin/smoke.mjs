@@ -85,6 +85,7 @@ export async function smoke(
     versionOverride,
     failedBaseline,
     allowMissingBaseline = false,
+    failOnReadyWaitCritical = false,
   } = {},
 ) {
   const base = new URL(baseUrl);
@@ -192,6 +193,17 @@ export async function smoke(
           // and unknown-ledger envelopes all pass; thresholds pinned to
           // src/up.ts QUEUE_WARN_AT / QUEUE_CRITICAL_AT via the exported
           // SMOKE_QUEUE_* constants above (drift guard in test/smoke.test.mjs).
+          // A stuck staging queue is not promotable: with
+          // failOnReadyWaitCritical (S6, staging deploy only),
+          // ready_wait_severity critical fails closed. The flag is
+          // staging-only by design: the age derives from the shared
+          // queue_jobs table (src/jobs/postgres.ts min(available_at)), not
+          // the Worker version under test, so a production canary probed
+          // with --version-override would report the same critical and a
+          // fail-closed production gate would block its own fix from
+          // shipping (and fail post-rollback smoke after a good rollback).
+          // Without the flag, critical logs WARN and passes; healthy /
+          // warning / unknown / missing severity never fail.
           const valid =
             data?.db === "ok" &&
             data?.pending_migrations === 0 &&
@@ -228,6 +240,20 @@ export async function smoke(
                 ? "queue.failed 0 (no dead letters)"
                 : `queue.failed <= ${baseline} (no new dead letters; baseline ${baseline})`,
               `queue.failed ${typeof failed === "number" ? failed : "unknown"}`,
+            );
+          }
+          const severity = data?.queue?.ready_wait_severity;
+          const readyAge = data?.queue?.oldest_ready_wait_age_seconds;
+          const readyAgeLabel = typeof readyAge === "number" ? readyAge : "unknown";
+          if (failOnReadyWaitCritical) {
+            check(
+              severity !== "critical",
+              "ready_wait_severity not critical",
+              `critical (oldest_ready_wait_age_seconds: ${readyAgeLabel})`,
+            );
+          } else if (severity === "critical") {
+            log(
+              `WARN ${route.path}: ready_wait_severity critical (oldest_ready_wait_age_seconds: ${readyAgeLabel})`,
             );
           }
         } catch {
@@ -294,12 +320,15 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   let versionOverride;
   let failedBaseline;
   let allowMissingBaseline = false;
+  let failOnReadyWaitCritical = false;
   let usage = false;
   for (let i = 0; i < flags.length; i += 1) {
     if (flags[i] === "--allow-indexable") {
       allowIndexable = true;
     } else if (flags[i] === "--allow-missing-baseline") {
       allowMissingBaseline = true;
+    } else if (flags[i] === "--fail-on-ready-wait-critical") {
+      failOnReadyWaitCritical = true;
     } else if (flags[i] === "--version-override") {
       const value = flags[i + 1];
       if (value === undefined) {
@@ -322,7 +351,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   }
   if (typeof baseUrl !== "string" || usage) {
     console.error(
-      'Usage: node bin/smoke.mjs <base-url> [--allow-indexable] [--version-override worker-name="<version-uuid>"] [--failed-baseline <n>] [--allow-missing-baseline]',
+      'Usage: node bin/smoke.mjs <base-url> [--allow-indexable] [--fail-on-ready-wait-critical] [--version-override worker-name="<version-uuid>"] [--failed-baseline <n>] [--allow-missing-baseline]',
     );
     process.exitCode = 2;
   } else {
@@ -350,6 +379,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
         versionOverride,
         failedBaseline: baseline,
         allowMissingBaseline: allowMissing,
+        failOnReadyWaitCritical,
       }))
         ? 0
         : 1;
