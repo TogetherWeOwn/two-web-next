@@ -14,7 +14,14 @@ import {
   SYNC_EVENT,
 } from "./constants";
 import { dispatchSyncEvent } from "./sync-event";
-import type { EventStore, PruneStores, StaleEventKeysPage, TxClient, UniqueLock } from "./types";
+import type {
+  EventStore,
+  PruneIsolation,
+  PruneStores,
+  StaleEventKeysPage,
+  TxClient,
+  UniqueLock,
+} from "./types";
 
 /**
  * Advisory-lock runner: re-expresses onOneServer + withoutOverlapping.
@@ -174,7 +181,12 @@ const cutoff = (now: Date, days: number): Date => new Date(now.getTime() - days 
 async function drainPruneTable(
   prune: (cutoff: Date) => Promise<number>,
   cutoffDate: Date,
+  isolate?: PruneIsolation["isolate"],
 ): Promise<{ total: number; capped: boolean }> {
+  // One boundary for the whole table, not one subtransaction per batch. Use
+  // the scope's client for every query so a late failure rolls back the early
+  // batches without poisoning the flight's postgres.js error tracking.
+  if (isolate) return isolate((scopedPrune) => drainPruneTable(scopedPrune, cutoffDate));
   let total = 0;
   let last = 0;
   for (let i = 0; i < PRUNE_DELETE_MAX_BATCHES; i++) {
@@ -239,6 +251,7 @@ export async function pruneModelTables(
     agentEventAudits = await drainPruneTable(
       (c) => stores.agentEventAudits.pruneOlderThan(c),
       cutoff(now, AGENT_EVENT_AUDIT_RETENTION_DAYS),
+      stores.agentEventAudits.isolate,
     );
   } catch (error) {
     failures.push({ table: "agentEventAudits", error });
@@ -248,6 +261,7 @@ export async function pruneModelTables(
     accessLog = await drainPruneTable(
       (c) => stores.accessLog.pruneOlderThan(c),
       cutoff(now, MEMBER_ACCESS_LOG_RETENTION_DAYS),
+      stores.accessLog.isolate,
     );
   } catch (error) {
     failures.push({ table: "accessLog", error });
@@ -257,6 +271,7 @@ export async function pruneModelTables(
     joinAttempts = await drainPruneTable(
       (c) => stores.joinAttempts.pruneOlderThan(c),
       cutoff(now, JOIN_ATTEMPT_RETENTION_DAYS),
+      stores.joinAttempts.isolate,
     );
   } catch (error) {
     failures.push({ table: "joinAttempts", error });
@@ -266,6 +281,7 @@ export async function pruneModelTables(
     idempotencyKeys = await drainPruneTable(
       (c) => stores.idempotencyKeys.pruneOlderThan(c),
       cutoff(now, IDEMPOTENCY_KEY_RETENTION_DAYS),
+      stores.idempotencyKeys.isolate,
     );
   } catch (error) {
     failures.push({ table: "idempotencyKeys", error });
@@ -275,6 +291,7 @@ export async function pruneModelTables(
     searchLog = await drainPruneTable(
       (c) => stores.searchLog.pruneOlderThan(c),
       cutoff(now, EVENT_SEARCH_LOG_RETENTION_DAYS),
+      stores.searchLog.isolate,
     );
   } catch (error) {
     failures.push({ table: "searchLog", error });
@@ -284,19 +301,21 @@ export async function pruneModelTables(
     boardViews = await drainPruneTable(
       (c) => stores.boardViews.pruneOlderThan(c),
       cutoff(now, BOARD_VIEW_LOG_RETENTION_DAYS),
+      stores.boardViews.isolate,
     );
   } catch (error) {
     failures.push({ table: "boardViews", error });
   }
   let sessions = { total: 0, capped: false };
   try {
-    sessions = await drainPruneTable((d) => stores.sessions.sweepExpired(d), now);
+    const isolate = stores.sessions.isolate;
+    sessions = await drainPruneTable((d) => stores.sessions.sweepExpired(d), now, isolate);
   } catch (error) {
     failures.push({ table: "sessions", error });
   }
   let jobUniqueLocks = { total: 0, capped: false };
   try {
-    jobUniqueLocks = await drainPruneTable((d) => locks.sweepExpired(d), now);
+    jobUniqueLocks = await drainPruneTable((d) => locks.sweepExpired(d), now, locks.isolate);
   } catch (error) {
     failures.push({ table: "jobUniqueLocks", error });
   }
