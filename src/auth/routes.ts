@@ -200,9 +200,12 @@ export function registerAuthRoutes(app: Hono<{ Bindings: Env }>, hooks: AuthHook
           user.id,
           accessToken,
           c.env.DISCORD_BOT_TOKEN,
-        ).catch(() => "failed" as const);
-    if (join === "failed")
-      console.warn("guild auto-join failed", { request_id: c.get("requestId") });
+        ).catch(() => "transport_failure" as const);
+    if (join !== "joined" && join !== "already_member")
+      console.warn("guild auto-join failed", {
+        request_id: c.get("requestId"),
+        kind: join,
+      });
 
     // Moderator recompute: roles re-read with the bot token against snowflake IDs
     // (never names). A failed lookup fails closed on the flag, never on sign-in.
@@ -219,7 +222,7 @@ export function registerAuthRoutes(app: Hono<{ Bindings: Env }>, hooks: AuthHook
       userId: user.id,
       username: user.global_name ?? user.username,
       avatar: user.avatar,
-      member: join !== "failed",
+      member: join === "joined" || join === "already_member",
       moderator,
     });
     await flashExpiredWrite(c, expiredWrite);
@@ -229,7 +232,7 @@ export function registerAuthRoutes(app: Hono<{ Bindings: Env }>, hooks: AuthHook
     // explanation plus the invite fallback. The intended destination is
     // re-recorded for the retry instead of being lost. Successful joins keep
     // the legacy precedence: explicit next, then intended page, then notice.
-    if (join === "failed") {
+    if (join !== "joined" && join !== "already_member") {
       if (returnTo) {
         await setSignedCookie(c, LOGIN_INTENDED_COOKIE, returnTo, c.env.SESSION_SECRET, {
           path: "/",
