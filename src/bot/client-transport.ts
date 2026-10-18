@@ -11,6 +11,7 @@ import { encodeCanonicalJson, INTERNAL_ACTIONS_PATH, newNonce, signInternalActio
 import { BotTerminalError, BotTransportError } from "../jobs/types";
 import type { BotClientOptions } from "./client-types";
 import { parseEnvelope, type ParsedEnvelope } from "./client-serialization";
+import { diagnosticCode } from "./diagnostic-code";
 
 export function assertBotConfigured(o: Pick<BotClientOptions, "url" | "secret" | "keyId">): void {
   if (!o.url) throw new BotTerminalError("Bot is not configured: BOT_ENDPOINT_URL is missing.");
@@ -93,9 +94,15 @@ export async function send(
   }
   const durationMs = Date.now() - startedAt;
   const actionName = payload["action"] ?? "(unknown)";
+  // Diagnostics never carry the provider's `request_id`/`error.code` raw:
+  // both are untrusted envelope fields that can echo outgoing material.
+  // Correlation uses the caller-supplied idempotency key (a validated UUID,
+  // never provider input); the code uses the shared closed vocabulary
+  // with a fixed `unknown` fallback, as do queue failure diagnostics.
+  const correlation = idempotencyKey !== null ? { idempotency_key: idempotencyKey } : {};
   if (parsed.ok) {
     console.info("bot internal action succeeded", {
-      request_id: parsed.requestId,
+      ...correlation,
       action: actionName,
       status: res.status,
       replayed: parsed.replayed,
@@ -103,10 +110,10 @@ export async function send(
     });
   } else {
     console.warn("bot internal action refused", {
-      request_id: parsed.failure.requestId,
+      ...correlation,
       action: actionName,
       status: res.status,
-      code: parsed.failure.code,
+      code: diagnosticCode(parsed.failure.code),
       retryable: parsed.failure.retryable,
       duration_ms: durationMs,
     });

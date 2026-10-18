@@ -3,20 +3,18 @@
 // Terminal queue alerts and diagnostics are class-only: bot refusal messages,
 // thrown error messages and provider bodies can carry tokens, SQL or personal
 // data, so they never reach console output, queue.failing or the ledger.
-// Stable failure codes are preserved (sanitized to a safe alphabet); nothing
-// else from the provider is copied. Attempt counts and job names are numbers
-// and fixed strings, already bounded.
+// Only known failure codes are preserved; unknown provider strings are dropped,
+// not alphabet-filtered. Attempt counts and job names are numbers and fixed
+// strings, already bounded.
 import { exceptionClass } from "../alerts";
+import { diagnosticCode } from "../bot/diagnostic-code";
 
-const MAX_CODE_LENGTH = 64;
 const MAX_CLASS_LENGTH = 100;
 const MAX_SCOPE_LENGTH = 200;
 
-/** Stable provider code, stripped to a log-safe alphabet and bounded. */
+/** Diagnostic classification only: never echo arbitrary provider strings. */
 export function sanitizeQueueCode(code: unknown): string {
-  if (typeof code !== "string" || code.length === 0) return "unknown";
-  const cleaned = code.replace(/[^A-Za-z0-9._-]/g, "_").slice(0, MAX_CODE_LENGTH);
-  return cleaned.length > 0 ? cleaned : "unknown";
+  return diagnosticCode(code);
 }
 
 /** Job scope tag (e.g. an event key) with line breaks removed and bounded. */
@@ -34,12 +32,12 @@ export function terminalFailureReason(): string {
   return "BotTerminalError";
 }
 
-/** Non-retryable bot refusal: job + sanitized code, never the provider message. */
+/** Non-retryable bot refusal: job + classified code, never the provider message. */
 export function botRefusalReason(job: string, code: unknown): string {
   return `The bot refused ${job} with \`${sanitizeQueueCode(code)}\``;
 }
 
-/** Retryable refusal exhausted over all attempts: job + sanitized code + count. */
+/** Retryable refusal exhausted over all attempts: job + classified code + count. */
 export function botRetryExhaustedReason(job: string, code: unknown, attempts: number): string {
   return `The bot refused ${job} with a retryable \`${sanitizeQueueCode(code)}\` on all ${attempts} attempts.`;
 }

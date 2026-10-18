@@ -17,18 +17,40 @@ describe("sanitizeQueueCode", () => {
     expect(sanitizeQueueCode("")).toBe("unknown");
   });
 
-  it("keeps the safe alphabet untouched", () => {
-    expect(sanitizeQueueCode("foo.bar-baz_1")).toBe("foo.bar-baz_1");
+  it.each([
+    "malformed",
+    "unauthorized",
+    "stale_request",
+    "action_not_allowed",
+    "replayed",
+    "in_progress",
+    "discord_rejected",
+    "rate_limited",
+    "internal",
+    "discord_unavailable",
+    "upstream_timeout",
+  ])("preserves the known diagnostic code %s", (code) => {
+    expect(sanitizeQueueCode(code)).toBe(code);
+    expect(botRefusalReason("announcement.post", code)).toBe(
+      `The bot refused announcement.post with \`${code}\``,
+    );
+    expect(botRetryExhaustedReason("role.assign", code, 5)).toBe(
+      `The bot refused role.assign with a retryable \`${code}\` on all 5 attempts.`,
+    );
   });
 
-  it("replaces unsafe characters with underscores", () => {
-    expect(sanitizeQueueCode("bad code!\nDROP")).toBe("bad_code__DROP");
-    expect(sanitizeQueueCode("a b/c:d")).toBe("a_b_c_d");
+  it("rejects unknown codes even when they use a safe alphabet", () => {
+    expect(sanitizeQueueCode("foo.bar-baz_1")).toBe("unknown");
   });
 
-  it("bounds codes at 64 characters", () => {
-    expect(sanitizeQueueCode("x".repeat(100))).toBe("x".repeat(64));
-    expect(sanitizeQueueCode("x".repeat(64))).toHaveLength(64);
+  it("drops unsafe codes rather than preserving cleaned substrings", () => {
+    expect(sanitizeQueueCode("bad code!\nDROP")).toBe("unknown");
+    expect(sanitizeQueueCode("a b/c:d")).toBe("unknown");
+  });
+
+  it("drops overlong codes rather than preserving truncated substrings", () => {
+    expect(sanitizeQueueCode("x".repeat(100))).toBe("unknown");
+    expect(sanitizeQueueCode("x".repeat(64))).toBe("unknown");
   });
 });
 
@@ -65,17 +87,17 @@ describe("queueExceptionClass", () => {
 });
 
 describe("class-only refusal reasons", () => {
-  it("botRefusalReason carries job and sanitized code only", () => {
+  it("botRefusalReason carries job and classified code only", () => {
     const providerMessage = "token=abc123 leaked\nsecond line";
     const reason = botRefusalReason("sync-event", providerMessage);
-    expect(reason).toBe("The bot refused sync-event with `token_abc123_leaked_second_line`");
+    expect(reason).toBe("The bot refused sync-event with `unknown`");
     expect(reason).not.toContain(providerMessage);
   });
 
-  it("botRetryExhaustedReason carries job, sanitized code and attempt count", () => {
+  it("botRetryExhaustedReason carries job, classified code and attempt count", () => {
     const reason = botRetryExhaustedReason("call-internal-action", "boom!", 5);
     expect(reason).toBe(
-      "The bot refused call-internal-action with a retryable `boom_` on all 5 attempts.",
+      "The bot refused call-internal-action with a retryable `unknown` on all 5 attempts.",
     );
   });
 
