@@ -144,6 +144,7 @@ export async function withdrawRsvp(
   db: Db,
   eventKey: string,
   userId: string,
+  clock: () => Date = () => new Date(),
 ): Promise<
   | { limited: false; deleted: boolean; status: EventStatus | null }
   | { limited: true; retryAfter: number }
@@ -175,7 +176,7 @@ export async function withdrawRsvp(
       .delete(rsvps)
       .where(and(eq(rsvps.eventId, ev.id), eq(rsvps.userId, userId)))
       .returning({ id: rsvps.id });
-    if (gone.length > 0) await promoteWaitlist(tx, ev);
+    if (gone.length > 0) await promoteWaitlist(tx, ev, clock);
     const mirrorable = ev.status === "published" || ev.status === "cancelled";
     return {
       limited: false,
