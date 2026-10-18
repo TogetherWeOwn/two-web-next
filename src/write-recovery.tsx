@@ -116,6 +116,19 @@ export async function flashExpiredWrite(c: Ctx, next: string | null): Promise<vo
   await setSignedCookie(c, EXPIRED_WRITE_COOKIE, `restored|${next}`, c.env.SESSION_SECRET, OPTIONS);
 }
 
+/**
+ * Failed auto-join retry: re-set the consumed pending notice as pending (not
+ * restored) for the same destination, with the same signed/httpOnly/Lax/TTL
+ * attributes. A pending notice is neither rendered nor consumed by the
+ * intermediate join_failed page, so the retry-to-success callback can still
+ * consume it and flash the restored banner. The input already passed safeNext
+ * in consumeExpiredWrite, so no hostile destination can be smuggled here.
+ */
+export async function reflashPendingExpiredWrite(c: Ctx, next: string | null): Promise<void> {
+  if (!next) return;
+  await setSignedCookie(c, EXPIRED_WRITE_COOKIE, `pending|${next}`, c.env.SESSION_SECRET, OPTIONS);
+}
+
 /** Consume only an actual visible document, after all inner access/audit guards. */
 export async function expiredWriteBanner(c: Ctx, next: Next): Promise<void> {
   await next();

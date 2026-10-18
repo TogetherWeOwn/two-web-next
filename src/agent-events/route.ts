@@ -124,8 +124,9 @@ export const agentEventsAdmission: MiddlewareHandler<IngressEnv> = async (c, nex
     return c.json({ reason: "internal_error", message: "The agent event ingress failed." }, 500);
   } finally {
     // Also close on 413, source failures, and shield refusals. Never close the
-    // injected fixture client; its owner manages its lifecycle.
-    if (!injected) c.executionCtx.waitUntil(sql.end({ timeout: 2 }));
+    // injected fixture client; its owner manages its lifecycle. A failing
+    // close settles silently so it never surfaces as an unhandled rejection.
+    if (!injected) c.executionCtx.waitUntil(sql.end({ timeout: 2 }).catch(() => {}));
   }
 };
 

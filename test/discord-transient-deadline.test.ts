@@ -5,7 +5,7 @@ import {
   liveDiscordEventsSource,
 } from "../src/events/discord-transients";
 const now = new Date("2030-01-01T00:00:00Z");
-const env = { DISCORD_GUILD_ID: "test-guild", DISCORD_BOT_TOKEN: "test-token" } as Env;
+const env = { DISCORD_GUILD_ID: "326474832151838730", DISCORD_BOT_TOKEN: "test-token" } as Env;
 const event = (overrides = {}) => ({
   id: "scheduled",
   name: "Game night",
@@ -226,7 +226,7 @@ describe("Discord transient end-to-end deadline", () => {
     expect(source.lastReadFailed()).toBe(false);
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(fetchMock).toHaveBeenCalledWith(
-      "https://discord.com/api/v10/guilds/test-guild/scheduled-events",
+      "https://discord.com/api/v10/guilds/326474832151838730/scheduled-events",
       {
         headers: { authorization: "Bot test-token" },
         signal: expect.any(AbortSignal),

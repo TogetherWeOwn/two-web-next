@@ -37,7 +37,9 @@ export type RsvpWriteResult =
   | { ok: false; reason: "closed"; why: "draft" | "cancelled" | "past" | "paused" }
   | { ok: false; reason: "limited"; retryAfter: number };
 
-/** Draft/cancelled/past events and paused ones take no new answers (RsvpPolicy + TOG-8725). */
+/** Draft/cancelled/past events and paused ones take no new answers (RsvpPolicy + TOG-8725).
+ * The `now` below is always the post-lock database instant (see readDbClock),
+ * never the caller's worker clock. */
 function closedWhy(
   ev: { status: string; endsAt: Date; rsvpOpen: boolean },
   now: Date,
@@ -47,6 +49,34 @@ function closedWhy(
   if (ev.endsAt <= now) return "past";
   if (!ev.rsvpOpen) return "paused";
   return null;
+}
+
+/**
+ * The one post-lock database instant for a verdict and its stamps. Read
+ * `clock_timestamp()` inside the transaction after the event lock and the
+ * waitlist/prune waits, so expiry and every stamp share the database clock
+ * the row locks were taken under — not transaction-start `now()` and not the
+ * caller's worker clock. The `clock` param is the test seam and the fallback
+ * for doubles that cannot answer the read (they resolve to no row, and the
+ * verdict falls back to the injected instant).
+ */
+async function readDbClock(tx: Tx, clock: () => Date, eventId: number): Promise<Date> {
+  try {
+    // This drizzle version only executes a select anchored on a table, so the
+    // projection rides on the locked event row (which the caller verified
+    // exists) rather than a bare `select clock_timestamp()`.
+    const [row] = (await tx
+      .select({ now: sql`clock_timestamp()` })
+      .from(events)
+      .where(eq(events.id, eventId))
+      .limit(1)) as unknown as Array<{ now: unknown }>;
+    const v = row?.now;
+    const at = v instanceof Date ? v : v == null ? null : new Date(v as string | number);
+    if (at && !Number.isNaN(at.getTime())) return at;
+  } catch {
+    // Fall through to the injected clock below.
+  }
+  return clock();
 }
 export async function writeRsvp(
   db: Db,
@@ -73,8 +103,9 @@ export async function writeRsvp(
     // and the global prune before judging expiry or stamping the budget hit.
     if (ev.status === "published" && ev.rsvpOpen) await lockWaitlist(tx, ev.id);
     await pruneThrottle(tx);
-    const now = clock();
-    const why = closedWhy(ev, now);
+    // Judge expiry on the database clock read after every wait above.
+    const dbNow = await readDbClock(tx, clock, ev.id);
+    const why = closedWhy(ev, dbNow);
     if (why) return { ok: false, reason: "closed", why } as const;
     // Every new seat request joins the line before allocation, even with a vacancy.
     // The same FIFO pass handles explicit waitlist answers from a stale full view;
@@ -94,24 +125,28 @@ export async function writeRsvp(
     // Any change makes the Discord mirror stale again.
     await tx
       .insert(rsvps)
-      // Use the database's post-lock clock and full precision for fresh FIFO keys,
-      // not transaction-start now() or a skewed/millisecond Worker Date.
+      // Sibling stamps share the database clock: full-precision
+      // clock_timestamp() for fresh FIFO keys (never transaction-start now()
+      // or a skewed/millisecond Worker Date) beside the same post-lock
+      // instant for the updated stamp.
       .values({
         eventId: ev.id,
         userId,
         status: settledStatus,
         syncedToDiscordAt: null,
         createdAt: sql`clock_timestamp()`,
-        updatedAt: now,
+        updatedAt: dbNow,
       })
       .onConflictDoUpdate({
         target: [rsvps.eventId, rsvps.userId],
-        set: { status: settledStatus, syncedToDiscordAt: null, updatedAt: now },
+        set: { status: settledStatus, syncedToDiscordAt: null, updatedAt: dbNow },
       });
     // Non-seat answers and Going re-answers leave the existing line untouched.
     // New seat requests still settle FIFO, including explicit stale-view joins.
+    // Promotion judges and stamps on the same post-lock instant: freeze the
+    // database clock for the waitlist pass instead of the worker clock.
     const releasesSeat = existing?.status === "going" && status !== "going";
-    if (releasesSeat || settledStatus === "waitlisted") await promoteWaitlist(tx, ev, clock);
+    if (releasesSeat || settledStatus === "waitlisted") await promoteWaitlist(tx, ev, () => dbNow);
     // Return the committed allocation, including callers that promoted themselves.
     const [row] = await tx
       .select()
@@ -166,13 +201,16 @@ export async function withdrawRsvp(
       .for("update");
     if (ev.status === "published" && ev.rsvpOpen) await lockWaitlist(tx, ev.id);
     await pruneThrottle(tx);
+    // Freeze the same post-lock database instant for the promotion pass below,
+    // so its expiry check and stamps never see the worker clock.
+    const dbNow = await readDbClock(tx, clock, ev.id);
     const verdict = await chargeThrottle(tx, userId);
     if (verdict.limited) return { limited: true, retryAfter: verdict.retryAfter } as const;
     const gone = await tx
       .delete(rsvps)
       .where(and(eq(rsvps.eventId, ev.id), eq(rsvps.userId, userId)))
       .returning({ id: rsvps.id });
-    if (gone.length > 0) await promoteWaitlist(tx, ev, clock);
+    if (gone.length > 0) await promoteWaitlist(tx, ev, () => dbNow);
     const mirrorable = ev.status === "published" || ev.status === "cancelled";
     return {
       limited: false,

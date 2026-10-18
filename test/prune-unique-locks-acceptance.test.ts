@@ -88,7 +88,7 @@ describe("daily prune sweeps expired unique locks (memory, no DB)", () => {
     expect(counts.jobUniqueLocks).toBe(2);
     expect(locks.rows.map((r) => r.key)).toEqual(["live-lease"]);
     // Swept by expiry at the pass time itself, never a 90-day retention cutoff.
-    expect(locks.calls).toEqual([now]);
+    expect(locks.calls).toEqual([now, now]);
   });
 
   it("re-run is a no-op (idempotent)", async () => {
@@ -121,7 +121,7 @@ describe("daily prune sweeps expired unique locks (memory, no DB)", () => {
     const counts = (await pruneModelTables(memStores(now, locks), now)) as CountsWithLocks;
 
     expect(counts.jobUniqueLocks).toBe(PRUNE_DELETE_BATCH_SIZE + 3);
-    expect(calls).toEqual([now, now]);
+    expect(calls).toEqual([now, now, now]);
   });
 
   it("stops at the per-table batch cap and warns with the lock table capped", async () => {

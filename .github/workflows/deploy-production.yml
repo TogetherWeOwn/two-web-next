@@ -194,16 +194,30 @@ jobs:
         # before the release job tags. Manual redirects keep the checks
         # unauthenticated and never visit Discord: no auth, no writes, no new
         # secrets. Same retry contract (6 attempts, 10s sleeps, fail closed).
-        # No automatic restore here: the gradual action's rollback steps only
+        # Ordinary-traffic identity is enforced below: the promoted version UUID
+        # travels steps.gradual.outputs.promoted-version-id -> env -> quoted
+        # shell variable and the smoke proves that version serves unpinned
+        # ordinary routing (no version-override header). A healthy unwanted
+        # version can satisfy every readiness assertion without proving the
+        # recorded target serves normal traffic, so identity is the gate: a
+        # missing, malformed or different revision.version_id fails even when
+        # health is green. An absent or malformed promoted id fails closed
+        # before any probe, never by silently omitting verification. No
+        # automatic restore here: the gradual action's rollback steps only
         # fire on failures inside the promotion, so a failed verification
-        # leaves the promoted candidate live at 100% and prints PREV_VERSION as
-        # the recorded restoration target; the operator restores it through the
-        # rollback-production workflow with that id. An inline wrangler
-        # rollback must stay out of this workflow: the rollback path checks
-        # the target version's secrets first (see rollback-production.yml).
+        # leaves the promoted candidate live at 100% and prints the live
+        # candidate plus PREV_VERSION as the recorded restoration target; the
+        # operator restores it through the rollback-production workflow with
+        # that id. An inline wrangler rollback must stay out of this workflow:
+        # the rollback path checks the target version's secrets first (see
+        # rollback-production.yml).
         run: |
+          if ! node -e 'const v = process.env.PROMOTED_VERSION_ID ?? ""; if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(v)) { console.error("::error::promoted-version-id missing or malformed; refusing to verify without a target identity"); process.exit(1); }'; then
+            echo "::error::post-promotion public-route smoke failed; promoted candidate ${PROMOTED_VERSION_ID:-unknown} remains live at 100%; release will not tag; recorded restoration target ${PREV_VERSION:-unknown} - restore it with the rollback-production workflow using that version id"
+            exit 1
+          fi
           for i in 1 2 3 4 5 6; do
-            if node bin/smoke.mjs https://togetherweown.com --allow-indexable; then
+            if node bin/smoke.mjs https://togetherweown.com --allow-indexable --expected-version-id "$PROMOTED_VERSION_ID"; then
               echo "post-promotion production smoke ok (attempt $i)"
               exit 0
             fi
@@ -212,9 +226,10 @@ jobs:
               sleep 10
             fi
           done
-          echo "::error::post-promotion public-route smoke failed; promoted candidate remains live at 100%; release will not tag; recorded restoration target ${PREV_VERSION:-unknown} - restore it with the rollback-production workflow using that version id"
+          echo "::error::post-promotion public-route smoke failed; promoted candidate ${PROMOTED_VERSION_ID:-unknown} remains live at 100%; release will not tag; recorded restoration target ${PREV_VERSION:-unknown} - restore it with the rollback-production workflow using that version id"
           exit 1
         env:
+          PROMOTED_VERSION_ID: ${{ steps.gradual.outputs.promoted-version-id }}
           PREV_VERSION: ${{ steps.gradual.outputs.rollback-version-id }}
 
   release:
