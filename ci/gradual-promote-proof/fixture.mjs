@@ -34,6 +34,8 @@ function proofHeaders(env, extra = {}) {
   return {
     "content-security-policy": "default-src 'none'; frame-ancestors 'none'",
     "x-content-type-options": "nosniff",
+    "referrer-policy": "strict-origin-when-cross-origin",
+    "x-frame-options": "DENY",
     "x-proof-version-id": typeof metadata.id === "string" ? metadata.id : "unbound",
     "x-proof-version-tag": typeof metadata.tag === "string" ? metadata.tag : "untagged",
     "x-proof-label": typeof env?.PROOF_LABEL === "string" ? env.PROOF_LABEL : "unlabelled",
