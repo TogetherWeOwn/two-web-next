@@ -84,19 +84,34 @@ for (const suite of SUITES) {
 
 const RSVP_FILE = "ci/rsvp-focus-browser.test.mjs";
 const RSVP_ENV = "RSVP_FOCUS_BROWSER_TESTS";
+const RSVP_SUITE = "RSVP outcome focus in Chromium";
+const RSVP_MIN = 16;
 const RSVP_CASES = [
   "keeps keyboard focus on the field the member tabbed to while the write is pending",
   "moves focus to the confirmation when the member stays on the control",
   "keeps focus off the confirmation after a pointer press outside the widget",
+  "focuses the unknown-outcome notice when the write times out with focus held",
+  "keeps focus on the outside field when the write times out after tabbing away",
+  "focuses the session-expired notice on a deferred 401 when focus stays",
+  "keeps focus on the outside field when a deferred 401 arrives after moving away",
 ];
 
 test("a11y job runs ci/rsvp-focus-browser.test.mjs with its opt-in after Chromium install", async () => {
-  const step = steps.find((entry) => entry.includes(`node --test ${RSVP_FILE}`));
+  const step = steps.find((entry) => entry.includes(RSVP_FILE) && entry.includes("node --test"));
   assert(step, `a11y job must run ${RSVP_FILE}`);
   assert.match(
     step,
-    new RegExp(`\\n        run: ${RSVP_ENV}=true node --test ${escape(RSVP_FILE)}\\s*$`),
-    "the RSVP step must use the exact enabled workflow command",
+    new RegExp(
+      `\\n          ${RSVP_ENV}=true node --test --test-reporter=tap --test-reporter-destination=artifacts/a11y/rsvp-focus\\.tap ${escape(RSVP_FILE)}\\n`,
+    ),
+    "the RSVP step must run the Chromium gate with its TAP report",
+  );
+  assert.match(
+    step,
+    new RegExp(
+      `\\n          node ci/rsvp-focus-require-executed\\.mjs artifacts/a11y/rsvp-focus\\.tap "${escape(RSVP_SUITE)}" ${RSVP_MIN}\\s*$`,
+    ),
+    "the RSVP step must fail an all-skipped run via the executed-count verifier",
   );
   assert.doesNotMatch(step, /^\s*(?:- )?(?:if|continue-on-error):/m);
   assert.doesNotMatch(step, new RegExp(`${RSVP_ENV}=(?!true)`));
@@ -110,7 +125,8 @@ test("a11y job runs ci/rsvp-focus-browser.test.mjs with its opt-in after Chromiu
 
   const readme = await readFile(new URL("../README.md", import.meta.url), "utf8");
   const row = readme.split("\n").find((line) => line.startsWith(`| \`${RSVP_FILE}\` |`));
-  assert.match(row ?? "", /no executed-count verifier yet/);
+  assert.match(row ?? "", /rsvp-focus-require-executed\.mjs/);
+  assert.doesNotMatch(row ?? "", /no executed-count verifier yet/);
 });
 
 // Every browser gate is named *_BROWSER_TESTS, so the scan keys on that name.
