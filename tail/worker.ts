@@ -1314,6 +1314,11 @@ export function createTailWorker(
       })();
       const result = await withAggregatorDeadline(operation);
       if ("fallback" in result) return local();
+      // A healthy probe handled durably still ends the local red window:
+      // without this, a fallback-red / aggregator-healthy / fallback-red
+      // sequence pages as continuous red from the first run. Healthy
+      // answers JSON null, so this covers the no-number branch too.
+      if (ok) health.observe(true, at);
       return result;
     } catch {
       return local();
