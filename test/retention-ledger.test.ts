@@ -485,8 +485,11 @@ describe("retention ledger mechanisms (memory, no DB)", () => {
     expect(counts.joinAttempts).toBe(1);
     expect(tables.accessLog.at).toEqual([edge, fresh]);
     expect(tables.joinAttempts.at).toEqual([edge, fresh]);
-    expect(tables.accessLog.cutoffs).toEqual([edge]);
-    expect(tables.joinAttempts.cutoffs).toEqual([edge]);
+    // Two calls each with the identical cutoff: the short first batch is not
+    // drained proof (a SKIP LOCKED window can hide unvisited rows), so the
+    // pass runs one empty proving batch before reporting uncapped.
+    expect(tables.accessLog.cutoffs).toEqual([edge, edge]);
+    expect(tables.joinAttempts.cutoffs).toEqual([edge, edge]);
   });
 
   it("session sweep removes expired and exactly-now rows, keeps live ones", async () => {

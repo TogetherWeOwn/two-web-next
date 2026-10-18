@@ -204,7 +204,10 @@ describe("model:prune windows and sweep (memory, no DB)", () => {
     });
     for (const [name, t] of Object.entries(stores.tables)) {
       expect(t.at, name).toEqual([edge, fresh]);
-      expect(t.cutoffs, name).toEqual([edge]);
+      // Two calls with the identical cutoff: the short first batch is not
+      // drained proof (a SKIP LOCKED window can hide unvisited rows), so the
+      // pass runs one empty proving batch before reporting uncapped.
+      expect(t.cutoffs, name).toEqual([edge, edge]);
     }
   });
 
@@ -430,7 +433,7 @@ describe.skipIf(!process.env.DATABASE_URL)("model:prune (test Postgres)", () => 
     // so no clock skew can flip them), plus the earlier test's edge/fresh
     // leftovers. Expired backlog per table is therefore above one batch.
     // One pass drains the whole backlog: each statement stays batch-bounded
-    // while the pass repeats until a short batch. No per-pass total exceeds
+    // while the pass repeats until an empty batch. No per-pass total exceeds
     // the batch cap (batches × size); global totals are not asserted because
     // the earlier test's leftover edge rows sit exactly on the audit
     // clock-guard boundary and can flip eligibility between statements — the
