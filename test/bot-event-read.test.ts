@@ -18,6 +18,10 @@ const observation = {
 };
 const reply = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status });
 
+// Bound before any vi.useFakeTimers(): fake timers replace performance.now,
+// so this keeps a real wall-clock for the zero-fake-ms signer polls below.
+const realNow = performance.now.bind(performance);
+
 // Every fetcher is a local stub, never the staging bot or a live guild.
 describe("signed bot event.read observation", () => {
   it("never calls a bot for a row that was never mirrored", async () => {
@@ -235,12 +239,17 @@ describe("signed bot event.read fallback coverage", () => {
       });
       const fetcher = vi.fn<typeof fetch>().mockResolvedValue(nullBody(() => textGate));
       const pending = observeDiscordEvent(local, signedEventReader(cfg, fetcher));
-      // Signing is real async crypto: zero-ms advances do not give it
-      // wall-clock time, so poll (zero fake ms) until the attempt is on the
-      // wire. 500 matches test/bot-event-read-budget.test.ts; 50 starved the
-      // signer on Node 22 under load (main CI: fetcher never called).
-      for (let i = 0; i < 500 && fetcher.mock.calls.length === 0; i++) {
-        await vi.advanceTimersByTimeAsync(0);
+      // Signing is real async crypto on the libuv threadpool: zero-ms
+      // advances cost ~2.4 ms per 500 turns, so a turn-count bound still
+      // starves a 3 ms-late signer on Node 22 under load (main CI: fetcher
+      // never called). Poll zero fake ms until the attempt is on the wire or
+      // a 5 s wall-clock deadline passes; the fake clock stays put, so the
+      // 2,500 ms budget below still measures transport time only.
+      {
+        const end = realNow() + 5_000;
+        while (fetcher.mock.calls.length === 0 && realNow() < end) {
+          await vi.advanceTimersByTimeAsync(0);
+        }
       }
       expect(fetcher).toHaveBeenCalledOnce();
       await vi.advanceTimersByTimeAsync(2_500);
@@ -312,10 +321,12 @@ describe("signed bot event.read fallback coverage", () => {
         .fn<typeof fetch>()
         .mockResolvedValue({ status: 200, ok: true, body: fakeBody } as unknown as Response);
       const pending = observeDiscordEvent(local, signedEventReader(cfg, fetcher));
-      // Same zero-fake-ms poll as above: real async signing needs more than
-      // 50 flushes on Node 22 under load (main CI: fetcher never called).
-      for (let i = 0; i < 500 && fetcher.mock.calls.length === 0; i++) {
-        await vi.advanceTimersByTimeAsync(0);
+      // Same wall-clock-bounded zero-fake-ms poll as above.
+      {
+        const end = realNow() + 5_000;
+        while (fetcher.mock.calls.length === 0 && realNow() < end) {
+          await vi.advanceTimersByTimeAsync(0);
+        }
       }
       expect(fetcher).toHaveBeenCalledOnce();
       await vi.advanceTimersByTimeAsync(2_500);

@@ -104,6 +104,10 @@ function trackUnhandledRejections() {
 const observe = (fetcher: typeof fetch) =>
   observeDiscordEvent(local, signedEventReader(cfg, fetcher));
 
+// Bound before any vi.useFakeTimers(): fake timers replace performance.now,
+// so this keeps a real wall-clock for the zero-fake-ms signer poll below.
+const realNow = performance.now.bind(performance);
+
 // Signing the request is real async crypto: under fake timers a bare
 // advanceTimersByTimeAsync(BUDGET) can fire before the fetcher is ever
 // invoked, and zero-millisecond advances do not give the crypto work
@@ -113,8 +117,11 @@ const observe = (fetcher: typeof fetch) =>
 async function untilFetcherCalled(fetcher: ReturnType<typeof vi.fn<typeof fetch>>) {
   // Zero-fake-ms poll: advanceTimersByTimeAsync(0) flushes microtasks/real
   // crypto without advancing the fake clock, so the 2,500 ms budget measured
-  // below covers transport time only.
-  for (let i = 0; i < 500 && fetcher.mock.calls.length === 0; i++) {
+  // below covers transport time only. Bounded by wall-clock (not a turn
+  // count): ~500 turns cost ~2.4 ms, so a 3 ms-late signer on Node 22 under
+  // load would still flake a count bound.
+  const end = realNow() + 5_000;
+  while (fetcher.mock.calls.length === 0 && realNow() < end) {
     await vi.advanceTimersByTimeAsync(0);
   }
   expect(fetcher.mock.calls.length).toBe(1);
