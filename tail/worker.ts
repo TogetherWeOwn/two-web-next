@@ -556,6 +556,17 @@ export class AggregateTracker {
     );
   }
 
+  /**
+   * Replace the whole tracker state with a previously captured snapshot.
+   * Unlike restore (which merges into the live map for load), this also drops
+   * scripts the snapshot does not contain, so rolling back a failed write
+   * cannot leave behind an entry the failed observation created.
+   */
+  resetTo(value: unknown): void {
+    this.scripts.clear();
+    this.restore(value);
+  }
+
   restore(value: unknown): void {
     if (!value || typeof value !== "object" || Array.isArray(value)) return;
     for (const [script, raw] of Object.entries(value as Record<string, unknown>)) {
@@ -850,6 +861,13 @@ export class AlertAggregator {
   private readonly tracker = new AggregateTracker();
   private readonly health = new HealthTracker();
   private loaded: Promise<void> | undefined;
+  // Serializes mutating requests within one instance. Each observe/resolve
+  // mutates its tracker before its storage.put lands; without ordering, a
+  // late put rejection could roll back over a concurrent successful update
+  // (or interleave with one), stranding or duplicating alert state. The
+  // chain survives individual failures so one rejected write never wedges
+  // later requests.
+  private writeQueue: Promise<void> = Promise.resolve();
 
   constructor(private readonly state: DurableObjectState) {}
 
@@ -859,6 +877,15 @@ export class AlertAggregator {
       this.health.restore(await this.state.storage.get("health"));
     })();
     return this.loaded;
+  }
+
+  private enqueue<T>(work: () => Promise<T>): Promise<T> {
+    const run = this.writeQueue.then(work, work);
+    this.writeQueue = run.then(
+      () => undefined,
+      () => undefined,
+    );
+    return run;
   }
 
   async fetch(request: Request): Promise<Response> {
@@ -879,11 +906,26 @@ export class AlertAggregator {
     if (pathname === "/observe") {
       const batch = validBatch(body);
       if (!batch) return new Response(null, { status: 400 });
-      const alert = this.tracker.observe(batch);
-      await this.state.storage.put("scripts", this.tracker.snapshot());
-      if (alert === null) return Response.json(null);
-      const attemptId = this.tracker.pendingAttemptId(batch.script);
-      return Response.json(attemptId ? { ...alert, attemptId } : alert);
+      return this.enqueue(async () => {
+        // Deep-clone: snapshot() shares its bucket arrays with the live
+        // tracker, so an alias would observe the very mutation it must undo.
+        const prior = structuredClone(this.tracker.snapshot());
+        const alert = this.tracker.observe(batch);
+        try {
+          await this.state.storage.put("scripts", this.tracker.snapshot());
+        } catch (error) {
+          // The write never landed, so the mutation must not become visible:
+          // a retained pending marker would suppress a recovered observation
+          // until expiry and retained counts would diverge from the snapshot
+          // a fresh instance restores. Rethrow so the caller takes its
+          // documented local fallback instead of reading a false success.
+          this.tracker.resetTo(prior);
+          throw error;
+        }
+        if (alert === null) return Response.json(null);
+        const attemptId = this.tracker.pendingAttemptId(batch.script);
+        return Response.json(attemptId ? { ...alert, attemptId } : alert);
+      });
     }
     if (pathname === "/spike-result") {
       const result = body as { script?: unknown; delivered?: unknown; attemptId?: unknown };
@@ -897,9 +939,16 @@ export class AlertAggregator {
       ) {
         return new Response(null, { status: 400 });
       }
-      this.tracker.resolve(result.script, result.delivered, result.attemptId);
-      await this.state.storage.put("scripts", this.tracker.snapshot());
-      return Response.json(null);
+      // Capture narrowed fields before the closure: property narrowing does
+      // not carry into the queued callback.
+      const script = result.script;
+      const delivered = result.delivered;
+      const attemptId = result.attemptId;
+      return this.enqueue(async () => {
+        this.tracker.resolve(script, delivered, attemptId);
+        await this.state.storage.put("scripts", this.tracker.snapshot());
+        return Response.json(null);
+      });
     }
     if (pathname === "/health-result") {
       const result = body as { delivered?: unknown; attemptId?: unknown };
@@ -911,18 +960,36 @@ export class AlertAggregator {
       ) {
         return new Response(null, { status: 400 });
       }
-      this.health.resolve(result.delivered, result.attemptId);
-      await this.state.storage.put("health", this.health.snapshot());
-      return Response.json(null);
+      const delivered = result.delivered;
+      const attemptId = result.attemptId;
+      return this.enqueue(async () => {
+        this.health.resolve(delivered, attemptId);
+        await this.state.storage.put("health", this.health.snapshot());
+        return Response.json(null);
+      });
     }
     const probe = body as { ok?: unknown; at?: unknown };
     if (typeof probe?.ok !== "boolean" || !Number.isSafeInteger(probe.at)) {
       return new Response(null, { status: 400 });
     }
-    const downMs = this.health.observe(probe.ok, probe.at as number);
-    await this.state.storage.put("health", this.health.snapshot());
-    if (downMs === null) return Response.json(null);
-    return Response.json({ downMs, attemptId: this.health.pendingAttempt() });
+    const ok = probe.ok;
+    const at = probe.at as number;
+    return this.enqueue(async () => {
+      const prior = structuredClone(this.health.snapshot());
+      const downMs = this.health.observe(ok, at);
+      try {
+        await this.state.storage.put("health", this.health.snapshot());
+      } catch (error) {
+        // Same contract as /observe: an unpersisted health mutation must not
+        // leak into this instance (a stranded window or pending page would
+        // suppress or restart the outage window). HealthTracker.restore
+        // overwrites every field, so no key cleanup is needed here.
+        this.health.restore(prior);
+        throw error;
+      }
+      if (downMs === null) return Response.json(null);
+      return Response.json({ downMs, attemptId: this.health.pendingAttempt() });
+    });
   }
 }
 
