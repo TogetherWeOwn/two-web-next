@@ -101,13 +101,20 @@ export function rateLimitExceeded(c: Context, retryAfter = 60): Response | Promi
   varyAccept(c);
   c.status(429);
   if (jsonOnlyEventRequest(c) || outageRepresentation(c) === "application/json") {
+    const requestId = supportReference(c);
     return c.json({
       reason: "rate_limited",
       message: `Too many requests. Try again in ${n} seconds.`,
       retry_after: n,
+      ...(requestId === undefined ? {} : { request_id: requestId }),
     });
   }
-  return c.html(<RateLimitedPage inviteUrl={inviteDestination(c.env?.DISCORD_INVITE_URL)} />);
+  return c.html(
+    <RateLimitedPage
+      inviteUrl={inviteDestination(c.env?.DISCORD_INVITE_URL)}
+      supportReference={supportReference(c)}
+    />,
+  );
 }
 
 // Match the JSON-only event contracts before a handler can run (e.g. session
@@ -163,9 +170,11 @@ export function databaseUnavailable(c: Context, jsonOnly = false): Response | Pr
   varyAccept(c);
   c.status(503);
   if (jsonOnly || jsonOnlyEventRequest(c) || outageRepresentation(c) === "application/json") {
+    const requestId = supportReference(c);
     return c.json({
       error: "db_unavailable",
       message: "The service is temporarily unavailable. Try again shortly.",
+      ...(requestId === undefined ? {} : { request_id: requestId }),
     });
   }
   return c.html(

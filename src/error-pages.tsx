@@ -143,7 +143,10 @@ export const InternalErrorPage: FC<{ inviteUrl: string; supportReference?: strin
 
 // 429 (ports errors/429 + App\Support\ThrottleEnvelope::render). Same outage-safe
 // CTA as 500/503: the invite URL works when the session store is throttled or down.
-export const RateLimitedPage: FC<{ inviteUrl: string }> = ({ inviteUrl }) => (
+export const RateLimitedPage: FC<{ inviteUrl: string; supportReference?: string }> = ({
+  inviteUrl,
+  supportReference,
+}) => (
   <ErrorShell
     code="429"
     title="Slow down a little"
@@ -161,6 +164,7 @@ export const RateLimitedPage: FC<{ inviteUrl: string }> = ({ inviteUrl }) => (
         Back to the homepage
       </a>
     </p>
+    <SupportReference reference={supportReference} />
   </ErrorShell>
 );
 
