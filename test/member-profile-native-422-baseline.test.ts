@@ -435,5 +435,103 @@ describe.skipIf(process.env.A11Y_BROWSER_TESTS !== "true")(
       });
       expect(await page.getByTestId("profile-bio").textContent()).toContain(B.bio);
     });
+
+    // Delayed island refusals must respect deliberate newer work, as a
+    // delayed success does. The PATCH is held at the route until the test
+    // releases it, so focus/caret assertions run against the real caret.
+    async function holdPatch(page: Page, status: number, body: string) {
+      let release!: () => void;
+      const gate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      let arrived!: () => void;
+      const seen = new Promise<void>((resolve) => {
+        arrived = resolve;
+      });
+      await page.route("**/members/*", async (route) => {
+        if (route.request().method() !== "PATCH") return route.fallback();
+        arrived();
+        await gate;
+        await route.fulfill({ status, contentType: "application/json", body });
+      });
+      return { seen, release: () => release() };
+    }
+
+    const activeName = (page: Page) =>
+      page.evaluate<string | null>("document.activeElement?.getAttribute('name') ?? null");
+    const activeTestId = (page: Page) =>
+      page.evaluate<string | null>("document.activeElement?.getAttribute('data-testid') ?? null");
+
+    async function deliberateGamesDraft(page: Page) {
+      const games = await field(page, "games_text");
+      await games.fill("Newer draft typed after save");
+      await games.evaluate((el) => {
+        const control = el as unknown as { setSelectionRange: (a: number, b: number) => void };
+        control.setSelectionRange(6, 11);
+      });
+      return games;
+    }
+
+    const caret = (games: Awaited<ReturnType<typeof field>>) =>
+      games.evaluate((el) => {
+        const control = el as unknown as { selectionStart: number; selectionEnd: number };
+        return { start: control.selectionStart, end: control.selectionEnd };
+      });
+
+    it("keeps real focus, caret and newer draft when a deferred 422 arrives after deliberate editing", async () => {
+      const { page } = await openProfile(true, false);
+      const held = await holdPatch(
+        page,
+        422,
+        JSON.stringify({ errors: { bio: "Keep your bio to 1000 characters or fewer." } }),
+      );
+      await setField(page, "bio", "Submitted bio");
+      await page.getByTestId("profile-save").click();
+      await held.seen;
+      const games = await deliberateGamesDraft(page);
+      held.release();
+      await page.getByTestId("profile-error").waitFor();
+
+      expect(await page.getByTestId("profile-error").getAttribute("role")).toBe("alert");
+      expect(await activeName(page)).toBe("games_text");
+      expect(await games.inputValue()).toBe("Newer draft typed after save");
+      expect(await caret(games)).toEqual({ start: 6, end: 11 });
+      const bio = await field(page, "bio");
+      expect(await bio.getAttribute("aria-invalid")).toBe("true");
+      expect(await bio.getAttribute("aria-describedby")).toContain("profile-bio-error");
+    });
+
+    it("keeps real focus, caret and newer draft when a deferred 500 arrives after deliberate editing", async () => {
+      const { page } = await openProfile(true, false);
+      const held = await holdPatch(page, 500, "");
+      await setField(page, "bio", "Submitted bio");
+      await page.getByTestId("profile-save").click();
+      await held.seen;
+      const games = await deliberateGamesDraft(page);
+      held.release();
+      await page.getByTestId("profile-save-failed").waitFor();
+
+      expect(await page.getByTestId("profile-save-failed").getAttribute("role")).toBe("alert");
+      expect(await activeName(page)).toBe("games_text");
+      expect(await games.inputValue()).toBe("Newer draft typed after save");
+      expect(await caret(games)).toEqual({ start: 6, end: 11 });
+    });
+
+    it("focuses the real error summary when a deferred 422 is uninterrupted", async () => {
+      const { page } = await openProfile(true, false);
+      const held = await holdPatch(
+        page,
+        422,
+        JSON.stringify({ errors: { bio: "Keep your bio to 1000 characters or fewer." } }),
+      );
+      await setField(page, "bio", "Submitted bio");
+      await page.getByTestId("profile-save").click();
+      await held.seen;
+      held.release();
+      await page.getByTestId("profile-error").waitFor();
+
+      expect(await activeTestId(page)).toBe("profile-error");
+      expect(await (await field(page, "bio")).inputValue()).toBe("Submitted bio");
+    });
   },
 );

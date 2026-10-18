@@ -14,7 +14,9 @@
 // but a newer save waits until the cancelled
 // write settles or its deadline expires. 422 → errors in the alert, input kept; 401/302-to-login/419 → session
 // expired notice with login link, input kept; anything else → save-failed
-// alert, input kept. Copy and testids mirror src/islands/contracts.ts.
+// alert, input kept. Refusal alerts focus only when the member has not moved
+// on since the save started, like the saved confirmation. Copy and testids
+// mirror src/islands/contracts.ts.
 // While a write is unsettled the form is aria-busy and a polite progress line
 // sits just after it; a Save press then says the earlier save is still finishing.
 
@@ -429,8 +431,18 @@
     return out.length ? out : [{ key: null, text: GENERIC_INVALID_COPY }];
   }
 
-  function saveFailed() {
-    notice("profile-save-failed", "alert", SAVE_FAILED_COPY);
+  // A delayed refusal respects deliberate newer work exactly as a delayed
+  // success does: it focuses its summary only when the member has not moved
+  // on since the save started. Decided at settle time (when the body
+  // completes), not at headers time, so editing done while the body streams
+  // still counts. Synchronous client validation passes no request and always
+  // focuses.
+  function hasMovedOn() {
+    return editing || document.activeElement !== saveFocus;
+  }
+
+  function saveFailed(noFocus) {
+    notice("profile-save-failed", "alert", SAVE_FAILED_COPY, false, noFocus);
   }
 
   function expire(request) {
@@ -464,7 +476,7 @@
     );
   }
 
-  function errorList(errors) {
+  function errorList(errors, noFocus) {
     clearFieldErrors();
     var old = root.querySelector('[data-testid="profile-error"]');
     if (old) old.remove();
@@ -503,7 +515,7 @@
     });
     alert.appendChild(ul);
     form.parentNode.insertBefore(alert, form);
-    alert.focus();
+    if (!noFocus) alert.focus();
   }
 
   function openEditor() {
@@ -615,11 +627,11 @@
           // arrives after expiry is dropped by the generation guard.
           var invalid = function (j) {
             if (request !== generation) return;
-            errorList(validationMessages(j));
+            errorList(validationMessages(j), hasMovedOn());
           };
           var rejected = function () {
             if (request !== generation) return;
-            errorList([]);
+            errorList([], hasMovedOn());
           };
           try {
             var problems = res.json();
@@ -642,12 +654,12 @@
               var unchanged = accepted(body);
               notice("profile-saved", "status", "Profile saved.", false, movedOn || !unchanged);
             } else {
-              saveFailed();
+              saveFailed(hasMovedOn());
             }
           };
           var unproven = function () {
             if (request !== generation) return;
-            saveFailed();
+            saveFailed(hasMovedOn());
           };
           try {
             var ack = res.json();
@@ -666,7 +678,7 @@
         ) {
           return expiredNotice();
         }
-        saveFailed();
+        saveFailed(hasMovedOn());
       })
       .catch(function (err) {
         // The owned abort ends the request's timeout ownership: the uncertain
@@ -674,7 +686,7 @@
         // Every other rejection is a genuine fast failure with input kept.
         if (request !== generation) return;
         if (err && err.name === "AbortError") return;
-        saveFailed();
+        saveFailed(hasMovedOn());
       })
       .then(function () {
         // Settlement owns the transport state, cancelled or not: release the
