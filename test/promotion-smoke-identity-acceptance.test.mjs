@@ -56,6 +56,21 @@ const healthyOpenApi = JSON.stringify({
 const fixtures = {
   "/up": [200, "application/json", healthyUp(PROMOTED)],
   "/api/public/events": [200, "application/json", healthyCollection],
+  "/api/public/events/00000000000000000000000001": [
+    404,
+    "application/json",
+    '{"error":{"code":"not_found","message":"No published event with that key."}}',
+  ],
+  "/api/public/community": [
+    200,
+    "application/json",
+    '{"member_count":123,"online_count":12,"ranks":[{"key":"veterans","label":"Veterans","member_count":42}]}',
+  ],
+  "/api/public/join": [
+    200,
+    "application/json",
+    '{"intro":"Approve once with Discord and we will add you to the server.","invite_url":"https://discord.gg/fixture"}',
+  ],
   "/openapi.json": [200, "application/json", healthyOpenApi],
   "/": [200, "text/html", "<h1>The lobby is open.</h1>"],
   "/about": [200, "text/html", "<h1>About Together We Own</h1>"],
