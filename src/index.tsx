@@ -51,7 +51,7 @@ import {
   upHttpStatus,
   withHealthReadTimeout,
 } from "./up";
-import { requestLog } from "./request-log";
+import { requestLog, safeRequestId } from "./request-log";
 import { sameOrigin } from "./same-origin";
 import { trustHosts } from "./trust-hosts";
 import { authStatusScript, enableAuthStatus } from "./auth-status";
@@ -511,7 +511,14 @@ registerJoinRoutes(
     // outage), the private no-store header and the journey-cookie clearing in
     // the callback stay exactly as contracted.
     recovery: (c, props, status = 200) =>
-      renderHtmlOutcome(c, recoveryOutcome(props, honoRecoveryRenderer, { status })),
+      renderHtmlOutcome(
+        c,
+        recoveryOutcome(
+          { ...props, supportReference: safeRequestId(c.get("requestId")) },
+          honoRecoveryRenderer,
+          { status },
+        ),
+      ),
   },
 );
 

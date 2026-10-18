@@ -109,6 +109,10 @@ export type RecoveryProps = {
   retryUrl: string;
   retryLabel: string;
   inviteUrl: string;
+  // Validated request ID for the member to quote to support (the same value
+  // as the response's x-request-id). Optional so non-request callers keep
+  // working; the join render boundary always supplies it.
+  supportReference?: string;
 };
 
 // Rendering lives with the app module (it owns the JSX runtime); this module
