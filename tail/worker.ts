@@ -8,6 +8,12 @@ export type TailEnv = {
   ALERT_AGGREGATOR?: DurableObjectNamespace;
 };
 export const MUTE_MS = 5 * 60 * 1000;
+// Source timestamps more than this far ahead of the Tail clock are treated as
+// skew or poisoning: the mute decision uses the local clock instead. Smaller
+// skews keep exact source-time semantics so the app's own alert limiter
+// (which re-emits on the window boundary in source time) stays coordinated
+// with the Tail mute.
+export const MAX_SOURCE_SKEW_MS = 60_000;
 // Aggregate spike alarm: one page per script when errors cross these gates in a
 // rolling window, then a cooldown. Per-fingerprint pages alone cannot say
 // "half of traffic is 5xx", so the Tail Worker counts every trace outcome.
@@ -215,6 +221,51 @@ function cleanupResponse(response: Response): void {
       );
   } catch {
     /* Cleanup request failures never flip the delivery verdict. */
+  }
+}
+
+// Independent settlement deadline for one scheduled GET header wait. The
+// /up and synthetic probes each allow UPTIME_TIMEOUT_MS per attempt; the
+// AbortSignal.timeout on each GET stays on as cooperative cleanup only.
+// Racing the headers against a setTimeout guarantees the attempt settles
+// within the existing budget even when the transport never resolves and
+// ignores abort. Expiry is the existing transport treatment (status 0,
+// eligible for the existing retry). A late response gets best-effort inert
+// body cleanup without being awaited, and a late rejection is swallowed:
+// neither can change the settled verdict, page twice, or surface as an
+// unhandled rejection.
+async function withProbeDeadline(
+  work: Promise<Response>,
+  ms = UPTIME_TIMEOUT_MS,
+): Promise<Response> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    const timeout = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new Error("probe deadline")), ms);
+    });
+    void work.then(
+      () => {},
+      () => {},
+    );
+    return await Promise.race([work, timeout]);
+  } catch (error) {
+    // The race already settled without this attempt: a late Response still
+    // gets inert cleanup, a late rejection stays swallowed, and the settled
+    // verdict below never changes. Attached only on the losing path so a
+    // winning attempt is still cleaned up exactly once by its caller.
+    void work.then(
+      (response) => {
+        try {
+          cleanupResponse(response);
+        } catch {
+          /* Late cleanup never flips the settled verdict. */
+        }
+      },
+      () => {},
+    );
+    throw error;
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
   }
 }
 
@@ -570,6 +621,17 @@ export class AggregateTracker {
     );
   }
 
+  /**
+   * Replace the whole tracker state with a previously captured snapshot.
+   * Unlike restore (which merges into the live map for load), this also drops
+   * scripts the snapshot does not contain, so rolling back a failed write
+   * cannot leave behind an entry the failed observation created.
+   */
+  resetTo(value: unknown): void {
+    this.scripts.clear();
+    this.restore(value);
+  }
+
   restore(value: unknown): void {
     if (!value || typeof value !== "object" || Array.isArray(value)) return;
     for (const [script, raw] of Object.entries(value as Record<string, unknown>)) {
@@ -908,6 +970,13 @@ export class AlertAggregator {
   private readonly tracker = new AggregateTracker();
   private readonly health = new HealthTracker();
   private loaded: Promise<void> | undefined;
+  // Serializes mutating requests within one instance. Each observe/resolve
+  // mutates its tracker before its storage.put lands; without ordering, a
+  // late put rejection could roll back over a concurrent successful update
+  // (or interleave with one), stranding or duplicating alert state. The
+  // chain survives individual failures so one rejected write never wedges
+  // later requests.
+  private writeQueue: Promise<void> = Promise.resolve();
 
   constructor(private readonly state: DurableObjectState) {}
 
@@ -925,6 +994,15 @@ export class AlertAggregator {
       });
     }
     return this.loaded;
+  }
+
+  private enqueue<T>(work: () => Promise<T>): Promise<T> {
+    const run = this.writeQueue.then(work, work);
+    this.writeQueue = run.then(
+      () => undefined,
+      () => undefined,
+    );
+    return run;
   }
 
   private async loadOnce(): Promise<void> {
@@ -955,11 +1033,26 @@ export class AlertAggregator {
     if (pathname === "/observe") {
       const batch = validBatch(body);
       if (!batch) return new Response(null, { status: 400 });
-      const alert = this.tracker.observe(batch);
-      await this.state.storage.put("scripts", this.tracker.snapshot());
-      if (alert === null) return Response.json(null);
-      const attemptId = this.tracker.pendingAttemptId(batch.script);
-      return Response.json(attemptId ? { ...alert, attemptId } : alert);
+      return this.enqueue(async () => {
+        // Deep-clone: snapshot() shares its bucket arrays with the live
+        // tracker, so an alias would observe the very mutation it must undo.
+        const prior = structuredClone(this.tracker.snapshot());
+        const alert = this.tracker.observe(batch);
+        try {
+          await this.state.storage.put("scripts", this.tracker.snapshot());
+        } catch (error) {
+          // The write never landed, so the mutation must not become visible:
+          // a retained pending marker would suppress a recovered observation
+          // until expiry and retained counts would diverge from the snapshot
+          // a fresh instance restores. Rethrow so the caller takes its
+          // documented local fallback instead of reading a false success.
+          this.tracker.resetTo(prior);
+          throw error;
+        }
+        if (alert === null) return Response.json(null);
+        const attemptId = this.tracker.pendingAttemptId(batch.script);
+        return Response.json(attemptId ? { ...alert, attemptId } : alert);
+      });
     }
     if (pathname === "/spike-result") {
       const result = body as { script?: unknown; delivered?: unknown; attemptId?: unknown };
@@ -973,9 +1066,16 @@ export class AlertAggregator {
       ) {
         return new Response(null, { status: 400 });
       }
-      this.tracker.resolve(result.script, result.delivered, result.attemptId);
-      await this.state.storage.put("scripts", this.tracker.snapshot());
-      return Response.json(null);
+      // Capture narrowed fields before the closure: property narrowing does
+      // not carry into the queued callback.
+      const script = result.script;
+      const delivered = result.delivered;
+      const attemptId = result.attemptId;
+      return this.enqueue(async () => {
+        this.tracker.resolve(script, delivered, attemptId);
+        await this.state.storage.put("scripts", this.tracker.snapshot());
+        return Response.json(null);
+      });
     }
     if (pathname === "/health-result") {
       const result = body as { delivered?: unknown; attemptId?: unknown };
@@ -987,18 +1087,36 @@ export class AlertAggregator {
       ) {
         return new Response(null, { status: 400 });
       }
-      this.health.resolve(result.delivered, result.attemptId);
-      await this.state.storage.put("health", this.health.snapshot());
-      return Response.json(null);
+      const delivered = result.delivered;
+      const attemptId = result.attemptId;
+      return this.enqueue(async () => {
+        this.health.resolve(delivered, attemptId);
+        await this.state.storage.put("health", this.health.snapshot());
+        return Response.json(null);
+      });
     }
     const probe = body as { ok?: unknown; at?: unknown };
     if (typeof probe?.ok !== "boolean" || !Number.isSafeInteger(probe.at)) {
       return new Response(null, { status: 400 });
     }
-    const downMs = this.health.observe(probe.ok, probe.at as number);
-    await this.state.storage.put("health", this.health.snapshot());
-    if (downMs === null) return Response.json(null);
-    return Response.json({ downMs, attemptId: this.health.pendingAttempt() });
+    const ok = probe.ok;
+    const at = probe.at as number;
+    return this.enqueue(async () => {
+      const prior = structuredClone(this.health.snapshot());
+      const downMs = this.health.observe(ok, at);
+      try {
+        await this.state.storage.put("health", this.health.snapshot());
+      } catch (error) {
+        // Same contract as /observe: an unpersisted health mutation must not
+        // leak into this instance (a stranded window or pending page would
+        // suppress or restart the outage window). HealthTracker.restore
+        // overwrites every field, so no key cleanup is needed here.
+        this.health.restore(prior);
+        throw error;
+      }
+      if (downMs === null) return Response.json(null);
+      return Response.json({ downMs, attemptId: this.health.pendingAttempt() });
+    });
   }
 }
 
@@ -1269,6 +1387,11 @@ export function createTailWorker(
       })();
       const result = await withAggregatorDeadline(operation);
       if ("fallback" in result) return local();
+      // A healthy probe handled durably still ends the local red window:
+      // without this, a fallback-red / aggregator-healthy / fallback-red
+      // sequence pages as continuous red from the first run. Healthy
+      // answers JSON null, so this covers the no-number branch too.
+      if (ok) health.observe(true, at);
       return result;
     } catch {
       return local();
@@ -1316,11 +1439,14 @@ export function createTailWorker(
     attribution: UpAttribution;
   }> {
     try {
-      const response = await send(target, {
-        method: "GET",
-        redirect: "manual", // Workers fetch rejects "error"; a 3xx is never ok, so it fails closed.
-        signal: AbortSignal.timeout(UPTIME_TIMEOUT_MS),
-      });
+      const response = await withProbeDeadline(
+        send(target, {
+          method: "GET",
+          redirect: "manual", // Workers fetch rejects "error"; a 3xx is never ok, so it fails closed.
+          signal: AbortSignal.timeout(UPTIME_TIMEOUT_MS),
+        }),
+        UPTIME_TIMEOUT_MS,
+      );
       const ok =
         response.status === 200 && response.headers.get("x-two-origin") === EXPECTED_ORIGIN;
       // Read the already-fetched body for the public revision marker only.
@@ -1352,11 +1478,14 @@ export function createTailWorker(
     check: SyntheticCheck,
   ): Promise<{ ok: boolean; status: number }> {
     try {
-      const response = await send(new URL(check.path, base).toString(), {
-        method: "GET",
-        redirect: "manual", // Never follow into Discord or a login flow.
-        signal: AbortSignal.timeout(UPTIME_TIMEOUT_MS),
-      });
+      const response = await withProbeDeadline(
+        send(new URL(check.path, base).toString(), {
+          method: "GET",
+          redirect: "manual", // Never follow into Discord or a login flow.
+          signal: AbortSignal.timeout(UPTIME_TIMEOUT_MS),
+        }),
+        UPTIME_TIMEOUT_MS,
+      );
       let ok = response.status === check.status;
       if (ok && check.contentType) {
         ok = (response.headers.get("content-type") ?? "").startsWith(check.contentType);
@@ -1539,7 +1668,15 @@ export function createTailWorker(
               timestamp: parsed.timestamp,
             };
             const key = `${alert.event}:${alert.fingerprint}`;
-            if (!mute.begin(key, log.timestamp)) continue;
+            // Clamp only far-future source timestamps to the local clock: the
+            // page still carries its original timestamp, but suppression can
+            // never stretch past the documented window. Stamps within skew
+            // tolerance (past, on-time, or seconds ahead) keep source-time
+            // semantics so boundary re-emits from the app's own limiter
+            // still coordinate with the Tail mute.
+            const nowMs = now();
+            const muteAt = log.timestamp - nowMs > MAX_SOURCE_SKEW_MS ? nowMs : log.timestamp;
+            if (!mute.begin(key, muteAt)) continue;
             const delivered = await deliver(url, alert);
             mute.finish(key, delivered);
             // Probe correlation is receipt-only: never send it to the webhook or split the mute key.

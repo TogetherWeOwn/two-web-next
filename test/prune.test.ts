@@ -61,6 +61,11 @@ function memStores(now: Date): Omit<PruneStores, "sessions"> & {
   return {
     ...tables,
     sessions: createMemorySessionStore(() => now.getTime()),
+    jobUniqueLocks: {
+      async sweepExpired(_now: Date): Promise<number> {
+        return 0;
+      },
+    },
     tables,
   };
 }
@@ -102,9 +107,14 @@ describe("model:prune windows and sweep (memory, no DB)", () => {
       searchLog: stubTable([PRUNE_DELETE_BATCH_SIZE, 3]),
       boardViews: stubTable([PRUNE_DELETE_BATCH_SIZE, 3]),
     };
-    const stores = {
+    const stores: PruneStores = {
       ...tables,
       sessions: createMemorySessionStore(() => now.getTime()),
+      jobUniqueLocks: {
+        async sweepExpired(_at: Date): Promise<number> {
+          return 0;
+        },
+      },
     };
     const counts = await pruneModelTables(stores, now);
     expect(counts).toMatchObject({
@@ -114,6 +124,7 @@ describe("model:prune windows and sweep (memory, no DB)", () => {
       idempotencyKeys: PRUNE_DELETE_BATCH_SIZE + 3,
       searchLog: PRUNE_DELETE_BATCH_SIZE + 3,
       boardViews: PRUNE_DELETE_BATCH_SIZE + 3,
+      jobUniqueLocks: 0,
     });
   });
 
@@ -130,7 +141,7 @@ describe("model:prune windows and sweep (memory, no DB)", () => {
           return PRUNE_DELETE_BATCH_SIZE;
         },
       };
-      const stores = {
+      const stores: PruneStores = {
         agentEventAudits: endless,
         accessLog: endless,
         joinAttempts: endless,
@@ -138,6 +149,11 @@ describe("model:prune windows and sweep (memory, no DB)", () => {
         searchLog: endless,
         boardViews: endless,
         sessions: createMemorySessionStore(() => now.getTime()),
+        jobUniqueLocks: {
+          async sweepExpired(_at: Date): Promise<number> {
+            return 0;
+          },
+        },
       };
       const counts = await pruneModelTables(stores, now);
       const perTable = PRUNE_DELETE_BATCH_SIZE * PRUNE_DELETE_MAX_BATCHES;
@@ -148,6 +164,7 @@ describe("model:prune windows and sweep (memory, no DB)", () => {
         idempotencyKeys: perTable,
         searchLog: perTable,
         boardViews: perTable,
+        jobUniqueLocks: 0,
       });
       // Each of the six tables stopped after exactly the max batches.
       expect(callCounts.n).toBe(6 * PRUNE_DELETE_MAX_BATCHES);
@@ -252,6 +269,7 @@ describe("model:prune windows and sweep (memory, no DB)", () => {
       searchLog: 0,
       boardViews: 0,
       sessions: 0,
+      jobUniqueLocks: 0,
     });
   });
 
@@ -334,6 +352,7 @@ describe.skipIf(!process.env.DATABASE_URL)("model:prune (test Postgres)", () => 
              ('edge','2','b',true,false,${now}),
              ('live','3','c',true,false,${new Date(now.getTime() + 3600_000)})`;
 
+    await sql`delete from job_unique_locks`;
     const counts = await pruneModelTables(pgPruneStores(sql), now);
     expect(counts).toEqual({
       agentEventAudits: 1,
@@ -343,6 +362,7 @@ describe.skipIf(!process.env.DATABASE_URL)("model:prune (test Postgres)", () => 
       searchLog: 1,
       boardViews: 1,
       sessions: 2,
+      jobUniqueLocks: 0,
     });
 
     // Audit cutoff-exact rows survive; newer rows remain untouched.
@@ -383,6 +403,7 @@ describe.skipIf(!process.env.DATABASE_URL)("model:prune (test Postgres)", () => 
       searchLog: 0,
       boardViews: 0,
       sessions: 0,
+      jobUniqueLocks: 0,
     });
   });
 
@@ -435,10 +456,13 @@ describe.skipIf(!process.env.DATABASE_URL)("model:prune (test Postgres)", () => 
     // the earlier test's leftover edge rows sit exactly on the audit
     // clock-guard boundary and can flip eligibility between statements — the
     // marker-scoped checks below are the exact drain proof instead.
+    await sql`delete from job_unique_locks`;
     const first = await pruneModelTables(pgPruneStores(sql), now);
     const perPassCap = PRUNE_DELETE_BATCH_SIZE * PRUNE_DELETE_MAX_BATCHES;
     for (const [name, n] of Object.entries(first)) {
-      expect(n, `single pass ${name}`).toBeLessThanOrEqual(name === "sessions" ? 0 : perPassCap);
+      expect(n, `single pass ${name}`).toBeLessThanOrEqual(
+        name === "sessions" || name === "jobUniqueLocks" ? 0 : perPassCap,
+      );
     }
     expect(first.agentEventAudits).toBeGreaterThanOrEqual(extra);
     expect(first.accessLog).toBeGreaterThanOrEqual(extra);
@@ -456,6 +480,7 @@ describe.skipIf(!process.env.DATABASE_URL)("model:prune (test Postgres)", () => 
       searchLog: 0,
       boardViews: 0,
       sessions: 0,
+      jobUniqueLocks: 0,
     });
 
     // Every expired `cap-` row is gone; only the cutoff-exact and fresh

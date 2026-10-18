@@ -151,6 +151,7 @@ describe.skipIf(!process.env.DATABASE_URL)(
             searchLog: 0,
             boardViews: 0,
             sessions: 1,
+            jobUniqueLocks: 0,
           });
           expect(await survivors(fixture)).toEqual(["pass-live", "pass-skew"]);
           expect(warn).not.toHaveBeenCalled();

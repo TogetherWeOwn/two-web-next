@@ -25,7 +25,13 @@ import type postgres from "postgres";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import mountedApp from "./app";
 import type { EnvWithAdminDb } from "../src/admin/db";
-import { createEvent, getEvent, updateEvent } from "../src/admin/store";
+import {
+  createEvent,
+  getEvent,
+  mergePatchInput,
+  patchEvent,
+  updateEvent,
+} from "../src/admin/store";
 import { parseEventForm, ValidationError, type EventFormInput } from "../src/admin/validation";
 import { DEFAULT_CONFIG, validateFields } from "../src/agent-events/service";
 import { sha256Hex } from "../src/bot/signer";
@@ -45,6 +51,7 @@ vi.mock("../src/admin/store", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../src/admin/store")>()),
   createEvent: vi.fn(),
   getEvent: vi.fn(),
+  patchEvent: vi.fn(),
   updateEvent: vi.fn(),
 }));
 vi.mock("../src/events/reads", async (importOriginal) => ({
@@ -306,6 +313,13 @@ for (const method of ["POST", "PATCH"] as const) {
         });
         return { row: updated, writeBack: null, childWriteBacks: [] };
       });
+      // PATCH merges through the real pure seam against the fixture row (no
+      // SQL): invalid patches throw before any write, like the live store.
+      vi.mocked(patchEvent).mockImplementation(async (_db, _actor, _key, patch) => {
+        const updated = saved(mergePatchInput(storedRow, patch));
+        vi.mocked(getPublicEvent).mockResolvedValue({ ...updated, goingCount: 0 });
+        return { row: updated, writeBack: null, childWriteBacks: [] };
+      });
     });
 
     const path = method === "POST" ? "/events" : `/events/${KEY}`;
@@ -334,10 +348,19 @@ for (const method of ["POST", "PATCH"] as const) {
     it.each(ROUTE_ACCEPTED)("persists $label verbatim", async ({ value }) => {
       const response = await request(value);
       expect(response.status).toBe(method === "POST" ? 201 : 200);
-      const write = method === "POST" ? createEvent : updateEvent;
-      expect(write).toHaveBeenCalledTimes(1);
-      expect(vi.mocked(write).mock.calls[0]!.at(-1)).toMatchObject({ game: value });
-      expect(method === "POST" ? updateEvent : createEvent).not.toHaveBeenCalled();
+      if (method === "POST") {
+        expect(createEvent).toHaveBeenCalledTimes(1);
+        expect(vi.mocked(createEvent).mock.calls[0]!.at(-1)).toMatchObject({ game: value });
+        expect(patchEvent).not.toHaveBeenCalled();
+        expect(updateEvent).not.toHaveBeenCalled();
+      } else {
+        // PATCH carries the raw one-field edit; the merge happens inside the
+        // store seam against the locked row.
+        expect(patchEvent).toHaveBeenCalledTimes(1);
+        expect(vi.mocked(patchEvent).mock.calls[0]!.at(-1)).toEqual({ game: value });
+        expect(createEvent).not.toHaveBeenCalled();
+        expect(updateEvent).not.toHaveBeenCalled();
+      }
     });
   });
 }

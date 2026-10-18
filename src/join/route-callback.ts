@@ -218,10 +218,17 @@ export function registerJoinCallbackRoutes(
         requestId: done.requestId,
         discordId: user.id,
       });
-      return recover(
+      const recovery = await recover(
         "We couldn't add you automatically",
         "You're nearly there — use the invite link below to join the server directly.",
       );
+      // Header only: status and copy never change. A usable rate-limited bot-add
+      // backoff flows into `Retry-After` (same admission as the exchange 429
+      // branch); absent/unusable values and every non-rate-limited path keep
+      // today's headerless response.
+      if (done.outcome === "rate_limited" && done.retryAfter !== undefined)
+        recovery.headers.set("Retry-After", String(done.retryAfter));
+      return recovery;
     }
 
     await recordAttempt(sql, {

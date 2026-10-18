@@ -246,10 +246,16 @@ export async function consume(
       continue;
     }
     if ("failed" in outcome) {
-      if (outcome.definitive && !(await failAttempt())) continue;
+      // A definitive settlement outage must not be silent: the same delivery
+      // still owes the operator-visible terminal record (alert + failed stamp)
+      // even though the attempt never settled. The retry is already queued by
+      // failAttempt; never ack, so redelivery can finish settling. The jobId
+      // fence keeps a single failed row when it does.
+      const settlementFailed = outcome.definitive && !(await failAttempt());
       console.error("job failed", body.kind, outcome.failed);
       alertFailing(body.kind, m.attempts, outcome.failed, { requestId }, syncRetry);
       if (jobId) await bounded("failed", deps.ledger.failed(jobId, body.kind, key, outcome.failed));
+      if (settlementFailed) continue;
     } else if (jobId) {
       await bounded("dequeued", deps.ledger.dequeued(jobId));
     }

@@ -336,7 +336,8 @@ describe("retention ledger doc rows", () => {
       ["src/hotzones/board-log.ts", "await tx.insert(boardViewLogs).values({"],
       ["src/hotzones/board-log.ts", "if (!queued || status !== 200) return;"],
       ["src/leaderboards/routes.tsx", "if (!view || c.res.status !== 200) return;"],
-      ["src/jobs/worker.ts", "pruneModelTables(pgPruneStores(db), undefined,"],
+      ["src/jobs/worker.ts", "jobUniqueLocks: pgPruneStores(dispatchClient).jobUniqueLocks"],
+      ["src/jobs/worker.ts", "...pgPruneStores(db),"],
       // The cap page fires only after the flight commits: the scheduled
       // prune reports the cap without paging inside the transaction, and the
       // handler pages post-commit so a commit failure cannot leave a cap page
@@ -386,13 +387,19 @@ describe("retention ledger doc rows", () => {
     expect(doc).toContain("src/jobs/consumer.ts");
     expect(doc).toContain("src/jobs/sync-event.ts");
     // Accurate bounds: orphans outlive message lifetime; TTL bounds lease
-    // validity, not row lifetime.
+    // validity, the daily sweep bounds row lifetime.
     expect(doc).not.toContain("settles every message");
     expect(doc).toContain("orphaned rows");
     expect(doc).toContain("reviewed operator correction");
     expect(doc).toContain("runbook.md#queue-containment-drain-and-failed-job-replay");
-    expect(doc).toContain("until the next acquire of the same key");
-    expect(doc).toContain("unbounded for keys never re-dispatched");
+    expect(doc).toContain("pgPruneStores().jobUniqueLocks.sweepExpired(now)");
+    expect(doc).toContain("expires_at <= now");
+    expect(doc).toContain("live leases stay");
+    expect(doc).toContain("`jobUniqueLocks` in `cappedTables`");
+    expect(doc).toContain("src/jobs/cron.ts");
+    expect(doc).not.toContain("until the next acquire of the same key");
+    expect(doc).not.toContain("unbounded for keys never re-dispatched");
+    expect(doc).not.toContain("(no sweeper)");
   });
 
   it("publishes the sync-attempt lifecycle: writers, readers, and no age prune", () => {
@@ -437,7 +444,7 @@ describe("retention ledger doc rows", () => {
       "No prune store exists",
       "`PruneStores`",
       "`pruneModelTables`",
-      "six age-pruned tables plus the session sweep only",
+      "six age-pruned tables plus the session and lock sweeps",
       "no retention-days constant names sync attempts",
       "only in test fixtures as cleanup",
       "../drizzle/1020_event-sync-revisions.sql",
@@ -472,6 +479,11 @@ describe("retention ledger mechanisms (memory, no DB)", () => {
     const stores = {
       ...tables,
       sessions: createMemorySessionStore(() => now.getTime()),
+      jobUniqueLocks: {
+        async sweepExpired(_now: Date): Promise<number> {
+          return 0;
+        },
+      },
     } satisfies PruneStores;
     const old = new Date(now.getTime() - 91 * DAY);
     const edge = new Date(now.getTime() - 90 * DAY);
@@ -520,7 +532,12 @@ describe("retention ledger mechanisms (memory, no DB)", () => {
     const service = read("src/join/service.ts");
     expect(service).toContain("THROTTLE_COUNTER_RETENTION_MINUTES = 5");
     expect(service).toContain(
-      "DELETE FROM web_throttle_hits WHERE at < now() - make_interval(mins => ${THROTTLE_COUNTER_RETENTION_MINUTES})",
+      "WHERE at < now() - make_interval(mins => ${THROTTLE_COUNTER_RETENTION_MINUTES})",
+    );
+    // Bounded oldest-first batch, off the admission path.
+    expect(service).toContain("ORDER BY id LIMIT 1000 FOR UPDATE SKIP LOCKED");
+    expect(service).toContain(
+      "DELETE FROM web_throttle_hits USING (SELECT id FROM web_throttle_hits",
     );
     const doc = read("docs/member-erasure.md");
     expect(doc).toContain("THROTTLE_COUNTER_RETENTION_MINUTES = 5");
@@ -547,7 +564,7 @@ describe("retention ledger mechanisms (memory, no DB)", () => {
       /sync.?attempt.*retention|retention.*sync.?attempt/i,
     );
     // The prune wiring never mentions the attempts table: six age-pruned
-    // stores plus the session sweep, and sync attempts is not among them.
+    // stores plus the session and lock sweeps, and sync attempts is not among them.
     expect(read("src/jobs/cron.ts")).not.toContain("event_sync_attempts");
     expect(read("src/jobs/postgres.ts")).not.toContain("event_sync_attempts");
     const pruned = [
@@ -563,6 +580,11 @@ describe("retention ledger mechanisms (memory, no DB)", () => {
         `(c) => stores.${store}.pruneOlderThan(c),`,
       );
     }
+    expect(read("src/jobs/cron.ts")).toContain("(d) => stores.sessions.sweepExpired(d), now");
+    expect(read("src/jobs/cron.ts")).toContain(
+      "const locks = stores.jobUniqueLocks ?? { sweepExpired: async (_d: Date): Promise<number> => 0 };",
+    );
+    expect(read("src/jobs/cron.ts")).toContain("(d) => locks.sweepExpired(d), now");
     // Repo-wide: raw SQL deletes/truncates of the attempts table are forbidden
     // in src (test fixtures may delete for cleanup). Updates are lifecycle
     // transitions, not retention deletes, and stay allowed.
@@ -765,14 +787,16 @@ describe("retention ledger queue mechanisms (no DB)", () => {
     expect(runbook).toContain("library-only");
   });
 
-  it("job_unique_locks are TTL leases with fenced release and no sweeper", () => {
+  it("job_unique_locks are TTL leases with fenced release and an expiry sweep", () => {
     const postgresTs = read("src/jobs/postgres.ts");
     // Acquire wins only over expired rows; release compare-deletes by token.
     expect(postgresTs).toContain("where job_unique_locks.expires_at < clock_timestamp()");
-    // Pin the complete fenced statement; appended expiry predicates would
-    // otherwise turn this compare-delete into a bulk sweep.
+    // Pin both complete statements: the daily expiry sweep plus the fenced
+    // compare-delete. Appended predicates on the fenced delete would otherwise
+    // turn it into a bulk sweep.
     const pgWindows = deleteWindows(postgresTs, "job_unique_locks");
     expect(pgWindows.map(normalizeSqlWindow)).toEqual([
+      "delete from job_unique_locks where expires_at <= ${now} and expires_at <= clock_timestamp() and key in ( select key from job_unique_locks where expires_at <= ${now} and expires_at <= clock_timestamp() order by key limit ${PRUNE_DELETE_BATCH_SIZE} for update skip locked ) returning 1",
       "delete from job_unique_locks where key = ${key} and owner_token = ${leaseToken}::uuid",
     ]);
     // Repo-wide: postgres.ts is the sole delete site, not an exempt file.

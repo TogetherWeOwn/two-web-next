@@ -45,6 +45,7 @@ describe("isolated accessibility bot read models", () => {
       tenureDays: 637,
       rankKey: "veteran",
       isCurrentMember: true,
+      milestonesTruncated: false,
       milestones: [
         {
           type: "first_event",

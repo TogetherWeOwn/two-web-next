@@ -100,7 +100,9 @@ const MemberStatsBlock: FC<{ stats: MemberStats }> = ({ stats }) => (
       </div>
       <div>
         <dt>Milestones</dt>
-        <dd>{stats.milestones.length}</dd>
+        <dd>
+          {stats.milestonesTruncated ? `${stats.milestones.length}+` : stats.milestones.length}
+        </dd>
       </div>
     </dl>
     <h3>Milestones</h3>
