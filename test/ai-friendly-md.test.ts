@@ -11,7 +11,8 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import app from "./app";
 import type { Env } from "../src/env";
-import { events } from "../src/db/admin-schema";
+import { events, rsvps } from "../src/db/admin-schema";
+import { users } from "../src/db/schema";
 import { createMemorySessionStore } from "../src/sessions";
 import { createMemberDataFixture, type MemberDataFixture } from "./helpers/member-data-db";
 import { cookieFor, MODERATOR } from "./helpers/member-data";
@@ -446,6 +447,44 @@ describe.skipIf(!process.env.DATABASE_URL)("event .md routes (agent-testdb)", ()
       expect(mb).toContain(phrase);
     expect(hb).toContain('rel="alternate" type="text/markdown"');
     expect(hb).toContain("/e/01J0000000000000000000PXB1.md");
+  });
+
+  it.each([
+    ["empty stored name", "100000000000000207", "100000000000000209", true],
+    ["missing user row", "100000000000000208", "100000000000000210", false],
+  ])(
+    "detail .md reads full from seat occupancy when a nameless row holds a seat (%s)",
+    async (_shape, namelessId, namedId, insertNamelessUser) => {
+      // Route-level pin for the dual-count rule: one named + one nameless
+      // going row at capacity 2. Nulling the route's goingOccupancy would
+      // drop the (full) signal here while the builder unit pins still pass.
+      await ins("01J0000000000000000000MDF1", "published", { capacity: 2 });
+      const [row] = await db.select().from(events);
+      await db.insert(users).values({ id: namedId, username: "named-friend" });
+      if (insertNamelessUser) await db.insert(users).values({ id: namelessId, username: "" });
+      await db.insert(rsvps).values([
+        { eventId: row!.id, userId: namedId, status: "going" },
+        { eventId: row!.id, userId: namelessId, status: "going" },
+      ]);
+      const res = await tReq("/e/01J0000000000000000000MDF1.md");
+      expect(res.status).toBe(200);
+      expect(res.headers.get("content-type")).toBe(MARKDOWN_MIME);
+      expect(await res.text()).toContain("- Lineup: 1 going of 2 (full)");
+    },
+  );
+
+  it("detail .md stays open when the named count leaves a seat free", async () => {
+    await ins("01J0000000000000000000MDP1", "published", { capacity: 2 });
+    const [row] = await db.select().from(events);
+    await db.insert(users).values({ id: "100000000000000211", username: "named-friend" });
+    await db
+      .insert(rsvps)
+      .values({ eventId: row!.id, userId: "100000000000000211", status: "going" });
+    const res = await tReq("/e/01J0000000000000000000MDP1.md");
+    expect(res.status).toBe(200);
+    const body = await res.text();
+    expect(body).toContain("- Lineup: 1 going of 2");
+    expect(body).not.toContain("(full)");
   });
 
   it("cancelled .md is a 410 gone notice with noindex, like the HTML page", async () => {

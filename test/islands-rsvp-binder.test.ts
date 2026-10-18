@@ -1479,6 +1479,28 @@ describe("RsvpButton shipped binder", () => {
     expect(b.get("event-full")).not.toBeNull();
   });
 
+  it("replays the retained seat occupancy after a refused write when counts differ", async () => {
+    // Regression pin for the deferred snapshot: a nameless seat makes
+    // occupancy exceed the named count. Replaying the stored snapshot with
+    // goingCount would reopen a full event after the refusal.
+    const b = browser("open", undefined, false, { capacity: 2 });
+    expect(b.get("rsvp-going")).not.toBeNull();
+    b.get("rsvp-going")!.click();
+    expect(b.root.getAttribute("aria-busy")).toBe("true");
+    b.emit("going-count-refreshed", {
+      eventKey: "raid/one",
+      goingCount: 1,
+      goingOccupancy: 2,
+      capacity: 2,
+    });
+    b.finish(0, 403, { error: "forbidden" });
+    await b.settle();
+    expect(b.root.getAttribute("data-full")).toBe("true");
+    expect(b.get("rsvp-going")).toBeNull();
+    expect(b.get("waitlist-join")?.disabled).toBe(false);
+    expect(b.requests).toHaveLength(1);
+  });
+
   it("does not reopen actual paused SSR after withdrawal and a fresh allocation", async () => {
     const b = browser("waitlisted", undefined, true, { rsvpOpen: false });
     expect(b.get("waitlist-claim")).toBeNull();
