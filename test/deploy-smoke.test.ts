@@ -49,7 +49,7 @@ import { appendFileSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 const attempts = join(process.env.RUNNER_TEMP, "attempts");
 appendFileSync(attempts, "x");
-if (process.argv.length !== 4 || process.argv[2] !== "bin/smoke.mjs" || process.argv[3] !== "https://next.togetherweown.com") {
+if (process.argv.length !== 5 || process.argv[2] !== "bin/smoke.mjs" || process.argv[3] !== "https://next.togetherweown.com" || process.argv[4] !== "--fail-on-ready-wait-critical") {
   console.error("unexpected checker invocation");
   process.exit(2);
 }
@@ -227,6 +227,35 @@ describe("deploy public-route smoke (offline)", () => {
     expect(result.output).toContain("FAIL /faq: expected HTTP 200; actual HTTP 503");
     expect(result.output).toContain("::error::staging public-route smoke failed after deploy");
     expect(result.output).not.toContain("unexpected checker invocation");
+  });
+
+  it("scopes the fail-closed ready-wait gate to staging only", () => {
+    // S6: staging fails closed on critical ready-wait (shared queue_jobs age
+    // would otherwise be promotable); production promote and post-rollback
+    // smoke stay warn-only so a stuck queue cannot block its own fix.
+    const staging = readFileSync(".github/workflows/deploy.yml", "utf8");
+    expect(staging).toContain(
+      "node bin/smoke.mjs https://next.togetherweown.com --fail-on-ready-wait-critical",
+    );
+    const action = readFileSync(".github/actions/gradual-promote/action.yml", "utf8");
+    for (const name of [
+      "Health and SLO gate at 5 percent",
+      "Health and SLO gate at 50 percent",
+      "Health and SLO gate at 100 percent \\(new version\\)",
+      "Health and SLO gate at 100 percent \\(live traffic\\)",
+    ]) {
+      const block = action.match(
+        new RegExp(`    - name: ${name}\\n[\\s\\S]*?      run: \\|\\n((?:        .*\\n)+)`),
+      )?.[1];
+      expect(block).toBeDefined();
+      expect(block).not.toContain("--fail-on-ready-wait-critical");
+    }
+    const rollback = readFileSync(".github/workflows/rollback-production.yml", "utf8");
+    const rollbackBlock = rollback.match(
+      /      - name: Smoke test production public routes\n[\s\S]*?        run: \|\n((?:          .*\n)+)/,
+    )?.[1];
+    expect(rollbackBlock).toBeDefined();
+    expect(rollbackBlock).not.toContain("--fail-on-ready-wait-critical");
   });
 
   it("runs the loopback selftest in required CI as well as pre-deploy check", () => {

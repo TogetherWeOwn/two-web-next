@@ -412,8 +412,9 @@ test("accepts rendered healthy, degraded, unknown and unconfigured /up envelopes
   const { upBody } = await import(
     `data:text/javascript;base64,${Buffer.from(bundle.outputFiles[0].text).toString("base64")}`
   );
-  // Critical ready-wait is fail-closed (S6) and covered below; every other
-  // rendered severity passes.
+  // Critical ready-wait is fail-closed only with failOnReadyWaitCritical
+  // (S6, staging deploy only) and covered below; every other rendered
+  // severity passes.
   for (const state of ["healthy", "warning", "degraded", "unknown", "unconfigured"]) {
     const body = await upBody(
       state === "unconfigured"
@@ -475,7 +476,7 @@ test("fails closed on critical ready-wait severity with the age in the output", 
   const { url } = await stub(t, (route, result) => {
     if (route === "/up") result.body = JSON.stringify(ready);
   });
-  const result = await run(url);
+  const result = await run(url, { failOnReadyWaitCritical: true });
   assert.equal(result.ok, false, result.output);
   assert.match(
     result.output,
@@ -489,11 +490,50 @@ test("critical ready-wait without an age still fails closed without leaking the 
       result.body =
         '{"status":"healthy","db":"ok","pending_migrations":0,"queue":{"status":"healthy","warn_at":20,"critical_at":100,"ready_wait_severity":"critical","oldest_ready_wait_age_seconds":null}}';
   });
-  const result = await run(url);
+  const result = await run(url, { failOnReadyWaitCritical: true });
   assert.equal(result.ok, false, result.output);
   assert.match(
     result.output,
     /FAIL \/up: expected ready_wait_severity not critical; actual critical \(oldest_ready_wait_age_seconds: unknown\)/,
+  );
+});
+
+test("without the ready-wait flag a critical envelope warns and passes (production/rollback posture)", async (t) => {
+  // Production promote (gradual-promote --version-override stages) and
+  // post-rollback smoke omit --fail-on-ready-wait-critical: the age reflects
+  // shared queue_jobs state, not the version under test, so a stuck queue
+  // must not block its own fix. Flag-less invocation warns and passes.
+  const { url } = await stub(t, (route, result) => {
+    if (route === "/up")
+      result.body =
+        '{"status":"healthy","db":"ok","pending_migrations":0,"queue":{"status":"healthy","warn_at":20,"critical_at":100,"ready_wait_severity":"critical","oldest_ready_wait_age_seconds":612000}}';
+  });
+  const result = await run(url);
+  assert.equal(result.ok, true, result.output);
+  assert.match(
+    result.output,
+    /WARN \/up: ready_wait_severity critical \(oldest_ready_wait_age_seconds: 612000\)/,
+  );
+  assert.ok(result.output.includes("PASS /up"), result.output);
+});
+
+test("CLI --fail-on-ready-wait-critical gates staging while the flag-less CLI passes", async (t) => {
+  const { url } = await stub(t, (route, result) => {
+    if (route === "/up")
+      result.body =
+        '{"status":"healthy","db":"ok","pending_migrations":0,"queue":{"status":"healthy","warn_at":20,"critical_at":100,"ready_wait_severity":"critical","oldest_ready_wait_age_seconds":612000}}';
+  });
+  const gated = await cli([url, "--fail-on-ready-wait-critical"]);
+  assert.equal(gated.code, 1, gated.output);
+  assert.match(
+    gated.output,
+    /FAIL \/up: expected ready_wait_severity not critical; actual critical \(oldest_ready_wait_age_seconds: 612000\)/,
+  );
+  const ungated = await cli([url]);
+  assert.equal(ungated.code, 0, ungated.output);
+  assert.match(
+    ungated.output,
+    /WARN \/up: ready_wait_severity critical \(oldest_ready_wait_age_seconds: 612000\)/,
   );
 });
 

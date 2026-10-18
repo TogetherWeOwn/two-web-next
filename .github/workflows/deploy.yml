@@ -275,10 +275,14 @@ jobs:
           bash ci/change-scope.sh "$RUNNER_TEMP/deployed-files.tsv" "$EXPECTED" >> "$GITHUB_OUTPUT"
       - name: Smoke test staging public routes
         if: steps.smoke-scope.outputs.skip_e2e != 'true'
-        # bin/smoke.mjs requires /up db:ok + pending_migrations:0 and ready_wait_severity != critical; queue-only degraded/unknown still pass, only a stuck queue fails the deploy.
+        # Staging-only fail-closed ready-wait gate (S6): /up db:ok +
+        # pending_migrations:0 plus --fail-on-ready-wait-critical, so a stuck
+        # staging queue fails the deploy. Production promote and
+        # post-rollback smoke intentionally omit the flag (warn-only): the age
+        # reflects the shared queue_jobs table, not the version under test.
         run: |
           for i in 1 2 3 4 5 6; do
-            if node bin/smoke.mjs https://next.togetherweown.com; then
+            if node bin/smoke.mjs https://next.togetherweown.com --fail-on-ready-wait-critical; then
               echo "staging smoke ok (attempt $i)"
               exit 0
             fi
