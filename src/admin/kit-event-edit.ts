@@ -28,6 +28,7 @@
 // no event delete anywhere on this resource.
 import type { Db } from "../db/index";
 import { isDatabaseUnavailable } from "../db/errors";
+import { eventKeyAllowed } from "../events/keys";
 import {
   parseRosterQuery,
   ROSTER_PAGE_SIZE,
@@ -137,6 +138,8 @@ export type KitEventEditRosterRow = {
 };
 
 export type KitEventEditDeps = {
+  /** The production load always supplies APP_URL; fixture-only callers may omit it. */
+  appUrl?: string;
   /** Null database answers the Hono dbOr503 503; the guard owns the rest. */
   db: Db | null;
   get: (db: Db, key: string) => Promise<KitEventEditRow | null>;
@@ -170,7 +173,9 @@ export async function resolveKitEventEdit(
   rawQuery: ListParams,
   deps: KitEventEditDeps,
 ): Promise<KitEventEditOutcome> {
-  if (!rawKey) return { kind: "notFound" };
+  if (!rawKey || (deps.appUrl !== undefined && !eventKeyAllowed(rawKey, deps.appUrl))) {
+    return { kind: "notFound" };
+  }
   if (!deps.db) return { kind: "unavailable" };
   let row: KitEventEditRow | null;
   try {

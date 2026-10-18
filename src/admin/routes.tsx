@@ -39,6 +39,7 @@ import { sourceEvidenceHandler, sourceEvidenceMethodRefused } from "./source-evi
 import { dbFor, type EnvWithAdminDb } from "./db";
 import { bufferedMemberHtml, bufferedMemberText } from "../member-reads";
 import { EVENT_PAGE_SIZE, parseEventListQuery } from "./event-list";
+import { eventKeyAllowed } from "../events/keys";
 import {
   ACTIVITY_LOG_PAGE_SIZE,
   FEATURED_PAGE_SIZE,
@@ -390,7 +391,9 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
     declareAccess(c, { resource: "events", action: "view", route: "admin.events.edit" });
     const db = await dbOr503(c);
     if (!db) return bufferedMemberText(c, "Admin temporarily unavailable", 503);
-    const row = await getEvent(db, c.req.param("key"));
+    const key = c.req.param("key");
+    if (!eventKeyAllowed(key, c.env.APP_URL)) return errorPage(c, 404, "Event not found");
+    const row = await getEvent(db, key);
     if (!row) return errorPage(c, 404, "Event not found");
     const rosterQuery = parseRosterQuery(c.req.query());
     const { rows: roster, total: rosterTotal } = await listRoster(db, row.eventKey, rosterQuery);
@@ -416,6 +419,7 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
       const db = await dbOr503(c);
       if (!db) return c.text("Admin temporarily unavailable", 503);
       const key = c.req.param("key");
+      if (!eventKeyAllowed(key, c.env.APP_URL)) return errorPage(c, 404, "Event not found");
       const existing = await getEvent(db, key);
       if (!existing) return errorPage(c, 404, "Event not found");
       const values = await parsedForm(c);
@@ -475,9 +479,10 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
       async (c) => {
         const db = await dbOr503(c);
         if (!db) return c.text("Admin temporarily unavailable", 503);
+        const key = c.req.param("key");
+        if (!eventKeyAllowed(key, c.env.APP_URL)) return errorPage(c, 404, "Event not found");
         try {
           const actor = c.get("adminActor");
-          const key = c.req.param("key");
           const { row, writeBack } =
             action === "rsvp-pause" || action === "rsvp-reopen"
               ? await setRsvpOpen(db, actor, key, action === "rsvp-reopen")
