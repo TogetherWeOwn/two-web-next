@@ -63,7 +63,7 @@ function reportLoadFailure(
   setHeaders: (headers: Record<string, string>) => void,
 ): never {
   if (!isDatabaseUnavailable(err)) {
-    alertRequestError(err, { method: "GET", route: "GET /admin/activity-log" });
+    alertRequestError(err, { method: "GET", route: "/admin/activity-log" });
   }
   setHeaders(PRIVATE_NO_STORE);
   throw activityLogUnavailable();
