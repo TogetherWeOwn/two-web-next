@@ -52,7 +52,7 @@ export const PROFILE_PENDING_TESTID = "profile-pending";
  */
 export const PROFILE_SAVE_DEADLINE_MS = 10_000;
 
-export const PROFILE_LIMITS = { bio: 1000, gamesMax: 20, gameChars: 80 } as const;
+export const PROFILE_LIMITS = { bio: 1000, gamesMax: 20, gameChars: 80, gamesText: 1700 } as const;
 
 export const PROFILE_COPY = {
   saved: "Profile saved.",
@@ -151,6 +151,8 @@ export function profileClientErrors(input: {
   }
   if ([...input.bio].length > PROFILE_LIMITS.bio)
     errors.bio = "Keep your bio to 1000 characters or fewer.";
+  if ([...input.games_text].length > PROFILE_LIMITS.gamesText)
+    errors.games = "Games list is too long.";
   const games: string[] = [];
   for (const line of input.games_text.split(/\r\n|\r|\n/)) {
     const t = line.trim();
