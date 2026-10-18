@@ -143,20 +143,27 @@ export const eventIcs = (e: EventRow, appUrl: string): string => calendar(vevent
 
 export const eventsIcsCollection = (rows: EventRow[], appUrl: string): string => {
   // One out-of-range stored revision must not fail the whole export: skip
-  // that row and log the count. Only the sequence-range failure is
-  // skippable; any other builder error still throws for the collection.
+  // that row and log the count plus the skipped event keys, so the stranded
+  // subscriber-visible event can be found and the identity migration started.
+  // Only the sequence-range failure is skippable; any other builder error
+  // still throws for the collection.
   let skipped = 0;
+  const skippedEventKeys: string[] = [];
   const inner = rows.flatMap((e) => {
     try {
       return vevent(e, appUrl);
     } catch (error) {
       if (!(error instanceof IcsSequenceRangeError)) throw error;
       skipped += 1;
+      skippedEventKeys.push(e.eventKey);
       return [];
     }
   });
   if (skipped > 0) {
-    console.warn("eventsIcsCollection skipped out-of-range SEQUENCE rows.", { skipped });
+    console.warn("eventsIcsCollection skipped out-of-range SEQUENCE rows.", {
+      skipped,
+      skippedEventKeys,
+    });
   }
   return calendar(inner);
 };

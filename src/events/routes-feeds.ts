@@ -3,7 +3,7 @@
 import { dbFor } from "../admin/db";
 import { isDatabaseUnavailable } from "../db/errors";
 import { databaseUnavailable, notFoundHandler } from "../errors";
-import { eventsIcsCollection, eventsRss } from "./feeds";
+import { IcsSequenceRangeError, eventIcs, eventsIcsCollection, eventsRss } from "./feeds";
 import { canonicalEventKey, eventKeyAllowed } from "./keys";
 import { getEventRow, listFeed } from "./reads";
 import {
@@ -31,6 +31,19 @@ async function feedResponse(
     return c.body(null, 304, { etag, "cache-control": headers["cache-control"]! });
   }
   return c.body(body, 200, { ...headers, etag });
+}
+
+async function calendarFeedResponse(
+  c: Ctx,
+  build: () => string,
+  headers: Record<string, string>,
+): Promise<Response> {
+  try {
+    return feedResponse(c, build(), headers);
+  } catch (error) {
+    if (!(error instanceof IcsSequenceRangeError)) throw error;
+    return c.text("Calendar revision unavailable", 503, { "cache-control": "no-store" });
+  }
 }
 
 export function registerFeedRoutes(app: App, readSession: SessionReader): void {
@@ -105,10 +118,10 @@ export function registerFeedRoutes(app: App, readSession: SessionReader): void {
       }
       if (!session?.moderator) return c.text("Forbidden", 403);
     }
-    // A sequence-poison row degrades like the collection (skipped with a
-    // logged count, serving an event-less calendar) instead of 503ing. Valid
-    // rows render byte-identically to eventIcs.
-    return feedResponse(c, eventsIcsCollection([e], c.env.APP_URL), {
+    // A single-event download has no other rows to protect: a
+    // sequence-poison row answers the honest 503 with no-store (no ETag, no
+    // attachment) instead of an event-less 200 calendar.
+    return calendarFeedResponse(c, () => eventIcs(e, c.env.APP_URL), {
       "content-type": "text/calendar; charset=utf-8",
       "content-disposition": `attachment; filename="${e.eventKey}.ics"`,
       "cache-control": "max-age=300, private",
