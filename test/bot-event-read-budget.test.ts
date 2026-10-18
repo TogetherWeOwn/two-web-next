@@ -135,6 +135,40 @@ async function flushRounds(rounds = 5) {
   for (let round = 0; round < rounds; round++) await vi.advanceTimersByTimeAsync(0);
 }
 
+// A transport gate that owns its in-flight observation. If the test fails
+// before observe() settles (for example request signing stalls past
+// untilFetcherCalled on a loaded runner), the abandoned chain would otherwise
+// finish signing during a LATER test, schedule its budget timer on that
+// test's fresh fake clock, and wait forever on this gate — a stable stray
+// timer that breaks that test's getTimerCount() assertion. Observed once on
+// CI as `expected 1 to be +0` in the byte-ceiling test immediately after a
+// slow-signing failure in the preceding deadline test
+// (https://github.com/TogetherWeOwn/two-web-next/actions/runs/39148879325,
+// attempt 1). settle() forces the chain to finish inside its own test:
+// reject the gate, fire any abandoned budget timer, then await settlement.
+// The reader converts every outcome (including the abort) into a resolved
+// value, so settle() always terminates without needing further advances.
+function startGatedObservation() {
+  const gate = deferred<Response>();
+  // The teardown rejection below can fire while the chain is still stuck at
+  // request signing, before it ever observes the gate: pre-handle here so
+  // the intentional rejection is never reported as unhandled.
+  void gate.promise.catch(() => {});
+  const fetcher = vi.fn<typeof fetch>(() => gate.promise);
+  const pending = observe(fetcher);
+  const result = outcome(pending);
+  return {
+    gate,
+    fetcher,
+    result,
+    settle: async () => {
+      gate.reject(new Error("test teardown settles abandoned observation"));
+      await vi.advanceTimersByTimeAsync(BUDGET_MS);
+      await pending;
+    },
+  };
+}
+
 // Every fetcher is a local stub, never the staging bot or a live guild.
 describe("signed bot event.read budget and byte ceiling", () => {
   beforeEach(() => vi.useFakeTimers());
@@ -289,22 +323,25 @@ describe("signed bot event.read budget and byte ceiling", () => {
     });
 
     it("does not reset the deadline at headers or after partial body progress", async () => {
-      const gate = deferred<Response>();
       const { body, cancel, controller } = streamBody([], { close: false });
-      const fetcher = vi.fn<typeof fetch>(() => gate.promise);
-      const result = outcome(observe(fetcher));
-      await untilFetcherCalled(fetcher);
-      await vi.advanceTimersByTimeAsync(BUDGET_MS - 100);
-      gate.resolve(new Response(body, { status: 200 }));
-      await vi.advanceTimersByTimeAsync(0);
-      controller().enqueue(encoder.encode("{"));
-      await vi.advanceTimersByTimeAsync(99);
-      expect(result()).toBeUndefined();
-      await vi.advanceTimersByTimeAsync(1);
-      expect(result()).toEqual({ value: unreachable });
-      expect(cancel).toHaveBeenCalledOnce();
-      expect(fetcher).toHaveBeenCalledOnce();
-      expect(vi.getTimerCount()).toBe(0);
+      const gated = startGatedObservation();
+      const { gate, fetcher, result } = gated;
+      try {
+        await untilFetcherCalled(fetcher);
+        await vi.advanceTimersByTimeAsync(BUDGET_MS - 100);
+        gate.resolve(new Response(body, { status: 200 }));
+        await vi.advanceTimersByTimeAsync(0);
+        controller().enqueue(encoder.encode("{"));
+        await vi.advanceTimersByTimeAsync(99);
+        expect(result()).toBeUndefined();
+        await vi.advanceTimersByTimeAsync(1);
+        expect(result()).toEqual({ value: unreachable });
+        expect(cancel).toHaveBeenCalledOnce();
+        expect(fetcher).toHaveBeenCalledOnce();
+        expect(vi.getTimerCount()).toBe(0);
+      } finally {
+        await gated.settle();
+      }
     });
 
     it("settles even when body cancellation itself never resolves", async () => {
@@ -350,10 +387,9 @@ describe("signed bot event.read budget and byte ceiling", () => {
 
     it("cancels headers that arrive after the deadline and keeps the settled answer", async () => {
       const unhandled = trackUnhandledRejections();
+      const gated = startGatedObservation();
+      const { gate, fetcher, result } = gated;
       try {
-        const gate = deferred<Response>();
-        const fetcher = vi.fn<typeof fetch>(() => gate.promise);
-        const result = outcome(observe(fetcher));
         await untilFetcherCalled(fetcher);
         await vi.advanceTimersByTimeAsync(BUDGET_MS);
         expect(result()).toEqual({ value: unreachable });
@@ -369,16 +405,16 @@ describe("signed bot event.read budget and byte ceiling", () => {
         expect(fetcher).toHaveBeenCalledOnce();
         expect(vi.getTimerCount()).toBe(0);
       } finally {
+        await gated.settle();
         unhandled.stop();
       }
     });
 
     it("a late transport rejection cannot change the settled answer or escape unhandled", async () => {
       const unhandled = trackUnhandledRejections();
+      const gated = startGatedObservation();
+      const { gate, fetcher, result } = gated;
       try {
-        const gate = deferred<Response>();
-        const fetcher = vi.fn<typeof fetch>(() => gate.promise);
-        const result = outcome(observe(fetcher));
         await untilFetcherCalled(fetcher);
         await vi.advanceTimersByTimeAsync(BUDGET_MS);
         expect(result()).toEqual({ value: unreachable });
@@ -390,6 +426,7 @@ describe("signed bot event.read budget and byte ceiling", () => {
         expect(fetcher).toHaveBeenCalledOnce();
         expect(vi.getTimerCount()).toBe(0);
       } finally {
+        await gated.settle();
         unhandled.stop();
       }
     });
@@ -452,6 +489,44 @@ describe("signed bot event.read budget and byte ceiling", () => {
       expect(answer).toEqual(unreachable);
       expect(JSON.stringify(answer)).not.toContain(MARKER);
       expect(fetcher).toHaveBeenCalledOnce();
+    });
+  });
+
+  describe("abandoned observation settlement", () => {
+    it("an observation abandoned while signing stalls leaves no timer on the next fake clock", async () => {
+      const sign = crypto.subtle.sign.bind(crypto.subtle);
+      let releaseSigning!: () => void;
+      const signingGate = new Promise<void>((resolve) => {
+        releaseSigning = resolve;
+      });
+      vi.spyOn(crypto.subtle, "sign").mockImplementationOnce(async (...args) => {
+        await signingGate;
+        return sign(...args);
+      });
+      // untilFetcherCalled gives up while signing is stalled, exactly like the
+      // loaded-runner failure: the observation is abandoned before settlement.
+      const gated = startGatedObservation();
+      // Test teardown settles inside the owning test's clock even though the
+      // chain is still stuck at signing: settle() waits out the stall, the
+      // rejected gate fails the chain closed, and the budget timer (if the
+      // chain ever reaches it) is fired and cleared here, not on a later clock.
+      const settling = gated.settle();
+      releaseSigning();
+      await settling;
+      // The next test installs a fresh fake clock and must see no stray timer
+      // from the abandoned chain.
+      vi.useRealTimers();
+      vi.useFakeTimers();
+      // Give a still-living chain (settle() removed or broken) the chance to
+      // proceed past signing: its budget timer would then land on this clock
+      // while it waits on the never-settled gate, a stable count of 1. The
+      // fetcher call proves the chain ran; the timer it schedules just before
+      // that call is what the assertion below observes.
+      const deadline = vi.getRealSystemTime() + 5_000;
+      while (gated.fetcher.mock.calls.length === 0 && vi.getRealSystemTime() < deadline) {
+        await realDelay(10);
+      }
+      expect(vi.getTimerCount()).toBe(0);
     });
   });
 });
