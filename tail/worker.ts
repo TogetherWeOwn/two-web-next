@@ -93,7 +93,36 @@ const UPTIME_RETRY_DELAY_MS = 10_000;
 const EXPECTED_ORIGIN = "two-web-next";
 // Bound every aggregator call: aggregation runs before per-fingerprint paging
 // in the tail handler, so a stalled Durable Object must not stall that pager.
+// Each complete operation (request plus body parsing) settles within
+// AGGREGATOR_TIMEOUT_MS via an independent setTimeout race; the
+// AbortSignal.timeout on each fetch stays on as cooperative cleanup only.
+// Result acknowledgement is exactly two such attempts, so its total wait is
+// bounded by twice the per-operation budget.
 const AGGREGATOR_TIMEOUT_MS = 5_000;
+
+// Independent settlement deadline for one complete aggregator operation.
+// AbortSignal.timeout is cooperative: an uncooperative stub can ignore its
+// signal forever, so awaiting fetch (or response.json) with only that signal
+// can hang the caller. Racing the work against a setTimeout guarantees the
+// caller settles within the budget and falls back to local counts. The late
+// loser is ignored: a noop handler is attached up front so a late rejection
+// after expiry cannot surface as an unhandled rejection, and its value can
+// never change the already-settled caller result.
+async function withAggregatorDeadline<T>(work: Promise<T>, ms = AGGREGATOR_TIMEOUT_MS): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    const timeout = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new Error("aggregator deadline")), ms);
+    });
+    void work.then(
+      () => {},
+      () => {},
+    );
+    return await Promise.race([work, timeout]);
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
+}
 
 export type UptimeAlert = {
   event: "uptime.down";
@@ -760,14 +789,21 @@ export function createTailWorker(
     const stub = aggregator(env);
     if (!stub) return tracker.observe(batch);
     try {
-      const response = await stub.fetch("https://aggregator.invalid/observe", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify(batch),
-        signal: AbortSignal.timeout(AGGREGATOR_TIMEOUT_MS),
-      });
-      if (!response.ok) return tracker.observe(batch);
-      return (await response.json()) as SpikeAlert | null;
+      // One independent deadline covers request plus body parsing: headers
+      // followed by a stalled JSON body expire as a single operation.
+      const operation = (async () => {
+        const response = await stub.fetch("https://aggregator.invalid/observe", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(batch),
+          signal: AbortSignal.timeout(AGGREGATOR_TIMEOUT_MS),
+        });
+        if (!response.ok) return { fallback: true as const };
+        return { data: (await response.json()) as SpikeAlert | null };
+      })();
+      const result = await withAggregatorDeadline(operation);
+      if ("fallback" in result) return tracker.observe(batch);
+      return result.data;
     } catch {
       // Aggregation is additive: a broken binding falls back to local counts
       // and must never suppress the per-fingerprint pager.
@@ -785,12 +821,18 @@ export function createTailWorker(
   ): Promise<void> {
     for (let attempt = 0; attempt < 2; attempt += 1) {
       try {
-        const response = await stub.fetch(`https://aggregator.invalid${path}`, {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify(body),
-          signal: AbortSignal.timeout(AGGREGATOR_TIMEOUT_MS),
-        });
+        // Each attempt has its own settlement deadline, so a stalled
+        // acknowledgement still makes exactly one retry and the total wait
+        // stays finite. A late loser is ignored and cannot change the
+        // settled caller result.
+        const response = await withAggregatorDeadline(
+          stub.fetch(`https://aggregator.invalid${path}`, {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify(body),
+            signal: AbortSignal.timeout(AGGREGATOR_TIMEOUT_MS),
+          }),
+        );
         if (response.ok) return;
       } catch {
         /* Fall through to the single retry, then give up. */
@@ -819,15 +861,23 @@ export function createTailWorker(
     const stub = aggregator(env);
     if (!stub) return health.observe(ok, at);
     try {
-      const response = await stub.fetch("https://aggregator.invalid/health", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ ok, at }),
-        signal: AbortSignal.timeout(AGGREGATOR_TIMEOUT_MS),
-      });
-      if (!response.ok) return health.observe(ok, at);
-      const result = (await response.json()) as { downMs?: unknown } | null;
-      return typeof result?.downMs === "number" ? result.downMs : null;
+      // One independent deadline covers request plus body parsing, matching
+      // observeBatch: expiry takes the existing local fallback.
+      const operation = (async () => {
+        const response = await stub.fetch("https://aggregator.invalid/health", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ ok, at }),
+          signal: AbortSignal.timeout(AGGREGATOR_TIMEOUT_MS),
+        });
+        if (!response.ok) return { fallback: true as const };
+        return {
+          data: (await response.json()) as { downMs?: unknown } | null,
+        };
+      })();
+      const result = await withAggregatorDeadline(operation);
+      if ("fallback" in result) return health.observe(ok, at);
+      return typeof result.data?.downMs === "number" ? result.data.downMs : null;
     } catch {
       return health.observe(ok, at);
     }
