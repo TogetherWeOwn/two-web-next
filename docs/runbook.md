@@ -215,20 +215,29 @@ real-clock expiry test is a last-resort failure at expiry, not a 90-day warning.
 3. Choose a fixed RFC 3339 UTC timestamp (`YYYY-MM-DDTHH:mm:ssZ`, no fractional
    seconds) in the future, later than the current pin and less than one year
    after the review, allowing time to deploy before the old expiry. [RFC 9116 §2.5.5](https://www.rfc-editor.org/rfc/rfc9116.html#section-2.5.5)
-   recommends a horizon shorter than a year. Update `SECURITY_TXT_EXPIRES` and
-   `PINNED_EXPIRES` together; retain the real-clock future/less-than-one-year
-   assertions and fixed-date behavior. Never replace the pin with a rolling clock
-   or disable the test to clear an expired date. Update the current pin and
-   90-day trigger above in the same PR. Leave contacts, policy URL, route and
-   headers unchanged.
-4. Follow [the PR contract](../CONTRIBUTING.md). Run the fixture-only test and
-   link check below; record the results and verify the two dates above against
-   the source pin and `expiry - 90 × 24 hours` in UTC. Required checks under that
-   contract and independent Paperclip Review 5/5 must pass on the exact head
-   before the existing merge automation proceeds. No database is needed:
+   recommends a horizon shorter than a year. Update `SECURITY_TXT_EXPIRES`,
+   `PINNED_EXPIRES`, and `SMOKE_SECURITY_TXT_EXPIRES` in [`bin/smoke.mjs`](../bin/smoke.mjs)
+   together, and move the outgoing pin into `SMOKE_SECURITY_TXT_PREVIOUS_EXPIRES`
+   (dropping values older than one renewal): the rollback smoke runs HEAD's
+   checker against the rolled-back Worker, so without the outgoing pin a
+   post-renewal rollback fails although the rollback worked. The hardcoded
+   `Expires` in the `ci/gradual-promote-gate-acceptance.test.mjs` stub and the
+   `ci/gradual-promote-proof/fixture.mjs` Worker move to the new pin in the same
+   PR. Retain the real-clock future/less-than-one-year assertions and fixed-date
+   behavior. Never replace the pin with a rolling clock or disable the test to
+   clear an expired date. Update the current pin and 90-day trigger above in the
+   same PR. Leave contacts, policy URL, route and headers unchanged.
+4. Follow [the PR contract](../CONTRIBUTING.md). Run the fixture-only test, the
+   smoke suite, and the link check below; record the results and verify the two
+   dates above against the source pin and `expiry - 90 × 24 hours` in UTC.
+   Required checks under that contract and independent Paperclip Review 5/5 must
+   pass on the exact head before the existing merge automation proceeds. No
+   database is needed:
 
    ```sh
    env -u DATABASE_URL -u CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_DB npx --no-install vitest run test/security-txt.test.ts
+   npm run test:smoke
+   node --test ci/gradual-promote-gate-acceptance.test.mjs ci/gradual-promote-proof/proof.test.mjs
    npm run docs:links
    ```
 5. Use the existing [release flow](releases.md) and
@@ -315,16 +324,17 @@ approved account and binding isolation before any remote mutation.
    failed migration step fails the job before any Cloudflare mutation. The
    queue-create step currently suppresses errors; it is not permission/provisioning evidence.
    The final staging smoke runs `node bin/smoke.mjs https://next.togetherweown.com`
-   ([smoke checker](../bin/smoke.mjs)), covering 17 public routes: `/up`
+   ([smoke checker](../bin/smoke.mjs)), covering 18 public routes: `/up`
    (HTTP 200, `application/json`, `status` healthy/degraded with `queue.status`
    healthy/degraded/unknown) plus `/`, `/about`, `/faq`, `/rules`, `/privacy`,
    `/events`, `/events/past`, `/join`, `/events.rss`, `/events.ics`,
-   `/sitemap_index.xml`, `/robots.txt`, `/discord` (302), `/profile` (302),
+   `/sitemap_index.xml`, `/robots.txt`, `/.well-known/security.txt`,
+   `/discord` (302), `/profile` (302),
    `/admin` (302/403) and `/__smoke_unknown_route__` (404)
    with CSP/nosniff/content-type/noindex/redirect assertions; queue
    `degraded` or `unknown` is allowed. This is public-route liveness only,
    not DB/schema readiness or queue-drain acceptance. The apex production
-   smoke uses the same 17-route shape with `--allow-indexable`
+   smoke uses the same 18-route shape with `--allow-indexable`
    (`node bin/smoke.mjs https://togetherweown.com --allow-indexable`).
 4. An explicitly authorized manual deployment of the reviewed release uses:
 

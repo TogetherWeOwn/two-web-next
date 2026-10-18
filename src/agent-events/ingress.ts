@@ -13,11 +13,20 @@ import {
   ulid,
 } from "./payload";
 import { audit } from "./audit";
+import { normalizeClientIp } from "../throttle";
 import { checkGrant, findGrant } from "./grants";
 import { shield } from "./shield";
 import { lookupReplay, replayAnswer } from "./idempotency";
 import { rateLimit } from "./rate-limit";
 import { execute } from "./dispatch";
+
+// The longest captured Bearer credential the ingress will hash, look up or
+// count. Anything longer dies here as unauthenticated before the shield hash,
+// the hit insert and the grant lookup — and it is never demoted to the
+// anonymous bucket, so a rotation flood mints no buckets and spends no
+// budget. The refusal carries the existing 401 envelope and nothing of the
+// credential, exactly as an unknown short credential is answered.
+export const MAX_BEARER_CREDENTIAL_LENGTH = 512;
 
 export async function handleAgentEvent(
   sql: Sql,
@@ -41,14 +50,32 @@ export async function admitAgentEvent(
 ): Promise<Answer | { handle: (body: unknown) => Promise<Answer> }> {
   const requestId = ulid();
 
+  // Overlong credentials never reach the hash: no shield bucket, no hit row,
+  // no verifier lookup, no payload digest and no audit write — the same
+  // envelope an unknown credential receives, so a granted overlong bearer is
+  // indistinguishable from an unknown short one.
+  if (credential !== null && credential.length > MAX_BEARER_CREDENTIAL_LENGTH) {
+    return {
+      status: 401,
+      body: {
+        reason: "unauthenticated",
+        message: "A valid machine credential is required.",
+        request_id: requestId,
+      },
+    };
+  }
+
   // The outer shield (two-web TOG-8402): every hit per credential per minute,
   // counted before auth, the grant lookup and the audit write — ahead of the
   // enabled check, as the route middleware fires before the controller runs,
   // and ahead of payload canonicalization, so a spent bucket is refused
   // without ever running the recursive digest over untrusted JSON. A presented
   // credential buckets on its own hash (one guess never spends another's);
-  // anonymous hits bucket per IP. Refused hits write nothing.
-  const shieldKey = credential ? await sha256Hex(credential) : `ip:${clientIp ?? "unknown"}`;
+  // anonymous hits bucket per normalized IP, like human throttles (IPv6 /64,
+  // mapped-IPv4, malformed verbatim). Refused hits write nothing.
+  const shieldKey = credential
+    ? await sha256Hex(credential)
+    : `ip:${normalizeClientIp(clientIp ?? "unknown")}`;
   const shielded = await shield(sql, cfg, shieldKey, requestId);
   if (shielded) return shielded;
   return { handle: (body) => processAgentEvent(sql, cfg, body, credential, requestId, effects) };
@@ -249,8 +276,19 @@ async function processAgentEvent(
   // Replays are answered from the store without spending rate budget.
   const replay = await lookupReplay(sql, grant.id, idem);
   if (!replay) {
-    const limited = await rateLimit(sql, cfg, grant, op as Op);
+    const limited = await rateLimit(sql, cfg, grant, op as Op, requestId);
     if (limited) {
+      if (limited.status === 503 && limited.body.reason === "operation_busy") {
+        // Inner-budget lock contention: retryable load refusal, never a rate
+        // denial. Audited once as error/operation_busy with the response
+        // request_id; the aborted verdict inserted no budget hits.
+        await audit(sql, grant, op, null, idem, dig, requestId, "error", "operation_busy");
+        return {
+          status: limited.status,
+          body: { ...limited.body, request_id: requestId },
+          ...(limited.headers ? { headers: limited.headers } : {}),
+        };
+      }
       await audit(sql, grant, op, null, idem, dig, requestId, "denied", "rate_limited");
       return limited;
     }
