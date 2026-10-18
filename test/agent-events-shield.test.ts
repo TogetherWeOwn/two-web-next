@@ -181,10 +181,10 @@ describe.skipIf(!process.env.DATABASE_URL)("agent-events outer shield (agent-tes
     expect(third.body.reason).toBe("rate_limited");
     expect(third.headers?.["Retry-After"]).toBeTruthy();
 
-    // No grant rows touched; only the two shield-passed hits wrote
-    // `unauthenticated` audit rows. The refused hit wrote nothing.
+    // No grant rows touched; pre-auth refusals write zero audit rows, so
+    // neither the shield-passed hits nor the refused hit wrote anything.
     expect((await sql`SELECT count(*)::int AS n FROM agent_event_grants`)[0]!.n).toBe(0);
-    expect(await audits("unauthenticated")).toBe(2);
+    expect(await audits("unauthenticated")).toBe(0);
   });
 
   it("throttles rapid invalid-grant probes without leaking grant-existence oracles", async () => {
@@ -235,8 +235,9 @@ describe.skipIf(!process.env.DATABASE_URL)("agent-events outer shield (agent-tes
     );
     expect(valid.status).toBe(201);
 
-    // Only the unthrottled misses wrote rows (3 near + 2 far).
-    expect((await audits("unauthenticated")) - unauthBefore).toBe(5);
+    // Pre-auth refusals write zero audit rows: none of the misses (3 near
+    // + 2 far) wrote anything, throttled or not.
+    expect((await audits("unauthenticated")) - unauthBefore).toBe(0);
   });
 
   // Exact-head review regressions (TOG-10475 CHANGES): the shield admits
@@ -268,7 +269,11 @@ describe.skipIf(!process.env.DATABASE_URL)("agent-events outer shield (agent-tes
   });
 
   it("refuses an admitted over-deep body with 422 payload_too_deep, never 500", async () => {
-    const r = await call(deepBody(), null, 60, "127.0.0.32");
+    // Grant-first ingress refuses grantless deep bodies 401 before the
+    // digest, so this regression pins the admitted (granted) path instead.
+    const token = `sh-deep-${schemaName}`;
+    await grant(token);
+    const r = await call(deepBody(), token, 60, "127.0.0.32");
     expect(r.status).toBe(422);
     expect(r.body.reason).toBe("payload_too_deep");
   });

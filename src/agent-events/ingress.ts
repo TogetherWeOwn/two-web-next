@@ -28,6 +28,18 @@ import { execute } from "./dispatch";
 // credential, exactly as an unknown short credential is answered.
 export const MAX_BEARER_CREDENTIAL_LENGTH = 512;
 
+// Pre-auth refusals insert zero audit rows. A sampled, constant-shape warn
+// keeps flood signal without recording attacker-controlled data: no
+// credential, body, operation, key or anything else the caller chose (the
+// request id is generated server-side). Deliberately probabilistic, not a
+// token bucket: a flood of distinct unknown credentials must not be able to
+// spend a shared budget to blind the sink.
+const PRE_AUTH_REFUSAL_WARN_RATE = 0.01;
+function warnPreAuthRefusal(requestId: string): void {
+  if (Math.random() >= PRE_AUTH_REFUSAL_WARN_RATE) return;
+  console.warn("agent-events.ingress.pre_auth_refusal", { request_id: requestId });
+}
+
 export async function handleAgentEvent(
   sql: Sql,
   cfg: IngressConfig,
@@ -55,6 +67,7 @@ export async function admitAgentEvent(
   // envelope an unknown credential receives, so a granted overlong bearer is
   // indistinguishable from an unknown short one.
   if (credential !== null && credential.length > MAX_BEARER_CREDENTIAL_LENGTH) {
+    warnPreAuthRefusal(requestId);
     return {
       status: 401,
       body: {
@@ -90,6 +103,39 @@ async function processAgentEvent(
   effects: IngressEffects,
 ): Promise<Answer> {
   const doc: Record<string, unknown> = isPlainObject(body) ? body : {};
+
+  // Grant before digest: the presented credential is resolved before the
+  // recursive payload digest runs. A missing or unknown
+  // grant is refused with the existing 401 envelope without traversing or
+  // hashing the body — only the top-level envelope fields above are read,
+  // so the nested payload stays untouched — and without an audit row. The
+  // control-byte refusal stays ahead of auth here too, so a grantless
+  // hostile envelope keeps its existing 422 before any store touch.
+  const grant = credential ? await findGrant(sql, credential) : null;
+  if (!grant) {
+    warnPreAuthRefusal(requestId);
+    if (hasIngressControlBytes(doc.op) || hasIngressControlBytes(doc.idempotency_key)) {
+      return {
+        status: 422,
+        body: {
+          reason: "validation_failed",
+          message: "The `op` and `idempotency_key` fields must not contain control characters.",
+          request_id: requestId,
+        },
+      };
+    }
+    return {
+      status: 401,
+      body: {
+        reason: "unauthenticated",
+        message: "A valid machine credential is required.",
+        request_id: requestId,
+      },
+    };
+  }
+
+  // Granted only from here: the digest may traverse the payload, and an
+  // over-deep body keeps its 422 — now attributed to the resolved grant.
   let dig: string;
   try {
     dig = await digest(isPlainObject(body) ? body : {});
@@ -97,7 +143,7 @@ async function processAgentEvent(
     if (err instanceof PayloadTooDeepError) {
       await audit(
         sql,
-        null,
+        grant,
         "unknown",
         null,
         null,
@@ -187,18 +233,9 @@ async function processAgentEvent(
     };
   }
 
-  const grant = credential ? await findGrant(sql, credential) : null;
-  if (!grant)
-    return deny(
-      null,
-      op,
-      idem,
-      "denied",
-      "unauthenticated",
-      401,
-      "A valid machine credential is required.",
-    );
-
+  // The grant is resolved above, before the digest: every caller reaching
+  // this point is authenticated, so the admission checks below keep their
+  // existing grant-attributed audits.
   if (!(OPS as readonly string[]).includes(op))
     return deny(
       grant,

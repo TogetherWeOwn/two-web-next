@@ -219,11 +219,11 @@ describe("positive controls: the 429 contract otherwise unchanged", () => {
     const fake = makeFakeAgentDb();
     const refused = await anonymousShieldRefusal(fake);
     expect(refused.status).toBe(429);
-    // Only the two admitted hits recorded anything: two shield hits, two
-    // `unauthenticated` audit rows. The refused hit wrote neither.
+    // Pre-auth refusals write zero audit rows: the two shield-admitted hits
+    // recorded their shield hits and nothing else. The refused hit wrote
+    // neither an audit row nor a shield hit.
     expect(fake.hits).toHaveLength(2);
-    expect(fake.audits).toHaveLength(2);
-    expect(fake.audits.every((audit) => audit.reason === "unauthenticated")).toBe(true);
+    expect(fake.audits).toHaveLength(0);
   });
 
   it("inner 429 keeps the shared shape and charges no inner hit", async () => {
