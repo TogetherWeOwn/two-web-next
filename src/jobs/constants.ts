@@ -33,9 +33,11 @@ export const PRUNE_CRON = "0 0 * * *"; // routes/console.php:19 daily() (Laravel
 // statement deletes the oldest N ids (age tables) or N expiry-eligible
 // session hashes (`expires_at <= now`, expiry-exact rows go, live rows stay)
 // via a subselect and reports the exact count through RETURNING. The pass
-// repeats the batched statement until a short batch proves the backlog
-// drained, so a backlog above one batch clears in a single pass instead of
-// piling past retention. The loop stops after PRUNE_DELETE_MAX_BATCHES
+// repeats the batched statement until an empty batch proves the backlog
+// drained (a short non-empty batch is not proof: a SKIP LOCKED candidate
+// window can hide unvisited unlocked rows behind lock-held ones), so a
+// backlog above one batch clears in a single pass instead of piling past
+// retention. The loop stops after PRUNE_DELETE_MAX_BATCHES
 // batches per table (100k rows) to bound the `model:prune` single-flight
 // hold; a final full batch pages once via `scheduled.failing@model:prune`
 // (one redacted line, no table detail) with rows possibly pending, for any
