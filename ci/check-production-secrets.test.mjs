@@ -620,7 +620,7 @@ test("target-selected environment requires every mapping to be guarded on inputs
 
 const ENV_SECRET_NAME = /(SECRET|TOKEN)/;
 
-function extractTypeBlock(source, typeName) {
+function extractTypeBlockRange(source, typeName) {
   const decl = new RegExp(`\\btype\\s+${typeName}\\b`).exec(source);
   assert.ok(decl, `expected type ${typeName}`);
   const start = source.indexOf("{", decl.index);
@@ -689,16 +689,38 @@ function extractTypeBlock(source, typeName) {
     if (c === "{") depth++;
     if (c === "}") {
       depth--;
-      if (depth === 0) return source.slice(start, i + 1);
+      if (depth === 0) return { block: source.slice(start, i + 1), end: i };
     }
   }
   throw new Error(`Unterminated ${typeName} body`);
 }
 
-// Env must stay `AgentEventsEnv & {...}` on one line. A new intersection
-// half (or Omit<...>) would otherwise pass silently while Env requires names
-// the gate never checks, which is exactly the drift this pin exists to catch.
+function extractTypeBlock(source, typeName) {
+  return extractTypeBlockRange(source, typeName).block;
+}
+
+// Env must stay `AgentEventsEnv & {...};` on one line, and AgentEventsEnv
+// must stay `= {...};`. A new intersection half before the body (or Omit<...>)
+// or after it (`} & PayEnv`) would otherwise pass silently while Env requires
+// names the gate never checks, which is exactly the drift this pin exists to
+// catch.
+function assertClosedWithSemicolon(source, typeName) {
+  const { end } = extractTypeBlockRange(source, typeName);
+  const tail = stripCommentsAndStrings(source.slice(end + 1)).trimStart();
+  assert.ok(
+    tail.startsWith(";"),
+    `${typeName} must end with \`};\`: a type joined after the body needs parser + pin support`,
+  );
+}
+
 function assertEnvIntersectionShape(source) {
+  const agentDecl = /\btype\s+AgentEventsEnv\s*=\s*([^{\n]*)\{/.exec(source);
+  assert.ok(agentDecl, "expected an AgentEventsEnv header");
+  assert.equal(
+    agentDecl[1].trim(),
+    "",
+    "AgentEventsEnv must stay `= {...}`: a new intersection half needs parser + pin support",
+  );
   const decl = /\btype\s+Env\s*=\s*([^\n{]*)\{/.exec(source);
   assert.ok(decl, "expected an Env intersection header");
   assert.equal(
@@ -706,6 +728,8 @@ function assertEnvIntersectionShape(source) {
     "AgentEventsEnv &",
     "Env must stay `AgentEventsEnv & {...}`: a new intersection half needs parser + pin support",
   );
+  assertClosedWithSemicolon(source, "AgentEventsEnv");
+  assertClosedWithSemicolon(source, "Env");
 }
 
 // Blank comments and string literals (braces included) so field matching
@@ -878,6 +902,25 @@ test("fixture Env intersection shape change fails closed", () => {
     () => requiredEnvSecretNames(withHalf),
     /AgentEventsEnv &/,
     "a new Env intersection half must fail the pin until the parser supports it",
+  );
+  const withSuffix =
+    FIXTURE_ENV_BASE.replace(
+      "  SESSION_SECRET: string;\n};",
+      "  SESSION_SECRET: string;\n} & PayEnv;",
+    ) + "export type PayEnv = { PAY_SECRET: string };\n";
+  assert.throws(
+    () => requiredEnvSecretNames(withSuffix),
+    /needs parser \+ pin support/,
+    "a type joined after the Env body must fail the pin until the parser supports it",
+  );
+  const withAgentHalf = FIXTURE_ENV_BASE.replace(
+    "export type AgentEventsEnv = {",
+    "export type AgentEventsEnv = BaseEnv & {",
+  );
+  assert.throws(
+    () => requiredEnvSecretNames(withAgentHalf),
+    /= \{\.\.\.\}/,
+    "a new AgentEventsEnv intersection half must fail the pin until the parser supports it",
   );
 });
 
