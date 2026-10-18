@@ -13,6 +13,9 @@ export type MemberStats = {
 };
 export type MemberStatsSource = (id: string, signal: AbortSignal) => Promise<MemberStats | null>;
 export const MEMBER_STATS_BUDGET_MS = 500;
+// Newest-N milestone window: the SQL read is capped at this many rows so one
+// member cannot force an unbounded scan. Matches the sibling 100-row caps.
+export const MEMBER_MILESTONES_CAP = 100;
 
 // One budget for connection setup and both optional reads, not one per query.
 export async function memberStatsWithBudget(
@@ -98,7 +101,8 @@ export async function readMemberStats(
     const rows = await keyedMemberRead(() =>
       connection.execute(sql`
       select member_id, milestone, occurred_at, detail from web_v1.member_milestones
-      where member_id = ${id} order by occurred_at desc
+      where member_id = ${id} order by occurred_at desc, milestone asc, detail asc nulls last
+      limit ${sql.raw(String(MEMBER_MILESTONES_CAP))}
     `),
     );
     signal.throwIfAborted();
