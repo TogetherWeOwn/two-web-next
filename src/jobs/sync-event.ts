@@ -18,6 +18,40 @@ export type Outcome =
 export const uniqueKey = (eventKey: string) => `sync-event:${eventKey}`;
 
 const LOCK_TIMEOUT_MS = 2000;
+/**
+ * Per-op bound for the producer's lock-acquire and queue-send (TOG-30878).
+ * Every neighboring op races a deadline; acquire and send were awaited bare,
+ * so one hung Postgres INSERT or one hung queue transport stalled the web
+ * after-commit producer (and the reconcile redispatch) with no recovery.
+ * Past this deadline dispatch rejects as a transport wait — the same
+ * disposition as "queue down", recovered by reconcile — and any acquired
+ * lease is released. Pinned so changes are deliberate.
+ */
+export const PRODUCER_TIMEOUT_MS = 2000;
+
+/**
+ * Race `op` against an independent setTimeout deadline. The timer is always
+ * cleared, and a late settle after the deadline wins is ignored: it can never
+ * reclassify the already-disposed outcome (Promise.race stays attached to both
+ * branches, so a late rejection is handled, not unhandled).
+ */
+export async function withProducerDeadline<T>(
+  op: Promise<T>,
+  ms: number = PRODUCER_TIMEOUT_MS,
+): Promise<T> {
+  let timer: ReturnType<typeof setTimeout>;
+  const deadline = new Promise<never>((_, reject) => {
+    timer = setTimeout(
+      () => reject(new BotTransportError(`sync producer timed out after ${ms}ms`)),
+      ms,
+    );
+  });
+  try {
+    return await Promise.race([op, deadline]);
+  } finally {
+    clearTimeout(timer!);
+  }
+}
 
 /** Producer: idempotency key minted once, here (the constructor in Laravel), and carried on every retry. */
 export async function dispatchSyncEvent(
@@ -34,35 +68,55 @@ export async function dispatchSyncEvent(
   signal?.throwIfAborted();
   // ShouldBeUnique: a still-queued write-back absorbs this dispatch.
   const key = uniqueKey(eventKey);
-  const leaseToken = await lock.acquire(key, SYNC_EVENT.uniqueForSeconds);
-  if (!leaseToken) return false;
-  try {
-    signal?.throwIfAborted();
-    await queue.send(
-      // Idempotency stays build-time; correlation rides alongside, never as the key.
-      {
-        kind: "sync-event",
-        eventKey,
-        idempotencyKey,
-        leaseToken,
-        requestId: safeRequestId(requestId),
-      },
-      { delaySeconds: SYNC_EVENT.debounceSeconds },
-    );
-  } catch (err) {
-    // Failed send: compensate only this acquisition, never a newer holder.
-    // Like terminal cleanup, a wedged DELETE must not hold dispatch hostage.
-    // TTL recovers a stuck lease; a late DELETE remains fenced by this token.
+  // Failed send: compensate only this acquisition, never a newer holder.
+  // Like terminal cleanup, a wedged DELETE must not hold dispatch hostage.
+  // TTL recovers a stuck lease; a late DELETE remains fenced by this token.
+  const releaseOwnLease = async (lease: string): Promise<void> => {
     let t: ReturnType<typeof setTimeout>;
     const timeout = new Promise<void>((resolve) => {
       t = setTimeout(resolve, LOCK_TIMEOUT_MS);
     });
     await Promise.race([
       Promise.resolve()
-        .then(() => lock.release(key, leaseToken))
+        .then(() => lock.release(key, lease))
         .catch(() => {}),
       timeout,
     ]).finally(() => clearTimeout(t));
+  };
+  const acquireOp = lock.acquire(key, SYNC_EVENT.uniqueForSeconds);
+  let leaseToken: string | null;
+  try {
+    leaseToken = await withProducerDeadline(acquireOp);
+  } catch (err) {
+    // A token arriving after the deadline wins is a live row again: free it
+    // (bounded, never throwing) so it cannot linger until its TTL. A real
+    // acquire rejection carries no token, so the handler is a no-op for it.
+    acquireOp.then(
+      (late) => {
+        if (typeof late === "string" && late) void releaseOwnLease(late);
+      },
+      () => {},
+    );
+    throw err;
+  }
+  if (!leaseToken) return false;
+  try {
+    signal?.throwIfAborted();
+    await withProducerDeadline(
+      queue.send(
+        // Idempotency stays build-time; correlation rides alongside, never as the key.
+        {
+          kind: "sync-event",
+          eventKey,
+          idempotencyKey,
+          leaseToken,
+          requestId: safeRequestId(requestId),
+        },
+        { delaySeconds: SYNC_EVENT.debounceSeconds },
+      ),
+    );
+  } catch (err) {
+    await releaseOwnLease(leaseToken);
     throw err;
   }
   return true;
