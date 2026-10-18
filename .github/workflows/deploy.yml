@@ -299,12 +299,13 @@ jobs:
         # Needs the staging-environment QA_AUTH_TOKEN secret: it is never a
         # repository secret/value in this file, only a name. When the secret is
         # absent the step replays a per-check SKIP ledger (the probe's own
-        # --skip-ledger mode, same check names) and passes, so the missing
-        # token never fails a deploy. Skipped exposure guards stay loud:
-        # every skipped guard is named with its reason in the log, in a
-        # warning annotation and in the step summary, pointing at tracked
+        # --skip-ledger mode, same check names) for evidence and then fails
+        # closed, so the missing token fails the deploy instead of passing
+        # with unverified guards. Skipped exposure guards stay loud:
+        # every skipped guard is named with its reason in the log, in an
+        # error annotation and in the step summary, pointing at tracked
         # follow-up #531. A passed probe with skipped guards warns the same
-        # way. The reporting lines below must never fail the deploy themselves.
+        # way. The reporting lines below must never mask the failure themselves.
         run: |
           LEDGER="$RUNNER_TEMP/json-smoke-ledger.json"
           SUMMARY="${GITHUB_STEP_SUMMARY:-/dev/null}"
@@ -316,7 +317,8 @@ jobs:
             else
               echo "::warning::staging json-smoke skipped with unverified exposure guards (ledger unwritten). Tracked follow-up: #531"
             fi
-            exit 0
+            echo "::error::staging event-JSON smoke missing QA token: exposure guards unverified"
+            exit 1
           fi
           for i in 1 2 3 4 5 6; do
             if node bin/json-smoke.mjs --ledger "$LEDGER" https://next.togetherweown.com; then

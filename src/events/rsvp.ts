@@ -154,13 +154,9 @@ export async function withdrawRsvp(
     // committed together with the delete, after both waits.
     await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${`rsvp-write:${userId}`}))`);
     const [ev] = await tx.select().from(events).where(eq(events.eventKey, eventKey)).for("update");
-    if (!ev) {
-      await pruneThrottle(tx);
-      const verdict = await chargeThrottle(tx, userId);
-      return verdict.limited
-        ? ({ limited: true, retryAfter: verdict.retryAfter } as const)
-        : ({ limited: false, deleted: false, status: null } as const);
-    }
+    // Unknown keys change nothing, so they cost nothing: return before the
+    // throttle prune/charge, mirroring writeRsvp's not_found path.
+    if (!ev) return { limited: false, deleted: false, status: null } as const;
     // Own row, promotion rows and maintenance can all wait on other writers.
     // Take them before the hit is stamped so an accepted debit stays fresh.
     await tx

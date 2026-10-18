@@ -261,6 +261,9 @@ const lineup = $derived(
               ← Previous attendees
             </a>
           {/if}{" "}
+          <span data-testid="event-attendees-current-page" aria-current="page">
+            Page {model.attendeesPaging.page}
+          </span>{" "}
           {#if model.attendeesPaging.nextHref}
             <a
               href={model.attendeesPaging.nextHref}
