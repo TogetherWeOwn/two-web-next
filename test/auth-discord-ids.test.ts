@@ -32,6 +32,9 @@ const HOSTILE_IDS: [string, string][] = [
   ["leading space", " 111222"],
   ["trailing space", "111222 "],
   ["newline", "111\n222"],
+  ["trailing newline", "111222\n"],
+  ["trailing carriage return", "111222\r"],
+  ["trailing CRLF", "111222\r\n"],
   ["letters", "fixture-user"],
   ["alphanumeric mix", "123abc456"],
   ["minus sign", "-123"],
@@ -113,22 +116,29 @@ describe("addGuildMember id admission", () => {
     expect(calls.map((c) => c.url)).toEqual([MEMBER_URL]);
   });
 
-  it.each([400, 401, 403, 404, 429, 500])(
-    "keeps genuine Discord HTTP %i mapping to failed for valid ids",
-    async (status) => {
+  it.each([
+    [400, "failed"],
+    [401, "failed"],
+    [404, "failed"],
+    [403, "forbidden"],
+    [429, "rate_limited"],
+    [500, "provider_outage"],
+  ] as const)(
+    "keeps genuine Discord HTTP %i mapping to %s for valid ids",
+    async (status, expected) => {
       const calls = recordingFetch(async () => new Response("{}", { status }));
-      expect(await addGuildMember(GUILD, USER, ACCESS, BOT)).toBe("failed");
+      expect(await addGuildMember(GUILD, USER, ACCESS, BOT)).toBe(expected);
       // A genuine provider failure is reached exactly once: admission must not
       // turn a valid snowflake pair into a silent local refusal.
       expect(calls.map((c) => c.url)).toEqual([MEMBER_URL]);
     },
   );
 
-  it("keeps a transport throw mapping to failed for valid ids", async () => {
+  it("keeps a transport throw mapping to transport_failure for valid ids", async () => {
     recordingFetch(async () => {
       throw new Error("fixture transport failure");
     });
-    expect(await addGuildMember(GUILD, USER, ACCESS, BOT)).toBe("failed");
+    expect(await addGuildMember(GUILD, USER, ACCESS, BOT)).toBe("transport_failure");
   });
 });
 
