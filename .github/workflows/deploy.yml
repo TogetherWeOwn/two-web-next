@@ -107,6 +107,27 @@ jobs:
       - name: Moderator role-config preflight (before any Cloudflare mutation)
         # Read the same top-level source var Wrangler deploys, not a CI secret.
         run: npm run check:worker-moderators
+      - name: Capture pre-deploy dead-letter baseline
+        id: dead-letter-baseline
+        # Read-only GET before any DB or Cloudflare mutation (migrations run
+        # below can enqueue work): queue.failed counts retained rows in
+        # queue_failed_jobs, so the post-deploy smoke fails only on growth
+        # past this count. Retried, then an unreadable /up leaves the baseline
+        # empty and the smoke skips the dead-letter gate on history (warning
+        # below) instead of failing on any positive count. Never fails the
+        # deploy on its own.
+        shell: bash
+        run: |
+          set -euo pipefail
+          baseline=""
+          for i in 1 2 3 4 5; do
+            candidate="$(node -e 'fetch("https://next.togetherweown.com/up", { signal: AbortSignal.timeout(10000) }).then((r) => r.json()).then((d) => { const f = d && d.queue ? d.queue.failed : undefined; if (typeof f === "number" && Number.isInteger(f) && f >= 0) process.stdout.write(String(f)); }).catch(() => {})' || true)"
+            if [ -n "$candidate" ]; then baseline="$candidate"; break; fi
+            if [ "$i" -lt 5 ]; then sleep 5; fi
+          done
+          if [ -z "$baseline" ]; then echo "::warning::dead-letter baseline unreadable after 5 attempts; smoke will skip the dead-letter gate on history"; fi
+          echo "failed=$baseline" >> "$GITHUB_OUTPUT"
+          echo "dead-letter baseline: ${baseline:-unknown}"
       # Staging web schema (TOG-12965). The Worker's /up gate and event queries
       # need the migrations of the SHA being deployed, so apply them after every
       # check has passed and before the first Cloudflare mutation: a failed plan,
@@ -140,19 +161,6 @@ jobs:
       # unreachable /up, never fails the deploy.
       - name: Record live revision (rollback pointer)
         run: node bin/revision-check.mjs https://next.togetherweown.com
-      - name: Capture pre-deploy dead-letter baseline
-        id: dead-letter-baseline
-        # Read-only GET before any Cloudflare mutation: queue.failed counts
-        # retained rows in queue_failed_jobs, so the post-deploy smoke fails
-        # only on growth past this count. An unreadable /up leaves the
-        # baseline empty and the smoke falls back to failing on any positive
-        # count. Never fails the deploy on its own.
-        shell: bash
-        run: |
-          set -euo pipefail
-          baseline="$(node -e 'fetch("https://next.togetherweown.com/up", { signal: AbortSignal.timeout(10000) }).then((r) => r.json()).then((d) => { const f = d && d.queue ? d.queue.failed : undefined; if (typeof f === "number" && Number.isInteger(f) && f >= 0) process.stdout.write(String(f)); }).catch(() => {})' || true)"
-          echo "failed=$baseline" >> "$GITHUB_OUTPUT"
-          echo "dead-letter baseline: ${baseline:-unknown}"
       - name: Verify jobs Worker BOT secrets exist (fail-closed)
         # Read-only preflight before the first Cloudflare mutation (queue
         # creation below). The jobs deploy attaches the jobs consumer
@@ -291,10 +299,13 @@ jobs:
         # bin/smoke.mjs requires /up db:ok + pending_migrations:0 and fails
         # only on new dead letters: a positive numeric queue.failed above the
         # pre-deploy baseline fails the deploy with the count, while a null or
-        # missing count does not fail it on its own. Queue-only
-        # degraded/unknown still pass.
+        # missing count does not fail it on its own. When the baseline capture
+        # could not read /up, the gate is skipped (SMOKE_ALLOW_MISSING_BASELINE)
+        # instead of failing on retained history. Queue-only degraded/unknown
+        # still pass.
         env:
           SMOKE_FAILED_BASELINE: ${{ steps.dead-letter-baseline.outputs.failed }}
+          SMOKE_ALLOW_MISSING_BASELINE: "1"
         run: |
           for i in 1 2 3 4 5 6; do
             if node bin/smoke.mjs https://next.togetherweown.com; then
