@@ -317,7 +317,11 @@ for (const method of ["POST", "PATCH"] as const) {
       // SQL): invalid patches throw before any write, like the live store.
       vi.mocked(patchEvent).mockImplementation(async (_db, _actor, _key, patch) => {
         const updated = saved(mergePatchInput(storedRow, patch));
-        vi.mocked(getPublicEvent).mockResolvedValue({ ...updated, goingCount: 0 });
+        vi.mocked(getPublicEvent).mockResolvedValue({
+          ...updated,
+          goingCount: 0,
+          goingOccupancy: 0,
+        });
         return { row: updated, writeBack: null, childWriteBacks: [] };
       });
     });

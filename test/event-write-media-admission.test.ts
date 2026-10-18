@@ -130,7 +130,7 @@ beforeEach(() => {
   // so admission pins keep exercising production validation.
   vi.mocked(patchEvent).mockImplementation(async (_db, _actor, _key, patch) => {
     const updated = saved(mergePatchInput(row, patch));
-    vi.mocked(getPublicEvent).mockResolvedValue({ ...updated, goingCount: 0 });
+    vi.mocked(getPublicEvent).mockResolvedValue({ ...updated, goingCount: 0, goingOccupancy: 0 });
     return { row: updated, writeBack: { eventKey: KEY, status: "published" }, childWriteBacks: [] };
   });
 });
