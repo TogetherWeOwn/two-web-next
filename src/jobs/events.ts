@@ -81,6 +81,13 @@ export function pgEventStore(
   // Reconciliation owns the due-time check using its scheduler clock.
   // The stale predicate is identical in every branch below: initiating-
   // eligible dirty revisions plus attempted pending recovery candidates.
+  // A dirty revision parked behind a permanently undispatchable pending
+  // request (retry budget spent, or an unsettled null deadline that will
+  // never become due on its own) is excluded from the dirty branch: the
+  // reconcile loop always skips such rows, so counting them toward the page
+  // would pin the same full page of skips ahead of every dispatchable key.
+  // Not-yet-due retries (future next_attempt_at) stay stale: selection is
+  // clock-free and the loop owns the exact due boundary.
   // The single-key branch keeps its current semantics; the page branch adds
   // a deterministic `ORDER BY event_key` + `LIMIT` with a same-statement
   // window count (windows see pre-LIMIT rows) for the deferred remainder.
@@ -98,6 +105,9 @@ export function pgEventStore(
           or (status in ('published', 'cancelled')
             and not exists (select 1 from event_sync_attempts rejected
               where rejected.event_id = events.id and rejected.revision = events.sync_revision and rejected.state = 'failed')
+            and not exists (select 1 from event_sync_attempts blocking
+              where blocking.event_id = events.id and blocking.state = 'pending'
+                and (blocking.request_attempts >= ${SYNC_EVENT.tries} or blocking.next_attempt_at is null))
             and (sync_revision > synced_revision or
               (status = 'published' and (discord_event_id is null or exists (
                 select 1 from rsvps where rsvps.event_id = events.id and synced_to_discord_at is null
@@ -123,6 +133,9 @@ export function pgEventStore(
         or (status in ('published', 'cancelled')
           and not exists (select 1 from event_sync_attempts rejected
             where rejected.event_id = events.id and rejected.revision = events.sync_revision and rejected.state = 'failed')
+          and not exists (select 1 from event_sync_attempts blocking
+            where blocking.event_id = events.id and blocking.state = 'pending'
+              and (blocking.request_attempts >= ${SYNC_EVENT.tries} or blocking.next_attempt_at is null))
           and (sync_revision > synced_revision or
             (status = 'published' and (discord_event_id is null or exists (
               select 1 from rsvps where rsvps.event_id = events.id and synced_to_discord_at is null

@@ -31,8 +31,10 @@ export const PRUNE_CRON = "0 0 * * *"; // routes/console.php:19 daily() (Laravel
 // Max stale events one reconcile pass redispatches. The stale selection is
 // paged deterministically (`ORDER BY event_key` + `LIMIT`); each pass asks
 // the store for exactly one page and dispatches at most that many keys in
-// the returned order. Leftovers stay stale, so the next pass (every ten
-// minutes per RECONCILE_CRON) picks them up once earlier keys have synced.
+// the returned order. Dirty rows parked behind a permanently undispatchable
+// pending request (budget spent, null deadline) are not stale and never
+// consume page slots. Other leftovers stay stale, so the next pass (every
+// ten minutes per RECONCILE_CRON) picks them up once earlier keys have synced.
 // The bound keeps a large dirty backlog from exceeding Worker CPU/time
 // limits mid-loop and repeating identically each pass. The pass result and
 // its single completion log line carry the deferred remainder next to the
