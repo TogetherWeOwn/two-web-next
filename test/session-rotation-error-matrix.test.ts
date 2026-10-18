@@ -17,6 +17,7 @@ import { cookieFor, env, MEMBER, MODERATOR } from "./helpers/member-data";
 
 const DRAFT_KEY = "01ARZ3NDEKTSV4RRFFQ69G5FAV";
 const DRAFT_PATH = `/events/${DRAFT_KEY}.ics`;
+const EVENTS_PATH = "/events";
 const DRAFT_TITLE = "Private draft chess night";
 const PRIVATE_DETAIL = "private rotation detail";
 
@@ -73,6 +74,28 @@ async function fixture(actor: typeof MEMBER) {
   return { store, cookie, bindings };
 }
 
+// Hermetic calendar read: the /events collection renders from empty rows, so a
+// guest render after rotate resolves false reaches 200 without a real database.
+// Search analytics uses a transaction; the pg-proxy fixture has no real SQL.
+function calendarDb() {
+  const db = drizzle(async () => ({ rows: [] })) as unknown as Db;
+  Object.assign(db, {
+    transaction: async (fn: (tx: Db) => Promise<void>) =>
+      fn({
+        execute: async () => {},
+        insert: () => ({ values: async () => {} }),
+      } as unknown as Db),
+  });
+  return db;
+}
+
+async function eventsFixture(actor: typeof MEMBER) {
+  const store = createMemorySessionStore();
+  const cookie = await cookieFor(store, actor);
+  const bindings = { ...env, SESSION_STORE: store, ADMIN_DB: calendarDb() } as Env;
+  return { store, cookie, bindings };
+}
+
 const pgError = (code: string) =>
   Object.assign(new Error(PRIVATE_DETAIL), { name: "PostgresError", code });
 const refused = () => Object.assign(new Error(PRIVATE_DETAIL), { code: "ECONNREFUSED" });
@@ -122,6 +145,23 @@ describe("rotation errors map to the outage treatment", () => {
       const body = await res.text();
       expect(body).not.toContain(DRAFT_TITLE);
       expect(body).not.toContain(PRIVATE_DETAIL);
+      expect(res.headers.getSetCookie()).toEqual([]);
+    },
+  );
+
+  it.each(GENERIC_ROTATE_ERRORS)(
+    "/events answers 503 (not a 500 or guest render) when rotate throws %s",
+    async (_label, makeError) => {
+      // The 503 returns before any calendar read, so the draft-only fixture
+      // is sufficient: reaching the calendar reads would throw, not 503.
+      const { store, cookie, bindings } = await fixture(MEMBER);
+      const rotate = vi.spyOn(store, "rotate").mockRejectedValue(makeError());
+      const res = await app.request(EVENTS_PATH, { headers: { cookie } }, bindings);
+      expect(rotate).toHaveBeenCalledOnce();
+      expect(res.status).toBe(503);
+      const body = await res.text();
+      expect(body).not.toContain(PRIVATE_DETAIL);
+      expect(body).not.toContain(MEMBER.username);
       expect(res.headers.getSetCookie()).toEqual([]);
     },
   );
@@ -211,6 +251,18 @@ describe("legitimately absent sessions keep the guest treatment", () => {
     );
     expect(gatedRes.status).toBe(403);
     expect(await gatedRes.text()).not.toContain(DRAFT_TITLE);
+  });
+
+  it("/events stays a 200 guest (not an outage) when rotation finds no live row", async () => {
+    const { store, cookie, bindings } = await eventsFixture(MEMBER);
+    const rotate = vi.spyOn(store, "rotate").mockResolvedValue(false);
+    const res = await app.request(EVENTS_PATH, { headers: { cookie } }, bindings);
+    expect(rotate).toHaveBeenCalledOnce();
+    expect(res.status).toBe(200);
+    const body = await res.text();
+    expect(body).not.toContain(PRIVATE_DETAIL);
+    expect(body).not.toContain(MEMBER.username);
+    expect(res.headers.getSetCookie()).toEqual([]);
   });
 });
 
