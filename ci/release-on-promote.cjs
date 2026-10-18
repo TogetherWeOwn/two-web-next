@@ -201,6 +201,17 @@ function main() {
         : nextVersion(prev, commits, opts);
   }
   const tag = `v${version.join(".")}`;
+  // Historical repair must not move GitHub Latest backwards: a tag below the
+  // highest semver tag repairs with explicit non-Latest semantics, while the
+  // newest release keeps Latest. Semver comparison (not lexicographic) so
+  // v0.9.0 is correctly below v0.10.0.
+  const highestTag = git("tag", "--list", "v*")
+    .split("\n")
+    .map(parseTag)
+    .filter(Boolean)
+    .sort((a, b) => compareVersions(b, a))[0];
+  const latestFlag =
+    highestTag && compareVersions(version, highestTag) < 0 ? "--latest=false" : "--latest";
   const notes = renderNotes({
     version,
     prevTag,
@@ -230,7 +241,7 @@ function main() {
         tag,
         "--notes-file",
         notesFile,
-        "--latest",
+        latestFlag,
       ],
       { stdio: "inherit" },
     );
