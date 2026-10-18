@@ -126,17 +126,15 @@ export function registerAuthRoutes(app: Hono<{ Bindings: Env }>, hooks: AuthHook
     const limited = await throttleGuard(c, "login-callback", AUTH_THROTTLE_PER_MINUTE);
     if (limited) return limited;
     const expected = await getSignedCookie(c, c.env.SESSION_SECRET, STATE_COOKIE);
-    deleteCookie(c, STATE_COOKIE, { path: "/", secure: true, httpOnly: true, sameSite: "Lax" });
-    // Consume the return journey on every terminal path — success, denial and
-    // failure all clear it (legacy forget on login_next + url.intended).
-    const returnTo = await consumeLoginReturn(c);
-    const expiredWrite = await consumeExpiredWrite(c);
     const code = c.req.query("code");
     const state = c.req.query("state");
+    const oauthError = c.req.query("error");
     // Inbound length bound: refuse oversized code/state before any journey
     // consume, exchange, or session work. Refusals keep today's path, so the
     // error param is peeked first and oversized maps to the generic failure.
-    if (!c.req.query("error") && hasOversizedOAuthParams(code, state)) {
+    // Like every other stray below, an oversized hit leaves the state, next
+    // and intended cookies intact for the next real hit.
+    if (!oauthError && hasOversizedOAuthParams(code, state)) {
       return c.redirect("/?n=signin_failed", 302);
     }
     const store =
@@ -145,25 +143,44 @@ export function registerAuthRoutes(app: Hono<{ Bindings: Env }>, hooks: AuthHook
         : null;
     const admitted =
       store && (await store.journeys.consume(await hashToken(state!), "auth").catch(() => false));
+    if (!admitted || !store) {
+      // Stray hit (bad state, bare hit, OAuth error without a matching
+      // state, replay after the journey was spent): not the real hit, so
+      // consume nothing — the state, next and intended cookies plus the
+      // expired-write notice all survive for the next real hit. The visible
+      // answer stays the generic failure (an unadmitted denial is a failed
+      // sign-in, not the cancelled-consent copy) with zero exchange calls.
+      // The one exception is the denied copy, which keys off presentation
+      // (a matching state cookie with an acquirable store), not journey
+      // admission: a replayed denial keeps the cancelled-consent copy,
+      // while a denial that never presented state keeps the generic one.
+      if (oauthError === "access_denied" && store) return c.redirect("/?n=signin_denied", 302);
+      return c.redirect("/?n=signin_failed", 302);
+    }
+    // Admitted terminal path: consume the return journey exactly once —
+    // success, denial and failure all clear it (legacy forget on login_next
+    // + url.intended). The failed auto-join re-record below re-sets the
+    // intended cookie after this clear.
+    deleteCookie(c, STATE_COOKIE, { path: "/", secure: true, httpOnly: true, sameSite: "Lax" });
+    const returnTo = await consumeLoginReturn(c);
+    const expiredWrite = await consumeExpiredWrite(c);
     // A consent-screen refusal arrives as an `error` param before any code
     // exists. Denied gets its own sentence (the member chose this); any other
     // OAuth error keeps the generic one. Legacy DiscordLoginTest: the
     // error_description is never echoed — we render only our own copy.
     // The denied copy requires a presented state (a matching state cookie
-    // with an acquirable store): a denial that was never admitted — missing
-    // or mismatched state — is a failed sign-in, not a cancelled consent, so
-    // it keeps the generic redirect. A replay still presents matching state,
-    // so it keeps the denied copy; the journey itself is consumed exactly
-    // once above.
-    const oauthError = c.req.query("error");
+    // with an acquirable store): a denial that never presented state is
+    // handled as a stray above with the generic redirect, while a replayed
+    // denial keeps the denied copy in the stray branch for the same reason.
+    // The journey itself is consumed exactly once above.
     if (oauthError) {
       return c.redirect(
-        oauthError === "access_denied" && store ? "/?n=signin_denied" : "/?n=signin_failed",
+        oauthError === "access_denied" ? "/?n=signin_denied" : "/?n=signin_failed",
         302,
       );
     }
 
-    if (!admitted || !store || !code) return c.redirect("/?n=signin_failed", 302);
+    if (!code) return c.redirect("/?n=signin_failed", 302);
 
     let accessToken: string;
     let user;
