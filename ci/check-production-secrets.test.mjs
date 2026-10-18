@@ -610,9 +610,12 @@ test("target-selected environment requires every mapping to be guarded on inputs
 // DISCORD_GUILD_ID, DISCORD_INVITE_URL) never matches and stays out.
 // Optional SECRET/TOKEN fields (QA_AUTH_TOKEN, SOURCE_EVIDENCE_VERIFIER_TOKEN,
 // BOT_SHARED_SECRET via AgentEventsEnv) stay out until made required.
-// BOT_ENDPOINT_URL and BOT_KEY_ID carry no SECRET/TOKEN marker; they stay
-// covered by the same-change note in check-production-secrets.mjs, pinned
-// below, not by this equality.
+// BOT_ENDPOINT_URL, BOT_KEY_ID and BOT_SHARED_SECRET are read from Env by the
+// deployed web/jobs paths, but they stay optional there and every reader
+// fails closed when they are missing — so they stay out of the required set,
+// covered by the same-change note in check-production-secrets.mjs pinned
+// below. If any of them is ever made required, it joins the gate set in the
+// same change.
 // ---------------------------------------------------------------------------
 
 const ENV_SECRET_NAME = /(SECRET|TOKEN)/;
@@ -692,16 +695,113 @@ function extractTypeBlock(source, typeName) {
   throw new Error(`Unterminated ${typeName} body`);
 }
 
+// Env must stay `AgentEventsEnv & {...}` on one line. A new intersection
+// half (or Omit<...>) would otherwise pass silently while Env requires names
+// the gate never checks, which is exactly the drift this pin exists to catch.
+function assertEnvIntersectionShape(source) {
+  const decl = /\btype\s+Env\s*=\s*([^\n{]*)\{/.exec(source);
+  assert.ok(decl, "expected an Env intersection header");
+  assert.equal(
+    decl[1].trim(),
+    "AgentEventsEnv &",
+    "Env must stay `AgentEventsEnv & {...}`: a new intersection half needs parser + pin support",
+  );
+}
+
+// Blank comments and string literals (braces included) so field matching
+// never reads comment text like `// OLD_TOKEN: removed` or a `"..."` value.
+function stripCommentsAndStrings(text) {
+  let out = "";
+  let i = 0;
+  const n = text.length;
+  let quote = null;
+  let lineComment = false;
+  let blockComment = false;
+  let escaped = false;
+  while (i < n) {
+    const c = text[i];
+    const next = text[i + 1];
+    if (lineComment) {
+      if (c === "\n") {
+        lineComment = false;
+        out += c;
+      } else {
+        out += " ";
+      }
+      i++;
+      continue;
+    }
+    if (blockComment) {
+      if (c === "*" && next === "/") {
+        blockComment = false;
+        out += "  ";
+        i += 2;
+      } else {
+        out += c === "\n" ? "\n" : " ";
+        i++;
+      }
+      continue;
+    }
+    if (quote) {
+      out += c === "\n" ? "\n" : " ";
+      if (escaped) escaped = false;
+      else if (c === "\\") escaped = true;
+      else if (c === quote) quote = null;
+      i++;
+      continue;
+    }
+    if (c === "/" && next === "/") {
+      lineComment = true;
+      out += "  ";
+      i += 2;
+      continue;
+    }
+    if (c === "/" && next === "*") {
+      blockComment = true;
+      out += "  ";
+      i += 2;
+      continue;
+    }
+    if (c === "'" || c === '"' || c === "`") {
+      quote = c;
+      out += " ";
+      i++;
+      continue;
+    }
+    out += c;
+    i++;
+  }
+  return out;
+}
+
+// Fields at the top level of a stripped type body only (brace depth 1), so a
+// required key inside a nested object literal never counts as an Env secret.
+function topLevelFields(stripped) {
+  const depthAt = new Array(stripped.length);
+  let depth = 0;
+  for (let i = 0; i < stripped.length; i++) {
+    depthAt[i] = depth;
+    if (stripped[i] === "{") depth++;
+    else if (stripped[i] === "}") depth--;
+  }
+  const fields = [];
+  const field = /\b([A-Z][A-Z0-9_]*)\s*(\?)?\s*:/g;
+  let match;
+  while ((match = field.exec(stripped)) !== null) {
+    if (depthAt[match.index] !== 1) continue;
+    fields.push({ name: match[1], optional: match[2] === "?" });
+  }
+  return fields;
+}
+
 export function requiredEnvSecretNames(source) {
   // Env is `AgentEventsEnv & {...}`: both halves contribute required keys.
   // JobsEnv is deliberately out of scope: it belongs to the jobs Worker.
+  assertEnvIntersectionShape(source);
   const blocks = [extractTypeBlock(source, "AgentEventsEnv"), extractTypeBlock(source, "Env")];
   const names = new Set();
   for (const block of blocks) {
-    const field = /\b([A-Z][A-Z0-9_]*)\s*(\?)?\s*:/g;
-    let match;
-    while ((match = field.exec(block)) !== null) {
-      const [, name, optional] = match;
+    for (const { name, optional } of topLevelFields(stripCommentsAndStrings(block))) {
       if (optional) continue;
       if (!ENV_SECRET_NAME.test(name)) continue;
       names.add(name);
@@ -752,6 +852,35 @@ test("fixture Env round-trip: new required secret diverges until the gate set is
   );
 });
 
+test("fixture Env ignores comments, strings and nested type keys", () => {
+  const withNoise = FIXTURE_ENV_BASE.replace(
+    "SESSION_SECRET: string;",
+    `SESSION_SECRET: string;
+  // OLD_TOKEN: removed, must never count as a required secret
+  /* MULTI_SECRET: still a comment, must never count */
+  NESTED?: { FOO_TOKEN: string; inner: { BAR_SECRET: string } };
+  NESTED_REQUIRED: { BAZ_TOKEN: string };
+  NOTE: "see QUX_TOKEN in the manual";`,
+  );
+  assert.deepEqual(
+    requiredEnvSecretNames(withNoise),
+    requiredEnvSecretNames(FIXTURE_ENV_BASE),
+    "comments, string literals and nested keys must not change the pin",
+  );
+});
+
+test("fixture Env intersection shape change fails closed", () => {
+  const withHalf = FIXTURE_ENV_BASE.replace(
+    "export type Env = AgentEventsEnv & {",
+    "export type Env = AgentEventsEnv & PayEnv & {",
+  );
+  assert.throws(
+    () => requiredEnvSecretNames(withHalf),
+    /AgentEventsEnv &/,
+    "a new Env intersection half must fail the pin until the parser supports it",
+  );
+});
+
 test("fixture Env keeps optional secrets and public config out of the pin", () => {
   const withOptional = FIXTURE_ENV_BASE.replace(
     "SESSION_SECRET: string;",
@@ -780,7 +909,7 @@ test("gate keeps the BOT_* same-change note", () => {
   assert.ok(gate.includes("BOT_SHARED_SECRET"), "gate must still name BOT_SHARED_SECRET");
   assert.ok(gate.includes("BOT_KEY_ID"), "gate must still name BOT_KEY_ID");
   assert.ok(
-    gate.includes("If the Worker ever reads them from Env"),
+    gate.includes("If any of them is ever made required"),
     "gate must keep the same-change note",
   );
 });
