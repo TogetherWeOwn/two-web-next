@@ -811,7 +811,16 @@ describe.skipIf(!process.env.DATABASE_URL)("RSVP waitlist (agent-testdb)", () =>
   );
 
   it("PUT judges expiry after the promotion-row wait without charging or mutating", async () => {
-    const ev = await fullWithLine();
+    // The event ends in real time while the writer waits on the promotion
+    // row: the post-lock database read must see the crossed end and refuse,
+    // spending no budget and mutating nothing. The injected worker clock is
+    // the default (no skew); only the database clock moves during the wait.
+    const endsAt = new Date(Date.now() + 2000);
+    const ev = await seed({ startsAt: new Date(Date.now() - 3_600_000), endsAt });
+    await put(ev.eventKey, "holder");
+    await put(ev.eventKey, "waiter-1");
+    await put(ev.eventKey, "waiter-2");
+    await client`update rsvps set created_at = '2020-01-01T00:00:00Z', synced_to_discord_at = now() where event_id = ${ev.id}`;
     await client`delete from web_throttle_hits where bucket = 'rsvp-write:holder'`;
     let release!: () => void;
     let ready!: (pid: number) => void;
@@ -828,14 +837,14 @@ describe.skipIf(!process.env.DATABASE_URL)("RSVP waitlist (agent-testdb)", () =>
       await gate;
     });
     let pending: ReturnType<typeof writeRsvp> | undefined;
-    let expired = false;
     try {
       const pid = await acquired;
-      pending = writeRsvp(db, ev.eventKey, "holder", "maybe", () =>
-        expired ? ev.endsAt : new Date(),
-      );
+      pending = writeRsvp(db, ev.eventKey, "holder", "maybe");
       await waiterBlockedBy(pid);
-      expired = true;
+      // Park the writer on the row past the real end, then let it judge.
+      await new Promise((resolve) =>
+        setTimeout(resolve, Math.max(0, endsAt.getTime() - Date.now() + 500)),
+      );
     } finally {
       release();
       await holder;
