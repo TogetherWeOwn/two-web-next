@@ -995,7 +995,7 @@ export function createTailWorker(
       });
       const ok =
         response.status === 200 && response.headers.get("x-two-origin") === EXPECTED_ORIGIN;
-      await response.body?.cancel(); // Never read or log the body.
+      cleanupResponse(response); // Never read or log the body; cleanup stays inert.
       return { ok, status: response.status };
     } catch {
       return { ok: false, status: 0 };
@@ -1030,7 +1030,7 @@ export function createTailWorker(
         }
         ok = target !== null && target.pathname === check.locationPath && target.host === base.host;
       }
-      await response.body?.cancel(); // Never read or log the body.
+      cleanupResponse(response); // Never read or log the body; cleanup stays inert.
       return { ok, status: response.status };
     } catch {
       return { ok: false, status: 0 };
