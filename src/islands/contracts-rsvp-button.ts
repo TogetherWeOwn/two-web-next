@@ -81,9 +81,12 @@ export function rsvpWithdrawRequest(eventKey: string): RsvpWithdrawRequest {
 
 /**
  * Status-code shape (legacy controller + PR #431 abuse pins): first answer
- * creates the row (201), re-answer updates it (200), withdraw is a quiet
- * 204 — including withdraw-without-a-row and withdraw-from-cancelled.
- * Status-Past PUT refuses 403 with nothing written; off-verb hits 405.
+ * creates the row (201), re-answer updates it (200), withdrawing an existing
+ * row answers 204. A DELETE that deletes no caller row answers honest 404
+ * {error: not_found}, never an implied 204. The no-row pins below still carry
+ * the pre-honest 204 client expectation and are pending refresh with the
+ * converged-state button behavior. Status-Past PUT refuses 403 with nothing
+ * written; off-verb hits 405.
  */
 export const RSVP_FIRST_WRITE_STATUS = 201;
 export const RSVP_REANSWER_STATUS = 200;
