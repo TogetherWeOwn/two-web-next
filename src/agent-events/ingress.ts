@@ -249,10 +249,47 @@ async function processAgentEvent(
   // Replays are answered from the store without spending rate budget.
   const replay = await lookupReplay(sql, grant.id, idem);
   if (!replay) {
-    const limited = await rateLimit(sql, cfg, grant, op as Op);
-    if (limited) {
-      await audit(sql, grant, op, null, idem, dig, requestId, "denied", "rate_limited");
-      return limited;
+    try {
+      const limited = await rateLimit(sql, cfg, grant, op as Op);
+      if (limited) {
+        await audit(sql, grant, op, null, idem, dig, requestId, "denied", "rate_limited");
+        return limited;
+      }
+    } catch (err) {
+      if ((err as { code?: string }).code !== "55P03") throw err;
+      // Inner admission contention, not a decision. Audited as an error so a
+      // run of these reads as load, mirroring the shield/operation busy
+      // contract: retryable 503, no budget hits, no mutation, no receipt.
+      // Bound the error receipt too; an unavailable audit table must not turn
+      // a retryable failure into a hung connection or an unaudited success.
+      try {
+        await sql.begin(async (tx) => {
+          await tx.unsafe(
+            `SET LOCAL lock_timeout = '${Math.max(1, Math.floor(cfg.lockWaitMs))}ms'`,
+          );
+          await audit(
+            tx,
+            grant,
+            op,
+            storedEventKey(doc.event_key),
+            idem,
+            dig,
+            requestId,
+            "error",
+            "operation_busy",
+          );
+        });
+      } catch (auditErr) {
+        if ((auditErr as { code?: string }).code !== "55P03") throw auditErr;
+      }
+      return {
+        status: 503,
+        body: {
+          reason: "operation_busy",
+          message: "The ingress is busy admitting requests. Retry with the same idempotency key.",
+          request_id: requestId,
+        },
+      };
     }
   }
 

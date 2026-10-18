@@ -33,6 +33,10 @@ export async function rateLimit(
     ],
   ];
   const verdict = await sql.begin(async (tx) => {
+    // Bound the bucket advisory-lock wait like the outer shield and the
+    // operation transaction: contention surfaces as 55P03, answered by the
+    // caller as retryable 503 operation_busy instead of a hung connection.
+    await tx.unsafe(`SET LOCAL lock_timeout = '${Math.max(1, Math.floor(cfg.lockWaitMs))}ms'`);
     let retry = 0;
     for (const [bucket] of [...buckets].sort((a, b) => (a[0] < b[0] ? -1 : 1))) {
       await tx`SELECT pg_advisory_xact_lock(hashtextextended(${`agent-event-hits:${bucket}`}, 0))`;
