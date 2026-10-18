@@ -287,18 +287,21 @@ approved account and binding isolation before any remote mutation.
    ```
 
    Both staging (`two-web-next`) and production (`two-web-next-production`)
-   live Workers report their own Version ID from their declared
-   `version_metadata` bindings (`wrangler.jsonc` top level and
+   declare `version_metadata` bindings (`wrangler.jsonc` top level and
    `env.production`): `GET /up` on `https://next.togetherweown.com/up` and
-   on the apex carries `revision: { version_id, commit }`. `version_id` is
+   on the apex carries `revision: { version_id, commit }` once the live
+   Version was uploaded after that binding landed. `version_id` is
    the value `wrangler rollback` takes; `commit` is the SHA the deploy tagged
-   that Version with (`null` for a manual deploy without `--tag`). The deploy
-   job logs it in `Record live revision (rollback pointer)` before any
-   Cloudflare mutation. A Version uploaded before the marker existed reports
-   no `revision`; use `wrangler deployments list` for it. If `/up` and
-   `wrangler deployments` ever disagree, `wrangler deployments` wins. Record
-   the production app `revision.version_id` and `revision.commit` separately
-   from the Tail Worker version.
+   that Version with (`null` for a manual deploy without `--tag`). On staging
+   the deploy job logs it in `Record live revision (rollback pointer)` before
+   any Cloudflare mutation. Production has no such step in
+   `deploy-production.yml`; take the pre-release production pointer from
+   `wrangler deployments status --name two-web-next-production --json` or the
+   gradual-promote `rollback-version-id` output. A Version uploaded before the
+   marker existed reports no `revision`; use `wrangler deployments list` for
+   it. If `/up` and `wrangler deployments` ever disagree, `wrangler
+   deployments` wins. Record the production app `revision.version_id` and
+   `revision.commit` separately from the Tail Worker version.
 
 3. Normal path: merge to `main` invokes
    [.github/workflows/deploy.yml](../.github/workflows/deploy.yml), using the

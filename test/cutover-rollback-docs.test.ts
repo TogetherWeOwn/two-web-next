@@ -345,7 +345,15 @@ describe("watch companions match current production probes", () => {
     expect(watchRecord).toMatch(/separately from the Tail Worker version/s);
     expect(watchRecord).not.toContain("carries no");
     expect(watchRecord).not.toContain("until a cutover PR declares the binding");
-    expect(runbook).toContain("Record\n   the production app `revision.version_id`");
+    expect(runbook.replace(/\s+/g, " ")).toContain(
+      "Record the production app `revision.version_id`",
+    );
     expect(runbook).not.toMatch(/Production `\/up` has no\s+`revision`/);
+    expect(runbook.replace(/\s+/g, " ")).toContain(
+      "On staging the deploy job logs it in `Record live revision (rollback pointer)`",
+    );
+    expect(runbook).toContain("--name two-web-next-production");
+    expect(runbook).toContain("rollback-version-id");
+    expect(runbook).not.toMatch(/Both staging.*live Workers report their own Version ID/s);
   });
 });
