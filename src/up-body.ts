@@ -8,7 +8,7 @@ export function upHttpStatus(body: DatabaseReadiness & ConfigReadiness): 200 | 5
   return body.config === undefined && body.db === "ok" && body.pending_migrations === 0 ? 200 : 503;
 }
 
-// Member-access-log enforcement signal (S7: TOG-29693): informational like
+// Member-access-log enforcement signal: informational like
 // `revision`, never part of the readiness verdict. `upHttpStatus` ignores it
 // on purpose — degraded log-only serving is a supported config, not an
 // outage. The value mirrors `enforceOn` in ./access-log exactly; the route
