@@ -171,4 +171,74 @@ describe.skipIf(!process.env.DATABASE_URL)("event JSON ETag invalidation (agent-
     expect(await modReplay.text()).toBe("");
     expect(modReplay.headers.get("etag")).toBe(draftEtag);
   });
+
+  // RFC 9110 If-None-Match uses weak comparison: a W/-prefixed copy of the
+  // current validator must match, while a weakly-prefixed different
+  // validator must not. The junk tag flips one hex digit of the real ETag,
+  // so it is same-shaped but guaranteed different.
+  const junkEtag = (etag: string) =>
+    etag.replace(/^"(.)/, (_m, ch: string) => `"${ch === "0" ? "1" : "0"}`);
+
+  it("returns 304 for a weak If-None-Match copy of the current ETag", async () => {
+    await seed();
+    const member = await cookieFor(false);
+
+    const first = await jsonGet(PUBLISHED_KEY, member);
+    expect(first.status).toBe(200);
+    const etag = first.headers.get("etag");
+    expect(etag).toMatch(SHA1_ETAG_RE);
+    expect(await first.text()).toContain(PUBLISHED_TITLE);
+
+    // Weak copy of a different validator: still 200 with the fresh body.
+    const weakJunk = await jsonGet(PUBLISHED_KEY, member, `W/${junkEtag(etag!)}`);
+    expect(weakJunk.status).toBe(200);
+    expect(weakJunk.headers.get("etag")).toBe(etag);
+    expect(await weakJunk.text()).toContain(PUBLISHED_TITLE);
+
+    // Weak copy of the current validator: empty 304 carrying the ETag.
+    const weak = await jsonGet(PUBLISHED_KEY, member, `W/${etag!}`);
+    expect(weak.status).toBe(304);
+    expect(await weak.text()).toBe("");
+    expect(weak.headers.get("etag")).toBe(etag);
+  });
+
+  it("returns 304 when the current ETag appears in an If-None-Match list", async () => {
+    await seed();
+    const member = await cookieFor(false);
+
+    const first = await jsonGet(PUBLISHED_KEY, member);
+    expect(first.status).toBe(200);
+    const etag = first.headers.get("etag");
+    expect(etag).toMatch(SHA1_ETAG_RE);
+    expect(await first.text()).toContain(PUBLISHED_TITLE);
+
+    // A list holding only other validators: still 200 with the fresh body.
+    const junk = junkEtag(etag!);
+    const junkOnly = await jsonGet(PUBLISHED_KEY, member, `${junk}, "junk"`);
+    expect(junkOnly.status).toBe(200);
+    expect(junkOnly.headers.get("etag")).toBe(etag);
+    expect(await junkOnly.text()).toContain(PUBLISHED_TITLE);
+
+    // The current validator anywhere in the list: empty 304.
+    const listed = await jsonGet(PUBLISHED_KEY, member, `"junk", ${etag!}`);
+    expect(listed.status).toBe(304);
+    expect(await listed.text()).toBe("");
+    expect(listed.headers.get("etag")).toBe(etag);
+  });
+
+  it("returns 304 for If-None-Match: * on an existing collection", async () => {
+    await seed();
+    const member = await cookieFor(false);
+
+    const first = await jsonGet(PUBLISHED_KEY, member);
+    expect(first.status).toBe(200);
+    const etag = first.headers.get("etag");
+    expect(etag).toMatch(SHA1_ETAG_RE);
+    expect(await first.text()).toContain(PUBLISHED_TITLE);
+
+    const star = await jsonGet(PUBLISHED_KEY, member, "*");
+    expect(star.status).toBe(304);
+    expect(await star.text()).toBe("");
+    expect(star.headers.get("etag")).toBe(etag);
+  });
 });
