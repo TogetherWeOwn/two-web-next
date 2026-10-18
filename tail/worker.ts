@@ -199,22 +199,25 @@ export type TraceBatch = {
   crashes: number;
 };
 
-// Synthetic main-flow checks: the same cron also probes the sign-in entry
+// Synthetic main-flow checks: the same cron also probes the conversion entry
 // and the main public pages, because a healthy /up does not prove members
 // can load the site or start Discord sign-in. Every check is an anonymous
 // GET with manual redirects: never a login attempt, form post or fault
 // injection, and no probe changes application data. The sign-in check
 // stops at /login on purpose: the next hop (/auth/discord) mints OAuth
 // state, writing a login-redirect throttle hit and an OAuth journey row
-// per attempt, so probing it would not stay passive in production.
-// /events records one rate-limit counter hit (the events-read bucket) per
+// per attempt, so probing it would not stay passive in production. The
+// conversion check likewise stops at the /join page: the next hops
+// (/join/discord, /join/callback) mint journey state and write throttle
+// hits, while the page itself is a persistence-free leaf that writes
+// nothing. /events records one rate-limit counter hit (the events-read bucket) per
 // admitted attempt, exactly like any anonymous visitor; the existing
 // throttle expiry sweep deletes those counters. Expected values were
 // verified against staging: /login redirects to /auth/discord on the same
 // host. The redirect Location is compared by host/path only and never
 // logged, so nothing from its query can reach a page or log line.
 export type SyntheticCheck = {
-  path: "/" | "/events" | "/login";
+  path: "/" | "/events" | "/join" | "/login";
   status: number;
   contentType?: string;
   locationPath?: string;
@@ -223,6 +226,7 @@ export type SyntheticCheck = {
 export const SYNTHETIC_CHECKS: readonly SyntheticCheck[] = [
   { path: "/", status: 200, contentType: "text/html" },
   { path: "/events", status: 200, contentType: "text/html" },
+  { path: "/join", status: 200, contentType: "text/html" },
   { path: "/login", status: 302, locationPath: "/auth/discord" },
 ];
 
