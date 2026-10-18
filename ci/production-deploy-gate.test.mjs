@@ -547,14 +547,17 @@ test("preflight checkouts materialize ci and wrangler.jsonc for the production g
   const gate = readFileSync(new URL("./production-deploy-gate.mjs", import.meta.url), "utf8");
   assert.match(gate, /\.\.\/wrangler\.jsonc/);
   // Negative control: the promotion resolver needs only ci/ files, so it
-  // succeeds on the same sparse tree — only the gate's file scope was broken.
+  // succeeds on the same sparse tree — it proves the checkout works and the
+  // gate is the step that needs the extra root file.
   const resolver = readFileSync(new URL("./resolve-promotion-sha.mjs", import.meta.url), "utf8");
   assert.ok(!resolver.includes("wrangler"), "resolver must not need wrangler.jsonc");
   assert.ok(!resolver.includes("../"), "resolver must not read outside ci/");
-  // Every checkout in preflight runs at the same workspace path, so each one
-  // must widen the sparse scope to both ci/ and wrangler.jsonc (cone-mode off
-  // so the file pattern applies); a missing sparse-checkout inherits the
-  // ci-only cone and the gate fails with ENOENT.
+  // Hardening: every checkout in preflight runs at the same workspace path,
+  // so each one lists both /ci/ and /wrangler.jsonc explicitly (cone-mode
+  // off so the file pattern applies). Cone-mode `ci` already includes root
+  // files and an empty sparse-checkout input disables sparse checkout in
+  // actions/checkout v7, so this guards against future cone-default or
+  // checkout-behavior changes, not an observed ENOENT.
   const preflight = workflow.slice(
     workflow.indexOf("\n  preflight:\n"),
     workflow.indexOf("\n  deploy-production:\n"),
@@ -570,10 +573,11 @@ test("preflight checkouts materialize ci and wrangler.jsonc for the production g
       /sparse-checkout-cone-mode: false/,
       "preflight checkout must disable cone mode so the wrangler.jsonc file pattern applies",
     );
-    assert.match(step, /\bci\b/, "preflight sparse scope must include ci/");
-    assert.ok(
-      step.includes("wrangler.jsonc"),
-      "preflight sparse scope must include wrangler.jsonc",
+    assert.match(step, /\/ci\//, "preflight sparse scope must include anchored /ci/");
+    assert.match(
+      step,
+      /\/wrangler\.jsonc/,
+      "preflight sparse scope must include anchored /wrangler.jsonc",
     );
   }
 });
