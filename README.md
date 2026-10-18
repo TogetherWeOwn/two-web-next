@@ -263,12 +263,11 @@ proof of environment isolation. The separate `env.production` block below
 configures the production Worker; it is not authorization for a deployment,
 database probe or production test.
 
-### Production (not live: gated manual deployment, cutover pending)
+### Production (gated manual deployment)
 
-TWO Web Next is not yet live in production; the apex is still served by the
-legacy stack and the cutover is pending (see `docs/cutover-gates.md`, currently
-NO-GO, and `docs/releases.md`: the cutover promote cuts `v1.0.0`, which does
-not exist yet). Worker code reaches production only through
+Cutover decision state is recorded in `docs/cutover-gates.md` and the release
+contract in `docs/releases.md`; this section describes the deployment contract,
+not the currently serving version. Worker code reaches production only through
 `.github/workflows/deploy-production.yml` (rollbacks through
 `.github/workflows/rollback-production.yml`; production migrations through
 `.github/workflows/db-migrate.yml`), all require `PRODUCTION_DEPLOY_ENABLED` to be
@@ -293,7 +292,10 @@ API access, unset/false flag or any other ref fails closed. Both gate jobs inher
 The deploy job uses that Environment and checks the gate again after approval.
 It uploads a Worker version tagged with the promoted SHA, GitHub run ID, and
 run attempt (`sha` input, or by default the latest main commit whose post-deploy
-e2e-staging journeys passed), then promotes that exact tag to 100%. Including the
+e2e-staging journeys passed), then promotes that exact tag 5% → 50% → 100%
+through the pinned central gradual-promote action, with per-stage health/SLO
+gates pinned to the new version and automatic rollback to the recorded
+pre-promote version on any in-action stage failure. Including the
 run and attempt keeps retries of the same SHA unambiguous. `wrangler versions
 upload` and `wrangler versions deploy` change code without re-syncing the
 already-attached apex custom domain or other triggers. The workflow intentionally
@@ -310,27 +312,38 @@ requires HTTP 200 with `db:ok` and `pending_migrations:0`, accepting
 degraded/unknown queue states like staging, and the remaining 15 routes assert
 status/body/CSP/nosniff/content-type/redirect plus the apex indexing posture
 (indexable HTML omits the staging noindex). No auth, no writes, no PII.
+After the promotion reaches 100%, the workflow probes the apex again with the
+same checker and retry contract (six attempts): verification gates release
+publication, so six failed attempts fail the deploy job before the `release`
+job can tag. A failed verification leaves the promoted candidate live at 100%
+with the tag withheld; the gradual action's automatic rollback covers only
+failures inside the promotion itself, so there is no automatic restore here.
+The failed step prints `PREV_VERSION` as the recorded restoration target, and
+the operator restores it manually through
+`.github/workflows/rollback-production.yml` with that version id. An inline
+rollback stays out of the deploy workflow: the rollback path checks the target
+version's secrets first.
 The smoke runs only inside an authorized production deployment run. Routine
 tests and probes stay staging-only; production live checks run only inside the
 authorized cutover (`docs/cutover-check.md`) or incident (`docs/runbook.md`)
 procedures.
 
-`env.production` in `wrangler.jsonc` is a cutover template for the production
-Worker, not a live deployment. Never deploy it outside the gated workflow:
+`env.production` in `wrangler.jsonc` configures the production
+Worker. Never deploy it outside the gated workflow:
 
 - Worker: `two-web-next-production`; workers.dev and preview URLs disabled.
-- Route/origin: `togetherweown.com` / `https://togetherweown.com`, the intended
-  apex placeholder target. Defining it does not flip DNS; deploying would
-  claim that custom domain, so deploy only through the gated workflow once
-  cutover is authorized.
+- Route/origin: `togetherweown.com` / `https://togetherweown.com`, the production
+  apex target. Defining it does not flip DNS; deploying would
+  claim that custom domain, so deploy only through the gated workflow.
 - Hyperdrive `DB`: the separately named `two-web-next-production` Hyperdrive
   with its provisioned id in `wrangler.jsonc` `env.production`, distinct from
   the staging Hyperdrive. The all-zero id `00000000000000000000000000000000`
   is only the inert sentinel `ci/production-deploy-gate.mjs` refuses; it never
   lives in config or deploys.
 - Queues: `two-web-next-production-sync-event` and
-  `two-web-next-production-internal-action` are reserved, unprovisioned names;
-  provision both separately from staging before cutover. Producers and consumers
+  `two-web-next-production-internal-action` are the production queue names,
+  kept separate from staging; complete provisioning before a deployment is
+  authorized. Producers and consumers
   use these names; crons match staging (every ten minutes, midnight UTC).
 - Vars are explicit because environment bindings/vars do not inherit. Register
   the production Discord callback; provision secrets for the production Worker
