@@ -670,7 +670,7 @@ describe.skipIf(process.env.A11Y_BROWSER_TESTS !== "true")(
             bio: "",
             games: "🎮".repeat(80) + " ".repeat(1621),
             error: "Games list is too long.",
-            clientRejects: false,
+            clientRejects: true,
           },
           {
             name: "game name",
