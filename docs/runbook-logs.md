@@ -172,21 +172,23 @@ the binding is fixed: treat a production warning as stuck, not late.
 | Field | Meaning and safe values |
 | --- | --- |
 | `eventKey` | The event whose write-back carrier was not sent |
-| `request_id` | The validated HTTP request ID (`safeRequestId`: a Cloudflare Ray ID or a generated ULID). Agent-events ingress write-backs (`POST /api/agent-events`, `src/agent-events/route.ts`) carry the same validated ID; absent only when the write has no request context (scheduled/reconcile), where `eventKey` and `agent_event_audits` remain the fallback. Never a secret or a member identity |
+| `request_id` | The validated HTTP request ID (`safeRequestId`: a Cloudflare Ray ID or a generated ULID) from the `http.request` line's `x-request-id`. Agent-events ingress write-backs (`POST /api/agent-events`, `src/agent-events/route.ts`) carry that HTTP ID, not the `request_id` in the agent response body nor `agent_event_audits.request_id`, which is a separate ingress-minted ULID (`src/agent-events/ingress.ts`). Always correlate an agent-published event via `eventKey` plus `agent_event_audits WHERE event_key = ...`; `request_id` alone only joins to the `http.request` line. Never a secret or a member identity |
 
 A successful HTTP response is not evidence of Discord synchronization: the
 request succeeded against the database, but Discord has not been told yet.
 
 Read-only diagnostic: filter Workers Logs message/text with the exact warning
-(see [Find a request](#find-a-request)) and correlate by `eventKey` and, when
-present, `request_id`. Then check whether a later sync landed: join through
+(see [Find a request](#find-a-request)) and correlate by `eventKey` and
+`request_id` (the warning's `request_id` joins to the `http.request` line).
+Then check whether a later sync landed: join through
 `events` (`event_sync_attempts` carries `event_id`, not `event_key`):
 `SELECT * FROM event_sync_attempts JOIN events ON events.id = event_sync_attempts.event_id WHERE events.event_key = '<eventKey>'`,
 or compare revisions with
 `SELECT sync_revision, synced_revision, discord_event_id FROM events WHERE event_key = '<eventKey>'`
 (`synced_revision` catching up to `sync_revision` means reconcile recovered
-it). For an agent-published event whose warning has no `request_id` (no request context),
-find the ingress request with
+it). For an agent-published event, the warning's `request_id` never matches
+`agent_event_audits.request_id` (the ingress mints its own ULID for the body
+and audit rows), so always find the ingress request with
 `SELECT * FROM agent_event_audits WHERE event_key = '<eventKey>'`. Then compare
 the deployed Workers' queue producer bindings with `wrangler.jsonc`: the
 top-level `queues.producers` block is staging (`SYNC_EVENT_QUEUE` bound to
