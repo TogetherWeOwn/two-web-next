@@ -3,7 +3,7 @@
 // five member tables. Authorship columns (events.created_by,
 // featured_contents.created_by) and the append-only audit tables are
 // deliberately out of scope — see docs/member-erasure.md.
-export const DISCORD_ID_RE = /^\d{1,20}$/;
+export const DISCORD_ID_RE = /^[1-9]\d{0,19}$/;
 
 export class InvalidMemberIdError extends Error {
   constructor(received: unknown) {
