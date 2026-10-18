@@ -182,8 +182,10 @@ The summary contains `event`, `status` (the second attempt's HTTP status,
 or `0` for a transport error/timeout), `down_seconds` (how long health has
 been continuously red), `timestamp`, plus optional `build_sha` (and
 `version_id`) read from the already-fetched `/up` body's public
-`revision.commit` through the exact 40-hex allowlist; an unreadable body
-pages unattributed, and no extra probe is made.
+`revision.commit` through the exact 40-hex allowlist (`version_id` only
+through the Worker Version UUID allowlist); an unreadable or stalled body
+pages unattributed — the marker read races a 2 s independent deadline, so
+a hung body cannot stall the run — and no extra probe is made.
 The Tail Worker records `ops.alert.delivered` or `ops.alert.delivery_failed`
 for each delivery attempt, so the delivery-receipt query below also
 catches these pages. **There is no matching app source-log line by design**:

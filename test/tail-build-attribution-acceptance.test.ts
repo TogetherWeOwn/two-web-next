@@ -11,8 +11,12 @@
 // Post-fix contract:
 // - revision.commit is accepted only through the existing exact
 //   40-hex SHA allowlist. A valid commit attaches optional build_sha,
-//   plus version_id when the same revision marker carries a usable
-//   (non-empty string) one.
+//   plus version_id only when the same revision marker carries a Worker
+//   Version UUID (a raw non-UUID string is omitted, never echoed: it
+//   could push the page past Discord's 2,000-character limit).
+// - A body that stalls after its headers yields absent attribution on a
+//   2 s independent deadline — never the cooperative fetch signal — so
+//   the scheduled run still pages and still runs its synthetic checks.
 // - Attribution comes from the /up body observed in the run that
 //   pages — including a failing 503 /up body, which still carries the
 //   marker. An unreadable body in the paging run yields absent
@@ -62,7 +66,19 @@ type Probe = {
   location?: string | null;
   body?: string | null;
   throw?: unknown;
+  // Headers plus one chunk, then the stream never closes: the attribution
+  // read must yield absent attribution on its own deadline instead of
+  // stalling the scheduled run.
+  stall?: boolean;
 };
+
+// A body that sends headers plus one chunk and then stalls forever.
+const stalledStream = () =>
+  new ReadableStream({
+    start(controller) {
+      controller.enqueue(new TextEncoder().encode('{"status":"degraded",'));
+    },
+  });
 
 // Healthy synthetic answers per path. There is deliberately no
 // /auth/discord answer: the prober must never request that hop.
@@ -120,10 +136,12 @@ function fixture(
     if (next.origin != null) headers["x-two-origin"] = next.origin;
     if (next.contentType != null) headers["content-type"] = next.contentType;
     if (next.location != null) headers.location = next.location;
-    return new Response(next.body ?? null, {
+    const responseInit = {
       status: next.status ?? 200,
       headers: Object.keys(headers).length ? headers : undefined,
-    });
+    };
+    if (next.stall) return new Response(stalledStream(), responseInit);
+    return new Response(next.body ?? null, responseInit);
   });
   const sink = vi.fn();
   const worker = createTailWorker({
@@ -317,6 +335,74 @@ describe("acceptance: Tail pages carry build attribution from /up", () => {
     expect(content).not.toHaveProperty("build_sha");
     expect(content).not.toHaveProperty("version_id");
     expect(pages[0]![1].body as string).not.toContain(shaA);
+  });
+
+  it("a 503 body that stalls after its headers still pages uptime.down unattributed", {
+    timeout: 30_000,
+  }, async () => {
+    const stalled: Probe = {
+      status: 503,
+      origin: "two-web-next",
+      contentType: "application/json",
+      stall: true,
+    };
+    const fx = fixture(stalled);
+    // Three red runs past the >2 min gate: six stalled reads at the 2 s
+    // attribution deadline. The vitest timeout is the stall detector:
+    // without the independent deadline this run would hang it.
+    await runDownPastGate(fx);
+    const pages = pagePosts(fx.send);
+    expect(pages).toHaveLength(1);
+    const content = pageContent(pages[0]!);
+    expect(content.event).toBe("uptime.down");
+    expect(content.status).toBe(503);
+    expect(content).not.toHaveProperty("build_sha");
+    expect(content).not.toHaveProperty("version_id");
+  });
+
+  it("a healthy body that stalls after its headers still lets the failing check page", {
+    timeout: 15_000,
+  }, async () => {
+    const stalled: Probe = {
+      status: 200,
+      origin: "two-web-next",
+      contentType: "application/json",
+      stall: true,
+    };
+    const fx = fixture(stalled, eventsDownTwice);
+    await fx.worker.scheduled(fx.event, upEnv);
+    const pages = pagePosts(fx.send);
+    expect(pages).toHaveLength(1);
+    const content = pageContent(pages[0]!);
+    expect(content).toMatchObject({ event: "synthetic.down", check: "/events" });
+    expect(content).not.toHaveProperty("build_sha");
+    expect(content).not.toHaveProperty("version_id");
+  });
+
+  it("a non-UUID version_id string is omitted, never echoed, while build_sha still attaches", async () => {
+    const bogus = "rollback-81da0f67-ever";
+    const fx = fixture(healthyUp(markedBody(shaA, bogus)), eventsDownTwice);
+    await fx.worker.scheduled(fx.event, upEnv);
+    const pages = pagePosts(fx.send);
+    expect(pages).toHaveLength(1);
+    const content = pageContent(pages[0]!);
+    expect(content.build_sha).toBe(shaA);
+    expect(content).not.toHaveProperty("version_id");
+    // The rejected raw value reaches neither the page nor the receipt.
+    expect(pages[0]![1].body as string).not.toContain(bogus);
+    expect(fx.sink.mock.calls[0]![0]).not.toContain(bogus);
+  });
+
+  it("an over-cap body yields absent attribution instead of buffering unboundedly", async () => {
+    const fx = fixture(healthyUp(`${markedBody()}${" ".repeat(70_000)}`), eventsDownTwice);
+    await fx.worker.scheduled(fx.event, upEnv);
+    const pages = pagePosts(fx.send);
+    expect(pages).toHaveLength(1);
+    const content = pageContent(pages[0]!);
+    expect(content).toMatchObject({ event: "synthetic.down", check: "/events" });
+    expect(content).not.toHaveProperty("build_sha");
+    expect(content).not.toHaveProperty("version_id");
+    expect(getsFor(fx.send, "/up")).toHaveLength(1);
   });
 
   it("attribution does not split the mute: a new build mid-incident does not re-page", async () => {

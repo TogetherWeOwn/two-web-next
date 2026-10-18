@@ -32,6 +32,11 @@ export function shaFromVersionTag(tag: unknown): string | undefined {
 }
 
 const BUILD_SHA = /^[0-9a-f]{40}$/;
+// Cloudflare Worker Version IDs are lowercase UUIDs (see src/up-revision.ts:
+// version_id is the exact value `wrangler rollback` takes). Anything else is
+// not echoed: a raw non-UUID string could push the page past Discord's
+// 2,000-character limit and turn the page into a delivery_failed.
+const VERSION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
 // Live traces do not populate scriptVersion.tag: in the 2026-10-17 staging
 // drill the active version tag was the bare deploy SHA, yet delivered
@@ -78,7 +83,7 @@ export type UpAttribution = {
  * Build attribution from a prober-observed `/up` body. The public body
  * carries `revision: { version_id, commit }` (see src/up-revision.ts);
  * `commit` passes only through the existing exact 40-hex SHA allowlist and
- * `version_id` only when it is a non-empty string from the same marker.
+ * `version_id` only through the UUID allowlist for Worker Version IDs.
  * Anything unreadable yields absent attribution, never a throw and never an
  * echo of the raw value.
  */
@@ -98,7 +103,7 @@ export function upAttributionFromBody(body: unknown): UpAttribution {
   const build_sha = typeof commit === "string" && BUILD_SHA.test(commit) ? commit : undefined;
   if (!build_sha) return {};
   const version = fields.version_id;
-  const version_id = typeof version === "string" && version !== "" ? version : undefined;
+  const version_id = typeof version === "string" && VERSION_ID.test(version) ? version : undefined;
   return version_id ? { build_sha, version_id } : { build_sha };
 }
 
@@ -124,6 +129,16 @@ export const APP_SCRIPT_NAMES: ReadonlySet<string> = new Set([
 const UPTIME_TIMEOUT_MS = 10_000;
 const UPTIME_RETRY_DELAY_MS = 10_000;
 const EXPECTED_ORIGIN = "two-web-next";
+// Bound the /up attribution read: headers already arrived, so only the body
+// read needs a budget, and it must not ride the cooperative fetch signal
+// (a body that stalls after its headers would stall the whole scheduled
+// run: no uptime page and no synthetic checks). Expiry yields absent
+// attribution and cleanup still runs.
+const ATTRIBUTION_TIMEOUT_MS = 2_000;
+// Largest /up body prefix worth parsing: upAttributionFromBody rejects
+// anything over 64_000 characters, so stop reading there instead of
+// buffering an unbounded body into the pager.
+const ATTRIBUTION_READ_CAP = 64_000;
 // Bound every aggregator call: aggregation runs before per-fingerprint paging
 // in the tail handler, so a stalled Durable Object must not stall that pager.
 // Each complete operation (request plus body parsing) settles within
@@ -1022,6 +1037,40 @@ export function createTailWorker(
     }
   }
 
+  /**
+   * Read the already-fetched /up body for the public revision marker only.
+   * Stops at ATTRIBUTION_READ_CAP so a corrupt or hostile body cannot buffer
+   * unboundedly; a stalled stream simply never resolves and the caller's
+   * independent deadline wins. Returns "" when the body is unavailable, so
+   * the caller yields absent attribution, never a throw. Never logs.
+   */
+  async function readAttributionBody(response: Response): Promise<string> {
+    if (typeof response.text !== "function") return "";
+    const stream = response.body;
+    if (!stream || typeof stream.getReader !== "function") return response.text();
+    const reader = stream.getReader();
+    const decoder = new TextDecoder();
+    let text = "";
+    try {
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        if (value) {
+          text += decoder.decode(value, { stream: true });
+          if (text.length > ATTRIBUTION_READ_CAP) return "";
+        }
+      }
+      text += decoder.decode();
+      return text;
+    } finally {
+      try {
+        reader.releaseLock();
+      } catch {
+        /* A pending stalled read stays with the stream; cancel below settles it. */
+      }
+    }
+  }
+
   /** One bounded /up probe. Transport errors and timeouts are status 0. */
   async function probeOnce(target: string): Promise<{
     ok: boolean;
@@ -1038,13 +1087,17 @@ export function createTailWorker(
         response.status === 200 && response.headers.get("x-two-origin") === EXPECTED_ORIGIN;
       // Read the already-fetched body for the public revision marker only.
       // No extra fetch: health still depends on status + origin alone, and an
-      // unreadable body yields absent attribution, never a throw. Cleanup
-      // stays inert (see #1095): its outcome can never flip this verdict.
+      // unreadable body yields absent attribution, never a throw. The read
+      // races an independent setTimeout deadline (not the cooperative fetch
+      // signal), so a body that stalls after its headers cannot stall the
+      // scheduled run. Cleanup stays inert (see #1095): its outcome can
+      // never flip this verdict.
       let attribution: UpAttribution = {};
       try {
-        if (typeof response.text === "function") {
-          attribution = upAttributionFromBody(await response.text());
-        }
+        attribution = await withDeliveryDeadline(
+          readAttributionBody(response).then(upAttributionFromBody),
+          ATTRIBUTION_TIMEOUT_MS,
+        );
       } catch {
         attribution = {};
       }
