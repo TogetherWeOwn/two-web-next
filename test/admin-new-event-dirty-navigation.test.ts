@@ -92,6 +92,17 @@ describe("admin new-event dirty navigation", () => {
     expect(b.navigate("save").preventDefault).not.toHaveBeenCalled();
   });
 
+  it("restores departure protection after an interrupted Create unlocks without another input", () => {
+    const b = eventEditorBrowser({ initial: NEW });
+    b.values.set("title", "Unsaved game night");
+    b.submit();
+    // No departure, input, or pageshow before the ten-second lock lapses.
+    b.fireTimers();
+    const departure = b.navigate("sort");
+    expect(departure.preventDefault).toHaveBeenCalledOnce();
+    expect(departure.returnValue).toBe("");
+  });
+
   it("cancels a repeated Save, so a double click creates one draft", () => {
     const html = form(NEW);
     expect(html).toContain('<script src="/islands/admin-event-editor.js" defer=""></script>');
