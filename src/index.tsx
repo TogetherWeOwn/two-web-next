@@ -568,7 +568,15 @@ app.get("/up", async (c) => {
     const sql = connect(url, 2);
     // Member-access-log enforcement signal: informational only, never moves
     // the status code. Parsing mirrors enforceOn exactly — no raw value or
-    // variable name is echoed into the body.
+    // variable name is echoed into the body. Security note: this two-state
+    // label is intentionally public on the unauthenticated /up body. The
+    // control name and its degraded meaning are already public in the
+    // operator runbooks, and dashboards poll /up without credentials, so an
+    // authenticated-only signal would not reach its consumers. Exploiting a
+    // log-only window still needs an authenticated read plus a failed audit
+    // write, so the field aids operators without giving an unauthenticated
+    // caller a bypass. Consistent with the existing public config/db/queue
+    // signals, which likewise describe operational posture, not secrets.
     const body = await upBody(
       sql ? () => withHealthReadTimeout(sql, pgQueueDepth) : null,
       sql,

@@ -13,8 +13,12 @@ export function upHttpStatus(body: DatabaseReadiness & ConfigReadiness): 200 | 5
 // on purpose — degraded log-only serving is a supported config, not an
 // outage. The value mirrors `enforceOn` in ./access-log exactly; the route
 // computes it from env and passes it in so this builder stays env-free like
-// `config`. Defaults to enforcing, matching an unset
-// MEMBER_ACCESS_LOG_ENFORCE.
+// `config`. Defaults to enforcing, matching an unset enforce flag.
+// Security note: the two-state label is intentionally public on the
+// unauthenticated /up body. The control and its degraded meaning are already
+// public in the operator runbooks, dashboards poll /up without credentials,
+// and exploiting a log-only window still needs an authenticated read plus a
+// failed audit write. No raw setting value or variable name is echoed.
 export type MemberAccessLogEnforcement = "enforcing" | "log_only";
 
 export type UpBody = QueueHealth &
