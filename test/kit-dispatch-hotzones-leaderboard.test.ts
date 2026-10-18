@@ -9,6 +9,8 @@
 // the manifest has no entries (Hono fallback) and pass once the exact
 // method/paths are Kit-owned with the correct reads.
 import { describe, expect, it, vi } from "vitest";
+import { loadHotzonesIndexData } from "../src/kit-hotzones";
+import { emptyGrid } from "../src/hotzones/aggregates";
 import {
   decideRoute,
   dispatchHookRequest,
@@ -98,6 +100,43 @@ describe("hot-zone Kit ownership (shipped manifest)", () => {
     expect(deps.honoFetch).not.toHaveBeenCalled();
     expect(response.headers.get(KIT_RENDERER_HEADER)).toBe(KIT_RENDERER_VALUE);
     expect(await response.text()).toBe("kit");
+  });
+
+  it("keeps anonymous hot-zone telemetry outside member-data access auditing", async () => {
+    const db = {} as never;
+    const recordBoardViewFn = vi.fn(async () => {});
+    const sessionFor = vi.fn(async () => {
+      throw new Error("public hot-zone views must not read a session");
+    });
+    const accessSink = vi.fn(async () => async () => true);
+    const deps = {
+      ...depsFor(),
+      sessionFor,
+      accessSink,
+      resolve: vi.fn(async () => {
+        const data = await loadHotzonesIndexData({
+          env: { APP_URL } as never,
+          seasonParam: null,
+          setHeaders: vi.fn(),
+          dbForFn: async () => db,
+          loadJoinsGridFn: async () => ({ cells: emptyGrid(), total: 3, eventCount: 2 }),
+          recordBoardViewFn,
+        });
+        return new Response(JSON.stringify(data));
+      }),
+    };
+    const response = await dispatchHookRequest(eventFor("/hotzones"), deps);
+    expect(response.status).toBe(200);
+    expect(deps.resolve).toHaveBeenCalledOnce();
+    expect(deps.honoFetch).not.toHaveBeenCalled();
+    expect(recordBoardViewFn).toHaveBeenCalledExactlyOnceWith(db, {
+      boardKey: "hotzones",
+      scope: "overall",
+      season: "all",
+      resultCount: 3,
+    });
+    expect(sessionFor).not.toHaveBeenCalled();
+    expect(accessSink).not.toHaveBeenCalled();
   });
 
   it("dispatches the enabled member board to resolve and Hono control to honoFetch", async () => {

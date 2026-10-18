@@ -97,6 +97,21 @@ jobs:
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.PRODUCTION_CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.PRODUCTION_CLOUDFLARE_ACCOUNT_ID }}
+      - name: Require rollback target version secrets (names only, before rollback)
+        # Reads the recorded target version's secret_text bindings via
+        # wrangler versions view and refuses on any missing required name.
+        # Values are never read or printed; unreadable output fails closed.
+        # Runs after the credentials check and before the rollback. The
+        # rollback deploys the target version's own bindings, never the
+        # checked-out commit: reading the latest listing here would refuse
+        # the rollback that restores a deleted secret. No moderator or
+        # dry-run build gate here: both validate the dispatch SHA, not the
+        # recorded version, and must never block the emergency path.
+        run: node ci/check-production-secrets.mjs --rollback-version
+        env:
+          ROLLBACK_VERSION_ID: ${{ inputs.version_id }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.PRODUCTION_CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.PRODUCTION_CLOUDFLARE_ACCOUNT_ID }}
       - name: Roll back to the recorded production Worker Version
         # Non-interactive CI auto-accepts wrangler's confirmation prompt with the
         # default answer. The version id was gate-validated above and is quoted.

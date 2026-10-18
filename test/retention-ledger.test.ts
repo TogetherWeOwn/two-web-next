@@ -216,6 +216,19 @@ describe("retention ledger doc rows", () => {
     expect(rsvpLines[210]).toContain("delete from web_throttle_hits");
   });
 
+  it("distinguishes the throttle age cutoff from path-dependent physical cleanup", () => {
+    const row = read("docs/retention-ledger.md")
+      .split("\n")
+      .find((line) => line.startsWith("| `web_throttle_hits` |"));
+    expect(row).toBeDefined();
+    expect(row).toMatch(/five minutes is an age cutoff, not a deletion timer/i);
+    expect(row).toMatch(/cleanup is lazy and path-dependent/i);
+    expect(row).toMatch(/expired rows can linger on a quiet site/i);
+    expect(row).toMatch(/until a later request that runs cleanup/i);
+    expect(row).toMatch(/throttle-refused join or profile writes do not run it/i);
+    expect(row).not.toMatch(/(?:next|every|any) counted request(?: anywhere)?/i);
+  });
+
   it("publishes the event-search table, access paths, and established prune window", () => {
     const doc = read("docs/retention-ledger.md");
     expect(EVENT_SEARCH_LOG_RETENTION_DAYS).toBe(90);

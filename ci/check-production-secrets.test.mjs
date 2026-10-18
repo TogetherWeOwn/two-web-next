@@ -7,8 +7,10 @@ import { test } from "node:test";
 import {
   REQUIRED_PRODUCTION_SECRETS,
   checkProductionSecrets,
+  checkRollbackVersionSecrets,
   missingRequiredSecrets,
   parseSecretNames,
+  parseVersionSecretNames,
 } from "./check-production-secrets.mjs";
 
 const allPresent = JSON.stringify([
@@ -102,6 +104,102 @@ test("extra fields that resemble values are ignored and never surface", () => {
   );
 });
 
+const versionAllPresent = JSON.stringify({
+  id: "11111111-2222-4333-8444-555555555555",
+  resources: {
+    bindings: [
+      { name: "SESSION_SECRET", type: "secret_text" },
+      { name: "DISCORD_CLIENT_SECRET", type: "secret_text" },
+      { name: "DISCORD_BOT_TOKEN", type: "secret_text" },
+      { name: "DISCORD_GUILD_ID", type: "plain_text", text: "fixture-guild" },
+    ],
+  },
+});
+
+test("rollback target version with all required secret_text bindings passes", () => {
+  assert.deepEqual(checkRollbackVersionSecrets(versionAllPresent), [
+    ...REQUIRED_PRODUCTION_SECRETS,
+  ]);
+  const names = parseVersionSecretNames(versionAllPresent);
+  assert.equal(names.size, 3);
+  assert.ok(names.has("SESSION_SECRET"));
+});
+
+test("rollback target version missing a secret names only the missing secret", () => {
+  for (const missing of REQUIRED_PRODUCTION_SECRETS) {
+    const stub = JSON.stringify({
+      id: "11111111-2222-4333-8444-555555555555",
+      resources: {
+        bindings: REQUIRED_PRODUCTION_SECRETS.filter((name) => name !== missing).map((name) => ({
+          name,
+          type: "secret_text",
+        })),
+      },
+    });
+    assert.throws(
+      () => checkRollbackVersionSecrets(stub),
+      (error) => {
+        assert.match(error.message, /Rollback target version is missing/);
+        assert.ok(error.message.includes(missing), `error must name ${missing}`);
+        return true;
+      },
+    );
+  }
+});
+
+for (const stub of [
+  "",
+  "not json",
+  "[]",
+  "{}",
+  '{"resources":{}}',
+  '{"resources":{"bindings":{}}}',
+  '{"resources":{"bindings":[null]}}',
+  '{"resources":{"bindings":[{}]}}',
+  '{"resources":{"bindings":[{"name":"SESSION_SECRET"}]}}',
+  '{"resources":{"bindings":[{"name":"","type":"secret_text"}]}}',
+  '{"resources":{"bindings":[{"name":42,"type":"secret_text"}]}}',
+  '{"resources":{"bindings":[{"type":"secret_text"}]}}',
+]) {
+  test(`malformed versions view output fails closed (${JSON.stringify(stub).slice(0, 60)})`, () => {
+    assert.throws(
+      () => checkRollbackVersionSecrets(stub),
+      /Could not verify rollback target version secrets/,
+    );
+  });
+}
+
+test("non-secret bindings are ignored and value-like fields never surface", () => {
+  const stub = JSON.stringify({
+    id: "11111111-2222-4333-8444-555555555555",
+    resources: {
+      bindings: [
+        { name: "SESSION_SECRET", type: "secret_text", value: "fixture-fake-aaa" },
+        { name: "DISCORD_CLIENT_SECRET", type: "secret_text" },
+        { name: "DISCORD_BOT_TOKEN", type: "secret_text" },
+        { name: "DISCORD_GUILD_ID", type: "plain_text", text: "fixture-fake-bbb" },
+        { name: "DB", type: "d1" },
+      ],
+    },
+  });
+  assert.deepEqual(checkRollbackVersionSecrets(stub), [...REQUIRED_PRODUCTION_SECRETS]);
+  assert.throws(
+    () =>
+      checkRollbackVersionSecrets(
+        JSON.stringify({
+          id: "11111111-2222-4333-8444-555555555555",
+          resources: {
+            bindings: [{ name: "SESSION_SECRET", type: "secret_text" }],
+          },
+        }),
+      ),
+    (error) => {
+      assert.ok(!error.message.includes("fixture-fake"), "error must never echo value-like fields");
+      return true;
+    },
+  );
+});
+
 function cliWithStubbedWrangler(stubStdout, { exitCode = 0, stubStderr = "" } = {}) {
   const scratch = mkdtempSync(
     join(
@@ -170,6 +268,119 @@ test("CLI fails closed on a missing secret and on wrangler failure without echoi
   assert.match(failed.stderr, /Could not verify production Worker secrets/);
   assert.ok(!failed.stderr.includes("fixture denied"), "wrangler output is never echoed");
   assert.equal(failed.stdout, "");
+});
+
+const ROLLBACK_VERSION_ID = "11111111-2222-4333-8444-555555555555";
+
+function cliWithStubbedVersionsView(
+  stubStdout,
+  { exitCode = 0, versionId = ROLLBACK_VERSION_ID, stubStderr = "" } = {},
+) {
+  const scratch = mkdtempSync(
+    join(
+      process.env.PAPERCLIP_RUN_SCRATCH_DIR ?? process.env.PAPERCLIP_SCRATCH_DIR ?? tmpdir(),
+      "wrangler-versions-stub-",
+    ),
+  );
+  try {
+    writeFileSync(
+      join(scratch, "npx"),
+      `#!${process.execPath}
+import { writeSync } from "node:fs";
+const expected = ["wrangler", "versions", "view", process.env.EXPECTED_VERSION, "--name", "two-web-next-production", "--json"];
+if (JSON.stringify(process.argv.slice(2)) !== JSON.stringify(expected)) {
+  console.error("unexpected wrangler invocation: " + process.argv.slice(2).join(" "));
+  process.exit(2);
+}
+if (process.env.STUB_STDERR) writeSync(2, process.env.STUB_STDERR);
+writeSync(1, process.env.STUB_STDOUT);
+process.exit(Number(process.env.STUB_EXIT));
+`,
+      { mode: 0o700 },
+    );
+    const result = spawnSync(
+      process.execPath,
+      ["ci/check-production-secrets.mjs", "--rollback-version"],
+      {
+        encoding: "utf8",
+        timeout: 30_000,
+        env: {
+          ...process.env,
+          PATH: `${scratch}:${process.env.PATH}`,
+          STUB_STDOUT: stubStdout,
+          STUB_STDERR: stubStderr,
+          STUB_EXIT: String(exitCode),
+          EXPECTED_VERSION: versionId,
+          ROLLBACK_VERSION_ID: versionId,
+        },
+      },
+    );
+    assert.equal(result.error, undefined);
+    return result;
+  } finally {
+    rmSync(scratch, { recursive: true, force: true });
+  }
+}
+
+test("rollback-version CLI passes on the target version and prints names only", () => {
+  const result = cliWithStubbedVersionsView(versionAllPresent);
+  assert.equal(result.status, 0);
+  for (const name of REQUIRED_PRODUCTION_SECRETS) {
+    assert.ok(result.stdout.includes(name), `stdout must list ${name}`);
+  }
+  assert.equal(result.stderr, "");
+});
+
+test("rollback-version CLI fails closed on a missing target secret and on bad input", () => {
+  const missing = cliWithStubbedVersionsView(
+    JSON.stringify({
+      id: ROLLBACK_VERSION_ID,
+      resources: { bindings: [{ name: "SESSION_SECRET", type: "secret_text" }] },
+    }),
+  );
+  assert.equal(missing.status, 1);
+  assert.match(missing.stderr, /Rollback target version is missing/);
+  assert.equal(missing.stdout, "");
+
+  const failed = cliWithStubbedVersionsView('{"error":"fixture denied"}', { exitCode: 1 });
+  assert.equal(failed.status, 1);
+  assert.match(failed.stderr, /Could not verify rollback target version secrets/);
+  assert.ok(!failed.stderr.includes("fixture denied"), "wrangler output is never echoed");
+  assert.equal(failed.stdout, "");
+
+  const badId = cliWithStubbedVersionsView(versionAllPresent, {
+    versionId: "not-a-uuid; rm -rf /",
+  });
+  assert.equal(badId.status, 1);
+  assert.match(badId.stderr, /ROLLBACK_VERSION_ID must be a Worker Version ID/);
+  assert.equal(badId.stdout, "");
+});
+
+test("rollback-version CLI keeps child stderr out of both parent streams on success", () => {
+  const canary = "synthetic-versions-view-stderr-canary-success";
+  const result = cliWithStubbedVersionsView(versionAllPresent, {
+    stubStderr: `${canary}\n`,
+  });
+  assert.equal(result.status, 0);
+  for (const name of REQUIRED_PRODUCTION_SECRETS) {
+    assert.ok(result.stdout.includes(name), `stdout must list ${name}`);
+  }
+  assert.ok(!result.stdout.includes('"name"'), "stdout must not forward the raw child JSON");
+  assert.equal(result.stderr, "");
+  assertNoChildCanary(result, canary);
+});
+
+test("rollback-version CLI keeps child stdout and stderr out of both parent streams on nonzero exit", () => {
+  const stdoutCanary = "synthetic-versions-view-stdout-canary-nonzero";
+  const stderrCanary = "synthetic-versions-view-stderr-canary-nonzero";
+  const result = cliWithStubbedVersionsView(`${stdoutCanary}\n`, {
+    exitCode: 42,
+    stubStderr: `${stderrCanary}\n`,
+  });
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /Could not verify rollback target version secrets/);
+  assert.equal(result.stdout, "");
+  assertNoChildCanary(result, stdoutCanary, stderrCanary);
 });
 
 // Child-stream boundary: the fake wrangler's stdout/stderr are untrusted
@@ -259,6 +470,62 @@ test("required-secrets preflight runs before the moderator preflight, version up
   assert.ok(
     credentials < secrets && secrets < moderator && moderator < upload && upload < gradual,
     "order must be credentials check, required-secrets preflight, moderator preflight, upload, gradual promotion",
+  );
+});
+
+test("rollback target-version secrets preflight runs before wrangler rollback", () => {
+  const workflow = readFileSync(
+    new URL("../.github/workflows/rollback-production.yml", import.meta.url),
+    "utf8",
+  );
+  const credentials = workflow.indexOf("run: node ci/production-deploy-gate.mjs --credentials");
+  const targetSecrets = workflow.indexOf(
+    "run: node ci/check-production-secrets.mjs --rollback-version",
+  );
+  const rollback = workflow.indexOf("npx wrangler rollback");
+  assert.ok(
+    credentials > 0 && targetSecrets > 0 && rollback > 0,
+    "expected credentials, rollback target-version secrets and wrangler rollback in rollback-production.yml",
+  );
+  assert.ok(
+    credentials < targetSecrets && targetSecrets < rollback,
+    "order must be credentials check, rollback target-version secrets preflight, rollback",
+  );
+  // The rollback deploys the recorded version's own bindings, never the
+  // dispatch SHA: latest-listing, moderator-config and dry-run build checks
+  // validate the wrong artifact and must never gate the emergency path.
+  assert.ok(
+    !workflow.includes("run: npm run check:worker-moderators-production"),
+    "rollback must not gate on the dispatch SHA moderator config",
+  );
+  assert.ok(
+    !workflow.includes("npx wrangler deploy --dry-run --env production"),
+    "rollback must not gate on a dispatch SHA dry-run build",
+  );
+  for (const line of workflow.split("\n")) {
+    if (line.includes("ci/check-production-secrets.mjs")) {
+      assert.ok(
+        line.includes("--rollback-version"),
+        `rollback must only check the target version, not the latest listing: ${line.trim()}`,
+      );
+    }
+    if (line.trimStart().startsWith("run:") && line.includes("inputs.version_id")) {
+      assert.fail(`input interpolates into a run: block: ${line}`);
+    }
+  }
+  assert.match(workflow, /ROLLBACK_VERSION_ID: \$\{\{ inputs\.version_id \}\}/);
+});
+
+test("deploy-production.yml carries no wrangler rollback mutation (negative control)", () => {
+  const workflow = readFileSync(
+    new URL("../.github/workflows/deploy-production.yml", import.meta.url),
+    "utf8",
+  );
+  const secrets = workflow.indexOf("run: node ci/check-production-secrets.mjs");
+  assert.ok(secrets > 0, "expected the required-secrets step in deploy-production.yml");
+  assert.ok(
+    !workflow.includes("npx wrangler rollback"),
+    "deploy must not contain a wrangler rollback mutation",
   );
 });
 
