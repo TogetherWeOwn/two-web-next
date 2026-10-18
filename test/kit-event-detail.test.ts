@@ -816,7 +816,12 @@ describe("Kit detail presentation", () => {
     const columns = Object.keys(getTableColumns(events)) as (keyof ReturnType<typeof row>)[];
     const toRow = (r: ReturnType<typeof row>) =>
       columns.map((key) => (r[key] instanceof Date ? (r[key] as Date).toISOString() : r[key]));
+    const auditQueries: { sql: string; params: unknown[] }[] = [];
     const db = drizzle(async (sql, params) => {
+      if (sql.includes("set_config(") || sql.startsWith('insert into "member_data_access_logs"')) {
+        auditQueries.push({ sql, params });
+        return { rows: [] };
+      }
       if (sql.includes("row_number()")) return { rows: [] };
       if (sql.includes('from "rsvps"') && sql.includes("count(")) {
         return {
@@ -846,6 +851,12 @@ describe("Kit detail presentation", () => {
       }
       return { rows: [] };
     });
+    // pg-proxy cannot open transactions. Keep the real audit recorder on the
+    // local SQL fixture, including its transaction-scoped timeout setup.
+    const transaction = vi.fn(async (run: (tx: Db) => Promise<unknown>) =>
+      run(db as unknown as Db),
+    );
+    Object.assign(db, { transaction });
     const sessionStore = createMemorySessionStore();
     const honoEnv = {
       APP_URL: `${APP_URL}/`,
@@ -887,9 +898,19 @@ describe("Kit detail presentation", () => {
     expect(guestHtml).not.toContain(">ann<");
     expect(guest.headers.get("cache-control")).toBe("private, no-store");
     expect(guest.headers.get("vary")).toContain("Cookie");
+    expect(transaction).not.toHaveBeenCalled();
+    expect(auditQueries).toEqual([]);
 
     const member = await request(await cookieFor(MEMBER_ID, false));
     expect(member.status).toBe(200);
+    expect(transaction).toHaveBeenCalledTimes(1);
+    expect(auditQueries).toHaveLength(2);
+    expect(auditQueries[0]!.sql).toBe(
+      "select set_config('lock_timeout', $1, true), set_config('statement_timeout', $2, true)",
+    );
+    expect(auditQueries[0]!.params).toEqual(["2000ms", "2000ms"]);
+    expect(auditQueries[1]!.sql).toMatch(/^insert into "member_data_access_logs"/);
+    expect(auditQueries[1]!.params).toContain(JSON.stringify(ATTENDEES.map((user) => user.id)));
     const memberHtml = await member.text();
     expect(memberHtml).toContain('data-testid="event-attendees"');
     expect(memberHtml).toContain("Who&#39;s going (3)");
