@@ -52,10 +52,7 @@ export const JSON_MAX_LIMIT = PUBLIC_DATA_BOUNDS.maxPageSize;
  * roster, so this joins users and counts only named rows: `goingCount`
  * always equals the roster length (within one roster page), and the
  * `full`/waitlist CTA in `rsvp-button.tsx` is driven by that same
- * attributable count. Seat enforcement (`waitlist.goingCount`, used by
- * `promoteWaitlist`, the admin capacity guard and the agent capacity check)
- * follows the same attributable rule, so the CTA matches the write outcome:
- * a nameless row never holds a seat the page offers. */
+ * attributable count. */
 async function withGoing(
   db: Pick<Db, "select">,
   rows: (typeof events.$inferSelect)[],

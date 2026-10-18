@@ -1,9 +1,8 @@
-import { and, asc, count, eq, inArray, ne, sql } from "drizzle-orm";
+import { and, asc, count, eq, inArray, sql } from "drizzle-orm";
 import type { Db } from "../db/index";
 import type { PgDatabase, PgQueryResultHKT } from "drizzle-orm/pg-core";
 import { keyedMemberRead } from "../member-reads";
 import { rsvps, type Event } from "../db/admin-schema";
-import { users } from "../db/schema";
 
 type SeatWriter = Pick<PgDatabase<PgQueryResultHKT>, "select" | "update">;
 type Tx = Parameters<Parameters<Db["transaction"]>[0]>[0];
@@ -11,20 +10,12 @@ type Tx = Parameters<Parameters<Db["transaction"]>[0]>[0];
 export const CAPACITY_BELOW_GOING =
   "Capacity cannot be lower than the number of members already going.";
 
-/** Attributable seat count behind the event's FOR UPDATE lock, like every
- * seat-changing write. Exactly the rows the roster can list (named users
- * only), matching `withGoing` in `reads.ts`, so the badge, the roster, the
- * `full`/waitlist CTA and the write outcome tell one consistent story.
- * A going row with an empty stored name, or no users row at all, never
- * renders as an identity and must not hold a seat the public CTA offers.
- * Admin Fill still shows occupancy (all rows) for moderators; allocation
- * here follows the attributable rule. */
+/** Call behind the event's FOR UPDATE lock, like every seat-changing write. */
 export async function goingCount(tx: Pick<SeatWriter, "select">, eventId: number): Promise<number> {
   const [tally] = await tx
     .select({ n: count() })
     .from(rsvps)
-    .innerJoin(users, eq(rsvps.userId, users.id))
-    .where(and(eq(rsvps.eventId, eventId), eq(rsvps.status, "going"), ne(users.username, "")));
+    .where(and(eq(rsvps.eventId, eventId), eq(rsvps.status, "going")));
   return Number(tally?.n ?? 0);
 }
 

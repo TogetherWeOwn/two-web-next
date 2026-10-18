@@ -12,7 +12,6 @@ import type { Env } from "../src/env";
 import { uniqueKey } from "../src/jobs/sync-event";
 import type { QueueMessage } from "../src/jobs/types";
 import { writeRsvp } from "../src/events/rsvp";
-import { getPublicEvent, listGoingAttendees } from "../src/events/reads";
 import { CAPACITY_BELOW_GOING, waitlistPosition } from "../src/events/waitlist";
 import { createMemorySessionStore, hashToken, newSessionToken } from "../src/sessions";
 import {
@@ -207,13 +206,8 @@ describe.skipIf(!process.env.DATABASE_URL)("RSVP waitlist (agent-testdb)", () =>
       env,
     );
   }
-  const put = async (key: string, userId: string, status = "going") => {
-    // Attributable writes: every HTTP answer carries a stored name like a
-    // signed-in member would, so the attributable seat count matches the
-    // badge/roster (nameless seeds use direct inserts, never this helper).
-    await db.insert(users).values({ id: userId, username: userId }).onConflictDoNothing();
-    return request(`/events/${key}/rsvp`, userId, "PUT", { status });
-  };
+  const put = (key: string, userId: string, status = "going") =>
+    request(`/events/${key}/rsvp`, userId, "PUT", { status });
   const withdraw = (key: string, userId: string) =>
     request(`/events/${key}/rsvp`, userId, "DELETE");
   const patch = (key: string, capacity: number | null) =>
@@ -689,7 +683,7 @@ describe.skipIf(!process.env.DATABASE_URL)("RSVP waitlist (agent-testdb)", () =>
 
   it("keeps the public JSON collection free of viewer waitlist state while HTML stays personalized", async () => {
     const ev = await fullWithLine(2, PAGE_MEMBER_KEYS);
-    await client`insert into users (id, username) values (${PAGE_MEMBER_KEYS[0]!}, 'Current holder'), (${PAGE_MEMBER_KEYS[1]!}, 'First waiter'), (${PAGE_MEMBER_KEYS[2]!}, 'Second waiter') on conflict (id) do update set username = excluded.username`;
+    await client`insert into users (id, username) values (${PAGE_MEMBER_KEYS[0]!}, 'Current holder'), (${PAGE_MEMBER_KEYS[1]!}, 'First waiter'), (${PAGE_MEMBER_KEYS[2]!}, 'Second waiter') on conflict (id) do nothing`;
     const first = await request("/events.json", PAGE_MEMBER_KEYS[1]!);
     const data = await collection(first);
     // A0 public contract: identical fields for every session, no personal state.
@@ -737,7 +731,7 @@ describe.skipIf(!process.env.DATABASE_URL)("RSVP waitlist (agent-testdb)", () =>
 
   it("composes private waitlist positions and promoted attendees with navigation and offset-labelled related events", async () => {
     const ev = await fullWithLine(2, PAGE_MEMBER_KEYS);
-    await client`insert into users (id, username) values (${PAGE_MEMBER_KEYS[0]!}, 'Current holder'), (${PAGE_MEMBER_KEYS[1]!}, 'First waiter') on conflict (id) do update set username = excluded.username`;
+    await client`insert into users (id, username) values (${PAGE_MEMBER_KEYS[0]!}, 'Current holder'), (${PAGE_MEMBER_KEYS[1]!}, 'First waiter') on conflict (id) do nothing`;
     const previous = await seed({
       startsAt: new Date("2098-12-31T20:00:00Z"),
       endsAt: new Date("2098-12-31T22:00:00Z"),
@@ -969,50 +963,4 @@ describe.skipIf(!process.env.DATABASE_URL)("RSVP waitlist (agent-testdb)", () =>
     expect(line.filter((r) => r.status === "going").map((r) => r.userId)).toEqual(["waiter-1"]);
     expect(await waitlistPosition(db, ev.id, "newcomer")).toBe(2);
   });
-
-  it.each([
-    ["empty stored name", true],
-    ["missing user row", false],
-  ])(
-    "nameless %s holds no seat: badge, CTA and write agree (attributable)",
-    async (_shape, insertUser) => {
-      const ev = await seed({ capacity: 2 });
-      const holderId = "100000000000000301";
-      const namelessId = "100000000000000302";
-      const newcomerId = "100000000000000303";
-      await db.insert(users).values({ id: holderId, username: holderId }).onConflictDoNothing();
-      await db.insert(rsvps).values({ eventId: ev.id, userId: holderId, status: "going" });
-      if (insertUser) await db.insert(users).values({ id: namelessId, username: "" });
-      await db.insert(rsvps).values({ eventId: ev.id, userId: namelessId, status: "going" });
-      await db.insert(users).values({ id: newcomerId, username: newcomerId }).onConflictDoNothing();
-
-      // Badge and roster agree on the attributable count (1 of 2).
-      expect(await listGoingAttendees(db, ev.id)).toEqual([{ id: holderId, name: holderId }]);
-      expect((await getPublicEvent(db, ev.eventKey))?.goingCount).toBe(1);
-
-      // Page offers the Going CTA (not full, spots left, no waitlist join).
-      const page = await request(`/e/${ev.eventKey}`, newcomerId);
-      expect(page.status).toBe(200);
-      const html = await page.text();
-      expect(html).toContain("<span data-count>1 of 2 going</span>");
-      expect(html).toContain(">1 of 2 spots left</span>");
-      expect(html).toContain('data-testid="rsvp-going"');
-      expect(html).not.toContain('data-testid="waitlist-join"');
-      expect(html).not.toContain('data-full="true"');
-      expect(html).not.toContain(namelessId);
-
-      // The write grants the offered seat (not the waitlist).
-      const res = await put(ev.eventKey, newcomerId);
-      expect(res.status).toBe(201);
-      expect(await res.json()).toEqual({
-        data: { status: "going", synced_to_discord_at: null, waitlist_position: null },
-      });
-      expect(await waitlistPosition(db, ev.id, newcomerId)).toBeNull();
-      expect((await getPublicEvent(db, ev.eventKey))?.goingCount).toBe(2);
-      expect(await listGoingAttendees(db, ev.id)).toEqual([
-        { id: holderId, name: holderId },
-        { id: newcomerId, name: newcomerId },
-      ]);
-    },
-  );
 });

@@ -336,8 +336,6 @@ describe.skipIf(!process.env.DATABASE_URL)("shared agent event acceptance (agent
     const event_key = await create();
     await call("publish", { event_key });
     const [event] = await fixture.client`SELECT id FROM events WHERE event_key = ${event_key}`;
-    // Attributable seats: allocation counts only named rows.
-    await fixture.client`INSERT INTO users (id, username) VALUES ('going-1', 'going-1'), ('going-2', 'going-2') ON CONFLICT (id) DO NOTHING`;
     await fixture.client`INSERT INTO rsvps (event_id, user_id, status, created_at) VALUES
       (${event!.id}, 'going-1', 'going', now()), (${event!.id}, 'going-2', 'going', now()),
       (${event!.id}, 'first-waiter', 'waitlisted', now() - interval '2 seconds'),

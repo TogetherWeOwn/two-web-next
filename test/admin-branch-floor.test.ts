@@ -64,7 +64,7 @@ import {
   memberDataAccessLogs,
   rsvps,
 } from "../src/db/admin-schema";
-import { joinAttempts, users } from "../src/db/schema";
+import { joinAttempts } from "../src/db/schema";
 import type { Env } from "../src/env";
 import { createMemorySessionStore } from "../src/sessions";
 import { cookieFor, env, MEMBER, MODERATOR } from "./helpers/member-data";
@@ -444,14 +444,6 @@ describe.skipIf(!process.env.DATABASE_URL)("admin store failure and rollback pat
 
   it("refuses a capacity below occupied seats and leaves the row and audit alone", async () => {
     const row = await seedEvent({ eventKey: "cap-floor-event", capacity: null });
-    // Attributable seats: allocation counts only named rows.
-    await db
-      .insert(users)
-      .values([
-        { id: "100000000000000201", username: "member-201" },
-        { id: "100000000000000202", username: "member-202" },
-      ])
-      .onConflictDoNothing();
     await db.insert(rsvps).values([
       { eventId: row.id, userId: "100000000000000201", status: "going" },
       { eventId: row.id, userId: "100000000000000202", status: "going" },
