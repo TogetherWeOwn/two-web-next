@@ -254,11 +254,10 @@ describe("bounded outer-shield refusal audit", () => {
         expect(shieldRefusalCounters.credential).toBe(0);
         expect(warn).toHaveBeenCalledTimes(expected);
         expect(warn.mock.calls[expected - 1]?.[0]).toBe("agent-events.shield.refusal_sampled");
-        expect(warn.mock.calls[expected - 1]?.[1]).toMatchObject({
-          bucket_class: "anonymous",
-          refusals: expected,
-          request_id: refused.body.request_id,
-        });
+        expect(warn.mock.calls[expected - 1]).toEqual([
+          "agent-events.shield.refusal_sampled",
+          { bucket_class: "anonymous", refusals: expected, request_id: refused.body.request_id },
+        ]);
       }
       expect(shieldRows(rec)).toHaveLength(3);
 
@@ -281,11 +280,15 @@ describe("bounded outer-shield refusal audit", () => {
       expect(credRefused.status).toBe(429);
       expect(shieldRefusalCounters).toEqual({ credential: 1, anonymous: 5 });
       expect(warn).toHaveBeenCalledTimes(4);
-      expect(warn.mock.calls[3]?.[1]).toMatchObject({
-        bucket_class: "credential",
-        refusals: 1,
-      });
-      expect(JSON.stringify(warn.mock.calls)).not.toContain("shield-counter-credential");
+      expect(warn.mock.calls[3]).toEqual([
+        "agent-events.shield.refusal_sampled",
+        { bucket_class: "credential", refusals: 1, request_id: credRefused.body.request_id },
+      ]);
+      const logged = JSON.stringify(warn.mock.calls);
+      expect(logged).not.toContain(ip);
+      expect(logged).not.toContain("ip:");
+      expect(logged).not.toContain("shield-counter-credential");
+      expect(logged).not.toContain(await sha256Hex("shield-counter-credential"));
     } finally {
       warn.mockRestore();
     }
