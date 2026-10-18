@@ -762,7 +762,14 @@ describe("join callback: post-bot-success downstream failures stay redacted", ()
     expect(await home.text()).toContain("Rick");
     expect(channelCounts(logs)).toMatchObject({ info: 0, debug: 0, warn: 0, error: 0 });
     streamClean(logs, JOIN_ROUTE);
-    leakFree(res.headers.get("location"), [...res.headers], setCookie, fake.attempts, created);
+    leakFree(
+      await res.text(),
+      res.headers.get("location"),
+      [...res.headers],
+      setCookie,
+      fake.attempts,
+      created,
+    );
   });
 
   it("moderator 500 with a marker body after a successful bot add: 302, status-only log, clean stream", async () => {
@@ -793,7 +800,14 @@ describe("join callback: post-bot-success downstream failures stay redacted", ()
     const setCookie = res.headers.getSetCookie().join("\n");
     expect(setCookie).toMatch(/__Host-two_session=[^;]/);
     streamClean(logs, JOIN_ROUTE, [MODERATOR_LOOKUP_LOG]);
-    leakFree(res.headers.get("location"), [...res.headers], setCookie, fake.attempts, created);
+    leakFree(
+      await res.text(),
+      res.headers.get("location"),
+      [...res.headers],
+      setCookie,
+      fake.attempts,
+      created,
+    );
   });
 
   it("session-create throw after a successful bot add: 500, no usable session, clean stream", async () => {
@@ -837,7 +851,21 @@ describe("join callback: post-bot-success downstream failures stay redacted", ()
     expect(setCookie).not.toContain("__Host-two_session=");
     const home = await app.request("/", { headers: { cookie: cookiesFrom(res) } }, e);
     expect(await home.text()).not.toContain("Rick");
+    expect(channelCounts(logs)).toMatchObject({ info: 0, debug: 0, warn: 0, error: 1 });
     streamClean(logs, JOIN_ROUTE);
+    const alertArgs = withheld(logs.find((r) => r.channel === "error")!.args, [
+      TOK,
+      SECRET,
+    ]) as unknown[];
+    expect(alertArgs).toHaveLength(1);
+    expect(JSON.parse(alertArgs[0] as string)).toMatchObject({
+      level: "critical",
+      event: "error.alert",
+      fingerprint: `Error@${JOIN_ROUTE}`,
+      exception: "Error",
+      method: "GET",
+      route: JOIN_ROUTE,
+    });
     leakFree(html, [...res.headers], setCookie, fake.attempts);
   });
 
