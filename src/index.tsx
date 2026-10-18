@@ -406,19 +406,27 @@ async function readSession(
     };
   }
   // Rotation: every authenticated page view mints a fresh token and deletes
-  // the old row in the same statement. A replayed cookie finds no row: guest.
+  // the old row in the same statement. A replayed cookie finds no row: guest
+  // (rotate resolves false for a revoked/expired/missing source — row
+  // ineligible stays guest, never an outage). Any rotation *error* is an
+  // outage, never a silent guest: classified database failures propagate as
+  // themselves, generic errors normalize to a plain Error so the callers'
+  // existing opaque-fallback boundary (plain Error => outage, named
+  // non-outage => 500) renders the honest outage treatment without leaking
+  // driver details or swallowing genuine programming errors from other reads.
   const statusKey = await store.statusHash(await hashToken(token));
   const replacement = newSessionToken();
-  const rotated = await store
-    .rotate(await hashToken(token), {
+  let rotated: boolean;
+  try {
+    rotated = await store.rotate(await hashToken(token), {
       tokenHash: await hashToken(replacement),
       ...row,
       expiresAt: new Date(Date.now() + SESSION_TTL_SECONDS * 1000),
-    })
-    .catch((err) => {
-      if (isDatabaseUnavailable(err)) throw err;
-      return false;
     });
+  } catch (err) {
+    if (isDatabaseUnavailable(err)) throw err;
+    throw new Error("Session rotation unavailable");
+  }
   if (!rotated) return null;
   await enableAuthStatus(c, store, await hashToken(replacement), statusKey);
   await setSignedCookie(c, SESSION_COOKIE, replacement, c.env.SESSION_SECRET, {
@@ -467,6 +475,9 @@ app.get("/", async (c) => {
     (session) => ({ session, unavailable: false }),
     (err) => {
       // Keep the opaque session-failure fallback, not named non-outage exceptions.
+      // Rotation errors arrive already normalized (classified outage or plain
+      // Error), so they render sessionUnavailable here; a revoked/expired row
+      // already returned null above (guest) without reaching rotation.
       if (err instanceof Error && err.name !== "Error" && !isDatabaseUnavailable(err)) throw err;
       // Driver messages can contain DSNs or session identifiers; only a fixed diagnostic is safe.
       console.warn("Home session unavailable; serving as guest.", {
