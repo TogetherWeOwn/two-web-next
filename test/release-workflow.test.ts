@@ -103,4 +103,11 @@ describe("release on promote", () => {
     const out = execFileSync("node", ["ci/release-on-promote.selftest.cjs"], { encoding: "utf8" });
     expect(out).toContain("all tests passed");
   });
+
+  it("repairs a historical release without moving Latest backwards", () => {
+    const out = execFileSync("node", ["ci/release-on-promote-latest.acceptance.cjs"], {
+      encoding: "utf8",
+    });
+    expect(out).toContain("all tests passed");
+  });
 });
