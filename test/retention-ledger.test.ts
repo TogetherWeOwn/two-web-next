@@ -520,7 +520,9 @@ describe("retention ledger mechanisms (memory, no DB)", () => {
     );
     // Bounded oldest-first batch, off the admission path.
     expect(service).toContain("ORDER BY id LIMIT 1000 FOR UPDATE SKIP LOCKED");
-    expect(service).toContain("DELETE FROM web_throttle_hits USING candidates");
+    expect(service).toContain(
+      "DELETE FROM web_throttle_hits USING (SELECT id FROM web_throttle_hits",
+    );
     const doc = read("docs/member-erasure.md");
     expect(doc).toContain("THROTTLE_COUNTER_RETENTION_MINUTES = 5");
   });

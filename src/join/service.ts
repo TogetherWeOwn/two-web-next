@@ -116,7 +116,7 @@ export async function checkJoinThrottle(
   // admission (the generic middleware catch) or a 500 on the direct join path
   // (no catch there).
   try {
-    await sql`WITH candidates AS (SELECT id FROM web_throttle_hits WHERE at < now() - make_interval(mins => ${THROTTLE_COUNTER_RETENTION_MINUTES}) ORDER BY id LIMIT 1000 FOR UPDATE SKIP LOCKED) DELETE FROM web_throttle_hits USING candidates WHERE web_throttle_hits.id = candidates.id`;
+    await sql`DELETE FROM web_throttle_hits USING (SELECT id FROM web_throttle_hits WHERE at < now() - make_interval(mins => ${THROTTLE_COUNTER_RETENTION_MINUTES}) ORDER BY id LIMIT 1000 FOR UPDATE SKIP LOCKED) AS candidates WHERE web_throttle_hits.id = candidates.id`;
   } catch {
     // Housekeeping failed; the verdict below was already decided.
     console.warn("Join throttle prune failed; keeping the decided verdict.");
