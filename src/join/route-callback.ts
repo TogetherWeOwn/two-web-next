@@ -16,6 +16,7 @@
 import type { Hono } from "hono";
 import { deleteCookie, getSignedCookie } from "hono/cookie";
 import { DiscordError, exchangeCode, failureMeta, fetchUser } from "../discord";
+import { hasOversizedOAuthParams } from "../oauth-code-state-length";
 import type { Env } from "../env";
 import { inviteDestination } from "../invite";
 import { recordJoinResult } from "../return-journey";
@@ -92,6 +93,21 @@ export function registerJoinCallbackRoutes(
     clearJourney();
     const code = c.req.query("code");
     const state = c.req.query("state");
+    // Same inbound bound as the auth callback: refuse oversized code/state
+    // before any journey consume, exchange, or session work. Refusals keep
+    // today's path, so the error param is peeked first and oversized maps to
+    // the existing expired-link recovery with its bounded log line.
+    if (!c.req.query("error") && hasOversizedOAuthParams(code, state)) {
+      console.warn("discord token exchange failed on the join journey", {
+        exception: "InvalidState",
+        source,
+        outcome: "expired",
+      });
+      return recover(
+        "Join link expired",
+        "That join link expired. Approvals last ten minutes — try again below.",
+      );
+    }
     const store =
       state && expected && state === expected ? await hooks.storeFor(c).catch(() => null) : null;
     const admitted =
