@@ -83,19 +83,22 @@ const fixtures = {
   "/discord": [302, null, "", "https://discord.gg/fixture"],
   "/profile": [302, null, "", "/auth/discord"],
   "/admin": [302, null, "", "/auth/discord"],
-  // Session-free public read API: collection envelope, one event, community
-  // snapshot, join handoff, and discovery document. Bodies mirror the
-  // acceptance healthy fixtures; the probe asserts each envelope shape and
-  // the OpenAPI marker, not fixture contents.
+  // Session-free public read API: collection envelope, one missing event
+  // (404 not_found, mirroring the real handler), community snapshot, join
+  // handoff, and discovery document. Bodies mirror the acceptance healthy
+  // fixtures; the probe asserts each envelope shape and the OpenAPI marker,
+  // not fixture contents.
   "/api/public/events": [
     200,
     "application/json",
     '{"data":[],"page":1,"limit":20,"meta":{"current_page":1,"per_page":20,"total":0,"last_page":1}}',
   ],
+  // The fixed probe key exists in no database, so like the real handler
+  // (src/public-data/routes.ts) the stub answers 404 not_found.
   "/api/public/events/00000000000000000000000001": [
-    200,
+    404,
     "application/json",
-    '{"event_key":"00000000000000000000000001","title":"Fixture game night","game":null,"description":"Brackets ] and braces } stay inside the row","starts_at":"2026-11-01T19:00:00.000Z","ends_at":"2026-11-01T22:00:00.000Z","starts_at_local":"2026-11-01 19:00","ends_at_local":"2026-11-01 22:00","timezone":"UTC","location":null,"capacity":null,"going_count":3,"status":"published","rsvp_open":true,"synced_to_discord":false}',
+    '{"error":{"code":"not_found","message":"No published event with that key."}}',
   ],
   "/api/public/community": [
     200,
@@ -405,25 +408,27 @@ for (const path of Object.keys(fixtures).filter((path) => fixtures[path][1])) {
   });
 }
 
-test("a broken single-event envelope served with HTTP 200 fails only that entry", async (t) => {
+test("a broken single-event error envelope served with HTTP 404 fails only that entry", async (t) => {
   const brokenBodies = [
-    // The public error envelope, mis-served as a success.
-    JSON.stringify({ error: { code: "not_found", message: "No published event with that key." } }),
-    // Empty object: no envelope at all.
-    "{}",
-    // A collection array instead of the single object.
-    "[]",
-    // Missing published status and handoff booleans.
-    JSON.stringify({ event_key: "00000000000000000000000001", title: "Fixture game night" }),
-    // Wrong-typed going_count.
+    // A success envelope where the missing-event error belongs.
     JSON.stringify({
       event_key: "00000000000000000000000001",
       title: "Fixture game night",
       status: "published",
       rsvp_open: true,
       synced_to_discord: false,
-      going_count: "3",
+      going_count: 3,
     }),
+    // Empty object: no envelope at all.
+    "{}",
+    // A collection array instead of the error object.
+    "[]",
+    // Wrong error code.
+    JSON.stringify({ error: { code: "unavailable", message: "Event data is unavailable." } }),
+    // Missing message.
+    JSON.stringify({ error: { code: "not_found" } }),
+    // Empty message.
+    JSON.stringify({ error: { code: "not_found", message: "" } }),
     // Not JSON at all.
     "event is temporarily unavailable",
   ];

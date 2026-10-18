@@ -170,10 +170,11 @@ export function handleProofRequest(request, env = {}) {
     });
   }
 
-  // Session-free public read API: collection envelope, one event, community
-  // snapshot, join handoff, and discovery document, mirroring the healthy
-  // fixtures in test/smoke.test.mjs. The real checker asserts each envelope
-  // shape and the OpenAPI marker, not fixture contents.
+  // Session-free public read API: collection envelope, one missing event
+  // (404 not_found), community snapshot, join handoff, and discovery
+  // document, mirroring the healthy fixtures in test/smoke.test.mjs. The
+  // real checker asserts each envelope shape and the OpenAPI marker, not
+  // fixture contents.
   if (path === "/api/public/events") {
     return new Response(
       '{"data":[],"page":1,"limit":20,"meta":{"current_page":1,"per_page":20,"total":0,"last_page":1}}',
@@ -184,11 +185,13 @@ export function handleProofRequest(request, env = {}) {
     );
   }
 
+  // The fixed probe key exists in no database: 404 not_found like the
+  // real handler (src/public-data/routes.ts).
   if (path === "/api/public/events/00000000000000000000000001") {
     return new Response(
-      '{"event_key":"00000000000000000000000001","title":"Fixture game night","game":null,"description":"Brackets ] and braces } stay inside the row","starts_at":"2026-11-01T19:00:00.000Z","ends_at":"2026-11-01T22:00:00.000Z","starts_at_local":"2026-11-01 19:00","ends_at_local":"2026-11-01 22:00","timezone":"UTC","location":null,"capacity":null,"going_count":3,"status":"published","rsvp_open":true,"synced_to_discord":false}',
+      '{"error":{"code":"not_found","message":"No published event with that key."}}',
       {
-        status: 200,
+        status: 404,
         headers: proofHeaders(env, { "content-type": "application/json; charset=UTF-8" }),
       },
     );

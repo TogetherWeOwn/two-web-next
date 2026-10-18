@@ -334,7 +334,8 @@ approved account and binding isolation before any remote mutation.
    `/sitemap_index.xml`, `/robots.txt`, `/.well-known/security.txt`,
    `/discord` (302), `/profile` (302),
    `/admin` (302/403), `/api/public/events` (200 JSON collection envelope),
-   `/api/public/events/<key>` (200 JSON single-event envelope),
+   `/api/public/events/<key>` (404 JSON not_found error envelope: the fixed
+   probe key exists in no database),
    `/api/public/community` (200 JSON community snapshot),
    `/api/public/join` (200 JSON join handoff),
    `/openapi.json` (200 JSON discovery document)

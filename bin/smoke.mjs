@@ -29,16 +29,21 @@ const routes = [
   { path: "/profile", statuses: [302], redirect: "login" },
   { path: "/admin", statuses: [302, 403], redirect: "login" },
   // Session-free public read API (anonymous by construction in
-  // src/public-data/routes.ts): the collection envelope, one event, the
-  // community snapshot, the join handoff, and the discovery document. No
-  // auth, no cookies, no flags; the session-gated /events.json stays out
-  // (staging-only bin/json-smoke.mjs covers it). The single-event probe
-  // uses an all-digit ULID so no secret scanner trips; the same literal
-  // must appear in the test fixtures.
+  // src/public-data/routes.ts): the collection envelope, one missing
+  // event, the community snapshot, the join handoff, and the discovery
+  // document. No auth, no cookies, no flags; the session-gated /events.json
+  // stays out (staging-only bin/json-smoke.mjs covers it). The single-event
+  // probe uses an all-digit ULID so no secret scanner trips; the same
+  // literal must appear in the test fixtures. That key is a valid
+  // PUBLIC_EVENT_ID carried by no migration, seed or src row, so no
+  // database has it and the real handler answers 404 not_found
+  // (src/public-data/routes.ts): the probe asserts that real contract —
+  // admission, key parsing, cache bypass, the DB lookup and the static
+  // error envelope — instead of a success body no environment serves.
   { path: "/api/public/events", statuses: [200], type: "application/json" },
   {
     path: "/api/public/events/00000000000000000000000001",
-    statuses: [200],
+    statuses: [404],
     type: "application/json",
   },
   { path: "/api/public/community", statuses: [200], type: "application/json" },
@@ -522,32 +527,31 @@ export async function smoke(
         }
       }
       if (route.path.startsWith("/api/public/events/")) {
-        // Single-event envelope (src/public-data/contracts.ts
-        // PublicApiEventDto): one object, never an array, with a string
-        // event_key, a string title, status published, boolean rsvp_open
-        // and synced_to_discord, and a going_count that is null (rollup
-        // unavailable) or a finite number — never 0 by default. An error
-        // envelope, an empty object, a collection array, wrong-typed
-        // fields, or a non-JSON body fails this entry only. Do not print
-        // response bodies into deploy logs: the actual side stays fixed.
+        // Missing-event error envelope (src/public-data/contracts.ts
+        // PublicDataErrorDto): the fixed probe key exists in no database,
+        // so the real handler answers 404 with { error: { code:
+        // "not_found", message } } (src/public-data/routes.ts). The probe
+        // pins the code and a non-empty message, not the message text. A
+        // 200 success body, an empty object, a collection array, a wrong
+        // error code, a missing message, or a non-JSON body fails this
+        // entry only. Do not print response bodies into deploy logs: the
+        // actual side stays a fixed string.
         try {
           const data = JSON.parse(body);
+          const error =
+            data !== null && typeof data === "object" && !Array.isArray(data)
+              ? data.error
+              : undefined;
           const valid =
-            data !== null &&
-            typeof data === "object" &&
-            !Array.isArray(data) &&
-            typeof data.event_key === "string" &&
-            data.event_key.length > 0 &&
-            typeof data.title === "string" &&
-            data.status === "published" &&
-            typeof data.rsvp_open === "boolean" &&
-            typeof data.synced_to_discord === "boolean" &&
-            (typeof data.going_count === "number"
-              ? Number.isFinite(data.going_count)
-              : data.going_count === null);
+            error !== null &&
+            typeof error === "object" &&
+            !Array.isArray(error) &&
+            error.code === "not_found" &&
+            typeof error.message === "string" &&
+            error.message.length > 0;
           check(
             valid,
-            "single-event envelope with event_key and published status",
+            "missing-event error envelope with not_found code",
             "valid JSON with unexpected public envelope shape",
           );
         } catch {

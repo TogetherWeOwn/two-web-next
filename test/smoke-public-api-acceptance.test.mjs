@@ -27,12 +27,15 @@ import { SMOKE_SECURITY_TXT_EXPIRES, smoke } from "../bin/smoke.mjs";
 //     missing or truncated envelope, non-numeric paging fields, or a
 //     non-JSON body served with HTTP 200 must fail this entry.
 //   - GET /api/public/events/00000000000000000000000001 expects HTTP
-//     200, Content-Type application/json, and the single-event object:
-//     a string event_key, a string title, status published, boolean
-//     rsvp_open and synced_to_discord, and a going_count that is null
-//     or a finite number. An error envelope, an empty object, a
-//     collection array, wrong-typed fields, or a non-JSON body served
-//     with HTTP 200 must fail this entry.
+//     404, Content-Type application/json, and the missing-event error
+//     envelope: an `error` object with code "not_found" and a non-empty
+//     message (src/public-data/routes.ts). The fixed probe key is a valid
+//     PUBLIC_EVENT_ID carried by no migration, seed or src row, so no
+//     database has it and the real handler answers not_found; the probe
+//     asserts that real contract, not a success body. A 200 success body,
+//     an empty object, a collection array, a wrong error code, a missing
+//     message, or a non-JSON body served with HTTP 404 must fail this
+//     entry.
 //   - GET /api/public/community expects HTTP 200, Content-Type
 //     application/json, and the community snapshot: member_count and
 //     online_count each null (collectors down, never 0) or finite
@@ -55,7 +58,7 @@ import { SMOKE_SECURITY_TXT_EXPIRES, smoke } from "../bin/smoke.mjs";
 //   probe-only addition mirroring the existing route-entry shape.
 // - Wire this file into the test:smoke script in package.json, and
 //   update the existing smoke selftest fixtures and route counts
-//   (18 -> 20) in the builder-owned test files.
+//   (20 -> 23) in the builder-owned test files.
 //
 // Hermetic only: every probe below talks to a loopback stub. No live
 // host, no workflow dispatch.
@@ -103,22 +106,10 @@ const populatedCollection = JSON.stringify({
   meta: { current_page: 1, per_page: 20, total: 1, last_page: 1 },
 });
 
-const healthySingle = JSON.stringify({
-  event_key: "00000000000000000000000001",
-  title: "Fixture game night",
-  game: null,
-  description: "Brackets ] and braces } stay inside the row",
-  starts_at: "2026-11-01T19:00:00.000Z",
-  ends_at: "2026-11-01T22:00:00.000Z",
-  starts_at_local: "2026-11-01 19:00",
-  ends_at_local: "2026-11-01 22:00",
-  timezone: "UTC",
-  location: null,
-  capacity: null,
-  going_count: 3,
-  status: "published",
-  rsvp_open: true,
-  synced_to_discord: false,
+// The fixed probe key exists in no database, so like the real handler
+// (src/public-data/routes.ts) the stub answers 404 not_found.
+const missingSingle = JSON.stringify({
+  error: { code: "not_found", message: "No published event with that key." },
 });
 
 const healthyCommunity = JSON.stringify({
@@ -181,7 +172,7 @@ const fixtures = {
     "<title>We cannot find that page — Together We Own</title>",
   ],
   "/api/public/events": [200, "application/json", healthyCollection],
-  "/api/public/events/00000000000000000000000001": [200, "application/json", healthySingle],
+  "/api/public/events/00000000000000000000000001": [404, "application/json", missingSingle],
   "/api/public/community": [200, "application/json", healthyCommunity],
   "/api/public/join": [200, "application/json", healthyJoin],
   "/openapi.json": [200, "application/json", healthyOpenApi],
@@ -466,20 +457,22 @@ test("a non-200 or non-JSON discovery response fails only the openapi entry", as
   }
 });
 
-test("a broken single-event envelope served with HTTP 200 fails only that entry", async (t) => {
+test("a broken single-event error envelope served with HTTP 404 fails only that entry", async (t) => {
   const brokenBodies = [
-    JSON.stringify({ error: { code: "not_found", message: "No published event with that key." } }),
-    "{}",
-    "[]",
-    JSON.stringify({ event_key: "00000000000000000000000001", title: "Fixture game night" }),
+    // A success envelope where the missing-event error belongs.
     JSON.stringify({
       event_key: "00000000000000000000000001",
       title: "Fixture game night",
       status: "published",
       rsvp_open: true,
       synced_to_discord: false,
-      going_count: "3",
+      going_count: 3,
     }),
+    "{}",
+    "[]",
+    JSON.stringify({ error: { code: "unavailable", message: "Event data is unavailable." } }),
+    JSON.stringify({ error: { code: "not_found" } }),
+    JSON.stringify({ error: { code: "not_found", message: "" } }),
     "event is temporarily unavailable",
   ];
   for (const body of brokenBodies) {
@@ -498,13 +491,38 @@ test("a broken single-event envelope served with HTTP 200 fails only that entry"
   }
 });
 
-test("a null going_count passes (rollup unavailable reads as unknown, never 0)", async (t) => {
+test("a 200 single-event success or a non-JSON 404 fails only that entry", async (t) => {
+  const mutations = [
+    (result) => {
+      result.status = 200;
+      result.body = JSON.stringify({
+        event_key: "00000000000000000000000001",
+        title: "Fixture game night",
+        status: "published",
+        rsvp_open: true,
+        synced_to_discord: false,
+        going_count: 3,
+      });
+    },
+    (result) => {
+      result.headers["content-type"] = "text/html; charset=UTF-8";
+      result.headers["x-robots-tag"] = "noindex, nofollow";
+    },
+  ];
+  for (const mutate of mutations) {
+    const { url } = await stub(t, serve("/api/public/events/00000000000000000000000001", mutate));
+    const result = await run(url);
+    assertOnlyRouteFails(result, "/api/public/events/00000000000000000000000001");
+    assert.match(result.output, /^PASS \/api\/public\/events$/m, result.output);
+    assert.match(result.output, /^PASS \/openapi\.json$/m, result.output);
+  }
+});
+
+test("a not_found message variant still passes (only the code is pinned)", async (t) => {
   const { url } = await stub(
     t,
     serve("/api/public/events/00000000000000000000000001", (result) => {
-      const data = JSON.parse(result.body);
-      data.going_count = null;
-      result.body = JSON.stringify(data);
+      result.body = JSON.stringify({ error: { code: "not_found", message: "Gone." } });
     }),
   );
   const result = await run(url);
