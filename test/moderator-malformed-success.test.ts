@@ -84,7 +84,10 @@ describe("moderator recompute contains malformed successful Discord responses", 
     await expect(recomputeModerator(opts)).resolves.toBe(false);
     expectLookup(fetch);
     expect(diagnostics).toEqual([
-      { level: "warn", args: ["moderator recompute lookup returned non-JSON"] },
+      {
+        level: "warn",
+        args: ["moderator recompute lookup returned non-JSON", { guild_id: opts.guildId }],
+      },
     ]);
   });
 
@@ -105,7 +108,10 @@ describe("moderator recompute contains malformed successful Discord responses", 
     await expect(recomputeModerator(opts)).resolves.toBe(false);
     expectLookup(fetch);
     expect(diagnostics).toEqual([
-      { level: "warn", args: ["moderator recompute lookup returned non-JSON"] },
+      {
+        level: "warn",
+        args: ["moderator recompute lookup returned non-JSON", { guild_id: opts.guildId }],
+      },
     ]);
   });
 
@@ -136,7 +142,12 @@ describe("moderator recompute contains malformed successful Discord responses", 
       expect(diagnostics).toEqual(
         status === 404
           ? []
-          : [{ level: "warn", args: ["moderator recompute lookup failed", { status }] }],
+          : [
+              {
+                level: "warn",
+                args: ["moderator recompute lookup failed", { status, guild_id: opts.guildId }],
+              },
+            ],
       );
     },
   );

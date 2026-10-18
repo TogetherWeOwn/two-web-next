@@ -29,7 +29,7 @@ export async function fetchMemberRoles(
   });
   if (res.status === 404) return null;
   if (!res.ok) {
-    console.warn("moderator recompute lookup failed", { status: res.status });
+    console.warn("moderator recompute lookup failed", { status: res.status, guild_id: guildId });
     return null;
   }
   // Discord answers JSON here; a non-JSON edge response is a failed lookup, not a crash.
@@ -37,7 +37,7 @@ export async function fetchMemberRoles(
   try {
     body = (await res.json()) as { roles?: unknown; joined_at?: unknown };
   } catch {
-    console.warn("moderator recompute lookup returned non-JSON");
+    console.warn("moderator recompute lookup returned non-JSON", { guild_id: guildId });
     return null;
   }
   const roles = Array.isArray(body.roles)
