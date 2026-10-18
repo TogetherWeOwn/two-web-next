@@ -172,7 +172,7 @@ the binding is fixed: treat a production warning as stuck, not late.
 | Field | Meaning and safe values |
 | --- | --- |
 | `eventKey` | The event whose write-back carrier was not sent |
-| `request_id` | The validated HTTP request ID (`safeRequestId`: a Cloudflare Ray ID or a generated ULID). Absent when the write came through the agent-events ingress (`POST /api/agent-events`, `src/agent-events/route.ts`), which calls `dispatchWriteBack` without the request ID; correlate those by `eventKey` and `agent_event_audits` instead. Never a secret or a member identity |
+| `request_id` | The validated HTTP request ID (`safeRequestId`: a Cloudflare Ray ID or a generated ULID). Agent-events ingress write-backs (`POST /api/agent-events`, `src/agent-events/route.ts`) carry the same validated ID; absent only when the write has no request context (scheduled/reconcile), where `eventKey` and `agent_event_audits` remain the fallback. Never a secret or a member identity |
 
 A successful HTTP response is not evidence of Discord synchronization: the
 request succeeded against the database, but Discord has not been told yet.
@@ -185,7 +185,7 @@ present, `request_id`. Then check whether a later sync landed: join through
 or compare revisions with
 `SELECT sync_revision, synced_revision, discord_event_id FROM events WHERE event_key = '<eventKey>'`
 (`synced_revision` catching up to `sync_revision` means reconcile recovered
-it). For an agent-published event, which has no `request_id` on the warning,
+it). For an agent-published event whose warning has no `request_id` (no request context),
 find the ingress request with
 `SELECT * FROM agent_event_audits WHERE event_key = '<eventKey>'`. Then compare
 the deployed Workers' queue producer bindings with `wrangler.jsonc`: the

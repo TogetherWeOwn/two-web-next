@@ -75,7 +75,7 @@ export const agentEventsAdmission: MiddlewareHandler<IngressEnv> = async (c, nex
     // write-back the admin path uses, and read observes through the signed bot
     // client (fail-closed when unconfigured).
     const effects: IngressEffects = {
-      writeBack: (wb) => dispatchWriteBack(c.env, wb),
+      writeBack: (wb) => dispatchWriteBack(c.env, wb, c.get("requestId")),
       readEvent: signedEventReader({
         baseUrl: c.env.BOT_ENDPOINT_URL,
         keyId: c.env.BOT_KEY_ID,
