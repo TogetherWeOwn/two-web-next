@@ -512,10 +512,11 @@ describe("rsvp-button SSR/server drift", () => {
       [42, VIEWER_TWO],
     ]);
     const attendeeReads = p.queries.filter((q) => q.sql.includes('inner join "users"'));
-    // The member-only attendees projection excludes nameless rows in SQL.
+    // The member-only attendees projection excludes nameless rows in SQL and
+    // retrieves at most one page per request (zero-offset reads elide OFFSET).
     expect(attendeeReads.map((q) => q.params)).toEqual([
-      [42, "going", ""],
-      [42, "going", ""],
+      [42, "going", "", 100],
+      [42, "going", "", 100],
     ]);
   });
 
