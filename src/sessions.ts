@@ -316,6 +316,16 @@ export async function hashToken(token: string): Promise<string> {
   return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("");
 }
 
+/** Exact minted bearer shape: `two_` + 43 base64url chars (47 total).
+ * Check this on the verified cookie value before hashing or any store call:
+ * malformed input is guest/no-op with zero store reads. Never a substitute
+ * for signature verification — always verify first, then shape-check. */
+const SESSION_TOKEN_RE = /^two_[A-Za-z0-9_-]{43}$/;
+
+export function isValidSessionToken(token: unknown): token is string {
+  return typeof token === "string" && SESSION_TOKEN_RE.test(token);
+}
+
 /** `two_` + 32 random bytes, base64url. ~256 bits: unguessable, URL/cookie-safe. */
 export function newSessionToken(): string {
   const bytes = crypto.getRandomValues(new Uint8Array(32));
