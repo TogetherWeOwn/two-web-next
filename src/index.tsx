@@ -44,6 +44,7 @@ import { registerMcpRoutes } from "./mcp/routes";
 import { registerPublicApiRoutes } from "./public-data/routes";
 import { takeJoinResult } from "./return-journey";
 import { buildSecurityTxt } from "./security-txt";
+import { enforceOn } from "./access-log";
 import {
   configReadiness,
   revisionReadiness,
@@ -565,10 +566,14 @@ app.get("/up", async (c) => {
     c.header("cache-control", "no-store");
     // Two slots on the one client: the queue read cannot starve the DB read.
     const sql = connect(url, 2);
+    // Member-access-log enforcement signal: informational only, never moves
+    // the status code. Parsing mirrors enforceOn exactly — no raw value or
+    // variable name is echoed into the body.
     const body = await upBody(
       sql ? () => withHealthReadTimeout(sql, pgQueueDepth) : null,
       sql,
       configReadiness(c.env),
+      enforceOn(c.env) ? "enforcing" : "log_only",
     );
     // Informational only: the revision never moves the status code.
     return c.json({ ...body, ...revisionReadiness(c.env.CF_VERSION_METADATA) }, upHttpStatus(body));
