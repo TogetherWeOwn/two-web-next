@@ -45,12 +45,13 @@ const FIELDS = {
 };
 
 describe("throttle envelope (pure, two-web TOG-6788)", () => {
-  it("answers one 429 shape: reason, message, retry_after, Retry-After, no stack", () => {
-    const a = throttleEnvelope(42);
+  it("answers one 429 shape: reason, message, request_id, retry_after, Retry-After, no stack", () => {
+    const a = throttleEnvelope(42, "req-429-pin-001");
     expect(a.status).toBe(429);
     expect(a.body).toEqual({
       reason: "rate_limited",
       message: "Too many requests. Try again in 42 seconds.",
+      request_id: "req-429-pin-001",
       retry_after: 42,
     });
     expect(a.headers).toEqual({ "Retry-After": "42" });
@@ -59,8 +60,9 @@ describe("throttle envelope (pure, two-web TOG-6788)", () => {
   });
 
   it("floors the wait at one second", () => {
-    expect(throttleEnvelope(0).body.retry_after).toBe(1);
-    expect(throttleEnvelope(0).headers).toEqual({ "Retry-After": "1" });
+    expect(throttleEnvelope(0, "req-429-pin-002").body.retry_after).toBe(1);
+    expect(throttleEnvelope(0, "req-429-pin-002").headers).toEqual({ "Retry-After": "1" });
+    expect(throttleEnvelope(0, "req-429-pin-002").body.request_id).toBe("req-429-pin-002");
   });
 });
 
