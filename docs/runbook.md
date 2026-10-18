@@ -539,6 +539,17 @@ Postgres migrations, data writes, Discord side effects, queue messages or
 external-resource changes; keep the release workflow from redeploying the bad
 head. Record the rollback deployment and previous/current version IDs.
 
+Post-rollback smoke proves ordinary traffic identity: it passes the recorded
+`ROLLBACK_VERSION_ID` to `bin/smoke.mjs --expected-version-id` inside the
+existing bounded retry loop, and `/up` `revision.version_id` must equal that
+UUID on unpinned ordinary traffic even when every health assertion is green.
+This sends no `Cloudflare-Workers-Version-Overrides` version-override header,
+so it proves normal routing, not pinned canary routing. Limit: Worker
+versions predating the `/up` revision marker carry no `revision` identity and
+cannot pass this check; covering those needs the target version's own checker.
+A failed verification is not reported as an undone rollback and never triggers
+a roll-forward; it leaves the rolled-back version live for operator diagnosis.
+
 A failed post-promotion public-route verification in `deploy-production`
 blocks the release tag but leaves the promoted version live at 100%: the
 gradual action's automatic rollback only covers failures inside the promotion
