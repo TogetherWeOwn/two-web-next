@@ -157,6 +157,20 @@ test("CLI refuses a malformed version override without probing", async (t) => {
   assert.equal(requests.length, 0);
 });
 
+test("CLI refuses a present version override without a value", async (t) => {
+  const { url, requests } = await stub(t);
+  const valid = 'two-web-next-production="22345678-1234-1234-1234-123456789abc"';
+  for (const args of [
+    [url, "--version-override"],
+    [url, "--version-override", valid, "--version-override"],
+  ]) {
+    const result = await cli(args);
+    assert.equal(result.code, 2, `${JSON.stringify(args)}: ${result.output}`);
+    assert.match(result.output, /version-override/);
+  }
+  assert.equal(requests.length, 0);
+});
+
 for (const path of Object.keys(fixtures)) {
   test(`rejects wrong status on ${path} and continues through remaining routes`, async (t) => {
     const { url, requests } = await stub(t, (route, result) => {
