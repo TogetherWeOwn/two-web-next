@@ -76,7 +76,7 @@ describe.skipIf(!process.env.DATABASE_URL)("scheduled worker (test Postgres)", (
     fixture = undefined;
   });
 
-  it("keeps accepted ledger rows if a later send rolls back the flight", async () => {
+  it("isolates a throwing key and keeps accepted ledger rows in the same pass", async () => {
     const accepted: QueueMessage[] = [];
     const env = envFor(async (body) => {
       const message = body as QueueMessage;
@@ -84,9 +84,10 @@ describe.skipIf(!process.env.DATABASE_URL)("scheduled worker (test Postgres)", (
         throw new Error("later send failed");
       accepted.push(message);
     });
-    await expect(handleScheduled(controller(RECONCILE_CRON), env)).rejects.toThrow(
-      "later send failed",
-    );
+    // One poison key is isolated per key: the pass resolves instead of
+    // rejecting, the accepted row stays, and the failed send's compensated
+    // ledger row does not.
+    await handleScheduled(controller(RECONCILE_CRON), env);
     expect(accepted).toHaveLength(1);
     const rows = await sql`select job_id, key from queue_jobs`;
     expect(rows).toHaveLength(1);
@@ -94,8 +95,9 @@ describe.skipIf(!process.env.DATABASE_URL)("scheduled worker (test Postgres)", (
     expect(
       await sql`select key from job_unique_locks where key = ${uniqueKey("first")}`,
     ).toHaveLength(1);
-    // Flight rollback has released the advisory lock; this accepted job stays
-    // observable while the failed send's compensated ledger row does not.
+    // Per-key isolation has released the failed send's advisory lock and
+    // compensated its ledger row; this accepted job stays observable while
+    // the failed send's compensated ledger row does not.
     state.keys = [];
     await handleScheduled(controller(RECONCILE_CRON), env);
     expect(await sql`select job_id from queue_jobs`).toHaveLength(1);
