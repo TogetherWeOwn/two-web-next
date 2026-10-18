@@ -147,8 +147,11 @@ describe("GET /auth/discord/callback is never cacheable", () => {
   });
 
   it("the consent-denied and generic OAuth error redirects", async () => {
+    // State admission gates the denied copy: neither row presents a state
+    // param, so both keep the generic banner (the admitted denial redirect is
+    // pinned in auth-admission.test.ts).
     for (const [query, location] of [
-      ["?error=access_denied", "/?n=signin_denied"],
+      ["?error=access_denied", "/?n=signin_failed"],
       ["?error=server_error&error_description=boom", "/?n=signin_failed"],
     ] as const) {
       const { cookie } = await start(isolated());
