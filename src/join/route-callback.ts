@@ -15,7 +15,7 @@
 // kind and the outcome — never a message, never a body.
 import type { Hono } from "hono";
 import { deleteCookie, getSignedCookie } from "hono/cookie";
-import { exchangeCode, failureMeta, fetchUser } from "../discord";
+import { DiscordError, exchangeCode, failureMeta, fetchUser } from "../discord";
 import type { Env } from "../env";
 import { inviteDestination } from "../invite";
 import { recordJoinResult } from "../return-journey";
@@ -149,16 +149,24 @@ export function registerJoinCallbackRoutes(
         outcome,
       });
       await recordAttempt(sql, { outcome: "error", source, requestId: null, discordId: null });
-      return outcome === "expired"
-        ? recover(
-            "Join approval expired",
-            "That Discord approval expired. Try again or use the invite below.",
-          )
-        : recover(
-            "Discord is unreachable",
-            "We couldn't reach Discord to complete the join. Try again in a moment, or use the invite link below.",
-            503,
-          );
+      if (outcome === "expired") {
+        return recover(
+          "Join approval expired",
+          "That Discord approval expired. Try again or use the invite below.",
+        );
+      }
+      const recovery = await recover(
+        "Discord is unreachable",
+        "We couldn't reach Discord to complete the join. Try again in a moment, or use the invite link below.",
+        503,
+      );
+      // Header only: status and copy never change. A usable 429 backoff flows
+      // into `Retry-After`; absent/unusable values and every non-429 path keep
+      // today's headerless response.
+      const retryAfter =
+        err instanceof DiscordError && err.kind === "rate_limited" ? err.retryAfter : undefined;
+      if (retryAfter !== undefined) recovery.headers.set("Retry-After", String(retryAfter));
+      return recovery;
     }
 
     const deps = (c.env as EnvWithJoin).JOIN_DEPS;

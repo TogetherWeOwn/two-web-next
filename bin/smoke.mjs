@@ -83,6 +83,16 @@ export function assertVersionOverride(value) {
   return value;
 }
 
+// Candidate UUID pinned by a validated version-override header value:
+// worker-name="<lowercase version uuid>". A green HTTP response does not
+// prove which Worker version served it (Cloudflare falls back to normal
+// routing when the override is ignored), so the /up revision.version_id
+// must equal this UUID or the probe fails.
+export function versionIdFromOverride(value) {
+  assertVersionOverride(value);
+  return value.slice(value.indexOf('="') + 2, -1);
+}
+
 // RFC 9116 field parsing for the security.txt probe: "#" lines are comments,
 // field names are case-insensitive, and matching is on whole field values, so
 // a commented-out or foreign line cannot satisfy an assertion by substring.
@@ -162,6 +172,8 @@ export async function smoke(
     );
   }
   if (versionOverride !== undefined) assertVersionOverride(versionOverride);
+  const expectedVersionId =
+    versionOverride === undefined ? undefined : versionIdFromOverride(versionOverride);
   const overrideHeaders =
     versionOverride === undefined
       ? {}
@@ -275,6 +287,27 @@ export async function smoke(
             "JSON /up db:ok, pending_migrations:0, status and queue.status",
             "valid JSON with unexpected health shape",
           );
+          // Version attribution (S4/M35): when the probe pins a candidate
+          // version, /up.revision.version_id must equal its UUID. Cloudflare
+          // falls back to normal routing when the override is ignored, so a
+          // healthy old version (or a missing/malformed revision) fails even
+          // though every readiness assertion above would pass. Commit equality
+          // is not identity: only the exact version UUID passes.
+          if (versionOverride !== undefined) {
+            const served =
+              data?.revision !== null &&
+              typeof data?.revision === "object" &&
+              !Array.isArray(data?.revision)
+                ? data.revision.version_id
+                : undefined;
+            check(
+              served === expectedVersionId,
+              `revision.version_id ${expectedVersionId}`,
+              served === undefined
+                ? "missing revision.version_id"
+                : `revision.version_id ${served}`,
+            );
+          }
           const severity = data?.queue?.ready_wait_severity;
           const readyAge = data?.queue?.oldest_ready_wait_age_seconds;
           const readyAgeLabel = typeof readyAge === "number" ? readyAge : "unknown";

@@ -71,6 +71,17 @@ test("healthy fixture passes the real smoke checker across all 18 routes", async
   assert.match(logs.at(-1), /^smoke: 18 routes, 0 failed assertions$/);
 });
 
+test("healthy fixture passes the real smoke checker with a matching version override", async (t) => {
+  const { base } = await serveFixture(t, fixtureEnv("ok"));
+  const logs = [];
+  const ok = await smoke(base, {
+    log: (line) => logs.push(line),
+    allowIndexable: false,
+    versionOverride: `${PROOF_WORKER_NAME}="${CANDIDATE}"`,
+  });
+  assert.equal(ok, true, logs.join("\n"));
+});
+
 test("fail-up fixture is rejected by the real smoke checker", async (t) => {
   const { base } = await serveFixture(t, fixtureEnv("fail-up"));
   const logs = [];
