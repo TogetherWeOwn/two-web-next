@@ -134,6 +134,71 @@
     "/join/discord?next=" +
       encodeURIComponent(typeof location !== "undefined" ? location.pathname : "/"),
   );
+  // Unknown-outcome recovery keeps the member on the attendee page they
+  // were already on (?attendees=N), never dropping to page 1. Only the
+  // live page URL is trusted, and only when its path is this event: mount
+  // data is untrusted (SSR returnTo is for sign-in, never the refresh),
+  // so an external or different-event href falls back to the bare event.
+  function isSameEventPath(pathname) {
+    if (typeof pathname !== "string") return false;
+    try {
+      if (decodeURIComponent(pathname) === "/e/" + eventKey) return true;
+    } catch {
+      return false;
+    }
+    return pathname === "/e/" + encodeURIComponent(eventKey);
+  }
+  function attendeesSuffix(search) {
+    if (typeof search !== "string" || search === "") return "";
+    var raw = null;
+    try {
+      var q = search.charAt(0) === "?" ? search.slice(1) : search;
+      raw = new URLSearchParams(q).get("attendees");
+    } catch {
+      return "";
+    }
+    if (typeof raw !== "string" || !/^[1-9]\d*$/.test(raw) || raw === "1") return "";
+    return "?attendees=" + raw;
+  }
+  function safeRefreshHref() {
+    var base = "/e/" + encodeURIComponent(eventKey);
+    try {
+      var loc =
+        typeof location !== "undefined" && location
+          ? location
+          : typeof document !== "undefined" && document.location
+            ? document.location
+            : null;
+      if (loc && isSameEventPath(loc.pathname)) return base + attendeesSuffix(loc.search || "");
+    } catch {
+      // fall through to the validated returnTo below, then the bare event
+    }
+    // Validated SSR returnTo fallback (the sign-in next param): same event only.
+    try {
+      var rawLogin = root.getAttribute("data-login-url");
+      if (typeof rawLogin === "string") {
+        var marker = "?next=";
+        var at = rawLogin.indexOf(marker);
+        if (at !== -1) {
+          var next = null;
+          try {
+            next = decodeURIComponent(rawLogin.slice(at + marker.length));
+          } catch {
+            next = null;
+          }
+          if (typeof next === "string" && next.charAt(0) === "/" && next.charAt(1) !== "/") {
+            var qAt = next.indexOf("?");
+            var nPath = qAt === -1 ? next : next.slice(0, qAt);
+            var nSearch = qAt === -1 ? "" : next.slice(qAt);
+            if (isSameEventPath(nPath)) return base + attendeesSuffix(nSearch);
+          }
+        }
+      }
+    } catch {
+      // fall through to the bare event
+    }
+    return base;
+  }
   var url = "/events/" + encodeURIComponent(eventKey) + "/rsvp";
 
   var controls = root.querySelector("[data-rsvp-form]") || root;
@@ -425,7 +490,7 @@
     el.appendChild(document.createTextNode(" "));
     var link = document.createElement("a");
     link.setAttribute("data-testid", TESTID.refresh);
-    link.href = "/e/" + encodeURIComponent(eventKey);
+    link.href = safeRefreshHref();
     link.textContent = COPY.refresh;
     el.appendChild(link);
   }
