@@ -28,7 +28,8 @@ import {
   withheld,
   type DiagnosticRecord,
 } from "./helpers/diagnostic-stream";
-import { createMemorySessionStore } from "../src/sessions";
+import { createMemorySessionStore, type SessionStore } from "../src/sessions";
+import { __resetAlertRateLimitForTests } from "../src/alerts";
 import {
   DiscordError,
   exchangeCode,
@@ -657,6 +658,195 @@ describe("join callback: post-exchange bot failures stay redacted (degraded reco
     const { env: e } = isolatedJoin();
     const { logs } = await joinRoundTrip(e, botRefusalWithMarkers);
     console.warn("planted leak", { detail: TOK });
+    let failure: unknown;
+    try {
+      streamClean(logs, JOIN_ROUTE);
+    } catch (error) {
+      failure = error;
+    }
+    expect(failure).toBeInstanceOf(Error);
+    expect((failure as Error).message).toContain("marker found in diagnostic stream");
+    expect((failure as Error).message).not.toContain(TOK);
+    expect((failure as Error).message).not.toContain(SECRET);
+  });
+});
+
+describe("join callback: post-bot-success downstream failures stay redacted", () => {
+  const MODERATOR_LOOKUP_LOG = "moderator recompute lookup failed";
+  const MEMBER_PATH = "/api/v10/guilds/326474832151838730/members/42";
+
+  type RecordedCall = { url: string; method: string };
+
+  /** Successful exchange + user + bot add; the moderator GET answer is injected. */
+  function stubPostBotDiscord(moderatorAnswer: () => Response | Promise<Response>) {
+    const calls: RecordedCall[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+        const url =
+          typeof input === "string" ? input : input instanceof Request ? input.url : input.href;
+        const method = init?.method ?? (input instanceof Request ? input.method : "GET");
+        calls.push({ url, method });
+        if (url.endsWith("/oauth2/token")) return Response.json({ access_token: TOK });
+        if (url.endsWith("/users/@me"))
+          return Response.json({ id: "42", username: "rick", global_name: "Rick", avatar: null });
+        if (url.includes("/members/42") && method === "PUT")
+          return new Response(null, { status: 201 });
+        if (url.includes("/members/42")) return moderatorAnswer();
+        throw new Error(`unexpected Discord call ${method} ${url}`);
+      }),
+    );
+    return calls;
+  }
+
+  /** Capture the session row issueSession writes, to prove the moderator flag. */
+  function captureIssuedSessions(e: Env) {
+    const store = (e as unknown as { SESSION_STORE: SessionStore }).SESSION_STORE;
+    const created: { moderator: boolean; userId: string; member: boolean }[] = [];
+    const origCreate = store.create.bind(store);
+    const origReplace = store.replace.bind(store);
+    store.create = async (s) => {
+      created.push({
+        moderator: (s as { moderator: boolean }).moderator,
+        userId: (s as { userId: string }).userId,
+        member: (s as { member: boolean }).member,
+      });
+      return origCreate(s);
+    };
+    store.replace = async (oldHash, s) => {
+      created.push({
+        moderator: (s as { moderator: boolean }).moderator,
+        userId: (s as { userId: string }).userId,
+        member: (s as { member: boolean }).member,
+      });
+      return origReplace(oldHash, s);
+    };
+    return created;
+  }
+
+  async function postBotRoundTrip(e: Env, moderatorAnswer: () => Response | Promise<Response>) {
+    const logs = captureDiagnosticStream();
+    const calls = stubPostBotDiscord(moderatorAnswer);
+    const start = await app.request("/join/discord", {}, e);
+    const state = new URL(start.headers.get("location")!).searchParams.get("state")!;
+    const res = await app.request(
+      `/join/callback?code=abc&state=${state}`,
+      { headers: { cookie: cookiesFrom(start) } },
+      e,
+    );
+    return { logs, calls, res };
+  }
+
+  it("moderator transport throw after a successful bot add: 302, non-moderator session, clean stream", async () => {
+    const { fake, env: e } = isolatedJoin();
+    const created = captureIssuedSessions(e);
+    const { logs, calls, res } = await postBotRoundTrip(e, () => {
+      throw new TypeError(`failed sending ${TOK}`, { cause: new Error(`nested ${SECRET}`) });
+    });
+    expect(res.status).toBe(302);
+    expect(res.headers.get("location")).toBe("/?n=joined");
+    expect(calls.map((c) => new URL(c.url).pathname)).toEqual([
+      "/api/v10/oauth2/token",
+      "/api/v10/users/@me",
+      MEMBER_PATH,
+      MEMBER_PATH,
+    ]);
+    expect(calls[2]!.method).toBe("PUT");
+    expect(fake.attempts).toEqual([
+      { outcome: "added", source: null, requestId: null, discordId: "42" },
+    ]);
+    const setCookie = res.headers.getSetCookie().join("\n");
+    expect(setCookie).toMatch(/__Host-two_session=[^;]/);
+    expect(created).toEqual([{ moderator: false, userId: "42", member: true }]);
+    const home = await app.request("/", { headers: { cookie: cookiesFrom(res) } }, e);
+    expect(await home.text()).toContain("Rick");
+    expect(channelCounts(logs)).toMatchObject({ info: 0, debug: 0, warn: 0, error: 0 });
+    streamClean(logs, JOIN_ROUTE);
+    leakFree(res.headers.get("location"), [...res.headers], setCookie, fake.attempts, created);
+  });
+
+  it("moderator 500 with a marker body after a successful bot add: 302, status-only log, clean stream", async () => {
+    const { fake, env: e } = isolatedJoin();
+    const created = captureIssuedSessions(e);
+    const { logs, calls, res } = await postBotRoundTrip(e, () =>
+      Response.json(
+        { roles: ["1546777856984481792"], diagnostic: `boom ${TOK} ${SECRET}` },
+        { status: 500 },
+      ),
+    );
+    expect(res.status).toBe(302);
+    expect(res.headers.get("location")).toBe("/?n=joined");
+    expect(calls.map((c) => new URL(c.url).pathname)).toEqual([
+      "/api/v10/oauth2/token",
+      "/api/v10/users/@me",
+      MEMBER_PATH,
+      MEMBER_PATH,
+    ]);
+    expect(fake.attempts).toEqual([
+      { outcome: "added", source: null, requestId: null, discordId: "42" },
+    ]);
+    expect(recordsFor(logs, MODERATOR_LOOKUP_LOG).map((r) => r.args)).toEqual([
+      [MODERATOR_LOOKUP_LOG, { status: 500 }],
+    ]);
+    expect(channelCounts(logs)).toMatchObject({ info: 0, debug: 0, warn: 1, error: 0 });
+    expect(created).toEqual([{ moderator: false, userId: "42", member: true }]);
+    const setCookie = res.headers.getSetCookie().join("\n");
+    expect(setCookie).toMatch(/__Host-two_session=[^;]/);
+    streamClean(logs, JOIN_ROUTE, [MODERATOR_LOOKUP_LOG]);
+    leakFree(res.headers.get("location"), [...res.headers], setCookie, fake.attempts, created);
+  });
+
+  it("session-create throw after a successful bot add: 500, no usable session, clean stream", async () => {
+    __resetAlertRateLimitForTests();
+    const { fake, env: e } = isolatedJoin();
+    const store = (e as unknown as { SESSION_STORE: SessionStore }).SESSION_STORE;
+    const nested = new Error(`nested ${SECRET}`, {
+      cause: new Map([["detail", TOK]]),
+    });
+    const failure = new Error(`insert failed ${TOK}`, { cause: nested });
+    store.create = async () => {
+      throw failure;
+    };
+    store.replace = async () => {
+      throw failure;
+    };
+    const logs = captureDiagnosticStream();
+    const calls = stubPostBotDiscord(() =>
+      Response.json({ roles: [], joined_at: "2024-01-01T00:00:00Z" }),
+    );
+    const start = await app.request("/join/discord", {}, e);
+    const state = new URL(start.headers.get("location")!).searchParams.get("state")!;
+    const res = await app.request(
+      `/join/callback?code=abc&state=${state}`,
+      { headers: { cookie: cookiesFrom(start) } },
+      e,
+    );
+    const html = await res.text();
+    expect(res.status).toBe(500);
+    expect(html).toContain("Something broke on our side");
+    expect(calls.map((c) => new URL(c.url).pathname)).toEqual([
+      "/api/v10/oauth2/token",
+      "/api/v10/users/@me",
+      MEMBER_PATH,
+      MEMBER_PATH,
+    ]);
+    expect(fake.attempts).toEqual([
+      { outcome: "added", source: null, requestId: null, discordId: "42" },
+    ]);
+    const setCookie = res.headers.getSetCookie().join("\n");
+    expect(setCookie).not.toContain("__Host-two_session=");
+    const home = await app.request("/", { headers: { cookie: cookiesFrom(res) } }, e);
+    expect(await home.text()).not.toContain("Rick");
+    streamClean(logs, JOIN_ROUTE);
+    leakFree(html, [...res.headers], setCookie, fake.attempts);
+  });
+
+  it("negative control: a planted post-bot-success marker fails the same inspection without printing marker bytes", async () => {
+    const { env: e } = isolatedJoin();
+    const { logs } = await postBotRoundTrip(e, () =>
+      Response.json({ roles: [], joined_at: "2024-01-01T00:00:00Z" }),
+    );
+    console.warn("planted leak", new Error("outer", { cause: new Error(`inner ${TOK}`) }));
     let failure: unknown;
     try {
       streamClean(logs, JOIN_ROUTE);
