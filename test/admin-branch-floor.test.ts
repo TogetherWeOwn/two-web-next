@@ -443,7 +443,7 @@ describe.skipIf(!process.env.DATABASE_URL)("admin store failure and rollback pat
   }
 
   it("refuses a capacity below occupied seats and leaves the row and audit alone", async () => {
-    const row = await seedEvent({ eventKey: "cap-floor-event", capacity: null });
+    const row = await seedEvent({ eventKey: "01K00000000000000000000001", capacity: null });
     await db.insert(rsvps).values([
       { eventId: row.id, userId: "100000000000000201", status: "going" },
       { eventId: row.id, userId: "100000000000000202", status: "going" },
@@ -458,7 +458,7 @@ describe.skipIf(!process.env.DATABASE_URL)("admin store failure and rollback pat
 
   it("refuses to publish an ended draft with the ends_at reason", async () => {
     const row = await seedEvent({
-      eventKey: "ended-draft-event",
+      eventKey: "01K00000000000000000000002",
       startsAt: new Date("2020-01-01T20:00:00Z"),
       endsAt: new Date("2020-01-01T22:00:00Z"),
     });
@@ -472,7 +472,7 @@ describe.skipIf(!process.env.DATABASE_URL)("admin store failure and rollback pat
   });
 
   it("keeps a cancelled event cancelled: publish is refused, never resurrected", async () => {
-    const row = await seedEvent({ eventKey: "terminal-event", status: "cancelled" });
+    const row = await seedEvent({ eventKey: "01K00000000000000000000003", status: "cancelled" });
     const res = await post(`/events/${row.eventKey}/publish`, {});
     expect(res.status).toBe(422);
     expect(await res.text()).toContain("stays cancelled");
@@ -482,7 +482,7 @@ describe.skipIf(!process.env.DATABASE_URL)("admin store failure and rollback pat
 
   it("refuses to publish a past event through the same transition page", async () => {
     const row = await seedEvent({
-      eventKey: "past-event",
+      eventKey: "01K00000000000000000000004",
       status: "past",
       startsAt: new Date("2020-01-01T20:00:00Z"),
       endsAt: new Date("2020-01-01T22:00:00Z"),
@@ -493,12 +493,12 @@ describe.skipIf(!process.env.DATABASE_URL)("admin store failure and rollback pat
   });
 
   it("refuses RSVP pause on a draft and reopen on an ended event", async () => {
-    const draft = await seedEvent({ eventKey: "pause-draft-event" });
+    const draft = await seedEvent({ eventKey: "01K00000000000000000000005" });
     const paused = await post(`/events/${draft.eventKey}/rsvp-pause`, {});
     expect(paused.status).toBe(422);
     expect(await paused.text()).toContain("Only published events");
     const ended = await seedEvent({
-      eventKey: "reopen-ended-event",
+      eventKey: "01K00000000000000000000006",
       status: "published",
       rsvpOpen: false,
       startsAt: new Date("2020-01-01T20:00:00Z"),
@@ -511,7 +511,7 @@ describe.skipIf(!process.env.DATABASE_URL)("admin store failure and rollback pat
 
   it("pausing twice writes one audit row: the repeat is a no-op redirect", async () => {
     const row = await seedEvent({
-      eventKey: "double-pause-event",
+      eventKey: "01K00000000000000000000007",
       status: "published",
       rsvpOpen: true,
     });
@@ -606,10 +606,10 @@ describe.skipIf(!process.env.DATABASE_URL)("admin store failure and rollback pat
 
   it("404s missing events, featured slots, and join attempts without audit writes", async () => {
     for (const [method, path] of [
-      ["GET", "/events/no-such-key"],
-      ["POST", "/events/no-such-key"],
-      ["POST", "/events/no-such-key/publish"],
-      ["POST", "/events/no-such-key/rsvp-pause"],
+      ["GET", "/events/01K00000000000000000000008"],
+      ["POST", "/events/01K00000000000000000000008"],
+      ["POST", "/events/01K00000000000000000000008/publish"],
+      ["POST", "/events/01K00000000000000000000008/rsvp-pause"],
       ["GET", "/featured/999999"],
       ["POST", "/featured/999999"],
       ["POST", "/featured/999999/delete"],
@@ -620,7 +620,7 @@ describe.skipIf(!process.env.DATABASE_URL)("admin store failure and rollback pat
       const res =
         method === "GET"
           ? await get(path)
-          : await post(path, method === "POST" && path.startsWith("/events/no") ? FORM : {});
+          : await post(path, method === "POST" && path.startsWith("/events/") ? FORM : {});
       expect(res.status, `${method} ${path}`).toBe(404);
     }
     expect(await auditDescriptions(db)).toEqual([]);
