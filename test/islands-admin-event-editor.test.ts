@@ -85,6 +85,33 @@ describe("Admin event editor navigation guard", () => {
     expect(b.navigate("sort").preventDefault).toHaveBeenCalledOnce();
   });
 
+  it("restores departure protection after an interrupted Save unlocks without another input", () => {
+    const b = browser();
+    b.values.set("title", "Unsaved draft");
+    b.submit();
+    // No departure, input, or pageshow before the ten-second lock lapses.
+    b.fireTimers();
+    const departure = b.navigate("sort");
+    expect(departure.preventDefault).toHaveBeenCalledOnce();
+    expect(departure.returnValue).toBe("");
+  });
+
+  it("gives a retried Save after timeout its own one-shot departure exemption", () => {
+    const b = browser();
+    b.values.set("title", "Unsaved draft");
+    b.submit();
+    b.fireTimers();
+    expect(b.navigate("save").preventDefault).not.toHaveBeenCalled();
+    expect(b.navigate("sort").preventDefault).toHaveBeenCalledOnce();
+  });
+
+  it("keeps clean navigation unprompted after an interrupted Save unlocks", () => {
+    const b = browser();
+    b.submit();
+    b.fireTimers();
+    expect(b.navigate("sort").preventDefault).not.toHaveBeenCalled();
+  });
+
   it("re-arms on edits if Save navigation never reaches beforeunload", () => {
     const b = browser();
     b.submit();
