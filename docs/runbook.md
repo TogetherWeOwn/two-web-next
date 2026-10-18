@@ -1255,7 +1255,10 @@ body has no `config` key. The Discord pair is presence-checked only: a wrong
 value still reports ready and fails at sign-in. `SESSION_SECRET` additionally
 enforces the documented strength floor (at least 32 characters, no
 leading/trailing whitespace); a weak value answers 503 with
-`config: "weak"` and a log line naming the requirement, never the value. Fix
+`config: "weak"` and a log line naming the requirement, never the value. A weak
+`SESSION_SECRET` takes precedence over a missing Discord secret: when both hold,
+`/up` reports `config: "weak"`, and fixing the weak secret can then surface
+`config: "missing"` for the still-absent secret. Fix
 by setting the secret (an Operator step
 for staging/production), not by weakening the probe.
 
