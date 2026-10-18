@@ -513,12 +513,17 @@ passwords, tokens, or other credentials while handling the request.
    join attempts in one transaction, following the
    [member-erasure operator runbook](member-erasure.md). Signing in again
    later starts a fresh record.
-4. Name the two exceptions, which stay tamper-proof as evidence: past
+4. Name the full exception inventory from the published policy's Deletion
+   section, not just the two tamper-proof evidence records: past
    member-data access-log entries (never rewritten for one person; they
-   delete themselves after 90 days) and the moderator edit history (it keeps
-   the name of the moderator who made each change). Discord-side data (roles,
-   messages, tickets) is out of scope here and is handled through Discord's
-   own moderation tools.
+   delete themselves after 90 days), the moderator edit history (it keeps
+   the name of the moderator who made each change), moderator-content
+   authorship marks (a Discord ID kept on the content row while that row
+   exists), and residual Discord-keyed rate-limit counters (cleaned up
+   lazily when a later request that runs cleanup arrives, never erased
+   on request). Discord-side data
+   (roles, messages, tickets) is out of scope here and is handled through
+   Discord's own moderation tools.
 
 Do not promise a completion time; the operator runs the command and confirms
 the per-table counts.

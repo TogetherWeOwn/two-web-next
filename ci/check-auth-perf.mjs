@@ -482,6 +482,21 @@ function selftest() {
     jsonEnvelope.some((f) => f.includes("content-type") && f.includes("is not HTML")),
     jsonEnvelope.join("; "),
   );
+  const canonicalAdminBody = assertJourney({
+    id: "moderator-admin",
+    samples: [
+      {
+        ...adminGood,
+        html: `<html><body><nav aria-label="Administration"></nav><footer>moderators only</footer><link rel="canonical" href="https://example.com/admin/events"></body></html>`,
+      },
+    ],
+    budget: adminBudget,
+  });
+  check(
+    "canonical-linked admin body fails",
+    canonicalAdminBody.some((f) => f.includes("canonical")),
+    canonicalAdminBody.join("; "),
+  );
   check(
     "empty samples fail",
     assertJourney({ id: "member-rsvp", samples: [], budget: memberBudget }).length > 0,
