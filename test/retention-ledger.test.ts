@@ -20,7 +20,7 @@ import { fileURLToPath } from "node:url";
 import { getTableColumns } from "drizzle-orm";
 import type postgres from "postgres";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { boardViewLogs } from "../src/db/admin-schema";
+import { boardViewLogs, eventSyncAttempts } from "../src/db/admin-schema";
 import {
   backoffFor,
   BOARD_VIEW_LOG_RETENTION_DAYS,
@@ -66,6 +66,7 @@ function deleteWindows(body: string, table: string): string[] {
   const anyTableRef = String.raw`(?:(?:"?[a-z_][\w$]*"?)\s*\.\s*)?"?[a-z_][\w$]*"?`;
   const symbols: Record<string, string> = {
     activity_log: "activityLog",
+    event_sync_attempts: "eventSyncAttempts",
     queue_jobs: "queueJobs",
     queue_failed_jobs: "queueFailedJobs",
     job_unique_locks: "jobUniqueLocks",
@@ -141,6 +142,20 @@ function deleteWindows(body: string, table: string): string[] {
     while ((m = ormRe.exec(body)) !== null) out.push(m[0]);
   }
   return out;
+}
+
+// Flags a module that writes sync-attempt rows: raw SQL inserts/updates of
+// event_sync_attempts, or the Drizzle table-object form
+// db.insert(eventSyncAttempts)/db.update(eventSyncAttempts), optionally
+// schema-qualified. Selects (reads) never match, and deletes are the
+// deleteWindows scanner's job, not this one.
+function writesSyncAttempts(body: string): boolean {
+  if (
+    body.includes("insert into event_sync_attempts") ||
+    body.includes("update event_sync_attempts")
+  )
+    return true;
+  return /\.\s*(?:insert|update)\s*\(\s*(?:[\w$]+\s*\.\s*)*eventSyncAttempts\b/.test(body);
 }
 
 function normalizeSqlWindow(statement: string): string {
@@ -374,6 +389,68 @@ describe("retention ledger doc rows", () => {
     expect(doc).toContain("until the next acquire of the same key");
     expect(doc).toContain("unbounded for keys never re-dispatched");
   });
+
+  it("publishes the sync-attempt lifecycle: writers, readers, and no age prune", () => {
+    const fields = Object.values(getTableColumns(eventSyncAttempts)).map((column) => column.name);
+    expect(fields).toEqual([
+      "idempotency_key",
+      "event_id",
+      "revision",
+      "action",
+      "payload",
+      "mirrored_at",
+      "state",
+      "request_attempts",
+      "next_attempt_at",
+    ]);
+    const rows = read("docs/retention-ledger.md")
+      .split("\n")
+      .filter((line) => /^\| `event_sync_attempts`(?:\s|\|)/.test(line));
+    expect(rows, "one dedicated sync-attempt row").toHaveLength(1);
+    const row = rows[0]!;
+    for (const claim of [
+      "`event_sync_attempts` (`public`, Drizzle `eventSyncAttempts`)",
+      "No age window in code",
+      "retained indefinitely",
+      "late redelivery cannot replay edits",
+      "ON DELETE cascade",
+      "no app path deletes events",
+      "Sole writer is `pgEventStore`",
+      "`prepareSync`",
+      "`claimSync`",
+      "`deferSync`",
+      "`completeSync`",
+      "`failSync`",
+      "`event_sync_attempts_pending_idx`",
+      "`obsolete`",
+      "`needsSync`",
+      "`pendingSync`",
+      "`hasFailedSync`",
+      "`stale_keys`",
+      "`failed_sync`",
+      "`pending_sync`",
+      "No prune store exists",
+      "`PruneStores`",
+      "`pruneModelTables`",
+      "six age-pruned tables plus the session sweep only",
+      "no retention-days constant names sync attempts",
+      "only in test fixtures as cleanup",
+      "../drizzle/1020_event-sync-revisions.sql",
+      "../src/db/admin-schema.ts",
+      "../src/jobs/events.ts",
+      "../src/jobs/cron.ts",
+      "../src/jobs/postgres.ts",
+      "../src/admin/source-evidence.ts",
+      "runbook.md#queue-containment-drain-and-failed-job-replay",
+    ]) {
+      expect(row, `sync-attempt row must pin: ${claim}`).toContain(claim);
+    }
+    const scope = read("docs/retention-ledger.md")
+      .split("\n")
+      .filter((line) => line.startsWith("- "));
+    expect(scope.some((line) => line.includes("`event_sync_attempts`"))).toBe(true);
+    expect(read("docs/retention-ledger.md")).not.toContain("documented in a later slice");
+  });
 });
 
 describe("retention ledger mechanisms (memory, no DB)", () => {
@@ -458,6 +535,99 @@ describe("retention ledger mechanisms (memory, no DB)", () => {
     }
     expect(offenders, `no src file may prune activity_log: ${offenders.join(", ")}`).toEqual([]);
   });
+
+  it("sync attempts have no age prune: no constant, no store, no src delete", () => {
+    // No retention-days constant names sync attempts; every named window is 90 days elsewhere.
+    expect(read("src/jobs/constants.ts")).not.toMatch(
+      /sync.?attempt.*retention|retention.*sync.?attempt/i,
+    );
+    // The prune wiring never mentions the attempts table: six age-pruned
+    // stores plus the session sweep, and sync attempts is not among them.
+    expect(read("src/jobs/cron.ts")).not.toContain("event_sync_attempts");
+    expect(read("src/jobs/postgres.ts")).not.toContain("event_sync_attempts");
+    const pruned = [
+      "agentEventAudits",
+      "accessLog",
+      "joinAttempts",
+      "idempotencyKeys",
+      "searchLog",
+      "boardViews",
+    ];
+    for (const store of pruned) {
+      expect(read("src/jobs/cron.ts"), `prune must still drain ${store}`).toContain(
+        `(c) => stores.${store}.pruneOlderThan(c),`,
+      );
+    }
+    // Repo-wide: raw SQL deletes/truncates of the attempts table are forbidden
+    // in src (test fixtures may delete for cleanup). Updates are lifecycle
+    // transitions, not retention deletes, and stay allowed.
+    const offenders: string[] = [];
+    for (const file of listTsFiles(join(root, "src"))) {
+      const body = readFileSync(file, "utf8");
+      if (deleteWindows(body, "event_sync_attempts").length > 0) offenders.push(file);
+    }
+    expect(
+      offenders,
+      `no src file may delete event_sync_attempts: ${offenders.join(", ")}`,
+    ).toEqual([]);
+  });
+
+  it("pins the sync-attempt writer, pending index, schema, and readers", () => {
+    // Sole writer: only the event store inserts or updates attempt rows, in
+    // raw SQL today or the Drizzle table-object form tomorrow.
+    const writers = listTsFiles(join(root, "src")).filter((file) =>
+      writesSyncAttempts(readFileSync(file, "utf8")),
+    );
+    expect(writers.map((file) => file.replace(root, "").replace(/^\/+/, ""))).toEqual([
+      "src/jobs/events.ts",
+    ]);
+    const store = read("src/jobs/events.ts");
+    expect(store).toContain("insert into event_sync_attempts");
+    expect(store).toContain("update event_sync_attempts set state = 'succeeded'");
+    expect(store).toContain("update event_sync_attempts set state = 'failed'");
+    expect(store).toContain(
+      "request_attempts = a.request_attempts + case when candidate.obsolete then 0 else 1 end",
+    );
+    expect(store).toContain("update event_sync_attempts set next_attempt_at = ${nextAttemptAt}");
+    // One pending row per event: the partial unique index fences retries.
+    expect(read("src/db/admin-schema.ts")).toContain(
+      'uniqueIndex("event_sync_attempts_pending_idx")',
+    );
+    expect(read("drizzle/1020_event-sync-revisions.sql")).toContain(
+      'CREATE TABLE "event_sync_attempts"',
+    );
+    expect(read("drizzle/1020_event-sync-revisions.sql")).toContain("ON DELETE cascade");
+    // Readers: recovery/eligibility checks plus the admin evidence verifier.
+    for (const probe of ["needsSync", "staleEventKeys", "pendingSync", "hasFailedSync"]) {
+      expect(store, `event store must read via ${probe}`).toContain(probe);
+    }
+    const evidence = read("src/admin/source-evidence.ts");
+    expect(evidence).toContain("from event_sync_attempts");
+    expect(evidence).toContain('statement: "pending_sync"');
+    expect(evidence).toContain('statement: "failed_sync"');
+    expect(evidence).toContain('statement: "stale_keys"');
+  });
+
+  it("flags Drizzle table-object writes to sync attempts, not reads or deletes", () => {
+    // A future db.insert(eventSyncAttempts)/db.update(eventSyncAttempts) in
+    // any src module must join the sole-writer set above; reads and deletes
+    // belong to the reader pins and the deleteWindows scanner instead.
+    for (const body of [
+      "await db.insert(eventSyncAttempts).values({ eventId })",
+      "await db.insert(schema.eventSyncAttempts).values({ eventId })",
+      "await db.update(eventSyncAttempts).set({ state: 'failed' })",
+      "await sql`insert into event_sync_attempts (event_id) values (${id})`",
+      "await sql`update event_sync_attempts set state = 'failed'`",
+    ])
+      expect(writesSyncAttempts(body), `writer: ${body}`).toBe(true);
+    for (const body of [
+      "await db.select().from(eventSyncAttempts)",
+      "await sql`select 1 from event_sync_attempts where state = 'pending'`",
+      "await db.delete(eventSyncAttempts)",
+      "await db.insert(queueJobs).values(job)",
+    ])
+      expect(writesSyncAttempts(body), `not a writer: ${body}`).toBe(false);
+  });
 });
 
 describe("retention ledger queue mechanisms (no DB)", () => {
@@ -487,11 +657,27 @@ describe("retention ledger queue mechanisms (no DB)", () => {
       ["sql`truncate table ${queueJobs}`", "queue_jobs"],
       ["const { queueJobs: jobs } = schema; db.delete(jobs)", "queue_jobs"],
       ["const { queueJobs: jobs } = schema; const q2 = jobs; db.delete(q2)", "queue_jobs"],
+      // Sync-attempt table-object deletes ride the same symbol mapping.
+      ["db.delete(eventSyncAttempts)", "event_sync_attempts"],
+      ["import { eventSyncAttempts as a } from './schema'; db.delete(a)", "event_sync_attempts"],
+      ["const t = schema.eventSyncAttempts; db.delete(t)", "event_sync_attempts"],
+      ["db.execute(sql`delete from ${eventSyncAttempts} where id = ${id}`)", "event_sync_attempts"],
+      [
+        "db.execute(sql`delete from ${schema.eventSyncAttempts} where id = ${id}`)",
+        "event_sync_attempts",
+      ],
     ];
     for (const [body, table] of cases)
       expect(deleteWindows(body, table), `${table}: ${body}`).not.toEqual([]);
     expect(deleteWindows("insert into activity_log values (1)", "activity_log")).toEqual([]);
     expect(deleteWindows("select * from queue_jobs", "queue_jobs")).toEqual([]);
+    // Inserts are the writer path, not deletes: they must not trip the scanner.
+    expect(
+      deleteWindows(
+        "await db.insert(eventSyncAttempts).values({ eventId })",
+        "event_sync_attempts",
+      ),
+    ).toEqual([]);
   });
 
   it("pins the .tsx directory walk: listTsFiles covers route/page modules", () => {
