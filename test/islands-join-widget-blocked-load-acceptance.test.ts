@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { runInNewContext } from "node:vm";
 import { URL as NodeURL } from "node:url";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, type Mock, vi } from "vitest";
 
 // Acceptance suite for blocked widget navigations that still fire `load`.
 //
@@ -62,8 +62,8 @@ type El = {
   onload?: ((e: unknown) => void) | null;
   onerror?: ((e: unknown) => void) | null;
   removed: boolean;
-  focus: ReturnType<typeof vi.fn>;
-  blur: ReturnType<typeof vi.fn>;
+  focus: Mock<() => void>;
+  blur: Mock<() => void>;
   setAttribute: (k: string, v: string) => void;
   getAttribute: (k: string) => string | null;
   addEventListener: (k: string, fn: (e: unknown) => void) => void;
@@ -152,8 +152,7 @@ function page() {
       },
       remove() {
         el.removed = true;
-        if (el.parent)
-          el.parent.children = el.parent.children.filter((c) => c !== el);
+        if (el.parent) el.parent.children = el.parent.children.filter((c) => c !== el);
       },
       contains(n) {
         return n === el || el.children.some((c) => c.contains(n));
@@ -300,10 +299,9 @@ describe("join-widget acceptance: blocked navigation that fires load", () => {
     f?.fire("load");
     expect(p.guidance()).toBe(false);
     p.fireTimers();
-    expect(
-      p.guidance(),
-      "the timer must survive load so a blocked embed still gets guidance",
-    ).toBe(true);
+    expect(p.guidance(), "the timer must survive load so a blocked embed still gets guidance").toBe(
+      true,
+    );
   });
 
   it("timer guidance is beside the frame, not a replacement for it", () => {
