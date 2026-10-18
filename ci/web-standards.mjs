@@ -7,7 +7,8 @@ import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
+import { pathToFileURL } from "node:url";
 
 const origin = "http://127.0.0.1:8787";
 const fixtureKey = "01ARZ3NDEKTSV4RRFFQ69G5FAV";
@@ -107,6 +108,138 @@ export function linkFindings(links, matchers, publicDir = "public") {
     );
   }
   return out;
+}
+
+// Per-route settlement deadline: headers AND the full body must settle within
+// this long, or the route becomes a route-named timeout finding instead of
+// stalling the collector until the enclosing workflow times out. It is a total
+// deadline, not an idle timer: a dripping body cannot keep resetting it.
+export const ROUTE_READ_TIMEOUT_MS = 15_000;
+
+function routeTimeoutError(timeoutMs) {
+  const err = new Error(`route read timed out after ${timeoutMs}ms`);
+  err.code = "ROUTE_READ_TIMEOUT";
+  return err;
+}
+
+async function cancelBody(res) {
+  try {
+    await res?.body?.cancel?.();
+  } catch {
+    // Best-effort cleanup only; the timeout error below carries the failure.
+  }
+}
+
+async function readBodyText(res, refs) {
+  if (!res.body) return "";
+  const reader = res.body.getReader();
+  if (refs) refs.reader = reader;
+  const textChunks = [];
+  const byteChunks = [];
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (typeof value === "string") textChunks.push(value);
+      else if (value) byteChunks.push(value);
+    }
+  } finally {
+    try {
+      reader.releaseLock();
+    } catch {
+      // Already cancelled on the deadline path; nothing left to release.
+    }
+  }
+  if (!byteChunks.length) return textChunks.join("");
+  const total = byteChunks.reduce((n, c) => n + c.byteLength, 0);
+  const merged = new Uint8Array(total);
+  let at = 0;
+  for (const c of byteChunks) {
+    merged.set(c, at);
+    at += c.byteLength;
+  }
+  return textChunks.join("") + new TextDecoder().decode(merged);
+}
+
+export async function fetchRoute(fetchImpl, url, options = {}) {
+  const timeoutMs = options.timeoutMs ?? ROUTE_READ_TIMEOUT_MS;
+  const controller = new AbortController();
+  let failDeadline;
+  const deadline = new Promise((_, reject) => {
+    failDeadline = reject;
+  });
+  // The deadline always has a listener, so a late settlement after the caller
+  // moved on never surfaces as an unhandled rejection.
+  deadline.catch(() => {});
+  const refs = {};
+  let res;
+  const timer = setTimeout(() => {
+    try {
+      controller.abort();
+    } catch {
+      // Aborting is best-effort; the deadline rejection below is the signal.
+    }
+    // A body that ignores the abort signal still settles: cancel the reader so
+    // the raced read below resolves instead of hanging on the stream.
+    try {
+      const cancelled = refs.reader?.cancel();
+      if (cancelled?.catch) cancelled.catch(() => {});
+    } catch {
+      // Reader already released or never created; the deadline still applies.
+    }
+    failDeadline(routeTimeoutError(timeoutMs));
+  }, timeoutMs);
+  timer.unref?.();
+  try {
+    res = await Promise.race([
+      fetchImpl(url, { redirect: "manual", signal: controller.signal }),
+      deadline,
+    ]);
+    const html = await Promise.race([readBodyText(res, refs), deadline]);
+    clearTimeout(timer);
+    return { status: res.status, headers: res.headers, html };
+  } catch (err) {
+    clearTimeout(timer);
+    try {
+      await refs.reader?.cancel();
+    } catch {
+      // Already cancelled on the deadline path; nothing further to release.
+    }
+    await cancelBody(res);
+    if (err?.code === "ROUTE_READ_TIMEOUT") throw err;
+    // The fetch settled (abort rejection, reset connection) only because the
+    // deadline fired first: report the timeout, not the abort fallout.
+    if (controller.signal.aborted) throw routeTimeoutError(timeoutMs);
+    throw err;
+  }
+}
+
+export async function collectStandards(options = {}) {
+  const {
+    base,
+    routes,
+    fetchImpl = (...args) => fetch(...args),
+    timeoutMs = ROUTE_READ_TIMEOUT_MS,
+  } = options;
+  const findings = [];
+  const links = new Set();
+  for (const path of routes) {
+    let status;
+    let headers;
+    let html;
+    try {
+      ({ status, headers, html } = await fetchRoute(fetchImpl, base + path, { timeoutMs }));
+    } catch (err) {
+      if (err?.code === "ROUTE_READ_TIMEOUT")
+        findings.push(`${path}: timed out after ${timeoutMs}ms`);
+      else findings.push(`${path}: ${err?.message || "request failed"}`);
+      continue;
+    }
+    if (status !== 200) findings.push(`${path}: status ${status}`);
+    findings.push(...headerFindings(path, headers), ...htmlFindings(path, html));
+    for (const link of internalLinks(html)) links.add(link);
+  }
+  return { findings, links };
 }
 
 function selftest() {
@@ -246,14 +379,15 @@ async function main() {
   let totalCollected = 0;
   try {
     if (child) await waitForServer(child);
-    const links = new Set();
-    for (const path of routes) {
-      const res = await fetch(base + path, { redirect: "manual" });
-      const html = await res.text();
-      if (res.status !== 200) findings.push(`${path}: status ${res.status}`);
-      findings.push(...headerFindings(path, res.headers), ...htmlFindings(path, html));
-      for (const link of internalLinks(html)) links.add(link);
-    }
+    // Every route read runs under the per-route deadline; a timed-out route
+    // becomes a route-named finding and later routes still run, so the summary
+    // below is always reached.
+    const { findings: routeFindings, links } = await collectStandards({
+      base,
+      routes,
+      timeoutMs: ROUTE_READ_TIMEOUT_MS,
+    });
+    findings.push(...routeFindings);
     const matchers = routeMatchers();
     const collected = [...links];
     totalCollected = collected.length;
@@ -282,5 +416,16 @@ async function main() {
   process.exit(findings.length ? 1 : 0);
 }
 
+// Import-safe: running the collector (fixture spawn, process.exit) happens only
+// when this file is the invoked script. Importing it for fetchRoute /
+// collectStandards never starts work.
+const invokedDirectly = (() => {
+  try {
+    return !!process.argv[1] && pathToFileURL(resolve(process.argv[1])).href === import.meta.url;
+  } catch {
+    return false;
+  }
+})();
+
 if (process.argv.includes("--selftest")) selftest();
-else await main();
+else if (invokedDirectly) await main();

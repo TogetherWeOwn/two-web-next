@@ -71,7 +71,7 @@
     "drill:internal-action": "node --import ./bin/ts-hook.mjs bin/internal-action-drill.mjs",
     "lighthouse:quality": "node ci/lighthouse-quality-run.mjs",
     "standards": "node ci/web-standards.mjs",
-    "standards:selftest": "node ci/web-standards.mjs --selftest && node ci/lighthouse-summary.mjs --selftest && node ci/lighthouse-quality-run.mjs --selftest",
+    "standards:selftest": "node ci/web-standards.mjs --selftest && node --test ci/web-standards-route-timeout-acceptance.test.mjs && node ci/lighthouse-summary.mjs --selftest && node ci/lighthouse-quality-run.mjs --selftest",
     "audit:moderator-roles": "node --import ./bin/ts-hook.mjs bin/role-audit.mjs"
   },
   "dependencies": {
