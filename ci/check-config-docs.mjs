@@ -372,7 +372,7 @@ export function checkTailKeys(
 export function checkConfigDocs() {
   const env = readEnvKeys(resolve(root, "src/env.ts"), resolve(root, "tsconfig.json"));
   const wrangler = new Set(
-    ["wrangler.jsonc", "wrangler.local.jsonc"].flatMap((file) => [
+    ["wrangler.jsonc", "wrangler.local.jsonc", "wrangler.jobs.jsonc"].flatMap((file) => [
       ...readWranglerKeys(readFileSync(resolve(root, file), "utf8")),
     ]),
   );

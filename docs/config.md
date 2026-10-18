@@ -236,8 +236,9 @@ npm run config:check
 [`ci/check-config-docs.mjs`](../ci/check-config-docs.mjs) uses the locked
 TypeScript 7 native API to resolve `Env` and `JobsEnv` properties (including
 intersections/inheritance) and parses the actual JSONC Wrangler vars/bindings
-from `wrangler.jsonc` and `wrangler.local.jsonc`, including named-environment
-overrides if added. It separately resolves Tail `TailEnv` keys from
+from `wrangler.jsonc`, `wrangler.local.jsonc` and `wrangler.jobs.jsonc`,
+including named-environment overrides if added. It separately resolves Tail
+`TailEnv` keys from
 `tail/worker.ts`, Tail vars (names only) from `tail/wrangler.jsonc` top level
 and named environments without assuming inheritance, Tail worker service names
 and app `tail_consumers` services, and accepted app script names
