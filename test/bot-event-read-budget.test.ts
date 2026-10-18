@@ -111,10 +111,13 @@ const observe = (fetcher: typeof fetch) =>
 // single attempt is on the wire, so the budget advances below measure
 // transport time only.
 async function untilFetcherCalled(fetcher: ReturnType<typeof vi.fn<typeof fetch>>) {
-  await vi.waitFor(() => expect(fetcher.mock.calls.length).toBe(1), {
-    timeout: 5_000,
-    interval: 1,
-  });
+  // Zero-fake-ms poll: advanceTimersByTimeAsync(0) flushes microtasks/real
+  // crypto without advancing the fake clock, so the 2,500 ms budget measured
+  // below covers transport time only.
+  for (let i = 0; i < 500 && fetcher.mock.calls.length === 0; i++) {
+    await vi.advanceTimersByTimeAsync(0);
+  }
+  expect(fetcher.mock.calls.length).toBe(1);
 }
 
 // Wait (real time, zero fake milliseconds) for microtask-driven settlement;
