@@ -87,7 +87,7 @@ describe.skipIf(!process.env.DATABASE_URL)("scheduled worker (test Postgres)", (
     // One poison key is isolated per key: the pass resolves instead of
     // rejecting, the accepted row stays, and the failed send's compensated
     // ledger row does not.
-    await handleScheduled(controller(RECONCILE_CRON), env);
+    await expect(handleScheduled(controller(RECONCILE_CRON), env)).resolves.toBeUndefined();
     expect(accepted).toHaveLength(1);
     const rows = await sql`select job_id, key from queue_jobs`;
     expect(rows).toHaveLength(1);
