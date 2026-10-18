@@ -49,24 +49,47 @@ const modes: DisposalMode[] = ["resolves", "sync-throw", "rejects", "never-settl
 
 // The disposal error deliberately carries the token: no verdict, error,
 // result or diagnostic produced from it may ever surface that text.
-function makeCancel(mode: DisposalMode) {
+//
+// The cancel doubles are plain functions with a manual calls counter, never
+// vi.fn: @vitest/spy attaches its own .then(ok, err) to every Promise a mock
+// returns, which would itself handle a disposal rejection and so mask a
+// missing rejection handler in the probe. With a plain double, only the
+// probe's own handler can keep a rejecting cancel from surfacing as an
+// unhandledRejection.
+type CancelDouble = {
+  cancel: () => Promise<unknown>;
+  calls: () => number;
+};
+
+function makeCancel(mode: DisposalMode): CancelDouble {
+  let calls = 0;
+  const counted = (impl: () => Promise<unknown>) => (): Promise<unknown> => {
+    calls += 1;
+    return impl();
+  };
   switch (mode) {
     case "resolves":
-      return vi.fn(async () => undefined);
+      return { cancel: counted(async () => undefined), calls: () => calls };
     case "sync-throw":
-      return vi.fn(() => {
-        throw new Error(`dispose failed ${TOKEN}`);
-      });
+      return {
+        cancel: counted(() => {
+          throw new Error(`dispose failed ${TOKEN}`);
+        }),
+        calls: () => calls,
+      };
     case "rejects":
-      return vi.fn(async () => {
-        throw new Error(`dispose failed ${TOKEN}`);
-      });
+      return {
+        cancel: counted(async () => {
+          throw new Error(`dispose failed ${TOKEN}`);
+        }),
+        calls: () => calls,
+      };
     case "never-settles":
-      return vi.fn(() => new Promise<never>(() => {}));
+      return { cancel: counted(() => new Promise<never>(() => {})), calls: () => calls };
   }
 }
 
-function responseWith(status: number, cancel: ReturnType<typeof makeCancel>) {
+function responseWith(status: number, cancel: CancelDouble["cancel"]) {
   const stream = new ReadableStream({ start() {} });
   Object.defineProperty(stream, "cancel", { value: cancel });
   return new Response(stream, { status });
@@ -106,7 +129,7 @@ describe("alert probe response disposal is inert to the verdict", () => {
   it.each(modes)(
     "500 with both receipts succeeds when body disposal %s",
     async (mode) => {
-      const cancel = makeCancel(mode);
+      const { cancel, calls } = makeCancel(mode);
       const send = vi.fn(async () => responseWith(500, cancel));
       const result = await runProbe({
         ...inputs,
@@ -122,7 +145,7 @@ describe("alert probe response disposal is inert to the verdict", () => {
       });
       expect(JSON.stringify(result)).not.toContain(TOKEN);
       // Disposal is still attempted exactly once; dropping it is not inertness.
-      expect(cancel).toHaveBeenCalledTimes(1);
+      expect(calls()).toBe(1);
       // Exact staging target and token transport fences are retained.
       expect(send).toHaveBeenCalledWith(
         `${STAGING_URL}/__probe/alert`,
@@ -143,7 +166,7 @@ describe("alert probe response disposal is inert to the verdict", () => {
   it.each(modes)(
     "500 with only the error.alert receipt still reaches the timeout when disposal %s",
     async (mode) => {
-      const cancel = makeCancel(mode);
+      const { cancel, calls } = makeCancel(mode);
       const time = clock();
       const error = await caught(
         runProbe({
@@ -157,7 +180,7 @@ describe("alert probe response disposal is inert to the verdict", () => {
       await flush();
       expectCleanError(error, "BOTH");
       expect(time.pause).toHaveBeenCalled();
-      expect(cancel).toHaveBeenCalledTimes(1);
+      expect(calls()).toBe(1);
     },
     3000,
   );
@@ -165,7 +188,7 @@ describe("alert probe response disposal is inert to the verdict", () => {
   it.each(modes)(
     "500 with only the queue.failing receipt still reaches the timeout when disposal %s",
     async (mode) => {
-      const cancel = makeCancel(mode);
+      const { cancel, calls } = makeCancel(mode);
       const time = clock();
       const error = await caught(
         runProbe({
@@ -179,7 +202,7 @@ describe("alert probe response disposal is inert to the verdict", () => {
       await flush();
       expectCleanError(error, "BOTH");
       expect(time.pause).toHaveBeenCalled();
-      expect(cancel).toHaveBeenCalledTimes(1);
+      expect(calls()).toBe(1);
     },
     3000,
   );
@@ -187,7 +210,7 @@ describe("alert probe response disposal is inert to the verdict", () => {
   it.each(modes)(
     "500 with no receipts times out instead of cleanup manufacturing success when disposal %s",
     async (mode) => {
-      const cancel = makeCancel(mode);
+      const { cancel } = makeCancel(mode);
       const error = await caught(
         runProbe({
           ...inputs,
@@ -205,7 +228,7 @@ describe("alert probe response disposal is inert to the verdict", () => {
   it.each(modes)(
     "non-500 still refuses even with both receipts available when disposal %s",
     async (mode) => {
-      const cancel = makeCancel(mode);
+      const { cancel, calls } = makeCancel(mode);
       const error = await caught(
         runProbe({
           ...inputs,
@@ -216,19 +239,23 @@ describe("alert probe response disposal is inert to the verdict", () => {
       );
       await flush();
       expectCleanError(error, "HTTP 200");
-      expect(cancel).toHaveBeenCalledTimes(1);
+      expect(calls()).toBe(1);
     },
     3000,
   );
 
   it("a disposal rejection that lands after the verdict is swallowed without a trace", async () => {
     let rejectCancel!: (error: Error) => void;
-    const cancel = vi.fn(
-      () =>
-        new Promise<never>((_resolve, reject) => {
-          rejectCancel = reject;
-        }),
-    );
+    // Plain function, not vi.fn (see makeCancel): a spy would handle this
+    // late rejection itself, so the unhandled assertion below could not
+    // detect a missing rejection handler in the probe.
+    let cancelCalls = 0;
+    const cancel = (): Promise<never> => {
+      cancelCalls += 1;
+      return new Promise<never>((_resolve, reject) => {
+        rejectCancel = reject;
+      });
+    };
     const unhandled: unknown[] = [];
     const onUnhandled = (reason: unknown) => unhandled.push(reason);
     process.on("unhandledRejection", onUnhandled);
@@ -273,7 +300,7 @@ describe("alert probe response disposal is inert to the verdict", () => {
     expect(settledBeforeRejection).toBe(true);
     expect(failure).toBeUndefined();
     expect(result?.receipts).toHaveLength(2);
-    expect(cancel).toHaveBeenCalledTimes(1);
+    expect(cancelCalls).toBe(1);
     expect(unhandled).toEqual([]);
     expect(consoleCalls.join("\n")).not.toContain(TOKEN);
     expect(JSON.stringify(result)).not.toContain(TOKEN);
