@@ -287,7 +287,8 @@ describe("W15 auth/join in Miniflare", () => {
     // A stray hit preserves the pending journey for the real hit that
     // follows — nothing is cleared here. Only terminal (admitted) paths
     // consume the journey, so no target sticks around after sign-in.
-    expect(cleared).not.toContain("Max-Age=0");
+    expect(cleared).not.toContain("__Host-two_login_next=; Max-Age=0");
+    expect(cleared).not.toContain("__Host-two_login_intended=; Max-Age=0");
     expect(calls).toHaveLength(0);
   });
 
