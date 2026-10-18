@@ -127,7 +127,7 @@ describe("503 page support reference", () => {
     expect(reference(await res.text())).toBe(RAY);
   });
 
-  it("keeps the JSON 503 envelope exactly as it was, with no reference", async () => {
+  it("includes the validated request_id in the JSON 503 envelope", async () => {
     const res = await fixture().request(
       "/503-db",
       { headers: { "cf-ray": RAY, accept: "application/json" } },
@@ -137,6 +137,7 @@ describe("503 page support reference", () => {
     expect(await res.json()).toEqual({
       error: "db_unavailable",
       message: "The service is temporarily unavailable. Try again shortly.",
+      request_id: RAY,
     });
     expect(res.headers.get("x-request-id")).toBe(RAY);
   });

@@ -100,13 +100,15 @@ probe, or change production state as part of diagnosis.
 - The scheduled Tail Worker probe checks `/up` every minute (two attempts per
   run) and alerts only after health has stayed red for over two minutes. Runs
   landing on a five-minute boundary also run the synthetic main-flow checks
-  (`/`, `/events`, `/login`), alerting after two failed attempts in one run
+  (`/`, `/events`, `/join`, `/login`), alerting after two failed attempts in one run
   per check (see the
   [alert runbook](runbook-alerts.md#synthetic-main-flow-checks-syntheticdown)).
-  Together they detect sustained unavailability and a broken sign-in entry
-  redirect, not the Discord authorize hop or a full Discord OAuth round trip:
-  the sign-in check stops at `/login` because the next hop mints OAuth state
-  and probing it would write production auth rows.
+  Together they detect sustained unavailability, a broken conversion page,
+  and a broken sign-in entry redirect, not the Discord authorize hop or a
+  full Discord OAuth round trip: the sign-in check stops at `/login`
+  because the next hop mints OAuth state and probing it would write
+  production auth rows, and the conversion check stops at the `/join`
+  page for the same reason (the `/join/discord` hop mints journey state).
 - Discord notifications are allowlisted, redacted summaries. Trace-derived
   summaries carry the exact source `script`, a fixed logs dashboard path, and
   the deployed `build_sha` when the trace carries one (version tag, else

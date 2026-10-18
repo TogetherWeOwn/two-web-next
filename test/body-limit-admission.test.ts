@@ -39,10 +39,13 @@ function routeInfo(key: string) {
     .filter((r) => `${r.method} ${r.path}` === key)
     .map((r) => bodyLimitClass(r.handler))
     .find(Boolean) as BodyClass;
+  // `:identity` first: it starts with `:id`, so the generic replacement would
+  // rewrite `/auth/qa/:identity` to `/auth/qa/1entity` (an unknown identity,
+  // which the S4 gate 404s before the throttle runs).
   const path = pattern!
+    .replace(":identity", "qa-member")
     .replace(":key", "test-event")
-    .replace(":id", "1")
-    .replace(":identity", "qa-member");
+    .replace(":id", "1");
   const budget =
     path.startsWith("/auth/qa/") || path === "/__probe/alert"
       ? AUTH_THROTTLE_PER_MINUTE
@@ -108,6 +111,9 @@ function upload(
   const body = new ReadableStream({ pull }, { highWaterMark: 0 });
   const headers: Record<string, string> = { cookie, origin: appUrl, accept: "application/json" };
   if (path === "/__probe/alert") headers[QA_HEADER] = "test-only-qa-token";
+  // Gated QA logins exercise throttle-before-buffering (S4): the seam's
+  // identity/token gate admits this fixture identity before the throttle runs.
+  if (path.startsWith("/auth/qa/")) headers[QA_HEADER] = "test-only-qa-token";
   if (advertised) headers["content-length"] = String(max + 1);
   const request = new Request(new URL(path, appUrl), {
     method,
@@ -132,6 +138,7 @@ describe("shared throttles admit before buffering", () => {
           origin: env.APP_URL,
           accept: "application/json",
           ...(path === "/__probe/alert" ? { [QA_HEADER]: env.QA_AUTH_TOKEN! } : {}),
+          ...(path.startsWith("/auth/qa/") ? { [QA_HEADER]: env.QA_AUTH_TOKEN! } : {}),
         },
       },
       env,
@@ -251,6 +258,32 @@ describe("alert probe authentication rejects before admission or buffering", () 
         expect(pull).not.toHaveBeenCalled();
         expect(sql).not.toHaveBeenCalled();
         expect(send).not.toHaveBeenCalled();
+        await request.body?.cancel().catch(() => {});
+      }
+    },
+  );
+});
+
+describe("qa seam authentication rejects before admission or buffering", () => {
+  it.each(["", "wrong"])(
+    "returns 404 for token %j without upload pulls or throttle writes",
+    async (token) => {
+      const { sql } = throttleFixture(0);
+      const { env } = await sessionEnv(sql as unknown as Sql);
+      for (const advertised of [false, true]) {
+        const { request, pull } = upload(
+          "/auth/qa/qa-member",
+          "POST",
+          "",
+          BODY_LIMIT_BYTES.action,
+          advertised,
+        );
+        if (token) request.headers.set(QA_HEADER, token);
+        else request.headers.delete(QA_HEADER);
+        const response = await app.request(request, undefined, env);
+        expect(response.status).toBe(404);
+        expect(pull).not.toHaveBeenCalled();
+        expect(sql).not.toHaveBeenCalled();
         await request.body?.cancel().catch(() => {});
       }
     },

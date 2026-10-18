@@ -13,8 +13,8 @@
 // (a 503 for a DB reason still carries the marker). The Version ID printed is
 // the value `wrangler rollback` takes.
 
-import { appendFileSync } from "node:fs";
-import { pathToFileURL } from "node:url";
+import { appendFileSync, realpathSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 
 const VERSION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const COMMIT = /^[0-9a-f]{40}$/;
@@ -68,7 +68,21 @@ function summarize(line) {
   if (process.env.GITHUB_STEP_SUMMARY) appendFileSync(process.env.GITHUB_STEP_SUMMARY, `${line}\n`);
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+// Entry guard compares canonical real paths so a symlinked invocation runs
+// the CLI instead of exiting 0 silently (string comparison of argv[1] against
+// import.meta.url misses symlinks because the module URL is already resolved).
+// Library imports keep argv[1] pointed elsewhere, so the guard stays silent
+// for them as before.
+function isMainEntry() {
+  if (!process.argv[1]) return false;
+  try {
+    return realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url));
+  } catch {
+    return false;
+  }
+}
+
+if (isMainEntry()) {
   const [origin, expected, ...extra] = process.argv.slice(2);
   if (!origin || extra.length || (expected !== undefined && !COMMIT.test(expected))) {
     console.error("Usage: node bin/revision-check.mjs <origin> [<40-hex-commit>]");
