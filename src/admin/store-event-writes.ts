@@ -228,7 +228,7 @@ export type PatchBase = Pick<
  * tests the fixture row), never from a pre-lock snapshot. Two overlapping
  * disjoint edits therefore preserve both changes: the later writer merges
  * against the earlier writer's committed row, and an omitted fold instant
- * keeps its exact stored UTC instant via the locked carriers (TOG-6805).
+ * keeps its exact stored UTC instant via the locked carriers.
  */
 export function mergePatchInput(base: PatchBase, patch: Record<string, unknown>): EventFormInput {
   const merged = {
