@@ -483,8 +483,24 @@ export class AggregateTracker {
               ),
           )
         : [];
+      // Batches can arrive out of order, so the same 30s bucket may recur
+      // after a different bucket was observed. Merge by bucket time first:
+      // trimming raw entries would discard a still-live bucket (for example
+      // the crash bucket) while keeping duplicates of later buckets.
+      const byAt = new Map<number, Bucket>();
+      for (const b of buckets) {
+        const existing = byAt.get(b.at);
+        if (existing) {
+          existing.requests += b.requests;
+          existing.errors += b.errors;
+          existing.crashes += b.crashes;
+        } else {
+          byAt.set(b.at, { at: b.at, requests: b.requests, errors: b.errors, crashes: b.crashes });
+        }
+      }
+      const merged = [...byAt.values()].sort((a, b) => a.at - b.at);
       this.scripts.set(script, {
-        buckets: buckets.slice(-MAX_BUCKETS),
+        buckets: merged.slice(-MAX_BUCKETS),
         cooldownUntil: Number.isSafeInteger(state.cooldownUntil) ? state.cooldownUntil! : 0,
         pendingAt: Number.isSafeInteger(state.pendingAt) ? state.pendingAt : undefined,
         buildSha: shaFromVersionTag(state.buildSha),
@@ -504,8 +520,12 @@ export class AggregateTracker {
     // clears a previous build's SHA rather than blaming that build.
     state.buildSha = shaFromVersionTag(batch.buildSha);
     const bucketAt = Math.floor(at / BUCKET_MS) * BUCKET_MS;
-    let bucket = state.buckets.at(-1);
-    if (!bucket || bucket.at !== bucketAt) {
+    // The same bucket time can recur after a different bucket was observed,
+    // so coalesce by bucket time rather than reusing only the last bucket.
+    // Otherwise each revisit appends a duplicate entry and the bucket cap
+    // evicts still-live in-window counts.
+    let bucket = state.buckets.find((b) => b.at === bucketAt);
+    if (!bucket) {
       bucket = { at: bucketAt, requests: 0, errors: 0, crashes: 0 };
       state.buckets.push(bucket);
       if (state.buckets.length > MAX_BUCKETS)
