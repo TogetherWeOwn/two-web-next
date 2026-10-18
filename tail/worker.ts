@@ -1629,9 +1629,10 @@ export function createTailWorker(
         if (!batch) continue;
         if (batch.at > wallNow + BATCH_FUTURE_SLACK_MS) continue;
         const bucketAt = Math.floor(batch.at / BUCKET_MS) * BUCKET_MS;
-        const prior = batches.get(`${batch.script} ${bucketAt}`);
+        const key = `${batch.script}\0${bucketAt}`;
+        const prior = batches.get(key);
         if (!prior) {
-          batches.set(`${batch.script} ${bucketAt}`, { ...batch });
+          batches.set(key, { ...batch });
         } else {
           const incomingCounts = batch.requests + batch.errors + batch.crashes;
           if (incomingCounts > 0) {
