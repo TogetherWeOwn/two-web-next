@@ -136,6 +136,9 @@ export async function pruneModelTables(
   now: Date = new Date(),
   opts?: { reportCap?: (capped: boolean) => void },
 ): Promise<PruneCounts> {
+  // Stores built before the lock sweep carry no sweeper: drain nothing for
+  // them instead of throwing, so the rest of the pass keeps its behavior.
+  const locks = stores.jobUniqueLocks ?? { sweepExpired: async (_d: Date): Promise<number> => 0 };
   const [
     agentEventAudits,
     accessLog,
@@ -171,7 +174,7 @@ export async function pruneModelTables(
       cutoff(now, BOARD_VIEW_LOG_RETENTION_DAYS),
     ),
     drainPruneTable((d) => stores.sessions.sweepExpired(d), now),
-    drainPruneTable((d) => stores.jobUniqueLocks.sweepExpired(d), now),
+    drainPruneTable((d) => locks.sweepExpired(d), now),
   ]);
   const counts = {
     agentEventAudits: agentEventAudits.total,

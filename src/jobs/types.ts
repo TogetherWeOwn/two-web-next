@@ -144,7 +144,10 @@ export interface PruneStores {
   searchLog: AgePrunedTable;
   boardViews: AgePrunedTable;
   sessions: SessionSweeper;
-  jobUniqueLocks: SessionSweeper;
+  // Optional so stores built before the lock sweep (older stubs) still run:
+  // pruneModelTables drains nothing for a missing sweeper instead of throwing.
+  // Production always passes pgPruneStores().jobUniqueLocks.
+  jobUniqueLocks?: SessionSweeper;
 }
 
 /** ShouldBeUnique: acquire returns an ownership token, or null while a holder's lock is live. */

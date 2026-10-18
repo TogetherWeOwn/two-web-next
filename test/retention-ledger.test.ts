@@ -576,7 +576,10 @@ describe("retention ledger mechanisms (memory, no DB)", () => {
       );
     }
     expect(read("src/jobs/cron.ts")).toContain("(d) => stores.sessions.sweepExpired(d), now");
-    expect(read("src/jobs/cron.ts")).toContain("(d) => stores.jobUniqueLocks.sweepExpired(d), now");
+    expect(read("src/jobs/cron.ts")).toContain(
+      "const locks = stores.jobUniqueLocks ?? { sweepExpired: async (_d: Date): Promise<number> => 0 };",
+    );
+    expect(read("src/jobs/cron.ts")).toContain("(d) => locks.sweepExpired(d), now");
     // Repo-wide: raw SQL deletes/truncates of the attempts table are forbidden
     // in src (test fixtures may delete for cleanup). Updates are lifecycle
     // transitions, not retention deletes, and stay allowed.

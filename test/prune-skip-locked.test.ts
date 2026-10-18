@@ -162,7 +162,7 @@ describe.skipIf(!DB)("scheduled prune skips locked rows (test Postgres)", () => 
           ["searchLog", () => stores.searchLog.pruneOlderThan(cutoff)],
           ["boardViews", () => stores.boardViews.pruneOlderThan(cutoff)],
           ["sessions", () => stores.sessions.sweepExpired(now)],
-          ["jobUniqueLocks", () => stores.jobUniqueLocks.sweepExpired(now)],
+          ["jobUniqueLocks", () => stores.jobUniqueLocks!.sweepExpired(now)],
         ];
         for (const [name, run] of runs) {
           const r = await runObserved(observer, sweeperName, holder!.pid, run);
@@ -229,7 +229,7 @@ describe.skipIf(!DB)("scheduled prune skips locked rows (test Postgres)", () => 
         searchLog: await stores.searchLog.pruneOlderThan(cutoff),
         boardViews: await stores.boardViews.pruneOlderThan(cutoff),
         sessions: await stores.sessions.sweepExpired(now),
-        jobUniqueLocks: await stores.jobUniqueLocks.sweepExpired(now),
+        jobUniqueLocks: await stores.jobUniqueLocks!.sweepExpired(now),
       };
       expect(second).toEqual({
         agentEventAudits: 1,
@@ -243,7 +243,7 @@ describe.skipIf(!DB)("scheduled prune skips locked rows (test Postgres)", () => 
       });
       expect(await stores.agentEventAudits.pruneOlderThan(cutoff)).toBe(0);
       expect(await stores.sessions.sweepExpired(now)).toBe(0);
-      expect(await stores.jobUniqueLocks.sweepExpired(now)).toBe(0);
+      expect(await stores.jobUniqueLocks!.sweepExpired(now)).toBe(0);
       // Cutoff-exact and fresh age controls survive both passes.
       const audits = await observer<
         { request_id: string }[]
@@ -431,7 +431,7 @@ describe.skipIf(!DB)("scheduled prune skips locked rows (test Postgres)", () => 
         await tx`delete from agent_event_audits where request_id = 'held-audit'`;
 
         const sweep = await runObserved(observer, sweeperName, pid!.pid, () =>
-          pgPruneStores(sweeper).jobUniqueLocks.sweepExpired(now),
+          pgPruneStores(sweeper).jobUniqueLocks!.sweepExpired(now),
         );
         expect(sweep.settled && !sweep.blocked, "sweep settles before prune commit").toBe(true);
         expect(sweep.value).toBe(1);
