@@ -63,7 +63,8 @@ async function setup(throttleLimited = false) {
     sessionStore: sessions,
     store,
     accessLog: async () => true,
-    throttle: async () => ({ limited: throttleLimited }),
+    throttle: async () =>
+      throttleLimited ? { limited: true, retryAfter: 17 } : { limited: false },
   });
   const form = (
     fields: Record<string, string>,
