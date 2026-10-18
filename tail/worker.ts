@@ -28,6 +28,14 @@ export const HEALTH_COOLDOWN_MS = 15 * 60 * 1000;
 const MAX_TRACKED = 500;
 const MAX_BUCKETS = 40;
 const BUCKET_MS = 30_000;
+// Future-skew slack: a batch stamped more than this far beyond the wall
+// clock is rejected at ingest (dropped on the tail path, 400 on the
+// aggregator wire) so one far-future batch cannot advance the eviction
+// cutoff and wipe every in-window bucket. Two buckets cover ordinary
+// clock drift and bucket quantization (a one-bucket +30s skew still
+// counts); merely-late batches (stamped in the past) are unaffected and
+// still count when inside the rolling window.
+export const BATCH_FUTURE_SLACK_MS = 2 * BUCKET_MS;
 // A deployed version tag is the staging SHA, or <sha>-<run-id>-<attempt> in
 // production. Accept only that leading 40-hex SHA; arbitrary tags never leave.
 const VERSION_TAG = /^([0-9a-f]{40})(?:-\d+-\d+)?$/;
@@ -939,6 +947,12 @@ function batchForTrace(trace: TraceLike, fallbackAt: number): TraceBatch | null 
   };
 }
 
+// Future-skew slack bound: a wire batch stamped beyond now plus
+// BATCH_FUTURE_SLACK_MS is rejected (null -> 400) so it can neither wipe
+// in-window buckets nor future-date an alert or pending/cooldown marker.
+// Merely-late batches (stamped in the past) are allowed and still count
+// when inside the rolling window; a one-bucket (+30s) skew is within the
+// slack and also counts.
 function validBatch(value: unknown): TraceBatch | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
   const b = value as Record<string, unknown>;
@@ -950,6 +964,7 @@ function validBatch(value: unknown): TraceBatch | null {
   )
     return null;
   if ((b.errors as number) > (b.requests as number) + (b.crashes as number)) return null;
+  if ((b.at as number) > Date.now() + BATCH_FUTURE_SLACK_MS) return null;
   const buildSha = shaFromVersionTag(b.buildSha);
   return {
     script: b.script,
@@ -1264,7 +1279,13 @@ export function createTailWorker(
           signal: AbortSignal.timeout(AGGREGATOR_TIMEOUT_MS),
         });
         if (!response.ok) return { fallback: true as const };
-        return { data: normalizeSpikeObservation(await response.json()) };
+        const raw: unknown = await response.json();
+        const spike = normalizeSpikeObservation(raw);
+        // A 200 that parses to anything other than null or a valid spike
+        // alert is a malfunctioning aggregator: fall back to local counts so
+        // it can never suppress the spike page.
+        if (raw !== null && spike === null) return { fallback: true as const };
+        return { data: spike };
       })();
       const result = await withAggregatorDeadline(operation);
       if ("fallback" in result) return localObserve();
@@ -1376,12 +1397,19 @@ export function createTailWorker(
           signal: AbortSignal.timeout(AGGREGATOR_TIMEOUT_MS),
         });
         if (!response.ok) return { fallback: true as const };
-        const data = (await response.json()) as { downMs?: unknown; attemptId?: unknown } | null;
-        if (!data || typeof data.downMs !== "number")
-          return { downMs: null, attemptId: null, source: "aggregator" as const };
+        const data: unknown = await response.json();
+        // Well-formed answers are exactly null or an object with a numeric
+        // downMs. Anything else on a 200 is a malfunctioning aggregator:
+        // fall back to the local health observation so it can never suppress
+        // the uptime page.
+        if (data === null) return { downMs: null, attemptId: null, source: "aggregator" as const };
+        if (typeof data !== "object" || data === null || Array.isArray(data))
+          return { fallback: true as const };
+        const { downMs, attemptId } = data as { downMs?: unknown; attemptId?: unknown };
+        if (typeof downMs !== "number") return { fallback: true as const };
         return {
-          downMs: data.downMs,
-          attemptId: validAttemptId(data.attemptId) ?? null,
+          downMs,
+          attemptId: validAttemptId(attemptId) ?? null,
           source: "aggregator" as const,
         };
       })();
@@ -1600,10 +1628,16 @@ export function createTailWorker(
       // invocation shares one validated SHA. An untagged or invalid trace,
       // or a second validated build, clears it to unknown: the last tag
       // must never speak for the whole invocation.
+      // Drop traces skewed beyond now plus the documented slack before the
+      // merge: keeping one would let Math.max lift the merged batch into
+      // the future and wipe in-window buckets. Merely-late traces still
+      // count; a one-bucket future skew stays within the slack.
+      const wallNow = now();
       const batches = new Map<string, TraceBatch>();
       for (const trace of events) {
-        const batch = batchForTrace(trace, now());
+        const batch = batchForTrace(trace, wallNow);
         if (!batch) continue;
+        if (batch.at > wallNow + BATCH_FUTURE_SLACK_MS) continue;
         const prior = batches.get(batch.script);
         if (!prior) {
           batches.set(batch.script, { ...batch });

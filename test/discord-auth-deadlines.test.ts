@@ -16,12 +16,13 @@ import { createMemorySessionStore, hashToken, type Sql } from "../src/sessions";
 const exchange = () =>
   exchangeCode("fixture-code", "fixture-client", "fixture-secret", "https://example.test/callback");
 const identity = () => fetchUser("fixture-access");
-const join = () => addGuildMember("fixture-guild", "fixture-user", "fixture-access", "fixture-bot");
-const roles = () => fetchMemberRoles("fixture-guild", "fixture-user", "fixture-bot");
+const join = () =>
+  addGuildMember("222222222222222222", "333333333333333333", "fixture-access", "fixture-bot");
+const roles = () => fetchMemberRoles("222222222222222222", "333333333333333333", "fixture-bot");
 const moderator = () =>
   recomputeModerator({
-    guildId: "fixture-guild",
-    userId: "fixture-user",
+    guildId: "222222222222222222",
+    userId: "333333333333333333",
     botToken: "fixture-bot",
     moderatorRoleIds: ["fixture-role"],
   });
@@ -37,7 +38,7 @@ function isolatedJourney() {
     APP_URL: "https://example.test",
     DISCORD_CLIENT_ID: "fixture-client",
     DISCORD_CLIENT_SECRET: "fixture-secret",
-    DISCORD_GUILD_ID: "fixture-guild",
+    DISCORD_GUILD_ID: "222222222222222222",
     DISCORD_BOT_TOKEN: "fixture-bot",
     DISCORD_INVITE_URL: "https://discord.gg/fixture-invite",
     SESSION_SECRET: "fixture signing key ".repeat(3),
@@ -299,7 +300,7 @@ describe("Discord auth deadlines", () => {
 
   it("preserves healthy payloads, request admission and status-based failures", async () => {
     const user = {
-      id: "100000000000000042",
+      id: "333333333333333333",
       username: "fixture-name",
       global_name: null,
       avatar: null,
@@ -381,8 +382,8 @@ describe("Discord auth deadlines", () => {
     expect(await moderator()).toBe(false);
     expect(
       await recomputeModerator({
-        guildId: "fixture-guild",
-        userId: "fixture-user",
+        guildId: "222222222222222222",
+        userId: "333333333333333333",
         botToken: "fixture-bot",
         moderatorRoleIds: [],
       }),
@@ -492,7 +493,7 @@ describe("deadline recovery at the existing journey boundaries", () => {
       vi.spyOn(console, "warn").mockImplementation(() => {}),
     ];
     const user = {
-      id: "100000000000000042",
+      id: "333333333333333333",
       username: "fixture-name",
       global_name: null,
       avatar: null,

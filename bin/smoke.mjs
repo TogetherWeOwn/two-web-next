@@ -28,6 +28,12 @@ const routes = [
   { path: "/discord", statuses: [302], redirect: "discord" },
   { path: "/profile", statuses: [302], redirect: "login" },
   { path: "/admin", statuses: [302, 403], redirect: "login" },
+  // Session-free public read API (anonymous by construction in
+  // src/public-data/routes.ts): the collection envelope and the discovery
+  // document. No auth, no cookies, no flags; the session-gated /events.json
+  // stays out (staging-only bin/json-smoke.mjs covers it).
+  { path: "/api/public/events", statuses: [200], type: "application/json" },
+  { path: "/openapi.json", statuses: [200], type: "application/json" },
   {
     path: "/__smoke_unknown_route__",
     statuses: [404],
@@ -461,6 +467,66 @@ export async function smoke(
         check(locs.length > 0, "at least one sitemap <loc>", `${locs.length} <loc> entries`);
         const foreign = locs.filter((loc) => !loc.startsWith(`${base.origin}/`)).length;
         check(foreign === 0, "same-origin sitemap locs", `${foreign} foreign locs`);
+      }
+      if (route.path === "/api/public/events") {
+        // Collection envelope (src/public-data/contracts.ts
+        // PublicApiEventCollectionDto): a data array (empty or populated),
+        // numeric page and limit, and a meta object with numeric
+        // current_page, per_page, total and last_page. An error envelope, a
+        // truncated envelope, wrong-typed paging fields, or a non-JSON body
+        // fails this entry only. Do not print response bodies into deploy
+        // logs: the actual side stays a fixed string.
+        try {
+          const data = JSON.parse(body);
+          const meta =
+            data !== null && typeof data === "object" && !Array.isArray(data)
+              ? data.meta
+              : undefined;
+          const valid =
+            data !== null &&
+            typeof data === "object" &&
+            !Array.isArray(data) &&
+            Array.isArray(data.data) &&
+            typeof data.page === "number" &&
+            Number.isFinite(data.page) &&
+            typeof data.limit === "number" &&
+            Number.isFinite(data.limit) &&
+            meta !== null &&
+            typeof meta === "object" &&
+            !Array.isArray(meta) &&
+            typeof meta.current_page === "number" &&
+            Number.isFinite(meta.current_page) &&
+            typeof meta.per_page === "number" &&
+            Number.isFinite(meta.per_page) &&
+            typeof meta.total === "number" &&
+            Number.isFinite(meta.total) &&
+            typeof meta.last_page === "number" &&
+            Number.isFinite(meta.last_page);
+          check(
+            valid,
+            "collection envelope with data array and numeric paging",
+            "valid JSON with unexpected public envelope shape",
+          );
+        } catch {
+          check(false, "valid JSON object", "invalid JSON");
+        }
+      }
+      if (route.path === "/openapi.json") {
+        // Discovery document: the OpenAPI version marker must be present. A
+        // body without the marker (or not JSON at all) fails this entry only.
+        // Do not print response bodies into deploy logs.
+        try {
+          const data = JSON.parse(body);
+          const valid =
+            data !== null &&
+            typeof data === "object" &&
+            !Array.isArray(data) &&
+            typeof data.openapi === "string" &&
+            data.openapi.length > 0;
+          check(valid, "OpenAPI version marker", "valid JSON with unexpected OpenAPI shape");
+        } catch {
+          check(false, "valid JSON object", "invalid JSON");
+        }
       }
       if (route.body)
         check(route.body.test(body), `body matching ${route.body}`, "body did not match");

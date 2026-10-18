@@ -1,7 +1,15 @@
 // Minimal Discord OAuth2 + guild auto-join. No SDK: three HTTP calls, all typed here.
 import { discordFetch } from "./discord-http";
-import { MAX_RETRY_DELAY_SECONDS } from "./jobs/retry-delay";
+import { parseRetryAfterSeconds } from "./jobs/retry-delay";
 const API = "https://discord.com/api/v10";
+
+// Charset-bound Discord IDs: ASCII digits only, nonempty, tested as-is with
+// no trimming, coercion or decoding. Length is deliberately unpinned here;
+// digits are the contract. Terminal line breaks, spaces, fullwidth digits
+// and every other non-digit shape fail.
+export function isDiscordId(value: unknown): value is string {
+  return typeof value === "string" && /^\d+$/.test(value);
+}
 
 // identify: who they are. guilds.join: lets our bot add them to the TWO server in one click.
 export const SCOPES = ["identify", "guilds.join"] as const;
@@ -131,25 +139,13 @@ async function errorBodyOf(res: Response): Promise<string> {
 
 /**
  * Bounded `retry-after` seconds from a 429 response, for callers that surface
- * provider backoff as a `Retry-After` header. Same numeric-only parse style as
- * `src/events/discord-transients-live.ts` (trimmed digits with an optional
- * fraction, finite and representable — no HTTP dates, signs, exponents, units
- * or markup), then the `src/jobs/retry-delay.ts` admission posture: fractions
- * round UP so the client never retries sooner than the provider asked, values
- * below 1s are unusable, and representable-but-absurd values cap at the
- * largest admitted delay instead of echoing raw. Anything unusable yields
- * undefined so the caller falls back to today's headerless response.
+ * provider backoff as a `Retry-After` header. Thin `Response` adapter over
+ * the one shared parser in `src/jobs/retry-delay.ts` — the same mapping the
+ * events reader and the bot transport use. Anything unusable yields undefined
+ * so the caller falls back to today's headerless response.
  */
 function providerRetryAfterSeconds(res: Response): number | undefined {
-  // `Number(null)` and `Number("")` are 0: an absent header must not read as backoff.
-  const raw = res.headers.get("retry-after")?.trim();
-  if (!raw || !/^\d+(?:\.\d+)?$/.test(raw)) return undefined;
-  const n = Number(raw);
-  // Only representable numeric delays are valid; no HTTP dates or infinity.
-  if (!Number.isFinite(n) || n * 1000 > 8_000_000_000_000_000) return undefined;
-  const seconds = Math.ceil(n);
-  if (seconds < 1) return undefined;
-  return Math.min(seconds, MAX_RETRY_DELAY_SECONDS);
+  return parseRetryAfterSeconds(res.headers.get("retry-after"));
 }
 
 function classified(step: string, res: Response, body: string): DiscordError {
@@ -244,8 +240,7 @@ export async function fetchUser(accessToken: string): Promise<DiscordUser> {
     user === null ||
     typeof user !== "object" ||
     Array.isArray(user) ||
-    typeof user.id !== "string" ||
-    !user.id ||
+    !isDiscordId(user.id) ||
     typeof user.username !== "string" ||
     !user.username ||
     (user.global_name !== null && typeof user.global_name !== "string") ||
@@ -311,17 +306,24 @@ export async function addGuildMemberDetailed(
   accessToken: string,
   botToken: string,
 ): Promise<GuildMemberAdd> {
+  // Charset admission first: a malformed guild or user id fails before any
+  // header/body construction or fetch, so zero Discord requests means no
+  // Authorization is ever emitted for it.
+  if (!isDiscordId(guildId) || !isDiscordId(userId)) return { result: "failed" };
   // Fail closed on an unconfigured bot token (TOG-12687): a blank token must
   // emit zero bot-credentialed calls, so the callers degrade to the invite
   // fallback instead of sending `Bot ` with nothing after it.
   if (!botToken || botToken.trim().length === 0) return { result: "failed" };
   let res: Response;
   try {
-    res = await discordFetch(`${API}/guilds/${guildId}/members/${userId}`, {
-      method: "PUT",
-      headers: { authorization: `Bot ${botToken}`, "content-type": "application/json" },
-      body: JSON.stringify({ access_token: accessToken }),
-    });
+    res = await discordFetch(
+      `${API}/guilds/${encodeURIComponent(guildId)}/members/${encodeURIComponent(userId)}`,
+      {
+        method: "PUT",
+        headers: { authorization: `Bot ${botToken}`, "content-type": "application/json" },
+        body: JSON.stringify({ access_token: accessToken }),
+      },
+    );
   } catch {
     return { result: "transport_failure" };
   }

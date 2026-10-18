@@ -251,9 +251,11 @@ describe("aggregate 5xx/error-rate spike alert", () => {
     const burst = (at: number) =>
       Array.from({ length: SPIKE_MIN_ERRORS }, () => fetchTrace(500, at));
     await f.worker.tail(burst(t0), env);
+    f.advance(60_000);
     await f.worker.tail(burst(t0 + 60_000), env);
     expect(f.contents()).toHaveLength(1);
     const later = t0 + SPIKE_COOLDOWN_MS + 60_000;
+    f.advance(later - f.now());
     await f.worker.tail(burst(later), env);
     expect(f.contents()).toHaveLength(2);
     expect(f.contents()[1].timestamp).toBe(new Date(later).toISOString());

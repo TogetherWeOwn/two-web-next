@@ -203,9 +203,11 @@ describe("retried spike results settle only their own attempt", () => {
     h.setDeliveryStatuses(200, 200);
     h.releaseSecondDelivery();
     await h.worker.tail(burst(t0), h.env);
+    h.setNow(t0 + 60_000);
     await h.worker.tail(burst(t0 + 60_000), h.env);
     const afterCooldownBurst = h.contents().length;
     const later = t0 + SPIKE_COOLDOWN_MS + 60_000;
+    h.setNow(later);
     await h.worker.tail(burst(later), h.env);
     expect(afterCooldownBurst).toBe(1);
     expect(h.contents()).toHaveLength(2);
@@ -243,14 +245,17 @@ describe("retried spike results settle only their own attempt", () => {
     const h = harness("/spike-result", "apply-then-lose");
     const aRun = h.worker.tail(burst(t0), h.env);
     await h.retryStarted; // A's failed result applied; its retry is held.
+    h.setNow(t0 + 60_000);
     const bRun = h.worker.tail(burst(t0 + 60_000), h.env);
     await h.secondDeliveryStarted; // B admitted; its delivery is held.
     h.releaseRetry();
     await aRun; // A's stale retry has now landed against pending B.
+    h.setNow(t0 + 120_000);
     await h.worker.tail(burst(t0 + 120_000), h.env); // C
     const pagesAfterC = h.contents().length;
     h.releaseSecondDelivery(); // B's delivery fails; B settles as failed.
     await bRun;
+    h.setNow(t0 + 180_000);
     await h.worker.tail(burst(t0 + 180_000), h.env); // D reattempt after B.
     expect(pagesAfterC).toBe(2);
     expect(h.contents()).toHaveLength(3);
@@ -261,11 +266,13 @@ describe("retried spike results settle only their own attempt", () => {
     const h = harness("/spike-result", "apply-then-lose");
     const aRun = h.worker.tail(burst(t0), h.env);
     await h.retryStarted;
+    h.setNow(t0 + 60_000);
     const bRun = h.worker.tail(burst(t0 + 60_000), h.env);
     await h.secondDeliveryStarted;
     h.restartAggregator(); // Same storage, fresh instance: state restores.
     h.releaseRetry();
     await aRun;
+    h.setNow(t0 + 120_000);
     await h.worker.tail(burst(t0 + 120_000), h.env); // C
     const pagesAfterC = h.contents().length;
     h.releaseSecondDelivery();
@@ -279,12 +286,14 @@ describe("retried spike results settle only their own attempt", () => {
     const aRun = h.worker.tail(burst(t0), h.env);
     await h.retryStarted; // A's delivered result applied (cooldown armed).
     const bAt = t0 + SPIKE_COOLDOWN_MS + 60_000;
+    h.setNow(bAt);
     const bRun = h.worker.tail(burst(bAt), h.env); // Past A's cooldown: B.
     await h.secondDeliveryStarted;
     h.releaseRetry();
     await aRun; // A's stale delivered retry lands against pending B.
     h.releaseSecondDelivery(); // B's own delivery fails; B settles failed.
     await bRun;
+    h.setNow(bAt + 60_000);
     await h.worker.tail(burst(bAt + 60_000), h.env); // C reattempts B.
     expect(h.contents()).toHaveLength(3);
   });
@@ -297,10 +306,13 @@ describe("retried spike results settle only their own attempt", () => {
     h.store.set("scripts", {
       "two-web-next": { buckets: [], cooldownUntil: 0, pendingAt: t0 },
     });
+    h.setNow(t0 + 60_000);
     await h.worker.tail(burst(t0 + 60_000), h.env);
     const whileLegacyPending = h.contents().length;
     const later = t0 + SPIKE_COOLDOWN_MS + 60_000;
+    h.setNow(later);
     await h.worker.tail(burst(later), h.env);
+    h.setNow(later + 60_000);
     await h.worker.tail(burst(later + 60_000), h.env);
     expect(whileLegacyPending).toBe(0);
     expect(h.contents()).toHaveLength(1);
