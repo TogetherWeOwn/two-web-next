@@ -242,7 +242,12 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     if (flags[i] === "--allow-indexable") {
       allowIndexable = true;
     } else if (flags[i] === "--version-override") {
-      versionOverride = flags[i + 1];
+      const value = flags[i + 1];
+      if (value === undefined) {
+        usage = true;
+      } else {
+        versionOverride = value;
+      }
       i += 1;
     } else {
       usage = true;
