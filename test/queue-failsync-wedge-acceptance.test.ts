@@ -11,13 +11,10 @@
 // On expiry the message takes the existing settlement-failure path — stamp
 // `ledger.released` (bounded, best-effort), then `message.retry()` undelayed —
 // and must never ack: the attempt remains unsettled and keeps blocking future
-// revisions until a later delivery settles it. A definitive outcome still
-// owes its terminal record on that same delivery: after the retry is queued,
-// one `queue.failing` alert and one `ledger.failed` stamp land (the terminal
-// stamp follows the released stamp, so the row reads `failed`). A settlement
-// that resolves after the bound must not flip the carrier to the settled
-// path afterwards. Normal and rejecting `failSync` behavior is unchanged;
-// there is no new ack path.
+// revisions until a later delivery settles it. A settlement that resolves
+// after the bound must not flip the carrier to the settled path afterwards.
+// Normal and rejecting `failSync` behavior is unchanged; there is no new
+// ack path.
 //
 // Hermetic: in-memory event store, ledger, lock and bot doubles only. No
 // database, queue or network.
@@ -254,11 +251,11 @@ const failingAlerts = () => errors.filter((l) => l.includes('"event":"queue.fail
 
 describe("wedged failSync (new behavior)", () => {
   it.each([
-    ["a non-retryable bot refusal", "refusal", expect.stringContaining("action_not_allowed")],
-    ["a terminal bot error", "terminal", "BotTerminalError"],
+    ["a non-retryable bot refusal", "refusal"],
+    ["a terminal bot error", "terminal"],
   ] as const)(
     "never-resolving failSync after %s gives up at the bound and retries without ack",
-    async (_label, botMode, reason) => {
+    async (_label, botMode) => {
       const s = setup({ botMode, failSyncMode: "hang" });
       const m = s.message(carrier());
 
@@ -278,26 +275,18 @@ describe("wedged failSync (new behavior)", () => {
       expect(s.ledger.released).toHaveBeenCalledExactlyOnceWith(JOB_ID, NOW);
       expect(m.retry).toHaveBeenCalledExactlyOnceWith();
       expect(m.ack).not.toHaveBeenCalled();
-      // A definitive outcome still records its terminal stamp on this
-      // delivery: the failed stamp follows the retry, overwriting the
-      // released row; the lock stays held for the redelivery and the
-      // attempt is not completed.
-      expect(s.ledger.failed).toHaveBeenCalledExactlyOnceWith(
-        JOB_ID,
-        "sync-event",
-        `sync-event:${EVENT_KEY}`,
-        reason,
-      );
+      expect(s.ledger.failed).not.toHaveBeenCalled();
       expect(s.ledger.dequeued).not.toHaveBeenCalled();
-      expect(s.rows.get(JOB_ID)).toEqual({ state: "failed", reason });
+      expect(s.rows.get(JOB_ID)).toEqual({ state: "released", availableAt: NOW });
       expect(s.order).toEqual([
         "ledger.reserved",
         "events.failSync",
         "ledger.released",
         "message.retry",
-        "ledger.failed",
       ]);
-      expect(failingAlerts()).toHaveLength(1);
+      // Not a terminal failure yet: no queue.failing alert, lock stays held
+      // for the redelivery, and the attempt is not completed.
+      expect(failingAlerts()).toEqual([]);
       expect(s.lock.release).not.toHaveBeenCalled();
       expect(s.completeSync).not.toHaveBeenCalled();
     },
@@ -334,23 +323,11 @@ describe("wedged failSync (new behavior)", () => {
     expect(stuck.retry).toHaveBeenCalledExactlyOnceWith();
     expect(stuck.ack).not.toHaveBeenCalled();
     expect(s.ledger.released).toHaveBeenCalledExactlyOnceWith(JOB_ID, NOW);
-    // The wedged carrier's definitive outcome still lands its one terminal
-    // stamp and one alert before the batch moves on.
-    expect(s.ledger.failed).toHaveBeenCalledExactlyOnceWith(
-      JOB_ID,
-      "sync-event",
-      `sync-event:${EVENT_KEY}`,
-      expect.stringContaining("action_not_allowed"),
-    );
-    expect(failingAlerts()).toHaveLength(1);
     expect(healthy.ack).toHaveBeenCalledExactlyOnceWith();
     expect(healthy.retry).not.toHaveBeenCalled();
     expect(s.ledger.dequeued).toHaveBeenCalledExactlyOnceWith(goodJob);
     expect(s.rows.has(goodJob)).toBe(false);
-    expect(s.rows.get(JOB_ID)).toEqual({
-      state: "failed",
-      reason: expect.stringContaining("action_not_allowed"),
-    });
+    expect(s.rows.get(JOB_ID)).toEqual({ state: "released", availableAt: NOW });
   });
 
   it("a failSync resolving only after the bound does not flip the carrier to settled", async () => {
@@ -359,36 +336,24 @@ describe("wedged failSync (new behavior)", () => {
 
     const outcome = await outcomeWithin(consume({ messages: [m] }, s.deps), SETTLE_WINDOW_MS);
 
-    // The consumer gave up at the bound and took the retry path; the
-    // definitive outcome lands its one terminal stamp and one alert.
+    // The consumer gave up at the bound and took the retry path.
     expect(outcome).toBe("resolved");
     expect(s.failSync).toHaveBeenCalledExactlyOnceWith(IDEMPOTENCY_KEY);
     expect(s.ledger.released).toHaveBeenCalledExactlyOnceWith(JOB_ID, NOW);
     expect(m.retry).toHaveBeenCalledExactlyOnceWith();
     expect(m.ack).not.toHaveBeenCalled();
-    expect(s.ledger.failed).toHaveBeenCalledExactlyOnceWith(
-      JOB_ID,
-      "sync-event",
-      `sync-event:${EVENT_KEY}`,
-      expect.stringContaining("action_not_allowed"),
-    );
-    expect(failingAlerts()).toHaveLength(1);
 
     // When the abandoned settlement finally lands, nothing else happens:
-    // no late ack, no second failed stamp or alert, no lock release, no
-    // second settlement.
+    // no late ack, no failed stamp, no lock release, no second settlement.
     await s.lateSettled;
     await new Promise((resolve) => setTimeout(resolve, 50));
     expect(m.ack).not.toHaveBeenCalled();
-    expect(s.ledger.failed).toHaveBeenCalledTimes(1);
+    expect(s.ledger.failed).not.toHaveBeenCalled();
     expect(s.ledger.dequeued).not.toHaveBeenCalled();
     expect(s.lock.release).not.toHaveBeenCalled();
     expect(s.failSync).toHaveBeenCalledTimes(1);
-    expect(s.rows.get(JOB_ID)).toEqual({
-      state: "failed",
-      reason: expect.stringContaining("action_not_allowed"),
-    });
-    expect(failingAlerts()).toHaveLength(1);
+    expect(s.rows.get(JOB_ID)).toEqual({ state: "released", availableAt: NOW });
+    expect(failingAlerts()).toEqual([]);
   });
 });
 
@@ -403,25 +368,16 @@ describe("failSync controls (unchanged paths)", () => {
     expect(s.ledger.released).toHaveBeenCalledExactlyOnceWith(JOB_ID, NOW);
     expect(m.retry).toHaveBeenCalledExactlyOnceWith();
     expect(m.ack).not.toHaveBeenCalled();
-    expect(s.ledger.failed).toHaveBeenCalledExactlyOnceWith(
-      JOB_ID,
-      "sync-event",
-      `sync-event:${EVENT_KEY}`,
-      expect.stringContaining("action_not_allowed"),
-    );
+    expect(s.ledger.failed).not.toHaveBeenCalled();
     expect(s.ledger.dequeued).not.toHaveBeenCalled();
-    expect(s.rows.get(JOB_ID)).toEqual({
-      state: "failed",
-      reason: expect.stringContaining("action_not_allowed"),
-    });
+    expect(s.rows.get(JOB_ID)).toEqual({ state: "released", availableAt: NOW });
     expect(s.order).toEqual([
       "ledger.reserved",
       "events.failSync",
       "ledger.released",
       "message.retry",
-      "ledger.failed",
     ]);
-    expect(failingAlerts()).toHaveLength(1);
+    expect(failingAlerts()).toEqual([]);
     expect(s.lock.release).not.toHaveBeenCalled();
   });
 
