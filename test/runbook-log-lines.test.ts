@@ -94,8 +94,6 @@ describe("runbook log lines coverage", () => {
     for (const file of sourceFiles) {
       const literals = extractConsoleErrorLiterals(file);
       for (const { literal, line } of literals) {
-        // Exclude the known out-of-scope line (sync-settlement handled separately)
-        if (literal === "sync attempt settlement failed") continue;
         if (!documented.has(literal)) {
           missing.push({ file, line, literal });
         }

@@ -201,6 +201,7 @@ before it can page:
 |-------|---------------|
 | `/` | HTTP 200 with an HTML content type |
 | `/events` | HTTP 200 with an HTML content type |
+| `/join` | HTTP 200 with an HTML content type |
 | `/login` | HTTP 302 redirecting to `/auth/discord` on the same host |
 
 The summary contains only `event`, `check` (the probed path), `target`
@@ -218,7 +219,10 @@ No check authenticates, posts a form, injects a fault, or changes
 application data, so the production prober stays passive. The sign-in
 check stops at `/login` on purpose: the next hop, `/auth/discord`, mints
 OAuth state and would write a login-redirect throttle hit and an OAuth
-journey row on every probe attempt. Like any anonymous visitor, the
+journey row on every probe attempt. The conversion check likewise stops
+at the `/join` page: the next hops (`/join/discord`, `/join/callback`)
+mint journey state and write throttle hits, while the page itself is a
+persistence-free leaf that writes nothing. Like any anonymous visitor, the
 `/events` probe records one rate-limit counter hit (the `events-read`
 bucket) per admitted attempt; the existing throttle expiry sweep deletes
 those counters. Staging and production each probe their own configured

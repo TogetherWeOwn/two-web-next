@@ -113,7 +113,7 @@ describe("Copy-link island DOM double", () => {
   it("copies the canonical SSR URL with Clipboard API and clears the live status after four seconds", async () => {
     const writeText = vi.fn(async () => {});
     const b = browser({ clipboard: { writeText } });
-    expect(b.attributes.get("role")).toBe("button");
+    expect(b.attributes.has("role")).toBe(false);
     expect((await b.click()).preventDefault).toHaveBeenCalled();
     expect(writeText).toHaveBeenCalledWith(canonical);
     expect(b.exec).not.toHaveBeenCalled();
@@ -165,11 +165,13 @@ describe("Copy-link island DOM double", () => {
     },
   );
 
-  it("supports Space and normal Enter clicks, but preserves modified link navigation", async () => {
+  it("supports Space and Enter keys, but preserves modified link navigation", async () => {
     const writeText = vi.fn(async () => {});
     const b = browser({ clipboard: { writeText } });
     expect((await b.key(" ")).preventDefault).toHaveBeenCalled();
     expect(writeText).toHaveBeenCalledTimes(1);
+    expect((await b.key("Enter")).preventDefault).toHaveBeenCalled();
+    expect(writeText).toHaveBeenCalledTimes(2);
     expect((await b.key("Escape")).preventDefault).not.toHaveBeenCalled();
     for (const extra of [
       { button: 1 },
@@ -180,9 +182,9 @@ describe("Copy-link island DOM double", () => {
     ]) {
       expect((await b.click(extra)).preventDefault).not.toHaveBeenCalled();
     }
-    expect(writeText).toHaveBeenCalledTimes(1);
-    await b.click(); // Enter on the anchor dispatches a normal click.
     expect(writeText).toHaveBeenCalledTimes(2);
+    await b.click();
+    expect(writeText).toHaveBeenCalledTimes(3);
   });
 
   it("replaces the old toast timer on repeated copies", async () => {
