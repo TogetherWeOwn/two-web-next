@@ -89,7 +89,8 @@ export async function loadMemberRanking(
   const gameFilter = game === null ? sql`` : sql`and lower(trim(events.game)) = ${game}`;
   // LIMIT is a literal cap, not a bound param: the raw-member-owner guard
   // matches the exact statement shape (see src/db/read-classification.ts).
-  const limitClause = scope === "overall" ? sql`limit 100` : sql``;
+  // Built from OVERALL_CAP so the constant stays the single source of truth.
+  const limitClause = scope === "overall" ? sql.raw(`limit ${OVERALL_CAP}`) : sql``;
   const rows = (await keyedMemberRead(() =>
     db.execute(sql`
       select rsvps.user_id as user_id, users.username as username, count(*)::int as count
