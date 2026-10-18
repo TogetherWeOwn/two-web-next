@@ -299,9 +299,9 @@ function parseHtml(html: string): El {
     s
       .replace(/&#39;/g, "'")
       .replace(/&quot;/g, '"')
-      .replace(/&amp;/g, "&")
       .replace(/&lt;/g, "<")
-      .replace(/&gt;/g, ">");
+      .replace(/&gt;/g, ">")
+      .replace(/&amp;/g, "&");
   for (const token of html.match(/<[^>]*>|[^<]+/g) ?? []) {
     if (token.startsWith("</")) {
       if (stack.length > 1) stack.pop();
