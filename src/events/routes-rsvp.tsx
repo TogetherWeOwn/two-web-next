@@ -10,6 +10,7 @@ import { RSVP_HONEY_FIELD, loginUrl, rsvpHoneyFilled, rsvpTrapTripped } from "..
 import { renderHtmlOutcome } from "../html-outcome";
 import { eventKeyAllowed } from "./keys";
 import { dispatchRsvpSync, isRsvpStatus, withdrawRsvp, writeRsvp, type RsvpAnswer } from "./rsvp";
+import { resolveNativeRsvpPage, rsvpPageReturnPath } from "./reads";
 import { renderRsvpRefusal } from "./rsvp-refusal-hono";
 import { rsvpRefusalModelFor, rsvpRefusalOutcome } from "./rsvp-refusal";
 import { body, type App, type Ctx, type SessionReader } from "./routes-shared";
@@ -123,7 +124,16 @@ export function registerRsvpRoutes(app: App, readFragmentSession: SessionReader)
       ? deleteRsvp(c, input, readFragmentSession)
       : putRsvp(c, input, readFragmentSession));
     const key = c.req.param("key");
-    const path = `/e/${encodeURIComponent(key)}`;
+    // Native page context comes only from the validated action-query and body
+    // carriers (both normalized, agreement required); the Referer is never a
+    // carrier. Invalid/unsafe values fall back to the bare event page, and the
+    // destination is rebuilt locally so nothing submitted can escape it.
+    const attendeePage = resolveNativeRsvpPage(
+      new URL(c.req.url).searchParams.getAll("attendees"),
+      input["attendees"],
+      "attendees" in input,
+    );
+    const path = rsvpPageReturnPath(key, attendeePage);
     if (response.ok) return c.redirect(path, 303);
     if (response.status === 401) return c.redirect(loginUrl(path), 303);
     const retryAfter = response.headers.get("Retry-After");
@@ -140,7 +150,7 @@ export function registerRsvpRoutes(app: App, readFragmentSession: SessionReader)
     return renderHtmlOutcome(
       c,
       rsvpRefusalOutcome(
-        rsvpRefusalModelFor({ status: response.status, retryAfter, eventKey: key }),
+        rsvpRefusalModelFor({ status: response.status, retryAfter, eventKey: key, attendeePage }),
         renderRsvpRefusal,
         {
           status: response.status as ContentfulStatusCode,

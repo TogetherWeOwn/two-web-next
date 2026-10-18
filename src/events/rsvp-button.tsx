@@ -30,7 +30,18 @@ export const RsvpButton: FC<{
   returnTo: string;
   waitlistPosition?: number | null;
   now?: Date;
-}> = ({ e, member, answer, returnTo, waitlistPosition = null, now = new Date() }) => {
+  /** Normalized native attendee page (1 stays bare); the form action carries
+   * only this validated page so malformed query values cannot leak through. */
+  attendeePage?: number;
+}> = ({
+  e,
+  member,
+  answer,
+  returnTo,
+  waitlistPosition = null,
+  now = new Date(),
+  attendeePage = 1,
+}) => {
   const closed =
     e.status === "cancelled"
       ? "cancelled"
@@ -65,7 +76,15 @@ export const RsvpButton: FC<{
       ) : !member ? (
         <a href={signIn}>{RSVP_COPY.guestCta}</a>
       ) : (
-        <form method="post" action={`/e/${encodeURIComponent(e.eventKey)}/rsvp`} data-rsvp-form>
+        <form
+          method="post"
+          action={
+            Number.isSafeInteger(attendeePage) && attendeePage > 1
+              ? `/e/${encodeURIComponent(e.eventKey)}/rsvp?attendees=${attendeePage}`
+              : `/e/${encodeURIComponent(e.eventKey)}/rsvp`
+          }
+          data-rsvp-form
+        >
           {!e.rsvpOpen ? (
             <p role="status" data-testid={RSVP_PAUSED_TESTID}>
               {RSVP_COPY.paused}
