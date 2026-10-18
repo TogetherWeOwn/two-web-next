@@ -3,6 +3,9 @@
 // route-inventory: GET /join/discord
 // route-inventory: GET /join/callback
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { readFileSync } from "node:fs";
+import { runInNewContext } from "node:vm";
+import { URL as NodeURL } from "node:url";
 import postgres from "postgres";
 import app from "./app";
 import type { Env } from "../src/env";
@@ -31,7 +34,7 @@ import joinMigration from "../drizzle/1000_join-attempts-throttle.sql?raw";
 // live member token is used once in the callback stack frame and never lands
 // in a queue table, a row or a log.
 
-const MOD_ROLE = "508654771276873729";
+const MOD_ROLE = "1546777856984481792";
 
 const env: Env = {
   APP_URL: "https://next.example.test",
@@ -331,16 +334,61 @@ describe("W15 join landing and recovery parity", () => {
     },
   );
 
-  it("renders the widget with sandbox, lazy loading and no-referrer", async () => {
+  it("defers the widget to a click: a no-referrer link and the island, no iframe", async () => {
     const { env: e } = isolated();
     const html = await (await app.request("/join", {}, e)).text();
-    for (const attr of [
-      'sandbox="allow-scripts allow-same-origin"',
-      'loading="lazy"',
-      'referrerpolicy="no-referrer"',
-    ]) {
-      expect(html).toContain(attr);
-    }
+    expect(html).toContain('data-testid="join-widget-load"');
+    // The island binds through this hook: removing it leaves the click
+    // un-intercepted and sends the visitor off-site, so pin it here.
+    expect(html).toContain("data-join-widget");
+    expect(html).toContain('referrerpolicy="no-referrer"');
+    expect(html).toContain('<script src="/islands/join-widget.js" defer=""></script>');
+    expect(html).not.toContain("<iframe");
+  });
+
+  it("wires the rendered preview link to the shipped island: a click builds the frame", async () => {
+    // Pins the markup-to-island contract against the real SSR HTML: the
+    // href the server renders is the src the island frames on click.
+    const { env: e } = isolated();
+    const html = await (await app.request("/join", {}, e)).text();
+    const anchor = html.match(/<a[^>]*data-join-widget[^>]*>/)?.[0];
+    // SSR escapes `&` as `&amp;`; the browser hands the island the decoded
+    // value via getAttribute, so decode the same way here.
+    const href = anchor?.match(/href="([^"]+)"/)?.[1]?.replace(/&amp;/g, "&");
+    expect(href).toMatch(/^https:\/\/discord\.com\/widget\?id=\d{10,25}&theme=dark$/);
+    expect(html).toMatch(/class="join-preview"[\s\S]*data-join-widget/);
+    const binder = readFileSync(
+      new NodeURL("../public/islands/join-widget.js", import.meta.url),
+      "utf8",
+    );
+    expect(binder).toContain("[data-join-widget]");
+    const frame = { setAttribute: vi.fn(), focus: vi.fn() } as {
+      src?: string;
+      setAttribute: ReturnType<typeof vi.fn>;
+      focus: ReturnType<typeof vi.fn>;
+    };
+    const preview = { replaceChildren: vi.fn() };
+    let onClick: (event: { button: number; preventDefault: () => void }) => void = () => {};
+    runInNewContext(binder, {
+      document: {
+        querySelector: (selector: string) =>
+          selector === "[data-join-widget]"
+            ? {
+                getAttribute: () => href,
+                closest: (s: string) => (s === ".join-preview" ? preview : null),
+                addEventListener: (kind: string, fn: typeof onClick) => {
+                  if (kind === "click") onClick = fn;
+                },
+              }
+            : null,
+        createElement: () => frame,
+      },
+    });
+    const event = { button: 0, preventDefault: vi.fn() };
+    onClick(event);
+    expect(event.preventDefault).toHaveBeenCalledOnce();
+    expect(frame.src).toBe(href);
+    expect(preview.replaceChildren).toHaveBeenCalledWith(frame);
   });
 
   it.each(["", "javascript:alert(1)", "https://evil.test/invite"])(
@@ -427,6 +475,30 @@ describe("GET /join/discord (throttled OAuth start)", () => {
     expect(res.headers.get("cache-control")).toContain("no-store");
   });
 
+  it("degrades to /join (never 500) when sweeping expired journeys rejects", async () => {
+    const { store, env: e } = isolated();
+    store.journeys.sweepExpired = async () => {
+      throw new Error("journey store down");
+    };
+    const res = await app.request("/join/discord", {}, e);
+    expect(res.status).toBe(302);
+    expect(res.headers.get("location")).toBe("/join");
+    expect(res.headers.get("cache-control")).toContain("no-store");
+    expect(res.headers.getSetCookie().join("\n")).not.toMatch(/__Host-two_join_state=[^;]/);
+  });
+
+  it("degrades to /join (never 500) when issuing the journey rejects", async () => {
+    const { store, env: e } = isolated();
+    store.journeys.issue = async () => {
+      throw new Error("journey store down");
+    };
+    const res = await app.request("/join/discord", {}, e);
+    expect(res.status).toBe(302);
+    expect(res.headers.get("location")).toBe("/join");
+    expect(res.headers.get("cache-control")).toContain("no-store");
+    expect(res.headers.getSetCookie().join("\n")).not.toMatch(/__Host-two_join_state=[^;]/);
+  });
+
   it("remembers a valid source and next, drops hostile values", async () => {
     const { env: e } = isolated();
     const { res } = await startJoin(e, "?source=web-homepage&next=/events");
@@ -436,7 +508,11 @@ describe("GET /join/discord (throttled OAuth start)", () => {
     expect(set).toContain("__Host-two_join_next=");
     const hostile = await startJoin(e, "?source=a/b&next=https://evil.test/");
     expect(hostile.res.status).toBe(302);
-    expect(hostile.res.headers.getSetCookie().join("\n")).not.toContain("__Host-two_join_source=");
+    // Hostile values leave no live value: a deletion (`=; Max-Age=0`) expires
+    // stale intent from an abandoned earlier start, so match live values only.
+    const hostileSet = hostile.res.headers.getSetCookie().join("\n");
+    expect(hostileSet).not.toMatch(/__Host-two_join_source=[^;]/);
+    expect(hostileSet).not.toMatch(/__Host-two_join_next=[^;]/);
   });
 
   it("refuses the 11th start in one minute with 429 + Retry-After", async () => {

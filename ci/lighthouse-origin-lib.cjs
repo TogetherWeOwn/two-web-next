@@ -177,11 +177,15 @@ async function getCandidate(origin, path, fetchImpl) {
  * feed was built): try the next listing. Any other status throws: an origin
  * that does not answer stays a watch finding, never a skip.
  */
-async function pickStableCandidate(origin, paths, fetchImpl, tally) {
+async function pickStableCandidate(origin, paths, fetchImpl, tally, seen) {
   for (const path of paths) {
+    // Already rejected in an earlier pass (title filter, gone, fixture page):
+    // skip without another request or a second tally count.
+    if (seen?.has(path)) continue;
     const response = await getCandidate(origin, path, fetchImpl);
     if (response.status === 404 || response.status === 410) {
       tally.gone += 1;
+      seen?.add(path);
       continue;
     }
     if (response.status !== 200) {
@@ -189,6 +193,7 @@ async function pickStableCandidate(origin, paths, fetchImpl, tally) {
     }
     if (isStagingFixturePage(await response.text())) {
       tally.fixtures += 1;
+      seen?.add(path);
       continue;
     }
     return path;
@@ -208,16 +213,22 @@ async function pickStableCandidate(origin, paths, fetchImpl, tally) {
 async function discoverEventPath(origin, fetchImpl = fetch) {
   const root = requireAllowedOrigin(origin);
   const tally = { fixtures: 0, gone: 0 };
+  // Paths rejected in the RSS pass are never re-requested in the /events
+  // pass: the listing carries no titles, so without this the fallback would
+  // fetch the same fixture or stale pages again and count them twice.
+  const rejected = new Set();
   const items = eventItemsFromRss(await getText(root, "/events.rss", fetchImpl));
   const rssPaths = [];
   for (const item of items) {
-    if (isStagingFixtureTitle(item.title)) tally.fixtures += 1;
-    else rssPaths.push(item.path);
+    if (isStagingFixtureTitle(item.title)) {
+      tally.fixtures += 1;
+      rejected.add(item.path);
+    } else rssPaths.push(item.path);
   }
-  const rssPick = await pickStableCandidate(root, rssPaths, fetchImpl, tally);
+  const rssPick = await pickStableCandidate(root, rssPaths, fetchImpl, tally, rejected);
   if (rssPick) return { path: rssPick, source: "/events.rss" };
   const listed = eventPathsFromListing(await getText(root, "/events", fetchImpl));
-  const listedPick = await pickStableCandidate(root, listed, fetchImpl, tally);
+  const listedPick = await pickStableCandidate(root, listed, fetchImpl, tally, rejected);
   if (listedPick) return { path: listedPick, source: "/events" };
   const skipped = [];
   if (tally.fixtures > 0) skipped.push(`${tally.fixtures} staging fixture(s)`);

@@ -1,4 +1,4 @@
-// Bounded 429 handling for staging QA logins (THROTTLE-SELF-HIT FIX).
+// Bounded 429 handling for staging and local QA logins (THROTTLE-SELF-HIT FIX).
 //
 // POST /auth/qa/:identity carries the shared `qa-login` throttle
 // (AUTH_THROTTLE_PER_MINUTE = 10/min per runner IP, src/throttle.ts). Every
@@ -44,10 +44,11 @@ export function parseRetryAfterSeconds(headers, fallbackSeconds = 60) {
  * @param {string} identity "qa-member" | "qa-moderator"
  * @param {number} retryAfterSeconds last Retry-After seen
  * @param {number} attempts attempts made
+ * @param {string} [scope] "staging" (default) or "local"
  */
-export function qaLoginThrottleError(identity, retryAfterSeconds, attempts) {
+export function qaLoginThrottleError(identity, retryAfterSeconds, attempts, scope = "staging") {
   return new Error(
-    `staging QA login as ${identity} refused with 429 after ${attempts} attempt(s) ` +
+    `${scope} QA login as ${identity} refused with 429 after ${attempts} attempt(s) ` +
       `(qa-login throttle: 10/min per runner IP; server asked to retry in ${retryAfterSeconds}s). ` +
       `Per-file QA logins exceeded the shared budget — cut the login count ` +
       `(scoped per-file sessions, no global-setup login) rather than retrying harder.`,
@@ -57,4 +58,23 @@ export function qaLoginThrottleError(identity, retryAfterSeconds, attempts) {
 /** Interruptible sleep for Retry-After waits. */
 export function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * Longest the Retry-After waits can take across `loginCount` sequential
+ * logins: each login sleeps at most QA_LOGIN_MAX_ATTEMPTS - 1 times, bounded
+ * by QA_LOGIN_RETRY_AFTER_CAP_SECONDS. Callers running under a test or hook
+ * timeout add this to their normal allowance — the staging config's 30 s
+ * timeout also bounds beforeAll hooks, and one capped wait is 65 s, so a
+ * login under the bare timeout dies as a hook timeout on the first 429
+ * instead of completing its retry (or failing with qaLoginThrottleError).
+ * Inside a hook, test.setTimeout raises that hook's own timeout.
+ *
+ * @param {number} loginCount sequential logins (2 for both QA identities)
+ */
+export function qaLoginRetryBudgetMs(loginCount) {
+  if (!Number.isInteger(loginCount) || loginCount < 1) {
+    throw new RangeError(`qaLoginRetryBudgetMs needs a positive login count, got ${loginCount}`);
+  }
+  return loginCount * (QA_LOGIN_MAX_ATTEMPTS - 1) * QA_LOGIN_RETRY_AFTER_CAP_SECONDS * 1000;
 }

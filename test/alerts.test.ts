@@ -10,6 +10,7 @@ import {
   shouldReport,
 } from "../src/alerts";
 import { registerErrorHandlers } from "../src/errors";
+import { MemberReadRefused } from "../src/member-reads";
 import { consume } from "../src/jobs/consumer";
 import { CALL_INTERNAL_ACTION, SYNC_EVENT } from "../src/jobs/constants";
 import { BotTerminalError } from "../src/jobs/types";
@@ -27,6 +28,7 @@ describe("dont-report list", () => {
     expect(shouldReport(Object.assign(new Error("invalid"), { name: "ZodError" }))).toBe(false);
     expect(shouldReport(new HTTPException(502))).toBe(true);
     expect(shouldReport(new BoomError("x"))).toBe(true);
+    expect(shouldReport(new MemberReadRefused())).toBe(true);
     expect(shouldReport("string")).toBe(true);
   });
 });
@@ -67,8 +69,11 @@ describe("rate limit", () => {
       event: "error.alert",
       fingerprint: "BoomError@/join",
       exception: "BoomError",
+      error_class: "BoomError",
       method: "POST",
       route: "/join",
+      build_sha: null,
+      release: null,
     });
     expect(fingerprintOf(new BoomError(), "/join")).toBe("BoomError@/join");
   });
@@ -159,6 +164,9 @@ describe("queue.failing", () => {
         job: "CallInternalAction",
         attempts: 2,
         exception: "BotTerminalError",
+        error_class: "BotTerminalError",
+        build_sha: null,
+        release: null,
       },
     ]);
   });

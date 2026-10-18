@@ -1,4 +1,5 @@
 import type { APIRequestContext, BrowserContext, Page } from "@playwright/test";
+import { qaLoginRetryBudgetMs } from "../qa-login-retry.mjs";
 import {
   emptyStorageState,
   expect,
@@ -14,6 +15,9 @@ import { loginQaIdentities } from "./qa-login";
 // the waitlist journeys below re-sign inside the test. Member + moderator:
 // two logins — the journeys need both identities.
 test.beforeAll(async () => {
+  // Hook timeout: the config's 30s covers the logins themselves; their
+  // bounded 429 waits get their own budget (qa-login-retry.mjs), two logins.
+  test.setTimeout(30_000 + qaLoginRetryBudgetMs(2));
   await loginQaIdentities();
 });
 
@@ -202,9 +206,10 @@ test("staging member joins then leaves the waitlist on a capacity-1 fixture", as
   browser,
 }) => {
   // Slow staging needs more than the 30s default: the re-sign below launches
-  // two browsers, then the journey drives a full fixture lifecycle. Triples
-  // the timeout to 90s.
-  test.slow();
+  // two browsers, then the journey drives a full fixture lifecycle. 90s
+  // covers that work; the re-sign's bounded 429 waits (two logins) get their
+  // own budget on top (qa-login-retry.mjs).
+  test.setTimeout(90_000 + qaLoginRetryBudgetMs(2));
   // The going/withdraw journey above already spent this file's stored bearers:
   // every authenticated event-page view rotates the session token server-side,
   // so the on-disk bearer is dead by now and the member page would render as a
@@ -288,8 +293,9 @@ test("staging waitlisted member is promoted when the seat holder withdraws", asy
   browser,
 }) => {
   // Same cost as the join + leave journey: a re-sign that launches two
-  // browsers, then a full fixture lifecycle. Triples the timeout to 90s.
-  test.slow();
+  // browsers, then a full fixture lifecycle. Same timeout shape: 90s for the
+  // work plus the re-sign's bounded 429 budget (two logins).
+  test.setTimeout(90_000 + qaLoginRetryBudgetMs(2));
   // The earlier tests in this file spent the stored bearers (event-page views
   // rotate the session token), so re-sign both identities; two more hits stay
   // under the 10/min QA-login budget.

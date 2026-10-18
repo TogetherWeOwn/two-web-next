@@ -1,0 +1,39 @@
+# Kit /_app asset headers (security lane).
+#
+# Adapter-owned immutable output is served by the generated Worker before
+# hooks run (adapter-cloudflare files/worker.js asset branch), so hooks alone
+# cannot cover it. This file is the supported adapter boundary: adapter merges
+# it with its generated _headers (X-Robots-Tag: noindex, immutable cache for
+# /_app/immutable/*) into the deployed asset directory.
+#
+# Admission: /_app/* is public, content-hashed, immutable JS/CSS with no
+# cookies, no session, no PII and never HTML. It is admitted without the APP_URL
+# host guard (the HTML document that enforces CSP IS host-guarded via the hook;
+# serving public JS to an untrusted Host discloses nothing new). The HTML
+# matrix (host guard, same-origin, robots, banners) stays in dispatchHookRequest
+# + Hono; /_app/* stays reserved to Hono in route-ownership.ts so any request
+# that DOES reach handle (dev, future adapter) falls through with full guards.
+#
+# Headers below mirror Hono's secureHeaders for non-HTML subresources when no
+# featured hosts are configured (the preview default). CSP on a subresource is
+# not enforced by browsers (only the document CSP matters); the static CSP here
+# is defense-in-depth parity, with frame-src 'none' (the /join widget exception
+# never applies to /_app) and img-src 'self' + Discord CDN. When
+# FEATURED_IMAGE_HOSTS is configured, HTML documents gain those hosts while
+# /_app keeps this static set: harmless, since subresource CSP is ignored.
+/_app/*
+  X-Content-Type-Options: nosniff
+  X-Frame-Options: DENY
+  Referrer-Policy: strict-origin-when-cross-origin
+  Permissions-Policy: camera=(), microphone=(), geolocation=()
+  Cross-Origin-Resource-Policy: same-origin
+  Cross-Origin-Opener-Policy: same-origin
+  Cross-Origin-Embedder-Policy: credentialless
+  Origin-Agent-Cluster: ?1
+  X-DNS-Prefetch-Control: off
+  X-Download-Options: noopen
+  X-Permitted-Cross-Domain-Policies: none
+  X-XSS-Protection: 0
+  X-Robots-Tag: noindex, nofollow
+  Content-Security-Policy: default-src 'self'; base-uri 'self'; connect-src 'self'; object-src 'none'; img-src 'self' https://cdn.discordapp.com; frame-src 'none'; style-src 'self'; script-src 'self'; font-src 'self'; frame-ancestors 'none'; form-action 'self'; report-to csp-endpoint
+  Reporting-Endpoints: csp-endpoint="/csp-reports"

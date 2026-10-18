@@ -23,10 +23,14 @@ export const HTML_READS = [
   "/auth/recover",
   "/events",
   "/events/past",
+  "/hotzones",
+  "/hotzones/:signal",
+  "/leaderboards/members",
   "/e/:key",
   "/profile",
   "/members/:user",
   "/admin",
+  "/admin/activity-log",
   "/admin/events",
   "/admin/events/new",
   "/admin/events/:key",
@@ -45,13 +49,18 @@ export const NON_HTML_READS = [
   "/auth/discord",
   "/auth/discord/callback",
   "/auth/discord/redirect",
+  "/login", // Vanity sign-in alias: 302 to /auth/discord, never an HTML page.
+  "/community", // Vanity lobby alias: 302 to /, never an HTML page.
   "/admin/events/create",
   "/admin/events/:key/edit",
   "/admin/featured-contents",
   "/admin/featured-contents/create",
   "/admin/featured-contents/:id/edit",
+  "/admin/queue/failed/:id/preview", // Operational advice is buffered JSON, never HTML.
+  "/admin/queue/source-evidence/:id", // Evidence-only proof is JSON, never HTML.
   "/sitemap_index.xml",
   "/robots.txt",
+  "/.well-known/security.txt", // Plain-text RFC 9116 disclosure file, never an HTML document.
   "/up",
   "/auth/status", // Bool-only JSON, never an HTML document.
   "/members", // Retired bare path: branded 404, never a member index.
@@ -61,10 +70,27 @@ export const NON_HTML_READS = [
   "/events.ics",
   "/events.rss",
   "/events/:file{.+\\.ics}",
+  "/llms.txt", // Assistant index of the Markdown alternates, never an HTML document.
+  "/about.md",
+  "/faq.md",
+  "/rules.md",
+  "/privacy.md",
+  "/join.md",
+  "/events.md",
+  "/e/:file{.+\\.md}", // Per-event Markdown alternate; cancelled 410, draft 403, never HTML.
+  "/api/public/events", // Bounded session-free JSON, never an HTML page.
+  "/api/public/events/:key",
+  "/api/public/community",
+  "/api/public/join",
+  "/openapi.json", // Static OpenAPI document, never an HTML page.
 ];
 
 export const concretePath = (pattern: string) =>
-  pattern.replace(":key", EVENT_KEY).replace(":user", MEMBER_ID).replace(":id", "1");
+  pattern
+    .replace(":key", EVENT_KEY)
+    .replace(":user", MEMBER_ID)
+    .replace(":id", "1")
+    .replace(":signal", "joins");
 
 export function pageShellFixture(status = "published") {
   const now = new Date("2030-01-01T20:00:00Z");
@@ -199,6 +225,13 @@ export function pageShellFixture(status = "published") {
       sql.includes("from rsvps")
     )
       return { rows: [] };
+    // The activity-log viewer selects an explicit 7-column projection that
+    // never includes `properties`; one null-causer system row keeps the page
+    // shell covered without inventing an access-log subject.
+    if (sql.includes('from "activity_log"'))
+      return {
+        rows: [[1, "Fixture activity", "event", "1", null, "created", now.toISOString()]],
+      };
     if (
       sql.includes('from "rsvps"') ||
       sql.includes('from "event_search_log"') ||

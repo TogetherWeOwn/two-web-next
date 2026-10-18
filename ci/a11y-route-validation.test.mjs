@@ -149,28 +149,24 @@ test("an earlier dynamic GET cannot stand in for an overlapping static route", (
   );
 });
 
-test("checked-in cases and test-only errors stay valid with explicit exclusions", () => {
-  const routes = Object.keys(coverage).map((path) => ({ method: "GET", path }));
-  const scenarios = auditCases(routes, coverage);
-  assert.equal(
-    scenarios.length,
-    Object.values(coverage).reduce((count, entry) => count + (entry.cases?.length || 0), 0),
-  );
+test("real audit-worker GET registrations accept checked-in cases and exclusions offline", async () => {
+  const worker = await loadAuditWorkerRoutes();
+  const scenarios = auditCases(worker.routes, worker.coverage);
+  assert(scenarios.length > 0);
+  const audited = new Set(scenarios.map((scenario) => scenario.route));
+  for (const [path, entry] of Object.entries(coverage))
+    assert.equal(
+      scenarios.filter((scenario) => scenario.route === path).length,
+      entry.cases?.length ?? 0,
+    );
+  for (const { method, path } of worker.routes) {
+    if (method === "GET") assert(worker.coverage[path]?.skip || audited.has(path), path);
+  }
   for (const status of [404, 429, 500, 503])
     assert(
       scenarios.some((entry) => entry.route === `/__a11y/${status}` && entry.status === status),
     );
   assert(!scenarios.some((entry) => entry.route === "/events/:file{.+\\.ics}"));
-});
-
-test("all real audit-worker GET registrations accept their checked-in cases offline", async () => {
-  const worker = await loadAuditWorkerRoutes();
-  const scenarios = auditCases(worker.routes, worker.coverage);
-  assert(scenarios.length > 0);
-  const audited = new Set(scenarios.map((scenario) => scenario.route));
-  for (const { method, path } of worker.routes) {
-    if (method === "GET") assert(worker.coverage[path]?.skip || audited.has(path), path);
-  }
 });
 
 test("runner validates coverage before acquiring fixtures or launching a browser", async () => {

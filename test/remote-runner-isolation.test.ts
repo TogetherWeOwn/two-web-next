@@ -70,7 +70,7 @@ function loadViaPinnedWrangler(cwd: string, env: NodeJS.ProcessEnv, envFiles?: s
   );
   expect(
     JSON.parse(readFileSync(path.join(root, "node_modules/wrangler/package.json"), "utf8")).version,
-  ).toBe("4.146.0");
+  ).toBe("4.149.0");
   const require = createRequire(import.meta.url);
   const context = vm.createContext({
     process: { env: { ...env }, cwd: () => cwd, platform: "linux" },
@@ -95,8 +95,8 @@ function loadViaPinnedWrangler(cwd: string, env: NodeJS.ProcessEnv, envFiles?: s
         return module.exports;
       };
     };
-    const path28 = { resolve: (...parts) => __require("path").resolve(process.cwd(), ...parts) };
-    const path28__namespace = { default: __require("path") };
+    const path29 = { resolve: (...parts) => __require("path").resolve(process.cwd(), ...parts) };
+    const path29__namespace = { default: __require("path") };
     ${sourceBetween(source, "var require_package = __commonJS({", "function validateFileSecrets(")}
     ${sourceBetween(source, "var require_main2 = __commonJS({", "// src/config/case-insensitive-env.ts")}
     ${sourceBetween(source, "function getDefaultEnvFiles(", "var import_dotenv2, import_dotenv_expand, isWindows5;")}
@@ -235,20 +235,28 @@ function python(file: string, body: string, args: string[] = []) {
   return JSON.parse(result);
 }
 function git(repo: string, ...args: string[]) {
-  return execFileSync("git", ["-C", repo, ...args], {
-    encoding: "utf8",
-    stdio: ["ignore", "pipe", "pipe"],
-    env: {
-      PATH: process.env.PATH,
-      HOME: repo,
-      GIT_CONFIG_NOSYSTEM: "1",
-      GIT_CONFIG_GLOBAL: os.devNull,
-      GIT_AUTHOR_NAME: "Synthetic Fixture",
-      GIT_AUTHOR_EMAIL: "fixture@example.invalid",
-      GIT_COMMITTER_NAME: "Synthetic Fixture",
-      GIT_COMMITTER_EMAIL: "fixture@example.invalid",
+  return execFileSync(
+    "git",
+    [
+      "-c",
+      "user.name=Synthetic Fixture",
+      "-c",
+      "user.email=fixture@example.invalid",
+      "-C",
+      repo,
+      ...args,
+    ],
+    {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+      env: {
+        PATH: process.env.PATH,
+        HOME: repo,
+        GIT_CONFIG_NOSYSTEM: "1",
+        GIT_CONFIG_GLOBAL: os.devNull,
+      },
     },
-  }).trim();
+  ).trim();
 }
 function committedFixture(dir: string) {
   // Git objects/HEAD exist only in this disposable fixture, never this worktree.

@@ -5,7 +5,7 @@ set -euo pipefail
 
 KEYRING="${PGDG_KEYRING:-/usr/share/keyrings/pgdg.gpg}"
 SOURCE_LIST="${PGDG_SOURCE_LIST:-/etc/apt/sources.list.d/pgdg.list}"
-CLIENT_BIN="${PGDG_CLIENT_BIN:-/usr/lib/postgresql/17/bin}"
+CLIENT_BIN="${PGDG_CLIENT_BIN:-/usr/lib/postgresql/18/bin}"
 T="$(mktemp -d)"
 STAGED=""
 cleanup() {
@@ -39,13 +39,13 @@ printf 'deb [signed-by=%s] http://apt.postgresql.org/pub/repos/apt %s-pgdg main\
   "$KEYRING" "$CODENAME" > "$T/pgdg.list"
 install_atomic "$T/pgdg.list" "$SOURCE_LIST"
 sudo -n env DEBIAN_FRONTEND=noninteractive apt-get update -y
-sudo -n env DEBIAN_FRONTEND=noninteractive apt-get install -y postgresql-client-17
+sudo -n env DEBIAN_FRONTEND=noninteractive apt-get install -y postgresql-client-18
 
-# A persistent runner may have other client majors installed. Select 17 directly
+# A persistent runner may have other client majors installed. Select 18 directly
 # and carry that selection to subsequent GitHub steps instead of using pg_wrapper.
 VERSION="$("$CLIENT_BIN/pg_dump" --version)"
-if [[ ! "$VERSION" =~ ^pg_dump\ \(PostgreSQL\)\ 17([.[:space:]]|$) ]]; then
-  echo "backup-bootstrap: expected pg_dump major 17" >&2
+if [[ ! "$VERSION" =~ ^pg_dump\ \(PostgreSQL\)\ 18([.[:space:]]|$) ]]; then
+  echo "backup-bootstrap: expected pg_dump major 18" >&2
   exit 1
 fi
 printf '%s\n' "$VERSION"

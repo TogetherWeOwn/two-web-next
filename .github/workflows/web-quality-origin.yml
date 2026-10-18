@@ -1,0 +1,76 @@
+name: web-quality-origin
+
+# Web quality gate against a deployed origin (owner policy 2026-10-10): called by e2e-staging after every staging
+# deploy, where a failure fails that run and so blocks promote-to-production (ci/resolve-promotion-sha.mjs), and
+# nightly against staging to catch drift that no PR changes (third-party scripts, CDN, content). GET only: no
+# sign-in, no write, no secret; the origin must be on ci/lighthouse-origin-lib.cjs's allowlist.
+on:
+  workflow_call:
+    inputs:
+      origin:
+        type: string
+        required: true
+  schedule:
+    - cron: "37 4 * * *"
+  workflow_dispatch:
+    inputs:
+      origin:
+        description: Origin to measure
+        type: choice
+        required: true
+        default: https://next.togetherweown.com
+        options:
+          - https://next.togetherweown.com
+
+permissions:
+  contents: read
+
+jobs:
+  quality:
+    name: quality
+    # Public repo: standard GitHub-hosted Linux only.
+    runs-on: ubuntu-latest
+    # 45 covers one desktop-collect retry (ci/lighthouse-quality-run.mjs makes a
+    # second whole-run attempt when the first comes up short of LHRs).
+    timeout-minutes: 45
+    env:
+      ORIGIN: ${{ inputs.origin || 'https://next.togetherweown.com' }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci --include=dev --no-audit --no-fund
+      - name: Install Chromium
+        run: |
+          npx playwright install --with-deps chromium
+          node -e 'require("fs").appendFileSync(process.env.GITHUB_ENV, "CHROME_PATH=" + require("playwright").chromium.executablePath() + "\n")'
+      - name: Lighthouse performance budgets (mobile, ci/lighthouserc.cjs)
+        run: npm run lighthouse:origin -- "$ORIGIN"
+      - name: Lighthouse quality scores (desktop, categories vs ci/quality-budget.json)
+        if: ${{ !cancelled() }}
+        env:
+          QUALITY_ORIGIN: ${{ env.ORIGIN }}
+        run: npm run lighthouse:quality
+      - name: Web standards (security headers, HTML basics, internal links)
+        if: ${{ !cancelled() }}
+        run: npm run standards -- --origin "$ORIGIN"
+      - name: Quality summary (what to fix)
+        if: ${{ !cancelled() }}
+        run: |
+          rc=0
+          node ci/lighthouse-summary.mjs >> "$GITHUB_STEP_SUMMARY" || rc=$?
+          if [ -f .lighthouseci/watch-summary.md ]; then cat .lighthouseci/watch-summary.md >> "$GITHUB_STEP_SUMMARY"; fi
+          exit "$rc"
+      - name: Quality evidence (including failures)
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: web-quality-origin-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .lighthouseci/
+          include-hidden-files: true
+          if-no-files-found: warn
+          retention-days: 14

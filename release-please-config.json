@@ -4,6 +4,7 @@
     ".": {
       "release-type": "node",
       "include-component-in-tag": false,
+      "bump-minor-pre-major": true,
       "changelog-sections": [
         {
           "type": "perf",
@@ -24,6 +25,10 @@
         },
         {
           "type": "fix",
+          "section": "Fixed"
+        },
+        {
+          "type": "security",
           "section": "Fixed"
         },
         {
@@ -61,7 +66,8 @@
           "section": "Style",
           "hidden": true
         }
-      ]
+      ],
+      "release-as": "1.0.0"
     }
   }
 }

@@ -1,0 +1,313 @@
+name: gradual-promote-proof
+
+# Manual proof exercise for the pinned central gradual-promote action.
+# Never runs on a push, PR, schedule, release, or completion of another
+# workflow. It targets exactly one isolated synthetic Worker
+# (two-gradual-promote-proof on workers.dev, no data bindings) so the
+# unmodified action can be exercised 5% -> 50% -> 100% plus a forced
+# health-failure rollback without touching staging or production.
+# See docs/gradual-promote-proof.md for the runbook and evidence schema.
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "success = healthy candidate sweeps 5-50-100; rollback = candidate /up fails and the action must auto-restore the captured original"
+        required: true
+        type: choice
+        options: [success, rollback]
+        default: success
+      confirm_worker:
+        description: "Target lock: repeat the exact synthetic Worker name (two-gradual-promote-proof)"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+# One proof at a time against the single synthetic Worker (target lock);
+# a queued run is never cancelled into a half-promoted split.
+concurrency:
+  group: gradual-promote-proof
+  cancel-in-progress: false
+
+jobs:
+  proof:
+    name: gradual-promote-proof
+    # Only the reviewed harness on main may run; a branch copy can never
+    # dispatch against the synthetic target.
+    if: github.ref == 'refs/heads/main'
+    runs-on: ${{ github.event.repository.private && fromJSON('["self-hosted","two-selfhosted"]') || 'ubuntu-latest' }}
+    timeout-minutes: 30
+    environment:
+      name: staging
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci --include=dev
+
+      - name: Target lock and production exclusion (before any Cloudflare call)
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p proof-evidence
+          node ci/gradual-promote-proof/proof-lib.mjs --guard \
+            --worker "$WORKER_NAME" --confirm "$CONFIRM_WORKER" --run-mode "$RUN_MODE"
+          node --test ci/gradual-promote-proof/proof.test.mjs
+        env:
+          WORKER_NAME: two-gradual-promote-proof
+          CONFIRM_WORKER: ${{ inputs.confirm_worker }}
+          RUN_MODE: ${{ inputs.mode }}
+
+      - name: Require staging Cloudflare credentials (names only)
+        shell: bash
+        run: |
+          set -euo pipefail
+          : "${CLOUDFLARE_API_TOKEN:?missing staging CLOUDFLARE_API_TOKEN secret}"
+          : "${CLOUDFLARE_ACCOUNT_ID:?missing staging CLOUDFLARE_ACCOUNT_ID secret}"
+          echo "staging Cloudflare credentials present (values not printed)"
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+
+      - name: Resolve and lock the workers.dev proof domain (read-only)
+        id: domain
+        shell: bash
+        run: |
+          set -euo pipefail
+          SUBDOMAIN="$(curl --fail --silent --show-error \
+            -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+            "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/workers/subdomain" \
+            | node -e 'let s="";process.stdin.on("data",(c)=>{s+=c;});process.stdin.on("end",()=>{const sub=JSON.parse(s)?.result?.subdomain;if(typeof sub!=="string"||!/^[a-z0-9][a-z0-9-]*$/.test(sub)){console.error("workers subdomain missing or malformed");process.exit(1);}process.stdout.write(sub);});')"
+          DOMAIN="$WORKER_NAME.$SUBDOMAIN.workers.dev"
+          node ci/gradual-promote-proof/proof-lib.mjs --guard \
+            --worker "$WORKER_NAME" --confirm "$WORKER_NAME" --domain "$DOMAIN"
+          echo "domain=$DOMAIN" >> "$GITHUB_OUTPUT"
+        env:
+          WORKER_NAME: two-gradual-promote-proof
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+
+      # The pinned action runs `npx wrangler` from the workspace root with
+      # no --config flag, so the generated proof config replaces
+      # wrangler.jsonc in this ephemeral checkout. Its top-level name and
+      # env.production.name are both the synthetic Worker: the action's
+      # --env production steps and its flagless rollback resolve to the
+      # same isolated target. The committed config is never edited.
+      - name: Generate the isolated proof config (original)
+        shell: bash
+        run: |
+          set -euo pipefail
+          node ci/gradual-promote-proof/proof-lib.mjs --generate-config \
+            --fixture-mode ok --label original > wrangler.jsonc
+          node ci/gradual-promote-proof/proof-lib.mjs --assert-config --file wrangler.jsonc
+          cp wrangler.jsonc proof-evidence/config-original.json
+
+      - name: Establish the captured original at 100 percent
+        id: baseline
+        shell: bash
+        run: |
+          set -euo pipefail
+          ORIGINAL_TAG="proof-original-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          # Bootstrap only: create the synthetic Worker on its first run.
+          # Every run then uploads a fresh tagged baseline and deploys it
+          # at 100%, so the captured original is a known fixture version.
+          if ! npx wrangler deployments list --env production --name "$WORKER_NAME" --json \
+              > proof-evidence/pre-deployments.json 2> proof-evidence/pre-deployments.err; then
+            echo "synthetic Worker not found; bootstrapping it"
+            npx wrangler deploy --env production
+          fi
+          npx wrangler versions upload --env production --tag "$ORIGINAL_TAG"
+          ORIGINAL_VERSION="$(npx wrangler versions list --env production --name "$WORKER_NAME" --json \
+            | node ci/gradual-promote-proof/proof-lib.mjs --resolve-tag --tag "$ORIGINAL_TAG")"
+          npx wrangler versions deploy --env production --name "$WORKER_NAME" \
+            --version-tag "${ORIGINAL_TAG}@100%" --yes
+          npx wrangler deployments list --env production --name "$WORKER_NAME" --json \
+            > proof-evidence/baseline-deployments.json
+          node ci/gradual-promote-proof/proof-lib.mjs --assert-deployed \
+            --version "$ORIGINAL_VERSION" < proof-evidence/baseline-deployments.json
+          node ci/gradual-promote-proof/probe.mjs "https://$DOMAIN" "$ORIGINAL_VERSION" \
+            --attempts 6 --delay-ms 5000 \
+            | tee proof-evidence/probe-original-live.jsonl
+          echo "original_version=$ORIGINAL_VERSION" >> "$GITHUB_OUTPUT"
+          echo "original_tag=$ORIGINAL_TAG" >> "$GITHUB_OUTPUT"
+        env:
+          WORKER_NAME: two-gradual-promote-proof
+          DOMAIN: ${{ steps.domain.outputs.domain }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+
+      # Cloudflare applies a version override only to a version that is in
+      # the current deployment; an uploaded-but-undeployed candidate would
+      # silently fall back to normal routing and the original would answer
+      # the probe. Deploying the candidate at 0% (Cloudflare's documented
+      # smoke-test pattern) puts it in the deployment without moving any
+      # live traffic, so the override below can truly pin to it.
+      - name: Upload the candidate and deploy it at 0 percent (no live traffic)
+        id: candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          CANDIDATE_TAG="proof-candidate-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${RUN_MODE}"
+          node ci/gradual-promote-proof/proof-lib.mjs --generate-config \
+            --run-mode "$RUN_MODE" --label candidate > wrangler.jsonc
+          node ci/gradual-promote-proof/proof-lib.mjs --assert-config --file wrangler.jsonc
+          cp wrangler.jsonc proof-evidence/config-candidate.json
+          npx wrangler versions upload --env production --tag "$CANDIDATE_TAG"
+          CANDIDATE_VERSION="$(npx wrangler versions list --env production --name "$WORKER_NAME" --json \
+            | node ci/gradual-promote-proof/proof-lib.mjs --resolve-tag --tag "$CANDIDATE_TAG")"
+          npx wrangler versions deploy --env production --name "$WORKER_NAME" \
+            "${ORIGINAL_VERSION}@100" --version-tag "${CANDIDATE_TAG}@0%" --yes
+          npx wrangler deployments list --env production --name "$WORKER_NAME" --json \
+            > proof-evidence/candidate-zero-deployments.json
+          echo "candidate_version=$CANDIDATE_VERSION" >> "$GITHUB_OUTPUT"
+          echo "candidate_tag=$CANDIDATE_TAG" >> "$GITHUB_OUTPUT"
+        env:
+          WORKER_NAME: two-gradual-promote-proof
+          RUN_MODE: ${{ inputs.mode }}
+          ORIGINAL_VERSION: ${{ steps.baseline.outputs.original_version }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+
+      # Before any traffic moves, prove the version-override header truly
+      # pins probes to the candidate (attribution header, not just a 200;
+      # the candidate is in the deployment at 0%, so the override applies)
+      # and that the candidate's health matches the run mode. A rollback
+      # run whose candidate passes smoke here would make the forced
+      # failure fake, so it stops before the action.
+      - name: Pre-promote override attribution and candidate health
+        shell: bash
+        run: |
+          set -euo pipefail
+          node ci/gradual-promote-proof/probe.mjs "https://$DOMAIN" "$CANDIDATE_VERSION" \
+            --version-override "$WORKER_NAME=\"$CANDIDATE_VERSION\"" \
+            --attempts 6 --delay-ms 5000 \
+            | tee proof-evidence/probe-candidate-override.jsonl
+          set +e
+          node bin/smoke.mjs "https://$DOMAIN" \
+            --version-override "$WORKER_NAME=\"$CANDIDATE_VERSION\"" \
+            > proof-evidence/smoke-candidate-override.txt 2>&1
+          SMOKE_EXIT=$?
+          set -e
+          echo "pre-promote candidate smoke exit: $SMOKE_EXIT (mode: $RUN_MODE)"
+          if [ "$RUN_MODE" = "success" ] && [ "$SMOKE_EXIT" -ne 0 ]; then
+            echo "::error::healthy candidate failed pre-promote smoke; not invoking the action"
+            exit 1
+          fi
+          if [ "$RUN_MODE" = "rollback" ] && [ "$SMOKE_EXIT" -eq 0 ]; then
+            echo "::error::rollback candidate passed pre-promote smoke; forced failure would be fake"
+            exit 1
+          fi
+        env:
+          WORKER_NAME: two-gradual-promote-proof
+          DOMAIN: ${{ steps.domain.outputs.domain }}
+          RUN_MODE: ${{ inputs.mode }}
+          CANDIDATE_VERSION: ${{ steps.candidate.outputs.candidate_version }}
+
+      # The action records its rollback target from the live deployment and
+      # refuses to start from a split, so the 0% candidate split used for
+      # the probe must collapse back to the captured original alone at
+      # 100% first. This is a pre-action reset to the run's own baseline,
+      # not a post-action restore: after the action runs, only the
+      # action's own rollback may move traffic.
+      - name: Restore the single-version original before the action
+        shell: bash
+        run: |
+          set -euo pipefail
+          npx wrangler versions deploy --env production --name "$WORKER_NAME" \
+            --version-tag "${ORIGINAL_TAG}@100%" --yes
+          npx wrangler deployments list --env production --name "$WORKER_NAME" --json \
+            > proof-evidence/pre-action-deployments.json
+          node ci/gradual-promote-proof/proof-lib.mjs --assert-deployed \
+            --version "$ORIGINAL_VERSION" < proof-evidence/pre-action-deployments.json
+        env:
+          WORKER_NAME: two-gradual-promote-proof
+          ORIGINAL_VERSION: ${{ steps.baseline.outputs.original_version }}
+          ORIGINAL_TAG: ${{ steps.baseline.outputs.original_tag }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+
+      # The unmodified pinned central action: 5% -> 50% -> 100% with the
+      # real smoke checker per stage, and its own automatic rollback to
+      # the version it records before promoting. In rollback mode this
+      # step is EXPECTED to fail; that failure is the evidence and is
+      # never masked (no continue-on-error anywhere in this workflow).
+      - name: Gradual promotion via the pinned central action
+        id: gradual
+        uses: TogetherWeOwn/.github/actions/gradual-promote@1dcce452d9066c02e4ab3d99931edf75d50388d7
+        with:
+          worker-name: two-gradual-promote-proof
+          version-tag: ${{ steps.candidate.outputs.candidate_tag }}
+          domain: ${{ steps.domain.outputs.domain }}
+          api-token: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          account-id: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          allow-indexable: "false"
+
+      # Independent readback (not the action's helper): the final live
+      # deployment must be the candidate at 100% after a successful
+      # action, or the captured original at 100% after a failed one.
+      # There is no post-action restore step in this workflow (the only
+      # redeploy is the pre-action baseline reset above): restoration can
+      # only be the action's own automatic rollback. Manual restore, if this
+      # readback ever fails, is a documented operator action
+      # (docs/gradual-promote-proof.md), never a hidden step here.
+      - name: Independent readback and evidence record
+        if: always() && steps.baseline.outputs.original_version != '' && steps.candidate.outputs.candidate_version != ''
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "action rollback-version-id output: $ACTION_ROLLBACK_ID"
+          echo "action promoted-version-id output: $ACTION_PROMOTED_ID"
+          npx wrangler deployments list --env production --name "$WORKER_NAME" --json \
+            > proof-evidence/post-deployments.json
+          npx wrangler versions list --env production --name "$WORKER_NAME" --json \
+            > proof-evidence/post-versions.json
+          node ci/gradual-promote-proof/proof-lib.mjs --evidence \
+            --deployments proof-evidence/post-deployments.json \
+            --run-mode "$RUN_MODE" --worker "$WORKER_NAME" --domain "$DOMAIN" \
+            --original-version "$ORIGINAL_VERSION" --original-tag "$ORIGINAL_TAG" \
+            --candidate-version "$CANDIDATE_VERSION" --candidate-tag "$CANDIDATE_TAG" \
+            --action-outcome "$ACTION_OUTCOME" \
+            > proof-evidence/evidence.json
+          cat proof-evidence/evidence.json >> "$GITHUB_STEP_SUMMARY"
+          if [ "$ACTION_OUTCOME" = "success" ]; then EXPECTED="$CANDIDATE_VERSION"; else EXPECTED="$ORIGINAL_VERSION"; fi
+          node ci/gradual-promote-proof/proof-lib.mjs --assert-deployed \
+            --version "$EXPECTED" < proof-evidence/post-deployments.json
+          node ci/gradual-promote-proof/probe.mjs "https://$DOMAIN" "$EXPECTED" \
+            --attempts 6 --delay-ms 5000 \
+            | tee proof-evidence/probe-final-live.jsonl
+          # The action must have recorded the same original we captured.
+          [ "$ACTION_ROLLBACK_ID" = "$ORIGINAL_VERSION" ] || {
+            echo "::error::action rollback target $ACTION_ROLLBACK_ID != captured original $ORIGINAL_VERSION"
+            exit 1
+          }
+          [ "$ACTION_PROMOTED_ID" = "$CANDIDATE_VERSION" ] || {
+            echo "::error::action promoted id $ACTION_PROMOTED_ID != candidate $CANDIDATE_VERSION"
+            exit 1
+          }
+        env:
+          WORKER_NAME: two-gradual-promote-proof
+          DOMAIN: ${{ steps.domain.outputs.domain }}
+          RUN_MODE: ${{ inputs.mode }}
+          ORIGINAL_VERSION: ${{ steps.baseline.outputs.original_version }}
+          ORIGINAL_TAG: ${{ steps.baseline.outputs.original_tag }}
+          CANDIDATE_VERSION: ${{ steps.candidate.outputs.candidate_version }}
+          CANDIDATE_TAG: ${{ steps.candidate.outputs.candidate_tag }}
+          ACTION_OUTCOME: ${{ steps.gradual.outcome }}
+          ACTION_ROLLBACK_ID: ${{ steps.gradual.outputs.rollback-version-id }}
+          ACTION_PROMOTED_ID: ${{ steps.gradual.outputs.promoted-version-id }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+
+      - name: Upload proof evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: gradual-promote-proof-${{ inputs.mode }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: proof-evidence/
+          if-no-files-found: warn
+          retention-days: 90

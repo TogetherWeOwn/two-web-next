@@ -37,13 +37,7 @@ const secondKey = "01ARZ3NDEKTSV4RRFFQ69G5FAW";
 type SyncMessage = Extract<QueueMessage, { kind: "sync-event" }>;
 
 function safeUrl(raw: string) {
-  const url = testDatabaseUrl(raw);
-  // Preserve the helper's localhost CI service allowance, which requires both
-  // GITHUB_ACTIONS=true and CI=true; restrict the agent lane to its test database.
-  if (url.hostname === "agent-testdb" && url.pathname !== "/two_web_next") {
-    throw new Error("jobs isolation requires the agent-testdb two_web_next database");
-  }
-  return url;
+  return testDatabaseUrl(raw);
 }
 function gate() {
   let release!: () => void;

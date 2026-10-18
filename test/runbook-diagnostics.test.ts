@@ -67,17 +67,43 @@ describe("runbook diagnostic and homepage contract", () => {
     expect(home).toMatch(/\*\*200\*\*.*guest/);
     expect(home).not.toMatch(/500|Not guaranteed/);
     expect(home).toMatch(/counts.*events.*featured/i);
-    expect(routeRow("/events/:key")).toMatch(/500 HTML.*503 JSON/);
+    expect(routeRow("/events/past")).toMatch(
+      /Classified DB outages.*503.*missing event DB.*plain-text.*503.*other uncaught failures.*500 HTML/i,
+    );
+    expect(routeRow("/e/:key")).toMatch(
+      /missing event DB.*plain-text.*503.*other failed reads.*plain-text.*503/,
+    );
     expect(outage).toMatch(/public\s+fallback[^.]*not[^.]*private[^.]*writes/i);
   });
 
-  it("cites shipped readiness and keeps the broader outage PR pending", () => {
+  it("cites shipped readiness and documents current outage responses", () => {
     expect(health).toMatch(
       /Readiness shipped in \[#111\]\(https:\/\/github.com\/TogetherWeOwn\/two-web-next\/pull\/111\)/,
     );
     expect(health).not.toMatch(/Pending[^\n]*#111/);
-    expect(outage).toMatch(
-      /Pending[^\n]*\[#92\]\(https:\/\/github.com\/TogetherWeOwn\/two-web-next\/pull\/92\)/,
+    expect(outage).not.toMatch(/Pending[^\n]*#92|not shipped in this snapshot/);
+    expect(routeRow("/events/past")).toMatch(/Classified DB outages.*503/);
+    expect(routeRow("/join/discord")).toMatch(
+      /classified DB outage.*503.*other uncaught join-store, attempt or session errors.*500/i,
+    );
+    expect(routeRow("/profile")).toMatch(
+      /member-data read failures.*503.*other save failures.*500/,
+    );
+    expect(routeRow("/admin")).toMatch(
+      /admin reads.*503.*other uncaught admin-write failures.*500/i,
+    );
+    const watch = readFileSync(new URL("../docs/48h-watch-spec.md", import.meta.url), "utf8");
+    expect(watch).not.toMatch(/uncaught DB failure is 500 HTML/);
+    const watchRow = (route: string) => {
+      const row = watch.split("\n").find((line) => line.startsWith(`| ${route} |`));
+      expect(row, `watch-spec row for ${route}`).toBeDefined();
+      return row!;
+    };
+    expect(watchRow("M member writes")).toMatch(
+      /classified DB outage and profile read failure 503.*other session, transaction or save failure 500/,
+    );
+    expect(watchRow("A privileged")).toMatch(
+      /admin reads.*classified DB outage 503.*other uncaught admin-write failure 500/,
     );
     expect(health).not.toMatch(/curl\s|fetch\(/);
     expect(outage).not.toMatch(/curl\s|fetch\(/);

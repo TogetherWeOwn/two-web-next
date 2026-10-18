@@ -1,8 +1,31 @@
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
+
+// Tie the hermetic action mirror to the immutable production ref. A pin change
+// needs verified upstream hashes so local tests cannot cover stale code.
+const gradualPromoteHashesByRef: Record<
+  string,
+  { helper: string; manifest: string; gate: string }
+> = {
+  "89c290be20c0044efaf6916f28341c76e75fff06": {
+    helper: "8f87a83d79cc24dacdb5a7247eb1ad67afa0dde71ce3d210980927fe681a320a",
+    manifest: "3ec491a337a484c5cdcb25695c6d0d9c48576a76a13c94453bd5ff98aa59b13a",
+    gate: "973d48bd7a0ee0c130a4842e4bd2441451791d1483abdef37fcd7a0895766914",
+  },
+};
+
+function actionManifestSha256(content: string) {
+  const executableContent = content
+    .split(/\r?\n/)
+    .filter((line) => !/^\s*#/.test(line) && line.trim() !== "")
+    .join("\n");
+  return createHash("sha256").update(executableContent).digest("hex");
+}
 
 // Execute the staging workflow's actual shell block with a fake checker and sleep.
 // The checker itself has loopback-fixture coverage in smoke.test.mjs.
@@ -79,13 +102,16 @@ process.exit(pass ? 0 : 1);
   }
 }
 
-// Execute the production workflow's actual public-route shell block with a fake
-// checker and sleep, mirroring the staging helper. The checker itself has
-// loopback-fixture coverage in smoke.test.mjs: no production requests here.
+// Execute the shared gradual-promotion action's actual 5-percent health/SLO gate
+// shell block with a fake checker and sleep, mirroring the staging helper. The
+// checker itself has loopback-fixture coverage in smoke.test.mjs: no production
+// requests here. The gate pins its probes to the NEW version through
+// --version-override, so the canary is tested directly instead of through
+// sampled traffic.
 function productionSmoke(succeedOnAttempt: number) {
-  const workflow = readFileSync(".github/workflows/deploy-production.yml", "utf8");
-  const block = workflow.match(
-    /      - name: Smoke test production public routes\n[\s\S]*?        run: \|\n((?:          .*\n)+)/,
+  const action = readFileSync(".github/actions/gradual-promote/action.yml", "utf8");
+  const block = action.match(
+    /    - name: Health and SLO gate at 5 percent\n[\s\S]*?      run: \|\n((?:        .*\n)+)/,
   )?.[1];
   expect(block).toBeDefined();
   const scratch = mkdtempSync(
@@ -94,6 +120,7 @@ function productionSmoke(succeedOnAttempt: number) {
       "prod-route-smoke-",
     ),
   );
+  const smokeUrl = pathToFileURL(join(process.cwd(), "bin/smoke.mjs")).href;
   try {
     writeFileSync(
       join(scratch, "node"),
@@ -101,8 +128,28 @@ function productionSmoke(succeedOnAttempt: number) {
 import { appendFileSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 const attempts = join(process.env.RUNNER_TEMP, "attempts");
+// On success the smoke block stamps its finish time with \`node -e ...\` for
+// the error-rate gate's window start. Run that snippet like real node (a
+// broken stamp throws here and fails the step) without counting it as a
+// checker attempt.
+if (process.argv[2] === "-e") {
+  (0, eval)(process.argv[3]);
+  process.exit(0);
+}
 appendFileSync(attempts, "x");
-if (process.argv.length !== 5 || process.argv[2] !== "bin/smoke.mjs" || process.argv[3] !== "https://togetherweown.com" || process.argv[4] !== "--allow-indexable") {
+// The shell must hand the checker a value the REAL checker accepts. The
+// fake validates the received override with the real assertVersionOverride
+// (not a retyped pattern), so shell/checker drift fails here instead of
+// failing every canary gate into rollback in production.
+const { assertVersionOverride } = await import(${JSON.stringify(smokeUrl)});
+try {
+  assertVersionOverride(process.argv[6]);
+} catch (error) {
+  console.error("checker rejected version override: " + (error instanceof Error ? error.message : error));
+  process.exit(2);
+}
+const expectedOverride = 'two-web-next-production="' + process.env.NEW_VERSION + '"';
+if (process.argv.length !== 7 || process.argv[2] !== "bin/smoke.mjs" || process.argv[3] !== "https://togetherweown.com" || process.argv[4] !== "--allow-indexable" || process.argv[5] !== "--version-override" || process.argv[6] !== expectedOverride) {
   console.error("unexpected checker invocation");
   process.exit(2);
 }
@@ -120,35 +167,41 @@ process.exit(pass ? 0 : 1);
     );
     writeFileSync(join(scratch, "sleeps"), "");
     writeFileSync(join(scratch, "attempts"), "");
+    writeFileSync(join(scratch, "github-output"), "");
     const bash = spawnSync("bash", ["-c", "command -v bash"], { encoding: "utf8" });
     expect(bash.status).toBe(0);
     // Only our fakes are on PATH: no real network request or retry delay.
-    const result = spawnSync(
-      bash.stdout.trim(),
-      ["-e", "-c", block!.replace(/^          /gm, "")],
-      {
-        encoding: "utf8",
-        timeout: 5000,
-        env: {
-          ...process.env,
-          // This container exports BASH_ENV pointing at a profile that
-          // reassigns PATH, which would drop the fakes below and send real
-          // network requests plus real 10s sleeps. Neutralize both profile
-          // hooks so only our fakes are on PATH.
-          BASH_ENV: "/dev/null",
-          ENV: "/dev/null",
-          PATH: scratch,
-          RUNNER_TEMP: scratch,
-          SMOKE_SUCCEED_ON_ATTEMPT: String(succeedOnAttempt),
-        },
+    const result = spawnSync(bash.stdout.trim(), ["-e", "-c", block!.replace(/^        /gm, "")], {
+      encoding: "utf8",
+      timeout: 5000,
+      env: {
+        ...process.env,
+        // The block appends its finished-at step output here on success.
+        GITHUB_OUTPUT: join(scratch, "github-output"),
+        // This container exports BASH_ENV pointing at a profile that
+        // reassigns PATH, which would drop the fakes below and send real
+        // network requests plus real 10s sleeps. Neutralize both profile
+        // hooks so only our fakes are on PATH.
+        BASH_ENV: "/dev/null",
+        ENV: "/dev/null",
+        PATH: scratch,
+        RUNNER_TEMP: scratch,
+        SMOKE_SUCCEED_ON_ATTEMPT: String(succeedOnAttempt),
+        // The gate block reads these from its own env mapping in the
+        // action; the test wires the production values directly.
+        DOMAIN: "togetherweown.com",
+        INDEXABLE: "--allow-indexable",
+        WORKER_NAME: "two-web-next-production",
+        NEW_VERSION: "12345678-1234-1234-1234-123456789abc",
       },
-    );
+    });
     expect(result.error).toBeUndefined();
     return {
       status: result.status,
       output: result.stdout + result.stderr,
       attempts: readFileSync(join(scratch, "attempts"), "utf8").length,
       sleeps: readFileSync(join(scratch, "sleeps"), "utf8").length,
+      stepOutput: readFileSync(join(scratch, "github-output"), "utf8"),
     };
   } finally {
     rmSync(scratch, { recursive: true, force: true });
@@ -406,9 +459,15 @@ describe("production deploy smoke (offline)", () => {
     expect(result.status, result.output).toBe(0);
     expect(result.attempts).toBe(attempt);
     expect(result.sleeps).toBe(attempt - 1);
-    expect(result.output).toContain(`production smoke ok (attempt ${attempt})`);
+    expect(result.output).toContain(`stage 5 percent smoke ok (attempt ${attempt})`);
     expect(result.output).not.toContain("unexpected checker invocation");
     expect(result.output).not.toContain("::error::");
+    // The error-rate gate's window starts at this stamp, so a successful
+    // smoke must emit a parseable finished-at step output.
+    expect(result.stepOutput).toMatch(/^finished-at=\d{4}-\d{2}-\d{2}T[\d:.]+Z\n$/);
+    expect(Number.isNaN(Date.parse(result.stepOutput.trim().slice("finished-at=".length)))).toBe(
+      false,
+    );
   });
 
   it("fails closed after six failed checker runs without a final sleep", () => {
@@ -417,27 +476,74 @@ describe("production deploy smoke (offline)", () => {
     expect(result.attempts).toBe(6);
     expect(result.sleeps).toBe(5);
     expect(result.output).toContain("FAIL /faq: expected HTTP 200; actual HTTP 503");
-    expect(result.output).toContain("::error::production public-route smoke failed after deploy");
+    expect(result.output).toContain(
+      "::error::stage 5 percent health/SLO gate failed after smoke retries",
+    );
     expect(result.output).not.toContain("unexpected checker invocation");
+    expect(result.stepOutput).toBe("");
   });
 
   it("probes the apex origin with the indexable posture, never staging", () => {
     const workflow = readFileSync(".github/workflows/deploy-production.yml", "utf8");
-    const block = workflow.match(
-      /      - name: Smoke test production public routes\n[\s\S]*?        run: \|\n((?:          .*\n)+)/,
+    expect(workflow).toContain(
+      "uses: TogetherWeOwn/.github/actions/gradual-promote@89c290be20c0044efaf6916f28341c76e75fff06",
+    );
+    const centralActionRef = workflow.match(
+      /uses: TogetherWeOwn\/\.github\/actions\/gradual-promote@([0-9a-f]{40})/,
     )?.[1];
-    expect(block).toBeDefined();
-    expect(block).toContain("node bin/smoke.mjs https://togetherweown.com --allow-indexable");
-    expect(block).not.toContain("next.togetherweown.com");
+    const expectedHashes = gradualPromoteHashesByRef[centralActionRef ?? ""];
+    expect(expectedHashes).toBeDefined();
+    const helperSha256 = createHash("sha256")
+      .update(readFileSync(".github/actions/gradual-promote/gradual-promote.mjs"))
+      .digest("hex");
+    expect(helperSha256).toBe(expectedHashes?.helper);
+    const gateSha256 = createHash("sha256")
+      .update(readFileSync(".github/actions/gradual-promote/error-rate-gate.mjs"))
+      .digest("hex");
+    expect(gateSha256).toBe(expectedHashes?.gate);
+    const action = readFileSync(".github/actions/gradual-promote/action.yml", "utf8");
+    expect(actionManifestSha256(action)).toBe(expectedHashes?.manifest);
+    expect(workflow).toContain("domain: togetherweown.com");
+    expect(workflow).not.toContain("next.togetherweown.com");
+    expect(action).toContain('default: "true"');
+    for (const stage of ["5", "50", "100"]) {
+      const block = action.match(
+        new RegExp(
+          `    - name: Health and SLO gate at ${stage} percent[\\s\\S]*?      run: \\|\\n((?:        .*\\n)+)`,
+        ),
+      )?.[1];
+      expect(block).toBeDefined();
+      expect(block).toContain('node bin/smoke.mjs "https://$DOMAIN" $INDEXABLE');
+      expect(block).toContain("--version-override");
+      // The checker override shape carries inner quotes (worker-name="uuid");
+      // an unquoted shell value is rejected before any probe, which would
+      // fail every canary gate into rollback.
+      expect(block).toContain('--version-override "$WORKER_NAME=\\"$NEW_VERSION\\""');
+      expect(block).not.toContain("next.togetherweown.com");
+      expect(block).not.toContain("https://togetherweown.com --allow-indexable");
+    }
+    const live = action.match(
+      /    - name: Health and SLO gate at 100 percent \(live traffic\)\n[\s\S]*?      run: \|\n((?:        .*\n)+)/,
+    )?.[1];
+    expect(live).toBeDefined();
+    expect(live).toContain('node bin/smoke.mjs "https://$DOMAIN" $INDEXABLE');
+    expect(live).not.toContain("--version-override");
   });
 
   it("stays on standard hosted runners with no secrets", () => {
-    const workflow = readFileSync(".github/workflows/deploy-production.yml", "utf8");
-    const block = workflow.match(
-      /      - name: Smoke test production public routes\n[\s\S]*?        run: \|\n((?:          .*\n)+)/,
-    )?.[1];
-    expect(block).toBeDefined();
-    expect(block).not.toMatch(/secrets\./);
-    expect(block).not.toMatch(/self-hosted/);
+    const action = readFileSync(".github/actions/gradual-promote/action.yml", "utf8");
+    for (const name of [
+      "Health and SLO gate at 5 percent",
+      "Health and SLO gate at 50 percent",
+      "Health and SLO gate at 100 percent \\(new version\\)",
+      "Health and SLO gate at 100 percent \\(live traffic\\)",
+    ]) {
+      const block = action.match(
+        new RegExp(`    - name: ${name}\\n[\\s\\S]*?      run: \\|\\n((?:        .*\\n)+)`),
+      )?.[1];
+      expect(block).toBeDefined();
+      expect(block).not.toMatch(/secrets\./);
+      expect(block).not.toMatch(/self-hosted/);
+    }
   });
 });

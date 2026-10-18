@@ -9,6 +9,7 @@ import { featuredContents, memberDataAccessLogs, rsvps } from "../src/db/admin-s
 import type { Db } from "../src/db/index";
 import { joinAttempts, users } from "../src/db/schema";
 import * as memberReads from "../src/member-reads";
+import { __resetAlertRateLimitForTests } from "../src/alerts";
 import { notFoundResponse } from "../src/errors";
 import { createMemorySessionStore } from "../src/sessions";
 import {
@@ -66,6 +67,7 @@ describe.skipIf(!process.env.DATABASE_URL)(
       await seed(fixture.db);
       sessions = createMemorySessionStore();
       cookie = await cookieFor(sessions, MODERATOR);
+      __resetAlertRateLimitForTests();
       vi.spyOn(console, "error").mockImplementation(() => {});
     });
     afterEach(async () => {
@@ -132,6 +134,7 @@ describe.skipIf(!process.env.DATABASE_URL)(
       "featured",
       "join-funnel",
       "going-counts",
+      "roster-count",
       "search-widget",
       "timeouts",
     ] as const)(
@@ -506,15 +509,39 @@ describe.skipIf(!process.env.DATABASE_URL)(
             await request(`/join-attempts?q=${SUBJECT.userId}`, tx as unknown as Db),
             false,
           );
-          const diagnostics = JSON.stringify(vi.mocked(console.error).mock.calls);
+          const calls = vi.mocked(console.error).mock.calls;
+          const alerts = calls
+            .map(([line]) =>
+              typeof line === "string" && line.startsWith("{") ? JSON.parse(line) : null,
+            )
+            .filter((line) => line?.event === "error.alert");
+          expect(alerts).toHaveLength(1);
+          expect(alerts[0]).toMatchObject({
+            event: "error.alert",
+            exception: "DrizzleQueryError",
+            method: "GET",
+          });
+          expect(alerts[0].request_id).toMatch(/^[0-7][0-9A-HJKMNP-TV-Z]{25}$/);
+          expect(console.error).toHaveBeenCalledWith("Member request failed; refusing contents.", {
+            exception: "DrizzleQueryError",
+            request_id: alerts[0].request_id,
+          });
+          const diagnostics = JSON.stringify(calls);
           expect(diagnostics).toContain("DrizzleQueryError");
+          // "request_id" appears as the validated correlation-ID key above; the
+          // dropped-column SQL/message must not leak around it.
           for (const token of [
             ...PERSONAL_STRINGS,
             SUBJECT.userId,
             MODERATOR.userId,
             "select",
-            "request_id",
             "params:",
+            "column",
+            "does not exist",
+            "of relation",
+            "join_attempts",
+            "alter table",
+            "drop column",
           ])
             expect(diagnostics).not.toContain(token);
           throw rollback;

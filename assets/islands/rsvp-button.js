@@ -6,12 +6,14 @@
 // a fetch cannot cancel a server transaction, so conflicting writes never overlap.
 // Optimistic saving in flight (`aria-busy` on the mount, clicked control
 // disabled with the saving/removing copy); on success the nodes are patched
-// in place and focus moves to the new state (board-6956), then a
+// in place and focus moves to the new state (board-6956) unless the member
+// has moved focus or pressed outside the widget since the write started, then a
 // `going-count-updated` CustomEvent `{eventKey, viewerState}` is broadcast
 // for the going-count badge — the button re-reads nothing itself.
 // Throttle (429) shows the CM-frozen wait copy (board-7976) in `role="status"`
 // with the button left enabled; refused writes show the failure alert with
-// retry enabled and focus untouched. Response-less transport requires SSR
+// retry enabled and focus restored to that control (disabling it in flight
+// drops focus to BODY). Response-less transport requires SSR
 // recovery with mutations disabled; 401/419/302-to-login shows
 // the session-expired notice with the SSR login link (`?next=` return path,
 // never the update endpoint, board-8135, board-9254) — never the native confirm
@@ -136,6 +138,18 @@
 
   var controls = root.querySelector("[data-rsvp-form]") || root;
   var inflight = null;
+  // Outcome focus belongs to the activation that started the write; the member's
+  // outside focus or press ends it, and moving back into the widget does not revive it.
+  var focusOwned = false;
+
+  function releaseFocusOnOutsideInteraction(ev) {
+    if (focusOwned && ev.target && !root.contains(ev.target)) focusOwned = false;
+  }
+  document.addEventListener("focusin", releaseFocusOnOutsideInteraction, true);
+  document.addEventListener("pointerdown", releaseFocusOnOutsideInteraction, true);
+  // Feedback deadline only: it cannot cancel or determine the server write.
+  // Unknown outcomes stay locked until the member refreshes the SSR page.
+  var FEEDBACK_DEADLINE_MS = 8000;
 
   function clearOutcome() {
     [
@@ -174,11 +188,24 @@
       el.appendChild(a);
     }
     controls.appendChild(el);
-    // Focus is opt-in (board-6956): failure/throttle keep focus put (null
-    // target) — the alert announces without stealing focus. Only the
-    // session-expired notice moves focus to the login path.
+    // Focus is opt-in (board-6956): failure/throttle notices never take
+    // focus themselves — the alert announces, and the caller restores focus
+    // to the re-enabled control. Only the session-expired notice moves
+    // focus to the login path.
     if (shouldFocus === true && el.focus) el.focus();
     return el;
+  }
+
+  // SSR paints the full notice before the waitlist button; keep that DOM
+  // order when the island paints (or re-paints) it, so Tab from the focused
+  // notice reaches the button instead of leaving the widget.
+  function placeBefore(el, anchor) {
+    // Already in place: re-inserting would move the node and drop focus
+    // from it (a capacity refresh can land right after a 409 focused it).
+    if (anchor && el.nextSibling === anchor) return;
+    if (anchor && anchor.parentNode && anchor.parentNode.insertBefore)
+      anchor.parentNode.insertBefore(el, anchor);
+    else controls.appendChild(el);
   }
 
   function setBusy(on, button, busyText) {
@@ -200,7 +227,17 @@
     }
   }
 
+  // A refused write keeps the same control, but setBusy disabled it while it
+  // held focus and the browser dropped focus to BODY at that moment. Put
+  // focus back on the re-enabled control — only while this activation still
+  // owns outcome focus, so a member who moved on mid-write is left alone.
+  function restoreFocus(button) {
+    if (!focusOwned || !button || button.disabled || !root.contains(button)) return;
+    if (button.focus) button.focus();
+  }
+
   function focusTestid(testids) {
+    if (!focusOwned) return false;
     for (var i = 0; i < testids.length; i++) {
       var n = root.querySelector('[data-testid="' + testids[i] + '"]');
       if (n) {
@@ -382,7 +419,9 @@
     root.querySelectorAll("[data-action]").forEach(function (control) {
       control.disabled = true;
     });
-    var el = notice(TESTID.unknown, "alert", COPY.unknown, false, true);
+    // Recovery respects relinquished ownership: an outside focus/press during
+    // the pending write leaves the member where they moved.
+    var el = notice(TESTID.unknown, "alert", COPY.unknown, false, focusOwned);
     el.appendChild(document.createTextNode(" "));
     var link = document.createElement("a");
     link.setAttribute("data-testid", TESTID.refresh);
@@ -449,8 +488,8 @@
         message = document.createElement("p");
         message.setAttribute("role", "status");
         message.setAttribute("data-testid", TESTID.full);
-        controls.appendChild(message);
       }
+      placeBefore(message, join);
       message.textContent = COPY.full + " " + fullCapCopy(detail.capacity);
     } else if (message) message.remove();
   }
@@ -479,6 +518,15 @@
     // Neither a withdrawal nor a refresh may reopen a paused event.
     if (root.getAttribute("data-paused") === "true") {
       if (conf && conf.parentNode) conf.parentNode.removeChild(conf);
+      // No control may reopen a paused event, so the paused status is the
+      // only deliberate landing spot: make it programmatically focusable at
+      // settle time (SSR keeps it out of the tab order on browse) and move
+      // focus there when this write still owns it, never leaving BODY.
+      var paused = root.querySelector('[data-testid="' + TESTID.paused + '"]');
+      if (paused) {
+        if (!paused.getAttribute("tabindex")) paused.setAttribute("tabindex", "-1");
+        focusTestid([TESTID.paused]);
+      }
       return;
     }
     var full = root.getAttribute("data-full") === "true";
@@ -495,14 +543,18 @@
     join.addEventListener("click", function (ev) {
       onAction(join.getAttribute("data-action"), join, ev);
     });
-    if (full && !root.querySelector('[data-testid="' + TESTID.full + '"]')) {
-      var message = document.createElement("p");
-      message.setAttribute("role", "status");
-      message.setAttribute("data-testid", TESTID.full);
-      var capRaw = root.getAttribute("data-capacity");
-      var capNum = capRaw === null || capRaw === "" ? NaN : Number(capRaw);
-      message.textContent = COPY.full + (Number.isFinite(capNum) ? " " + fullCapCopy(capNum) : "");
-      controls.appendChild(message);
+    if (full) {
+      var message = root.querySelector('[data-testid="' + TESTID.full + '"]');
+      if (!message) {
+        message = document.createElement("p");
+        message.setAttribute("role", "status");
+        message.setAttribute("data-testid", TESTID.full);
+        var capRaw = root.getAttribute("data-capacity");
+        var capNum = capRaw === null || capRaw === "" ? NaN : Number(capRaw);
+        message.textContent =
+          COPY.full + (Number.isFinite(capNum) ? " " + fullCapCopy(capNum) : "");
+      }
+      placeBefore(message, join);
     }
     focusTestid([TESTID.going, TESTID.waitlistJoin]);
   }
@@ -557,6 +609,14 @@
     clearOutcome();
     var controller = {};
     inflight = controller;
+    focusOwned = true;
+    var watchdog = setTimeout(function () {
+      if (inflight !== controller) return;
+      // Revoke write ownership before rendering recovery so late headers/body
+      // and buffered capacity snapshots cannot guess or replace its outcome.
+      inflight = null;
+      unknownOutcome(button);
+    }, FEEDBACK_DEADLINE_MS);
     // A waitlisted member clicking the claim control: if the locked server
     // keeps them waitlisted, a rival took the freed seat first.
     var claimingFromWaitlist =
@@ -632,7 +692,7 @@
           if (sessionExpiredResponse(res)) {
             controller.refused = true;
             setBusy(false, button);
-            notice(TESTID.sessionExpired, "alert", COPY.sessionExpired, true, true);
+            notice(TESTID.sessionExpired, "alert", COPY.sessionExpired, true, focusOwned);
             return;
           }
           if (res.status === 429) {
@@ -645,6 +705,7 @@
               false,
               false,
             );
+            restoreFocus(button);
             return;
           }
           if (res.status === 403) {
@@ -673,6 +734,7 @@
                         false,
                         false,
                       );
+                      restoreFocus(button);
                     } else {
                       reloadClosed();
                     }
@@ -705,7 +767,6 @@
                   old.setAttribute("role", "status");
                   old.setAttribute("data-testid", TESTID.full);
                   old.setAttribute("tabindex", "-1");
-                  controls.appendChild(old);
                 }
                 old.textContent =
                   COPY.full + (Number.isFinite(capNum) ? " " + fullCapCopy(capNum) : "");
@@ -720,8 +781,13 @@
                 going.setAttribute("value", "waitlisted");
                 going.textContent = COPY.waitlistJoin;
               }
+              if (!position && old)
+                placeBefore(
+                  old,
+                  going || root.querySelector('[data-testid="' + TESTID.waitlistJoin + '"]'),
+                );
               if (position) focusTestid([TESTID.waitlistPosition]);
-              else if (old && old.focus) old.focus();
+              else if (focusOwned && old && old.focus) old.focus();
             };
             var domRaw = root.getAttribute("data-capacity");
             var domNum = domRaw === null || domRaw === "" ? NaN : Number(domRaw);
@@ -747,9 +813,10 @@
           }
           controller.refused = res.status >= 400 && res.status < 500;
           setBusy(false, button);
-          // Failure keeps the control enabled and focus stays put (null focus
-          // target, board-6956): the alert announces without stealing focus.
+          // Failure keeps the control enabled; the alert announces without
+          // taking focus, and focus returns to the control it started on.
           notice(TESTID.failed, "alert", COPY.failedTitle + " " + COPY.failedAction, false, false);
+          restoreFocus(button);
         },
         function () {
           if (controller && inflight !== controller) return;
@@ -759,8 +826,10 @@
       )
       .finally(function () {
         // Keep ownership through body parsing; header arrival is not completion.
+        clearTimeout(watchdog);
         if (inflight === controller) {
           inflight = null;
+          focusOwned = false;
           var snapshot = pendingCapacity;
           pendingCapacity = null;
           // Only a refused write can reuse the earlier accepted allocation.

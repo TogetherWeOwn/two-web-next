@@ -8,6 +8,7 @@ version.
 - Work on a branch and open a PR. Never push to `main`. Name branches
   `type/short-slug`, for example `fix/sudo-window`. Head branches are deleted when
   the PR merges.
+- The workspace may hand you a local branch named after a tracker card; keep committing to it, never publish that name, push `git push origin HEAD:refs/heads/<type>/<short-slug>` and open the PR from that ref.
 - Squash-merge only. Each PR is one logical change. The squash commit takes the PR
   title and body, so write both for the history on `main`.
 - PR title = Conventional Commits header: `type(scope): summary`, at most 100
@@ -15,22 +16,27 @@ version.
   `test`, `docs`, `build`, `ci`, `chore`, `revert`, `style`, `security`. The scope
   names the area of the code, such as `auth`, `events` or `sync`. Release automation
   reads these headers.
-- Fill in every section of the [PR template](.github/pull_request_template.md):
-  Thinking Path, Linked Issues or Issue Description, What Changed, Verification,
-  Risks, Model Used, and the Checklist. Use short, active sentences.
+- Use the [PR template](.github/pull_request_template.md), in short, active
+  sentences. In the current warn mode `pr-lint` warns (does not fail) on a
+  missing or thin Linked Issues or Issue Description and Verification; the
+  other sections are optional. See "What fails `pr-lint` today vs what only
+  warns" below for the full fail/warn split.
 - Link a public GitHub issue with `Closes #123`, or describe the problem in the PR.
   No card reference is required. `docs`, `chore`, `build`, `ci`, `style`, `test` and
   `revert` PRs need no linked issue.
 - Search first. Look for an open or recent PR that touches the same area, and link
-  what you find. `feat`, `fix`, `perf`, `refactor` and `security` PRs tick the
-  duplicate-search box in the checklist.
+  what you find.
 - Keep references public-safe. Do not put internal card IDs (`TOG-` or `PAP-`
-  followed by digits), private URLs, tokens or secrets in any title, body, commit,
-  comment or branch name. `pr-lint` warns when it finds a card ID in the title, body
-  or a commit subject, and in the branch name in any letter case (`qa/tog-123-x`).
-- Be honest about the model and the tests. Name the model that wrote or assisted the
-  change, give the exact commands you ran and their results, and say what you did
-  not run. Never claim a green run you did not see.
+  followed by digits), instance UI links, the internal host, private URLs, tokens or
+  secrets in any title, body, commit, comment or branch name. A tracker ID, instance
+  UI link or the internal host in the title or body fails `pr-lint`, comments
+  included; a card ID in a commit subject warns (first checker,
+  `INTERNAL_ID_LEVEL: "warning"`); a branch-name internal ID fails only on a PR
+  numbered at or above `HEAD_REF_ERROR_FROM_PR: "627"`, and warns below it; other
+  title/body references follow `PR_STANDARDS_MODE`.
+- Every PR, including docs-only and draft heads, must not increase the total count of internal card IDs and instance-UI links in tracked files versus its fork point (the merge-base with its base); `pr-lint` fails when that tracked-file ratchet grows, with named lint-fixture exclusions only.
+- Be honest about the tests. Give the exact commands you ran and their results in
+  Verification, and say what you did not run. Never claim a green run you did not see.
 - Address every review finding, or reply with why it does not apply.
 - Credit the contributors whose work you build on.
 - Done means merged. Do not leave an orphan PR open: merge it, or close it with a
@@ -44,9 +50,29 @@ version.
 The repository rulesets enforce the following on `main`:
 
 - `protect-main`: changes arrive through a pull request, the branch cannot be
-  deleted or force-pushed, only squash merges are allowed, and `check` and
-  `gitleaks` must pass.
+  deleted or force-pushed, only squash merges are allowed, and `ci-ok`,
+  `gitleaks` and `e2e-ok` must pass, plus Paperclip Review 5/5 on the exact head.
+
+  The journeys count only through the aggregator in e2e.yml: it fails when the
+  scope job fails or the browser journeys fail or are cancelled, and passes a
+  skipped journey run only on an explicit scope verdict (docs/test-only) or a
+  draft.
+
 - `pr-conventions`: `pr-lint` must pass.
+
+### Pull-request size labels (advisory)
+
+`.github/workflows/pr-size.yml` labels every pull request `size/S` (up to 100
+counted lines), `size/M` (up to 400), `size/L` (up to 1000) or `size/XL`, and
+keeps one advisory comment on pull requests over the 400-line threshold.
+Counted lines are additions + deletions excluding lockfiles, generated files
+and fixtures. The labeller lives once in the org
+[TogetherWeOwn/.github](https://github.com/TogetherWeOwn/.github) repository
+(`CI-STANDARD.md`, "Advisory PR-size labels"); the workflow here is a thin
+caller pinned to a central SHA and passes only this repo's generated paths.
+This is advisory only: it is not a required check and never blocks a merge.
+A Monday run of the same workflow prints the weekly tally of merged pull
+requests per size; the labels are the durable record behind it.
 
 ### Change-gated CI and `ci-ok`
 
@@ -55,11 +81,45 @@ Heavy CI jobs run only when their inputs changed (TOG-14877 CI standard). The
 (served code, assets, tests, journeys), `worker` (dispatch configs, the Tail
 worker, the Kit spike), `db` (migrations) — plus `full` (lockfiles,
 `.github/**`, shared config, or anything unknown: run everything) and `draft`.
-`a11y` runs on app/db, `lighthouse` and `bundle-budget` on app, `check` always
-runs but skips its heavy steps on docs-only and draft PRs, and the `ci-ok`
-aggregator reports the overall conclusion. Main pushes and the nightly schedule
+`a11y` runs on app/db, `lighthouse` and `bundle-budget` on app, and `docs-links`
+checks relative links and anchors on every PR. `check` runs unless its run was
+cancelled, starts from `scope` alone so it runs in parallel with the audit
+and performance jobs, and skips its heavy steps on docs-only and draft PRs.
+`node22-compat` reports the same way on the exact Node 22.23.0 `engines`
+floor — the version asserted in its log — running lint, typecheck and the
+unit suite, so the declared 22 range is verified beside the Node 24 jobs;
+the `ci-ok` aggregator requires `docs-links`, `node22-compat` and every
+selected job's result, and reports the overall conclusion. In a run
+cancelled by a newer run on the same PR, both conclude cancelled rather than
+failed, and the newer run's `ci-ok` decides the merge. Main pushes and the nightly schedule
 run the full suite. The `ci-ok`-as-required-check ruleset cutover is an
 OPERATOR step after merge plus green probes — never part of a PR.
+
+### What fails `pr-lint` today vs what only warns
+
+`pr-lint` is a required job, so it must pass; inside the job, some findings
+fail it and some only warn. Current mode in
+`.github/workflows/pr-gates.yml`: `INTERNAL_ID_LEVEL: "warning"`,
+`PR_STANDARDS_MODE: "warn"`, `HEAD_REF_ERROR_FROM_PR: "627"`. A finding that
+fails exits the checker nonzero and turns the job red; a warning is annotated
+without failing. Flipping a knob to `"error"` turns the Warns-only rows that
+name it into failures, so update this table in the same change. The strict
+title/body subset always fails regardless of either knob; a commit-subject hit
+needs `INTERNAL_ID_LEVEL`, and the Linked Issues, Verification, advisory and
+below-cutoff branch rows need `PR_STANDARDS_MODE`.
+
+| Check | Result today |
+| --- | --- |
+| PR title is not a Conventional Commits title, exceeds 100 characters, or ends with a period (`ci/check-pr-conventions.py` and `.github/scripts/pr_standards.py`) | Fails `pr-lint` |
+| Empty body: fewer than 40 non-space characters after stripping HTML comments | Fails `pr-lint` |
+| Push to main carries a bypass commit message that is not a Conventional Commits header (squash-merge bypass) | Fails `pr-lint` |
+| Net growth from the fork point in the internal-card-ID and instance-UI-link tracked-file ratchet (`.github/scripts/internal_ref_ratchet.py`); unreadable trees also fail closed | Fails `pr-lint` |
+| Branch-name internal ID on a PR numbered at or above the cutoff (`HEAD_REF_ERROR_FROM_PR: "627"`) | Fails `pr-lint` |
+| Missing or thin Linked Issues or Issue Description section (upstream gate, `PR_STANDARDS_MODE: "warn"`) | Warns only |
+| Missing or thin Verification section (upstream gate, `PR_STANDARDS_MODE: "warn"`) | Warns only |
+| Tracker ID, instance UI link or the internal host in the PR title or body (upstream strict subset, always fails) | Fails `pr-lint` |
+| Internal card ID in a commit subject (first checker, `INTERNAL_ID_LEVEL: "warning"`) | Warns only |
+| Advisory references in the PR title or body, or an internal reference in the branch name below the cutoff (upstream gate, `PR_STANDARDS_MODE: "warn"`) | Warns only |
 
 GitHub does not enforce an approval count here. Team policy does: an independent
 reviewer, who did not write the change, reviews the exact head SHA that merges, CI
@@ -71,10 +131,11 @@ title that is not a Conventional Commits header, a title over 100 characters or
 ending in a period, and an empty body; its internal-ID check is a warning
 today, and `INTERNAL_ID_LEVEL` in the workflow turns it into an error), then
 `.github/scripts/pr_standards.py` for pull requests when the workflow sets
-`PR_STANDARDS_MODE`. The upstream body, branch and reference rules start as
-warnings (`PR_STANDARDS_MODE: "warn"`); the flip to `"error"` is a separate
-one-line change once the repo's open PRs are clear. The script is unit-tested
-beside it: `python3 -m unittest discover -s .github/scripts -p
+`PR_STANDARDS_MODE`. A tracker ID, instance UI link or the internal host in a
+public title or body always fails, comments included; the remaining body, branch
+and reference rules follow the mode (`PR_STANDARDS_MODE: "warn"`); the flip to
+`"error"` is a separate one-line change once the repo's open PRs are clear. The
+script is unit-tested beside it: `python3 -m unittest discover -s .github/scripts -p
 'test_pr_standards.py'`.
 
 ### Secret-scan allowlists
@@ -96,12 +157,15 @@ with `GITLEAKS_VERSION`.
 
 The required `check` job runs `npm run deps:audit:selftest` (local fixtures,
 including a loopback registry) and `npm run deps:audit` before installing
-dependencies. The audit reads `package-lock.json`, includes
-development/optional/peer dependencies, and blocks high, critical or unknown
-severity. It forces online auditing even when npm's environment or `.npmrc`
-enables offline mode, using a fresh per-invocation cache rather than the restored
+dependencies. The audit reads every lockfile root (`package-lock.json` and
+`web/package-lock.json`), includes development/optional/peer dependencies, and
+blocks high, critical or unknown severity. It prints one result per lockfile
+(`.` and `web`) and fails when either has a non-excepted finding. A missing
+`web/package-lock.json` or an unreachable registry for either lockfile fails
+closed. It forces online auditing even when npm's environment or `.npmrc`
+enables offline mode, using a fresh per-lockfile cache rather than the restored
 installation cache (which can retain stale advisory severity). The owned audit
-cache is removed on success or failure. A child-only Node preload also validates
+caches are removed on success or failure. A child-only Node preload also validates
 the exact raw bulk advisory response before npm can normalize it. A clean `{}`
 is valid; `null`, arrays and missing/unknown advisory severities are not. The
 preload observes bounded HTTP/HTTPS bodies (including compressed responses),
@@ -131,6 +195,10 @@ the gate never runs `npm audit fix`.
 }
 ```
 
+An exception may add an optional `lockfile` scope (`"."` or `"web"`). An
+exception without `lockfile` applies to both lockfiles; an exception with
+`lockfile` applies only to that lockfile.
+
 Add it to `exceptions` only through a reviewed PR. Match the audit's exact package,
 range, severity and complete numeric advisory ID set (including transitive
 `via` references). New advisories/ranges/severity invalidate the exception.
@@ -144,23 +212,21 @@ workflow or change repository scanning settings as part of the dependency gate.
 
 ## Releases
 
-Releases are automated with [release-please](https://github.com/googleapis/release-please)
-(`release-please-config.json` + `.release-please-manifest.json`, release-type
-`node`). The `release` workflow regenerates the release PR on a weekly schedule
-or a manual dispatch, not on every merge to `main` (a push only publishes).
-Merging that PR writes `CHANGELOG.md`, tags `vX.Y.Z` and publishes a GitHub
-Release. Cut one with the short freeze procedure in
-[`docs/releases.md`](docs/releases.md#cutting-a-release). Never tag or release
-by hand.
+Each successful production promote tags the deployed commit `vX.Y.Z` and
+publishes a GitHub Release from the Conventional Commit subjects since the
+previous tag (`release.yml`, called by `deploy-production`). There is no release
+PR. See [`docs/releases.md`](docs/releases.md). Never tag or release by hand.
 
-`CHANGELOG.md` uses the [Common Changelog](https://common-changelog.org/)
+Release notes use the [Common Changelog](https://common-changelog.org/)
 categories, in its order: **Changed** (`perf`, `revert`), **Added** (`feat`),
-**Fixed** (`fix`). `chore`, `docs`, `test`, `ci`, `build`, `refactor` and `style`
-stay out of the changelog. Each squash-merged PR title becomes one entry, so
-write it for a reader of the changelog: imperative mood, one user-facing change.
+**Fixed** (`fix`, `security`). `chore`, `docs`, `test`, `ci`, `build`, `refactor` and `style`
+stay out of the notes. Each squash-merged PR title becomes one entry, so
+write it for a reader of the release notes: imperative mood, one user-facing change.
 
 Versioning is SemVer, starting at `0.1.0`; `1.0.0` marks the production
-cutover. `feat!` / `BREAKING CHANGE` bumps major (minor while `0.x`).
+cutover: `release-as: 1.0.0` in `release-please-config.json` makes the
+cutover promote cut `v1.0.0`. Before `1.0.0`, `feat!` / `BREAKING CHANGE` bumps the minor version;
+from `1.0.0` onward, it bumps the major version.
 
 ## Local development
 
@@ -206,7 +272,9 @@ from TypeScript's module diagnostic. `assets/styles.css`, `public/styles.css`,
 source-order substrings and single-line selector scoping. `ci/featured-proof/**` also retains its immutable,
 hash-verified proof inputs byte-for-byte. Their content, hashes and regression
 assertions remain unchanged. These formatter exemptions disable neither lint nor
-typecheck.
+typecheck. Lint exemptions are limited to `public/islands/**` and the hash-pinned
+`ci/featured-proof/fixtures/**`; `ci/a11y.mjs`, the other featured-proof files and the
+stylesheets are still linted.
 Configuration options follow the [Biome configuration reference](https://biomejs.dev/reference/configuration/).
 
 Never commit secrets, `.dev.vars` or `node_modules/`. Run tests only against the

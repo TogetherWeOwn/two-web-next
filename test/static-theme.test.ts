@@ -58,15 +58,31 @@ it.each(paths)(
     expect(html).toContain(
       `<body class="base-theme ${path === "/join" ? "join" : "content"}-theme"><a class="skip-link"`,
     );
-    expect(html).toContain('rel="stylesheet" href="/theme.css"');
-    expect(html).toContain('href="/fonts/display-latin-700.woff2" as="font"');
+    if (path === "/join") {
+      expect(html).toContain('rel="stylesheet" href="/theme.css"');
+    } else {
+      // Content leaves inline the stylesheets: no render-blocking CSS
+      // requests, with the real rules verifiable inside the style block.
+      expect(html).toContain("<style>");
+      expect(html).toContain(".content-page");
+      expect(html).not.toContain('rel="stylesheet"');
+    }
+    // Only the join shell still preloads Display; content
+    // leaves render no Display text so they preload no font.
+    if (path === "/join") {
+      expect(html).toContain('href="/fonts/display-latin-700.woff2" as="font"');
+    } else {
+      expect(html).not.toContain('.woff2" as="font"');
+    }
     expect(html).toContain('class="bar site-header"');
     expect(html).toContain('src="/logo.svg" width="64" height="64"');
     expect(html).toContain('aria-label="Primary"');
     expect(html).toContain('aria-label="Site"');
     expect(html).toContain(`<link rel="canonical" href="${env.APP_URL}${path}"`);
     expect(html).not.toContain('<meta name="robots"');
-    expect(html).not.toContain("<script");
+    expect(html.match(/<script\b[^>]*>/gi) ?? []).toEqual(
+      path === "/join" ? ['<script src="/islands/join-widget.js" defer="">'] : [],
+    );
     expect(html).not.toContain('action="/logout"');
     if (path !== "/join") {
       expect(html).toContain(`<a href="${path}" aria-current="page">`);
@@ -81,10 +97,24 @@ it("keeps versioned privacy HTML and the rules date unchanged inside the content
   expect(privacy).toContain(
     `<div data-testid="privacy-policy">${renderPolicyMarkdown(POLICY_MARKDOWN)}</div>`,
   );
-  expect(privacy).toContain('data-testid="privacy-version">Version 2');
+  expect(privacy).toContain('data-testid="privacy-version">Version 5');
   const rules = await (await app.request("/rules", {}, env)).text();
   expect(rules).toContain('<time datetime="2026-09-01">1 September 2026</time>');
   expect(rules.match(/<li class="card">/g)).toHaveLength(5);
+});
+
+it("/faq skips rendering offscreen sections until scrolled near (LCP)", async () => {
+  // /faq is the stable ~2.3 s LCP outlier because it carries by far the most
+  // below-fold DOM (8 sections, 15 cards); its LCP element (h1) sits outside
+  // these subtrees, so first paint is unaffected. Sibling leaves showed only
+  // 15-70 ms margins inside demonstrated runner noise (e.g. /about measured
+  // 1003 ms then 2043 ms on consecutive heads with no app change), so no
+  // defect was found there to fix.
+  const html = await (await app.request("/faq", {}, env)).text();
+  const style = html.match(/<style>([\s\S]*?)<\/style>/)?.[1] ?? "";
+  expect(style).toContain("[data-testid='faq-list']>section");
+  expect(style).toContain("content-visibility:auto");
+  expect(style).toContain("contain-intrinsic-size:auto 20rem");
 });
 
 it("keeps the join targets, guarded return path, widget and fallback in the auth layout", async () => {
@@ -93,10 +123,9 @@ it("keeps the join targets, guarded return path, widget and fallback in the auth
   expect(html).toMatch(/href="\/auth\/discord"[^>]*data-testid="signin"/);
   expect(html).toContain(`href="/join/discord?next=${encodeURIComponent(next)}"`);
   expect(html).toContain('href="https://discord.gg/fixture" data-testid="join-invite"');
-  expect(html).toContain('title="TWO Discord server preview"');
-  expect(html).toContain(
-    'width="350" height="500" sandbox="allow-scripts allow-same-origin" loading="lazy" referrerpolicy="no-referrer"',
-  );
+  expect(html).toContain('data-testid="join-widget-load"');
+  expect(html).toContain('<script src="/islands/join-widget.js" defer=""></script>');
+  expect(html).not.toContain("<iframe");
   const fallback = await (
     await app.request("/join?next=https://evil.test", {}, { ...env, DISCORD_GUILD_ID: "unset" })
   ).text();

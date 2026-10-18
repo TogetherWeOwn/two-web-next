@@ -4,14 +4,14 @@ on:
   workflow_dispatch:
     inputs:
       target:
-        description: Approved Neon target (web migrations only)
+        description: Approved migration target (web migrations only)
         type: choice
         options: [staging, production]
         default: staging
         required: true
   # deploy.yml does not call this workflow: it applies the staging web
   # migrations itself, in the exact-SHA deploy job, with the same
-  # ci/neon-migrate.mjs. This stays the hand-dispatch path (staging recovery)
+  # ci/db-migrate.mjs. This stays the hand-dispatch path (staging recovery)
   # and the only production path.
   # Environment secrets are loaded here, not passed/inherited from a caller.
   workflow_call:
@@ -27,7 +27,7 @@ permissions:
 # Never cancel an in-flight schema change. Bot operations must be coordinated
 # separately; the script also serializes web applies at the database level.
 concurrency:
-  group: neon-web-migrate-${{ inputs.target }}
+  group: web-migrate-${{ inputs.target }}
   cancel-in-progress: false
 
 jobs:
@@ -44,18 +44,19 @@ jobs:
         env:
           MIGRATION_TARGET: ${{ inputs.target }}
           PRODUCTION_DEPLOY_ENABLED: ${{ vars.PRODUCTION_DEPLOY_ENABLED }}
+          STAGING_MIGRATION_HOLD: ${{ vars.STAGING_MIGRATION_HOLD }}
         run: |
           set -euo pipefail
           [[ "$GITHUB_REF" == refs/heads/main ]] || { printf '%s\n' 'Migrations require main.' >&2; exit 1; }
           case "$MIGRATION_TARGET" in
-            staging) ;;
+            staging) [[ "${STAGING_MIGRATION_HOLD:-}" == false ]] || { printf '%s\n' 'Staging migrations are held (STAGING_MIGRATION_HOLD is not exactly "false").' >&2; exit 1; } ;;
             production) [[ "$PRODUCTION_DEPLOY_ENABLED" == true ]] || { printf '%s\n' 'Production migrations are disabled.' >&2; exit 1; } ;;
             *) printf '%s\n' 'Unknown migration target.' >&2; exit 1 ;;
           esac
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24
           cache: npm
@@ -80,17 +81,18 @@ jobs:
           GIT_CONFIG_VALUE_1="AUTHORIZATION: basic $auth" \
             bash ci/check-migration-numbers.sh
       - name: Dry-run listing (read-only journal diff, no DDL)
-        run: node ci/neon-migrate.mjs plan
+        run: node ci/db-migrate.mjs plan
         env: &migration-env
           MIGRATION_TARGET: ${{ inputs.target }}
           PRODUCTION_DEPLOY_ENABLED: ${{ vars.PRODUCTION_DEPLOY_ENABLED }}
+          STAGING_MIGRATION_HOLD: ${{ vars.STAGING_MIGRATION_HOLD }}
           # Provision ONLY as secrets on the matching GitHub Environment.
           # The unselected target is not exposed to the process. No DATABASE_URL fallback.
-          NEON_STAGING_DATABASE_URL: ${{ inputs.target == 'staging' && secrets.NEON_STAGING_DATABASE_URL || '' }}
+          PLANETSCALE_STAGING_DATABASE_URL: ${{ inputs.target == 'staging' && secrets.PLANETSCALE_STAGING_DATABASE_URL || '' }}
           PRODUCTION_DATABASE_URL: ${{ inputs.target == 'production' && secrets.PRODUCTION_DATABASE_URL || '' }}
       - name: Record PITR timestamp, apply and verify under database lock
-        run: node ci/neon-migrate.mjs apply
+        run: node ci/db-migrate.mjs apply
         env: *migration-env
       - name: Post-check zero pending web migrations
-        run: node ci/neon-migrate.mjs verify
+        run: node ci/db-migrate.mjs verify
         env: *migration-env

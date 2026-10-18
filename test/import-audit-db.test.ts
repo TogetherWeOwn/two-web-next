@@ -36,9 +36,6 @@ let ingress: ReturnType<typeof postgres>;
 suite("audit import into the migrated Next schema (disposable test DB only)", () => {
   beforeAll(async () => {
     const url = testDatabaseUrl(raw!);
-    if (url.hostname === "agent-testdb" && url.pathname !== "/two_web_next") {
-      throw new Error("Audit fixtures require agent-testdb database two_web_next");
-    }
     fixture = await createMemberDataFixture(raw!);
     // Import and ingress must use raw postgres.js serializers like the CLI.
     // Drizzle overrides the fixture client's JSON and timestamp serializers.

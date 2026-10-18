@@ -42,37 +42,44 @@
       return inflight;
     }
     last = Date.now();
-    controller = new AbortController();
-    var timeout = setTimeout(function () {
-      controller.abort();
-    }, 4000);
-    inflight = fetch("/auth/status", {
+    var request = new AbortController();
+    var timeout;
+    // Settles at the budget even if fetch ignores abort; a late answer is then dropped.
+    var budget = new Promise(function (resolve) {
+      timeout = setTimeout(function () {
+        request.abort();
+        resolve(null);
+      }, 4000);
+    });
+    var answer = fetch("/auth/status", {
       credentials: "same-origin",
       cache: "no-store",
       redirect: "manual",
-      signal: controller.signal,
+      signal: request.signal,
     })
       .then(function (response) {
         if (!response.ok) return null;
         return response.json().then(function (body) {
           if (Object.keys(body).length !== 1 || typeof body.authenticated !== "boolean")
             return null;
-          if (!body.authenticated) loseSession();
           return body.authenticated;
         });
       })
       .catch(function () {
         return null;
-      })
-      .finally(function () {
-        clearTimeout(timeout);
-        inflight = null;
-        controller = null;
-        if (queued) {
-          queued = false;
-          schedule();
-        }
       });
+    controller = request;
+    inflight = Promise.race([answer, budget]).then(function (value) {
+      clearTimeout(timeout);
+      inflight = null;
+      controller = null;
+      if (value === false) loseSession();
+      if (queued) {
+        queued = false;
+        schedule();
+      }
+      return value;
+    });
     return inflight;
   }
   function schedule() {
@@ -134,17 +141,17 @@
     var signingOut = false;
     var button = form.querySelector('[type="submit"]');
     var failureNotice = null;
-    function failedLogout() {
+    function showFailure(testId, message) {
       signingOut = false;
       form.removeAttribute("aria-busy");
       if (button) button.disabled = false;
       // A refused or uncertain logout must not replace an editor's in-memory draft.
       failureNotice = document.createElement("p");
       failureNotice.className = "notice";
-      failureNotice.setAttribute("data-testid", "logout-error");
+      failureNotice.setAttribute("data-testid", testId);
       failureNotice.setAttribute("role", "alert");
       failureNotice.setAttribute("tabindex", "-1");
-      failureNotice.textContent = "Could not sign out. Please try again.";
+      failureNotice.textContent = message;
       form.appendChild(failureNotice);
       failureNotice.focus();
     }
@@ -153,22 +160,31 @@
       event.preventDefault();
       if (signingOut) return;
       signingOut = true;
-      if (failureNotice) {
-        failureNotice.remove();
-        failureNotice = null;
-      }
+      if (failureNotice) failureNotice.remove();
       form.setAttribute("aria-busy", "true");
       if (button) button.disabled = true;
+      var timedOut = false;
+      // A 10 s feedback deadline; expiry shows uncertainty and never publishes or redirects.
+      var deadline = setTimeout(function () {
+        timedOut = true;
+        showFailure("logout-unconfirmed", "Sign-out not confirmed. Please try again.");
+      }, 10000);
       fetch("/logout", { method: "POST", credentials: "same-origin", redirect: "manual" })
         .then(function (response) {
+          clearTimeout(deadline);
+          if (timedOut) return;
           if (response.type === "opaqueredirect" || response.status === 303) {
             publish();
             location.assign("/");
           } else {
-            failedLogout();
+            showFailure("logout-error", "Could not sign out. Please try again.");
           }
         })
-        .catch(failedLogout);
+        .catch(function () {
+          clearTimeout(deadline);
+          if (timedOut) return;
+          showFailure("logout-error", "Could not sign out. Please try again.");
+        });
     });
   }
 })();

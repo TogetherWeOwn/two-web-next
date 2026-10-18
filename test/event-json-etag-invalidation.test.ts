@@ -3,7 +3,7 @@
 // Ledger EventEtagTest gaps (docs/w15-events-acceptance-ledger.md:99):
 // feed + unchanged-JSON validators are proved elsewhere; this pins the two
 // JSON gaps — legacy title-edit invalidation (EventEtagTest.php:32-46) and
-// member-vs-moderator validator separation when drafts are visible (:48-64).
+// the shared public-collection validator when drafts are hidden from every role (:48-64).
 // Real app + agent-testdb/CI Postgres only.
 import { serializeSigned } from "hono/utils/cookie";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -146,7 +146,7 @@ describe.skipIf(!process.env.DATABASE_URL)("event JSON ETag invalidation (agent-
     expect(settled.headers.get("etag")).toBe(next);
   });
 
-  it("refuses a moderator draft ETag replayed as member, with no cross-role 304", async () => {
+  it("hides drafts from every role in the public collection, so member and moderator share one validator", async () => {
     await seed();
     const mod = await cookieFor(true);
     const member = await cookieFor(false);
@@ -155,23 +155,90 @@ describe.skipIf(!process.env.DATABASE_URL)("event JSON ETag invalidation (agent-
     expect(draft.status).toBe(200);
     const draftEtag = draft.headers.get("etag");
     expect(draftEtag).toMatch(SHA1_ETAG_RE);
-    expect(await draft.text()).toContain(DRAFT_TITLE);
+    const draftBody = await draft.text();
+    expect(draftBody).not.toContain(DRAFT_TITLE);
+    expect(JSON.parse(draftBody).data).toEqual([]);
 
-    // Authorization runs before conditional success: the member replay is a
-    // 200 with an empty draft-filtered body — never 304, never draft bytes.
+    // Identical public fields: the member replay settles to 304, never draft bytes.
     const replay = await jsonGet(DRAFT_KEY, member, draftEtag!);
-    expect(replay.status).toBe(200);
-    const memberEtag = replay.headers.get("etag");
-    expect(memberEtag).toMatch(SHA1_ETAG_RE);
-    expect(memberEtag).not.toBe(draftEtag);
-    const body = await replay.text();
-    expect(body).not.toContain(DRAFT_TITLE);
-    expect(JSON.parse(body).data).toEqual([]);
+    expect(replay.status).toBe(304);
+    expect(await replay.text()).toBe("");
+    expect(replay.headers.get("etag")).toBe(draftEtag);
 
     // The moderator's own unchanged replay still settles to an empty 304.
     const modReplay = await jsonGet(DRAFT_KEY, mod, draftEtag!);
     expect(modReplay.status).toBe(304);
     expect(await modReplay.text()).toBe("");
     expect(modReplay.headers.get("etag")).toBe(draftEtag);
+  });
+
+  // RFC 9110 If-None-Match uses weak comparison: a W/-prefixed copy of the
+  // current validator must match, while a weakly-prefixed different
+  // validator must not. The junk tag flips one hex digit of the real ETag,
+  // so it is same-shaped but guaranteed different.
+  const junkEtag = (etag: string) =>
+    etag.replace(/^"(.)/, (_m, ch: string) => `"${ch === "0" ? "1" : "0"}`);
+
+  it("returns 304 for a weak If-None-Match copy of the current ETag", async () => {
+    await seed();
+    const member = await cookieFor(false);
+
+    const first = await jsonGet(PUBLISHED_KEY, member);
+    expect(first.status).toBe(200);
+    const etag = first.headers.get("etag");
+    expect(etag).toMatch(SHA1_ETAG_RE);
+    expect(await first.text()).toContain(PUBLISHED_TITLE);
+
+    // Weak copy of a different validator: still 200 with the fresh body.
+    const weakJunk = await jsonGet(PUBLISHED_KEY, member, `W/${junkEtag(etag!)}`);
+    expect(weakJunk.status).toBe(200);
+    expect(weakJunk.headers.get("etag")).toBe(etag);
+    expect(await weakJunk.text()).toContain(PUBLISHED_TITLE);
+
+    // Weak copy of the current validator: empty 304 carrying the ETag.
+    const weak = await jsonGet(PUBLISHED_KEY, member, `W/${etag!}`);
+    expect(weak.status).toBe(304);
+    expect(await weak.text()).toBe("");
+    expect(weak.headers.get("etag")).toBe(etag);
+  });
+
+  it("returns 304 when the current ETag appears in an If-None-Match list", async () => {
+    await seed();
+    const member = await cookieFor(false);
+
+    const first = await jsonGet(PUBLISHED_KEY, member);
+    expect(first.status).toBe(200);
+    const etag = first.headers.get("etag");
+    expect(etag).toMatch(SHA1_ETAG_RE);
+    expect(await first.text()).toContain(PUBLISHED_TITLE);
+
+    // A list holding only other validators: still 200 with the fresh body.
+    const junk = junkEtag(etag!);
+    const junkOnly = await jsonGet(PUBLISHED_KEY, member, `${junk}, "junk"`);
+    expect(junkOnly.status).toBe(200);
+    expect(junkOnly.headers.get("etag")).toBe(etag);
+    expect(await junkOnly.text()).toContain(PUBLISHED_TITLE);
+
+    // The current validator anywhere in the list: empty 304.
+    const listed = await jsonGet(PUBLISHED_KEY, member, `"junk", ${etag!}`);
+    expect(listed.status).toBe(304);
+    expect(await listed.text()).toBe("");
+    expect(listed.headers.get("etag")).toBe(etag);
+  });
+
+  it("returns 304 for If-None-Match: * on an existing collection", async () => {
+    await seed();
+    const member = await cookieFor(false);
+
+    const first = await jsonGet(PUBLISHED_KEY, member);
+    expect(first.status).toBe(200);
+    const etag = first.headers.get("etag");
+    expect(etag).toMatch(SHA1_ETAG_RE);
+    expect(await first.text()).toContain(PUBLISHED_TITLE);
+
+    const star = await jsonGet(PUBLISHED_KEY, member, "*");
+    expect(star.status).toBe(304);
+    expect(await star.text()).toBe("");
+    expect(star.headers.get("etag")).toBe(etag);
   });
 });

@@ -37,7 +37,7 @@ import { createMemberDataFixture, type MemberDataFixture } from "./helpers/membe
 
 // Nonempty, exhaustive inventories: a newly registered read needs an exposure
 // case. This cannot quietly become [] == [] when a namespace is renamed.
-const PROFILE_READS = ["/profile", "/members/:user"];
+const PROFILE_READS = ["/profile", "/members/:user", "/leaderboards/members"];
 const ADMIN_REDIRECTS = [
   "/events/create",
   "/events/:key/edit",
@@ -47,6 +47,7 @@ const ADMIN_REDIRECTS = [
 ];
 const ADMIN_READS = [
   "/",
+  "/activity-log",
   "/events",
   "/events/new",
   "/events/:key",
@@ -57,6 +58,7 @@ const ADMIN_READS = [
   "/join-attempts/:id",
   ...ADMIN_REDIRECTS,
 ];
+const OPERATIONAL_READS = ["/queue/failed/:id/preview", "/queue/source-evidence/:id"];
 const OTHER_READS = [
   "/",
   "/discord",
@@ -69,22 +71,41 @@ const OTHER_READS = [
   "/join/callback",
   "/sitemap_index.xml",
   "/robots.txt",
+  "/.well-known/security.txt",
   "/up",
   "/auth/discord",
   "/auth/discord/callback",
   "/auth/discord/redirect",
+  "/login", // Vanity sign-in entry: DB-free 302 to /auth/discord, no member access.
+  "/community", // Vanity lobby front: DB-free 302 to /, no member access.
   "/auth/status",
   "/auth/recover", // Public bool-only liveness and recovery HTML; neither grants member access.
   "/members", // Retired bare path: frozen 404, answered before the member gate.
   "/members/", // Trailing-slash form is retired before the same gate.
   "/events",
   "/events/past",
+  "/hotzones", // Aggregate heatmaps: counts only, no member rows.
+  "/hotzones/:signal",
   "/events.json",
   "/events/:key",
   "/e/:key",
   "/events.ics",
   "/events.rss",
   "/events/:file{.+\\.ics}",
+  // A2 machine formats: viewer-independent, no session read, no member access.
+  "/llms.txt",
+  "/about.md",
+  "/faq.md",
+  "/rules.md",
+  "/privacy.md",
+  "/join.md",
+  "/events.md",
+  "/e/:file{.+\\.md}",
+  "/api/public/events", // Bounded session-free JSON: published-only, no member access.
+  "/api/public/events/:key",
+  "/api/public/community",
+  "/api/public/join",
+  "/openapi.json", // Static OpenAPI document, no member access.
 ];
 const readInventory = (router: { routes: { method: string; path: string }[] }) =>
   router.routes
@@ -96,15 +117,17 @@ function assertReadInventory(router: Parameters<typeof readInventory>[0]) {
   expect(readInventory(router)).toEqual(
     [
       ...[...OTHER_READS, ...PROFILE_READS].map((path) => `GET ${path}`),
-      ...ADMIN_READS.map((path) => `GET /admin${path === "/" ? "" : path}`),
+      ...[...ADMIN_READS, ...OPERATIONAL_READS].map(
+        (path) => `GET /admin${path === "/" ? "" : path}`,
+      ),
       // ALL includes middleware as well as handlers. Pin their multiplicity;
       // filtering wildcards or deduplicating would hide added ALL endpoints.
-      // The six global ALL /* registrations are the composed security/robots
+      // The seven global ALL /* registrations are the composed security/robots
       // headers, strict per-environment trustHosts guard, same-origin guard,
-      // auth-status controller injection, expired-write banner consumption and
-      // the flag-gated freeze banner.
+      // auth-status controller injection, expired-write banner consumption,
+      // the flag-gated freeze banner and the flag-gated WebMCP pilot script
+      // (no session, cookie or database read).
       // ALL /events/:key/rsvp is the W9 RSVP 405 fallback (PUT/DELETE only), not a read.
-      // Six global ALL /*: headers, trustHosts, same-origin, auth-status injection, expired-write banner and freeze banner.
       // The event read boundary encloses its existing GET handler directly;
       // profile flash consumption stays inside the existing boundary middleware.
       "ALL /*",
@@ -113,10 +136,14 @@ function assertReadInventory(router: Parameters<typeof readInventory>[0]) {
       "ALL /*",
       "ALL /*",
       "ALL /*",
+      "ALL /*",
       "ALL /admin/*",
+      "ALL /admin/queue/*",
       "ALL /events/:key/rsvp",
       "ALL /profile",
       "ALL /profile",
+      "ALL /leaderboards/members",
+      "ALL /leaderboards/members",
       "ALL /members/*",
       "ALL /members/*",
     ].sort(),
@@ -263,6 +290,20 @@ describe.skipIf(!process.env.DATABASE_URL)(
           expect(await db.select().from(memberDataAccessLogs)).toHaveLength(0);
       },
     );
+
+    it("operational reads remain opaque to every role when disabled on the mounted Worker", async () => {
+      for (const actor of [null, OUTSIDER, MEMBER, MODERATOR]) {
+        for (const pattern of OPERATIONAL_READS) {
+          const res = await request(`/admin${pattern.replace(":id", "7")}`, {
+            headers: actor ? await headers(actor) : {},
+          });
+          expect(res.status).toBe(404);
+          for (const personal of PERSONAL_STRINGS)
+            expect(await res.clone().text()).not.toContain(personal);
+          expect(res.headers.get("cache-control")).toBe("private, no-store");
+        }
+      }
+    });
 
     it("non-member: profile reads and direct/form writes expose and change nothing", async () => {
       for (const [method, path, body] of [

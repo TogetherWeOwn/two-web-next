@@ -7,7 +7,7 @@ import postgres from "postgres";
 import { rateLimitExceeded } from "./errors";
 import type { Env } from "./env";
 import { databaseOptions, databaseUrl } from "./db/connection";
-import { checkJoinThrottle, migrateJoin } from "./join/service";
+import { checkJoinThrottle } from "./join/service";
 import type { Sql } from "./sessions";
 
 /** `throttle:10,1` — join redirect/callback, login callback, QA login. */
@@ -19,20 +19,16 @@ export type ThrottleStore = () => Promise<Sql | null>;
 export type EnvWithThrottle = Env & { THROTTLE_STORE?: ThrottleStore };
 
 const THROTTLED = Symbol.for("two-web-next.throttled");
-const migrated = new Set<string>();
 
-/** Test seam first, then local URL or Hyperdrive; absent store degrades to allow. */
+/** Test seam first, then local URL or Hyperdrive; absent store degrades to allow.
+ * No DDL here (TOG-19721): web_throttle_hits comes from the migrate workflow
+ * (drizzle/1000); the runtime role stays read/write-only. */
 export async function throttleStore(c: Context<{ Bindings: Env }>): Promise<Sql | null> {
   const injected = (c.env as EnvWithThrottle).THROTTLE_STORE;
   if (injected) return injected();
   const url = databaseUrl(c.env);
   if (!url) return null;
-  const sql = postgres(url, databaseOptions) as unknown as Sql;
-  if (!migrated.has(url)) {
-    await migrateJoin(sql);
-    migrated.add(url);
-  }
-  return sql;
+  return postgres(url, databaseOptions) as unknown as Sql;
 }
 
 /** IPv6 clients share a /64; IPv4 and its mapped form share the IPv4 key. */

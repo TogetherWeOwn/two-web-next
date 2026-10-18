@@ -1,5 +1,15 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, readFileSync, writeFileSync, rmSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import {
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  writeFileSync,
+  rmSync,
+  symlinkSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -7,8 +17,16 @@ import { test } from "node:test";
 import { getPlatformProxy } from "wrangler";
 import {
   checkKeys,
+  checkTailKeys,
+  readAppScriptNames,
+  readAppTailConsumers,
   readDocKeys,
   readEnvKeys,
+  readTailDocKeys,
+  readTailEnvKeys,
+  readTailScriptNames,
+  readTailWorkerNames,
+  readTailWranglerVars,
   readWranglerConfig,
   readWranglerKeys,
 } from "./check-config-docs.mjs";
@@ -363,4 +381,409 @@ test("fails when Wrangler gains an undeclared or undocumented binding", () => {
     "Wrangler key missing from Env/JobsEnv: NEW_QUEUE",
     "Undocumented Wrangler key: NEW_QUEUE",
   ]);
+});
+
+test("tail inventory covers vars, secrets, services and script names without inheritance", () => {
+  const tailVars = readTailWranglerVars(
+    JSON.stringify({
+      vars: { UPTIME_URL: "https://staging.example/up" },
+      secrets: { required: ["OPS_ALERT_WEBHOOK_URL"] },
+      env: { production: { vars: { UPTIME_URL: "https://apex.example/up" } } },
+    }),
+  );
+  assert.deepEqual(tailVars, set("UPTIME_URL", "OPS_ALERT_WEBHOOK_URL"));
+  const workerNames = readTailWorkerNames(
+    JSON.stringify({
+      name: "two-web-next-alerts",
+      env: { production: { name: "two-web-next-alerts-production" } },
+    }),
+  );
+  assert.deepEqual(workerNames, set("two-web-next-alerts", "two-web-next-alerts-production"));
+  const appConfig = JSON.stringify({
+    name: "two-web-next",
+    tail_consumers: [{ service: "two-web-next-alerts" }],
+    env: {
+      production: {
+        name: "two-web-next-production",
+        tail_consumers: [{ service: "two-web-next-alerts-production" }],
+      },
+    },
+  });
+  const consumers = readAppTailConsumers(appConfig);
+  assert.deepEqual(consumers, set("two-web-next-alerts", "two-web-next-alerts-production"));
+  assert.deepEqual(readAppScriptNames(appConfig), set("two-web-next", "two-web-next-production"));
+  const renamedProduction = JSON.stringify({
+    name: "two-web-next",
+    tail_consumers: [{ service: "two-web-next-alerts" }],
+    env: {
+      production: {
+        name: "two-web-next-prod",
+        tail_consumers: [{ service: "two-web-next-alerts-production" }],
+      },
+    },
+  });
+  const appScripts = readAppScriptNames(renamedProduction);
+  assert.deepEqual(appScripts, set("two-web-next", "two-web-next-prod"));
+  assert.deepEqual(
+    checkTailKeys(
+      set(),
+      set(),
+      set("two-web-next-alerts-production"),
+      set("two-web-next-alerts-production"),
+      set("two-web-next", "two-web-next-production"),
+      set("two-web-next", "two-web-next-production", "two-web-next-alerts-production"),
+      appScripts,
+    ),
+    [
+      "App script not accepted by Tail: two-web-next-prod (wrangler.jsonc/wrangler.jobs.jsonc vs tail/worker.ts APP_SCRIPT_NAMES)",
+    ],
+  );
+  assert.deepEqual(
+    readAppScriptNames(
+      JSON.stringify({
+        name: "two-web-next",
+        env: { production: { tail_consumers: [{ service: "alerts" }] } },
+      }),
+    ),
+    set("two-web-next-production"),
+  );
+  const scripts = readTailScriptNames(
+    `export const APP_SCRIPT_NAMES = new Set(["two-web-next", "two-web-next-production"]);`,
+  );
+  assert.deepEqual(scripts, set("two-web-next", "two-web-next-production"));
+  assert.throws(() => readTailScriptNames("export const APP_SCRIPT_NAMES = new Set([]);"), /Empty/);
+});
+
+const tailInventory = (rows) => `<!-- tail-config-docs:start -->
+| Name | Kind | Environments | Default | Failure behaviour |
+| --- | --- | --- | --- | --- |
+${rows}
+<!-- tail-config-docs:end -->`;
+const tailRow = (key) =>
+  `| \`${key}\` | test kind | tail staging/prod | none | silently disables paging |`;
+
+test("tail doc table accepts service aliases and rejects malformed rows", () => {
+  const doc = tailInventory(
+    [tailRow("UPTIME_URL"), tailRow("two-web-next-alerts"), tailRow("two-web-next")].join("\n"),
+  );
+  assert.deepEqual(
+    doc && readTailDocKeys(doc),
+    set("UPTIME_URL", "two-web-next-alerts", "two-web-next"),
+  );
+  assert.throws(
+    () => readTailDocKeys(tailInventory(tailRow("UPTIME_URL") + "\n" + tailRow("UPTIME_URL"))),
+    /Duplicate/,
+  );
+  assert.throws(
+    () => readTailDocKeys(tailInventory("| `DB` | binding | dev | | fails |")),
+    /Tail config rows/,
+  );
+  assert.throws(
+    () => readTailDocKeys(tailInventory("| DB | binding | dev | none | fails |")),
+    /Invalid tail/,
+  );
+  assert.throws(() => readTailDocKeys("UPTIME_URL in prose only"), /tail-config-docs/);
+});
+
+test("tail check passes when every declaration is documented", () => {
+  const tailEnv = set("UPTIME_URL", "OPS_ALERT_WEBHOOK_URL");
+  const tailVars = set("UPTIME_URL");
+  const workerNames = set("two-web-next-alerts", "two-web-next-alerts-production");
+  const consumers = set("two-web-next-alerts", "two-web-next-alerts-production");
+  const scripts = set("two-web-next", "two-web-next-production");
+  const docs = set(
+    "UPTIME_URL",
+    "OPS_ALERT_WEBHOOK_URL",
+    "two-web-next-alerts",
+    "two-web-next-alerts-production",
+    "two-web-next",
+    "two-web-next-production",
+  );
+  assert.deepEqual(checkTailKeys(tailEnv, tailVars, workerNames, consumers, scripts, docs), []);
+});
+
+test("tail check fails when a declaration is omitted from the docs", () => {
+  const tailEnv = set("UPTIME_URL", "OPS_ALERT_WEBHOOK_URL");
+  const tailVars = set("UPTIME_URL");
+  const workerNames = set("two-web-next-alerts");
+  const consumers = set("two-web-next-alerts");
+  const scripts = set("two-web-next");
+  const docs = set("UPTIME_URL", "two-web-next-alerts", "two-web-next");
+  assert.deepEqual(checkTailKeys(tailEnv, tailVars, workerNames, consumers, scripts, docs), [
+    "Undocumented TailEnv key: OPS_ALERT_WEBHOOK_URL (tail/worker.ts -> docs/config.md)",
+  ]);
+  assert.deepEqual(
+    checkTailKeys(
+      tailEnv,
+      tailVars,
+      set("two-web-next-alerts"),
+      set("two-web-next-alerts", "missing-service"),
+      scripts,
+      set("UPTIME_URL", "OPS_ALERT_WEBHOOK_URL", "two-web-next-alerts", "two-web-next"),
+    ),
+    [
+      "Undocumented Tail consumer service: missing-service (wrangler.jsonc/wrangler.jobs.jsonc -> docs/config.md)",
+      "App tail_consumer without Tail worker: missing-service (wrangler.jsonc/wrangler.jobs.jsonc vs tail/wrangler.jsonc)",
+    ],
+  );
+});
+
+test("tail check fails on obsolete or misspelled documented keys", () => {
+  const tailEnv = set("UPTIME_URL");
+  const docs = set("UPTIME_URL", "OBSOLETE_TAIL_KEY");
+  assert.deepEqual(
+    checkTailKeys(
+      tailEnv,
+      set("UPTIME_URL"),
+      set(),
+      set(),
+      set("two-web-next"),
+      set("UPTIME_URL", "two-web-next"),
+    ),
+    [],
+  );
+  assert.deepEqual(checkTailKeys(tailEnv, set("UPTIME_URL"), set(), set(), set(), docs), [
+    "Obsolete Tail doc key: OBSOLETE_TAIL_KEY (docs/config.md)",
+  ]);
+  assert.deepEqual(
+    checkTailKeys(
+      tailEnv,
+      set("UPTIME_URL"),
+      set(),
+      set(),
+      set("two-web-next"),
+      set("UPTIME_URL", "two-web-next-typo"),
+    ),
+    [
+      "Undocumented Tail app script name: two-web-next (tail/worker.ts -> docs/config.md)",
+      "Obsolete Tail doc key: two-web-next-typo (docs/config.md)",
+    ],
+  );
+});
+
+test("tail check covers environment-only declarations without inheritance", () => {
+  const tailVars = readTailWranglerVars(
+    JSON.stringify({ vars: {}, env: { production: { vars: { ENV_ONLY_VAR: "x" } } } }),
+  );
+  assert.deepEqual(tailVars, set("ENV_ONLY_VAR"));
+  const tailEnv = set("ENV_ONLY_VAR");
+  assert.deepEqual(checkTailKeys(tailEnv, tailVars, set(), set(), set(), set("ENV_ONLY_VAR")), []);
+  assert.deepEqual(checkTailKeys(tailEnv, tailVars, set(), set(), set(), set()), [
+    "Undocumented TailEnv key: ENV_ONLY_VAR (tail/worker.ts -> docs/config.md)",
+    "Undocumented Tail Wrangler key: ENV_ONLY_VAR (tail/wrangler.jsonc -> docs/config.md)",
+  ]);
+});
+
+test("tail env keys resolve from the TailEnv alias without secret values", () => {
+  const dir = mkdtempSync(
+    join(process.env.PAPERCLIP_RUN_SCRATCH_DIR ?? tmpdir(), "tail-selftest-"),
+  );
+  try {
+    const file = join(dir, "worker.ts");
+    const config = join(dir, "tsconfig.json");
+    writeFileSync(
+      config,
+      JSON.stringify({ files: ["worker.ts"], compilerOptions: { noLib: true } }),
+    );
+    writeFileSync(
+      file,
+      `export type TailEnv = { OPS_ALERT_WEBHOOK_URL?: string; UPTIME_URL?: string };`,
+    );
+    assert.deepEqual(readTailEnvKeys(file, config), set("OPS_ALERT_WEBHOOK_URL", "UPTIME_URL"));
+    writeFileSync(file, `export type TailEnv = { UPTIME_URL?: string };`);
+    assert.deepEqual(readTailEnvKeys(file, config), set("UPTIME_URL"));
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// Composition acceptance: the composed check (checkConfigDocs via the CLI)
+// must include wrangler.jobs.jsonc root and named-environment declarations in
+// the same Env/JobsEnv/documented-key union as the app configs. Parser-only
+// coverage above cannot prove composition, so these tests copy the checker
+// into a synthetic tree (it resolves its root from its own location) and run
+// the real CLI against fixture configs. Removing wrangler.jobs.jsonc from the
+// composed scan is the omission mutant every jobs-only case below must catch.
+const repoRoot = fileURLToPath(new URL("../", import.meta.url));
+
+function runComposedCheck({
+  appVars = {},
+  jobsRootVars = {},
+  jobsRootBindings = [],
+  jobsRootSecrets = [],
+  jobsPreviewVars = {},
+  jobsPreviewBindings = [],
+  jobsPreviewSecrets = [],
+  extraJobsEnvKeys = [],
+} = {}) {
+  const dir = mkdtempSync(join(process.env.PAPERCLIP_RUN_SCRATCH_DIR ?? tmpdir(), "jobs-comp-"));
+  try {
+    for (const entry of ["ci", "src", "docs", "tail"]) mkdirSync(join(dir, entry));
+    copyFileSync(join(repoRoot, "ci/check-config-docs.mjs"), join(dir, "ci/check-config-docs.mjs"));
+    copyFileSync(join(repoRoot, "ci/wrangler-config.mjs"), join(dir, "ci/wrangler-config.mjs"));
+    symlinkSync(join(repoRoot, "node_modules"), join(dir, "node_modules"), "dir");
+    const write = (path, content) => writeFileSync(join(dir, path), content);
+    write(
+      "tsconfig.json",
+      JSON.stringify({
+        files: ["src/env.ts", "tail/worker.ts"],
+        compilerOptions: { noLib: true },
+      }),
+    );
+    const jobsEnvKeys = [
+      "JOBS_ROOT_VAR?: string",
+      "JOBS_QUEUE: { send(): void }",
+      "JOBS_SECRET?: string",
+      "JOBS_PREVIEW_VAR?: string",
+      "JOBS_PREVIEW_QUEUE: { send(): void }",
+      "JOBS_PREVIEW_SECRET?: string",
+      ...extraJobsEnvKeys,
+    ];
+    write(
+      "src/env.ts",
+      `export type Env = { APP_URL: string; DB: { connectionString: string } };\n` +
+        `export type JobsEnv = Env & { ${jobsEnvKeys.join("; ")} };\n`,
+    );
+    const documented = [
+      "APP_URL",
+      "DB",
+      "JOBS_ROOT_VAR",
+      "JOBS_QUEUE",
+      "JOBS_SECRET",
+      "JOBS_PREVIEW_VAR",
+      "JOBS_PREVIEW_QUEUE",
+      "JOBS_PREVIEW_SECRET",
+    ];
+    write(
+      "docs/config.md",
+      `${inventory(documented.map(row).join("\n"))}\n` +
+        `${tailInventory(["UPTIME_URL", "tail-fixture", "app-fixture"].map(tailRow).join("\n"))}\n`,
+    );
+    write(
+      "wrangler.jsonc",
+      JSON.stringify({
+        name: "app-fixture",
+        vars: { APP_URL: "https://example.test", ...appVars },
+        hyperdrive: [{ binding: "DB", id: "fixture" }],
+      }),
+    );
+    write("wrangler.local.jsonc", JSON.stringify({ vars: { APP_URL: "http://localhost:8787" } }));
+    write(
+      "wrangler.jobs.jsonc",
+      JSON.stringify({
+        name: "jobs-fixture",
+        vars: { JOBS_ROOT_VAR: "fixture", ...jobsRootVars },
+        queues: {
+          producers: [
+            { binding: "JOBS_QUEUE", queue: "fixture-queue" },
+            ...jobsRootBindings.map((binding) => ({ binding, queue: "fixture-queue" })),
+          ],
+        },
+        secrets: { required: ["JOBS_SECRET", ...jobsRootSecrets] },
+        env: {
+          preview: {
+            name: "jobs-fixture-preview",
+            vars: { JOBS_PREVIEW_VAR: "fixture", ...jobsPreviewVars },
+            queues: {
+              producers: [
+                { binding: "JOBS_PREVIEW_QUEUE", queue: "fixture-preview-queue" },
+                ...jobsPreviewBindings.map((binding) => ({
+                  binding,
+                  queue: "fixture-preview-queue",
+                })),
+              ],
+            },
+            secrets: { required: ["JOBS_PREVIEW_SECRET", ...jobsPreviewSecrets] },
+          },
+        },
+      }),
+    );
+    write(
+      "tail/worker.ts",
+      `export type TailEnv = { UPTIME_URL?: string };\n` +
+        `export const APP_SCRIPT_NAMES = new Set(["app-fixture"]);\n`,
+    );
+    write(
+      "tail/wrangler.jsonc",
+      JSON.stringify({ name: "tail-fixture", vars: { UPTIME_URL: "https://example.test/up" } }),
+    );
+    return spawnSync(process.execPath, [join(dir, "ci/check-config-docs.mjs")], {
+      cwd: dir,
+      encoding: "utf8",
+    });
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+function assertJobsKeyRejected(result, key) {
+  assert.equal(result.status, 1, `expected composed check to reject ${key}:\n${result.stdout}`);
+  assert.match(result.stderr, new RegExp(`Wrangler key missing from Env/JobsEnv: ${key}`));
+  assert.match(result.stderr, new RegExp(`Undocumented Wrangler key: ${key}`));
+}
+
+test("composed check accepts typed and documented jobs root and preview keys", () => {
+  const result = runComposedCheck();
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /config-docs: ok/);
+});
+
+test("composed check rejects a jobs-only undeclared root var", () => {
+  assertJobsKeyRejected(
+    runComposedCheck({ jobsRootVars: { JOBS_UNDECLARED_VAR: "fixture" } }),
+    "JOBS_UNDECLARED_VAR",
+  );
+});
+
+test("composed check rejects a jobs-only undeclared root binding", () => {
+  assertJobsKeyRejected(
+    runComposedCheck({ jobsRootBindings: ["JOBS_UNDECLARED_QUEUE"] }),
+    "JOBS_UNDECLARED_QUEUE",
+  );
+});
+
+test("composed check rejects a jobs-only undeclared root required secret", () => {
+  assertJobsKeyRejected(
+    runComposedCheck({ jobsRootSecrets: ["JOBS_UNDECLARED_SECRET"] }),
+    "JOBS_UNDECLARED_SECRET",
+  );
+});
+
+test("composed check rejects a jobs-only undeclared env.preview var", () => {
+  assertJobsKeyRejected(
+    runComposedCheck({ jobsPreviewVars: { JOBS_PREVIEW_UNDECLARED_VAR: "fixture" } }),
+    "JOBS_PREVIEW_UNDECLARED_VAR",
+  );
+});
+
+test("composed check rejects a jobs-only undeclared env.preview binding", () => {
+  assertJobsKeyRejected(
+    runComposedCheck({ jobsPreviewBindings: ["JOBS_PREVIEW_UNDECLARED_QUEUE"] }),
+    "JOBS_PREVIEW_UNDECLARED_QUEUE",
+  );
+});
+
+test("composed check rejects a jobs-only undeclared env.preview required secret", () => {
+  assertJobsKeyRejected(
+    runComposedCheck({ jobsPreviewSecrets: ["JOBS_PREVIEW_UNDECLARED_SECRET"] }),
+    "JOBS_PREVIEW_UNDECLARED_SECRET",
+  );
+});
+
+test("composed check rejects a typed but undocumented jobs-only var as a Wrangler key", () => {
+  const result = runComposedCheck({
+    jobsRootVars: { JOBS_UNDOCUMENTED_VAR: "fixture" },
+    extraJobsEnvKeys: ["JOBS_UNDOCUMENTED_VAR?: string"],
+  });
+  assert.equal(result.status, 1, result.stdout);
+  // The Env-vs-docs error alone does not prove the jobs file was scanned; the
+  // Wrangler-key error only appears when wrangler.jobs.jsonc is composed in.
+  assert.match(result.stderr, /Undocumented Wrangler key: JOBS_UNDOCUMENTED_VAR/);
+});
+
+test("composed check still rejects an undeclared app var (composition control)", () => {
+  assertJobsKeyRejected(
+    runComposedCheck({ appVars: { APP_UNDECLARED_VAR: "fixture" } }),
+    "APP_UNDECLARED_VAR",
+  );
 });

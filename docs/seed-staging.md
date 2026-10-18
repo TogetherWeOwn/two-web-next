@@ -26,15 +26,18 @@ SEED_CONFIRM=staging npm run seed:staging -- --apply
 credentials/connection strings. Do not paste a real connection URL into shell
 history, a card, or a log; use the authorized environment/secret injection.
 
-## Neon staging (separate operator execution)
+## Remote staging (separate operator execution)
 
-This change does **not** execute against Neon. An authorized operator must verify
-that the URL belongs to the **staging branch**, not the production branch or
-production Hyperdrive binding. The repository does not record Neon endpoint
-hostnames, so the script cannot infer branch identity from `neon.tech` or the
-shared database name `neondb`.
+This change does **not** execute against remote staging. An authorized operator
+must verify that the URL belongs to the **staging branch/database**, not the
+production branch/database or production Hyperdrive binding. The repository does
+not record staging endpoint hostnames, so the script cannot infer branch
+identity from the provider suffix (`*.neon.tech` or `*.pg.psdb.cloud`) or a
+shared database name such as `neondb`.
 
-Before a remote dry-run/apply, provide non-secret, independently verified target
+Staging is moving from Neon (`*.neon.tech`) to PlanetScale
+(`*.pg.psdb.cloud`); both suffixes pass the seed gate when allowlisted. Before
+a remote dry-run/apply, provide non-secret, independently verified target
 metadata through env:
 
 | Variable | Requirement |
@@ -42,16 +45,17 @@ metadata through env:
 | `APP_URL` | Exactly `https://next.togetherweown.com` (optional trailing slash) |
 | `SEED_CONFIRM` | Exactly `staging`, for dry-run as well as apply |
 | `DATABASE_URL` | Authorized staging connection, env only |
-| `SEED_STAGING_DB_HOST` | Exact staging Neon endpoint hostname, including `-pooler` if used |
+| `SEED_STAGING_DB_HOST` | Exact staging endpoint hostname (`*.neon.tech` or `*.pg.psdb.cloud`), including `-pooler` if a Neon pooler is used |
 | `SEED_STAGING_DB_NAME` | Exact staging database name |
 | `SEED_PRODUCTION_DB_HOSTS` | Comma-separated verified production endpoint hostnames; include direct **and** pooled endpoints |
-| `SEED_PRODUCTION_DB_NAMES` | Optional comma-separated production-only names; do not deny `neondb` if both branches use it |
+| `SEED_PRODUCTION_DB_NAMES` | Optional comma-separated production-only names; do not deny `neondb` if both Neon branches use it |
 
 Then run `npm run seed:staging` and inspect the sanitized planned counts; execute
 `npm run seed:staging -- --apply` only after target verification. This is target
 configuration, not a bypass: the denylist wins over the allowlist. Never configure
 a production endpoint as staging. A hostname allowlist is not an independent
-proof of Neon branch identity; operator verification is required.
+proof of branch identity; operator verification is required. Real PlanetScale
+seeding stays operator-gated.
 
 ## Refusal and ownership guards
 
@@ -59,8 +63,9 @@ Both modes refuse missing confirmation, `APP_ENV=production`, production apex
 `APP_URL` (including `www`, case variants and trailing-dot hosts), unknown app
 hosts, invalid PostgreSQL URLs, denied database hosts, and denied database names.
 `prod`/`production` host labels and database names are always denied. Remote
-targets must be the exact allowlisted Neon endpoint/name with the staging app URL
-and a non-empty production host denylist. Local apps may target only
+targets must be the exact allowlisted staging endpoint/name (`*.neon.tech` or
+`*.pg.psdb.cloud`) with the staging app URL and a non-empty production host
+denylist. Local apps may target only
 `agent_test@agent-testdb:5432/two_web_next` with an empty password. Driver URL query
 parameters other than `sslmode=require` or `sslmode=verify-full` are refused, so
 `host`, `dbname`, `options`, or service parameters cannot redirect a checked URL.

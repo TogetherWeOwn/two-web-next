@@ -6,24 +6,39 @@
   "workers_dev": false,
   "preview_urls": false,
   "observability": { "enabled": true },
-  // Uptime prober (TOG-12394): the Tail pager only sees requests that reach the
-  // app Worker, so cron probes /up and pages on two consecutive failures.
-  "triggers": { "crons": ["*/5 * * * *"] },
+  // Uptime + synthetic prober: the Tail pager only sees requests that reach
+  // the app Worker, so cron probes /up every minute and pages only after
+  // health has stayed red for over two minutes (two attempts per run).
+  // Runs landing on a five-minute boundary also run the synthetic main-flow
+  // checks (home, events, sign-in entry) on the UPTIME_URL origin.
+  "triggers": { "crons": ["* * * * *"] },
+  // Aggregate 5xx/crash counts and the health window live in one Durable
+  // Object per environment so isolate churn cannot split a spike.
+  "durable_objects": {
+    "bindings": [{ "name": "ALERT_AGGREGATOR", "class_name": "AlertAggregator" }]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["AlertAggregator"] }],
   "vars": {
     "UPTIME_URL": "https://next.togetherweown.com/up"
   },
   // OPS_ALERT_WEBHOOK_URL is an optional secret on THIS Worker, not the app.
-  // No public routes, database bindings, queue bindings or tail consumers.
+  // No public routes, database bindings or queue bindings.
   "env": {
     "production": {
       "name": "two-web-next-alerts-production",
       "workers_dev": false,
       "preview_urls": false,
       "observability": { "enabled": true },
-      // Wrangler never inherits top-level vars into a named environment:
-      // without this block the production prober runs with no UPTIME_URL
-      // and probes nothing. The apex target mirrors the app's production
-      // APP_URL in wrangler.jsonc.
+      // Wrangler never inherits top-level triggers, bindings or vars into a
+      // named environment, so the prober cron and aggregator repeat here.
+      "triggers": { "crons": ["* * * * *"] },
+      "durable_objects": {
+        "bindings": [{ "name": "ALERT_AGGREGATOR", "class_name": "AlertAggregator" }]
+      },
+      "migrations": [{ "tag": "v1", "new_sqlite_classes": ["AlertAggregator"] }],
+      // Without this vars block the production prober runs with no
+      // UPTIME_URL and probes nothing. The apex target mirrors the app's
+      // production APP_URL in wrangler.jsonc.
       "vars": {
         "UPTIME_URL": "https://togetherweown.com/up"
       }

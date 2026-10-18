@@ -27,10 +27,10 @@ const ROSTER_MIGRATION = [
   )`,
 ];
 
-// Runtime DDL backstop, mirroring sessions.ts MIGRATION and join migrateJoin:
-// the same shape as drizzle/0000_init-users.sql, create-if-not-exists so a
-// Worker that reaches a migrated database is a no-op and one that reaches a
-// fresh database self-heals. The drizzle file stays the canonical migration.
+// Fixture helper only (TOG-19721): the same shape as
+// drizzle/0000_init-users.sql, kept identical so disposable test schemas
+// match migrated databases. Sign-in must NOT call migrateRoster(): the
+// runtime role holds read/write only, no schema CREATE.
 export async function migrateRoster(sql: Sql): Promise<void> {
   for (const stmt of ROSTER_MIGRATION) await sql.unsafe(stmt);
 }

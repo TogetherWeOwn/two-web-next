@@ -2,7 +2,7 @@ name: staging-census
 
 # Read-only staging web_sessions census (counts only).
 # Operator tool for the staging session-sweep probe: runs inside GitHub where
-# the staging Neon secret already lives, so no agent principal ever holds it.
+# the staging PlanetScale secret already lives, so no agent principal ever holds it.
 # Manual dispatch only, staging environment, one read-only
 # transaction. Prints COUNTS ONLY — never token_hash or session values.
 # No migrations, no writes, no rotation, staging only.
@@ -115,14 +115,14 @@ jobs:
         env:
           # Staging Environment secret; never echoed, never written to a file.
           # GitHub masks secret values in logs automatically.
-          NEON_STAGING_DATABASE_URL: ${{ secrets.NEON_STAGING_DATABASE_URL }}
+          PLANETSCALE_STAGING_DATABASE_URL: ${{ secrets.PLANETSCALE_STAGING_DATABASE_URL }}
         run: |
           set -euo pipefail
-          if [ -z "${NEON_STAGING_DATABASE_URL:-}" ]; then
-            echo "::error::NEON_STAGING_DATABASE_URL is not configured on the staging environment"
+          if [ -z "${PLANETSCALE_STAGING_DATABASE_URL:-}" ]; then
+            echo "::error::PLANETSCALE_STAGING_DATABASE_URL is not configured on the staging environment"
             exit 1
           fi
-          psql "$NEON_STAGING_DATABASE_URL" -v ON_ERROR_STOP=1 --pset footer=off <<'SQL'
+          psql "$PLANETSCALE_STAGING_DATABASE_URL" -v ON_ERROR_STOP=1 --pset footer=off <<'SQL'
           begin read only;
           set local statement_timeout = '30s';
           select count(*) as total,

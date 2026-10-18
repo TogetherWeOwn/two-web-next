@@ -3,6 +3,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import app from "./app";
 import { registerErrorHandlers } from "../src/errors";
 import type { Env } from "../src/env";
+import { memberReadBoundary } from "../src/member-reads";
+import { __resetAlertRateLimitForTests } from "../src/alerts";
 import { newRequestId, requestLog, safeRequestId } from "../src/request-log";
 
 // Lets one test make the real app's outer post-processing throw.
@@ -30,6 +32,7 @@ const PERSONAL = [
 afterEach(() => {
   post.fail = false;
   vi.restoreAllMocks();
+  __resetAlertRateLimitForTests();
 });
 
 function logs(spy: { mock: { calls: unknown[][] } }) {
@@ -83,6 +86,9 @@ describe("structured request logs (local fixtures only)", () => {
         status: 200,
         duration_ms: expect.any(Number),
         colo: "LHR",
+        error_class: null,
+        build_sha: null,
+        release: null,
       },
     ]);
     expect(logs(log)[0].duration_ms).toBeGreaterThanOrEqual(0);
@@ -108,6 +114,48 @@ describe("structured request logs (local fixtures only)", () => {
     ]);
     expect(res.status).toBe(status);
     expect(JSON.stringify(log.mock.calls)).not.toContain("private-id");
+  });
+
+  it("alerts once for an admin read error handled inside the member boundary", async () => {
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    const router = new Hono<{ Bindings: Env }>();
+    router.use("*", requestLog);
+    registerErrorHandlers(router);
+    router.use("/admin/roster", (c, next) =>
+      memberReadBoundary(
+        c,
+        { viewer: "123456789012345678", resource: "admin", action: "view", route: "admin.roster" },
+        async () => true,
+        next,
+      ),
+    );
+    router.get("/admin/roster", () => {
+      throw new TypeError("private member-read failure");
+    });
+
+    const response = await router.request("/admin/roster", {}, env);
+    const requestId = response.headers.get("x-request-id");
+    expect(response.status).toBe(503);
+    const alerts = error.mock.calls
+      .map(([line]) => (typeof line === "string" && line.startsWith("{") ? JSON.parse(line) : null))
+      .filter((line) => line?.event === "error.alert");
+    expect(alerts).toHaveLength(1);
+    expect(alerts[0]).toMatchObject({
+      event: "error.alert",
+      exception: "TypeError",
+      method: "GET",
+      route: "/admin/roster",
+      request_id: requestId,
+    });
+    expect(error).toHaveBeenCalledWith("Member request failed; refusing contents.", {
+      exception: "TypeError",
+      request_id: requestId,
+    });
+    expect(logs(log)).toContainEqual(
+      expect.objectContaining({ request_id: requestId, route: "/admin/roster", status: 503 }),
+    );
+    expect(JSON.stringify(error.mock.calls)).not.toContain("private member-read failure");
   });
 
   it("correlates a handled 500 with its alert without logging the exception message", async () => {

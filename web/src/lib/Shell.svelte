@@ -1,18 +1,23 @@
 <script lang="ts">
 import type { Snippet } from "svelte";
-import { loginUrl } from "../../../src/islands/contracts";
+import SiteFooter from "#lib/SiteFooter.svelte";
+import SiteHeader from "#lib/SiteHeader.svelte";
+import SiteMetadata from "#lib/SiteMetadata.svelte";
 
-// Svelte twin of the Hono Layout + schedule Shell (src/pages.tsx,
-// src/events/pages.tsx) for the archive page: same head tags in the same
-// order, same skip link, same schedule header/main/footer chrome.
 let {
   title,
   canonical,
   robots,
   description,
   shareTitle,
+  exactTitle,
+  theme,
+  leafCss,
+  activeNav,
+  mainClass,
   loginReturnTo = null,
-  headerCenter,
+  accountChrome,
+  hideAccount = false,
   children,
 }: {
   title: string;
@@ -20,66 +25,40 @@ let {
   robots?: string;
   description?: string | null;
   shareTitle?: string;
+  exactTitle?: string;
+  theme: "home" | "event" | "content" | "join" | "profile" | "schedule";
+  /** Inlined leaf CSS for the content shell; see SiteMetadata for why this
+    arrives as load data instead of an import. */
+  leafCss?: string;
+  activeNav?: "home" | "events";
+  mainClass?: string;
   loginReturnTo?: string | null;
-  headerCenter?: Snippet;
+  /** Explicitly supplied session-aware chrome; the static shell never reads session state. */
+  accountChrome?: Snippet;
+  /** Drop the account area entirely, as Hono account={false} does on sessionless pages. */
+  hideAccount?: boolean;
   children: Snippet;
 } = $props();
 
-const SITE_NAME = "Together We Own";
-const fullTitle = $derived(`${title} — ${SITE_NAME}`);
-const share = $derived(shareTitle ?? `${title} — ${SITE_NAME}`);
-const shareDescription = $derived(
-  description || "Together We Own: a close-knit adult gaming community, founded 1998.",
+const themeClass = $derived(theme === "home" ? "homepage-theme" : `${theme}-theme`);
+// Content leaves are styled solely by the inlined leaf block (Hono parity):
+// no Tailwind utilities here, so the served page needs nothing from the
+// root-layout stylesheet the hook strips (transformContentLeafChunk). Every
+// other theme keeps the Open Lobby chrome below.
+const shellClass = $derived(
+  theme === "content"
+    ? `base-theme ${themeClass}`
+    : `base-theme bg-lobby-surface font-sans text-lobby-ink ${themeClass}`,
 );
 </script>
 
-<svelte:head>
-  {#if robots}<meta name="robots" content={robots} />{/if}
-  <title>{fullTitle}</title>
-  <meta name="description" content={shareDescription} />
-  {#if canonical}
-    <link rel="canonical" href={canonical} />
-    <meta property="og:type" content="website" />
-    <meta property="og:site_name" content={SITE_NAME} />
-    <meta property="og:url" content={canonical} />
-    <meta property="og:title" content={share} />
-    {#if description}<meta property="og:description" content={description} />{/if}
-    <meta name="twitter:card" content="summary" />
-    <meta name="twitter:title" content={share} />
-    {#if description}<meta name="twitter:description" content={description} />{/if}
-  {/if}
-  <link rel="alternate" type="application/rss+xml" title="{SITE_NAME} Events" href="/events.rss" />
-  <link rel="stylesheet" href="/styles.css" />
-  <link rel="preload" href="/fonts/display-latin-700.woff2" as="font" type="font/woff2" crossorigin="anonymous" />
-  <link rel="stylesheet" href="/theme.css" />
-  <link rel="stylesheet" href="/schedule-theme.css" />
-</svelte:head>
-
-<a class="skip-link" href="#main">Skip to content</a>
-<header class="bar site-header">
-  <nav class="main-nav" aria-label="Primary">
-    <a href="/">Home</a>
-    <a href="/events" aria-current="page">Events</a>
-  </nav>
-  <a class="brand" href="/" aria-label="Together We Own homepage">
-    <img src="/logo.svg" width="64" height="64" alt="Together We Own" />
-  </a>
-  <nav class="header-account" aria-label="Account">
-    {#if headerCenter}
-      {@render headerCenter()}
-    {:else}
-      <div>
-        <span class="account-caption">Welcome, guest</span>
-        <a class="btn" href={loginUrl(loginReturnTo)} data-testid="signin">Sign in with Discord</a>
-      </div>
-    {/if}
-  </nav>
-</header>
-<main class="events-page" id="main" tabindex="-1">{@render children()}</main>
-<footer>
-  Together We Own · adult gaming community · founded 1998
-  <nav aria-label="Site">
-    <a href="/about">About</a> <a href="/faq">FAQ</a> <a href="/rules">House rules</a>
-    <a href="/privacy">Privacy</a>
-  </nav>
-</footer>
+<SiteMetadata {title} {canonical} {robots} {description} {shareTitle} {exactTitle} {theme} {leafCss} />
+<!-- Open Lobby chrome: colours resolve through src/app.css semantic tokens
+  (bg-lobby-*/text-lobby-*/font-sans); no hard-coded palette values here. A
+  restyle is a token swap in that one file. The content theme is the
+  exception: it renders leaf-CSS classes only (see shellClass). -->
+<div class={shellClass} data-theme={theme}>
+  <SiteHeader {activeNav} {loginReturnTo} {accountChrome} {hideAccount} />
+  <main class={mainClass} id="main" tabindex="-1">{@render children()}</main>
+  <SiteFooter {theme} />
+</div>

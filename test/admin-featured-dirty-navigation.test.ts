@@ -123,4 +123,26 @@ describe("admin featured dirty navigation", () => {
     expect(departure.returnValue).toBe("");
     expect(b.navigate("save").preventDefault).not.toHaveBeenCalled();
   });
+
+  it("restores departure protection after an interrupted featured Save unlocks without another input", () => {
+    const b = eventEditorBrowser({ initial: DRAFT });
+    b.values.set("title", "Unsaved headline");
+    b.submit();
+    // No departure, input, or pageshow before the ten-second lock lapses.
+    b.fireTimers();
+    const departure = b.navigate("sort");
+    expect(departure.preventDefault).toHaveBeenCalledOnce();
+    expect(departure.returnValue).toBe("");
+  });
+
+  it.each(["new", "edit"] as const)(
+    "cancels a repeated %s featured Save, so a double click publishes one slot",
+    (mode) => {
+      const html = mode === "new" ? renderNew(DRAFT) : renderEdit(DRAFT);
+      expect(html).toContain('<script src="/islands/admin-event-editor.js" defer=""></script>');
+      const b = eventEditorBrowser({ initial: DRAFT });
+      const submits = [b.submit(), b.submit(), b.submit()];
+      expect(submits.filter((s) => !s.defaultPrevented)).toHaveLength(1);
+    },
+  );
 });

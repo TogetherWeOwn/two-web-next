@@ -1,8 +1,8 @@
 # Synthetic backup-to-restore proof
 
 This standalone harness proves that a **real custom-format PostgreSQL archive
-transported by `bin/neon-backup.sh`** can be downloaded and restored. It supplements
-`ci/neon-backup-selftest.sh`, whose fixed dump payload tests transport/retention,
+transported by `bin/db-backup.sh`** can be downloaded and restored. It supplements
+`ci/db-backup-selftest.sh`, whose fixed dump payload tests transport/retention,
 not recoverability. It does not add a production restore command, exercise nightly
 workflows, fetch live archives, or prove a live backup's recoverability.
 
@@ -10,7 +10,7 @@ workflows, fetch live archives, or prove a live backup's recoverability.
 
 Prerequisites: Python 3 (standard library only), Bash, `psql`, `pg_dump` and
 `pg_restore` on PATH, with a client major version compatible with the test server
-(PostgreSQL 17 currently). No npm install, application migrations, Wrangler
+(PostgreSQL 18 currently). No npm install, application migrations, Wrangler
 installation or Cloudflare credentials are needed.
 
 ```sh
@@ -46,16 +46,22 @@ instead of installed on the host. Temporary files, fake objects and archives are
 private to the invocation and removed; Paperclip runs use
 `PAPERCLIP_RUN_SCRATCH_DIR` as their scratch parent.
 
-## Optional isolated GitHub Actions service
+## Isolated GitHub Actions job
 
-No shared workflow/package changes are part of this slice. A future dedicated
-job may run the same standalone commands in a job container with a service named
-`postgres`, configured with **POSTGRES_USER=agent_test**, **POSTGRES_DB=agent_test**
-and **POSTGRES_HOST_AUTH_METHOD=trust** (empty password). Use an isolated CI service
-only, never a mapped host database or an existing staging/production server.
+`.github/workflows/backup-restore-proof.yml` runs the same standalone commands
+on a disposable service named `postgres`, configured with **POSTGRES_USER=agent_test**,
+**POSTGRES_DB=agent_test** and **POSTGRES_HOST_AUTH_METHOD=trust** (empty password).
+The job sets no `PG*` or `*DATABASE_URL*` variables, uses no secrets, and touches
+no staging or production server. Docs-only PRs and drafts skip it through the
+same scope gate as the hermetic selftest steps; the proof log uploads as a
+short-retention artifact. Job steps run on the runner host where the service
+name does not resolve, so the job maps `postgres` to `127.0.0.1` in
+`/etc/hosts` and reaches the service through its mapped port; the allowlist
+still sees the name `postgres`, and loopback stays refused as a `--host`
+value.
 
 ```sh
-# Inside that GitHub Actions job container (CI=true, GITHUB_ACTIONS=true):
+# Inside that GitHub Actions job (CI=true, GITHUB_ACTIONS=true arrive from the runner):
 python3 ci/backup-restore-proof/run.py --host postgres
 ```
 

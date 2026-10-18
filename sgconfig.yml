@@ -1,0 +1,20 @@
+# ast-grep project config (quality gate: fetch-await HARD).
+#
+# Rules live in sg-rules/ (ast-grep 0.50.0 project mode only reads
+# `ruleDirs`; inline `rules:` here are silently ignored). The ts-* rules are
+# vendored byte-identical from the shared meta-only quality assets
+# (quality/meta-only/rules/ts/); provenance is recorded in
+# docs/quality-gates.md. Rule fixtures live in sg-tests/.
+#
+# Run locally: npx -y --package @ast-grep/cli@0.50.0 ast-grep scan
+# CI runs `ast-grep scan --error`: any error-severity finding fails `check`.
+# Rule tests: npx -y --package @ast-grep/cli@0.50.0 ast-grep test
+ruleDirs:
+  - sg-rules
+testConfigs:
+  - testDir: sg-tests
+languageGlobs:
+  TypeScript:
+    - '**/*.cjs'
+    - '**/*.mjs'
+    - '**/*.js'

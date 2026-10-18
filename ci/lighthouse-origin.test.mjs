@@ -228,6 +228,54 @@ test("discovery skips stale-cache 410 candidates and keeps real coverage", async
   });
 });
 
+test("discovery skips 404 candidates and keeps real coverage", async () => {
+  const GONE_PATH = "/e/01JCCCCCCCCCCCCCCCCCCCCCCC";
+  const { fetchImpl } = stubFetch({
+    "/events.rss": { body: rss(`${APEX}${GONE_PATH}`, `${APEX}${EVENT_PATH}`) },
+    // Unknown after the feed was cached: the route answers 404.
+    [GONE_PATH]: { status: 404, body: "<h1>Missing meetup</h1>" },
+    [EVENT_PATH]: { body: "<h1>Community game night</h1>" },
+  });
+  assert.deepEqual(await lib.discoverEventPath(APEX, fetchImpl), {
+    path: EVENT_PATH,
+    source: "/events.rss",
+  });
+});
+
+test("discovery fails closed on unhealthy candidate statuses", async () => {
+  for (const status of [500, 429, 301]) {
+    const { fetchImpl } = stubFetch({
+      "/events.rss": { body: rss(`${APEX}${EVENT_PATH}`) },
+      [EVENT_PATH]: { status, body: "<h1>Community game night</h1>" },
+    });
+    await assert.rejects(
+      () => lib.discoverEventPath(APEX, fetchImpl),
+      new RegExp(`returned ${status}.*expected 200`),
+      `status ${status} must throw, never measure`,
+    );
+  }
+});
+
+test("discovery reports cancelled listings when only stale candidates remain", async () => {
+  const GONE_PATH = "/e/01JDDDDDDDDDDDDDDDDDDDDDDD";
+  const { calls, fetchImpl } = stubFetch({
+    "/events.rss": { body: rss(`${APEX}${GONE_PATH}`) },
+    [GONE_PATH]: { status: 410, body: "<h1>Old meetup</h1>" },
+    // The listing still links the same stale path: it must not be
+    // re-requested or counted twice.
+    "/events": { body: `<a href="${GONE_PATH}">Old meetup</a>` },
+  });
+  const skipped = await lib.discoverEventPath(APEX, fetchImpl);
+  assert.equal(skipped.path, null);
+  assert.match(skipped.reason, /no published event is listed/);
+  assert.match(skipped.reason, /1 cancelled\/stale listing\(s\)/);
+  assert.equal(
+    calls.filter((call) => call.url.endsWith(GONE_PATH)).length,
+    1,
+    "a stale candidate is verified once, never twice",
+  );
+});
+
 test("discovery skips when the feed lists only staging fixtures", async () => {
   const { calls, fetchImpl } = stubFetch({
     "/events.rss": {
@@ -244,6 +292,52 @@ test("discovery skips when the feed lists only staging fixtures", async () => {
   assert.ok(
     calls.every((call) => !call.url.endsWith(FIXTURE_EVENT_PATH)),
     "a filtered fixture needs no verification request",
+  );
+});
+
+test("discovery never re-requests a title-filtered fixture in the /events fallback", async () => {
+  const { calls, fetchImpl } = stubFetch({
+    "/events.rss": {
+      body: rssWithTitles(
+        rssItem(`${APEX}${FIXTURE_EVENT_PATH}`, "Staging E2E RSVP 1760317553000"),
+      ),
+    },
+    // The listing links the same fixture path, as the calendar card renders.
+    // It is already rejected by title, so the fallback must skip it unseen.
+    "/events": { body: `<a href="${FIXTURE_EVENT_PATH}">Staging E2E RSVP</a>` },
+    [FIXTURE_EVENT_PATH]: {
+      body: '<h1 data-waitlist-position="">Staging E2E RSVP 1760317553000</h1>',
+    },
+  });
+  const skipped = await lib.discoverEventPath(APEX, fetchImpl);
+  assert.equal(skipped.path, null);
+  assert.match(skipped.reason, /1 staging fixture\(s\)/);
+  assert.equal(
+    calls.filter((call) => call.url.endsWith(FIXTURE_EVENT_PATH)).length,
+    0,
+    "a title-filtered fixture must never be requested, in either pass",
+  );
+  assert.deepEqual(
+    calls.map((call) => new URL(call.url).pathname),
+    ["/events.rss", "/events"],
+  );
+});
+
+test("discovery still filters an /events-only fixture by page content", async () => {
+  const { calls, fetchImpl } = stubFetch({
+    "/events.rss": { body: rss() },
+    "/events": { body: `<a href="${FIXTURE_EVENT_PATH}">Staging E2E RSVP</a>` },
+    [FIXTURE_EVENT_PATH]: {
+      body: '<h1 data-waitlist-position="">Staging E2E RSVP 1760317553000</h1>',
+    },
+  });
+  const skipped = await lib.discoverEventPath(APEX, fetchImpl);
+  assert.equal(skipped.path, null);
+  assert.match(skipped.reason, /1 staging fixture\(s\)/);
+  assert.equal(
+    calls.filter((call) => call.url.endsWith(FIXTURE_EVENT_PATH)).length,
+    1,
+    "an /events-only fixture is verified once, then skipped by its heading",
   );
 });
 
@@ -389,6 +483,9 @@ test("per-route verdicts: pass, warn, fail, missing run and skipped event", () =
     "/events": "fail",
     "/join": "warn",
     "/about": "fail",
+    "/faq": "pass",
+    "/rules": "pass",
+    "/privacy": "pass",
     "/e/<key>": "skipped",
   });
   assert.equal(rows.find((row) => row.path === "/").medians["largest-contentful-paint"], 1100);

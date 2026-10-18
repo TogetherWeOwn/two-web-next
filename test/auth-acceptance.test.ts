@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import app from "./app";
 import type { Env } from "../src/env";
 import { QA_HEADER, QA_IDENTITIES, STAGING_APP_URL } from "../src/qa";
+import { AUTH_STATUS_COOKIE } from "../src/auth-status";
 import { createMemorySessionStore, hashToken, type SessionStore } from "../src/sessions";
 import { isModerator, parseModeratorRoleIds } from "../src/roles";
 
@@ -136,12 +137,13 @@ describe("W15 Discord login and callback boundaries", () => {
       e,
     );
     expect(result.status).toBe(302);
-    // A consent refusal (error=access_denied) gets its own user-visible
-    // meaning — "you cancelled" — distinct from the generic failure banner
-    // (TOG-10355, legacy DiscordLoginTest denial row). None of these rows
-    // may reach Discord.
-    const notice = query.includes("error=access_denied") ? "signin_denied" : "signin_failed";
-    expect(result.headers.get("location")).toBe(`/?n=${notice}`);
+    // State admission gates the OAuth-error mapping: a denial without a
+    // presented, admitted state is a failed sign-in, not a cancelled consent.
+    // None of these rows presents an admitted state (no state param, or a
+    // forged one), so all keep the generic banner; the admitted-denial copy
+    // is pinned in auth-admission.test.ts. None of these rows may reach
+    // Discord.
+    expect(result.headers.get("location")).toBe("/?n=signin_failed");
     expect(fetch).not.toHaveBeenCalled();
     expect(result.headers.getSetCookie().join("\n")).toContain(
       "__Host-two_oauth_state=; Max-Age=0",
@@ -195,16 +197,16 @@ describe("W15 Discord login and callback boundaries", () => {
 });
 
 describe("W15 moderator role configuration", () => {
-  it.each([undefined, "", "SySOp", "123", "not-a-snowflake"])("fails closed for %s", (raw) => {
+  it.each([undefined, "", "Moderator", "123", "not-a-snowflake"])("fails closed for %s", (raw) => {
     expect(parseModeratorRoleIds(raw)).toEqual([]);
-    expect(isModerator(["508654771276873729"], parseModeratorRoleIds(raw))).toBe(false);
+    expect(isModerator(["1546777856984481792"], parseModeratorRoleIds(raw))).toBe(false);
   });
 
   it("parses multiple snowflakes with padding and a trailing comma, never granting by role name", () => {
-    const ids = parseModeratorRoleIds(" 508654771276873729, 1078757544169848933, SySOp, ");
-    expect(ids).toEqual(["508654771276873729", "1078757544169848933"]);
+    const ids = parseModeratorRoleIds(" 1546777856984481792, 1078757544169848933, Moderator, ");
+    expect(ids).toEqual(["1546777856984481792", "1078757544169848933"]);
     expect(isModerator(["1078757544169848933"], ids)).toBe(true);
-    expect(isModerator(["SySOp"], ids)).toBe(false);
+    expect(isModerator(["Moderator"], ids)).toBe(false);
   });
 });
 
@@ -300,6 +302,86 @@ describe("W15 session lifetime, rotation and logout", () => {
     expect(
       await (await app.request("/", { headers: { cookie: cookies(login) } }, e)).text(),
     ).toContain("Sign in with Discord");
+  });
+
+  it("a stale cookie revokes its rotated successor but not an independent device lineage", async () => {
+    const { store, env: e } = isolated();
+    const login = await qaLogin(e);
+    const staleHash = await hashToken(bearer(login));
+    const rotated = await app.request("/", { headers: { cookie: cookies(login) } }, e);
+    const successorHash = await hashToken(bearer(rotated));
+    expect(await store.get(successorHash)).not.toBeNull();
+
+    const independentToken = "two_independent-session-token";
+    const independentHash = await hashToken(independentToken);
+    await store.create({
+      tokenHash: independentHash,
+      userId: "42",
+      username: "QA Member",
+      avatar: null,
+      member: true,
+      moderator: false,
+      expiresAt: new Date(Date.now() + TTL * 1000),
+    });
+    const post = await app.request(
+      "/logout",
+      { method: "POST", headers: { cookie: cookies(login), origin: e.APP_URL } },
+      e,
+    );
+
+    expect(post.status).toBe(303);
+    expect(await store.get(staleHash)).toBeNull();
+    expect(await store.get(successorHash)).toBeNull();
+    expect(await store.get(independentHash)).not.toBeNull();
+  });
+
+  it.each(["absent", "forged"] as const)(
+    "falls back to presented-token revocation when the lineage cookie is %s",
+    async (state) => {
+      const { store, env: e } = isolated();
+      const login = await qaLogin(e);
+      const independent = await qaLogin(e, "qa-moderator");
+      const presentedHash = await hashToken(bearer(login));
+      const independentHash = await hashToken(bearer(independent));
+      const cookie = cookies(login)
+        .split("; ")
+        .filter((part) => !part.startsWith(`${AUTH_STATUS_COOKIE}=`))
+        .concat(state === "forged" ? [`${AUTH_STATUS_COOKIE}=forged`] : [])
+        .join("; ");
+
+      const post = await app.request(
+        "/logout",
+        { method: "POST", headers: { cookie, origin: e.APP_URL } },
+        e,
+      );
+
+      expect(post.status).toBe(303);
+      expect(await store.get(presentedHash)).toBeNull();
+      expect(await store.get(independentHash)).not.toBeNull();
+    },
+  );
+
+  it("does not clear the session cookie when lineage revocation fails", async () => {
+    const { store, env: e } = isolated();
+    const login = await qaLogin(e);
+    const failing: SessionStore = {
+      ...store,
+      revokeLineage: async () => {
+        throw new Error("test lineage store unavailable");
+      },
+    };
+
+    const post = await app.request(
+      "/logout",
+      { method: "POST", headers: { cookie: cookies(login), origin: e.APP_URL } },
+      { ...e, SESSION_STORE: failing } as Env,
+    );
+
+    expect(post.status).toBe(503);
+    expect(
+      post.headers.getSetCookie().some((cookie) => cookie.startsWith(`${SESSION_COOKIE}=`)),
+    ).toBe(false);
+    expect(await store.get(await hashToken(bearer(login)))).toBeNull();
   });
 
   it("a foreign-origin POST refuses without revoking the valid row", async () => {

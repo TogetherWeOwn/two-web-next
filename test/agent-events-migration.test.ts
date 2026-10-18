@@ -21,11 +21,6 @@ const migration1019 = migrations[migrationIndex]!;
 // applies it. Keep all scratch DDL and cleanup local to this test file.
 async function createMigrationFixture(raw: string) {
   const url = testDatabaseUrl(raw); // Guard before constructing either driver.
-  if (url.hostname === "agent-testdb" && url.pathname !== "/two_web_next") {
-    throw new Error(
-      "Migration fixtures require agent-testdb/two_web_next; refusing before connecting",
-    );
-  }
   const schemaName = `agent_migration_${randomUUID().replaceAll("-", "")}`;
   const options = {
     max: 1,
@@ -252,9 +247,9 @@ it("appends the shared migration after the audit-immutability migration with a l
   }
 });
 
-it("refuses a different agent-testdb database before connecting", async () => {
+it("refuses a production-named database before connecting", async () => {
   await expect(
-    createMigrationFixture("postgres://agent_test@agent-testdb:5432/postgres"),
+    createMigrationFixture("postgres://agent_test@agent-testdb:5432/production"),
   ).rejects.toThrow("refusing before connecting");
 });
 

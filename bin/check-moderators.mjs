@@ -6,8 +6,11 @@
 //   node --import ./bin/ts-hook.mjs bin/check-moderators.mjs --config=<path> [--env=<name>] [--require-configured] [--json]
 //
 // Reads DISCORD_MODERATOR_ROLE_IDS from the environment as the login path
-// parses it. Network-free: it checks resolved config, never Discord, so it
-// cannot target production. Exit 0 when nothing FAILs, 1 otherwise.
+// parses it, plus DISCORD_GUILD_ID for the guild binding: the configured
+// pair must be the pair bound to the queried guild, so a production pair in
+// a staging config fails. Network-free: it checks resolved config, never
+// Discord, so it cannot target production. Exit 0 when nothing FAILs,
+// 1 otherwise.
 //
 // With --config alone it reads top-level vars; with --config plus --env it
 // reads env.<name>.vars only, with no fallback to the top level (Wrangler
@@ -33,6 +36,7 @@ if (unknown.length > 0) {
 }
 
 let raw = process.env.DISCORD_MODERATOR_ROLE_IDS;
+let guildId = process.env.DISCORD_GUILD_ID || undefined;
 if (envs.length > 0) {
   // Named-environment read: --env requires exactly one --config, and reads
   // env.<name>.vars only. Never fall back to top-level vars or to an
@@ -68,6 +72,11 @@ if (envs.length > 0) {
     );
     process.exit(2);
   }
+  guildId = named.vars?.DISCORD_GUILD_ID || undefined;
+  if (guildId !== undefined && typeof guildId !== "string") {
+    console.error("check-moderators: cannot read a valid Wrangler config with a string guild var");
+    process.exit(2);
+  }
 } else if (configs.length > 0) {
   if (configs.length !== 1 || configs[0] === "--config=") {
     console.error("check-moderators: supply exactly one nonempty --config=<path>");
@@ -79,6 +88,8 @@ if (envs.length > 0) {
     const config = readWranglerConfig(readFileSync(configs[0].slice("--config=".length), "utf8"));
     raw = config.vars?.DISCORD_MODERATOR_ROLE_IDS;
     if (raw !== undefined && typeof raw !== "string") throw new Error("invalid var");
+    guildId = config.vars?.DISCORD_GUILD_ID || undefined;
+    if (guildId !== undefined && typeof guildId !== "string") throw new Error("invalid var");
   } catch {
     console.error(
       "check-moderators: cannot read a valid Wrangler config with a string moderator var",
@@ -86,9 +97,21 @@ if (envs.length > 0) {
     process.exit(2);
   }
 }
-const probe = checkModerators(raw, {
-  requireConfigured: args.has("--require-configured"),
-});
+const probe = (() => {
+  // Config-file reads with --require-configured must name a guild: a missing
+  // or blank DISCORD_GUILD_ID would otherwise fall back to the legacy
+  // production-pair expectation with no guild-binding finding, so a config
+  // that lost the guild var looks configured while the worker boots with a
+  // blank guild and matches nobody. Pass the miss through as an unknown
+  // guild so the probe reports FAIL guild-binding instead of skipping it.
+  const configRead = envs.length > 0 || configs.length > 0;
+  const effectiveGuildId =
+    args.has("--require-configured") && configRead && guildId === undefined ? "" : guildId;
+  return checkModerators(raw, {
+    requireConfigured: args.has("--require-configured"),
+    guildId: effectiveGuildId,
+  });
+})();
 
 if (args.has("--json")) {
   console.log(

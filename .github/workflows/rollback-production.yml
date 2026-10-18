@@ -32,7 +32,7 @@ jobs:
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24
       - name: Refuse disabled, non-main, unprotected or placeholder deployment
@@ -40,6 +40,8 @@ jobs:
         env:
           PRODUCTION_DEPLOY_ENABLED: ${{ vars.PRODUCTION_DEPLOY_ENABLED }}
           GITHUB_TOKEN: ${{ github.token }}
+          # Rollback checks out github.sha; the gate verifies DEPLOY_SHA.
+          DEPLOY_SHA: ${{ github.sha }}
       - name: Refuse an empty, malformed or injectable version_id
         # The input travels inputs -> env -> quoted shell variable, never
         # through expression interpolation in a run: block.
@@ -54,6 +56,13 @@ jobs:
     # GitHub-hosted while public, the self-hosted fleet while private.
     runs-on: ${{ github.event.repository.private && fromJSON('["self-hosted","two-selfhosted"]') || 'ubuntu-latest' }}
     timeout-minutes: 15
+    # Shared production Worker mutation lock with the promotion job: the same
+    # static non-cancelling group serializes rollback and promotion mutations
+    # to the same Worker. Workflow-level groups stay distinct so the run never
+    # nests this group.
+    concurrency:
+      group: production-worker-mutation
+      cancel-in-progress: false
     # Required reviewers + prevent-self-review are live repo settings. Preflight
     # refuses a missing/unprotected Environment before GitHub can auto-create it.
     environment:
@@ -65,7 +74,7 @@ jobs:
           # Roll back from the dispatch SHA that passed preflight, not a newer main head.
           ref: ${{ github.sha }}
           persist-credentials: false
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24
           cache: npm
@@ -74,6 +83,8 @@ jobs:
         env:
           PRODUCTION_DEPLOY_ENABLED: ${{ vars.PRODUCTION_DEPLOY_ENABLED }}
           GITHUB_TOKEN: ${{ github.token }}
+          # Rollback checks out github.sha; the gate verifies DEPLOY_SHA.
+          DEPLOY_SHA: ${{ github.sha }}
       - name: Recheck version_id after Environment approval
         run: node ci/production-deploy-gate.mjs --version-id
         env:
@@ -84,6 +95,21 @@ jobs:
       - name: Require production-only Cloudflare credentials
         run: node ci/production-deploy-gate.mjs --credentials
         env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.PRODUCTION_CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.PRODUCTION_CLOUDFLARE_ACCOUNT_ID }}
+      - name: Require rollback target version secrets (names only, before rollback)
+        # Reads the recorded target version's secret_text bindings via
+        # wrangler versions view and refuses on any missing required name.
+        # Values are never read or printed; unreadable output fails closed.
+        # Runs after the credentials check and before the rollback. The
+        # rollback deploys the target version's own bindings, never the
+        # checked-out commit: reading the latest listing here would refuse
+        # the rollback that restores a deleted secret. No moderator or
+        # dry-run build gate here: both validate the dispatch SHA, not the
+        # recorded version, and must never block the emergency path.
+        run: node ci/check-production-secrets.mjs --rollback-version
+        env:
+          ROLLBACK_VERSION_ID: ${{ inputs.version_id }}
           CLOUDFLARE_API_TOKEN: ${{ secrets.PRODUCTION_CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.PRODUCTION_CLOUDFLARE_ACCOUNT_ID }}
       - name: Roll back to the recorded production Worker Version

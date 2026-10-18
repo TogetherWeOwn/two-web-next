@@ -1,12 +1,16 @@
 # 48h post-flip watch: run-record sheet
 
 Blank sheet the watch writes into. Procedure lives elsewhere; this file
-records evidence only. Everything here is read-only or GET-only: no
-production writes, migrations, credential changes or queue purges.
+records evidence only. The after-gate probes use GET requests but are not
+side-effect-free: OAuth start/callback probes can write throttle and failed
+join-attempt records, and `/join/discord` plus `/auth/discord` can sweep
+expired and issue one-use OAuth journey records. The watch performs no
+migrations, credential changes or queue purges.
 
 - Watch procedure and cadence:
   [runbook.md](runbook.md#48h-post-flip-watch). The first 60 minutes use
-  the denser poll script in [first-hour-watch.md](first-hour-watch.md);
+  the denser first-hour polls and ladder in
+  [48h-watch-spec.md](48h-watch-spec.md#escalation-ladder);
   record each of its checkpoints in §3 below.
 - Staffing: the approved 48h roster (roles pre-filled per block in §2;
   start/end UTC are set at the CEO go). Handoffs go on the cutover card

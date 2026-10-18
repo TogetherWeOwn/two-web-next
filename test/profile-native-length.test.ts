@@ -33,7 +33,7 @@ const alphabets = [
 const paths = ["native POST", "island PATCH"] as const;
 type Fields = { bio: string; games_text: string; timezone: string };
 
-async function setup() {
+async function setup(leaderboardOptOut = false) {
   const sessions = createMemorySessionStore();
   const token = newSessionToken();
   await sessions.create({
@@ -53,7 +53,15 @@ async function setup() {
       sameSite: "Lax",
     })
   ).split(";")[0]!;
-  const member = { id: ID, username: "alice", avatar: null, bio: null, games: [], timezone: null };
+  const member = {
+    id: ID,
+    username: "alice",
+    avatar: null,
+    bio: null,
+    games: [],
+    timezone: null,
+    leaderboardOptOut,
+  };
   const store = createMemoryProfileStore([member]);
   const save = vi.spyOn(store, "save");
   const app = profilesApp({
@@ -252,6 +260,7 @@ describe("real island binder: oversized synthetic lists", () => {
       setAttribute: ReturnType<typeof vi.fn>;
       appendChild: (child: Element) => void;
       focus: ReturnType<typeof vi.fn>;
+      addEventListener: ReturnType<typeof vi.fn>;
     };
     const element = (): Element => ({
       textContent: "",
@@ -261,6 +270,7 @@ describe("real island binder: oversized synthetic lists", () => {
         this.children.push(child);
       },
       focus: vi.fn(),
+      addEventListener: vi.fn(),
     });
     const insertBefore = vi.fn();
     const fetch = vi.fn();
@@ -323,7 +333,12 @@ describe("real island binder: oversized synthetic lists", () => {
     expect(insertBefore).toHaveBeenCalledOnce();
     const alert = insertBefore.mock.calls[0]![0] as Element;
     expect(alert.setAttribute).toHaveBeenCalledWith("role", "alert");
-    expect(alert.children[0]!.children.map((child) => child.textContent)).toEqual(errors);
+    // Field errors render as summary links; read the link text.
+    expect(
+      alert.children[0]!.children.map(
+        (child) => child.children[0]?.textContent || child.textContent,
+      ),
+    ).toEqual(errors);
     expect(alert.focus).toHaveBeenCalledOnce();
     expect(form.elements.games_text.value).toBe(games);
   });
@@ -357,8 +372,19 @@ describe.skipIf(process.env.A11Y_BROWSER_TESTS !== "true")(
       );
     });
 
-    async function openProfile(javaScriptEnabled: boolean) {
-      const fixture = await setup();
+    async function openProfile(
+      javaScriptEnabled: boolean,
+      opts: { leaderboardOptOut?: boolean; holdFirstWrite?: boolean } = {},
+    ) {
+      const fixture = await setup(opts.leaderboardOptOut ?? false);
+      // Optionally keep the first write's response in flight until the test
+      // releases it, so edits made during the pending save race its ack.
+      let releaseFirstWrite = () => {};
+      let firstWriteGate: Promise<void> | null = opts.holdFirstWrite
+        ? new Promise<void>((resolve) => {
+            releaseFirstWrite = resolve;
+          })
+        : null;
       const context = await browser.newContext({ javaScriptEnabled, serviceWorkers: "block" });
       contexts.push(context);
       const writes: { method: string; status: number; body: string }[] = [];
@@ -413,8 +439,14 @@ describe.skipIf(process.env.A11Y_BROWSER_TESTS !== "true")(
               (_, prefix) => prefix + String(Date.now() - 5000),
             );
           }
-          if (request.method !== "GET")
+          if (request.method !== "GET") {
             writes.push({ method: request.method!, status: response.status, body: input });
+            if (firstWriteGate) {
+              const gate = firstWriteGate;
+              firstWriteGate = null;
+              await gate;
+            }
+          }
           reply.writeHead(response.status, Object.fromEntries(response.headers));
           reply.end(body);
         } catch (error) {
@@ -444,7 +476,7 @@ describe.skipIf(process.env.A11Y_BROWSER_TESTS !== "true")(
       );
       const page = await context.newPage();
       await page.goto(`${base}/profile`);
-      return { ...fixture, page, writes, base };
+      return { ...fixture, page, writes, base, releaseFirstWrite };
     }
 
     async function enter(page: Page, name: string, value: string) {
@@ -464,8 +496,115 @@ describe.skipIf(process.env.A11Y_BROWSER_TESTS !== "true")(
       expect(writes).toHaveLength(1);
       expect(writes[0]).toMatchObject({ method: "PATCH", status: 200 });
       expect(JSON.parse(writes[0]!.body).games_text).toBe(games_text);
-      expect(save).toHaveBeenCalledExactlyOnceWith(ID, { bio: null, games, timezone: null });
+      expect(save).toHaveBeenCalledExactlyOnceWith(ID, {
+        bio: null,
+        games,
+        timezone: null,
+        leaderboardOptOut: false,
+      });
     });
+
+    // Native proof for the pending-save opt-out race: real form semantics
+    // (same-name hidden fallback + checkbox, checked/defaultChecked,
+    // document.activeElement, native reset) against the shipped island.
+    async function optOutState(page: Page) {
+      const box = page.locator("#profile-leaderboard-opt-out");
+      const named = await page.locator('[name="leaderboard_opt_out"]').evaluateAll((els) =>
+        (els as unknown as { type: string; value: string }[]).map((el) => ({
+          type: el.type,
+          value: el.value,
+        })),
+      );
+      const { checked, defaultChecked } = await box.evaluate((el) => {
+        const input = el as unknown as { checked: boolean; defaultChecked: boolean };
+        return { checked: input.checked, defaultChecked: input.defaultChecked };
+      });
+      const formHidden = await page
+        .getByTestId("profile-form")
+        .evaluate((el) => (el as unknown as { hidden: boolean }).hidden);
+      const activeName = await page.evaluate<string | null>(
+        "document.activeElement && document.activeElement.getAttribute('name')",
+      );
+      const departurePrevented = await page.evaluate<boolean>(
+        "(() => { const e = new Event('beforeunload', { cancelable: true }); window.dispatchEvent(e); return e.defaultPrevented; })()",
+      );
+      return { named, checked, defaultChecked, activeName, formHidden, departurePrevented };
+    }
+
+    async function pendingOptOutToggle(initial: boolean) {
+      const opened = await openProfile(true, {
+        leaderboardOptOut: initial,
+        holdFirstWrite: true,
+      });
+      const { page } = opened;
+      const before = await optOutState(page);
+      expect(before.named).toEqual([
+        { type: "hidden", value: "0" },
+        { type: "checkbox", value: "1" },
+      ]);
+      expect(before.checked).toBe(initial);
+      expect(before.defaultChecked).toBe(initial);
+      await enter(page, "bio", "Saved bio");
+      await page.getByTestId("profile-save").click();
+      // Flip the switch by keyboard while the older save is still pending,
+      // then move focus to Bio before its acknowledgement arrives.
+      await page.locator("#profile-leaderboard-opt-out").focus();
+      await page.keyboard.press("Space");
+      expect((await optOutState(page)).checked).toBe(!initial);
+      await page.locator('[name="bio"]').focus();
+      opened.releaseFirstWrite();
+      await page.getByTestId("profile-saved").waitFor();
+      return opened;
+    }
+
+    it.each([
+      { label: "false-to-true", initial: false },
+      { label: "true-to-false", initial: true },
+    ])(
+      "keeps a newer $label opt-out choice after the older save lands; Cancel restores the acknowledged choice",
+      async ({ initial }) => {
+        const { page, writes } = await pendingOptOutToggle(initial);
+        const after = await optOutState(page);
+        expect(after.checked).toBe(!initial);
+        expect(after.defaultChecked).toBe(initial);
+        expect(after.activeName).toBe("bio");
+        expect(after.formHidden).toBe(false);
+        expect(after.departurePrevented).toBe(true);
+        expect(writes).toHaveLength(1);
+        await page.getByTestId("profile-cancel").click();
+        const reset = await optOutState(page);
+        expect(reset.checked).toBe(initial);
+        expect(reset.defaultChecked).toBe(initial);
+        expect(reset.departurePrevented).toBe(false);
+        expect(writes).toHaveLength(1);
+      },
+    );
+
+    it.each([
+      { label: "false-to-true", initial: false },
+      { label: "true-to-false", initial: true },
+    ])(
+      "sends the newer $label opt-out choice only on an explicit later Save",
+      async ({ initial }) => {
+        const { page, writes, save } = await pendingOptOutToggle(initial);
+        expect((await optOutState(page)).checked).toBe(!initial);
+        expect(writes).toHaveLength(1);
+        await page.getByTestId("profile-save").click();
+        await expect
+          .poll(() => page.getByTestId("profile-form").getAttribute("aria-busy"))
+          .toBeNull();
+        expect(writes).toHaveLength(2);
+        expect(JSON.parse(writes[1]!.body).leaderboard_opt_out).toBe(!initial);
+        expect(save).toHaveBeenLastCalledWith(
+          ID,
+          expect.objectContaining({ leaderboardOptOut: !initial }),
+        );
+        const settled = await optOutState(page);
+        expect(settled.checked).toBe(!initial);
+        expect(settled.defaultChecked).toBe(!initial);
+        expect(settled.departurePrevented).toBe(false);
+      },
+    );
 
     for (const javaScriptEnabled of [false, true]) {
       describe(javaScriptEnabled ? "JS island" : "no-JS form", () => {
@@ -504,7 +643,12 @@ describe.skipIf(process.env.A11Y_BROWSER_TESTS !== "true")(
               // Native form serialization normalizes textarea LF to CRLF.
               expect(posted.get("games_text")).toBe(games_text.replaceAll("\n", "\r\n"));
             }
-            expect(save).toHaveBeenCalledExactlyOnceWith(ID, { bio, games, timezone: null });
+            expect(save).toHaveBeenCalledExactlyOnceWith(ID, {
+              bio,
+              games,
+              timezone: null,
+              leaderboardOptOut: false,
+            });
           },
         );
 

@@ -252,6 +252,40 @@ function contract(name: string, make: () => SessionStore, sql?: Sql) {
       },
     );
 
+    // OAuth-error mapping requires state admission first: a denial that was
+    // never admitted is a failed sign-in, not a cancelled consent. Reordering
+    // the error branch ahead of admission makes these report signin_denied.
+    it("auth OAuth denial without a state cookie reports signin_failed, not signin_denied", async () => {
+      const f = fixture(make(), sql);
+      const fetch = mockDiscord();
+      const res = await app.request("/auth/discord/callback?error=access_denied", {}, f.env);
+      expect(res.status).toBe(302);
+      expect(res.headers.get("location")).toBe("/?n=signin_failed");
+      expect(sessionCookie(res)).toBeUndefined();
+      expect(fetch).not.toHaveBeenCalled();
+      expect(f.create).not.toHaveBeenCalled();
+      expect(f.replace).not.toHaveBeenCalled();
+      expect(await f.attemptCount()).toBe(0);
+    });
+
+    it("auth OAuth denial with a mismatched state reports signin_failed, not signin_denied", async () => {
+      const f = fixture(make(), sql);
+      const original = await start(f.env, "auth");
+      const fetch = mockDiscord();
+      const res = await app.request(
+        "/auth/discord/callback?error=access_denied&state=mismatch",
+        { headers: { cookie: original.cookie } },
+        f.env,
+      );
+      expect(res.status).toBe(302);
+      expect(res.headers.get("location")).toBe("/?n=signin_failed");
+      expect(sessionCookie(res)).toBeUndefined();
+      expect(fetch).not.toHaveBeenCalled();
+      expect(f.create).not.toHaveBeenCalled();
+      expect(f.replace).not.toHaveBeenCalled();
+      expect(await f.attemptCount()).toBe(0);
+    });
+
     it.each(flows)(
       "%s an incomplete callback spends the journey without elevating or permitting a later exchange",
       async (flow) => {

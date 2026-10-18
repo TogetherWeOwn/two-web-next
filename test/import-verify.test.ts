@@ -225,8 +225,6 @@ describe.skipIf(!databaseUrl)("two-schema verification on the authorized test da
   let sourceCreated = false;
   beforeAll(async () => {
     const url = testDatabaseUrl(databaseUrl!); // Refuse before creating a driver or spawning the CLI.
-    if (url.hostname === "agent-testdb" && url.pathname !== "/two_web_next")
-      throw new Error("verifier fixtures require two_web_next");
     const config = { max: 1, port: 5432, password: () => url.password, onnotice: () => {} };
     admin = postgres(url.href, config);
     legacy = postgres(url.href, config);

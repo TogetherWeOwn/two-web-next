@@ -7,9 +7,11 @@ export type Env = AgentEventsEnv & {
   SYNC_EVENT_QUEUE?: Pick<Queue<QueueMessage>, "send">;
   // Worker-first static assets: fetched only after the host guard admits the request.
   ASSETS?: Pick<Fetcher, "fetch">;
-  // Worker Version metadata binding (`version_metadata`). Bound on the staging
-  // Worker only; absent elsewhere, so `/up` carries no revision there. `id` is
-  // the Version ID that `wrangler rollback` takes; `tag` is the deploy commit.
+  // Worker Version metadata binding (`version_metadata`). Declared for the
+  // staging and production web Workers and the staging jobs Worker; absent
+  // locally, so `/up` carries no revision and log release fields stay null
+  // there. `id` is the Version ID that `wrangler rollback` takes; `tag`
+  // carries the deploy commit (src/release-tag.ts parses both tag shapes).
   CF_VERSION_METADATA?: Partial<Pick<WorkerVersionMetadata, "id" | "tag">>;
   DISCORD_CLIENT_ID: string;
   DISCORD_GUILD_ID: string;
@@ -32,8 +34,29 @@ export type Env = AgentEventsEnv & {
   // QA seam; unset elsewhere, the route 404s. `MEMBER_ACCESS_LOG_ENFORCE`
   // defaults to true (a log write failure refuses the read; "false" degrades).
   DATABASE_URL?: string;
+  // Bot database for the homepage counts' and profile stats' `web_v1` views
+  // (bot-owned, read-only `two_web_reader` grant). Hyperdrive binding `BOT_DB`
+  // in deployed environments; `BOT_DATABASE_URL` overrides it for local/dev
+  // use. Absent both, counts and stats degrade to hidden — the web `DB` is
+  // never read for them.
+  BOT_DB?: { connectionString: string };
+  BOT_DATABASE_URL?: string;
   DISCORD_MODERATOR_ROLE_IDS?: string;
   QA_AUTH_TOKEN?: string;
+  // Separate default-off operational read boundary. No grant or principal is
+  // provisioned here; both settings require independent security review.
+  QUEUE_RECONCILE_PREVIEW_ENABLED?: string;
+  QUEUE_RECONCILE_OPERATOR_ID?: string;
+  // Evidence-only source/cache verifier (runtime-only, never checked-in
+  // config). The bearer token, authorized incident ID, issued instant and
+  // expiry instant are provisioned for one separately authorized invocation
+  // (at most a one-hour issued-to-expiry window) and removed at teardown;
+  // merged main carries no values, leaving the route inert.
+  SOURCE_EVIDENCE_VERIFIER_ENABLED?: string;
+  SOURCE_EVIDENCE_VERIFIER_TOKEN?: string;
+  SOURCE_EVIDENCE_VERIFIER_INCIDENT_ID?: string;
+  SOURCE_EVIDENCE_VERIFIER_ISSUED_AT?: string;
+  SOURCE_EVIDENCE_VERIFIER_EXPIRES_AT?: string;
   // The staging alert probe uses the same internal queue as JobsEnv, without a DB fixture.
   INTERNAL_ACTION_QUEUE?: Queue<QueueMessage>;
   MEMBER_ACCESS_LOG_ENFORCE?: string;
@@ -51,6 +74,23 @@ export type Env = AgentEventsEnv & {
   // the banner needs real dates, so the flag alone never renders.
   FREEZE_BANNER_ENABLED?: string;
   FREEZE_BANNER_DATES?: string;
+  // Kit parity fixture only (ci/kit-worker-dev.mjs sets it on its generated
+  // loopback worker, never a deployed config): enables the member board in
+  // the fixture manifest so the executed parity journey runs the Kit load.
+  // The shipped manifest now owns the board on Kit too, so the flag is
+  // redundant for this entry (rollback is enabled: false). Honoured only
+  // for an http loopback APP_URL (src/route-ownership.ts fixtureManifestFor).
+  KIT_PARITY_FIXTURE_MEMBER_BOARD?: string;
+  // Kit parity fixture only (same loopback worker, never deployed): enables
+  // the live event detail (GET /e/:key) in the fixture manifest so the RSVP
+  // companion's executed journey runs the Kit load. The shipped detail entry
+  // stays disabled until the companion passes; honoured only for an http
+  // loopback APP_URL (src/route-ownership.ts fixtureManifestFor).
+  KIT_PARITY_FIXTURE_EVENT_DETAIL?: string;
+  // B1 read-only WebMCP pilot: only the exact strings "true"/"1" inject the
+  // model-context island on the four pilot pages; unset or anything else
+  // leaves pages byte-identical. No session, cookie or database read.
+  WEBMCP_PILOT_ENABLED?: string;
 };
 
 // Worker-only bindings added by W13; the web app (Hono) and its tests only need `Env`.

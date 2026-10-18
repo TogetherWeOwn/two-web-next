@@ -12,6 +12,7 @@ import { createMemberDataFixture, type MemberDataFixture } from "./helpers/membe
 import { createMemorySessionStore, hashToken, newSessionToken } from "../src/sessions";
 import type { Env } from "../src/env";
 import type { EnvWithAdminDb } from "../src/admin/db";
+import { __resetHomeGuestCacheForTests } from "../src/home-cache";
 
 const now = new Date("2026-09-30T12:00:00Z");
 const before = new Date(now.getTime() - 1000);
@@ -26,7 +27,12 @@ const env: Env = {
   SESSION_SECRET: "test-session-secret-at-least-32-bytes-long",
 };
 
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => {
+  vi.restoreAllMocks();
+  // The homepage guest cache is module state: one fixture object shared across
+  // cases would otherwise serve a previous case's featured rows here.
+  __resetHomeGuestCacheForTests();
+});
 
 describe("featured homepage fallback (local fixtures)", () => {
   it("omits the section with no configured database", async () => {
@@ -56,7 +62,11 @@ describe("featured homepage fallback (local fixtures)", () => {
   it("serves guest 200 at the deadline when featured connection acquisition stalls", async () => {
     const db = drizzle.mock();
     let rejectRead!: (error: Error) => void;
-    vi.spyOn(eventReads, "loadHomeUpcoming").mockResolvedValue([]); // only featured stalls in this test
+    vi.spyOn(eventReads, "loadHomeUpcomingMerged").mockResolvedValue({
+      items: [],
+      unavailable: false,
+      discordFailed: false,
+    }); // only featured stalls in this test
     const session = Reflect.get(db, "session") as { transaction: () => Promise<unknown> };
     const transaction = vi.spyOn(session, "transaction").mockImplementation(
       () =>
@@ -92,8 +102,14 @@ describe("featured homepage fallback (local fixtures)", () => {
     for (const host of ["images.corp", "images.mail", "localhost.localdomain", "images.alt"]) {
       expect(featuredImageSrc(`https://${host}/photo.jpg`, env.APP_URL, host)).toBeNull();
     }
-    vi.spyOn(eventReads, "loadHomeUpcoming").mockResolvedValue([]);
-    vi.spyOn(featuredReads, "listVisibleFeatured").mockResolvedValue([
+    vi.spyOn(eventReads, "loadHomeUpcomingMerged").mockResolvedValue({
+      items: [],
+      unavailable: false,
+      discordFailed: false,
+    });
+    // The homepage reads the published base through the guest cache and
+    // applies the live window per request; the open window here is always live.
+    vi.spyOn(featuredReads, "listPublishedFeatured").mockResolvedValue([
       {
         id: 1,
         title: "Configured photo",
@@ -101,6 +117,8 @@ describe("featured homepage fallback (local fixtures)", () => {
         url: null,
         imageUrl,
         imageAlt: "Squad photo",
+        startsAt: null,
+        endsAt: null,
       },
     ]);
     const bindings = {
@@ -244,7 +262,11 @@ describe.skipIf(!process.env.DATABASE_URL)("featured homepage (isolated test Pos
       '<h3><a href="https://example.test/squad?a=1&amp;b=2">Squad &lt;night&gt;</a></h3>',
     );
     expect(html).toContain("&lt;script&gt;");
-    expect(html).not.toMatch(/<script\b|\sstyle=|\son\w+=/i);
+    const withoutJsonLd = html.replace(
+      /<script type="application\/ld\+json"[^>]*>[\s\S]*?<\/script>/g,
+      "",
+    );
+    expect(withoutJsonLd).not.toMatch(/<script\b|\sstyle=|\son\w+=/i);
     expect(html).toContain('alt="Squad &amp; friends"');
     expect(html).toContain('alt="Title fallback"');
     expect(html).toContain('alt="Blank fallback"');

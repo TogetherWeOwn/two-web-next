@@ -29,11 +29,13 @@ export type BotSuccess<T> = { ok: true; requestId: string | null } & T;
 export class BotTransportError extends Error {}
 /** Missing secret / payload the bot would call malformed: terminal. */
 export class BotTerminalError extends Error {}
+export const SYNC_RETRY_PERSISTENCE_REASON =
+  "sync retry result could not be persisted; request remains fenced";
 /** Known retry result could not be committed; the durable claim remains closed. */
 export class SyncRetryPersistenceError extends Error {
   readonly nextAttemptAt: Date | null;
   constructor(nextAttemptAt: Date | null, cause: unknown) {
-    super("sync retry result could not be persisted; request remains fenced", { cause });
+    super(SYNC_RETRY_PERSISTENCE_REASON, { cause });
     this.nextAttemptAt = nextAttemptAt;
   }
 }
@@ -64,6 +66,12 @@ export type SyncAttempt = {
   requestAttempts: number;
   /** Null while a claim's result is unsettled, or after retirement/exhaustion. */
   nextAttemptAt: Date | null;
+  /**
+   * Current `events.discord_event_id` at snapshot/claim time. Null means the
+   * event was never mirrored to Discord; undefined is a pre-mirror snapshot
+   * (hermetic doubles) and is treated as mirrored to preserve the bot path.
+   */
+  discordEventId?: string | null;
 } & (
   | { action: "event.upsert"; payload: EventUpsert }
   | { action: "event.cancel"; payload: { eventKey: string } }
@@ -76,8 +84,12 @@ export interface EventStore {
     idempotencyKey: string,
     mirroredAt: Date,
   ): Promise<SyncAttempt | { waiting: true } | null>;
-  /** Atomically settle the attempt and acknowledge only its revision/RSVP cutoff. */
-  completeSync(attempt: SyncAttempt, discordEventId: string): Promise<void>;
+  /**
+   * Atomically settle the attempt and acknowledge only its revision/RSVP cutoff.
+   * Null keeps the stored `discord_event_id` (never-mirrored local completion):
+   * the revision still advances and RSVPs stamp to the attempt's mirrored_at.
+   */
+  completeSync(attempt: SyncAttempt, discordEventId: string | null): Promise<void>;
   /** Fence a due request until its result commits, or retire an obsolete snapshot. */
   claimSync(attempt: SyncAttempt, now: Date): Promise<SyncAttempt | null>;
   deferSync(attempt: SyncAttempt, nextAttemptAt: Date | null): Promise<void>;
@@ -86,6 +98,14 @@ export interface EventStore {
   needsSync(eventKey: string): Promise<boolean>;
   /** Recovery preserves request identity, eligibility and attempts across carriers. */
   pendingSync(eventKey: string): Promise<SyncAttempt | null>;
+  /**
+   * True when the current `sync_revision` carries a `failed` (definitive
+   * refusal) snapshot. `needsSync` is false for both clean and refused
+   * revisions, so reconciliation must check this before treating a clean
+   * read as obsolete — deleting the only ledger evidence of an event that
+   * never reached Discord is forbidden (docs/runbook.md).
+   */
+  hasFailedSync?(eventKey: string): Promise<boolean>;
   /** Published events past ends_at -> past. Returns rows changed. */
   closeFinished(now: Date): Promise<number>;
   /** Top up every live series (draft/published parent). Returns rows created; idempotent. */
@@ -115,12 +135,14 @@ export interface SessionSweeper {
   sweepExpired(now: Date): Promise<number>;
 }
 
-/** Every table the daily model:prune pass owns (routes/console.php ×3 + web_sessions GC). */
+/** Tables owned by the daily model:prune pass (audit logs, legacy prunes, and web_sessions GC). */
 export interface PruneStores {
+  agentEventAudits: AgePrunedTable;
   accessLog: AgePrunedTable;
   joinAttempts: AgePrunedTable;
   idempotencyKeys: AgePrunedTable;
   searchLog: AgePrunedTable;
+  boardViews: AgePrunedTable;
   sessions: SessionSweeper;
 }
 

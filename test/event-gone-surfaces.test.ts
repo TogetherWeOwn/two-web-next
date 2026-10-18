@@ -9,11 +9,12 @@
 // uses data-testid="event-cancelled" on current markup (theme restyle owned elsewhere).
 // (agent-testdb; skipped without DATABASE_URL like test/events.test.ts).
 import { serializeSigned } from "hono/utils/cookie";
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import app from "./app";
 import { events, rsvps } from "../src/db/admin-schema";
 import { clearAuditRows } from "./helpers/audit-rows";
-import { createDb } from "../src/db/index";
+import type { Db } from "../src/db/index";
+import { createMemberDataFixture, type MemberDataFixture } from "./helpers/member-data-db";
 import type { Env } from "../src/env";
 import {
   createMemorySessionStore,
@@ -69,26 +70,35 @@ async function cookieFor(store: SessionStore, moderator: boolean): Promise<strin
 }
 
 function jsonLdOf(html: string): Record<string, unknown> {
-  const match = html.match(/<script type="application\/ld\+json">([\s\S]*?)<\/script>/);
+  const match = html.match(
+    /<script type="application\/ld\+json"[^>]*data-testid="event-jsonld"[^>]*>([\s\S]*?)<\/script>/,
+  );
   expect(match?.[1], "gone page carries a JSON-LD block").toBeDefined();
   return JSON.parse(match![1]!) as Record<string, unknown>;
 }
 
 describe.skipIf(!process.env.DATABASE_URL)("event gone surfaces (agent-testdb)", () => {
-  const db = createDb(process.env.DATABASE_URL!);
+  let fixture: MemberDataFixture;
+  let db: Db;
   const store = createMemorySessionStore();
-  const env = {
-    ...baseEnv,
-    ADMIN_DB: db,
-    SESSION_STORE: store,
-    DISCORD_EVENTS: { upcoming: async () => [], lastReadFailed: () => false },
-  } as unknown as Env;
+  const bindings = () =>
+    ({
+      ...baseEnv,
+      ADMIN_DB: db,
+      SESSION_STORE: store,
+      DISCORD_EVENTS: { upcoming: async () => [], lastReadFailed: () => false },
+    }) as unknown as Env;
   // Apex config silences the global staging middleware, so every robots
   // assertion below proves a route-level signal, not middleware interference.
-  const apexEnv = { ...env, APP_URL: "https://togetherweown.com" } as unknown as Env;
+  const req = (path: string, init: RequestInit = {}) => app.request(path, init, bindings());
+  const apex = (path: string, init: RequestInit = {}) =>
+    app.request(path, init, { ...bindings(), APP_URL: "https://togetherweown.com" });
 
-  const req = (path: string, init: RequestInit = {}) => app.request(path, init, env);
-  const apex = (path: string, init: RequestInit = {}) => app.request(path, init, apexEnv);
+  beforeAll(async () => {
+    fixture = await createMemberDataFixture(process.env.DATABASE_URL!);
+    db = fixture.db;
+  });
+  afterAll(() => fixture?.dispose());
   // View sessions rotate on every authenticated page read, so each request
   // mints a fresh cookie.
   const auth = async (moderator: boolean, extra: RequestInit = {}) => ({
@@ -193,27 +203,24 @@ describe.skipIf(!process.env.DATABASE_URL)("event gone surfaces (agent-testdb)",
     expect(html).toContain('name="robots" content="noindex, nofollow"');
   });
 
-  it("hides drafts from member JSON and ICS while moderators still read them", async () => {
+  it("hides drafts from every JSON collection and keeps moderator-only ICS access", async () => {
     expect((await req("/events.json")).status).toBe(401);
     const hidden = await req(`/events.json?event_key=${DRAFT}`, await auth(false));
     expect(hidden.status).toBe(200);
     expect(((await hidden.json()) as { data: unknown[] }).data).toEqual([]);
     const shown = await req(`/events.json?event_key=${DRAFT}`, await auth(true));
-    expect(((await shown.json()) as { data: { event_key: string }[] }).data[0]?.event_key).toBe(
-      DRAFT,
-    );
+    expect(((await shown.json()) as { data: unknown[] }).data).toEqual([]);
     expect((await req(`/events/${DRAFT}.ics`)).status).toBe(403);
     expect((await req(`/events/${DRAFT}.ics`, await auth(false))).status).toBe(403);
     expect((await req(`/events/${DRAFT}.ics`, await auth(true))).status).toBe(200);
   });
 
-  it("keeps a cancelled row listed in member JSON with its status and no JSON robots tag", async () => {
+  it("excludes cancelled rows from the public JSON collection", async () => {
     const res = await req(`/events.json?event_key=${CANCELLED}`, await auth(false));
     expect(res.status).toBe(200);
-    expect(res.headers.get("x-robots-tag")).toBeNull();
-    const rows = ((await res.json()) as { data: { event_key: string; status: string }[] }).data;
-    expect(rows).toHaveLength(1);
-    expect(rows[0]).toMatchObject({ event_key: CANCELLED, status: "cancelled" });
+    const body = (await res.json()) as { data: unknown[]; meta: { total: number } };
+    expect(body.data).toEqual([]);
+    expect(body.meta.total).toBe(0);
   });
 
   it("leaves a published page without any robots signal on the apex", async () => {

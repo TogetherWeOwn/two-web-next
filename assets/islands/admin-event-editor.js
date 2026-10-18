@@ -15,14 +15,34 @@
   // An expired session vetoes the probe reload (the unsaved draft only exists
   // in this document) and releases the dirty guard for the recovery trip.
   var sessionExpired = false;
-  editor.addEventListener("submit", function () {
+  // Cancels repeat Saves; the bound stops an aborted navigation stranding the form.
+  var SUBMIT_LOCK_MS = 10000;
+  var locked = false;
+  var lockTimer = null;
+  function unlock() {
+    if (lockTimer !== null) window.clearTimeout(lockTimer);
+    lockTimer = null;
+    locked = false;
+    // The Save departure never happened, so its one-shot exemption lapses too.
+    saving = false;
+    editor.removeAttribute("aria-busy");
+  }
+  editor.addEventListener("submit", function (event) {
+    if (locked) {
+      event.preventDefault();
+      return;
+    }
     saving = true;
+    locked = true;
+    editor.setAttribute("aria-busy", "true");
+    lockTimer = window.setTimeout(unlock, SUBMIT_LOCK_MS);
   });
   editor.addEventListener("input", function () {
     saving = false;
   });
   window.addEventListener("pageshow", function () {
     saving = false;
+    unlock();
   });
   // Same bar as safeNext (src/join/service.ts): a same-origin path or nothing.
   function samePath(raw) {

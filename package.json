@@ -1,6 +1,6 @@
 {
   "name": "two-web-next",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "private": true,
   "type": "module",
   "scripts": {
@@ -8,27 +8,47 @@
     "deploy": "wrangler deploy",
     "typecheck": "tsc --noEmit && tsc --noEmit -p ci/tsconfig.json",
     "test": "vitest run",
-    "e2e": "playwright test",
+    "e2e": "NODE_OPTIONS=--import=tsx playwright test",
     "e2e:staging": "playwright test --config playwright.staging.config.ts",
     "e2e:watch": "playwright test --config playwright.watch.config.ts",
     "e2e:typecheck": "tsc --noEmit -p e2e/tsconfig.json",
-    "e2e:safety": "node --test e2e/safety.test.mjs e2e/qa-request.test.mjs e2e/search-retry.test.mjs e2e/fixture-sweep.test.mjs e2e/watch-guard.test.mjs",
+    "e2e:safety": "node --test e2e/safety.test.mjs e2e/qa-request.test.mjs e2e/search-retry.test.mjs e2e/fixture-sweep.test.mjs e2e/local-fixture-sweep.test.mjs e2e/watch-guard.test.mjs e2e/staging/journey-ledger.test.mjs e2e/qa-login-retry.test.mjs e2e/qa-login-budget.test.mjs e2e/featured-guest-poll.test.mjs",
     "test:coverage": "vitest run --coverage --pool=threads",
     "test:admin-properties": "vitest run test/admin-validation.property.test.ts",
+    "test:tier0": "vitest run --config tier0/vitest.config.ts",
     "lint": "biome ci . --error-on-warnings",
     "format": "biome format --write .",
-    "check": "npm run lint && npm run typecheck && npm run e2e:typecheck && npm run config:check && npm run test && node --test ci/a11y-*.test.mjs && npm run test:cutover && npm run test:shadow && npm run budget:selftest && npm run budget && npm run gate:selftest && npm run test:smoke && npm run e2e:safety",
+    "check": "npm run lint && npm run typecheck && npm run e2e:typecheck && npm run config:check && npm run docs:links && npm run test && node --test ci/a11y-*.test.mjs ci/visual-accept.test.mjs && npm run test:cutover && npm run test:shadow && npm run budget:selftest && npm run budget && npm run gate:selftest && npm run test:smoke && npm run e2e:safety",
     "check:offline": "node ci/offline-check.mjs",
     "test:smoke": "node --test test/smoke.test.mjs test/json-smoke.test.mjs test/revision-check.test.mjs",
     "gate:selftest": "node ci/require-performance.mjs --selftest",
     "config:check": "node ci/check-config-docs.mjs && node --test ci/check-config-docs-selftest.mjs",
+    "docs:links": "node ci/check-doc-links.mjs --selftest && node --test ci/parity-citations-acceptance.test.mjs && node ci/check-doc-links.mjs",
     "seed:staging": "node bin/seed-staging.mjs",
     "test:cutover": "node --test ci/cutover-check-selftest.mjs",
     "test:shadow": "node --test ci/shadow-compare-selftest.mjs",
+    "mutation:sessions-join": "node ci/mutation-sessions-join.mjs",
+    "mutation:sessions-join:selftest": "node ci/mutation-sessions-join.mjs --selftest",
+    "scan:fetch-await": "npx -y --package @ast-grep/cli@0.50.0 ast-grep scan",
+    "scan:rules-test": "npx -y --package @ast-grep/cli@0.50.0 ast-grep test",
+    "floor-guard": "node ci/floor-guard.mjs",
+    "floor-guard:selftest": "node --test ci/floor-guard.test.mjs",
+    "patch:coverage": "node ci/patch-coverage.mjs",
+    "patch:coverage:selftest": "node ci/patch-coverage.mjs --selftest",
+    "test:inventory": "node ci/test-inventory.mjs",
+    "test:inventory:selftest": "node ci/test-inventory.mjs --selftest",
     "a11y": "node ci/a11y.mjs",
     "test:auth-browser": "node ci/session-recovery-browser.mjs",
     "budget": "node ci/check-bundle-budget.mjs",
     "budget:selftest": "node ci/check-bundle-budget.mjs --selftest",
+    "kit-parity": "node ci/kit-parity-gates.mjs",
+    "kit-parity:selftest": "node ci/kit-parity-gates.mjs --selftest",
+    "kit-parity:test": "node --test ci/kit-parity-gates.test.mjs ci/kit-parity-origin.test.mjs ci/check-kit-parity.test.mjs ci/kit-visual-accept.test.mjs",
+    "kit-perf": "node ci/check-kit-perf.mjs",
+    "kit-perf:selftest": "node ci/check-kit-perf.mjs --selftest",
+    "auth-perf": "node ci/check-auth-perf.mjs",
+    "auth-perf:selftest": "node ci/check-auth-perf.mjs --selftest",
+    "e2e:kit-parity": "playwright test --config playwright.kit-parity.config.ts",
     "build:assets": "node ci/minify-assets.mjs",
     "build:assets:selftest": "node ci/minify-assets.mjs --selftest",
     "build:assets:check": "node ci/minify-assets.mjs --check",
@@ -40,44 +60,56 @@
     "deps:audit:selftest": "node --test ci/deps-audit.test.mjs",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate",
-    "db:migrate:selftest": "node --test ci/neon-migrate-selftest.mjs",
+    "db:migrate:selftest": "node --test ci/db-migrate-selftest.mjs",
     "db:check": "drizzle-kit check",
     "check:moderators": "node --import ./bin/ts-hook.mjs bin/check-moderators.mjs",
     "check:worker-moderators": "node --import ./bin/ts-hook.mjs bin/check-moderators.mjs --config=wrangler.jsonc --require-configured",
     "check:worker-moderators-production": "node --import ./bin/ts-hook.mjs bin/check-moderators.mjs --config=wrangler.jsonc --env=production --require-configured",
     "smoke:internal-action": "node --import ./bin/ts-hook.mjs bin/internal-action-smoke.mjs",
-    "drill:internal-action": "node --import ./bin/ts-hook.mjs bin/internal-action-drill.mjs"
+    "drill:internal-action": "node --import ./bin/ts-hook.mjs bin/internal-action-drill.mjs",
+    "lighthouse:quality": "node ci/lighthouse-quality-run.mjs",
+    "standards": "node ci/web-standards.mjs",
+    "standards:selftest": "node ci/web-standards.mjs --selftest && node ci/lighthouse-summary.mjs --selftest && node ci/lighthouse-quality-run.mjs --selftest",
+    "audit:moderator-roles": "node --import ./bin/ts-hook.mjs bin/role-audit.mjs"
   },
   "dependencies": {
-    "drizzle-orm": "^0.45.3",
+    "@modelcontextprotocol/server": "2.3.1",
+    "agents": "0.28.1",
+    "drizzle-orm": "^0.45.4",
     "hono": "^4.13.12",
-    "postgres": "^3.4.9"
+    "postgres": "^3.4.9",
+    "zod": "4.6.6"
   },
   "devDependencies": {
     "@axe-core/playwright": "^4.13.0",
     "@biomejs/biome": "2.5.15",
-    "@cloudflare/workers-types": "^5.20261002.1",
+    "@cloudflare/workers-types": "^5.20261009.1",
     "@lhci/cli": "0.15.1",
-    "@playwright/test": "1.63.0",
-    "@types/node": "^26.6.4",
+    "@playwright/test": "1.64.0",
+    "@types/node": "^26.6.5",
     "@vitest/coverage-v8": "^5.0.3",
     "drizzle-kit": "^0.31.11",
     "esbuild": "0.28.2",
     "fast-check": "4.10.2",
     "miniflare": "5.20260926.1-alpha",
     "playwright": "^1.63.0",
+    "tsx": "^4.23.15",
     "typescript": "^7.0.2",
     "vitest": "^5.0.2",
-    "wrangler": "^4.146.0"
+    "wrangler": "^4.149.0"
   },
   "overrides": {
     "@lhci/cli": {
       "tmp": "0.2.7",
       "@puppeteer/browsers": "3.2.3"
     },
-    "basic-ftp": "6.2.1"
+    "basic-ftp": "6.2.1",
+    "sharp": "0.35.5",
+    "puppeteer-core": {
+      "proxy-agent": "6.5.0"
+    }
   },
   "engines": {
-    "node": "^22.18.0 || >=24"
+    "node": "^22.23.0 || >=24"
   }
 }

@@ -46,9 +46,9 @@ describe("staging deploy applies web migrations before the Worker deploy", () =>
   });
 
   it("runs the shared migration script with default success semantics so a failure stops the deploy", () => {
-    expect(stepBlock(PLAN)).toContain("run: node ci/neon-migrate.mjs plan\n");
-    expect(stepBlock(APPLY)).toContain("run: node ci/neon-migrate.mjs apply\n");
-    expect(stepBlock(VERIFY)).toContain("run: node ci/neon-migrate.mjs verify");
+    expect(stepBlock(PLAN)).toContain("run: node ci/db-migrate.mjs plan\n");
+    expect(stepBlock(APPLY)).toContain("run: node ci/db-migrate.mjs apply\n");
+    expect(stepBlock(VERIFY)).toContain("run: node ci/db-migrate.mjs verify");
     expect(stepBlock(GATE)).toContain("run: node ci/staging-deploy-gate.mjs\n");
     for (const name of migration) {
       expect(stepBlock(name)).not.toMatch(/^ {8}(?:if|continue-on-error):/m);
@@ -61,8 +61,9 @@ describe("staging deploy applies web migrations before the Worker deploy", () =>
     const env = stepBlock(PLAN).split("        env: &staging-migration-env\n")[1];
     expect(env).toBeDefined();
     expect(env).toContain("          MIGRATION_TARGET: staging\n");
+    expect(env).toContain("          STAGING_MIGRATION_HOLD: ${{ vars.STAGING_MIGRATION_HOLD }}\n");
     expect(env).toContain(
-      "          NEON_STAGING_DATABASE_URL: ${{ secrets.NEON_STAGING_DATABASE_URL }}\n",
+      "          PLANETSCALE_STAGING_DATABASE_URL: ${{ secrets.PLANETSCALE_STAGING_DATABASE_URL }}\n",
     );
     // Release receipt names the CI-verified checkout, not workflow_run's main tip.
     expect(env).toContain(
@@ -73,13 +74,21 @@ describe("staging deploy applies web migrations before the Worker deploy", () =>
     }
     // The secret appears only in the shared env anchor (key and expression), and
     // nothing production-shaped or fallback-shaped is reachable from this workflow.
-    expect(workflow.match(/NEON_STAGING_DATABASE_URL/g)).toHaveLength(2);
+    expect(workflow.match(/PLANETSCALE_STAGING_DATABASE_URL/g)).toHaveLength(2);
     expect(workflow).not.toMatch(
       /PRODUCTION_DATABASE_URL|PRODUCTION_DEPLOY_ENABLED|MIGRATION_TARGET: production|target: production|secrets: inherit/,
     );
     // The migration runs in this exact-SHA job, not in a reusable workflow that
     // would check out main's tip and run before the test suite.
     expect(workflow).not.toMatch(/^\s+uses: \.\/\.github\/workflows\//m);
+  });
+
+  it("pins the staging hold wiring into the hold step and the migration env anchor", () => {
+    const holdBlock = stepBlock("Staging admission hold (before dependencies or mutations)");
+    expect(holdBlock).toContain("STAGING_MIGRATION_HOLD: ${{ vars.STAGING_MIGRATION_HOLD }}");
+    const planEnv = stepBlock(PLAN).split("        env: &staging-migration-env\n")[1];
+    expect(planEnv).toBeDefined();
+    expect(planEnv).toContain("STAGING_MIGRATION_HOLD: ${{ vars.STAGING_MIGRATION_HOLD }}");
   });
 
   it("keeps the staging Environment gate, serialized deploys and read-only token permissions", () => {

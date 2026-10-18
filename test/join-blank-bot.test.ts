@@ -28,7 +28,7 @@ import type { EnvWithJoin } from "../src/join/route";
 import { createMemorySessionStore, hashToken, type Sql } from "../src/sessions";
 import { FALLBACK_INVITE } from "../src/invite";
 
-const MOD_ROLE = "508654771276873729";
+const MOD_ROLE = "1546777856984481792";
 
 const baseEnv: Env = {
   APP_URL: "https://next.example.test",

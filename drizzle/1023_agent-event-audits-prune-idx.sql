@@ -1,0 +1,1 @@
+CREATE INDEX "agent_event_audits_created_at_idx" ON "agent_event_audits" USING btree ("created_at");

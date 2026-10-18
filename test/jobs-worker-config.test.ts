@@ -7,11 +7,11 @@ import { STAGING_APP_URL, qaEnabled } from "../src/qa";
 
 // TOG-12247: the SvelteKit spike splits the runtime in two Workers that share
 // src/db and the domain modules. A queue has exactly one consumer and a cron
-// exactly one owner, so this pins the split: staging keeps consuming in
-// src/worker.ts (wrangler.jsonc) until a cutover PR moves consumers + crons
-// into wrangler.jobs.jsonc, and both preview Workers stay off the staging
-// queues, routes and secrets. An accidental deploy must not steal staging's
-// consumers, double-run its crons, or page from an alert probe.
+// exactly one owner, so this pins the split: staging consumes in two-web-jobs
+// (wrangler.jobs.jsonc top level) after the handoff; the web Worker
+// (wrangler.jsonc top level) only produces, and both preview Workers stay off
+// the staging queues, routes and secrets. An accidental deploy must not steal
+// staging's consumers, double-run its crons, or page from an alert probe.
 
 const read = (path: string) => readFileSync(path, "utf8");
 const jobs = readWranglerConfig(read("wrangler.jobs.jsonc"));
@@ -36,17 +36,44 @@ describe("jobs Worker config (wrangler.jobs.jsonc)", () => {
     expect(jobsEntry).not.toMatch(/^\s*fetch\s*:/m);
   });
 
-  it("consumes nothing at top level, so staging keeps its consumers until cutover", () => {
+  it("owns both staging consumers and both crons; the web Worker only produces", () => {
     expect(jobs.workers_dev).toBe(false);
     expect(jobs.routes).toBeUndefined();
-    expect(jobs.triggers?.crons).toEqual([]);
-    expect(jobs.queues?.consumers).toBeUndefined();
-    // Same producer shape as the staging Worker: top level only produces.
+    // Staging handoff: jobs owns both cron schedules.
+    expect(jobs.triggers?.crons).toEqual([RECONCILE_CRON, PRUNE_CRON]);
+    // Same queue names and producer bindings as the web Worker: no renames.
     expect(queueNames(jobs, "producers")).toEqual(queueNames(main, "producers"));
     expect(bindings(jobs)).toEqual(["SYNC_EVENT_QUEUE", "INTERNAL_ACTION_QUEUE"]);
-    // Staging still owns both consumers and both crons until the cutover PR.
-    expect(queueNames(main, "consumers")).toHaveLength(2);
-    expect(main.triggers?.crons).toEqual([RECONCILE_CRON, PRUNE_CRON]);
+    // Exactly one consumer per staging queue, on the jobs Worker only.
+    expect(queueNames(jobs, "consumers")).toEqual(["two-sync-event", "two-internal-action"]);
+    expect(queueNames(main, "consumers")).toEqual([]);
+    // Exactly one cron owner: the web Worker runs none.
+    expect(main.triggers?.crons).toEqual([]);
+  });
+
+  it("keeps staging placement, tail paging and consumer backstops on the jobs Worker", () => {
+    // Same region as the web Worker: staging database is PlanetScale us-east-1 and every
+    // statement is a round trip through Hyperdrive.
+    expect(jobs.placement).toMatchObject({ region: "aws:us-east-1" });
+    // Jobs traces page through the same staging Tail pager as the web Worker.
+    expect(jobs.tail_consumers).toEqual([{ service: "two-web-next-alerts" }]);
+    // Terminal outcomes are acked by the consumer; max_retries is only a
+    // backstop above the largest `tries`. Same values as the web Worker had.
+    expect(jobs.queues?.consumers).toEqual([
+      { queue: "two-sync-event", max_retries: 10, max_batch_size: 10, max_batch_timeout: 5 },
+      {
+        queue: "two-internal-action",
+        max_retries: 10,
+        max_batch_size: 10,
+        max_batch_timeout: 5,
+      },
+    ]);
+    // Least-required vars: staging APP_URL only. Never the preview production
+    // guild settings and never preview/production secrets in source.
+    expect(jobs.vars?.APP_URL).toBe(STAGING_APP_URL);
+    expect(jobs.vars).not.toHaveProperty("DISCORD_GUILD_ID");
+    expect(jobs.vars).not.toHaveProperty("DISCORD_MODERATOR_ROLE_IDS");
+    expect(hyperdriveId(jobs)).toBe(hyperdriveId(main));
   });
 
   it("preview env consumes its own queues on the staging Hyperdrive, paging nothing", () => {
@@ -61,7 +88,7 @@ describe("jobs Worker config (wrangler.jobs.jsonc)", () => {
     expect(produced).toEqual(queueNames(preview ?? {}, "consumers"));
     expect(produced).toHaveLength(2);
     // Preview queues are disjoint from staging's: no consumer theft, ever.
-    for (const queue of produced) expect(queueNames(main, "consumers")).not.toContain(queue);
+    for (const queue of produced) expect(queueNames(jobs, "consumers")).not.toContain(queue);
     expect(hyperdriveId(preview ?? {})).toBe(hyperdriveId(main));
     // Never the staging APP_URL, so qaEnabled() stays false and an
     // alert-probe message is acked as done without paging.

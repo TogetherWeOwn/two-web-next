@@ -128,7 +128,12 @@ describe("queue envelope batch isolation", () => {
       expect(invalid.ack).toHaveBeenCalledExactlyOnceWith();
       expect(invalid.retry).not.toHaveBeenCalled();
       expect(handlers.internal).not.toHaveBeenCalled();
-      expect(handlers.sync).toHaveBeenCalledExactlyOnceWith(sync, 1, deps);
+      expect(handlers.sync).toHaveBeenCalledExactlyOnceWith(sync, 1, {
+        bot: deps.bot,
+        events: deps.events,
+        now: undefined,
+        onRetryDiagnostic: expect.any(Function),
+      });
       for (const operation of Object.values(deps.ledger)) expect(operation).not.toHaveBeenCalled();
       expect(deps.lock.acquire).not.toHaveBeenCalled();
       if (disposition === "ack") {
@@ -252,7 +257,12 @@ describe("queue envelope batch isolation", () => {
       const m = message(body);
       const deps = dependencies();
       await consume({ messages: [m] }, deps);
-      expect(handlers.sync).toHaveBeenCalledExactlyOnceWith(body, 1, deps);
+      expect(handlers.sync).toHaveBeenCalledExactlyOnceWith(body, 1, {
+        bot: deps.bot,
+        events: deps.events,
+        now: undefined,
+        onRetryDiagnostic: expect.any(Function),
+      });
       expect(m.ack).toHaveBeenCalledExactlyOnceWith();
       expect(m.retry).not.toHaveBeenCalled();
       expect(deps.ledger.reserved).toHaveBeenCalledExactlyOnceWith("legacy-job");

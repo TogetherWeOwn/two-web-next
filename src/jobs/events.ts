@@ -13,6 +13,7 @@ type AttemptRow = {
   state: SyncAttempt["state"];
   request_attempts: number;
   next_attempt_at: Date | null;
+  discord_event_id?: string | null;
 } & (
   | { action: "event.upsert"; payload: EventUpsert }
   | { action: "event.cancel"; payload: { eventKey: string } }
@@ -27,6 +28,9 @@ function attemptFrom(row: AttemptRow): SyncAttempt {
     state: row.state,
     requestAttempts: row.request_attempts,
     nextAttemptAt: row.next_attempt_at,
+    // Absent on pre-mirror rows (hermetic doubles leave it undefined, which
+    // the consumer treats as mirrored to preserve the bot path).
+    ...("discord_event_id" in row ? { discordEventId: row.discord_event_id ?? null } : {}),
   };
   if (row.action === "event.cancel")
     return { ...base, action: "event.cancel", payload: row.payload };
@@ -41,15 +45,42 @@ function attemptFrom(row: AttemptRow): SyncAttempt {
   };
 }
 
-/** Durable request snapshot; first claims recheck eligibility, attempted retries are immutable. */
-export function pgEventStore(sql: ReturnType<typeof postgres> | TxClient): EventStore {
+/** Durable request snapshot; first claims recheck eligibility, attempted retries are immutable.
+ * Evidence-only verifier support: every source SELECT executed through this
+ * store reports its statement name, row count and `clock_timestamp()` marker
+ * (null when the SELECT legitimately returns no rows). The callback is
+ * optional; when absent nothing is reported and behavior is unchanged. */
+export type SourceReadStatement =
+  | "queue_failed_jobs_by_id"
+  | "events_by_key_exists"
+  | "stale_keys"
+  | "pending_sync"
+  | "failed_sync";
+export type SourceReadReport = {
+  statement: SourceReadStatement;
+  rowCount: number;
+  readAt: unknown;
+};
+function markerOf(row: { preview_read_at?: unknown } | undefined): unknown {
+  return row?.preview_read_at ?? null;
+}
+export function pgEventStore(
+  sql: ReturnType<typeof postgres> | TxClient,
+  {
+    bypassReadCache = false,
+    onSourceRead,
+  }: { bypassReadCache?: boolean; onSourceRead?: (report: SourceReadReport) => void } = {},
+): EventStore {
+  // Operational previews cannot combine a fresh timestamp with cached source reads.
+  // https://developers.cloudflare.com/hyperdrive/concepts/query-caching/
+  const readMarker = () => (bypassReadCache ? sql`, clock_timestamp() as preview_read_at` : sql``);
   // Revision dirtiness survives a rejected send and deletion of the last RSVP.
   // The missing-mapping/RSVP predicate remains a migration backstop.
   // Attempted requests recover independently of first-request eligibility:
   // closure or later refusal cannot resolve an ambiguous immutable request.
   // Reconciliation owns the due-time check using its scheduler clock.
   const staleKeys = async (eventKey: string | null) => {
-    const rows = await sql`select event_key from events
+    const rows = await sql`select event_key${readMarker()} from events
       where (${eventKey}::text is null or event_key = ${eventKey}) and (
         exists (select 1 from event_sync_attempts pending
           where pending.event_id = events.id and pending.state = 'pending'
@@ -62,12 +93,17 @@ export function pgEventStore(sql: ReturnType<typeof postgres> | TxClient): Event
             (status = 'published' and (discord_event_id is null or exists (
               select 1 from rsvps where rsvps.event_id = events.id and synced_to_discord_at is null
             ))))))`;
+    onSourceRead?.({
+      statement: "stale_keys",
+      rowCount: rows.length,
+      readAt: markerOf(rows[0] as { preview_read_at?: unknown } | undefined),
+    });
     return rows.map((row: { event_key: string }) => row.event_key);
   };
   return {
     async prepareSync(eventKey, idempotencyKey, mirroredAt) {
       const [cached] =
-        await sql`select a.* from event_sync_attempts a join events e on e.id = a.event_id
+        await sql`select a.*, e.discord_event_id from event_sync_attempts a join events e on e.id = a.event_id
         where a.idempotency_key = ${idempotencyKey}::uuid and e.event_key = ${eventKey}`;
       if (cached) return attemptFrom(cached);
       // One atomic snapshot of status/payload/revision. A partial unique index
@@ -89,7 +125,7 @@ export function pgEventStore(sql: ReturnType<typeof postgres> | TxClient): Event
           (status = 'published' and (discord_event_id is null or exists (
             select 1 from rsvps where rsvps.event_id = events.id and synced_to_discord_at is null
           ))))
-        on conflict do nothing returning *`;
+        on conflict do nothing returning *, (select discord_event_id from events where id = event_id) as discord_event_id`;
       if (created) return attemptFrom(created);
       // Clean rows need no further bot call even if redundant jobs were queued
       // while an older attempt was finishing. Dirty conflicts wait, never ACK.
@@ -98,12 +134,14 @@ export function pgEventStore(sql: ReturnType<typeof postgres> | TxClient): Event
     async completeSync(attempt, discordEventId) {
       // Settlement and revision acknowledgement commit together. Only the read
       // revision is clean; later event edits/cancellations remain in the outbox.
+      // Null keeps the stored discord_event_id: a never-mirrored cancel resolves
+      // its revision and stamps RSVPs locally without a bot revision.
       await sql`with settled as (
         update event_sync_attempts set state = 'succeeded'
         where idempotency_key = ${attempt.idempotencyKey}::uuid and state = 'pending'
         returning event_id, revision, mirrored_at
       ), mirrored as (
-        update events set discord_event_id = ${discordEventId},
+        update events set discord_event_id = coalesce(${discordEventId}, discord_event_id),
           synced_revision = greatest(synced_revision, settled.revision)
         from settled where events.id = settled.event_id returning events.id, settled.mirrored_at
       ) update rsvps set synced_to_discord_at = mirrored.mirrored_at
@@ -117,7 +155,7 @@ export function pgEventStore(sql: ReturnType<typeof postgres> | TxClient): Event
       // An ineligible unattempted snapshot retires without consuming a request
       // or acknowledging the event. Attempted replay keeps its payload/key.
       const [row] = await sql`with candidate as (
-        select a.idempotency_key, a.request_attempts = 0 and not (
+        select a.idempotency_key, e.discord_event_id, a.request_attempts = 0 and not (
           e.status in ('published', 'cancelled') and e.sync_revision = a.revision
           and not exists (select 1 from event_sync_attempts rejected
             where rejected.event_id = e.id and rejected.revision = e.sync_revision and rejected.state = 'failed')
@@ -134,7 +172,7 @@ export function pgEventStore(sql: ReturnType<typeof postgres> | TxClient): Event
           request_attempts = a.request_attempts + case when candidate.obsolete then 0 else 1 end,
           next_attempt_at = null
         from candidate where a.idempotency_key = candidate.idempotency_key
-        returning a.*`;
+        returning a.*, candidate.discord_event_id`;
       return row ? attemptFrom(row) : null;
     },
     async deferSync(attempt, nextAttemptAt) {
@@ -148,10 +186,28 @@ export function pgEventStore(sql: ReturnType<typeof postgres> | TxClient): Event
         where idempotency_key = ${idempotencyKey}::uuid and state = 'pending'`;
     },
     needsSync: async (eventKey) => (await staleKeys(eventKey)).length > 0,
+    async hasFailedSync(eventKey) {
+      const rows = await sql`select 1${readMarker()} from event_sync_attempts rejected
+        join events e on e.id = rejected.event_id
+        where e.event_key = ${eventKey}
+          and rejected.revision = e.sync_revision
+          and rejected.state = 'failed' limit 1`;
+      onSourceRead?.({
+        statement: "failed_sync",
+        rowCount: rows.length,
+        readAt: markerOf(rows[0] as { preview_read_at?: unknown } | undefined),
+      });
+      return rows.length > 0;
+    },
     async pendingSync(eventKey) {
       const [row] =
-        await sql`select a.* from event_sync_attempts a join events e on e.id = a.event_id
+        await sql`select a.*, e.discord_event_id${readMarker()} from event_sync_attempts a join events e on e.id = a.event_id
         where e.event_key = ${eventKey} and a.state = 'pending'`;
+      onSourceRead?.({
+        statement: "pending_sync",
+        rowCount: row ? 1 : 0,
+        readAt: markerOf(row as { preview_read_at?: unknown } | undefined),
+      });
       return row ? attemptFrom(row) : null;
     },
     async closeFinished(now) {

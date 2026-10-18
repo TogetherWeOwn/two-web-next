@@ -32,7 +32,7 @@ const env: Env = {
   DISCORD_CLIENT_SECRET: "client-secret",
   DISCORD_BOT_TOKEN: "bot-token",
   SESSION_SECRET: "test-session-secret-at-least-32-bytes-long",
-  DISCORD_MODERATOR_ROLE_IDS: "508654771276873729",
+  DISCORD_MODERATOR_ROLE_IDS: "1546777856984481792",
 };
 
 const cookiesFrom = (res: Response) =>
@@ -180,6 +180,7 @@ describe("join-blocked copy (legacy JoinBlockedWidgetTest)", () => {
     const res = await finishJoinCb(e, state!, cookie);
     expect(res.status).toBe(200);
     expect(await res.text()).toContain("We couldn&#39;t add you automatically");
+    expect(fake.attempts[0]).toMatchObject({ outcome: "degraded", discordId: "42" });
   });
 
   it("blocked copy stays distinct from denied, outage, expired-grant and expired-link copy", async () => {

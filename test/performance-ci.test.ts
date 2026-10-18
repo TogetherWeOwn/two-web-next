@@ -17,6 +17,7 @@ import { auditPaths, fixtureKey } from "../ci/lighthouse-paths";
 
 const require = createRequire(import.meta.url);
 const config = require("../ci/lighthouserc.cjs").ci;
+const qualityBudget = require("../ci/quality-budget.json");
 const {
   assertFixtureContent,
   probeFixture,
@@ -42,7 +43,7 @@ async function request(path: string, method = "GET") {
 }
 
 describe("performance CI", () => {
-  it("measures all five real public pages, not error pages or redirects", async () => {
+  it("measures all eight real public pages, not error pages or redirects", async () => {
     const outbound = vi
       .spyOn(globalThis, "fetch")
       .mockRejectedValue(new Error("Unexpected outbound fetch"));
@@ -53,7 +54,16 @@ describe("performance CI", () => {
         expect(response.headers.get("location"), path).toBeNull();
         expect(response.headers.get("content-type"), path).toContain("text/html");
         const html = await response.text();
-        expect(html, path).toContain("/styles.css");
+        if (["/", "/about", "/faq", "/rules", "/privacy"].includes(path)) {
+          // Inline-critical pages carry the stylesheets in a style block
+          // instead of a link: the homepage reuses the leaf bundle (hero
+          // rules), the leaves carry the content rules.
+          expect(html, path).toContain("<style>");
+          expect(html, path).toContain(path === "/" ? ".hero h1" : ".content-page");
+          expect(html, path).not.toContain('rel="stylesheet"');
+        } else {
+          expect(html, path).toContain("/styles.css");
+        }
         if (path === "/" || path === "/events" || path.startsWith("/e/")) {
           expect(html).toContain("Lighthouse fixture game night");
           expect(html).toContain(fixtureKey);
@@ -84,6 +94,12 @@ describe("performance CI", () => {
           );
         }
         if (path === "/join") expect(html).not.toContain("<iframe");
+        const staticHeading = {
+          "/faq": "Frequently asked questions",
+          "/rules": "House rules",
+          "/privacy": "Privacy policy",
+        }[path];
+        if (staticHeading) expect(html).toMatch(new RegExp(`<h1\\b[^>]*>${staticHeading}</h1>`));
       }
       expect(outbound).not.toHaveBeenCalled();
     } finally {
@@ -253,9 +269,11 @@ describe("performance CI", () => {
       [...config.collect.url, "http://127.0.0.1:8787/admin"],
       config.collect.url.slice(1),
       [...config.collect.url.slice(0, 4), "http://127.0.0.1:8787/about?probe=1"],
+      config.collect.url.slice(0, 5),
+      config.collect.url.slice(0, 7),
     ]) {
       await expect(probeFixture(urls, fetchPage)).rejects.toThrow(
-        "Only the five local fixture URLs",
+        "Only the audited local fixture URLs",
       );
     }
     expect(fetchPage).not.toHaveBeenCalled();
@@ -323,10 +341,11 @@ describe("performance CI", () => {
       "/",
       (html: string) => html.replace(/datetime="[^"]+"/g, 'datetime="1970-01-08T00:00:00.000Z"'),
     ],
+    ["missing real app CSS", "/", (html: string) => html.replace(/<style>[\s\S]*?<\/style>/, "")],
     [
-      "missing real app CSS",
-      "/",
-      (html: string) => html.replace('href="/styles.css"', 'href="/missing.css"'),
+      "missing inlined leaf CSS",
+      "/rules",
+      (html: string) => html.replace(/<style>[\s\S]*?<\/style>/, ""),
     ],
     [
       "external Discord embed",
@@ -338,6 +357,21 @@ describe("performance CI", () => {
       "static error content",
       "/about",
       (html: string) => html.replace("About Together We Own</h1>", "Unavailable</h1>"),
+    ],
+    [
+      "FAQ error content",
+      "/faq",
+      (html: string) => html.replace("Frequently asked questions</h1>", "Unavailable</h1>"),
+    ],
+    [
+      "rules error content",
+      "/rules",
+      (html: string) => html.replace("House rules</h1>", "Unavailable</h1>"),
+    ],
+    [
+      "privacy error content",
+      "/privacy",
+      (html: string) => html.replace("Privacy policy</h1>", "Unavailable</h1>"),
     ],
   ])("refuses %s even when the route remains HTTP 200", async (_label, path, mutate) => {
     const before = Date.now();
@@ -383,7 +417,7 @@ describe("performance CI", () => {
     child.stdout.emit("data", "1:8787\n");
     expect(chunks.join("")).not.toContain(readyPattern);
     await running.admission;
-    expect(fetchPage).toHaveBeenCalledTimes(5);
+    expect(fetchPage).toHaveBeenCalledTimes(8);
     expect(chunks.join("")).toContain(readyPattern);
     expect(stopServer).not.toHaveBeenCalled();
     running.stop();
@@ -446,7 +480,7 @@ describe("performance CI", () => {
     child.emit("exit", 1);
     await expect(running.admission).rejects.toThrow("exited before content admission");
     release();
-    await vi.waitFor(() => expect(fetchPage).toHaveBeenCalledTimes(5));
+    await vi.waitFor(() => expect(fetchPage).toHaveBeenCalledTimes(8));
     expect(chunks.join("")).not.toContain(readyPattern);
     expect(stopServer).toHaveBeenCalledExactlyOnceWith(child);
   });
@@ -487,11 +521,16 @@ describe("performance CI", () => {
   it("pins legacy public thresholds, median sampling and the phone profile", () => {
     expect(config.collect.url).toEqual(auditPaths.map((path) => `http://127.0.0.1:8787${path}`));
     expect(config.collect.numberOfRuns).toBe(3);
+    // The mobile performance category floor is the owner-approved web quality gate (ci/quality-budget.json).
     expect(config.assert.assertions).toEqual({
+      "categories:performance": [
+        "error",
+        { minScore: qualityBudget.mobilePerformance, aggregationMethod: "median-run" },
+      ],
       "largest-contentful-paint": ["error", { maxNumericValue: 2000, aggregationMethod: "median" }],
       "cumulative-layout-shift": ["error", { maxNumericValue: 0.1, aggregationMethod: "median" }],
       "server-response-time": ["error", { maxNumericValue: 600, aggregationMethod: "median" }],
-      "total-blocking-time": ["warn", { maxNumericValue: 300, aggregationMethod: "median" }],
+      "total-blocking-time": ["error", { maxNumericValue: 200, aggregationMethod: "median" }],
       "first-contentful-paint": ["warn", { maxNumericValue: 1800, aggregationMethod: "median" }],
     });
     expect(config.collect.settings.formFactor).toBe("mobile");
@@ -527,7 +566,13 @@ describe("performance CI", () => {
       );
       audits[audit] = { numericValue };
       const report = join(root, "report.json");
-      writeFileSync(report, JSON.stringify({ finalUrl: "http://127.0.0.1:8787/events", audits }));
+      // The categories:performance assertion reads lhr.categories, not audits: give it a passing
+      // score so the run fails on the intended audit instead of a missing category.
+      const categories = { performance: { score: 1 } };
+      writeFileSync(
+        report,
+        JSON.stringify({ finalUrl: "http://127.0.0.1:8787/events", audits, categories }),
+      );
       // Real assertion command and production thresholds; no collection/network.
       const assertion = spawnSync(
         process.execPath,
@@ -565,9 +610,13 @@ describe("performance CI", () => {
     expect(pkg.overrides["@lhci/cli"]).toEqual({ tmp: "0.2.7", "@puppeteer/browsers": "3.2.3" });
     // GHSA-c475-qrg2-pj4r: only LHCI's proxy chain pulls basic-ftp in.
     expect(pkg.overrides["basic-ftp"]).toBe("6.2.1");
-    // Main's engines floor (^22.18.0 || >=24) satisfies the ESM-only browser
+    // Main's engines floor (^22.23.0 || >=24) satisfies the ESM-only browser
     // helper's own >=22.12.0 requirement; pin the merged value, not the floor.
-    expect(pkg.engines.node).toBe("^22.18.0 || >=24");
+    // 22.23.0 is the verified floor: its ICU 78 renders the suite's pinned
+    // `GMT+00:00` zero offset and its bundled npm 10 accepts the lockfile
+    // with the puppeteer-core proxy-agent override below.
+    expect(pkg.engines.node).toBe("^22.23.0 || >=24");
+    expect(pkg.overrides["puppeteer-core"]).toEqual({ "proxy-agent": "6.5.0" });
     // Exercise both module entry points used by LHCI and Lighthouse, without Chrome/network.
     const loaded = spawnSync(
       process.execPath,
@@ -607,16 +656,43 @@ describe("performance CI", () => {
     expect(loaded.status, loaded.stdout + loaded.stderr).toBe(0);
   });
 
-  it("wires both performance results into the always-running required check", () => {
+  it("wires both performance results into the always-running required ci-ok gate", () => {
     const workflow = readFileSync(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8");
     const check = workflow.split("\n  check:\n")[1]!.split("\n  bundle-budget:\n")[0]!;
-    expect(check).toContain("name: check");
-    expect(check).toContain("needs: [a11y, lighthouse, bundle-budget, scope]");
-    expect(check).toContain("if: always()");
-    expect(check).toContain(
-      'node ci/require-performance.mjs "${{ needs.lighthouse.result }}" "${{ needs.bundle-budget.result }}"',
+    const ciOk = workflow.split("\n  ci-ok:\n")[1]!;
+    const performanceGateMarker =
+      "\n      - name: Performance gate (lighthouse + bundle-budget must succeed)\n";
+    const performanceGateIndex = ciOk.indexOf(performanceGateMarker);
+    const ciOkBeforePerformanceGate = ciOk.slice(0, performanceGateIndex);
+    const performanceGate =
+      ciOk.slice(performanceGateIndex + performanceGateMarker.length).split("\n      - name:")[0] ??
+      "";
+    const performanceGateCondition =
+      "always() && (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true')";
+    const checkoutStep =
+      ciOkBeforePerformanceGate
+        .split("\n      - uses: actions/checkout@")[1]
+        ?.split("\n      - ")[0] ?? "";
+    const setupNodeStep =
+      ciOkBeforePerformanceGate
+        .split("\n      - uses: actions/setup-node@")[1]
+        ?.split("\n      - ")[0] ?? "";
+
+    expect(performanceGateIndex).toBeGreaterThan(-1);
+    expect(ciOk).toContain("name: ci-ok");
+    expect(ciOk).toContain(
+      "needs: [a11y, lighthouse, bundle-budget, docs-links, check, node22-compat, scope]",
     );
-    expect(check).toContain("if: always() && (needs.scope.outputs.docs_only != 'true'");
+    expect(ciOk).toContain("\n    if: ${{ !cancelled() }}\n");
+    expect(performanceGate).toContain(`if: ${performanceGateCondition}`);
+    expect(performanceGate).toContain(
+      'run: node ci/require-performance.mjs "${{ needs.lighthouse.result }}" "${{ needs.bundle-budget.result }}"',
+    );
+    expect(checkoutStep).toContain(`\n        if: ${performanceGateCondition}\n`);
+    expect(setupNodeStep).toContain(`\n        if: ${performanceGateCondition}\n`);
+    // check starts from scope alone and keeps the gate's selftests.
+    expect(check).toContain("needs: [scope]");
+    expect(check).toContain("run: node ci/require-performance.mjs --selftest");
     expect(check).toContain("run: npm run deps:audit:selftest");
     expect(check).toContain("run: npm run deps:audit");
   });

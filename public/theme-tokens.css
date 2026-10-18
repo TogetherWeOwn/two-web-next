@@ -1,0 +1,35 @@
+.base-theme {
+  --color-text: var(--theme-text, #f5f6fb);
+  --color-page: var(--theme-page, #151720);
+  --color-accent: var(--theme-accent, #a3ff12);
+  --color-muted: var(--theme-muted, #c6cbea);
+  --color-surface: var(--theme-surface, #222430);
+  --color-border: var(--theme-border, #41465c);
+  --ink: var(--color-text);
+  --paper: var(--color-page);
+  --brand: var(--color-accent);
+  --muted: var(--color-muted);
+  --surface: var(--color-surface);
+  --line: var(--color-border);
+  min-height: 100vh;
+  background: var(--color-page);
+  color: var(--color-text);
+  font:
+    17px / 1.65 system-ui,
+    sans-serif;
+}
+.base-theme.schedule-theme,
+.base-theme[data-theme="schedule"] {
+  --color-text: var(--theme-schedule-text, #f5f6fb);
+  --color-page: var(--theme-schedule-page, #151720);
+  --color-accent: var(--theme-schedule-accent, #a3ff12);
+  --color-muted: var(--theme-schedule-muted, #c6cbea);
+  --color-surface: var(--theme-schedule-surface, #222430);
+  --color-border: var(--theme-schedule-border, #41465c);
+  --ink: var(--color-text);
+  --paper: var(--color-page);
+  --brand: var(--color-accent);
+  --muted: var(--color-muted);
+  --surface: var(--color-surface);
+  --line: var(--color-border);
+}

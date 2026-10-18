@@ -1,6 +1,6 @@
 # TOG-9689 — W10: Livewire → islands re-spec + drift tests
 
-**Status:** slice 1 merged; slices 2–5 as gated child cards.
+**Status:** slices 1–5 done, incl. slice-2 PR #98.
 **Source of truth for behavior:** two-web (maintenance-only) `app/Livewire/*.php`,
 `resources/views/livewire/*.blade.php`, `tests/Feature/Livewire/*`, `tests/Feature/Events/*`,
 `tests/Feature/Profile/*`. This doc re-expresses them; nothing is ported verbatim
@@ -40,7 +40,9 @@ Legacy: `GoingCount.php` + `going-count.blade.php` + `GoingCountTest.php` (TOG-7
   pagination); non-matching island keys fire nothing; missing row keeps last known-good. A newer write owns its refresh even when an
   older fetch/body finishes later. The accepted aggregate emits
   `going-count-refreshed {eventKey, goingCount, capacity}` for capacity reconciliation,
-  without another request. Executable: `test/islands-going-count*.test.ts`.
+  without another request. A hung read aborts at the owned ~5 s deadline
+  (`GOING_COUNT_READ_DEADLINE_MS`, fetch headers plus JSON body); the badge keeps
+  its last known-good value with no announcement. Executable: `test/islands-going-count*.test.ts`.
 
 ## 2. RsvpButton (slice 2, on the frozen W8/W9 routes)
 
@@ -60,6 +62,10 @@ TOG-6990 syncing-vs-failed, TOG-8715 honeypot swallow).
   announces an unknown outcome and offers an event refresh; mutations stay disabled
   until SSR recovers the answer, rather than asserting a failed write or blindly
   replaying it. Losing transport does not prove a delivered transaction was refused.
+- Outcome focus: a settled going, waitlist, withdrawal or full outcome moves focus to its
+  new state only while the member's activation still owns focus. Focus or a pointer press
+  outside the widget during the write ends that ownership, and moving back into the widget
+  does not revive it. Unknown and session-expired notices keep their existing focus rules.
 - States rendered: guest login link (never a dead button); closed (Cancelled /
   Not published yet / been-and-gone, `role="status"`); full + waitlist join; in-line
   position + claim-seat (locked path); You're-in + withdraw; optimistic saving in
@@ -118,7 +124,8 @@ TOG-5624 share tags, TOG-8400 search logging, TOG-7332 announcements, TOG-6958 t
   Host-zone event/today buckets use the same canonical ISO years, interpreting
   Gregorian eras (1 BC = year zero); unsupported implicit host months fall back.
 - Drafts invisible to non-moderators including inside search; withCount aggregate (no N+1);
-  Discord display-only transients merged in start order, never persisted/published.
+  Discord display-only transients merged in start order. [Expiring shared snapshots](discord-snapshots.md)
+  are not canonical events and never enter feeds, RSVP or write-back.
 - Drift tests pin: requests per action (single in flight, abort), all empty states,
   URL-bound search, grid math (weeks/today/fallbacks), draft invisibility, log shape.
 
@@ -155,7 +162,8 @@ trap, TOG-6924-adjacent new-member state).
 - Edit flow: one `PATCH` on save (validation: bio ≤1000, games ≤20×80 chars one per
   line de-duped, IANA timezone, no control chars); cancel discards; save-failed keeps
   input + announces; session-expired (checked before the gate) keeps input + points at
-  login; focus moves to form heading / alert / saved confirmation.
+  login; focus moves to form heading / alert / saved confirmation, which takes focus
+  only while the member has not moved focus, caret or text during the save.
 - Save deadline (TOG-11625): one owned 10 s client deadline
   (`PROFILE_SAVE_DEADLINE_MS`) covering fetch plus response-body completion;
   on expiry the binder aborts the owned fetch where possible, shows the

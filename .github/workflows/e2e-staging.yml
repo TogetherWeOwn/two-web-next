@@ -1,4 +1,7 @@
 name: e2e-staging
+# Inherits the deploy run-name, so the title ends in the commit these journeys exercised
+# (ci/resolve-promotion-sha.mjs reads it; head_sha is main's tip for workflow_run runs).
+run-name: e2e-staging ${{ github.event.workflow_run.display_title || github.sha }}
 
 # Post-deploy critical journeys against the staging Worker
 # (docs/critical-journeys.md, "Staging post-deploy journeys"). Runs after a
@@ -74,6 +77,18 @@ jobs:
           EXPECTED=$(wc -l < "$RUNNER_TEMP/deployed-files.tsv")
           bash ci/change-scope.sh "$RUNNER_TEMP/deployed-files.tsv" "$EXPECTED" >> "$GITHUB_OUTPUT"
 
+  # OWASP ZAP passive scan of the deployed staging Worker (zap-staging.yml).
+  # Runs for every successful main deploy, including docs-only ones (it scans
+  # the live Worker, not the diff). A failing scan fails this run, which keeps
+  # the commit from being promoted to production.
+  zap-baseline:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.head_branch == 'main' &&
+       github.event.workflow_run.head_repository.full_name == github.repository)
+    uses: ./.github/workflows/zap-staging.yml
+
   staging-journeys:
     name: staging-journeys
     needs: scope
@@ -91,7 +106,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24
           cache: npm
@@ -109,6 +124,14 @@ jobs:
         run: npm run e2e:staging
         env:
           QA_AUTH_TOKEN: ${{ secrets.QA_AUTH_TOKEN }}
+      - name: Journey ledger (pass/skip/fail accounting)
+        # Playwright exits 0 when every journey skips, so without this gate an
+        # all-skipped run looks green. The gate writes the per-journey ledger
+        # (JSON + Markdown) and fails loud with every skipped journey and its
+        # reason named when nothing passed.
+        id: ledger
+        if: always()
+        run: node ci/check-staging-journeys.mjs
       - name: Scrub QA token from failure artifacts
         # The repo is public and artifacts are downloadable without log
         # masking. Delete any file holding the token (also inside the report's
@@ -121,7 +144,7 @@ jobs:
           QA_AUTH_TOKEN: ${{ secrets.QA_AUTH_TOKEN }}
       - name: Failure traces and report
         if: failure() && steps.scrub.outputs.swept == 'true'
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: e2e-staging-failure-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
@@ -129,3 +152,38 @@ jobs:
             playwright-report/
           if-no-files-found: ignore
           retention-days: 7
+      - name: Journey ledger artifact
+        # Ships only the derived ledger files (journey titles, outcomes and
+        # skip reasons), never the raw Playwright JSON report: that report can
+        # hold request and error text. The raw report reaches an artifact
+        # solely through the swept failure upload above. The ledger still
+        # carries the first line of each failure's error text, so it follows
+        # the same gate: uploaded on a green run (the scrub is skipped) and on
+        # a failed run only once the scrub finished the whole tree. A crashed
+        # or incomplete scrub (swept unset) uploads nothing.
+        if: ${{ !cancelled() && (steps.scrub.outcome == 'skipped' || steps.scrub.outputs.swept == 'true') }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: e2e-staging-ledger-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            test-results/staging-journey-ledger.json
+            test-results/staging-journey-ledger.md
+          if-no-files-found: warn
+          retention-days: 7
+
+  # Web quality gate on the deployed staging Worker (owner policy 2026-10-10): runs after EVERY staging deploy
+  # (not skipped with the journeys). A Lighthouse failure fails this run, and ci/resolve-promotion-sha.mjs also
+  # requires this job by name, so production is never promoted from a staging deploy that scored below budget.
+  # The origin web-standards step inside (security headers, HTML basics, internal links) blocks this job too,
+  # the same as the Lighthouse budgets; see web-quality-origin.yml.
+  staging-quality:
+    name: staging-quality
+    needs: scope
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.head_branch == 'main' &&
+       github.event.workflow_run.head_repository.full_name == github.repository)
+    uses: ./.github/workflows/web-quality-origin.yml
+    with:
+      origin: https://next.togetherweown.com

@@ -2,15 +2,17 @@
 
 Offline ledger of every web migration in `drizzle/` that the cutover
 must run against production, read from the migration SQL and
-`drizzle/meta/_journal.json` on `origin/main` (`7e92b7a3`,
-22 journal entries, idx 0–21). No database connection was used and no
+`drizzle/meta/_journal.json`. It was pinned at 22 journal entries
+(idx 0–21) on `origin/main` (`7e92b7a3`); it is now reconciled to
+25 entries (idx 0–24), with the production apply outcome recorded
+below. No database connection was used and no
 migration was run to build this document. Numbering and topology live
 in [db-migrations.md](db-migrations.md); the bot migration set is a
 different ledger and is out of scope here.
 
-Two facts govern every row below. First, all 22 migrations are
+Two facts govern every row below. First, all 25 migrations are
 **up-only**: Drizzle ships no down files, and the applier
-(`ci/neon-migrate.mjs`) moves the `drizzle.__drizzle_migrations` ledger
+(`ci/db-migrate.mjs`) moves the `drizzle.__drizzle_migrations` ledger
 forward only, refusing any history that is not an exact prefix of the
 release. Reversal always means a new compensating migration, never a
 built-in down. Second, tag `1015` is absent (the journal goes
@@ -45,6 +47,27 @@ prior state cannot be restored by SQL alone; needs backup/PITR).
 | 19 | `1018_audit-immutability` | up-only | agent_event_audits, member_data_access_logs, activity_log + `audit_rows_append_only()` | backout-script | Drop the six guard triggers and the function; audit tables stay writable until re-guarded. |
 | 20 | `1019_shared-agent-events` | up-only | events (columns + copied rows), `agent_events` dropped | unmeasurable | `DROP TABLE agent_events` destroys the wall-clock source table; copied rows survive in `events` but the separate table returns only from backup/PITR. |
 | 21 | `1020_event-sync-revisions` | up-only | event_sync_attempts (new), events (two revision columns) + two revision triggers | backout-script | Drop both triggers/functions, drop the attempts table and the two columns; mirrors restart from revision zero. |
+| 22 | `1021_discord-event-snapshots` | up-only | discord_event_snapshots | backout-script | `DROP TABLE discord_event_snapshots`; display cache only, no canonical rows lost. |
+| 23 | `1022_web-sessions-oauth-journeys` | up-only | web_sessions, web_oauth_journeys (columns + indexes) | re-runnable | `CREATE TABLE/INDEX IF NOT EXISTS` throughout plus `ADD COLUMN IF NOT EXISTS` and an `UPDATE` that only fills NULL `status_hash`; re-apply is safe. Live databases already carry these tables from the retired runtime backstop, so no backout applies there — do not `DROP` them (the runtime no longer holds CREATE, dropped sessions and journeys would not rebuild, and the migrate ledger would still report 1022 applied). |
+| 24 | `1023_agent-event-audits-prune-idx` | up-only | agent_event_audits (index only) | backout-script | `DROP INDEX agent_event_audits_created_at_idx`; no row data. |
+
+## Production apply outcome
+
+The cutover flipped production to the Next Worker at 2026-10-10
+00:52Z: production `/up` reported healthy with `db ok` and **0 pending
+migrations**, covering the pinned 22 plus `1021_discord-event-snapshots`
+(merged 2026-10-07, in the flipped `15423dc9` release). Zero pending
+held through the 2h watch close at 02:52Z, the origin re-run at
+03:03Z, the tail samples including 21:47Z, and the 48h close at
+2026-10-12 00:57Z. The early-watch auth P0 (session/join 500s) was
+host role grants, not pending migrations: `/up` stayed 0 pending
+throughout and the funnel recovered per the 01:27Z receipt.
+Of rows 22–24, only `1021` was in the flipped release (noted
+above); `1022` and `1023` merged afterwards, are recorded here, and
+reach production through the normal `db-migrate` path, not through
+this outcome.
+Nothing here was probed: every production fact is cited from the
+production health receipts recorded through the cutover close.
 
 ## Gated apply path
 
@@ -54,20 +77,23 @@ The sanctioned live apply path is the `db-migrate` workflow
 - Dispatch is `workflow_dispatch` with a `staging`/`production` choice
   (default `staging`), or `workflow_call` from an authorized caller.
 - Gates run before any install or database access: the ref must be
-  `refs/heads/main`, and `production` requires the
-  `PRODUCTION_DEPLOY_ENABLED` variable to be true.
+  `refs/heads/main`, staging requires `STAGING_MIGRATION_HOLD` exactly
+  `false`, and `production` requires the `PRODUCTION_DEPLOY_ENABLED`
+  variable to be true.
 - Secrets come from the matching GitHub Environment only
-  (`NEON_STAGING_DATABASE_URL` or `PRODUCTION_DATABASE_URL`); the
+  (`PLANETSCALE_STAGING_DATABASE_URL` or `PRODUCTION_DATABASE_URL`); the
   unselected target is never exposed and no fallback URL exists.
 - Endpoint rules are enforced in code: direct port `5432`, no pooler;
-  staging must be a direct Neon endpoint, production must be a direct
-  PlanetScale endpoint (`<id>.pg.psdb.cloud`) with TLS.
+  staging must be the pinned PlanetScale staging branch and host (retired
+  Neon endpoints are refused; the production identity is refused),
+  production must be a direct PlanetScale endpoint (`<id>.pg.psdb.cloud`)
+  with TLS.
 - Steps: numbering guard, read-only `plan` (journal/ledger diff, no
   DDL), `apply` under a Postgres transaction advisory lock with the
   pre-apply PITR timestamp recorded, then `verify` proves zero pending
   web migrations.
 - Applies never cancel each other: the concurrency group is
-  `neon-web-migrate-<target>` with `cancel-in-progress: false`.
+  `web-migrate-<target>` with `cancel-in-progress: false`.
 - Staging Worker deploys apply the same script for `staging` inside the
   deploy job; live production execution always needs its own
   authorization and is never part of a Worker deploy.

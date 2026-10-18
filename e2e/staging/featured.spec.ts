@@ -1,3 +1,5 @@
+import { featuredGuestPoll, featuredJourneyTimeoutMs } from "../featured-guest-poll.mjs";
+import { qaLoginRetryBudgetMs } from "../qa-login-retry.mjs";
 import { cleanupFeaturedFixture, homeHasHeadline } from "./featured-checks";
 import { emptyStorageState, expect, moderatorStorageState, stagingOrigin, test } from "./fixtures";
 import { loginQaModerator } from "./qa-login";
@@ -7,6 +9,9 @@ test.use({ storageState: moderatorStorageState });
 // Fresh moderator session per file: admin page views rotate the bearer, so a
 // stored token is single-use across files. Moderator only — one login.
 test.beforeAll(async () => {
+  // Hook timeout: the config's 30s covers the login itself; its bounded 429
+  // waits get their own budget (qa-login-retry.mjs), one login here.
+  test.setTimeout(30_000 + qaLoginRetryBudgetMs(1));
   await loginQaModerator();
 });
 
@@ -24,7 +29,11 @@ function utcWall(offsetMs: number): string {
 
 // The homepage bounds its featured read to 500 ms and degrades to no section,
 // so poll rather than trust a single load. Transport/non-200 failures retry too.
-const HOME_POLL = { timeout: 20_000, intervals: [1_000, 2_000, 3_000] };
+// The poll also outlasts the homepage guest cache's convergence bound
+// (featured-guest-poll.mjs): a guest read on a non-mutating isolate can serve
+// the pre-write entry until its TTL lapses, so a shorter poll races the cache
+// instead of asserting the slot's eventual authoritative visibility.
+const HOME_POLL = featuredGuestPoll();
 
 // Moderator owns the journey: a published slot is created, shown to a guest on
 // the homepage, renamed, then deleted through the UI. The fixture is deleted
@@ -34,7 +43,9 @@ test("staging moderator creates, edits and deletes a featured slot shown on the 
   page,
   browser,
 }, testInfo) => {
-  test.setTimeout(120_000);
+  // Three guest polls can each spend the full convergence budget; the
+  // timeout covers all three plus the moderator journey itself.
+  test.setTimeout(featuredJourneyTimeoutMs());
   const stamp = Date.now();
   const title = `Staging E2E Featured ${stamp}`;
   const renamed = `Staging E2E Featured Renamed ${stamp}`;

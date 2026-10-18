@@ -1,9 +1,11 @@
 import postgres from "postgres";
+import { alertScheduledFailing, type ScheduledFailingJob } from "../alerts";
 import { createBotClient } from "../bot/client";
 import type { Env, JobsEnv } from "../env";
 import { databaseOptions, databaseUrl } from "../db/connection";
+import { setReleaseMetadata } from "../release-tag";
 import { qaEnabled } from "../qa";
-import { migrate as migrateSessions, type Sql as SessionSql } from "../sessions";
+import { PRUNE_CRON, RECONCILE_CRON } from "./constants";
 import { pruneModelTables, reconcileEvents, runScheduled } from "./cron";
 import { consume } from "./consumer";
 import { trackingQueue } from "./ledger";
@@ -111,6 +113,8 @@ export async function handleQueue(
   env: JobsEnv,
   ctx?: ExecutionContext,
 ): Promise<void> {
+  // Seed before consume() so queue.failing lines carry this Worker's build.
+  setReleaseMetadata(env.CF_VERSION_METADATA);
   const sql = sqlFor(env);
   // Promise.race bounds waiting, not SQL execution. Isolate all best-effort
   // ledger/lock traffic from the max:1 handler pool: a timed-out statement can
@@ -158,22 +162,29 @@ export async function handleQueue(
   }
 }
 
+// Cron expression to the allowlisted scheduled-job discriminator. Only these
+// two jobs emit the scheduled.failing paging signal: sparse invocations that
+// can never trip the crash-loop gate on their own. Unknown crons still fail
+// loudly but stay silent here.
+const SCHEDULED_JOB_FOR_CRON: Record<string, ScheduledFailingJob> = {
+  [RECONCILE_CRON]: "events:reconcile",
+  [PRUNE_CRON]: "model:prune",
+};
+
 export async function handleScheduled(
   controller: ScheduledController,
   env: JobsEnv,
 ): Promise<void> {
+  setReleaseMetadata(env.CF_VERSION_METADATA);
   const sql = sqlFor(env);
   // Dispatch commits its ledger row and uniqueness lock before the external
   // queue send. A later reconciliation rollback must not erase accepted jobs,
   // and an early consumer must see and settle the committed rows.
   const dispatchSql = sqlFor(env);
   try {
-    // web_sessions is runtime-DDL-only (no drizzle migration owns it); only
-    // the web path runs migrate(). A prune before any web traffic would fail
-    // the whole pass on a missing table, so ensure it here too (no-op when
-    // already migrated). Outside the flight: DDL must not run inside the
-    // advisory-lock transaction.
-    await migrateSessions(sql as unknown as SessionSql);
+    // No DDL here (TOG-19721): web_sessions comes from the migrate workflow
+    // (drizzle/1022), like every other table the prune pass reads. A database
+    // that predates that migration fails the pass like any other outage.
     await runScheduled(controller.cron, pgSingleFlight(sql), {
       // The reserved flight holds only the scheduler advisory lock during
       // dispatch. Event writes have a shorter transaction on the other pool,
@@ -187,6 +198,20 @@ export async function handleScheduled(
         }),
       prune: (db) => pruneModelTables(pgPruneStores(db)),
     });
+  } catch (err) {
+    // Direct paging signal for a failed scheduled run: one redacted line per
+    // failed invocation, no source-side mute. The handler still rejects with
+    // the original error, and pool cleanup in finally still runs, even when
+    // writing the signal itself throws.
+    const job = SCHEDULED_JOB_FOR_CRON[controller.cron];
+    if (job !== undefined) {
+      try {
+        alertScheduledFailing(job, err);
+      } catch {
+        // A throwing alert sink must not replace the original rejection.
+      }
+    }
+    throw err;
   } finally {
     await dispatchSql.end({ timeout: 1 }).catch(() => {});
     await sql.end({ timeout: 1 });

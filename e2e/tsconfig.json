@@ -8,6 +8,9 @@
     "./watch-guard.mjs",
     "../playwright.config.ts",
     "../playwright.staging.config.ts",
-    "../playwright.watch.config.ts"
+    "../playwright.watch.config.ts",
+    "../playwright.explore.config.ts",
+    "../playwright.visual.config.ts",
+    "../playwright.kit-parity.config.ts"
   ]
 }

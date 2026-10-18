@@ -1,0 +1,148 @@
+import assert from "node:assert/strict";
+import { readFile, readdir } from "node:fs/promises";
+import { basename, extname } from "node:path";
+import { test } from "node:test";
+
+const escape = (text) => text.replace(/[.*+?^${}()|[\]\\/]/g, "\\$&");
+
+const SUITES = [
+  {
+    file: "test/profile-native-length.test.ts",
+    env: "A11Y_BROWSER_TESTS",
+    title: "native browser submission and real island binder",
+    min: 15,
+  },
+  {
+    file: "test/member-profile-native-422-baseline.test.ts",
+    env: "A11Y_BROWSER_TESTS",
+    title: "native 422 baseline in a real browser",
+    min: 4,
+  },
+  {
+    file: "test/featured-native-length.test.ts",
+    env: "FEATURED_NATIVE_BROWSER_TESTS",
+    title: "native featured headline and image description",
+    min: 36,
+  },
+  {
+    file: "test/calendar-search-unicode-boundaries.test.ts",
+    env: "CALENDAR_SEARCH_BROWSER_TESTS",
+    title: "native calendar search input (real Chromium typing/paste)",
+    min: 21,
+  },
+  {
+    file: "ci/audit-lifecycle.test.mjs",
+    env: "A11Y_BROWSER_TESTS",
+    title: "audit lifecycle real Chromium signal cleanup",
+    min: 2,
+  },
+  {
+    file: "test/kit-error-shell-render.test.ts",
+    env: "KIT_ERROR_SHELL_BROWSER_TESTS",
+    title: "Kit error shell rendered accessibility",
+    min: 6,
+  },
+];
+
+const workflow = await readFile(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8");
+const job = workflow.split("\n  a11y:\n")[1]?.split(/\n  [\w-]+:\n/)[0] ?? "";
+const steps = job.split(/\n(?=      - )/);
+const stepRunning = (file) => steps.find((step) => step.includes(`npx vitest run ${file} `));
+const chromiumInstall = job.indexOf("npx playwright install --with-deps chromium");
+
+test("the a11y job does not bypass its steps at job level", () => {
+  assert.doesNotMatch(job, /^    continue-on-error:/m);
+});
+
+for (const suite of SUITES) {
+  test(`a11y job runs ${suite.file} with its opt-in, a JSON report and the executed-count verifier`, async () => {
+    const step = stepRunning(suite.file);
+    assert(step, `a11y job must run ${suite.file}`);
+    const artifact = `artifacts/a11y/${basename(suite.file).replace(/\.test\.(ts|mjs)$/, "")}.json`;
+    assert.match(step, new RegExp(`\\n        env:\\n          ${suite.env}: "true"\\n`));
+    assert.match(
+      step,
+      new RegExp(
+        `\\n          npx vitest run ${escape(suite.file)} --reporter=default --reporter=json --outputFile\\.json=${escape(artifact)}\\n`,
+      ),
+    );
+    assert.match(
+      step,
+      new RegExp(
+        `\\n          node ci/a11y-require-executed\\.mjs ${escape(artifact)} "${escape(suite.title)}" ${suite.min}\\s*$`,
+      ),
+    );
+    assert.doesNotMatch(step, /^\s*(?:- )?(?:if|continue-on-error):/m);
+    assert(chromiumInstall >= 0, "a11y job must install Chromium");
+    assert(chromiumInstall < job.indexOf(step));
+
+    const source = await readFile(new URL(`../${suite.file}`, import.meta.url), "utf8");
+    assert.match(source, new RegExp(`skipIf\\(process\\.env\\.${suite.env} !== "true"\\)`));
+    assert.match(source, new RegExp(`"${escape(suite.title)}"`));
+  });
+}
+
+const RSVP_FILE = "ci/rsvp-focus-browser.test.mjs";
+const RSVP_ENV = "RSVP_FOCUS_BROWSER_TESTS";
+const RSVP_CASES = [
+  "keeps keyboard focus on the field the member tabbed to while the write is pending",
+  "moves focus to the confirmation when the member stays on the control",
+  "keeps focus off the confirmation after a pointer press outside the widget",
+];
+
+test("a11y job runs ci/rsvp-focus-browser.test.mjs with its opt-in after Chromium install", async () => {
+  const step = steps.find((entry) => entry.includes(`node --test ${RSVP_FILE}`));
+  assert(step, `a11y job must run ${RSVP_FILE}`);
+  assert.match(
+    step,
+    new RegExp(`\\n        run: ${RSVP_ENV}=true node --test ${escape(RSVP_FILE)}\\s*$`),
+    "the RSVP step must use the exact enabled workflow command",
+  );
+  assert.doesNotMatch(step, /^\s*(?:- )?(?:if|continue-on-error):/m);
+  assert.doesNotMatch(step, new RegExp(`${RSVP_ENV}=(?!true)`));
+  assert(chromiumInstall >= 0, "a11y job must install Chromium");
+  assert(chromiumInstall < job.indexOf(step), "Chromium install must precede the RSVP step");
+
+  const source = await readFile(new URL(`../${RSVP_FILE}`, import.meta.url), "utf8");
+  assert.match(source, new RegExp(`process\\.env\\.${RSVP_ENV} !== "true"`));
+  for (const title of RSVP_CASES)
+    assert.match(source, new RegExp(`^\\s+it\\("${escape(title)}"`, "m"), title);
+
+  const readme = await readFile(new URL("../README.md", import.meta.url), "utf8");
+  const row = readme.split("\n").find((line) => line.startsWith(`| \`${RSVP_FILE}\` |`));
+  assert.match(row ?? "", /no executed-count verifier yet/);
+});
+
+// Every browser gate is named *_BROWSER_TESTS, so the scan keys on that name.
+async function browserGatedSuites() {
+  const found = [];
+  for (const dir of ["test", "ci"]) {
+    for (const entry of await readdir(new URL(`../${dir}/`, import.meta.url), {
+      recursive: true,
+    })) {
+      if (![".ts", ".mjs"].includes(extname(entry))) continue;
+      if (basename(entry) === basename(import.meta.filename)) continue;
+      const file = `${dir}/${entry}`;
+      const source = await readFile(new URL(`../${file}`, import.meta.url), "utf8");
+      for (const [, env] of source.matchAll(/process\.env\.([A-Z0-9_]*_BROWSER_TESTS)\b/g))
+        found.push({ file, env });
+    }
+  }
+  return found;
+}
+
+test("the README Browser regressions table lists every browser-gated suite", async () => {
+  const readme = await readFile(new URL("../README.md", import.meta.url), "utf8");
+  const section = readme.split("\n### Browser regressions\n")[1]?.split(/\n#{2,3} /)[0] ?? "";
+  assert(section, "README must keep the Browser regressions section");
+  const gated = await browserGatedSuites();
+  for (const suite of SUITES)
+    assert(
+      gated.some(({ file }) => file === suite.file),
+      suite.file,
+    );
+  for (const { file, env } of gated) {
+    const row = new RegExp(`^\\|\\s*\`${escape(file)}\`\\s*\\|\\s*\`${env}\``, "m");
+    assert.match(section, row, `README table must list ${file} with ${env}`);
+  }
+});

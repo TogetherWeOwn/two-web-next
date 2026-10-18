@@ -17,6 +17,8 @@ on:
     # ready_for_review re-runs the smoke when a draft becomes ready (drafts
     # skip it below). `edited` needs no browser run; pr-gates covers it.
     types: [opened, synchronize, reopened, ready_for_review]
+  merge_group:
+    types: [checks_requested]
   push:
     branches: [main]
   # Nightly full smoke (TOG-14880): schedule events run the journeys
@@ -30,9 +32,12 @@ permissions:
   # The scope job lists the PR's changed files via the API.
   pull-requests: read
 
+# Schedule and dispatch runs get their own groups (as in ci.yml): with the
+# default queue a newly queued run cancels any pending run in its group, so a
+# nightly or dispatch sharing main's group would replace a waiting push run.
 concurrency:
-  group: e2e-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  group: e2e-${{ github.event.pull_request.number || (github.event_name == 'schedule' && 'nightly') || (github.event_name == 'workflow_dispatch' && github.run_id) || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   # Cheap change-scope gate (mirrors ci.yml): a PR that only touches prose
@@ -75,7 +80,11 @@ jobs:
     needs: scope
     # Drafts skip the 25-minute smoke; undrafting re-runs via ready_for_review.
     if: needs.scope.outputs.skip_e2e != 'true' && github.event.pull_request.draft != true
-    runs-on: ubuntu-latest
+    # Pinned for visual-regression stability: body text renders with the
+    # runner's system fonts, so a floating ubuntu-latest image change would
+    # shift every baseline with no code change. Bump deliberately and
+    # re-baseline in the same PR (docs/visual-regression.md).
+    runs-on: ubuntu-24.04
     timeout-minutes: 25
     services:
       postgres:
@@ -96,7 +105,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24
           cache: npm
@@ -116,18 +125,130 @@ jobs:
             playwright-chromium-${{ runner.os }}-
       - name: Install Chromium
         run: npx playwright install --with-deps chromium
+      # Kit visuals run against the freshly seeded state before browser
+      # journeys create disposable events and RSVPs (docs/kit-parity-gates.md).
+      - name: Install Kit workspace dependencies
+        run: npm ci --prefix web --include=dev --no-audit --no-fund
+      - name: Build Kit worker
+        run: npm run build --prefix web
+      - name: Kit visual regression
+        run: npx playwright test --config playwright.kit-visual.config.ts
+      # Hono visual regression also runs before the mutating journeys.
+      - name: Visual regression
+        id: visual
+        if: ${{ !cancelled() }}
+        run: npx playwright test --config playwright.visual.config.ts
       - name: Critical browser journeys
+        if: ${{ !cancelled() }}
         run: npm run e2e
+      # Kit journey parity (docs/kit-parity-gates.md): these parity journeys
+      # run against Hono and the built Kit Worker on the same seeded disposable
+      # Postgres after the browser suite. The Kit workspace is rebuilt here
+      # for the parity run. Read-only apart from the
+      # member-board journey's single shared QA login and its one going RSVP
+      # (withdrawn in afterAll) and the archive journey's 24 seeded rows
+      # (swept in afterAll), so they neither contaminate either visual suite
+      # nor skew the teardown sweep. The visual spec above stays pinned to its
+      # file: the parity run below must not re-run it after the mutating
+      # journeys.
+      - name: Install Kit workspace dependencies
+        if: ${{ !cancelled() }}
+        run: npm ci --prefix web --include=dev --no-audit --no-fund
+      - name: Build Kit worker
+        if: ${{ !cancelled() }}
+        run: npm run build --prefix web
+      - name: Kit journey parity (Hono vs built Kit Worker)
+        if: ${{ !cancelled() }}
+        run: >-
+          npx playwright test --config playwright.kit-parity.config.ts
+          e2e/kit-parity/parity.spec.ts e2e/kit-parity/auth-boundaries.spec.ts
+      - name: Kit parity ledger (no quiet green)
+        if: ${{ !cancelled() }}
+        run: node ci/check-kit-parity.mjs
+      # Authenticated perf budgets (docs/performance-budgets.md): the guest
+      # Lighthouse gate refuses authenticated requests, so the member-RSVP
+      # detail read and the moderator-admin list read get their own
+      # server-response gate with a real session cookie. Read-only (no RSVP
+      # writes, no fixtures to cancel) and exactly two QA logins, placed
+      # after the browser suite so the shared qa-login throttle window holds
+      # at most this step's pair plus the parity journey's one. The ledger
+      # lands in test-results/ and rides the failure-traces upload below.
+      - name: Authenticated perf budgets (session-cookie journeys)
+        if: ${{ !cancelled() }}
+        env:
+          AUTH_PERF_URL: https://localhost:8787
+        run: |
+          set -euo pipefail
+          npx wrangler dev --config e2e/wrangler.jsonc --local --local-protocol https --ip localhost --port 8787 >"$RUNNER_TEMP/auth-perf-worker.log" 2>&1 &
+          WORKER_PID=$!
+          trap 'kill $WORKER_PID' EXIT
+          for _ in $(seq 1 90); do
+            if curl -sk https://localhost:8787/up >/dev/null 2>&1; then break; fi
+            sleep 1
+          done
+          curl -sk https://localhost:8787/up >/dev/null
+          NODE_TLS_REJECT_UNAUTHORIZED=0 npm run auth-perf
+      # A missing visual baseline is written by the visual step (never an
+      # existing one); it must be reviewed and committed, so fail here.
+      # Kit visual and parity baselines land in e2e/visual/__screenshots-kit__/
+      # (docs/kit-parity-gates.md); accept
+      # them with node ci/kit-visual-accept.mjs, never by hand.
+      - name: Uncommitted visual baselines
+        if: ${{ !cancelled() }}
+        run: |
+          new="$(git status --porcelain -- e2e/visual/__screenshots__ e2e/visual/__screenshots-kit__)"
+          if [ -n "$new" ]; then
+            echo "New visual baselines were generated; review and commit them using docs/visual-regression.md or docs/kit-parity-gates.md:"
+            echo "$new"
+            exit 1
+          fi
       - name: Failure traces and report
         if: failure()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: e2e-failure-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
             test-results/
             playwright-report/
+            test-results-visual/
+            playwright-report-visual/
+            test-results-kit-visual/
+            test-results-kit-parity/
+            playwright-report-kit-parity/
+            e2e/visual/__screenshots__/
+            e2e/visual/__screenshots-kit__/
           if-no-files-found: ignore
           retention-days: 7
       - name: Remove ephemeral QA material
         if: always()
         run: rm -f e2e/.dev.vars
+
+  # Required check (rule 3 model): branch protection requires e2e-ok, not browser-smoke, because a directly required
+  # job that `needs: scope` reports skipped (= pass) when scope itself fails. e2e-ok passes a skipped smoke only on an
+  # explicit scope verdict (skip_e2e=true) or a draft; a failed/cancelled scope or smoke fails it.
+  # `!cancelled()`, not `always()`: when a newer run supersedes this one, e2e-ok
+  # concludes cancelled instead of failing (see the note on ci-ok in ci.yml).
+  e2e-ok:
+    name: e2e-ok
+    needs: [scope, browser-smoke]
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Verdict
+        env:
+          SCOPE: ${{ needs.scope.result }}
+          SMOKE: ${{ needs.browser-smoke.result }}
+          SKIP_E2E: ${{ needs.scope.outputs.skip_e2e }}
+          DRAFT: ${{ github.event.pull_request.draft }}
+        run: |
+          set -euo pipefail
+          [ "$SCOPE" = success ] || { echo "scope result: $SCOPE"; exit 1; }
+          case "$SMOKE" in
+            success) echo "browser-smoke passed" ;;
+            skipped)
+              if [ "$SKIP_E2E" = true ] || [ "$DRAFT" = true ]; then echo "browser-smoke skipped by scope verdict/draft"
+              else echo "browser-smoke skipped without a scope verdict"; exit 1; fi ;;
+            *) echo "browser-smoke result: $SMOKE"; exit 1 ;;
+          esac
+

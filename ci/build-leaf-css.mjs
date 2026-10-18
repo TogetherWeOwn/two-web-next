@@ -1,0 +1,38 @@
+#!/usr/bin/env node
+// Bundle the content-leaf stylesheets into a generated module so the Worker
+// can inline them without a filesystem read: the staging Lighthouse audit
+// measured mobile /rules LCP just over budget with render-blocking-resources
+// savings of ~150 ms across styles.css, theme-tokens.css and theme.css,
+// while the <link rel="preload"> hints for those same files measured zero
+// effect (the whole head fits the first response chunk). Inlining removes
+// all three render-blocking requests from the content leaves (/about, /faq,
+// /rules, /privacy — the only theme="content" pages); the <style> block is
+// allowlisted by its sha256 hash, so style-src keeps no 'unsafe-inline'.
+// Regen: node ci/build-leaf-css.mjs (drift is pinned by
+// test/leaf-css-drift.test.ts — CI fails until this is re-run).
+import { createHash } from "node:crypto";
+import { readFileSync, writeFileSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+
+const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+const SOURCES = ["public/styles.css", "public/theme-tokens.css", "public/theme.css"];
+const OUT = "src/leaf-critical-css.ts";
+
+export function build() {
+  const css = SOURCES.map((entry) => readFileSync(join(repoRoot, entry), "utf8")).join("\n");
+  if (/<\/style/i.test(css)) {
+    throw new Error("refusing to inline CSS containing a closing style tag");
+  }
+  const sha256 = createHash("sha256").update(css, "utf8").digest("base64");
+  const text =
+    `// GENERATED from ${SOURCES.join(", ")} — do not hand-edit.\n` +
+    `// Regen: node ci/build-leaf-css.mjs (drift is pinned by test/leaf-css-drift.test.ts).\n` +
+    `export const LEAF_CRITICAL_CSS: string =\n  ${JSON.stringify(css)};\n` +
+    `export const LEAF_CRITICAL_CSS_SHA256: string = ${JSON.stringify(sha256)};\n`;
+  return { text, sha256 };
+}
+
+const { text, sha256 } = build();
+writeFileSync(join(repoRoot, OUT), text);
+console.log(`${OUT}: ${text.length} chars, sha256 ${sha256}`);

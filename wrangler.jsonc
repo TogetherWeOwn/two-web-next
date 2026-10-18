@@ -6,12 +6,15 @@
   "compatibility_date": "2026-09-29",
   "compatibility_flags": ["nodejs_compat"],
   "observability": { "enabled": true },
-  // Staging Neon is eu-central-1 and every statement is a round trip through Hyperdrive, so run
-  // the Worker beside it. Served from CDG/AMS, DB-bound requests had a median of 125-195 ms; served
-  // from ORD/MSP/DFW/SEA/IAD (where GitHub-hosted runners land) 0.5-1.8 s, p95 3-4.6 s. A
-  // far-away user now pays one hop to the Worker instead of one per statement. env.production
-  // opts out below: its database lives elsewhere and that placement is a cutover decision.
-  "placement": { "region": "aws:eu-central-1" },
+  // Staging database is PlanetScale us-east-1, so this Worker is placed
+  // beside it (aws:us-east-1): every statement is a Hyperdrive round trip,
+  // and the pre-repoint eu-central-1 pin (beside the retired Neon branch)
+  // made each one transatlantic. Live /up from this run's host took 1.32 s
+  // under the old pin (2026-10-15); re-measure after the first deploy on
+  // this placement before quoting a new figure.
+  // env.production opts out below: its database lives elsewhere and that
+  // placement is a cutover decision.
+  "placement": { "region": "aws:us-east-1" },
   // Deploy the Tail Worker first; it has no public route and its own optional webhook secret.
   "tail_consumers": [{ "service": "two-web-next-alerts" }],
   "workers_dev": false,
@@ -21,40 +24,33 @@
   // Staging host. The Discord application must list ${APP_URL}/auth/discord/callback as a redirect URI.
   "routes": [{ "pattern": "next.togetherweown.com", "custom_domain": true }],
   // W13: Laravel queue + scheduler parity (TOG-9692). Cron expressions are pinned to
-  // src/jobs/constants.ts by test/jobs-constants.test.ts.
-  "triggers": { "crons": ["*/10 * * * *", "0 0 * * *"] },
+  // src/jobs/constants.ts by test/jobs-constants.test.ts. Staging consumers
+  // and crons live on two-web-jobs (wrangler.jobs.jsonc): the web
+  // Worker only produces after the handoff, so a queue keeps exactly one
+  // consumer and a cron exactly one owner. test/jobs-worker-config.test.ts
+  // pins the split. env.production below keeps its own cutover template.
+  "triggers": { "crons": [] },
   "queues": {
     "producers": [
       { "queue": "two-sync-event", "binding": "SYNC_EVENT_QUEUE" },
       { "queue": "two-internal-action", "binding": "INTERNAL_ACTION_QUEUE" }
-    ],
-    // Terminal outcomes are acked by the consumer; max_retries is only a backstop above the largest `tries`.
-    "consumers": [
-      {
-        "queue": "two-sync-event",
-        "max_retries": 10,
-        "max_batch_size": 10,
-        "max_batch_timeout": 5
-      },
-      {
-        "queue": "two-internal-action",
-        "max_retries": 10,
-        "max_batch_size": 10,
-        "max_batch_timeout": 5
-      }
     ]
   },
-  // Revision marker for `/up` (staging only). Bindings are not inherited by
-  // `env.production`, so production stays unmarked until a reviewed cutover PR
-  // declares this binding there. The deploy workflow tags each Version with its
-  // commit SHA; `/up` reads both back so a rollback target is provable live.
+  // Revision marker for `/up` and the release fields on structured log
+  // lines. Bindings are not inherited by `env.production`, which declares
+  // its own copy below. The deploy workflows tag each Version with its
+  // commit SHA; `/up` and the log emitters read it back so a rollback
+  // target and every log line's build are provable live.
   "version_metadata": { "binding": "CF_VERSION_METADATA" },
   // Every host, including static requests, must pass the Worker's host guard.
   "assets": { "directory": "./public", "binding": "ASSETS", "run_worker_first": true },
-  // Shared Postgres (S1: TOG-9679): Hyperdrive "two-web-next-staging" → Neon
-  // project two-web-next, staging branch (pooled endpoint). Local dev sets
+  // Shared Postgres: Hyperdrive "two-web-next-staging" → PlanetScale
+  // staging branch (direct endpoint). Local dev sets
   // CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_DB to agent-testdb.
-  "hyperdrive": [{ "binding": "DB", "id": "1d48a54abd3444009b7067c03c63ff9f" }],
+  "hyperdrive": [
+    { "binding": "DB", "id": "1d48a54abd3444009b7067c03c63ff9f" },
+    { "binding": "BOT_DB", "id": "63e6e86a91cb4e40b3ee54f459c8b450" }
+  ],
   // Not secrets (the client id is public: it is in every OAuth URL). Secrets (DISCORD_CLIENT_SECRET, DISCORD_BOT_TOKEN, SESSION_SECRET) are set with
   // `wrangler secret put` and never live in this file.
   "vars": {
@@ -63,8 +59,10 @@
     "FEATURED_IMAGE_HOSTS": "",
     "DISCORD_CLIENT_ID": "1539711683898118154",
     "DISCORD_GUILD_ID": "1545644954272137297",
-    // Approved SySOp only. Preflight checks this exact public deployment value.
-    "DISCORD_MODERATOR_ROLE_IDS": "508654771276873729",
+    // Approved staging Owner+Moderator pair only (guild-bound: these IDs exist
+    // solely in the staging guild above, never copy the production pair here).
+    // Preflight checks this exact public deployment value plus the binding.
+    "DISCORD_MODERATOR_ROLE_IDS": "1546211363578191873,1545648550329851946",
     // WEB-HOMEPAGE campaign invite (never expires, unlimited); the fallback when auto-join fails.
     "DISCORD_INVITE_URL": "https://discord.gg/4GwEDNRTtx"
   },
@@ -78,6 +76,9 @@
       // tail_consumers are not inherited from the top level: Wrangler needs
       // this repeated in every named environment that must page.
       "tail_consumers": [{ "service": "two-web-next-alerts-production" }],
+      // Not inherited from the top level: without this copy a production
+      // `/up` has no revision marker and its log lines carry no build SHA.
+      "version_metadata": { "binding": "CF_VERSION_METADATA" },
       // Cutover target only, NOT a DNS change or authorization to claim the apex.
       "routes": [{ "pattern": "togetherweown.com", "custom_domain": true }],
       "triggers": { "crons": ["*/10 * * * *", "0 0 * * *"] },
@@ -102,22 +103,28 @@
           }
         ]
       },
-      // PLACEHOLDER: replace with the separately provisioned production Hyperdrive
-      // id in a reviewed cutover PR. The manual workflow refuses this sentinel.
-      "hyperdrive": [{ "binding": "DB", "id": "7489f6ad630042148cdef83602f27b8a" }],
+      // Production Hyperdrive for the separately named two-web-next-production
+      // database, distinct from staging. The all-zero id is only the inert
+      // sentinel ci/production-deploy-gate.mjs refuses; it never lives here.
+      // Production database plus read-only bot-reader Hyperdrive binding.
+      "hyperdrive": [
+        { "binding": "DB", "id": "7489f6ad630042148cdef83602f27b8a" },
+        { "binding": "BOT_DB", "id": "14c00d84d1d446c1b117861f3b49473f" }
+      ],
       // Vars/bindings do not inherit across environments. No QA_AUTH_TOKEN in prod.
       // env.production.vars must repeat every var the worker reads: Wrangler
       // never inherits top-level vars into a named environment. The moderator
-      // list is the same approved SySOp role as staging (TOG-106); without it
-      // production boots with no moderators and admin authorization fails
-      // closed for everyone.
+      // list is the approved Owner+Moderator pair for the production guild
+      // above, unrelated to staging's pair (role IDs are guild-scoped);
+      // without it production boots with no moderators and admin
+      // authorization fails closed for everyone.
       "vars": {
         "APP_URL": "https://togetherweown.com",
         "FEATURED_IMAGE_HOSTS": "",
         "DISCORD_CLIENT_ID": "1539711683898118154",
         "DISCORD_GUILD_ID": "326474832151838730",
-        // Approved SySOp only. Production preflight checks this exact value.
-        "DISCORD_MODERATOR_ROLE_IDS": "508654771276873729",
+        // Approved Owner+Moderator pair only. Production preflight checks this exact value.
+        "DISCORD_MODERATOR_ROLE_IDS": "1546777855801954408,1546777856984481792",
         "DISCORD_INVITE_URL": "https://discord.gg/4GwEDNRTtx"
       }
     }

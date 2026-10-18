@@ -56,6 +56,7 @@ async function stub(t, change = () => {}) {
       method: request.method,
       cookie: request.headers.cookie,
       host: request.headers.host,
+      override: request.headers["cloudflare-workers-version-overrides"],
     });
     const fixture = fixtures[request.url];
     if (!fixture) {
@@ -133,6 +134,41 @@ test("CLI passes every route without following redirects or carrying cookies", a
     Object.keys(fixtures),
   );
   assert.ok(requests.every((r) => r.method === "GET" && r.cookie === undefined));
+  assert.ok(requests.every((r) => r.override === undefined));
+});
+
+test("version override pins every gradual-promotion probe to the new version", async (t) => {
+  const { url, requests } = await stub(t);
+  const override = 'two-web-next-production="22345678-1234-1234-1234-123456789abc"';
+  const result = await cli([url, "--version-override", override]);
+  assert.equal(result.code, 0, result.output);
+  assert.match(result.output, /17 routes, 0 failed assertions/);
+  assert.equal(requests.length, 17);
+  assert.ok(requests.every((r) => r.override === override));
+});
+
+test("CLI refuses a malformed version override without probing", async (t) => {
+  const { url, requests } = await stub(t);
+  for (const bad of ['two-web-next-production="NOT-A-UUID"', "no-quotes", ""]) {
+    const result = await cli([url, "--version-override", bad]);
+    assert.equal(result.code, 2, bad);
+    assert.match(result.output, /version-override/);
+  }
+  assert.equal(requests.length, 0);
+});
+
+test("CLI refuses a present version override without a value", async (t) => {
+  const { url, requests } = await stub(t);
+  const valid = 'two-web-next-production="22345678-1234-1234-1234-123456789abc"';
+  for (const args of [
+    [url, "--version-override"],
+    [url, "--version-override", valid, "--version-override"],
+  ]) {
+    const result = await cli(args);
+    assert.equal(result.code, 2, `${JSON.stringify(args)}: ${result.output}`);
+    assert.match(result.output, /version-override/);
+  }
+  assert.equal(requests.length, 0);
 });
 
 for (const path of Object.keys(fixtures)) {

@@ -23,7 +23,7 @@ Test aliases:
 | Every registered admin GET | OAuth 302 | 403, no login loop | 403, no login loop | 200 (missing resource 404), private/no-store |
 | Other public pages | Public event/aggregate data only | Same public representation | Same public representation | Same published-event representation |
 | `/e/:key` attendee list | No names/links/list count | No names/links/list count | Going names + profile links, logged, private/no-store | Same member representation; draft view allowed |
-| `/events.json`, `/events/:key` | JSON 401; browser OAuth 302 with guarded `next` | Session gate; no attendee representation | Event data/counts and own waitlist position, not attendee names; draft show 403 | Includes drafts; draft show noindex; no attendee representation |
+| `/events.json`, `/events/:key` | JSON 401; browser OAuth 302 with guarded `next` | Authenticated non-member receives the same published-only collection projection as members/moderators; no attendee representation or viewer state | Same public collection fields and counts; draft show remains 403 | Same published-only collection fields as other sessions; draft show remains moderator-only/noindex; no attendee representation |
 
 `test/event-attendees.test.ts` covers the mounted event page's four roles,
 original RSVP `created_at ASC` ordering (ID tie-break), status/event filtering,
@@ -91,9 +91,9 @@ handlers fail completeness. It remains an inventory guard. Runtime query observa
 | 340: unattributable profile read refused | Keyed real-row suites refuse absent, malformed, partial and wrong-table owner keys. All-null LEFT JOINs contribute no contents/subject. Explicit self-only and empty result sets remain valid. |
 | 360: schema only IDs/metadata, no copied contents | A `the access table stores identifiers/metadata only, not another copy of member contents` queries actual `information_schema.columns`; P no-content row scan. |
 | 377: route name, never URL/search term | A admin relation/join reads and real failure diagnostics + P `never records a URL, username or bio`. |
-| 391: append only | **Gap:** `recordAccess` inserts only, but no model/DB update/delete guard exists; arbitrary Db calls can mutate the table. Do not equate insert-only API with append-only enforcement. |
-| 406: retention deletes only expired records | `src/jobs/cron.ts:27` computes 90-day cutoff, but **production gap:** `src/jobs/worker.ts:17` wires `AccessLogStore.pruneOlderThan` to `notWired`, not a real DB adapter. No real-row prune parity claimed. |
-| 428: retention scheduled | J `wrangler cron triggers are the pinned expressions`, `routes by cron and rejects unknown expressions` + `src/jobs/worker.ts:43`. Scheduled dispatch exists; executable prune gap above remains. |
+| 391: append only | **Adapted:** DB-level append-only enforcement. `drizzle/1018_audit-immutability.sql` refuses UPDATE and TRUNCATE on `member_data_access_logs` for every role that cannot alter the tables and refuses DELETE unless the row is strictly older than 90 days by its own clock (`occurred_at < clock_timestamp() - interval '2160 hours'`). `test/audit-immutability.test.ts:131-159` proves INSERT succeeds while every UPDATE shape is refused with rows unchanged; `:162-184` proves DELETE is refused for current, future and in-window rows (one protected row refuses the whole statement); `:186-205` proves DELETE passes only for rows strictly older than 90 days. Documented exception: the table owner or a superuser can disable the triggers, so the web/bot runtime roles must not own these tables — not yet provisioned (`docs/db-migrations.md:169-176`). No other remaining gap for this row. |
+| 406: retention deletes only expired records | **Adapted:** real age-only prune adapter. `src/jobs/postgres.ts:34-76` (`pgPruneStores`) wires all five age-pruned tables to real SQL: `agent_event_audits`, `member_data_access_logs`, `join_attempts`, `agent_event_idempotency_keys` and `event_search_logs`. Strictly older than the cutoff goes (`< cutoff`), cutoff-exact rows survive, and both audit-table deletes additionally require their age column to be strictly older than 90 days by the database clock (`clock_timestamp() - interval '2160 hours'`) so a caller clock running ahead skips rather than raises. `src/jobs/cron.ts:89-112` (`pruneModelTables`) fans out to the five stores plus the session-expiry sweep and is idempotent (re-run reports zeros). `test/prune.test.ts:221-229` proves one expired row per age-pruned table deleted (sessions 2); `:231-255` proves cutoff-exact and fresh survivors; `:257-264` proves the idempotent zero re-run. The `notWired` symbol no longer exists (`grep -rn notWired src/` is empty). No remaining gap for this row. |
+| 428: retention scheduled | **Adapted:** scheduled prune dispatch is executable end to end. `wrangler.jsonc:25` pins both cron expressions; `src/jobs/constants.ts:27` (`PRUNE_CRON = "0 0 * * *"`) is the daily `model:prune` port; `src/jobs/cron.ts:115-127` (`runScheduled`) routes that expression to the prune job and throws on unknown expressions; `src/jobs/worker.ts:173-184` (`handleScheduled`) plugs `prune: (db) => pruneModelTables(pgPruneStores(db))` into the scheduled pass. `test/jobs.test.ts:119-122` pins the wrangler triggers; `:777-791` proves routing by cron with unknown-expression rejection. No remaining gap for this row. |
 | 435: unattributable user read refused | Same scoped keyed-user/undeclared-query denial proofs as lines 92/340; no arbitrary driver or future table coverage is claimed. |
 | 457: keyed user partial select recorded | `test/keyed-member-reads.test.ts` proves keyed partial users selections and owner-column validation with real PostgreSQL rows. |
 | 471: member reached through RSVP relation logged | A `admin roster/relation and join reads name the actual members, never profile or event ids`; R roster rows/scoping. Observed returned owner columns replace a hydration listener; current users rows are not required to attribute departed join-attempt members. |
@@ -123,38 +123,26 @@ npm run typecheck
 ```
 
 Other pre-existing suites still delete shared tables; serial files do not
-serialize other agents. Broad local tests must use a run-owned migrated test DB.
-Seven importer suites additionally pin the local database name to `two_web_next`,
-but create and drop only their own disposable schemas; run those separately
-rather than weakening their guards or pointing destructive suites at that DB.
-The audit suites require their own explicit URL opt-in. Exclude the fixed-name
+serialize other agents, so broad local tests use one fresh, run-owned database.
+Importer, migration, event-sync and jobs fixtures all pass through the global
+`testDatabaseUrl` guard, then create or use their own disposable schemas. No
+fixture needs to pin the database name to the shared `two_web_next` database.
+Audit suites require their own explicit URL opt-in. Exclude the fixed-name
 agent-testdb staging control too: it uses a different database and is not part of
 this run-owned lane. Staging-named mocked/loopback unit tests are not authorization
 to execute a staging probe.
 
 ```sh
-# Create this run-owned DB on agent-testdb first; validate the run UUID/name.
-TEST_DB="w15_${PAPERCLIP_RUN_ID//-/}"
-DATABASE_URL="postgres://agent_test@agent-testdb:5432/$TEST_DB" npm run db:migrate
-DATABASE_URL="postgres://agent_test@agent-testdb:5432/$TEST_DB" \
-  AUDIT_IMPORT_TEST_DATABASE_URL= W1_AGENT_TESTDB=0 npm run test:coverage -- \
-  --exclude test/import-content-funnel.test.ts \
-  --exclude test/import-events-rsvps-db.test.ts \
-  --exclude test/import-users-profiles.test.ts \
-  --exclude test/import-users-profiles-encoding.test.ts \
-  --exclude test/import-audit-db.test.ts \
-  --exclude test/import-audit-datestyle-db.test.ts \
-  --exclude test/import-verify.test.ts \
-  --exclude test/staging-fixed-agent-testdb.test.ts
-DATABASE_URL=postgres://agent_test@agent-testdb:5432/two_web_next \
-  AUDIT_IMPORT_TEST_DATABASE_URL=postgres://agent_test@agent-testdb:5432/two_web_next \
-  npx vitest run test/import-content-funnel.test.ts test/import-events-rsvps-db.test.ts \
-  test/import-users-profiles.test.ts test/import-users-profiles-encoding.test.ts \
-  test/import-audit-db.test.ts test/import-audit-datestyle-db.test.ts test/import-verify.test.ts
-npm run typecheck
-npm run config:check
-node --test ci/a11y-*.test.mjs
-npm run test:cutover
+# Create a fresh run-owned database first; replace the suffix with unused digits.
+export TEST_DB="two_web_next_tog1234567890123456" # replace with unused digits
+export DATABASE_URL="postgres://agent_test@agent-testdb:5432/$TEST_DB"
+export AUDIT_IMPORT_TEST_DATABASE_URL="$DATABASE_URL"
+unset LEGACY_DATABASE_URL
+export PGPASSWORD=
+export W1_AGENT_TESTDB=0
+npm run db:migrate
+npm run db:check
+npm run check
 ```
 
 CI's job-private Postgres service allows all suites in one run. Local accessibility
@@ -170,8 +158,10 @@ DDL failure fixtures run inside rollback-only transactions and do not persist
 schema damage.
 
 This slice does **not** certify complete Laravel parity or production acceptance.
-Append-only enforcement and the executable retention adapter remain separate
-unresolved controls. Optional MemberStats reads now return keyed owner columns;
+The citations above prove append-only enforcement for roles that cannot alter the
+tables (row 391), subject to the documented owner/superuser exception and pending
+runtime-role provisioning, and the executable retention adapter (rows 406/428).
+Optional MemberStats reads now return keyed owner columns;
 unavailable bot-owned views still hide the stats block within the existing budget.
 
 ## Scoped runtime control and evidence split

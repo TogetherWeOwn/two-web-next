@@ -1,5 +1,6 @@
 import type { Context, Next } from "hono";
 import { matchedRoutes } from "hono/route";
+import { currentReleaseFields, setReleaseMetadata } from "./release-tag";
 
 declare module "hono" {
   interface ContextVariableMap {
@@ -46,6 +47,11 @@ export async function requestLog(c: Context, next: Next): Promise<void> {
   const started = performance.now();
   const requestId = safeRequestId(c.req.header("cf-ray")) ?? newRequestId();
   c.set("requestId", requestId);
+  // Seed the per-isolate release identity before any downstream alert can
+  // fire, so error lines from this request carry the same build SHA.
+  setReleaseMetadata(
+    (c.env as { CF_VERSION_METADATA?: { tag?: unknown } } | undefined)?.CF_VERSION_METADATA,
+  );
   // Hono handles downstream exceptions before next resolves. Run this wrapper
   // outermost so downstream response replacements are included in the status.
   // Source: https://hono.dev/docs/guides/middleware#execution-order
@@ -61,6 +67,9 @@ export async function requestLog(c: Context, next: Next): Promise<void> {
       status: c.res.status,
       duration_ms: Math.max(0, Math.round((performance.now() - started) * 100) / 100),
       colo: typeof colo === "string" && /^[A-Z]{3}$/.test(colo) ? colo : null,
+      // Same fields on every structured line: this record has no error.
+      error_class: null,
+      ...currentReleaseFields(),
     }),
   );
 }

@@ -33,10 +33,30 @@ function table(rows) {
   ].join("\n");
 }
 
-const scopes = ["src/admin/", "src/events/", "src/join/", "src/sessions.ts"];
+const scopes = [
+  "src/admin/",
+  "src/events/",
+  "src/join/",
+  "src/sessions.ts",
+  "src/jobs/",
+  "src/bot/",
+  "src/agent-events/",
+  "src/profiles/",
+  "src/auth/",
+  "src/invite.ts",
+  "src/return-journey.ts",
+  "src/write-recovery.tsx",
+  "src/kit-*",
+  "src/counts.ts",
+  "src/seo.ts",
+];
 const scoped = scopes.map((scope) => {
   const entries = files.filter(({ file }) =>
-    scope.endsWith("/") ? file.startsWith(scope) : file === scope,
+    scope.endsWith("*")
+      ? file.startsWith(scope.slice(0, -1))
+      : scope.endsWith("/")
+        ? file.startsWith(scope)
+        : file === scope,
   );
   if (entries.length === 0) throw new Error(`Coverage report is missing required scope: ${scope}`);
   return { file: scope, coverage: aggregate(entries) };
@@ -57,6 +77,6 @@ console.log(
     "",
     table(leastCovered),
     "",
-    "Download the coverage artifact for the HTML report, LCOV and JSON summary.",
+    "Download the coverage artifact for the JSON summary.",
   ].join("\n"),
 );

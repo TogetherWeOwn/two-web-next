@@ -35,9 +35,30 @@ const routes = [
   },
 ];
 
+// versionOverride pins gradual-promotion probes to the new Worker version
+// through Cloudflare's version-override header, so a 5% canary is tested
+// directly instead of through sampled traffic. Format:
+// <worker-name>="<lowercase version uuid>".
+export const VERSION_OVERRIDE_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}="[0-9a-f-]{36}"$/;
+
+export function assertVersionOverride(value) {
+  if (
+    typeof value !== "string" ||
+    !VERSION_OVERRIDE_PATTERN.test(value) ||
+    !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"$/.test(
+      value.slice(value.indexOf('="') + 2),
+    )
+  ) {
+    throw new Error(
+      'version-override must look like worker-name="12345678-1234-1234-1234-123456789abc"',
+    );
+  }
+  return value;
+}
+
 export async function smoke(
   baseUrl,
-  { timeoutMs = 5_000, log = console.log, allowIndexable = false } = {},
+  { timeoutMs = 5_000, log = console.log, allowIndexable = false, versionOverride } = {},
 ) {
   const base = new URL(baseUrl);
   if (
@@ -52,6 +73,11 @@ export async function smoke(
       "base-url must be an HTTP(S) origin without credentials, path, query or fragment",
     );
   }
+  if (versionOverride !== undefined) assertVersionOverride(versionOverride);
+  const overrideHeaders =
+    versionOverride === undefined
+      ? {}
+      : { "Cloudflare-Workers-Version-Overrides": versionOverride };
   let failures = 0;
   for (const route of routes) {
     let routeFailures = 0;
@@ -68,6 +94,7 @@ export async function smoke(
       const response = await fetch(new URL(route.path, base), {
         redirect: "manual",
         signal: AbortSignal.timeout(timeoutMs),
+        headers: overrideHeaders,
       });
       check(
         route.statuses.includes(response.status),
@@ -207,18 +234,34 @@ export async function smoke(
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const args = process.argv.slice(2);
-  const [baseUrl, flag] = args;
-  if (
-    (args.length !== 1 && args.length !== 2) ||
-    (flag !== undefined && flag !== "--allow-indexable")
-  ) {
-    console.error("Usage: node bin/smoke.mjs <base-url> [--allow-indexable]");
+  const [baseUrl, ...flags] = args;
+  let allowIndexable = false;
+  let versionOverride;
+  let usage = false;
+  for (let i = 0; i < flags.length; i += 1) {
+    if (flags[i] === "--allow-indexable") {
+      allowIndexable = true;
+    } else if (flags[i] === "--version-override") {
+      const value = flags[i + 1];
+      if (value === undefined) {
+        usage = true;
+      } else {
+        versionOverride = value;
+      }
+      i += 1;
+    } else {
+      usage = true;
+    }
+  }
+  if (typeof baseUrl !== "string" || usage) {
+    console.error(
+      'Usage: node bin/smoke.mjs <base-url> [--allow-indexable] [--version-override worker-name="<version-uuid>"]',
+    );
     process.exitCode = 2;
   } else {
     try {
-      process.exitCode = (await smoke(baseUrl, { allowIndexable: flag === "--allow-indexable" }))
-        ? 0
-        : 1;
+      if (versionOverride !== undefined) assertVersionOverride(versionOverride);
+      process.exitCode = (await smoke(baseUrl, { allowIndexable, versionOverride })) ? 0 : 1;
     } catch (error) {
       console.error(`smoke: ${error instanceof Error ? error.message : "invalid base-url"}`);
       process.exitCode = 2;

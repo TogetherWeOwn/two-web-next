@@ -49,11 +49,17 @@ export type SessionStore = {
     replacement: DbSessionRow & { tokenHash: string; expiresAt: Date },
   ) => Promise<boolean>;
   revoke: (tokenHash: string) => Promise<void>;
+  /** Revoke every live token that shares a stable status/lineage hash. */
+  revokeLineage: (statusHash: string) => Promise<void>;
   /** Fresh login (TOG-12284): revoke every live session for this user except
    * the freshly issued token, so a pre-login/pre-join token — and any older
    * concurrent login — cannot survive sign-in. Hash-only, like revoke. */
   revokeUserSessions: (userId: string, exceptTokenHash: string) => Promise<void>;
-  /** Expiry GC (W13 model:prune): delete rows reads can no longer see. Returns rows removed. */
+  /** Expiry GC: delete rows reads can no longer see. Returns rows removed.
+   * The general store drains all eligible rows in one call. The scheduled
+   * `model:prune` pass uses its own bounded adapter (`pgPruneStores` in
+   * `src/jobs/postgres.ts`, drained via `drainPruneTable` in
+   * `src/jobs/cron.ts`), so scheduler holds stay capped. */
   sweepExpired: (now: Date) => Promise<number>;
 };
 
@@ -68,6 +74,11 @@ export type Sql = (<T = Record<string, unknown>[]>(
   ...values: unknown[]
 ) => Promise<T>) & { unsafe: (query: string) => Promise<unknown> };
 
+// Fixture/backfill helper only (TOG-19721): the canonical DDL for these
+// shapes lives in drizzle/1022_web-sessions-oauth-journeys.sql and is applied
+// by the migrate workflow. The request path must NOT call migrate(): the
+// runtime role holds read/write only, no schema CREATE. Tests use this to
+// build disposable schemas; its statements stay identical to the migration.
 const MIGRATION = [
   `create table if not exists web_sessions (
     token_hash text primary key,
@@ -191,6 +202,11 @@ export function createPostgresSessionStore(sql: Sql): SessionStore {
       await sql`update web_sessions set revoked_at = now()
         where token_hash = ${tokenHash} and revoked_at is null`;
     },
+    async revokeLineage(statusHash) {
+      await sql`update web_sessions set revoked_at = now()
+        where coalesce(status_hash, token_hash) = ${statusHash}
+          and revoked_at is null and expires_at > clock_timestamp()`;
+    },
     async revokeUserSessions(userId, exceptTokenHash) {
       await sql`update web_sessions set revoked_at = now()
         where user_id = ${userId} and token_hash != ${exceptTokenHash} and revoked_at is null`;
@@ -198,6 +214,8 @@ export function createPostgresSessionStore(sql: Sql): SessionStore {
     async sweepExpired(now) {
       // `<=`: reads require expires_at > now(), so a row expiring exactly at
       // `now` is already invisible. Idempotent: a second pass matches nothing.
+      // General-store full drain; the scheduled pass uses the bounded adapter
+      // in `src/jobs/postgres.ts` instead, so daily holds stay capped.
       const rows = await sql<Record<string, unknown>[]>`delete from web_sessions
         where expires_at <= ${now} returning 1`;
       return rows.length;
@@ -267,6 +285,11 @@ export function createMemorySessionStore(clock: () => number = Date.now): Sessio
     },
     async revoke(hash) {
       rows.delete(hash);
+    },
+    async revokeLineage(statusHash) {
+      for (const [hash, r] of rows) {
+        if (r.statusHash === statusHash) rows.delete(hash);
+      }
     },
     async revokeUserSessions(userId, exceptTokenHash) {
       for (const [hash, r] of rows) {

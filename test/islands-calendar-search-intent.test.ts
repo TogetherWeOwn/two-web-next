@@ -552,7 +552,7 @@ describe("EventsCalendar search intent before the next debounce", () => {
           ? "/events?view=calendar"
           : action === "drawer"
             ? "/events?past=1"
-            : "/events#event-a";
+            : "/events?event=a#event-a";
       if (action === "popstate") b.back(path);
       else b.navigate(path, action === "jump");
       expect(b.requests).toHaveLength(1);

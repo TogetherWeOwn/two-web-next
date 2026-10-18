@@ -64,8 +64,8 @@ function memLedger(): QueueLedger & {
     failed: async (id, _kind, _key, reason) => void rows.set(id, { state: "failed", reason }),
   };
 }
-function store(over: Partial<EventStore> = {}): EventStore & { mirrored: string[] } {
-  const mirrored: string[] = [];
+function store(over: Partial<EventStore> = {}): EventStore & { mirrored: (string | null)[] } {
+  const mirrored: (string | null)[] = [];
   return {
     mirrored,
     prepareSync: async (_eventKey, idempotencyKey, mirroredAt) => ({
@@ -261,6 +261,12 @@ describe("SyncEventToDiscord", () => {
       expect(carrier.retried).toBe(exhausted ? undefined : 32);
       expect(carrier.acked).toBe(exhausted);
       expect(ledger.rows.get("job")!.state).toBe(exhausted ? "failed" : "released");
+      if (!exhausted) {
+        // The durable release must agree with the queue delay on the original
+        // absolute deadline: start + 42s survives 10s of failed persistence
+        // (clock ends at start + 10s, 32s remain).
+        expect(ledger.rows.get("job")!.availableAt).toEqual(new Date(start + 42_000));
+      }
       expect(bot.upsertEvent).toHaveBeenCalledOnce();
       expect(events.mirrored).toEqual([]);
     });
@@ -728,6 +734,26 @@ describe("queue ledger (N3)", () => {
     expect(m.acked).toBe(false);
     expect(m.retried).toBe("now");
     expect(ledger.rows.get("j1")?.state).toBe("released");
+  });
+
+  it("an unexpected throw releases at the injected clock, not wall-clock time", async () => {
+    const nowValue = new Date(1_000_000);
+    const bot = {
+      upsertEvent: async () => {
+        throw new TypeError("boom");
+      },
+    } as unknown as BotClient;
+    const ledger = memLedger();
+    ledger.rows.set("j1", { state: "pending" });
+    const m = msg({ kind: "sync-event", eventKey: "e1", idempotencyKey: "k", jobId: "j1" }, 1);
+    await consume(
+      { messages: [m] },
+      { bot, events: store(), lock: memLock(), ledger, now: () => nowValue },
+    );
+    expect(m.acked).toBe(false);
+    expect(m.retried).toBe("now");
+    expect(ledger.rows.get("j1")?.state).toBe("released");
+    expect(ledger.rows.get("j1")?.availableAt).toEqual(nowValue);
   });
 });
 

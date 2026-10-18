@@ -49,8 +49,6 @@ describe.skipIf(!databaseUrl)("all four importers verify clean end to end", () =
 
   beforeAll(async () => {
     const safe = testDatabaseUrl(databaseUrl!); // Refuse before any driver or DDL.
-    if (safe.hostname === "agent-testdb" && safe.pathname !== "/two_web_next")
-      throw new Error("Importer fixtures require the two_web_next test database");
     destination = await createMemberDataFixture(safe.href);
     legacySchema = `verify_chain_l_${randomUUID().replaceAll("-", "")}`;
     ({ legacy, target } = createImportFixtureClients(

@@ -89,8 +89,11 @@ describe("error-alert:probe drill", () => {
       event: "error.alert",
       fingerprint: "DrillBoomError@/drill-probe",
       exception: "DrillBoomError",
+      error_class: "DrillBoomError",
       method: "POST",
       route: "/drill-probe",
+      build_sha: null,
+      release: null,
     });
   });
 
@@ -267,7 +270,7 @@ describe("queue:poison-probe drill", () => {
     vi.spyOn(console, "error").mockImplementation(() => {});
     const { ledger, rows } = memLedger();
     const { lock, held } = memLock();
-    const mirrored: string[] = [];
+    const mirrored: (string | null)[] = [];
     const events: EventStore = {
       ...memStore(),
       completeSync: async (_a, id) => void mirrored.push(id),

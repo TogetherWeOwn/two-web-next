@@ -1,0 +1,220 @@
+import { readFileSync, readdirSync, statSync } from "node:fs";
+import { join, extname } from "node:path";
+import { describe, expect, it } from "vitest";
+// @ts-expect-error Standalone CI tooling has no declaration file.
+import { readWranglerConfig } from "../ci/wrangler-config.mjs";
+import { RECONCILE_CRON } from "../src/jobs/constants";
+
+const SRC_DIR = "src";
+const DOCS_PATH = "docs/runbook-logs.md";
+
+/** Recursively collect all .ts and .tsx files under a directory. */
+function collectSourceFiles(dir: string): string[] {
+  const entries = readdirSync(dir);
+  const files: string[] = [];
+  for (const entry of entries) {
+    const full = join(dir, entry);
+    const st = statSync(full);
+    if (st.isDirectory()) {
+      files.push(...collectSourceFiles(full));
+    } else if (st.isFile() && (extname(entry) === ".ts" || extname(entry) === ".tsx")) {
+      files.push(full);
+    }
+  }
+  return files;
+}
+
+/** Extract the first argument of console.error("...") calls as a literal string. */
+function extractConsoleErrorLiterals(
+  filePath: string,
+): Array<{ literal: string; line: number; index: number }> {
+  const content = readFileSync(filePath, "utf8");
+  const results: Array<{ literal: string; line: number; index: number }> = [];
+  // Match against the whole file text so `\s*` spans the newline Biome emits
+  // when it formats a long message with a non-object second argument across
+  // multiple lines. The literal itself stays on one line.
+  const re = /console\.error\(\s*(["'])((?:\\.|(?!\1)[^\\\n])*)\1/g;
+  for (const m of content.matchAll(re)) {
+    // m[2] is the literal content (second capture group)
+    const g2: string | undefined = m[2];
+    if (typeof g2 === "string" && typeof m.index === "number") {
+      const line = content.slice(0, m.index).split("\n").length;
+      results.push({ literal: g2, line, index: m.index });
+    }
+  }
+  return results;
+}
+
+/** Every console.error( call site, literal or not, with its line number. */
+function extractAllConsoleErrorCalls(filePath: string): Array<{ line: number; index: number }> {
+  const content = readFileSync(filePath, "utf8");
+  const results: Array<{ line: number; index: number }> = [];
+  const re = /console\.error\s*\(/g;
+  for (const m of content.matchAll(re)) {
+    if (typeof m.index === "number") {
+      results.push({ line: content.slice(0, m.index).split("\n").length, index: m.index });
+    }
+  }
+  return results;
+}
+
+/** Extract documented prefixes from the Failure log lines table in docs/runbook-logs.md. */
+function extractDocumentedPrefixes(docsPath: string): Set<string> {
+  const content = readFileSync(docsPath, "utf8");
+  const prefixes = new Set<string>();
+  // Find the Failure log lines section and its table
+  const sectionMatch = content.match(/## Failure log lines([\s\S]*?)(?=\n## |$)/);
+  if (!sectionMatch) return prefixes;
+  const section = sectionMatch[1];
+  if (typeof section !== "string") return prefixes;
+  // Table rows are | prefix | ... |; the prefix cell may contain backticks
+  const rowRe = /^\|\s*`?([^`|]+?)`?\s*\|/gm;
+  // matchAll yields RegExpStringIterator; each match has capture groups as strings when matched
+  for (const m of section.matchAll(rowRe)) {
+    // m[1] is the prefix cell content
+    const g1: string | undefined = m[1];
+    if (typeof g1 === "string") {
+      const trimmed = g1.trim();
+      if (trimmed && trimmed !== "---" && !trimmed.toLowerCase().startsWith("message")) {
+        prefixes.add(trimmed);
+      }
+    }
+  }
+  return prefixes;
+}
+
+describe("runbook log lines coverage", () => {
+  it("every console.error literal first argument has a row in docs/runbook-logs.md", () => {
+    const documented = extractDocumentedPrefixes(DOCS_PATH);
+    expect(documented.size).toBeGreaterThan(0);
+    const sourceFiles = collectSourceFiles(SRC_DIR);
+    const missing: Array<{ file: string; line: number; literal: string }> = [];
+    const unshaped: Array<{ file: string; line: number }> = [];
+
+    for (const file of sourceFiles) {
+      const literals = extractConsoleErrorLiterals(file);
+      for (const { literal, line } of literals) {
+        // Exclude the known out-of-scope line (sync-settlement handled separately)
+        if (literal === "sync attempt settlement failed") continue;
+        if (!documented.has(literal)) {
+          missing.push({ file, line, literal });
+        }
+      }
+
+      // A console.error( call the literal matcher did not cover (template
+      // literal, variable, or member first argument) must be explicitly
+      // allowlisted, otherwise the catalogue silently stops covering it.
+      // Match by call index, not line: two calls can share one line.
+      const calls = extractAllConsoleErrorCalls(file);
+      const literalIndexes = new Set(literals.map((l) => l.index));
+      const uncovered = calls.filter((call) => !literalIndexes.has(call.index));
+      // src/alerts.ts is the shared sink that forwards an already-shaped
+      // line; it takes no message literal by design. Allow exactly that call
+      // (`console.error(line)`): any other uncovered call still fails.
+      const content = readFileSync(file, "utf8");
+      for (const call of uncovered) {
+        const text = content.slice(call.index, call.index + 20);
+        if (file === "src/alerts.ts" && text.includes("console.error(line)")) continue;
+        unshaped.push({ file, line: call.line });
+      }
+    }
+
+    if (missing.length > 0) {
+      const details = missing.map((m) => `${m.file}:${m.line}  "${m.literal}"`).join("\n  ");
+      throw new Error(
+        `Found console.error literals without a row in docs/runbook-logs.md Failure log lines table:\n  ${details}\n\nAdd a row for each literal (exact prefix match) or exclude it via the test allowlist if intentionally out of scope.`,
+      );
+    }
+
+    if (unshaped.length > 0) {
+      const details = unshaped.map((m) => `${m.file}:${m.line}`).join("\n  ");
+      throw new Error(
+        `Found console.error calls with no string-literal first argument and no allowlist entry:\n  ${details}\n\nAdd a catalogue row for the literal or allowlist the call site in test/runbook-log-lines.test.ts if it takes no message literal by design.`,
+      );
+    }
+
+    expect(missing).toHaveLength(0);
+  });
+});
+
+describe("missing sync-queue binding warning docs", () => {
+  const WARNING = "event write-back due but SYNC_EVENT_QUEUE is not bound";
+  const HEADING = "### Missing sync-queue binding warning";
+
+  /** The new runbook subsection, up to (not including) the next heading. */
+  function warningSection(): string {
+    const docs = readFileSync(DOCS_PATH, "utf8");
+    const start = docs.indexOf(HEADING);
+    expect(start, `missing ${HEADING} in ${DOCS_PATH}`).toBeGreaterThanOrEqual(0);
+    const rest = docs.slice(start + HEADING.length);
+    const next = rest.search(/\n#{1,3} /);
+    return next === -1 ? rest : rest.slice(0, next);
+  }
+
+  it("documents the exact warning at warn severity with its carried fields", () => {
+    const section = warningSection();
+    expect(section).toContain(WARNING);
+    expect(section).toContain("console.warn");
+    expect(section).toContain("eventKey");
+    expect(section).toContain("request_id");
+  });
+
+  it("explains the committed write, the sync gap, and the Operator route", () => {
+    const section = warningSection();
+    expect(section).toContain("remains committed");
+    expect(section).toContain("not evidence of Discord synchronization");
+    expect(section).toContain("Operator");
+  });
+
+  it("states reconcile recovery, the real request_id gap, and per-env bindings", () => {
+    const section = warningSection();
+    // Delayed, not lost: reconcile re-dispatches, unless jobs also lacks the binding.
+    expect(section).toContain("late, not lost");
+    expect(section).toContain("reconcileEvents");
+    expect(section).toContain("every 10");
+    expect(section).not.toContain("lost its carrier");
+    // Read-only per-event sync-state check, mirroring the enqueue-failed row.
+    expect(section).toContain(
+      "SELECT * FROM event_sync_attempts JOIN events ON events.id = event_sync_attempts.event_id WHERE events.event_key = '<eventKey>'",
+    );
+    expect(section).toContain("sync_revision, synced_revision");
+    // request_id is absent via the agent-events ingress, not scheduled/reconcile.
+    expect(section).toContain("POST /api/agent-events");
+    expect(section).toContain("agent_event_audits");
+    expect(section).not.toContain("absent for scheduled, reconcile");
+    // Top-level producers are staging; production declares its own block.
+    expect(section).toContain("env.production.queues.producers");
+    expect(section).toContain("two-web-next-production-sync-event");
+    expect(section).toContain("two-sync-event");
+    // Production reconcile runs on the web Worker: a missing binding there is stuck.
+    // Pin the ownership claim itself, not just the Worker name (which is a
+    // substring of the production queue name asserted above), and tie it to
+    // the wrangler configs so a handoff that moves the cron fails here.
+    expect(section).toContain(
+      "In the production cutover template this self-healing does not apply:",
+    );
+    expect(section).toContain("Worker `two-web-next-production` owns both");
+    expect(section).toContain("`*/10 * * * *` reconcile");
+    expect(section).toContain("cron (`env.production.triggers`, `wrangler.jsonc`)");
+    expect(section).toContain("stuck, not late");
+    expect(section).toContain("same `env.SYNC_EVENT_QUEUE`");
+    expect(section).toContain("which has no production env");
+    const production = readWranglerConfig(readFileSync("wrangler.jsonc", "utf8")).env?.production;
+    expect(production?.name).toBe("two-web-next-production");
+    expect(section).toContain(`Worker \`${production.name}\` owns both`);
+    expect(production?.triggers?.crons).toContain(RECONCILE_CRON);
+    expect(section).toContain(`\`${RECONCILE_CRON}\` reconcile`);
+    expect(production?.queues?.producers).toContainEqual({
+      queue: "two-web-next-production-sync-event",
+      binding: "SYNC_EVENT_QUEUE",
+    });
+    const jobsConfig = readWranglerConfig(readFileSync("wrangler.jobs.jsonc", "utf8"));
+    expect(jobsConfig.env ?? {}).not.toHaveProperty("production");
+  });
+
+  it("source still emits the warning with the documented fields", () => {
+    const source = readFileSync("src/events/sync.ts", "utf8");
+    expect(source).toContain(`console.warn("${WARNING}"`);
+    expect(source).toContain("request_id: message.requestId");
+  });
+});

@@ -51,7 +51,7 @@ describe("feed builders (byte fixtures)", () => {
         "X-WR-CALDESC:Upcoming events from Together We Own",
         "BEGIN:VEVENT",
         `UID:${KEY}@next.example.test`,
-        "SEQUENCE:1782907200",
+        "SEQUENCE:82907200",
         "DTSTAMP:20260701T120000Z",
         "DTSTART:20260715T180000Z",
         "DTEND:20260715T200000Z",
@@ -72,12 +72,15 @@ describe("feed builders (byte fixtures)", () => {
     );
   });
 
-  it.each([0n, 2147483647n])(
-    "emits valid persisted SEQUENCE %s independently of updatedAt",
-    (icsSequence) => {
+  it.each([
+    [0n, "0"],
+    [2147483647n, "447483647"],
+  ] as const)(
+    "emits base-shifted SEQUENCE %s for stored revision %s independently of updatedAt",
+    (icsSequence, emitted) => {
       const event = row({ icsSequence });
       for (const body of [eventIcs(event, APP_URL), eventsIcsCollection([event], APP_URL)]) {
-        expect(body).toContain(`SEQUENCE:${icsSequence}\r\n`);
+        expect(body).toContain(`SEQUENCE:${emitted}\r\n`);
         expect(body).toContain("DTSTAMP:20260701T120000Z\r\n");
       }
     },

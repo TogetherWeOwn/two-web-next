@@ -5,14 +5,23 @@
 // The app emits logs only; tail/worker.ts delivers allowlisted summaries to
 // the optional ops Discord webhook (see docs/runbook-alerts.md). Every alert is
 // ONE single-line JSON object on
-// console.error with `event` set to "error.alert" or "queue.failing".
+// console.error with `event` set to "error.alert", "queue.failing" or
+// "scheduled.failing".
 //
 // Alert lines carry the exception CLASS, never its message: a database error
 // message can carry the failed statement's bound values. Correlate by request
 // ID rather than logging exception messages or stacks.
 
+// Allowlisted scheduled-job discriminators for the direct scheduled.failing
+// paging signal. Sparse cron invocations can never trip the crash-loop gate
+// on their own, so one failed known reconcile/prune run pages directly.
+export const SCHEDULED_FAILING_JOBS = ["events:reconcile", "model:prune"] as const;
+export type ScheduledFailingJob = (typeof SCHEDULED_FAILING_JOBS)[number];
+
 import { AlertProbeError } from "./alert-probe-error";
+import { currentReleaseFields } from "./release-tag";
 import { safeRequestId } from "./request-log";
+import { projectSyncRetryDiagnostic, type SyncRetryDiagnostic } from "./jobs/sync-retry-diagnostic";
 
 export const ALERT_WINDOW_MS = 5 * 60 * 1000;
 const MAX_TRACKED = 500;
@@ -72,6 +81,11 @@ export class AlertRateLimit {
 
 const limiter = new AlertRateLimit();
 
+/** Test-only: clear the global per-fingerprint mute so alert assertions stay isolated. */
+export function __resetAlertRateLimitForTests(): void {
+  (limiter as unknown as { last: Map<string, number> }).last.clear();
+}
+
 type Sink = (line: string) => void;
 const consoleSink: Sink = (line) => console.error(line);
 
@@ -84,15 +98,18 @@ export function alertRequestError(
   if (!shouldReport(err)) return false;
   const fingerprint = fingerprintOf(err, req.route);
   if (!(opts.limiter ?? limiter).allow(fingerprint)) return false;
+  const errorClass = exceptionClass(err);
   (opts.sink ?? consoleSink)(
     JSON.stringify({
       level: "critical",
       event: "error.alert",
       fingerprint,
-      exception: exceptionClass(err),
+      exception: errorClass,
+      error_class: errorClass,
       method: req.method,
       route: req.route,
       request_id: safeRequestId(req.requestId),
+      ...currentReleaseFields(),
       ...(err instanceof AlertProbeError && err.probeId ? { probeId: err.probeId } : {}),
     }),
   );
@@ -107,17 +124,50 @@ export type FailedJob = {
   exception: string;
   probeId?: string;
   requestId?: string;
+  syncRetry?: SyncRetryDiagnostic;
 };
+
+/** Failed scheduled reconcile/prune run: one redacted scheduled.failing line per invocation, no mute. */
+export function alertScheduledFailing(
+  job: ScheduledFailingJob,
+  err: unknown,
+  sink: Sink = consoleSink,
+): void {
+  const errorClass = exceptionClass(err);
+  sink(
+    JSON.stringify({
+      level: "critical",
+      event: "scheduled.failing",
+      job,
+      exception: errorClass,
+      error_class: errorClass,
+      ...currentReleaseFields(),
+    }),
+  );
+}
 
 /** Failing queue job (ports Queue::failing): connection, queue, job class, attempts, exception. */
 export function alertQueueFailing(job: FailedJob, sink: Sink = consoleSink): void {
-  const { requestId, ...fields } = job;
+  let syncRetry: Partial<SyncRetryDiagnostic> = {};
+  try {
+    syncRetry = projectSyncRetryDiagnostic(
+      Object.getOwnPropertyDescriptor(job, "syncRetry")?.value,
+    );
+  } catch {}
   sink(
     JSON.stringify({
       level: "critical",
       event: "queue.failing",
-      ...fields,
-      request_id: safeRequestId(requestId),
+      connection: job.connection,
+      queue: job.queue,
+      job: job.job,
+      attempts: job.attempts,
+      exception: job.exception,
+      error_class: job.exception,
+      probeId: job.probeId,
+      request_id: safeRequestId(job.requestId),
+      ...currentReleaseFields(),
+      ...syncRetry,
     }),
   );
 }

@@ -67,5 +67,5 @@ if __name__ == "__main__":
         sys.exit(main())
     except (ValueError, OSError, IndexError):
         # Never echo untrusted inventory content or transport diagnostics.
-        print("neon-backup: manifest admission failed", file=sys.stderr)
+        print("db-backup: manifest admission failed", file=sys.stderr)
         sys.exit(1)

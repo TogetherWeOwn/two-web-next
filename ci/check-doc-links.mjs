@@ -1,0 +1,815 @@
+#!/usr/bin/env node
+// Checks relative file links and `#anchor` fragments in the Markdown files
+// GitHub renders for this repo: the root files (ROOT_FILES) plus the
+// contributor contracts (CONTRIBUTOR_CONTRACT_FILES), the in-tree guides
+// (IN_TREE_GUIDE_FILES) and docs/**/*.md. External `http(s)` links are
+// ignored (no network); fenced code blocks and inline code spans are skipped
+// for link checks. Literal current-repository implementation citations in
+// the parity evidence scope (PARITY_CITATION_FILES) are validated
+// separately: those live in inline code, so the link scan cannot see them.
+//
+// Exit codes: 0 = every link resolves, 1 = at least one broken link,
+// 2 = usage error or an unreadable file (fail closed, like check-bundle-budget).
+import {
+  existsSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+  mkdirSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+import assert from "node:assert/strict";
+
+const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+const ROOT_FILES = ["README.md", "CONTRIBUTING.md", "SECURITY.md"];
+// Contributor contracts GitHub renders at the repo root or under .github/:
+// an explicit list (not a glob) so silently dropping a file fails the
+// selftests below instead of passing with fewer files checked.
+const CONTRIBUTOR_CONTRACT_FILES = [
+  "AGENTS.md",
+  "CHANGELOG.md",
+  "CODE_OF_CONDUCT.md",
+  ".github/pull_request_template.md",
+];
+// In-tree guides with relative links into docs/ and test fixtures.
+const IN_TREE_GUIDE_FILES = ["bin/import/README.md", "ci/featured-proof/README.md"];
+const DOCS_DIR = "docs";
+
+// A link target with a URI scheme (http:, https:, mailto:, data:, ...) or a
+// root-absolute path (/TOG/issues/..., /admin, ...) is not a relative file
+// link, so the checker leaves it alone.
+function isSkippedTarget(target) {
+  return /^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(target) || target.startsWith("/");
+}
+
+function isMarkdownFile(path) {
+  return /\.(md|markdown|mdown)$/i.test(path);
+}
+
+// Rendered heading text, the way GitHub slugs it: links and images contribute
+// their visible text, code spans contribute their content, and emphasis pairs
+// contribute their inner text. Intra-word underscores are literal text (kept),
+// so `_` emphasis only counts at word boundaries.
+function stripTagRuns(input) {
+  const text = String(input);
+  let output = "";
+  let inTag = false;
+  for (let i = 0; i < text.length; i++) {
+    const char = text[i];
+    // Only `<` followed by a letter, `/` or `!` starts raw HTML (CommonMark).
+    // A bare `<` (for example `p95 < 300 ms`) is literal text, so keeping it
+    // preserves the rest of the heading for the slug.
+    if (!inTag && char === "<") {
+      if (/[A-Za-z/!]/.test(text[i + 1] ?? "")) {
+        // Only a `<...>` run closed by `>` is a tag (CommonMark raw HTML).
+        // An unclosed `<` (for example `if a<b then`) is literal text, so
+        // keeping it preserves the rest of the heading for the slug.
+        if (!text.includes(">", i + 1)) {
+          output += char;
+          continue;
+        }
+        inTag = true;
+        continue;
+      }
+      output += char;
+      continue;
+    }
+    if (char === ">" && inTag) {
+      inTag = false;
+      continue;
+    }
+    if (!inTag) output += char;
+  }
+  return output;
+}
+export function headingText(raw) {
+  // Markdown heading text is plain-text input and the return value is a
+  // slug-comparison string, never HTML output. Code spans are lifted out
+  // first: GitHub renders them literally, so `<div>` inside backticks
+  // contributes "div" to the slug instead of being stripped as a tag.
+  // Tags are stripped with a single-pass scanner (not a repeated regex
+  // replace) before links, images and emphasis below.
+  let text = String(raw);
+  const spans = [];
+  const lift = (_, inner) => {
+    spans.push(inner);
+    return `\u0000${spans.length - 1}\u0000`;
+  };
+  text = text.replace(/``([^`]+)``/g, lift).replace(/`([^`]*)`/g, lift);
+  text = stripTagRuns(text);
+  text = text.replace(/!\[([^\]]*)\]\([^()]*\)/g, "$1");
+  text = text.replace(/\[([^\]]*)\]\([^()]*\)/g, "$1");
+  text = text.replace(/\[([^\]]*)\]\[[^\]]*\]/g, "$1");
+  text = text.replace(/\*\*([^*]+)\*\*/g, "$1");
+  text = text.replace(/(?<!\w)__([^_]+)__(?!\w)/g, "$1");
+  text = text.replace(/\*([^*]+)\*/g, "$1");
+  text = text.replace(/(?<!\w)_([^_]+)_(?!\w)/g, "$1");
+  text = text.replace(/~~([^~]+)~~/g, "$1");
+  // Restore code spans last: GitHub renders them literally, so the link and
+  // emphasis passes above must not rewrite their content (`__init__` stays).
+  text = text.replace(/\u0000(\d+)\u0000/g, (_, index) => spans[Number(index)]);
+  return text;
+}
+
+// GitHub heading slugs: lowercase, drop every character except Unicode
+// letters/numbers, spaces, hyphens and underscores, then turn each remaining
+// space into one hyphen (so a double space becomes `--`, not `-`).
+export function slugifyHeading(raw) {
+  return headingText(raw)
+    .replace(/\s/g, " ")
+    .trim()
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N} _-]/gu, "")
+    .replace(/ /g, "-");
+}
+
+// Every `#anchor` GitHub generates for a Markdown source: one slug per ATX
+// heading (duplicate headings gain `-1`, `-2`, ... suffixes, first wins the
+// bare slug), plus explicit `id`/`name` attributes on raw HTML elements.
+// Headings inside fenced code blocks are code samples, not headings.
+export function collectAnchors(text) {
+  const anchors = new Set();
+  const seen = new Map();
+  let fenceChar = null;
+  let fenceLength = 0;
+  const lines = text.split(/\r?\n/);
+  for (const line of lines) {
+    const fence = /^\s*(`{3,}|~{3,})/.exec(line);
+    if (fenceChar) {
+      if (line.trimStart().startsWith(fenceChar) && /^\s*(`{3,}|~{3,})/.test(line)) {
+        const run = /^\s*(`{3,}|~{3,})/.exec(line)[1];
+        if (run[0] === fenceChar && run.length >= fenceLength) {
+          fenceChar = null;
+          fenceLength = 0;
+        }
+      }
+      continue;
+    }
+    if (fence) {
+      fenceChar = fence[1][0];
+      fenceLength = fence[1].length;
+      continue;
+    }
+    const heading = /^(#{1,6})\s+(.*)$/.exec(line);
+    if (heading) {
+      const raw = heading[2].replace(/\s+#+\s*$/, "");
+      const base = slugifyHeading(raw);
+      if (!base) continue;
+      const count = seen.get(base) ?? 0;
+      seen.set(base, count + 1);
+      anchors.add(count === 0 ? base : `${base}-${count}`);
+    }
+    for (const match of line.matchAll(
+      /<[a-zA-Z][^<>]*\s(?:id|name)\s*=\s*["']([^"'<>]+)["'][^<>]*>/g,
+    )) {
+      anchors.add(match[1]);
+    }
+  }
+  return anchors;
+}
+
+function stripInlineCode(line) {
+  let previous;
+  let text = line;
+  do {
+    previous = text;
+    text = text.replace(/``[^`]*``/g, "``").replace(/`[^`\n]*`/g, "");
+  } while (text !== previous);
+  return text;
+}
+
+// Documents whose inline code spans carry evidence citations naming
+// current-repository implementation files, repo-root-relative. Narrow scope
+// on purpose (no blanket inline-code validation): legacy/historical paths,
+// route examples and globs must remain valid prose everywhere else.
+const PARITY_CITATION_FILES = ["docs/parity.md"];
+
+// Every inline code span on a line, double-backtick spans first so their
+// content is not split into single-backtick fragments.
+function scanCitationSpans(line) {
+  const spans = [];
+  for (const match of line.matchAll(/``([^`]+)``|`([^`\n]*)`/g)) {
+    spans.push(match[1] ?? match[2]);
+  }
+  return spans;
+}
+
+// A literal current-repository implementation citation (`src/...`,
+// `test/...`, optionally with a `:line`, `:line,line` or `:start-end`
+// suffix), or null when the span is prose, a command (`node ci/tool.mjs`),
+// a route example (`GET /events/{event}`), a glob (`test/islands-*.test.ts`),
+// a legacy path (`routes/web.php`, `app/Mail`, `config/mail.php`) or any
+// other non-path code. Returns the repo-root-relative file part.
+export function citationTarget(span) {
+  const text = String(span).trim();
+  const match = /^(src\/[^\s`]+|test\/[^\s`]+)/.exec(text);
+  if (!match) return null;
+  const file = match[1]
+    .replace(/[.,;!?)"']+$/, "")
+    .replace(/#.*$/, "")
+    .replace(/:\d+(?:[,-]\d+)*$/, "");
+  if (!file || file.includes("*")) return null;
+  return file;
+}
+
+// Inline links `[text](target)` and images `![alt](target)` on one line,
+// with balanced-paren destinations (titles after a space are dropped).
+// Returns [{ text, target, index }].
+function scanInlineLinks(line) {
+  const links = [];
+  const pattern = /!?\[([^\]\n]*)\]\(/g;
+  let match;
+  while ((match = pattern.exec(line)) !== null) {
+    let depth = 1;
+    let cursor = match.index + match[0].length;
+    while (cursor < line.length && depth > 0) {
+      if (line[cursor] === "(") depth += 1;
+      else if (line[cursor] === ")") depth -= 1;
+      cursor += 1;
+    }
+    if (depth !== 0) continue;
+    const inside = line.slice(match.index + match[0].length, cursor - 1).trim();
+    if (!inside) continue;
+    let target;
+    if (inside.startsWith("<")) {
+      const close = inside.indexOf(">");
+      if (close === -1) continue;
+      target = inside.slice(1, close).trim();
+    } else {
+      target = inside.split(/\s+/)[0];
+    }
+    if (!target) continue;
+    links.push({ text: match[1], target, index: match.index });
+    pattern.lastIndex = cursor;
+  }
+  return links;
+}
+
+function decodeTarget(target) {
+  try {
+    return decodeURIComponent(target);
+  } catch {
+    return target;
+  }
+}
+
+// Reference definitions `[label]: target` outside fenced code, for the
+// `[text][label]` and `[text][]` links below. Bare `[text]` shortcuts stay
+// unchecked: they are indistinguishable from prose brackets.
+function collectDefinitions(lines, inCode) {
+  const definitions = new Map();
+  lines.forEach((line, index) => {
+    if (inCode[index]) return;
+    const match = /^\s{0,3}\[([^\]\n]+)\]:\s*(\S+)/.exec(line);
+    if (match) definitions.set(match[1].toLowerCase(), match[2]);
+  });
+  return definitions;
+}
+
+function scanReferenceLinks(line, definitions) {
+  const links = [];
+  const pattern = /!\[([^\]\n]*)\]\[([^\]\n]*)\]|\[([^\]\n]+)\]\[([^\]\n]*)\]/g;
+  let match;
+  while ((match = pattern.exec(line)) !== null) {
+    const label =
+      (match[2] ?? match[4] ?? "").toLowerCase() || (match[1] ?? match[3]).toLowerCase();
+    const target = definitions.get(label);
+    if (target) links.push({ text: match[1] ?? match[3], target, index: match.index });
+  }
+  return links;
+}
+
+function fenceMask(lines) {
+  const inCode = new Array(lines.length).fill(false);
+  let fenceChar = null;
+  let fenceLength = 0;
+  lines.forEach((line, index) => {
+    if (fenceChar) {
+      inCode[index] = true;
+      const run = /^\s*(`{3,}|~{3,})/.exec(line);
+      if (run && run[1][0] === fenceChar && run[1].length >= fenceLength) {
+        fenceChar = null;
+        fenceLength = 0;
+      }
+      return;
+    }
+    const run = /^\s*(`{3,}|~{3,})/.exec(line);
+    if (run) {
+      inCode[index] = true;
+      fenceChar = run[1][0];
+      fenceLength = run[1].length;
+    }
+  });
+  return inCode;
+}
+
+function walkMarkdownFiles(root) {
+  const files = [];
+  for (const name of [...ROOT_FILES, ...CONTRIBUTOR_CONTRACT_FILES, ...IN_TREE_GUIDE_FILES])
+    files.push(join(root, name));
+  const docs = join(root, DOCS_DIR);
+  const walk = (dir) => {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const path = join(dir, entry.name);
+      if (entry.isDirectory()) walk(path);
+      else if (entry.isFile() && /\.md$/i.test(entry.name)) files.push(path);
+    }
+  };
+  walk(docs);
+  return files;
+}
+
+export function checkLinks(root, output = console) {
+  let files;
+  try {
+    files = walkMarkdownFiles(root);
+  } catch (error) {
+    output.error(`doc links: cannot list Markdown files: ${error.message}`);
+    return 2;
+  }
+  const anchorCache = new Map();
+  const anchorsFor = (path) => {
+    if (!anchorCache.has(path)) {
+      anchorCache.set(path, collectAnchors(readFileSync(path, "utf8")));
+    }
+    return anchorCache.get(path);
+  };
+  const errors = [];
+  const citationScope = new Set(PARITY_CITATION_FILES.map((path) => join(root, path)));
+  for (const file of files) {
+    let text;
+    try {
+      text = readFileSync(file, "utf8");
+    } catch (error) {
+      output.error(`doc links: cannot read ${file}: ${error.message}`);
+      return 2;
+    }
+    const lines = text.split(/\r?\n/);
+    const inCode = fenceMask(lines);
+    const definitions = collectDefinitions(lines, inCode);
+    lines.forEach((rawLine, index) => {
+      if (inCode[index]) return;
+      const line = stripInlineCode(rawLine);
+      const links = [...scanInlineLinks(line), ...scanReferenceLinks(line, definitions)];
+      // Relative autolinks such as <./other.md#anchor>.
+      for (const match of line.matchAll(/<(\.{1,2}\/[^<>\s]*)>/g)) {
+        links.push({ text: "", target: match[1], index: match.index });
+      }
+      for (const link of links) {
+        const hash = link.target.indexOf("#");
+        const pathPart = (hash === -1 ? link.target : link.target.slice(0, hash)).split("?")[0];
+        const fragment = hash === -1 ? "" : link.target.slice(hash + 1);
+        if (pathPart === "" && fragment === "") continue;
+        if (pathPart !== "" && isSkippedTarget(pathPart)) continue;
+        const decodedPath = decodeTarget(pathPart);
+        const resolved = pathPart === "" ? file : resolve(dirname(file), decodedPath);
+        if (!existsSync(resolved)) {
+          errors.push(`${file}:${index + 1}: missing link target "${link.target}" (from ${file})`);
+          continue;
+        }
+        if (!fragment) continue;
+        let isDirectory = false;
+        try {
+          isDirectory = statSync(resolved).isDirectory();
+        } catch {
+          continue;
+        }
+        // Directory listings and non-Markdown files have no heading anchors.
+        if (isDirectory || !isMarkdownFile(resolved)) continue;
+        const fragmentDecoded = decodeTarget(fragment);
+        if (!anchorsFor(resolved).has(fragmentDecoded)) {
+          errors.push(
+            `${file}:${index + 1}: missing anchor "#${fragment}" in "${link.target}" (from ${file})`,
+          );
+        }
+      }
+      // Literal implementation citations live in inline code, which the link
+      // scan above strips: resolve `src/`/`test/` spans against the repo
+      // root. Citations are repo-root-relative even in nested documents.
+      if (citationScope.has(file)) {
+        for (const span of scanCitationSpans(rawLine)) {
+          const target = citationTarget(span);
+          if (!target) continue;
+          if (!existsSync(join(root, decodeTarget(target)))) {
+            errors.push(
+              `${file}:${index + 1}: missing implementation citation "${target}" (from ${file})`,
+            );
+          }
+        }
+      }
+    });
+  }
+  // Friendly relative paths in output; absolute paths only for files outside root.
+  // Keep output deterministic for review.
+  const pretty = errors.map((error) => error.replaceAll(`${root}/`, "")).sort();
+  for (const error of pretty) output.error(`doc links: ${error}`);
+  if (pretty.length) {
+    output.error(`doc links: ${pretty.length} broken link(s).`);
+    return 1;
+  }
+  output.log(`doc links: ok (${files.length} Markdown files).`);
+  return 0;
+}
+
+function selftest() {
+  const root = mkdtempSync(join(process.env.PAPERCLIP_RUN_SCRATCH_DIR || tmpdir(), "doc-links-"));
+  let cases = 0;
+  try {
+    const check = (name, setup, expected, diagnostics = []) => {
+      rmSync(root, { recursive: true, force: true });
+      mkdirSync(root, { recursive: true });
+      // Every explicitly scoped file must exist in the scratch tree: the
+      // checker fails closed on unreadable files, so stub the scope here and
+      // let each setup overwrite the files it exercises.
+      for (const stub of [...ROOT_FILES, ...CONTRIBUTOR_CONTRACT_FILES, ...IN_TREE_GUIDE_FILES]) {
+        write(stub, "# Stub\n");
+      }
+      // The docs walk requires the directory to exist; the stub carries no
+      // links so it cannot change any expectation.
+      write("docs/scope-stub.md", "# Stub\n");
+      setup();
+      const messages = [];
+      const code = checkLinks(root, {
+        log() {},
+        error(text) {
+          messages.push(text);
+        },
+      });
+      assert.equal(code, expected, `${name}: exit ${code}, got ${messages.join("; ")}`);
+      for (const diagnostic of diagnostics) {
+        assert.ok(
+          messages.some((text) => text.includes(diagnostic)),
+          `${name}: missing diagnostic ${JSON.stringify(diagnostic)} in ${messages.join("; ")}`,
+        );
+      }
+      cases += 1;
+      console.log(`PASS ${name}`);
+    };
+    const write = (path, content) => {
+      mkdirSync(dirname(join(root, path)), { recursive: true });
+      writeFileSync(join(root, path), content);
+    };
+    const target = [
+      "# Target",
+      "",
+      "## Setup",
+      "",
+      "Some words.",
+      "",
+      "## Setup",
+      "",
+      "## Change-gated CI and `ci-ok`",
+      "",
+      "## Production cutover capability ↔ reverse map",
+      "",
+    ].join("\n");
+
+    check(
+      "good links pass",
+      () => {
+        write("README.md", "# Root\n");
+        write("CONTRIBUTING.md", "# Contributing\n");
+        write("SECURITY.md", "# Security\n");
+        write(
+          "docs/good.md",
+          [
+            "# Hello World",
+            "",
+            "[file](target.md)",
+            "[same](#hello-world)",
+            "[cross](target.md#setup)",
+            "[duplicate](target.md#setup-1)",
+            "[code heading](target.md#change-gated-ci-and-ci-ok)",
+            "[punctuation](target.md#production-cutover-capability--reverse-map)",
+            "[external](https://example.com/target.md#setup)",
+            "[mail](mailto:someone@example.com)",
+            "[root absolute](/TOG/issues/1)",
+            "",
+          ].join("\n"),
+        );
+        write("docs/target.md", target);
+      },
+      0,
+    );
+
+    check(
+      "broken links fail with file, line and target",
+      () => {
+        write("README.md", "# Root\n");
+        write("CONTRIBUTING.md", "# Contributing\n");
+        write("SECURITY.md", "# Security\n");
+        write(
+          "docs/page.md",
+          ["# Page", "", "[lost](missing.md)", "[anchor](target.md#no-such-anchor)"].join("\n"),
+        );
+        write("docs/target.md", target);
+      },
+      1,
+      [
+        'docs/page.md:3: missing link target "missing.md"',
+        'docs/page.md:4: missing anchor "#no-such-anchor"',
+      ],
+    );
+
+    check(
+      "file case mismatch fails",
+      () => {
+        write("README.md", "# Root\n");
+        write("CONTRIBUTING.md", "# Contributing\n");
+        write("SECURITY.md", "# Security\n");
+        write("docs/page.md", "# Page\n\n[wrong case](Target.md)\n");
+        write("docs/target.md", target);
+      },
+      1,
+      ['missing link target "Target.md"'],
+    );
+
+    check(
+      "anchor case mismatch fails",
+      () => {
+        write("README.md", "# Root\n");
+        write("CONTRIBUTING.md", "# Contributing\n");
+        write("SECURITY.md", "# Security\n");
+        write("docs/page.md", "# Page\n\n[wrong case](target.md#Setup)\n");
+        write("docs/target.md", target);
+      },
+      1,
+      ['missing anchor "#Setup"'],
+    );
+
+    check(
+      "links inside fenced code and inline code are skipped",
+      () => {
+        write("README.md", "# Root\n");
+        write("CONTRIBUTING.md", "# Contributing\n");
+        write("SECURITY.md", "# Security\n");
+        write(
+          "docs/page.md",
+          [
+            "# Page",
+            "",
+            "```md",
+            "[fenced](missing.md)",
+            "[fenced anchor](#no-such-anchor)",
+            "# Not a heading",
+            "```",
+            "",
+            "`[inline](missing.md)`",
+            "",
+            "[real](target.md)",
+            "",
+          ].join("\n"),
+        );
+        write("docs/target.md", target);
+      },
+      0,
+    );
+
+    check(
+      "duplicate heading anchors resolve with suffixes",
+      () => {
+        write("README.md", "# Root\n");
+        write("CONTRIBUTING.md", "# Contributing\n");
+        write("SECURITY.md", "# Security\n");
+        write(
+          "docs/page.md",
+          ["# Page", "", "[first](target.md#setup)", "[second](target.md#setup-1)"].join("\n"),
+        );
+        write("docs/target.md", target);
+      },
+      0,
+    );
+
+    check(
+      "second duplicate suffix fails when only two headings exist",
+      () => {
+        write("README.md", "# Root\n");
+        write("CONTRIBUTING.md", "# Contributing\n");
+        write("SECURITY.md", "# Security\n");
+        write("docs/page.md", "# Page\n\n[third](target.md#setup-2)\n");
+        write("docs/target.md", target);
+      },
+      1,
+      ['missing anchor "#setup-2"'],
+    );
+
+    check(
+      "missing parity implementation citation fails with file, line and target",
+      () => {
+        write(
+          "docs/parity.md",
+          ["# Parity", "", "Adapter on the pg store (`src/jobs/event-store-pg.ts`).", ""].join(
+            "\n",
+          ),
+        );
+        write("src/jobs/events.ts", "export function pgEventStore() {}\n");
+      },
+      1,
+      ['docs/parity.md:3: missing implementation citation "src/jobs/event-store-pg.ts"'],
+    );
+
+    check(
+      "existing parity citations pass, including line and range suffixes",
+      () => {
+        write(
+          "docs/parity.md",
+          [
+            "# Parity",
+            "",
+            "Adapter `src/jobs/events.ts:67`, proof `test/recurrence.test.ts:135,194`,",
+            "range `test/event-writeback.test.ts:332-351` and plain `src/jobs/cron.ts`.",
+            "",
+          ].join("\n"),
+        );
+        write("src/jobs/events.ts", "export function pgEventStore() {}\n");
+        write("src/jobs/cron.ts", "export function reconcileEvents() {}\n");
+        write("test/recurrence.test.ts", "// fixture\n");
+        write("test/event-writeback.test.ts", "// fixture\n");
+      },
+      0,
+    );
+
+    check(
+      "parity legacy paths, routes, globs, non-path code and fences stay valid",
+      () => {
+        write(
+          "docs/parity.md",
+          [
+            "# Parity",
+            "",
+            "Legacy `routes/web.php`, `app/Mail`, `config/mail.php`.",
+            "Routes `GET /events/{event}`, `/e/{key}`, `ALL /admin/*`.",
+            "Globs `test/islands-*.test.ts`, `content/welcome/*`.",
+            "Not paths `reconcileEvents`, `EventService::materialize`, `node ci/tool.mjs`.",
+            "Current `src/jobs/events.ts` and `test/recurrence.test.ts`.",
+            "",
+            "```md",
+            "Fenced `src/missing-in-fence.ts` is not a citation.",
+            "```",
+            "",
+          ].join("\n"),
+        );
+        write("src/jobs/events.ts", "export function pgEventStore() {}\n");
+        write("test/recurrence.test.ts", "// fixture\n");
+      },
+      0,
+    );
+
+    check(
+      "implementation citations in other documents are not checked",
+      () => {
+        write("docs/page.md", "# Page\n\nMissing `src/no-such-file.ts` here.\n");
+      },
+      0,
+    );
+
+    {
+      rmSync(root, { recursive: true, force: true });
+      mkdirSync(root, { recursive: true });
+      for (const stub of [...ROOT_FILES, ...CONTRIBUTOR_CONTRACT_FILES, ...IN_TREE_GUIDE_FILES]) {
+        write(stub, "# Stub\n");
+      }
+      write("docs/scope-stub.md", "# Stub\n");
+      write(
+        "docs/parity.md",
+        "# Parity\n\nFirst `src/missing-one.ts`.\n\nSecond `src/missing-two.ts`.\n",
+      );
+      const runs = [0, 1].map(() => {
+        const messages = [];
+        const code = checkLinks(root, {
+          log() {},
+          error(text) {
+            messages.push(text);
+          },
+        });
+        assert.equal(code, 1, `citation diagnostics exit 1, got ${messages.join("; ")}`);
+        return messages;
+      });
+      assert.deepEqual(runs[1], runs[0], "citation diagnostics are deterministic");
+      assert.ok(
+        runs[0].some(
+          (text) => text.includes("docs/parity.md:3:") && text.includes("src/missing-one.ts"),
+        ),
+        `first diagnostic carries file, line and target: ${runs[0].join("; ")}`,
+      );
+      assert.ok(
+        runs[0].some(
+          (text) => text.includes("docs/parity.md:5:") && text.includes("src/missing-two.ts"),
+        ),
+        `second diagnostic carries file, line and target: ${runs[0].join("; ")}`,
+      );
+      cases += 1;
+      console.log("PASS parity citation diagnostics are deterministic");
+    }
+
+    // The six files this scope added, pinned literally on purpose: a loop over
+    // the scope constants shrinks with them and would never notice a dropped
+    // entry. Restoring the old three-file scope, or dropping any one of these,
+    // makes the checker skip the file, so its broken link is accepted (exit 0,
+    // not 1) and the case fails.
+    const NEW_SCOPE_FILES = [
+      "AGENTS.md",
+      "CHANGELOG.md",
+      "CODE_OF_CONDUCT.md",
+      ".github/pull_request_template.md",
+      "bin/import/README.md",
+      "ci/featured-proof/README.md",
+    ];
+    for (const path of NEW_SCOPE_FILES) {
+      check(
+        `${path} broken links fail with file, line and target`,
+        () => {
+          write(
+            path,
+            ["# Heading", "", "[lost](missing.md)", "[anchor](#no-such-anchor)"].join("\n"),
+          );
+        },
+        1,
+        [
+          `${path}:3: missing link target "missing.md"`,
+          `${path}:4: missing anchor "#no-such-anchor"`,
+        ],
+      );
+    }
+
+    check(
+      "new-scope fenced code and inline code links are skipped",
+      () => {
+        write(
+          "AGENTS.md",
+          [
+            "# Agents",
+            "",
+            "```md",
+            "[fenced](missing.md)",
+            "```",
+            "",
+            "`[inline](missing.md)`",
+            "",
+          ].join("\n"),
+        );
+        write(
+          ".github/pull_request_template.md",
+          ["# Template", "", "```md", "[fenced](missing.md)", "```", ""].join("\n"),
+        );
+        write(
+          "bin/import/README.md",
+          ["# Import", "", "```md", "[fenced](missing.md)", "```", ""].join("\n"),
+        );
+      },
+      0,
+    );
+
+    check(
+      "bare angle brackets are literal text in slugs",
+      () => {
+        write("README.md", "# Root\n");
+        write("CONTRIBUTING.md", "# Contributing\n");
+        write("SECURITY.md", "# Security\n");
+        write("docs/page.md", ["# Page", "", "[budget](target.md#p95--300-ms-budget)"].join("\n"));
+        write("docs/target.md", "# Target\n\n## p95 < 300 ms budget\n");
+      },
+      0,
+    );
+
+    assert.equal(slugifyHeading("Change-gated CI and `ci-ok`"), "change-gated-ci-and-ci-ok");
+    assert.equal(
+      slugifyHeading("Production cutover capability ↔ reverse map"),
+      "production-cutover-capability--reverse-map",
+    );
+    assert.equal(slugifyHeading("Topology (target)"), "topology-target");
+    assert.equal(slugifyHeading("p95 < 300 ms budget"), "p95--300-ms-budget");
+    assert.equal(slugifyHeading("x <= y"), "x--y");
+    assert.equal(slugifyHeading("Hello <code>world</code> done"), "hello-world-done");
+    assert.equal(slugifyHeading("`Map<K, V>` helper"), "mapk-v-helper");
+    assert.equal(slugifyHeading("`Array<T>`"), "arrayt");
+    assert.equal(slugifyHeading("Use `<div>` wrappers"), "use-div-wrappers");
+    assert.equal(slugifyHeading("if a<b then"), "if-ab-then");
+    assert.equal(slugifyHeading("`__init__` method"), "__init__-method");
+    assert.equal(slugifyHeading("`__proto__` access"), "__proto__-access");
+    assert.ok(collectAnchors("```\n# Not a heading\n```\n## Real\n").has("real"));
+    assert.ok(!collectAnchors("```\n# Not a heading\n```\n## Real\n").has("not-a-heading"));
+    cases += 1;
+    console.log("PASS heading slug unit cases");
+    console.log(`doc links selftest: ${cases} cases passed.`);
+    return 0;
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+}
+
+if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  if (process.argv.length > 3 || (process.argv[2] && process.argv[2] !== "--selftest")) {
+    console.error("Usage: node ci/check-doc-links.mjs [--selftest]");
+    process.exitCode = 2;
+  } else if (process.argv[2] === "--selftest") {
+    process.exitCode = selftest();
+  } else {
+    process.exitCode = checkLinks(repoRoot);
+  }
+}

@@ -5,6 +5,7 @@ import { readFileSync } from "node:fs";
 import { runInNewContext } from "node:vm";
 import { URL as NodeURL } from "node:url";
 import { describe, expect, it } from "vitest";
+import { EVENTS_CALENDAR_READ_DEADLINE_MS } from "../src/islands/contracts-calendar";
 
 const binder = readFileSync(
   new NodeURL("../public/islands/events-calendar.js", import.meta.url),
@@ -152,8 +153,11 @@ function browser() {
     reject: (error: Error) => void;
   }[] = [];
   const pages = new Map<string, Element>();
-  const timers = new Map<number, () => void>();
+  // Timed callbacks keyed by requested delay: tick() drains only the short
+  // search-debounce timers, never the owned multi-second read deadline.
+  const timers = new Map<number, { ms: number; fn: () => void }>();
   let timer = 0;
+  const pushes: unknown[][] = [];
   runInNewContext(binder, {
     URL,
     AbortController,
@@ -178,7 +182,11 @@ function browser() {
     },
     window: {
       location: { href: ORIGIN + "/events", origin: ORIGIN },
-      history: { pushState() {} },
+      history: {
+        pushState(...args: unknown[]) {
+          pushes.push(args);
+        },
+      },
       addEventListener() {},
     },
     DOMParser: class {
@@ -188,8 +196,8 @@ function browser() {
     },
     fetch: (_url: string, init: RequestInit) =>
       new Promise((resolve, reject) => requests.push({ signal: init.signal!, resolve, reject })),
-    setTimeout: (fn: () => void) => {
-      timers.set(++timer, fn);
+    setTimeout: (fn: () => void, ms = 0) => {
+      timers.set(++timer, { ms, fn });
       return timer;
     },
     clearTimeout: (id: number) => timers.delete(id),
@@ -230,9 +238,21 @@ function browser() {
     input.fire("input");
   }
   function tick() {
-    for (const [id, fn] of timers) {
+    // Drain only the short debounce timers: a pending read keeps its owned
+    // deadline (a late completion is dropped by ownership, not by the clock).
+    for (const [id, t] of [...timers]) {
+      if (t.ms >= EVENTS_CALENDAR_READ_DEADLINE_MS) continue;
       timers.delete(id);
-      fn();
+      t.fn();
+    }
+  }
+  function expireDeadline() {
+    // Fire every armed owned read deadline in arming order; debounce timers
+    // stay pending so this can never flush a search by accident.
+    for (const [id, t] of [...timers]) {
+      if (t.ms < EVENTS_CALENDAR_READ_DEADLINE_MS) continue;
+      timers.delete(id);
+      t.fn();
     }
   }
   function paint() {
@@ -247,6 +267,8 @@ function browser() {
     zones,
     skeleton,
     feedback,
+    canonical,
+    pushes,
     requests,
     node,
     link,
@@ -255,6 +277,7 @@ function browser() {
     settle,
     type,
     tick,
+    expireDeadline,
     paint,
     focusListeners,
     focused: () => activeElement,
@@ -459,5 +482,141 @@ describe("calendar keyboard focus continuity", () => {
     await b.finish(1);
     await b.finish(0, { content: [b.node("article", { id: "event-night", tabindex: "-1" })] });
     expect(b.focused()).toBe(b.input);
+  });
+});
+
+describe("calendar keyboard focus after failed hidden-content navigation", () => {
+  type Browser = ReturnType<typeof browser>;
+  const FAILURES = ["transport", "http", "invalid", "deadline"] as const;
+  type Failure = (typeof FAILURES)[number];
+
+  // Keyboard-activate a content-zone control, then let the loading paint
+  // hide the content zone: focus provably falls to body before any failure.
+  function hiddenOrigin(kind: "month" | "grid") {
+    const b = browser();
+    const control =
+      kind === "month"
+        ? b.node("a", { href: "/events?month=2030-02", "aria-label": "Next month" })
+        : b.link("calendar-day", "/events#event-night", { "data-cal-jump": "" });
+    b.zones.content!.replaceChildren(control);
+    b.click(control);
+    b.paint();
+    expect(b.focused()).toBe(b.body);
+    expect(b.zones.content!.hidden).toBe(true);
+    expect(b.root.getAttribute("aria-busy")).toBe("true");
+    return { b, control };
+  }
+
+  async function fail(b: Browser, failure: Failure) {
+    if (failure === "transport") b.requests[0]!.reject(new Error("offline"));
+    else if (failure === "deadline") b.expireDeadline();
+    else b.requests[0]!.resolve({ ok: failure !== "http", text: async () => "invalid" });
+    await b.settle();
+  }
+
+  for (const kind of ["month", "grid"] as const) {
+    it.each(FAILURES)(
+      `restores the hidden ${kind} origin after %s failure reveals the last-good view`,
+      async (failure) => {
+        const { b, control } = hiddenOrigin(kind);
+        await fail(b, failure);
+        expect(b.focused()).toBe(control);
+        expect(b.zones.content!.hidden).toBe(false);
+        expect(b.zones.content!.contains(control)).toBe(true);
+        expect(b.skeleton.hidden).toBe(true);
+        expect(b.root.getAttribute("aria-busy")).toBeNull();
+        expect(b.feedback.textContent).toBe("Calendar unavailable");
+        expect(b.focusListeners.size).toBe(0);
+      },
+    );
+  }
+
+  it("commits no URL, canonical or fragment when hidden-content navigation fails", async () => {
+    const { b, control } = hiddenOrigin("month");
+    await fail(b, "http");
+    expect(b.pushes).toEqual([]);
+    expect(b.canonical.href).toBe(ORIGIN + "/events");
+    expect(b.zones.content!.childNodes).toEqual([control]);
+  });
+
+  it("drops a late success that settles after its owned deadline already failed it", async () => {
+    const { b, control } = hiddenOrigin("grid");
+    await fail(b, "deadline");
+    expect(b.focused()).toBe(control);
+    await b.finish(0, { content: [b.node("article", { id: "event-night", tabindex: "-1" })] });
+    expect(b.focused()).toBe(control);
+    expect(b.zones.content!.contains(control)).toBe(true);
+    expect(b.pushes).toEqual([]);
+  });
+
+  it("keeps deliberate focus moved after the skeleton blur when navigation fails", async () => {
+    const { b } = hiddenOrigin("month");
+    b.outside.focus();
+    await fail(b, "transport");
+    expect(b.focused()).toBe(b.outside);
+    expect(b.zones.content!.hidden).toBe(false);
+    expect(b.feedback.textContent).toBe("Calendar unavailable");
+  });
+
+  it("does not mistake outside focus lost to body after the skeleton blur for its own", async () => {
+    const { b } = hiddenOrigin("grid");
+    b.outside.focus();
+    b.outside.hidden = true;
+    b.paint();
+    expect(b.focused()).toBe(b.body);
+    await fail(b, "invalid");
+    expect(b.focused()).toBe(b.body);
+  });
+
+  it("does not restore after newer input even if the text returns to its starting value", async () => {
+    const { b, control } = hiddenOrigin("month");
+    b.type("x");
+    b.type("");
+    await fail(b, "transport");
+    expect(b.focused()).not.toBe(control);
+    expect(b.focused()).toBe(b.body);
+  });
+
+  it("never restores focus for pointer activation blurred by the skeleton paint", async () => {
+    const b = browser();
+    const control = b.node("a", { href: "/events?month=2030-02", "aria-label": "Next month" });
+    b.zones.content!.replaceChildren(control);
+    control.focus(); // Some browsers focus an anchor on pointer down.
+    b.click(control, false);
+    b.paint();
+    expect(b.focused()).toBe(b.body);
+    await fail(b, "transport");
+    expect(b.focused()).toBe(b.body);
+    expect(b.zones.content!.hidden).toBe(false);
+  });
+
+  it("ignores a superseded hidden origin's late failure while newer navigation owns focus", async () => {
+    const { b, control } = hiddenOrigin("month");
+    const second = b.link("events-view-list", "/events");
+    b.zones.head!.replaceChildren(second);
+    b.click(second);
+    expect(b.requests[0]!.signal.aborted).toBe(true);
+    b.requests[0]!.reject(new Error("offline"));
+    await b.settle();
+    expect(b.focused()).toBe(second);
+    await b.finish(1, { head: [b.link("events-view-list", "/events")] });
+    expect(b.focused()).toBe(b.root.querySelector('[data-testid="events-view-list"]'));
+    expect(b.focused()).not.toBe(control);
+  });
+
+  it("ignores an obsolete deadline and response after a superseding navigation settled", async () => {
+    const { b } = hiddenOrigin("month");
+    const second = b.link("events-view-list", "/events");
+    b.zones.head!.replaceChildren(second);
+    b.click(second);
+    await b.finish(1, { head: [b.link("events-view-list", "/events")] });
+    const focused = b.focused();
+    expect(focused).toBe(b.root.querySelector('[data-testid="events-view-list"]'));
+    b.expireDeadline();
+    b.requests[0]!.reject(new Error("offline"));
+    await b.settle();
+    expect(b.focused()).toBe(focused);
+    expect(b.skeleton.hidden).toBe(true);
+    expect(b.root.getAttribute("aria-busy")).toBeNull();
   });
 });

@@ -20,6 +20,56 @@ import subprocess
 import sys
 import tempfile
 
+from floor_waiver_body import missing_body_waivers
+
+
+def check_queue_visible_waivers(body):
+    base_sha = os.environ.get("FLOOR_WAIVER_BASE_SHA", "").strip()
+    if not base_sha:
+        print("::error::Missing immutable PR base SHA for floor-waiver validation.")
+        sys.exit(2)
+    # The base branch name lets the scan exclude commits already on the base
+    # branch after an update-branch merge, while still including waivers from
+    # a merged side branch that floor-guard honours at the PR head. A
+    # --first-parent scan would skip those side-branch waivers and let pr-lint
+    # pass while the queue squash (which lacks them) fails floor-guard.
+    base_ref = (
+        os.environ.get("FLOOR_WAIVER_BASE_REF", "").strip()
+        or os.environ.get("BASE_BRANCH", "").strip()
+        or "main"
+    )
+    try:
+        subprocess.run(
+            ["git", "merge-base", base_sha, "HEAD"],
+            check=True, capture_output=True, text=True,
+        )
+        # NOTE: a second `--not` toggles back to inclusive, so the base tip
+        # joins the same exclusion list: `HEAD --not <base_sha> <base_tip>`.
+        log_args = ["git", "log", "--format=%B", "HEAD", "--not", base_sha]
+        for candidate in (f"origin/{base_ref}", base_ref):
+            probe = subprocess.run(
+                ["git", "rev-parse", "--verify", candidate],
+                capture_output=True, text=True,
+            )
+            if probe.returncode == 0 and probe.stdout.strip():
+                if probe.stdout.strip() != base_sha:
+                    log_args += [candidate]
+                break
+        messages = subprocess.run(
+            log_args,
+            check=True, capture_output=True, text=True,
+        ).stdout
+    except (subprocess.CalledProcessError, OSError):
+        print("::error::Could not read the PR commit range for floor-waiver validation.")
+        sys.exit(2)
+    missing = missing_body_waivers(messages, body)
+    if missing:
+        print("::error::Every Floor-waiver trailer in branch commits must appear verbatim in the PR body for merge-queue validation.")
+        for waiver in missing:
+            print(f"  Missing from PR body: {waiver}")
+        sys.exit(1)
+    print("PR floor-waiver trailers are visible to merge-queue validation.")
+
 
 def resolve():
     # Bind identity/revision before publishing any output, then keep the decoded
@@ -47,13 +97,15 @@ def check():
     for key in ("event", "title", "body", "author"):
         os.environ[key.upper()] = metadata[key]
     runpy.run_path(str(Path(__file__).with_name("check-pr-conventions.py")), run_name="__main__")
-    # Upstream body/branch/reference gate (warn mode: never fails today). Pull
-    # requests only: push and workflow_dispatch keep the proven first-checker
-    # behavior. It shares the exact TITLE/BODY/AUTHOR the binding step pinned;
+    if metadata["event"] == "pull_request":
+        check_queue_visible_waivers(metadata["body"])
+    # Upstream body/branch/reference gate: the strict title/body subset (tracker IDs,
+    # instance UI links, the internal host) always fails on a public repo; the rest
+    # follows the mode. Pull requests only: push and workflow_dispatch keep the proven
+    # first-checker behavior. It shares the exact TITLE/BODY/AUTHOR the binding step pinned;
     # HEAD_REF and REPO_PRIVATE arrive through the step env. Absent in the
     # hermetic harness, so repo tests keep proving the error-level policy alone.
-    # A nonzero exit here must fail the step, like the checker above: warn mode
-    # only warns, error mode fails.
+    # A nonzero exit here must fail the step, like the checker above.
     if os.environ["EVENT"] == "pull_request" and os.environ.get(
         "PR_STANDARDS_MODE", ""
     ).strip().lower() in ("warn", "error"):
@@ -67,6 +119,8 @@ def check():
             "REPO_PRIVATE": os.environ.get("REPO_PRIVATE", "false"),
             "REQUIRE_CARD_REF": "false",
             "PR_STANDARDS_MODE": os.environ["PR_STANDARDS_MODE"],
+            "PR_NUMBER": os.environ.get("PR_NUMBER", ""),
+            "HEAD_REF_ERROR_FROM_PR": os.environ.get("HEAD_REF_ERROR_FROM_PR", ""),
         }
         completed = subprocess.run([sys.executable, str(standards)], env=env, check=False)
         if completed.returncode != 0:

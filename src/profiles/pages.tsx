@@ -29,12 +29,38 @@ import {
 import type { MemberView } from "./store";
 import type { MemberStats } from "./stats";
 
-const statsLabel = (key: string) =>
+// Stable field/error ids for profile validation association.
+// The server `games` key maps to the `games_text` control; any other key is
+// global and stays in the summary without a fabricated control link.
+export const PROFILE_FIELD_IDS = {
+  bio: "profile-bio",
+  games_text: "profile-games-text",
+  timezone: "profile-timezone",
+  leaderboard_opt_out: "profile-leaderboard-opt-out",
+} as const;
+type ProfileField = keyof typeof PROFILE_FIELD_IDS;
+export const PROFILE_ERROR_IDS: Record<ProfileField, string> = {
+  bio: "profile-bio-error",
+  games_text: "profile-games-text-error",
+  timezone: "profile-timezone-error",
+  leaderboard_opt_out: "profile-leaderboard-opt-out-error",
+};
+export const profileFieldForErrorKey = (key: string): ProfileField | null =>
+  key === "bio"
+    ? "bio"
+    : key === "games" || key === "games_text"
+      ? "games_text"
+      : key === "timezone"
+        ? "timezone"
+        : key === "leaderboard_opt_out"
+          ? "leaderboard_opt_out"
+          : null;
+export const statsLabel = (key: string) =>
   key.replace(/[_-]+/g, " ").replace(/\b\w/g, (letter) => letter.toUpperCase());
 // Legacy parity: the avatar fallback is the first two code points, uppercased.
 export const profileInitials = (username: string) =>
   [...username].slice(0, 2).join("").toUpperCase() || "?";
-const statsDate = (date: Date) =>
+export const statsDate = (date: Date) =>
   date.toLocaleDateString("en-GB", {
     day: "numeric",
     month: "short",
@@ -105,6 +131,15 @@ const MemberStatsBlock: FC<{ stats: MemberStats }> = ({ stats }) => (
 // profile HTML renders, so no tags can leak to them.
 export const PROFILE_SHARE_DESCRIPTION = "A member of Together We Own.";
 
+// Failed-save re-render shape, shared with the Svelte view: preserved inputs
+// plus the 422 error bag, so both renderers show the same form.
+export type ProfileFormValues = {
+  bio: string;
+  games_text: string;
+  timezone: string;
+  leaderboard_opt_out: boolean;
+};
+
 export const ProfilePage: FC<{
   member: MemberView;
   isOwner: boolean;
@@ -114,7 +149,7 @@ export const ProfilePage: FC<{
   joinResult?: JoinResult | null;
   stats?: MemberStats | null;
   errors?: Record<string, string>;
-  values?: { bio: string; games_text: string; timezone: string };
+  values?: ProfileFormValues;
 }> = ({ member, isOwner, isModerator, appUrl, joinResult, stats, errors, values }) => {
   const img = profileAvatarSrcset(member.id, member.avatar);
   const joined = profileJoinedMonth(member.joinedAt ?? null);
@@ -123,6 +158,17 @@ export const ProfilePage: FC<{
     bio: member.bio ?? "",
     games_text: member.games.join("\n"),
     timezone: member.timezone ?? "",
+    leaderboard_opt_out: member.leaderboardOptOut ?? false,
+  };
+  // Saved baseline for the island: on a native 422 the controls hold the
+  // rejected draft B while these attributes hold the persisted profile A, so
+  // the enhancement can treat B as unsaved work and Cancel can restore A.
+  // On an ordinary GET both sides are A and re-pinning is a no-op.
+  const saved = {
+    bio: member.bio ?? "",
+    games_text: member.games.join("\n"),
+    timezone: member.timezone ?? "",
+    leaderboard_opt_out: member.leaderboardOptOut ?? false,
   };
   return (
     <Layout
@@ -258,6 +304,10 @@ export const ProfilePage: FC<{
             data-testid={PROFILE_EDIT_TESTID}
             {...{ [MOUNT_ATTR]: MEMBER_PROFILE_ISLAND }}
             data-member-id={member.id}
+            data-saved-bio={saved.bio}
+            data-saved-games-text={saved.games_text}
+            data-saved-timezone={saved.timezone}
+            data-saved-leaderboard-opt-out={saved.leaderboard_opt_out ? "1" : "0"}
           >
             <h2 id="edit-heading" tabindex={-1}>
               Edit your profile
@@ -270,30 +320,102 @@ export const ProfilePage: FC<{
             {errors && Object.keys(errors).length > 0 ? (
               <div role="alert" tabindex={-1} data-testid={PROFILE_ERROR_TESTID}>
                 <ul>
-                  {Object.values(errors).map((e) => (
-                    <li>{e}</li>
-                  ))}
+                  {Object.entries(errors).map(([key, message]) => {
+                    const field = profileFieldForErrorKey(key);
+                    return field ? (
+                      <li>
+                        <a href={`#${PROFILE_FIELD_IDS[field]}`}>{message}</a>
+                      </li>
+                    ) : (
+                      <li>{message}</li>
+                    );
+                  })}
                 </ul>
               </div>
             ) : null}
             <form method="post" action={`/members/${member.id}`} data-testid={PROFILE_FORM_TESTID}>
               <input type="hidden" name="_method" value="PATCH" />
+              {/* Unchecked still submits: the hidden 0 keeps the choice explicit
+                  so an absent key always means "leave the stored choice alone". */}
+              <input type="hidden" name="leaderboard_opt_out" value="0" />
+              <label class="profile-field profile-switch">
+                <input
+                  id={PROFILE_FIELD_IDS.leaderboard_opt_out}
+                  name="leaderboard_opt_out"
+                  type="checkbox"
+                  value="1"
+                  checked={form.leaderboard_opt_out}
+                  aria-invalid={errors?.leaderboard_opt_out ? "true" : undefined}
+                  aria-describedby={
+                    errors?.leaderboard_opt_out ? PROFILE_ERROR_IDS.leaderboard_opt_out : undefined
+                  }
+                />
+                Hide me from the member leaderboard
+              </label>
+              <p class="profile-hint">
+                Opted out, you leave every board and every count. Tick to hide, untick to show
+                again.
+              </p>
+              {errors?.leaderboard_opt_out ? (
+                <p id={PROFILE_ERROR_IDS.leaderboard_opt_out} class="error">
+                  {errors.leaderboard_opt_out}
+                </p>
+              ) : null}
               {/* Native maxlength counts UTF-16 units; code-point limits belong to the validators. */}
               <label class="profile-field">
                 Bio{" "}
-                <textarea name="bio" rows={4}>
+                <textarea
+                  id={PROFILE_FIELD_IDS.bio}
+                  name="bio"
+                  rows={4}
+                  aria-invalid={errors?.bio ? "true" : undefined}
+                  aria-describedby={errors?.bio ? PROFILE_ERROR_IDS.bio : undefined}
+                >
                   {form.bio}
                 </textarea>
               </label>
+              {errors?.bio ? (
+                <p id={PROFILE_ERROR_IDS.bio} class="error">
+                  {errors.bio}
+                </p>
+              ) : null}
               <label class="profile-field">
                 Games (one per line){" "}
-                <textarea name="games_text" rows={4}>
+                <textarea
+                  id={PROFILE_FIELD_IDS.games_text}
+                  name="games_text"
+                  rows={4}
+                  aria-invalid={errors && (errors.games ?? errors.games_text) ? "true" : undefined}
+                  aria-describedby={
+                    errors && (errors.games ?? errors.games_text)
+                      ? PROFILE_ERROR_IDS.games_text
+                      : undefined
+                  }
+                >
                   {form.games_text}
                 </textarea>
               </label>
+              {errors && (errors.games ?? errors.games_text) ? (
+                <p id={PROFILE_ERROR_IDS.games_text} class="error">
+                  {errors.games ?? errors.games_text}
+                </p>
+              ) : null}
               <label class="profile-field">
-                Timezone <input name="timezone" value={form.timezone} placeholder="Europe/London" />
+                Timezone{" "}
+                <input
+                  id={PROFILE_FIELD_IDS.timezone}
+                  name="timezone"
+                  value={form.timezone}
+                  placeholder="Europe/London"
+                  aria-invalid={errors?.timezone ? "true" : undefined}
+                  aria-describedby={errors?.timezone ? PROFILE_ERROR_IDS.timezone : undefined}
+                />
               </label>
+              {errors?.timezone ? (
+                <p id={PROFILE_ERROR_IDS.timezone} class="error">
+                  {errors.timezone}
+                </p>
+              ) : null}
               <div aria-hidden="true" class="sr-only">
                 <label>
                   Website <input name={PROFILE_HONEY_FIELD} tabindex={-1} autocomplete="off" />

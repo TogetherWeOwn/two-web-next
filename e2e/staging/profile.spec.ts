@@ -1,9 +1,13 @@
+import { qaLoginRetryBudgetMs } from "../qa-login-retry.mjs";
 import { test, expect } from "./fixtures";
 import { loginQaMember } from "./qa-login";
 
 // Fresh member session per file: event pages rotate the bearer on read, so a
 // stored token is single-use across files. Member only — one login.
 test.beforeAll(async () => {
+  // Hook timeout: the config's 30s covers the login itself; its bounded 429
+  // waits get their own budget (qa-login-retry.mjs), one login here.
+  test.setTimeout(30_000 + qaLoginRetryBudgetMs(1));
   await loginQaMember();
 });
 

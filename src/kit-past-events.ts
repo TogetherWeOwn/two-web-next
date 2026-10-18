@@ -1,0 +1,172 @@
+import { Hono } from "hono";
+import type { Db } from "./db/index";
+import type { Env } from "./env";
+import {
+  ANON_PAST_TTL_MS,
+  anonCacheGeneration,
+  anonCacheSource,
+  anonPastKey,
+  isAnonCacheEligible,
+  readAnonCache,
+  writeAnonCache,
+} from "./events/anon-cache";
+import { normalizePastPage } from "./events/reads";
+import { publicReadGuard } from "./events/routes-shared";
+
+export type KitPublicReadGuard = (request: Request, env: Env) => Promise<Response | null>;
+
+const guardApp = new Hono<{ Bindings: Env }>();
+guardApp.all("*", async (c) => {
+  const limited = await publicReadGuard(c);
+  return limited ?? c.body(null, 204);
+});
+
+/** Reuse the public Hono read budget for the native Kit route. */
+export async function kitPublicReadGuard(request: Request, env: Env): Promise<Response | null> {
+  const response = await guardApp.fetch(request, env);
+  return response.status === 204 ? null : response;
+}
+
+/** Apply the Hono archive's guard and anonymous HTML cache around Kit SSR. */
+export async function dispatchPastArchiveRequest(
+  request: Request,
+  env: Env,
+  resolve: () => Promise<Response>,
+  guard: KitPublicReadGuard = kitPublicReadGuard,
+  now: number = Date.now(),
+): Promise<Response> {
+  const limited = await guard(request, env);
+  if (limited) return limited;
+
+  const url = new URL(request.url);
+  // Kit data requests still execute the read guard/load but their JSON payload
+  // is not the HTML representation cached by Hono.
+  const htmlRequest = url.pathname === "/events/past";
+  const page = normalizePastPage(Number.parseInt(url.searchParams.get("page") ?? "1", 10));
+  const eligible =
+    htmlRequest &&
+    isAnonCacheEligible({
+      method: request.method,
+      hasCookie: request.headers.has("cookie"),
+      hasSession: false,
+      searching: false,
+      flashed: false,
+    });
+  const source = eligible ? anonCacheSource(env) : null;
+  const key = eligible ? anonPastKey(request.method, page) : null;
+  if (source && key) {
+    const hit = readAnonCache(key, source, now);
+    if (hit) {
+      const headers = new Headers({ "cache-control": hit.cacheControl });
+      headers.set(
+        "cache-control",
+        hit.cacheControl.replace(/max-age=\d+/, `max-age=${hit.maxAgeSeconds}`),
+      );
+      // The entry stores no content type and a string body defaults to
+      // text/plain; name the cached HTML exactly as Hono's c.html() does so
+      // repeat guests render the page instead of its source.
+      headers.set("content-type", "text/html; charset=UTF-8");
+      if (hit.vary) headers.set("vary", hit.vary);
+      return new Response(hit.body, { status: hit.status, headers });
+    }
+  }
+
+  const generation = source ? anonCacheGeneration() : 0;
+  const response = await resolve();
+  const cacheable = response.headers.get("x-two-past-cacheable") === "true";
+  const headers = new Headers(response.headers);
+  headers.delete("x-two-past-cacheable");
+  const cleanResponse = new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers,
+  });
+
+  if (source && key && cacheable && cleanResponse.status === 200) {
+    // Buffer the candidate before the final generation comparison: a retire
+    // that lands while clone().text() is in flight must stop the stale bytes
+    // from settling. The compare-and-write below is synchronous, so it stays
+    // atomic within the isolate.
+    const body = await cleanResponse.clone().text();
+    if (anonCacheGeneration() === generation) {
+      writeAnonCache(
+        key,
+        source,
+        {
+          status: cleanResponse.status,
+          cacheControl: cleanResponse.headers.get("cache-control") ?? "public, max-age=300",
+          vary: cleanResponse.headers.get("vary"),
+          body,
+        },
+        ANON_PAST_TTL_MS,
+        now,
+      );
+    }
+  }
+
+  return cleanResponse;
+}
+
+// Framework-free core of web/src/routes/events/past/+page.server.ts load().
+// The SvelteKit module is a thin binding over this helper so the root Vitest
+// suite can pin every branch without transforming SvelteKit code: rows mean
+// cacheable, empty means served-but-uncacheable (events age into the archive
+// as time passes, so caching emptiness would pin "never ran"), and every
+// database failure is a branded 503 with private, no-store. Exactly one
+// setHeaders call per path: SvelteKit throws `header_already_set` on a
+// double-set, so the caller must not set headers again on a throw.
+export type PastArchiveListPast<Row = never> = (
+  db: Db,
+  page: number,
+) => Promise<{ rows: Row[]; hasMore: boolean; totalPages: number }>;
+
+export interface PastArchiveLoadArgs<Row = never> {
+  env: Env;
+  pageParam: string | null;
+  setHeaders: (headers: Record<string, string>) => void;
+  dbForFn: (c: { env: Env }) => Promise<Db | null>;
+  listPastFn: PastArchiveListPast<Row>;
+}
+
+/** Branded-outage marker: the Kit binding maps every throw to error(503). */
+export function pastArchiveUnavailable(): Error & { status: number } {
+  return Object.assign(new Error("Events temporarily unavailable"), { status: 503 });
+}
+
+export async function loadPastArchivePage<Row>({
+  env,
+  pageParam,
+  setHeaders,
+  dbForFn,
+  listPastFn,
+}: PastArchiveLoadArgs<Row>): Promise<{
+  rows: Row[];
+  page: number;
+  hasMore: boolean;
+  totalPages: number;
+  appUrl: string;
+}> {
+  let db: Db | null;
+  try {
+    db = await dbForFn({ env });
+  } catch {
+    setHeaders({ "cache-control": "private, no-store" });
+    throw pastArchiveUnavailable();
+  }
+  if (!db) {
+    setHeaders({ "cache-control": "private, no-store" });
+    throw pastArchiveUnavailable();
+  }
+  const page = normalizePastPage(Number.parseInt(pageParam ?? "1", 10));
+  try {
+    const { rows, hasMore, totalPages } = await listPastFn(db, page);
+    setHeaders({
+      "cache-control": "public, max-age=300",
+      "x-two-past-cacheable": String(rows.length > 0),
+    });
+    return { rows, page, hasMore, totalPages, appUrl: env.APP_URL };
+  } catch {
+    setHeaders({ "cache-control": "private, no-store" });
+    throw pastArchiveUnavailable();
+  }
+}

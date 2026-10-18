@@ -34,6 +34,7 @@ const SESSION_SECRET = "test-session-secret-at-least-32-bytes-long";
 const ENDED = "An event that has already ended cannot be published. Update its dates first.";
 const FLOOR =
   "Capacity cannot be lower than the number of members already going. Occupied seats: 5.";
+const LOCATION = "Add a location before publishing.";
 const ACTOR = { id: "moderator", username: "mod" };
 
 describe("event mutation test containment", () => {
@@ -179,6 +180,7 @@ describe.skipIf(!process.env.DATABASE_URL)("event mutation invariants (agent-tes
         startsAt: new Date(NOW.getTime() - 3600_000),
         endsAt: new Date(NOW.getTime() + 3600_000),
         timezone: "UTC",
+        location: "Voice",
         status: "draft",
         capacity: 8,
         createdAt: NOW,
@@ -210,11 +212,12 @@ describe.skipIf(!process.env.DATABASE_URL)("event mutation invariants (agent-tes
     answers: await fixture.db.select().from(rsvps).orderBy(rsvps.id),
     audits: await fixture.db.select().from(activityLog).orderBy(activityLog.id),
   });
-  const form = (capacity: string) => ({
+  const form = (capacity: string, location = "Voice") => ({
     title: "Edited title",
     starts_at: "2026-09-30 11:00",
     ends_at: "2026-09-30 13:00",
     timezone: "UTC",
+    location,
     capacity,
   });
   const input = (row: typeof events.$inferSelect, capacity: number | null): EventFormInput => ({
@@ -270,6 +273,83 @@ describe.skipIf(!process.env.DATABASE_URL)("event mutation invariants (agent-tes
     expect((await browser(`/events/${row.eventKey}/cancel`)).status).toBe(303);
     expect((await getEvent(fixture.db, row.eventKey))?.status).toBe("cancelled");
   });
+
+  it.each([null, "", "   "] as const)(
+    "POST publish refuses a draft with blank location %j",
+    async (location) => {
+      const row = await seed({ location });
+      const before = await state(row.eventKey);
+      const response = await json("POST", `/events/${row.eventKey}/publish`);
+      expect(response.status).toBe(422);
+      expect(await response.json()).toEqual({ error: "invalid", fields: { location: LOCATION } });
+      expect(await state(row.eventKey)).toEqual(before);
+      expect((await getEvent(fixture.db, row.eventKey))?.status).toBe("draft");
+      expect(sent).toEqual([]);
+    },
+  );
+
+  it("admin POST publish re-renders the edit form with the location error; cancel still succeeds", async () => {
+    const row = await seed({ location: "   " });
+    const before = await state(row.eventKey);
+    const response = await browser(`/events/${row.eventKey}/publish`);
+    expect(response.status).toBe(422);
+    const html = await response.text();
+    expect(html).toContain(LOCATION);
+    expect(html).toContain('name="location"');
+    expect(await state(row.eventKey)).toEqual(before);
+    expect((await getEvent(fixture.db, row.eventKey))?.status).toBe("draft");
+    expect(sent).toEqual([]);
+    expect((await browser(`/events/${row.eventKey}/cancel`)).status).toBe(303);
+    expect((await getEvent(fixture.db, row.eventKey))?.status).toBe("cancelled");
+  });
+
+  it.each(["json", "admin"] as const)(
+    "%s edit refuses blanking a published location",
+    async (path) => {
+      for (const location of ["", "   "]) {
+        await fixture.reset();
+        const row = await occupied();
+        const before = await state(row.eventKey);
+        const response =
+          path === "json"
+            ? await json("PATCH", `/events/${row.eventKey}`, { location })
+            : await browser(`/events/${row.eventKey}`, { ...form("8"), location });
+        expect(response.status).toBe(422);
+        if (path === "json")
+          expect(await response.json()).toEqual({
+            error: "invalid",
+            fields: { location: LOCATION },
+          });
+        else {
+          const html = await response.text();
+          expect(html).toContain(LOCATION);
+          expect(html).toContain('name="location"');
+        }
+        expect(await state(row.eventKey)).toEqual(before);
+        expect(sent).toEqual([]);
+      }
+    },
+  );
+
+  it.each(["json", "admin"] as const)(
+    "%s draft edit without a location still succeeds",
+    async (path) => {
+      const row = await seed({ location: null });
+      const response =
+        path === "json"
+          ? await json("PATCH", `/events/${row.eventKey}`, { title: "Still draft" })
+          : await browser(`/events/${row.eventKey}`, {
+              ...form("8", ""),
+              title: "Still draft",
+            });
+      expect(response.status).toBe(path === "json" ? 200 : 303);
+      expect(await getEvent(fixture.db, row.eventKey)).toMatchObject({
+        title: "Still draft",
+        status: "draft",
+      });
+      expect(sent).toEqual([]);
+    },
+  );
 
   it.each(["json", "admin"] as const)(
     "%s edit refuses below occupied seats from both finite and unlimited capacity",

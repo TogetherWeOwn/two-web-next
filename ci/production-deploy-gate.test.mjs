@@ -9,6 +9,8 @@ import {
   assertProductionTarget,
   assertRollbackVersionId,
   checkProductionGate,
+  stagingQualityJob,
+  stagingQualitySteps,
 } from "./production-deploy-gate.mjs";
 
 const enabled = {
@@ -17,6 +19,7 @@ const enabled = {
   GITHUB_REF: "refs/heads/main",
   GITHUB_REPOSITORY: "fixture/repo",
   GITHUB_TOKEN: "fixture-only",
+  DEPLOY_SHA: "a".repeat(40),
 };
 const protectedEnvironment = {
   name: "production",
@@ -152,7 +155,7 @@ function stubProductionApi(evidence, seen = {}) {
     assert.fail(`unexpected production gate API path ${parsed.pathname}`);
   };
 }
-const greenEnv = { ...enabled, GITHUB_SHA: dispatchSha };
+const greenEnv = { ...enabled, GITHUB_SHA: otherSha, DEPLOY_SHA: dispatchSha };
 function checkGreen(evidence, seen = {}, env = greenEnv, options = { checkoutSha: dispatchSha }) {
   return checkProductionGate(env, stubProductionApi(evidence, seen), options);
 }
@@ -231,11 +234,32 @@ const targetConfig = (hyperdrive) => JSON.stringify({ env: { production: { hyper
 
 test("placeholder Hyperdrive refuses live deployment with fixture-only IDs", () => {
   assert.throws(
-    () => assertProductionTarget(targetConfig([{ binding: "DB", id: sentinel }])),
+    () =>
+      assertProductionTarget(
+        targetConfig([
+          { binding: "DB", id: sentinel },
+          { binding: "BOT_DB", id: provisionedId },
+        ]),
+      ),
+    /still a placeholder/,
+  );
+  assert.throws(
+    () =>
+      assertProductionTarget(
+        targetConfig([
+          { binding: "DB", id: provisionedId },
+          { binding: "BOT_DB", id: sentinel },
+        ]),
+      ),
     /still a placeholder/,
   );
   assert.doesNotThrow(() =>
-    assertProductionTarget(targetConfig([{ binding: "DB", id: provisionedId }])),
+    assertProductionTarget(
+      targetConfig([
+        { binding: "DB", id: provisionedId },
+        { binding: "BOT_DB", id: provisionedId },
+      ]),
+    ),
   );
 });
 
@@ -255,6 +279,7 @@ test("provisioned production DB ignores historical comments, unrelated zero IDs 
     "env": {"production": {"hyperdrive": [
       {"binding":"OTHER","id":"${sentinel}"},
       {"binding":"DB","id":/* reviewed replacement */"${provisionedId}",},
+      {"binding":"BOT_DB","id":"${provisionedId}",},
     ],},},
   }`;
   const parsed = readWranglerConfig(config);
@@ -282,6 +307,33 @@ for (const hyperdrive of [
 ]) {
   test(`refuses missing, invalid or duplicate production DB bindings (${JSON.stringify(hyperdrive)})`, () => {
     assert.throws(() => assertProductionTarget(targetConfig(hyperdrive)), /one valid id/);
+  });
+}
+
+for (const botBinding of [
+  undefined,
+  null,
+  {},
+  [],
+  [{ binding: "OTHER", id: provisionedId }],
+  [{ binding: "BOT_DB" }],
+  [{ binding: "BOT_DB", id: null }],
+  [{ binding: "BOT_DB", id: [provisionedId] }],
+  [{ binding: "BOT_DB", id: "not-an-id" }],
+  [{ binding: "BOT_DB", id: `${provisionedId}0` }],
+  [{ binding: "BOT_DB", id: ` ${provisionedId}` }],
+  [
+    { binding: "BOT_DB", id: provisionedId },
+    { binding: "BOT_DB", id: provisionedId },
+  ],
+]) {
+  test(`refuses missing, invalid or duplicate production BOT_DB bindings (${JSON.stringify(botBinding)})`, () => {
+    const hyperdrive = [{ binding: "DB", id: provisionedId }];
+    if (Array.isArray(botBinding)) hyperdrive.push(...botBinding);
+    else if (botBinding !== undefined) hyperdrive.push(botBinding);
+    // undefined botBinding leaves BOT_DB absent; other non-array shapes are
+    // appended so the BOT_DB count/shape check fails instead of passing.
+    assert.throws(() => assertProductionTarget(targetConfig(hyperdrive)), /BOT_DB.*one valid id/);
   });
 }
 
@@ -314,7 +366,12 @@ function assertIsolatedBindings(config) {
   assert.equal(production.vars.APP_URL, "https://togetherweown.com");
   assert.equal(production.vars.QA_AUTH_TOKEN, undefined);
   assert.notEqual(production.hyperdrive[0].id, config.hyperdrive[0].id);
-  assert.deepEqual(production.triggers, config.triggers);
+  // Staging handoff: the web Worker owns no crons (both live on two-web-jobs,
+  // wrangler.jobs.jsonc). The production cutover template keeps both schedules
+  // on the web Worker until its own handoff, so assert each side explicitly.
+  // Values must match RECONCILE_CRON/PRUNE_CRON in src/jobs/constants.ts.
+  assert.deepEqual(config.triggers, { crons: [] });
+  assert.deepEqual(production.triggers, { crons: ["*/10 * * * *", "0 0 * * *"] });
   const stagingQueues = config.queues.producers.map((producer) => producer.queue);
   for (const producer of production.queues.producers) {
     assert.ok(!stagingQueues.includes(producer.queue));
@@ -330,6 +387,81 @@ test("actual production config retains isolated bindings before and after sentin
   provisioned.env.production.hyperdrive[0].id = "11111111111111111111111111111111";
   assertIsolatedBindings(provisioned);
   assert.doesNotThrow(() => assertProductionTarget(JSON.stringify(provisioned)));
+});
+
+function assertProductionHyperdrivePlaceholderCommentMatchesId(text) {
+  const config = readWranglerConfig(text);
+  const id = config.env?.production?.hyperdrive?.find((entry) => entry?.binding === "DB")?.id;
+  assert.equal(typeof id, "string");
+
+  const productionStart = text.search(/"production"\s*:\s*\{/);
+  assert.ok(productionStart >= 0);
+  const hyperdriveOffset = text.slice(productionStart).search(/"hyperdrive"\s*:/);
+  assert.ok(hyperdriveOffset >= 0);
+  const hyperdriveStart = productionStart + hyperdriveOffset;
+  const lines = text.slice(productionStart, hyperdriveStart).trimEnd().split(/\r?\n/);
+  const comments = [];
+  while (lines.at(-1)?.trimStart().startsWith("//")) {
+    comments.unshift(lines.pop().trim());
+  }
+  const resourceCommentIndex = comments.findIndex(
+    (line) => /hyperdrive/i.test(line) && /two-web-next-production/i.test(line),
+  );
+  assert.ok(resourceCommentIndex >= 0, "production Hyperdrive comment must identify its resource");
+  const productionHyperdriveComment = comments.slice(resourceCommentIndex).join(" ");
+  const placeholderHyperdriveComment = /placeholder/i.test(productionHyperdriveComment);
+  assert.equal(
+    placeholderHyperdriveComment,
+    id === sentinel,
+    id === sentinel
+      ? "the production sentinel comment must identify the placeholder Hyperdrive"
+      : "a provisioned production Hyperdrive comment must not call its id a placeholder",
+  );
+}
+
+test("checked-in production Hyperdrive uses placeholder wording only for the sentinel id", () => {
+  const text = readFileSync(new URL("../wrangler.jsonc", import.meta.url), "utf8");
+  assertProductionHyperdrivePlaceholderCommentMatchesId(text);
+
+  for (const unrelated of [
+    "// PLACEHOLDER: unrelated queue setting",
+    "// PLACEHOLDER: hyperdrive timeout tuning for queues",
+    "// PLACEHOLDER: production hyperdrive timeout tuning for queues",
+  ]) {
+    const withUnrelatedPlaceholder = text.replace(
+      "// Production Hyperdrive for the separately named two-web-next-production",
+      `${unrelated}\n      // Production Hyperdrive for the separately named two-web-next-production`,
+    );
+    assertProductionHyperdrivePlaceholderCommentMatchesId(withUnrelatedPlaceholder);
+  }
+
+  const reformattedKeys = text
+    .replace('"production": {', '"production" : {')
+    .replace('"hyperdrive":', '"hyperdrive" :')
+    .replace('"id": "', '"id" : "');
+  assertProductionHyperdrivePlaceholderCommentMatchesId(reformattedKeys);
+
+  const productionStart = text.search(/"production"\s*:\s*\{/);
+  const hyperdriveOffset = text.slice(productionStart).search(/"hyperdrive"\s*:/);
+  const hyperdriveStart = productionStart + hyperdriveOffset;
+  const idMatch = /"id"\s*:\s*"/.exec(text.slice(hyperdriveStart));
+  assert.ok(idMatch);
+  const idStart = hyperdriveStart + idMatch.index + idMatch[0].length;
+  const idEnd = text.indexOf('"', idStart);
+  const sentinelWithProvisionedComment = `${text.slice(0, idStart)}${sentinel}${text.slice(idEnd)}`;
+  assert.throws(
+    () => assertProductionHyperdrivePlaceholderCommentMatchesId(sentinelWithProvisionedComment),
+    /production sentinel comment must identify the placeholder Hyperdrive/,
+  );
+
+  const placeholderOnProvisionedId = text.replace(
+    "// Production Hyperdrive for the separately named two-web-next-production",
+    "// PLACEHOLDER: replace with the separately provisioned two-web-next-production Hyperdrive",
+  );
+  assert.throws(
+    () => assertProductionHyperdrivePlaceholderCommentMatchesId(placeholderOnProvisionedId),
+    /provisioned production Hyperdrive comment must not call its id a placeholder/,
+  );
 });
 
 test("preserves the owner exception for admin bypass without relaxing self-review protection", () => {
@@ -431,8 +563,12 @@ test("both Environment gate jobs inherit contents and Actions read permissions",
     "utf8",
   );
   assert.match(workflow, /^permissions:\n  contents: read\n  actions: read\n/m);
+  // The post-deploy `release` call (release.yml) is the only job override: it
+  // runs after both gate jobs and needs only contents: write to tag the commit.
+  const release = workflow.slice(workflow.indexOf("\n  release:\n"));
+  assert.match(release, /^ {4}permissions:\n {6}contents: write[^\n]*\n(?! {6})/m);
   assert.ok(
-    !/^ {4,}permissions:/m.test(workflow),
+    !/^ {4,}permissions:/m.test(workflow.slice(0, workflow.indexOf("\n  release:\n"))),
     "job overrides must not drop inherited Actions read",
   );
   assert.match(workflow, /^  preflight:/m);
@@ -443,7 +579,55 @@ test("both Environment gate jobs inherit contents and Actions read permissions",
   for (const gate of gates) {
     const block = gate.split("\n      - ")[0];
     assert.match(block, /GITHUB_TOKEN: /);
-    assert.match(block, /GITHUB_SHA: /);
+    // The runner resets step-level GITHUB_* overrides to github.sha, so the
+    // promoted commit must travel under a non-reserved name.
+    assert.match(block, /DEPLOY_SHA: \$\{\{ (steps\.target|needs\.preflight)\.outputs\.sha \}\}/);
+    assert.doesNotMatch(block, /GITHUB_SHA: /);
+  }
+});
+
+test("preflight checkouts materialize ci and wrangler.jsonc for the production gate", () => {
+  const workflow = readFileSync(
+    new URL("../.github/workflows/deploy-production.yml", import.meta.url),
+    "utf8",
+  );
+  // The gate's main path reads the repo-root Wrangler config, so the sparse
+  // preflight tree must contain it (ci/production-deploy-gate.mjs:260).
+  const gate = readFileSync(new URL("./production-deploy-gate.mjs", import.meta.url), "utf8");
+  assert.match(gate, /\.\.\/wrangler\.jsonc/);
+  // Negative control: the promotion resolver needs only ci/ files, so it
+  // succeeds on the same sparse tree — it proves the checkout works and the
+  // gate is the step that needs the extra root file.
+  const resolver = readFileSync(new URL("./resolve-promotion-sha.mjs", import.meta.url), "utf8");
+  assert.ok(!resolver.includes("wrangler"), "resolver must not need wrangler.jsonc");
+  assert.ok(!resolver.includes("../"), "resolver must not read outside ci/");
+  // Hardening: every checkout in preflight runs at the same workspace path,
+  // so each one lists both /ci/ and /wrangler.jsonc explicitly (cone-mode
+  // off so the file pattern applies). Cone-mode `ci` already includes root
+  // files and an empty sparse-checkout input disables sparse checkout in
+  // actions/checkout v7, so this guards against future cone-default or
+  // checkout-behavior changes, not an observed ENOENT.
+  const preflight = workflow.slice(
+    workflow.indexOf("\n  preflight:\n"),
+    workflow.indexOf("\n  deploy-production:\n"),
+  );
+  assert.ok(preflight.includes("preflight"), "preflight job missing");
+  const checkouts = preflight.split("- uses: actions/checkout@").slice(1);
+  assert.ok(checkouts.length >= 2, `expected >=2 preflight checkouts, found ${checkouts.length}`);
+  for (const block of checkouts) {
+    const step = block.split("\n      - ")[0];
+    assert.match(step, /sparse-checkout:/, "preflight checkout must set sparse-checkout");
+    assert.match(
+      step,
+      /sparse-checkout-cone-mode: false/,
+      "preflight checkout must disable cone mode so the wrangler.jsonc file pattern applies",
+    );
+    assert.match(step, /\/ci\//, "preflight sparse scope must include anchored /ci/");
+    assert.match(
+      step,
+      /\/wrangler\.jsonc/,
+      "preflight sparse scope must include anchored /wrangler.jsonc",
+    );
   }
 });
 
@@ -464,21 +648,168 @@ test("manual production workflow routes runners by repo visibility and uses prod
   assert.ok(!workflow.includes("secrets.CLOUDFLARE_ACCOUNT_ID"));
   for (const key of Object.keys(credentials)) {
     // Credentials check, required-secrets preflight, production Tail deploy,
-    // app deploy: all production-only.
-    assert.equal((workflow.match(new RegExp(`secrets\\.PRODUCTION_${key}`, "g")) ?? []).length, 4);
+    // version upload and promotion: all production-only.
+    assert.equal((workflow.match(new RegExp(`secrets\\.PRODUCTION_${key}`, "g")) ?? []).length, 5);
   }
   const credentialCheck = workflow.indexOf("run: node ci/production-deploy-gate.mjs --credentials");
   const requiredSecrets = workflow.indexOf("run: node ci/check-production-secrets.mjs");
   const tailDeploy = workflow.indexOf(
     "run: npx wrangler deploy --config tail/wrangler.jsonc --env production",
   );
-  const deploy = workflow.indexOf("run: npx wrangler deploy --env production");
+  const upload = workflow.indexOf("npx wrangler versions upload --env production --tag ");
+  const gradual = workflow.indexOf(
+    "uses: TogetherWeOwn/.github/actions/gradual-promote@89c290be20c0044efaf6916f28341c76e75fff06",
+  );
   assert.ok(
     credentialCheck > 0 &&
       credentialCheck < requiredSecrets &&
       requiredSecrets < tailDeploy &&
-      tailDeploy < deploy,
+      tailDeploy < upload &&
+      upload < gradual,
   );
+  assert.match(
+    workflow,
+    /versions upload --env production --tag "\$\{DEPLOY_SHA:\?\}-\$\{GITHUB_RUN_ID:\?\}-\$\{GITHUB_RUN_ATTEMPT:\?\}"/,
+  );
+  // Promotion lives in the shared composite action: the caller only passes
+  // the tag built from the exact same three parts as the upload tag above.
+  const call = workflow.slice(gradual, gradual + 800);
+  assert.match(call, /worker-name: two-web-next-production/);
+  assert.match(
+    call,
+    /version-tag: \$\{\{ needs\.preflight\.outputs\.sha \}\}-\$\{\{ github\.run_id \}\}-\$\{\{ github\.run_attempt \}\}/,
+  );
+  assert.match(call, /domain: togetherweown\.com/);
+  assert.match(call, /api-token: \$\{\{ secrets\.PRODUCTION_CLOUDFLARE_API_TOKEN \}\}/);
+  assert.match(call, /account-id: \$\{\{ secrets\.PRODUCTION_CLOUDFLARE_ACCOUNT_ID \}\}/);
+  assert.ok(!workflow.includes("npx wrangler versions deploy --env production"));
+  assert.ok(!workflow.includes("wrangler deploy --env production"));
+});
+
+test("shared gradual action promotes 5-50-100 with per-stage gates and auto-rollback", () => {
+  const action = readFileSync(
+    new URL("../.github/actions/gradual-promote/action.yml", import.meta.url),
+    "utf8",
+  );
+  // Ladder order: record rollback target, resolve the new id, then each
+  // stage deploys, gates, and rolls back before the next stage starts.
+  const order = [
+    "Record pre-promote rollback target",
+    "Resolve promoted version id",
+    "Promote to 5 percent",
+    "Health and SLO gate at 5 percent",
+    "Automatic rollback after 5 percent gate failure",
+    "Promote to 50 percent",
+    "Health and SLO gate at 50 percent",
+    "Automatic rollback after 50 percent gate failure",
+    "Promote to 100 percent",
+    "Health and SLO gate at 100 percent (new version)",
+    "Health and SLO gate at 100 percent (live traffic)",
+    "Automatic rollback after 100 percent gate failure",
+  ];
+  let at = -1;
+  for (const name of order) {
+    const next = action.indexOf(`- name: ${name}\n`);
+    assert.ok(next > at, `stage out of order or missing: ${name}`);
+    at = next;
+  }
+  // Deterministic specs from code, never interpolated percentages: wrangler
+  // refuses a lone TAG@5% (traffic must total 100), so each gradual step
+  // names the pre-promote version alongside the new tag.
+  assert.equal(
+    (action.match(/--deploy-spec "\$VERSION_TAG" (5|50|100) "\$PREV_VERSION"/g) ?? []).length,
+    3,
+  );
+  assert.ok(action.includes("npx wrangler versions deploy --env production"));
+  assert.ok(action.includes('npx wrangler rollback "$PREV_VERSION"'));
+  // Every rollback runs on any failure or cancellation once a rollback target
+  // is recorded: promote API errors and step timeouts included, not just
+  // gate failures. Later rollbacks stand down only when an earlier one
+  // recorded success (outputs.restored == 'true'); a failed restore leaves
+  // the output empty so the next rollback retries (up to three attempts for
+  // free). Each restore is time-bounded and refuses an unknown target before
+  // wrangler ever runs.
+  assert.equal(
+    (
+      action.match(
+        /if: \(failure\(\) \|\| cancelled\(\)\) && steps\.rollback-target\.conclusion == 'success'/g,
+      ) ?? []
+    ).length,
+    3,
+  );
+  // Success is recorded explicitly after each restore; a wrangler failure
+  // under `set -euo pipefail` exits before the echo, leaving no output.
+  assert.equal((action.match(/echo "restored=true" >> "\$GITHUB_OUTPUT"/g) ?? []).length, 3);
+  assert.ok(action.includes("&& steps.rollback-5.outputs.restored != 'true'"));
+  assert.ok(action.includes("&& steps.rollback-50.outputs.restored != 'true'"));
+  // A failed rollback must never count as restored: conclusion-based
+  // stand-down guards would treat failure as done.
+  assert.ok(!action.includes("rollback-5.conclusion == 'skipped'"));
+  assert.ok(!action.includes("rollback-50.conclusion == 'skipped'"));
+  assert.equal((action.match(/timeout 120 npx wrangler rollback/g) ?? []).length, 3);
+  assert.equal(
+    (action.match(/: "\$\{PREV_VERSION:\?missing pre-promote rollback target\}"/g) ?? []).length,
+    3,
+  );
+  // Four smoke loops exit 0 on success and exit 1 when retries run out;
+  // three rollback steps exit 1 after restoring the pre-promote version.
+  assert.equal((action.match(/^            exit 0$/gm) ?? []).length, 4);
+  assert.equal((action.match(/^        exit 1$/gm) ?? []).length, 7);
+  // Canary stages probe the new version directly; the final stage also probes
+  // live traffic. No curl one-offs, no trigger or full deploys.
+  // The override pins probes to the new version in the checker's quoted
+  // worker="uuid" shape; the checker rejects an unquoted value before any
+  // probe, so an unquoted shell would fail every canary gate into rollback.
+  assert.equal(
+    (action.match(/--version-override "\$WORKER_NAME=\\"\$NEW_VERSION\\""/g) ?? []).length,
+    3,
+  );
+  assert.ok(!action.includes("curl "));
+  assert.ok(!action.includes("wrangler triggers deploy"));
+  assert.ok(!action.includes("wrangler deploy --env production"));
+});
+
+test("rollback stand-down retries promote failures, cancellations and failed restores", () => {
+  const action = readFileSync(
+    new URL("../.github/actions/gradual-promote/action.yml", import.meta.url),
+    "utf8",
+  );
+  const guard50 = action.match(
+    /- name: Automatic rollback after 50 percent gate failure\n(?:.*\n)*? {6}if: (.*)\n/,
+  )?.[1];
+  const guard100 = action.match(
+    /- name: Automatic rollback after 100 percent gate failure\n(?:.*\n)*? {6}if: (.*)\n/,
+  )?.[1];
+  assert.ok(guard50, "rollback-50 has an if: guard");
+  assert.ok(guard100, "rollback-100 has an if: guard");
+  // Both guards run on failure or cancellation with a recorded target.
+  for (const guard of [guard50, guard100]) {
+    assert.match(guard, /\(failure\(\) \|\| cancelled\(\)\)/);
+    assert.match(guard, /steps\.rollback-target\.conclusion == 'success'/);
+  }
+  // Stand-down is success-explicit: only outputs.restored == 'true' holds the
+  // next rollback back. Empty means skipped (earlier stage never ran) or a
+  // failed/cancelled restore that never reached the echo.
+  const wouldRun50 = (restored5) => restored5 !== "true";
+  const wouldRun100 = (restored5, restored50) => restored5 !== "true" && restored50 !== "true";
+  assert.ok(guard50.includes("steps.rollback-5.outputs.restored != 'true'"));
+  assert.ok(guard100.includes("steps.rollback-5.outputs.restored != 'true'"));
+  assert.ok(guard100.includes("steps.rollback-50.outputs.restored != 'true'"));
+  const cases = [
+    // [label, restored5, restored50, run50, run100]
+    // A failed or cancelled restore never reaches the echo, so its output is
+    // empty — exactly like a skipped step — and the next rollback retries.
+    ["promote failure before any rollback", "", "", true, true],
+    ["cancelled before any rollback", undefined, undefined, true, true],
+    ["failed 5 percent restore leaves no output so 50 retries", "", "", true, true],
+    ["successful 5 percent restore stands down later steps", "true", "", false, false],
+    ["successful 50 percent restore stands down the last step", "", "true", true, false],
+    ["both restores recorded stand down everything", "true", "true", false, false],
+  ];
+  for (const [label, restored5, restored50, run50, run100] of cases) {
+    assert.equal(wouldRun50(restored5 ?? ""), run50, label);
+    assert.equal(wouldRun100(restored5 ?? "", restored50 ?? ""), run100, label);
+  }
 });
 
 test("rollback workflow reuses the production gate with no wider permissions", () => {
@@ -520,15 +851,44 @@ test("rollback workflow reuses the production gate with no wider permissions", (
   assert.ok(!workflow.includes("secrets.CLOUDFLARE_API_TOKEN"));
   assert.ok(!workflow.includes("secrets.CLOUDFLARE_ACCOUNT_ID"));
   for (const key of Object.keys(credentials)) {
-    assert.equal((workflow.match(new RegExp(`secrets\\.PRODUCTION_${key}`, "g")) ?? []).length, 2);
+    // Credentials check, rollback target-version secrets preflight and the
+    // rollback itself: all production-only.
+    assert.equal((workflow.match(new RegExp(`secrets\\.PRODUCTION_${key}`, "g")) ?? []).length, 3);
   }
   const versionCheck = workflow.indexOf("run: node ci/production-deploy-gate.mjs --version-id");
   const credentialCheck = workflow.indexOf("run: node ci/production-deploy-gate.mjs --credentials");
+  const targetSecrets = workflow.indexOf(
+    "run: node ci/check-production-secrets.mjs --rollback-version",
+  );
   const rollback = workflow.indexOf(
     'run: npx wrangler rollback "$ROLLBACK_VERSION_ID" --name two-web-next-production',
   );
   assert.ok(rollback > 0);
-  assert.ok(versionCheck > 0 && versionCheck < credentialCheck && credentialCheck < rollback);
+  assert.ok(
+    versionCheck > 0 &&
+      versionCheck < credentialCheck &&
+      credentialCheck < targetSecrets &&
+      targetSecrets < rollback,
+  );
+  // The rollback deploys the recorded version's own bindings: moderator and
+  // dry-run checks validate the dispatch SHA and must never gate it, and the
+  // secrets check must read the target version, never the latest listing.
+  assert.ok(
+    !workflow.includes("run: npm run check:worker-moderators-production"),
+    "rollback must not gate on the dispatch SHA moderator config",
+  );
+  assert.ok(
+    !workflow.includes("npx wrangler deploy --dry-run --env production"),
+    "rollback must not gate on a dispatch SHA dry-run build",
+  );
+  for (const line of workflow.split("\n")) {
+    if (line.includes("ci/check-production-secrets.mjs")) {
+      assert.ok(
+        line.includes("--rollback-version"),
+        `rollback must only check the target version: ${line.trim()}`,
+      );
+    }
+  }
   // The input never interpolates into a run: block; it travels inputs -> env.
   for (const line of workflow.split("\n")) {
     if (line.trimStart().startsWith("run:") && line.includes("inputs.version_id")) {
@@ -538,7 +898,17 @@ test("rollback workflow reuses the production gate with no wider permissions", (
   assert.match(workflow, /ROLLBACK_VERSION_ID: \$\{\{ inputs\.version_id \}\}/);
 });
 
-test("rollback smoke enforces the same public-route set as the deploy smoke", () => {
+const sharedMutationGroup = "production-worker-mutation";
+
+function jobConcurrencyBlocks(workflow) {
+  return [
+    ...workflow.matchAll(
+      /^    concurrency:\n      group: (.+)\n      cancel-in-progress: (true|false)\n/gm,
+    ),
+  ].map((match) => ({ group: match[1].trim(), cancel: match[2] }));
+}
+
+test("production promotion and rollback mutations share one static non-cancelling lock", () => {
   const deploy = readFileSync(
     new URL("../.github/workflows/deploy-production.yml", import.meta.url),
     "utf8",
@@ -547,18 +917,115 @@ test("rollback smoke enforces the same public-route set as the deploy smoke", ()
     new URL("../.github/workflows/rollback-production.yml", import.meta.url),
     "utf8",
   );
-  const block = (text) =>
-    text.match(
-      /      - name: Smoke test production public routes\n[\s\S]*?        run: \|\n((?:          .*\n)+)/,
-    )?.[1];
-  assert.ok(block(deploy) && block(rollback));
-  // Identical checks and retries; only the failure message names the operation.
-  assert.equal(block(rollback), block(deploy).replaceAll("after deploy", "after rollback"));
-  // GET-only public-route set through the shared checker; no curl /up one-off.
-  for (const step of [block(deploy), block(rollback)]) {
-    assert.match(step, /node bin\/smoke\.mjs https:\/\/togetherweown\.com --allow-indexable/);
+  for (const [label, workflow] of [
+    ["deploy-production.yml", deploy],
+    ["rollback-production.yml", rollback],
+  ]) {
+    const blocks = jobConcurrencyBlocks(workflow);
+    // Exactly one job-level mutation lock per workflow: deleting it fails here.
+    assert.equal(blocks.length, 1, `${label} must hold exactly one job-level mutation lock`);
+    assert.equal(blocks[0].group, sharedMutationGroup, `${label} mutation lock diverged`);
+    // A cancelling lock would let a queued run kill the active Worker mutation.
+    assert.equal(blocks[0].cancel, "false", `${label} mutation lock must not cancel`);
+    // The lock is independent of run/ref: no expression and no run-specific suffix.
+    assert.ok(!blocks[0].group.includes("${{"), `${label} mutation lock must be static`);
+    for (const suffix of ["github.", "run_id", "run_number", "run_attempt", "ref", "sha"]) {
+      assert.ok(
+        !blocks[0].group.toLowerCase().includes(suffix),
+        `${label} mutation lock must not carry a run-specific suffix (${suffix})`,
+      );
+    }
+  }
+  const deployGroup = jobConcurrencyBlocks(deploy)[0].group;
+  const rollbackGroup = jobConcurrencyBlocks(rollback)[0].group;
+  assert.equal(deployGroup, rollbackGroup, "promotion and rollback locks must match exactly");
+});
+
+test("shared production mutation lock never nests at workflow level nor leaks into release", () => {
+  const deploy = readFileSync(
+    new URL("../.github/workflows/deploy-production.yml", import.meta.url),
+    "utf8",
+  );
+  const rollback = readFileSync(
+    new URL("../.github/workflows/rollback-production.yml", import.meta.url),
+    "utf8",
+  );
+  // Workflow-level groups stay distinct and non-cancelling, so the run never
+  // nests the shared job-level group.
+  for (const [label, workflow, expected] of [
+    ["deploy-production.yml", deploy, "deploy-production"],
+    ["rollback-production.yml", rollback, "rollback-production"],
+  ]) {
+    const header = workflow.slice(0, workflow.indexOf("\njobs:"));
+    assert.match(
+      header,
+      new RegExp(`^concurrency:\\n  group: ${expected}\\n  cancel-in-progress: false\\n`, "m"),
+      `${label} keeps its own non-cancelling workflow-level group`,
+    );
+    assert.ok(
+      !header.includes(sharedMutationGroup),
+      `${label} must not nest the shared mutation lock at workflow level`,
+    );
+  }
+  // Only the Worker-mutating jobs hold the critical lock: preflight gates and
+  // the release-notes call must never hold it.
+  const deployMutation = deploy.slice(
+    deploy.indexOf("\n  deploy-production:\n"),
+    deploy.indexOf("\n  release:\n"),
+  );
+  const release = deploy.slice(deploy.indexOf("\n  release:\n"));
+  assert.ok(deployMutation.includes(sharedMutationGroup), "promotion job must hold the lock");
+  assert.ok(!release.includes(sharedMutationGroup), "release notes must not hold the lock");
+  const rollbackMutation = rollback.slice(rollback.indexOf("\n  rollback-production:\n"));
+  assert.ok(rollbackMutation.includes(sharedMutationGroup), "rollback job must hold the lock");
+  for (const [label, workflow, next] of [
+    ["deploy-production.yml", deploy, "\n  deploy-production:\n"],
+    ["rollback-production.yml", rollback, "\n  rollback-production:\n"],
+  ]) {
+    const preflight = workflow.slice(workflow.indexOf("\n  preflight:\n"), workflow.indexOf(next));
+    assert.ok(
+      !preflight.includes(sharedMutationGroup),
+      `${label} preflight must not hold the lock`,
+    );
+  }
+});
+
+test("rollback smoke enforces the same public-route set as the gradual live gate", () => {
+  // The deploy-time live gate now lives in the shared gradual action; the
+  // manual rollback keeps its own copy. Both must run the same shared
+  // checker with the same retries, so the two gates cannot drift.
+  const action = readFileSync(
+    new URL("../.github/actions/gradual-promote/action.yml", import.meta.url),
+    "utf8",
+  );
+  const rollback = readFileSync(
+    new URL("../.github/workflows/rollback-production.yml", import.meta.url),
+    "utf8",
+  );
+  const live = action.match(
+    /    - name: Health and SLO gate at 100 percent \(live traffic\)\n(?:.*\n)*?      run: \|\n((?:        .*\n)+)/,
+  )?.[1];
+  const manual = rollback.match(
+    /      - name: Smoke test production public routes\n[\s\S]*?        run: \|\n((?:          .*\n)+)/,
+  )?.[1];
+  assert.ok(live && manual);
+  for (const step of [live, manual]) {
+    assert.match(step, /node bin\/smoke\.mjs /);
+    assert.match(step, /for i in 1 2 3 4 5 6/);
     assert.ok(!step.includes("curl "));
   }
+  // The action threads --allow-indexable through env (same flag, same
+  // checker); the manual rollback passes it literally.
+  assert.match(live, /\$INDEXABLE/);
+  assert.match(
+    action,
+    /INDEXABLE: \$\{\{ inputs\.allow-indexable == 'true' && '--allow-indexable' \|\| '' \}\}/,
+  );
+  assert.match(manual, /--allow-indexable/);
+  // The gradual live gate probes the production domain through env, like the
+  // manual rollback probes the literal apex: same origin, same checker.
+  assert.ok(live.includes('node bin/smoke.mjs "https://$DOMAIN"'));
+  assert.match(manual, /node bin\/smoke\.mjs https:\/\/togetherweown\.com --allow-indexable/);
 });
 
 // Automated approval mode (repo variable PRODUCTION_AUTO_APPROVE=true).
@@ -567,10 +1034,14 @@ const autoEnvironment = {
   deployment_branch_policy: { protected_branches: false, custom_branch_policies: true },
   protection_rules: [{ type: "branch_policy" }],
 };
+// workflow_run runs record main's tip as head_sha; the run-name names the deployed commit.
+const tipSha = "c".repeat(40);
 function stagingRun(file, id, overrides = {}) {
   return {
     id,
-    head_sha: dispatchSha,
+    head_sha: tipSha,
+    display_title:
+      file === "deploy.yml" ? `deploy ${dispatchSha}` : `e2e-staging deploy ${dispatchSha}`,
     head_branch: "main",
     path: `.github/workflows/${file}`,
     head_repository: { full_name: "fixture/repo" },
@@ -585,6 +1056,18 @@ function stagingEvidence() {
     "e2e-staging.yml": [stagingRun("e2e-staging.yml", 200)],
   };
 }
+function qualitySteps(conclusions = {}) {
+  return stagingQualitySteps.map((name) => ({ name, conclusion: conclusions[name] ?? "success" }));
+}
+function qualityJob(overrides = {}) {
+  return { name: stagingQualityJob, conclusion: "success", steps: qualitySteps(), ...overrides };
+}
+function e2eJobs(journeys = "success") {
+  return [{ name: "staging-journeys", conclusion: journeys }, qualityJob()];
+}
+function withQuality(quality) {
+  return { 200: [{ name: "staging-journeys", conclusion: "success" }, quality] };
+}
 function stubAutoApi(staging, environment = autoEnvironment, seen = {}) {
   const ci = stubProductionApi(ciEvidence());
   return async (url, init) => {
@@ -596,11 +1079,18 @@ function stubAutoApi(staging, environment = autoEnvironment, seen = {}) {
     for (const file of ["deploy.yml", "e2e-staging.yml"]) {
       if (parsed.pathname.endsWith(`/workflows/${file}/runs`)) {
         seen[file] = (seen[file] ?? 0) + 1;
-        assert.equal(parsed.searchParams.get("head_sha"), dispatchSha);
+        // head_sha is main's tip for workflow_run runs: never filter on it.
+        assert.equal(parsed.searchParams.get("head_sha"), null);
         assert.equal(parsed.searchParams.get("branch"), "main");
-        const runs = staging[file];
+        const runs = parsed.searchParams.get("page") === "1" ? staging[file] : [];
         return { ok: true, json: async () => ({ total_count: runs.length, workflow_runs: runs }) };
       }
+    }
+    const jobsOf = parsed.pathname.match(/\/actions\/runs\/(\d+)\/jobs$/)?.[1];
+    // Only e2e-staging run ids answer here; CI run job lookups fall through.
+    if (jobsOf && (staging["e2e-staging.yml"] ?? []).some((run) => String(run.id) === jobsOf)) {
+      const jobs = staging.jobs?.[jobsOf] ?? e2eJobs(staging.journeys?.[jobsOf]);
+      return { ok: true, json: async () => ({ jobs }) };
     }
     return ci(url, init);
   };
@@ -656,8 +1146,54 @@ for (const [name, pattern, mutate] of [
   ],
   [
     "evidence for another SHA",
-    /deploy\.yml evidence revision\/branch\/workflow mismatch/,
-    (s) => (s["deploy.yml"][0].head_sha = otherSha),
+    /Missing or incomplete exact-SHA deploy\.yml/,
+    (s) => (s["deploy.yml"][0].display_title = `deploy ${otherSha}`),
+  ],
+  [
+    "a manual e2e-staging run (tests whatever staging serves)",
+    /Missing or incomplete exact-SHA e2e-staging\.yml/,
+    (s) => (s["e2e-staging.yml"][0].display_title = `e2e-staging ${dispatchSha}`),
+  ],
+  [
+    "e2e-staging that skipped its journeys",
+    /e2e-staging\.yml run 200 did not pass staging-journeys/,
+    (s) => (s.journeys = { 200: "skipped" }),
+  ],
+  [
+    "e2e-staging with no staging quality job",
+    /e2e-staging\.yml run 200 has missing or ambiguous staging-quality evidence/,
+    (s) => (s.jobs = { 200: [{ name: "staging-journeys", conclusion: "success" }] }),
+  ],
+  [
+    "e2e-staging with two staging quality jobs, one failing",
+    /e2e-staging\.yml run 200 has missing or ambiguous staging-quality evidence/,
+    (s) => (s.jobs = { 200: [...e2eJobs(), qualityJob({ conclusion: "failure" })] }),
+  ],
+  [
+    "staging quality job skipped under a green e2e-staging run",
+    /e2e-staging\.yml run 200 did not execute and pass the staging quality gate/,
+    (s) => (s.jobs = withQuality(qualityJob({ conclusion: "skipped", steps: [] }))),
+  ],
+  [
+    "staging quality job failed",
+    /e2e-staging\.yml run 200 did not execute and pass the staging quality gate/,
+    (s) => (s.jobs = withQuality(qualityJob({ conclusion: "failure" }))),
+  ],
+  [
+    "Lighthouse budget step skipped under a green quality job",
+    /e2e-staging\.yml run 200 did not execute and pass the staging quality gate/,
+    (s) =>
+      (s.jobs = withQuality(
+        qualityJob({ steps: qualitySteps({ [stagingQualitySteps[0]]: "skipped" }) }),
+      )),
+  ],
+  [
+    "Lighthouse quality step failing under a green quality job",
+    /e2e-staging\.yml run 200 did not execute and pass the staging quality gate/,
+    (s) =>
+      (s.jobs = withQuality(
+        qualityJob({ steps: qualitySteps({ [stagingQualitySteps[1]]: "failure" }) }),
+      )),
   ],
   [
     "evidence from another branch",
@@ -686,6 +1222,26 @@ test("auto-approve still requires the main-only branch policy", async () => {
       checkAuto(stagingEvidence(), environment),
       /main-only deployment branch policy/,
     );
+  }
+});
+
+test("auto-approve's staging quality job and steps are the ones the workflows run", () => {
+  const quality = readFileSync(
+    new URL("../.github/workflows/web-quality-origin.yml", import.meta.url),
+    "utf8",
+  );
+  const e2e = readFileSync(
+    new URL("../.github/workflows/e2e-staging.yml", import.meta.url),
+    "utf8",
+  );
+  assert.match(
+    e2e,
+    /\n {2}staging-quality:\n {4}name: staging-quality\n[\s\S]*?uses: \.\/\.github\/workflows\/web-quality-origin\.yml\n/,
+  );
+  assert.match(quality, /\n {2}quality:\n {4}name: quality\n/);
+  assert.equal(stagingQualityJob, "staging-quality / quality");
+  for (const step of stagingQualitySteps) {
+    assert.ok(quality.includes(`      - name: ${step}\n`), `web-quality-origin.yml runs "${step}"`);
   }
 });
 
@@ -724,4 +1280,159 @@ test("both production gate steps receive PRODUCTION_AUTO_APPROVE", () => {
     const block = gate.split("\n      - ")[0];
     assert.match(block, /PRODUCTION_AUTO_APPROVE: \$\{\{ vars\.PRODUCTION_AUTO_APPROVE \}\}/);
   }
+});
+
+test("gates the promoted DEPLOY_SHA, never the dispatch-time GITHUB_SHA", async () => {
+  // greenEnv carries a different GITHUB_SHA (main tip); evidence and checkout are for DEPLOY_SHA.
+  const result = await checkGreen(ciEvidence());
+  assert.equal(result.sha, dispatchSha);
+});
+
+test("refuses a missing or malformed DEPLOY_SHA before any API call", async () => {
+  for (const bad of [undefined, "", "main", dispatchSha.slice(1), `${dispatchSha};id`]) {
+    const seen = {};
+    const env = { ...greenEnv, DEPLOY_SHA: bad };
+    await assert.rejects(
+      checkGreen(ciEvidence(), seen, env),
+      /DEPLOY_SHA must be a full 40-hex commit/,
+    );
+  }
+});
+
+test("rollback-production passes the checked-out commit as DEPLOY_SHA to both gate steps", () => {
+  const rollback = readFileSync(
+    new URL("../.github/workflows/rollback-production.yml", import.meta.url),
+    "utf8",
+  );
+  const gates = rollback.split("run: node ci/production-deploy-gate.mjs\n").slice(1);
+  assert.equal(gates.length, 2);
+  for (const gate of gates) {
+    assert.match(gate.split("\n      - ")[0], /DEPLOY_SHA: \$\{\{ github\.sha \}\}/);
+  }
+});
+
+test("CI runs the promotion resolver selftest beside the production gate selftest", () => {
+  const ci = readFileSync(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8");
+  assert.match(ci, /run: node --test ci\/resolve-promotion-sha\.test\.mjs\n/);
+  assert.match(ci, /run: node --test ci\/gradual-promote\.test\.mjs\n/);
+  assert.match(ci, /run: node --test ci\/gradual-promote-gate-acceptance\.test\.mjs\n/);
+});
+
+test("each gradual stage also judges the new version's live error rate before rollback stand-down", () => {
+  const action = readFileSync(
+    new URL("../.github/actions/gradual-promote/action.yml", import.meta.url),
+    "utf8",
+  );
+  // The live gate sits between the stage's smoke gate and its rollback
+  // step, so a fail verdict reaches the same failure-driven rollback.
+  const order = [
+    "Health and SLO gate at 5 percent",
+    "Live error-rate gate at 5 percent",
+    "Automatic rollback after 5 percent gate failure",
+    "Health and SLO gate at 50 percent",
+    "Live error-rate gate at 50 percent",
+    "Automatic rollback after 50 percent gate failure",
+    "Health and SLO gate at 100 percent (live traffic)",
+    "Live error-rate gate at 100 percent",
+    "Automatic rollback after 100 percent gate failure",
+  ];
+  let at = -1;
+  for (const name of order) {
+    const next = action.indexOf(`- name: ${name}\n`);
+    assert.ok(next > at, `error-rate stage out of order or missing: ${name}`);
+    at = next;
+  }
+  assert.equal((action.match(/id: error-rate-(5|50|100)\n/g) ?? []).length, 3);
+  // End-of-line anchor: a trailing `|| true` on the run line would
+  // neutralize the gate while an unanchored count stays green.
+  assert.equal(
+    (action.match(/node "\$\{\{ github\.action_path \}\}\/error-rate-gate\.mjs"$/gm) ?? []).length,
+    3,
+  );
+  // The gate reads analytics with the same caller-supplied token/account
+  // pair as the wrangler steps; the rehearsal-only fixture override must
+  // never be reachable from the production promotion path.
+  assert.equal(
+    (action.match(/ERROR_RATE_THRESHOLD: \$\{\{ inputs\.error-rate-threshold \}\}/g) ?? []).length,
+    3,
+  );
+  assert.ok(!action.includes("ERROR_RATE_FIXTURE"));
+  // Per-step wiring: enabled-only guard (whole line, so `&& false` fails),
+  // the promoted version (never the rollback target), and the exact env
+  // names configFromEnv parses. Count pins alone let a renamed env var or
+  // a repointed NEW_VERSION merge green.
+  const stepBlock = (name) => {
+    const start = action.indexOf(`    - name: ${name}\n`);
+    assert.ok(start >= 0, `step missing: ${name}`);
+    const rest = action.slice(start + 1);
+    const next = rest.indexOf("\n    - name: ");
+    return next < 0 ? rest : rest.slice(0, next);
+  };
+  // Each smoke gate records when it finished, 1s past the finish: a
+  // whole-second stamp would round down, and the analytics lower bound
+  // is inclusive, so probes sent in the final second would still count.
+  // The error-rate gate starts its judged window there, so the stage's
+  // own probes never count. The stamp must fail closed: an empty value
+  // would read as "no recorded start" and revive the trailing window.
+  assert.equal(
+    (
+      action.match(
+        /finished_at=\$\(node -e "process\.stdout\.write\(new Date\(Date\.now\(\) \+ 1000\)\.toISOString\(\)\)"\)/g,
+      ) ?? []
+    ).length,
+    3,
+  );
+  assert.equal(
+    (
+      action.match(
+        /if \[ -z "\$finished_at" \]; then echo "::error::could not stamp the smoke finish time" >&2; exit 1; fi/g,
+      ) ?? []
+    ).length,
+    3,
+  );
+  assert.equal(
+    (action.match(/echo "finished-at=\$finished_at" >> "\$GITHUB_OUTPUT"/g) ?? []).length,
+    3,
+  );
+  for (const [pct, smoke] of [
+    [5, "smoke-5"],
+    [50, "smoke-50"],
+    [100, "smoke-100"],
+  ]) {
+    const block = stepBlock(`Live error-rate gate at ${pct} percent`);
+    assert.ok(block.includes("if: inputs.error-rate-gate == 'true'\n"), `gate ${pct} if guard`);
+    for (const envLine of [
+      "WORKER_NAME: ${{ inputs.worker-name }}",
+      "NEW_VERSION: ${{ steps.promoted-version.outputs.id }}",
+      "CLOUDFLARE_API_TOKEN: ${{ inputs.api-token }}",
+      "CLOUDFLARE_ACCOUNT_ID: ${{ inputs.account-id }}",
+      "ERROR_RATE_THRESHOLD: ${{ inputs.error-rate-threshold }}",
+      "ERROR_RATE_MIN_REQUESTS: ${{ inputs.error-rate-min-requests }}",
+      "ERROR_RATE_WINDOW_MINUTES: ${{ inputs.error-rate-window-minutes }}",
+      "ERROR_RATE_SOAK_SECONDS: ${{ inputs.error-rate-soak-seconds }}",
+      `ERROR_RATE_WINDOW_START: \${{ steps.${smoke}.outputs.finished-at }}`,
+    ]) {
+      assert.ok(block.includes(envLine), `gate ${pct} env: ${envLine}`);
+    }
+    assert.ok(!block.includes("rollback-target"), `gate ${pct} must not read the rollback target`);
+    // A swallowed failure would never reach the rollback step.
+    assert.ok(!block.includes("continue-on-error"), `gate ${pct} must not swallow its failure`);
+  }
+});
+
+test("the staging rehearsal requires the elevated-rate verdict, not any non-zero exit", () => {
+  const rehearsal = readFileSync(
+    new URL("../.github/workflows/error-rate-gate-rehearsal.yml", import.meta.url),
+    "utf8",
+  );
+  // Manual-only staging proof; it must never gain an automatic trigger.
+  assert.match(rehearsal, /on:\n  workflow_dispatch:\n/);
+  // The simulated half counts as a halt only when the gate judged the
+  // fixture's exact elevated sample (200 requests, 80 errors): a malformed
+  // fixture also exits non-zero, with verdict=error, and must not read as
+  // a successful rehearsal.
+  assert.ok(
+    rehearsal.includes('grep -F "error-rate requests=200 errors=80 rate=0.4000 verdict=fail"'),
+    "rehearsal must require the elevated-rate fail verdict line",
+  );
 });

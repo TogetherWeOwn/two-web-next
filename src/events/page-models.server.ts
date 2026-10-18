@@ -1,0 +1,210 @@
+// Framework-neutral, server-only page models for public event pages.
+import type { Db } from "../db/index";
+import {
+  calendarEmptyState,
+  calendarGridRange,
+  dedupeTransients,
+  eventSearchLogEntry,
+  EVENTS_UPCOMING_PAGE_SIZE,
+  mergeCalendarRows,
+  parseCalendarMonth,
+  type CalendarState,
+  type DiscordTransient,
+} from "../islands/contracts";
+import {
+  calendarZone,
+  currentCalendarMonth,
+  wallDateIso,
+  wallDayStart,
+  wallMonth,
+} from "./date-format";
+import type { DiscordEventsSource } from "./discord-transients-types";
+import {
+  listCalendarPast,
+  listUpcoming,
+  listUpcomingForMonth,
+  normalizeUpcomingPage,
+  persistedDiscordIds,
+  rankUpcoming,
+  type PublicEvent,
+} from "./reads";
+import { MAX_QUERY_LENGTH, matchQuery, recordSearch } from "./search-log";
+
+export interface CalendarPageInput {
+  q: string;
+  searching: boolean;
+  view: "list" | "calendar";
+  past: boolean;
+  page: number;
+  jumpKey: string;
+  /** NUL-stripped `?event=` was present, even when overlong and unusable for lookup. */
+  jumpRequested: boolean;
+  month: string | null;
+  queryTooLong: boolean;
+}
+
+/** Normalize bounded URL state before a framework-specific route loads data. */
+export function resolveCalendarInput(input: {
+  q?: string | null;
+  view?: string | null;
+  past?: string | null;
+  page?: string | null;
+  event?: string | null;
+  month?: string | null;
+}): CalendarPageInput {
+  const q = input.q ?? "";
+  const queryTooLong = [...q].length > MAX_QUERY_LENGTH;
+  const searching = !queryTooLong && matchQuery(q) !== null;
+  const view = searching ? "list" : input.view === "calendar" ? "calendar" : "list";
+  const parsedPage = Number.parseInt(input.page ?? "1", 10);
+  const rawJumpKey = (input.event ?? "").replaceAll(String.fromCharCode(0), "");
+
+  return {
+    q,
+    searching,
+    view,
+    past: input.past === "1",
+    page: normalizeUpcomingPage(parsedPage),
+    jumpKey: rawJumpKey !== "" && rawJumpKey.length <= 64 ? rawJumpKey : "",
+    jumpRequested: rawJumpKey !== "",
+    month: input.month ?? null,
+    queryTooLong,
+  };
+}
+
+export interface CalendarPageModel {
+  state: CalendarState;
+  upcoming: (PublicEvent | DiscordTransient)[];
+  past: PublicEvent[];
+  zone: string;
+  totalPages: number;
+  emptyState: ReturnType<typeof calendarEmptyState>;
+  robots?: string;
+  discordFailed: boolean;
+}
+
+/**
+ * Load the public calendar projection from the shared Drizzle/domain reads.
+ * The framework adapter owns admission, DB acquisition, session and response
+ * caching; this model owns only normalized public page data and its fallbacks.
+ */
+export async function loadCalendarPageModel(args: {
+  db: Db;
+  input: CalendarPageInput;
+  includeDrafts: boolean;
+  discord: DiscordEventsSource;
+  now?: Date;
+}): Promise<CalendarPageModel> {
+  const { db, input, includeDrafts, discord } = args;
+  const now = args.now ?? new Date();
+  const { q, searching, view, past, page, jumpKey, jumpRequested } = input;
+  const match = matchQuery(q);
+  const opts = { includeDrafts, search: match };
+
+  // Grid day-jumps resolve the list page holding the card, even past page one.
+  let listPage = view === "calendar" ? 1 : page;
+  if (view === "list" && jumpKey !== "") {
+    const rank = await rankUpcoming(db, jumpKey, now, opts);
+    if (rank !== null) listPage = Math.floor(rank / EVENTS_UPCOMING_PAGE_SIZE) + 1;
+  }
+
+  // Independent reads start together like the homepage (perf(home) #856):
+  // the upcoming page (web DB), the past drawer (web DB) and the Discord
+  // transients (snapshot store, at most one live Discord GET) share nothing,
+  // so sequential awaits would sum every round trip into /events server time.
+  // Keep the rows and failure flag on the same resolved source instance.
+  const [upcomingPage, localPast, discordRows] = await Promise.all([
+    listUpcoming(db, now, opts, listPage),
+    listCalendarPast(db, now, opts),
+    discord.upcoming(now),
+  ]);
+  const { rows: pageRows, totalPages, total: totalUpcoming } = upcomingPage;
+  const persistedIds = await persistedDiscordIds(
+    db,
+    discordRows.map((row) => row.discordId),
+  );
+  const term = (match ?? "").toLowerCase();
+  const transients = dedupeTransients(discordRows, persistedIds).filter(
+    (row) =>
+      (row.endsAt === null || row.endsAt >= now) &&
+      (term === "" ||
+        row.title.toLowerCase().includes(term) ||
+        (row.description ?? "").toLowerCase().includes(term)),
+  );
+  const discordFailed = discord.lastReadFailed();
+
+  const probe = mergeCalendarRows(
+    pageRows,
+    view !== "list" || listPage === 1 || totalUpcoming === 0 ? transients : [],
+  );
+  const probeZone = calendarZone([
+    ...pageRows.map((event) => event.timezone),
+    ...localPast.map((event) => event.timezone),
+  ]);
+  const firstProbe = probe[0];
+  const fallbackMonth =
+    parseCalendarMonth(
+      firstProbe
+        ? wallMonth(
+            firstProbe.startsAt,
+            "discordId" in firstProbe ? probeZone : firstProbe.timezone,
+          )
+        : null,
+    ) ?? currentCalendarMonth(now);
+
+  let upcoming = probe;
+  let zone = probeZone;
+  const month = parseCalendarMonth(input.month) ?? fallbackMonth;
+  if (view === "calendar") {
+    const monthRows = await listUpcomingForMonth(db, month, now, opts);
+    zone = calendarZone([
+      ...monthRows.map((event) => event.timezone),
+      ...localPast.map((event) => event.timezone),
+    ]);
+    const grid = calendarGridRange(month) ?? { first: month, last: month };
+    const gridFirst = wallDayStart(grid.first);
+    const gridLast = wallDayStart(grid.last);
+    upcoming = mergeCalendarRows(
+      monthRows,
+      transients.filter((row) => {
+        const day = wallDayStart(wallDateIso(row.startsAt, zone));
+        return day >= gridFirst && day <= gridLast;
+      }),
+    );
+  }
+
+  const state = { view, month, q, past, page: listPage };
+  // An overlong `?event=` never resolves, but it is still a jump URL — not an
+  // indexable copy of page one — so the robots decision sees the request flag.
+  const robots = searching || state.page > 1 || jumpRequested ? "noindex, follow" : undefined;
+  const emptyState = calendarEmptyState({
+    searching,
+    upcomingEmpty: totalUpcoming === 0 && transients.length === 0,
+    pastEmpty: localPast.length === 0,
+    readFailed: discordFailed,
+  });
+
+  if (searching && listPage === 1) {
+    const totalMatches = totalUpcoming + transients.length + localPast.length;
+    await recordSearch(db, q, totalMatches);
+    const entry = eventSearchLogEntry(match ?? "", totalMatches);
+    if (entry) {
+      try {
+        console.info("event_search", JSON.stringify(entry));
+      } catch {
+        /* a down logger is an unrecorded search, never a broken page */
+      }
+    }
+  }
+
+  return {
+    state,
+    upcoming,
+    past: localPast,
+    zone,
+    totalPages,
+    emptyState,
+    robots,
+    discordFailed,
+  };
+}

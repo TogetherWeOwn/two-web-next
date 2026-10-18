@@ -29,7 +29,7 @@ export const LOGIN_NEXT_COOKIE = "__Host-two_login_next";
 export const LOGIN_INTENDED_COOKIE = "__Host-two_login_intended";
 export const JOIN_RESULT_COOKIE = "__Host-two_join_result";
 // Same ten-minute window as the OAuth state cookie it accompanies.
-const JOURNEY_TTL_SECONDS = 600;
+export const JOURNEY_TTL_SECONDS = 600;
 
 // `any` env so callers carrying middleware Variables (profiles' viewer, the
 // admin guard's actor/access) can pass their Context unchanged; hono's own
@@ -37,7 +37,10 @@ const JOURNEY_TTL_SECONDS = 600;
 type Ctx = Context<any>;
 
 const cookieOpts = { path: "/", secure: true, httpOnly: true, sameSite: "Lax" as const };
-const deleteOpts = { path: "/", secure: true };
+// Deletion repeats the set attributes (minus maxAge): a clearing Set-Cookie
+// without HttpOnly/SameSite is flagged by scanners and risks the browser
+// keeping a differently-scoped twin.
+const deleteOpts = { ...cookieOpts };
 
 /**
  * Explicit `?next=` on the sign-in link. A safe value rides OAuth; anything

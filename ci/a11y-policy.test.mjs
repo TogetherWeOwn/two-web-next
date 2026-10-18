@@ -55,6 +55,22 @@ test("event JSON reads are explicitly classified as non-documents, not HTML succ
   );
 });
 
+test("operational preview JSON is explicitly a non-document", () => {
+  const path = "/admin/queue/failed/:id/preview";
+  const entry = documentCoverage[path];
+  assert.equal(entry.skip, true);
+  assert.match(entry.reason, /operator-only JSON/);
+  assert.deepEqual(auditCases([{ method: "GET", path }], { [path]: entry }), []);
+});
+
+test("evidence-only source verifier JSON is explicitly a non-document", () => {
+  const path = "/admin/queue/source-evidence/:id";
+  const entry = documentCoverage[path];
+  assert.equal(entry.skip, true);
+  assert.match(entry.reason, /evidence-only.*JSON/);
+  assert.deepEqual(auditCases([{ method: "GET", path }], { [path]: entry }), []);
+});
+
 test("removed routes and unexplained exclusions fail", () => {
   assert.throws(() => auditCases(routes.slice(1), coverage), /stale=\//);
   assert.throws(
@@ -164,19 +180,22 @@ test("audit artifacts omit Wrangler's synthetic session and DB configuration val
   assert.equal(redactAuditLog("startup failed"), "startup failed");
 });
 
-test("the required CI job runs after a non-green audit and rejects every non-success result", async () => {
+test("the required ci-ok gate runs after a non-green audit and rejects every non-success result", async () => {
   const workflow = await readFile(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8");
-  const check = workflow.slice(workflow.indexOf("\n  check:\n"));
-  assert.match(check, /\n    needs: \[a11y, lighthouse, bundle-budget, scope\]\n/);
-  assert.match(check, /\n    if: always\(\)\n/);
-  assert.match(check, /A11Y_RESULT: \$\{\{ needs\.a11y\.result \}\}/);
-  const guard = check.match(
+  const check = workflow.split("\n  check:\n")[1]?.split(/\n  [\w-]+:\n/)[0];
+  // check no longer waits on the audit; the guard below lives in ci-ok.
+  assert.match(check, /\n    needs: \[scope\]\n/);
+  const ciOk = workflow.split("\n  ci-ok:\n")[1];
+  assert.match(
+    ciOk,
+    /\n    needs: \[a11y, lighthouse, bundle-budget, docs-links, check, node22-compat, scope\]\n/,
+  );
+  assert.match(ciOk, /\n    if: \$\{\{ !cancelled\(\) \}\}\n/);
+  assert.match(ciOk, /A11Y_RESULT: \$\{\{ needs\.a11y\.result \}\}/);
+  const guard = ciOk.match(
     /- name: Require successful accessibility audit\n        if: \(needs\.scope\.outputs\.docs_only != 'true' && needs\.scope\.outputs\.draft != 'true'\)\n        env:\n          A11Y_RESULT: [^\n]+\n          A11Y_SELECTED: [^\n]+\n        run: ([^\n]+)/,
   );
-  assert(
-    guard,
-    "Audit guard must precede the heavy suite (only the docs-only fast pass may run before it)",
-  );
+  assert(guard, "Audit guard must sit in ci-ok, gated on the audit result");
   for (const [result, selected, expected] of [
     ["success", "true", 0],
     ["success", "false", 0],
@@ -235,9 +254,9 @@ test("the required CI job has a bounded coverage allowance without relaxing its 
     "npm run test:smoke",
     "npm run db:migrate",
     "npm run config:check",
-    "npm run lint && npm run typecheck && npm run test:coverage && node --test ci/a11y-*.test.mjs ci/admin-properties-ci.test.mjs ci/coverage-command.test.mjs",
+    "npm run lint && npm run typecheck && npm run e2e:typecheck && npm run test:coverage && npm run e2e:safety && node --test ci/a11y-*.test.mjs ci/admin-properties-ci.test.mjs ci/coverage-command.test.mjs ci/kit-preview-e2e-wiring.test.mjs ci/visual-accept.test.mjs ci/tier0-changed-query-files.test.mjs",
     "npm run test:cutover",
-    "bash ci/neon-backup-selftest.sh",
+    "bash ci/db-backup-selftest.sh",
     "bash ci/check-migration-numbers.sh",
     "node --test ci/production-deploy-gate.test.mjs",
     "npx wrangler deploy --dry-run --outdir dist",

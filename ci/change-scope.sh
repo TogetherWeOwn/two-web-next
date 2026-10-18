@@ -46,7 +46,7 @@ if [ -s "$files" ]; then
       # observing it, and moving code out of test/ starts observing it.
       for path in "$name" ${previous:+"$previous"}; do
         case "$path" in
-          docs/*|test/*) ;;
+          docs/*|test/*|tier0/*) ;;
           # Markdown elsewhere (content/, src/, fixtures outside test/) may
           # be shipped or read, so only root-level prose skips.
           */*) skip_e2e=false ;;
@@ -83,9 +83,13 @@ if [ -s "$files" ]; then
             full=true
             ;;
           # Worker deploy surface: dispatch configs, the Tail worker and the
-          # Kit spike. Observed by `check` (dry runs, Kit typecheck and
-          # parity) and the deploy workflows, not by the audit or perf jobs.
-          wrangler*.jsonc|tail/*|web/*)
+          # Kit spike. Kit UI sources also select the served-app browser and
+          # performance gates; preserve worker checks for all Kit inputs.
+          wrangler*.jsonc|tail/*)
+            worker=true
+            ;;
+          web/*)
+            app=true
             worker=true
             ;;
           # Database: migrations, the journal lock, the drizzle config and the
@@ -95,12 +99,12 @@ if [ -s "$files" ]; then
           # migrations), not by the perf jobs. Listed before the `ci/*` app
           # arm below, which would otherwise claim these paths.
           drizzle/*|migrations.lock|drizzle.config.ts|\
-          ci/check-migration-*|ci/neon-migrate*)
+          ci/check-migration-*|ci/db-migrate*)
             db=true
             ;;
           # App: everything the served worker, its assets, the test suites
           # and the browser journeys observe.
-          src/*|assets/*|public/*|content/*|bin/*|ci/*|test/*|e2e/*|spike/*)
+          src/*|assets/*|public/*|content/*|bin/*|ci/*|test/*|tier0/*|e2e/*|spike/*)
             app=true
             ;;
           # Prose: area-neutral here; the docs_only verdict below decides.

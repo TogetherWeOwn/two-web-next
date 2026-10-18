@@ -5,8 +5,9 @@ import { pgQueueDepth, pgQueueLedger } from "../src/jobs/postgres";
 import type { BotClient, EventStore, QueueLedger, UniqueLock } from "../src/jobs/types";
 
 // Mirrors of the 3rd review's P1 proofs, against the fixed code. Live-DB parts
-// use connection-scoped temporary tables on DATABASE_URL (CI's postgres:17
-// service, agent-testdb locally); shared tables are never written or dropped.
+// run on DATABASE_URL (CI's postgres:17 service, agent-testdb locally) and skip
+// when it is unset, so `npm run check:offline` covers this file without opening
+// SQL. The P1-3 refusal paths below are pure in-memory and always run offline.
 
 const leaseToken = "11111111-1111-4111-8111-111111111111";
 
@@ -61,12 +62,15 @@ function msg(body: unknown, attempts = 1) {
     },
   });
 }
-// CI sets DATABASE_URL to its postgres:17 service (localhost); local runs fall
-// back to the shared agent-testdb host. Never hardcode the host: CI has no
+// CI sets DATABASE_URL to its postgres:17 service (localhost); local runs use
+// the shared agent-testdb host. Never hardcode the host: CI has no
 // `agent-testdb` DNS and fails with EAI_AGAIN (PR #30 `check` on d276d0b).
-const URL = process.env.DATABASE_URL ?? "postgres://agent_test@agent-testdb:5432/postgres";
+// No fallback: an unset DATABASE_URL means the live-DB proofs below skip via
+// `skipIf`, so offline runs never open SQL.
+const URL = process.env.DATABASE_URL!;
+const hasDb = Boolean(process.env.DATABASE_URL);
 
-describe("P1-2: every accepted jobId keeps its row (real SQL)", () => {
+describe.skipIf(!hasDb)("P1-2: every accepted jobId keeps its row (real SQL)", () => {
   it("two live dispatches of the same key count 2", async () => {
     const live = postgres(URL, { max: 1 });
     try {
@@ -97,6 +101,8 @@ describe("P1-2: every accepted jobId keeps its row (real SQL)", () => {
   });
 });
 
+// Offline fixture: no DATABASE_URL, no driver, no network. This is the P1
+// refusal coverage that `check:offline` exercises.
 describe("P1-3: exhausted throws ack, nonterminal throws retry", () => {
   it("attempt-6 throw: failed() + ack, no retry, lock freed", async () => {
     const bot = {
@@ -131,9 +137,43 @@ describe("P1-3: exhausted throws ack, nonterminal throws retry", () => {
     expect(m.retried).toBeUndefined();
     expect(lock.held.has("sync-event:e1")).toBe(false);
   });
+
+  it("attempt-1 throw: released() + retry, no ack, lock held", async () => {
+    const bot = {
+      upsertEvent: async () => {
+        throw new TypeError("boom");
+      },
+    } as unknown as BotClient;
+    const lock = memLock(new Set(["sync-event:e1"]));
+    const calls: string[] = [];
+    const ledger: QueueLedger = {
+      enqueued: async () => {},
+      reserved: async () => {
+        calls.push("reserved");
+      },
+      released: async () => {
+        calls.push("released");
+      },
+      dequeued: async () => {
+        calls.push("dequeued");
+      },
+      failed: async () => {
+        calls.push("failed");
+      },
+    };
+    const m = msg(
+      { kind: "sync-event", eventKey: "e1", idempotencyKey: "k", leaseToken, jobId: "j" },
+      1,
+    );
+    await consume({ messages: [m] }, { bot, events: store(), lock, ledger });
+    expect(calls).toEqual(["reserved", "released"]);
+    expect(m.acked).toBe(false);
+    expect(m.retried).toBeDefined();
+    expect(lock.held.has("sync-event:e1")).toBe(true);
+  });
 });
 
-describe("P1-1: wedged ledger SQL cannot stall ack (isolated connection)", () => {
+describe.skipIf(!hasDb)("P1-1: wedged ledger SQL cannot stall ack (isolated connection)", () => {
   it("terminal path completes while the real ledger UPDATE is row-lock-blocked", async () => {
     // Real row-lock contention on a temporary table: the blocker transaction
     // holds a FOR UPDATE lock on the ledger row; the real pgQueueLedger
@@ -195,85 +235,88 @@ describe("P1-1: wedged ledger SQL cannot stall ack (isolated connection)", () =>
   }, 30000);
 });
 
-describe("P1-1b: the producer-side ledger no longer shares a pool with the consumer lock", () => {
-  it("a wedged reserved() cannot hold lock.release hostage (separate clients)", async () => {
-    // Supersedes the old shared-pool regression guard. Two changes made the
-    // old assertion obsolete: (a) the worker isolates ledger I/O on its own
-    // connection (handleQueue), and (b) lock cleanup is bounded best-effort
-    // (releaseLock, 2s) — so even a wedged `reserved` no longer stalls the
-    // terminal ack path. This proof pins the new posture: with the ledger
-    // wedged on a real row lock, the consumer still acks promptly while the
-    // release goes through its own client.
-    //
-    // Run-owned scratch table: created in this proof, dropped at the end, so
-    // the caller's tables are never touched. The name is unique per run.
-    const mainSql = postgres(URL, { max: 1 });
-    const blocker = postgres(URL, { max: 1 });
-    const scratch = `scratch_iso2_${crypto.randomUUID().replaceAll("-", "")}`;
-    const ledgerSql = postgres(URL, { max: 1 });
-    const releaseSql = postgres(URL, { max: 1 });
-    try {
-      await mainSql.unsafe(`create table "${scratch}" (id int primary key, v int)`);
-      await mainSql.unsafe(`insert into "${scratch}" values (1, 0)`);
-      await blocker`begin`;
-      await blocker.unsafe(`select * from "${scratch}" where id = 1 for update`);
-      let released = false;
-      const ledger: QueueLedger = {
-        enqueued: async () => {},
-        reserved: async () => {
-          await ledgerSql.unsafe(`update "${scratch}" set v = v + 1 where id = 1`);
-        },
-        released: async () => {},
-        dequeued: async () => {},
-        failed: async () => {},
-      };
-      const lock: UniqueLock = {
-        acquire: async () => leaseToken,
-        // Own client: the row lock is held by `blocker`, not by this
-        // session — but `blocker` holds FOR UPDATE on the same row, so this
-        // UPDATE also waits. The point stands: the bounded ledger (2s)
-        // expires first and ack lands before the 8s race ends.
-        release: async () => {
-          await releaseSql.unsafe(`update "${scratch}" set v = v + 1 where id = 1`);
-          released = true;
-        },
-      };
-      const bot = {
-        upsertEvent: async () => ({ ok: true, requestId: null, discordEventId: "d" }),
-      } as unknown as BotClient;
-      const m = msg({
-        kind: "sync-event",
-        eventKey: "e1",
-        idempotencyKey: "k",
-        leaseToken,
-        jobId: crypto.randomUUID(),
-      });
-      const done = consume({ messages: [m] }, { bot, events: store(), lock, ledger });
-      const winner = await Promise.race([
-        done.then(() => "done"),
-        new Promise((r) => setTimeout(() => r("timeout"), 8000)),
-      ]);
-      // Bounded ledger (2s) and bounded lock cleanup (2s) both expire while
-      // the row lock is held, so the handler runs and the terminal ack lands
-      // promptly — the wedged statements hold only their own clients.
-      // `released` stays false until the blocker rolls back (both UPDATEs
-      // wait on the same row lock); clearing it must never gate the ack.
-      expect(winner).toBe("done");
-      expect(m.acked).toBe(true);
-      expect(released).toBe(false);
-      await blocker`rollback`;
-      await done;
-      // `done` already settled via the 2s bounded path, so it cannot wait for
-      // the orphaned release UPDATE: poll until the unblocked statement lands.
-      const deadline = Date.now() + 5000;
-      while (!released && Date.now() < deadline) await new Promise((r) => setTimeout(r, 50));
-      expect(released).toBe(true);
-      await mainSql.unsafe(`drop table "${scratch}"`);
-    } finally {
-      await blocker.end();
-      await mainSql.end();
-      await ledgerSql.end({ timeout: 1 });
-      await releaseSql.end({ timeout: 1 });
-    }
-  }, 30000);
-});
+describe.skipIf(!hasDb)(
+  "P1-1b: the producer-side ledger no longer shares a pool with the consumer lock",
+  () => {
+    it("a wedged reserved() cannot hold lock.release hostage (separate clients)", async () => {
+      // Supersedes the old shared-pool regression guard. Two changes made the
+      // old assertion obsolete: (a) the worker isolates ledger I/O on its own
+      // connection (handleQueue), and (b) lock cleanup is bounded best-effort
+      // (releaseLock, 2s) — so even a wedged `reserved` no longer stalls the
+      // terminal ack path. This proof pins the new posture: with the ledger
+      // wedged on a real row lock, the consumer still acks promptly while the
+      // release goes through its own client.
+      //
+      // Run-owned scratch table: created in this proof, dropped at the end, so
+      // the caller's tables are never touched. The name is unique per run.
+      const mainSql = postgres(URL, { max: 1 });
+      const blocker = postgres(URL, { max: 1 });
+      const scratch = `scratch_iso2_${crypto.randomUUID().replaceAll("-", "")}`;
+      const ledgerSql = postgres(URL, { max: 1 });
+      const releaseSql = postgres(URL, { max: 1 });
+      try {
+        await mainSql.unsafe(`create table "${scratch}" (id int primary key, v int)`);
+        await mainSql.unsafe(`insert into "${scratch}" values (1, 0)`);
+        await blocker`begin`;
+        await blocker.unsafe(`select * from "${scratch}" where id = 1 for update`);
+        let released = false;
+        const ledger: QueueLedger = {
+          enqueued: async () => {},
+          reserved: async () => {
+            await ledgerSql.unsafe(`update "${scratch}" set v = v + 1 where id = 1`);
+          },
+          released: async () => {},
+          dequeued: async () => {},
+          failed: async () => {},
+        };
+        const lock: UniqueLock = {
+          acquire: async () => leaseToken,
+          // Own client: the row lock is held by `blocker`, not by this
+          // session — but `blocker` holds FOR UPDATE on the same row, so this
+          // UPDATE also waits. The point stands: the bounded ledger (2s)
+          // expires first and ack lands before the 8s race ends.
+          release: async () => {
+            await releaseSql.unsafe(`update "${scratch}" set v = v + 1 where id = 1`);
+            released = true;
+          },
+        };
+        const bot = {
+          upsertEvent: async () => ({ ok: true, requestId: null, discordEventId: "d" }),
+        } as unknown as BotClient;
+        const m = msg({
+          kind: "sync-event",
+          eventKey: "e1",
+          idempotencyKey: "k",
+          leaseToken,
+          jobId: crypto.randomUUID(),
+        });
+        const done = consume({ messages: [m] }, { bot, events: store(), lock, ledger });
+        const winner = await Promise.race([
+          done.then(() => "done"),
+          new Promise((r) => setTimeout(() => r("timeout"), 8000)),
+        ]);
+        // Bounded ledger (2s) and bounded lock cleanup (2s) both expire while
+        // the row lock is held, so the handler runs and the terminal ack lands
+        // promptly — the wedged statements hold only their own clients.
+        // `released` stays false until the blocker rolls back (both UPDATEs
+        // wait on the same row lock); clearing it must never gate the ack.
+        expect(winner).toBe("done");
+        expect(m.acked).toBe(true);
+        expect(released).toBe(false);
+        await blocker`rollback`;
+        await done;
+        // `done` already settled via the 2s bounded path, so it cannot wait for
+        // the orphaned release UPDATE: poll until the unblocked statement lands.
+        const deadline = Date.now() + 5000;
+        while (!released && Date.now() < deadline) await new Promise((r) => setTimeout(r, 50));
+        expect(released).toBe(true);
+        await mainSql.unsafe(`drop table "${scratch}"`);
+      } finally {
+        await blocker.end();
+        await mainSql.end();
+        await ledgerSql.end({ timeout: 1 });
+        await releaseSql.end({ timeout: 1 });
+      }
+    }, 30000);
+  },
+);

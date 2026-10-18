@@ -23,8 +23,13 @@ describe("global test-database guard matrix", () => {
     ["production db name", "postgres://agent_test@agent-testdb/production"],
     ["prod db name", "postgres://agent_test@agent-testdb/prod"],
     ["controller db name", "postgres://agent_test@agent-testdb/controller"],
+    ["staging db name", "postgres://agent_test@agent-testdb/staging"],
+    ["unknown db name", "postgres://agent_test@agent-testdb/events"],
+    ["unknown W15 db name", "postgres://agent_test@agent-testdb/w15_staging"],
+    ["W15-prefixed worktree name", "postgres://agent_test@agent-testdb/two_web_next_w15_tog10114"],
     ["uppercase production db name", "postgres://agent_test@agent-testdb/PRODUCTION"],
     ["prefix-only worktree name", "postgres://agent_test@agent-testdb/two_web_next_tog"],
+    ["non-numeric worktree suffix", "postgres://agent_test@agent-testdb/two_web_next_togstaging"],
     ["wrong role", "postgres://postgres@agent-testdb/postgres"],
     ["other role", "postgres://other@agent-testdb/two_web_next"],
     ["non-empty password", "postgres://agent_test:x@agent-testdb/postgres"],
@@ -49,10 +54,12 @@ describe("global test-database guard matrix", () => {
   it.each([
     "postgres://agent_test@agent-testdb/postgres",
     "postgres://agent_test@agent-testdb:5432/postgres",
+    "postgres://agent_test@agent-testdb/w15_tests",
     "postgres://agent_test@agent-testdb/two_web_next",
     "postgres://agent_test@agent-testdb:5432/two_web_next",
     "postgres://agent_test@agent-testdb/two_web_next_tog12345",
     "postgres://agent_test@agent-testdb:5432/two_web_next_tog12345",
+    "postgres://agent_test@agent-testdb/two_web_next_tog1234567890123456",
   ])("allows agent-testdb URL %s", (raw) => {
     expect(testDatabaseUrl(raw, {}).hostname).toBe("agent-testdb");
   });

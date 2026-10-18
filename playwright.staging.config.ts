@@ -17,7 +17,14 @@ export default defineConfig({
   retries: 0,
   forbidOnly: true,
   timeout: 30_000,
-  reporter: [["list"], ["html", { open: "never" }]],
+  // The JSON report feeds ci/check-staging-journeys.mjs, which ledgers every
+  // journey pass/skip/fail and fails loud when nothing passed (Playwright
+  // exits 0 on all-skipped, so without the gate that run looks green).
+  reporter: [
+    ["list"],
+    ["html", { open: "never" }],
+    ["json", { outputFile: "test-results/staging-journeys.json" }],
+  ],
   use: {
     baseURL: stagingOrigin,
     serviceWorkers: "block",
