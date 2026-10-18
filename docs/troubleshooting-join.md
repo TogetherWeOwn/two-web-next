@@ -63,17 +63,26 @@ unreachable**; Next does not expose a separate `invalid_grant` message.
 A 200 response on another recovery page is not a successful join: it does
 not mean joined and does not sign in.
 
-**Slow down a little** has two different causes. A website 429 is local
+Throttling looks different depending on where it happened:
+
+**Slow down a little** is the website's own 429 page. A website 429 is local
 admission: the join budget was exceeded before Discord was contacted. It
 carries `Retry-After` from the website, records no join-attempt row, and
-never implies a session. A Discord automatic-add backoff renders the 200
-**We couldn't add you automatically** recovery carrying the provider's
-`Retry-After` and records the distinct `rate_limited` attempt outcome;
-the 200 status does not mean joined. For either cause, wait for
-`Retry-After` if present (otherwise at least a minute), then start a
-fresh journey at `/join/discord` or use the invite link below. Do not
-repeatedly click, refresh, replay `/join/callback`, or try to evade the
-limit.
+never implies a session.
+
+A Discord automatic-add backoff renders the 200
+**We couldn't add you automatically** recovery and records the distinct
+`rate_limited` attempt outcome. It carries the provider's `Retry-After`
+when the provider sent a usable backoff; the 200 status does not mean joined.
+
+A Discord 429 during token exchange renders the 503
+**Discord is unreachable** recovery and records an `error` attempt.
+It carries `Retry-After` when the provider sent a usable backoff.
+
+In all three cases, wait for `Retry-After` if present (otherwise at least a
+minute), then start a fresh journey at `/join/discord` or use the invite
+link below. Do not repeatedly click, refresh, replay `/join/callback`, or
+try to evade the limit.
 
 ## Still locked out after a successful join
 

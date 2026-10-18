@@ -54,6 +54,22 @@ describe("troubleshooting-join guide contract", () => {
     expect(guide).toMatch(/A 200 response on another recovery page is not a successful join/);
   });
 
+  it("ties Slow down a little only to website admission throttling", () => {
+    const paragraph = guide.match(/\*\*Slow down a little\*\*[^]*?(?=\n\n)/)?.[0] ?? "";
+    expect(paragraph).toContain("**Slow down a little** is the website's own 429 page.");
+    expect(paragraph).toMatch(/records no join-attempt row/);
+    expect(paragraph).not.toContain("Discord automatic-add backoff");
+    expect(paragraph).not.toContain("has two different causes");
+  });
+
+  it("identifies token-exchange backoff as a 503 error, not an automatic-add rate_limited row", () => {
+    const paragraph = guide.match(/A Discord 429 during token exchange[^]*?(?=\n\n)/)?.[0] ?? "";
+    expect(paragraph).toMatch(/renders the 503\s+\*\*Discord is unreachable\*\* recovery/);
+    expect(paragraph).toMatch(/records an `error` attempt/);
+    expect(paragraph).toMatch(/`Retry-After` when the provider sent a usable backoff/);
+    expect(paragraph).not.toContain("`rate_limited`");
+  });
+
   it("preserves fresh-journey, invite, no-replay and no-session advice", () => {
     // Wait, then a fresh journey or the invite — never a callback replay.
     expect(guide).toMatch(/then start a\s?fresh journey/i);
