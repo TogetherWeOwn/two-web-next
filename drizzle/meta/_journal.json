@@ -197,6 +197,13 @@
       "when": 1792318606947,
       "tag": "1027_join-attempts-discord-id-index",
       "breakpoints": true
+    },
+    {
+      "idx": 28,
+      "version": "7",
+      "when": 1792324473098,
+      "tag": "1028_join-attempts-request-id-index",
+      "breakpoints": true
     }
   ]
 }

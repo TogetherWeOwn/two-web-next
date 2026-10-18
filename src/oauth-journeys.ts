@@ -4,6 +4,11 @@
 import type { Sql } from "./sessions";
 
 export const OAUTH_JOURNEY_TTL_SECONDS = 600;
+// One request-path sweep deletes at most this many expired journeys: the same
+// 1000-row batch every other bounded cleanup already uses. Auth/join starts
+// run the sweep inline, so an unbounded delete would hold the request while a
+// backlog drains; repeated sweeps drain the remainder instead.
+export const OAUTH_JOURNEY_SWEEP_BATCH_SIZE = 1000;
 export type OAuthFlow = "auth" | "join";
 export type OAuthJourneyStore = {
   issue: (stateHash: string, flow: OAuthFlow) => Promise<boolean>;
@@ -56,8 +61,16 @@ export function createPostgresOAuthJourneyStore(sql: Sql): OAuthJourneyStore {
       return rows.length === 1;
     },
     async sweepExpired() {
+      // Bounded + lock-skipping: at most one batch per call, and an expired
+      // row locked by an unrelated transaction is skipped instead of blocking
+      // this request's start sequence. The caller repeats the sweep to drain
+      // the backlog; the returned count is the actual rows this call removed.
       const rows = await sql<{ state_hash: string }[]>`delete from web_oauth_journeys
-        where expires_at <= now() returning state_hash`;
+        where state_hash in (
+          select state_hash from web_oauth_journeys where expires_at <= now()
+          order by expires_at, state_hash limit ${OAUTH_JOURNEY_SWEEP_BATCH_SIZE}
+          for update skip locked
+        ) returning state_hash`;
       return rows.length;
     },
   };
@@ -83,9 +96,12 @@ export function createMemoryOAuthJourneyStore(clock: () => number = Date.now): O
       return true;
     },
     async sweepExpired() {
+      // Same bounded contract as Postgres, minus row locks (none exist here).
+      // Live rows never consume the batch: only expired deletions count.
       let n = 0;
       for (const [hash, row] of rows) {
         if (row.expiresAt <= clock()) {
+          if (n >= OAUTH_JOURNEY_SWEEP_BATCH_SIZE) break;
           rows.delete(hash);
           n++;
         }

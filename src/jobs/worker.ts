@@ -176,25 +176,34 @@ export async function handleScheduled(
   env: JobsEnv,
 ): Promise<void> {
   setReleaseMetadata(env.CF_VERSION_METADATA);
-  const sql = sqlFor(env);
-  // Dispatch commits its ledger row and uniqueness lock before the external
-  // queue send. A later reconciliation rollback must not erase accepted jobs,
-  // and an early consumer must see and settle the committed rows.
-  const dispatchSql = sqlFor(env);
+  // Acquire inside the failure boundary: a setup throw (missing DB config or
+  // a throwing driver construction) still pages once for a known cron, and a
+  // second-construction failure still closes the first client.
+  let sql: ReturnType<typeof sqlFor> | undefined;
+  let dispatchSql: ReturnType<typeof sqlFor> | undefined;
   try {
+    sql = sqlFor(env);
+    // Dispatch commits its ledger row and uniqueness lock before the external
+    // queue send. A later reconciliation rollback must not erase accepted jobs,
+    // and an early consumer must see and settle the committed rows.
+    dispatchSql = sqlFor(env);
+    // Narrow once for the closures below: both pools are acquired here, so a
+    // later setup throw cannot reach this point with a missing client.
+    const sqlClient: ReturnType<typeof sqlFor> = sql;
+    const dispatchClient: ReturnType<typeof sqlFor> = dispatchSql;
     // No DDL here (TOG-19721): web_sessions comes from the migrate workflow
     // (drizzle/1022), like every other table the prune pass reads. A database
     // that predates that migration fails the pass like any other outage.
-    await runScheduled(controller.cron, pgSingleFlight(sql), {
+    await runScheduled(controller.cron, pgSingleFlight(sqlClient), {
       // The reserved flight holds only the scheduler advisory lock during
       // dispatch. Event writes have a shorter transaction on the other pool,
       // so parent row locks are released before unrelated external sends.
       reconcile: () =>
         reconcileEvents({
-          events: pgEventStore(dispatchSql),
-          writeTransaction: (work) => dispatchSql.begin(async (tx) => work(pgEventStore(tx))),
-          queue: trackingQueue(env.SYNC_EVENT_QUEUE, pgQueueLedger(dispatchSql)),
-          lock: pgUniqueLock(dispatchSql),
+          events: pgEventStore(dispatchClient),
+          writeTransaction: (work) => dispatchClient.begin(async (tx) => work(pgEventStore(tx))),
+          queue: trackingQueue(env.SYNC_EVENT_QUEUE, pgQueueLedger(dispatchClient)),
+          lock: pgUniqueLock(dispatchClient),
         }),
       prune: (db) => pruneModelTables(pgPruneStores(db)),
     });
@@ -213,7 +222,13 @@ export async function handleScheduled(
     }
     throw err;
   } finally {
-    await dispatchSql.end({ timeout: 1 }).catch(() => {});
-    await sql.end({ timeout: 1 });
+    // Close only what was acquired, exactly once each. Cleanup failures are
+    // swallowed so they never replace the original rejection.
+    if (dispatchSql !== undefined) {
+      await dispatchSql.end({ timeout: 1 }).catch(() => {});
+    }
+    if (sql !== undefined) {
+      await sql.end({ timeout: 1 }).catch(() => {});
+    }
   }
 }

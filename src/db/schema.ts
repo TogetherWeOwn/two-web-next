@@ -81,6 +81,7 @@ export const joinAttempts = pgTable(
   (t) => [
     index("join_attempts_created_at_idx").on(t.createdAt),
     index("join_attempts_outcome_index").on(t.outcome),
+    index("join_attempts_request_id_idx").on(t.requestId),
     index("join_attempts_discord_id_idx").on(t.discordId),
   ],
 );
