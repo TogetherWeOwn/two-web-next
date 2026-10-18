@@ -1,7 +1,7 @@
 import { alertQueueFailing } from "../alerts";
 import { AlertProbeError } from "../alert-probe-error";
 import { safeRequestId } from "../request-log";
-import { CALL_INTERNAL_ACTION, SYNC_EVENT } from "./constants";
+import { CALL_INTERNAL_ACTION, SYNC_EVENT, backoffFor } from "./constants";
 import { handleCallInternalAction } from "./call-internal-action";
 import { toQueueMessage } from "./envelope";
 import { queueExceptionClass, sanitizeQueueScope } from "./queue-error";
@@ -140,6 +140,8 @@ export async function consume(
         // Never ack a terminal message while it still blocks future revisions.
         // Class-only: settlement errors can carry SQL or connection secrets.
         console.error("sync attempt settlement failed", { exception: queueExceptionClass(e) });
+        if (jobId)
+          await bounded("released", deps.ledger.released(jobId, deps.now?.() ?? new Date()));
         m.retry();
         return false;
       }
@@ -175,17 +177,26 @@ export async function consume(
         // Carry the known wait on this delivery, but only a committed result can
         // reopen the durable claim. Recovery must not substitute a short lease.
         console.error("sync retry result persistence failed", SYNC_RETRY_PERSISTENCE_REASON);
-        outcome =
-          e.nextAttemptAt === null || m.attempts >= SYNC_EVENT.tries
-            ? { failed: SYNC_RETRY_PERSISTENCE_REASON }
-            : {
-                retryInSeconds: Math.max(
-                  0,
-                  Math.ceil(
-                    (e.nextAttemptAt.getTime() - (deps.now?.() ?? new Date()).getTime()) / 1000,
-                  ),
-                ),
-              };
+        // A due carried wait (now/past) must never reach the retry
+        // transport as `delaySeconds: 0` — the transport requires a positive
+        // integer. Take the configured sync-event backoff for this carrier
+        // attempt instead; a due deadline is a delay-shape fix, not a failure
+        // reclassification (exhausted and null-deadline carriers stay terminal).
+        // Positive waits pass through ceiled.
+        const nextAttemptAt = e.nextAttemptAt;
+        if (nextAttemptAt === null || m.attempts >= SYNC_EVENT.tries) {
+          outcome = { failed: SYNC_RETRY_PERSISTENCE_REASON };
+        } else {
+          const carriedSeconds = Math.ceil(
+            (nextAttemptAt.getTime() - (deps.now?.() ?? new Date()).getTime()) / 1000,
+          );
+          outcome = {
+            retryInSeconds:
+              carriedSeconds <= 0
+                ? backoffFor(SYNC_EVENT.backoffSeconds, m.attempts)
+                : carriedSeconds,
+          };
+        }
       } else {
         // Unexpected (not a BotTransport/BotTerminal error, not a refusal): a
         // redeliverable throw goes back on the queue with the same message (same
