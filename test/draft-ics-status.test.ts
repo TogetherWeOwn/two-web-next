@@ -1,4 +1,4 @@
-// TOG-30395: draft ICS must stamp TENTATIVE, not CONFIRMED.
+// Draft ICS must stamp TENTATIVE, not CONFIRMED.
 // Builder-owned regression tests (unit-level, no DB).
 import { describe, expect, it } from "vitest";
 import { events } from "../src/db/admin-schema";
@@ -25,7 +25,7 @@ const row = (o: Partial<typeof events.$inferSelect> = {}) =>
     ...o,
   }) as typeof events.$inferSelect;
 
-describe("draft ICS status mapping (TOG-30395)", () => {
+describe("draft ICS status mapping", () => {
   it.each([
     ["draft", "STATUS:TENTATIVE"],
     ["cancelled", "STATUS:CANCELLED"],
