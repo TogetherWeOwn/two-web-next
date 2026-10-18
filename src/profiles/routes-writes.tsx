@@ -82,7 +82,16 @@ export function registerWriteRoutes(
       ? validateProfile(input)
       : { ok: false as const, errors: { fields: UNSUPPORTED_FIELDS } };
     if (!result.ok) {
-      if (acceptsJson(c.req.header("accept"))) return c.json({ errors: result.errors }, 422);
+      if (acceptsJson(c.req.header("accept"))) {
+        // Additive correlation: the validated log id requestLog set on the
+        // context, never raw client header bytes. Omitted when there is no
+        // requestLog context (a bare mount has no log correlation id).
+        const requestId = safeRequestId(c.get("requestId"));
+        return c.json(
+          { errors: result.errors, ...(requestId ? { request_id: requestId } : {}) },
+          422,
+        );
+      }
       c.status(422);
       return c.html(
         <ProfilePage

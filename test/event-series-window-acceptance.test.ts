@@ -218,6 +218,7 @@ describe.skipIf(!process.env.DATABASE_URL)(
       expect(await res.json()).toEqual({
         error: "invalid",
         fields: { ends_at: END_AFTER_START },
+        request_id: res.headers.get("x-request-id"),
       });
       expect(await snapshot()).toEqual(before);
       expect(sent).toEqual([]);
