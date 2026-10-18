@@ -710,7 +710,7 @@ describe.skipIf(!process.env.DATABASE_URL)("rsvp routes (agent-testdb)", () => {
       ];
     expect(n).toBe(0);
   });
-  it("the global prune runs before the hit is stamped: a write queued behind prune keeps a fresh budget", async () => {
+  it("the global prune runs before the hit is stamped: a write skips a locked unrelated row and keeps a fresh budget", async () => {
     const ev = await seed();
     const who = "prune-rowlock";
     await client`insert into web_throttle_hits (bucket, at) values ('unrelated-expired-bucket', clock_timestamp() - interval '10 minutes')`;
@@ -721,19 +721,31 @@ describe.skipIf(!process.env.DATABASE_URL)("rsvp routes (agent-testdb)", () => {
       await held;
     });
     await new Promise((r) => setTimeout(r, 200));
+    const [tb] = await client`select clock_timestamp() as t`;
     const pending = put(ev.key, who, "going");
-    expect(await waitForLock("%delete from web_throttle_hits%")).toBe(true);
-    await new Promise((r) => setTimeout(r, 2000));
-    const [tr] = await client`select clock_timestamp() as t`;
-    release();
-    await holder;
-    expect((await pending).status).toBe(201);
+    // Bounded race, not an open wait: a prune that blocked on the held row
+    // could never settle before release() below.
+    const res = await Promise.race([
+      pending,
+      new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error("write did not skip the held prune row")), 15_000),
+      ),
+    ]);
+    expect(res.status).toBe(201);
+    // The locked row was skipped, not deleted from under its holder.
+    const [{ n: locked }] =
+      (await client`select count(*)::int as n from web_throttle_hits where bucket = 'unrelated-expired-bucket'`) as unknown as [
+        { n: number },
+      ];
+    expect(locked).toBe(1);
     const [hit] =
       await client`select at from web_throttle_hits where bucket = ${`rsvp-write:${who}`}`;
-    expect(new Date(hit!.at).getTime()).toBeGreaterThanOrEqual(new Date(tr!.t).getTime());
+    expect(new Date(hit!.at).getTime()).toBeGreaterThanOrEqual(new Date(tb!.t).getTime());
+    release();
+    await holder;
     await client`delete from web_throttle_hits where bucket = 'unrelated-expired-bucket'`;
   });
-  it("expiry is judged after the prune wait: a PUT queued behind prune is refused once the event ends", async () => {
+  it("expiry is judged after the event-lock wait: a PUT queued behind the event row is refused once the event ends", async () => {
     const ev = await seed();
     const who = "expire-prunelock";
     await client`insert into web_throttle_hits (bucket, at) values ('unrelated-expired-hold', clock_timestamp() - interval '10 minutes')`;
@@ -741,13 +753,13 @@ describe.skipIf(!process.env.DATABASE_URL)("rsvp routes (agent-testdb)", () => {
     let release!: () => void;
     const held = new Promise<void>((r) => (release = r));
     const holder = client.begin(async (tx) => {
-      await tx`select * from web_throttle_hits where bucket = 'unrelated-expired-hold' for update`;
+      await tx`select id from events where id = ${ev.id} for update`;
       await held;
     });
     await new Promise((r) => setTimeout(r, 200));
     const pending = put(ev.key, who, "going");
-    expect(await waitForLock("%delete from web_throttle_hits%")).toBe(true);
-    // Let the event end while the write is still queued behind the prune.
+    expect(await waitForLock('%from "events"%for update%')).toBe(true);
+    // Let the event end while the write is still queued behind the event lock.
     await client`select pg_sleep(greatest(0, extract(epoch from (ends_at - clock_timestamp())) + 0.2)) from events where id = ${ev.id}`;
     release();
     await holder;
