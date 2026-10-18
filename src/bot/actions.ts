@@ -13,7 +13,8 @@
 //   legacy counts with mb_strlen (grapheme-ish code points). `[...s].length`
 //   matches it for the BMP text Discord accepts.
 // - `discordId` is decimal digits, at most 20 (a 64-bit snowflake); blank
-//   channel/body/name/location/keys are refused, all before anything is sent.
+//   channel/body/name/location/keys are refused, map keys ≤64 and location
+//   ≤255 characters, all before anything is sent.
 
 export class InvalidActionRequestError extends Error {}
 
@@ -27,6 +28,10 @@ const isUuid = (v: string): boolean =>
 const charLen = (s: string): number => [...s].length;
 
 const blank = (v: string): boolean => v.trim() === "";
+
+/** Map keys are short slugs (MCP event_key ≤64, src/mcp/server.ts); location ≤255 (admin event form). */
+const KEY_MAX = 64;
+const LOCATION_MAX = 255;
 
 export function assertIdempotencyKey(key: string): void {
   if (!isUuid(key))
@@ -50,6 +55,11 @@ export function roleAssignPayload(a: RoleAssignment): ActionPayload {
       "A role.assign needs a role_key. It is a key from the bot role map, not a Discord role id.",
     );
   }
+  if (charLen(a.roleKey) > KEY_MAX) {
+    throw new InvalidActionRequestError(
+      `A role_key is at most ${KEY_MAX} characters; this one is ${charLen(a.roleKey)}.`,
+    );
+  }
   return { action: "role.assign", discord_id: a.discordId, role_key: a.roleKey };
 }
 
@@ -61,6 +71,11 @@ export function announcementPayload(a: Announcement): ActionPayload {
   if (blank(a.channelKey)) {
     throw new InvalidActionRequestError(
       "An announcement.post needs a channel_key. It is a key from the bot channel map, not a Discord channel id.",
+    );
+  }
+  if (charLen(a.channelKey) > KEY_MAX) {
+    throw new InvalidActionRequestError(
+      `A channel_key is at most ${KEY_MAX} characters; this one is ${charLen(a.channelKey)}.`,
     );
   }
   if (blank(a.body)) throw new InvalidActionRequestError("An announcement.post needs a body.");
@@ -103,6 +118,11 @@ export function eventUpsertPayload(e: EventUpsert): ActionPayload {
       "An event.upsert needs an event_key: it is how the bot finds the event to update.",
     );
   }
+  if (charLen(e.eventKey) > KEY_MAX) {
+    throw new InvalidActionRequestError(
+      `An event_key is at most ${KEY_MAX} characters; this one is ${charLen(e.eventKey)}.`,
+    );
+  }
   if (blank(e.name)) throw new InvalidActionRequestError("An event.upsert needs a name.");
   if (charLen(e.name) > EVENT_MAX_NAME) {
     throw new InvalidActionRequestError(
@@ -117,6 +137,11 @@ export function eventUpsertPayload(e: EventUpsert): ActionPayload {
   if (blank(e.location)) {
     throw new InvalidActionRequestError(
       "An event.upsert needs a location. The bot takes exactly one of channel_key or location, and this client only ever sends location.",
+    );
+  }
+  if (charLen(e.location) > LOCATION_MAX) {
+    throw new InvalidActionRequestError(
+      `A location is at most ${LOCATION_MAX} characters; this one is ${charLen(e.location)}.`,
     );
   }
   // Strictly after at the precision the wire carries: Discord refuses a
@@ -142,6 +167,11 @@ export type EventCancel = { eventKey: string };
 export function eventCancelPayload(e: EventCancel): ActionPayload {
   if (blank(e.eventKey)) {
     throw new InvalidActionRequestError("An event.cancel needs an event_key.");
+  }
+  if (charLen(e.eventKey) > KEY_MAX) {
+    throw new InvalidActionRequestError(
+      `An event_key is at most ${KEY_MAX} characters; this one is ${charLen(e.eventKey)}.`,
+    );
   }
   return { action: "event.cancel", event_key: e.eventKey };
 }
