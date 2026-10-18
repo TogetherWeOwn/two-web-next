@@ -116,6 +116,7 @@ export async function checkJoinThrottle(
     await sql`DELETE FROM web_throttle_hits WHERE at < now() - make_interval(mins => ${THROTTLE_COUNTER_RETENTION_MINUTES})`;
   } catch {
     // Housekeeping failed; the verdict below was already decided.
+    console.warn("Join throttle prune failed; keeping the decided verdict.");
   }
   return verdict;
 }

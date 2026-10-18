@@ -65,13 +65,13 @@ describe("deletion-exception inventory", () => {
     expect(block).not.toMatch(/indefinite|permanent/i);
   });
 
-  it("describes lazy cleanup with admitted-only end conditions", () => {
+  it("describes lazy cleanup including the refused-path prune", () => {
     const docs = read("docs/member-erasure.md");
     expect(docs).toMatch(/age cutoff, not a physical\s+deletion deadline/);
     expect(docs).toMatch(/exact-five-minute deletion guarantee/);
-    expect(docs).toMatch(/only for admitted\s+requests/);
-    expect(docs).toMatch(/refused join/);
-    expect(docs).toMatch(/triggers no cleanup/);
+    expect(docs).toMatch(/after every verdict, admitted or refused/);
+    expect(docs).not.toMatch(/only for admitted\s+requests/);
+    expect(docs).not.toMatch(/triggers no cleanup/);
   });
 
   it("ships as a new numbered version with priors preserved and the bundle regenerated", () => {
