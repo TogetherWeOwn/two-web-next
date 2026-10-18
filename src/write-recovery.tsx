@@ -1,6 +1,7 @@
 import type { Context, Next } from "hono";
 import { deleteCookie, getSignedCookie, setSignedCookie } from "hono/cookie";
 import { safeNext } from "./join/service";
+import { acceptsJson, isJsonMediaType } from "./media-type";
 import { renderHtmlOutcome } from "./html-outcome";
 import { honoRecoveryRenderer } from "./recovery-hono";
 import { recoveryOutcome } from "./recovery-outcome";
@@ -62,10 +63,12 @@ export async function expiredWriteBounce(c: Ctx, jsonOnly = false): Promise<Resp
   const next = writeReturn(c);
   // JSON callers keep 401, with an explicit recovery link, never an OAuth redirect.
   // JSON-only routes pass jsonOnly: a header-less fetch must not follow a 303 to a 200 page.
+  // Accept uses exact media-range matching (shared with profile saves); Content-Type
+  // is a single media type, so an exact case-insensitive comparison applies.
   if (
     jsonOnly ||
-    (c.req.header("accept") ?? "").includes("application/json") ||
-    (c.req.header("content-type") ?? "").includes("application/json")
+    acceptsJson(c.req.header("accept")) ||
+    isJsonMediaType(c.req.header("content-type"))
   ) {
     return c.json({ error: "Unauthorized", recovery: recoveryUrl(next) }, 401);
   }

@@ -302,6 +302,7 @@ exactly once.
 | `src/leaderboards/` | profiles |
 | `src/leaf-critical-css.ts` | content |
 | `src/mcp/` | content |
+| `src/media-type.ts` | http-guard |
 | `src/member-erasure.ts` | profiles |
 | `src/member-reads.ts` | profiles |
 | `src/not-found-suggestions.ts` | content |
