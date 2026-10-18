@@ -141,7 +141,8 @@ describe("runbook diagnostic and homepage contract", () => {
     expect(watch).toContain(`npx wrangler tail ${app}`);
     expect(watch).toContain(`npx wrangler tail ${tail}`);
     expect(watch).toMatch(/Staging comparison only.*`two-web-next`/s);
-    expect(watch).toContain(`\`$metadata.service\`\n   \`${app}\` on production`);
+    expect(watch).toMatch(/As printed it filters staging[\s\S]*for production substitute/i);
+    expect(watch).toContain(`\`${app}\``);
   });
 
   it("smokes the apex with --allow-indexable over the 17-route set", () => {

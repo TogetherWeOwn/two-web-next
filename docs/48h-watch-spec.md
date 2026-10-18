@@ -153,8 +153,9 @@ No new infrastructure, no Logpush, no external shipper, no new pager.
    `rollback-production` workflow to the recorded version ID.
 8. **Version-settle telemetry (rollback proof only).** The `served_versions`
    helper in the runbook queries Worker telemetry by `$metadata.service`
-   `two-web-next-production` on production (staging: `two-web-next`) over
-   windows of 40 s or less. Use it to prove which version
+   over windows of 40 s or less. As printed it filters staging
+   (`two-web-next`); for production substitute that `"value"` with
+   `two-web-next-production`. Use it to prove which version
    served during a rollback, not as a routine latency panel.
 
 ## Mute windows
