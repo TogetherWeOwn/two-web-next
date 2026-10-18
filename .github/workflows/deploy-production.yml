@@ -173,6 +173,13 @@ jobs:
         # before the release job tags. Manual redirects keep the checks
         # unauthenticated and never visit Discord: no auth, no writes, no new
         # secrets. Same retry contract (6 attempts, 10s sleeps, fail closed).
+        # No automatic restore here: the gradual action's rollback steps only
+        # fire on failures inside the promotion, so a failed verification
+        # leaves the promoted version live at 100% and prints the recorded
+        # pre-promote version id; the operator restores it through the
+        # rollback-production workflow with that id. An inline wrangler
+        # rollback must stay out of this workflow: the rollback path checks
+        # the target version's secrets first (see rollback-production.yml).
         run: |
           for i in 1 2 3 4 5 6; do
             if node bin/smoke.mjs https://togetherweown.com --allow-indexable; then
@@ -184,8 +191,10 @@ jobs:
               sleep 10
             fi
           done
-          echo "::error::post-promotion public-route smoke failed; release will not tag"
+          echo "::error::post-promotion public-route smoke failed; release will not tag; pre-promote version ${PREV_VERSION:-unknown} still live at 100% - restore it with the rollback-production workflow using that version id"
           exit 1
+        env:
+          PREV_VERSION: ${{ steps.gradual.outputs.rollback-version-id }}
 
   release:
     name: release

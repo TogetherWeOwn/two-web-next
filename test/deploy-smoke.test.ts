@@ -553,8 +553,15 @@ describe("production deploy smoke (offline)", () => {
 // loopback-fixture coverage in smoke.test.mjs: no production requests here.
 // The step probes live traffic (no --version-override) after the gradual
 // promotion reaches 100%, so a promotion serving broken public content fails
-// the deploy-production job before the release job can tag.
-function postPromotionSmoke(succeedOnAttempt: number) {
+// the deploy-production job before the release job can tag. A failed run
+// prints the recorded pre-promote version id for the rollback-production
+// workflow; there is no automatic restore (the gradual action's rollback only
+// covers in-action failures, and an inline wrangler rollback would bypass the
+// rollback target-version secrets preflight).
+function postPromotionSmoke(
+  succeedOnAttempt: number,
+  prevVersion = "pre-promote-version-for-test",
+) {
   const workflow = readFileSync(".github/workflows/deploy-production.yml", "utf8");
   const block = workflow.match(
     /      - name: Verify public routes on the promoted version\n[\s\S]*?        run: \|\n((?:          .*\n)+)/,
@@ -612,6 +619,7 @@ process.exit(pass ? 0 : 1);
           PATH: scratch,
           RUNNER_TEMP: scratch,
           SMOKE_SUCCEED_ON_ATTEMPT: String(succeedOnAttempt),
+          PREV_VERSION: prevVersion,
         },
       },
     );
@@ -648,6 +656,32 @@ describe("production post-promotion verification (offline)", () => {
       "::error::post-promotion public-route smoke failed; release will not tag",
     );
     expect(result.output).not.toContain("unexpected checker invocation");
+  });
+
+  it("names the still-live pre-promote version and the rollback workflow on failure", () => {
+    const result = postPromotionSmoke(0, "aaaabbbb-cccc-dddd-eeee-ffffffffffff");
+    expect(result.status, result.output).toBe(1);
+    // The gradual action's rollback only covers in-action failures, so the
+    // promoted version stays live at 100%: the error must hand the operator
+    // the recorded pre-promote version id and the restore path.
+    expect(result.output).toContain("aaaabbbb-cccc-dddd-eeee-ffffffffffff");
+    expect(result.output).toContain("still live at 100%");
+    expect(result.output).toContain("rollback-production");
+  });
+
+  it("wires the gradual rollback target into the step and documents the manual restore", () => {
+    const workflow = readFileSync(".github/workflows/deploy-production.yml", "utf8");
+    const stepAt = workflow.indexOf("- name: Verify public routes on the promoted version");
+    expect(stepAt).toBeGreaterThan(-1);
+    const section = workflow.slice(stepAt, workflow.indexOf("\n  release:\n"));
+    // PREV_VERSION comes from the gradual action's recorded pre-promote
+    // target, the same id its own rollback steps restore.
+    expect(section).toContain("PREV_VERSION: ${{ steps.gradual.outputs.rollback-version-id }}");
+    expect(section).toContain("rollback-production");
+    // No inline restore: the rollback workflow checks the target version's
+    // secrets before moving traffic (pinned by the negative control in
+    // ci/check-production-secrets.test.mjs), so this step only blocks the tag.
+    expect(section).not.toContain("npx wrangler rollback");
   });
 
   it("runs after the gradual promotion inside the deploy job, before the release job can tag", () => {

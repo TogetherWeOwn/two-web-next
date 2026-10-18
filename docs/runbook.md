@@ -510,6 +510,12 @@ Postgres migrations, data writes, Discord side effects, queue messages or
 external-resource changes; keep the release workflow from redeploying the bad
 head. Record the rollback deployment and previous/current version IDs.
 
+A failed post-promotion public-route verification in `deploy-production`
+blocks the release tag but leaves the promoted version live at 100%: the
+gradual action's automatic rollback only covers failures inside the promotion
+itself. The failed step's logs print the recorded pre-promote version ID;
+restore it with this workflow using that ID.
+
 Promotion and rollback mutations to the production Worker serialize on the
 shared `production-worker-mutation` job-level concurrency group
 (non-cancelling). The lock covers only the two mutating jobs, never
