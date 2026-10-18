@@ -719,6 +719,233 @@ test("accepts a critical backlog as degraded, never down", async (t) => {
   assert.ok(result.output.includes("PASS /up"), result.output);
 });
 
+test("fails closed on a dead-letter failed count with the count in the output", async (t) => {
+  for (const failed of [1, 3]) {
+    const { url } = await stub(t, (route, result) => {
+      if (route === "/up")
+        result.body = `{"status":"healthy","db":"ok","pending_migrations":0,"queue":{"status":"healthy","warn_at":20,"critical_at":100,"failed":${failed}}}`;
+    });
+    const result = await run(url);
+    assert.equal(result.ok, false, `${failed}: ${result.output}`);
+    assert.match(
+      result.output,
+      new RegExp(
+        `FAIL /up: expected queue\\.failed 0 \\(no dead letters\\); actual queue\\.failed ${failed}`,
+      ),
+    );
+    assert.ok(!result.output.includes("PASS /up"), result.output);
+  }
+});
+
+test("fails closed on dead letters from the real /up renderer", async (t) => {
+  const bundle = await build({
+    entryPoints: ["src/up.ts"],
+    bundle: true,
+    write: false,
+    format: "esm",
+    platform: "node",
+  });
+  const { upBody } = await import(
+    `data:text/javascript;base64,${Buffer.from(bundle.outputFiles[0].text).toString("base64")}`
+  );
+  const body = await upBody(async () => ({
+    pending: 0,
+    delayed: 0,
+    reserved: 0,
+    total: 0,
+    failed: 2,
+    oldestPendingAgeSeconds: null,
+    oldestReadyWaitAgeSeconds: null,
+  }));
+  const ready = { ...body, db: "ok", pending_migrations: 0 };
+  assert.equal(ready.queue.failed, 2);
+  const { url } = await stub(t, (route, result) => {
+    if (route === "/up") result.body = JSON.stringify(ready);
+  });
+  const result = await run(url);
+  assert.equal(result.ok, false, result.output);
+  assert.match(
+    result.output,
+    /FAIL \/up: expected queue\.failed 0 \(no dead letters\); actual queue\.failed 2/,
+  );
+  assert.ok(!result.output.includes("PASS /up"), result.output);
+});
+
+test("failed 0, null and missing do not fail the dead-letter gate on their own", async (t) => {
+  for (const queue of ['"failed":0', '"failed":null', '"pending":0']) {
+    const { url } = await stub(t, (route, result) => {
+      if (route === "/up")
+        result.body = `{"status":"healthy","db":"ok","pending_migrations":0,"queue":{"status":"unknown","warn_at":20,"critical_at":100,${queue}}}`;
+    });
+    const result = await run(url);
+    assert.equal(result.ok, true, `${queue}: ${result.output}`);
+    assert.ok(result.output.includes("PASS /up"), result.output);
+  }
+});
+
+test("retained dead letters pass when the pre-deploy baseline covers them", async (t) => {
+  // Staging serves retained rows (queue.failed 19 on 2026-10-18): the
+  // promotion workflows capture that count before mutating, so history
+  // passes and only growth fails.
+  for (const [failed, failedBaseline] of [
+    [19, 19],
+    [19, 25],
+    [0, 0],
+  ]) {
+    const { url } = await stub(t, (route, result) => {
+      if (route === "/up")
+        result.body = `{"status":"healthy","db":"ok","pending_migrations":0,"queue":{"status":"healthy","warn_at":20,"critical_at":100,"failed":${failed}}}`;
+    });
+    const result = await run(url, { failedBaseline });
+    assert.equal(result.ok, true, `${failed}/${failedBaseline}: ${result.output}`);
+    assert.ok(result.output.includes("PASS /up"), result.output);
+  }
+});
+
+test("dead letters past the baseline fail with the count in the output", async (t) => {
+  const { url } = await stub(t, (route, result) => {
+    if (route === "/up")
+      result.body =
+        '{"status":"healthy","db":"ok","pending_migrations":0,"queue":{"status":"healthy","warn_at":20,"critical_at":100,"failed":20}}';
+  });
+  const result = await run(url, { failedBaseline: 19 });
+  assert.equal(result.ok, false, result.output);
+  assert.match(
+    result.output,
+    /FAIL \/up: expected queue\.failed <= 19 \(no new dead letters; baseline 19\); actual queue\.failed 20/,
+  );
+  assert.ok(!result.output.includes("PASS /up"), result.output);
+});
+
+test("CLI --failed-baseline and SMOKE_FAILED_BASELINE cover retained rows", async (t) => {
+  const { url } = await stub(t, (route, result) => {
+    if (route === "/up")
+      result.body =
+        '{"status":"healthy","db":"ok","pending_migrations":0,"queue":{"status":"healthy","warn_at":20,"critical_at":100,"failed":19}}';
+  });
+  const flagged = await cli([url, "--failed-baseline", "19"]);
+  assert.equal(flagged.code, 0, flagged.output);
+  const grown = await cli([url, "--failed-baseline", "18"]);
+  assert.equal(grown.code, 1, grown.output);
+  assert.match(grown.output, /actual queue\.failed 19/);
+  const unflagged = await cli([url]);
+  assert.equal(unflagged.code, 1, unflagged.output);
+  const previous = process.env.SMOKE_FAILED_BASELINE;
+  process.env.SMOKE_FAILED_BASELINE = "19";
+  try {
+    const fromEnv = await cli([url]);
+    assert.equal(fromEnv.code, 0, fromEnv.output);
+  } finally {
+    if (previous === undefined) delete process.env.SMOKE_FAILED_BASELINE;
+    else process.env.SMOKE_FAILED_BASELINE = previous;
+  }
+  // An empty SMOKE_FAILED_BASELINE is the workflows' unreadable-/up fallback:
+  // it maps to no baseline, so ad-hoc runs keep the absolute gate.
+  const previousEmpty = process.env.SMOKE_FAILED_BASELINE;
+  process.env.SMOKE_FAILED_BASELINE = "";
+  try {
+    const fromEmpty = await cli([url]);
+    assert.equal(fromEmpty.code, 1, fromEmpty.output);
+    assert.match(
+      fromEmpty.output,
+      /FAIL \/up: expected queue\.failed 0 \(no dead letters\); actual queue\.failed 19/,
+    );
+  } finally {
+    if (previousEmpty === undefined) delete process.env.SMOKE_FAILED_BASELINE;
+    else process.env.SMOKE_FAILED_BASELINE = previousEmpty;
+  }
+  // An explicit flag wins over the environment in either direction.
+  const previousBoth = process.env.SMOKE_FAILED_BASELINE;
+  process.env.SMOKE_FAILED_BASELINE = "18";
+  try {
+    const flagWins = await cli([url, "--failed-baseline", "19"]);
+    assert.equal(flagWins.code, 0, flagWins.output);
+  } finally {
+    if (previousBoth === undefined) delete process.env.SMOKE_FAILED_BASELINE;
+    else process.env.SMOKE_FAILED_BASELINE = previousBoth;
+  }
+  process.env.SMOKE_FAILED_BASELINE = "19";
+  try {
+    const envLoses = await cli([url, "--failed-baseline", "18"]);
+    assert.equal(envLoses.code, 1, envLoses.output);
+    assert.match(envLoses.output, /actual queue\.failed 19/);
+  } finally {
+    if (previousBoth === undefined) delete process.env.SMOKE_FAILED_BASELINE;
+    else process.env.SMOKE_FAILED_BASELINE = previousBoth;
+  }
+});
+
+test("allow-missing-baseline skips the dead-letter gate when the baseline is unreadable", async (t) => {
+  const { url } = await stub(t, (route, result) => {
+    if (route === "/up")
+      result.body =
+        '{"status":"healthy","db":"ok","pending_migrations":0,"queue":{"status":"healthy","warn_at":20,"critical_at":100,"failed":19}}';
+  });
+  // Unit surface: no baseline + opt-in skips, without it the absolute gate fires.
+  const skipped = await run(url, { allowMissingBaseline: true });
+  assert.equal(skipped.ok, true, skipped.output);
+  assert.ok(skipped.output.includes("SKIP /up dead-letter gate"), skipped.output);
+  assert.ok(skipped.output.includes("PASS /up"), skipped.output);
+  const strict = await run(url);
+  assert.equal(strict.ok, false, strict.output);
+  // CLI surface: empty env (the workflow fallback) + opt-in skips.
+  const previousBaseline = process.env.SMOKE_FAILED_BASELINE;
+  const previousAllow = process.env.SMOKE_ALLOW_MISSING_BASELINE;
+  process.env.SMOKE_FAILED_BASELINE = "";
+  process.env.SMOKE_ALLOW_MISSING_BASELINE = "1";
+  try {
+    const fromEnv = await cli([url]);
+    assert.equal(fromEnv.code, 0, fromEnv.output);
+    assert.match(fromEnv.output, /SKIP \/up dead-letter gate/);
+  } finally {
+    if (previousBaseline === undefined) delete process.env.SMOKE_FAILED_BASELINE;
+    else process.env.SMOKE_FAILED_BASELINE = previousBaseline;
+    if (previousAllow === undefined) delete process.env.SMOKE_ALLOW_MISSING_BASELINE;
+    else process.env.SMOKE_ALLOW_MISSING_BASELINE = previousAllow;
+  }
+  const flagged = await cli([url, "--allow-missing-baseline"]);
+  assert.equal(flagged.code, 0, flagged.output);
+  assert.match(flagged.output, /SKIP \/up dead-letter gate/);
+  // A readable baseline with allow-missing still enforces growth: the
+  // workflows set both together, so `if (allowMissingBaseline)` alone would
+  // silently disable the gate. Growth fails, at-baseline passes without SKIP.
+  const { url: grownUrl } = await stub(t, (route, result) => {
+    if (route === "/up")
+      result.body =
+        '{"status":"healthy","db":"ok","pending_migrations":0,"queue":{"status":"healthy","warn_at":20,"critical_at":100,"failed":20}}';
+  });
+  const grownWithBaseline = await run(grownUrl, {
+    failedBaseline: 19,
+    allowMissingBaseline: true,
+  });
+  assert.equal(grownWithBaseline.ok, false, grownWithBaseline.output);
+  assert.match(
+    grownWithBaseline.output,
+    /FAIL \/up: expected queue\.failed <= 19 \(no new dead letters; baseline 19\); actual queue\.failed 20/,
+  );
+  assert.ok(
+    !grownWithBaseline.output.includes("SKIP /up dead-letter gate"),
+    grownWithBaseline.output,
+  );
+  const { url: atUrl } = await stub(t, (route, result) => {
+    if (route === "/up")
+      result.body =
+        '{"status":"healthy","db":"ok","pending_migrations":0,"queue":{"status":"healthy","warn_at":20,"critical_at":100,"failed":19}}';
+  });
+  const atBaseline = await run(atUrl, { failedBaseline: 19, allowMissingBaseline: true });
+  assert.equal(atBaseline.ok, true, atBaseline.output);
+  assert.ok(atBaseline.output.includes("PASS /up"), atBaseline.output);
+  assert.ok(!atBaseline.output.includes("SKIP /up dead-letter gate"), atBaseline.output);
+});
+
+test("rejects a non-integer failed baseline", async (t) => {
+  const { url } = await stub(t);
+  await assert.rejects(() => smoke(url, { failedBaseline: -1 }), /failed-baseline/);
+  const badFlag = await cli([url, "--failed-baseline", "many"]);
+  assert.equal(badFlag.code, 2, badFlag.output);
+  assert.match(badFlag.output, /failed-baseline/);
+});
+
 test("rejects /up without the cutover origin marker", async (t) => {
   const { url } = await stub(t, (route, result) => {
     if (route === "/up") delete result.headers["x-two-origin"];

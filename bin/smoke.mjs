@@ -64,6 +64,18 @@ export function assertVersionOverride(value) {
   return value;
 }
 
+export function assertFailedBaseline(value) {
+  const text = typeof value === "number" ? String(value) : value;
+  if (typeof text !== "string" || !/^\d+$/.test(text.trim())) {
+    throw new Error("failed-baseline must be a non-negative integer");
+  }
+  const parsed = Number.parseInt(text.trim(), 10);
+  if (!Number.isSafeInteger(parsed)) {
+    throw new Error("failed-baseline must be a non-negative integer");
+  }
+  return parsed;
+}
+
 // Candidate UUID pinned by a validated version-override header value:
 // worker-name="<lowercase version uuid>". A green HTTP response does not
 // prove which Worker version served it (Cloudflare falls back to normal
@@ -81,6 +93,8 @@ export async function smoke(
     log = console.log,
     allowIndexable = false,
     versionOverride,
+    failedBaseline,
+    allowMissingBaseline = false,
     failOnReadyWaitCritical = false,
   } = {},
 ) {
@@ -98,6 +112,7 @@ export async function smoke(
     );
   }
   if (versionOverride !== undefined) assertVersionOverride(versionOverride);
+  const baseline = failedBaseline === undefined ? undefined : assertFailedBaseline(failedBaseline);
   const expectedVersionId =
     versionOverride === undefined ? undefined : versionIdFromOverride(versionOverride);
   const overrideHeaders =
@@ -213,6 +228,32 @@ export async function smoke(
             "JSON /up db:ok, pending_migrations:0, status and queue.status",
             "valid JSON with unexpected health shape",
           );
+          // Dead letters are not promotable. Ad-hoc runs without a baseline
+          // fail closed on any positive numeric queue.failed with the count
+          // in the output. Promotion workflows capture the retained-rows
+          // count from /up before the deploy/promote (SMOKE_FAILED_BASELINE)
+          // and fail only on growth past it, so history never blocks a
+          // deploy while new dead letters still do. When the workflows could
+          // not read a baseline (SMOKE_ALLOW_MISSING_BASELINE) the gate is
+          // skipped with a notice instead of falling back to the absolute
+          // gate, so a transient /up blip never reds on retained history.
+          // failed 0/null (an unreadable ledger, or an envelope without the
+          // field) does not fail this gate on its own.
+          const failed = data?.queue?.failed;
+          if (baseline === undefined && allowMissingBaseline) {
+            log("SKIP /up dead-letter gate: no baseline (unreadable /up), not failing on history");
+          } else {
+            const failedIsNew =
+              typeof failed === "number" &&
+              (baseline === undefined ? failed > 0 : failed > baseline);
+            check(
+              !failedIsNew,
+              baseline === undefined
+                ? "queue.failed 0 (no dead letters)"
+                : `queue.failed <= ${baseline} (no new dead letters; baseline ${baseline})`,
+              `queue.failed ${typeof failed === "number" ? failed : "unknown"}`,
+            );
+          }
           // Version attribution (S4/M35): when the probe pins a candidate
           // version, /up.revision.version_id must equal its UUID. Cloudflare
           // falls back to normal routing when the override is ignored, so a
@@ -310,11 +351,15 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   const [baseUrl, ...flags] = args;
   let allowIndexable = false;
   let versionOverride;
+  let failedBaseline;
+  let allowMissingBaseline = false;
   let failOnReadyWaitCritical = false;
   let usage = false;
   for (let i = 0; i < flags.length; i += 1) {
     if (flags[i] === "--allow-indexable") {
       allowIndexable = true;
+    } else if (flags[i] === "--allow-missing-baseline") {
+      allowMissingBaseline = true;
     } else if (flags[i] === "--fail-on-ready-wait-critical") {
       failOnReadyWaitCritical = true;
     } else if (flags[i] === "--version-override") {
@@ -325,21 +370,48 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
         versionOverride = value;
       }
       i += 1;
+    } else if (flags[i] === "--failed-baseline") {
+      const value = flags[i + 1];
+      if (value === undefined) {
+        usage = true;
+      } else {
+        failedBaseline = value;
+      }
+      i += 1;
     } else {
       usage = true;
     }
   }
   if (typeof baseUrl !== "string" || usage) {
     console.error(
-      'Usage: node bin/smoke.mjs <base-url> [--allow-indexable] [--fail-on-ready-wait-critical] [--version-override worker-name="<version-uuid>"]',
+      'Usage: node bin/smoke.mjs <base-url> [--allow-indexable] [--fail-on-ready-wait-critical] [--version-override worker-name="<version-uuid>"] [--failed-baseline <n>] [--allow-missing-baseline]',
     );
     process.exitCode = 2;
   } else {
     try {
       if (versionOverride !== undefined) assertVersionOverride(versionOverride);
+      // Promotion workflows export the pre-deploy/promote retained-rows count
+      // as SMOKE_FAILED_BASELINE so the gate fails only on growth; an
+      // explicit --failed-baseline flag wins over the environment. An empty
+      // SMOKE_FAILED_BASELINE means the capture could not read /up and maps
+      // to no baseline. SMOKE_ALLOW_MISSING_BASELINE=1 (or the flag) makes
+      // that no-baseline state skip the dead-letter gate instead of failing
+      // on any positive count; ad-hoc runs without it keep the absolute gate.
+      const baselineRaw = failedBaseline ?? process.env.SMOKE_FAILED_BASELINE;
+      const baseline =
+        baselineRaw === undefined || baselineRaw === ""
+          ? undefined
+          : assertFailedBaseline(baselineRaw);
+      const allowMissingRaw = process.env.SMOKE_ALLOW_MISSING_BASELINE;
+      const allowMissing =
+        allowMissingBaseline ||
+        allowMissingRaw === "1" ||
+        allowMissingRaw?.toLowerCase() === "true";
       process.exitCode = (await smoke(baseUrl, {
         allowIndexable,
         versionOverride,
+        failedBaseline: baseline,
+        allowMissingBaseline: allowMissing,
         failOnReadyWaitCritical,
       }))
         ? 0

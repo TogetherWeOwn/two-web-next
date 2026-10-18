@@ -107,6 +107,27 @@ jobs:
       - name: Moderator role-config preflight (before any Cloudflare mutation)
         # Read the same top-level source var Wrangler deploys, not a CI secret.
         run: npm run check:worker-moderators
+      - name: Capture pre-deploy dead-letter baseline
+        id: dead-letter-baseline
+        # Read-only GET before any DB or Cloudflare mutation (migrations run
+        # below can enqueue work): queue.failed counts retained rows in
+        # queue_failed_jobs, so the post-deploy smoke fails only on growth
+        # past this count. Retried, then an unreadable /up leaves the baseline
+        # empty and the smoke skips the dead-letter gate on history (warning
+        # below) instead of failing on any positive count. Never fails the
+        # deploy on its own.
+        shell: bash
+        run: |
+          set -euo pipefail
+          baseline=""
+          for i in 1 2 3 4 5; do
+            candidate="$(node -e 'fetch("https://next.togetherweown.com/up", { signal: AbortSignal.timeout(10000) }).then((r) => r.json()).then((d) => { const f = d && d.queue ? d.queue.failed : undefined; if (typeof f === "number" && Number.isInteger(f) && f >= 0) process.stdout.write(String(f)); }).catch(() => {})' || true)"
+            if [ -n "$candidate" ]; then baseline="$candidate"; break; fi
+            if [ "$i" -lt 5 ]; then sleep 5; fi
+          done
+          if [ -z "$baseline" ]; then echo "::warning::dead-letter baseline unreadable after 5 attempts; smoke will skip the dead-letter gate on history"; fi
+          echo "failed=$baseline" >> "$GITHUB_OUTPUT"
+          echo "dead-letter baseline: ${baseline:-unknown}"
       # Staging web schema (TOG-12965). The Worker's /up gate and event queries
       # need the migrations of the SHA being deployed, so apply them after every
       # check has passed and before the first Cloudflare mutation: a failed plan,
@@ -275,11 +296,19 @@ jobs:
           bash ci/change-scope.sh "$RUNNER_TEMP/deployed-files.tsv" "$EXPECTED" >> "$GITHUB_OUTPUT"
       - name: Smoke test staging public routes
         if: steps.smoke-scope.outputs.skip_e2e != 'true'
-        # Staging-only fail-closed ready-wait gate (S6): /up db:ok +
-        # pending_migrations:0 plus --fail-on-ready-wait-critical, so a stuck
-        # staging queue fails the deploy. Production promote and
-        # post-rollback smoke intentionally omit the flag (warn-only): the age
-        # reflects the shared queue_jobs table, not the version under test.
+        # bin/smoke.mjs requires /up db:ok + pending_migrations:0, fails
+        # only on new dead letters (a positive numeric queue.failed above the
+        # pre-deploy baseline fails the deploy with the count; null/missing
+        # never fails on its own; an unreadable baseline skips the gate via
+        # SMOKE_ALLOW_MISSING_BASELINE instead of failing on history), and
+        # fails closed on a stuck queue via --fail-on-ready-wait-critical
+        # (S6, staging-only: the age reflects the shared queue_jobs table,
+        # not the version under test, so production promote and post-rollback
+        # smoke omit the flag and stay warn-only). Queue-only
+        # degraded/unknown still pass.
+        env:
+          SMOKE_FAILED_BASELINE: ${{ steps.dead-letter-baseline.outputs.failed }}
+          SMOKE_ALLOW_MISSING_BASELINE: "1"
         run: |
           for i in 1 2 3 4 5 6; do
             if node bin/smoke.mjs https://next.togetherweown.com --fail-on-ready-wait-critical; then
