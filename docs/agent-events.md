@@ -11,6 +11,8 @@ one admitted caller, one staging guild. Wire contract follows two-web `AgentEven
 - All five operations use `events`, including nullable unique `agent_grant_id` and `proof_marker`, and
   `agent_version` (default 1). Human rows have no machine owner. A grant still owns at most one proof event;
   known foreign keys are refused. `update` requires the last read's integer `version` and increments it once.
+  The version must fit PostgreSQL `integer` (-2147483648 to 2147483647); anything outside that
+  range, or not an integer, is refused 422 before any event SQL runs.
   Moderator edits, shifted recurrence children and moderator lifecycle changes also increment the version
   on agent-owned rows, so an older agent update cannot overwrite a human correction. Lifecycle decisions
   share the event-row lock across both writers; a cancelled event cannot be republished by a racing moderator.

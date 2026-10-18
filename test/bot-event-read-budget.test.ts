@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { setTimeout as realDelay } from "node:timers/promises";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_CONFIG, handleAgentEvent, type IngressEffects } from "../src/agent-events/service";
 import { observeDiscordEvent, signedEventReader } from "../src/bot/event-read";
@@ -104,10 +105,6 @@ function trackUnhandledRejections() {
 const observe = (fetcher: typeof fetch) =>
   observeDiscordEvent(local, signedEventReader(cfg, fetcher));
 
-// Bound before any vi.useFakeTimers(): fake timers replace performance.now,
-// so this keeps a real wall-clock for the zero-fake-ms signer poll below.
-const realNow = performance.now.bind(performance);
-
 // Signing the request is real async crypto: under fake timers a bare
 // advanceTimersByTimeAsync(BUDGET) can fire before the fetcher is ever
 // invoked, and zero-millisecond advances do not give the crypto work
@@ -115,14 +112,11 @@ const realNow = performance.now.bind(performance);
 // single attempt is on the wire, so the budget advances below measure
 // transport time only.
 async function untilFetcherCalled(fetcher: ReturnType<typeof vi.fn<typeof fetch>>) {
-  // Zero-fake-ms poll: advanceTimersByTimeAsync(0) flushes microtasks/real
-  // crypto without advancing the fake clock, so the 2,500 ms budget measured
-  // below covers transport time only. Bounded by wall-clock (not a turn
-  // count): ~500 turns cost ~2.4 ms, so a 3 ms-late signer on Node 22 under
-  // load would still flake a count bound.
-  const end = realNow() + 5_000;
-  while (fetcher.mock.calls.length === 0 && realNow() < end) {
-    await vi.advanceTimersByTimeAsync(0);
+  // Real-time polling lets WebCrypto's worker finish even on a busy runner;
+  // a fixed number of zero-time event-loop turns can finish before signing.
+  const deadline = vi.getRealSystemTime() + 2_000;
+  while (fetcher.mock.calls.length === 0 && vi.getRealSystemTime() < deadline) {
+    await realDelay(1);
   }
   expect(fetcher.mock.calls.length).toBe(1);
 }
@@ -150,6 +144,29 @@ describe("signed bot event.read budget and byte ceiling", () => {
   });
 
   describe("positive controls: existing behaviour is unchanged", () => {
+    it("waits for slow real signing without consuming the fake transport budget", async () => {
+      const sign = crypto.subtle.sign.bind(crypto.subtle);
+      vi.spyOn(crypto.subtle, "sign").mockImplementationOnce(async (...args) => {
+        await realDelay(100);
+        return sign(...args);
+      });
+      const fetcher = vi
+        .fn<typeof fetch>()
+        .mockResolvedValue(
+          new Response(JSON.stringify({ ok: true, result: observation }), { status: 200 }),
+        );
+      const startedAt = Date.now();
+      const pending = observe(fetcher);
+      try {
+        await untilFetcherCalled(fetcher);
+        expect(Date.now()).toBe(startedAt);
+        expect(await pending).toEqual(observation);
+        expect(vi.getTimerCount()).toBe(0);
+      } finally {
+        await pending;
+      }
+    });
+
     it("returns a valid chunked observation under the ceiling byte-for-byte", async () => {
       const bytes = jsonBytes({ ok: true, result: observation });
       // Split inside the two-byte "é" so only true byte buffering survives.

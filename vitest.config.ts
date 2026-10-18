@@ -9,6 +9,7 @@ export default defineConfig({
       "test/smoke.test.mjs",
       "test/json-smoke.test.mjs",
       "test/revision-check.test.mjs",
+      "test/smoke-ordinary-traffic-identity-acceptance.test.mjs",
     ],
     // Live suites truncate shared tables in one database, so files run serially.
     fileParallelism: false,

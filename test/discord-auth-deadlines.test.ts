@@ -102,9 +102,10 @@ describe("Discord auth deadlines", () => {
       expect(signal?.aborted).toBe(false);
       await vi.advanceTimersByTimeAsync(1);
       // Each step keeps its existing taxonomy: exchange/identity wrap the timeout
-      // as a transport failure, guild admission degrades to "failed", and the raw
-      // role lookup propagates to recomputeModerator's fail-closed catch.
-      if (name === "join") expect(result()).toEqual({ value: "failed" });
+      // as a transport failure, guild admission classifies it as
+      // "transport_failure", and the raw role lookup propagates to
+      // recomputeModerator's fail-closed catch.
+      if (name === "join") expect(result()).toEqual({ value: "transport_failure" });
       else if (name === "roles")
         expect(result()).toEqual({ error: expect.any(DiscordHttpTimeoutError) });
       else {
@@ -131,7 +132,7 @@ describe("Discord auth deadlines", () => {
     );
     const result = outcome(call());
     await vi.advanceTimersByTimeAsync(BUDGET_MS);
-    if (name.startsWith("join")) expect(result()).toEqual({ value: "failed" });
+    if (name.startsWith("join")) expect(result()).toEqual({ value: "transport_failure" });
     else if (name.startsWith("role"))
       expect(result()).toEqual({ error: expect.any(DiscordHttpTimeoutError) });
     else {
@@ -313,7 +314,7 @@ describe("Discord auth deadlines", () => {
     expect(await identity()).toEqual(user);
     expect(await join()).toBe("joined");
     expect(await join()).toBe("already_member");
-    expect(await join()).toBe("failed");
+    expect(await join()).toBe("forbidden");
     expect(await moderator()).toBe(true);
     expect(await roles()).toBeNull();
     await expect(exchange()).rejects.toMatchObject({
