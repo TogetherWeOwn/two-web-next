@@ -38,6 +38,7 @@
 // Everything is hermetic: injected fetch, a fake local clock, no
 // webhook, database or network contact.
 import { describe, expect, it, vi } from "vitest";
+import { ALERT_WINDOW_MS, AlertRateLimit, alertRequestError } from "../src/alerts";
 import { DeliveryMute, MUTE_MS, createTailWorker } from "../tail/worker";
 
 const t0 = Date.parse("2026-10-01T00:00:00Z");
@@ -270,6 +271,44 @@ describe("mute behavior the clamp must not change (positive controls)", () => {
     await worker.tail([trace([requestAlert], t0 + YEAR_MS)], env);
     setNow(t0 + 1000);
     await worker.tail([trace([queueAlert], t0 + 1000)], env);
+    expect(send).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("small source-ahead skew keeps source-time coordination", () => {
+  it("a boundary re-emit pages when the Tail clock runs seconds behind the source with varying latency", async () => {
+    // The app's alert limiter re-emits exactly one window later in source
+    // time. With the Tail clock seconds behind and arrival latency varying
+    // per trace, both mute decisions must still measure in source time:
+    // clamping either stamp to the Tail clock would shrink the observed gap
+    // under MUTE_MS and drop the re-page for a sustained error.
+    let sourceTime = t0;
+    let tailTime = t0 - 1000;
+    const limiter = new AlertRateLimit(ALERT_WINDOW_MS, () => sourceTime);
+    const send = vi.fn(async () => new Response(null, { status: 200 }));
+    const worker = createTailWorker({
+      fetch: send as unknown as typeof fetch,
+      sink: vi.fn(),
+      mute: new DeliveryMute(() => tailTime),
+      now: () => tailTime,
+    });
+    const emit = async (tailOffset: number) => {
+      const lines: string[] = [];
+      const emitted = alertRequestError(
+        new TypeError("private"),
+        { method: "POST", route: "/join" },
+        { limiter, sink: (line) => void lines.push(line) },
+      );
+      tailTime = sourceTime + tailOffset;
+      if (emitted) await worker.tail([trace(lines, sourceTime)], env);
+      return emitted;
+    };
+
+    expect(await emit(-1000)).toBe(true);
+    expect(send).toHaveBeenCalledOnce();
+
+    sourceTime += ALERT_WINDOW_MS;
+    expect(await emit(-2500)).toBe(true);
     expect(send).toHaveBeenCalledTimes(2);
   });
 });
