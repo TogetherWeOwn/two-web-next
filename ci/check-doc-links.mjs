@@ -3,7 +3,10 @@
 // GitHub renders for this repo: the root files (ROOT_FILES) plus the
 // contributor contracts (CONTRIBUTOR_CONTRACT_FILES), the in-tree guides
 // (IN_TREE_GUIDE_FILES) and docs/**/*.md. External `http(s)` links are
-// ignored (no network); fenced code blocks and inline code spans are skipped.
+// ignored (no network); fenced code blocks and inline code spans are skipped
+// for link checks. Literal current-repository implementation citations in
+// the parity evidence scope (PARITY_CITATION_FILES) are validated
+// separately: those live in inline code, so the link scan cannot see them.
 //
 // Exit codes: 0 = every link resolves, 1 = at least one broken link,
 // 2 = usage error or an unreadable file (fail closed, like check-bundle-budget).
@@ -180,6 +183,40 @@ function stripInlineCode(line) {
   return text;
 }
 
+// Documents whose inline code spans carry evidence citations naming
+// current-repository implementation files, repo-root-relative. Narrow scope
+// on purpose (no blanket inline-code validation): legacy/historical paths,
+// route examples and globs must remain valid prose everywhere else.
+const PARITY_CITATION_FILES = ["docs/parity.md"];
+
+// Every inline code span on a line, double-backtick spans first so their
+// content is not split into single-backtick fragments.
+function scanCitationSpans(line) {
+  const spans = [];
+  for (const match of line.matchAll(/``([^`]+)``|`([^`\n]*)`/g)) {
+    spans.push(match[1] ?? match[2]);
+  }
+  return spans;
+}
+
+// A literal current-repository implementation citation (`src/...`,
+// `test/...`, optionally with a `:line`, `:line,line` or `:start-end`
+// suffix), or null when the span is prose, a command (`node ci/tool.mjs`),
+// a route example (`GET /events/{event}`), a glob (`test/islands-*.test.ts`),
+// a legacy path (`routes/web.php`, `app/Mail`, `config/mail.php`) or any
+// other non-path code. Returns the repo-root-relative file part.
+export function citationTarget(span) {
+  const text = String(span).trim();
+  const match = /^(src\/[^\s`]+|test\/[^\s`]+)/.exec(text);
+  if (!match) return null;
+  const file = match[1]
+    .replace(/[.,;!?)"']+$/, "")
+    .replace(/#.*$/, "")
+    .replace(/:\d+(?:[,-]\d+)*$/, "");
+  if (!file || file.includes("*")) return null;
+  return file;
+}
+
 // Inline links `[text](target)` and images `![alt](target)` on one line,
 // with balanced-paren destinations (titles after a space are dropped).
 // Returns [{ text, target, index }].
@@ -303,6 +340,7 @@ export function checkLinks(root, output = console) {
     return anchorCache.get(path);
   };
   const errors = [];
+  const citationScope = new Set(PARITY_CITATION_FILES.map((path) => join(root, path)));
   for (const file of files) {
     let text;
     try {
@@ -348,6 +386,20 @@ export function checkLinks(root, output = console) {
           errors.push(
             `${file}:${index + 1}: missing anchor "#${fragment}" in "${link.target}" (from ${file})`,
           );
+        }
+      }
+      // Literal implementation citations live in inline code, which the link
+      // scan above strips: resolve `src/`/`test/` spans against the repo
+      // root. Citations are repo-root-relative even in nested documents.
+      if (citationScope.has(file)) {
+        for (const span of scanCitationSpans(rawLine)) {
+          const target = citationTarget(span);
+          if (!target) continue;
+          if (!existsSync(join(root, decodeTarget(target)))) {
+            errors.push(
+              `${file}:${index + 1}: missing implementation citation "${target}" (from ${file})`,
+            );
+          }
         }
       }
     });
@@ -545,6 +597,115 @@ function selftest() {
       1,
       ['missing anchor "#setup-2"'],
     );
+
+    check(
+      "missing parity implementation citation fails with file, line and target",
+      () => {
+        write(
+          "docs/parity.md",
+          ["# Parity", "", "Adapter on the pg store (`src/jobs/event-store-pg.ts`).", ""].join(
+            "\n",
+          ),
+        );
+        write("src/jobs/events.ts", "export function pgEventStore() {}\n");
+      },
+      1,
+      ['docs/parity.md:3: missing implementation citation "src/jobs/event-store-pg.ts"'],
+    );
+
+    check(
+      "existing parity citations pass, including line and range suffixes",
+      () => {
+        write(
+          "docs/parity.md",
+          [
+            "# Parity",
+            "",
+            "Adapter `src/jobs/events.ts:67`, proof `test/recurrence.test.ts:135,194`,",
+            "range `test/event-writeback.test.ts:332-351` and plain `src/jobs/cron.ts`.",
+            "",
+          ].join("\n"),
+        );
+        write("src/jobs/events.ts", "export function pgEventStore() {}\n");
+        write("src/jobs/cron.ts", "export function reconcileEvents() {}\n");
+        write("test/recurrence.test.ts", "// fixture\n");
+        write("test/event-writeback.test.ts", "// fixture\n");
+      },
+      0,
+    );
+
+    check(
+      "parity legacy paths, routes, globs, non-path code and fences stay valid",
+      () => {
+        write(
+          "docs/parity.md",
+          [
+            "# Parity",
+            "",
+            "Legacy `routes/web.php`, `app/Mail`, `config/mail.php`.",
+            "Routes `GET /events/{event}`, `/e/{key}`, `ALL /admin/*`.",
+            "Globs `test/islands-*.test.ts`, `content/welcome/*`.",
+            "Not paths `reconcileEvents`, `EventService::materialize`, `node ci/tool.mjs`.",
+            "Current `src/jobs/events.ts` and `test/recurrence.test.ts`.",
+            "",
+            "```md",
+            "Fenced `src/missing-in-fence.ts` is not a citation.",
+            "```",
+            "",
+          ].join("\n"),
+        );
+        write("src/jobs/events.ts", "export function pgEventStore() {}\n");
+        write("test/recurrence.test.ts", "// fixture\n");
+      },
+      0,
+    );
+
+    check(
+      "implementation citations in other documents are not checked",
+      () => {
+        write("docs/page.md", "# Page\n\nMissing `src/no-such-file.ts` here.\n");
+      },
+      0,
+    );
+
+    {
+      rmSync(root, { recursive: true, force: true });
+      mkdirSync(root, { recursive: true });
+      for (const stub of [...ROOT_FILES, ...CONTRIBUTOR_CONTRACT_FILES, ...IN_TREE_GUIDE_FILES]) {
+        write(stub, "# Stub\n");
+      }
+      write("docs/scope-stub.md", "# Stub\n");
+      write(
+        "docs/parity.md",
+        "# Parity\n\nFirst `src/missing-one.ts`.\n\nSecond `src/missing-two.ts`.\n",
+      );
+      const runs = [0, 1].map(() => {
+        const messages = [];
+        const code = checkLinks(root, {
+          log() {},
+          error(text) {
+            messages.push(text);
+          },
+        });
+        assert.equal(code, 1, `citation diagnostics exit 1, got ${messages.join("; ")}`);
+        return messages;
+      });
+      assert.deepEqual(runs[1], runs[0], "citation diagnostics are deterministic");
+      assert.ok(
+        runs[0].some(
+          (text) => text.includes("docs/parity.md:3:") && text.includes("src/missing-one.ts"),
+        ),
+        `first diagnostic carries file, line and target: ${runs[0].join("; ")}`,
+      );
+      assert.ok(
+        runs[0].some(
+          (text) => text.includes("docs/parity.md:5:") && text.includes("src/missing-two.ts"),
+        ),
+        `second diagnostic carries file, line and target: ${runs[0].join("; ")}`,
+      );
+      cases += 1;
+      console.log("PASS parity citation diagnostics are deterministic");
+    }
 
     // The six files this scope added, pinned literally on purpose: a loop over
     // the scope constants shrinks with them and would never notice a dropped
