@@ -207,21 +207,44 @@ describe("explicit expired-write recovery, never replay", () => {
   });
 
   it.each(["error=access_denied", "code=fixture&state=wrong"])(
-    "terminal failure %s clears pending notice and cannot flash success later",
+    "stray failure %s leaves the pending notice for the real hit",
     async (query) => {
       const f = recoveryFixture();
       const jar = mergeCookies("", await f.request("/auth/recover?next=%2Fprofile"));
-      const failed = await f.request("/auth/discord/callback?" + query, {
+      const stray = await f.request("/auth/discord/callback?" + query, {
         headers: { cookie: jar },
       });
+      expect(stray.status).toBe(302);
+      expect(stray.headers.get("location")).toBe("/?n=signin_failed");
+      // The pending notice survives the stray: it is neither re-set nor
+      // cleared, so the jar still carries it for the real hit.
       expect(
-        failed.headers
-          .getSetCookie()
-          .some((c) => c.startsWith(EXPIRED_WRITE_COOKIE + "=") && c.includes("Max-Age=0")),
-      ).toBe(true);
-      expect(mergeCookies(jar, failed)).not.toContain(EXPIRED_WRITE_COOKIE);
+        stray.headers.getSetCookie().some((c) => c.startsWith(EXPIRED_WRITE_COOKIE + "=")),
+      ).toBe(false);
+      expect(mergeCookies(jar, stray)).toContain(EXPIRED_WRITE_COOKIE);
     },
   );
+
+  it("an admitted denial clears the pending notice and cannot flash success later", async () => {
+    const f = recoveryFixture();
+    let jar = mergeCookies("", await f.request("/auth/recover?next=%2Fprofile"));
+    const start = await f.request("/auth/discord?next=%2Fprofile", {
+      headers: { cookie: jar },
+    });
+    expect(start.status).toBe(302);
+    jar = mergeCookies(jar, start);
+    const state = new URL(start.headers.get("location")!).searchParams.get("state")!;
+    const denied = await f.request(`/auth/discord/callback?error=access_denied&state=${state}`, {
+      headers: { cookie: jar },
+    });
+    expect(denied.headers.get("location")).toBe("/?n=signin_denied");
+    expect(
+      denied.headers
+        .getSetCookie()
+        .some((c) => c.startsWith(EXPIRED_WRITE_COOKIE + "=") && c.includes("Max-Age=0")),
+    ).toBe(true);
+    expect(mergeCookies(jar, denied)).not.toContain(EXPIRED_WRITE_COOKIE);
+  });
 
   it("logout clears the pending/restored recovery notice only after successful revocation", async () => {
     const f = recoveryFixture();

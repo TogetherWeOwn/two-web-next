@@ -145,11 +145,16 @@ export function registerAuthRoutes(app: Hono<{ Bindings: Env }>, hooks: AuthHook
       store && (await store.journeys.consume(await hashToken(state!), "auth").catch(() => false));
     if (!admitted || !store) {
       // Stray hit (bad state, bare hit, OAuth error without a matching
-      // state): not the real hit, so consume nothing — the state, next and
-      // intended cookies plus the expired-write notice all survive for the
-      // next real hit. The visible answer stays the generic failure (an
-      // unadmitted denial is a failed sign-in, not the cancelled-consent
-      // copy) with zero exchange calls.
+      // state, replay after the journey was spent): not the real hit, so
+      // consume nothing — the state, next and intended cookies plus the
+      // expired-write notice all survive for the next real hit. The visible
+      // answer stays the generic failure (an unadmitted denial is a failed
+      // sign-in, not the cancelled-consent copy) with zero exchange calls.
+      // The one exception is the denied copy, which keys off presentation
+      // (a matching state cookie with an acquirable store), not journey
+      // admission: a replayed denial keeps the cancelled-consent copy,
+      // while a denial that never presented state keeps the generic one.
+      if (oauthError === "access_denied" && store) return c.redirect("/?n=signin_denied", 302);
       return c.redirect("/?n=signin_failed", 302);
     }
     // Admitted terminal path: consume the return journey exactly once —
@@ -163,11 +168,11 @@ export function registerAuthRoutes(app: Hono<{ Bindings: Env }>, hooks: AuthHook
     // exists. Denied gets its own sentence (the member chose this); any other
     // OAuth error keeps the generic one. Legacy DiscordLoginTest: the
     // error_description is never echoed — we render only our own copy.
-    // The denied copy requires admission (a matching state cookie with a
-    // consumed journey): a denial that was never admitted is handled as a
-    // stray above with the generic redirect. A replay still presents matching
-    // state on its first admitted hit, so it keeps the denied copy; the
-    // journey itself is consumed exactly once above.
+    // The denied copy requires a presented state (a matching state cookie
+    // with an acquirable store): a denial that never presented state is
+    // handled as a stray above with the generic redirect, while a replayed
+    // denial keeps the denied copy in the stray branch for the same reason.
+    // The journey itself is consumed exactly once above.
     if (oauthError) {
       return c.redirect(
         oauthError === "access_denied" ? "/?n=signin_denied" : "/?n=signin_failed",

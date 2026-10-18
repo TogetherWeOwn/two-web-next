@@ -284,10 +284,10 @@ describe("W15 auth/join in Miniflare", () => {
     expect(res.headers.get("location")).toBe("/?n=signin_failed");
     const cleared = res.headers.getSetCookie().join("\n");
     expect(cleared).not.toContain("__Host-two_session=");
-    // The failure path still consumes the journey — a stale next never leaks
-    // into a later sign-in.
-    expect(cleared).toContain("__Host-two_login_next=; Max-Age=0");
-    expect(cleared).toContain("__Host-two_login_intended=; Max-Age=0");
+    // A stray hit preserves the pending journey for the real hit that
+    // follows — nothing is cleared here. Only terminal (admitted) paths
+    // consume the journey, so no target sticks around after sign-in.
+    expect(cleared).not.toContain("Max-Age=0");
     expect(calls).toHaveLength(0);
   });
 

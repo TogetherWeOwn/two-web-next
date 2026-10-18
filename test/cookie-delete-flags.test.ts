@@ -8,6 +8,7 @@
 // flagged the same as the sets. Local fixtures only: no database, no Discord.
 import { describe, expect, it } from "vitest";
 import type { Env } from "../src/env";
+import { createMemorySessionStore } from "../src/sessions";
 import app from "./app";
 
 const env: Env = {
@@ -46,18 +47,25 @@ describe("clearing cookies carry HttpOnly + SameSite=Lax (ZAP 10010/10054)", () 
     assertAllFlagged(res, "GET /auth/discord");
   });
 
-  it("every terminal /auth/discord/callback clears flagged", async () => {
-    const start = await app.request("/auth/discord?next=%2Fevents", {}, env);
+  it("an admitted /auth/discord/callback denial clears flagged", async () => {
+    // Only admitted (terminal) callback hits clear: an unadmitted stray
+    // sets no cookies at all, so flag hygiene is exercised through a denial
+    // that presents the matching state.
+    const storeEnv = { ...env, SESSION_STORE: createMemorySessionStore() } as unknown as Env;
+    const start = await app.request("/auth/discord?next=%2Fevents", {}, storeEnv);
+    expect(start.status).toBe(302);
+    const state = new URL(start.headers.get("location")!).searchParams.get("state");
+    expect(state).toBeTruthy();
     const cookie = start.headers
       .getSetCookie()
       .map((c) => c.split(";")[0])
       .join("; ");
     const denied = await app.request(
-      "/auth/discord/callback?error=access_denied",
+      `/auth/discord/callback?error=access_denied&state=${state}`,
       { headers: { cookie } },
-      env,
+      storeEnv,
     );
-    expect([200, 302, 303]).toContain(denied.status);
+    expect(denied.headers.get("location")).toBe("/?n=signin_denied");
     expect(flaggedDeletions(denied)).toEqual([]);
     assertAllFlagged(denied, "GET /auth/discord/callback denial");
   });
