@@ -6,8 +6,9 @@
 import { readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ACTIVITY_LOG_PAGE_SIZE } from "../src/admin/table-list";
+import { __resetAlertRateLimitForTests } from "../src/alerts";
 import {
   activityLogUnavailable,
   formatActivityCauser,
@@ -180,6 +181,131 @@ describe("loadActivityLogPage: shared filters, paging, instants, headers", () =>
 
   it("brands the outage like the Hono 503 envelope", () => {
     expect(activityLogUnavailable()).toMatchObject({ status: 503 });
+  });
+});
+
+describe("loadActivityLogPage: load failures classify and alert (acceptance)", () => {
+  // A code bug inside the load must never look like a downstream outage:
+  // an unbranded failure emits exactly one leak-free `error.alert`
+  // diagnostic (critical JSON on console.error) and still answers the
+  // branded 503. A classified database-unavailable failure (transport
+  // code or Postgres server-unavailable code) keeps the silent 503 — no
+  // over-alerting. Each silent expectation is paired after an alerting
+  // one in the same case, so a load that never alerts fails every case.
+  const MARKER = "acceptance-probe-secret-marker";
+  const codeBug = () => new TypeError(`${MARKER}: cannot read properties of undefined`);
+  const transportDown = () =>
+    Object.assign(new Error("connect ECONNREFUSED"), { code: "ECONNREFUSED" });
+  const serverDown = () => {
+    const err = new Error(`${MARKER}: the database system is starting up`);
+    err.name = "PostgresError";
+    return Object.assign(err, { code: "57P03" });
+  };
+
+  const alertLines = (): string[] =>
+    vi
+      .mocked(console.error)
+      .mock.calls.map((call) => String(call[0]))
+      .filter((line) => line.includes('"error.alert"'));
+
+  const expectExactlyOneAlert = () => {
+    const lines = alertLines();
+    expect(lines, "expected exactly one error.alert diagnostic").toHaveLength(1);
+    const parsed = JSON.parse(lines[0] as string) as { event?: unknown; level?: unknown };
+    expect(parsed.event).toBe("error.alert");
+    expect(parsed.level).toBe("critical");
+    expect(lines[0]).not.toContain(MARKER);
+  };
+
+  const loadWith = (overrides: Record<string, unknown> = {}) => {
+    const setHeaders = headersSpy();
+    const promise = loadActivityLogPage({
+      env,
+      subjectParam: null,
+      causerParam: null,
+      pageParam: null,
+      setHeaders,
+      dbForFn: async () => db,
+      listFn: async () => [],
+      ...overrides,
+    } as Parameters<typeof loadActivityLogPage>[0]);
+    return { promise, setHeaders };
+  };
+
+  const expectBranded503 = async (
+    promise: ReturnType<typeof loadActivityLogPage>,
+    setHeaders: ReturnType<typeof headersSpy>,
+  ) => {
+    await expect(promise).rejects.toMatchObject({ status: 503 });
+    expect(setHeaders).toHaveBeenCalledWith({ "cache-control": "private, no-store" });
+  };
+
+  beforeEach(() => {
+    __resetAlertRateLimitForTests();
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    vi.spyOn(console, "log").mockImplementation(() => {});
+  });
+  afterEach(() => vi.restoreAllMocks());
+
+  it("listFn throwing a TypeError emits one error.alert and still answers branded 503", async () => {
+    const { promise, setHeaders } = loadWith({
+      listFn: async () => {
+        throw codeBug();
+      },
+    });
+    await expectBranded503(promise, setHeaders);
+    expectExactlyOneAlert();
+  });
+
+  it("dbForFn throwing a TypeError emits one error.alert and still answers branded 503", async () => {
+    const { promise, setHeaders } = loadWith({
+      dbForFn: async () => {
+        throw codeBug();
+      },
+    });
+    await expectBranded503(promise, setHeaders);
+    expectExactlyOneAlert();
+  });
+
+  it("listFn classifies: TypeError alerts, unavailable failures add no alert", async () => {
+    const bug = loadWith({
+      listFn: async () => {
+        throw codeBug();
+      },
+    });
+    await expectBranded503(bug.promise, bug.setHeaders);
+    expectExactlyOneAlert();
+
+    for (const unavailable of [transportDown, serverDown]) {
+      const down = loadWith({
+        listFn: async () => {
+          throw unavailable();
+        },
+      });
+      await expectBranded503(down.promise, down.setHeaders);
+      expect(alertLines(), "unavailable failure must not over-alert").toHaveLength(1);
+    }
+  });
+
+  it("dbForFn classifies: TypeError alerts, unavailable failures add no alert", async () => {
+    const bug = loadWith({
+      dbForFn: async () => {
+        throw codeBug();
+      },
+    });
+    await expectBranded503(bug.promise, bug.setHeaders);
+    expectExactlyOneAlert();
+
+    for (const unavailable of [transportDown, serverDown]) {
+      const down = loadWith({
+        dbForFn: async () => {
+          throw unavailable();
+        },
+      });
+      await expectBranded503(down.promise, down.setHeaders);
+      expect(alertLines(), "unavailable failure must not over-alert").toHaveLength(1);
+    }
   });
 });
 
