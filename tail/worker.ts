@@ -218,6 +218,51 @@ function cleanupResponse(response: Response): void {
   }
 }
 
+// Independent settlement deadline for one scheduled GET header wait. The
+// /up and synthetic probes each allow UPTIME_TIMEOUT_MS per attempt; the
+// AbortSignal.timeout on each GET stays on as cooperative cleanup only.
+// Racing the headers against a setTimeout guarantees the attempt settles
+// within the existing budget even when the transport never resolves and
+// ignores abort. Expiry is the existing transport treatment (status 0,
+// eligible for the existing retry). A late response gets best-effort inert
+// body cleanup without being awaited, and a late rejection is swallowed:
+// neither can change the settled verdict, page twice, or surface as an
+// unhandled rejection.
+async function withProbeDeadline(
+  work: Promise<Response>,
+  ms = UPTIME_TIMEOUT_MS,
+): Promise<Response> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    const timeout = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new Error("probe deadline")), ms);
+    });
+    void work.then(
+      () => {},
+      () => {},
+    );
+    return await Promise.race([work, timeout]);
+  } catch (error) {
+    // The race already settled without this attempt: a late Response still
+    // gets inert cleanup, a late rejection stays swallowed, and the settled
+    // verdict below never changes. Attached only on the losing path so a
+    // winning attempt is still cleaned up exactly once by its caller.
+    void work.then(
+      (response) => {
+        try {
+          cleanupResponse(response);
+        } catch {
+          /* Late cleanup never flips the settled verdict. */
+        }
+      },
+      () => {},
+    );
+    throw error;
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
+}
+
 export type UptimeAlert = {
   event: "uptime.down";
   status: number;
@@ -1240,11 +1285,14 @@ export function createTailWorker(
     attribution: UpAttribution;
   }> {
     try {
-      const response = await send(target, {
-        method: "GET",
-        redirect: "manual", // Workers fetch rejects "error"; a 3xx is never ok, so it fails closed.
-        signal: AbortSignal.timeout(UPTIME_TIMEOUT_MS),
-      });
+      const response = await withProbeDeadline(
+        send(target, {
+          method: "GET",
+          redirect: "manual", // Workers fetch rejects "error"; a 3xx is never ok, so it fails closed.
+          signal: AbortSignal.timeout(UPTIME_TIMEOUT_MS),
+        }),
+        UPTIME_TIMEOUT_MS,
+      );
       const ok =
         response.status === 200 && response.headers.get("x-two-origin") === EXPECTED_ORIGIN;
       // Read the already-fetched body for the public revision marker only.
@@ -1276,11 +1324,14 @@ export function createTailWorker(
     check: SyntheticCheck,
   ): Promise<{ ok: boolean; status: number }> {
     try {
-      const response = await send(new URL(check.path, base).toString(), {
-        method: "GET",
-        redirect: "manual", // Never follow into Discord or a login flow.
-        signal: AbortSignal.timeout(UPTIME_TIMEOUT_MS),
-      });
+      const response = await withProbeDeadline(
+        send(new URL(check.path, base).toString(), {
+          method: "GET",
+          redirect: "manual", // Never follow into Discord or a login flow.
+          signal: AbortSignal.timeout(UPTIME_TIMEOUT_MS),
+        }),
+        UPTIME_TIMEOUT_MS,
+      );
       let ok = response.status === check.status;
       if (ok && check.contentType) {
         ok = (response.headers.get("content-type") ?? "").startsWith(check.contentType);
