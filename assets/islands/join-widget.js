@@ -25,6 +25,13 @@
     frame.setAttribute("data-testid", "join-widget");
     let loaded = false;
     let guided = false;
+    // Focus the island itself placed in the frame on load. Any blur clears
+    // it: a visitor who moved away — even one who later tabs back into the
+    // frame — keeps their focus untouched when guidance appears.
+    let owned = false;
+    frame.addEventListener("blur", () => {
+      owned = false;
+    });
     const guide = (beside) => {
       if (guided) return;
       guided = true;
@@ -64,10 +71,11 @@
       };
       const active = document.activeElement;
       if (beside) {
-        // Focus sat in the frame since load placed it there: move it onto the
-        // guidance/invite so it is not stranded in a dead frame. A visitor who
-        // moved elsewhere keeps their focus untouched.
-        if (active === frame) focusIt(fallback) || focusIt(message);
+        // Focus the island placed in the frame on load, still owned: move it
+        // onto the guidance/invite so it is not stranded in a dead frame. A
+        // visitor who moved elsewhere — even one who tabbed back in — keeps
+        // their focus untouched.
+        if (owned && active === frame) focusIt(fallback) || focusIt(message);
       } else if (!active || active === document.body) {
         focusIt(fallback) || focusIt(message);
       }
@@ -82,7 +90,10 @@
       if (guided || loaded) return;
       loaded = true;
       const active = document.activeElement;
-      if (!active || active === document.body) frame.focus();
+      if (!active || active === document.body) {
+        frame.focus();
+        owned = true;
+      }
     });
     frame.addEventListener("error", () => {
       if (guided || loaded) return;
