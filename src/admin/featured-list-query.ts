@@ -11,12 +11,19 @@ export type FeaturedListQuery = {
 /** One extra row is fetched as the next-page lookahead, like events. */
 export const FEATURED_PAGE_SIZE = 25;
 
+// Free-text search is bounded before the leading-wildcard ILIKE scan and
+// before reflection into navigation links. Measured on the normalized value
+// (NULs stripped, then trimmed); overlong falls back to absent, never truncated.
+const FEATURED_FREE_TEXT_MAX_LENGTH = 128;
+const boundFeaturedFreeText = (value: string): string =>
+  value.length > FEATURED_FREE_TEXT_MAX_LENGTH ? "" : value;
+
 export function parseFeaturedListQuery(params: ListParams): FeaturedListQuery {
   const page = Number(params.page);
   return {
     published: params.published === "1" || params.published === "0" ? params.published : "",
     // PostgreSQL text cannot contain NUL; keep this leaf independent of other tables.
-    q: (params.q ?? "").replaceAll(String.fromCharCode(0), "").trim(),
+    q: boundFeaturedFreeText((params.q ?? "").replaceAll(String.fromCharCode(0), "").trim()),
     sort: params.sort === "updated_at" ? "updated_at" : "position",
     order: params.order === "desc" ? "desc" : "asc",
     // Keep the offset within a safe integer, even for adversarial page values.

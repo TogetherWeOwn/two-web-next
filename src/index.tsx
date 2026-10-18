@@ -12,6 +12,7 @@ import {
   createMemorySessionStore,
   createPostgresSessionStore,
   hashToken,
+  isValidSessionToken,
   newSessionToken,
   SESSION_TTL_SECONDS,
   type SessionStore,
@@ -336,8 +337,10 @@ async function issueSession(
     expiresAt: new Date(Date.now() + SESSION_TTL_SECONDS * 1000),
   };
   const prior = await getSignedCookie(c, c.env.SESSION_SECRET, SESSION_COOKIE);
-  const priorHash =
-    typeof prior === "string" && prior.startsWith("two_") ? await hashToken(prior) : null;
+  // Malformed pre-login bearers never reach the store: the shared
+  // minted-shape gate rejects them before hashing (malformed prior =>
+  // create, never replace).
+  const priorHash = isValidSessionToken(prior) ? await hashToken(prior) : null;
   // Serialize the insert+sweep per user (see withFreshLoginUserLock): the
   // second overlapping issuance waits for the first to finish, so the final
   // state equals a serialized order — newest live, previous revoked. The wait
@@ -389,7 +392,7 @@ async function readSession(
   rotateToken = true,
 ): Promise<Session | null> {
   const token = await getSignedCookie(c, c.env.SESSION_SECRET, SESSION_COOKIE);
-  if (!token || !token.startsWith("two_")) return null;
+  if (!isValidSessionToken(token)) return null;
   // Anonymous public pages must not depend on session storage or its startup DDL.
   const store = await storeFor(c);
   const row = await store.get(await hashToken(token));
@@ -406,19 +409,27 @@ async function readSession(
     };
   }
   // Rotation: every authenticated page view mints a fresh token and deletes
-  // the old row in the same statement. A replayed cookie finds no row: guest.
+  // the old row in the same statement. A replayed cookie finds no row: guest
+  // (rotate resolves false for a revoked/expired/missing source — row
+  // ineligible stays guest, never an outage). Any rotation *error* is an
+  // outage, never a silent guest: classified database failures propagate as
+  // themselves, generic errors normalize to a plain Error so the callers'
+  // existing opaque-fallback boundary (plain Error => outage, named
+  // non-outage => 500) renders the honest outage treatment without leaking
+  // driver details or swallowing genuine programming errors from other reads.
   const statusKey = await store.statusHash(await hashToken(token));
   const replacement = newSessionToken();
-  const rotated = await store
-    .rotate(await hashToken(token), {
+  let rotated: boolean;
+  try {
+    rotated = await store.rotate(await hashToken(token), {
       tokenHash: await hashToken(replacement),
       ...row,
       expiresAt: new Date(Date.now() + SESSION_TTL_SECONDS * 1000),
-    })
-    .catch((err) => {
-      if (isDatabaseUnavailable(err)) throw err;
-      return false;
     });
+  } catch (err) {
+    if (isDatabaseUnavailable(err)) throw err;
+    throw new Error("Session rotation unavailable");
+  }
   if (!rotated) return null;
   await enableAuthStatus(c, store, await hashToken(replacement), statusKey);
   await setSignedCookie(c, SESSION_COOKIE, replacement, c.env.SESSION_SECRET, {
@@ -467,6 +478,9 @@ app.get("/", async (c) => {
     (session) => ({ session, unavailable: false }),
     (err) => {
       // Keep the opaque session-failure fallback, not named non-outage exceptions.
+      // Rotation errors arrive already normalized (classified outage or plain
+      // Error), so they render sessionUnavailable here; a revoked/expired row
+      // already returned null above (guest) without reaching rotation.
       if (err instanceof Error && err.name !== "Error" && !isDatabaseUnavailable(err)) throw err;
       // Driver messages can contain DSNs or session identifiers; only a fixed diagnostic is safe.
       console.warn("Home session unavailable; serving as guest.", {

@@ -12,7 +12,7 @@ import { databaseUnavailable } from "../errors";
 import { bufferedMemberText, memberReadBoundary } from "../member-reads";
 import { bounceToLogin, takeJoinResult } from "../return-journey";
 import { SESSION_COOKIE } from "../session-cookie";
-import { hashToken } from "../sessions";
+import { hashToken, isValidSessionToken } from "../sessions";
 import { requestRoute, safeRequestId } from "../request-log";
 import type { Ctx, ProfileApp, ProfileDeps, Viewer } from "./routes-shared";
 import type { ProfileStores } from "./routes-stores";
@@ -40,7 +40,9 @@ export function memberGate(deps: ProfileDeps) {
     const token = await getSignedCookie(c, c.env.SESSION_SECRET, SESSION_COOKIE);
     // Guest: record where they were headed (legacy url.intended), then into
     // the site OAuth flow — the callback returns them here after sign-in.
-    if (!token) return bounceToLogin(c);
+    // Malformed bearers are guests too, with zero store reads (shape-checked
+    // before any hash/store call).
+    if (!isValidSessionToken(token)) return bounceToLogin(c);
     let viewer: Viewer | null = null;
     try {
       const sessions = deps.sessionStore ?? (await sessionStoreFor(c));

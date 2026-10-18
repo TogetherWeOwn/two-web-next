@@ -16,7 +16,7 @@ The app writes ONE single-line JSON object on `console.error`, with
 | --- | --- | --- |
 | `error.alert` | An unexpected non-4xx error reached an HTTP error path, including a member-read refusal or locally handled profile-save failure (the response may remain 503) | `fingerprint` (`ExceptionClass@/route/pattern`), `exception`, `error_class` (same class), `method`, `route`, optional `request_id`, `build_sha`, `release` |
 | `queue.failing` | A job failed terminally or threw on its final attempt | `connection`, `queue`, `job`, `attempts`, `exception`, `error_class` (same value), optional `request_id`, `build_sha`, `release` |
-| `scheduled.failing` | A scheduled reconcile or retention run failed (known cron only); pages directly without waiting for the crash-loop gate, which sparse cron invocations can never trip alone | `job` (`events:reconcile` or `model:prune`), `exception`, `error_class` (same class), `build_sha`, `release`. One line per failed invocation, no source-side mute; healthy runs, advisory-lock skips and unknown crons stay silent |
+| `scheduled.failing` | A scheduled reconcile or retention run failed (known cron only); pages directly without waiting for the crash-loop gate, which sparse cron invocations can never trip alone. Exception: a `model:prune` line with exception `PruneBatchCapError` means the pass committed but hit the per-pass batch ceiling with rows possibly pending — a backlog, not an outage | `job` (`events:reconcile` or `model:prune`), `exception`, `error_class` (same class), `build_sha`, `release`. One line per failed invocation, no source-side mute; healthy runs, advisory-lock skips and unknown crons stay silent. A capped pass likewise pages once per pass, after the flight commits; only `PruneBatchCapError` pages for a committed pass, and a rolled-back pass pages only its real error. On a cap page, check that the next pass drains the remainder; pages on consecutive passes mean inflow above the ceiling |
 
 - The app mutes `error.alert` per `class@route` for five minutes. Client errors
   (404, 403, 429 and other 4xx) and `ZodError` stay silent. A thrown
@@ -189,9 +189,14 @@ page (a failed POST re-pages on the next red run). The red window lives in the s
 Healthy means HTTP 200 with `x-two-origin: two-web-next`, not merely a
 reachable endpoint.
 
-The summary contains only `event`, `status` (the second attempt's HTTP status,
+The summary contains `event`, `status` (the second attempt's HTTP status,
 or `0` for a transport error/timeout), `down_seconds` (how long health has
-been continuously red) and `timestamp`.
+been continuously red), `timestamp`, plus optional `build_sha` (and
+`version_id`) read from the already-fetched `/up` body's public
+`revision.commit` through the exact 40-hex allowlist (`version_id` only
+through the Worker Version UUID allowlist); an unreadable or stalled body
+pages unattributed — the marker read races a 2 s independent deadline, so
+a hung body cannot stall the run — and no extra probe is made.
 The Tail Worker records `ops.alert.delivered` or `ops.alert.delivery_failed`
 for each delivery attempt, so the delivery-receipt query below also
 catches these pages. **There is no matching app source-log line by design**:
@@ -204,7 +209,9 @@ Scheduled runs landing on a five-minute boundary also probe the main flow
 on the `UPTIME_URL` origin, because a healthy `/up` does not prove members
 can load the site or start
 sign-in. Each check is an anonymous GET with manual redirects and a
-ten-second timeout; response bodies are never read. Checks run even when
+ten-second timeout; synthetic response bodies are never read (only the
+run's already-fetched `/up` body is parsed for the revision marker).
+Checks run even when
 `/up` is down, and each failing check is retried once after ten seconds
 before it can page:
 
@@ -215,16 +222,22 @@ before it can page:
 | `/join` | HTTP 200 with an HTML content type |
 | `/login` | HTTP 302 redirecting to `/auth/discord` on the same host |
 
-The summary contains only `event`, `check` (the probed path), `target`
+The summary contains `event`, `check` (the probed path), `target`
 (the public host of the configured `UPTIME_URL`, which identifies the
 environment), `status` (the second attempt's HTTP status, or `0` for a
-transport error/timeout) and `timestamp`. Redirect targets are compared by
-host and path only: any Location query is discarded inside the probe and
-never appears in a page or log line.
+transport error/timeout), `timestamp`, plus the same optional `build_sha`
+(and `version_id`) from the run's already-fetched `/up` body. Redirect
+targets are compared by host and path only: any Location query is discarded
+inside the probe and never appears in a page or log line.
 Delivery uses the same five-minute, per-isolate mute, keyed by
-`synthetic.down:<check>` (the status rides in the page but does not split
-the mute, so a check flapping between failing statuses pages once per
+`synthetic.down:<check>` (the status and the build attribution ride in the
+page but do not split the mute, so a check flapping between failing
+statuses — or a deploy answering `/up` mid-incident — pages once per
 window), and the same delivery receipts as `uptime.down`.
+
+- Correlate the page to the deploy: `build_sha` is the `/up`
+  `revision.commit` observed in the paging run, so open that commit (and
+  `version_id` in Cloudflare) instead of assuming the current `main` head.
 
 No check authenticates, posts a form, injects a fault, or changes
 application data, so the production prober stays passive. The sign-in

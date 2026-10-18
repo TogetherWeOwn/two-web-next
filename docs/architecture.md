@@ -308,6 +308,7 @@ exactly once.
 | `src/member-erasure.ts` | profiles |
 | `src/member-reads.ts` | profiles |
 | `src/not-found-suggestions.ts` | content |
+| `src/oauth-code-state-length.ts` | auth |
 | `src/oauth-journeys.ts` | auth |
 | `src/page-shell.tsx` | content |
 | `src/pages.tsx` | content |
