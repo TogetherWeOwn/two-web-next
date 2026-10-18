@@ -249,8 +249,19 @@ async function processAgentEvent(
   // Replays are answered from the store without spending rate budget.
   const replay = await lookupReplay(sql, grant.id, idem);
   if (!replay) {
-    const limited = await rateLimit(sql, cfg, grant, op as Op);
+    const limited = await rateLimit(sql, cfg, grant, op as Op, requestId);
     if (limited) {
+      if (limited.status === 503 && limited.body.reason === "operation_busy") {
+        // Inner-budget lock contention: retryable load refusal, never a rate
+        // denial. Audited once as error/operation_busy with the response
+        // request_id; the aborted verdict inserted no budget hits.
+        await audit(sql, grant, op, null, idem, dig, requestId, "error", "operation_busy");
+        return {
+          status: limited.status,
+          body: { ...limited.body, request_id: requestId },
+          ...(limited.headers ? { headers: limited.headers } : {}),
+        };
+      }
       await audit(sql, grant, op, null, idem, dig, requestId, "denied", "rate_limited");
       return limited;
     }
