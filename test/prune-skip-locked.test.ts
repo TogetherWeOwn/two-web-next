@@ -346,6 +346,7 @@ describe.skipIf(!DB)("scheduled prune skips locked rows (test Postgres)", () => 
         accessLog: 0,
         joinAttempts: 0,
         idempotencyKeys: 0,
+        jobUniqueLocks: 0,
         searchLog: 0,
         boardViews: 0,
         sessions: 0,
