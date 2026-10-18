@@ -19,8 +19,10 @@
 // - Each refused admission carries its OWN ID: two consecutive 429s differ,
 //   and neither reuses an admitted neighbour's ID (no constant placeholder).
 // - Nothing else changes: the message wording, the key set beyond the new
-//   field, the absence of exception/trace/stack material, the
-//   charges-nothing refusals, and the audit-free unauthenticated shield.
+//   field, the absence of exception/trace/stack material, and the
+//   charges-no-hit refusals. The refused hit writes no hit row but audits one
+//   denied/rate_limited row with the admission request_id (see shield.ts for
+//   the bucket-class encoding).
 // - No credential material ever appears in the envelope.
 //
 // Hermetic and DB-free: the in-memory fake agent-event store records every
@@ -215,15 +217,25 @@ describe("positive controls: the 429 contract otherwise unchanged", () => {
     expect(refused.body).not.toHaveProperty("stack");
   });
 
-  it("unauthenticated-shield 429 stays audit-free and charges no hit", async () => {
+  it("unauthenticated-shield 429 audits one denied row and charges no hit", async () => {
     const fake = makeFakeAgentDb();
     const refused = await anonymousShieldRefusal(fake);
     expect(refused.status).toBe(429);
-    // Only the two admitted hits recorded anything: two shield hits, two
-    // `unauthenticated` audit rows. The refused hit wrote neither.
+    // The refused hit wrote no hit row but one denied/rate_limited audit row
+    // with the admission request_id, beside the two admitted hits and their
+    // `unauthenticated` audit rows.
     expect(fake.hits).toHaveLength(2);
-    expect(fake.audits).toHaveLength(2);
-    expect(fake.audits.every((audit) => audit.reason === "unauthenticated")).toBe(true);
+    expect(fake.audits).toHaveLength(3);
+    const [first, second, row] = fake.audits;
+    expect(first!.reason).toBe("unauthenticated");
+    expect(second!.reason).toBe("unauthenticated");
+    expect(row).toMatchObject({
+      grantId: null,
+      operation: "shield:anonymous",
+      reason: "rate_limited",
+      result: "denied",
+      requestId: refused.body.request_id,
+    });
   });
 
   it("inner 429 keeps the shared shape and charges no inner hit", async () => {
