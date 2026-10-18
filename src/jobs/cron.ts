@@ -10,10 +10,11 @@ import {
   PRUNE_DELETE_BATCH_SIZE,
   PRUNE_DELETE_MAX_BATCHES,
   RECONCILE_CRON,
+  RECONCILE_REDISPATCH_PAGE_SIZE,
   SYNC_EVENT,
 } from "./constants";
 import { dispatchSyncEvent } from "./sync-event";
-import type { EventStore, PruneStores, TxClient, UniqueLock } from "./types";
+import type { EventStore, PruneStores, StaleEventKeysPage, TxClient, UniqueLock } from "./types";
 
 /**
  * Advisory-lock runner: re-expresses onOneServer + withoutOverlapping.
@@ -25,12 +26,21 @@ import type { EventStore, PruneStores, TxClient, UniqueLock } from "./types";
  */
 export type SingleFlight = (name: string, fn: (db: TxClient) => Promise<void>) => Promise<boolean>;
 
-type ReconcilePreparation = { closed: number; materialized: number; stale: string[] };
+type ReconcilePreparation = {
+  closed: number;
+  materialized: number;
+  stale: string[] | StaleEventKeysPage;
+};
 
 /**
  * Ports events:reconcile: close finished, materialise series, re-dispatch stale. Close first so the
  * sync pass cannot resurrect an ended event; materialise before the sync pass so a new occurrence is
  * picked up in the same run (new occurrences are drafts, which the stale query never returns).
+ * Each pass redispatches at most one RECONCILE_REDISPATCH_PAGE_SIZE page in
+ * the store's order; deferred leftovers stay stale for the next pass.
+ * `resynced` counts only transport-accepted dispatches; unique-lock
+ * absorptions report as `absorbed`. One throwing key counts as `failed` and
+ * never starves the rest of the pass.
  */
 export async function reconcileEvents(deps: {
   events: EventStore;
@@ -46,22 +56,36 @@ export async function reconcileEvents(deps: {
   resynced: number;
   absorbed: number;
   failed: number;
+  deferred: number;
 }> {
   const prepare = async (events: EventStore): Promise<ReconcilePreparation> => ({
     closed: await events.closeFinished((deps.now ?? (() => new Date()))()),
     materialized: await events.materializeSeries(),
-    stale: await events.staleEventKeys(),
+    stale: await events.staleEventKeys(RECONCILE_REDISPATCH_PAGE_SIZE),
   });
   // Commit materialization and release parent row locks before external I/O.
   // The enclosing flight still excludes another scheduler throughout dispatch.
   const { closed, materialized, stale } = await (deps.writeTransaction
     ? deps.writeTransaction(prepare)
     : prepare(deps.events));
+  // Legacy array answers (and dual-shaped doubles) carry no remainder; a
+  // page object carries its deferred count. Either way the pass dispatches
+  // at most one page, in the store's order, and leaves the rest stale.
+  // Note: plain arrays expose Array.prototype.keys, so the page check must
+  // look for an OWN `keys` property — dual-shaped doubles set one, legacy
+  // arrays do not. (`deferred` has no prototype clash.)
+  const ownPage = Object.hasOwn(stale, "keys")
+    ? (stale as unknown as StaleEventKeysPage)
+    : undefined;
+  const keys = [...(ownPage?.keys ?? (stale as unknown as string[]))];
+  const deferred = Array.isArray(stale)
+    ? ((stale as unknown as Partial<StaleEventKeysPage>).deferred ?? 0)
+    : stale.deferred;
   let resynced = 0;
   let absorbed = 0;
   let failed = 0;
   let firstError: unknown;
-  for (const key of stale) {
+  for (const key of keys) {
     try {
       // A carrier can be stranded, delayed or exhausted. Only recover a due
       // request with budget left, always under its original immutable key.
@@ -90,16 +114,24 @@ export async function reconcileEvents(deps: {
   // scheduled.failing page for events:reconcile. A single failed key keeps
   // resolving per the acceptance pin (failed-only single-key pass logs once).
   if (failed > 1 && resynced + absorbed === 0) throw firstError;
-  if (closed > 0 || materialized > 0 || resynced > 0 || absorbed > 0 || failed > 0) {
+  if (
+    closed > 0 ||
+    materialized > 0 ||
+    resynced > 0 ||
+    absorbed > 0 ||
+    failed > 0 ||
+    deferred > 0
+  ) {
     console.info("Event reconcile pass completed.", {
       closed,
       materialized,
       resynced,
       absorbed,
       failed,
+      deferred,
     });
   }
-  return { closed, materialized, resynced, absorbed, failed };
+  return { closed, materialized, resynced, absorbed, failed, deferred };
 }
 
 export type PruneCounts = {

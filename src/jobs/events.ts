@@ -4,7 +4,7 @@ import { drizzle } from "drizzle-orm/pg-proxy";
 import * as schema from "../db/admin-schema";
 import { materializeMissingInstances } from "../admin/store";
 import { SYNC_EVENT } from "./constants";
-import type { EventStore, EventUpsert, SyncAttempt, TxClient } from "./types";
+import type { EventStore, EventUpsert, StaleEventKeysPage, SyncAttempt, TxClient } from "./types";
 
 type AttemptRow = {
   idempotency_key: string;
@@ -79,7 +79,51 @@ export function pgEventStore(
   // Attempted requests recover independently of first-request eligibility:
   // closure or later refusal cannot resolve an ambiguous immutable request.
   // Reconciliation owns the due-time check using its scheduler clock.
-  const staleKeys = async (eventKey: string | null) => {
+  // The stale predicate is identical in every branch below: initiating-
+  // eligible dirty revisions plus attempted pending recovery candidates.
+  // A dirty revision parked behind a permanently undispatchable pending
+  // request (retry budget spent, or an unsettled null deadline that will
+  // never become due on its own) is excluded from the dirty branch: the
+  // reconcile loop always skips such rows, so counting them toward the page
+  // would pin the same full page of skips ahead of every dispatchable key.
+  // Not-yet-due retries (future next_attempt_at) stay stale: selection is
+  // clock-free and the loop owns the exact due boundary.
+  // The single-key branch keeps its current semantics; the page branch adds
+  // a deterministic `ORDER BY event_key` + `LIMIT` with a same-statement
+  // window count (windows see pre-LIMIT rows) for the deferred remainder.
+  const staleKeys = async (
+    eventKey: string | null,
+    limit?: number,
+  ): Promise<string[] | StaleEventKeysPage> => {
+    if (eventKey === null && typeof limit === "number" && Number.isFinite(limit) && limit > 0) {
+      const page = await sql`select event_key, count(*) over() as total${readMarker()} from events
+        where (${eventKey}::text is null or event_key = ${eventKey}) and (
+          exists (select 1 from event_sync_attempts pending
+            where pending.event_id = events.id and pending.state = 'pending'
+              and pending.request_attempts > 0 and pending.request_attempts < ${SYNC_EVENT.tries}
+              and pending.next_attempt_at is not null)
+          or (status in ('published', 'cancelled')
+            and not exists (select 1 from event_sync_attempts rejected
+              where rejected.event_id = events.id and rejected.revision = events.sync_revision and rejected.state = 'failed')
+            and not exists (select 1 from event_sync_attempts blocking
+              where blocking.event_id = events.id and blocking.state = 'pending'
+                and (blocking.request_attempts >= ${SYNC_EVENT.tries} or blocking.next_attempt_at is null))
+            and (sync_revision > synced_revision or
+              (status = 'published' and (discord_event_id is null or exists (
+                select 1 from rsvps where rsvps.event_id = events.id and synced_to_discord_at is null
+              ))))))
+        order by event_key asc limit ${Math.floor(limit)}`;
+      onSourceRead?.({
+        statement: "stale_keys",
+        rowCount: page.length,
+        readAt: markerOf(page[0] as { preview_read_at?: unknown } | undefined),
+      });
+      const keys = page.map((row: { event_key: string }) => row.event_key);
+      // An empty page means nothing matched (a positive LIMIT returns rows
+      // whenever matches exist), so the remainder is exactly zero.
+      const total = page.length === 0 ? 0 : Number((page[0] as { total: string | number }).total);
+      return { keys, deferred: Math.max(0, total - keys.length) };
+    }
     const rows = await sql`select event_key${readMarker()} from events
       where (${eventKey}::text is null or event_key = ${eventKey}) and (
         exists (select 1 from event_sync_attempts pending
@@ -89,10 +133,14 @@ export function pgEventStore(
         or (status in ('published', 'cancelled')
           and not exists (select 1 from event_sync_attempts rejected
             where rejected.event_id = events.id and rejected.revision = events.sync_revision and rejected.state = 'failed')
+          and not exists (select 1 from event_sync_attempts blocking
+            where blocking.event_id = events.id and blocking.state = 'pending'
+              and (blocking.request_attempts >= ${SYNC_EVENT.tries} or blocking.next_attempt_at is null))
           and (sync_revision > synced_revision or
             (status = 'published' and (discord_event_id is null or exists (
               select 1 from rsvps where rsvps.event_id = events.id and synced_to_discord_at is null
-            ))))))`;
+            ))))))
+      order by event_key asc`;
     onSourceRead?.({
       statement: "stale_keys",
       rowCount: rows.length,
@@ -129,7 +177,10 @@ export function pgEventStore(
       if (created) return attemptFrom(created);
       // Clean rows need no further bot call even if redundant jobs were queued
       // while an older attempt was finishing. Dirty conflicts wait, never ACK.
-      return (await staleKeys(eventKey)).length ? { waiting: true } : null;
+      // A single-key eligibility check always answers an array, never a page.
+      const eligibility = await staleKeys(eventKey);
+      const eligible = Array.isArray(eligibility) ? eligibility : eligibility.keys;
+      return eligible.length ? { waiting: true } : null;
     },
     async completeSync(attempt, discordEventId) {
       // Settlement and revision acknowledgement commit together. Only the read
@@ -185,7 +236,11 @@ export function pgEventStore(
       await sql`update event_sync_attempts set state = 'failed'
         where idempotency_key = ${idempotencyKey}::uuid and state = 'pending'`;
     },
-    needsSync: async (eventKey) => (await staleKeys(eventKey)).length > 0,
+    needsSync: async (eventKey) => {
+      // A single-key eligibility check always answers an array, never a page.
+      const eligibility = await staleKeys(eventKey);
+      return (Array.isArray(eligibility) ? eligibility : eligibility.keys).length > 0;
+    },
     async hasFailedSync(eventKey) {
       const rows = await sql`select 1${readMarker()} from event_sync_attempts rejected
         join events e on e.id = rejected.event_id
@@ -257,6 +312,6 @@ export function pgEventStore(
       for (const parent of parents) created += await materializeMissingInstances(writer, parent);
       return created;
     },
-    staleEventKeys: () => staleKeys(null),
+    staleEventKeys: (limit?: number) => staleKeys(null, limit),
   };
 }
