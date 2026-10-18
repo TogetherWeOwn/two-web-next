@@ -68,7 +68,18 @@ describe("/privacy versioned policy page (N1)", () => {
         format === "source"
           ? readFileSync(resolve(root, POLICY_FILE), "utf8")
           : await (await app.request("/privacy", {}, noDbEnv)).text();
-      const flat = (text: string) => text.replace(/<[^>]+>/g, "").replace(/\s+/g, " ");
+      const flat = (text: string) => {
+        // Strip tags without a `<...>` regex replace so the test helper does
+        // not read as an HTML sanitizer (CodeQL incomplete sanitization).
+        let out = "";
+        let inTag = false;
+        for (const ch of text) {
+          if (ch === "<") inTag = true;
+          else if (ch === ">") inTag = false;
+          else if (!inTag) out += ch;
+        }
+        return out.replace(/\s+/g, " ");
+      };
       const board = content.match(
         /(?:- \*\*Leaderboard views\*\*|<li><strong>Leaderboard views<\/strong>)[\s\S]*?(?:\n- |<\/li>)/,
       )?.[0];
