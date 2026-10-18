@@ -135,10 +135,16 @@ export function registerAuthRoutes(app: Hono<{ Bindings: Env }>, hooks: AuthHook
     // exists. Denied gets its own sentence (the member chose this); any other
     // OAuth error keeps the generic one. Legacy DiscordLoginTest: the
     // error_description is never echoed — we render only our own copy.
+    // The denied copy requires a presented state (a matching state cookie
+    // with an acquirable store): a denial that was never admitted — missing
+    // or mismatched state — is a failed sign-in, not a cancelled consent, so
+    // it keeps the generic redirect. A replay still presents matching state,
+    // so it keeps the denied copy; the journey itself is consumed exactly
+    // once above.
     const oauthError = c.req.query("error");
     if (oauthError) {
       return c.redirect(
-        oauthError === "access_denied" ? "/?n=signin_denied" : "/?n=signin_failed",
+        oauthError === "access_denied" && store ? "/?n=signin_denied" : "/?n=signin_failed",
         302,
       );
     }

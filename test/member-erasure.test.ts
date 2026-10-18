@@ -39,7 +39,22 @@ describe("member-erasure id validation (no database)", () => {
     expect(isValidDiscordId(MEMBER_A)).toBe(true);
     expect(isValidDiscordId("1")).toBe(true);
     expect(isValidDiscordId("900000000000001396")).toBe(true);
-    for (const bad of ["", "  ", "abc", "12a34", "-1", "+1", "1.5", "1_2", " ".repeat(3)]) {
+    // Non-canonical forms are refused too: "007" would otherwise cast to
+    // bigint 7 in Postgres and erase a different member; "0"/"00" name nobody.
+    for (const bad of [
+      "",
+      "  ",
+      "abc",
+      "12a34",
+      "-1",
+      "+1",
+      "1.5",
+      "1_2",
+      " ".repeat(3),
+      "0",
+      "00",
+      "007",
+    ]) {
       expect(isValidDiscordId(bad), JSON.stringify(bad)).toBe(false);
       expect(() => assertDiscordId(bad)).toThrow(InvalidMemberIdError);
     }
@@ -99,6 +114,8 @@ describe("erase-member CLI safety (no database)", () => {
       [],
       ["--discord-id="],
       ["--discord-id=not-an-id"],
+      ["--discord-id=007"],
+      ["007"],
       [`--discord-id=${MEMBER_A}`, "--apply", "--dry-run"],
       [`--discord-id=${MEMBER_A}`, "--unknown"],
       [`--discord-id=${MEMBER_A}`, "--target"],
