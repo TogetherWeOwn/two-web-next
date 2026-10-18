@@ -556,11 +556,22 @@ cannot pass this check; covering those needs the target version's own checker.
 A failed verification is not reported as an undone rollback and never triggers
 a roll-forward; it leaves the rolled-back version live for operator diagnosis.
 
+Post-promotion smoke proves ordinary traffic identity, not just healthy
+content: it passes the gradual action's `promoted-version-id` output as
+`PROMOTED_VERSION_ID` to `bin/smoke.mjs --expected-version-id` inside the
+existing bounded retry loop (6 attempts, 10s sleeps, fail closed), and `/up`
+`revision.version_id` must equal that UUID on unpinned ordinary traffic even
+when every health assertion is green. This sends no
+`Cloudflare-Workers-Version-Overrides` version-override header, so it proves
+normal routing, not pinned canary routing. An absent or malformed promoted id
+fails closed before any probe, never by silently omitting verification.
+
 A failed post-promotion public-route verification in `deploy-production`
 blocks the release tag but leaves the promoted version live at 100%: the
 gradual action's automatic rollback only covers failures inside the promotion
-itself. The failed step's logs print the recorded pre-promote version ID;
-restore it with this workflow using that ID.
+itself, and this step never adds an automatic rollback. The failed step's logs
+print the live promoted candidate plus the recorded pre-promote version ID as
+the restoration target; restore it with this workflow using that ID.
 
 Promotion and rollback mutations to the production Worker serialize on the
 shared `production-worker-mutation` job-level concurrency group
