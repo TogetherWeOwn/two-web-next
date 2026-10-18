@@ -141,6 +141,23 @@ Read-only checks only: a Workers Logs search, a `SELECT`, or a source file.
 | `events calendar could not resolve the session; refusing.` | The events calendar session rotation threw (`src/events/routes-calendar.tsx`). | Fails closed with the database-unavailable response. | Search logs for the matching `http.request` status on `/events`; then `SELECT count(*) FROM web_sessions` to confirm the table is readable. | `exception` (class name) |
 | `profile save failed` | Saving a validated profile threw (`src/profiles/routes-writes.tsx`). | Fails closed: database-unavailable response for an outage, otherwise 500 "Could not save your profile." | Search logs for the matching `http.request` status on the profile save route; then `SELECT updated_at FROM profiles` for that member. | `exception` (class name), validated `request_id` |
 
+### Join journey warnings
+
+The join funnel emits three `console.warn` lines (`src/join/service.ts:129,183`,
+`src/join/route-callback.ts:111,150,186`). None pages: the prune and the
+attempt write are best-effort work that never changes the member's outcome, and
+the token-exchange line always accompanies a recovery page the member already
+sees. Promoting the attempt-write failure to `error.alert` was considered and
+rejected: the request itself succeeded, so a page would alarm on an analytics
+gap. No code changes. None of the three lines carries a `request_id`, so
+correlate by time window and route instead of by ID.
+
+| Message | Meaning | Member impact | First read-only check | Fields carried |
+| --- | --- | --- | --- | --- |
+| `Join throttle prune failed; keeping the decided verdict.` | The best-effort expiry delete on `web_throttle_hits` threw after the admit/refuse verdict was already decided (`src/join/service.ts:129`). | None on this request. Expired rows wait for a later pass; every request retries one bounded 1,000-row skip-locked batch. | `SELECT count(*) FROM web_throttle_hits WHERE at < now() - make_interval(mins => 5)` across passes: a spike that drains is healthy; a count that grows pass over pass points at database write/lock health (see the [alert runbook](runbook-alerts.md)). | None (message only) |
+| `join attempt write failed` | The `join_attempts` analytics `INSERT` threw; the row is lost but the request outcome stands (`src/join/service.ts:183`). | None on the journey. The gap shows only in `join_attempts` counts. | `SELECT outcome, count(*), max(created_at) FROM join_attempts WHERE created_at > now() - interval '1 hour' GROUP BY outcome`, then compare against `http.request` volume on `/join/callback` for the same window; a gap inside one window matches the warn timestamps. If writes never resume, route database insert health to the authorized operator. Never replay a member join to investigate. | `exception` (class name only, never the message, which can quote the live token or statement text), `outcome` |
+| `discord token exchange failed on the join journey` | One bounded line for three triggers: oversized code/state refused before any exchange (`src/join/route-callback.ts:111`), lost-or-replayed state (`:150`), or a token-exchange/user-fetch throw classified by `failureMeta` (`:186`). | The member already sees the matching recovery page: expired-link retry, or the Discord-down 503. | Filter logs for the line and tally `outcome` (`expired` vs `error`) with `kind`/`status`; sustained non-expired `error` points at Discord/provider health, not the app. | `exception` (class only, never the message, which can quote the secret), `kind`/`status` (exchange-throw site only), sanitized `source`, `outcome` |
+
 ### Missing sync-queue binding warning
 
 `event write-back due but SYNC_EVENT_QUEUE is not bound` (`src/events/sync.ts`,
@@ -223,7 +240,11 @@ investigating an incident.
 Warning lines follow the same boundary. `roster upsert failed` and
 `prior session sweep failed` (`src/index.tsx`) and `guild auto-join failed`
 (`src/auth/routes.ts`) carry `request_id` and, where there is one, the exception
-class; they never carry a member's Discord ID. `csp.report.violation`
+class; they never carry a member's Discord ID. The join journey lines carry
+no member identity either: the prune line carries no fields, the attempt line
+carries the exception class and `outcome`, and the token-exchange line carries
+the exception class, kind/status, sanitized `source` and `outcome` (see
+[Join journey warnings](#join-journey-warnings)). `csp.report.violation`
 (`src/csp-reports.ts`) keeps each reported URI's origin and path shape, but a
 17-20 digit run in a path segment (a Discord ID in `/members/:user`) is logged
 as `:id` (`src/csp-report-uri.ts`). `test/console-user-key-guard.test.ts` fails
