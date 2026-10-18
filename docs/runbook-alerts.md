@@ -150,6 +150,19 @@ either gate crosses, then a 15-minute cooldown applies:
 - **Crash loop:** at least 5 crash outcomes, including queue, cron and
   other non-fetch invocations that produce no `error.alert` line at all.
 
+Counts enter by event time, not by invocation or arrival time. One Tail
+invocation can carry same-script traces minutes apart (a delayed flush, a
+retry batch), and trace arrival order is arbitrary: each trace is filed
+into its 30-second event-time bucket from its own `eventTimestamp`, and
+the buckets of one invocation are observed oldest first. Four crashes
+from six minutes ago arriving alongside one new crash never form a
+five-crash window — only traces sharing a rolling five-minute event-time
+window count together, and the same traces in any arrival order keep the
+same buckets and the same verdict. This is best-effort counting over
+recent buckets, not live delivery: a delayed trace still counts in its
+event-time bucket while that bucket is inside the window, and an expired
+bucket simply drops out.
+
 Like the per-fingerprint mute, the cooldown arms only when the page is
 actually delivered; a failed Discord POST leaves the alarm ready to retry on
 the next batch.
