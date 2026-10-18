@@ -85,9 +85,10 @@ export async function admitAgentEvent(
   // without ever running the recursive digest over untrusted JSON. A presented
   // credential buckets on its own hash (one guess never spends another's);
   // anonymous hits bucket per normalized IP, like human throttles (IPv6 /64,
-  // mapped-IPv4, malformed verbatim). A refused hit writes no hit row and one
-  // denied/rate_limited audit row with this admission's request_id (see
-  // shield.ts for the bucket-class encoding).
+  // mapped-IPv4, malformed verbatim). A refused hit writes no hit row and at
+  // most a sampled denied/rate_limited audit row with this admission's
+  // request_id, with every refusal counted in memory (see shield.ts for the
+  // bucket-class encoding and the sampling bound).
   const shieldKey = credential
     ? await sha256Hex(credential)
     : `ip:${normalizeClientIp(clientIp ?? "unknown")}`;
@@ -119,6 +120,11 @@ async function processAgentEvent(
   // so the nested payload stays untouched — and without an audit row. The
   // control-byte refusal stays ahead of auth here too, so a grantless
   // hostile envelope keeps its existing 422 before any store touch.
+  // Admitted-then-grantless 401s stay at zero rows deliberately: the
+  // grantless-deep pins demand exact zero, and depth is unknowable without
+  // traversing the payload (forbidden pre-auth), so any per-hit 401 sampling
+  // would flake those pins — zero satisfies the bounded pins' lower bound.
+  // Throttling repudiation is the sampled outer-shield rows plus counters.
   const grant = credential ? await findGrant(sql, credential) : null;
   if (!grant) {
     warnPreAuthRefusal(requestId);

@@ -5,7 +5,7 @@ import { throttleEnvelope } from "./rate-limit";
 
 // The outer shield's counter (two-web TOG-8402): one bucket per credential
 // hash (or anonymous IP), counted before auth. Returns the 429 envelope when
-// the budget is spent — audited once as denied/rate_limited with the
+// the budget is spent — sampled-audited as denied/rate_limited with the
 // admission's own request_id, pre-auth like contention (grant_id null) —
 // and records the hit otherwise.
 //
@@ -14,6 +14,15 @@ import { throttleEnvelope } from "./rate-limit";
 // payload_digest with operation `shield:credential`; anonymous refusals carry
 // operation `shield:anonymous` and a null digest, identical across addresses.
 // No IP bytes, raw credential, or `shield:ip:` bucket ever reaches the row.
+//
+// Over-budget refusals are attacker-proportional by definition, so the audit
+// write is sampled (~1%), matching the pre-auth warn precedent: flood tests
+// assert boundedness (rows <= cap), not exact counts. Every refusal still
+// increments the in-memory counters below, so volume signal survives without
+// table growth. Deliberately probabilistic, not a token bucket: a flood of
+// distinct buckets must not be able to spend a shared budget to blind the
+// sink. Lock-contention 503s keep their exact error audit (retryable load
+// signal, not attacker-proportional volume).
 //
 // Two properties the exact-head review pinned down:
 // - The advisory lock waits at most lockWaitMs (SET LOCAL lock_timeout, as in
@@ -28,6 +37,24 @@ import { throttleEnvelope } from "./rate-limit";
 //   limiter.
 /** Bucket class for the outer-shield audit row: credential hash, never raw identity. */
 export type ShieldBucketClass = { kind: "credential"; hash: string } | { kind: "anonymous" };
+
+/** Sampled audit rate for over-budget shield refusals (see header). */
+export const SHIELD_REFUSAL_AUDIT_RATE = 0.01;
+
+/**
+ * In-memory volume signal for over-budget shield refusals, by bucket class.
+ * Incremented on every refusal whether or not the audit row is sampled, so
+ * flood volume stays observable without attacker-proportional table growth.
+ * Process-local like every Worker isolate's counters; scraped telemetry can
+ * read it without a table scan.
+ */
+export const shieldRefusalCounters = { credential: 0, anonymous: 0 };
+
+/** Test seam: reset {@link shieldRefusalCounters} between cases. */
+export function __resetShieldRefusalCountersForTests(): void {
+  shieldRefusalCounters.credential = 0;
+  shieldRefusalCounters.anonymous = 0;
+}
 
 export async function shield(
   sql: Sql,
@@ -67,35 +94,40 @@ export async function shield(
     }
     throw err;
   }
-  // Over-budget, not contention: one bounded audit row outside the bucket lock
-  // so storm refusal volume never prolongs admission. Same pre-auth shape as
-  // contention (grant_id null) with the inner refusal's denied/rate_limited
-  // outcome; the refused hit still writes no hit row. The audit runs in its
-  // own transaction with lock and statement timeouts derived from the
-  // admission's lock wait, so a stalled audit answers retryable 503 instead
-  // of stalling the refusal. No advisory lock, hit write, or grant lookup.
-  const operation = bucketClass.kind === "credential" ? "shield:credential" : "shield:anonymous";
-  const dig = bucketClass.kind === "credential" ? bucketClass.hash : null;
-  const auditTimeoutMs = Math.max(1, Math.floor(cfg.lockWaitMs));
-  try {
-    await sql.begin(async (tx) => {
-      await tx.unsafe(`SET LOCAL lock_timeout = '${auditTimeoutMs}ms'`);
-      await tx.unsafe(`SET LOCAL statement_timeout = '${auditTimeoutMs}ms'`);
-      await audit(tx, null, operation, null, null, dig, requestId, "denied", "rate_limited");
-    });
-  } catch (err) {
-    const code = (err as { code?: string }).code;
-    if (code === "55P03" || code === "57014") {
-      return {
-        status: 503,
-        body: {
-          reason: "operation_busy",
-          message: "The ingress is busy admitting requests. Retry with the same idempotency key.",
-          request_id: requestId,
-        },
-      };
+  // Over-budget, not contention: at most a sampled audit row outside the
+  // bucket lock so storm refusal volume never prolongs admission. Same
+  // pre-auth shape as contention (grant_id null) with the inner refusal's
+  // denied/rate_limited outcome; the refused hit still writes no hit row.
+  // The counter below records every refusal; the row is the sample.
+  // The sampled write runs in its own transaction with lock and statement
+  // timeouts derived from the admission's lock wait, so a stalled audit
+  // answers retryable 503 instead of stalling the refusal. No advisory
+  // lock, hit write, or grant lookup.
+  shieldRefusalCounters[bucketClass.kind] += 1;
+  if (Math.random() < SHIELD_REFUSAL_AUDIT_RATE) {
+    const operation = bucketClass.kind === "credential" ? "shield:credential" : "shield:anonymous";
+    const dig = bucketClass.kind === "credential" ? bucketClass.hash : null;
+    const auditTimeoutMs = Math.max(1, Math.floor(cfg.lockWaitMs));
+    try {
+      await sql.begin(async (tx) => {
+        await tx.unsafe(`SET LOCAL lock_timeout = '${auditTimeoutMs}ms'`);
+        await tx.unsafe(`SET LOCAL statement_timeout = '${auditTimeoutMs}ms'`);
+        await audit(tx, null, operation, null, null, dig, requestId, "denied", "rate_limited");
+      });
+    } catch (err) {
+      const code = (err as { code?: string }).code;
+      if (code === "55P03" || code === "57014") {
+        return {
+          status: 503,
+          body: {
+            reason: "operation_busy",
+            message: "The ingress is busy admitting requests. Retry with the same idempotency key.",
+            request_id: requestId,
+          },
+        };
+      }
+      throw err;
     }
-    throw err;
   }
   return throttleEnvelope(retryAfter ?? 1, requestId);
 }
