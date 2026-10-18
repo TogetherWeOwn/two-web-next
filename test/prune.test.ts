@@ -77,10 +77,10 @@ describe("model:prune windows and sweep (memory, no DB)", () => {
   });
 
   it("prune deletes carry a documented fixed per-statement batch bound", () => {
-    // Each statement removes at most this many rows per age-pruned table;
-    // the pass drains per table up to PRUNE_DELETE_MAX_BATCHES batches and
-    // warns when the cap is hit with rows possibly pending. Sessions sweep
-    // stays unbounded.
+    // Each statement removes at most this many rows per pruned table,
+    // including the scheduled session expiry sweep; the pass drains per
+    // table up to PRUNE_DELETE_MAX_BATCHES batches and warns when the cap
+    // is hit with rows possibly pending.
     expect(PRUNE_DELETE_BATCH_SIZE).toBe(1000);
     expect(PRUNE_DELETE_MAX_BATCHES).toBe(100);
   });
