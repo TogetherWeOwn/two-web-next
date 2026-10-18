@@ -3,11 +3,12 @@
 // Unknown-event withdraw must spend zero throttle budget.
 //
 // A withdraw against an event key that resolves to no event changes
-// nothing, so it must cost nothing: repeated unknown-key DELETEs (route)
-// and withdrawRsvp calls (service) return quietly, leave the member's
-// shared PUT/DELETE budget counter untouched, and never 429 / limit a
-// following valid PUT. The empty-string key the route falls back to for
-// a forged or malformed key is bound by the same rule.
+// nothing, so it must cost nothing: repeated unknown-key DELETEs answer
+// the honest 404 not_found (route) and withdrawRsvp calls return
+// not-deleted (service), both leave the member's shared PUT/DELETE
+// budget counter untouched, and never 429 / limit a following valid PUT.
+// The empty-string key the route falls back to for a forged or malformed
+// key is bound by the same rule.
 //
 // Live against the disposable Postgres fixture (skipped without
 // DATABASE_URL, like test/rsvp.test.ts). Never point this at anything
@@ -183,11 +184,12 @@ describe.skipIf(!process.env.DATABASE_URL)("unknown-event withdraw throttle (age
     expect(await hits(user)).toBe(1);
   });
 
-  it("route: unknown-key DELETEs stay 204 past the whole budget and the next valid PUT is never 429", async () => {
+  it("route: unknown-key DELETEs answer 404 past the whole budget and the next valid PUT is never 429", async () => {
     const user = "route-unknown-burst";
     for (let i = 0; i < BURST; i++) {
       const res = await call("DELETE", UNKNOWN_KEY, user);
-      expect(res.status, `unknown DELETE #${i + 1}`).toBe(204);
+      expect(res.status, `unknown DELETE #${i + 1}`).toBe(404);
+      expect(await res.json(), `unknown DELETE body #${i + 1}`).toEqual({ error: "not_found" });
     }
     expect(await hits(user)).toBe(0);
 
@@ -197,11 +199,12 @@ describe.skipIf(!process.env.DATABASE_URL)("unknown-event withdraw throttle (age
     expect(await hits(user)).toBe(1);
   });
 
-  it("route: a forged malformed key DELETE burst stays 204 and spends nothing", async () => {
+  it("route: a forged malformed key DELETE burst answers 404 and spends nothing", async () => {
     const user = "route-forged-burst";
     for (let i = 0; i < BURST; i++) {
       const res = await call("DELETE", "not-a-key", user);
-      expect(res.status, `forged DELETE #${i + 1}`).toBe(204);
+      expect(res.status, `forged DELETE #${i + 1}`).toBe(404);
+      expect(await res.json(), `forged DELETE body #${i + 1}`).toEqual({ error: "not_found" });
     }
     expect(await hits(user)).toBe(0);
 

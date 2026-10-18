@@ -24,6 +24,12 @@
 // Discord." beside the enabled control; a stamped row renders "Synced to
 // Discord." on the next SSR pass. The click island carries no trap: a bare
 // click never sends a honeypot field (board-8715).
+// Honest DELETE: a withdraw that deletes no caller row answers 404
+// {error: not_found}. The member's wanted end state is already "no row",
+// so a 404 on withdraw converges like a 204 — paint withdrawn and broadcast
+// none — covering a second DELETE, a cross-tab double-withdraw, and a retry
+// after a lost 204. Any other 404 (a PUT for an unknown key) keeps the
+// failure alert.
 //
 // Budget: one request per click; no polling; no GETs.
 
@@ -755,6 +761,15 @@
             } catch {
               return unknownOutcome(button);
             }
+          }
+          if (isWithdraw && res.status === 404) {
+            // Converged withdraw: the row is already gone (second DELETE,
+            // cross-tab double-withdraw, retry after a lost 204). Paint the
+            // withdrawn end state like a 204, never the failure alert.
+            setBusy(false, button);
+            paintWithdrawn();
+            broadcast(viewerState("withdraw"));
+            return;
           }
           if (sessionExpiredResponse(res)) {
             controller.refused = true;
