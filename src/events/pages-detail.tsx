@@ -7,6 +7,7 @@ import { JoinResultBanner } from "../pages";
 import type { JoinResult } from "../return-journey";
 import { googleCalendarUrl } from "./feeds";
 import type { EventAttendee, EventLink, EventNeighbors, PublicEvent, ViewerRsvp } from "./reads";
+import { attendeePageHref } from "./reads";
 import { RsvpButton } from "./rsvp-button";
 import { EventDetailShell } from "./pages-shared";
 
@@ -246,7 +247,10 @@ export const EventPage: FC<{
           ) : null}
           <p>
             Attendees shown at page load.{" "}
-            <a href={path} data-testid="event-attendees-refresh">
+            <a
+              href={attendeePageHref(e.eventKey, attendeesPaging.page)}
+              data-testid="event-attendees-refresh"
+            >
               Refresh attendees
             </a>
             .
