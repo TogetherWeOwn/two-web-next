@@ -5,8 +5,8 @@
 // Acceptance-owned: the builder implements against these tests without
 // editing this file or test/helpers/admin-event-editor.ts.
 import { readFileSync } from "node:fs";
-import { chromium, type Browser, type Page } from "playwright";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { ADMIN_SESSION_EXPIRED_COPY, ADMIN_SESSION_EXPIRED_TESTID } from "../src/islands/contracts";
 import { eventEditorBrowser, type ClickInit } from "./helpers/admin-event-editor";
 
@@ -161,6 +161,7 @@ describe.skipIf(process.env.ADMIN_EDITOR_EXPIRY_BROWSER_TESTS !== "true")(
   "admin editor expiry departure in Chromium",
   () => {
     let browser: Browser;
+    let context: BrowserContext;
     let page: Page;
     const dialogs: string[] = [];
 
@@ -174,7 +175,14 @@ describe.skipIf(process.env.ADMIN_EDITOR_EXPIRY_BROWSER_TESTS !== "true")(
 
     beforeAll(async () => {
       browser = await chromium.launch();
-      page = await (await browser.newContext()).newPage();
+    });
+    // Fresh context/page per test: a correctly-armed dirty guard in one
+    // test must not prompt (and, dismissed, abort) the next test's setup
+    // navigation.
+    beforeEach(async () => {
+      dialogs.length = 0;
+      context = await browser.newContext();
+      page = await context.newPage();
       page.on("dialog", async (dialog) => {
         dialogs.push(dialog.type());
         await dialog.dismiss(); // Stay on the page.
@@ -195,6 +203,9 @@ describe.skipIf(process.env.ADMIN_EDITOR_EXPIRY_BROWSER_TESTS !== "true")(
         }
       });
     });
+    afterEach(async () => {
+      await context?.close();
+    });
     afterAll(async () => {
       await browser?.close();
     });
@@ -202,7 +213,10 @@ describe.skipIf(process.env.ADMIN_EDITOR_EXPIRY_BROWSER_TESTS !== "true")(
     async function loadDirtyExpired(path: string) {
       dialogs.length = 0;
       await page.goto(`https://next.example.test${path}`);
-      await page.locator('input[name="title"]').pressSequentially(" changed");
+      const title = page.locator('input[name="title"]');
+      await title.focus();
+      await title.press("End");
+      await title.pressSequentially(" changed");
       const vetoed = await page.evaluate(
         `(() => {
           const e = new CustomEvent('two:session-expired', {
