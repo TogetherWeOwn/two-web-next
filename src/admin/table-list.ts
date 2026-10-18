@@ -24,6 +24,13 @@ export const ROSTER_PAGE_SIZE = 100;
 const withoutNul = (raw: string | undefined): string =>
   (raw ?? "").replaceAll(String.fromCharCode(0), "");
 
+// Free-text filters are bounded before the leading-wildcard ILIKE scan and
+// before reflection into pagination/sort links. The bound is measured on the
+// normalized value (NULs stripped, then trimmed); overlong values fall back
+// to absent like other invalid values, never truncated to a new search term.
+const FREE_TEXT_MAX_LENGTH = 128;
+const boundFreeText = (value: string): string => (value.length > FREE_TEXT_MAX_LENGTH ? "" : value);
+
 export function parseRosterQuery(params: ListParams): RosterQuery {
   const page = Number(params.roster_page);
   // Same unsafe-OFFSET guard as the join-attempts viewer: PostgreSQL OFFSET
@@ -33,7 +40,7 @@ export function parseRosterQuery(params: ListParams): RosterQuery {
     Number.isSafeInteger(page) &&
     Number.isSafeInteger((page - 1) * ROSTER_PAGE_SIZE);
   return {
-    q: withoutNul(params.roster_q).trim(),
+    q: boundFreeText(withoutNul(params.roster_q).trim()),
     sort: params.roster_sort === "status" ? "status" : "answered",
     order: params.roster_order === "asc" ? "asc" : "desc",
     page: validPage ? page : 1,
@@ -49,7 +56,7 @@ export function parseJoinAttemptsQuery(params: ListParams): JoinAttemptsQuery {
     Number.isSafeInteger((page - 1) * JOIN_ATTEMPT_PAGE_SIZE);
   return {
     outcome: withoutNul(params.outcome),
-    q: withoutNul(params.q).trim(),
+    q: boundFreeText(withoutNul(params.q).trim()),
     page: validPage ? page : 1,
   };
 }
@@ -62,8 +69,8 @@ export function parseActivityLogQuery(params: ListParams): ActivityLogQuery {
     Number.isSafeInteger(page) &&
     Number.isSafeInteger((page - 1) * ACTIVITY_LOG_PAGE_SIZE);
   return {
-    subject: withoutNul(params.subject).trim(),
-    causer: withoutNul(params.causer).trim(),
+    subject: boundFreeText(withoutNul(params.subject).trim()),
+    causer: boundFreeText(withoutNul(params.causer).trim()),
     page: validPage ? page : 1,
   };
 }

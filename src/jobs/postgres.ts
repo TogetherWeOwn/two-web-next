@@ -30,11 +30,12 @@ export function pgSingleFlight(sql: Sql): SingleFlight {
  * Laravel MassPrunable shape: strictly older than the cutoff goes
  * (`occurred_at`/`created_at < cutoff`), cutoff-exact rows survive. The
  * scheduled session and unique-lock adapters each delete at most
- * PRUNE_DELETE_BATCH_SIZE expired rows per statement (`expires_at <= now`,
- * matching what reads/acquire can see: expiry-exact rows go, live rows stay);
- * the scheduled pass drains each via `drainPruneTable`. The general session
- * store's `sweepExpired` keeps its existing full-drain contract for
- * non-scheduled callers.
+ * PRUNE_DELETE_BATCH_SIZE expired rows per statement, and only rows expired
+ * by BOTH clocks (`expires_at <= now` AND `expires_at <= clock_timestamp()`,
+ * mirroring the audit guard: expiry-exact rows go, live rows stay,
+ * caller-ahead skew rows are skipped); the scheduled pass drains each via
+ * `drainPruneTable`. The general session store's `sweepExpired` keeps its
+ * existing full-drain contract for non-scheduled callers.
  *
  * Every candidate select takes its rows `FOR UPDATE SKIP LOCKED`: an eligible
  * row locked by an unrelated transaction is skipped instead of stalling the
@@ -111,38 +112,47 @@ export function pgPruneStores(sql: TxClient | Sql): PruneStores {
         ) returning 1`
       ).length,
   };
-  // Scheduled session adapter: per-statement bounded expiry sweep. Keeps the
-  // `expires_at <= now` read-visibility predicate (expiry-exact rows go, live
-  // rows stay) while deleting at most one batch per statement; the cron pass
-  // drains via `drainPruneTable` and reports exact totals plus the cap.
+  // Scheduled session adapter: per-statement bounded expiry sweep. Deletes
+  // only rows expired by BOTH clocks — `expires_at <= now` (the read-visibility
+  // predicate: expiry-exact rows go, live rows stay) AND expired by the
+  // database's own clock at statement time (`expires_at <= clock_timestamp()`),
+  // mirroring the audit-table guard above. A caller clock running ahead skips
+  // the skew-window rows instead of over-deleting them, and never raises; a
+  // caller clock running behind stays caller-bounded (AND, not DB-clock-only).
+  // Deletes at most one batch per statement; the cron pass drains via
+  // `drainPruneTable` and reports exact totals plus the cap.
   const sessions = {
     sweepExpired: async (now: Date) =>
       (
         await sql`delete from web_sessions where token_hash in (
           select token_hash from web_sessions where expires_at <= ${now}
+            and expires_at <= clock_timestamp()
           order by token_hash limit ${PRUNE_DELETE_BATCH_SIZE}
           for update skip locked
         ) returning 1`
       ).length,
   };
   // Expired unique-lock sweep: per-statement bounded expiry delete. Uses the
-  // session-sweep expiry predicate (`expires_at <= now`: expiry-exact rows go,
-  // live leases stay) while deleting at most one batch per statement; the cron
-  // pass drains via `drainPruneTable`. Acquire keeps its strict supersede
-  // predicate (`expires_at < clock_timestamp()`), so at the exact-expiry
-  // instant a row is sweep-eligible one instant before acquire would supersede
-  // it; the lease is expired under either reading within that instant.
+  // scheduled session-sweep expiry predicate: only rows expired by BOTH
+  // clocks (`expires_at <= now` AND `expires_at <= clock_timestamp()`).
+  // Expiry-exact rows go, live leases stay, and a caller clock running ahead
+  // skips the skew-window rows instead of deleting leases acquire (which
+  // answers the database clock: `expires_at < clock_timestamp()`) still
+  // honors. Deletes at most one batch per statement; the cron pass drains via
+  // `drainPruneTable`.
   //
-  // The outer DELETE rechecks `expires_at <= now` (not just candidate keys):
-  // under READ COMMITTED a concurrent acquire that renews a swept candidate
-  // between the subquery snapshot and the delete would otherwise still match
-  // on key alone and delete the live lease. The recheck makes the renewed row
-  // fail the predicate after the row-lock wait instead.
+  // The outer DELETE rechecks both expiry predicates (not just candidate
+  // keys): under READ COMMITTED a concurrent acquire that renews a swept
+  // candidate between the subquery snapshot and the delete would otherwise
+  // still match on key alone and delete the live lease. The recheck makes the
+  // renewed row fail the predicate after the row-lock wait instead.
   const jobUniqueLocks = {
     sweepExpired: async (now: Date) =>
       (
-        await sql`delete from job_unique_locks where expires_at <= ${now} and key in (
+        await sql`delete from job_unique_locks where expires_at <= ${now}
+          and expires_at <= clock_timestamp() and key in (
           select key from job_unique_locks where expires_at <= ${now}
+            and expires_at <= clock_timestamp()
           order by key limit ${PRUNE_DELETE_BATCH_SIZE}
           for update skip locked
         ) returning 1`
