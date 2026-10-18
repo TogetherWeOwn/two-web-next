@@ -29,10 +29,13 @@ const QUOTED_OVERRIDE = `${WORKER}="${NEW_VERSION}"`;
 const GATE_IDS = ["smoke-5", "smoke-50", "smoke-100-override"];
 
 const fixtures = {
+  // The /up fixture carries the candidate revision the gates pin
+  // (NEW_VERSION): the real checker requires revision.version_id to equal
+  // the override UUID, so an ignored override serving the old version fails.
   "/up": [
     200,
     "application/json",
-    '{"status":"healthy","db":"ok","pending_migrations":0,"queue":{"status":"unknown","warn_at":20,"critical_at":100}}',
+    '{"status":"healthy","db":"ok","pending_migrations":0,"queue":{"status":"unknown","warn_at":20,"critical_at":100},"revision":{"version_id":"22345678-1234-1234-1234-123456789abc","commit":null}}',
   ],
   "/": [200, "text/html", "<h1>The lobby is open.</h1>"],
   "/about": [200, "text/html", "<h1>About Together We Own</h1>"],
@@ -69,7 +72,7 @@ const fixtures = {
   ],
 };
 
-async function stub(t) {
+async function stub(t, change = () => {}) {
   const requests = [];
   const server = createServer((request, response) => {
     requests.push({
@@ -83,17 +86,25 @@ async function stub(t) {
     }
     const [status, type, body, location] = fixture;
     const origin = `http://${request.headers.host}`;
-    response.writeHead(status, {
+    const resolved = typeof body === "function" ? body(origin) : body;
+    const result = {
+      status,
+      body: resolved,
+      location,
+      type,
+    };
+    change(request.url, result);
+    response.writeHead(result.status, {
       "content-security-policy": "default-src 'self'; frame-ancestors 'none'",
       "x-content-type-options": "nosniff",
-      ...(type ? { "content-type": `${type}; charset=UTF-8` } : {}),
-      ...(type === "text/html" ? { "x-robots-tag": "noindex, nofollow" } : {}),
+      ...(result.type ? { "content-type": `${result.type}; charset=UTF-8` } : {}),
+      ...(result.type === "text/html" ? { "x-robots-tag": "noindex, nofollow" } : {}),
       ...(request.url === "/up"
         ? { "x-two-origin": "two-web-next", "cache-control": "no-store" }
         : {}),
-      ...(location ? { location } : {}),
+      ...(result.location ? { location: result.location } : {}),
     });
-    response.end(typeof body === "function" ? body(origin) : body);
+    response.end(result.body);
   });
   server.listen(0, "127.0.0.1");
   await once(server, "listening");
@@ -238,4 +249,31 @@ test("the real checker itself accepts quoted and refuses unquoted overrides", as
   assert.match(quoted.stdout, /17 routes, 0 failed assertions/);
   assert.equal(requests.length, 17);
   assert.ok(requests.every((r) => r.override === QUOTED_OVERRIDE));
+});
+
+test("gate smoke-5 fails when the override is ignored and the old version answers healthy", async (t) => {
+  // Response attribution, not readiness: the stub answers every readiness
+  // assertion healthy but identifies the old version, so the extracted gate
+  // block probing the candidate UUID must fail closed.
+  const action = readAction();
+  const { host, requests } = await stub(t, (route, result) => {
+    if (route === "/up")
+      result.body = JSON.stringify({
+        status: "healthy",
+        db: "ok",
+        pending_migrations: 0,
+        queue: { status: "unknown", warn_at: 20, critical_at: 100 },
+        revision: {
+          version_id: "11111111-2222-3333-4444-555555555555",
+          commit: null,
+        },
+      });
+  });
+  const result = await runGate(gateBlock(action, "smoke-5"), host);
+  assert.notEqual(result.status, 0, result.stdout + result.stderr);
+  assert.match(result.stdout + result.stderr, /revision\.version_id/);
+  assert.ok(
+    requests.every((r) => r.override === QUOTED_OVERRIDE),
+    "the gate still pins every probe to the candidate version",
+  );
 });
