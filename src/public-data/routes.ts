@@ -13,7 +13,7 @@ import { readCounts, type Counts } from "../counts";
 import { isDatabaseUnavailable } from "../db/errors";
 import type { Env } from "../env";
 import { getPublicApiEvent, listPublicApiEvents, type PublicApiEvent } from "../events/reads";
-import { etagFor, publicReadGuard } from "../events/routes-shared";
+import { etagFor, matchesIfNoneMatch, publicReadGuard } from "../events/routes-shared";
 import { inviteDestination } from "../invite";
 import { wallDateIso, wallTimeHm } from "../islands/contracts";
 import { JOIN_INTRO } from "../screens/join";
@@ -198,7 +198,7 @@ export function fitByteBudget(
 }
 
 function cachedEntry(c: Ctx, entry: ApiPublicCacheEntry): Response {
-  if (c.req.header("if-none-match") === entry.headers.etag) {
+  if (matchesIfNoneMatch(c.req.header("if-none-match"), entry.headers.etag!)) {
     return c.body(null, 304, {
       etag: entry.headers.etag!,
       "cache-control": entry.headers["cache-control"]!,
@@ -216,7 +216,7 @@ async function servePublicJson(c: Ctx, cacheKey: string, value: unknown): Promis
     etag,
   };
   writeApiPublicCache(cacheKey, { status: 200, headers, body });
-  if (c.req.header("if-none-match") === etag) {
+  if (matchesIfNoneMatch(c.req.header("if-none-match"), etag)) {
     return c.body(null, 304, { etag, "cache-control": PUBLIC_MAX_AGE });
   }
   return c.body(body, 200, headers);
