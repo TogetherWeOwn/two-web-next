@@ -281,7 +281,9 @@ export async function smoke(
           // SMOKE_QUEUE_* constants above (drift guard in test/smoke.test.mjs).
           // A stuck staging queue is not promotable: with
           // failOnReadyWaitCritical (S6, staging deploy only),
-          // ready_wait_severity critical fails closed. The flag is
+          // ready_wait_severity critical fails closed, as does a blind
+          // queue-observability path (queue.status or ready_wait_severity
+          // unknown). The flag is
           // staging-only by design: the age derives from the shared
           // queue_jobs table (src/jobs/postgres.ts min(available_at)), not
           // the Worker version under test, so a production canary probed
@@ -289,7 +291,8 @@ export async function smoke(
           // fail-closed production gate would block its own fix from
           // shipping (and fail post-rollback smoke after a good rollback).
           // Without the flag, critical logs WARN and passes; healthy /
-          // warning / unknown / missing severity never fail.
+          // warning pass, and unknown / missing severity pass to preserve
+          // the production/rollback posture.
           const valid =
             data?.db === "ok" &&
             data?.pending_migrations === 0 &&
@@ -350,14 +353,24 @@ export async function smoke(
             );
           }
           const severity = data?.queue?.ready_wait_severity;
+          const queueStatus = data?.queue?.status;
           const readyAge = data?.queue?.oldest_ready_wait_age_seconds;
           const readyAgeLabel = typeof readyAge === "number" ? readyAge : "unknown";
           if (failOnReadyWaitCritical) {
-            check(
-              severity !== "critical",
-              "ready_wait_severity not critical",
-              `critical (oldest_ready_wait_age_seconds: ${readyAgeLabel})`,
-            );
+            const unknownReadiness = queueStatus === "unknown" || severity === "unknown";
+            if (unknownReadiness) {
+              check(
+                false,
+                "known queue.status and ready_wait_severity (not unknown)",
+                `unknown (queue.status: ${queueStatus ?? "missing"}, ready_wait_severity: ${severity ?? "missing"})`,
+              );
+            } else {
+              check(
+                severity !== "critical",
+                "ready_wait_severity not critical",
+                `critical (oldest_ready_wait_age_seconds: ${readyAgeLabel})`,
+              );
+            }
           } else if (severity === "critical") {
             log(
               `WARN ${route.path}: ready_wait_severity critical (oldest_ready_wait_age_seconds: ${readyAgeLabel})`,
