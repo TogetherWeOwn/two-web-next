@@ -22,6 +22,11 @@ type Click = {
 function page(opts: { missing?: boolean; orphan?: boolean; noInvite?: boolean } = {}) {
   const listeners: Record<string, (e: unknown) => void> = {};
   const timers: Array<{ fn: () => void; ms: number; cleared: boolean }> = [];
+  const createdEls: Array<{
+    attrs: Record<string, string>;
+    textContent: string;
+    focus: ReturnType<typeof vi.fn>;
+  }> = [];
   const frame = {
     title: "",
     src: "",
@@ -40,7 +45,12 @@ function page(opts: { missing?: boolean; orphan?: boolean; noInvite?: boolean } 
   type Message = {
     attrs: Record<string, string>;
     textContent: string;
-    children: Array<{ attrs: Record<string, string>; textContent: string }>;
+    focus: ReturnType<typeof vi.fn>;
+    children: Array<{
+      attrs: Record<string, string>;
+      textContent: string;
+      focus: ReturnType<typeof vi.fn>;
+    }>;
   };
   const preview = {
     children: [] as Array<unknown>,
@@ -56,17 +66,33 @@ function page(opts: { missing?: boolean; orphan?: boolean; noInvite?: boolean } 
     const el = {
       attrs: {} as Record<string, string>,
       textContent: "",
-      children: [] as Array<{ attrs: Record<string, string>; textContent: string }>,
+      focus: vi.fn(),
+      children: [] as Array<{
+        attrs: Record<string, string>;
+        textContent: string;
+        focus: ReturnType<typeof vi.fn>;
+      }>,
       setAttribute(key: string, value: string) {
         el.attrs[key] = value;
       },
-      appendChild(node: { attrs: Record<string, string>; textContent: string }) {
+      appendChild(node: {
+        attrs: Record<string, string>;
+        textContent: string;
+        focus: ReturnType<typeof vi.fn>;
+      }) {
         el.children.push(node);
         return node;
       },
     };
+    createdEls.push(el);
     return el;
   });
+  // After replaceChildren removes the clicked link, a real browser drops
+  // focus to <body>. `active` models document.activeElement so the suite can
+  // pin the steal-guard: focus moves in only when the visitor hasn't moved
+  // elsewhere since the click.
+  const body = {};
+  let active: unknown = body;
   let onClick: (e: Click) => void = () => {};
   const link = {
     getAttribute: (key: string) => (key === "href" ? widget : null),
@@ -78,15 +104,20 @@ function page(opts: { missing?: boolean; orphan?: boolean; noInvite?: boolean } 
   const inviteLink = opts.noInvite
     ? null
     : { getAttribute: (key: string) => (key === "href" ? invite : null) };
-  runInNewContext(binder, {
-    document: {
-      querySelector: (selector: string) => {
-        if (selector === "[data-join-widget]") return opts.missing ? null : link;
-        if (selector.includes("join-invite")) return inviteLink;
-        return null;
-      },
-      createElement,
+  const documentStub = {
+    querySelector: (selector: string) => {
+      if (selector === "[data-join-widget]") return opts.missing ? null : link;
+      if (selector.includes("join-invite")) return inviteLink;
+      return null;
     },
+    createElement,
+    get activeElement() {
+      return active;
+    },
+    body,
+  };
+  runInNewContext(binder, {
+    document: documentStub,
     setTimeout: (fn: () => void, ms = 0) => {
       timers.push({ fn, ms: Number(ms) || 0, cleared: false });
       return timers.length;
@@ -102,6 +133,11 @@ function page(opts: { missing?: boolean; orphan?: boolean; noInvite?: boolean } 
     messageOf,
     timers,
     createElement,
+    createdEls,
+    body,
+    moveFocusTo(target: unknown) {
+      active = target;
+    },
     async click(extra: Partial<Click> = {}) {
       const event = { button: 0, preventDefault: vi.fn(), ...extra };
       onClick(event);
@@ -142,6 +178,33 @@ describe("join-widget island", () => {
     p.frame.fire("load");
     expect(p.frame.focus).toHaveBeenCalledOnce();
     expect(p.preview.replaceChildren).toHaveBeenCalledOnce();
+  });
+
+  it("does not steal focus on load when the visitor moved elsewhere since the click", async () => {
+    const p = page();
+    await p.click();
+    p.moveFocusTo({ tag: "header-link" });
+    p.frame.fire("load");
+    expect(p.frame.focus).not.toHaveBeenCalled();
+  });
+
+  it("moves focus to the invite fallback when the preview fails", async () => {
+    const p = page();
+    await p.click();
+    p.frame.fire("error");
+    const message = p.messageOf(1)!;
+    expect(message.attrs.tabindex).toBe("-1");
+    const fallback = message.children[0]!;
+    expect(fallback.focus).toHaveBeenCalledOnce();
+  });
+
+  it("moves focus to the guidance itself when no invite fallback exists", async () => {
+    const p = page({ noInvite: true });
+    await p.click();
+    p.frame.fire("error");
+    const message = p.messageOf(1)!;
+    expect(message.attrs.tabindex).toBe("-1");
+    expect(message.focus).toHaveBeenCalledOnce();
   });
 
   it("on error keeps focus put and guides to the invite fallback", async () => {

@@ -28,15 +28,17 @@
       if (settled) return;
       settled = true;
       // The invite link lives beside the preview on every /join variant; a
-      // blocked or hung frame guides there instead of stranding the visitor.
+      // failed or hung frame guides there instead of stranding the visitor.
       const invite = document.querySelector('[data-testid="join-invite"]');
       const inviteHref = invite && invite.getAttribute("href");
       const message = document.createElement("p");
       message.setAttribute("data-testid", "join-widget-error");
       message.setAttribute("role", "status");
+      message.setAttribute("tabindex", "-1");
       message.textContent = "The preview failed to load. ";
+      let fallback = null;
       if (inviteHref) {
-        const fallback = document.createElement("a");
+        fallback = document.createElement("a");
         fallback.setAttribute("href", inviteHref);
         fallback.textContent = "Join with an invite link.";
         message.appendChild(fallback);
@@ -46,16 +48,27 @@
       // Swap the dead frame out: it never rendered, so holding its 500px
       // hole open would strand the guidance below the fold.
       preview.replaceChildren(message);
+      // The clicked link is gone, so focus fell to <body>: move it onto the
+      // guidance (prefer the invite link) so the next Tab reaches forward
+      // instead of restarting from the top of the page.
+      if (fallback && typeof fallback.focus === "function") fallback.focus();
+      else if (typeof message.focus === "function") message.focus();
     };
-    // A blocked embed fires `error`; a hung one never fires `load`, so a
-    // bounded timer fires the same guided fallback. Focus stays put either
-    // way: it moves in only on `load`, and a late load never steals it back.
+    // Browsers fire `load` for a cross-origin frame even when its navigation
+    // was blocked (X-Frame-Options, CSP, DNS, refused connection, content
+    // blocker): there is no reliable `error` for that case, so the `error`
+    // listener below is best-effort only and the bounded timer covers a hung
+    // frame that fires neither event. Focus moves in only on `load`, and only
+    // when the visitor hasn't moved elsewhere since the click (after
+    // replaceChildren the clicked link is gone, so <body> means "hasn't
+    // moved"): a late load never steals focus from another element.
     const timer = setTimeout(guideToInvite, 8000);
     frame.addEventListener("load", () => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
-      frame.focus();
+      const active = document.activeElement;
+      if (!active || active === document.body) frame.focus();
     });
     frame.addEventListener("error", () => {
       clearTimeout(timer);
