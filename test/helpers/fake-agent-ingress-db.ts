@@ -33,7 +33,13 @@ type Tag = (strings: TemplateStringsArray, ...values: unknown[]) => Promise<unkn
 
 export type FakeAgentDb = {
   sql: postgres.Sql;
-  audits: { grantId: string | null; operation: string; reason: string | null }[];
+  audits: {
+    grantId: string | null;
+    operation: string;
+    reason: string | null;
+    requestId: string | null;
+    result: string | null;
+  }[];
   hits: { bucket: string; at: number }[];
   addGrant: (credential: string, grant: FakeGrant) => Promise<void>;
   seedReplay: (grantId: string, key: string, row: FakeReplayRow) => void;
@@ -131,17 +137,17 @@ export function makeFakeAgentDb(): FakeAgentDb {
     }
 
     if (head.includes("INSERT INTO agent_event_audits")) {
-      const [grantId, operation, , , , , , reason] = values as [
+      const [grantId, operation, , , , requestId, result, reason] = values as [
         string | null,
         string,
         unknown,
         unknown,
         unknown,
-        unknown,
-        unknown,
+        string | null,
+        string | null,
         string | null,
       ];
-      audits.push({ grantId, operation, reason });
+      audits.push({ grantId, operation, reason, requestId, result });
       return [];
     }
 
