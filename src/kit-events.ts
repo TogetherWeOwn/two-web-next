@@ -164,25 +164,26 @@ export async function dispatchEventsRequest(
     headers,
   });
 
-  if (
-    source &&
-    key &&
-    cacheable &&
-    cleanResponse.status === 200 &&
-    anonCacheGeneration() === generation
-  ) {
-    writeAnonCache(
-      key,
-      source,
-      {
-        status: cleanResponse.status,
-        cacheControl: cleanResponse.headers.get("cache-control") ?? "public, max-age=60",
-        vary: cleanResponse.headers.get("vary"),
-        body: await cleanResponse.clone().text(),
-      },
-      ANON_EVENTS_TTL_MS,
-      now,
-    );
+  if (source && key && cacheable && cleanResponse.status === 200) {
+    // Buffer the candidate before the final generation comparison: a retire
+    // that lands while clone().text() is in flight must stop the stale bytes
+    // from settling. The compare-and-write below is synchronous, so it stays
+    // atomic within the isolate.
+    const body = await cleanResponse.clone().text();
+    if (anonCacheGeneration() === generation) {
+      writeAnonCache(
+        key,
+        source,
+        {
+          status: cleanResponse.status,
+          cacheControl: cleanResponse.headers.get("cache-control") ?? "public, max-age=60",
+          vary: cleanResponse.headers.get("vary"),
+          body,
+        },
+        ANON_EVENTS_TTL_MS,
+        now,
+      );
+    }
   }
 
   return cleanResponse;
