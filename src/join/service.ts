@@ -109,11 +109,14 @@ export async function checkJoinThrottle(
   // never prolongs it. Refused requests prune too: a bucket under sustained
   // refused load would otherwise accumulate expired rows until some request
   // is admitted. The prune is age-only, so it records no hit and never moves
-  // a request across the admit/refuse boundary. It is best-effort: a throwing
-  // prune must not flip a decided refusal into an admission (the generic
-  // middleware catch) or a 500 on the direct join path (no catch there).
+  // a request across the admit/refuse boundary. One bounded oldest-first
+  // batch per request (1,000 rows, the established cleanup batch, skip-locked
+  // so rows held by unrelated transactions wait for a later pass). It is
+  // best-effort: a throwing prune must not flip a decided refusal into an
+  // admission (the generic middleware catch) or a 500 on the direct join path
+  // (no catch there).
   try {
-    await sql`DELETE FROM web_throttle_hits WHERE at < now() - make_interval(mins => ${THROTTLE_COUNTER_RETENTION_MINUTES})`;
+    await sql`WITH candidates AS (SELECT id FROM web_throttle_hits WHERE at < now() - make_interval(mins => ${THROTTLE_COUNTER_RETENTION_MINUTES}) ORDER BY id LIMIT 1000 FOR UPDATE SKIP LOCKED) DELETE FROM web_throttle_hits USING candidates WHERE web_throttle_hits.id = candidates.id`;
   } catch {
     // Housekeeping failed; the verdict below was already decided.
     console.warn("Join throttle prune failed; keeping the decided verdict.");
