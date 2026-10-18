@@ -236,9 +236,7 @@ describe("Discord 429 backoff reaches the join recovery response", () => {
     expect(calls).toEqual(["/api/v10/oauth2/token", "/api/v10/users/@me"]);
     expect(create).not.toHaveBeenCalled();
     const requestId = res.headers.get("x-request-id");
-    expect(fake.attempts).toEqual([
-      { outcome: "error", source: null, requestId, discordId: null },
-    ]);
+    expect(fake.attempts).toEqual([{ outcome: "error", source: null, requestId, discordId: null }]);
   });
 });
 
@@ -251,9 +249,7 @@ describe("absent or unusable provider backoff falls back to today's response", (
     // The body's own retry_after (77) is never mined as a substitute.
     expect(res.headers.get("retry-after")).toBeNull();
     const requestId = res.headers.get("x-request-id");
-    expect(fake.attempts).toEqual([
-      { outcome: "error", source: null, requestId, discordId: null },
-    ]);
+    expect(fake.attempts).toEqual([{ outcome: "error", source: null, requestId, discordId: null }]);
   });
 
   it.each([
@@ -338,9 +334,7 @@ describe("non-429 paths are unchanged and never gain Retry-After", () => {
     expect(html).not.toContain("Discord is unreachable");
     expect(res.headers.get("retry-after")).toBeNull();
     const requestId = res.headers.get("x-request-id");
-    expect(fake.attempts).toEqual([
-      { outcome: "error", source: null, requestId, discordId: null },
-    ]);
+    expect(fake.attempts).toEqual([{ outcome: "error", source: null, requestId, discordId: null }]);
   });
 
   it("successful join: redirect unchanged, no Retry-After", async () => {
