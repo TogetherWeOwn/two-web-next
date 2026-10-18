@@ -19,7 +19,7 @@ export const uniqueKey = (eventKey: string) => `sync-event:${eventKey}`;
 
 const LOCK_TIMEOUT_MS = 2000;
 /**
- * Per-op bound for the producer's lock-acquire and queue-send (TOG-30878).
+ * Per-op bound for the producer's lock-acquire and queue-send.
  * Every neighboring op races a deadline; acquire and send were awaited bare,
  * so one hung Postgres INSERT or one hung queue transport stalled the web
  * after-commit producer (and the reconcile redispatch) with no recovery.

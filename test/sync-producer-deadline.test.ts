@@ -5,7 +5,7 @@ import { dispatchSyncEvent, PRODUCER_TIMEOUT_MS, uniqueKey } from "../src/jobs/s
 import { BotTransportError } from "../src/jobs/types";
 import type { EventStore, QueueLedger, UniqueLock } from "../src/jobs/types";
 
-// TOG-30878: the producer's lock-acquire and queue-send must race an
+// The producer's lock-acquire and queue-send must race an
 // independent setTimeout deadline like every neighboring op. Each case drives
 // the dispatch with a never-settling stub, advances past the budget, and
 // asserts the dispatch already rejected — so each fails while acquire/send
@@ -73,7 +73,7 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe("producer deadline (TOG-30878)", () => {
+describe("producer deadline", () => {
   it("pins the per-op bound so changes are deliberate", () => {
     expect(PRODUCER_TIMEOUT_MS).toBe(2000);
     expect(PRODUCER_BUDGET_MS).toBe(PRODUCER_TIMEOUT_MS);
