@@ -55,7 +55,11 @@ export type SessionStore = {
    * the freshly issued token, so a pre-login/pre-join token — and any older
    * concurrent login — cannot survive sign-in. Hash-only, like revoke. */
   revokeUserSessions: (userId: string, exceptTokenHash: string) => Promise<void>;
-  /** Expiry GC (W13 model:prune): delete rows reads can no longer see. Returns rows removed. */
+  /** Expiry GC: delete rows reads can no longer see. Returns rows removed.
+   * The general store drains all eligible rows in one call. The scheduled
+   * `model:prune` pass uses its own bounded adapter (`pgPruneStores` in
+   * `src/jobs/postgres.ts`, drained via `drainPruneTable` in
+   * `src/jobs/cron.ts`), so scheduler holds stay capped. */
   sweepExpired: (now: Date) => Promise<number>;
 };
 
@@ -210,6 +214,8 @@ export function createPostgresSessionStore(sql: Sql): SessionStore {
     async sweepExpired(now) {
       // `<=`: reads require expires_at > now(), so a row expiring exactly at
       // `now` is already invisible. Idempotent: a second pass matches nothing.
+      // General-store full drain; the scheduled pass uses the bounded adapter
+      // in `src/jobs/postgres.ts` instead, so daily holds stay capped.
       const rows = await sql<Record<string, unknown>[]>`delete from web_sessions
         where expires_at <= ${now} returning 1`;
       return rows.length;

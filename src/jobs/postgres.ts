@@ -1,5 +1,4 @@
 import type postgres from "postgres";
-import { createPostgresSessionStore, type Sql as SessionSql } from "../sessions";
 import { PRUNE_DELETE_BATCH_SIZE } from "./constants";
 import type { SingleFlight } from "./cron";
 import type { AgePrunedTable, PruneStores, QueueLedger, TxClient, UniqueLock } from "./types";
@@ -27,10 +26,14 @@ export function pgSingleFlight(sql: Sql): SingleFlight {
 }
 
 /**
- * Postgres prune stores (W13 model:prune). Every delete is age-only, the
+ * Postgres prune stores (W13 model:prune). Every age delete is age-only, the
  * Laravel MassPrunable shape: strictly older than the cutoff goes
- * (`occurred_at`/`created_at < cutoff`), cutoff-exact rows survive. Sessions
- * sweep by expiry (`expires_at <= now`, matching what reads can see).
+ * (`occurred_at`/`created_at < cutoff`), cutoff-exact rows survive. The
+ * scheduled session adapter deletes at most PRUNE_DELETE_BATCH_SIZE expired
+ * rows per statement (`expires_at <= now`, matching what reads can see:
+ * expiry-exact rows go, live rows stay); the scheduled pass drains it via
+ * `drainPruneTable`. The general session store's `sweepExpired` keeps its
+ * existing full-drain contract for non-scheduled callers.
  */
 export function pgPruneStores(sql: TxClient | Sql): PruneStores {
   // Table names cannot be parameterized in postgres.js tagged templates, so
@@ -95,6 +98,19 @@ export function pgPruneStores(sql: TxClient | Sql): PruneStores {
         ) returning 1`
       ).length,
   };
+  // Scheduled session adapter: per-statement bounded expiry sweep. Keeps the
+  // `expires_at <= now` read-visibility predicate (expiry-exact rows go, live
+  // rows stay) while deleting at most one batch per statement; the cron pass
+  // drains via `drainPruneTable` and reports exact totals plus the cap.
+  const sessions = {
+    sweepExpired: async (now: Date) =>
+      (
+        await sql`delete from web_sessions where token_hash in (
+          select token_hash from web_sessions where expires_at <= ${now}
+          order by token_hash limit ${PRUNE_DELETE_BATCH_SIZE}
+        ) returning 1`
+      ).length,
+  };
   return {
     agentEventAudits,
     accessLog,
@@ -102,7 +118,7 @@ export function pgPruneStores(sql: TxClient | Sql): PruneStores {
     idempotencyKeys,
     searchLog,
     boardViews,
-    sessions: createPostgresSessionStore(sql as unknown as SessionSql),
+    sessions,
   };
 }
 

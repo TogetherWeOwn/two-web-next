@@ -86,8 +86,10 @@ const cutoff = (now: Date, days: number): Date => new Date(now.getTime() - days 
 /**
  * Ports model:prune daily ×3 (routes/console.php) plus the web_sessions expiry
  * sweep (no legacy equivalent — Laravel GC; rows accumulate without one).
- * Every delete is age-only (Laravel MassPrunable shape): strictly older than
- * the cutoff goes, cutoff-exact rows survive. Each statement deletes at most
+ * Age deletes are age-only (Laravel MassPrunable shape): strictly older than
+ * the cutoff goes, cutoff-exact rows survive. The session sweep deletes by
+ * expiry (`expires_at <= now`, matching what reads can see): expiry-exact
+ * rows go, live rows stay. Each statement deletes at most
  * PRUNE_DELETE_BATCH_SIZE rows; the pass repeats the statement per table until
  * a short batch proves the backlog drained, stopping after
  * PRUNE_DELETE_MAX_BATCHES batches so the single-flight is never held
@@ -143,7 +145,7 @@ export async function pruneModelTables(
       (c) => stores.boardViews.pruneOlderThan(c),
       cutoff(now, BOARD_VIEW_LOG_RETENTION_DAYS),
     ),
-    stores.sessions.sweepExpired(now),
+    drainPruneTable((d) => stores.sessions.sweepExpired(d), now),
   ]);
   const counts = {
     agentEventAudits: agentEventAudits.total,
@@ -152,7 +154,7 @@ export async function pruneModelTables(
     idempotencyKeys: idempotencyKeys.total,
     searchLog: searchLog.total,
     boardViews: boardViews.total,
-    sessions,
+    sessions: sessions.total,
   };
   const cappedTables = (
     [
@@ -162,6 +164,7 @@ export async function pruneModelTables(
       ["idempotencyKeys", idempotencyKeys.capped],
       ["searchLog", searchLog.capped],
       ["boardViews", boardViews.capped],
+      ["sessions", sessions.capped],
     ] as const
   )
     .filter(([, capped]) => capped)
