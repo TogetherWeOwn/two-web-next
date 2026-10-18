@@ -78,6 +78,21 @@ const fixtures = {
     "application/json",
     '{"data":[],"page":1,"limit":20,"meta":{"current_page":1,"per_page":20,"total":0,"last_page":1}}',
   ],
+  "/api/public/events/00000000000000000000000001": [
+    200,
+    "application/json",
+    '{"event_key":"00000000000000000000000001","title":"Fixture game night","game":null,"description":"Brackets ] and braces } stay inside the row","starts_at":"2026-11-01T19:00:00.000Z","ends_at":"2026-11-01T22:00:00.000Z","starts_at_local":"2026-11-01 19:00","ends_at_local":"2026-11-01 22:00","timezone":"UTC","location":null,"capacity":null,"going_count":3,"status":"published","rsvp_open":true,"synced_to_discord":false}',
+  ],
+  "/api/public/community": [
+    200,
+    "application/json",
+    '{"member_count":123,"online_count":12,"ranks":[{"key":"veterans","label":"Veterans","member_count":42}]}',
+  ],
+  "/api/public/join": [
+    200,
+    "application/json",
+    '{"intro":"Approve once with Discord and we will add you to the server.","invite_url":"https://discord.gg/fixture"}',
+  ],
   "/openapi.json": [
     200,
     "application/json",
@@ -223,7 +238,7 @@ for (const id of GATE_IDS) {
     const result = await runGate(gateBlock(action, id), host);
     assert.equal(result.status, 0, result.stdout + result.stderr);
     assert.match(result.stdout, /smoke ok \(attempt 1\)/);
-    assert.equal(requests.length, 20, "the real checker probed every route once");
+    assert.equal(requests.length, 23, "the real checker probed every route once");
     assert.ok(
       requests.every((r) => r.override === QUOTED_OVERRIDE),
       `every probe must carry ${QUOTED_OVERRIDE}`,
@@ -264,8 +279,8 @@ test("the real checker itself accepts quoted and refuses unquoted overrides", as
   assert.equal(requests.length, 0);
   const quoted = await cli(QUOTED_OVERRIDE);
   assert.equal(quoted.status, 0, quoted.stdout + quoted.stderr);
-  assert.match(quoted.stdout, /20 routes, 0 failed assertions/);
-  assert.equal(requests.length, 20);
+  assert.match(quoted.stdout, /23 routes, 0 failed assertions/);
+  assert.equal(requests.length, 23);
   assert.ok(requests.every((r) => r.override === QUOTED_OVERRIDE));
 });
 

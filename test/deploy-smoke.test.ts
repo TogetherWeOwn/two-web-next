@@ -700,7 +700,7 @@ if (process.argv.length !== 5 || process.argv[2] !== "bin/smoke.mjs" || process.
 }
 const count = readFileSync(attempts, "utf8").length;
 const pass = count === Number(process.env.SMOKE_SUCCEED_ON_ATTEMPT);
-console.log(pass ? "smoke: 20 routes, 0 failed assertions" : "FAIL /join: expected HTTP 200; actual HTTP 503");
+console.log(pass ? "smoke: 23 routes, 0 failed assertions" : "FAIL /join: expected HTTP 200; actual HTTP 503");
 process.exit(pass ? 0 : 1);
 `,
       { mode: 0o700 },

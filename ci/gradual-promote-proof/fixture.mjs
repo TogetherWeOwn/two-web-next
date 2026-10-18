@@ -7,7 +7,7 @@
 // binding: proof-lib.mjs refuses to generate a config that adds one.
 //
 // The route table satisfies the real deploy smoke checker (bin/smoke.mjs,
-// 20 GETs) so the pinned gradual-promote action runs its genuine gates
+// 23 GETs) so the pinned gradual-promote action runs its genuine gates
 // against this fixture instead of the live site. The fail-up mode makes
 // /up answer 503 with a down envelope, which is a real health failure the
 // checker rejects on status and body shape.
@@ -170,12 +170,43 @@ export function handleProofRequest(request, env = {}) {
     });
   }
 
-  // Session-free public read API: collection envelope and discovery document,
-  // mirroring the healthy fixtures in test/smoke.test.mjs. The real checker
-  // asserts the envelope shape and the OpenAPI marker, not fixture contents.
+  // Session-free public read API: collection envelope, one event, community
+  // snapshot, join handoff, and discovery document, mirroring the healthy
+  // fixtures in test/smoke.test.mjs. The real checker asserts each envelope
+  // shape and the OpenAPI marker, not fixture contents.
   if (path === "/api/public/events") {
     return new Response(
       '{"data":[],"page":1,"limit":20,"meta":{"current_page":1,"per_page":20,"total":0,"last_page":1}}',
+      {
+        status: 200,
+        headers: proofHeaders(env, { "content-type": "application/json; charset=UTF-8" }),
+      },
+    );
+  }
+
+  if (path === "/api/public/events/00000000000000000000000001") {
+    return new Response(
+      '{"event_key":"00000000000000000000000001","title":"Fixture game night","game":null,"description":"Brackets ] and braces } stay inside the row","starts_at":"2026-11-01T19:00:00.000Z","ends_at":"2026-11-01T22:00:00.000Z","starts_at_local":"2026-11-01 19:00","ends_at_local":"2026-11-01 22:00","timezone":"UTC","location":null,"capacity":null,"going_count":3,"status":"published","rsvp_open":true,"synced_to_discord":false}',
+      {
+        status: 200,
+        headers: proofHeaders(env, { "content-type": "application/json; charset=UTF-8" }),
+      },
+    );
+  }
+
+  if (path === "/api/public/community") {
+    return new Response(
+      '{"member_count":123,"online_count":12,"ranks":[{"key":"veterans","label":"Veterans","member_count":42}]}',
+      {
+        status: 200,
+        headers: proofHeaders(env, { "content-type": "application/json; charset=UTF-8" }),
+      },
+    );
+  }
+
+  if (path === "/api/public/join") {
+    return new Response(
+      '{"intro":"Approve once with Discord and we will add you to the server.","invite_url":"https://discord.gg/fixture"}',
       {
         status: 200,
         headers: proofHeaders(env, { "content-type": "application/json; charset=UTF-8" }),

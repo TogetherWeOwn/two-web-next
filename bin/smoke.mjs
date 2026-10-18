@@ -29,10 +29,20 @@ const routes = [
   { path: "/profile", statuses: [302], redirect: "login" },
   { path: "/admin", statuses: [302, 403], redirect: "login" },
   // Session-free public read API (anonymous by construction in
-  // src/public-data/routes.ts): the collection envelope and the discovery
-  // document. No auth, no cookies, no flags; the session-gated /events.json
-  // stays out (staging-only bin/json-smoke.mjs covers it).
+  // src/public-data/routes.ts): the collection envelope, one event, the
+  // community snapshot, the join handoff, and the discovery document. No
+  // auth, no cookies, no flags; the session-gated /events.json stays out
+  // (staging-only bin/json-smoke.mjs covers it). The single-event probe
+  // uses an all-digit ULID so no secret scanner trips; the same literal
+  // must appear in the test fixtures.
   { path: "/api/public/events", statuses: [200], type: "application/json" },
+  {
+    path: "/api/public/events/00000000000000000000000001",
+    statuses: [200],
+    type: "application/json",
+  },
+  { path: "/api/public/community", statuses: [200], type: "application/json" },
+  { path: "/api/public/join", statuses: [200], type: "application/json" },
   { path: "/openapi.json", statuses: [200], type: "application/json" },
   {
     path: "/__smoke_unknown_route__",
@@ -505,6 +515,102 @@ export async function smoke(
           check(
             valid,
             "collection envelope with data array and numeric paging",
+            "valid JSON with unexpected public envelope shape",
+          );
+        } catch {
+          check(false, "valid JSON object", "invalid JSON");
+        }
+      }
+      if (route.path.startsWith("/api/public/events/")) {
+        // Single-event envelope (src/public-data/contracts.ts
+        // PublicApiEventDto): one object, never an array, with a string
+        // event_key, a string title, status published, boolean rsvp_open
+        // and synced_to_discord, and a going_count that is null (rollup
+        // unavailable) or a finite number — never 0 by default. An error
+        // envelope, an empty object, a collection array, wrong-typed
+        // fields, or a non-JSON body fails this entry only. Do not print
+        // response bodies into deploy logs: the actual side stays fixed.
+        try {
+          const data = JSON.parse(body);
+          const valid =
+            data !== null &&
+            typeof data === "object" &&
+            !Array.isArray(data) &&
+            typeof data.event_key === "string" &&
+            data.event_key.length > 0 &&
+            typeof data.title === "string" &&
+            data.status === "published" &&
+            typeof data.rsvp_open === "boolean" &&
+            typeof data.synced_to_discord === "boolean" &&
+            (typeof data.going_count === "number"
+              ? Number.isFinite(data.going_count)
+              : data.going_count === null);
+          check(
+            valid,
+            "single-event envelope with event_key and published status",
+            "valid JSON with unexpected public envelope shape",
+          );
+        } catch {
+          check(false, "valid JSON object", "invalid JSON");
+        }
+      }
+      if (route.path === "/api/public/community") {
+        // Community snapshot (src/public-data/contracts.ts
+        // CommunitySnapshotDto): member_count and online_count are null
+        // when the collectors are unavailable (never 0 by default) or
+        // finite numbers, and ranks is an array of key/label/member_count
+        // rows. An error envelope, an empty object, wrong-typed counts,
+        // or a non-JSON body fails this entry only. Do not print response
+        // bodies into deploy logs: the actual side stays a fixed string.
+        try {
+          const data = JSON.parse(body);
+          const countsValid = (value) =>
+            typeof value === "number" ? Number.isFinite(value) : value === null;
+          const ranksValid =
+            data !== null &&
+            typeof data === "object" &&
+            !Array.isArray(data) &&
+            Array.isArray(data.ranks) &&
+            data.ranks.every(
+              (rank) =>
+                rank !== null &&
+                typeof rank === "object" &&
+                !Array.isArray(rank) &&
+                typeof rank.key === "string" &&
+                typeof rank.label === "string" &&
+                countsValid(rank.member_count),
+            );
+          const valid =
+            ranksValid && countsValid(data.member_count) && countsValid(data.online_count);
+          check(
+            valid,
+            "community snapshot with nullable counts and ranks array",
+            "valid JSON with unexpected public envelope shape",
+          );
+        } catch {
+          check(false, "valid JSON object", "invalid JSON");
+        }
+      }
+      if (route.path === "/api/public/join") {
+        // Join handoff (src/public-data/contracts.ts JoinHandoffDto):
+        // database-free like the /join leaf, a non-empty intro plus the
+        // public HTTPS invite. An error envelope, an empty object,
+        // wrong-typed fields, a non-HTTPS invite, or a non-JSON body
+        // fails this entry only. Do not print response bodies into
+        // deploy logs: the actual side stays a fixed string.
+        try {
+          const data = JSON.parse(body);
+          const valid =
+            data !== null &&
+            typeof data === "object" &&
+            !Array.isArray(data) &&
+            typeof data.intro === "string" &&
+            data.intro.length > 0 &&
+            typeof data.invite_url === "string" &&
+            data.invite_url.startsWith("https://");
+          check(
+            valid,
+            "join handoff with intro and HTTPS invite",
             "valid JSON with unexpected public envelope shape",
           );
         } catch {

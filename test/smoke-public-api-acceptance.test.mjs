@@ -17,7 +17,7 @@ import { SMOKE_SECURITY_TXT_EXPIRES, smoke } from "../bin/smoke.mjs";
 //
 // Locked builder contract (this file is acceptance-owned; do not edit it
 // to make an implementation pass):
-// - Deploy smoke additionally probes exactly two session-free routes,
+// - Deploy smoke additionally probes exactly five session-free routes,
 //   with no auth, no cookies and no new CLI flags:
 //   - GET /api/public/events expects HTTP 200, Content-Type
 //     application/json, and a collection envelope in the body: a `data`
@@ -26,13 +26,29 @@ import { SMOKE_SECURITY_TXT_EXPIRES, smoke } from "../bin/smoke.mjs";
 //     last_page (src/public-data/contracts.ts). An error envelope, a
 //     missing or truncated envelope, non-numeric paging fields, or a
 //     non-JSON body served with HTTP 200 must fail this entry.
+//   - GET /api/public/events/00000000000000000000000001 expects HTTP
+//     200, Content-Type application/json, and the single-event object:
+//     a string event_key, a string title, status published, boolean
+//     rsvp_open and synced_to_discord, and a going_count that is null
+//     or a finite number. An error envelope, an empty object, a
+//     collection array, wrong-typed fields, or a non-JSON body served
+//     with HTTP 200 must fail this entry.
+//   - GET /api/public/community expects HTTP 200, Content-Type
+//     application/json, and the community snapshot: member_count and
+//     online_count each null (collectors down, never 0) or finite
+//     numbers, plus a ranks array of key/label/member_count rows. An
+//     error envelope, an empty object, wrong-typed counts, or a
+//     non-JSON body served with HTTP 200 must fail this entry.
+//   - GET /api/public/join expects HTTP 200, Content-Type
+//     application/json, and the join handoff: a non-empty intro plus
+//     the public HTTPS invite_url. An error envelope, an empty object,
+//     a missing or non-HTTPS invite, or a non-JSON body served with
+//     HTTP 200 must fail this entry.
 //   - GET /openapi.json expects HTTP 200, Content-Type application/json,
 //     and the OpenAPI version marker in the body. A body without the
 //     marker (or not JSON at all) served with HTTP 200 must fail it.
 // - No other route is added. In particular the session-gated
-//   /events.json stay out of deploy smoke, as do the other public
-//   endpoints (/api/public/community, /api/public/join and the
-//   single-event route).
+//   /events.json stays out of deploy smoke.
 // - A broken public entry fails only its own route: every existing
 //   entry keeps its current assertions and pass/fail behaviour.
 // - No application code, envelope schema or workflow changes: this is a
@@ -87,6 +103,35 @@ const populatedCollection = JSON.stringify({
   meta: { current_page: 1, per_page: 20, total: 1, last_page: 1 },
 });
 
+const healthySingle = JSON.stringify({
+  event_key: "00000000000000000000000001",
+  title: "Fixture game night",
+  game: null,
+  description: "Brackets ] and braces } stay inside the row",
+  starts_at: "2026-11-01T19:00:00.000Z",
+  ends_at: "2026-11-01T22:00:00.000Z",
+  starts_at_local: "2026-11-01 19:00",
+  ends_at_local: "2026-11-01 22:00",
+  timezone: "UTC",
+  location: null,
+  capacity: null,
+  going_count: 3,
+  status: "published",
+  rsvp_open: true,
+  synced_to_discord: false,
+});
+
+const healthyCommunity = JSON.stringify({
+  member_count: 123,
+  online_count: 12,
+  ranks: [{ key: "veterans", label: "Veterans", member_count: 42 }],
+});
+
+const healthyJoin = JSON.stringify({
+  intro: "Approve once with Discord and we will add you to the server.",
+  invite_url: "https://discord.gg/fixture",
+});
+
 const healthyOpenApi = JSON.stringify({
   openapi: "3.1.0",
   info: { title: "Together We Own public read API", version: "1.0.0" },
@@ -136,6 +181,9 @@ const fixtures = {
     "<title>We cannot find that page — Together We Own</title>",
   ],
   "/api/public/events": [200, "application/json", healthyCollection],
+  "/api/public/events/00000000000000000000000001": [200, "application/json", healthySingle],
+  "/api/public/community": [200, "application/json", healthyCommunity],
+  "/api/public/join": [200, "application/json", healthyJoin],
   "/openapi.json": [200, "application/json", healthyOpenApi],
 };
 
@@ -273,17 +321,30 @@ test("positive control: no probe sends a cookie or authorization header, and the
 
 // --- Failing-first: the public API probes do not exist yet.
 
-test("healthy stub: both public API entries are probed exactly once and pass, as plain anonymous GETs", async (t) => {
+test("healthy stub: all five public API entries are probed exactly once and pass, as plain anonymous GETs", async (t) => {
   const { url, requests } = await stub(t);
   const result = await run(url);
   assert.equal(result.ok, true, result.output);
   assert.match(result.output, /^PASS \/api\/public\/events$/m, result.output);
+  assert.match(
+    result.output,
+    /^PASS \/api\/public\/events\/00000000000000000000000001$/m,
+    result.output,
+  );
+  assert.match(result.output, /^PASS \/api\/public\/community$/m, result.output);
+  assert.match(result.output, /^PASS \/api\/public\/join$/m, result.output);
   assert.match(result.output, /^PASS \/openapi\.json$/m, result.output);
-  assert.match(result.output, /smoke: 20 routes, 0 failed assertions/, result.output);
-  // Exactly the two additions: no other public endpoint, no
-  // session-gated route, no query string, no duplicate probe.
+  assert.match(result.output, /smoke: 23 routes, 0 failed assertions/, result.output);
+  // Exactly the five additions: no session-gated route, no query string,
+  // no duplicate probe.
   assert.deepEqual(requests.map((r) => r.path).sort(), EXPECTED_PATHS, JSON.stringify(requests));
-  for (const path of ["/api/public/events", "/openapi.json"]) {
+  for (const path of [
+    "/api/public/events",
+    "/api/public/events/00000000000000000000000001",
+    "/api/public/community",
+    "/api/public/join",
+    "/openapi.json",
+  ]) {
     const hits = requests.filter((r) => r.path === path);
     assert.equal(hits.length, 1, path);
     assert.equal(hits[0].method, "GET", path);
@@ -405,15 +466,136 @@ test("a non-200 or non-JSON discovery response fails only the openapi entry", as
   }
 });
 
+test("a broken single-event envelope served with HTTP 200 fails only that entry", async (t) => {
+  const brokenBodies = [
+    JSON.stringify({ error: { code: "not_found", message: "No published event with that key." } }),
+    "{}",
+    "[]",
+    JSON.stringify({ event_key: "00000000000000000000000001", title: "Fixture game night" }),
+    JSON.stringify({
+      event_key: "00000000000000000000000001",
+      title: "Fixture game night",
+      status: "published",
+      rsvp_open: true,
+      synced_to_discord: false,
+      going_count: "3",
+    }),
+    "event is temporarily unavailable",
+  ];
+  for (const body of brokenBodies) {
+    const { url } = await stub(
+      t,
+      serve("/api/public/events/00000000000000000000000001", (result) => {
+        result.body = body;
+      }),
+    );
+    const result = await run(url);
+    assertOnlyRouteFails(result, "/api/public/events/00000000000000000000000001");
+    assert.match(result.output, /^PASS \/api\/public\/events$/m, `${body}\n${result.output}`);
+    assert.match(result.output, /^PASS \/api\/public\/community$/m, `${body}\n${result.output}`);
+    assert.match(result.output, /^PASS \/api\/public\/join$/m, `${body}\n${result.output}`);
+    assert.match(result.output, /^PASS \/openapi\.json$/m, `${body}\n${result.output}`);
+  }
+});
+
+test("a null going_count passes (rollup unavailable reads as unknown, never 0)", async (t) => {
+  const { url } = await stub(
+    t,
+    serve("/api/public/events/00000000000000000000000001", (result) => {
+      const data = JSON.parse(result.body);
+      data.going_count = null;
+      result.body = JSON.stringify(data);
+    }),
+  );
+  const result = await run(url);
+  assert.equal(result.ok, true, result.output);
+  assert.match(
+    result.output,
+    /^PASS \/api\/public\/events\/00000000000000000000000001$/m,
+    result.output,
+  );
+});
+
+test("a broken community snapshot served with HTTP 200 fails only that entry", async (t) => {
+  const brokenBodies = [
+    JSON.stringify({ error: { code: "unavailable", message: "Event data is unavailable." } }),
+    "{}",
+    JSON.stringify({ member_count: 123, online_count: 12, ranks: {} }),
+    JSON.stringify({ member_count: "123", online_count: 12, ranks: [] }),
+    JSON.stringify({
+      member_count: 123,
+      online_count: 12,
+      ranks: [{ key: "veterans", label: "Veterans" }],
+    }),
+    "community snapshot unavailable",
+  ];
+  for (const body of brokenBodies) {
+    const { url } = await stub(
+      t,
+      serve("/api/public/community", (result) => {
+        result.body = body;
+      }),
+    );
+    const result = await run(url);
+    assertOnlyRouteFails(result, "/api/public/community");
+    assert.match(result.output, /^PASS \/api\/public\/join$/m, `${body}\n${result.output}`);
+    assert.match(result.output, /^PASS \/openapi\.json$/m, `${body}\n${result.output}`);
+  }
+});
+
+test("null community counts pass (collectors down reads as unknown, never 0)", async (t) => {
+  const { url } = await stub(
+    t,
+    serve("/api/public/community", (result) => {
+      result.body = '{"member_count":null,"online_count":null,"ranks":[]}';
+    }),
+  );
+  const result = await run(url);
+  assert.equal(result.ok, true, result.output);
+  assert.match(result.output, /^PASS \/api\/public\/community$/m, result.output);
+});
+
+test("a broken join handoff served with HTTP 200 fails only that entry", async (t) => {
+  const brokenBodies = [
+    JSON.stringify({ error: { code: "rate_limited", message: "Too many requests." } }),
+    "{}",
+    JSON.stringify({ intro: "Approve once with Discord and we will add you to the server." }),
+    JSON.stringify({
+      intro: "Approve once with Discord and we will add you to the server.",
+      invite_url: "http://discord.gg/fixture",
+    }),
+    "join handoff unavailable",
+  ];
+  for (const body of brokenBodies) {
+    const { url } = await stub(
+      t,
+      serve("/api/public/join", (result) => {
+        result.body = body;
+      }),
+    );
+    const result = await run(url);
+    assertOnlyRouteFails(result, "/api/public/join");
+    assert.match(result.output, /^PASS \/api\/public\/community$/m, `${body}\n${result.output}`);
+    assert.match(result.output, /^PASS \/openapi\.json$/m, `${body}\n${result.output}`);
+  }
+});
+
 // --- CLI surface the deploy workflows call (no new flags).
 
-test("CLI passes a healthy stub and reports both new entries, with no extra flags", async (t) => {
+test("CLI passes a healthy stub and reports all five public entries, with no extra flags", async (t) => {
   const { url } = await stub(t);
   const result = await cli([url]);
   assert.equal(result.code, 0, result.output);
   assert.match(result.output, /^PASS \/api\/public\/events$/m, result.output);
+  assert.match(
+    result.output,
+    /^PASS \/api\/public\/events\/00000000000000000000000001$/m,
+    result.output,
+  );
+  assert.match(result.output, /^PASS \/api\/public\/community$/m, result.output);
+  assert.match(result.output, /^PASS \/api\/public\/join$/m, result.output);
   assert.match(result.output, /^PASS \/openapi\.json$/m, result.output);
-  assert.match(result.output, /smoke: 20 routes, 0 failed assertions/, result.output);
+  assert.match(result.output, /smoke: 23 routes, 0 failed assertions/, result.output);
 });
 
 test("CLI exits 1 when the stub serves a broken public envelope", async (t) => {
