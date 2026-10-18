@@ -337,22 +337,22 @@
   }
 
   function clearStateTimeout(state) {
-    if (state.timeout !== null && state.timeout !== undefined) {
+    if (state.tmr !== null && state.tmr !== undefined) {
       try {
-        clearTimeout(state.timeout);
+        clearTimeout(state.tmr);
       } catch (_clearIgnored) {
         // Fall through: the handle is dropped below either way, so at most
         // one late timer fires and its state guard no-ops it.
       }
-      state.timeout = null;
+      state.tmr = null;
     }
   }
 
   function onFailure(state) {
     if (current !== state) return;
     clearStateTimeout(state);
-    if (state.attempt < MAX_ATTEMPTS) {
-      state.attempt += 1;
+    if (state.seq < MAX_ATTEMPTS) {
+      state.seq += 1;
       if (!canTimeout) {
         // Without timers there is no deferred retry: surface the signal now
         // rather than leaving a silent contradiction.
@@ -360,9 +360,9 @@
         showStale(state.key);
         return;
       }
-      state.retryTimer = setTimeout(function () {
+      state.retry = setTimeout(function () {
         if (current !== state) return;
-        state.retryTimer = null;
+        state.retry = null;
         attempt(state);
       }, RETRY_DELAY_MS);
     } else {
@@ -372,24 +372,42 @@
   }
 
   function attempt(state) {
-    var controller = canAbort ? new AbortController() : null;
-    state.controller = controller;
+    // Per-attempt ownership: capture the sequence number this read belongs
+    // to. onFailure increments state.seq exactly once for the winning
+    // settlement, so every late header/body/rejection from an older attempt
+    // sees a mismatch and returns before touching roster state, timers,
+    // retries or stale feedback. No new state fields: the existing counter
+    // doubles as the generation.
+    // Budget: state fields use short names (seq/ctrl/tmr/retry) because the
+    // minifier cannot shorten property names; see ci/bundle-budget.json.
+    var ownedAttempt = state.seq;
+    var controller = null;
+    if (canAbort) {
+      try {
+        controller = new AbortController();
+      } catch (_abortConstructIgnored) {
+        // Fall through with controller still null: the read is still issued
+        // and the deadline below still settles it, so a throwing host never
+        // suppresses the refresh.
+      }
+    }
+    state.ctrl = controller;
     if (canTimeout) {
-      state.timeout = setTimeout(function () {
-        if (current !== state) return;
+      state.tmr = setTimeout(function () {
+        if (current !== state || state.seq !== ownedAttempt) return;
         // Abort first so a real transport rejects into the failure path;
-        // harnesses without abort support still get the bounded retry via
-        // the direct failure below only when no controller exists.
+        // then settle here regardless: an abort-ignoring transport (or a
+        // throwing abort) must not hang recovery past the deadline. The
+        // later abort rejection re-enters onFailure with a stale attempt
+        // number and is fenced there. Abort stays best effort.
         if (controller) {
           try {
             controller.abort();
           } catch (_deadlineAbortIgnored) {
-            // Fall through: without abort support the owned fetch still
-            // rejects into the failure path via the controller-less branch.
+            // Fall through to the owned failure below.
           }
-        } else {
-          onFailure(state);
         }
+        onFailure(state);
       }, READ_DEADLINE_MS);
     }
     var options = {
@@ -407,7 +425,10 @@
     if (controller) options.signal = controller.signal;
     fetch("/e/" + encodeURIComponent(state.key) + pageQuery(), options).then(
       function (res) {
-        if (current !== state) return;
+        // Fence stale attempts: only the attempt that owns the current
+        // counter may settle. Late headers from a timed-out or superseded
+        // attempt return here before touching roster state or timers.
+        if (current !== state || state.seq !== ownedAttempt) return;
         // The deadline stays armed past the headers: it clears only once the
         // body is read (below) or fails (onFailure), so a stalled body still
         // retries instead of hanging silently.
@@ -429,7 +450,10 @@
         }
         text.then(
           function (html) {
-            if (current !== state) return;
+            // Late bodies from a timed-out or superseded attempt cannot
+            // swap the roster, clear the newer deadline or clear stale
+            // feedback: only the owning attempt settles.
+            if (current !== state || state.seq !== ownedAttempt) return;
             clearStateTimeout(state);
             var ok = false;
             try {
@@ -447,13 +471,17 @@
             current = null;
           },
           function () {
-            if (current !== state) return;
+            // A late rejection (including the abort rejection that follows
+            // a deadline abort) must not clear the newer deadline, add a
+            // retry or surface stale feedback: the winning settlement
+            // already advanced state.seq, so the stale number fences it.
+            if (current !== state || state.seq !== ownedAttempt) return;
             onFailure(state);
           },
         );
       },
       function () {
-        if (current !== state) return;
+        if (current !== state || state.seq !== ownedAttempt) return;
         onFailure(state);
       },
     );
@@ -467,25 +495,25 @@
     // for another event fires nothing here.
     if (pageKey && key !== pageKey) return;
     if (current) {
-      if (current.retryTimer) {
+      if (current.retry) {
         try {
-          clearTimeout(current.retryTimer);
+          clearTimeout(current.retry);
         } catch (_supersedeClearIgnored) {
           // Fall through: the superseded timer's state guard no-ops it even
           // if the clear throws.
         }
       }
       clearStateTimeout(current);
-      if (current.controller) {
+      if (current.ctrl) {
         try {
-          current.controller.abort();
+          current.ctrl.abort();
         } catch (_supersedeAbortIgnored) {
           // Fall through: the superseded read's state guard drops its late
           // completion even without abort support.
         }
       }
     }
-    var state = { key: key, attempt: 1, controller: null, timeout: null, retryTimer: null };
+    var state = { key: key, seq: 1, ctrl: null, tmr: null, retry: null };
     current = state;
     attempt(state);
   }
