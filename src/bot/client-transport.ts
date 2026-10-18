@@ -74,7 +74,10 @@ async function readCappedJson(res: Response): Promise<unknown> {
     let size = 0;
     while (true) {
       let done: boolean;
-      let value: Uint8Array;
+      // DOM lib types read() chunks as `Uint8Array | undefined` (undefined on
+      // done); workers types omit the undefined. A non-done read always
+      // carries a chunk, so the non-null assertions below hold on both.
+      let value: Uint8Array | undefined;
       try {
         ({ done, value } = await reader.read());
       } catch (error) {
@@ -82,14 +85,14 @@ async function readCappedJson(res: Response): Promise<unknown> {
         throw new BotTransportError("bot answered with a body that is not JSON");
       }
       if (done) break;
-      size += value.byteLength;
+      size += value!.byteLength;
       // Cap buffered bytes before parsing: overflow fails closed without
       // waiting for close.
       if (size > MUTATION_MAX_RESPONSE_BYTES) {
         cancelBodyWithoutWaiting(reader);
         throw new BotTransportError("bot answered with a body that is too large");
       }
-      chunks.push(value);
+      chunks.push(value!);
     }
     const bytes = new Uint8Array(size);
     let offset = 0;
