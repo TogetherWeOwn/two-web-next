@@ -547,3 +547,168 @@ describe("production deploy smoke (offline)", () => {
     }
   });
 });
+
+// Execute deploy-production.yml's post-promotion verification step with a fake
+// checker and sleep, mirroring the helpers above. The checker itself has
+// loopback-fixture coverage in smoke.test.mjs: no production requests here.
+// The step probes live traffic (no --version-override) after the gradual
+// promotion reaches 100%, so a promotion serving broken public content fails
+// the deploy-production job before the release job can tag. A failed run
+// prints the recorded pre-promote version id for the rollback-production
+// workflow; there is no automatic restore (the gradual action's rollback only
+// covers in-action failures, and an inline wrangler rollback would bypass the
+// rollback target-version secrets preflight).
+function postPromotionSmoke(
+  succeedOnAttempt: number,
+  prevVersion = "pre-promote-version-for-test",
+) {
+  const workflow = readFileSync(".github/workflows/deploy-production.yml", "utf8");
+  const block = workflow.match(
+    /      - name: Verify public routes on the promoted version\n[\s\S]*?        run: \|\n((?:          .*\n)+)/,
+  )?.[1];
+  expect(block).toBeDefined();
+  const scratch = mkdtempSync(
+    join(
+      process.env.PAPERCLIP_RUN_SCRATCH_DIR ?? process.env.PAPERCLIP_SCRATCH_DIR ?? tmpdir(),
+      "post-promote-smoke-",
+    ),
+  );
+  try {
+    writeFileSync(
+      join(scratch, "node"),
+      `#!${process.execPath}
+import { appendFileSync, readFileSync } from "node:fs";
+import { join } from "node:path";
+const attempts = join(process.env.RUNNER_TEMP, "attempts");
+appendFileSync(attempts, "x");
+if (process.argv.length !== 5 || process.argv[2] !== "bin/smoke.mjs" || process.argv[3] !== "https://togetherweown.com" || process.argv[4] !== "--allow-indexable") {
+  console.error("unexpected checker invocation");
+  process.exit(2);
+}
+const count = readFileSync(attempts, "utf8").length;
+const pass = count === Number(process.env.SMOKE_SUCCEED_ON_ATTEMPT);
+console.log(pass ? "smoke: 17 routes, 0 failed assertions" : "FAIL /join: expected HTTP 200; actual HTTP 503");
+process.exit(pass ? 0 : 1);
+`,
+      { mode: 0o700 },
+    );
+    writeFileSync(
+      join(scratch, "sleep"),
+      '#!/bin/sh\nprintf x >> "$RUNNER_TEMP/sleeps"\nexit 0\n',
+      { mode: 0o700 },
+    );
+    writeFileSync(join(scratch, "sleeps"), "");
+    writeFileSync(join(scratch, "attempts"), "");
+    const bash = spawnSync("bash", ["-c", "command -v bash"], { encoding: "utf8" });
+    expect(bash.status).toBe(0);
+    // Only our fakes are on PATH: no real network request or retry delay.
+    const result = spawnSync(
+      bash.stdout.trim(),
+      ["-e", "-c", block!.replace(/^          /gm, "")],
+      {
+        encoding: "utf8",
+        timeout: 5000,
+        env: {
+          ...process.env,
+          // This container exports BASH_ENV pointing at a profile that
+          // reassigns PATH, which would drop the fakes below and send real
+          // network requests plus real 10s sleeps. Neutralize both profile
+          // hooks so only our fakes are on PATH.
+          BASH_ENV: "/dev/null",
+          ENV: "/dev/null",
+          PATH: scratch,
+          RUNNER_TEMP: scratch,
+          SMOKE_SUCCEED_ON_ATTEMPT: String(succeedOnAttempt),
+          PREV_VERSION: prevVersion,
+        },
+      },
+    );
+    expect(result.error).toBeUndefined();
+    return {
+      status: result.status,
+      output: result.stdout + result.stderr,
+      attempts: readFileSync(join(scratch, "attempts"), "utf8").length,
+      sleeps: readFileSync(join(scratch, "sleeps"), "utf8").length,
+    };
+  } finally {
+    rmSync(scratch, { recursive: true, force: true });
+  }
+}
+
+describe("production post-promotion verification (offline)", () => {
+  it.each([1, 3, 6])("stops on successful attempt %s", (attempt) => {
+    const result = postPromotionSmoke(attempt);
+    expect(result.status, result.output).toBe(0);
+    expect(result.attempts).toBe(attempt);
+    expect(result.sleeps).toBe(attempt - 1);
+    expect(result.output).toContain(`post-promotion production smoke ok (attempt ${attempt})`);
+    expect(result.output).not.toContain("unexpected checker invocation");
+    expect(result.output).not.toContain("::error::");
+  });
+
+  it("fails closed after six failed checker runs without a final sleep", () => {
+    const result = postPromotionSmoke(0);
+    expect(result.status, result.output).toBe(1);
+    expect(result.attempts).toBe(6);
+    expect(result.sleeps).toBe(5);
+    expect(result.output).toContain("FAIL /join: expected HTTP 200; actual HTTP 503");
+    expect(result.output).toContain(
+      "::error::post-promotion public-route smoke failed; release will not tag",
+    );
+    expect(result.output).not.toContain("unexpected checker invocation");
+  });
+
+  it("names the still-live pre-promote version and the rollback workflow on failure", () => {
+    const result = postPromotionSmoke(0, "aaaabbbb-cccc-dddd-eeee-ffffffffffff");
+    expect(result.status, result.output).toBe(1);
+    // The gradual action's rollback only covers in-action failures, so the
+    // promoted version stays live at 100%: the error must hand the operator
+    // the recorded pre-promote version id and the restore path.
+    expect(result.output).toContain("aaaabbbb-cccc-dddd-eeee-ffffffffffff");
+    expect(result.output).toContain("still live at 100%");
+    expect(result.output).toContain("rollback-production");
+  });
+
+  it("wires the gradual rollback target into the step and documents the manual restore", () => {
+    const workflow = readFileSync(".github/workflows/deploy-production.yml", "utf8");
+    const stepAt = workflow.indexOf("- name: Verify public routes on the promoted version");
+    expect(stepAt).toBeGreaterThan(-1);
+    const section = workflow.slice(stepAt, workflow.indexOf("\n  release:\n"));
+    // PREV_VERSION comes from the gradual action's recorded pre-promote
+    // target, the same id its own rollback steps restore.
+    expect(section).toContain("PREV_VERSION: ${{ steps.gradual.outputs.rollback-version-id }}");
+    expect(section).toContain("rollback-production");
+    // No inline restore: the rollback workflow checks the target version's
+    // secrets before moving traffic (pinned by the negative control in
+    // ci/check-production-secrets.test.mjs), so this step only blocks the tag.
+    expect(section).not.toContain("npx wrangler rollback");
+  });
+
+  it("runs after the gradual promotion inside the deploy job, before the release job can tag", () => {
+    const workflow = readFileSync(".github/workflows/deploy-production.yml", "utf8");
+    const stepAt = workflow.indexOf("- name: Verify public routes on the promoted version");
+    expect(stepAt).toBeGreaterThan(-1);
+    expect(stepAt).toBeGreaterThan(
+      workflow.indexOf("- name: Gradual promotion 5-50-100 with automatic rollback"),
+    );
+    // Still inside the deploy-production job: the release job keeps its
+    // `needs: [preflight, deploy-production]`, so a failed verification fails
+    // this job and the tag never publishes (pinned in release-workflow.test.ts).
+    expect(stepAt).toBeLessThan(workflow.indexOf("\n  release:\n"));
+    const block = workflow.match(
+      /      - name: Verify public routes on the promoted version\n[\s\S]*?        run: \|\n((?:          .*\n)+)/,
+    )?.[1];
+    expect(block).toBeDefined();
+    // Same shared checker and retry contract as the gradual live gate and the
+    // rollback smoke, so the three post-deploy gates cannot drift.
+    expect(block).toContain("node bin/smoke.mjs https://togetherweown.com --allow-indexable");
+    expect(block).toContain("for i in 1 2 3 4 5 6");
+    expect(block).not.toContain("curl ");
+    // Live-traffic probe of the promoted apex: no version override, no
+    // staging host, no secrets, no state-mutating probes.
+    expect(block).not.toContain("--version-override");
+    expect(block).not.toContain("next.togetherweown.com");
+    expect(block).not.toMatch(/secrets\./);
+    expect(block).not.toMatch(/\/auth\/discord/);
+  });
+});
