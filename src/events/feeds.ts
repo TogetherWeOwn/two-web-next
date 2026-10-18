@@ -109,7 +109,7 @@ function vevent(e: EventRow, appUrl: string): string[] {
     `DTSTART:${icsInstant(e.startsAt)}`,
     `DTEND:${icsInstant(e.endsAt)}`,
     `SUMMARY:${text(e.title)}`,
-    `STATUS:${e.status === "cancelled" ? "CANCELLED" : "CONFIRMED"}`,
+    `STATUS:${e.status === "cancelled" ? "CANCELLED" : e.status === "draft" ? "TENTATIVE" : "CONFIRMED"}`,
   ];
   if (e.description) lines.push(`DESCRIPTION:${text(e.description)}`);
   if (e.location) lines.push(`LOCATION:${text(e.location)}`);
