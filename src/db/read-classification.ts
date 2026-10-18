@@ -83,7 +83,7 @@ export function rawMemberOwner(statement: string): string | undefined {
       "member_id",
     ],
     [
-      "select member_id, milestone, occurred_at, detail from web_v1.member_milestones where member_id = $1 order by occurred_at desc, milestone asc, detail asc nulls last limit 100",
+      "select member_id, milestone, occurred_at, detail from web_v1.member_milestones where member_id = $1 order by occurred_at desc, milestone asc, detail asc nulls last limit 101",
       "member_id",
     ],
   ]);

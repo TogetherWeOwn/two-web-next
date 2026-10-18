@@ -74,7 +74,7 @@ export function auditReadDatabase(db: Db, state: AuditFixtureState): Db {
           const memberQuery =
             "select member_id, joined_at, tenure_days, rank_key, is_current_member from web_v1.members where member_id = $1 limit 1";
           const milestoneQuery =
-            "select member_id, milestone, occurred_at, detail from web_v1.member_milestones where member_id = $1 order by occurred_at desc, milestone asc, detail asc nulls last limit 100";
+            "select member_id, milestone, occurred_at, detail from web_v1.member_milestones where member_id = $1 order by occurred_at desc, milestone asc, detail asc nulls last limit 101";
           if (
             ![memberQuery, milestoneQuery].includes(statement) ||
             parsed.params.length !== 1 ||

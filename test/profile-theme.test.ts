@@ -20,6 +20,7 @@ const stats: MemberStats = {
   joinedAt: new Date("2025-01-01T00:00:00Z"),
   tenureDays: 0,
   isCurrentMember: true,
+  milestonesTruncated: false,
   milestones: [],
 };
 const render = (overrides = {}) =>
