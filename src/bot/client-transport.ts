@@ -26,6 +26,33 @@ function endpointOf(url: string): string {
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /**
+ * Closed vocabulary for the `code` field on transport diagnostics
+ * (two-bot docs/INTERNAL_ACTIONS.md §2, per InternalActionClientTest.php:303-315).
+ * The wire `code` is untrusted provider input and must never reach a log line
+ * raw: an exact allowlist match logs the code, anything else logs `unknown`.
+ * Length/alphabet filtering is not a confidentiality proof, so no cleaned
+ * substring of the wire value is ever logged. The returned `BotFailure.code`
+ * keeps the raw wire value; only the diagnostic projection is classified.
+ */
+const DIAGNOSTIC_CODES: ReadonlySet<string> = new Set([
+  "malformed",
+  "unauthorized",
+  "stale_request",
+  "action_not_allowed",
+  "replayed",
+  "in_progress",
+  "discord_rejected",
+  "rate_limited",
+  "internal",
+  "discord_unavailable",
+  "upstream_timeout",
+]);
+
+export function diagnosticCode(code: string): string {
+  return DIAGNOSTIC_CODES.has(code) ? code : "unknown";
+}
+
+/**
  * One signed attempt. Builds the JSON once and sends those exact bytes —
  * re-serializing between signing and sending breaks the signature.
  */
@@ -93,9 +120,15 @@ export async function send(
   }
   const durationMs = Date.now() - startedAt;
   const actionName = payload["action"] ?? "(unknown)";
+  // Diagnostics never carry the provider's `request_id`/`error.code` raw:
+  // both are untrusted envelope fields that can echo outgoing material.
+  // Correlation uses the caller-supplied idempotency key (a validated UUID,
+  // never provider input); the code is projected through the closed
+  // vocabulary above with a fixed `unknown` fallback.
+  const correlation = idempotencyKey !== null ? { idempotency_key: idempotencyKey } : {};
   if (parsed.ok) {
     console.info("bot internal action succeeded", {
-      request_id: parsed.requestId,
+      ...correlation,
       action: actionName,
       status: res.status,
       replayed: parsed.replayed,
@@ -103,10 +136,10 @@ export async function send(
     });
   } else {
     console.warn("bot internal action refused", {
-      request_id: parsed.failure.requestId,
+      ...correlation,
       action: actionName,
       status: res.status,
-      code: parsed.failure.code,
+      code: diagnosticCode(parsed.failure.code),
       retryable: parsed.failure.retryable,
       duration_ms: durationMs,
     });
