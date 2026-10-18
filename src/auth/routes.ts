@@ -38,7 +38,12 @@ import {
   throttle,
   throttleGuard,
 } from "../throttle";
-import { consumeExpiredWrite, flashExpiredWrite, recoveryLanding } from "../write-recovery";
+import {
+  consumeExpiredWrite,
+  flashExpiredWrite,
+  reflashPendingExpiredWrite,
+  recoveryLanding,
+} from "../write-recovery";
 import { SESSION_COOKIE } from "../session-cookie";
 
 export { SESSION_COOKIE };
@@ -247,13 +252,16 @@ export function registerAuthRoutes(app: Hono<{ Bindings: Env }>, hooks: AuthHook
       member: join === "joined" || join === "already_member",
       moderator,
     });
-    await flashExpiredWrite(c, expiredWrite);
     // A failed auto-join keeps the recovery landing even when a destination
     // was remembered: the session is a non-member one, so a member-only gate
     // (/profile, /members/*) would answer bare 403 and swallow the failure
     // explanation plus the invite fallback. The intended destination is
-    // re-recorded for the retry instead of being lost. Successful joins keep
-    // the legacy precedence: explicit next, then intended page, then notice.
+    // re-recorded for the retry instead of being lost. The consumed
+    // expired-write notice is re-set as pending (not restored) alongside it:
+    // a pending notice is neither rendered nor consumed by the intermediate
+    // join_failed page, so the retry-to-success callback can still consume
+    // it and flash the resubmit banner. Successful joins keep the legacy
+    // precedence: explicit next, then intended page, then notice.
     if (join !== "joined" && join !== "already_member") {
       if (returnTo) {
         await setSignedCookie(c, LOGIN_INTENDED_COOKIE, returnTo, c.env.SESSION_SECRET, {
@@ -264,10 +272,12 @@ export function registerAuthRoutes(app: Hono<{ Bindings: Env }>, hooks: AuthHook
           maxAge: JOURNEY_TTL_SECONDS,
         });
       }
+      await reflashPendingExpiredWrite(c, expiredWrite);
       const failed = c.redirect("/?n=join_failed", 302);
       if (joinRetryAfter !== undefined) failed.headers.set("Retry-After", String(joinRetryAfter));
       return failed;
     }
+    await flashExpiredWrite(c, expiredWrite);
     return c.redirect(returnTo ?? `/?n=${join}`, 302);
   });
 
