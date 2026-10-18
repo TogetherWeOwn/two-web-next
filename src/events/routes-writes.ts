@@ -16,6 +16,7 @@ import { ValidationError, isKnownTimezone, parseEventForm } from "../admin/valid
 import { dispatchWriteBack } from "../admin/writeback";
 import { requestBodyLimit } from "../body-limit";
 import type { Env, Session } from "../env";
+import { safeRequestId } from "../request-log";
 import { WRITE_THROTTLE_PER_MINUTE, throttle } from "../throttle";
 import { expiredWriteBounce } from "../write-recovery";
 import { getPublicEvent, withGoingCount } from "./reads";
@@ -82,8 +83,16 @@ async function eventBody(c: Pick<Ctx, "req">): Promise<Record<string, unknown>> 
   throw new UnsupportedMediaTypeError(`Unsupported media type: ${contentType ?? ""}`);
 }
 
-const invalid = (c: Pick<Ctx, "json">, err: ValidationError) =>
-  c.json({ error: "invalid", fields: err.fields }, 422);
+const invalid = (c: Pick<Ctx, "json" | "get">, err: ValidationError) => {
+  // Additive correlation: the validated log id requestLog set on the context,
+  // never raw client header bytes. Omitted when there is no requestLog context
+  // (a bare mount has no log correlation id to carry).
+  const requestId = safeRequestId(c.get("requestId"));
+  return c.json(
+    { error: "invalid", fields: err.fields, ...(requestId ? { request_id: requestId } : {}) },
+    422,
+  );
+};
 
 export function registerWriteRoutes(app: App, readFragmentSession: SessionReader): void {
   const moderatorGate: MiddlewareHandler<{

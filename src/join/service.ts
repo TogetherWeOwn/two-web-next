@@ -163,8 +163,21 @@ export async function recordAttempt(
   },
 ): Promise<void> {
   if (!sql) return;
-  await sql`INSERT INTO join_attempts (outcome, source, request_id, discord_id)
+  try {
+    await sql`INSERT INTO join_attempts (outcome, source, request_id, discord_id)
     VALUES (${attempt.outcome}, ${attempt.source}, ${attempt.requestId}, ${attempt.discordId})`;
+  } catch (err) {
+    // Analytics must never break the join: a throwing INSERT still resolves,
+    // logging only the exception class (never the message, which can quote
+    // the live token or statement text).
+    console.warn("join attempt write failed", {
+      exception:
+        err instanceof Error
+          ? err.name
+          : ((err as { constructor?: { name?: string } })?.constructor?.name ?? "unknown"),
+      outcome: attempt.outcome,
+    });
+  }
 }
 
 export type BotAdd = (
