@@ -472,6 +472,16 @@ function selftest() {
     budget: adminBudget,
   });
   check("guest-chromed admin body fails", guestAdminBody.length > 0, guestAdminBody.join("; "));
+  const jsonEnvelope = assertJourney({
+    id: "member-rsvp",
+    samples: [{ ...memberGood, contentType: "application/json; charset=utf-8", elapsedMs: 120 }],
+    budget: memberBudget,
+  });
+  check(
+    "non-HTML content type fails",
+    jsonEnvelope.some((f) => f.includes("content-type") && f.includes("is not HTML")),
+    jsonEnvelope.join("; "),
+  );
   const canonicalAdminBody = assertJourney({
     id: "moderator-admin",
     samples: [
