@@ -757,15 +757,27 @@ test("rollback workflow reuses the production gate with no wider permissions", (
   assert.ok(!workflow.includes("secrets.CLOUDFLARE_API_TOKEN"));
   assert.ok(!workflow.includes("secrets.CLOUDFLARE_ACCOUNT_ID"));
   for (const key of Object.keys(credentials)) {
-    assert.equal((workflow.match(new RegExp(`secrets\\.PRODUCTION_${key}`, "g")) ?? []).length, 2);
+    // Credentials check, required-secrets preflight and the rollback itself:
+    // all production-only.
+    assert.equal((workflow.match(new RegExp(`secrets\\.PRODUCTION_${key}`, "g")) ?? []).length, 3);
   }
   const versionCheck = workflow.indexOf("run: node ci/production-deploy-gate.mjs --version-id");
   const credentialCheck = workflow.indexOf("run: node ci/production-deploy-gate.mjs --credentials");
+  const requiredSecrets = workflow.indexOf("run: node ci/check-production-secrets.mjs");
+  const moderator = workflow.indexOf("run: npm run check:worker-moderators-production");
+  const dryRun = workflow.indexOf("npx wrangler deploy --dry-run --env production");
   const rollback = workflow.indexOf(
     'run: npx wrangler rollback "$ROLLBACK_VERSION_ID" --name two-web-next-production',
   );
   assert.ok(rollback > 0);
-  assert.ok(versionCheck > 0 && versionCheck < credentialCheck && credentialCheck < rollback);
+  assert.ok(
+    versionCheck > 0 &&
+      versionCheck < credentialCheck &&
+      credentialCheck < requiredSecrets &&
+      requiredSecrets < moderator &&
+      moderator < dryRun &&
+      dryRun < rollback,
+  );
   // The input never interpolates into a run: block; it travels inputs -> env.
   for (const line of workflow.split("\n")) {
     if (line.trimStart().startsWith("run:") && line.includes("inputs.version_id")) {

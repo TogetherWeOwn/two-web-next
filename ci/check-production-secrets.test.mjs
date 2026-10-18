@@ -192,6 +192,42 @@ test("required-secrets preflight runs before the moderator preflight, version up
   );
 });
 
+test("required-secrets preflight runs before wrangler rollback in rollback-production.yml", () => {
+  const workflow = readFileSync(
+    new URL("../.github/workflows/rollback-production.yml", import.meta.url),
+    "utf8",
+  );
+  const credentials = workflow.indexOf("run: node ci/production-deploy-gate.mjs --credentials");
+  const secrets = workflow.indexOf("run: node ci/check-production-secrets.mjs");
+  const moderator = workflow.indexOf("run: npm run check:worker-moderators-production");
+  const dryRun = workflow.indexOf("npx wrangler deploy --dry-run --env production");
+  const rollback = workflow.indexOf("npx wrangler rollback");
+  assert.ok(
+    credentials > 0 && secrets > 0 && moderator > 0 && dryRun > 0 && rollback > 0,
+    "expected credentials, secrets, moderator, dry-run build and wrangler rollback in rollback-production.yml",
+  );
+  assert.ok(
+    credentials < secrets &&
+      secrets < moderator &&
+      moderator < dryRun &&
+      dryRun < rollback,
+    "order must be credentials check, required-secrets preflight, moderator preflight, dry-run build, rollback",
+  );
+});
+
+test("deploy-production.yml carries no wrangler rollback mutation (negative control)", () => {
+  const workflow = readFileSync(
+    new URL("../.github/workflows/deploy-production.yml", import.meta.url),
+    "utf8",
+  );
+  const secrets = workflow.indexOf("run: node ci/check-production-secrets.mjs");
+  assert.ok(secrets > 0, "expected the required-secrets step in deploy-production.yml");
+  assert.ok(
+    !workflow.includes("npx wrangler rollback"),
+    "deploy must not contain a wrangler rollback mutation",
+  );
+});
+
 test("required-secrets preflight uses production-only credentials", () => {
   const workflow = readFileSync(
     new URL("../.github/workflows/deploy-production.yml", import.meta.url),
