@@ -298,7 +298,12 @@ describe("Discord auth deadlines", () => {
   });
 
   it("preserves healthy payloads, request admission and status-based failures", async () => {
-    const user = { id: "fixture-user", username: "fixture-name", global_name: null, avatar: null };
+    const user = {
+      id: "100000000000000042",
+      username: "fixture-name",
+      global_name: null,
+      avatar: null,
+    };
     const transport = vi
       .fn()
       .mockResolvedValueOnce(Response.json({ access_token: "fixture-access" }))
@@ -486,7 +491,12 @@ describe("deadline recovery at the existing journey boundaries", () => {
       vi.spyOn(console, "error").mockImplementation(() => {}),
       vi.spyOn(console, "warn").mockImplementation(() => {}),
     ];
-    const user = { id: "fixture-user", username: "fixture-name", global_name: null, avatar: null };
+    const user = {
+      id: "100000000000000042",
+      username: "fixture-name",
+      global_name: null,
+      avatar: null,
+    };
     const { response, cancel } = stalledBody(step === "join" ? 201 : 200);
     let started!: () => void;
     const reachedStall = new Promise<void>((resolve) => {

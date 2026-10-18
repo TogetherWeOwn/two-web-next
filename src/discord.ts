@@ -14,15 +14,23 @@ export type DiscordUser = {
 };
 
 // Documented bounds for provider identity values carried into session and
-// roster rows. Discord usernames and display names stay well under 128
-// characters and avatar hashes under 512 in practice; anything longer is a
-// hostile or broken provider payload, not a member. Oversized values are
-// rejected (never truncated) in fetchUser before any session or roster
+// roster rows. Discord user ids are decimal snowflakes (positive ASCII digits,
+// 1-20 characters, no leading zero); usernames and display names stay well
+// under 128 characters and avatar hashes under 512 in practice; anything
+// longer or non-decimal is a hostile or broken provider payload, not a
+// member. Oversized or non-snowflake values are rejected (never truncated,
+// coerced, trimmed or rewritten) in fetchUser before any session or roster
 // write, so both callbacks keep their existing generic failure outcome.
-// Only `.length` is inspected — values are never logged, echoed, or stored.
+// Only the value shape is inspected — values are never logged, echoed, or stored.
 export const DISCORD_USERNAME_MAX_LENGTH = 128;
 export const DISCORD_DISPLAY_NAME_MAX_LENGTH = 128;
 export const DISCORD_AVATAR_MAX_LENGTH = 512;
+
+// Positive ASCII-decimal snowflake admission: 1-20 digits, first digit 1-9.
+// No multiline flag; the raw provider value is tested as-is (no coerce,
+// trim, truncate or substitute), so hostile ids fail into the existing
+// provider_reject path before any guild/member/role egress or write.
+const DISCORD_USER_ID_RE = /^[1-9][0-9]{0,19}$/;
 
 export function authorizeUrl(clientId: string, redirectUri: string, state: string): string {
   const q = new URLSearchParams({
@@ -255,6 +263,13 @@ export async function fetchUser(accessToken: string): Promise<DiscordUser> {
       user.global_name.length > DISCORD_DISPLAY_NAME_MAX_LENGTH) ||
     (typeof user.avatar === "string" && user.avatar.length > DISCORD_AVATAR_MAX_LENGTH)
   ) {
+    throw new DiscordError("fetch_user", res.status, "provider_reject");
+  }
+  // Bound the provider user id before any session or roster write. Rejection
+  // keeps the callbacks' existing bounded provider_reject path: no session
+  // cookie, no roster statement, no further Discord calls, and the fixed
+  // error carries no provider bytes.
+  if (!DISCORD_USER_ID_RE.test(user.id)) {
     throw new DiscordError("fetch_user", res.status, "provider_reject");
   }
   return user as DiscordUser;
