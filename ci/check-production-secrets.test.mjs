@@ -200,7 +200,7 @@ test("non-secret bindings are ignored and value-like fields never surface", () =
   );
 });
 
-function cliWithStubbedWrangler(stubStdout, { exitCode = 0 } = {}) {
+function cliWithStubbedWrangler(stubStdout, { exitCode = 0, stubStderr = "" } = {}) {
   const scratch = mkdtempSync(
     join(
       process.env.PAPERCLIP_RUN_SCRATCH_DIR ?? process.env.PAPERCLIP_SCRATCH_DIR ?? tmpdir(),
@@ -211,13 +211,14 @@ function cliWithStubbedWrangler(stubStdout, { exitCode = 0 } = {}) {
     writeFileSync(
       join(scratch, "npx"),
       `#!${process.execPath}
-import { writeFileSync } from "node:fs";
+import { writeSync } from "node:fs";
 const expected = ["wrangler", "secret", "list", "--env", "production", "--format", "json"];
 if (JSON.stringify(process.argv.slice(2)) !== JSON.stringify(expected)) {
   console.error("unexpected wrangler invocation: " + process.argv.slice(2).join(" "));
   process.exit(2);
 }
-process.stdout.write(process.env.STUB_STDOUT);
+if (process.env.STUB_STDERR) writeSync(2, process.env.STUB_STDERR);
+writeSync(1, process.env.STUB_STDOUT);
 process.exit(Number(process.env.STUB_EXIT));
 `,
       { mode: 0o700 },
@@ -229,6 +230,7 @@ process.exit(Number(process.env.STUB_EXIT));
         ...process.env,
         PATH: `${scratch}:${process.env.PATH}`,
         STUB_STDOUT: stubStdout,
+        STUB_STDERR: stubStderr,
         STUB_EXIT: String(exitCode),
       },
     });
@@ -349,6 +351,74 @@ test("rollback-version CLI fails closed on a missing target secret and on bad in
   assert.equal(badId.status, 1);
   assert.match(badId.stderr, /ROLLBACK_VERSION_ID must be a Worker Version ID/);
   assert.equal(badId.stdout, "");
+});
+
+// Child-stream boundary: the fake wrangler's stdout/stderr are untrusted
+// input. Only validated required names and locally constructed diagnostics
+// may reach the preflight's own stdout/stderr, on every outcome. Canaries
+// are synthetic strings, never real values.
+function assertNoChildCanary(result, ...canaries) {
+  for (const canary of canaries) {
+    assert.ok(
+      !result.stdout.includes(canary),
+      `parent stdout must not forward child output ${canary}`,
+    );
+    assert.ok(
+      !result.stderr.includes(canary),
+      `parent stderr must not forward child output ${canary}`,
+    );
+  }
+}
+
+test("CLI keeps child stderr out of both parent streams on success", () => {
+  const canary = "synthetic-child-stderr-canary-success";
+  const result = cliWithStubbedWrangler(allPresent, { stubStderr: `${canary}\n` });
+  assert.equal(result.status, 0);
+  for (const name of REQUIRED_PRODUCTION_SECRETS) {
+    assert.ok(result.stdout.includes(name), `stdout must list ${name}`);
+  }
+  assert.ok(!result.stdout.includes('"name"'), "stdout must not forward the raw child JSON");
+  assert.equal(result.stderr, "");
+  assertNoChildCanary(result, canary);
+});
+
+test("CLI keeps child stdout and stderr out of both parent streams on nonzero exit", () => {
+  const stdoutCanary = "synthetic-child-stdout-canary-nonzero";
+  const stderrCanary = "synthetic-child-stderr-canary-nonzero";
+  const result = cliWithStubbedWrangler(`${stdoutCanary}\n`, {
+    exitCode: 42,
+    stubStderr: `${stderrCanary}\n`,
+  });
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /Could not verify production Worker secrets/);
+  assert.equal(result.stdout, "");
+  assertNoChildCanary(result, stdoutCanary, stderrCanary);
+});
+
+test("CLI keeps child stdout and stderr out of both parent streams on malformed JSON", () => {
+  const stdoutCanary = "synthetic-child-stdout-canary-malformed";
+  const stderrCanary = "synthetic-child-stderr-canary-malformed";
+  const result = cliWithStubbedWrangler(`not json ${stdoutCanary}`, {
+    stubStderr: `${stderrCanary}\n`,
+  });
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /Could not verify production Worker secrets/);
+  assert.equal(result.stdout, "");
+  assertNoChildCanary(result, stdoutCanary, stderrCanary);
+});
+
+test("CLI keeps child stderr out of both parent streams when a required secret is missing", () => {
+  const canary = "synthetic-child-stderr-canary-missing";
+  const result = cliWithStubbedWrangler(JSON.stringify([{ name: "SESSION_SECRET" }]), {
+    stubStderr: `${canary}\n`,
+  });
+  assert.equal(result.status, 1);
+  assert.match(
+    result.stderr,
+    /Missing production Worker secret.*DISCORD_CLIENT_SECRET.*DISCORD_BOT_TOKEN/,
+  );
+  assert.equal(result.stdout, "");
+  assertNoChildCanary(result, canary);
 });
 
 test("required-secrets preflight runs before the moderator preflight, version upload and gradual promotion", () => {
@@ -835,4 +905,361 @@ test("target-selected environment requires every mapping to be guarded on inputs
   // An expression that cannot be shown to select production is rejected.
   const opaque = guarded.replace("inputs.target || 'staging'", "vars.ENVIRONMENT_NAME");
   assert.equal(productionSecretEnvironmentViolations(opaque, "fixture.yml").length, 1);
+});
+
+// ---------------------------------------------------------------------------
+// Production secret set pins to Env.
+//
+// REQUIRED_PRODUCTION_SECRETS must equal the required (non-optional) secret
+// fields of `Env` in src/env.ts. "Secret" here means the name carries
+// SECRET or TOKEN: today that is DISCORD_CLIENT_SECRET, DISCORD_BOT_TOKEN and
+// SESSION_SECRET. Public required config (APP_URL, DISCORD_CLIENT_ID,
+// DISCORD_GUILD_ID, DISCORD_INVITE_URL) never matches and stays out.
+// Optional SECRET/TOKEN fields (QA_AUTH_TOKEN, SOURCE_EVIDENCE_VERIFIER_TOKEN,
+// BOT_SHARED_SECRET via AgentEventsEnv) stay out until made required.
+// BOT_ENDPOINT_URL, BOT_KEY_ID and BOT_SHARED_SECRET are read from Env by the
+// deployed web/jobs paths, but they stay optional there and every reader
+// fails closed when they are missing — so they stay out of the required set,
+// covered by the same-change note in check-production-secrets.mjs pinned
+// below. If any of them is ever made required, it joins the gate set in the
+// same change.
+// ---------------------------------------------------------------------------
+
+const ENV_SECRET_NAME = /(SECRET|TOKEN)/;
+
+function extractTypeBlockRange(source, typeName) {
+  const decl = new RegExp(`\\btype\\s+${typeName}\\b`).exec(source);
+  assert.ok(decl, `expected type ${typeName}`);
+  const start = source.indexOf("{", decl.index);
+  assert.ok(start >= 0, `expected body for type ${typeName}`);
+  let depth = 0;
+  let single = false;
+  let double = false;
+  let backtick = false;
+  let lineComment = false;
+  let blockComment = false;
+  let escaped = false;
+  for (let i = start; i < source.length; i++) {
+    const c = source[i];
+    const next = source[i + 1];
+    if (lineComment) {
+      if (c === "\n") lineComment = false;
+      continue;
+    }
+    if (blockComment) {
+      if (c === "*" && next === "/") {
+        blockComment = false;
+        i++;
+      }
+      continue;
+    }
+    if (single) {
+      if (escaped) escaped = false;
+      else if (c === "\\") escaped = true;
+      else if (c === "'") single = false;
+      continue;
+    }
+    if (double) {
+      if (escaped) escaped = false;
+      else if (c === "\\") escaped = true;
+      else if (c === '"') double = false;
+      continue;
+    }
+    if (backtick) {
+      if (escaped) escaped = false;
+      else if (c === "\\") escaped = true;
+      else if (c === "`") backtick = false;
+      continue;
+    }
+    if (c === "/" && next === "/") {
+      lineComment = true;
+      i++;
+      continue;
+    }
+    if (c === "/" && next === "*") {
+      blockComment = true;
+      i++;
+      continue;
+    }
+    if (c === "'") {
+      single = true;
+      continue;
+    }
+    if (c === '"') {
+      double = true;
+      continue;
+    }
+    if (c === "`") {
+      backtick = true;
+      continue;
+    }
+    if (c === "{") depth++;
+    if (c === "}") {
+      depth--;
+      if (depth === 0) return { block: source.slice(start, i + 1), end: i };
+    }
+  }
+  throw new Error(`Unterminated ${typeName} body`);
+}
+
+function extractTypeBlock(source, typeName) {
+  return extractTypeBlockRange(source, typeName).block;
+}
+
+// Env must stay `AgentEventsEnv & {...};` on one line, and AgentEventsEnv
+// must stay `= {...};`. A new intersection half before the body (or Omit<...>)
+// or after it (`} & PayEnv`) would otherwise pass silently while Env requires
+// names the gate never checks, which is exactly the drift this pin exists to
+// catch.
+function assertClosedWithSemicolon(source, typeName) {
+  const { end } = extractTypeBlockRange(source, typeName);
+  const tail = stripCommentsAndStrings(source.slice(end + 1)).trimStart();
+  assert.ok(
+    tail.startsWith(";"),
+    `${typeName} must end with \`};\`: a type joined after the body needs parser + pin support`,
+  );
+}
+
+function assertEnvIntersectionShape(source) {
+  const agentDecl = /\btype\s+AgentEventsEnv\s*=\s*([^{\n]*)\{/.exec(source);
+  assert.ok(agentDecl, "expected an AgentEventsEnv header");
+  assert.equal(
+    agentDecl[1].trim(),
+    "",
+    "AgentEventsEnv must stay `= {...}`: a new intersection half needs parser + pin support",
+  );
+  const decl = /\btype\s+Env\s*=\s*([^\n{]*)\{/.exec(source);
+  assert.ok(decl, "expected an Env intersection header");
+  assert.equal(
+    decl[1].trim(),
+    "AgentEventsEnv &",
+    "Env must stay `AgentEventsEnv & {...}`: a new intersection half needs parser + pin support",
+  );
+  assertClosedWithSemicolon(source, "AgentEventsEnv");
+  assertClosedWithSemicolon(source, "Env");
+}
+
+// Blank comments and string literals (braces included) so field matching
+// never reads comment text like `// OLD_TOKEN: removed` or a `"..."` value.
+function stripCommentsAndStrings(text) {
+  let out = "";
+  let i = 0;
+  const n = text.length;
+  let quote = null;
+  let lineComment = false;
+  let blockComment = false;
+  let escaped = false;
+  while (i < n) {
+    const c = text[i];
+    const next = text[i + 1];
+    if (lineComment) {
+      if (c === "\n") {
+        lineComment = false;
+        out += c;
+      } else {
+        out += " ";
+      }
+      i++;
+      continue;
+    }
+    if (blockComment) {
+      if (c === "*" && next === "/") {
+        blockComment = false;
+        out += "  ";
+        i += 2;
+      } else {
+        out += c === "\n" ? "\n" : " ";
+        i++;
+      }
+      continue;
+    }
+    if (quote) {
+      out += c === "\n" ? "\n" : " ";
+      if (escaped) escaped = false;
+      else if (c === "\\") escaped = true;
+      else if (c === quote) quote = null;
+      i++;
+      continue;
+    }
+    if (c === "/" && next === "/") {
+      lineComment = true;
+      out += "  ";
+      i += 2;
+      continue;
+    }
+    if (c === "/" && next === "*") {
+      blockComment = true;
+      out += "  ";
+      i += 2;
+      continue;
+    }
+    if (c === "'" || c === '"' || c === "`") {
+      quote = c;
+      out += " ";
+      i++;
+      continue;
+    }
+    out += c;
+    i++;
+  }
+  return out;
+}
+
+// Fields at the top level of a stripped type body only (brace depth 1), so a
+// required key inside a nested object literal never counts as an Env secret.
+function topLevelFields(stripped) {
+  const depthAt = new Array(stripped.length);
+  let depth = 0;
+  for (let i = 0; i < stripped.length; i++) {
+    depthAt[i] = depth;
+    if (stripped[i] === "{") depth++;
+    else if (stripped[i] === "}") depth--;
+  }
+  const fields = [];
+  const field = /\b([A-Z][A-Z0-9_]*)\s*(\?)?\s*:/g;
+  let match;
+  while ((match = field.exec(stripped)) !== null) {
+    if (depthAt[match.index] !== 1) continue;
+    fields.push({ name: match[1], optional: match[2] === "?" });
+  }
+  return fields;
+}
+
+export function requiredEnvSecretNames(source) {
+  // Env is `AgentEventsEnv & {...}`: both halves contribute required keys.
+  // JobsEnv is deliberately out of scope: it belongs to the jobs Worker.
+  assertEnvIntersectionShape(source);
+  const blocks = [extractTypeBlock(source, "AgentEventsEnv"), extractTypeBlock(source, "Env")];
+  const names = new Set();
+  for (const block of blocks) {
+    for (const { name, optional } of topLevelFields(stripCommentsAndStrings(block))) {
+      if (optional) continue;
+      if (!ENV_SECRET_NAME.test(name)) continue;
+      names.add(name);
+    }
+  }
+  return [...names].sort();
+}
+
+const FIXTURE_ENV_BASE = `export type AgentEventsEnv = {
+  BOT_ENDPOINT_URL?: string;
+  BOT_KEY_ID?: string;
+  BOT_SHARED_SECRET?: string;
+};
+export type Env = AgentEventsEnv & {
+  APP_URL: string;
+  DISCORD_CLIENT_SECRET: string;
+  DISCORD_BOT_TOKEN: string;
+  SESSION_SECRET: string;
+};
+`;
+
+test("REQUIRED_PRODUCTION_SECRETS equals the required secret fields of Env", () => {
+  const source = readFileSync(new URL("../src/env.ts", import.meta.url), "utf8");
+  assert.deepEqual([...REQUIRED_PRODUCTION_SECRETS].sort(), requiredEnvSecretNames(source));
+});
+
+test("fixture Env round-trip: new required secret diverges until the gate set is updated", () => {
+  assert.deepEqual(requiredEnvSecretNames(FIXTURE_ENV_BASE), [
+    "DISCORD_BOT_TOKEN",
+    "DISCORD_CLIENT_SECRET",
+    "SESSION_SECRET",
+  ]);
+  const withDummy = FIXTURE_ENV_BASE.replace(
+    "SESSION_SECRET: string;",
+    "SESSION_SECRET: string;\n  DUMMY_REQUIRED_SECRET: string;",
+  );
+  const extracted = requiredEnvSecretNames(withDummy);
+  assert.ok(extracted.includes("DUMMY_REQUIRED_SECRET"), "extraction must see the dummy secret");
+  assert.notDeepEqual(
+    [...REQUIRED_PRODUCTION_SECRETS].sort(),
+    extracted,
+    "a new required Env secret must fail the pin",
+  );
+  assert.deepEqual(
+    [...REQUIRED_PRODUCTION_SECRETS, "DUMMY_REQUIRED_SECRET"].sort(),
+    extracted,
+    "updating the gate set to include it must pass",
+  );
+});
+
+test("fixture Env ignores comments, strings and nested type keys", () => {
+  const withNoise = FIXTURE_ENV_BASE.replace(
+    "SESSION_SECRET: string;",
+    `SESSION_SECRET: string;
+  // OLD_TOKEN: removed, must never count as a required secret
+  /* MULTI_SECRET: still a comment, must never count */
+  NESTED?: { FOO_TOKEN: string; inner: { BAR_SECRET: string } };
+  NESTED_REQUIRED: { BAZ_TOKEN: string };
+  NOTE: "see QUX_TOKEN in the manual";`,
+  );
+  assert.deepEqual(
+    requiredEnvSecretNames(withNoise),
+    requiredEnvSecretNames(FIXTURE_ENV_BASE),
+    "comments, string literals and nested keys must not change the pin",
+  );
+});
+
+test("fixture Env intersection shape change fails closed", () => {
+  const withHalf = FIXTURE_ENV_BASE.replace(
+    "export type Env = AgentEventsEnv & {",
+    "export type Env = AgentEventsEnv & PayEnv & {",
+  );
+  assert.throws(
+    () => requiredEnvSecretNames(withHalf),
+    /AgentEventsEnv &/,
+    "a new Env intersection half must fail the pin until the parser supports it",
+  );
+  const withSuffix =
+    FIXTURE_ENV_BASE.replace(
+      "  SESSION_SECRET: string;\n};",
+      "  SESSION_SECRET: string;\n} & PayEnv;",
+    ) + "export type PayEnv = { PAY_SECRET: string };\n";
+  assert.throws(
+    () => requiredEnvSecretNames(withSuffix),
+    /needs parser \+ pin support/,
+    "a type joined after the Env body must fail the pin until the parser supports it",
+  );
+  const withAgentHalf = FIXTURE_ENV_BASE.replace(
+    "export type AgentEventsEnv = {",
+    "export type AgentEventsEnv = BaseEnv & {",
+  );
+  assert.throws(
+    () => requiredEnvSecretNames(withAgentHalf),
+    /= \{\.\.\.\}/,
+    "a new AgentEventsEnv intersection half must fail the pin until the parser supports it",
+  );
+});
+
+test("fixture Env keeps optional secrets and public config out of the pin", () => {
+  const withOptional = FIXTURE_ENV_BASE.replace(
+    "SESSION_SECRET: string;",
+    "SESSION_SECRET: string;\n  DUMMY_OPTIONAL_SECRET?: string;",
+  );
+  assert.deepEqual(
+    requiredEnvSecretNames(withOptional),
+    requiredEnvSecretNames(FIXTURE_ENV_BASE),
+    "an optional SECRET field must not change the pin",
+  );
+  const extracted = requiredEnvSecretNames(FIXTURE_ENV_BASE);
+  assert.ok(!extracted.includes("APP_URL"), "public required config stays out");
+  for (const name of ["BOT_ENDPOINT_URL", "BOT_KEY_ID", "BOT_SHARED_SECRET"]) {
+    assert.ok(!extracted.includes(name), `${name} stays out while optional`);
+    assert.ok(!REQUIRED_PRODUCTION_SECRETS.includes(name), `${name} stays out of the gate set`);
+  }
+  const real = readFileSync(new URL("../src/env.ts", import.meta.url), "utf8");
+  for (const name of ["BOT_ENDPOINT_URL", "BOT_SHARED_SECRET", "BOT_KEY_ID"]) {
+    assert.match(real, new RegExp(`${name}\\s*\\?:`), `${name} must stay optional in Env`);
+  }
+});
+
+test("gate keeps the BOT_* same-change note", () => {
+  const gate = readFileSync(new URL("./check-production-secrets.mjs", import.meta.url), "utf8");
+  assert.ok(gate.includes("BOT_ENDPOINT_URL"), "gate must still name BOT_ENDPOINT_URL");
+  assert.ok(gate.includes("BOT_SHARED_SECRET"), "gate must still name BOT_SHARED_SECRET");
+  assert.ok(gate.includes("BOT_KEY_ID"), "gate must still name BOT_KEY_ID");
+  assert.ok(
+    gate.includes("If any of them is ever made required"),
+    "gate must keep the same-change note",
+  );
 });

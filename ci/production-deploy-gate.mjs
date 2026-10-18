@@ -182,6 +182,21 @@ export function assertProductionTarget(configText) {
       "Production Hyperdrive is still a placeholder; provision and review the cutover configuration first",
     );
   }
+  const botDatabase = Array.isArray(bindings)
+    ? bindings.filter((entry) => entry?.binding === "BOT_DB")
+    : [];
+  if (
+    botDatabase.length !== 1 ||
+    typeof botDatabase[0].id !== "string" ||
+    !/^[a-fA-F0-9]{32}$/.test(botDatabase[0].id)
+  ) {
+    throw new Error("Production Hyperdrive BOT_DB binding must have one valid id");
+  }
+  if (botDatabase[0].id === "00000000000000000000000000000000") {
+    throw new Error(
+      "Production Hyperdrive BOT_DB is still a placeholder; provision and review the cutover configuration first",
+    );
+  }
 }
 
 // The checkout must be the promoted SHA itself: deploy-production.yml resolves

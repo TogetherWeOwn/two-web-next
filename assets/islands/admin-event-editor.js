@@ -23,6 +23,8 @@
     if (lockTimer !== null) window.clearTimeout(lockTimer);
     lockTimer = null;
     locked = false;
+    // The Save departure never happened, so its one-shot exemption lapses too.
+    saving = false;
     editor.removeAttribute("aria-busy");
   }
   editor.addEventListener("submit", function (event) {

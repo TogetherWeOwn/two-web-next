@@ -157,9 +157,13 @@
     // the dirty check agree with the server. Absent (an older page) leaves it.
     var optOut = optOutField();
     if (optOut && typeof body.leaderboard_opt_out === "boolean") {
-      var keptSwitch = editing && optOut === document.activeElement;
+      // A newer choice made while the save was pending survives its
+      // acknowledgement even after focus moves away: advance only the
+      // saved/reset baseline. A checkbox still holding the submitted value
+      // settles cleanly.
+      var newerSwitch = optOut.checked !== body.leaderboard_opt_out;
       optOut.defaultChecked = body.leaderboard_opt_out;
-      if (!keptSwitch) optOut.checked = body.leaderboard_opt_out;
+      if (!newerSwitch) optOut.checked = body.leaderboard_opt_out;
     }
     Object.keys(values).forEach(function (key) {
       var field = form.elements[key];

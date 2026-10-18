@@ -18,6 +18,7 @@ import {
   type PublicDataErrorCode,
 } from "../public-data/contracts";
 import {
+  EventByteCapExceededError,
   fitByteBudget,
   serializeCommunity,
   serializeEvent,
@@ -117,10 +118,21 @@ export function createPublicMcpServer(deps: PublicMcpDeps): McpServer {
         per_page,
       );
       // The same byte budget as REST: trim descriptions, never drop rows.
-      const body = fitByteBudget(payload.data, API_PUBLIC_BOUNDS.maxBodyBytes, (trimmed) => ({
-        ...payload,
-        data: trimmed,
-      }));
+      // Irreducible metadata refuses with the unavailable tool error inside
+      // the unchanged JSON-RPC result envelope — never a throw (the SDK
+      // echoes err.message) and never an oversized success.
+      let body: string;
+      try {
+        body = fitByteBudget(payload.data, API_PUBLIC_BOUNDS.maxBodyBytes, (trimmed) => ({
+          ...payload,
+          data: trimmed,
+        }));
+      } catch (err) {
+        if (err instanceof EventByteCapExceededError) return toolError("unavailable", UNAVAILABLE);
+        return internalError(err);
+      }
+      if (new TextEncoder().encode(body).length > API_PUBLIC_BOUNDS.maxBodyBytes)
+        return toolError("unavailable", UNAVAILABLE);
       return toolJson(JSON.parse(body) as Record<string, unknown>);
     },
   );
@@ -146,11 +158,15 @@ export function createPublicMcpServer(deps: PublicMcpDeps): McpServer {
         return internalError(err);
       }
       if (!row) return toolError("not_found", "No published event with that key.");
-      const body = fitByteBudget(
-        [serializeEvent(row)],
-        API_PUBLIC_BOUNDS.maxBodyBytes,
-        (t) => t[0],
-      );
+      let body: string;
+      try {
+        body = fitByteBudget([serializeEvent(row)], API_PUBLIC_BOUNDS.maxBodyBytes, (t) => t[0]);
+      } catch (err) {
+        if (err instanceof EventByteCapExceededError) return toolError("unavailable", UNAVAILABLE);
+        return internalError(err);
+      }
+      if (new TextEncoder().encode(body).length > API_PUBLIC_BOUNDS.maxBodyBytes)
+        return toolError("unavailable", UNAVAILABLE);
       return toolJson(JSON.parse(body) as Record<string, unknown>);
     },
   );

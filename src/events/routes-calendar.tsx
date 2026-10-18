@@ -156,23 +156,27 @@ export function registerCalendarRoutes(
     );
     // Settle the shared entry only from an anonymous 200: the header guard
     // above already forced private on session/search/flash, so a `public`
-    // prefix re-checks that no viewer state slipped into shared bytes. The
-    // generation check drops a render overtaken by a retire mid-flight; the
+    // prefix re-checks that no viewer state slipped into shared bytes. Buffer
+    // the candidate before the final generation comparison so a retire that
+    // lands while clone().text() is in flight drops the stale bytes; the
     // compare-and-write is synchronous, so it is atomic within the isolate.
-    if (anonSource && anonKey && response.status === 200 && anonCacheGeneration() === anonGen) {
+    if (anonSource && anonKey && response.status === 200) {
       const cacheControl = response.headers.get("cache-control");
       if (cacheControl?.startsWith("public")) {
-        writeAnonCache(
-          anonKey,
-          anonSource,
-          {
-            status: 200,
-            cacheControl,
-            vary: response.headers.get("vary"),
-            body: await response.clone().text(),
-          },
-          ANON_EVENTS_TTL_MS,
-        );
+        const body = await response.clone().text();
+        if (anonCacheGeneration() === anonGen) {
+          writeAnonCache(
+            anonKey,
+            anonSource,
+            {
+              status: 200,
+              cacheControl,
+              vary: response.headers.get("vary"),
+              body,
+            },
+            ANON_EVENTS_TTL_MS,
+          );
+        }
       }
     }
     return response;
@@ -223,24 +227,24 @@ export function registerCalendarRoutes(
         appUrl={c.env.APP_URL}
       />,
     );
-    if (
-      pastSource &&
-      pastKey &&
-      pastResponse.status === 200 &&
-      rows.length > 0 &&
-      anonCacheGeneration() === pastGen
-    ) {
-      writeAnonCache(
-        pastKey,
-        pastSource,
-        {
-          status: 200,
-          cacheControl: pastResponse.headers.get("cache-control") ?? "public, max-age=300",
-          vary: pastResponse.headers.get("vary"),
-          body: await pastResponse.clone().text(),
-        },
-        ANON_PAST_TTL_MS,
-      );
+    // Buffer before the final generation comparison (see /events above): a
+    // retire that lands while clone().text() is in flight must stop stale
+    // archive bytes from settling; the compare-and-write stays synchronous.
+    if (pastSource && pastKey && pastResponse.status === 200 && rows.length > 0) {
+      const body = await pastResponse.clone().text();
+      if (anonCacheGeneration() === pastGen) {
+        writeAnonCache(
+          pastKey,
+          pastSource,
+          {
+            status: 200,
+            cacheControl: pastResponse.headers.get("cache-control") ?? "public, max-age=300",
+            vary: pastResponse.headers.get("vary"),
+            body,
+          },
+          ANON_PAST_TTL_MS,
+        );
+      }
     }
     return pastResponse;
   });

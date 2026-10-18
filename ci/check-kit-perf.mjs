@@ -44,11 +44,17 @@ function checkCeilingShape(entry, ceiling) {
 export function discoverKitAssets(clientDir) {
   const js = [];
   const css = [];
+  const failures = [];
   const walk = (dir) => {
     let entries;
     try {
       entries = readdirSync(dir, { withFileTypes: true });
-    } catch {
+    } catch (error) {
+      failures.push({
+        path: dir,
+        code: error?.code ?? "UNKNOWN",
+        message: error?.message ?? String(error),
+      });
       return;
     }
     for (const entry of entries) {
@@ -61,7 +67,16 @@ export function discoverKitAssets(clientDir) {
   walk(clientDir);
   js.sort();
   css.sort();
-  return { js, css };
+  return { js, css, incomplete: failures.length > 0, failures };
+}
+
+function formatEnumerationDetail(failures) {
+  const shown = failures.slice(0, 3).map((failure) => {
+    const path = failure.path.length > 260 ? `${failure.path.slice(0, 260)}…` : failure.path;
+    return `${path} (${failure.code})`;
+  });
+  const extra = failures.length > shown.length ? ` (+${failures.length - shown.length} more)` : "";
+  return shown.length ? `: ${shown.join("; ")}${extra}` : "";
 }
 
 function checkGroupShape(group) {
@@ -148,12 +163,33 @@ export function run(root = repoRoot, output = console) {
       );
       return 2;
     }
-    const serverFiles = discoverKitAssets(serverDir).js;
+    const serverDiscovery = discoverKitAssets(serverDir);
+    if (serverDiscovery.incomplete) {
+      output.error(
+        `kit perf budget: server js: cannot enforce: incomplete enumeration${formatEnumerationDetail(serverDiscovery.failures)}`,
+      );
+      return 2;
+    }
+    const serverFiles = serverDiscovery.js;
+    if (serverFiles.length === 0) {
+      output.error(
+        `kit perf budget: server js: cannot enforce: no server JS files under web/.svelte-kit/output/server (run npm run build --prefix web)`,
+      );
+      return 2;
+    }
     const group = budget.server.js;
     let raw = 0;
     let gzip = 0;
     for (const file of serverFiles) {
-      const bytes = readFileSync(file);
+      let bytes;
+      try {
+        bytes = readFileSync(file);
+      } catch (error) {
+        output.error(
+          `kit perf budget: server js: cannot enforce: unreadable file ${file}: ${error.message}`,
+        );
+        return 2;
+      }
       raw += bytes.length;
       gzip += gzipSync(bytes).length;
     }
@@ -185,16 +221,37 @@ export function run(root = repoRoot, output = console) {
     );
     return 2;
   }
-  const { js, css } = discoverKitAssets(clientDir);
+  const clientDiscovery = discoverKitAssets(clientDir);
+  if (clientDiscovery.incomplete) {
+    output.error(
+      `kit perf budget: client js/css: cannot enforce: incomplete enumeration${formatEnumerationDetail(clientDiscovery.failures)}`,
+    );
+    return 2;
+  }
+  const { js, css } = clientDiscovery;
   for (const [key, files] of [
     ["js", js],
     ["css", css],
   ]) {
+    if (files.length === 0) {
+      output.error(
+        `kit perf budget: client ${key}: cannot enforce: no client ${key} files under web/.svelte-kit/output/client/_app (run npm run build --prefix web)`,
+      );
+      return 2;
+    }
     const group = budget.client[key];
     let raw = 0;
     let gzip = 0;
     for (const file of files) {
-      const bytes = readFileSync(file);
+      let bytes;
+      try {
+        bytes = readFileSync(file);
+      } catch (error) {
+        output.error(
+          `kit perf budget: client ${key}: cannot enforce: unreadable file ${file}: ${error.message}`,
+        );
+        return 2;
+      }
       raw += bytes.length;
       gzip += gzipSync(bytes).length;
     }
