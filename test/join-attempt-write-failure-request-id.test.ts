@@ -1,4 +1,4 @@
-// Join attempt write-failure warn carries the validated request_id (TOG-30870).
+// Join attempt write-failure warn carries the validated request_id.
 //
 // The admin viewer queries by exact request_id; the failing INSERT drops it.
 // The warn is the only join left, so it must carry request_id to join the row
