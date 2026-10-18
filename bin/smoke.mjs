@@ -184,6 +184,16 @@ export async function smoke(
             "JSON /up db:ok, pending_migrations:0, status and queue.status",
             "valid JSON with unexpected health shape",
           );
+          // Dead letters are not promotable: queue.failed > 0 fails closed
+          // with the count in the output. failed 0/null (an unreadable
+          // ledger, or an envelope without the field) does not fail this
+          // gate on its own.
+          const failed = data?.queue?.failed;
+          check(
+            !(typeof failed === "number" && failed > 0),
+            "queue.failed 0 (no dead letters)",
+            `queue.failed ${typeof failed === "number" ? failed : "unknown"}`,
+          );
         } catch {
           check(false, "valid JSON object", "invalid JSON");
         }

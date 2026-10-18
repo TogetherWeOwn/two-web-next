@@ -515,6 +515,70 @@ test("accepts a critical backlog as degraded, never down", async (t) => {
   assert.ok(result.output.includes("PASS /up"), result.output);
 });
 
+test("fails closed on a dead-letter failed count with the count in the output", async (t) => {
+  for (const failed of [1, 3]) {
+    const { url } = await stub(t, (route, result) => {
+      if (route === "/up")
+        result.body = `{"status":"healthy","db":"ok","pending_migrations":0,"queue":{"status":"healthy","warn_at":20,"critical_at":100,"failed":${failed}}}`;
+    });
+    const result = await run(url);
+    assert.equal(result.ok, false, `${failed}: ${result.output}`);
+    assert.match(
+      result.output,
+      new RegExp(
+        `FAIL /up: expected queue\\.failed 0 \\(no dead letters\\); actual queue\\.failed ${failed}`,
+      ),
+    );
+    assert.ok(!result.output.includes("PASS /up"), result.output);
+  }
+});
+
+test("fails closed on dead letters from the real /up renderer", async (t) => {
+  const bundle = await build({
+    entryPoints: ["src/up.ts"],
+    bundle: true,
+    write: false,
+    format: "esm",
+    platform: "node",
+  });
+  const { upBody } = await import(
+    `data:text/javascript;base64,${Buffer.from(bundle.outputFiles[0].text).toString("base64")}`
+  );
+  const body = await upBody(async () => ({
+    pending: 0,
+    delayed: 0,
+    reserved: 0,
+    total: 0,
+    failed: 2,
+    oldestPendingAgeSeconds: null,
+    oldestReadyWaitAgeSeconds: null,
+  }));
+  const ready = { ...body, db: "ok", pending_migrations: 0 };
+  assert.equal(ready.queue.failed, 2);
+  const { url } = await stub(t, (route, result) => {
+    if (route === "/up") result.body = JSON.stringify(ready);
+  });
+  const result = await run(url);
+  assert.equal(result.ok, false, result.output);
+  assert.match(
+    result.output,
+    /FAIL \/up: expected queue\.failed 0 \(no dead letters\); actual queue\.failed 2/,
+  );
+  assert.ok(!result.output.includes("PASS /up"), result.output);
+});
+
+test("failed 0, null and missing do not fail the dead-letter gate on their own", async (t) => {
+  for (const queue of ['"failed":0', '"failed":null', '"pending":0']) {
+    const { url } = await stub(t, (route, result) => {
+      if (route === "/up")
+        result.body = `{"status":"healthy","db":"ok","pending_migrations":0,"queue":{"status":"unknown","warn_at":20,"critical_at":100,${queue}}}`;
+    });
+    const result = await run(url);
+    assert.equal(result.ok, true, `${queue}: ${result.output}`);
+    assert.ok(result.output.includes("PASS /up"), result.output);
+  }
+});
+
 test("rejects /up without the cutover origin marker", async (t) => {
   const { url } = await stub(t, (route, result) => {
     if (route === "/up") delete result.headers["x-two-origin"];
