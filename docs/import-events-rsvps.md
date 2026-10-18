@@ -59,14 +59,20 @@ not advance the counter.
 ### Calendar wire range and exhaustion
 
 Storage/import retain exact bigint revisions, but RFC 5545 §§3.3.8 and 3.8.7.4
-limit the `SEQUENCE` wire value to **0–2147483647**. Both ICS exports reject an
-out-of-range revision and return **503**, with no ETag or cacheable calendar.
-The collection fails as a whole rather than silently omitting an event. There
-is no clamping, modulo, reset, or automatic UID change: any of those could make
-subscribers retain stale content or create duplicate events.
+limit the `SEQUENCE` wire value to **0–2147483647**. The single-event ICS
+export rejects an out-of-range revision and returns **503**, with no ETag or
+cacheable calendar. The `/events.ics` collection instead skips the poison row
+and serves the remaining events as **200**: the feed is METHOD:PUBLISH
+full-state replace, so subscribers drop the skipped event from their calendars
+while `/e/:key` still shows it as live. Every skip logs the exact count plus
+the skipped event keys at warn level, so the stranded event can be found and
+the identity migration below started. There is no clamping, modulo, reset, or
+automatic UID change: any of those could make subscribers retain stale content
+or create duplicate events.
 
 At 2147483647 the last valid revision remains exportable; the next real edit
-continues the database counter and suspends ICS export. Native event edits and
+continues the database counter and suspends that event's ICS export
+(skipped from the collection, 503 on the single-event download). Native event edits and
 legacy import remain available and do not lose the stored revision. An imported
 oversized counter has the same export policy. Recovery requires an explicitly
 approved calendar-identity migration (new UID and subscriber transition), not
