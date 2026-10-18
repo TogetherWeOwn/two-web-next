@@ -80,12 +80,35 @@ function warnReadFailed(failure: ReadFailure, startedAt: number): void {
   });
 }
 
+/** Named configuration error for a malformed env guild id. Never echoes the value. */
+export class DiscordGuildIdConfigError extends Error {
+  constructor() {
+    super("Invalid DISCORD_GUILD_ID configuration");
+    this.name = "DiscordGuildIdConfigError";
+  }
+}
+
+/**
+ * Charset admission for the env-configured Discord guild id: ASCII digits
+ * only, 1-20 characters, tested as-is with no trimming, coercion or
+ * decoding. Refusal throws the named configuration error before any fetch.
+ */
+export function admitDiscordGuildId(value: unknown): string {
+  if (typeof value !== "string" || !/^\d{1,20}$/.test(value)) {
+    throw new DiscordGuildIdConfigError();
+  }
+  return value;
+}
+
 /**
  * The live reader: one GET of the guild's scheduled events per `upcoming()`
  * call, bot-token auth. Any failure — network, non-2xx, malformed rows — flips
  * `lastReadFailed` and returns an empty list; the page decides what that means.
  */
 export function liveDiscordEventsSource(env: Env): DiscordEventsSource {
+  // Admit once at read time: a malformed guild id throws the named
+  // configuration error before any credentialed request is constructed.
+  const guildId = admitDiscordGuildId(env.DISCORD_GUILD_ID);
   let failed = false;
   let failure: ReadFailure | null = null;
   return {
@@ -105,7 +128,7 @@ export function liveDiscordEventsSource(env: Env): DiscordEventsSource {
         );
       });
       const read = async (): Promise<unknown> => {
-        const res = await fetch(`${API}/guilds/${env.DISCORD_GUILD_ID}/scheduled-events`, {
+        const res = await fetch(`${API}/guilds/${encodeURIComponent(guildId)}/scheduled-events`, {
           headers: { authorization: `Bot ${env.DISCORD_BOT_TOKEN}` },
           signal: controller.signal,
         });
