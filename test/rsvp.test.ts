@@ -448,6 +448,7 @@ describe.skipIf(!process.env.DATABASE_URL)("rsvp routes (agent-testdb)", () => {
       reason: "rate_limited",
       message: `Too many requests. Try again in ${retry} seconds.`,
       retry_after: retry,
+      request_id: limited.headers.get("x-request-id"),
     });
     expect((await call("DELETE", ev.key, "u1")).status).toBe(429);
     // The budget is per member: someone else is unaffected.

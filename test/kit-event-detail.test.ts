@@ -533,6 +533,26 @@ describe("event-detail member reads", () => {
     );
     expect(response.status).toBe(503);
   });
+
+  it("links a page far past the end back to page one, never to another empty page", async () => {
+    // An empty page read two or more pages past the last real page must return
+    // to the bare page-one URL: page N-1 (?attendees=9) is empty too.
+    const { outcome } = await resolve(
+      KEY,
+      fakeStore({ attendees: [] }),
+      memberSession(),
+      null,
+      "?attendees=10",
+    );
+    expect(outcome.kind).toBe("ok");
+    if (outcome.kind !== "ok") throw new Error("unreachable");
+    expect(outcome.model.attendees).toEqual([]);
+    expect(outcome.model.attendeesPaging).toEqual({
+      page: 10,
+      prevHref: `/e/${KEY}`,
+      nextHref: null,
+    });
+  });
 });
 
 describe("event-detail metadata safety", () => {

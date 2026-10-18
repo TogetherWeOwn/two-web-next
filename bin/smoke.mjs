@@ -41,6 +41,14 @@ const routes = [
 // <worker-name>="<lowercase version uuid>".
 export const VERSION_OVERRIDE_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}="[0-9a-f-]{36}"$/;
 
+// Queue thresholds shared with src/up-queue.ts (re-exported by src/up.ts).
+// This file runs on plain node with no TS loader, so the values are
+// duplicated here and pinned by the drift guard in test/smoke.test.mjs: a
+// threshold change in src/up-queue.ts fails `npm run test:smoke` at PR time
+// with a drift message; update the values below to match.
+export const SMOKE_QUEUE_WARN_AT = 20;
+export const SMOKE_QUEUE_CRITICAL_AT = 100;
+
 export function assertVersionOverride(value) {
   if (
     typeof value !== "string" ||
@@ -160,16 +168,17 @@ export async function smoke(
       if (route.json) {
         try {
           const data = JSON.parse(body);
-          // Healthy, degraded (warn 20 / critical 100, still degraded never
-          // down) and unknown-ledger envelopes all pass; thresholds pinned to
-          // src/up.ts QUEUE_WARN_AT / QUEUE_CRITICAL_AT.
+          // Healthy, degraded (warn/critical, still degraded never down)
+          // and unknown-ledger envelopes all pass; thresholds pinned to
+          // src/up.ts QUEUE_WARN_AT / QUEUE_CRITICAL_AT via the exported
+          // SMOKE_QUEUE_* constants above (drift guard in test/smoke.test.mjs).
           const valid =
             data?.db === "ok" &&
             data?.pending_migrations === 0 &&
             ["healthy", "degraded"].includes(data?.status) &&
             ["healthy", "degraded", "unknown"].includes(data?.queue?.status) &&
-            data?.queue?.warn_at === 20 &&
-            data?.queue?.critical_at === 100;
+            data?.queue?.warn_at === SMOKE_QUEUE_WARN_AT &&
+            data?.queue?.critical_at === SMOKE_QUEUE_CRITICAL_AT;
           check(
             valid,
             "JSON /up db:ok, pending_migrations:0, status and queue.status",

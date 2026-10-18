@@ -40,7 +40,9 @@ PRs, logs or command arguments.
 `dev/staging/prod` in the table means the setting is applicable in each, with
 production still planned. Optional settings are not supplied by Wrangler unless
 stated. Required TypeScript fields do **not** imply runtime startup validation;
-the application has no central validator. Absence and connection/API failure
+there is no central startup validator; `/up` readiness is the gate (absent
+secrets fail `config: "missing"`, a weak `SESSION_SECRET` fails
+`config: "weak"`). Absence and connection/API failure
 are separate cases, and there is no credential failover after an error.
 
 ## Checked Worker inventory
@@ -62,7 +64,7 @@ an actual code fallback or a checked-in Wrangler value, not a recommended value.
 | `DB` | Optional Hyperdrive binding | dev: omitted in local config; staging/prod: provisioned database binding | Main Wrangler: configured `DB` Hyperdrive binding; local config: unbound | Web falls back to this when the explicit URL is empty/absent. Missing both sources yields guest-only nonpersistent sessions and unavailable DB features. Connection failures do not retry another source. |
 | `DISCORD_CLIENT_SECRET` | Secret, required | dev/staging/prod | None | Missing/invalid OAuth credentials fail exchange; ordinary login redirects with `signin_failed`, join shows recovery (503). Absent or empty fails `/up` readiness (503, `config: "missing"`). |
 | `DISCORD_BOT_TOKEN` | Secret, required | dev/staging/prod | None | Must belong to the client application; the bot must be in the target guild with Create Instant Invite permission for auto-join. Failed auto-join/role lookup denies member/moderator status but ordinary login continues; join offers invite recovery, calendar reads return an error/empty state. Absent or empty fails `/up` readiness (503, `config: "missing"`). |
-| `SESSION_SECRET` | Secret, required | dev/staging/prod | None; local example recommends 32+ random bytes | Invalid signatures become guest/failed OAuth state. Absent or empty (including whitespace-only) fails `/up` readiness (503, `config: "missing"`); there is no strength check or graceful configuration fallback, and a missing value can break signing. |
+| `SESSION_SECRET` | Secret, required | dev/staging/prod | None; local example recommends 32+ random bytes | Invalid signatures become guest/failed OAuth state. Absent or empty (including whitespace-only) fails `/up` readiness (503, `config: "missing"`). A configured value under 32 characters or with leading/trailing whitespace fails readiness too (503, `config: "weak"`); the body names neither the secret nor its value, and the server log names the secret and the requirement, never the value. There is no graceful configuration fallback, and a missing value can break signing. See [strength and rotation](#session_secret-strength-and-rotation). |
 | `DATABASE_URL` | Optional connection string; treat credential-bearing URLs as secrets | dev: test database; staging/prod: optional explicit override, normally use `DB` | None in runtime; local example uses the test container | Normal web selection is explicit URL then `DB`. No source means guest-only sessions, no-op roster persistence and unavailable DB-backed features. Generic human throttles use the same selection (nonempty explicit URL, then `DB`); with neither source configured they allow the request, and a selected store that fails to connect or errors also allows it — the other source is never retried after that failure. Web producers, jobs and `/up` share explicit URL then `DB` selection, with jobs accepting the legacy alias last (below). |
 | `BOT_DB` | Optional Hyperdrive binding | dev: unset (use `BOT_DATABASE_URL`); staging/prod: bot-reader Hyperdrive binding | Unbound; staging/prod bindings land with the bot-reader wiring | Homepage counts and profile stats read the bot-owned `web_v1` views through this binding (read-only `two_web_reader` grant). Missing both bot sources hides the counts and the stats block; the web `DB` is never read for them. Connection failures do not retry another source. |
 | `BOT_DATABASE_URL` | Optional connection string; treat credential-bearing URLs as secrets | dev: test database carrying `web_v1`; staging/prod: optional explicit override, normally use `BOT_DB` | None in runtime | Counts and profile-stats selection is explicit URL then `BOT_DB`. No bot source means hidden counts and hidden stats block. Never point tests or local runs at a production or staging bot database. |
@@ -96,6 +98,32 @@ an actual code fallback or a checked-in Wrangler value, not a recommended value.
 | `INTERNAL_ACTION_QUEUE` | Required Queue producer binding (`JobsEnv`) | dev: local Queue; staging/prod: provisioned Queue | Main Wrangler: `two-internal-action`; local config: `two-internal-action-local` | Declared/configured but no consumer reads this producer property in current source; both configured queue consumers share the Worker dispatch path. No application-side default. |
 | `HYPERDRIVE` | Optional Hyperdrive legacy alias (`JobsEnv`) | dev/staging/prod | Unbound in Wrangler | Jobs use this only when nonempty `DATABASE_URL` and `DB.connectionString` are both absent/empty. With no usable database source, job DB selection throws. No retry fallback after a connection error. |
 <!-- config-docs:end -->
+
+### `SESSION_SECRET` strength and rotation
+
+The floor is **at least 32 characters as configured, with no leading or
+trailing whitespace** (enforced by `/up` readiness, implemented in
+[`src/up-config.ts`](../src/up-config.ts)). Generate with 32+ random bytes,
+for example `openssl rand -base64 48` (64 characters), `openssl rand -base64
+32` (44 characters with padding), or `openssl rand -hex 32` (64 characters).
+Length is the floor for randomly generated secrets; no entropy estimator
+runs. Only secret **names** appear in this file, PRs, logs and command
+arguments; never paste a value.
+
+Rotate without downtime:
+
+1. Generate the replacement secret on the operator machine.
+2. Install it with `wrangler secret put SESSION_SECRET` on the target
+   Worker (staging first, production only under its own authorization).
+   Both the old and the replacement satisfy the floor, so `/up` stays
+   ready throughout the swap.
+3. Confirm `GET /up` answers 200 with no `config` key before and after.
+4. Sessions signed under the previous secret stop verifying and degrade
+   to guest state; affected members simply sign in again via Discord
+   OAuth. There is no dual-secret overlap (session-format changes are
+   out of scope), so prefer low-traffic windows. No data migration runs.
+5. Confirm no log line carries a value: readiness diagnostics name the
+   secret and the requirement, never the value.
 
 ## Tail Worker inventory
 

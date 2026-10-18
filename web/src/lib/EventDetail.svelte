@@ -229,19 +229,49 @@ const lineup = $derived(
       <p role="status" aria-live="polite" data-testid="event-copy-toast" data-copy-toast></p>
     </section>
   </div>
-  {#if model.attendees.length > 0}
+  {#if model.attendees.length > 0 || (model.viewerMember && model.attendeesPaging.page > 1)}
     <section aria-labelledby="event-attendees-heading" data-testid="event-attendees">
-      <h2 id="event-attendees-heading">Who's going ({model.attendees.length})</h2>
-      <ul class="event-attendee-grid">
-        {#each model.attendees as attendee (attendee.id)}
-          <li>
-            <span class="event-attendee-mark" aria-hidden="true">
-              {Array.from(attendee.name)[0]}
-            </span>
-            <a href="/members/{encodeURIComponent(attendee.id)}">{attendee.name}</a>
-          </li>
-        {/each}
-      </ul>
+      {#if model.attendeesPaging.prevHref || model.attendeesPaging.nextHref}
+        <h2 id="event-attendees-heading">Who's going</h2>
+      {:else}
+        <h2 id="event-attendees-heading">Who's going ({model.attendees.length})</h2>
+      {/if}
+      {#if model.attendees.length > 0}
+        <ul class="event-attendee-grid">
+          {#each model.attendees as attendee (attendee.id)}
+            <li>
+              <span class="event-attendee-mark" aria-hidden="true">
+                {Array.from(attendee.name)[0]}
+              </span>
+              <a href="/members/{encodeURIComponent(attendee.id)}">{attendee.name}</a>
+            </li>
+          {/each}
+        </ul>
+      {:else}
+        <p>There are no more attendees on this page.</p>
+      {/if}
+      {#if model.attendeesPaging.prevHref || model.attendeesPaging.nextHref}
+        <nav class="event-attendees-pagination" aria-label="Attendee pages">
+          {#if model.attendeesPaging.prevHref}
+            <a
+              href={model.attendeesPaging.prevHref}
+              rel="prev"
+              data-testid="event-attendees-prev"
+            >
+              ← Previous attendees
+            </a>
+          {/if}{" "}
+          {#if model.attendeesPaging.nextHref}
+            <a
+              href={model.attendeesPaging.nextHref}
+              rel="next"
+              data-testid="event-attendees-next"
+            >
+              Next attendees →
+            </a>
+          {/if}
+        </nav>
+      {/if}
       <p>
         Attendees shown at page load.{" "}
         <a href={model.path} data-testid="event-attendees-refresh">Refresh attendees</a>.

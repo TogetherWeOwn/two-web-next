@@ -46,7 +46,8 @@
 // - X-RateLimit-Limit / X-RateLimit-Remaining: legacy RsvpThrottleTest.php:42
 //   asserts them, but no Next throttle emits them — the one 429 shape
 //   (src/errors.tsx rateLimitExceeded) standardizes on Retry-After + the
-//   {reason, message, retry_after} envelope across human and machine ingress.
+//   {reason, message, retry_after} envelope (plus request_id matching
+//   x-request-id) across human and machine ingress.
 // - Livewire mount gates (MemberDirectoryExposureTest.php:77, SpamTrap traps):
 //   no Livewire endpoint exists; island HTML is served after the member gate.
 // - PATCH /members/{user} guest 405: legacy deleted the writer (TOG-8440);
@@ -187,8 +188,9 @@ describe("OAuth throttle envelope (DB-free)", () => {
     expect(limited.status).toBe(429);
     expect(limited.headers.get("retry-after")).toMatch(/^[1-9]\d*$/);
     const body = (await limited.json()) as Record<string, unknown>;
-    expect(Object.keys(body).sort()).toEqual(["message", "reason", "retry_after"]);
+    expect(Object.keys(body).sort()).toEqual(["message", "reason", "request_id", "retry_after"]);
     expect(body).toMatchObject({ reason: "rate_limited" });
+    expect(body.request_id).toBe(limited.headers.get("x-request-id"));
     expect(typeof body.message).toBe("string");
     expect((body.message as string).length).toBeGreaterThan(0);
     expect(body.retry_after).toBe(Number(limited.headers.get("retry-after")));
