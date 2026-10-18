@@ -27,9 +27,18 @@ export function registerJoinStartRoutes(app: Hono<{ Bindings: Env }>, hooks: Joi
     const next = safeNext(c.req.query("next"));
     const state = crypto.randomUUID();
     const store = await hooks.storeFor(c);
-    await store.journeys.sweepExpired();
-    if (!(await store.journeys.issue(await hashToken(state), "join")))
+    // A transient journey-store failure degrades to /join, never a 500 —
+    // the same posture as GET /auth/discord. No state cookie is minted.
+    try {
+      await store.journeys.sweepExpired();
+      if (!(await store.journeys.issue(await hashToken(state), "join"))) {
+        c.header("cache-control", "no-store");
+        return c.redirect("/join", 302);
+      }
+    } catch {
+      c.header("cache-control", "no-store");
       return c.redirect("/join", 302);
+    }
     if (source) {
       await setSignedCookie(c, JOIN_SOURCE_COOKIE, source, c.env.SESSION_SECRET, {
         path: "/",
