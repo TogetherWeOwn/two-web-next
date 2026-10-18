@@ -34,7 +34,11 @@
       message.setAttribute("data-testid", "join-widget-error");
       message.setAttribute("role", "status");
       message.setAttribute("tabindex", "-1");
-      message.textContent = "The preview failed to load. ";
+      // A post-load timer cannot tell a blocked error page from a real render
+      // cross-origin, so beside-frame guidance must not claim failure: it
+      // offers the invite path in case the preview is not showing. A frame
+      // that never loaded did fail, so the replacing guidance says so.
+      message.textContent = beside ? "Preview not showing? " : "The preview failed to load. ";
       let fallback = null;
       if (href) {
         fallback = document.createElement("a");
