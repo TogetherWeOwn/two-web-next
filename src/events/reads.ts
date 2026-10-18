@@ -826,6 +826,12 @@ export async function listJson(
   };
 }
 
+/** Egress cap for feeds and sitemap: the soonest rows in the existing order.
+ * A pathological guard only — a real schedule never holds this many upcoming
+ * rows. Keeps the established 103-event subscription collection whole while
+ * bounding /events.ics, /events.rss, /events.md and sitemap bytes. */
+export const FEED_EGRESS_LIMIT = 1000;
+
 export async function sitemapEvents(
   db: Db,
 ): Promise<{ key: string; status: "published"; updatedAt: string | null }[]> {
@@ -833,7 +839,8 @@ export async function sitemapEvents(
     .select()
     .from(events)
     .where(eq(events.status, "published"))
-    .orderBy(asc(events.startsAt));
+    .orderBy(asc(events.startsAt))
+    .limit(FEED_EGRESS_LIMIT);
   // One poison row (unrenderable window, or an updatedAt outside the JS Date
   // range) must not empty the sitemap via the route's `.catch(() => [])`:
   // skip it in JS and log the count. The guard lives in JS (not SQL) because
@@ -857,13 +864,14 @@ export async function sitemapEvents(
   }));
 }
 
-/** Feed scope: upcoming, finite boundaries, ends_at >= now, soonest first. Equal starts break ties by id for a deterministic total order. `statuses` differs for RSS vs ICS. */
+/** Feed scope: upcoming, finite boundaries, ends_at >= now, soonest first. Equal starts break ties by id for a deterministic total order. `statuses` differs for RSS vs ICS. Capped in SQL at FEED_EGRESS_LIMIT. */
 export async function listFeed(db: Db, statuses: ("published" | "cancelled")[], now = new Date()) {
   const rows = await db
     .select()
     .from(events)
     .where(and(inArray(events.status, statuses), finiteEventWindow, gte(events.endsAt, now)))
-    .orderBy(asc(events.startsAt), asc(events.id));
+    .orderBy(asc(events.startsAt), asc(events.id))
+    .limit(FEED_EGRESS_LIMIT);
   // Feed builders stringify date parts without throwing, so without this the
   // export would serve corrupt `NaN` instants instead of failing loudly.
   return rows.filter(isRenderableEventWindow);
