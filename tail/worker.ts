@@ -1029,7 +1029,10 @@ export function createTailWorker(
         status: second.status,
         timestamp: new Date().toISOString(),
       };
-      await deliverScheduled(url, alert, `${alert.event}:${alert.check}:${alert.status}`);
+      // Mute on check identity only: the status rides in the payload but
+      // must not split the mute, or one flapping check re-pages on every
+      // status change. One instance probes one host, so no target segment.
+      await deliverScheduled(url, alert, `${alert.event}:${alert.check}`);
     }
   }
   return {
