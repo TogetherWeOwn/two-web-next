@@ -6,10 +6,15 @@ the 60-second window, and the shared 429 response do not change.
 
 ## Address selection
 
-The address is `CF-Connecting-IP` when present, otherwise the trimmed first hop
-of `X-Forwarded-For`, otherwise `anon`. Cloudflare supplies `CF-Connecting-IP`
-on edge requests; the other cases support off-edge tests and local runs. This
-change does not make other forwarded headers trusted or change their precedence.
+The address is the trimmed `CF-Connecting-IP` when it is non-empty, otherwise
+the first non-empty trimmed `X-Forwarded-For` hop, otherwise `anon`. Empty or
+whitespace-only `CF-Connecting-IP` falls through to `X-Forwarded-For`; empty
+hops are skipped, so an empty first hop never collapses clients into a shared
+empty-suffix bucket. Only a request with no usable identity in either header
+lands in the existing documented `anon` fallback bucket, exactly like a
+headerless request. Cloudflare supplies `CF-Connecting-IP` on edge requests;
+the other cases support off-edge tests and local runs. This change does not
+make other forwarded headers trusted or change their precedence.
 
 ## Normalization
 
@@ -23,8 +28,16 @@ change does not make other forwarded headers trusted or change their precedence.
   produce the same key for the same prefix. The runtime's
   [URL IPv6 parser](https://url.spec.whatwg.org/#concept-ipv6-parser)
   validates addresses before the canonical pieces are expanded.
-- Missing addresses still share `anon`. Malformed off-edge values retain their
-  existing key; a parse failure never skips the throttle store.
+- Missing or wholly empty addresses share the documented `anon` fallback, never
+  an empty-suffix bucket. Malformed off-edge values retain their existing key;
+  a parse failure never skips the throttle store.
+- The normalized client segment is capped at 64 characters
+  (`MAX_CLIENT_KEY_SEGMENT` in [`src/throttle.ts`](../src/throttle.ts)),
+  applied before any store call. The longest valid IP text form is 45
+  characters, so the cap never truncates a valid address; only over-bound
+  malformed or hostile values are truncated, deterministically, with values
+  differing inside the bound keeping distinct buckets. No header bytes are
+  logged.
 
 This limits address rotation within one /64. It does not prevent clients with
 multiple /64 allocations from consuming multiple budgets. Devices sharing a
@@ -51,16 +64,16 @@ differs by call site:
   [`throttleGuard`](../src/throttle.ts) catches any throw from store
   acquisition or the count/insert and allows — a missed count beats a 500 on
   that path.
-- Direct join propagates configured-store failures:
+- Direct join allows unclassified store failures, propagates outages:
   [`throttled`](../src/join/route-shared.ts) awaits the configured store and
-  [`checkJoinThrottle`](../src/join/service.ts) with no catch. A
-  configured-but-unreachable store throws; the global handler maps only
-  classified transport/server outages to the shared 503 envelope (see
-  [`isDatabaseUnavailable`](../src/db/errors.ts) and
-  [`internalErrorHandler`](../src/error-responses.tsx)) and leaves other
-  errors as 500s. The outage matrix pins the classified case:
-  `GET /join/discord` and `GET /join/callback` answer 503 on a refused
-  Postgres socket (see [`test/db-outage-matrix.test.ts`](../test/db-outage-matrix.test.ts)).
+  [`checkJoinThrottle`](../src/join/service.ts) and allows on any throw
+  except a classified transport/server outage (see
+  [`isDatabaseUnavailable`](../src/db/errors.ts)), which it rethrows so the
+  global handler renders the shared 503 envelope (see
+  [`internalErrorHandler`](../src/error-responses.tsx)). The outage matrix pins
+  the classified case: `GET /join/discord` and `GET /join/callback` answer 503
+  on a refused Postgres socket (see
+  [`test/db-outage-matrix.test.ts`](../test/db-outage-matrix.test.ts)).
 - Prune is best-effort: [`checkJoinThrottle`](../src/join/service.ts) logs a
   one-line warning and swallows a throwing expiry DELETE, then returns the
   decided verdict, so a prune failure never flips a refusal into an admission
@@ -120,11 +133,13 @@ two call sites, both with a 5-minute bound:
 
 - [`src/join/service.ts`](../src/join/service.ts) (`checkJoinThrottle`): after
   the admission verdict — admitted or refused — outside the per-bucket
-  admission lock transaction,
-  `DELETE FROM web_throttle_hits WHERE at < now() - interval '5 minutes'`.
-  The cleanup stays outside the lock so it never prolongs it; refused
-  requests prune the same age-only rows instead of letting expired rows
-  accumulate until some request is admitted.
+  admission lock transaction, at most one 1,000-row oldest-first batch of
+  `where at < now() - interval '5 minutes'` via
+  `order by id limit 1000 for update skip locked`, so rows locked by unrelated
+  transactions are skipped for a later pass. The cleanup stays outside the lock
+  so it never prolongs it; refused requests prune the same age-only rows
+  instead of letting expired rows accumulate until some request is admitted.
+  Best-effort: a throwing prune keeps the decided verdict.
 - [`src/events/rsvp.ts`](../src/events/rsvp.ts) (`pruneThrottle`, called from
   `writeRsvp` and both `withdrawRsvp` paths): inside the same transaction,
   before the budget charge and the write, at most one 1,000-row batch of

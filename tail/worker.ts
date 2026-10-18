@@ -226,6 +226,51 @@ function cleanupResponse(response: Response): void {
   }
 }
 
+// Independent settlement deadline for one scheduled GET header wait. The
+// /up and synthetic probes each allow UPTIME_TIMEOUT_MS per attempt; the
+// AbortSignal.timeout on each GET stays on as cooperative cleanup only.
+// Racing the headers against a setTimeout guarantees the attempt settles
+// within the existing budget even when the transport never resolves and
+// ignores abort. Expiry is the existing transport treatment (status 0,
+// eligible for the existing retry). A late response gets best-effort inert
+// body cleanup without being awaited, and a late rejection is swallowed:
+// neither can change the settled verdict, page twice, or surface as an
+// unhandled rejection.
+async function withProbeDeadline(
+  work: Promise<Response>,
+  ms = UPTIME_TIMEOUT_MS,
+): Promise<Response> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    const timeout = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new Error("probe deadline")), ms);
+    });
+    void work.then(
+      () => {},
+      () => {},
+    );
+    return await Promise.race([work, timeout]);
+  } catch (error) {
+    // The race already settled without this attempt: a late Response still
+    // gets inert cleanup, a late rejection stays swallowed, and the settled
+    // verdict below never changes. Attached only on the losing path so a
+    // winning attempt is still cleaned up exactly once by its caller.
+    void work.then(
+      (response) => {
+        try {
+          cleanupResponse(response);
+        } catch {
+          /* Late cleanup never flips the settled verdict. */
+        }
+      },
+      () => {},
+    );
+    throw error;
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
+}
+
 export type UptimeAlert = {
   event: "uptime.down";
   status: number;
@@ -507,7 +552,17 @@ function validAttemptId(value: unknown): string | undefined {
   return typeof value === "string" && value.length >= 8 && value.length <= 128 ? value : undefined;
 }
 
-type Bucket = { at: number; requests: number; errors: number; crashes: number };
+type Bucket = {
+  at: number;
+  requests: number;
+  errors: number;
+  crashes: number;
+  // Homogeneous validated 40-hex SHA for every counted observation merged
+  // into this bucket. Absent when the bucket mixes builds or contains any
+  // counted observation with unknown attribution: an untagged or invalid
+  // batch, or a restored legacy entry written before provenance existed.
+  buildSha?: string;
+};
 type ScriptState = {
   buckets: Bucket[];
   cooldownUntil: number;
@@ -519,7 +574,6 @@ type ScriptState = {
   // Fences retried results to the attempt they settle. Restored legacy state
   // has a pendingAt without an identity and still suppresses until age-out.
   pendingAttemptId?: string;
-  buildSha?: string;
 };
 
 function orderSpike(alert: SpikeAlert): SpikeAlert {
@@ -552,13 +606,18 @@ export class AggregateTracker {
       [...this.scripts].map(([script, state]) => [
         script,
         {
-          buckets: state.buckets,
+          buckets: state.buckets.map((b) => ({
+            at: b.at,
+            requests: b.requests,
+            errors: b.errors,
+            crashes: b.crashes,
+            ...(shaFromVersionTag(b.buildSha) ? { buildSha: shaFromVersionTag(b.buildSha)! } : {}),
+          })),
           cooldownUntil: state.cooldownUntil,
           ...(state.pendingAt !== undefined ? { pendingAt: state.pendingAt } : {}),
           ...(state.pendingAttemptId !== undefined
             ? { pendingAttemptId: state.pendingAttemptId }
             : {}),
-          ...(state.buildSha ? { buildSha: state.buildSha } : {}),
         },
       ]),
     );
@@ -583,13 +642,29 @@ export class AggregateTracker {
       // after a different bucket was observed. Merge by bucket time first:
       // trimming raw entries would discard a still-live bucket (for example
       // the crash bucket) while keeping duplicates of later buckets.
+      // Provenance merges too: duplicate entries keep a SHA only when every
+      // copy carries the same validated SHA. Legacy entries without
+      // provenance, and any legacy top-level buildSha, are unknown and
+      // ignored — never proof the restored counts came from one build.
       const byAt = new Map<number, Bucket>();
       for (const b of buckets) {
+        const sha = shaFromVersionTag((b as Partial<Bucket>).buildSha);
         const existing = byAt.get(b.at);
         if (existing) {
           existing.requests += b.requests;
           existing.errors += b.errors;
           existing.crashes += b.crashes;
+          if (existing.buildSha === undefined || sha === undefined || existing.buildSha !== sha) {
+            delete existing.buildSha;
+          }
+        } else if (sha !== undefined) {
+          byAt.set(b.at, {
+            at: b.at,
+            requests: b.requests,
+            errors: b.errors,
+            crashes: b.crashes,
+            buildSha: sha,
+          });
         } else {
           byAt.set(b.at, { at: b.at, requests: b.requests, errors: b.errors, crashes: b.crashes });
         }
@@ -600,7 +675,6 @@ export class AggregateTracker {
         cooldownUntil: Number.isSafeInteger(state.cooldownUntil) ? state.cooldownUntil! : 0,
         pendingAt: Number.isSafeInteger(state.pendingAt) ? state.pendingAt : undefined,
         pendingAttemptId: validAttemptId(state.pendingAttemptId),
-        buildSha: shaFromVersionTag(state.buildSha),
       });
     }
   }
@@ -624,9 +698,13 @@ export class AggregateTracker {
       state = { buckets: [], cooldownUntil: 0 };
       this.scripts.set(batch.script, state);
     }
-    // The latest batch owns the attribution: a batch with no valid tag
-    // clears a previous build's SHA rather than blaming that build.
-    state.buildSha = shaFromVersionTag(batch.buildSha);
+    // Provenance is per bucket, not per latest batch: a bucket keeps its
+    // SHA only while every counted observation merged into it shares one
+    // validated SHA. An untagged or invalid batch, or a second validated
+    // build in the same 30-second bucket, clears that bucket to unknown.
+    // A batch contributing no counts never changes provenance.
+    const incomingSha = shaFromVersionTag(batch.buildSha);
+    const incomingCounts = batch.requests + batch.errors + batch.crashes;
     const bucketAt = Math.floor(at / BUCKET_MS) * BUCKET_MS;
     // The same bucket time can recur after a different bucket was observed,
     // so coalesce by bucket time rather than reusing only the last bucket.
@@ -639,6 +717,19 @@ export class AggregateTracker {
       if (state.buckets.length > MAX_BUCKETS)
         state.buckets.splice(0, state.buckets.length - MAX_BUCKETS);
     }
+    if (incomingCounts > 0) {
+      const priorCounts = bucket.requests + bucket.errors + bucket.crashes;
+      if (priorCounts === 0) {
+        if (incomingSha !== undefined) bucket.buildSha = incomingSha;
+        else delete bucket.buildSha;
+      } else if (
+        bucket.buildSha === undefined ||
+        incomingSha === undefined ||
+        bucket.buildSha !== incomingSha
+      ) {
+        delete bucket.buildSha;
+      }
+    }
     bucket.requests += batch.requests;
     bucket.errors += batch.errors;
     bucket.crashes += batch.crashes;
@@ -648,11 +739,23 @@ export class AggregateTracker {
     let requests = 0;
     let errors = 0;
     let crashes = 0;
+    // The page counts every trace in the window whatever build produced it;
+    // the SHA is emitted only when every counted bucket in the window
+    // carries the same validated SHA. Mixed builds, or any counted bucket
+    // with unknown attribution (including restored legacy buckets), page
+    // with no build_sha rather than blaming the latest build.
+    let windowSha: string | undefined;
+    let windowMixed = false;
     for (const b of state.buckets) {
       requests += b.requests;
       errors += b.errors;
       crashes += b.crashes;
+      if (b.requests + b.errors + b.crashes === 0) continue;
+      if (b.buildSha === undefined) windowMixed = true;
+      else if (windowSha === undefined) windowSha = b.buildSha;
+      else if (windowSha !== b.buildSha) windowMixed = true;
     }
+    if (windowMixed) windowSha = undefined;
     const rateGate =
       errors >= SPIKE_MIN_ERRORS && requests > 0 && errors / requests >= SPIKE_MIN_RATE;
     const crashGate = crashes >= SPIKE_MIN_CRASHES;
@@ -665,7 +768,7 @@ export class AggregateTracker {
     return orderSpike({
       event: "error.spike",
       script: batch.script,
-      ...(state.buildSha ? { build_sha: state.buildSha } : {}),
+      ...(windowSha ? { build_sha: windowSha } : {}),
       logs: logsPath(batch.script),
       window_seconds: SPIKE_WINDOW_MS / 1000,
       requests,
@@ -1226,6 +1329,11 @@ export function createTailWorker(
       })();
       const result = await withAggregatorDeadline(operation);
       if ("fallback" in result) return local();
+      // A healthy probe handled durably still ends the local red window:
+      // without this, a fallback-red / aggregator-healthy / fallback-red
+      // sequence pages as continuous red from the first run. Healthy
+      // answers JSON null, so this covers the no-number branch too.
+      if (ok) health.observe(true, at);
       return result;
     } catch {
       return local();
@@ -1273,11 +1381,14 @@ export function createTailWorker(
     attribution: UpAttribution;
   }> {
     try {
-      const response = await send(target, {
-        method: "GET",
-        redirect: "manual", // Workers fetch rejects "error"; a 3xx is never ok, so it fails closed.
-        signal: AbortSignal.timeout(UPTIME_TIMEOUT_MS),
-      });
+      const response = await withProbeDeadline(
+        send(target, {
+          method: "GET",
+          redirect: "manual", // Workers fetch rejects "error"; a 3xx is never ok, so it fails closed.
+          signal: AbortSignal.timeout(UPTIME_TIMEOUT_MS),
+        }),
+        UPTIME_TIMEOUT_MS,
+      );
       const ok =
         response.status === 200 && response.headers.get("x-two-origin") === EXPECTED_ORIGIN;
       // Read the already-fetched body for the public revision marker only.
@@ -1309,11 +1420,14 @@ export function createTailWorker(
     check: SyntheticCheck,
   ): Promise<{ ok: boolean; status: number }> {
     try {
-      const response = await send(new URL(check.path, base).toString(), {
-        method: "GET",
-        redirect: "manual", // Never follow into Discord or a login flow.
-        signal: AbortSignal.timeout(UPTIME_TIMEOUT_MS),
-      });
+      const response = await withProbeDeadline(
+        send(new URL(check.path, base).toString(), {
+          method: "GET",
+          redirect: "manual", // Never follow into Discord or a login flow.
+          signal: AbortSignal.timeout(UPTIME_TIMEOUT_MS),
+        }),
+        UPTIME_TIMEOUT_MS,
+      );
       let ok = response.status === check.status;
       if (ok && check.contentType) {
         ok = (response.headers.get("content-type") ?? "").startsWith(check.contentType);
@@ -1424,6 +1538,10 @@ export function createTailWorker(
       if (!url) return; // No secret: no parsing, no logging, no outbound work.
       // Merge same-script traces so one invocation makes at most one
       // aggregation call per script; SHA is per-trace version metadata.
+      // The merged batch keeps a SHA only while every counted trace in the
+      // invocation shares one validated SHA. An untagged or invalid trace,
+      // or a second validated build, clears it to unknown: the last tag
+      // must never speak for the whole invocation.
       // Drop traces skewed beyond now plus the documented slack before the
       // merge: keeping one would let Math.max lift the merged batch into
       // the future and wipe in-window buckets. Merely-late traces still
@@ -1438,11 +1556,25 @@ export function createTailWorker(
         if (!prior) {
           batches.set(batch.script, { ...batch });
         } else {
+          const incomingCounts = batch.requests + batch.errors + batch.crashes;
+          if (incomingCounts > 0) {
+            const priorCounts = prior.requests + prior.errors + prior.crashes;
+            const incomingSha = shaFromVersionTag(batch.buildSha);
+            if (priorCounts === 0) {
+              if (incomingSha !== undefined) prior.buildSha = incomingSha;
+              else delete prior.buildSha;
+            } else if (
+              prior.buildSha === undefined ||
+              incomingSha === undefined ||
+              prior.buildSha !== incomingSha
+            ) {
+              delete prior.buildSha;
+            }
+          }
           prior.requests += batch.requests;
           prior.errors += batch.errors;
           prior.crashes += batch.crashes;
           prior.at = Math.max(prior.at, batch.at);
-          if (batch.buildSha) prior.buildSha = batch.buildSha;
         }
       }
       for (const batch of batches.values()) {

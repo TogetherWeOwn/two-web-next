@@ -52,6 +52,7 @@ export type LoadRanking = (
   db: Db | null,
   window: SeasonWindow,
   game: string | null,
+  scope?: "overall" | "relative",
 ) => Promise<RankedMember[]>;
 
 export type { BoardViewEntry, QueueBoardView, RecordBoardView };
@@ -151,7 +152,12 @@ export async function loadMembersBoardData(args: MembersBoardArgs): Promise<{
   let ranked: RankedMember[];
   try {
     db = await args.dbForFn({ env: args.env });
-    ranked = await (args.loadRankingFn ?? loadMemberRanking)(db, season, activity.game);
+    ranked = await (args.loadRankingFn ?? loadMemberRanking)(
+      db,
+      season,
+      activity.game,
+      scope.scope,
+    );
   } catch (err) {
     reportBoardFailure(err, args);
   }

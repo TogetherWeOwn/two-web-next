@@ -105,7 +105,18 @@
     }
     var request = {};
     latest.set(key, request);
-    var controller = canAbort ? new AbortController() : null;
+    // Best effort: a host whose AbortController construction throws must not
+    // suppress the count read (or, on the shared broadcast chain, a later
+    // island's read). Without a controller the deadline below still guards
+    // the fetch and the late completion is fenced by the inflight check.
+    var controller = null;
+    if (canAbort) {
+      try {
+        controller = new AbortController();
+      } catch (_countAbortConstructIgnored) {
+        // controller stays null; the read still issues (see above).
+      }
+    }
     var timeout = null;
     if (canTimeout) {
       timeout = setTimeout(function () {
