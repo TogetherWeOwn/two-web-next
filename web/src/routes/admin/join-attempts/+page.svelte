@@ -40,7 +40,6 @@ const { rows, query, hasNext, prevUrl, nextUrl, outcomes, retentionDays } = $der
           <option value={o} selected={o === query.outcome}>{o === "" ? "All" : o}</option>
         {/each}
         {#if query.outcome !== "" && !outcomes.includes(query.outcome)}
-          <!-- An unrecognized outcome is still the active exact filter, so it gets its own selected option instead of misleadingly showing All. Svelte escapes the value and label. -->
           <option value={query.outcome} selected>{query.outcome}</option>
         {/if}
       </select>
