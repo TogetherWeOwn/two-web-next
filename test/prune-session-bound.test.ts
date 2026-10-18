@@ -87,8 +87,10 @@ describe("scheduled session sweep bound (fake store seam, no DB)", () => {
       const counts = await pruneModelTables({ ...emptyAgeTables(), sessions }, now);
       // 1,003 expired + the exact-expiry row; only the live row survives.
       expect(counts.sessions).toBe(PRUNE_DELETE_BATCH_SIZE + 4);
-      // The pass repeated the bounded statement until a short batch.
-      expect(sessions.calls).toBe(2);
+      // The pass repeated the bounded statement until an empty batch proved
+      // the drain: the short 4-row batch is not proof (a SKIP LOCKED window
+      // can hide unvisited rows), so one proving batch follows it.
+      expect(sessions.calls).toBe(3);
       expect(sessions.remaining()).toEqual(["rawhash-live"]);
       expect(warn).not.toHaveBeenCalled();
       // Logs carry counts only: no raw session material ever appears.
@@ -137,7 +139,9 @@ describe("scheduled session sweep bound (fake store seam, no DB)", () => {
 
       const second = await pruneModelTables(stores, now);
       expect(second.sessions).toBe(3);
-      expect(sessions.calls).toBe(PRUNE_DELETE_MAX_BATCHES + 1);
+      // The 3-row remainder batch is short but not drained proof, so the
+      // pass runs one empty proving batch before reporting uncapped.
+      expect(sessions.calls).toBe(PRUNE_DELETE_MAX_BATCHES + 2);
       // The uncapped drain stays silent: still exactly the first pass's page.
       expect(warn).not.toHaveBeenCalled();
       expect(error).toHaveBeenCalledTimes(1);

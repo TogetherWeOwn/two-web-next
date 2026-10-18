@@ -145,9 +145,10 @@ describe("W15 Discord login and callback boundaries", () => {
     // Discord.
     expect(result.headers.get("location")).toBe("/?n=signin_failed");
     expect(fetch).not.toHaveBeenCalled();
-    expect(result.headers.getSetCookie().join("\n")).toContain(
-      "__Host-two_oauth_state=; Max-Age=0",
-    );
+    // Stray hits preserve the pending journey for the real hit that follows:
+    // no cookie is cleared here (the surviving journey is pinned by the
+    // stray-callback acceptance suite), and no session is issued.
+    expect(result.headers.getSetCookie().join("\n")).not.toContain("Max-Age=0");
     expect(result.headers.getSetCookie().join("\n")).not.toContain(`${SESSION_COOKIE}=`);
   });
 

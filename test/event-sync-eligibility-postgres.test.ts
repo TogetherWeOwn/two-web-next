@@ -283,6 +283,7 @@ describe.skipIf(!process.env.DATABASE_URL)("event sync eligibility (native Postg
         resynced: 1,
         absorbed: 0,
         failed: 0,
+        deferred: 0,
       });
       expect(sent[1]!.idempotencyKey).toBe(original.idempotencyKey);
       await consume({ messages: [delivery(sent[1]!)] }, deps(bot));
@@ -346,6 +347,7 @@ describe.skipIf(!process.env.DATABASE_URL)("event sync eligibility (native Postg
         resynced: 1,
         absorbed: 0,
         failed: 0,
+        deferred: 0,
       });
       expect((await sql`select status from events`)[0]!.status).toBe(
         ended ? "past" : control === "draft upsert" ? "draft" : "published",
@@ -398,6 +400,7 @@ describe.skipIf(!process.env.DATABASE_URL)("event sync eligibility (native Postg
         resynced: 0,
         absorbed: 0,
         failed: 0,
+        deferred: 0,
       });
       // Candidate selection is clock-free; reconciliation owns the exact due
       // check (including injected scheduler clocks). NULL/capped requests have
@@ -425,12 +428,12 @@ describe.skipIf(!process.env.DATABASE_URL)("event sync eligibility (native Postg
             lock: pgUniqueLock(sql),
             now: () => new Date(deadline.getTime() - 1),
           }),
-        ).toEqual({ closed: 0, materialized: 0, resynced: 0, absorbed: 0, failed: 0 });
+        ).toEqual({ closed: 0, materialized: 0, resynced: 0, absorbed: 0, failed: 0, deferred: 0 });
         expect(sent).toHaveLength(1);
         expect((await events.pendingSync(eventKey))!.nextAttemptAt).toEqual(deadline);
         expect(
           await reconcileEvents({ events, queue, lock: pgUniqueLock(sql), now: () => deadline }),
-        ).toEqual({ closed: 0, materialized: 0, resynced: 1, absorbed: 0, failed: 0 });
+        ).toEqual({ closed: 0, materialized: 0, resynced: 1, absorbed: 0, failed: 0, deferred: 0 });
         expect(sent[1]!.idempotencyKey).toBe(original.idempotencyKey);
         const dueDeps = { ...deps(bot), now: () => deadline };
         await consume({ messages: [delivery(sent[1]!)] }, dueDeps);
@@ -457,6 +460,7 @@ describe.skipIf(!process.env.DATABASE_URL)("event sync eligibility (native Postg
           resynced: 0,
           absorbed: 0,
           failed: 0,
+          deferred: 0,
         });
         const bot = botDouble();
         const message = delivery(original);

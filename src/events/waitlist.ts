@@ -62,7 +62,10 @@ export async function lockWaitlist(tx: Tx, eventId: number): Promise<void> {
 
 /** Settle FIFO heads inside the caller's transaction and event-row lock, never after commit.
  * A paused/closed event freezes the line. Reset mirror stamps; the caller queues the event
- * write-back after commit, covering both its own write and every promoted answer. */
+ * write-back after commit, covering both its own write and every promoted answer.
+ * The `clock` is the caller's post-lock instant: RSVP verbs freeze the one
+ * in-transaction `clock_timestamp()` read taken after every wait, so the
+ * `endsAt` re-check and the promotion stamps never see the worker clock. */
 export async function promoteWaitlist(
   tx: SeatWriter,
   ev: Event,

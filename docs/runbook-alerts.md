@@ -188,6 +188,17 @@ been observed. Tune the gates in `tail/worker.ts` (`SPIKE_MIN_ERRORS`,
 `SPIKE_MIN_RATE`, `SPIKE_MIN_CRASHES`, `SPIKE_COOLDOWN_MS`) only with staging
 evidence; on a quiet site the count floor, not the rate, is what fires.
 
+Future-skew drop observability: a batch stamped beyond now plus the
+`BATCH_FUTURE_SLACK_MS` slack is dropped on the tail path and rejected with
+400 on the aggregator `/observe` wire — the slack bound and drop semantics
+are unchanged, only the accounting is new. Each `tail()` invocation that
+drops skewed traces emits one `tail.skew_drop` sink line reporting that
+invocation's dropped count; a 400 for a future-skewed but otherwise valid
+batch logs a skew-rejection line, while a 400 for a structurally invalid or
+unparseable batch logs a malformed-payload line (status stays 400 either
+way). A skew line means a poisoned clock is eating traffic; a malformed
+line means payload corruption. No threshold or slack change.
+
 Attribution is honest about the whole counted window. `build_sha` is present
 only on a homogeneous page: every counted bucket in the window carries the
 same validated build, through the same 40-hex version-tag and release-log
@@ -212,6 +223,18 @@ page (a failed POST re-pages on the next red run). The red window lives in the s
 `AlertAggregator` Durable Object (per-isolate fallback without the binding).
 Healthy means HTTP 200 with `x-two-origin: two-web-next`, not merely a
 reachable endpoint.
+
+Observation ordering: the tracker persists a monotonic source-observation
+watermark (the newest probe source time applied so far) alongside the red
+window, and an observation stamped strictly older than that watermark is a
+successful no-op — it publishes nothing and changes neither the outage start,
+the pending page attempt, nor the cooldown. A delayed older healthy sample
+therefore cannot clear a newer outage, and a delayed older red sample cannot
+resurrect a window a newer healthy sample already cleared. Equal timestamps
+are not strictly older, so a same-time retry still takes effect. The watermark
+survives snapshot/restore and Durable Object restarts; snapshots written
+before it existed load safely and establish it from the first observation
+accepted after the restore.
 
 The summary contains `event`, `status` (the second attempt's HTTP status,
 or `0` for a transport error/timeout), `down_seconds` (how long health has

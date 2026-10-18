@@ -83,6 +83,19 @@ const fixtures = {
   "/discord": [302, null, "", "https://discord.gg/fixture"],
   "/profile": [302, null, "", "/auth/discord"],
   "/admin": [302, null, "", "/auth/discord"],
+  // Session-free public read API: collection envelope and discovery document.
+  // Bodies mirror the acceptance healthy fixtures; the probe asserts the
+  // envelope shape and the OpenAPI marker, not fixture contents.
+  "/api/public/events": [
+    200,
+    "application/json",
+    '{"data":[],"page":1,"limit":20,"meta":{"current_page":1,"per_page":20,"total":0,"last_page":1}}',
+  ],
+  "/openapi.json": [
+    200,
+    "application/json",
+    '{"openapi":"3.1.0","info":{"title":"Together We Own public read API","version":"1.0.0"},"paths":{"/api/public/events":{"get":{"responses":{"200":{"description":"ok"}}}}}}',
+  ],
   "/__smoke_unknown_route__": [
     404,
     "text/html",
@@ -177,7 +190,7 @@ test("CLI passes every route without following redirects or carrying cookies", a
   const { url, requests } = await stub(t);
   const result = await cli([url]);
   assert.equal(result.code, 0, result.output);
-  assert.match(result.output, /18 routes, 0 failed assertions/);
+  assert.match(result.output, /20 routes, 0 failed assertions/);
   assert.deepEqual(
     requests.map((r) => r.path),
     Object.keys(fixtures),
@@ -191,8 +204,8 @@ test("version override pins every gradual-promotion probe to the new version", a
   const override = 'two-web-next-production="22345678-1234-1234-1234-123456789abc"';
   const result = await cli([url, "--version-override", override]);
   assert.equal(result.code, 0, result.output);
-  assert.match(result.output, /18 routes, 0 failed assertions/);
-  assert.equal(requests.length, 18);
+  assert.match(result.output, /20 routes, 0 failed assertions/);
+  assert.equal(requests.length, 20);
   assert.ok(requests.every((r) => r.override === override));
 });
 
@@ -215,7 +228,7 @@ test("version override refuses a healthy /up that identifies another Worker vers
   const result = await run(url, { versionOverride: override });
   assert.equal(result.ok, false, result.output);
   assert.match(result.output, /FAIL \/up: expected revision\.version_id/);
-  assert.equal(requests.length, 18);
+  assert.equal(requests.length, 20);
   assert.ok(requests.every((r) => r.override === override));
 });
 
@@ -304,7 +317,7 @@ test("version override passes when the candidate version answers healthy", async
   const result = await run(url, { versionOverride: override });
   assert.equal(result.ok, true, result.output);
   assert.ok(result.output.includes("PASS /up"), result.output);
-  assert.equal(requests.length, 18);
+  assert.equal(requests.length, 20);
   assert.ok(requests.every((r) => r.override === override));
 });
 
@@ -341,7 +354,7 @@ for (const path of Object.keys(fixtures)) {
     assert.equal(result.ok, false);
     assert.ok(result.output.includes(`FAIL ${path}: expected HTTP`), result.output);
     assert.match(result.output, /actual HTTP 503/);
-    assert.equal(requests.length, 18);
+    assert.equal(requests.length, 20);
   });
 }
 
@@ -680,7 +693,7 @@ test("past events accepts rendered Archive but rejects rendered Upcoming with ar
     });
     const result = await run(url);
     assert.equal(result.ok, expected, result.output);
-    assert.equal(requests.length, 18);
+    assert.equal(requests.length, 20);
     if (!expected) {
       assert.match(
         result.output,
@@ -1535,7 +1548,7 @@ for (const [robotsTag, expected] of [
     });
     const result = await run(url);
     assert.equal(result.ok, expected, result.output);
-    assert.equal(requests.length, 18);
+    assert.equal(requests.length, 20);
     if (!expected) {
       for (const path of ["/about", "/admin"]) {
         assert.ok(
@@ -1620,7 +1633,7 @@ for (const [location, expected] of [
     });
     const result = await run(url);
     assert.equal(result.ok, expected, result.output);
-    assert.equal(requests.length, 18);
+    assert.equal(requests.length, 20);
     assert.ok(!result.output.includes("never-log-this"));
     if (!expected) {
       assert.match(
@@ -1666,7 +1679,7 @@ test("connection failures include route and expected versus actual", async (t) =
     result.output,
     /FAIL \/up: expected HTTP response and body within timeout; actual TypeError/,
   );
-  assert.match(result.output, /18 routes, 18 failed assertions/);
+  assert.match(result.output, /20 routes, 20 failed assertions/);
 });
 
 test("invalid input is rejected before making requests", async () => {
@@ -1694,7 +1707,7 @@ test("allowIndexable passes apex HTML without the staging noindex", async (t) =>
   });
   const result = await run(url, { allowIndexable: true });
   assert.equal(result.ok, true, result.output);
-  assert.equal(requests.length, 18);
+  assert.equal(requests.length, 20);
   assert.ok(requests.every((r) => r.method === "GET" && r.cookie === undefined));
 });
 
@@ -1730,5 +1743,5 @@ test("CLI --allow-indexable reaches the apex posture", async (t) => {
   });
   const result = await cli([url, "--allow-indexable"]);
   assert.equal(result.code, 0, result.output);
-  assert.match(result.output, /18 routes, 0 failed assertions/);
+  assert.match(result.output, /20 routes, 0 failed assertions/);
 });

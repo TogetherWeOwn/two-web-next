@@ -43,7 +43,12 @@ function fixture(db: Db | null = null) {
       if (statement.includes("DELETE FROM web_throttle_hits")) return [];
       throw new Error("Unexpected throttle statement");
     },
-    { begin: (run: (tx: Sql) => Promise<unknown>) => run(sql as unknown as Sql) },
+    {
+      begin: (run: (tx: Sql) => Promise<unknown>) => run(sql as unknown as Sql),
+      // The throttle sets `SET LOCAL lock_timeout` through `unsafe` before
+      // the advisory lock; the double passes it through.
+      unsafe: async () => [],
+    },
   );
   const throttleStore = vi.fn(async () => sql as unknown as Sql);
   const eventStore = vi.fn(() => db);

@@ -88,6 +88,16 @@ const fixtures = {
   "/discord": [302, null, "", "https://discord.gg/fixture"],
   "/profile": [302, null, "", "/auth/discord"],
   "/admin": [302, null, "", "/auth/discord"],
+  "/api/public/events": [
+    200,
+    "application/json",
+    '{"data":[],"page":1,"limit":20,"meta":{"current_page":1,"per_page":20,"total":0,"last_page":1}}',
+  ],
+  "/openapi.json": [
+    200,
+    "application/json",
+    '{"openapi":"3.1.0","info":{"title":"Together We Own public read API","version":"1.0.0"},"paths":{"/api/public/events":{"get":{"responses":{"200":{"description":"ok"}}}}}}',
+  ],
   "/__smoke_unknown_route__": [
     404,
     "text/html",
@@ -177,8 +187,8 @@ test("positive control: expected version passes when it serves healthy ordinary 
   const { url, requests } = await stub(t, serveUp(healthyUp(EXPECTED)));
   const result = await run(url, { expectedVersionId: EXPECTED });
   assert.equal(result.ok, true, result.output);
-  assert.match(result.output, /18 routes, 0 failed assertions/);
-  assert.equal(requests.length, 18);
+  assert.match(result.output, /20 routes, 0 failed assertions/);
+  assert.equal(requests.length, 20);
   assert.ok(requests.every((r) => r.method === "GET" && r.override === undefined));
 });
 
@@ -213,7 +223,7 @@ test("healthy /up identifying a different version fails the expected-version che
   const result = await run(url, { expectedVersionId: EXPECTED });
   assert.equal(result.ok, false, result.output);
   assert.match(result.output, /FAIL \/up: expected revision\.version_id/);
-  assert.equal(requests.length, 18);
+  assert.equal(requests.length, 20);
   assert.ok(requests.every((r) => r.override === undefined));
 });
 
@@ -312,8 +322,8 @@ test("CLI --expected-version-id passes when the recorded version serves, without
   const { url, requests } = await stub(t, serveUp(healthyUp(EXPECTED)));
   const result = await cli([url, "--expected-version-id", EXPECTED]);
   assert.equal(result.code, 0, result.output);
-  assert.match(result.output, /18 routes, 0 failed assertions/);
-  assert.equal(requests.length, 18);
+  assert.match(result.output, /20 routes, 0 failed assertions/);
+  assert.equal(requests.length, 20);
   assert.ok(requests.every((r) => r.override === undefined));
 });
 

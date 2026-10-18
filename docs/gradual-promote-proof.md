@@ -15,7 +15,7 @@ production Workers, any database, or any custom domain.
 | Synthetic Worker | `two-gradual-promote-proof` on workers.dev |
 | Fixture | `ci/gradual-promote-proof/fixture.mjs` (no imports, no data bindings) |
 | Config | generated at run time by `ci/gradual-promote-proof/proof-lib.mjs` and saved in the evidence artifact as `config-original.json` / `config-candidate.json` |
-| Smoke checker | the real `bin/smoke.mjs` (18 GETs per attempt, 6 attempts per stage gate) |
+| Smoke checker | the real `bin/smoke.mjs` (20 GETs per attempt, 6 attempts per stage gate) |
 | Credentials | the staging `CLOUDFLARE_API_TOKEN` / `CLOUDFLARE_ACCOUNT_ID` secrets under the `staging` GitHub Environment. The production secret names are never referenced |
 
 The action hardcodes `--env production` for its deployment list and

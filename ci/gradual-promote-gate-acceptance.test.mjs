@@ -73,6 +73,16 @@ const fixtures = {
   "/discord": [302, null, "", "https://discord.gg/fixture"],
   "/profile": [302, null, "", "/auth/discord"],
   "/admin": [302, null, "", "/auth/discord"],
+  "/api/public/events": [
+    200,
+    "application/json",
+    '{"data":[],"page":1,"limit":20,"meta":{"current_page":1,"per_page":20,"total":0,"last_page":1}}',
+  ],
+  "/openapi.json": [
+    200,
+    "application/json",
+    '{"openapi":"3.1.0","info":{"title":"Together We Own public read API","version":"1.0.0"},"paths":{"/api/public/events":{"get":{"responses":{"200":{"description":"ok"}}}}}}',
+  ],
   "/__smoke_unknown_route__": [
     404,
     "text/html",
@@ -213,7 +223,7 @@ for (const id of GATE_IDS) {
     const result = await runGate(gateBlock(action, id), host);
     assert.equal(result.status, 0, result.stdout + result.stderr);
     assert.match(result.stdout, /smoke ok \(attempt 1\)/);
-    assert.equal(requests.length, 18, "the real checker probed every route once");
+    assert.equal(requests.length, 20, "the real checker probed every route once");
     assert.ok(
       requests.every((r) => r.override === QUOTED_OVERRIDE),
       `every probe must carry ${QUOTED_OVERRIDE}`,
@@ -254,8 +264,8 @@ test("the real checker itself accepts quoted and refuses unquoted overrides", as
   assert.equal(requests.length, 0);
   const quoted = await cli(QUOTED_OVERRIDE);
   assert.equal(quoted.status, 0, quoted.stdout + quoted.stderr);
-  assert.match(quoted.stdout, /18 routes, 0 failed assertions/);
-  assert.equal(requests.length, 18);
+  assert.match(quoted.stdout, /20 routes, 0 failed assertions/);
+  assert.equal(requests.length, 20);
   assert.ok(requests.every((r) => r.override === QUOTED_OVERRIDE));
 });
 
