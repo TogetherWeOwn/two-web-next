@@ -269,6 +269,16 @@ export function registerAuthRoutes(app: Hono<{ Bindings: Env }>, hooks: AuthHook
       if (!qaEnabled(c.env.APP_URL, c.env.QA_AUTH_TOKEN)) return c.notFound();
       await next();
     },
+    // Identity/token gate BEFORE the throttle (S4): unauthenticated probes 404
+    // here without consuming the shared qa-login counter, so a probe flood can
+    // never lock out legitimate QA logins. Same shape as /__probe/alert
+    // (src/alert-probe.ts): only gated requests reach the throttle below, and
+    // the handler re-checks before issuing a session.
+    async (c, next) => {
+      const ok = await qaTokenMatches(c.env.QA_AUTH_TOKEN, c.req.header(QA_HEADER) ?? "");
+      if (!ok || !qaIdentity(c.req.param("identity") ?? "")) return c.notFound();
+      await next();
+    },
     throttle("qa-login", AUTH_THROTTLE_PER_MINUTE),
     requestBodyLimit("action"),
     async (c) => {

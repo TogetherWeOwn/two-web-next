@@ -92,11 +92,13 @@ describe("every registered write route is body-limited", () => {
     ),
   )("%s accepts its cap and refuses cap+1 before parsing or writing", async (key, kind) => {
     const [method, pattern] = key.split(" ");
+    // `:identity` before `:id` (`:identity` starts with `:id`); a valid QA
+    // identity so the S4 gate admits the request to the body limiter.
     const path = pattern!
+      .replace(":identity", "qa-member")
       .replace(":key", "test-event")
       .replace(":user", "111111111111111111")
-      .replace(":id", "1")
-      .replace(":identity", "test");
+      .replace(":id", "1");
     const max = BODY_LIMIT_BYTES[kind];
     for (const bytes of [max, max + 1]) {
       const store = createMemorySessionStore();
@@ -142,6 +144,7 @@ describe("every registered write route is body-limited", () => {
             accept: "application/json",
             "content-type": "application/json",
             ...(path === "/__probe/alert" ? { [QA_HEADER]: env.QA_AUTH_TOKEN! } : {}),
+            ...(path.startsWith("/auth/qa/") ? { [QA_HEADER]: env.QA_AUTH_TOKEN! } : {}),
           },
         },
         env,
