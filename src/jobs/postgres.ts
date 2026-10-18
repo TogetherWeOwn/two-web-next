@@ -112,10 +112,13 @@ export function pgPruneStores(sql: TxClient | Sql): PruneStores {
         ) returning 1`
       ).length,
   };
-  // Expired unique-lock sweep: per-statement bounded expiry delete. Keeps the
-  // same `expires_at <= now` predicate the acquire path uses to supersede a
-  // lease (expiry-exact rows go, live leases stay) while deleting at most one
-  // batch per statement; the cron pass drains via `drainPruneTable`.
+  // Expired unique-lock sweep: per-statement bounded expiry delete. Uses the
+  // session-sweep expiry predicate (`expires_at <= now`: expiry-exact rows go,
+  // live leases stay) while deleting at most one batch per statement; the cron
+  // pass drains via `drainPruneTable`. Acquire keeps its strict supersede
+  // predicate (`expires_at < clock_timestamp()`), so at the exact-expiry
+  // instant a row is sweep-eligible one instant before acquire would supersede
+  // it; the lease is expired under either reading within that instant.
   const jobUniqueLocks = {
     sweepExpired: async (now: Date) =>
       (

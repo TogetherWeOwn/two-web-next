@@ -90,8 +90,9 @@ const cutoff = (now: Date, days: number): Date => new Date(now.getTime() - days 
  * the job_unique_locks expiry sweep (expired leases linger without one).
  * Age deletes are age-only (Laravel MassPrunable shape): strictly older than
  * the cutoff goes, cutoff-exact rows survive. The session and lock sweeps
- * delete by expiry (`expires_at <= now`, matching what reads/acquire can see):
- * expiry-exact rows go, live rows stay. Each statement deletes at most
+ * delete by expiry (`expires_at <= now`, matching what reads see for sessions
+ * and the documented sweep contract for locks): expiry-exact rows go, live
+ * rows stay. Each statement deletes at most
  * PRUNE_DELETE_BATCH_SIZE rows; the pass repeats the statement per table until
  * a short batch proves the backlog drained, stopping after
  * PRUNE_DELETE_MAX_BATCHES batches so the single-flight is never held
