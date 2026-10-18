@@ -186,6 +186,18 @@ describe("Copy-link activation admission", () => {
     const { event, preventDefault } = await b.activate("keydown", { key: "Escape" });
     expect(event.defaultPrevented).toBe(false);
     expect(preventDefault).not.toHaveBeenCalled();
+    for (const key of [" ", "Enter"] as const) {
+      for (const extra of [
+        { ctrlKey: true },
+        { metaKey: true },
+        { shiftKey: true },
+        { altKey: true },
+      ]) {
+        const modified = await b.activate("keydown", { key, ...extra });
+        expect(modified.event.defaultPrevented).toBe(false);
+        expect(modified.preventDefault).not.toHaveBeenCalled();
+      }
+    }
     expect(b.writeText).not.toHaveBeenCalled();
     expect(b.setTimeout).not.toHaveBeenCalled();
     // Enter activates the copy directly, exactly like Space and plain click.
