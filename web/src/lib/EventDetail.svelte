@@ -281,7 +281,7 @@ const lineup = $derived(
       {/if}
       <p>
         Attendees shown at page load.{" "}
-        <a href={model.path} data-testid="event-attendees-refresh">Refresh attendees</a>.
+        <a href={model.attendeesRefreshHref} data-testid="event-attendees-refresh">Refresh attendees</a>.
       </p>
     </section>
   {/if}
