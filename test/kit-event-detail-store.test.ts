@@ -6,10 +6,12 @@ import { describe, expect, it, vi } from "vitest";
 
 vi.mock("../src/admin/db", () => ({ dbFor: vi.fn() }));
 vi.mock("../src/events/reads", () => ({
+  ATTENDEE_PAGE_SIZE: 100,
   getPublicEvent: vi.fn(),
   getEventNeighbors: vi.fn(),
   listRelatedEvents: vi.fn(),
   listGoingAttendees: vi.fn(),
+  nextAttendeePage: vi.fn(),
   getViewerRsvp: vi.fn(),
 }));
 vi.mock("../src/events/waitlist", () => ({ waitlistPosition: vi.fn() }));
@@ -59,8 +61,10 @@ describe("kit event-detail production store", () => {
     ).resolves.toBe(related);
 
     const attendees: Awaited<ReturnType<typeof listGoingAttendees>> = [];
-    vi.mocked(listGoingAttendees).mockResolvedValueOnce(attendees);
-    await expect(store.attendeesFn(db, 7)).resolves.toBe(attendees);
+    vi.mocked(listGoingAttendees).mockResolvedValue(attendees);
+    // The store concatenates the page and its one-row lookahead probe, so the
+    // resolved array is a new reference holding both reads' rows.
+    await expect(store.attendeesFn(db, 7, 1)).resolves.toEqual(attendees);
 
     const answer: Awaited<ReturnType<typeof getViewerRsvp>> = null;
     vi.mocked(getViewerRsvp).mockResolvedValueOnce(answer);
