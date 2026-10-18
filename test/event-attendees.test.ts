@@ -221,6 +221,24 @@ describe.skipIf(!process.env.DATABASE_URL)(
       expect(await logs()).toHaveLength(0);
     });
 
+    it("links a page far past the end back to page one, never to another empty page", async () => {
+      // The seed holds one named attendee, so pages 2..N are all empty. Page 3
+      // must return to the bare page-one URL: page N-1 (?attendees=2) is empty
+      // too and would strand the viewer on empty pages.
+      const res = await request(`/e/${EVENT_KEY}?attendees=3`, {
+        headers: await headers(MEMBER),
+      });
+      expect(res.status).toBe(200);
+      const html = await res.text();
+      expect(html).toContain("There are no more attendees on this page.");
+      expect(html).toMatch(
+        new RegExp(`href="/e/${EVENT_KEY}"[^>]*data-testid="event-attendees-prev"`),
+      );
+      expect(html).not.toContain("attendees=2");
+      expect(html).not.toContain('data-testid="event-attendees-next"');
+      expect(await logs()).toHaveLength(0);
+    });
+
     it("missing/forbidden/cancelled pages do not render or log subjects", async () => {
       expect((await request("/e/invalid")).status).toBe(404);
       expect((await request("/e/01J00000000000000000000017")).status).toBe(404);

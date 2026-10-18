@@ -175,9 +175,16 @@ export function registerDetailRoutes(
             session?.member && attendees.length === ATTENDEE_PAGE_SIZE
               ? await listGoingAttendees(db, e.id, nextAttendeePage(attendeePage), 1)
               : [];
+          // An empty past-end page links back to page one (the bare URL):
+          // page N-1 may itself be empty, stranding the viewer on empty
+          // pages. Guests never render this section, so the value is inert
+          // for them.
           const attendeesPaging = {
             page: attendeePage,
-            prevHref: attendeePage > 1 ? attendeePageHref(e.eventKey, attendeePage - 1) : null,
+            prevHref:
+              attendeePage > 1
+                ? attendeePageHref(e.eventKey, attendees.length === 0 ? 1 : attendeePage - 1)
+                : null,
             nextHref:
               attendeeLookahead.length > 0 ? attendeePageHref(e.eventKey, attendeePage + 1) : null,
           };

@@ -388,9 +388,15 @@ export async function resolveKitEventDetail(
       // Like listPast, the render keeps one page while the lookahead powers
       // Next; a partial page is never labeled as the total.
       const attendees = attendeeRows.slice(0, ATTENDEE_PAGE_SIZE);
+      // An empty past-end page links back to page one (the bare URL):
+      // page N-1 may itself be empty, stranding the viewer on empty pages.
+      // Guests never render this section, so the value is inert for them.
       const attendeesPaging = {
         page: attendeePage,
-        prevHref: attendeePage > 1 ? attendeePageHref(event.eventKey, attendeePage - 1) : null,
+        prevHref:
+          attendeePage > 1
+            ? attendeePageHref(event.eventKey, attendees.length === 0 ? 1 : attendeePage - 1)
+            : null,
         nextHref:
           attendeeRows.length > ATTENDEE_PAGE_SIZE
             ? attendeePageHref(event.eventKey, attendeePage + 1)
