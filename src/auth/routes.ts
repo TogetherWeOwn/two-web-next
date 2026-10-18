@@ -31,7 +31,7 @@ import {
   rememberLoginNext,
 } from "../return-journey";
 import { parseModeratorRoleIds, recomputeModerator } from "../roles";
-import { hashToken, type SessionStore } from "../sessions";
+import { hashToken, isValidSessionToken, type SessionStore } from "../sessions";
 import {
   AUTH_THROTTLE_PER_MINUTE,
   WRITE_THROTTLE_PER_MINUTE,
@@ -251,10 +251,13 @@ export function registerAuthRoutes(app: Hono<{ Bindings: Env }>, hooks: AuthHook
     async (c) => {
       // The app-wide same-origin guard runs before throttling or session storage.
       const token = await getSignedCookie(c, c.env.SESSION_SECRET, SESSION_COOKIE);
-      // No bearer: nothing to revoke — clear cookies and leave without touching
-      // session storage (stays 303 when the store is down; main #239 pins the
-      // authoritative 503 only for a presented token whose revocation fails).
-      if (token) {
+      // No bearer, or a correctly-signed but malformed bearer: nothing to
+      // revoke — clear cookies and leave without touching session storage
+      // (stays 303 when the store is down; main #239 pins the authoritative
+      // 503 only for a well-formed presented token whose revocation fails).
+      // A malformed hash could never match a live row, so revoking it is
+      // useless work that would 503 a sign-out that must always clear.
+      if (isValidSessionToken(token)) {
         try {
           const store = await hooks.storeFor(c);
           await store.revoke(await hashToken(token));

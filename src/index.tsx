@@ -12,6 +12,7 @@ import {
   createMemorySessionStore,
   createPostgresSessionStore,
   hashToken,
+  isValidSessionToken,
   newSessionToken,
   SESSION_TTL_SECONDS,
   type SessionStore,
@@ -336,8 +337,10 @@ async function issueSession(
     expiresAt: new Date(Date.now() + SESSION_TTL_SECONDS * 1000),
   };
   const prior = await getSignedCookie(c, c.env.SESSION_SECRET, SESSION_COOKIE);
-  const priorHash =
-    typeof prior === "string" && prior.startsWith("two_") ? await hashToken(prior) : null;
+  // Malformed pre-login bearers never reach the store: the shared
+  // minted-shape gate rejects them before hashing (malformed prior =>
+  // create, never replace).
+  const priorHash = isValidSessionToken(prior) ? await hashToken(prior) : null;
   // Serialize the insert+sweep per user (see withFreshLoginUserLock): the
   // second overlapping issuance waits for the first to finish, so the final
   // state equals a serialized order — newest live, previous revoked. The wait
@@ -389,7 +392,7 @@ async function readSession(
   rotateToken = true,
 ): Promise<Session | null> {
   const token = await getSignedCookie(c, c.env.SESSION_SECRET, SESSION_COOKIE);
-  if (!token || !token.startsWith("two_")) return null;
+  if (!isValidSessionToken(token)) return null;
   // Anonymous public pages must not depend on session storage or its startup DDL.
   const store = await storeFor(c);
   const row = await store.get(await hashToken(token));

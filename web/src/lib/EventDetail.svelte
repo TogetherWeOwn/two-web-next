@@ -40,6 +40,7 @@ let { model }: { model: KitEventDetailModel } = $props();
 const rsvpIsland = '<script src="/islands/rsvp-button.js" defer></' + "script>";
 const copyLinkIsland = '<script src="/islands/copy-link.js" defer></' + "script>";
 const goingCountIsland = '<script src="/islands/going-count.js" defer></' + "script>";
+const attendeesLiveIsland = '<script src="/islands/attendees-live.js" defer></' + "script>";
 
 const closed = $derived(
   model.isDraft ? "draft" : model.isPast || Date.parse(model.endsAt) <= Date.now() ? "past" : null,
@@ -234,7 +235,7 @@ const lineup = $derived(
     </section>
   </div>
   {#if model.attendees.length > 0 || (model.viewerMember && model.attendeesPaging.page > 1)}
-    <section aria-labelledby="event-attendees-heading" data-testid="event-attendees">
+    <section aria-labelledby="event-attendees-heading" data-testid="event-attendees" data-island="attendees-live">
       {#if model.attendeesPaging.prevHref || model.attendeesPaging.nextHref}
         <h2 id="event-attendees-heading">Who's going</h2>
       {:else}
@@ -287,6 +288,7 @@ const lineup = $derived(
   {/if}
   {@html copyLinkIsland}
   {@html goingCountIsland}
+  {@html attendeesLiveIsland}
   <JsonLd testid="event-jsonld" json={model.jsonLd} />
   <JsonLd testid="site-jsonld" json={model.siteJsonLd} />
   <div class="event-discovery">
