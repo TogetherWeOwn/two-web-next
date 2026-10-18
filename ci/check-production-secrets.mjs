@@ -14,11 +14,9 @@
 //
 // Required names mirror the required secret fields of `Env` in src/env.ts.
 // BOT_ENDPOINT_URL, BOT_SHARED_SECRET and BOT_KEY_ID are intentionally NOT
-// required: the deployed jobs path receives an injected BotClient
-// (src/jobs/worker.ts) and nothing in the deployed Worker reads those names.
-// They live only in operator/probe tooling (bin/, src/probes/) via
-// process.env. If the Worker ever reads them from Env, add them here in the
-// same change.
+// required: they are optional in Env and every deployed reader fails closed
+// when they are missing (src/agent-events/route.ts, src/jobs/worker.ts).
+// If any of them is ever made required, add it here in the same change.
 
 import { execFileSync } from "node:child_process";
 import { pathToFileURL } from "node:url";
