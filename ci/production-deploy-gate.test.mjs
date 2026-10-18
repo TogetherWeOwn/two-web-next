@@ -757,15 +757,15 @@ test("rollback workflow reuses the production gate with no wider permissions", (
   assert.ok(!workflow.includes("secrets.CLOUDFLARE_API_TOKEN"));
   assert.ok(!workflow.includes("secrets.CLOUDFLARE_ACCOUNT_ID"));
   for (const key of Object.keys(credentials)) {
-    // Credentials check, required-secrets preflight and the rollback itself:
-    // all production-only.
+    // Credentials check, rollback target-version secrets preflight and the
+    // rollback itself: all production-only.
     assert.equal((workflow.match(new RegExp(`secrets\\.PRODUCTION_${key}`, "g")) ?? []).length, 3);
   }
   const versionCheck = workflow.indexOf("run: node ci/production-deploy-gate.mjs --version-id");
   const credentialCheck = workflow.indexOf("run: node ci/production-deploy-gate.mjs --credentials");
-  const requiredSecrets = workflow.indexOf("run: node ci/check-production-secrets.mjs");
-  const moderator = workflow.indexOf("run: npm run check:worker-moderators-production");
-  const dryRun = workflow.indexOf("npx wrangler deploy --dry-run --env production");
+  const targetSecrets = workflow.indexOf(
+    "run: node ci/check-production-secrets.mjs --rollback-version",
+  );
   const rollback = workflow.indexOf(
     'run: npx wrangler rollback "$ROLLBACK_VERSION_ID" --name two-web-next-production',
   );
@@ -773,11 +773,28 @@ test("rollback workflow reuses the production gate with no wider permissions", (
   assert.ok(
     versionCheck > 0 &&
       versionCheck < credentialCheck &&
-      credentialCheck < requiredSecrets &&
-      requiredSecrets < moderator &&
-      moderator < dryRun &&
-      dryRun < rollback,
+      credentialCheck < targetSecrets &&
+      targetSecrets < rollback,
   );
+  // The rollback deploys the recorded version's own bindings: moderator and
+  // dry-run checks validate the dispatch SHA and must never gate it, and the
+  // secrets check must read the target version, never the latest listing.
+  assert.ok(
+    !workflow.includes("run: npm run check:worker-moderators-production"),
+    "rollback must not gate on the dispatch SHA moderator config",
+  );
+  assert.ok(
+    !workflow.includes("npx wrangler deploy --dry-run --env production"),
+    "rollback must not gate on a dispatch SHA dry-run build",
+  );
+  for (const line of workflow.split("\n")) {
+    if (line.includes("ci/check-production-secrets.mjs")) {
+      assert.ok(
+        line.includes("--rollback-version"),
+        `rollback must only check the target version: ${line.trim()}`,
+      );
+    }
+  }
   // The input never interpolates into a run: block; it travels inputs -> env.
   for (const line of workflow.split("\n")) {
     if (line.trimStart().startsWith("run:") && line.includes("inputs.version_id")) {
