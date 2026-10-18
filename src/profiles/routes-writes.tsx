@@ -16,6 +16,7 @@ import { admitWrite } from "./routes-admission";
 import type { Ctx, ProfileApp, ProfileDeps } from "./routes-shared";
 import type { ProfileStores } from "./routes-stores";
 import { requestRoute, safeRequestId } from "../request-log";
+import { acceptsJson, isJsonMediaType, mediaType } from "../media-type";
 import { normalizeLeaderboardOptOut, validateProfile } from "./validation";
 
 // UpdateProfileRequest's fields plus the spam-trap pair. Anything else (user_id,
@@ -32,30 +33,13 @@ const WRITABLE_FIELDS = new Set([
 ]);
 const UNSUPPORTED_FIELDS = "Only your bio, games, timezone and leaderboard setting can be changed.";
 
-// Media types are case-insensitive (RFC 2045 §5.1) and may carry parameters:
-// compare only the type/subtype before `;`, trimmed and lowercased. Anything
-// else (including a missing Content-Type) is not a save body at all: Hono's
-// parseBody answers `{}` for those, which would otherwise validate as a blank
-// profile and silently wipe bio/games/timezone.
-const mediaType = (value: string | null | undefined): string =>
-  (value ?? "").split(";")[0]?.trim().toLowerCase() ?? "";
-
-const isJsonMediaType = (value: string | null | undefined): boolean =>
-  mediaType(value) === "application/json";
+// Anything besides JSON or a form (including a missing Content-Type) is not a
+// save body at all: Hono's parseBody answers `{}` for those, which would
+// otherwise validate as a blank profile and silently wipe bio/games/timezone.
 const isFormMediaType = (value: string | null | undefined): boolean => {
   const mt = mediaType(value);
   return mt === "application/x-www-form-urlencoded" || mt === "multipart/form-data";
 };
-
-// Response selection mirrors request admission above: Accept lists media
-// ranges (`type/subtype`, case-insensitive, optional `;` parameters,
-// comma-separated). A range selects JSON only when its type/subtype is
-// exactly application/json: substring lookalikes (application/jsonx,
-// x-application/json, quoted parameter notes) stay on the HTML path.
-// Preference weighting and wildcards are unchanged: any exact JSON range
-// selects JSON, anything else keeps the native HTML contract.
-const acceptsJson = (value: string | null | undefined): boolean =>
-  (value ?? "").split(",").some((range) => mediaType(range) === "application/json");
 
 export function registerWriteRoutes(
   app: ProfileApp,

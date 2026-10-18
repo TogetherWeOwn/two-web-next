@@ -189,6 +189,62 @@ describe("expiredWriteBounce", () => {
     });
   });
 
+  it.each([
+    ["accept", "Application/JSON"],
+    ["content-type", "Application/JSON"],
+    ["accept", "APPLICATION/JSON; charset=UTF-8"],
+    ["accept", "text/html, Application/Json"],
+  ])("a mixed-case %s request keeps the JSON 401 shape", async (header, value) => {
+    const res = await bounce(false).request(
+      "/probe",
+      { method: "POST", headers: { [header]: value } },
+      env,
+    );
+    expect(res.status, `${header}: ${value}`).toBe(401);
+    expect(await res.json()).toEqual({
+      error: "Unauthorized",
+      recovery: "/auth/recover?next=%2Fevents",
+    });
+  });
+
+  it.each([
+    ["accept", "application/jsonx"],
+    ["accept", "APPLICATION/JSONX"],
+    ["accept", 'text/html; note="application/json"'],
+    ["content-type", "application/jsonx"],
+  ])("a lookalike %s request stays on the HTML 303 path", async (header, value) => {
+    const res = await bounce(false).request(
+      "/probe",
+      { method: "POST", headers: { [header]: value } },
+      env,
+    );
+    expect(res.status, `${header}: ${value}`).toBe(303);
+    expect(res.headers.get("location")).toBe("/auth/recover?next=%2Fevents");
+  });
+
+  it("a comma inside a quoted Accept parameter does not select JSON", async () => {
+    const res = await bounce(false).request(
+      "/probe",
+      { method: "POST", headers: { accept: 'text/html; note="a,b"' } },
+      env,
+    );
+    expect(res.status).toBe(303);
+    expect(res.headers.get("location")).toBe("/auth/recover?next=%2Fevents");
+  });
+
+  it("a quoted comma plus a real JSON range still selects JSON", async () => {
+    const res = await bounce(false).request(
+      "/probe",
+      { method: "POST", headers: { accept: 'text/html; note="a,b", Application/JSON' } },
+      env,
+    );
+    expect(res.status).toBe(401);
+    expect(await res.json()).toEqual({
+      error: "Unauthorized",
+      recovery: "/auth/recover?next=%2Fevents",
+    });
+  });
+
   it("a native form POST redirects to recovery, never the write URL", async () => {
     const res = await bounce(false).request(
       "/probe",
