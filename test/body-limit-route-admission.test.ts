@@ -195,9 +195,10 @@ const moderatorWrites = [
 
 describe("moderator admission", () => {
   it.each(moderatorWrites)(
-    "%s %s refuses guests and non-moderators without body reads",
+    "%s %s refuses oversized bodies before session reads for guests and non-moderators",
     async (method, path, max) => {
       const { sessions, cookie } = await session();
+      const get = vi.spyOn(sessions, "get");
       for (const presented of ["", cookie]) {
         for (const advertised of [false, true]) {
           const { request, pull } = upload(path, method, max, presented, advertised);
@@ -205,19 +206,19 @@ describe("moderator admission", () => {
             ...env,
             SESSION_STORE: sessions,
           } as Env);
-          expect(response.status).toBe(presented ? 403 : 401);
-          expect(await response.json()).toEqual({
-            error: presented ? "forbidden" : "unauthenticated",
-          });
-          expect(pull).not.toHaveBeenCalled();
+          expect(response.status).toBe(413);
+          expect(await response.json()).toEqual(ERROR);
+          if (advertised) expect(pull).not.toHaveBeenCalled();
+          else expect(pull.mock.calls.length).toBeLessThanOrEqual(max / 1024 + 2);
           await request.body?.cancel();
         }
       }
+      expect(get).not.toHaveBeenCalled();
     },
   );
 
   it.each(moderatorWrites)(
-    "%s %s authenticates a moderator once before bounding the upload",
+    "%s %s refuses a moderator upload before session reads",
     async (method, path, max) => {
       const { sessions, cookie } = await session(true);
       const get = vi.spyOn(sessions, "get");
@@ -228,7 +229,7 @@ describe("moderator admission", () => {
       } as Env);
       expect(response.status).toBe(413);
       expect(await response.json()).toEqual(ERROR);
-      expect(get).toHaveBeenCalledOnce();
+      expect(get).not.toHaveBeenCalled();
     },
   );
 });
