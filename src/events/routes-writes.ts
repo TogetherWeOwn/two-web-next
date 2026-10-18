@@ -41,23 +41,45 @@ async function moderator(c: Ctx, readFragmentSession: SessionReader): Promise<Se
   return session;
 }
 
+class UnsupportedMediaTypeError extends Error {}
+
+// Media types are case-insensitive (RFC 2045 §5.1) and may carry parameters:
+// compare only the type/subtype before `;`, trimmed and lowercased. Anything
+// else (including a missing Content-Type) is not an event body at all: the
+// form parser would otherwise answer `{}` for those, which PATCH would merge
+// with the stored row and acknowledge as a successful (but ignored) edit.
+// Mirrors the profile save gate in src/profiles/routes-writes.tsx.
+const mediaType = (value: string | null | undefined): string =>
+  (value ?? "").split(";")[0]?.trim().toLowerCase() ?? "";
+
+const isJsonMediaType = (value: string | null | undefined): boolean =>
+  mediaType(value) === "application/json";
+const isFormMediaType = (value: string | null | undefined): boolean => {
+  const mt = mediaType(value);
+  return mt === "application/x-www-form-urlencoded" || mt === "multipart/form-data";
+};
+
 async function eventBody(c: Pick<Ctx, "req">): Promise<Record<string, unknown>> {
   // Event edits must not turn malformed/non-object JSON into an empty PATCH.
   // Keep the RSVP trap's permissive body parsing independent of this admission:
   // a form body that fails to parse is a 422 here, never an empty edit that
   // gets written, audited, and re-synced to Discord.
-  if (!(c.req.header("content-type") ?? "").toLowerCase().includes("application/json")) {
+  const contentType = c.req.header("content-type");
+  if (isJsonMediaType(contentType)) {
+    const input: unknown = await c.req.json().catch(() => null);
+    if (!input || typeof input !== "object" || Array.isArray(input)) {
+      throw new ValidationError({ body: "Send a JSON object." });
+    }
+    return input as Record<string, unknown>;
+  }
+  if (isFormMediaType(contentType)) {
     try {
       return await body(c, { onMalformedForm: "throw" });
     } catch {
       throw new ValidationError({ body: "Send a valid form body." });
     }
   }
-  const input: unknown = await c.req.json().catch(() => null);
-  if (!input || typeof input !== "object" || Array.isArray(input)) {
-    throw new ValidationError({ body: "Send a JSON object." });
-  }
-  return input as Record<string, unknown>;
+  throw new UnsupportedMediaTypeError(`Unsupported media type: ${contentType ?? ""}`);
 }
 
 const invalid = (c: Pick<Ctx, "json">, err: ValidationError) =>
@@ -92,6 +114,8 @@ export function registerWriteRoutes(app: App, readFragmentSession: SessionReader
         );
         return c.json({ data: eventJson({ ...row, goingCount: 0 }) }, 201);
       } catch (err) {
+        if (err instanceof UnsupportedMediaTypeError)
+          return c.json({ error: "unsupported_media_type" }, 415);
         if (err instanceof ValidationError) return invalid(c, err);
         throw err;
       }
@@ -152,6 +176,8 @@ export function registerWriteRoutes(app: App, readFragmentSession: SessionReader
         const updated = await getPublicEvent(db, row.eventKey);
         return c.json({ data: eventJson(updated!) });
       } catch (err) {
+        if (err instanceof UnsupportedMediaTypeError)
+          return c.json({ error: "unsupported_media_type" }, 415);
         if (err instanceof ValidationError) return invalid(c, err);
         if (err instanceof NotFoundError) return c.json({ error: "not_found" }, 404);
         throw err;
