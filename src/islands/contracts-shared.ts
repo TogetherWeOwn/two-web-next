@@ -47,7 +47,8 @@ export const POLLING: Record<IslandName, { pollMs: number | null; reason: string
   "attendees-live": {
     pollMs: null,
     reason:
-      "Event-driven fragment refresh on the going-count-updated CustomEvent; one GET /e/:key " +
-      "per answered event with a single bounded retry, non-matching keys fire no request.",
+      "Event-driven fragment refresh on the going-count-updated CustomEvent; one non-rotating " +
+      "GET /e/:key (x-two-island fragment header) per answered event with a single bounded " +
+      "retry, non-matching keys fire no request.",
   },
 };

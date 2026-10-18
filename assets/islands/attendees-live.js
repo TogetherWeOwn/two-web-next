@@ -3,9 +3,11 @@
 // Progressive enhancement over the SSR who's-going roster in
 // `src/events/pages-detail.tsx`: listens for the `going-count-updated`
 // CustomEvent broadcast by the rsvp-button island after every successful
-// write, then re-reads the event page HTML (GET /e/<key>, text/html) and
-// swaps the `[data-testid="event-attendees"]` section in place (no full
-// reload). The SSR section and its full-page Refresh link stay as the
+// write, then re-reads the event page HTML (GET /e/<key>, text/html, with
+// the x-two-island fragment header so the server answers without rotating
+// the single-use session bearer) and swaps the
+// `[data-testid="event-attendees"]` section in place (no full reload). The
+// SSR section and its full-page Refresh link stay as the
 // no-JS fallback; this binder only patches nodes in place, never invents
 // markup beyond the bounded stale/retry signal.
 //
@@ -13,7 +15,9 @@
 // keys fire nothing. No polling. One automatic retry, then a visible
 // stale/retry signal (outside the RSVP island) instead of a silent
 // contradiction with the count badge. A newer broadcast for the same page
-// aborts the older read; its late completion patches nothing.
+// aborts the older read; its late completion patches nothing. The refresh
+// preserves the displayed attendee page (?attendees=N) so a later page never
+// snaps back to page one.
 
 (function () {
   var SECTION = '[data-testid="event-attendees"]';
@@ -50,40 +54,67 @@
       var path = (typeof location !== "undefined" && (location.pathname || location.href)) || "";
       var match = /\/e\/([^/?#]+)/.exec(path);
       if (match) return decodeURIComponent(match[1]);
-    } catch {}
+    } catch (_locationUnreadable) {
+      // Fall through to null: without a page key the refresh stays idle and
+      // the SSR roster plus Refresh link remain the fallback.
+    }
     return null;
   }
 
-  function findSection(doc) {
+  // Current attendee page for this view, from ?attendees=N only (no other
+  // query state is copied). Returns "" on page one or when unreadable so the
+  // refresh keeps the default URL.
+  function pageQuery() {
+    var raw = null;
     try {
-      return (doc || document).querySelector(SECTION);
-    } catch {
-      return null;
+      var search = typeof location !== "undefined" && location.search ? location.search : "";
+      var params = new URLSearchParams(search);
+      raw = params.get("attendees");
+    } catch (_searchUnreadable) {
+      // Fall through to "": an unreadable query keeps the default page-one
+      // refresh instead of firing nothing.
     }
+    var page = parseInt(raw || "", 10);
+    if (!isFinite(page) || page <= 1) return "";
+    return "?attendees=" + Math.floor(page);
+  }
+
+  function findSection(doc) {
+    var scope = doc || (typeof document !== "undefined" ? document : null);
+    if (!scope || typeof scope.querySelector !== "function") return null;
+    return scope.querySelector(SECTION);
   }
 
   function clearStale() {
     var stale = null;
     try {
       stale = document.querySelector('[data-testid="' + STALE_TESTID + '"]');
-    } catch {
+    } catch (_staleLookupIgnored) {
+      // Fall through with stale null: no signal to clear, the refresh still
+      // completes and the next failure re-renders the signal.
       stale = null;
     }
     if (!stale) return;
     try {
       if (stale.parentNode) stale.parentNode.removeChild(stale);
       else if (stale.remove) stale.remove();
-    } catch {}
+    } catch (_staleRemoveIgnored) {
+      // Fall through: a leftover stale note is corrected on the next refresh
+      // via showStale's already-present guard, never a silent contradiction.
+    }
   }
 
   function showStale(key) {
     try {
       if (document.querySelector('[data-testid="' + STALE_TESTID + '"]')) return;
-    } catch {}
+    } catch (_guardLookupIgnored) {
+      // Fall through and render: a duplicate signal is harmless, a missing
+      // one would be the silent contradiction this island must not leave.
+    }
     var note = null;
     try {
       note = document.createElement("p");
-    } catch {
+    } catch (_createIgnored) {
       return;
     }
     note.setAttribute("role", "status");
@@ -95,7 +126,9 @@
     var retry = null;
     try {
       retry = document.createElement("button");
-    } catch {
+    } catch (_retryCreateIgnored) {
+      // Fall through with retry null: the stale note still renders, only the
+      // manual retry control is missing, and the next broadcast retries.
       retry = null;
     }
     if (retry) {
@@ -112,7 +145,10 @@
       if (host) host.appendChild(note);
       else if (document.body) document.body.appendChild(note);
       else if (document.documentElement) document.documentElement.appendChild(note);
-    } catch {}
+    } catch (_signalMountIgnored) {
+      // Fall through: without a mount point the signal is dropped, but the
+      // count badge already updated so the next broadcast re-attempts.
+    }
   }
 
   // Swap the roster section from a re-rendered event page. Returns true when
@@ -121,7 +157,9 @@
     var parsed = null;
     try {
       parsed = new DOMParser().parseFromString(html, "text/html");
-    } catch {
+    } catch (_parseIgnored) {
+      // Fall through to false: an unparseable body keeps the current roster
+      // and runs the bounded retry/stale path instead of patching garbage.
       return false;
     }
     if (!parsed || !parsed.querySelector) return false;
@@ -139,11 +177,16 @@
           old.parentNode.replaceChild(node, old);
           return true;
         }
-      } catch {}
+      } catch (_replaceIgnored) {
+        // Fall through to the innerHTML fallback below, which needs no
+        // cross-document adoption.
+      }
       try {
         old.innerHTML = fresh.innerHTML;
         return true;
-      } catch {
+      } catch (_innerHtmlIgnored) {
+        // Fall through to false: the roster keeps server page-load truth and
+        // the caller runs the bounded retry/stale path.
         return false;
       }
     }
@@ -156,7 +199,9 @@
         var anchor = null;
         try {
           anchor = document.querySelector(".event-discovery");
-        } catch {
+        } catch (_anchorLookupIgnored) {
+          // Fall through with anchor null: the section appends to the body
+          // instead of slotting before discovery content.
           anchor = null;
         }
         if (anchor && anchor.parentNode) anchor.parentNode.insertBefore(node2, anchor);
@@ -173,7 +218,9 @@
         if (old.parentNode) old.parentNode.removeChild(old);
         else if (old.remove) old.remove();
         return true;
-      } catch {
+      } catch (_pruneIgnored) {
+        // Fall through to false: the stale section stays and the caller runs
+        // the bounded retry/stale path rather than claiming success.
         return false;
       }
     }
@@ -184,7 +231,10 @@
     if (state.timeout !== null && state.timeout !== undefined) {
       try {
         clearTimeout(state.timeout);
-      } catch {}
+      } catch (_clearIgnored) {
+        // Fall through: the handle is dropped below either way, so at most
+        // one late timer fires and its state guard no-ops it.
+      }
       state.timeout = null;
     }
   }
@@ -224,7 +274,10 @@
         if (controller) {
           try {
             controller.abort();
-          } catch {}
+          } catch (_deadlineAbortIgnored) {
+            // Fall through: without abort support the owned fetch still
+            // rejects into the failure path via the controller-less branch.
+          }
         } else {
           onFailure(state);
         }
@@ -232,14 +285,23 @@
     }
     var options = {
       method: "GET",
-      headers: { accept: "text/html" },
+      headers: {
+        accept: "text/html",
+        // Fragment read: the server answers without rotating the session, so
+        // this re-read racing a reload (or a superseded attempt racing its
+        // replacement) cannot burn the single-use bearer the page view holds.
+        // Same x-two-island contract as the events-calendar fragment.
+        "x-two-island": "attendees-live",
+      },
       credentials: "same-origin",
     };
     if (controller) options.signal = controller.signal;
-    fetch("/e/" + encodeURIComponent(state.key), options).then(
+    fetch("/e/" + encodeURIComponent(state.key) + pageQuery(), options).then(
       function (res) {
         if (current !== state) return;
-        clearStateTimeout(state);
+        // The deadline stays armed past the headers: it clears only once the
+        // body is read (below) or fails (onFailure), so a stalled body still
+        // retries instead of hanging silently.
         if (!res || !res.ok) {
           onFailure(state);
           return;
@@ -247,7 +309,8 @@
         var text = null;
         try {
           text = res.text();
-        } catch {
+        } catch (_bodyReadIgnored) {
+          // Fall through to the failure path: no body, no swap.
           onFailure(state);
           return;
         }
@@ -258,10 +321,13 @@
         text.then(
           function (html) {
             if (current !== state) return;
+            clearStateTimeout(state);
             var ok = false;
             try {
               ok = swapFromHtml(html);
-            } catch {
+            } catch (_swapIgnored) {
+              // Fall through with ok false: the roster is untouched and the
+              // bounded retry/stale path runs.
               ok = false;
             }
             if (!ok) {
@@ -295,13 +361,19 @@
       if (current.retryTimer) {
         try {
           clearTimeout(current.retryTimer);
-        } catch {}
+        } catch (_supersedeClearIgnored) {
+          // Fall through: the superseded timer's state guard no-ops it even
+          // if the clear throws.
+        }
       }
       clearStateTimeout(current);
       if (current.controller) {
         try {
           current.controller.abort();
-        } catch {}
+        } catch (_supersedeAbortIgnored) {
+          // Fall through: the superseded read's state guard drops its late
+          // completion even without abort support.
+        }
       }
     }
     var state = { key: key, attempt: 1, controller: null, timeout: null, retryTimer: null };
