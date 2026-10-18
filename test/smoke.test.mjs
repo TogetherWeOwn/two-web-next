@@ -791,6 +791,36 @@ test("allow-missing-baseline skips the dead-letter gate when the baseline is unr
   const flagged = await cli([url, "--allow-missing-baseline"]);
   assert.equal(flagged.code, 0, flagged.output);
   assert.match(flagged.output, /SKIP \/up dead-letter gate/);
+  // A readable baseline with allow-missing still enforces growth: the
+  // workflows set both together, so `if (allowMissingBaseline)` alone would
+  // silently disable the gate. Growth fails, at-baseline passes without SKIP.
+  const { url: grownUrl } = await stub(t, (route, result) => {
+    if (route === "/up")
+      result.body =
+        '{"status":"healthy","db":"ok","pending_migrations":0,"queue":{"status":"healthy","warn_at":20,"critical_at":100,"failed":20}}';
+  });
+  const grownWithBaseline = await run(grownUrl, {
+    failedBaseline: 19,
+    allowMissingBaseline: true,
+  });
+  assert.equal(grownWithBaseline.ok, false, grownWithBaseline.output);
+  assert.match(
+    grownWithBaseline.output,
+    /FAIL \/up: expected queue\.failed <= 19 \(no new dead letters; baseline 19\); actual queue\.failed 20/,
+  );
+  assert.ok(
+    !grownWithBaseline.output.includes("SKIP /up dead-letter gate"),
+    grownWithBaseline.output,
+  );
+  const { url: atUrl } = await stub(t, (route, result) => {
+    if (route === "/up")
+      result.body =
+        '{"status":"healthy","db":"ok","pending_migrations":0,"queue":{"status":"healthy","warn_at":20,"critical_at":100,"failed":19}}';
+  });
+  const atBaseline = await run(atUrl, { failedBaseline: 19, allowMissingBaseline: true });
+  assert.equal(atBaseline.ok, true, atBaseline.output);
+  assert.ok(atBaseline.output.includes("PASS /up"), atBaseline.output);
+  assert.ok(!atBaseline.output.includes("SKIP /up dead-letter gate"), atBaseline.output);
 });
 
 test("rejects a non-integer failed baseline", async (t) => {
