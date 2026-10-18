@@ -205,15 +205,15 @@ describe("retention ledger doc rows", () => {
     expect(doc).toContain("2160 hours");
     expect(doc).toContain("member-erasure.md#what-is-retained-and-why");
     expect(doc).toContain("src/jobs/cron.ts");
-    expect(doc).toContain("src/events/rsvp.ts:208-212");
+    expect(doc).toContain("src/events/rsvp.ts:209-213");
     expect(doc).toContain("Retain indefinitely per CISO decision");
     // The cited line range must actually hold the prune: shifting rsvp.ts
     // without re-basing the citation fails here instead of going stale.
-    // Pinned per-line so a one-line shift already breaks (line 208 must open
-    // pruneThrottle, line 210 must hold the delete).
+    // Pinned per-line so a one-line shift already breaks (line 209 must open
+    // pruneThrottle, line 211 must hold the delete).
     const rsvpLines = read("src/events/rsvp.ts").split("\n");
-    expect(rsvpLines[207]).toContain("pruneThrottle");
-    expect(rsvpLines[209]).toContain("delete from web_throttle_hits");
+    expect(rsvpLines[208]).toContain("pruneThrottle");
+    expect(rsvpLines[210]).toContain("delete from web_throttle_hits");
   });
 
   it("publishes the event-search table, access paths, and established prune window", () => {
