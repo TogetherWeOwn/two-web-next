@@ -794,7 +794,7 @@ describe("join callback: post-bot-success downstream failures stay redacted", ()
       { outcome: "added", source: null, requestId: null, discordId: "42" },
     ]);
     expect(recordsFor(logs, MODERATOR_LOOKUP_LOG).map((r) => r.args)).toEqual([
-      [MODERATOR_LOOKUP_LOG, { status: 500 }],
+      [MODERATOR_LOOKUP_LOG, { status: 500, guild_id: "326474832151838730" }],
     ]);
     expect(channelCounts(logs)).toMatchObject({ info: 0, debug: 0, warn: 1, error: 0 });
     expect(created).toEqual([{ moderator: false, userId: "42", member: true }]);
