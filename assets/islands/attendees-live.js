@@ -143,15 +143,99 @@
     var host = findSection();
     try {
       if (host) host.appendChild(note);
-      else if (document.body) document.body.appendChild(note);
-      else if (document.documentElement) document.documentElement.appendChild(note);
+      else mountWhereRosterLives(note);
     } catch (_signalMountIgnored) {
       // Fall through: without a mount point the signal is dropped, but the
       // count badge already updated so the next broadcast re-attempts.
     }
   }
 
-  // Adopt a node parsed from the re-read document into the live document.
+  // Mount a node where the roster section lives: inside the existing
+  // section when present, otherwise slotted before the discovery content
+  // (inside <main>) so a first-RSVP stale signal never lands after the site
+  // footer. Falls back to <main>, then body, when the anchor is missing.
+  function mountWhereRosterLives(node) {
+    var anchor = null;
+    try {
+      anchor = document.querySelector(".event-discovery");
+    } catch (_anchorLookupIgnored) {
+      // Fall through with anchor null: the main/body fallbacks below apply.
+      anchor = null;
+    }
+    try {
+      if (anchor && anchor.parentNode) {
+        anchor.parentNode.insertBefore(node, anchor);
+        return true;
+      }
+    } catch (_anchorInsertIgnored) {
+      // Fall through to the main/body fallbacks below.
+    }
+    var main = null;
+    try {
+      main = document.querySelector("main");
+    } catch (_mainLookupIgnored) {
+      main = null;
+    }
+    try {
+      if (main) {
+        main.appendChild(node);
+        return true;
+      }
+    } catch (_mainInsertIgnored) {
+      // Fall through to the body fallbacks below.
+    }
+    try {
+      if (document.body) {
+        document.body.appendChild(node);
+        return true;
+      }
+    } catch (_bodyInsertIgnored) {
+      // Fall through to false: without a mount point the caller reports
+      // failure and runs the bounded retry/stale path.
+    }
+    return false;
+  }
+
+  // Move keyboard focus into the freshly swapped section when the swap
+  // removed the focused element (e.g. the "Try again" button lived inside
+  // the old section). Without this the focus drops to BODY and assistive
+  // tech loses its place.
+  function restoreFocusAfterSwap(section) {
+    var heading = null;
+    try {
+      heading = section.querySelector("#event-attendees-heading");
+    } catch (_headingLookupIgnored) {
+      heading = null;
+    }
+    var target = heading || section;
+    try {
+      if (target && typeof target.setAttribute === "function") {
+        target.setAttribute("tabindex", "-1");
+      }
+    } catch (_tabindexIgnored) {
+      // Fall through to the focus attempt: the target is still focusable
+      // enough in most hosts without the tabindex hint.
+    }
+    try {
+      if (target && typeof target.focus === "function") target.focus();
+    } catch (_focusIgnored) {
+      // Fall through: the roster still matches the server truth; only the
+      // focus restoration is skipped.
+    }
+  }
+
+  function focusedInside(node) {
+    try {
+      if (!node || typeof node.contains !== "function") return false;
+      var active = document.activeElement;
+      if (!active) return false;
+      return node.contains(active);
+    } catch (_focusLookupIgnored) {
+      // Fall through to false: without a readable focus state the refresh
+      // completes without moving focus.
+      return false;
+    }
+  }
   // Prefers an explicit cross-document import when the host provides it
   // (same contract as the events-calendar island); otherwise moves the node
   // directly, which the DOM auto-adopts on insert. Either way no markup
@@ -185,9 +269,12 @@
     if (fresh && old) {
       // Replace the node so attributes (counts in the heading, list order)
       // match the server exactly; the insert adopts across documents.
+      var refocus = focusedInside(old);
       try {
         if (!old.parentNode) return false;
-        old.parentNode.replaceChild(adopt(fresh), old);
+        var adopted = adopt(fresh);
+        old.parentNode.replaceChild(adopted, old);
+        if (refocus) restoreFocusAfterSwap(adopted);
         return true;
       } catch (_replaceIgnored) {
         // Fall through to false: the roster keeps server page-load truth and
@@ -196,19 +283,17 @@
       }
     }
     if (fresh && !old) {
+      var staleForFocus = null;
+      try {
+        staleForFocus = document.querySelector('[data-testid="' + STALE_TESTID + '"]');
+      } catch (_staleFocusLookupIgnored) {
+        staleForFocus = null;
+      }
+      var refocusAfterInsert = focusedInside(staleForFocus);
       try {
         var node2 = adopt(fresh);
-        var anchor = null;
-        try {
-          anchor = document.querySelector(".event-discovery");
-        } catch (_anchorLookupIgnored) {
-          // Fall through with anchor null: the section appends to the body
-          // instead of slotting before discovery content.
-          anchor = null;
-        }
-        if (anchor && anchor.parentNode) anchor.parentNode.insertBefore(node2, anchor);
-        else if (document.body) document.body.appendChild(node2);
-        else return false;
+        if (!mountWhereRosterLives(node2)) return false;
+        if (refocusAfterInsert) restoreFocusAfterSwap(node2);
         return true;
       } catch {
         return false;
@@ -216,9 +301,22 @@
     }
     if (!fresh && old) {
       // The server renders no section for an empty roster.
+      var refocusAfterPrune = focusedInside(old);
       try {
         if (old.parentNode) old.parentNode.removeChild(old);
         else if (old.remove) old.remove();
+        else return false;
+        if (refocusAfterPrune) {
+          // <main id="main" tabindex="-1"> in EventDetailShell is already
+          // focusable, so no tabindex hint is needed here.
+          try {
+            var fallback = document.querySelector("main");
+            if (fallback && typeof fallback.focus === "function") fallback.focus();
+          } catch (_fallbackFocusIgnored) {
+            // Fall through: the roster still matches the server truth; only
+            // the focus restoration is skipped.
+          }
+        }
         return true;
       } catch (_pruneIgnored) {
         // Fall through to false: the stale section stays and the caller runs
