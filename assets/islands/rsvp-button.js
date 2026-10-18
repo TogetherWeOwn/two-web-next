@@ -419,7 +419,9 @@
     root.querySelectorAll("[data-action]").forEach(function (control) {
       control.disabled = true;
     });
-    var el = notice(TESTID.unknown, "alert", COPY.unknown, false, true);
+    // Recovery respects relinquished ownership: an outside focus/press during
+    // the pending write leaves the member where they moved.
+    var el = notice(TESTID.unknown, "alert", COPY.unknown, false, focusOwned);
     el.appendChild(document.createTextNode(" "));
     var link = document.createElement("a");
     link.setAttribute("data-testid", TESTID.refresh);
@@ -690,7 +692,7 @@
           if (sessionExpiredResponse(res)) {
             controller.refused = true;
             setBusy(false, button);
-            notice(TESTID.sessionExpired, "alert", COPY.sessionExpired, true, true);
+            notice(TESTID.sessionExpired, "alert", COPY.sessionExpired, true, focusOwned);
             return;
           }
           if (res.status === 429) {
