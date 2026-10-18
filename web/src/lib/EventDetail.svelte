@@ -48,7 +48,11 @@ const full = $derived(model.capacity !== null && model.goingCount >= model.capac
 const going = $derived(model.answer?.status === "going");
 const waitlisted = $derived(model.answer?.status === "waitlisted");
 const signIn = $derived(loginUrl(model.joinReturnTo));
-const rsvpAction = $derived(`/e/${encodeURIComponent(model.eventKey)}/rsvp`);
+const rsvpAction = $derived(
+  model.attendeesPaging.page > 1
+    ? `/e/${encodeURIComponent(model.eventKey)}/rsvp?attendees=${model.attendeesPaging.page}`
+    : `/e/${encodeURIComponent(model.eventKey)}/rsvp`,
+);
 const lineup = $derived(
   renderGoingCount(model.eventKey, {
     going: model.goingCount,
