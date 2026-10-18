@@ -326,20 +326,22 @@ approved account and binding isolation before any remote mutation.
    failed migration step fails the job before any Cloudflare mutation. The
    queue-create step currently suppresses errors; it is not permission/provisioning evidence.
    The final staging smoke runs `node bin/smoke.mjs https://next.togetherweown.com --fail-on-ready-wait-critical`
-   ([smoke checker](../bin/smoke.mjs)), covering 18 public routes: `/up`
+   ([smoke checker](../bin/smoke.mjs)), covering 20 public routes: `/up`
    (HTTP 200, `application/json`, `db:ok`, `pending_migrations:0`, `status`
    healthy/degraded, `queue.status` healthy/degraded/unknown, `warn_at:20`,
    `critical_at:100`) plus `/`, `/about`, `/faq`, `/rules`, `/privacy`,
    `/events`, `/events/past`, `/join`, `/events.rss`, `/events.ics`,
    `/sitemap_index.xml`, `/robots.txt`, `/.well-known/security.txt`,
    `/discord` (302), `/profile` (302),
-   `/admin` (302/403) and `/__smoke_unknown_route__` (404)
+   `/admin` (302/403), `/api/public/events` (200 JSON collection envelope),
+   `/openapi.json` (200 JSON discovery document)
+   and `/__smoke_unknown_route__` (404)
    with CSP/nosniff/content-type/noindex/redirect assertions. The `/up` assertions
    are DB/schema readiness, not liveness only; with the staging strict flag a literal
    `unknown` in `queue.status` or `ready_wait_severity`, or a `critical`
    `ready_wait_severity`, fails the deploy even though `/up` itself still returns 200.
    Queue `degraded` passes. The strict flag is staging-only: the apex production
-   smoke uses the same 18-route shape with `--allow-indexable` and without the strict flag
+   smoke uses the same 20-route shape with `--allow-indexable` and without the strict flag
    (`node bin/smoke.mjs https://togetherweown.com --allow-indexable`), so `critical`
    queue readiness only warns and `unknown` passes there.
 4. An explicitly authorized manual deployment of the reviewed release uses:
@@ -552,7 +554,9 @@ UUID on unpinned ordinary traffic even when every health assertion is green.
 This sends no `Cloudflare-Workers-Version-Overrides` version-override header,
 so it proves normal routing, not pinned canary routing. Limit: Worker
 versions predating the `/up` revision marker carry no `revision` identity and
-cannot pass this check; covering those needs the target version's own checker.
+cannot pass this check; versions predating the session-free public API
+return 404 on `/api/public/events` and `/openapi.json` and fail those two
+probes; covering either case needs the target version's own checker.
 A failed verification is not reported as an undone rollback and never triggers
 a roll-forward; it leaves the rolled-back version live for operator diagnosis.
 
