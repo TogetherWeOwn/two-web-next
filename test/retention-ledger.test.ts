@@ -336,7 +336,13 @@ describe("retention ledger doc rows", () => {
       ["src/hotzones/board-log.ts", "await tx.insert(boardViewLogs).values({"],
       ["src/hotzones/board-log.ts", "if (!queued || status !== 200) return;"],
       ["src/leaderboards/routes.tsx", "if (!view || c.res.status !== 200) return;"],
-      ["src/jobs/worker.ts", "prune: (db) => pruneModelTables(pgPruneStores(db))"],
+      ["src/jobs/worker.ts", "pruneModelTables(pgPruneStores(db), undefined,"],
+      // The cap page fires only after the flight commits: the scheduled
+      // prune reports the cap without paging inside the transaction, and the
+      // handler pages post-commit so a commit failure cannot leave a cap page
+      // muting the real failure page.
+      ["src/jobs/worker.ts", "reportCap: (capped) => {"],
+      ["src/jobs/worker.ts", 'alertScheduledFailing("model:prune", new PruneBatchCapError())'],
     ] as const) {
       expect(read(path), `board-view call path: ${path}`).toContain(call);
     }

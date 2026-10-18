@@ -6,7 +6,7 @@ import { databaseOptions, databaseUrl } from "../db/connection";
 import { setReleaseMetadata } from "../release-tag";
 import { qaEnabled } from "../qa";
 import { PRUNE_CRON, RECONCILE_CRON } from "./constants";
-import { pruneModelTables, reconcileEvents, runScheduled } from "./cron";
+import { PruneBatchCapError, pruneModelTables, reconcileEvents, runScheduled } from "./cron";
 import { consume } from "./consumer";
 import { trackingQueue } from "./ledger";
 import { pgPruneStores, pgQueueLedger, pgSingleFlight, pgUniqueLock } from "./postgres";
@@ -194,6 +194,13 @@ export async function handleScheduled(
     // No DDL here (TOG-19721): web_sessions comes from the migrate workflow
     // (drizzle/1022), like every other table the prune pass reads. A database
     // that predates that migration fails the pass like any other outage.
+    // The prune cap page fires only after the flight commits. The drains run
+    // inside the advisory-lock transaction, and a pre-commit cap page shares
+    // the Tail mute key scheduled.failing@model:prune with a later commit
+    // failure's page, muting the real failure. A rolled-back pass reports
+    // only its real error from the catch below; the next pass re-pages the
+    // cap if the backlog is still over the ceiling.
+    let pruneCapped = false;
     await runScheduled(controller.cron, pgSingleFlight(sqlClient), {
       // The reserved flight holds only the scheduler advisory lock during
       // dispatch. Event writes have a shorter transaction on the other pool,
@@ -205,8 +212,23 @@ export async function handleScheduled(
           queue: trackingQueue(env.SYNC_EVENT_QUEUE, pgQueueLedger(dispatchClient)),
           lock: pgUniqueLock(dispatchClient),
         }),
-      prune: (db) => pruneModelTables(pgPruneStores(db)),
+      prune: async (db) => {
+        // Report the cap without paging inside the flight; the page fires
+        // below, after the transaction commits.
+        await pruneModelTables(pgPruneStores(db), undefined, {
+          reportCap: (capped) => {
+            pruneCapped = capped;
+          },
+        });
+      },
     });
+    if (pruneCapped) {
+      try {
+        alertScheduledFailing("model:prune", new PruneBatchCapError());
+      } catch {
+        // A throwing alert sink must not fail a committed pass.
+      }
+    }
   } catch (err) {
     // Direct paging signal for a failed scheduled run: one redacted line per
     // failed invocation, no source-side mute. The handler still rejects with
