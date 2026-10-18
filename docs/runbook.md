@@ -512,9 +512,15 @@ shared `production-worker-mutation` job-level concurrency group
 (non-cancelling). The lock covers only the two mutating jobs, never
 release-note publication, so tagging a release does not block recovery.
 
-Emergency stop: to roll back during an active promotion, cancel the running
-`deploy-production` run first, confirm the Worker version that is live, then
-dispatch `rollback-production` with the recorded known-good version ID.
+Emergency stop: before dispatching `rollback-production`, cancel or reject every
+`deploy-production` run that is waiting for Environment approval, queued, or
+running — waiting and queued runs first, then the active run. A run waiting
+for approval already holds the `production-worker-mutation` lock, and a second
+job in the group cannot be approved until the first is approved or cancelled,
+so an unapproved promotion blocks the rollback indefinitely. Confirm the
+active run has stopped and check again for newly queued runs, then confirm the
+Worker version that is live and dispatch `rollback-production` with the
+recorded known-good version ID.
 Serialization queues a promotion and a rollback behind each other but cancels
 neither and promises no FIFO order: after stopping a bad promotion, also
 cancel any queued `deploy-production` runs, or the queued promotion will run
