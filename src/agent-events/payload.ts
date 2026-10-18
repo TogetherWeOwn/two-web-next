@@ -124,12 +124,6 @@ export function validateFields(
     if (typeof v === "string" && v !== "" && containsControlCharacters(v))
       bad(k, `The ${k} field must not contain control or invisible characters.`);
   }
-  // `game` is the NUL gap: Postgres text columns reject NUL bytes, so NUL
-  // must be refused before persistence. Only NUL is refused here — BEL and
-  // other controls stay accepted to avoid broadening validation.
-  const gameRaw = raw["game"];
-  if (typeof gameRaw === "string" && gameRaw !== "" && gameRaw.includes("\0"))
-    bad("game", "The game field must not contain NUL characters.");
   if (timezone !== null) {
     try {
       new Intl.DateTimeFormat("en", { timeZone: timezone });
