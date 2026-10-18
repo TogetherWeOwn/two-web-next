@@ -112,6 +112,10 @@
     {
       "path": "drizzle/1027_join-attempts-discord-id-index.sql",
       "sha256": "2cde39794c5738ab5135f8481e5bab987c8eea976a26a71fb999ab511ec0f569"
+    },
+    {
+      "path": "drizzle/1028_join-attempts-request-id-index.sql",
+      "sha256": "103839786b3354c2470ef21a947e7e97b102225dd055825304c597666c4aa526"
     }
   ]
 }
