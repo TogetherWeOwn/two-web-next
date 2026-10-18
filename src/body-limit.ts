@@ -21,7 +21,10 @@ export function requestBodyLimit(kind: BodyClass): MiddlewareHandler<{ Bindings:
   const middleware: MiddlewareHandler<{ Bindings: Env }> = async (c, next) => {
     const length = c.req.header("content-length");
     if (length !== undefined && Number(length) > maxSize) {
-      await c.req.raw.body?.cancel().catch(() => {});
+      // Request-owned cancellation must never hold the already-decided
+      // refusal. Fire-and-forget: the attached catch still swallows a late
+      // rejection without waiting for it to settle.
+      void c.req.raw.body?.cancel().catch(() => {});
       return payloadTooLarge(c);
     }
     if (!c.req.raw.body) return next();
@@ -55,8 +58,10 @@ export function requestBodyLimit(kind: BodyClass): MiddlewareHandler<{ Bindings:
     c.req.raw = new Request(c.req.raw, { headers, body, duplex: "half" } as RequestInit);
     const limit = bodyLimit({
       maxSize,
-      onError: async () => {
-        await reader.cancel().catch(() => {});
+      onError: () => {
+        // Same fire-and-forget contract as the advertised-overflow path:
+        // request cancellation, swallow a late rejection, return now.
+        void reader.cancel().catch(() => {});
         return payloadTooLarge(c);
       },
     });
