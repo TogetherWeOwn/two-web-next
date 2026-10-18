@@ -19,6 +19,15 @@ export const storedEventKey = (key: unknown): string | null =>
     ? key
     : null;
 
+// Machine-envelope guard for `op` and `idempotency_key`: PostgreSQL `text`
+// rejects NUL (SQLSTATE 22021), so a hostile key offered to the audit INSERT
+// turns a denial into a 500. The shared human-field predicate stays the rule
+// here too — Tab/LF/CR stay accepted, every other C0 control plus DEL (and
+// the wider Cc/invisible set) is refused at admission, before any store touch.
+export function hasIngressControlBytes(value: unknown): boolean {
+  return typeof value === "string" && containsControlCharacters(value);
+}
+
 // Nesting bound for the payload digest: comfortably above every real agent
 // event body (3 levels), far below stack exhaustion (~10k frames in a Worker).
 export const MAX_DIGEST_DEPTH = 100;

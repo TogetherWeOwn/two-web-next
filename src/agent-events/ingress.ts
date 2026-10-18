@@ -4,7 +4,14 @@ import { retireAnonEventCaches } from "../events/anon-cache";
 import { retireHomeGuestCache } from "../home-cache";
 import type { Answer, Grant, IngressConfig, IngressEffects, Op } from "./types";
 import { OPS } from "./types";
-import { digest, isPlainObject, PayloadTooDeepError, storedEventKey, ulid } from "./payload";
+import {
+  digest,
+  hasIngressControlBytes,
+  isPlainObject,
+  PayloadTooDeepError,
+  storedEventKey,
+  ulid,
+} from "./payload";
 import { audit } from "./audit";
 import { checkGrant, findGrant } from "./grants";
 import { shield } from "./shield";
@@ -123,6 +130,21 @@ async function processAgentEvent(
       422,
       "The request needs a string `op` and a non-empty string `idempotency_key` (max 255 characters).",
     );
+  }
+
+  // Control bytes in the machine envelope never reach the store: PostgreSQL
+  // `text` rejects NUL (22021), so auditing the raw value would turn this
+  // denial into a 500. Refused before auth, grant, replay, rate-limit and
+  // audit — no audit row, no replay write, no hostile byte in any INSERT.
+  if (hasIngressControlBytes(op) || hasIngressControlBytes(idem)) {
+    return {
+      status: 422,
+      body: {
+        reason: "validation_failed",
+        message: "The `op` and `idempotency_key` fields must not contain control characters.",
+        request_id: requestId,
+      },
+    };
   }
 
   const grant = credential ? await findGrant(sql, credential) : null;
