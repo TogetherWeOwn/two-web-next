@@ -336,7 +336,7 @@ describe("retention ledger doc rows", () => {
       ["src/hotzones/board-log.ts", "await tx.insert(boardViewLogs).values({"],
       ["src/hotzones/board-log.ts", "if (!queued || status !== 200) return;"],
       ["src/leaderboards/routes.tsx", "if (!view || c.res.status !== 200) return;"],
-      ["src/jobs/worker.ts", "prune: (db) => pruneModelTables(pgPruneStores(db))"],
+      ["src/jobs/worker.ts", "jobUniqueLocks: pgPruneStores(dispatchClient).jobUniqueLocks"],
     ] as const) {
       expect(read(path), `board-view call path: ${path}`).toContain(call);
     }
@@ -783,7 +783,7 @@ describe("retention ledger queue mechanisms (no DB)", () => {
     // turn it into a bulk sweep.
     const pgWindows = deleteWindows(postgresTs, "job_unique_locks");
     expect(pgWindows.map(normalizeSqlWindow)).toEqual([
-      "delete from job_unique_locks where key in ( select key from job_unique_locks where expires_at <= ${now} order by key limit ${PRUNE_DELETE_BATCH_SIZE} for update skip locked ) returning 1",
+      "delete from job_unique_locks where expires_at <= ${now} and key in ( select key from job_unique_locks where expires_at <= ${now} order by key limit ${PRUNE_DELETE_BATCH_SIZE} for update skip locked ) returning 1",
       "delete from job_unique_locks where key = ${key} and owner_token = ${leaseToken}::uuid",
     ]);
     // Repo-wide: postgres.ts is the sole delete site, not an exempt file.

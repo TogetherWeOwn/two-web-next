@@ -132,10 +132,16 @@ export function pgPruneStores(sql: TxClient | Sql): PruneStores {
   // predicate (`expires_at < clock_timestamp()`), so at the exact-expiry
   // instant a row is sweep-eligible one instant before acquire would supersede
   // it; the lease is expired under either reading within that instant.
+  //
+  // The outer DELETE rechecks `expires_at <= now` (not just candidate keys):
+  // under READ COMMITTED a concurrent acquire that renews a swept candidate
+  // between the subquery snapshot and the delete would otherwise still match
+  // on key alone and delete the live lease. The recheck makes the renewed row
+  // fail the predicate after the row-lock wait instead.
   const jobUniqueLocks = {
     sweepExpired: async (now: Date) =>
       (
-        await sql`delete from job_unique_locks where key in (
+        await sql`delete from job_unique_locks where expires_at <= ${now} and key in (
           select key from job_unique_locks where expires_at <= ${now}
           order by key limit ${PRUNE_DELETE_BATCH_SIZE}
           for update skip locked

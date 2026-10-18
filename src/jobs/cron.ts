@@ -97,6 +97,11 @@ const cutoff = (now: Date, days: number): Date => new Date(now.getTime() - days 
  * a short batch proves the backlog drained, stopping after
  * PRUNE_DELETE_MAX_BATCHES batches so the single-flight is never held
  * forever. Idempotent: a re-run matches nothing and reports zeros.
+ *
+ * The worker runs the lock sweep on its autocommit dispatch pool rather than
+ * the flight transaction (the sweep deletes the exact rows acquire targets;
+ * inside the flight its row locks would be held until the whole pass commits
+ * and block concurrent acquires). Either client satisfies the stores shape.
  */
 async function drainPruneTable(
   prune: (cutoff: Date) => Promise<number>,
