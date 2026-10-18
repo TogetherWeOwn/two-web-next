@@ -35,7 +35,9 @@ import { describe, expect, it, type Mock, vi } from "vitest";
 //     state for identical inputs; never move focus on a timer that cannot
 //     prove the frame is dead.
 //  5. Anti-steal: if the visitor has moved focus elsewhere after load, the
-//     timer guidance appears without moving focus at all.
+//     timer guidance appears without moving focus at all. This includes
+//     focus resting on the page body (the visitor clicked plain page text),
+//     which is the only focus state that reaches the post-load focus branch.
 //  6. A signaled `error` still guides immediately, without the timer.
 //
 // The harness is deliberately shape-tolerant like the focus/error suite:
@@ -355,6 +357,22 @@ describe("join-widget acceptance: blocked navigation that fires load", () => {
     expect(p.guidance(), "guidance still appears").toBe(true);
     expect(calls, "guidance must not steal focus from where the visitor put it").toBe(0);
     expect(p.document.activeElement).toBe(p.invite);
+  });
+
+  it("anti-steal from body: timer guidance does not focus the invite when focus rests on the page body", () => {
+    const p = page();
+    p.click();
+    const f = p.frame();
+    f?.fire("load");
+    // The visitor clicked plain page text, so focus rests on the body. Of
+    // the post-load focus states, only body/null reaches the focus branch,
+    // so this is the case that pins the loaded-frame guard in the bundle.
+    f?.blur();
+    expect(p.document.activeElement).toBe(p.body);
+    const calls = p.focusCallsDuring(() => p.fireTimers());
+    expect(p.guidance(), "guidance still appears").toBe(true);
+    expect(calls, "post-load guidance is announcement-only, even from body focus").toBe(0);
+    expect(p.document.activeElement).toBe(p.body);
   });
 
   it("a signaled error still guides immediately, without waiting for the timer", () => {
