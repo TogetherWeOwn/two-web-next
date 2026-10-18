@@ -1,4 +1,5 @@
 import { SYNC_EVENT, backoffFor } from "./constants";
+import { withInternalActionDeadline } from "./internal-action-deadline";
 import { botRefusalReason, sanitizeQueueScope, terminalFailureReason } from "./queue-error";
 import { admitRetryDelay, MAX_RETRY_DELAY_SECONDS } from "./retry-delay";
 import { BotTerminalError, BotTransportError, SyncRetryPersistenceError } from "./types";
@@ -139,10 +140,15 @@ export async function handleSyncEvent(
       await deps.events.completeSync(attempt, null);
       return { done: true };
     }
-    const answer =
+    // Bounded: a never-settling bot round-trip must not stall the serial
+    // batch behind it. Expiry rejects as BotTransportError, the same
+    // disposition as "bot down"; a late settlement is the race loser and is
+    // ignored. The carrier (idempotency key) is untouched for redelivery.
+    const answer = await withInternalActionDeadline(
       attempt.action === "event.cancel"
-        ? await deps.bot.cancelEvent(attempt.payload, msg.idempotencyKey)
-        : await deps.bot.upsertEvent(attempt.payload, msg.idempotencyKey);
+        ? deps.bot.cancelEvent(attempt.payload, msg.idempotencyKey)
+        : deps.bot.upsertEvent(attempt.payload, msg.idempotencyKey),
+    );
     if (!answer.ok) {
       if (!answer.retryable)
         return {

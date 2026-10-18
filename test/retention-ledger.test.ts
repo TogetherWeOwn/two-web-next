@@ -220,15 +220,15 @@ describe("retention ledger doc rows", () => {
     expect(doc).toContain("2160 hours");
     expect(doc).toContain("member-erasure.md#what-is-retained-and-why");
     expect(doc).toContain("src/jobs/cron.ts");
-    expect(doc).toContain("src/events/rsvp.ts:205-209");
+    expect(doc).toContain("src/events/rsvp.ts:243-247");
     expect(doc).toContain("Retain indefinitely per CISO decision");
     // The cited line range must actually hold the prune: shifting rsvp.ts
     // without re-basing the citation fails here instead of going stale.
-    // Pinned per-line so a one-line shift already breaks (line 205 must open
-    // pruneThrottle, line 207 must hold the delete).
+    // Pinned per-line so a one-line shift already breaks (line 243 must open
+    // pruneThrottle, line 245 must hold the delete).
     const rsvpLines = read("src/events/rsvp.ts").split("\n");
-    expect(rsvpLines[204]).toContain("pruneThrottle");
-    expect(rsvpLines[206]).toContain("delete from web_throttle_hits");
+    expect(rsvpLines[242]).toContain("pruneThrottle");
+    expect(rsvpLines[244]).toContain("delete from web_throttle_hits");
   });
 
   it("distinguishes the throttle age cutoff from path-dependent physical cleanup", () => {
@@ -497,8 +497,11 @@ describe("retention ledger mechanisms (memory, no DB)", () => {
     expect(counts.joinAttempts).toBe(1);
     expect(tables.accessLog.at).toEqual([edge, fresh]);
     expect(tables.joinAttempts.at).toEqual([edge, fresh]);
-    expect(tables.accessLog.cutoffs).toEqual([edge]);
-    expect(tables.joinAttempts.cutoffs).toEqual([edge]);
+    // Two calls each with the identical cutoff: the short first batch is not
+    // drained proof (a SKIP LOCKED window can hide unvisited rows), so the
+    // pass runs one empty proving batch before reporting uncapped.
+    expect(tables.accessLog.cutoffs).toEqual([edge, edge]);
+    expect(tables.joinAttempts.cutoffs).toEqual([edge, edge]);
   });
 
   it("session sweep removes expired and exactly-now rows, keeps live ones", async () => {

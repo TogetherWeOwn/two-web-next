@@ -104,7 +104,7 @@ export async function enqueueSyncEvent(
       message.requestId,
     );
   } finally {
-    await sql.end({ timeout: 1 });
+    await sql.end({ timeout: 1 }).catch(() => {});
   }
 }
 
@@ -158,7 +158,7 @@ export async function handleQueue(
       ledgerSql.end({ timeout: 1 }).catch(() => {}),
       cleanupSql.end({ timeout: 1 }).catch(() => {}),
     ]);
-    await sql.end({ timeout: 1 });
+    await sql.end({ timeout: 1 }).catch(() => {});
   }
 }
 

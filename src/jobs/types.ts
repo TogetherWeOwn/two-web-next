@@ -77,6 +77,13 @@ export type SyncAttempt = {
   | { action: "event.cancel"; payload: { eventKey: string } }
 );
 
+/**
+ * One bounded page of the reconcile stale set: `keys` holds at most the
+ * requested page size in ascending `event_key` order, and `deferred` counts
+ * how many matched stale keys were left for later passes.
+ */
+export type StaleEventKeysPage = { keys: string[]; deferred: number };
+
 export interface EventStore {
   /** Snapshot at first attempt, not dispatch. Retries return the persisted request. */
   prepareSync(
@@ -110,8 +117,21 @@ export interface EventStore {
   closeFinished(now: Date): Promise<number>;
   /** Top up every live series (draft/published parent). Returns rows created; idempotent. */
   materializeSeries(): Promise<number>;
-  /** Initiating-eligible dirty revisions and attempted pending recovery candidates. */
-  staleEventKeys(): Promise<string[]>;
+  /**
+   * Initiating-eligible dirty revisions and attempted pending recovery
+   * candidates. A dirty revision parked behind a permanently undispatchable
+   * pending request (retry budget spent, or a null deadline that never becomes
+   * due) is not stale: the reconcile loop always skips it, so it must not
+   * consume page slots ahead of dispatchable keys. Not-yet-due retries stay
+   * stale; the loop owns the exact due check. Called with a positive limit,
+   * resolves one deterministic page: at most `limit` keys in ascending
+   * `event_key` order plus how many matched keys were NOT returned (`deferred`
+   * is 0 exactly when the page drained the backlog). Called without a limit,
+   * resolves every stale key as an ascending ordered array (legacy shape
+   * retained for existing single-key-era callers). Deferred keys stay stale
+   * for the next pass: nothing marks, skips or reorders them.
+   */
+  staleEventKeys(limit?: number): Promise<string[] | StaleEventKeysPage>;
 }
 
 /**

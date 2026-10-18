@@ -81,21 +81,26 @@ export function rsvpWithdrawRequest(eventKey: string): RsvpWithdrawRequest {
 
 /**
  * Status-code shape (legacy controller + PR #431 abuse pins): first answer
- * creates the row (201), re-answer updates it (200), withdraw is a quiet
- * 204 — including withdraw-without-a-row and withdraw-from-cancelled.
- * Status-Past PUT refuses 403 with nothing written; off-verb hits 405.
+ * creates the row (201), re-answer updates it (200), withdrawing an existing
+ * row answers 204 — including from a cancelled event, where the service
+ * deletes regardless of status. A DELETE that deletes no caller row answers
+ * honest 404 {error: not_found}, never an implied 204: never answered, only
+ * another member answered, unknown key, or forged key all converge to the
+ * withdrawn end state. Status-Past PUT refuses 403 with nothing written;
+ * off-verb hits 405.
  */
 export const RSVP_FIRST_WRITE_STATUS = 201;
 export const RSVP_REANSWER_STATUS = 200;
 export const RSVP_WITHDRAW_STATUS = 204;
+export const RSVP_WITHDRAW_MISSING_STATUS = 404;
 export const RSVP_CLOSED_WRITE_STATUS = 403;
 export const RSVP_WRONG_METHOD_STATUS = 405;
 
 export const RSVP_ABUSE_PINS = {
   doubleSubmit: [RSVP_FIRST_WRITE_STATUS, RSVP_REANSWER_STATUS],
-  crossUserDeleteVictimRowKept: RSVP_WITHDRAW_STATUS,
+  crossUserDeleteVictimRowKept: RSVP_WITHDRAW_MISSING_STATUS,
   methodTampering: RSVP_WRONG_METHOD_STATUS,
-  withdrawWithoutRow: RSVP_WITHDRAW_STATUS,
+  withdrawWithoutRow: RSVP_WITHDRAW_MISSING_STATUS,
   statusPastPut: RSVP_CLOSED_WRITE_STATUS,
   withdrawFromCancelled: RSVP_WITHDRAW_STATUS,
 } as const;

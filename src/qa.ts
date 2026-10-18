@@ -23,6 +23,13 @@ export function qaIdentity(name: string): QaIdentity | undefined {
 
 export const STAGING_APP_URL = "https://next.togetherweown.com";
 
+// The longest presented QA token the gate will hash, in characters. Anything
+// longer refuses false before hashing — parity with the 512-char ingress
+// bearer cap (src/agent-events/ingress.ts) so unbounded staging-probe headers
+// cannot force a digest pre-throttle. Callers answer the existing
+// byte-identical 404, so valid and short-bad-token behavior is unchanged.
+export const MAX_QA_PRESENTED_TOKEN_LENGTH = 512;
+
 export function qaEnabled(appUrl: string, qaToken: string | undefined): boolean {
   return appUrl === STAGING_APP_URL && !!qaToken;
 }
@@ -35,6 +42,7 @@ export async function qaTokenMatches(
   presented: string,
 ): Promise<boolean> {
   if (!configured) return false;
+  if (presented.length > MAX_QA_PRESENTED_TOKEN_LENGTH) return false;
   const [a, b] = await Promise.all([sha256(configured), sha256(presented)]);
   const x = new Uint8Array(a);
   const y = new Uint8Array(b);

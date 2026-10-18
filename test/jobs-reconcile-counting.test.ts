@@ -89,7 +89,14 @@ describe("reconcileEvents ordering and counting (no DB)", () => {
     expect(events.calls).toEqual(["close", "materialize", "stale"]);
     expect(events.closedAt).toEqual([NOW]);
     expect(rows.find((x) => x.key === "ended-stale")!.status).toBe("past");
-    expect(r).toEqual({ closed: 1, materialized: 0, resynced: 1, absorbed: 0, failed: 0 });
+    expect(r).toEqual({
+      closed: 1,
+      materialized: 0,
+      resynced: 1,
+      absorbed: 0,
+      failed: 0,
+      deferred: 0,
+    });
     expect(queue.sent.map((b) => b.eventKey)).toEqual(["live-stale"]);
     expect(lock.acquired).not.toContain(uniqueKey("ended-stale"));
   });
@@ -107,7 +114,14 @@ describe("reconcileEvents ordering and counting (no DB)", () => {
 
     expect(lock.acquired).toEqual([uniqueKey("queued"), uniqueKey("fresh")]);
     expect(queue.sent.map((b) => b.eventKey)).toEqual(["fresh"]);
-    expect(r).toEqual({ closed: 0, materialized: 0, resynced: 1, absorbed: 1, failed: 0 });
+    expect(r).toEqual({
+      closed: 0,
+      materialized: 0,
+      resynced: 1,
+      absorbed: 1,
+      failed: 0,
+      deferred: 0,
+    });
   });
 
   it("reports absorbed separately when every dispatch is absorbed", async () => {
@@ -126,7 +140,14 @@ describe("reconcileEvents ordering and counting (no DB)", () => {
     });
 
     expect(queue.sent).toEqual([]);
-    expect(r).toEqual({ closed: 0, materialized: 0, resynced: 0, absorbed: 2, failed: 0 });
+    expect(r).toEqual({
+      closed: 0,
+      materialized: 0,
+      resynced: 0,
+      absorbed: 2,
+      failed: 0,
+      deferred: 0,
+    });
   });
 
   it("returns zeros with no log line, lock or send on an empty pass", async () => {
@@ -140,7 +161,14 @@ describe("reconcileEvents ordering and counting (no DB)", () => {
 
     const r = await reconcileEvents({ events: fakeEvents(rows), queue, lock, now: () => NOW });
 
-    expect(r).toEqual({ closed: 0, materialized: 0, resynced: 0, absorbed: 0, failed: 0 });
+    expect(r).toEqual({
+      closed: 0,
+      materialized: 0,
+      resynced: 0,
+      absorbed: 0,
+      failed: 0,
+      deferred: 0,
+    });
     expect(info).not.toHaveBeenCalled();
     expect(lock.acquired).toEqual([]);
     expect(queue.sent).toEqual([]);
@@ -167,6 +195,7 @@ describe("reconcileEvents ordering and counting (no DB)", () => {
       resynced: 1,
       absorbed: 0,
       failed: 0,
+      deferred: 0,
     });
   });
 });
