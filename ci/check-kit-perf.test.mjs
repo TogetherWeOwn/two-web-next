@@ -1,8 +1,12 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
-import { discoverKitAssets } from "./check-kit-perf.mjs";
+import { gzipSync } from "node:zlib";
+import { discoverKitAssets, run } from "./check-kit-perf.mjs";
 
 const scriptPath = fileURLToPath(new URL("./check-kit-perf.mjs", import.meta.url));
 
@@ -43,4 +47,259 @@ test("missing client output fails closed, never green", () => {
     2,
     `expected exit 2, got ${result.status}\n${result.stdout}\n${result.stderr}`,
   );
+});
+
+// --- Acceptance: empty or incompletely enumerated build output ------------
+// Exit semantics (script header): 0 fits, 1 breach, 2 cannot enforce.
+// A required asset group (server JS, client JS, client CSS) that is absent,
+// empty, or only partly enumerated proves nothing about size, so each case
+// must return 2 with a bounded diagnostic naming the group — never the
+// current "0 files fit under every ceiling" green. Every fixture below
+// supplies a VALID budget and Worker first, so a red result can only come
+// from the named group, not from the missing-budget branch.
+
+const WORKER_BODY = Buffer.from(`/* worker */\n${"x".repeat(1000)}`);
+const SERVER_BODY = Buffer.from(`/* server chunk */\n${"w".repeat(800)}`);
+const JS_BODY = Buffer.from(`console.log(1);\n${"y".repeat(500)}`);
+const CSS_BODY = Buffer.from(`.a{color:red}\n${"z".repeat(200)}`);
+
+const SERVER_DIR = "web/.svelte-kit/output/server";
+const CLIENT_DIR = "web/.svelte-kit/output/client/_app";
+
+function groupBudget(files) {
+  if (files.length === 0) return { maxRawBytes: 4096, maxGzipBytes: 4096, maxFiles: 4 };
+  return {
+    maxRawBytes: files.reduce((sum, f) => sum + f.body.length, 0),
+    // run() sums gzip per file, so the exact-fit ceiling does the same.
+    maxGzipBytes: files.reduce((sum, f) => sum + gzipSync(f.body).length, 0),
+    maxFiles: files.length,
+  };
+}
+
+function writeFixtureFile(root, relative, body) {
+  const full = join(root, relative);
+  mkdirSync(dirname(full), { recursive: true });
+  writeFileSync(full, body);
+}
+
+// Builds a complete, valid tree; each test then removes exactly one thing.
+function makeFixture({
+  server = [{ name: "chunks/server.js", body: SERVER_BODY }],
+  clientJs = [{ name: "immutable/client.js", body: JS_BODY }],
+  clientCss = [{ name: "immutable/client.css", body: CSS_BODY }],
+  extraFiles = [],
+  budgetOverrides = {},
+  omitServerDir = false,
+  omitClientDir = false,
+} = {}) {
+  const root = mkdtempSync(
+    join(process.env.PAPERCLIP_RUN_SCRATCH_DIR ?? tmpdir(), "kit-perf-accept-"),
+  );
+  writeFixtureFile(root, "web/.svelte-kit/cloudflare/_worker.js", WORKER_BODY);
+  if (!omitServerDir) {
+    mkdirSync(join(root, SERVER_DIR), { recursive: true });
+    for (const f of server) writeFixtureFile(root, join(SERVER_DIR, f.name), f.body);
+  }
+  if (!omitClientDir) {
+    mkdirSync(join(root, CLIENT_DIR), { recursive: true });
+    for (const f of clientJs) writeFixtureFile(root, join(CLIENT_DIR, f.name), f.body);
+    for (const f of clientCss) writeFixtureFile(root, join(CLIENT_DIR, f.name), f.body);
+  }
+  for (const f of extraFiles) writeFixtureFile(root, f.path, f.body);
+  const budget = {
+    worker: {
+      "_worker.js": {
+        maxRawBytes: WORKER_BODY.length,
+        maxGzipBytes: gzipSync(WORKER_BODY).length,
+      },
+    },
+    server: { js: { ...groupBudget(server), ...budgetOverrides.serverJs } },
+    client: {
+      js: { ...groupBudget(clientJs), ...budgetOverrides.clientJs },
+      css: { ...groupBudget(clientCss), ...budgetOverrides.clientCss },
+    },
+    startup: { maxMs: 30_000 },
+  };
+  writeFixtureFile(root, "ci/kit-perf-budget.json", JSON.stringify(budget));
+  return {
+    root,
+    runCaptured() {
+      const logs = [];
+      const errors = [];
+      const code = run(root, {
+        log: (text) => logs.push(String(text)),
+        error: (text) => errors.push(String(text)),
+      });
+      return { code, logs, errors };
+    },
+    cleanup() {
+      try {
+        rmSync(root, { recursive: true, force: true });
+      } catch {
+        // Deep-tree fixtures exceed PATH_MAX for path-based removal too.
+      }
+      if (existsSync(root)) spawnSync("rm", ["-rf", root]);
+    },
+  };
+}
+
+function assertCannotEnforce(result, groupRe, label) {
+  assert.equal(
+    result.code,
+    2,
+    `${label}: expected cannot-enforce (2), got ${result.code}\nlogs: ${result.logs.join("\n")}\nerrors: ${result.errors.join("\n")}`,
+  );
+  assert.ok(
+    result.errors.some((line) => groupRe.test(line)),
+    `${label}: expected a diagnostic naming ${groupRe}, got: ${result.errors.join(" | ") || "(none)"}`,
+  );
+  assert.ok(
+    result.errors.some((line) =>
+      /empty|no \w* ?files|missing|cannot|unable|incomplete|enumerat|fail|unreadable|ENAMETOOLONG/i.test(
+        line,
+      ),
+    ),
+    `${label}: expected the diagnostic to say why it cannot enforce, got: ${result.errors.join(" | ")}`,
+  );
+  assert.ok(
+    !result.logs.some((line) => line.includes("every Kit asset fits")),
+    `${label}: must never claim every Kit asset fits`,
+  );
+  assert.ok(result.errors.length <= 6, `${label}: diagnostics must stay bounded`);
+}
+
+test("acceptance: existing but empty server JS output cannot enforce (exit 2)", (t) => {
+  // A lone sourcemap is not server JS: zero real files must not read as fits.
+  const fx = makeFixture({
+    server: [],
+    extraFiles: [{ path: join(SERVER_DIR, "chunks/server.js.map"), body: Buffer.from("{}") }],
+  });
+  t.after(fx.cleanup);
+  assertCannotEnforce(fx.runCaptured(), /server/i, "empty server js");
+});
+
+test("acceptance: existing but empty client JS output cannot enforce (exit 2)", (t) => {
+  const fx = makeFixture({ clientJs: [] });
+  t.after(fx.cleanup);
+  assertCannotEnforce(fx.runCaptured(), /client js/i, "empty client js");
+});
+
+test("acceptance: existing but empty client CSS output cannot enforce (exit 2)", (t) => {
+  const fx = makeFixture({ clientCss: [] });
+  t.after(fx.cleanup);
+  assertCannotEnforce(fx.runCaptured(), /client css/i, "empty client css");
+});
+
+test("acceptance: missing server output dir cannot enforce with a valid budget", (t) => {
+  const fx = makeFixture({ omitServerDir: true });
+  t.after(fx.cleanup);
+  assertCannotEnforce(fx.runCaptured(), /server/i, "missing server output");
+});
+
+test("acceptance: missing client output dir cannot enforce with a valid budget", (t) => {
+  const fx = makeFixture({ omitClientDir: true });
+  t.after(fx.cleanup);
+  assertCannotEnforce(fx.runCaptured(), /client/i, "missing client output");
+});
+
+// Enumeration failure injection that works as root (chmod 000 does not):
+// nest directories until the joined absolute path passes Linux PATH_MAX
+// (4096), so enumerating the deep subtree fails with ENAMETOOLONG. The
+// top-level assets still enumerate, so only an implementation that
+// propagates enumeration failures — instead of swallowing them and
+// totalling what it happened to find — can return 2 here. Ceilings are
+// generous in these two tests so size can never be the cause.
+function addUnenumerableDeepTree(baseDir, body) {
+  const component = "d".repeat(180);
+  const levels = Math.max(4, Math.ceil((4300 - baseDir.length) / (component.length + 1)) + 1);
+  const previous = process.cwd();
+  try {
+    process.chdir(baseDir);
+    for (let i = 0; i < levels; i += 1) {
+      mkdirSync(component);
+      process.chdir(component);
+    }
+    writeFileSync("deep.js", body);
+  } finally {
+    process.chdir(previous);
+  }
+}
+
+const GENEROUS = { maxRawBytes: 1_000_000, maxGzipBytes: 1_000_000, maxFiles: 10 };
+
+test("acceptance: incompletely enumerated server output cannot enforce (exit 2)", (t) => {
+  const fx = makeFixture({ budgetOverrides: { serverJs: GENEROUS } });
+  t.after(fx.cleanup);
+  addUnenumerableDeepTree(join(fx.root, SERVER_DIR), SERVER_BODY);
+  assertCannotEnforce(fx.runCaptured(), /server/i, "unenumerable server subtree");
+});
+
+test("acceptance: incompletely enumerated client output cannot enforce (exit 2)", (t) => {
+  const fx = makeFixture({ budgetOverrides: { clientJs: GENEROUS } });
+  t.after(fx.cleanup);
+  addUnenumerableDeepTree(join(fx.root, CLIENT_DIR), JS_BODY);
+  assertCannotEnforce(fx.runCaptured(), /client/i, "unenumerable client subtree");
+});
+
+test("acceptance: nested assets are all discovered and counted (exit 0)", (t) => {
+  const fx = makeFixture({
+    server: [
+      { name: "chunks/server.js", body: SERVER_BODY },
+      { name: "chunks/deep/nested.js", body: SERVER_BODY },
+    ],
+    clientJs: [
+      { name: "immutable/client.js", body: JS_BODY },
+      { name: "immutable/nodes/page.js", body: JS_BODY },
+    ],
+    clientCss: [
+      { name: "immutable/client.css", body: CSS_BODY },
+      { name: "immutable/assets/page.css", body: CSS_BODY },
+    ],
+  });
+  t.after(fx.cleanup);
+  const result = fx.runCaptured();
+  assert.equal(
+    result.code,
+    0,
+    `expected fits (0), got ${result.code}\nerrors: ${result.errors.join("\n")}`,
+  );
+  // Exact-fit ceilings plus these counts pin that nested files were counted.
+  assert.ok(result.logs.some((line) => line.includes("ok server js: 2/2 files")));
+  assert.ok(result.logs.some((line) => line.includes("ok client js: 2/2 files")));
+  assert.ok(result.logs.some((line) => line.includes("ok client css: 2/2 files")));
+});
+
+test("acceptance: sourcemaps stay excluded from totals and counts (exit 0)", (t) => {
+  const bigMap = Buffer.from("m".repeat(100_000));
+  const fx = makeFixture({
+    extraFiles: [
+      { path: join(SERVER_DIR, "chunks/server.js.map"), body: bigMap },
+      { path: join(CLIENT_DIR, "immutable/client.js.map"), body: bigMap },
+      { path: join(CLIENT_DIR, "immutable/client.css.map"), body: bigMap },
+    ],
+  });
+  t.after(fx.cleanup);
+  const result = fx.runCaptured();
+  assert.equal(
+    result.code,
+    0,
+    `sourcemaps must not breach exact-fit ceilings, got ${result.code}\nerrors: ${result.errors.join("\n")}`,
+  );
+  assert.ok(result.logs.some((line) => line.includes("ok server js: 1/1 files")));
+  assert.ok(result.logs.some((line) => line.includes("ok client js: 1/1 files")));
+  assert.ok(result.logs.some((line) => line.includes("ok client css: 1/1 files")));
+});
+
+test("acceptance: an actual size breach still exits 1, not cannot-enforce", (t) => {
+  const fx = makeFixture({
+    budgetOverrides: { clientJs: { maxRawBytes: JS_BODY.length - 1 } },
+  });
+  t.after(fx.cleanup);
+  const result = fx.runCaptured();
+  assert.equal(
+    result.code,
+    1,
+    `expected breach (1), got ${result.code}\nerrors: ${result.errors.join("\n")}`,
+  );
+  assert.ok(result.errors.some((line) => /client js/i.test(line)));
 });

@@ -2,6 +2,7 @@ import { error, redirect } from "@sveltejs/kit";
 import { env } from "cloudflare:workers";
 import type { PageServerLoad } from "./$types";
 import { dbFor } from "../../../../../src/admin/db";
+import { alertRequestError } from "../../../../../src/alerts";
 import { loadMembersBoardData, queueMembersBoardView } from "../../../../../src/kit-members";
 
 // Server-rendered only: no hydration bundle, so no inline bootstrap script that
@@ -43,6 +44,10 @@ export const load: PageServerLoad = async ({ url, locals, setHeaders }) => {
     if (status === 302) redirect(302, "/auth/discord");
     if (status === 403) error(403, "Forbidden");
     if (status === 400) error(400, message || "Unknown season");
+    // The helper already alerted on unbranded read failures; alert here only
+    // for failures the helper could not see, so a code bug never stays silent.
+    if (typeof status !== "number")
+      alertRequestError(err, { method: "GET", route: "/leaderboards/members" });
     error(503, "Member data is temporarily unavailable.");
   }
 };
