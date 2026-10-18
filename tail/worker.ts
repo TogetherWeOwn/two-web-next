@@ -253,9 +253,17 @@ export const ALERT_ROUTES = new Set([
   "/up",
 ]);
 const JOB_NAMES = new Set(["SyncEventToDiscord", "CallInternalAction", "AlertProbe"]);
+// Allowlisted scheduled-job discriminators for the direct scheduled.failing
+// paging signal. Sparse cron invocations can never trip the crash-loop gate
+// on their own, so one failed known reconcile/prune run pages directly.
+const SCHEDULED_JOBS = new Set(["events:reconcile", "model:prune"]);
+// Exception classes only: a database error message can hold bound values,
+// SQL, event keys or identities, so anything that is not a bare identifier
+// never leaves the account.
+const EXCEPTION_CLASS = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
 export type AlertSummary = {
-  event: "error.alert" | "queue.failing";
+  event: "error.alert" | "queue.failing" | "scheduled.failing";
   fingerprint: string;
   script?: string;
   build_sha?: string;
@@ -263,6 +271,7 @@ export type AlertSummary = {
   route?: string;
   job?: string;
   attempts?: number;
+  exception?: string;
   timestamp: string;
 };
 
@@ -317,6 +326,26 @@ export async function parseAlert(
       fingerprint: `queue.failing@${line.job}`,
       job: line.job,
       attempts: line.attempts as number,
+      timestamp: date.toISOString(),
+    };
+  }
+  if (line.event === "scheduled.failing") {
+    // One failed known scheduled run pages directly, without waiting for the
+    // aggregate crash-loop gate. Only the allowlisted job discriminator and
+    // an identifier-shaped exception class pass; cron text, messages, SQL,
+    // event keys and identities are never forwarded.
+    if (typeof line.job !== "string" || !SCHEDULED_JOBS.has(line.job)) return null;
+    if (
+      typeof line.exception !== "string" ||
+      line.exception.length > 128 ||
+      !EXCEPTION_CLASS.test(line.exception)
+    )
+      return null;
+    return {
+      event: line.event,
+      fingerprint: `scheduled.failing@${line.job}`,
+      job: line.job,
+      exception: line.exception,
       timestamp: date.toISOString(),
     };
   }
@@ -1003,6 +1032,9 @@ export function createTailWorker(
               ...(parsed.route ? { route: parsed.route } : {}),
               ...(parsed.job ? { job: parsed.job } : {}),
               ...(parsed.attempts !== undefined ? { attempts: parsed.attempts } : {}),
+              // Scheduled pages carry only the allowlisted exception class;
+              // request and queue summaries never forward an exception.
+              ...(parsed.exception ? { exception: parsed.exception } : {}),
               timestamp: parsed.timestamp,
             };
             const key = `${alert.event}:${alert.fingerprint}`;

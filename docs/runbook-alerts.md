@@ -16,6 +16,7 @@ The app writes ONE single-line JSON object on `console.error`, with
 | --- | --- | --- |
 | `error.alert` | An unexpected non-4xx error reached an HTTP error path, including a member-read refusal or locally handled profile-save failure (the response may remain 503) | `fingerprint` (`ExceptionClass@/route/pattern`), `exception`, `error_class` (same class), `method`, `route`, optional `request_id`, `build_sha`, `release` |
 | `queue.failing` | A job failed terminally or threw on its final attempt | `connection`, `queue`, `job`, `attempts`, `exception`, `error_class` (same value), optional `request_id`, `build_sha`, `release` |
+| `scheduled.failing` | A scheduled reconcile or retention run failed (known cron only); pages directly without waiting for the crash-loop gate, which sparse cron invocations can never trip alone | `job` (`events:reconcile` or `model:prune`), `exception`, `error_class` (same class), `build_sha`, `release`. One line per failed invocation, no source-side mute; healthy runs, advisory-lock skips and unknown crons stay silent |
 
 - The app mutes `error.alert` per `class@route` for five minutes. Client errors
   (404, 403, 429 and other 4xx) and `ZodError` stay silent. A thrown
@@ -77,26 +78,30 @@ occurring work.
 
 ## Delivery and redaction
 
-For source alerts, `tail/worker.ts` accepts only critical `error.alert` and
-`queue.failing` JSON arguments from error-level logs of `two-web-next` and
-`two-web-jobs` (`error.alert` from the web Worker, `queue.failing` from the
+For source alerts, `tail/worker.ts` accepts only critical `error.alert`,
+`queue.failing` and `scheduled.failing` JSON arguments from error-level logs
+of `two-web-next` and `two-web-jobs` (`error.alert` from the web Worker,
+`queue.failing` and `scheduled.failing` from the
 jobs Worker after the handoff). Other
 events, malformed arguments, other Workers and recursive Tail logs are ignored.
 
 | Outbound field | Policy |
 | --- | --- |
-| `event` | Only the two critical event types |
-| `fingerprint` | Request: SHA-256 of the source fingerprint; queue: `queue.failing@JobClass` |
+| `event` | Only the three critical event types |
+| `fingerprint` | Request: SHA-256 of the source fingerprint; queue: `queue.failing@JobClass`; scheduled: `scheduled.failing@events:reconcile` or `scheduled.failing@model:prune` |
 | `script` | The exact allowlisted app script name from the trace (staging web, staging jobs, or production); the reliable environment discriminator |
 | `build_sha` | Optional: the deployed 40-hex source SHA, parsed from the trace's version tag when present (a bare SHA in staging, `<sha>-<run-id>-<attempt>` in production), else from the trace's own release-tagged log lines (only an exact 40-hex `build_sha` paired with an equal `release` passes — live traces do not populate the version tag, per the 2026-10-17 staging drill); anything else is omitted, never forwarded |
 | `logs` | Fixed dashboard path for that script: `Workers & Pages > <script> > Observability > Logs`; a navigation path, never a URL with parameters |
 | `route` | Request only: a reviewed registered route template; unknown/raw paths and query-bearing routes become `[redacted]` |
 | `job`, `attempts` | Queue only: known job class and positive integer attempt count |
+| `job`, `exception` | Scheduled only: the allowlisted job discriminator and the identifier-shaped exception class |
 | `timestamp` | ISO timestamp from the source console log, never a user-supplied field |
 
 The Discord message is this summary as JSON in `content`, with all mentions
-explicitly disabled. No exception/class/message, HTTP method, job body,
-connection/queue name, URL, token, member/event ID or full trace is forwarded.
+explicitly disabled. No exception message, HTTP method, job body,
+connection/queue name, cron text, URL, token, member/event ID or full trace is forwarded;
+request and queue summaries carry no exception at all, while a scheduled
+summary carries only the allowlisted exception class.
 A request's original fingerprint can be correlated internally by hashing it:
 
 ```sh
@@ -340,9 +345,9 @@ This exercises the `error.spike` gate end to end without touching production:
 ```sh
 # Source alerts only (authorized Cloudflare access required). The queue
 # consumer runs on two-web-jobs after the handoff, so tail it for
-# queue.failing; tail two-web-next for error.alert.
+# queue.failing and scheduled.failing; tail two-web-next for error.alert.
 npx wrangler tail two-web-jobs --format json \
-  | jq -c 'select(.logs[]?.message[]? | tostring | test("\"event\":\"(error.alert|queue.failing)\""))'
+  | jq -c 'select(.logs[]?.message[]? | tostring | test("\"event\":\"(error.alert|queue.failing|scheduled.failing)\""))'
 npx wrangler tail two-web-next --format json \
   | jq -c 'select(.logs[]?.message[]? | tostring | test("\"event\":\"(error.alert|queue.failing)\""))'
 
