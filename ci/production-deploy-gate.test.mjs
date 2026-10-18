@@ -860,7 +860,10 @@ test("shared production mutation lock never nests at workflow level nor leaks in
     ["rollback-production.yml", rollback, "\n  rollback-production:\n"],
   ]) {
     const preflight = workflow.slice(workflow.indexOf("\n  preflight:\n"), workflow.indexOf(next));
-    assert.ok(!preflight.includes(sharedMutationGroup), `${label} preflight must not hold the lock`);
+    assert.ok(
+      !preflight.includes(sharedMutationGroup),
+      `${label} preflight must not hold the lock`,
+    );
   }
 });
 
