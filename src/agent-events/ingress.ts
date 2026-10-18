@@ -89,9 +89,22 @@ async function processAgentEvent(
 
   const rawOp = doc.op;
   const rawKey = doc.idempotency_key;
-  const auditOp = typeof rawOp === "string" && rawOp !== "" ? rawOp.slice(0, 32) : "unknown";
+  // Sanitised fallbacks: the two denials below run before the control guard,
+  // so a hostile value on the other half of an invalid envelope (a NUL key
+  // next to a non-string op, a NUL op next to an over-length key, or either
+  // under a disabled ingress) must never reach the audit INSERT raw, where
+  // PostgreSQL `text` would reject NUL (22021) and turn the denial into a 500.
+  const auditOp =
+    typeof rawOp === "string" && rawOp !== "" && !hasIngressControlBytes(rawOp)
+      ? rawOp.slice(0, 32)
+      : "unknown";
   const auditKey =
-    typeof rawKey === "string" && rawKey !== "" && rawKey.length <= 255 ? rawKey : null;
+    typeof rawKey === "string" &&
+    rawKey !== "" &&
+    rawKey.length <= 255 &&
+    !hasIngressControlBytes(rawKey)
+      ? rawKey
+      : null;
   const deny = async (
     grant: Grant | null,
     op: string,
