@@ -6,10 +6,12 @@ import { BotTransportError } from "../src/jobs/types";
 import type { EventStore, QueueLedger, UniqueLock } from "../src/jobs/types";
 
 // The producer's lock-acquire and queue-send must race an
-// independent setTimeout deadline like every neighboring op. Each case drives
-// the dispatch with a never-settling stub, advances past the budget, and
-// asserts the dispatch already rejected — so each fails while acquire/send
-// are awaited bare, and passes once they race a deadline.
+// independent setTimeout deadline like every neighboring op. The direct cases
+// drive the dispatch with a never-settling stub, advance past the budget, and
+// assert the dispatch already rejected — so each fails while acquire/send are
+// awaited bare, and passes once they race a deadline. The reconcile case pins
+// the merged pass contract: one key's deadline rejection is isolated as a
+// single failed key and the pass still resolves.
 const PRODUCER_BUDGET_MS = 2000;
 const eventKey = "producer-deadline";
 const key = uniqueKey(eventKey);
@@ -143,12 +145,16 @@ describe("producer deadline", () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 
-  it("reconcileEvents redispatch inherits the bound with no per-caller wiring", async () => {
-    const lock: UniqueLock = {
-      acquire: vi.fn(() => new Promise<string | null>(() => {})),
-      release: vi.fn(async () => {}),
-    };
-    const queue = trackingQueue({ send: async () => {} }, memLedger().ledger);
+  it("reconcileEvents redispatch inherits the bound with no per-caller wiring, isolated as one failed key", async () => {
+    vi.spyOn(console, "info").mockImplementation(() => {});
+    const acquire = vi.fn(() => new Promise<string | null>(() => {}));
+    const release = vi.fn(async (_k: string, _t: string) => {});
+    const lock: UniqueLock = { acquire, release };
+    const sent: unknown[] = [];
+    const queue = trackingQueue(
+      { send: async (b: unknown) => void sent.push(b) },
+      memLedger().ledger,
+    );
     const due = new Date(Date.now() - 1000);
     const events = {
       closeFinished: async () => 0,
@@ -176,8 +182,26 @@ describe("producer deadline", () => {
     const outcome = track(reconcileEvents({ events, queue, lock }));
     await vi.advanceTimersByTimeAsync(PRODUCER_BUDGET_MS + 1000);
     const result = outcome();
-    expect(result.status).toBe("rejected");
-    expect((result as { reason: unknown }).reason).toBeInstanceOf(BotTransportError);
+    // Poison-key isolation: the hung redispatch rejects inside dispatch at the
+    // producer bound, the pass counts it as one failed key and still resolves.
+    // The bound itself still fired — the warn carries the transport class, no
+    // lease was ever acquired, and nothing was sent.
+    expect(result.status).toBe("fulfilled");
+    expect((result as { value: unknown }).value).toEqual({
+      closed: 0,
+      materialized: 0,
+      resynced: 0,
+      absorbed: 0,
+      failed: 1,
+    });
+    expect(console.warn).toHaveBeenCalledWith("Event reconcile key failed.", {
+      key: eventKey,
+      error_class: "BotTransportError",
+    });
+    expect(sent).toHaveLength(0);
+    expect(acquire).toHaveBeenCalledOnce();
+    expect(release).not.toHaveBeenCalled();
+    expect(console.info).toHaveBeenCalledTimes(1);
     expect(vi.getTimerCount()).toBe(0);
   });
 });
