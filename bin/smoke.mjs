@@ -440,13 +440,14 @@ export async function smoke(
         // Comment parity with ci/cutover-check.mjs: "#" starts a comment, so
         // strip it before the anchored match. A comment-only Sitemap line
         // cannot pass, while a trailing comment after a real same-origin
-        // line still passes.
+        // line still passes. Horizontal whitespace only: \s would cross
+        // newlines and let a split-line Sitemap directive pass.
         const line = `Sitemap: ${base.origin}/sitemap_index.xml`;
         const stripped = String(body)
           .split(/\r?\n/)
           .map((robotsLine) => robotsLine.split("#", 1)[0])
           .join("\n");
-        const sitemaps = [...stripped.matchAll(/^\s*Sitemap:\s*(\S+)\s*$/gim)].map(
+        const sitemaps = [...stripped.matchAll(/^[ \t]*Sitemap:[ \t]*(\S+)[ \t]*$/gim)].map(
           (match) => match[1],
         );
         const expectedSitemap = `${base.origin}/sitemap_index.xml`;
