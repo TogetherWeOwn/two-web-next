@@ -77,11 +77,19 @@ async function cookieFor(store: SessionStore, userId: string): Promise<string> {
 }
 
 // Alternating letter case, not just all-lowercase: still one hop to canonical.
-const mixedCase = (key: string) =>
-  key
+// A random key can land digits on every odd slot, making the alternation a
+// no-op and the spelling already canonical (then DELETE would really delete
+// instead of redirecting). The fallback lowercases the first cased character
+// so the non-canonical premise always holds.
+const mixedCase = (key: string) => {
+  const mixed = key
     .split("")
     .map((ch, i) => (i % 2 ? ch.toLowerCase() : ch))
     .join("");
+  if (mixed !== key) return mixed;
+  const i = key.search(/[A-Za-z]/);
+  return i < 0 ? key : `${key.slice(0, i)}${key[i]!.toLowerCase()}${key.slice(i + 1)}`;
+};
 // Fully percent-encoded lowercase key: the route param decodes before any
 // canonical decision, so the redirect still fires in a single hop.
 const encodedLower = (key: string) =>
@@ -293,7 +301,9 @@ describe.skipIf(!process.env.DATABASE_URL)(
         const ev = await seed();
         const user = "mixed-delete";
         expect((await put(ev.key, user)).status).toBe(201);
-        const moved = await del(mixedCase(ev.key), user);
+        const spelling = mixedCase(ev.key);
+        expect(spelling).not.toBe(ev.key);
+        const moved = await del(spelling, user);
         expect(moved.status).toBe(308);
         expect(moved.headers.get("location")).toBe(`/events/${ev.key}/rsvp`);
         expect(await rowUsers(ev.id)).toEqual([user]);

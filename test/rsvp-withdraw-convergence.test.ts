@@ -295,13 +295,17 @@ class Node {
 function parse(html: string) {
   const page = new Node();
   const stack = [page];
+  // Single-pass entity decode: resolving "&amp;" in its own chained pass
+  // would double-unescape "&amp;lt;" to "<" instead of one level to "&lt;".
+  const entities: Record<string, string> = {
+    amp: "&",
+    lt: "<",
+    gt: ">",
+    quot: '"',
+    "#39": "'",
+  };
   const decode = (s: string) =>
-    s
-      .replace(/&#39;/g, "'")
-      .replace(/&quot;/g, '"')
-      .replace(/&amp;/g, "&")
-      .replace(/&lt;/g, "<")
-      .replace(/&gt;/g, ">");
+    s.replace(/&(amp|lt|gt|quot|#39);/g, (m, name: string) => entities[name] ?? m);
   for (const token of html.match(/<[^>]*>|[^<]+/g) ?? []) {
     if (token.startsWith("</")) {
       stack.pop();
