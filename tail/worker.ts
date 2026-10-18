@@ -1038,13 +1038,17 @@ export function createTailWorker(
         response.status === 200 && response.headers.get("x-two-origin") === EXPECTED_ORIGIN;
       // Read the already-fetched body for the public revision marker only.
       // No extra fetch: health still depends on status + origin alone, and an
-      // unreadable body yields absent attribution, never a throw.
+      // unreadable body yields absent attribution, never a throw. Cleanup
+      // stays inert (see #1095): its outcome can never flip this verdict.
       let attribution: UpAttribution = {};
       try {
-        attribution = upAttributionFromBody(await response.text());
+        if (typeof response.text === "function") {
+          attribution = upAttributionFromBody(await response.text());
+        }
       } catch {
         attribution = {};
       }
+      cleanupResponse(response); // Never read or log beyond the marker; cleanup stays inert.
       return { ok, status: response.status, attribution };
     } catch {
       return { ok: false, status: 0, attribution: {} };
@@ -1079,7 +1083,7 @@ export function createTailWorker(
         }
         ok = target !== null && target.pathname === check.locationPath && target.host === base.host;
       }
-      await response.body?.cancel(); // Never read or log the body.
+      cleanupResponse(response); // Never read or log the body; cleanup stays inert.
       return { ok, status: response.status };
     } catch {
       return { ok: false, status: 0 };
