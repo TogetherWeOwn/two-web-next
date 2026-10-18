@@ -7,9 +7,15 @@
 //   existing envelope) without hashing the body: an over-deep grantless body
 //   is answered 401, never 422 `payload_too_deep`, and a nested payload
 //   probe is never traversed.
-// - Pre-auth refusals insert zero audit rows. Table growth per
-//   unauthenticated hit is zero (a sampled warn log is the builder's
-//   choice and is deliberately not pinned here; the audit table is).
+// - Audit growth is split at admission (bounded compromise):
+//   grantless-deep refusals, refused before any digest work, insert
+//   zero audit rows exactly. Admitted-then-grantless 401s and
+//   outer-shield 429s carry a `request_id` and may write *sampled*
+//   audit rows, so those pins assert boundedness over a flood (rows
+//   <= cap, never one row per refusal), not exact counts. Refused
+//   (429) hits still write no hit row and reach no grant lookup. (A
+//   sampled warn log is the builder's choice and is deliberately not
+//   pinned here; the audit-table bound is.)
 // - Authenticated oversized/deep payloads keep the existing 422
 //   `payload_too_deep` plus exactly one audit row, now attributed to the
 //   resolved grant. Admission, idempotency and shield semantics are
@@ -124,7 +130,44 @@ function noFetch() {
   return fetch;
 }
 
-describe("pre-auth refusals: no digest, no audit row (failing-first)", () => {
+// Sampled-audit bound for admitted (post-`request_id`) refusals. The
+// ruling's rate is ~1%; the cap is set an order of magnitude above it
+// (10% of the flood) so the pin asserts boundedness — sub-linear table
+// growth — without pinning the exact sampler. It still kills the
+// one-row-per-refusal shape: auditing every refusal writes `refusals`
+// rows, far above this cap for any flood past a handful of hits.
+const sampledCap = (refusals: number) => Math.ceil(refusals / 10);
+
+function expectBoundedAudits(fake: ReturnType<typeof makeFakeAgentDb>, refusals: number) {
+  expect(fake.audits.length).toBeGreaterThanOrEqual(0);
+  expect(fake.audits.length).toBeLessThanOrEqual(sampledCap(refusals));
+  // Any sampled row that is written must correlate to its refusal.
+  for (const row of fake.audits) expect(row.requestId).toBeTruthy();
+}
+
+/**
+ * Wrap the fake sql tag counting grant lookups by credential hash.
+ * `begin` hands back the wrapper itself so lookups issued inside a
+ * transaction are counted too.
+ */
+function countingGrantLookups(fake: ReturnType<typeof makeFakeAgentDb>) {
+  const state = { lookups: 0 };
+  type TagFn = (strings: TemplateStringsArray, ...values: unknown[]) => Promise<unknown[]>;
+  const tag: TagFn = (strings, ...values) => {
+    if ((strings[0] ?? "").includes("FROM agent_event_grants WHERE verifier_hash")) {
+      state.lookups += 1;
+    }
+    return (fake.sql as unknown as TagFn)(strings, ...values);
+  };
+  const seams = tag as unknown as Record<string, unknown>;
+  const fakeSeams = fake.sql as unknown as Record<string, unknown>;
+  seams.unsafe = fakeSeams.unsafe;
+  seams.end = fakeSeams.end;
+  seams.begin = async (fn: (tx: unknown) => Promise<unknown>) => fn(tag);
+  return { sql: tag as unknown as typeof fake.sql, lookups: () => state.lookups };
+}
+
+describe("pre-auth refusals: no digest; zero audits grantless-deep, sampled-bounded once admitted", () => {
   it("a missing credential with an over-deep body is 401, never payload_too_deep, with zero audits", async () => {
     noFetch();
     const fake = makeFakeAgentDb();
@@ -172,14 +215,16 @@ describe("pre-auth refusals: no digest, no audit row (failing-first)", () => {
     // The recursive digest enumerates and reads every nested value; grant
     // resolution needs only the credential, so the payload stays untouched.
     expect(probe.traversals()).toBe(0);
-    expect(fake.audits).toHaveLength(0);
+    // Admitted-then-grantless: a sampled audit row is allowed, an
+    // unbounded one is not. The flood pin below carries the bound's teeth.
+    expectBoundedAudits(fake, 1);
   });
 
   it.each([
     ["missing", null],
     ["unknown", UNKNOWN],
   ] as const)(
-    "%s credential with a shallow valid body is 401 with zero audits",
+    "%s credential with a shallow valid body is 401 with at most sampled audits",
     async (_l, cred) => {
       noFetch();
       const fake = makeFakeAgentDb();
@@ -191,7 +236,10 @@ describe("pre-auth refusals: no digest, no audit row (failing-first)", () => {
       );
       expect(a.status).toBe(401);
       expect(a.body).toMatchObject({ reason: "unauthenticated" });
-      expect(fake.audits).toHaveLength(0);
+      // Admitted, so the refusal carries its correlation id...
+      expect(a.body.request_id).toBeTruthy();
+      // ...and may be sampled into the audit table, within the cap.
+      expectBoundedAudits(fake, 1);
       expect(fake.hits).toHaveLength(1);
     },
   );
@@ -242,19 +290,34 @@ describe("pre-auth refusals: no digest, no audit row (failing-first)", () => {
     expect(fake.audits).toHaveLength(0);
   });
 
-  it("a spent shield bucket still refuses first, and no grantless hit in the run audits", async () => {
+  it("a spent shield bucket refuses a flood first: every 429 carries request_id, refused hits write no hit rows and reach no grant lookup, and audits stay within the sampled cap", async () => {
     noFetch();
     const fake = makeFakeAgentDb();
+    const counting = countingGrantLookups(fake);
     const tight = { ...cfg, routePerMinute: 2 };
     const ip = "127.0.0.41";
     const spend = () =>
-      handleAgentEvent(fake.sql, tight, { op: "create", idempotency_key: key() }, null, ip);
+      handleAgentEvent(counting.sql, tight, { op: "create", idempotency_key: key() }, null, ip);
     expect((await spend()).status).toBe(401);
     expect((await spend()).status).toBe(401);
-    const refused = await handleAgentEvent(fake.sql, tight, deepBody(), null, ip);
-    expect(refused.status).toBe(429);
-    expect(refused.body).toMatchObject({ reason: "rate_limited" });
-    expect(fake.audits).toHaveLength(0);
+    // Bucket spent. Snapshot the seams the refused hits must not touch.
+    const hitsBeforeFlood = fake.hits.length;
+    const lookupsBeforeFlood = counting.lookups();
+    const FLOOD = 20;
+    for (let i = 0; i < FLOOD; i++) {
+      const refused = await handleAgentEvent(counting.sql, tight, deepBody(), null, ip);
+      expect(refused.status).toBe(429);
+      expect(refused.body).toMatchObject({ reason: "rate_limited" });
+      expect(typeof refused.body.request_id).toBe("string");
+      expect((refused.body.request_id as string).length).toBeGreaterThan(0);
+    }
+    // No hit row per refused hit, and the shield refuses before any
+    // grant resolution is attempted.
+    expect(fake.hits).toHaveLength(hitsBeforeFlood);
+    expect(counting.lookups()).toBe(lookupsBeforeFlood);
+    // Bounded-sampled, not exact-zero and not one-row-per-429: over the
+    // whole run (2 admitted 401s + the 429 flood) audit growth is capped.
+    expectBoundedAudits(fake, 2 + FLOOD);
   });
 
   it("the audit row for a granted over-deep payload is attributed to the resolved grant", async () => {
