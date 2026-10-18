@@ -17,13 +17,19 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { getTableColumns } from "drizzle-orm";
 import type postgres from "postgres";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { boardViewLogs } from "../src/db/admin-schema";
 import {
   backoffFor,
+  BOARD_VIEW_LOG_RETENTION_DAYS,
   EVENT_SEARCH_LOG_RETENTION_DAYS,
   JOIN_ATTEMPT_RETENTION_DAYS,
   MEMBER_ACCESS_LOG_RETENTION_DAYS,
+  PRUNE_CRON,
+  PRUNE_DELETE_BATCH_SIZE,
+  PRUNE_DELETE_MAX_BATCHES,
   SYNC_EVENT,
 } from "../src/jobs/constants";
 import { checkJoinThrottle, THROTTLE_COUNTER_RETENTION_MINUTES } from "../src/join/service";
@@ -233,6 +239,101 @@ describe("retention ledger doc rows", () => {
     expect(read("src/jobs/cron.ts")).toContain(
       "drainPruneTable(\n      (c) => stores.searchLog.pruneOlderThan(c),\n      cutoff(now, EVENT_SEARCH_LOG_RETENTION_DAYS),",
     );
+  });
+
+  it("publishes the anonymous board-view lifecycle in its own row", () => {
+    expect(BOARD_VIEW_LOG_RETENTION_DAYS).toBe(90);
+    expect(PRUNE_CRON).toBe("0 0 * * *");
+    expect(PRUNE_DELETE_BATCH_SIZE).toBe(1000);
+    expect(PRUNE_DELETE_MAX_BATCHES).toBe(100);
+    const fields = Object.values(getTableColumns(boardViewLogs)).map((column) => column.name);
+    expect(fields).toEqual([
+      "id",
+      "normalized_board_key",
+      "scope",
+      "season",
+      "result_count",
+      "occurred_at",
+    ]);
+    const rows = read("docs/retention-ledger.md")
+      .split("\n")
+      .filter((line) => /^\| `board_view_logs`(?:\s|\|)/.test(line));
+    expect(rows, "one dedicated board-view row, not the event-search row").toHaveLength(1);
+    const row = rows[0]!;
+    for (const claim of [
+      "BOARD_VIEW_LOG_RETENTION_DAYS = 90",
+      "90-day eligibility, not a deletion deadline",
+      "Anonymous usage fields",
+      ...fields.map((field) => `\`${field}\``),
+      "no user ID, session, Discord ID, IP, or username",
+      "Hono (`src/hotzones/routes.tsx`, `src/leaderboards/routes.tsx`)",
+      "Kit (`src/kit-hotzones.ts`, `web/src/hooks.server.ts`)",
+      "best-effort `recordBoardView`",
+      "anonymous describes the record, not necessarily the visitor",
+      "Member-board recording follows a released HTTP 200",
+      "separate from fail-closed `member_data_access_logs` auditing",
+      "Daily `model:prune`",
+      'PRUNE_CRON = "0 0 * * *"',
+      "pruneModelTables",
+      "drainPruneTable",
+      "pgPruneStores().boardViews.pruneOlderThan",
+      "occurred_at < cutoff",
+      "cutoff-exact and newer rows survive",
+      "at most 1,000 rows (`PRUNE_DELETE_BATCH_SIZE = 1000`)",
+      "up to 100 batches per table per pass (`PRUNE_DELETE_MAX_BATCHES = 100`)",
+      "full final batch emits a cap warning with `cappedTables`",
+      "older rows may remain until a later pass",
+      "../src/db/admin-schema.ts",
+      "../src/hotzones/board-log.ts",
+      "../src/jobs/constants.ts",
+      "../src/jobs/cron.ts",
+      "../src/jobs/worker.ts",
+      "../src/jobs/postgres.ts",
+      "../test/prune.test.ts",
+    ]) {
+      expect(row, `board-view row must pin: ${claim}`).toContain(claim);
+    }
+  });
+
+  it("pins the board-view writer and scheduled prune paths without duplicating prune proofs", () => {
+    for (const [path, call] of [
+      ["src/hotzones/routes.tsx", "await recordBoardView(db, {"],
+      ["src/leaderboards/routes.tsx", "await recordBoardView(db, entry).catch(() => {});"],
+      ["src/kit-hotzones.ts", "await (args.recordBoardViewFn ?? recordBoardView)(db, opts)"],
+      [
+        "web/src/hooks.server.ts",
+        "recordQueuedBoardView(event.locals, response.status, recordBoardView)",
+      ],
+      ["src/hotzones/board-log.ts", "await tx.insert(boardViewLogs).values({"],
+      ["src/hotzones/board-log.ts", "if (!queued || status !== 200) return;"],
+      ["src/leaderboards/routes.tsx", "if (!view || c.res.status !== 200) return;"],
+      ["src/jobs/worker.ts", "prune: (db) => pruneModelTables(pgPruneStores(db))"],
+    ] as const) {
+      expect(read(path), `board-view call path: ${path}`).toContain(call);
+    }
+    const cron = read("src/jobs/cron.ts");
+    expect(cron).toContain(
+      'if (cron === PRUNE_CRON) return flight("model:prune", async (db) => void (await jobs.prune(db)));',
+    );
+    expect(cron).toContain(
+      "drainPruneTable(\n      (c) => stores.boardViews.pruneOlderThan(c),\n      cutoff(now, BOARD_VIEW_LOG_RETENTION_DAYS),",
+    );
+    expect(cron).toContain('["boardViews", boardViews.capped]');
+    expect(cron).toContain(
+      'console.warn("Model prune pass hit per-table batch cap with rows possibly pending.", {',
+    );
+    expect(normalizeSqlWindow(read("src/jobs/postgres.ts"))).toContain(
+      "delete from board_view_logs where id in ( select id from board_view_logs where occurred_at < ${cutoff} order by id limit ${PRUNE_DELETE_BATCH_SIZE} ) returning 1",
+    );
+    const proof = read("test/prune.test.ts");
+    for (const name of [
+      "prunes each table by age, sweeps expired sessions, and re-runs clean",
+      "drains a multi-batch backlog in one pass and sums the counts",
+      "stops at the per-table batch cap and warns with rows possibly pending",
+      "each age-pruned statement obeys its per-statement batch bound",
+    ]) {
+      expect(proof, `existing prune proof: ${name}`).toContain(`it("${name}"`);
+    }
   });
 
   it("publishes one row per queue/lock table with window, mechanism, and proof", () => {
