@@ -124,6 +124,52 @@ async function withAggregatorDeadline<T>(work: Promise<T>, ms = AGGREGATOR_TIMEO
   }
 }
 
+// Bound every outbound webhook POST the same way: the per-attempt delivery
+// budget is DELIVERY_TIMEOUT_MS via an independent setTimeout race; the
+// AbortSignal.timeout on each fetch stays on as cooperative cleanup only.
+// The verdict comes from the HTTP response alone: once a response is known,
+// body cleanup is still attempted but its outcome is inert and can never
+// flip success into failure or stall the caller.
+const DELIVERY_TIMEOUT_MS = 5_000;
+
+// Independent settlement deadline for one webhook attempt. AbortSignal.timeout
+// is cooperative: an uncooperative fetch can ignore its signal forever, so
+// awaiting send (or body.cancel) with only that signal can hang the caller.
+// Racing the work against a setTimeout guarantees the caller settles within
+// the budget. The late loser is ignored: a noop handler is attached up front
+// so a late settlement or rejection after expiry cannot surface as an
+// unhandled rejection, and its value can never change the settled result.
+async function withDeliveryDeadline<T>(work: Promise<T>, ms = DELIVERY_TIMEOUT_MS): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    const timeout = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new Error("delivery deadline")), ms);
+    });
+    void work.then(
+      () => {},
+      () => {},
+    );
+    return await Promise.race([work, timeout]);
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
+}
+
+// Best-effort response cleanup: request cancel, swallow its outcome, never
+// let rejection or stall reach a receipt, a mute decision, or the process.
+function cleanupResponse(response: Response): void {
+  try {
+    const cleanup = response.body?.cancel();
+    if (cleanup)
+      void cleanup.then(
+        () => {},
+        () => {},
+      );
+  } catch {
+    /* Cleanup request failures never flip the delivery verdict. */
+  }
+}
+
 export type UptimeAlert = {
   event: "uptime.down";
   status: number;
@@ -788,18 +834,21 @@ export function createTailWorker(
     try {
       // wait=true confirms message persistence; disable all mentions.
       // https://docs.discord.com/developers/resources/webhook#execute-webhook
-      const response = await send(url.toString(), {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          content: JSON.stringify(summary),
-          allowed_mentions: { parse: [] },
+      const response = await withDeliveryDeadline(
+        send(url.toString(), {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            content: JSON.stringify(summary),
+            allowed_mentions: { parse: [] },
+          }),
+          redirect: "manual", // Workers fetch rejects "error"; a 3xx is never ok, so it fails closed.
+          signal: AbortSignal.timeout(5000),
         }),
-        redirect: "manual", // Workers fetch rejects "error"; a 3xx is never ok, so it fails closed.
-        signal: AbortSignal.timeout(5000),
-      });
-      await response.body?.cancel(); // Never read/log the message or credential-bearing error response.
-      return response.ok;
+      );
+      const ok = response.ok;
+      cleanupResponse(response); // Never read/log the message or credential-bearing error response.
+      return ok;
     } catch {
       /* Transport/timeout: do not log the URL or exception. */
       return false;
@@ -973,18 +1022,20 @@ export function createTailWorker(
     if (!mute.begin(key)) return;
     let delivered = false;
     try {
-      const response = await send(url.toString(), {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          content: JSON.stringify(alert),
-          allowed_mentions: { parse: [] },
+      const response = await withDeliveryDeadline(
+        send(url.toString(), {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            content: JSON.stringify(alert),
+            allowed_mentions: { parse: [] },
+          }),
+          redirect: "manual", // Workers fetch rejects "error"; a 3xx is never ok, so it fails closed.
+          signal: AbortSignal.timeout(5000),
         }),
-        redirect: "manual", // Workers fetch rejects "error"; a 3xx is never ok, so it fails closed.
-        signal: AbortSignal.timeout(5000),
-      });
+      );
       delivered = response.ok;
-      await response.body?.cancel();
+      cleanupResponse(response);
     } catch {
       /* Transport/timeout: do not log the URL or exception. */
     } finally {
