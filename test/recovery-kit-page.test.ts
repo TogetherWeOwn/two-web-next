@@ -268,7 +268,7 @@ describe("recovery outcomes through the injected renderer", () => {
     const html = await res.text();
     expect(html).toContain("Join cancelled");
     expectRecoveryShell(html);
-    expect(html).toContain('href="/join/discord?next=%2Fevents"');
+    expect(html).toContain('href="/join/discord?next=%2Fevents&amp;source=web-homepage"');
     expect(html).not.toContain(TOKEN);
     expect(html).not.toContain("error_description");
     expect(calls).toHaveLength(0);
