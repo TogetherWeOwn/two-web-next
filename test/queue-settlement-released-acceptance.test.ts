@@ -222,22 +222,33 @@ describe("settlement failure on a definitive sync failure", () => {
       expect(m.retry).toHaveBeenCalledExactlyOnceWith();
       expect(m.ack).not.toHaveBeenCalled();
       // The ledger row must not stay `reserved`: released is stamped with the
-      // consumer's clock (the retry carries no delay), and nothing buries or
+      // consumer's clock (the retry carries no delay) before the retry, and
+      // the definitive failure also gets its terminal record — one failed
+      // stamp (which overwrites the released row) and one alert. Nothing
       // dequeues the row.
+      const reason =
+        botMode === "refusal" ? expect.stringContaining("action_not_allowed") : "BotTerminalError";
       expect(s.ledger.released).toHaveBeenCalledExactlyOnceWith(JOB_ID, NOW);
-      expect(s.ledger.failed).not.toHaveBeenCalled();
+      expect(s.ledger.failed).toHaveBeenCalledExactlyOnceWith(
+        JOB_ID,
+        "sync-event",
+        "sync-event:e-settle",
+        reason,
+      );
       expect(s.ledger.dequeued).not.toHaveBeenCalled();
-      expect(s.rows.get(JOB_ID)).toEqual({ state: "released", availableAt: NOW });
-      // Exact call order: released lands before the retry is signalled.
+      expect(s.rows.get(JOB_ID)).toEqual({ state: "failed", reason });
+      // Exact call order: released lands before the retry is signalled, and
+      // the terminal stamp follows it.
       expect(s.order).toEqual([
         "ledger.reserved",
         "events.failSync",
         "ledger.released",
         "message.retry",
+        "ledger.failed",
       ]);
-      // Not a terminal failure yet: no queue.failing alert, lock stays held
-      // for the redelivery.
-      expect(failingAlerts()).toEqual([]);
+      // Exactly one queue.failing alert; the lock stays held for the
+      // redelivery.
+      expect(failingAlerts()).toHaveLength(1);
       expect(s.lock.release).not.toHaveBeenCalled();
       expect(s.completeSync).not.toHaveBeenCalled();
     },
@@ -257,10 +268,16 @@ describe("settlement failure on a definitive sync failure", () => {
       "events.failSync",
       "ledger.released",
       "message.retry",
+      "ledger.failed",
     ]);
-    // The stamp itself failed, so the visible row is unchanged — but the
-    // carrier was still retried rather than held hostage to the ledger.
-    expect(s.rows.get(JOB_ID)?.state).toBe("reserved");
+    // The released stamp itself failed, leaving the row `reserved` — but the
+    // carrier was still retried rather than held hostage to the ledger, and
+    // the terminal failed stamp then overwrites the row.
+    expect(s.rows.get(JOB_ID)).toEqual({
+      state: "failed",
+      reason: expect.stringContaining("action_not_allowed"),
+    });
+    expect(failingAlerts()).toHaveLength(1);
   });
 
   it("a hung released stamp is bounded and still fails open to the retry", async () => {
@@ -277,7 +294,9 @@ describe("settlement failure on a definitive sync failure", () => {
       "events.failSync",
       "ledger.released",
       "message.retry",
+      "ledger.failed",
     ]);
+    expect(failingAlerts()).toHaveLength(1);
   }, 15_000);
 
   it("a settlement failure on one message does not stall the rest of the batch", async () => {
