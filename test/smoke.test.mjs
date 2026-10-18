@@ -4,7 +4,7 @@ import { once } from "node:events";
 import { createServer } from "node:http";
 import { test } from "node:test";
 import { build } from "esbuild";
-import { smoke } from "../bin/smoke.mjs";
+import { SMOKE_QUEUE_CRITICAL_AT, SMOKE_QUEUE_WARN_AT, smoke } from "../bin/smoke.mjs";
 
 // Independent local responses matching the route contracts, not a live Worker/DB.
 const fixtures = {
@@ -432,6 +432,34 @@ test("accepts rendered healthy, degraded, unknown and unconfigured /up envelopes
     const result = await run(url);
     assert.equal(result.ok, true, `${state}: ${result.output}`);
   }
+});
+
+test("smoke queue thresholds track src/up.ts QUEUE_WARN_AT / QUEUE_CRITICAL_AT", async () => {
+  // Drift guard: bin/smoke.mjs runs on plain node with no TS loader, so its
+  // expected warn_at/critical_at are duplicated from src/up-queue.ts
+  // (re-exported by src/up.ts) and pinned here. A threshold change in src
+  // fails this test at PR time (npm run test:smoke is in the required check
+  // job); update SMOKE_QUEUE_* in bin/smoke.mjs to match.
+  const bundle = await build({
+    entryPoints: ["src/up.ts"],
+    bundle: true,
+    write: false,
+    format: "esm",
+    platform: "node",
+  });
+  const { QUEUE_WARN_AT, QUEUE_CRITICAL_AT } = await import(
+    `data:text/javascript;base64,${Buffer.from(bundle.outputFiles[0].text).toString("base64")}`
+  );
+  assert.equal(
+    SMOKE_QUEUE_WARN_AT,
+    QUEUE_WARN_AT,
+    `smoke queue warn_at drifted from src/up.ts: smoke=${SMOKE_QUEUE_WARN_AT} src=${QUEUE_WARN_AT}; update SMOKE_QUEUE_WARN_AT in bin/smoke.mjs`,
+  );
+  assert.equal(
+    SMOKE_QUEUE_CRITICAL_AT,
+    QUEUE_CRITICAL_AT,
+    `smoke queue critical_at drifted from src/up.ts: smoke=${SMOKE_QUEUE_CRITICAL_AT} src=${QUEUE_CRITICAL_AT}; update SMOKE_QUEUE_CRITICAL_AT in bin/smoke.mjs`,
+  );
 });
 
 for (const body of [
