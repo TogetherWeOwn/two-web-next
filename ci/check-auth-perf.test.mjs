@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 
@@ -77,6 +79,106 @@ test("live run without an origin fails closed, never green", () => {
     `expected exit 2, got ${result.status}\n${result.stdout}\n${result.stderr}`,
   );
 });
+
+// Isolate the writer's relative test-results paths without changing the test
+// runner's cwd. The child imports helpers only, with no live credentials or env.
+function runLedger(t, journeys) {
+  const dir = mkdtempSync(
+    join(process.env.PAPERCLIP_RUN_SCRATCH_DIR || tmpdir(), "auth-perf-ledger-"),
+  );
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const moduleUrl = new URL("./check-auth-perf.mjs", import.meta.url).href;
+  const result = spawnSync(
+    process.execPath,
+    [
+      "--input-type=module",
+      "--eval",
+      `import { readFileSync } from "node:fs";
+       import { summarize, writeLedger } from ${JSON.stringify(moduleUrl)};
+       const summary = summarize(JSON.parse(readFileSync(0, "utf8")));
+       let output = "";
+       const code = writeLedger(summary, { stdout: { write(text) { output += text; } } });
+       console.log(JSON.stringify({ summary, code, output }));`,
+    ],
+    { cwd: dir, env: {}, input: JSON.stringify(journeys), encoding: "utf8", timeout: 30_000 },
+  );
+  assert.equal(result.status, 0, `${result.error ?? ""}\n${result.stdout}\n${result.stderr}`);
+  assert.equal(result.stderr, "");
+  const ledgerDir = join(dir, "test-results");
+  return {
+    ...JSON.parse(result.stdout),
+    files: existsSync(ledgerDir) ? readdirSync(ledgerDir).sort() : [],
+    read: (name) => readFileSync(join(ledgerDir, name), "utf8"),
+  };
+}
+
+const passedJourneys = [
+  { name: "member-rsvp", status: "passed", reason: null, samples: [100, 120, 140], medianMs: 120 },
+  {
+    name: "moderator-admin",
+    status: "passed",
+    reason: null,
+    samples: [120, 140, 160],
+    medianMs: 140,
+  },
+];
+
+for (const reason of ["__Host-two_session=abc", "X-TWO-QA-Auth: synthetic", "Bearer synthetic"]) {
+  test(`ledger refuses a secret-shaped reason (${reason.split(/[=: ]/)[0]}) before writing files`, (t) => {
+    // Keep the verdict passing so only the secret guard can return 1.
+    const result = runLedger(t, [{ ...passedJourneys[0], reason }, passedJourneys[1]]);
+    assert.equal(result.summary.verdict, "pass");
+    assert.equal(result.code, 1);
+    assert.deepEqual(result.files, []);
+    assert.equal(result.output, "auth perf gate: secret-shaped content in ledger — failing.\n");
+    assert.ok(!result.output.includes(reason));
+  });
+}
+
+test("a failed journey's secret-shaped reason is not written either", (t) => {
+  const result = runLedger(t, [
+    { ...passedJourneys[0], status: "failed", reason: "__Host-two_session=abc" },
+    passedJourneys[1],
+  ]);
+  assert.equal(result.summary.verdict, "fail");
+  assert.equal(result.code, 1);
+  assert.deepEqual(result.files, []);
+  assert.equal(result.output, "auth perf gate: secret-shaped content in ledger — failing.\n");
+});
+
+for (const failed of [false, true]) {
+  test(`ledger writes both summaries and returns ${failed ? 1 : 0} with ${failed ? "one failed journey" : "all journeys passed"}`, (t) => {
+    const journeys = passedJourneys.map((journey, index) =>
+      failed && index === 1
+        ? { ...journey, status: "failed", reason: "status 403 !== 200" }
+        : journey,
+    );
+    const result = runLedger(t, journeys);
+    const verdict = failed ? "fail" : "pass";
+    const counts = { total: 2, passed: failed ? 1 : 2, failed: failed ? 1 : 0 };
+    assert.deepEqual(result.summary, { version: 1, counts, journeys, verdict });
+    assert.equal(result.code, failed ? 1 : 0);
+    assert.deepEqual(result.files, ["auth-perf-ledger.json", "auth-perf-ledger.md"]);
+    assert.deepEqual(JSON.parse(result.read("auth-perf-ledger.json")), result.summary);
+    const markdown = result.read("auth-perf-ledger.md");
+    assert.ok(
+      markdown.includes(
+        `Verdict: **${verdict}** — ${counts.passed} passed, ${counts.failed} failed, 2 total.`,
+      ),
+    );
+    for (const journey of journeys) {
+      assert.ok(
+        markdown.includes(
+          `| ${journey.name} | ${journey.status} | ${journey.medianMs} | ${journey.samples.join(", ")} | ${journey.reason ?? "—"} |`,
+        ),
+      );
+    }
+    assert.equal(
+      result.output,
+      `auth perf gate: ${counts.passed} passed, ${counts.failed} failed, 2 total (verdict: ${verdict}).\n`,
+    );
+  });
+}
 
 test("browser smoke executes the live authenticated gate", () => {
   const workflow = readFileSync(new URL("../.github/workflows/e2e.yml", import.meta.url), "utf8");
