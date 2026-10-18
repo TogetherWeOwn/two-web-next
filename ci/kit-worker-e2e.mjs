@@ -107,7 +107,7 @@ const configBody = {
     DISCORD_CLIENT_ID: "ci-fixture-client",
     DISCORD_CLIENT_SECRET: "ci-fixture-secret",
     DISCORD_BOT_TOKEN: "ci-fixture-token",
-    DISCORD_GUILD_ID: "ci-fixture-guild",
+    DISCORD_GUILD_ID: "326474832151838730",
     DISCORD_MODERATOR_ROLE_IDS: "",
     DISCORD_INVITE_URL: "https://example.invalid/invite",
     AGENT_EVENTS_ENABLED: "false",
