@@ -70,6 +70,13 @@ export function handleProofRequest(request, env = {}) {
     return new Response(
       JSON.stringify({
         ...body,
+        // Top-level revision mirrors src/up-revision.ts so the real smoke
+        // checker can attribute an overridden probe to this exact version.
+        // commit is null: proof tags are not deploy SHAs.
+        revision: {
+          version_id: typeof metadata.id === "string" ? metadata.id : null,
+          commit: null,
+        },
         proof: {
           version_id: typeof metadata.id === "string" ? metadata.id : null,
           version_tag: typeof metadata.tag === "string" ? metadata.tag : null,

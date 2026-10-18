@@ -51,8 +51,9 @@ other environment.
 5. Pre-promote attribution: the probe requires the
    `x-proof-version-id` header (from the version-metadata binding) to
    equal the candidate id under the version-override header, and the
-   real smoke checker must agree with the run mode (pass for `success`,
-   fail for `rollback`). A healthy rollback candidate stops the run
+   real smoke checker requires `/up` `revision.version_id` to equal
+   the same candidate id. The smoke checker must agree with the run
+   mode (pass for `success`, fail for `rollback`). A healthy rollback candidate stops the run
    before the action, because its forced failure would be fake. Every
    live probe in the workflow retries 6 times, 5s apart, and records
    each attempt, because a deployment change can take a couple of
