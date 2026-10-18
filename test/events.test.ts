@@ -425,6 +425,41 @@ describe.skipIf(!process.env.DATABASE_URL)("events routes (agent-testdb)", () =>
     },
   );
 
+  it("parses ?page= as strictly as its siblings: prefixes, hex, fractional and padded fall back to page 1", async () => {
+    await db.insert(events).values(Array.from({ length: 7 }, (_, i) => eventRow(i + 1)));
+    const first = await collection("?per_page=3&page=1");
+    expect(first.page).toBe(1);
+    expect(first.meta).toEqual({ current_page: 1, per_page: 3, total: 7, last_page: 3 });
+    // Valid pages unchanged.
+    const second = await collection("?per_page=3&page=2");
+    expect(second.page).toBe(2);
+    expect(second.meta.current_page).toBe(2);
+    expect(second.data).not.toEqual(first.data);
+    // Clamped-paging contract unchanged: a valid past-end page still clamps.
+    expect((await collection("?per_page=3&page=99")).page).toBe(3);
+    // Sibling-strict: parseAttendeePageParam and the admin table viewers accept
+    // only /^[1-9]\d*$/ in full; parseInt would accept "2x" as 2.
+    for (const value of [
+      "2x",
+      "0x10",
+      "2.5",
+      " 2",
+      "2 ",
+      "02",
+      "+2",
+      "2e1",
+      "0",
+      "-1",
+      "abc",
+      "",
+    ]) {
+      const result = await collection(`?per_page=3&page=${encodeURIComponent(value)}`);
+      expect(result.page, value).toBe(1);
+      expect(result.meta.current_page, value).toBe(1);
+      expect(result.data, value).toEqual(first.data);
+    }
+  });
+
   it.each(["per_page", "limit"])(
     "clamps complete signed integer %s sizes at both boundaries",
     async (parameter) => {
