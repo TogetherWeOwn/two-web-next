@@ -14,8 +14,13 @@ export const isPlainObject = (v: unknown): v is Record<string, unknown> =>
 
 // Keep explicit keys safe for PostgreSQL text/varchar(26), including denied
 // audits and lock names. Never truncate or repair a key into another identity.
+// Every Unicode Cc control (C0 U+0000-U+001F, DEL and C1 U+007F-U+009F)
+// resolves to null so control-bearing keys take the existing null-key paths.
 export const storedEventKey = (key: unknown): string | null =>
-  typeof key === "string" && key !== "" && key.length <= 26 && !/[\u0000\uD800-\uDFFF]/u.test(key)
+  typeof key === "string" &&
+  key !== "" &&
+  key.length <= 26 &&
+  !/[\u0000-\u001F\u007F-\u009F\uD800-\uDFFF]/u.test(key)
     ? key
     : null;
 
