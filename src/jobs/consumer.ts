@@ -215,7 +215,8 @@ export async function consume(
           if (body.kind === "sync-event") await releaseLock(uniqueKey(body.eventKey));
           m.ack();
         } else {
-          if (jobId) await bounded("released", deps.ledger.released(jobId, new Date()));
+          if (jobId)
+            await bounded("released", deps.ledger.released(jobId, deps.now?.() ?? new Date()));
           m.retry();
         }
         continue;
@@ -225,7 +226,10 @@ export async function consume(
       if (jobId)
         await bounded(
           "released",
-          deps.ledger.released(jobId, new Date(Date.now() + outcome.retryInSeconds * 1000)),
+          deps.ledger.released(
+            jobId,
+            new Date((deps.now?.() ?? new Date()).getTime() + outcome.retryInSeconds * 1000),
+          ),
         );
       m.retry({ delaySeconds: outcome.retryInSeconds });
       continue;
