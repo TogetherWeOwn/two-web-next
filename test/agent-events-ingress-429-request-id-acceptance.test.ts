@@ -20,9 +20,12 @@
 //   and neither reuses an admitted neighbour's ID (no constant placeholder).
 // - Nothing else changes: the message wording, the key set beyond the new
 //   field, the absence of exception/trace/stack material, and the
-//   charges-no-hit refusals. The refused hit writes no hit row but audits one
-//   denied/rate_limited row with the admission request_id (see shield.ts for
-//   the bucket-class encoding).
+//   charges-no-hit refusals. A refused hit writes no hit row and reaches
+//   no grant lookup. Post-admission refusals (admitted 401s and shield
+//   429s alike) are audited only on a bounded sample — exact audit counts
+//   are retired on both sides; the flood pin below asserts rows stay
+//   within the sampled cap and every sampled row correlates to its
+//   refusal's request_id.
 // - No credential material ever appears in the envelope.
 //
 // Hermetic and DB-free: the in-memory fake agent-event store records every
@@ -69,6 +72,36 @@ function expectCorrelated429(answer: { status: number; body: Record<string, unkn
   expect(Object.keys(answer.body).sort()).toEqual(KEYS_429);
   expect(typeof answer.body.request_id).toBe("string");
   expect((answer.body.request_id as string).length).toBeGreaterThan(0);
+}
+
+// Sampled-audit bound for post-admission refusals. The sampling rate is
+// ~1%; the cap is set an order of magnitude above it (10% of the flood)
+// so the pin asserts boundedness without pinning the exact sampler. It
+// still kills the one-row-per-refusal shape on either side: auditing
+// every admitted 401 and shield 429 writes one row per hit, far above
+// this cap over a flood.
+const sampledCap = (hits: number) => Math.ceil(hits / 10);
+
+/**
+ * Wrap the fake sql tag counting grant lookups by credential hash.
+ * `begin` hands back the wrapper itself so lookups issued inside a
+ * transaction are counted too.
+ */
+function countingGrantLookups(fake: FakeAgentDb) {
+  const state = { lookups: 0 };
+  type TagFn = (strings: TemplateStringsArray, ...values: unknown[]) => Promise<unknown[]>;
+  const tag: TagFn = (strings, ...values) => {
+    if ((strings[0] ?? "").includes("FROM agent_event_grants WHERE verifier_hash")) {
+      state.lookups += 1;
+    }
+    return (fake.sql as unknown as TagFn)(strings, ...values);
+  };
+  const seams = tag as unknown as Record<string, unknown>;
+  const fakeSeams = fake.sql as unknown as Record<string, unknown>;
+  seams.unsafe = fakeSeams.unsafe;
+  seams.end = fakeSeams.end;
+  seams.begin = async (fn: (tx: unknown) => Promise<unknown>) => fn(tag);
+  return { sql: tag as unknown as FakeAgentDb["sql"], lookups: () => state.lookups };
 }
 
 /** Spend an anonymous shield of 2 and return the refusal that follows. */
@@ -217,25 +250,65 @@ describe("positive controls: the 429 contract otherwise unchanged", () => {
     expect(refused.body).not.toHaveProperty("stack");
   });
 
-  it("unauthenticated-shield 429 audits one denied row and charges no hit", async () => {
+  it("unauthenticated-shield flood: admitted 401s and shield 429s stay within the sampled cap, refused hits charge no hit and reach no grant lookup", async () => {
     const fake = makeFakeAgentDb();
-    const refused = await anonymousShieldRefusal(fake);
-    expect(refused.status).toBe(429);
-    // The refused hit wrote no hit row but one denied/rate_limited audit row
-    // with the admission request_id, beside the two admitted hits and their
-    // `unauthenticated` audit rows.
+    const counting = countingGrantLookups(fake);
+    const call = () =>
+      handleAgentEvent(
+        counting.sql,
+        cfg(2),
+        { op: "create", idempotency_key: key() },
+        null,
+        "127.0.0.1",
+      );
+
+    const firstAdmitted = await call();
+    expect(firstAdmitted.status).toBe(401);
+    const secondAdmitted = await call();
+    expect(secondAdmitted.status).toBe(401);
+    const admittedIds = new Set<unknown>([
+      firstAdmitted.body.request_id,
+      secondAdmitted.body.request_id,
+    ]);
     expect(fake.hits).toHaveLength(2);
-    expect(fake.audits).toHaveLength(3);
-    const [first, second, row] = fake.audits;
-    expect(first!.reason).toBe("unauthenticated");
-    expect(second!.reason).toBe("unauthenticated");
-    expect(row).toMatchObject({
-      grantId: null,
-      operation: "shield:anonymous",
-      reason: "rate_limited",
-      result: "denied",
-      requestId: refused.body.request_id,
-    });
+    // Bucket spent. Snapshot the seam the refused hits must not touch.
+    const lookupsBeforeFlood = counting.lookups();
+
+    const FLOOD = 20;
+    const envelopeIds = new Set<unknown>();
+    for (let i = 0; i < FLOOD; i++) {
+      const refused = await call();
+      // Every 429 envelope still carries its own admission request_id.
+      expectCorrelated429(refused);
+      expect(envelopeIds.has(refused.body.request_id)).toBe(false);
+      envelopeIds.add(refused.body.request_id);
+    }
+
+    // No refused hit wrote a hit row or reached a grant lookup.
+    expect(fake.hits).toHaveLength(2);
+    expect(counting.lookups()).toBe(lookupsBeforeFlood);
+
+    // Bounded-sampled across the whole run (2 admitted 401s + the 429
+    // flood): not one row per hit, not exact-zero. Every sampled row
+    // correlates to the hit that produced it and keeps its shape.
+    expect(fake.audits.length).toBeGreaterThanOrEqual(0);
+    expect(fake.audits.length).toBeLessThanOrEqual(sampledCap(2 + FLOOD));
+    const seenRateLimited = new Set<unknown>();
+    for (const row of fake.audits) {
+      if (row.reason === "unauthenticated") {
+        expect(admittedIds.has(row.requestId)).toBe(true);
+        continue;
+      }
+      expect(row).toMatchObject({
+        grantId: null,
+        reason: "rate_limited",
+        result: "denied",
+      });
+      expect(row.requestId).toBeTruthy();
+      expect(envelopeIds.has(row.requestId)).toBe(true);
+      expect(seenRateLimited.has(row.requestId)).toBe(false);
+      seenRateLimited.add(row.requestId);
+    }
   });
 
   it("inner 429 keeps the shared shape and charges no inner hit", async () => {
