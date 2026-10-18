@@ -336,6 +336,7 @@ describe.skipIf(!process.env.DATABASE_URL)("events routes (agent-testdb)", () =>
     location: string | null;
     capacity: number | null;
     going_count: number;
+    going_occupancy: number;
     status: string;
     rsvp_open: boolean;
     synced_to_discord: boolean;
@@ -551,6 +552,7 @@ describe.skipIf(!process.env.DATABASE_URL)("events routes (agent-testdb)", () =>
       "location",
       "capacity",
       "going_count",
+      "going_occupancy",
       "status",
       "rsvp_open",
       "synced_to_discord",
@@ -569,6 +571,7 @@ describe.skipIf(!process.env.DATABASE_URL)("events routes (agent-testdb)", () =>
       location: "Voice",
       capacity: 2,
       going_count: 2,
+      going_occupancy: 2,
       status: "published",
       rsvp_open: false,
       synced_to_discord: false,

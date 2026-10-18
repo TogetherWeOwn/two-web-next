@@ -969,7 +969,7 @@ describe("RsvpButton shipped binder", () => {
       expect(b.requests).toHaveLength(3);
       expect(
         b.broadcasts.filter((e) => e.type === "going-count-refreshed").map((e) => e.detail),
-      ).toEqual([{ eventKey: "raid/one", goingCount: 3, capacity }]);
+      ).toEqual([{ eventKey: "raid/one", goingCount: 3, goingOccupancy: 3, capacity }]);
       b.get("rsvp-going")!.click();
       expect(b.requests[3]!.init.body).toBe('{"status":"going"}');
       expect(
@@ -1372,7 +1372,7 @@ describe("RsvpButton shipped binder", () => {
     expect(badge.querySelector("[data-announcement]")?.textContent).toBe("RSVP removed. ");
     expect(
       b.broadcasts.filter((e) => e.type === "going-count-refreshed").map((e) => e.detail),
-    ).toEqual([{ eventKey: "raid/one", goingCount: 1, capacity: 4 }]);
+    ).toEqual([{ eventKey: "raid/one", goingCount: 1, goingOccupancy: 1, capacity: 4 }]);
     expect(b.requests).toHaveLength(4);
   });
 

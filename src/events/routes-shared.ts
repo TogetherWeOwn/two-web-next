@@ -48,6 +48,7 @@ export function eventJson(e: PublicEvent) {
     location: e.location,
     capacity: e.capacity,
     going_count: e.goingCount,
+    going_occupancy: e.goingOccupancy ?? e.goingCount,
     status: e.status,
     rsvp_open: e.rsvpOpen,
     synced_to_discord: e.discordEventId !== null,

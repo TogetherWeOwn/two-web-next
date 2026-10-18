@@ -16,10 +16,12 @@ const fixedStatements = {
 };
 // Only bound-list cardinality varies; no interpolated identifiers/projections.
 // Two pinned shapes: the legacy all-rows occupancy count (admin Fill column
-// and fill filter, matching write-path seat enforcement) and the public
-// attributable count (withGoing joins users and counts only named rows, so
-// the badge and the full verdict agree with the roster; the join qualifies
-// "rsvps"."event_id"). Both return a single cardinality, never identities.
+// and fill filter, matching write-path seat enforcement; `withGoing` reuses
+// this exact shape for its public `goingOccupancy`, which drives full,
+// spots-left and the Going/waitlist CTA) and the public attributable count
+// (`withGoing` joins users and counts only named rows, so the badge label
+// agrees with the roster; the join qualifies "rsvps"."event_id"). Both return
+// a single cardinality, never identities.
 const goingCountsLegacy =
   /^select "event_id", count\(\*\) from "rsvps" where \("rsvps"\."event_id" in \(\$\d+(?:, \$\d+)*\) and "rsvps"\."status" = \$\d+\) group by "rsvps"\."event_id"$/;
 const goingCountsNamed =

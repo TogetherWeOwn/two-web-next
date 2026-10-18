@@ -134,6 +134,7 @@ export const EventPage: FC<{
               dangerouslySetInnerHTML={{
                 __html: renderGoingCount(e.eventKey, {
                   going: e.goingCount,
+                  occupancy: e.goingOccupancy ?? e.goingCount,
                   capacity: e.capacity,
                   showSpotsLeft: true,
                   announcement: null,

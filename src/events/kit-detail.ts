@@ -107,6 +107,8 @@ export interface KitEventDetailModel {
   isDraft: boolean;
   isPast: boolean;
   goingCount: number;
+  /** Seat occupancy for full/spots/CTA; absent on older models. */
+  goingOccupancy?: number;
   capacity: number | null;
   rsvpOpen: boolean;
   /** Absolute canonical URL: the share/copy target and the JSON-LD @id. */
@@ -429,6 +431,7 @@ export async function resolveKitEventDetail(
           isDraft: event.status === "draft",
           isPast: event.status === "past",
           goingCount: event.goingCount,
+          goingOccupancy: event.goingOccupancy ?? event.goingCount,
           capacity: event.capacity,
           rsvpOpen: event.rsvpOpen,
           canonical: pageCanonical,

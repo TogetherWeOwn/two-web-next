@@ -138,6 +138,11 @@
             return r && typeof r === "object" && !Array.isArray(r) && r.event_key === key;
           });
           if (!row || !Number.isSafeInteger(row.going_count) || row.going_count < 0) return;
+          // Seat occupancy drives spots/full; absent on older snapshots, where
+          // the attributable count is the only seat signal. A malformed
+          // occupancy rejects the row like a malformed count.
+          var occupancy = row.going_occupancy === undefined ? row.going_count : row.going_occupancy;
+          if (!Number.isSafeInteger(occupancy) || occupancy < 0) return;
           // The keyed snapshot carries the current cap (`eventJson`); a
           // moderator capacity edit between SSR and refresh must move both
           // displays, not just the count. Any malformed snapshot capacity
@@ -176,7 +181,7 @@
               }
             } else if (spots) {
               spots.hidden = false;
-              spots.textContent = spotsLeftText(row.going_count, capacity);
+              spots.textContent = spotsLeftText(occupancy, capacity);
             }
             var ann = node.querySelector("[data-announcement]");
             if (ann && state) {
@@ -196,7 +201,12 @@
             return;
           document.dispatchEvent(
             new CustomEvent(REFRESHED, {
-              detail: { eventKey: key, goingCount: row.going_count, capacity: capacity },
+              detail: {
+                eventKey: key,
+                goingCount: row.going_count,
+                goingOccupancy: occupancy,
+                capacity: capacity,
+              },
             }),
           );
         } finally {

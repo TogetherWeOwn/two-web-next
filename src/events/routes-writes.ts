@@ -123,7 +123,7 @@ export function registerWriteRoutes(app: App, readFragmentSession: SessionReader
           { id: who.id, username: who.username },
           parseEventForm(await eventBody(c)),
         );
-        return c.json({ data: eventJson({ ...row, goingCount: 0 }) }, 201);
+        return c.json({ data: eventJson({ ...row, goingCount: 0, goingOccupancy: 0 }) }, 201);
       } catch (err) {
         if (err instanceof UnsupportedMediaTypeError)
           return c.json({ error: "unsupported_media_type" }, 415);

@@ -45,7 +45,8 @@ const attendeesLiveIsland = '<script src="/islands/attendees-live.js" defer></' 
 const closed = $derived(
   model.isDraft ? "draft" : model.isPast || Date.parse(model.endsAt) <= Date.now() ? "past" : null,
 );
-const full = $derived(model.capacity !== null && model.goingCount >= model.capacity);
+const occupancy = $derived(model.goingOccupancy ?? model.goingCount);
+const full = $derived(model.capacity !== null && occupancy >= model.capacity);
 const going = $derived(model.answer?.status === "going");
 const waitlisted = $derived(model.answer?.status === "waitlisted");
 const signIn = $derived(loginUrl(model.joinReturnTo));
@@ -57,6 +58,7 @@ const rsvpAction = $derived(
 const lineup = $derived(
   renderGoingCount(model.eventKey, {
     going: model.goingCount,
+    occupancy: model.goingOccupancy ?? model.goingCount,
     capacity: model.capacity,
     showSpotsLeft: true,
     announcement: null,

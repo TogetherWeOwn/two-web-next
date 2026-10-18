@@ -1,13 +1,20 @@
 // Acceptance: the going-count badge, the full/waitlist verdict and the
 // attendee roster tell one consistent story when nameless going rows exist.
 //
-// Chosen consistency rule (pinned here): the count is the attributable
-// (named-only) count — exactly the rows the roster can list. A going row
-// whose user has an empty stored name, or no user row at all, is never
-// rendered as an identity and must not inflate the badge or flip the event
-// to "full". So for every event: goingCount === listGoingAttendees().length
-// (within one roster page), and `full` is goingCount >= capacity on that
-// same attributable count.
+// Chosen consistency rule (pinned here): two counts leave `withGoing`.
+// - `goingCount` is the attributable (named-only) count — exactly the rows
+//   the roster can list. A going row whose user has an empty stored name, or
+//   no user row at all, is never rendered as an identity and must not inflate
+//   the badge, so for every event: goingCount === listGoingAttendees().length
+//   (within one roster page).
+// - `goingOccupancy` counts every going row (same shape as
+//   `waitlist.goingCount`, the write-path seat enforcement). The `full`
+//   verdict, the spots-left text and the Going/waitlist CTA read occupancy,
+//   so the page never offers a seat the write path cannot grant. Occupancy is
+//   an aggregate only and never renders an identity.
+// So a nameless row holds a seat: the badge still reads the attributable
+// count, but the event reads full and the CTA offers the waitlist — matching
+// what answering Going actually does.
 //
 // Real reads and the real event page against the disposable member-data
 // fixture (isolated schema, synthetic identities; skipped without
@@ -65,7 +72,7 @@ describe.skipIf(!process.env.DATABASE_URL)(
       ["empty stored name", NAMELESS_EMPTY_ID, true],
       ["missing user row", NAMELESS_MISSING_ID, false],
     ])(
-      "one nameless (%s) + one named going row: badge, full verdict and roster agree",
+      "one nameless (%s) + one named going row: badge is attributable, seats are occupancy",
       async (_shape, namelessId, insertUser) => {
         const db = fixture.db;
         const event = await eventRow();
@@ -77,27 +84,49 @@ describe.skipIf(!process.env.DATABASE_URL)(
         expect(roster).toEqual([{ id: SUBJECT.userId, name: SUBJECT.username }]);
 
         // The badge count is that same attributable count, on the single-event
-        // read and on the grouped listing read alike.
-        expect((await getPublicEvent(db, EVENT_KEY))?.goingCount).toBe(roster.length);
+        // read and on the grouped listing read alike; occupancy counts the
+        // nameless seat too, like the write path.
+        const single = await getPublicEvent(db, EVENT_KEY);
+        expect(single?.goingCount).toBe(roster.length);
+        expect(single?.goingOccupancy).toBe(2);
         const listed = (await listJson(db, { limit: 10, offset: 0 })).rows.find(
           (row) => row.eventKey === EVENT_KEY,
         );
         expect(listed?.goingCount).toBe(roster.length);
+        expect(listed?.goingOccupancy).toBe(2);
 
-        // 1 of 2 attributable going: not full, one spot left, going CTA shown,
-        // and no nameless identity anywhere on the page.
+        // Badge reads "1 of 2 going" (attributable) but the nameless seat is
+        // occupied, so the event reads full and the CTA offers the waitlist —
+        // exactly what answering Going does. No nameless identity is rendered.
         const html = await memberPage();
         expect(html).toContain("<span data-count>1 of 2 going</span>");
-        expect(html).toContain(">1 of 2 spots left</span>");
-        expect(html).toContain('data-testid="rsvp-going"');
-        expect(html).not.toContain("full. Cap is");
-        expect(html).not.toContain('data-testid="waitlist-join"');
-        expect(html).not.toContain('data-full="true"');
+        expect(html).toContain(">Full</span>");
+        expect(html).toContain("full. Cap is 2.");
+        expect(html).toContain('data-testid="waitlist-join"');
+        expect(html).toContain('data-full="true"');
+        expect(html).not.toContain('data-testid="rsvp-going"');
         expect(html).toContain(`<a href="/members/${SUBJECT.userId}">${SUBJECT.username}</a>`);
         expect(html).not.toContain(namelessId);
         expect(await logs()).toMatchObject([
           { subjectUserIds: [SUBJECT.userId], subjectCount: 1, route: "events.page" },
         ]);
+
+        // The CTA matches the write: a member answering Going lands waitlisted.
+        const put = await app.request(
+          `/events/${EVENT_KEY}/rsvp`,
+          {
+            method: "PUT",
+            headers: {
+              cookie: await cookieFor(sessions, MEMBER),
+              "content-type": "application/json",
+              origin: "https://next.example.test",
+            },
+            body: JSON.stringify({ status: "going" }),
+          },
+          { ...env, ADMIN_DB: fixture.db, SESSION_STORE: sessions },
+        );
+        expect(put.status).toBe(201);
+        expect(((await put.json()) as { data: { status: string } }).data.status).toBe("waitlisted");
       },
     );
 
@@ -111,11 +140,16 @@ describe.skipIf(!process.env.DATABASE_URL)(
         .values({ eventId: event.id, userId: NAMELESS_EMPTY_ID, status: "going" });
 
       expect(await listGoingAttendees(db, event.id)).toEqual([]);
-      expect((await getPublicEvent(db, EVENT_KEY))?.goingCount).toBe(0);
+      const single = await getPublicEvent(db, EVENT_KEY);
+      expect(single?.goingCount).toBe(0);
+      // One occupied seat, one spot left: the badge reads 0 going, the seats
+      // line reflects occupancy, and the CTA still offers Going.
+      expect(single?.goingOccupancy).toBe(1);
 
       const html = await memberPage();
       expect(html).toContain("<span data-count>0 of 2 going</span>");
-      expect(html).toContain(">2 of 2 spots left</span>");
+      expect(html).toContain(">1 of 2 spots left</span>");
+      expect(html).toContain('data-testid="rsvp-going"');
       expect(html).not.toContain('data-testid="event-attendees"');
       expect(html).not.toContain(NAMELESS_EMPTY_ID);
       expect(await logs()).toHaveLength(0);

@@ -22,6 +22,8 @@ const SESSION_SECRET = "test-session-secret-at-least-32-bytes-long";
 
 // Legacy EventResource order (event_key first, synced_to_discord last, never
 // the autoincrement id). Personal waitlist state is deliberately excluded.
+// `going_occupancy` is the seat-occupancy aggregate (every going row, like the
+// write path); `going_count` stays the attributable badge label.
 const EXPECTED_KEYS = [
   "event_key",
   "title",
@@ -35,6 +37,7 @@ const EXPECTED_KEYS = [
   "location",
   "capacity",
   "going_count",
+  "going_occupancy",
   "status",
   "rsvp_open",
   "synced_to_discord",

@@ -193,7 +193,7 @@ describe("event navigation SQL and SSR (local fixtures)", () => {
     expect(html).toContain(`href="/join?next=%2Fe%2F${key(2)}" data-testid="event-related-join"`);
     expect(response.headers.get("cache-control")).toBe("private, no-store");
     expect(response.headers.get("vary")).toBe("Cookie");
-    expect(f.queries).toHaveLength(5); // Event + going aggregate + 3 navigation reads.
+    expect(f.queries).toHaveLength(6); // Event + two going aggregates + 3 navigation reads.
   });
 
   it.each(["added", "already_member"])(
@@ -293,7 +293,7 @@ describe("event navigation SQL and SSR (local fixtures)", () => {
       }
       expect(response.headers.get("cache-control")).toBe("private, no-store");
       expect(response.headers.get("vary")).toBe("Cookie");
-      expect(f.queries).toHaveLength(8); // Event/count, viewer answer/position, attendees and three navigation reads.
+      expect(f.queries).toHaveLength(9); // Event/count, viewer answer/position, attendees, two going aggregates and three navigation reads.
       const viewerAnswers = f.queries.filter((q) =>
         q.sql.includes('select "user_id", "status", "synced_to_discord_at"'),
       );
@@ -344,16 +344,16 @@ describe("event navigation SQL and SSR (local fixtures)", () => {
   it("keeps draft authorization and cancelled 410 ahead of navigation reads", async () => {
     const draft = pageFixture(row(2, { status: "draft" }));
     expect((await draft.request()).status).toBe(403);
-    expect(draft.queries).toHaveLength(2);
+    expect(draft.queries).toHaveLength(3);
     const mod = await draft.request({ headers: { cookie: await cookie(draft.env, true) } });
     expect(mod.status).toBe(200);
     expect(mod.headers.get("cache-control")).toBe("private, no-store");
-    expect(draft.queries.slice(4)).toHaveLength(6); // Navigation, attendees, viewer answer and position.
+    expect(draft.queries.slice(6)).toHaveLength(6); // Navigation, attendees, viewer answer and position.
     const cancelled = pageFixture(row(2, { status: "cancelled" }));
     const gone = await cancelled.request();
     expect(gone.status).toBe(410);
     expect(await gone.text()).not.toContain('data-testid="event-pagination"');
-    expect(cancelled.queries).toHaveLength(2);
+    expect(cancelled.queries).toHaveLength(3);
   });
 
   it("escapes titles and locations without turning related cards into markup", async () => {

@@ -104,6 +104,9 @@ export interface PublicEventDto {
   location: string | null;
   capacity: number | null;
   going_count: number;
+  /** Seat occupancy for spots/full; aggregate only. Optional so older fakes
+   * still typecheck; the serializer always emits it. */
+  going_occupancy?: number;
   status: typeof PUBLIC_EVENT_STATUS;
   rsvp_open: boolean;
   synced_to_discord: boolean;
