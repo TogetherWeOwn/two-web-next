@@ -362,10 +362,15 @@ describe("W15 join landing and recovery parity", () => {
       "utf8",
     );
     expect(binder).toContain("[data-join-widget]");
-    const frame = { setAttribute: vi.fn(), focus: vi.fn() } as {
+    const frame = {
+      setAttribute: vi.fn(),
+      focus: vi.fn(),
+      addEventListener: vi.fn(),
+    } as {
       src?: string;
       setAttribute: ReturnType<typeof vi.fn>;
       focus: ReturnType<typeof vi.fn>;
+      addEventListener: ReturnType<typeof vi.fn>;
     };
     const preview = { replaceChildren: vi.fn() };
     let onClick: (event: { button: number; preventDefault: () => void }) => void = () => {};
@@ -383,6 +388,8 @@ describe("W15 join landing and recovery parity", () => {
             : null,
         createElement: () => frame,
       },
+      setTimeout: () => 0,
+      clearTimeout: () => {},
     });
     const event = { button: 0, preventDefault: vi.fn() };
     onClick(event);
