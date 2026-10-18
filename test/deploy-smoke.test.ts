@@ -347,7 +347,7 @@ describe("deploy public-route smoke (offline)", () => {
     const pkg = JSON.parse(readFileSync("package.json", "utf8"));
     expect(pkg.scripts.check).toContain("npm run test:smoke");
     expect(pkg.scripts["test:smoke"]).toBe(
-      "node --test test/smoke.test.mjs test/json-smoke.test.mjs test/revision-check.test.mjs test/smoke-ordinary-traffic-identity-acceptance.test.mjs",
+      "node --test test/smoke.test.mjs test/json-smoke.test.mjs test/revision-check.test.mjs test/smoke-ordinary-traffic-identity-acceptance.test.mjs test/smoke-public-api-acceptance.test.mjs",
     );
   });
 });
@@ -700,7 +700,7 @@ if (process.argv.length !== 5 || process.argv[2] !== "bin/smoke.mjs" || process.
 }
 const count = readFileSync(attempts, "utf8").length;
 const pass = count === Number(process.env.SMOKE_SUCCEED_ON_ATTEMPT);
-console.log(pass ? "smoke: 18 routes, 0 failed assertions" : "FAIL /join: expected HTTP 200; actual HTTP 503");
+console.log(pass ? "smoke: 20 routes, 0 failed assertions" : "FAIL /join: expected HTTP 200; actual HTTP 503");
 process.exit(pass ? 0 : 1);
 `,
       { mode: 0o700 },

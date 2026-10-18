@@ -333,13 +333,15 @@ approved account and binding isolation before any remote mutation.
    `/events`, `/events/past`, `/join`, `/events.rss`, `/events.ics`,
    `/sitemap_index.xml`, `/robots.txt`, `/.well-known/security.txt`,
    `/discord` (302), `/profile` (302),
-   `/admin` (302/403) and `/__smoke_unknown_route__` (404)
+   `/admin` (302/403), `/api/public/events` (200 JSON collection envelope),
+   `/openapi.json` (200 JSON discovery document)
+   and `/__smoke_unknown_route__` (404)
    with CSP/nosniff/content-type/noindex/redirect assertions. The `/up` assertions
    are DB/schema readiness, not liveness only; with the staging strict flag a literal
    `unknown` in `queue.status` or `ready_wait_severity`, or a `critical`
    `ready_wait_severity`, fails the deploy even though `/up` itself still returns 200.
    Queue `degraded` passes. The strict flag is staging-only: the apex production
-   smoke uses the same 18-route shape with `--allow-indexable` and without the strict flag
+   smoke uses the same 20-route shape with `--allow-indexable` and without the strict flag
    (`node bin/smoke.mjs https://togetherweown.com --allow-indexable`), so `critical`
    queue readiness only warns and `unknown` passes there.
 4. An explicitly authorized manual deployment of the reviewed release uses:
