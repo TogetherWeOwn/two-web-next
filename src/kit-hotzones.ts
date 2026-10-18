@@ -1,5 +1,6 @@
 import type { Db } from "./db/index";
 import type { Env } from "./env";
+import { alertRequestError } from "./alerts";
 import {
   isHotzoneSignal,
   joinsRetentionNote,
@@ -64,12 +65,24 @@ function seasonOrThrow(seasonParam: string | null): { window: SeasonWindow; labe
   return { window, label: window.kind === "all" ? "all" : window.label };
 }
 
-async function dbOrUnavailable(args: HotzonesLoadArgs): Promise<{ db: Db | null }> {
+// A code bug (no branded status) must never look like a downstream outage:
+// emit the leak-free error.alert diagnostic before mapping to the branded
+// 503, mirroring the Hono member-read boundary (src/member-reads.ts). Branded
+// throws (400/404/503 from nested helpers) pass through untouched so the
+// binding maps them once and exactly one setHeaders call fires per path.
+function reportLoadFailure(err: unknown, args: HotzonesLoadArgs, route: string): never {
+  const status = (err as { status?: unknown })?.status;
+  if (typeof status === "number") throw err;
+  alertRequestError(err, { method: "GET", route });
+  args.setHeaders({ "cache-control": "private, no-store" });
+  throw hotzonesUnavailable();
+}
+
+async function dbOrUnavailable(args: HotzonesLoadArgs, route: string): Promise<{ db: Db | null }> {
   try {
     return { db: await args.dbForFn({ env: args.env }) };
-  } catch {
-    args.setHeaders({ "cache-control": "private, no-store" });
-    throw hotzonesUnavailable();
+  } catch (err) {
+    reportLoadFailure(err, args, route);
   }
 }
 
@@ -77,12 +90,12 @@ async function joinsOrUnavailable(
   args: HotzonesLoadArgs,
   db: Db | null,
   window: SeasonWindow,
+  route: string,
 ): Promise<HotzonesGrid> {
   try {
     return await (args.loadJoinsGridFn ?? loadJoinsGrid)(db, window);
-  } catch {
-    args.setHeaders({ "cache-control": "private, no-store" });
-    throw hotzonesUnavailable();
+  } catch (err) {
+    reportLoadFailure(err, args, route);
   }
 }
 
@@ -105,8 +118,8 @@ export async function loadHotzonesIndexData(args: HotzonesLoadArgs): Promise<{
   appUrl: string;
 }> {
   const { window, label } = seasonOrThrow(args.seasonParam);
-  const { db } = await dbOrUnavailable(args);
-  const joins = await joinsOrUnavailable(args, db, window);
+  const { db } = await dbOrUnavailable(args, "/hotzones");
+  const joins = await joinsOrUnavailable(args, db, window, "/hotzones");
   await record(args, db, {
     boardKey: "hotzones",
     scope: "overall",
@@ -139,9 +152,9 @@ export async function loadHotzoneSignalData(
   const { window, label } = seasonOrThrow(args.seasonParam);
   const signal = args.signalParam;
   if (!isHotzoneSignal(signal)) throw hotzoneSignalNotFound();
-  const { db } = await dbOrUnavailable(args);
+  const { db } = await dbOrUnavailable(args, "/hotzones/:signal");
   if (signal === "joins") {
-    const joins = await joinsOrUnavailable(args, db, window);
+    const joins = await joinsOrUnavailable(args, db, window, "/hotzones/:signal");
     await record(args, db, {
       boardKey: "hotzones/joins",
       scope: "overall",

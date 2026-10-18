@@ -2,6 +2,7 @@ import { error } from "@sveltejs/kit";
 import { env } from "cloudflare:workers";
 import type { PageServerLoad } from "./$types";
 import { dbFor } from "../../../../src/admin/db";
+import { alertRequestError } from "../../../../src/alerts";
 import { loadHotzonesIndexData } from "../../../../src/kit-hotzones";
 import { renderHotzoneGrid } from "../../../../src/hotzones/pages";
 
@@ -43,6 +44,10 @@ export const load: PageServerLoad = async ({ url, setHeaders }) => {
   } catch (err) {
     const status = (err as { status?: number })?.status;
     if (status === 400) error(400, "Unknown season");
+    // The helper already alerted on unbranded read failures; alert here only
+    // for failures the helper could not see (grid rendering), so a code bug
+    // never becomes a silent 503.
+    if (typeof status !== "number") alertRequestError(err, { method: "GET", route: "/hotzones" });
     error(503, "Hot zones temporarily unavailable");
   }
 };
