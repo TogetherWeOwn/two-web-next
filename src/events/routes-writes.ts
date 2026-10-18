@@ -22,20 +22,22 @@ import { expiredWriteBounce } from "../write-recovery";
 import { getPublicEvent, withGoingCount } from "./reads";
 import { body, eventJson, type App, type Ctx, type SessionReader } from "./routes-shared";
 import { SESSION_COOKIE } from "../session-cookie";
+import { isValidSessionToken } from "../sessions";
 
 async function moderator(c: Ctx, readFragmentSession: SessionReader): Promise<Session | Response> {
   // Non-rotating: concurrent writes with one cookie must all authenticate.
-  // A presented bearer with no live row (expired/revoked/rotated) is an
-  // expired guest, not an unknown guest: writes recover through
+  // A well-formed presented bearer with no live row (expired/revoked/rotated)
+  // is an expired guest, not an unknown guest: writes recover through
   // expiredWriteBounce, matching the profile/admin gates (TOG-10357/TOG-12399).
   // These routes are JSON-only, so the bounce is always 401 with a recovery
   // link, never a 303 a header-less fetch would follow to a 200 page. A
-  // request with no cookie at all keeps the bare unauthenticated refusal the
-  // admission pins assert.
+  // request with no cookie — or a correctly-signed but malformed bearer, which
+  // readSession already rejects as guest with zero store reads — keeps the
+  // bare unauthenticated refusal the admission pins assert.
   const session = await readFragmentSession(c);
   if (!session) {
     const token = await getSignedCookie(c, c.env.SESSION_SECRET, SESSION_COOKIE);
-    if (token) return expiredWriteBounce(c, true);
+    if (isValidSessionToken(token)) return expiredWriteBounce(c, true);
     return c.json({ error: "unauthenticated" }, 401);
   }
   if (!session.moderator) return c.json({ error: "forbidden" }, 403);
