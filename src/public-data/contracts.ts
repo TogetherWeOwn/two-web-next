@@ -18,8 +18,10 @@ export const API_PUBLIC_BOUNDS = {
 } as const;
 
 /** One published event as the public API serves it. `going_count` is null — never 0 — when the RSVP aggregate cannot be read. */
-export interface PublicApiEventDto extends Omit<PublicEventDto, "going_count"> {
+export interface PublicApiEventDto extends Omit<PublicEventDto, "going_count" | "going_occupancy"> {
   going_count: number | null;
+  /** Seat occupancy for spots/full; null when the rollup is unavailable. */
+  going_occupancy: number | null;
 }
 
 export interface PublicApiEventCollectionDto {
@@ -71,6 +73,7 @@ export const PUBLIC_API_EVENT_FIELDS = [
   "location",
   "capacity",
   "going_count",
+  "going_occupancy",
   "status",
   "rsvp_open",
   "synced_to_discord",

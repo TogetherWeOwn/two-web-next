@@ -299,7 +299,11 @@ for (const method of ["POST", "PATCH"] as const) {
       }));
       vi.mocked(updateEvent).mockImplementation(async (_db, _actor, _key, input) => {
         const updated = saved(input);
-        vi.mocked(getPublicEvent).mockResolvedValue({ ...updated, goingCount: 0 });
+        vi.mocked(getPublicEvent).mockResolvedValue({
+          ...updated,
+          goingCount: 0,
+          goingOccupancy: 0,
+        });
         return { row: updated, writeBack: null, childWriteBacks: [] };
       });
     });

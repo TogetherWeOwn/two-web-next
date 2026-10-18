@@ -627,6 +627,41 @@ describe.skipIf(!process.env.DATABASE_URL)("events routes (agent-testdb)", () =>
     expect(res.headers.get("vary")).toContain("Cookie");
   });
 
+  it("emits the attributable count beside seat occupancy when a nameless row holds a seat", async () => {
+    // Regression pin for the live refresh: the going-count island re-reads
+    // /events.json after a member answers, so the emission must carry both
+    // aggregates when they differ — dropping occupancy flips data-full and
+    // the CTA back to the named count.
+    const [event] = await db
+      .insert(events)
+      .values({ ...eventRow(1), capacity: 2 })
+      .returning();
+    await db
+      .insert(users)
+      .values([
+        { id: "named-going", username: "named-going" },
+        { id: "nameless-going", username: "" },
+      ])
+      .onConflictDoNothing();
+    await db.insert(rsvps).values([
+      { eventId: event!.id, userId: "named-going", status: "going" },
+      { eventId: event!.id, userId: "nameless-going", status: "going" },
+    ]);
+    const show = (
+      (await (await req(`/events/${event!.eventKey}`, await as(MEMBER))).json()) as {
+        data: JsonRow;
+      }
+    ).data;
+    expect(show).toMatchObject({ going_count: 1, going_occupancy: 2 });
+    const listed = (await collection()).data;
+    expect(listed).toHaveLength(1);
+    expect(listed[0]).toMatchObject({
+      event_key: event!.eventKey,
+      going_count: 1,
+      going_occupancy: 2,
+    });
+  });
+
   it.each(["published", "past"])(
     "show keeps nullable fields and zero counts for %s",
     async (status) => {

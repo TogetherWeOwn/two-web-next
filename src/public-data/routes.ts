@@ -90,6 +90,10 @@ export function serializeEvent(e: PublicApiEvent): PublicApiEventDto {
     location: e.location,
     capacity: e.capacity,
     going_count: e.goingCount,
+    // Attributable `going_count` can read a free seat a nameless row already
+    // holds, so the occupancy aggregate ships beside it for spots/full math.
+    // Both degrade to null (never 0) when the rollup is unavailable.
+    going_occupancy: e.goingOccupancy ?? e.goingCount,
     status: PUBLIC_EVENT_STATUS,
     rsvp_open: e.rsvpOpen,
     synced_to_discord: e.discordEventId !== null,

@@ -17,6 +17,7 @@ const event: PublicEvent = {
   status: "published",
   rsvpOpen: true,
   goingCount: 3,
+  goingOccupancy: 3,
   icsSequence: 1n,
   discordEventId: null,
   discordSyncFailedAt: null,

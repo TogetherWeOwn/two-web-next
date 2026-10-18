@@ -38,9 +38,10 @@ export type PublicEvent = typeof events.$inferSelect & {
   goingCount: number;
   /** Seat occupancy: every going row, like `waitlist.goingCount`. Drives the
    * `full` verdict, spots-left text and Going/waitlist CTA so the page never
-   * offers a seat the write path cannot grant. Optional only so older test
-   * fakes without it still typecheck; `withGoing` always sets it. */
-  goingOccupancy?: number;
+   * offers a seat the write path cannot grant. Required (not optional) so a
+   * new code path that forgets to wire it fails typecheck instead of
+   * silently regressing to the named count; `withGoing` always sets it. */
+  goingOccupancy: number;
 };
 
 export type HomeEvent = Pick<

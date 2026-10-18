@@ -65,6 +65,7 @@ const mdRow = (o: Partial<MdEvent> = {}): MdEvent => ({
   location: past.location,
   capacity: null,
   goingCount: 7,
+  goingOccupancy: 7,
   status: "published",
   ...o,
 });
@@ -161,6 +162,20 @@ describe("md builders (pure, DB-free)", () => {
       expect(body).toContain(phrase);
     for (const leak of ["attendee", "rsvp_user", "waitlist_position", "discord_event_id"])
       expect(body.toLowerCase()).not.toContain(leak);
+  });
+
+  it("signals full from seat occupancy, not the attributable count", () => {
+    // A nameless seat fills the event while the roster reads one of two:
+    // the full signal must follow occupancy, like the write path does.
+    const full = mdEvent(APP_URL, mdRow({ goingCount: 1, goingOccupancy: 2, capacity: 2 }));
+    expect(full).toContain("- Lineup: 1 going of 2 (full)");
+    const room = mdEvent(APP_URL, mdRow({ goingCount: 1, goingOccupancy: 1, capacity: 2 }));
+    expect(room).toContain("- Lineup: 1 going of 2");
+    expect(room).not.toContain("(full)");
+    // Unknown occupancy (feed rows carry no counts) never claims full.
+    const unknown = mdEvent(APP_URL, mdRow({ goingCount: 1, goingOccupancy: null, capacity: 1 }));
+    expect(unknown).toContain("- Lineup: 1 going of 1");
+    expect(unknown).not.toContain("(full)");
   });
 
   it("event collection lists published rows with canonical links", () => {

@@ -115,7 +115,7 @@ beforeEach(() => {
   }));
   vi.mocked(updateEvent).mockImplementation(async (_db, _actor, _key, input) => {
     const updated = saved(input);
-    vi.mocked(getPublicEvent).mockResolvedValue({ ...updated, goingCount: 0 });
+    vi.mocked(getPublicEvent).mockResolvedValue({ ...updated, goingCount: 0, goingOccupancy: 0 });
     // Non-null so a successful PATCH must dispatch exactly one write-back.
     return { row: updated, writeBack: { eventKey: KEY, status: "published" }, childWriteBacks: [] };
   });

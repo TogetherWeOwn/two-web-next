@@ -53,7 +53,7 @@ export const RsvpButton: FC<{
   // Seat-accurate verdict: occupancy counts every going row like the write
   // path, so the CTA never offers a seat a nameless row already holds. The
   // visible "N going" label stays on the attributable `goingCount`.
-  const occupancy = e.goingOccupancy ?? e.goingCount;
+  const occupancy = e.goingOccupancy;
   const full = e.capacity !== null && occupancy >= e.capacity;
   const going = answer?.status === "going";
   const waitlisted = answer?.status === "waitlisted";

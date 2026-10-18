@@ -143,7 +143,7 @@ describe.skipIf(!process.env.DATABASE_URL)("public read API: events", () => {
     ).split(";")[0]!;
   };
 
-  it("lists published events soonest-first with the shared 15-key projection", async () => {
+  it("lists published events soonest-first with the shared 16-key projection", async () => {
     const [ev] = await db
       .insert(events)
       .values({
@@ -289,6 +289,41 @@ describe.skipIf(!process.env.DATABASE_URL)("public read API: events", () => {
     expect(raw).not.toContain("not-a-key");
   });
 
+  it("pairs the attributable going_count with seat occupancy when a nameless row holds a seat", async () => {
+    // A client computing capacity minus going_count would see a free seat
+    // the write path will not grant, so occupancy ships beside the count on
+    // both the collection and the single route.
+    const [ev] = await db
+      .insert(events)
+      .values({
+        eventKey: key(31),
+        title: "Game 31",
+        status: "published",
+        startsAt: new Date(Date.UTC(2099, 0, 31, 20)),
+        endsAt: new Date(Date.UTC(2099, 0, 31, 22)),
+        capacity: 2,
+      })
+      .returning();
+    await db
+      .insert(users)
+      .values([
+        { id: "api-named", username: "api-named" },
+        { id: "api-nameless", username: "" },
+      ])
+      .onConflictDoNothing();
+    await db.insert(rsvps).values([
+      { eventId: ev!.id, userId: "api-named", status: "going" },
+      { eventId: ev!.id, userId: "api-nameless", status: "going" },
+    ]);
+    const listed = (await (await get("/api/public/events")).json()) as PublicApiEventCollectionDto;
+    expect(listed.data).toHaveLength(1);
+    expect(listed.data[0]).toMatchObject({ going_count: 1, going_occupancy: 2, capacity: 2 });
+    expect(validatePublicSchema(listed, "PublicApiEventCollection")).toEqual([]);
+    const single = (await (await get(`/api/public/events/${key(31)}`)).json()) as PublicApiEventDto;
+    expect(single).toMatchObject({ going_count: 1, going_occupancy: 2, capacity: 2 });
+    expect(validatePublicSchema(single, "PublicApiEvent")).toEqual([]);
+  });
+
   it("returns null, never 0, when the going-count aggregate is unavailable", async () => {
     await seed(21);
     await db.execute("ALTER TABLE rsvps RENAME TO rsvps_hidden_probe");
@@ -298,6 +333,7 @@ describe.skipIf(!process.env.DATABASE_URL)("public read API: events", () => {
       const body = (await res.json()) as PublicApiEventCollectionDto;
       expect(body.data).toHaveLength(1);
       expect(body.data[0]!.going_count).toBeNull();
+      expect(body.data[0]!.going_occupancy).toBeNull();
       expect(validatePublicSchema(body, "PublicApiEventCollection")).toEqual([]);
     } finally {
       await db.execute("ALTER TABLE rsvps_hidden_probe RENAME TO rsvps");
