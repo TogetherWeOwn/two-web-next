@@ -5,12 +5,16 @@
 // These owned regressions pin the bounded write: the refusal audit runs in its
 // own transaction with lock + statement timeouts derived from cfg.lockWaitMs,
 // a timed-out audit answers retryable 503 operation_busy with the same
-// request_id (never an unaudited 429), and unrelated errors still throw.
+// request_id, and unrelated errors still throw.
+//
+// The refusal audit is sampled (~1%): every test below forces the sample so
+// the bounded-write assertions stay deterministic (see the beforeEach). Flood
+// boundedness itself is pinned by the sampled-acceptance suites, not here.
 //
 // Hermetic and DB-free: in-memory fake agent-event store plus an
 // INSERT-recording wrapper. Never edit
 // test/agent-events-shield-429-audit-acceptance.test.ts.
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_CONFIG, handleAgentEvent, type IngressConfig } from "../src/agent-events/service";
 import { sha256Hex } from "../src/bot/signer";
 import { makeFakeAgentDb, type FakeAgentDb } from "./helpers/fake-agent-ingress-db";
@@ -137,8 +141,20 @@ function setup(
 const shieldRows = (rec: BoundedRecording) =>
   rec.rows.filter((r) => r.reason_code === "rate_limited");
 
+// The shield refusal audit is sampled (~1%, see src/agent-events/shield.ts).
+// Force the sample in every case so the bounded-write pins below stay
+// deterministic; the sampling bound itself is pinned by the acceptance
+// suites, not here.
+beforeEach(() => {
+  vi.spyOn(Math, "random").mockReturnValue(0);
+});
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
+
 describe("bounded outer-shield refusal audit", () => {
-  it("stalled lock on the refusal audit answers 503 operation_busy with the same request_id, never an unaudited 429", async () => {
+  it("stalled lock on the sampled refusal audit answers 503 operation_busy with the same request_id instead of stalling", async () => {
     const { fake, rec, call } = setup(1, { failAuditCode: "55P03" });
     const ip = "198.51.100.70";
 
@@ -149,7 +165,7 @@ describe("bounded outer-shield refusal audit", () => {
     expect(refused.body.reason).toBe("operation_busy");
     expect(refused.body.request_id).toMatch(ULID);
     // No denied/rate_limited row: the timed-out audit committed nothing, and
-    // the refusal is a retryable 503 rather than an unaudited 429.
+    // the sampled refusal is a retryable 503 rather than stalling.
     expect(shieldRows(rec)).toHaveLength(0);
     // The refused hit still writes no hit row.
     expect(fake.hits).toHaveLength(1);
@@ -230,8 +246,10 @@ describe("bounded outer-shield refusal audit", () => {
     const admitted = await call(null, "198.51.100.75");
     expect(admitted.status).toBe(401);
     expect(admitted.body.reason).toBe("unauthenticated");
-    expect(rec.rows).toHaveLength(1);
-    expect(rec.rows[0]!.request_id).toBe(admitted.body.request_id);
+    expect(admitted.body.request_id).toMatch(ULID);
+    // Grant-first pre-auth refusal: no digest, no grant lookup, zero audit
+    // rows. The envelope still carries the admission request_id.
+    expect(rec.rows).toHaveLength(0);
     expect(shieldRows(rec)).toHaveLength(0);
     expect(fake.hits.map((h) => h.bucket)).toEqual(["shield:ip:198.51.100.75"]);
 
