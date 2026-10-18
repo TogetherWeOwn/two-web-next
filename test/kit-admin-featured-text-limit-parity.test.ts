@@ -61,16 +61,40 @@ function kitSource(rel: string): string {
 const newSource = kitSource("../web/src/routes/admin/featured/new/+page.svelte");
 const editSource = kitSource("../web/src/routes/admin/featured/[id]/+page.svelte");
 
-function stripComments(source: string): string {
-  return source.replace(/<!--[\s\S]*?-->/g, "");
+// Walk the source token by token, skipping `<!--...-->` comment tokens, and
+// yield each span of live markup between them. A comment ends at the first
+// `-->`, so skipping its token ignores commented-out markup without ever
+// building a rewritten copy of the source (no replace-based stripping).
+// An unterminated comment swallows the rest of the source.
+function* liveSpans(source: string): Generator<string> {
+  let index = 0;
+  while (index < source.length) {
+    if (source.startsWith("<!--", index)) {
+      const end = source.indexOf("-->", index + 4);
+      index = end === -1 ? source.length : end + 3;
+      continue;
+    }
+    const next = source.indexOf("<!--", index);
+    const stop = next === -1 ? source.length : next;
+    yield source.slice(index, stop);
+    index = stop;
+  }
+}
+
+/** First match of `pattern` in live (non-comment) markup, or null. */
+function matchLive(source: string, pattern: RegExp): RegExpMatchArray | null {
+  for (const span of liveSpans(source)) {
+    const found = span.match(pattern);
+    if (found) return found;
+  }
+  return null;
 }
 
 /** First plain-POST form action in the Kit page (the save form). */
 function saveFormAction(source: string): string {
-  const cleaned = stripComments(source);
-  const plain = cleaned.match(/<form method="post" action="([^"]+)"/)?.[1];
+  const plain = matchLive(source, /<form method="post" action="([^"]+)"/)?.[1];
   if (plain) return plain;
-  const templated = cleaned.match(/<form method="post" action=\{`([^`]+)`\}/)?.[1];
+  const templated = matchLive(source, /<form method="post" action=\{`([^`]+)`\}/)?.[1];
   if (templated) return templated;
   throw new Error("Kit featured page has no plain-POST save form action");
 }
@@ -91,7 +115,7 @@ function appPath(publicPath: string): string {
 }
 
 function kitInputTag(source: string, name: string): string {
-  const tag = stripComments(source).match(new RegExp(`<input[^>]*name="${name}"[^>]*>`))?.[0];
+  const tag = matchLive(source, new RegExp(`<input[^>]*name="${name}"[^>]*>`))?.[0];
   expect(tag, `expected Kit input[name="${name}"]`).toBeDefined();
   return tag!;
 }
@@ -177,13 +201,15 @@ describe("Kit featured forms carry no native length gate", () => {
       for (const name of ["title", "image_alt"]) {
         expect(kitInputTag(source, name)).not.toMatch(/\bmaxlength\s*=/i);
       }
-      expect(stripComments(source)).not.toMatch(/\bmaxlength\s*=/i);
+      // Page-wide on purpose: a native length gate anywhere on the page
+      // (not just on the two named inputs) still fails this pin.
+      expect(matchLive(source, /\bmaxlength\s*=/i)).toBeNull();
     });
 
     it(`${mode}: the save form posts plainly to an /admin destination`, () => {
       const action = mode === "new" ? KIT_NEW_ACTION : kitEditAction(7);
       expect(action).toMatch(/^\/admin\/featured/);
-      expect(stripComments(source)).not.toContain("onsubmit");
+      expect(matchLive(source, /onsubmit/)).toBeNull();
     });
   }
 });
