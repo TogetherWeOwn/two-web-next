@@ -11,6 +11,7 @@ import { encodeCanonicalJson, INTERNAL_ACTIONS_PATH, newNonce, signInternalActio
 import { BotTerminalError, BotTransportError } from "../jobs/types";
 import type { BotClientOptions } from "./client-types";
 import { parseEnvelope, type ParsedEnvelope } from "./client-serialization";
+import { diagnosticCode } from "./diagnostic-code";
 
 export function assertBotConfigured(o: Pick<BotClientOptions, "url" | "secret" | "keyId">): void {
   if (!o.url) throw new BotTerminalError("Bot is not configured: BOT_ENDPOINT_URL is missing.");
@@ -24,33 +25,6 @@ function endpointOf(url: string): string {
 
 /** A caller-supplied UUID for one logical operation (announcement/event only). */
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
-/**
- * Closed vocabulary for the `code` field on transport diagnostics
- * (two-bot docs/INTERNAL_ACTIONS.md §2, per InternalActionClientTest.php:303-315).
- * The wire `code` is untrusted provider input and must never reach a log line
- * raw: an exact allowlist match logs the code, anything else logs `unknown`.
- * Length/alphabet filtering is not a confidentiality proof, so no cleaned
- * substring of the wire value is ever logged. The returned `BotFailure.code`
- * keeps the raw wire value; only the diagnostic projection is classified.
- */
-const DIAGNOSTIC_CODES: ReadonlySet<string> = new Set([
-  "malformed",
-  "unauthorized",
-  "stale_request",
-  "action_not_allowed",
-  "replayed",
-  "in_progress",
-  "discord_rejected",
-  "rate_limited",
-  "internal",
-  "discord_unavailable",
-  "upstream_timeout",
-]);
-
-export function diagnosticCode(code: string): string {
-  return DIAGNOSTIC_CODES.has(code) ? code : "unknown";
-}
 
 /**
  * One signed attempt. Builds the JSON once and sends those exact bytes —
@@ -123,8 +97,8 @@ export async function send(
   // Diagnostics never carry the provider's `request_id`/`error.code` raw:
   // both are untrusted envelope fields that can echo outgoing material.
   // Correlation uses the caller-supplied idempotency key (a validated UUID,
-  // never provider input); the code is projected through the closed
-  // vocabulary above with a fixed `unknown` fallback.
+  // never provider input); the code uses the shared closed vocabulary
+  // with a fixed `unknown` fallback, as do queue failure diagnostics.
   const correlation = idempotencyKey !== null ? { idempotency_key: idempotencyKey } : {};
   if (parsed.ok) {
     console.info("bot internal action succeeded", {

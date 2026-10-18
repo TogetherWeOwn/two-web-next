@@ -207,7 +207,7 @@ describe("terminal queue alerts and diagnostics are class-only", () => {
     for (const line of lines) expect(line).not.toContain("\nforged-line");
   });
 
-  it("a sync-event refusal keeps its code with a sanitized scope and drops the provider message", async () => {
+  it("a sync-event refusal classifies its code, sanitizes scope and drops the provider message", async () => {
     const lines = capture();
     const d = deps();
     const bot = {
@@ -228,7 +228,7 @@ describe("terminal queue alerts and diagnostics are class-only", () => {
     expect(failing).toHaveLength(1);
     expect(failing[0]).toMatchObject({
       queue: "two-sync-event",
-      exception: "The bot refused event.upsert for e1_injected-field with `forbidden_inject`",
+      exception: "The bot refused event.upsert for e1_injected-field with `unknown`",
     });
     leakFree(lines, d.failedReasons);
   });
@@ -334,7 +334,7 @@ describe("terminal queue alerts and diagnostics are class-only", () => {
     expect(last.ack).toHaveBeenCalledOnce();
     expect(last.retry).not.toHaveBeenCalled();
     expect(d2.failedReasons).toEqual([
-      `The bot refused announcement.post with a retryable \`slow_down\` on all ${CALL_INTERNAL_ACTION.tries} attempts.`,
+      `The bot refused announcement.post with a retryable \`unknown\` on all ${CALL_INTERNAL_ACTION.tries} attempts.`,
     ]);
   });
 });
