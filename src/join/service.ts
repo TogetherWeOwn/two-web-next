@@ -27,6 +27,7 @@
 // bodies and exception messages can quote the live token, so none of them is
 // ever a recordAttempt parameter and none is ever logged.
 import { addGuildMemberDetailed, type JoinResult } from "../discord";
+import { safeRequestId } from "../request-log";
 import type { Sql } from "../sessions";
 
 export const JOIN_OUTCOMES = [
@@ -179,13 +180,18 @@ export async function recordAttempt(
   } catch (err) {
     // Analytics must never break the join: a throwing INSERT still resolves,
     // logging only the exception class (never the message, which can quote
-    // the live token or statement text).
+    // the live token or statement text) plus the validated request_id so the
+    // line joins to request logs (the admin viewer queries by exact
+    // request_id). Absent/malformed IDs are omitted, never raw; no
+    // discordId/source is added.
+    const requestId = safeRequestId(attempt.requestId);
     console.warn("join attempt write failed", {
       exception:
         err instanceof Error
           ? err.name
           : ((err as { constructor?: { name?: string } })?.constructor?.name ?? "unknown"),
       outcome: attempt.outcome,
+      ...(requestId !== undefined ? { request_id: requestId } : {}),
     });
   }
 }
