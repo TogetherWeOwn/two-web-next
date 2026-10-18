@@ -234,11 +234,32 @@ const targetConfig = (hyperdrive) => JSON.stringify({ env: { production: { hyper
 
 test("placeholder Hyperdrive refuses live deployment with fixture-only IDs", () => {
   assert.throws(
-    () => assertProductionTarget(targetConfig([{ binding: "DB", id: sentinel }])),
+    () =>
+      assertProductionTarget(
+        targetConfig([
+          { binding: "DB", id: sentinel },
+          { binding: "BOT_DB", id: provisionedId },
+        ]),
+      ),
+    /still a placeholder/,
+  );
+  assert.throws(
+    () =>
+      assertProductionTarget(
+        targetConfig([
+          { binding: "DB", id: provisionedId },
+          { binding: "BOT_DB", id: sentinel },
+        ]),
+      ),
     /still a placeholder/,
   );
   assert.doesNotThrow(() =>
-    assertProductionTarget(targetConfig([{ binding: "DB", id: provisionedId }])),
+    assertProductionTarget(
+      targetConfig([
+        { binding: "DB", id: provisionedId },
+        { binding: "BOT_DB", id: provisionedId },
+      ]),
+    ),
   );
 });
 
@@ -258,6 +279,7 @@ test("provisioned production DB ignores historical comments, unrelated zero IDs 
     "env": {"production": {"hyperdrive": [
       {"binding":"OTHER","id":"${sentinel}"},
       {"binding":"DB","id":/* reviewed replacement */"${provisionedId}",},
+      {"binding":"BOT_DB","id":"${provisionedId}",},
     ],},},
   }`;
   const parsed = readWranglerConfig(config);
@@ -285,6 +307,33 @@ for (const hyperdrive of [
 ]) {
   test(`refuses missing, invalid or duplicate production DB bindings (${JSON.stringify(hyperdrive)})`, () => {
     assert.throws(() => assertProductionTarget(targetConfig(hyperdrive)), /one valid id/);
+  });
+}
+
+for (const botBinding of [
+  undefined,
+  null,
+  {},
+  [],
+  [{ binding: "OTHER", id: provisionedId }],
+  [{ binding: "BOT_DB" }],
+  [{ binding: "BOT_DB", id: null }],
+  [{ binding: "BOT_DB", id: [provisionedId] }],
+  [{ binding: "BOT_DB", id: "not-an-id" }],
+  [{ binding: "BOT_DB", id: `${provisionedId}0` }],
+  [{ binding: "BOT_DB", id: ` ${provisionedId}` }],
+  [
+    { binding: "BOT_DB", id: provisionedId },
+    { binding: "BOT_DB", id: provisionedId },
+  ],
+]) {
+  test(`refuses missing, invalid or duplicate production BOT_DB bindings (${JSON.stringify(botBinding)})`, () => {
+    const hyperdrive = [{ binding: "DB", id: provisionedId }];
+    if (Array.isArray(botBinding)) hyperdrive.push(...botBinding);
+    else if (botBinding !== undefined) hyperdrive.push(botBinding);
+    // undefined botBinding leaves BOT_DB absent; other non-array shapes are
+    // appended so the BOT_DB count/shape check fails instead of passing.
+    assert.throws(() => assertProductionTarget(targetConfig(hyperdrive)), /BOT_DB.*one valid id/);
   });
 }
 
