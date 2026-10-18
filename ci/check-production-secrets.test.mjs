@@ -207,10 +207,7 @@ test("required-secrets preflight runs before wrangler rollback in rollback-produ
     "expected credentials, secrets, moderator, dry-run build and wrangler rollback in rollback-production.yml",
   );
   assert.ok(
-    credentials < secrets &&
-      secrets < moderator &&
-      moderator < dryRun &&
-      dryRun < rollback,
+    credentials < secrets && secrets < moderator && moderator < dryRun && dryRun < rollback,
     "order must be credentials check, required-secrets preflight, moderator preflight, dry-run build, rollback",
   );
 });
