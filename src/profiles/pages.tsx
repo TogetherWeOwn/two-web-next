@@ -160,6 +160,16 @@ export const ProfilePage: FC<{
     timezone: member.timezone ?? "",
     leaderboard_opt_out: member.leaderboardOptOut ?? false,
   };
+  // Saved baseline for the island: on a native 422 the controls hold the
+  // rejected draft B while these attributes hold the persisted profile A, so
+  // the enhancement can treat B as unsaved work and Cancel can restore A.
+  // On an ordinary GET both sides are A and re-pinning is a no-op.
+  const saved = {
+    bio: member.bio ?? "",
+    games_text: member.games.join("\n"),
+    timezone: member.timezone ?? "",
+    leaderboard_opt_out: member.leaderboardOptOut ?? false,
+  };
   return (
     <Layout
       title={`${member.username} — Member profile`}
@@ -294,6 +304,10 @@ export const ProfilePage: FC<{
             data-testid={PROFILE_EDIT_TESTID}
             {...{ [MOUNT_ATTR]: MEMBER_PROFILE_ISLAND }}
             data-member-id={member.id}
+            data-saved-bio={saved.bio}
+            data-saved-games-text={saved.games_text}
+            data-saved-timezone={saved.timezone}
+            data-saved-leaderboard-opt-out={saved.leaderboard_opt_out ? "1" : "0"}
           >
             <h2 id="edit-heading" tabindex={-1}>
               Edit your profile
