@@ -115,6 +115,11 @@ export function createRevokeClient(postgres, raw) {
   // Pass only the parsed endpoint fields: the raw URL's query string must
   // never reach postgres.js, which would forward unknown keys such as
   // sslrootcert as server startup parameters (Postgres 42704).
+  // Bounded operator waits: finite server-enforced statement and lock budgets
+  // on this CLI's own single connection. They cover the dry-run count (no
+  // transaction) and every apply statement alike, without changing global
+  // database policy. A locked target fails the whole operation; never SKIP
+  // LOCKED and never report success while a target session stays active.
   return postgres({
     ...endpoint,
     max: 1,
@@ -122,7 +127,13 @@ export function createRevokeClient(postgres, raw) {
     debug: false,
     onnotice: () => {},
     target_session_attrs: "read-write",
-    connection: { timezone: "UTC", search_path: "public", application_name: "revoke-sessions" },
+    connection: {
+      timezone: "UTC",
+      search_path: "public",
+      application_name: "revoke-sessions",
+      statement_timeout: 10_000,
+      lock_timeout: 5_000,
+    },
   });
 }
 
