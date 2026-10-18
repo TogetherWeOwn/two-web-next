@@ -216,7 +216,9 @@ promotion. Every check listed above blocks: a failure in any of them fails
 Desktop collection survives one transient: `npm run lighthouse:quality` runs
 `ci/lighthouse-quality-run.mjs`, which reruns the whole `lhci autorun` a single
 time when it fails with fewer LHRs than configured (7 routes x 3 runs = 21 on a
-deployed origin). A full-evidence assert failure never retries. Every run writes
+deployed origin), counted from collect's per-run `.lighthouseci/lhr-*.json`
+files (the quality dir holds only the median report per route). A
+full-evidence assert failure never retries. Every run writes
 `.lighthouseci/quality-collect.log` (full lhci output) and, on failure,
 `.lighthouseci/quality-collect-diagnosis.md`, which says COLLECT FAILURE
 (short evidence: re-run the step, floors untouched), BUDGET BREACH (full

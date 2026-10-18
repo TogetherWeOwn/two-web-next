@@ -10,7 +10,10 @@
 //   1. a tee of the full lhci output to stdout (job log) AND
 //      .lighthouseci/quality-collect.log (uploaded artifact);
 //   2. an LHR count vs expected (routes x numberOfRuns from
-//      ci/lighthouserc.quality.cjs: 21 on a deployed origin, 24 on the fixture worker);
+//      ci/lighthouserc.quality.cjs: 21 on a deployed origin, 24 on the fixture
+//      worker), counted from collect's own per-run `.lighthouseci/lhr-*.json`
+//      files — the quality dir holds only the median report per route, so it
+//      can never reach the expected total;
 //   3. ONE whole-run retry when lhci fails with short evidence (transient
 //      suspected); a full-evidence assert failure (real breach) never retries;
 //   4. .lighthouseci/quality-collect-diagnosis.md classifying COLLECT FAILURE
@@ -33,8 +36,16 @@ import { pathToFileURL } from "node:url";
 const require = createRequire(import.meta.url);
 
 const QUALITY_DIR = ".lighthouseci/quality";
+const LHCI_DIR = ".lighthouseci";
 const LOG_FILE = ".lighthouseci/quality-collect.log";
 const DIAGNOSIS_FILE = ".lighthouseci/quality-collect-diagnosis.md";
+// Mirrors @lhci/utils saved-reports.js: collect saves every run as
+// `.lighthouseci/lhr-<timestamp>.json` and clears those files at the start of
+// each (non-additive) collect. The filesystem upload instead writes ONE file
+// per route into the quality dir (reportFilenamePattern has no per-run token,
+// so the runs of a route overwrite each other and only the median survives).
+const LHR_FILE_REGEX = /^lhr-\d+\.json$/;
+const LHR_HTML_REGEX = /^lhr-\d+\.html$/;
 // One retry: the flake hit 3 runs in 3 days against many greens, so a single
 // consecutive-failure needs two bad runs in a row; more attempts would not fit
 // the quality job's timeout (mobile + desktop + standards share it).
@@ -111,6 +122,19 @@ export function routeOf(url) {
 // Same LHR filter as ci/lighthouse-summary.mjs: parsed JSON reports that carry
 // categories (manifest.json and non-report files excluded).
 export function loadLhrs(dir) {
+  return readLhrFiles(dir, (name) => name.endsWith(".json") && name !== "manifest.json");
+}
+
+// Per-run evidence from collect itself: every collected run is saved under a
+// name like `lhr-1729660800000.json`, surviving the upload dedup that collapses
+// the quality dir to one median report per route. Counting here (not the
+// quality dir) is what keeps a full-evidence floor breach from reading as a
+// short collect.
+export function loadCollectedLhrs(dir = LHCI_DIR) {
+  return readLhrFiles(dir, (name) => LHR_FILE_REGEX.test(name));
+}
+
+function readLhrFiles(dir, accept) {
   let names;
   try {
     names = readdirSync(dir);
@@ -119,7 +143,7 @@ export function loadLhrs(dir) {
   }
   const lhrs = [];
   for (const name of names) {
-    if (!name.endsWith(".json") || name === "manifest.json") continue;
+    if (!accept(name)) continue;
     try {
       const parsed = JSON.parse(readFileSync(join(dir, name), "utf8"));
       if (parsed.categories) lhrs.push(parsed);
@@ -129,6 +153,29 @@ export function loadLhrs(dir) {
     }
   }
   return lhrs;
+}
+
+// Fresh evidence for every attempt: stale quality reports AND stale saved LHRs
+// (from the mobile `lhci autorun` step sharing this checkout, or an earlier
+// invocation) must never count toward the new attempt. Mirrors lhci's own
+// clearSavedReportsAndLHRs. The collect log and any earlier diagnosis live
+// outside both dirs and survive.
+export function clearAttemptEvidence({ qualityDir = QUALITY_DIR, lhciDir = LHCI_DIR } = {}) {
+  rmSync(qualityDir, { recursive: true, force: true });
+  let names;
+  try {
+    names = readdirSync(lhciDir);
+  } catch {
+    return;
+  }
+  for (const name of names) {
+    if (!LHR_FILE_REGEX.test(name) && !LHR_HTML_REGEX.test(name)) continue;
+    try {
+      rmSync(join(lhciDir, name));
+    } catch {
+      // Already gone between listing and removal: nothing stale remains.
+    }
+  }
 }
 
 export function shortfalls(lhrs, { runsPerRoute }) {
@@ -192,6 +239,7 @@ export async function main(
     env = process.env,
     run = runAutorun,
     qualityDir = QUALITY_DIR,
+    lhciDir = LHCI_DIR,
     logFile = LOG_FILE,
     diagnosisFile = DIAGNOSIS_FILE,
     log = console.log,
@@ -205,25 +253,35 @@ export async function main(
   const attempts = [];
   for (let n = 1; n <= MAX_ATTEMPTS; n += 1) {
     if (n > 1) {
-      // Clean accounting for the retry: stale LHRs from the failed attempt
-      // must not masquerade as fresh evidence (the log and any earlier
-      // diagnosis stay, since they live outside the quality dir).
       log(
         `Collect short (${attempts[0].lhrs}/${expected} LHRs): retrying (attempt ${n}/${MAX_ATTEMPTS}).`,
       );
-      rmSync(qualityDir, { recursive: true, force: true });
     }
+    // Clean accounting for every attempt, including the first: stale LHRs or
+    // quality reports from an earlier invocation must not masquerade as fresh
+    // evidence (the log and any earlier diagnosis stay, since they live
+    // outside both evidence dirs).
+    clearAttemptEvidence({ qualityDir, lhciDir });
     log(
       `Lighthouse quality collect: attempt ${n}/${MAX_ATTEMPTS} (${mode}, expecting ${expected} LHRs).`,
     );
     const started = Date.now();
     // Sequential by design: attempt 2 runs only when attempt 1 came up short.
-    const { exitCode, output } = await run({ env, extraArgs });
+    // A spawn failure (missing CLI, process error) is a failed attempt with
+    // its error text, so the retry and diagnosis flow still handles it.
+    let result;
+    try {
+      result = await run({ env, extraArgs });
+    } catch (error) {
+      const detail = error instanceof Error ? (error.stack ?? error.message) : String(error);
+      result = { exitCode: 1, output: `lhci autorun failed to start: ${detail}\n` };
+    }
+    const { exitCode, output } = result;
     const elapsed = Math.round((Date.now() - started) / 1000);
     writeFileSync(logFile, `\n=== attempt ${n}: exit ${exitCode}, ${elapsed}s ===\n${output}`, {
       flag: "a",
     });
-    const lhrObjects = loadLhrs(qualityDir);
+    const lhrObjects = loadCollectedLhrs(lhciDir);
     attempts.push({
       n,
       exitCode,
@@ -301,22 +359,59 @@ function selftest() {
     [],
   );
 
-  // Retry matrix with a stubbed lhci (hermetic: temp dirs, no browser).
-  const runCase = async (script) => {
+  // loadCollectedLhrs counts collect's per-run files (lhr-<digits>.json with
+  // categories); the upload manifest and half-written files never count.
+  {
+    const lhci = mkdtempSync(join(tmpdir(), "lh-quality-collected-"));
+    writeFileSync(join(lhci, "lhr-1.json"), JSON.stringify(lhr("https://h/")));
+    writeFileSync(join(lhci, "lhr-2.json"), "{truncated");
+    writeFileSync(join(lhci, "manifest.json"), "{}");
+    writeFileSync(join(lhci, "assertion-results.json"), "{}");
+    assert.equal(loadCollectedLhrs(lhci).length, 1);
+    assert.equal(loadCollectedLhrs(join(lhci, "missing")).length, 0);
+  }
+
+  // clearAttemptEvidence removes stale per-run LHRs and the quality dir but
+  // keeps the collect log, diagnosis and manifest-style files.
+  {
+    const lhci = mkdtempSync(join(tmpdir(), "lh-quality-clear-"));
+    const qdir = join(lhci, "quality");
+    mkdirSync(qdir, { recursive: true });
+    writeFileSync(join(lhci, "lhr-1.json"), "{}");
+    writeFileSync(join(lhci, "lhr-1.html"), "<html></html>");
+    writeFileSync(join(lhci, "quality-collect.log"), "keep");
+    writeFileSync(join(qdir, "old-report.json"), "{}");
+    clearAttemptEvidence({ qualityDir: qdir, lhciDir: lhci });
+    assert.equal(readdirSync(lhci).sort().join(","), "quality-collect.log");
+  }
+
+  // Retry matrix with a stubbed lhci (hermetic: temp dirs, no browser). The
+  // stub mirrors the real filesystem upload: the quality dir holds ONE file
+  // per route (runs overwrite each other, median survives) while the lhci dir
+  // holds one lhr-<n>.json per run. A stub that wrote uniquely named quality
+  // files would hide the dedup miscount this wrapper once had.
+  const runCase = async (script, { env = {} } = {}) => {
     const caseDir = mkdtempSync(join(tmpdir(), "lh-quality-case-"));
-    const qdir = join(caseDir, "quality");
+    const lhci = join(caseDir, ".lighthouseci");
+    const qdir = join(lhci, "quality");
     mkdirSync(qdir, { recursive: true });
     let calls = 0;
     const run = async () => {
       calls += 1;
       const step = script[calls - 1];
-      rmSync(qdir, { recursive: true, force: true });
+      if (step.reject) throw new Error(step.reject);
+      // Emulate a fresh collect: per-run saved LHRs, then the deduping upload.
+      clearAttemptEvidence({ qualityDir: qdir, lhciDir: lhci });
       mkdirSync(qdir, { recursive: true });
-      for (let i = 0; i < step.lhrs; i += 1) {
+      step.urls.forEach((url, i) => {
         writeFileSync(
-          join(qdir, `r${calls}-${i}.json`),
-          JSON.stringify(lhr(`https://h/p${i % 2}/`)),
+          join(lhci, `lhr-${calls}${String(i).padStart(4, "0")}.json`),
+          JSON.stringify(lhr(url)),
         );
+      });
+      for (const route of new Set(step.urls.map(routeOf))) {
+        const slug = route === "/" ? "root" : route.replaceAll("/", "_");
+        writeFileSync(join(qdir, `${slug}-report.json`), JSON.stringify(lhr(`https://h${route}`)));
       }
       const marker = step.assertFailed ? `\n${ASSERT_FAILURE_MARKER}\n` : "";
       return {
@@ -325,38 +420,80 @@ function selftest() {
       };
     };
     const code = await main([], {
-      env: {},
+      env,
       run,
       qualityDir: qdir,
+      lhciDir: lhci,
       logFile: join(caseDir, "collect.log"),
       diagnosisFile: join(caseDir, "diagnosis.md"),
     });
     return { code, calls, caseDir };
   };
+  // 8 fixture routes x 3 runs; 7 staging routes x 3 runs.
+  const fixtureUrls = Array.from({ length: 8 }, (_, r) =>
+    Array.from({ length: 3 }, () => `https://h/f${r}/`),
+  ).flat();
+  const stagingUrls = Array.from({ length: 7 }, (_, r) =>
+    Array.from({ length: 3 }, () => `https://h/s${r}/`),
+  ).flat();
+  const stagingEnv = { env: { QUALITY_ORIGIN: "https://next.togetherweown.com" } };
 
   (async () => {
     // Green first attempt: no retry, no diagnosis, exit 0.
     {
-      const { code, calls, caseDir } = await runCase([{ exitCode: 0, lhrs: 24 }]);
+      const { code, calls, caseDir } = await runCase([{ exitCode: 0, urls: fixtureUrls }]);
       assert.equal(code, 0);
       assert.equal(calls, 1);
-      assert.equal(loadLhrs(join(caseDir, "quality")).length, 24);
+      assert.equal(loadCollectedLhrs(join(caseDir, ".lighthouseci")).length, 24);
+    }
+    // Stale evidence from an earlier invocation never counts: a leftover
+    // mobile-run LHR plus old quality reports are cleared before attempt 1.
+    {
+      const probe = mkdtempSync(join(tmpdir(), "lh-quality-stale-"));
+      const lhci = join(probe, ".lighthouseci");
+      const qdir = join(lhci, "quality");
+      mkdirSync(qdir, { recursive: true });
+      writeFileSync(join(lhci, "lhr-9.json"), JSON.stringify(lhr("https://h/stale/")));
+      writeFileSync(join(qdir, "stale-report.json"), JSON.stringify(lhr("https://h/stale/")));
+      const code = await main([], {
+        env: {},
+        run: async () => ({ exitCode: 0, output: "stub green" }),
+        qualityDir: qdir,
+        lhciDir: lhci,
+        logFile: join(probe, "collect.log"),
+        diagnosisFile: join(probe, "diagnosis.md"),
+      });
+      assert.equal(code, 0);
+      assert.equal(loadCollectedLhrs(lhci).length, 0);
+    }
+    // A spawn failure becomes a failed attempt (not a crash): short evidence
+    // retries once, then COLLECT FAILURE keeps the last exit code.
+    {
+      const { code, calls, caseDir } = await runCase([
+        { reject: "spawn /nope ENOENT" },
+        { exitCode: 0, urls: fixtureUrls },
+      ]);
+      assert.equal(code, 0);
+      assert.equal(calls, 2);
+      assert.match(readFileSync(join(caseDir, "collect.log"), "utf8"), /failed to start/);
     }
     // Transient short failure then green: exactly one retry, exit 0.
     {
       const { code, calls } = await runCase([
-        { exitCode: 1, lhrs: 4 },
-        { exitCode: 0, lhrs: 24 },
+        { exitCode: 1, urls: fixtureUrls.slice(0, 4) },
+        { exitCode: 0, urls: fixtureUrls },
       ]);
       assert.equal(code, 0);
       assert.equal(calls, 2);
     }
-    // Full evidence plus the evaluated-assertion marker: real breach, NO
-    // retry, BUDGET BREACH.
+    // Full evidence plus the evaluated-assertion marker on the staging shape
+    // (21 runs deduped to 7 quality files): real breach, NO retry,
+    // BUDGET BREACH. This is the PR #1021 review finding, pinned.
     {
-      const { code, calls, caseDir } = await runCase([
-        { exitCode: 1, lhrs: 24, assertFailed: true },
-      ]);
+      const { code, calls, caseDir } = await runCase(
+        [{ exitCode: 1, urls: stagingUrls, assertFailed: true }],
+        stagingEnv,
+      );
       assert.equal(code, 1);
       assert.equal(calls, 1);
       assert.match(readFileSync(join(caseDir, "diagnosis.md"), "utf8"), /BUDGET BREACH/);
@@ -364,7 +501,7 @@ function selftest() {
     // Full evidence but no assertion verdict (upload/config blew up): NO
     // retry, and the verdict must NOT claim a floor breached.
     {
-      const { code, calls, caseDir } = await runCase([{ exitCode: 1, lhrs: 24 }]);
+      const { code, calls, caseDir } = await runCase([{ exitCode: 1, urls: fixtureUrls }]);
       assert.equal(code, 1);
       assert.equal(calls, 1);
       const diagnosis = readFileSync(join(caseDir, "diagnosis.md"), "utf8");
@@ -374,8 +511,8 @@ function selftest() {
     // Short twice: COLLECT FAILURE, last exit code preserved, tail recorded.
     {
       const { code, calls, caseDir } = await runCase([
-        { exitCode: 2, lhrs: 0, note: "NO_NAVSTART boom" },
-        { exitCode: 3, lhrs: 6, note: "chrome crash boom" },
+        { exitCode: 2, urls: [], note: "NO_NAVSTART boom" },
+        { exitCode: 3, urls: fixtureUrls.slice(0, 6), note: "chrome crash boom" },
       ]);
       assert.equal(code, 3);
       assert.equal(calls, 2);
