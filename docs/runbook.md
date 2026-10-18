@@ -1237,8 +1237,12 @@ empty). If any is missing, `/up` answers 503 with top-level `status: degraded`
 and `config: "missing"`, alongside the DB and queue fields above. The body never
 names the secret; the Worker log line `Health check found required Worker
 secrets missing.` lists the missing names only, never values. A ready Worker's
-body has no `config` key. This is a presence check only: a wrong value still
-reports ready and fails at sign-in. Fix by setting the secret (an Operator step
+body has no `config` key. The Discord pair is presence-checked only: a wrong
+value still reports ready and fails at sign-in. `SESSION_SECRET` additionally
+enforces the documented strength floor (at least 32 characters, no
+leading/trailing whitespace); a weak value answers 503 with
+`config: "weak"` and a log line naming the requirement, never the value. Fix
+by setting the secret (an Operator step
 for staging/production), not by weakening the probe.
 
 Queue-only degradation or `unknown` **still returns 200 when DB/schema is ready**:
