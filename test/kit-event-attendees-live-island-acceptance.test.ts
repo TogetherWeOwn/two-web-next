@@ -836,7 +836,7 @@ const MOUNT = 'data-island="attendees-live"';
 const SCRIPT_SRC = "/islands/attendees-live.js";
 
 function islandScriptTags(html: string): string[] {
-  return [...html.matchAll(/<script\b[^>]*>/g)]
+  return [...html.matchAll(/<script\b[^>]*>/gi)]
     .map((m) => m[0])
     .filter((tag) => tag.includes(`src="${SCRIPT_SRC}"`));
 }
