@@ -1579,9 +1579,9 @@ Sync carriers (including waiting deliveries) settle their ledger and ACK at 6
 tries, before transport `max_retries: 10`. Internal-action carriers cap at 5.
 Sync requests independently persist `request_attempts` and `next_attempt_at`:
 claims durably set eligibility to null **before** bot I/O. Only a committed
-result can reopen that fence: backoff (`10,60,300,900,3600`) or a bot Retry-After
-above 0 and at most 86400 seconds (fractions round up) selects the next absolute
-deadline; any other Retry-After uses the backoff. An already-persisted wait
+result can reopen that fence: backoff (`10,60,300,900,3600`) or a usable bot Retry-After
+above 0 selects the next absolute deadline (fractions round up, values above 86400
+cap at 86400); any absent, zero or unusable Retry-After uses the backoff. An already-persisted wait
 farther than 86400 seconds caps at 86400 before queue admission. A failed deadline write retries
 that same Date (or exhausted null), never shorter generic backoff. If both writes
 fail, the consumer carries the known remaining wait on that delivery, but the

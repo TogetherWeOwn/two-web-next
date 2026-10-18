@@ -12,6 +12,7 @@ import {
   DISCORD_SNAPSHOT_MAX_ROWS,
   encodeDiscordSnapshot,
 } from "./discord-snapshot";
+import { parseRetryAfterSeconds } from "../jobs/retry-delay";
 import {
   DISCORD_READ_DEADLINE_MS,
   type DiscordEventsSource,
@@ -61,14 +62,14 @@ function toTransient(row: AdmittedScheduledEvent): DiscordTransient | null {
   }
 }
 
-/** Numeric `retry-after` seconds from a 429; anything else is not worth logging. */
+/**
+ * Bounded `retry-after` seconds from a 429; anything else is not worth
+ * logging. Thin `Response` adapter over the one shared parser in
+ * `src/jobs/retry-delay.ts` — the same mapping the Discord OAuth path and
+ * the bot transport use.
+ */
 function retryAfterSeconds(res: Response): number | undefined {
-  // `Number(null)` and `Number("")` are 0: an absent header must not log as "retry now".
-  const raw = res.headers.get("retry-after")?.trim();
-  if (!raw || !/^\d+(?:\.\d+)?$/.test(raw)) return undefined;
-  const n = Number(raw);
-  // Only representable numeric delays are valid; no HTTP dates or infinity.
-  return Number.isFinite(n) && n * 1000 <= 8_000_000_000_000_000 ? n : undefined;
+  return parseRetryAfterSeconds(res.headers.get("retry-after"));
 }
 
 /** One warn line per failed read: a silent error state cannot be told from an outage. */

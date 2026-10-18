@@ -12,6 +12,7 @@ import { BotTerminalError, BotTransportError } from "../jobs/types";
 import type { BotClientOptions } from "./client-types";
 import { parseEnvelope, type ParsedEnvelope } from "./client-serialization";
 import { diagnosticCode } from "./diagnostic-code";
+import { parseRetryAfterSeconds } from "../jobs/retry-delay";
 
 export function assertBotConfigured(o: Pick<BotClientOptions, "url" | "secret" | "keyId">): void {
   if (!o.url) throw new BotTerminalError("Bot is not configured: BOT_ENDPOINT_URL is missing.");
@@ -179,9 +180,10 @@ export async function send(
   const json: unknown = await readCappedJson(res);
   const parsed = parseEnvelope(res.status, res.headers.get("Idempotent-Replay") === "true", json);
   if (!parsed.ok && parsed.failure.code === "rate_limited" && res.status === 429) {
-    const retryAfter = res.headers.get("Retry-After");
+    // The shared parser's `undefined` (unusable header) adapts to this seam's
+    // `null` fallback so the caller keeps its existing fallback behavior.
     parsed.failure.retryAfterSeconds =
-      retryAfter !== null && /^\d+$/.test(retryAfter) ? Number(retryAfter) : null;
+      parseRetryAfterSeconds(res.headers.get("Retry-After")) ?? null;
   }
   const durationMs = Date.now() - startedAt;
   const actionName = payload["action"] ?? "(unknown)";
