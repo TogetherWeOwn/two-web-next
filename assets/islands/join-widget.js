@@ -23,8 +23,65 @@
     frame.setAttribute("sandbox", "allow-scripts allow-same-origin");
     frame.setAttribute("referrerpolicy", "no-referrer");
     frame.setAttribute("data-testid", "join-widget");
+    let settled = false;
+    const guideToInvite = () => {
+      if (settled) return;
+      settled = true;
+      // The invite link lives beside the preview on every /join variant; a
+      // failed or hung frame guides there instead of stranding the visitor.
+      const invite = document.querySelector('[data-testid="join-invite"]');
+      const inviteHref = invite && invite.getAttribute("href");
+      const message = document.createElement("p");
+      message.setAttribute("data-testid", "join-widget-error");
+      message.setAttribute("role", "status");
+      message.setAttribute("tabindex", "-1");
+      message.textContent = "The preview failed to load. ";
+      let fallback = null;
+      if (inviteHref) {
+        fallback = document.createElement("a");
+        fallback.setAttribute("href", inviteHref);
+        fallback.textContent = "Join with an invite link.";
+        message.appendChild(fallback);
+      } else {
+        message.textContent += "Join with an invite link.";
+      }
+      // Swap the dead frame out: it never rendered, so holding its 500px
+      // hole open would strand the guidance below the fold.
+      preview.replaceChildren(message);
+      // The clicked link is gone, so focus fell to <body>: move it onto the
+      // guidance (prefer the invite link) so the next Tab reaches forward
+      // instead of restarting from the top of the page. Same guard as the
+      // load handler: a late failure never steals focus the visitor moved
+      // elsewhere; the role=status message still announces the fallback.
+      const active = document.activeElement;
+      if (!active || active === document.body) {
+        if (fallback && typeof fallback.focus === "function") fallback.focus();
+        else if (typeof message.focus === "function") message.focus();
+      }
+    };
+    // Scope: the guided fallback covers the observable failure signals —
+    // a signaled `error` (best-effort only) and a hung frame that fires
+    // neither event within the bounded timer. A blocked navigation that
+    // commits an error page fires `load` instead, which is indistinguishable
+    // from a real render cross-origin (Discord's widget posts no readiness
+    // signal), so it follows the load contract and stays out of scope here.
+    // The page-level invite link beside the preview remains the visible path
+    // in that case. Focus moves in only on `load`, and only
+    // when the visitor hasn't moved elsewhere since the click (after
+    // replaceChildren the clicked link is gone, so <body> means "hasn't
+    // moved"): a late load never steals focus from another element.
+    const timer = setTimeout(guideToInvite, 8000);
+    frame.addEventListener("load", () => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      const active = document.activeElement;
+      if (!active || active === document.body) frame.focus();
+    });
+    frame.addEventListener("error", () => {
+      clearTimeout(timer);
+      guideToInvite();
+    });
     preview.replaceChildren(frame);
-    // Keep keyboard focus in the preview once the link is gone.
-    frame.focus();
   });
 })();
