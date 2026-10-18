@@ -95,6 +95,21 @@ export function linkResolves(link, matchers, publicDir = "public") {
   return pathname !== "/" && existsSync(join(publicDir, pathname));
 }
 
+export function linkFindings(links, matchers, publicDir = "public") {
+  const list = Array.isArray(links) ? links : [...links];
+  const out = [];
+  for (const link of list.slice(0, maxLinks)) {
+    if (!linkResolves(link, matchers, publicDir))
+      out.push(`internal link ${link}: no app route or public file serves it`);
+  }
+  if (list.length > maxLinks) {
+    out.push(
+      `internal links truncated: checked first ${maxLinks} of ${list.length} collected; expand coverage so every collected link is checked`,
+    );
+  }
+  return out;
+}
+
 // Per-route settlement deadline: headers AND the full body must settle within
 // this long, or the route becomes a route-named timeout finding instead of
 // stalling the collector until the enclosing workflow times out. It is a total
@@ -277,6 +292,53 @@ function selftest() {
     "/featured/new",
   ])
     assert.ok(!linkResolves(bad, ms), `should not resolve: ${bad}`);
+  const okMatchers = [/^\/ok-\d+\/?$/];
+  const probeDir = "/nonexistent-public-dir-for-selftest";
+  const manyOk = Array.from({ length: maxLinks }, (_, i) => `/ok-${i}`);
+  const overPastCap = [...manyOk, "/past-cap-missing"];
+  const overPastFindings = linkFindings(overPastCap, okMatchers, probeDir);
+  assert.equal(
+    overPastFindings.filter((f) => /truncat/i.test(f)).length,
+    1,
+    `over-cap set must emit one truncation finding: ${overPastFindings}`,
+  );
+  const truncation = overPastFindings.find((f) => /truncat/i.test(f));
+  assert.ok(
+    truncation.includes(String(maxLinks)),
+    `truncation finding must name the cap (${maxLinks}): ${truncation}`,
+  );
+  assert.ok(
+    truncation.includes(String(overPastCap.length)),
+    `truncation finding must name total collected (${overPastCap.length}): ${truncation}`,
+  );
+  assert.ok(
+    !overPastFindings.includes(
+      "internal link /past-cap-missing: no app route or public file serves it",
+    ),
+    `past-cap link is not checked, only truncated: ${overPastFindings}`,
+  );
+  assert.deepEqual(
+    overPastFindings.filter((f) => !/truncat/i.test(f)),
+    [],
+    `all checked links resolve, so only truncation remains: ${overPastFindings}`,
+  );
+  const overWithinCap = ["/ok-1", "/within-cap-missing", ...manyOk];
+  const overWithinFindings = linkFindings(overWithinCap, okMatchers, probeDir);
+  assert.ok(
+    overWithinFindings.includes(
+      "internal link /within-cap-missing: no app route or public file serves it",
+    ),
+    `within-cap miss still reported under truncation: ${overWithinFindings}`,
+  );
+  assert.equal(
+    overWithinFindings.filter((f) => /truncat/i.test(f)).length,
+    1,
+    `within-cap miss keeps one truncation finding: ${overWithinFindings}`,
+  );
+  assert.deepEqual(linkFindings(manyOk, okMatchers, probeDir), []);
+  assert.deepEqual(linkFindings(["/ok-1", "/bad-a"], okMatchers, probeDir), [
+    "internal link /bad-a: no app route or public file serves it",
+  ]);
   console.log("web-standards selftest: ok");
 }
 
@@ -314,6 +376,7 @@ async function main() {
       });
   const findings = [];
   const checked = new Set();
+  let totalCollected = 0;
   try {
     if (child) await waitForServer(child);
     // Every route read runs under the per-route deadline; a timed-out route
@@ -326,11 +389,10 @@ async function main() {
     });
     findings.push(...routeFindings);
     const matchers = routeMatchers();
-    for (const link of [...links].slice(0, maxLinks)) {
-      checked.add(link);
-      if (!linkResolves(link, matchers))
-        findings.push(`internal link ${link}: no app route or public file serves it`);
-    }
+    const collected = [...links];
+    totalCollected = collected.length;
+    findings.push(...linkFindings(collected, matchers));
+    for (const link of collected.slice(0, maxLinks)) checked.add(link);
   } finally {
     if (child)
       try {
@@ -340,7 +402,7 @@ async function main() {
   const lines = [
     "## Web standards",
     "",
-    `Origin: ${base}. Routes: ${routes.length}. Internal links checked: ${checked.size}.`,
+    `Origin: ${base}. Routes: ${routes.length}. Internal links checked: ${checked.size} of ${totalCollected} collected.`,
     "",
   ];
   lines.push(

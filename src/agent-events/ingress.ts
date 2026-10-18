@@ -72,11 +72,19 @@ export async function admitAgentEvent(
   // without ever running the recursive digest over untrusted JSON. A presented
   // credential buckets on its own hash (one guess never spends another's);
   // anonymous hits bucket per normalized IP, like human throttles (IPv6 /64,
-  // mapped-IPv4, malformed verbatim). Refused hits write nothing.
+  // mapped-IPv4, malformed verbatim). A refused hit writes no hit row and one
+  // denied/rate_limited audit row with this admission's request_id (see
+  // shield.ts for the bucket-class encoding).
   const shieldKey = credential
     ? await sha256Hex(credential)
     : `ip:${normalizeClientIp(clientIp ?? "unknown")}`;
-  const shielded = await shield(sql, cfg, shieldKey, requestId);
+  const shielded = await shield(
+    sql,
+    cfg,
+    shieldKey,
+    requestId,
+    credential ? { kind: "credential", hash: shieldKey } : { kind: "anonymous" },
+  );
   if (shielded) return shielded;
   return { handle: (body) => processAgentEvent(sql, cfg, body, credential, requestId, effects) };
 }
