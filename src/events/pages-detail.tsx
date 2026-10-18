@@ -226,6 +226,9 @@ export const EventPage: FC<{
                   ← Previous attendees
                 </a>
               ) : null}{" "}
+              <span data-testid="event-attendees-current-page" aria-current="page">
+                Page {attendeesPaging.page}
+              </span>{" "}
               {attendeesPaging.nextHref ? (
                 <a href={attendeesPaging.nextHref} rel="next" data-testid="event-attendees-next">
                   Next attendees →
