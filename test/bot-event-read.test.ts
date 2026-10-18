@@ -235,7 +235,11 @@ describe("signed bot event.read fallback coverage", () => {
       });
       const fetcher = vi.fn<typeof fetch>().mockResolvedValue(nullBody(() => textGate));
       const pending = observeDiscordEvent(local, signedEventReader(cfg, fetcher));
-      for (let i = 0; i < 50 && fetcher.mock.calls.length === 0; i++) {
+      // Signing is real async crypto: zero-ms advances do not give it
+      // wall-clock time, so poll (zero fake ms) until the attempt is on the
+      // wire. 500 matches test/bot-event-read-budget.test.ts; 50 starved the
+      // signer on Node 22 under load (main CI: fetcher never called).
+      for (let i = 0; i < 500 && fetcher.mock.calls.length === 0; i++) {
         await vi.advanceTimersByTimeAsync(0);
       }
       expect(fetcher).toHaveBeenCalledOnce();
@@ -308,7 +312,9 @@ describe("signed bot event.read fallback coverage", () => {
         .fn<typeof fetch>()
         .mockResolvedValue({ status: 200, ok: true, body: fakeBody } as unknown as Response);
       const pending = observeDiscordEvent(local, signedEventReader(cfg, fetcher));
-      for (let i = 0; i < 50 && fetcher.mock.calls.length === 0; i++) {
+      // Same zero-fake-ms poll as above: real async signing needs more than
+      // 50 flushes on Node 22 under load (main CI: fetcher never called).
+      for (let i = 0; i < 500 && fetcher.mock.calls.length === 0; i++) {
         await vi.advanceTimersByTimeAsync(0);
       }
       expect(fetcher).toHaveBeenCalledOnce();
