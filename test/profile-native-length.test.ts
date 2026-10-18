@@ -240,12 +240,17 @@ for (const path of paths) {
 
 describe("real island binder: oversized synthetic lists", () => {
   it.each([
-    { name: "distinct short names", tail: [], errors: ["Add no more than 20 games."] },
+    {
+      name: "distinct short names",
+      tail: [],
+      errors: ["Games list is too long.", "Add no more than 20 games."],
+    },
     {
       name: "invalid tail after too many names",
       tail: ["🎮".repeat(81), "bad\u0000game"],
       errors: [
         "Remove control characters.",
+        "Games list is too long.",
         "Keep each game name to 80 characters or fewer.",
         "Add no more than 20 games.",
       ],
