@@ -403,6 +403,11 @@ describe("signed bot event.read budget and byte ceiling", () => {
         .mockResolvedValue(new Response(JSON.stringify(doc), { status: 200 }));
       expect(await observe(fetcher)).toEqual(unreachable);
       expect(fetcher).toHaveBeenCalledOnce();
+      // Cancelling a string-backed body can leave Node-internal
+      // zero-millisecond work queued. Drain those turns without consuming
+      // the fake transport budget, so the count still catches a leaked
+      // 2.5-second deadline timer.
+      await flushRounds();
       expect(vi.getTimerCount()).toBe(0);
     });
 
@@ -416,6 +421,10 @@ describe("signed bot event.read budget and byte ceiling", () => {
       const fetcher = vi.fn<typeof fetch>().mockResolvedValue(new Response(body, { status: 200 }));
       expect(await observe(fetcher)).toEqual(unreachable);
       expect(fetcher).toHaveBeenCalledOnce();
+      // Cancelling mid-stream can leave zero-millisecond cleanup turns
+      // queued. Drain them without consuming the fake transport budget, so
+      // the count still catches a leaked 2.5-second deadline timer.
+      await flushRounds();
       expect(vi.getTimerCount()).toBe(0);
     });
 
