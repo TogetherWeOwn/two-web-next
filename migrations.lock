@@ -110,8 +110,12 @@
       "sha256": "cd56bd4947a15ac1a5c0257b1543cdc3250d5e58f15a8c7aad73663b677f6b6e"
     },
     {
-      "path": "drizzle/1026_join-attempts-request-id-index.sql",
-      "sha256": "b4492ccfb5d1acc59c058ede8345bcd5a1144a675fb0021ba72a14679dee8148"
+      "path": "drizzle/1027_join-attempts-discord-id-index.sql",
+      "sha256": "2cde39794c5738ab5135f8481e5bab987c8eea976a26a71fb999ab511ec0f569"
+    },
+    {
+      "path": "drizzle/1028_join-attempts-request-id-index.sql",
+      "sha256": "103839786b3354c2470ef21a947e7e97b102225dd055825304c597666c4aa526"
     }
   ]
 }

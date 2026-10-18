@@ -57,7 +57,7 @@
     "dev:lighthouse": "wrangler dev --config ci/wrangler.lighthouse.jsonc --local --ip 127.0.0.1 --port 8787",
     "lighthouse": "lhci autorun --config=ci/lighthouserc.cjs",
     "lighthouse:origin": "node ci/lighthouse-origin-run.mjs",
-    "lighthouse:origin:selftest": "node --test ci/lighthouse-origin.test.mjs",
+    "lighthouse:origin:selftest": "node --test ci/lighthouse-origin.test.mjs && node ci/lighthouse-origin-run.mjs --selftest",
     "deps:audit": "node ci/deps-audit.mjs",
     "deps:audit:selftest": "node --test ci/deps-audit.test.mjs",
     "db:generate": "drizzle-kit generate",

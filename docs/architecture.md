@@ -74,7 +74,9 @@ checked by `ci/check-config-docs.mjs` (run via `npm run config:check`).
 Secrets are set with `wrangler secret put` and never live in the repo; only
 secret **names** appear in docs. The three readiness secrets are
 `SESSION_SECRET`, `DISCORD_CLIENT_SECRET`, and `DISCORD_BOT_TOKEN`: when any
-is absent or empty, `GET /up` answers 503.
+is absent or empty, `GET /up` answers 503, and a `SESSION_SECRET` under 32
+characters or with leading/trailing whitespace answers 503 as well
+(`config: "weak"`; see the [configuration reference](./config.md)).
 
 ## 3. Queue and cron path
 

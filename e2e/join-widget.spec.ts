@@ -3,7 +3,8 @@ import { test, expect } from "./fixtures";
 // Browser pin for the click-to-load Discord preview facade on /join: page
 // load renders a no-referrer link and the island script with no iframe and no
 // Discord traffic, and a plain click swaps the link for the sandboxed widget
-// frame with focus inside it. Unit parity lives in test/join.test.ts (which
+// frame with focus moving in once the stubbed widget signals load. Unit
+// parity lives in test/join.test.ts (which
 // pins the data-join-widget markup-to-island hook against the real SSR HTML)
 // and test/islands-join-widget.test.ts; this spec proves the same path
 // through the browser against wrangler dev + CI Postgres only. It never
@@ -73,7 +74,8 @@ test("join preview makes no Discord request until clicked, then frames the widge
   await link.click();
 
   // One click builds exactly one frame from the link href, sandboxed with no
-  // referrer at the documented size, and moves focus into it.
+  // referrer at the documented size; the stubbed widget loads, so focus moves
+  // into the frame on load.
   const frame = page.locator('iframe[data-testid="join-widget"]');
   await expect(frame).toHaveCount(1);
   expect(await frame.getAttribute("src")).toBe(WIDGET_URL);

@@ -301,7 +301,7 @@ export function fixtureEnvForRequest(nowMs: number): Env & Record<string, unknow
     DISCORD_INVITE_URL: "http://127.0.0.1:8787/join",
     DISCORD_CLIENT_SECRET: "fixture-only",
     DISCORD_BOT_TOKEN: "fixture-only",
-    SESSION_SECRET: "lighthouse-local-fixture-only",
+    SESSION_SECRET: "lighthouse-local-fixture-secret-at-least-32",
     SESSION_STORE: createMemorySessionStore(),
     ADMIN_DB: db as unknown as Db,
     DISCORD_EVENTS: { upcoming: async () => [], lastReadFailed: () => false },

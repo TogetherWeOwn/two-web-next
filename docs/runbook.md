@@ -518,6 +518,12 @@ Postgres migrations, data writes, Discord side effects, queue messages or
 external-resource changes; keep the release workflow from redeploying the bad
 head. Record the rollback deployment and previous/current version IDs.
 
+A failed post-promotion public-route verification in `deploy-production`
+blocks the release tag but leaves the promoted version live at 100%: the
+gradual action's automatic rollback only covers failures inside the promotion
+itself. The failed step's logs print the recorded pre-promote version ID;
+restore it with this workflow using that ID.
+
 Promotion and rollback mutations to the production Worker serialize on the
 shared `production-worker-mutation` job-level concurrency group
 (non-cancelling). The lock covers only the two mutating jobs, never
@@ -1245,8 +1251,12 @@ empty). If any is missing, `/up` answers 503 with top-level `status: degraded`
 and `config: "missing"`, alongside the DB and queue fields above. The body never
 names the secret; the Worker log line `Health check found required Worker
 secrets missing.` lists the missing names only, never values. A ready Worker's
-body has no `config` key. This is a presence check only: a wrong value still
-reports ready and fails at sign-in. Fix by setting the secret (an Operator step
+body has no `config` key. The Discord pair is presence-checked only: a wrong
+value still reports ready and fails at sign-in. `SESSION_SECRET` additionally
+enforces the documented strength floor (at least 32 characters, no
+leading/trailing whitespace); a weak value answers 503 with
+`config: "weak"` and a log line naming the requirement, never the value. Fix
+by setting the secret (an Operator step
 for staging/production), not by weakening the probe.
 
 Queue-only degradation or `unknown` **still returns 200 when DB/schema is ready**:
