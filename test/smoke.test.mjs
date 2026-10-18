@@ -8,8 +8,34 @@ import {
   SMOKE_QUEUE_CRITICAL_AT,
   SMOKE_QUEUE_WARN_AT,
   SMOKE_SECURITY_TXT_EXPIRES,
+  securityTxtAssertions,
   smoke,
 } from "../bin/smoke.mjs";
+
+// Producer-derived security.txt body: buildSecurityTxt bundled once from
+// src/security-txt.ts (same in-memory esbuild pattern as the rendering tests
+// below), so the passing fixture is the exact producer output for the loopback
+// origin and cannot drift from it. The loopback stub has no TLS, so like the
+// real Worker on an http origin the body carries no Canonical line; the https
+// Canonical path is covered by the securityTxtAssertions unit tests.
+let securityTxtBuilderPromise = null;
+function securityTxtBuilder() {
+  securityTxtBuilderPromise ??= build({
+    entryPoints: ["src/security-txt.ts"],
+    bundle: true,
+    write: false,
+    format: "esm",
+    platform: "node",
+  }).then(
+    async (bundle) =>
+      (
+        await import(
+          `data:text/javascript;base64,${Buffer.from(bundle.outputFiles[0].text).toString("base64")}`
+        )
+      ).buildSecurityTxt,
+  );
+  return securityTxtBuilderPromise;
+}
 
 // Independent local responses matching the route contracts, not a live Worker/DB.
 const fixtures = {
@@ -43,18 +69,14 @@ const fixtures = {
     "text/plain",
     (origin) => `User-agent: *\nDisallow:\nSitemap: ${origin}/sitemap_index.xml\n`,
   ],
-  // RFC 9116 publication (S8): the stub advertises its own origin the way the
-  // Worker advertises APP_URL, so the probe's Expires-pin and same-origin
-  // Canonical assertions exercise a true positive. The Expires date is
-  // hardcoded here like the queue thresholds in /up above; the drift guard at
-  // the bottom of this file pins SMOKE_SECURITY_TXT_EXPIRES to
-  // src/security-txt.ts, so a pin change fails here first.
-  "/.well-known/security.txt": [
-    200,
-    "text/plain",
-    (origin) =>
-      `Contact: https://github.com/TogetherWeOwn/two-web-next/security/advisories/new\nExpires: 2027-10-01T00:00:00Z\nPreferred-Languages: en\nCanonical: ${origin}/.well-known/security.txt\nPolicy: https://github.com/TogetherWeOwn/two-web-next/blob/main/SECURITY.md\n`,
-  ],
+  // RFC 9116 publication (S8): the body is rendered per request from the real
+  // producer (see stub below), so the probe's Expires-pin and no-Canonical-on-
+  // http assertions exercise a true positive. The pin itself stays hardcoded
+  // in bin/smoke.mjs like the queue thresholds in /up above; the drift guard
+  // at the bottom of this file pins SMOKE_SECURITY_TXT_EXPIRES to
+  // src/security-txt.ts, so a pin change fails here first. Body is unused (the
+  // stub renders the producer); status and type still drive the generic loops.
+  "/.well-known/security.txt": [200, "text/plain", null],
   "/discord": [302, null, "", "https://discord.gg/fixture"],
   "/profile": [302, null, "", "/auth/discord"],
   "/admin": [302, null, "", "/auth/discord"],
@@ -67,6 +89,7 @@ const fixtures = {
 
 async function stub(t, change = () => {}) {
   const requests = [];
+  const buildSecurityTxt = await securityTxtBuilder();
   const server = createServer((request, response) => {
     requests.push({
       path: request.url,
@@ -83,9 +106,15 @@ async function stub(t, change = () => {}) {
     const [status, type, body, location] = fixture;
     // Origin-aware SEO fixtures (W16b TOG-11942): the stub advertises its own
     // origin the way the Worker advertises APP_URL, so the probe's
-    // same-origin robots/sitemap assertions exercise a true positive.
+    // same-origin robots/sitemap assertions exercise a true positive. The
+    // security.txt body is rendered from the real producer for that origin.
     const origin = `http://${request.headers.host}`;
-    const resolved = typeof body === "function" ? body(origin) : body;
+    const resolved =
+      request.url === "/.well-known/security.txt"
+        ? buildSecurityTxt(origin)
+        : typeof body === "function"
+          ? body(origin)
+          : body;
     const result = {
       status,
       body: resolved,
@@ -275,34 +304,107 @@ test("rejects a stale security.txt Expires pin without leaking the body", async 
   const { url } = await stub(t, (route, result) => {
     if (route === "/.well-known/security.txt")
       result.body = result.body.replace(
-        "Expires: 2027-10-01T00:00:00Z",
+        `Expires: ${SMOKE_SECURITY_TXT_EXPIRES}`,
         "Expires: 2026-10-01T00:00:00Z",
       );
   });
   const result = await run(url);
   assert.equal(result.ok, false);
-  assert.match(
+  assert.ok(
+    result.output.includes(
+      `FAIL /.well-known/security.txt: expected security Expires: ${SMOKE_SECURITY_TXT_EXPIRES}; actual Expires line missing or stale`,
+    ),
     result.output,
-    /FAIL \/.well-known\/security\.txt: expected security Expires: 2027-10-01T00:00:00Z; actual Expires line missing or stale/,
   );
   assert.doesNotMatch(result.output, /2026-10-01T00:00:00Z/);
 });
 
-test("rejects a foreign security.txt Canonical host without leaking the body", async (t) => {
+test("rejects a Canonical line on http origins, where the producer omits it", async (t) => {
   const { url } = await stub(t, (route, result) => {
     if (route === "/.well-known/security.txt")
-      result.body = result.body.replace(
-        /Canonical: http:\/\/[^/]+/u,
-        "Canonical: https://togetherweown.com",
-      );
+      result.body += "Canonical: https://togetherweown.com/.well-known/security.txt\n";
   });
   const result = await run(url);
   assert.equal(result.ok, false);
   assert.match(
     result.output,
-    /FAIL \/.well-known\/security\.txt: expected security Canonical: .*\.well-known\/security\.txt; actual Canonical line missing or foreign/,
+    /FAIL \/.well-known\/security\.txt: expected security no Canonical on http origin; actual unexpected Canonical line/,
   );
   assert.doesNotMatch(result.output, /togetherweown\.com/);
+});
+
+test("security.txt assertions parse fields on both protocols", () => {
+  const contact = "Contact: https://github.com/TogetherWeOwn/two-web-next/security/advisories/new";
+  const policy = "Policy: https://github.com/TogetherWeOwn/two-web-next/blob/main/SECURITY.md";
+  const https = new URL("https://example.test");
+  const http = new URL("http://127.0.0.1:9");
+  const httpsBody = [
+    contact,
+    `Expires: ${SMOKE_SECURITY_TXT_EXPIRES}`,
+    "Preferred-Languages: en",
+    "Canonical: https://example.test/.well-known/security.txt",
+    policy,
+    "",
+  ].join("\n");
+  const httpBody = [
+    contact,
+    `Expires: ${SMOKE_SECURITY_TXT_EXPIRES}`,
+    "Preferred-Languages: en",
+    policy,
+    "",
+  ].join("\n");
+  // Exact producer output passes on both protocols.
+  assert.deepEqual(securityTxtAssertions(httpsBody, https), []);
+  assert.deepEqual(securityTxtAssertions(httpBody, http), []);
+  // A commented-out correct line cannot satisfy a missing or stale field.
+  assert.equal(
+    securityTxtAssertions(
+      `# Expires: ${SMOKE_SECURITY_TXT_EXPIRES}\nExpires: 2026-10-01T00:00:00Z\nCanonical: https://example.test/.well-known/security.txt\n`,
+      https,
+    ).length,
+    1,
+  );
+  assert.equal(
+    securityTxtAssertions(
+      `${httpsBody}\n# Canonical: https://example.test/.well-known/security.txt\nCanonical: https://other.test/.well-known/security.txt\n`,
+      https,
+    ).length,
+    1,
+  );
+  // RFC 9116 permits only one Expires field; a duplicate fails even when one
+  // value matches the pin.
+  assert.equal(
+    securityTxtAssertions(`${httpsBody}Expires: ${SMOKE_SECURITY_TXT_EXPIRES}\n`, https).length,
+    1,
+  );
+  // A previous reviewed pin passes when listed, and fails when it is not.
+  const rotated = httpsBody.replace(
+    `Expires: ${SMOKE_SECURITY_TXT_EXPIRES}`,
+    "Expires: 2026-10-01T00:00:00Z",
+  );
+  assert.deepEqual(securityTxtAssertions(rotated, https, ["2026-10-01T00:00:00Z"]), []);
+  assert.equal(securityTxtAssertions(rotated, https).length, 1);
+  // https requires the same-origin Canonical; http rejects any Canonical.
+  assert.equal(
+    securityTxtAssertions(
+      httpsBody.replace(
+        "Canonical: https://example.test/.well-known/security.txt",
+        "Canonical: https://other.test/.well-known/security.txt",
+      ),
+      https,
+    ).length,
+    1,
+  );
+  assert.equal(
+    securityTxtAssertions(
+      httpBody.replace(
+        "Policy:",
+        "Canonical: http://127.0.0.1:9/.well-known/security.txt\nPolicy:",
+      ),
+      http,
+    ).length,
+    1,
+  );
 });
 
 test("security.txt passes in both indexing modes", async (t) => {

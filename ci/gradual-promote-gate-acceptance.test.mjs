@@ -59,11 +59,13 @@ const fixtures = {
     "text/plain",
     (origin) => `User-agent: *\nDisallow:\nSitemap: ${origin}/sitemap_index.xml\n`,
   ],
+  // RFC 9116 publication: the loopback stub has no TLS, so like the real Worker
+  // on an http origin the body carries no Canonical line (bin/smoke.mjs
+  // asserts its absence on http and requires the same-origin value on https).
   "/.well-known/security.txt": [
     200,
     "text/plain",
-    (origin) =>
-      `Contact: https://github.com/TogetherWeOwn/two-web-next/security/advisories/new\nExpires: 2027-10-01T00:00:00Z\nPreferred-Languages: en\nCanonical: ${origin}/.well-known/security.txt\nPolicy: https://github.com/TogetherWeOwn/two-web-next/blob/main/SECURITY.md\n`,
+    "Contact: https://github.com/TogetherWeOwn/two-web-next/security/advisories/new\nExpires: 2027-10-01T00:00:00Z\nPreferred-Languages: en\nPolicy: https://github.com/TogetherWeOwn/two-web-next/blob/main/SECURITY.md\n",
   ],
   "/discord": [302, null, "", "https://discord.gg/fixture"],
   "/profile": [302, null, "", "/auth/discord"],

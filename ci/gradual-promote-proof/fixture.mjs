@@ -130,12 +130,16 @@ export function handleProofRequest(request, env = {}) {
     });
   }
 
-  // RFC 9116 publication: the Expires pin must match SMOKE_SECURITY_TXT_EXPIRES
-  // in bin/smoke.mjs (currently 2027-10-01T00:00:00Z) and Canonical must name
-  // the probed origin, mirroring the robots.txt same-origin pattern.
+  // RFC 9116 publication, mirroring buildSecurityTxt in src/security-txt.ts.
+  // The Expires pin must match SMOKE_SECURITY_TXT_EXPIRES in bin/smoke.mjs
+  // (currently 2027-10-01T00:00:00Z). Canonical is https-only (RFC 9116
+  // §2.5.2): the http loopback harness serves and asserts no Canonical line,
+  // while an https probe serves and asserts the same-origin value.
   if (path === "/.well-known/security.txt") {
+    const canonical =
+      url.protocol === "https:" ? `Canonical: ${url.origin}/.well-known/security.txt\n` : "";
     return new Response(
-      `Contact: https://github.com/TogetherWeOwn/two-web-next/security/advisories/new\nExpires: 2027-10-01T00:00:00Z\nPreferred-Languages: en\nCanonical: ${url.origin}/.well-known/security.txt\nPolicy: https://github.com/TogetherWeOwn/two-web-next/blob/main/SECURITY.md\n`,
+      `Contact: https://github.com/TogetherWeOwn/two-web-next/security/advisories/new\nExpires: 2027-10-01T00:00:00Z\nPreferred-Languages: en\n${canonical}Policy: https://github.com/TogetherWeOwn/two-web-next/blob/main/SECURITY.md\n`,
       {
         status: 200,
         headers: proofHeaders(env, { "content-type": "text/plain; charset=UTF-8" }),
