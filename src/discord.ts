@@ -13,6 +13,17 @@ export type DiscordUser = {
   avatar: string | null;
 };
 
+// Documented bounds for provider identity values carried into session and
+// roster rows. Discord usernames and display names stay well under 128
+// characters and avatar hashes under 512 in practice; anything longer is a
+// hostile or broken provider payload, not a member. Oversized values are
+// rejected (never truncated) in fetchUser before any session or roster
+// write, so both callbacks keep their existing generic failure outcome.
+// Only `.length` is inspected — values are never logged, echoed, or stored.
+export const DISCORD_USERNAME_MAX_LENGTH = 128;
+export const DISCORD_DISPLAY_NAME_MAX_LENGTH = 128;
+export const DISCORD_AVATAR_MAX_LENGTH = 512;
+
 export function authorizeUrl(clientId: string, redirectUri: string, state: string): string {
   const q = new URLSearchParams({
     response_type: "code",
@@ -234,15 +245,38 @@ export async function fetchUser(accessToken: string): Promise<DiscordUser> {
   ) {
     throw new DiscordError("fetch_user", res.status, "provider_reject");
   }
+  // Bound identity lengths before any session or roster write. Rejection
+  // keeps the callbacks' existing bounded provider_reject path: no session
+  // cookie, no roster statement, no further Discord calls, and the fixed
+  // error carries no provider bytes.
+  if (
+    user.username.length > DISCORD_USERNAME_MAX_LENGTH ||
+    (typeof user.global_name === "string" &&
+      user.global_name.length > DISCORD_DISPLAY_NAME_MAX_LENGTH) ||
+    (typeof user.avatar === "string" && user.avatar.length > DISCORD_AVATAR_MAX_LENGTH)
+  ) {
+    throw new DiscordError("fetch_user", res.status, "provider_reject");
+  }
   return user as DiscordUser;
 }
 
-export type JoinResult = "joined" | "already_member" | "failed";
+export type JoinResult =
+  | "joined"
+  | "already_member"
+  | "rate_limited"
+  | "forbidden"
+  | "provider_outage"
+  | "transport_failure"
+  | "failed";
 
 // PUT /guilds/{guild}/members/{user}: 201 = added, 204 = already a member.
-// Anything else (bot missing CREATE_INSTANT_INVITE, user banned, member cap) is "failed": the
-// sign-in still succeeds and the page offers the invite link instead. A transport
-// throw is "failed" too: the caller degrades to the invite link either way.
+// Failures are classified by status alone so callers can distinguish them
+// without reading the provider body: 429 = rate_limited, 403 = forbidden
+// (Missing Access / Missing Permissions class), 5xx = provider_outage, a
+// transport throw = transport_failure, anything else = failed. The body is
+// never read and never logged here, so no token or body byte can leak through
+// the return value; every value is a fixed string. A transport throw is
+// "transport_failure" too: the caller degrades to the invite link either way.
 export async function addGuildMember(
   guildId: string,
   userId: string,
@@ -261,9 +295,12 @@ export async function addGuildMember(
       body: JSON.stringify({ access_token: accessToken }),
     });
   } catch {
-    return "failed";
+    return "transport_failure";
   }
   if (res.status === 201) return "joined";
   if (res.status === 204) return "already_member";
+  if (res.status === 429) return "rate_limited";
+  if (res.status === 403) return "forbidden";
+  if (res.status >= 500 && res.status <= 599) return "provider_outage";
   return "failed";
 }

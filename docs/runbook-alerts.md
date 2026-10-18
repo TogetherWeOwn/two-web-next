@@ -160,9 +160,26 @@ The summary is allowlisted like the other events: `event`, `script`, optional
 `timestamp`. It is recorded with the usual `ops.alert.delivered` /
 `ops.alert.delivery_failed` receipt. Aggregation is additive: a failing
 aggregator falls back to local counts and never suppresses the per-fingerprint
-pager. Tune the gates in `tail/worker.ts` (`SPIKE_MIN_ERRORS`,
+pager. If the first storage load rejects with a transient fault, that request
+fails and the caller falls back; a later request on the same instance retries
+the load and recovers the persisted counts/cooldowns and the health window
+coherently. A failed load applies nothing and writes nothing, so the retry
+restores stored state exactly once, while a successful first load stays
+single-flight. This path is covered by hermetic tests; live recovery has not
+been observed. Tune the gates in `tail/worker.ts` (`SPIKE_MIN_ERRORS`,
 `SPIKE_MIN_RATE`, `SPIKE_MIN_CRASHES`, `SPIKE_COOLDOWN_MS`) only with staging
 evidence; on a quiet site the count floor, not the rate, is what fires.
+
+Attribution is honest about the whole counted window. `build_sha` is present
+only on a homogeneous page: every counted bucket in the window carries the
+same validated build, through the same 40-hex version-tag and release-log
+pairing as above (a bare tag and a production-suffixed tag of one SHA count
+as one build). A mixed window — two builds in one bucket or across buckets,
+or any counted bucket with unknown attribution (an untagged or invalid batch,
+or counts restored from before provenance existed) — pages with `build_sha`
+omitted rather than assigning every failure to the latest build. Thresholds,
+counts, timing and cooldowns stay script-wide either way, and per-trace
+fingerprint summaries keep their own trace's `build_sha`.
 
 ### Scheduled `/up` prober: `uptime.down`
 

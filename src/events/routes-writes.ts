@@ -148,6 +148,21 @@ export function registerWriteRoutes(app: App, readFragmentSession: SessionReader
       try {
         // PATCH: unspecified fields keep their stored value.
         const patch = await eventBody(c);
+        // `status`/`rsvpOpen` are transitioned through the publish/cancel and
+        // rsvp-pause/rsvp-reopen actions, never edited: the parser and writer
+        // below never read them, so a silent merge would answer 200 with the
+        // row visibly unchanged and mislead the moderator. Presence is refused,
+        // even when the value repeats what is stored.
+        const extraneous: Record<string, string> = {};
+        if (patch.status !== undefined)
+          extraneous.status = "Change the status with the publish/cancel actions, not by editing.";
+        // Both spellings: the read envelope serializes `rsvp_open`, so a client
+        // echoing the GET shape back must hit the same refusal (both-spellings
+        // precedent: event_key/eventKey in parseEventForm).
+        if (patch.rsvpOpen !== undefined || patch.rsvp_open !== undefined)
+          extraneous.rsvpOpen =
+            "Change RSVP availability with the rsvp-pause/rsvp-reopen actions, not by editing.";
+        if (Object.keys(extraneous).length > 0) throw new ValidationError(extraneous);
         const merged = {
           title: existing.title,
           game: existing.game,

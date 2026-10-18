@@ -146,6 +146,8 @@ node --import ./bin/ts-hook.mjs bin/revoke-sessions.mjs --discord-id=<snowflake>
 
 `DATABASE_URL` is supplied through the environment only. Remote database URLs—including production-looking ones—require `--target production`; do not add a URL to command arguments or paste it into logs. Accepted form is `postgres://USER:PASSWORD@HOST:5432/DATABASE?sslmode=verify-full` (`sslrootcert=system` is accepted as an alias for `verify-full`); no other query parameters are accepted, so a console URL with extra parameters or `sslmode=require` is refused as missing or invalid until it is reduced to that form. See [moderator admin guide](moderator-admin-guide.md#a-moderator-lost-their-role).
 
+Bounded waits: the command sets its own session `statement_timeout` (10s) and `lock_timeout` (5s) on its single connection only; global database policy is unchanged. If a target row or table is locked, the run fails bounded with exit 1 and a redacted count-only error; the transaction rolls back, so a timed-out run revokes nothing and the target sessions remain active. Verify with a dry-run to read the active-session count, then retry (re-run) the apply once the lock clears. If timeouts repeat, escalate to the DevOps & Reliability Engineer with the redacted error and the dry-run count; do not retry in a loop and do not revoke by another path.
+
 ## Still signed in elsewhere after a fresh sign-in
 
 **Symptom.** A member signs in again — a new browser, device or browser profile — but an older browser still shows them signed in, including a shared terminal they used earlier. The same incident can appear in the logs as the warning line `prior session sweep failed`.
@@ -323,19 +325,23 @@ approved account and binding isolation before any remote mutation.
    ensures `two-sync-event` and `two-internal-action` exist, then deploys. A
    failed migration step fails the job before any Cloudflare mutation. The
    queue-create step currently suppresses errors; it is not permission/provisioning evidence.
-   The final staging smoke runs `node bin/smoke.mjs https://next.togetherweown.com`
+   The final staging smoke runs `node bin/smoke.mjs https://next.togetherweown.com --fail-on-ready-wait-critical`
    ([smoke checker](../bin/smoke.mjs)), covering 18 public routes: `/up`
-   (HTTP 200, `application/json`, `status` healthy/degraded with `queue.status`
-   healthy/degraded/unknown) plus `/`, `/about`, `/faq`, `/rules`, `/privacy`,
+   (HTTP 200, `application/json`, `db:ok`, `pending_migrations:0`, `status`
+   healthy/degraded, `queue.status` healthy/degraded/unknown, `warn_at:20`,
+   `critical_at:100`) plus `/`, `/about`, `/faq`, `/rules`, `/privacy`,
    `/events`, `/events/past`, `/join`, `/events.rss`, `/events.ics`,
    `/sitemap_index.xml`, `/robots.txt`, `/.well-known/security.txt`,
    `/discord` (302), `/profile` (302),
    `/admin` (302/403) and `/__smoke_unknown_route__` (404)
-   with CSP/nosniff/content-type/noindex/redirect assertions; queue
-   `degraded` or `unknown` is allowed. This is public-route liveness only,
-   not DB/schema readiness or queue-drain acceptance. The apex production
-   smoke uses the same 18-route shape with `--allow-indexable`
-   (`node bin/smoke.mjs https://togetherweown.com --allow-indexable`).
+   with CSP/nosniff/content-type/noindex/redirect assertions. The `/up` assertions
+   are DB/schema readiness, not liveness only; with the staging strict flag a literal
+   `unknown` in `queue.status` or `ready_wait_severity`, or a `critical`
+   `ready_wait_severity`, fails the deploy even though `/up` itself still returns 200.
+   Queue `degraded` passes. The strict flag is staging-only: the apex production
+   smoke uses the same 18-route shape with `--allow-indexable` and without the strict flag
+   (`node bin/smoke.mjs https://togetherweown.com --allow-indexable`), so `critical`
+   queue readiness only warns and `unknown` passes there.
 4. An explicitly authorized manual deployment of the reviewed release uses:
 
    ```bash
@@ -538,6 +544,17 @@ an unreadable target fails closed). A rollback does **not** undo
 Postgres migrations, data writes, Discord side effects, queue messages or
 external-resource changes; keep the release workflow from redeploying the bad
 head. Record the rollback deployment and previous/current version IDs.
+
+Post-rollback smoke proves ordinary traffic identity: it passes the recorded
+`ROLLBACK_VERSION_ID` to `bin/smoke.mjs --expected-version-id` inside the
+existing bounded retry loop, and `/up` `revision.version_id` must equal that
+UUID on unpinned ordinary traffic even when every health assertion is green.
+This sends no `Cloudflare-Workers-Version-Overrides` version-override header,
+so it proves normal routing, not pinned canary routing. Limit: Worker
+versions predating the `/up` revision marker carry no `revision` identity and
+cannot pass this check; covering those needs the target version's own checker.
+A failed verification is not reported as an undone rollback and never triggers
+a roll-forward; it leaves the rolled-back version live for operator diagnosis.
 
 A failed post-promotion public-route verification in `deploy-production`
 blocks the release tag but leaves the promoted version live at 100%: the
@@ -1292,9 +1309,12 @@ Queue-only degradation or `unknown` **still returns 200 when DB/schema is ready*
 | Read rejects or reaches a server/response limit | `healthy` | `unknown`, all seven measurements `null`, `ready_wait_severity: unknown`, `detail: null` |
 | No usable queue client/configuration | `healthy` | `unknown`, measurements `null`, `detail: "queue ledger is not configured."` |
 
-The deploy smoke requires **HTTP 200 + `db:ok` + `pending_migrations:0`** and the
-existing queue envelope. HTTP 503 (including pending migrations) fails the deploy;
-queue-only `unknown` does not. The workflow's `Apply test migrations` step affects
+The staging deploy smoke requires **HTTP 200 + `db:ok` + `pending_migrations:0`**
+and the existing queue envelope, invoked as `node bin/smoke.mjs https://next.togetherweown.com --fail-on-ready-wait-critical`.
+HTTP 503 (including pending migrations) fails the deploy. Queue-only `unknown` still
+returns 200 from `/up` itself, but the staging smoke fails closed on a literal `unknown`
+in `queue.status` or `ready_wait_severity` and on a `critical` `ready_wait_severity`;
+flag-less production/rollback smoke only warns on `critical` and passes on `unknown`. The workflow's `Apply test migrations` step affects
 only disposable CI Postgres, **not the staging schema**. A failed readiness smoke
 requires a recorded, authorized staging schema/rollback action, not weakening the
 probe or running migrations through `/up`.

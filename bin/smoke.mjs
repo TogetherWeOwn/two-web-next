@@ -105,6 +105,21 @@ export function versionIdFromOverride(value) {
   return value.slice(value.indexOf('="') + 2, -1);
 }
 
+// Lowercase Worker Version UUID expected on ordinary (unpinned) routing.
+// Validated before any probe request is sent; malformed values are a usage
+// error, never a serving failure.
+export const EXPECTED_VERSION_ID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
+export function assertExpectedVersionId(value) {
+  if (typeof value !== "string" || !EXPECTED_VERSION_ID_PATTERN.test(value)) {
+    throw new Error(
+      'expected-version-id must be a lowercase UUID like "22345678-1234-1234-1234-123456789abc"',
+    );
+  }
+  return value;
+}
+
 // RFC 9116 field parsing for the security.txt probe: "#" lines are comments,
 // field names are case-insensitive, and matching is on whole field values, so
 // a commented-out or foreign line cannot satisfy an assertion by substring.
@@ -167,6 +182,7 @@ export async function smoke(
     log = console.log,
     allowIndexable = false,
     versionOverride,
+    expectedVersionId,
     failedBaseline,
     allowMissingBaseline = false,
     failOnReadyWaitCritical = false,
@@ -186,8 +202,9 @@ export async function smoke(
     );
   }
   if (versionOverride !== undefined) assertVersionOverride(versionOverride);
+  if (expectedVersionId !== undefined) assertExpectedVersionId(expectedVersionId);
   const baseline = failedBaseline === undefined ? undefined : assertFailedBaseline(failedBaseline);
-  const expectedVersionId =
+  const overrideVersionId =
     versionOverride === undefined ? undefined : versionIdFromOverride(versionOverride);
   const overrideHeaders =
     versionOverride === undefined
@@ -345,6 +362,30 @@ export async function smoke(
                 ? data.revision.version_id
                 : undefined;
             check(
+              served === overrideVersionId,
+              `revision.version_id ${overrideVersionId}`,
+              served === undefined
+                ? "missing revision.version_id"
+                : `revision.version_id ${served}`,
+            );
+          }
+          // Ordinary-traffic identity (rollback): when the caller records an
+          // expected version, /up.revision.version_id must equal it even
+          // though no version-override header pins the probe. During
+          // propagation a healthy unwanted version can satisfy every
+          // readiness assertion above without proving the recorded target
+          // serves normal routing, so a missing, malformed or different
+          // identity fails. Commit equality is not identity: only the exact
+          // version UUID passes. Sends no routing header; exact identity
+          // still requires every existing health/security check.
+          if (expectedVersionId !== undefined) {
+            const served =
+              data?.revision !== null &&
+              typeof data?.revision === "object" &&
+              !Array.isArray(data?.revision)
+                ? data.revision.version_id
+                : undefined;
+            check(
               served === expectedVersionId,
               `revision.version_id ${expectedVersionId}`,
               served === undefined
@@ -446,6 +487,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   const [baseUrl, ...flags] = args;
   let allowIndexable = false;
   let versionOverride;
+  let expectedVersionId;
   let failedBaseline;
   let allowMissingBaseline = false;
   let failOnReadyWaitCritical = false;
@@ -465,6 +507,14 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
         versionOverride = value;
       }
       i += 1;
+    } else if (flags[i] === "--expected-version-id") {
+      const value = flags[i + 1];
+      if (value === undefined) {
+        usage = true;
+      } else {
+        expectedVersionId = value;
+      }
+      i += 1;
     } else if (flags[i] === "--failed-baseline") {
       const value = flags[i + 1];
       if (value === undefined) {
@@ -479,12 +529,13 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   }
   if (typeof baseUrl !== "string" || usage) {
     console.error(
-      'Usage: node bin/smoke.mjs <base-url> [--allow-indexable] [--fail-on-ready-wait-critical] [--version-override worker-name="<version-uuid>"] [--failed-baseline <n>] [--allow-missing-baseline]',
+      'Usage: node bin/smoke.mjs <base-url> [--allow-indexable] [--fail-on-ready-wait-critical] [--version-override worker-name="<version-uuid>"] [--expected-version-id <lowercase-uuid>] [--failed-baseline <n>] [--allow-missing-baseline]',
     );
     process.exitCode = 2;
   } else {
     try {
       if (versionOverride !== undefined) assertVersionOverride(versionOverride);
+      if (expectedVersionId !== undefined) assertExpectedVersionId(expectedVersionId);
       // Promotion workflows export the pre-deploy/promote retained-rows count
       // as SMOKE_FAILED_BASELINE so the gate fails only on growth; an
       // explicit --failed-baseline flag wins over the environment. An empty
@@ -505,6 +556,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
       process.exitCode = (await smoke(baseUrl, {
         allowIndexable,
         versionOverride,
+        expectedVersionId,
         failedBaseline: baseline,
         allowMissingBaseline: allowMissing,
         failOnReadyWaitCritical,
