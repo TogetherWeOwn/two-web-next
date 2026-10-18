@@ -28,6 +28,16 @@ export const EVENT_SEARCH_LOG_RETENTION_DAYS = 90; // config/event_search_log.ph
 export const BOARD_VIEW_LOG_RETENTION_DAYS = 90;
 export const RECONCILE_CRON = "*/10 * * * *"; // routes/console.php:35 everyTenMinutes()
 export const PRUNE_CRON = "0 0 * * *"; // routes/console.php:19 daily() (Laravel daily = 00:00)
+// Max stale events one reconcile pass redispatches. The stale selection is
+// paged deterministically (`ORDER BY event_key` + `LIMIT`); each pass asks
+// the store for exactly one page and dispatches at most that many keys in
+// the returned order. Leftovers stay stale, so the next pass (every ten
+// minutes per RECONCILE_CRON) picks them up once earlier keys have synced.
+// The bound keeps a large dirty backlog from exceeding Worker CPU/time
+// limits mid-loop and repeating identically each pass. The pass result and
+// its single completion log line carry the deferred remainder next to the
+// other counts; cadence, dispatch semantics and retention are unchanged.
+export const RECONCILE_REDISPATCH_PAGE_SIZE = 200;
 // Max rows one daily pass deletes per pruned table, including the scheduled
 // web_sessions expiry sweep. Postgres DELETE takes no LIMIT, so each
 // statement deletes the oldest N ids (age tables) or N expiry-eligible

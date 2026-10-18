@@ -146,7 +146,8 @@ describe.skipIf(!process.env.DATABASE_URL)(
       // published, so the finished-but-dirty row is stale-eligible here. The
       // already-mirrored rows (running-mirrored, clean cancelled, draft, past,
       // finished-mirrored) are skipped by staleEventKeys itself, not just by dispatch.
-      const preStale = (await pgEventStore(sql).staleEventKeys()).sort();
+      // Unpaged selection keeps the legacy array shape: every stale key, ordered.
+      const preStale = ((await pgEventStore(sql).staleEventKeys()) as string[]).sort();
       expect(preStale).toEqual(
         [
           finishedStale.eventKey,
@@ -165,7 +166,7 @@ describe.skipIf(!process.env.DATABASE_URL)(
         writeTransaction: (work) => sql.begin(async (tx) => work(pgEventStore(tx as never))),
       });
 
-      expect(r).toEqual({ closed: 2, materialized: 0, resynced: 3 });
+      expect(r).toEqual({ closed: 2, materialized: 0, resynced: 3, deferred: 0 });
       expect(await statuses()).toMatchObject({
         [finishedStale.eventKey]: "past",
         [finishedMirrored.eventKey]: "past",
@@ -191,7 +192,7 @@ describe.skipIf(!process.env.DATABASE_URL)(
         lock: memLock(),
         now: () => NOW,
       });
-      expect(again).toEqual({ closed: 0, materialized: 0, resynced: 3 });
+      expect(again).toEqual({ closed: 0, materialized: 0, resynced: 3, deferred: 0 });
       expect(sent.map((b) => b.eventKey).sort()).toEqual(stale);
     });
   },
