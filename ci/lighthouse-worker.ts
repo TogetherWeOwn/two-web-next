@@ -173,23 +173,21 @@ export function fixtureEnvForRequest(nowMs: number): Env & Record<string, unknow
         ) {
           return { rows: fixture.endsAt >= new Date(params[1]) ? [encoded] : [] };
         }
+        // The rank anchor compares at the stored timestamp precision: the
+        // count carries the anchor id twice (once per subquery) instead of a
+        // bound JS instant. Single-fixture emulation: the count only runs
+        // when the anchor is the fixture itself, so no visible row sorts
+        // before it.
         if (
           sql ===
-            `select count(*) from "events" where ("events"."status" != 'draft' and (isfinite("events"."starts_at") and isfinite("events"."ends_at")) and "events"."ends_at" >= $1 and ("events"."starts_at" < $2 or ("events"."starts_at" = $3 and "events"."id" < $4)))` &&
+            `select count(*) from "events" where ("events"."status" != 'draft' and (isfinite("events"."starts_at") and isfinite("events"."ends_at")) and "events"."ends_at" >= $1 and ("events"."starts_at" < (select "starts_at" from "events" where "events"."id" = $2) or ("events"."starts_at" = (select "starts_at" from "events" where "events"."id" = $3) and "events"."id" < $4)))` &&
           params.length === 4 &&
           isInstant(params[0]) &&
-          isInstant(params[1]) &&
-          isInstant(params[2]) &&
-          typeof params[3] === "number"
+          params[1] === fixture.id &&
+          params[2] === fixture.id &&
+          params[3] === fixture.id
         ) {
-          const anchor = { startsAt: new Date(params[1]).getTime(), id: params[3] };
-          const before =
-            fixture.endsAt >= new Date(params[0]) &&
-            (fixture.startsAt.getTime() < anchor.startsAt ||
-              (fixture.startsAt.getTime() === anchor.startsAt && fixture.id < anchor.id))
-              ? "1"
-              : "0";
-          return { rows: [[before]] };
+          return { rows: [["0"]] };
         }
         if (
           inTransaction &&

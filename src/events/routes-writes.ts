@@ -109,9 +109,9 @@ export function registerWriteRoutes(app: App, readFragmentSession: SessionReader
 
   app.post(
     "/events",
+    requestBodyLimit("json"),
     throttle("event-write", WRITE_THROTTLE_PER_MINUTE),
     moderatorGate,
-    requestBodyLimit("json"),
     async (c) => {
       const who = c.get("eventModerator");
       const db = await dbFor(c);
@@ -134,9 +134,9 @@ export function registerWriteRoutes(app: App, readFragmentSession: SessionReader
 
   app.patch(
     "/events/:key",
+    requestBodyLimit("json"),
     throttle("event-write", WRITE_THROTTLE_PER_MINUTE),
     moderatorGate,
-    requestBodyLimit("json"),
     async (c) => {
       const who = c.get("eventModerator");
       const db = await dbFor(c);
@@ -185,9 +185,9 @@ export function registerWriteRoutes(app: App, readFragmentSession: SessionReader
   for (const action of ["publish", "cancel", "rsvp-pause", "rsvp-reopen"] as const) {
     app.post(
       `/events/:key/${action}`,
+      requestBodyLimit("action"),
       throttle("event-write", WRITE_THROTTLE_PER_MINUTE),
       moderatorGate,
-      requestBodyLimit("action"),
       async (c) => {
         const who = c.get("eventModerator");
         const db = await dbFor(c);

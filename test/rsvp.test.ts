@@ -251,17 +251,25 @@ describe.skipIf(!process.env.DATABASE_URL)("rsvp routes (agent-testdb)", () => {
     expect(sent.map((m) => m.kind)).toEqual(["sync-event", "sync-event", "sync-event"]);
   });
 
-  it("withdraw is quiet without a row or an event, and never touches another member's row", async () => {
+  it("withdraw without a row answers 404 not_found, and never touches another member's row", async () => {
     const ev = await seed();
-    expect((await call("DELETE", ev.key, "u1")).status).toBe(204);
-    expect((await call("DELETE", "01ARZ3NDEKTSV4RRFFQ69G5FAV", "u1")).status).toBe(204);
-    expect((await call("DELETE", "not-a-key", "u1")).status).toBe(204);
+    const noRow = await call("DELETE", ev.key, "u1");
+    expect(noRow.status).toBe(404);
+    expect(await noRow.json()).toEqual({ error: "not_found" });
+    const unknown = await call("DELETE", "01ARZ3NDEKTSV4RRFFQ69G5FAV", "u1");
+    expect(unknown.status).toBe(404);
+    expect(await unknown.json()).toEqual({ error: "not_found" });
+    const forged = await call("DELETE", "not-a-key", "u1");
+    expect(forged.status).toBe(404);
+    expect(await forged.json()).toEqual({ error: "not_found" });
     await put(ev.key, "victim", "going");
-    expect((await call("DELETE", ev.key, "attacker")).status).toBe(204);
+    const other = await call("DELETE", ev.key, "attacker");
+    expect(other.status).toBe(404);
+    expect(await other.json()).toEqual({ error: "not_found" });
     expect((await rows(ev.id)).map((r) => r.userId)).toEqual(["victim"]);
   });
 
-  it("draft, cancelled, ended and paused events refuse PUT with 403 and write nothing; withdraw from cancelled stays 204", async () => {
+  it("draft, cancelled, ended and paused events refuse PUT with 403 and write nothing; withdraw from cancelled answers 404", async () => {
     const cases = {
       draft: await seed({ status: "draft" }),
       cancelled: await seed({ status: "cancelled" }),
@@ -282,7 +290,9 @@ describe.skipIf(!process.env.DATABASE_URL)("rsvp routes (agent-testdb)", () => {
       expect(await rows(ev.id), name).toHaveLength(0);
     }
     expect((await put("01ARZ3NDEKTSV4RRFFQ69G5FAV", "u1")).status).toBe(404);
-    expect((await call("DELETE", cases.cancelled.key, "u1")).status).toBe(204);
+    const cancelledWithdraw = await call("DELETE", cases.cancelled.key, "u1");
+    expect(cancelledWithdraw.status).toBe(404);
+    expect(await cancelledWithdraw.json()).toEqual({ error: "not_found" });
     // Refused writes did not spend the budget.
     const [{ n }] =
       (await client`select count(*)::int as n from web_throttle_hits where bucket = 'rsvp-write:u1'`) as unknown as [

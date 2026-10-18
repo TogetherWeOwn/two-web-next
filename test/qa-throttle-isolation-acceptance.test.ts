@@ -45,6 +45,9 @@ function fakeThrottleStore() {
     return [];
   }) as unknown as Sql & { begin: (run: (tx: Sql) => Promise<unknown>) => Promise<unknown> };
   sql.begin = (run) => run(sql);
+  // The throttle sets `SET LOCAL lock_timeout` through `unsafe` before the
+  // advisory lock (as in test/join.test.ts); the double passes it through.
+  (sql as unknown as { unsafe: (q: string) => Promise<unknown> }).unsafe = async () => [];
   return { sql, hits };
 }
 

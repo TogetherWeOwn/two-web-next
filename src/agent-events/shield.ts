@@ -70,9 +70,32 @@ export async function shield(
   // Over-budget, not contention: one bounded audit row outside the bucket lock
   // so storm refusal volume never prolongs admission. Same pre-auth shape as
   // contention (grant_id null) with the inner refusal's denied/rate_limited
-  // outcome; the refused hit still writes no hit row.
+  // outcome; the refused hit still writes no hit row. The audit runs in its
+  // own transaction with lock and statement timeouts derived from the
+  // admission's lock wait, so a stalled audit answers retryable 503 instead
+  // of stalling the refusal. No advisory lock, hit write, or grant lookup.
   const operation = bucketClass.kind === "credential" ? "shield:credential" : "shield:anonymous";
   const dig = bucketClass.kind === "credential" ? bucketClass.hash : null;
-  await audit(sql, null, operation, null, null, dig, requestId, "denied", "rate_limited");
+  const auditTimeoutMs = Math.max(1, Math.floor(cfg.lockWaitMs));
+  try {
+    await sql.begin(async (tx) => {
+      await tx.unsafe(`SET LOCAL lock_timeout = '${auditTimeoutMs}ms'`);
+      await tx.unsafe(`SET LOCAL statement_timeout = '${auditTimeoutMs}ms'`);
+      await audit(tx, null, operation, null, null, dig, requestId, "denied", "rate_limited");
+    });
+  } catch (err) {
+    const code = (err as { code?: string }).code;
+    if (code === "55P03" || code === "57014") {
+      return {
+        status: 503,
+        body: {
+          reason: "operation_busy",
+          message: "The ingress is busy admitting requests. Retry with the same idempotency key.",
+          request_id: requestId,
+        },
+      };
+    }
+    throw err;
+  }
   return throttleEnvelope(retryAfter ?? 1, requestId);
 }

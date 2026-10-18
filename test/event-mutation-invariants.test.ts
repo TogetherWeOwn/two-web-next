@@ -190,8 +190,11 @@ describe.skipIf(!process.env.DATABASE_URL)("event mutation invariants (agent-tes
       .returning();
     return row!;
   }
-  async function occupied(capacity: number | null = 8) {
-    const row = await seed({ status: "published", capacity });
+  async function occupied(
+    capacity: number | null = 8,
+    over: Partial<typeof events.$inferInsert> = {},
+  ) {
+    const row = await seed({ status: "published", capacity, ...over });
     const statuses = [
       "going",
       "going",
@@ -432,7 +435,9 @@ describe.skipIf(!process.env.DATABASE_URL)("event mutation invariants (agent-tes
   });
 
   it("recounts the floor for a form opened before a member joined", async () => {
-    const row = await occupied();
+    // Expiry is judged on the database clock, so the event must end in real
+    // time: NOW-relative dates are already past on agent-testdb/CI.
+    const row = await occupied(8, { endsAt: new Date("2099-01-01T13:00:00Z") });
     const staleInput = input(row, 5);
     expect(
       (await json("PUT", `/events/${row.eventKey}/rsvp`, { status: "going" }, "late-member"))

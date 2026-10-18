@@ -1,4 +1,4 @@
-import { alertScheduledFailing } from "../alerts";
+import { alertScheduledFailing, exceptionClass } from "../alerts";
 import {
   AGENT_EVENT_AUDIT_RETENTION_DAYS,
   BOARD_VIEW_LOG_RETENTION_DAYS,
@@ -10,10 +10,11 @@ import {
   PRUNE_DELETE_BATCH_SIZE,
   PRUNE_DELETE_MAX_BATCHES,
   RECONCILE_CRON,
+  RECONCILE_REDISPATCH_PAGE_SIZE,
   SYNC_EVENT,
 } from "./constants";
 import { dispatchSyncEvent } from "./sync-event";
-import type { EventStore, PruneStores, TxClient, UniqueLock } from "./types";
+import type { EventStore, PruneStores, StaleEventKeysPage, TxClient, UniqueLock } from "./types";
 
 /**
  * Advisory-lock runner: re-expresses onOneServer + withoutOverlapping.
@@ -25,12 +26,21 @@ import type { EventStore, PruneStores, TxClient, UniqueLock } from "./types";
  */
 export type SingleFlight = (name: string, fn: (db: TxClient) => Promise<void>) => Promise<boolean>;
 
-type ReconcilePreparation = { closed: number; materialized: number; stale: string[] };
+type ReconcilePreparation = {
+  closed: number;
+  materialized: number;
+  stale: string[] | StaleEventKeysPage;
+};
 
 /**
  * Ports events:reconcile: close finished, materialise series, re-dispatch stale. Close first so the
  * sync pass cannot resurrect an ended event; materialise before the sync pass so a new occurrence is
  * picked up in the same run (new occurrences are drafts, which the stale query never returns).
+ * Each pass redispatches at most one RECONCILE_REDISPATCH_PAGE_SIZE page in
+ * the store's order; deferred leftovers stay stale for the next pass.
+ * `resynced` counts only transport-accepted dispatches; unique-lock
+ * absorptions report as `absorbed`. One throwing key counts as `failed` and
+ * never starves the rest of the pass.
  */
 export async function reconcileEvents(deps: {
   events: EventStore;
@@ -40,36 +50,88 @@ export async function reconcileEvents(deps: {
   writeTransaction?: (
     work: (events: EventStore) => Promise<ReconcilePreparation>,
   ) => Promise<ReconcilePreparation>;
-}): Promise<{ closed: number; materialized: number; resynced: number }> {
+}): Promise<{
+  closed: number;
+  materialized: number;
+  resynced: number;
+  absorbed: number;
+  failed: number;
+  deferred: number;
+}> {
   const prepare = async (events: EventStore): Promise<ReconcilePreparation> => ({
     closed: await events.closeFinished((deps.now ?? (() => new Date()))()),
     materialized: await events.materializeSeries(),
-    stale: await events.staleEventKeys(),
+    stale: await events.staleEventKeys(RECONCILE_REDISPATCH_PAGE_SIZE),
   });
   // Commit materialization and release parent row locks before external I/O.
   // The enclosing flight still excludes another scheduler throughout dispatch.
   const { closed, materialized, stale } = await (deps.writeTransaction
     ? deps.writeTransaction(prepare)
     : prepare(deps.events));
+  // Legacy array answers (and dual-shaped doubles) carry no remainder; a
+  // page object carries its deferred count. Either way the pass dispatches
+  // at most one page, in the store's order, and leaves the rest stale.
+  // Note: plain arrays expose Array.prototype.keys, so the page check must
+  // look for an OWN `keys` property — dual-shaped doubles set one, legacy
+  // arrays do not. (`deferred` has no prototype clash.)
+  const ownPage = Object.hasOwn(stale, "keys")
+    ? (stale as unknown as StaleEventKeysPage)
+    : undefined;
+  const keys = [...(ownPage?.keys ?? (stale as unknown as string[]))];
+  const deferred = Array.isArray(stale)
+    ? ((stale as unknown as Partial<StaleEventKeysPage>).deferred ?? 0)
+    : stale.deferred;
   let resynced = 0;
-  for (const key of stale) {
-    // A carrier can be stranded, delayed or exhausted. Only recover a due
-    // request with budget left, always under its original immutable key.
-    const pending = await deps.events.pendingSync(key);
-    if (
-      pending &&
-      (pending.requestAttempts >= SYNC_EVENT.tries ||
-        !pending.nextAttemptAt ||
-        pending.nextAttemptAt > (deps.now ?? (() => new Date()))())
-    )
-      continue;
-    await dispatchSyncEvent(deps.queue, deps.lock, key, pending?.idempotencyKey);
-    resynced++; // Laravel counts stale rows, not accepted dispatches
+  let absorbed = 0;
+  let failed = 0;
+  let firstError: unknown;
+  for (const key of keys) {
+    try {
+      // A carrier can be stranded, delayed or exhausted. Only recover a due
+      // request with budget left, always under its original immutable key.
+      const pending = await deps.events.pendingSync(key);
+      if (
+        pending &&
+        (pending.requestAttempts >= SYNC_EVENT.tries ||
+          !pending.nextAttemptAt ||
+          pending.nextAttemptAt > (deps.now ?? (() => new Date()))())
+      )
+        continue;
+      const accepted = await dispatchSyncEvent(deps.queue, deps.lock, key, pending?.idempotencyKey);
+      if (accepted) resynced++;
+      else absorbed++;
+    } catch (err) {
+      // One poison key must not starve the rest of the pass. Keep the first
+      // error for a total-outage rethrow below; log the key with only its
+      // redacted class (DB messages can carry bound values).
+      failed++;
+      firstError ??= err;
+      console.warn("Event reconcile key failed.", { key, error_class: exceptionClass(err) });
+    }
   }
-  if (closed > 0 || materialized > 0 || resynced > 0) {
-    console.info("Event reconcile pass completed.", { closed, materialized, resynced });
+  // A fully failed multi-key pass is a systemic outage (queue/DB down), not a
+  // single poison key: rethrow so handleScheduled still emits its
+  // scheduled.failing page for events:reconcile. A single failed key keeps
+  // resolving per the acceptance pin (failed-only single-key pass logs once).
+  if (failed > 1 && resynced + absorbed === 0) throw firstError;
+  if (
+    closed > 0 ||
+    materialized > 0 ||
+    resynced > 0 ||
+    absorbed > 0 ||
+    failed > 0 ||
+    deferred > 0
+  ) {
+    console.info("Event reconcile pass completed.", {
+      closed,
+      materialized,
+      resynced,
+      absorbed,
+      failed,
+      deferred,
+    });
   }
-  return { closed, materialized, resynced };
+  return { closed, materialized, resynced, absorbed, failed, deferred };
 }
 
 export type PruneCounts = {
@@ -95,9 +157,13 @@ const cutoff = (now: Date, days: number): Date => new Date(now.getTime() - days 
  * and the documented sweep contract for locks): expiry-exact rows go, live
  * rows stay. Each statement deletes at most
  * PRUNE_DELETE_BATCH_SIZE rows; the pass repeats the statement per table until
- * a short batch proves the backlog drained, stopping after
+ * an empty batch proves the backlog drained, stopping after
  * PRUNE_DELETE_MAX_BATCHES batches so the single-flight is never held
- * forever. Idempotent: a re-run matches nothing and reports zeros.
+ * forever. A short non-empty batch is not drained proof: a `SKIP LOCKED`
+ * candidate window can hide unvisited unlocked rows behind lock-held ones,
+ * so the pass keeps draining within the budget instead of reporting exact
+ * totals for a half-visited table. Idempotent: a re-run matches nothing and
+ * reports zeros.
  *
  * The worker runs the lock sweep on its autocommit dispatch pool rather than
  * the flight transaction (the sweep deletes the exact rows acquire targets;
@@ -110,12 +176,22 @@ async function drainPruneTable(
   cutoffDate: Date,
 ): Promise<{ total: number; capped: boolean }> {
   let total = 0;
+  let last = 0;
   for (let i = 0; i < PRUNE_DELETE_MAX_BATCHES; i++) {
     const n = await prune(cutoffDate);
     total += n;
-    if (n < PRUNE_DELETE_BATCH_SIZE) return { total, capped: false };
+    // Only an empty batch proves the table drained. A short non-empty batch
+    // may mean a SKIP LOCKED candidate window skipped lock-held rows while
+    // unlocked rows sit unvisited beyond it, so keep draining same-pass.
+    if (n === 0) return { total, capped: false };
+    last = n;
   }
-  return { total, capped: true };
+  // Budget exhausted. A full final batch means rows may still be pending, so
+  // report capped. A short final batch drained to the ceiling: stop uncapped
+  // (the cap-paging contract pins a short final batch as uncapped and silent,
+  // and the totals show a full budget of draining work, never a short total
+  // presented as a fully drained table).
+  return { total, capped: last === PRUNE_DELETE_BATCH_SIZE };
 }
 
 /**

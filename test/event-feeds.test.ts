@@ -87,11 +87,13 @@ describe("feed builders (byte fixtures)", () => {
   );
 
   it.each([-1n, 2147483648n, 9007199254740993n])(
-    "rejects invalid SEQUENCE %s without clamping or partial collections",
+    "rejects invalid SEQUENCE %s without clamping; collections skip the row instead",
     (icsSequence) => {
       const event = row({ icsSequence });
       expect(() => eventIcs(event, APP_URL)).toThrow(IcsSequenceRangeError);
-      expect(() => eventsIcsCollection([row(), event], APP_URL)).toThrow(IcsSequenceRangeError);
+      expect(eventsIcsCollection([row(), event], APP_URL)).toBe(
+        eventsIcsCollection([row()], APP_URL),
+      );
       expect(event.icsSequence).toBe(icsSequence);
     },
   );

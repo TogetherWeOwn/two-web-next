@@ -72,7 +72,12 @@ describe.skipIf(!process.env.DATABASE_URL)("public read API: events", () => {
         if (statement.includes("DELETE FROM web_throttle_hits")) return [];
         throw new Error("Unexpected throttle statement");
       },
-      { begin: (run: (tx: Sql) => Promise<unknown>) => run(sql as unknown as Sql) },
+      {
+        begin: (run: (tx: Sql) => Promise<unknown>) => run(sql as unknown as Sql),
+        // The throttle sets `SET LOCAL lock_timeout` through `unsafe` before
+        // the advisory lock; the double passes it through.
+        unsafe: async () => [],
+      },
     );
     return sql;
   };

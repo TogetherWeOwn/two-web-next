@@ -1,7 +1,15 @@
 // Minimal Discord OAuth2 + guild auto-join. No SDK: three HTTP calls, all typed here.
 import { discordFetch } from "./discord-http";
-import { MAX_RETRY_DELAY_SECONDS } from "./jobs/retry-delay";
+import { parseRetryAfterSeconds } from "./jobs/retry-delay";
 const API = "https://discord.com/api/v10";
+
+// Charset-bound Discord IDs: ASCII digits only, nonempty, tested as-is with
+// no trimming, coercion or decoding. Length is deliberately unpinned here;
+// digits are the contract. Terminal line breaks, spaces, fullwidth digits
+// and every other non-digit shape fail.
+export function isDiscordId(value: unknown): value is string {
+  return typeof value === "string" && /^\d+$/.test(value);
+}
 
 // identify: who they are. guilds.join: lets our bot add them to the TWO server in one click.
 export const SCOPES = ["identify", "guilds.join"] as const;
@@ -14,15 +22,23 @@ export type DiscordUser = {
 };
 
 // Documented bounds for provider identity values carried into session and
-// roster rows. Discord usernames and display names stay well under 128
-// characters and avatar hashes under 512 in practice; anything longer is a
-// hostile or broken provider payload, not a member. Oversized values are
-// rejected (never truncated) in fetchUser before any session or roster
+// roster rows. Discord user ids are decimal snowflakes (positive ASCII digits,
+// 1-20 characters, no leading zero); usernames and display names stay well
+// under 128 characters and avatar hashes under 512 in practice; anything
+// longer or non-decimal is a hostile or broken provider payload, not a
+// member. Oversized or non-snowflake values are rejected (never truncated,
+// coerced, trimmed or rewritten) in fetchUser before any session or roster
 // write, so both callbacks keep their existing generic failure outcome.
-// Only `.length` is inspected — values are never logged, echoed, or stored.
+// Only the value shape is inspected — values are never logged, echoed, or stored.
 export const DISCORD_USERNAME_MAX_LENGTH = 128;
 export const DISCORD_DISPLAY_NAME_MAX_LENGTH = 128;
 export const DISCORD_AVATAR_MAX_LENGTH = 512;
+
+// Positive ASCII-decimal snowflake admission: 1-20 digits, first digit 1-9.
+// No multiline flag; the raw provider value is tested as-is (no coerce,
+// trim, truncate or substitute), so hostile ids fail into the existing
+// provider_reject path before any guild/member/role egress or write.
+const DISCORD_USER_ID_RE = /^[1-9][0-9]{0,19}$/;
 
 export function authorizeUrl(clientId: string, redirectUri: string, state: string): string {
   const q = new URLSearchParams({
@@ -123,25 +139,13 @@ async function errorBodyOf(res: Response): Promise<string> {
 
 /**
  * Bounded `retry-after` seconds from a 429 response, for callers that surface
- * provider backoff as a `Retry-After` header. Same numeric-only parse style as
- * `src/events/discord-transients-live.ts` (trimmed digits with an optional
- * fraction, finite and representable — no HTTP dates, signs, exponents, units
- * or markup), then the `src/jobs/retry-delay.ts` admission posture: fractions
- * round UP so the client never retries sooner than the provider asked, values
- * below 1s are unusable, and representable-but-absurd values cap at the
- * largest admitted delay instead of echoing raw. Anything unusable yields
- * undefined so the caller falls back to today's headerless response.
+ * provider backoff as a `Retry-After` header. Thin `Response` adapter over
+ * the one shared parser in `src/jobs/retry-delay.ts` — the same mapping the
+ * events reader and the bot transport use. Anything unusable yields undefined
+ * so the caller falls back to today's headerless response.
  */
 function providerRetryAfterSeconds(res: Response): number | undefined {
-  // `Number(null)` and `Number("")` are 0: an absent header must not read as backoff.
-  const raw = res.headers.get("retry-after")?.trim();
-  if (!raw || !/^\d+(?:\.\d+)?$/.test(raw)) return undefined;
-  const n = Number(raw);
-  // Only representable numeric delays are valid; no HTTP dates or infinity.
-  if (!Number.isFinite(n) || n * 1000 > 8_000_000_000_000_000) return undefined;
-  const seconds = Math.ceil(n);
-  if (seconds < 1) return undefined;
-  return Math.min(seconds, MAX_RETRY_DELAY_SECONDS);
+  return parseRetryAfterSeconds(res.headers.get("retry-after"));
 }
 
 function classified(step: string, res: Response, body: string): DiscordError {
@@ -236,8 +240,7 @@ export async function fetchUser(accessToken: string): Promise<DiscordUser> {
     user === null ||
     typeof user !== "object" ||
     Array.isArray(user) ||
-    typeof user.id !== "string" ||
-    !user.id ||
+    !isDiscordId(user.id) ||
     typeof user.username !== "string" ||
     !user.username ||
     (user.global_name !== null && typeof user.global_name !== "string") ||
@@ -255,6 +258,13 @@ export async function fetchUser(accessToken: string): Promise<DiscordUser> {
       user.global_name.length > DISCORD_DISPLAY_NAME_MAX_LENGTH) ||
     (typeof user.avatar === "string" && user.avatar.length > DISCORD_AVATAR_MAX_LENGTH)
   ) {
+    throw new DiscordError("fetch_user", res.status, "provider_reject");
+  }
+  // Bound the provider user id before any session or roster write. Rejection
+  // keeps the callbacks' existing bounded provider_reject path: no session
+  // cookie, no roster statement, no further Discord calls, and the fixed
+  // error carries no provider bytes.
+  if (!DISCORD_USER_ID_RE.test(user.id)) {
     throw new DiscordError("fetch_user", res.status, "provider_reject");
   }
   return user as DiscordUser;
@@ -296,17 +306,24 @@ export async function addGuildMemberDetailed(
   accessToken: string,
   botToken: string,
 ): Promise<GuildMemberAdd> {
+  // Charset admission first: a malformed guild or user id fails before any
+  // header/body construction or fetch, so zero Discord requests means no
+  // Authorization is ever emitted for it.
+  if (!isDiscordId(guildId) || !isDiscordId(userId)) return { result: "failed" };
   // Fail closed on an unconfigured bot token (TOG-12687): a blank token must
   // emit zero bot-credentialed calls, so the callers degrade to the invite
   // fallback instead of sending `Bot ` with nothing after it.
   if (!botToken || botToken.trim().length === 0) return { result: "failed" };
   let res: Response;
   try {
-    res = await discordFetch(`${API}/guilds/${guildId}/members/${userId}`, {
-      method: "PUT",
-      headers: { authorization: `Bot ${botToken}`, "content-type": "application/json" },
-      body: JSON.stringify({ access_token: accessToken }),
-    });
+    res = await discordFetch(
+      `${API}/guilds/${encodeURIComponent(guildId)}/members/${encodeURIComponent(userId)}`,
+      {
+        method: "PUT",
+        headers: { authorization: `Bot ${botToken}`, "content-type": "application/json" },
+        body: JSON.stringify({ access_token: accessToken }),
+      },
+    );
   } catch {
     return { result: "transport_failure" };
   }

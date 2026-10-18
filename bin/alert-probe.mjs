@@ -124,7 +124,20 @@ export async function runProbe({
     redirect: "error",
     signal: AbortSignal.timeout(10_000),
   });
-  await response.body?.cancel();
+  // Response disposal is inert to the verdict: attempt cleanup once without
+  // letting a sync throw, a rejection (including a late one), or a
+  // never-settling cancel alter the expected status or receipt outcome.
+  // Disposal diagnostics are never surfaced; they may carry request material.
+  try {
+    const disposal = response.body?.cancel();
+    if (disposal && typeof disposal.then === "function") {
+      disposal.then(undefined, () => {
+        // Swallow disposal rejections, including late ones.
+      });
+    }
+  } catch {
+    // Swallow synchronous disposal throws; the verdict below decides.
+  }
   if (response.status !== 500)
     throw new Error(`Probe refused or unavailable (HTTP ${response.status}); no delivery claimed`);
   while (now() - since < timeoutMs) {

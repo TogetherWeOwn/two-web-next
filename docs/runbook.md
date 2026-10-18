@@ -326,20 +326,22 @@ approved account and binding isolation before any remote mutation.
    failed migration step fails the job before any Cloudflare mutation. The
    queue-create step currently suppresses errors; it is not permission/provisioning evidence.
    The final staging smoke runs `node bin/smoke.mjs https://next.togetherweown.com --fail-on-ready-wait-critical`
-   ([smoke checker](../bin/smoke.mjs)), covering 18 public routes: `/up`
+   ([smoke checker](../bin/smoke.mjs)), covering 20 public routes: `/up`
    (HTTP 200, `application/json`, `db:ok`, `pending_migrations:0`, `status`
    healthy/degraded, `queue.status` healthy/degraded/unknown, `warn_at:20`,
    `critical_at:100`) plus `/`, `/about`, `/faq`, `/rules`, `/privacy`,
    `/events`, `/events/past`, `/join`, `/events.rss`, `/events.ics`,
    `/sitemap_index.xml`, `/robots.txt`, `/.well-known/security.txt`,
    `/discord` (302), `/profile` (302),
-   `/admin` (302/403) and `/__smoke_unknown_route__` (404)
+   `/admin` (302/403), `/api/public/events` (200 JSON collection envelope),
+   `/openapi.json` (200 JSON discovery document)
+   and `/__smoke_unknown_route__` (404)
    with CSP/nosniff/content-type/noindex/redirect assertions. The `/up` assertions
    are DB/schema readiness, not liveness only; with the staging strict flag a literal
    `unknown` in `queue.status` or `ready_wait_severity`, or a `critical`
    `ready_wait_severity`, fails the deploy even though `/up` itself still returns 200.
    Queue `degraded` passes. The strict flag is staging-only: the apex production
-   smoke uses the same 18-route shape with `--allow-indexable` and without the strict flag
+   smoke uses the same 20-route shape with `--allow-indexable` and without the strict flag
    (`node bin/smoke.mjs https://togetherweown.com --allow-indexable`), so `critical`
    queue readiness only warns and `unknown` passes there.
 4. An explicitly authorized manual deployment of the reviewed release uses:
@@ -552,15 +554,28 @@ UUID on unpinned ordinary traffic even when every health assertion is green.
 This sends no `Cloudflare-Workers-Version-Overrides` version-override header,
 so it proves normal routing, not pinned canary routing. Limit: Worker
 versions predating the `/up` revision marker carry no `revision` identity and
-cannot pass this check; covering those needs the target version's own checker.
+cannot pass this check; versions predating the session-free public API
+return 404 on `/api/public/events` and `/openapi.json` and fail those two
+probes; covering either case needs the target version's own checker.
 A failed verification is not reported as an undone rollback and never triggers
 a roll-forward; it leaves the rolled-back version live for operator diagnosis.
+
+Post-promotion smoke proves ordinary traffic identity, not just healthy
+content: it passes the gradual action's `promoted-version-id` output as
+`PROMOTED_VERSION_ID` to `bin/smoke.mjs --expected-version-id` inside the
+existing bounded retry loop (6 attempts, 10s sleeps, fail closed), and `/up`
+`revision.version_id` must equal that UUID on unpinned ordinary traffic even
+when every health assertion is green. This sends no
+`Cloudflare-Workers-Version-Overrides` version-override header, so it proves
+normal routing, not pinned canary routing. An absent or malformed promoted id
+fails closed before any probe, never by silently omitting verification.
 
 A failed post-promotion public-route verification in `deploy-production`
 blocks the release tag but leaves the promoted version live at 100%: the
 gradual action's automatic rollback only covers failures inside the promotion
-itself. The failed step's logs print the recorded pre-promote version ID;
-restore it with this workflow using that ID.
+itself, and this step never adds an automatic rollback. The failed step's logs
+print the live promoted candidate plus the recorded pre-promote version ID as
+the restoration target; restore it with this workflow using that ID.
 
 Promotion and rollback mutations to the production Worker serialize on the
 shared `production-worker-mutation` job-level concurrency group
@@ -1579,9 +1594,9 @@ Sync carriers (including waiting deliveries) settle their ledger and ACK at 6
 tries, before transport `max_retries: 10`. Internal-action carriers cap at 5.
 Sync requests independently persist `request_attempts` and `next_attempt_at`:
 claims durably set eligibility to null **before** bot I/O. Only a committed
-result can reopen that fence: backoff (`10,60,300,900,3600`) or a bot Retry-After
-above 0 and at most 86400 seconds (fractions round up) selects the next absolute
-deadline; any other Retry-After uses the backoff. An already-persisted wait
+result can reopen that fence: backoff (`10,60,300,900,3600`) or a usable bot Retry-After
+above 0 selects the next absolute deadline (fractions round up, values above 86400
+cap at 86400); any absent, zero or unusable Retry-After uses the backoff. An already-persisted wait
 farther than 86400 seconds caps at 86400 before queue admission. A failed deadline write retries
 that same Date (or exhausted null), never shorter generic backoff. If both writes
 fail, the consumer carries the known remaining wait on that delivery, but the

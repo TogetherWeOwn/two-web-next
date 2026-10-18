@@ -66,7 +66,7 @@ export function registerFeedRoutes(app: App, readSession: SessionReader): void {
     const db = await dbFor(c);
     if (!db) return eventsUnavailable(c);
     const rows = await listFeed(db, ["published", "cancelled"]);
-    return calendarFeedResponse(c, () => eventsIcsCollection(rows, c.env.APP_URL), {
+    return feedResponse(c, eventsIcsCollection(rows, c.env.APP_URL), {
       "content-type": "text/calendar; charset=utf-8",
       "content-disposition": 'inline; filename="events.ics"',
       "cache-control": "max-age=300, public",
@@ -118,6 +118,9 @@ export function registerFeedRoutes(app: App, readSession: SessionReader): void {
       }
       if (!session?.moderator) return c.text("Forbidden", 403);
     }
+    // A single-event download has no other rows to protect: a
+    // sequence-poison row answers the honest 503 with no-store (no ETag, no
+    // attachment) instead of an event-less 200 calendar.
     return calendarFeedResponse(c, () => eventIcs(e, c.env.APP_URL), {
       "content-type": "text/calendar; charset=utf-8",
       "content-disposition": `attachment; filename="${e.eventKey}.ics"`,

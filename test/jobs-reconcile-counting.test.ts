@@ -4,7 +4,7 @@ import { uniqueKey } from "../src/jobs/sync-event";
 import type { EventStore, UniqueLock } from "../src/jobs/types";
 
 // DB-free pins for the two Laravel-parity rules in reconcileEvents: close-finished runs before the
-// sync pass, and `resynced` counts stale rows rather than accepted dispatches.
+// sync pass, and `resynced` counts only transport-accepted dispatches (absorbed reported separately).
 
 type Row = {
   key: string;
@@ -89,12 +89,19 @@ describe("reconcileEvents ordering and counting (no DB)", () => {
     expect(events.calls).toEqual(["close", "materialize", "stale"]);
     expect(events.closedAt).toEqual([NOW]);
     expect(rows.find((x) => x.key === "ended-stale")!.status).toBe("past");
-    expect(r).toEqual({ closed: 1, materialized: 0, resynced: 1 });
+    expect(r).toEqual({
+      closed: 1,
+      materialized: 0,
+      resynced: 1,
+      absorbed: 0,
+      failed: 0,
+      deferred: 0,
+    });
     expect(queue.sent.map((b) => b.eventKey)).toEqual(["live-stale"]);
     expect(lock.acquired).not.toContain(uniqueKey("ended-stale"));
   });
 
-  it("counts a stale row whose dispatch the unique lock absorbs", async () => {
+  it("reports a stale row whose dispatch the unique lock absorbs separately", async () => {
     vi.spyOn(console, "info").mockImplementation(() => {});
     const rows: Row[] = [
       { key: "queued", status: "published", endsAt: upcoming, discordEventId: null },
@@ -107,10 +114,17 @@ describe("reconcileEvents ordering and counting (no DB)", () => {
 
     expect(lock.acquired).toEqual([uniqueKey("queued"), uniqueKey("fresh")]);
     expect(queue.sent.map((b) => b.eventKey)).toEqual(["fresh"]);
-    expect(r).toEqual({ closed: 0, materialized: 0, resynced: 2 });
+    expect(r).toEqual({
+      closed: 0,
+      materialized: 0,
+      resynced: 1,
+      absorbed: 1,
+      failed: 0,
+      deferred: 0,
+    });
   });
 
-  it("counts every stale row even when every dispatch is absorbed", async () => {
+  it("reports absorbed separately when every dispatch is absorbed", async () => {
     vi.spyOn(console, "info").mockImplementation(() => {});
     const rows: Row[] = [
       { key: "a", status: "published", endsAt: upcoming, discordEventId: null },
@@ -126,7 +140,14 @@ describe("reconcileEvents ordering and counting (no DB)", () => {
     });
 
     expect(queue.sent).toEqual([]);
-    expect(r.resynced).toBe(2);
+    expect(r).toEqual({
+      closed: 0,
+      materialized: 0,
+      resynced: 0,
+      absorbed: 2,
+      failed: 0,
+      deferred: 0,
+    });
   });
 
   it("returns zeros with no log line, lock or send on an empty pass", async () => {
@@ -140,7 +161,14 @@ describe("reconcileEvents ordering and counting (no DB)", () => {
 
     const r = await reconcileEvents({ events: fakeEvents(rows), queue, lock, now: () => NOW });
 
-    expect(r).toEqual({ closed: 0, materialized: 0, resynced: 0 });
+    expect(r).toEqual({
+      closed: 0,
+      materialized: 0,
+      resynced: 0,
+      absorbed: 0,
+      failed: 0,
+      deferred: 0,
+    });
     expect(info).not.toHaveBeenCalled();
     expect(lock.acquired).toEqual([]);
     expect(queue.sent).toEqual([]);
@@ -165,6 +193,9 @@ describe("reconcileEvents ordering and counting (no DB)", () => {
       closed: 1,
       materialized: 0,
       resynced: 1,
+      absorbed: 0,
+      failed: 0,
+      deferred: 0,
     });
   });
 });
