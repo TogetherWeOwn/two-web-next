@@ -20,16 +20,18 @@
 // 3. `reconcileEvents` asks the store for exactly one page per pass: it calls
 //    `staleEventKeys(RECONCILE_REDISPATCH_PAGE_SIZE)` once, dispatches at most
 //    that many keys, in the order the store returned them, and resolves
-//    `{ closed, materialized, resynced, deferred }` where `resynced` keeps
-//    counting the page rows it attempted (unchanged semantics, page-scoped)
-//    and `deferred` is the store's remainder. Keys deferred by a pass stay
+//    `{ closed, materialized, resynced, absorbed, failed, deferred }` where
+//    `resynced` counts only transport-accepted dispatches, `absorbed` counts
+//    unique-lock absorptions and `failed` counts throwing keys (the counting
+//    semantics already on main, passed through unchanged, page-scoped), and
+//    `deferred` is the store's remainder. Keys deferred by a pass stay
 //    stale: nothing in the pass marks, skips or reorders them, so the next
 //    pass picks them up once earlier keys have synced.
 // 4. Logging volume is unchanged: at most the one existing
 //    "Event reconcile pass completed." info line per pass, now carrying
 //    `deferred` next to the other counts, and emitted when any of
-//    closed/materialized/resynced/deferred is non-zero (a pass that only
-//    deferred must still be visible). No per-key log lines.
+//    closed/materialized/resynced/absorbed/failed/deferred is non-zero (a
+//    pass that only deferred must still be visible). No per-key log lines.
 // 5. Pass cadence, dispatch semantics (unique lock, pending recovery,
 //    close-before-sync ordering) and retention are unchanged.
 //
@@ -112,7 +114,7 @@ function fakeLock(held: string[] = []): UniqueLock {
 afterEach(() => vi.restoreAllMocks());
 
 describe("reconcile redispatch bound — positive controls (today's behaviour)", () => {
-  it("dispatches every stale key of an under-page pass and counts lock-absorbed rows", async () => {
+  it("dispatches every stale key of an under-page pass and counts the lock-absorbed row as absorbed", async () => {
     vi.spyOn(console, "info").mockImplementation(() => {});
     const events = fakeEvents(["alpha", "beta", "gamma"]);
     const queue = fakeQueue();
@@ -124,7 +126,7 @@ describe("reconcile redispatch bound — positive controls (today's behaviour)",
     });
 
     expect(queue.sent).toEqual(["alpha", "gamma"]);
-    expect(r).toMatchObject({ closed: 0, materialized: 0, resynced: 3 });
+    expect(r).toMatchObject({ closed: 0, materialized: 0, resynced: 2, absorbed: 1 });
     expect(events.calls).toEqual(["close", "materialize", "stale"]);
   });
 
