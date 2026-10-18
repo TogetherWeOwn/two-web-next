@@ -228,6 +228,33 @@ async function rosterSqlFor(c: Context<{ Bindings: Env }>): Promise<Sql | null> 
   return postgres(url, databaseOptions) as unknown as Sql;
 }
 
+/** Fresh-login mutual exclusion, per user: overlapping callbacks for the same
+ * user run their insert+sweep one at a time, so insert A, insert B, sweep A,
+ * sweep B cannot revoke both fresh tokens. Keys are user ids only — never a
+ * global lock, so different users stay concurrent. Process-wide (not
+ * per-store) so per-request store instances still serialize the same user;
+ * entries are removed when their tail has no waiter. Holds no session data and
+ * no database connection while waiting. Single call site (issueSession below);
+ * not reentrant — never wrap it in itself. */
+const freshLoginChains = new Map<string, Promise<void>>();
+
+async function withFreshLoginUserLock<T>(userId: string, fn: () => Promise<T>): Promise<T> {
+  const prev = freshLoginChains.get(userId) ?? Promise.resolve();
+  let releaseTail!: () => void;
+  const tail = new Promise<void>((resolve) => {
+    releaseTail = resolve;
+  });
+  const cur = prev.then(() => tail);
+  freshLoginChains.set(userId, cur);
+  await prev;
+  try {
+    return await fn();
+  } finally {
+    releaseTail();
+    if (freshLoginChains.get(userId) === cur) freshLoginChains.delete(userId);
+  }
+}
+
 async function issueSession(
   c: Context<{ Bindings: Env }>,
   store: SessionStore,
@@ -269,27 +296,41 @@ async function issueSession(
     expiresAt: new Date(Date.now() + SESSION_TTL_SECONDS * 1000),
   };
   const prior = await getSignedCookie(c, c.env.SESSION_SECRET, SESSION_COOKIE);
-  // Fresh authentication revokes the presented pre-login/pre-join token
-  // atomically with the insert (a failed insert leaves the prior session
-  // intact; see store.replace). The token is revoked by hash because it can
-  // belong to a different user (shared terminal).
-  if (typeof prior === "string" && prior.startsWith("two_")) {
-    await store.replace(await hashToken(prior), replacement);
-  } else {
-    await store.create(replacement);
-  }
-  // Session fixation (TOG-12284): additionally revoke every other live
-  // session for this user so only the newest survives. The fresh row already
-  // exists: a sweep failure warns and sign-in still succeeds (fail-open on the
-  // sweep, never a logout-on-login). Token-hash-only.
-  try {
-    await store.revokeUserSessions(row.userId, tokenHash);
-  } catch (err) {
-    console.warn("prior session sweep failed", {
-      request_id: c.get("requestId"),
-      exception: (err as Error)?.constructor?.name ?? "unknown",
-    });
-  }
+  const priorHash =
+    typeof prior === "string" && prior.startsWith("two_") ? await hashToken(prior) : null;
+  // Serialize the insert+sweep per user (see withFreshLoginUserLock): the
+  // second overlapping issuance waits for the first to finish, so the final
+  // state equals a serialized order — newest live, previous revoked. A sweep
+  // failure still completes sign-in (fail-open wins over strict newest-wins:
+  // both stay live rather than failing the login). A degenerate empty user id
+  // runs unlocked; Discord ids are never empty.
+  const runLocked =
+    typeof row.userId === "string" && row.userId
+      ? (fn: () => Promise<void>) => withFreshLoginUserLock(row.userId, fn)
+      : (fn: () => Promise<void>) => fn();
+  await runLocked(async () => {
+    // Fresh authentication revokes the presented pre-login/pre-join token
+    // atomically with the insert (a failed insert leaves the prior session
+    // intact; see store.replace). The token is revoked by hash because it can
+    // belong to a different user (shared terminal).
+    if (priorHash) {
+      await store.replace(priorHash, replacement);
+    } else {
+      await store.create(replacement);
+    }
+    // Session fixation: additionally revoke every other live session for this
+    // user so only the newest survives. The fresh row already exists: a sweep
+    // failure warns and sign-in still succeeds (fail-open on the sweep, never
+    // a logout-on-login). Token-hash-only.
+    try {
+      await store.revokeUserSessions(row.userId, tokenHash);
+    } catch (err) {
+      console.warn("prior session sweep failed", {
+        request_id: c.get("requestId"),
+        exception: (err as Error)?.constructor?.name ?? "unknown",
+      });
+    }
+  });
   await setSignedCookie(c, SESSION_COOKIE, token, c.env.SESSION_SECRET, {
     path: "/",
     secure: true,
