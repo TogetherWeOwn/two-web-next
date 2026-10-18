@@ -113,6 +113,10 @@ export function createBotClient(opts: BotClientOptions) {
     ): Promise<EventCancelResult | BotFailure> {
       if (e.eventKey.trim() === "")
         throw new BotTerminalError("An event.cancel needs an event_key.");
+      if ([...e.eventKey].length > 64)
+        throw new BotTerminalError(
+          `An event_key is at most 64 characters; this one is ${[...e.eventKey].length}.`,
+        );
       const answer = await send(
         cfg(),
         { action: "event.cancel", event_key: e.eventKey },
