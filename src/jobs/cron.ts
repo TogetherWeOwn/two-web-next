@@ -40,7 +40,13 @@ export async function reconcileEvents(deps: {
   writeTransaction?: (
     work: (events: EventStore) => Promise<ReconcilePreparation>,
   ) => Promise<ReconcilePreparation>;
-}): Promise<{ closed: number; materialized: number; resynced: number }> {
+}): Promise<{
+  closed: number;
+  materialized: number;
+  resynced: number;
+  absorbed: number;
+  failed: number;
+}> {
   const prepare = async (events: EventStore): Promise<ReconcilePreparation> => ({
     closed: await events.closeFinished((deps.now ?? (() => new Date()))()),
     materialized: await events.materializeSeries(),
@@ -52,24 +58,38 @@ export async function reconcileEvents(deps: {
     ? deps.writeTransaction(prepare)
     : prepare(deps.events));
   let resynced = 0;
+  let absorbed = 0;
+  let failed = 0;
   for (const key of stale) {
-    // A carrier can be stranded, delayed or exhausted. Only recover a due
-    // request with budget left, always under its original immutable key.
-    const pending = await deps.events.pendingSync(key);
-    if (
-      pending &&
-      (pending.requestAttempts >= SYNC_EVENT.tries ||
-        !pending.nextAttemptAt ||
-        pending.nextAttemptAt > (deps.now ?? (() => new Date()))())
-    )
-      continue;
-    await dispatchSyncEvent(deps.queue, deps.lock, key, pending?.idempotencyKey);
-    resynced++; // Laravel counts stale rows, not accepted dispatches
+    try {
+      // A carrier can be stranded, delayed or exhausted. Only recover a due
+      // request with budget left, always under its original immutable key.
+      const pending = await deps.events.pendingSync(key);
+      if (
+        pending &&
+        (pending.requestAttempts >= SYNC_EVENT.tries ||
+          !pending.nextAttemptAt ||
+          pending.nextAttemptAt > (deps.now ?? (() => new Date()))())
+      )
+        continue;
+      const accepted = await dispatchSyncEvent(deps.queue, deps.lock, key, pending?.idempotencyKey);
+      if (accepted) resynced++;
+      else absorbed++;
+    } catch {
+      // One poison key must not starve the rest of the pass.
+      failed++;
+    }
   }
-  if (closed > 0 || materialized > 0 || resynced > 0) {
-    console.info("Event reconcile pass completed.", { closed, materialized, resynced });
+  if (closed > 0 || materialized > 0 || resynced > 0 || absorbed > 0 || failed > 0) {
+    console.info("Event reconcile pass completed.", {
+      closed,
+      materialized,
+      resynced,
+      absorbed,
+      failed,
+    });
   }
-  return { closed, materialized, resynced };
+  return { closed, materialized, resynced, absorbed, failed };
 }
 
 export type PruneCounts = {

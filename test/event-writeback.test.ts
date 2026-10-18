@@ -1228,7 +1228,7 @@ describe.skipIf(!process.env.DATABASE_URL)("event write-back through W13 (test c
               queue: env.SYNC_EVENT_QUEUE!,
               lock: pgUniqueLock(sql),
             }),
-          ).toEqual({ closed: 0, materialized: 1, resynced: 0 });
+          ).toEqual({ closed: 0, materialized: 1, resynced: 0, absorbed: 0, failed: 0 });
           if (hold) {
             holdingPid = cronPid;
             await held;
@@ -1322,7 +1322,7 @@ describe.skipIf(!process.env.DATABASE_URL)("event write-back through W13 (test c
             queue: env.SYNC_EVENT_QUEUE!,
             lock: pgUniqueLock(sql),
           }),
-        ).toEqual({ closed: 0, materialized: 0, resynced: 0 });
+        ).toEqual({ closed: 0, materialized: 0, resynced: 0, absorbed: 0, failed: 0 });
       });
       expect(
         await sql`select id, event_key, recurrence_index, starts_at, ends_at, status from events order by recurrence_index`,
