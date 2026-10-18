@@ -207,8 +207,9 @@ describe("Discord 429 backoff reaches the join recovery response", () => {
       expect(res.headers.get("retry-after")).toMatch(/^\d+$/);
       expect(calls).toEqual(["/api/v10/oauth2/token"]);
       expect(create).not.toHaveBeenCalled();
+      const requestId = res.headers.get("x-request-id");
       expect(fake.attempts).toEqual([
-        { outcome: "error", source: null, requestId: null, discordId: null },
+        { outcome: "error", source: null, requestId, discordId: null },
       ]);
     },
   );
@@ -234,9 +235,8 @@ describe("Discord 429 backoff reaches the join recovery response", () => {
     expect(res.headers.get("retry-after")).toBe("45");
     expect(calls).toEqual(["/api/v10/oauth2/token", "/api/v10/users/@me"]);
     expect(create).not.toHaveBeenCalled();
-    expect(fake.attempts).toEqual([
-      { outcome: "error", source: null, requestId: null, discordId: null },
-    ]);
+    const requestId = res.headers.get("x-request-id");
+    expect(fake.attempts).toEqual([{ outcome: "error", source: null, requestId, discordId: null }]);
   });
 });
 
@@ -248,9 +248,8 @@ describe("absent or unusable provider backoff falls back to today's response", (
     await expectUnreachableRecovery(res);
     // The body's own retry_after (77) is never mined as a substitute.
     expect(res.headers.get("retry-after")).toBeNull();
-    expect(fake.attempts).toEqual([
-      { outcome: "error", source: null, requestId: null, discordId: null },
-    ]);
+    const requestId = res.headers.get("x-request-id");
+    expect(fake.attempts).toEqual([{ outcome: "error", source: null, requestId, discordId: null }]);
   });
 
   it.each([
@@ -334,9 +333,8 @@ describe("non-429 paths are unchanged and never gain Retry-After", () => {
     expect(html).toContain("That Discord approval expired");
     expect(html).not.toContain("Discord is unreachable");
     expect(res.headers.get("retry-after")).toBeNull();
-    expect(fake.attempts).toEqual([
-      { outcome: "error", source: null, requestId: null, discordId: null },
-    ]);
+    const requestId = res.headers.get("x-request-id");
+    expect(fake.attempts).toEqual([{ outcome: "error", source: null, requestId, discordId: null }]);
   });
 
   it("successful join: redirect unchanged, no Retry-After", async () => {

@@ -424,8 +424,9 @@ describe("malformed HTTP-200 user responses stay inside callback recovery", () =
         [JOIN_LOG, { ...rejectedUserMeta, source: null, outcome: "error" }],
       ]);
       expect(channelCounts(logs)).toMatchObject({ info: 0, debug: 0, warn: 1, error: 0 });
+      const requestId = res.headers.get("x-request-id");
       expect(fake.attempts).toEqual([
-        { outcome: "error", source: null, requestId: null, discordId: null },
+        { outcome: "error", source: null, requestId, discordId: null },
       ]);
       expect(res.headers.getSetCookie().join("\n")).not.toContain("__Host-two_session=");
       streamClean(logs, JOIN_ROUTE, [JOIN_LOG]);
@@ -481,9 +482,8 @@ describe("join callback: expired recovery versus outage 503", () => {
     });
 
     // The funnel row is the legacy enum's error row; its four columns carry no secret.
-    expect(fake.attempts).toEqual([
-      { outcome: "error", source: null, requestId: null, discordId: null },
-    ]);
+    const requestId = res.headers.get("x-request-id");
+    expect(fake.attempts).toEqual([{ outcome: "error", source: null, requestId, discordId: null }]);
     streamClean(logs, JOIN_ROUTE, [JOIN_LOG]);
     leakFree(html, fake.attempts, res.headers.getSetCookie());
   });
@@ -512,8 +512,9 @@ describe("join callback: expired recovery versus outage 503", () => {
         status,
         source: null,
       });
+      const requestId = res.headers.get("x-request-id");
       expect(fake.attempts).toEqual([
-        { outcome: "error", source: null, requestId: null, discordId: null },
+        { outcome: "error", source: null, requestId, discordId: null },
       ]);
       streamClean(logs, JOIN_ROUTE, [JOIN_LOG]);
       leakFree(html, fake.attempts, [...res.headers], res.headers.getSetCookie());

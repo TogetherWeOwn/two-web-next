@@ -343,8 +343,9 @@ describe("healthy-store controls (same journeys, analytics rows land)", () => {
     );
     expect(res.status).toBe(200);
     expect(await res.text()).toContain("Join cancelled");
+    const requestId = res.headers.get("x-request-id");
     expect(fake.attempts).toEqual([
-      { outcome: "denied", source: "web-homepage", requestId: null, discordId: null },
+      { outcome: "denied", source: "web-homepage", requestId, discordId: null },
     ]);
   });
 

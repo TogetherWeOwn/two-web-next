@@ -237,8 +237,9 @@ describe("join-blocked copy (legacy JoinBlockedWidgetTest)", () => {
     expect(html).not.toContain("blocked-probe-never-echo");
     expect(html).not.toContain("We couldn&#39;t add you automatically");
     expect(calls).toHaveLength(0);
+    const requestId = res.headers.get("x-request-id");
     expect(fake.attempts).toEqual([
-      { outcome: "denied", source: null, requestId: null, discordId: null },
+      { outcome: "denied", source: null, requestId, discordId: null },
     ]);
   });
 

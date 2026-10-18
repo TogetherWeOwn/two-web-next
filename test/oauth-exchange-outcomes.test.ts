@@ -193,9 +193,8 @@ describe("expired grant pins expired copy, never outage copy", () => {
     expect(calls).toEqual(["/api/v10/oauth2/token"]);
     expect(create).not.toHaveBeenCalled();
     expect(res.headers.getSetCookie().join("\n")).not.toContain("__Host-two_session=");
-    expect(fake.attempts).toEqual([
-      { outcome: "error", source: null, requestId: null, discordId: null },
-    ]);
+    const requestId = res.headers.get("x-request-id");
+    expect(fake.attempts).toEqual([{ outcome: "error", source: null, requestId, discordId: null }]);
   });
 });
 
@@ -251,9 +250,8 @@ describe("provider outage pins outage copy, never expired copy", () => {
     expect(html).not.toContain("Join link expired");
     expect(calls).toEqual(["/api/v10/oauth2/token"]);
     expect(create).not.toHaveBeenCalled();
-    expect(fake.attempts).toEqual([
-      { outcome: "error", source: null, requestId: null, discordId: null },
-    ]);
+    const requestId = res.headers.get("x-request-id");
+    expect(fake.attempts).toEqual([{ outcome: "error", source: null, requestId, discordId: null }]);
   });
 });
 

@@ -235,7 +235,9 @@ for (const journey of journeys) {
               },
             ],
           ]);
-          expect(isolated.attempts).toEqual([["error", null, null, null]]);
+          expect(isolated.attempts).toEqual([
+            ["error", null, res.headers.get("x-request-id"), null],
+          ]);
         }
         leakFree(
           html,
