@@ -23,64 +23,71 @@
     frame.setAttribute("sandbox", "allow-scripts allow-same-origin");
     frame.setAttribute("referrerpolicy", "no-referrer");
     frame.setAttribute("data-testid", "join-widget");
-    let settled = false;
-    const guideToInvite = () => {
-      if (settled) return;
-      settled = true;
-      // The invite link lives beside the preview on every /join variant; a
-      // failed or hung frame guides there instead of stranding the visitor.
+    let loaded = false;
+    let guided = false;
+    const guide = (beside) => {
+      if (guided) return;
+      guided = true;
       const invite = document.querySelector('[data-testid="join-invite"]');
-      const inviteHref = invite && invite.getAttribute("href");
+      const href = invite && invite.getAttribute("href");
       const message = document.createElement("p");
       message.setAttribute("data-testid", "join-widget-error");
       message.setAttribute("role", "status");
       message.setAttribute("tabindex", "-1");
-      message.textContent = "The preview failed to load. ";
+      // A post-load timer cannot tell a blocked error page from a real render
+      // cross-origin, so beside-frame guidance must not claim failure: it
+      // offers the invite path in case the preview is not showing. A frame
+      // that never loaded did fail, so the replacing guidance says so.
+      message.textContent = beside ? "Preview not showing? " : "The preview failed to load. ";
       let fallback = null;
-      if (inviteHref) {
+      if (href) {
         fallback = document.createElement("a");
-        fallback.setAttribute("href", inviteHref);
+        fallback.setAttribute("href", href);
         fallback.textContent = "Join with an invite link.";
         message.appendChild(fallback);
       } else {
         message.textContent += "Join with an invite link.";
       }
-      // Swap the dead frame out: it never rendered, so holding its 500px
-      // hole open would strand the guidance below the fold.
-      preview.replaceChildren(message);
-      // The clicked link is gone, so focus fell to <body>: move it onto the
-      // guidance (prefer the invite link) so the next Tab reaches forward
-      // instead of restarting from the top of the page. Same guard as the
-      // load handler: a late failure never steals focus the visitor moved
-      // elsewhere; the role=status message still announces the fallback.
+      // A blocked navigation commits an error page yet fires `load`, which is
+      // indistinguishable from a real render cross-origin: keep the frame so a
+      // real render keeps working, with the guidance beside it. A frame that
+      // never loaded is swapped out so its 500px hole does not strand the
+      // guidance below the fold.
+      if (beside) preview.appendChild(message);
+      else preview.replaceChildren(message);
+      const focusIt = (el) => {
+        if (el && typeof el.focus === "function") {
+          el.focus();
+          return true;
+        }
+        return false;
+      };
       const active = document.activeElement;
-      if (!active || active === document.body) {
-        if (fallback && typeof fallback.focus === "function") fallback.focus();
-        else if (typeof message.focus === "function") message.focus();
+      if (beside) {
+        // Focus sat in the frame since load placed it there: move it onto the
+        // guidance/invite so it is not stranded in a dead frame. A visitor who
+        // moved elsewhere keeps their focus untouched.
+        if (active === frame) focusIt(fallback) || focusIt(message);
+      } else if (!active || active === document.body) {
+        focusIt(fallback) || focusIt(message);
       }
     };
-    // Scope: the guided fallback covers the observable failure signals —
-    // a signaled `error` (best-effort only) and a hung frame that fires
-    // neither event within the bounded timer. A blocked navigation that
-    // commits an error page fires `load` instead, which is indistinguishable
-    // from a real render cross-origin (Discord's widget posts no readiness
-    // signal), so it follows the load contract and stays out of scope here.
-    // The page-level invite link beside the preview remains the visible path
-    // in that case. Focus moves in only on `load`, and only
-    // when the visitor hasn't moved elsewhere since the click (after
-    // replaceChildren the clicked link is gone, so <body> means "hasn't
-    // moved"): a late load never steals focus from another element.
-    const timer = setTimeout(guideToInvite, 8000);
+    // The bounded timer survives `load`: a blocked embed fires `load` for its
+    // error page, so guidance appears beside the frame when the timer fires.
+    // Focus moves in only on `load`, and only when the visitor hasn't moved
+    // elsewhere since the click (after replaceChildren the link is gone, so
+    // <body> means "hasn't moved"): a late load never steals focus.
+    const timer = setTimeout(() => guide(loaded), 8000);
     frame.addEventListener("load", () => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
+      if (guided || loaded) return;
+      loaded = true;
       const active = document.activeElement;
       if (!active || active === document.body) frame.focus();
     });
     frame.addEventListener("error", () => {
+      if (guided || loaded) return;
       clearTimeout(timer);
-      guideToInvite();
+      guide(false);
     });
     preview.replaceChildren(frame);
   });
