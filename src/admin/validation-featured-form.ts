@@ -39,7 +39,12 @@ export function parseFeaturedForm(
   const title = str(data.title);
   if (!title) fields.title = "Give it a headline.";
   else if ([...title].length > 255) fields.title = "Keep the headline to 255 characters.";
+  // Postgres text cannot store NUL: reject it here so the form returns a
+  // field-level 422 instead of a persistence failure. Only NUL is rejected
+  // in this slice; all other characters keep today's behavior.
+  if (title?.includes("\0")) fields.title = "Headline cannot contain NUL characters.";
   const body = str(data.body);
+  if (body?.includes("\0")) fields.body = "Body cannot contain NUL characters.";
   const url = str(data.url);
   if (url && (url.length > 255 || !isHttpUrl(url)))
     fields.url = "Link is a full http(s) URL, or empty for no link.";
@@ -55,6 +60,7 @@ export function parseFeaturedForm(
     fields.image_alt = "Describe the photo in one plain sentence for screen-reader visitors.";
   if (imageAlt && [...imageAlt].length > 255)
     fields.image_alt = "Keep the alt text to 255 characters.";
+  if (imageAlt?.includes("\0")) fields.image_alt = "Alt text cannot contain NUL characters.";
 
   let position = 0;
   const posRaw = str(data.position);
