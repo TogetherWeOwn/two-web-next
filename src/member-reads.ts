@@ -4,9 +4,20 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import type { Context, Next } from "hono";
 import type { ContentfulStatusCode } from "hono/utils/http-status";
 import type { AccessDecl, AccessSink } from "./access-log";
+import { MEMBER_ACCESS_AUDIT_TIMEOUT_MS, withAccessAuditDeadline } from "./access-log";
 import { alertRequestError } from "./alerts";
 import { isDatabaseUnavailable } from "./db/errors";
 import { requestRoute, safeRequestId } from "./request-log";
+
+/**
+ * Kit/Hono shared-boundary alias for the audit-wait deadline owned by
+ * src/access-log.ts. A member read is released only after its audit row is
+ * written; this bounds that wait. Timeout renders the existing sanitized
+ * 503/private-no-store outage response, never the buffered member success
+ * body or its sensitive headers. See MEMBER_ACCESS_AUDIT_TIMEOUT_MS for the
+ * CISO rationale; the value is shared so Hono and Kit cannot diverge.
+ */
+export const MEMBER_READ_AUDIT_TIMEOUT_MS = MEMBER_ACCESS_AUDIT_TIMEOUT_MS;
 
 type Capture = {
   subjects: Set<string>;
@@ -182,15 +193,24 @@ async function releaseAfterAudit(
   const subjects = [...capture.subjects].filter((key) => key !== declared!.viewer).sort();
   if (subjects.length === 0) return { released: true };
   try {
-    const recorded = await captures.exit(() =>
-      write({
-        viewerDiscordId: declared!.viewer!,
-        viewerUserId: declared!.viewer!,
-        resource: declared!.resource,
-        action: declared!.action,
-        route: declared!.route,
-        subjectUserIds: subjects,
-      }),
+    // Bounded wait: a never-settling audit refuses with the sanitized
+    // 503/private-no-store outage response. The sink runs exactly once; a late
+    // success/rejection after the deadline is consumed by
+    // withAccessAuditDeadline and cannot alter the response, replay the write,
+    // or escape unhandled. This bounds liveness only: it does not cancel
+    // database work (a late INSERT may still commit server-side, see
+    // src/admin/store-access.ts), and audit failure still fails closed.
+    const recorded = await withAccessAuditDeadline(
+      captures.exit(() =>
+        write({
+          viewerDiscordId: declared!.viewer!,
+          viewerUserId: declared!.viewer!,
+          resource: declared!.resource,
+          action: declared!.action,
+          route: declared!.route,
+          subjectUserIds: subjects,
+        }),
+      ),
     );
     if (!recorded) throw new MemberReadRefused();
     return { released: true };
