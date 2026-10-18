@@ -24,6 +24,7 @@ const routes = [
   { path: "/events.ics", statuses: [200], type: "text/calendar", body: /BEGIN:VCALENDAR/ },
   { path: "/sitemap_index.xml", statuses: [200], type: "application/xml", body: /<urlset\b/ },
   { path: "/robots.txt", statuses: [200], type: "text/plain", body: /User-agent:/i },
+  { path: "/.well-known/security.txt", statuses: [200], type: "text/plain", body: /Contact:/ },
   { path: "/discord", statuses: [302], redirect: "discord" },
   { path: "/profile", statuses: [302], redirect: "login" },
   { path: "/admin", statuses: [302, 403], redirect: "login" },
@@ -48,6 +49,24 @@ export const VERSION_OVERRIDE_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}="[0-9a
 // with a drift message; update the values below to match.
 export const SMOKE_QUEUE_WARN_AT = 20;
 export const SMOKE_QUEUE_CRITICAL_AT = 100;
+
+// Pinned review date shared with src/security-txt.ts (re-exported expiry).
+// This file runs on plain node with no TS loader, so the value is duplicated
+// here and pinned by the drift guard in test/smoke.test.mjs: an expiry change
+// in src/security-txt.ts fails `npm run test:smoke` at PR time with a drift
+// message; update the value below to match.
+export const SMOKE_SECURITY_TXT_EXPIRES = "2027-10-01T00:00:00Z";
+
+// Previously reviewed Expires values, oldest last. The rollback smoke runs
+// HEAD's checker against the rolled-back Worker, so after a renewal it would
+// fail the Expires assertion although the rollback worked. Accepting the
+// outgoing reviewed pin keeps that emergency path green; the renewal procedure
+// (docs/runbook.md) moves the outgoing pin here when it bumps the pin above.
+// Empty today: the pin dates to the route's introduction and has never been
+// renewed. Versions predating the route cannot pass this probe; covering those
+// needs the target version's own checker in rollback-production, which is
+// outside this slice (no deployment changes).
+export const SMOKE_SECURITY_TXT_PREVIOUS_EXPIRES = [];
 
 export function assertVersionOverride(value) {
   if (
@@ -84,6 +103,61 @@ export function assertFailedBaseline(value) {
 export function versionIdFromOverride(value) {
   assertVersionOverride(value);
   return value.slice(value.indexOf('="') + 2, -1);
+}
+
+// RFC 9116 field parsing for the security.txt probe: "#" lines are comments,
+// field names are case-insensitive, and matching is on whole field values, so
+// a commented-out or foreign line cannot satisfy an assertion by substring.
+export function securityTxtFields(body) {
+  const fields = [];
+  for (const rawLine of String(body).split("\n")) {
+    const line = rawLine.trim();
+    if (!line || line.startsWith("#")) continue;
+    const colon = line.indexOf(":");
+    if (colon === -1) continue;
+    fields.push([line.slice(0, colon).trim().toLowerCase(), line.slice(colon + 1).trim()]);
+  }
+  return fields;
+}
+
+// Pure core of the security.txt route assertion, unit-tested in
+// test/smoke.test.mjs across both protocols. Returns [expected, actual] pairs
+// for each failing assertion; smoke() feeds each pair to check().
+export function securityTxtAssertions(
+  body,
+  base,
+  previousExpires = SMOKE_SECURITY_TXT_PREVIOUS_EXPIRES,
+) {
+  const failures = [];
+  const fields = securityTxtFields(body);
+  const expiresValues = fields.filter(([name]) => name === "expires").map(([, value]) => value);
+  if (
+    expiresValues.length !== 1 ||
+    (expiresValues[0] !== SMOKE_SECURITY_TXT_EXPIRES && !previousExpires.includes(expiresValues[0]))
+  ) {
+    failures.push([
+      `security Expires: ${SMOKE_SECURITY_TXT_EXPIRES}`,
+      "Expires line missing or stale",
+    ]);
+  }
+  const canonicalValues = fields.filter(([name]) => name === "canonical").map(([, value]) => value);
+  if (base.protocol === "https:") {
+    // Same-origin Canonical, mirroring the robots.txt Sitemap pattern.
+    const canonical = `Canonical: ${base.origin}/.well-known/security.txt`;
+    if (
+      canonicalValues.length !== 1 ||
+      canonicalValues[0] !== `${base.origin}/.well-known/security.txt`
+    ) {
+      failures.push([`security ${canonical}`, "Canonical line missing or foreign"]);
+    }
+  } else {
+    // The producer omits Canonical on http origins (RFC 9116 §2.5.2;
+    // src/security-txt.ts), so an http probe asserts its absence.
+    if (canonicalValues.length !== 0) {
+      failures.push(["security no Canonical on http origin", "unexpected Canonical line"]);
+    }
+  }
+  return failures;
 }
 
 export async function smoke(
@@ -298,6 +372,14 @@ export async function smoke(
         // this environment's own origin, never the apex or another env's host.
         const line = `Sitemap: ${base.origin}/sitemap_index.xml`;
         check(body.includes(line), `robots ${line}`, "Sitemap line missing or foreign");
+      }
+      if (route.path === "/.well-known/security.txt") {
+        // RFC 9116 publication (S8): field-parsed assertions shared with the
+        // unit tests (securityTxtAssertions above). Do not print response
+        // bodies into deploy logs: the actual side stays a fixed string.
+        for (const [expected, actual] of securityTxtAssertions(body, base)) {
+          check(false, expected, actual);
+        }
       }
       if (route.path === "/sitemap_index.xml") {
         // Same-environment sitemap: every loc stays on the probed origin, and

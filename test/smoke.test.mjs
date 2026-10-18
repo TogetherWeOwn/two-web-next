@@ -4,7 +4,38 @@ import { once } from "node:events";
 import { createServer } from "node:http";
 import { test } from "node:test";
 import { build } from "esbuild";
-import { SMOKE_QUEUE_CRITICAL_AT, SMOKE_QUEUE_WARN_AT, smoke } from "../bin/smoke.mjs";
+import {
+  SMOKE_QUEUE_CRITICAL_AT,
+  SMOKE_QUEUE_WARN_AT,
+  SMOKE_SECURITY_TXT_EXPIRES,
+  securityTxtAssertions,
+  smoke,
+} from "../bin/smoke.mjs";
+
+// Producer-derived security.txt body: buildSecurityTxt bundled once from
+// src/security-txt.ts (same in-memory esbuild pattern as the rendering tests
+// below), so the passing fixture is the exact producer output for the loopback
+// origin and cannot drift from it. The loopback stub has no TLS, so like the
+// real Worker on an http origin the body carries no Canonical line; the https
+// Canonical path is covered by the securityTxtAssertions unit tests.
+let securityTxtBuilderPromise = null;
+function securityTxtBuilder() {
+  securityTxtBuilderPromise ??= build({
+    entryPoints: ["src/security-txt.ts"],
+    bundle: true,
+    write: false,
+    format: "esm",
+    platform: "node",
+  }).then(
+    async (bundle) =>
+      (
+        await import(
+          `data:text/javascript;base64,${Buffer.from(bundle.outputFiles[0].text).toString("base64")}`
+        )
+      ).buildSecurityTxt,
+  );
+  return securityTxtBuilderPromise;
+}
 
 // Independent local responses matching the route contracts, not a live Worker/DB.
 // The /up fixture carries the candidate revision the version-override tests
@@ -41,6 +72,14 @@ const fixtures = {
     "text/plain",
     (origin) => `User-agent: *\nDisallow:\nSitemap: ${origin}/sitemap_index.xml\n`,
   ],
+  // RFC 9116 publication (S8): the body is rendered per request from the real
+  // producer (see stub below), so the probe's Expires-pin and no-Canonical-on-
+  // http assertions exercise a true positive. The pin itself stays hardcoded
+  // in bin/smoke.mjs like the queue thresholds in /up above; the drift guard
+  // at the bottom of this file pins SMOKE_SECURITY_TXT_EXPIRES to
+  // src/security-txt.ts, so a pin change fails here first. Body is unused (the
+  // stub renders the producer); status and type still drive the generic loops.
+  "/.well-known/security.txt": [200, "text/plain", null],
   "/discord": [302, null, "", "https://discord.gg/fixture"],
   "/profile": [302, null, "", "/auth/discord"],
   "/admin": [302, null, "", "/auth/discord"],
@@ -53,6 +92,7 @@ const fixtures = {
 
 async function stub(t, change = () => {}) {
   const requests = [];
+  const buildSecurityTxt = await securityTxtBuilder();
   const server = createServer((request, response) => {
     requests.push({
       path: request.url,
@@ -69,9 +109,15 @@ async function stub(t, change = () => {}) {
     const [status, type, body, location] = fixture;
     // Origin-aware SEO fixtures (W16b TOG-11942): the stub advertises its own
     // origin the way the Worker advertises APP_URL, so the probe's
-    // same-origin robots/sitemap assertions exercise a true positive.
+    // same-origin robots/sitemap assertions exercise a true positive. The
+    // security.txt body is rendered from the real producer for that origin.
     const origin = `http://${request.headers.host}`;
-    const resolved = typeof body === "function" ? body(origin) : body;
+    const resolved =
+      request.url === "/.well-known/security.txt"
+        ? buildSecurityTxt(origin)
+        : typeof body === "function"
+          ? body(origin)
+          : body;
     const result = {
       status,
       body: resolved,
@@ -131,7 +177,7 @@ test("CLI passes every route without following redirects or carrying cookies", a
   const { url, requests } = await stub(t);
   const result = await cli([url]);
   assert.equal(result.code, 0, result.output);
-  assert.match(result.output, /17 routes, 0 failed assertions/);
+  assert.match(result.output, /18 routes, 0 failed assertions/);
   assert.deepEqual(
     requests.map((r) => r.path),
     Object.keys(fixtures),
@@ -145,8 +191,8 @@ test("version override pins every gradual-promotion probe to the new version", a
   const override = 'two-web-next-production="22345678-1234-1234-1234-123456789abc"';
   const result = await cli([url, "--version-override", override]);
   assert.equal(result.code, 0, result.output);
-  assert.match(result.output, /17 routes, 0 failed assertions/);
-  assert.equal(requests.length, 17);
+  assert.match(result.output, /18 routes, 0 failed assertions/);
+  assert.equal(requests.length, 18);
   assert.ok(requests.every((r) => r.override === override));
 });
 
@@ -169,7 +215,7 @@ test("version override refuses a healthy /up that identifies another Worker vers
   const result = await run(url, { versionOverride: override });
   assert.equal(result.ok, false, result.output);
   assert.match(result.output, /FAIL \/up: expected revision\.version_id/);
-  assert.equal(requests.length, 17);
+  assert.equal(requests.length, 18);
   assert.ok(requests.every((r) => r.override === override));
 });
 
@@ -258,7 +304,7 @@ test("version override passes when the candidate version answers healthy", async
   const result = await run(url, { versionOverride: override });
   assert.equal(result.ok, true, result.output);
   assert.ok(result.output.includes("PASS /up"), result.output);
-  assert.equal(requests.length, 17);
+  assert.equal(requests.length, 18);
   assert.ok(requests.every((r) => r.override === override));
 });
 
@@ -295,7 +341,7 @@ for (const path of Object.keys(fixtures)) {
     assert.equal(result.ok, false);
     assert.ok(result.output.includes(`FAIL ${path}: expected HTTP`), result.output);
     assert.match(result.output, /actual HTTP 503/);
-    assert.equal(requests.length, 17);
+    assert.equal(requests.length, 18);
   });
 }
 
@@ -366,6 +412,135 @@ test("rejects foreign sitemap locs and an empty sitemap", async (t) => {
       result.output,
     );
     assert.doesNotMatch(result.output, /togetherweown\.com/);
+  }
+});
+
+test("rejects a stale security.txt Expires pin without leaking the body", async (t) => {
+  const { url } = await stub(t, (route, result) => {
+    if (route === "/.well-known/security.txt")
+      result.body = result.body.replace(
+        `Expires: ${SMOKE_SECURITY_TXT_EXPIRES}`,
+        "Expires: 2026-10-01T00:00:00Z",
+      );
+  });
+  const result = await run(url);
+  assert.equal(result.ok, false);
+  assert.ok(
+    result.output.includes(
+      `FAIL /.well-known/security.txt: expected security Expires: ${SMOKE_SECURITY_TXT_EXPIRES}; actual Expires line missing or stale`,
+    ),
+    result.output,
+  );
+  assert.doesNotMatch(result.output, /2026-10-01T00:00:00Z/);
+});
+
+test("rejects a Canonical line on http origins, where the producer omits it", async (t) => {
+  const { url } = await stub(t, (route, result) => {
+    if (route === "/.well-known/security.txt")
+      result.body += "Canonical: https://togetherweown.com/.well-known/security.txt\n";
+  });
+  const result = await run(url);
+  assert.equal(result.ok, false);
+  assert.match(
+    result.output,
+    /FAIL \/.well-known\/security\.txt: expected security no Canonical on http origin; actual unexpected Canonical line/,
+  );
+  assert.doesNotMatch(result.output, /togetherweown\.com/);
+});
+
+test("security.txt assertions parse fields on both protocols", () => {
+  const contact = "Contact: https://github.com/TogetherWeOwn/two-web-next/security/advisories/new";
+  const policy = "Policy: https://github.com/TogetherWeOwn/two-web-next/blob/main/SECURITY.md";
+  const https = new URL("https://example.test");
+  const http = new URL("http://127.0.0.1:9");
+  const httpsBody = [
+    contact,
+    `Expires: ${SMOKE_SECURITY_TXT_EXPIRES}`,
+    "Preferred-Languages: en",
+    "Canonical: https://example.test/.well-known/security.txt",
+    policy,
+    "",
+  ].join("\n");
+  const httpBody = [
+    contact,
+    `Expires: ${SMOKE_SECURITY_TXT_EXPIRES}`,
+    "Preferred-Languages: en",
+    policy,
+    "",
+  ].join("\n");
+  // Exact producer output passes on both protocols.
+  assert.deepEqual(securityTxtAssertions(httpsBody, https), []);
+  assert.deepEqual(securityTxtAssertions(httpBody, http), []);
+  // A commented-out correct line cannot satisfy a missing or stale field.
+  assert.equal(
+    securityTxtAssertions(
+      `# Expires: ${SMOKE_SECURITY_TXT_EXPIRES}\nExpires: 2026-10-01T00:00:00Z\nCanonical: https://example.test/.well-known/security.txt\n`,
+      https,
+    ).length,
+    1,
+  );
+  assert.equal(
+    securityTxtAssertions(
+      `${httpsBody}\n# Canonical: https://example.test/.well-known/security.txt\nCanonical: https://other.test/.well-known/security.txt\n`,
+      https,
+    ).length,
+    1,
+  );
+  // RFC 9116 permits only one Expires field; a duplicate fails even when one
+  // value matches the pin.
+  assert.equal(
+    securityTxtAssertions(`${httpsBody}Expires: ${SMOKE_SECURITY_TXT_EXPIRES}\n`, https).length,
+    1,
+  );
+  // A previous reviewed pin passes when listed, and fails when it is not.
+  const rotated = httpsBody.replace(
+    `Expires: ${SMOKE_SECURITY_TXT_EXPIRES}`,
+    "Expires: 2026-10-01T00:00:00Z",
+  );
+  assert.deepEqual(securityTxtAssertions(rotated, https, ["2026-10-01T00:00:00Z"]), []);
+  assert.equal(securityTxtAssertions(rotated, https).length, 1);
+  // https requires the same-origin Canonical; http rejects any Canonical.
+  assert.equal(
+    securityTxtAssertions(
+      httpsBody.replace(
+        "Canonical: https://example.test/.well-known/security.txt",
+        "Canonical: https://other.test/.well-known/security.txt",
+      ),
+      https,
+    ).length,
+    1,
+  );
+  assert.equal(
+    securityTxtAssertions(
+      httpBody.replace(
+        "Policy:",
+        "Canonical: http://127.0.0.1:9/.well-known/security.txt\nPolicy:",
+      ),
+      http,
+    ).length,
+    1,
+  );
+});
+
+test("security.txt passes in both indexing modes", async (t) => {
+  for (const allowIndexable of [false, true]) {
+    const { url } = await stub(t, (route, result) => {
+      // Apex posture for the indexable run: strip the staging noindex from
+      // indexable HTML leaves; the archive and branded 404 keep theirs.
+      // security.txt is text/plain, so neither mode touches its headers.
+      if (allowIndexable && (route === "/events/past" || route === "/__smoke_unknown_route__"))
+        return;
+      if (allowIndexable && result.headers["content-type"]?.startsWith("text/html"))
+        delete result.headers["x-robots-tag"];
+    });
+    const result = await run(url, { allowIndexable });
+    assert.equal(result.ok, true, `allowIndexable=${allowIndexable}: ${result.output}`);
+    // The security.txt route itself passes in both modes: a failure here
+    // would name it explicitly.
+    assert.ok(
+      result.output.includes("PASS /.well-known/security.txt"),
+      `allowIndexable=${allowIndexable}: ${result.output}`,
+    );
   }
 });
 
@@ -505,7 +680,7 @@ test("past events accepts rendered Archive but rejects rendered Upcoming with ar
     });
     const result = await run(url);
     assert.equal(result.ok, expected, result.output);
-    assert.equal(requests.length, 17);
+    assert.equal(requests.length, 18);
     if (!expected) {
       assert.match(
         result.output,
@@ -677,6 +852,29 @@ test("smoke queue thresholds track src/up.ts QUEUE_WARN_AT / QUEUE_CRITICAL_AT",
     SMOKE_QUEUE_CRITICAL_AT,
     QUEUE_CRITICAL_AT,
     `smoke queue critical_at drifted from src/up.ts: smoke=${SMOKE_QUEUE_CRITICAL_AT} src=${QUEUE_CRITICAL_AT}; update SMOKE_QUEUE_CRITICAL_AT in bin/smoke.mjs`,
+  );
+});
+
+test("smoke security.txt expiry tracks src/security-txt.ts SECURITY_TXT_EXPIRES", async () => {
+  // Drift guard: bin/smoke.mjs runs on plain node with no TS loader, so its
+  // expected Expires is duplicated from src/security-txt.ts and pinned here.
+  // An expiry change in src fails this test at PR time (npm run test:smoke is
+  // in the required check job); update SMOKE_SECURITY_TXT_EXPIRES in
+  // bin/smoke.mjs to match.
+  const bundle = await build({
+    entryPoints: ["src/security-txt.ts"],
+    bundle: true,
+    write: false,
+    format: "esm",
+    platform: "node",
+  });
+  const { SECURITY_TXT_EXPIRES } = await import(
+    `data:text/javascript;base64,${Buffer.from(bundle.outputFiles[0].text).toString("base64")}`
+  );
+  assert.equal(
+    SMOKE_SECURITY_TXT_EXPIRES,
+    SECURITY_TXT_EXPIRES,
+    `smoke security Expires drifted from src/security-txt.ts: smoke=${SMOKE_SECURITY_TXT_EXPIRES} src=${SECURITY_TXT_EXPIRES}; update SMOKE_SECURITY_TXT_EXPIRES in bin/smoke.mjs`,
   );
 });
 
@@ -1062,7 +1260,7 @@ for (const [robotsTag, expected] of [
     });
     const result = await run(url);
     assert.equal(result.ok, expected, result.output);
-    assert.equal(requests.length, 17);
+    assert.equal(requests.length, 18);
     if (!expected) {
       for (const path of ["/about", "/admin"]) {
         assert.ok(
@@ -1147,7 +1345,7 @@ for (const [location, expected] of [
     });
     const result = await run(url);
     assert.equal(result.ok, expected, result.output);
-    assert.equal(requests.length, 17);
+    assert.equal(requests.length, 18);
     assert.ok(!result.output.includes("never-log-this"));
     if (!expected) {
       assert.match(
@@ -1193,7 +1391,7 @@ test("connection failures include route and expected versus actual", async (t) =
     result.output,
     /FAIL \/up: expected HTTP response and body within timeout; actual TypeError/,
   );
-  assert.match(result.output, /17 routes, 17 failed assertions/);
+  assert.match(result.output, /18 routes, 18 failed assertions/);
 });
 
 test("invalid input is rejected before making requests", async () => {
@@ -1221,7 +1419,7 @@ test("allowIndexable passes apex HTML without the staging noindex", async (t) =>
   });
   const result = await run(url, { allowIndexable: true });
   assert.equal(result.ok, true, result.output);
-  assert.equal(requests.length, 17);
+  assert.equal(requests.length, 18);
   assert.ok(requests.every((r) => r.method === "GET" && r.cookie === undefined));
 });
 
@@ -1257,5 +1455,5 @@ test("CLI --allow-indexable reaches the apex posture", async (t) => {
   });
   const result = await cli([url, "--allow-indexable"]);
   assert.equal(result.code, 0, result.output);
-  assert.match(result.output, /17 routes, 0 failed assertions/);
+  assert.match(result.output, /18 routes, 0 failed assertions/);
 });
