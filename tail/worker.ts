@@ -8,6 +8,12 @@ export type TailEnv = {
   ALERT_AGGREGATOR?: DurableObjectNamespace;
 };
 export const MUTE_MS = 5 * 60 * 1000;
+// Source timestamps more than this far ahead of the Tail clock are treated as
+// skew or poisoning: the mute decision uses the local clock instead. Smaller
+// skews keep exact source-time semantics so the app's own alert limiter
+// (which re-emits on the window boundary in source time) stays coordinated
+// with the Tail mute.
+export const MAX_SOURCE_SKEW_MS = 60_000;
 // Aggregate spike alarm: one page per script when errors cross these gates in a
 // rolling window, then a cooldown. Per-fingerprint pages alone cannot say
 // "half of traffic is 5xx", so the Tail Worker counts every trace outcome.
@@ -1662,7 +1668,15 @@ export function createTailWorker(
               timestamp: parsed.timestamp,
             };
             const key = `${alert.event}:${alert.fingerprint}`;
-            if (!mute.begin(key, log.timestamp)) continue;
+            // Clamp only far-future source timestamps to the local clock: the
+            // page still carries its original timestamp, but suppression can
+            // never stretch past the documented window. Stamps within skew
+            // tolerance (past, on-time, or seconds ahead) keep source-time
+            // semantics so boundary re-emits from the app's own limiter
+            // still coordinate with the Tail mute.
+            const nowMs = now();
+            const muteAt = log.timestamp - nowMs > MAX_SOURCE_SKEW_MS ? nowMs : log.timestamp;
+            if (!mute.begin(key, muteAt)) continue;
             const delivered = await deliver(url, alert);
             mute.finish(key, delivered);
             // Probe correlation is receipt-only: never send it to the webhook or split the mute key.
