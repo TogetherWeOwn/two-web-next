@@ -16,10 +16,12 @@ import { throttleEnvelope } from "./rate-limit";
 // No IP bytes, raw credential, or `shield:ip:` bucket ever reaches the row.
 //
 // Over-budget refusals are attacker-proportional by definition, so the audit
-// write is sampled (~1%), matching the pre-auth warn precedent: flood tests
-// assert boundedness (rows <= cap), not exact counts. Every refusal still
-// increments the in-memory counters below, so volume signal survives without
-// table growth. Deliberately probabilistic, not a token bucket: a flood of
+// write is sampled (~1%, SHIELD_REFUSAL_AUDIT_RATE, matching the pre-auth warn
+// precedent): flood tests assert exact row counts under a forced sampler, not
+// live randomness. Every refusal still increments the in-memory counters
+// below, and each sampled refusal also emits a warn carrying the running
+// per-class count, so flood volume stays observable in logs without table
+// growth. Deliberately probabilistic, not a token bucket: a flood of
 // distinct buckets must not be able to spend a shared budget to blind the
 // sink. Lock-contention 503s keep their exact error audit (retryable load
 // signal, not attacker-proportional volume).
@@ -43,10 +45,15 @@ export const SHIELD_REFUSAL_AUDIT_RATE = 0.01;
 
 /**
  * In-memory volume signal for over-budget shield refusals, by bucket class.
- * Incremented on every refusal whether or not the audit row is sampled, so
- * flood volume stays observable without attacker-proportional table growth.
- * Process-local like every Worker isolate's counters; scraped telemetry can
- * read it without a table scan.
+ * Incremented on every refusal whether or not the audit row is sampled. The
+ * running count is surfaced, not just stored: each sampled refusal logs
+ * `agent-events.shield.refusal_sampled` with the bucket class, the running
+ * per-class count and the admission request_id (server-minted only, never
+ * identity), so flood volume stays observable in logs without
+ * attacker-proportional table growth. Process-local like every Worker
+ * isolate's counters; responders multiply sampled rows by ~100 (see
+ * docs/agent-events.md). Pinned by the counter test in
+ * test/agent-events-shield-429-bounded-audit.test.ts.
  */
 export const shieldRefusalCounters = { credential: 0, anonymous: 0 };
 
@@ -107,6 +114,14 @@ export async function shield(
   if (Math.random() < SHIELD_REFUSAL_AUDIT_RATE) {
     const operation = bucketClass.kind === "credential" ? "shield:credential" : "shield:anonymous";
     const dig = bucketClass.kind === "credential" ? bucketClass.hash : null;
+    // The sampled refusal carries the running volume with it: operators
+    // multiply sampled rows by ~100, and the latest warn gives the exact
+    // running per-class count. Request_id only, never identity.
+    console.warn("agent-events.shield.refusal_sampled", {
+      bucket_class: bucketClass.kind,
+      refusals: shieldRefusalCounters[bucketClass.kind],
+      request_id: requestId,
+    });
     const auditTimeoutMs = Math.max(1, Math.floor(cfg.lockWaitMs));
     try {
       await sql.begin(async (tx) => {

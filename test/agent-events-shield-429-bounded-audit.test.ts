@@ -16,6 +16,11 @@
 // test/agent-events-shield-429-audit-acceptance.test.ts.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_CONFIG, handleAgentEvent, type IngressConfig } from "../src/agent-events/service";
+import {
+  __resetShieldRefusalCountersForTests,
+  SHIELD_REFUSAL_AUDIT_RATE,
+  shieldRefusalCounters,
+} from "../src/agent-events/shield";
 import { sha256Hex } from "../src/bot/signer";
 import { makeFakeAgentDb, type FakeAgentDb } from "./helpers/fake-agent-ingress-db";
 
@@ -147,6 +152,7 @@ const shieldRows = (rec: BoundedRecording) =>
 // suites, not here.
 beforeEach(() => {
   vi.spyOn(Math, "random").mockReturnValue(0);
+  __resetShieldRefusalCountersForTests();
 });
 
 afterEach(() => {
@@ -219,6 +225,70 @@ describe("bounded outer-shield refusal audit", () => {
     expect(credRows).toHaveLength(1);
     expect(Object.values(credRows[0]!).join("\n")).toContain(await sha256Hex(credential));
     expect(Object.values(credRows[0]!).join("\n")).not.toContain(credential);
+  });
+
+  it("refusal counters increment on every refusal and the running count rides the sampled warn", async () => {
+    // The counters are the volume signal for the ~99% of refusals that write
+    // no audit row: deleting the increment must fail this pin.
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const { rec, call } = setup(1);
+      const ip = "198.51.100.77";
+
+      // Admitted (grantless 401) hits are not shield refusals: no count.
+      // Sampler forced off for the admission so its own pre-auth warn does
+      // not pollute the shield-warn pins below.
+      vi.mocked(Math.random).mockReturnValue(SHIELD_REFUSAL_AUDIT_RATE);
+      expect((await call(null, ip)).status).toBe(401);
+      expect(shieldRefusalCounters).toEqual({ credential: 0, anonymous: 0 });
+      expect(warn).not.toHaveBeenCalled();
+
+      // Sampler forced on for the refusals: three refusals, three rows,
+      // three warns carrying the running count 1, 2, 3 with each refusal's
+      // own request_id and no identity.
+      vi.mocked(Math.random).mockReturnValue(0);
+      for (let expected = 1; expected <= 3; expected++) {
+        const refused = await call(null, ip);
+        expect(refused.status).toBe(429);
+        expect(shieldRefusalCounters.anonymous).toBe(expected);
+        expect(shieldRefusalCounters.credential).toBe(0);
+        expect(warn).toHaveBeenCalledTimes(expected);
+        expect(warn.mock.calls[expected - 1]?.[0]).toBe("agent-events.shield.refusal_sampled");
+        expect(warn.mock.calls[expected - 1]?.[1]).toMatchObject({
+          bucket_class: "anonymous",
+          refusals: expected,
+          request_id: refused.body.request_id,
+        });
+      }
+      expect(shieldRows(rec)).toHaveLength(3);
+
+      // Sampler forced off: two more refusals still count, but write no row
+      // and emit no warn. The count is the only durable volume signal left.
+      vi.mocked(Math.random).mockReturnValue(SHIELD_REFUSAL_AUDIT_RATE);
+      expect((await call(null, ip)).status).toBe(429);
+      expect((await call(null, ip)).status).toBe(429);
+      expect(shieldRefusalCounters.anonymous).toBe(5);
+      expect(warn).toHaveBeenCalledTimes(3);
+      expect(shieldRows(rec)).toHaveLength(3);
+
+      // Credentialed refusals count under their own class. The credential
+      // bucket is new, so spend it with one (unsampled, silent) admission
+      // before refusing.
+      vi.mocked(Math.random).mockReturnValue(SHIELD_REFUSAL_AUDIT_RATE);
+      expect((await call("shield-counter-credential", ip)).status).toBe(401);
+      vi.mocked(Math.random).mockReturnValue(0);
+      const credRefused = await call("shield-counter-credential", ip);
+      expect(credRefused.status).toBe(429);
+      expect(shieldRefusalCounters).toEqual({ credential: 1, anonymous: 5 });
+      expect(warn).toHaveBeenCalledTimes(4);
+      expect(warn.mock.calls[3]?.[1]).toMatchObject({
+        bucket_class: "credential",
+        refusals: 1,
+      });
+      expect(JSON.stringify(warn.mock.calls)).not.toContain("shield-counter-credential");
+    } finally {
+      warn.mockRestore();
+    }
   });
 
   it("holds no new lock: one refusal costs the bucket lock only, with bounded timeouts outside it", async () => {

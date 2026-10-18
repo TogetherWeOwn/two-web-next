@@ -6,27 +6,32 @@
 // post-admission (each carries its own request_id on the 429 envelope), so
 // a sampled audit gives operators traceable examples without letting a
 // throttle storm grow the audit table linearly: the sampling rate is
-// ~1%, and these pins assert boundedness over floods (sampled rows <=
-// cap, >= 0) rather than exact counts on either side. Volume itself is a
-// counter signal, not an audit-table signal.
+// ~1% (SHIELD_REFUSAL_AUDIT_RATE). These pins run under a forced sampler so
+// they are deterministic: shape/privacy tests stub Math.random to 0 (every
+// refusal sampled, exact one row per refusal) and boundedness tests stub it
+// to the rate itself (never sampled, exact zero rows). Volume itself is a
+// counter signal surfaced on the sampled warn, not an audit-table signal
+// (see src/agent-events/shield.ts).
 //
 // The contract pinned here:
-// - Over a flood of outer-shield 429s, denied/rate_limited audit rows stay
-//   within the sampled cap. Every row that IS written carries its own
+// - Over a flood of outer-shield 429s with the sampler forced on, every
+//   refusal writes exactly one denied/rate_limited audit row carrying its own
 //   refusal's request_id (the ULID on that refusal's envelope, distinct
 //   per row and from every admitted hit), result "denied" and reason_code
 //   "rate_limited" — the inner refusal's existing outcome convention. The
-//   row is pre-auth like the contention row: grant_id null.
+//   row is pre-auth like the contention row: grant_id null. With the sampler
+//   forced off, a flood writes exact zero rows: at most one audit insert per
+//   refusal either way, never one row per refusal under live sampling.
 // - A sampled row records the bucket CLASS — credential-hash vs anonymous —
 //   in the existing audit columns (no migration, no new column is assumed).
 //   Which existing column carries the class is the builder's choice; these
-//   tests pin the observable outcome on the rows written instead:
+//   tests pin the observable outcome on the forced-sampled rows:
 //   anonymous rows from different addresses are identical once request_id
 //   is removed, credentialed and anonymous rows differ, and any
 //   per-credential difference is the credential's sha256 hash and nothing
 //   else. No audit value may carry the raw credential, an IP address, or
-//   an IP bucket. The sampler may write no row for a given class in a
-//   flood; the class comparisons apply to the rows it does write.
+//   an IP bucket. Forcing the sample keeps these comparisons non-vacuous:
+//   every flood segment contributes exactly FLOOD rows.
 // - Every refused hit still writes no hit row and reaches no grant
 //   lookup, and every 429 envelope still carries its request_id. The
 //   contention path is unchanged (controls below).
@@ -37,8 +42,9 @@
 // Hermetic and DB-free: the in-memory fake agent-event store plus an
 // INSERT-recording wrapper that maps audit values to their column names,
 // so no DATABASE_URL, network, or Discord access is involved.
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_CONFIG, handleAgentEvent, type IngressConfig } from "../src/agent-events/service";
+import { SHIELD_REFUSAL_AUDIT_RATE } from "../src/agent-events/shield";
 import { sha256Hex } from "../src/bot/signer";
 import type { Env } from "../src/env";
 import app from "./app";
@@ -130,26 +136,29 @@ function setup(routePerMinute: number, opts: { failAdvisoryLock?: boolean } = {}
 
 const shieldRows = (rec: Recording) => rec.rows.filter((r) => r.reason_code === "rate_limited");
 
-// Sampled-audit bound. The sampling rate is ~1%; the cap is set an order of
-// magnitude above it (10% of the flood) so the pin asserts boundedness —
-// sub-linear table growth — without pinning the exact sampler. It still
-// kills the one-row-per-refusal shape: auditing every refusal writes
-// `refusals` rows, far above this cap for any flood past a handful of hits.
-const sampledCap = (refusals: number) => Math.ceil(refusals / 10);
+// Forced-sampler determinism. Sampling (~1%) under live Math.random is flaky
+// by construction: most floods write no rows, so privacy loops run vacuous,
+// and the cap flakes the other way. Shape/privacy tests force the sample on
+// (Math.random -> 0: exactly one row per refusal) and boundedness tests force
+// it off (Math.random -> SHIELD_REFUSAL_AUDIT_RATE: `rate < rate` is false, so
+// exact zero rows). The bound itself is the rate constant plus at-most-one
+// insert per refusal, both pinned exactly below.
+afterEach(() => {
+  vi.restoreAllMocks();
+});
 
 /**
- * Assert the sampled shield rows for a flood: count within the cap, and
- * every row written keeps the pre-auth shape and correlates to one of the
- * refused envelopes (never to an admitted hit).
+ * Assert an exact sampled-shield row count under a forced sampler: the count
+ * is exact, and every row keeps the pre-auth shape and correlates to one of
+ * the refused envelopes (never to an admitted hit).
  */
-function expectSampledShieldRows(
+function expectExactShieldRows(
   rows: AuditRow[],
-  refusals: number,
+  expected: number,
   envelopeIds: ReadonlySet<unknown>,
   admittedIds: ReadonlySet<unknown> = new Set(),
 ) {
-  expect(rows.length).toBeGreaterThanOrEqual(0);
-  expect(rows.length).toBeLessThanOrEqual(sampledCap(refusals));
+  expect(rows).toHaveLength(expected);
   const seen = new Set<unknown>();
   for (const row of rows) {
     expect(row).toMatchObject({
@@ -180,7 +189,9 @@ function expectNoValueContains(rec: Recording, needles: string[]) {
 }
 
 describe("outer-shield 429 audit rows (sampled-bounded)", () => {
-  it("a flood of anonymous over-budget refusals stays within the sampled cap, every sampled row denied/rate_limited with its own request_id", async () => {
+  it("a flood of anonymous over-budget refusals writes exactly one denied/rate_limited row per refusal with its own request_id", async () => {
+    // Forced sample: every refusal audits, so the shape pins are exact.
+    vi.spyOn(Math, "random").mockReturnValue(0);
     const { fake, rec, call } = setup(2);
     const ip = "198.51.100.20";
 
@@ -205,15 +216,17 @@ describe("outer-shield 429 audit rows (sampled-bounded)", () => {
       expect(envelopeIds.has(refused.body.request_id)).toBe(false);
       envelopeIds.add(refused.body.request_id);
     }
-    // Bounded-sampled, not one-row-per-429 and not exact-zero: the sampled
-    // rows (if any) keep the shape and correlate to refused envelopes.
-    expectSampledShieldRows(shieldRows(rec), FLOOD, envelopeIds, admittedIds);
+    // Forced sample: exactly one row per refusal, each keeping the shape and
+    // correlating to its refused envelope.
+    expectExactShieldRows(shieldRows(rec), FLOOD, envelopeIds, admittedIds);
     // No refused hit wrote a hit row or reached a grant lookup.
     expect(fake.hits).toHaveLength(2);
     expect(rec.counts.grantLookups).toBe(lookupsBeforeFlood);
   });
 
-  it("a flood of credentialed over-budget refusals stays within the sampled cap, never carrying the raw credential", async () => {
+  it("a flood of credentialed over-budget refusals writes exactly one row per refusal, never carrying the raw credential", async () => {
+    // Forced sample: every refusal audits, so the no-credential pin is exact.
+    vi.spyOn(Math, "random").mockReturnValue(0);
     const { rec, call } = setup(2);
     const credential = "shield-audit-credential-alpha";
 
@@ -230,12 +243,15 @@ describe("outer-shield 429 audit rows (sampled-bounded)", () => {
       envelopeIds.add(refused.body.request_id);
       expect(JSON.stringify(refused.body)).not.toContain(credential);
     }
-    expectSampledShieldRows(shieldRows(rec), FLOOD, envelopeIds);
+    expectExactShieldRows(shieldRows(rec), FLOOD, envelopeIds);
     expect(rec.counts.grantLookups).toBe(lookupsBeforeFlood);
     expectNoValueContains(rec, [credential]);
   });
 
   it("sampled rows record bucket class: anonymous rows are address-independent, credentialed rows differ only by class or credential hash", async () => {
+    // Forced sample: every segment contributes exactly FLOOD rows, so the
+    // class comparisons below are non-vacuous.
+    vi.spyOn(Math, "random").mockReturnValue(0);
     const { rec, call } = setup(1);
     const credA = "shield-audit-credential-one";
     const credB = "shield-audit-credential-two";
@@ -256,7 +272,7 @@ describe("outer-shield 429 audit rows (sampled-bounded)", () => {
         envelopeIds.add(refused.body.request_id);
       }
       const segment = shieldRows(rec).slice(before);
-      expectSampledShieldRows(segment, FLOOD, envelopeIds);
+      expectExactShieldRows(segment, FLOOD, envelopeIds);
       return segment.map(stripRequestId);
     };
 
@@ -265,11 +281,11 @@ describe("outer-shield 429 audit rows (sampled-bounded)", () => {
     const credRowsA = await floodBucket(credA, ipA);
     const credRowsB = await floodBucket(credB, ipB);
 
-    // Across all four floods, sampling stayed within the overall cap.
-    expect(shieldRows(rec).length).toBeLessThanOrEqual(sampledCap(4 * FLOOD));
+    // Forced sample: all four floods audited every refusal.
+    expect(shieldRows(rec)).toHaveLength(4 * FLOOD);
+    expect(anonA).toHaveLength(FLOOD);
+    expect(anonB).toHaveLength(FLOOD);
 
-    // The comparisons below apply to the rows the sampler wrote; it may
-    // write none for a class, in which case that pair has nothing to leak.
     // Same class, different addresses: identical rows. This is what proves
     // no IP bytes (raw, normalised, or bucketed) reached the audit row.
     for (const rowB of anonB) {
@@ -294,7 +310,9 @@ describe("outer-shield 429 audit rows (sampled-bounded)", () => {
     expectNoValueContains(rec, [credA, credB, ipA, ipB, "shield:ip:"]);
   });
 
-  it("storm volume stays bounded: sampled rows within the cap, at most one audit insert and no hit insert per refusal, admission unharmed afterwards", async () => {
+  it("storm volume stays bounded: forced-unsampled flood writes zero rows, a forced-sampled refusal writes exactly one, admission unharmed afterwards", async () => {
+    // Forced off: `rate < rate` is false, so the flood audits nothing.
+    const random = vi.spyOn(Math, "random").mockReturnValue(SHIELD_REFUSAL_AUDIT_RATE);
     const { rec, call } = setup(1);
     const ip = "198.51.100.40";
 
@@ -307,24 +325,31 @@ describe("outer-shield 429 audit rows (sampled-bounded)", () => {
       expect(refused.body.request_id).toMatch(ULID);
       envelopeIds.add(refused.body.request_id);
     }
-    // 25 refusals, sampled: far below one row per refusal, never above cap.
-    expectSampledShieldRows(shieldRows(rec), 25, envelopeIds);
+    // 25 refusals, sampler forced off: exact zero rows, never above any cap.
+    expectExactShieldRows(shieldRows(rec), 0, envelopeIds);
     expect(rec.counts.grantLookups).toBe(lookupsBeforeStorm);
 
-    // The 26th refusal, measured: at most one audit write (the sample may
-    // skip it), no hit write, no grant lookup, bounded statements.
+    // The 26th refusal, measured with the sampler forced on: exactly one
+    // audit write (at most one per refusal either way), no hit write, no
+    // grant lookup, bounded statements.
+    random.mockReturnValue(0);
     const before = { ...rec.counts };
-    expect((await call(null, ip)).status).toBe(429);
-    expect(rec.counts.auditInserts - before.auditInserts).toBeLessThanOrEqual(1);
+    const sampled = await call(null, ip);
+    expect(sampled.status).toBe(429);
+    expect(rec.counts.auditInserts - before.auditInserts).toBe(1);
     expect(rec.counts.hitInserts - before.hitInserts).toBe(0);
     expect(rec.counts.grantLookups - before.grantLookups).toBe(0);
     expect(rec.counts.statements - before.statements).toBeLessThanOrEqual(6);
+    expect(shieldRows(rec)).toHaveLength(1);
+    expect(shieldRows(rec)[0]!.request_id).toBe(sampled.body.request_id);
 
     // A fresh bucket is still admitted after the storm.
     expect((await call(null, "198.51.100.41")).status).toBe(401);
   });
 
-  it("refusals at the mounted route stay within the sampled cap too", async () => {
+  it("refusals at the mounted route audit nothing with the sampler forced off", async () => {
+    // Boundedness at the route boundary: sampler forced off, exact zero rows.
+    vi.spyOn(Math, "random").mockReturnValue(SHIELD_REFUSAL_AUDIT_RATE);
     const fake = makeFakeAgentDb();
     const rec = recordingSql(fake);
     const env = {
@@ -359,30 +384,24 @@ describe("outer-shield 429 audit rows (sampled-bounded)", () => {
       expect(refused.headers.get("Retry-After")).toBeTruthy();
       envelopeIds.add(body.request_id);
     }
-    expectSampledShieldRows(shieldRows(rec), FLOOD, envelopeIds);
+    expectExactShieldRows(shieldRows(rec), 0, envelopeIds);
     // Only the one admitted hit wrote a hit row.
     expect(fake.hits).toHaveLength(1);
   });
 });
 
 describe("outer-shield 429 audit controls", () => {
-  it("control: an admitted hit writes at most a sampled unauthenticated audit correlated to the answer, and no rate_limited row", async () => {
+  it("control: an admitted grantless hit writes zero audit rows and no rate_limited row", async () => {
     const { fake, rec, call } = setup(60);
 
     const answer = await call(null, "198.51.100.60");
     expect(answer.status).toBe(401);
     expect(answer.body.reason).toBe("unauthenticated");
     expect(answer.body.request_id).toMatch(ULID);
-    // Admitted-then-grantless 401s are sampled like shield 429s: the row
-    // may be skipped, but never duplicated, and if written the recorded
-    // column mapping is sound — its request_id is the very id the caller
-    // was answered with.
-    expect(rec.rows.length).toBeGreaterThanOrEqual(0);
-    expect(rec.rows.length).toBeLessThanOrEqual(sampledCap(1));
-    for (const row of rec.rows) {
-      expect(row).toMatchObject({ reason_code: "unauthenticated" });
-      expect(row.request_id).toBe(answer.body.request_id);
-    }
+    // Grant-first pre-auth refusal: zero audit INSERTs by contract (the
+    // grantless-deep pins demand exact zero). The envelope still carries the
+    // admission request_id the caller was answered with.
+    expect(rec.rows).toHaveLength(0);
     expect(shieldRows(rec)).toHaveLength(0);
     expect(fake.hits.map((hit) => hit.bucket)).toEqual(["shield:ip:198.51.100.60"]);
   });

@@ -1,10 +1,11 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { serializeSigned } from "hono/utils/cookie";
 import app from "./app";
 import { profilesApp } from "../src/profiles/routes";
 import { BODY_LIMIT_BYTES } from "../src/body-limit";
 import type { Env } from "../src/env";
 import { createMemorySessionStore, hashToken, newSessionToken } from "../src/sessions";
+import { SHIELD_REFUSAL_AUDIT_RATE } from "../src/agent-events/shield";
 
 // No sockets: model only the existing shield SQL and audit writes.
 const fixture = vi.hoisted(() => ({
@@ -103,6 +104,10 @@ beforeEach(() => {
   fixture.failAudit = false;
   fixture.failGrants = false;
   fixture.options = [];
+});
+
+afterEach(() => {
+  vi.restoreAllMocks();
 });
 
 describe("profile write admission", () => {
@@ -289,6 +294,10 @@ describe("agent ingress admission", () => {
   it.each([null, "test-only-machine-credential"])(
     "spent bucket %s refuses under-cap 429; over-cap is 413 first",
     async (credential) => {
+      // Sampler forced off (`rate < rate` is false): exact zero audits,
+      // deterministically. Row shape under sampling is pinned by the
+      // shield-429-audit suite.
+      vi.spyOn(Math, "random").mockReturnValue(SHIELD_REFUSAL_AUDIT_RATE);
       fixture.hits = 60;
       // Under-cap still reaches the spent bucket and refuses 429.
       for (let i = 0; i < 2; i++) {
@@ -310,13 +319,10 @@ describe("agent ingress admission", () => {
         expect(ctx.waitUntil).toHaveBeenCalledOnce();
       }
       expect(fixture.hits).toBe(60);
-      // Outer-shield refusals are sampled, not one audit row per refusal: over
-      // 2 refusals the audit growth stays within the sampled cap (10%), with
-      // no hit row and no grant lookup either way.
+      // Sampler forced off: exact zero audit INSERTs with no hit row and no
+      // grant lookup either way.
       expect(fixture.queries.some((q) => /agent_event_grants/.test(q))).toBe(false);
-      const audits = fixture.queries.filter((q) => q.includes("agent_event_audits"));
-      expect(audits.length).toBeGreaterThanOrEqual(0);
-      expect(audits.length).toBeLessThanOrEqual(Math.ceil(2 / 10));
+      expect(fixture.queries.filter((q) => q.includes("agent_event_audits"))).toHaveLength(0);
       expect(fixture.ends).toBe(2);
       // Over-cap with the same spent bucket never reads the bucket: 413, no
       // new statements, hits, audits or closes.

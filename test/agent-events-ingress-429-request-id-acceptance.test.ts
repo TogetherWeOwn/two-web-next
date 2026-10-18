@@ -21,18 +21,18 @@
 // - Nothing else changes: the message wording, the key set beyond the new
 //   field, the absence of exception/trace/stack material, and the
 //   charges-no-hit refusals. A refused hit writes no hit row and reaches
-//   no grant lookup. Post-admission refusals (admitted 401s and shield
-//   429s alike) are audited only on a bounded sample — exact audit counts
-//   are retired on both sides; the flood pin below asserts rows stay
-//   within the sampled cap and every sampled row correlates to its
-//   refusal's request_id.
+//   no grant lookup. Admitted grantless 401s write zero audit rows; shield
+//   429s audit on a bounded ~1% sample. The flood pin below forces the
+//   sampler off (exact zero rows) so it is deterministic; every refused
+//   envelope still carries its own request_id.
 // - No credential material ever appears in the envelope.
 //
 // Hermetic and DB-free: the in-memory fake agent-event store records every
 // hit and audit row, so spent buckets, audit deltas and the serialized route
 // JSON are observed directly with no DATABASE_URL, network, or Discord.
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_CONFIG, handleAgentEvent, type IngressConfig } from "../src/agent-events/service";
+import { SHIELD_REFUSAL_AUDIT_RATE } from "../src/agent-events/shield";
 import type { Env } from "../src/env";
 import app from "./app";
 import { makeFakeAgentDb, type FakeAgentDb } from "./helpers/fake-agent-ingress-db";
@@ -74,13 +74,12 @@ function expectCorrelated429(answer: { status: number; body: Record<string, unkn
   expect((answer.body.request_id as string).length).toBeGreaterThan(0);
 }
 
-// Sampled-audit bound for post-admission refusals. The sampling rate is
-// ~1%; the cap is set an order of magnitude above it (10% of the flood)
-// so the pin asserts boundedness without pinning the exact sampler. It
-// still kills the one-row-per-refusal shape on either side: auditing
-// every admitted 401 and shield 429 writes one row per hit, far above
-// this cap over a flood.
-const sampledCap = (hits: number) => Math.ceil(hits / 10);
+// Deterministic sampling for the flood pin below. Live ~1% sampling is flaky
+// by construction, so the pin forces the sampler off (Math.random at the
+// rate itself: `rate < rate` is false) and asserts exact zero audit rows.
+afterEach(() => {
+  vi.restoreAllMocks();
+});
 
 /**
  * Wrap the fake sql tag counting grant lookups by credential hash.
@@ -250,7 +249,9 @@ describe("positive controls: the 429 contract otherwise unchanged", () => {
     expect(refused.body).not.toHaveProperty("stack");
   });
 
-  it("unauthenticated-shield flood: admitted 401s and shield 429s stay within the sampled cap, refused hits charge no hit and reach no grant lookup", async () => {
+  it("unauthenticated-shield flood: admitted 401s write zero rows and forced-unsampled shield 429s write zero rows, refused hits charge no hit and reach no grant lookup", async () => {
+    // Sampler forced off: exact zero audit rows, deterministically.
+    vi.spyOn(Math, "random").mockReturnValue(SHIELD_REFUSAL_AUDIT_RATE);
     const fake = makeFakeAgentDb();
     const counting = countingGrantLookups(fake);
     const call = () =>
@@ -266,10 +267,6 @@ describe("positive controls: the 429 contract otherwise unchanged", () => {
     expect(firstAdmitted.status).toBe(401);
     const secondAdmitted = await call();
     expect(secondAdmitted.status).toBe(401);
-    const admittedIds = new Set<unknown>([
-      firstAdmitted.body.request_id,
-      secondAdmitted.body.request_id,
-    ]);
     expect(fake.hits).toHaveLength(2);
     // Bucket spent. Snapshot the seam the refused hits must not touch.
     const lookupsBeforeFlood = counting.lookups();
@@ -288,27 +285,11 @@ describe("positive controls: the 429 contract otherwise unchanged", () => {
     expect(fake.hits).toHaveLength(2);
     expect(counting.lookups()).toBe(lookupsBeforeFlood);
 
-    // Bounded-sampled across the whole run (2 admitted 401s + the 429
-    // flood): not one row per hit, not exact-zero. Every sampled row
-    // correlates to the hit that produced it and keeps its shape.
-    expect(fake.audits.length).toBeGreaterThanOrEqual(0);
-    expect(fake.audits.length).toBeLessThanOrEqual(sampledCap(2 + FLOOD));
-    const seenRateLimited = new Set<unknown>();
-    for (const row of fake.audits) {
-      if (row.reason === "unauthenticated") {
-        expect(admittedIds.has(row.requestId)).toBe(true);
-        continue;
-      }
-      expect(row).toMatchObject({
-        grantId: null,
-        reason: "rate_limited",
-        result: "denied",
-      });
-      expect(row.requestId).toBeTruthy();
-      expect(envelopeIds.has(row.requestId)).toBe(true);
-      expect(seenRateLimited.has(row.requestId)).toBe(false);
-      seenRateLimited.add(row.requestId);
-    }
+    // Sampler forced off plus zero-audit grantless 401s: exact zero rows
+    // across the whole run (2 admitted 401s + the 429 flood). Row shape
+    // under sampling is pinned by the shield-429-audit suite; here every
+    // refused envelope still carries its own request_id (asserted above).
+    expect(fake.audits).toHaveLength(0);
   });
 
   it("inner 429 keeps the shared shape and charges no inner hit", async () => {
