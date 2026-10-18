@@ -60,11 +60,20 @@ invite fallback. Do not reload, bookmark, share or replay `/join/callback`.
 
 An expired Discord authorization code can also produce **Discord is
 unreachable**; Next does not expose a separate `invalid_grant` message.
-A 200 response on another recovery page is not a successful join.
+A 200 response on another recovery page is not a successful join: it does
+not mean joined and does not sign in.
 
-**Slow down a little** (429) means the request budget was exceeded. Wait for
-`Retry-After` if available, otherwise at least a minute, before starting a
-fresh journey. Do not repeatedly click, refresh or try to evade the limit.
+**Slow down a little** has two different causes. A website 429 is local
+admission: the join budget was exceeded before Discord was contacted. It
+carries `Retry-After` from the website, records no join-attempt row, and
+never implies a session. A Discord automatic-add backoff renders the 200
+**We couldn't add you automatically** recovery carrying the provider's
+`Retry-After` and records the distinct `rate_limited` attempt outcome;
+the 200 status does not mean joined. For either cause, wait for
+`Retry-After` if present (otherwise at least a minute), then start a
+fresh journey at `/join/discord` or use the invite link below. Do not
+repeatedly click, refresh, replay `/join/callback`, or try to evade the
+limit.
 
 ## Still locked out after a successful join
 
@@ -106,10 +115,13 @@ The join attempt outcomes are **not** the homepage notice names:
 | `denied` | Discord returned an approval error, including cancelled consent. |
 | `error` | State/code validation or token exchange/user lookup failed. |
 | `degraded` | Automatic server entry failed or was refused after identity lookup. |
+| `rate_limited` | Discord rate-limited the automatic add. The callback still renders the 200 **We couldn't add you automatically** recovery (with `Retry-After` when the provider sent a usable backoff); the 200 does not mean joined. Wait, then start a fresh journey or use the invite. |
 
 The table is not a complete sign-in history: `/auth/discord/callback` does not
-write join-attempt rows, throttled requests do not reach the recorder, and a
-missing join store can leave no row. The current live add-member call also
+write join-attempt rows, website-throttled (429 admission) requests do not reach
+the recorder, and a missing join store can leave no row. A Discord
+automatic-add backoff (`rate_limited`) is recorded; a local admission refusal
+is not. The current live add-member call also
 leaves Request ID empty; do not promise a trace ID or infer success from an
 absent row. List and detail reads attribute the returned rows' recorded Discord
 IDs directly, excluding the viewer, without requiring a current users row or
