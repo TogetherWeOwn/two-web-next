@@ -4,7 +4,14 @@ import { retireAnonEventCaches } from "../events/anon-cache";
 import { retireHomeGuestCache } from "../home-cache";
 import type { Answer, Grant, IngressConfig, IngressEffects, Op } from "./types";
 import { OPS } from "./types";
-import { digest, isPlainObject, PayloadTooDeepError, storedEventKey, ulid } from "./payload";
+import {
+  digest,
+  hasIngressControlBytes,
+  isPlainObject,
+  PayloadTooDeepError,
+  storedEventKey,
+  ulid,
+} from "./payload";
 import { audit } from "./audit";
 import { checkGrant, findGrant } from "./grants";
 import { shield } from "./shield";
@@ -82,9 +89,22 @@ async function processAgentEvent(
 
   const rawOp = doc.op;
   const rawKey = doc.idempotency_key;
-  const auditOp = typeof rawOp === "string" && rawOp !== "" ? rawOp.slice(0, 32) : "unknown";
+  // Sanitised fallbacks: the two denials below run before the control guard,
+  // so a hostile value on the other half of an invalid envelope (a NUL key
+  // next to a non-string op, a NUL op next to an over-length key, or either
+  // under a disabled ingress) must never reach the audit INSERT raw, where
+  // PostgreSQL `text` would reject NUL (22021) and turn the denial into a 500.
+  const auditOp =
+    typeof rawOp === "string" && rawOp !== "" && !hasIngressControlBytes(rawOp)
+      ? rawOp.slice(0, 32)
+      : "unknown";
   const auditKey =
-    typeof rawKey === "string" && rawKey !== "" && rawKey.length <= 255 ? rawKey : null;
+    typeof rawKey === "string" &&
+    rawKey !== "" &&
+    rawKey.length <= 255 &&
+    !hasIngressControlBytes(rawKey)
+      ? rawKey
+      : null;
   const deny = async (
     grant: Grant | null,
     op: string,
@@ -123,6 +143,21 @@ async function processAgentEvent(
       422,
       "The request needs a string `op` and a non-empty string `idempotency_key` (max 255 characters).",
     );
+  }
+
+  // Control bytes in the machine envelope never reach the store: PostgreSQL
+  // `text` rejects NUL (22021), so auditing the raw value would turn this
+  // denial into a 500. Refused before auth, grant, replay, rate-limit and
+  // audit — no audit row, no replay write, no hostile byte in any INSERT.
+  if (hasIngressControlBytes(op) || hasIngressControlBytes(idem)) {
+    return {
+      status: 422,
+      body: {
+        reason: "validation_failed",
+        message: "The `op` and `idempotency_key` fields must not contain control characters.",
+        request_id: requestId,
+      },
+    };
   }
 
   const grant = credential ? await findGrant(sql, credential) : null;
