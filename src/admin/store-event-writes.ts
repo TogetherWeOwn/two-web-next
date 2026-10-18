@@ -288,6 +288,17 @@ async function shiftFutureChildren(
     .from(events)
     .where(and(eq(events.parentEventId, parent.id), gt(events.startsAt, new Date())))
     .for("update");
+  // A parent delta must never invert (or zero) a future occurrence the
+  // moderator shortened individually: refuse the whole edit with the existing
+  // ends_at response before any child write, so the surrounding transaction
+  // rolls the parent, audit and waitlist writes back atomically.
+  for (const child of children) {
+    const proposedStart = child.startsAt.getTime() + startDelta;
+    const proposedEnd = child.endsAt.getTime() + endDelta;
+    if (proposedEnd <= proposedStart) {
+      throw new ValidationError({ ends_at: "The end is after the start." });
+    }
+  }
   const owed: NonNullable<WriteBack>[] = [];
   for (const child of children) {
     const [moved] = await tx
