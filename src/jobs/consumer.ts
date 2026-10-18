@@ -140,6 +140,8 @@ export async function consume(
         // Never ack a terminal message while it still blocks future revisions.
         // Class-only: settlement errors can carry SQL or connection secrets.
         console.error("sync attempt settlement failed", { exception: queueExceptionClass(e) });
+        if (jobId)
+          await bounded("released", deps.ledger.released(jobId, deps.now?.() ?? new Date()));
         m.retry();
         return false;
       }
