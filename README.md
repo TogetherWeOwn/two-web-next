@@ -253,8 +253,9 @@ still report their skips when staging has no events or no cancelled fixture,
 and the loud-skip ledger records those results. The step retries six times like
 the public smoke, refuses any non-staging origin (production included), and
 never logs the token, cookies or response bodies. It needs the
-`staging`-environment `QA_AUTH_TOKEN` secret; without it the step reports its
-skip and passes, so a missing token never fails a deploy.
+`staging`-environment `QA_AUTH_TOKEN` secret; without it the step writes the
+per-check SKIP ledger as evidence and then fails closed, so a missing token
+fails the deploy instead of passing with unverified guards.
 
 Deployment context: the top-level Wrangler configuration names Worker
 `two-web-next` and the `next.togetherweown.com` route; it has no named
