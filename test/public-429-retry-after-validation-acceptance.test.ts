@@ -45,7 +45,10 @@ function fixture(limited: boolean, wait: Wait) {
       if (statement.includes("DELETE FROM web_throttle_hits")) return [];
       throw new Error("Unexpected throttle statement");
     },
-    { begin: (run: (tx: Sql) => Promise<unknown>) => run(sql as unknown as Sql) },
+    {
+      begin: (run: (tx: Sql) => Promise<unknown>) => run(sql as unknown as Sql),
+      unsafe: async () => [],
+    },
   );
   const app = new Hono<{ Bindings: Env }>();
   registerPublicApiRoutes(app);
