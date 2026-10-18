@@ -94,7 +94,7 @@ export type Fields = {
 };
 
 // Same rules as the human event form (parseEventForm in src/admin/validation):
-// trimmed before the required/length checks, and title/description/location
+// trimmed before the required/length checks, and title/game/description/location
 // refuse control and invisible/bidi characters via the shared predicate.
 export function validateFields(
   raw: unknown,
@@ -133,17 +133,11 @@ export function validateFields(
   const timezone = str("timezone", 64, true);
   // Like the human form, check the raw submitted text (trim removes BOM): tab,
   // LF and CR and genuine emoji ZWJ sequences stay accepted.
-  for (const k of ["title", "description", "location"] as const) {
+  for (const k of ["title", "game", "description", "location"] as const) {
     const v = raw[k];
     if (typeof v === "string" && v !== "" && containsControlCharacters(v))
       bad(k, `The ${k} field must not contain control or invisible characters.`);
   }
-  // `game` is the NUL gap: Postgres text columns reject NUL bytes, so NUL
-  // must be refused before persistence. Only NUL is refused here — BEL and
-  // other controls stay accepted to avoid broadening validation.
-  const gameRaw = raw["game"];
-  if (typeof gameRaw === "string" && gameRaw !== "" && gameRaw.includes("\0"))
-    bad("game", "The game field must not contain NUL characters.");
   if (timezone !== null) {
     try {
       new Intl.DateTimeFormat("en", { timeZone: timezone });
