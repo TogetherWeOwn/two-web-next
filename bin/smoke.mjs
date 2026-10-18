@@ -64,9 +64,27 @@ export function assertVersionOverride(value) {
   return value;
 }
 
+export function assertFailedBaseline(value) {
+  const text = typeof value === "number" ? String(value) : value;
+  if (typeof text !== "string" || !/^\d+$/.test(text.trim())) {
+    throw new Error("failed-baseline must be a non-negative integer");
+  }
+  const parsed = Number.parseInt(text.trim(), 10);
+  if (!Number.isSafeInteger(parsed)) {
+    throw new Error("failed-baseline must be a non-negative integer");
+  }
+  return parsed;
+}
+
 export async function smoke(
   baseUrl,
-  { timeoutMs = 5_000, log = console.log, allowIndexable = false, versionOverride } = {},
+  {
+    timeoutMs = 5_000,
+    log = console.log,
+    allowIndexable = false,
+    versionOverride,
+    failedBaseline,
+  } = {},
 ) {
   const base = new URL(baseUrl);
   if (
@@ -82,6 +100,7 @@ export async function smoke(
     );
   }
   if (versionOverride !== undefined) assertVersionOverride(versionOverride);
+  const baseline = failedBaseline === undefined ? undefined : assertFailedBaseline(failedBaseline);
   const overrideHeaders =
     versionOverride === undefined
       ? {}
@@ -184,14 +203,21 @@ export async function smoke(
             "JSON /up db:ok, pending_migrations:0, status and queue.status",
             "valid JSON with unexpected health shape",
           );
-          // Dead letters are not promotable: queue.failed > 0 fails closed
-          // with the count in the output. failed 0/null (an unreadable
-          // ledger, or an envelope without the field) does not fail this
-          // gate on its own.
+          // Dead letters are not promotable: without a baseline any positive
+          // numeric queue.failed fails closed with the count in the output.
+          // Promotion workflows capture the retained-rows count from /up
+          // before the deploy/promote (SMOKE_FAILED_BASELINE) and fail only
+          // on growth past it, so history never blocks a deploy while new
+          // dead letters still do. failed 0/null (an unreadable ledger, or
+          // an envelope without the field) does not fail this gate on its own.
           const failed = data?.queue?.failed;
+          const failedIsNew =
+            typeof failed === "number" && (baseline === undefined ? failed > 0 : failed > baseline);
           check(
-            !(typeof failed === "number" && failed > 0),
-            "queue.failed 0 (no dead letters)",
+            !failedIsNew,
+            baseline === undefined
+              ? "queue.failed 0 (no dead letters)"
+              : `queue.failed <= ${baseline} (no new dead letters; baseline ${baseline})`,
             `queue.failed ${typeof failed === "number" ? failed : "unknown"}`,
           );
         } catch {
@@ -256,6 +282,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   const [baseUrl, ...flags] = args;
   let allowIndexable = false;
   let versionOverride;
+  let failedBaseline;
   let usage = false;
   for (let i = 0; i < flags.length; i += 1) {
     if (flags[i] === "--allow-indexable") {
@@ -268,19 +295,41 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
         versionOverride = value;
       }
       i += 1;
+    } else if (flags[i] === "--failed-baseline") {
+      const value = flags[i + 1];
+      if (value === undefined) {
+        usage = true;
+      } else {
+        failedBaseline = value;
+      }
+      i += 1;
     } else {
       usage = true;
     }
   }
   if (typeof baseUrl !== "string" || usage) {
     console.error(
-      'Usage: node bin/smoke.mjs <base-url> [--allow-indexable] [--version-override worker-name="<version-uuid>"]',
+      'Usage: node bin/smoke.mjs <base-url> [--allow-indexable] [--version-override worker-name="<version-uuid>"] [--failed-baseline <n>]',
     );
     process.exitCode = 2;
   } else {
     try {
       if (versionOverride !== undefined) assertVersionOverride(versionOverride);
-      process.exitCode = (await smoke(baseUrl, { allowIndexable, versionOverride })) ? 0 : 1;
+      // Promotion workflows export the pre-deploy/promote retained-rows count
+      // as SMOKE_FAILED_BASELINE so the gate fails only on growth; an
+      // explicit --failed-baseline flag wins over the environment.
+      const baselineRaw = failedBaseline ?? process.env.SMOKE_FAILED_BASELINE;
+      const baseline =
+        baselineRaw === undefined || baselineRaw === ""
+          ? undefined
+          : assertFailedBaseline(baselineRaw);
+      process.exitCode = (await smoke(baseUrl, {
+        allowIndexable,
+        versionOverride,
+        failedBaseline: baseline,
+      }))
+        ? 0
+        : 1;
     } catch (error) {
       console.error(`smoke: ${error instanceof Error ? error.message : "invalid base-url"}`);
       process.exitCode = 2;

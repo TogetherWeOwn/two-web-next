@@ -579,6 +579,72 @@ test("failed 0, null and missing do not fail the dead-letter gate on their own",
   }
 });
 
+test("retained dead letters pass when the pre-deploy baseline covers them", async (t) => {
+  // Staging serves retained rows (queue.failed 19 on 2026-10-18): the
+  // promotion workflows capture that count before mutating, so history
+  // passes and only growth fails.
+  for (const [failed, failedBaseline] of [
+    [19, 19],
+    [19, 25],
+    [0, 0],
+  ]) {
+    const { url } = await stub(t, (route, result) => {
+      if (route === "/up")
+        result.body = `{"status":"healthy","db":"ok","pending_migrations":0,"queue":{"status":"healthy","warn_at":20,"critical_at":100,"failed":${failed}}}`;
+    });
+    const result = await run(url, { failedBaseline });
+    assert.equal(result.ok, true, `${failed}/${failedBaseline}: ${result.output}`);
+    assert.ok(result.output.includes("PASS /up"), result.output);
+  }
+});
+
+test("dead letters past the baseline fail with the count in the output", async (t) => {
+  const { url } = await stub(t, (route, result) => {
+    if (route === "/up")
+      result.body =
+        '{"status":"healthy","db":"ok","pending_migrations":0,"queue":{"status":"healthy","warn_at":20,"critical_at":100,"failed":20}}';
+  });
+  const result = await run(url, { failedBaseline: 19 });
+  assert.equal(result.ok, false, result.output);
+  assert.match(
+    result.output,
+    /FAIL \/up: expected queue\.failed <= 19 \(no new dead letters; baseline 19\); actual queue\.failed 20/,
+  );
+  assert.ok(!result.output.includes("PASS /up"), result.output);
+});
+
+test("CLI --failed-baseline and SMOKE_FAILED_BASELINE cover retained rows", async (t) => {
+  const { url } = await stub(t, (route, result) => {
+    if (route === "/up")
+      result.body =
+        '{"status":"healthy","db":"ok","pending_migrations":0,"queue":{"status":"healthy","warn_at":20,"critical_at":100,"failed":19}}';
+  });
+  const flagged = await cli([url, "--failed-baseline", "19"]);
+  assert.equal(flagged.code, 0, flagged.output);
+  const grown = await cli([url, "--failed-baseline", "18"]);
+  assert.equal(grown.code, 1, grown.output);
+  assert.match(grown.output, /actual queue\.failed 19/);
+  const unflagged = await cli([url]);
+  assert.equal(unflagged.code, 1, unflagged.output);
+  const previous = process.env.SMOKE_FAILED_BASELINE;
+  process.env.SMOKE_FAILED_BASELINE = "19";
+  try {
+    const fromEnv = await cli([url]);
+    assert.equal(fromEnv.code, 0, fromEnv.output);
+  } finally {
+    if (previous === undefined) delete process.env.SMOKE_FAILED_BASELINE;
+    else process.env.SMOKE_FAILED_BASELINE = previous;
+  }
+});
+
+test("rejects a non-integer failed baseline", async (t) => {
+  const { url } = await stub(t);
+  await assert.rejects(() => smoke(url, { failedBaseline: -1 }), /failed-baseline/);
+  const badFlag = await cli([url, "--failed-baseline", "many"]);
+  assert.equal(badFlag.code, 2, badFlag.output);
+  assert.match(badFlag.output, /failed-baseline/);
+});
+
 test("rejects /up without the cutover origin marker", async (t) => {
   const { url } = await stub(t, (route, result) => {
     if (route === "/up") delete result.headers["x-two-origin"];
