@@ -133,7 +133,17 @@ export async function consume(
     const failAttempt = async () => {
       if (body.kind !== "sync-event") return true;
       try {
-        await deps.events.failSync(body.idempotencyKey);
+        // Settlement is correctness-critical but must never hold the serial
+        // batch open: race the same ledger bound as every sibling wait. On
+        // expiry the existing catch path retries without ack; a late
+        // settlement landing after the race is abandoned and changes nothing.
+        let t: ReturnType<typeof setTimeout>;
+        const timeout = new Promise<never>((_, reject) => {
+          t = setTimeout(() => reject(new Error("timed out")), LEDGER_TIMEOUT_MS);
+        });
+        await Promise.race([deps.events.failSync(body.idempotencyKey), timeout]).finally(() =>
+          clearTimeout(t),
+        );
         return true;
       } catch (e) {
         // Snapshot settlement is correctness-critical, unlike the depth ledger.
