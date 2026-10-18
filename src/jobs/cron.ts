@@ -207,51 +207,99 @@ export class PruneBatchCapError extends Error {
   }
 }
 
+/**
+ * One table drain that failed while the rest of the pass settled. `table` is
+ * a PruneCounts key in canonical table order; `error` preserves the original
+ * rejection identity for whole-flight reporting when no reporter is supplied.
+ */
+export type PruneTableFailure = { table: keyof PruneCounts; error: unknown };
+
 export async function pruneModelTables(
   stores: PruneStores,
   now: Date = new Date(),
-  opts?: { reportCap?: (capped: boolean) => void },
+  opts?: {
+    reportCap?: (capped: boolean) => void;
+    reportFailures?: (failures: readonly PruneTableFailure[]) => void;
+  },
 ): Promise<PruneCounts> {
   // Stores built before the lock sweep carry no sweeper: drain nothing for
   // them instead of throwing, so the rest of the pass keeps its behavior.
   const locks = stores.jobUniqueLocks ?? { sweepExpired: async (_d: Date): Promise<number> => 0 };
-  const [
-    agentEventAudits,
-    accessLog,
-    joinAttempts,
-    idempotencyKeys,
-    searchLog,
-    boardViews,
-    sessions,
-    jobUniqueLocks,
-  ] = await Promise.all([
-    drainPruneTable(
+  // Sequential per-table drains in canonical order: every started drain
+  // settles before the pass reports (never fail-fast), and one table's SQL
+  // error never aborts its siblings. Concurrent drains on a single flight
+  // transaction interleave savepoints and one rollback destroys its peers,
+  // so tables drain one at a time inside the flight while the lock sweep
+  // keeps its autocommit dispatch-pool boundary (see worker.ts). A failed
+  // table contributes 0: partial batches from a failed drain are rolled back
+  // (or discarded) and must never surface as successful-looking counts.
+  const failures: PruneTableFailure[] = [];
+  let agentEventAudits = { total: 0, capped: false };
+  try {
+    agentEventAudits = await drainPruneTable(
       (c) => stores.agentEventAudits.pruneOlderThan(c),
       cutoff(now, AGENT_EVENT_AUDIT_RETENTION_DAYS),
-    ),
-    drainPruneTable(
+    );
+  } catch (error) {
+    failures.push({ table: "agentEventAudits", error });
+  }
+  let accessLog = { total: 0, capped: false };
+  try {
+    accessLog = await drainPruneTable(
       (c) => stores.accessLog.pruneOlderThan(c),
       cutoff(now, MEMBER_ACCESS_LOG_RETENTION_DAYS),
-    ),
-    drainPruneTable(
+    );
+  } catch (error) {
+    failures.push({ table: "accessLog", error });
+  }
+  let joinAttempts = { total: 0, capped: false };
+  try {
+    joinAttempts = await drainPruneTable(
       (c) => stores.joinAttempts.pruneOlderThan(c),
       cutoff(now, JOIN_ATTEMPT_RETENTION_DAYS),
-    ),
-    drainPruneTable(
+    );
+  } catch (error) {
+    failures.push({ table: "joinAttempts", error });
+  }
+  let idempotencyKeys = { total: 0, capped: false };
+  try {
+    idempotencyKeys = await drainPruneTable(
       (c) => stores.idempotencyKeys.pruneOlderThan(c),
       cutoff(now, IDEMPOTENCY_KEY_RETENTION_DAYS),
-    ),
-    drainPruneTable(
+    );
+  } catch (error) {
+    failures.push({ table: "idempotencyKeys", error });
+  }
+  let searchLog = { total: 0, capped: false };
+  try {
+    searchLog = await drainPruneTable(
       (c) => stores.searchLog.pruneOlderThan(c),
       cutoff(now, EVENT_SEARCH_LOG_RETENTION_DAYS),
-    ),
-    drainPruneTable(
+    );
+  } catch (error) {
+    failures.push({ table: "searchLog", error });
+  }
+  let boardViews = { total: 0, capped: false };
+  try {
+    boardViews = await drainPruneTable(
       (c) => stores.boardViews.pruneOlderThan(c),
       cutoff(now, BOARD_VIEW_LOG_RETENTION_DAYS),
-    ),
-    drainPruneTable((d) => stores.sessions.sweepExpired(d), now),
-    drainPruneTable((d) => locks.sweepExpired(d), now),
-  ]);
+    );
+  } catch (error) {
+    failures.push({ table: "boardViews", error });
+  }
+  let sessions = { total: 0, capped: false };
+  try {
+    sessions = await drainPruneTable((d) => stores.sessions.sweepExpired(d), now);
+  } catch (error) {
+    failures.push({ table: "sessions", error });
+  }
+  let jobUniqueLocks = { total: 0, capped: false };
+  try {
+    jobUniqueLocks = await drainPruneTable((d) => locks.sweepExpired(d), now);
+  } catch (error) {
+    failures.push({ table: "jobUniqueLocks", error });
+  }
   const counts = {
     agentEventAudits: agentEventAudits.total,
     accessLog: accessLog.total,
@@ -293,6 +341,19 @@ export async function pruneModelTables(
   // real failure page (both share the Tail mute key
   // scheduled.failing@model:prune).
   opts?.reportCap?.(capped);
+  if (failures.length > 0) {
+    // Partial failure: every drain already settled above, healthy counts and
+    // the cap signal stay exact, and a failed table reports 0 (its partial
+    // batches are rolled back or discarded, never successful-looking). The
+    // pass itself never pages and never logs success: the scheduled caller
+    // pages once post-commit with the failure class, which beats the cap
+    // page when both land in one pass.
+    opts?.reportFailures?.(failures);
+    if (opts?.reportFailures !== undefined) return counts;
+    // Existing direct callers without the reporter keep whole-flight failure
+    // reporting: settle-all, then reject with the canonical-first error.
+    throw failures[0]!.error;
+  }
   const deferred = opts?.reportCap !== undefined;
   if (capped && !deferred) {
     // Page once per capped pass instead of warning: sustained over-cap

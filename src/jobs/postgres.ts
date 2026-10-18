@@ -50,67 +50,100 @@ export function pgPruneStores(sql: TxClient | Sql): PruneStores {
   // Append-only audit rows (drizzle/1018): the database refuses to delete one
   // unless it is strictly older than 90 days by its own clock. A caller clock
   // running ahead must skip, not raise on, the rows in between.
+  //
+  // Transaction isolation: bound to a flight transaction client, each
+  // statement runs inside a real PostgreSQL savepoint boundary so one
+  // table-specific SQL error rolls back only that statement and rethrows
+  // without aborting the enclosing flight (the pass drains tables
+  // sequentially, so savepoints never interleave). Bound to a pool
+  // (autocommit, no savepoint surface) the same statements run as before —
+  // the lock sweep's autocommit boundary is unchanged.
+  const withSavepoint = <T>(work: (client: TxClient | Sql) => Promise<T>): Promise<T> => {
+    const candidate = sql as unknown as {
+      savepoint?: (fn: (client: TxClient | Sql) => Promise<T>) => Promise<T>;
+    };
+    if (typeof candidate.savepoint === "function") return candidate.savepoint((c) => work(c));
+    return work(sql);
+  };
   const agentEventAudits: AgePrunedTable = {
     pruneOlderThan: async (cutoff) =>
-      (
-        await sql`delete from agent_event_audits where id in (
+      withSavepoint(
+        async (client) =>
+          (
+            await client`delete from agent_event_audits where id in (
           select id from agent_event_audits where created_at < ${cutoff}
             and created_at < clock_timestamp() - interval '2160 hours'
           order by id limit ${PRUNE_DELETE_BATCH_SIZE}
           for update skip locked
         ) returning 1`
-      ).length,
+          ).length,
+      ),
   };
   const accessLog: AgePrunedTable = {
     pruneOlderThan: async (cutoff) =>
-      (
-        await sql`delete from member_data_access_logs where id in (
+      withSavepoint(
+        async (client) =>
+          (
+            await client`delete from member_data_access_logs where id in (
           select id from member_data_access_logs where occurred_at < ${cutoff}
             and occurred_at < clock_timestamp() - interval '2160 hours'
           order by id limit ${PRUNE_DELETE_BATCH_SIZE}
           for update skip locked
         ) returning 1`
-      ).length,
+          ).length,
+      ),
   };
   const joinAttempts: AgePrunedTable = {
     pruneOlderThan: async (cutoff) =>
-      (
-        await sql`delete from join_attempts where id in (
+      withSavepoint(
+        async (client) =>
+          (
+            await client`delete from join_attempts where id in (
           select id from join_attempts where created_at < ${cutoff}
           order by id limit ${PRUNE_DELETE_BATCH_SIZE}
           for update skip locked
         ) returning 1`
-      ).length,
+          ).length,
+      ),
   };
   const idempotencyKeys: AgePrunedTable = {
     pruneOlderThan: async (cutoff) =>
-      (
-        await sql`delete from agent_event_idempotency_keys where id in (
+      withSavepoint(
+        async (client) =>
+          (
+            await client`delete from agent_event_idempotency_keys where id in (
           select id from agent_event_idempotency_keys where created_at < ${cutoff}
           order by id limit ${PRUNE_DELETE_BATCH_SIZE}
           for update skip locked
         ) returning 1`
-      ).length,
+          ).length,
+      ),
   };
   const searchLog: AgePrunedTable = {
     pruneOlderThan: async (cutoff) =>
-      (
-        await sql`delete from event_search_logs where id in (
+      withSavepoint(
+        async (client) =>
+          (
+            await client`delete from event_search_logs where id in (
           select id from event_search_logs where occurred_at < ${cutoff}
           order by id limit ${PRUNE_DELETE_BATCH_SIZE}
           for update skip locked
         ) returning 1`
-      ).length,
+          ).length,
+      ),
   };
   const boardViews: AgePrunedTable = {
     pruneOlderThan: async (cutoff) =>
-      (
-        await sql`delete from board_view_logs where id in (
+      withSavepoint(
+        async (client) =>
+          (
+            await client`delete from board_view_logs where id in (
           select id from board_view_logs where occurred_at < ${cutoff}
           order by id limit ${PRUNE_DELETE_BATCH_SIZE}
           for update skip locked
         ) returning 1`
-      ).length,
+          ).length,
+      ),
   };
   // Scheduled session adapter: per-statement bounded expiry sweep. Deletes
   // only rows expired by BOTH clocks — `expires_at <= now` (the read-visibility
@@ -123,14 +156,17 @@ export function pgPruneStores(sql: TxClient | Sql): PruneStores {
   // `drainPruneTable` and reports exact totals plus the cap.
   const sessions = {
     sweepExpired: async (now: Date) =>
-      (
-        await sql`delete from web_sessions where token_hash in (
+      withSavepoint(
+        async (client) =>
+          (
+            await client`delete from web_sessions where token_hash in (
           select token_hash from web_sessions where expires_at <= ${now}
             and expires_at <= clock_timestamp()
           order by token_hash limit ${PRUNE_DELETE_BATCH_SIZE}
           for update skip locked
         ) returning 1`
-      ).length,
+          ).length,
+      ),
   };
   // Expired unique-lock sweep: per-statement bounded expiry delete. Uses the
   // scheduled session-sweep expiry predicate: only rows expired by BOTH
@@ -148,15 +184,18 @@ export function pgPruneStores(sql: TxClient | Sql): PruneStores {
   // renewed row fail the predicate after the row-lock wait instead.
   const jobUniqueLocks = {
     sweepExpired: async (now: Date) =>
-      (
-        await sql`delete from job_unique_locks where expires_at <= ${now}
+      withSavepoint(
+        async (client) =>
+          (
+            await client`delete from job_unique_locks where expires_at <= ${now}
           and expires_at <= clock_timestamp() and key in (
           select key from job_unique_locks where expires_at <= ${now}
             and expires_at <= clock_timestamp()
           order by key limit ${PRUNE_DELETE_BATCH_SIZE}
           for update skip locked
         ) returning 1`
-      ).length,
+          ).length,
+      ),
   };
   return {
     agentEventAudits,

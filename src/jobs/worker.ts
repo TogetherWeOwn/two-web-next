@@ -201,6 +201,7 @@ export async function handleScheduled(
     // only its real error from the catch below; the next pass re-pages the
     // cap if the backlog is still over the ceiling.
     let pruneCapped = false;
+    let pruneFailures: { error: unknown }[] = [];
     await runScheduled(controller.cron, pgSingleFlight(sqlClient), {
       // The reserved flight holds only the scheduler advisory lock during
       // dispatch. Event writes have a shorter transaction on the other pool,
@@ -213,8 +214,11 @@ export async function handleScheduled(
           lock: pgUniqueLock(dispatchClient),
         }),
       prune: async (db) => {
-        // Report the cap without paging inside the flight; the page fires
-        // below, after the transaction commits.
+        // Report the cap and any table failures without paging inside the
+        // flight; the single page fires below, after the transaction commits.
+        // Sequential drains settle every table (including the autocommit lock
+        // sweep on the dispatch pool) before the flight commits, so pool
+        // cleanup in finally never closes a client under an in-flight sweep.
         await pruneModelTables(
           {
             ...pgPruneStores(db),
@@ -234,11 +238,24 @@ export async function handleScheduled(
             reportCap: (capped) => {
               pruneCapped = capped;
             },
+            reportFailures: (failures) => {
+              pruneFailures = [...failures];
+            },
           },
         );
       },
     });
-    if (pruneCapped) {
+    if (pruneFailures.length > 0) {
+      // Partial failure with healthy tables committed: resolve the handler
+      // (like the post-commit cap precedent) and page exactly once with the
+      // canonical-first failure's class only. The failure page beats the cap
+      // page when both land in one pass; a real error is never muted by it.
+      try {
+        alertScheduledFailing("model:prune", pruneFailures[0]!.error);
+      } catch {
+        // A throwing alert sink must not fail a committed pass.
+      }
+    } else if (pruneCapped) {
       try {
         alertScheduledFailing("model:prune", new PruneBatchCapError());
       } catch {
