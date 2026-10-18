@@ -15,6 +15,10 @@ function fixture() {
       hits.push(values[0] as string);
       return [];
     }
+    // The age-only expiry prune runs on every check (admitted or refused).
+    // This double stores no timestamps, so every row counts as fresh and the
+    // prune removes nothing.
+    if (query.includes("DELETE FROM web_throttle_hits")) return [];
     throw new Error("Unexpected throttle statement");
   }) as unknown as Sql);
   const app = new Hono<{ Bindings: Env }>();
