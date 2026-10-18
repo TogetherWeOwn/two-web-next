@@ -40,14 +40,17 @@ export type RsvpWriteResult =
 /**
  * Bounded advisory-lock wait for every RSVP write transaction. Each of the
  * three takes (write member lock, withdraw member lock, charge bucket lock)
- * carries a transaction-local `lock_timeout` bound in its own statement, so
- * a contended member waits at most this long and a timed-out wait (55P03,
- * surfaced by drizzle on `cause`) resolves to the existing limited verdict
- * — never a 500. 5s keeps the ~3.2s queued-write expiry control in
- * test/rsvp-throttle-prune-batch.test.ts judging normally (its member-lock
- * wait still fits), while the 8s busy bound in test/rsvp-lock-busy.test.ts
- * settles well inside it. Same mechanism as the join admission lock
- * (`WEB_THROTTLE_LOCK_TIMEOUT_MS`) and the agent-events shield/inner limiter.
+ * carries a `lock_timeout` bound that covers only the take itself: the same
+ * statement captures the prior value, sets the bound, takes the lock, then
+ * restores the prior value, so later waits in the transaction (event and RSVP
+ * row locks, lockWaitlist, promoteWaitlist) keep their wait-then-judge
+ * semantics. A timed-out take (55P03, surfaced by drizzle on `cause`)
+ * resolves to the existing limited verdict — never a 500. 5s keeps the ~3.2s
+ * queued-write expiry control in test/rsvp-throttle-prune-batch.test.ts
+ * judging normally (its member-lock wait still fits), while the 8s busy bound
+ * in test/rsvp-lock-busy.test.ts settles well inside it. Same mechanism as
+ * the join admission lock (`WEB_THROTTLE_LOCK_TIMEOUT_MS`) and the
+ * agent-events shield/inner limiter.
  */
 export const RSVP_LOCK_TIMEOUT_MS = 5000;
 
@@ -57,6 +60,22 @@ function isLockTimeout(err: unknown): boolean {
   if (code === "55P03") return true;
   const cause = (err as { cause?: unknown })?.cause as { code?: unknown } | undefined;
   return cause?.code === "55P03";
+}
+
+/**
+ * Take one `pg_advisory_xact_lock` with a bound scoped to the take itself.
+ * `set_config(..., true)` is transaction-local, so without the restore the
+ * bound would leak onto every later lock wait in the transaction (event and
+ * RSVP row `FOR UPDATE`, waitlist head rows a mirror-stamp writer can hold
+ * until after the event ends). The chained `MATERIALIZED` CTEs force
+ * evaluation order — read the prior value, set the bound, take the lock,
+ * then restore — in a single statement, so the pinned single-execute
+ * sequences stay one statement per take.
+ */
+async function takeBoundedAdvisoryLock(tx: Tx, key: string): Promise<void> {
+  await tx.execute(
+    sql`with rsvp_lock_prev as materialized (select current_setting('lock_timeout') as v), rsvp_lock_cfg as materialized (select set_config('lock_timeout', ${`${RSVP_LOCK_TIMEOUT_MS}ms`}, true) from rsvp_lock_prev), rsvp_lock_take as materialized (select pg_advisory_xact_lock(hashtext(${key})) from rsvp_lock_cfg) select set_config('lock_timeout', (select v from rsvp_lock_prev), true) from rsvp_lock_take`,
+  );
 }
 
 /** Draft/cancelled/past events and paused ones take no new answers (RsvpPolicy + TOG-8725). */
@@ -81,18 +100,11 @@ export async function writeRsvp(
   try {
     result = await db.transaction(async (tx) => {
       // Member lock first, then the event row lock (withdraw takes the same order, so the
-      // order cannot deadlock). The take is bounded: without the timeout a
-      // bucket whose advisory lock is held by another transaction blocks here
-      // until the holder commits. set_config is transaction-local (is_local),
-      // so the bound cannot leak to the pooled session, and the CTE runs
-      // before the outer take, so the bound applies to the take in this same
-      // statement. One statement per take keeps the pinned execute sequence
-      // the hermetic kills script (advisory lock, prune, charge lock, count,
-      // insert) aligned. Same mechanism as the join admission lock
-      // (`WEB_THROTTLE_LOCK_TIMEOUT_MS`) and the agent-events shield.
-      await tx.execute(
-        sql`with rsvp_lock_cfg as (select set_config('lock_timeout', ${`${RSVP_LOCK_TIMEOUT_MS}ms`}, true)) select pg_advisory_xact_lock(hashtext(${`rsvp-write:${userId}`})) from rsvp_lock_cfg`,
-      );
+      // order cannot deadlock). The take is bounded and self-scoped (see
+      // takeBoundedAdvisoryLock): without the timeout a bucket whose advisory
+      // lock is held by another transaction blocks here until the holder
+      // commits, and the restore keeps the bound off the row waits below.
+      await takeBoundedAdvisoryLock(tx, `rsvp-write:${userId}`);
       const [ev] = await tx
         .select()
         .from(events)
@@ -203,13 +215,10 @@ export async function withdrawRsvp(
   try {
     result = await db.transaction(async (tx) => {
       // Same lock order as writeRsvp (member, then event row); the budget hit is stamped and
-      // committed together with the delete, after both waits. Bounded take, same
-      // single-statement shape as writeRsvp above: the CTE sets the
-      // transaction-local bound before the take in this same statement, and the
-      // pinned single-execute sequence the unknown-budget kill counts is kept.
-      await tx.execute(
-        sql`with rsvp_lock_cfg as (select set_config('lock_timeout', ${`${RSVP_LOCK_TIMEOUT_MS}ms`}, true)) select pg_advisory_xact_lock(hashtext(${`rsvp-write:${userId}`})) from rsvp_lock_cfg`,
-      );
+      // committed together with the delete, after both waits. Bounded,
+      // self-scoped take (see takeBoundedAdvisoryLock): only the member take
+      // carries the timeout, so the row waits below keep theirs.
+      await takeBoundedAdvisoryLock(tx, `rsvp-write:${userId}`);
       const [ev] = await tx
         .select()
         .from(events)
@@ -281,11 +290,10 @@ async function chargeThrottle(tx: Tx, userId: string): Promise<Verdict> {
   const { maxAttempts, decaySeconds } = RSVP_RATE_LIMIT;
   {
     // Third take (same bucket key the outer transaction already holds):
-    // re-assert the bound in this same statement so the charge stays bounded
-    // even if a future caller reaches it without the outer take.
-    await tx.execute(
-      sql`with rsvp_lock_cfg as (select set_config('lock_timeout', ${`${RSVP_LOCK_TIMEOUT_MS}ms`}, true)) select pg_advisory_xact_lock(hashtext(${bucket})) from rsvp_lock_cfg`,
-    );
+    // re-assert the bound so the charge stays bounded even if a future
+    // caller reaches it without the outer take. Self-scoped like the outer
+    // takes, so the count and insert below keep their waits.
+    await takeBoundedAdvisoryLock(tx, bucket);
     // The own/promotion row locks and global prune ran before this final decision.
     // Count and insert here so the window is judged fresh; policy-refused writes
     // return before this point and spend nothing.
