@@ -11,6 +11,7 @@
 // or skipped run is not outvoted by an older pass of the same commit.
 import { appendFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
+import { stagingQualityJob, stagingQualitySteps } from "./production-deploy-gate.mjs";
 
 const shaPattern = /^[0-9a-f]{40}$/;
 const titleSha = /^e2e-staging deploy ([0-9a-f]{40})$/;
@@ -51,15 +52,27 @@ export async function resolvePromotionSha({ repository, token, fetchImpl = fetch
       decided.add(sha);
       if (run.status !== "completed" || run.conclusion !== "success") continue;
       const { jobs = [] } = await get(`/actions/runs/${run.id}/jobs?per_page=100`);
-      // Both gates must have passed on this deploy: journeys and the web quality gate (a job called through a
-      // reusable workflow is named "<caller job> / <job>").
-      const passed = (name) =>
-        jobs.some(
-          (job) =>
-            (job.name === name || job.name.startsWith(`${name} / `)) &&
-            job.conclusion === "success",
-        );
-      if (passed("staging-journeys") && passed("staging-quality")) return sha;
+      // Both gates must have passed on this deploy: journeys and the web quality gate.
+      // The quality evidence must match the production gate exactly: one
+      // stagingQualityJob whose stagingQualitySteps both executed successfully.
+      // A green job with skipped/failed/missing Lighthouse steps is ineligible
+      // evidence, like any other valid ineligibility, and falls through to an
+      // older eligible SHA (or null) instead of refusing the whole selection.
+      const journeysOk = jobs.some(
+        (job) =>
+          (job.name === "staging-journeys" || job.name.startsWith("staging-journeys / ")) &&
+          job.conclusion === "success",
+      );
+      if (!journeysOk) continue;
+      const qualityJobs = jobs.filter((job) => job.name === stagingQualityJob);
+      if (qualityJobs.length !== 1) continue;
+      const [quality] = qualityJobs;
+      if (quality.conclusion !== "success") continue;
+      const executed = stagingQualitySteps.every((name) =>
+        (quality.steps ?? []).some((step) => step.name === name && step.conclusion === "success"),
+      );
+      if (!executed) continue;
+      return sha;
     }
   }
   return null;

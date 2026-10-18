@@ -169,6 +169,11 @@ describe("performance budgets snapshot path", () => {
       .split("name: Web standards (security headers, HTML basics, internal links)")[1]!
       .split("- name:")[0]!;
     expect(ciStandards).not.toContain("continue-on-error");
-    expect(promotionResolver).toContain('passed("staging-journeys") && passed("staging-quality")');
+    expect(promotionResolver).toContain("staging-journeys");
+    expect(promotionResolver).toContain('from "./production-deploy-gate.mjs"');
+    expect(promotionResolver).toContain("stagingQualityJob");
+    expect(promotionResolver).toContain("stagingQualitySteps");
+    expect(promotionResolver).toContain("qualityJobs.length !== 1");
+    expect(promotionResolver).not.toContain('passed("staging-quality")');
   });
 });
