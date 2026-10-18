@@ -382,7 +382,7 @@ describe("BotAdd seam: retryAfter rides only on rate_limited, through finishJoin
           }),
       ),
     );
-    const outcome = await liveBotAdd(BOT)("guild", "42", TOK);
+    const outcome = await liveBotAdd(BOT)("326474832151838730", "42", TOK);
     expect(outcome.result as string).toBe("rate_limited");
     expect(outcome.requestId).toBeNull();
     expect(retryAfterOf(outcome)).toBe(37);
@@ -400,7 +400,7 @@ describe("BotAdd seam: retryAfter rides only on rate_limited, through finishJoin
         "fetch",
         vi.fn(async () => new Response(null, { status, headers: { "retry-after": "37" } })),
       );
-      const outcome = await liveBotAdd(BOT)("guild", "42", TOK);
+      const outcome = await liveBotAdd(BOT)("326474832151838730", "42", TOK);
       expect(outcome.result as string).toBe(expected);
       expect(retryAfterOf(outcome)).toBeUndefined();
       leakFree(outcome);
@@ -412,7 +412,7 @@ describe("BotAdd seam: retryAfter rides only on rate_limited, through finishJoin
       "fetch",
       vi.fn(async () => new Response(JSON.stringify({ retry_after: 77 }), { status: 429 })),
     );
-    const outcome = await liveBotAdd(BOT)("guild", "42", TOK);
+    const outcome = await liveBotAdd(BOT)("326474832151838730", "42", TOK);
     expect(outcome.result as string).toBe("rate_limited");
     expect(retryAfterOf(outcome)).toBeUndefined();
   });

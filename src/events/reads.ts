@@ -841,7 +841,23 @@ export async function sitemapEvents(
     .where(eq(events.status, "published"))
     .orderBy(asc(events.startsAt))
     .limit(FEED_EGRESS_LIMIT);
-  return rows.map((r) => ({
+  // One poison row (unrenderable window, or an updatedAt outside the JS Date
+  // range) must not empty the sitemap via the route's `.catch(() => [])`:
+  // skip it in JS and log the count. The guard lives in JS (not SQL) because
+  // SQL cannot see a timestamp that is finite in PostgreSQL but out of range
+  // in JS. A DB failure still rejects here; the route degrades to the static
+  // entries instead.
+  const renderable = rows.filter(
+    (r) =>
+      isRenderableEventWindow(r) &&
+      r.updatedAt instanceof Date &&
+      Number.isFinite(r.updatedAt.getTime()),
+  );
+  const skipped = rows.length - renderable.length;
+  if (skipped > 0) {
+    console.warn("sitemapEvents skipped unrenderable rows.", { skipped });
+  }
+  return renderable.map((r) => ({
     key: r.eventKey,
     status: "published" as const,
     updatedAt: r.updatedAt.toISOString(),

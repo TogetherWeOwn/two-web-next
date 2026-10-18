@@ -51,6 +51,7 @@ export const agentEventsAdmission: MiddlewareHandler<IngressEnv> = async (c, nex
       {
         reason: "ingress_disabled",
         message: "The agent event ingress is not enabled in this environment.",
+        request_id: c.get("requestId"),
       },
       404,
     );
@@ -61,7 +62,11 @@ export const agentEventsAdmission: MiddlewareHandler<IngressEnv> = async (c, nex
   const url = injected ? undefined : (c.env.AGENT_DB?.connectionString ?? databaseUrl(c.env));
   if (!injected && !url)
     return c.json(
-      { reason: "ingress_unavailable", message: "The agent event store is not configured." },
+      {
+        reason: "ingress_unavailable",
+        message: "The agent event store is not configured.",
+        request_id: c.get("requestId"),
+      },
       503,
     );
 
@@ -111,6 +116,7 @@ export const agentEventsAdmission: MiddlewareHandler<IngressEnv> = async (c, nex
         {
           reason: "ingress_unavailable",
           message: "The agent event store is temporarily unavailable. Try again shortly.",
+          request_id: c.get("requestId"),
         },
         503,
       );
@@ -147,6 +153,7 @@ export async function agentEventsRoute(c: Context<IngressEnv>): Promise<Response
         {
           reason: "ingress_unavailable",
           message: "The agent event store is temporarily unavailable. Try again shortly.",
+          request_id: c.get("requestId"),
         },
         503,
       );

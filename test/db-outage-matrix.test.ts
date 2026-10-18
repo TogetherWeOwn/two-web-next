@@ -590,9 +590,13 @@ it.each([
       expect(res.headers.get("cache-control")).toContain("private");
       expect(res.headers.get("cache-control")).toContain("no-store");
       expect(res.headers.getSetCookie()).toEqual([]);
-      expect(await res.json()).toEqual({
+      const headerId = res.headers.get("x-request-id");
+      expect(typeof headerId).toBe("string");
+      const body = (await res.json()) as { reason: string; message: string; request_id: string };
+      expect(body).toEqual({
         reason: "ingress_unavailable",
         message: "The agent event store is temporarily unavailable. Try again shortly.",
+        request_id: headerId,
       });
     } finally {
       await Promise.allSettled(pending);
@@ -610,9 +614,13 @@ it("enabled agent ingress retains its reason envelope without a configured bindi
     },
   );
   expect(res.status).toBe(503);
-  expect(await res.json()).toEqual({
+  const headerId = res.headers.get("x-request-id");
+  expect(typeof headerId).toBe("string");
+  const body = (await res.json()) as { reason: string; message: string; request_id: string };
+  expect(body).toEqual({
     reason: "ingress_unavailable",
     message: "The agent event store is not configured.",
+    request_id: headerId,
   });
   expect(clients).toHaveLength(0);
 });

@@ -7,7 +7,7 @@
 // binding: proof-lib.mjs refuses to generate a config that adds one.
 //
 // The route table satisfies the real deploy smoke checker (bin/smoke.mjs,
-// 18 GETs) so the pinned gradual-promote action runs its genuine gates
+// 20 GETs) so the pinned gradual-promote action runs its genuine gates
 // against this fixture instead of the live site. The fail-up mode makes
 // /up answer 503 with a down envelope, which is a real health failure the
 // checker rejects on status and body shape.
@@ -168,6 +168,29 @@ export function handleProofRequest(request, env = {}) {
       status: 302,
       headers: proofHeaders(env, { location: "/auth/discord" }),
     });
+  }
+
+  // Session-free public read API: collection envelope and discovery document,
+  // mirroring the healthy fixtures in test/smoke.test.mjs. The real checker
+  // asserts the envelope shape and the OpenAPI marker, not fixture contents.
+  if (path === "/api/public/events") {
+    return new Response(
+      '{"data":[],"page":1,"limit":20,"meta":{"current_page":1,"per_page":20,"total":0,"last_page":1}}',
+      {
+        status: 200,
+        headers: proofHeaders(env, { "content-type": "application/json; charset=UTF-8" }),
+      },
+    );
+  }
+
+  if (path === "/openapi.json") {
+    return new Response(
+      '{"openapi":"3.1.0","info":{"title":"Together We Own public read API","version":"1.0.0"},"paths":{"/api/public/events":{"get":{"responses":{"200":{"description":"ok"}}}}}}',
+      {
+        status: 200,
+        headers: proofHeaders(env, { "content-type": "application/json; charset=UTF-8" }),
+      },
+    );
   }
 
   return html(

@@ -38,8 +38,25 @@ function healthyUp(versionId) {
   });
 }
 
+const healthyCollection = JSON.stringify({
+  data: [],
+  page: 1,
+  limit: 20,
+  meta: { current_page: 1, per_page: 20, total: 0, last_page: 1 },
+});
+
+const healthyOpenApi = JSON.stringify({
+  openapi: "3.1.0",
+  info: { title: "Together We Own public read API", version: "1.0.0" },
+  paths: {
+    "/api/public/events": { get: { responses: { 200: { description: "ok" } } } },
+  },
+});
+
 const fixtures = {
   "/up": [200, "application/json", healthyUp(PROMOTED)],
+  "/api/public/events": [200, "application/json", healthyCollection],
+  "/openapi.json": [200, "application/json", healthyOpenApi],
   "/": [200, "text/html", "<h1>The lobby is open.</h1>"],
   "/about": [200, "text/html", "<h1>About Together We Own</h1>"],
   "/faq": [200, "text/html", "<h1>Frequently asked questions</h1>"],
@@ -141,7 +158,7 @@ function spawnCollect(command, args, options = {}) {
       output += chunk;
     });
     child.on("error", reject);
-    child.on("exit", (code) => resolve({ code, output }));
+    child.on("close", (code) => resolve({ code, output }));
   });
 }
 

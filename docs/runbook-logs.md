@@ -72,7 +72,7 @@ Documented cause set: `discord_unavailable`, `in_progress`, `internal`, `rate_li
 | Cause (`sync_retry_code`) | Meaning |
 | --- | --- |
 | `in_progress` | The bot reports the operation is already in progress (409 with a retryable answer); another attempt for the same logical operation is underway |
-| `rate_limited` | The bot or Discord rate-limited the call (429); a Retry-After above 0 and at most 86400 seconds (fractions round up) sets the wait, and an absent, zero or out-of-range value uses the attempt's backoff |
+| `rate_limited` | The bot or Discord rate-limited the call (429); a usable Retry-After above 0 sets the wait (fractions round up, values above 86400 cap at 86400), and an absent, zero or unusable value uses the attempt's backoff |
 | `internal` | The bot reported a retryable internal error |
 | `discord_unavailable` | The bot surfaced Discord-side unavailability |
 | `upstream_timeout` | The bot's upstream call timed out |
