@@ -31,8 +31,8 @@ export async function throttleStore(c: Context<{ Bindings: Env }>): Promise<Sql 
   return postgres(url, databaseOptions) as unknown as Sql;
 }
 
-/** IPv6 clients share a /64; IPv4 and its mapped form share the IPv4 key. */
-function normalizeClientIp(ip: string): string {
+/** IPv6 clients share a /64; IPv4 and its mapped form share the IPv4 key. Shared with the agent-events shield so anonymous buckets match human throttles. */
+export function normalizeClientIp(ip: string): string {
   if (!ip.includes(":") || !/^[0-9a-f:.]+$/i.test(ip)) return ip;
   try {
     // URL validates IPv6 and serializes embedded IPv4 as hex pieces.

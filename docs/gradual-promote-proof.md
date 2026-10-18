@@ -15,7 +15,7 @@ production Workers, any database, or any custom domain.
 | Synthetic Worker | `two-gradual-promote-proof` on workers.dev |
 | Fixture | `ci/gradual-promote-proof/fixture.mjs` (no imports, no data bindings) |
 | Config | generated at run time by `ci/gradual-promote-proof/proof-lib.mjs` and saved in the evidence artifact as `config-original.json` / `config-candidate.json` |
-| Smoke checker | the real `bin/smoke.mjs` (17 GETs per attempt, 6 attempts per stage gate) |
+| Smoke checker | the real `bin/smoke.mjs` (18 GETs per attempt, 6 attempts per stage gate) |
 | Credentials | the staging `CLOUDFLARE_API_TOKEN` / `CLOUDFLARE_ACCOUNT_ID` secrets under the `staging` GitHub Environment. The production secret names are never referenced |
 
 The action hardcodes `--env production` for its deployment list and
@@ -51,8 +51,9 @@ other environment.
 5. Pre-promote attribution: the probe requires the
    `x-proof-version-id` header (from the version-metadata binding) to
    equal the candidate id under the version-override header, and the
-   real smoke checker must agree with the run mode (pass for `success`,
-   fail for `rollback`). A healthy rollback candidate stops the run
+   real smoke checker requires `/up` `revision.version_id` to equal
+   the same candidate id. The smoke checker must agree with the run
+   mode (pass for `success`, fail for `rollback`). A healthy rollback candidate stops the run
    before the action, because its forced failure would be fake. Every
    live probe in the workflow retries 6 times, 5s apart, and records
    each attempt, because a deployment change can take a couple of

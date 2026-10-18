@@ -127,10 +127,12 @@ two call sites, both with a 5-minute bound:
   accumulate until some request is admitted.
 - [`src/events/rsvp.ts`](../src/events/rsvp.ts) (`pruneThrottle`, called from
   `writeRsvp` and both `withdrawRsvp` paths): inside the same transaction,
-  before the budget charge and the write,
-  `delete from web_throttle_hits where at < clock_timestamp() - interval '5 minutes'`.
-  It must run before any accept/charge decision, never between the debit and
-  the write.
+  before the budget charge and the write, at most one 1,000-row batch of
+  `where at < clock_timestamp() - interval '5 minutes'` via
+  `order by id limit 1000 for update skip locked`, so rows locked by unrelated
+  transactions are skipped for a later pass and the cleanup never stalls the
+  write. It must run before any accept/charge decision, never between the
+  debit and the write.
 
 The admission window reads `clock_timestamp()` (the lock wait does not stretch
 the window); the join-path prune uses `now()`. The table and its
