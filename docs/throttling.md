@@ -101,7 +101,12 @@ policy refusals (`not_found`, closed events) return before the charge in
 before policy is judged — the generic middleware charges before the handler
 runs, profile-write 403s charge before the owner check in
 [`admitWrite`](../src/profiles/routes-admission.ts), and RSVP DELETE on a missing event
-charges in [`withdrawRsvp`](../src/events/rsvp.ts).
+charges in [`withdrawRsvp`](../src/events/rsvp.ts). The QA seam is the
+exception: its identity/token gate runs before `throttle("qa-login", …)` (same
+shape as `/__probe/alert` in [`src/alert-probe.ts`](../src/alert-probe.ts)),
+so unauthenticated probes 404 without spending the shared `qa-login` bucket and
+a probe flood can never lock out legitimate QA logins. Only gated QA logins
+charge the bucket.
 
 ## Prune and storage bound
 
