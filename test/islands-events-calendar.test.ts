@@ -88,7 +88,7 @@ const binder = readFileSync(
 const baseEnv = {
   APP_URL,
   DISCORD_CLIENT_ID: "client-id",
-  DISCORD_GUILD_ID: "guild-id",
+  DISCORD_GUILD_ID: "326474832151838730",
   DISCORD_INVITE_URL: INVITE,
   DISCORD_CLIENT_SECRET: "client-secret",
   DISCORD_BOT_TOKEN: "bot-token",
