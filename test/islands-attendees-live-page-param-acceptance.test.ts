@@ -143,7 +143,7 @@ const SERVER_PAGE_ONE_RAW = ["2x", "2.9", "02", "9007199254740993", "90071992547
 
 describe.each(SOURCES)("attendees-live ?attendees= parsing ($label)", ({ rel }) => {
   const source = readFileSync(new NodeURL(rel, import.meta.url), "utf8");
-  const filename = rel.replace("../", "");
+  const filename = rel.replace(/^\.\.\//, "");
 
   it.each(SERVER_PAGE_ONE_RAW)(
     "refreshes page one for ?attendees=%s, matching the server fallback",
