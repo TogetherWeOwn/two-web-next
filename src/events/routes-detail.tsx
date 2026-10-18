@@ -8,11 +8,15 @@ import { eventJsonLd, siteJsonLd } from "../seo-json-ld";
 import { canonicalEventKey, eventKeyAllowed } from "./keys";
 import { cachedNotFoundSuggestions } from "../not-found-suggestions";
 import {
+  ATTENDEE_PAGE_SIZE,
+  attendeePageHref,
   getEventNeighbors,
   getPublicEvent,
   getViewerRsvp,
   listGoingAttendees,
   listRelatedEvents,
+  nextAttendeePage,
+  parseAttendeePageParam,
   type PublicEvent,
 } from "./reads";
 import { waitlistPosition } from "./waitlist";
@@ -139,7 +143,17 @@ export function registerDetailRoutes(
               410,
             );
           }
-          const session = await readSession(c);
+          // Non-rotating fragment read: the attendees-live island re-reads
+          // this page after the member's own RSVP while the reloadable page
+          // view (and any in-flight write response) still holds the current
+          // bearer. Rotation mints single-use tokens, so a rotating fragment
+          // read racing the reload would leave exactly one winner and render
+          // the loser as a guest. Same x-two-island contract as the
+          // events-calendar fragment (routes-calendar.tsx).
+          const session =
+            c.req.header("x-two-island") === "attendees-live"
+              ? await readFragmentSession(c)
+              : await readSession(c);
           viewer = session?.id ?? null;
           if (e.status === "draft" && !session?.moderator)
             return bufferedMemberText(c, "Forbidden", 403);
@@ -152,13 +166,38 @@ export function registerDetailRoutes(
           // consume only after the boundary allows a visible response.
           const joinResult = await readJoinResult(c);
           const member = session?.member === true;
+          // Bounded member attendee window: the requested page plus the first
+          // row of the next page (lookahead, never rendered) that powers Next.
+          // Both go through the keyed read, so every retrieved identity —
+          // lookahead included — is audited before any private bytes release.
+          const attendeePage = parseAttendeePageParam(c.req.query("attendees"));
           const [neighbors, related, attendees, position, answer] = await Promise.all([
             getEventNeighbors(db, e),
             listRelatedEvents(db, e),
-            session?.member ? listGoingAttendees(db, e.id) : Promise.resolve([]),
+            session?.member ? listGoingAttendees(db, e.id, attendeePage) : Promise.resolve([]),
             session ? waitlistPosition(db, e.id, session.id) : Promise.resolve(null),
             session && member ? getViewerRsvp(db, e.id, session.id) : Promise.resolve(null),
           ]);
+          // One-row lookahead probe that powers Next, only from a full page:
+          // a partial page cannot have a successor, so the probe (and its
+          // audit subject) is skipped there.
+          const attendeeLookahead =
+            session?.member && attendees.length === ATTENDEE_PAGE_SIZE
+              ? await listGoingAttendees(db, e.id, nextAttendeePage(attendeePage), 1)
+              : [];
+          // An empty past-end page links back to page one (the bare URL):
+          // page N-1 may itself be empty, stranding the viewer on empty
+          // pages. Guests never render this section, so the value is inert
+          // for them.
+          const attendeesPaging = {
+            page: attendeePage,
+            prevHref:
+              attendeePage > 1
+                ? attendeePageHref(e.eventKey, attendees.length === 0 ? 1 : attendeePage - 1)
+                : null,
+            nextHref:
+              attendeeLookahead.length > 0 ? attendeePageHref(e.eventKey, attendeePage + 1) : null,
+          };
           const returnTo = c.req.path + new URL(c.req.url).search;
           return bufferedMemberHtml(
             c,
@@ -167,6 +206,7 @@ export function registerDetailRoutes(
               neighbors={neighbors}
               related={related}
               attendees={attendees}
+              attendeesPaging={attendeesPaging}
               appUrl={c.env.APP_URL}
               jsonLd={jsonLd(e, c.env.APP_URL)}
               siteJsonLd={siteIdentities(c.env.APP_URL)}

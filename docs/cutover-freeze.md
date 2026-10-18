@@ -15,10 +15,10 @@
 > **The proposal is withdrawn.** The freeze window below was written before
 > the flip date was set. Take no freeze from this file: any future freeze
 > (for example around a rollback and re-flip) needs new dates decided at that
-> time. Several docs still call this freeze "in force" or ask for it to be
-> "posted" (the runbook watch section, the rollback checklist, the watch spec
-> and run record); read those references as describing the withdrawn
-> proposal. This archive does not edit them.
+> time. Companion docs that repeated this freeze (the runbook watch
+> section, the rollback checklist, the watch spec and run record) are
+> reconciled to this withdrawn status; read any remaining historical
+> reference as describing the withdrawn proposal.
 >
 > **Current guidance** lives in [runbook.md](runbook.md#48h-post-flip-watch)
 > (watch procedure) and [releases.md](releases.md) (release mechanics: the

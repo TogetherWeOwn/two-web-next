@@ -2,6 +2,9 @@ import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
 import { once } from "node:events";
 import { createServer } from "node:http";
+import { mkdtempSync, rmSync, symlinkSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
 import { test } from "node:test";
 import { readRevision, verifyRevision } from "../bin/revision-check.mjs";
 
@@ -148,5 +151,27 @@ test("CLI rejects a missing origin, an extra argument and a non-SHA commit", () 
     });
     assert.equal(result.status, 2);
     assert.match(result.stderr, /Usage: node bin\/revision-check\.mjs/);
+  }
+});
+
+test("CLI fires through a symlinked invocation instead of exiting 0 silently", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "revision-check-guard-"));
+  const link = join(dir, "link-check.mjs");
+  symlinkSync(resolve("bin/revision-check.mjs"), link);
+  try {
+    const result = await new Promise((done) => {
+      const child = spawn(process.execPath, [link], {
+        env: { PATH: process.env.PATH },
+      });
+      let stdout = "";
+      let stderr = "";
+      child.stdout.on("data", (chunk) => (stdout += chunk));
+      child.stderr.on("data", (chunk) => (stderr += chunk));
+      child.on("close", (status) => done({ status, stdout, stderr }));
+    });
+    assert.equal(result.status, 2);
+    assert.match(result.stderr, /Usage: node bin\/revision-check\.mjs/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
   }
 });

@@ -670,12 +670,14 @@ describe("Tail scheduled uptime prober", () => {
       "/up",
       "/",
       "/events",
+      "/join",
       "/login",
     ]);
     // Every probe is an anonymous GET that never follows a redirect into a
     // login flow, and the sign-in check stops at /login: /auth/discord
     // mints OAuth state (throttle hit + journey row), so probing it would
-    // not stay passive in production.
+    // not stay passive in production. The conversion check likewise stops
+    // at the /join page and never requests /join/discord.
     for (const [, init] of probeGets(send)) {
       expect(init?.method).toBe("GET");
       expect(init?.redirect).toBe("manual");
@@ -883,6 +885,7 @@ describe("Tail scheduled uptime prober", () => {
       "/up",
       "/",
       "/events",
+      "/join",
       "/login",
     ]);
   });

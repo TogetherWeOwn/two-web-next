@@ -64,6 +64,13 @@ export function parseEventForm(
       fields[field] = "Remove control or invisible characters.";
     }
   }
+  // `game` is the NUL gap: Postgres text columns reject NUL bytes, so NUL
+  // must be refused before persistence. Only NUL is refused here — BEL and
+  // other controls stay accepted to avoid broadening validation.
+  const gameRaw = data.game;
+  if (typeof gameRaw === "string" && gameRaw.includes("\0") && !fields.game) {
+    fields.game = "Remove NUL characters.";
+  }
 
   let capacity: number | null = null;
   // Forms carry strings; JSON and stored PATCH defaults carry numbers. A non-string

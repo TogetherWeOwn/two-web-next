@@ -682,8 +682,62 @@ export async function getViewerRsvp(
 
 export type EventAttendee = { id: string; name: string };
 
-/** Member-only projection, never part of PublicEvent or the feeds/JSON. */
-export async function listGoingAttendees(db: Db, eventId: number): Promise<EventAttendee[]> {
+/** Member attendee paging: one page of named going identities, oldest answers
+ * first. The legacy answer-time order is kept (not the admin roster's
+ * most-recent-update order); the 100-row size reuses the admin roster
+ * convention (ROSTER_PAGE_SIZE). */
+export const ATTENDEE_PAGE_SIZE = 100;
+
+/** Defensive page form, mirroring normalizePastPage: invalid numbers retain
+ * the page-one fallback, including overflow where the offset would stop being
+ * a safe integer. */
+export function normalizeAttendeePage(page: number): number {
+  return Number.isSafeInteger(page) &&
+    page > 0 &&
+    Number.isSafeInteger((page - 1) * ATTENDEE_PAGE_SIZE)
+    ? page
+    : 1;
+}
+
+/** Strict ?attendees= validation, mirroring the admin table viewers: the raw
+ * value must be a positive integer in full (parseInt would accept "2x" as 2),
+ * and its OFFSET arithmetic must stay exact. Missing, malformed, nonpositive,
+ * fractional, padded or unsafe values all fall back to page 1. */
+export function parseAttendeePageParam(raw: string | null | undefined): number {
+  if (raw === null || raw === undefined || !/^[1-9]\d*$/.test(raw)) return 1;
+  return normalizeAttendeePage(Number(raw));
+}
+
+/** Native attendee page URL: page 1 stays bare so first-page links reset the
+ * section, like the roster's page-one convention. */
+export function attendeePageHref(eventKey: string, page: number): string {
+  return page <= 1 ? `/e/${eventKey}` : `/e/${eventKey}?attendees=${page}`;
+}
+
+/** Next-page probe for the one-row lookahead: the probe's own OFFSET must stay
+ * exact too, so at the safe-integer ceiling it re-probes the current page
+ * (empty up there, hence no false Next) instead of falling back to page 1. */
+export function nextAttendeePage(page: number): number {
+  return Number.isSafeInteger(page * ATTENDEE_PAGE_SIZE) ? page + 1 : page;
+}
+
+/** Member-only projection, never part of PublicEvent or the feeds/JSON. One
+ * bounded retrieval at SQL (limit/offset, never fetch-all-then-slice): `limit`
+ * bounds the page itself (100) as well as the one-row lookahead probe that
+ * powers Next. Every retrieved row — lookahead included — is audit-observed
+ * before release, so an unbounded read shows up as extra audit subjects even
+ * when the render hides them. */
+export async function listGoingAttendees(
+  db: Db,
+  eventId: number,
+  page = 1,
+  limit = ATTENDEE_PAGE_SIZE,
+): Promise<EventAttendee[]> {
+  page = normalizeAttendeePage(page);
+  const bounded =
+    Number.isSafeInteger(limit) && limit > 0
+      ? Math.min(limit, ATTENDEE_PAGE_SIZE)
+      : ATTENDEE_PAGE_SIZE;
   // Legacy answer-time order, not the admin roster's most-recent-update order.
   // Partial select/join/orderBy: https://orm.drizzle.team/docs/select
   // Exclude nameless rows in SQL: every retrieved identity is attributable.
@@ -693,7 +747,9 @@ export async function listGoingAttendees(db: Db, eventId: number): Promise<Event
       .from(rsvps)
       .innerJoin(users, eq(rsvps.userId, users.id))
       .where(and(eq(rsvps.eventId, eventId), eq(rsvps.status, "going"), ne(users.username, "")))
-      .orderBy(asc(rsvps.createdAt), asc(rsvps.id)),
+      .orderBy(asc(rsvps.createdAt), asc(rsvps.id))
+      .limit(bounded)
+      .offset((page - 1) * ATTENDEE_PAGE_SIZE),
   );
 }
 

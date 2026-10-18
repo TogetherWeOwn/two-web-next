@@ -14,6 +14,10 @@ CI runs two independent jobs in `.github/workflows/ci.yml`:
   web-standards check. These checks fail the CI job when they fail. Reports and
   assertion results (also on failure) are uploaded as the `lighthouse-<sha>` GitHub
   artifact for 14 days in the repository artifact store, not a public LHCI server.
+- main Worker bundle: the `check` job dry-runs the Hono Worker
+  (`npx wrangler deploy --dry-run --outdir dist`, no deploy) and gates
+  `dist/worker.js` against `ci/worker-bundle-budget.json` with
+  `node ci/check-worker-bundle.mjs`. Served-asset and Kit budgets are untouched.
 
 The required `ci-ok` job is the result gate; the standalone `check` job depends
 only on `scope` and runs alongside the audit and performance jobs. `ci-ok`
@@ -30,6 +34,29 @@ skips to enforce the gate.
 `test/performance-ci.test.ts` sends synthetic over-budget LCP/CLS reports through
 the real LHCI assertion command, proves its nonzero exit fails this gate, and pins
 the workflow wiring. `npm run gate:selftest` covers result-state handling offline.
+
+## Main Worker bundle
+
+The main app Worker (`src/worker.ts` via `wrangler.jsonc`) previously had
+dry-run builds in CI (`ci.yml` `check` job) with no size assertion.
+`ci/check-worker-bundle.mjs` gates the dry-run output `dist/worker.js`
+(raw and default-level gzip) against `ci/worker-bundle-budget.json`.
+It exits **0** when the bundle fits, **1** on breach, **2** when it cannot
+enforce (missing bundle or budget). Every failure prints a remediation
+pointer to the budget file's `$comment`. The checker never deploys.
+
+Measured 2026-10-18 with wrangler 4.149.0
+(`npx wrangler deploy --dry-run --outdir dist`; the `--env production`
+dry-run builds byte-identical output, so one ceiling covers both):
+
+| Bundle | Raw / gzip bytes | Ceiling |
+|---|---:|---:|
+| `dist/worker.js` | 2486680 / 499001 | 3108352 / 623872 |
+
+Ceilings are measured size x1.25 rounded up (raw to 512 B, gzip to 256 B),
+the repository x1.25 rule from `ci/bundle-budget.json`. Never relax a
+ceiling to turn a build green; a raise needs its own reviewed decision
+explaining what grew and why.
 
 ## Minified public assets
 
@@ -64,6 +91,9 @@ npm run build:assets:selftest
 npm run build:assets:check
 npm run budget:selftest
 npm run budget
+npm run worker-budget:selftest
+npx wrangler deploy --dry-run --outdir dist
+npm run worker-budget
 # Chrome/Chromium must be installed; point CHROME_PATH at its executable.
 CHROME_PATH=/path/to/chrome WRANGLER_SEND_METRICS=false npm run lighthouse
 ```
@@ -225,6 +255,21 @@ full-evidence assert failure never retries. Every run writes
 evidence plus an evaluated assertion miss: see `quality-summary.md`), or an
 unclassified step failure (full evidence, no assertion verdict). Both files
 ship in the `web-quality-origin-*` artifact.
+
+Mobile collection survives one transient the same way: `npm run
+lighthouse:origin` runs `ci/lighthouse-origin-run.mjs`, which reruns the whole
+`lhci autorun` a single time when the first attempt comes up short of LHRs (8
+routes x 3 runs = 24 with a discovered event, 7 x 3 = 21 when the event route
+is skipped), counted from collect's per-run `.lighthouseci/lhr-*.json` files.
+The retry also fires on the truncation signature of exit 0 with tail routes
+unmeasured, which the old single-shot runner failed closed on with no
+diagnosis. A full-evidence assert failure never retries. Every run writes
+`.lighthouseci/origin-collect.log` (full lhci output) and, on failure,
+`.lighthouseci/origin-collect-diagnosis.md`, which says COLLECT FAILURE
+(short evidence, naming the routes short of runs: re-run the step, budgets
+untouched), BUDGET BREACH (full evidence plus an evaluated assertion miss:
+see `watch-summary.md`), or an unclassified step failure (full evidence, no
+assertion verdict). Both files ship in the `web-quality-origin-*` artifact.
 
 The byte ceilings are specific to Next's unbundled assets, based on the measured
 2026-09-30 sizes documented in `ci/bundle-budget.json`, with roughly 25–45%

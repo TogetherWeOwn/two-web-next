@@ -83,6 +83,7 @@ const editorIsland = '<script src="/islands/admin-event-editor.js" defer></' + "
         id="f-description"
         name="description"
         rows={4}
+        data-event-text-limit={1000}
         aria-invalid={errors.description ? "true" : undefined}
         aria-describedby={errors.description ? "f-description-error" : undefined}
       >{val("description")}</textarea>

@@ -15,9 +15,10 @@ replacements have the same log/header contract.
    Authorization header, OAuth callback URL or Discord identity. The header is
    a validated Cloudflare Ray ID (`cf-ray`), or a generated ULID when no valid
    Ray ID is available. Client `x-request-id` input is ignored. The generic 500
-   page and the database-outage and maintenance 503 pages show the same value as
-   their **Support reference**, so a member can copy it without developer tools.
-   The join-flow recovery page does not show it.
+   page, the 429 rate-limit page, and the database-outage and maintenance 503
+   pages show the same value as their **Support reference**, so a member can
+   copy it without developer tools. The 429 and 503 JSON envelopes carry it as
+   `request_id`. The join-flow recovery page shows the same value as its **Support reference**.
 2. Open **Cloudflare dashboard → Workers & Pages → two-web-next → Observability**.
    Choose a time window around the report and the correct deployed Worker.
 3. Search the log message for the exact ID (for example,
@@ -130,15 +131,13 @@ Read-only checks only: a Workers Logs search, a `SELECT`, or a source file.
 | `services.discord.invite_url is unusable; serving the hardcoded fallback invite.` | The configured invite URL is not an `https` `discord.gg` or `discord.com/invite` link (`src/invite.ts`). | Degrades: visitors get the hardcoded invite, which may be a rotation old. | Read the `services.discord.invite_url` setting in the deployed config and compare it with the validator in `src/invite.ts`. | None |
 | `agent-events failed` | The agent-events ingress threw before or while handling a request (`src/agent-events/route.ts`, two call sites). | Fails closed: 503 `ingress_unavailable` for a database outage, otherwise 500 `internal_error`. | Search logs for the matching `http.request` status on the agent-events route; then `SELECT * FROM agent_event_audits` for the window. | Error name as the second argument |
 | `sync retry result persistence failed` | A known sync-retry result could not be committed (`src/jobs/consumer.ts`), so the durable claim stays fenced. | Degrades: the delivery is retried after the known wait, or marked failed once tries run out. | Search logs for `sync retry classified` and `queue.failing` for the same event; see [sync-event retry-cause diagnostics](#sync-event-retry-cause-diagnostics). | Fixed reason string `sync retry result could not be persisted; request remains fenced` |
+| `sync attempt settlement failed` | A definitive sync refusal could not be settled via `failSync` (`src/jobs/consumer.ts`), so the `event_sync_attempts` row stays `pending` and still blocks future revisions. | Stuck, not self-healing: this delivery is retried, but redeliveries wait on the null-fenced claim (`failSync` is never retried) and the carrier is ACKed after six deliveries with `job failed` / `queue.failing` reason `waiting carrier exhausted; request remains recoverable`; the refusal stays unrecorded and newer revisions stay blocked. | Search logs for the line (it carries no event key, only `exception`); then list null-fenced pending rows: `SELECT e.event_key, a.request_attempts, a.next_attempt_at FROM event_sync_attempts a JOIN events e ON e.id = a.event_id WHERE a.state = 'pending' AND a.next_attempt_at IS NULL`. See the operator-recovery paragraph in docs/runbook.md: no live reset or blind replay. | `exception` (class name) |
 | `job threw` | A queue job threw something that is not a bot transport error, a terminal error or a refusal (`src/jobs/consumer.ts`). | Retries until the job runs out of tries, then it is buried and a `queue.failing` alert fires. | Search logs for `queue.failing` with the same job kind; then `SELECT * FROM queue_failed_jobs` for that kind. | Job `kind`, `exception` (class name) |
 | `job failed` | A job returned a failed outcome (`src/jobs/consumer.ts`), and a `queue.failing` alert follows. | Terminal for that job; the ledger row is marked failed. | Search logs for `queue.failing` with the same job kind; then `SELECT * FROM queue_failed_jobs` for that kind. | Job `kind`, then the bounded failure reason (a stable code or class name, not raw error text) |
 | `Member request failed; refusing contents.` | An unhandled error reached the shared error handler while a member read was active (`src/error-responses.tsx`). | Fails closed with a 503 "Member data is temporarily unavailable." body. | Search logs for the matching `http.request` record and its route. | `exception` (class name), validated `request_id` |
 | `Profile request failed; refusing contents.` | An unhandled error reached the profiles router error handler (`src/profiles/routes-gate.ts`). | Fails closed: database-unavailable response for an outage, otherwise a 503 member text. | Search logs for the matching `http.request` record on a `/members` route. | `exception` (class name), validated `request_id` |
 | `profiles could not resolve the session; refusing.` | The profiles session lookup threw (`src/profiles/routes-gate.ts`). | Fails closed with the database-unavailable response. | Search logs for the matching `http.request` status; then `SELECT count(*) FROM web_sessions` to confirm the table is readable. | `exception` (class name) |
 | `profile save failed` | Saving a validated profile threw (`src/profiles/routes-writes.tsx`). | Fails closed: database-unavailable response for an outage, otherwise 500 "Could not save your profile." | Search logs for the matching `http.request` status on the profile save route; then `SELECT updated_at FROM profiles` for that member. | `exception` (class name), validated `request_id` |
-
-The `sync attempt settlement failed` line (`src/jobs/consumer.ts`) is outside
-this catalogue.
 
 ### Missing sync-queue binding warning
 
@@ -172,21 +171,23 @@ the binding is fixed: treat a production warning as stuck, not late.
 | Field | Meaning and safe values |
 | --- | --- |
 | `eventKey` | The event whose write-back carrier was not sent |
-| `request_id` | The validated HTTP request ID (`safeRequestId`: a Cloudflare Ray ID or a generated ULID). Absent when the write came through the agent-events ingress (`POST /api/agent-events`, `src/agent-events/route.ts`), which calls `dispatchWriteBack` without the request ID; correlate those by `eventKey` and `agent_event_audits` instead. Never a secret or a member identity |
+| `request_id` | The validated HTTP request ID (`safeRequestId`: a Cloudflare Ray ID or a generated ULID) from the `http.request` line's `x-request-id`. Agent-events ingress write-backs (`POST /api/agent-events`, `src/agent-events/route.ts`) carry that HTTP ID, not the `request_id` in the agent response body nor `agent_event_audits.request_id`, which is a separate ingress-minted ULID (`src/agent-events/ingress.ts`). Always correlate an agent-published event via `eventKey` plus `agent_event_audits WHERE event_key = ...`; `request_id` alone only joins to the `http.request` line. Never a secret or a member identity |
 
 A successful HTTP response is not evidence of Discord synchronization: the
 request succeeded against the database, but Discord has not been told yet.
 
 Read-only diagnostic: filter Workers Logs message/text with the exact warning
-(see [Find a request](#find-a-request)) and correlate by `eventKey` and, when
-present, `request_id`. Then check whether a later sync landed: join through
+(see [Find a request](#find-a-request)) and correlate by `eventKey` and
+`request_id` (the warning's `request_id` joins to the `http.request` line).
+Then check whether a later sync landed: join through
 `events` (`event_sync_attempts` carries `event_id`, not `event_key`):
 `SELECT * FROM event_sync_attempts JOIN events ON events.id = event_sync_attempts.event_id WHERE events.event_key = '<eventKey>'`,
 or compare revisions with
 `SELECT sync_revision, synced_revision, discord_event_id FROM events WHERE event_key = '<eventKey>'`
 (`synced_revision` catching up to `sync_revision` means reconcile recovered
-it). For an agent-published event, which has no `request_id` on the warning,
-find the ingress request with
+it). For an agent-published event, the warning's `request_id` never matches
+`agent_event_audits.request_id` (the ingress mints its own ULID for the body
+and audit rows), so always find the ingress request with
 `SELECT * FROM agent_event_audits WHERE event_key = '<eventKey>'`. Then compare
 the deployed Workers' queue producer bindings with `wrangler.jsonc`: the
 top-level `queues.producers` block is staging (`SYNC_EVENT_QUEUE` bound to

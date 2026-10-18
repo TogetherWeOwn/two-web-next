@@ -32,7 +32,7 @@ export async function rateLimit(
       read ? cfg.serviceReadsPerMinute : cfg.serviceMutatingPerMinute,
     ],
   ];
-  return sql.begin(async (tx) => {
+  const verdict = await sql.begin(async (tx) => {
     let retry = 0;
     for (const [bucket] of [...buckets].sort((a, b) => (a[0] < b[0] ? -1 : 1))) {
       await tx`SELECT pg_advisory_xact_lock(hashtextextended(${`agent-event-hits:${bucket}`}, 0))`;
@@ -46,7 +46,19 @@ export async function rateLimit(
     if (retry > 0) return throttleEnvelope(retry);
     for (const [bucket] of buckets)
       await tx`INSERT INTO agent_event_hits (bucket) VALUES (${bucket})`;
-    await tx`DELETE FROM agent_event_hits WHERE at < now() - interval '5 minutes'`;
     return null;
   });
+  // Expiry cleanup runs after the verdict — admitted or refused — outside the
+  // bucket advisory locks, so a prune never prolongs the admission lock and a
+  // bucket under sustained refused load still drains. Capped per pass at the
+  // outer shield's standard; the candidate select is SKIP LOCKED so expired
+  // rows held by unrelated transactions are left for a later pass instead of
+  // stalling admission. Best-effort: housekeeping must never flip a decided
+  // verdict into an admission or a 500.
+  try {
+    await sql`WITH candidates AS (SELECT id FROM agent_event_hits WHERE at < now() - interval '5 minutes' ORDER BY id LIMIT 1000 FOR UPDATE SKIP LOCKED) DELETE FROM agent_event_hits USING candidates WHERE agent_event_hits.id = candidates.id`;
+  } catch {
+    // The verdict above was already decided.
+  }
+  return verdict;
 }

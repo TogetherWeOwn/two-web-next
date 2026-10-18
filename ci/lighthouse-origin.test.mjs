@@ -439,6 +439,7 @@ test("an origin that errors, redirects or is not allowlisted fails discovery ins
 const lhr = (path, values, finalPath = path) => ({
   requestedUrl: `${APEX}${path}`,
   finalUrl: `${APEX}${finalPath}`,
+  categories: { performance: { score: 1 } },
   audits: {
     "largest-contentful-paint": { numericValue: values[0] },
     "cumulative-layout-shift": { numericValue: values[1] },
@@ -561,7 +562,7 @@ test("a skipped event route is recorded in the output and the run still measures
         }
       }
       await writeFile(join(dir, "assertion-results.json"), "[]");
-      return 0;
+      return { exitCode: 0, output: "" };
     };
     const code = await main([APEX], {
       env: { PATH: "x" },
@@ -589,9 +590,19 @@ test("failures are never a pass: a budget error, a crashed run and a dead origin
       "/events.rss": { body: rss(`${APEX}${EVENT_PATH}`) },
       [EVENT_PATH]: { body: "<h1>Community game night</h1>" },
     });
-    const crashed = await main([APEX], { fetchImpl, lhci: async () => 1, dir, log: () => {} });
+    const crashed = await main([APEX], {
+      fetchImpl,
+      lhci: async () => ({ exitCode: 1, output: "boom" }),
+      dir,
+      log: () => {},
+    });
     assert.equal(crashed, 1, "lhci exit code is propagated");
-    const noRuns = await main([APEX], { fetchImpl, lhci: async () => 0, dir, log: () => {} });
+    const noRuns = await main([APEX], {
+      fetchImpl,
+      lhci: async () => ({ exitCode: 0, output: "" }),
+      dir,
+      log: () => {},
+    });
     assert.equal(noRuns, 1, "a clean exit without any lhr result is not a pass");
     const down = stubFetch({ "/events.rss": { status: 503 } });
     let launched = false;
@@ -600,7 +611,7 @@ test("failures are never a pass: a budget error, a crashed run and a dead origin
       fetchImpl: down.fetchImpl,
       lhci: async () => {
         launched = true;
-        return 0;
+        return { exitCode: 0, output: "" };
       },
       dir,
       log: (l) => lines.push(l),
@@ -609,9 +620,9 @@ test("failures are never a pass: a budget error, a crashed run and a dead origin
     assert.equal(launched, false);
     assert.match(lines.join("\n"), /Event discovery failed, origin not healthy: .*503/);
     assert.deepEqual(
-      await readdir(dir),
-      ["watch-summary.md"],
-      "a failure summary is still left for the artifact",
+      (await readdir(dir)).sort(),
+      ["origin-collect.log", "watch-summary.md"],
+      "a failure summary and the collect log are still left for the artifact",
     );
   });
 });
@@ -639,7 +650,10 @@ test("package.json wires the command and its selftest", async () => {
     await readFile(new URL("../package.json", import.meta.url), "utf8"),
   );
   assert.equal(scripts["lighthouse:origin"], "node ci/lighthouse-origin-run.mjs");
-  assert.equal(scripts["lighthouse:origin:selftest"], "node --test ci/lighthouse-origin.test.mjs");
+  assert.equal(
+    scripts["lighthouse:origin:selftest"],
+    "node --test ci/lighthouse-origin.test.mjs && node ci/lighthouse-origin-run.mjs --selftest",
+  );
 });
 
 test("the workflow is dispatch-only, hosted, read-only, secret-free and pinned", async () => {

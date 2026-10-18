@@ -180,7 +180,10 @@ jobs:
           npx vitest run ci/audit-lifecycle.test.mjs --reporter=default --reporter=json --outputFile.json=artifacts/a11y/audit-lifecycle.json
           node ci/a11y-require-executed.mjs artifacts/a11y/audit-lifecycle.json "audit lifecycle real Chromium signal cleanup" 2
       - name: RSVP keyboard-focus proof (real Chromium, loopback fixtures)
-        run: RSVP_FOCUS_BROWSER_TESTS=true node --test ci/rsvp-focus-browser.test.mjs
+        run: |
+          mkdir -p artifacts/a11y
+          RSVP_FOCUS_BROWSER_TESTS=true node --test --test-reporter=tap --test-reporter-destination=artifacts/a11y/rsvp-focus.tap ci/rsvp-focus-browser.test.mjs
+          node ci/rsvp-focus-require-executed.mjs artifacts/a11y/rsvp-focus.tap "RSVP outcome focus in Chromium" 16
       - name: Session recovery (local two-tab fixture, mocked OAuth)
         run: timeout 120s npm run test:auth-browser
       # The suite has no opt-out: it always runs, so missing evidence on the
@@ -614,6 +617,12 @@ jobs:
       - name: Production build (wrangler dry run, no deployment)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true' || needs.scope.outputs.worker == 'true')
         run: npx wrangler deploy --dry-run --env production --outdir dist-production
+      - name: Main Worker bundle budget selftest (offline fixtures, no deploy)
+        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true' || needs.scope.outputs.worker == 'true')
+        run: node ci/check-worker-bundle.mjs --selftest
+      - name: Main Worker bundle budget (dry-run output vs ceiling)
+        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true' || needs.scope.outputs.worker == 'true')
+        run: node ci/check-worker-bundle.mjs
 
   # Node 22 compatibility leg: package.json `engines` declares a 22 range
   # beside `>=24`, but every other job runs Node 24, so the 22 range shipped

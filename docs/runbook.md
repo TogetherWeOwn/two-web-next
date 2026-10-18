@@ -286,16 +286,22 @@ approved account and binding isolation before any remote mutation.
    )
    ```
 
-   On staging the live Worker also reports its own Version ID:
-   `GET https://next.togetherweown.com/up` carries
-   `revision: { version_id, commit }`. `version_id` is the value
-   `wrangler rollback` takes; `commit` is the SHA the deploy tagged that Version
-   with (`null` for a manual deploy without `--tag`). The deploy job logs it in
-   `Record live revision (rollback pointer)` before any Cloudflare mutation.
-   A Version uploaded before the marker existed reports no `revision`; use
-   `wrangler deployments list` for it. If `/up` and `wrangler deployments`
-   ever disagree, `wrangler deployments` wins. Production `/up` has no
-   `revision`: the binding is not declared in `env.production`.
+   Both staging (`two-web-next`) and production (`two-web-next-production`)
+   declare `version_metadata` bindings (`wrangler.jsonc` top level and
+   `env.production`): `GET /up` on `https://next.togetherweown.com/up` and
+   on the apex carries `revision: { version_id, commit }` once the live
+   Version was uploaded after that binding landed. `version_id` is
+   the value `wrangler rollback` takes; `commit` is the SHA the deploy tagged
+   that Version with (`null` for a manual deploy without `--tag`). On staging
+   the deploy job logs it in `Record live revision (rollback pointer)` before
+   any Cloudflare mutation. Production has no such step in
+   `deploy-production.yml`; take the pre-release production pointer from
+   `wrangler deployments status --name two-web-next-production --json` or the
+   gradual-promote `rollback-version-id` output. A Version uploaded before the
+   marker existed reports no `revision`; use `wrangler deployments list` for
+   it. If `/up` and `wrangler deployments` ever disagree, `wrangler
+   deployments` wins. Record the production app `revision.version_id` and
+   `revision.commit` separately from the Tail Worker version.
 
 3. Normal path: merge to `main` invokes
    [.github/workflows/deploy.yml](../.github/workflows/deploy.yml), using the
@@ -309,12 +315,17 @@ approved account and binding isolation before any remote mutation.
    failed migration step fails the job before any Cloudflare mutation. The
    queue-create step currently suppresses errors; it is not permission/provisioning evidence.
    The final staging smoke runs `node bin/smoke.mjs https://next.togetherweown.com`
-   ([smoke checker](../bin/smoke.mjs)), covering 16 public routes: `/up`
+   ([smoke checker](../bin/smoke.mjs)), covering 17 public routes: `/up`
    (HTTP 200, `application/json`, `status` healthy/degraded with `queue.status`
-   healthy/degraded/unknown) plus HTML/RSS/iCal/sitemap/robots/redirect/404
-   routes with CSP/nosniff/content-type/noindex/redirect assertions; queue
+   healthy/degraded/unknown) plus `/`, `/about`, `/faq`, `/rules`, `/privacy`,
+   `/events`, `/events/past`, `/join`, `/events.rss`, `/events.ics`,
+   `/sitemap_index.xml`, `/robots.txt`, `/discord` (302), `/profile` (302),
+   `/admin` (302/403) and `/__smoke_unknown_route__` (404)
+   with CSP/nosniff/content-type/noindex/redirect assertions; queue
    `degraded` or `unknown` is allowed. This is public-route liveness only,
-   not DB/schema readiness or queue-drain acceptance.
+   not DB/schema readiness or queue-drain acceptance. The apex production
+   smoke uses the same 17-route shape with `--allow-indexable`
+   (`node bin/smoke.mjs https://togetherweown.com --allow-indexable`).
 4. An explicitly authorized manual deployment of the reviewed release uses:
 
    ```bash
@@ -382,11 +393,19 @@ migration is performed by its selftest.
   and host (direct `<id>.pg.psdb.cloud:5432` endpoint — never the
   pooled `6432` port). The migrate gate pins the staging host and branch id and
   refuses the production identity in code, so a production URL in the staging
-  secret fails closed. The driver pins port 5432, uses
-  certificate-verified TLS, strips optional `channel_binding=prefer|disable`, and
-  refuses `channel_binding=require` (unsupported by postgres.js) before connecting.
-  Never weaken a required channel-binding policy just to run migrations; stop and
-  coordinate a compatible driver. Never copy credentials to argv, comments, code
+  secret fails closed. The driver pins port 5432 and enforces
+  certificate-verified TLS (`sslmode=require|verify-full` plus
+  `rejectUnauthorized:true` in `migrationClient`), while
+  `channel_binding=require|prefer|disable` values are accepted and stripped
+  before connecting: postgres.js does not implement SCRAM channel binding and
+  would forward the libpq-only flag as a startup setting, so stripping it keeps
+  TLS encryption without providing SCRAM-SHA-256-PLUS channel binding
+  (`ci/db-migrate.mjs:110-117,177-198`; pinned in
+  `ci/db-migrate-selftest.mjs:296-332`). This driver cannot satisfy a genuine
+  channel-binding requirement. Never weaken or remove a required
+  channel-binding policy just to run migrations; stop and route the requirement
+  through the authorized security/operator path for a compatible driver, not to
+  weaker credentials or DSNs. Never copy credentials to argv, comments, code
   or logs. No `DATABASE_URL`/Hyperdrive/alternate-secret fallback.
 - GitHub's `secrets` context also resolves repository/organization secrets.
   Therefore verify the selected name exists at Environment scope before using
@@ -509,6 +528,12 @@ an unreadable target fails closed). A rollback does **not** undo
 Postgres migrations, data writes, Discord side effects, queue messages or
 external-resource changes; keep the release workflow from redeploying the bad
 head. Record the rollback deployment and previous/current version IDs.
+
+A failed post-promotion public-route verification in `deploy-production`
+blocks the release tag but leaves the promoted version live at 100%: the
+gradual action's automatic rollback only covers failures inside the promotion
+itself. The failed step's logs print the recorded pre-promote version ID;
+restore it with this workflow using that ID.
 
 Promotion and rollback mutations to the production Worker serialize on the
 shared `production-worker-mutation` job-level concurrency group
@@ -1237,8 +1262,15 @@ empty). If any is missing, `/up` answers 503 with top-level `status: degraded`
 and `config: "missing"`, alongside the DB and queue fields above. The body never
 names the secret; the Worker log line `Health check found required Worker
 secrets missing.` lists the missing names only, never values. A ready Worker's
-body has no `config` key. This is a presence check only: a wrong value still
-reports ready and fails at sign-in. Fix by setting the secret (an Operator step
+body has no `config` key. The Discord pair is presence-checked only: a wrong
+value still reports ready and fails at sign-in. `SESSION_SECRET` additionally
+enforces the documented strength floor (at least 32 characters, no
+leading/trailing whitespace); a weak value answers 503 with
+`config: "weak"` and a log line naming the requirement, never the value. A weak
+`SESSION_SECRET` takes precedence over a missing Discord secret: when both hold,
+`/up` reports `config: "weak"`, and fixing the weak secret can then surface
+`config: "missing"` for the still-absent secret. Fix
+by setting the secret (an Operator step
 for staging/production), not by weakening the probe.
 
 Queue-only degradation or `unknown` **still returns 200 when DB/schema is ready**:
@@ -1311,7 +1343,9 @@ still fence a due carrier. Measuring health never resets `created_at`, expires
 reservations, redrives jobs or discards failures. Investigate with the existing
 [queue redrive runbook](queue-redrive-runbook.md), not by deleting old evidence.
 Queue-only warning/critical/unknown remains HTTP 200 when DB/schema/config is
-ready; deploy smoke and uptime/liveness acceptance are unchanged. This field
+ready; staging deploy smoke fails closed on ready_wait_severity critical (S6,
+--fail-on-ready-wait-critical), while production promote and post-rollback
+smoke warn and pass; uptime/liveness acceptance are unchanged. This field
 neither repairs the queue nor grants staging SQL/redrive or production deployment
 permission; existing production approval gates still apply.
 

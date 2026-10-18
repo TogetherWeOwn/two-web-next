@@ -32,11 +32,19 @@ const fmtWithOffset = (d: Date, tz: string): string => {
 // non-member) never sees it. The pitch carries this page as ?next= so the
 // journey lands the guest back here after joining. The one-shot join
 // confirmation still renders for the newly authenticated member.
+export interface EventAttendeesPaging {
+  page: number;
+  prevHref: string | null;
+  nextHref: string | null;
+}
+
 export const EventPage: FC<{
   e: PublicEvent;
   neighbors: EventNeighbors;
   related: EventLink[];
   attendees?: EventAttendee[];
+  /** Native attendee page window; omitted renders the legacy single page. */
+  attendeesPaging?: EventAttendeesPaging;
   appUrl: string;
   jsonLd: string;
   siteJsonLd?: string;
@@ -53,6 +61,7 @@ export const EventPage: FC<{
   neighbors,
   related,
   attendees = [],
+  attendeesPaging = { page: 1, prevHref: null, nextHref: null },
   appUrl,
   jsonLd,
   siteJsonLd,
@@ -189,19 +198,45 @@ export const EventPage: FC<{
           <p role="status" aria-live="polite" data-testid="event-copy-toast" data-copy-toast></p>
         </section>
       </div>
-      {attendees.length > 0 ? (
-        <section aria-labelledby="event-attendees-heading" data-testid="event-attendees">
-          <h2 id="event-attendees-heading">Who's going ({attendees.length})</h2>
-          <ul class="event-attendee-grid">
-            {attendees.map((attendee) => (
-              <li>
-                <span class="event-attendee-mark" aria-hidden="true">
-                  {Array.from(attendee.name)[0]}
-                </span>
-                <a href={`/members/${encodeURIComponent(attendee.id)}`}>{attendee.name}</a>
-              </li>
-            ))}
-          </ul>
+      {attendees.length > 0 || (member && attendeesPaging.page > 1) ? (
+        <section
+          aria-labelledby="event-attendees-heading"
+          data-testid="event-attendees"
+          data-island="attendees-live"
+        >
+          {attendeesPaging.prevHref || attendeesPaging.nextHref ? (
+            <h2 id="event-attendees-heading">Who's going</h2>
+          ) : (
+            <h2 id="event-attendees-heading">Who's going ({attendees.length})</h2>
+          )}
+          {attendees.length > 0 ? (
+            <ul class="event-attendee-grid">
+              {attendees.map((attendee) => (
+                <li>
+                  <span class="event-attendee-mark" aria-hidden="true">
+                    {Array.from(attendee.name)[0]}
+                  </span>
+                  <a href={`/members/${encodeURIComponent(attendee.id)}`}>{attendee.name}</a>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p>There are no more attendees on this page.</p>
+          )}
+          {attendeesPaging.prevHref || attendeesPaging.nextHref ? (
+            <nav class="event-attendees-pagination" aria-label="Attendee pages">
+              {attendeesPaging.prevHref ? (
+                <a href={attendeesPaging.prevHref} rel="prev" data-testid="event-attendees-prev">
+                  ← Previous attendees
+                </a>
+              ) : null}{" "}
+              {attendeesPaging.nextHref ? (
+                <a href={attendeesPaging.nextHref} rel="next" data-testid="event-attendees-next">
+                  Next attendees →
+                </a>
+              ) : null}
+            </nav>
+          ) : null}
           <p>
             Attendees shown at page load.{" "}
             <a href={path} data-testid="event-attendees-refresh">
@@ -213,6 +248,7 @@ export const EventPage: FC<{
       ) : null}
       <script src="/islands/copy-link.js" defer />
       <script src="/islands/going-count.js" defer />
+      <script src="/islands/attendees-live.js" defer />
       <script
         type="application/ld+json"
         data-testid="event-jsonld"

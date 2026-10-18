@@ -236,7 +236,11 @@ describe.skipIf(!process.env.DATABASE_URL)("event mutation invariants (agent-tes
     const before = await state(row.eventKey);
     const response = await json("POST", `/events/${row.eventKey}/publish`);
     expect(response.status).toBe(422);
-    expect(await response.json()).toEqual({ error: "invalid", fields: { ends_at: ENDED } });
+    expect(await response.json()).toEqual({
+      error: "invalid",
+      fields: { ends_at: ENDED },
+      request_id: response.headers.get("x-request-id"),
+    });
     expect(await state(row.eventKey)).toEqual(before);
     expect(sent).toEqual([]);
   });
@@ -281,7 +285,11 @@ describe.skipIf(!process.env.DATABASE_URL)("event mutation invariants (agent-tes
       const before = await state(row.eventKey);
       const response = await json("POST", `/events/${row.eventKey}/publish`);
       expect(response.status).toBe(422);
-      expect(await response.json()).toEqual({ error: "invalid", fields: { location: LOCATION } });
+      expect(await response.json()).toEqual({
+        error: "invalid",
+        fields: { location: LOCATION },
+        request_id: response.headers.get("x-request-id"),
+      });
       expect(await state(row.eventKey)).toEqual(before);
       expect((await getEvent(fixture.db, row.eventKey))?.status).toBe("draft");
       expect(sent).toEqual([]);
@@ -319,6 +327,7 @@ describe.skipIf(!process.env.DATABASE_URL)("event mutation invariants (agent-tes
           expect(await response.json()).toEqual({
             error: "invalid",
             fields: { location: LOCATION },
+            request_id: response.headers.get("x-request-id"),
           });
         else {
           const html = await response.text();
@@ -364,7 +373,11 @@ describe.skipIf(!process.env.DATABASE_URL)("event mutation invariants (agent-tes
             : await browser(`/events/${row.eventKey}`, form("2"));
         expect(response.status).toBe(422);
         if (path === "json")
-          expect(await response.json()).toEqual({ error: "invalid", fields: { capacity: FLOOR } });
+          expect(await response.json()).toEqual({
+            error: "invalid",
+            fields: { capacity: FLOOR },
+            request_id: response.headers.get("x-request-id"),
+          });
         else {
           const html = await response.text();
           expect(html).toContain(FLOOR);
@@ -485,7 +498,11 @@ describe.skipIf(!process.env.DATABASE_URL)("event mutation invariants (agent-tes
     }
     const response = await pending;
     expect(response.status).toBe(422);
-    expect(await response.json()).toEqual({ error: "invalid", fields: { ends_at: ENDED } });
+    expect(await response.json()).toEqual({
+      error: "invalid",
+      fields: { ends_at: ENDED },
+      request_id: response.headers.get("x-request-id"),
+    });
     expect(await state(row.eventKey)).toEqual(before);
     expect(sent).toEqual([]);
   });

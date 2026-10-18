@@ -263,6 +263,7 @@ describe.skipIf(!process.env.DATABASE_URL)("event write-back through W13 (test c
         expect(await response.json()).toEqual({
           error: "invalid",
           fields: { location: "Add a location before publishing." },
+          request_id: response.headers.get("x-request-id"),
         });
       else expect(await response.text()).toContain("Add a location before publishing.");
       expect(sent).toHaveLength(0);

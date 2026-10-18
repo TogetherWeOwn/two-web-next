@@ -39,6 +39,9 @@ const { rows, query, hasNext, prevUrl, nextUrl, outcomes, retentionDays } = $der
         {#each ["", ...outcomes] as o (o)}
           <option value={o} selected={o === query.outcome}>{o === "" ? "All" : o}</option>
         {/each}
+        {#if query.outcome !== "" && !outcomes.includes(query.outcome)}
+          <option value={query.outcome} selected>{query.outcome}</option>
+        {/if}
       </select>
     </div>
     <div class="field">

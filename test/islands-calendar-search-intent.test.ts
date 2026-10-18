@@ -575,4 +575,57 @@ describe("EventsCalendar search intent before the next debounce", () => {
       );
     },
   );
+
+  it.each(["view", "drawer", "jump", "popstate"])(
+    "preserves newer same-value draft during explicit %s navigation",
+    async (action) => {
+      const b = browser();
+      b.type("raid");
+      const path =
+        action === "view"
+          ? "/events?view=calendar"
+          : action === "drawer"
+            ? "/events?past=1"
+            : "/events?event=a#event-a";
+      if (action === "popstate") b.back(path);
+      else b.navigate(path, action === "jump");
+      expect(b.requests).toHaveLength(1);
+      b.type("raidx");
+      b.type("raid");
+      expect(b.requests[0]!.signal.aborted).toBe(false);
+      await b.respond(0);
+      expect(b.zones.every((zone) => zone.swaps === 1)).toBe(true);
+      expect(b.input.value).toBe("raid");
+      expect(b.input.focused).toBe(true);
+      vi.advanceTimersByTime(299);
+      expect(b.requests).toHaveLength(1);
+      vi.advanceTimersByTime(1);
+      const expected = action === "drawer" ? "/events?q=raid&past=1" : "/events?q=raid";
+      expect(b.requests[1]!.url).toBe(expected);
+      await b.respond(1);
+      expect(b.history).toEqual(action === "popstate" ? [expected] : [path, expected]);
+    },
+  );
+
+  it.each(["view", "drawer", "jump", "popstate"])(
+    "synchronizes untouched input during explicit %s navigation",
+    async (action) => {
+      const b = browser();
+      b.type("raid");
+      const path =
+        action === "view"
+          ? "/events?view=calendar"
+          : action === "drawer"
+            ? "/events?past=1"
+            : "/events?event=a#event-a";
+      if (action === "popstate") b.back(path);
+      else b.navigate(path, action === "jump");
+      expect(b.requests).toHaveLength(1);
+      await b.respond(0);
+      expect(b.zones.every((zone) => zone.swaps === 1)).toBe(true);
+      expect(b.input.value).toBe("");
+      vi.advanceTimersByTime(1000);
+      expect(b.requests).toHaveLength(1);
+    },
+  );
 });

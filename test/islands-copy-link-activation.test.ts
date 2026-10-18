@@ -115,27 +115,30 @@ describe("Copy-link activation admission", () => {
       },
     );
 
-    it("admits one Space press but ignores held-key repeats and admits the next press", async () => {
-      const b = browser(mode);
-      const first = await b.activate("keydown");
-      expect(first.preventDefault).toHaveBeenCalledOnce();
-      const before = feedback(b);
-      for (let i = 0; i < 3; i++) {
-        const repeated = await b.activate("keydown", { repeat: true });
-        expect(repeated.preventDefault).toHaveBeenCalledOnce();
-        expect(repeated.event.defaultPrevented).toBe(true);
-        expect(feedback(b)).toEqual(before);
-      }
-      await b.activate("keydown");
-      expect(mode === "absent" ? b.exec : b.writeText).toHaveBeenCalledTimes(2);
-    });
+    it.each([" ", "Enter"] as const)(
+      "admits one %s press but ignores held-key repeats and admits the next press",
+      async (key) => {
+        const b = browser(mode);
+        const first = await b.activate("keydown", { key });
+        expect(first.preventDefault).toHaveBeenCalledOnce();
+        const before = feedback(b);
+        for (let i = 0; i < 3; i++) {
+          const repeated = await b.activate("keydown", { key, repeat: true });
+          expect(repeated.preventDefault).toHaveBeenCalledOnce();
+          expect(repeated.event.defaultPrevented).toBe(true);
+          expect(feedback(b)).toEqual(before);
+        }
+        await b.activate("keydown", { key });
+        expect(mode === "absent" ? b.exec : b.writeText).toHaveBeenCalledTimes(2);
+      },
+    );
 
     it.each(["click", "keydown"] as const)(
-      "preserves ordinary %s copying, button role and four-second feedback",
+      "preserves ordinary %s copying, link semantics and four-second feedback",
       async (type) => {
         const b = browser(mode);
         const { event, preventDefault } = await b.activate(type);
-        expect(b.attributes.get("role")).toBe("button");
+        expect(b.attributes.has("role")).toBe(false);
         expect(event.defaultPrevented).toBe(true);
         expect(preventDefault).toHaveBeenCalledOnce();
         if (mode === "absent") expect(b.writeText).not.toHaveBeenCalled();
@@ -166,7 +169,7 @@ describe("Copy-link activation admission", () => {
     expect(feedback(b)).toEqual(before);
   });
 
-  it("leaves modified/non-primary clicks and native Enter keydown alone", async () => {
+  it("leaves modified/non-primary clicks and unrelated keys alone", async () => {
     const b = browser();
     for (const extra of [
       { button: 1 },
@@ -180,16 +183,29 @@ describe("Copy-link activation admission", () => {
       expect(event.defaultPrevented).toBe(false);
       expect(preventDefault).not.toHaveBeenCalled();
     }
-    for (const key of ["Enter", "Escape"]) {
-      const { event, preventDefault } = await b.activate("keydown", { key });
-      expect(event.defaultPrevented).toBe(false);
-      expect(preventDefault).not.toHaveBeenCalled();
+    const { event, preventDefault } = await b.activate("keydown", { key: "Escape" });
+    expect(event.defaultPrevented).toBe(false);
+    expect(preventDefault).not.toHaveBeenCalled();
+    for (const key of [" ", "Enter"] as const) {
+      for (const extra of [
+        { ctrlKey: true },
+        { metaKey: true },
+        { shiftKey: true },
+        { altKey: true },
+      ]) {
+        const modified = await b.activate("keydown", { key, ...extra });
+        expect(modified.event.defaultPrevented).toBe(false);
+        expect(modified.preventDefault).not.toHaveBeenCalled();
+      }
     }
     expect(b.writeText).not.toHaveBeenCalled();
     expect(b.setTimeout).not.toHaveBeenCalled();
-    // Native Enter activation on an anchor produces a primary click.
-    await b.activate("click");
+    // Enter activates the copy directly, exactly like Space and plain click.
+    const entered = await b.activate("keydown", { key: "Enter" });
+    expect(entered.preventDefault).toHaveBeenCalledOnce();
     expect(b.writeText).toHaveBeenCalledExactlyOnceWith(canonical);
+    await b.activate("click");
+    expect(b.writeText).toHaveBeenCalledTimes(2);
   });
 
   it("does not supersede a pending clipboard attempt with ignored activations", async () => {
