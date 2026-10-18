@@ -412,7 +412,9 @@ test("accepts rendered healthy, degraded, unknown and unconfigured /up envelopes
   const { upBody } = await import(
     `data:text/javascript;base64,${Buffer.from(bundle.outputFiles[0].text).toString("base64")}`
   );
-  for (const state of ["healthy", "warning", "critical", "degraded", "unknown", "unconfigured"]) {
+  // Critical ready-wait is fail-closed (S6) and covered below; every other
+  // rendered severity passes.
+  for (const state of ["healthy", "warning", "degraded", "unknown", "unconfigured"]) {
     const body = await upBody(
       state === "unconfigured"
         ? null
@@ -426,8 +428,7 @@ test("accepts rendered healthy, degraded, unknown and unconfigured /up envelopes
               total: pending,
               failed: 0,
               oldestPendingAgeSeconds: null,
-              oldestReadyWaitAgeSeconds:
-                state === "critical" ? 1800.1 : state === "warning" ? 300.1 : null,
+              oldestReadyWaitAgeSeconds: state === "warning" ? 300.1 : null,
             };
           },
     );
@@ -435,7 +436,7 @@ test("accepts rendered healthy, degraded, unknown and unconfigured /up envelopes
     const ready = { ...body, db: "ok", pending_migrations: 0 };
     const expectedSeverity = ["unknown", "unconfigured"].includes(state)
       ? "unknown"
-      : ["warning", "critical"].includes(state)
+      : state === "warning"
         ? state
         : "healthy";
     assert.equal(ready.queue.ready_wait_severity, expectedSeverity);
@@ -446,6 +447,54 @@ test("accepts rendered healthy, degraded, unknown and unconfigured /up envelopes
     const result = await run(url);
     assert.equal(result.ok, true, `${state}: ${result.output}`);
   }
+});
+
+test("fails closed on critical ready-wait severity with the age in the output", async (t) => {
+  const bundle = await build({
+    entryPoints: ["src/up.ts"],
+    bundle: true,
+    write: false,
+    format: "esm",
+    platform: "node",
+  });
+  const { upBody } = await import(
+    `data:text/javascript;base64,${Buffer.from(bundle.outputFiles[0].text).toString("base64")}`
+  );
+  const body = await upBody(async () => ({
+    pending: 1,
+    delayed: 0,
+    reserved: 0,
+    total: 1,
+    failed: 0,
+    oldestPendingAgeSeconds: null,
+    oldestReadyWaitAgeSeconds: 612000,
+  }));
+  const ready = { ...body, db: "ok", pending_migrations: 0 };
+  assert.equal(ready.queue.ready_wait_severity, "critical");
+  assert.equal(ready.queue.oldest_ready_wait_age_seconds, 612000);
+  const { url } = await stub(t, (route, result) => {
+    if (route === "/up") result.body = JSON.stringify(ready);
+  });
+  const result = await run(url);
+  assert.equal(result.ok, false, result.output);
+  assert.match(
+    result.output,
+    /FAIL \/up: expected ready_wait_severity not critical; actual critical \(oldest_ready_wait_age_seconds: 612000\)/,
+  );
+});
+
+test("critical ready-wait without an age still fails closed without leaking the body", async (t) => {
+  const { url } = await stub(t, (route, result) => {
+    if (route === "/up")
+      result.body =
+        '{"status":"healthy","db":"ok","pending_migrations":0,"queue":{"status":"healthy","warn_at":20,"critical_at":100,"ready_wait_severity":"critical","oldest_ready_wait_age_seconds":null}}';
+  });
+  const result = await run(url);
+  assert.equal(result.ok, false, result.output);
+  assert.match(
+    result.output,
+    /FAIL \/up: expected ready_wait_severity not critical; actual critical \(oldest_ready_wait_age_seconds: unknown\)/,
+  );
 });
 
 test("smoke queue thresholds track src/up.ts QUEUE_WARN_AT / QUEUE_CRITICAL_AT", async () => {

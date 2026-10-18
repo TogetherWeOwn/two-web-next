@@ -275,7 +275,7 @@ jobs:
           bash ci/change-scope.sh "$RUNNER_TEMP/deployed-files.tsv" "$EXPECTED" >> "$GITHUB_OUTPUT"
       - name: Smoke test staging public routes
         if: steps.smoke-scope.outputs.skip_e2e != 'true'
-        # bin/smoke.mjs requires /up db:ok + pending_migrations:0; queue-only degraded/unknown must not fail a deploy.
+        # bin/smoke.mjs requires /up db:ok + pending_migrations:0 and ready_wait_severity != critical; queue-only degraded/unknown still pass, only a stuck queue fails the deploy.
         run: |
           for i in 1 2 3 4 5 6; do
             if node bin/smoke.mjs https://next.togetherweown.com; then

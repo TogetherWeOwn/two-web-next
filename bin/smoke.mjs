@@ -172,6 +172,10 @@ export async function smoke(
           // and unknown-ledger envelopes all pass; thresholds pinned to
           // src/up.ts QUEUE_WARN_AT / QUEUE_CRITICAL_AT via the exported
           // SMOKE_QUEUE_* constants above (drift guard in test/smoke.test.mjs).
+          // A stuck queue is not promotable: ready_wait_severity critical
+          // fails closed (S6). Healthy/warning/unknown do not fail this gate;
+          // a missing severity is not a failure (no behavior change beyond
+          // the fail-closed case).
           const valid =
             data?.db === "ok" &&
             data?.pending_migrations === 0 &&
@@ -183,6 +187,13 @@ export async function smoke(
             valid,
             "JSON /up db:ok, pending_migrations:0, status and queue.status",
             "valid JSON with unexpected health shape",
+          );
+          const severity = data?.queue?.ready_wait_severity;
+          const readyAge = data?.queue?.oldest_ready_wait_age_seconds;
+          check(
+            severity !== "critical",
+            "ready_wait_severity not critical",
+            `critical (oldest_ready_wait_age_seconds: ${typeof readyAge === "number" ? readyAge : "unknown"})`,
           );
         } catch {
           check(false, "valid JSON object", "invalid JSON");
