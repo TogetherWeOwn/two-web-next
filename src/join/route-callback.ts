@@ -112,6 +112,7 @@ export function registerJoinCallbackRoutes(
         exception: "InvalidState",
         source,
         outcome: "expired",
+        request_id: safeRequestId(c.get("requestId")),
       });
       return recover(
         "Join link expired",
@@ -151,6 +152,7 @@ export function registerJoinCallbackRoutes(
         exception: "InvalidState",
         source,
         outcome: "expired",
+        request_id: safeRequestId(c.get("requestId")),
       });
       if (admitted)
         await recordAttempt(sql, {
@@ -189,6 +191,7 @@ export function registerJoinCallbackRoutes(
         status: meta.status,
         source,
         outcome,
+        request_id: safeRequestId(c.get("requestId")),
       });
       await recordAttempt(sql, {
         outcome: "error",

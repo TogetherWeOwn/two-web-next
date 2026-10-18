@@ -23,6 +23,7 @@ import {
 import type { Env } from "../env";
 import { STATE_TTL_SECONDS } from "../index";
 import { safeNext } from "../join/service";
+import { safeRequestId } from "../request-log";
 import { QA_HEADER, qaEnabled, qaIdentity, qaTokenMatches, type QaIdentity } from "../qa";
 import {
   consumeLoginReturn,
@@ -205,6 +206,7 @@ export function registerAuthRoutes(app: Hono<{ Bindings: Env }>, hooks: AuthHook
         exception: meta.exception,
         kind: meta.kind,
         status: meta.status,
+        request_id: safeRequestId(c.get("requestId")),
       });
       return c.redirect(
         isProviderOutage(meta.kind) ? "/?n=signin_unavailable" : "/?n=signin_failed",
@@ -231,6 +233,7 @@ export function registerAuthRoutes(app: Hono<{ Bindings: Env }>, hooks: AuthHook
     if (join !== "joined" && join !== "already_member")
       console.warn("guild auto-join failed", {
         request_id: c.get("requestId"),
+        guild_id: c.env.DISCORD_GUILD_ID,
         kind: join,
       });
 
