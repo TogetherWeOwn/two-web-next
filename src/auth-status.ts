@@ -1,6 +1,6 @@
 import type { Context, Next } from "hono";
 import { deleteCookie, generateSignedCookie, getSignedCookie } from "hono/cookie";
-import { hashToken, SESSION_TTL_SECONDS, type SessionStore } from "./sessions";
+import { hashToken, isValidSessionToken, SESSION_TTL_SECONDS, type SessionStore } from "./sessions";
 import { SESSION_COOKIE } from "./session-cookie";
 
 export const AUTH_STATUS_COOKIE = "__Host-two_session_status";
@@ -63,7 +63,7 @@ export async function authStatus(c: Ctx, storeFor: () => Promise<SessionStore>):
       return c.json({ authenticated: await (await storeFor()).isActive(key) });
     }
     // Pre-rollout clients without a probe cookie remain read-only too.
-    const valid = typeof token === "string" && token.startsWith("two_");
+    const valid = isValidSessionToken(token);
     return c.json({
       authenticated: valid ? !!(await (await storeFor()).get(await hashToken(token))) : false,
     });

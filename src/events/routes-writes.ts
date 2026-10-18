@@ -21,20 +21,22 @@ import { expiredWriteBounce } from "../write-recovery";
 import { getPublicEvent, withGoingCount } from "./reads";
 import { body, eventJson, type App, type Ctx, type SessionReader } from "./routes-shared";
 import { SESSION_COOKIE } from "../session-cookie";
+import { isValidSessionToken } from "../sessions";
 
 async function moderator(c: Ctx, readFragmentSession: SessionReader): Promise<Session | Response> {
   // Non-rotating: concurrent writes with one cookie must all authenticate.
-  // A presented bearer with no live row (expired/revoked/rotated) is an
-  // expired guest, not an unknown guest: writes recover through
+  // A well-formed presented bearer with no live row (expired/revoked/rotated)
+  // is an expired guest, not an unknown guest: writes recover through
   // expiredWriteBounce, matching the profile/admin gates (TOG-10357/TOG-12399).
   // These routes are JSON-only, so the bounce is always 401 with a recovery
   // link, never a 303 a header-less fetch would follow to a 200 page. A
-  // request with no cookie at all keeps the bare unauthenticated refusal the
-  // admission pins assert.
+  // request with no cookie — or a correctly-signed but malformed bearer, which
+  // readSession already rejects as guest with zero store reads — keeps the
+  // bare unauthenticated refusal the admission pins assert.
   const session = await readFragmentSession(c);
   if (!session) {
     const token = await getSignedCookie(c, c.env.SESSION_SECRET, SESSION_COOKIE);
-    if (token) return expiredWriteBounce(c, true);
+    if (isValidSessionToken(token)) return expiredWriteBounce(c, true);
     return c.json({ error: "unauthenticated" }, 401);
   }
   if (!session.moderator) return c.json({ error: "forbidden" }, 403);
@@ -145,6 +147,21 @@ export function registerWriteRoutes(app: App, readFragmentSession: SessionReader
         // transaction that commits the update (patchEvent), never from a
         // pre-lock snapshot, so concurrent disjoint edits both survive.
         const patch = await eventBody(c);
+        // `status`/`rsvpOpen` are transitioned through the publish/cancel and
+        // rsvp-pause/rsvp-reopen actions, never edited: the parser and writer
+        // below never read them, so a silent merge would answer 200 with the
+        // row visibly unchanged and mislead the moderator. Presence is refused,
+        // even when the value repeats what is stored.
+        const extraneous: Record<string, string> = {};
+        if (patch.status !== undefined)
+          extraneous.status = "Change the status with the publish/cancel actions, not by editing.";
+        // Both spellings: the read envelope serializes `rsvp_open`, so a client
+        // echoing the GET shape back must hit the same refusal (both-spellings
+        // precedent: event_key/eventKey in parseEventForm).
+        if (patch.rsvpOpen !== undefined || patch.rsvp_open !== undefined)
+          extraneous.rsvpOpen =
+            "Change RSVP availability with the rsvp-pause/rsvp-reopen actions, not by editing.";
+        if (Object.keys(extraneous).length > 0) throw new ValidationError(extraneous);
         const { row, writeBack, childWriteBacks } = await patchEvent(
           db,
           { id: who.id, username: who.username },

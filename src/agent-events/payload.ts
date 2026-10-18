@@ -33,6 +33,18 @@ export function hasIngressControlBytes(value: unknown): boolean {
   return typeof value === "string" && containsControlCharacters(value);
 }
 
+// PostgreSQL `integer` (int4) bounds for the optimistic-version column. An
+// out-of-range JSON integer admitted past validation would reach the driver
+// as a range error (500) instead of the existing validation refusal, so the
+// update path refuses such versions before any event SQL runs.
+export const INT4_MIN = -2147483648;
+export const INT4_MAX = 2147483647;
+export function isAgentVersion(value: unknown): value is number {
+  return (
+    typeof value === "number" && Number.isInteger(value) && value >= INT4_MIN && value <= INT4_MAX
+  );
+}
+
 // Nesting bound for the payload digest: comfortably above every real agent
 // event body (3 levels), far below stack exhaustion (~10k frames in a Worker).
 export const MAX_DIGEST_DEPTH = 100;

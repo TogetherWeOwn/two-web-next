@@ -102,8 +102,9 @@ const MUTANTS = [
     id: "S5-revoke-wrong-user",
     file: "src/sessions.ts",
     note: "fresh login revokes only the same user's sessions: other users are revoked instead",
-    find: "if (hash !== exceptTokenHash && r.userId === userId) rows.delete(hash);",
-    replace: "if (hash !== exceptTokenHash && r.userId !== userId) rows.delete(hash);",
+    find: "if (hash !== exceptTokenHash && r.userId === userId && r.expiresAt > clock())\n          rows.delete(hash);",
+    replace:
+      "if (hash !== exceptTokenHash && r.userId !== userId && r.expiresAt > clock())\n          rows.delete(hash);",
   },
   {
     id: "S6-create-drops-member",

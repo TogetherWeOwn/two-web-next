@@ -827,6 +827,166 @@ test("CLI --fail-on-ready-wait-critical gates staging while the flag-less CLI pa
   );
 });
 
+// Acceptance: a blind queue-observability path must not pass the staging
+// fail-closed gate. /up itself is unchanged (unknown stays HTTP 200 /
+// healthy at the route); only the staging smoke verdict changes, and only
+// with failOnReadyWaitCritical. Without the flag the legacy pass is kept
+// so production/rollback smokes can still ship a fix for a blind queue.
+test("fails closed on rendered unknown queue/readiness with the staging flag; flag-less passes", async (t) => {
+  const bundle = await build({
+    entryPoints: ["src/up.ts"],
+    bundle: true,
+    write: false,
+    format: "esm",
+    platform: "node",
+  });
+  const { upBody } = await import(
+    `data:text/javascript;base64,${Buffer.from(bundle.outputFiles[0].text).toString("base64")}`
+  );
+  const unknownQueue = {
+    status: "unknown",
+    pending: null,
+    delayed: null,
+    reserved: null,
+    total: null,
+    failed: null,
+    oldest_pending_age_seconds: null,
+    oldest_ready_wait_age_seconds: null,
+    ready_wait_severity: "unknown",
+    warn_at: 20,
+    critical_at: 100,
+    detail: null,
+  };
+  // Throwing measureQueue (broken observability) and unconfigured ledger
+  // (null) are the two real producers of the unknown envelope.
+  const measureQueue = async () => {
+    throw new Error("fixture outage");
+  };
+  for (const [state, measure, detail] of [
+    ["throwing measureQueue", measureQueue, null],
+    ["unconfigured", null, "queue ledger is not configured."],
+  ]) {
+    const body = await upBody(measure);
+    const ready = { ...body, db: "ok", pending_migrations: 0 };
+    // /up payload unchanged: queue slice is exactly the unknown envelope.
+    assert.deepEqual(ready.queue, { ...unknownQueue, detail }, state);
+    assert.equal(ready.queue.status, "unknown", state);
+    assert.equal(ready.queue.ready_wait_severity, "unknown", state);
+    const { url } = await stub(t, (route, result) => {
+      if (route === "/up") result.body = JSON.stringify(ready);
+    });
+    const gated = await run(url, { failOnReadyWaitCritical: true });
+    assert.equal(gated.ok, false, `${state}: ${gated.output}`);
+    assert.match(gated.output, /FAIL \/up:[^\n]*unknown/, state);
+    assert.ok(!gated.output.includes("PASS /up"), `${state}: ${gated.output}`);
+    const ungated = await run(url);
+    assert.equal(ungated.ok, true, `${state}: ${ungated.output}`);
+    assert.ok(ungated.output.includes("PASS /up"), `${state}: ${ungated.output}`);
+  }
+});
+
+test("staging flag fails closed when either queue.status or ready_wait_severity alone is unknown", async (t) => {
+  // The smoke consumes JSON, not the renderer, so each readiness field is
+  // gated independently: either one reporting unknown (including an older
+  // envelope with no severity field at all) is a blind queue.
+  const base = { status: "healthy", db: "ok", pending_migrations: 0 };
+  const cases = [
+    [
+      "queue.status unknown, severity healthy",
+      {
+        status: "unknown",
+        warn_at: 20,
+        critical_at: 100,
+        ready_wait_severity: "healthy",
+        oldest_ready_wait_age_seconds: null,
+      },
+    ],
+    ["queue.status unknown, severity absent", { status: "unknown", warn_at: 20, critical_at: 100 }],
+    [
+      "queue.status healthy, severity unknown",
+      {
+        status: "healthy",
+        warn_at: 20,
+        critical_at: 100,
+        ready_wait_severity: "unknown",
+        oldest_ready_wait_age_seconds: null,
+      },
+    ],
+    [
+      "queue.status degraded, severity unknown",
+      {
+        status: "degraded",
+        warn_at: 20,
+        critical_at: 100,
+        ready_wait_severity: "unknown",
+        oldest_ready_wait_age_seconds: null,
+      },
+    ],
+  ];
+  for (const [state, queue] of cases) {
+    const { url } = await stub(t, (route, result) => {
+      if (route === "/up") result.body = JSON.stringify({ ...base, queue });
+    });
+    const gated = await run(url, { failOnReadyWaitCritical: true });
+    assert.equal(gated.ok, false, `${state}: ${gated.output}`);
+    assert.match(gated.output, /FAIL \/up:[^\n]*unknown/, state);
+    assert.ok(!gated.output.includes("PASS /up"), `${state}: ${gated.output}`);
+    const ungated = await run(url);
+    assert.equal(ungated.ok, true, `${state}: ${ungated.output}`);
+    assert.ok(ungated.output.includes("PASS /up"), `${state}: ${ungated.output}`);
+  }
+});
+
+test("healthy, warning and degraded rendered envelopes still pass with the staging flag", async (t) => {
+  const bundle = await build({
+    entryPoints: ["src/up.ts"],
+    bundle: true,
+    write: false,
+    format: "esm",
+    platform: "node",
+  });
+  const { upBody } = await import(
+    `data:text/javascript;base64,${Buffer.from(bundle.outputFiles[0].text).toString("base64")}`
+  );
+  for (const state of ["healthy", "warning", "degraded"]) {
+    const body = await upBody(async () => {
+      const pending = state === "degraded" ? 20 : 0;
+      return {
+        pending,
+        delayed: 0,
+        reserved: 0,
+        total: pending,
+        failed: 0,
+        oldestPendingAgeSeconds: null,
+        oldestReadyWaitAgeSeconds: state === "warning" ? 300.1 : null,
+      };
+    });
+    const ready = { ...body, db: "ok", pending_migrations: 0 };
+    assert.notEqual(ready.queue.status, "unknown", state);
+    assert.notEqual(ready.queue.ready_wait_severity, "unknown", state);
+    const { url } = await stub(t, (route, result) => {
+      if (route === "/up") result.body = JSON.stringify(ready);
+    });
+    const gated = await run(url, { failOnReadyWaitCritical: true });
+    assert.equal(gated.ok, true, `${state}: ${gated.output}`);
+    assert.ok(gated.output.includes("PASS /up"), `${state}: ${gated.output}`);
+  }
+});
+
+test("CLI --fail-on-ready-wait-critical fails an unknown queue envelope while the flag-less CLI passes", async (t) => {
+  const { url } = await stub(t, (route, result) => {
+    if (route === "/up")
+      result.body =
+        '{"status":"healthy","db":"ok","pending_migrations":0,"queue":{"status":"unknown","pending":null,"delayed":null,"reserved":null,"total":null,"failed":null,"oldest_pending_age_seconds":null,"oldest_ready_wait_age_seconds":null,"ready_wait_severity":"unknown","warn_at":20,"critical_at":100,"detail":null}}';
+  });
+  const gated = await cli([url, "--fail-on-ready-wait-critical"]);
+  assert.equal(gated.code, 1, gated.output);
+  assert.match(gated.output, /FAIL \/up:[^\n]*unknown/);
+  const ungated = await cli([url]);
+  assert.equal(ungated.code, 0, ungated.output);
+  assert.ok(ungated.output.includes("PASS /up"), ungated.output);
+});
+
 test("smoke queue thresholds track src/up.ts QUEUE_WARN_AT / QUEUE_CRITICAL_AT", async () => {
   // Drift guard: bin/smoke.mjs runs on plain node with no TS loader, so its
   // expected warn_at/critical_at are duplicated from src/up-queue.ts

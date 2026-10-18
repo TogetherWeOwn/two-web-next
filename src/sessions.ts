@@ -209,7 +209,8 @@ export function createPostgresSessionStore(sql: Sql): SessionStore {
     },
     async revokeUserSessions(userId, exceptTokenHash) {
       await sql`update web_sessions set revoked_at = now()
-        where user_id = ${userId} and token_hash != ${exceptTokenHash} and revoked_at is null`;
+        where user_id = ${userId} and token_hash != ${exceptTokenHash}
+          and revoked_at is null and expires_at > clock_timestamp()`;
     },
     async sweepExpired(now) {
       // `<=`: reads require expires_at > now(), so a row expiring exactly at
@@ -293,7 +294,8 @@ export function createMemorySessionStore(clock: () => number = Date.now): Sessio
     },
     async revokeUserSessions(userId, exceptTokenHash) {
       for (const [hash, r] of rows) {
-        if (hash !== exceptTokenHash && r.userId === userId) rows.delete(hash);
+        if (hash !== exceptTokenHash && r.userId === userId && r.expiresAt > clock())
+          rows.delete(hash);
       }
     },
     async sweepExpired(now) {
@@ -314,6 +316,16 @@ export function createMemorySessionStore(clock: () => number = Date.now): Sessio
 export async function hashToken(token: string): Promise<string> {
   const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(token));
   return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+/** Exact minted bearer shape: `two_` + 43 base64url chars (47 total).
+ * Check this on the verified cookie value before hashing or any store call:
+ * malformed input is guest/no-op with zero store reads. Never a substitute
+ * for signature verification — always verify first, then shape-check. */
+const SESSION_TOKEN_RE = /^two_[A-Za-z0-9_-]{43}$/;
+
+export function isValidSessionToken(token: unknown): token is string {
+  return typeof token === "string" && SESSION_TOKEN_RE.test(token);
 }
 
 /** `two_` + 32 random bytes, base64url. ~256 bits: unguessable, URL/cookie-safe. */
