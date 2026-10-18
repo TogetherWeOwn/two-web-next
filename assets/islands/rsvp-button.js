@@ -135,10 +135,12 @@
       encodeURIComponent(typeof location !== "undefined" ? location.pathname : "/"),
   );
   // Unknown-outcome recovery keeps the member on the attendee page they
-  // were already on (?attendees=N), never dropping to page 1. Only the
-  // live page URL is trusted, and only when its path is this event: mount
-  // data is untrusted (SSR returnTo is for sign-in, never the refresh),
-  // so an external or different-event href falls back to the bare event.
+  // were already on (?attendees=N), never dropping to page 1. The live
+  // page URL is preferred when its path is this event; otherwise the SSR
+  // sign-in `next` path is used only if it is the same event. Mount data
+  // is untrusted: the href is always rebuilt from eventKey, and only a
+  // positive-integer attendees value (>1) is carried over. Anything else
+  // falls back to the bare event.
   function isSameEventPath(pathname) {
     if (typeof pathname !== "string") return false;
     try {
