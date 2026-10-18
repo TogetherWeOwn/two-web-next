@@ -145,7 +145,8 @@ describe("shared throttles admit before buffering", () => {
       expect(pull).not.toHaveBeenCalled();
       await request.body?.cancel().catch(() => {});
     }
-    expect(sql).toHaveBeenCalledTimes(3);
+    // Count + age-only prune per refused request; no insert, no upload pull.
+    expect(sql).toHaveBeenCalledTimes(6);
     expect(count()).toBe(budget);
   });
 
