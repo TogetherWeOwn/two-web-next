@@ -1,9 +1,11 @@
 import postgres from "postgres";
+import { alertScheduledFailing, type ScheduledFailingJob } from "../alerts";
 import { createBotClient } from "../bot/client";
 import type { Env, JobsEnv } from "../env";
 import { databaseOptions, databaseUrl } from "../db/connection";
 import { setReleaseMetadata } from "../release-tag";
 import { qaEnabled } from "../qa";
+import { PRUNE_CRON, RECONCILE_CRON } from "./constants";
 import { pruneModelTables, reconcileEvents, runScheduled } from "./cron";
 import { consume } from "./consumer";
 import { trackingQueue } from "./ledger";
@@ -160,6 +162,15 @@ export async function handleQueue(
   }
 }
 
+// Cron expression to the allowlisted scheduled-job discriminator. Only these
+// two jobs emit the scheduled.failing paging signal: sparse invocations that
+// can never trip the crash-loop gate on their own. Unknown crons still fail
+// loudly but stay silent here.
+const SCHEDULED_JOB_FOR_CRON: Record<string, ScheduledFailingJob> = {
+  [RECONCILE_CRON]: "events:reconcile",
+  [PRUNE_CRON]: "model:prune",
+};
+
 export async function handleScheduled(
   controller: ScheduledController,
   env: JobsEnv,
@@ -187,6 +198,20 @@ export async function handleScheduled(
         }),
       prune: (db) => pruneModelTables(pgPruneStores(db)),
     });
+  } catch (err) {
+    // Direct paging signal for a failed scheduled run: one redacted line per
+    // failed invocation, no source-side mute. The handler still rejects with
+    // the original error, and pool cleanup in finally still runs, even when
+    // writing the signal itself throws.
+    const job = SCHEDULED_JOB_FOR_CRON[controller.cron];
+    if (job !== undefined) {
+      try {
+        alertScheduledFailing(job, err);
+      } catch {
+        // A throwing alert sink must not replace the original rejection.
+      }
+    }
+    throw err;
   } finally {
     await dispatchSql.end({ timeout: 1 }).catch(() => {});
     await sql.end({ timeout: 1 });
