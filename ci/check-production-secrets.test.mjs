@@ -274,7 +274,7 @@ const ROLLBACK_VERSION_ID = "11111111-2222-4333-8444-555555555555";
 
 function cliWithStubbedVersionsView(
   stubStdout,
-  { exitCode = 0, versionId = ROLLBACK_VERSION_ID } = {},
+  { exitCode = 0, versionId = ROLLBACK_VERSION_ID, stubStderr = "" } = {},
 ) {
   const scratch = mkdtempSync(
     join(
@@ -286,12 +286,14 @@ function cliWithStubbedVersionsView(
     writeFileSync(
       join(scratch, "npx"),
       `#!${process.execPath}
+import { writeSync } from "node:fs";
 const expected = ["wrangler", "versions", "view", process.env.EXPECTED_VERSION, "--name", "two-web-next-production", "--json"];
 if (JSON.stringify(process.argv.slice(2)) !== JSON.stringify(expected)) {
   console.error("unexpected wrangler invocation: " + process.argv.slice(2).join(" "));
   process.exit(2);
 }
-process.stdout.write(process.env.STUB_STDOUT);
+if (process.env.STUB_STDERR) writeSync(2, process.env.STUB_STDERR);
+writeSync(1, process.env.STUB_STDOUT);
 process.exit(Number(process.env.STUB_EXIT));
 `,
       { mode: 0o700 },
@@ -306,6 +308,7 @@ process.exit(Number(process.env.STUB_EXIT));
           ...process.env,
           PATH: `${scratch}:${process.env.PATH}`,
           STUB_STDOUT: stubStdout,
+          STUB_STDERR: stubStderr,
           STUB_EXIT: String(exitCode),
           EXPECTED_VERSION: versionId,
           ROLLBACK_VERSION_ID: versionId,
@@ -351,6 +354,33 @@ test("rollback-version CLI fails closed on a missing target secret and on bad in
   assert.equal(badId.status, 1);
   assert.match(badId.stderr, /ROLLBACK_VERSION_ID must be a Worker Version ID/);
   assert.equal(badId.stdout, "");
+});
+
+test("rollback-version CLI keeps child stderr out of both parent streams on success", () => {
+  const canary = "synthetic-versions-view-stderr-canary-success";
+  const result = cliWithStubbedVersionsView(versionAllPresent, {
+    stubStderr: `${canary}\n`,
+  });
+  assert.equal(result.status, 0);
+  for (const name of REQUIRED_PRODUCTION_SECRETS) {
+    assert.ok(result.stdout.includes(name), `stdout must list ${name}`);
+  }
+  assert.ok(!result.stdout.includes('"name"'), "stdout must not forward the raw child JSON");
+  assert.equal(result.stderr, "");
+  assertNoChildCanary(result, canary);
+});
+
+test("rollback-version CLI keeps child stdout and stderr out of both parent streams on nonzero exit", () => {
+  const stdoutCanary = "synthetic-versions-view-stdout-canary-nonzero";
+  const stderrCanary = "synthetic-versions-view-stderr-canary-nonzero";
+  const result = cliWithStubbedVersionsView(`${stdoutCanary}\n`, {
+    exitCode: 42,
+    stubStderr: `${stderrCanary}\n`,
+  });
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /Could not verify rollback target version secrets/);
+  assert.equal(result.stdout, "");
+  assertNoChildCanary(result, stdoutCanary, stderrCanary);
 });
 
 // Child-stream boundary: the fake wrangler's stdout/stderr are untrusted

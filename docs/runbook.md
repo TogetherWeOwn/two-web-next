@@ -502,7 +502,10 @@ self-review) and the same production-only Cloudflare credentials as a deploy,
 then runs `wrangler rollback <version_id> --name two-web-next-production`
 followed by the same `/up` smoke. The `version_id` input must be a lowercase
 Worker Version UUID and travels inputs → `env:` only, never through
-expression interpolation in a shell block. A rollback does **not** undo
+expression interpolation in a shell block. Before the rollback moves traffic,
+the workflow refuses when the recorded target version's `secret_text`
+bindings lack a required secret name (names only; values are never read, and
+an unreadable target fails closed). A rollback does **not** undo
 Postgres migrations, data writes, Discord side effects, queue messages or
 external-resource changes; keep the release workflow from redeploying the bad
 head. Record the rollback deployment and previous/current version IDs.

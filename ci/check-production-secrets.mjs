@@ -200,6 +200,11 @@ function listRollbackVersionJson() {
         encoding: "utf8",
         timeout: 60_000,
         maxBuffer: 1024 * 1024,
+        // Capture the child's stdout/stderr instead of inheriting them: the
+        // child's streams are untrusted input and must never reach our own
+        // stdout/stderr. Only the returned stdout is parsed; anything the
+        // child writes to stderr is discarded here.
+        stdio: ["ignore", "pipe", "pipe"],
       },
     );
   } catch (error) {
