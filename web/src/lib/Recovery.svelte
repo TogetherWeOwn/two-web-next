@@ -17,14 +17,12 @@ let {
   retryUrl,
   retryLabel,
   inviteUrl,
-  supportReference,
 }: {
   title: string;
   message: string;
   retryUrl: string;
   retryLabel: string;
   inviteUrl: string;
-  supportReference?: string;
 } = $props();
 </script>
 
@@ -54,10 +52,5 @@ let {
       <a class="btn" href={retryUrl} data-testid="recovery-retry">{retryLabel}</a>
       {" "}<a href={inviteUrl} data-testid="recovery-invite">Join with an invite link instead</a>
     </p>
-    {#if supportReference}
-      <p class="support-reference">
-        Support reference: <code data-testid="error-support-reference">{supportReference}</code>
-      </p>
-    {/if}
   </section>
 </Shell>
