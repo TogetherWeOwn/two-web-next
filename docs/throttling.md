@@ -39,7 +39,9 @@ bucket stamped in the last 60 seconds; at or over budget refuses with the
 shared 429 response and a `Retry-After` of at least 1 second (the ceiling of
 oldest-hit-plus-window minus now), otherwise the admission inserts one hit row
 and lets the request through. The count-then-insert runs under a per-bucket
-Postgres advisory lock so concurrent bursts cannot overshoot. Failure posture
+Postgres advisory lock so concurrent bursts cannot overshoot; the lock waits
+at most `WEB_THROTTLE_LOCK_TIMEOUT_MS` (`SET LOCAL lock_timeout` in
+[`checkJoinThrottle`](../src/join/service.ts)). Failure posture
 differs by call site:
 
 - Absent store allows: [`checkJoinThrottle`](../src/join/service.ts) returns
@@ -47,6 +49,12 @@ differs by call site:
   with no injected test store lets the request through. This holds for both
   the generic middleware (via [`throttleStore`](../src/throttle.ts)) and the
   direct join helper (via [`joinStore`](../src/join/route-shared.ts)).
+- Held-bucket lock contention allows: a timed-out admission-lock wait (55P03)
+  resolves inside [`checkJoinThrottle`](../src/join/service.ts) to
+  `{ limited: false }` with no hit charged — contention is load, not a
+  verdict — and the busy pass still runs the best-effort expiry prune below.
+  Any other store error still propagates (generic middleware allows, direct
+  join keeps its outage envelope).
 - Generic middleware catches count failures:
   [`throttleGuard`](../src/throttle.ts) catches any throw from store
   acquisition or the count/insert and allows — a missed count beats a 500 on

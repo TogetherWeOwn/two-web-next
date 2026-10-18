@@ -42,6 +42,15 @@ export const JOIN_THROTTLE_BUCKET = "join";
 export const THROTTLE_COUNTER_RETENTION_MINUTES = 5;
 
 /**
+ * Bound on the per-bucket admission-lock wait. A held `web-throttle:` advisory
+ * lock resolves fail-open within this bound (55P03 → allow, no hit charged)
+ * instead of hanging a funnel request behind another isolate's admission.
+ * Sized above the ~1s held-lock windows pinned by the concurrency suite and
+ * well inside the 4s busy bound in `test/web-throttle-lock-busy.test.ts`.
+ */
+export const WEB_THROTTLE_LOCK_TIMEOUT_MS = 2000;
+
+/**
  * Legacy join_source validation (JoinController::rememberSource): starts
  * alnum, then up to 63 of [a-z0-9:_-]. Anything else leaves no trace.
  */
@@ -81,6 +90,15 @@ export type ThrottleVerdict = { limited: false } | { limited: true; retryAfter: 
  * allow — refusing the funnel top on a DB outage is worse than a missed count
  * (legacy funnel.php made the same call for the leaves: no throttle at all
  * rather than a cache-backed one that 500s when the database is down).
+ *
+ * Lock contention degrades the same way: the admission lock waits at most
+ * `WEB_THROTTLE_LOCK_TIMEOUT_MS`, and a timed-out wait (55P03) resolves
+ * fail-open allow with no hit charged — contention is load, not a verdict.
+ * The join funnel calls this function with no catch of its own, so the
+ * mapping lives here: a lock-timeout error never propagates to a caller and
+ * never becomes a refusal. Any other store error still propagates (the
+ * generic middleware maps it to allow; the direct join path to its outage
+ * envelope).
  */
 export async function checkJoinThrottle(
   sql: Sql | null,
@@ -93,18 +111,32 @@ export async function checkJoinThrottle(
   const store = sql as Sql & {
     begin: (run: (tx: Sql) => Promise<ThrottleVerdict>) => Promise<ThrottleVerdict>;
   };
-  const verdict = await store.begin(async (tx) => {
-    await tx`SELECT pg_advisory_xact_lock(hashtextextended(${`web-throttle:${bucket}`}, 0))`;
-    // now() is transaction-start time, which can precede a long lock wait.
-    const rows = await tx<{ n: number; wait: number }[]>`
+  let verdict: ThrottleVerdict;
+  try {
+    verdict = await store.begin(async (tx) => {
+      // Bound the admission-lock wait: without this, a bucket whose advisory
+      // lock is held by another isolate blocks here until the holder commits.
+      // Same `SET LOCAL lock_timeout` shape as the agent-events shield, inner
+      // limiter and ingress operation locks.
+      await tx.unsafe(`SET LOCAL lock_timeout = '${WEB_THROTTLE_LOCK_TIMEOUT_MS}ms'`);
+      await tx`SELECT pg_advisory_xact_lock(hashtextextended(${`web-throttle:${bucket}`}, 0))`;
+      // now() is transaction-start time, which can precede a long lock wait.
+      const rows = await tx<{ n: number; wait: number }[]>`
       SELECT count(*)::int AS n,
         coalesce(ceil(extract(epoch FROM (min(at) + interval '60 seconds' - clock_timestamp()))), 1)::int AS wait
       FROM web_throttle_hits WHERE bucket = ${bucket} AND at > clock_timestamp() - interval '60 seconds'`;
-    const r = rows[0];
-    if (r && r.n >= max) return { limited: true, retryAfter: Math.max(1, r.wait) };
-    await tx`INSERT INTO web_throttle_hits (bucket, at) VALUES (${bucket}, clock_timestamp())`;
-    return { limited: false };
-  });
+      const r = rows[0];
+      if (r && r.n >= max) return { limited: true, retryAfter: Math.max(1, r.wait) };
+      await tx`INSERT INTO web_throttle_hits (bucket, at) VALUES (${bucket}, clock_timestamp())`;
+      return { limited: false };
+    });
+  } catch (err) {
+    if ((err as { code?: string }).code !== "55P03") throw err;
+    // Busy pass: the verdict transaction aborted with no hit inserted. Fall
+    // through to the best-effort prune below so a busy pass still drains
+    // expired rows, then answer fail-open allow.
+    verdict = { limited: false };
+  }
   // Global expiry cleanup stays outside the per-bucket admission lock so it
   // never prolongs it. Refused requests prune too: a bucket under sustained
   // refused load would otherwise accumulate expired rows until some request
