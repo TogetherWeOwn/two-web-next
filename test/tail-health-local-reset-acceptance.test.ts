@@ -157,6 +157,9 @@ describe("aggregator-handled recovery resets the local red window", () => {
       downSince: null,
       cooldownUntil: 0,
       pendingAt: null,
+      // The healthy observation establishes the ordering watermark at its
+      // own source time, so a delayed older sample cannot reopen the window.
+      lastObservedAt: t0 + 60_000,
     });
   });
 
