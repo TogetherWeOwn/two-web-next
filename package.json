@@ -67,9 +67,9 @@
     "check:worker-moderators-production": "node --import ./bin/ts-hook.mjs bin/check-moderators.mjs --config=wrangler.jsonc --env=production --require-configured",
     "smoke:internal-action": "node --import ./bin/ts-hook.mjs bin/internal-action-smoke.mjs",
     "drill:internal-action": "node --import ./bin/ts-hook.mjs bin/internal-action-drill.mjs",
-    "lighthouse:quality": "lhci autorun --config=ci/lighthouserc.quality.cjs",
+    "lighthouse:quality": "node ci/lighthouse-quality-run.mjs",
     "standards": "node ci/web-standards.mjs",
-    "standards:selftest": "node ci/web-standards.mjs --selftest && node ci/lighthouse-summary.mjs --selftest",
+    "standards:selftest": "node ci/web-standards.mjs --selftest && node ci/lighthouse-summary.mjs --selftest && node ci/lighthouse-quality-run.mjs --selftest",
     "audit:moderator-roles": "node --import ./bin/ts-hook.mjs bin/role-audit.mjs"
   },
   "dependencies": {

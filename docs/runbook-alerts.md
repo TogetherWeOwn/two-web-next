@@ -210,8 +210,9 @@ transport error/timeout) and `timestamp`. Redirect targets are compared by
 host and path only: any Location query is discarded inside the probe and
 never appears in a page or log line.
 Delivery uses the same five-minute, per-isolate mute, keyed by
-`synthetic.down:<check>:<status>`, and the same delivery receipts as
-`uptime.down`.
+`synthetic.down:<check>` (the status rides in the page but does not split
+the mute, so a check flapping between failing statuses pages once per
+window), and the same delivery receipts as `uptime.down`.
 
 No check authenticates, posts a form, injects a fault, or changes
 application data, so the production prober stays passive. The sign-in
