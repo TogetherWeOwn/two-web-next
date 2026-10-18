@@ -1463,7 +1463,11 @@ export function createTailWorker(
               timestamp: parsed.timestamp,
             };
             const key = `${alert.event}:${alert.fingerprint}`;
-            if (!mute.begin(key, log.timestamp)) continue;
+            // Clamp the mute decision to the local clock: a far-future source
+            // timestamp still pages once with its original timestamp, but it
+            // cannot stretch suppression past the documented window. Past and
+            // on-time stamps keep source-time semantics.
+            if (!mute.begin(key, Math.min(log.timestamp, now()))) continue;
             const delivered = await deliver(url, alert);
             mute.finish(key, delivered);
             // Probe correlation is receipt-only: never send it to the webhook or split the mute key.
