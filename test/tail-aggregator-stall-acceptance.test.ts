@@ -78,9 +78,13 @@ function tracked(promise: Promise<unknown>) {
 }
 
 // Let real async work (body streams, subtle crypto in alert parsing)
-// run to completion without moving the fake deadline clocks.
-async function flushAsync(): Promise<void> {
-  for (let i = 0; i < 20; i += 1) {
+// run to completion without moving the fake deadline clocks. Flush until
+// the tracked caller settles instead of a fixed turn count: subtle-crypto
+// threadpool time varies with host load, so a fixed count is flaky on a
+// loaded runner. The generous bound still fails fast on a hung
+// implementation.
+async function flushAsync(state: { settled: boolean }): Promise<void> {
+  for (let i = 0; i < 500 && !state.settled; i += 1) {
     await new Promise((resolve) => setImmediate(resolve));
     await vi.advanceTimersByTimeAsync(0);
   }
@@ -136,7 +140,7 @@ describe("acceptance: stalled Tail aggregator never stalls fingerprint paging", 
     const run = worker.tail([alertTrace()], env);
     const state = tracked(run);
     await vi.advanceTimersByTimeAsync(0);
-    await flushAsync();
+    await flushAsync(state);
     expect(state.settled).toBe(true);
     await run;
     expect(contents()).toHaveLength(1);
@@ -156,7 +160,7 @@ describe("acceptance: stalled Tail aggregator never stalls fingerprint paging", 
     const run = worker.tail([alertTrace()], env);
     const state = tracked(run);
     await vi.advanceTimersByTimeAsync(0);
-    await flushAsync();
+    await flushAsync(state);
     expect(state.settled).toBe(true);
     await run;
     expect(contents()).toHaveLength(1);
@@ -172,7 +176,7 @@ describe("acceptance: stalled Tail aggregator never stalls fingerprint paging", 
     const run = worker.tail([alertTrace()], env);
     const state = tracked(run);
     await vi.advanceTimersByTimeAsync(ONE_OPERATION_MS);
-    await flushAsync();
+    await flushAsync(state);
     expect(state.settled).toBe(true);
     await run;
     expect(contents()).toHaveLength(1);
@@ -194,7 +198,7 @@ describe("acceptance: stalled Tail aggregator never stalls fingerprint paging", 
     const run = worker.tail([alertTrace()], env);
     const state = tracked(run);
     await vi.advanceTimersByTimeAsync(ONE_OPERATION_MS);
-    await flushAsync();
+    await flushAsync(state);
     expect(state.settled).toBe(true);
     await run;
     expect(contents()).toHaveLength(1);
@@ -217,7 +221,7 @@ describe("acceptance: stalled Tail aggregator never stalls fingerprint paging", 
     const first = worker.scheduled(event as never, env);
     const firstState = tracked(first);
     await vi.advanceTimersByTimeAsync(ONE_OPERATION_MS + 15_000);
-    await flushAsync();
+    await flushAsync(firstState);
     expect(firstState.settled).toBe(true);
     await first;
     expect(sink.mock.calls).toHaveLength(0); // First red run: no page yet.
@@ -229,7 +233,7 @@ describe("acceptance: stalled Tail aggregator never stalls fingerprint paging", 
     // The observe deadline and the two-attempt acknowledgement deadline
     // both have to expire inside this run.
     await vi.advanceTimersByTimeAsync(ONE_OPERATION_MS + ACK_TOTAL_MS + 15_000);
-    await flushAsync();
+    await flushAsync(secondState);
     expect(secondState.settled).toBe(true);
     await second;
     const receipts = sink.mock.calls.map(([line]) => JSON.parse(line as string));
@@ -276,7 +280,7 @@ describe("acceptance: stalled Tail aggregator never stalls fingerprint paging", 
     const run = worker.tail([trace], env);
     const state = tracked(run);
     await vi.advanceTimersByTimeAsync(ACK_TOTAL_MS);
-    await flushAsync();
+    await flushAsync(state);
     expect(state.settled).toBe(true);
     await run;
     // The spike reached the webhook exactly once, the acknowledgement
@@ -311,7 +315,7 @@ describe("acceptance: stalled Tail aggregator never stalls fingerprint paging", 
       const run = worker.tail([alertTrace()], env);
       const state = tracked(run);
       await vi.advanceTimersByTimeAsync(ONE_OPERATION_MS);
-      await flushAsync();
+      await flushAsync(state);
       expect(state.settled).toBe(true);
       await run;
       expect(contents()).toHaveLength(1);
@@ -340,7 +344,7 @@ describe("acceptance: stalled Tail aggregator never stalls fingerprint paging", 
       const run2 = second.worker.tail([alertTrace()], env2);
       const state2 = tracked(run2);
       await vi.advanceTimersByTimeAsync(ONE_OPERATION_MS);
-      await flushAsync();
+      await flushAsync(state2);
       expect(state2.settled).toBe(true);
       await run2;
       expect(second.contents()).toHaveLength(1);
