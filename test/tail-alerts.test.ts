@@ -784,6 +784,73 @@ describe("Tail scheduled uptime prober", () => {
     expect(checks.sort()).toEqual(["/", "/events"]);
   });
 
+  it("a synthetic check flapping to a different failing status within the mute window stays muted", async () => {
+    const { worker, send, sink, event } = uptimeFixture(
+      [
+        { status: 200, origin: "two-web-next" },
+        { status: 200, origin: "two-web-next" },
+      ],
+      {
+        "/events": [{ status: 500 }, { status: 500 }, { status: 503 }, { status: 503 }],
+      },
+    );
+    await worker.scheduled(event, upEnv);
+    const firstPages = pagePosts(send);
+    expect(firstPages).toHaveLength(1);
+    expect(JSON.parse(JSON.parse(firstPages[0]![1].body as string).content)).toEqual({
+      event: "synthetic.down",
+      check: "/events",
+      target: "next.togetherweown.com",
+      status: 500,
+      timestamp: expect.any(String),
+    });
+
+    // Same check, still inside the mute window, now failing as 503: the
+    // status carried in the page must not split the mute, or one flapping
+    // check re-pages on every status change.
+    await worker.scheduled(event, upEnv);
+    expect(getsFor(send, "/events")).toHaveLength(4);
+    expect(pagePosts(send)).toHaveLength(1);
+    expect(sink).toHaveBeenCalledOnce();
+  });
+
+  it("a flapped synthetic check pages again once the mute window expires", async () => {
+    const fx = uptimeFixture(
+      [
+        { status: 200, origin: "two-web-next" },
+        { status: 200, origin: "two-web-next" },
+        { status: 200, origin: "two-web-next" },
+      ],
+      {
+        "/events": [
+          { status: 500 },
+          { status: 500 },
+          { status: 503 },
+          { status: 503 },
+          { status: 503 },
+          { status: 503 },
+        ],
+      },
+    );
+    await fx.worker.scheduled(fx.event, upEnv);
+    await fx.worker.scheduled(fx.event, upEnv);
+    expect(pagePosts(fx.send)).toHaveLength(1);
+
+    fx.advance(MUTE_MS);
+    await fx.worker.scheduled(fx.event, upEnv);
+    expect(getsFor(fx.send, "/events")).toHaveLength(6);
+    const pages = pagePosts(fx.send);
+    expect(pages).toHaveLength(2);
+    expect(JSON.parse(JSON.parse(pages[1]![1].body as string).content)).toEqual({
+      event: "synthetic.down",
+      check: "/events",
+      target: "next.togetherweown.com",
+      status: 503,
+      timestamp: expect.any(String),
+    });
+    expect(fx.sink).toHaveBeenCalledTimes(2);
+  });
+
   it("synthetic checks still run and page when /up is down", async () => {
     const fx = uptimeFixture([{ status: 500 }, { status: 500 }], {
       "/login": [
