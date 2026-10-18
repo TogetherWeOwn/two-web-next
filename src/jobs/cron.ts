@@ -201,6 +201,16 @@ export async function pruneModelTables(
     .filter(([, capped]) => capped)
     .map(([name]) => name);
   const capped = cappedTables.length > 0;
+  if (jobUniqueLocks.capped) {
+    // Lock-table cap observability: the lock sweep is a new table the
+    // paging contract predates, and its acceptance pins a warn with the
+    // capped-table list. Other-table caps stay warn-free per the paging
+    // acceptance; the pass still pages once via the redacted signal below.
+    console.warn("Model prune pass hit per-table batch cap with rows possibly pending.", {
+      ...counts,
+      cappedTables,
+    });
+  }
   // Scheduled path (worker.ts): report the cap without paging inside the
   // advisory-lock transaction. The caller pages after the flight commits, so
   // a commit failure after a capped drain cannot leave a cap page muting the
