@@ -220,12 +220,17 @@ Do not use `npm run deploy` as a test or build command.
 
 Push to `main` runs `check`, then `deploy-staging` (GitHub Environment `staging`
 gate): `wrangler deploy` with the repo secrets `CLOUDFLARE_API_TOKEN` /
-`CLOUDFLARE_ACCOUNT_ID`, followed by `node bin/smoke.mjs https://next.togetherweown.com`.
+`CLOUDFLARE_ACCOUNT_ID`, followed by `node bin/smoke.mjs https://next.togetherweown.com --fail-on-ready-wait-critical`.
 The staging smoke checks `/up`, the public pages and feeds, sitemap, robots,
 Discord and guest auth redirects, and a branded 404. It checks CSP and nosniff
 on every response and staging noindex on returned HTML (the application's header
 contract). `/up` requires HTTP 200 with `db:ok` and `pending_migrations:0` (DB/schema
-readiness); degraded or unknown queue health alone does not fail deployment. Redirects are not followed; each
+readiness) plus the queue envelope (`warn_at:20`, `critical_at:100`); with the staging
+strict flag a literal `unknown` in `queue.status` or `ready_wait_severity`, or a `critical`
+`ready_wait_severity`, fails the deploy even though `/up` itself still returns 200. Queue
+`degraded` passes. The strict flag is staging-only: production and post-rollback smoke omit
+it (`critical` only warns, `unknown` passes), so a blind or stuck queue cannot block its own
+fix. Redirects are not followed; each
 request/body has a 5-second timeout. A failure names the route and expected versus
 actual result and fails the deploy job after six attempts. That workflow remains
 staging-only; the separate production workflow below is gated and runs only
@@ -311,7 +316,8 @@ migrations/tests on production. Its post-deploy smoke runs
 the same GET-only public-route set as staging
 (`node bin/smoke.mjs https://togetherweown.com --allow-indexable`): `/up`
 requires HTTP 200 with `db:ok` and `pending_migrations:0`, accepting
-degraded/unknown queue states like staging, and the remaining 15 routes assert
+degraded queue states; unlike staging it omits `--fail-on-ready-wait-critical`,
+so `critical` queue readiness only warns and `unknown` passes, and the remaining 15 routes assert
 status/body/CSP/nosniff/content-type/redirect plus the apex indexing posture
 (indexable HTML omits the staging noindex). No auth, no writes, no PII.
 After the promotion reaches 100%, the workflow probes the apex again with the

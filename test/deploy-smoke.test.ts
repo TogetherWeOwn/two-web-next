@@ -873,3 +873,77 @@ describe("production release-docs contract (source)", () => {
     }
   });
 });
+
+describe("staging readiness smoke docs contract (offline)", () => {
+  it("pins the staging invocation and posture in source", () => {
+    const workflow = readFileSync(".github/workflows/deploy.yml", "utf8");
+    expect(workflow).toContain(
+      "node bin/smoke.mjs https://next.togetherweown.com --fail-on-ready-wait-critical",
+    );
+    const smoke = readFileSync("bin/smoke.mjs", "utf8");
+    expect(smoke).toContain("known queue.status and ready_wait_severity (not unknown)");
+    expect(smoke).toContain("ready_wait_severity not critical");
+  });
+
+  it("states the strict staging command, DB/schema requirements and unknown/critical refusal in README", () => {
+    const readme = readFileSync("README.md", "utf8");
+    const deployAt = readme.indexOf("## Deploy");
+    expect(deployAt).toBeGreaterThan(-1);
+    const section = readme.slice(deployAt, readme.indexOf("Full procedures live in"));
+    expect(section).toContain(
+      "node bin/smoke.mjs https://next.togetherweown.com --fail-on-ready-wait-critical",
+    );
+    expect(section).toContain("`db:ok`");
+    expect(section).toContain("`pending_migrations:0`");
+    for (const phrase of ["`unknown`", "`critical`", "`ready_wait_severity`"]) {
+      expect(section, `README staging smoke misses ${phrase}`).toContain(phrase);
+    }
+    expect(section).toContain("staging-only");
+    expect(section).toContain("only warns");
+    // No liveness-only contradiction and no unknown-passes claim.
+    const flat = section.replace(/\s+/g, " ");
+    expect(flat).not.toContain("liveness only");
+    expect(flat).not.toContain("unknown queue health alone does not fail");
+    // Literal refusal only: never promise every malformed field is rejected.
+    expect(flat).not.toMatch(/malformed.*reject/i);
+  });
+
+  it("states the strict staging posture in the runbook deploy section without liveness-only language", () => {
+    const runbook = readFileSync("docs/runbook.md", "utf8");
+    const at = runbook.indexOf("The final staging smoke runs");
+    expect(at).toBeGreaterThan(-1);
+    const section = runbook.slice(
+      at,
+      runbook.indexOf("An explicitly authorized manual deployment"),
+    );
+    expect(section).toContain(
+      "node bin/smoke.mjs https://next.togetherweown.com --fail-on-ready-wait-critical",
+    );
+    expect(section).toContain("`db:ok`");
+    expect(section).toContain("`pending_migrations:0`");
+    expect(section).toContain("`ready_wait_severity`");
+    expect(section).toContain("fails the deploy");
+    expect(section).toContain("Queue `degraded` passes");
+    expect(section).not.toContain("public-route liveness only");
+    expect(section).not.toMatch(/not DB\/schema readiness/);
+    expect(section).not.toMatch(/`unknown` is allowed/);
+    // Staging strict versus flag-less production posture in the same passage.
+    expect(section).toContain("node bin/smoke.mjs https://togetherweown.com --allow-indexable");
+    expect(section).toContain("without the strict flag");
+    expect(section).toContain("only warns");
+  });
+
+  it("separates /up 200 behavior from the staging smoke verdict in the readiness section", () => {
+    const runbook = readFileSync("docs/runbook.md", "utf8");
+    const at = runbook.indexOf("The staging deploy smoke requires");
+    expect(at).toBeGreaterThan(-1);
+    const section = runbook.slice(at, runbook.indexOf("requires a recorded, authorized staging"));
+    expect(section).toContain("--fail-on-ready-wait-critical");
+    expect(section).toContain("fails closed on a literal `unknown`");
+    expect(section).toContain("`critical` `ready_wait_severity`");
+    expect(section).toContain("only warns on `critical`");
+    const flat = section.replace(/\s+/g, " ");
+    expect(flat).toContain("still returns 200 from `/up` itself");
+    expect(flat).not.toContain("queue-only `unknown` does not");
+  });
+});
