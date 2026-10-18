@@ -52,7 +52,13 @@ function cancelBodyWithoutWaiting(target: { cancel?: () => unknown } | null | un
  */
 async function readCappedJson(res: Response): Promise<unknown> {
   if (!res.body) {
-    const text = await res.text();
+    let text: string;
+    try {
+      text = await res.text();
+    } catch (error) {
+      void error;
+      throw new BotTransportError("bot answered with a body that is not JSON");
+    }
     if (new TextEncoder().encode(text).byteLength > MUTATION_MAX_RESPONSE_BYTES)
       throw new BotTransportError("bot answered with a body that is too large");
     try {
