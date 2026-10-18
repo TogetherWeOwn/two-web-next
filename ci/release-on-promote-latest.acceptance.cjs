@@ -110,10 +110,15 @@ const run = ({ sha, mode = "absent", dryRun = false }) => {
 // The single `release create` line for a tag, split into argv tokens.
 const createTokens = (ghLog, tag) => {
   const lines = ghLog.split("\n").filter((l) => l.startsWith(`release create ${tag} `));
-  assert.equal(lines.length, 1, `expected exactly one release create for ${tag}, gh log:\n${ghLog}`);
+  assert.equal(
+    lines.length,
+    1,
+    `expected exactly one release create for ${tag}, gh log:\n${ghLog}`,
+  );
   return lines[0].split(" ").filter(Boolean);
 };
-const latestTokens = (tokens) => tokens.filter((t) => t === "--latest" || t.startsWith("--latest="));
+const latestTokens = (tokens) =>
+  tokens.filter((t) => t === "--latest" || t.startsWith("--latest="));
 const assertNonLatest = (tokens, tag) => {
   assert.deepEqual(
     latestTokens(tokens),
@@ -123,7 +128,11 @@ const assertNonLatest = (tokens, tag) => {
 };
 const assertLatest = (tokens, tag) => {
   const found = latestTokens(tokens);
-  assert.equal(found.length, 1, `${tag}: newest release must request Latest exactly once, got: ${tokens.join(" ")}`);
+  assert.equal(
+    found.length,
+    1,
+    `${tag}: newest release must request Latest exactly once, got: ${tokens.join(" ")}`,
+  );
   assert.ok(
     found[0] === "--latest" || found[0] === "--latest=true",
     `${tag}: newest release must retain Latest semantics, got: ${found[0]}`,
@@ -131,14 +140,21 @@ const assertLatest = (tokens, tag) => {
 };
 const assertTarget = (tokens, sha, tag) => {
   const i = tokens.indexOf("--target");
-  assert.ok(i >= 0 && tokens[i + 1] === sha, `${tag}: create must target ${sha}, got: ${tokens.join(" ")}`);
+  assert.ok(
+    i >= 0 && tokens[i + 1] === sha,
+    `${tag}: create must target ${sha}, got: ${tokens.join(" ")}`,
+  );
 };
 
 // 1. Historical repair: a missing Release on v0.9.0 is created at the exact
 // tag/SHA, explicitly non-Latest, without moving or adding any tag.
 const repair = run({ sha: historical });
 assert.equal(repair.status, 0, repair.stderr);
-assert.equal(repair.out, "tag_name=v0.9.0\nreleased=true\n", "historical repair reports its own tag");
+assert.equal(
+  repair.out,
+  "tag_name=v0.9.0\nreleased=true\n",
+  "historical repair reports its own tag",
+);
 assert.match(repair.gh, /^api repos\/o\/r\/releases\/tags\/v0\.9\.0$/m, "lookup probes v0.9.0");
 const repairTokens = createTokens(repair.gh, "v0.9.0");
 assertTarget(repairTokens, historical, "v0.9.0");
