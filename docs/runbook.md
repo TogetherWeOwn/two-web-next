@@ -286,16 +286,22 @@ approved account and binding isolation before any remote mutation.
    )
    ```
 
-   On staging the live Worker also reports its own Version ID:
-   `GET https://next.togetherweown.com/up` carries
-   `revision: { version_id, commit }`. `version_id` is the value
-   `wrangler rollback` takes; `commit` is the SHA the deploy tagged that Version
-   with (`null` for a manual deploy without `--tag`). The deploy job logs it in
-   `Record live revision (rollback pointer)` before any Cloudflare mutation.
-   A Version uploaded before the marker existed reports no `revision`; use
-   `wrangler deployments list` for it. If `/up` and `wrangler deployments`
-   ever disagree, `wrangler deployments` wins. Production `/up` has no
-   `revision`: the binding is not declared in `env.production`.
+   Both staging (`two-web-next`) and production (`two-web-next-production`)
+   declare `version_metadata` bindings (`wrangler.jsonc` top level and
+   `env.production`): `GET /up` on `https://next.togetherweown.com/up` and
+   on the apex carries `revision: { version_id, commit }` once the live
+   Version was uploaded after that binding landed. `version_id` is
+   the value `wrangler rollback` takes; `commit` is the SHA the deploy tagged
+   that Version with (`null` for a manual deploy without `--tag`). On staging
+   the deploy job logs it in `Record live revision (rollback pointer)` before
+   any Cloudflare mutation. Production has no such step in
+   `deploy-production.yml`; take the pre-release production pointer from
+   `wrangler deployments status --name two-web-next-production --json` or the
+   gradual-promote `rollback-version-id` output. A Version uploaded before the
+   marker existed reports no `revision`; use `wrangler deployments list` for
+   it. If `/up` and `wrangler deployments` ever disagree, `wrangler
+   deployments` wins. Record the production app `revision.version_id` and
+   `revision.commit` separately from the Tail Worker version.
 
 3. Normal path: merge to `main` invokes
    [.github/workflows/deploy.yml](../.github/workflows/deploy.yml), using the
@@ -309,12 +315,17 @@ approved account and binding isolation before any remote mutation.
    failed migration step fails the job before any Cloudflare mutation. The
    queue-create step currently suppresses errors; it is not permission/provisioning evidence.
    The final staging smoke runs `node bin/smoke.mjs https://next.togetherweown.com`
-   ([smoke checker](../bin/smoke.mjs)), covering 16 public routes: `/up`
+   ([smoke checker](../bin/smoke.mjs)), covering 17 public routes: `/up`
    (HTTP 200, `application/json`, `status` healthy/degraded with `queue.status`
-   healthy/degraded/unknown) plus HTML/RSS/iCal/sitemap/robots/redirect/404
-   routes with CSP/nosniff/content-type/noindex/redirect assertions; queue
+   healthy/degraded/unknown) plus `/`, `/about`, `/faq`, `/rules`, `/privacy`,
+   `/events`, `/events/past`, `/join`, `/events.rss`, `/events.ics`,
+   `/sitemap_index.xml`, `/robots.txt`, `/discord` (302), `/profile` (302),
+   `/admin` (302/403) and `/__smoke_unknown_route__` (404)
+   with CSP/nosniff/content-type/noindex/redirect assertions; queue
    `degraded` or `unknown` is allowed. This is public-route liveness only,
-   not DB/schema readiness or queue-drain acceptance.
+   not DB/schema readiness or queue-drain acceptance. The apex production
+   smoke uses the same 17-route shape with `--allow-indexable`
+   (`node bin/smoke.mjs https://togetherweown.com --allow-indexable`).
 4. An explicitly authorized manual deployment of the reviewed release uses:
 
    ```bash
