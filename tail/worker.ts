@@ -872,10 +872,18 @@ export class AlertAggregator {
   constructor(private readonly state: DurableObjectState) {}
 
   private load(): Promise<void> {
-    this.loaded ??= (async () => {
-      this.tracker.restore(await this.state.storage.get("scripts"));
-      this.health.restore(await this.state.storage.get("health"));
-    })();
+    if (!this.loaded) {
+      const attempt = this.loadOnce();
+      this.loaded = attempt;
+      // A rejected initial load must not wedge the instance: clear the
+      // cached promise so a later request retries once storage is healthy.
+      // Concurrent holders keep `attempt`, so one recovery load stays
+      // single-flight; the identity guard never clears a newer attempt.
+      // A resolved load stays cached: success remains single-flight.
+      void attempt.catch(() => {
+        if (this.loaded === attempt) this.loaded = undefined;
+      });
+    }
     return this.loaded;
   }
 
@@ -886,6 +894,16 @@ export class AlertAggregator {
       () => undefined,
     );
     return run;
+  }
+
+  private async loadOnce(): Promise<void> {
+    // Read both keys before restoring either: a rejected second read must
+    // not leave half-restored scripts state applied (or applied twice on
+    // recovery), and a failed load must not reach a snapshot write.
+    const scripts = await this.state.storage.get("scripts");
+    const health = await this.state.storage.get("health");
+    this.tracker.restore(scripts);
+    this.health.restore(health);
   }
 
   async fetch(request: Request): Promise<Response> {

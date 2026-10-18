@@ -209,7 +209,8 @@ export function createPostgresSessionStore(sql: Sql): SessionStore {
     },
     async revokeUserSessions(userId, exceptTokenHash) {
       await sql`update web_sessions set revoked_at = now()
-        where user_id = ${userId} and token_hash != ${exceptTokenHash} and revoked_at is null`;
+        where user_id = ${userId} and token_hash != ${exceptTokenHash}
+          and revoked_at is null and expires_at > clock_timestamp()`;
     },
     async sweepExpired(now) {
       // `<=`: reads require expires_at > now(), so a row expiring exactly at
@@ -293,7 +294,8 @@ export function createMemorySessionStore(clock: () => number = Date.now): Sessio
     },
     async revokeUserSessions(userId, exceptTokenHash) {
       for (const [hash, r] of rows) {
-        if (hash !== exceptTokenHash && r.userId === userId) rows.delete(hash);
+        if (hash !== exceptTokenHash && r.userId === userId && r.expiresAt > clock())
+          rows.delete(hash);
       }
     },
     async sweepExpired(now) {
