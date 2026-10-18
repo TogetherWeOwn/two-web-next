@@ -61,6 +61,10 @@ differs by call site:
   errors as 500s. The outage matrix pins the classified case:
   `GET /join/discord` and `GET /join/callback` answer 503 on a refused
   Postgres socket (see [`test/db-outage-matrix.test.ts`](../test/db-outage-matrix.test.ts)).
+- Prune is best-effort: [`checkJoinThrottle`](../src/join/service.ts) swallows
+  a throwing expiry DELETE and returns the decided verdict, so a prune failure
+  never flips a refusal into an admission on the generic path or a 500 on the
+  direct join path.
 - Allowance is admission only: passing the throttle does not guarantee the
   downstream handler succeeds — the journey store, bot call, or session mint
   can still refuse or fail.
