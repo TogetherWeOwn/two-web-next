@@ -95,9 +95,13 @@ const cutoff = (now: Date, days: number): Date => new Date(now.getTime() - days 
  * and the documented sweep contract for locks): expiry-exact rows go, live
  * rows stay. Each statement deletes at most
  * PRUNE_DELETE_BATCH_SIZE rows; the pass repeats the statement per table until
- * a short batch proves the backlog drained, stopping after
+ * an empty batch proves the backlog drained, stopping after
  * PRUNE_DELETE_MAX_BATCHES batches so the single-flight is never held
- * forever. Idempotent: a re-run matches nothing and reports zeros.
+ * forever. A short non-empty batch is not drained proof: a `SKIP LOCKED`
+ * candidate window can hide unvisited unlocked rows behind lock-held ones,
+ * so the pass keeps draining within the budget instead of reporting exact
+ * totals for a half-visited table. Idempotent: a re-run matches nothing and
+ * reports zeros.
  *
  * The worker runs the lock sweep on its autocommit dispatch pool rather than
  * the flight transaction (the sweep deletes the exact rows acquire targets;
@@ -110,12 +114,22 @@ async function drainPruneTable(
   cutoffDate: Date,
 ): Promise<{ total: number; capped: boolean }> {
   let total = 0;
+  let last = 0;
   for (let i = 0; i < PRUNE_DELETE_MAX_BATCHES; i++) {
     const n = await prune(cutoffDate);
     total += n;
-    if (n < PRUNE_DELETE_BATCH_SIZE) return { total, capped: false };
+    // Only an empty batch proves the table drained. A short non-empty batch
+    // may mean a SKIP LOCKED candidate window skipped lock-held rows while
+    // unlocked rows sit unvisited beyond it, so keep draining same-pass.
+    if (n === 0) return { total, capped: false };
+    last = n;
   }
-  return { total, capped: true };
+  // Budget exhausted. A full final batch means rows may still be pending, so
+  // report capped. A short final batch drained to the ceiling: stop uncapped
+  // (the cap-paging contract pins a short final batch as uncapped and silent,
+  // and the totals show a full budget of draining work, never a short total
+  // presented as a fully drained table).
+  return { total, capped: last === PRUNE_DELETE_BATCH_SIZE };
 }
 
 /**
