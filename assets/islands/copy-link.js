@@ -86,7 +86,8 @@
     }, resetMs);
   }
 
-  link.setAttribute("role", "button");
+  // The control stays a link: plain activation copies, modified clicks keep
+  // native link navigation, and both Enter and Space copy exactly once.
   link.addEventListener("click", (event) => {
     if (
       event.defaultPrevented ||
@@ -101,7 +102,7 @@
     void copy();
   });
   link.addEventListener("keydown", (event) => {
-    if (event.defaultPrevented || event.key !== " ") return;
+    if (event.defaultPrevented || (event.key !== " " && event.key !== "Enter")) return;
     event.preventDefault();
     if (event.repeat) return;
     void copy();
