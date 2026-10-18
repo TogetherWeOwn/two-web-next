@@ -410,9 +410,9 @@ describe("deploy event-JSON smoke (offline)", () => {
     expect(result.summary).toContain("Skipped exposure guards: none.");
   });
 
-  it("names every skipped exposure guard without the token instead of failing the deploy", () => {
+  it("fails closed without the token while keeping the skip ledger as evidence", () => {
     const result = stagingJsonSmoke(0, false);
-    expect(result.status, result.output).toBe(0);
+    expect(result.status, result.output).toBe(1);
     expect(result.attempts).toBe(0);
     expect(result.output).toContain("json-smoke skipped: staging QA_AUTH_TOKEN is not configured");
     for (const guard of [
@@ -429,7 +429,9 @@ describe("deploy event-JSON smoke (offline)", () => {
       "::warning::staging json-smoke skipped with unverified exposure guards",
     );
     expect(result.output).toContain("Tracked follow-up: #531");
-    expect(result.output).not.toContain("::error::");
+    expect(result.output).toContain(
+      "::error::staging event-JSON smoke missing QA token: exposure guards unverified",
+    );
     expect(result.output).not.toContain("never-log-this");
     expect(result.ledger?.summary).toEqual({ total: 14, passed: 0, failed: 0, skipped: 14 });
     expect(result.summary).toContain("## Staging event-JSON smoke: skipped (no QA token)");
@@ -464,6 +466,7 @@ describe("deploy event-JSON smoke (offline)", () => {
       "#531",
       "ledger write failed",
       "::error::staging event-JSON smoke failed after deploy",
+      "::error::staging event-JSON smoke missing QA token: exposure guards unverified",
     ]) {
       expect(block).toContain(marker);
     }
@@ -583,7 +586,8 @@ describe("production deploy smoke (offline)", () => {
 // The step probes live traffic (no --version-override) after the gradual
 // promotion reaches 100%, so a promotion serving broken public content fails
 // the deploy-production job before the release job can tag. A failed run
-// prints the recorded pre-promote version id for the rollback-production
+// leaves the promoted candidate live at 100% with the tag withheld and prints
+// PREV_VERSION as the recorded restoration target for the rollback-production
 // workflow; there is no automatic restore (the gradual action's rollback only
 // covers in-action failures, and an inline wrangler rollback would bypass the
 // rollback target-version secrets preflight).
@@ -682,20 +686,24 @@ describe("production post-promotion verification (offline)", () => {
     expect(result.sleeps).toBe(5);
     expect(result.output).toContain("FAIL /join: expected HTTP 200; actual HTTP 503");
     expect(result.output).toContain(
-      "::error::post-promotion public-route smoke failed; release will not tag",
+      "::error::post-promotion public-route smoke failed; promoted candidate remains live at 100%; release will not tag",
     );
     expect(result.output).not.toContain("unexpected checker invocation");
   });
 
-  it("names the still-live pre-promote version and the rollback workflow on failure", () => {
+  it("names the live promoted candidate and the recorded restoration target on failure", () => {
     const result = postPromotionSmoke(0, "aaaabbbb-cccc-dddd-eeee-ffffffffffff");
     expect(result.status, result.output).toBe(1);
     // The gradual action's rollback only covers in-action failures, so the
-    // promoted version stays live at 100%: the error must hand the operator
-    // the recorded pre-promote version id and the restore path.
+    // promoted candidate stays live at 100% with the tag withheld: the error
+    // must name the live candidate, the recorded restoration target id, and
+    // the restore path, without asserting the target is currently serving.
+    expect(result.output).toContain("promoted candidate remains live at 100%");
+    expect(result.output).toContain("release will not tag");
+    expect(result.output).toContain("recorded restoration target");
     expect(result.output).toContain("aaaabbbb-cccc-dddd-eeee-ffffffffffff");
-    expect(result.output).toContain("still live at 100%");
     expect(result.output).toContain("rollback-production");
+    expect(result.output).not.toContain("still live at 100%");
   });
 
   it("wires the gradual rollback target into the step and documents the manual restore", () => {
@@ -707,6 +715,12 @@ describe("production post-promotion verification (offline)", () => {
     // target, the same id its own rollback steps restore.
     expect(section).toContain("PREV_VERSION: ${{ steps.gradual.outputs.rollback-version-id }}");
     expect(section).toContain("rollback-production");
+    // The failure annotation must name the promoted candidate as live and
+    // PREV_VERSION as the recorded restoration target, never the target as
+    // currently serving.
+    expect(section).toContain("promoted candidate remains live at 100%");
+    expect(section).toContain("recorded restoration target");
+    expect(section).not.toContain("still live at 100%");
     // No inline restore: the rollback workflow checks the target version's
     // secrets before moving traffic (pinned by the negative control in
     // ci/check-production-secrets.test.mjs), so this step only blocks the tag.
@@ -739,5 +753,43 @@ describe("production post-promotion verification (offline)", () => {
     expect(block).not.toContain("next.togetherweown.com");
     expect(block).not.toMatch(/secrets\./);
     expect(block).not.toMatch(/\/auth\/discord/);
+  });
+});
+
+describe("production release-docs contract (source)", () => {
+  it("explains gradual promotion, manual restoration and release gating without static serving-state claims", () => {
+    const readme = readFileSync("README.md", "utf8");
+    const heading = "### Production (gated manual deployment)";
+    expect(readme).toContain(heading);
+    expect(readme).not.toContain("### Production (not live");
+    const section = readme.slice(
+      readme.indexOf(heading),
+      readme.indexOf("Whoever is authorized to provision production"),
+    );
+    expect(section.length).toBeGreaterThan(0);
+    // 5 -> 50 -> 100 with in-action automatic rollback versus post-action
+    // manual restoration, and verification before release publication.
+    expect(section).toContain("5% → 50% → 100%");
+    expect(section).toContain("automatic rollback");
+    expect(section).toContain("promoted candidate live at 100%");
+    expect(section).toContain("recorded restoration target");
+    expect(section).toContain("rollback-production");
+    expect(section).toContain("before the `release`");
+    // No unsupported static not-live/unprovisioned assertions and no claim
+    // that the restoration target is currently serving.
+    const flat = section.replace(/\s+/g, " ");
+    for (const stale of [
+      "not yet live",
+      "not live",
+      "legacy stack",
+      "cutover template",
+      "not a live deployment",
+      "unprovisioned",
+      "does not exist yet",
+      "NO-GO",
+      "still live at 100%",
+    ]) {
+      expect(flat).not.toContain(stale);
+    }
   });
 });
