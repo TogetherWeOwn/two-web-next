@@ -109,8 +109,9 @@ describe("Worker redirect-manual behavior", () => {
     const { fetchFn, seen } = botRedirectEmulator();
     const client = createBotClient({ ...BOT_OPTS, fetchFn });
     // The "not followed" message proves the explicit 3xx refusal ran: an "error"-mode revert
-    // throws "bot unreachable: Invalid redirect value ..." instead, and a default-mode revert
-    // follows to the 200 above and resolves, failing this rejection outright.
+    // throws the fixed "bot unreachable" string (raw redirect error as cause) instead,
+    // and a default-mode revert follows to the 200 above and resolves,
+    // failing this rejection outright.
     await expect(client.assignRole({ userId: SNOWFLAKE, roleKey: "rocketleague" })).rejects.toThrow(
       BotTransportError,
     );

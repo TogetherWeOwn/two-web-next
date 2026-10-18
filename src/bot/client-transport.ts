@@ -76,7 +76,11 @@ export async function send(
       signal: AbortSignal.timeout(o.timeoutSeconds * 1000),
     });
   } catch (e) {
-    throw new BotTransportError(`bot unreachable: ${e instanceof Error ? e.message : String(e)}`);
+    // The rejection text is untrusted, input-derived material — runtimes echo
+    // the endpoint URL, resolved addresses, redirect targets, and anything a
+    // hostile endpoint gets echoed into the error — so it never reaches the
+    // message. Fixed string; the original rides structurally as `cause`.
+    throw new BotTransportError("bot unreachable", { cause: e });
   }
   if (res.status >= 300 && res.status < 400)
     throw new BotTransportError(`bot answered with a redirect (${res.status}); not followed`);
