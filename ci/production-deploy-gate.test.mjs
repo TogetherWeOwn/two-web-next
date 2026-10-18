@@ -571,7 +571,10 @@ test("preflight checkouts materialize ci and wrangler.jsonc for the production g
       "preflight checkout must disable cone mode so the wrangler.jsonc file pattern applies",
     );
     assert.match(step, /\bci\b/, "preflight sparse scope must include ci/");
-    assert.ok(step.includes("wrangler.jsonc"), "preflight sparse scope must include wrangler.jsonc");
+    assert.ok(
+      step.includes("wrangler.jsonc"),
+      "preflight sparse scope must include wrangler.jsonc",
+    );
   }
 });
 
