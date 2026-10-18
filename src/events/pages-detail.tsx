@@ -190,7 +190,11 @@ export const EventPage: FC<{
         </section>
       </div>
       {attendees.length > 0 ? (
-        <section aria-labelledby="event-attendees-heading" data-testid="event-attendees">
+        <section
+          aria-labelledby="event-attendees-heading"
+          data-testid="event-attendees"
+          data-island="attendees-live"
+        >
           <h2 id="event-attendees-heading">Who's going ({attendees.length})</h2>
           <ul class="event-attendee-grid">
             {attendees.map((attendee) => (
@@ -213,6 +217,7 @@ export const EventPage: FC<{
       ) : null}
       <script src="/islands/copy-link.js" defer />
       <script src="/islands/going-count.js" defer />
+      <script src="/islands/attendees-live.js" defer />
       <script
         type="application/ld+json"
         data-testid="event-jsonld"
