@@ -22,7 +22,7 @@ import {
 import type { Env } from "../env";
 import { STATE_TTL_SECONDS } from "../index";
 import { safeNext } from "../join/service";
-import { QA_HEADER, qaEnabled, qaIdentity, qaTokenMatches } from "../qa";
+import { QA_HEADER, qaEnabled, qaIdentity, qaTokenMatches, type QaIdentity } from "../qa";
 import {
   consumeLoginReturn,
   JOURNEY_TTL_SECONDS,
@@ -44,6 +44,13 @@ export { SESSION_COOKIE };
 const STATE_COOKIE = "__Host-two_oauth_state";
 
 type Ctx = Context<{ Bindings: Env }>;
+
+declare module "hono" {
+  interface ContextVariableMap {
+    /** QA fixture admitted by the /auth/qa/:identity gate (stashed pre-throttle). */
+    qaFixture: QaIdentity;
+  }
+}
 
 const redirectUri = (env: Env) => `${env.APP_URL}/auth/discord/callback`;
 
@@ -272,20 +279,22 @@ export function registerAuthRoutes(app: Hono<{ Bindings: Env }>, hooks: AuthHook
     // Identity/token gate BEFORE the throttle (S4): unauthenticated probes 404
     // here without consuming the shared qa-login counter, so a probe flood can
     // never lock out legitimate QA logins. Same shape as /__probe/alert
-    // (src/alert-probe.ts): only gated requests reach the throttle below, and
-    // the handler re-checks before issuing a session.
+    // (src/alert-probe.ts): only gated requests reach the throttle below. The
+    // gate stashes the admitted fixture for the handler, so the handler issues
+    // the session with no re-check to cover (a handler re-check would be an
+    // uncoverable branch: the gate already admits only valid pairs).
     async (c, next) => {
+      const fixture = qaIdentity(c.req.param("identity") ?? "");
+      if (!fixture) return c.notFound();
       const ok = await qaTokenMatches(c.env.QA_AUTH_TOKEN, c.req.header(QA_HEADER) ?? "");
-      if (!ok || !qaIdentity(c.req.param("identity") ?? "")) return c.notFound();
+      if (!ok) return c.notFound();
+      c.set("qaFixture", fixture);
       await next();
     },
     throttle("qa-login", AUTH_THROTTLE_PER_MINUTE),
     requestBodyLimit("action"),
     async (c) => {
-      const presented = c.req.header(QA_HEADER) ?? "";
-      const ok = await qaTokenMatches(c.env.QA_AUTH_TOKEN, presented);
-      const fixture = qaIdentity(c.req.param("identity") ?? "");
-      if (!ok || !fixture) return c.notFound();
+      const fixture = c.get("qaFixture");
       const store = await hooks.storeFor(c);
       await hooks.issueSession(c, store, {
         userId: fixture.discordId,
