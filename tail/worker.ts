@@ -69,6 +69,39 @@ function traceBuildSha(trace: TraceLike): string | undefined {
   return shaFromVersionTag(trace.scriptVersion?.tag) ?? buildShaFromLogs(trace.logs);
 }
 
+export type UpAttribution = {
+  build_sha?: string;
+  version_id?: string;
+};
+
+/**
+ * Build attribution from a prober-observed `/up` body. The public body
+ * carries `revision: { version_id, commit }` (see src/up-revision.ts);
+ * `commit` passes only through the existing exact 40-hex SHA allowlist and
+ * `version_id` only when it is a non-empty string from the same marker.
+ * Anything unreadable yields absent attribution, never a throw and never an
+ * echo of the raw value.
+ */
+export function upAttributionFromBody(body: unknown): UpAttribution {
+  if (typeof body !== "string" || body === "" || body.length > 64_000) return {};
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(body);
+  } catch {
+    return {};
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
+  const revision = (parsed as Record<string, unknown>).revision;
+  if (!revision || typeof revision !== "object" || Array.isArray(revision)) return {};
+  const fields = revision as Record<string, unknown>;
+  const commit = fields.commit;
+  const build_sha = typeof commit === "string" && BUILD_SHA.test(commit) ? commit : undefined;
+  if (!build_sha) return {};
+  const version = fields.version_id;
+  const version_id = typeof version === "string" && version !== "" ? version : undefined;
+  return version_id ? { build_sha, version_id } : { build_sha };
+}
+
 export function logsPath(script: string): string {
   return `Workers & Pages > ${script} > Observability > Logs`;
 }
@@ -174,6 +207,8 @@ export type UptimeAlert = {
   event: "uptime.down";
   status: number;
   down_seconds: number;
+  build_sha?: string;
+  version_id?: string;
   timestamp: string;
 };
 
@@ -236,6 +271,8 @@ export type SyntheticAlert = {
   /** Public host of the configured target: identifies the environment. */
   target: string;
   status: number;
+  build_sha?: string;
+  version_id?: string;
   timestamp: string;
 };
 
@@ -986,7 +1023,11 @@ export function createTailWorker(
   }
 
   /** One bounded /up probe. Transport errors and timeouts are status 0. */
-  async function probeOnce(target: string): Promise<{ ok: boolean; status: number }> {
+  async function probeOnce(target: string): Promise<{
+    ok: boolean;
+    status: number;
+    attribution: UpAttribution;
+  }> {
     try {
       const response = await send(target, {
         method: "GET",
@@ -995,10 +1036,18 @@ export function createTailWorker(
       });
       const ok =
         response.status === 200 && response.headers.get("x-two-origin") === EXPECTED_ORIGIN;
-      await response.body?.cancel(); // Never read or log the body.
-      return { ok, status: response.status };
+      // Read the already-fetched body for the public revision marker only.
+      // No extra fetch: health still depends on status + origin alone, and an
+      // unreadable body yields absent attribution, never a throw.
+      let attribution: UpAttribution = {};
+      try {
+        attribution = upAttributionFromBody(await response.text());
+      } catch {
+        attribution = {};
+      }
+      return { ok, status: response.status, attribution };
     } catch {
-      return { ok: false, status: 0 };
+      return { ok: false, status: 0, attribution: {} };
     }
   }
 
@@ -1079,7 +1128,11 @@ export function createTailWorker(
    * from the configured UPTIME_URL, so staging and production each probe
    * their own public host with no extra configuration.
    */
-  async function runSynthetics(url: URL, uptimeUrl: string): Promise<void> {
+  async function runSynthetics(
+    url: URL,
+    uptimeUrl: string,
+    attribution: UpAttribution = {},
+  ): Promise<void> {
     let base: URL;
     try {
       base = new URL(uptimeUrl);
@@ -1102,11 +1155,14 @@ export function createTailWorker(
         check: check.path,
         target: base.host,
         status: second.status,
+        ...(attribution.build_sha ? { build_sha: attribution.build_sha } : {}),
+        ...(attribution.version_id ? { version_id: attribution.version_id } : {}),
         timestamp: new Date().toISOString(),
       };
-      // Mute on check identity only: the status rides in the payload but
-      // must not split the mute, or one flapping check re-pages on every
-      // status change. One instance probes one host, so no target segment.
+      // Mute on check identity only: the status and the build attribution ride
+      // in the payload but must not split the mute, or one flapping check (or
+      // a deploy mid-incident) re-pages on every change. One instance probes
+      // one host, so no target segment.
       await deliverScheduled(url, alert, `${alert.event}:${alert.check}`);
     }
   }
@@ -1187,12 +1243,20 @@ export function createTailWorker(
       const url = webhookUrl(env.OPS_ALERT_WEBHOOK_URL);
       if (!url) return; // No secret: no probing, no logging, no outbound work.
       const at = now();
+      // Attribution is read from the /up body already fetched in this run —
+      // never a cached build, never an extra fetch. A healthy run names the
+      // first body's build; a red run names the second attempt's build, so an
+      // unreadable paging-run body pages unattributed instead of blaming the
+      // previous build.
+      let upAttribution: UpAttribution = {};
       const first = await probeOnce(env.UPTIME_URL);
       if (first.ok) {
+        upAttribution = first.attribution;
         await observeHealth(env, true, at);
       } else {
         await sleep(UPTIME_RETRY_DELAY_MS);
         const second = await probeOnce(env.UPTIME_URL);
+        upAttribution = second.attribution;
         if (second.ok) {
           await observeHealth(env, true, at);
         } else {
@@ -1204,6 +1268,8 @@ export function createTailWorker(
               event: "uptime.down",
               status: second.status,
               down_seconds: Math.floor(downMs / 1000),
+              ...(upAttribution.build_sha ? { build_sha: upAttribution.build_sha } : {}),
+              ...(upAttribution.version_id ? { version_id: upAttribution.version_id } : {}),
               timestamp: new Date(at).toISOString(),
             };
             const delivered = await deliver(url, alert);
@@ -1226,7 +1292,7 @@ export function createTailWorker(
       // boundary run that starts a minute late still probes.
       const slot = Number.isFinite(controller.scheduledTime) ? controller.scheduledTime : at;
       if (new Date(slot).getUTCMinutes() % SYNTHETIC_INTERVAL_MINUTES === 0) {
-        await runSynthetics(url, env.UPTIME_URL);
+        await runSynthetics(url, env.UPTIME_URL, upAttribution);
       }
     },
   };
