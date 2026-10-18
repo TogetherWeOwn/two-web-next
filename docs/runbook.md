@@ -75,9 +75,14 @@ are not incident entries; read those sections directly when that work is authori
   Respect existing deployment, receiver/HMAC and isolation holds. A green
   workflow or an always-200 endpoint does not release them.
 - Never test, probe or verify database behavior against staging or production
-  databases. Tests use `agent-testdb`, database `two_web_next`, or local fixtures;
-  CI uses its disposable Postgres service. Do not send synthetic writes or
-  authenticated smoke actions to live services as a substitute for those tests.
+  databases. Full database verification uses a fresh, run-owned disposable
+  database (`two_web_next_tog<digits>`) on `agent-testdb` with the migrated
+  schema; follow the canonical setup in
+  [README Database and migrations](../README.md#database-and-migrations).
+  Fixture-only `npm run check:offline` and focused isolated-schema tests remain
+  allowed without the full database; CI uses its disposable Postgres service.
+  Do not send synthetic writes or authenticated smoke actions to live services
+  as a substitute for those tests.
 - On an authentication/ownership/permission failure, **stop**. Do not try a
   credential from another environment, print a URL/password, change identity,
   or bypass a failed check. Use the authorized broker/provisioning principal.
@@ -130,10 +135,13 @@ service-container DB coverage. Appending flags to the full shell-chain `check`
 script sends them to its final cutover command, not the earlier Vitest command.
 
 Full `npm run check`, coverage thresholds and required CI gates are unchanged.
-Full database verification must explicitly use
-`postgres://agent_test@agent-testdb:5432/two_web_next` and the migrated schema,
-never a live service. Required CI runs the complete suite on
-its disposable Postgres service.
+Full database verification must use a fresh, run-owned `two_web_next_tog<digits>`
+database on `agent-testdb` with the migrated schema, never the shared
+`two_web_next` database nor a live service; follow the canonical setup in
+[README Database and migrations](../README.md#database-and-migrations).
+Fixture-only `npm run check:offline` is limited evidence, not database
+acceptance, and focused isolated-schema tests remain allowed. Required CI runs
+the complete suite on its disposable Postgres service.
 
 ## A moderator lost their role
 
