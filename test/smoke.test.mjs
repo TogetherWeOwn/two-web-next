@@ -7,11 +7,14 @@ import { build } from "esbuild";
 import { SMOKE_QUEUE_CRITICAL_AT, SMOKE_QUEUE_WARN_AT, smoke } from "../bin/smoke.mjs";
 
 // Independent local responses matching the route contracts, not a live Worker/DB.
+// The /up fixture carries the candidate revision the version-override tests
+// pin (22345678-...): non-overridden probes ignore it, while overridden
+// probes require revision.version_id to equal the override UUID.
 const fixtures = {
   "/up": [
     200,
     "application/json",
-    '{"status":"healthy","db":"ok","pending_migrations":0,"queue":{"status":"unknown","warn_at":20,"critical_at":100}}',
+    '{"status":"healthy","db":"ok","pending_migrations":0,"queue":{"status":"unknown","warn_at":20,"critical_at":100},"revision":{"version_id":"22345678-1234-1234-1234-123456789abc","commit":null}}',
   ],
   "/": [200, "text/html", "<h1>The lobby is open.</h1>"],
   "/about": [200, "text/html", "<h1>About Together We Own</h1>"],
@@ -143,6 +146,118 @@ test("version override pins every gradual-promotion probe to the new version", a
   const result = await cli([url, "--version-override", override]);
   assert.equal(result.code, 0, result.output);
   assert.match(result.output, /17 routes, 0 failed assertions/);
+  assert.equal(requests.length, 17);
+  assert.ok(requests.every((r) => r.override === override));
+});
+
+test("version override refuses a healthy /up that identifies another Worker version", async (t) => {
+  // Ignored-override attribution: the stub answers healthy with the old
+  // version while the probe pins the candidate UUID, so the checker must
+  // fail even though every existing readiness assertion would pass.
+  const override = 'two-web-next-production="22345678-1234-1234-1234-123456789abc"';
+  const oldVersion = "11111111-2222-3333-4444-555555555555";
+  const { url, requests } = await stub(t, (route, result) => {
+    if (route === "/up")
+      result.body = JSON.stringify({
+        status: "healthy",
+        db: "ok",
+        pending_migrations: 0,
+        queue: { status: "unknown", warn_at: 20, critical_at: 100 },
+        revision: { version_id: oldVersion, commit: null },
+      });
+  });
+  const result = await run(url, { versionOverride: override });
+  assert.equal(result.ok, false, result.output);
+  assert.match(result.output, /FAIL \/up: expected revision\.version_id/);
+  assert.equal(requests.length, 17);
+  assert.ok(requests.every((r) => r.override === override));
+});
+
+test("version override refuses missing or malformed revision metadata", async (t) => {
+  const override = 'two-web-next-production="22345678-1234-1234-1234-123456789abc"';
+  const healthy = {
+    status: "healthy",
+    db: "ok",
+    pending_migrations: 0,
+    queue: { status: "unknown", warn_at: 20, critical_at: 100 },
+  };
+  const bodies = [
+    JSON.stringify(healthy),
+    JSON.stringify({ ...healthy, revision: null }),
+    JSON.stringify({ ...healthy, revision: "22345678-1234-1234-1234-123456789abc" }),
+    JSON.stringify({ ...healthy, revision: {} }),
+    JSON.stringify({ ...healthy, revision: { version_id: null, commit: null } }),
+    JSON.stringify({ ...healthy, revision: { version_id: 123, commit: null } }),
+    JSON.stringify({
+      ...healthy,
+      revision: { version_id: "22345678-1234-1234-1234-123456789ABC", commit: null },
+    }),
+    JSON.stringify({ ...healthy, revision: { commit: null } }),
+  ];
+  for (const body of bodies) {
+    const { url } = await stub(t, (route, result) => {
+      if (route === "/up") result.body = body;
+    });
+    const result = await run(url, { versionOverride: override });
+    assert.equal(result.ok, false, body);
+    assert.match(result.output, /FAIL \/up: expected revision\.version_id/, body);
+  }
+});
+
+test("version override refuses the same commit served as a different version", async (t) => {
+  // Commit equality is not identity: the candidate UUID must match exactly.
+  const override = 'two-web-next-production="22345678-1234-1234-1234-123456789abc"';
+  const commit = "0123456789abcdef0123456789abcdef01234567";
+  const { url } = await stub(t, (route, result) => {
+    if (route === "/up")
+      result.body = JSON.stringify({
+        status: "healthy",
+        db: "ok",
+        pending_migrations: 0,
+        queue: { status: "unknown", warn_at: 20, critical_at: 100 },
+        revision: { version_id: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee", commit },
+      });
+  });
+  const result = await run(url, { versionOverride: override });
+  assert.equal(result.ok, false, result.output);
+  assert.match(result.output, /FAIL \/up: expected revision\.version_id/);
+});
+
+test("version override still requires every readiness assertion", async (t) => {
+  // The candidate version answers, but unhealthy: identity alone never passes.
+  const uuid = "22345678-1234-1234-1234-123456789abc";
+  const override = `two-web-next-production="${uuid}"`;
+  const { url } = await stub(t, (route, result) => {
+    if (route === "/up")
+      result.body = JSON.stringify({
+        status: "healthy",
+        db: "error",
+        pending_migrations: 0,
+        queue: { status: "unknown", warn_at: 20, critical_at: 100 },
+        revision: { version_id: uuid, commit: null },
+      });
+  });
+  const result = await run(url, { versionOverride: override });
+  assert.equal(result.ok, false, result.output);
+  assert.match(result.output, /FAIL \/up: expected JSON \/up db:ok/);
+});
+
+test("version override passes when the candidate version answers healthy", async (t) => {
+  const uuid = "22345678-1234-1234-1234-123456789abc";
+  const override = `two-web-next-production="${uuid}"`;
+  const { url, requests } = await stub(t, (route, result) => {
+    if (route === "/up")
+      result.body = JSON.stringify({
+        status: "healthy",
+        db: "ok",
+        pending_migrations: 0,
+        queue: { status: "unknown", warn_at: 20, critical_at: 100 },
+        revision: { version_id: uuid, commit: null },
+      });
+  });
+  const result = await run(url, { versionOverride: override });
+  assert.equal(result.ok, true, result.output);
+  assert.ok(result.output.includes("PASS /up"), result.output);
   assert.equal(requests.length, 17);
   assert.ok(requests.every((r) => r.override === override));
 });
