@@ -34,7 +34,7 @@ import {
 } from "./return-journey";
 import type { HookEventLike } from "./route-ownership";
 import { SESSION_COOKIE } from "./session-cookie";
-import { hashToken, SESSION_TTL_SECONDS, type SessionStore } from "./sessions";
+import { hashToken, isValidSessionToken, SESSION_TTL_SECONDS, type SessionStore } from "./sessions";
 import { EXPIRED_WRITE_COOKIE } from "./write-recovery";
 
 export type KitSession = {
@@ -95,7 +95,7 @@ export async function resolveRequestSession(
   const cookies = await verifiedCookies(request, deps.sessionSecret);
   if (!cookies) return UNKNOWN;
   const raw = cookies[SESSION_COOKIE];
-  if (typeof raw !== "string" || !raw.startsWith("two_")) return GUEST;
+  if (!isValidSessionToken(raw)) return GUEST;
   let row;
   try {
     row = await deps.store.get(await hashToken(raw));
@@ -268,7 +268,7 @@ export function kitAuthStatusCookieFor(env: Env): (event: HookEventLike) => Prom
     try {
       const cookies = await verifiedCookies(event.request, env.SESSION_SECRET);
       const token = cookies?.[SESSION_COOKIE];
-      if (typeof token !== "string" || !token.startsWith("two_")) return null;
+      if (!isValidSessionToken(token)) return null;
       const store = await storeForEnv(env);
       const key = await store.statusHash(await hashToken(token));
       // Assert the 64-hex shape before signing (the recorded cookie-write

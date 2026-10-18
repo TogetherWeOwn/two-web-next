@@ -12,6 +12,7 @@ import {
   createMemorySessionStore,
   createPostgresSessionStore,
   hashToken,
+  isValidSessionToken,
   newSessionToken,
   SESSION_TTL_SECONDS,
   type SessionStore,
@@ -273,7 +274,7 @@ async function issueSession(
   // atomically with the insert (a failed insert leaves the prior session
   // intact; see store.replace). The token is revoked by hash because it can
   // belong to a different user (shared terminal).
-  if (typeof prior === "string" && prior.startsWith("two_")) {
+  if (isValidSessionToken(prior)) {
     await store.replace(await hashToken(prior), replacement);
   } else {
     await store.create(replacement);
@@ -305,7 +306,7 @@ async function readSession(
   rotateToken = true,
 ): Promise<Session | null> {
   const token = await getSignedCookie(c, c.env.SESSION_SECRET, SESSION_COOKIE);
-  if (!token || !token.startsWith("two_")) return null;
+  if (!isValidSessionToken(token)) return null;
   // Anonymous public pages must not depend on session storage or its startup DDL.
   const store = await storeFor(c);
   const row = await store.get(await hashToken(token));
