@@ -49,6 +49,20 @@ export const JOIN_THROTTLE_BUCKET = "join";
 export const THROTTLE_COUNTER_RETENTION_MINUTES = 5;
 
 /**
+ * Bound on the per-bucket admission-lock wait. A held `web-throttle:` advisory
+ * lock resolves to a refusal within this bound (55P03 → `{ limited: true }`,
+ * no hit charged) instead of hanging a funnel request behind another
+ * isolate's admission. Sized above the ~1s held-lock windows pinned by the
+ * concurrency suite and well inside the 4s busy bound in
+ * `test/web-throttle-lock-busy.test.ts`. A refusal is the correct mapping
+ * because every bucket is per client (`<name>:<clientKey>`): contention on a
+ * bucket only comes from that same client's parallel requests, which is the
+ * burst the throttle exists to limit — admitting it would turn the throttle
+ * off under exactly the load it exists to stop.
+ */
+export const WEB_THROTTLE_LOCK_TIMEOUT_MS = 2000;
+
+/**
  * Legacy join_source validation (JoinController::rememberSource): starts
  * alnum, then up to 63 of [a-z0-9:_-]. Anything else leaves no trace.
  */
@@ -88,6 +102,16 @@ export type ThrottleVerdict = { limited: false } | { limited: true; retryAfter: 
  * allow — refusing the funnel top on a DB outage is worse than a missed count
  * (legacy funnel.php made the same call for the leaves: no throttle at all
  * rather than a cache-backed one that 500s when the database is down).
+ *
+ * Lock contention is a refusal: the admission lock waits at most
+ * `WEB_THROTTLE_LOCK_TIMEOUT_MS`, and a timed-out wait (55P03) resolves to
+ * `{ limited: true, retryAfter: 1 }` with no hit charged — contention on a
+ * per-client bucket is that same client's burst, so the busy pass refuses
+ * with the shared 429 rather than admitting free. The join funnel calls this
+ * function with no catch of its own, so the mapping lives here: a
+ * lock-timeout error never propagates to a caller and never becomes an
+ * admission. Any other store error still propagates (the generic middleware
+ * maps it to allow; the direct join path to its outage envelope).
  */
 export async function checkJoinThrottle(
   sql: Sql | null,
@@ -100,18 +124,33 @@ export async function checkJoinThrottle(
   const store = sql as Sql & {
     begin: (run: (tx: Sql) => Promise<ThrottleVerdict>) => Promise<ThrottleVerdict>;
   };
-  const verdict = await store.begin(async (tx) => {
-    await tx`SELECT pg_advisory_xact_lock(hashtextextended(${`web-throttle:${bucket}`}, 0))`;
-    // now() is transaction-start time, which can precede a long lock wait.
-    const rows = await tx<{ n: number; wait: number }[]>`
+  let verdict: ThrottleVerdict;
+  try {
+    verdict = await store.begin(async (tx) => {
+      // Bound the admission-lock wait: without this, a bucket whose advisory
+      // lock is held by another isolate blocks here until the holder commits.
+      // Same `SET LOCAL lock_timeout` shape as the agent-events shield, inner
+      // limiter and ingress operation locks.
+      await tx.unsafe(`SET LOCAL lock_timeout = '${WEB_THROTTLE_LOCK_TIMEOUT_MS}ms'`);
+      await tx`SELECT pg_advisory_xact_lock(hashtextextended(${`web-throttle:${bucket}`}, 0))`;
+      // now() is transaction-start time, which can precede a long lock wait.
+      const rows = await tx<{ n: number; wait: number }[]>`
       SELECT count(*)::int AS n,
         coalesce(ceil(extract(epoch FROM (min(at) + interval '60 seconds' - clock_timestamp()))), 1)::int AS wait
       FROM web_throttle_hits WHERE bucket = ${bucket} AND at > clock_timestamp() - interval '60 seconds'`;
-    const r = rows[0];
-    if (r && r.n >= max) return { limited: true, retryAfter: Math.max(1, r.wait) };
-    await tx`INSERT INTO web_throttle_hits (bucket, at) VALUES (${bucket}, clock_timestamp())`;
-    return { limited: false };
-  });
+      const r = rows[0];
+      if (r && r.n >= max) return { limited: true, retryAfter: Math.max(1, r.wait) };
+      await tx`INSERT INTO web_throttle_hits (bucket, at) VALUES (${bucket}, clock_timestamp())`;
+      return { limited: false };
+    });
+  } catch (err) {
+    if ((err as { code?: string }).code !== "55P03") throw err;
+    // Busy pass: the verdict transaction aborted with no hit inserted. Fall
+    // through to the best-effort prune below so a busy pass still drains
+    // expired rows, then answer a refusal — the shared 429 with Retry-After: 1
+    // at every caller (join funnel, generic middleware, profile writes).
+    verdict = { limited: true, retryAfter: 1 };
+  }
   // Global expiry cleanup stays outside the per-bucket admission lock so it
   // never prolongs it. Refused requests prune too: a bucket under sustained
   // refused load would otherwise accumulate expired rows until some request
