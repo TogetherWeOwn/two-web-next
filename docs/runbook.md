@@ -382,11 +382,19 @@ migration is performed by its selftest.
   and host (direct `<id>.pg.psdb.cloud:5432` endpoint — never the
   pooled `6432` port). The migrate gate pins the staging host and branch id and
   refuses the production identity in code, so a production URL in the staging
-  secret fails closed. The driver pins port 5432, uses
-  certificate-verified TLS, strips optional `channel_binding=prefer|disable`, and
-  refuses `channel_binding=require` (unsupported by postgres.js) before connecting.
-  Never weaken a required channel-binding policy just to run migrations; stop and
-  coordinate a compatible driver. Never copy credentials to argv, comments, code
+  secret fails closed. The driver pins port 5432 and enforces
+  certificate-verified TLS (`sslmode=require|verify-full` plus
+  `rejectUnauthorized:true` in `migrationClient`), while
+  `channel_binding=require|prefer|disable` values are accepted and stripped
+  before connecting: postgres.js does not implement SCRAM channel binding and
+  would forward the libpq-only flag as a startup setting, so stripping it keeps
+  TLS encryption without providing SCRAM-SHA-256-PLUS channel binding
+  (`ci/db-migrate.mjs:110-117,177-198`; pinned in
+  `ci/db-migrate-selftest.mjs:296-332`). This driver cannot satisfy a genuine
+  channel-binding requirement. Never weaken or remove a required
+  channel-binding policy just to run migrations; stop and route the requirement
+  through the authorized security/operator path for a compatible driver, not to
+  weaker credentials or DSNs. Never copy credentials to argv, comments, code
   or logs. No `DATABASE_URL`/Hyperdrive/alternate-secret fallback.
 - GitHub's `secrets` context also resolves repository/organization secrets.
   Therefore verify the selected name exists at Environment scope before using
