@@ -21,6 +21,7 @@ import { inviteDestination } from "../invite";
 import { recordJoinResult } from "../return-journey";
 import { parseModeratorRoleIds, recomputeModerator } from "../roles";
 import { hashToken } from "../sessions";
+import { safeRequestId } from "../request-log";
 import { finishJoin, liveBotAdd, recordAttempt, safeNext } from "./service";
 import {
   JOIN_NEXT_COOKIE,
@@ -97,7 +98,12 @@ export function registerJoinCallbackRoutes(
     if (c.req.query("error")) {
       const denied = c.req.query("error") === "access_denied";
       if (admitted)
-        await recordAttempt(sql, { outcome: "denied", source, requestId: null, discordId: null });
+        await recordAttempt(sql, {
+          outcome: "denied",
+          source,
+          requestId: safeRequestId(c.get("requestId")) ?? null,
+          discordId: null,
+        });
       return recover(
         denied ? "Join cancelled" : "Join didn't complete",
         denied
@@ -116,7 +122,12 @@ export function registerJoinCallbackRoutes(
         outcome: "expired",
       });
       if (admitted)
-        await recordAttempt(sql, { outcome: "error", source, requestId: null, discordId: null });
+        await recordAttempt(sql, {
+          outcome: "error",
+          source,
+          requestId: safeRequestId(c.get("requestId")) ?? null,
+          discordId: null,
+        });
       return recover(
         "Join link expired",
         "That join link expired. Approvals last ten minutes — try again below.",
@@ -148,7 +159,12 @@ export function registerJoinCallbackRoutes(
         source,
         outcome,
       });
-      await recordAttempt(sql, { outcome: "error", source, requestId: null, discordId: null });
+      await recordAttempt(sql, {
+        outcome: "error",
+        source,
+        requestId: safeRequestId(c.get("requestId")) ?? null,
+        discordId: null,
+      });
       return outcome === "expired"
         ? recover(
             "Join approval expired",
