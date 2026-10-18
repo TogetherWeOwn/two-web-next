@@ -148,10 +148,25 @@ export function serializeJoin(env: Env): JoinHandoffDto {
 }
 
 /**
+ * Irreducible byte-cap overflow: the event representation still exceeds
+ * maxBytes after every trimmable description is exhausted. Callers map this
+ * to the existing static unavailable envelope; the message stays generic so
+ * it can never leak row content.
+ */
+export class EventByteCapExceededError extends Error {
+  constructor() {
+    super("Event representation exceeds the public byte cap.");
+    this.name = "EventByteCapExceededError";
+  }
+}
+
+/**
  * Fits a collection inside the byte cap by halving the longest description
  * until the wrapped body fits. Shortened descriptions end in …; rows are
  * never dropped, so paging stays stable. Always terminates: a one-character
- * description collapses to empty.
+ * description collapses to empty. Throws EventByteCapExceededError when no
+ * description remains but the body still exceeds the cap — irreducible
+ * metadata (title/game/location) must refuse, never return oversized.
  */
 export function fitByteBudget(
   rows: PublicApiEventDto[],
@@ -169,7 +184,7 @@ export function fitByteBudget(
       )
         longest = row;
     }
-    if (!longest?.description) return body;
+    if (!longest?.description) throw new EventByteCapExceededError();
     // Cut on code points, not UTF-16 units: slicing astral characters
     // (emoji, some CJK) mid-pair emits a lone surrogate that strict JSON
     // decoders reject. Array.from splits on whole code points.
@@ -235,14 +250,21 @@ export function registerPublicApiRoutes(app: Hono<{ Bindings: Env }>): void {
     if (!listed) return apiError(c, "unavailable", "Event data is temporarily unavailable.", 503);
     const { rows, total, page: clamped } = listed;
     const payload = serializeEventCollection(rows.map(serializeEvent), total, clamped, limit);
-    return servePublicJson(
-      c,
-      key,
-      fitByteBudget(payload.data, API_PUBLIC_BOUNDS.maxBodyBytes, (trimmed) => ({
+    let body: string;
+    try {
+      body = fitByteBudget(payload.data, API_PUBLIC_BOUNDS.maxBodyBytes, (trimmed) => ({
         ...payload,
         data: trimmed,
-      })),
-    );
+      }));
+    } catch (err) {
+      if (err instanceof EventByteCapExceededError)
+        return apiError(c, "unavailable", "Event data is temporarily unavailable.", 503);
+      throw err;
+    }
+    // Final guard: an oversized success is never cached or served.
+    if (TEXT.encode(body).length > API_PUBLIC_BOUNDS.maxBodyBytes)
+      return apiError(c, "unavailable", "Event data is temporarily unavailable.", 503);
+    return servePublicJson(c, key, body);
   });
 
   app.get("/api/public/events/:key", async (c) => {
@@ -266,11 +288,18 @@ export function registerPublicApiRoutes(app: Hono<{ Bindings: Env }>): void {
     }
     if (!row) return apiError(c, "not_found", "No published event with that key.", 404);
     const [dto] = [serializeEvent(row)];
-    return servePublicJson(
-      c,
-      key,
-      fitByteBudget([dto!], API_PUBLIC_BOUNDS.maxBodyBytes, (trimmed) => trimmed[0]),
-    );
+    let body: string;
+    try {
+      body = fitByteBudget([dto!], API_PUBLIC_BOUNDS.maxBodyBytes, (trimmed) => trimmed[0]);
+    } catch (err) {
+      if (err instanceof EventByteCapExceededError)
+        return apiError(c, "unavailable", "Event data is temporarily unavailable.", 503);
+      throw err;
+    }
+    // Final guard: an oversized success is never cached or served.
+    if (TEXT.encode(body).length > API_PUBLIC_BOUNDS.maxBodyBytes)
+      return apiError(c, "unavailable", "Event data is temporarily unavailable.", 503);
+    return servePublicJson(c, key, body);
   });
 
   app.get("/api/public/community", async (c) => {

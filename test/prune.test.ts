@@ -498,4 +498,217 @@ describe.skipIf(!process.env.DATABASE_URL)("model:prune (test Postgres)", () => 
     >`select normalized_query from event_search_logs where normalized_query like 'cap q%' order by id`;
     expect(searches.map((r) => r.normalized_query)).toEqual(["cap q edge", "cap q fresh"]);
   });
+
+  it("each age-pruned statement obeys its per-statement batch bound", async () => {
+    // Per-statement oracle: the shared batch test above proves the draining
+    // pass clears a backlog, but an unbounded statement would also pass it.
+    // This test calls each adapter's pruneOlderThan directly on an isolated
+    // schema: 1,003 eligible old rows plus cutoff-exact/fresh markers must
+    // report 1,000, then 3, then 0, with exact survivors after each call.
+    const iso = await createJobsFixture(process.env.DATABASE_URL!, { max: 4 });
+    try {
+      const { migrate } = await import("../src/sessions");
+      await migrate(iso.client as unknown as Parameters<typeof migrate>[0]);
+      const psql = iso.client;
+      const stores = pgPruneStores(psql);
+      // Fixed cutoff for every direct call: edge markers sit exactly on it
+      // (`< cutoff` is false, so they survive even as the database clock
+      // advances past them). Old rows are 91 days back, a full day past both
+      // the cutoff and the audit database-clock guard, so no skew can flip
+      // eligibility mid-test.
+      const now = new Date();
+      const cutoff = new Date(now.getTime() - 90 * DAY);
+      const old = new Date(now.getTime() - 91 * DAY);
+      const edge = new Date(cutoff.getTime());
+      const fresh = new Date(now.getTime() - DAY);
+      const extra = PRUNE_DELETE_BATCH_SIZE + 3;
+
+      await psql`insert into agent_event_audits (operation, request_id, result, created_at)
+        select 'create', 'per-audit-' || g, 'ok', ${old} from generate_series(1, ${extra}) g`;
+      await psql`insert into agent_event_audits (operation, request_id, result, created_at)
+        values ('create','per-audit-edge','ok',${edge}),('create','per-audit-fresh','ok',${fresh})`;
+      await psql`insert into member_data_access_logs (viewer_discord_id, resource, action, subject_user_ids, subject_count, occurred_at)
+        select 'per-access-old','members','view','["2"]',1, ${old} from generate_series(1, ${extra}) g`;
+      await psql`insert into member_data_access_logs (viewer_discord_id, resource, action, subject_user_ids, subject_count, occurred_at)
+        values ('per-access-edge','members','view','["2"]',1,${edge}),('per-access-fresh','members','view','["2"]',1,${fresh})`;
+      await psql`insert into join_attempts (outcome, source, request_id, discord_id, created_at)
+        select 'added','site','per-join-' || g,'10', ${old} from generate_series(1, ${extra}) g`;
+      await psql`insert into join_attempts (outcome, source, request_id, discord_id, created_at)
+        values ('added','site','per-join-edge','11',${edge}),('denied','site','per-join-fresh','12',${fresh})`;
+      const [grant] = await psql<
+        { id: string }[]
+      >`insert into agent_event_grants (agent_id, company_id, guild_id, verifier_hash)
+        values ('a','co','g',${`per-h-${iso.schemaName}`}) returning id`;
+      await psql`insert into agent_event_idempotency_keys (grant_id, key, payload_digest, status, body, created_at)
+        select ${grant!.id}, 'per-key-' || g, 'd', 200, '{}', ${old} from generate_series(1, ${extra}) g`;
+      await psql`insert into agent_event_idempotency_keys (grant_id, key, payload_digest, status, body, created_at)
+        values (${grant!.id},'per-key-edge','d',200,'{}',${edge}),(${grant!.id},'per-key-fresh','d',200,'{}',${fresh})`;
+      await psql`insert into event_search_logs (normalized_query, result_count, occurred_at)
+        select 'per-search-' || g, 0, ${old} from generate_series(1, ${extra}) g`;
+      await psql`insert into event_search_logs (normalized_query, result_count, occurred_at)
+        values ('per-search edge',1,${edge}),('per-search fresh',0,${fresh})`;
+      await psql`insert into board_view_logs (normalized_board_key, scope, season, result_count, occurred_at)
+        select 'per-board', 'overall', 'all', 0, ${old} from generate_series(1, ${extra}) g`;
+      await psql`insert into board_view_logs (normalized_board_key, scope, season, result_count, occurred_at)
+        values ('per-board-edge','overall','all',1,${edge}),('per-board-fresh','overall','all',0,${fresh})`;
+
+      const remaining = async (q: Promise<{ n: number }[]>) => (await q)[0]!.n;
+
+      // agentEventAudits.
+      expect(await stores.agentEventAudits.pruneOlderThan(cutoff)).toBe(PRUNE_DELETE_BATCH_SIZE);
+      expect(
+        await remaining(
+          psql`select count(*)::int as n from agent_event_audits
+            where request_id like 'per-audit-%' and request_id not in ('per-audit-edge', 'per-audit-fresh')`,
+        ),
+      ).toBe(3);
+      expect(
+        (
+          await psql<
+            { request_id: string }[]
+          >`select request_id from agent_event_audits where request_id in ('per-audit-edge', 'per-audit-fresh') order by id`
+        ).map((r) => r.request_id),
+      ).toEqual(["per-audit-edge", "per-audit-fresh"]);
+      expect(await stores.agentEventAudits.pruneOlderThan(cutoff)).toBe(3);
+      expect(
+        await remaining(
+          psql`select count(*)::int as n from agent_event_audits
+            where request_id like 'per-audit-%' and request_id not in ('per-audit-edge', 'per-audit-fresh')`,
+        ),
+      ).toBe(0);
+      expect(await stores.agentEventAudits.pruneOlderThan(cutoff)).toBe(0);
+      expect(
+        (
+          await psql<
+            { request_id: string }[]
+          >`select request_id from agent_event_audits where request_id like 'per-audit-%' order by id`
+        ).map((r) => r.request_id),
+      ).toEqual(["per-audit-edge", "per-audit-fresh"]);
+
+      // accessLog.
+      expect(await stores.accessLog.pruneOlderThan(cutoff)).toBe(PRUNE_DELETE_BATCH_SIZE);
+      expect(
+        await remaining(
+          psql`select count(*)::int as n from member_data_access_logs where viewer_discord_id = 'per-access-old'`,
+        ),
+      ).toBe(3);
+      expect(
+        (
+          await psql<
+            { viewer_discord_id: string }[]
+          >`select viewer_discord_id from member_data_access_logs where viewer_discord_id in ('per-access-edge', 'per-access-fresh') order by id`
+        ).map((r) => r.viewer_discord_id),
+      ).toEqual(["per-access-edge", "per-access-fresh"]);
+      expect(await stores.accessLog.pruneOlderThan(cutoff)).toBe(3);
+      expect(
+        await remaining(
+          psql`select count(*)::int as n from member_data_access_logs where viewer_discord_id = 'per-access-old'`,
+        ),
+      ).toBe(0);
+      expect(await stores.accessLog.pruneOlderThan(cutoff)).toBe(0);
+      expect(
+        (
+          await psql<
+            { viewer_discord_id: string }[]
+          >`select viewer_discord_id from member_data_access_logs order by id`
+        ).map((r) => r.viewer_discord_id),
+      ).toEqual(["per-access-edge", "per-access-fresh"]);
+
+      // joinAttempts.
+      expect(await stores.joinAttempts.pruneOlderThan(cutoff)).toBe(PRUNE_DELETE_BATCH_SIZE);
+      expect(
+        await remaining(
+          psql`select count(*)::int as n from join_attempts
+            where request_id like 'per-join-%' and request_id not in ('per-join-edge', 'per-join-fresh')`,
+        ),
+      ).toBe(3);
+      expect(await stores.joinAttempts.pruneOlderThan(cutoff)).toBe(3);
+      expect(
+        await remaining(
+          psql`select count(*)::int as n from join_attempts
+            where request_id like 'per-join-%' and request_id not in ('per-join-edge', 'per-join-fresh')`,
+        ),
+      ).toBe(0);
+      expect(await stores.joinAttempts.pruneOlderThan(cutoff)).toBe(0);
+      expect(
+        (
+          await psql<
+            { request_id: string }[]
+          >`select request_id from join_attempts where request_id like 'per-join-%' order by id`
+        ).map((r) => r.request_id),
+      ).toEqual(["per-join-edge", "per-join-fresh"]);
+
+      // idempotencyKeys.
+      expect(await stores.idempotencyKeys.pruneOlderThan(cutoff)).toBe(PRUNE_DELETE_BATCH_SIZE);
+      expect(
+        await remaining(
+          psql`select count(*)::int as n from agent_event_idempotency_keys
+            where key like 'per-key-%' and key not in ('per-key-edge', 'per-key-fresh')`,
+        ),
+      ).toBe(3);
+      expect(await stores.idempotencyKeys.pruneOlderThan(cutoff)).toBe(3);
+      expect(
+        await remaining(
+          psql`select count(*)::int as n from agent_event_idempotency_keys
+            where key like 'per-key-%' and key not in ('per-key-edge', 'per-key-fresh')`,
+        ),
+      ).toBe(0);
+      expect(await stores.idempotencyKeys.pruneOlderThan(cutoff)).toBe(0);
+      expect(
+        (
+          await psql<
+            { key: string }[]
+          >`select key from agent_event_idempotency_keys where key like 'per-key-%' order by id`
+        ).map((r) => r.key),
+      ).toEqual(["per-key-edge", "per-key-fresh"]);
+
+      // searchLog.
+      expect(await stores.searchLog.pruneOlderThan(cutoff)).toBe(PRUNE_DELETE_BATCH_SIZE);
+      expect(
+        await remaining(
+          psql`select count(*)::int as n from event_search_logs
+            where normalized_query like 'per-search-%' and normalized_query not in ('per-search edge', 'per-search fresh')`,
+        ),
+      ).toBe(3);
+      expect(await stores.searchLog.pruneOlderThan(cutoff)).toBe(3);
+      expect(
+        await remaining(
+          psql`select count(*)::int as n from event_search_logs
+            where normalized_query like 'per-search-%' and normalized_query not in ('per-search edge', 'per-search fresh')`,
+        ),
+      ).toBe(0);
+      expect(await stores.searchLog.pruneOlderThan(cutoff)).toBe(0);
+      expect(
+        (
+          await psql<
+            { normalized_query: string }[]
+          >`select normalized_query from event_search_logs where normalized_query like 'per-search%' order by id`
+        ).map((r) => r.normalized_query),
+      ).toEqual(["per-search edge", "per-search fresh"]);
+
+      // boardViews.
+      expect(await stores.boardViews.pruneOlderThan(cutoff)).toBe(PRUNE_DELETE_BATCH_SIZE);
+      expect(
+        await remaining(
+          psql`select count(*)::int as n from board_view_logs where normalized_board_key = 'per-board'`,
+        ),
+      ).toBe(3);
+      expect(await stores.boardViews.pruneOlderThan(cutoff)).toBe(3);
+      expect(
+        await remaining(
+          psql`select count(*)::int as n from board_view_logs where normalized_board_key = 'per-board'`,
+        ),
+      ).toBe(0);
+      expect(await stores.boardViews.pruneOlderThan(cutoff)).toBe(0);
+      expect(
+        (
+          await psql<
+            { normalized_board_key: string }[]
+          >`select normalized_board_key from board_view_logs order by id`
+        ).map((r) => r.normalized_board_key),
+      ).toEqual(["per-board-edge", "per-board-fresh"]);
+    } finally {
+      await iso.dispose();
+    }
+  });
 });

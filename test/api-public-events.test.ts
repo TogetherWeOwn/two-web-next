@@ -15,7 +15,12 @@ import {
   type PublicApiEventCollectionDto,
   type PublicApiEventDto,
 } from "../src/public-data/contracts";
-import { __resetApiPublicCacheForTests } from "../src/public-data/cache";
+import {
+  API_PUBLIC_CACHE_TTL_MS,
+  __resetApiPublicCacheForTests,
+  readApiPublicCache,
+  writeApiPublicCache,
+} from "../src/public-data/cache";
 import {
   createMemorySessionStore,
   hashToken,
@@ -347,5 +352,93 @@ describe.skipIf(!process.env.DATABASE_URL)("public read API: events", () => {
     expect(
       await (await get("/api/public/events", { headers: { cookie: "stray=crumb" } })).text(),
     ).toBe(anonBody);
+  });
+
+  it("retires the entry at TTL expiry with a controlled clock", async () => {
+    const t0 = 1_000_000;
+    writeApiPublicCache(
+      "GET /api/public/events?probe=ttl",
+      {
+        status: 200,
+        headers: { etag: '"probe"', "cache-control": "public, max-age=60" },
+        body: '{"probe":1}',
+      },
+      t0,
+    );
+    const hit = readApiPublicCache(
+      "GET /api/public/events?probe=ttl",
+      t0 + API_PUBLIC_CACHE_TTL_MS - 1,
+    );
+    expect(hit).not.toBeNull();
+    expect(hit!.expiresAt).toBe(t0 + API_PUBLIC_CACHE_TTL_MS);
+    expect(
+      readApiPublicCache("GET /api/public/events?probe=ttl", t0 + API_PUBLIC_CACHE_TTL_MS),
+    ).toBeNull();
+    // Expiry retires the entry: a second read at the same instant still misses.
+    expect(
+      readApiPublicCache("GET /api/public/events?probe=ttl", t0 + API_PUBLIC_CACHE_TTL_MS),
+    ).toBeNull();
+  });
+
+  it("misses the route cache at TTL expiry with a controlled clock", async () => {
+    await seed(61);
+    const t0 = Date.now();
+    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(t0);
+    try {
+      const first = await get("/api/public/events");
+      expect(first.status).toBe(200);
+      const firstBody = await first.text();
+      eventStore.mockClear();
+      nowSpy.mockReturnValue(t0 + API_PUBLIC_CACHE_TTL_MS - 1);
+      const hit = await get("/api/public/events");
+      expect(hit.status).toBe(200);
+      expect(await hit.text()).toBe(firstBody);
+      expect(eventStore).not.toHaveBeenCalled();
+      nowSpy.mockReturnValue(t0 + API_PUBLIC_CACHE_TTL_MS);
+      eventStore.mockClear();
+      const miss = await get("/api/public/events");
+      expect(miss.status).toBe(200);
+      expect(await miss.text()).toBe(firstBody);
+      expect(eventStore).toHaveBeenCalled();
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
+  it("serves a fresh 200 with a new ETag after expiry when rows change, then 304s the new ETag", async () => {
+    await seed(71);
+    const t0 = Date.now();
+    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(t0);
+    try {
+      const first = await get("/api/public/events");
+      expect(first.status).toBe(200);
+      const etag1 = first.headers.get("etag");
+      expect(etag1).not.toBeNull();
+      await first.text();
+      // Change the fixture while the entry is still fresh.
+      await seed(72);
+      // Past TTL the next read is fresh, so the stale ETag must not 304.
+      nowSpy.mockReturnValue(t0 + API_PUBLIC_CACHE_TTL_MS);
+      eventStore.mockClear();
+      const stale = await get("/api/public/events", {
+        headers: { "if-none-match": etag1! },
+      });
+      expect(stale.status).toBe(200);
+      const etag2 = stale.headers.get("etag");
+      expect(etag2).not.toBeNull();
+      expect(etag2).not.toBe(etag1);
+      const freshBody = await stale.text();
+      expect(freshBody).toContain(key(72));
+      expect(eventStore).toHaveBeenCalled();
+      // Unchanged data may 304, but only after that fresh read warmed the cache.
+      eventStore.mockClear();
+      const revalidated = await get("/api/public/events", {
+        headers: { "if-none-match": etag2! },
+      });
+      expect(revalidated.status).toBe(304);
+      expect(eventStore).not.toHaveBeenCalled();
+    } finally {
+      nowSpy.mockRestore();
+    }
   });
 });

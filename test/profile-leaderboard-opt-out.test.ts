@@ -13,6 +13,7 @@ import { serializeSigned } from "hono/utils/cookie";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import type { Db } from "../src/db/index";
 import { profiles, users } from "../src/db/schema";
+import { POLICY_FILE } from "../src/privacy";
 import type { Env } from "../src/env";
 import { profilesApp } from "../src/profiles/routes";
 import {
@@ -391,7 +392,7 @@ describe.each(backends)("owner-only leaderboard opt-out ($name)", (backend) => {
 
 describe("privacy policy names the profile switch", () => {
   it("the leaderboard paragraph points at the profile form", () => {
-    const policy = readFileSync("content/privacy-policy-v3.md", "utf8");
+    const policy = readFileSync(POLICY_FILE, "utf8");
     const paragraph = policy
       .split(/\n\s*\n/)
       .find((block) => /member leaderboard is members-only/i.test(block));

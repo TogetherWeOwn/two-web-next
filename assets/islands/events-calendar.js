@@ -105,6 +105,31 @@
     );
   }
 
+  // Failed navigation keeps every last-good zone intact, so the initiating
+  // control survives — but hiding the content zone may already have blurred
+  // its keyboard origin to body. When this request still owns keyboard focus
+  // (focus never moved, no newer input, and any body blur came from hiding
+  // its own content-zone origin), reveal the last-good view first and restore
+  // that control with the same resolution successful swaps use. Pointer
+  // activation carries no control and never restores.
+  function restoreFailedFocus(opts, focusAtStart, focusMoved, inputRevisionAtStart) {
+    if (!opts.control || !focusAtStart || focusMoved || inputRevision !== inputRevisionAtStart)
+      return;
+    var blurred =
+      document.activeElement === focusAtStart ||
+      (opts.skeleton &&
+        root.contains(focusAtStart) &&
+        focusAtStart.closest('[data-cal-zone="content"]') &&
+        document.activeElement === document.body);
+    if (!blurred) return;
+    // A hidden control cannot take focus: reveal before resolving, so the
+    // surviving origin resolves to itself rather than the heading fallback.
+    setLoading(false);
+    var target = (opts.focus && root.querySelector(opts.focus)) || null;
+    if (!target) target = replacementControl(opts.control) || root.querySelector("#events-heading");
+    if (target) target.focus();
+  }
+
   // opts.control: the focused keyboard-activated anchor to restore if replaced.
   // opts.focus: a selector to focus after the swap (grid day jumps land on the card).
   // opts.skeleton: member-started actions show it; a settled search does not.
@@ -153,6 +178,8 @@
         setLoading(false);
         if (!push || renderedAddress !== pageAddress(new URL(window.location.href))) {
           window.location.assign(window.location.href);
+        } else {
+          restoreFailedFocus(opts, focusAtStart, focusMoved, inputRevisionAtStart);
         }
       }, READ_DEADLINE_MS);
     }
@@ -249,6 +276,8 @@
       // changed the address (even before a superseding push), SSR restores it.
       if (!push || renderedAddress !== pageAddress(new URL(window.location.href))) {
         window.location.assign(window.location.href);
+      } else {
+        restoreFailedFocus(opts, focusAtStart, focusMoved, inputRevisionAtStart);
       }
     } finally {
       if (trackFocus) document.removeEventListener("focusin", trackFocus);
