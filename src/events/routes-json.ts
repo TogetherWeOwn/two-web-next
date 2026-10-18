@@ -1,7 +1,7 @@
 // JSON/ETag event routes: GET /events.json. Split out of
 // src/events/routes.tsx; publishes the same bounded projection to every session.
 import { dbFor } from "../admin/db";
-import { eventKeyAllowed } from "./keys";
+import { canonicalEventKey, eventKeyAllowed } from "./keys";
 import { JSON_DEFAULT_LIMIT, JSON_MAX_LIMIT, listJson } from "./reads";
 import type { PublicEventCollectionDto } from "../public-data/contracts";
 import {
@@ -28,9 +28,14 @@ export function registerJsonRoutes(app: App, readFragmentSession: SessionReader)
     // Missing, malformed, nonpositive, fractional, padded or hex values fall
     // back to page 1; listJson still clamps valid past-end pages to the last.
     const page = /^[1-9]\d*$/.test(pageRaw) ? Number(pageRaw) : 1;
-    const eventKey = c.req.query("event_key");
-    if (eventKey !== undefined && !eventKeyAllowed(eventKey, c.env.APP_URL))
+    const eventKeyRaw = c.req.query("event_key");
+    if (eventKeyRaw !== undefined && !eventKeyAllowed(eventKeyRaw, c.env.APP_URL))
       return c.json({ error: "invalid_event_key" }, 422);
+    // ULIDs are stored uppercase: resolve an admitted alias in another letter
+    // case to the canonical key before lookup. Seed keys are already canonical
+    // (canonicalEventKey is null), so they pass through unchanged.
+    const eventKey =
+      eventKeyRaw === undefined ? undefined : (canonicalEventKey(eventKeyRaw) ?? eventKeyRaw);
     // listJson bounds the scan to the last page (the COUNT runs first), so
     // the response echoes the clamped page rather than the raw request.
     const {
