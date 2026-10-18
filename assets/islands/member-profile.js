@@ -90,6 +90,46 @@
     return null;
   }
 
+  // Native 422 re-render: the controls hold the rejected draft B while the
+  // server carries the persisted profile A in data-saved-* on the island
+  // root. Re-pin the reset/dirty baseline to A so B counts as unsaved work
+  // and native Cancel restores A, not B. Absent (ordinary GET or older
+  // markup) leaves the native defaults alone. No browser storage is used.
+  (function restoreSavedBaseline() {
+    if (!root.getAttribute) return;
+    var savedBio = root.getAttribute("data-saved-bio");
+    var savedGames = root.getAttribute("data-saved-games-text");
+    var savedTimezone = root.getAttribute("data-saved-timezone");
+    var savedOptOut = root.getAttribute("data-saved-leaderboard-opt-out");
+    if (savedBio === null && savedGames === null && savedTimezone === null && savedOptOut === null)
+      return;
+    // Setting defaultValue on a pristine control also rewrites its live
+    // value, which would hide the rejected draft. Keep the visible B while
+    // the reset/dirty baseline moves to the saved A.
+    var live = {};
+    ["bio", "games_text", "timezone"].forEach(function (key) {
+      if (form.elements[key]) live[key] = form.elements[key].value;
+    });
+    if (savedBio !== null && form.elements.bio) form.elements.bio.defaultValue = savedBio;
+    if (savedGames !== null && form.elements.games_text)
+      form.elements.games_text.defaultValue = savedGames;
+    if (savedTimezone !== null && form.elements.timezone)
+      form.elements.timezone.defaultValue = savedTimezone;
+    Object.keys(live).forEach(function (key) {
+      form.elements[key].value = live[key];
+    });
+    if (savedOptOut !== null) {
+      var savedSwitch = optOutField();
+      if (savedSwitch) {
+        // Like defaultValue, pinning defaultChecked on a pristine switch can
+        // move its live state; keep the visible B while the baseline moves to A.
+        var liveChecked = savedSwitch.checked;
+        savedSwitch.defaultChecked = savedOptOut === "1";
+        savedSwitch.checked = liveChecked;
+      }
+    }
+  })();
+
   function hasUnsavedChanges() {
     var textDirty = ["bio", "games_text", "timezone"].some(function (key) {
       var field = form.elements[key];

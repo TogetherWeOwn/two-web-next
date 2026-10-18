@@ -13,6 +13,12 @@ const SUITES = [
     min: 15,
   },
   {
+    file: "test/member-profile-native-422-baseline.test.ts",
+    env: "A11Y_BROWSER_TESTS",
+    title: "native 422 baseline in a real browser",
+    min: 4,
+  },
+  {
     file: "test/featured-native-length.test.ts",
     env: "FEATURED_NATIVE_BROWSER_TESTS",
     title: "native featured headline and image description",

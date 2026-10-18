@@ -205,6 +205,12 @@ jobs:
         run: |
           npx vitest run test/profile-native-length.test.ts --reporter=default --reporter=json --outputFile.json=artifacts/a11y/profile-native-length.json
           node ci/a11y-require-executed.mjs artifacts/a11y/profile-native-length.json "native browser submission and real island binder" 15
+      - name: Profile native 422 baseline regressions (memory fixtures)
+        env:
+          A11Y_BROWSER_TESTS: "true"
+        run: |
+          npx vitest run test/member-profile-native-422-baseline.test.ts --reporter=default --reporter=json --outputFile.json=artifacts/a11y/member-profile-native-422-baseline.json
+          node ci/a11y-require-executed.mjs artifacts/a11y/member-profile-native-422-baseline.json "native 422 baseline in a real browser" 4
       - name: Admin event native Unicode regressions (intercepted fixtures, no network or DB)
         env:
           ADMIN_EVENT_BROWSER_TESTS: "true"

@@ -84,6 +84,15 @@ const form: ProfileFormValues = $derived(
     leaderboard_opt_out: member.leaderboardOptOut ?? false,
   },
 );
+// Persisted baseline for the island: on a 422 the controls hold the rejected
+// draft while these attributes hold the stored profile, so Cancel restores
+// the record. Same contract as the Hono ProfilePage data-saved-* attrs.
+const saved: ProfileFormValues = $derived({
+  bio: member.bio ?? "",
+  games_text: member.games.join("\n"),
+  timezone: member.timezone ?? "",
+  leaderboard_opt_out: member.leaderboardOptOut ?? false,
+});
 const gamesError = $derived(errors?.games ?? errors?.games_text);
 // A component-level <script> is Svelte's own; the island tags are markup.
 const avatarIsland = '<script src="/islands/avatar.js" defer></' + "script>";
@@ -265,6 +274,10 @@ const editorIsland = '<script src="/islands/member-profile.js" defer></' + "scri
         data-testid={PROFILE_EDIT_TESTID}
         {...{ [MOUNT_ATTR]: MEMBER_PROFILE_ISLAND }}
         data-member-id={member.id}
+        data-saved-bio={saved.bio}
+        data-saved-games-text={saved.games_text}
+        data-saved-timezone={saved.timezone}
+        data-saved-leaderboard-opt-out={saved.leaderboard_opt_out ? "1" : "0"}
       >
         <h2 id="edit-heading" tabindex="-1">Edit your profile</h2>
         <div data-testid="profile-edit-control" hidden>
