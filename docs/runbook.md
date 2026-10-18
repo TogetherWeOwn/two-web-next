@@ -1319,7 +1319,9 @@ still fence a due carrier. Measuring health never resets `created_at`, expires
 reservations, redrives jobs or discards failures. Investigate with the existing
 [queue redrive runbook](queue-redrive-runbook.md), not by deleting old evidence.
 Queue-only warning/critical/unknown remains HTTP 200 when DB/schema/config is
-ready; deploy smoke and uptime/liveness acceptance are unchanged. This field
+ready; staging deploy smoke fails closed on ready_wait_severity critical (S6,
+--fail-on-ready-wait-critical), while production promote and post-rollback
+smoke warn and pass; uptime/liveness acceptance are unchanged. This field
 neither repairs the queue nor grants staging SQL/redrive or production deployment
 permission; existing production approval gates still apply.
 
