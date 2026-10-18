@@ -35,7 +35,17 @@ export async function revokeMemberSessions(
     let revoked = 0;
     // An in-flight rotation can replace a locked row after this UPDATE's
     // statement snapshot. Recount with a fresh snapshot and catch its successor.
-    for (let attempt = 0; attempt < 5; attempt++) {
+    // The loop has no pass cap on purpose: a bounded cap throws away (by
+    // rolling back) every stamp collected so far, so sustained rotation always
+    // outlasts it while the victim stays signed in. Each pass stamps every
+    // revocable row in a fresh snapshot and holds those row locks to commit,
+    // so a rotation racing a stamped row parks on its lock and then fails on
+    // the revoked source without minting; only rotations already holding a
+    // source lock can still commit a successor, bounding each pass's miss to
+    // the instantaneously in-flight frontier. Passes therefore chase a
+    // shrinking frontier until one pass observes quiescence. Database errors
+    // still propagate and roll the whole revocation back.
+    for (;;) {
       const rows = await tx`update web_sessions
         set revoked_at = clock_timestamp()
         where user_id = ${discordId} and revoked_at is null and expires_at > clock_timestamp()
@@ -44,6 +54,5 @@ export async function revokeMemberSessions(
       const remaining = await countActiveMemberSessions(tx, discordId);
       if (remaining.web_sessions === 0) return { web_sessions: revoked };
     }
-    throw new Error("Active sessions kept changing during revocation.");
   });
 }
