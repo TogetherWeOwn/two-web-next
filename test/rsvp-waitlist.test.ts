@@ -10,7 +10,7 @@ import { events, rsvps } from "../src/db/admin-schema";
 import type { Env } from "../src/env";
 import { uniqueKey } from "../src/jobs/sync-event";
 import type { QueueMessage } from "../src/jobs/types";
-import { writeRsvp } from "../src/events/rsvp";
+import { withdrawRsvp, writeRsvp } from "../src/events/rsvp";
 import { CAPACITY_BELOW_GOING, waitlistPosition } from "../src/events/waitlist";
 import { createMemorySessionStore, hashToken, newSessionToken } from "../src/sessions";
 import {
@@ -854,6 +854,61 @@ describe.skipIf(!process.env.DATABASE_URL)("RSVP waitlist (agent-testdb)", () =>
     expect((await rows(ev.id)).map((r) => r.status)).toEqual(["going", "waitlisted", "waitlisted"]);
     const hits = await client`select at from web_throttle_hits where bucket = 'rsvp-write:holder'`;
     expect(hits).toHaveLength(0);
+  });
+
+  it("withdraw leaves the line waitlisted when the event ends during the promotion-row wait", async () => {
+    // Delete-path mirror of the PUT expiry test above: the holder's
+    // withdraw waits on waiter-1's row past the real end. The database
+    // clock must be read after that wait, so the frozen promotion pass
+    // sees the crossed end and promotes nobody. A read taken above the
+    // waits would freeze a pre-end instant and promote waiter-1 after
+    // the event ended. The injected worker clock is the default (no
+    // skew); only the database clock moves during the wait.
+    const endsAt = new Date(Date.now() + 2000);
+    const ev = await seed({ startsAt: new Date(Date.now() - 3_600_000), endsAt });
+    await put(ev.eventKey, "holder");
+    await put(ev.eventKey, "waiter-1");
+    await put(ev.eventKey, "waiter-2");
+    await client`update rsvps set created_at = '2020-01-01T00:00:00Z', synced_to_discord_at = now() where event_id = ${ev.id}`;
+    expect((await rows(ev.id)).map((r) => [r.userId, r.status])).toEqual([
+      ["holder", "going"],
+      ["waiter-1", "waitlisted"],
+      ["waiter-2", "waitlisted"],
+    ]);
+    await client`delete from web_throttle_hits where bucket = 'rsvp-write:holder'`;
+    let release!: () => void;
+    let ready!: (pid: number) => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const acquired = new Promise<number>((resolve) => {
+      ready = resolve;
+    });
+    const holder = client.begin(async (tx) => {
+      await tx`select id from rsvps where event_id = ${ev.id} and user_id = 'waiter-1' for update`;
+      const [backend] = await tx`select pg_backend_pid() as pid`;
+      ready(Number(backend!.pid));
+      await gate;
+    });
+    let pending: ReturnType<typeof withdrawRsvp> | undefined;
+    try {
+      const pid = await acquired;
+      pending = withdrawRsvp(db, ev.eventKey, "holder");
+      await waiterBlockedBy(pid);
+      // Park the withdraw on the row past the real end, then let it judge.
+      await new Promise((resolve) =>
+        setTimeout(resolve, Math.max(0, endsAt.getTime() - Date.now() + 500)),
+      );
+    } finally {
+      release();
+      await holder;
+      await pending;
+    }
+    expect(await pending!).toEqual({ limited: false, deleted: true, status: "published" });
+    expect((await rows(ev.id)).map((r) => [r.userId, r.status])).toEqual([
+      ["waiter-1", "waitlisted"],
+      ["waiter-2", "waitlisted"],
+    ]);
   });
 
   it.each(["going", "waitlisted", "maybe"])(
