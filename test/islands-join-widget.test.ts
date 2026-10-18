@@ -188,7 +188,13 @@ describe("join-widget island", () => {
     expect(p.frame.focus).not.toHaveBeenCalled();
   });
 
-  it("moves focus to the invite fallback when the preview fails", async () => {
+  // Scope note: the failure paths below exercise the observable signals —
+  // a signaled `error` event and the bounded load timeout. A blocked
+  // navigation that commits an error page fires `load` instead, which is
+  // indistinguishable from a real render cross-origin and stays out of scope
+  // (see the island source comment); the page-level invite link beside the
+  // preview remains the visible path in that case.
+  it("moves focus to the invite fallback when the frame signals error", async () => {
     const p = page();
     await p.click();
     p.frame.fire("error");
@@ -229,7 +235,7 @@ describe("join-widget island", () => {
     expect(message.focus).not.toHaveBeenCalled();
   });
 
-  it("on error keeps focus put and guides to the invite fallback", async () => {
+  it("on a signaled error keeps focus put and guides to the invite fallback", async () => {
     const p = page();
     await p.click();
     p.frame.fire("error");

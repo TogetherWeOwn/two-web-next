@@ -59,11 +59,14 @@
         else if (typeof message.focus === "function") message.focus();
       }
     };
-    // Browsers fire `load` for a cross-origin frame even when its navigation
-    // was blocked (X-Frame-Options, CSP, DNS, refused connection, content
-    // blocker): there is no reliable `error` for that case, so the `error`
-    // listener below is best-effort only and the bounded timer covers a hung
-    // frame that fires neither event. Focus moves in only on `load`, and only
+    // Scope: the guided fallback covers the observable failure signals —
+    // a signaled `error` (best-effort only) and a hung frame that fires
+    // neither event within the bounded timer. A blocked navigation that
+    // commits an error page fires `load` instead, which is indistinguishable
+    // from a real render cross-origin (Discord's widget posts no readiness
+    // signal), so it follows the load contract and stays out of scope here.
+    // The page-level invite link beside the preview remains the visible path
+    // in that case. Focus moves in only on `load`, and only
     // when the visitor hasn't moved elsewhere since the click (after
     // replaceChildren the clicked link is gone, so <body> means "hasn't
     // moved"): a late load never steals focus from another element.
