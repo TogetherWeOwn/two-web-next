@@ -112,6 +112,7 @@ describe("Kit member-board load parity", () => {
       expect.anything(),
       expect.objectContaining({ kind: "window", label: "2026-Q3" }),
       "valheim",
+      "overall",
     );
     expect(queueBoardViewFn).toHaveBeenCalledWith(
       expect.anything(),

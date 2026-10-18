@@ -93,5 +93,17 @@ export function rawMemberOwner(statement: string): string | undefined {
     )
   )
     return "user_id";
+  // Member leaderboard aggregate (src/leaderboards/members.ts): one grouped
+  // row per ranked member with the owner's id alongside, never per-RSVP
+  // rows. Only this exact GROUP BY + COUNT shape earns the exemption, with
+  // optional season-window bounds, an optional lower(trim(game)) filter, and
+  // an optional literal top-100 cap. Bound params are dates/game only; the
+  // cap is the literal OVERALL_CAP, never a bound limit.
+  if (
+    /^select rsvps\.user_id as user_id, users\.username as username, count\(\*\)::int as count from rsvps inner join events on events\.id = rsvps\.event_id inner join users on users\.id = rsvps\.user_id left join profiles on profiles\.user_id = rsvps\.user_id where rsvps\.status = 'going' and events\.status = 'published' and users\.member = true and \(profiles\.leaderboard_opt_out is null or profiles\.leaderboard_opt_out = false\)( and events\.starts_at >= \$\d+ and events\.starts_at < \$\d+)?( and lower\(trim\(events\.game\)\) = \$\d+)? group by rsvps\.user_id, users\.username order by count\(\*\) desc, rsvps\.user_id asc( limit 100)?$/.test(
+      query,
+    )
+  )
+    return "user_id";
   return owners.get(query);
 }
