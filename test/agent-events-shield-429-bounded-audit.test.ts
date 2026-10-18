@@ -1,4 +1,4 @@
-// Bounded outer-shield refusal audit (TOG-30954 child of TOG-30517).
+// Bounded outer-shield refusal audit regressions.
 //
 // The merged 429-audit path awaits a plain INSERT outside the bucket lock, so a
 // stalled audit (row lock or slow execution) stalls the refusal indefinitely.
