@@ -191,8 +191,9 @@ export function registerAuthRoutes(app: Hono<{ Bindings: Env }>, hooks: AuthHook
     }
 
     // Auto-join: a guild join failure never blocks sign-in. The access token is used once here and
-    // never stored.
-    const botBlank = c.env.DISCORD_BOT_TOKEN.trim() === "";
+    // never stored. An unset binding reads back as undefined (not ""), so a
+    // missing token takes the same fail-closed invite-fallback path as a blank one.
+    const botBlank = (c.env.DISCORD_BOT_TOKEN ?? "").trim() === "";
     const join = botBlank
       ? "failed"
       : await addGuildMember(
