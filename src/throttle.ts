@@ -32,7 +32,17 @@ export async function throttleStore(c: Context<{ Bindings: Env }>): Promise<Sql 
 }
 
 /** IPv6 clients share a /64; IPv4 and its mapped form share the IPv4 key. Shared with the agent-events shield so anonymous buckets match human throttles. */
+export const MAX_CLIENT_KEY_SEGMENT = 64;
+
 export function normalizeClientIp(ip: string): string {
+  return boundClientSegment(normalizeClientIpUnbounded(ip));
+}
+
+function boundClientSegment(value: string): string {
+  return value.length > MAX_CLIENT_KEY_SEGMENT ? value.slice(0, MAX_CLIENT_KEY_SEGMENT) : value;
+}
+
+function normalizeClientIpUnbounded(ip: string): string {
   if (!ip.includes(":") || !/^[0-9a-f:.]+$/i.test(ip)) return ip;
   try {
     // URL validates IPv6 and serializes embedded IPv4 as hex pieces.
@@ -67,12 +77,18 @@ export function normalizeClientIp(ip: string): string {
  * `x-forwarded-for` hop and "anon" only matter off-edge (local runs, tests).
  * See docs/throttling.md for prefix sharing and rollout behaviour.
  */
-export const clientKey = (c: Context) =>
-  normalizeClientIp(
-    c.req.header("cf-connecting-ip") ??
-      c.req.header("x-forwarded-for")?.split(",")[0]?.trim() ??
-      "anon",
-  );
+export const clientKey = (c: Context) => {
+  const cf = c.req.header("cf-connecting-ip")?.trim();
+  if (cf) return normalizeClientIp(cf) || "anon";
+  const xff = c.req.header("x-forwarded-for");
+  if (xff) {
+    for (const hop of xff.split(",")) {
+      const trimmed = hop.trim();
+      if (trimmed) return normalizeClientIp(trimmed) || "anon";
+    }
+  }
+  return "anon";
+};
 
 /** In-handler form for GET routes, where a middleware entry would widen the read inventory. */
 export async function throttleGuard(
