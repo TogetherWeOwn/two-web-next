@@ -300,7 +300,9 @@ export async function smoke(
           // failOnReadyWaitCritical (S6, staging deploy only),
           // ready_wait_severity critical fails closed, as does a blind
           // queue-observability path (queue.status or ready_wait_severity
-          // unknown). The flag is
+          // unknown). Only healthy / warning severities pass: an absent,
+          // null, wrong-type or unrecognized severity fails closed too,
+          // independently of a healthy/degraded queue.status. The flag is
           // staging-only by design: the age derives from the shared
           // queue_jobs table (src/jobs/postgres.ts min(available_at)), not
           // the Worker version under test, so a production canary probed
@@ -398,18 +400,35 @@ export async function smoke(
           const readyAge = data?.queue?.oldest_ready_wait_age_seconds;
           const readyAgeLabel = typeof readyAge === "number" ? readyAge : "unknown";
           if (failOnReadyWaitCritical) {
-            const unknownReadiness = queueStatus === "unknown" || severity === "unknown";
+            // Fail closed: admit only the documented passing severities
+            // (healthy / warning; src/up-queue.ts ReadyWaitSeverity).
+            // Absent, null, wrong-type and unrecognized values fail
+            // independently of a healthy/degraded queue.status. The
+            // unknown and critical refusals below keep their exact
+            // diagnostics; the unrecognized branch reports only fixed
+            // safe metadata (typeof), never the body value.
+            const unknownReadiness =
+              queueStatus === "unknown" ||
+              severity === "unknown" ||
+              severity === undefined ||
+              severity === null;
             if (unknownReadiness) {
               check(
                 false,
                 "known queue.status and ready_wait_severity (not unknown)",
                 `unknown (queue.status: ${queueStatus ?? "missing"}, ready_wait_severity: ${severity ?? "missing"})`,
               );
-            } else {
+            } else if (severity === "critical") {
               check(
-                severity !== "critical",
+                false,
                 "ready_wait_severity not critical",
                 `critical (oldest_ready_wait_age_seconds: ${readyAgeLabel})`,
+              );
+            } else if (severity !== "healthy" && severity !== "warning") {
+              check(
+                false,
+                "ready_wait_severity healthy or warning",
+                `unrecognized ready_wait_severity (typeof ${typeof severity})`,
               );
             }
           } else if (severity === "critical") {
