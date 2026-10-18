@@ -107,6 +107,31 @@ describe("admin event code-point contract", () => {
       );
     }
   });
+  it("description with line breaks matches the server verdict (browsers submit CRLF)", () => {
+    // Browsers serialize textarea LF as CRLF on submit, so the server counts
+    // two code points per break while textarea .value holds one.
+    const toSubmitted = (value: string): string => value.replace(/\n/g, "\r\n");
+    const serverMessage = (value: string): string => {
+      try {
+        parseEventForm({ ...base, description: toSubmitted(value) });
+        return "";
+      } catch (error) {
+        expect(error).toBeInstanceOf(ValidationError);
+        return (error as ValidationError).fields.description ?? "";
+      }
+    };
+    // 47 lines of 20 chars: 986 code points by .value, 1032 as submitted.
+    const over = Array.from({ length: 47 }, () => "x".repeat(20)).join("\n");
+    expect([...over].length).toBe(986);
+    expect(eventTextLimitError(over, "description", 1000)).toBe(
+      "Keep the description to 1000 characters.",
+    );
+    expect(serverMessage(over)).toBe("Keep the description to 1000 characters.");
+    // 45 lines of 20 chars: 944 by .value, 988 as submitted — both pass.
+    const under = Array.from({ length: 45 }, () => "x".repeat(20)).join("\n");
+    expect(eventTextLimitError(under, "description", 1000)).toBe("");
+    expect(serverMessage(under)).toBe("");
+  });
   it.each(["new", "edit"] as const)(
     "enhances only the four scoped %s controls and retains native POST",
     (mode) => {
