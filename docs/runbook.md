@@ -507,6 +507,20 @@ Postgres migrations, data writes, Discord side effects, queue messages or
 external-resource changes; keep the release workflow from redeploying the bad
 head. Record the rollback deployment and previous/current version IDs.
 
+Promotion and rollback mutations to the production Worker serialize on the
+shared `production-worker-mutation` job-level concurrency group
+(non-cancelling). The lock covers only the two mutating jobs, never
+release-note publication, so tagging a release does not block recovery.
+
+Emergency stop: to roll back during an active promotion, cancel the running
+`deploy-production` run first, confirm the Worker version that is live, then
+dispatch `rollback-production` with the recorded known-good version ID.
+Serialization queues a promotion and a rollback behind each other but cancels
+neither and promises no FIFO order: after stopping a bad promotion, also
+cancel any queued `deploy-production` runs, or the queued promotion will run
+after the rollback and undo the recovery. Verify the live version after each
+step.
+
 #### Production trigger reconciliation (manual, domain-safe)
 
 Promoting a Worker Version does not apply `wrangler.jsonc` cron schedules or
