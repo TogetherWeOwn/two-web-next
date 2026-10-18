@@ -15,16 +15,17 @@ import { testDatabaseUrl } from "./helpers/member-data-db";
 // today there is no bound, so the busy cases below time out at that bound.
 //
 // Busy mapping (pinned here, from the human-throttle domain contract, not
-// the agent-events ingress): fail-open allow, `{ limited: false }`, with no
-// hit inserted. `ThrottleVerdict` has only admit/refuse shapes; a missing
-// store already degrades to allow, and every generic caller already maps a
-// store failure to allow ("a missed count beats a 500"). The join funnel
-// calls this function with no catch of its own, so the mapping must live
-// inside `checkJoinThrottle`: a lock-timeout error (55P03) must never
-// propagate to a caller, never become a refusal ({ limited: true }) and
-// never charge the bucket. The bound's mechanism and exact value are not
-// pinned — any bound that resolves well inside 4s passes; an unbounded or
-// multi-second wait does not.
+// the agent-events ingress): refuse `{ limited: true, retryAfter: 1 }` (the
+// shared 429), with no hit charged. Every bucket is per client, so
+// contention on a bucket's lock is that client's own burst — a fail-open
+// allow on lock-timeout would let a same-client burst bypass the throttle.
+// `ThrottleVerdict` has only admit/refuse shapes; a missing store still
+// degrades to allow, but a contended lock is not a missing store. The join
+// funnel calls this function with no catch of its own, so the mapping must
+// live inside `checkJoinThrottle`: a lock-timeout error (55P03) must never
+// propagate to a caller and never charge the bucket. The bound's mechanism
+// and exact value are not pinned — any bound that resolves well inside 4s
+// passes; an unbounded or multi-second wait does not.
 //
 // Prune stays outside the admission lock on every path, busy included: an
 // expired row seeded in another bucket is deleted by a busy pass while the
@@ -208,7 +209,7 @@ describe.skipIf(!raw)("web-throttle lock waits are busy-bounded (test database)"
   const busyBuckets = ["join:203.0.113.7", "logout:198.51.100.9"] as const;
 
   it.each(busyBuckets)(
-    "settles fail-open within the bound while the bucket lock is held: %s",
+    "refuses within the bound while the bucket lock is held: %s",
     async (bucket) => {
       expect(await hitsFor(bucket)).toBe(0);
       const release = await holdBucketLock(bucket);
@@ -221,8 +222,8 @@ describe.skipIf(!raw)("web-throttle lock waits are busy-bounded (test database)"
 
         // Every assertion below runs while the holder remains locked.
         expect(elapsed).toBeLessThan(BUSY_BOUND_MS);
-        // Fail-open allow: never a refusal, never a thrown lock error.
-        expect(busy).toEqual({ limited: false });
+        // Refusal (the shared 429): never an allow, never a thrown lock error.
+        expect(busy).toEqual({ limited: true, retryAfter: 1 });
         // The busy pass is free: it charges no hit to the held bucket.
         expect(await hitsFor(bucket)).toBe(0);
       } finally {
@@ -246,7 +247,7 @@ describe.skipIf(!raw)("web-throttle lock waits are busy-bounded (test database)"
     try {
       pending = checkJoinThrottle(sql, bucket, 1);
       const busy = await settleWithinBound(pending, bucket);
-      expect(busy).toEqual({ limited: false });
+      expect(busy).toEqual({ limited: true, retryAfter: 1 });
       expect(await hitsFor(bucket)).toBe(0);
     } finally {
       await release();
@@ -275,7 +276,7 @@ describe.skipIf(!raw)("web-throttle lock waits are busy-bounded (test database)"
 
       // All while the holder remains locked: prune never waits on, and
       // never prolongs, the held admission lock.
-      expect(busy).toEqual({ limited: false });
+      expect(busy).toEqual({ limited: true, retryAfter: 1 });
       expect(await hitsFor("busy-prune:expired")).toBe(0);
       expect(await hitsFor("busy-prune:live")).toBe(1);
       expect(await hitsFor(bucket)).toBe(0);
