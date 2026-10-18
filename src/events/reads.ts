@@ -714,6 +714,46 @@ export function attendeePageHref(eventKey: string, page: number): string {
   return page <= 1 ? `/e/${eventKey}` : `/e/${eventKey}?attendees=${page}`;
 }
 
+/** Encoded variant for POST destinations built from the routed :key param:
+ * the key is encoded (route input) while the page stays a validated integer,
+ * so malformed/unsafe page values can never escape the local destination. */
+export function rsvpPageReturnPath(eventKey: string, page: number): string {
+  const base = `/e/${encodeURIComponent(eventKey)}`;
+  return page > 1 ? `${base}?attendees=${page}` : base;
+}
+
+/** Strict native-RSVP page resolution across the submitted carriers (action
+ * query values plus the body attendees value). Missing carriers are absent;
+ * any present but malformed value (duplicates, non-strings, padded/suffixed
+ * numbers, unsafe integers, URLs, cross-event paths) normalizes to page 1,
+ * and disagreeing carriers fall back to page 1 — so tampering can never
+ * choose an external destination or select an offset. Valid agreement keeps
+ * the page; page 1 stays bare. Referer is never a carrier. */
+export function resolveNativeRsvpPage(
+  queryValues: readonly string[],
+  bodyValue: unknown,
+  hasBody: boolean,
+): number {
+  const normalizePresent = (raw: unknown): number =>
+    typeof raw === "string" ? parseAttendeePageParam(raw) : 1;
+  let queryPage: number | null = null;
+  if (queryValues.length > 0) {
+    queryPage = queryValues.length > 1 ? 1 : normalizePresent(queryValues[0]);
+  }
+  let bodyPage: number | null = null;
+  if (hasBody) {
+    if (Array.isArray(bodyValue)) {
+      bodyPage = bodyValue.length === 1 ? normalizePresent(bodyValue[0]) : 1;
+    } else {
+      bodyPage = normalizePresent(bodyValue);
+    }
+  }
+  if (queryPage !== null && bodyPage !== null) {
+    return queryPage === bodyPage ? queryPage : 1;
+  }
+  return queryPage ?? bodyPage ?? 1;
+}
+
 /** Next-page probe for the one-row lookahead: the probe's own OFFSET must stay
  * exact too, so at the safe-integer ceiling it re-probes the current page
  * (empty up there, hence no false Next) instead of falling back to page 1. */

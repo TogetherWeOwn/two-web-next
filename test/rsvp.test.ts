@@ -401,6 +401,154 @@ describe.skipIf(!process.env.DATABASE_URL)("rsvp routes (agent-testdb)", () => {
     expect(await state(ev.id)).toEqual({ rows: 0, hits: 0 });
   });
 
+  it("honeypot: a filled query decoy on PUT answers byte-identical to the body decoy and touches no limiter, auth or table", async () => {
+    const ev = await seed();
+    const real = await (await put(ev.key, "u1", "going")).text();
+    await db.delete(rsvps);
+    await client`delete from web_throttle_hits`;
+    sent.length = 0;
+    const bodyDecoy = await put(ev.key, null, "going", { website: "http://spam.test" });
+    expect(bodyDecoy.status).toBe(201);
+    const bodyDecoyText = await bodyDecoy.text();
+    expect(bodyDecoyText).toBe(real);
+    expect(await state(ev.id)).toEqual({ rows: 0, hits: 0 });
+    // Guest on purpose: a query decoy that falls through to auth answers the
+    // real 401, which is an oracle the body decoy does not leak.
+    const queryDecoy = await app.request(
+      `/events/${ev.key}/rsvp?website=http%3A%2F%2Fspam.test`,
+      {
+        method: "PUT",
+        headers: {
+          origin: APP_URL,
+          accept: "application/json",
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({ status: "going" }),
+      },
+      env,
+    );
+    expect(queryDecoy.status).toBe(201);
+    const queryDecoyText = await queryDecoy.text();
+    expect(queryDecoyText).toBe(bodyDecoyText);
+    expect(JSON.parse(queryDecoyText)).toEqual({
+      data: { status: "going", synced_to_discord_at: null, waitlist_position: null },
+    });
+    expect(await state(ev.id)).toEqual({ rows: 0, hits: 0 });
+    expect(sent).toHaveLength(0);
+  });
+
+  it("honeypot: duplicate PUT query keys trip when any one value is filled", async () => {
+    const ev = await seed();
+    const real = await (await put(ev.key, "u1", "going")).text();
+    // Every value must be seen, in either position; a member session proves
+    // the write itself is suppressed, not just the guest path.
+    for (const query of ["website=&website=spam", "website=spam&website=", "website=spam"]) {
+      await db.delete(rsvps);
+      await client`delete from web_throttle_hits`;
+      sent.length = 0;
+      const res = await app.request(
+        `/events/${ev.key}/rsvp?${query}`,
+        {
+          method: "PUT",
+          headers: {
+            cookie: await cookieFor(store, "u1"),
+            origin: APP_URL,
+            accept: "application/json",
+            "content-type": "application/json",
+          },
+          body: JSON.stringify({ status: "going" }),
+        },
+        env,
+      );
+      expect(res.status, query).toBe(201);
+      expect(await res.text(), query).toBe(real);
+      expect(await state(ev.id), query).toEqual({ rows: 0, hits: 0 });
+      expect(sent, query).toHaveLength(0);
+    }
+    // A filled query decoy also traps a form body, matching the body sources.
+    await db.delete(rsvps);
+    await client`delete from web_throttle_hits`;
+    sent.length = 0;
+    const formRes = await app.request(
+      `/events/${ev.key}/rsvp?website=spam`,
+      {
+        method: "PUT",
+        headers: {
+          cookie: await cookieFor(store, "u1"),
+          origin: APP_URL,
+          accept: "application/json",
+          "content-type": "application/x-www-form-urlencoded",
+        },
+        body: "status=going",
+      },
+      env,
+    );
+    expect(formRes.status).toBe(201);
+    expect(await formRes.text()).toBe(real);
+    expect(await state(ev.id)).toEqual({ rows: 0, hits: 0 });
+    expect(sent).toHaveLength(0);
+  });
+
+  it("honeypot: an empty PUT query cannot mask a filled body decoy (no row, no hit)", async () => {
+    const ev = await seed();
+    const real = await (await put(ev.key, "u1", "going")).text();
+    await db.delete(rsvps);
+    await client`delete from web_throttle_hits`;
+    sent.length = 0;
+    const res = await app.request(
+      `/events/${ev.key}/rsvp?website=`,
+      {
+        method: "PUT",
+        headers: {
+          origin: APP_URL,
+          accept: "application/json",
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({ status: "going", website: "spam" }),
+      },
+      env,
+    );
+    expect(res.status).toBe(201);
+    expect(await res.text()).toBe(real);
+    expect(await state(ev.id)).toEqual({ rows: 0, hits: 0 });
+    expect(sent).toHaveLength(0);
+  });
+
+  it("honeypot: empty PUT/DELETE query inputs stay genuine (PUT writes, DELETE removes + charges)", async () => {
+    const ev = await seed();
+    const written = await app.request(
+      `/events/${ev.key}/rsvp?website=&website=`,
+      {
+        method: "PUT",
+        headers: {
+          cookie: await cookieFor(store, "u1"),
+          origin: APP_URL,
+          accept: "application/json",
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({ status: "going" }),
+      },
+      env,
+    );
+    expect(written.status).toBe(201);
+    expect(await state(ev.id)).toEqual({ rows: 1, hits: 1 });
+    const removed = await app.request(
+      `/events/${ev.key}/rsvp?website=`,
+      {
+        method: "DELETE",
+        headers: {
+          cookie: await cookieFor(store, "u1"),
+          origin: APP_URL,
+          accept: "application/json",
+          "content-type": "application/json",
+        },
+      },
+      env,
+    );
+    expect(removed.status).toBe(204);
+    expect(await state(ev.id)).toEqual({ rows: 0, hits: 2 });
+  });
+
   it("honeypot: a mixed-case JSON media type cannot hide a DELETE body trap", async () => {
     const ev = await seed();
     expect((await put(ev.key, "u1", "going")).status).toBe(201);

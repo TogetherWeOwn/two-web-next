@@ -131,7 +131,8 @@ describe("guest event pages with unavailable session storage", () => {
 
   it("a usable signed token still resolves storage and fails closed on session storage failure", async () => {
     vi.spyOn(console, "error").mockImplementation(() => {});
-    const res = await request(await signedCookie("two_test-token"));
+    // Well-formed bearer (two_ + 43 base64url); malformed bearers stay guests (200) with zero store reads.
+    const res = await request(await signedCookie(`two_${"A".repeat(43)}`));
     expect(res.status).toBe(503);
     expect(await res.text()).not.toContain(SUBJECT.username);
     expect(connect).toHaveBeenCalledTimes(1);

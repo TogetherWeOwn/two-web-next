@@ -63,7 +63,13 @@
 
   // Current attendee page for this view, from ?attendees=N only (no other
   // query state is copied). Returns "" on page one or when unreadable so the
-  // refresh keeps the default URL.
+  // refresh keeps the default URL. Strict like the server
+  // (parseAttendeePageParam in src/events/reads.ts): the raw value must be a
+  // positive integer in full, and its offset arithmetic must stay exact, so
+  // suffixed ("2x"), fractional ("2.9"), padded ("02") and unsafe values all
+  // fall back to the page-one refresh instead of a page the server never
+  // rendered.
+  var ATTENDEE_PAGE_SIZE = 100;
   function pageQuery() {
     var raw = null;
     try {
@@ -74,9 +80,12 @@
       // Fall through to "": an unreadable query keeps the default page-one
       // refresh instead of firing nothing.
     }
-    var page = parseInt(raw || "", 10);
-    if (!isFinite(page) || page <= 1) return "";
-    return "?attendees=" + Math.floor(page);
+    if (typeof raw !== "string" || !/^[1-9]\d*$/.test(raw)) return "";
+    var page = Number(raw);
+    if (!Number.isSafeInteger(page)) return "";
+    if (!Number.isSafeInteger((page - 1) * ATTENDEE_PAGE_SIZE)) return "";
+    if (page <= 1) return "";
+    return "?attendees=" + raw;
   }
 
   function findSection(doc) {

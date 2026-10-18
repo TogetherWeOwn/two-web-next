@@ -31,6 +31,8 @@ export interface RsvpRefusalInput {
   retryAfter: string | null;
   /** Raw :key param, exactly as routed. */
   eventKey: string;
+  /** Normalized native attendee page (1 stays bare). */
+  attendeePage?: number;
 }
 
 /**
@@ -46,10 +48,14 @@ export function rsvpRefusalModelFor(input: RsvpRefusalInput): RsvpRefusalModel {
     input.status === 429
       ? throttleWaitCopy(input.retryAfter ? Number(input.retryAfter) : null)
       : RSVP_REFUSAL_GENERIC_MESSAGE;
+  const page = input.attendeePage ?? 1;
   return {
     title: RSVP_COPY.failedTitle,
     message,
-    returnPath: `/e/${encodeURIComponent(input.eventKey)}`,
+    returnPath:
+      Number.isSafeInteger(page) && page > 1
+        ? `/e/${encodeURIComponent(input.eventKey)}?attendees=${page}`
+        : `/e/${encodeURIComponent(input.eventKey)}`,
   };
 }
 

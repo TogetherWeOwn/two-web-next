@@ -10,6 +10,7 @@
 import { type Context, Hono } from "hono";
 import { deleteCookie, getSignedCookie, setSignedCookie } from "hono/cookie";
 import { requestBodyLimit } from "../body-limit";
+import { hasOversizedOAuthParams } from "../oauth-code-state-length";
 import { AUTH_STATUS_COOKIE, authStatus, clearAuthStatus } from "../auth-status";
 import {
   addGuildMember,
@@ -30,7 +31,7 @@ import {
   rememberLoginNext,
 } from "../return-journey";
 import { parseModeratorRoleIds, recomputeModerator } from "../roles";
-import { hashToken, type SessionStore } from "../sessions";
+import { hashToken, isValidSessionToken, type SessionStore } from "../sessions";
 import {
   AUTH_THROTTLE_PER_MINUTE,
   WRITE_THROTTLE_PER_MINUTE,
@@ -132,6 +133,12 @@ export function registerAuthRoutes(app: Hono<{ Bindings: Env }>, hooks: AuthHook
     const expiredWrite = await consumeExpiredWrite(c);
     const code = c.req.query("code");
     const state = c.req.query("state");
+    // Inbound length bound: refuse oversized code/state before any journey
+    // consume, exchange, or session work. Refusals keep today's path, so the
+    // error param is peeked first and oversized maps to the generic failure.
+    if (!c.req.query("error") && hasOversizedOAuthParams(code, state)) {
+      return c.redirect("/?n=signin_failed", 302);
+    }
     const store =
       state && typeof expected === "string" && state === expected
         ? await hooks.storeFor(c).catch(() => null)
@@ -244,10 +251,13 @@ export function registerAuthRoutes(app: Hono<{ Bindings: Env }>, hooks: AuthHook
     async (c) => {
       // The app-wide same-origin guard runs before throttling or session storage.
       const token = await getSignedCookie(c, c.env.SESSION_SECRET, SESSION_COOKIE);
-      // No bearer: nothing to revoke — clear cookies and leave without touching
-      // session storage (stays 303 when the store is down; main #239 pins the
-      // authoritative 503 only for a presented token whose revocation fails).
-      if (token) {
+      // No bearer, or a correctly-signed but malformed bearer: nothing to
+      // revoke — clear cookies and leave without touching session storage
+      // (stays 303 when the store is down; main #239 pins the authoritative
+      // 503 only for a well-formed presented token whose revocation fails).
+      // A malformed hash could never match a live row, so revoking it is
+      // useless work that would 503 a sign-out that must always clear.
+      if (isValidSessionToken(token)) {
         try {
           const store = await hooks.storeFor(c);
           await store.revoke(await hashToken(token));
