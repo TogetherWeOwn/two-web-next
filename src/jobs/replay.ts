@@ -83,9 +83,33 @@ export async function reconcileFailedJob(
     // `needsSync === false` is ambiguous: the source may be clean, or the
     // current revision may carry a definitive refusal (`failed` snapshot),
     // which `staleKeys` also excludes. A pending request may also survive on
-    // a non-dirty event (e.g. closed to `past`). All three must keep the row.
+    // a non-dirty event (e.g. closed to `past`), or sit parked behind a dirty
+    // revision it can never dispatch (budget spent, unsettled claim). All of
+    // these must keep the row, with the same specific guidance as the dirty
+    // path below so operators see why the request is stuck.
     const pending = await events.pendingSync(eventKey);
     if (pending) {
+      if (pending.requestAttempts >= SYNC_EVENT.tries) {
+        return {
+          action: "keep",
+          eventKey,
+          reason: `request budget exhausted for ${scope}; leave to scheduler`,
+        };
+      }
+      if (!pending.nextAttemptAt) {
+        return {
+          action: "keep",
+          eventKey,
+          reason: `claim unsettled for ${scope}; result in flight`,
+        };
+      }
+      if (pending.nextAttemptAt > now()) {
+        return {
+          action: "keep",
+          eventKey,
+          reason: `pending request for ${scope} is not due; leave to scheduler`,
+        };
+      }
       return {
         action: "keep",
         eventKey,

@@ -129,7 +129,14 @@ describe("reconcile counts: accepted vs absorbed (no DB)", () => {
     const r = await run(h);
 
     expect(h.queue.sent.map((b) => b.eventKey)).toEqual(["a", "c"]);
-    expect(r).toEqual({ closed: 0, materialized: 0, resynced: 2, absorbed: 1, failed: 0 });
+    expect(r).toEqual({
+      closed: 0,
+      materialized: 0,
+      resynced: 2,
+      absorbed: 1,
+      failed: 0,
+      deferred: 0,
+    });
   });
 
   it("reports resynced 0 when every dispatch is absorbed, and still logs the pass once", async () => {
@@ -139,7 +146,14 @@ describe("reconcile counts: accepted vs absorbed (no DB)", () => {
     const r = await run(h);
 
     expect(h.queue.sent).toEqual([]);
-    expect(r).toEqual({ closed: 0, materialized: 0, resynced: 0, absorbed: 2, failed: 0 });
+    expect(r).toEqual({
+      closed: 0,
+      materialized: 0,
+      resynced: 0,
+      absorbed: 2,
+      failed: 0,
+      deferred: 0,
+    });
     expect(info).toHaveBeenCalledTimes(1);
     expect(info).toHaveBeenCalledWith("Event reconcile pass completed.", {
       closed: 0,
@@ -147,6 +161,7 @@ describe("reconcile counts: accepted vs absorbed (no DB)", () => {
       resynced: 0,
       absorbed: 2,
       failed: 0,
+      deferred: 0,
     });
   });
 });
@@ -159,7 +174,14 @@ describe("reconcile counts: one poison key is isolated (no DB)", () => {
     const r = await run(h);
 
     expect(h.queue.sent.map((b) => b.eventKey)).toEqual(["ok1", "ok2"]);
-    expect(r).toEqual({ closed: 0, materialized: 0, resynced: 2, absorbed: 0, failed: 1 });
+    expect(r).toEqual({
+      closed: 0,
+      materialized: 0,
+      resynced: 2,
+      absorbed: 0,
+      failed: 1,
+      deferred: 0,
+    });
     // The failed send compensated its own lease; the poison key is not left held.
     expect(h.lock.released).toContain(uniqueKey("poison"));
     expect(h.lock.heldNow()).not.toContain(uniqueKey("poison"));
@@ -172,7 +194,14 @@ describe("reconcile counts: one poison key is isolated (no DB)", () => {
     const r = await run(h);
 
     expect(h.queue.sent.map((b) => b.eventKey)).toEqual(["ok1", "ok2"]);
-    expect(r).toEqual({ closed: 0, materialized: 0, resynced: 2, absorbed: 0, failed: 1 });
+    expect(r).toEqual({
+      closed: 0,
+      materialized: 0,
+      resynced: 2,
+      absorbed: 0,
+      failed: 1,
+      deferred: 0,
+    });
   });
 
   it("a key whose pending lookup throws is isolated before any lock or send for that key", async () => {
@@ -183,7 +212,14 @@ describe("reconcile counts: one poison key is isolated (no DB)", () => {
 
     expect(h.queue.sent.map((b) => b.eventKey)).toEqual(["ok1", "ok2"]);
     expect(h.lock.acquired).not.toContain(uniqueKey("poison"));
-    expect(r).toEqual({ closed: 0, materialized: 0, resynced: 2, absorbed: 0, failed: 1 });
+    expect(r).toEqual({
+      closed: 0,
+      materialized: 0,
+      resynced: 2,
+      absorbed: 0,
+      failed: 1,
+      deferred: 0,
+    });
   });
 
   it("a failed-only pass resolves and logs its failure count once", async () => {
@@ -193,7 +229,14 @@ describe("reconcile counts: one poison key is isolated (no DB)", () => {
     const r = await run(h);
 
     expect(h.queue.sent).toEqual([]);
-    expect(r).toEqual({ closed: 0, materialized: 0, resynced: 0, absorbed: 0, failed: 1 });
+    expect(r).toEqual({
+      closed: 0,
+      materialized: 0,
+      resynced: 0,
+      absorbed: 0,
+      failed: 1,
+      deferred: 0,
+    });
     expect(info).toHaveBeenCalledTimes(1);
     expect(info).toHaveBeenCalledWith("Event reconcile pass completed.", {
       closed: 0,
@@ -201,6 +244,7 @@ describe("reconcile counts: one poison key is isolated (no DB)", () => {
       resynced: 0,
       absorbed: 0,
       failed: 1,
+      deferred: 0,
     });
   });
 });
@@ -230,7 +274,14 @@ describe("reconcile counts: skip rules unchanged (no DB)", () => {
     expect(h.events.pendingLookups).toEqual(["exhausted", "unsettled", "future"]);
     expect(h.lock.acquired).toEqual([]);
     expect(h.queue.sent).toEqual([]);
-    expect(r).toEqual({ closed: 0, materialized: 0, resynced: 0, absorbed: 0, failed: 0 });
+    expect(r).toEqual({
+      closed: 0,
+      materialized: 0,
+      resynced: 0,
+      absorbed: 0,
+      failed: 0,
+      deferred: 0,
+    });
   });
 
   it("a due pending request with budget left dispatches under its original idempotency key", async () => {
@@ -258,7 +309,14 @@ describe("reconcile counts: skip rules unchanged (no DB)", () => {
         requestId: undefined,
       },
     ]);
-    expect(r).toEqual({ closed: 0, materialized: 0, resynced: 1, absorbed: 0, failed: 0 });
+    expect(r).toEqual({
+      closed: 0,
+      materialized: 0,
+      resynced: 1,
+      absorbed: 0,
+      failed: 0,
+      deferred: 0,
+    });
   });
 });
 
@@ -285,7 +343,14 @@ describe("reconcile counts: pass shape (no DB)", () => {
     expect(h.events.calls).toEqual(["close", "materialize", "stale"]);
     expect(h.queue.sent.map((b) => b.eventKey)).toEqual(["sent1", "sent2"]);
     // 5 stale keys = 2 accepted + 1 absorbed + 1 failed + 1 skipped.
-    expect(r).toEqual({ closed: 2, materialized: 1, resynced: 2, absorbed: 1, failed: 1 });
+    expect(r).toEqual({
+      closed: 2,
+      materialized: 1,
+      resynced: 2,
+      absorbed: 1,
+      failed: 1,
+      deferred: 0,
+    });
     expect(info).toHaveBeenCalledTimes(1);
     expect(info).toHaveBeenCalledWith("Event reconcile pass completed.", {
       closed: 2,
@@ -293,6 +358,7 @@ describe("reconcile counts: pass shape (no DB)", () => {
       resynced: 2,
       absorbed: 1,
       failed: 1,
+      deferred: 0,
     });
   });
 
@@ -302,7 +368,14 @@ describe("reconcile counts: pass shape (no DB)", () => {
 
     const r = await run(h);
 
-    expect(r).toEqual({ closed: 0, materialized: 0, resynced: 0, absorbed: 0, failed: 0 });
+    expect(r).toEqual({
+      closed: 0,
+      materialized: 0,
+      resynced: 0,
+      absorbed: 0,
+      failed: 0,
+      deferred: 0,
+    });
     expect(info).not.toHaveBeenCalled();
     expect(h.lock.acquired).toEqual([]);
     expect(h.queue.sent).toEqual([]);

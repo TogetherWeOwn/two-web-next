@@ -263,7 +263,11 @@
 
   // Swap the roster section from a re-rendered event page. Returns true when
   // the DOM now matches the server truth (including both-missing as no-op).
-  function swapFromHtml(html) {
+  // Admits only the authoritative document for the requested event: the
+  // parsed page must carry this event's mount key. Anything else (an
+  // unrelated/error document, or another event's page) returns false so the
+  // caller runs the bounded retry/stale path and the last-good roster stays.
+  function swapFromHtml(html, key) {
     var parsed = null;
     try {
       parsed = new DOMParser().parseFromString(html, "text/html");
@@ -273,6 +277,25 @@
       return false;
     }
     if (!parsed || !parsed.querySelector) return false;
+    var admitted = false;
+    try {
+      var mounts = parsed.querySelectorAll("[data-event-key]");
+      for (var i = 0; mounts && i < mounts.length; i++) {
+        var mountKey = null;
+        try {
+          mountKey = mounts[i].getAttribute("data-event-key");
+        } catch (_keyUnreadable) {
+          mountKey = null;
+        }
+        if (mountKey === key) {
+          admitted = true;
+          break;
+        }
+      }
+    } catch (_admissionIgnored) {
+      admitted = false;
+    }
+    if (!admitted) return false;
     var fresh = findSection(parsed);
     var old = findSection();
     if (fresh && old) {
@@ -457,7 +480,7 @@
             clearStateTimeout(state);
             var ok = false;
             try {
-              ok = swapFromHtml(html);
+              ok = swapFromHtml(html, state.key);
             } catch (_swapIgnored) {
               // Fall through with ok false: the roster is untouched and the
               // bounded retry/stale path runs.

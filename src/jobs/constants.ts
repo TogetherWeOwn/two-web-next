@@ -28,14 +28,28 @@ export const EVENT_SEARCH_LOG_RETENTION_DAYS = 90; // config/event_search_log.ph
 export const BOARD_VIEW_LOG_RETENTION_DAYS = 90;
 export const RECONCILE_CRON = "*/10 * * * *"; // routes/console.php:35 everyTenMinutes()
 export const PRUNE_CRON = "0 0 * * *"; // routes/console.php:19 daily() (Laravel daily = 00:00)
+// Max stale events one reconcile pass redispatches. The stale selection is
+// paged deterministically (`ORDER BY event_key` + `LIMIT`); each pass asks
+// the store for exactly one page and dispatches at most that many keys in
+// the returned order. Dirty rows parked behind a permanently undispatchable
+// pending request (budget spent, null deadline) are not stale and never
+// consume page slots. Other leftovers stay stale, so the next pass (every
+// ten minutes per RECONCILE_CRON) picks them up once earlier keys have synced.
+// The bound keeps a large dirty backlog from exceeding Worker CPU/time
+// limits mid-loop and repeating identically each pass. The pass result and
+// its single completion log line carry the deferred remainder next to the
+// other counts; cadence, dispatch semantics and retention are unchanged.
+export const RECONCILE_REDISPATCH_PAGE_SIZE = 200;
 // Max rows one daily pass deletes per pruned table, including the scheduled
 // web_sessions expiry sweep. Postgres DELETE takes no LIMIT, so each
 // statement deletes the oldest N ids (age tables) or N expiry-eligible
 // session hashes (`expires_at <= now`, expiry-exact rows go, live rows stay)
 // via a subselect and reports the exact count through RETURNING. The pass
-// repeats the batched statement until a short batch proves the backlog
-// drained, so a backlog above one batch clears in a single pass instead of
-// piling past retention. The loop stops after PRUNE_DELETE_MAX_BATCHES
+// repeats the batched statement until an empty batch proves the backlog
+// drained (a short non-empty batch is not proof: a SKIP LOCKED candidate
+// window can hide unvisited unlocked rows behind lock-held ones), so a
+// backlog above one batch clears in a single pass instead of piling past
+// retention. The loop stops after PRUNE_DELETE_MAX_BATCHES
 // batches per table (100k rows) to bound the `model:prune` single-flight
 // hold; a final full batch pages once via `scheduled.failing@model:prune`
 // (one redacted line, no table detail) with rows possibly pending, for any
