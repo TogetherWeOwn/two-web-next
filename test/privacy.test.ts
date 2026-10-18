@@ -43,7 +43,7 @@ const noDbEnv = {
 } as unknown as Env;
 
 describe("/privacy versioned policy page (N1)", () => {
-  it("renders v4 with zero queries: 200 with the app DB down, no cookies, CSP present", async () => {
+  it("renders v5 with zero queries: 200 with the app DB down, no cookies, CSP present", async () => {
     const res = await app.request("/privacy", {}, noDbEnv);
     expect(res.status).toBe(200);
     expect(res.headers.get("content-type")).toContain("text/html");
@@ -52,7 +52,7 @@ describe("/privacy versioned policy page (N1)", () => {
     expect(res.headers.getSetCookie()).toHaveLength(0);
     const html = await res.text();
     expect(html).toContain('data-testid="privacy-version"');
-    expect(html).toContain("Version 4");
+    expect(html).toContain("Version 5");
     expect(html).toContain('data-testid="privacy-policy"');
     expect(html).toContain("<h2>What we store</h2>");
     expect(html).toContain("<strong>Your Discord identity</strong>");
@@ -60,6 +60,50 @@ describe("/privacy versioned policy page (N1)", () => {
     expect(html).toContain("<code>guilds.join</code>");
     expect(html).toContain("Deletion");
   });
+
+  it.each(["source", "served"])(
+    "distinguishes anonymous board telemetry from viewer-linked access auditing in %s content",
+    async (format) => {
+      const content =
+        format === "source"
+          ? readFileSync(resolve(root, POLICY_FILE), "utf8")
+          : await (await app.request("/privacy", {}, noDbEnv)).text();
+      const flat = (text: string) => {
+        // Strip tags without a `<...>` regex replace so the test helper does
+        // not read as an HTML sanitizer (CodeQL incomplete sanitization).
+        let out = "";
+        let inTag = false;
+        for (const ch of text) {
+          if (ch === "<") inTag = true;
+          else if (ch === ">") inTag = false;
+          else if (!inTag) out += ch;
+        }
+        return out.replace(/\s+/g, " ");
+      };
+      const board = content.match(
+        /(?:- \*\*Leaderboard views\*\*|<li><strong>Leaderboard views<\/strong>)[\s\S]*?(?:\n- |<\/li>)/,
+      )?.[0];
+      expect(board, "board disclosure must be present").toBeDefined();
+      const disclosure = flat(board!);
+      expect(disclosure).toMatch(
+        /anonymous board-view log records.*no user, session or IP address/i,
+      );
+      expect(disclosure).toMatch(/separate from member-data access auditing/i);
+      expect(disclosure).toMatch(
+        /other members.*access log records who viewed, when, and whose records were read/i,
+      );
+      expect(disclosure).toMatch(/also for 90 days/i);
+      expect(disclosure).toMatch(
+        /Hot-zone boards use the anonymous board-view log without member-data access auditing/,
+      );
+      const version3 = content.match(/Version 3\b[\s\S]*?(?:\n\n|<\/p>)/)?.[0];
+      expect(version3, "version 3 summary must remain qualified").toBeDefined();
+      expect(flat(version3!)).toMatch(
+        /anonymous board-view telemetry, separately from viewer-linked member-data access auditing/,
+      );
+      expect(flat(content)).not.toMatch(/each view logged without identity/i);
+    },
+  );
 
   it("ships no JavaScript on the page", async () => {
     const html = await (await app.request("/privacy", {}, noDbEnv)).text();
@@ -71,7 +115,7 @@ describe("/privacy versioned policy page (N1)", () => {
     const res = await app.request("/privacy", { headers: { cookie: forged } }, noDbEnv);
     expect(res.status).toBe(200);
     expect(res.headers.getSetCookie()).toHaveLength(0);
-    expect(await res.text()).toContain("Version 4");
+    expect(await res.text()).toContain("Version 5");
   });
 
   it("appears in the sitemap crawl set at 0.7 (parity matrix §1)", async () => {
@@ -81,13 +125,14 @@ describe("/privacy versioned policy page (N1)", () => {
 });
 
 describe("policy versioning contract", () => {
-  it("pins version 4 to the v4 content file and keeps v1/v2/v3 in history", () => {
-    expect(POLICY_VERSION).toBe(4);
-    expect(POLICY_FILE).toBe("content/privacy-policy-v4.md");
+  it("pins version 5 to the v5 content file and keeps v1/v2/v3/v4 in history", () => {
+    expect(POLICY_VERSION).toBe(5);
+    expect(POLICY_FILE).toBe("content/privacy-policy-v5.md");
     expect(POLICY_MARKDOWN.startsWith("## Who we are")).toBe(true);
     expect(existsSync(resolve(root, "content/privacy-policy-v1.md"))).toBe(true);
     expect(existsSync(resolve(root, "content/privacy-policy-v2.md"))).toBe(true);
     expect(existsSync(resolve(root, "content/privacy-policy-v3.md"))).toBe(true);
+    expect(existsSync(resolve(root, "content/privacy-policy-v4.md"))).toBe(true);
   });
 
   // v1 described the legacy stack (TOG-12553). These facts are false on Next.
