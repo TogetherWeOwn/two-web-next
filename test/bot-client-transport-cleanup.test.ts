@@ -187,3 +187,48 @@ describe("reader and cleanup failures never leak or poison the outcome", () => {
     expect(seen).toHaveLength(1);
   });
 });
+
+describe("over-limit log redaction pins console output (supplement)", () => {
+  it("no console line carries the over-limit provider body, the secret, or the signature", async () => {
+    // Acceptance test/bot-client-response-cap.test.ts:281-303 intends this
+    // same pin but records nothing: its `record` is a factory
+    // `(...args) => () => { logged.push(...) }` and `mockImplementation(record())`
+    // calls it with no arguments, so every console call pushes an empty
+    // string and the not-toContain checks always pass. This supplement is the
+    // corrected form — `record` IS the implementation — in a Builder-owned
+    // file so the acceptance file stays byte-for-byte. Correction returned to
+    // the acceptance author: make `record` the implementation itself, pass
+    // `mockImplementation(record)`, and watch `log`/`debug` too.
+    const logged: string[] = [];
+    const record = (...args: unknown[]) => {
+      logged.push(args.map((a) => JSON.stringify(a) ?? String(a)).join(" "));
+    };
+    const levels = ["info", "warn", "error", "log", "debug"] as const;
+    const spies = levels.map((level) => vi.spyOn(console, level).mockImplementation(record));
+    try {
+      const overLimitBody = `${TOKEN}-${SECRET}-${"x".repeat(CAP)}`;
+      expect(enc.encode(overLimitBody).byteLength).toBeGreaterThan(CAP);
+      const { client, seen } = clientWith(
+        async () =>
+          new Response(overLimitBody, {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          }),
+      );
+      const error = await throwsTransport(
+        client.assignRole({ userId: USER_ID, roleKey: "rocketleague" }),
+      );
+      expect(error.message).toBe(TOO_LARGE);
+      expectRedacted(error, seen);
+      expect(seen).toHaveLength(1);
+      const signature = (seen[0]!.init.headers as Record<string, string>)["X-TWO-Signature"]!;
+      const allLogged = logged.join("\n");
+      expect(allLogged).not.toContain(TOKEN);
+      expect(allLogged).not.toContain(SECRET);
+      expect(allLogged).not.toContain(signature);
+      expect(allLogged).not.toContain(overLimitBody.slice(0, 64));
+    } finally {
+      for (const spy of spies) spy.mockRestore();
+    }
+  });
+});
