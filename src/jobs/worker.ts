@@ -215,11 +215,27 @@ export async function handleScheduled(
       prune: async (db) => {
         // Report the cap without paging inside the flight; the page fires
         // below, after the transaction commits.
-        await pruneModelTables(pgPruneStores(db), undefined, {
-          reportCap: (capped) => {
-            pruneCapped = capped;
+        await pruneModelTables(
+          {
+            ...pgPruneStores(db),
+            // The lock sweep deletes the exact rows acquire targets, so it
+            // must not sit inside the flight transaction: an uncommitted sweep
+            // DELETE holds row locks until the whole eight-table pass commits,
+            // and a concurrent acquire (INSERT .. ON CONFLICT) blocks on the
+            // deleting transaction instead of superseding or inserting. Like
+            // reconcile, run it on the autocommit dispatch pool: the flight
+            // still holds the advisory lock for mutual exclusion, while each
+            // sweep batch commits (and releases its row locks) when its own
+            // statement finishes.
+            jobUniqueLocks: pgPruneStores(dispatchClient).jobUniqueLocks,
           },
-        });
+          undefined,
+          {
+            reportCap: (capped) => {
+              pruneCapped = capped;
+            },
+          },
+        );
       },
     });
     if (pruneCapped) {

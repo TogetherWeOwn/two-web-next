@@ -25,11 +25,12 @@
 // token nor any response-body byte may appear in a return value, a log
 // line, a rendered page, a redirect, a cookie or a journey row.
 //
-// Both call sites keep today's member-facing handling for every classified
-// failure (no retry policy, no UX change):
+// Member-facing handling (no retry policy, no copy or status change):
 //   - the join journey (`liveBotAdd` / `finishJoin` / GET /join/callback)
-//     surfaces the classified result through the BotAdd seam and degrades
-//     to the same blocked-copy recovery + one "degraded" attempt row;
+//     surfaces the classified result through the BotAdd seam to the same
+//     blocked-copy recovery: `rate_limited` records the distinct
+//     "rate_limited" attempt row (plus `Retry-After` when the provider sent
+//     a usable backoff), every other classified failure records "degraded";
 //   - ordinary login (GET /auth/discord/callback) still signs in as a
 //     non-member to /?n=join_failed, and its existing "guild auto-join
 //     failed" log line gains the fixed `kind` classification next to
@@ -259,7 +260,7 @@ describe("join journey seam: the classified result reaches finishJoin and degrad
   const botReturning = (result: string, requestId: string | null = null): BotAdd =>
     (async () => ({ result: result as JoinResult, requestId })) as BotAdd;
 
-  it.each(["rate_limited", "forbidden", "provider_outage", "transport_failure", "failed"])(
+  it.each(["forbidden", "provider_outage", "transport_failure", "failed"])(
     "finishJoin degrades (never throws, never signs in) on classified failure %s",
     async (classified) => {
       await expect(
@@ -271,6 +272,16 @@ describe("join journey seam: the classified result reaches finishJoin and degrad
       });
     },
   );
+
+  it("finishJoin keeps rate_limited distinct (never degrades)", async () => {
+    await expect(
+      finishJoin(botReturning("rate_limited", "req-7"), "g", "u", TOK, null),
+    ).resolves.toEqual({
+      kind: "recoverable",
+      outcome: "rate_limited",
+      requestId: "req-7",
+    });
+  });
 
   it("finishJoin success semantics are unchanged", async () => {
     await expect(finishJoin(botReturning("joined"), "g", "u", TOK, null)).resolves.toMatchObject({
@@ -379,7 +390,6 @@ describe("join callback handling: every classified failure degrades exactly like
 
   it.each([
     ["403 forbidden (50001 body)", markerPut(403, 50001)],
-    ["429 rate_limited", markerPut(429)],
     ["500 provider_outage", markerPut(500)],
     ["503 provider_outage", markerPut(503)],
     [
@@ -407,6 +417,23 @@ describe("join callback handling: every classified failure degrades exactly like
       leakFree(html, fake.attempts, [...res.headers], res.headers.getSetCookie());
     },
   );
+
+  it("PUT 429 rate_limited: same blocked-copy recovery, one rate_limited attempt, headerless without backoff", async () => {
+    const { fake, env: e } = isolated();
+    const { logs, calls, res, html } = await joinRoundTrip(e, markerPut(429));
+    expect(res.status).toBe(200);
+    expect(html).toContain("We couldn&#39;t add you automatically");
+    expect(html).toContain('data-testid="recovery-invite"');
+    expect(html).not.toContain("Discord is unreachable");
+    expect(res.headers.getSetCookie().join("\n")).not.toContain("__Host-two_session=");
+    expect(res.headers.get("retry-after")).toBeNull();
+    expect(fake.attempts).toEqual([
+      { outcome: "rate_limited", source: null, requestId: null, discordId: "42" },
+    ]);
+    expect(putsOf(calls)).toHaveLength(1);
+    expectDiagnosticStreamClean(logs, [TOK, BOT, SECRET], { request: "/join/callback" });
+    leakFree(html, fake.attempts, [...res.headers], res.headers.getSetCookie());
+  });
 
   it.each([
     [201, "/?n=joined", "added"],
