@@ -15,6 +15,7 @@ import app from "./app";
 import { DEFAULT_CONFIG, handleAgentEvent, type IngressEffects } from "../src/agent-events/service";
 import { sha256Hex } from "../src/bot/signer";
 import { rsvps } from "../src/db/admin-schema";
+import { users } from "../src/db/schema";
 import type { Env } from "../src/env";
 import { CAPACITY_BELOW_GOING } from "../src/events/waitlist";
 import { createMemorySessionStore } from "../src/sessions";
@@ -61,14 +62,22 @@ describe.skipIf(!process.env.DATABASE_URL)(
     };
     const eventId = async (eventKey: string) =>
       (await fixture.client`SELECT id FROM events WHERE event_key = ${eventKey}`)[0]!.id as number;
-    const occupy = (id: number, n: number, prefix: string) =>
-      fixture.db.insert(rsvps).values(
-        Array.from({ length: n }, (_, i) => ({
+    const occupy = async (id: number, n: number, prefix: string) => {
+      // Attributable seats: allocation counts only named rows, so every
+      // occupied seat carries a stored name like a signed-in member would.
+      const ids = Array.from({ length: n }, (_, i) => `${prefix}-${i}`);
+      await fixture.db
+        .insert(users)
+        .values(ids.map((userId) => ({ id: userId, username: userId })))
+        .onConflictDoNothing();
+      return fixture.db.insert(rsvps).values(
+        ids.map((userId) => ({
           eventId: id,
-          userId: `${prefix}-${i}`,
+          userId,
           status: "going",
         })),
       );
+    };
     const snapshot = async (eventKey: string, id: number) => ({
       event: await fixture.client`SELECT * FROM events WHERE event_key = ${eventKey}`,
       answers: await fixture.client`SELECT * FROM rsvps WHERE event_id = ${id} ORDER BY id`,
@@ -184,6 +193,10 @@ describe.skipIf(!process.env.DATABASE_URL)(
       const eventKey = await create(8);
       const id = await eventId(eventKey);
       await occupy(id, 5, "seat");
+      await fixture.db
+        .insert(users)
+        .values({ id: "concurrent-member", username: "concurrent-member" })
+        .onConflictDoNothing();
       let release!: () => void;
       let ready!: () => void;
       const held = new Promise<void>((resolve) => {

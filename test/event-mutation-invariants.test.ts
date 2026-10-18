@@ -14,6 +14,7 @@ import {
   ValidationError,
 } from "../src/admin/validation";
 import { activityLog, events, rsvps } from "../src/db/admin-schema";
+import { users } from "../src/db/schema";
 import type { Env } from "../src/env";
 import type { QueueMessage } from "../src/jobs/types";
 import { createMemorySessionStore, hashToken, newSessionToken } from "../src/sessions";
@@ -202,6 +203,12 @@ describe.skipIf(!process.env.DATABASE_URL)("event mutation invariants (agent-tes
       "not_going",
       "waitlisted",
     ];
+    // Attributable seats: allocation counts only named rows, so every
+    // occupied seat carries a stored name like a signed-in member would.
+    await fixture.db
+      .insert(users)
+      .values(statuses.map((_, i) => ({ id: `member-${i}`, username: `member-${i}` })))
+      .onConflictDoNothing();
     await fixture.db
       .insert(rsvps)
       .values(statuses.map((status, i) => ({ eventId: row.id, userId: `member-${i}`, status })));
@@ -434,6 +441,11 @@ describe.skipIf(!process.env.DATABASE_URL)("event mutation invariants (agent-tes
   it("recounts the floor for a form opened before a member joined", async () => {
     const row = await occupied();
     const staleInput = input(row, 5);
+    // Attributable join: allocation counts only named rows.
+    await fixture.db
+      .insert(users)
+      .values({ id: "late-member", username: "late-member" })
+      .onConflictDoNothing();
     expect(
       (await json("PUT", `/events/${row.eventKey}/rsvp`, { status: "going" }, "late-member"))
         .status,
@@ -541,6 +553,10 @@ describe.skipIf(!process.env.DATABASE_URL)("event mutation invariants (agent-tes
 
   it("locks before counting: an edit queued behind a new going answer cannot strand the seat", async () => {
     const row = await occupied();
+    await fixture.db
+      .insert(users)
+      .values({ id: "concurrent-member", username: "concurrent-member" })
+      .onConflictDoNothing();
     let release!: () => void;
     let ready!: () => void;
     const held = new Promise<void>((resolve) => {
