@@ -155,7 +155,7 @@ export interface SessionSweeper {
   sweepExpired(now: Date): Promise<number>;
 }
 
-/** Tables owned by the daily model:prune pass (audit logs, legacy prunes, and web_sessions GC). */
+/** Tables owned by the daily model:prune pass (audit logs, legacy prunes, web_sessions GC, and job_unique_locks expiry sweep). */
 export interface PruneStores {
   agentEventAudits: AgePrunedTable;
   accessLog: AgePrunedTable;
@@ -164,6 +164,10 @@ export interface PruneStores {
   searchLog: AgePrunedTable;
   boardViews: AgePrunedTable;
   sessions: SessionSweeper;
+  // Optional so stores built before the lock sweep (older stubs) still run:
+  // pruneModelTables drains nothing for a missing sweeper instead of throwing.
+  // Production always passes pgPruneStores().jobUniqueLocks.
+  jobUniqueLocks?: SessionSweeper;
 }
 
 /** ShouldBeUnique: acquire returns an ownership token, or null while a holder's lock is live. */

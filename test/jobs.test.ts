@@ -796,7 +796,14 @@ describe("cron", () => {
       lock: memLock(),
     });
     expect(order).toEqual(["close", "stale"]);
-    expect(r).toEqual({ closed: 2, materialized: 0, resynced: 2, deferred: 0 });
+    expect(r).toEqual({
+      closed: 2,
+      materialized: 0,
+      resynced: 2,
+      absorbed: 0,
+      failed: 0,
+      deferred: 0,
+    });
     expect(sent).toHaveLength(2);
   });
 

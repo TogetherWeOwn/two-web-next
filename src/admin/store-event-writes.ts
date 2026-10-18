@@ -9,7 +9,15 @@ import type { Db } from "../db/index";
 import { activityLog, events } from "../db/admin-schema";
 import { occurrences, type RecurrenceInput } from "./recurrence";
 import type { EventFormInput, EventStatus } from "./validation";
-import { isMirrored, newEventKey, nextStatus, ValidationError } from "./validation";
+import {
+  isKnownTimezone,
+  isMirrored,
+  newEventKey,
+  nextStatus,
+  parseEventForm,
+  utcToWall,
+  ValidationError,
+} from "./validation";
 import {
   CAPACITY_BELOW_GOING,
   goingCount,
@@ -201,70 +209,144 @@ export async function updateEvent(
         .where(eq(events.eventKey, eventKey))
         .for("update");
       if (!locked) throw new NotFoundError("event");
-      if (input.capacity !== null) {
-        const occupied = await goingCount(tx, locked.id);
-        if (input.capacity < occupied) {
-          throw new ValidationError({
-            capacity: `${CAPACITY_BELOW_GOING} Occupied seats: ${occupied}.`,
-          });
-        }
-      }
-      // A published row must keep a non-blank location (bot upsert contract):
-      // drafts may stay blank, but an edit that would leave a published event
-      // without one is refused under the same row lock, so no route can bypass it.
-      if (toEventStatus(locked.status) === "published" && isBlankLocation(input.location)) {
-        throw new ValidationError({ location: LOCATION_REQUIRED });
-      }
-      // Closed field list: the key is addressed by, never written through,
-      // this update (EventFormInput carries no key; forged keys never parse).
-      const [row] = await tx
-        .update(events)
-        .set({
-          title: input.title,
-          game: input.game,
-          description: input.description,
-          startsAt: input.startsAtUtc,
-          endsAt: input.endsAtUtc,
-          timezone: input.timezone,
-          location: input.location,
-          capacity: input.capacity,
-          // A moderator edit must invalidate an agent's full-field stale write.
-          agentVersion:
-            locked.agentGrantId === null ? locked.agentVersion : locked.agentVersion + 1,
-          updatedAt: new Date(),
-        })
-        .where(eq(events.eventKey, eventKey))
-        .returning();
-      if (!row) throw new Error("event update returned no row");
-      await promoteWaitlist(tx, row);
-      const changes = dirty(
-        locked as Record<string, unknown>,
-        row as unknown as Record<string, unknown>,
-      );
-      if (Object.keys(changes).length > 0) {
-        await tx.insert(activityLog).values({
-          logName: "default",
-          description: `updated event ${row.title}`,
-          subjectType: "Event",
-          subjectId: row.eventKey,
-          causerId: actor.id,
-          properties: changes,
-        });
-      }
-      const childWriteBacks = row.recurrenceFrequency
-        ? await shiftFutureChildren(tx, actor, row, locked.startsAt, locked.endsAt)
-        : [];
-      const status = toEventStatus(row.status);
-      return {
-        row,
-        writeBack: isMirrored(status) ? { eventKey: row.eventKey, status } : null,
-        childWriteBacks,
-      };
+      return commitLockedUpdate(tx, actor, eventKey, locked, input);
     });
   // Committed: the edit is visible to guests on the next fetch (N6).
   retireAnonEventCaches();
   await retireHomeGuestCache();
   return result;
+}
+
+export type PatchBase = Pick<
+  EventRow,
+  "title" | "game" | "description" | "timezone" | "location" | "capacity" | "startsAt" | "endsAt"
+>;
+
+/**
+ * Pure PATCH admission + merge: omitted fields resolve from `base` (in
+ * production the locked row inside the committing transaction, in hermetic
+ * tests the fixture row), never from a pre-lock snapshot. Two overlapping
+ * disjoint edits therefore preserve both changes: the later writer merges
+ * against the earlier writer's committed row, and an omitted fold instant
+ * keeps its exact stored UTC instant via the locked carriers.
+ */
+export function mergePatchInput(base: PatchBase, patch: Record<string, unknown>): EventFormInput {
+  const merged = {
+    title: base.title,
+    game: base.game,
+    description: base.description,
+    timezone: base.timezone,
+    location: base.location,
+    capacity: base.capacity,
+    ...patch,
+  } as Record<string, unknown>;
+  // Match parseEventForm's zone default before deriving omitted wall times.
+  const tz =
+    typeof merged.timezone === "string"
+      ? merged.timezone.trim() || "Europe/London"
+      : "Europe/London";
+  if (!isKnownTimezone(tz)) throw new ValidationError({ timezone: `Unknown timezone: ${tz}.` });
+  merged.starts_at ??= utcToWall(base.startsAt, tz);
+  merged.ends_at ??= utcToWall(base.endsAt, tz);
+  return parseEventForm(merged, {
+    startsAtUtc: base.startsAt.toISOString(),
+    endsAtUtc: base.endsAt.toISOString(),
+  });
+}
+
+/**
+ * Partial JSON PATCH: omitted fields resolve from the locked row inside the
+ * same transaction that commits the update, never from a pre-lock snapshot.
+ * Full-form admin semantics are untouched (updateEvent still takes a complete
+ * EventFormInput).
+ */
+export async function patchEvent(
+  db: Db,
+  actor: Actor,
+  eventKey: string,
+  patch: Record<string, unknown>,
+): Promise<{ row: EventRow; writeBack: WriteBack; childWriteBacks: NonNullable<WriteBack>[] }> {
+  const result: { row: EventRow; writeBack: WriteBack; childWriteBacks: NonNullable<WriteBack>[] } =
+    await db.transaction(async (tx) => {
+      const [locked] = await tx
+        .select()
+        .from(events)
+        .where(eq(events.eventKey, eventKey))
+        .for("update");
+      if (!locked) throw new NotFoundError("event");
+      return commitLockedUpdate(tx, actor, eventKey, locked, mergePatchInput(locked, patch));
+    });
+  // Committed: same retirement point as updateEvent, only after success.
+  retireAnonEventCaches();
+  await retireHomeGuestCache();
+  return result;
+}
+
+async function commitLockedUpdate(
+  tx: Writer,
+  actor: Actor,
+  eventKey: string,
+  locked: EventRow,
+  input: EventFormInput,
+): Promise<{ row: EventRow; writeBack: WriteBack; childWriteBacks: NonNullable<WriteBack>[] }> {
+  if (input.capacity !== null) {
+    const occupied = await goingCount(tx, locked.id);
+    if (input.capacity < occupied) {
+      throw new ValidationError({
+        capacity: `${CAPACITY_BELOW_GOING} Occupied seats: ${occupied}.`,
+      });
+    }
+  }
+  // A published row must keep a non-blank location (bot upsert contract):
+  // drafts may stay blank, but an edit that would leave a published event
+  // without one is refused under the same row lock, so no route can bypass it.
+  if (toEventStatus(locked.status) === "published" && isBlankLocation(input.location)) {
+    throw new ValidationError({ location: LOCATION_REQUIRED });
+  }
+  // Closed field list: the key is addressed by, never written through,
+  // this update (EventFormInput carries no key; forged keys never parse).
+  const [row] = await tx
+    .update(events)
+    .set({
+      title: input.title,
+      game: input.game,
+      description: input.description,
+      startsAt: input.startsAtUtc,
+      endsAt: input.endsAtUtc,
+      timezone: input.timezone,
+      location: input.location,
+      capacity: input.capacity,
+      // A moderator edit must invalidate an agent's full-field stale write.
+      agentVersion: locked.agentGrantId === null ? locked.agentVersion : locked.agentVersion + 1,
+      updatedAt: new Date(),
+    })
+    .where(eq(events.eventKey, eventKey))
+    .returning();
+  if (!row) throw new Error("event update returned no row");
+  await promoteWaitlist(tx, row);
+  const changes = dirty(
+    locked as Record<string, unknown>,
+    row as unknown as Record<string, unknown>,
+  );
+  if (Object.keys(changes).length > 0) {
+    await tx.insert(activityLog).values({
+      logName: "default",
+      description: `updated event ${row.title}`,
+      subjectType: "Event",
+      subjectId: row.eventKey,
+      causerId: actor.id,
+      properties: changes,
+    });
+  }
+  const childWriteBacks = row.recurrenceFrequency
+    ? await shiftFutureChildren(tx, actor, row, locked.startsAt, locked.endsAt)
+    : [];
+  const status = toEventStatus(row.status);
+  return {
+    row,
+    writeBack: isMirrored(status) ? { eventKey: row.eventKey, status } : null,
+    childWriteBacks,
+  };
 }
 
 /**

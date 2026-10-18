@@ -277,16 +277,29 @@ export type JoinResult =
 // never read and never logged here, so no token or body byte can leak through
 // the return value; every value is a fixed string. A transport throw is
 // "transport_failure" too: the caller degrades to the invite link either way.
-export async function addGuildMember(
+//
+// A 429 may carry a bounded `retryAfter` (delta-seconds from the response's
+// `retry-after` header, same admission as DiscordError.retryAfter): present
+// only when the header is usable (trimmed digits with an optional fraction,
+// rounded up, minimum 1, capped at 86400). Absent, malformed, body-only or
+// non-429 values yield no backoff. The plain `addGuildMember` wrapper keeps
+// the historical string-only contract; callers that surface provider backoff
+// use the detailed form.
+export type GuildMemberAdd = {
+  result: JoinResult;
+  retryAfter?: number;
+};
+
+export async function addGuildMemberDetailed(
   guildId: string,
   userId: string,
   accessToken: string,
   botToken: string,
-): Promise<JoinResult> {
+): Promise<GuildMemberAdd> {
   // Fail closed on an unconfigured bot token (TOG-12687): a blank token must
   // emit zero bot-credentialed calls, so the callers degrade to the invite
   // fallback instead of sending `Bot ` with nothing after it.
-  if (!botToken || botToken.trim().length === 0) return "failed";
+  if (!botToken || botToken.trim().length === 0) return { result: "failed" };
   let res: Response;
   try {
     res = await discordFetch(`${API}/guilds/${guildId}/members/${userId}`, {
@@ -295,12 +308,26 @@ export async function addGuildMember(
       body: JSON.stringify({ access_token: accessToken }),
     });
   } catch {
-    return "transport_failure";
+    return { result: "transport_failure" };
   }
-  if (res.status === 201) return "joined";
-  if (res.status === 204) return "already_member";
-  if (res.status === 429) return "rate_limited";
-  if (res.status === 403) return "forbidden";
-  if (res.status >= 500 && res.status <= 599) return "provider_outage";
-  return "failed";
+  if (res.status === 201) return { result: "joined" };
+  if (res.status === 204) return { result: "already_member" };
+  if (res.status === 429) {
+    const retryAfter = providerRetryAfterSeconds(res);
+    return retryAfter === undefined
+      ? { result: "rate_limited" }
+      : { result: "rate_limited", retryAfter };
+  }
+  if (res.status === 403) return { result: "forbidden" };
+  if (res.status >= 500 && res.status <= 599) return { result: "provider_outage" };
+  return { result: "failed" };
+}
+
+export async function addGuildMember(
+  guildId: string,
+  userId: string,
+  accessToken: string,
+  botToken: string,
+): Promise<JoinResult> {
+  return (await addGuildMemberDetailed(guildId, userId, accessToken, botToken)).result;
 }

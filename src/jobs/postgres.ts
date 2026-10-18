@@ -29,12 +29,13 @@ export function pgSingleFlight(sql: Sql): SingleFlight {
  * Postgres prune stores (W13 model:prune). Every age delete is age-only, the
  * Laravel MassPrunable shape: strictly older than the cutoff goes
  * (`occurred_at`/`created_at < cutoff`), cutoff-exact rows survive. The
- * scheduled session adapter deletes at most PRUNE_DELETE_BATCH_SIZE expired
- * rows per statement, and only rows expired by BOTH clocks (`expires_at <= now`
- * AND `expires_at <= clock_timestamp()`, mirroring the audit guard: expiry-exact
- * rows go, live rows stay, caller-ahead skew rows are skipped); the scheduled
- * pass drains it via `drainPruneTable`. The general session store's `sweepExpired`
- * keeps its existing full-drain contract for non-scheduled callers.
+ * scheduled session and unique-lock adapters each delete at most
+ * PRUNE_DELETE_BATCH_SIZE expired rows per statement, and only rows expired
+ * by BOTH clocks (`expires_at <= now` AND `expires_at <= clock_timestamp()`,
+ * mirroring the audit guard: expiry-exact rows go, live rows stay,
+ * caller-ahead skew rows are skipped); the scheduled pass drains each via
+ * `drainPruneTable`. The general session store's `sweepExpired` keeps its
+ * existing full-drain contract for non-scheduled callers.
  *
  * Every candidate select takes its rows `FOR UPDATE SKIP LOCKED`: an eligible
  * row locked by an unrelated transaction is skipped instead of stalling the
@@ -131,6 +132,32 @@ export function pgPruneStores(sql: TxClient | Sql): PruneStores {
         ) returning 1`
       ).length,
   };
+  // Expired unique-lock sweep: per-statement bounded expiry delete. Uses the
+  // scheduled session-sweep expiry predicate: only rows expired by BOTH
+  // clocks (`expires_at <= now` AND `expires_at <= clock_timestamp()`).
+  // Expiry-exact rows go, live leases stay, and a caller clock running ahead
+  // skips the skew-window rows instead of deleting leases acquire (which
+  // answers the database clock: `expires_at < clock_timestamp()`) still
+  // honors. Deletes at most one batch per statement; the cron pass drains via
+  // `drainPruneTable`.
+  //
+  // The outer DELETE rechecks both expiry predicates (not just candidate
+  // keys): under READ COMMITTED a concurrent acquire that renews a swept
+  // candidate between the subquery snapshot and the delete would otherwise
+  // still match on key alone and delete the live lease. The recheck makes the
+  // renewed row fail the predicate after the row-lock wait instead.
+  const jobUniqueLocks = {
+    sweepExpired: async (now: Date) =>
+      (
+        await sql`delete from job_unique_locks where expires_at <= ${now}
+          and expires_at <= clock_timestamp() and key in (
+          select key from job_unique_locks where expires_at <= ${now}
+            and expires_at <= clock_timestamp()
+          order by key limit ${PRUNE_DELETE_BATCH_SIZE}
+          for update skip locked
+        ) returning 1`
+      ).length,
+  };
   return {
     agentEventAudits,
     accessLog,
@@ -139,6 +166,7 @@ export function pgPruneStores(sql: TxClient | Sql): PruneStores {
     searchLog,
     boardViews,
     sessions,
+    jobUniqueLocks,
   };
 }
 

@@ -76,7 +76,7 @@ describe.skipIf(!process.env.DATABASE_URL)("scheduled worker (test Postgres)", (
     fixture = undefined;
   });
 
-  it("keeps accepted ledger rows if a later send rolls back the flight", async () => {
+  it("isolates a throwing key and keeps accepted ledger rows in the same pass", async () => {
     const accepted: QueueMessage[] = [];
     const env = envFor(async (body) => {
       const message = body as QueueMessage;
@@ -84,9 +84,10 @@ describe.skipIf(!process.env.DATABASE_URL)("scheduled worker (test Postgres)", (
         throw new Error("later send failed");
       accepted.push(message);
     });
-    await expect(handleScheduled(controller(RECONCILE_CRON), env)).rejects.toThrow(
-      "later send failed",
-    );
+    // One poison key is isolated per key: the pass resolves instead of
+    // rejecting, the accepted row stays, and the failed send's compensated
+    // ledger row does not.
+    await expect(handleScheduled(controller(RECONCILE_CRON), env)).resolves.toBeUndefined();
     expect(accepted).toHaveLength(1);
     const rows = await sql`select job_id, key from queue_jobs`;
     expect(rows).toHaveLength(1);
@@ -94,11 +95,46 @@ describe.skipIf(!process.env.DATABASE_URL)("scheduled worker (test Postgres)", (
     expect(
       await sql`select key from job_unique_locks where key = ${uniqueKey("first")}`,
     ).toHaveLength(1);
-    // Flight rollback has released the advisory lock; this accepted job stays
-    // observable while the failed send's compensated ledger row does not.
+    // Per-key isolation has released the failed send's advisory lock and
+    // compensated its ledger row; this accepted job stays observable while
+    // the failed send's compensated ledger row does not.
     state.keys = [];
     await handleScheduled(controller(RECONCILE_CRON), env);
     expect(await sql`select job_id from queue_jobs`).toHaveLength(1);
+  });
+
+  it("a fully failed multi-key pass rethrows to preserve the scheduled.failing page", async () => {
+    state.keys = ["down1", "down2"];
+    const errorCalls: unknown[][] = [];
+    const errorSpy = vi
+      .spyOn(console, "error")
+      .mockImplementation((...args: unknown[]) => void errorCalls.push(args));
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const infoSpy = vi.spyOn(console, "info").mockImplementation(() => {});
+    try {
+      const env = envFor(async () => {
+        throw new Error("queue down");
+      });
+      // Total outage (every key fails, nothing accepted/absorbed) must reject
+      // so handleScheduled emits its redacted scheduled.failing page instead
+      // of resolving silently. A single poison key still resolves (acceptance
+      // pin); this multi-key threshold keeps that contract intact.
+      await expect(handleScheduled(controller(RECONCILE_CRON), env)).rejects.toThrow("queue down");
+      const lines = errorCalls
+        .filter((args) => args.length === 1 && typeof args[0] === "string")
+        .map((args) => JSON.parse(args[0] as string) as Record<string, unknown>)
+        .filter((line) => line.event === "scheduled.failing");
+      expect(lines).toHaveLength(1);
+      expect(lines[0]).toMatchObject({ job: "events:reconcile", exception: "Error" });
+      // Per-key redacted warns fired; the info pass log is skipped on throw.
+      expect(warnSpy).toHaveBeenCalledTimes(2);
+      expect(infoSpy).not.toHaveBeenCalled();
+      expect(await sql`select job_id from queue_jobs`).toHaveLength(0);
+    } finally {
+      errorSpy.mockRestore();
+      warnSpy.mockRestore();
+      infoSpy.mockRestore();
+    }
   });
 
   it("an early consumer sees and settles committed rows before flight completion", async () => {

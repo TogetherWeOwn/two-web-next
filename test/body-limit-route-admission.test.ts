@@ -291,9 +291,10 @@ describe("agent ingress admission", () => {
         await request.body?.cancel();
       }
       expect(fixture.hits).toBe(60);
-      expect(fixture.queries.some((q) => /agent_event_grants|agent_event_audits/.test(q))).toBe(
-        false,
-      );
+      // Outer-shield refusals now write one denied/rate_limited audit row each
+      // (no grant lookup, no hit row); the body is still never read.
+      expect(fixture.queries.some((q) => /agent_event_grants/.test(q))).toBe(false);
+      expect(fixture.queries.filter((q) => q.includes("agent_event_audits"))).toHaveLength(2);
       expect(fixture.ends).toBe(2);
     },
   );

@@ -13,7 +13,7 @@ import { requestBodyLimit } from "../body-limit";
 import { hasOversizedOAuthParams } from "../oauth-code-state-length";
 import { AUTH_STATUS_COOKIE, authStatus, clearAuthStatus } from "../auth-status";
 import {
-  addGuildMember,
+  addGuildMemberDetailed,
   authorizeUrl,
   exchangeCode,
   failureMeta,
@@ -194,14 +194,18 @@ export function registerAuthRoutes(app: Hono<{ Bindings: Env }>, hooks: AuthHook
     // never stored. An unset binding reads back as undefined (not ""), so a
     // missing token takes the same fail-closed invite-fallback path as a blank one.
     const botBlank = (c.env.DISCORD_BOT_TOKEN ?? "").trim() === "";
-    const join = botBlank
-      ? "failed"
-      : await addGuildMember(
+    const add = botBlank
+      ? { result: "failed" as const }
+      : await addGuildMemberDetailed(
           c.env.DISCORD_GUILD_ID,
           user.id,
           accessToken,
           c.env.DISCORD_BOT_TOKEN,
-        ).catch(() => "transport_failure" as const);
+        ).catch(() => ({ result: "transport_failure" as const }));
+    const join = add.result;
+    // A usable 429 backoff rides to the same redirect as a header; every other
+    // path stays headerless even when the provider sent one.
+    const joinRetryAfter = add.result === "rate_limited" ? add.retryAfter : undefined;
     if (join !== "joined" && join !== "already_member")
       console.warn("guild auto-join failed", {
         request_id: c.get("requestId"),
@@ -243,7 +247,9 @@ export function registerAuthRoutes(app: Hono<{ Bindings: Env }>, hooks: AuthHook
           maxAge: JOURNEY_TTL_SECONDS,
         });
       }
-      return c.redirect("/?n=join_failed", 302);
+      const failed = c.redirect("/?n=join_failed", 302);
+      if (joinRetryAfter !== undefined) failed.headers.set("Retry-After", String(joinRetryAfter));
+      return failed;
     }
     return c.redirect(returnTo ?? `/?n=${join}`, 302);
   });

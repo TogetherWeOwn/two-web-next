@@ -1,4 +1,4 @@
-import { alertScheduledFailing } from "../alerts";
+import { alertScheduledFailing, exceptionClass } from "../alerts";
 import {
   AGENT_EVENT_AUDIT_RETENTION_DAYS,
   BOARD_VIEW_LOG_RETENTION_DAYS,
@@ -38,6 +38,9 @@ type ReconcilePreparation = {
  * picked up in the same run (new occurrences are drafts, which the stale query never returns).
  * Each pass redispatches at most one RECONCILE_REDISPATCH_PAGE_SIZE page in
  * the store's order; deferred leftovers stay stale for the next pass.
+ * `resynced` counts only transport-accepted dispatches; unique-lock
+ * absorptions report as `absorbed`. One throwing key counts as `failed` and
+ * never starves the rest of the pass.
  */
 export async function reconcileEvents(deps: {
   events: EventStore;
@@ -47,7 +50,14 @@ export async function reconcileEvents(deps: {
   writeTransaction?: (
     work: (events: EventStore) => Promise<ReconcilePreparation>,
   ) => Promise<ReconcilePreparation>;
-}): Promise<{ closed: number; materialized: number; resynced: number; deferred: number }> {
+}): Promise<{
+  closed: number;
+  materialized: number;
+  resynced: number;
+  absorbed: number;
+  failed: number;
+  deferred: number;
+}> {
   const prepare = async (events: EventStore): Promise<ReconcilePreparation> => ({
     closed: await events.closeFinished((deps.now ?? (() => new Date()))()),
     materialized: await events.materializeSeries(),
@@ -72,24 +82,56 @@ export async function reconcileEvents(deps: {
     ? ((stale as unknown as Partial<StaleEventKeysPage>).deferred ?? 0)
     : stale.deferred;
   let resynced = 0;
+  let absorbed = 0;
+  let failed = 0;
+  let firstError: unknown;
   for (const key of keys) {
-    // A carrier can be stranded, delayed or exhausted. Only recover a due
-    // request with budget left, always under its original immutable key.
-    const pending = await deps.events.pendingSync(key);
-    if (
-      pending &&
-      (pending.requestAttempts >= SYNC_EVENT.tries ||
-        !pending.nextAttemptAt ||
-        pending.nextAttemptAt > (deps.now ?? (() => new Date()))())
-    )
-      continue;
-    await dispatchSyncEvent(deps.queue, deps.lock, key, pending?.idempotencyKey);
-    resynced++; // Laravel counts stale rows, not accepted dispatches
+    try {
+      // A carrier can be stranded, delayed or exhausted. Only recover a due
+      // request with budget left, always under its original immutable key.
+      const pending = await deps.events.pendingSync(key);
+      if (
+        pending &&
+        (pending.requestAttempts >= SYNC_EVENT.tries ||
+          !pending.nextAttemptAt ||
+          pending.nextAttemptAt > (deps.now ?? (() => new Date()))())
+      )
+        continue;
+      const accepted = await dispatchSyncEvent(deps.queue, deps.lock, key, pending?.idempotencyKey);
+      if (accepted) resynced++;
+      else absorbed++;
+    } catch (err) {
+      // One poison key must not starve the rest of the pass. Keep the first
+      // error for a total-outage rethrow below; log the key with only its
+      // redacted class (DB messages can carry bound values).
+      failed++;
+      firstError ??= err;
+      console.warn("Event reconcile key failed.", { key, error_class: exceptionClass(err) });
+    }
   }
-  if (closed > 0 || materialized > 0 || resynced > 0 || deferred > 0) {
-    console.info("Event reconcile pass completed.", { closed, materialized, resynced, deferred });
+  // A fully failed multi-key pass is a systemic outage (queue/DB down), not a
+  // single poison key: rethrow so handleScheduled still emits its
+  // scheduled.failing page for events:reconcile. A single failed key keeps
+  // resolving per the acceptance pin (failed-only single-key pass logs once).
+  if (failed > 1 && resynced + absorbed === 0) throw firstError;
+  if (
+    closed > 0 ||
+    materialized > 0 ||
+    resynced > 0 ||
+    absorbed > 0 ||
+    failed > 0 ||
+    deferred > 0
+  ) {
+    console.info("Event reconcile pass completed.", {
+      closed,
+      materialized,
+      resynced,
+      absorbed,
+      failed,
+      deferred,
+    });
   }
-  return { closed, materialized, resynced, deferred };
+  return { closed, materialized, resynced, absorbed, failed, deferred };
 }
 
 export type PruneCounts = {
@@ -100,21 +142,29 @@ export type PruneCounts = {
   searchLog: number;
   boardViews: number;
   sessions: number;
+  jobUniqueLocks: number;
 };
 
 const cutoff = (now: Date, days: number): Date => new Date(now.getTime() - days * 86_400_000);
 
 /**
  * Ports model:prune daily ×3 (routes/console.php) plus the web_sessions expiry
- * sweep (no legacy equivalent — Laravel GC; rows accumulate without one).
+ * sweep (no legacy equivalent — Laravel GC; rows accumulate without one) and
+ * the job_unique_locks expiry sweep (expired leases linger without one).
  * Age deletes are age-only (Laravel MassPrunable shape): strictly older than
- * the cutoff goes, cutoff-exact rows survive. The session sweep deletes by
- * expiry (`expires_at <= now`, matching what reads can see): expiry-exact
- * rows go, live rows stay. Each statement deletes at most
+ * the cutoff goes, cutoff-exact rows survive. The session and lock sweeps
+ * delete by expiry (`expires_at <= now`, matching what reads see for sessions
+ * and the documented sweep contract for locks): expiry-exact rows go, live
+ * rows stay. Each statement deletes at most
  * PRUNE_DELETE_BATCH_SIZE rows; the pass repeats the statement per table until
  * a short batch proves the backlog drained, stopping after
  * PRUNE_DELETE_MAX_BATCHES batches so the single-flight is never held
  * forever. Idempotent: a re-run matches nothing and reports zeros.
+ *
+ * The worker runs the lock sweep on its autocommit dispatch pool rather than
+ * the flight transaction (the sweep deletes the exact rows acquire targets;
+ * inside the flight its row locks would be held until the whole pass commits
+ * and block concurrent acquires). Either client satisfies the stores shape.
  */
 
 async function drainPruneTable(
@@ -148,6 +198,9 @@ export async function pruneModelTables(
   now: Date = new Date(),
   opts?: { reportCap?: (capped: boolean) => void },
 ): Promise<PruneCounts> {
+  // Stores built before the lock sweep carry no sweeper: drain nothing for
+  // them instead of throwing, so the rest of the pass keeps its behavior.
+  const locks = stores.jobUniqueLocks ?? { sweepExpired: async (_d: Date): Promise<number> => 0 };
   const [
     agentEventAudits,
     accessLog,
@@ -156,6 +209,7 @@ export async function pruneModelTables(
     searchLog,
     boardViews,
     sessions,
+    jobUniqueLocks,
   ] = await Promise.all([
     drainPruneTable(
       (c) => stores.agentEventAudits.pruneOlderThan(c),
@@ -182,6 +236,7 @@ export async function pruneModelTables(
       cutoff(now, BOARD_VIEW_LOG_RETENTION_DAYS),
     ),
     drainPruneTable((d) => stores.sessions.sweepExpired(d), now),
+    drainPruneTable((d) => locks.sweepExpired(d), now),
   ]);
   const counts = {
     agentEventAudits: agentEventAudits.total,
@@ -191,6 +246,7 @@ export async function pruneModelTables(
     searchLog: searchLog.total,
     boardViews: boardViews.total,
     sessions: sessions.total,
+    jobUniqueLocks: jobUniqueLocks.total,
   };
   const cappedTables = (
     [
@@ -201,11 +257,22 @@ export async function pruneModelTables(
       ["searchLog", searchLog.capped],
       ["boardViews", boardViews.capped],
       ["sessions", sessions.capped],
+      ["jobUniqueLocks", jobUniqueLocks.capped],
     ] as const
   )
     .filter(([, capped]) => capped)
     .map(([name]) => name);
   const capped = cappedTables.length > 0;
+  if (jobUniqueLocks.capped) {
+    // Lock-table cap observability: the lock sweep is a new table the
+    // paging contract predates, and its acceptance pins a warn with the
+    // capped-table list. Other-table caps stay warn-free per the paging
+    // acceptance; the pass still pages once via the redacted signal below.
+    console.warn("Model prune pass hit per-table batch cap with rows possibly pending.", {
+      ...counts,
+      cappedTables,
+    });
+  }
   // Scheduled path (worker.ts): report the cap without paging inside the
   // advisory-lock transaction. The caller pages after the flight commits, so
   // a commit failure after a capped drain cannot leave a cap page muting the

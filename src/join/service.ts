@@ -26,10 +26,17 @@
 // outcome, source, request_id and discord_id. The OAuth/token-exchange response
 // bodies and exception messages can quote the live token, so none of them is
 // ever a recordAttempt parameter and none is ever logged.
-import { addGuildMember, type JoinResult } from "../discord";
+import { addGuildMemberDetailed, type JoinResult } from "../discord";
 import type { Sql } from "../sessions";
 
-export const JOIN_OUTCOMES = ["added", "already_member", "error", "denied", "degraded"] as const;
+export const JOIN_OUTCOMES = [
+  "added",
+  "already_member",
+  "error",
+  "denied",
+  "degraded",
+  "rate_limited",
+] as const;
 export type JoinOutcome = (typeof JOIN_OUTCOMES)[number];
 
 /**
@@ -190,14 +197,17 @@ export type BotAdd = (
 ) => Promise<{
   result: JoinResult;
   requestId: string | null;
+  retryAfter?: number;
 }>;
 
 /** The production bot call: Discord's own add-member endpoint with the bot token. */
 export function liveBotAdd(botToken: string): BotAdd {
-  return async (guildId, userId, accessToken) => ({
-    result: await addGuildMember(guildId, userId, accessToken, botToken),
-    requestId: null,
-  });
+  return async (guildId, userId, accessToken) => {
+    const add = await addGuildMemberDetailed(guildId, userId, accessToken, botToken);
+    if (add.result !== "rate_limited" || add.retryAfter === undefined)
+      return { result: add.result, requestId: null };
+    return { result: add.result, requestId: null, retryAfter: add.retryAfter };
+  };
 }
 
 export type JoinFinish =
@@ -208,15 +218,22 @@ export type JoinFinish =
       requestId: string | null;
       discordId: string;
     }
-  | { kind: "recoverable"; outcome: JoinOutcome; requestId: string | null };
+  | {
+      kind: "recoverable";
+      outcome: JoinOutcome;
+      requestId: string | null;
+      retryAfter?: number;
+    };
 
 /**
  * The synchronous tail of the callback: one bot attempt owns the live token,
  * then the frame drops it. Outcomes mirror the legacy JoinOutcome enum:
- * added / already_member → sign in; any classified bot refusal
- * (rate_limited, forbidden, provider_outage, transport_failure, failed) or
- * any transport throw → degraded (sign-in succeeds, invite fallback offered);
- * the callback never stores the token, never logs it, never queues it.
+ * added / already_member → sign in; a rate-limited bot add → recoverable
+ * with the distinct `rate_limited` outcome (plus the bounded `retryAfter`
+ * when the bot seam carried one); any other classified bot refusal
+ * (forbidden, provider_outage, transport_failure, failed) or any transport
+ * throw → degraded (a `retryAfter` riding on any non-rate-limited answer is
+ * dropped); the callback never stores the token, never logs it, never queues it.
  */
 export async function finishJoin(
   bot: BotAdd,
@@ -227,13 +244,19 @@ export async function finishJoin(
 ): Promise<JoinFinish> {
   let result: JoinResult;
   let requestId: string | null = null;
+  let retryAfter: number | undefined;
   try {
     const answer = await bot(guildId, userId, accessToken);
     result = answer.result;
     requestId = answer.requestId;
+    retryAfter = answer.retryAfter;
   } catch {
     return { kind: "recoverable", outcome: "degraded", requestId: null };
   }
+  if (result === "rate_limited")
+    return retryAfter === undefined
+      ? { kind: "recoverable", outcome: "rate_limited", requestId }
+      : { kind: "recoverable", outcome: "rate_limited", requestId, retryAfter };
   if (result !== "joined" && result !== "already_member")
     return { kind: "recoverable", outcome: "degraded", requestId };
   const outcome: JoinOutcome = result === "joined" ? "added" : "already_member";
