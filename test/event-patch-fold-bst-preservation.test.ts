@@ -40,4 +40,13 @@ describe("mergePatchInput preserves the stored fold side on omitted instants", (
     expect(merged.startsAtUtc.toISOString()).toBe("2099-10-25T01:30:00.000Z");
     expect(merged.endsAtUtc.toISOString()).toBe("2099-10-25T03:00:00.000Z");
   });
+
+  it("a title-only PATCH keeps a BST-side (00:30Z) fold end instant", () => {
+    const merged = mergePatchInput(baseAt("2099-10-24T22:00:00.000Z", "2099-10-25T00:30:00.000Z"), {
+      title: "Fold-safe rename",
+    });
+    expect(merged.title).toBe("Fold-safe rename");
+    expect(merged.startsAtUtc.toISOString()).toBe("2099-10-24T22:00:00.000Z");
+    expect(merged.endsAtUtc.toISOString()).toBe("2099-10-25T00:30:00.000Z");
+  });
 });
