@@ -178,8 +178,14 @@ test("CLI fails closed on a missing secret and on wrangler failure without echoi
 // are synthetic strings, never real values.
 function assertNoChildCanary(result, ...canaries) {
   for (const canary of canaries) {
-    assert.ok(!result.stdout.includes(canary), `parent stdout must not forward child output ${canary}`);
-    assert.ok(!result.stderr.includes(canary), `parent stderr must not forward child output ${canary}`);
+    assert.ok(
+      !result.stdout.includes(canary),
+      `parent stdout must not forward child output ${canary}`,
+    );
+    assert.ok(
+      !result.stderr.includes(canary),
+      `parent stderr must not forward child output ${canary}`,
+    );
   }
 }
 
