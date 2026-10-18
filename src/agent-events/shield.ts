@@ -34,7 +34,7 @@ export async function shield(
       const [r] =
         await tx`SELECT count(*)::int AS n, coalesce(ceil(extract(epoch FROM (min(at) + interval '60 seconds' - now()))), 1)::int AS wait
                            FROM agent_event_hits WHERE bucket = ${bucket} AND at > now() - interval '60 seconds'`;
-      if (r!.n >= cfg.routePerMinute) return throttleEnvelope(Math.max(1, r!.wait));
+      if (r!.n >= cfg.routePerMinute) return throttleEnvelope(Math.max(1, r!.wait), requestId);
       await tx`INSERT INTO agent_event_hits (bucket) VALUES (${bucket})`;
       return null;
     });
