@@ -264,11 +264,15 @@ async function processAgentEvent(
         : "This grant is not bound to the admitted staging guild.",
     );
   }
-  // The guild comes from the grant, never the caller.
+  // The guild comes from the grant, never the caller. A supplied guild_id is
+  // admitted only when it is a string exactly equal to the grant guild: no
+  // String() coercion, so arrays, objects (including JSON null-conversion
+  // properties), booleans, numbers and boxed Strings refuse as wrong_guild
+  // instead of creating or throwing their way to a 500.
   if (
     doc.guild_id !== undefined &&
     doc.guild_id !== null &&
-    String(doc.guild_id) !== grant.guild_id
+    (typeof doc.guild_id !== "string" || doc.guild_id !== grant.guild_id)
   ) {
     return deny(
       grant,

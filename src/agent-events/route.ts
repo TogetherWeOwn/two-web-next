@@ -127,8 +127,9 @@ export const agentEventsAdmission: MiddlewareHandler<IngressEnv> = async (c, nex
   } finally {
     // Close on shield refusals, admission/service errors and normal completion
     // (413 and source-read failures never reach this middleware). Never close
-    // the injected fixture client; its owner manages its lifecycle.
-    if (!injected) c.executionCtx.waitUntil(sql.end({ timeout: 2 }));
+    // the injected fixture client; its owner manages its lifecycle. A failing
+    // close settles silently so it never surfaces as an unhandled rejection.
+    if (!injected) c.executionCtx.waitUntil(sql.end({ timeout: 2 }).catch(() => {}));
   }
 };
 

@@ -175,6 +175,7 @@ export function createDiscordWidgetHealth(deps: DiscordWidgetHealthDeps = {}): D
         available = false;
         if (wasAvailable)
           console.warn("discord widget unavailable; rendering the join fallback", {
+            guild_id: guildId,
             status: res.status,
           });
       }
@@ -182,6 +183,7 @@ export function createDiscordWidgetHealth(deps: DiscordWidgetHealthDeps = {}): D
       available = false;
       if (wasAvailable)
         console.warn("discord widget unavailable; rendering the join fallback", {
+          guild_id: guildId,
           exception: (error as Error).name,
         });
     }

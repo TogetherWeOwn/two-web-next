@@ -823,6 +823,13 @@ export class HealthTracker {
   private pendingAt: number | null = null;
   // Fences retried results to the attempt they settle; see AggregateTracker.
   private pendingAttemptId: string | undefined;
+  // Monotonic source-observation watermark: the newest source timestamp
+  // applied so far. A delayed observation stamped strictly older than this
+  // is ignored before it can clear a newer outage (or its pending page) or
+  // resurrect an outage a newer healthy sample already cleared. Equal
+  // timestamps are not strictly older, so same-time duplicates and retries
+  // still take effect.
+  private lastObservedAt: number | null = null;
   constructor(private readonly now: () => number = Date.now) {}
 
   snapshot(): {
@@ -830,12 +837,14 @@ export class HealthTracker {
     cooldownUntil: number;
     pendingAt: number | null;
     pendingAttemptId?: string;
+    lastObservedAt: number | null;
   } {
     return {
       downSince: this.downSince,
       cooldownUntil: this.cooldownUntil,
       pendingAt: this.pendingAt,
       ...(this.pendingAttemptId !== undefined ? { pendingAttemptId: this.pendingAttemptId } : {}),
+      lastObservedAt: this.lastObservedAt,
     };
   }
 
@@ -846,6 +855,7 @@ export class HealthTracker {
       cooldownUntil?: unknown;
       pendingAt?: unknown;
       pendingAttemptId?: unknown;
+      lastObservedAt?: unknown;
     };
     this.downSince = Number.isSafeInteger(state.downSince) ? (state.downSince as number) : null;
     this.cooldownUntil = Number.isSafeInteger(state.cooldownUntil)
@@ -853,6 +863,11 @@ export class HealthTracker {
       : 0;
     this.pendingAt = Number.isSafeInteger(state.pendingAt) ? (state.pendingAt as number) : null;
     this.pendingAttemptId = validAttemptId(state.pendingAttemptId);
+    // Legacy snapshots predate the watermark: they load safely with it unset,
+    // and the first accepted observation after the restore establishes it.
+    this.lastObservedAt = Number.isSafeInteger(state.lastObservedAt)
+      ? (state.lastObservedAt as number)
+      : null;
   }
 
   /** Identity of the current pending health attempt, if any. */
@@ -864,6 +879,11 @@ export class HealthTracker {
 
   /** Returns how long health has been red when a page is due, else null. */
   observe(ok: boolean, at = this.now()): number | null {
+    // Fence observation ordering, not arrival order: a strictly older sample
+    // is a successful no-op (null, nothing mutated) so it can neither clear
+    // a newer outage/pending page nor resurrect a cleared window.
+    if (this.lastObservedAt !== null && at < this.lastObservedAt) return null;
+    this.lastObservedAt = at;
     if (ok) {
       this.downSince = null;
       this.pendingAt = null;
@@ -1119,6 +1139,12 @@ export class AlertAggregator {
     return this.enqueue(async () => {
       const prior = structuredClone(this.health.snapshot());
       const downMs = this.health.observe(ok, at);
+      // A stale observation changes nothing (every mutated field is part of
+      // the snapshot), so there is nothing to publish: skip the write and
+      // answer success instead of persisting an identical value.
+      if (JSON.stringify(this.health.snapshot()) === JSON.stringify(prior)) {
+        return Response.json(null);
+      }
       try {
         await this.state.storage.put("health", this.health.snapshot());
       } catch (error) {
