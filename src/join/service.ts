@@ -43,10 +43,15 @@ export const THROTTLE_COUNTER_RETENTION_MINUTES = 5;
 
 /**
  * Bound on the per-bucket admission-lock wait. A held `web-throttle:` advisory
- * lock resolves fail-open within this bound (55P03 → allow, no hit charged)
- * instead of hanging a funnel request behind another isolate's admission.
- * Sized above the ~1s held-lock windows pinned by the concurrency suite and
- * well inside the 4s busy bound in `test/web-throttle-lock-busy.test.ts`.
+ * lock resolves to a refusal within this bound (55P03 → `{ limited: true }`,
+ * no hit charged) instead of hanging a funnel request behind another
+ * isolate's admission. Sized above the ~1s held-lock windows pinned by the
+ * concurrency suite and well inside the 4s busy bound in
+ * `test/web-throttle-lock-busy.test.ts`. A refusal is the correct mapping
+ * because every bucket is per client (`<name>:<clientKey>`): contention on a
+ * bucket only comes from that same client's parallel requests, which is the
+ * burst the throttle exists to limit — admitting it would turn the throttle
+ * off under exactly the load it exists to stop.
  */
 export const WEB_THROTTLE_LOCK_TIMEOUT_MS = 2000;
 
@@ -91,14 +96,15 @@ export type ThrottleVerdict = { limited: false } | { limited: true; retryAfter: 
  * (legacy funnel.php made the same call for the leaves: no throttle at all
  * rather than a cache-backed one that 500s when the database is down).
  *
- * Lock contention degrades the same way: the admission lock waits at most
- * `WEB_THROTTLE_LOCK_TIMEOUT_MS`, and a timed-out wait (55P03) resolves
- * fail-open allow with no hit charged — contention is load, not a verdict.
- * The join funnel calls this function with no catch of its own, so the
- * mapping lives here: a lock-timeout error never propagates to a caller and
- * never becomes a refusal. Any other store error still propagates (the
- * generic middleware maps it to allow; the direct join path to its outage
- * envelope).
+ * Lock contention is a refusal: the admission lock waits at most
+ * `WEB_THROTTLE_LOCK_TIMEOUT_MS`, and a timed-out wait (55P03) resolves to
+ * `{ limited: true, retryAfter: 1 }` with no hit charged — contention on a
+ * per-client bucket is that same client's burst, so the busy pass refuses
+ * with the shared 429 rather than admitting free. The join funnel calls this
+ * function with no catch of its own, so the mapping lives here: a
+ * lock-timeout error never propagates to a caller and never becomes an
+ * admission. Any other store error still propagates (the generic middleware
+ * maps it to allow; the direct join path to its outage envelope).
  */
 export async function checkJoinThrottle(
   sql: Sql | null,
@@ -134,8 +140,9 @@ export async function checkJoinThrottle(
     if ((err as { code?: string }).code !== "55P03") throw err;
     // Busy pass: the verdict transaction aborted with no hit inserted. Fall
     // through to the best-effort prune below so a busy pass still drains
-    // expired rows, then answer fail-open allow.
-    verdict = { limited: false };
+    // expired rows, then answer a refusal — the shared 429 with Retry-After: 1
+    // at every caller (join funnel, generic middleware, profile writes).
+    verdict = { limited: true, retryAfter: 1 };
   }
   // Global expiry cleanup stays outside the per-bucket admission lock so it
   // never prolongs it. Refused requests prune too: a bucket under sustained

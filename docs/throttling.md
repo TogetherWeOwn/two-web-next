@@ -49,12 +49,13 @@ differs by call site:
   with no injected test store lets the request through. This holds for both
   the generic middleware (via [`throttleStore`](../src/throttle.ts)) and the
   direct join helper (via [`joinStore`](../src/join/route-shared.ts)).
-- Held-bucket lock contention allows: a timed-out admission-lock wait (55P03)
+- Held-bucket lock contention refuses: a timed-out admission-lock wait (55P03)
   resolves inside [`checkJoinThrottle`](../src/join/service.ts) to
-  `{ limited: false }` with no hit charged — contention is load, not a
-  verdict — and the busy pass still runs the best-effort expiry prune below.
-  Any other store error still propagates (generic middleware allows, direct
-  join keeps its outage envelope).
+  `{ limited: true, retryAfter: 1 }` with no hit charged — contention on a
+  per-client bucket is that same client's burst, so the busy pass answers the
+  shared 429 rather than admitting free — and the busy pass still runs the
+  best-effort expiry prune below. Any other store error still propagates
+  (generic middleware allows, direct join keeps its outage envelope).
 - Generic middleware catches count failures:
   [`throttleGuard`](../src/throttle.ts) catches any throw from store
   acquisition or the count/insert and allows — a missed count beats a 500 on
