@@ -6,10 +6,8 @@
 // are never counted. Opted-out and erased members never appear: the inner join
 // on `users` drops erased rows, the left join on `profiles` drops opt-outs.
 // Rows carry rank + display name + count only: no timestamps, no presence.
-import { and, eq, gte, isNull, lt, or, sql } from "drizzle-orm";
-import { events, rsvps } from "../db/admin-schema";
+import { sql } from "drizzle-orm";
 import type { Db } from "../db/index";
-import { profiles, users } from "../db/schema";
 import { keyedMemberRead } from "../member-reads";
 import type { SeasonWindow } from "../hotzones/season";
 
@@ -59,52 +57,71 @@ export function parseActivityParam(raw: string | null | undefined): ActivityPars
 export type RankedMember = { userId: string; username: string; count: number };
 export type BoardRow = RankedMember & { rank: number };
 
+/** Members shown on the overall board: ranks 1..100. */
+export const OVERALL_CAP = 100;
+
+type AggregateRow = { user_id: string; username: string; count: number | string };
+
 /**
- * One keyed read: a row per counted going RSVP, folded to counts here. The
- * member-read boundary needs plain column projections, so aggregation stays in
- * application code. `db = null` (no database configured) yields no rows.
+ * One keyed read: DB-side GROUP BY + COUNT with a deterministic
+ * `count DESC, userId ASC` order. The overall scope caps at OVERALL_CAP via
+ * LIMIT; the relative scope reads the full grouped ranking (one row per
+ * ranked member, never one row per RSVP) so a viewer below #100 keeps their
+ * ±5 window. Counting matches the old per-RSVP fold exactly: only `going`
+ * RSVPs for published events inside the season window count, with the same
+ * `?activity=` game filter, opt-out and member filters. `db = null` (no
+ * database configured) yields no rows.
  */
 export async function loadMemberRanking(
   db: Db | null,
   window: SeasonWindow,
   game: string | null,
+  scope: MemberScope = "overall",
 ): Promise<RankedMember[]> {
   if (!db) return [];
-  const rows = await keyedMemberRead(() =>
-    db
-      .select({ userId: rsvps.userId, id: users.id, username: users.username })
-      .from(rsvps)
-      .innerJoin(events, eq(events.id, rsvps.eventId))
-      .innerJoin(users, eq(users.id, rsvps.userId))
-      .leftJoin(profiles, eq(profiles.userId, rsvps.userId))
-      .where(
-        and(
-          eq(rsvps.status, "going"),
-          eq(events.status, "published"),
-          eq(users.member, true),
-          or(isNull(profiles.leaderboardOptOut), eq(profiles.leaderboardOptOut, false)),
-          window.kind === "window" ? gte(events.startsAt, window.start) : undefined,
-          window.kind === "window" ? lt(events.startsAt, window.end) : undefined,
-          game === null ? undefined : sql`lower(trim(${events.game})) = ${game}`,
-        ),
-      ),
-  );
-  const byUser = new Map<string, RankedMember>();
-  for (const row of rows) {
-    const entry = byUser.get(row.userId);
-    if (entry) entry.count += 1;
-    else byUser.set(row.userId, { userId: row.userId, username: row.username, count: 1 });
-  }
-  return [...byUser.values()].sort(
-    (a, b) => b.count - a.count || (a.userId < b.userId ? -1 : a.userId > b.userId ? 1 : 0),
-  );
+  // Raw sql`` interpolation does not serialize Date bounds the way the
+  // query builder does (see src/hotzones/aggregates.ts): pass ISO strings so
+  // the postgres driver binds them as timestamptz.
+  const dateFilter =
+    window.kind === "window"
+      ? sql`and events.starts_at >= ${window.start.toISOString()} and events.starts_at < ${window.end.toISOString()}`
+      : sql``;
+  const gameFilter = game === null ? sql`` : sql`and lower(trim(events.game)) = ${game}`;
+  // LIMIT is a literal cap, not a bound param: the raw-member-owner guard
+  // matches the exact statement shape (see src/db/read-classification.ts).
+  // Built from OVERALL_CAP so the constant stays the single source of truth.
+  const limitClause = scope === "overall" ? sql.raw(`limit ${OVERALL_CAP}`) : sql``;
+  const rows = (await keyedMemberRead(() =>
+    db.execute(sql`
+      select rsvps.user_id as user_id, users.username as username, count(*)::int as count
+      from rsvps
+      inner join events on events.id = rsvps.event_id
+      inner join users on users.id = rsvps.user_id
+      left join profiles on profiles.user_id = rsvps.user_id
+      where rsvps.status = 'going'
+        and events.status = 'published'
+        and users.member = true
+        and (profiles.leaderboard_opt_out is null or profiles.leaderboard_opt_out = false)
+        ${dateFilter}
+        ${gameFilter}
+      group by rsvps.user_id, users.username
+      order by count(*) desc, rsvps.user_id asc
+      ${limitClause}
+    `),
+  )) as unknown as AggregateRow[];
+  return rows.flatMap((row) => {
+    if (typeof row.user_id !== "string" || typeof row.username !== "string") return [];
+    const count = Number(row.count);
+    if (!Number.isSafeInteger(count) || count <= 0) return [];
+    return [{ userId: row.user_id, username: row.username, count }];
+  });
 }
 
 /**
- * Rows to render. Overall = the whole ranking. Relative = the viewer plus up
- * to RELATIVE_NEIGHBORS on each side, clamped to the board edges (never more
- * than 2 * RELATIVE_NEIGHBORS + 1 rows); a viewer with no counted RSVP is not
- * on the board and gets no rows.
+ * Rows to render. Overall = the top OVERALL_CAP rows (ranks 1..100).
+ * Relative = the viewer plus up to RELATIVE_NEIGHBORS on each side, clamped
+ * to the board edges (never more than 2 * RELATIVE_NEIGHBORS + 1 rows); a
+ * viewer with no counted RSVP is not on the board and gets no rows.
  */
 export function boardRows(
   ranked: RankedMember[],
@@ -112,7 +129,7 @@ export function boardRows(
   viewerId: string,
 ): BoardRow[] {
   const numbered = ranked.map((member, i) => ({ ...member, rank: i + 1 }));
-  if (scope === "overall") return numbered;
+  if (scope === "overall") return numbered.slice(0, OVERALL_CAP);
   const at = ranked.findIndex((member) => member.userId === viewerId);
   if (at < 0) return [];
   return numbered.slice(Math.max(0, at - RELATIVE_NEIGHBORS), at + RELATIVE_NEIGHBORS + 1);

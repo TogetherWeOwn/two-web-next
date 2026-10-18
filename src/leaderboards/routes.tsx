@@ -34,7 +34,7 @@ export function registerMemberLeaderboardRoutes(
     if (!activity.ok) return bufferedMemberText(c, activity.message, 400);
     const viewer = c.get("viewer");
     const db = await dbFor(c);
-    const ranked = await loadMemberRanking(db, window, activity.game);
+    const ranked = await loadMemberRanking(db, window, activity.game, scope.scope);
     const rows = boardRows(ranked, scope.scope, viewer.id);
     const season = window.label;
     c.set("boardView", {

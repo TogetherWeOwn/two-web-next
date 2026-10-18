@@ -170,6 +170,17 @@ been observed. Tune the gates in `tail/worker.ts` (`SPIKE_MIN_ERRORS`,
 `SPIKE_MIN_RATE`, `SPIKE_MIN_CRASHES`, `SPIKE_COOLDOWN_MS`) only with staging
 evidence; on a quiet site the count floor, not the rate, is what fires.
 
+Attribution is honest about the whole counted window. `build_sha` is present
+only on a homogeneous page: every counted bucket in the window carries the
+same validated build, through the same 40-hex version-tag and release-log
+pairing as above (a bare tag and a production-suffixed tag of one SHA count
+as one build). A mixed window — two builds in one bucket or across buckets,
+or any counted bucket with unknown attribution (an untagged or invalid batch,
+or counts restored from before provenance existed) — pages with `build_sha`
+omitted rather than assigning every failure to the latest build. Thresholds,
+counts, timing and cooldowns stay script-wide either way, and per-trace
+fingerprint summaries keep their own trace's `build_sha`.
+
 ### Scheduled `/up` prober: `uptime.down`
 
 The Tail Worker's scheduled handler generates a third event, `uptime.down`,
