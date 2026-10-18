@@ -1246,6 +1246,39 @@ export function createTailWorker(
 
   type ObservationSource = "aggregator" | "local";
   type SpikeObservation = SpikeAlert & { attemptId?: string; source: ObservationSource };
+
+  // Visibility for a malfunctioning aggregator: one classified console line
+  // per fallback (non-OK, unparseable, wrong-shape 200 on spike/observe and
+  // health). Console, not the sink: sink lines are delivery receipts and
+  // exact-receipt assertions pin them. Only fixed tokens plus a numeric
+  // status: never payload bytes, the webhook credential, the trace token,
+  // or the internal aggregator URL. Thrown/stalled operations stay silent
+  // (deliberately unpinned) so stall coverage keeps its exact shape.
+  type AggregatorFallbackClass = "non-ok" | "unparseable" | "wrong-shape";
+  function warnAggregatorFallback(
+    path: "spike" | "health",
+    failure: AggregatorFallbackClass,
+    status?: number,
+  ): void {
+    try {
+      console.warn(
+        JSON.stringify({
+          event: "aggregator.fallback",
+          path,
+          fallback: "aggregator-fallback",
+          reason:
+            failure === "non-ok"
+              ? "non-ok-status"
+              : failure === "unparseable"
+                ? "unparseable-json"
+                : "wrong-shape",
+          ...(status !== undefined ? { status } : {}),
+        }),
+      );
+    } catch {
+      /* Diagnostics never throw. */
+    }
+  }
   function normalizeSpikeObservation(value: unknown): SpikeObservation | null {
     if (value === null) return null;
     if (!value || typeof value !== "object" || Array.isArray(value)) return null;
@@ -1271,24 +1304,41 @@ export function createTailWorker(
     try {
       // One independent deadline covers request plus body parsing: headers
       // followed by a stalled JSON body expire as a single operation.
-      const operation = (async () => {
+      type ObserveOutcome =
+        | { fallback: true; failure: AggregatorFallbackClass; status?: number }
+        | { data: SpikeObservation | null };
+      const operation: Promise<ObserveOutcome> = (async () => {
         const response = await stub.fetch("https://aggregator.invalid/observe", {
           method: "POST",
           headers: { "content-type": "application/json" },
           body: JSON.stringify(batch),
           signal: AbortSignal.timeout(AGGREGATOR_TIMEOUT_MS),
         });
-        if (!response.ok) return { fallback: true as const };
-        const raw: unknown = await response.json();
+        if (!response.ok)
+          return { fallback: true as const, failure: "non-ok" as const, status: response.status };
+        let raw: unknown;
+        try {
+          raw = await response.json();
+        } catch {
+          return { fallback: true as const, failure: "unparseable" as const };
+        }
         const spike = normalizeSpikeObservation(raw);
         // A 200 that parses to anything other than null or a valid spike
         // alert is a malfunctioning aggregator: fall back to local counts so
         // it can never suppress the spike page.
-        if (raw !== null && spike === null) return { fallback: true as const };
+        if (raw !== null && spike === null)
+          return { fallback: true as const, failure: "wrong-shape" as const };
         return { data: spike };
       })();
       const result = await withAggregatorDeadline(operation);
-      if ("fallback" in result) return localObserve();
+      if ("fallback" in result) {
+        warnAggregatorFallback(
+          "spike",
+          result.failure,
+          "status" in result ? result.status : undefined,
+        );
+        return localObserve();
+      }
       return result.data;
     } catch {
       // Aggregation is additive: a broken binding falls back to local counts
@@ -1389,24 +1439,34 @@ export function createTailWorker(
     try {
       // One independent deadline covers request plus body parsing, matching
       // observeBatch: expiry takes the existing local fallback.
-      const operation = (async () => {
+      type HealthOutcome =
+        | { fallback: true; failure: AggregatorFallbackClass; status?: number }
+        | { downMs: number | null; attemptId: string | null; source: "aggregator" };
+      const operation: Promise<HealthOutcome> = (async () => {
         const response = await stub.fetch("https://aggregator.invalid/health", {
           method: "POST",
           headers: { "content-type": "application/json" },
           body: JSON.stringify({ ok, at }),
           signal: AbortSignal.timeout(AGGREGATOR_TIMEOUT_MS),
         });
-        if (!response.ok) return { fallback: true as const };
-        const data: unknown = await response.json();
+        if (!response.ok)
+          return { fallback: true as const, failure: "non-ok" as const, status: response.status };
+        let data: unknown;
+        try {
+          data = await response.json();
+        } catch {
+          return { fallback: true as const, failure: "unparseable" as const };
+        }
         // Well-formed answers are exactly null or an object with a numeric
         // downMs. Anything else on a 200 is a malfunctioning aggregator:
         // fall back to the local health observation so it can never suppress
         // the uptime page.
         if (data === null) return { downMs: null, attemptId: null, source: "aggregator" as const };
         if (typeof data !== "object" || data === null || Array.isArray(data))
-          return { fallback: true as const };
+          return { fallback: true as const, failure: "wrong-shape" as const };
         const { downMs, attemptId } = data as { downMs?: unknown; attemptId?: unknown };
-        if (typeof downMs !== "number") return { fallback: true as const };
+        if (typeof downMs !== "number")
+          return { fallback: true as const, failure: "wrong-shape" as const };
         return {
           downMs,
           attemptId: validAttemptId(attemptId) ?? null,
@@ -1414,7 +1474,14 @@ export function createTailWorker(
         };
       })();
       const result = await withAggregatorDeadline(operation);
-      if ("fallback" in result) return local();
+      if ("fallback" in result) {
+        warnAggregatorFallback(
+          "health",
+          result.failure,
+          "status" in result ? result.status : undefined,
+        );
+        return local();
+      }
       // A healthy probe handled durably still ends the local red window:
       // without this, a fallback-red / aggregator-healthy / fallback-red
       // sequence pages as continuous red from the first run. Healthy
