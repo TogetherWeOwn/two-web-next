@@ -983,14 +983,19 @@ export function createTailWorker(
     }
   }
 
-  type SpikeObservation = SpikeAlert & { attemptId?: string };
+  type ObservationSource = "aggregator" | "local";
+  type SpikeObservation = SpikeAlert & { attemptId?: string; source: ObservationSource };
   function normalizeSpikeObservation(value: unknown): SpikeObservation | null {
     if (value === null) return null;
     if (!value || typeof value !== "object" || Array.isArray(value)) return null;
     const record = value as Record<string, unknown> & SpikeAlert;
     if (record.event !== "error.spike" || typeof record.script !== "string") return null;
     const attemptId = validAttemptId((record as { attemptId?: unknown }).attemptId);
-    return { ...(record as SpikeAlert), ...(attemptId ? { attemptId } : {}) };
+    return {
+      ...(record as SpikeAlert),
+      ...(attemptId ? { attemptId } : {}),
+      source: "aggregator",
+    };
   }
 
   async function observeBatch(env: TailEnv, batch: TraceBatch): Promise<SpikeObservation | null> {
@@ -998,7 +1003,7 @@ export function createTailWorker(
       const alert = tracker.observe(batch);
       if (alert === null) return null;
       const attemptId = tracker.pendingAttemptId(batch.script);
-      return attemptId ? { ...alert, attemptId } : { ...alert };
+      return attemptId ? { ...alert, attemptId, source: "local" } : { ...alert, source: "local" };
     };
     const stub = aggregator(env);
     if (!stub) return localObserve();
@@ -1059,10 +1064,20 @@ export function createTailWorker(
     script: string,
     delivered: boolean,
     attemptId?: string,
+    source?: ObservationSource,
   ): Promise<void> {
     const stub = aggregator(env);
     if (!stub) return tracker.resolve(script, delivered, attemptId);
-    await postAggregatorResult(stub, "/spike-result", { script, delivered, attemptId });
+    // A locally-originated page never matches the DO's pending attempt, so it
+    // posts without an identity: an applied-but-unacknowledged DO attempt
+    // still settles (legacy settle-any) instead of suppressing the failed
+    // delivery's retry for a full cooldown. The local tracker settles with
+    // its own identity.
+    await postAggregatorResult(
+      stub,
+      "/spike-result",
+      source === "local" ? { script, delivered } : { script, delivered, attemptId },
+    );
     // Resolve locally too, whatever the aggregator answered: the observation
     // may have fallen back to this tracker while the result call recovered,
     // and a leftover local pending would suppress a failed delivery's retry.
@@ -1073,10 +1088,15 @@ export function createTailWorker(
     env: TailEnv,
     delivered: boolean,
     attemptId?: string | null,
+    source?: ObservationSource,
   ): Promise<void> {
     const stub = aggregator(env);
     if (!stub) return health.resolve(delivered, attemptId ?? undefined);
-    await postAggregatorResult(stub, "/health-result", { delivered, attemptId });
+    await postAggregatorResult(
+      stub,
+      "/health-result",
+      source === "local" ? { delivered } : { delivered, attemptId },
+    );
     health.resolve(delivered, attemptId ?? undefined);
   }
 
@@ -1084,10 +1104,18 @@ export function createTailWorker(
     env: TailEnv,
     ok: boolean,
     at: number,
-  ): Promise<{ downMs: number | null; attemptId: string | null }> {
-    const local = (): { downMs: number | null; attemptId: string | null } => {
+  ): Promise<{ downMs: number | null; attemptId: string | null; source: ObservationSource }> {
+    const local = (): {
+      downMs: number | null;
+      attemptId: string | null;
+      source: ObservationSource;
+    } => {
       const downMs = health.observe(ok, at);
-      return { downMs, attemptId: downMs === null ? null : health.pendingAttempt() };
+      return {
+        downMs,
+        attemptId: downMs === null ? null : health.pendingAttempt(),
+        source: "local",
+      };
     };
     const stub = aggregator(env);
     if (!stub) return local();
@@ -1103,8 +1131,13 @@ export function createTailWorker(
         });
         if (!response.ok) return { fallback: true as const };
         const data = (await response.json()) as { downMs?: unknown; attemptId?: unknown } | null;
-        if (!data || typeof data.downMs !== "number") return { downMs: null, attemptId: null };
-        return { downMs: data.downMs, attemptId: validAttemptId(data.attemptId) ?? null };
+        if (!data || typeof data.downMs !== "number")
+          return { downMs: null, attemptId: null, source: "aggregator" as const };
+        return {
+          downMs: data.downMs,
+          attemptId: validAttemptId(data.attemptId) ?? null,
+          source: "aggregator" as const,
+        };
       })();
       const result = await withAggregatorDeadline(operation);
       if ("fallback" in result) return local();
@@ -1263,11 +1296,12 @@ export function createTailWorker(
       for (const batch of batches.values()) {
         const observed = await observeBatch(env, batch);
         if (!observed) continue;
-        // The fencing identity stays internal: strip it before delivery and
-        // receipts so external payloads keep their long-standing shape.
-        const { attemptId, ...spike } = observed;
+        // The fencing identity and observation source stay internal: strip
+        // both before delivery and receipts so external payloads keep
+        // their long-standing shape.
+        const { attemptId, source, ...spike } = observed;
         const delivered = await deliver(url, spike);
-        await resolveSpike(env, spike.script, delivered, attemptId);
+        await resolveSpike(env, spike.script, delivered, attemptId, source);
         sink(
           JSON.stringify({
             ...spike,
@@ -1328,7 +1362,7 @@ export function createTailWorker(
         if (second.ok) {
           await observeHealth(env, true, at);
         } else {
-          const { downMs, attemptId } = await observeHealth(env, false, at);
+          const { downMs, attemptId, source } = await observeHealth(env, false, at);
           // Red, but not yet red for over two minutes (or cooling down):
           // no uptime page this run; synthetics below still run.
           if (downMs !== null) {
@@ -1339,7 +1373,7 @@ export function createTailWorker(
               timestamp: new Date(at).toISOString(),
             };
             const delivered = await deliver(url, alert);
-            await resolveHealth(env, delivered, attemptId);
+            await resolveHealth(env, delivered, attemptId, source);
             sink(
               JSON.stringify({
                 ...alert,
