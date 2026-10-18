@@ -1,0 +1,1 @@
+CREATE INDEX IF NOT EXISTS "join_attempts_discord_id_idx" ON "join_attempts" USING btree ("discord_id");

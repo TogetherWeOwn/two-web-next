@@ -18,6 +18,10 @@
 # sleeps, fail closed). Repo-specific bits stay in the caller (build,
 # secrets preflight, upload). Only versions upload/promote/rollback run
 # here: nothing may re-sync custom domains or cron triggers as a side effect.
+# The stage gates call smoke WITHOUT --fail-on-ready-wait-critical (warn-only
+# on critical): the ready-wait age reflects shared queue_jobs state, not the
+# canary version, so a stuck queue must not block its own fix from promoting.
+# Staging deploy passes the flag; production promotion never does.
 name: gradual-prod-promote
 description: Promote an uploaded Worker version 5-50-100 percent with per-stage health/SLO gates and automatic rollback
 

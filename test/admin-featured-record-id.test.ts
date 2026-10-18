@@ -232,7 +232,8 @@ for (const route of routes) {
         });
         expect(res.status).toBe(429);
         expect(res.headers.get("retry-after")).toBe("17");
-        expect(sql).toHaveBeenCalledTimes(1);
+        // Count + age-only prune per refused request; still no admission work.
+        expect(sql).toHaveBeenCalledTimes(2);
         expect(sql.mock.calls[0]![1]).toBe("admin-write:anon");
         expectNoRecordAccess();
       });
