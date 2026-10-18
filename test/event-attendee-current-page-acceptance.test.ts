@@ -99,6 +99,23 @@ async function seedPaging(db: MemberDataFixture["db"]) {
 
 const CURRENT_ID = 'data-testid="event-attendees-current-page"';
 
+// Test-only text extraction for assertions (no HTML sink): walk angle
+// brackets instead of a `<...>` regex replace so the helper does not read
+// as an HTML sanitizer (CodeQL incomplete sanitization). tagReplacement is
+// emitted once per tag, mirroring the empty- vs space-join at the call sites.
+function textOutsideTags(fragment: string, tagReplacement = "") {
+  let out = "";
+  let inTag = false;
+  for (const ch of fragment) {
+    if (ch === "<" && !inTag) {
+      out += tagReplacement;
+      inTag = true;
+    } else if (ch === ">" && inTag) inTag = false;
+    else if (!inTag) out += ch;
+  }
+  return out;
+}
+
 function currentPageElement(html: string) {
   const m = html.match(
     new RegExp(`<([a-zA-Z][a-zA-Z0-9-]*)\\b([^>]*${CURRENT_ID}[^>]*)>([\\s\\S]*?)</\\1>`),
@@ -106,10 +123,7 @@ function currentPageElement(html: string) {
   if (!m) return null;
   return {
     attrs: m[2]!,
-    text: m[3]!
-      .replace(/<[^>]*>/g, "")
-      .replace(/\s+/g, " ")
-      .trim(),
+    text: textOutsideTags(m[3]!).replace(/\s+/g, " ").trim(),
     index: m.index!,
   };
 }
@@ -119,7 +133,7 @@ function attendeesNav(html: string) {
   if (!m) return null;
   return {
     inner: m[1]!,
-    text: m[1]!.replace(/<[^>]*>/g, " ").replace(/\s+/g, " "),
+    text: textOutsideTags(m[1]!, " ").replace(/\s+/g, " "),
     index: m.index!,
     end: m.index! + m[0].length,
   };
