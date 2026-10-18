@@ -134,13 +134,10 @@ describe.skipIf(!process.env.DATABASE_URL)("unknown-event withdraw throttle (age
   const rows = (eventId: number) => db.select().from(rsvps).where(eq(rsvps.eventId, eventId));
 
   async function seed(): Promise<{ id: number; key: string }> {
-    const key = `01UW${Math.random()
-      .toString(36)
-      .slice(2, 14)
-      .toUpperCase()
-      .replace(/[ILOU]/g, "7")}`
+    const key = `01W9${Math.random().toString(36).slice(2, 14).toUpperCase()}`
       .padEnd(26, "0")
-      .slice(0, 26);
+      .slice(0, 26)
+      .replace(/[ILOU]/g, "7");
     const [row] = await db
       .insert(events)
       .values({
