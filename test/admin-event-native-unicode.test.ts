@@ -275,7 +275,7 @@ describe.skipIf(process.env.ADMIN_EVENT_BROWSER_TESTS !== "true")(
             `${currentMode}: ${method} N/N+1 $label ${field} code points`,
             async ({ characters }) => {
               await load(currentMode);
-              const input = page.locator(`input[name="${field}"]`);
+              const input = page.locator(`input[name="${field}"], textarea[name="${field}"]`);
               const value = text(characters, max);
               await input.fill("");
               if (method === "typing") {
