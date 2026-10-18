@@ -18,6 +18,7 @@ const base = {
 const limits = [
   { field: "title", max: 100 },
   { field: "game", max: 100 },
+  { field: "description", max: 1000 },
   { field: "location", max: 255 },
 ] as const;
 const patterns = [
@@ -107,13 +108,13 @@ describe("admin event code-point contract", () => {
     }
   });
   it.each(["new", "edit"] as const)(
-    "enhances only the three scoped %s controls and retains native POST",
+    "enhances only the four scoped %s controls and retains native POST",
     (mode) => {
       const html = form(mode);
       expect(html).toContain('<script type="module" src="/islands/admin-event-text-limits.js"');
       expect(html).toContain('<form method="post" action="/admin/events');
       for (const { field, max } of limits) {
-        const input = html.match(new RegExp(`<input[^>]*name="${field}"[^>]*>`))![0];
+        const input = html.match(new RegExp(`<(?:input|textarea)[^>]*name="${field}"[^>]*>`))![0];
         expect(input).toContain(`data-event-text-limit="${max}"`);
         expect(input).not.toContain("maxlength");
         const rejected = form(mode, base, { [field]: "Server feedback" });
@@ -121,7 +122,7 @@ describe("admin event code-point contract", () => {
         expect(rejected).toContain("Server feedback");
       }
       expect(html).toMatch(/name="title"[^>]*required/);
-      expect(html.match(/data-event-text-limit=/g)).toHaveLength(3);
+      expect(html.match(/data-event-text-limit=/g)).toHaveLength(4);
       expect(html).toContain('src="/islands/admin-event-editor.js"');
     },
   );
