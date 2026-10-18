@@ -54,6 +54,8 @@ export const EventPage: FC<{
   member?: boolean;
   answer?: ViewerRsvp | null;
   returnTo?: string;
+  /** Normalized native attendee page for the RSVP form action. */
+  attendeePage?: number;
   /** Rooted .md alternate path (A2), e.g. `/e/<key>.md`. */
   markdownAlternate?: string;
 }> = ({
@@ -71,6 +73,7 @@ export const EventPage: FC<{
   member = false,
   answer = null,
   returnTo,
+  attendeePage = 1,
   markdownAlternate,
 }) => {
   const path = `/e/${e.eventKey}`;
@@ -147,6 +150,7 @@ export const EventPage: FC<{
           answer={answer}
           waitlistPosition={waitlistPosition}
           returnTo={returnTo ?? path}
+          attendeePage={attendeePage}
         />
         <script src="/islands/rsvp-button.js" defer />
       </div>
@@ -230,6 +234,9 @@ export const EventPage: FC<{
                   ← Previous attendees
                 </a>
               ) : null}{" "}
+              <span data-testid="event-attendees-current-page" aria-current="page">
+                Page {attendeesPaging.page}
+              </span>{" "}
               {attendeesPaging.nextHref ? (
                 <a href={attendeesPaging.nextHref} rel="next" data-testid="event-attendees-next">
                   Next attendees →

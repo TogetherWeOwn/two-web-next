@@ -1,5 +1,6 @@
 // Minimal Discord OAuth2 + guild auto-join. No SDK: three HTTP calls, all typed here.
 import { discordFetch } from "./discord-http";
+import { MAX_RETRY_DELAY_SECONDS } from "./jobs/retry-delay";
 const API = "https://discord.com/api/v10";
 
 // identify: who they are. guilds.join: lets our bot add them to the TWO server in one click.
@@ -46,14 +47,20 @@ export type DiscordFailureKind =
 
 export class DiscordError extends Error {
   readonly providerCode: string | null;
+  readonly retryAfter: number | undefined;
   constructor(
     readonly step: string,
     readonly status: number,
     readonly kind: DiscordFailureKind,
     providerCode: string | null = null,
+    retryAfter?: number,
   ) {
     super(`discord ${step} failed with HTTP ${status}`);
     this.providerCode = providerCode;
+    // Bounded integer delta-seconds from a 429's `retry-after` header, for
+    // callers that surface provider backoff (join recovery). Undefined unless
+    // a usable 429 backoff was present: never a body value, never raw text.
+    this.retryAfter = retryAfter;
     this.name = "DiscordError";
   }
 }
@@ -103,9 +110,36 @@ async function errorBodyOf(res: Response): Promise<string> {
   }
 }
 
+/**
+ * Bounded `retry-after` seconds from a 429 response, for callers that surface
+ * provider backoff as a `Retry-After` header. Same numeric-only parse style as
+ * `src/events/discord-transients-live.ts` (trimmed digits with an optional
+ * fraction, finite and representable — no HTTP dates, signs, exponents, units
+ * or markup), then the `src/jobs/retry-delay.ts` admission posture: fractions
+ * round UP so the client never retries sooner than the provider asked, values
+ * below 1s are unusable, and representable-but-absurd values cap at the
+ * largest admitted delay instead of echoing raw. Anything unusable yields
+ * undefined so the caller falls back to today's headerless response.
+ */
+function providerRetryAfterSeconds(res: Response): number | undefined {
+  // `Number(null)` and `Number("")` are 0: an absent header must not read as backoff.
+  const raw = res.headers.get("retry-after")?.trim();
+  if (!raw || !/^\d+(?:\.\d+)?$/.test(raw)) return undefined;
+  const n = Number(raw);
+  // Only representable numeric delays are valid; no HTTP dates or infinity.
+  if (!Number.isFinite(n) || n * 1000 > 8_000_000_000_000_000) return undefined;
+  const seconds = Math.ceil(n);
+  if (seconds < 1) return undefined;
+  return Math.min(seconds, MAX_RETRY_DELAY_SECONDS);
+}
+
 function classified(step: string, res: Response, body: string): DiscordError {
   const providerCode = providerCodeOf(res.status, body);
-  return new DiscordError(step, res.status, kindOf(res.status, providerCode), providerCode);
+  const kind = kindOf(res.status, providerCode);
+  // Only 429 backoff flows through: any other status keeps today's headerless
+  // response even when the provider sent a `retry-after` header.
+  const retryAfter = kind === "rate_limited" ? providerRetryAfterSeconds(res) : undefined;
+  return new DiscordError(step, res.status, kind, providerCode, retryAfter);
 }
 
 /** Wrap a transport throw the same way: bounded class, no raw message. */

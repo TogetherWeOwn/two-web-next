@@ -7,9 +7,9 @@
 // NUL on every surface below; those rows are regression pins. `game` lets
 // NUL reach the persistence call on every surface; those rows are RED until
 // the paired build adds the guard. Only the field-error KEY is pinned —
-// message wording is free. No-broadening control: a non-NUL control (BEL,
-// U+0007) in `game` is accepted today and must stay accepted, so reusing a
-// broad control-character ban for `game` fails this suite.
+// message wording is free. Broadened control scope: non-NUL controls (BEL,
+// U+0007) in `game` are refused like the sibling fields, so the rows below
+// pin that refusal; tab, LF, CR and genuine emoji ZWJ sequences stay accepted.
 import { Hono } from "hono";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { EnvWithAdminDb } from "../src/admin/db";
@@ -115,8 +115,11 @@ describe("parseEventForm NUL rejection", () => {
     );
   });
 
-  it("does not broaden: BEL (U+0007) in game stays accepted verbatim", () => {
-    expect(parseEventForm({ ...base, game: "a\u0007b" }).game).toBe("a\u0007b");
+  it("refuses BEL (U+0007) in game naming only game (broadened control scope)", () => {
+    const errors = parseErrors({ ...base, game: "a\u0007b" });
+    expect(Object.keys(errors)).toEqual(["game"]);
+    expect(errors.game).toEqual(expect.any(String));
+    expect(errors.game!.length).toBeGreaterThan(0);
   });
 
   it("keeps empty optional text null", () => {
@@ -137,9 +140,12 @@ describe("agent validateFields NUL rejection", () => {
     });
   }
 
-  it("accepts valid multibyte and BEL game text verbatim", () => {
+  it("refuses BEL in game even alongside valid multibyte text", () => {
     const result = validateFields({ ...base, game: "a\u0007b 将棋" });
-    expect(result).toMatchObject({ ok: true, fields: { game: "a\u0007b 将棋" } });
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("unreachable");
+    expect(Object.keys(result.errors)).toEqual(["game"]);
+    expect(result.errors.game).toEqual([expect.any(String)]);
   });
 });
 
@@ -250,15 +256,17 @@ describe("moderator JSON event NUL rejection", () => {
       });
     }
 
-    it(`${method}: BEL and multibyte game text persists verbatim`, async () => {
-      const game = "a\u0007b 将棋 😀";
+    it(`${method}: BEL in game is 422 invalid naming only game, without writing`, async () => {
+      const game = "a\u0007b 将棋";
       const data = method === "POST" ? { ...base, game } : { game };
       const res = await request(method, data);
-      expect(res.status).toBe(method === "POST" ? 201 : 200);
-      expect(await res.json()).toMatchObject({ data: { game } });
-      const write = method === "POST" ? createEvent : updateEvent;
-      expect(write).toHaveBeenCalledTimes(1);
-      expect(vi.mocked(write).mock.calls[0]!.at(-1)).toMatchObject({ game });
+      expect(res.status).toBe(422);
+      const body = (await res.json()) as { error: string; fields: Record<string, string> };
+      expect(body.error).toBe("invalid");
+      expect(Object.keys(body.fields)).toEqual(["game"]);
+      expect(body.fields.game!.length).toBeGreaterThan(0);
+      expect(createEvent).not.toHaveBeenCalled();
+      expect(updateEvent).not.toHaveBeenCalled();
     });
   }
 

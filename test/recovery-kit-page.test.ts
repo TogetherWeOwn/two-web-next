@@ -268,12 +268,13 @@ describe("recovery outcomes through the injected renderer", () => {
     const html = await res.text();
     expect(html).toContain("Join cancelled");
     expectRecoveryShell(html);
-    expect(html).toContain('href="/join/discord"');
+    expect(html).toContain('href="/join/discord?next=%2Fevents"');
     expect(html).not.toContain(TOKEN);
     expect(html).not.toContain("error_description");
     expect(calls).toHaveLength(0);
+    const requestId = res.headers.get("x-request-id");
     expect(fake.attempts).toEqual([
-      { outcome: "denied", source: "web-homepage", requestId: null, discordId: null },
+      { outcome: "denied", source: "web-homepage", requestId, discordId: null },
     ]);
     const cleared = res.headers.getSetCookie().join("\n");
     for (const name of ["state", "source", "next"]) {

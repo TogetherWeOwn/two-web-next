@@ -24,6 +24,7 @@ const routes = [
   { path: "/events.ics", statuses: [200], type: "text/calendar", body: /BEGIN:VCALENDAR/ },
   { path: "/sitemap_index.xml", statuses: [200], type: "application/xml", body: /<urlset\b/ },
   { path: "/robots.txt", statuses: [200], type: "text/plain", body: /User-agent:/i },
+  { path: "/.well-known/security.txt", statuses: [200], type: "text/plain", body: /Contact:/ },
   { path: "/discord", statuses: [302], redirect: "discord" },
   { path: "/profile", statuses: [302], redirect: "login" },
   { path: "/admin", statuses: [302, 403], redirect: "login" },
@@ -49,6 +50,24 @@ export const VERSION_OVERRIDE_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}="[0-9a
 export const SMOKE_QUEUE_WARN_AT = 20;
 export const SMOKE_QUEUE_CRITICAL_AT = 100;
 
+// Pinned review date shared with src/security-txt.ts (re-exported expiry).
+// This file runs on plain node with no TS loader, so the value is duplicated
+// here and pinned by the drift guard in test/smoke.test.mjs: an expiry change
+// in src/security-txt.ts fails `npm run test:smoke` at PR time with a drift
+// message; update the value below to match.
+export const SMOKE_SECURITY_TXT_EXPIRES = "2027-10-01T00:00:00Z";
+
+// Previously reviewed Expires values, oldest last. The rollback smoke runs
+// HEAD's checker against the rolled-back Worker, so after a renewal it would
+// fail the Expires assertion although the rollback worked. Accepting the
+// outgoing reviewed pin keeps that emergency path green; the renewal procedure
+// (docs/runbook.md) moves the outgoing pin here when it bumps the pin above.
+// Empty today: the pin dates to the route's introduction and has never been
+// renewed. Versions predating the route cannot pass this probe; covering those
+// needs the target version's own checker in rollback-production, which is
+// outside this slice (no deployment changes).
+export const SMOKE_SECURITY_TXT_PREVIOUS_EXPIRES = [];
+
 export function assertVersionOverride(value) {
   if (
     typeof value !== "string" ||
@@ -64,6 +83,83 @@ export function assertVersionOverride(value) {
   return value;
 }
 
+export function assertFailedBaseline(value) {
+  const text = typeof value === "number" ? String(value) : value;
+  if (typeof text !== "string" || !/^\d+$/.test(text.trim())) {
+    throw new Error("failed-baseline must be a non-negative integer");
+  }
+  const parsed = Number.parseInt(text.trim(), 10);
+  if (!Number.isSafeInteger(parsed)) {
+    throw new Error("failed-baseline must be a non-negative integer");
+  }
+  return parsed;
+}
+
+// Candidate UUID pinned by a validated version-override header value:
+// worker-name="<lowercase version uuid>". A green HTTP response does not
+// prove which Worker version served it (Cloudflare falls back to normal
+// routing when the override is ignored), so the /up revision.version_id
+// must equal this UUID or the probe fails.
+export function versionIdFromOverride(value) {
+  assertVersionOverride(value);
+  return value.slice(value.indexOf('="') + 2, -1);
+}
+
+// RFC 9116 field parsing for the security.txt probe: "#" lines are comments,
+// field names are case-insensitive, and matching is on whole field values, so
+// a commented-out or foreign line cannot satisfy an assertion by substring.
+export function securityTxtFields(body) {
+  const fields = [];
+  for (const rawLine of String(body).split("\n")) {
+    const line = rawLine.trim();
+    if (!line || line.startsWith("#")) continue;
+    const colon = line.indexOf(":");
+    if (colon === -1) continue;
+    fields.push([line.slice(0, colon).trim().toLowerCase(), line.slice(colon + 1).trim()]);
+  }
+  return fields;
+}
+
+// Pure core of the security.txt route assertion, unit-tested in
+// test/smoke.test.mjs across both protocols. Returns [expected, actual] pairs
+// for each failing assertion; smoke() feeds each pair to check().
+export function securityTxtAssertions(
+  body,
+  base,
+  previousExpires = SMOKE_SECURITY_TXT_PREVIOUS_EXPIRES,
+) {
+  const failures = [];
+  const fields = securityTxtFields(body);
+  const expiresValues = fields.filter(([name]) => name === "expires").map(([, value]) => value);
+  if (
+    expiresValues.length !== 1 ||
+    (expiresValues[0] !== SMOKE_SECURITY_TXT_EXPIRES && !previousExpires.includes(expiresValues[0]))
+  ) {
+    failures.push([
+      `security Expires: ${SMOKE_SECURITY_TXT_EXPIRES}`,
+      "Expires line missing or stale",
+    ]);
+  }
+  const canonicalValues = fields.filter(([name]) => name === "canonical").map(([, value]) => value);
+  if (base.protocol === "https:") {
+    // Same-origin Canonical, mirroring the robots.txt Sitemap pattern.
+    const canonical = `Canonical: ${base.origin}/.well-known/security.txt`;
+    if (
+      canonicalValues.length !== 1 ||
+      canonicalValues[0] !== `${base.origin}/.well-known/security.txt`
+    ) {
+      failures.push([`security ${canonical}`, "Canonical line missing or foreign"]);
+    }
+  } else {
+    // The producer omits Canonical on http origins (RFC 9116 §2.5.2;
+    // src/security-txt.ts), so an http probe asserts its absence.
+    if (canonicalValues.length !== 0) {
+      failures.push(["security no Canonical on http origin", "unexpected Canonical line"]);
+    }
+  }
+  return failures;
+}
+
 export async function smoke(
   baseUrl,
   {
@@ -71,6 +167,8 @@ export async function smoke(
     log = console.log,
     allowIndexable = false,
     versionOverride,
+    failedBaseline,
+    allowMissingBaseline = false,
     failOnReadyWaitCritical = false,
   } = {},
 ) {
@@ -88,6 +186,9 @@ export async function smoke(
     );
   }
   if (versionOverride !== undefined) assertVersionOverride(versionOverride);
+  const baseline = failedBaseline === undefined ? undefined : assertFailedBaseline(failedBaseline);
+  const expectedVersionId =
+    versionOverride === undefined ? undefined : versionIdFromOverride(versionOverride);
   const overrideHeaders =
     versionOverride === undefined
       ? {}
@@ -180,7 +281,9 @@ export async function smoke(
           // SMOKE_QUEUE_* constants above (drift guard in test/smoke.test.mjs).
           // A stuck staging queue is not promotable: with
           // failOnReadyWaitCritical (S6, staging deploy only),
-          // ready_wait_severity critical fails closed. The flag is
+          // ready_wait_severity critical fails closed, as does a blind
+          // queue-observability path (queue.status or ready_wait_severity
+          // unknown). The flag is
           // staging-only by design: the age derives from the shared
           // queue_jobs table (src/jobs/postgres.ts min(available_at)), not
           // the Worker version under test, so a production canary probed
@@ -188,7 +291,8 @@ export async function smoke(
           // fail-closed production gate would block its own fix from
           // shipping (and fail post-rollback smoke after a good rollback).
           // Without the flag, critical logs WARN and passes; healthy /
-          // warning / unknown / missing severity never fail.
+          // warning pass, and unknown / missing severity pass to preserve
+          // the production/rollback posture.
           const valid =
             data?.db === "ok" &&
             data?.pending_migrations === 0 &&
@@ -201,15 +305,72 @@ export async function smoke(
             "JSON /up db:ok, pending_migrations:0, status and queue.status",
             "valid JSON with unexpected health shape",
           );
+          // Dead letters are not promotable. Ad-hoc runs without a baseline
+          // fail closed on any positive numeric queue.failed with the count
+          // in the output. Promotion workflows capture the retained-rows
+          // count from /up before the deploy/promote (SMOKE_FAILED_BASELINE)
+          // and fail only on growth past it, so history never blocks a
+          // deploy while new dead letters still do. When the workflows could
+          // not read a baseline (SMOKE_ALLOW_MISSING_BASELINE) the gate is
+          // skipped with a notice instead of falling back to the absolute
+          // gate, so a transient /up blip never reds on retained history.
+          // failed 0/null (an unreadable ledger, or an envelope without the
+          // field) does not fail this gate on its own.
+          const failed = data?.queue?.failed;
+          if (baseline === undefined && allowMissingBaseline) {
+            log("SKIP /up dead-letter gate: no baseline (unreadable /up), not failing on history");
+          } else {
+            const failedIsNew =
+              typeof failed === "number" &&
+              (baseline === undefined ? failed > 0 : failed > baseline);
+            check(
+              !failedIsNew,
+              baseline === undefined
+                ? "queue.failed 0 (no dead letters)"
+                : `queue.failed <= ${baseline} (no new dead letters; baseline ${baseline})`,
+              `queue.failed ${typeof failed === "number" ? failed : "unknown"}`,
+            );
+          }
+          // Version attribution (S4/M35): when the probe pins a candidate
+          // version, /up.revision.version_id must equal its UUID. Cloudflare
+          // falls back to normal routing when the override is ignored, so a
+          // healthy old version (or a missing/malformed revision) fails even
+          // though every readiness assertion above would pass. Commit equality
+          // is not identity: only the exact version UUID passes.
+          if (versionOverride !== undefined) {
+            const served =
+              data?.revision !== null &&
+              typeof data?.revision === "object" &&
+              !Array.isArray(data?.revision)
+                ? data.revision.version_id
+                : undefined;
+            check(
+              served === expectedVersionId,
+              `revision.version_id ${expectedVersionId}`,
+              served === undefined
+                ? "missing revision.version_id"
+                : `revision.version_id ${served}`,
+            );
+          }
           const severity = data?.queue?.ready_wait_severity;
+          const queueStatus = data?.queue?.status;
           const readyAge = data?.queue?.oldest_ready_wait_age_seconds;
           const readyAgeLabel = typeof readyAge === "number" ? readyAge : "unknown";
           if (failOnReadyWaitCritical) {
-            check(
-              severity !== "critical",
-              "ready_wait_severity not critical",
-              `critical (oldest_ready_wait_age_seconds: ${readyAgeLabel})`,
-            );
+            const unknownReadiness = queueStatus === "unknown" || severity === "unknown";
+            if (unknownReadiness) {
+              check(
+                false,
+                "known queue.status and ready_wait_severity (not unknown)",
+                `unknown (queue.status: ${queueStatus ?? "missing"}, ready_wait_severity: ${severity ?? "missing"})`,
+              );
+            } else {
+              check(
+                severity !== "critical",
+                "ready_wait_severity not critical",
+                `critical (oldest_ready_wait_age_seconds: ${readyAgeLabel})`,
+              );
+            }
           } else if (severity === "critical") {
             log(
               `WARN ${route.path}: ready_wait_severity critical (oldest_ready_wait_age_seconds: ${readyAgeLabel})`,
@@ -224,6 +385,14 @@ export async function smoke(
         // this environment's own origin, never the apex or another env's host.
         const line = `Sitemap: ${base.origin}/sitemap_index.xml`;
         check(body.includes(line), `robots ${line}`, "Sitemap line missing or foreign");
+      }
+      if (route.path === "/.well-known/security.txt") {
+        // RFC 9116 publication (S8): field-parsed assertions shared with the
+        // unit tests (securityTxtAssertions above). Do not print response
+        // bodies into deploy logs: the actual side stays a fixed string.
+        for (const [expected, actual] of securityTxtAssertions(body, base)) {
+          check(false, expected, actual);
+        }
       }
       if (route.path === "/sitemap_index.xml") {
         // Same-environment sitemap: every loc stays on the probed origin, and
@@ -277,11 +446,15 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   const [baseUrl, ...flags] = args;
   let allowIndexable = false;
   let versionOverride;
+  let failedBaseline;
+  let allowMissingBaseline = false;
   let failOnReadyWaitCritical = false;
   let usage = false;
   for (let i = 0; i < flags.length; i += 1) {
     if (flags[i] === "--allow-indexable") {
       allowIndexable = true;
+    } else if (flags[i] === "--allow-missing-baseline") {
+      allowMissingBaseline = true;
     } else if (flags[i] === "--fail-on-ready-wait-critical") {
       failOnReadyWaitCritical = true;
     } else if (flags[i] === "--version-override") {
@@ -292,21 +465,48 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
         versionOverride = value;
       }
       i += 1;
+    } else if (flags[i] === "--failed-baseline") {
+      const value = flags[i + 1];
+      if (value === undefined) {
+        usage = true;
+      } else {
+        failedBaseline = value;
+      }
+      i += 1;
     } else {
       usage = true;
     }
   }
   if (typeof baseUrl !== "string" || usage) {
     console.error(
-      'Usage: node bin/smoke.mjs <base-url> [--allow-indexable] [--fail-on-ready-wait-critical] [--version-override worker-name="<version-uuid>"]',
+      'Usage: node bin/smoke.mjs <base-url> [--allow-indexable] [--fail-on-ready-wait-critical] [--version-override worker-name="<version-uuid>"] [--failed-baseline <n>] [--allow-missing-baseline]',
     );
     process.exitCode = 2;
   } else {
     try {
       if (versionOverride !== undefined) assertVersionOverride(versionOverride);
+      // Promotion workflows export the pre-deploy/promote retained-rows count
+      // as SMOKE_FAILED_BASELINE so the gate fails only on growth; an
+      // explicit --failed-baseline flag wins over the environment. An empty
+      // SMOKE_FAILED_BASELINE means the capture could not read /up and maps
+      // to no baseline. SMOKE_ALLOW_MISSING_BASELINE=1 (or the flag) makes
+      // that no-baseline state skip the dead-letter gate instead of failing
+      // on any positive count; ad-hoc runs without it keep the absolute gate.
+      const baselineRaw = failedBaseline ?? process.env.SMOKE_FAILED_BASELINE;
+      const baseline =
+        baselineRaw === undefined || baselineRaw === ""
+          ? undefined
+          : assertFailedBaseline(baselineRaw);
+      const allowMissingRaw = process.env.SMOKE_ALLOW_MISSING_BASELINE;
+      const allowMissing =
+        allowMissingBaseline ||
+        allowMissingRaw === "1" ||
+        allowMissingRaw?.toLowerCase() === "true";
       process.exitCode = (await smoke(baseUrl, {
         allowIndexable,
         versionOverride,
+        failedBaseline: baseline,
+        allowMissingBaseline: allowMissing,
         failOnReadyWaitCritical,
       }))
         ? 0

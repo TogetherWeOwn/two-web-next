@@ -154,13 +154,9 @@ export async function withdrawRsvp(
     // committed together with the delete, after both waits.
     await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${`rsvp-write:${userId}`}))`);
     const [ev] = await tx.select().from(events).where(eq(events.eventKey, eventKey)).for("update");
-    if (!ev) {
-      await pruneThrottle(tx);
-      const verdict = await chargeThrottle(tx, userId);
-      return verdict.limited
-        ? ({ limited: true, retryAfter: verdict.retryAfter } as const)
-        : ({ limited: false, deleted: false, status: null } as const);
-    }
+    // Unknown keys change nothing, so they cost nothing: return before the
+    // throttle prune/charge, mirroring writeRsvp's not_found path.
+    if (!ev) return { limited: false, deleted: false, status: null } as const;
     // Own row, promotion rows and maintenance can all wait on other writers.
     // Take them before the hit is stamped so an accepted debit stays fresh.
     await tx
@@ -204,11 +200,11 @@ export type Verdict = { limited: false } | { limited: true; retryAfter: number }
 
 type Tx = Parameters<Parameters<Db["transaction"]>[0]>[0];
 
-/** Global maintenance: prunes expired hits. Can block on a contended expired row, so it
- * must run before any accept/charge decision — never between the debit and the write. */
+/** Bounded global maintenance: one capped skip-locked batch per write (1000, the
+ * established cleanup batch), so it must run before any accept/charge decision. */
 async function pruneThrottle(tx: Tx): Promise<void> {
   await tx.execute(
-    sql`delete from web_throttle_hits where at < clock_timestamp() - make_interval(mins => ${THROTTLE_COUNTER_RETENTION_MINUTES})`,
+    sql`with candidates as (select id from web_throttle_hits where at < clock_timestamp() - make_interval(mins => ${THROTTLE_COUNTER_RETENTION_MINUTES}) order by id limit 1000 for update skip locked) delete from web_throttle_hits using candidates where web_throttle_hits.id = candidates.id`,
   );
 }
 

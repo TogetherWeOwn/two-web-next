@@ -282,6 +282,8 @@
     if (control(tz)) e.push({ key: "timezone", text: "Remove control characters." });
     if (Array.from(bio).length > 1000)
       e.push({ key: "bio", text: "Keep your bio to 1000 characters or fewer." });
+    if (Array.from(games).length > 1700)
+      e.push({ key: "games_text", text: "Games list is too long." });
     var seen = new Set();
     var long = false;
     games.split(/\r\n|\r|\n/).forEach(function (l) {

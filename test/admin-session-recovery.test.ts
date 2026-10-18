@@ -358,12 +358,17 @@ describe("admin editor session-expiry island", () => {
     expect(notice!.children[0]!.href).toBe(safe);
   });
 
-  it("releases the dirty guard for the recovery trip but keeps prompting otherwise", () => {
+  it("keeps prompting a dirty expired editor on unrelated navigation; only the recovery trip is exempt", () => {
     const guarded = eventEditorBrowser({});
     guarded.values.set("title", "Unsaved headline");
     expect(guarded.navigate("sort").preventDefault).toHaveBeenCalledOnce();
     guarded.expireSession();
+    // Expiry alone must not disarm the guard: an unrelated departure still prompts.
+    expect(guarded.navigate("sort").preventDefault).toHaveBeenCalledOnce();
+    // The explicit recovery activation releases exactly that one departure.
+    guarded.clickRecovery();
     expect(guarded.navigate("sort").preventDefault).not.toHaveBeenCalled();
+    expect(guarded.navigate("sort").preventDefault).toHaveBeenCalledOnce();
     const clean = eventEditorBrowser({});
     clean.expireSession();
     expect(clean.navigate("sort").preventDefault).not.toHaveBeenCalled();

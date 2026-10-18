@@ -52,7 +52,7 @@ export const EventFormFields: FC<{
         </Field>
         <Field name="description" label="Description" errors={errors}>
           {(id) => (
-            <textarea id={id} name="description" rows={4}>
+            <textarea id={id} name="description" rows={4} data-event-text-limit={1000}>
               {val(values, "description")}
             </textarea>
           )}

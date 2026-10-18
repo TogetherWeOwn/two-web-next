@@ -18,6 +18,7 @@ const base = {
 const limits = [
   { field: "title", max: 100 },
   { field: "game", max: 100 },
+  { field: "description", max: 1000 },
   { field: "location", max: 255 },
 ] as const;
 const patterns = [
@@ -106,14 +107,39 @@ describe("admin event code-point contract", () => {
       );
     }
   });
+  it("description with line breaks matches the server verdict (browsers submit CRLF)", () => {
+    // Browsers serialize textarea LF as CRLF on submit, so the server counts
+    // two code points per break while textarea .value holds one.
+    const toSubmitted = (value: string): string => value.replace(/\n/g, "\r\n");
+    const serverMessage = (value: string): string => {
+      try {
+        parseEventForm({ ...base, description: toSubmitted(value) });
+        return "";
+      } catch (error) {
+        expect(error).toBeInstanceOf(ValidationError);
+        return (error as ValidationError).fields.description ?? "";
+      }
+    };
+    // 47 lines of 20 chars: 986 code points by .value, 1032 as submitted.
+    const over = Array.from({ length: 47 }, () => "x".repeat(20)).join("\n");
+    expect([...over].length).toBe(986);
+    expect(eventTextLimitError(over, "description", 1000)).toBe(
+      "Keep the description to 1000 characters.",
+    );
+    expect(serverMessage(over)).toBe("Keep the description to 1000 characters.");
+    // 45 lines of 20 chars: 944 by .value, 988 as submitted — both pass.
+    const under = Array.from({ length: 45 }, () => "x".repeat(20)).join("\n");
+    expect(eventTextLimitError(under, "description", 1000)).toBe("");
+    expect(serverMessage(under)).toBe("");
+  });
   it.each(["new", "edit"] as const)(
-    "enhances only the three scoped %s controls and retains native POST",
+    "enhances only the four scoped %s controls and retains native POST",
     (mode) => {
       const html = form(mode);
       expect(html).toContain('<script type="module" src="/islands/admin-event-text-limits.js"');
       expect(html).toContain('<form method="post" action="/admin/events');
       for (const { field, max } of limits) {
-        const input = html.match(new RegExp(`<input[^>]*name="${field}"[^>]*>`))![0];
+        const input = html.match(new RegExp(`<(?:input|textarea)[^>]*name="${field}"[^>]*>`))![0];
         expect(input).toContain(`data-event-text-limit="${max}"`);
         expect(input).not.toContain("maxlength");
         const rejected = form(mode, base, { [field]: "Server feedback" });
@@ -121,7 +147,7 @@ describe("admin event code-point contract", () => {
         expect(rejected).toContain("Server feedback");
       }
       expect(html).toMatch(/name="title"[^>]*required/);
-      expect(html.match(/data-event-text-limit=/g)).toHaveLength(3);
+      expect(html.match(/data-event-text-limit=/g)).toHaveLength(4);
       expect(html).toContain('src="/islands/admin-event-editor.js"');
     },
   );
@@ -274,7 +300,7 @@ describe.skipIf(process.env.ADMIN_EVENT_BROWSER_TESTS !== "true")(
             `${currentMode}: ${method} N/N+1 $label ${field} code points`,
             async ({ characters }) => {
               await load(currentMode);
-              const input = page.locator(`input[name="${field}"]`);
+              const input = page.locator(`input[name="${field}"], textarea[name="${field}"]`);
               const value = text(characters, max);
               await input.fill("");
               if (method === "typing") {

@@ -220,15 +220,15 @@ describe("retention ledger doc rows", () => {
     expect(doc).toContain("2160 hours");
     expect(doc).toContain("member-erasure.md#what-is-retained-and-why");
     expect(doc).toContain("src/jobs/cron.ts");
-    expect(doc).toContain("src/events/rsvp.ts:209-213");
+    expect(doc).toContain("src/events/rsvp.ts:205-209");
     expect(doc).toContain("Retain indefinitely per CISO decision");
     // The cited line range must actually hold the prune: shifting rsvp.ts
     // without re-basing the citation fails here instead of going stale.
-    // Pinned per-line so a one-line shift already breaks (line 209 must open
-    // pruneThrottle, line 211 must hold the delete).
+    // Pinned per-line so a one-line shift already breaks (line 205 must open
+    // pruneThrottle, line 207 must hold the delete).
     const rsvpLines = read("src/events/rsvp.ts").split("\n");
-    expect(rsvpLines[208]).toContain("pruneThrottle");
-    expect(rsvpLines[210]).toContain("delete from web_throttle_hits");
+    expect(rsvpLines[204]).toContain("pruneThrottle");
+    expect(rsvpLines[206]).toContain("delete from web_throttle_hits");
   });
 
   it("distinguishes the throttle age cutoff from path-dependent physical cleanup", () => {
@@ -352,7 +352,7 @@ describe("retention ledger doc rows", () => {
       'console.warn("Model prune pass hit per-table batch cap with rows possibly pending.", {',
     );
     expect(normalizeSqlWindow(read("src/jobs/postgres.ts"))).toContain(
-      "delete from board_view_logs where id in ( select id from board_view_logs where occurred_at < ${cutoff} order by id limit ${PRUNE_DELETE_BATCH_SIZE} ) returning 1",
+      "delete from board_view_logs where id in ( select id from board_view_logs where occurred_at < ${cutoff} order by id limit ${PRUNE_DELETE_BATCH_SIZE} for update skip locked ) returning 1",
     );
     const proof = read("test/prune.test.ts");
     for (const name of [

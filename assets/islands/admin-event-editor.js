@@ -13,8 +13,9 @@
   var draft = editor.hasAttribute("data-event-draft");
   var saving = false;
   // An expired session vetoes the probe reload (the unsaved draft only exists
-  // in this document) and releases the dirty guard for the recovery trip.
-  var sessionExpired = false;
+  // in this document). Departure protection stays armed; only a normal,
+  // explicit activation of the recovery link exempts that one trip.
+  var leavingForRecovery = false;
   // Cancels repeat Saves; the bound stops an aborted navigation stranding the form.
   var SUBMIT_LOCK_MS = 10000;
   var locked = false;
@@ -42,6 +43,7 @@
   });
   window.addEventListener("pageshow", function () {
     saving = false;
+    leavingForRecovery = false;
     unlock();
   });
   // Same bar as safeNext (src/join/service.ts): a same-origin path or nothing.
@@ -59,7 +61,6 @@
   }
   window.addEventListener("two:session-expired", function (event) {
     event.preventDefault();
-    sessionExpired = true;
     var detail = (event && event.detail) || {};
     var recoveryUrl =
       samePath(detail.recoveryUrl) ||
@@ -74,6 +75,20 @@
     var link = document.createElement("a");
     link.href = recoveryUrl;
     link.textContent = "Sign in again";
+    link.addEventListener("click", function (clickEvent) {
+      if (
+        clickEvent.button !== 0 ||
+        clickEvent.ctrlKey ||
+        clickEvent.metaKey ||
+        clickEvent.shiftKey ||
+        clickEvent.altKey
+      )
+        return;
+      leavingForRecovery = true;
+      window.setTimeout(function () {
+        leavingForRecovery = false;
+      }, 0);
+    });
     notice.appendChild(link);
     editor.parentNode.insertBefore(notice, editor);
     notice.focus();
@@ -82,11 +97,16 @@
     // Only the Save departure is exempt, even if loading is then stopped.
     if (saving) {
       saving = false;
+      leavingForRecovery = false;
       return;
     }
-    // The recovery navigation must never be blocked: the draft stays in this
-    // document either way, and the notice above holds the way back.
-    if (sessionExpired) return;
+    // Only a normal, explicit recovery activation exempts that one trip.
+    // Modified and middle clicks keep the current-document guard; an
+    // interrupted recovery re-arms when its one-shot window lapses.
+    if (leavingForRecovery) {
+      leavingForRecovery = false;
+      return;
+    }
     if (!draft && snapshot() === initial) return;
     event.preventDefault();
     event.returnValue = "";

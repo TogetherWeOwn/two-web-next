@@ -58,18 +58,11 @@ export function parseEventForm(
   if (location && [...location].length > 255)
     fields.location = "Keep the location to 255 characters.";
   // Check the submitted text, not its trimmed value: trim removes BOM.
-  for (const field of ["title", "description", "location"] as const) {
+  for (const field of ["title", "game", "description", "location"] as const) {
     const raw = data[field];
     if (typeof raw === "string" && containsControlCharacters(raw)) {
       fields[field] = "Remove control or invisible characters.";
     }
-  }
-  // `game` is the NUL gap: Postgres text columns reject NUL bytes, so NUL
-  // must be refused before persistence. Only NUL is refused here — BEL and
-  // other controls stay accepted to avoid broadening validation.
-  const gameRaw = data.game;
-  if (typeof gameRaw === "string" && gameRaw.includes("\0") && !fields.game) {
-    fields.game = "Remove NUL characters.";
   }
 
   let capacity: number | null = null;

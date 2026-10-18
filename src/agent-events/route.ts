@@ -70,7 +70,11 @@ export const agentEventsAdmission: MiddlewareHandler<IngressEnv> = async (c, nex
   try {
     // Admit before the transport limiter reads. The bound handler cannot charge
     // a second shield hit when the parsed body reaches the service.
-    const ip = c.req.header("cf-connecting-ip") ?? null;
+    // `cf-connecting-ip` wins on the edge (unforgeable); off-edge the first
+    // `x-forwarded-for` hop applies, else nothing (`unknown` downstream).
+    const ip =
+      c.req.header("cf-connecting-ip") ??
+      (c.req.header("x-forwarded-for")?.split(",")[0]?.trim() || null);
     // Effects ride the admitted handler: publish/cancel/update dispatch the same
     // write-back the admin path uses, and read observes through the signed bot
     // client (fail-closed when unconfigured).

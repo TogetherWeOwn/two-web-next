@@ -150,6 +150,27 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ secrets.PRODUCTION_CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.PRODUCTION_CLOUDFLARE_ACCOUNT_ID }}
           DEPLOY_SHA: ${{ needs.preflight.outputs.sha }}
+      - name: Capture pre-promote dead-letter baseline
+        # Read-only GET before the central gradual-promote action runs: that
+        # action's stage smokes execute this repo's bin/smoke.mjs in this job,
+        # so SMOKE_FAILED_BASELINE published here via $GITHUB_ENV scopes every
+        # stage gate to growth past the retained queue_failed_jobs count (the
+        # count is database-wide, never version-scoped). Retried, then an
+        # unreadable /up leaves the baseline empty and the stage smokes skip
+        # the dead-letter gate on history (SMOKE_ALLOW_MISSING_BASELINE)
+        # instead of failing on any positive count. Never fails the deploy on
+        # its own.
+        run: |
+          baseline=""
+          for i in 1 2 3 4 5; do
+            candidate="$(node -e 'fetch("https://togetherweown.com/up", { signal: AbortSignal.timeout(10000) }).then((r) => r.json()).then((d) => { const f = d && d.queue ? d.queue.failed : undefined; if (typeof f === "number" && Number.isInteger(f) && f >= 0) process.stdout.write(String(f)); }).catch(() => {})' || true)"
+            if [ -n "$candidate" ]; then baseline="$candidate"; break; fi
+            if [ "$i" -lt 5 ]; then sleep 5; fi
+          done
+          if [ -z "$baseline" ]; then echo "::warning::dead-letter baseline unreadable after 5 attempts; promote smokes will skip the dead-letter gate on history"; fi
+          echo "SMOKE_FAILED_BASELINE=$baseline" >> "$GITHUB_ENV"
+          echo "SMOKE_ALLOW_MISSING_BASELINE=1" >> "$GITHUB_ENV"
+          echo "dead-letter baseline: ${baseline:-unknown}"
       # Gradual promotion lives in the shared central composite action
       # (TogetherWeOwn/.github/actions/gradual-promote, pinned below): 5% ->
       # 50% -> 100% with per-stage health/SLO gates pinned to the new version,
@@ -175,8 +196,8 @@ jobs:
         # secrets. Same retry contract (6 attempts, 10s sleeps, fail closed).
         # No automatic restore here: the gradual action's rollback steps only
         # fire on failures inside the promotion, so a failed verification
-        # leaves the promoted version live at 100% and prints the recorded
-        # pre-promote version id; the operator restores it through the
+        # leaves the promoted candidate live at 100% and prints PREV_VERSION as
+        # the recorded restoration target; the operator restores it through the
         # rollback-production workflow with that id. An inline wrangler
         # rollback must stay out of this workflow: the rollback path checks
         # the target version's secrets first (see rollback-production.yml).
@@ -191,7 +212,7 @@ jobs:
               sleep 10
             fi
           done
-          echo "::error::post-promotion public-route smoke failed; release will not tag; pre-promote version ${PREV_VERSION:-unknown} still live at 100% - restore it with the rollback-production workflow using that version id"
+          echo "::error::post-promotion public-route smoke failed; promoted candidate remains live at 100%; release will not tag; recorded restoration target ${PREV_VERSION:-unknown} - restore it with the rollback-production workflow using that version id"
           exit 1
         env:
           PREV_VERSION: ${{ steps.gradual.outputs.rollback-version-id }}

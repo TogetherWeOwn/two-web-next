@@ -258,6 +258,86 @@ describe("deploy public-route smoke (offline)", () => {
     expect(rollbackBlock).not.toContain("--fail-on-ready-wait-critical");
   });
 
+  it("hands the pre-deploy dead-letter baseline to staging smoke after capture", () => {
+    // S7: staging /up serves retained queue.failed rows today, so the smoke
+    // fails only on growth past this baseline. Dropping the env handoff
+    // silently restores the absolute failed > 0 gate and reds every deploy.
+    const workflow = readFileSync(".github/workflows/deploy.yml", "utf8");
+    const captureAt = workflow.indexOf("- name: Capture pre-deploy dead-letter baseline");
+    const smokeAt = workflow.indexOf("- name: Smoke test staging public routes");
+    const migrateAt = workflow.indexOf("- name: Apply staging web migrations");
+    expect(captureAt).toBeGreaterThan(-1);
+    expect(migrateAt).toBeGreaterThan(captureAt);
+    expect(smokeAt).toBeGreaterThan(migrateAt);
+    const captureBlock = workflow.match(
+      /- name: Capture pre-deploy dead-letter baseline\n[\s\S]*?run: \|\n((?:          .*\n)+)/,
+    )?.[1];
+    expect(captureBlock).toBeDefined();
+    expect(captureBlock).toContain("for i in 1 2 3 4 5");
+    expect(captureBlock).toContain('fetch("https://next.togetherweown.com/up"');
+    expect(captureBlock).toContain("::warning::dead-letter baseline unreadable");
+    expect(captureBlock).toContain('echo "failed=$baseline" >> "$GITHUB_OUTPUT"');
+    const smokeSection = workflow.slice(smokeAt, smokeAt + 2000);
+    expect(smokeSection).toContain(
+      "SMOKE_FAILED_BASELINE: ${{ steps.dead-letter-baseline.outputs.failed }}",
+    );
+    expect(smokeSection).toContain('SMOKE_ALLOW_MISSING_BASELINE: "1"');
+  });
+
+  it("hands the pre-promote dead-letter baseline to every promote smoke via GITHUB_ENV", () => {
+    // The gradual-promote action runs this repo's bin/smoke.mjs in the same
+    // job, so the $GITHUB_ENV export scopes every stage gate plus the
+    // post-promotion verify to growth past the retained count.
+    const workflow = readFileSync(".github/workflows/deploy-production.yml", "utf8");
+    const jobAt = workflow.indexOf("\n  deploy-production:\n");
+    const releaseAt = workflow.indexOf("\n  release:\n");
+    expect(jobAt).toBeGreaterThan(-1);
+    expect(releaseAt).toBeGreaterThan(jobAt);
+    const job = workflow.slice(jobAt, releaseAt);
+    const captureAt = job.indexOf("- name: Capture pre-promote dead-letter baseline");
+    const gradualAt = job.indexOf("- name: Gradual promotion 5-50-100 with automatic rollback");
+    const verifyAt = job.indexOf("- name: Verify public routes on the promoted version");
+    expect(captureAt).toBeGreaterThan(-1);
+    expect(gradualAt).toBeGreaterThan(captureAt);
+    expect(verifyAt).toBeGreaterThan(gradualAt);
+    const captureBlock = job.match(
+      /- name: Capture pre-promote dead-letter baseline\n[\s\S]*?run: \|\n((?:          .*\n)+)/,
+    )?.[1];
+    expect(captureBlock).toBeDefined();
+    expect(captureBlock).toContain("for i in 1 2 3 4 5");
+    expect(captureBlock).toContain('fetch("https://togetherweown.com/up"');
+    expect(captureBlock).toContain("::warning::dead-letter baseline unreadable");
+    expect(captureBlock).toContain('echo "SMOKE_FAILED_BASELINE=$baseline" >> "$GITHUB_ENV"');
+    expect(captureBlock).toContain('echo "SMOKE_ALLOW_MISSING_BASELINE=1" >> "$GITHUB_ENV"');
+  });
+
+  it("hands the pre-rollback dead-letter baseline to rollback smoke after capture", () => {
+    // The emergency path must never go red on retained history: growth past
+    // the pre-rollback baseline fails, an unreadable capture skips the gate.
+    const workflow = readFileSync(".github/workflows/rollback-production.yml", "utf8");
+    const captureAt = workflow.indexOf("- name: Capture pre-rollback dead-letter baseline");
+    const smokeAt = workflow.indexOf("- name: Smoke test production public routes");
+    const rollbackAt = workflow.indexOf(
+      "- name: Roll back to the recorded production Worker Version",
+    );
+    expect(captureAt).toBeGreaterThan(-1);
+    expect(rollbackAt).toBeGreaterThan(captureAt);
+    expect(smokeAt).toBeGreaterThan(rollbackAt);
+    const captureBlock = workflow.match(
+      /- name: Capture pre-rollback dead-letter baseline\n[\s\S]*?run: \|\n((?:          .*\n)+)/,
+    )?.[1];
+    expect(captureBlock).toBeDefined();
+    expect(captureBlock).toContain("for i in 1 2 3 4 5");
+    expect(captureBlock).toContain('fetch("https://togetherweown.com/up"');
+    expect(captureBlock).toContain("::warning::dead-letter baseline unreadable");
+    expect(captureBlock).toContain('echo "failed=$baseline" >> "$GITHUB_OUTPUT"');
+    const smokeSection = workflow.slice(smokeAt, smokeAt + 2000);
+    expect(smokeSection).toContain(
+      "SMOKE_FAILED_BASELINE: ${{ steps.dead-letter-baseline.outputs.failed }}",
+    );
+    expect(smokeSection).toContain('SMOKE_ALLOW_MISSING_BASELINE: "1"');
+  });
+
   it("runs the loopback selftest in required CI as well as pre-deploy check", () => {
     const ci = readFileSync(".github/workflows/ci.yml", "utf8");
     const checkJob = ci.slice(ci.indexOf("  check:\n"));
@@ -410,9 +490,9 @@ describe("deploy event-JSON smoke (offline)", () => {
     expect(result.summary).toContain("Skipped exposure guards: none.");
   });
 
-  it("names every skipped exposure guard without the token instead of failing the deploy", () => {
+  it("fails closed without the token while keeping the skip ledger as evidence", () => {
     const result = stagingJsonSmoke(0, false);
-    expect(result.status, result.output).toBe(0);
+    expect(result.status, result.output).toBe(1);
     expect(result.attempts).toBe(0);
     expect(result.output).toContain("json-smoke skipped: staging QA_AUTH_TOKEN is not configured");
     for (const guard of [
@@ -429,7 +509,9 @@ describe("deploy event-JSON smoke (offline)", () => {
       "::warning::staging json-smoke skipped with unverified exposure guards",
     );
     expect(result.output).toContain("Tracked follow-up: #531");
-    expect(result.output).not.toContain("::error::");
+    expect(result.output).toContain(
+      "::error::staging event-JSON smoke missing QA token: exposure guards unverified",
+    );
     expect(result.output).not.toContain("never-log-this");
     expect(result.ledger?.summary).toEqual({ total: 14, passed: 0, failed: 0, skipped: 14 });
     expect(result.summary).toContain("## Staging event-JSON smoke: skipped (no QA token)");
@@ -464,6 +546,7 @@ describe("deploy event-JSON smoke (offline)", () => {
       "#531",
       "ledger write failed",
       "::error::staging event-JSON smoke failed after deploy",
+      "::error::staging event-JSON smoke missing QA token: exposure guards unverified",
     ]) {
       expect(block).toContain(marker);
     }
@@ -583,7 +666,8 @@ describe("production deploy smoke (offline)", () => {
 // The step probes live traffic (no --version-override) after the gradual
 // promotion reaches 100%, so a promotion serving broken public content fails
 // the deploy-production job before the release job can tag. A failed run
-// prints the recorded pre-promote version id for the rollback-production
+// leaves the promoted candidate live at 100% with the tag withheld and prints
+// PREV_VERSION as the recorded restoration target for the rollback-production
 // workflow; there is no automatic restore (the gradual action's rollback only
 // covers in-action failures, and an inline wrangler rollback would bypass the
 // rollback target-version secrets preflight).
@@ -616,7 +700,7 @@ if (process.argv.length !== 5 || process.argv[2] !== "bin/smoke.mjs" || process.
 }
 const count = readFileSync(attempts, "utf8").length;
 const pass = count === Number(process.env.SMOKE_SUCCEED_ON_ATTEMPT);
-console.log(pass ? "smoke: 17 routes, 0 failed assertions" : "FAIL /join: expected HTTP 200; actual HTTP 503");
+console.log(pass ? "smoke: 18 routes, 0 failed assertions" : "FAIL /join: expected HTTP 200; actual HTTP 503");
 process.exit(pass ? 0 : 1);
 `,
       { mode: 0o700 },
@@ -682,20 +766,24 @@ describe("production post-promotion verification (offline)", () => {
     expect(result.sleeps).toBe(5);
     expect(result.output).toContain("FAIL /join: expected HTTP 200; actual HTTP 503");
     expect(result.output).toContain(
-      "::error::post-promotion public-route smoke failed; release will not tag",
+      "::error::post-promotion public-route smoke failed; promoted candidate remains live at 100%; release will not tag",
     );
     expect(result.output).not.toContain("unexpected checker invocation");
   });
 
-  it("names the still-live pre-promote version and the rollback workflow on failure", () => {
+  it("names the live promoted candidate and the recorded restoration target on failure", () => {
     const result = postPromotionSmoke(0, "aaaabbbb-cccc-dddd-eeee-ffffffffffff");
     expect(result.status, result.output).toBe(1);
     // The gradual action's rollback only covers in-action failures, so the
-    // promoted version stays live at 100%: the error must hand the operator
-    // the recorded pre-promote version id and the restore path.
+    // promoted candidate stays live at 100% with the tag withheld: the error
+    // must name the live candidate, the recorded restoration target id, and
+    // the restore path, without asserting the target is currently serving.
+    expect(result.output).toContain("promoted candidate remains live at 100%");
+    expect(result.output).toContain("release will not tag");
+    expect(result.output).toContain("recorded restoration target");
     expect(result.output).toContain("aaaabbbb-cccc-dddd-eeee-ffffffffffff");
-    expect(result.output).toContain("still live at 100%");
     expect(result.output).toContain("rollback-production");
+    expect(result.output).not.toContain("still live at 100%");
   });
 
   it("wires the gradual rollback target into the step and documents the manual restore", () => {
@@ -707,6 +795,12 @@ describe("production post-promotion verification (offline)", () => {
     // target, the same id its own rollback steps restore.
     expect(section).toContain("PREV_VERSION: ${{ steps.gradual.outputs.rollback-version-id }}");
     expect(section).toContain("rollback-production");
+    // The failure annotation must name the promoted candidate as live and
+    // PREV_VERSION as the recorded restoration target, never the target as
+    // currently serving.
+    expect(section).toContain("promoted candidate remains live at 100%");
+    expect(section).toContain("recorded restoration target");
+    expect(section).not.toContain("still live at 100%");
     // No inline restore: the rollback workflow checks the target version's
     // secrets before moving traffic (pinned by the negative control in
     // ci/check-production-secrets.test.mjs), so this step only blocks the tag.
@@ -739,5 +833,43 @@ describe("production post-promotion verification (offline)", () => {
     expect(block).not.toContain("next.togetherweown.com");
     expect(block).not.toMatch(/secrets\./);
     expect(block).not.toMatch(/\/auth\/discord/);
+  });
+});
+
+describe("production release-docs contract (source)", () => {
+  it("explains gradual promotion, manual restoration and release gating without static serving-state claims", () => {
+    const readme = readFileSync("README.md", "utf8");
+    const heading = "### Production (gated manual deployment)";
+    expect(readme).toContain(heading);
+    expect(readme).not.toContain("### Production (not live");
+    const section = readme.slice(
+      readme.indexOf(heading),
+      readme.indexOf("Whoever is authorized to provision production"),
+    );
+    expect(section.length).toBeGreaterThan(0);
+    // 5 -> 50 -> 100 with in-action automatic rollback versus post-action
+    // manual restoration, and verification before release publication.
+    expect(section).toContain("5% → 50% → 100%");
+    expect(section).toContain("automatic rollback");
+    expect(section).toContain("promoted candidate live at 100%");
+    expect(section).toContain("recorded restoration target");
+    expect(section).toContain("rollback-production");
+    expect(section).toContain("before the `release`");
+    // No unsupported static not-live/unprovisioned assertions and no claim
+    // that the restoration target is currently serving.
+    const flat = section.replace(/\s+/g, " ");
+    for (const stale of [
+      "not yet live",
+      "not live",
+      "legacy stack",
+      "cutover template",
+      "not a live deployment",
+      "unprovisioned",
+      "does not exist yet",
+      "NO-GO",
+      "still live at 100%",
+    ]) {
+      expect(flat).not.toContain(stale);
+    }
   });
 });
