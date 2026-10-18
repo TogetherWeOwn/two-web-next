@@ -161,12 +161,19 @@ describe("admin guard pins (memory store, no DB)", () => {
   it("503s without a session store instead of deciding open or closed", async () => {
     const res = await adminApp().request("/events", {}, env);
     expect(res.status).toBe(302); // no cookie at all → guest redirect, no decision needed
-    const forged = await serializeSigned("__Host-two_session", "two_bogus", SESSION_SECRET, {
-      path: "/",
-      secure: true,
-      httpOnly: true,
-      sameSite: "Lax",
-    });
+    // Well-formed bearer (two_ + 43 base64url) with nowhere to resolve → fail closed.
+    // Malformed bearers are guests (302) with zero store reads.
+    const forged = await serializeSigned(
+      "__Host-two_session",
+      `two_${"A".repeat(43)}`,
+      SESSION_SECRET,
+      {
+        path: "/",
+        secure: true,
+        httpOnly: true,
+        sameSite: "Lax",
+      },
+    );
     const denied = await adminApp().request(
       "/events",
       { headers: { cookie: forged.split(";")[0]! } },
