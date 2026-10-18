@@ -151,13 +151,17 @@ jobs:
         # instead of failing on history. Critical ready-wait warns and passes
         # here by design (--fail-on-ready-wait-critical is staging-only): the
         # age reflects shared queue_jobs state, not the rolled-back version,
-        # so it must not fail a good rollback.
+        # so it must not fail a good rollback. Ordinary-traffic identity is
+        # enforced below: the recorded version UUID travels inputs -> env ->
+        # quoted shell variable and the smoke proves that version serves
+        # unpinned routing (no version-override header).
         env:
+          ROLLBACK_VERSION_ID: ${{ inputs.version_id }}
           SMOKE_FAILED_BASELINE: ${{ steps.dead-letter-baseline.outputs.failed }}
           SMOKE_ALLOW_MISSING_BASELINE: "1"
         run: |
           for i in 1 2 3 4 5 6; do
-            if node bin/smoke.mjs https://togetherweown.com --allow-indexable; then
+            if node bin/smoke.mjs https://togetherweown.com --allow-indexable --expected-version-id "$ROLLBACK_VERSION_ID"; then
               echo "production smoke ok (attempt $i)"
               exit 0
             fi
