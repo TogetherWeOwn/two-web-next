@@ -59,6 +59,12 @@ const fixtures = {
     "text/plain",
     (origin) => `User-agent: *\nDisallow:\nSitemap: ${origin}/sitemap_index.xml\n`,
   ],
+  "/.well-known/security.txt": [
+    200,
+    "text/plain",
+    (origin) =>
+      `Contact: https://github.com/TogetherWeOwn/two-web-next/security/advisories/new\nExpires: 2027-10-01T00:00:00Z\nPreferred-Languages: en\nCanonical: ${origin}/.well-known/security.txt\nPolicy: https://github.com/TogetherWeOwn/two-web-next/blob/main/SECURITY.md\n`,
+  ],
   "/discord": [302, null, "", "https://discord.gg/fixture"],
   "/profile": [302, null, "", "/auth/discord"],
   "/admin": [302, null, "", "/auth/discord"],
@@ -194,7 +200,7 @@ for (const id of GATE_IDS) {
     const result = await runGate(gateBlock(action, id), host);
     assert.equal(result.status, 0, result.stdout + result.stderr);
     assert.match(result.stdout, /smoke ok \(attempt 1\)/);
-    assert.equal(requests.length, 17, "the real checker probed every route once");
+    assert.equal(requests.length, 18, "the real checker probed every route once");
     assert.ok(
       requests.every((r) => r.override === QUOTED_OVERRIDE),
       `every probe must carry ${QUOTED_OVERRIDE}`,
@@ -235,7 +241,7 @@ test("the real checker itself accepts quoted and refuses unquoted overrides", as
   assert.equal(requests.length, 0);
   const quoted = await cli(QUOTED_OVERRIDE);
   assert.equal(quoted.status, 0, quoted.stdout + quoted.stderr);
-  assert.match(quoted.stdout, /17 routes, 0 failed assertions/);
-  assert.equal(requests.length, 17);
+  assert.match(quoted.stdout, /18 routes, 0 failed assertions/);
+  assert.equal(requests.length, 18);
   assert.ok(requests.every((r) => r.override === QUOTED_OVERRIDE));
 });

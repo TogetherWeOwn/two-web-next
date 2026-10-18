@@ -309,9 +309,9 @@ approved account and binding isolation before any remote mutation.
    failed migration step fails the job before any Cloudflare mutation. The
    queue-create step currently suppresses errors; it is not permission/provisioning evidence.
    The final staging smoke runs `node bin/smoke.mjs https://next.togetherweown.com`
-   ([smoke checker](../bin/smoke.mjs)), covering 16 public routes: `/up`
+   ([smoke checker](../bin/smoke.mjs)), covering 18 public routes: `/up`
    (HTTP 200, `application/json`, `status` healthy/degraded with `queue.status`
-   healthy/degraded/unknown) plus HTML/RSS/iCal/sitemap/robots/redirect/404
+   healthy/degraded/unknown) plus HTML/RSS/iCal/sitemap/robots/security.txt/redirect/404
    routes with CSP/nosniff/content-type/noindex/redirect assertions; queue
    `degraded` or `unknown` is allowed. This is public-route liveness only,
    not DB/schema readiness or queue-drain acceptance.

@@ -7,7 +7,7 @@
 // binding: proof-lib.mjs refuses to generate a config that adds one.
 //
 // The route table satisfies the real deploy smoke checker (bin/smoke.mjs,
-// 17 GETs) so the pinned gradual-promote action runs its genuine gates
+// 18 GETs) so the pinned gradual-promote action runs its genuine gates
 // against this fixture instead of the live site. The fail-up mode makes
 // /up answer 503 with a down envelope, which is a real health failure the
 // checker rejects on status and body shape.
@@ -128,6 +128,19 @@ export function handleProofRequest(request, env = {}) {
       status: 200,
       headers: proofHeaders(env, { "content-type": "text/plain; charset=UTF-8" }),
     });
+  }
+
+  // RFC 9116 publication: the Expires pin must match SMOKE_SECURITY_TXT_EXPIRES
+  // in bin/smoke.mjs (currently 2027-10-01T00:00:00Z) and Canonical must name
+  // the probed origin, mirroring the robots.txt same-origin pattern.
+  if (path === "/.well-known/security.txt") {
+    return new Response(
+      `Contact: https://github.com/TogetherWeOwn/two-web-next/security/advisories/new\nExpires: 2027-10-01T00:00:00Z\nPreferred-Languages: en\nCanonical: ${url.origin}/.well-known/security.txt\nPolicy: https://github.com/TogetherWeOwn/two-web-next/blob/main/SECURITY.md\n`,
+      {
+        status: 200,
+        headers: proofHeaders(env, { "content-type": "text/plain; charset=UTF-8" }),
+      },
+    );
   }
 
   // Shape-only redirect targets: the smoke checker uses redirect: "manual"

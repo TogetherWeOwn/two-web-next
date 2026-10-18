@@ -24,6 +24,7 @@ const routes = [
   { path: "/events.ics", statuses: [200], type: "text/calendar", body: /BEGIN:VCALENDAR/ },
   { path: "/sitemap_index.xml", statuses: [200], type: "application/xml", body: /<urlset\b/ },
   { path: "/robots.txt", statuses: [200], type: "text/plain", body: /User-agent:/i },
+  { path: "/.well-known/security.txt", statuses: [200], type: "text/plain", body: /Contact:/ },
   { path: "/discord", statuses: [302], redirect: "discord" },
   { path: "/profile", statuses: [302], redirect: "login" },
   { path: "/admin", statuses: [302, 403], redirect: "login" },
@@ -48,6 +49,13 @@ export const VERSION_OVERRIDE_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}="[0-9a
 // with a drift message; update the values below to match.
 export const SMOKE_QUEUE_WARN_AT = 20;
 export const SMOKE_QUEUE_CRITICAL_AT = 100;
+
+// Pinned review date shared with src/security-txt.ts (re-exported expiry).
+// This file runs on plain node with no TS loader, so the value is duplicated
+// here and pinned by the drift guard in test/smoke.test.mjs: an expiry change
+// in src/security-txt.ts fails `npm run test:smoke` at PR time with a drift
+// message; update the value below to match.
+export const SMOKE_SECURITY_TXT_EXPIRES = "2027-10-01T00:00:00Z";
 
 export function assertVersionOverride(value) {
   if (
@@ -193,6 +201,24 @@ export async function smoke(
         // this environment's own origin, never the apex or another env's host.
         const line = `Sitemap: ${base.origin}/sitemap_index.xml`;
         check(body.includes(line), `robots ${line}`, "Sitemap line missing or foreign");
+      }
+      if (route.path === "/.well-known/security.txt") {
+        // RFC 9116 publication (S8): Expires must equal the reviewed pin and
+        // Canonical must name this environment's own origin, mirroring the
+        // robots.txt same-origin pattern above. Do not print response bodies
+        // into deploy logs: the actual side stays a fixed string.
+        const expiresLine = `Expires: ${SMOKE_SECURITY_TXT_EXPIRES}`;
+        check(
+          body.includes(expiresLine),
+          `security ${expiresLine}`,
+          "Expires line missing or stale",
+        );
+        const canonicalLine = `Canonical: ${base.origin}/.well-known/security.txt`;
+        check(
+          body.includes(canonicalLine),
+          `security ${canonicalLine}`,
+          "Canonical line missing or foreign",
+        );
       }
       if (route.path === "/sitemap_index.xml") {
         // Same-environment sitemap: every loc stays on the probed origin, and

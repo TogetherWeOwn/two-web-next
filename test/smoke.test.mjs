@@ -4,7 +4,12 @@ import { once } from "node:events";
 import { createServer } from "node:http";
 import { test } from "node:test";
 import { build } from "esbuild";
-import { SMOKE_QUEUE_CRITICAL_AT, SMOKE_QUEUE_WARN_AT, smoke } from "../bin/smoke.mjs";
+import {
+  SMOKE_QUEUE_CRITICAL_AT,
+  SMOKE_QUEUE_WARN_AT,
+  SMOKE_SECURITY_TXT_EXPIRES,
+  smoke,
+} from "../bin/smoke.mjs";
 
 // Independent local responses matching the route contracts, not a live Worker/DB.
 const fixtures = {
@@ -37,6 +42,18 @@ const fixtures = {
     200,
     "text/plain",
     (origin) => `User-agent: *\nDisallow:\nSitemap: ${origin}/sitemap_index.xml\n`,
+  ],
+  // RFC 9116 publication (S8): the stub advertises its own origin the way the
+  // Worker advertises APP_URL, so the probe's Expires-pin and same-origin
+  // Canonical assertions exercise a true positive. The Expires date is
+  // hardcoded here like the queue thresholds in /up above; the drift guard at
+  // the bottom of this file pins SMOKE_SECURITY_TXT_EXPIRES to
+  // src/security-txt.ts, so a pin change fails here first.
+  "/.well-known/security.txt": [
+    200,
+    "text/plain",
+    (origin) =>
+      `Contact: https://github.com/TogetherWeOwn/two-web-next/security/advisories/new\nExpires: 2027-10-01T00:00:00Z\nPreferred-Languages: en\nCanonical: ${origin}/.well-known/security.txt\nPolicy: https://github.com/TogetherWeOwn/two-web-next/blob/main/SECURITY.md\n`,
   ],
   "/discord": [302, null, "", "https://discord.gg/fixture"],
   "/profile": [302, null, "", "/auth/discord"],
@@ -128,7 +145,7 @@ test("CLI passes every route without following redirects or carrying cookies", a
   const { url, requests } = await stub(t);
   const result = await cli([url]);
   assert.equal(result.code, 0, result.output);
-  assert.match(result.output, /17 routes, 0 failed assertions/);
+  assert.match(result.output, /18 routes, 0 failed assertions/);
   assert.deepEqual(
     requests.map((r) => r.path),
     Object.keys(fixtures),
@@ -142,8 +159,8 @@ test("version override pins every gradual-promotion probe to the new version", a
   const override = 'two-web-next-production="22345678-1234-1234-1234-123456789abc"';
   const result = await cli([url, "--version-override", override]);
   assert.equal(result.code, 0, result.output);
-  assert.match(result.output, /17 routes, 0 failed assertions/);
-  assert.equal(requests.length, 17);
+  assert.match(result.output, /18 routes, 0 failed assertions/);
+  assert.equal(requests.length, 18);
   assert.ok(requests.every((r) => r.override === override));
 });
 
@@ -180,7 +197,7 @@ for (const path of Object.keys(fixtures)) {
     assert.equal(result.ok, false);
     assert.ok(result.output.includes(`FAIL ${path}: expected HTTP`), result.output);
     assert.match(result.output, /actual HTTP 503/);
-    assert.equal(requests.length, 17);
+    assert.equal(requests.length, 18);
   });
 }
 
@@ -251,6 +268,62 @@ test("rejects foreign sitemap locs and an empty sitemap", async (t) => {
       result.output,
     );
     assert.doesNotMatch(result.output, /togetherweown\.com/);
+  }
+});
+
+test("rejects a stale security.txt Expires pin without leaking the body", async (t) => {
+  const { url } = await stub(t, (route, result) => {
+    if (route === "/.well-known/security.txt")
+      result.body = result.body.replace(
+        "Expires: 2027-10-01T00:00:00Z",
+        "Expires: 2026-10-01T00:00:00Z",
+      );
+  });
+  const result = await run(url);
+  assert.equal(result.ok, false);
+  assert.match(
+    result.output,
+    /FAIL \/.well-known\/security\.txt: expected security Expires: 2027-10-01T00:00:00Z; actual Expires line missing or stale/,
+  );
+  assert.doesNotMatch(result.output, /2026-10-01T00:00:00Z/);
+});
+
+test("rejects a foreign security.txt Canonical host without leaking the body", async (t) => {
+  const { url } = await stub(t, (route, result) => {
+    if (route === "/.well-known/security.txt")
+      result.body = result.body.replace(
+        /Canonical: http:\/\/[^/]+/u,
+        "Canonical: https://togetherweown.com",
+      );
+  });
+  const result = await run(url);
+  assert.equal(result.ok, false);
+  assert.match(
+    result.output,
+    /FAIL \/.well-known\/security\.txt: expected security Canonical: .*\.well-known\/security\.txt; actual Canonical line missing or foreign/,
+  );
+  assert.doesNotMatch(result.output, /togetherweown\.com/);
+});
+
+test("security.txt passes in both indexing modes", async (t) => {
+  for (const allowIndexable of [false, true]) {
+    const { url } = await stub(t, (route, result) => {
+      // Apex posture for the indexable run: strip the staging noindex from
+      // indexable HTML leaves; the archive and branded 404 keep theirs.
+      // security.txt is text/plain, so neither mode touches its headers.
+      if (allowIndexable && (route === "/events/past" || route === "/__smoke_unknown_route__"))
+        return;
+      if (allowIndexable && result.headers["content-type"]?.startsWith("text/html"))
+        delete result.headers["x-robots-tag"];
+    });
+    const result = await run(url, { allowIndexable });
+    assert.equal(result.ok, true, `allowIndexable=${allowIndexable}: ${result.output}`);
+    // The security.txt route itself passes in both modes: a failure here
+    // would name it explicitly.
+    assert.ok(
+      result.output.includes("PASS /.well-known/security.txt"),
+      `allowIndexable=${allowIndexable}: ${result.output}`,
+    );
   }
 });
 
@@ -390,7 +463,7 @@ test("past events accepts rendered Archive but rejects rendered Upcoming with ar
     });
     const result = await run(url);
     assert.equal(result.ok, expected, result.output);
-    assert.equal(requests.length, 17);
+    assert.equal(requests.length, 18);
     if (!expected) {
       assert.match(
         result.output,
@@ -473,6 +546,29 @@ test("smoke queue thresholds track src/up.ts QUEUE_WARN_AT / QUEUE_CRITICAL_AT",
     SMOKE_QUEUE_CRITICAL_AT,
     QUEUE_CRITICAL_AT,
     `smoke queue critical_at drifted from src/up.ts: smoke=${SMOKE_QUEUE_CRITICAL_AT} src=${QUEUE_CRITICAL_AT}; update SMOKE_QUEUE_CRITICAL_AT in bin/smoke.mjs`,
+  );
+});
+
+test("smoke security.txt expiry tracks src/security-txt.ts SECURITY_TXT_EXPIRES", async () => {
+  // Drift guard: bin/smoke.mjs runs on plain node with no TS loader, so its
+  // expected Expires is duplicated from src/security-txt.ts and pinned here.
+  // An expiry change in src fails this test at PR time (npm run test:smoke is
+  // in the required check job); update SMOKE_SECURITY_TXT_EXPIRES in
+  // bin/smoke.mjs to match.
+  const bundle = await build({
+    entryPoints: ["src/security-txt.ts"],
+    bundle: true,
+    write: false,
+    format: "esm",
+    platform: "node",
+  });
+  const { SECURITY_TXT_EXPIRES } = await import(
+    `data:text/javascript;base64,${Buffer.from(bundle.outputFiles[0].text).toString("base64")}`
+  );
+  assert.equal(
+    SMOKE_SECURITY_TXT_EXPIRES,
+    SECURITY_TXT_EXPIRES,
+    `smoke security Expires drifted from src/security-txt.ts: smoke=${SMOKE_SECURITY_TXT_EXPIRES} src=${SECURITY_TXT_EXPIRES}; update SMOKE_SECURITY_TXT_EXPIRES in bin/smoke.mjs`,
   );
 });
 
@@ -631,7 +727,7 @@ for (const [robotsTag, expected] of [
     });
     const result = await run(url);
     assert.equal(result.ok, expected, result.output);
-    assert.equal(requests.length, 17);
+    assert.equal(requests.length, 18);
     if (!expected) {
       for (const path of ["/about", "/admin"]) {
         assert.ok(
@@ -716,7 +812,7 @@ for (const [location, expected] of [
     });
     const result = await run(url);
     assert.equal(result.ok, expected, result.output);
-    assert.equal(requests.length, 17);
+    assert.equal(requests.length, 18);
     assert.ok(!result.output.includes("never-log-this"));
     if (!expected) {
       assert.match(
@@ -762,7 +858,7 @@ test("connection failures include route and expected versus actual", async (t) =
     result.output,
     /FAIL \/up: expected HTTP response and body within timeout; actual TypeError/,
   );
-  assert.match(result.output, /17 routes, 17 failed assertions/);
+  assert.match(result.output, /18 routes, 18 failed assertions/);
 });
 
 test("invalid input is rejected before making requests", async () => {
@@ -790,7 +886,7 @@ test("allowIndexable passes apex HTML without the staging noindex", async (t) =>
   });
   const result = await run(url, { allowIndexable: true });
   assert.equal(result.ok, true, result.output);
-  assert.equal(requests.length, 17);
+  assert.equal(requests.length, 18);
   assert.ok(requests.every((r) => r.method === "GET" && r.cookie === undefined));
 });
 
@@ -826,5 +922,5 @@ test("CLI --allow-indexable reaches the apex posture", async (t) => {
   });
   const result = await cli([url, "--allow-indexable"]);
   assert.equal(result.code, 0, result.output);
-  assert.match(result.output, /17 routes, 0 failed assertions/);
+  assert.match(result.output, /18 routes, 0 failed assertions/);
 });
