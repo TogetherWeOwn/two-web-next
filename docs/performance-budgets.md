@@ -226,6 +226,21 @@ evidence plus an evaluated assertion miss: see `quality-summary.md`), or an
 unclassified step failure (full evidence, no assertion verdict). Both files
 ship in the `web-quality-origin-*` artifact.
 
+Mobile collection survives one transient the same way: `npm run
+lighthouse:origin` runs `ci/lighthouse-origin-run.mjs`, which reruns the whole
+`lhci autorun` a single time when the first attempt comes up short of LHRs (8
+routes x 3 runs = 24 with a discovered event, 7 x 3 = 21 when the event route
+is skipped), counted from collect's per-run `.lighthouseci/lhr-*.json` files.
+The retry also fires on the truncation signature of exit 0 with tail routes
+unmeasured, which the old single-shot runner failed closed on with no
+diagnosis. A full-evidence assert failure never retries. Every run writes
+`.lighthouseci/origin-collect.log` (full lhci output) and, on failure,
+`.lighthouseci/origin-collect-diagnosis.md`, which says COLLECT FAILURE
+(short evidence, naming the routes short of runs: re-run the step, budgets
+untouched), BUDGET BREACH (full evidence plus an evaluated assertion miss:
+see `watch-summary.md`), or an unclassified step failure (full evidence, no
+assertion verdict). Both files ship in the `web-quality-origin-*` artifact.
+
 The byte ceilings are specific to Next's unbundled assets, based on the measured
 2026-09-30 sizes documented in `ci/bundle-budget.json`, with roughly 25–45%
 headroom. They are not copied from legacy Vite/Filament bundles that Next does not

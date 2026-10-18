@@ -530,7 +530,10 @@ function selftest() {
   });
 }
 
-if (process.argv.includes("--selftest")) selftest();
-else if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
-  process.exitCode = await main(process.argv.slice(2));
+// Gated on being the entry point: ci/lighthouse-origin-run.mjs imports the
+// helpers above, and must never trigger this selftest (or a main run) as a
+// side effect of that import.
+if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
+  if (process.argv.includes("--selftest")) selftest();
+  else process.exitCode = await main(process.argv.slice(2));
 }
