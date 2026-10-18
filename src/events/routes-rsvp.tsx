@@ -167,7 +167,11 @@ export function registerRsvpRoutes(app: App, readFragmentSession: SessionReader)
       "attendees" in input,
     );
     const path = rsvpPageReturnPath(key, attendeePage);
-    if (response.ok) return c.redirect(path, 303);
+    // A withdraw that deletes no caller row is already-withdrawn state, like
+    // the island's withdraw-404 convergence: back to the event page, whose own
+    // 404 still covers unknown or forged keys. Other failures keep refusal.
+    const alreadyWithdrawn = input.status === "withdraw" && response.status === 404;
+    if (response.ok || alreadyWithdrawn) return c.redirect(path, 303);
     if (response.status === 401) return c.redirect(loginUrl(path), 303);
     const retryAfter = response.headers.get("Retry-After");
     // No-JS refusal renders inside the branded event shell (viewport, skip
