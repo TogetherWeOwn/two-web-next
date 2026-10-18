@@ -1,4 +1,4 @@
-// Queue-level pin for the shared Retry-After cap (TOG-30733 review follow-up).
+// Queue-level pin for the shared Retry-After cap (review follow-up).
 //
 // The shared parser caps representable-but-absurd headers at
 // MAX_RETRY_DELAY_SECONDS before the bot transport hands them to queue
