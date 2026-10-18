@@ -591,7 +591,11 @@ describe.skipIf(!process.env.DATABASE_URL)("RSVP waitlist (agent-testdb)", () =>
       expect(res.status).toBe(422);
       const capacityError = `${CAPACITY_BELOW_GOING} Occupied seats: 2.`;
       if (surface === "json")
-        expect(await res.json()).toEqual({ error: "invalid", fields: { capacity: capacityError } });
+        expect(await res.json()).toEqual({
+          error: "invalid",
+          fields: { capacity: capacityError },
+          request_id: res.headers.get("x-request-id"),
+        });
       else expect(await res.text()).toContain(capacityError);
       const [stored] = await db.select().from(events).where(eq(events.id, ev.id));
       expect(stored!.capacity).toBe(2);

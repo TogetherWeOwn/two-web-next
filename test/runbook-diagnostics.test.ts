@@ -108,4 +108,50 @@ describe("runbook diagnostic and homepage contract", () => {
     expect(health).not.toMatch(/curl\s|fetch\(/);
     expect(outage).not.toMatch(/curl\s|fetch\(/);
   });
+
+  it("reconciles the withdrawn freeze across the watch companions", () => {
+    const watch = readFileSync(new URL("../docs/48h-watch-spec.md", import.meta.url), "utf8");
+    const record = readFileSync(new URL("../docs/watch-run-record.md", import.meta.url), "utf8");
+    const rollback = readFileSync(new URL("../docs/cutover-rollback.md", import.meta.url), "utf8");
+    for (const [name, text] of [
+      ["48h-watch-spec.md", watch],
+      ["watch-run-record.md", record],
+      ["cutover-rollback.md", rollback],
+    ] as const) {
+      expect(text, `${name} still imposes the freeze`).not.toContain("stays in force");
+      expect(text, `${name} still auto-lifts`).not.toContain("lifts the freeze there");
+      expect(text, `${name} misses the declaration rule`).toMatch(
+        /any future\s+freeze needs a\s+separate declaration/i,
+      );
+      expect(text, `${name} misses no-auto-lift`).toMatch(
+        /watch exit alone does not lift a freeze|never by watch exit alone/i,
+      );
+    }
+    expect(rollback).toMatch(/writer holds[\s\S]*identified before import/i);
+  });
+
+  it("observes production with the config-derived app and Tail workers", () => {
+    const wrangler = readFileSync(new URL("../wrangler.jsonc", import.meta.url), "utf8");
+    const production = wrangler.split('"production"')[1]!;
+    const app = production.match(/"name":\s*"([^"]+)"/)![1]!;
+    const tail = production.match(/"tail_consumers":\s*\[\s*\{\s*"service":\s*"([^"]+)"/)![1]!;
+    expect(app).toBe("two-web-next-production");
+    expect(tail).toBe("two-web-next-alerts-production");
+    const watch = readFileSync(new URL("../docs/48h-watch-spec.md", import.meta.url), "utf8");
+    expect(watch).toContain(`npx wrangler tail ${app}`);
+    expect(watch).toContain(`npx wrangler tail ${tail}`);
+    expect(watch).toMatch(/Staging comparison only.*`two-web-next`/s);
+    expect(watch).toMatch(/As printed it filters staging[\s\S]*for production substitute/i);
+    expect(watch).toMatch(new RegExp(`for production substitute[\\s\\S]*\`${app}\``, "i"));
+  });
+
+  it("smokes the apex with --allow-indexable over the 18-route set", () => {
+    const watch = readFileSync(new URL("../docs/48h-watch-spec.md", import.meta.url), "utf8");
+    expect(watch).toContain("node bin/smoke.mjs https://togetherweown.com --allow-indexable");
+    expect(watch).toMatch(/Eighteen public routes/s);
+    expect(watch).toMatch(/Without `--allow-indexable` the apex probe fails/s);
+    expect(watch).toContain("node bin/smoke.mjs https://next.togetherweown.com");
+    const smokeTests = readFileSync(new URL("./smoke.test.mjs", import.meta.url), "utf8");
+    expect(smokeTests).toContain("allowIndexable rejects a staging noindex leaked onto apex HTML");
+  });
 });

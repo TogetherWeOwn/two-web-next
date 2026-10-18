@@ -127,7 +127,10 @@ jobs:
         # HTML omits the staging noindex (src/headers.ts); the archive and the
         # branded 404 stay meta-noindex and skip the header assertion inside
         # the checker. DB/schema readiness is mandatory via the /up envelope;
-        # queue-only degraded/unknown is allowed.
+        # queue-only degraded/unknown is allowed. Critical ready-wait warns
+        # and passes here by design (--fail-on-ready-wait-critical is
+        # staging-only): the age reflects shared queue_jobs state, not the
+        # rolled-back version, so it must not fail a good rollback.
         run: |
           for i in 1 2 3 4 5 6; do
             if node bin/smoke.mjs https://togetherweown.com --allow-indexable; then
