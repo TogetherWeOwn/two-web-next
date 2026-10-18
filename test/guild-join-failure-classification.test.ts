@@ -173,7 +173,7 @@ describe("addGuildMember classifies failures by kind and status", () => {
     const logs = captureDiagnosticStream();
     const fetchFn = vi.fn(async () => respond());
     vi.stubGlobal("fetch", fetchFn);
-    const result: string = await addGuildMember("guild", "42", TOK, BOT);
+    const result: string = await addGuildMember("326474832151838730", "42", TOK, BOT);
     expect(result).toBe(expected);
     expect(CLASSIFIED).toContain(result);
     // Classification never retries: exactly one provider call per attempt.
@@ -200,7 +200,7 @@ describe("addGuildMember classifies failures by kind and status", () => {
         throw makeError();
       });
       vi.stubGlobal("fetch", fetchFn);
-      const result: string = await addGuildMember("guild", "42", TOK, BOT);
+      const result: string = await addGuildMember("326474832151838730", "42", TOK, BOT);
       expect(result).toBe("transport_failure");
       expect(CLASSIFIED).toContain(result);
       expect(fetchFn).toHaveBeenCalledTimes(1);
@@ -215,7 +215,7 @@ describe("addGuildMember classifies failures by kind and status", () => {
       const logs = captureDiagnosticStream();
       const fetchFn = vi.fn(async () => new Response(null, { status: 201 }));
       vi.stubGlobal("fetch", fetchFn);
-      const result: string = await addGuildMember("guild", "42", TOK, botToken);
+      const result: string = await addGuildMember("326474832151838730", "42", TOK, botToken);
       expect(result).toBe("failed");
       expect(fetchFn).not.toHaveBeenCalled();
       logsClean(logs);
@@ -237,7 +237,7 @@ describe("join journey seam: the classified result reaches finishJoin and degrad
         "fetch",
         vi.fn(async () => new Response(null, { status })),
       );
-      const outcome = await liveBotAdd(BOT)("guild", "42", TOK);
+      const outcome = await liveBotAdd(BOT)("326474832151838730", "42", TOK);
       expect(outcome.requestId).toBeNull();
       expect(outcome.result as string).toBe(expected);
       leakFree(outcome);
@@ -251,7 +251,7 @@ describe("join journey seam: the classified result reaches finishJoin and degrad
         throw new TypeError(`failed sending ${TOK}`);
       }),
     );
-    const outcome = await liveBotAdd(BOT)("guild", "42", TOK);
+    const outcome = await liveBotAdd(BOT)("326474832151838730", "42", TOK);
     expect(outcome).toEqual({ result: "transport_failure", requestId: null });
     leakFree(outcome);
   });

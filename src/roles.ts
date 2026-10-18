@@ -14,6 +14,15 @@ import { discordFetch } from "./discord-http";
 
 const API = "https://discord.com/api/v10";
 
+// Charset-bound Discord IDs, same contract as `isDiscordId` in `./discord`:
+// ASCII digits only, nonempty, tested as-is with no trimming, coercion or
+// decoding. Kept local (not imported) so the `bin/check-moderators.mjs`
+// strip-only CLI never loads `./discord`, whose parameter properties Node's
+// type-stripping cannot parse.
+function isDiscordId(value: unknown): value is string {
+  return typeof value === "string" && /^\d+$/.test(value);
+}
+
 export type GuildMemberRoles = { roles: string[]; joinedAt: string | null };
 
 export async function fetchMemberRoles(
@@ -21,12 +30,18 @@ export async function fetchMemberRoles(
   userId: string,
   botToken: string,
 ): Promise<GuildMemberRoles | null> {
+  // Charset admission first: a malformed guild or user id returns null before
+  // any header construction or fetch, so zero Discord requests are emitted.
+  if (!isDiscordId(guildId) || !isDiscordId(userId)) return null;
   // Fail closed on an unconfigured bot token (TOG-12687): no bot call is
   // emitted, so the caller degrades to a non-moderator flag.
   if (!botToken || botToken.trim().length === 0) return null;
-  const res = await discordFetch(`${API}/guilds/${guildId}/members/${userId}`, {
-    headers: { authorization: `Bot ${botToken}` },
-  });
+  const res = await discordFetch(
+    `${API}/guilds/${encodeURIComponent(guildId)}/members/${encodeURIComponent(userId)}`,
+    {
+      headers: { authorization: `Bot ${botToken}` },
+    },
+  );
   if (res.status === 404) return null;
   if (!res.ok) {
     console.warn("moderator recompute lookup failed", { status: res.status });

@@ -3,6 +3,14 @@ import { discordFetch } from "./discord-http";
 import { MAX_RETRY_DELAY_SECONDS } from "./jobs/retry-delay";
 const API = "https://discord.com/api/v10";
 
+// Charset-bound Discord IDs: ASCII digits only, nonempty, tested as-is with
+// no trimming, coercion or decoding. Length is deliberately unpinned here;
+// digits are the contract. Terminal line breaks, spaces, fullwidth digits
+// and every other non-digit shape fail.
+export function isDiscordId(value: unknown): value is string {
+  return typeof value === "string" && /^\d+$/.test(value);
+}
+
 // identify: who they are. guilds.join: lets our bot add them to the TWO server in one click.
 export const SCOPES = ["identify", "guilds.join"] as const;
 
@@ -225,8 +233,7 @@ export async function fetchUser(accessToken: string): Promise<DiscordUser> {
     user === null ||
     typeof user !== "object" ||
     Array.isArray(user) ||
-    typeof user.id !== "string" ||
-    !user.id ||
+    !isDiscordId(user.id) ||
     typeof user.username !== "string" ||
     !user.username ||
     (user.global_name !== null && typeof user.global_name !== "string") ||
@@ -260,17 +267,24 @@ export async function addGuildMember(
   accessToken: string,
   botToken: string,
 ): Promise<JoinResult> {
+  // Charset admission first: a malformed guild or user id fails before any
+  // header/body construction or fetch, so zero Discord requests means no
+  // Authorization is ever emitted for it.
+  if (!isDiscordId(guildId) || !isDiscordId(userId)) return "failed";
   // Fail closed on an unconfigured bot token (TOG-12687): a blank token must
   // emit zero bot-credentialed calls, so the callers degrade to the invite
   // fallback instead of sending `Bot ` with nothing after it.
   if (!botToken || botToken.trim().length === 0) return "failed";
   let res: Response;
   try {
-    res = await discordFetch(`${API}/guilds/${guildId}/members/${userId}`, {
-      method: "PUT",
-      headers: { authorization: `Bot ${botToken}`, "content-type": "application/json" },
-      body: JSON.stringify({ access_token: accessToken }),
-    });
+    res = await discordFetch(
+      `${API}/guilds/${encodeURIComponent(guildId)}/members/${encodeURIComponent(userId)}`,
+      {
+        method: "PUT",
+        headers: { authorization: `Bot ${botToken}`, "content-type": "application/json" },
+        body: JSON.stringify({ access_token: accessToken }),
+      },
+    );
   } catch {
     return "transport_failure";
   }
