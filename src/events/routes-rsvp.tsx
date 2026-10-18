@@ -6,7 +6,7 @@ import { dbFor } from "../admin/db";
 import { requestBodyLimit } from "../body-limit";
 import type { Session } from "../env";
 import { rateLimitExceeded } from "../errors";
-import { RSVP_HONEY_FIELD, loginUrl, rsvpHoneyFilled, rsvpTrapTripped } from "../islands/contracts";
+import { RSVP_HONEY_FIELD, loginUrl, rsvpHoneyFilled } from "../islands/contracts";
 import { renderHtmlOutcome } from "../html-outcome";
 import { eventKeyAllowed } from "./keys";
 import { dispatchRsvpSync, isRsvpStatus, withdrawRsvp, writeRsvp, type RsvpAnswer } from "./rsvp";
@@ -40,10 +40,17 @@ const putRsvp = async (
   readFragmentSession: SessionReader,
 ): Promise<Response> => {
   c.header("cache-control", "private, no-store");
-  // Decoy (TOG-8715): a filled honeypot answers the byte-identical first-write success
+  // Decoy: a filled honeypot answers the byte-identical first-write success
   // without touching limiter, auth or DB, and logs nothing. Present non-string
   // values count as filled (fail-closed); absent/empty inputs are genuine.
-  if (rsvpTrapTripped(input)) {
+  // Both sources are evaluated independently, with ALL values preserved:
+  // `query()` is first-wins, so duplicates use `queries()` — an empty query
+  // value must not mask a filled sibling or a filled body decoy, and a
+  // non-string body value trips like a filled string. The status echo reads
+  // the body only; no other query parameter influences the trap or the echo.
+  const queryHoney = c.req.queries(RSVP_HONEY_FIELD);
+  const bodyHoney = input[RSVP_HONEY_FIELD];
+  if (rsvpHoneyFilled(queryHoney) || rsvpHoneyFilled(bodyHoney)) {
     return c.json(
       rsvpBody({
         status: isRsvpStatus(input.status) ? input.status : "going",
