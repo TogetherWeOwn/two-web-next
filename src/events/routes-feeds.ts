@@ -7,6 +7,7 @@ import { canonicalEventKey, eventKeyAllowed } from "./keys";
 import { getEventRow, listFeed } from "./reads";
 import {
   eventsUnavailable,
+  matchesIfNoneMatch,
   publicReadGuard,
   type App,
   type Ctx,
@@ -25,11 +26,7 @@ async function feedResponse(
   headers: Record<string, string>,
 ): Promise<Response> {
   const etag = await sha256Etag(body);
-  const inm = c.req.header("if-none-match");
-  if (
-    inm &&
-    (inm.trim() === "*" || inm.split(",").some((t) => t.trim().replace(/^W\//, "") === etag))
-  ) {
+  if (matchesIfNoneMatch(c.req.header("if-none-match"), etag)) {
     return c.body(null, 304, { etag, "cache-control": headers["cache-control"]! });
   }
   return c.body(body, 200, { ...headers, etag });
