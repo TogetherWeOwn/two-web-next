@@ -1,6 +1,8 @@
 // Calendar/collection event routes: GET /events and GET /events/past.
 // Split out of src/events/routes.tsx; behavior unchanged.
 import { dbFor } from "../admin/db";
+import { isDatabaseUnavailable } from "../db/errors";
+import { databaseUnavailable } from "../errors";
 import { inviteDestination } from "../invite";
 import { takeJoinResult, readJoinResult } from "../return-journey";
 import { loadCalendarPageModel, resolveCalendarInput } from "./page-models.server";
@@ -42,9 +44,22 @@ export function registerCalendarRoutes(
     if (limited) return limited;
     const db = await dbFor(c);
     if (!db) return eventsUnavailable(c);
-    const session = await (c.req.header("x-two-island") === "events-calendar"
-      ? readFragmentSession(c)
-      : readSession(c));
+    let session;
+    try {
+      session = await (c.req.header("x-two-island") === "events-calendar"
+        ? readFragmentSession(c)
+        : readSession(c));
+    } catch (err) {
+      // Rotation errors arrive already normalized (classified outage or plain
+      // Error) and answer 503, never a silent guest or a 500; named non-outage
+      // exceptions are genuine programming errors, so they rethrow like home.
+      // Class-only log: driver messages can carry DSN fragments.
+      if (err instanceof Error && err.name !== "Error" && !isDatabaseUnavailable(err)) throw err;
+      console.error("events calendar could not resolve the session; refusing.", {
+        exception: err instanceof Error ? err.constructor.name : "unknown",
+      });
+      return databaseUnavailable(c);
+    }
     const now = new Date();
 
     const { searching } = input;
