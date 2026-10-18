@@ -604,6 +604,21 @@
           "concurrently": false,
           "method": "btree",
           "with": {}
+        },
+        "join_attempts_discord_id_idx": {
+          "name": "join_attempts_discord_id_idx",
+          "columns": [
+            {
+              "expression": "discord_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
         }
       },
       "foreignKeys": {},
