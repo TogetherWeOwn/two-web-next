@@ -230,8 +230,11 @@ describe("homepage upcoming events", () => {
     );
     expect(f.queries[1]!.params).toEqual(["published", expect.any(String), 3]);
     expect(f.queries[2]!.sql).toContain('"rsvps"."status" =');
-    expect(f.queries[2]!.params).toEqual([1, 2, 3, "going"]);
-    expect(f.queries[2]!.sql).not.toContain("user_id");
+    expect(f.queries[2]!.params).toEqual([1, 2, 3, "going", ""]);
+    // Attributable count: joins users and counts only named rows, still with
+    // no viewer id anywhere in the params.
+    expect(f.queries[2]!.sql).toContain('inner join "users"');
+    expect(f.queries[2]!.sql).toContain('"users"."username" <>');
     expect(Object.keys(rows[0]!).sort()).toEqual([
       "eventKey",
       "goingCount",

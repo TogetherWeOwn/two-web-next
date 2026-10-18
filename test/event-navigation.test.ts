@@ -300,7 +300,13 @@ describe("event navigation SQL and SSR (local fixtures)", () => {
       expect(viewerAnswers).toHaveLength(1);
       expect(viewerAnswers[0]!.params).toContain("100000000000000001");
       expect(f.queries.filter((q) => q.sql.includes("row_number() over"))).toHaveLength(1);
-      expect(f.queries.filter((q) => q.sql.includes('inner join "users"'))).toHaveLength(1);
+      // Exactly one roster-shaped read (joins users, no group-by); the
+      // attributable going-count aggregate joins too and is pinned separately.
+      expect(
+        f.queries.filter(
+          (q) => q.sql.includes('inner join "users"') && !q.sql.includes("group by"),
+        ),
+      ).toHaveLength(1);
     },
   );
 

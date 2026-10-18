@@ -31,6 +31,11 @@ describe.skipIf(!url)("listUpcoming orders equal starts by id (isolated test DB)
           (9101, '01J0000000000000000000T0L', 'Later', '2071-01-01T18:00:00Z', '2071-01-01T20:00:00Z', 'published'),
           (9102, '01J0000000000000000000T0D', 'Draft tied', ${TIED_STARTS}, ${TIED_ENDS}, 'draft'),
           (9103, '01J0000000000000000000T0X', 'Cancelled tied', ${TIED_STARTS}, ${TIED_ENDS}, 'cancelled')`;
+      // Attributable seed: the going count joins users and counts only
+      // named rows.
+      await client`insert into users (id, username)
+        values ('424242424242424242', '424242424242424242')
+        on conflict (id) do nothing`;
       await client`insert into rsvps (event_id, user_id, status)
         values (9002, '424242424242424242', 'going')`;
 

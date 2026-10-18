@@ -25,8 +25,10 @@ const featuredSql =
 // bounds) stays visible at every instant.
 const publishedFeaturedSql =
   'select "id", "title", "body", "url", "image_url", "image_alt", "starts_at", "ends_at" from "featured_contents" where "featured_contents"."is_published" = $1 order by "featured_contents"."position" asc, "featured_contents"."id" asc';
+// Attributable going count: joins users and counts only named rows, so the
+// badge agrees with the roster (the fixture's three going members are named).
 const goingSql =
-  'select "event_id", count(*) from "rsvps" where ("rsvps"."event_id" in ($1) and "rsvps"."status" = $2) group by "rsvps"."event_id"';
+  'select "rsvps"."event_id", count(*) from "rsvps" inner join "users" on "rsvps"."user_id" = "users"."id" where ("rsvps"."event_id" in ($1) and "rsvps"."status" = $2 and "users"."username" <> $3) group by "rsvps"."event_id"';
 const localOrigin = "http://127.0.0.1:8787";
 
 function neighborSql(comparison: "<" | ">", direction: "asc" | "desc"): string {
@@ -106,7 +108,7 @@ export function fixtureEnvForRequest(nowMs: number): Env & Record<string, unknow
         return { rows: [] }; // Only these transaction-local read timeouts are simulated.
       }
       if (method === "all") {
-        if (sql === goingSql && sameParams(params, [fixture.id, "going"]))
+        if (sql === goingSql && sameParams(params, [fixture.id, "going", ""]))
           return { rows: [[fixture.id, 3]] };
         if (
           sql === `${eventSelect} where "events"."event_key" = $1` &&

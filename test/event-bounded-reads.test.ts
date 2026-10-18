@@ -12,6 +12,7 @@ import { drizzle } from "drizzle-orm/postgres-js";
 import postgres from "postgres";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { events, featuredContents, rsvps } from "../src/db/admin-schema";
+import { users } from "../src/db/schema";
 import { adminSchema, schema, type Db } from "../src/db/index";
 import { getPublicEvent, listHomeUpcoming, listJson, listUpcoming } from "../src/events/reads";
 import { listVisibleFeatured } from "../src/featured";
@@ -101,6 +102,17 @@ describe.skipIf(!process.env.DATABASE_URL)("event bounded reads (agent-testdb)",
           status: "published",
         })
         .returning();
+      // Attributable seeds: the going count joins users and counts only
+      // named rows, so every going identity carries a stored name.
+      await db
+        .insert(users)
+        .values(
+          [`going-a-${tag}-${i}`, `going-b-${tag}-${i}`, `going-c-${tag}-${i}`].map((id) => ({
+            id,
+            username: id,
+          })),
+        )
+        .onConflictDoNothing();
       await db.insert(rsvps).values([
         { eventId: row!.id, userId: `going-a-${tag}-${i}`, status: "going" },
         { eventId: row!.id, userId: `going-b-${tag}-${i}`, status: "going" },

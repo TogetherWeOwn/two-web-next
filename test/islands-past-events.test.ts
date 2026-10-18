@@ -224,8 +224,14 @@ describe("PastEvents contract and SSR drift", () => {
     expect(rows!.params.slice(-2)).toEqual([21, 20]);
     expect(rows!.sql).toContain('order by "events"."starts_at" desc, "events"."id" desc');
     expect(aggregate!.sql).toContain('group by "rsvps"."event_id"');
-    expect(aggregate!.sql).not.toMatch(/user_id|member_id|join/i);
-    expect(source.queries.every((q) => !/join|user_id|member_id/i.test(q.sql))).toBe(true);
+    // Attributable count: joins users for the named-only rule, but never a
+    // viewer answer — params are event ids, the going status, and the
+    // non-empty-name bound, with no session id.
+    expect(aggregate!.sql).toContain('inner join "users"');
+    expect(aggregate!.sql).toContain('"users"."username" <>');
+    expect(aggregate!.params.at(-1)).toBe("");
+    expect(source.queries.every((q) => !/member_id/i.test(q.sql))).toBe(true);
+    expect(source.queries.filter((q) => /join/i.test(q.sql))).toEqual([aggregate]);
   });
 });
 

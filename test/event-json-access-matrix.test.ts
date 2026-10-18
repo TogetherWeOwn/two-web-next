@@ -12,6 +12,7 @@ import { serializeSigned } from "hono/utils/cookie";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import app from "./app";
 import { events, rsvps } from "../src/db/admin-schema";
+import { users } from "../src/db/schema";
 import type { Env } from "../src/env";
 import { createMemorySessionStore, hashToken, newSessionToken } from "../src/sessions";
 import { createMemberDataFixture, type MemberDataFixture } from "./helpers/member-data-db";
@@ -253,6 +254,14 @@ describe.skipIf(!process.env.DATABASE_URL)("event JSON access matrix (agent-test
         endsAt: new Date("2099-11-04T22:00:00Z"),
       })
       .returning();
+    // Attributable seeds: the going count only counts named rows.
+    await db
+      .insert(users)
+      .values([
+        { id: "going-1", username: "going-1" },
+        { id: "going-2", username: "going-2" },
+      ])
+      .onConflictDoNothing();
     await db.insert(rsvps).values([
       { eventId: ev!.id, userId: "going-1", status: "going" },
       { eventId: ev!.id, userId: "going-2", status: "going" },

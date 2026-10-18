@@ -13,6 +13,7 @@ import { serializeSigned } from "hono/utils/cookie";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import app from "./app";
 import { events, rsvps } from "../src/db/admin-schema";
+import { users } from "../src/db/schema";
 import type { Db } from "../src/db/index";
 import { createMemberDataFixture, type MemberDataFixture } from "./helpers/member-data-db";
 import type { Env } from "../src/env";
@@ -507,6 +508,14 @@ describe.skipIf(!process.env.DATABASE_URL)("events routes (agent-testdb)", () =>
         rsvpOpen: false,
       })
       .returning();
+    // Attributable seeds: the going count only counts named rows.
+    await db
+      .insert(users)
+      .values([
+        { id: "going-a", username: "going-a" },
+        { id: "going-b", username: "going-b" },
+      ])
+      .onConflictDoNothing();
     await db.insert(rsvps).values([
       { eventId: event!.id, userId: "going-a", status: "going" },
       { eventId: event!.id, userId: "going-b", status: "going" },
@@ -617,6 +626,8 @@ describe.skipIf(!process.env.DATABASE_URL)("events routes (agent-testdb)", () =>
     await db.insert(events).values(eventRow(4, "published", 5));
     expect((await req(path, await as(MEMBER, { "if-none-match": etag }))).status).toBe(200);
     const current = (await req(path, await as(MEMBER))).headers.get("etag")!;
+    // Attributable seed: the going count only counts named rows.
+    await db.insert(users).values({ id: "going", username: "going" }).onConflictDoNothing();
     await db.insert(rsvps).values({ eventId: seeded[0]!.id, userId: "going", status: "going" });
     expect((await req(path, await as(MEMBER, { "if-none-match": current }))).status).toBe(200);
     const counted = (await req(path, await as(MEMBER))).headers.get("etag")!;

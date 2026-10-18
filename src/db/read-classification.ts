@@ -15,8 +15,15 @@ const fixedStatements = {
     "select set_config('lock_timeout', $1, true), set_config('statement_timeout', $2, true)",
 };
 // Only bound-list cardinality varies; no interpolated identifiers/projections.
-const goingCounts =
+// Two pinned shapes: the legacy all-rows occupancy count (admin Fill column
+// and fill filter, matching write-path seat enforcement) and the public
+// attributable count (withGoing joins users and counts only named rows, so
+// the badge and the full verdict agree with the roster; the join qualifies
+// "rsvps"."event_id"). Both return a single cardinality, never identities.
+const goingCountsLegacy =
   /^select "event_id", count\(\*\) from "rsvps" where \("rsvps"\."event_id" in \(\$\d+(?:, \$\d+)*\) and "rsvps"\."status" = \$\d+\) group by "rsvps"\."event_id"$/;
+const goingCountsNamed =
+  /^select "rsvps"\."event_id", count\(\*\) from "rsvps" inner join "users" on "rsvps"\."user_id" = "users"\."id" where \("rsvps"\."event_id" in \(\$\d+(?:, \$\d+)*\) and "rsvps"\."status" = \$\d+ and "users"\."username" <> \$\d+\) group by "rsvps"\."event_id"$/;
 // Roster totals return a single cardinality, never member identifiers. The
 // username filter is a bound parameter; only these two join/where shapes may
 // run under the roster-count classification.
@@ -37,7 +44,7 @@ export function validateNonSensitiveRead(
 ): void {
   const query = normalizedStatement(statement);
   if (classification === "going-counts") {
-    if (!goingCounts.test(query)) refuseMemberRead();
+    if (!goingCountsLegacy.test(query) && !goingCountsNamed.test(query)) refuseMemberRead();
     return;
   }
   if (classification === "roster-count") {

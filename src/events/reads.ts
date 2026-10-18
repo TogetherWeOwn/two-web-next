@@ -45,6 +45,14 @@ export const PAGE_SIZE = PAST_EVENTS_PAGE_SIZE;
 export const JSON_DEFAULT_LIMIT = PUBLIC_DATA_BOUNDS.defaultPageSize;
 export const JSON_MAX_LIMIT = PUBLIC_DATA_BOUNDS.maxPageSize;
 
+/** Attributable going counts: exactly the rows the roster can list.
+ * `listGoingAttendees` excludes nameless rows (empty stored name, or no
+ * user row at all) so no nameless identity is ever rendered. Counting every
+ * going row here let the badge and the `full` verdict disagree with that
+ * roster, so this joins users and counts only named rows: `goingCount`
+ * always equals the roster length (within one roster page), and the
+ * `full`/waitlist CTA in `rsvp-button.tsx` is driven by that same
+ * attributable count. */
 async function withGoing(
   db: Pick<Db, "select">,
   rows: (typeof events.$inferSelect)[],
@@ -54,6 +62,7 @@ async function withGoing(
     db
       .select({ eventId: rsvps.eventId, n: count() })
       .from(rsvps)
+      .innerJoin(users, eq(rsvps.userId, users.id))
       .where(
         and(
           inArray(
@@ -61,6 +70,7 @@ async function withGoing(
             rows.map((r) => r.id),
           ),
           eq(rsvps.status, "going"),
+          ne(users.username, ""),
         ),
       )
       .groupBy(rsvps.eventId),
