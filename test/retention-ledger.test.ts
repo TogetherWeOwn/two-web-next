@@ -352,7 +352,7 @@ describe("retention ledger doc rows", () => {
       'console.warn("Model prune pass hit per-table batch cap with rows possibly pending.", {',
     );
     expect(normalizeSqlWindow(read("src/jobs/postgres.ts"))).toContain(
-      "delete from board_view_logs where id in ( select id from board_view_logs where occurred_at < ${cutoff} order by id limit ${PRUNE_DELETE_BATCH_SIZE} ) returning 1",
+      "delete from board_view_logs where id in ( select id from board_view_logs where occurred_at < ${cutoff} order by id limit ${PRUNE_DELETE_BATCH_SIZE} for update skip locked ) returning 1",
     );
     const proof = read("test/prune.test.ts");
     for (const name of [
