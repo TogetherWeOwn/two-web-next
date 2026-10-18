@@ -1,14 +1,21 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
+import { stagingQualityJob, stagingQualitySteps } from "./production-deploy-gate.mjs";
 import { resolvePromotionSha } from "./resolve-promotion-sha.mjs";
 
 const A = "a".repeat(40);
 const B = "b".repeat(40);
 const TIP = "f".repeat(40);
 
+// Step fixtures for the staging-quality job, named from the deploy gate's own
+// constants so a rename in the gate (or a stale literal in the resolver) breaks here.
+const lhSteps = (conclusions) =>
+  stagingQualitySteps.map((name, i) => ({ name, conclusion: conclusions[i] ?? "success" }));
+
 // runs: newest first, as the API returns them; jobs: run id -> staging-journeys conclusion, or
-// { journeys, quality } (quality defaults to success; null leaves the job out, like runs before the gate existed).
+// { journeys, quality, qualitySteps, qualityJobs } (quality defaults to success with both
+// Lighthouse steps executed successfully; null leaves the job out, like runs before the gate existed).
 function stub(runs, jobs) {
   return async (url) => {
     const { pathname, searchParams } = new URL(url);
@@ -32,9 +39,13 @@ function stub(runs, jobs) {
       const spec =
         typeof jobs[id] === "object" && jobs[id] !== null ? jobs[id] : { journeys: jobs[id] };
       const quality = "quality" in spec ? spec.quality : "success";
+      const qualitySteps = "qualitySteps" in spec ? spec.qualitySteps : lhSteps([]);
+      const qualityJobs = spec.qualityJobs ?? (quality ? 1 : 0);
       const list = [];
       if (spec.journeys) list.push({ name: "staging-journeys", conclusion: spec.journeys });
-      if (quality) list.push({ name: "staging-quality / quality", conclusion: quality });
+      for (let i = 0; i < qualityJobs; i++) {
+        list.push({ name: stagingQualityJob, conclusion: quality, steps: qualitySteps });
+      }
       return { ok: true, json: async () => ({ jobs: list }) };
     }
     assert.fail(`unexpected ${pathname}`);
@@ -164,6 +175,108 @@ test("a deploy whose web quality gate failed is never promoted", async () => {
 
 test("a deploy without the web quality gate (older runs) is not promotable", async () => {
   assert.equal(await resolve([run(2, A)], { 2: { journeys: "success", quality: null } }), null);
+});
+
+// Executed-steps contract: the production deploy gate refuses a green
+// staging-quality job whose Lighthouse steps did not execute and pass, so the
+// resolver must not select a SHA the gate will refuse. A job-level success
+// with skipped/failed/absent Lighthouse steps is ineligible evidence and the
+// resolver falls through to an older eligible SHA (or null), like other
+// valid ineligibility above.
+
+test("a green quality job whose Lighthouse steps were skipped falls through to the older eligible SHA", async () => {
+  assert.equal(
+    await resolve([run(3, A), run(2, B)], {
+      3: {
+        journeys: "success",
+        quality: "success",
+        qualitySteps: lhSteps(["skipped", "skipped"]),
+      },
+      2: "success",
+    }),
+    B,
+  );
+});
+
+test("either Lighthouse step skipped alone blocks resolution", async () => {
+  for (const skipped of stagingQualitySteps) {
+    const steps = stagingQualitySteps.map((name) => ({
+      name,
+      conclusion: name === skipped ? "skipped" : "success",
+    }));
+    assert.equal(
+      await resolve([run(2, A)], {
+        2: { journeys: "success", quality: "success", qualitySteps: steps },
+      }),
+      null,
+      skipped,
+    );
+  }
+});
+
+test("a green quality job with a failed Lighthouse step does not resolve", async () => {
+  for (const steps of [lhSteps(["failure", "success"]), lhSteps(["success", "failure"])]) {
+    assert.equal(
+      await resolve([run(2, A)], {
+        2: { journeys: "success", quality: "success", qualitySteps: steps },
+      }),
+      null,
+      JSON.stringify(steps),
+    );
+  }
+});
+
+test("a green quality job with no Lighthouse step evidence does not resolve", async () => {
+  for (const qualitySteps of [[], undefined]) {
+    assert.equal(
+      await resolve([run(2, A)], {
+        2: { journeys: "success", quality: "success", qualitySteps },
+      }),
+      null,
+      `steps=${JSON.stringify(qualitySteps)}`,
+    );
+  }
+});
+
+test("ambiguous staging-quality evidence (two quality jobs) falls through to the older eligible SHA", async () => {
+  assert.equal(
+    await resolve([run(3, A), run(2, B)], {
+      3: { journeys: "success", quality: "success", qualityJobs: 2 },
+      2: "success",
+    }),
+    B,
+  );
+});
+
+test("quality job/step names stay pinned to the deploy gate, and executed steps resolve while skipped steps do not", async () => {
+  assert.equal(stagingQualityJob, "staging-quality / quality");
+  assert.deepEqual(stagingQualitySteps, [
+    "Lighthouse performance budgets (mobile, ci/lighthouserc.cjs)",
+    "Lighthouse quality scores (desktop, categories vs ci/quality-budget.json)",
+  ]);
+  // Positive control: exactly one quality job, both Lighthouse steps success
+  // (unrelated extra steps do not matter) still resolves.
+  assert.equal(
+    await resolve([run(2, A)], {
+      2: {
+        journeys: "success",
+        quality: "success",
+        qualitySteps: [{ name: "Check out repository", conclusion: "success" }, ...lhSteps([])],
+      },
+    }),
+    A,
+  );
+  // The same run with a skipped Lighthouse step must not resolve.
+  assert.equal(
+    await resolve([run(2, A)], {
+      2: {
+        journeys: "success",
+        quality: "success",
+        qualitySteps: lhSteps(["skipped", "success"]),
+      },
+    }),
+    null,
+  );
 });
 
 // Evidence-failure refusal contract: HTTP, transport, and decoding failures must
