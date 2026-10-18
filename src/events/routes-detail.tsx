@@ -143,7 +143,17 @@ export function registerDetailRoutes(
               410,
             );
           }
-          const session = await readSession(c);
+          // Non-rotating fragment read: the attendees-live island re-reads
+          // this page after the member's own RSVP while the reloadable page
+          // view (and any in-flight write response) still holds the current
+          // bearer. Rotation mints single-use tokens, so a rotating fragment
+          // read racing the reload would leave exactly one winner and render
+          // the loser as a guest. Same x-two-island contract as the
+          // events-calendar fragment (routes-calendar.tsx).
+          const session =
+            c.req.header("x-two-island") === "attendees-live"
+              ? await readFragmentSession(c)
+              : await readSession(c);
           viewer = session?.id ?? null;
           if (e.status === "draft" && !session?.moderator)
             return bufferedMemberText(c, "Forbidden", 403);

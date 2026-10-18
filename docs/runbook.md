@@ -1255,7 +1255,10 @@ body has no `config` key. The Discord pair is presence-checked only: a wrong
 value still reports ready and fails at sign-in. `SESSION_SECRET` additionally
 enforces the documented strength floor (at least 32 characters, no
 leading/trailing whitespace); a weak value answers 503 with
-`config: "weak"` and a log line naming the requirement, never the value. Fix
+`config: "weak"` and a log line naming the requirement, never the value. A weak
+`SESSION_SECRET` takes precedence over a missing Discord secret: when both hold,
+`/up` reports `config: "weak"`, and fixing the weak secret can then surface
+`config: "missing"` for the still-absent secret. Fix
 by setting the secret (an Operator step
 for staging/production), not by weakening the probe.
 
@@ -1329,7 +1332,9 @@ still fence a due carrier. Measuring health never resets `created_at`, expires
 reservations, redrives jobs or discards failures. Investigate with the existing
 [queue redrive runbook](queue-redrive-runbook.md), not by deleting old evidence.
 Queue-only warning/critical/unknown remains HTTP 200 when DB/schema/config is
-ready; deploy smoke and uptime/liveness acceptance are unchanged. This field
+ready; staging deploy smoke fails closed on ready_wait_severity critical (S6,
+--fail-on-ready-wait-critical), while production promote and post-rollback
+smoke warn and pass; uptime/liveness acceptance are unchanged. This field
 neither repairs the queue nor grants staging SQL/redrive or production deployment
 permission; existing production approval gates still apply.
 
