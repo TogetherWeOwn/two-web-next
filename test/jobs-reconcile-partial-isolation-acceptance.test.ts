@@ -126,7 +126,14 @@ describe("reconcile partial isolation behind the page signal (acceptance, no DB)
     const r = await run(h);
 
     expect(h.queue.sent).toEqual([]);
-    expect(r).toEqual({ closed: 0, materialized: 0, resynced: 0, absorbed: 0, failed: 1 });
+    expect(r).toEqual({
+      closed: 0,
+      materialized: 0,
+      resynced: 0,
+      absorbed: 0,
+      failed: 1,
+      deferred: 0,
+    });
     expect(h.lock.released).toContain(uniqueKey("poison"));
     expect(h.lock.heldNow()).not.toContain(uniqueKey("poison"));
     expectNoErrorLines();
@@ -138,7 +145,14 @@ describe("reconcile partial isolation behind the page signal (acceptance, no DB)
     const r = await run(h);
 
     expect(h.queue.sent).toEqual(["ok1", "ok2"]);
-    expect(r).toEqual({ closed: 0, materialized: 0, resynced: 2, absorbed: 0, failed: 1 });
+    expect(r).toEqual({
+      closed: 0,
+      materialized: 0,
+      resynced: 2,
+      absorbed: 0,
+      failed: 1,
+      deferred: 0,
+    });
     expectNoErrorLines();
   });
 
@@ -148,7 +162,14 @@ describe("reconcile partial isolation behind the page signal (acceptance, no DB)
     const r = await run(h);
 
     expect(h.queue.sent).toEqual(["ok1", "ok2"]);
-    expect(r).toEqual({ closed: 0, materialized: 0, resynced: 2, absorbed: 0, failed: 0 });
+    expect(r).toEqual({
+      closed: 0,
+      materialized: 0,
+      resynced: 2,
+      absorbed: 0,
+      failed: 0,
+      deferred: 0,
+    });
     expectNoErrorLines();
   });
 
@@ -158,7 +179,14 @@ describe("reconcile partial isolation behind the page signal (acceptance, no DB)
     const r = await run(h);
 
     expect(h.queue.sent).toEqual([]);
-    expect(r).toEqual({ closed: 0, materialized: 0, resynced: 0, absorbed: 0, failed: 0 });
+    expect(r).toEqual({
+      closed: 0,
+      materialized: 0,
+      resynced: 0,
+      absorbed: 0,
+      failed: 0,
+      deferred: 0,
+    });
     expect(SYNC_EVENT.tries).toBeGreaterThan(1);
     expectNoErrorLines();
   });
