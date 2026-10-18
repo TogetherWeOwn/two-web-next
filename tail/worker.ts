@@ -1191,7 +1191,13 @@ export function createTailWorker(
           signal: AbortSignal.timeout(AGGREGATOR_TIMEOUT_MS),
         });
         if (!response.ok) return { fallback: true as const };
-        return { data: normalizeSpikeObservation(await response.json()) };
+        const raw: unknown = await response.json();
+        const spike = normalizeSpikeObservation(raw);
+        // A 200 that parses to anything other than null or a valid spike
+        // alert is a malfunctioning aggregator: fall back to local counts so
+        // it can never suppress the spike page.
+        if (raw !== null && spike === null) return { fallback: true as const };
+        return { data: spike };
       })();
       const result = await withAggregatorDeadline(operation);
       if ("fallback" in result) return localObserve();
@@ -1303,12 +1309,19 @@ export function createTailWorker(
           signal: AbortSignal.timeout(AGGREGATOR_TIMEOUT_MS),
         });
         if (!response.ok) return { fallback: true as const };
-        const data = (await response.json()) as { downMs?: unknown; attemptId?: unknown } | null;
-        if (!data || typeof data.downMs !== "number")
-          return { downMs: null, attemptId: null, source: "aggregator" as const };
+        const data: unknown = await response.json();
+        // Well-formed answers are exactly null or an object with a numeric
+        // downMs. Anything else on a 200 is a malfunctioning aggregator:
+        // fall back to the local health observation so it can never suppress
+        // the uptime page.
+        if (data === null) return { downMs: null, attemptId: null, source: "aggregator" as const };
+        if (typeof data !== "object" || data === null || Array.isArray(data))
+          return { fallback: true as const };
+        const { downMs, attemptId } = data as { downMs?: unknown; attemptId?: unknown };
+        if (typeof downMs !== "number") return { fallback: true as const };
         return {
-          downMs: data.downMs,
-          attemptId: validAttemptId(data.attemptId) ?? null,
+          downMs,
+          attemptId: validAttemptId(attemptId) ?? null,
           source: "aggregator" as const,
         };
       })();
