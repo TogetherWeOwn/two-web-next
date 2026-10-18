@@ -162,6 +162,11 @@ export async function rankUpcoming(
       ),
     );
   if (!anchor || !isRenderableEventWindow(anchor)) return null;
+  // Compare the stored timestamp: a JS Date loses PostgreSQL's microseconds.
+  const anchorStartsAt = db
+    .select({ startsAt: events.startsAt })
+    .from(events)
+    .where(eq(events.id, anchor.id));
   const [before] = await db
     .select({ n: count() })
     .from(events)
@@ -171,8 +176,8 @@ export async function rankUpcoming(
         finiteEventWindow,
         gte(events.endsAt, now),
         or(
-          lt(events.startsAt, anchor.startsAt),
-          and(eq(events.startsAt, anchor.startsAt), lt(events.id, anchor.id)),
+          lt(events.startsAt, anchorStartsAt),
+          and(eq(events.startsAt, anchorStartsAt), lt(events.id, anchor.id)),
         ),
       ),
     );
