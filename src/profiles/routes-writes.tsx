@@ -47,6 +47,16 @@ const isFormMediaType = (value: string | null | undefined): boolean => {
   return mt === "application/x-www-form-urlencoded" || mt === "multipart/form-data";
 };
 
+// Response selection mirrors request admission above: Accept lists media
+// ranges (`type/subtype`, case-insensitive, optional `;` parameters,
+// comma-separated). A range selects JSON only when its type/subtype is
+// exactly application/json: substring lookalikes (application/jsonx,
+// x-application/json, quoted parameter notes) stay on the HTML path.
+// Preference weighting and wildcards are unchanged: any exact JSON range
+// selects JSON, anything else keeps the native HTML contract.
+const acceptsJson = (value: string | null | undefined): boolean =>
+  (value ?? "").split(",").some((range) => mediaType(range) === "application/json");
+
 export function registerWriteRoutes(
   app: ProfileApp,
   deps: ProfileDeps,
@@ -88,8 +98,7 @@ export function registerWriteRoutes(
       ? validateProfile(input)
       : { ok: false as const, errors: { fields: UNSUPPORTED_FIELDS } };
     if (!result.ok) {
-      if ((c.req.header("accept") ?? "").includes("application/json"))
-        return c.json({ errors: result.errors }, 422);
+      if (acceptsJson(c.req.header("accept"))) return c.json({ errors: result.errors }, 422);
       c.status(422);
       return c.html(
         <ProfilePage
@@ -137,7 +146,7 @@ export function registerWriteRoutes(
       if (isDatabaseUnavailable(err)) return databaseUnavailable(c);
       return c.text("Could not save your profile.", 500);
     }
-    if ((c.req.header("accept") ?? "").includes("application/json")) {
+    if (acceptsJson(c.req.header("accept"))) {
       return c.json({ saved: true, message: PROFILE_COPY.saved });
     }
     return c.redirect(`/members/${id}`, 303);
