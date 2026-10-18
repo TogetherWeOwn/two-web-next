@@ -68,6 +68,18 @@ export async function etagFor(body: string): Promise<string> {
   return `"${[...new Uint8Array(d)].map((b) => b.toString(16).padStart(2, "0")).join("")}"`;
 }
 
+/**
+ * Shared If-None-Match matcher (RFC 9110 §13.1.2, weak comparison): `*`
+ * matches any current validator, otherwise a comma-separated list matches
+ * when any entry equals the current ETag after stripping the `W/` prefix.
+ */
+export function matchesIfNoneMatch(header: string | null | undefined, etag: string): boolean {
+  if (!header) return false;
+  const value = header.trim();
+  if (value === "*") return true;
+  return value.split(",").some((tag) => tag.trim().replace(/^W\//, "") === etag);
+}
+
 export async function jsonSession(
   c: Ctx,
   readFragmentSession: SessionReader,
@@ -106,7 +118,7 @@ export async function jsonResponse(c: Ctx, value: unknown): Promise<Response> {
   const etag = await etagFor(body);
   c.header("cache-control", "private, no-cache");
   c.header("etag", etag);
-  if (c.req.header("if-none-match") === etag) return c.body(null, 304);
+  if (matchesIfNoneMatch(c.req.header("if-none-match"), etag)) return c.body(null, 304);
   return c.body(body, 200, { "content-type": "application/json; charset=UTF-8" });
 }
 
