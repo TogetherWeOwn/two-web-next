@@ -36,6 +36,7 @@ import {
   type ApiPublicCacheEntry,
 } from "./cache";
 import { getOpenApiDocument } from "./openapi";
+import { parseRetryAfterSeconds } from "../jobs/retry-delay";
 
 type Ctx = Context<{ Bindings: Env }>;
 
@@ -54,22 +55,32 @@ function apiError(
 
 /**
  * Shared admission for the read API: the same per-client fixed-window budget
- * as pages and feeds, before any event or database read. A 429 keeps the
- * shared Retry-After but speaks the new error envelope instead of the legacy
- * /events.json shape.
+ * as pages and feeds, before any event or database read. A 429 validates the
+ * upstream Retry-After through the shared `parseRetryAfterSeconds` parser —
+ * usable values pass through (absurd ones cap at 86400), absent/unparseable
+ * values fall back to 60 — and speaks the new error envelope instead of the
+ * legacy /events.json shape. The one validated value feeds both the message
+ * and the response header, so they can never disagree or echo raw upstream
+ * text.
  */
 export async function admitted(c: Ctx): Promise<Response | null> {
   const limited = await publicReadGuard(c);
   if (!limited) return null;
-  const retryAfter = limited.headers.get("retry-after") ?? "60";
+  const retryAfterSeconds = parseRetryAfterSeconds(limited.headers.get("retry-after")) ?? 60;
   const body: PublicDataErrorDto = {
     error: {
       code: "rate_limited",
-      message: `Too many requests. Try again in ${retryAfter} seconds.`,
+      message: `Too many requests. Try again in ${retryAfterSeconds} seconds.`,
     },
   };
+  // Stamp the context header too, not just the per-response one: the guard
+  // chain already set a context-level Retry-After to the RAW upstream value,
+  // and on routes with middleware Hono merges those stale context headers
+  // over the returned response. Without this the MCP 429 header echoes raw
+  // upstream text while the body carries the validated value.
+  c.header("retry-after", String(retryAfterSeconds));
   return c.json(body, 429, {
-    "retry-after": retryAfter,
+    "retry-after": String(retryAfterSeconds),
     "cache-control": "no-store, private",
   });
 }
