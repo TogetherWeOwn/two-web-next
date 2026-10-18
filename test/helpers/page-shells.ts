@@ -234,6 +234,7 @@ export function pageShellFixture(status = "published") {
       };
     if (
       sql.includes('from "rsvps"') ||
+      sql.includes("from rsvps") ||
       sql.includes('from "event_search_log"') ||
       sql.startsWith('insert into "member_data_access_logs"') ||
       sql.startsWith("SET LOCAL")
