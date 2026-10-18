@@ -237,12 +237,23 @@ export async function fetchUser(accessToken: string): Promise<DiscordUser> {
   return user as DiscordUser;
 }
 
-export type JoinResult = "joined" | "already_member" | "failed";
+export type JoinResult =
+  | "joined"
+  | "already_member"
+  | "rate_limited"
+  | "forbidden"
+  | "provider_outage"
+  | "transport_failure"
+  | "failed";
 
 // PUT /guilds/{guild}/members/{user}: 201 = added, 204 = already a member.
-// Anything else (bot missing CREATE_INSTANT_INVITE, user banned, member cap) is "failed": the
-// sign-in still succeeds and the page offers the invite link instead. A transport
-// throw is "failed" too: the caller degrades to the invite link either way.
+// Failures are classified by status alone so callers can distinguish them
+// without reading the provider body: 429 = rate_limited, 403 = forbidden
+// (Missing Access / Missing Permissions class), 5xx = provider_outage, a
+// transport throw = transport_failure, anything else = failed. The body is
+// never read and never logged here, so no token or body byte can leak through
+// the return value; every value is a fixed string. A transport throw is
+// "transport_failure" too: the caller degrades to the invite link either way.
 export async function addGuildMember(
   guildId: string,
   userId: string,
@@ -261,9 +272,12 @@ export async function addGuildMember(
       body: JSON.stringify({ access_token: accessToken }),
     });
   } catch {
-    return "failed";
+    return "transport_failure";
   }
   if (res.status === 201) return "joined";
   if (res.status === 204) return "already_member";
+  if (res.status === 429) return "rate_limited";
+  if (res.status === 403) return "forbidden";
+  if (res.status >= 500 && res.status <= 599) return "provider_outage";
   return "failed";
 }

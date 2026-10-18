@@ -210,9 +210,10 @@ export type JoinFinish =
 /**
  * The synchronous tail of the callback: one bot attempt owns the live token,
  * then the frame drops it. Outcomes mirror the legacy JoinOutcome enum:
- * added / already_member → sign in; anything the bot refuses or any transport
- * failure → degraded (sign-in succeeds, invite fallback offered); the callback
- * never stores the token, never logs it, never queues it.
+ * added / already_member → sign in; any classified bot refusal
+ * (rate_limited, forbidden, provider_outage, transport_failure, failed) or
+ * any transport throw → degraded (sign-in succeeds, invite fallback offered);
+ * the callback never stores the token, never logs it, never queues it.
  */
 export async function finishJoin(
   bot: BotAdd,
@@ -230,7 +231,8 @@ export async function finishJoin(
   } catch {
     return { kind: "recoverable", outcome: "degraded", requestId: null };
   }
-  if (result === "failed") return { kind: "recoverable", outcome: "degraded", requestId };
+  if (result !== "joined" && result !== "already_member")
+    return { kind: "recoverable", outcome: "degraded", requestId };
   const outcome: JoinOutcome = result === "joined" ? "added" : "already_member";
   const notice = result === "joined" ? "joined" : "already_member";
   return {

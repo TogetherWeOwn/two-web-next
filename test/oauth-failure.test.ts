@@ -1032,7 +1032,10 @@ describe("adjacent auth log paths stay bounded", () => {
     expect(res.headers.getSetCookie().join("\n")).toContain("__Host-two_session=");
     const joinLine = recordsFor(logs, "guild auto-join failed");
     expect(joinLine).toHaveLength(1);
-    expect(joinLine[0]!.args[1]).toEqual({ request_id: res.headers.get("x-request-id") });
+    expect(joinLine[0]!.args[1]).toEqual({
+      request_id: res.headers.get("x-request-id"),
+      kind: "provider_outage",
+    });
     streamClean(logs, LOGIN_ROUTE, ["guild auto-join failed"]);
     leakFree(res.headers.getSetCookie(), res.headers.get("location"));
   });
