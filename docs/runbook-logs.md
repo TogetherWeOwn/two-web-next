@@ -399,6 +399,25 @@ This source does not emit a `Discord snapshot outcome` line. Check the configure
 [`DISCORD_GUILD_ID`](config.md), rather than treating the warning as a Discord
 or snapshot-store outage.
 
+## Rules last-updated stamp warning
+
+`Invalid community.rules_last_updated — hiding /rules stamp` is the exact fixed
+`console.warn` message when `rulesLastUpdated`
+(`src/rules-last-updated.ts:19-22`) refuses the configured value. Two triggers
+share the one line: a non-empty value that fails the strict `YYYY-MM-DD` shape
+(for example `someday`, `2026-9-01`, `2026/09/01`), or a well-shaped but
+impossible calendar date (month `00` or `13` and up, day `00` or past the
+month's length, `February 29` on a non-leap year under Gregorian century
+rules). An empty or whitespace-only value hides the stamp silently with no
+warning.
+
+| Message | Meaning | Severity | First read-only check | Fields carried |
+| --- | --- | --- | --- | --- |
+| `Invalid community.rules_last_updated — hiding /rules stamp` | The configured stamp value was refused, so `/rules` and `/rules.md` render without the "Last updated" stamp. The page itself stays healthy: it still answers 200 with its normal cache headers and no session, cookie or database read. | No page: a hidden stamp is a content gap, never an outage. | Read the [`RULES_LAST_UPDATED`](config.md) value in the deployed config and validate it against the parser in `src/rules-last-updated.ts`: strict `YYYY-MM-DD` shape plus a real-calendar date (month lengths, Gregorian leap years). Find sightings with the message **contains** filter from [Find a request](#find-a-request). | None (message only): the line carries no fields and never echoes the refused value, so correlate by deploy/config-change time. |
+
+Escalation boundary: a content/config correction — set a valid `YYYY-MM-DD`
+date. No parser, validation, stamp-rendering, or config-schema change.
+
 ## Discord snapshot outcome
 
 The calendar's Discord snapshot source (`src/events/discord-transients-cached.ts`)
