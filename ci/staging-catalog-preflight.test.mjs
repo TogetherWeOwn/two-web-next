@@ -231,20 +231,20 @@ test("live: all seven queries execute on disposable Postgres and report the seed
   skip: LIVE_URL
     ? false
     : "needs CATALOG_PREFLIGHT_TEST_DATABASE_URL on disposable Postgres (localhost/agent-testdb)",
-}, async (t) => {
+}, async () => {
   const admin = postgres(LIVE_URL, { max: 1 });
   const dbName = `catalog_preflight_${process.pid}`;
   try {
     // Roles are cluster-wide, so a pre-existing fixture name means a leaked
-    // run or a real local role: skip instead of dropping what we did not create.
+    // run or a real local role: fail closed instead of dropping what we did
+    // not create. A loud refusal beats a silent pass on a dirty cluster.
     const existing = await admin.unsafe(
       "SELECT rolname FROM pg_roles WHERE rolname IN ('two_web_app', 'preflight_owner', 'preflight_reader')",
     );
     if (existing.length > 0) {
-      t.skip(
+      throw new Error(
         `refusing live test: fixture role(s) already exist: ${existing.map((row) => row.rolname).join(", ")}`,
       );
-      return;
     }
     await admin.unsafe(`CREATE DATABASE "${dbName}"`);
   } finally {
