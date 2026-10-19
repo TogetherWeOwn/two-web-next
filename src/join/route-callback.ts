@@ -16,6 +16,7 @@
 import type { Hono } from "hono";
 import { deleteCookie, getSignedCookie } from "hono/cookie";
 import { DiscordError, exchangeCode, failureMeta, fetchUser } from "../discord";
+import { isDatabaseUnavailable } from "../db/errors";
 import { hasOversizedOAuthParams } from "../oauth-code-state-length";
 import type { Env } from "../env";
 import { inviteDestination } from "../invite";
@@ -58,6 +59,14 @@ export function registerJoinCallbackRoutes(
     const limited = oversizedParams ? null : await throttled(c);
     if (limited) return limited;
     const sql = await joinStore(c);
+    if (oversizedParams && sql) {
+      // postgres clients connect lazily. Preserve the throttle's classified
+      // outage 503 without counting, locking, inserting or pruning any hits.
+      // Like throttled(), an unclassified query failure does not refuse.
+      await sql`SELECT 1`.catch((err: unknown) => {
+        if (isDatabaseUnavailable(err)) throw err;
+      });
+    }
     // getSignedCookie answers false on a bad signature: not a string, not a source.
     // Sanitized like GET /join/discord: a correctly-signed but hostile value
     // leaves no trace in the retry href, the attempt row, or the log line.

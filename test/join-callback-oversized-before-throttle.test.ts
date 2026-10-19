@@ -46,6 +46,7 @@ const sessionCookie = (res: Response) =>
 // In-memory Sql double for the journey's statements (same shape as
 // join.test.ts). Records every throttle hit and attempt row.
 function fakeJoinStore() {
+  const availabilityChecks = vi.fn(async () => []);
   const hits: { bucket: string; at: number }[] = [];
   const attempts: {
     outcome: string;
@@ -55,6 +56,7 @@ function fakeJoinStore() {
   }[] = [];
   const sql = (async (strings: TemplateStringsArray, ...values: unknown[]) => {
     const head = strings[0] ?? "";
+    if (head === "SELECT 1") return availabilityChecks();
     if (head.includes("pg_advisory_xact_lock")) return [];
     if (head.includes("count(*)")) {
       const [bucket] = values as [string];
@@ -90,12 +92,13 @@ function fakeJoinStore() {
   (sql as unknown as { begin: (run: (tx: Sql) => Promise<unknown>) => Promise<unknown> }).begin = (
     run,
   ) => run(sql);
-  return { sql, hits, attempts };
+  return { sql, hits, attempts, availabilityChecks };
 }
 
 function exhaustedJoinStore() {
   return withThrottleTx((async (strings: TemplateStringsArray) => {
     const head = strings.join("?");
+    if (head === "SELECT 1") return [];
     if (head.includes("count(*)")) return [{ n: 999, wait: 30 }];
     if (head.includes("DELETE FROM web_throttle_hits")) return [];
     if (head.includes("INSERT INTO web_throttle_hits")) return [];
@@ -192,7 +195,9 @@ describe("join callback refuses oversized OAuth params before throttle", () => {
     expect(f.create).not.toHaveBeenCalled();
     expect(f.replace).not.toHaveBeenCalled();
     expect(f.join.attempts).toHaveLength(0);
-    // Zero callback spend: only the start's hit exists.
+    // Zero callback spend: only the start's hit exists. The read-only probe
+    // still checks availability; it cannot consume the shared join budget.
+    expect(f.join.availabilityChecks).toHaveBeenCalledTimes(1);
     expect(f.join.hits.filter((h) => h.bucket.startsWith("join:"))).toHaveLength(1);
     expectJourneyCleared(res);
     // Bounded log line unchanged: own class, sanitized source, never values.
@@ -248,6 +253,46 @@ describe("join callback refuses oversized OAuth params before throttle", () => {
       request: JOIN_ROUTE,
       messages: [JOIN_LOG],
     });
+  });
+
+  it("an unclassified availability-query failure keeps the oversized recovery", async () => {
+    const f = fixture();
+    f.join.availabilityChecks.mockRejectedValueOnce(new Error("fixture query failure"));
+    const { fetch } = mockDiscord();
+    const logs = captureDiagnosticStream();
+    const res = await app.request(
+      `/join/callback?code=${"a".repeat(OVERSIZED)}&state=x`,
+      {},
+      f.env,
+    );
+    expect(res.status).toBe(200);
+    expect(await res.text()).toContain("Join link expired");
+    expect(f.join.availabilityChecks).toHaveBeenCalledTimes(1);
+    expect(f.join.hits).toHaveLength(0);
+    expect(f.join.attempts).toHaveLength(0);
+    expect(f.create).not.toHaveBeenCalled();
+    expect(fetch).not.toHaveBeenCalled();
+    expectJourneyCleared(res);
+    expectDiagnosticStreamClean(logs, ["fixture query failure"], {
+      request: JOIN_ROUTE,
+      messages: [JOIN_LOG],
+    });
+  });
+
+  it("a missing join store keeps the DB-free oversized recovery", async () => {
+    const { fetch } = mockDiscord();
+    const logs = captureDiagnosticStream();
+    const res = await app.request(
+      `/join/callback?code=${"a".repeat(OVERSIZED)}&state=x`,
+      {},
+      baseEnv,
+    );
+    expect(res.status).toBe(200);
+    expect(await res.text()).toContain("Join link expired");
+    expect(fetch).not.toHaveBeenCalled();
+    expect(sessionCookie(res)).toBeUndefined();
+    expectJourneyCleared(res);
+    expectDiagnosticStreamClean(logs, [], { request: JOIN_ROUTE, messages: [JOIN_LOG] });
   });
 
   it("error with oversized params keeps today's denied path and spends throttle", async () => {
