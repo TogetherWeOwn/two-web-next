@@ -6,7 +6,7 @@
 // any aggregation (also on signal views). Same aggregate reads the Kit load
 // functions call, per web/src/routes/events/past/ precedent.
 import { dbFor } from "../admin/db";
-import type { App, Ctx } from "../events/routes-shared";
+import { publicReadGuard, type App, type Ctx } from "../events/routes-shared";
 import { HotzoneSignalPage, HotzonesIndexPage } from "./pages";
 import { isHotzoneSignal, joinsRetentionNote, loadJoinsGrid, priorGrid } from "./aggregates";
 import { recordBoardView } from "./board-log";
@@ -18,6 +18,8 @@ async function renderIndex(c: Ctx) {
   const raw = c.req.query("season");
   const window = parseSeasonParam(raw ?? null);
   if (!window) return badSeason(c);
+  const limited = await publicReadGuard(c);
+  if (limited) return limited;
   const label = window.kind === "all" ? "all" : window.label;
   const db = await dbFor(c);
   const joins = await loadJoinsGrid(db, window);
@@ -54,6 +56,8 @@ async function renderSignal(c: Ctx) {
   if (!window) return badSeason(c);
   const signal = c.req.param("signal") ?? "";
   if (!isHotzoneSignal(signal)) return c.notFound();
+  const limited = await publicReadGuard(c);
+  if (limited) return limited;
   const label = window.kind === "all" ? "all" : window.label;
   void seasonLabel(raw ?? null);
   const db = await dbFor(c);
