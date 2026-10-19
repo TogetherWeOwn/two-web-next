@@ -12,6 +12,7 @@ import app from "./app";
 import { withThrottleTx } from "./helpers/throttle-tx-double";
 import {
   captureDiagnosticStream,
+  channelCounts,
   expectDiagnosticStreamClean,
   withheld,
 } from "./helpers/diagnostic-stream";
@@ -148,10 +149,12 @@ describe("auth callback refuses oversized OAuth params before throttle", () => {
     // Own warn class, never InvalidState, never the values.
     const line = recordsFor(logs, LOGIN_LOG);
     expect(line).toHaveLength(1);
+    expect(line[0]!.channel).toBe("warn");
     expect(line[0]!.args[1]).toEqual({
       exception: "OversizedOAuthParams",
       request_id: res.headers.get("x-request-id"),
     });
+    expect(channelCounts(logs)).toMatchObject({ warn: 1, error: 0 });
     expect(JSON.stringify(line)).not.toContain("InvalidState");
     expect(JSON.stringify(logs.map((r) => r.args))).not.toContain(oversized.slice(0, 32));
     expectDiagnosticStreamClean(logs, [oversized.slice(0, 16)], {
@@ -179,10 +182,12 @@ describe("auth callback refuses oversized OAuth params before throttle", () => {
     expect(f.hits.filter((h) => h.bucket.startsWith("login-callback:"))).toHaveLength(0);
     const line = recordsFor(logs, LOGIN_LOG);
     expect(line).toHaveLength(1);
+    expect(line[0]!.channel).toBe("warn");
     expect(line[0]!.args[1]).toEqual({
       exception: "OversizedOAuthParams",
       request_id: res.headers.get("x-request-id"),
     });
+    expect(channelCounts(logs)).toMatchObject({ warn: 1, error: 0 });
     expectDiagnosticStreamClean(logs, [oversized.slice(0, 16)], {
       request: LOGIN_ROUTE,
       messages: [LOGIN_LOG],
@@ -229,10 +234,12 @@ describe("auth callback refuses oversized OAuth params before throttle", () => {
     expect(fetch).not.toHaveBeenCalled();
     const line = recordsFor(logs, LOGIN_LOG);
     expect(line).toHaveLength(1);
+    expect(line[0]!.channel).toBe("warn");
     expect(line[0]!.args[1]).toEqual({
       exception: "OversizedOAuthParams",
       request_id: res.headers.get("x-request-id"),
     });
+    expect(channelCounts(logs)).toMatchObject({ warn: 1, error: 0 });
   });
 
   it("throttle-exhausted plus normal-length still answers 429 (throttle intact)", async () => {

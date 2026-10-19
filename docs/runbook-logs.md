@@ -163,9 +163,10 @@ route instead of by ID.
 
 ### Auth sign-in warnings
 
-One `console.warn` line is auth-scoped (the oversized code/state refusal in
-`src/auth/routes.ts`). It never pages: the refusal keeps today's generic
-`/?n=signin_failed` redirect, so the member already sees the outcome. The
+This section documents one auth-scoped `console.warn` line (the oversized
+code/state refusal in `src/auth/routes.ts`), not every auth-scoped line.
+It never pages: the refusal keeps today's generic `/?n=signin_failed`
+redirect, so the member already sees the outcome. The
 replayed/invalid-state branch stays silent and unchanged. Correlate by the
 validated `request_id`, which joins to the `http.request` line.
 
