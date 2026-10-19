@@ -73,13 +73,17 @@ const putRsvp = async (
   // Generic Ctx (no route path type) yields string|undefined: fail closed.
   const key = c.req.param("key") ?? "";
   if (!eventKeyAllowed(key, c.env.APP_URL)) return c.json({ error: "not_found" }, 404);
+  // POST /e/:key/rsvp aliases normalize here (PUT/DELETE already 308 above):
+  // ULIDs are stored uppercase, so an alias in another letter case reaches
+  // the same row. Invalid keys return null and keep their refusal path.
+  const lookupKey = canonicalEventKey(key) ?? key;
   const db = await dbFor(c);
   if (!db) return c.json({ error: "db_unavailable" }, 503);
   // Policy, clock and budget are decided inside writeRsvp, after all blocking waits
   // (member/event/RSVP-row locks and the throttle prune), as in Laravel: a refused
   // write does not spend an attempt. No pre-lock check here — a stale read could
   // refuse a write that is open by the time the locks are held.
-  const r = await writeRsvp(db, key, who.id, input.status);
+  const r = await writeRsvp(db, lookupKey, who.id, input.status);
   if (!r.ok) {
     if (r.reason === "limited") return rateLimitExceeded(c, r.retryAfter);
     if (r.reason === "not_found") return c.json({ error: "not_found" }, 404);
@@ -110,13 +114,14 @@ const deleteRsvp = async (
   // The budget is charged inside withdrawRsvp, atomically with the delete.
   // Generic Ctx (no route path type) yields string|undefined: fail closed.
   const key = c.req.param("key") ?? "";
-  const r = await withdrawRsvp(db, eventKeyAllowed(key, c.env.APP_URL) ? key : "", who.id);
+  const lookupKey = canonicalEventKey(key) ?? key;
+  const r = await withdrawRsvp(db, eventKeyAllowed(key, c.env.APP_URL) ? lookupKey : "", who.id);
   if (r.limited) return rateLimitExceeded(c, r.retryAfter);
   // Honest withdrawal: no caller row (never answered, only another member
   // answered, unknown or forged key) is the same not-found the PUT answers,
   // never a 204 that implies a withdrawal happened.
   if (!r.deleted) return c.json({ error: "not_found" }, 404);
-  await dispatchRsvpSync(c.env, key, r.status, c.get("requestId"));
+  await dispatchRsvpSync(c.env, lookupKey, r.status, c.get("requestId"));
   return c.body(null, 204);
 };
 
@@ -160,7 +165,10 @@ export function registerRsvpRoutes(app: App, readFragmentSession: SessionReader)
     const response = await (input.status === "withdraw"
       ? deleteRsvp(c, input, readFragmentSession)
       : putRsvp(c, input, readFragmentSession));
-    const key = c.req.param("key");
+    // Aliases land on the canonical page: every return path below (success,
+    // login next, refusal link) rebuilds from this key, never the raw alias.
+    const rawKey = c.req.param("key") ?? "";
+    const key = canonicalEventKey(rawKey) ?? rawKey;
     // Native page context comes only from the validated action-query and body
     // carriers (both normalized, agreement required); the Referer is never a
     // carrier. Invalid/unsafe values fall back to the bare event page, and the
