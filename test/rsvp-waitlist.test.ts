@@ -7,6 +7,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vites
 import app from "./app";
 import { adminApp } from "../src/admin/routes";
 import { events, rsvps } from "../src/db/admin-schema";
+import { users } from "../src/db/schema";
 import type { Env } from "../src/env";
 import { uniqueKey } from "../src/jobs/sync-event";
 import type { QueueMessage } from "../src/jobs/types";
@@ -237,8 +238,21 @@ describe.skipIf(!process.env.DATABASE_URL)("RSVP waitlist (agent-testdb)", () =>
   }
   async function fullWithLine(count = 2, memberKeys: string[] = []) {
     const ev = await seed();
-    await put(ev.eventKey, memberKeys[0] ?? "holder");
-    for (let i = 1; i <= count; i++) await put(ev.eventKey, memberKeys[i] ?? `waiter-${i}`);
+    // Attributable seeds: JSON responses count only named rows, so every
+    // default line member carries a stored name like a signed-in member
+    // would. Callers passing explicit keys manage their own display names.
+    const lineIds = Array.from(
+      { length: count + 1 },
+      (_, i) => memberKeys[i] ?? (i === 0 ? "holder" : `waiter-${i}`),
+    );
+    const defaultIds = lineIds.filter((_, i) => memberKeys[i] === undefined);
+    if (defaultIds.length > 0)
+      await db
+        .insert(users)
+        .values(defaultIds.map((id) => ({ id, username: id })))
+        .onConflictDoNothing();
+    await put(ev.eventKey, lineIds[0]!);
+    for (let i = 1; i <= count; i++) await put(ev.eventKey, lineIds[i]!);
     // Pin same-instant FIFO so ID, not wall time, breaks the tie.
     await client`update rsvps set created_at = '2020-01-01T00:00:00Z', synced_to_discord_at = now() where event_id = ${ev.id}`;
     await completeQueuedDeliveries();
@@ -669,7 +683,7 @@ describe.skipIf(!process.env.DATABASE_URL)("RSVP waitlist (agent-testdb)", () =>
 
   it("keeps the public JSON collection free of viewer waitlist state while HTML stays personalized", async () => {
     const ev = await fullWithLine(2, PAGE_MEMBER_KEYS);
-    await client`insert into users (id, username) values (${PAGE_MEMBER_KEYS[0]!}, 'Current holder'), (${PAGE_MEMBER_KEYS[1]!}, 'First waiter'), (${PAGE_MEMBER_KEYS[2]!}, 'Second waiter')`;
+    await client`insert into users (id, username) values (${PAGE_MEMBER_KEYS[0]!}, 'Current holder'), (${PAGE_MEMBER_KEYS[1]!}, 'First waiter'), (${PAGE_MEMBER_KEYS[2]!}, 'Second waiter') on conflict (id) do nothing`;
     const first = await request("/events.json", PAGE_MEMBER_KEYS[1]!);
     const data = await collection(first);
     // A0 public contract: identical fields for every session, no personal state.
@@ -717,7 +731,7 @@ describe.skipIf(!process.env.DATABASE_URL)("RSVP waitlist (agent-testdb)", () =>
 
   it("composes private waitlist positions and promoted attendees with navigation and offset-labelled related events", async () => {
     const ev = await fullWithLine(2, PAGE_MEMBER_KEYS);
-    await client`insert into users (id, username) values (${PAGE_MEMBER_KEYS[0]!}, 'Current holder'), (${PAGE_MEMBER_KEYS[1]!}, 'First waiter')`;
+    await client`insert into users (id, username) values (${PAGE_MEMBER_KEYS[0]!}, 'Current holder'), (${PAGE_MEMBER_KEYS[1]!}, 'First waiter') on conflict (id) do nothing`;
     const previous = await seed({
       startsAt: new Date("2098-12-31T20:00:00Z"),
       endsAt: new Date("2098-12-31T22:00:00Z"),

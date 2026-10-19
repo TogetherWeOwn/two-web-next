@@ -54,7 +54,14 @@ function fixture(over: Partial<typeof events.$inferSelect> = {}, queryError?: Er
   const db = drizzle(async (sql) => {
     queries.push(sql);
     if (queryError && sql.includes('"event_key" =')) throw queryError;
-    if (sql.includes('from "rsvps"') && sql.includes('inner join "users"')) return { rows: [] };
+    // The roster projection joins users without a group-by; the attributable
+    // going-count aggregate joins too, so it must fall through to the count arm.
+    if (
+      sql.includes('from "rsvps"') &&
+      sql.includes('inner join "users"') &&
+      !sql.includes("group by")
+    )
+      return { rows: [] };
     // The going-count aggregate reads two positional columns; the viewer
     // answer read selects its own row and is empty in this fixture.
     if (sql.includes('from "rsvps"'))

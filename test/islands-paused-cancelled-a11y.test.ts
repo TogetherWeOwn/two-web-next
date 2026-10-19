@@ -58,6 +58,7 @@ function publicEvent(over: Partial<PublicEvent> = {}): PublicEvent {
     goingCount: 1,
     syncRevision: 1,
     syncedRevision: 0,
+    goingOccupancy: 1,
     ...over,
   };
 }

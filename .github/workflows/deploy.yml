@@ -38,19 +38,11 @@ jobs:
     environment:
       name: staging
       url: https://next.togetherweown.com
-    # Match CI's disposable SQL target; never run tests on the staging binding.
-    # Self-hosted runners share one Docker host, so a published 5432 (and
-    # wrangler's dev ports) collide across concurrent jobs. A job container has
-    # its own network namespace; localhost:5432 is forwarded to the service.
+    # Self-hosted runners share one Docker host, so wrangler's dev ports
+    # collide across concurrent jobs. A job container has its own network
+    # namespace.
     container:
       image: node:24-bookworm
-    services:
-      postgres:
-        image: postgres:17
-        env:
-          POSTGRES_PASSWORD: ci
-        options: >-
-          --health-cmd "pg_isready -U postgres" --health-interval 5s --health-timeout 5s --health-retries 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -77,28 +69,17 @@ jobs:
         run: node ci/staging-deploy-gate.mjs
         env:
           GITHUB_TOKEN: ${{ github.token }}
-      - name: Job-private localhost:5432 forward to the Postgres service
-        run: |
-          apt-get update -qq && apt-get install -y -qq --no-install-recommends socat postgresql-client >/dev/null
-          nohup setsid socat TCP-LISTEN:5432,bind=127.0.0.1,reuseaddr,fork TCP:postgres:5432 >/dev/null 2>&1 &
-          for i in $(seq 1 30); do pg_isready -q -h 127.0.0.1 -U postgres && exit 0; sleep 1; done
-          exit 1
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24
           cache: npm
       - run: npm ci
-      # SvelteKit parity suites SSR-compile through web's svelte/compiler at
-      # import time, and `npm run check` below runs the full root vitest, so
-      # the web workspace must exist before the check gate (same as ci.yml).
+      # The Worker bundle imports web/src modules, so wrangler needs the Kit
+      # workspace dependencies (same install as ci.yml).
       - run: npm ci --prefix web --include=dev --no-audit --no-fund
-      - name: Apply test migrations
-        run: npm run db:migrate
-        env:
-          DATABASE_URL: postgres://postgres:ci@localhost:5432/postgres
-      - run: npm run check
-        env:
-          DATABASE_URL: postgres://postgres:ci@localhost:5432/postgres
+      # No test re-run here: the exact-SHA gate above (re-checked before each
+      # mutation below) requires full CI, which already ran every `npm run
+      # check` part on this commit. A second copy outgrew this job's timeout.
       # Deploy build step: regenerate the served public/ assets from assets/
       # with esbuild --minify and refuse drift. Deterministic: a no-op when
       # CI's drift check passed, so the deployed bytes are the reviewed bytes.
@@ -271,7 +252,7 @@ jobs:
       # Post-deploy smoke scope (mirrors e2e-staging.yml): a deploy whose
       # head commit only touches docs prose or the `test/` unit tree the
       # checkers never execute skips the smoke steps below — the full suite,
-      # including those tests, already ran in this job via `npm run check`.
+      # including those tests, already passed in the exact-SHA full CI run.
       # ci/change-scope.sh fails closed: every other path runs the smoke.
       - name: Scope post-deploy smoke to web-affecting changes
         id: smoke-scope

@@ -166,6 +166,7 @@ function eventFixture(): PublicEvent {
     status: "published",
     rsvpOpen: true,
     goingCount: 2,
+    goingOccupancy: 2,
     discordEventId: null,
     discordSyncFailedAt: null,
     discordSyncFailureCode: null,
