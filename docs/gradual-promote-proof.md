@@ -65,7 +65,8 @@ other environment.
    only redeploy; after the action runs, only its own rollback may move
    traffic.
 7. The pinned action promotes 5% -> 50% -> 100%, running the real smoke
-   checker (pinned to the candidate by version override) at every stage.
+   checker (pinned to the candidate by version override) plus the
+   per-stage error-rate gate and soak at every stage.
 8. Independent readback (always): the final deployment must be the
    candidate at 100% after a successful action, or the captured original
    at 100% after a failed one; the live probe must be served by that same
@@ -159,9 +160,13 @@ report the gap instead of broadening access.
    Cloudflare account, or is already this proof's Worker from an
    earlier run (never some other workload).
 2. The staging `CLOUDFLARE_API_TOKEN` can edit Workers scripts and read
-   the account's workers.dev subdomain. The workflow fails closed if
+   the account's workers.dev subdomain plus Account Analytics read (the
+   new pin runs its per-stage error-rate gate by default, which queries
+   analytics and fails closed). The workflow fails closed if
    the credentials are absent; a token scoped to other scripts only
-   will fail at the first wrangler call, before any traffic moves.
+   will fail at the first wrangler call, before any traffic moves, and
+   a token without analytics read fails at the 5% gate with automatic
+   rollback of the synthetic Worker only.
 3. The `staging` GitHub Environment admits this workflow (its
    protection rules apply to the dispatch as they do to staging
    deploys). Version overrides themselves are documented Cloudflare

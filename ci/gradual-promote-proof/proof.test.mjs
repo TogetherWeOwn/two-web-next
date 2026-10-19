@@ -460,6 +460,42 @@ test("proof pin equals the production deploy pin so they cannot drift", () => {
     assert.equal(matches.length, 1, `${label} must contain exactly one active pin`);
     return matches[0];
   };
+  // Per-caller inputs that must differ: deployment identity, credentials,
+  // and the proof's indexability lock. Anything else must match exactly.
+  const PER_CALLER_INPUTS = new Set([
+    "worker-name",
+    "version-tag",
+    "domain",
+    "api-token",
+    "account-id",
+    "allow-indexable",
+  ]);
+  const extractActiveWith = (source, label) => {
+    const lines = source.split("\n");
+    const usesAt = lines.findIndex((line) =>
+      /^[ \t]*uses:[ \t]*TogetherWeOwn\/\.github\/actions\/gradual-promote@[^\s#]+/.test(line),
+    );
+    assert.notEqual(usesAt, -1, `${label} must contain an active gradual-promote step`);
+    const withAt = lines.findIndex((line, idx) => idx > usesAt && /^[ \t]*with:[ \t]*$/.test(line));
+    assert.notEqual(withAt, -1, `${label} gradual-promote step must have a with-block`);
+    const stepAt = lines.findIndex((line, idx) => idx > usesAt && /^ {6}- /.test(line));
+    assert.ok(stepAt === -1 || withAt < stepAt, `${label} with-block must belong to the step`);
+    const withIndent = lines[withAt].match(/^(\s*)/)?.[1].length ?? 0;
+    const entries = {};
+    for (let idx = withAt + 1; idx < lines.length; idx += 1) {
+      const line = lines[idx];
+      if (line.trim() === "" || line.trim().startsWith("#")) continue;
+      const indent = line.match(/^(\s*)/)?.[1].length ?? 0;
+      if (indent <= withIndent) break;
+      const input = line.match(/^\s*([A-Za-z0-9_.-]+):[ \t]*(.*?)\s*$/);
+      if (!input) break;
+      entries[input[1]] = input[2];
+    }
+    assert.ok("worker-name" in entries, `${label} with-block must list worker-name`);
+    return entries;
+  };
+  const stripPerCaller = (entries) =>
+    Object.fromEntries(Object.entries(entries).filter(([key]) => !PER_CALLER_INPUTS.has(key)));
   const productionPin = extractActivePin(deploy, "production workflow");
   assert.equal(PINNED_ACTION, productionPin);
   const workflow = readFileSync(
@@ -469,4 +505,7 @@ test("proof pin equals the production deploy pin so they cannot drift", () => {
   const proofPin = extractActivePin(workflow, "proof workflow");
   assert.equal(proofPin, productionPin);
   assert.equal(proofPin, PINNED_ACTION);
+  const productionWith = extractActiveWith(deploy, "production workflow");
+  const proofWith = extractActiveWith(workflow, "proof workflow");
+  assert.deepEqual(stripPerCaller(proofWith), stripPerCaller(productionWith));
 });
