@@ -84,9 +84,10 @@ differs by call site:
   on a refused Postgres socket (see
   [`test/db-outage-matrix.test.ts`](../test/db-outage-matrix.test.ts)).
 - Prune is best-effort: [`checkJoinThrottle`](../src/join/service.ts) logs a
-  one-line warning and swallows a throwing expiry DELETE, then returns the
-  decided verdict, so a prune failure never flips a refusal into an admission
-  on the generic path or a 500 on the direct join path.
+  one-line warning carrying the exception class (never the message, which can
+  quote statement bindings) and swallows a throwing expiry DELETE, then
+  returns the decided verdict, so a prune failure never flips a refusal into
+  an admission on the generic path or a 500 on the direct join path.
 - Allowance is admission only: passing the throttle does not guarantee the
   downstream handler succeeds — the journey store, bot call, or session mint
   can still refuse or fail.
