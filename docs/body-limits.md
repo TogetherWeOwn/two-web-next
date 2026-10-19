@@ -8,19 +8,22 @@ reading the body. Existing authentication, field validation and throttles remain
 in place; authenticated-only route groups may reject a guest before the limiter.
 The global trusted-host and same-origin gates run before route admission or
 buffering; the same-origin ingress/CSP exemptions retain bounded body handling.
-Except for the six event-write routes, two admin event form routes and two
-featured-write routes below, shared throttles and the profile write throttle run
-before buffering: oversized attempts consume admission budget and an exhausted
-bucket returns 429 without pulling the upload. Profile owner policy and other
-moderator write authentication also run before buffering; moderator
-authentication is read once, without rotation.
+Shared throttles run before buffering: oversized attempts consume admission
+budget and an exhausted bucket returns 429 without pulling the upload. The
+profile write throttle is the exception: profile PATCH/form POST enforce the
+form cap before throttle and session work, so an oversized body returns 413
+with zero throttle spend and no session or store read, and an exhausted bucket
+returns 429 only for bodies at or under the cap. Profile owner policy runs
+after the cap; other moderator write authentication runs before buffering,
+read once, without rotation.
 
 `POST /events`, `PATCH /events/:key` and the four `POST /events/:key/` actions
-(`publish`, `cancel`, `rsvp-pause`, `rsvp-reopen`) apply the body cap before the
-shared throttle and moderator authentication. Oversized advertised or streamed
-bodies return 413 without throttle rows or session reads, even when the budget is
-exhausted. At or under the cap, requests still run the throttle then moderator
-authentication, retaining the existing 429, 401 and 403 refusals.
+(`publish`, `cancel`, `rsvp-pause`, `rsvp-reopen`) likewise apply the existing body
+cap before the shared throttle and moderator authentication. Oversized advertised
+or streamed bodies return 413 without throttle rows or session reads, even when
+the throttle budget is exhausted. At or under the cap, requests still run the
+throttle then moderator authentication, retaining the existing 429, 401 and 403
+refusals.
 
 `POST /admin/events` and `POST /admin/events/:key` apply the `form` cap before
 the `admin-write` throttle, after the admin guard. An oversized body from a
