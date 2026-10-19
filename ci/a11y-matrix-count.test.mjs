@@ -31,6 +31,8 @@ test("documented matrix count matches the derived audit matrix", async () => {
   // Derive the scan multiplier from the viewport list the runner iterates,
   // not from source text: a spread/variable addition or dimension edit fails
   // here even though the literal count in ci/a11y.mjs would be unchanged.
+  // The loop assertion binds the runner to this constant, so a loop-site
+  // spread such as [...AUDIT_VIEWPORTS, extra] also fails the pin.
   assert.deepEqual(
     AUDIT_VIEWPORTS,
     [
@@ -38,6 +40,18 @@ test("documented matrix count matches the derived audit matrix", async () => {
       { width: 1280, height: 900 },
     ],
     "viewport list drifted; the scan total is cases x viewports",
+  );
+  assert(Object.isFrozen(AUDIT_VIEWPORTS), "AUDIT_VIEWPORTS must stay frozen so a push throws");
+  const runner = await readFile(new URL("./a11y.mjs", import.meta.url), "utf8");
+  assert.match(
+    runner,
+    /for \(const viewport of AUDIT_VIEWPORTS\)/,
+    "runner must iterate the pinned AUDIT_VIEWPORTS list; loop-site spreads bypass the pin",
+  );
+  assert.equal(
+    runner.match(/for \(const viewport of /g)?.length,
+    1,
+    "exactly one viewport loop must iterate AUDIT_VIEWPORTS; a second loop adds scans silently",
   );
   assert.equal(AUDIT_VIEWPORTS.length, EXPECTED_VIEWPORTS);
   assert.equal(
