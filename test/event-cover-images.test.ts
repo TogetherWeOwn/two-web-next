@@ -83,6 +83,7 @@ function event(overrides: Partial<PublicEvent> = {}): PublicEvent {
     updatedAt: start,
     syncRevision: 1,
     syncedRevision: 0,
+    goingOccupancy: 3,
     ...overrides,
   };
 }

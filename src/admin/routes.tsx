@@ -344,8 +344,10 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
 
   admin.post(
     "/events",
-    throttle("admin-write", WRITE_THROTTLE_PER_MINUTE),
+    // Cap before throttle: oversized moderator bodies 413 with zero
+    // admin-write spend and no store read; the guard above still runs first.
     requestBodyLimit("form"),
+    throttle("admin-write", WRITE_THROTTLE_PER_MINUTE),
     async (c) => {
       const db = await dbOr503(c);
       if (!db) return c.text("Admin temporarily unavailable", 503);
@@ -410,8 +412,10 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
 
   admin.post(
     "/events/:key",
-    throttle("admin-write", WRITE_THROTTLE_PER_MINUTE),
+    // Cap before throttle: oversized moderator bodies 413 with zero
+    // admin-write spend and no store read; the guard above still runs first.
     requestBodyLimit("form"),
+    throttle("admin-write", WRITE_THROTTLE_PER_MINUTE),
     async (c) => {
       const db = await dbOr503(c);
       if (!db) return c.text("Admin temporarily unavailable", 503);

@@ -254,7 +254,7 @@ describe("auth/join failure warns carry correlation IDs", () => {
       [
         JOIN_LOG,
         {
-          exception: "InvalidState",
+          exception: "OversizedOAuthParams",
           source: null,
           outcome: "expired",
           request_id: res.headers.get("x-request-id"),

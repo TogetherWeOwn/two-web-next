@@ -148,7 +148,9 @@ function fakeStore(
     neighborsFn: async () => over.neighbors ?? NEIGHBORS,
     relatedFn: async () => over.related ?? RELATED,
     attendeesFn: async () => over.attendees ?? ATTENDEES,
-    viewerRsvpFn: async () => over.answer ?? ANSWER,
+    // Explicit null is "no answer" (a member who never answered); only an
+    // absent key falls back to the default going answer.
+    viewerRsvpFn: async () => (over.answer !== undefined ? over.answer : ANSWER),
     waitlistFn: async () => over.waitlist ?? null,
     suggestionsFn: async () => over.suggestions ?? SUGGESTIONS,
   };
@@ -751,6 +753,33 @@ describe("Kit detail presentation", () => {
     // Signed-in header chrome mirrors the served sign-out form.
     expect(html).toContain('class="who">member<');
     expect(html).toContain('action="/logout"');
+  });
+
+  it("drives full and the waitlist CTA from seat occupancy, not the named count", async () => {
+    // Nameless-seat regression pin: one named going row of a cap of two.
+    // The label reads the attributable count while full, spots-left and the
+    // CTA read occupancy — the same split the Hono page serves, so the Kit
+    // page can never offer a seat the write path refuses.
+    const { outcome } = await resolve(
+      KEY,
+      fakeStore({
+        event: { ...row({ capacity: 2 }), goingCount: 1, goingOccupancy: 2 } as PublicEvent,
+        answer: null,
+      }),
+      memberSession(),
+    );
+    expect(outcome.kind).toBe("ok");
+    if (outcome.kind !== "ok") throw new Error("unreachable");
+    expect(outcome.model.goingCount).toBe(1);
+    expect(outcome.model.goingOccupancy).toBe(2);
+    const { renderDetail } = await buildKitEventDetailBundle();
+    const html = renderDetail(outcome.model as unknown as Record<string, unknown>);
+    expect(html).toContain('data-full="true"');
+    expect(html).toContain('data-testid="waitlist-join"');
+    expect(html).not.toContain('data-testid="rsvp-going"');
+    // The lineup spots line reads occupancy too, not the named count.
+    expect(html).toContain('data-testid="event-spots-left"');
+    expect(html).toContain(">Full<");
   });
 
   it("renders draft and past states with their notices and noindex", async () => {

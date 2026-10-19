@@ -8,21 +8,26 @@ reading the body. Existing authentication, field validation and throttles remain
 in place; authenticated-only route groups may reject a guest before the limiter.
 The global trusted-host and same-origin gates run before route admission or
 buffering; the same-origin ingress/CSP exemptions retain bounded body handling.
-Except for the six event-write routes and the five admin action routes below,
+Except for the event-write, admin event form, and admin action routes below,
 shared throttles and the profile write throttle run before buffering: oversized
 attempts consume admission budget and an exhausted bucket returns 429 without
 pulling the upload. Profile owner policy and other moderator write
 authentication also run before buffering; moderator authentication is read once,
-without rotation. Admin event form routes retain their existing throttle-first
-order.
+without rotation.
 
 `POST /events`, `PATCH /events/:key` and the four `POST /events/:key/` actions
-(`publish`, `cancel`, `rsvp-pause`, `rsvp-reopen`) instead apply the existing body
-cap before the shared throttle and moderator authentication. Oversized advertised
-or streamed bodies return 413 without throttle rows or session reads, even when
-the throttle budget is exhausted. At or under the cap, requests still run the
-throttle then moderator authentication, retaining the existing 429, 401 and 403
-refusals.
+(`publish`, `cancel`, `rsvp-pause`, `rsvp-reopen`) apply the body cap before the
+shared throttle and moderator authentication. Oversized advertised or streamed
+bodies return 413 without throttle rows or session reads, even when the budget is
+exhausted. At or under the cap, requests still run the throttle then moderator
+authentication, retaining the existing 429, 401 and 403 refusals.
+
+`POST /admin/events` and `POST /admin/events/:key` apply the `form` cap before
+the `admin-write` throttle, after the admin guard. An oversized body from a
+signed-in moderator returns 413 with zero throttle spend and no store read, even
+when the budget is exhausted. Guest 401 and non-moderator 403 refusals still run
+first, oversized or not; at or under the cap, moderator posts still spend one
+throttle hit before validation and the store.
 
 Admin lifecycle actions (`POST /admin/events/:key/publish`, `/cancel`,
 `/rsvp-pause`, `/rsvp-reopen`) and queue redispatch

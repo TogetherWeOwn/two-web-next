@@ -262,15 +262,58 @@ describe.skipIf(!process.env.DATABASE_URL)(
         try {
           await vi.waitFor(() => expect(successor).toBeDefined(), { timeout: 2000 });
           await expectAckAndShutdown(messages, work);
-          expect(pools.every(({ ended }) => ended)).toBe(true);
+          // AB7 producer deadline: a hung send stops racing at 2000 ms, so its
+          // lease-release pool can still be closing when the batch acks. Wait
+          // for every pool to end instead of asserting it immediately.
+          await vi.waitFor(() => expect(pools.every(({ ended }) => ended)).toBe(true), {
+            timeout: 5000,
+          });
           if (late) {
             expect(await observer`select job_id from queue_jobs`).toEqual([
               { job_id: successor!.jobId },
             ]);
+            // Pin the worker waitUntil wiring: after the dispatch deadline the
+            // background lifetime must still be pending while the held send is
+            // unresolved. A revert to successorLifetime(work) settles at the
+            // deadline and fails this pin (Node would still run the detached
+            // tail, masking it without this order assert).
+            await vi.waitFor(
+              () =>
+                expect(
+                  warnings.mock.calls.some(
+                    ([text]) => text === "sync successor dispatch failed; reconcile will retry",
+                  ),
+                ).toBe(true),
+              { timeout: 10_000 },
+            );
+            let backgroundSettled = false;
+            void Promise.all(background).then(
+              () => {
+                backgroundSettled = true;
+              },
+              () => {
+                backgroundSettled = true;
+              },
+            );
+            await new Promise((resolve) => setTimeout(resolve, 100));
+            expect(backgroundSettled).toBe(false);
             held.reject(new Error("local late transport rejection")); // AFTER actual pool end
+            await Promise.all(background);
+            // The tail (including exact-jobId ledger compensation) rides the
+            // background lifetime: already empty here with no waitFor. A
+            // reverted wiring drains at the deadline while compensation is
+            // still in flight and fails this immediate assert.
+            expect(await observer`select job_id from queue_jobs`).toEqual([]);
+          } else {
+            await awaitDispatchFailure();
+            // AB7 producer deadline: the dispatch can already have settled at
+            // its 2000 ms bound, so the rejection compensation below can still
+            // be in flight. Wait for it instead of asserting it immediately.
+            await vi.waitFor(
+              async () => expect(await observer`select job_id from queue_jobs`).toEqual([]),
+              { timeout: 10_000 },
+            );
           }
-          await awaitDispatchFailure();
-          expect.soft(await observer`select job_id from queue_jobs`).toEqual([]);
           expect(await pgEventStore(observer).needsSync(firstKey)).toBe(true);
           await recover(); // A clean revision must not hide the old orphan jobId.
         } finally {
@@ -281,7 +324,7 @@ describe.skipIf(!process.env.DATABASE_URL)(
     }
 
     for (const expireGrace of [false, true]) {
-      it(`accepted-late successor keeps its exact row and lock until its real consumer settles it (grace expired=${expireGrace})`, async () => {
+      it(`accepted-late successor keeps its exact row with the lease released at the deadline until its real consumer settles it (grace expired=${expireGrace})`, async () => {
         const messages = await prepare();
         const held = gate();
         let successor: SyncMessage | undefined;
@@ -309,7 +352,12 @@ describe.skipIf(!process.env.DATABASE_URL)(
         try {
           await vi.waitFor(() => expect(successor).toBeDefined(), { timeout: 2000 });
           await expectAckAndShutdown(messages, work);
-          expect(pools.every(({ ended }) => ended)).toBe(true);
+          // AB7 producer deadline: a hung send stops racing at 2000 ms, so its
+          // lease-release pool can still be closing when the batch acks. Wait
+          // for every pool to end instead of asserting it immediately.
+          await vi.waitFor(() => expect(pools.every(({ ended }) => ended)).toBe(true), {
+            timeout: 5000,
+          });
           expect(await observer`select job_id from queue_jobs`).toEqual([
             { job_id: successor!.jobId },
           ]);
@@ -329,15 +377,29 @@ describe.skipIf(!process.env.DATABASE_URL)(
               { job_id: successor!.jobId },
             ]);
           }
+          // AB7 producer deadline: the hung send stops racing at 2000 ms, but
+          // the expiry above can settle the lifetime race first. Wait for the
+          // deadline rejection itself before releasing the gate, so the late
+          // accept always lands after the lease is gone.
+          await vi.waitFor(
+            () =>
+              expect(
+                warnings.mock.calls.some(
+                  ([text]) => text === "sync successor dispatch failed; reconcile will retry",
+                ),
+              ).toBe(true),
+            { timeout: 10_000 },
+          );
           held.release();
           await vi.waitFor(() => expect(accepted).toBe(true), { timeout: 2000 });
           await Promise.all(background);
           expect(await observer`select job_id from queue_jobs`).toEqual([
             { job_id: successor!.jobId },
           ]);
-          expect(await observer`select key from job_unique_locks`).toEqual([
-            { key: uniqueKey(firstKey) },
-          ]);
+          // AB7 producer deadline: the lease was already released when the
+          // 2000 ms bound fired, while the late-accepted send keeps its exact
+          // tracked row until its real consumer settles it below.
+          expect(await observer`select key from job_unique_locks`).toEqual([]);
           transport.bot = {
             upsertEvent: vi.fn<BotClient["upsertEvent"]>(async () => ({
               ok: true,
@@ -408,32 +470,55 @@ describe.skipIf(!process.env.DATABASE_URL)(
           expect(send).not.toHaveBeenCalled();
           expect(await blocked()).toHaveLength(1); // Still server-side, AFTER shutdown.
           if (statementTimeout) {
-            // Keep the actual server lock held until statement_timeout cancels the
-            // query. waitUntil settlement is bounded independently of this holder.
+            // AB7 producer deadline: the 2000 ms bound fires before the 5 s
+            // statement_timeout, so dispatch rejects as a transport wait while
+            // the blocked INSERT is still server-side. The cancelled server
+            // query and the empty receipts below still prove the database
+            // timeout itself happened.
             await Promise.all(background);
             // Class-only since the successor-dispatch redaction: the timeout
             // error's raw message ("statement timeout") must not reach the
-            // log, only its bounded class. The cancelled server query and the
-            // empty receipts below still prove the timeout itself happened.
+            // log, only its bounded class.
             const dispatchWarns = warnings.mock.calls.filter(
               ([text]) => text === "sync successor dispatch failed; reconcile will retry",
             );
             expect(dispatchWarns.length).toBeGreaterThanOrEqual(1);
             for (const [, detail] of dispatchWarns) {
-              expect(detail).toEqual({ exception: "PostgresError" });
+              expect(detail).toEqual({ exception: "BotTransportError" });
             }
-            expect(await blocked()).toHaveLength(0);
-            expect(pools.every(({ ended }) => ended)).toBe(true);
+            // The server-side INSERT outlives the deadline; wait for
+            // statement_timeout to cancel it before asserting it is gone.
+            await vi.waitFor(async () => expect(await blocked()).toHaveLength(0), {
+              interval: 100,
+              timeout: 15_000,
+            });
+            await vi.waitFor(() => expect(pools.every(({ ended }) => ended)).toBe(true), {
+              timeout: 15_000,
+            });
           }
           held.release();
           await holding;
           await awaitDispatchFailure();
           expect(send).not.toHaveBeenCalled(); // Deadline abort prevents a late send.
-          expect(await observer`select job_id from successor_insert_receipts`).toHaveLength(
-            statementTimeout ? 0 : 1,
+          // The blocked INSERT settles after the holder commits; wait for its
+          // receipt instead of asserting it immediately.
+          await vi.waitFor(
+            async () =>
+              expect(await observer`select job_id from successor_insert_receipts`).toHaveLength(
+                statementTimeout ? 0 : 1,
+              ),
+            { timeout: 10_000 },
           );
-          expect(await observer`select job_id from queue_jobs`).toEqual([]);
-          expect(await observer`select key from job_unique_locks`).toEqual([]);
+          // The late compensation runs after the blocked INSERT settles; wait
+          // for it instead of asserting it immediately.
+          await vi.waitFor(
+            async () => expect(await observer`select job_id from queue_jobs`).toEqual([]),
+            { timeout: 10_000 },
+          );
+          await vi.waitFor(
+            async () => expect(await observer`select key from job_unique_locks`).toEqual([]),
+            { timeout: 10_000 },
+          );
           await observer`drop trigger hold_successor_insert on queue_jobs`;
           await recover();
         } finally {

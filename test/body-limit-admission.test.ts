@@ -33,7 +33,8 @@ const sharedRoutes = [
   ),
 ];
 
-// Moderator event writes and admin lifecycle actions refuse oversized bodies
+// Moderator event writes, admin event forms, and admin lifecycle actions
+// refuse oversized bodies
 // before the shared throttle (and before any session read): cap-first, not
 // throttle-first. Every other shared-throttle route keeps the
 // throttle-before-buffering order.
@@ -44,6 +45,8 @@ const EVENT_WRITE_CAP_FIRST = new Set([
   "POST /events/:key/cancel",
   "POST /events/:key/rsvp-pause",
   "POST /events/:key/rsvp-reopen",
+  "POST /admin/events",
+  "POST /admin/events/:key",
   "POST /admin/events/:key/publish",
   "POST /admin/events/:key/cancel",
   "POST /admin/events/:key/rsvp-pause",
