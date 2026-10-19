@@ -1,7 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 // @ts-expect-error Standalone probe tooling has no declaration file.
-// biome-ignore format: single-line import keeps the @ts-expect-error above attached to TS7016 (wrapping detaches it)
-import { ADMIN_POST_PATHS, QA_HEADER, STAGING_URL, runProbe } from "../bin/admin-authwall-probe.mjs";
+import * as probe from "../bin/admin-authwall-probe.mjs";
+
+const { ADMIN_POST_PATHS, QA_HEADER, STAGING_URL, runProbe } = probe;
 
 // Acceptance contract for the admin auth-wall probe:
 // 1. Response disposal is inert. It is attempted exactly once per response,
