@@ -947,24 +947,28 @@ describe.skipIf(!process.env.DATABASE_URL)("rsvp routes (agent-testdb)", () => {
     // Bounded race, not an open wait: a prune that blocked on the held row
     // could never settle before release() below. Bound: 15s guard fails the
     // test instead of hanging if the write ever blocks on the held prune row.
-    const res = await Promise.race([
-      pending,
-      new Promise<never>((_, reject) =>
-        setTimeout(() => reject(new Error("write did not skip the held prune row")), 15_000),
-      ),
-    ]);
-    expect(res.status).toBe(201);
-    // The locked row was skipped, not deleted from under its holder.
-    const [{ n: locked }] =
-      (await client`select count(*)::int as n from web_throttle_hits where bucket = 'unrelated-expired-bucket'`) as unknown as [
-        { n: number },
-      ];
-    expect(locked).toBe(1);
-    const [hit] =
-      await client`select at from web_throttle_hits where bucket = ${`rsvp-write:${who}`}`;
-    expect(new Date(hit!.at).getTime()).toBeGreaterThanOrEqual(new Date(tb!.t).getTime());
-    release();
-    await holder;
+    try {
+      const res = await Promise.race([
+        pending,
+        new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error("write did not skip the held prune row")), 15_000),
+        ),
+      ]);
+      expect(res.status).toBe(201);
+      // The locked row was skipped, not deleted from under its holder.
+      const [{ n: locked }] =
+        (await client`select count(*)::int as n from web_throttle_hits where bucket = 'unrelated-expired-bucket'`) as unknown as [
+          { n: number },
+        ];
+      expect(locked).toBe(1);
+      const [hit] =
+        await client`select at from web_throttle_hits where bucket = ${`rsvp-write:${who}`}`;
+      expect(new Date(hit!.at).getTime()).toBeGreaterThanOrEqual(new Date(tb!.t).getTime());
+    } finally {
+      release();
+      await holder;
+      await pending.catch(() => undefined);
+    }
     await client`delete from web_throttle_hits where bucket = 'unrelated-expired-bucket'`;
   });
   it("expiry is judged after the event-lock wait: a PUT queued behind the event row is refused once the event ends", async () => {
