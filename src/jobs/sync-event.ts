@@ -14,7 +14,17 @@ import {
 export type Outcome =
   | { done: true }
   | { retryInSeconds: number }
-  | { failed: string; definitive?: true };
+  | {
+      failed: string;
+      definitive?: true;
+      /**
+       * Settlement-only redelivery: the attempt still carries terminal intent,
+       * so the consumer re-runs the bounded settlement without the bot flow.
+       * A still-unsettled store retries after this many seconds instead of
+       * going terminal; only a committed settlement reaches the failed path.
+       */
+      intentRedeliveryBackoffSeconds?: number;
+    };
 
 export const uniqueKey = (eventKey: string) => `sync-event:${eventKey}`;
 
@@ -177,7 +187,39 @@ export async function handleSyncEvent(
   const prepared = await deps.events.prepareSync(msg.eventKey, msg.idempotencyKey, now());
   if (!prepared) return { done: true };
   if ("waiting" in prepared) return waiting();
+  // Settlement-only redelivery: a definitive outcome already recorded its
+  // terminal intent on this attempt. Never re-run the bot flow or re-derive
+  // the verdict; return the stored reason so the consumer re-runs the
+  // bounded settlement. The carried backoff keeps a still-unsettled store
+  // on delayed retry instead of going terminal.
+  const terminalIntent =
+    prepared.terminalReason ??
+    (prepared as unknown as { terminal_reason?: string | null }).terminal_reason ??
+    null;
+  if (prepared.state === "failed" && terminalIntent) {
+    // Late settlement commit: the UPDATE landed after the client's race gave
+    // up, so the alert and the failed row were never written. Settle again —
+    // the UPDATE matches zero rows and resolves — and reach the terminal path.
+    return {
+      failed: terminalIntent,
+      definitive: true,
+      intentRedeliveryBackoffSeconds: backoffFor(
+        SYNC_EVENT.backoffSeconds,
+        Math.max(attempts, prepared.requestAttempts),
+      ),
+    };
+  }
   if (prepared.state !== "pending") return { done: true };
+  if (terminalIntent) {
+    return {
+      failed: terminalIntent,
+      definitive: true,
+      intentRedeliveryBackoffSeconds: backoffFor(
+        SYNC_EVENT.backoffSeconds,
+        Math.max(attempts, prepared.requestAttempts),
+      ),
+    };
+  }
   if (prepared.requestAttempts >= SYNC_EVENT.tries) {
     return { failed: "request retry budget exhausted; unresolved identity retained" };
   }

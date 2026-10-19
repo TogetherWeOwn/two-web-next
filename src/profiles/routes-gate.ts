@@ -33,6 +33,17 @@ export function profileError(error: Error, c: Ctx) {
   return bufferedMemberText(c, "Member data is temporarily unavailable.", 503);
 }
 
+/** Write bypass: PATCH/POST /members/:user (single segment) enforce the body
+ * cap before any session work. The global gate skips only that exact write
+ * shape here; the write routes run the same gate explicitly after their body
+ * limiter. Deeper (/members/:user/extra), trailing-slash and bare /members/
+ * writes keep the global gate. Reads keep the global gate. */
+export function isProfileWriteRequest(c: Pick<Ctx, "req">): boolean {
+  const method = c.req.method;
+  if (method !== "PATCH" && method !== "POST") return false;
+  return /^\/members\/[^/]+$/.test(c.req.path);
+}
+
 /** Gate: guest → OAuth, non-member → 403, store failure → 503 (fail closed). */
 export function memberGate(deps: ProfileDeps) {
   return async (c: Ctx, next: Next) => {
@@ -93,9 +104,14 @@ export function registerGate(app: ProfileApp, deps: ProfileDeps, { sinkFor }: Pr
   app.get("/members/", (c) => c.notFound());
 
   // Scoped to this slice's paths: the app is mounted at "/", so a "*" here
-  // would gate every route in the worker.
+  // would gate every route in the worker. Profile writes bypass the global
+  // gate so their body cap runs first; registerWriteRoutes runs this same
+  // gate explicitly after its limiter.
   for (const path of ["/profile", "/members/*"]) {
-    app.use(path, gate);
+    app.use(path, async (c, next) => {
+      if (isProfileWriteRequest(c)) return next();
+      return gate(c, next);
+    });
     app.use(path, async (c, next) => {
       if (c.req.method !== "GET" && c.req.method !== "HEAD") return next();
       await memberReadBoundary(
