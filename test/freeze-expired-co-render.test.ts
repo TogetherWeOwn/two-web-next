@@ -89,7 +89,12 @@ describe("freeze + expired-write co-render", () => {
     expect(occurrences(html, "auth-error")).toBe(1);
     expect(html).toContain(DATES);
     expect(html).toContain('href="/privacy"');
-    expect(html).toContain('href="/auth/recover?next=%2Fprofile"');
+    // The restored banner keeps its copy with no recovery link: a signed-in
+    // member must never be sent back to the expired-session landing.
+    expect(html).not.toContain("/auth/recover");
+    const banner = html.match(/<div[^>]*data-testid="auth-error"[^>]*>.*?<\/div>/s)?.[0];
+    expect(banner).toBeDefined();
+    expect(banner).not.toContain("<a ");
     const main = html.indexOf("<main>");
     expect(main).toBeGreaterThan(-1);
     // Expired-write is the outer post-processor, so its banner lands first.
