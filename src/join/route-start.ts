@@ -25,6 +25,18 @@ export function registerJoinStartRoutes(app: Hono<{ Bindings: Env }>, hooks: Joi
     if (limited) return limited;
     const source = sanitizeSource(c.req.query("source"));
     const next = safeNext(c.req.query("next"));
+    // The fallback target is the only place the retry intent survives: safe
+    // next/source values ride back onto /join (mirroring the callback's retry
+    // href), while hostile or absent values keep the bare target. Both already
+    // passed their sanitizers above, so hostile stays dropped.
+    const fallback =
+      next && source
+        ? `/join?next=${encodeURIComponent(next)}&source=${encodeURIComponent(source)}`
+        : next
+          ? `/join?next=${encodeURIComponent(next)}`
+          : source
+            ? `/join?source=${encodeURIComponent(source)}`
+            : "/join";
     const state = crypto.randomUUID();
     const store = await hooks.storeFor(c);
     // A transient journey-store failure degrades to /join, never a 500 —
@@ -33,11 +45,11 @@ export function registerJoinStartRoutes(app: Hono<{ Bindings: Env }>, hooks: Joi
       await store.journeys.sweepExpired();
       if (!(await store.journeys.issue(await hashToken(state), "join"))) {
         c.header("cache-control", "no-store");
-        return c.redirect("/join", 302);
+        return c.redirect(fallback, 302);
       }
     } catch {
       c.header("cache-control", "no-store");
-      return c.redirect("/join", 302);
+      return c.redirect(fallback, 302);
     }
     // Each admitted journey owns its optional intent: a missing or rejected
     // value expires a stale cookie from an abandoned earlier start (same
