@@ -75,9 +75,14 @@ are not incident entries; read those sections directly when that work is authori
   Respect existing deployment, receiver/HMAC and isolation holds. A green
   workflow or an always-200 endpoint does not release them.
 - Never test, probe or verify database behavior against staging or production
-  databases. Tests use `agent-testdb`, database `two_web_next`, or local fixtures;
-  CI uses its disposable Postgres service. Do not send synthetic writes or
-  authenticated smoke actions to live services as a substitute for those tests.
+  databases. Full database verification uses a fresh, run-owned disposable
+  database (`two_web_next_tog<digits>`) on `agent-testdb` with the migrated
+  schema; follow the canonical setup in
+  [README Database and migrations](../README.md#database-and-migrations).
+  Fixture-only `npm run check:offline` and focused isolated-schema tests remain
+  allowed without the full database; CI uses its disposable Postgres service.
+  Do not send synthetic writes or authenticated smoke actions to live services
+  as a substitute for those tests.
 - On an authentication/ownership/permission failure, **stop**. Do not try a
   credential from another environment, print a URL/password, change identity,
   or bypass a failed check. Use the authorized broker/provisioning principal.
@@ -130,10 +135,13 @@ service-container DB coverage. Appending flags to the full shell-chain `check`
 script sends them to its final cutover command, not the earlier Vitest command.
 
 Full `npm run check`, coverage thresholds and required CI gates are unchanged.
-Full database verification must explicitly use
-`postgres://agent_test@agent-testdb:5432/two_web_next` and the migrated schema,
-never a live service. Required CI runs the complete suite on
-its disposable Postgres service.
+Full database verification must use a fresh, run-owned `two_web_next_tog<digits>`
+database on `agent-testdb` with the migrated schema, never the shared
+`two_web_next` database nor a live service; follow the canonical setup in
+[README Database and migrations](../README.md#database-and-migrations).
+Fixture-only `npm run check:offline` is limited evidence, not database
+acceptance, and focused isolated-schema tests remain allowed. Required CI runs
+the complete suite on its disposable Postgres service.
 
 ## A moderator lost their role
 
@@ -326,7 +334,7 @@ approved account and binding isolation before any remote mutation.
    failed migration step fails the job before any Cloudflare mutation. The
    queue-create step currently suppresses errors; it is not permission/provisioning evidence.
    The final staging smoke runs `node bin/smoke.mjs https://next.togetherweown.com --fail-on-ready-wait-critical`
-   ([smoke checker](../bin/smoke.mjs)), covering 20 public routes: `/up`
+   ([smoke checker](../bin/smoke.mjs)), covering 23 public routes: `/up`
    (HTTP 200, `application/json`, `db:ok`, `pending_migrations:0`, `status`
    healthy/degraded, `queue.status` healthy/degraded/unknown, `warn_at:20`,
    `critical_at:100`) plus `/`, `/about`, `/faq`, `/rules`, `/privacy`,
@@ -334,6 +342,10 @@ approved account and binding isolation before any remote mutation.
    `/sitemap_index.xml`, `/robots.txt`, `/.well-known/security.txt`,
    `/discord` (302), `/profile` (302),
    `/admin` (302/403), `/api/public/events` (200 JSON collection envelope),
+   `/api/public/events/<key>` (404 JSON not_found error envelope: the fixed
+   probe key exists in no database),
+   `/api/public/community` (200 JSON community snapshot),
+   `/api/public/join` (200 JSON join handoff),
    `/openapi.json` (200 JSON discovery document)
    and `/__smoke_unknown_route__` (404)
    with CSP/nosniff/content-type/noindex/redirect assertions. The `/up` assertions
@@ -341,7 +353,7 @@ approved account and binding isolation before any remote mutation.
    `unknown` in `queue.status` or `ready_wait_severity`, or a `critical`
    `ready_wait_severity`, fails the deploy even though `/up` itself still returns 200.
    Queue `degraded` passes. The strict flag is staging-only: the apex production
-   smoke uses the same 20-route shape with `--allow-indexable` and without the strict flag
+   smoke uses the same 23-route shape with `--allow-indexable` and without the strict flag
    (`node bin/smoke.mjs https://togetherweown.com --allow-indexable`), so `critical`
    queue readiness only warns and `unknown` passes there.
 4. An explicitly authorized manual deployment of the reviewed release uses:
