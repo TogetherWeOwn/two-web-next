@@ -1,0 +1,1 @@
+ALTER TABLE "event_sync_attempts" ADD COLUMN "terminal_reason" text;

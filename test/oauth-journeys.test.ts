@@ -4,6 +4,7 @@ import {
   createMemoryOAuthJourneyStore,
   createPostgresOAuthJourneyStore,
   migrateOAuthJourneys,
+  OAUTH_JOURNEY_SWEEP_BATCH_SIZE,
   OAUTH_JOURNEY_TTL_SECONDS,
   type OAuthJourneyStore,
 } from "../src/oauth-journeys";
@@ -115,6 +116,18 @@ it("memory expiry rejects the exact ten-minute boundary even before cleanup", as
   expect(await store.sweepExpired()).toBe(2);
   expect(await store.sweepExpired()).toBe(0);
   expect(await store.consume("expired", "auth")).toBe(false);
+});
+
+it("memory sweep removes at most one batch per call", async () => {
+  let now = 0;
+  const store = createMemoryOAuthJourneyStore(() => now);
+  for (let i = 0; i < OAUTH_JOURNEY_SWEEP_BATCH_SIZE + 1; i += 1) {
+    expect(await store.issue(`batch-${i}`, "auth")).toBe(true);
+  }
+  now = OAUTH_JOURNEY_TTL_SECONDS * 1000 + 1;
+  expect(await store.sweepExpired()).toBe(OAUTH_JOURNEY_SWEEP_BATCH_SIZE);
+  expect(await store.sweepExpired()).toBe(1);
+  expect(await store.sweepExpired()).toBe(0);
 });
 
 describe.skipIf(!url)("isolated Postgres persistence", () => {
@@ -256,5 +269,20 @@ describe.skipIf(!url)("isolated Postgres persistence", () => {
     expect(await store.consume(hash, "auth")).toBe(false);
     expect(await store.sweepExpired()).toBeGreaterThanOrEqual(1);
     expect(await store.consume(hash, "auth")).toBe(false);
+  });
+
+  it("postgres sweep drains a multi-batch backlog across calls, never within one request", async () => {
+    const prefix = `batch-${crypto.randomUUID()}-`;
+    await sql`insert into web_oauth_journeys (state_hash, flow, expires_at)
+      select ${prefix} || i, 'auth', now() - interval '1 second'
+      from generate_series(1, ${OAUTH_JOURNEY_SWEEP_BATCH_SIZE + 1}) i`;
+    try {
+      const store = createPostgresOAuthJourneyStore(sql);
+      expect(await store.sweepExpired()).toBe(OAUTH_JOURNEY_SWEEP_BATCH_SIZE);
+      expect(await store.sweepExpired()).toBe(1);
+      expect(await store.sweepExpired()).toBe(0);
+    } finally {
+      await sql`delete from web_oauth_journeys where state_hash like ${`${prefix}%`}`;
+    }
   });
 });
