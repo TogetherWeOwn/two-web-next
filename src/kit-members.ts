@@ -1,4 +1,6 @@
-import { serialize, serializeSigned } from "hono/utils/cookie";
+import type { Context } from "hono";
+import { deleteCookie } from "hono/cookie";
+import { serializeSigned } from "hono/utils/cookie";
 import type { Db } from "./db/index";
 import type { Env } from "./env";
 import { alertRequestError } from "./alerts";
@@ -147,10 +149,32 @@ async function guestIntendedCookie(
       // Signing must never crash the bounce; fall through to clearing.
     }
   }
-  return serialize(LOGIN_INTENDED_COOKIE, "", {
-    ...intendedCookieOpts,
-    maxAge: 0,
-  });
+  return clearIntendedCookie();
+}
+
+// Clearing serialization for a rejected (hostile, oversized), unparseable or
+// unsignable destination: empty value with immediate expiry, same attributes. This goes
+// through the same deleteCookie the Hono journey uses (bounceToLogin's
+// rejection arm), not a hand-rolled maxAge literal — every maxAge in src is
+// pinned to a named lifetime constant (test/privacy-policy-numbers.test.ts),
+// and clears are not lifetimes. This core is framework-free, so a minimal
+// header sink harvests the Set-Cookie string deleteCookie emits; it touches
+// only deleteCookie's documented surface (one header write, one request
+// cookie read), and the guest-bounce differential fails loudly if a hono
+// upgrade ever changes that surface.
+function clearIntendedCookie(): string {
+  let cleared = "";
+  deleteCookie(
+    {
+      req: { raw: { headers: new Headers() } },
+      header: (name: string, value: string) => {
+        if (name.toLowerCase() === "set-cookie") cleared = value;
+      },
+    } as unknown as Context,
+    LOGIN_INTENDED_COOKIE,
+    { ...intendedCookieOpts },
+  );
+  return cleared;
 }
 
 /** Signed-in non-member: the binding maps this to error(403). */
