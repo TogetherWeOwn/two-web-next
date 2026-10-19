@@ -1767,6 +1767,15 @@ test("check-migrations CLI stops manual dispatch until db-migrate plus audited c
   assert.match(stopped.stderr, /0001_b/);
   assert.match(stopped.stderr, /run db-migrate\.yml \(target production\) first/);
   assert.match(stopped.stderr, /migrations_applied=true/);
+  // The workflow renders the boolean input default as the string "false",
+  // so only the exact "true" confirmation releases the stop.
+  const defaulted = spawnGateCli(
+    ["--check-migrations"],
+    { ...base, MIGRATIONS_APPLIED: "false" },
+    journals,
+  );
+  assert.equal(defaulted.status, 1);
+  assert.match(defaulted.stderr, /run db-migrate\.yml \(target production\) first/);
   // After db-migrate applied the entries, the operator-confirmed re-dispatch
   // continues with an audited log line naming the pending tags.
   const continued = spawnGateCli(
