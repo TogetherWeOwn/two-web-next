@@ -1,11 +1,12 @@
 // Fails unless the auth-browser sign-in proof left real evidence behind:
 // the evidence directory must exist and be non-empty, and result.json must
 // exist, be non-empty, parse as JSON, record all six checks and zero
-// unexpected requests, with every listed screenshot present and non-empty
-// (the suite writes result.json last, so six checks prove it ran to
-// completion). The ci.yml upload step additionally uses if-no-files-found:
-// error, so an empty directory fails there too; this assertion names the
-// missing evidence instead of failing on the upload.
+// unexpected requests, and list exactly the four screenshots the suite
+// writes, each present and non-empty (the suite writes result.json last, so
+// six checks prove it ran to completion). The ci.yml upload step
+// additionally uses if-no-files-found: error, so an empty directory fails
+// there too; this assertion names the missing evidence instead of failing on
+// the upload.
 //
 // Usage: node ci/require-auth-browser-evidence.mjs [artifacts/auth-browser]
 import { appendFileSync, existsSync, readdirSync, readFileSync, statSync } from "node:fs";
@@ -14,6 +15,12 @@ import { pathToFileURL } from "node:url";
 
 export const EVIDENCE_RESULT = "result.json";
 export const EXPECTED_CHECKS = 6;
+export const EXPECTED_SCREENSHOTS = [
+  "auth-success.png",
+  "auth-replay.png",
+  "join-success.png",
+  "join-replay.png",
+];
 
 export function checkAuthBrowserEvidence(dir = "artifacts/auth-browser") {
   if (!existsSync(dir) || !statSync(dir).isDirectory())
@@ -43,7 +50,14 @@ export function checkAuthBrowserEvidence(dir = "artifacts/auth-browser") {
     throw new Error(
       `${dir}: ${EVIDENCE_RESULT} records ${JSON.stringify(report?.unexpectedRequests)} unexpected requests instead of 0`,
     );
-  for (const shot of report?.screenshots ?? []) {
+  if (
+    !Array.isArray(report?.screenshots) ||
+    report.screenshots.length !== EXPECTED_SCREENSHOTS.length ||
+    new Set(report.screenshots).size !== EXPECTED_SCREENSHOTS.length ||
+    report.screenshots.some((shot) => !EXPECTED_SCREENSHOTS.includes(shot))
+  )
+    throw new Error(`${dir}: ${EVIDENCE_RESULT} must list all four screenshots`);
+  for (const shot of report.screenshots) {
     const shotPath = join(dir, shot);
     if (!existsSync(shotPath) || statSync(shotPath).size === 0)
       throw new Error(`${dir}: screenshot ${shot} is missing or empty`);

@@ -79,15 +79,55 @@ describe("auth-browser evidence guard", () => {
     }
   });
 
+  it("rejects a six-check report with no screenshots field", () => {
+    const dir = mkdtempSync(join(tmpdir(), "auth-guard-"));
+    try {
+      writeFileSync(
+        join(dir, "result.json"),
+        JSON.stringify({ checks: [1, 2, 3, 4, 5, 6], unexpectedRequests: 0 }),
+      );
+      expect(() => checkAuthBrowserEvidence(dir)).toThrow(/must list all four screenshots/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects a six-check report with an empty, partial, or padded screenshot list", () => {
+    const dir = mkdtempSync(join(tmpdir(), "auth-guard-"));
+    try {
+      for (const screenshots of [
+        [],
+        ["auth-success.png"],
+        ["auth-success.png", "auth-replay.png", "join-success.png", "join-replay.png", "extra.png"],
+        ["auth-success.png", "auth-success.png", "join-success.png", "join-replay.png"],
+      ]) {
+        writeFileSync(
+          join(dir, "result.json"),
+          JSON.stringify({ checks: [1, 2, 3, 4, 5, 6], unexpectedRequests: 0, screenshots }),
+        );
+        expect(() => checkAuthBrowserEvidence(dir)).toThrow(/must list all four screenshots/);
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("rejects evidence with a missing screenshot", () => {
     const dir = mkdtempSync(join(tmpdir(), "auth-guard-"));
     try {
+      for (const shot of ["auth-success.png", "auth-replay.png", "join-success.png"])
+        writeFileSync(join(dir, shot), "fake-png");
       writeFileSync(
         join(dir, "result.json"),
         JSON.stringify({
           checks: [1, 2, 3, 4, 5, 6],
           unexpectedRequests: 0,
-          screenshots: ["auth-success.png"],
+          screenshots: [
+            "auth-success.png",
+            "auth-replay.png",
+            "join-success.png",
+            "join-replay.png",
+          ],
         }),
       );
       expect(() => checkAuthBrowserEvidence(dir)).toThrow(/screenshot .* is missing or empty/);
@@ -99,13 +139,24 @@ describe("auth-browser evidence guard", () => {
   it("accepts a normal run's evidence", () => {
     const dir = mkdtempSync(join(tmpdir(), "auth-guard-"));
     try {
-      writeFileSync(join(dir, "auth-success.png"), "fake-png");
+      for (const shot of [
+        "auth-success.png",
+        "auth-replay.png",
+        "join-success.png",
+        "join-replay.png",
+      ])
+        writeFileSync(join(dir, shot), "fake-png");
       writeFileSync(
         join(dir, "result.json"),
         JSON.stringify({
           checks: [1, 2, 3, 4, 5, 6],
           unexpectedRequests: 0,
-          screenshots: ["auth-success.png"],
+          screenshots: [
+            "auth-success.png",
+            "auth-replay.png",
+            "join-success.png",
+            "join-replay.png",
+          ],
         }),
       );
       expect(checkAuthBrowserEvidence(dir)).toMatch(/6 checks, 0 unexpected requests/);
