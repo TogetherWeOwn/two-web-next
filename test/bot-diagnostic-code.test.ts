@@ -6,9 +6,28 @@
 // fixed literal "unknown": never cleaned, truncated, or alphabet-filtered,
 // and the output carries nothing derived from its input.
 //
-// Hermetic: pure function. No live bot, no database, synthetic canaries only.
+// Hermetic: a pure function plus a local read of its source. No live bot, no
+// database, synthetic canaries only.
+import { readFileSync } from "node:fs";
+import { URL } from "node:url";
 import { describe, expect, it } from "vitest";
 import { diagnosticCode } from "../src/bot/diagnostic-code";
+
+// DIAGNOSTIC_CODES stays module-private: an export would let any importer
+// reach, and past the ReadonlySet type mutate, the closed vocabulary. The pin
+// reads the Set literal from source instead, as sync-retry-cause-docs does.
+const source = readFileSync(new URL("../src/bot/diagnostic-code.ts", import.meta.url), "utf8");
+
+function productionVocabulary(): string[] {
+  const block = source.match(
+    /const DIAGNOSTIC_CODES\b[^=]*=\s*new Set(?:<[^>]*>)?\(\[([^\]]*)\]\)/,
+  )?.[1];
+  expect(block, "DIAGNOSTIC_CODES Set literal in src/bot/diagnostic-code.ts").toBeDefined();
+  // Fail closed: a spread, constant or template member would hide from the pin.
+  const rest = block!.replace(/"[^"\\\n]*"\s*,?/g, "").trim();
+  expect(rest, "DIAGNOSTIC_CODES holds only plain string literals").toBe("");
+  return [...block!.matchAll(/"([^"\\\n]*)"/g)].map((m) => m[1]!);
+}
 
 const MEMBERS = [
   "malformed",
@@ -140,13 +159,27 @@ const NON_STRINGS: unknown[] = [
 ];
 
 describe("diagnosticCode round-trips the closed 11-member vocabulary", () => {
-  it("pins the vocabulary to exactly 11 distinct members", () => {
-    expect(MEMBERS).toHaveLength(11);
-    expect(new Set(MEMBERS).size).toBe(11);
+  it("pins MEMBERS to the production vocabulary of exactly 11 distinct codes", () => {
+    const production = productionVocabulary();
+    expect(production).toHaveLength(11);
+    expect(new Set(production).size).toBe(11);
+    expect([...production].sort()).toEqual([...MEMBERS].sort());
   });
 
   it.each(MEMBERS)("round-trips %s", (code) => {
     expect(diagnosticCode(code)).toBe(code);
+  });
+
+  it("collapses every other string literal in the module to unknown", () => {
+    // A second membership path (e.g. `|| code === "x"`) would bypass the Set
+    // pin above, so no literal outside MEMBERS may classify as itself.
+    const others = [...source.matchAll(/"([^"\\\n]*)"/g)]
+      .map((m) => m[1]!)
+      .filter((literal) => !MEMBERS.includes(literal));
+    expect(others.length, "module literals outside MEMBERS").toBeGreaterThan(0);
+    for (const literal of others) {
+      expect(diagnosticCode(literal)).toBe("unknown");
+    }
   });
 });
 
