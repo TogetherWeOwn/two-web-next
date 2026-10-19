@@ -505,6 +505,33 @@ This source does not emit a `Discord snapshot outcome` line. Check the configure
 [`DISCORD_GUILD_ID`](config.md), rather than treating the warning as a Discord
 or snapshot-store outage.
 
+## Live Discord scheduled-events read failure
+
+`Discord scheduled-events read failed.` is the exact fixed `console.warn`
+message for one failed live read of the guild's scheduled events
+(`src/events/discord-transients-live.ts:76-81`, `ReadFailure` at
+`src/events/discord-transients-types.ts:29-34`). One line per failed
+`upcoming()` call; a successful read stays quiet. The cached source turns a
+failed live read into a retry hold and keeps serving the last usable snapshot
+while one exists, so this line alone is not an outage. Read it together with
+the [Discord snapshot outcome](#discord-snapshot-outcome) line for the same
+window.
+
+| Message | Trigger (`reason`) | Member impact | Severity | First read-only check | Escalation boundary | Fields carried |
+| --- | --- | --- | --- | --- | --- | --- |
+| `Discord scheduled-events read failed.` | One of `deadline` (the 1,000 ms headers-and-body budget elapsed), `status` (non-2xx; the body is cancelled unread), `aborted` (the deadline fired while the read was in flight: a late adapter delivery or a mid-body stall), `no_body` (a 2xx without a body), `invalid_payload` (a non-list, over-row-count, or over-byte payload), or `exception` (a fetch/parse throw classified by class name, including unparseable JSON as `SyntaxError`). | Stale cached transients served while a usable snapshot exists (`held`/`stale` on the snapshot line); an honest error state (`cold`, nothing served) only when nothing usable is left. Canonical events stay available. Not an outage. | Warn only. No page and no new alert: a throttled or slow Discord episode is expected to log a burst of these while the snapshot line stays on `held`. | Filter Workers Logs message/text with the exact line over the incident window (see [Find a request](#find-a-request)), tally the `"reason":"..."` substrings, and compare against the [Discord snapshot outcome](#discord-snapshot-outcome) mix for the same window: a `status`/429 burst with `held` snapshots is throttling, while `cold` growth or any `error` line points past Discord. `jq -c '.logs[]? \| select(any(.message[]?; . == "Discord scheduled-events read failed.")) \| .message[]? \| select(type == "object")' tail.json \| grep -o '"reason":"[a-z_]*"' \| sort \| uniq -c` | Discord-side: `status` with 401/403 (token or guild access), 429 (throttling), or 5xx (Discord outage) — check Discord health and the configured guild/token via the authorized Operator, not code. App-side: `deadline`, `aborted`, `no_body`, `invalid_payload`, or `exception` sustained outside a Discord episode, or a matching snapshot `error`/`completionFailed: true` line — triage the app, store, or config. | `reason` (always), `status` (`status` only), `retryAfter` (429 with a usable header only), `exception` (`exception` only, class name), `elapsedMs` (always). Never a message, URL, header, body, token, or member identity. |
+
+`retryAfter` is bounded admitted backoff, not the raw header: the shared
+`parseRetryAfterSeconds` parser (`src/jobs/retry-delay.ts`) accepts trimmed
+digits with an optional fraction only, rounds fractions up, keeps 1 to 86,400
+seconds, and omits the field when the header is absent, empty, or unusable —
+so a 429 line without `retryAfter` means "no usable backoff", not "no
+throttle". Only a 429 carries it; every other `status` omits it. `exception`
+is the throw's fixed class name (`TypeError`, `SyntaxError`, `Error`, or the
+`typeof` fallback), never its message, which can echo the bot token or wire
+detail. The error body is deliberately never read: a stalled body must not
+hold the page past the deadline.
+
 ## Rules last-updated stamp warning
 
 `Invalid community.rules_last_updated — hiding /rules stamp` is the exact fixed
