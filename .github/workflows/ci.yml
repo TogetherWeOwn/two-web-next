@@ -484,6 +484,8 @@ jobs:
       - name: Catalog-preflight selftest (disposable service Postgres only)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
         run: npm run test:catalog-preflight
+        env:
+          CATALOG_PREFLIGHT_TEST_DATABASE_URL: postgres://postgres:ci@localhost:5432/postgres
       # Changed-lines WARN gate (quality-gates.md): added TS lines should be
       # executed (80%). Reads the coverage this job just produced; a missing
       # report fails the step (fail closed). Docs-only and draft PRs skip via

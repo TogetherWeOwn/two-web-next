@@ -126,6 +126,9 @@ test("table_grants reads raw relacl, not the membership-filtered information_sch
   assert.doesNotMatch(query, /information_schema/);
   assert.match(query, /aclexplode\(c\.relacl\)/);
   assert.match(query, /e\.grantee = 0/);
+  // No membership probe: the read must report the same grants to a
+  // non-member reader as to the owner (pinned live under SET ROLE below).
+  assert.doesNotMatch(query, /pg_has_role/);
   assert.equal(assertReadOnly(query), true);
 });
 
@@ -207,35 +210,41 @@ test("endpoint pin refuses weak TLS, unknown params and bad shapes; strips chann
 });
 
 const LIVE_URL = (() => {
-  for (const raw of [process.env.CATALOG_PREFLIGHT_TEST_DATABASE_URL, process.env.DATABASE_URL]) {
-    if (!raw) continue;
-    try {
-      if (
-        ["localhost", "127.0.0.1", "::1", "agent-testdb", "postgres"].includes(
-          new URL(raw).hostname,
-        )
-      ) {
-        return raw;
-      }
-    } catch {
-      // Not a URL: not a live target.
+  // Explicit opt-in only. Never fall back to DATABASE_URL: the fixture
+  // roles below are cluster-wide, and a developer's ordinary local app
+  // database would match a localhost allowlist while holding real roles.
+  const raw = process.env.CATALOG_PREFLIGHT_TEST_DATABASE_URL;
+  if (!raw) return null;
+  try {
+    if (
+      ["localhost", "127.0.0.1", "::1", "agent-testdb", "postgres"].includes(new URL(raw).hostname)
+    ) {
+      return raw;
     }
+  } catch {
+    // Not a URL: not a live target.
   }
   return null;
 })();
 
 test("live: all seven queries execute on disposable Postgres and report the seeded grants", {
-  skip: LIVE_URL ? false : "needs a disposable DATABASE_URL (localhost/agent-testdb)",
-}, async () => {
+  skip: LIVE_URL
+    ? false
+    : "needs CATALOG_PREFLIGHT_TEST_DATABASE_URL on disposable Postgres (localhost/agent-testdb)",
+}, async (t) => {
   const admin = postgres(LIVE_URL, { max: 1 });
   const dbName = `catalog_preflight_${process.pid}`;
   try {
-    for (const role of ["two_web_app", "preflight_owner"]) {
-      try {
-        await admin.unsafe(`DROP ROLE "${role}"`);
-      } catch {
-        // Absent on first run.
-      }
+    // Roles are cluster-wide, so a pre-existing fixture name means a leaked
+    // run or a real local role: skip instead of dropping what we did not create.
+    const existing = await admin.unsafe(
+      "SELECT rolname FROM pg_roles WHERE rolname IN ('two_web_app', 'preflight_owner', 'preflight_reader')",
+    );
+    if (existing.length > 0) {
+      t.skip(
+        `refusing live test: fixture role(s) already exist: ${existing.map((row) => row.rolname).join(", ")}`,
+      );
+      return;
     }
     await admin.unsafe(`CREATE DATABASE "${dbName}"`);
   } finally {
@@ -247,7 +256,13 @@ test("live: all seven queries execute on disposable Postgres and report the seed
   try {
     await client.unsafe("CREATE ROLE two_web_app NOLOGIN");
     await client.unsafe("CREATE ROLE preflight_owner NOLOGIN");
+    await client.unsafe("CREATE ROLE preflight_reader NOLOGIN");
     await client.unsafe("GRANT CREATE ON SCHEMA public TO preflight_owner");
+    // Discriminating C2 seed: the app role holds CREATE, PUBLIC does not.
+    // The REVOKE keeps that pair exact on every Postgres major (pre-15
+    // clusters grant PUBLIC CREATE on public by default).
+    await client.unsafe("REVOKE CREATE ON SCHEMA public FROM PUBLIC");
+    await client.unsafe("GRANT CREATE ON SCHEMA public TO two_web_app");
     for (const table of EXPECTED_TABLES.filter((name) => name !== "web_throttle_hits")) {
       await client.unsafe(`CREATE TABLE ${table} (id bigserial primary key)`);
     }
@@ -270,6 +285,10 @@ test("live: all seven queries execute on disposable Postgres and report the seed
     const rows = {};
     await client.unsafe("BEGIN READ ONLY");
     try {
+      // Read as an unrelated non-member role, like the staging preflight
+      // connection: a membership-filtered grant read must fail here, not
+      // pass silently on superuser visibility. SET LOCAL resets on COMMIT.
+      await client.unsafe("SET LOCAL ROLE preflight_reader");
       for (const query of QUERIES) {
         rows[query.id] = await client.unsafe(query.sql);
       }
@@ -301,8 +320,8 @@ test("live: all seven queries execute on disposable Postgres and report the seed
       assert.ok(seen.has(grant), `expected grant row ${grant}`);
     }
     assert.equal(rows.create_booleans.length, 1);
-    assert.equal(typeof rows.create_booleans[0].app_has_create, "boolean");
-    assert.equal(typeof rows.create_booleans[0].public_has_create, "boolean");
+    assert.equal(rows.create_booleans[0].app_has_create, true);
+    assert.equal(rows.create_booleans[0].public_has_create, false);
     const schemas = new Set(rows.default_acl.map((row) => row.schema));
     assert.ok(schemas.has("(global)"), "global default privileges are reported");
     assert.ok(schemas.has("public"), "schema-scoped default privileges are reported");
@@ -328,7 +347,9 @@ test("live: all seven queries execute on disposable Postgres and report the seed
     const cleanup = postgres(LIVE_URL, { max: 1 });
     try {
       await cleanup.unsafe(`DROP DATABASE "${dbName}" WITH (FORCE)`);
-      for (const role of ["two_web_app", "preflight_owner"]) {
+      // Safe: the existence gate above proved these names were absent, so
+      // every role dropped here was created by this run.
+      for (const role of ["two_web_app", "preflight_owner", "preflight_reader"]) {
         try {
           await cleanup.unsafe(`DROP ROLE "${role}"`);
         } catch {
