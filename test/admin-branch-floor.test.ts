@@ -1186,7 +1186,15 @@ describe("admin guard denials (memory store, no DB)", () => {
     ] as const) {
       const res = await adminApp(store).request(path, { method, headers: { cookie } }, env);
       expect(res.status, `${method} ${path}`).toBe(403);
-      expect(await res.text()).toContain("Forbidden");
+      const text = await res.text();
+      // POST harness paths matching the shared 403 helper's machine-only
+      // event-write shapes keep the JSON envelope; every other admin path
+      // negotiates to the branded page (as production always does).
+      if (method === "POST" && (path === "/events" || path.endsWith("/publish"))) {
+        expect(JSON.parse(text), `${method} ${path}`).toMatchObject({ error: "forbidden" });
+      } else {
+        expect(text, `${method} ${path}`).toContain("You do not have access to this");
+      }
     }
   });
 

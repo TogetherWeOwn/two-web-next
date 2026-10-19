@@ -8,7 +8,7 @@ import { sessionStoreFor } from "../admin/guard";
 import { enableAuthStatus } from "../auth-status";
 import { alertRequestError } from "../alerts";
 import { isDatabaseUnavailable } from "../db/errors";
-import { databaseUnavailable } from "../errors";
+import { databaseUnavailable, forbidden } from "../errors";
 import { bufferedMemberText, memberReadBoundary } from "../member-reads";
 import { bounceToLogin, takeJoinResult } from "../return-journey";
 import { SESSION_COOKIE } from "../session-cookie";
@@ -83,7 +83,7 @@ export function memberGate(deps: ProfileDeps) {
     // A cookie whose row is gone (revoked/expired/rotated) is a guest — same
     // intended-page bounce so the round trip lands them back here.
     if (!viewer) return bounceToLogin(c);
-    if (!viewer.member) return c.text("Forbidden", 403);
+    if (!viewer.member) return forbidden(c);
     c.set("viewerId", viewer.id);
     c.set("viewer", viewer);
     await next();

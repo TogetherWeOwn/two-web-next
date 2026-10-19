@@ -261,8 +261,9 @@ export function registerAuthRoutes(app: Hono<{ Bindings: Env }>, hooks: AuthHook
     });
     // A failed auto-join keeps the recovery landing even when a destination
     // was remembered: the session is a non-member one, so a member-only gate
-    // (/profile, /members/*) would answer bare 403 and swallow the failure
-    // explanation plus the invite fallback. The intended destination is
+    // (/profile, /members/*) would answer 403 and swallow the failure
+    // explanation (the branded page keeps the invite fallback, but not the
+    // reason this join failed). The intended destination is
     // re-recorded for the retry instead of being lost. The consumed
     // expired-write notice is re-set as pending (not restored) alongside it:
     // a pending notice is neither rendered nor consumed by the intermediate

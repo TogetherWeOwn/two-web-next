@@ -308,7 +308,9 @@ describe("staging one-row guarded re-dispatch admission", () => {
       { loadCandidate: async () => replayCandidate, dispatch },
     );
     expect(res.status).toBe(403);
-    expect(await res.text()).toBe("Forbidden");
+    const body = await res.text();
+    expect(body).toContain("You do not have access to this");
+    expect(body).toContain('data-testid="error-home"');
     expect(dispatch).not.toHaveBeenCalled();
     expect(mocks.factory).not.toHaveBeenCalled();
   });
