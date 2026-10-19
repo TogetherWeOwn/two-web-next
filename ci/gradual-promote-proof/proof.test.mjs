@@ -488,7 +488,7 @@ test("proof pin equals the production deploy pin so they cannot drift", () => {
       const indent = line.match(/^(\s*)/)?.[1].length ?? 0;
       if (indent <= withIndent) break;
       const input = line.match(/^\s*([A-Za-z0-9_.-]+):[ \t]*(.*?)\s*$/);
-      if (!input) break;
+      assert.ok(input, `${label} with-block line not understood: ${line}`);
       entries[input[1]] = input[2];
     }
     assert.ok("worker-name" in entries, `${label} with-block must list worker-name`);
