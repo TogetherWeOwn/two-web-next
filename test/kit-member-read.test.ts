@@ -436,17 +436,21 @@ describe("memberReadResponse (Kit boundary)", () => {
         // pin, releasing the dirty gate first lets the late read land before
         // the boundary decides (200 instead of 503 on Node 22 scheduling).
         const dirtyRes = await dirty;
+        let cleanRes: Response;
         if (order === "clean-first") {
           cleanRelease.resolve();
           await cleanDeclared.promise;
+          // Force the clean boundary to decide while the dirty read is still
+          // parked: a pending read in another capture must not refuse it.
+          cleanRes = await clean;
           dirtyRelease.resolve();
           await dirtyDeclared.promise;
         } else {
           dirtyRelease.resolve();
           await dirtyDeclared.promise;
           cleanRelease.resolve();
+          cleanRes = await clean;
         }
-        const cleanRes = await clean;
         expect(cleanRes.status).toBe(200);
         expect(await cleanRes.text()).toBe("<p>clean</p>");
         await expectRefused(dirtyRes);
