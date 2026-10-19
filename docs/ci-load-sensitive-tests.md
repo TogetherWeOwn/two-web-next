@@ -17,7 +17,14 @@ written for a laptop fail under normal queue load (TOG-12177).
 
 The vitest defaults detect hangs; they are not performance budgets. Prefer the
 default to a per-test limit. Add a per-test limit only when the limit is the
-behavior under test, and list it below.
+behavior under test, and list it below. Every `test/` file with a per-test
+timeout literal below the 30 s default (a trailing argument on `it()`/`test()`,
+including `.each` forms) carries one row naming the file with an `(N× <limit>)`
+count pin over its timeout locations, plus a "why it stays" justification.
+Hook limits (`beforeEach`/`afterEach` and friends) are out of scope for the
+ledger. `ci/check-test-timeout-ledger.mjs` enforces the pins; it runs in
+`npm run check` (`npm run ledger:timeouts`, with a `--selftest` proving both
+verdicts).
 
 ## Remaining limits and timing asserts
 
@@ -27,18 +34,18 @@ timing check to fake timers; do not retry the job until it passes.
 
 | Test | Limit | Why it stays |
 | --- | --- | --- |
-| `test/up-db.test.ts` (5 tests) | 10 s per test; elapsed `< 3500`/`< 4000` ms | Asserts the up-probe's own DB deadlines |
-| `test/db-ping-cli.test.mjs` | 10 s; elapsed `< 500`/`< 2500` ms | Asserts the CLI's probe and cleanup deadlines |
-| `test/counts-worker.test.ts` (4 tests) | 10 s per test | Bounds the miniflare counts Worker runs |
-| `test/remote-runner-isolation.test.ts:347` | 10 s; child exec 10 s | Asserts the runner's kill deadline |
-| `test/session-rotation-revocation-race.test.ts:192` | 10 s | Bounds the rotation/revocation race |
-| `test/agent-events-grant-admission-race.test.ts:97` | `expect.poll` 4 s | Waits for the blocked admission backend |
+| `test/up-db.test.ts` (5× 10 s) | 10 s per test; elapsed `< 3500`/`< 4000` ms | Asserts the up-probe's own DB deadlines |
+| `test/db-ping-cli.test.mjs` (1× 10 s) | 10 s; elapsed `< 500`/`< 2500` ms | Asserts the CLI's probe and cleanup deadlines |
+| `test/counts-worker.test.ts` (4× 10 s) | 10 s per test | Bounds the miniflare counts Worker runs |
+| `test/remote-runner-isolation.test.ts:547` (1× 10 s) | 10 s; child exec 10 s | Asserts the runner's kill deadline |
+| `test/session-rotation-revocation-race.test.ts:220` (1× 10 s) | 10 s | Bounds the rotation/revocation race |
+| `test/agent-events-grant-admission-race.test.ts:142` | `expect.poll` 4 s | Waits for the blocked admission backend |
 | `test/home-events-db.test.ts` | elapsed `< 1500` ms | Home page DB read budget |
-| `test/featured.test.ts:218` | elapsed `< 2000` ms | Featured rail fail-open budget |
-| `test/worker-runner.test.ts:246` | elapsed `< 5000` ms | Worker request deadline |
+| `test/featured.test.ts:296` | elapsed `< 2000` ms | Featured rail fail-open budget |
+| `test/worker-runner.test.ts:720` | elapsed `< 5000` ms | Worker request deadline |
 | `test/event-search.test.ts` | elapsed `< 1000`-`< 2000` ms | Search-log write/read deadlines (see below) |
 | `test/event-ics-schema.test.ts` | 90 s; `drizzle-kit generate` 60 s | Spawns drizzle-kit, the slowest step on a loaded host |
-| `test/web-db-binding.test.ts:156` | 30 s | 31 sequential PATCH requests against the DB binding |
+| `test/web-db-binding.test.ts:213` | 30 s | 31 sequential PATCH requests against the DB binding |
 | `test/admin-validation.property.test.ts` | hard 10 s | Seeded property suite; intentionally hard |
 | `test/agent-events-shield.test.ts` "admits a fresh credential while an unrelated stale row is locked" | elapsed `< 4000` ms | Proves the shield skips a locked stale row instead of waiting on it (`lockWaitMs: 50`); a stalled wait would answer 503 or hang |
 | `test/agent-events-shield.test.ts` "bounds the shield lock wait under contention" | elapsed `< 4000` ms | Proves the shield gives up on a held advisory lock with a retryable 503 (`lockWaitMs: 50`) instead of waiting for the holder |
@@ -46,6 +53,17 @@ timing check to fake timers; do not retry the job until it passes.
 | `test/jobs-postgres.test.ts` "overlapping cron invocations single-flight…", "different jobs do not block each other" | 200 ms / 100 ms sleeps | Give the first flight time to take its lock before the second starts; a longer pause is safe, a shorter one can let the second flight win |
 | `test/rsvp-lock-busy.test.ts` (queued control) | `expect.poll` 4 s | Waits for the waiter backend to queue on the member advisory lock before releasing, proving the wait-then-judge path rather than a race past the holder |
 | `test/human-throttle-concurrency.test.ts` "uses post-lock time for expiry…" | 1.1 s held lock vs 2 s `WEB_THROTTLE_LOCK_TIMEOUT_MS` | The admission must acquire the held lock before the 2 s timeout so the post-lock expiry read still charges; a much slower host would refuse with no hit and break the row-count asserts |
+| `test/alert-probe-disposal-acceptance.test.ts` (5× 3 s) | 3 s per test (`it.each` trailing literal) | The disposal probes assert the probe's own 2 s `timeoutMs` budget with exactly-once disposal per mode; 3 s bounds the five disposal-mode `it.each` blocks without tripping the 30 s default on a loaded host |
+| `test/admin-editor-expiry-departure.test.ts` (4× 20 s) | 20 s per test | Browser-driven expiry/departure flows (reloads with 5 s Playwright caps, session-expired veto, recovery landing); 20 s bounds the Chromium round-trips |
+| `test/jobs-worker-lifetime.test.ts` (3× 20 s) | 20 s per test | Successor-compensation and lease tests with pool shutdown, cron recovery and trigger-held INSERTs; 20 s bounds the database-held lock waits (the two 15 s `beforeEach`/`afterEach` hook limits are out of scope and uncounted) |
+| `test/import-audit-datestyle-db.test.ts` (1× 20 s) | 20 s per test | Full legacy-fixture replay (preview, apply, replay over two stamps) with the pooled-session `SET LOCAL` datestyle matrix; 20 s bounds the multi-pass replay |
+| `test/admin-keyed-mounted.test.ts` (1× 15 s) | 15 s per test | Forced-overlap roster/join rendezvous behind gated sensitive reads; 15 s bounds the two-gate handshake |
+| `test/keyed-member-reads.test.ts` (1× 15 s) | 15 s per test | Forced-overlap reads rendezvous after distinct sensitive reads; 15 s bounds the gate handshake |
+| `test/agent-events-shared.test.ts` (1× 15 s) | 15 s per test | A queued human publish serialized behind a real agent cancellation; 15 s bounds the cross-flight gate handshake |
+| `test/agent-events-event-key-control-bytes.test.ts` (3× 15 s) | 15 s per test | Advisory-lock equivalence and wait proofs (same null-key lock, owned-lock wait, lock-name hygiene); 15 s bounds the lock-wait handshakes |
+| `test/jobs-isolation.test.ts` (3× 15 s) | 15 s per test | PR68 single-flight tests with blocking-holder handshakes; 15 s bounds the holder/release rendezvous (the 15 s `beforeEach`/`afterEach` hook limits are out of scope and uncounted) |
+| `test/session-revocation-rotation.test.ts` (2× 15 s) | 15 s per test | Rotation/revocation race windows with `pg_sleep`-backed expiry; 15 s bounds the race settlement |
+| `test/queue-settlement-released-acceptance.test.ts` (1× 15 s) | 15 s per test | The hung released-stamp case must stay bounded yet fail open to retry; 15 s bounds the hung clock |
 
 The lock-busy busy verdicts (`test/web-throttle-lock-busy.test.ts`,
 `test/agent-events-inner-lock-busy.test.ts`, and the busy cases in
