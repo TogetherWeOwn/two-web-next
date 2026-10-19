@@ -131,7 +131,7 @@ No new infrastructure, no Logpush, no external shipper, no new pager.
    ```sh
    node ci/cutover-check.mjs --phase after --target togetherweown.com --json
    ```
-5. **Public-route smoke on the apex.** Twenty-three public routes (the
+5. **Public-route smoke on the apex.** Twenty-four public routes (the
    `bin/smoke.mjs` shape: `/up` JSON readiness plus `/`, `/about`, `/faq`,
    `/rules`, `/privacy`, `/events`, `/events/past`, `/join`, `/events.rss`,
    `/events.ics`, `/sitemap_index.xml`, `/robots.txt`,
@@ -141,7 +141,9 @@ No new infrastructure, no Logpush, no external shipper, no new pager.
    error envelope: the fixed probe key exists in no database),
    `/api/public/community` (200 JSON community snapshot),
    `/api/public/join` (200 JSON join handoff), `/openapi.json` (200 JSON
-   discovery document) and `/__smoke_unknown_route__`
+   discovery document), `/e/<key>` (404 branded missing-event HTML page:
+   the fixed probe key exists in no database) and
+   `/__smoke_unknown_route__`
    (404), with CSP/nosniff/content-type/indexing/redirect assertions).
    ```sh
    node bin/smoke.mjs https://togetherweown.com --allow-indexable

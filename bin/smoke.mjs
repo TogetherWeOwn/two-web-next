@@ -13,9 +13,13 @@ const html = [
   ["/join", /One click with Discord/],
 ];
 // HTML leaves that stay non-indexable even on the indexable apex: the archive
-// and the branded 404 carry their noindex in <meta>, so the deploy smoke
+// and the branded 404s carry their noindex in <meta>, so the deploy smoke
 // asserts the X-Robots-Tag header only on the indexable leaves.
-const nonIndexableHtml = new Set(["/events/past", "/__smoke_unknown_route__"]);
+const nonIndexableHtml = new Set([
+  "/events/past",
+  "/e/00000000000000000000000001",
+  "/__smoke_unknown_route__",
+]);
 
 const routes = [
   { path: "/up", statuses: [200], type: "application/json", json: true },
@@ -49,6 +53,19 @@ const routes = [
   { path: "/api/public/community", statuses: [200], type: "application/json" },
   { path: "/api/public/join", statuses: [200], type: "application/json" },
   { path: "/openapi.json", statuses: [200], type: "application/json" },
+  // Single-event HTML detail (src/events/routes-detail.tsx GET /e/:key): the
+  // same fixed probe key exists in no database, so the real handler answers
+  // the branded missing-event page (404 text/html via notFound(), the same
+  // NotFoundPage the unknown-route probe asserts). A published-event 200
+  // would depend on seed data no environment guarantees, so the probe pins
+  // the missing-page contract — HTTP 404 plus the branded marker — with no
+  // live Discord data and no fixture seeding.
+  {
+    path: "/e/00000000000000000000000001",
+    statuses: [404],
+    type: "text/html",
+    body: /We cannot find that page[\s\S]*Together We Own/,
+  },
   {
     path: "/__smoke_unknown_route__",
     statuses: [404],

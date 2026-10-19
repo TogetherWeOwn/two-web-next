@@ -115,6 +115,14 @@ const fixtures = {
     "application/json",
     '{"openapi":"3.1.0","info":{"title":"Together We Own public read API","version":"1.0.0"},"paths":{"/api/public/events":{"get":{"responses":{"200":{"description":"ok"}}}}}}',
   ],
+  // Single-event HTML detail (GET /e/:key, src/events/routes-detail.tsx):
+  // the fixed probe key exists in no database, so like the real handler's
+  // notFound() the stub answers the branded missing-event page.
+  "/e/00000000000000000000000001": [
+    404,
+    "text/html",
+    "<title>We cannot find that page — Together We Own</title>",
+  ],
   "/__smoke_unknown_route__": [
     404,
     "text/html",
@@ -209,7 +217,7 @@ test("CLI passes every route without following redirects or carrying cookies", a
   const { url, requests } = await stub(t);
   const result = await cli([url]);
   assert.equal(result.code, 0, result.output);
-  assert.match(result.output, /23 routes, 0 failed assertions/);
+  assert.match(result.output, /24 routes, 0 failed assertions/);
   assert.deepEqual(
     requests.map((r) => r.path),
     Object.keys(fixtures),
@@ -223,8 +231,8 @@ test("version override pins every gradual-promotion probe to the new version", a
   const override = 'two-web-next-production="22345678-1234-1234-1234-123456789abc"';
   const result = await cli([url, "--version-override", override]);
   assert.equal(result.code, 0, result.output);
-  assert.match(result.output, /23 routes, 0 failed assertions/);
-  assert.equal(requests.length, 23);
+  assert.match(result.output, /24 routes, 0 failed assertions/);
+  assert.equal(requests.length, 24);
   assert.ok(requests.every((r) => r.override === override));
 });
 
@@ -247,7 +255,7 @@ test("version override refuses a healthy /up that identifies another Worker vers
   const result = await run(url, { versionOverride: override });
   assert.equal(result.ok, false, result.output);
   assert.match(result.output, /FAIL \/up: expected revision\.version_id/);
-  assert.equal(requests.length, 23);
+  assert.equal(requests.length, 24);
   assert.ok(requests.every((r) => r.override === override));
 });
 
@@ -336,7 +344,7 @@ test("version override passes when the candidate version answers healthy", async
   const result = await run(url, { versionOverride: override });
   assert.equal(result.ok, true, result.output);
   assert.ok(result.output.includes("PASS /up"), result.output);
-  assert.equal(requests.length, 23);
+  assert.equal(requests.length, 24);
   assert.ok(requests.every((r) => r.override === override));
 });
 
@@ -373,7 +381,7 @@ for (const path of Object.keys(fixtures)) {
     assert.equal(result.ok, false);
     assert.ok(result.output.includes(`FAIL ${path}: expected HTTP`), result.output);
     assert.match(result.output, /actual HTTP 503/);
-    assert.equal(requests.length, 23);
+    assert.equal(requests.length, 24);
   });
 }
 
@@ -445,6 +453,40 @@ test("a broken single-event error envelope served with HTTP 404 fails only that 
     assert.match(result.output, /^PASS \/api\/public\/events$/m, `${body}\n${result.output}`);
     assert.match(result.output, /^PASS \/api\/public\/community$/m, `${body}\n${result.output}`);
     assert.match(result.output, /^PASS \/api\/public\/join$/m, `${body}\n${result.output}`);
+  }
+});
+
+test("a broken single-event HTML detail fails only that entry", async (t) => {
+  // GET /e/:key (src/events/routes-detail.tsx) must answer the branded
+  // missing-event page for the fixed probe key: a success body, the JSON
+  // error envelope, an unbranded page, or a wrong status fails this entry
+  // only while the neighbouring HTML and JSON probes keep passing.
+  const broken = [
+    ["<h1>Fixture game night</h1>", 200],
+    ['{"error":{"code":"not_found","message":"No published event with that key."}}', 404],
+    ["<h1>Something went wrong</h1>", 404],
+    ["<title>We cannot find that page — Together We Own</title>", 200],
+  ];
+  for (const [body, status] of broken) {
+    const { url } = await stub(t, (route, result) => {
+      if (route === "/e/00000000000000000000000001") {
+        result.body = body;
+        result.status = status;
+      }
+    });
+    const result = await run(url);
+    assert.equal(result.ok, false, body);
+    assert.ok(
+      result.output.includes("FAIL /e/00000000000000000000000001: expected"),
+      `${body}\n${result.output}`,
+    );
+    assert.match(result.output, /^PASS \/events$/m, `${body}\n${result.output}`);
+    assert.match(
+      result.output,
+      /^PASS \/api\/public\/events\/00000000000000000000000001$/m,
+      `${body}\n${result.output}`,
+    );
+    assert.match(result.output, /^PASS \/__smoke_unknown_route__$/m, `${body}\n${result.output}`);
   }
 });
 
@@ -669,7 +711,12 @@ test("security.txt passes in both indexing modes", async (t) => {
       // Apex posture for the indexable run: strip the staging noindex from
       // indexable HTML leaves; the archive and branded 404 keep theirs.
       // security.txt is text/plain, so neither mode touches its headers.
-      if (allowIndexable && (route === "/events/past" || route === "/__smoke_unknown_route__"))
+      if (
+        allowIndexable &&
+        (route === "/events/past" ||
+          route === "/e/00000000000000000000000001" ||
+          route === "/__smoke_unknown_route__")
+      )
         return;
       if (allowIndexable && result.headers["content-type"]?.startsWith("text/html"))
         delete result.headers["x-robots-tag"];
@@ -821,7 +868,7 @@ test("past events accepts rendered Archive but rejects rendered Upcoming with ar
     });
     const result = await run(url);
     assert.equal(result.ok, expected, result.output);
-    assert.equal(requests.length, 23);
+    assert.equal(requests.length, 24);
     if (!expected) {
       assert.match(
         result.output,
@@ -1676,7 +1723,7 @@ for (const [robotsTag, expected] of [
     });
     const result = await run(url);
     assert.equal(result.ok, expected, result.output);
-    assert.equal(requests.length, 23);
+    assert.equal(requests.length, 24);
     if (!expected) {
       for (const path of ["/about", "/admin"]) {
         assert.ok(
@@ -1761,7 +1808,7 @@ for (const [location, expected] of [
     });
     const result = await run(url);
     assert.equal(result.ok, expected, result.output);
-    assert.equal(requests.length, 23);
+    assert.equal(requests.length, 24);
     assert.ok(!result.output.includes("never-log-this"));
     if (!expected) {
       assert.match(
@@ -1807,7 +1854,7 @@ test("connection failures include route and expected versus actual", async (t) =
     result.output,
     /FAIL \/up: expected HTTP response and body within timeout; actual TypeError/,
   );
-  assert.match(result.output, /23 routes, 23 failed assertions/);
+  assert.match(result.output, /24 routes, 24 failed assertions/);
 });
 
 test("invalid input is rejected before making requests", async () => {
@@ -1830,12 +1877,17 @@ test("allowIndexable passes apex HTML without the staging noindex", async (t) =>
   // robotsTagFor); the archive and branded 404 stay meta-noindex, which this
   // header probe skips.
   const { url, requests } = await stub(t, (route, result) => {
-    if (route === "/events/past" || route === "/__smoke_unknown_route__") return;
+    if (
+      route === "/events/past" ||
+      route === "/e/00000000000000000000000001" ||
+      route === "/__smoke_unknown_route__"
+    )
+      return;
     delete result.headers["x-robots-tag"];
   });
   const result = await run(url, { allowIndexable: true });
   assert.equal(result.ok, true, result.output);
-  assert.equal(requests.length, 23);
+  assert.equal(requests.length, 24);
   assert.ok(requests.every((r) => r.method === "GET" && r.cookie === undefined));
 });
 
@@ -1866,10 +1918,15 @@ test("default mode still requires the staging noindex", async (t) => {
 
 test("CLI --allow-indexable reaches the apex posture", async (t) => {
   const { url } = await stub(t, (route, result) => {
-    if (route === "/events/past" || route === "/__smoke_unknown_route__") return;
+    if (
+      route === "/events/past" ||
+      route === "/e/00000000000000000000000001" ||
+      route === "/__smoke_unknown_route__"
+    )
+      return;
     delete result.headers["x-robots-tag"];
   });
   const result = await cli([url, "--allow-indexable"]);
   assert.equal(result.code, 0, result.output);
-  assert.match(result.output, /23 routes, 0 failed assertions/);
+  assert.match(result.output, /24 routes, 0 failed assertions/);
 });
