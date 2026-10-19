@@ -158,6 +158,21 @@ assert.match(r.stdout, /### Fixed\n\n\* \*\*voice:\*\* retry renames/);
 r = run(fixSha);
 assert.equal(r.status, 0, r.stderr);
 assert.match(r.stdout, /## \[0\.4\.1\]/);
+// Regression for the Oct 2026 promote failure (`spawnSync git ENOBUFS`): the
+// prevTag..sha log passes Node's 1 MiB execFileSync default once a few hundred
+// commits accumulate, so one 2 MiB body through the same range must still dry
+// run green. Without the raised maxBuffer this exits non-zero with ENOBUFS.
+const bigMsgFile = path.join(dir, "big-body-msg.txt");
+fs.writeFileSync(
+  bigMsgFile,
+  `fix(voice): carry a large body past the old 1 MiB cap (#5)\n\n${"x".repeat(2 * 1024 * 1024)}\n`,
+);
+g("commit", "-q", "--allow-empty", "-F", bigMsgFile);
+const bigSha = g("rev-parse", "HEAD");
+g("update-ref", "refs/remotes/origin/main", bigSha);
+r = run(bigSha);
+assert.equal(r.status, 0, r.stderr);
+assert.match(r.stdout, /## \[0\.5\.0\]/, "range log past 1 MiB must still render");
 g("tag", "v0.5.0", featSha);
 r = run(fixSha);
 assert.equal(r.status, 0, r.stderr);
