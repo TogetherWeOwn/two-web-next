@@ -13,11 +13,11 @@
 // - The label sits between the Previous and Next links when both exist,
 //   after Previous on a last/past-end page, and before Next on page 1.
 // - No total is ever shown: never "Page <n> of <m>", and no page count is
-//   derived from the aggregate Going count (which includes unnamed and
-//   nonmatching going users and therefore cannot yield a page total).
+//   derived from the aggregate Going count (named-only: it excludes unnamed
+//   and nonmatching going users, so it equals the roster length).
 // - No extra identity or count read is added: the audit subjects per request
 //   stay exactly the rendered page plus its one lookahead, and the aggregate
-//   Going count is unchanged.
+//   Going count keeps that named-only rule.
 // - Preserved behavior: single-page lists render no pager and no label,
 //   guests/nonmembers get no attendee section at all, previous/next hrefs
 //   are unchanged, and a past-end page keeps its bare-URL return link with
@@ -45,10 +45,11 @@ import { createMemberDataFixture, type MemberDataFixture } from "./helpers/membe
 const PAGE = 100;
 // 250 named going rows = two full pages plus a 50-row last page; page 4 is
 // past the end. Two further going rows (one unnamed, one with no user row)
-// count toward the aggregate Going total but are never named, so the
-// aggregate (252) must never be turned into a page total.
+// are excluded from the aggregate Going total and never named, so the
+// aggregate (250) equals the roster length and must never be turned into a
+// page total.
 const TOTAL_NAMED = 250;
-const GOING_TOTAL = TOTAL_NAMED + 2;
+const GOING_TOTAL = TOTAL_NAMED;
 const pad = (n: number) => String(n).padStart(3, "0");
 const synthId = (i: number) => `400000000000000${pad(i)}`;
 const synthName = (i: number) => `paging-attendee-${pad(i)}`;

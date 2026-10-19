@@ -348,6 +348,7 @@ const baseEvent: PublicEvent = {
   location: null,
   capacity: CAPACITY,
   goingCount: 1,
+  goingOccupancy: 1,
   status: "published",
   discordEventId: null,
   discordSyncFailedAt: null,

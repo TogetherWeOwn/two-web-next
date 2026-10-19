@@ -20,6 +20,7 @@ import { alias } from "drizzle-orm/pg-core";
 import { events } from "../src/db/admin-schema";
 import { nonSensitiveRead } from "../src/member-reads";
 import { env, MEMBER, MODERATOR, PERSONAL_STRINGS, seed, SUBJECT } from "./helpers/member-data";
+import { assertDenialThrows } from "./helpers/assert-denial";
 import { clearAuditRows } from "./helpers/audit-rows";
 import { createMemberDataFixture, type MemberDataFixture } from "./helpers/member-data-db";
 
@@ -96,6 +97,7 @@ describe.skipIf(!process.env.DATABASE_URL)("keyed member read boundary (real Pos
   it.each(["unwrapped", "caught", "extra-in-helper"])(
     "refuses a new %s sensitive query inside an existing handler",
     async (variant) => {
+      let sabotage: unknown;
       const app = router(async (c) => {
         const query = () => db().select({ id: users.id, name: users.username }).from(users);
         if (variant === "extra-in-helper") {
@@ -104,18 +106,23 @@ describe.skipIf(!process.env.DATABASE_URL)("keyed member read boundary (real Pos
               await query();
               return query();
             });
-          } catch {}
+          } catch (error) {
+            sabotage = error;
+          }
         } else {
           await keyedMemberRead(query);
           if (variant === "caught") {
             try {
               await query();
-            } catch {}
+            } catch (error) {
+              sabotage = error;
+            }
           } else await query();
         }
         return bufferedMemberText(c, PERSONAL_STRINGS[1]!);
       });
       await deny(await app.request("/existing", {}, env));
+      if (variant !== "unwrapped") await assertDenialThrows(Promise.reject(sabotage));
     },
   );
 

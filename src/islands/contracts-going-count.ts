@@ -27,6 +27,10 @@ export type GoingViewerState = "going" | "waitlisted" | "none" | "other";
 
 export interface GoingCountState {
   going: number;
+  /** Seat occupancy for the spots-left line; defaults to `going` when absent
+   * (older fixtures). Counts every going row like the write path, so spots
+   * never offer a seat a nameless row already holds. Aggregate only. */
+  occupancy?: number;
   capacity: number | null;
   showSpotsLeft: boolean;
   announcement: GoingViewerState | null;
@@ -68,9 +72,10 @@ export function spotsLeftText(going: number, capacity: number): string {
 export function renderGoingCount(eventKey: string, s: GoingCountState): string {
   const announcement = goingAnnouncementText(s.announcement);
   const safeKey = eventKey.replace(/"/g, "&quot;");
+  const occupancy = s.occupancy ?? s.going;
   const spots =
     s.showSpotsLeft && s.capacity !== null
-      ? ` · <span data-testid="${SPOTS_LEFT_TESTID}" data-spots>${spotsLeftText(s.going, s.capacity)}</span>`
+      ? ` · <span data-testid="${SPOTS_LEFT_TESTID}" data-spots>${spotsLeftText(occupancy, s.capacity)}</span>`
       : "";
   return (
     `<span role="status" data-testid="${GOING_COUNT_TESTID}" ` +
@@ -105,12 +110,22 @@ export function goingRefreshRequest(eventKey: string): GoingRefreshRequest {
 export interface EventJsonRow {
   event_key: string;
   going_count: number;
+  /** Seat occupancy for spots/full; absent on older snapshots. */
+  going_occupancy?: number;
 }
 
 /** Pick this island's aggregate out of the collection; null when absent. */
 export function applyGoingRefresh(rows: EventJsonRow[], eventKey: string): number | null {
   const row = rows.find((r) => r.event_key === eventKey);
   return row ? row.going_count : null;
+}
+
+/** Pick the seat-occupancy aggregate out of the collection, falling back to
+ * the attributable count on older snapshots; null when absent. */
+export function applyGoingOccupancyRefresh(rows: EventJsonRow[], eventKey: string): number | null {
+  const row = rows.find((r) => r.event_key === eventKey);
+  if (!row) return null;
+  return row.going_occupancy ?? row.going_count;
 }
 
 /** Listener-side skip: another card's answer fires no request here. */

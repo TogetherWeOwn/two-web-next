@@ -35,7 +35,13 @@ const EVENT_PROPERTIES: Record<EventField, JsonSchema> = {
   capacity: { type: ["integer", "null"] },
   going_count: {
     type: ["integer", "null"],
-    description: "Going RSVPs, or null when the rollup is unavailable — never 0 by default.",
+    description:
+      "Attributable going RSVPs (named members only, matching the roster), or null when the rollup is unavailable — never 0 by default. Use going_occupancy for seats.",
+  },
+  going_occupancy: {
+    type: ["integer", "null"],
+    description:
+      "Seat occupancy: every going row including nameless ones, like the write path counts it. Full when it reaches capacity; null when the rollup is unavailable.",
   },
   status: { type: "string", enum: ["published"] },
   rsvp_open: { type: "boolean" },

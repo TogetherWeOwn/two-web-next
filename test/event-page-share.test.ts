@@ -68,9 +68,14 @@ function fixture(
     queries.push(sql);
     // Waitlist line rank is empty in this fixture (position fallback).
     if (sql.includes("row_number()")) return { rows: [] };
-    if (sql.includes('from "rsvps"') && sql.includes('inner join "users"')) {
+    if (
+      sql.includes('from "rsvps"') &&
+      sql.includes('inner join "users"') &&
+      !sql.includes("group by")
+    ) {
       // Member-only attendee projection: positional for the pg-proxy mapper,
-      // named for the keyed-read owner projection.
+      // named for the keyed-read owner projection. The attributable
+      // going-count aggregate joins too, so it falls through to the count arm.
       return {
         rows: attendees.map((a) => Object.assign([a.id, a.name], { id: a.id, name: a.name })),
       };
@@ -168,7 +173,11 @@ describe("Event detail share matrix (fixture-only)", () => {
     expect(html).not.toContain("Who&#39;s going");
     expect(html).not.toContain("/members/");
     expect(html).not.toContain(">member</a>");
-    expect(source.queries.filter((q) => q.includes('inner join "users"'))).toHaveLength(0);
+    // No roster-shaped read runs for guests; the public attributable count
+    // still joins users (non-sensitive aggregate, never identities).
+    expect(
+      source.queries.filter((q) => q.includes('inner join "users"') && !q.includes("group by")),
+    ).toHaveLength(0);
   });
 
   it("shows a member their going answer and their linked attendee name, never the pitch", async () => {

@@ -22,6 +22,7 @@ import {
   seed,
   SUBJECT,
 } from "./helpers/member-data";
+import { assertDenialThrows } from "./helpers/assert-denial";
 import { createMemberDataFixture, type MemberDataFixture } from "./helpers/member-data-db";
 
 // Every injection below runs through an EXISTING mounted admin handler. The
@@ -80,13 +81,16 @@ describe.skipIf(!process.env.DATABASE_URL)(
     it.each(["roster", "dashboard"])(
       "refuses an added unwrapped sensitive query in the existing %s handler",
       async (surface) => {
+        let sabotage: unknown;
         if (surface === "roster") {
           const original = reads.listRoster;
           vi.spyOn(reads, "listRoster").mockImplementationOnce(async (db, key) => {
             const rows = await original(db, key);
             try {
               await db.select().from(users);
-            } catch {}
+            } catch (error) {
+              sabotage = error;
+            }
             return rows;
           });
         } else {
@@ -95,17 +99,21 @@ describe.skipIf(!process.env.DATABASE_URL)(
             const counts = await original(db, now);
             try {
               await db.select().from(users);
-            } catch {}
+            } catch (error) {
+              sabotage = error;
+            }
             return counts;
           });
         }
         await denial(await request(surface === "roster" ? `/events/${EVENT_KEY}` : "/"));
+        await assertDenialThrows(Promise.reject(sabotage));
       },
     );
 
     it.each(["comment", "mutation", "builder"])(
       "a %s statement cannot evade the read prefix inside an existing roster handler",
       async (mode) => {
+        let sabotage: unknown;
         const original = reads.listRoster;
         vi.spyOn(reads, "listRoster").mockImplementationOnce(async (db, key) => {
           const rows = await original(db, key);
@@ -119,10 +127,13 @@ describe.skipIf(!process.env.DATABASE_URL)(
                       : sql`update users set username = 'mutated-private-name' returning id, username`,
                   ),
             );
-          } catch {}
+          } catch (error) {
+            sabotage = error;
+          }
           return rows;
         });
         await denial(await request(`/events/${EVENT_KEY}`));
+        await assertDenialThrows(Promise.reject(sabotage));
         expect(
           (await fixture.db.select().from(users).where(eq(users.id, SUBJECT.userId)))[0]!.username,
         ).toBe(SUBJECT.username);
@@ -140,15 +151,19 @@ describe.skipIf(!process.env.DATABASE_URL)(
     ] as const)(
       "%s classification cannot authorize a sensitive projection",
       async (classification) => {
+        let sabotage: unknown;
         const original = reads.listRoster;
         vi.spyOn(reads, "listRoster").mockImplementationOnce(async (db, key) => {
           const rows = await original(db, key);
           try {
             await memberReads.nonSensitiveRead(classification, () => db.select().from(users));
-          } catch {}
+          } catch (error) {
+            sabotage = error;
+          }
           return rows;
         });
         await denial(await request(`/events/${EVENT_KEY}`));
+        await assertDenialThrows(Promise.reject(sabotage));
       },
     );
 
@@ -272,6 +287,7 @@ describe.skipIf(!process.env.DATABASE_URL)(
     it.each(["literal", "member"])(
       "precision classification cannot authorize an added %s SQL projection in the existing featured handler",
       async (mode) => {
+        let sabotage: unknown;
         const [featured] = await fixture.db
           .insert(featuredContents)
           .values({ title: "Public editorial card" })
@@ -292,10 +308,13 @@ describe.skipIf(!process.env.DATABASE_URL)(
                 .from(featuredContents)
                 .where(eq(featuredContents.id, id)),
             );
-          } catch {}
+          } catch (error) {
+            sabotage = error;
+          }
           return row;
         });
         await denial(await request(`/featured/${featured!.id}`));
+        await assertDenialThrows(Promise.reject(sabotage));
       },
     );
 
@@ -339,18 +358,22 @@ describe.skipIf(!process.env.DATABASE_URL)(
     );
 
     it("a controlled not-found shell cannot erase a prior unwrapped sensitive read", async () => {
+      let sabotage: unknown;
       const original = reads.listRoster;
       vi.spyOn(reads, "listRoster").mockImplementationOnce(async (db, key) => {
         const rows = await original(db, key);
         try {
           await db.select().from(users);
-        } catch {}
+        } catch (error) {
+          sabotage = error;
+        }
         return rows;
       });
       vi.spyOn(memberReads, "bufferedMemberHtml").mockImplementationOnce(async (c) =>
         notFoundResponse(c),
       );
       await denial(await request(`/events/${EVENT_KEY}`));
+      await assertDenialThrows(Promise.reject(sabotage));
     });
 
     it("an arbitrary 404 replacement cannot inherit buffered approval", async () => {

@@ -145,13 +145,18 @@ export interface EventStore {
  */
 export type TxClient = (strings: TemplateStringsArray, ...values: any[]) => Promise<any>;
 
+/** Run a whole drain on one isolated client; a rejection rolls back all its batches. */
+export interface PruneIsolation {
+  isolate?<T>(work: (prune: (at: Date) => Promise<number>) => Promise<T>): Promise<T>;
+}
+
 /** One age-pruned table (Laravel MassPrunable): mass delete older than cutoff, returns rows removed. */
-export interface AgePrunedTable {
+export interface AgePrunedTable extends PruneIsolation {
   pruneOlderThan(cutoff: Date): Promise<number>;
 }
 
 /** web_sessions expiry sweep: delete rows reads can no longer see (expires_at <= now). */
-export interface SessionSweeper {
+export interface SessionSweeper extends PruneIsolation {
   sweepExpired(now: Date): Promise<number>;
 }
 
