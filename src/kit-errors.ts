@@ -25,8 +25,8 @@ export interface KitErrorCopy {
 const COPY: Record<KitErrorStatus, KitErrorCopy> = {
   400: {
     code: "400",
-    title: "We could not read that request",
-    lead: "Something in the address or the filters was not quite right. Check it and try again.",
+    title: "Check your request",
+    lead: "Check the address or filters and try again.",
   },
   404: {
     code: "404",
