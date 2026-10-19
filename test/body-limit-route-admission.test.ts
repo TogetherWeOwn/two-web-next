@@ -112,9 +112,10 @@ afterEach(() => {
 
 describe("profile write admission", () => {
   it.each(["PATCH", "POST"])(
-    "%s refuses spent buckets without reading advertised or chunked overflow",
+    "%s refuses oversized bodies before throttle spend, even with a spent budget",
     async (method) => {
       const { sessions, cookie } = await session();
+      const get = vi.spyOn(sessions, "get");
       const throttle = vi.fn(async () => ({ limited: true as const, retryAfter: 31 }));
       const profile = profilesApp({ sessionStore: sessions, throttle });
       for (const advertised of [false, true]) {
@@ -128,18 +129,39 @@ describe("profile write admission", () => {
         if (method === "POST")
           request.headers.set("content-type", "application/x-www-form-urlencoded");
         const response = await profile.request(request, undefined, env);
-        expect(response.status).toBe(429);
-        expect(await response.json()).toMatchObject({ reason: "rate_limited", retry_after: 31 });
-        expect(pull).not.toHaveBeenCalled();
+        expect(response.status).toBe(413);
+        expect(await response.json()).toEqual(ERROR);
+        if (advertised) expect(pull).not.toHaveBeenCalled();
+        else expect(pull.mock.calls.length).toBeLessThanOrEqual(BODY_LIMIT_BYTES.form / 1024 + 2);
         await request.body?.cancel();
       }
-      expect(throttle).toHaveBeenCalledTimes(2);
+      expect(throttle).not.toHaveBeenCalled();
+      expect(get).not.toHaveBeenCalled();
+      const body =
+        method === "POST" ? "_method=PATCH&bio=hello&games_text=" : '{"bio":"hello","games":[]}';
+      const spent = await profile.request(
+        `/members/${userId}`,
+        {
+          method,
+          body,
+          headers: {
+            cookie,
+            accept: "application/json",
+            "content-type":
+              method === "POST" ? "application/x-www-form-urlencoded" : "application/json",
+          },
+        },
+        env,
+      );
+      expect(spent.status).toBe(429);
+      expect(await spent.json()).toMatchObject({ reason: "rate_limited", retry_after: 31 });
+      expect(throttle).toHaveBeenCalledTimes(1);
       expect(throttle).toHaveBeenCalledWith(`profile-write:${userId}`);
     },
   );
 
   it.each(["PATCH", "POST"])(
-    "%s spends exactly one attempt on an admitted overflow or valid write",
+    "%s spends nothing on overflow and exactly one attempt on a valid write",
     async (method) => {
       const { sessions, cookie } = await session();
       const throttle = vi.fn(async () => ({ limited: false as const }));
@@ -165,7 +187,7 @@ describe("profile write admission", () => {
         );
         expect((await profile.request(request, undefined, env)).status).toBe(413);
       }
-      expect(throttle).toHaveBeenCalledTimes(2);
+      expect(throttle).not.toHaveBeenCalled();
       expect(store.find).not.toHaveBeenCalled();
       expect(store.save).not.toHaveBeenCalled();
       const body =
@@ -185,8 +207,46 @@ describe("profile write admission", () => {
         env,
       );
       expect(response.status).toBe(200);
-      expect(throttle).toHaveBeenCalledTimes(3);
+      expect(throttle).toHaveBeenCalledTimes(1);
       expect(store.save).toHaveBeenCalledOnce();
+    },
+  );
+
+  it.each(["PATCH", "POST"])(
+    "%s keeps the member gate on deeper or bare member write shapes",
+    async (method) => {
+      const { sessions } = await session();
+      const get = vi.spyOn(sessions, "get");
+      const throttle = vi.fn(async () => ({ limited: false as const }));
+      const profile = profilesApp({ sessionStore: sessions, throttle });
+      for (const path of [`/members/${userId}/extra`, `/members/${userId}/`, "/members/"]) {
+        const response = await profile.request(
+          path,
+          { method, headers: { accept: "application/json", cookie: "" } },
+          env,
+        );
+        expect(response.status, `${method} ${path}`).toBe(401);
+        expect(await response.json(), `${method} ${path}`).toEqual({
+          error: "Unauthorized",
+          recovery: "/auth/recover?next=%2Fprofile",
+        });
+        expect(response.headers.get("cache-control") ?? "", `${method} ${path}`).toMatch(/private/);
+        expect(response.headers.get("cache-control") ?? "", `${method} ${path}`).toMatch(
+          /no-store/,
+        );
+      }
+      expect(throttle).not.toHaveBeenCalled();
+      expect(get).not.toHaveBeenCalled();
+      // The real single-segment write shape still 413s first when oversized.
+      const { request } = upload(`/members/${userId}`, method, BODY_LIMIT_BYTES.form, "", true);
+      if (method === "POST")
+        request.headers.set("content-type", "application/x-www-form-urlencoded");
+      const oversized = await profile.request(request, undefined, env);
+      expect(oversized.status).toBe(413);
+      expect(await oversized.json()).toEqual(ERROR);
+      expect(throttle).not.toHaveBeenCalled();
+      expect(get).not.toHaveBeenCalled();
+      await request.body?.cancel();
     },
   );
 });
@@ -405,6 +465,9 @@ describe("agent ingress admission", () => {
       });
       expect(fixture.ends).toBe(1);
       expect(ctx.waitUntil).toHaveBeenCalledOnce();
+      // Emission proof: the redaction assert below is vacuous when nothing is
+      // logged, so pin the expected error first (silencing the logger fails here).
+      expect(log).toHaveBeenCalledWith("agent-events failed", "Error");
       expect(JSON.stringify(log.mock.calls)).not.toContain("private grant failure");
     } finally {
       log.mockRestore();

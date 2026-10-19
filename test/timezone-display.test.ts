@@ -61,6 +61,7 @@ function event(overrides: Partial<PublicEvent> = {}): PublicEvent {
     updatedAt: new Date("2026-07-01T12:00:00Z"),
     syncRevision: 1,
     syncedRevision: 0,
+    goingOccupancy: 3,
     ...overrides,
   };
 }
