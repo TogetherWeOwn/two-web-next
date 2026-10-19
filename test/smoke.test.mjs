@@ -428,6 +428,30 @@ test("rejects a comment-only robots Sitemap line", async (t) => {
   );
 });
 
+test("rejects a split-line robots Sitemap directive", async (t) => {
+  const { url } = await stub(t, (route, result) => {
+    if (route === "/robots.txt") result.body = result.body.replace("Sitemap:", "Sitemap:\n");
+  });
+  const result = await run(url);
+  assert.equal(result.ok, false);
+  assert.match(
+    result.output,
+    /FAIL \/robots\.txt: expected robots Sitemap: .*sitemap_index\.xml; actual Sitemap line missing or foreign/,
+  );
+});
+
+test("rejects a split-line robots Sitemap directive with a comment before the URL", async (t) => {
+  const { url } = await stub(t, (route, result) => {
+    if (route === "/robots.txt") result.body = result.body.replace("Sitemap:", "Sitemap: # note\n");
+  });
+  const result = await run(url);
+  assert.equal(result.ok, false);
+  assert.match(
+    result.output,
+    /FAIL \/robots\.txt: expected robots Sitemap: .*sitemap_index\.xml; actual Sitemap line missing or foreign/,
+  );
+});
+
 // Comment parity with the cutover robots gate: comments are stripped
 // before the anchored Sitemap match, so a trailing comment after a real
 // same-origin Sitemap line stays a pass, never a failure.
