@@ -19,6 +19,7 @@
 // Mutation check: flip the catch to deny (`{ limited: true }`) and both status
 // assertions fail (429 instead of 200 / 403).
 import { serializeSigned } from "hono/utils/cookie";
+import { inspect } from "node:util";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Env } from "../src/env";
 import { PROFILE_COPY } from "../src/islands/contracts";
@@ -151,11 +152,14 @@ describe("profile writes degrade to allow when the throttle store throws", () =>
     expect(res.status).toBe(403);
     expect(await res.text()).toBe("Forbidden");
     expect(await store.find(ALICE.userId)).toEqual(before);
+    // Throttle-first order: the throttle branch ran before the owner check
+    // 403 (an owner-check-first reorder would skip the store entirely).
+    expect(state.urls).toHaveLength(1);
   });
 
   it("the thrown store error text never reaches the console", async () => {
     const calls: unknown[][] = [];
-    for (const level of ["error", "warn", "log"] as const) {
+    for (const level of ["error", "warn", "log", "info", "debug"] as const) {
       vi.spyOn(console, level).mockImplementation((...args: unknown[]) => {
         calls.push(args);
       });
@@ -181,6 +185,8 @@ describe("profile writes degrade to allow when the throttle store throws", () =>
         )
       ).status,
     ).toBe(403);
-    expect(JSON.stringify(calls)).not.toContain(CANARY);
+    // inspect (not JSON.stringify): Error message/stack are non-enumerable,
+    // so JSON.stringify([[new Error(canary)]]) === '[[{}]]' hides the leak.
+    expect(inspect(calls, { depth: 10 })).not.toContain(CANARY);
   });
 });
