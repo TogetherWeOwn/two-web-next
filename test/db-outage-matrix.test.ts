@@ -671,13 +671,14 @@ it("valid login callback fails closed at admission, before any Discord call", as
     { headers: { cookie } },
     outageEnv(),
   );
-  // The journey cannot be consumed with the app DB down, so the code is never
-  // exchanged and no session is minted: zero upstream calls.
+  // The journey cannot be consumed with the app DB down: the classified
+  // outage from journeys.consume (not store acquisition) reaches the shared
+  // branded 503, so the code is never exchanged and no session is minted.
   expect(fetch).not.toHaveBeenCalled();
   await assertResponse(res, {
     method: "GET",
     route: "/auth/discord/callback",
-    status: 302,
-    location: "/?n=signin_failed",
+    status: 503,
+    format: "html",
   });
 });
