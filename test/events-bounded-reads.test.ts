@@ -90,6 +90,11 @@ describe.skipIf(!process.env.DATABASE_URL)("event bounded reads (agent-testdb)",
       const eventId = row!.id;
       const answers = ["going", "going", "going", "maybe", "not_going", "waitlisted"];
       for (let j = 0; j < answers.length; j += 1) {
+        // Attributable seeds: the going count joins users and counts only
+        // named rows, so every seeded identity carries a stored name.
+        await fixture.client`
+          insert into users (id, username) values (${`${keyPrefix}-user-${i}-${j}`}, ${`${keyPrefix}-user-${i}-${j}`})
+          on conflict (id) do nothing`;
         await fixture.client`
           insert into rsvps (event_id, user_id, status)
           values (${eventId}, ${`${keyPrefix}-user-${i}-${j}`}, ${answers[j]!})`;
@@ -176,6 +181,10 @@ describe.skipIf(!process.env.DATABASE_URL)("event bounded reads (agent-testdb)",
       ["show-user-2", "maybe"],
       ["show-user-3", "not_going"],
     ] as const) {
+      // Attributable seeds (see above): the going count only counts named rows.
+      await fixture.client`
+        insert into users (id, username) values (${user}, ${user})
+        on conflict (id) do nothing`;
       await fixture.client`
         insert into rsvps (event_id, user_id, status) values (${row!.id}, ${user}, ${status})`;
     }

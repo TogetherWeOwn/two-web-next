@@ -360,7 +360,8 @@ describe.skipIf(!process.env.DATABASE_URL)("events.json exposure (agent-testdb)"
   it("exposes only the allowlisted fields on every row", async () => {
     // Legacy allowlist (EventJsonAccessTest.php:71): event_key, title, game,
     // description, starts_at, ends_at, starts_at_local, ends_at_local,
-    // timezone, location, capacity, going_count, status, rsvp_open,
+    // timezone, location, capacity, going_count, going_occupancy (seat
+    // occupancy aggregate, like the write path), status, rsvp_open,
     // synced_to_discord. Viewer-specific waitlist_position is excluded. The
     // invariant pinned is exactness — no
     // autoincrement id, no creator id, no raw Discord id may ever leave the server.
@@ -382,6 +383,7 @@ describe.skipIf(!process.env.DATABASE_URL)("events.json exposure (agent-testdb)"
           "event_key",
           "game",
           "going_count",
+          "going_occupancy",
           "location",
           "rsvp_open",
           "starts_at",

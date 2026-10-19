@@ -12,7 +12,12 @@ const MOUNT = '[data-island="going-count"]';
 const EVENT = "going-count-updated";
 const REFRESHED = "going-count-refreshed";
 
-type Snapshot = { eventKey: string; goingCount: number; capacity: number | null };
+type Snapshot = {
+  eventKey: string;
+  goingCount: number;
+  goingOccupancy: number;
+  capacity: number | null;
+};
 class DOMCustomEvent {
   constructor(
     public type: string,
@@ -238,7 +243,7 @@ describe("GoingCount distributed binder refresh ownership", () => {
     expect(badge.count.textContent).toBe("1 of 4 going");
     expect(badge.count.writes).toEqual(["1 of 4 going"]);
     expect(badge.announcement.writes).toEqual(["RSVP removed. "]);
-    expect(b.refreshes).toEqual([{ eventKey: "a", goingCount: 1, capacity: 4 }]);
+    expect(b.refreshes).toEqual([{ eventKey: "a", goingCount: 1, goingOccupancy: 1, capacity: 4 }]);
   });
 
   it("does not publish A or steal B's announcement while B is pending", async () => {
@@ -267,7 +272,7 @@ describe("GoingCount distributed binder refresh ownership", () => {
     await settle();
     expect(badge.count.writes).toEqual(["1 of 4 going"]);
     expect(badge.announcement.writes).toEqual(["RSVP removed. "]);
-    expect(b.refreshes).toEqual([{ eventKey: "a", goingCount: 1, capacity: 4 }]);
+    expect(b.refreshes).toEqual([{ eventKey: "a", goingCount: 1, goingOccupancy: 1, capacity: 4 }]);
   });
 
   it.each(failures)(
@@ -289,8 +294,8 @@ describe("GoingCount distributed binder refresh ownership", () => {
       expect(badge.count.textContent).toBe("1 of 4 going");
       expect(badge.announcement.writes).toEqual(["You're going. ", "RSVP removed. "]);
       expect(b.refreshes).toEqual([
-        { eventKey: "a", goingCount: 3, capacity: 4 },
-        { eventKey: "a", goingCount: 1, capacity: 4 },
+        { eventKey: "a", goingCount: 3, goingOccupancy: 3, capacity: 4 },
+        { eventKey: "a", goingCount: 1, goingOccupancy: 1, capacity: 4 },
       ]);
       expect(b.requests).toHaveLength(4);
     },
@@ -305,7 +310,7 @@ describe("GoingCount distributed binder refresh ownership", () => {
     await fail(b, 0, failure);
     expect(badge.count.writes).toEqual(["1 of 4 going"]);
     expect(badge.announcement.writes).toEqual(["RSVP removed. "]);
-    expect(b.refreshes).toEqual([{ eventKey: "a", goingCount: 1, capacity: 4 }]);
+    expect(b.refreshes).toEqual([{ eventKey: "a", goingCount: 1, goingOccupancy: 1, capacity: 4 }]);
   });
 
   it("does not replay a failed operation's announcement on a count-only refresh", async () => {
@@ -353,8 +358,8 @@ describe("GoingCount distributed binder refresh ownership", () => {
     expect(other.count.writes).toEqual(["6 going"]);
     expect(other.announcement.writes).toEqual(["You're on the waitlist. "]);
     expect(b.refreshes).toEqual([
-      { eventKey: "a", goingCount: 1, capacity: 4 },
-      { eventKey: "b", goingCount: 6, capacity: null },
+      { eventKey: "a", goingCount: 1, goingOccupancy: 1, capacity: 4 },
+      { eventKey: "b", goingCount: 6, goingOccupancy: 6, capacity: null },
     ]);
   });
 });
@@ -384,11 +389,25 @@ describe("GoingCount accepted aggregate snapshots", () => {
     expect(badge.spots!.hidden).toBe(false);
     expect(badge.spots!.textContent).toBe("4 of 6 spots left");
     expect(b.refreshes).toEqual([
-      { eventKey: "a", goingCount: 4, capacity: 4 },
-      { eventKey: "a", goingCount: 3, capacity: null },
-      { eventKey: "a", goingCount: 2, capacity: 6 },
+      { eventKey: "a", goingCount: 4, goingOccupancy: 4, capacity: 4 },
+      { eventKey: "a", goingCount: 3, goingOccupancy: 3, capacity: null },
+      { eventKey: "a", goingCount: 2, goingOccupancy: 2, capacity: 6 },
     ]);
     expect(b.requests).toHaveLength(4);
+  });
+
+  it("publishes seat occupancy alongside the attributable count when the row carries both", async () => {
+    const badge = new Badge("a", "2", true);
+    const b = browser(badge);
+    b.broadcast({ eventKey: "a", viewerState: "going" });
+    await b.respond(0, [{ event_key: "a", going_count: 1, going_occupancy: 2, capacity: 2 }]);
+    // Badge label stays attributable; spots and the published snapshot follow
+    // occupancy so a nameless-held seat is never offered again.
+    expect(badge.count.textContent).toBe("1 of 2 going");
+    expect(badge.spots!.hidden).toBe(false);
+    expect(badge.spots!.textContent).toBe("Full");
+    expect(b.refreshes).toEqual([{ eventKey: "a", goingCount: 1, goingOccupancy: 2, capacity: 2 }]);
+    expect(b.requests).toHaveLength(1);
   });
 
   it.each([7, null])(
@@ -411,7 +430,7 @@ describe("GoingCount accepted aggregate snapshots", () => {
       for (const badge of badges) expect(badge.announcement.writes).toEqual(["You're going. "]);
       expect(other.count.writes).toEqual([]);
       expect(other.announcement.writes).toEqual([]);
-      expect(b.refreshes).toEqual([{ eventKey: "a", goingCount: 3, capacity }]);
+      expect(b.refreshes).toEqual([{ eventKey: "a", goingCount: 3, goingOccupancy: 3, capacity }]);
       b.broadcast({ eventKey: "other", viewerState: "none" });
       b.broadcast({});
       await settle();
@@ -437,7 +456,7 @@ describe("GoingCount accepted aggregate snapshots", () => {
         Array(2).fill(capacity ? "0 of 4 going" : "0 going"),
       );
       expect(b.refreshes).toEqual([
-        { eventKey: "a", goingCount: 0, capacity: capacity ? 4 : null },
+        { eventKey: "a", goingCount: 0, goingOccupancy: 0, capacity: capacity ? 4 : null },
       ]);
       for (const badge of badges) expect(badge.announcement.writes).toEqual([]);
       expect(b.requests).toHaveLength(1);
@@ -503,7 +522,9 @@ describe("GoingCount accepted aggregate snapshots", () => {
       await b.respond(1, [{ event_key: "a", going_count: 1, capacity: null }]);
       expect(badge.count.writes).toEqual(["1 going"]);
       expect(badge.announcement.writes).toEqual(["RSVP removed. "]);
-      expect(b.refreshes).toEqual([{ eventKey: "a", goingCount: 1, capacity: null }]);
+      expect(b.refreshes).toEqual([
+        { eventKey: "a", goingCount: 1, goingOccupancy: 1, capacity: null },
+      ]);
       expect(b.requests).toHaveLength(2);
     },
   );
@@ -566,7 +587,9 @@ describe("GoingCount accepted aggregate snapshots", () => {
       await settle();
       expect(badge.count.writes).toEqual(["1 going"]);
       expect(badge.announcement.writes).toEqual(["RSVP removed. "]);
-      expect(b.refreshes).toEqual([{ eventKey: "a", goingCount: 1, capacity: null }]);
+      expect(b.refreshes).toEqual([
+        { eventKey: "a", goingCount: 1, goingOccupancy: 1, capacity: null },
+      ]);
       expect(b.requests).toHaveLength(2);
     },
   );
@@ -616,7 +639,7 @@ describe("GoingCount owned read deadline", () => {
     b.broadcast({ eventKey: "a", viewerState: "none" });
     await b.respond(1, rows("a", 1));
     expect(badge.count.textContent).toBe("1 of 4 going");
-    expect(b.refreshes).toEqual([{ eventKey: "a", goingCount: 1, capacity: 4 }]);
+    expect(b.refreshes).toEqual([{ eventKey: "a", goingCount: 1, goingOccupancy: 1, capacity: 4 }]);
   });
 
   it("a second broadcast aborts the first read and its late resolution patches nothing", async () => {
@@ -633,6 +656,6 @@ describe("GoingCount owned read deadline", () => {
     await b.respond(1, rows("a", 1));
     expect(badge.count.textContent).toBe("1 of 4 going");
     expect(badge.announcement.writes).toEqual(["RSVP removed. "]);
-    expect(b.refreshes).toEqual([{ eventKey: "a", goingCount: 1, capacity: 4 }]);
+    expect(b.refreshes).toEqual([{ eventKey: "a", goingCount: 1, goingOccupancy: 1, capacity: 4 }]);
   });
 });
