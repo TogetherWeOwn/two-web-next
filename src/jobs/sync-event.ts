@@ -53,7 +53,15 @@ export async function withProducerDeadline<T>(
   }
 }
 
-/** Producer: idempotency key minted once, here (the constructor in Laravel), and carried on every retry. */
+/** Producer: idempotency key minted once, here (the constructor in Laravel), and carried on every retry.
+ *
+ * Late settlement is best-effort: past the deadline dispatch rejects while the
+ * underlying acquire/send may still be in flight. Callers that need Workers
+ * lifetime for that tail (the successor path) pass `onLateSettlement` and hold
+ * the received promises in their own waitUntil; callers without lifetime
+ * (the web after-commit path, whose pool ends in its finally) accept that a
+ * late token or ledger compensation may wait for TTL/reconcile recovery.
+ */
 export async function dispatchSyncEvent(
   queue: { send(body: unknown, opts?: { delaySeconds?: number }): Promise<unknown> },
   lock: UniqueLock,
@@ -64,6 +72,11 @@ export async function dispatchSyncEvent(
   // Originating HTTP request for queue.failing correlation; optional for
   // scheduled/reconcile/legacy dispatches. Never a job or idempotency key.
   requestId?: string,
+  // Lifetime hook: receives each detached late-settlement promise (a late
+  // acquire-token release, a raced-away send including its ledger
+  // compensation). Never affects the dispatch outcome; the caller decides
+  // whether to hold it in waitUntil.
+  onLateSettlement?: (work: Promise<unknown>) => void,
 ): Promise<boolean> {
   signal?.throwIfAborted();
   // ShouldBeUnique: a still-queued write-back absorbs this dispatch.
@@ -88,34 +101,52 @@ export async function dispatchSyncEvent(
   try {
     leaseToken = await withProducerDeadline(acquireOp);
   } catch (err) {
-    // A token arriving after the deadline wins is a live row again: free it
-    // (bounded, never throwing) so it cannot linger until its TTL. A real
-    // acquire rejection carries no token, so the handler is a no-op for it.
-    acquireOp.then(
+    // A token arriving after the deadline wins is a live row again: attempt to
+    // free it (bounded, never throwing). Best-effort only — without Workers
+    // lifetime (web path) it can still linger until its TTL, so callers that
+    // need the tail to run hold the exposed promise in their own waitUntil.
+    // A real acquire rejection carries no token, so the handler is a no-op.
+    const lateRelease = acquireOp.then(
       (late) => {
-        if (typeof late === "string" && late) void releaseOwnLease(late);
+        if (typeof late === "string" && late) return releaseOwnLease(late);
       },
       () => {},
     );
+    onLateSettlement?.(lateRelease);
     throw err;
   }
   if (!leaseToken) return false;
+  // Hoisted so a deadline rejection can expose the still-in-flight send
+  // (including its exact-jobId ledger compensation) to the caller's lifetime.
+  // The abort check stays before any send is attempted, inside the try so an
+  // abort after acquisition still compensates this token.
+  let sendOp: Promise<unknown> | undefined;
   try {
     signal?.throwIfAborted();
-    await withProducerDeadline(
-      queue.send(
-        // Idempotency stays build-time; correlation rides alongside, never as the key.
-        {
-          kind: "sync-event",
-          eventKey,
-          idempotencyKey,
-          leaseToken,
-          requestId: safeRequestId(requestId),
-        },
-        { delaySeconds: SYNC_EVENT.debounceSeconds },
-      ),
+    sendOp = queue.send(
+      // Idempotency stays build-time; correlation rides alongside, never as the key.
+      {
+        kind: "sync-event",
+        eventKey,
+        idempotencyKey,
+        leaseToken,
+        requestId: safeRequestId(requestId),
+      },
+      { delaySeconds: SYNC_EVENT.debounceSeconds },
     );
+    await withProducerDeadline(sendOp);
   } catch (err) {
+    // The raced-away send still owns its ledger compensation: expose its
+    // settlement so a waitUntil holder can cover it. The lease release below
+    // stays awaited inside dispatch (bounded), so it needs no hook.
+    if (sendOp) {
+      onLateSettlement?.(
+        sendOp.then(
+          () => {},
+          () => {},
+        ),
+      );
+    }
     await releaseOwnLease(leaseToken);
     throw err;
   }

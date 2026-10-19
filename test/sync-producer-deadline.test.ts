@@ -81,6 +81,45 @@ describe("producer deadline", () => {
     expect(PRODUCER_BUDGET_MS).toBe(PRODUCER_TIMEOUT_MS);
   });
 
+  it("a fast acquire and send clears both deadline timers without advancing past the bound", async () => {
+    const { lock } = memoryLock();
+    const queue = trackingQueue({ send: async () => {} }, memLedger().ledger);
+    await expect(dispatchSyncEvent(queue, lock, eventKey)).resolves.toBe(true);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("a raced-away send exposes its settlement (with ledger compensation) to the lifetime hook", async () => {
+    const { lock } = memoryLock();
+    const { ledger, rows: ledgerRows } = memLedger();
+    let rejectTransport!: (err: unknown) => void;
+    const transport = new Promise<unknown>((_resolve, reject) => {
+      rejectTransport = reject;
+    });
+    const queue = trackingQueue({ send: () => transport }, ledger);
+    const late: Promise<unknown>[] = [];
+    const outcome = track(
+      dispatchSyncEvent(
+        queue,
+        lock,
+        eventKey,
+        crypto.randomUUID(),
+        undefined,
+        undefined,
+        (tail) => {
+          late.push(tail);
+        },
+      ),
+    );
+    await vi.advanceTimersByTimeAsync(PRODUCER_BUDGET_MS + 1000);
+    expect(outcome().status).toBe("rejected");
+    expect(late).toHaveLength(1);
+    expect(ledgerRows.size).toBe(1);
+    rejectTransport(new Error("fixture late send failure"));
+    await late[0];
+    expect(ledgerRows.size).toBe(0);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
   it("a hung lock.acquire rejects within budget and holds no lease", async () => {
     const acquire = vi.fn(() => new Promise<string | null>(() => {}));
     const release = vi.fn(async (_k: string, _t: string) => {});
