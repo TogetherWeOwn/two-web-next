@@ -3,7 +3,7 @@
 // recorded in that file's header. registerGate must run before any profile
 // route is registered: the middleware only covers routes added after it.
 import type { Next } from "hono";
-import { getSignedCookie } from "hono/cookie";
+import { getSignedCookie, setSignedCookie } from "hono/cookie";
 import { sessionStoreFor } from "../admin/guard";
 import { enableAuthStatus } from "../auth-status";
 import { alertRequestError } from "../alerts";
@@ -12,7 +12,7 @@ import { databaseUnavailable, forbidden } from "../errors";
 import { bufferedMemberText, memberReadBoundary } from "../member-reads";
 import { bounceToLogin, takeJoinResult } from "../return-journey";
 import { SESSION_COOKIE } from "../session-cookie";
-import { hashToken, isValidSessionToken } from "../sessions";
+import { hashToken, isValidSessionToken, SESSION_TTL_SECONDS } from "../sessions";
 import { requestRoute, safeRequestId } from "../request-log";
 import type { Ctx, ProfileApp, ProfileDeps, Viewer } from "./routes-shared";
 import type { ProfileStores } from "./routes-stores";
@@ -47,6 +47,7 @@ export function isProfileWriteRequest(c: Pick<Ctx, "req">): boolean {
 /** Gate: guest → OAuth, non-member → 403, store failure → 503 (fail closed). */
 export function memberGate(deps: ProfileDeps) {
   return async (c: Ctx, next: Next) => {
+    const expiresAt = new Date(Date.now() + SESSION_TTL_SECONDS * 1000);
     c.header("cache-control", "private, no-store");
     const token = await getSignedCookie(c, c.env.SESSION_SECRET, SESSION_COOKIE);
     // Guest: record where they were headed (legacy url.intended), then into
@@ -58,16 +59,26 @@ export function memberGate(deps: ProfileDeps) {
     try {
       const sessions = deps.sessionStore ?? (await sessionStoreFor(c));
       if (!sessions) throw new Error("no session store");
-      const row = await sessions.get(await hashToken(token));
+      const tokenHash = await hashToken(token);
+      const row = await sessions.get(tokenHash);
       if (row) {
+        if (row.member && c.req.method === "GET") {
+          if (!(await sessions.renew(tokenHash, expiresAt))) return bounceToLogin(c);
+          await enableAuthStatus(c, sessions, tokenHash);
+          await setSignedCookie(c, SESSION_COOKIE, token, c.env.SESSION_SECRET, {
+            path: "/",
+            secure: true,
+            httpOnly: true,
+            sameSite: "Lax",
+            maxAge: SESSION_TTL_SECONDS,
+          });
+        }
         viewer = {
           id: row.userId,
           username: row.username,
           member: row.member,
           moderator: row.moderator,
         };
-        if (row.member && c.req.method === "GET")
-          await enableAuthStatus(c, sessions, await hashToken(token));
       }
     } catch (err) {
       // Bounded like every other session-failure log: class name only — driver
