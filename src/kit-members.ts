@@ -53,6 +53,7 @@ export type LoadRanking = (
   window: SeasonWindow,
   game: string | null,
   scope?: "overall" | "relative",
+  viewerId?: string,
 ) => Promise<RankedMember[]>;
 
 export type { BoardViewEntry, QueueBoardView, RecordBoardView };
@@ -157,15 +158,23 @@ export async function loadMembersBoardData(args: MembersBoardArgs): Promise<{
       season,
       activity.game,
       scope.scope,
+      args.session.userId,
     );
   } catch (err) {
     reportBoardFailure(err, args);
   }
+  // The relative read already returns its SQL-numbered window (BoardRow):
+  // only the overall ranking still needs numbering from the full list.
+  const windowed: BoardRow[] =
+    scope.scope === "relative"
+      ? (ranked as BoardRow[])
+      : boardRows(ranked, scope.scope, args.session.userId);
   // Strip every Discord ID here: mark the viewer's own row server-side so
   // neither the HTML props nor the __data.json payload carry an ID.
-  const rows: MembersBoardRow[] = boardRows(ranked, scope.scope, args.session.userId).map(
-    ({ userId, ...row }) => ({ ...row, isViewer: userId === args.session.userId }),
-  );
+  const rows: MembersBoardRow[] = windowed.map(({ userId, ...row }) => ({
+    ...row,
+    isViewer: userId === args.session.userId,
+  }));
   // Queue only (see the header): the write itself runs after the member-read
   // boundary releases this board, outside its capture. Only a served (200)
   // board records a view, and queueing is fail-open like the Hono write.
