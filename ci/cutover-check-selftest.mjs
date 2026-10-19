@@ -701,6 +701,24 @@ test("all regressions fail closed, including wrong phase and challenge/soft-404 
       "robots-sitemap",
     ],
     [
+      "split-line robots sitemap",
+      "after",
+      "/robots.txt",
+      (response) => {
+        response.body = response.body.replace("Sitemap: ", "Sitemap:\n");
+      },
+      "robots-sitemap",
+    ],
+    [
+      "comment-between robots sitemap",
+      "after",
+      "/robots.txt",
+      (response) => {
+        response.body = response.body.replace("Sitemap: ", "Sitemap: # note\n");
+      },
+      "robots-sitemap",
+    ],
+    [
       "wrong invite",
       "after",
       "/discord",

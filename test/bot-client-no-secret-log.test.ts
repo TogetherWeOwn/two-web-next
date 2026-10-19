@@ -54,6 +54,10 @@ function captureLogs() {
         lines.push(
           call
             .map((a) => {
+              // Benign serializer fallback (not an alert/log-line parse): this
+              // stringifies arbitrary log args for secret scans, so String(a)
+              // on unstringifiable values is intentional and stays outside
+              // parseJsonLines.
               try {
                 return typeof a === "string" ? a : JSON.stringify(a);
               } catch {

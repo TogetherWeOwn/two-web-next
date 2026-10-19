@@ -16,11 +16,34 @@ import { stagingQualityJob, stagingQualitySteps } from "./production-deploy-gate
 const shaPattern = /^[0-9a-f]{40}$/;
 const titleSha = /^e2e-staging deploy ([0-9a-f]{40})$/;
 
+// Automatic promotion safety: a staging green must soak before it can ride
+// to production, and a newer red staging run blocks every older candidate.
+// Soak window and red conclusions are pinned here so the workflow, the gate
+// and the tests share one definition.
+export const PROMOTION_SOAK_MS = 30 * 60 * 1000;
+const RED_CONCLUSIONS = new Set(["failure", "timed_out"]);
+
+function runCompletedAtMs(run) {
+  const stamp = run?.updated_at ?? run?.created_at;
+  if (typeof stamp !== "string") return NaN;
+  return Date.parse(stamp);
+}
+
+function isRedStagingRun(run) {
+  return run?.status === "completed" && RED_CONCLUSIONS.has(run?.conclusion);
+}
+
 // Run-names (see the workflow headers): the deployed commit is the title's SHA.
 export const deployTitle = (sha) => `deploy ${sha}`;
 export const e2eTitle = (sha) => `e2e-staging deploy ${sha}`;
 
-export async function resolvePromotionSha({ repository, token, fetchImpl = fetch, pages = 5 }) {
+export async function resolvePromotionSha({
+  repository,
+  token,
+  fetchImpl = fetch,
+  pages = 5,
+  nowMs = Date.now(),
+}) {
   async function get(path) {
     const response = await fetchImpl(`https://api.github.com/repos/${repository}${path}`, {
       headers: {
@@ -35,6 +58,9 @@ export async function resolvePromotionSha({ repository, token, fetchImpl = fetch
     return response.json();
   }
   const decided = new Set();
+  // Newest-first: any red run blocks every older candidate, so automatic
+  // promotion never rides an older green while staging is currently red.
+  let seenNewerRed = false;
   for (let page = 1; page <= pages; page += 1) {
     const query = new URLSearchParams({
       branch: "main",
@@ -47,10 +73,19 @@ export async function resolvePromotionSha({ repository, token, fetchImpl = fetch
     );
     if (!runs.length) break;
     for (const run of runs) {
+      if (isRedStagingRun(run)) seenNewerRed = true;
       const sha = titleSha.exec(run.display_title ?? "")?.[1];
       if (!sha || decided.has(sha)) continue;
       decided.add(sha);
       if (run.status !== "completed" || run.conclusion !== "success") continue;
+      // A newer red staging run blocks this older green: staging is not
+      // currently healthy, so there is nothing safe to promote automatically.
+      if (seenNewerRed) continue;
+      // Soak: the green must be at least 30 minutes old, so a just-passed
+      // staging has time to reveal a flake before it rides to production.
+      // A missing or unparsable timestamp fails closed (not promotable).
+      const completedAt = runCompletedAtMs(run);
+      if (!Number.isFinite(completedAt) || nowMs - completedAt < PROMOTION_SOAK_MS) continue;
       const { jobs = [] } = await get(`/actions/runs/${run.id}/jobs?per_page=100`);
       // Both gates must have passed on this deploy: journeys and the web quality gate.
       // The quality evidence must match the production gate exactly: one
@@ -88,6 +123,17 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
         token: process.env.GITHUB_TOKEN,
       }));
     if (!shaPattern.test(sha ?? "")) {
+      // Automatic triggers (workflow_run, schedule) run daily even when
+      // there is nothing soaked and green to promote: exit cleanly with an
+      // empty sha so the workflow skips the deploy instead of going red.
+      // A manual dispatch with no candidate is still an error.
+      if (!input && process.env.GITHUB_EVENT_NAME !== "workflow_dispatch") {
+        console.log(
+          "No soaked green staging commit to promote (need a 30-minute-old success with no newer red run); skipping",
+        );
+        appendFileSync(process.env.GITHUB_OUTPUT, "sha=\n");
+        process.exit(0);
+      }
       throw new Error(
         "No commit to promote: set the sha input, or wait for a deploy whose staging-journeys and staging-quality pass",
       );

@@ -20,6 +20,7 @@ import { alias } from "drizzle-orm/pg-core";
 import { events } from "../src/db/admin-schema";
 import { nonSensitiveRead } from "../src/member-reads";
 import { env, MEMBER, MODERATOR, PERSONAL_STRINGS, seed, SUBJECT } from "./helpers/member-data";
+import { assertDenialThrows } from "./helpers/assert-denial";
 import { clearAuditRows } from "./helpers/audit-rows";
 import { createMemberDataFixture, type MemberDataFixture } from "./helpers/member-data-db";
 
@@ -96,6 +97,7 @@ describe.skipIf(!process.env.DATABASE_URL)("keyed member read boundary (real Pos
   it.each(["unwrapped", "caught", "extra-in-helper"])(
     "refuses a new %s sensitive query inside an existing handler",
     async (variant) => {
+      let sabotage: unknown;
       const app = router(async (c) => {
         const query = () => db().select({ id: users.id, name: users.username }).from(users);
         if (variant === "extra-in-helper") {
@@ -104,18 +106,23 @@ describe.skipIf(!process.env.DATABASE_URL)("keyed member read boundary (real Pos
               await query();
               return query();
             });
-          } catch {}
+          } catch (error) {
+            sabotage = error;
+          }
         } else {
           await keyedMemberRead(query);
           if (variant === "caught") {
             try {
               await query();
-            } catch {}
+            } catch (error) {
+              sabotage = error;
+            }
           } else await query();
         }
         return bufferedMemberText(c, PERSONAL_STRINGS[1]!);
       });
       await deny(await app.request("/existing", {}, env));
+      if (variant !== "unwrapped") await assertDenialThrows(Promise.reject(sabotage));
     },
   );
 
@@ -276,8 +283,24 @@ describe.skipIf(!process.env.DATABASE_URL)("keyed member read boundary (real Pos
     expect(await logs()).toHaveLength(0);
   });
 
-  it("sequential and concurrent reads share a DB, never receipts or viewer identities", async () => {
+  it("forced-overlap reads rendezvous after distinct sensitive reads, never sharing receipts", async () => {
     const connection = db();
+    const withTimeout = <T>(promise: Promise<T>, ms: number, label: string): Promise<T> => {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const timeout = new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error(`timed out waiting for ${label}`)), ms);
+      });
+      return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
+    };
+    const deferred = () => {
+      let resolve!: () => void;
+      const promise = new Promise<void>((res) => {
+        resolve = res;
+      });
+      return { promise, resolve };
+    };
+    type Gate = { arrived: ReturnType<typeof deferred>; release: ReturnType<typeof deferred> };
+    const gates = new Map<string, Gate>();
     const app = new Hono<{ Bindings: Env }>();
     app.use("/:viewer/:subject", (c, next) =>
       memberReadBoundary(
@@ -294,27 +317,101 @@ describe.skipIf(!process.env.DATABASE_URL)("keyed member read boundary (real Pos
           .from(users)
           .where(eq(users.id, c.req.param("subject")!)),
       );
-      await new Promise((resolve) => setTimeout(resolve, 1));
+      // Rendezvous after the distinct sensitive read, while the capture is
+      // still open and before the buffered response is released. Probe
+      // requests (self/empty, no gate) proceed without parking.
+      const gate = gates.get(`${c.req.param("viewer")}/${c.req.param("subject")}`);
+      if (gate) {
+        gate.arrived.resolve();
+        await withTimeout(gate.release.promise, 5000, `release ${c.req.param("viewer")}`);
+      }
       return bufferedMemberText(c, rows.map((row) => row.name).join(" "));
     });
-    const request = (viewer: string, subject: string) =>
-      app.request(`/${viewer}/${subject}`, {}, env);
-    const parallel = await Promise.all([
-      request(MEMBER.userId, SUBJECT.userId),
-      request(MODERATOR.userId, MEMBER.userId),
-    ]);
-    expect(parallel.map((res) => res.status)).toEqual([200, 200]);
-    for (const subject of [MEMBER.userId, "999999999999999999", SUBJECT.userId]) {
-      expect((await request(MEMBER.userId, subject)).status).toBe(200);
+    const request = (viewer: string, subject: string): Promise<Response> =>
+      Promise.resolve(app.request(`/${viewer}/${subject}`, {}, env));
+    const keyA = `${MEMBER.userId}/${SUBJECT.userId}`;
+    const keyB = `${MODERATOR.userId}/${MEMBER.userId}`;
+
+    for (const first of ["b", "a"] as const) {
+      await fixture.reset();
+      await seed(fixture.db);
+      const gateA = { arrived: deferred(), release: deferred() };
+      const gateB = { arrived: deferred(), release: deferred() };
+      gates.set(keyA, gateA);
+      gates.set(keyB, gateB);
+      let settledA = false;
+      let settledB = false;
+      const promiseA = request(MEMBER.userId, SUBJECT.userId);
+      const promiseB = request(MODERATOR.userId, MEMBER.userId);
+      promiseA.then(
+        () => {
+          settledA = true;
+        },
+        () => {
+          settledA = true;
+        },
+      );
+      promiseB.then(
+        () => {
+          settledB = true;
+        },
+        () => {
+          settledB = true;
+        },
+      );
+      try {
+        // Both sensitive reads completed and both handlers are parked:
+        // neither buffered response has been released yet.
+        await withTimeout(
+          Promise.all([gateA.arrived.promise, gateB.arrived.promise]),
+          5000,
+          `rendezvous (first=${first})`,
+        );
+        expect(settledA, `A must stay parked until release (first=${first})`).toBe(false);
+        expect(settledB, `B must stay parked until release (first=${first})`).toBe(false);
+        if (first === "b") {
+          gateB.release.resolve();
+          const resB = await withTimeout(promiseB, 5000, `B response (first=${first})`);
+          expect(resB.status).toBe(200);
+          expect(await resB.text()).toBe(MEMBER.username);
+          expect(settledA, `A must stay parked while B completes (first=${first})`).toBe(false);
+          gateA.release.resolve();
+          const resA = await withTimeout(promiseA, 5000, `A response (first=${first})`);
+          expect(resA.status).toBe(200);
+          expect(await resA.text()).toBe(SUBJECT.username);
+        } else {
+          gateA.release.resolve();
+          const resA = await withTimeout(promiseA, 5000, `A response (first=${first})`);
+          expect(resA.status).toBe(200);
+          expect(await resA.text()).toBe(SUBJECT.username);
+          expect(settledB, `B must stay parked while A completes (first=${first})`).toBe(false);
+          gateB.release.resolve();
+          const resB = await withTimeout(promiseB, 5000, `B response (first=${first})`);
+          expect(resB.status).toBe(200);
+          expect(await resB.text()).toBe(MEMBER.username);
+        }
+        expect(
+          (await logs()).map((row) => [row.viewerDiscordId, row.subjectUserIds]).sort(),
+        ).toEqual(
+          [
+            [MEMBER.userId, [SUBJECT.userId]],
+            [MODERATOR.userId, [MEMBER.userId]],
+          ].sort(),
+        );
+        // No leftover receipt: an explicit self read and an empty read each
+        // serve without writing another audit row.
+        expect((await request(MEMBER.userId, MEMBER.userId)).status).toBe(200);
+        expect(await logs()).toHaveLength(2);
+        expect((await request(MEMBER.userId, "999999999999999999")).status).toBe(200);
+        expect(await logs()).toHaveLength(2);
+      } finally {
+        gateA.release.resolve();
+        gateB.release.resolve();
+        await Promise.allSettled([promiseA, promiseB]);
+        gates.clear();
+      }
     }
-    expect((await logs()).map((row) => [row.viewerDiscordId, row.subjectUserIds]).sort()).toEqual(
-      [
-        [MEMBER.userId, [SUBJECT.userId]],
-        [MODERATOR.userId, [MEMBER.userId]],
-        [MEMBER.userId, [SUBJECT.userId]],
-      ].sort(),
-    );
-  });
+  }, 15000);
 
   it("prepared statements consume a fresh permit on each execution", async () => {
     const prepared = db()

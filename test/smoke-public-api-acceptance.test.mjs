@@ -176,6 +176,14 @@ const fixtures = {
   "/api/public/community": [200, "application/json", healthyCommunity],
   "/api/public/join": [200, "application/json", healthyJoin],
   "/openapi.json": [200, "application/json", healthyOpenApi],
+  // Single-event HTML detail (GET /e/:key): the fixed probe key exists in
+  // no database, so like the real handler's notFound() the stub answers the
+  // branded missing-event page.
+  "/e/00000000000000000000000001": [
+    404,
+    "text/html",
+    "<title>We cannot find that page — Together We Own</title>",
+  ],
 };
 
 const EXPECTED_PATHS = Object.keys(fixtures).sort();
@@ -202,6 +210,8 @@ async function stub(t, change = () => {}) {
       headers: {
         "content-security-policy": "default-src 'self'; frame-ancestors 'none'",
         "x-content-type-options": "nosniff",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "x-frame-options": "DENY",
         ...(type ? { "content-type": `${type}; charset=UTF-8` } : {}),
         ...(type === "text/html" ? { "x-robots-tag": "noindex, nofollow" } : {}),
         ...(request.url === "/up"
@@ -325,7 +335,7 @@ test("healthy stub: all five public API entries are probed exactly once and pass
   assert.match(result.output, /^PASS \/api\/public\/community$/m, result.output);
   assert.match(result.output, /^PASS \/api\/public\/join$/m, result.output);
   assert.match(result.output, /^PASS \/openapi\.json$/m, result.output);
-  assert.match(result.output, /smoke: 23 routes, 0 failed assertions/, result.output);
+  assert.match(result.output, /smoke: 24 routes, 0 failed assertions/, result.output);
   // Exactly the five additions: no session-gated route, no query string,
   // no duplicate probe.
   assert.deepEqual(requests.map((r) => r.path).sort(), EXPECTED_PATHS, JSON.stringify(requests));
@@ -613,7 +623,7 @@ test("CLI passes a healthy stub and reports all five public entries, with no ext
   assert.match(result.output, /^PASS \/api\/public\/community$/m, result.output);
   assert.match(result.output, /^PASS \/api\/public\/join$/m, result.output);
   assert.match(result.output, /^PASS \/openapi\.json$/m, result.output);
-  assert.match(result.output, /smoke: 23 routes, 0 failed assertions/, result.output);
+  assert.match(result.output, /smoke: 24 routes, 0 failed assertions/, result.output);
 });
 
 test("CLI exits 1 when the stub serves a broken public envelope", async (t) => {

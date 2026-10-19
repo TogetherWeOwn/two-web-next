@@ -131,7 +131,8 @@ Read-only checks only: a Workers Logs search, a `SELECT`, or a source file.
 | `services.discord.invite_url is unusable; serving the hardcoded fallback invite.` | The configured invite URL is not an `https` `discord.gg` or `discord.com/invite` link (`src/invite.ts`). | Degrades: visitors get the hardcoded invite, which may be a rotation old. | Read the `services.discord.invite_url` setting in the deployed config and compare it with the validator in `src/invite.ts`. | None |
 | `agent-events failed` | The agent-events ingress threw before or while handling a request (`src/agent-events/route.ts`, two call sites). | Fails closed: 503 `ingress_unavailable` for a database outage, otherwise 500 `internal_error`. | Search logs for the matching `http.request` status on the agent-events route; then `SELECT * FROM agent_event_audits` for the window. Shield 429 rows are a ~1% sample (multiply by ~100; the latest `agent-events.shield.refusal_sampled` warn carries the running per-class count) and grantless 401s write no rows, so an audit count undercounts refusals. | Error name as the second argument |
 | `sync retry result persistence failed` | A known sync-retry result could not be committed (`src/jobs/consumer.ts`), so the durable claim stays fenced. | Degrades: the delivery is retried after the known wait, or marked failed once tries run out. | Search logs for `sync retry classified` and `queue.failing` for the same event; see [sync-event retry-cause diagnostics](#sync-event-retry-cause-diagnostics). | Fixed reason string `sync retry result could not be persisted; request remains fenced` |
-| `sync attempt settlement failed` | A definitive sync refusal could not be settled via `failSync` (`src/jobs/consumer.ts`), so the `event_sync_attempts` row stays `pending` and still blocks future revisions. | Stuck, not self-healing: this delivery is retried, but redeliveries wait on the null-fenced claim (`failSync` is never retried) and the carrier is ACKed after six deliveries with `job failed` / `queue.failing` reason `waiting carrier exhausted; request remains recoverable`; the refusal stays unrecorded and newer revisions stay blocked. | Search logs for the line (it carries no event key, only `exception`); then list null-fenced pending rows: `SELECT e.event_key, a.request_attempts, a.next_attempt_at FROM event_sync_attempts a JOIN events e ON e.id = a.event_id WHERE a.state = 'pending' AND a.next_attempt_at IS NULL`. See the operator-recovery paragraph in docs/runbook.md: no live reset or blind replay. | `exception` (class name) |
+| `sync attempt settlement failed` | A definitive sync refusal could not be settled via `failSync` (`src/jobs/consumer.ts`), so the `event_sync_attempts` row stays `pending` and still blocks future revisions. | This delivery retries released-only. A redelivery carrying terminal intent re-runs settlement with backoff; past the carrier budget each unsettled redelivery raises the distinct `queue.failing` line (`terminal settlement unavailable; ...`), still without a `failed` stamp or ack, until the transport backstop drops the carrier and the pending row waits for operator recovery. A redelivery with no recorded intent waits on the nulled claim until the carrier exhausts with `job failed` / `queue.failing` reason `waiting carrier exhausted; request remains recoverable`; the refusal stays unrecorded and newer revisions stay blocked. | Search logs for the line (it carries no event key, only `exception`); then list null-fenced pending rows: `SELECT e.event_key, a.request_attempts, a.next_attempt_at FROM event_sync_attempts a JOIN events e ON e.id = a.event_id WHERE a.state = 'pending' AND a.next_attempt_at IS NULL`. See the operator-recovery paragraph in docs/runbook.md: no live reset or blind replay. | `exception` (class name) |
+| `sync terminal intent failed` | The terminal-intent note (`terminal_reason`) for a definitive sync refusal could not be committed (`src/jobs/consumer.ts`); the claim reopens to a due deadline and settlement still runs on this delivery. | Degrades: a healed redelivery re-derives the verdict and re-notes; only a still-wedged store keeps the row unsettled on backoff retry. | Search logs for the line (it carries no event key, only `exception`); then list pending rows carrying intent: `SELECT e.event_key, a.request_attempts, a.terminal_reason FROM event_sync_attempts a JOIN events e ON e.id = a.event_id WHERE a.state = 'pending' AND a.terminal_reason IS NOT NULL`. | `exception` (class name) |
 | `job threw` | A queue job threw something that is not a bot transport error, a terminal error or a refusal (`src/jobs/consumer.ts`). | Retries until the job runs out of tries, then it is buried and a `queue.failing` alert fires. | Search logs for `queue.failing` with the same job kind; then `SELECT * FROM queue_failed_jobs` for that kind. | Job `kind`, `exception` (class name) |
 | `job failed` | A job returned a failed outcome (`src/jobs/consumer.ts`), and a `queue.failing` alert follows. | Terminal for that job; the ledger row is marked failed. | Search logs for `queue.failing` with the same job kind; then `SELECT * FROM queue_failed_jobs` for that kind. | Job `kind`, then the bounded failure reason (a stable code or class name, not raw error text) |
 | `Member request failed; refusing contents.` | An unhandled error reached the shared error handler while a member read was active (`src/error-responses.tsx`). | Fails closed with a 503 "Member data is temporarily unavailable." body. | Search logs for the matching `http.request` record and its route. | `exception` (class name), validated `request_id` |
@@ -161,6 +162,52 @@ delete a ledger row, clear a lock, or reset a sync claim to investigate.
 | `queue lock release failed` | The lock `release` rejected (`src/jobs/consumer.ts:126`). Same handling as the timeout: the ack lands, the batch continues, the TTL heals. | No page: TTL self-heal, same as the timeout row. | Same lock-table `SELECT` as the timeout row; a live row expires on its own. Same never-delete rule. | Sanitized lock scope plus `exception` (class name only) |
 | `sync successor dispatch timed out; reconcile will retry` | The post-ack successor check and dispatch hit the 2 s bound and aborted (`src/jobs/consumer.ts:281`). The lock was already released; a rejected or timed-out send still leaves the dirty revision for reconciliation. | No page. Reconcile re-dispatches stale revisions every 10 minutes (`*/10 * * * *`). | Search logs for the line; then check whether a later sync landed: `SELECT sync_revision, synced_revision, discord_event_id FROM events WHERE event_key = '<eventKey>'` (`synced_revision` catching up to `sync_revision` means reconcile recovered it). Never replay a sync to investigate. | None (message only) |
 | `sync successor dispatch failed; reconcile will retry` | The successor dispatch threw and was caught (`src/jobs/consumer.ts:293`). Same backstop as the timeout: the dirty revision stays for reconcile. | No page: same 10-minute reconcile backstop. | Same revision `SELECT` as the timeout row. Never replay a sync to investigate. | `exception` (class name only, never the message, which can carry SQL or connection secrets) |
+
+### Shield sampling and pre-auth refusal warns
+
+Docs-only: this section triages two existing `console.warn` lines. No
+behavior, sampler-rate or audit change, and no new logged field.
+
+| Message | Meaning | Severity | First read-only check | Fields carried |
+| --- | --- | --- | --- | --- |
+| `agent-events.shield.refusal_sampled` | An over-budget outer-shield 429 refusal was sampled (`src/agent-events/shield.ts:120`). Both the audit row and this warn fire on the same ~1% sample (`SHIELD_REFUSAL_AUDIT_RATE = 0.01`): to estimate true refusals, multiply sampled warns (or sampled `shield:credential` / `shield:anonymous` audit rows) by ~100. The latest warn's `refusals` value is the exact running per-class count for the emitting isolate only (process-local, resets on restart, not Worker-wide); estimate window totals by multiplying sampled warns/rows by ~100. | Warn only: no page. A 429 here is the shield doing its job, not an outage. | Filter logs message/text with `agent-events.shield.refusal_sampled` over the window and split by `bucket_class`; then `SELECT operation, payload_digest, count(*) FROM agent_event_audits WHERE created_at > now() - interval '1 hour' AND operation LIKE 'shield:%' GROUP BY operation, payload_digest`. One `shield:credential` digest recurring with a steadily climbing `refusals` counter within a single isolate's warns points at a misconfigured client looping over budget (route to the credential owner to slow its loop); many distinct credential digests point at spray. `shield:anonymous` rows always store a null digest by design, so grouping yields a single row that cannot attribute source: read anonymous spray vs single client from `bucket_class` volume and `http.request` 429s only. Correlate with `http.request` 429 volume on `POST /api/agent-events`. | `bucket_class` (`credential` or `anonymous`), running per-class `refusals`, server-minted `request_id`. Never raw identity. |
+| `agent-events.ingress.pre_auth_refusal` | A pre-auth refusal was sampled (`src/agent-events/ingress.ts:40`): an overlong bearer (> 512 chars), a missing/unknown grant 401, or a grantless control-byte 422. The warn fires on a ~1% sample (`PRE_AUTH_REFUSAL_WARN_RATE = 0.01`): multiply warns by ~100 to estimate true refusals. Grantless refusals write zero audit rows by contract, so an audit count undercounts them to zero. | Warn only: no page. A 401/422 here is the ingress refusing before auth, not an outage. | Filter logs message/text with `agent-events.ingress.pre_auth_refusal` over the window; then compare against `http.request` 401/422 volume on `POST /api/agent-events` for the same window and confirm `SELECT count(*) FROM agent_event_audits WHERE request_id = '<request_id from the sampled warn>'` shows zero rows (zero is expected for these refusals, not a gap). A steady low-rate warn stream with matching 401s and zero matching audit rows points at a misconfigured client (unknown or rotated credential, overlong bearer; route to the provisioning owner, never replay or log the bearer); a burst of warns with a 401/422 spike points at spray. Overlong bearers are never demoted to the anonymous shield bucket, so a rotation flood mints no shield rows. | Server-minted `request_id` only. Never credential, body, operation, key, or anything else the caller chose. |
+
+What the sampling deliberately hides, and why: 99 of 100 refusals leave
+no warn and (for pre-auth) no audit row at all, so per-hit granularity is
+gone by design; the warn carries only the bucket class (shield) or nothing
+but the server-minted `request_id` (pre-auth), and the sampled audit row
+carries only the bucket class with a credential sha256 (or null for
+anonymous), never the raw bearer, body, operation, key, event key, or IP
+bytes. Refusals are attacker-proportional volume, so exact logging would let
+a flood dictate log and table growth. The sample is deliberately
+probabilistic (`Math.random() < 0.01`), not a token bucket, so a flood of
+distinct unknown credentials or buckets cannot spend a shared allowance to
+blind the sink. Lock-contention 503s keep their exact error audit because a
+contention burst is a retryable load signal, not attacker volume.
+
+### `/up` degrade warnings
+
+These five `console.warn` lines come from the `/up` readiness path (the
+route in `src/index.tsx`, plus `src/up-queue.ts`, `src/up-database.ts` and
+`src/up-config.ts`). None pages on its own: the queue-only `unknown` still
+answers HTTP 200, and each 503 feeds the existing
+[`uptime.down`](runbook-alerts.md#scheduled-up-prober-uptimedown) prober
+rather than a new page. Each row gives the exact message, what it means, why
+it does not page, and the first read-only check, including what the degraded
+`/up` body still proves. Find a line with the message **contains** filter
+from [Find a request](#find-a-request). Read-only checks only: a Workers
+Logs search, a `GET /up` read, a `SELECT`, or a source or deployed-config
+read. Never set a secret, run or repair migrations, replay a sync, or
+substitute another backend or credential to investigate.
+
+| Message | Meaning | Severity | First read-only check | Fields carried |
+| --- | --- | --- | --- | --- |
+| `Health check could not build the database client.` | The `postgres()` client constructor threw synchronously (`src/index.tsx:664`), so neither the DB/schema read nor the queue-ledger read started. | No page. The 503 feeds the existing `uptime.down` prober (red for over two minutes); the warn adds no new paging. | Read `GET /up` per [Read `/up` without mistaking liveness for readiness](runbook.md#read-up-without-mistaking-liveness-for-readiness): expect HTTP 503 with `db: error`, `pending_migrations: null` and `queue.status: unknown` with `detail: "queue ledger is not configured."` That triple proves the route served but neither store was read; the `config` and `revision` slices stay valid. Route the unreachable or malformed selection (`DATABASE_URL`, else `DB.connectionString`) to the Operator. Never substitute another backend or credential. | `exception` (class name only) |
+| `Health check could not read the queue depth; reporting unknown.` | The ledger measure threw or hit the response deadline (`src/up-queue.ts:75`); the failure is reported as `unknown`, never thrown to the route. | No page. Queue-only `unknown` still answers HTTP 200 when DB/schema is ready, so the prober does not fire; backlog visibility is reduced, not lost, and ledger rows are unchanged. | Read `GET /up`: `queue.status: unknown` with all seven measurements `null`, `ready_wait_severity: unknown` and `detail: null` still proves `db: ok` with `pending_migrations: 0` and the `config` slice when present; then `SELECT job_id, kind, key, available_at, reserved_at, created_at FROM queue_jobs ORDER BY created_at, job_id LIMIT 100`. Never insert or delete a ledger row to investigate. | `exception` (class name only, never the message: the queue tables carry job payloads and the endpoint must not leak one into a log) |
+| `Health check could not establish database/schema readiness.` | The DB ping or the migration-ledger read threw or hit its deadline (`src/up-database.ts:67`). `db` reads `ok` when the ping passed but the ledger failed, else `error`; `pending_migrations` is `null` either way. | No page on the line itself. The 503 feeds the existing `uptime.down` prober. | Read `GET /up`: `db` plus `pending_migrations: null` with a still-measured `queue.status` proves the queue slice survived and only the DB/schema half failed; then check database health with the [alert runbook](runbook-alerts.md). Never run or repair migrations through `/up`. | `exception` (class name only) |
+| `Health check found SESSION_SECRET too weak: it must be at least 32 characters with no leading or trailing whitespace.` | `SESSION_SECRET` is configured but fails the documented strength floor (`src/up-config.ts:44`): under 32 characters or with leading or trailing whitespace. A weak session key takes precedence over a missing Discord secret, so fixing it can surface `config: "missing"` next. | No page on the line itself. The 503 with `config: "weak"` feeds the existing prober. | Read `GET /up`: `config: "weak"` with measured `db` and `queue` slices proves the stores are healthy and only the secret fails; then read the floor in [`SESSION_SECRET` strength and rotation](config.md#session_secret-strength-and-rotation). Route the fix to the Operator (`wrangler secret put` on the target); never weaken the probe. | `secret: "SESSION_SECRET"` plus the requirement text, never the value |
+| `Health check found required Worker secrets missing.` | One or more required secrets is absent, empty or whitespace-only (`src/up-config.ts:52`). The body answers 503 with `config: "missing"` and never names which secret. | No page on the line itself. The 503 feeds the existing prober. | Read `GET /up`: `config: "missing"` with measured `db` and `queue` slices proves the stores are healthy; only these names are safe to list from the log line, never values: `SESSION_SECRET`, `DISCORD_CLIENT_SECRET`, `DISCORD_BOT_TOKEN`. Route the fix to the Operator under [Deploy and record the rollback pointer](runbook.md#deploy-and-record-the-rollback-pointer); never echo a value. | `missing` (secret names only, never values) |
 
 ### Join journey warnings
 
@@ -207,6 +254,19 @@ moderator authority and role-removal residuals in the
 Ownership flags, response behavior and the log privacy contract are unchanged
 by this section.
 
+### Auth sign-in warnings
+
+This section documents one auth-scoped `console.warn` line (the oversized
+code/state refusal in `src/auth/routes.ts`), not every auth-scoped line.
+It never pages: the refusal keeps today's generic `/?n=signin_failed`
+redirect, so the member already sees the outcome. The
+replayed/invalid-state branch stays silent and unchanged. Correlate by the
+validated `request_id`, which joins to the `http.request` line.
+
+| Message | Meaning | Member impact | First read-only check | Fields carried |
+| --- | --- | --- | --- | --- |
+| `discord sign-in failed` with `exception: OversizedOAuthParams` | Oversized `code`/`state` on `GET /auth/discord/callback` refused before throttle spend or any journey consume, exchange, or session work. | The generic sign-in failure redirect (`/?n=signin_failed`); the state, next and intended cookies survive for the next real hit. | Filter logs for the message with `exception: OversizedOAuthParams` and compare against `http.request` volume on `/auth/discord/callback`. A burst with no matching Discord-side change points at probing, not at Discord health. Never replay a member sign-in to investigate. | `exception` (class only, never `InvalidState`, never the refused values), validated `request_id` |
+
 ### CSP report warnings
 
 The session-free sink (`src/csp-reports.ts`) logs at warn level and always
@@ -218,6 +278,87 @@ exhaustion diagnostic, if added, gets its own row: exhaustion today is silent.
 | Message | Meaning | Member impact | First read-only check | Fields carried |
 | --- | --- | --- | --- | --- |
 | `csp.report.dropped_oversize` | The sink refused a body larger than the 8,192-byte cap (`MAX_CSP_REPORT_BYTES` in `src/csp-report-body.ts`) before parsing. Benign: a misconfigured page or extension emitting a large report. Attack: an oversize flood spending the shared per-isolate log budget to hide real `csp.report.violation` lines. | None: every sink path answers 204. | Filter Workers Logs message/text with `csp.report.dropped_oversize` over the window and compare with `http.request` volume on `POST /csp-reports` and the `csp.report.violation` rate; then cross-check the [CSP report log budget](config.md#csp-report-log-budget) (burst of 20, one refill per 3 seconds, shared by both warning keys) and any shed or exhaustion signal where present. Exhaustion is silent, so a violation drought during an oversize burst may mean the shared per-isolate budget was spent; it does not prove violations stopped — also check `CSP_REPORT_SAMPLE_RATE` (sampled-out reports consume no token) and that the burst reached the burst cap of 20. | `bytes` (number only: the declared length when refused unread, otherwise observed bytes including the discarded overflow chunk; never the body, a URI, or member identity) |
+
+### Discord sign-in and guild auto-join warnings
+
+Two `console.warn` lines in `src/auth/routes.ts` cover the ordinary-login
+Discord round trip (`GET /auth/discord/callback`). Neither pages: the sign-in
+line always accompanies the member-visible failure redirect, and the auto-join
+line always accompanies the recovery page the member already sees. Correlate
+both by `request_id` with the `http.request` record (see
+[Find a request](#find-a-request)). Where a line carries an exception, it is
+the class name only, never the raw error text, which can quote the client
+secret or the live access token.
+
+| Message | Meaning | Member impact | First read-only check | Fields carried |
+| --- | --- | --- | --- | --- |
+| `discord sign-in failed` | The token exchange (`exchangeCode`) or user fetch (`fetchUser`) threw; the failure is classified by `failureMeta` in `src/discord.ts`. Read `kind` plus `status`, not volume alone: `expired_grant` (400 plus `invalid_grant`) is a spent, replayed or timed-out approval; `provider_reject` (any other 4xx, for example `invalid_client` after a secret rotation or `invalid_request` from a bad redirect URI) points at [`DISCORD_CLIENT_ID` / `DISCORD_CLIENT_SECRET` and the registered redirect URI](config.md), not at Discord health; `rate_limited`, `provider_outage` and `transport_failure` point at Discord or wire health; `unknown` with a null status is an app-side throw. | Sign-in blocked. `rate_limited`, `provider_outage` and `transport_failure` (`isProviderOutage` in `src/discord.ts`) redirect to `/?n=signin_unavailable`; every other kind redirects to `/?n=signin_failed`. | Filter logs for the line and split by `kind` and `status`. A `provider_reject` burst with status 400/401 after a deploy or rotation points at the OAuth config above; `provider_outage`, `transport_failure` and `rate_limited` point at Discord or wire health; a lone `unknown` with a null status points at an app-side throw, so read the `exception` class. Never replay a member sign-in to investigate. | `exception` (class only, never the message, which can quote the secret), `kind`, `status`, validated `request_id` |
+| `guild auto-join failed` | Adding the fresh member to the guild (`addGuildMemberDetailed` in `src/discord.ts`) returned a non-member outcome. Read `kind`: `rate_limited` is Discord throttling (a usable backoff rides to the recovery response as a `Retry-After` header); `provider_outage` is a Discord 5xx; `transport_failure` is a fetch throw; `forbidden` (403) is a bot permission problem, not an outage; `failed` is the config-shaped outcome (blank bot token, malformed guild or user id, or any other non-429/403/5xx status), so a sustained `failed` run points at [`DISCORD_GUILD_ID` / `DISCORD_BOT_TOKEN`](config.md) and the bot's guild membership, not at Discord health. | None on sign-in: the session is still issued as a non-member session and the member lands on the `/?n=join_failed` recovery page with the invite fallback; the remembered destination is re-recorded for the retry. | Filter logs for the line and split by `kind`. A sustained `failed` run points at the guild/bot config above; `forbidden` points at the bot's guild role and permissions; `rate_limited`, `provider_outage` and `transport_failure` point at Discord or wire health. Never replay a member sign-in to investigate. | `request_id`, `guild_id` (the configured guild actually used, not a member identity), `kind` |
+
+### Analytics write-degradation warnings
+
+Two `console.warn` lines mark best-effort analytics writes that rejected or
+outran the 500 ms response deadline (`recordSearch` in
+`src/events/search-log.ts`, `recordBoardView` in
+`src/hotzones/board-log.ts`). None pages: neither outcome fails the request,
+so a missing analytics row is a dashboard gap, never a member-facing failure.
+Promoting these warnings to `error.alert` was considered and rejected for the
+same reason the join attempt-write failure above stays a warning: the request
+itself succeeded.
+
+For event-search warnings, `recordSearch` is awaited before the page
+continues. A rejection warning may be emitted before or after the response
+continues, depending on whether the write wins the deadline race. A
+`LogWriteDeadline` warning can delay the response by up to 500 ms.
+
+| Message | Meaning | Member impact | First read-only check | Fields carried |
+| --- | --- | --- | --- | --- |
+| `Event search unavailable for logging; serving results without recording.` | The `event_search_logs` `INSERT` rejected, or the 500 ms response deadline fired first (`src/events/search-log.ts`). | None on this request. The results were still served; only the analytics row may be missing. | Filter logs for the exact message over the incident window; then run the shared aggregate check below. | `exception` (the rejection class name, or the fixed `LogWriteDeadline` string; never the raw error text, which can carry the DSN) |
+| `Board view unavailable for logging; serving results without recording.` | The `board_view_logs` `INSERT` rejected, or the 500 ms response deadline fired first (`src/hotzones/board-log.ts`). Member-board views queue behind the member-read boundary and write only after a released 200. | None on this request. The board was still served; only the analytics row may be missing. | Filter logs for the exact message over the incident window; then run the shared aggregate check below. | `exception` (the rejection class name, or the fixed `LogWriteDeadline` string; never the raw error text) |
+
+The `exception` field tells a rejection apart from a deadline expiry: a
+rejected write carries the error's class name (with a `typeof` fallback for a
+non-`Error` throw), while an expired response wait carries the fixed string
+`LogWriteDeadline`. The deadline is a race, not a cancellation: the write
+promise keeps running after the 500 ms timer fires, so a `LogWriteDeadline`
+warning may still be followed by a settled row — and if that late write then
+rejects, the same request logs a second warning with the rejection class.
+Never equate warning count with lost requests, and never assume one warning
+per affected request.
+
+These two lines are fail-open anonymous analytics. Do not confuse them with
+the fail-closed mandatory auditing rows in the table above (`Member read audit
+failed; refusing contents.`, `Member data access could not be recorded;
+refusing to serve the read.`): a member-data read is refused when its
+`member_data_access_logs` row cannot be written, while a search or board view
+is always served when its analytics row cannot. The analytics tables store
+normalized dimensions (`normalized_query` on event searches;
+`normalized_board_key`, `scope`, and `season` on board views) with per-row
+result counts and `occurred_at` timestamps. They carry no member identity by
+design, so erasure leaves them because no row belongs to a member (see [What
+is retained and why](member-erasure.md#what-is-retained-and-why)). Retention,
+prune batching,
+and outage-time refusal policy are decided in the [retention
+ledger](retention-ledger.md) and the [database-outage
+contract](db-outage-matrix.md); this section changes none of them.
+
+Shared first check for either line (read-only; run no `INSERT`, `DELETE`,
+replay, lock clear, or credential change to investigate):
+
+```sql
+-- Incident-window aggregates. Compare against http.request volume on the
+-- serving routes over the same window; a gap inside one window matches the
+-- warn timestamps. If writes never resume, route database insert health to
+-- the authorized operator.
+SELECT count(*), max(occurred_at) FROM event_search_logs WHERE occurred_at > now() - interval '1 hour';
+SELECT count(*), max(occurred_at) FROM board_view_logs WHERE occurred_at > now() - interval '1 hour';
+```
+
+Neither line carries a `request_id`, so correlate by time window and route,
+not by ID. Keep raw `normalized_query` and `normalized_board_key` values,
+member identity, cookies, tokens, connection strings, and invented request IDs
+out of diagnostic output: the aggregates above are sufficient, and the
+warning's `exception` is a class name, never the message.
 
 ### Missing sync-queue binding warning
 
@@ -282,6 +423,32 @@ the existing contract. Never run production database tests or replay a sync
 to investigate; log search, read-only `SELECT`s, source and deployed-config
 reads only.
 
+### Optional-content degradation warnings
+
+Four `console.warn` lines mark degraded optional content. The page still
+returns 200 with a hidden block, fallback ranks, or a static fallback; none
+of these reads fails the request. Do not triage them as page outages: join
+the home-events warn by its validated `request_id` to the `http.request`
+line and confirm the status is 200, and read the other three by incident
+window (counts carries only a view key, stats carries nothing, and the
+widget carries a guild, never a request ID). Absent warnings do not prove
+healthy counts, stats or widgets: each family has silent paths that hide
+content without logging (see the rows). None of the four pages; the paging
+side lives in the [alert runbook](runbook-alerts.md).
+
+| Message | Trigger | User impact | Severity | First read-only check | Fields carried | Escalation boundary |
+| --- | --- | --- | --- | --- | --- | --- |
+| `Counts read unavailable` | One bot-owned `web_v1` view read threw or passed the 2 s deadline (`cachedRead` catch in `src/counts.ts`). Live counts and ranks degrade independently. | Hidden numerals on home (`src/screens/home.tsx`): no `member-count` block while `memberCount` is null, and static fallback rank labels while `ranks` is empty. The page is still 200. | No page. | Search logs for the line and its `key`; then check the configured bot source (explicit `BOT_DATABASE_URL`, else the `BOT_DB` Hyperdrive binding serving read-only `web_v1` views, `src/db/connection.ts`; see [config](config.md)). Never the web `DB` (it holds no `web_v1` views), never web migrations, never alternate credentials. | `key` only (`counts.live` or `counts.ranks`) | One window that recovers on retry needs nothing. Counts hidden across windows point at bot-source health: route to the authorized operator. A quiet window with hidden counts is cached degradation (unavailable results cached 60 s), no bot source (fallback with no warning), or a stale snapshot: a readable `web_v1.live_counts` row whose `counts_updated_at` is 10 min old or more (or future-dated past the same absolute bound) hides numerals with no warning and caches that outcome. With a readable bot source, check `counts_updated_at` freshness first (collector stall) before treating it as bot-source ill health. |
+| `Home events unavailable; serving the fallback.` | The homepage merged read threw or passed the 1 s deadline (`warnHomeFallback` in `src/events/reads.ts`). | The teaser reads "Game nights are unavailable right now." (`data-state="unavailable"`, `src/screens/home.tsx`) instead of "Nothing scheduled yet." The page is still 200. | No page. | Join by the warning's validated `request_id` to the matching `http.request` line ([Find a request](#find-a-request)): 200 with `unavailable` is degradation, not an outage. Only join on the actual ID: malformed caller input is dropped to `undefined`. | Validated `request_id` plus `exception` (`HomeEventsDeadline` on deadline, otherwise `ReadFailure`); never driver text, SQL or identities | `HomeEventsDeadline` points at the canonical/database side of the merged read (canonical rows, past zones, persisted IDs, connection setup): the Discord read is bounded separately at 700 ms (`HOME_DISCORD_TIMEOUT_MS`) and degrades to silent `discordFailed`, so Discord slowness alone cannot trip the 1 s deadline (background: [Discord calendar snapshots](discord-snapshots.md)). Sustained `ReadFailure` with canonical errors points at database health: route to the authorized operator. An `unavailable` teaser with no warning has two silent paths: a null database handle returns unavailable without logging, and an empty canonical list plus a failed or timed-out Discord read (`discordFailed`) returns unavailable without calling `warnHomeFallback`. |
+| `discord widget unavailable; rendering the join fallback` | The `/join` widget probe got a non-2xx (other than 429) or threw, while the previous posture was available (`wasAvailable` gate in `src/discord-widget.ts`). Cold isolates start optimistic, so the first failing probe warns; a sustained outage warns once. | The static fallback ("Live server preview is unavailable — the join button above still works.", `src/screens/join.tsx`): no presence snapshot, no preview loader. Join still works. | No page. | Search logs by `guild_id` over the incident window; confirm the probe target in `src/discord-widget.ts` (public `widget.json` for that guild: no member data, no cookies). | `guild_id` plus `status` (non-2xx site) or `exception` (class name, throw site); never a URL, body, token or member field | One transition during a Discord incident needs nothing. A fallback that persists across windows points at the widget switch or guild config (`DISCORD_GUILD_ID`, see [config](config.md)): route to the authorized operator. A 429 never warns: it carries no new information, so the probe keeps the previous verdict and snapshot (see below). |
+| `Member stats unavailable; hiding the stats block.` | A profile stats read threw: the 500 ms budget wrapper (`memberStatsWithBudget`) or the `web_v1` view read (`readMemberStats`) in `src/profiles/stats.ts`. | The profile page renders with no stats block (`stats` null hides it, `src/profiles/pages.tsx`); the read itself is not refused. | No page. | Search logs by incident window only (message-only, no join key); then check the same configured bot `web_v1` source as counts ([config](config.md)). Never web migrations or alternate credentials. | None (message only) | Occasional warnings under load are budget trips, not proof of a broken view: when the 500 ms budget expires the wrapper aborts the in-flight `web_v1` query, and the aborted read then warns as it settles (`throwIfAborted`/rejection inside `readMemberStats`). Stats hidden across windows point at bot-source health: route to the authorized operator. Only a missing database/source (no bot URL, null handle) resolves to null silently, so a quiet window with hidden stats proves nothing only in those cases. |
+
+A 429 from the widget probe is not a verdict change: the probe keeps the
+previous availability and snapshot and logs nothing, because a rate limit
+says nothing new about whether the widget is up. Expect quiet windows that
+still serve a stale snapshot during 429 episodes, and a single warning only
+when a later probe confirms the widget down (non-2xx) or the fetch throws.
+
 ## Privacy and boundaries
 
 Request logs allowlist only `event`, `request_id`, `method`, `route`, `status`,
@@ -301,7 +468,12 @@ investigating an incident.
 Warning lines follow the same boundary. `roster upsert failed` and
 `prior session sweep failed` (`src/index.tsx`) and `guild auto-join failed`
 (`src/auth/routes.ts`) carry `request_id` and, where there is one, the exception
-class; they never carry a member's Discord ID. The join journey lines carry
+class; they never carry a member's Discord ID. `discord sign-in failed`
+(`src/auth/routes.ts`) carries the exception class, kind/status and the
+validated `request_id`, and `guild auto-join failed` adds only the configured
+`guild_id`, never a member identity (see
+[Discord sign-in and guild auto-join warnings](#discord-sign-in-and-guild-auto-join-warnings)).
+The join journey lines carry
 no member identity either: the prune line carries the exception class (never the message), the attempt line
 carries the exception class and `outcome`, and the token-exchange line carries
 the exception class, kind/status, sanitized `source` and `outcome` (see
@@ -339,6 +511,25 @@ the calendar and home teaser (`test/discord-guild-admission-degrade.test.ts:101-
 This source does not emit a `Discord snapshot outcome` line. Check the configured
 [`DISCORD_GUILD_ID`](config.md), rather than treating the warning as a Discord
 or snapshot-store outage.
+
+## Rules last-updated stamp warning
+
+`Invalid community.rules_last_updated — hiding /rules stamp` is the exact fixed
+`console.warn` message when `rulesLastUpdated`
+(`src/rules-last-updated.ts:19-22`) refuses the configured value. Two triggers
+share the one line: a non-empty value that fails the strict `YYYY-MM-DD` shape
+(for example `someday`, `2026-9-01`, `2026/09/01`), or a well-shaped but
+impossible calendar date (month `00` or `13` and up, day `00` or past the
+month's length, `February 29` on a non-leap year under Gregorian century
+rules). An empty or whitespace-only value hides the stamp silently with no
+warning.
+
+| Message | Meaning | Severity | First read-only check | Fields carried |
+| --- | --- | --- | --- | --- |
+| `Invalid community.rules_last_updated — hiding /rules stamp` | The configured stamp value was refused, so `/rules` and `/rules.md` render without the "Last updated" stamp. The page itself stays healthy: it still answers 200 with its normal cache headers and no session, cookie or database read. | No page: a hidden stamp is a content gap, never an outage. | Read the [`RULES_LAST_UPDATED`](config.md) value in the deployed config and validate it against the parser in `src/rules-last-updated.ts`: strict `YYYY-MM-DD` shape plus a real-calendar date (month lengths, Gregorian leap years). Find sightings with the message **contains** filter from [Find a request](#find-a-request). | None (message only): the line carries no fields and never echoes the refused value, so correlate by deploy/config-change time. |
+
+Escalation boundary: a content/config correction — set a valid `YYYY-MM-DD`
+date. No parser, validation, stamp-rendering, or config-schema change.
 
 ## Discord snapshot outcome
 

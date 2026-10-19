@@ -718,7 +718,7 @@ if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(proce
 }
 const count = readFileSync(attempts, "utf8").length;
 const pass = count === Number(process.env.SMOKE_SUCCEED_ON_ATTEMPT);
-console.log(pass ? "smoke: 23 routes, 0 failed assertions" : "FAIL /join: expected HTTP 200; actual HTTP 503");
+console.log(pass ? "smoke: 24 routes, 0 failed assertions" : "FAIL /join: expected HTTP 200; actual HTTP 503");
 process.exit(pass ? 0 : 1);
 `,
       { mode: 0o700 },
@@ -871,7 +871,7 @@ describe("production post-promotion verification (offline)", () => {
 describe("production release-docs contract (source)", () => {
   it("explains gradual promotion, manual restoration and release gating without static serving-state claims", () => {
     const readme = readFileSync("README.md", "utf8");
-    const heading = "### Production (gated manual deployment)";
+    const heading = "### Production (gated automatic promotion)";
     expect(readme).toContain(heading);
     expect(readme).not.toContain("### Production (not live");
     const section = readme.slice(

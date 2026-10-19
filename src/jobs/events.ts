@@ -13,6 +13,7 @@ type AttemptRow = {
   state: SyncAttempt["state"];
   request_attempts: number;
   next_attempt_at: Date | null;
+  terminal_reason?: string | null;
   discord_event_id?: string | null;
 } & (
   | { action: "event.upsert"; payload: EventUpsert }
@@ -28,6 +29,8 @@ function attemptFrom(row: AttemptRow): SyncAttempt {
     state: row.state,
     requestAttempts: row.request_attempts,
     nextAttemptAt: row.next_attempt_at,
+    // Terminal-intent marker; absent on pre-migration rows (null then).
+    terminalReason: row.terminal_reason ?? null,
     // Absent on pre-mirror rows (hermetic doubles leave it undefined, which
     // the consumer treats as mirrored to preserve the bot path).
     ...("discord_event_id" in row ? { discordEventId: row.discord_event_id ?? null } : {}),
@@ -264,6 +267,27 @@ export function pgEventStore(
       await sql`select set_config('lock_timeout', ${`${FAIL_SYNC_DB_TIMEOUT_MS}ms`}, true), set_config('statement_timeout', ${`${FAIL_SYNC_DB_TIMEOUT_MS}ms`}, true)`;
       await sql`update event_sync_attempts set state = 'failed'
         where idempotency_key = ${idempotencyKey}::uuid and state = 'pending'`;
+    },
+    async noteTerminalIntent(idempotencyKey, reason) {
+      // Terminal-intent marker, not settlement: the live row stays pending so
+      // redelivery can still settle it. Same server-side bound as failSync so
+      // a wedged UPDATE never holds the batch or leaks session settings.
+      // First writer wins (`terminal_reason is null`): noting twice — first
+      // delivery and settlement-only redelivery — keeps the original reason.
+      const pool = sql as unknown as {
+        begin?: (fn: (tx: TxClient) => Promise<void>) => Promise<void>;
+      };
+      if (typeof pool.begin === "function") {
+        await pool.begin(async (tx) => {
+          await tx`select set_config('lock_timeout', ${`${FAIL_SYNC_DB_TIMEOUT_MS}ms`}, true), set_config('statement_timeout', ${`${FAIL_SYNC_DB_TIMEOUT_MS}ms`}, true)`;
+          await tx`update event_sync_attempts set terminal_reason = ${reason}
+            where idempotency_key = ${idempotencyKey}::uuid and state = 'pending' and terminal_reason is null`;
+        });
+        return;
+      }
+      await sql`select set_config('lock_timeout', ${`${FAIL_SYNC_DB_TIMEOUT_MS}ms`}, true), set_config('statement_timeout', ${`${FAIL_SYNC_DB_TIMEOUT_MS}ms`}, true)`;
+      await sql`update event_sync_attempts set terminal_reason = ${reason}
+        where idempotency_key = ${idempotencyKey}::uuid and state = 'pending' and terminal_reason is null`;
     },
     needsSync: async (eventKey) => {
       // A single-key eligibility check always answers an array, never a page.
