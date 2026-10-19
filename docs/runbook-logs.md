@@ -234,6 +234,71 @@ secret or the live access token.
 | `discord sign-in failed` | The token exchange (`exchangeCode`) or user fetch (`fetchUser`) threw; the failure is classified by `failureMeta` in `src/discord.ts`. Read `kind` plus `status`, not volume alone: `expired_grant` (400 plus `invalid_grant`) is a spent, replayed or timed-out approval; `provider_reject` (any other 4xx, for example `invalid_client` after a secret rotation or `invalid_request` from a bad redirect URI) points at [`DISCORD_CLIENT_ID` / `DISCORD_CLIENT_SECRET` and the registered redirect URI](config.md), not at Discord health; `rate_limited`, `provider_outage` and `transport_failure` point at Discord or wire health; `unknown` with a null status is an app-side throw. | Sign-in blocked. `rate_limited`, `provider_outage` and `transport_failure` (`isProviderOutage` in `src/discord.ts`) redirect to `/?n=signin_unavailable`; every other kind redirects to `/?n=signin_failed`. | Filter logs for the line and split by `kind` and `status`. A `provider_reject` burst with status 400/401 after a deploy or rotation points at the OAuth config above; `provider_outage`, `transport_failure` and `rate_limited` point at Discord or wire health; a lone `unknown` with a null status points at an app-side throw, so read the `exception` class. Never replay a member sign-in to investigate. | `exception` (class only, never the message, which can quote the secret), `kind`, `status`, validated `request_id` |
 | `guild auto-join failed` | Adding the fresh member to the guild (`addGuildMemberDetailed` in `src/discord.ts`) returned a non-member outcome. Read `kind`: `rate_limited` is Discord throttling (a usable backoff rides to the recovery response as a `Retry-After` header); `provider_outage` is a Discord 5xx; `transport_failure` is a fetch throw; `forbidden` (403) is a bot permission problem, not an outage; `failed` is the config-shaped outcome (blank bot token, malformed guild or user id, or any other non-429/403/5xx status), so a sustained `failed` run points at [`DISCORD_GUILD_ID` / `DISCORD_BOT_TOKEN`](config.md) and the bot's guild membership, not at Discord health. | None on sign-in: the session is still issued as a non-member session and the member lands on the `/?n=join_failed` recovery page with the invite fallback; the remembered destination is re-recorded for the retry. | Filter logs for the line and split by `kind`. A sustained `failed` run points at the guild/bot config above; `forbidden` points at the bot's guild role and permissions; `rate_limited`, `provider_outage` and `transport_failure` point at Discord or wire health. Never replay a member sign-in to investigate. | `request_id`, `guild_id` (the configured guild actually used, not a member identity), `kind` |
 
+### Analytics write-degradation warnings
+
+Two `console.warn` lines mark best-effort analytics writes that rejected or
+outran the 500 ms response deadline (`recordSearch` in
+`src/events/search-log.ts`, `recordBoardView` in
+`src/hotzones/board-log.ts`). None pages: neither outcome fails the request,
+so a missing analytics row is a dashboard gap, never a member-facing failure.
+Promoting these warnings to `error.alert` was considered and rejected for the
+same reason the join attempt-write failure above stays a warning: the request
+itself succeeded.
+
+For event-search warnings, `recordSearch` is awaited before the page
+continues. A rejection warning may be emitted before or after the response
+continues, depending on whether the write wins the deadline race. A
+`LogWriteDeadline` warning can delay the response by up to 500 ms.
+
+| Message | Meaning | Member impact | First read-only check | Fields carried |
+| --- | --- | --- | --- | --- |
+| `Event search unavailable for logging; serving results without recording.` | The `event_search_logs` `INSERT` rejected, or the 500 ms response deadline fired first (`src/events/search-log.ts`). | None on this request. The results were still served; only the analytics row may be missing. | Filter logs for the exact message over the incident window; then run the shared aggregate check below. | `exception` (the rejection class name, or the fixed `LogWriteDeadline` string; never the raw error text, which can carry the DSN) |
+| `Board view unavailable for logging; serving results without recording.` | The `board_view_logs` `INSERT` rejected, or the 500 ms response deadline fired first (`src/hotzones/board-log.ts`). Member-board views queue behind the member-read boundary and write only after a released 200. | None on this request. The board was still served; only the analytics row may be missing. | Filter logs for the exact message over the incident window; then run the shared aggregate check below. | `exception` (the rejection class name, or the fixed `LogWriteDeadline` string; never the raw error text) |
+
+The `exception` field tells a rejection apart from a deadline expiry: a
+rejected write carries the error's class name (with a `typeof` fallback for a
+non-`Error` throw), while an expired response wait carries the fixed string
+`LogWriteDeadline`. The deadline is a race, not a cancellation: the write
+promise keeps running after the 500 ms timer fires, so a `LogWriteDeadline`
+warning may still be followed by a settled row — and if that late write then
+rejects, the same request logs a second warning with the rejection class.
+Never equate warning count with lost requests, and never assume one warning
+per affected request.
+
+These two lines are fail-open anonymous analytics. Do not confuse them with
+the fail-closed mandatory auditing rows in the table above (`Member read audit
+failed; refusing contents.`, `Member data access could not be recorded;
+refusing to serve the read.`): a member-data read is refused when its
+`member_data_access_logs` row cannot be written, while a search or board view
+is always served when its analytics row cannot. The analytics tables store
+normalized dimensions (`normalized_query` on event searches;
+`normalized_board_key`, `scope`, and `season` on board views) with per-row
+result counts and `occurred_at` timestamps. They carry no member identity by
+design, so erasure leaves them because no row belongs to a member (see [What
+is retained and why](member-erasure.md#what-is-retained-and-why)). Retention,
+prune batching,
+and outage-time refusal policy are decided in the [retention
+ledger](retention-ledger.md) and the [database-outage
+contract](db-outage-matrix.md); this section changes none of them.
+
+Shared first check for either line (read-only; run no `INSERT`, `DELETE`,
+replay, lock clear, or credential change to investigate):
+
+```sql
+-- Incident-window aggregates. Compare against http.request volume on the
+-- serving routes over the same window; a gap inside one window matches the
+-- warn timestamps. If writes never resume, route database insert health to
+-- the authorized operator.
+SELECT count(*), max(occurred_at) FROM event_search_logs WHERE occurred_at > now() - interval '1 hour';
+SELECT count(*), max(occurred_at) FROM board_view_logs WHERE occurred_at > now() - interval '1 hour';
+```
+
+Neither line carries a `request_id`, so correlate by time window and route,
+not by ID. Keep raw `normalized_query` and `normalized_board_key` values,
+member identity, cookies, tokens, connection strings, and invented request IDs
+out of diagnostic output: the aggregates above are sufficient, and the
+warning's `exception` is a class name, never the message.
+
 ### Missing sync-queue binding warning
 
 `event write-back due but SYNC_EVENT_QUEUE is not bound` (`src/events/sync.ts`,
