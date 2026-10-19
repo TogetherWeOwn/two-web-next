@@ -114,16 +114,47 @@ describe.skipIf(!process.env.DATABASE_URL)("reconcile scheduling (test Postgres)
     await fixture?.dispose();
   });
 
+  // Observe the held advisory lock rather than guessing with a sleep.
+  // pg_try_advisory_xact_lock never blocks, so there is no waiter in
+  // pg_stat_activity: the holder sits idle-in-transaction on a Client wait.
+  // Poll pg_locks (joined to pg_stat_activity for the database scope) for
+  // the holder pid's granted advisory lock instead. performance's real
+  // clock bounds failure. House pattern: waitForEventLock() at
+  // test/event-mutation-invariants.test.ts:462-476.
+  async function waitForReconcileLock(pid: number): Promise<void> {
+    const deadline = performance.now() + 2000;
+    while (performance.now() < deadline) {
+      const [held] = await sql<{ n: number }[]>`
+        select count(*)::int as n from pg_locks l
+        join pg_stat_activity a on a.pid = l.pid
+        where l.pid = ${pid} and l.locktype = 'advisory' and l.granted
+          and a.datname = current_database()`;
+      if (held!.n > 0) return;
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    throw new Error("reconcile flight did not hold its advisory lock");
+  }
+
   it("held events:reconcile flight skips without store calls (real pg flight)", async () => {
     const store = fakeStore() as FakeStore;
     const jobs = reconcileJobs(store);
     const flight = pgSingleFlight(sql);
     let release!: () => void;
     const gate = new Promise<void>((r) => (release = r));
-    const first = flight("events:reconcile", async () => {
+    let holderPid = 0;
+    let entered!: () => void;
+    const enteredGate = new Promise<void>((r) => (entered = r));
+    const first = flight("events:reconcile", async (tx) => {
+      // The flight body runs only after pg_try_advisory_xact_lock succeeds,
+      // so entry proves acquisition; the pid lets the observer confirm the
+      // server-side lock instead of racing a sleep.
+      const [row] = await (tx as unknown as TxClient)`select pg_backend_pid() as pid`;
+      holderPid = (row as { pid: number }).pid;
+      entered();
       await gate;
     });
-    await new Promise((r) => setTimeout(r, 200)); // first now holds the lock
+    await enteredGate;
+    await waitForReconcileLock(holderPid);
     const skipped = await runScheduled(RECONCILE_CRON, flight, jobs);
     release();
     expect(await first).toBe(true);
