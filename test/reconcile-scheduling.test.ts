@@ -153,10 +153,21 @@ describe.skipIf(!process.env.DATABASE_URL)("reconcile scheduling (test Postgres)
       entered();
       await gate;
     });
-    await enteredGate;
-    await waitForReconcileLock(holderPid);
-    const skipped = await runScheduled(RECONCILE_CRON, flight, jobs);
-    release();
+    let skipped = false;
+    try {
+      // Race entry against the flight so a non-entering flight fails fast
+      // with its real error instead of hanging until testTimeout.
+      await Promise.race([
+        enteredGate,
+        first.then((ran) => {
+          if (!ran) throw new Error("reconcile flight did not acquire its lock");
+        }),
+      ]);
+      await waitForReconcileLock(holderPid);
+      skipped = await runScheduled(RECONCILE_CRON, flight, jobs);
+    } finally {
+      release();
+    }
     expect(await first).toBe(true);
     expect(skipped).toBe(false);
     expect(jobs.reconcile).not.toHaveBeenCalled();
