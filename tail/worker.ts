@@ -1606,7 +1606,7 @@ export function createTailWorker(
       try {
         reader.releaseLock();
       } catch {
-        /* A pending stalled read stays with the stream; cancel below settles it. */
+        /* A pending stalled read stays pending with the stream; the caller's independent deadline wins. */
       }
     }
   }

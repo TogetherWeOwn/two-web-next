@@ -344,6 +344,12 @@ describe("GET /up", () => {
         queue: unknownQueue,
         member_access_log_enforcement: "enforcing",
       });
+      // Emission proof: the redaction assert below is vacuous when nothing is
+      // logged, so pin the expected warn first (silencing the logger fails here).
+      expect(warning).toHaveBeenCalledWith(
+        "Health check could not establish database/schema readiness.",
+        { exception: "Error" },
+      );
       expect(JSON.stringify(warning.mock.calls)).not.toContain("private credential");
     } finally {
       warning.mockRestore();

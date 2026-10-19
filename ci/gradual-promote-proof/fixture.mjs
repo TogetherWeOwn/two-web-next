@@ -7,7 +7,7 @@
 // binding: proof-lib.mjs refuses to generate a config that adds one.
 //
 // The route table satisfies the real deploy smoke checker (bin/smoke.mjs,
-// 23 GETs) so the pinned gradual-promote action runs its genuine gates
+// 24 GETs) so the pinned gradual-promote action runs its genuine gates
 // against this fixture instead of the live site. The fail-up mode makes
 // /up answer 503 with a down envelope, which is a real health failure the
 // checker rejects on status and body shape.
@@ -34,6 +34,8 @@ function proofHeaders(env, extra = {}) {
   return {
     "content-security-policy": "default-src 'none'; frame-ancestors 'none'",
     "x-content-type-options": "nosniff",
+    "referrer-policy": "strict-origin-when-cross-origin",
+    "x-frame-options": "DENY",
     "x-proof-version-id": typeof metadata.id === "string" ? metadata.id : "unbound",
     "x-proof-version-tag": typeof metadata.tag === "string" ? metadata.tag : "untagged",
     "x-proof-label": typeof env?.PROOF_LABEL === "string" ? env.PROOF_LABEL : "unlabelled",
