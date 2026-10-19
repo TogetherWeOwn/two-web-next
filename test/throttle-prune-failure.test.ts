@@ -4,12 +4,16 @@
 // middleware catch turns that into an admission (fail-open), while the direct
 // join path (no catch) turns a 429 into a 500. Hermetic: an in-memory SQL
 // double with a throwing DELETE, no database required.
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { checkJoinThrottle } from "../src/join/service";
 import type { Sql } from "../src/sessions";
 import { withThrottleTx } from "./helpers/throttle-tx-double";
 
-function fixture(failPrune: boolean) {
+class PruneBoomError extends Error {
+  override name = "PruneBoomError";
+}
+
+function fixture(failPrune: boolean, pruneError: unknown = new Error("prune boom")) {
   const hits: string[] = [];
   const sql = withThrottleTx((async (strings: TemplateStringsArray, ...values: unknown[]) => {
     const query = strings.join("?");
@@ -20,7 +24,7 @@ function fixture(failPrune: boolean) {
       return [];
     }
     if (query.includes("DELETE FROM web_throttle_hits")) {
-      if (failPrune) throw new Error("prune boom");
+      if (failPrune) throw pruneError;
       return [];
     }
     throw new Error("Unexpected throttle statement");
@@ -45,5 +49,28 @@ describe("throttle prune failure keeps the decided verdict", () => {
     const verdict = await checkJoinThrottle(sql, bucket, 2);
     expect(verdict).toEqual({ limited: false });
     expect(hits).toEqual([bucket]);
+  });
+
+  it("logs the exception class, never the message, and keeps the refusal", async () => {
+    const { hits, sql } = fixture(true, new PruneBoomError("prune boom detail"));
+    const bucket = "prune-failure-warn-class";
+    hits.push(bucket, bucket);
+    const warns: unknown[][] = [];
+    const spy = vi.spyOn(console, "warn").mockImplementation((...args: unknown[]) => {
+      warns.push(args);
+    });
+    try {
+      const verdict = await checkJoinThrottle(sql, bucket, 2);
+      expect(verdict).toEqual({ limited: true, retryAfter: 30 });
+      expect(hits).toEqual([bucket, bucket]);
+    } finally {
+      spy.mockRestore();
+    }
+    expect(warns).toHaveLength(1);
+    const first = warns[0]!;
+    expect(first[0]).toBe("Join throttle prune failed; keeping the decided verdict.");
+    expect(first[1]).toMatchObject({ exception: "PruneBoomError" });
+    // The DB error text (which can quote statement bindings) never reaches the log.
+    expect(JSON.stringify(first)).not.toContain("prune boom detail");
   });
 });
