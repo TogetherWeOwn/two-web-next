@@ -490,6 +490,13 @@ describe("retention ledger agent-event rows (L8a)", () => {
     }
     const rows = doc.split("\n").filter((line) => line.startsWith("| `agent_"));
     expect(rows, "one dedicated row per agent-event table").toHaveLength(5);
+    // Contiguity: no blank line may separate the agent rows from the
+    // board_view_logs row — a blank line ends the GFM table and the rows
+    // would render as raw pipe text outside it.
+    const lines = doc.split("\n");
+    const boardIdx = lines.findIndex((line) => line.startsWith("| `board_view_logs`"));
+    expect(boardIdx, "board_view_logs row precedes the agent rows").toBeGreaterThanOrEqual(0);
+    expect(lines.slice(boardIdx + 1, boardIdx + 6)).toEqual(rows);
     for (const claim of [
       "AGENT_EVENT_AUDIT_RETENTION_DAYS = 90",
       "IDEMPOTENCY_KEY_RETENTION_DAYS = 90",
@@ -515,6 +522,7 @@ describe("retention ledger agent-event rows (L8a)", () => {
       "src/agent-events/shield.ts",
       "src/agent-events/rate-limit.ts",
       "src/agent-events/audit.ts",
+      "bin/import/audit.mjs",
       "../drizzle/0001_agent-events.sql",
       "../drizzle/1008_agent-event-idempotency-prune-idx.sql",
       "../drizzle/1019_shared-agent-events.sql",
@@ -541,6 +549,14 @@ describe("retention ledger agent-event rows (L8a)", () => {
     // Grants are credentials: expiry/disability rejects admission, deletes nothing.
     expect(line("| `agent_event_grants`")).toMatch(/retain indefinitely/i);
     expect(line("| `agent_event_grants`")).toMatch(/no app path deletes a grant/i);
+    // A grant with audit history cannot be deleted: the 1018 append-only
+    // trigger refuses the ON DELETE SET NULL rewrite; the cascade only
+    // applies when no audits remain.
+    expect(line("| `agent_event_grants`")).toMatch(/while any.*audit.*refuses the deletion/i);
+    expect(line("| `agent_event_grants`")).toMatch(
+      /only a grant with no remaining audits could cascade/i,
+    );
+    expect(line("| `agent_event_grants`")).toContain("bin/import/audit.mjs");
     // Hits mirror the throttle row: the cutoff is an age, not a timer.
     expect(line("| `agent_event_hits`")).toMatch(/an age cutoff, not a deletion timer/i);
     expect(line("| `agent_event_hits`")).toMatch(/linger on a quiet ingress until a later pass/i);
@@ -548,6 +564,11 @@ describe("retention ledger agent-event rows (L8a)", () => {
     expect(line("| `agent_event_audits`")).toMatch(/cutoff-exact rows survive/i);
     expect(line("| `agent_event_idempotency_keys`")).toMatch(/cutoff-exact rows survive/i);
     expect(line("| `agent_event_idempotency_keys`")).toMatch(/never deleted by the request path/i);
+    // Runtime writer plus the legacy import writer — never a sole-writer claim.
+    expect(line("| `agent_event_audits`")).toMatch(/runtime writer/i);
+    expect(line("| `agent_event_audits`")).toContain("bin/import/audit.mjs");
+    expect(line("| `agent_event_audits`")).not.toMatch(/sole writer/i);
+    expect(line("| `agent_event_idempotency_keys`")).toContain("bin/import/audit.mjs");
   });
 
   it("negative control: an invented row fails the pin", () => {
@@ -685,6 +706,16 @@ describe("retention ledger agent-event rows (L8a)", () => {
       offenders,
       `only shield/rate-limit may delete agent_event_hits: ${offenders.join(", ")}`,
     ).toEqual([]);
+    // Full statement including the WITH candidates CTE that carries the age
+    // and the bound: per-file presence is not enough — either limiter
+    // statement drifting must turn the suite red (1 in shield, 2 in rate-limit).
+    const full =
+      "WITH candidates AS (SELECT id FROM agent_event_hits WHERE at < now() - interval '5 minutes' ORDER BY id LIMIT 1000 FOR UPDATE SKIP LOCKED) " +
+      window;
+    const fullCount = (path: string): number =>
+      normalizeSqlWindow(read(path)).split(full).length - 1;
+    expect(fullCount("src/agent-events/shield.ts")).toBe(1);
+    expect(fullCount("src/agent-events/rate-limit.ts")).toBe(2);
     // Budget is the rows in the last 60 s; five minutes is the prune age.
     for (const path of ["src/agent-events/shield.ts", "src/agent-events/rate-limit.ts"]) {
       const body = read(path);
