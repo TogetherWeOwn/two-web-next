@@ -16,6 +16,7 @@
 import type { Hono } from "hono";
 import { deleteCookie, getSignedCookie } from "hono/cookie";
 import { DiscordError, exchangeCode, failureMeta, fetchUser } from "../discord";
+import { isDatabaseUnavailable } from "../db/errors";
 import { hasOversizedOAuthParams } from "../oauth-code-state-length";
 import type { Env } from "../env";
 import { inviteDestination } from "../invite";
@@ -123,7 +124,13 @@ export function registerJoinCallbackRoutes(
     const store =
       state && expected && state === expected ? await hooks.storeFor(c).catch(() => null) : null;
     const admitted =
-      store && (await store.journeys.consume(await hashToken(state!), "join").catch(() => false));
+      store &&
+      (await store.journeys.consume(await hashToken(state!), "join").catch((err: unknown) => {
+        // A classified store outage is not an expired link. Let the shared
+        // handler render its branded 503 without logging driver details here.
+        if (isDatabaseUnavailable(err)) throw err;
+        return false;
+      }));
 
     // They pressed Cancel on the consent screen, or Discord answered the
     // approval with an error: nothing to exchange. Legacy renders the recovery
