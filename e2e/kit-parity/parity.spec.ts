@@ -45,6 +45,28 @@ test.beforeAll(async ({ playwright }) => {
       }),
     );
   }
+  // Ranked RSVP before the first cache-settling read: anonymous /events
+  // entries are isolate-local (src/events/anon-cache.ts) and the RSVP PUT
+  // retires only the Hono isolate, so establishing the going RSVP here means
+  // every guest entry settled later on either isolate already carries
+  // count=1. This spends the journey's one memoized QA login early; the
+  // afterAll withdrawal and the exactly-one-login assertion are unchanged.
+  await memberGoingRsvp();
+  // Leave the shared jar guest-clean: the QA login above stores its session
+  // cookie in the Hono context, and every later api(hono) call would send
+  // it — turning the guest-contract tests (public cache-control on /events,
+  // the 302 member-board bounce) into member reads. Recreate the context
+  // instead: the memoized pair stays live (the RSVP PUT never rotates), so
+  // later memberCookie() calls replay it explicitly with no second login.
+  const hono = targets.find((target) => target.name === "hono")!;
+  await contexts.get(hono.name)!.dispose();
+  contexts.set(
+    hono.name,
+    await playwright.request.newContext({
+      baseURL: hono.origin,
+      ignoreHTTPSErrors: hono.ignoreHTTPSErrors,
+    }),
+  );
 });
 
 test.afterAll(async () => {

@@ -168,6 +168,27 @@ test("the member RSVP cleanup flag is armed before parsing the response", () => 
   );
 });
 
+test("the ranked RSVP is established before the first cache-settling /events GET", () => {
+  // The cross-target events-calendar comparison races the documented
+  // isolate-local anon-cache convergence window (src/events/anon-cache.ts:
+  // other isolates converge only on expiry, 60 s on /events) unless every
+  // settled guest entry already carries the ranked count. The RSVP PUT
+  // retires only the Hono worker's isolate, so the ranked RSVP must be
+  // established before the first anonymous GET /events settles an entry on
+  // either isolate; otherwise the Kit entry holds count=0 and the
+  // comparison passes only when over 60 s elapsed since that GET.
+  const spec = readFileSync(new URL("../e2e/kit-parity/parity.spec.ts", import.meta.url), "utf8");
+  const lines = spec.split("\n");
+  const rsvpLine = lines.findIndex((line) => /^\s*await memberGoingRsvp\(\);/.test(line)) + 1;
+  const getLine = lines.findIndex((line) => /\.get\("\/events"\)/.test(line)) + 1;
+  assert(rsvpLine > 0, "memberGoingRsvp must be called at least once");
+  assert(getLine > 0, "an anonymous GET /events must exist");
+  assert(
+    rsvpLine < getLine,
+    `ranked RSVP established at line ${rsvpLine}, after the first cache-settling GET /events at line ${getLine}`,
+  );
+});
+
 test("the required check runs the parity selftests in their own fail-closed step", () => {
   const step = job
     .split(/\n      - /)
