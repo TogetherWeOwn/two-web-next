@@ -19,6 +19,7 @@ import {
 import usersMigration from "../drizzle/0000_init-users.sql?raw";
 import joinMigration from "../drizzle/1000_join-attempts-throttle.sql?raw";
 import sessionsMigration from "../drizzle/1022_web-sessions-oauth-journeys.sql?raw";
+import graceMigration from "../drizzle/1030_session-predecessor-grace.sql?raw";
 
 const MOD_ROLE = "1546777856984481792";
 const SESSION_COOKIE = "__Host-two_session";
@@ -254,6 +255,7 @@ describe.skipIf(!process.env.DATABASE_URL)(
       "join_attempts",
       "users",
       "web_oauth_journeys",
+      "web_session_grace",
       "web_sessions",
       "web_throttle_hits",
     ];
@@ -264,7 +266,7 @@ describe.skipIf(!process.env.DATABASE_URL)(
       admin = postgres(process.env.DATABASE_URL!, { max: 1 });
       await admin.unsafe(`CREATE SCHEMA ${schema}`);
       sql = postgres(process.env.DATABASE_URL!, { max: 4, connection: { search_path: schema } });
-      for (const file of [usersMigration, joinMigration, sessionsMigration])
+      for (const file of [usersMigration, joinMigration, sessionsMigration, graceMigration])
         for (const stmt of file.split("--> statement-breakpoint"))
           if (stmt.trim()) await sql.unsafe(stmt);
     });
