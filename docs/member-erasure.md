@@ -70,6 +70,23 @@ For ONE Discord id, in one transaction:
 
 A second apply is a no-op: every count returns 0.
 
+## Concurrent rotations
+
+A rotation that is already in flight when erasure reaches its session
+removal cannot smuggle its successor past the erase. The session removal
+repeats its DELETE with a fresh snapshot until one pass finds no session
+row left for the member, and the reported `web_sessions` count is the
+rows the erase itself physically deleted, accumulated across passes. A
+rotation that starts after erasure has removed its source fails on the
+missing row without minting a successor.
+
+Boundary: this converges over rotations of sessions that existed when
+erasure ran. It is not a tombstone and not a sign-in ban: a genuinely
+new session created after erasure authenticates normally, and a sign-in
+racing the final pass can land after it. Retained-table policy is
+unchanged, and nothing here authorizes running erasure outside the
+Scope below.
+
 ## What is retained and why
 
 - `events.created_by` / `featured_contents.created_by` stay in place. Each
