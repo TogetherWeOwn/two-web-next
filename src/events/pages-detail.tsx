@@ -134,6 +134,7 @@ export const EventPage: FC<{
               dangerouslySetInnerHTML={{
                 __html: renderGoingCount(e.eventKey, {
                   going: e.goingCount,
+                  occupancy: e.goingOccupancy,
                   capacity: e.capacity,
                   showSpotsLeft: true,
                   announcement: null,
@@ -246,7 +247,10 @@ export const EventPage: FC<{
           ) : null}
           <p>
             Attendees shown at page load.{" "}
-            <a href={path} data-testid="event-attendees-refresh">
+            <a
+              href={attendeesPaging.page <= 1 ? path : `${path}?attendees=${attendeesPaging.page}`}
+              data-testid="event-attendees-refresh"
+            >
               Refresh attendees
             </a>
             .

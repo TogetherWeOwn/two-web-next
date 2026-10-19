@@ -117,6 +117,22 @@ describe("QA identity admission before session issuance", () => {
     await expectRefusal(fixture, await login(fixture.bindings, "qa-member", token));
   });
 
+  it.each([513, 8192])(
+    "rejects an overlong %i-character presented token like an unknown identity",
+    async (len) => {
+      const fixture = isolated();
+      await expectRefusal(fixture, await login(fixture.bindings, "qa-member", "x".repeat(len)));
+    },
+  );
+
+  it("admits a presented token at exactly the 512-character boundary", async () => {
+    const atCap = "z".repeat(512);
+    const fixture = isolated({ QA_AUTH_TOKEN: atCap });
+    const response = await login(fixture.bindings, "qa-member", atCap);
+    expect(response.status).toBe(204);
+    expect(fixture.create).toHaveBeenCalledTimes(1);
+  });
+
   it("rejects a missing token", async () => {
     const fixture = isolated();
     const response = await app.request(

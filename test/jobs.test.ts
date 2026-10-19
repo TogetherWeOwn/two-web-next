@@ -586,10 +586,14 @@ describe("queue ledger (N3)", () => {
       expect(first.acked && second.acked).toBe(true);
       expect(send).toHaveBeenCalledOnce();
       expect(ledger.rows.size).toBe(1);
+      // AB7 producer deadline: the 2000 ms bound releases the lease while the
+      // already-started send keeps its tracked row (row-without-message fails
+      // visible per N3).
+      expect(lock.held.has(uniqueKey("e1"))).toBe(false);
       accepted();
       await vi.advanceTimersByTimeAsync(0);
       expect(ledger.rows.size).toBe(1); // acceptance is ambiguous until its consumer settles it
-      expect(lock.held.has(uniqueKey("e1"))).toBe(true);
+      expect(lock.held.has(uniqueKey("e1"))).toBe(false);
     } finally {
       vi.useRealTimers();
     }
@@ -796,7 +800,14 @@ describe("cron", () => {
       lock: memLock(),
     });
     expect(order).toEqual(["close", "stale"]);
-    expect(r).toEqual({ closed: 2, materialized: 0, resynced: 2 });
+    expect(r).toEqual({
+      closed: 2,
+      materialized: 0,
+      resynced: 2,
+      absorbed: 0,
+      failed: 0,
+      deferred: 0,
+    });
     expect(sent).toHaveLength(2);
   });
 

@@ -96,6 +96,7 @@ describe("kitProfileDeps stats wiring", () => {
       tenureDays: 637,
       rankKey: "community_regular",
       isCurrentMember: true,
+      milestonesTruncated: false,
       milestones: milestones.map((row) => ({
         type: row.milestone,
         occurredAt: new Date(row.occurred_at),

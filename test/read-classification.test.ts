@@ -36,10 +36,14 @@ const SEARCH_WIDGET =
   'select "normalized_query", count(*), max("occurred_at") from "event_search_logs" where "event_search_logs"."result_count" = $1 group by "event_search_logs"."normalized_query" order by count(*) desc, "event_search_logs"."normalized_query" asc limit $2';
 const GOING_COUNTS_TWO =
   'select "event_id", count(*) from "rsvps" where ("rsvps"."event_id" in ($1, $2) and "rsvps"."status" = $3) group by "rsvps"."event_id"';
+// Attributable (named-only) going count: joins users so the badge agrees with
+// the roster; the join qualifies "rsvps"."event_id".
+const GOING_COUNTS_NAMED =
+  'select "rsvps"."event_id", count(*) from "rsvps" inner join "users" on "rsvps"."user_id" = "users"."id" where ("rsvps"."event_id" in ($1, $2) and "rsvps"."status" = $3 and "users"."username" <> $4) group by "rsvps"."event_id"';
 const MEMBER_ROW =
   "select member_id, joined_at, tenure_days, rank_key, is_current_member from web_v1.members where member_id = $1 limit 1";
 const MILESTONE_ROW =
-  "select member_id, milestone, occurred_at, detail from web_v1.member_milestones where member_id = $1 order by occurred_at desc";
+  "select member_id, milestone, occurred_at, detail from web_v1.member_milestones where member_id = $1 order by occurred_at desc, milestone asc, detail asc nulls last limit 101";
 const SELF_POSITION =
   "select event_id, user_id, position from ( select event_id, user_id, row_number() over (partition by event_id order by created_at, coalesce(legacy_id, id), id)::int as position from rsvps where event_id in ($1, $2) and status = 'waitlisted' ) line where user_id = $3";
 // Verbatim copy of the module-private featuredEditRead literal: the admin edit
@@ -93,6 +97,14 @@ describe("validateNonSensitiveRead accepts each intended shape", () => {
     allows("going-counts", GOING_COUNTS_TWO);
   });
 
+  it("going-counts accepts the attributable named-only aggregate", () => {
+    allows(
+      "going-counts",
+      'select "rsvps"."event_id", count(*) from "rsvps" inner join "users" on "rsvps"."user_id" = "users"."id" where ("rsvps"."event_id" in ($1) and "rsvps"."status" = $2 and "users"."username" <> $3) group by "rsvps"."event_id"',
+    );
+    allows("going-counts", GOING_COUNTS_NAMED);
+  });
+
   it("events accepts an events-table projection with no member tables", () => {
     allows(
       "events",
@@ -135,6 +147,10 @@ describe("PII-bearing reads never classify as public", () => {
   it("going-counts refuses projections outside its count shape", () => {
     refuses("going-counts", 'select "user_id" from "rsvps" where "rsvps"."event_id" = $1');
     refuses("going-counts", GOING_COUNTS_TWO.replace("count(*)", '"user_id"'));
+    // Near-misses on the attributable shape: an identity projection, or the
+    // same join without the non-empty-name filter, both fail closed.
+    refuses("going-counts", GOING_COUNTS_NAMED.replace("count(*)", '"users"."username"'));
+    refuses("going-counts", GOING_COUNTS_NAMED.replace(' and "users"."username" <> $4', ""));
   });
 
   it("events refuses member tables outside the reviewed aggregate", () => {

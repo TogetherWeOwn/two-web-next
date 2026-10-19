@@ -51,6 +51,7 @@ export const agentEventsAdmission: MiddlewareHandler<IngressEnv> = async (c, nex
       {
         reason: "ingress_disabled",
         message: "The agent event ingress is not enabled in this environment.",
+        request_id: c.get("requestId"),
       },
       404,
     );
@@ -61,15 +62,21 @@ export const agentEventsAdmission: MiddlewareHandler<IngressEnv> = async (c, nex
   const url = injected ? undefined : (c.env.AGENT_DB?.connectionString ?? databaseUrl(c.env));
   if (!injected && !url)
     return c.json(
-      { reason: "ingress_unavailable", message: "The agent event store is not configured." },
+      {
+        reason: "ingress_unavailable",
+        message: "The agent event store is not configured.",
+        request_id: c.get("requestId"),
+      },
       503,
     );
 
   // Release idle sockets even if an admitted upload never reaches EOF.
   const sql = injected ?? postgres(url!, databaseOptions);
   try {
-    // Admit before the transport limiter reads. The bound handler cannot charge
-    // a second shield hit when the parsed body reaches the service.
+    // The route mounts requestBodyLimit("agent") first, so the body is already
+    // bounded and buffered here. Admission charges the shield exactly once; the
+    // bound handler cannot charge a second hit when the parsed body reaches
+    // the service.
     // `cf-connecting-ip` wins on the edge (unforgeable); off-edge the first
     // `x-forwarded-for` hop applies, else nothing (`unknown` downstream).
     const ip =
@@ -111,15 +118,18 @@ export const agentEventsAdmission: MiddlewareHandler<IngressEnv> = async (c, nex
         {
           reason: "ingress_unavailable",
           message: "The agent event store is temporarily unavailable. Try again shortly.",
+          request_id: c.get("requestId"),
         },
         503,
       );
     }
     return c.json({ reason: "internal_error", message: "The agent event ingress failed." }, 500);
   } finally {
-    // Also close on 413, source failures, and shield refusals. Never close the
-    // injected fixture client; its owner manages its lifecycle.
-    if (!injected) c.executionCtx.waitUntil(sql.end({ timeout: 2 }));
+    // Close on shield refusals, admission/service errors and normal completion
+    // (413 and source-read failures never reach this middleware). Never close
+    // the injected fixture client; its owner manages its lifecycle. A failing
+    // close settles silently so it never surfaces as an unhandled rejection.
+    if (!injected) c.executionCtx.waitUntil(sql.end({ timeout: 2 }).catch(() => {}));
   }
 };
 
@@ -147,6 +157,7 @@ export async function agentEventsRoute(c: Context<IngressEnv>): Promise<Response
         {
           reason: "ingress_unavailable",
           message: "The agent event store is temporarily unavailable. Try again shortly.",
+          request_id: c.get("requestId"),
         },
         503,
       );

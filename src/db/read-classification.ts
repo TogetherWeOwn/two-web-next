@@ -15,8 +15,17 @@ const fixedStatements = {
     "select set_config('lock_timeout', $1, true), set_config('statement_timeout', $2, true)",
 };
 // Only bound-list cardinality varies; no interpolated identifiers/projections.
-const goingCounts =
+// Two pinned shapes: the legacy all-rows occupancy count (admin Fill column
+// and fill filter, matching write-path seat enforcement; `withGoing` reuses
+// this exact shape for its public `goingOccupancy`, which drives full,
+// spots-left and the Going/waitlist CTA) and the public attributable count
+// (`withGoing` joins users and counts only named rows, so the badge label
+// agrees with the roster; the join qualifies "rsvps"."event_id"). Both return
+// a single cardinality, never identities.
+const goingCountsLegacy =
   /^select "event_id", count\(\*\) from "rsvps" where \("rsvps"\."event_id" in \(\$\d+(?:, \$\d+)*\) and "rsvps"\."status" = \$\d+\) group by "rsvps"\."event_id"$/;
+const goingCountsNamed =
+  /^select "rsvps"\."event_id", count\(\*\) from "rsvps" inner join "users" on "rsvps"\."user_id" = "users"\."id" where \("rsvps"\."event_id" in \(\$\d+(?:, \$\d+)*\) and "rsvps"\."status" = \$\d+ and "users"\."username" <> \$\d+\) group by "rsvps"\."event_id"$/;
 // Roster totals return a single cardinality, never member identifiers. The
 // username filter is a bound parameter; only these two join/where shapes may
 // run under the roster-count classification.
@@ -37,7 +46,7 @@ export function validateNonSensitiveRead(
 ): void {
   const query = normalizedStatement(statement);
   if (classification === "going-counts") {
-    if (!goingCounts.test(query)) refuseMemberRead();
+    if (!goingCountsLegacy.test(query) && !goingCountsNamed.test(query)) refuseMemberRead();
     return;
   }
   if (classification === "roster-count") {
@@ -83,12 +92,24 @@ export function rawMemberOwner(statement: string): string | undefined {
       "member_id",
     ],
     [
-      "select member_id, milestone, occurred_at, detail from web_v1.member_milestones where member_id = $1 order by occurred_at desc",
+      "select member_id, milestone, occurred_at, detail from web_v1.member_milestones where member_id = $1 order by occurred_at desc, milestone asc, detail asc nulls last limit 101",
       "member_id",
     ],
   ]);
   if (
     /^select event_id, user_id, position from \( select event_id, user_id, row_number\(\) over \(partition by event_id order by created_at, coalesce\(legacy_id, id\), id\)::int as position from rsvps where event_id in \(\$\d+(?:, \$\d+)*\) and status = 'waitlisted' \) line where user_id = \$\d+$/.test(
+      query,
+    )
+  )
+    return "user_id";
+  // Member leaderboard aggregate (src/leaderboards/members.ts): one grouped
+  // row per ranked member with the owner's id alongside, never per-RSVP
+  // rows. Only this exact GROUP BY + COUNT shape earns the exemption, with
+  // optional season-window bounds, an optional lower(trim(game)) filter, and
+  // an optional literal top-100 cap. Bound params are dates/game only; the
+  // cap is the literal OVERALL_CAP, never a bound limit.
+  if (
+    /^select rsvps\.user_id as user_id, users\.username as username, count\(\*\)::int as count from rsvps inner join events on events\.id = rsvps\.event_id inner join users on users\.id = rsvps\.user_id left join profiles on profiles\.user_id = rsvps\.user_id where rsvps\.status = 'going' and events\.status = 'published' and users\.member = true and \(profiles\.leaderboard_opt_out is null or profiles\.leaderboard_opt_out = false\)( and events\.starts_at >= \$\d+ and events\.starts_at < \$\d+)?( and lower\(trim\(events\.game\)\) = \$\d+)? group by rsvps\.user_id, users\.username order by count\(\*\) desc, rsvps\.user_id asc( limit 100)?$/.test(
       query,
     )
   )

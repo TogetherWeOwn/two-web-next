@@ -10,9 +10,13 @@ export type MemberStats = {
   rankKey: string | null;
   isCurrentMember: boolean;
   milestones: Milestone[];
+  milestonesTruncated: boolean;
 };
 export type MemberStatsSource = (id: string, signal: AbortSignal) => Promise<MemberStats | null>;
 export const MEMBER_STATS_BUDGET_MS = 500;
+// Newest-N milestone window: the SQL read is capped at this many rows so one
+// member cannot force an unbounded scan. Matches the sibling 100-row caps.
+export const MEMBER_MILESTONES_CAP = 100;
 
 // One budget for connection setup and both optional reads, not one per query.
 export async function memberStatsWithBudget(
@@ -95,19 +99,25 @@ export async function readMemberStats(
     signal.throwIfAborted();
     const member = members[0];
     if (!member) return null;
+    // Read one row past the display cap: the extra row only detects
+    // truncation, so the count never silently reports the cap as a total.
     const rows = await keyedMemberRead(() =>
       connection.execute(sql`
       select member_id, milestone, occurred_at, detail from web_v1.member_milestones
-      where member_id = ${id} order by occurred_at desc
+      where member_id = ${id} order by occurred_at desc, milestone asc, detail asc nulls last
+      limit ${sql.raw(String(MEMBER_MILESTONES_CAP + 1))}
     `),
     );
     signal.throwIfAborted();
+    const truncated = rows.length > MEMBER_MILESTONES_CAP;
+    const capped = truncated ? rows.slice(0, MEMBER_MILESTONES_CAP) : rows;
     return {
       joinedAt: dateOrNull(member.joined_at),
       tenureDays: daysOrNull(member.tenure_days),
       rankKey: stringOrNull(member.rank_key),
       isCurrentMember: member.is_current_member !== false,
-      milestones: rows.flatMap((row) => {
+      milestonesTruncated: truncated,
+      milestones: capped.flatMap((row) => {
         const occurredAt = dateOrNull(row.occurred_at);
         return occurredAt
           ? [

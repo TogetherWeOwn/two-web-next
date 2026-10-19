@@ -13,7 +13,7 @@ import { readCounts, type Counts } from "../counts";
 import { isDatabaseUnavailable } from "../db/errors";
 import type { Env } from "../env";
 import { getPublicApiEvent, listPublicApiEvents, type PublicApiEvent } from "../events/reads";
-import { etagFor, publicReadGuard } from "../events/routes-shared";
+import { etagFor, matchesIfNoneMatch, publicReadGuard } from "../events/routes-shared";
 import { inviteDestination } from "../invite";
 import { wallDateIso, wallTimeHm } from "../islands/contracts";
 import { JOIN_INTRO } from "../screens/join";
@@ -36,6 +36,7 @@ import {
   type ApiPublicCacheEntry,
 } from "./cache";
 import { getOpenApiDocument } from "./openapi";
+import { parseRetryAfterSeconds } from "../jobs/retry-delay";
 
 type Ctx = Context<{ Bindings: Env }>;
 
@@ -54,22 +55,32 @@ function apiError(
 
 /**
  * Shared admission for the read API: the same per-client fixed-window budget
- * as pages and feeds, before any event or database read. A 429 keeps the
- * shared Retry-After but speaks the new error envelope instead of the legacy
- * /events.json shape.
+ * as pages and feeds, before any event or database read. A 429 validates the
+ * upstream Retry-After through the shared `parseRetryAfterSeconds` parser —
+ * usable values pass through (absurd ones cap at 86400), absent/unparseable
+ * values fall back to 60 — and speaks the new error envelope instead of the
+ * legacy /events.json shape. The one validated value feeds both the message
+ * and the response header, so they can never disagree or echo raw upstream
+ * text.
  */
 export async function admitted(c: Ctx): Promise<Response | null> {
   const limited = await publicReadGuard(c);
   if (!limited) return null;
-  const retryAfter = limited.headers.get("retry-after") ?? "60";
+  const retryAfterSeconds = parseRetryAfterSeconds(limited.headers.get("retry-after")) ?? 60;
   const body: PublicDataErrorDto = {
     error: {
       code: "rate_limited",
-      message: `Too many requests. Try again in ${retryAfter} seconds.`,
+      message: `Too many requests. Try again in ${retryAfterSeconds} seconds.`,
     },
   };
+  // Stamp the context header too, not just the per-response one: the guard
+  // chain already set a context-level Retry-After to the RAW upstream value,
+  // and on routes with middleware Hono merges those stale context headers
+  // over the returned response. Without this the MCP 429 header echoes raw
+  // upstream text while the body carries the validated value.
+  c.header("retry-after", String(retryAfterSeconds));
   return c.json(body, 429, {
-    "retry-after": retryAfter,
+    "retry-after": String(retryAfterSeconds),
     "cache-control": "no-store, private",
   });
 }
@@ -90,6 +101,10 @@ export function serializeEvent(e: PublicApiEvent): PublicApiEventDto {
     location: e.location,
     capacity: e.capacity,
     going_count: e.goingCount,
+    // Attributable `going_count` can read a free seat a nameless row already
+    // holds, so the occupancy aggregate ships beside it for spots/full math.
+    // Both degrade to null (never 0) when the rollup is unavailable.
+    going_occupancy: e.goingOccupancy ?? e.goingCount,
     status: PUBLIC_EVENT_STATUS,
     rsvp_open: e.rsvpOpen,
     synced_to_discord: e.discordEventId !== null,
@@ -198,7 +213,7 @@ export function fitByteBudget(
 }
 
 function cachedEntry(c: Ctx, entry: ApiPublicCacheEntry): Response {
-  if (c.req.header("if-none-match") === entry.headers.etag) {
+  if (matchesIfNoneMatch(c.req.header("if-none-match"), entry.headers.etag!)) {
     return c.body(null, 304, {
       etag: entry.headers.etag!,
       "cache-control": entry.headers["cache-control"]!,
@@ -216,7 +231,7 @@ async function servePublicJson(c: Ctx, cacheKey: string, value: unknown): Promis
     etag,
   };
   writeApiPublicCache(cacheKey, { status: 200, headers, body });
-  if (c.req.header("if-none-match") === etag) {
+  if (matchesIfNoneMatch(c.req.header("if-none-match"), etag)) {
     return c.body(null, 304, { etag, "cache-control": PUBLIC_MAX_AGE });
   }
   return c.body(body, 200, headers);

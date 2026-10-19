@@ -103,7 +103,12 @@ describe("Kit past archive response parity", () => {
       vi.fn(async (parts: TemplateStringsArray) =>
         parts.join("").includes("SELECT count(*)") ? [{ n: 60, wait: 12 }] : [],
       ),
-      { begin: async (run: (tx: never) => Promise<unknown>) => run(sql as never) },
+      {
+        begin: async (run: (tx: never) => Promise<unknown>) => run(sql as never),
+        // The throttle sets `SET LOCAL lock_timeout` through `unsafe` before
+        // the advisory lock; the double passes it through.
+        unsafe: async () => [],
+      },
     );
     const throttledEnv = {
       APP_URL: "https://example.test",

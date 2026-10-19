@@ -29,6 +29,7 @@ function event(overrides: Partial<PublicEvent> = {}): PublicEvent {
     status: "published",
     rsvpOpen: true,
     goingCount: 3,
+    goingOccupancy: 3,
     discordEventId: null,
     discordSyncFailedAt: null,
     discordSyncFailureCode: null,

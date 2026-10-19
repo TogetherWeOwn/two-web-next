@@ -191,9 +191,10 @@ describe("join-widget island", () => {
   // Scope note: the failure paths below exercise the observable signals —
   // a signaled `error` event and the bounded load timeout. A blocked
   // navigation that commits an error page fires `load` instead, which is
-  // indistinguishable from a real render cross-origin and stays out of scope
-  // (see the island source comment); the page-level invite link beside the
-  // preview remains the visible path in that case.
+  // indistinguishable from a real render cross-origin; that case is covered
+  // by test/islands-join-widget-blocked-load-acceptance.test.ts (the timer
+  // survives `load` and announces beside-frame guidance without moving
+  // focus).
   it("moves focus to the invite fallback when the frame signals error", async () => {
     const p = page();
     await p.click();

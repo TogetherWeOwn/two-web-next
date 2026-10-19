@@ -421,7 +421,15 @@ describe("malformed HTTP-200 user responses stay inside callback recovery", () =
         "/api/v10/users/@me",
       ]);
       expect(recordsFor(logs, JOIN_LOG).map((r) => r.args)).toEqual([
-        [JOIN_LOG, { ...rejectedUserMeta, source: null, outcome: "error" }],
+        [
+          JOIN_LOG,
+          {
+            ...rejectedUserMeta,
+            source: null,
+            outcome: "error",
+            request_id: res.headers.get("x-request-id"),
+          },
+        ],
       ]);
       expect(channelCounts(logs)).toMatchObject({ info: 0, debug: 0, warn: 1, error: 0 });
       const requestId = res.headers.get("x-request-id");
@@ -446,7 +454,7 @@ describe("malformed HTTP-200 user responses stay inside callback recovery", () =
         "/api/v10/users/@me",
       ]);
       expect(recordsFor(logs, LOGIN_LOG).map((r) => r.args)).toEqual([
-        [LOGIN_LOG, rejectedUserMeta],
+        [LOGIN_LOG, { ...rejectedUserMeta, request_id: res.headers.get("x-request-id") }],
       ]);
       expect(channelCounts(logs)).toMatchObject({ info: 0, debug: 0, warn: 1, error: 0 });
       expect(fake.attempts).toEqual([]);
@@ -479,6 +487,7 @@ describe("join callback: expired recovery versus outage 503", () => {
       status: 400,
       source: null,
       outcome: "expired",
+      request_id: res.headers.get("x-request-id"),
     });
 
     // The funnel row is the legacy enum's error row; its four columns carry no secret.
@@ -511,6 +520,7 @@ describe("join callback: expired recovery versus outage 503", () => {
         outcome: "error",
         status,
         source: null,
+        request_id: res.headers.get("x-request-id"),
       });
       const requestId = res.headers.get("x-request-id");
       expect(fake.attempts).toEqual([
@@ -566,6 +576,7 @@ describe("join callback: expired recovery versus outage 503", () => {
       status: null,
       source: null,
       outcome: "error",
+      request_id: res.headers.get("x-request-id"),
     });
     streamClean(logs, JOIN_ROUTE, [JOIN_LOG]);
     leakFree(html);
@@ -581,6 +592,7 @@ describe("join callback: expired recovery versus outage 503", () => {
     expect(recordsFor(logs, JOIN_LOG)[0]!.args[1]).toMatchObject({
       exception: "InvalidState",
       outcome: "expired",
+      request_id: res.headers.get("x-request-id"),
     });
     expect(calls).toHaveLength(0);
     streamClean(logs, JOIN_ROUTE, [JOIN_LOG]);
@@ -794,7 +806,7 @@ describe("join callback: post-bot-success downstream failures stay redacted", ()
       { outcome: "added", source: null, requestId: null, discordId: "42" },
     ]);
     expect(recordsFor(logs, MODERATOR_LOOKUP_LOG).map((r) => r.args)).toEqual([
-      [MODERATOR_LOOKUP_LOG, { status: 500 }],
+      [MODERATOR_LOOKUP_LOG, { status: 500, guild_id: "326474832151838730" }],
     ]);
     expect(channelCounts(logs)).toMatchObject({ info: 0, debug: 0, warn: 1, error: 0 });
     expect(created).toEqual([{ moderator: false, userId: "42", member: true }]);
@@ -930,6 +942,7 @@ describe("ordinary login: denial, outage, generic (legacy DiscordLoginTest failu
       exception: "DiscordError",
       kind: "expired_grant",
       status: 400,
+      request_id: res.headers.get("x-request-id"),
     });
     streamClean(logs, LOGIN_ROUTE, [LOGIN_LOG]);
     leakFree(res.headers.get("location"));
@@ -1034,6 +1047,7 @@ describe("adjacent auth log paths stay bounded", () => {
     expect(joinLine).toHaveLength(1);
     expect(joinLine[0]!.args[1]).toEqual({
       request_id: res.headers.get("x-request-id"),
+      guild_id: env.DISCORD_GUILD_ID,
       kind: "provider_outage",
     });
     streamClean(logs, LOGIN_ROUTE, ["guild auto-join failed"]);

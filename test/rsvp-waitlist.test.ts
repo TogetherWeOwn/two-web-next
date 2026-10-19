@@ -7,10 +7,11 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vites
 import app from "./app";
 import { adminApp } from "../src/admin/routes";
 import { events, rsvps } from "../src/db/admin-schema";
+import { users } from "../src/db/schema";
 import type { Env } from "../src/env";
 import { uniqueKey } from "../src/jobs/sync-event";
 import type { QueueMessage } from "../src/jobs/types";
-import { writeRsvp } from "../src/events/rsvp";
+import { withdrawRsvp, writeRsvp } from "../src/events/rsvp";
 import { CAPACITY_BELOW_GOING, waitlistPosition } from "../src/events/waitlist";
 import { createMemorySessionStore, hashToken, newSessionToken } from "../src/sessions";
 import {
@@ -237,8 +238,21 @@ describe.skipIf(!process.env.DATABASE_URL)("RSVP waitlist (agent-testdb)", () =>
   }
   async function fullWithLine(count = 2, memberKeys: string[] = []) {
     const ev = await seed();
-    await put(ev.eventKey, memberKeys[0] ?? "holder");
-    for (let i = 1; i <= count; i++) await put(ev.eventKey, memberKeys[i] ?? `waiter-${i}`);
+    // Attributable seeds: JSON responses count only named rows, so every
+    // default line member carries a stored name like a signed-in member
+    // would. Callers passing explicit keys manage their own display names.
+    const lineIds = Array.from(
+      { length: count + 1 },
+      (_, i) => memberKeys[i] ?? (i === 0 ? "holder" : `waiter-${i}`),
+    );
+    const defaultIds = lineIds.filter((_, i) => memberKeys[i] === undefined);
+    if (defaultIds.length > 0)
+      await db
+        .insert(users)
+        .values(defaultIds.map((id) => ({ id, username: id })))
+        .onConflictDoNothing();
+    await put(ev.eventKey, lineIds[0]!);
+    for (let i = 1; i <= count; i++) await put(ev.eventKey, lineIds[i]!);
     // Pin same-instant FIFO so ID, not wall time, breaks the tie.
     await client`update rsvps set created_at = '2020-01-01T00:00:00Z', synced_to_discord_at = now() where event_id = ${ev.id}`;
     await completeQueuedDeliveries();
@@ -669,7 +683,7 @@ describe.skipIf(!process.env.DATABASE_URL)("RSVP waitlist (agent-testdb)", () =>
 
   it("keeps the public JSON collection free of viewer waitlist state while HTML stays personalized", async () => {
     const ev = await fullWithLine(2, PAGE_MEMBER_KEYS);
-    await client`insert into users (id, username) values (${PAGE_MEMBER_KEYS[0]!}, 'Current holder'), (${PAGE_MEMBER_KEYS[1]!}, 'First waiter'), (${PAGE_MEMBER_KEYS[2]!}, 'Second waiter')`;
+    await client`insert into users (id, username) values (${PAGE_MEMBER_KEYS[0]!}, 'Current holder'), (${PAGE_MEMBER_KEYS[1]!}, 'First waiter'), (${PAGE_MEMBER_KEYS[2]!}, 'Second waiter') on conflict (id) do nothing`;
     const first = await request("/events.json", PAGE_MEMBER_KEYS[1]!);
     const data = await collection(first);
     // A0 public contract: identical fields for every session, no personal state.
@@ -717,7 +731,7 @@ describe.skipIf(!process.env.DATABASE_URL)("RSVP waitlist (agent-testdb)", () =>
 
   it("composes private waitlist positions and promoted attendees with navigation and offset-labelled related events", async () => {
     const ev = await fullWithLine(2, PAGE_MEMBER_KEYS);
-    await client`insert into users (id, username) values (${PAGE_MEMBER_KEYS[0]!}, 'Current holder'), (${PAGE_MEMBER_KEYS[1]!}, 'First waiter')`;
+    await client`insert into users (id, username) values (${PAGE_MEMBER_KEYS[0]!}, 'Current holder'), (${PAGE_MEMBER_KEYS[1]!}, 'First waiter') on conflict (id) do nothing`;
     const previous = await seed({
       startsAt: new Date("2098-12-31T20:00:00Z"),
       endsAt: new Date("2098-12-31T22:00:00Z"),
@@ -811,7 +825,16 @@ describe.skipIf(!process.env.DATABASE_URL)("RSVP waitlist (agent-testdb)", () =>
   );
 
   it("PUT judges expiry after the promotion-row wait without charging or mutating", async () => {
-    const ev = await fullWithLine();
+    // The event ends in real time while the writer waits on the promotion
+    // row: the post-lock database read must see the crossed end and refuse,
+    // spending no budget and mutating nothing. The injected worker clock is
+    // the default (no skew); only the database clock moves during the wait.
+    const endsAt = new Date(Date.now() + 2000);
+    const ev = await seed({ startsAt: new Date(Date.now() - 3_600_000), endsAt });
+    await put(ev.eventKey, "holder");
+    await put(ev.eventKey, "waiter-1");
+    await put(ev.eventKey, "waiter-2");
+    await client`update rsvps set created_at = '2020-01-01T00:00:00Z', synced_to_discord_at = now() where event_id = ${ev.id}`;
     await client`delete from web_throttle_hits where bucket = 'rsvp-write:holder'`;
     let release!: () => void;
     let ready!: (pid: number) => void;
@@ -828,14 +851,14 @@ describe.skipIf(!process.env.DATABASE_URL)("RSVP waitlist (agent-testdb)", () =>
       await gate;
     });
     let pending: ReturnType<typeof writeRsvp> | undefined;
-    let expired = false;
     try {
       const pid = await acquired;
-      pending = writeRsvp(db, ev.eventKey, "holder", "maybe", () =>
-        expired ? ev.endsAt : new Date(),
-      );
+      pending = writeRsvp(db, ev.eventKey, "holder", "maybe");
       await waiterBlockedBy(pid);
-      expired = true;
+      // Park the writer on the row past the real end, then let it judge.
+      await new Promise((resolve) =>
+        setTimeout(resolve, Math.max(0, endsAt.getTime() - Date.now() + 500)),
+      );
     } finally {
       release();
       await holder;
@@ -845,6 +868,61 @@ describe.skipIf(!process.env.DATABASE_URL)("RSVP waitlist (agent-testdb)", () =>
     expect((await rows(ev.id)).map((r) => r.status)).toEqual(["going", "waitlisted", "waitlisted"]);
     const hits = await client`select at from web_throttle_hits where bucket = 'rsvp-write:holder'`;
     expect(hits).toHaveLength(0);
+  });
+
+  it("withdraw leaves the line waitlisted when the event ends during the promotion-row wait", async () => {
+    // Delete-path mirror of the PUT expiry test above: the holder's
+    // withdraw waits on waiter-1's row past the real end. The database
+    // clock must be read after that wait, so the frozen promotion pass
+    // sees the crossed end and promotes nobody. A read taken above the
+    // waits would freeze a pre-end instant and promote waiter-1 after
+    // the event ended. The injected worker clock is the default (no
+    // skew); only the database clock moves during the wait.
+    const endsAt = new Date(Date.now() + 2000);
+    const ev = await seed({ startsAt: new Date(Date.now() - 3_600_000), endsAt });
+    await put(ev.eventKey, "holder");
+    await put(ev.eventKey, "waiter-1");
+    await put(ev.eventKey, "waiter-2");
+    await client`update rsvps set created_at = '2020-01-01T00:00:00Z', synced_to_discord_at = now() where event_id = ${ev.id}`;
+    expect((await rows(ev.id)).map((r) => [r.userId, r.status])).toEqual([
+      ["holder", "going"],
+      ["waiter-1", "waitlisted"],
+      ["waiter-2", "waitlisted"],
+    ]);
+    await client`delete from web_throttle_hits where bucket = 'rsvp-write:holder'`;
+    let release!: () => void;
+    let ready!: (pid: number) => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const acquired = new Promise<number>((resolve) => {
+      ready = resolve;
+    });
+    const holder = client.begin(async (tx) => {
+      await tx`select id from rsvps where event_id = ${ev.id} and user_id = 'waiter-1' for update`;
+      const [backend] = await tx`select pg_backend_pid() as pid`;
+      ready(Number(backend!.pid));
+      await gate;
+    });
+    let pending: ReturnType<typeof withdrawRsvp> | undefined;
+    try {
+      const pid = await acquired;
+      pending = withdrawRsvp(db, ev.eventKey, "holder");
+      await waiterBlockedBy(pid);
+      // Park the withdraw on the row past the real end, then let it judge.
+      await new Promise((resolve) =>
+        setTimeout(resolve, Math.max(0, endsAt.getTime() - Date.now() + 500)),
+      );
+    } finally {
+      release();
+      await holder;
+      await pending;
+    }
+    expect(await pending!).toEqual({ limited: false, deleted: true, status: "published" });
+    expect((await rows(ev.id)).map((r) => [r.userId, r.status])).toEqual([
+      ["waiter-1", "waitlisted"],
+      ["waiter-2", "waitlisted"],
+    ]);
   });
 
   it.each(["going", "waitlisted", "maybe"])(

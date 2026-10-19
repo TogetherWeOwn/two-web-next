@@ -133,7 +133,21 @@ export async function consume(
     const failAttempt = async () => {
       if (body.kind !== "sync-event") return true;
       try {
-        await deps.events.failSync(body.idempotencyKey);
+        // Settlement is correctness-critical but must never hold the serial
+        // batch open: race the same ledger bound as every sibling wait. On
+        // expiry the existing catch path retries without ack; a late
+        // settlement landing after the race is abandoned and changes nothing.
+        // This race only stops the wait: pgEventStore.failSync cancels the
+        // UPDATE server-side at the same bound (FAIL_SYNC_DB_TIMEOUT_MS), so
+        // a wedged statement also frees the max:1 handler connection and the
+        // next message's prepareSync still runs.
+        let t: ReturnType<typeof setTimeout>;
+        const timeout = new Promise<never>((_, reject) => {
+          t = setTimeout(() => reject(new Error("timed out")), LEDGER_TIMEOUT_MS);
+        });
+        await Promise.race([deps.events.failSync(body.idempotencyKey), timeout]).finally(() =>
+          clearTimeout(t),
+        );
         return true;
       } catch (e) {
         // Snapshot settlement is correctness-critical, unlike the depth ledger.

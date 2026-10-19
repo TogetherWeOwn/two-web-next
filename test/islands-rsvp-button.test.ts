@@ -34,6 +34,7 @@ import {
   RSVP_SYNCED_TESTID,
   RSVP_SYNC_FAILED_TESTID,
   RSVP_SYNCING_TESTID,
+  RSVP_WITHDRAW_MISSING_STATUS,
   RSVP_WITHDRAW_STATUS,
   RSVP_WITHDRAW_TESTID,
   WAITLIST_CLAIM_TESTID,
@@ -187,17 +188,18 @@ describe("rsvp-button broadcast: going-count-updated on every successful write",
 });
 
 describe("rsvp-button abuse surface: status codes + budget + decoy (PR #431, SpamTrap)", () => {
-  it("creates on first write (201), updates on re-answer (200), quiet 204 on withdraw", () => {
+  it("creates on first write (201), updates on re-answer (200), 204 on withdraw with a row", () => {
     expect(RSVP_FIRST_WRITE_STATUS).toBe(201);
     expect(RSVP_REANSWER_STATUS).toBe(200);
     expect(RSVP_WITHDRAW_STATUS).toBe(204);
+    expect(RSVP_WITHDRAW_MISSING_STATUS).toBe(404);
   });
 
-  it("pins the PR #431 abuse pins: double-submit, cross-user delete, 405s, quiet 204, past-403, cancelled-withdraw", () => {
+  it("pins the PR #431 abuse pins: double-submit, cross-user delete 404, 405s, honest 404, past-403, cancelled-withdraw 204", () => {
     expect(RSVP_ABUSE_PINS.doubleSubmit).toEqual([201, 200]);
-    expect(RSVP_ABUSE_PINS.crossUserDeleteVictimRowKept).toBe(204);
+    expect(RSVP_ABUSE_PINS.crossUserDeleteVictimRowKept).toBe(404);
     expect(RSVP_ABUSE_PINS.methodTampering).toBe(405);
-    expect(RSVP_ABUSE_PINS.withdrawWithoutRow).toBe(204);
+    expect(RSVP_ABUSE_PINS.withdrawWithoutRow).toBe(404);
     expect(RSVP_ABUSE_PINS.statusPastPut).toBe(403);
     expect(RSVP_ABUSE_PINS.withdrawFromCancelled).toBe(204);
   });
@@ -511,7 +513,11 @@ describe("rsvp-button SSR/server drift", () => {
       [42, VIEWER_ONE],
       [42, VIEWER_TWO],
     ]);
-    const attendeeReads = p.queries.filter((q) => q.sql.includes('inner join "users"'));
+    // Roster-shaped reads join users without a group-by; the attributable
+    // going-count aggregate joins too and is not an attendee read.
+    const attendeeReads = p.queries.filter(
+      (q) => q.sql.includes('inner join "users"') && !q.sql.includes("group by"),
+    );
     // The member-only attendees projection excludes nameless rows in SQL and
     // retrieves at most one page per request (zero-offset reads elide OFFSET).
     expect(attendeeReads.map((q) => q.params)).toEqual([

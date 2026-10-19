@@ -57,6 +57,7 @@ const event: PublicEvent = {
   createdAt: new Date("2026-01-01"),
   updatedAt: new Date("2026-01-01"),
   goingCount: 1,
+  goingOccupancy: 1,
 };
 const signedCookie = async (token: string) =>
   (

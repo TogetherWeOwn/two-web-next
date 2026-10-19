@@ -220,7 +220,10 @@ describe.skipIf(!process.env.DATABASE_URL)(
       // cancel (event.cancel). Never the draft parent or the draft top-up.
       const store = pgEventStore(sql!);
       const skippedKey = before[2]!.eventKey;
-      expect((await store.staleEventKeys()).sort()).toEqual([freshKey, skippedKey].sort());
+      // Unpaged selection keeps the legacy array shape: every stale key, ordered.
+      expect(((await store.staleEventKeys()) as string[]).sort()).toEqual(
+        [freshKey, skippedKey].sort(),
+      );
       expect(await materializeRecurringSeries(db)).toBe(0);
     });
   },

@@ -26,10 +26,18 @@
 // outcome, source, request_id and discord_id. The OAuth/token-exchange response
 // bodies and exception messages can quote the live token, so none of them is
 // ever a recordAttempt parameter and none is ever logged.
-import { addGuildMember, type JoinResult } from "../discord";
+import { addGuildMemberDetailed, type JoinResult } from "../discord";
+import { safeRequestId } from "../request-log";
 import type { Sql } from "../sessions";
 
-export const JOIN_OUTCOMES = ["added", "already_member", "error", "denied", "degraded"] as const;
+export const JOIN_OUTCOMES = [
+  "added",
+  "already_member",
+  "error",
+  "denied",
+  "degraded",
+  "rate_limited",
+] as const;
 export type JoinOutcome = (typeof JOIN_OUTCOMES)[number];
 
 /**
@@ -40,6 +48,20 @@ export const JOIN_THROTTLE_PER_MINUTE = 10;
 export const JOIN_THROTTLE_BUCKET = "join";
 // The privacy policy promises this window for rate-limit counters; change it only with a policy version.
 export const THROTTLE_COUNTER_RETENTION_MINUTES = 5;
+
+/**
+ * Bound on the per-bucket admission-lock wait. A held `web-throttle:` advisory
+ * lock resolves to a refusal within this bound (55P03 → `{ limited: true }`,
+ * no hit charged) instead of hanging a funnel request behind another
+ * isolate's admission. Sized above the ~1s held-lock windows pinned by the
+ * concurrency suite and well inside the 4s busy bound in
+ * `test/web-throttle-lock-busy.test.ts`. A refusal is the correct mapping
+ * because every bucket is per client (`<name>:<clientKey>`): contention on a
+ * bucket only comes from that same client's parallel requests, which is the
+ * burst the throttle exists to limit — admitting it would turn the throttle
+ * off under exactly the load it exists to stop.
+ */
+export const WEB_THROTTLE_LOCK_TIMEOUT_MS = 2000;
 
 /**
  * Legacy join_source validation (JoinController::rememberSource): starts
@@ -81,6 +103,16 @@ export type ThrottleVerdict = { limited: false } | { limited: true; retryAfter: 
  * allow — refusing the funnel top on a DB outage is worse than a missed count
  * (legacy funnel.php made the same call for the leaves: no throttle at all
  * rather than a cache-backed one that 500s when the database is down).
+ *
+ * Lock contention is a refusal: the admission lock waits at most
+ * `WEB_THROTTLE_LOCK_TIMEOUT_MS`, and a timed-out wait (55P03) resolves to
+ * `{ limited: true, retryAfter: 1 }` with no hit charged — contention on a
+ * per-client bucket is that same client's burst, so the busy pass refuses
+ * with the shared 429 rather than admitting free. The join funnel calls this
+ * function with no catch of its own, so the mapping lives here: a
+ * lock-timeout error never propagates to a caller and never becomes an
+ * admission. Any other store error still propagates (the generic middleware
+ * maps it to allow; the direct join path to its outage envelope).
  */
 export async function checkJoinThrottle(
   sql: Sql | null,
@@ -93,30 +125,54 @@ export async function checkJoinThrottle(
   const store = sql as Sql & {
     begin: (run: (tx: Sql) => Promise<ThrottleVerdict>) => Promise<ThrottleVerdict>;
   };
-  const verdict = await store.begin(async (tx) => {
-    await tx`SELECT pg_advisory_xact_lock(hashtextextended(${`web-throttle:${bucket}`}, 0))`;
-    // now() is transaction-start time, which can precede a long lock wait.
-    const rows = await tx<{ n: number; wait: number }[]>`
+  let verdict: ThrottleVerdict;
+  try {
+    verdict = await store.begin(async (tx) => {
+      // Bound the admission-lock wait: without this, a bucket whose advisory
+      // lock is held by another isolate blocks here until the holder commits.
+      // Same `SET LOCAL lock_timeout` shape as the agent-events shield, inner
+      // limiter and ingress operation locks.
+      await tx.unsafe(`SET LOCAL lock_timeout = '${WEB_THROTTLE_LOCK_TIMEOUT_MS}ms'`);
+      await tx`SELECT pg_advisory_xact_lock(hashtextextended(${`web-throttle:${bucket}`}, 0))`;
+      // now() is transaction-start time, which can precede a long lock wait.
+      const rows = await tx<{ n: number; wait: number }[]>`
       SELECT count(*)::int AS n,
         coalesce(ceil(extract(epoch FROM (min(at) + interval '60 seconds' - clock_timestamp()))), 1)::int AS wait
       FROM web_throttle_hits WHERE bucket = ${bucket} AND at > clock_timestamp() - interval '60 seconds'`;
-    const r = rows[0];
-    if (r && r.n >= max) return { limited: true, retryAfter: Math.max(1, r.wait) };
-    await tx`INSERT INTO web_throttle_hits (bucket, at) VALUES (${bucket}, clock_timestamp())`;
-    return { limited: false };
-  });
+      const r = rows[0];
+      if (r && r.n >= max) return { limited: true, retryAfter: Math.max(1, r.wait) };
+      await tx`INSERT INTO web_throttle_hits (bucket, at) VALUES (${bucket}, clock_timestamp())`;
+      return { limited: false };
+    });
+  } catch (err) {
+    if ((err as { code?: string }).code !== "55P03") throw err;
+    // Busy pass: the verdict transaction aborted with no hit inserted. Fall
+    // through to the best-effort prune below so a busy pass still drains
+    // expired rows, then answer a refusal — the shared 429 with Retry-After: 1
+    // at every caller (join funnel, generic middleware, profile writes).
+    verdict = { limited: true, retryAfter: 1 };
+  }
   // Global expiry cleanup stays outside the per-bucket admission lock so it
   // never prolongs it. Refused requests prune too: a bucket under sustained
   // refused load would otherwise accumulate expired rows until some request
   // is admitted. The prune is age-only, so it records no hit and never moves
-  // a request across the admit/refuse boundary. It is best-effort: a throwing
-  // prune must not flip a decided refusal into an admission (the generic
-  // middleware catch) or a 500 on the direct join path (no catch there).
+  // a request across the admit/refuse boundary. One bounded oldest-first
+  // batch per request (1,000 rows, the established cleanup batch, skip-locked
+  // so rows held by unrelated transactions wait for a later pass). It is
+  // best-effort: a throwing prune must not flip a decided refusal into an
+  // admission (the generic middleware catch) or a 500 on the direct join path
+  // (no catch there).
   try {
-    await sql`DELETE FROM web_throttle_hits WHERE at < now() - make_interval(mins => ${THROTTLE_COUNTER_RETENTION_MINUTES})`;
-  } catch {
-    // Housekeeping failed; the verdict below was already decided.
-    console.warn("Join throttle prune failed; keeping the decided verdict.");
+    await sql`DELETE FROM web_throttle_hits USING (SELECT id FROM web_throttle_hits WHERE at < now() - make_interval(mins => ${THROTTLE_COUNTER_RETENTION_MINUTES}) ORDER BY id LIMIT 1000 FOR UPDATE SKIP LOCKED) AS candidates WHERE web_throttle_hits.id = candidates.id`;
+  } catch (err) {
+    // Housekeeping failed; the verdict below was already decided. Log the
+    // exception class only: the message can quote statement bindings.
+    console.warn("Join throttle prune failed; keeping the decided verdict.", {
+      exception:
+        err instanceof Error
+          ? err.name
+          : ((err as { constructor?: { name?: string } })?.constructor?.name ?? "unknown"),
+    });
   }
   return verdict;
 }
@@ -169,13 +225,18 @@ export async function recordAttempt(
   } catch (err) {
     // Analytics must never break the join: a throwing INSERT still resolves,
     // logging only the exception class (never the message, which can quote
-    // the live token or statement text).
+    // the live token or statement text) plus the validated request_id so the
+    // line joins to request logs (the admin viewer queries by exact
+    // request_id). Absent/malformed IDs are omitted, never raw; no
+    // discordId/source is added.
+    const requestId = safeRequestId(attempt.requestId);
     console.warn("join attempt write failed", {
       exception:
         err instanceof Error
           ? err.name
           : ((err as { constructor?: { name?: string } })?.constructor?.name ?? "unknown"),
       outcome: attempt.outcome,
+      ...(requestId !== undefined ? { request_id: requestId } : {}),
     });
   }
 }
@@ -187,14 +248,17 @@ export type BotAdd = (
 ) => Promise<{
   result: JoinResult;
   requestId: string | null;
+  retryAfter?: number;
 }>;
 
 /** The production bot call: Discord's own add-member endpoint with the bot token. */
 export function liveBotAdd(botToken: string): BotAdd {
-  return async (guildId, userId, accessToken) => ({
-    result: await addGuildMember(guildId, userId, accessToken, botToken),
-    requestId: null,
-  });
+  return async (guildId, userId, accessToken) => {
+    const add = await addGuildMemberDetailed(guildId, userId, accessToken, botToken);
+    if (add.result !== "rate_limited" || add.retryAfter === undefined)
+      return { result: add.result, requestId: null };
+    return { result: add.result, requestId: null, retryAfter: add.retryAfter };
+  };
 }
 
 export type JoinFinish =
@@ -205,15 +269,22 @@ export type JoinFinish =
       requestId: string | null;
       discordId: string;
     }
-  | { kind: "recoverable"; outcome: JoinOutcome; requestId: string | null };
+  | {
+      kind: "recoverable";
+      outcome: JoinOutcome;
+      requestId: string | null;
+      retryAfter?: number;
+    };
 
 /**
  * The synchronous tail of the callback: one bot attempt owns the live token,
  * then the frame drops it. Outcomes mirror the legacy JoinOutcome enum:
- * added / already_member → sign in; any classified bot refusal
- * (rate_limited, forbidden, provider_outage, transport_failure, failed) or
- * any transport throw → degraded (sign-in succeeds, invite fallback offered);
- * the callback never stores the token, never logs it, never queues it.
+ * added / already_member → sign in; a rate-limited bot add → recoverable
+ * with the distinct `rate_limited` outcome (plus the bounded `retryAfter`
+ * when the bot seam carried one); any other classified bot refusal
+ * (forbidden, provider_outage, transport_failure, failed) or any transport
+ * throw → degraded (a `retryAfter` riding on any non-rate-limited answer is
+ * dropped); the callback never stores the token, never logs it, never queues it.
  */
 export async function finishJoin(
   bot: BotAdd,
@@ -224,13 +295,19 @@ export async function finishJoin(
 ): Promise<JoinFinish> {
   let result: JoinResult;
   let requestId: string | null = null;
+  let retryAfter: number | undefined;
   try {
     const answer = await bot(guildId, userId, accessToken);
     result = answer.result;
     requestId = answer.requestId;
+    retryAfter = answer.retryAfter;
   } catch {
     return { kind: "recoverable", outcome: "degraded", requestId: null };
   }
+  if (result === "rate_limited")
+    return retryAfter === undefined
+      ? { kind: "recoverable", outcome: "rate_limited", requestId }
+      : { kind: "recoverable", outcome: "rate_limited", requestId, retryAfter };
   if (result !== "joined" && result !== "already_member")
     return { kind: "recoverable", outcome: "degraded", requestId };
   const outcome: JoinOutcome = result === "joined" ? "added" : "already_member";

@@ -180,6 +180,11 @@ function stubStores(): PruneStores {
     searchLog: empty,
     boardViews: empty,
     sessions: createMemorySessionStore(() => NOW.getTime()),
+    jobUniqueLocks: {
+      async sweepExpired(_now: Date): Promise<number> {
+        return 0;
+      },
+    },
   };
 }
 

@@ -56,7 +56,9 @@ describe("Discord scheduled-events read failure logging", () => {
     await source.upcoming(NOW);
     await source.upcoming(NOW);
     const [first, second] = warn.mock.calls.map((call) => call[1] as Record<string, unknown>);
-    expect(first).toMatchObject({ reason: "status", status: 429, retryAfter: 2.5 });
+    // Fractions ceil under the shared Retry-After parser: 2.5s of provider
+    // backoff means retrying in 3s, never sooner.
+    expect(first).toMatchObject({ reason: "status", status: 429, retryAfter: 3 });
     expect(second).toMatchObject({ reason: "status", status: 429 });
     expect(second!.retryAfter).toBeUndefined();
   });

@@ -34,7 +34,15 @@ import {
 import { calendarZone, wallDateIso, wallDayStart } from "./date-format";
 import type { DiscordEventsSource } from "./discord-transients-types";
 
-export type PublicEvent = typeof events.$inferSelect & { goingCount: number };
+export type PublicEvent = typeof events.$inferSelect & {
+  goingCount: number;
+  /** Seat occupancy: every going row, like `waitlist.goingCount`. Drives the
+   * `full` verdict, spots-left text and Going/waitlist CTA so the page never
+   * offers a seat the write path cannot grant. Required (not optional) so a
+   * new code path that forgets to wire it fails typecheck instead of
+   * silently regressing to the named count; `withGoing` always sets it. */
+  goingOccupancy: number;
+};
 
 export type HomeEvent = Pick<
   PublicEvent,
@@ -45,28 +53,47 @@ export const PAGE_SIZE = PAST_EVENTS_PAGE_SIZE;
 export const JSON_DEFAULT_LIMIT = PUBLIC_DATA_BOUNDS.defaultPageSize;
 export const JSON_MAX_LIMIT = PUBLIC_DATA_BOUNDS.maxPageSize;
 
+/** Two going counts per event, so the badge and the seats agree with the
+ * roster and the write path at once.
+ * `listGoingAttendees` excludes nameless rows (empty stored name, or no user
+ * row at all) so no nameless identity is ever rendered. `goingCount` joins
+ * users and counts only named rows, so it always equals the roster length
+ * (within one roster page) and drives the visible "N going" label.
+ * `goingOccupancy` counts every going row — the same shape as
+ * `waitlist.goingCount`, the write-path seat enforcement — and drives the
+ * `full` verdict, the spots-left text and the Going/waitlist CTA in
+ * `rsvp-button.tsx` (plus the Kit mirror), so the page never offers a seat
+ * the write cannot grant. Both are aggregates only; neither renders a name. */
 async function withGoing(
   db: Pick<Db, "select">,
   rows: (typeof events.$inferSelect)[],
 ): Promise<PublicEvent[]> {
   if (rows.length === 0) return [];
-  const counts = await nonSensitiveRead("going-counts", () =>
-    db
-      .select({ eventId: rsvps.eventId, n: count() })
-      .from(rsvps)
-      .where(
-        and(
-          inArray(
-            rsvps.eventId,
-            rows.map((r) => r.id),
-          ),
-          eq(rsvps.status, "going"),
-        ),
-      )
-      .groupBy(rsvps.eventId),
-  );
-  const by = new Map(counts.map((c) => [c.eventId, Number(c.n)]));
-  return rows.map((r) => ({ ...r, goingCount: by.get(r.id) ?? 0 }));
+  const ids = rows.map((r) => r.id);
+  const [named, occupied] = await Promise.all([
+    nonSensitiveRead("going-counts", () =>
+      db
+        .select({ eventId: rsvps.eventId, n: count() })
+        .from(rsvps)
+        .innerJoin(users, eq(rsvps.userId, users.id))
+        .where(and(inArray(rsvps.eventId, ids), eq(rsvps.status, "going"), ne(users.username, "")))
+        .groupBy(rsvps.eventId),
+    ),
+    nonSensitiveRead("going-counts", () =>
+      db
+        .select({ eventId: rsvps.eventId, n: count() })
+        .from(rsvps)
+        .where(and(inArray(rsvps.eventId, ids), eq(rsvps.status, "going")))
+        .groupBy(rsvps.eventId),
+    ),
+  ]);
+  const byNamed = new Map(named.map((c) => [c.eventId, Number(c.n)]));
+  const byOccupied = new Map(occupied.map((c) => [c.eventId, Number(c.n)]));
+  return rows.map((r) => ({
+    ...r,
+    goingCount: byNamed.get(r.id) ?? 0,
+    goingOccupancy: byOccupied.get(r.id) ?? 0,
+  }));
 }
 
 /** Title/description substring match; SQL wildcards in the query match themselves. */
@@ -162,6 +189,11 @@ export async function rankUpcoming(
       ),
     );
   if (!anchor || !isRenderableEventWindow(anchor)) return null;
+  // Compare the stored timestamp: a JS Date loses PostgreSQL's microseconds.
+  const anchorStartsAt = db
+    .select({ startsAt: events.startsAt })
+    .from(events)
+    .where(eq(events.id, anchor.id));
   const [before] = await db
     .select({ n: count() })
     .from(events)
@@ -171,8 +203,8 @@ export async function rankUpcoming(
         finiteEventWindow,
         gte(events.endsAt, now),
         or(
-          lt(events.startsAt, anchor.startsAt),
-          and(eq(events.startsAt, anchor.startsAt), lt(events.id, anchor.id)),
+          lt(events.startsAt, anchorStartsAt),
+          and(eq(events.startsAt, anchorStartsAt), lt(events.id, anchor.id)),
         ),
       ),
     );
@@ -826,6 +858,12 @@ export async function listJson(
   };
 }
 
+/** Egress cap for feeds and sitemap: the soonest rows in the existing order.
+ * A pathological guard only — a real schedule never holds this many upcoming
+ * rows. Keeps the established 103-event subscription collection whole while
+ * bounding /events.ics, /events.rss, /events.md and sitemap bytes. */
+export const FEED_EGRESS_LIMIT = 1000;
+
 export async function sitemapEvents(
   db: Db,
 ): Promise<{ key: string; status: "published"; updatedAt: string | null }[]> {
@@ -833,21 +871,39 @@ export async function sitemapEvents(
     .select()
     .from(events)
     .where(eq(events.status, "published"))
-    .orderBy(asc(events.startsAt));
-  return rows.map((r) => ({
+    .orderBy(asc(events.startsAt))
+    .limit(FEED_EGRESS_LIMIT);
+  // One poison row (unrenderable window, or an updatedAt outside the JS Date
+  // range) must not empty the sitemap via the route's `.catch(() => [])`:
+  // skip it in JS and log the count. The guard lives in JS (not SQL) because
+  // SQL cannot see a timestamp that is finite in PostgreSQL but out of range
+  // in JS. A DB failure still rejects here; the route degrades to the static
+  // entries instead.
+  const renderable = rows.filter(
+    (r) =>
+      isRenderableEventWindow(r) &&
+      r.updatedAt instanceof Date &&
+      Number.isFinite(r.updatedAt.getTime()),
+  );
+  const skipped = rows.length - renderable.length;
+  if (skipped > 0) {
+    console.warn("sitemapEvents skipped unrenderable rows.", { skipped });
+  }
+  return renderable.map((r) => ({
     key: r.eventKey,
     status: "published" as const,
     updatedAt: r.updatedAt.toISOString(),
   }));
 }
 
-/** Feed scope: upcoming, finite boundaries, ends_at >= now, soonest first. Equal starts break ties by id for a deterministic total order. `statuses` differs for RSS vs ICS. */
+/** Feed scope: upcoming, finite boundaries, ends_at >= now, soonest first. Equal starts break ties by id for a deterministic total order. `statuses` differs for RSS vs ICS. Capped in SQL at FEED_EGRESS_LIMIT. */
 export async function listFeed(db: Db, statuses: ("published" | "cancelled")[], now = new Date()) {
   const rows = await db
     .select()
     .from(events)
     .where(and(inArray(events.status, statuses), finiteEventWindow, gte(events.endsAt, now)))
-    .orderBy(asc(events.startsAt), asc(events.id));
+    .orderBy(asc(events.startsAt), asc(events.id))
+    .limit(FEED_EGRESS_LIMIT);
   // Feed builders stringify date parts without throwing, so without this the
   // export would serve corrupt `NaN` instants instead of failing loudly.
   return rows.filter(isRenderableEventWindow);
@@ -861,7 +917,10 @@ export async function getEventRow(db: Db, key: string) {
   return row;
 }
 
-export type PublicApiEvent = Omit<PublicEvent, "goingCount"> & { goingCount: number | null };
+export type PublicApiEvent = Omit<PublicEvent, "goingCount" | "goingOccupancy"> & {
+  goingCount: number | null;
+  goingOccupancy?: number | null;
+};
 
 /**
  * A3 public-API collection: published-only with the same clamp-to-last-page
@@ -887,7 +946,11 @@ export async function listPublicApiEvents(
     .offset((page - 1) * opts.limit);
   const renderable = rows.filter(isRenderableEventWindow);
   const withCounts = await withGoing(db, renderable).catch(() =>
-    renderable.map((row) => ({ ...row, goingCount: null as number | null })),
+    renderable.map((row) => ({
+      ...row,
+      goingCount: null as number | null,
+      goingOccupancy: null as number | null,
+    })),
   );
   return { rows: withCounts, total: n, page };
 }
@@ -897,7 +960,7 @@ export async function getPublicApiEvent(db: Db, eventKey: string): Promise<Publi
   const row = await getEventRow(db, eventKey);
   if (!row || row.status !== PUBLIC_EVENT_STATUS) return null;
   const [withCount] = await withGoing(db, [row]).catch(() => [
-    { ...row, goingCount: null as number | null },
+    { ...row, goingCount: null as number | null, goingOccupancy: null as number | null },
   ]);
-  return withCount ?? { ...row, goingCount: null };
+  return withCount ?? { ...row, goingCount: null, goingOccupancy: null };
 }

@@ -70,6 +70,7 @@ function eventRow(id: number, startsAt: Date): PublicEvent {
     createdAt: startsAt,
     updatedAt: startsAt,
     goingCount: 0,
+    goingOccupancy: 0,
   };
 }
 

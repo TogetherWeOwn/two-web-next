@@ -7,12 +7,11 @@ import { dbFor } from "../admin/db";
 import {
   NotFoundError,
   createEvent,
-  getEvent,
+  patchEvent,
   setRsvpOpen,
   transitionEvent,
-  updateEvent,
 } from "../admin/store";
-import { ValidationError, isKnownTimezone, parseEventForm } from "../admin/validation";
+import { ValidationError, parseEventForm } from "../admin/validation";
 import { dispatchWriteBack } from "../admin/writeback";
 import { requestBodyLimit } from "../body-limit";
 import type { Env, Session } from "../env";
@@ -110,9 +109,9 @@ export function registerWriteRoutes(app: App, readFragmentSession: SessionReader
 
   app.post(
     "/events",
+    requestBodyLimit("json"),
     throttle("event-write", WRITE_THROTTLE_PER_MINUTE),
     moderatorGate,
-    requestBodyLimit("json"),
     async (c) => {
       const who = c.get("eventModerator");
       const db = await dbFor(c);
@@ -123,7 +122,7 @@ export function registerWriteRoutes(app: App, readFragmentSession: SessionReader
           { id: who.id, username: who.username },
           parseEventForm(await eventBody(c)),
         );
-        return c.json({ data: eventJson({ ...row, goingCount: 0 }) }, 201);
+        return c.json({ data: eventJson({ ...row, goingCount: 0, goingOccupancy: 0 }) }, 201);
       } catch (err) {
         if (err instanceof UnsupportedMediaTypeError)
           return c.json({ error: "unsupported_media_type" }, 415);
@@ -135,18 +134,18 @@ export function registerWriteRoutes(app: App, readFragmentSession: SessionReader
 
   app.patch(
     "/events/:key",
+    requestBodyLimit("json"),
     throttle("event-write", WRITE_THROTTLE_PER_MINUTE),
     moderatorGate,
-    requestBodyLimit("json"),
     async (c) => {
       const who = c.get("eventModerator");
       const db = await dbFor(c);
       if (!db) return c.json({ error: "db_unavailable" }, 503);
       const key = c.req.param("key");
-      const existing = await getEvent(db, key);
-      if (!existing) return c.json({ error: "not_found" }, 404);
       try {
-        // PATCH: unspecified fields keep their stored value.
+        // PATCH: omitted fields resolve from the locked row inside the same
+        // transaction that commits the update (patchEvent), never from a
+        // pre-lock snapshot, so concurrent disjoint edits both survive.
         const patch = await eventBody(c);
         // `status`/`rsvpOpen` are transitioned through the publish/cancel and
         // rsvp-pause/rsvp-reopen actions, never edited: the parser and writer
@@ -163,39 +162,11 @@ export function registerWriteRoutes(app: App, readFragmentSession: SessionReader
           extraneous.rsvpOpen =
             "Change RSVP availability with the rsvp-pause/rsvp-reopen actions, not by editing.";
         if (Object.keys(extraneous).length > 0) throw new ValidationError(extraneous);
-        const merged = {
-          title: existing.title,
-          game: existing.game,
-          description: existing.description,
-          timezone: existing.timezone,
-          location: existing.location,
-          capacity: existing.capacity,
-          ...patch,
-        } as Record<string, unknown>;
-        // Match parseEventForm's zone default before deriving omitted wall times.
-        const tz =
-          typeof merged.timezone === "string"
-            ? merged.timezone.trim() || "Europe/London"
-            : "Europe/London";
-        if (!isKnownTimezone(tz))
-          throw new ValidationError({ timezone: `Unknown timezone: ${tz}.` });
-        const wall = (d: Date) =>
-          new Intl.DateTimeFormat("sv-SE", {
-            timeZone: tz,
-            dateStyle: "short",
-            timeStyle: "short",
-          }).format(d);
-        merged.starts_at ??= wall(existing.startsAt);
-        merged.ends_at ??= wall(existing.endsAt);
-        const input = parseEventForm(merged, {
-          startsAtUtc: existing.startsAt.toISOString(),
-          endsAtUtc: existing.endsAt.toISOString(),
-        });
-        const { row, writeBack, childWriteBacks } = await updateEvent(
+        const { row, writeBack, childWriteBacks } = await patchEvent(
           db,
           { id: who.id, username: who.username },
           key,
-          input,
+          patch,
         );
         if (writeBack) await dispatchWriteBack(c.env, writeBack, c.get("requestId"));
         for (const wb of childWriteBacks) await dispatchWriteBack(c.env, wb, c.get("requestId"));
@@ -214,9 +185,9 @@ export function registerWriteRoutes(app: App, readFragmentSession: SessionReader
   for (const action of ["publish", "cancel", "rsvp-pause", "rsvp-reopen"] as const) {
     app.post(
       `/events/:key/${action}`,
+      requestBodyLimit("action"),
       throttle("event-write", WRITE_THROTTLE_PER_MINUTE),
       moderatorGate,
-      requestBodyLimit("action"),
       async (c) => {
         const who = c.get("eventModerator");
         const db = await dbFor(c);

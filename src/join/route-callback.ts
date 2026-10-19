@@ -23,7 +23,7 @@ import { recordJoinResult } from "../return-journey";
 import { parseModeratorRoleIds, recomputeModerator } from "../roles";
 import { hashToken } from "../sessions";
 import { safeRequestId } from "../request-log";
-import { finishJoin, liveBotAdd, recordAttempt, safeNext } from "./service";
+import { finishJoin, liveBotAdd, recordAttempt, safeNext, sanitizeSource } from "./service";
 import {
   JOIN_NEXT_COOKIE,
   JOIN_SOURCE_COOKIE,
@@ -46,8 +46,10 @@ export function registerJoinCallbackRoutes(
     if (limited) return limited;
     const sql = await joinStore(c);
     // getSignedCookie answers false on a bad signature: not a string, not a source.
+    // Sanitized like GET /join/discord: a correctly-signed but hostile value
+    // leaves no trace in the retry href, the attempt row, or the log line.
     const rawSource = await getSignedCookie(c, c.env.SESSION_SECRET, JOIN_SOURCE_COOKIE);
-    const source = typeof rawSource === "string" ? rawSource : null;
+    const source = sanitizeSource(typeof rawSource === "string" ? rawSource : null);
     const rawNext = await getSignedCookie(c, c.env.SESSION_SECRET, JOIN_NEXT_COOKIE);
     const next = safeNext(typeof rawNext === "string" ? rawNext : null);
     const clearJourney = () => {
@@ -77,10 +79,18 @@ export function registerJoinCallbackRoutes(
     // JoinCallbackFailureTest "recovery uses static invite when none is configured").
     const invite = inviteDestination(c.env.DISCORD_INVITE_URL);
     // The callback clears the journey cookies, so the retry href is the only
-    // place the return target survives: a safe next re-mints the start URL
-    // (mirroring GET /join?next=), while a hostile or absent value keeps the
-    // bare URL. `next` already passed safeNext above, so hostile stays dropped.
-    const retryUrl = next ? `/join/discord?next=${encodeURIComponent(next)}` : "/join/discord";
+    // place the return target and attribution survive: safe next/source values
+    // re-mint the start URL (mirroring GET /join/discord?next=&source=), while
+    // hostile or absent values keep the bare URL. Both already passed their
+    // sanitizers above, so hostile stays dropped.
+    const retryUrl =
+      next && source
+        ? `/join/discord?next=${encodeURIComponent(next)}&source=${encodeURIComponent(source)}`
+        : next
+          ? `/join/discord?next=${encodeURIComponent(next)}`
+          : source
+            ? `/join/discord?source=${encodeURIComponent(source)}`
+            : "/join/discord";
     const recover = (title: string, message: string, status: 200 | 503 = 200) =>
       render.recovery(
         c,
@@ -96,12 +106,14 @@ export function registerJoinCallbackRoutes(
     // Same inbound bound as the auth callback: refuse oversized code/state
     // before any journey consume, exchange, or session work. Refusals keep
     // today's path, so the error param is peeked first and oversized maps to
-    // the existing expired-link recovery with its bounded log line.
+    // the existing expired-link recovery with its bounded log line under its
+    // own class (replay keeps InvalidState).
     if (!c.req.query("error") && hasOversizedOAuthParams(code, state)) {
       console.warn("discord token exchange failed on the join journey", {
-        exception: "InvalidState",
+        exception: "OversizedOAuthParams",
         source,
         outcome: "expired",
+        request_id: safeRequestId(c.get("requestId")),
       });
       return recover(
         "Join link expired",
@@ -141,6 +153,7 @@ export function registerJoinCallbackRoutes(
         exception: "InvalidState",
         source,
         outcome: "expired",
+        request_id: safeRequestId(c.get("requestId")),
       });
       if (admitted)
         await recordAttempt(sql, {
@@ -179,6 +192,7 @@ export function registerJoinCallbackRoutes(
         status: meta.status,
         source,
         outcome,
+        request_id: safeRequestId(c.get("requestId")),
       });
       await recordAttempt(sql, {
         outcome: "error",
@@ -218,10 +232,17 @@ export function registerJoinCallbackRoutes(
         requestId: done.requestId,
         discordId: user.id,
       });
-      return recover(
+      const recovery = await recover(
         "We couldn't add you automatically",
         "You're nearly there — use the invite link below to join the server directly.",
       );
+      // Header only: status and copy never change. A usable rate-limited bot-add
+      // backoff flows into `Retry-After` (same admission as the exchange 429
+      // branch); absent/unusable values and every non-rate-limited path keep
+      // today's headerless response.
+      if (done.outcome === "rate_limited" && done.retryAfter !== undefined)
+        recovery.headers.set("Retry-After", String(done.retryAfter));
+      return recovery;
     }
 
     await recordAttempt(sql, {

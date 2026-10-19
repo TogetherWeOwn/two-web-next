@@ -129,7 +129,7 @@ describe("Discord scheduled-events invalid-filter, sanitized-log and failure-res
 
   it("logs only keys and elapsed on a transport failure, never URL, header, token or message bytes", async () => {
     const canary = "canary-7f3a9c2e5b1d4a6f";
-    const guild = `guild-${canary}`;
+    const guild = "326474832151838730";
     const token = `token-${canary}-secret`;
     const message = `boom-${canary}-message`;
     const scoped = { ...env, DISCORD_GUILD_ID: guild, DISCORD_BOT_TOKEN: token };
@@ -176,7 +176,7 @@ describe("Discord scheduled-events invalid-filter, sanitized-log and failure-res
 
   it("logs only keys and elapsed on a status failure, never the error body bytes", async () => {
     const canary = "canary-3b9e51a7c4d84f0a";
-    const guild = `guild-${canary}`;
+    const guild = "326474832151838730";
     const token = `token-${canary}-secret`;
     const body = `error-body-${canary}-bytes`;
     const scoped = { ...env, DISCORD_GUILD_ID: guild, DISCORD_BOT_TOKEN: token };
