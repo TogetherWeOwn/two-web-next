@@ -4,19 +4,19 @@ Source: legacy [two-web](https://github.com/TogetherWeOwn/two-web) @ `e1e939a`
 (read 2026-09-29: `routes/web.php`, `routes/api.php`, `routes/funnel.php`,
 `routes/console.php`, controllers, Livewire, Filament, jobs, commands,
 policies, middleware, services, config, views, content, public).
-Next side: this repo @ `56c4502c` (2026-10-10).
+Next side: this repo @ `7a91cbbb9` (2026-10-19).
 
 Flip gate (owner): re-run before W16; the DNS flip needs **0 unmapped rows**.
 A row is mapped when it names a card or is **dropped, with a reason**.
 `✅ done` = merged to `main`. Everything else names the owning card.
 
-W-card statuses at refresh time (2026-10-01; W10/W15 updated 2026-10-02; re-verified 2026-10-03, unchanged):
+W-card statuses at refresh time (2026-10-01; W10/W15 updated 2026-10-02; re-verified 2026-10-03, unchanged; re-verified 2026-10-19):
 W1 ✅, W2 ✅, W3 ✅, W4 ✅, W5 ✅, W6 ✅, W7 ✅, W8 ✅, W9 ✅, W10 ✅
 (slices 1–5, incl. slice 2 RsvpButton island PR #98;
 [TOG-9839](/TOG/issues/TOG-9839) done), W11 ✅, W12 ✅,
 W13 ✅, W14 ✅, S1 ✅ · W15 ✅ ([TOG-9697](/TOG/issues/TOG-9697) done,
 QA PASS on main `ea51a83e`) ·
-W16 ⛔ ([TOG-10112](/TOG/issues/TOG-10112), parent [TOG-9698](/TOG/issues/TOG-9698)).
+W16 ⛔ ([TOG-10112](/TOG/issues/TOG-10112) done, parent [TOG-9698](/TOG/issues/TOG-9698) still blocked).
 
 Database-outage acceptance is maintained separately in
 [`db-outage-matrix.md`](db-outage-matrix.md) and
@@ -47,8 +47,8 @@ is not evidence that a configured-but-unreachable DB already meets them.
 | `GET /profile`, `GET /members/{user}` (+ `member-access-log`, canonical to `profiles.show`) | ✅ member-gated (guest 302 → OAuth recording `url.intended`, non-member 403), one access-log row per read of another member, fail-closed 503; MemberStats block reads bot-owned `web_v1` views through the bot database (`BOT_DATABASE_URL` then `BOT_DB`, never the web `DB`), hides on no row/missing views/DB failure, covered by the same profile access-log subject | W7 ✅ |
 | `GET /leaderboards/members` (new, no legacy page; member-gated like `/members/{user}`) | ✅ going-RSVP ranking over published events, `?season=` shared window grammar, `?scope=overall\|relative` (viewer ±5, clamped, ≤ 11 rows; `friends` deferred → 400), `?activity=` normalized game; opted-out (`profiles.leaderboard_opt_out`) and erased members excluded, joins never counted; one access-log row per view, anonymous `board_view_logs` row (`members`), fail-open | new ✅ |
 | `PATCH /members/{user}` (owner-only, throttle 30,1, bio/games/timezone validation) | ✅ + `POST _method=PATCH` for the plain form | W7 ✅ |
-| `GET /events.json` (auth, 20/def-100/max paging, ETag, `going_count` per row) | `per_page` takes precedence over retained `limit` alias; default 20, complete signed integer sizes clamped 1–100, malformed/decimal/exponent sizes default 20; stable `starts_at ASC, id ASC`; existing `data/page/limit` plus `meta.current_page/per_page/total/last_page` (published-only total identical for every signed-in session, at least one last page); pages past the end clamp to the last page before any OFFSET is issued, so the response carries last-page rows with consistent `page`/`current_page`; retained exact `event_key` filter applies before paging to both rows and totals (malformed key 422, hidden/missing key empty); JSON/default/mixed-JSON guest 401, explicit `text/html` with valid positive quality redirects 302 with guarded `next` (no HTML substring or q=0 redirect); private ETag/304 identical across signed-in sessions; collection holds published events only and emits the same 15 legacy-ordered keys with wall-time readings, `going_count` and Discord derivation, and no `waitlist_position` or other viewer state (`test/event-json-access-matrix.test.ts`) | W8 ✅ + [TOG-11155](/TOG/issues/TOG-11155) |
-| `GET /events/:key` (legacy `/events/{event}` JSON show) | Session gate as collection; existing `eventJson()` fields and viewer waitlist position, no identities; draft member 403, moderator 200 + noindex; cancelled 410 with legacy reason/message/event_key/status; private ETag/304; non-canonical letter-case keys 301 to the canonical form (`test/events-key-canonical-siblings.test.ts`); registered after archive and per-event ICS | [TOG-11155](/TOG/issues/TOG-11155) |
+| `GET /events.json` (auth, 20/def-100/max paging, ETag, `going_count` per row) | `per_page` takes precedence over retained `limit` alias; default 20, complete signed integer sizes clamped 1–100, malformed/decimal/exponent sizes default 20; stable `starts_at ASC, id ASC`; existing `data/page/limit` plus `meta.current_page/per_page/total/last_page` (published-only total identical for every signed-in session, at least one last page); pages past the end clamp to the last page before any OFFSET is issued, so the response carries last-page rows with consistent `page`/`current_page`; retained exact `event_key` filter applies before paging to both rows and totals (malformed key 422, hidden/missing key empty); JSON/default/mixed-JSON guest 401, explicit `text/html` with valid positive quality redirects 302 with guarded `next` (no HTML substring or q=0 redirect); private ETag/304 identical across signed-in sessions; collection holds published events only and emits the same 15 legacy-ordered keys with wall-time readings, `going_count` and Discord derivation, and no `waitlist_position` or other viewer state (`test/event-json-access-matrix.test.ts`) | ✅ W8 ✅ + [TOG-11155](/TOG/issues/TOG-11155) ✅ |
+| `GET /events/:key` (legacy `/events/{event}` JSON show) | Session gate as collection; existing `eventJson()` fields and viewer waitlist position, no identities; draft member 403, moderator 200 + noindex; cancelled 410 with legacy reason/message/event_key/status; private ETag/304; non-canonical letter-case keys 301 to the canonical form (`test/events-key-canonical-siblings.test.ts`); registered after archive and per-event ICS | ✅ [TOG-11155](/TOG/issues/TOG-11155) ✅ |
 | `POST /events`, `PATCH /events/{event}` (throttle 30,1, draft-only create) | ✅ JSON moderator routes + `event-write` throttle (`test/throttle.test.ts`) | W8 ✅ + W11 ✅ |
 | `POST /events/{event}/publish|cancel` (throttle 30,1, announce semantics) | ✅ routes + status machine (`test/admin-reads.test.ts` publish/cancel parity); tracked write-back via W13 `SYNC_EVENT_QUEUE` (PR #68); mirrored cancel rows send `event.cancel`, never upsert, and legacy in-flight `event.cancel` carriers map to the same tracked job with the producer key unchanged (`test/sync-cancel-carrier.test.ts`); a cancel for a never-mirrored event (`discord_event_id` null) skips the bot and settles locally with the revision advanced and RSVPs stamped (`test/sync-cancel-never-mirrored.test.ts:59-73`, `test/event-writeback.test.ts:332-351`) | W8 ✅ + W11 ✅ + [TOG-10815](/TOG/issues/TOG-10815) |
 | `POST /events/{event}/rsvp-pause|rsvp-reopen` (throttle 30,1) | ✅ `POST /events/:key/rsvp-pause`, `POST /events/:key/rsvp-reopen`, `POST /admin/events/:key/rsvp-pause`, `POST /admin/events/:key/rsvp-reopen`: moderator-only, published/non-ended, row-locked idempotent toggles; each flip uses the Discord sync queue (`test/rsvp-toggle.test.ts`) | [TOG-10817](/TOG/issues/TOG-10817) ✅ |
@@ -68,7 +68,7 @@ Guests get `/join?next=/e/{key}`; all event-page variants retain the existing
 private/no-store policy with `Vary: Cookie`. Three bounded link queries, no
 per-event RSVP reads.
 
-### Auth admission follow-up (merged PR #141 + PR #118; review acceptance pending)
+### Auth admission follow-up (merged PR #141 + PR #118; [TOG-10354](/TOG/issues/TOG-10354) ✅ done)
 
 [TOG-10354](/TOG/issues/TOG-10354) adds shared Postgres single-use admission for
 ordinary auth and one-click join, plus atomic invalidation of the supplied active
@@ -96,7 +96,7 @@ consent-denial recovery without external traffic. Human admission is
 serialized per bucket (`test/human-throttle-concurrency.test.ts`) and
 signed-in re-entry replacing the prior session exactly once is pinned
 (`test/join-idempotence.test.ts`). Exact-head independent
-review/security acceptance and green CI remain delivery gates.
+review/security acceptance and green CI were the delivery gates (card done).
 This narrows three W15 gaps; it does not claim full parity, cutover readiness,
 production testing, or change the recorded rotating TTL/POST-QA divergences.
 
@@ -178,7 +178,7 @@ no public version/clock endpoint or redirect alias remains.
 | SyncEventToDiscord (unique per eventKey, tries 6, backoff 10/60/300/900/3600, debounce 10 s, grant recheck, terminal stamp) | ✅ `src/jobs/sync-event.ts` + consumer (`src/jobs/consumer.ts`); shape pinned in `test/jobs.test.ts` (unique/debounce/backoff/terminal), real-SQL timing in `test/jobs-scheduled.test.ts` | W13 ✅ |
 | CallInternalAction (`role.assign`/`announcement.post` only; production web never dispatches it — drill-only) | ✅ runtime handler `src/jobs/call-internal-action.ts` (`test/jobs.test.ts`, retry-delay/handler-deadline tests); staging drill-only script merged (PR #267): `bin/internal-action-drill.mjs` + `src/probes/internal-action-drill.ts`, fixture-pinned in `test/internal-action-drill.test.ts` (staging guard, production host refused); no-web-dispatch pinned in `test/callinternalaction-no-web-dispatch.test.ts` (PR #361) | W13 ✅ + [TOG-11706](/TOG/issues/TOG-11706) ✅ |
 | `events:reconcile` every 10 min (close past, materialize series, re-dispatch stale; single-flight) | ✅ `reconcileEvents` in `src/jobs/cron.ts` (close finished, materialize series, re-dispatch stale) on the pg EventStore (`src/jobs/events.ts`); single-flight via `runScheduled` (`test/jobs-scheduled.test.ts`, `test/prune.test.ts`) | W13 ✅ |
-| `model:prune` daily ×3 (MemberDataAccessLog, JoinAttempt + AgentEventIdempotencyKey, EventSearchLog; 90 d windows) | ✅ `pruneModelTables` in `src/jobs/cron.ts` (90 d each, legacy constants; `test/prune.test.ts` memory + real Postgres). Each statement deletes at most 1000 rows and the pass drains per table up to 100 batches (100k rows), paging once per pass via `scheduled.failing@model:prune` when the cap is hit with rows possibly pending; sustained inflow above 100k rows/day on one table stays best-effort and keeps paging. Next also prunes `agent_event_audits` at 90 d; legacy never pruned audits | W13 ✅ |
+| `model:prune` daily ×3 (MemberDataAccessLog, JoinAttempt + AgentEventIdempotencyKey, EventSearchLog; 90 d windows) | ✅ `pruneModelTables` in `src/jobs/cron.ts` (90 d each, legacy constants; `test/prune.test.ts` memory + real Postgres). Each statement deletes at most 1000 rows and the pass drains per table up to 100 batches (100k rows), paging once per pass via `scheduled.failing@model:prune` when the cap is hit with rows possibly pending; sustained inflow above 100k rows/day on one table stays best-effort and keeps paging. Next also prunes `agent_event_audits` at 90 d and sweeps expired `job_unique_locks` rows in the same daily pass (`src/jobs/cron.ts:160`); legacy never pruned audits and owns no lock table, so both are Next-internal additions, not divergences | W13 ✅ |
 | `web_sessions` expiry cleanup (no legacy equivalent — Laravel GC; rows accumulate without one) | ✅ expiry sweep in the same prune pass (`test/prune.test.ts`) | W13 ✅ |
 | Bot write-back after every event mutation (`syncAfterCommit`, drafts/past/unmirrored skip) | ✅ per-mutation `writeBack`/`childWriteBacks` in `src/admin/store-event-writes.ts` (re-exported via the `src/admin/store.ts` barrel; drafts/past/unmirrored skip); tracked write-back via W13 `SYNC_EVENT_QUEUE` with ledger, 10 s debounce + unique lock (PR #68; `test/rsvp-writeback-recovery.test.ts`, `test/rsvp-writeback-outage.test.ts`, PR #247); title-only edit write-back pinned (`test/event-title-edit-writeback.test.ts`). Bot HTTP adapter still pending (no live Discord proof) | [TOG-10815](/TOG/issues/TOG-10815) |
 
@@ -187,7 +187,7 @@ no public version/clock endpoint or redirect alias remains.
 | Legacy | Next status | Card |
 |---|---|---|
 | `discord:check-moderators` (deploy-time role-config probe) | ✅ ported (PR #38): `src/probes/check-moderators.ts` + `bin/check-moderators.mjs`, fixture-pinned in `test/probes.test.ts` (blank/dev PASS, require-configured FAIL, approved-pair PASS, doomed-role FAIL); never touches the network. Live W16 rehearsal use stays on the pre-flip card | Live rehearsal is tracked separately from this matrix. |
-| `bot:internal-action-smoke` (live-against-staging QA) | ✅ ported (PR #38): `src/probes/bot-smoke.ts` + `bin/internal-action-smoke.mjs`, fixture-pinned in `test/probes.test.ts` (signer + staging guard, production host refused, announcement-only mode); staging-only drill entry merged (PR #267; `test/internal-action-drill.test.ts`) | [TOG-10112](/TOG/issues/TOG-10112) (blocked; parent [TOG-9698](/TOG/issues/TOG-9698)) + [TOG-11706](/TOG/issues/TOG-11706) ✅ |
+| `bot:internal-action-smoke` (live-against-staging QA) | ✅ ported (PR #38): `src/probes/bot-smoke.ts` + `bin/internal-action-smoke.mjs`, fixture-pinned in `test/probes.test.ts` (signer + staging guard, production host refused, announcement-only mode); staging-only drill entry merged (PR #267; `test/internal-action-drill.test.ts`) | [TOG-10112](/TOG/issues/TOG-10112) ✅ (done; parent [TOG-9698](/TOG/issues/TOG-9698) still blocked) + [TOG-11706](/TOG/issues/TOG-11706) ✅ |
 | `queue:check-depth` (box probe) | dropped as a command (no box on Workers) — replaced by `GET /up` | **N3** ✅ ([TOG-9895](/TOG/issues/TOG-9895)) |
 | `error-alert:probe`, `queue:poison-probe` (drills) | ✅ re-expressed as Vitest tests (`test/drill-probes.test.ts`: error-alert 1-per-fingerprint/5min critical line against a fixture logger; poison-queue fixture isolated from ordinary queued work; fixture-only, no staging/prod) | [TOG-11732](/TOG/issues/TOG-11732) ✅ |
 | `ci:session-cookie` (perf-budget session minter) | unnecessary for the five guest-page budgets; authenticated perf surfaces remain uncovered | [TOG-10845](/TOG/issues/TOG-10845), [coverage](performance-budgets.md) |
@@ -297,4 +297,27 @@ preserve their export surfaces (10/10 admin pages, 210/210 island contracts,
 12/12 ingress exports), the session cookie value is unchanged behind its
 single source, and the tightened ingress text rules narrow no parity claim.
 Prune/immutability rows and the rows owned by open #620/#582 were not
-touched. Re-run this matrix before the DNS flip.
+touched. Re-run 2026-10-19 at `7a91cbbb9` (579 merges after `56c4502c`):
+table scan finds 0 rows without a card or drop reason; `npm run docs:links`
+is green (parity-citation acceptance 12/12, 83 Markdown files ok), so every
+implementation citation resolves at HEAD. Behavior deltas reviewed and all
+additive/hardening — no ✅ flipped back: #1254 featured body 1000-code-point
+field-level 422, #1136 named-only badge count with occupancy kept for seats,
+#1240/#1228/#1168 event-key alias resolution plus canonical 301s, #1226 prune
+failure isolation, #1120 `job_unique_locks` expiry sweep (row text refreshed;
+Next-internal, no legacy equivalent), #1216 grant-first agent-events ingress,
+#1221 released-only retry-contract restore (revert of #1142), #1135 draft ICS
+`TENTATIVE`, #1143/#1126/#1161 admin write hardening, #1151 bot-token-missing
+fail-closed. Two rows flipped to ✅ with merge evidence: `GET /events.json`
+and the legacy JSON show ([TOG-11155](/TOG/issues/TOG-11155) done 2026-10-02;
+`test/event-json-access-matrix.test.ts` 9/9 plus
+`test/events-key-canonical-siblings.test.ts` and `test/draft-ics-status.test.ts`
+17/17 green at HEAD on agent-testdb). The §3 agent-events row stays unmarked:
+`docs/agent-events.md:50` still records the optional W8 carrier as unbound in
+checked-in Wrangler. [TOG-10354](/TOG/issues/TOG-10354) and
+[TOG-10112](/TOG/issues/TOG-10112) closed since the last pin (texts updated);
+W16 stays ⛔ on still-blocked parent [TOG-9698](/TOG/issues/TOG-9698).
+Kit-side moves (#886/#914/#879 event/member-board ownership, #960 admin lists)
+are out of scope and touch no Hono parity claim; the §12 Kit session-bridge
+divergence still pins `src/kit-session.ts`. No row invalidated, so no
+follow-up card. Re-run this matrix before the DNS flip.
