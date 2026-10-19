@@ -613,6 +613,17 @@ describe("retention ledger agent-event rows (L8a)", () => {
     );
     // Sole audit writer is insert-only; dispatch reads the trail, postgres only prunes.
     expect(read("src/agent-events/audit.ts")).toContain("INSERT INTO agent_event_audits");
+    // Repo-wide: only the prune store may delete audit or idempotency rows,
+    // so the request path can never widen into a drain.
+    for (const table of ["agent_event_audits", "agent_event_idempotency_keys"]) {
+      const offenders = listTsFiles(join(root, "src")).filter((file) => {
+        if (file.endsWith("src/jobs/postgres.ts")) return false;
+        return deleteWindows(readFileSync(file, "utf8"), table).length > 0;
+      });
+      expect(offenders, `only postgres.ts may delete ${table}: ${offenders.join(", ")}`).toEqual(
+        [],
+      );
+    }
     // Retired table: no Drizzle export, dropped by 1019, content carried by events.
     expect(read("src/db/schema.ts")).not.toContain("agentEvents");
     expect(read("drizzle/1019_shared-agent-events.sql")).toContain('DROP TABLE "agent_events"');
