@@ -122,7 +122,11 @@ describe("guest event pages with unavailable session storage", () => {
       vi.mocked(getPublicEvent).mockResolvedValue({ ...event, status: "draft" });
       const draft = await request(cookie);
       expect(draft.status).toBe(403);
-      expect(await draft.text()).toBe("Forbidden");
+      // Same draft-denial line as a signed-in non-moderator: the branded
+      // page, which invites a sign-in retry instead of bare text.
+      const draftBody = await draft.text();
+      expect(draftBody).toContain("You do not have access to this");
+      expect(draftBody).toContain('data-testid="error-home"');
       expect(listGoingAttendees).not.toHaveBeenCalled();
       expect(connect).not.toHaveBeenCalled();
       expect(ddl).not.toHaveBeenCalled();

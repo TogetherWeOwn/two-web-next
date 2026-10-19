@@ -97,7 +97,9 @@ describe("admin guard matrix (override seams, no DB)", () => {
     const cookie = await cookieFor(store, MEMBER);
     const res = await adminApp(store).request("/events", { headers: { cookie } }, env);
     expect(res.status).toBe(403);
-    expect(await res.text()).toContain("Forbidden");
+    const body = await res.text();
+    expect(body).toContain("You do not have access to this");
+    expect(body).toContain('data-testid="error-home"');
     expect(res.headers.get("location")).toBeNull();
     expect(intendedPair(res)).toBeNull();
   });

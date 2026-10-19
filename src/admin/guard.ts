@@ -28,7 +28,7 @@ import { getSignedCookie } from "hono/cookie";
 import type { Context, Next } from "hono";
 import postgres from "postgres";
 import type { Env } from "../env";
-import { databaseUnavailable, notFoundHandler } from "../errors";
+import { databaseUnavailable, forbidden, notFoundHandler } from "../errors";
 import { databaseOptions, databaseUrl } from "../db/connection";
 import { bounceToLogin } from "../return-journey";
 import { prepareAuthStatus } from "../auth-status";
@@ -142,7 +142,7 @@ export function adminGuard(overrides?: AdminOverrides | SessionStore) {
     }
     if (!actor) {
       if (expiredGuest) return bounceToLogin(c);
-      return c.text("Forbidden", 403);
+      return forbidden(c);
     }
     c.set("adminActor", actor);
 

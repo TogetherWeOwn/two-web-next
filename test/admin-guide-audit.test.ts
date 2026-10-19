@@ -181,7 +181,9 @@ describe("admin guide audit: moderator guard on every claimed route (no DB)", ()
         : path;
       const res = await request(route, env, { headers: { cookie } });
       expect(res.status, route).toBe(403);
-      expect(await res.text()).toBe("Forbidden");
+      const body = await res.text();
+      expect(body, route).toContain("You do not have access to this");
+      expect(body, route).toContain('data-testid="error-home"');
     },
   );
 
