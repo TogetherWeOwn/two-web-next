@@ -40,6 +40,19 @@ node --import ./bin/ts-hook.mjs bin/erase-member.mjs --discord-id=<snowflake> --
 Exit codes: 0 success, 2 usage/config/refusal (including a malformed id),
 1 driver/transaction failure (changes rolled back).
 
+## Bounded waits
+
+Like `revoke-sessions`, the command sets its own session
+`statement_timeout` (10s) and `lock_timeout` (5s) on its single connection
+only; global database policy is unchanged. If a member row or table is
+locked, the run fails bounded with exit 1 and the redacted "operation
+failed; changes rolled back" message; the transaction rolls back, so a
+timed-out run erases nothing and all five tables stay unchanged. Verify
+with a dry-run to read the per-table counts, then retry (re-run) the apply
+once the lock clears. If timeouts repeat, escalate to the DevOps &
+Reliability Engineer with the redacted error and the dry-run counts; do
+not retry in a loop and do not erase by another path.
+
 For the separate case where a moderator has lost their Discord role but their
 member account should remain, use the [moderator session-revocation procedure](moderator-admin-guide.md#a-moderator-lost-their-role). It explains the session expiry window and how to end active sessions without erasing member data.
 
