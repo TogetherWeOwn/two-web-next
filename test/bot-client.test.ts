@@ -277,6 +277,120 @@ describe("createBotClient (ported InternalActionClient)", () => {
     ).rejects.toThrow(BotTransportError);
   });
 
+  it("an unknown event.upsert outcome throws the fixed factory string, not the outcome", async () => {
+    const { client } = clientWith([
+      jsonResponse(200, {
+        ok: true,
+        result: { outcome: "mystery", event_id: "d1" },
+        request_id: "r",
+      }),
+    ]);
+    let thrown: unknown;
+    try {
+      await client.upsertEvent(
+        {
+          eventKey: "e",
+          name: "n",
+          startsAt: "2026-10-01T00:00:00Z",
+          endsAt: "2026-10-01T01:00:00Z",
+          location: "L",
+          description: null,
+        },
+        uuid,
+      );
+    } catch (e) {
+      thrown = e;
+    }
+    expect(thrown).toBeInstanceOf(BotTransportError);
+    expect(thrown).not.toBeInstanceOf(TypeError);
+    expect((thrown as Error).message).toBe("an event.upsert outcome this release does not know");
+  });
+
+  it.each([
+    ["a missing", {}],
+    ["an empty", { event_id: "" }],
+    ["a blank", { event_id: "   " }],
+    ["a null", { event_id: null }],
+    ["a non-string", { event_id: 123 }],
+  ])(
+    "an event.upsert success with %s event_id throws the fixed factory string",
+    async (_label, extra) => {
+      const { client } = clientWith([
+        jsonResponse(200, {
+          ok: true,
+          result: { outcome: "created", ...extra },
+          request_id: "r",
+        }),
+      ]);
+      let thrown: unknown;
+      try {
+        await client.upsertEvent(
+          {
+            eventKey: "e",
+            name: "n",
+            startsAt: "2026-10-01T00:00:00Z",
+            endsAt: "2026-10-01T01:00:00Z",
+            location: "L",
+            description: null,
+          },
+          uuid,
+        );
+      } catch (e) {
+        thrown = e;
+      }
+      expect(thrown).toBeInstanceOf(BotTransportError);
+      expect(thrown).not.toBeInstanceOf(TypeError);
+      expect((thrown as Error).message).toBe("an event.upsert success with no event_id");
+    },
+  );
+
+  it("an unknown event.cancel outcome throws the fixed factory string, not the outcome", async () => {
+    const { client } = clientWith([
+      jsonResponse(200, {
+        ok: true,
+        result: { outcome: "mystery", event_id: "d1" },
+        request_id: "r",
+      }),
+    ]);
+    let thrown: unknown;
+    try {
+      await client.cancelEvent({ eventKey: "e" }, uuid);
+    } catch (e) {
+      thrown = e;
+    }
+    expect(thrown).toBeInstanceOf(BotTransportError);
+    expect(thrown).not.toBeInstanceOf(TypeError);
+    expect((thrown as Error).message).toBe("an event.cancel outcome this release does not know");
+  });
+
+  it.each([
+    ["a missing", {}],
+    ["an empty", { event_id: "" }],
+    ["a blank", { event_id: "   " }],
+    ["a null", { event_id: null }],
+    ["a non-string", { event_id: 123 }],
+  ])(
+    "an event.cancel success with %s event_id throws the fixed factory string",
+    async (_label, extra) => {
+      const { client } = clientWith([
+        jsonResponse(200, {
+          ok: true,
+          result: { outcome: "cancelled", ...extra },
+          request_id: "r",
+        }),
+      ]);
+      let thrown: unknown;
+      try {
+        await client.cancelEvent({ eventKey: "e" }, uuid);
+      } catch (e) {
+        thrown = e;
+      }
+      expect(thrown).toBeInstanceOf(BotTransportError);
+      expect(thrown).not.toBeInstanceOf(TypeError);
+      expect((thrown as Error).message).toBe("an event.cancel success with no event_id");
+    },
+  );
+
   it("compares offset-bearing event times as instants, not strings", async () => {
     const { client } = clientWith([
       jsonResponse(200, { ok: true, result: { outcome: "created", event_id: "d1" } }),
