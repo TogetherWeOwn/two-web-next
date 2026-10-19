@@ -37,6 +37,7 @@ import { pruneModelTables } from "../src/jobs/cron";
 import { pgPruneStores, pgQueueLedger, pgUniqueLock } from "../src/jobs/postgres";
 import { discardFailedJob } from "../src/jobs/redrive";
 import type { PruneStores } from "../src/jobs/types";
+import { OAUTH_JOURNEY_SWEEP_BATCH_SIZE, OAUTH_JOURNEY_TTL_SECONDS } from "../src/oauth-journeys";
 import { createMemorySessionStore, SESSION_TTL_SECONDS } from "../src/sessions";
 import { createJobsFixture, type JobsFixture } from "./helpers/jobs-db";
 
@@ -462,6 +463,56 @@ describe("retention ledger doc rows", () => {
       .filter((line) => line.startsWith("- "));
     expect(scope.some((line) => line.includes("`event_sync_attempts`"))).toBe(true);
     expect(read("docs/retention-ledger.md")).not.toContain("documented in a later slice");
+  });
+
+  it("publishes the web_oauth_journeys row: 10-minute TTL with bounded request-path sweep", () => {
+    expect(OAUTH_JOURNEY_TTL_SECONDS).toBe(600);
+    expect(OAUTH_JOURNEY_SWEEP_BATCH_SIZE).toBe(1000);
+    const rows = read("docs/retention-ledger.md")
+      .split("\n")
+      .filter((line) => /^\| `web_oauth_journeys`(?:\s|\|)/.test(line));
+    expect(rows, "one dedicated web_oauth_journeys row").toHaveLength(1);
+    const row = rows[0]!;
+    for (const claim of [
+      "`web_oauth_journeys`",
+      "10-minute TTL",
+      "OAUTH_JOURNEY_TTL_SECONDS = 600",
+      "never deletes on consume",
+      "No daily prune",
+      "pruneModelTables",
+      "sweepExpired",
+      "OAUTH_JOURNEY_SWEEP_BATCH_SIZE = 1000",
+      "for update skip locked",
+      "expires_at <= now()",
+      "across repeated starts",
+      "src/oauth-journeys.ts:6-13",
+      "drizzle/1022_web-sessions-oauth-journeys.sql",
+      "src/db/schema.ts",
+      "src/auth/routes.ts",
+      "src/join/route-start.ts",
+    ]) {
+      expect(row, `journey row must pin: ${claim}`).toContain(claim);
+    }
+    // Mechanism pins: the bounded sweep lives in the journey store, the
+    // request paths run it inline, and the daily prune never mentions it.
+    const journeys = read("src/oauth-journeys.ts");
+    expect(journeys).toContain("OAUTH_JOURNEY_TTL_SECONDS = 600");
+    expect(journeys).toContain("OAUTH_JOURNEY_SWEEP_BATCH_SIZE = 1000");
+    expect(normalizeSqlWindow(journeys)).toContain(
+      "delete from web_oauth_journeys where state_hash in ( select state_hash from web_oauth_journeys where expires_at <= now() order by expires_at, state_hash limit ${OAUTH_JOURNEY_SWEEP_BATCH_SIZE} for update skip locked ) returning state_hash",
+    );
+    expect(read("drizzle/1022_web-sessions-oauth-journeys.sql")).toContain(
+      'CREATE TABLE IF NOT EXISTS "web_oauth_journeys"',
+    );
+    expect(read("src/auth/routes.ts")).toContain("await store.journeys.sweepExpired();");
+    expect(read("src/join/route-start.ts")).toContain("await store.journeys.sweepExpired();");
+    expect(read("src/jobs/cron.ts")).not.toContain("web_oauth_journeys");
+    expect(read("src/jobs/postgres.ts")).not.toContain("web_oauth_journeys");
+    // Negative control: an invented row name pins nothing.
+    const invented = read("docs/retention-ledger.md")
+      .split("\n")
+      .filter((line) => /^\| `web_oauth_journeys_invented`(?:\s|\|)/.test(line));
+    expect(invented, "invented journey row must fail the pin").toHaveLength(0);
   });
 });
 
