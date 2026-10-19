@@ -102,7 +102,7 @@ afterEach(() => {
   }
 });
 
-describe("CSP sink shed signal (TOG-31725)", () => {
+describe("CSP sink shed signal", () => {
   it("emits one bounded shed signal under sustained flood, still all 204", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     for (let i = 0; i < 80; i += 1) {
