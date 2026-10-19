@@ -73,4 +73,32 @@ describe("throttle prune failure keeps the decided verdict", () => {
     // The DB error text (which can quote statement bindings) never reaches the log.
     expect(JSON.stringify(first)).not.toContain("prune boom detail");
   });
+
+  it("names a non-Error prune throw by constructor, unknown when absent", async () => {
+    for (const [thrown, exception, leaked] of [
+      ["prune boom string", "String", "prune boom string"],
+      [null, "unknown", "null"],
+    ] as const) {
+      const { hits, sql } = fixture(true, thrown);
+      const bucket = "prune-failure-warn-non-error";
+      hits.push(bucket, bucket);
+      const warns: unknown[][] = [];
+      const spy = vi.spyOn(console, "warn").mockImplementation((...args: unknown[]) => {
+        warns.push(args);
+      });
+      try {
+        const verdict = await checkJoinThrottle(sql, bucket, 2);
+        expect(verdict).toEqual({ limited: true, retryAfter: 30 });
+        expect(hits).toEqual([bucket, bucket]);
+      } finally {
+        spy.mockRestore();
+      }
+      expect(warns).toHaveLength(1);
+      const first = warns[0]!;
+      expect(first[0]).toBe("Join throttle prune failed; keeping the decided verdict.");
+      expect(first[1]).toMatchObject({ exception });
+      // The thrown value itself never reaches the log.
+      expect(JSON.stringify(first)).not.toContain(leaked);
+    }
+  });
 });
