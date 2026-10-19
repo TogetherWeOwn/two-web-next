@@ -29,7 +29,13 @@ const title = $derived(copy.title);
     <p class="recovery-code" aria-hidden="true">{copy.code}</p>
     <h1 id="error-heading">{copy.title}</h1>
     <p class="lead">{copy.lead}</p>
-    {#if code === 404}
+    {#if code === 400}
+      <!-- 400: We could not read that request -->
+      <p class="recovery-actions">
+        <a class="btn" href="/events" data-testid="error-events">Browse all events</a>
+        <a href="/" data-testid="error-home">Back to the homepage</a>
+      </p>
+    {:else if code === 404}
       <!-- 404 -->
       <p class="recovery-actions">
         <a class="btn" href="/auth/discord" data-testid="error-join">Join with Discord</a>
