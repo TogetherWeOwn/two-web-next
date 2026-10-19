@@ -135,7 +135,12 @@ export interface EventStore {
    * pending request (retry budget spent, or a null deadline that never becomes
    * due) is not stale: the reconcile loop always skips it, so it must not
    * consume page slots ahead of dispatchable keys. Not-yet-due retries stay
-   * stale; the loop owns the exact due check. Called with a positive limit,
+   * stale when `dueBefore` is omitted; the loop then owns the exact due check.
+   * A supplied `dueBefore` applies that boundary in the selection, before
+   * `ORDER BY` / `LIMIT`, using only that instant: recovery requires
+   * `next_attempt_at <= dueBefore`, and any pending request still sleeping
+   * then also blocks the dirty branch. With a cutoff, `deferred` counts only
+   * due-eligible matches that were not returned. Called with a positive limit,
    * resolves one deterministic page: at most `limit` keys in ascending
    * `event_key` order plus how many matched keys were NOT returned (`deferred`
    * is 0 exactly when the page drained the backlog). Called without a limit,
@@ -143,7 +148,7 @@ export interface EventStore {
    * retained for existing single-key-era callers). Deferred keys stay stale
    * for the next pass: nothing marks, skips or reorders them.
    */
-  staleEventKeys(limit?: number): Promise<string[] | StaleEventKeysPage>;
+  staleEventKeys(limit?: number, dueBefore?: Date): Promise<string[] | StaleEventKeysPage>;
 }
 
 /**
