@@ -157,6 +157,9 @@ function captureLogs() {
       .map((arg) => {
         if (typeof arg === "string") return arg;
         if (arg instanceof Error) return `${arg.message} ${arg.stack ?? ""}`;
+        // Benign serializer fallback (not an alert/log-line parse): this
+        // stringifies arbitrary log args for marker scans, so String(arg) on
+        // unstringifiable values is intentional and stays outside parseJsonLines.
         try {
           return JSON.stringify(arg) ?? String(arg);
         } catch {

@@ -36,6 +36,9 @@ function chainable(value: unknown): Chain {
 }
 
 function serializeExecuteArg(arg: unknown): string {
+  // Benign serializer fallback (not an alert/log-line parse): this renders an
+  // arbitrary driver arg for throttle-table matching, so "" on unreadable
+  // shapes is intentional and stays outside parseJsonLines.
   try {
     const v = arg as Record<string, unknown>;
     const parts: string[] = [];

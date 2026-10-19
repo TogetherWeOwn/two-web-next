@@ -37,7 +37,7 @@ steps against `togetherweown.com`, `www`, or
    plus the chosen known-good N version ID. Prefer the newest N
    whose sources differ on a public route; adjacent versions are
    often code-identical after workflow-only merges.
-3. Baseline: run the staging smoke (23 routes)
+3. Baseline: run the staging smoke (24 routes)
    (`node bin/smoke.mjs https://next.togetherweown.com`) and record
    the result. The rehearsal compares against this baseline.
 4. Roll back with `wrangler rollback <N_VERSION> --name two-web-next
