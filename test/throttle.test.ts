@@ -23,13 +23,13 @@ const EXEMPT: Record<string, string> = {
   "PATCH /members/:user": "in-handler 30/min profile-write bucket (W7)",
   "POST /members/:user": "in-handler 30/min profile-write bucket (W7)",
   "POST /admin/queue/source-evidence/:id":
-    "evidence-bearer refusal; DB-free 405 before any body parse or state touch",
+    "evidence-bearer refusal; action cap first (oversized 413 DB-free), then 405; no throttle, session, or source touch",
   "PUT /admin/queue/source-evidence/:id":
-    "evidence-bearer refusal; DB-free 405 before any body parse or state touch",
+    "evidence-bearer refusal; action cap first (oversized 413 DB-free), then 405; no throttle, session, or source touch",
   "PATCH /admin/queue/source-evidence/:id":
-    "evidence-bearer refusal; DB-free 405 before any body parse or state touch",
+    "evidence-bearer refusal; action cap first (oversized 413 DB-free), then 405; no throttle, session, or source touch",
   "DELETE /admin/queue/source-evidence/:id":
-    "evidence-bearer refusal; DB-free 405 before any body parse or state touch",
+    "evidence-bearer refusal; action cap first (oversized 413 DB-free), then 405; no throttle, session, or source touch",
   "POST /mcp":
     "public MCP; in-handler shared 60/min public-read budget, same 429 envelope as the public API (B2)",
 };
