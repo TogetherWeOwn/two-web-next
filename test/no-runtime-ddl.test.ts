@@ -3,7 +3,11 @@
 // bootstrap for disposable test schemas; the canonical DDL lives in
 // drizzle/ and is applied by the migrate workflow. This scan keeps it that
 // way: after removing comments, no src/ module outside the definition sites
-// may name a bootstrap helper or carry a DDL statement.
+// may name a bootstrap helper or carry a DDL statement. Verbs are paired
+// with their object noun (create/alter/drop table, truncate to a target,
+// grant/revoke … on), so prose identifiers such as a `truncate()` helper or
+// `grant` records cannot trip it; a statement split across lines is caught
+// by the whitespace-folded check.
 //
 // Scope is src/ because that is what ships in the Worker bundle. Test,
 // fixture, e2e and ci code may call the helpers against disposable schemas.
@@ -40,7 +44,8 @@ const DDL_SITES = new Set([
 
 const HELPER_PATTERN =
   /\b(migrate|migrateJoin|migrateRoster|migrateOAuthJourneys|ensureAccessLogGin)\b/;
-const DDL_PATTERN = /\b(create\s+table|alter\s+table|create\s+(unique\s+)?index)\b/i;
+const DDL_PATTERN =
+  /\b(create\s+table|alter\s+(table|sequence)|create\s+(unique\s+)?index|drop\s+table|truncate\s+(table\s+)?\w|create\s+(extension|type|schema|view|sequence)\b|grant\s+\S+\s+on\b|revoke\s+\S+\s+on\b)/i;
 
 function walk(dir: string): string[] {
   const out: string[] = [];
@@ -81,27 +86,34 @@ describe("no runtime DDL in the Worker bundle", () => {
     const violations: string[] = [];
     for (const file of walk(`${SRC}/`)) {
       if (DDL_SITES.has(file)) continue;
-      const lines = codeOnly(readFileSync(new URL(file, root), "utf8")).split("\n");
-      lines.forEach((line, index) => {
+      const code = codeOnly(readFileSync(new URL(file, root), "utf8"));
+      code.split("\n").forEach((line, index) => {
         if (DDL_PATTERN.test(line)) {
           violations.push(`${file}:${index + 1} (${line.trim().slice(0, 100)})`);
         }
       });
+      // A statement split across lines evades the per-line check; folding
+      // whitespace catches `create\ntable …` at file granularity.
+      if (
+        violations.every((v) => !v.startsWith(`${file}:`)) &&
+        DDL_PATTERN.test(code.replace(/\s+/g, " "))
+      ) {
+        violations.push(`${file} (DDL statement split across lines)`);
+      }
     }
     expect(violations, "DDL statements live in drizzle/ migrations, not in src/").toEqual([]);
   });
 
-  it("each definition site still defines its helper (allowlist cannot drift silent)", () => {
+  it("each allowlist entry is still referenced (no stale exemptions)", () => {
     for (const [file, helpers] of Object.entries(DEFINITION_SITES)) {
       const code = codeOnly(readFileSync(new URL(file, root), "utf8"));
       for (const helper of helpers) {
-        const defined =
-          helper === "migrate"
-            ? /export async function migrate\(/.test(code)
-            : code.includes(`export async function ${helper}(`) ||
-              code.includes(`export { ${helper},`) ||
-              code.includes(`${helper},`);
-        expect(defined, `${file} must still define ${helper}`).toBe(true);
+        // Presence, not a definition assertion: sessions.ts imports and calls
+        // migrateOAuthJourneys without defining it, and store.ts only
+        // re-exports. If a helper leaves its file entirely, the exemption
+        // must leave with it.
+        const referenced = new RegExp(`\\b${helper}\\b`).test(code);
+        expect(referenced, `${file} no longer references ${helper}: drop its exemption`).toBe(true);
       }
     }
   });
