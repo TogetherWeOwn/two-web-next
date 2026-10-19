@@ -59,6 +59,14 @@ Rules:
   remove or rename historical migrations, move them between directories, or
   reuse their numbers. New migrations append above the highest reserved web
   number (the last web entry in `migrations.lock` on fetched main) within `1000–1999`; gaps are not reusable slots.
+- `1026` was never issued: the journal goes `1025_leaderboard-opt-out`
+  (idx 26) straight to `1027_join-attempts-discord-id-index` (idx 27),
+  no `drizzle/1026*` or `drizzle/meta/1026*` file exists, and
+  `git log --all -- drizzle/1026* drizzle/meta/1026*` returns nothing.
+  Do not backfill it: new migrations append above the highest reserved
+  web number and numbering stays monotonic-forward (same as the older
+  `1014` → `1016` gap recorded in the
+  [cutover ledger](cutover-migration-ledger.md)).
 - Web migrations must keep the C1 zero-replatform constraints: `jsonb`
   operators, the GIN index on `member_data_access_logs`, and
   `SELECT … FOR UPDATE` row locks stay working through Hyperdrive
