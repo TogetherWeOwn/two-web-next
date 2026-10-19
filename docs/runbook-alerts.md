@@ -207,6 +207,18 @@ unparseable batch logs a malformed-payload line (status stays 400 either
 way). A skew line means a poisoned clock is eating traffic; a malformed
 line means payload corruption. No threshold or slack change.
 
+The three exact rejection lines come from the Tail Worker
+`two-web-next-alerts` (`AlertAggregator.fetch` in `tail/worker.ts`). Each is
+`console.warn` only — no page, no Discord delivery — and the response status
+stays 400; the line names the reason so operators can tell clock skew from
+payload corruption. No line carries payload bytes.
+
+| Exact warn | Emitter / path | Contract and severity | First read-only check |
+| --- | --- | --- | --- |
+| `tail observe rejected malformed batch: invalid body` | `two-web-next-alerts` `AlertAggregator.fetch`, pre-dispatch: any POST to `/observe`, `/health`, `/spike-result`, or `/health-result` (`tail/worker.ts`) | 400; warn only, no page. Unparseable body is malformed, never skew. No payload bytes in the line. | Filter the alerts-Worker logs for the exact string (Workers Logs, or `npx wrangler tail two-web-next-alerts --search 'tail observe rejected'`), then check the sender batch shape/version and that the sender posted valid JSON. |
+| `tail observe rejected future-skewed batch: timestamp beyond slack` | `two-web-next-alerts` `AlertAggregator.fetch` `/observe` (`tail/worker.ts`) | 400; warn only, no page. Otherwise-valid batch stamped beyond now plus `BATCH_FUTURE_SLACK_MS`; a batch that is both malformed and future-stamped reads as malformed, never skew. No payload bytes in the line. | Filter the alerts-Worker logs for the exact string, then compare the sender clock against `BATCH_FUTURE_SLACK_MS` in `tail/worker.ts`. A skew line means a poisoned clock is eating traffic. |
+| `tail observe rejected malformed batch: invalid payload` | `two-web-next-alerts` `AlertAggregator.fetch` `/observe` (`tail/worker.ts`) | 400; warn only, no page. Structurally invalid batch (`script`, `at`, `requests`, `errors`, `crashes` per `validBatch` in `tail/worker.ts`). No payload bytes in the line. | Filter the alerts-Worker logs for the exact string, then check the sender batch shape/version against `validBatch` in `tail/worker.ts`. A malformed line means payload corruption. |
+
 Attribution is honest about the whole counted window. `build_sha` is present
 only on a homogeneous page: every counted bucket in the window carries the
 same validated build, through the same 40-hex version-tag and release-log

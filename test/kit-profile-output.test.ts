@@ -153,7 +153,7 @@ describe("Kit authenticated public-member profile output", () => {
       joinResult: outcome.joinResult,
     };
     const kitHtml = renderView(pageProps);
-    const honoHtml = ProfilePage(pageProps)!.toString();
+    const honoHtml = ProfilePage(pageProps)!.toString() as string;
 
     expect(visibleContract(kitHtml)).toEqual(visibleContract(honoHtml));
     for (const html of [kitHtml, honoHtml]) {
@@ -203,7 +203,7 @@ describe("Kit authenticated public-member profile output", () => {
       joinResult: outcome.joinResult,
     };
     const kitHtml = renderView(pageProps);
-    const honoHtml = ProfilePage(pageProps)!.toString();
+    const honoHtml = ProfilePage(pageProps)!.toString() as string;
 
     expect(visibleContract(kitHtml)).toEqual(visibleContract(honoHtml));
     for (const html of [kitHtml, honoHtml]) {
