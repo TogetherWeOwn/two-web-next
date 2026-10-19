@@ -139,8 +139,9 @@ function noFetch() {
 // refusals. The ruling's rate is ~1%; the cap is set an order of
 // magnitude above it (10%, so 1 for a single hit) so those pins assert
 // boundedness without pinning the exact sampler. The flood pin below
-// carries the bound's teeth deterministically: it forces the sampler
-// off and asserts exact zero, which a one-row-per-refusal shape fails.
+// carries the bound's teeth deterministically: it pins the rate's
+// value, stubs the sampler at the literal boundary, and asserts exact
+// zero, which a one-row-per-refusal shape fails.
 const sampledCap = (refusals: number) => Math.ceil(refusals / 10);
 
 function expectBoundedAudits(fake: ReturnType<typeof makeFakeAgentDb>, refusals: number) {
@@ -296,11 +297,17 @@ describe("pre-auth refusals: no digest; zero audits grantless-deep, sampled-boun
   });
 
   it("a spent shield bucket refuses a flood first: every 429 carries request_id, refused hits write no hit rows and reach no grant lookup, and the forced-unsampled flood writes zero audit rows", async () => {
-    // Force the shield sampler off deterministically: `rate < rate` is
-    // false, so no refusal is sampled. Under the live ~1% sampler this
-    // pin was a rare flake (a flood can sample more rows than any fixed
-    // cap); forced off, the exact count is zero. Restored in afterEach.
-    vi.spyOn(Math, "random").mockReturnValue(SHIELD_REFUSAL_AUDIT_RATE);
+    // Force the shield sampler off deterministically at the literal
+    // documented boundary: `0.01 < 0.01` is false, so no refusal is
+    // sampled. Stubbing the imported constant instead would let a
+    // raised rate (1 = audit every refusal) pass silently, because
+    // the stub would rise with it; with the literal, any rate above
+    // 0.01 samples the flood and fails the exact-zero assertion
+    // below, and the value pin after it catches a lower rate too.
+    // Under the live sampler this pin was a rare flake (a flood can
+    // sample more rows than any fixed cap); forced off, the exact
+    // count is zero. Restored in afterEach.
+    vi.spyOn(Math, "random").mockReturnValue(0.01);
     noFetch();
     const fake = makeFakeAgentDb();
     const counting = countingGrantLookups(fake);
@@ -326,10 +333,14 @@ describe("pre-auth refusals: no digest; zero audits grantless-deep, sampled-boun
     expect(fake.hits).toHaveLength(hitsBeforeFlood);
     expect(counting.lookups()).toBe(lookupsBeforeFlood);
     // Sampler forced off above, so exact zero over the whole run (the 2
-    // admitted grantless 401s write none either). This still kills the
-    // one-row-per-refusal shape: auditing every 429 would write FLOOD
-    // rows here regardless of the stub.
+    // admitted grantless 401s write none either). This kills the
+    // one-row-per-refusal shapes: removing the sampler guard writes
+    // FLOOD rows regardless of the stub, a `<=` comparison samples at
+    // the boundary, and a rate above the literal 0.01 samples too.
     expect(fake.audits).toHaveLength(0);
+    // The literal stub cannot see a rate lowered below 0.01, so pin
+    // the documented ~1% value itself.
+    expect(SHIELD_REFUSAL_AUDIT_RATE).toBe(0.01);
   });
 
   it("the audit row for a granted over-deep payload is attributed to the resolved grant", async () => {
