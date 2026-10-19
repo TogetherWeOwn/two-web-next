@@ -70,6 +70,9 @@ function makeCaseSensitiveDb(rows: FakeRow[]) {
           chain.predicate = predicate;
           return chain;
         },
+        innerJoin(..._args: unknown[]) {
+          return chain;
+        },
         orderBy(..._args: unknown[]) {
           return chain;
         },
