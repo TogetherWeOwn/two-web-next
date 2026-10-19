@@ -26,6 +26,7 @@ export {
   INT4_MIN,
   isAgentVersion,
   MAX_DIGEST_DEPTH,
+  PAYLOAD_TOO_DEEP_MESSAGE,
   PayloadTooDeepError,
   ulid,
   validateFields,

@@ -22,13 +22,21 @@
 // lock-error catch of their own, so the mapping must live inside
 // writeRsvp/withdrawRsvp: a lock-timeout error must never propagate.
 //
-// The bound's mechanism and exact value are not pinned — any lock_timeout
-// that resolves well inside the 8s race bound passes (the codebase already
-// carries 2s and 5s precedents); an unbounded wait does not. Note the other
-// side is pinned elsewhere: test/rsvp-throttle-prune-batch.test.ts holds
-// this same member lock for ~3.2s and expects the queued write to then be
-// judged on expiry, so a timeout below that window must reconcile those
-// suites rather than silently flip them to limited.
+// The bound's magnitude is pinned twice, both without reading the
+// JavaScript clock: the containment suite pins RSVP_LOCK_TIMEOUT_MS to 5000
+// (mirroring test/performance-budgets-snapshot.test.ts), and every busy case
+// holds its lock on a database-side self-release schedule (pg_sleep(7)
+// inside the holder transaction, then ROLLBACK). A wait honoring the 5s
+// lock_timeout answers limited long before the 7s release; a wait that
+// ignored it (say 20s) would still be blocked at 7s, see the release, and be
+// judged normally instead of limited, failing the verdict assert. An
+// unbounded wait hangs past the vitest test timeout instead of answering
+// limited.
+// Note the other side is pinned elsewhere:
+// test/rsvp-throttle-prune-batch.test.ts holds this same member lock for
+// ~3.2s and expects the queued write to then be judged on expiry, so a
+// timeout below that window must reconcile those suites rather than
+// silently flip them to limited.
 //
 // Scope: only the advisory lock is contended here. Event/RSVP row locks keep
 // their current wait-then-judge semantics (pinned by test/rsvp.test.ts);
@@ -38,10 +46,13 @@
 //
 // Lock acquisition is coordinated explicitly: the holder's advisory-lock
 // query resolving inside its open transaction on a second connection is the
-// handshake that the lock is held; the measured call races an 8s bound only
-// so an unbounded wait fails fast instead of hanging the suite. Every busy
-// assertion runs while the holder remains locked: releasing first could let
-// a hung request complete and mask it.
+// handshake that the lock is held. The holder then sleeps on the database
+// clock (pg_sleep, still inside its transaction so the lock stays held) and
+// releases itself; the measured call is awaited directly with no JavaScript
+// timer — arrival of the limited verdict before that self-release IS the
+// proof the 5s database lock_timeout fired. Every busy assertion runs before
+// the self-release resolves: releasing first could let a hung request
+// complete and mask it.
 //
 // Live against the guarded test database in a throwaway schema. Skipped
 // when DATABASE_URL is unset. Never point this at production or staging.
@@ -52,7 +63,12 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vites
 import app from "./app";
 import { events, rsvps } from "../src/db/admin-schema";
 import type { Env } from "../src/env";
-import { withdrawRsvp, writeRsvp, type RsvpWriteResult } from "../src/events/rsvp";
+import {
+  RSVP_LOCK_TIMEOUT_MS,
+  withdrawRsvp,
+  writeRsvp,
+  type RsvpWriteResult,
+} from "../src/events/rsvp";
 import type { QueueMessage } from "../src/jobs/types";
 
 // RSVP route tests isolate dispatch; other suites prove the real producer.
@@ -75,7 +91,6 @@ import {
   type MemberDataFixture,
 } from "./helpers/member-data-db";
 
-const BUSY_BOUND_MS = 8000;
 const SESSION_SECRET = "test-session-secret-at-least-32-bytes-long";
 const APP_URL = "https://next.example.test";
 // Well-formed key no seeded event ever uses.
@@ -90,7 +105,7 @@ async function cookieFor(store: SessionStore, userId: string): Promise<string> {
     avatar: null,
     member: true,
     moderator: false,
-    expiresAt: new Date(Date.now() + 3600_000),
+    expiresAt: new Date("2099-01-01T00:00:00.000Z"),
   });
   return (
     await serializeSigned("__Host-two_session", token, SESSION_SECRET, {
@@ -109,6 +124,13 @@ describe("rsvp lock-busy test containment", () => {
         "refusing before connecting",
       );
     }
+  });
+
+  it("pins the member-lock timeout magnitude the busy proofs rely on", () => {
+    // Mirrors test/performance-budgets-snapshot.test.ts: the busy cases'
+    // database-side self-release (7s) only discriminates a 5s wait from a
+    // 20s one while this stays 5000.
+    expect(RSVP_LOCK_TIMEOUT_MS).toBe(5000);
   });
 });
 
@@ -191,8 +213,8 @@ describe.skipIf(!raw)("rsvp advisory-lock waits are busy-bounded (test database)
       .values({
         eventKey: key,
         title: "Lock busy night",
-        startsAt: new Date(Date.now() + 3600_000),
-        endsAt: new Date(Date.now() + 2 * 3600_000),
+        startsAt: new Date("2099-06-01T19:00:00.000Z"),
+        endsAt: new Date("2099-06-01T21:00:00.000Z"),
         timezone: "UTC",
         location: "Voice",
         status: "published",
@@ -224,30 +246,44 @@ describe.skipIf(!raw)("rsvp advisory-lock waits are busy-bounded (test database)
     };
   }
 
-  // Race the measured call against a generous bound. The bound is not the
-  // proof — the lock handshake is — it only turns an unbounded wait into a
-  // readable failure instead of a hung suite.
-  async function settleWithinBound<T>(pending: Promise<T>, what: string): Promise<T> {
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    try {
-      return await Promise.race([
-        pending,
-        new Promise<never>((_, reject) => {
-          timer = setTimeout(
-            () =>
-              reject(
-                new Error(
-                  `rsvp advisory-lock wait was not bounded: ${what} still blocked ` +
-                    `after ${BUSY_BOUND_MS}ms while the advisory lock holder remains locked`,
-                ),
-              ),
-            BUSY_BOUND_MS,
-          );
-        }),
-      ]);
-    } finally {
-      if (timer) clearTimeout(timer);
-    }
+  // Hold `rsvp-write:<userId>` on a database-side self-release schedule.
+  // The await resolves only once the lock is actually held; the returned
+  // `done` promise resolves once the holder has slept `delaySecs` on the
+  // database clock (inside its open transaction, so the lock stays held
+  // throughout) and rolled back. The handle is a plain object (not a nested
+  // promise) because await flattens Promise<Promise<T>> and would wait out
+  // the whole self-release instead of just the handshake. A measured wait
+  // honoring the 5s lock_timeout answers limited before that release; a wait
+  // ignoring it is still blocked at release time, sees the lock free, and is
+  // judged normally instead.
+  async function holdMemberLockDbDelayed(
+    userId: string,
+    delaySecs: number,
+  ): Promise<{ done: Promise<void> }> {
+    const url = testDatabaseUrl(raw!);
+    const holder = postgres(url.href, {
+      max: 1,
+      port: 5432,
+      connect_timeout: 5,
+      password: () => url.password,
+      connection: { search_path: fixture.schemaName },
+      onnotice: () => {},
+    });
+    await holder.unsafe("BEGIN");
+    await holder`select pg_advisory_xact_lock(hashtext(${"rsvp-write:" + userId}))`;
+    const done = (async () => {
+      try {
+        await holder.unsafe(`SELECT pg_sleep(${delaySecs})`);
+      } finally {
+        try {
+          await holder.unsafe("ROLLBACK");
+        } catch {
+          // Already closed; the lock is gone either way.
+        }
+        await holder.end({ timeout: 1 }).catch(() => {});
+      }
+    })();
+    return { done };
   }
 
   it("control: an uncontended write lands byte-identical and charges exactly one hit", async () => {
@@ -311,12 +347,7 @@ describe.skipIf(!raw)("rsvp advisory-lock waits are busy-bounded (test database)
     const free = "busy-control-free-member";
     const release = await holdMemberLock(held);
     try {
-      const start = Date.now();
-      const result = await settleWithinBound(
-        writeRsvp(db, ev.key, free, "going"),
-        `writeRsvp for independent member ${free}`,
-      );
-      expect(Date.now() - start).toBeLessThan(BUSY_BOUND_MS);
+      const result = await writeRsvp(db, ev.key, free, "going");
       expect(result.ok).toBe(true);
       expect(await hits(free)).toBe(1);
       expect(await hits(held)).toBe(0);
@@ -351,7 +382,9 @@ describe.skipIf(!raw)("rsvp advisory-lock waits are busy-bounded (test database)
     } finally {
       await release();
     }
-    const result = await settleWithinBound(pending!, `queued writeRsvp for ${user}`);
+    // Direct await: the queued wait resolves once the holder releases, then
+    // the write is judged normally. No JavaScript timer bounds this path.
+    const result = await pending!;
     expect(result).toEqual({
       ok: true,
       created: true,
@@ -363,19 +396,20 @@ describe.skipIf(!raw)("rsvp advisory-lock waits are busy-bounded (test database)
     expect(await rowsFor(ev.id, user)).toHaveLength(1);
   });
 
-  it("writeRsvp refuses limited within the bound while the member lock is held", async () => {
+  it("writeRsvp refuses limited while the member lock is held", async () => {
     const ev = await seed();
     const user = "busy-write";
-    const release = await holdMemberLock(user);
+    const { done: holderDone } = await holdMemberLockDbDelayed(user, 7);
     let pending: Promise<RsvpWriteResult> | undefined;
     try {
-      const start = Date.now();
       pending = writeRsvp(db, ev.key, user, "going");
-      const busy = await settleWithinBound(pending, `writeRsvp for ${user}`);
-      const elapsed = Date.now() - start;
+      // Direct await: the 5s database lock_timeout settles this before the
+      // holder's 7s database-side self-release. Arrival of the limited
+      // verdict before that release IS the magnitude proof: a wait ignoring
+      // the 5s bound would still be blocked at 7s and be judged normally.
+      const busy = await pending;
 
-      // Every assertion below runs while the holder remains locked.
-      expect(elapsed).toBeLessThan(BUSY_BOUND_MS);
+      // Every assertion below runs before the self-release resolves.
       // The existing limited verdict: never an admission, never a thrown
       // lock error.
       expect(busy).toEqual({ ok: false, reason: "limited", retryAfter: 1 });
@@ -383,10 +417,10 @@ describe.skipIf(!raw)("rsvp advisory-lock waits are busy-bounded (test database)
       expect(await hits(user)).toBe(0);
       expect(await rowsFor(ev.id, user)).toHaveLength(0);
     } finally {
-      await release();
-      // Let a still-blocked call settle after release so no work dangles
+      // Wait out the holder's database-side schedule so no work dangles
       // into the next test (on the unbounded path it now completes and
       // writes; beforeEach clears it).
+      await holderDone;
       await pending?.catch(() => null);
     }
 
@@ -399,28 +433,27 @@ describe.skipIf(!raw)("rsvp advisory-lock waits are busy-bounded (test database)
     expect(await hits(user)).toBe(1);
   });
 
-  it("withdrawRsvp refuses limited within the bound while the member lock is held", async () => {
+  it("withdrawRsvp refuses limited while the member lock is held", async () => {
     const ev = await seed();
     const user = "busy-withdraw";
     expect((await writeRsvp(db, ev.key, user, "going")).ok).toBe(true);
     await client`delete from web_throttle_hits where bucket = ${`rsvp-write:${user}`}`;
 
-    const release = await holdMemberLock(user);
+    const { done: holderDone } = await holdMemberLockDbDelayed(user, 7);
     let pending: ReturnType<typeof withdrawRsvp> | undefined;
     try {
-      const start = Date.now();
       pending = withdrawRsvp(db, ev.key, user);
-      const busy = await settleWithinBound(pending, `withdrawRsvp for ${user}`);
-      const elapsed = Date.now() - start;
+      // Limited before the holder's 7s self-release proves the 5s bound;
+      // an over-long wait would be judged normally instead (see above).
+      const busy = await pending;
 
-      // Every assertion below runs while the holder remains locked.
-      expect(elapsed).toBeLessThan(BUSY_BOUND_MS);
+      // Every assertion below runs before the self-release resolves.
       expect(busy).toEqual({ limited: true, retryAfter: 1 });
       // The busy pass is free and deletes nothing: the row survives.
       expect(await hits(user)).toBe(0);
       expect(await rowsFor(ev.id, user)).toHaveLength(1);
     } finally {
-      await release();
+      await holderDone;
       await pending?.catch(() => null);
     }
 
@@ -447,16 +480,18 @@ describe.skipIf(!raw)("rsvp advisory-lock waits are busy-bounded (test database)
       select ${`rsvp-write:${user}`}, clock_timestamp()
       from generate_series(1, ${RSVP_RATE_LIMIT.maxAttempts - 1})`;
 
-    const release = await holdMemberLock(user);
+    const { done: holderDone } = await holdMemberLockDbDelayed(user, 7);
     let pending: Promise<RsvpWriteResult> | undefined;
     try {
       pending = writeRsvp(db, ev.key, user, "going");
-      const busy = await settleWithinBound(pending, `writeRsvp for ${user}`);
+      // Limited before the holder's 7s self-release proves the 5s bound;
+      // an over-long wait would be judged normally instead (see above).
+      const busy = await pending;
       expect(busy).toEqual({ ok: false, reason: "limited", retryAfter: 1 });
       expect(await hits(user)).toBe(RSVP_RATE_LIMIT.maxAttempts - 1);
       expect(await rowsFor(ev.id, user)).toHaveLength(0);
     } finally {
-      await release();
+      await holderDone;
       await pending?.catch(() => null);
     }
 
@@ -475,25 +510,24 @@ describe.skipIf(!raw)("rsvp advisory-lock waits are busy-bounded (test database)
     expect(await hits(user)).toBe(RSVP_RATE_LIMIT.maxAttempts);
   });
 
-  it("route PUT answers the shared 429 within the bound while the member lock is held, never a 500", async () => {
+  it("route PUT answers the shared 429 while the member lock is held, never a 500", async () => {
     const ev = await seed();
     const user = "busy-route-put";
-    const release = await holdMemberLock(user);
+    const { done: holderDone } = await holdMemberLockDbDelayed(user, 7);
     let pending: Promise<Response> | undefined;
     try {
-      const start = Date.now();
       pending = put(ev.key, user, "going");
-      const response = await settleWithinBound(pending, `PUT /events/${ev.key}/rsvp for ${user}`);
-      const elapsed = Date.now() - start;
+      // 429 before the holder's 7s self-release proves the 5s bound; an
+      // over-long wait would be judged normally instead (see above).
+      const response = await pending;
 
-      // Every assertion below runs while the holder remains locked.
-      expect(elapsed).toBeLessThan(BUSY_BOUND_MS);
+      // Every assertion below runs before the self-release resolves.
       expect(response.status).toBe(429);
       expect(response.headers.get("retry-after")).toBe("1");
       expect(await hits(user)).toBe(0);
       expect(await rowsFor(ev.id, user)).toHaveLength(0);
     } finally {
-      await release();
+      await holderDone;
       await pending?.catch(() => null);
     }
   });
