@@ -9,7 +9,7 @@ in place; authenticated-only route groups may reject a guest before the limiter.
 The global trusted-host and same-origin gates run before route admission or
 buffering; the same-origin ingress/CSP exemptions retain bounded body handling.
 Except for the event-write, admin event form, admin action, featured
-create/delete, staging alert probe, profile write, logout and QA-login routes
+write, staging alert probe, profile write, logout and QA-login routes
 below, shared throttles run before buffering: oversized attempts consume
 admission budget and
 an exhausted bucket returns 429 without pulling the upload. The profile write
@@ -40,11 +40,11 @@ Admin lifecycle actions (`POST /admin/events/:key/publish`, `/cancel`,
 oversized moderator body returns 413 with zero admin-write throttle spend and no
 store work, and stays 413 when the budget is already spent.
 
-`POST /admin/featured` (featured cap) and `POST /admin/featured/:id/delete`
-(action cap) likewise decide the cap before the admin-write throttle: an
-oversized body is 413 with zero throttle spend even when the budget is already
-spent. The moderator guard still runs first on those routes, and the featured
-update post keeps the throttle-before-buffering order.
+`POST /admin/featured` (featured cap), `POST /admin/featured/:id`
+(featured cap) and `POST /admin/featured/:id/delete` (action cap) likewise
+decide the cap before the admin-write throttle: an oversized body is 413
+with zero throttle spend even when the budget is already spent. The
+moderator guard still runs first on those routes.
 
 The staging alert probe is likewise cap-first: its body cap runs before its
 throttle (after the QA gate), so an over-cap probe returns 413 with no throttle
@@ -79,7 +79,7 @@ including field names, escaping, multipart boundaries and metadata:
 | `form` | 65,536 | Profile PATCH/form POST; admin event create/update | Profile bio 1,000 code points, games_text 1,700 (20 games × 80 plus separators), per legacy UpdateProfileRequest (`src/profiles/validation.ts`, `docs/w10-islands-respec.md`). 2,700 four-byte Unicode code points need at most 32,400 bytes when percent-encoded; 64 KiB accommodates form keys, `_method`, trap fields and multipart framing. Also covers the smaller admin event form. |
 | `agent` | 32,768 | `/api/agent-events` | StoreEventRequest maxima: title/game 100, description 1,000, location 255, timezone 64 code points (`src/agent-events/payload.ts`, `validateFields`), plus idempotency_key 255 UTF-16 units. Even JSON-escaped surrogate pairs fit well below 32 KiB with the operation/version/key envelope. |
 | `mcp` | 32,768 | `POST /mcp` | JSON-RPC request envelope plus tool arguments (event key 26 chars, paging integers). Tool calls carry filters, never content; 32 KiB matches the `json`/`agent` tier and the public API's 32 KiB response budget. |
-| `featured` | 262,144 | Admin featured create (cap-first); update keeps throttle-first | The four bounded title/URL/image/alt strings are 255 code units each and featured `body` is 1,000 Unicode code points after trim (`src/admin/validation-featured-form.ts`, `parseFeaturedForm`); over-max bodies 422 with a field-level error. 256 KiB is the unchanged total editorial-body transport allowance, not a claim of legacy equivalence; large submissions still receive 413 before validation instead of consuming unbounded memory. The create post decides the cap before the admin-write throttle (zero spend on 413); the update post keeps the throttle-before-buffering order. |
+| `featured` | 262,144 | Admin featured create/update (cap-first) | The four bounded title/URL/image/alt strings are 255 code units each and featured `body` is 1,000 Unicode code points after trim (`src/admin/validation-featured-form.ts`, `parseFeaturedForm`); over-max bodies 422 with a field-level error. 256 KiB is the unchanged total editorial-body transport allowance, not a claim of legacy equivalence; large submissions still receive 413 before validation instead of consuming unbounded memory. The create and update posts decide the cap before the admin-write throttle (zero spend on 413). |
 | `action` | 4,096 | Logout (cap-first), QA login (cap-first), staging alert probe (cap before throttle: over-cap probes 413 with no throttle spend), publish/cancel, RSVP pause/reopen (public and admin), queue redispatch, featured delete (cap-first), RSVP PUT/DELETE | Actions do not consume bodies; RSVP only needs an enum, optional caller ID and honeypot. 4 KiB leaves form/JSON overhead while preventing bodyless endpoints from accepting arbitrary uploads. DELETE RSVP does read its honeypot body. Logout, QA login, featured delete, the staging alert probe, the four public `POST /events/:key/` actions, the four admin lifecycle actions and queue redispatch decide the cap before their throttle; the remaining throttled action routes keep the throttle-before-buffering order. |
 
 Validation still determines which inputs are legitimate. Trimming, game

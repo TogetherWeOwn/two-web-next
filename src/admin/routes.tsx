@@ -629,8 +629,9 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
 
   admin.post(
     "/featured/:id",
-    throttle("admin-write", WRITE_THROTTLE_PER_MINUTE),
+    // Cap first: refuse an oversized editorial body before spending admin-write throttle.
     requestBodyLimit("featured"),
+    throttle("admin-write", WRITE_THROTTLE_PER_MINUTE),
     async (c) => {
       const id = parseRecordId(c.req.param("id"));
       if (id === null) return errorPage(c, 404, "Featured content not found");
