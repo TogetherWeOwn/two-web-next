@@ -74,6 +74,7 @@ import {
   testDatabaseUrl,
   type MemberDataFixture,
 } from "./helpers/member-data-db";
+import { waitForNoLockWaiters } from "./helpers/wait-for-no-lock-waiters";
 import { createMemorySessionStore, hashToken, newSessionToken } from "../src/sessions";
 import { POLICY_FILE } from "../src/privacy";
 
@@ -568,10 +569,17 @@ describe.skipIf(!process.env.DATABASE_URL)("member leaderboard (agent-testdb)", 
         const res = await board("?season=2026-09");
         expect(res.status).toBe(200);
         expect(Date.now() - t0).toBeLessThan(10_000);
-        await new Promise((r) => setTimeout(r, 300));
-        const active =
-          await tx`select count(*)::int as n from pg_stat_activity where datname = current_database() and state = 'active' and wait_event_type = 'Lock' and query ilike '%board_view_logs%' and pid <> pg_backend_pid()`;
-        expect((active as unknown as { n: number }[])[0]!.n).toBe(0);
+        expect(
+          await waitForNoLockWaiters(
+            async () =>
+              (
+                (await tx`select count(*)::int as n from pg_stat_activity where datname = current_database() and state = 'active' and wait_event_type = 'Lock' and query ilike '%board_view_logs%' and pid <> pg_backend_pid()`) as unknown as {
+                  n: number;
+                }[]
+              )[0]!.n,
+            { timeoutMs: 2000 },
+          ),
+        ).toBe(true);
       });
     } finally {
       await locker.end();

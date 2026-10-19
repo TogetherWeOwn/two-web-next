@@ -11,6 +11,7 @@ import {
   testDatabaseUrl,
   type MemberDataFixture,
 } from "./helpers/member-data-db";
+import { waitForNoLockWaiters } from "./helpers/wait-for-no-lock-waiters";
 import type { Env } from "../src/env";
 import {
   matchQuery,
@@ -206,10 +207,15 @@ describe.skipIf(!process.env.DATABASE_URL)("event search (agent-testdb)", () => 
         const t0 = Date.now();
         await recordSearch(db, "blocked", 0);
         expect(Date.now() - t0).toBeLessThan(1500);
-        await new Promise((r) => setTimeout(r, 300));
-        const active =
-          await tx`select count(*)::int as n from pg_stat_activity where datname = current_database() and state = 'active' and wait_event_type = 'Lock' and query ilike '%event_search_logs%' and pid <> pg_backend_pid()`;
-        expect(active[0]!.n).toBe(0);
+        expect(
+          await waitForNoLockWaiters(
+            async () =>
+              (
+                await tx`select count(*)::int as n from pg_stat_activity where datname = current_database() and state = 'active' and wait_event_type = 'Lock' and query ilike '%event_search_logs%' and pid <> pg_backend_pid()`
+              )[0]!.n,
+            { timeoutMs: 2000 },
+          ),
+        ).toBe(true);
       });
     } finally {
       await locker.end();
@@ -290,10 +296,15 @@ describe.skipIf(!process.env.DATABASE_URL)("event search (agent-testdb)", () => 
         expect(Date.now() - t0).toBeLessThan(2000);
         const html = await mod.text();
         expect(html).not.toContain('data-testid="top-zero-searches"');
-        await new Promise((r) => setTimeout(r, 300));
-        const active =
-          await tx`select count(*)::int as n from pg_stat_activity where datname = current_database() and state = 'active' and wait_event_type = 'Lock' and query ilike '%event_search_logs%' and pid <> pg_backend_pid()`;
-        expect(active[0]!.n).toBe(0);
+        expect(
+          await waitForNoLockWaiters(
+            async () =>
+              (
+                await tx`select count(*)::int as n from pg_stat_activity where datname = current_database() and state = 'active' and wait_event_type = 'Lock' and query ilike '%event_search_logs%' and pid <> pg_backend_pid()`
+              )[0]!.n,
+            { timeoutMs: 2000 },
+          ),
+        ).toBe(true);
       });
     } finally {
       await locker.end();
