@@ -488,6 +488,14 @@ Pass `--announcement-only` (workflow input `announcement_only`) to run only
 implement `role.assign` or `event.upsert`; then only `--channel-key` is needed.
 Both probes are fixture-tested in `check` without real secrets.
 
+The smoke and drill accept only the documented `--name=value` options and the
+smoke's bare `--announcement-only` flag. Unknown flags (including `--dry-run`),
+duplicates, positional arguments, bare value options and empty values exit 2
+with bounded usage before any action or fetch. There is no preview mode. Each
+run validates all applicable payloads with the bot client's validators before
+its first action or queued carrier; announcement-only validates only its
+announcement. Invalid inputs therefore cannot leave earlier steps applied.
+
 The CallInternalAction drill (`drill:internal-action`) ports the remaining
 drill-only half of `docs/parity.md` §6: production web never dispatches
 CallInternalAction, so instead of a web route it drives the real queued
