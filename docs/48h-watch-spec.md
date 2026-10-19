@@ -155,8 +155,8 @@ No new infrastructure, no Logpush, no external shipper, no new pager.
    `node bin/smoke.mjs https://next.togetherweown.com`.
 6. **Lighthouse artifact.** The `lighthouse-<sha>` GitHub artifact (14 days)
    with assertion results; thresholds live in `ci/lighthouserc.cjs`.
-7. **GitHub Actions.** Required `check`, `gitleaks`, `pr-lint` on the exact
-   head; `deploy-production` `/up` smoke; `e2e-staging` journeys for the
+7. **GitHub Actions.** Required `ci-ok`, `gitleaks`, `e2e-ok`, `pr-lint` on
+   the exact head; `deploy-production` `/up` smoke; `e2e-staging` journeys for the
    staging comparison. Production rollback is the one-click
    `rollback-production` workflow to the recorded version ID.
 8. **Version-settle telemetry (rollback proof only).** The `served_versions`

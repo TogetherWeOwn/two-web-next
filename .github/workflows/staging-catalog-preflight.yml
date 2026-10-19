@@ -12,8 +12,8 @@ name: staging-catalog-preflight
 # reads a staging secret, and no pull-request-triggered workflow in this repo
 # touches staging secrets (a fork PR would have no secret and fail). There is
 # no scope gate: every dispatch runs the same seven reads. This workflow
-# gates no merge (required checks are check, gitleaks and pr-lint), so there
-# is no aggregator job and a skip never blocks anything.
+# gates no merge (required checks are ci-ok, gitleaks, e2e-ok and pr-lint),
+# so there is no aggregator job and a skip never blocks anything.
 
 on:
   workflow_dispatch:

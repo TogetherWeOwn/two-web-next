@@ -16,8 +16,8 @@ run-name: e2e-staging ${{ github.event.workflow_run.display_title || github.sha 
 # the deployed Worker. There is no PR context here (workflow_run +
 # workflow_dispatch triggers), so the scope job diffs the deployed head SHA
 # against its parent instead of listing PR files. e2e-staging gates no merge
-# (required checks are check, gitleaks and pr-lint), so a skip never blocks
-# anything.
+# (required checks are ci-ok, gitleaks, e2e-ok and pr-lint), so a skip never
+# blocks anything.
 
 on:
   workflow_run:

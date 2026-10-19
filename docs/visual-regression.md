@@ -31,9 +31,10 @@ Each baseline exists at both widths (`<name>-desktop.png`, `<name>-mobile.png`).
   same 410 for a guest and a member, so it needs no login.
 - **Where it runs:** the `browser-smoke` job in `.github/workflows/e2e.yml`, before
   the critical journeys, on the freshly seeded local stack (no secrets, no
-  staging or production). `browser-smoke` is a required check, so a visual diff
-  blocks the merge. Docs-only, test-only and draft PRs skip it (the job reports
-  skipped, which passes).
+  staging or production). `e2e-ok` is the required check: a visual diff
+  fails `browser-smoke`, which fails `e2e-ok` and blocks the merge. Docs-only,
+  test-only and draft PRs skip it (the aggregator passes the skip only on the
+  scope verdict or a draft).
 - **Stability:** `<time>` elements are masked (server-rendered times follow the
   wall clock), animations are disabled, and the caret is hidden. A route must
   return the status in the table above.

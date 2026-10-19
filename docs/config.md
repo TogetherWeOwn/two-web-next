@@ -292,6 +292,6 @@ The companion selftest covers inherited/optional/job keys, comments, nested
 fields, JSONC strings/trailing commas, scoped Wrangler keys, synthetic Tail
 aliases, top-level/named-environment Tail config and both directions
 of drift using local fixtures only. `npm run check` includes both commands, so
-CI's required `check` job executes them before Vitest. This check proves names
+CI's `check` job executes them before Vitest. This check proves names
 and row completeness, not the semantic correctness of descriptions or live
 provider configuration; reviewers must verify those against source.

@@ -290,8 +290,8 @@ Do not add `--env staging` or invent a different Worker target. Verify the
 approved account and binding isolation before any remote mutation.
 
 1. Require independent Code Reviewer approval on the exact head SHA and green
-   `check`, `gitleaks`, `pr-lint`; the approving reviewer squash-merges, not the
-   author. Record the merged SHA and intended target.
+   `ci-ok`, `gitleaks`, `e2e-ok`, `pr-lint`; the approving reviewer squash-merges,
+   not the author. Record the merged SHA and intended target.
 2. Before release, capture the current deployment and its **version ID** (not
    its deployment ID) as the known-good rollback pointer. The following are
    remote metadata reads, not database probes; approved Cloudflare credentials

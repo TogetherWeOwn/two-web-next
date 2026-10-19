@@ -16,8 +16,8 @@ name: staging-census
 # (`force: true`) always runs. The census job is gated on the verdict with a
 # job-level `if:`, mirroring featured-offline-proof.yml and
 # backup-bootstrap-selftest.yml. This workflow gates no merge (required checks
-# are check, gitleaks and pr-lint), so there is no aggregator job and a skip
-# never blocks anything.
+# are ci-ok, gitleaks, e2e-ok and pr-lint), so there is no aggregator job and
+# a skip never blocks anything.
 
 on:
   workflow_dispatch:
