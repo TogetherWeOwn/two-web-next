@@ -26,9 +26,11 @@ PRs, logs or command arguments.
   route, queues, Hyperdrive binding and explicit vars; bindings and vars are
   not inherited), and
   [`.github/workflows/deploy-production.yml`](../.github/workflows/deploy-production.yml)
-  is a manual `workflow_dispatch`-on-`main` workflow gated by
+  promotes automatically on `e2e-staging` completion plus a daily schedule
+  backstop (keeping manual dispatch), gated by
   `PRODUCTION_DEPLOY_ENABLED`, the live `production` Environment's protection,
-  exact-SHA CI and the Hyperdrive sentinel check. By default, protection requires
+  exact-SHA CI and the Hyperdrive sentinel check, with a 30-minute staging
+  soak, already-live skip, pending-migration stop and `PRODUCTION_HOLD_UNTIL`. By default, protection requires
   reviewers with self-review prevented; with `PRODUCTION_AUTO_APPROVE=true`, the
   gate instead requires a main-only deployment policy and successful staging
   deploy and `e2e-staging` runs on the same SHA, with an executed, passing
