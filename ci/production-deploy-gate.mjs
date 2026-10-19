@@ -1,10 +1,16 @@
 import { execFileSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { appendFileSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { deployTitle, e2eTitle } from "./resolve-promotion-sha.mjs";
 import { requireSuccessfulCi } from "./staging-deploy-gate.mjs";
 import { readWranglerConfig } from "./wrangler-config.mjs";
+
+export const AUTOMATIC_PROMOTION_EVENTS = new Set([
+  "workflow_dispatch",
+  "workflow_run",
+  "schedule",
+]);
 
 export function assertProductionRequest(env) {
   if (env.PRODUCTION_DEPLOY_ENABLED !== "true") {
@@ -12,9 +18,136 @@ export function assertProductionRequest(env) {
       "Production deployment disabled: repo variable PRODUCTION_DEPLOY_ENABLED must be exactly true",
     );
   }
-  if (env.GITHUB_EVENT_NAME !== "workflow_dispatch" || env.GITHUB_REF !== "refs/heads/main") {
-    throw new Error("Production deployment requires workflow_dispatch on main");
+  if (
+    !AUTOMATIC_PROMOTION_EVENTS.has(env.GITHUB_EVENT_NAME) ||
+    env.GITHUB_REF !== "refs/heads/main"
+  ) {
+    throw new Error(
+      "Production deployment requires workflow_dispatch on main (or workflow_run/schedule on main for automatic promotion)",
+    );
   }
+  // Automatic triggers have no human reviewer to approve the Environment:
+  // they must run under automated staging evidence, never the reviewer path.
+  if (env.GITHUB_EVENT_NAME !== "workflow_dispatch" && !autoApproveEnabled(env)) {
+    throw new Error(
+      "Automatic production promotion requires repo variable PRODUCTION_AUTO_APPROVE exactly true",
+    );
+  }
+}
+
+// Repo variable PRODUCTION_HOLD_UNTIL (ISO-8601 UTC) pauses automatic and
+// manual promotion while now < value. Values more than 24h ahead are refused
+// so a stale hold cannot park production indefinitely. Empty means no hold.
+export const PRODUCTION_HOLD_MAX_MS = 24 * 60 * 60 * 1000;
+const HOLD_ISO_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d+)?)?Z$/;
+
+export function assertProductionHold(env, { nowMs = Date.now() } = {}) {
+  const raw = (env.PRODUCTION_HOLD_UNTIL ?? "").trim();
+  if (!raw) return;
+  if (!HOLD_ISO_PATTERN.test(raw)) {
+    throw new Error(
+      "PRODUCTION_HOLD_UNTIL must be ISO-8601 UTC (e.g. 2026-10-20T14:00:00Z); clear it to resume promotion",
+    );
+  }
+  const holdMs = Date.parse(raw);
+  if (!Number.isFinite(holdMs)) {
+    throw new Error(
+      "PRODUCTION_HOLD_UNTIL is not a valid UTC timestamp; clear it to resume promotion",
+    );
+  }
+  if (holdMs - nowMs > PRODUCTION_HOLD_MAX_MS) {
+    throw new Error(
+      "PRODUCTION_HOLD_UNTIL refuses values more than 24h ahead; shorten the hold or clear it",
+    );
+  }
+  if (nowMs < holdMs) {
+    throw new Error(
+      `Production promotion held until ${raw}; clear PRODUCTION_HOLD_UNTIL to resume`,
+    );
+  }
+}
+
+// Live production identity: the Cloudflare active version's commit, read from
+// the production apex /up revision marker (the same source the TOG-25031
+// promoter uses). Returns the 40-hex commit, or null when the marker is
+// absent or unreadable (unknown, never equal).
+export const PRODUCTION_ORIGIN = "https://togetherweown.com";
+
+export async function readLiveProductionCommit({
+  origin = PRODUCTION_ORIGIN,
+  fetchImpl = fetch,
+} = {}) {
+  try {
+    const response = await fetchImpl(new URL("/up", origin), {
+      redirect: "manual",
+      headers: { "cache-control": "no-cache" },
+      signal: AbortSignal.timeout(10_000),
+    });
+    const data = await response.json();
+    const commit = data?.revision?.commit;
+    return typeof commit === "string" && /^[0-9a-f]{40}$/.test(commit) ? commit : null;
+  } catch {
+    return null;
+  }
+}
+
+export function isAlreadyLive(deploySha, liveSha) {
+  return (
+    typeof deploySha === "string" &&
+    typeof liveSha === "string" &&
+    deploySha.toLowerCase() === liveSha.toLowerCase() &&
+    /^[0-9a-f]{40}$/i.test(deploySha)
+  );
+}
+
+// Pending-production-migration comparison: tags in the target journal that
+// the live production journal lacks. Pure, so the workflow and the tests
+// share one definition without database access.
+export function pendingMigrationTags(targetTags, liveTags) {
+  const live = new Set(Array.isArray(liveTags) ? liveTags : []);
+  return (Array.isArray(targetTags) ? targetTags : []).filter((tag) => !live.has(tag));
+}
+
+function decodeJournalTags(content, encoding) {
+  const text =
+    encoding === "base64"
+      ? Buffer.from(String(content ?? "").replace(/\s+/g, ""), "base64").toString("utf8")
+      : String(content ?? "");
+  const journal = JSON.parse(text);
+  if (!Array.isArray(journal?.entries)) throw new Error("Invalid migration journal");
+  return journal.entries.map((entry) => entry.tag);
+}
+
+export async function pendingProductionMigrations({
+  repository,
+  targetSha,
+  liveSha,
+  token,
+  fetchImpl = fetch,
+}) {
+  if (!liveSha) return [];
+  if (!/^[0-9a-f]{40}$/.test(targetSha ?? "") || !/^[0-9a-f]{40}$/.test(liveSha ?? "")) {
+    throw new Error("Migration comparison needs full 40-hex target and live commits");
+  }
+  async function journalAt(ref) {
+    const response = await fetchImpl(
+      `https://api.github.com/repos/${repository}/contents/drizzle/meta/_journal.json?ref=${ref}`,
+      {
+        headers: {
+          Authorization: `Bearer ${token}`,
+          Accept: "application/vnd.github+json",
+          "X-GitHub-Api-Version": "2022-11-28",
+        },
+        redirect: "error",
+        signal: AbortSignal.timeout(10_000),
+      },
+    );
+    if (!response.ok) throw new Error(`Migration journal lookup failed (HTTP ${response.status})`);
+    const body = await response.json();
+    return decodeJournalTags(body.content, body.encoding);
+  }
+  const [target, live] = await Promise.all([journalAt(targetSha), journalAt(liveSha)]);
+  return pendingMigrationTags(target, live);
 }
 
 export function assertProductionCredentials(env) {
@@ -216,6 +349,9 @@ export async function checkProductionGate(env, fetchEnvironment = fetch, options
   let { checkoutSha, fetchCi = fetchEnvironment } = options;
   // Refuse before any API request, and before the protected deploy job can start.
   assertProductionRequest(env);
+  // Hold applies to every trigger (manual and automatic) and fails before any
+  // API request, so a held production never starts a deploy.
+  assertProductionHold(env);
   // The runner resets step-level GITHUB_* overrides to github.sha (the dispatch
   // tip), so the promoted commit arrives as DEPLOY_SHA.
   if (!/^[0-9a-f]{40}$/.test(env.DEPLOY_SHA ?? "")) {
@@ -243,12 +379,16 @@ export async function checkProductionGate(env, fetchEnvironment = fetch, options
   // Exact-SHA green main CI, shared with the staging gate: a red or pending
   // ci.yml run on this SHA must never reach production.
   checkoutSha ??= currentCheckoutSha();
+  // The CI evidence check always takes the explicit-SHA dispatch path: the
+  // promotion trigger (dispatch, workflow_run or schedule) is already
+  // validated by assertProductionRequest above, and DEPLOY_SHA is the exact
+  // commit to verify, never the trigger's own SHA.
   const ci = await requireSuccessfulCi(
     {
-      eventName: env.GITHUB_EVENT_NAME,
+      eventName: "workflow_dispatch",
       event: { repository: { full_name: env.GITHUB_REPOSITORY } },
       repository: env.GITHUB_REPOSITORY,
-      ref: env.GITHUB_REF,
+      ref: "refs/heads/main",
       sha: env.DEPLOY_SHA,
       checkoutSha,
     },
@@ -270,6 +410,58 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     } else if (process.argv[2] === "--version-id") {
       assertRollbackVersionId(process.env.ROLLBACK_VERSION_ID);
       console.log("Rollback version_id is a valid Worker Version ID");
+    } else if (process.argv[2] === "--already-live") {
+      // Clean skip when production already serves the target: exits 0 in
+      // both cases and reports via GITHUB_OUTPUT so the workflow can skip
+      // the deploy without going red. An unreadable /up never counts as
+      // live (fail open toward deploying, not toward skipping).
+      const deploySha = (process.env.DEPLOY_SHA ?? "").replace(/\s+/g, "").toLowerCase();
+      if (!/^[0-9a-f]{40}$/.test(deploySha)) {
+        throw new Error("DEPLOY_SHA must be a full 40-hex commit (resolved by the preflight job)");
+      }
+      const origin =
+        (process.env.PRODUCTION_ORIGIN ?? PRODUCTION_ORIGIN).trim() || PRODUCTION_ORIGIN;
+      const live = await readLiveProductionCommit({ origin });
+      const already = isAlreadyLive(deploySha, live);
+      console.log(
+        already
+          ? `Production already serves ${deploySha}; skipping deploy`
+          : live
+            ? `Production serves ${live}, promoting ${deploySha}`
+            : "Production live commit unreadable; proceeding to promotion gates",
+      );
+      if (process.env.GITHUB_OUTPUT) {
+        appendFileSync(
+          process.env.GITHUB_OUTPUT,
+          `already_live=${already ? "true" : "false"}\nlive_sha=${live ?? ""}\n`,
+        );
+      }
+    } else if (process.argv[2] === "--check-migrations") {
+      // Pending-migration stop until the least-privilege migrator lands:
+      // when the target journal has entries production lacks, refuse with a
+      // clear error instead of deploying. Unknown live (unreadable /up)
+      // cannot prove pending, so it warns and passes.
+      const deploySha = (process.env.DEPLOY_SHA ?? "").replace(/\s+/g, "").toLowerCase();
+      if (!/^[0-9a-f]{40}$/.test(deploySha)) {
+        throw new Error("DEPLOY_SHA must be a full 40-hex commit (resolved by the preflight job)");
+      }
+      const liveSha = (process.env.LIVE_SHA ?? "").replace(/\s+/g, "").toLowerCase() || null;
+      if (!liveSha) {
+        console.log("Live production commit unknown; migration comparison skipped");
+      } else {
+        const pending = await pendingProductionMigrations({
+          repository: process.env.GITHUB_REPOSITORY,
+          targetSha: deploySha,
+          liveSha,
+          token: process.env.GITHUB_TOKEN,
+        });
+        if (pending.length) {
+          throw new Error(
+            `Target has ${pending.length} production migration(s) production lacks (${pending.join(", ")}); run db-migrate.yml (target production) first — automatic production migration is blocked until the least-privilege migrator lands, so this promotion stops here`,
+          );
+        }
+        console.log(`No pending production migrations (${deploySha} vs live ${liveSha})`);
+      }
     } else {
       const evidence = await checkProductionGate(process.env);
       assertProductionTarget(readFileSync(new URL("../wrangler.jsonc", import.meta.url), "utf8"));

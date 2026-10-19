@@ -664,3 +664,86 @@ describe("deployed revision marker is bound per environment", () => {
     expect(deploy.split(expr)).toHaveLength(4);
   });
 });
+
+describe("native automatic production promotion", () => {
+  const production = read(".github/workflows/deploy-production.yml");
+
+  it("triggers on e2e-staging completion and a daily schedule backstop, keeping dispatch", () => {
+    // Manual dispatch stays for explicit redeploys and recovery.
+    expect(production).toContain("workflow_dispatch:");
+    // Automatic promotion: post-staging completion plus a daily backstop.
+    expect(production).toContain("workflows: [e2e-staging]");
+    expect(production).toContain("types: [completed]");
+    expect(production).toContain('cron: "17 14 * * *"');
+    // Never on push or PR.
+    expect(production).not.toContain("push:");
+    expect(production).not.toContain("pull_request:");
+  });
+
+  it("only auto-starts preflight on successful main staging runs", () => {
+    const preflight = production.slice(
+      production.indexOf("\n  preflight:\n"),
+      production.indexOf("\n  deploy-production:\n"),
+    );
+    expect(preflight).toContain("github.event_name == 'workflow_dispatch'");
+    expect(preflight).toContain("github.event_name == 'schedule'");
+    expect(preflight).toContain("github.event.workflow_run.conclusion == 'success'");
+    expect(preflight).toContain("github.event.workflow_run.head_branch == 'main'");
+  });
+
+  it("exits cleanly with no deploy when there is nothing soaked and green to promote", () => {
+    // The resolver exits 0 with an empty sha on automatic triggers (never on
+    // manual dispatch), and every later preflight step stands down on empty.
+    const resolver = read("ci/resolve-promotion-sha.mjs");
+    expect(resolver).toContain('GITHUB_EVENT_NAME !== "workflow_dispatch"');
+    expect(resolver).toContain('appendFileSync(process.env.GITHUB_OUTPUT, "sha=\\n")');
+    expect(production).toContain("id: target");
+    expect(production).toContain("if: steps.target.outputs.sha != ''");
+    // The deploy job stands down on empty sha or an already-live target.
+    expect(production).toContain(
+      "if: needs.preflight.outputs.sha != '' && needs.preflight.outputs.already_live != 'true'",
+    );
+  });
+
+  it("skips the deploy when production already serves the target", () => {
+    expect(production).toContain("id: live");
+    expect(production).toContain("run: node ci/production-deploy-gate.mjs --already-live");
+    expect(production).toContain("DEPLOY_SHA: ${{ steps.target.outputs.sha }}");
+    expect(production).toContain("already_live: ${{ steps.live.outputs.already_live }}");
+    expect(production).toContain("live_sha: ${{ steps.live.outputs.live_sha }}");
+    // The live check derives the commit from the Cloudflare active version
+    // (/up revision marker), like the TOG-25031 promoter.
+    const gate = read("ci/production-deploy-gate.mjs");
+    expect(gate).toContain('new URL("/up", origin)');
+    expect(gate).toContain("revision?.commit");
+  });
+
+  it("soaks greens 30 minutes and blocks on any newer red staging run", () => {
+    const resolver = read("ci/resolve-promotion-sha.mjs");
+    expect(resolver).toContain("PROMOTION_SOAK_MS = 30 * 60 * 1000");
+    expect(resolver).toContain("seenNewerRed");
+    expect(resolver).toContain("nowMs - completedAt < PROMOTION_SOAK_MS");
+  });
+
+  it("refuses pending production migrations with a migrator-blocked error", () => {
+    expect(production).toContain("run: node ci/production-deploy-gate.mjs --check-migrations");
+    expect(production).toContain("LIVE_SHA: ${{ steps.live.outputs.live_sha }}");
+    // Until the least-privilege migrator lands this stops instead of calling
+    // db-migrate.yml; the comment records the future workflow_call.
+    expect(production).toContain("db-migrate.yml");
+    expect(production).toContain("workflow_call");
+    expect(production).toContain("least-privilege migrator");
+  });
+
+  it("passes the hold variable to both production gate steps", () => {
+    const gates = production.split("run: node ci/production-deploy-gate.mjs\n").slice(1);
+    expect(gates.length).toBe(2);
+    for (const gate of gates) {
+      const block = gate.split("\n      - ")[0];
+      expect(block).toContain("PRODUCTION_HOLD_UNTIL: ${{ vars.PRODUCTION_HOLD_UNTIL }}");
+    }
+    const gate = read("ci/production-deploy-gate.mjs");
+    expect(gate).toContain("PRODUCTION_HOLD_MAX_MS = 24 * 60 * 60 * 1000");
+    expect(gate).toContain("assertProductionHold(env)");
+  });
+});

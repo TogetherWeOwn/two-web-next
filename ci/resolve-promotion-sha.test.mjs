@@ -51,16 +51,23 @@ function stub(runs, jobs) {
     assert.fail(`unexpected ${pathname}`);
   };
 }
-const run = (id, deployed, conclusion = "success", status = "completed") => ({
+const OLD_AT = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+const run = (id, deployed, conclusion = "success", status = "completed", updated_at = OLD_AT) => ({
   id,
   // API head_sha is main's tip for workflow_run runs; only the run-name names the deployed commit.
   head_sha: TIP,
   display_title: `e2e-staging deploy ${deployed}`,
   status,
   conclusion,
+  updated_at,
 });
-const resolve = (runs, jobs) =>
-  resolvePromotionSha({ repository: "o/r", token: "t", fetchImpl: stub(runs, jobs) });
+const resolve = (runs, jobs, nowMs) =>
+  resolvePromotionSha({
+    repository: "o/r",
+    token: "t",
+    fetchImpl: stub(runs, jobs),
+    ...(nowMs ? { nowMs } : {}),
+  });
 
 test("promotes the deployed commit from the run-name, not the run's head_sha", async () => {
   assert.equal(await resolve([run(2, A)], { 2: "success" }), A);
@@ -71,9 +78,12 @@ test("skips a commit whose journeys were skipped and takes the newest verified o
 });
 
 test("a newer failed run of a commit is not outvoted by an older pass of the same commit", async () => {
+  // Automatic promotion never rides an older green while staging is red: the
+  // newer failure blocks every older candidate (manual dispatch with an
+  // explicit sha still promotes B through the exact-SHA gate).
   assert.equal(
     await resolve([run(3, A, "failure"), run(2, A), run(1, B)], { 2: "success", 1: "success" }),
-    B,
+    null,
   );
 });
 
@@ -521,4 +531,68 @@ test("negative control: catch-and-continue would silently return the older SHA",
   }
   assert.equal(await catchAndContinue(), B);
   assert.deepEqual(requestedJobIds, ["3"]);
+});
+
+// Automatic-promotion soak and red-run rules: a green must be 30 minutes old
+// and no newer red run may exist. Pinned to PROMOTION_SOAK_MS so a window
+// change breaks here.
+const { PROMOTION_SOAK_MS } = await import("./resolve-promotion-sha.mjs");
+
+test("soak window is 30 minutes", () => {
+  assert.equal(PROMOTION_SOAK_MS, 30 * 60 * 1000);
+});
+
+test("a fresh green (under 30 minutes old) falls through to the older soaked green", async () => {
+  const now = Date.now();
+  const freshAt = new Date(now - 10 * 60 * 1000).toISOString();
+  const oldAt = new Date(now - 60 * 60 * 1000).toISOString();
+  assert.equal(
+    await resolve(
+      [run(3, A, "success", "completed", freshAt), run(2, B, "success", "completed", oldAt)],
+      {
+        3: "success",
+        2: "success",
+      },
+      now,
+    ),
+    B,
+  );
+});
+
+test("a fresh green with no older soaked green resolves nothing", async () => {
+  const now = Date.now();
+  const freshAt = new Date(now - 5 * 60 * 1000).toISOString();
+  assert.equal(
+    await resolve([run(2, A, "success", "completed", freshAt)], { 2: "success" }, now),
+    null,
+  );
+});
+
+test("a green exactly 30 minutes old is promotable", async () => {
+  const now = Date.now();
+  const soakedAt = new Date(now - PROMOTION_SOAK_MS).toISOString();
+  assert.equal(
+    await resolve([run(2, A, "success", "completed", soakedAt)], { 2: "success" }, now),
+    A,
+  );
+});
+
+test("a green with a missing timestamp is not promotable", async () => {
+  const missing = { ...run(2, A), updated_at: undefined, created_at: undefined };
+  assert.equal(await resolve([missing], { 2: "success" }), null);
+});
+
+test("a newer timed_out run blocks every older green like a failure", async () => {
+  assert.equal(await resolve([run(3, A, "timed_out"), run(2, B)], { 2: "success" }), null);
+});
+
+test("a newer red run for a different commit blocks the older green", async () => {
+  // Staging is currently red (newest run failed for C); even a soaked green
+  // B must wait for staging to go green again.
+  const C = "c".repeat(40);
+  assert.equal(await resolve([run(4, C, "failure"), run(3, B)], { 3: "success" }), null);
+});
+
+test("a newer cancelled run does not block the older green", async () => {
+  assert.equal(await resolve([run(3, A, "cancelled"), run(2, B)], { 2: "success" }), B);
 });
