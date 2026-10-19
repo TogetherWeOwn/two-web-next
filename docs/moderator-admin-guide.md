@@ -552,6 +552,7 @@ context only through the approved private support process.
 | **Something broke on our side** (500) | Offer `/discord` for server entry and escalate the path, wording and time. Do not guess the cause. |
 | **We will be right back** (503) | Use the invite offered by the page or `/discord`; escalate if it persists. Do not restart anything. |
 | Admin/member-data request returns 503 or says unavailable | Stop that operation and report it to engineering; protected reads can fail closed when the database/session/audit path is unavailable. |
+| Dashboard card or section missing on `/admin` (Join funnel, Top searches with no results) | Do not read absence as zero: a failing or slow optional read omits its section inside the 1.5 s budget while the dashboard stays available. Stop and escalate the path and time with timezone. A signed-session 503 or missing database configuration is different: the panel itself is unavailable, so report it the same way. |
 | Event page says cancelled | Explain that the event is not happening; check `/events` for an approved replacement. |
 
 `/discord` is the database-, session- and bot-free invite fallback. It cannot
