@@ -38,7 +38,11 @@ describe("staging deploy applies web migrations before the Worker deploy", () =>
     ].map(at);
     expect(order).toEqual([...order].sort((a, b) => a - b));
     // Full CI on the exact SHA already ran the suite; the deploy job must not repeat it.
-    expect(stepNames).not.toContain("npm run check");
+    // Match comment-stripped text with an anchored pattern: stepNames only captures
+    // 6-space `run:` lines, so a conventional named step (`- name:` + 8-space `run:`)
+    // or a multiline run block would otherwise slip through.
+    const workflowWithoutComments = workflow.replace(/^\s*#.*$/gm, "");
+    expect(workflowWithoutComments).not.toMatch(/npm run check(?:\s|$)/m);
     // The gate sits directly before the DDL it protects.
     expect(at(APPLY) - at(GATE)).toBe(1);
     // No wrangler (Cloudflare) command precedes the zero-pending verification.
