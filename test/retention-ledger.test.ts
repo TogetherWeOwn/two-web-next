@@ -420,6 +420,7 @@ describe("retention ledger doc rows", () => {
       "state",
       "request_attempts",
       "next_attempt_at",
+      "terminal_reason",
     ]);
     const rows = read("docs/retention-ledger.md")
       .split("\n")
@@ -439,6 +440,8 @@ describe("retention ledger doc rows", () => {
       "`deferSync`",
       "`completeSync`",
       "`failSync`",
+      "`noteTerminalIntent`",
+      "`terminal_reason`",
       "`event_sync_attempts_pending_idx`",
       "`obsolete`",
       "`needsSync`",
