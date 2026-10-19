@@ -13,6 +13,7 @@ import app from "./app";
 import type { Env } from "../src/env";
 import { DEFAULT_CONFIG } from "../src/agent-events/service";
 import { makeFakeAgentDb } from "./helpers/fake-agent-ingress-db";
+import { parseJsonLines } from "./helpers/parse-json-lines";
 
 const CALLER = "agent-under-test";
 const CRED = "cred-ingress-alert-001";
@@ -37,16 +38,12 @@ type AlertLine = {
 };
 
 function alertLines(calls: unknown[][]): AlertLine[] {
+  const { parsed, skipped } = parseJsonLines(calls);
+  expect(skipped, `unparsed log lines: ${JSON.stringify(skipped)}`).toEqual([]);
   const out: AlertLine[] = [];
-  for (const args of calls) {
-    const first = args[0];
-    if (typeof first !== "string" || !first.startsWith("{")) continue;
-    try {
-      const line = JSON.parse(first) as AlertLine;
-      if (line.event === "error.alert") out.push(line);
-    } catch {
-      // Non-JSON warn lines (e.g. "agent-events failed") are not alerts.
-    }
+  for (const { value } of parsed) {
+    const line = value as AlertLine;
+    if (line.event === "error.alert") out.push(line);
   }
   return out;
 }

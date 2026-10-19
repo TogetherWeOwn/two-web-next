@@ -27,6 +27,7 @@ import type { JobsEnv } from "../src/env";
 import { PRUNE_CRON, PRUNE_DELETE_BATCH_SIZE } from "../src/jobs/constants";
 import { handleScheduled } from "../src/jobs/worker";
 import { __resetReleaseForTests } from "../src/release-tag";
+import { parseJsonLines } from "./helpers/parse-json-lines";
 
 const SHA = "0123456789abcdef0123456789abcdef01234567";
 const TIMESTAMP = Date.parse("2026-10-01T00:00:00Z");
@@ -133,21 +134,17 @@ let errorCalls: unknown[][] = [];
 let spies: { mockRestore(): void }[] = [];
 
 function scheduledLines(): { raw: string; line: Record<string, unknown> }[] {
+  const { parsed, skipped } = parseJsonLines(errorCalls);
+  expect(skipped, `unparsed log lines: ${JSON.stringify(skipped)}`).toEqual([]);
   const found: { raw: string; line: Record<string, unknown> }[] = [];
-  for (const args of errorCalls) {
-    if (args.length !== 1 || typeof args[0] !== "string") continue;
-    try {
-      const line: unknown = JSON.parse(args[0]);
-      if (
-        line &&
-        typeof line === "object" &&
-        !Array.isArray(line) &&
-        (line as Record<string, unknown>).event === "scheduled.failing"
-      ) {
-        found.push({ raw: args[0], line: line as Record<string, unknown> });
-      }
-    } catch {
-      // Not a JSON line; the strict assertions below report it.
+  for (const { raw, value: line } of parsed) {
+    if (
+      line &&
+      typeof line === "object" &&
+      !Array.isArray(line) &&
+      (line as Record<string, unknown>).event === "scheduled.failing"
+    ) {
+      found.push({ raw, line: line as Record<string, unknown> });
     }
   }
   return found;
