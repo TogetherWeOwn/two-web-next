@@ -193,16 +193,27 @@ describe.skipIf(!raw)("/up real read-only database readiness", () => {
     try {
       await reader`SELECT 1`;
       const client = scopedHealthSql(reader, name, "ping", async () => {
-        // Delay processing a REAL set_config reply, not the server's execution.
+        // Stimulus, not a wait: delaying a REAL set_config reply (not the
+        // server's execution) consumes the health-read budget, forcing the
+        // delayed-setup refusal path. The duration is load-bearing.
         await new Promise((resolve) => setTimeout(resolve, 2600));
       });
       const started = Date.now();
       expect(await databaseReadiness(client)).toEqual({ db: "error", pending_migrations: null });
       expect(Date.now() - started).toBeLessThan(3500);
-      await new Promise((resolve) => setTimeout(resolve, 100));
-      const [activity] = await admin<{ active: number }[]>`
+      // Bounded poll-until-zero (inverted waitForEventLock pattern): observe
+      // actual backend shutdown instead of guessing with a fixed settle sleep.
+      // Deadline 2000ms: a still-active slow ping fails fast, never hangs.
+      const settleDeadline = performance.now() + 2000;
+      let activity: { active: number } | undefined;
+      for (;;) {
+        const rows = await admin<{ active: number }[]>`
         SELECT count(*)::int AS active FROM pg_stat_activity WHERE application_name = ${name} AND state = 'active'
       `;
+        activity = rows[0];
+        if (activity?.active === 0 || performance.now() >= settleDeadline) break;
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      }
       expect(activity?.active).toBe(0); // No end(): an issued slow ping would still be active here.
       const [settings] =
         await reader`SELECT current_setting('statement_timeout') AS statement, current_setting('lock_timeout') AS lock`;
@@ -246,6 +257,8 @@ describe.skipIf(!raw)("/up real read-only database readiness", () => {
       const client = scopedHealthSql(reader, schema, undefined, async () => {
         // BEGIN has already frozen now(); the aggregate has not started yet.
         // All writes target only this owned schema through a separate client.
+        // Stimulus, not a wait: the sleep ages the fixture rows past the 2s
+        // oldest-age asserts below. The duration is load-bearing.
         await admin`UPDATE ${admin(schema)}.queue_jobs SET created_at = clock_timestamp() - interval '1 second'`;
         await admin`UPDATE ${admin(schema)}.queue_jobs SET available_at = clock_timestamp() + interval '200 milliseconds' WHERE id = 20`;
         await new Promise((resolve) => setTimeout(resolve, 1100));
@@ -324,14 +337,27 @@ describe.skipIf(!raw)("/up real read-only database readiness", () => {
       });
       expect(Date.now() - started).toBeLessThan(3500);
       await reader.end({ timeout: 0 });
-      await new Promise((resolve) => setTimeout(resolve, 500));
+      // Bounded poll-until-zero (inverted waitForEventLock pattern): observe
+      // actual backend shutdown instead of guessing with a fixed settle sleep.
+      // Deadline 2000ms: a leaked lock-waiter fails fast, never hangs.
       // Inspect only this test's application_name while the exclusive lock is
       // STILL held: an active query cannot appear to pass by finishing its read.
-      const [activity] = await admin<{ active: number; lock_waiters: number }[]>`
+      const settleDeadline = performance.now() + 2000;
+      let activity: { active: number; lock_waiters: number } | undefined;
+      for (;;) {
+        const rows = await admin<{ active: number; lock_waiters: number }[]>`
         SELECT count(*) FILTER (WHERE state = 'active')::int AS active,
           count(*) FILTER (WHERE state = 'active' AND wait_event_type = 'Lock')::int AS lock_waiters
         FROM pg_stat_activity WHERE application_name = ${schema}
       `;
+        activity = rows[0];
+        if (
+          (activity?.active === 0 && activity?.lock_waiters === 0) ||
+          performance.now() >= settleDeadline
+        )
+          break;
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      }
       expect(activity).toEqual({ active: 0, lock_waiters: 0 });
     } finally {
       release();
