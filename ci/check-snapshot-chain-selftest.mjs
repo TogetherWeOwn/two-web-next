@@ -89,6 +89,16 @@ test("non-zero genesis prevId fails", (t) => {
   assert.throws(() => checkSnapshotChain(root), /genesis.*prevId/);
 });
 
+test("malformed journal tag fails", (t) => {
+  const root = fixture(t, ["no-number-here"], {});
+  assert.throws(() => checkSnapshotChain(root), /malformed tag/);
+});
+
+test("unparseable snapshot fails", (t) => {
+  const root = fixture(t, ["1004_job-unique-locks"], { 1004: "{not json" });
+  assert.throws(() => checkSnapshotChain(root), /unparseable snapshot chain file/);
+});
+
 test("live drizzle chain is contiguous", () => {
   const result = checkSnapshotChain(repoRoot);
   assert.equal(result.entries, result.snapshots);
