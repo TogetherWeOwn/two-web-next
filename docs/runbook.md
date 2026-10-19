@@ -547,12 +547,21 @@ Keep required resources/bindings in place; never delete a queue to roll back.
 is the one-click production rollback: Actions → `rollback-production` → Run
 workflow, branch `main`, `version_id` set to the recorded known-good Worker
 Version ID. It reuses the same request gate
-(`workflow_dispatch` on `main`, `PRODUCTION_DEPLOY_ENABLED` exactly `true`),
-the same `production` Environment approval (required reviewers, no
-self-review) and the same production-only Cloudflare credentials as a deploy,
-then runs `wrangler rollback <version_id> --name two-web-next-production`
-followed by the same `/up` smoke. The `version_id` input must be a lowercase
-Worker Version UUID and travels inputs → `env:` only, never through
+(`workflow_dispatch` on `main`, `PRODUCTION_DEPLOY_ENABLED` exactly `true`)
+and the same `production` Environment gate as a deploy. Both preflight and
+the mutation job receive the repository variable `PRODUCTION_AUTO_APPROVE`:
+exactly `true` selects automated approval, requiring the main-only Environment
+branch policy, green exact-SHA CI, and successful exact-SHA staging deploy and
+e2e-staging evidence with executed journeys and staging quality checks.
+An absent, false or otherwise non-`true` value selects reviewer mode, which
+requires reviewers with self-review prevented; a reviewer-less Environment is
+refused. Exact-SHA CI remains required in either mode. The workflow uses the
+same production-only Cloudflare credentials as a deploy, then runs
+`wrangler rollback <version_id> --name two-web-next-production` followed by
+the same `/up` smoke. This approval-mode selection applies only to the Worker
+rollback; it does not change database migration or backup policy. The
+`version_id` input must be a lowercase Worker Version UUID and travels
+inputs → `env:` only, never through
 expression interpolation in a shell block. Before the rollback moves traffic,
 the workflow refuses when the recorded target version's `secret_text`
 bindings lack a required secret name (names only; values are never read, and

@@ -840,7 +840,7 @@ test("rollback workflow reuses the production gate with no wider permissions", (
   );
   assert.match(workflow, /^  preflight:/m);
   assert.match(workflow, /^  rollback-production:/m);
-  // Production Environment approval with required reviewers; never cancelled.
+  // Production Environment gate in either approval mode; never cancelled.
   assert.match(workflow, /environment:\n      name: production\n/);
   assert.match(workflow, /cancel-in-progress: false/);
   // Same request gate as a deploy, in both jobs.
@@ -1292,6 +1292,24 @@ test("both production gate steps receive PRODUCTION_AUTO_APPROVE", () => {
     assert.match(block, /PRODUCTION_AUTO_APPROVE: \$\{\{ vars\.PRODUCTION_AUTO_APPROVE \}\}/);
   }
 });
+
+for (const job of ["preflight", "rollback-production"]) {
+  test(`rollback ${job} gate receives the repository approval mode and dispatch SHA`, () => {
+    const workflow = readFileSync(
+      new URL("../.github/workflows/rollback-production.yml", import.meta.url),
+      "utf8",
+    );
+    const block = workflow.split(`\n  ${job}:\n`)[1]?.split(/\n  [\w-]+:\n/)[0];
+    assert.ok(block, `${job} job must exist`);
+    const gates = block.split("run: node ci/production-deploy-gate.mjs\n").slice(1);
+    assert.equal(gates.length, 1, `${job} must run the shared gate`);
+    const gate = gates[0].split("\n      - ")[0];
+    assert.match(gate, /PRODUCTION_AUTO_APPROVE: \$\{\{ vars\.PRODUCTION_AUTO_APPROVE \}\}/);
+    assert.match(gate, /PRODUCTION_DEPLOY_ENABLED: \$\{\{ vars\.PRODUCTION_DEPLOY_ENABLED \}\}/);
+    assert.match(gate, /DEPLOY_SHA: \$\{\{ github\.sha \}\}/);
+    assert.match(gate, /GITHUB_TOKEN: \$\{\{ github\.token \}\}/);
+  });
+}
 
 test("gates the promoted DEPLOY_SHA, never the dispatch-time GITHUB_SHA", async () => {
   // greenEnv carries a different GITHUB_SHA (main tip); evidence and checkout are for DEPLOY_SHA.
