@@ -130,7 +130,11 @@ export async function consume(
         timeout,
       ]).finally(() => clearTimeout(t));
     };
-    const failAttempt = async () => {
+    // Bounded settlement without a disposition: reports whether failSync
+    // committed and leaves released/retry policy to the caller. The fresh
+    // definitive path retries undelayed; settlement-only redelivery retries
+    // with the carried backoff delay.
+    const settleAttempt = async () => {
       if (body.kind !== "sync-event") return true;
       try {
         // Settlement is correctness-critical but must never hold the serial
@@ -154,11 +158,14 @@ export async function consume(
         // Never ack a terminal message while it still blocks future revisions.
         // Class-only: settlement errors can carry SQL or connection secrets.
         console.error("sync attempt settlement failed", { exception: queueExceptionClass(e) });
-        if (jobId)
-          await bounded("released", deps.ledger.released(jobId, deps.now?.() ?? new Date()));
-        m.retry();
         return false;
       }
+    };
+    const failAttempt = async () => {
+      if (await settleAttempt()) return true;
+      if (jobId) await bounded("released", deps.ledger.released(jobId, deps.now?.() ?? new Date()));
+      m.retry();
+      return false;
     };
     if (jobId) await bounded("reserved", deps.ledger.reserved(jobId));
 
@@ -260,7 +267,34 @@ export async function consume(
       continue;
     }
     if ("failed" in outcome) {
-      if (outcome.definitive && !(await failAttempt())) continue;
+      if (body.kind === "sync-event" && outcome.definitive) {
+        if (typeof outcome.intentRedeliveryBackoffSeconds === "number") {
+          // Settlement-only redelivery: intent is already recorded, so re-run
+          // the bounded settlement without the bot flow. A still-unsettled
+          // store goes back on the queue with the carried backoff delay — the
+          // live row keeps its depth accounting until the store heals. Never
+          // fail, alert, or ack before failSync commits.
+          if (!(await settleAttempt())) {
+            const availableAt = new Date(
+              (deps.now?.() ?? new Date()).getTime() +
+                outcome.intentRedeliveryBackoffSeconds * 1000,
+            );
+            if (jobId) await bounded("released", deps.ledger.released(jobId, availableAt));
+            m.retry({ delaySeconds: outcome.intentRedeliveryBackoffSeconds });
+            continue;
+          }
+        } else {
+          // Fresh definitive refusal: record terminal intent first (idempotent,
+          // first-writer-wins), then run the existing settlement race unchanged.
+          if (typeof deps.events.noteTerminalIntent === "function") {
+            await bounded(
+              "terminal-intent",
+              deps.events.noteTerminalIntent(body.idempotencyKey, outcome.failed),
+            );
+          }
+          if (!(await failAttempt())) continue;
+        }
+      }
       console.error("job failed", body.kind, outcome.failed);
       alertFailing(body.kind, m.attempts, outcome.failed, { requestId }, syncRetry);
       if (jobId) await bounded("failed", deps.ledger.failed(jobId, body.kind, key, outcome.failed));

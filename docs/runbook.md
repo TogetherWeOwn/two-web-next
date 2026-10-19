@@ -1639,6 +1639,12 @@ automatic dispatch of that unchanged revision is suppressed; a meaningful
 subsequent mutation is eligible. Retrying an unchanged refused revision likewise
 requires an explicit reviewed operator action, not deleting history.
 
+A definitive refusal first records its redacted reason as `terminal_reason` on
+the still-`pending` attempt (terminal intent), then settles. If settlement
+cannot commit, the row stays live and redelivery re-runs settlement only — no
+bot call, no second alert — backing off until the store heals. The `failed`
+stamp and its single `queue.failing` alert land only when settlement commits.
+
 Best-effort successor checks/dispatch time out after two seconds. These timers
 do not cancel SQL: ledger and lock traffic use pools separate from the handler,
 so a blocked cleanup cannot starve the next message's snapshot/claim. Successor
