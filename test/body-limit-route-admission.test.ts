@@ -5,7 +5,6 @@ import { profilesApp } from "../src/profiles/routes";
 import { BODY_LIMIT_BYTES } from "../src/body-limit";
 import type { Env } from "../src/env";
 import { createMemorySessionStore, hashToken, newSessionToken } from "../src/sessions";
-import { sha256Hex } from "../src/bot/signer";
 
 // No sockets: model only the existing shield SQL and audit writes.
 const fixture = vi.hoisted(() => ({
@@ -246,8 +245,18 @@ describe("agent ingress admission", () => {
     [false, 404, "ingress_disabled"],
     [true, 503, "ingress_unavailable"],
   ] as const)(
-    "environment gate enabled=%s refuses before any reads or SQL",
+    "environment gate enabled=%s refuses under-cap before SQL; over-cap is 413 first",
     async (enabled, status, reason) => {
+      // Under-cap still reaches the gate with no client.
+      const under = await app.request(
+        "/api/agent-events",
+        { method: "POST", body: "{}", headers: { "content-type": "application/json" } },
+        { ...env, AGENT_EVENTS_ENABLED: String(enabled) },
+      );
+      expect(under.status).toBe(status);
+      expect(await under.json()).toMatchObject({ reason });
+      expect(fixture.connects).toBe(0);
+      // Over-cap never reaches the gate: the byte cap answers 413 first.
       for (const advertised of [false, true]) {
         const { request, pull } = upload(
           "/api/agent-events",
@@ -260,53 +269,54 @@ describe("agent ingress admission", () => {
           ...env,
           AGENT_EVENTS_ENABLED: String(enabled),
         });
-        expect(response.status).toBe(status);
-        expect(await response.json()).toMatchObject({ reason });
-        expect(pull).not.toHaveBeenCalled();
+        expect(response.status).toBe(413);
+        expect(await response.json()).toEqual(ERROR);
+        // Advertised overflow short-circuits on content-length; chunked must
+        // read the stream to discover the overflow.
+        if (advertised) expect(pull).not.toHaveBeenCalled();
+        else expect(pull).toHaveBeenCalled();
         expect(fixture.connects).toBe(0);
+        expect(fixture.queries).toEqual([]);
         await request.body?.cancel();
       }
     },
   );
 
   it.each([null, "test-only-machine-credential"])(
-    "spent bucket %s refuses before reading",
+    "spent bucket %s refuses under-cap 429; over-cap is 413 first",
     async (credential) => {
       fixture.hits = 60;
-      for (const advertised of [false, true]) {
+      // Under-cap still reaches the spent bucket and refuses 429.
+      for (let i = 0; i < 2; i++) {
         const ctx = execution();
-        const { request, pull } = upload(
+        const headers: Record<string, string> = { "cf-connecting-ip": "192.0.2.1" };
+        if (credential) headers.authorization = `Bearer ${credential}`;
+        const response = await app.request(
           "/api/agent-events",
-          "POST",
-          BODY_LIMIT_BYTES.agent,
-          "",
-          advertised,
+          {
+            method: "POST",
+            body: JSON.stringify({ op: "create" }),
+            headers: { "content-type": "application/json", ...headers },
+          },
+          ingressEnv,
+          ctx,
         );
-        if (credential) request.headers.set("authorization", `Bearer ${credential}`);
-        request.headers.set("cf-connecting-ip", "192.0.2.1");
-        const response = await app.request(request, undefined, ingressEnv, ctx);
         expect(response.status).toBe(429);
         expect(await response.json()).toMatchObject({ reason: "rate_limited", retry_after: 31 });
-        expect(pull).not.toHaveBeenCalled();
         expect(ctx.waitUntil).toHaveBeenCalledOnce();
-        await request.body?.cancel();
       }
       expect(fixture.hits).toBe(60);
       // Outer-shield refusals now write one denied/rate_limited audit row each
-      // (no grant lookup, no hit row); the body is still never read.
+      // (no grant lookup, no hit row).
       expect(fixture.queries.some((q) => /agent_event_grants/.test(q))).toBe(false);
       expect(fixture.queries.filter((q) => q.includes("agent_event_audits"))).toHaveLength(2);
       expect(fixture.ends).toBe(2);
-    },
-  );
-
-  it.each([null, "test-only-machine-credential"])(
-    "%s charges overflow once and preserves credential/IP buckets",
-    async (credential) => {
-      const expectedBucket = credential
-        ? `shield:${await sha256Hex(credential)}`
-        : "shield:ip:192.0.2.1";
+      // Over-cap with the same spent bucket never reads the bucket: 413, no
+      // new statements, hits, audits or closes.
+      fixture.queries = [];
+      fixture.ends = 0;
       for (const advertised of [false, true]) {
+        const ctx = execution();
         const { request } = upload(
           "/api/agent-events",
           "POST",
@@ -316,16 +326,44 @@ describe("agent ingress admission", () => {
         );
         if (credential) request.headers.set("authorization", `Bearer ${credential}`);
         request.headers.set("cf-connecting-ip", "192.0.2.1");
-        const response = await app.request(request, undefined, ingressEnv, execution());
+        const response = await app.request(request, undefined, ingressEnv, ctx);
         expect(response.status).toBe(413);
         expect(await response.json()).toEqual(ERROR);
+        expect(ctx.waitUntil).not.toHaveBeenCalled();
+        await request.body?.cancel();
       }
-      expect(fixture.hits).toBe(2);
-      expect(fixture.buckets).toEqual([expectedBucket, expectedBucket]);
-      expect(fixture.queries.some((q) => /agent_event_grants|agent_event_audits/.test(q))).toBe(
-        false,
-      );
-      expect(fixture.ends).toBe(2);
+      expect(fixture.hits).toBe(60);
+      expect(fixture.queries).toEqual([]);
+      expect(fixture.ends).toBe(0);
+    },
+  );
+
+  it.each([null, "test-only-machine-credential"])(
+    "%s refuses overflow with zero spend and no client",
+    async (credential) => {
+      for (const advertised of [false, true]) {
+        const ctx = execution();
+        const { request } = upload(
+          "/api/agent-events",
+          "POST",
+          BODY_LIMIT_BYTES.agent,
+          "",
+          advertised,
+        );
+        if (credential) request.headers.set("authorization", `Bearer ${credential}`);
+        request.headers.set("cf-connecting-ip", "192.0.2.1");
+        const response = await app.request(request, undefined, ingressEnv, ctx);
+        expect(response.status).toBe(413);
+        expect(await response.json()).toEqual(ERROR);
+        expect(ctx.waitUntil).not.toHaveBeenCalled();
+        await request.body?.cancel();
+      }
+      // Cap-first: no shield hit, no grant/audit row, no client open or close.
+      expect(fixture.hits).toBe(0);
+      expect(fixture.buckets).toEqual([]);
+      expect(fixture.queries).toEqual([]);
+      expect(fixture.connects).toBe(0);
+      expect(fixture.ends).toBe(0);
     },
   );
 
@@ -353,7 +391,7 @@ describe("agent ingress admission", () => {
     }
   });
 
-  it("closes an admitted client when the upload source rejects", async () => {
+  it("refuses a failing upload without opening a client", async () => {
     const ctx = execution();
     const request = new Request(new URL("/api/agent-events", env.APP_URL), {
       method: "POST",
@@ -371,16 +409,16 @@ describe("agent ingress admission", () => {
     const response = await app.request(request, undefined, ingressEnv, ctx);
     expect(response.status).toBe(400);
     expect(await response.text()).not.toContain("private upload failure");
-    expect(fixture.hits).toBe(1);
-    expect(fixture.queries.some((q) => /agent_event_grants|agent_event_audits/.test(q))).toBe(
-      false,
-    );
-    expect(fixture.ends).toBe(1);
-    expect(ctx.waitUntil).toHaveBeenCalledOnce();
+    // Cap-first: the limiter fails the upload before admission opens a client.
+    expect(fixture.hits).toBe(0);
+    expect(fixture.connects).toBe(0);
+    expect(fixture.queries).toEqual([]);
+    expect(fixture.ends).toBe(0);
+    expect(ctx.waitUntil).not.toHaveBeenCalled();
   });
 
   it.each(["complete", "reject"] as const)(
-    "bounds the idle client while a below-cap upload withholds EOF, then cleans up on %s",
+    "defers the client until a below-cap upload reaches EOF, then cleans up on %s",
     async (finish) => {
       const ctx = execution();
       let source!: ReadableStreamDefaultController<Uint8Array>;
@@ -409,14 +447,29 @@ describe("agent ingress admission", () => {
       await awaitingEof;
       try {
         expect(completed).toBe(false);
-        expect(fixture.hits).toBe(1);
-        expect(fixture.connects).toBe(1);
+        // Cap-first: the limiter buffers before admission, so no client exists
+        // while EOF is withheld.
+        expect(fixture.hits).toBe(0);
+        expect(fixture.connects).toBe(0);
         expect(fixture.ends).toBe(0);
         expect(ctx.waitUntil).not.toHaveBeenCalled();
-        expect(fixture.queries.some((q) => /agent_event_grants|agent_event_audits/.test(q))).toBe(
-          false,
-        );
-        // Driver bounds must already apply: HTTP cleanup cannot run without EOF.
+        expect(fixture.queries).toEqual([]);
+        expect(fixture.options).toEqual([]);
+      } finally {
+        if (finish === "complete") source.close();
+        else source.error(new Error("private withheld upload failure"));
+        await pending;
+      }
+      const response = await pending;
+      expect(response.status).toBe(finish === "complete" ? 422 : 400);
+      expect(await response.text()).not.toContain("private withheld upload failure");
+      if (finish === "complete") {
+        // Admitted after EOF: one shield hit, one audit, driver bounds apply.
+        expect(fixture.hits).toBe(1);
+        expect(fixture.connects).toBe(1);
+        expect(fixture.queries.filter((q) => q.includes("agent_event_audits"))).toHaveLength(1);
+        expect(fixture.ends).toBe(1);
+        expect(ctx.waitUntil).toHaveBeenCalledOnce();
         expect(fixture.options).toEqual([
           {
             max: 1,
@@ -426,21 +479,14 @@ describe("agent ingress admission", () => {
             fetch_types: false,
           },
         ]);
-      } finally {
-        if (finish === "complete") source.close();
-        else source.error(new Error("private withheld upload failure"));
-        await pending;
+      } else {
+        // Failed upload never reaches admission: no client, no audit.
+        expect(fixture.hits).toBe(0);
+        expect(fixture.connects).toBe(0);
+        expect(fixture.queries).toEqual([]);
+        expect(fixture.ends).toBe(0);
+        expect(ctx.waitUntil).not.toHaveBeenCalled();
       }
-      const response = await pending;
-      expect(response.status).toBe(finish === "complete" ? 422 : 400);
-      expect(await response.text()).not.toContain("private withheld upload failure");
-      expect(fixture.hits).toBe(1);
-      expect(fixture.connects).toBe(1);
-      expect(fixture.queries.filter((q) => q.includes("agent_event_audits"))).toHaveLength(
-        finish === "complete" ? 1 : 0,
-      );
-      expect(fixture.ends).toBe(1);
-      expect(ctx.waitUntil).toHaveBeenCalledOnce();
     },
   );
 

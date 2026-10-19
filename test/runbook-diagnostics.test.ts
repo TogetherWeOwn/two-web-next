@@ -22,6 +22,41 @@ function routeRow(path: string) {
   return row!;
 }
 
+// Offline semantic guard for the run-owned full-suite contract. It flags the
+// stale shared-database instruction in either corrected passage and requires
+// the fresh run-owned contract with its canonical link and tier distinction.
+// Scoped to full-suite wording so focused isolated-schema fixtures that name
+// the shared database (restore drill, queue inspection) do not trip it.
+function contractViolations(doc: string): string[] {
+  const violations: string[] = [];
+  if (/Tests use `agent-testdb`, database `two_web_next`/.test(doc)) {
+    violations.push("stale safety passage directs full verification to shared two_web_next");
+  }
+  if (
+    /Full database verification must explicitly use\s+`postgres:\/\/agent_test@agent-testdb:5432\/two_web_next`/.test(
+      doc,
+    )
+  ) {
+    violations.push("stale full-check passage directs full verification to shared two_web_next");
+  }
+  if (!/fresh, run-owned[\s\S]*`two_web_next_tog<[^`]+>`/.test(doc)) {
+    violations.push("missing fresh run-owned two_web_next_tog<digits> requirement");
+  }
+  if (!/never the shared\s+`two_web_next`/.test(doc)) {
+    violations.push("missing refusal of the shared two_web_next database for full verification");
+  }
+  if (!/README\.md#database-and-migrations/.test(doc)) {
+    violations.push("missing link to the canonical README database setup");
+  }
+  if (!/Fixture-only `npm run check:offline` is limited evidence/.test(doc)) {
+    violations.push("missing fixture-only check:offline limited-evidence distinction");
+  }
+  if (!/focused isolated-schema tests remain\s+allowed/.test(doc)) {
+    violations.push("missing focused isolated-schema allowance");
+  }
+  return violations;
+}
+
 describe("runbook diagnostic and homepage contract", () => {
   it("documents the deployed public-route smoke, not removed diagnostic probes", () => {
     expect(deploy).toMatch(/node bin\/smoke\.mjs https:\/\/next\.togetherweown\.com/);
@@ -145,10 +180,54 @@ describe("runbook diagnostic and homepage contract", () => {
     expect(watch).toMatch(new RegExp(`for production substitute[\\s\\S]*\`${app}\``, "i"));
   });
 
-  it("smokes the apex with --allow-indexable over the 20-route set", () => {
+  it("directs full database verification to a fresh run-owned database, not the shared one", () => {
+    expect(contractViolations(runbook)).toEqual([]);
+    // Both corrected passages link the canonical setup instead of a competing recipe.
+    expect(runbook).toContain("README.md#database-and-migrations");
+    // Full-suite tier requires a fresh run-owned disposable database ...
+    expect(runbook).toMatch(/fresh, run-owned[\s\S]*`two_web_next_tog<[^`]+>`/);
+    // ... and explicitly refuses the shared database for that tier ...
+    expect(runbook).toMatch(/never the shared\s+`two_web_next`/);
+    // ... while keeping the other tiers: fixture-only offline is limited
+    // evidence, and focused isolated-schema tests stay allowed.
+    expect(runbook).toMatch(/Fixture-only `npm run check:offline` is limited evidence/);
+    expect(runbook).toMatch(/focused isolated-schema tests remain\s+allowed/);
+    // The guard is scoped to the full-suite instruction: focused fixtures that
+    // name the shared database for an isolated schema (restore drill, queue
+    // inspection) remain in the document and must not trip it.
+    expect(runbook).toContain("PGDATABASE=two_web_next");
+  });
+
+  it("rejects a synthetic restoration of the shared-database full-suite instruction", () => {
+    const staleSafety =
+      "Never test, probe or verify database behavior against staging or production " +
+      "databases. Tests use `agent-testdb`, database `two_web_next`, or local fixtures;";
+    const staleFull =
+      "Full database verification must explicitly use " +
+      "`postgres://agent_test@agent-testdb:5432/two_web_next` and the migrated schema, " +
+      "never a live service.";
+    expect(contractViolations(staleSafety)).not.toEqual([]);
+    expect(contractViolations(staleFull)).not.toEqual([]);
+    expect(contractViolations(`${staleSafety}\n${staleFull}`)).not.toEqual([]);
+    // A fixed document passes again: the guard tracks the contract, not a
+    // blocklist of the fixture strings.
+    const repaired =
+      "Full database verification uses a fresh, run-owned disposable " +
+      "database (`two_web_next_tog<digits>`) on `agent-testdb` with the migrated " +
+      "schema; follow the canonical setup in " +
+      "[README Database and migrations](../README.md#database-and-migrations). " +
+      "Full database verification must use a fresh, run-owned `two_web_next_tog<digits>` " +
+      "database on `agent-testdb` with the migrated schema, never the shared " +
+      "`two_web_next` database nor a live service. " +
+      "Fixture-only `npm run check:offline` is limited evidence, not database " +
+      "acceptance, and focused isolated-schema tests remain allowed.";
+    expect(contractViolations(repaired)).toEqual([]);
+  });
+
+  it("smokes the apex with --allow-indexable over the 23-route set", () => {
     const watch = readFileSync(new URL("../docs/48h-watch-spec.md", import.meta.url), "utf8");
     expect(watch).toContain("node bin/smoke.mjs https://togetherweown.com --allow-indexable");
-    expect(watch).toMatch(/Twenty public routes/s);
+    expect(watch).toMatch(/Twenty-three public routes/s);
     expect(watch).toMatch(/Without `--allow-indexable` the apex probe fails/s);
     expect(watch).toContain("node bin/smoke.mjs https://next.togetherweown.com");
     const smokeTests = readFileSync(new URL("./smoke.test.mjs", import.meta.url), "utf8");

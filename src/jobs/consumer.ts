@@ -133,7 +133,21 @@ export async function consume(
     const failAttempt = async () => {
       if (body.kind !== "sync-event") return true;
       try {
-        await deps.events.failSync(body.idempotencyKey);
+        // Settlement is correctness-critical but must never hold the serial
+        // batch open: race the same ledger bound as every sibling wait. On
+        // expiry the existing catch path retries without ack; a late
+        // settlement landing after the race is abandoned and changes nothing.
+        // This race only stops the wait: pgEventStore.failSync cancels the
+        // UPDATE server-side at the same bound (FAIL_SYNC_DB_TIMEOUT_MS), so
+        // a wedged statement also frees the max:1 handler connection and the
+        // next message's prepareSync still runs.
+        let t: ReturnType<typeof setTimeout>;
+        const timeout = new Promise<never>((_, reject) => {
+          t = setTimeout(() => reject(new Error("timed out")), LEDGER_TIMEOUT_MS);
+        });
+        await Promise.race([deps.events.failSync(body.idempotencyKey), timeout]).finally(() =>
+          clearTimeout(t),
+        );
         return true;
       } catch (e) {
         // Snapshot settlement is correctness-critical, unlike the depth ledger.
@@ -246,16 +260,10 @@ export async function consume(
       continue;
     }
     if ("failed" in outcome) {
-      // A definitive settlement outage must not be silent: the same delivery
-      // still owes the operator-visible terminal record (alert + failed stamp)
-      // even though the attempt never settled. The retry is already queued by
-      // failAttempt; never ack, so redelivery can finish settling. The jobId
-      // fence keeps a single failed row when it does.
-      const settlementFailed = outcome.definitive && !(await failAttempt());
+      if (outcome.definitive && !(await failAttempt())) continue;
       console.error("job failed", body.kind, outcome.failed);
       alertFailing(body.kind, m.attempts, outcome.failed, { requestId }, syncRetry);
       if (jobId) await bounded("failed", deps.ledger.failed(jobId, body.kind, key, outcome.failed));
-      if (settlementFailed) continue;
     } else if (jobId) {
       await bounded("dequeued", deps.ledger.dequeued(jobId));
     }

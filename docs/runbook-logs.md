@@ -265,6 +265,23 @@ before concluding the request did not occur. `duration_ms` includes downstream
 middleware and handler work, not queue execution or streamed-body completion.
 No Logpush or external shipping is configured by this change.
 
+## Discord guild-id configuration refusal
+
+`Discord guild id configuration invalid.` is the exact fixed `console.warn`
+message when the default cached source refuses `DISCORD_GUILD_ID`
+(`src/events/discord-transients-cached.ts:51-59`). Admission requires 1–20 ASCII
+digits as configured, with no trimming, coercion or decoding
+(`src/events/discord-transients-live.ts:91-111`). The warning has no fields and
+never echoes the refused value.
+
+Refusal happens before the snapshot key/claim path and sends zero Discord
+requests. Discord events are unavailable: the source returns an empty Discord
+list with `lastReadFailed()` true, while canonical events remain available in
+the calendar and home teaser (`test/discord-guild-admission-degrade.test.ts:101-175`).
+This source does not emit a `Discord snapshot outcome` line. Check the configured
+[`DISCORD_GUILD_ID`](config.md), rather than treating the warning as a Discord
+or snapshot-store outage.
+
 ## Discord snapshot outcome
 
 The calendar's Discord snapshot source (`src/events/discord-transients-cached.ts`)
@@ -287,7 +304,7 @@ these lines. Background: [Discord calendar snapshots](discord-snapshots.md).
 | `held` | A usable snapshot was served while a retry hold is active. That covers requests that skipped Discord because another request set the hold, and the request that just set the hold itself after its own Discord read failed. Expect during Discord 429 or slow episodes. |
 | `fresh` | Served a usable snapshot completed less than 60 seconds ago. That includes a snapshot this request just refreshed: the lease winner calls Discord, completes, then logs `fresh`. Other requests served from a fresh snapshot skip Discord. |
 | `stale` | Served data while the snapshot is 60 to 600 seconds old and another request holds the refresh lease, or after publishing the refresh result threw (`completionFailed: true`, which can serve even live rows because the outcome is derived from the pre-claim view). A failed refresh itself logs `held` (or `cold` when nothing usable is left), never `stale`. |
-| `error` | The snapshot store read (claim) failed, the stored payload was corrupt and failed to decode, or the snapshot key config was invalid (an `APP_URL` with a path, query or credentials, or a missing or oversized `DISCORD_GUILD_ID`). Logged at warn level with no live Discord fallback. Points at the store or the config, not at Discord. A store completion failure is not `error`: it stays on the info line with `completionFailed: true`. |
+| `error` | The snapshot store read (claim) failed, the stored payload was corrupt and failed to decode, or the snapshot key config was invalid (an `APP_URL` with a path, query or credentials). Logged at warn level with no live Discord fallback. Points at the store or the config, not at Discord. A store completion failure is not `error`: it stays on the info line with `completionFailed: true`. |
 
 A healthy mix is mostly `fresh`, with `stale` around the 60-second refresh
 boundary and brief `held` stretches while Discord throttles or slows.
