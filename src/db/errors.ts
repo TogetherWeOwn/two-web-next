@@ -13,7 +13,9 @@ const TRANSPORT_CODES = new Set([
   "CONNECTION_CLOSED",
   "CONNECTION_DESTROYED",
 ]);
-const SERVER_UNAVAILABLE_CODES = new Set(["57P01", "57P02", "57P03", "53300"]);
+// Lock/statement cancellation is retryable too. Moderator mutations await
+// transaction rollback before propagating it to the existing outage response.
+const SERVER_UNAVAILABLE_CODES = new Set(["57P01", "57P02", "57P03", "53300", "55P03", "57014"]);
 
 export function isDatabaseUnavailable(error: unknown): boolean {
   // Bound traversal also handles cyclic causes. Syntax, constraint and ordinary

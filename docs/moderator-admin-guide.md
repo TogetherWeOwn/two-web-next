@@ -113,6 +113,23 @@ QA_AUTH_TOKEN=<from the approved binding, never pasted> node bin/admin-authwall-
 It spends two QA-login hits and stays inside the admin-write throttle budget.
 Live runs belong to the authorized cutover procedure, not CI.
 
+## Busy writes and retrying
+
+Event create, Save/PATCH, publish/cancel and RSVP pause/reopen, and featured
+create, Save and Delete apply transaction-local `lock_timeout` and
+`statement_timeout` database bounds of two seconds each. These are per-statement bounds, not a
+whole-request deadline: a multi-occurrence series can execute many statements
+inside one atomic transaction. The bounds include dependent recurrence children,
+waitlist changes and audit writes, and do not change pooled connection defaults.
+
+If a database statement times out, the mutation transaction rolls back before
+the existing private, no-store 503 outage response is returned. No success
+redirect or write-back is sent for that refused mutation. Keep the submitted
+draft in the existing editor/recovery flow, wait briefly, then retry; a timeout
+is not confirmation that your changes saved. Validation errors still use their
+normal field errors. If the outage continues, use the response's support reference
+when contacting the maintainers.
+
 ## Screens and route reference
 
 Use the navigation **Events**, **Featured**, **Join attempts**, **Activity log**, or **Site**.
