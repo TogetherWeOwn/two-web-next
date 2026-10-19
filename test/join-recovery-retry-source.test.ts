@@ -2,14 +2,17 @@
 // route-inventory: GET /join/callback
 // Acceptance: a failed join callback renders the recovery page, and its
 // "Try again" retry link must preserve the sanitized ?source= attribution
-// the journey started with, alongside any ?next= return target. The
-// callback clears the journey cookies, so the retry href is the only
-// place the attribution can survive: it must carry
+// the journey started with, alongside any ?next= return target. An
+// admitted callback clears its own journey cookies, so its retry href is
+// the only place the attribution can survive: it must carry
 // "source=<sanitized value>" when the journey carried a valid source,
 // and no source parameter at all when the source was hostile or absent.
-// Following the retry href must make the retried journey's join_attempts
-// row record that source instead of null. The recovery title, message,
-// invite fallback and retry label stay byte-identical.
+// An unadmitted callback (its state does not bind to the jar's journey)
+// renders the same sanitized retry href but must not touch the pending
+// journey's cookies at all. Following the retry href must make the
+// retried journey's join_attempts row record that source instead of
+// null. The recovery title, message, invite fallback and retry label
+// stay byte-identical.
 //
 // Hermetic: mounted app with in-memory stores and a stubbed Discord
 // fetch only. No database, no network, no live Discord contact.
@@ -153,9 +156,15 @@ type VariantKey =
   | "outage"
   | "bot-refused";
 
+// `admitted` records whether the callback binds to the jar's journey (its
+// state matches the signed state cookie and consumes the stored journey).
+// Only an admitted callback owns journey cleanup; `expired-state` submits a
+// forged state against the real jar, so it is unadmitted and must preserve
+// the pending journey's cookies.
 const VARIANTS: {
   key: VariantKey;
   mode: DiscordMode;
+  admitted: boolean;
   status: number;
   title: string;
   message: string;
@@ -163,6 +172,7 @@ const VARIANTS: {
   {
     key: "cancelled",
     mode: "no-call",
+    admitted: true,
     status: 200,
     title: "Join cancelled",
     message: "You cancelled the Discord approval",
@@ -170,6 +180,7 @@ const VARIANTS: {
   {
     key: "discord-error",
     mode: "no-call",
+    admitted: true,
     status: 200,
     title: "Join didn&#39;t complete",
     message: "complete the approval. Try again",
@@ -177,6 +188,7 @@ const VARIANTS: {
   {
     key: "expired-state",
     mode: "no-call",
+    admitted: false,
     status: 200,
     title: "Join link expired",
     message: "That join link expired",
@@ -184,6 +196,7 @@ const VARIANTS: {
   {
     key: "expired-grant",
     mode: "expired-grant",
+    admitted: true,
     status: 200,
     title: "Join approval expired",
     message: "That Discord approval expired",
@@ -191,6 +204,7 @@ const VARIANTS: {
   {
     key: "outage",
     mode: "exchange-outage",
+    admitted: true,
     status: 503,
     title: "Discord is unreachable",
     message: "reach Discord to complete the join",
@@ -198,6 +212,7 @@ const VARIANTS: {
   {
     key: "bot-refused",
     mode: "bot-refuses",
+    admitted: true,
     status: 200,
     title: "We couldn&#39;t add you automatically",
     message: "use the invite link below",
@@ -248,6 +263,7 @@ async function expectRecovery(
     message: string;
     source: string | null;
     next: string | null;
+    admitted: boolean;
   },
 ) {
   expect(res.status).toBe(expected.status);
@@ -260,10 +276,22 @@ async function expectRecovery(
   expect(html).toContain("Try again");
   expect(html).not.toContain(DESCRIPTION_SECRET);
   expect(html).not.toContain("fixture-access-token");
-  // The journey cookies are still cleared by the callback (no cookie
-  // redesign): the href, not a surviving cookie, carries the attribution.
+  // Admission decides journey cleanup. An admitted callback still clears
+  // its own journey cookies (no cookie redesign): the href, not a
+  // surviving cookie, carries the attribution. An unadmitted callback
+  // must not touch them at all — no deletion and no replacement header
+  // for any journey cookie — so the pending journey (e.g. a newer tab's)
+  // survives in the browser jar byte-for-byte.
+  const setCookies = res.headers.getSetCookie();
   for (const name of ["state", "source", "next"]) {
-    expect(res.headers.getSetCookie().join("\n")).toContain(`__Host-two_join_${name}=; Max-Age=0`);
+    if (expected.admitted) {
+      expect(setCookies.join("\n")).toContain(`__Host-two_join_${name}=; Max-Age=0`);
+    } else {
+      expect(
+        setCookies.some((c) => c.startsWith(`__Host-two_join_${name}=`)),
+        `__Host-two_join_${name} must be untouched`,
+      ).toBe(false);
+    }
   }
   const href = retryHref(html);
   expect(href).not.toBeNull();
@@ -302,7 +330,7 @@ afterEach(() => {
 describe("join recovery retry preserves a sanitized ?source=", () => {
   it.each(VARIANTS)(
     "$key recovery carries ?source= for a valid source",
-    async ({ key, mode, status, title, message }) => {
+    async ({ key, mode, admitted, status, title, message }) => {
       const { env: e } = isolated();
       stubDiscord(mode);
       const start = await startJoin(e, { source: SAFE_SOURCE });
@@ -310,13 +338,20 @@ describe("join recovery retry preserves a sanitized ?source=", () => {
       // bare retry href below can only mean the callback dropped it.
       expect(start.res.headers.getSetCookie().join("\n")).toMatch(/__Host-two_join_source=[^;]/);
       const res = await runVariant(e, key, start);
-      await expectRecovery(res, { status, title, message, source: SAFE_SOURCE, next: null });
+      await expectRecovery(res, {
+        status,
+        title,
+        message,
+        source: SAFE_SOURCE,
+        next: null,
+        admitted,
+      });
     },
   );
 
   it.each(VARIANTS)(
     "$key recovery carries ?source= alongside a safe ?next=",
-    async ({ key, mode, status, title, message }) => {
+    async ({ key, mode, admitted, status, title, message }) => {
       const { env: e } = isolated();
       stubDiscord(mode);
       const start = await startJoin(e, { source: SAFE_SOURCE, next: SAFE_NEXT });
@@ -329,6 +364,7 @@ describe("join recovery retry preserves a sanitized ?source=", () => {
         message,
         source: SAFE_SOURCE,
         next: SAFE_NEXT,
+        admitted,
       });
     },
   );
@@ -347,6 +383,7 @@ describe("join recovery retry preserves a sanitized ?source=", () => {
         message: "You cancelled the Discord approval",
         source,
         next: null,
+        admitted: true,
       });
     },
   );
@@ -364,6 +401,7 @@ describe("join recovery retry preserves a sanitized ?source=", () => {
       message: "You cancelled the Discord approval",
       source: SAFE_SOURCE,
       next: null,
+      admitted: true,
     });
     // A fresh browser follows the retry href with no journey cookies left.
     const retry = await app.request(href, {}, e);
@@ -399,6 +437,7 @@ describe("join recovery retry preserves a sanitized ?source=", () => {
       message: "You cancelled the Discord approval",
       source: SAFE_SOURCE,
       next: SAFE_NEXT,
+      admitted: true,
     });
     const retry = await app.request(href, {}, e);
     expect(retry.status).toBe(302);
@@ -422,12 +461,19 @@ describe("join recovery retry preserves a sanitized ?source=", () => {
 describe("join recovery retry omits ?source= when there is no valid source", () => {
   it.each(VARIANTS)(
     "$key recovery carries only ?next= when source was absent",
-    async ({ key, mode, status, title, message }) => {
+    async ({ key, mode, admitted, status, title, message }) => {
       const { env: e } = isolated();
       stubDiscord(mode);
       const start = await startJoin(e, { next: SAFE_NEXT });
       const res = await runVariant(e, key, start);
-      await expectRecovery(res, { status, title, message, source: null, next: SAFE_NEXT });
+      await expectRecovery(res, {
+        status,
+        title,
+        message,
+        source: null,
+        next: SAFE_NEXT,
+        admitted,
+      });
     },
   );
 
@@ -442,6 +488,7 @@ describe("join recovery retry omits ?source= when there is no valid source", () 
       message: "You cancelled the Discord approval",
       source: null,
       next: null,
+      admitted: true,
     });
   });
 
@@ -463,6 +510,7 @@ describe("join recovery retry omits ?source= when there is no valid source", () 
         message: "You cancelled the Discord approval",
         source: null,
         next: null,
+        admitted: true,
       });
       expect(html).not.toContain(hostile);
       expect(html).not.toContain(encodeURIComponent(hostile));
@@ -483,6 +531,7 @@ describe("join recovery retry omits ?source= when there is no valid source", () 
       message: "You cancelled the Discord approval",
       source: null,
       next: SAFE_NEXT,
+      admitted: true,
     });
     expect(html).not.toContain("a/b");
   });
@@ -501,6 +550,7 @@ describe("join recovery retry omits ?source= when there is no valid source", () 
       message: "You cancelled the Discord approval",
       source: null,
       next: SAFE_NEXT,
+      admitted: true,
     });
     expect(html).not.toContain(hostile);
     expect(html).not.toContain(encodeURIComponent(hostile));
@@ -509,7 +559,7 @@ describe("join recovery retry omits ?source= when there is no valid source", () 
 
   it.each(VARIANTS.filter((v) => v.key === "expired-grant" || v.key === "outage"))(
     "$key recovery drops a correctly-signed but hostile source cookie value",
-    async ({ key, mode, status, title, message }) => {
+    async ({ key, mode, admitted, status, title, message }) => {
       const { env: e } = isolated();
       stubDiscord(mode);
       const start = await startJoin(e, { source: SAFE_SOURCE });
@@ -524,6 +574,7 @@ describe("join recovery retry omits ?source= when there is no valid source", () 
         message,
         source: null,
         next: null,
+        admitted,
       });
       expect(html).not.toContain("evil.test");
     },
