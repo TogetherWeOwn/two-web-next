@@ -278,14 +278,10 @@ describe("admission precedence is preserved with a hostile guild_id", () => {
     expect(a.status).not.toBeGreaterThanOrEqual(500);
     expect(a.status).toBe(401);
     expect(a.body).toMatchObject({ reason: "unauthenticated", request_id: expect.any(String) });
-    expect(ctx.fake.audits).toEqual([
-      expect.objectContaining({
-        grantId: null,
-        result: "denied",
-        reason: "unauthenticated",
-        requestId: a.body.request_id,
-      }),
-    ]);
+    // Grant-first ingress refuses unknown credentials with zero audit rows:
+    // pre-auth refusals stay zero-audit (sampled warn only). Envelope,
+    // request_id correlation and precedence pins below are unchanged.
+    expect(ctx.fake.audits).toEqual([]);
     expect(ctx.fake.hits.filter((h) => !h.bucket.startsWith("shield:"))).toHaveLength(0);
   });
 
