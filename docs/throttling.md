@@ -127,7 +127,12 @@ run would exceed the budget — merge journeys onto fewer logins instead of
 retrying across the window. Bounded retry handling for an
 already-throttled staging login lives in
 [`e2e/qa-login-retry.mjs`](../e2e/qa-login-retry.mjs); the local `qaLogin`
-fails hard on the first 429.
+fails hard on the first 429. The public-reads budget has the same CI-sharing
+shape — every suite in the `browser-smoke` job lands in `events-read:anon` —
+but reads have no static call-site count, so the loopback worker raises the
+budget instead: `e2e/wrangler.jsonc` sets `E2E_PUBLIC_READ_BUDGET` to `600`
+while production keeps 60 (see
+[`event-read-admission.md`](event-read-admission.md)).
 
 Generic and join buckets key on the client key above (`<name>:<clientKey>`);
 RSVP and profile-write buckets key on the member id instead, so switching verb

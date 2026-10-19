@@ -11,6 +11,12 @@
     "DISCORD_CLIENT_ID": "e2e-client",
     "DISCORD_GUILD_ID": "326474832151838730",
     "DISCORD_MODERATOR_ROLE_IDS": "1546777855801954408,1546777856984481792",
-    "DISCORD_INVITE_URL": "https://discord.gg/e2e-never-follow"
+    "DISCORD_INVITE_URL": "https://discord.gg/e2e-never-follow",
+    // The sequential suites share one `anon` read bucket off-edge and issue
+    // well over 60 guarded reads inside a 60-second window; 600 absorbs the
+    // combined bursts while a runaway loop still 429s within the minute
+    // (docs/event-read-admission.md). Production keeps 60: no deployed
+    // config sets this var (test/e2e-public-read-budget.test.ts pins that).
+    "E2E_PUBLIC_READ_BUDGET": "600"
   }
 }
