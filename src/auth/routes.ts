@@ -290,8 +290,10 @@ export function registerAuthRoutes(app: Hono<{ Bindings: Env }>, hooks: AuthHook
 
   app.post(
     "/logout",
-    throttle("logout", WRITE_THROTTLE_PER_MINUTE),
+    // Body cap before the throttle: oversized probes 413 with zero
+    // `logout`-bucket spend, even on a spent budget.
     requestBodyLimit("action"),
+    throttle("logout", WRITE_THROTTLE_PER_MINUTE),
     async (c) => {
       // The app-wide same-origin guard runs before throttling or session storage.
       const token = await getSignedCookie(c, c.env.SESSION_SECRET, SESSION_COOKIE);
@@ -345,8 +347,11 @@ export function registerAuthRoutes(app: Hono<{ Bindings: Env }>, hooks: AuthHook
       c.set("qaFixture", fixture);
       await next();
     },
-    throttle("qa-login", AUTH_THROTTLE_PER_MINUTE),
+    // Body cap before the throttle (but after the identity/token gate
+    // above): oversized probes from admitted QA callers 413 with zero
+    // `qa-login`-bucket spend, even on a spent budget.
     requestBodyLimit("action"),
+    throttle("qa-login", AUTH_THROTTLE_PER_MINUTE),
     async (c) => {
       const fixture = c.get("qaFixture");
       const store = await hooks.storeFor(c);
