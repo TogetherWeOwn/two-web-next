@@ -29,7 +29,6 @@ describe("staging deploy applies web migrations before the Worker deploy", () =>
     };
     const order = [
       "Require successful exact-SHA full CI",
-      "npm run check",
       "Moderator role-config preflight (before any Cloudflare mutation)",
       ...migration,
       "Ensure queues exist",
@@ -38,6 +37,8 @@ describe("staging deploy applies web migrations before the Worker deploy", () =>
       "Smoke test staging public routes",
     ].map(at);
     expect(order).toEqual([...order].sort((a, b) => a - b));
+    // Full CI on the exact SHA already ran the suite; the deploy job must not repeat it.
+    expect(stepNames).not.toContain("npm run check");
     // The gate sits directly before the DDL it protects.
     expect(at(APPLY) - at(GATE)).toBe(1);
     // No wrangler (Cloudflare) command precedes the zero-pending verification.
