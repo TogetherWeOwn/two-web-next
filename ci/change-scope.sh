@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# Change-scope gate for the required `check` (TOG-11811) and the browser/staging
-# smoke jobs (e2e.yml, e2e-staging.yml, deploy.yml smoke steps). Prints
+# Change-scope gate for `check` (gated by the required `ci-ok`; TOG-11811)
+# and the browser/staging smoke jobs (e2e.yml, e2e-staging.yml, deploy.yml
+# smoke steps). Prints
 # `docs_only=true` only when every path a PR touches is prose that nothing
 # executes or reads; anything else, or any doubt, prints `docs_only=false` and
 # the full suite runs. Also prints `skip_e2e=true` when no changed path can

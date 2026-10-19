@@ -95,8 +95,8 @@ synchronization.
 - On failure, the job uploads `test-results/` traces/screenshots and the HTML
   `playwright-report/` under `e2e-failure-<run>-<attempt>` for seven days.
   Do not upload `.dev.vars`; traces can contain only disposable CI sessions.
-- Require a green `browser-smoke` result on the exact PR head, together with
-  `check`, `gitleaks`, `pr-lint`, and independent Code Reviewer approval before
+- Require a green `e2e-ok` result on the exact PR head, together with
+  `ci-ok`, `gitleaks`, `pr-lint`, and independent Code Reviewer approval before
   squash merge. A green static check does not prove the browser journeys.
 
 Scope excludes visual regression, real Discord writes and any tests against
