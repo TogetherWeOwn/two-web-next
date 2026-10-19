@@ -21,6 +21,15 @@ import { getTableColumns } from "drizzle-orm";
 import type postgres from "postgres";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { boardViewLogs, eventSyncAttempts } from "../src/db/admin-schema";
+import { discordEventSnapshots, webOAuthJourneys } from "../src/db/schema";
+import {
+  DISCORD_CACHE_FRESH_MS,
+  DISCORD_CACHE_STALE_MS,
+  DISCORD_SNAPSHOT_CLEANUP_BATCH,
+  DISCORD_SNAPSHOT_MAX_KEYS,
+} from "../src/events/discord-snapshot";
+import { ERASURE_TABLES } from "../src/member-erasure";
+import { OAUTH_JOURNEY_SWEEP_BATCH_SIZE, OAUTH_JOURNEY_TTL_SECONDS } from "../src/oauth-journeys";
 import {
   backoffFor,
   BOARD_VIEW_LOG_RETENTION_DAYS,
@@ -66,10 +75,17 @@ function deleteWindows(body: string, table: string): string[] {
   const anyTableRef = String.raw`(?:(?:"?[a-z_][\w$]*"?)\s*\.\s*)?"?[a-z_][\w$]*"?`;
   const symbols: Record<string, string> = {
     activity_log: "activityLog",
+    discord_event_snapshots: "discordEventSnapshots",
     event_sync_attempts: "eventSyncAttempts",
-    queue_jobs: "queueJobs",
-    queue_failed_jobs: "queueFailedJobs",
+    events: "events",
+    featured_contents: "featuredContents",
     job_unique_locks: "jobUniqueLocks",
+    profiles: "profiles",
+    queue_failed_jobs: "queueFailedJobs",
+    queue_jobs: "queueJobs",
+    rsvps: "rsvps",
+    users: "users",
+    web_oauth_journeys: "webOAuthJourneys",
   };
   const symbol = symbols[table];
   // Build the symbol and alias set before the SQL pass so interpolated
@@ -964,5 +980,210 @@ describe.skipIf(!process.env.DATABASE_URL)("retention ledger (test Postgres)", (
     expect(heir).not.toBeNull();
     expect(heir).not.toBe(stale);
     await lock.release(staleKey, heir!);
+  });
+});
+
+describe("retention ledger L8b core member tables", () => {
+  const L8B_TABLES = [
+    "users",
+    "profiles",
+    "rsvps",
+    "events",
+    "featured_contents",
+    "discord_event_snapshots",
+    "web_oauth_journeys",
+  ];
+
+  it("publishes one dedicated row per core member table", () => {
+    const doc = read("docs/retention-ledger.md");
+    for (const table of L8B_TABLES) {
+      const rows = doc
+        .split("\n")
+        .filter((line) => new RegExp(`^\\| \`${table}\`(?:\\s|\\|)`).test(line));
+      expect(rows, `one dedicated ledger row for ${table}`).toHaveLength(1);
+    }
+    const scope = doc.split("\n").filter((line) => line.startsWith("- "));
+    expect(
+      scope.some((line) => line.includes("Core member tables")),
+      "scope must name the L8b slice",
+    ).toBe(true);
+    for (const claim of [
+      "No age window",
+      "eraseMember",
+      "bin/erase-member.mjs",
+      "upsertRosterUser",
+      "ON CONFLICT (id) DO UPDATE",
+      "DELETE /events/:key/rsvp",
+      "src/events/routes-rsvp.tsx:150",
+      "ON DELETE cascade",
+      "deliberately no `deleteEvent`",
+      "no event delete anywhere on this resource",
+      "deleteFeatured",
+      "Deleting featured content is safe",
+      "DISCORD_CACHE_FRESH_MS = 60_000",
+      "DISCORD_CACHE_STALE_MS = 600_000",
+      "DISCORD_SNAPSHOT_MAX_KEYS = 128",
+      "DISCORD_SNAPSHOT_CLEANUP_BATCH = 16",
+      "OAUTH_JOURNEY_TTL_SECONDS = 600",
+      "OAUTH_JOURNEY_SWEEP_BATCH_SIZE = 1000",
+      "tombstone",
+      "for update skip locked",
+      "member-erasure.md#what-is-deleted",
+      "member-erasure.md#what-is-retained-and-why",
+      "No policy or CISO decision changes in this slice",
+    ]) {
+      expect(doc, `ledger must pin L8b claim: ${claim}`).toContain(claim);
+    }
+  });
+
+  it("pins the L8b cache/journey constants (read-only)", () => {
+    expect(OAUTH_JOURNEY_TTL_SECONDS).toBe(600);
+    expect(OAUTH_JOURNEY_SWEEP_BATCH_SIZE).toBe(1000);
+    expect(DISCORD_CACHE_FRESH_MS).toBe(60_000);
+    expect(DISCORD_CACHE_STALE_MS).toBe(600_000);
+    expect(DISCORD_SNAPSHOT_MAX_KEYS).toBe(128);
+    expect(DISCORD_SNAPSHOT_CLEANUP_BATCH).toBe(16);
+    // None of the seven tables has a retention-days constant or a prune
+    // store: the daily model:prune wiring never mentions them. Bare names
+    // are unambiguous except "events", which also matches ordinary prose
+    // ("stale events"), so that one is probed by its exact SQL/store shape.
+    for (const file of ["src/jobs/constants.ts", "src/jobs/cron.ts", "src/jobs/postgres.ts"]) {
+      for (const table of L8B_TABLES.filter((name) => name !== "events")) {
+        expect(read(file), `${file} must not prune ${table}`).not.toContain(table);
+      }
+      expect(read(file), `${file} must not prune events`).not.toContain("delete from events");
+      expect(read(file), `${file} must not prune events`).not.toContain("stores.events");
+    }
+  });
+
+  it("pins the erasure lifecycle: users, profiles, rsvps leave only via eraseMember", () => {
+    expect([...ERASURE_TABLES]).toEqual([
+      "users",
+      "profiles",
+      "rsvps",
+      "web_sessions",
+      "join_attempts",
+    ]);
+    const erasure = read("src/member-erasure.ts");
+    expect(erasure).toContain("delete from users where id = ${discordId} returning 1");
+    expect(erasure).toContain("delete from profiles where user_id = ${discordId} returning 1");
+    expect(erasure).toContain("delete from rsvps where user_id = ${discordId} returning 1");
+    // The roster write refreshes in place and never deletes.
+    const roster = read("src/db/roster.ts");
+    expect(roster).toContain("ON CONFLICT (id) DO UPDATE");
+    // Repo-wide: only the erasure deletes users/profiles rows. rsvps has two
+    // further member-action writers pinned below, so it is excluded here.
+    for (const table of ["users", "profiles"]) {
+      const offenders = listTsFiles(join(root, "src")).filter(
+        (file) => deleteWindows(readFileSync(file, "utf8"), table).length > 0,
+      );
+      expect(
+        offenders.map((file) => file.replace(root, "").replace(/^\/+/, "")),
+        `only member-erasure.ts may delete ${table}`,
+      ).toEqual(["src/member-erasure.ts"]);
+    }
+  });
+
+  it("pins the rsvp member-action paths and the never-firing parent cascade", () => {
+    // Member withdraw: exactly that member's row for the event, then a
+    // waitlist promotion. The waitlist re-queue deletes and recreates the
+    // same member's row to reset both FIFO keys.
+    expect(read("src/events/routes-rsvp.tsx")).toContain('app.delete("/events/:key/rsvp"');
+    const store = read("src/events/rsvp.ts");
+    expect(store).toContain(".delete(rsvps)");
+    // The event FK cascades, but no app path deletes an event row, so the
+    // cascade never fires (events row below).
+    expect(read("drizzle/1002_rsvps.sql")).toContain("ON DELETE cascade");
+    expect(read("src/db/admin-schema.ts")).toContain('onDelete: "cascade"');
+    const offenders = listTsFiles(join(root, "src"))
+      .filter((file) => deleteWindows(readFileSync(file, "utf8"), "rsvps").length > 0)
+      .map((file) => file.replace(root, "").replace(/^\/+/, ""))
+      .sort();
+    expect(offenders, "only erasure and the member-action store delete rsvps").toEqual([
+      "src/events/rsvp.ts",
+      "src/member-erasure.ts",
+    ]);
+  });
+
+  it("pins events: deliberately no delete path, retained indefinitely", () => {
+    const reads = read("src/admin/store-event-reads.ts");
+    expect(reads).toContain("There is deliberately no deleteEvent");
+    expect(read("src/admin/kit-event-edit.ts")).toContain("no event delete anywhere");
+    const erasureDoc = read("docs/member-erasure.md");
+    expect(erasureDoc).toContain("this command never deletes event rows");
+    // Repo-wide: no src file deletes an event row.
+    const offenders: string[] = [];
+    for (const file of listTsFiles(join(root, "src"))) {
+      if (deleteWindows(readFileSync(file, "utf8"), "events").length > 0) offenders.push(file);
+    }
+    expect(offenders, `no src file may delete events: ${offenders.join(", ")}`).toEqual([]);
+  });
+
+  it("pins featured_contents: moderator single-row delete only, audited", () => {
+    const store = read("src/admin/store-featured.ts");
+    expect(store).toContain("Deleting featured content is safe");
+    expect(store).toContain("deleted featured content ${locked.title}");
+    const offenders = listTsFiles(join(root, "src"))
+      .filter((file) => deleteWindows(readFileSync(file, "utf8"), "featured_contents").length > 0)
+      .map((file) => file.replace(root, "").replace(/^\/+/, ""));
+    expect(offenders, "only store-featured.ts may delete featured_contents").toEqual([
+      "src/admin/store-featured.ts",
+    ]);
+    const windows = deleteWindows(store, "featured_contents").map(normalizeSqlWindow);
+    expect(windows).toEqual([".delete(featuredContents)"]);
+  });
+
+  it("pins the discord snapshot cache: bounds, opportunistic cleanup, no prune", () => {
+    const fields = Object.values(getTableColumns(discordEventSnapshots)).map(
+      (column) => column.name,
+    );
+    expect(fields).toEqual([
+      "key",
+      "payload",
+      "succeeded_at",
+      "retry_at",
+      "lease_token",
+      "lease_expires_at",
+    ]);
+    const store = read("src/events/discord-snapshot-postgres.ts");
+    expect(store).toContain("Expiring cache bytes only: never events/audit/history");
+    expect(normalizeSqlWindow(store)).toContain(
+      "delete from discord_event_snapshots where key in ( select key from discord_event_snapshots where coalesce(succeeded_at, '-infinity'::timestamptz) <= clock_timestamp() - make_interval(secs => ${DISCORD_CACHE_STALE_MS / 1000})",
+    );
+    expect(store).toContain(
+      "order by key limit ${DISCORD_SNAPSHOT_CLEANUP_BATCH} for update skip locked",
+    );
+    expect(store).toContain("capacity.count >= DISCORD_SNAPSHOT_MAX_KEYS");
+    expect(read("drizzle/1021_discord-event-snapshots.sql")).toContain(
+      "Additive display cache only",
+    );
+    const offenders = listTsFiles(join(root, "src"))
+      .filter(
+        (file) => deleteWindows(readFileSync(file, "utf8"), "discord_event_snapshots").length > 0,
+      )
+      .map((file) => file.replace(root, "").replace(/^\/+/, ""));
+    expect(offenders, "only the snapshot store deletes snapshots").toEqual([
+      "src/events/discord-snapshot-postgres.ts",
+    ]);
+  });
+
+  it("pins the oauth journey TTL, tombstone consume, and request-path sweep", () => {
+    const fields = Object.values(getTableColumns(webOAuthJourneys)).map((column) => column.name);
+    expect(fields).toEqual(["state_hash", "flow", "expires_at", "consumed_at"]);
+    const store = read("src/oauth-journeys.ts");
+    expect(store).toContain("Keep the tombstone until expiry; never delete on consume");
+    expect(store).toContain("values (${stateHash}, ${flow}, now() + ${OAUTH_JOURNEY_TTL_SECONDS}");
+    expect(normalizeSqlWindow(store)).toContain(
+      "delete from web_oauth_journeys where state_hash in ( select state_hash from web_oauth_journeys where expires_at <= now() order by expires_at, state_hash limit ${OAUTH_JOURNEY_SWEEP_BATCH_SIZE} for update skip locked ) returning state_hash",
+    );
+    // Request-path sweep on auth/join starts, never the daily model:prune.
+    expect(read("src/auth/routes.ts")).toContain("await store.journeys.sweepExpired();");
+    expect(read("src/join/route-start.ts")).toContain("await store.journeys.sweepExpired();");
+    const offenders = listTsFiles(join(root, "src"))
+      .filter((file) => deleteWindows(readFileSync(file, "utf8"), "web_oauth_journeys").length > 0)
+      .map((file) => file.replace(root, "").replace(/^\/+/, ""));
+    expect(offenders, "only the journey store deletes journeys").toEqual(["src/oauth-journeys.ts"]);
+    // The journey table carries no member key, so erasure never touches it.
+    expect(read("docs/member-erasure.md")).not.toContain("web_oauth_journeys");
   });
 });
