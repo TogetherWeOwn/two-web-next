@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import postgres from "postgres";
 import {
   EXPECTED_SEQUENCES,
   EXPECTED_TABLES,
@@ -7,6 +8,7 @@ import {
   SECRET_NAME,
   assertReadOnly,
   checkSequenceNames,
+  safePreflightError,
   validateStagingUrl,
 } from "./staging-catalog-preflight.mjs";
 import {
@@ -108,6 +110,235 @@ test("endpoint pin refuses production identity, other hosts and weak TLS", () =>
       ),
     /TLS/,
   );
+});
+
+test("create_booleans uses (role, schema, privilege) order, lowercase public, missing-role guard", () => {
+  const query = QUERIES.find((entry) => entry.id === "create_booleans").sql;
+  assert.match(query, /has_schema_privilege\('two_web_app', 'public', 'CREATE'\)/);
+  assert.match(query, /has_schema_privilege\('public', 'public', 'CREATE'\)/);
+  assert.doesNotMatch(query, /'PUBLIC'/);
+  assert.match(query, /EXISTS \(SELECT 1 FROM pg_roles WHERE rolname = 'two_web_app'\)/);
+  assert.equal(assertReadOnly(query), true);
+});
+
+test("table_grants reads raw relacl, not the membership-filtered information_schema view", () => {
+  const query = QUERIES.find((entry) => entry.id === "table_grants").sql;
+  assert.doesNotMatch(query, /information_schema/);
+  assert.match(query, /aclexplode\(c\.relacl\)/);
+  assert.match(query, /e\.grantee = 0/);
+  assert.equal(assertReadOnly(query), true);
+});
+
+test("default_acl includes global (namespace 0) entries with an explicit label", () => {
+  const query = QUERIES.find((entry) => entry.id === "default_acl").sql;
+  assert.match(query, /defaclnamespace = 0/);
+  assert.match(query, /\(global\)/);
+  assert.equal(assertReadOnly(query), true);
+});
+
+test("driver errors are masked; only refusal prefixes pass through", () => {
+  const driver = new Error(
+    "connect failed postgres://role-stub:secret-value@db.host/db?sslmode=require",
+  );
+  const masked = safePreflightError(driver);
+  assert.match(masked, /database details withheld/);
+  assert.doesNotMatch(masked, /secret-value|postgres:\/\//);
+  for (const message of [
+    "Missing PLANETSCALE_STAGING_DATABASE_URL Environment secret; no fallback is permitted.",
+    "Invalid preflight endpoint; value withheld.",
+    "Refusing preflight against the production database; value withheld.",
+    "Preflight requires the pinned staging endpoint with TLS; value withheld.",
+    "This preflight takes no inputs.",
+  ]) {
+    assert.equal(safePreflightError(new Error(message)), message);
+  }
+});
+
+test("endpoint pin refuses weak TLS, unknown params and bad shapes; strips channel_binding", () => {
+  const staged = (query) =>
+    `postgres://role-stub.${PLANETSCALE_STAGING_BRANCH_ID}:stub@${PLANETSCALE_STAGING_HOST}/db${query}`;
+  // Only require/verify-full pass; disable and other values refuse.
+  for (const sslmode of ["disable", "prefer", "verify-ca", "allow"]) {
+    assert.throws(() => validateStagingUrl(staged(`?sslmode=${sslmode}`)), /TLS/);
+  }
+  // Unknown query params refuse: postgres.js would spread them over
+  // connection settings and silently override the script's own guards.
+  assert.throws(() => validateStagingUrl(staged("?sslmode=require&statement_timeout=5s")), /TLS/);
+  // Bad protocol, hash, non-5432 port and non-database paths refuse.
+  assert.throws(
+    () =>
+      validateStagingUrl(
+        `http://role-stub.${PLANETSCALE_STAGING_BRANCH_ID}:stub@${PLANETSCALE_STAGING_HOST}/db?sslmode=require`,
+      ),
+    /Invalid preflight endpoint/,
+  );
+  assert.throws(
+    () => validateStagingUrl(`${staged("?sslmode=require")}#fragment`),
+    /Invalid preflight endpoint/,
+  );
+  assert.throws(
+    () =>
+      validateStagingUrl(
+        `postgres://role-stub.${PLANETSCALE_STAGING_BRANCH_ID}:stub@${PLANETSCALE_STAGING_HOST}:5433/db?sslmode=require`,
+      ),
+    /Invalid preflight endpoint/,
+  );
+  assert.throws(
+    () =>
+      validateStagingUrl(
+        `postgres://role-stub.${PLANETSCALE_STAGING_BRANCH_ID}:stub@${PLANETSCALE_STAGING_HOST}/a/b?sslmode=require`,
+      ),
+    /Invalid preflight endpoint/,
+  );
+  // Only unknown channel_binding values refuse; known ones are accepted
+  // and stripped (libpq-only flag; TLS stays enforced via sslmode).
+  for (const binding of ["bogus", "prefer&channel_binding=bogus"]) {
+    assert.throws(
+      () => validateStagingUrl(staged(`?sslmode=require&channel_binding=${binding}`)),
+      /channel binding/,
+    );
+  }
+  for (const binding of ["require", "prefer", "disable"]) {
+    const url = validateStagingUrl(staged(`?sslmode=require&channel_binding=${binding}`));
+    assert.equal(url.searchParams.has("channel_binding"), false);
+    assert.equal(url.searchParams.get("sslmode"), "require");
+    assert.equal(url.port, "5432");
+  }
+});
+
+const LIVE_URL = (() => {
+  for (const raw of [process.env.CATALOG_PREFLIGHT_TEST_DATABASE_URL, process.env.DATABASE_URL]) {
+    if (!raw) continue;
+    try {
+      if (
+        ["localhost", "127.0.0.1", "::1", "agent-testdb", "postgres"].includes(
+          new URL(raw).hostname,
+        )
+      ) {
+        return raw;
+      }
+    } catch {
+      // Not a URL: not a live target.
+    }
+  }
+  return null;
+})();
+
+test("live: all seven queries execute on disposable Postgres and report the seeded grants", {
+  skip: LIVE_URL ? false : "needs a disposable DATABASE_URL (localhost/agent-testdb)",
+}, async () => {
+  const admin = postgres(LIVE_URL, { max: 1 });
+  const dbName = `catalog_preflight_${process.pid}`;
+  try {
+    for (const role of ["two_web_app", "preflight_owner"]) {
+      try {
+        await admin.unsafe(`DROP ROLE "${role}"`);
+      } catch {
+        // Absent on first run.
+      }
+    }
+    await admin.unsafe(`CREATE DATABASE "${dbName}"`);
+  } finally {
+    await admin.end({ timeout: 5 });
+  }
+  const liveBase = new URL(LIVE_URL);
+  liveBase.pathname = `/${dbName}`;
+  const client = postgres(liveBase.href, { max: 1 });
+  try {
+    await client.unsafe("CREATE ROLE two_web_app NOLOGIN");
+    await client.unsafe("CREATE ROLE preflight_owner NOLOGIN");
+    await client.unsafe("GRANT CREATE ON SCHEMA public TO preflight_owner");
+    for (const table of EXPECTED_TABLES.filter((name) => name !== "web_throttle_hits")) {
+      await client.unsafe(`CREATE TABLE ${table} (id bigserial primary key)`);
+    }
+    await client.unsafe("GRANT SELECT, INSERT ON TABLE public.join_attempts TO two_web_app");
+    await client.unsafe("GRANT SELECT ON TABLE public.web_sessions TO PUBLIC");
+    await client.unsafe("ALTER DEFAULT PRIVILEGES GRANT SELECT ON TABLES TO PUBLIC");
+    await client.unsafe(
+      "ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT INSERT ON TABLES TO PUBLIC",
+    );
+    // web_throttle_hits belongs to a role the reader is not a member of:
+    // only its owner may grant on it.
+    await client.unsafe("SET ROLE preflight_owner");
+    try {
+      await client.unsafe("CREATE TABLE web_throttle_hits (id bigserial primary key)");
+      await client.unsafe("GRANT SELECT ON TABLE public.web_throttle_hits TO two_web_app");
+    } finally {
+      await client.unsafe("RESET ROLE");
+    }
+
+    const rows = {};
+    await client.unsafe("BEGIN READ ONLY");
+    try {
+      for (const query of QUERIES) {
+        rows[query.id] = await client.unsafe(query.sql);
+      }
+      await client.unsafe("COMMIT");
+    } catch (error) {
+      try {
+        await client.unsafe("ROLLBACK");
+      } catch {
+        // Best-effort; the original error carries the verdict.
+      }
+      throw error;
+    }
+
+    assert.equal(rows.table_owners.length, 4);
+    assert.deepEqual(
+      rows.table_owners.map((row) => row.object).sort(),
+      [...EXPECTED_TABLES].sort(),
+    );
+    assert.equal(rows.schema_acl.length, 1);
+    const seen = new Set(
+      rows.table_grants.map((row) => `${row.grantee}|${row.object}|${row.privilege_type}`),
+    );
+    for (const grant of [
+      "two_web_app|join_attempts|SELECT",
+      "two_web_app|join_attempts|INSERT",
+      "PUBLIC|web_sessions|SELECT",
+      "two_web_app|web_throttle_hits|SELECT",
+    ]) {
+      assert.ok(seen.has(grant), `expected grant row ${grant}`);
+    }
+    assert.equal(rows.create_booleans.length, 1);
+    assert.equal(typeof rows.create_booleans[0].app_has_create, "boolean");
+    assert.equal(typeof rows.create_booleans[0].public_has_create, "boolean");
+    const schemas = new Set(rows.default_acl.map((row) => row.schema));
+    assert.ok(schemas.has("(global)"), "global default privileges are reported");
+    assert.ok(schemas.has("public"), "schema-scoped default privileges are reported");
+    const c3 = checkSequenceNames(rows.sequences.map((row) => row.name));
+    assert.equal(c3.mismatch, false);
+    assert.deepEqual(c3.missing, []);
+    assert.equal(
+      rows.owner_counts.reduce((sum, row) => sum + Number(row.tables), 0),
+      4,
+    );
+
+    // A missing two_web_app role reports NULL instead of aborting the run.
+    await client.unsafe("DROP OWNED BY two_web_app");
+    await client.unsafe("DROP ROLE two_web_app");
+    const missing = await client.unsafe(
+      QUERIES.find((query) => query.id === "create_booleans").sql,
+    );
+    assert.equal(missing.length, 1);
+    assert.equal(missing[0].app_has_create, null);
+    assert.equal(typeof missing[0].public_has_create, "boolean");
+  } finally {
+    await client.end({ timeout: 5 });
+    const cleanup = postgres(LIVE_URL, { max: 1 });
+    try {
+      await cleanup.unsafe(`DROP DATABASE "${dbName}" WITH (FORCE)`);
+      for (const role of ["two_web_app", "preflight_owner"]) {
+        try {
+          await cleanup.unsafe(`DROP ROLE "${role}"`);
+        } catch {
+          // Already gone or still referenced; the run-owned database is dropped.
+        }
+      }
+    } finally {
+      await cleanup.end({ timeout: 5 });
+    }
+  }
 });
 
 test("C3 check passes on bigserial defaults and flags any divergence", () => {
