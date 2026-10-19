@@ -528,11 +528,31 @@ function decorateKitResponse(
 // (including "null"/malformed), Sec-Fetch-Site same-origin is a fallback only
 // when Origin is absent and only when the request origin is APP_URL, invalid
 // config fails closed. Reads headers + URL only, never the body.
+// Hono-identical path decode for the exemption match. Hono's guard and router
+// both see getPath() (hono/utils/url in the pinned Hono: decodeURI with a
+// %25 pre-escape, falling back to decoding only the valid %XX runs), so the
+// twin decodes the same way. decodeURI on purpose: reserved escapes such as
+// %2F stay encoded on Hono too, and decodeURIComponent would diverge.
+function decodeTwinPath(path: string): string {
+  const preescaped = path.includes("%25") ? path.replace(/%25/g, "%2525") : path;
+  try {
+    return decodeURI(preescaped);
+  } catch {
+    return preescaped.replace(/(?:%[0-9A-Fa-f]{2})+/g, (match) => {
+      try {
+        return decodeURI(match);
+      } catch {
+        return match;
+      }
+    });
+  }
+}
+
 export function isSameOriginAllowed(request: Request, appUrl: string): boolean {
   const method = request.method.toUpperCase();
   let path: string;
   try {
-    path = new URL(request.url).pathname;
+    path = decodeTwinPath(new URL(request.url).pathname);
   } catch {
     return false;
   }
