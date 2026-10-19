@@ -549,7 +549,7 @@ context only through the approved private support process.
 |---|---|
 | Join recovery or sign-in notice | Follow the [join troubleshooting guide](troubleshooting-join.md); one-click join and sign-in have different failure behavior. |
 | **Slow down a little** (429) | Wait for `Retry-After`, or at least a minute if unavailable. Do not repeatedly click or bypass the limit. |
-| **Request too large** (413) on event create/edit | Wire body is over the 32K `json` cap ([body budgets](body-limits.md#classes-and-derivation)). Shrink the payload and retry. Not throttle, session, or moderation state: the cap runs before those checks. Covers merged event create/edit only. |
+| **That request is too large** (413) on event create/save | Wire body is over the 64K `form` cap ([body budgets](body-limits.md#classes-and-derivation)). Shrink the payload and retry. Sign-in, moderator role, and throttle still come first: the moderator guard and the write throttle run before the cap, so a sign-in/403 or 429 takes precedence. Covers merged admin event create/save only. |
 | **Something broke on our side** (500) | Offer `/discord` for server entry and escalate the path, wording and time. Do not guess the cause. |
 | **We will be right back** (503) | Use the invite offered by the page or `/discord`; escalate if it persists. Do not restart anything. |
 | Admin/member-data request returns 503 or says unavailable | Stop that operation and report it to engineering; protected reads can fail closed when the database/session/audit path is unavailable. |
