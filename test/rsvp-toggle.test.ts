@@ -10,6 +10,7 @@ import app from "./app";
 import { setRsvpOpen } from "../src/admin/store";
 import { newEventKey, ValidationError } from "../src/admin/validation";
 import { activityLog, events, rsvps } from "../src/db/admin-schema";
+import { users } from "../src/db/schema";
 import type { Env } from "../src/env";
 import { uniqueKey } from "../src/jobs/sync-event";
 import type { QueueMessage } from "../src/jobs/types";
@@ -218,6 +219,11 @@ describe.skipIf(!process.env.DATABASE_URL)(
     it("pauses idempotently, preserves answers, returns paused, and reopens member writes", async () => {
       const row = await seed();
       const path = `/events/${row.eventKey}`;
+      // Attributable seed: the pause response counts only named rows.
+      await fixture.db
+        .insert(users)
+        .values({ id: "toggle-member", username: "toggle-member" })
+        .onConflictDoNothing();
       expect((await request(`${path}/rsvp`, "PUT", false, { status: "going" })).status).toBe(201);
       await completeQueuedDeliveries();
       sent.length = 0;
@@ -266,6 +272,11 @@ describe.skipIf(!process.env.DATABASE_URL)(
     it("counts only this event's going answers, including zero, on changed and no-op responses", async () => {
       const row = await seed({ capacity: 2 });
       const other = await seed();
+      // Attributable seeds: the going count only counts named rows.
+      await fixture.db
+        .insert(users)
+        .values({ id: "other-going", username: "other-going" })
+        .onConflictDoNothing();
       await fixture.db
         .insert(rsvps)
         .values([
@@ -277,6 +288,14 @@ describe.skipIf(!process.env.DATABASE_URL)(
         expect(res.status).toBe(200);
         expect(await res.json()).toMatchObject({ data: { going_count: 0 } });
       }
+      // Attributable seeds: the going count only counts named rows.
+      await fixture.db
+        .insert(users)
+        .values([
+          { id: "going-1", username: "going-1" },
+          { id: "going-2", username: "going-2" },
+        ])
+        .onConflictDoNothing();
       await fixture.db.insert(rsvps).values([
         { eventId: row.id, userId: "going-1", status: "going" },
         { eventId: row.id, userId: "going-2", status: "going" },
@@ -294,6 +313,16 @@ describe.skipIf(!process.env.DATABASE_URL)(
       async (prefix) => {
         const row = await seed({ capacity: 1 });
         const stamp = new Date("2026-01-01T00:00:00Z");
+        // Attributable seeds: the reopen response counts only named rows,
+        // including the promoted head.
+        await fixture.db
+          .insert(users)
+          .values([
+            { id: "toggle-member", username: "toggle-member" },
+            { id: "first", username: "first" },
+            { id: "second", username: "second" },
+          ])
+          .onConflictDoNothing();
         await fixture.db.insert(rsvps).values([
           { eventId: row.id, userId: "toggle-member", status: "going" },
           {

@@ -15,8 +15,7 @@ form cap before throttle and session work, so an oversized body returns 413
 with zero throttle spend and no session or store read, and an exhausted bucket
 returns 429 only for bodies at or under the cap. Profile owner policy runs
 after the cap; other moderator write authentication runs before buffering,
-read once, without rotation. Admin event form routes retain their existing
-throttle-first order.
+read once, without rotation.
 
 `POST /events`, `PATCH /events/:key` and the four `POST /events/:key/` actions
 (`publish`, `cancel`, `rsvp-pause`, `rsvp-reopen`) likewise apply the existing body
@@ -25,6 +24,13 @@ or streamed bodies return 413 without throttle rows or session reads, even when
 the throttle budget is exhausted. At or under the cap, requests still run the
 throttle then moderator authentication, retaining the existing 429, 401 and 403
 refusals.
+
+`POST /admin/events` and `POST /admin/events/:key` apply the `form` cap before
+the `admin-write` throttle, after the admin guard. An oversized body from a
+signed-in moderator returns 413 with zero throttle spend and no store read, even
+when the budget is exhausted. Guest 401 and non-moderator 403 refusals still run
+first, oversized or not; at or under the cap, moderator posts still spend one
+throttle hit before validation and the store.
 
 Agent ingress runs its byte cap first: an over-cap body returns 413 with no
 SQL, shield charge or client. Under-cap bodies are buffered, then the

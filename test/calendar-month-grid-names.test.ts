@@ -37,6 +37,7 @@ function persisted(overrides: Partial<PublicEvent> = {}): PublicEvent {
     status: "published",
     rsvpOpen: true,
     goingCount: 0,
+    goingOccupancy: 0,
     discordEventId: null,
     discordSyncFailedAt: null,
     discordSyncFailureCode: null,

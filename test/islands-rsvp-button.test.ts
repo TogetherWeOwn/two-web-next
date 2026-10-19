@@ -513,7 +513,11 @@ describe("rsvp-button SSR/server drift", () => {
       [42, VIEWER_ONE],
       [42, VIEWER_TWO],
     ]);
-    const attendeeReads = p.queries.filter((q) => q.sql.includes('inner join "users"'));
+    // Roster-shaped reads join users without a group-by; the attributable
+    // going-count aggregate joins too and is not an attendee read.
+    const attendeeReads = p.queries.filter(
+      (q) => q.sql.includes('inner join "users"') && !q.sql.includes("group by"),
+    );
     // The member-only attendees projection excludes nameless rows in SQL and
     // retrieves at most one page per request (zero-offset reads elide OFFSET).
     expect(attendeeReads.map((q) => q.params)).toEqual([
