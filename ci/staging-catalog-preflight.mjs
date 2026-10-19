@@ -54,15 +54,27 @@ export const QUERIES = [
   },
   {
     id: "create_booleans",
-    sql: "SELECT has_schema_privilege('two_web_app', 'CREATE', 'public') AS app_has_create, has_schema_privilege('PUBLIC', 'CREATE', 'public') AS public_has_create",
+    // has_schema_privilege(user, schema, privilege): the pseudo-role is only
+    // the lowercase name 'public' ('PUBLIC' errors as a missing role), and a
+    // missing two_web_app role reports NULL instead of aborting the run.
+    sql: "SELECT CASE WHEN EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'two_web_app') THEN has_schema_privilege('two_web_app', 'public', 'CREATE') ELSE NULL END AS app_has_create, has_schema_privilege('public', 'public', 'CREATE') AS public_has_create",
   },
   {
     id: "table_grants",
-    sql: "SELECT grantee, table_name AS object, privilege_type FROM information_schema.role_table_grants WHERE table_schema = 'public' AND table_name IN ('join_attempts', 'web_oauth_journeys', 'web_sessions', 'web_throttle_hits') AND grantee IN ('two_web_app', 'PUBLIC') ORDER BY 1, 2, 3",
+    // Raw relacl, not information_schema.role_table_grants: that view only
+    // shows rows whose grantor/grantee is in the reader's enabled_roles, so
+    // grants from a non-member owner would read as zero rows. relacl is
+    // visible regardless of membership; grantee 0 is PUBLIC. No regrole
+    // casts, so a missing two_web_app role filters to nothing instead of
+    // erroring.
+    sql: "SELECT CASE WHEN e.grantee = 0 THEN 'PUBLIC' ELSE pg_get_userbyid(e.grantee) END AS grantee, c.relname AS object, e.privilege_type FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace CROSS JOIN aclexplode(c.relacl) AS e WHERE n.nspname = 'public' AND c.relname IN ('join_attempts', 'web_oauth_journeys', 'web_sessions', 'web_throttle_hits') AND (e.grantee = 0 OR pg_get_userbyid(e.grantee) = 'two_web_app') ORDER BY 1, 2, 3",
   },
   {
     id: "default_acl",
-    sql: "SELECT defaclrole::regrole AS for_role, defaclnamespace::regnamespace AS schema, defaclobjtype AS objtype, defaclacl AS acl FROM pg_default_acl WHERE defaclnamespace = 'public'::regnamespace",
+    // Include global default privileges (defaclnamespace = 0): an ALTER
+    // DEFAULT PRIVILEGES without IN SCHEMA governs later tables in public
+    // but the schema-scoped predicate alone would hide it.
+    sql: "SELECT CASE WHEN defaclnamespace = 0 THEN '(global)' ELSE defaclnamespace::regnamespace::text END AS schema, defaclrole::regrole::text AS for_role, defaclobjtype AS objtype, defaclacl AS acl FROM pg_default_acl WHERE defaclnamespace = 0 OR defaclnamespace = 'public'::regnamespace",
   },
   {
     id: "owner_counts",
