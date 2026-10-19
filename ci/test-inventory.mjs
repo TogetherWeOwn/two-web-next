@@ -4,9 +4,11 @@
 //
 // Reachability rules (vitest.config.ts + package.json + workflows):
 // - test/** matches the vitest `include` globs, except the files the config
-//   `exclude`s (parsed live from vitest.config.ts, never mirrored by hand).
+//   `exclude`s (parsed live from vitest.config.ts, never mirrored by hand:
+//   literals plus `*`/`**` globs expanded against the files on disk).
 //   An excluded file runs via `npm run test:smoke` instead, and counts as
-//   reachable only while that script still names it.
+//   reachable only while that command still names it (a mention anywhere
+//   else is not a run).
 // - tier0/** matches the Tier-0 config (`tier0/vitest.config.ts`, run via
 //   `npm run test:tier0`); reachable only while that wiring names it.
 // - ci/** and e2e/** have no glob runner: each file must be named in a
@@ -15,6 +17,7 @@
 //
 // Modes: default prints ::warning:: per orphan and exits 0 (triage runs).
 // --strict exits 1 on any orphan; CI runs --strict (HARD).
+// --root <dir> checks that tree instead of the repo (triage, selftest).
 // --selftest runs the fixture suite below and exits 0/1 on pass/fail.
 import {
   readdirSync,
@@ -26,6 +29,7 @@ import {
   rmSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
+import { spawnSync } from "node:child_process";
 import { join, resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import assert from "node:assert/strict";
@@ -36,8 +40,9 @@ const VITEST_TEST_DIRS = ["test"];
 
 // The test/** files vitest skips, parsed from the `exclude` array in
 // <root>/vitest.config.ts. Derived, not mirrored, so the gate cannot drift
-// from the config: only literal test/** test paths count (configDefaults and
-// glob entries never match a concrete file). A root without the config
+// from the config. Literals land here; `*` globs are expanded against the
+// files on disk by vitestExcludeGlobs (a glob-excluded suite needs smoke
+// wiring too, never a silent vitest-reachable). A root without the config
 // (hermetic fixtures) excludes nothing.
 export function vitestExcludedTests(root = repoRoot) {
   const configPath = join(root, "vitest.config.ts");
@@ -51,6 +56,23 @@ export function vitestExcludedTests(root = repoRoot) {
     .map((m) => m[1])
     .filter((f) => f.startsWith("test/") && !f.includes("*"));
   return new Set(files);
+}
+
+// Every `*`/`**` entry in the vitest `exclude` array. Expanded against the
+// discovered test files so a glob-excluded suite cannot read as
+// vitest-reachable, however the glob is prefixed (`test/…`, `**/…`).
+// Entries matching nothing (node_modules, dist) expand to the empty set.
+export function vitestExcludeGlobs(root = repoRoot) {
+  const configPath = join(root, "vitest.config.ts");
+  if (!existsSync(configPath)) return [];
+  const text = readFileSync(configPath, "utf8");
+  const start = text.indexOf("exclude:");
+  assert.ok(start !== -1, `${configPath} has no exclude block`);
+  const end = text.indexOf("]", start);
+  assert.ok(end !== -1, `${configPath} exclude block never closes`);
+  return [...text.slice(start, end).matchAll(/"([^"]+)"/g)]
+    .map((m) => m[1])
+    .filter((g) => g.includes("*"));
 }
 
 function listTestFiles(root, dir) {
@@ -84,7 +106,25 @@ function collectHaystack(root) {
 // its full relative path, or a `*`-glob covering it (e.g. the check job runs
 // `node --test ci/a11y-*.test.mjs`, which covers the whole a11y family).
 function globToRegExp(glob) {
-  return new RegExp(`^${glob.replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*/g, "[^/]*")}$`);
+  // `*` stays inside one path segment, `**` crosses directories (`**/`
+  // also matches zero directories, so `test/**` covers `test/a.test.ts`).
+  let out = "";
+  for (let i = 0; i < glob.length; ) {
+    if (glob.startsWith("**/", i)) {
+      out += "(.*/)?";
+      i += 3;
+    } else if (glob.startsWith("**", i)) {
+      out += ".*";
+      i += 2;
+    } else if (glob[i] === "*") {
+      out += "[^/]*";
+      i += 1;
+    } else {
+      out += /[.+^${}()|[\]\\]/.test(glob[i]) ? `\\${glob[i]}` : glob[i];
+      i += 1;
+    }
+  }
+  return new RegExp(`^${out}$`);
 }
 
 function referencedInCi(file, haystack) {
@@ -93,11 +133,28 @@ function referencedInCi(file, haystack) {
   return tokens.some((t) => globToRegExp(t).test(file));
 }
 
+// The exact command CI runs for vitest-excluded suites. A smokeExcluded file
+// is reachable only when THIS command names it: a mention in any other
+// script, or in a workflow comment, is not a run.
+function smokeCommand(root) {
+  const pkg = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
+  return pkg.scripts?.["test:smoke"] ?? "";
+}
+
 export function inventory(root = repoRoot) {
   const haystack = collectHaystack(root);
+  const smokeCmd = smokeCommand(root);
+  const testFiles = VITEST_TEST_DIRS.flatMap((d) => listTestFiles(root, d));
   const smokeExcluded = vitestExcludedTests(root);
+  // Glob excludes (e.g. "test/smoke-*.test.mjs") expand against the files on
+  // disk: a glob-excluded suite needs test:smoke wiring like a literal one,
+  // instead of silently reading as vitest-reachable.
+  const excludeGlobs = vitestExcludeGlobs(root);
+  for (const file of testFiles) {
+    if (excludeGlobs.some((g) => globToRegExp(g).test(file))) smokeExcluded.add(file);
+  }
   const files = [
-    ...VITEST_TEST_DIRS.flatMap((d) => listTestFiles(root, d)),
+    ...testFiles,
     ...listTestFiles(root, "tier0"),
     ...listTestFiles(root, "ci"),
     ...listTestFiles(root, "e2e"),
@@ -108,8 +165,9 @@ export function inventory(root = repoRoot) {
     let via = null;
     if (file.startsWith("test/")) {
       via = smokeExcluded.has(file) ? "npm run test:smoke" : "vitest include (test/**/*.test.*)";
-      // A vitest-excluded file is reachable only when test:smoke still names it.
-      if (smokeExcluded.has(file) && !referencedInCi(file, haystack)) via = null;
+      // A vitest-excluded file is reachable only when the test:smoke
+      // command itself still names it.
+      if (smokeExcluded.has(file) && !referencedInCi(file, smokeCmd)) via = null;
     } else if (file.startsWith("tier0/")) {
       // Tier-0 suites run only from the report-only step via their own
       // config: reachable only while that wiring still names the config or
@@ -210,6 +268,75 @@ function selftest() {
     }
   });
 
+  check("glob vitest excludes expand against discovered files", () => {
+    const dir = mkdtempSync(join(tmpdir(), "test-inventory-"));
+    try {
+      writeFileSync(
+        join(dir, "package.json"),
+        JSON.stringify({ scripts: { "test:smoke": "node --test test/smoke-wired.test.mjs" } }),
+      );
+      writeFileSync(
+        join(dir, "vitest.config.ts"),
+        'export default { test: { exclude: ["**/node_modules/**", "test/smoke-wired.test.mjs", "test/smoke-*.test.mjs", "test/nested/**", "**/legacy-*.test.mjs"] } };\n',
+      );
+      mkdirSync(join(dir, "test", "nested"), { recursive: true });
+      writeFileSync(join(dir, "test", "smoke-wired.test.mjs"), "node:test placeholder\n");
+      writeFileSync(join(dir, "test", "smoke-new-thing.test.mjs"), "node:test placeholder\n");
+      writeFileSync(join(dir, "test", "legacy-thing.test.mjs"), "node:test placeholder\n");
+      writeFileSync(join(dir, "test", "nested", "deep.test.ts"), "vitest placeholder\n");
+      writeFileSync(join(dir, "test", "plain.test.ts"), "vitest placeholder\n");
+      const { orphans, reachable } = inventory(dir);
+      assert.deepEqual(orphans, [
+        "test/legacy-thing.test.mjs",
+        "test/nested/deep.test.ts",
+        "test/smoke-new-thing.test.mjs",
+      ]);
+      const wired = reachable.find((r) => r.file === "test/smoke-wired.test.mjs");
+      assert.ok(wired, "literal-excluded wired file should be reachable");
+      assert.match(wired.via, /test:smoke/);
+      const plain = reachable.find((r) => r.file === "test/plain.test.ts");
+      assert.ok(plain, "non-excluded file should be reachable");
+      assert.match(plain.via, /vitest include/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  check("excluded file mentioned outside test:smoke is still an orphan", () => {
+    const dir = mkdtempSync(join(tmpdir(), "test-inventory-"));
+    try {
+      writeFileSync(
+        join(dir, "package.json"),
+        JSON.stringify({
+          scripts: {
+            "test:smoke": "node --test test/wired.test.mjs",
+            "local-only": "echo test/script-ghost.test.mjs",
+          },
+        }),
+      );
+      mkdirSync(join(dir, ".github", "workflows"), { recursive: true });
+      writeFileSync(
+        join(dir, ".github", "workflows", "ci.yml"),
+        "# runs test/comment-ghost.test.mjs\nname: ci\n",
+      );
+      writeFileSync(
+        join(dir, "vitest.config.ts"),
+        'export default { test: { exclude: ["test/wired.test.mjs", "test/script-ghost.test.mjs", "test/comment-ghost.test.mjs"] } };\n',
+      );
+      mkdirSync(join(dir, "test"), { recursive: true });
+      writeFileSync(join(dir, "test", "wired.test.mjs"), "node:test placeholder\n");
+      writeFileSync(join(dir, "test", "script-ghost.test.mjs"), "node:test placeholder\n");
+      writeFileSync(join(dir, "test", "comment-ghost.test.mjs"), "node:test placeholder\n");
+      const { orphans, reachable } = inventory(dir);
+      assert.deepEqual(orphans, ["test/comment-ghost.test.mjs", "test/script-ghost.test.mjs"]);
+      const wired = reachable.find((r) => r.file === "test/wired.test.mjs");
+      assert.ok(wired, "file named by test:smoke should be reachable");
+      assert.match(wired.via, /test:smoke/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   check("unreferenced ci file is an orphan", () => {
     const dir = mkdtempSync(join(tmpdir(), "test-inventory-"));
     try {
@@ -248,20 +375,50 @@ function selftest() {
     }
   });
 
+  check("CLI --strict exits 1 naming a fixture orphan", () => {
+    const dir = mkdtempSync(join(tmpdir(), "test-inventory-"));
+    try {
+      writeFileSync(join(dir, "package.json"), JSON.stringify({ scripts: {} }));
+      mkdirSync(join(dir, "ci"), { recursive: true });
+      writeFileSync(join(dir, "ci", "never-wired.test.mjs"), "node:test placeholder\n");
+      const self = fileURLToPath(import.meta.url);
+      const strict = spawnSync(process.execPath, [self, "--root", dir, "--strict"], {
+        encoding: "utf8",
+      });
+      assert.equal(strict.status, 1);
+      assert.match(strict.stdout, /never-wired/);
+      const warn = spawnSync(process.execPath, [self, "--root", dir], { encoding: "utf8" });
+      assert.equal(warn.status, 0);
+      assert.match(warn.stdout, /never-wired/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   console.log(`test inventory selftest: ${cases} cases passed.`);
   return 0;
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   const args = process.argv.slice(2);
-  const unknown = args.filter((a) => a !== "--selftest" && a !== "--strict");
+  let root = repoRoot;
+  const flags = [];
+  for (let i = 0; i < args.length; i += 1) {
+    if (args[i] === "--root" && i + 1 < args.length) {
+      root = resolve(args[i + 1]);
+      i += 1;
+    } else {
+      flags.push(args[i]);
+    }
+  }
+  const unknown = flags.filter((a) => a !== "--selftest" && a !== "--strict");
   if (unknown.length) {
-    console.error("Usage: node ci/test-inventory.mjs [--selftest] [--strict]");
+    console.error("Usage: node ci/test-inventory.mjs [--selftest] [--strict] [--root <dir>]");
     process.exitCode = 2;
-  } else if (args.includes("--selftest")) {
+  } else if (flags.includes("--selftest")) {
     process.exitCode = selftest();
   } else {
-    const { files, orphans } = inventory(repoRoot);
+    const { files, orphans } = inventory(root);
     console.log(
       `test inventory: ${files.length - orphans.length}/${files.length} test files reachable from CI.`,
     );
@@ -269,6 +426,6 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
       console.log(`::warning file=${f}::test file is not reachable from any CI job`);
       console.log(`orphan: ${f}`);
     }
-    if (orphans.length && args.includes("--strict")) process.exitCode = 1;
+    if (orphans.length && flags.includes("--strict")) process.exitCode = 1;
   }
 }
