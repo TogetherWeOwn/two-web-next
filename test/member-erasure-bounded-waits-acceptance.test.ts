@@ -7,7 +7,6 @@ import postgres from "postgres";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { migrate, type Sql } from "../src/sessions";
 // @ts-expect-error Standalone Node CLI is intentionally JavaScript, like bin/import.
-// biome-ignore format: keep the directive adjacent to TS7016 (wrapping detaches it)
 import { createEraseClient } from "../bin/erase-member.mjs";
 import { testDatabaseUrl } from "./helpers/member-data-db";
 
