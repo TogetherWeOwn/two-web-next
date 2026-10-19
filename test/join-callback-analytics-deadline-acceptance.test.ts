@@ -4,7 +4,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import app from "./app";
 import type { Env } from "../src/env";
-import { recordAttempt } from "../src/join/service";
+import { checkJoinThrottle, recordAttempt } from "../src/join/service";
 import type { JoinRouteDeps } from "../src/join/route";
 import { createMemorySessionStore, type Sql } from "../src/sessions";
 
@@ -50,6 +50,7 @@ const MOD_ROLE = "1546777856984481792";
 const INSERT_PROBE = "attempt-deadline-probe-must-never-surface";
 const USER_TOKEN = "user-token-probe-must-never-surface";
 const MAX_ANALYTICS_WAIT_MS = 5_000;
+const MAX_PRUNE_WAIT_MS = 2_000;
 const VALID_REQUEST_ID = "0123456789abcdef";
 
 // Real event-loop yields captured before any fake timers: crypto.subtle,
@@ -161,12 +162,13 @@ function fakeSql(attemptMode: AttemptMode) {
   const attempts: AttemptRow[] = [];
   let attemptInsertTries = 0;
   let deferred: DeferredQuery | null = null;
-  let sawStatementTimeout = false;
-
-  const noteStatement = (text: string, values: unknown[]) => {
-    if (/statement_timeout/.test(text) || values.some((v) => v === "statement_timeout"))
-      sawStatementTimeout = true;
-  };
+  // Statements are recorded per channel: the outer `sql` handle and each
+  // distinct `tx` handle handed to a `begin` callback log separately.
+  // Aliasing `tx` to `sql` would let a regression that runs the analytics
+  // guard + INSERT on the outer connection (losing the transaction-local
+  // statement bound on real postgres.js) pass unnoticed.
+  const outerStatements: string[] = [];
+  const txTransactions: string[][] = [];
 
   const attemptInsert = (values: unknown[]) => {
     attemptInsertTries += 1;
@@ -187,8 +189,8 @@ function fakeSql(attemptMode: AttemptMode) {
     return deferred;
   };
 
-  const runStatement = (head: string, values: unknown[]) => {
-    noteStatement(head, values);
+  const runStatement = (head: string, values: unknown[], log: string[]) => {
+    log.push(head);
     if (head.includes("pg_advisory_xact_lock")) return Promise.resolve([]);
     if (head.includes("set_config") || head.includes("SET LOCAL")) return Promise.resolve([]);
     if (head.includes("count(*)")) {
@@ -213,25 +215,37 @@ function fakeSql(attemptMode: AttemptMode) {
     throw new Error(`fakeSql: unexpected statement: ${head.slice(0, 80)}`);
   };
 
-  const sql = ((strings: TemplateStringsArray, ...values: unknown[]) =>
-    runStatement(strings.join(" "), values)) as unknown as Sql;
-  (sql as { unsafe: (q: string, v?: unknown[]) => unknown }).unsafe = (q, v = []) =>
-    runStatement(q, v);
-  (sql as unknown as { begin: (run: (tx: Sql) => Promise<unknown>) => Promise<unknown> }).begin = (
-    run,
-  ) => run(sql);
+  const makeHandle = (log: string[]): Sql => {
+    const handle = ((strings: TemplateStringsArray, ...values: unknown[]) =>
+      runStatement(strings.join(" "), values, log)) as unknown as Sql;
+    (handle as unknown as { unsafe: (q: string, v?: unknown[]) => unknown }).unsafe = (q, v = []) =>
+      runStatement(q, v, log);
+    return handle;
+  };
+
+  const sql = makeHandle(outerStatements) as Sql & {
+    begin: (run: (tx: Sql) => Promise<unknown>) => Promise<unknown>;
+  };
+  sql.begin = (run) => {
+    const txLog: string[] = [];
+    txTransactions.push(txLog);
+    const tx = makeHandle(txLog) as Sql & {
+      begin: (run: (tx: Sql) => Promise<unknown>) => Promise<unknown>;
+    };
+    tx.begin = (nested) => nested(tx);
+    return run(tx);
+  };
 
   return {
     sql,
     attempts,
+    outerStatements,
+    txTransactions,
     get attemptInsertTries() {
       return attemptInsertTries;
     },
     get cancelCalls() {
       return deferred?.cancelCalls ?? 0;
-    },
-    get sawStatementTimeout() {
-      return sawStatementTimeout;
     },
     resolveAttemptInsert() {
       deferred?.settleLanded();
@@ -343,10 +357,37 @@ function expectNoLeak(lines: string[], body: string) {
 }
 
 function expectStatementBounded(fake: Fake) {
+  // The guard and the INSERT must arrive on the same distinct `tx` handle,
+  // guard first: on real postgres.js `SET LOCAL` only bounds statements in
+  // its own transaction, so either statement landing on the outer `sql`
+  // silently loses the server-side bound. A query cancel is the other
+  // accepted bound (contract point 2), but it cannot substitute for the
+  // INSERT itself running via `tx` when a transaction was opened for it.
+  const analyticsTx = fake.txTransactions.find((log) =>
+    log.some((head) => head.includes("INSERT INTO join_attempts")),
+  );
   expect(
-    fake.sawStatementTimeout || fake.cancelCalls > 0,
-    "the attempt statement itself must be bounded (statement_timeout guard and/or query cancel), not only the caller wait",
+    analyticsTx,
+    "the attempt INSERT must run via the transaction handle (tx), not the outer sql",
+  ).toBeDefined();
+  const guardAt = analyticsTx!.findIndex(
+    (head) =>
+      head.includes("statement_timeout") &&
+      (head.includes("SET LOCAL") || head.includes("set_config")),
+  );
+  const insertAt = analyticsTx!.findIndex((head) => head.includes("INSERT INTO join_attempts"));
+  expect(
+    (guardAt >= 0 && guardAt < insertAt) || fake.cancelCalls > 0,
+    "the attempt statement itself must be bounded (tx statement_timeout guard before the INSERT, and/or query cancel), not only the caller wait",
   ).toBe(true);
+  expect(
+    fake.outerStatements.some((head) => head.includes("INSERT INTO join_attempts")),
+    "no attempt INSERT may arrive via the outer sql handle",
+  ).toBe(false);
+  expect(
+    fake.outerStatements.some((head) => head.includes("statement_timeout")),
+    "no statement_timeout guard may arrive via the outer sql handle",
+  ).toBe(false);
 }
 
 // Drive a callback (or a direct recordAttempt) whose analytics INSERT is
@@ -423,6 +464,160 @@ async function rejectLate(fake: Fake) {
   process.on("unhandledRejection", onUnhandled);
   try {
     fake.rejectAttemptInsert(new Error(`late analytics failure: ${INSERT_PROBE}`));
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(0);
+  } finally {
+    process.off("unhandledRejection", onUnhandled);
+  }
+  expect(unhandled).toEqual([]);
+}
+
+// Throttle-prune fixture: the verdict statements are healthy, only the
+// expiry `DELETE FROM web_throttle_hits` is deferred. Like fakeSql, `begin`
+// hands the callback a distinct `tx` handle with its own statement log, so
+// a guard or DELETE landing on the outer `sql` is observable.
+function fakePruneSql({ refused }: { refused: boolean }) {
+  let deleteTries = 0;
+  let deferred: DeferredQuery | null = null;
+  const outerStatements: string[] = [];
+  const txTransactions: string[][] = [];
+
+  const runStatement = (head: string, _values: unknown[], log: string[]) => {
+    log.push(head);
+    if (head.includes("pg_advisory_xact_lock")) return Promise.resolve([]);
+    if (head.includes("set_config") || head.includes("SET LOCAL")) return Promise.resolve([]);
+    if (head.includes("count(*)")) return Promise.resolve([{ n: refused ? 10 : 0, wait: 7 }]);
+    if (head.includes("INSERT INTO web_throttle_hits")) return Promise.resolve([]);
+    if (head.includes("DELETE FROM web_throttle_hits")) {
+      deleteTries += 1;
+      deferred = new DeferredQuery(() => {});
+      return deferred;
+    }
+    throw new Error(`fakePruneSql: unexpected statement: ${head.slice(0, 80)}`);
+  };
+
+  const makeHandle = (log: string[]): Sql => {
+    const handle = ((strings: TemplateStringsArray, ...values: unknown[]) =>
+      runStatement(strings.join(" "), values, log)) as unknown as Sql;
+    (handle as unknown as { unsafe: (q: string, v?: unknown[]) => unknown }).unsafe = (q, v = []) =>
+      runStatement(q, v, log);
+    return handle;
+  };
+
+  const sql = makeHandle(outerStatements) as Sql & {
+    begin: (run: (tx: Sql) => Promise<unknown>) => Promise<unknown>;
+  };
+  sql.begin = (run) => {
+    const txLog: string[] = [];
+    txTransactions.push(txLog);
+    const tx = makeHandle(txLog) as Sql & {
+      begin: (run: (tx: Sql) => Promise<unknown>) => Promise<unknown>;
+    };
+    tx.begin = (nested) => nested(tx);
+    return run(tx);
+  };
+
+  return {
+    sql,
+    outerStatements,
+    txTransactions,
+    get deleteTries() {
+      return deleteTries;
+    },
+    resolvePruneDelete() {
+      deferred?.settleLanded();
+    },
+    rejectPruneDelete(err: unknown) {
+      deferred?.settleRejected(err);
+    },
+  };
+}
+
+type PruneFake = ReturnType<typeof fakePruneSql>;
+
+function expectPruneTxBounded(fake: PruneFake) {
+  const pruneTx = fake.txTransactions.find((log) =>
+    log.some((head) => head.includes("DELETE FROM web_throttle_hits")),
+  );
+  expect(
+    pruneTx,
+    "the prune DELETE must run via the transaction handle (tx), not the outer sql",
+  ).toBeDefined();
+  const guardAt = pruneTx!.findIndex(
+    (head) => head === `SET LOCAL statement_timeout = '${MAX_PRUNE_WAIT_MS}ms'`,
+  );
+  const deleteAt = pruneTx!.findIndex((head) => head.includes("DELETE FROM web_throttle_hits"));
+  expect(
+    guardAt >= 0 && guardAt < deleteAt,
+    "the prune DELETE must be preceded in the same transaction by SET LOCAL statement_timeout = '2000ms'",
+  ).toBe(true);
+  expect(
+    fake.outerStatements.some((head) => head.includes("DELETE FROM web_throttle_hits")),
+    "no prune DELETE may arrive via the outer sql handle",
+  ).toBe(false);
+  expect(
+    fake.outerStatements.some((head) => head.includes("statement_timeout")),
+    "no statement_timeout guard may arrive via the outer sql handle",
+  ).toBe(false);
+}
+
+// Drive a throttle verdict whose prune DELETE never settles: prove the
+// caller is waiting, then advance the fake clock up to the 2 s ceiling. On
+// failure the deferred DELETE is settled and drained before asserting, so
+// a red run (e.g. the unbounded prune) leaves no orphaned in-flight work
+// on the next test's clock.
+async function drivePruneBounded<T>(pendingInput: Promise<T>, fake: PruneFake): Promise<T> {
+  const pending = Promise.resolve(pendingInput);
+  let settled = false;
+  void pending.then(
+    () => {
+      settled = true;
+    },
+    () => {
+      settled = true;
+    },
+  );
+  for (let round = 0; round < 1000 && fake.deleteTries === 0 && !settled; round++) {
+    await vi.advanceTimersByTimeAsync(0);
+    await realYield();
+  }
+  expect(fake.deleteTries).toBe(1);
+  expect(settled, "the verdict must wait (bounded) for the prune, not abandon it").toBe(false);
+
+  let elapsed = 0;
+  while (!settled && elapsed < MAX_PRUNE_WAIT_MS) {
+    await vi.advanceTimersByTimeAsync(100);
+    await realYield();
+    elapsed += 100;
+  }
+  for (let round = 0; round < 50 && !settled; round++) {
+    await vi.advanceTimersByTimeAsync(0);
+    await realYield();
+  }
+  const settledWithinBound = settled;
+  if (!settledWithinBound) {
+    fake.resolvePruneDelete();
+    for (let round = 0; round < 200 && !settled; round++) {
+      await vi.advanceTimersByTimeAsync(0);
+      await realYield();
+    }
+  }
+  expect(
+    settledWithinBound,
+    `the decided verdict must return within ${MAX_PRUNE_WAIT_MS}ms of fake time without the prune DELETE settling`,
+  ).toBe(true);
+  return pending;
+}
+
+async function settlePruneLate(fake: PruneFake, mode: "resolve" | "reject") {
+  const unhandled: unknown[] = [];
+  const onUnhandled = (reason: unknown) => {
+    unhandled.push(reason);
+  };
+  process.on("unhandledRejection", onUnhandled);
+  try {
+    if (mode === "resolve") fake.resolvePruneDelete();
+    else fake.rejectPruneDelete(new Error(`late prune failure: ${INSERT_PROBE}`));
     await vi.advanceTimersByTimeAsync(0);
     await vi.advanceTimersByTimeAsync(0);
   } finally {
@@ -619,7 +814,7 @@ describe("join callback with a never-settling analytics INSERT", () => {
 
 describe("recordAttempt with a never-settling INSERT (direct)", () => {
   it("resolves within the bound and logs class-only with the validated request_id", async () => {
-    const lines = captureLogs();
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const fake = fakeSql("deferred");
     vi.useFakeTimers();
     await driveBounded(
@@ -634,19 +829,26 @@ describe("recordAttempt with a never-settling INSERT (direct)", () => {
     expect(fake.attemptInsertTries).toBe(1);
     expect(fake.attempts).toEqual([]);
     expectStatementBounded(fake);
-    const logged = lines.join("\n");
-    expect(logged).toContain("join attempt");
-    expect(logged).toContain("exception");
-    expect(logged).toContain(VALID_REQUEST_ID);
-    expectNoLeak(lines, "");
+    // Exact payload, not substrings: the runbook stall-detection guidance
+    // keys on `exception: AnalyticsWriteDeadline`, so a rename to a generic
+    // class (e.g. `Error`) must go red here.
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn.mock.calls[0]?.[0]).toBe("join attempt write failed");
+    expect(warn.mock.calls[0]?.[1]).toEqual({
+      exception: "AnalyticsWriteDeadline",
+      outcome: "added",
+      request_id: VALID_REQUEST_ID,
+    });
+    expectNoLeak([JSON.stringify(warn.mock.calls)], "");
 
     await rejectLate(fake);
     expect(fake.attemptInsertTries).toBe(1);
-    expectNoLeak(lines, "");
+    expect(warn).toHaveBeenCalledTimes(1);
+    expectNoLeak([JSON.stringify(warn.mock.calls)], "");
   });
 
   it("omits a malformed request_id from timeout diagnostics", async () => {
-    const lines = captureLogs();
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const fake = fakeSql("deferred");
     vi.useFakeTimers();
     await driveBounded(
@@ -660,12 +862,20 @@ describe("recordAttempt with a never-settling INSERT (direct)", () => {
     );
     expect(fake.attemptInsertTries).toBe(1);
     expectStatementBounded(fake);
-    expect(lines.join("\n")).not.toContain("not a valid id");
-    expectNoLeak(lines, "");
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn.mock.calls[0]?.[0]).toBe("join attempt write failed");
+    expect(warn.mock.calls[0]?.[1]).toEqual({
+      exception: "AnalyticsWriteDeadline",
+      outcome: "error",
+    });
+    expect(warn.mock.calls[0]?.[1]).not.toHaveProperty("request_id");
+    expect(JSON.stringify(warn.mock.calls)).not.toContain("not a valid id");
+    expectNoLeak([JSON.stringify(warn.mock.calls)], "");
 
     await rejectLate(fake);
     expect(fake.attemptInsertTries).toBe(1);
-    expectNoLeak(lines, "");
+    expect(warn).toHaveBeenCalledTimes(1);
+    expectNoLeak([JSON.stringify(warn.mock.calls)], "");
   });
 
   it("a write that settles inside the bound still lands its row before resolving", async () => {
@@ -697,6 +907,56 @@ describe("recordAttempt with a never-settling INSERT (direct)", () => {
     ]);
     expect(lines.join("\n")).not.toContain("join attempt write failed");
     expectNoLeak(lines, "");
+  });
+});
+
+describe("checkJoinThrottle with a never-settling prune DELETE (direct)", () => {
+  it("returns the decided refusal within the bound and warns exactly ThrottlePruneDeadline; a late rejection is inert", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const fake = fakePruneSql({ refused: true });
+    vi.useFakeTimers();
+    const verdict = await drivePruneBounded(
+      checkJoinThrottle(fake.sql, "join:203.0.113.7", 10),
+      fake,
+    );
+    expect(verdict).toEqual({ limited: true, retryAfter: 7 });
+    expect(fake.deleteTries).toBe(1);
+    expectPruneTxBounded(fake);
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn.mock.calls[0]?.[0]).toBe(
+      "Join throttle prune failed; keeping the decided verdict.",
+    );
+    expect(warn.mock.calls[0]?.[1]).toEqual({ exception: "ThrottlePruneDeadline" });
+    expectNoLeak([JSON.stringify(warn.mock.calls)], "");
+
+    await settlePruneLate(fake, "reject");
+    expect(fake.deleteTries).toBe(1);
+    expect(warn).toHaveBeenCalledTimes(1);
+    expectNoLeak([JSON.stringify(warn.mock.calls)], "");
+  });
+
+  it("returns the decided admission within the bound; a late prune success changes nothing", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const fake = fakePruneSql({ refused: false });
+    vi.useFakeTimers();
+    const verdict = await drivePruneBounded(
+      checkJoinThrottle(fake.sql, "join:203.0.113.8", 10),
+      fake,
+    );
+    expect(verdict).toEqual({ limited: false });
+    expect(fake.deleteTries).toBe(1);
+    expectPruneTxBounded(fake);
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn.mock.calls[0]?.[0]).toBe(
+      "Join throttle prune failed; keeping the decided verdict.",
+    );
+    expect(warn.mock.calls[0]?.[1]).toEqual({ exception: "ThrottlePruneDeadline" });
+    expectNoLeak([JSON.stringify(warn.mock.calls)], "");
+
+    await settlePruneLate(fake, "resolve");
+    expect(fake.deleteTries).toBe(1);
+    expect(warn).toHaveBeenCalledTimes(1);
+    expectNoLeak([JSON.stringify(warn.mock.calls)], "");
   });
 });
 
