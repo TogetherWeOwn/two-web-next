@@ -88,6 +88,9 @@ describe("wrapper process-group teardown (TOG-9680 re-review P1)", () => {
   }
 
   async function waitReaped(pid: number, timeoutMs = 5000): Promise<boolean> {
+    // A non-integer PID is never "reaped": returning true here would let a
+    // reaping assertion pass vacuously on a PID that was never published.
+    if (!Number.isInteger(pid)) return false;
     const started = Date.now();
     for (;;) {
       try {
@@ -112,7 +115,9 @@ describe("wrapper process-group teardown (TOG-9680 re-review P1)", () => {
   // await exactly those processes on every path (readiness, PID-read, spawn,
   // and assertion failures included). Cleanup signals direct PIDs only: never
   // pkill/pgrep/killall, process-group scans, or broad matching, so unrelated
-  // processes always survive.
+  // processes always survive. Descendant PIDs already observed reaped are
+  // skipped rather than signalled, so a recycled number can never turn
+  // cleanup against an unrelated process.
   function trackOwned(child: ChildProcess): OwnedChild {
     let done = false;
     let resolveClosed!: () => void;
@@ -142,11 +147,13 @@ describe("wrapper process-group teardown (TOG-9680 re-review P1)", () => {
   }
 
   // SIGTERM the owned wrapper, escalate to SIGKILL after 15s, then await its
-  // close; afterwards TERM each recorded owned descendant PID (then KILL the
-  // survivors). Every step tolerates already-reaped processes, so this is
-  // safe in finally on both the happy and failure paths. Scratch removal
-  // (withScratchDir) only runs after this settles because callers await it
-  // inside the scratch callback.
+  // close; afterwards TERM each still-live recorded owned descendant PID (then
+  // KILL the survivors). PIDs already observed reaped are never signalled: on
+  // the happy paths the test proved them dead before finally, and a reaped
+  // number may already belong to an unrelated process. Every step tolerates
+  // already-reaped processes, so this is safe in finally on both the happy
+  // and failure paths. Scratch removal (withScratchDir) only runs after this
+  // settles because callers await it inside the scratch callback.
   async function settleOwned(
     owned: OwnedChild | undefined,
     ownedDescendants: number[],
@@ -170,17 +177,20 @@ describe("wrapper process-group teardown (TOG-9680 re-review P1)", () => {
       }
       await owned.closed;
     }
+    const liveDescendants: number[] = [];
     for (const pid of ownedDescendants) {
-      if (!Number.isInteger(pid)) continue;
+      if (await isLiveProcess(pid)) liveDescendants.push(pid);
+    }
+    for (const pid of liveDescendants) {
       try {
         process.kill(pid, "SIGTERM");
       } catch {
-        // Already reaped; the wait below confirms it.
+        // Reaped between the liveness check and the signal.
       }
     }
-    for (const pid of ownedDescendants) {
-      if (!Number.isInteger(pid)) continue;
+    for (const pid of liveDescendants) {
       if (await waitReaped(pid)) continue;
+      if (!(await isLiveProcess(pid))) continue;
       try {
         process.kill(pid, "SIGKILL");
       } catch {
@@ -406,6 +416,8 @@ describe("wrapper process-group teardown (TOG-9680 re-review P1)", () => {
           let owned: OwnedChild | undefined;
           let wrapperCode: number | undefined;
           let childPid = NaN;
+          let runnerPid = NaN;
+          let reachedFault = false;
           let injected: unknown;
           try {
             owned = trackOwned(
@@ -417,7 +429,6 @@ describe("wrapper process-group teardown (TOG-9680 re-review P1)", () => {
             owned.child.on("close", (code) => {
               wrapperCode = code ?? -1;
             });
-            let runnerPid = NaN;
             for (let i = 0; i < 30 && !Number.isInteger(runnerPid); i++) {
               await new Promise((r) => setTimeout(r, 100));
               try {
@@ -429,6 +440,7 @@ describe("wrapper process-group teardown (TOG-9680 re-review P1)", () => {
             childPid = parseInt(fs.readFileSync(childPidFile, "utf8").trim(), 10);
             expect(Number.isInteger(childPid)).toBe(true);
             expect(await isLiveProcess(childPid)).toBe(true);
+            reachedFault = true;
             expect(Number.isInteger(runnerPid)).toBe(true);
           } catch (error) {
             injected = error;
@@ -436,6 +448,10 @@ describe("wrapper process-group teardown (TOG-9680 re-review P1)", () => {
             await settleOwned(owned, Number.isInteger(childPid) ? [childPid] : []);
           }
           expect(injected).toBeDefined();
+          expect(reachedFault).toBe(true);
+          expect(Number.isInteger(childPid)).toBe(true);
+          expect(Number.isNaN(runnerPid)).toBe(true);
+          expect(String(injected)).toMatch(/expected false to be true/);
           expect(wrapperCode).toBe(143);
           expect(owned?.settled()).toBe(true);
           expect(await waitReaped(childPid)).toBe(true);
@@ -469,6 +485,7 @@ describe("wrapper process-group teardown (TOG-9680 re-review P1)", () => {
           let owned: OwnedChild | undefined;
           let wrapperCode: number | undefined;
           let runnerPid = NaN;
+          let reachedFault = false;
           let injected: unknown;
           try {
             owned = trackOwned(
@@ -491,6 +508,7 @@ describe("wrapper process-group teardown (TOG-9680 re-review P1)", () => {
             if (Number.isInteger(runnerPid)) ownedDescendants.push(runnerPid);
             expect(Number.isInteger(runnerPid)).toBe(true);
             expect(await isLiveProcess(runnerPid)).toBe(true);
+            reachedFault = true;
             const childPid = parseInt(fs.readFileSync(childPidFile, "utf8").trim(), 10);
             if (Number.isInteger(childPid)) ownedDescendants.push(childPid);
             expect(Number.isInteger(childPid)).toBe(true);
@@ -500,6 +518,9 @@ describe("wrapper process-group teardown (TOG-9680 re-review P1)", () => {
             await settleOwned(owned, ownedDescendants);
           }
           expect(injected).toBeDefined();
+          expect(reachedFault).toBe(true);
+          expect(Number.isInteger(runnerPid)).toBe(true);
+          expect((injected as { code?: string }).code).toBe("ENOENT");
           expect(wrapperCode).toBe(143);
           expect(owned?.settled()).toBe(true);
           expect(await waitReaped(runnerPid)).toBe(true);
@@ -534,6 +555,7 @@ describe("wrapper process-group teardown (TOG-9680 re-review P1)", () => {
           let wrapperCode: number | undefined;
           let runnerPid = NaN;
           let childPid = NaN;
+          let reachedFault = false;
           let injected: unknown;
           try {
             owned = trackOwned(
@@ -559,6 +581,7 @@ describe("wrapper process-group teardown (TOG-9680 re-review P1)", () => {
             if (Number.isInteger(childPid)) ownedDescendants.push(childPid);
             expect(Number.isInteger(childPid)).toBe(true);
             expect(await isLiveProcess(childPid)).toBe(true);
+            reachedFault = true;
             expect("actual").toBe("expected");
           } catch (error) {
             injected = error;
@@ -566,9 +589,65 @@ describe("wrapper process-group teardown (TOG-9680 re-review P1)", () => {
             await settleOwned(owned, ownedDescendants);
           }
           expect(injected).toBeDefined();
+          expect(reachedFault).toBe(true);
+          expect(Number.isInteger(runnerPid)).toBe(true);
+          expect(Number.isInteger(childPid)).toBe(true);
+          expect(String(injected)).toMatch(/expected 'actual' to be 'expected'/);
           expect(wrapperCode).toBe(143);
           expect(owned?.settled()).toBe(true);
           expect(await waitReaped(runnerPid)).toBe(true);
+          expect(await waitReaped(childPid)).toBe(true);
+        });
+        expect(fs.existsSync(sibling)).toBe(true);
+      });
+      expect(await isLiveProcess(sentinelPid)).toBe(true);
+    } finally {
+      await stopSentinel(sentinel);
+    }
+  }, 90_000);
+
+  it("reaps orphaned descendants when the wrapper ignores SIGTERM (offline)", async () => {
+    // Fixture: a fake wrapper that backgrounds one descendant, then ignores
+    // SIGTERM and execs into sleep (SIG_IGN survives exec, so the wrapper is
+    // immune to settleOwned's SIGTERM). settleOwned must escalate to SIGKILL,
+    // which runs no trap, so the descendant is orphaned while still live and
+    // only settleOwned's direct descendant signalling can reap it. This pins
+    // both the SIGKILL escalation and the descendant loops: deleting either
+    // keeps every other case green because the real wrapper's trap cleans its
+    // own process group.
+    const { proc, fs, path } = await shellDeps();
+    const sentinel = trackOwned(proc.spawn("sleep", ["60"], { stdio: "ignore" }));
+    const sentinelPid = sentinel.child.pid ?? NaN;
+    try {
+      await withScratchDir("wrapper-notrap-sibling-", async (sibling) => {
+        await withScratchDir("wrapper-notrap-", async (scratch) => {
+          const childPidFile = path.join(scratch, "child.pid");
+          const fakeWrapper = path.join(scratch, "fake-wrapper.sh");
+          fs.writeFileSync(
+            fakeWrapper,
+            `#!/bin/sh\nsleep 60 &\necho "$!" > "${childPidFile}"\ntrap '' TERM\nexec sleep 120\n`,
+          );
+          fs.chmodSync(fakeWrapper, 0o700);
+          let owned: OwnedChild | undefined;
+          let childPid = NaN;
+          try {
+            owned = trackOwned(proc.spawn("bash", [fakeWrapper], { stdio: "ignore" }));
+            for (let i = 0; i < 150 && !Number.isInteger(childPid); i++) {
+              await new Promise((r) => setTimeout(r, 100));
+              try {
+                childPid = parseInt(fs.readFileSync(childPidFile, "utf8").trim(), 10);
+              } catch {
+                childPid = NaN;
+              }
+            }
+            expect(Number.isInteger(childPid)).toBe(true);
+            expect(await isLiveProcess(childPid)).toBe(true);
+          } finally {
+            await settleOwned(owned, Number.isInteger(childPid) ? [childPid] : []);
+          }
+          expect(Number.isInteger(childPid)).toBe(true);
+          expect(owned?.settled()).toBe(true);
+          expect(owned?.child.signalCode).toBe("SIGKILL");
           expect(await waitReaped(childPid)).toBe(true);
         });
         expect(fs.existsSync(sibling)).toBe(true);
