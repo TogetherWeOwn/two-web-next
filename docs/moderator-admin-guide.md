@@ -552,6 +552,7 @@ context only through the approved private support process.
 | **Something broke on our side** (500) | Offer `/discord` for server entry and escalate the path, wording and time. Do not guess the cause. |
 | **We will be right back** (503) | Use the invite offered by the page or `/discord`; escalate if it persists. Do not restart anything. |
 | Admin/member-data request returns 503 or says unavailable | Stop that operation and report it to engineering; protected reads can fail closed when the database/session/audit path is unavailable. |
+| 403 on a moderator/admin surface | Expect it for a signed-in non-moderator, a stale role cache, or a form-action path opened directly. Verify the role in-server, then re-check after a fresh sign-in and role sync ([sign-in check](#get-into-the-panel)); non-moderators get 403 and failed lookups fail closed ([probe expectations](#auth-wall-probe-staging-only)). If a current moderator hits it, escalate the path and time. |
 | Event page says cancelled | Explain that the event is not happening; check `/events` for an approved replacement. |
 
 `/discord` is the database-, session- and bot-free invite fallback. It cannot
