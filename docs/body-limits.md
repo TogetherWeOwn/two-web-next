@@ -27,6 +27,7 @@ signed-in moderator returns 413 with zero throttle spend and no store read, even
 when the budget is exhausted. Guest 401 and non-moderator 403 refusals still run
 first, oversized or not; at or under the cap, moderator posts still spend one
 throttle hit before validation and the store.
+
 Agent ingress runs its byte cap first: an over-cap body returns 413 with no
 SQL, shield charge or client. Under-cap bodies are buffered, then the
 enabled/store configuration gate runs (404/503 without SQL), then the

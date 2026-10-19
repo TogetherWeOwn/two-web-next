@@ -29,10 +29,25 @@ const routes = [
   { path: "/profile", statuses: [302], redirect: "login" },
   { path: "/admin", statuses: [302, 403], redirect: "login" },
   // Session-free public read API (anonymous by construction in
-  // src/public-data/routes.ts): the collection envelope and the discovery
+  // src/public-data/routes.ts): the collection envelope, one missing
+  // event, the community snapshot, the join handoff, and the discovery
   // document. No auth, no cookies, no flags; the session-gated /events.json
-  // stays out (staging-only bin/json-smoke.mjs covers it).
+  // stays out (staging-only bin/json-smoke.mjs covers it). The single-event
+  // probe uses an all-digit ULID so no secret scanner trips; the same
+  // literal must appear in the test fixtures. That key is a valid
+  // PUBLIC_EVENT_ID carried by no migration, seed or src row, so no
+  // database has it and the real handler answers 404 not_found
+  // (src/public-data/routes.ts): the probe asserts that real contract —
+  // admission, key parsing, cache bypass, the DB lookup and the static
+  // error envelope — instead of a success body no environment serves.
   { path: "/api/public/events", statuses: [200], type: "application/json" },
+  {
+    path: "/api/public/events/00000000000000000000000001",
+    statuses: [404],
+    type: "application/json",
+  },
+  { path: "/api/public/community", statuses: [200], type: "application/json" },
+  { path: "/api/public/join", statuses: [200], type: "application/json" },
   { path: "/openapi.json", statuses: [200], type: "application/json" },
   {
     path: "/__smoke_unknown_route__",
@@ -505,6 +520,101 @@ export async function smoke(
           check(
             valid,
             "collection envelope with data array and numeric paging",
+            "valid JSON with unexpected public envelope shape",
+          );
+        } catch {
+          check(false, "valid JSON object", "invalid JSON");
+        }
+      }
+      if (route.path.startsWith("/api/public/events/")) {
+        // Missing-event error envelope (src/public-data/contracts.ts
+        // PublicDataErrorDto): the fixed probe key exists in no database,
+        // so the real handler answers 404 with { error: { code:
+        // "not_found", message } } (src/public-data/routes.ts). The probe
+        // pins the code and a non-empty message, not the message text. A
+        // 200 success body, an empty object, a collection array, a wrong
+        // error code, a missing message, or a non-JSON body fails this
+        // entry only. Do not print response bodies into deploy logs: the
+        // actual side stays a fixed string.
+        try {
+          const data = JSON.parse(body);
+          const error =
+            data !== null && typeof data === "object" && !Array.isArray(data)
+              ? data.error
+              : undefined;
+          const valid =
+            error !== null &&
+            typeof error === "object" &&
+            !Array.isArray(error) &&
+            error.code === "not_found" &&
+            typeof error.message === "string" &&
+            error.message.length > 0;
+          check(
+            valid,
+            "missing-event error envelope with not_found code",
+            "valid JSON with unexpected public envelope shape",
+          );
+        } catch {
+          check(false, "valid JSON object", "invalid JSON");
+        }
+      }
+      if (route.path === "/api/public/community") {
+        // Community snapshot (src/public-data/contracts.ts
+        // CommunitySnapshotDto): member_count and online_count are null
+        // when the collectors are unavailable (never 0 by default) or
+        // finite numbers, and ranks is an array of key/label/member_count
+        // rows. An error envelope, an empty object, wrong-typed counts,
+        // or a non-JSON body fails this entry only. Do not print response
+        // bodies into deploy logs: the actual side stays a fixed string.
+        try {
+          const data = JSON.parse(body);
+          const countsValid = (value) =>
+            typeof value === "number" ? Number.isFinite(value) : value === null;
+          const ranksValid =
+            data !== null &&
+            typeof data === "object" &&
+            !Array.isArray(data) &&
+            Array.isArray(data.ranks) &&
+            data.ranks.every(
+              (rank) =>
+                rank !== null &&
+                typeof rank === "object" &&
+                !Array.isArray(rank) &&
+                typeof rank.key === "string" &&
+                typeof rank.label === "string" &&
+                countsValid(rank.member_count),
+            );
+          const valid =
+            ranksValid && countsValid(data.member_count) && countsValid(data.online_count);
+          check(
+            valid,
+            "community snapshot with nullable counts and ranks array",
+            "valid JSON with unexpected public envelope shape",
+          );
+        } catch {
+          check(false, "valid JSON object", "invalid JSON");
+        }
+      }
+      if (route.path === "/api/public/join") {
+        // Join handoff (src/public-data/contracts.ts JoinHandoffDto):
+        // database-free like the /join leaf, a non-empty intro plus the
+        // public HTTPS invite. An error envelope, an empty object,
+        // wrong-typed fields, a non-HTTPS invite, or a non-JSON body
+        // fails this entry only. Do not print response bodies into
+        // deploy logs: the actual side stays a fixed string.
+        try {
+          const data = JSON.parse(body);
+          const valid =
+            data !== null &&
+            typeof data === "object" &&
+            !Array.isArray(data) &&
+            typeof data.intro === "string" &&
+            data.intro.length > 0 &&
+            typeof data.invite_url === "string" &&
+            data.invite_url.startsWith("https://");
+          check(
+            valid,
+            "join handoff with intro and HTTPS invite",
             "valid JSON with unexpected public envelope shape",
           );
         } catch {

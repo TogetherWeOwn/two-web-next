@@ -64,6 +64,16 @@ export type SourceReadReport = {
 function markerOf(row: { preview_read_at?: unknown } | undefined): unknown {
   return row?.preview_read_at ?? null;
 }
+/**
+ * DB-side cap for the terminal settlement UPDATE. The consumer also races
+ * `failSync` against its 2s ledger bound, but `Promise.race` only stops the
+ * wait — the UPDATE keeps the handler pool's single connection (`max: 1`), so
+ * the next sync-event in the batch still queues behind it in `prepareSync`.
+ * Cancelling the statement server-side frees that connection, so the batch
+ * still settles later messages. Kept equal to the consumer's
+ * `LEDGER_TIMEOUT_MS`; change both together.
+ */
+export const FAIL_SYNC_DB_TIMEOUT_MS = 2000;
 export function pgEventStore(
   sql: ReturnType<typeof postgres> | TxClient,
   {
@@ -233,6 +243,25 @@ export function pgEventStore(
           and request_attempts = ${attempt.requestAttempts}`;
     },
     async failSync(idempotencyKey) {
+      // Server-side bound (src/admin/store-access.ts pattern): a lock-blocked
+      // or slow UPDATE is cancelled by Postgres instead of holding the
+      // handler pool's single connection after the consumer's client-side race
+      // has already given up. Transaction-scoped so pooled session settings
+      // never leak; the TxClient path is already inside its caller's
+      // transaction, so scope the timeouts there without a nested BEGIN
+      // (postgres.js rejects `begin` on a transaction client).
+      const pool = sql as unknown as {
+        begin?: (fn: (tx: TxClient) => Promise<void>) => Promise<void>;
+      };
+      if (typeof pool.begin === "function") {
+        await pool.begin(async (tx) => {
+          await tx`select set_config('lock_timeout', ${`${FAIL_SYNC_DB_TIMEOUT_MS}ms`}, true), set_config('statement_timeout', ${`${FAIL_SYNC_DB_TIMEOUT_MS}ms`}, true)`;
+          await tx`update event_sync_attempts set state = 'failed'
+            where idempotency_key = ${idempotencyKey}::uuid and state = 'pending'`;
+        });
+        return;
+      }
+      await sql`select set_config('lock_timeout', ${`${FAIL_SYNC_DB_TIMEOUT_MS}ms`}, true), set_config('statement_timeout', ${`${FAIL_SYNC_DB_TIMEOUT_MS}ms`}, true)`;
       await sql`update event_sync_attempts set state = 'failed'
         where idempotency_key = ${idempotencyKey}::uuid and state = 'pending'`;
     },

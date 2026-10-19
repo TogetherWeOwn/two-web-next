@@ -485,6 +485,42 @@ describe("dispatchHookRequest session bridge (Kit branch only)", () => {
     expect(res.status).toBe(200);
   });
 
+  it("a throwing probe never fails an authorized admin render: 200 with no Set-Cookie", async () => {
+    const body = "<h1>admin</h1>";
+    const resolve = vi.fn(
+      async () => new Response(body, { headers: { "content-type": "text/html" } }),
+    );
+    const authStatusCookieFor = vi.fn(async (_event: HookEventLike) => {
+      throw new Error("probe unavailable");
+    });
+    const deps = depsFor({
+      manifest: [{ method: "GET", path: "/admin", enabled: true, reads: "public" as const }],
+      authStatusCookieFor,
+      resolve,
+    });
+    const request = new Request("https://next.example.test/admin", {
+      headers: { host: "next.example.test" },
+    });
+    const event: HookEventLike = {
+      request,
+      url: new URL(request.url),
+      route: { id: "/admin" },
+      locals: {
+        status: "authenticated",
+        session: { userId: "42", username: "Rick", avatar: null, member: true, moderator: true },
+        returnTo: null,
+        joinResult: null,
+        expiredWrite: null,
+      },
+    };
+    const res = await dispatchHookRequest(event, deps);
+    expect(resolve).toHaveBeenCalledTimes(1);
+    expect(authStatusCookieFor).toHaveBeenCalledTimes(1);
+    expect(res.status).toBe(200);
+    expect(await res.text()).toBe(body);
+    expect(res.headers.getSetCookie()).toEqual([]);
+  });
+
   it("an untrusted host bypasses the bridge straight to Hono", async () => {
     const sessionFor = vi.fn(async (_event: HookEventLike) => guestLocals());
     const event = eventFor("/events/past", [], "evil.test");
