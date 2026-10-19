@@ -188,6 +188,7 @@ describe("change-scope gate", () => {
       "vitest.config.ts",
       ".github/workflows/ci.yml",
       "ci/change-scope.sh",
+      "ci/e2e-test-helpers.mjs",
     ]) {
       expect(scope([[path, ""]]).full, path).toBe("true");
     }
@@ -305,6 +306,120 @@ describe("skip_e2e verdict", () => {
     expect(scope([["test/helpers/imported.ts", "test/old-name.ts"]]).skipE2e).toBe("false");
     expect(scope([["test/new-name.ts", "test/helpers/imported.ts"]]).skipE2e).toBe("false");
     expect(scope([["test/new-name.ts", "test/old-name.ts"]]).skipE2e).toBe("true");
+  });
+
+  it("follows reachable helper chains and terminates on cycles", () => {
+    for (const [path, source] of Object.entries({
+      "test/helpers/imported.ts": 'export { app } from "../app";\n',
+      "test/app.ts": 'import "./helpers/imported.js";\n',
+      "test/helpers/unreachable.ts": 'import "../unreachable-leaf";\n',
+      "test/unreachable-leaf.ts": "export {};\n",
+    })) {
+      writeFileSync(join(repo, path), source);
+    }
+    git("add", ".");
+    expect(scope([["test/app.ts", ""]]).skipE2e).toBe("false");
+    expect(scope([["test/unreachable-leaf.ts", ""]]).skipE2e).toBe("true");
+  });
+
+  it.each([
+    ["extensionless", 'import { a } from "../test/helpers/variant";\n', "test/helpers/variant.ts"],
+    ["js suffix", 'import { a } from "../test/helpers/variant.js";\n', "test/helpers/variant.ts"],
+    ["backtick", "import(`../test/helpers/variant`);\n", "test/helpers/variant.ts"],
+    ["split line", 'import { a } from\n  "../test/helpers/variant";\n', "test/helpers/variant.ts"],
+    ["side effect", 'import "../test/helpers/variant";\n', "test/helpers/variant.ts"],
+    ["require", 'const a = require("../test/helpers/variant.js");\n', "test/helpers/variant.ts"],
+    ["re-export", 'export * from "../test/helpers/variant";\n', "test/helpers/variant.ts"],
+    [
+      "directory",
+      'import { a } from "../test/helpers/variant";\n',
+      "test/helpers/variant/index.ts",
+    ],
+    [
+      "trailing-slash directory",
+      'import { a } from "../test/helpers/variant/";\n',
+      "test/helpers/variant/index.ts",
+    ],
+    ["declaration", 'import { a } from "../test/helpers/variant";\n', "test/helpers/variant.d.ts"],
+  ])("runs the smoke for a %s import", (_label, source, helper) => {
+    mkdirSync(dirname(join(repo, helper)), { recursive: true });
+    writeFileSync(join(repo, helper), "export {};\n");
+    writeFileSync(join(repo, "e2e/variant.spec.ts"), source);
+    git("add", ".");
+    expect(scope([[helper, ""]]).skipE2e).toBe("false");
+  });
+
+  it.each([
+    "import(`../test/helpers/${helper}`);\n",
+    'import "../test/helpers/import\\u0065d";\n',
+    "const path = `../test/helpers/${helper}`; import(path);\n",
+    'const path = "../test/helpers/import\\u0065d"; import(path);\n',
+    "const path = `./${helper}`; import(path);\n",
+  ])("fails closed on an opaque module path: %s", (source) => {
+    writeFileSync(join(repo, "e2e/opaque.spec.ts"), source);
+    git("add", ".");
+    expect(scope([["test/helpers/fixture.ts", ""]]).skipE2e).toBe("false");
+  });
+
+  it.each([
+    'import("../test/helpers/" + name);\n',
+    'const path = "../test/helpers/" + name; import(path);\n',
+    'const path = "../test/" + name; import(path);\n',
+  ])("fails closed on a concatenated helper path: %s", (source) => {
+    writeFileSync(join(repo, "e2e/concatenated.spec.ts"), source);
+    git("add", ".");
+    expect(scope([["test/helpers/fixture.ts", ""]]).skipE2e).toBe("false");
+  });
+
+  it("does not mistake a computed file-reader string for a module import", () => {
+    writeFileSync(join(repo, "e2e/reader.test.mjs"), "new URL(`./${file}`, import.meta.url);\n");
+    git("add", ".");
+    expect(scope([["test/helpers/fixture.ts", ""]]).skipE2e).toBe("true");
+  });
+
+  it("counts deleted helpers against their old import paths", () => {
+    rmSync(join(repo, "test/helpers/imported.ts"));
+    git("add", "-A");
+    expect(scope([["test/helpers/imported.ts", ""]]).skipE2e).toBe("false");
+    expect(scope([["test/new-name.ts", "test/helpers/imported.ts"]]).skipE2e).toBe("false");
+  });
+
+  it("skips helpers when the checked-out tree has no e2e directory", () => {
+    rmSync(join(repo, "e2e"), { recursive: true });
+    git("add", "-A");
+    expect(scope([["test/helpers/imported.ts", ""]]).skipE2e).toBe("true");
+  });
+
+  it.each(["test/helpers/imported.ts", "test/helpers/fixture.ts"])(
+    "preserves docs_only and every area verdict for %s",
+    (helper) => {
+      const r = scope([[helper, ""]]);
+      expect([r.docsOnly, r.app, r.worker, r.db, r.full, r.draft]).toEqual([
+        "false",
+        "true",
+        "false",
+        "false",
+        "false",
+        "false",
+      ]);
+    },
+  );
+
+  it("does not match a helper whose name only shares an imported prefix", () => {
+    expect(scope([["test/helpers/imported-extra.ts", ""]]).skipE2e).toBe("true");
+  });
+
+  it("fails closed for an exotic changed helper name", () => {
+    expect(scope([["test/helpers/foo bar.ts", ""]]).skipE2e).toBe("false");
+  });
+
+  it("fails closed when git cannot search the import tree", () => {
+    const outside = mkdtempSync(join(dirname(repo), "not-a-repo-"));
+    mkdirSync(join(outside, "e2e"));
+    // git grep exits 128 here: there is an e2e tree but no searchable repo.
+    const result = scope([["test/helpers/fixture.ts", ""]], 1, outside);
+    expect(result.status).toBe(0);
+    expect(result.skipE2e).toBe("false");
   });
 
   it("skips the smoke for mixed docs and test changes", () => {

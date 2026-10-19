@@ -8,10 +8,11 @@
 # alter what a browser or the staging Worker observes — docs prose plus the
 # `test/` unit tree the journeys never execute (Playwright `testDir` is
 # `./e2e`, the deploy smoke drives `bin/`), except `test/` helpers the `e2e/`
-# tree imports: journeys execute those, so changing one runs the smoke. The
-# imported set is derived at runtime by grepping the `e2e/` tree for `test/`
-# imports on import lines (comments that merely name a path don't count),
-# never a hardcoded list. Every other path prints `skip_e2e=false`. The
+# tree imports, directly or through other test helpers: changing one runs
+# the smoke. The imported set is derived from the checked-out tree, never a
+# hardcoded list. Relative path literals are conservative dependencies; an
+# import-like comment may run extra smoke. Every other path prints
+# `skip_e2e=false`. The
 # `skip_e2e` verdict is pure path matching on purpose: a
 # doc that a gate reads (docs/config.md) is an input to `check` but proves
 # nothing about browser journeys, so it still skips them. `check` ignores
@@ -42,30 +43,31 @@ expected=$2
 # early exit below — a `test/` path trips that exit while still skipping e2e.
 # A truncated list proves nothing for either verdict, so it fails both closed.
 #
-# True when a changed test/ helper is imported by the e2e/ tree. Journeys
-# execute helpers they import (e2e/home-font-swap.spec.ts imports
-# ../test/helpers/page-shells), so such a change must run the smoke. The match
-# is extension-insensitive, so extensionless and .js-suffixed imports both
-# count; a missing e2e/ tree means no imports, while an unsearchable tree
-# fails closed to imported.
+# Cache the derived dependency closure once per invocation, not per changed
+# path. The Node helper uses only built-ins (scope runs before npm ci) and
+# handles source extensions, directory indexes and transitive helper cycles.
+# Missing e2e/ means no journeys; search/read/resolution errors run the smoke.
+e2e_helpers_loaded=false
+e2e_helpers_failed=false
+e2e_helpers=
 is_e2e_imported_helper() {
   [ -d e2e ] || return 1
   local helper=$1
-  local sub=${helper#test/}
-  sub=${sub%.*}
-  [ -n "$sub" ] || return 0
-  # Only dots need regex-escaping below; anything outside the safe path
-  # charset fails closed to imported instead of risking a bad pattern.
-  case $sub in
+  case $helper in
     *[!A-Za-z0-9_./-]*) return 0 ;;
   esac
-  local escaped=${sub//./\\.}
-  local rc=0
-  git grep -qE "(from|import|require)[^'\"]*['\"]([^'\"]*[^A-Za-z0-9_.-])?test/${escaped}(\$|[.'\"])" -- e2e/ 2>/dev/null || rc=$?
-  case $rc in
-    0) return 0 ;;
-    1) return 1 ;;
-    *) return 0 ;;
+  if [ "$e2e_helpers_loaded" = false ]; then
+    e2e_helpers_loaded=true
+    local script_dir
+    script_dir=$(dirname -- "${BASH_SOURCE[0]}")
+    if ! e2e_helpers=$(node "$script_dir/e2e-test-helpers.mjs" 2>/dev/null); then
+      e2e_helpers_failed=true
+    fi
+  fi
+  [ "$e2e_helpers_failed" = false ] || return 0
+  case $'\n'"$e2e_helpers"$'\n' in
+    *$'\n'"$helper"$'\n'*) return 0 ;;
+    *) return 1 ;;
   esac
 }
 skip_e2e=false
@@ -116,7 +118,7 @@ if [ -s "$files" ]; then
           package.json|web/package.json|\
           biome.json|tsconfig.json|ci/tsconfig.json|e2e/tsconfig.json|\
           vitest.config.ts|playwright.config.ts|playwright.staging.config.ts|\
-          .github/*|ci/change-scope.sh)
+          .github/*|ci/change-scope.sh|ci/e2e-test-helpers.mjs)
             full=true
             ;;
           # Worker deploy surface: dispatch configs, the Tail worker and the
