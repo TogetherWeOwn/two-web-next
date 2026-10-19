@@ -19,7 +19,7 @@ import { isContentLeafPath, robotsTagFor, securityHeadersFor } from "./headers";
 import { transformContentLeafChunk } from "./kit-content-chunk";
 import type { KitLocals } from "./kit-session";
 import { type MemberRead, memberReadResponse } from "./member-reads";
-import { JOIN_RESULT_COOKIE } from "./return-journey";
+import { JOIN_RESULT_COOKIE, deleteOpts } from "./return-journey";
 import { SAME_ORIGIN_EXEMPTIONS, UNSAFE_METHODS } from "./same-origin";
 import { isTrustedHost } from "./trust-hosts";
 
@@ -785,12 +785,7 @@ export async function dispatchHookRequest(
   if (releasedProfileConsumesJoinFlash(route, event, response)) {
     const c = new Context(event.request);
     c.res = response;
-    deleteCookie(c, JOIN_RESULT_COOKIE, {
-      path: "/",
-      secure: true,
-      httpOnly: true,
-      sameSite: "Lax",
-    });
+    deleteCookie(c, JOIN_RESULT_COOKIE, deleteOpts);
     response = c.res;
   }
   decorateKitResponse(response, event, deps.appUrl, deps.featuredImageHosts);
