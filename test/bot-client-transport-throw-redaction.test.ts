@@ -226,6 +226,26 @@ describe("controls: neighbouring fixed-string surfaces are already clean and sta
     expect(err.message).toBe("bot answered without an `ok` field");
   });
 
+  it("an ok:true envelope without a result object throws the fixed serialization string", async () => {
+    // Premise check (2026-10-19 probe): these two serialization throws carry
+    // no `cause` by design — unlike the fetch-rejection throw ("bot
+    // unreachable", { cause }) — so the pin is exact message plus no raw-body
+    // leak into the message. No production change per card scope.
+    const err = await thrownFrom(async () =>
+      jsonResponse(200, { ok: true, request_id: "r1", note: TOKEN }),
+    );
+    expect(err.message).toBe("bot success has no result object");
+    expect(err.message).not.toContain(TOKEN);
+  });
+
+  it("an ok:false envelope without an error code throws the fixed serialization string", async () => {
+    const err = await thrownFrom(async () =>
+      jsonResponse(200, { ok: false, error: { message: TOKEN }, request_id: "r1" }),
+    );
+    expect(err.message).toBe("bot failure has no error code");
+    expect(err.message).not.toContain(TOKEN);
+  });
+
   it("an unknown role.assign outcome throws the fixed factory string, not the outcome", async () => {
     const err = await thrownFrom(async () =>
       jsonResponse(200, { ok: true, result: { outcome: TOKEN }, request_id: "r1" }),
