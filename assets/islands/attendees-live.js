@@ -104,9 +104,16 @@
       stale = null;
     }
     if (!stale) return;
+    var refocus = focusedInside(stale);
     try {
       if (stale.parentNode) stale.parentNode.removeChild(stale);
       else if (stale.remove) stale.remove();
+      if (refocus) {
+        // Empty-to-empty recovery has no roster heading to receive focus.
+        // <main> is already focusable; never steal focus that moved away.
+        var fallback = document.querySelector("main");
+        if (fallback && typeof fallback.focus === "function") fallback.focus();
+      }
     } catch (_staleRemoveIgnored) {
       // Fall through: a leftover stale note is corrected on the next refresh
       // via showStale's already-present guard, never a silent contradiction.
