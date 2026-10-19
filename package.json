@@ -27,6 +27,7 @@
     "seed:staging": "node bin/seed-staging.mjs",
     "test:cutover": "node --test ci/cutover-check-selftest.mjs",
     "test:shadow": "node --test ci/shadow-compare-selftest.mjs",
+    "test:catalog-preflight": "node --test ci/staging-catalog-preflight.test.mjs",
     "mutation:sessions-join": "node ci/mutation-sessions-join.mjs",
     "mutation:sessions-join:selftest": "node ci/mutation-sessions-join.mjs --selftest",
     "scan:fetch-await": "npx -y --package @ast-grep/cli@0.50.0 ast-grep scan",
