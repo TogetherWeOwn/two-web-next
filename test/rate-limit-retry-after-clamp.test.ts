@@ -58,6 +58,7 @@ describe("rateLimitExceeded Retry-After clamp edges", () => {
     [0.5, 1],
     [Number.NaN, 60],
     [Number.POSITIVE_INFINITY, 60],
+    [Number.NEGATIVE_INFINITY, 60],
     [1.9, 1],
   ])("clamps retryAfter %s to %s in the header and envelope", async (input, expected) => {
     await expectClamped(input, expected);
