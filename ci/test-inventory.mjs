@@ -91,15 +91,27 @@ function excludeArrayBody(text, configPath) {
   return out;
 }
 
-// Every quoted entry in the `exclude` array in <root>/vitest.config.ts,
-// single-, double- or backtick-quoted. Shared by both parsers below so no
-// quote style can slip through as a silent vitest-reachable.
+// Consume complete comma-separated entries, not just quoted substrings:
+// concatenation, variables, calls and unknown spreads can exclude files too.
+// Only plain strings (no escapes/interpolation) and the known defaults spread
+// are supported; everything else fails closed instead of hiding an orphan.
 function rawVitestExcludes(root) {
   const configPath = join(root, "vitest.config.ts");
   if (!existsSync(configPath)) return [];
   const text = readFileSync(configPath, "utf8");
-  const body = excludeArrayBody(text, configPath);
-  return [...body.matchAll(/(['"`])([^'"`]+)\1/g)].map((m) => m[2]);
+  let rest = excludeArrayBody(text, configPath).trim();
+  const entries = [];
+  const error = `${configPath} has an exclude this gate cannot parse: use plain strings or ...configDefaults.exclude`;
+  while (rest) {
+    const literal = rest.match(/^(['"`])([^\\\r\n]*?)\1/);
+    const token = literal ?? rest.match(/^\.\.\.\s*configDefaults\s*\.\s*exclude\b/);
+    assert.ok(token, error);
+    rest = rest.slice(token[0].length).trimStart();
+    assert.ok(!rest || rest.startsWith(","), error);
+    if (literal) entries.push(literal[2]);
+    rest = rest.slice(1).trimStart();
+  }
+  return entries;
 }
 
 // Fail closed on exclude entries this gate cannot expand. Vitest honors the
@@ -456,6 +468,63 @@ function selftest() {
       } finally {
         rmSync(dir, { recursive: true, force: true });
       }
+    }
+  });
+
+  check("exclude expressions fail closed in the strict CLI", () => {
+    const expressions = [
+      '"test/" + "ghost.test.mjs"',
+      '...["test/ghost.test.mjs"]',
+      "...extraExcludes",
+      "extraExclude",
+      "`test/${name}.test.mjs`",
+      '"test/ghost.test.mjs".replace("ghost", "ghost")',
+      '"test/ghost.test.mjs" "test/other.test.mjs"',
+      '"test/gh\\u006fst.test.mjs"',
+      "...configDefaults.exclude.filter(keep)",
+    ];
+    for (const expression of expressions) {
+      const dir = mkdtempSync(join(tmpdir(), "test-inventory-"));
+      try {
+        writeFileSync(join(dir, "package.json"), JSON.stringify({ scripts: {} }));
+        writeFileSync(
+          join(dir, "vitest.config.ts"),
+          `export default { test: { exclude: [...configDefaults.exclude, ${expression}] } };\n`,
+        );
+        mkdirSync(join(dir, "test"), { recursive: true });
+        writeFileSync(join(dir, "test", "ghost.test.mjs"), "node:test placeholder\n");
+        const result = spawnSync(
+          process.execPath,
+          [fileURLToPath(import.meta.url), "--root", dir, "--strict"],
+          { encoding: "utf8" },
+        );
+        assert.equal(result.status, 1, `${expression} must fail closed`);
+        assert.match(result.stderr, /cannot (?:parse|expand)/, expression);
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    }
+  });
+
+  check("plain excludes accept all quote styles and the default spread", () => {
+    const dir = mkdtempSync(join(tmpdir(), "test-inventory-"));
+    try {
+      writeFileSync(join(dir, "package.json"), JSON.stringify({ scripts: {} }));
+      writeFileSync(
+        join(dir, "vitest.config.ts"),
+        "export default { test: { exclude: [...configDefaults.exclude, \"test/double.test.mjs\", 'test/single.test.mjs', `test/backtick.test.mjs`,] } };\n",
+      );
+      mkdirSync(join(dir, "test"), { recursive: true });
+      for (const name of ["double", "single", "backtick"]) {
+        writeFileSync(join(dir, "test", `${name}.test.mjs`), "node:test placeholder\n");
+      }
+      assert.deepEqual(inventory(dir).orphans, [
+        "test/backtick.test.mjs",
+        "test/double.test.mjs",
+        "test/single.test.mjs",
+      ]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
     }
   });
 
