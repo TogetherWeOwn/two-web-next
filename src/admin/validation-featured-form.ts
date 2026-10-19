@@ -47,7 +47,7 @@ export function parseFeaturedForm(
   // Featured body is the homepage slot's short editorial blurb: 1000 Unicode
   // code points after the existing trim, matching the site's long-text
   // ceiling (event description, profile bio). Astral characters count once,
-  // like the 255 sibling fields. Non-strings stay null via str(), never an
+  // like the 255 title/alt sibling fields. Non-strings stay null via str(), never an
   // over-max error. The 256 KiB transport cap still refuses first (413).
   if (body && [...body].length > 1000) fields.body = "Keep the body to 1000 characters.";
   if (body?.includes("\0")) fields.body = "Body cannot contain NUL characters.";
