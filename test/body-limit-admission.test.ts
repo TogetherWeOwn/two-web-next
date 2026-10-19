@@ -55,12 +55,12 @@ const CAP_FIRST_ROUTES = new Set([
   "POST /__probe/alert",
 ]);
 
-// Moderator featured create/delete refuse oversized bodies before the shared
-// throttle (the moderator guard still runs first): cap-first, not
-// throttle-first. The featured update post keeps the throttle-before-buffering
-// order.
+// Moderator featured create/update/delete refuse oversized bodies before the
+// shared throttle (the moderator guard still runs first): cap-first, not
+// throttle-first.
 const FEATURED_WRITE_CAP_FIRST = new Set([
   "POST /admin/featured",
+  "POST /admin/featured/:id",
   "POST /admin/featured/:id/delete",
 ]);
 
