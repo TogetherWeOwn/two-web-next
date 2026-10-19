@@ -206,6 +206,53 @@ describe("explicit expired-write recovery, never replay", () => {
     expect(f.state.writes).toBe(0);
   });
 
+  it("the restored banner never returns a signed-in member to the expired-session page", async () => {
+    vi.stubGlobal("fetch", fixtureDiscord);
+    const f = recoveryFixture();
+    let jar = mergeCookies("", await f.request("/auth/recover?next=%2Fprofile%3Fedit%3D1"));
+    const start = await f.request("/auth/discord?next=%2Fprofile%3Fedit%3D1", {
+      headers: { cookie: jar },
+    });
+    jar = mergeCookies(jar, start);
+    const state = new URL(start.headers.get("location")!).searchParams.get("state")!;
+    const callback = await f.request(`/auth/discord/callback?state=${state}&code=fixture`, {
+      headers: { cookie: jar },
+    });
+    expect(callback.headers.get("location")).toBe("/profile?edit=1");
+    jar = mergeCookies(jar, callback);
+    expect(only(jar, EXPIRED_WRITE_COOKIE)).toContain("restored");
+    const page = await f.request("/profile?edit=1", { headers: { cookie: jar } });
+    const html = await page.text();
+    expect(html).toContain('role="status" tabindex="-1" data-testid="auth-error"');
+    expect(html).toContain(
+      "You signed in again. Your earlier changes were not saved. Review and submit them again.",
+    );
+    const banner = html.match(/<div[^>]*data-testid="auth-error"[^>]*>.*?<\/div>/s)?.[0];
+    expect(banner).toBeDefined();
+    expect(banner).not.toContain("/auth/recover");
+    // Follow every link in the banner: none may render the expired-session
+    // page or plant a fresh expired-write or intended cookie.
+    const hrefs = [...banner!.matchAll(/href="([^"]+)"/g)].map((m) => m[1]!);
+    jar = mergeCookies(jar, page);
+    for (const href of hrefs) {
+      expect(href).not.toContain("/auth/recover");
+      const followed = await f.request(href, { headers: { cookie: jar } });
+      expect(await followed.text()).not.toContain("Your session expired");
+      const set = followed.headers.getSetCookie();
+      expect(
+        set.some((c) => c.startsWith(EXPIRED_WRITE_COOKIE + "=") && !/Max-Age=0/i.test(c)),
+      ).toBe(false);
+      expect(
+        set.some((c) => c.startsWith("__Host-two_login_intended=") && !/Max-Age=0/i.test(c)),
+      ).toBe(false);
+    }
+    // The one-shot banner still clears on first render.
+    expect(await (await f.request("/profile", { headers: { cookie: jar } })).text()).not.toContain(
+      'data-testid="auth-error"',
+    );
+    expect(f.state.writes).toBe(0);
+  });
+
   it.each(["error=access_denied", "code=fixture&state=wrong"])(
     "stray failure %s leaves the pending notice for the real hit",
     async (query) => {

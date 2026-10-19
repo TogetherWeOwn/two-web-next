@@ -157,10 +157,11 @@ export async function expiredWriteBanner(c: Ctx, next: Next): Promise<void> {
   });
   c.header("cache-control", "no-store, private");
   c.header("vary", "Cookie");
+  // The member just signed in: the banner keeps its copy with no link, so it
+  // can never send them back to the expired-session landing (which would
+  // re-arm the intended cookie and a fresh pending notice).
   const banner =
-    '<div role="status" tabindex="-1" data-testid="auth-error">You signed in again. Your earlier changes were not saved. Review and submit them again. <a href="' +
-    recoveryUrl(destination) +
-    '">Try signing in again</a></div>';
+    '<div role="status" tabindex="-1" data-testid="auth-error">You signed in again. Your earlier changes were not saved. Review and submit them again.</div>';
   c.res = new Response(html.replace(/(<main\b[^>]*>)/, `$1${banner}`), {
     status: c.res.status,
     headers: c.res.headers,
