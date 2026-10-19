@@ -182,7 +182,32 @@ route instead of by ID.
 | `join attempt write failed` | The `join_attempts` analytics `INSERT` threw; the row is lost but the request outcome stands (`recordAttempt` in `src/join/service.ts`). | None on the journey. The gap shows only in `join_attempts` counts. | `SELECT outcome, count(*), max(created_at) FROM join_attempts WHERE created_at > now() - interval '1 hour' GROUP BY outcome`, then compare against `http.request` volume on `/join/callback` for the same window; a gap inside one window matches the warn timestamps. If writes never resume, route database insert health to the authorized operator. Never replay a member join to investigate. | `exception` (class name only, never the message, which can quote the live token or statement text), `outcome` |
 | `discord token exchange failed on the join journey` | One bounded line for three triggers in `src/join/route-callback.ts`: oversized code/state refused before any exchange, an invalid-state branch (state cookie missing or mismatched, journey already consumed or expired, missing `code`, or a swallowed journey-store error from `storeFor().catch(() => null)` / `journeys.consume().catch(() => false)`), or a token-exchange/user-fetch throw classified by `failureMeta` (`src/discord.ts`). | The member already sees the matching recovery page: expired-link retry, or the Discord-down 503. A database-caused invalid-state failure also renders "Join link expired" even though the link itself was fine. | Filter logs for the line and split by `kind` and `outcome`, not by `outcome` alone. `provider_outage`/`rate_limited`/`transport_failure` with `outcome: error` point at Discord or wire health; `expired_grant` with `outcome: expired` is a spent or replayed approval. `provider_reject` with status 400/401 (for example `invalid_client` after a secret rotation, or `invalid_request` from a bad redirect URI) points at `DISCORD_CLIENT_ID`/`DISCORD_CLIENT_SECRET` and the registered redirect URI, not at Discord health. `unknown` with a null status is an app-side throw. A sustained `expired` burst with no matching Discord-side change points at the journey store: check `web_oauth_journeys` and database health via the [alert runbook](runbook-alerts.md). Never replay a member join to investigate. | `exception` (class only, never the message, which can quote the secret), `kind`/`status` (exchange-throw site only), sanitized `source`, `outcome` |
 
-### Missing sync-queue binding warning
+#### Kit session-bridge and auth-status probe warnings
+
+Two `console.warn` lines from the Kit hook dispatch
+(`src/route-ownership.ts`). Neither pages: the bridge line is a designed
+guest-equivalent render or fail-closed refusal, and the probe line is an
+optional cookie skipped on an already-authorized response. Neither line
+carries `request_id`, route, or cookie values, so correlate by time window
+plus route/status evidence per [Find a request](#find-a-request): never
+request cookie values and never invent request correlation fields.
+
+| Message | Trigger | Member impact | Severity | First read-only check | Fields carried | Security boundary |
+| --- | --- | --- | --- | --- | --- | --- |
+| `kit session bridge unavailable; rendering without locals.` | The optional read-only session bridge (`sessionFor`) rejected after a Kit ownership decision and before `resolve` (`src/route-ownership.ts:643-653`). The bridge merges one session decision into `event.locals`; on failure locals stay guest-equivalent and `viewerOf` names no viewer (`src/route-ownership.ts:403-406`). | Protected member contents are refused: the member-read render fails closed with the bridged (unknown) viewer (`test/kit-member-dispatch.test.ts:266`). Public Kit pages render as guest. | No page. Guest-equivalent render or sanitized refusal is the designed outcome, not an outage signal on its own. | Filter the exact message over the incident window; join by time window to `http.request` route/status (member-route refusal). Confirm effective ownership in `ROUTE_MANIFEST` (`src/route-ownership.ts`) via `decideRoute`/`decideOwner`, and read the bridge/session configuration in `src/kit-session.ts:228-245` and [`SESSION_SECRET`](config.md#session_secret-strength-and-rotation). | `exception` (class name only, never the message) | The bridge session read runs outside the member-read boundary (it is not member data); the render stays inside it, so protected contents are refused after bridge failure. Never request cookie values to investigate. |
+| `kit auth-status probe unavailable; rendering without probe cookie.` | The optional probe-cookie provider (`authStatusCookieFor`) rejected after the response was already rendered: `GET` on an `/admin` path, status 200, `text/html`, with authenticated moderator locals (`src/route-ownership.ts:701-724`; the signer admits only that shape, `src/kit-session.ts:256-283`). | None on authorization: the successful admin HTML response is served as rendered, without the probe cookie (`test/kit-member-dispatch.test.ts:219`). Scoped to successful GET admin HTML for an authenticated moderator; other responses never call the probe. | No page. A missing optional cookie is not a privilege change, and probe failure never implies de-authentication. | Filter the exact message over the incident window; join by time window to `http.request` (GET admin route, 200). Confirm the probe preconditions and the manifest `enabled` flag in source. Never request cookie values; do not invent request correlation fields. | `exception` (class name only, never the message) | The probe cookie decorates an already-authorized response: probe failure retains that response and never removes authentication. Carries the exception class only, per [privacy and boundaries](#privacy-and-boundaries). |
+
+Kit rollout context: admin shells and manifest-`enabled` rollback in
+[Kit admin shells](moderator-admin-guide.md#kit-admin-shells-shipped-join-attempts-pair-kit-served);
+artifact and log hygiene in
+[Kit journey, visual and performance parity gates](kit-parity-gates.md#security);
+moderator authority and role-removal residuals in the
+[threat model](threat-model.md#moderator-authority)
+([residuals](threat-model.md#gaps-and-residual-risks)).
+Ownership flags, response behavior and the log privacy contract are unchanged
+by this section.
+
+## Missing sync-queue binding warning
 
 `event write-back due but SYNC_EVENT_QUEUE is not bound` (`src/events/sync.ts`,
 `enqueueEventSync`) is a `console.warn`, not one of the `console.error` rows
