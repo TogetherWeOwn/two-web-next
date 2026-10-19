@@ -52,11 +52,23 @@ function markerRow() {
   };
 }
 
-function fakeTag(strings: TemplateStringsArray, ..._values: unknown[]) {
+function fakeTag(strings: TemplateStringsArray, ...values: unknown[]) {
   const text = strings.join("?");
   // Cache-defeat fragments are interpolated, never executed: like the real
   // driver, build them without recording a source read.
   if (text.trim().startsWith(", clock_timestamp()")) return {};
+  // SET LOCAL configures the connection; it is not an evidence/source read.
+  if (text.includes("set_config")) {
+    if (
+      text.replace(/\s+/g, " ").trim() ===
+        "select set_config('lock_timeout', ?, true), set_config('statement_timeout', ?, true)" &&
+      values.length === 2 &&
+      values.every((value) => value === "2000" || value === "2000ms")
+    ) {
+      return [];
+    }
+    throw new Error(`unexpected statement: ${text.slice(0, 80)}`);
+  }
   mocks.texts.push(text);
   if (mocks.mode === "error") throw new Error("private source failure");
   if (text.includes("queue_failed_jobs")) return mocks.mode === "missing" ? [] : [markerRow()];
@@ -332,6 +344,43 @@ describe("evidence-only source/cache verifier admission", () => {
     const res = await request(createMemorySessionStore());
     expect(res.status).toBe(503);
     expect(await res.json()).toEqual({ error: "evidence_unavailable" });
+  });
+
+  it.each(["2000", "2000ms"])(
+    "local timeout configuration %s does not count as a source read",
+    async (timeout) => {
+      fakeTag`select set_config('lock_timeout', ${timeout}, true), set_config('statement_timeout', ${timeout}, true)`;
+      expect(mocks.texts).toHaveLength(0);
+      const res = await request(createMemorySessionStore());
+      expect(res.status).toBe(200);
+      expect(mocks.texts).toHaveLength(5);
+      const body = (await res.json()) as { selects: unknown[] };
+      expect(body.selects).toHaveLength(5);
+    },
+  );
+
+  it.each([
+    ["select unknown_function()", []],
+    [
+      "select set_config('lock_timeout', ?, false), set_config('statement_timeout', ?, true)",
+      ["2000", "2000"],
+    ],
+    [
+      "select set_config('lock_timeout', ?, true), set_config('statement_timeout', ?, true) from events",
+      ["2000", "2000"],
+    ],
+    [
+      "select set_config('lock_timeout', ?, true), set_config('statement_timeout', ?, true)",
+      ["0", "2000"],
+    ],
+    [
+      "select set_config('lock_timeout', ?, true), set_config('statement_timeout', ?, true)",
+      ["2000"],
+    ],
+  ])("unexpected SQL/configuration still refuses: %s %j", (text, values) => {
+    expect(() => fakeTag([text] as unknown as TemplateStringsArray, ...values)).toThrow(
+      "unexpected statement:",
+    );
   });
 
   it("success returns evidence only, once, with no session and no audit write", async () => {
