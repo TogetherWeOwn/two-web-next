@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { ChildProcess } from "node:child_process";
 
 // These regressions are offline: they pin the local runner's real boundaries
@@ -609,12 +609,16 @@ describe("wrapper process-group teardown (TOG-9680 re-review P1)", () => {
   it("reaps orphaned descendants when the wrapper ignores SIGTERM (offline)", async () => {
     // Fixture: a fake wrapper that backgrounds one descendant, then ignores
     // SIGTERM and execs into sleep (SIG_IGN survives exec, so the wrapper is
-    // immune to settleOwned's SIGTERM). settleOwned must escalate to SIGKILL,
-    // which runs no trap, so the descendant is orphaned while still live and
-    // only settleOwned's direct descendant signalling can reap it. This pins
-    // both the SIGKILL escalation and the descendant loops: deleting either
-    // keeps every other case green because the real wrapper's trap cleans its
-    // own process group.
+    // immune to settleOwned's SIGTERM). The descendant is a subshell that
+    // also ignores SIGTERM before execing sleep, so it survives the wrapper's
+    // SIGKILL (which runs no trap) and settleOwned's descendant SIGTERM loop:
+    // only the descendant SIGKILL after the 5s waitReaped timeout can reap
+    // it. child.pid is published after the wrapper's trap is installed, so
+    // cleanup can never signal the wrapper before it ignores TERM. A
+    // call-through process.kill spy records the SIGTERM and the SIGKILL sent
+    // to the orphan, pinning both descendant loops; deleting either loop (or
+    // the wrapper escalation) keeps every other case green because the real
+    // wrapper's trap cleans its own process group.
     const { proc, fs, path } = await shellDeps();
     const sentinel = trackOwned(proc.spawn("sleep", ["60"], { stdio: "ignore" }));
     const sentinelPid = sentinel.child.pid ?? NaN;
@@ -625,30 +629,44 @@ describe("wrapper process-group teardown (TOG-9680 re-review P1)", () => {
           const fakeWrapper = path.join(scratch, "fake-wrapper.sh");
           fs.writeFileSync(
             fakeWrapper,
-            `#!/bin/sh\nsleep 60 &\necho "$!" > "${childPidFile}"\ntrap '' TERM\nexec sleep 120\n`,
+            `#!/bin/sh\n(trap '' TERM; exec sleep 60) &\nchild=$!\ntrap '' TERM\necho "$child" > "${childPidFile}"\nexec sleep 120\n`,
           );
           fs.chmodSync(fakeWrapper, 0o700);
           let owned: OwnedChild | undefined;
           let childPid = NaN;
+          const killSpy = vi.spyOn(process, "kill");
           try {
-            owned = trackOwned(proc.spawn("bash", [fakeWrapper], { stdio: "ignore" }));
-            for (let i = 0; i < 150 && !Number.isInteger(childPid); i++) {
-              await new Promise((r) => setTimeout(r, 100));
-              try {
-                childPid = parseInt(fs.readFileSync(childPidFile, "utf8").trim(), 10);
-              } catch {
-                childPid = NaN;
+            try {
+              owned = trackOwned(proc.spawn("bash", [fakeWrapper], { stdio: "ignore" }));
+              for (let i = 0; i < 150 && !Number.isInteger(childPid); i++) {
+                await new Promise((r) => setTimeout(r, 100));
+                try {
+                  childPid = parseInt(fs.readFileSync(childPidFile, "utf8").trim(), 10);
+                } catch {
+                  childPid = NaN;
+                }
               }
+              expect(Number.isInteger(childPid)).toBe(true);
+              expect(await isLiveProcess(childPid)).toBe(true);
+            } finally {
+              await settleOwned(owned, Number.isInteger(childPid) ? [childPid] : []);
             }
             expect(Number.isInteger(childPid)).toBe(true);
-            expect(await isLiveProcess(childPid)).toBe(true);
+            expect(owned?.settled()).toBe(true);
+            expect(owned?.child.signalCode).toBe("SIGKILL");
+            const signalsToChild = killSpy.mock.calls
+              .filter(([pid]) => pid === childPid)
+              .map(([, signal]) => signal);
+            // The orphan ignores SIGTERM by construction, so a recorded
+            // SIGTERM proves the descendant TERM loop ran, a recorded SIGKILL
+            // proves the KILL loop ran after the 5s waitReaped timeout, and
+            // the reaped check below proves the KILL is what reaped it.
+            expect(signalsToChild).toContain("SIGTERM");
+            expect(signalsToChild).toContain("SIGKILL");
+            expect(await waitReaped(childPid)).toBe(true);
           } finally {
-            await settleOwned(owned, Number.isInteger(childPid) ? [childPid] : []);
+            killSpy.mockRestore();
           }
-          expect(Number.isInteger(childPid)).toBe(true);
-          expect(owned?.settled()).toBe(true);
-          expect(owned?.child.signalCode).toBe("SIGKILL");
-          expect(await waitReaped(childPid)).toBe(true);
         });
         expect(fs.existsSync(sibling)).toBe(true);
       });
@@ -657,6 +675,34 @@ describe("wrapper process-group teardown (TOG-9680 re-review P1)", () => {
       await stopSentinel(sentinel);
     }
   }, 90_000);
+
+  it("never signals descendant PIDs already proven reaped (offline)", async () => {
+    // Pins the isLiveProcess filter in settleOwned: a PID already observed
+    // reaped must never receive SIGTERM/SIGKILL, because the number may
+    // already belong to an unrelated process. Signalling a dead PID throws
+    // ESRCH into settleOwned's bare catches, so without the spy this mutant
+    // is silent: reverting the filter to signal every integer PID keeps every
+    // other assertion green.
+    const { proc } = await shellDeps();
+    const short = proc.spawn("sleep", ["0"], { stdio: "ignore" });
+    const deadPid = short.pid ?? NaN;
+    expect(Number.isInteger(deadPid)).toBe(true);
+    await new Promise<void>((resolve) => {
+      short.on("close", () => resolve());
+      short.on("error", () => resolve());
+    });
+    expect(await waitReaped(deadPid)).toBe(true);
+    const killSpy = vi.spyOn(process, "kill");
+    try {
+      await settleOwned(undefined, [deadPid]);
+      const fatalSignals = killSpy.mock.calls.filter(
+        ([pid, signal]) => pid === deadPid && (signal === "SIGTERM" || signal === "SIGKILL"),
+      );
+      expect(fatalSignals).toEqual([]);
+    } finally {
+      killSpy.mockRestore();
+    }
+  });
 });
 
 describe("runner startup bound (TOG-9680 P2)", () => {
