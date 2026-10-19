@@ -1,4 +1,6 @@
-// GET /join/callback (structural split; zero behavior change).
+// GET /join/callback.
+// Journey cookies are cleared only after one-use admission. A stale, stray,
+// or unadmitted callback leaves the current journey cookies in place.
 //
 // Throttle, exchange, synchronous bot add, sign-in. The synchronous bot call
 // (service.finishJoin) owns the live token for exactly one attempt — it is
