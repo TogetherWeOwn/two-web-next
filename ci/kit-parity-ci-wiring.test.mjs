@@ -183,6 +183,6 @@ test("the required check runs the parity selftests in their own fail-closed step
   assert.doesNotMatch(step, /continue-on-error:/);
   assert.equal(
     step.match(/^        run: (.+)$/m)?.[1],
-    "node --test ci/kit-parity-gates.test.mjs ci/kit-parity-origin.test.mjs ci/check-kit-parity.test.mjs ci/check-kit-perf.test.mjs ci/kit-visual-accept.test.mjs ci/kit-parity-ci-wiring.test.mjs",
+    "node --test ci/kit-parity-gates.test.mjs ci/kit-parity-origin.test.mjs ci/check-kit-parity.test.mjs ci/check-kit-perf.test.mjs ci/kit-visual-accept.test.mjs ci/kit-parity-ci-wiring.test.mjs ci/kit-section-normalization.test.mjs",
   );
 });

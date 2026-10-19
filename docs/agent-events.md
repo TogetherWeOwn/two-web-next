@@ -73,7 +73,7 @@ Source: [legacy service](https://github.com/TogetherWeOwn/two-web/blob/1a9a23555
 
 ## Migration / rollout
 
-`1019_shared-agent-events.sql` is the highest web migration (after `1018_audit-immutability.sql`; it was renumbered from the reserved 1015 gap so its journal `when` sorts last)
+`1019_shared-agent-events.sql` landed as the highest web migration (after `1018_audit-immutability.sql`; it was renumbered from the reserved 1015 gap so its journal `when` sorted last at the time — later migrations have since landed, and the Drizzle journal is the source of truth for current ordering)
 and copies **every** temporary
 `agent_events` row into `events`, preserving keys, ownership, markers, versions, status and timestamps,
 then drops the temporary table. Audit/replay

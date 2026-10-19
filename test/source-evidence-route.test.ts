@@ -8,6 +8,7 @@ import { Hono } from "hono";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { adminApp } from "../src/admin/routes";
 import { STATEMENT_SET_HASH } from "../src/admin/source-evidence";
+import { BODY_LIMIT_BYTES } from "../src/body-limit";
 import type { Env } from "../src/env";
 import { STAGING_APP_URL } from "../src/qa";
 import { createMemorySessionStore, type SessionStore } from "../src/sessions";
@@ -81,6 +82,30 @@ function request(
   );
 }
 
+const WRITE_VERBS = ["OPTIONS", "POST", "PUT", "PATCH", "DELETE"] as const;
+const ACTION_MAX = BODY_LIMIT_BYTES.action;
+const TOO_LARGE = {
+  reason: "payload_too_large",
+  message: "Reduce the size of your request and try again.",
+};
+
+function oversizedUpload(method: string, advertised: boolean) {
+  const pull = vi.fn((controller: ReadableStreamDefaultController<Uint8Array>) =>
+    controller.enqueue(new Uint8Array(1024)),
+  );
+  const upload = new Request(`${STAGING_APP_URL}/admin/queue/source-evidence/7`, {
+    method,
+    body: new ReadableStream({ pull }, { highWaterMark: 0 }),
+    duplex: "half",
+    headers: {
+      authorization: `Bearer ${token}`,
+      accept: "application/json",
+      ...(advertised ? { "content-length": String(ACTION_MAX + 1) } : {}),
+    },
+  } as RequestInit);
+  return { upload, pull };
+}
+
 describe("evidence-only source/cache verifier admission", () => {
   beforeEach(() => {
     mocks.texts.length = 0;
@@ -150,6 +175,67 @@ describe("evidence-only source/cache verifier admission", () => {
       expect(await res.json()).toEqual({ error: "method_not_allowed" });
       expect(get).not.toHaveBeenCalled();
       expect(mocks.factory).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([...WRITE_VERBS])(
+    "%s with a small body still refuses 405 DB-free (cap passes, refusal answers)",
+    async (method) => {
+      const store = createMemorySessionStore();
+      const get = vi.spyOn(store, "get");
+      const throttleStore = vi.fn(async () => null);
+      const bindings = { ...env, THROTTLE_STORE: throttleStore } as unknown as Env;
+      const res = await request(
+        store,
+        { method, body: "ok", headers: { "content-type": "text/plain" } },
+        bindings,
+      );
+      expect(res.status).toBe(405);
+      expect(res.headers.get("allow")).toBe("GET");
+      expect(await res.json()).toEqual({ error: "method_not_allowed" });
+      expect(get).not.toHaveBeenCalled();
+      expect(mocks.factory).not.toHaveBeenCalled();
+      expect(throttleStore).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([...WRITE_VERBS])(
+    "%s with an advertised oversized body refuses 413 DB-free before the method refusal",
+    async (method) => {
+      const store = createMemorySessionStore();
+      const get = vi.spyOn(store, "get");
+      const throttleStore = vi.fn(async () => null);
+      const bindings = { ...env, THROTTLE_STORE: throttleStore } as unknown as Env;
+      const app = new Hono().route("/admin", adminApp(store));
+      const { upload, pull } = oversizedUpload(method, true);
+      const res = await app.request(upload, undefined, bindings);
+      expect(res.status).toBe(413);
+      expect(await res.json()).toEqual(TOO_LARGE);
+      expect(pull).not.toHaveBeenCalled();
+      expect(get).not.toHaveBeenCalled();
+      expect(mocks.factory).not.toHaveBeenCalled();
+      expect(throttleStore).not.toHaveBeenCalled();
+      await upload.body?.cancel().catch(() => {});
+    },
+  );
+
+  it.each([...WRITE_VERBS])(
+    "%s with a chunked oversized body refuses 413 DB-free before the method refusal",
+    async (method) => {
+      const store = createMemorySessionStore();
+      const get = vi.spyOn(store, "get");
+      const throttleStore = vi.fn(async () => null);
+      const bindings = { ...env, THROTTLE_STORE: throttleStore } as unknown as Env;
+      const app = new Hono().route("/admin", adminApp(store));
+      const { upload, pull } = oversizedUpload(method, false);
+      const res = await app.request(upload, undefined, bindings);
+      expect(res.status).toBe(413);
+      expect(await res.json()).toEqual(TOO_LARGE);
+      expect(pull.mock.calls.length).toBeLessThanOrEqual(ACTION_MAX / 1024 + 2);
+      expect(get).not.toHaveBeenCalled();
+      expect(mocks.factory).not.toHaveBeenCalled();
+      expect(throttleStore).not.toHaveBeenCalled();
+      await upload.body?.cancel().catch(() => {});
     },
   );
 

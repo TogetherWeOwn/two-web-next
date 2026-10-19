@@ -29,7 +29,7 @@ const render = (overrides = {}) =>
     isOwner: true,
     appUrl: "https://next.example.test",
     ...overrides,
-  })!.toString();
+  })!.toString() as string;
 
 describe("member profile base theme", () => {
   it("loads the base tokens and profile-only layout without changing other shells", () => {

@@ -95,8 +95,11 @@ function makeRotationServer() {
     journeyHeaders.set("content-type", "text/html; charset=utf-8");
     if (entry.next < entry.rot.length) {
       const nextValue = entry.rot[entry.next];
-      journeyHeaders.append("set-cookie", sessionSetCookie(nextValue));
+      // Decoy first: the jar must filter by cookie name, not take the first
+      // pair. The login path keeps session-first order, so both orders are
+      // covered across the two extraction sites.
       journeyHeaders.append("set-cookie", "other=decoy; Path=/");
+      journeyHeaders.append("set-cookie", sessionSetCookie(nextValue));
       entry.valid = nextValue;
       entry.next += 1;
       responses.push({ identity, rotated: true, stale: false });

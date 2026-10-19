@@ -181,15 +181,15 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
   admin.use("/queue/*", queuePreviewAdmission);
   admin.use("/*", adminGuard(overrides));
   admin.get("/queue/failed/:id/preview", queuePreviewHandler);
-  // Same write envelope as every other admin POST: throttle admits before
-  // buffering (oversized attempts count against the bucket), the wire cap
-  // refuses before parsing, and the handler itself never parses a payload
+  // Action-class admin write: the wire cap runs before the shared throttle
+  // (oversized attempts 413 without spending the bucket), the cap refuses
+  // before parsing, and the handler itself never parses a payload
   // (dispatch always starts from the reconciled source). Only the dedicated
   // staging operator principal can reach the handler.
   admin.post(
     "/queue/failed/:id/redispatch",
-    throttle("admin-write", WRITE_THROTTLE_PER_MINUTE),
     requestBodyLimit("action"),
+    throttle("admin-write", WRITE_THROTTLE_PER_MINUTE),
     queueRedispatchHandler,
   );
 
@@ -472,10 +472,12 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
   );
 
   for (const action of ["publish", "cancel", "rsvp-pause", "rsvp-reopen"] as const) {
+    // Action-class lifecycle write: wire cap before the shared throttle, so an
+    // oversized moderator body 413s without spending admin-write budget.
     admin.post(
       `/events/:key/${action}`,
-      throttle("admin-write", WRITE_THROTTLE_PER_MINUTE),
       requestBodyLimit("action"),
+      throttle("admin-write", WRITE_THROTTLE_PER_MINUTE),
       async (c) => {
         const db = await dbOr503(c);
         if (!db) return c.text("Admin temporarily unavailable", 503);
