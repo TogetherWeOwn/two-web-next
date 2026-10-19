@@ -34,15 +34,18 @@ const sharedRoutes = [
 ];
 
 // Moderator event writes refuse oversized bodies before the shared throttle
-// (and before any session read): cap-first, not throttle-first. Every other
-// shared-throttle route keeps the throttle-before-buffering order.
-const EVENT_WRITE_CAP_FIRST = new Set([
+// (and before any session read); the staging alert probe refuses oversized
+// bodies before its throttle (after the QA gate, which still runs first):
+// cap-first, not throttle-first. Every other shared-throttle route keeps the
+// throttle-before-buffering order.
+const CAP_FIRST_ROUTES = new Set([
   "POST /events",
   "PATCH /events/:key",
   "POST /events/:key/publish",
   "POST /events/:key/cancel",
   "POST /events/:key/rsvp-pause",
   "POST /events/:key/rsvp-reopen",
+  "POST /__probe/alert",
 ]);
 
 function routeInfo(key: string) {
@@ -139,7 +142,7 @@ function upload(
 describe("shared throttles admit before buffering", () => {
   it.each(sharedRoutes)("%s rejects exhausted buckets without pulling any upload", async (key) => {
     const { method, path, max, budget } = routeInfo(key);
-    const capFirst = EVENT_WRITE_CAP_FIRST.has(key);
+    const capFirst = CAP_FIRST_ROUTES.has(key);
     const { sql, count } = throttleFixture(budget);
     const { env, cookie } = await sessionEnv(sql as unknown as Sql);
     const empty = await app.request(
@@ -161,8 +164,9 @@ describe("shared throttles admit before buffering", () => {
       const { request, pull } = upload(path, method, cookie, max, advertised);
       const response = await app.request(request, undefined, env);
       if (capFirst) {
-        // Event writes refuse the oversized body before the throttle runs:
-        // 413 even with a spent budget, spending no throttle row.
+        // Cap-first routes refuse the oversized body before the throttle runs:
+        // 413 even with a spent budget, spending no throttle row. (The probe's
+        // QA gate still runs before the cap, so these requests carry the token.)
         expect(response.status).toBe(413);
         expect(await response.json()).toEqual(ERROR);
         if (advertised) expect(pull).not.toHaveBeenCalled();
@@ -187,7 +191,7 @@ describe("shared throttles admit before buffering", () => {
 
   it.each(sharedRoutes)("%s counts advertised and chunked oversized attempts", async (key) => {
     const { method, path, max, budget } = routeInfo(key);
-    const capFirst = EVENT_WRITE_CAP_FIRST.has(key);
+    const capFirst = CAP_FIRST_ROUTES.has(key);
     for (const advertised of [false, true]) {
       const { sql, count } = throttleFixture(budget - 1);
       const { env, cookie } = await sessionEnv(sql as unknown as Sql);

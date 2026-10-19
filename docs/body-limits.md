@@ -10,7 +10,9 @@ The global trusted-host and same-origin gates run before route admission or
 buffering; the same-origin ingress/CSP exemptions retain bounded body handling.
 Shared throttles and the profile write throttle run before buffering: oversized
 attempts consume admission budget and an exhausted bucket returns 429 without
-pulling the upload. Profile owner policy and moderator write authentication also
+pulling the upload. The staging alert probe is the exception: its body cap runs
+before its throttle (after the QA gate), so an over-cap probe returns 413 with
+no throttle spend. Profile owner policy and moderator write authentication also
 run before buffering; moderator authentication is read once, without rotation.
 Agent ingress runs its byte cap first: an over-cap body returns 413 with no
 SQL, shield charge or client. Under-cap bodies are buffered, then the
@@ -38,7 +40,7 @@ including field names, escaping, multipart boundaries and metadata:
 | `agent` | 32,768 | `/api/agent-events` | StoreEventRequest maxima: title/game 100, description 1,000, location 255, timezone 64 code points (`src/agent-events/payload.ts`, `validateFields`), plus idempotency_key 255 UTF-16 units. Even JSON-escaped surrogate pairs fit well below 32 KiB with the operation/version/key envelope. |
 | `mcp` | 32,768 | `POST /mcp` | JSON-RPC request envelope plus tool arguments (event key 26 chars, paging integers). Tool calls carry filters, never content; 32 KiB matches the `json`/`agent` tier and the public API's 32 KiB response budget. |
 | `featured` | 262,144 | Admin featured create/update | The four bounded title/URL/image/alt strings are 255 code units each (`src/admin/validation.ts`, `parseFeaturedForm`), but featured `body` has **no legacy field maximum in this port**. 256 KiB is an explicit new total editorial-body transport allowance, not a claim of legacy equivalence; large submissions receive 413 instead of consuming unbounded memory. |
-| `action` | 4,096 | Logout, QA login, staging alert probe, publish/cancel, RSVP pause/reopen (public and admin), featured delete, RSVP PUT/DELETE | Actions do not consume bodies; RSVP only needs an enum, optional caller ID and honeypot. 4 KiB leaves form/JSON overhead while preventing bodyless endpoints from accepting arbitrary uploads. DELETE RSVP does read its honeypot body. |
+| `action` | 4,096 | Logout, QA login, staging alert probe (cap before throttle: over-cap probes 413 with no throttle spend), publish/cancel, RSVP pause/reopen (public and admin), featured delete, RSVP PUT/DELETE | Actions do not consume bodies; RSVP only needs an enum, optional caller ID and honeypot. 4 KiB leaves form/JSON overhead while preventing bodyless endpoints from accepting arbitrary uploads. DELETE RSVP does read its honeypot body. |
 
 Validation still determines which inputs are legitimate. Trimming, game
 normalization, unknown fields and some unrestricted ancillary fields mean there
