@@ -48,7 +48,7 @@ vi.mock("../src/events/rsvp", async (importOriginal) => ({
     created: true,
     answer: { status: "going", syncedToDiscordAt: null },
   }),
-  withdrawRsvp: async () => ({ limited: false, status: "published" }),
+  withdrawRsvp: async () => ({ limited: false, deleted: true, status: "published" }),
 }));
 
 const ID = "0123456789abcdef-LHR";

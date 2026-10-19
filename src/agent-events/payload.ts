@@ -48,14 +48,22 @@ export function isAgentVersion(value: unknown): value is number {
 // Nesting bound for the payload digest: comfortably above every real agent
 // event body (3 levels), far below stack exhaustion (~10k frames in a Worker).
 export const MAX_DIGEST_DEPTH = 100;
+// Static API contract for the 422 `payload_too_deep` refusal: the ingress
+// answers this text verbatim and never echoes the caught error's message, so
+// internal error-text edits cannot silently move the API contract. The digest
+// below deliberately throws a distinct internal diagnostic (never this
+// constant) so the decoupling is observable: echoing `err.message` would
+// answer different text and fail the contract pin.
+export const PAYLOAD_TOO_DEEP_MESSAGE = "The request body nests deeper than 100 levels.";
 export class PayloadTooDeepError extends Error {}
 
 function sortRecursive(v: unknown, depth = 0): unknown {
   // Untrusted nesting is bounded: without this, an admitted deeply nested
   // body recurses until the worker throws RangeError (answered 500). Past the
   // bound the digest refuses with a typed error the caller answers 422.
+  // The internal message stays distinct from PAYLOAD_TOO_DEEP_MESSAGE.
   if (depth > MAX_DIGEST_DEPTH)
-    throw new PayloadTooDeepError(`The request body nests deeper than ${MAX_DIGEST_DEPTH} levels.`);
+    throw new PayloadTooDeepError("payload digest exceeded maximum depth");
   if (Array.isArray(v)) return v.map((e) => sortRecursive(e, depth + 1));
   if (isPlainObject(v))
     return Object.fromEntries(

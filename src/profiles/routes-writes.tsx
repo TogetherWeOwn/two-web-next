@@ -1,6 +1,7 @@
 // PATCH /members/:user and its form-override POST: the profile save. Split out
-// of src/profiles/routes.tsx. Admission (throttle, owner only) runs first, then
-// the body limit, then the save.
+// of src/profiles/routes.tsx. The body limit runs first, then the session
+// gate, then admission (throttle, owner only), then the save — an oversized
+// body 413s with zero throttle spend and no session/store read.
 import { requestBodyLimit } from "../body-limit";
 import { alertRequestError } from "../alerts";
 import { isDatabaseUnavailable } from "../db/errors";
@@ -13,6 +14,7 @@ import {
 } from "../islands/contracts";
 import { ProfilePage } from "./pages";
 import { admitWrite } from "./routes-admission";
+import { memberGate } from "./routes-gate";
 import type { Ctx, ProfileApp, ProfileDeps } from "./routes-shared";
 import type { ProfileStores } from "./routes-stores";
 import { requestRoute, safeRequestId } from "../request-log";
@@ -47,6 +49,9 @@ export function registerWriteRoutes(
   { storeFor, statsFor }: ProfileStores,
 ) {
   const admit = admitWrite(deps);
+  // Same gate the global middleware runs for reads, here explicitly after
+  // the limiter: the global gate skips writes so the cap decides first.
+  const writeGate = memberGate(deps);
 
   const patch = async (c: Ctx, forced?: Record<string, unknown>) => {
     const id = c.req.param("user") ?? "";
@@ -145,9 +150,9 @@ export function registerWriteRoutes(
     return c.redirect(`/members/${id}`, 303);
   };
 
-  app.patch("/members/:user", admit, requestBodyLimit("form"), (c) => patch(c));
+  app.patch("/members/:user", requestBodyLimit("form"), writeGate, admit, (c) => patch(c));
   // Plain HTML forms cannot PATCH: the edit form posts `_method=PATCH`.
-  app.post("/members/:user", admit, requestBodyLimit("form"), async (c) => {
+  app.post("/members/:user", requestBodyLimit("form"), writeGate, admit, async (c) => {
     if (isFormMediaType(c.req.header("content-type"))) {
       const body = await c.req.parseBody({ all: true }).catch(() => null);
       if (body && body._method === "PATCH") {

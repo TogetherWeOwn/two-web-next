@@ -111,8 +111,12 @@ function renderNotes({ version, prevTag, date, commits, sections, repoUrl }) {
   return `${lines.join("\n")}\n`;
 }
 
+// A release range can hold hundreds of commits; their log outgrew Node's 1 MiB
+// default (spawnSync ENOBUFS on the 2026-10-19 v0.4.0..754b10b3 range, 1.6 MB).
+const GIT_MAX_BUFFER = 256 * 1024 * 1024;
+
 function git(...args) {
-  return execFileSync("git", args, { encoding: "utf8" }).trim();
+  return execFileSync("git", args, { encoding: "utf8", maxBuffer: GIT_MAX_BUFFER }).trim();
 }
 
 // Only a 404 proves the release is absent. Any other failure (outage, rate

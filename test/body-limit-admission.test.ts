@@ -33,6 +33,30 @@ const sharedRoutes = [
   ),
 ];
 
+// Moderator event writes and admin event forms refuse oversized bodies
+// before the shared throttle (and before any session read): cap-first, not
+// throttle-first. Every other shared-throttle route keeps the
+// throttle-before-buffering order.
+const EVENT_WRITE_CAP_FIRST = new Set([
+  "POST /events",
+  "PATCH /events/:key",
+  "POST /events/:key/publish",
+  "POST /events/:key/cancel",
+  "POST /events/:key/rsvp-pause",
+  "POST /events/:key/rsvp-reopen",
+  "POST /admin/events",
+  "POST /admin/events/:key",
+]);
+
+// Moderator featured create/delete refuse oversized bodies before the shared
+// throttle (the moderator guard still runs first): cap-first, not
+// throttle-first. The featured update post keeps the throttle-before-buffering
+// order.
+const FEATURED_WRITE_CAP_FIRST = new Set([
+  "POST /admin/featured",
+  "POST /admin/featured/:id/delete",
+]);
+
 function routeInfo(key: string) {
   const [method, pattern] = key.split(" ");
   const kind = rawApp.routes
@@ -127,6 +151,7 @@ function upload(
 describe("shared throttles admit before buffering", () => {
   it.each(sharedRoutes)("%s rejects exhausted buckets without pulling any upload", async (key) => {
     const { method, path, max, budget } = routeInfo(key);
+    const capFirst = EVENT_WRITE_CAP_FIRST.has(key) || FEATURED_WRITE_CAP_FIRST.has(key);
     const { sql, count } = throttleFixture(budget);
     const { env, cookie } = await sessionEnv(sql as unknown as Sql);
     const empty = await app.request(
@@ -147,18 +172,34 @@ describe("shared throttles admit before buffering", () => {
     for (const advertised of [false, true]) {
       const { request, pull } = upload(path, method, cookie, max, advertised);
       const response = await app.request(request, undefined, env);
-      expect(response.status).toBe(429);
-      expect(await response.json()).toMatchObject({ reason: "rate_limited", retry_after: 30 });
-      expect(pull).not.toHaveBeenCalled();
+      if (capFirst) {
+        // Cap-first writes refuse the oversized body before the throttle runs:
+        // 413 even with a spent budget, spending no throttle row.
+        expect(response.status).toBe(413);
+        expect(await response.json()).toEqual(ERROR);
+        if (advertised) expect(pull).not.toHaveBeenCalled();
+        else expect(pull.mock.calls.length).toBeLessThanOrEqual(max / 1024 + 2);
+      } else {
+        expect(response.status).toBe(429);
+        expect(await response.json()).toMatchObject({ reason: "rate_limited", retry_after: 30 });
+        expect(pull).not.toHaveBeenCalled();
+      }
       await request.body?.cancel().catch(() => {});
     }
-    // Count + age-only prune per refused request; no insert, no upload pull.
-    expect(sql).toHaveBeenCalledTimes(6);
+    if (capFirst) {
+      // Empty refusal spends the usual select + age-only prune; the two
+      // oversized refusals spend nothing.
+      expect(sql).toHaveBeenCalledTimes(2);
+    } else {
+      // Count + age-only prune per refused request; no insert, no upload pull.
+      expect(sql).toHaveBeenCalledTimes(6);
+    }
     expect(count()).toBe(budget);
   });
 
   it.each(sharedRoutes)("%s counts advertised and chunked oversized attempts", async (key) => {
     const { method, path, max, budget } = routeInfo(key);
+    const capFirst = EVENT_WRITE_CAP_FIRST.has(key) || FEATURED_WRITE_CAP_FIRST.has(key);
     for (const advertised of [false, true]) {
       const { sql, count } = throttleFixture(budget - 1);
       const { env, cookie } = await sessionEnv(sql as unknown as Sql);
@@ -166,6 +207,25 @@ describe("shared throttles admit before buffering", () => {
       const response = await app.request(first.request, undefined, env);
       expect(response.status).toBe(413);
       expect(await response.json()).toEqual(ERROR);
+      if (capFirst) {
+        // The cap runs before the throttle, so an oversized body spends no
+        // throttle row; the budget still has room, so the follow-up oversized
+        // body is a second 413, not a 429.
+        expect(count()).toBe(budget - 1);
+        expect(sql).not.toHaveBeenCalled();
+        if (advertised) expect(first.pull).not.toHaveBeenCalled();
+        else expect(first.pull.mock.calls.length).toBeLessThanOrEqual(max / 1024 + 2);
+        const second = upload(path, method, cookie, max, false);
+        const retry = await app.request(second.request, undefined, env);
+        expect(retry.status).toBe(413);
+        expect(await retry.json()).toEqual(ERROR);
+        expect(second.pull.mock.calls.length).toBeLessThanOrEqual(max / 1024 + 2);
+        expect(count()).toBe(budget - 1);
+        expect(sql).not.toHaveBeenCalled();
+        await first.request.body?.cancel().catch(() => {});
+        await second.request.body?.cancel().catch(() => {});
+        continue;
+      }
       expect(count()).toBe(budget);
       expect(sql).toHaveBeenCalledTimes(3); // select, insert, prune
       if (advertised) expect(first.pull).not.toHaveBeenCalled();

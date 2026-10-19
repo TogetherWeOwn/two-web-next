@@ -344,8 +344,10 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
 
   admin.post(
     "/events",
-    throttle("admin-write", WRITE_THROTTLE_PER_MINUTE),
+    // Cap before throttle: oversized moderator bodies 413 with zero
+    // admin-write spend and no store read; the guard above still runs first.
     requestBodyLimit("form"),
+    throttle("admin-write", WRITE_THROTTLE_PER_MINUTE),
     async (c) => {
       const db = await dbOr503(c);
       if (!db) return c.text("Admin temporarily unavailable", 503);
@@ -410,8 +412,10 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
 
   admin.post(
     "/events/:key",
-    throttle("admin-write", WRITE_THROTTLE_PER_MINUTE),
+    // Cap before throttle: oversized moderator bodies 413 with zero
+    // admin-write spend and no store read; the guard above still runs first.
     requestBodyLimit("form"),
+    throttle("admin-write", WRITE_THROTTLE_PER_MINUTE),
     async (c) => {
       const db = await dbOr503(c);
       if (!db) return c.text("Admin temporarily unavailable", 503);
@@ -560,8 +564,9 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
 
   admin.post(
     "/featured",
-    throttle("admin-write", WRITE_THROTTLE_PER_MINUTE),
+    // Cap first: refuse an oversized editorial body before spending admin-write throttle.
     requestBodyLimit("featured"),
+    throttle("admin-write", WRITE_THROTTLE_PER_MINUTE),
     async (c) => {
       const db = await dbOr503(c);
       if (!db) return c.text("Admin temporarily unavailable", 503);
@@ -669,8 +674,9 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
 
   admin.post(
     "/featured/:id/delete",
-    throttle("admin-write", WRITE_THROTTLE_PER_MINUTE),
+    // Cap first: refuse an oversized body before spending admin-write throttle.
     requestBodyLimit("action"),
+    throttle("admin-write", WRITE_THROTTLE_PER_MINUTE),
     async (c) => {
       const id = parseRecordId(c.req.param("id"));
       if (id === null) return errorPage(c, 404, "Featured content not found");

@@ -586,10 +586,14 @@ describe("queue ledger (N3)", () => {
       expect(first.acked && second.acked).toBe(true);
       expect(send).toHaveBeenCalledOnce();
       expect(ledger.rows.size).toBe(1);
+      // AB7 producer deadline: the 2000 ms bound releases the lease while the
+      // already-started send keeps its tracked row (row-without-message fails
+      // visible per N3).
+      expect(lock.held.has(uniqueKey("e1"))).toBe(false);
       accepted();
       await vi.advanceTimersByTimeAsync(0);
       expect(ledger.rows.size).toBe(1); // acceptance is ambiguous until its consumer settles it
-      expect(lock.held.has(uniqueKey("e1"))).toBe(true);
+      expect(lock.held.has(uniqueKey("e1"))).toBe(false);
     } finally {
       vi.useRealTimers();
     }

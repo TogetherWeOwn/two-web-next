@@ -1,6 +1,6 @@
 // Profile write admission: the per-member write throttle and the owner-only
-// check. Split out of src/profiles/routes.tsx. Registered ahead of the body
-// limit on PATCH and form-override POST in routes-writes.tsx.
+// check. Split out of src/profiles/routes.tsx. Registered after the body
+// limit and session gate on PATCH and form-override POST in routes-writes.tsx.
 import type { Next } from "hono";
 import postgres from "postgres";
 import { databaseOptions, databaseUrl } from "../db/connection";

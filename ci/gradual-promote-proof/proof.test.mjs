@@ -62,13 +62,13 @@ async function serveFixture(t, env) {
   return { base: `http://127.0.0.1:${server.address().port}`, paths };
 }
 
-test("healthy fixture passes the real smoke checker across all 20 routes", async (t) => {
+test("healthy fixture passes the real smoke checker across all 24 routes", async (t) => {
   const { base, paths } = await serveFixture(t, fixtureEnv("ok"));
   const logs = [];
   const ok = await smoke(base, { log: (line) => logs.push(line), allowIndexable: false });
   assert.equal(ok, true, logs.join("\n"));
-  assert.equal(paths.length, 20);
-  assert.match(logs.at(-1), /^smoke: 20 routes, 0 failed assertions$/);
+  assert.equal(paths.length, 24);
+  assert.match(logs.at(-1), /^smoke: 24 routes, 0 failed assertions$/);
 });
 
 test("healthy fixture passes the real smoke checker with a matching version override", async (t) => {

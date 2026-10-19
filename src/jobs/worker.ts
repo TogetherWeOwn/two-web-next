@@ -6,7 +6,13 @@ import { databaseOptions, databaseUrl } from "../db/connection";
 import { setReleaseMetadata } from "../release-tag";
 import { qaEnabled } from "../qa";
 import { PRUNE_CRON, RECONCILE_CRON } from "./constants";
-import { PruneBatchCapError, pruneModelTables, reconcileEvents, runScheduled } from "./cron";
+import {
+  PruneBatchCapError,
+  ReconcilePartialFailureError,
+  pruneModelTables,
+  reconcileEvents,
+  runScheduled,
+} from "./cron";
 import { consume } from "./consumer";
 import { trackingQueue } from "./ledger";
 import { pgPruneStores, pgQueueLedger, pgSingleFlight, pgUniqueLock } from "./postgres";
@@ -140,14 +146,34 @@ export async function handleQueue(
       ledger,
       needsSync: pgEventStore(cleanupSql).needsSync,
       dispatchPending: (eventKey, signal) => {
+        // Late settlement stays inside Workers lifetime: dispatch rejects at
+        // the producer deadline while the underlying acquire/send (and its
+        // exact-jobId ledger compensation on fresh successor pools) may still
+        // be in flight. The hook fires before dispatch settles, so awaiting
+        // the tail here covers it; ACK timing is unchanged (the consumer still
+        // races the returned work at its own 2s bound).
+        const late: Promise<unknown>[] = [];
         const work = dispatchSyncEvent(
           trackingQueue(env.SYNC_EVENT_QUEUE, successorLedger, undefined, signal),
           successorLock,
           eventKey,
           undefined,
           signal,
+          undefined,
+          (tail) => {
+            late.push(tail);
+          },
         );
-        ctx?.waitUntil(successorLifetime(work));
+        ctx?.waitUntil(
+          successorLifetime(
+            work
+              .finally(() => Promise.allSettled(late))
+              .then(
+                () => {},
+                () => {},
+              ),
+          ),
+        );
         return work;
       },
       probeEnabled: qaEnabled(env.APP_URL, env.QA_AUTH_TOKEN),
@@ -201,20 +227,34 @@ export async function handleScheduled(
     // only its real error from the catch below; the next pass re-pages the
     // cap if the backlog is still over the ceiling.
     let pruneCapped = false;
+    let pruneFailures: { error: unknown }[] = [];
+    // Resolved partial failures: the pass committed with isolated keys failed
+    // while healthy keys still dispatched. Reported here (not inside the
+    // flight) so the page fires after the flight commits, like the prune-cap
+    // precedent: a rolled-back pass pages only its real error from the catch
+    // below, and a direct reconcileEvents call stays page-free.
+    let reconcilePartialFailures = 0;
     await runScheduled(controller.cron, pgSingleFlight(sqlClient), {
       // The reserved flight holds only the scheduler advisory lock during
       // dispatch. Event writes have a shorter transaction on the other pool,
       // so parent row locks are released before unrelated external sends.
-      reconcile: () =>
-        reconcileEvents({
+      reconcile: async () => {
+        const result = await reconcileEvents({
           events: pgEventStore(dispatchClient),
           writeTransaction: (work) => dispatchClient.begin(async (tx) => work(pgEventStore(tx))),
           queue: trackingQueue(env.SYNC_EVENT_QUEUE, pgQueueLedger(dispatchClient)),
           lock: pgUniqueLock(dispatchClient),
-        }),
+        });
+        const failed = (result as { failed?: unknown }).failed;
+        if (typeof failed === "number" && failed > 0) reconcilePartialFailures = failed;
+        return result;
+      },
       prune: async (db) => {
-        // Report the cap without paging inside the flight; the page fires
-        // below, after the transaction commits.
+        // Report the cap and any table failures without paging inside the
+        // flight; the single page fires below, after the transaction commits.
+        // Sequential drains settle every table (including the autocommit lock
+        // sweep on the dispatch pool) before the flight commits, so pool
+        // cleanup in finally never closes a client under an in-flight sweep.
         await pruneModelTables(
           {
             ...pgPruneStores(db),
@@ -234,13 +274,38 @@ export async function handleScheduled(
             reportCap: (capped) => {
               pruneCapped = capped;
             },
+            reportFailures: (failures) => {
+              pruneFailures = [...failures];
+            },
           },
         );
       },
     });
-    if (pruneCapped) {
+    if (pruneFailures.length > 0) {
+      // Partial failure with healthy tables committed: resolve the handler
+      // (like the post-commit cap precedent) and page exactly once with the
+      // canonical-first failure's class only. The failure page beats the cap
+      // page when both land in one pass; a real error is never muted by it.
+      try {
+        alertScheduledFailing("model:prune", pruneFailures[0]!.error);
+      } catch {
+        // A throwing alert sink must not fail a committed pass.
+      }
+    } else if (pruneCapped) {
       try {
         alertScheduledFailing("model:prune", new PruneBatchCapError());
+      } catch {
+        // A throwing alert sink must not fail a committed pass.
+      }
+    }
+    if (reconcilePartialFailures > 0) {
+      // One class-only page per resolved partial pass; the pass still
+      // resolves (isolated failures are never rethrown). Healthy, skipped
+      // and lock-skipped passes keep failed at 0 and stay silent, and the
+      // all-failed throw path never reaches here so it keeps exactly its one
+      // real-class page from the catch below.
+      try {
+        alertScheduledFailing("events:reconcile", new ReconcilePartialFailureError());
       } catch {
         // A throwing alert sink must not fail a committed pass.
       }

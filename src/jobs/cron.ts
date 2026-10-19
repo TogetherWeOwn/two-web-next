@@ -14,7 +14,14 @@ import {
   SYNC_EVENT,
 } from "./constants";
 import { dispatchSyncEvent } from "./sync-event";
-import type { EventStore, PruneStores, StaleEventKeysPage, TxClient, UniqueLock } from "./types";
+import type {
+  EventStore,
+  PruneIsolation,
+  PruneStores,
+  StaleEventKeysPage,
+  TxClient,
+  UniqueLock,
+} from "./types";
 
 /**
  * Advisory-lock runner: re-expresses onOneServer + withoutOverlapping.
@@ -174,7 +181,12 @@ const cutoff = (now: Date, days: number): Date => new Date(now.getTime() - days 
 async function drainPruneTable(
   prune: (cutoff: Date) => Promise<number>,
   cutoffDate: Date,
+  isolate?: PruneIsolation["isolate"],
 ): Promise<{ total: number; capped: boolean }> {
+  // One boundary for the whole table, not one subtransaction per batch. Use
+  // the scope's client for every query so a late failure rolls back the early
+  // batches without poisoning the flight's postgres.js error tracking.
+  if (isolate) return isolate((scopedPrune) => drainPruneTable(scopedPrune, cutoffDate));
   let total = 0;
   let last = 0;
   for (let i = 0; i < PRUNE_DELETE_MAX_BATCHES; i++) {
@@ -207,51 +219,121 @@ export class PruneBatchCapError extends Error {
   }
 }
 
+/**
+ * Resolved-partial-failure signal: a scheduled reconcile pass committed with
+ * one or more isolated dispatch failures while healthy keys still dispatched.
+ * Only the class reaches the page line (never a key, message, SQL or count):
+ * the wrapper emits it after the flight commits, so a later flight failure
+ * cannot be muted by this earlier page. A direct reconcileEvents call never
+ * emits it; the scheduled wrapper owns the page.
+ */
+export class ReconcilePartialFailureError extends Error {
+  constructor() {
+    super("reconcile pass completed with isolated dispatch failures");
+    this.name = "ReconcilePartialFailureError";
+  }
+}
+
+/**
+ * One table drain that failed while the rest of the pass settled. `table` is
+ * a PruneCounts key in canonical table order; `error` preserves the original
+ * rejection identity for whole-flight reporting when no reporter is supplied.
+ */
+export type PruneTableFailure = { table: keyof PruneCounts; error: unknown };
+
 export async function pruneModelTables(
   stores: PruneStores,
   now: Date = new Date(),
-  opts?: { reportCap?: (capped: boolean) => void },
+  opts?: {
+    reportCap?: (capped: boolean) => void;
+    reportFailures?: (failures: readonly PruneTableFailure[]) => void;
+  },
 ): Promise<PruneCounts> {
   // Stores built before the lock sweep carry no sweeper: drain nothing for
   // them instead of throwing, so the rest of the pass keeps its behavior.
   const locks = stores.jobUniqueLocks ?? { sweepExpired: async (_d: Date): Promise<number> => 0 };
-  const [
-    agentEventAudits,
-    accessLog,
-    joinAttempts,
-    idempotencyKeys,
-    searchLog,
-    boardViews,
-    sessions,
-    jobUniqueLocks,
-  ] = await Promise.all([
-    drainPruneTable(
+  // Sequential per-table drains in canonical order: every started drain
+  // settles before the pass reports (never fail-fast), and one table's SQL
+  // error never aborts its siblings. Concurrent drains on a single flight
+  // transaction interleave savepoints and one rollback destroys its peers,
+  // so tables drain one at a time inside the flight while the lock sweep
+  // keeps its autocommit dispatch-pool boundary (see worker.ts). A failed
+  // table contributes 0: partial batches from a failed drain are rolled back
+  // (or discarded) and must never surface as successful-looking counts.
+  const failures: PruneTableFailure[] = [];
+  let agentEventAudits = { total: 0, capped: false };
+  try {
+    agentEventAudits = await drainPruneTable(
       (c) => stores.agentEventAudits.pruneOlderThan(c),
       cutoff(now, AGENT_EVENT_AUDIT_RETENTION_DAYS),
-    ),
-    drainPruneTable(
+      stores.agentEventAudits.isolate,
+    );
+  } catch (error) {
+    failures.push({ table: "agentEventAudits", error });
+  }
+  let accessLog = { total: 0, capped: false };
+  try {
+    accessLog = await drainPruneTable(
       (c) => stores.accessLog.pruneOlderThan(c),
       cutoff(now, MEMBER_ACCESS_LOG_RETENTION_DAYS),
-    ),
-    drainPruneTable(
+      stores.accessLog.isolate,
+    );
+  } catch (error) {
+    failures.push({ table: "accessLog", error });
+  }
+  let joinAttempts = { total: 0, capped: false };
+  try {
+    joinAttempts = await drainPruneTable(
       (c) => stores.joinAttempts.pruneOlderThan(c),
       cutoff(now, JOIN_ATTEMPT_RETENTION_DAYS),
-    ),
-    drainPruneTable(
+      stores.joinAttempts.isolate,
+    );
+  } catch (error) {
+    failures.push({ table: "joinAttempts", error });
+  }
+  let idempotencyKeys = { total: 0, capped: false };
+  try {
+    idempotencyKeys = await drainPruneTable(
       (c) => stores.idempotencyKeys.pruneOlderThan(c),
       cutoff(now, IDEMPOTENCY_KEY_RETENTION_DAYS),
-    ),
-    drainPruneTable(
+      stores.idempotencyKeys.isolate,
+    );
+  } catch (error) {
+    failures.push({ table: "idempotencyKeys", error });
+  }
+  let searchLog = { total: 0, capped: false };
+  try {
+    searchLog = await drainPruneTable(
       (c) => stores.searchLog.pruneOlderThan(c),
       cutoff(now, EVENT_SEARCH_LOG_RETENTION_DAYS),
-    ),
-    drainPruneTable(
+      stores.searchLog.isolate,
+    );
+  } catch (error) {
+    failures.push({ table: "searchLog", error });
+  }
+  let boardViews = { total: 0, capped: false };
+  try {
+    boardViews = await drainPruneTable(
       (c) => stores.boardViews.pruneOlderThan(c),
       cutoff(now, BOARD_VIEW_LOG_RETENTION_DAYS),
-    ),
-    drainPruneTable((d) => stores.sessions.sweepExpired(d), now),
-    drainPruneTable((d) => locks.sweepExpired(d), now),
-  ]);
+      stores.boardViews.isolate,
+    );
+  } catch (error) {
+    failures.push({ table: "boardViews", error });
+  }
+  let sessions = { total: 0, capped: false };
+  try {
+    const isolate = stores.sessions.isolate;
+    sessions = await drainPruneTable((d) => stores.sessions.sweepExpired(d), now, isolate);
+  } catch (error) {
+    failures.push({ table: "sessions", error });
+  }
+  let jobUniqueLocks = { total: 0, capped: false };
+  try {
+    jobUniqueLocks = await drainPruneTable((d) => locks.sweepExpired(d), now, locks.isolate);
+  } catch (error) {
+    failures.push({ table: "jobUniqueLocks", error });
+  }
   const counts = {
     agentEventAudits: agentEventAudits.total,
     accessLog: accessLog.total,
@@ -293,6 +375,19 @@ export async function pruneModelTables(
   // real failure page (both share the Tail mute key
   // scheduled.failing@model:prune).
   opts?.reportCap?.(capped);
+  if (failures.length > 0) {
+    // Partial failure: every drain already settled above, healthy counts and
+    // the cap signal stay exact, and a failed table reports 0 (its partial
+    // batches are rolled back or discarded, never successful-looking). The
+    // pass itself never pages and never logs success: the scheduled caller
+    // pages once post-commit with the failure class, which beats the cap
+    // page when both land in one pass.
+    opts?.reportFailures?.(failures);
+    if (opts?.reportFailures !== undefined) return counts;
+    // Existing direct callers without the reporter keep whole-flight failure
+    // reporting: settle-all, then reject with the canonical-first error.
+    throw failures[0]!.error;
+  }
   const deferred = opts?.reportCap !== undefined;
   if (capped && !deferred) {
     // Page once per capped pass instead of warning: sustained over-cap
