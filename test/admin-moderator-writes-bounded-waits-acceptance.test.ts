@@ -823,9 +823,9 @@ describe.skipIf(!raw)("moderator writes bounded waits (test database)", () => {
       CREATE TRIGGER bounded_write_sleep BEFORE UPDATE ON events
       FOR EACH ROW EXECUTE FUNCTION bounded_write_sleep()`;
     try {
-      await expect(updateEvent(db, MOD, seeded.eventKey, eventInput())).rejects.toMatchObject({
-        code: expect.stringMatching(/^(57014)$/),
-      });
+      await expect(updateEvent(db, MOD, seeded.eventKey, eventInput())).rejects.toSatisfy(
+        (error: unknown) => codesInChain(error).includes("57014"),
+      );
       const [after] = await db.select().from(events).where(eq(events.eventKey, seeded.eventKey));
       expect(after).toEqual(seeded);
       expect(await audits()).toHaveLength(0);
