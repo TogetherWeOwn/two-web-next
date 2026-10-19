@@ -8,6 +8,7 @@ import {
   digest,
   hasIngressControlBytes,
   isPlainObject,
+  PAYLOAD_TOO_DEEP_MESSAGE,
   PayloadTooDeepError,
   storedEventKey,
   ulid,
@@ -116,7 +117,11 @@ async function processAgentEvent(
       );
       return {
         status: 422,
-        body: { reason: "payload_too_deep", message: err.message, request_id: requestId },
+        body: {
+          reason: "payload_too_deep",
+          message: PAYLOAD_TOO_DEEP_MESSAGE,
+          request_id: requestId,
+        },
       };
     }
     throw err;

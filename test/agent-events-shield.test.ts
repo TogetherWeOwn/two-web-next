@@ -271,6 +271,9 @@ describe.skipIf(!process.env.DATABASE_URL)("agent-events outer shield (agent-tes
     const r = await call(deepBody(), null, 60, "127.0.0.32");
     expect(r.status).toBe(422);
     expect(r.body.reason).toBe("payload_too_deep");
+    // Pinned API contract: the ingress answers a static message, never the
+    // caught error's text, so internal error-text edits cannot move the API.
+    expect(r.body.message).toBe("The request body nests deeper than 100 levels.");
   });
 
   it("prunes stale shield counters on denied-only traffic", async () => {
