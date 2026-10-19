@@ -129,10 +129,13 @@ describe("evidence-only source/cache verifier admission", () => {
       mocks.options.push(options);
       const tag = (strings: TemplateStringsArray, ...values: unknown[]) =>
         fakeTag(strings, ...values);
+      // A postgres.js transaction tag can query but cannot open another transaction.
+      const tx = (strings: TemplateStringsArray, ...values: unknown[]) =>
+        fakeTag(strings, ...values);
       return Object.assign(tag, {
         begin: (...args: unknown[]) => {
           mocks.begins.push(args);
-          return (args[args.length - 1] as (tx: unknown) => unknown)(tag);
+          return (args[args.length - 1] as (tx: unknown) => unknown)(tx);
         },
         end: mocks.end,
       });
