@@ -24,21 +24,31 @@ export function assertBotConfigured(o: Pick<BotClientOptions, "url" | "secret" |
  * The exact URL a signed mutation is POSTed to, admitted only when it is bare
  * https:, as the read client requires (./event-read.ts). http: would put the
  * signed body on the wire in cleartext, and URL credentials would ride into
- * fetch errors. The check parses the very string the fetch receives; the path
- * derivation is unchanged. A refusal is the rejecting-fetch message with no
- * cause: a URL parser error carries its raw input.
+ * fetch errors. Validate both the configured URL (so appending cannot create
+ * a host) and the exact fetched string (so even an empty query/fragment cannot
+ * swallow the actions path). Path derivation is unchanged. A refusal is the
+ * rejecting-fetch message with no cause: a URL parser error carries its input.
  */
 function endpointOf(url: string): string {
   const endpoint = `${url.replace(/\/+$/, "")}${INTERNAL_ACTIONS_PATH}`;
-  let parsed: URL;
-  try {
-    parsed = new URL(endpoint);
-  } catch (error) {
-    void error;
-    throw new BotTransportError("bot unreachable");
+  for (const candidate of [url, endpoint]) {
+    let parsed: URL;
+    try {
+      parsed = new URL(candidate);
+    } catch (error) {
+      void error;
+      throw new BotTransportError("bot unreachable");
+    }
+    if (
+      parsed.protocol !== "https:" ||
+      !parsed.hostname ||
+      parsed.username ||
+      parsed.password ||
+      parsed.search ||
+      parsed.hash
+    )
+      throw new BotTransportError("bot unreachable");
   }
-  if (parsed.protocol !== "https:" || parsed.username || parsed.password)
-    throw new BotTransportError("bot unreachable");
   return endpoint;
 }
 
