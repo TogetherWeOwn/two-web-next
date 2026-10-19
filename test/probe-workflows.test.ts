@@ -689,6 +689,10 @@ describe("native automatic production promotion", () => {
     expect(preflight).toContain("github.event_name == 'schedule'");
     expect(preflight).toContain("github.event.workflow_run.conclusion == 'success'");
     expect(preflight).toContain("github.event.workflow_run.head_branch == 'main'");
+    // Same-repo guard: a fork's staging green must never promote this repo.
+    expect(preflight).toContain(
+      "github.event.workflow_run.head_repository.full_name == github.repository",
+    );
   });
 
   it("exits cleanly with no deploy when there is nothing soaked and green to promote", () => {
@@ -733,6 +737,20 @@ describe("native automatic production promotion", () => {
     expect(production).toContain("db-migrate.yml");
     expect(production).toContain("workflow_call");
     expect(production).toContain("least-privilege migrator");
+    // The check runs from the tip checkout, before the target re-checkout:
+    // an older target's script could lack the flag and fall through to the
+    // full gate without its enable vars, blocking rescue redeploys.
+    const checkAt = production.indexOf(
+      "run: node ci/production-deploy-gate.mjs --check-migrations",
+    );
+    const targetCheckoutAt = production.indexOf("ref: ${{ steps.target.outputs.sha }}");
+    expect(checkAt).toBeGreaterThan(-1);
+    expect(targetCheckoutAt).toBeGreaterThan(-1);
+    expect(checkAt).toBeLessThan(targetCheckoutAt);
+    // Audited manual continuation: after db-migrate applied the entries out
+    // of band, a dispatch input releases the stop on manual runs only.
+    expect(production).toContain("migrations_applied:");
+    expect(production).toContain("MIGRATIONS_APPLIED: ${{ inputs.migrations_applied }}");
   });
 
   it("passes the hold variable to both production gate steps", () => {

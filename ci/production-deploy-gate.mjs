@@ -437,16 +437,39 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
         );
       }
     } else if (process.argv[2] === "--check-migrations") {
-      // Pending-migration stop until the least-privilege migrator lands:
-      // when the target journal has entries production lacks, refuse with a
-      // clear error instead of deploying. Unknown live (unreadable /up)
-      // cannot prove pending, so it warns and passes.
+      // Pending-migration stop until the least-privilege migrator lands.
+      // This step runs from the tip checkout (before the target re-checkout
+      // in deploy-production.yml), so an older target can never shadow it
+      // with a script that lacks this flag. When the target journal has
+      // entries production lacks, automatic promotion stops here, and manual
+      // dispatch stops unless the operator confirms the migrations were
+      // applied out of band (db-migrate.yml, target production) with
+      // migrations_applied=true. The confirmation travels in the workflow
+      // inputs and is repeated in the log line below, so the continuation
+      // stays audited. Unknown live (unreadable /up) cannot prove pending:
+      // the read is retried, then automatic runs halt for a later retry
+      // while manual dispatch keeps its override and proceeds with a warning.
       const deploySha = (process.env.DEPLOY_SHA ?? "").replace(/\s+/g, "").toLowerCase();
       if (!/^[0-9a-f]{40}$/.test(deploySha)) {
         throw new Error("DEPLOY_SHA must be a full 40-hex commit (resolved by the preflight job)");
       }
-      const liveSha = (process.env.LIVE_SHA ?? "").replace(/\s+/g, "").toLowerCase() || null;
+      const eventName = process.env.GITHUB_EVENT_NAME ?? "";
+      const automatic = eventName === "workflow_run" || eventName === "schedule";
+      let liveSha = (process.env.LIVE_SHA ?? "").replace(/\s+/g, "").toLowerCase() || null;
       if (!liveSha) {
+        const origin =
+          (process.env.PRODUCTION_ORIGIN ?? PRODUCTION_ORIGIN).trim() || PRODUCTION_ORIGIN;
+        for (let attempt = 0; attempt < 3 && !liveSha; attempt += 1) {
+          if (attempt > 0) await new Promise((resolve) => setTimeout(resolve, 2000));
+          liveSha = await readLiveProductionCommit({ origin });
+        }
+      }
+      if (!liveSha) {
+        if (automatic) {
+          throw new Error(
+            "Live production commit unknown after 3 /up reads; halting automatic promotion for a later retry",
+          );
+        }
         console.log("Live production commit unknown; migration comparison skipped");
       } else {
         const pending = await pendingProductionMigrations({
@@ -456,11 +479,22 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
           token: process.env.GITHUB_TOKEN,
         });
         if (pending.length) {
-          throw new Error(
-            `Target has ${pending.length} production migration(s) production lacks (${pending.join(", ")}); run db-migrate.yml (target production) first — automatic production migration is blocked until the least-privilege migrator lands, so this promotion stops here`,
-          );
+          if (!automatic && (process.env.MIGRATIONS_APPLIED ?? "") === "true") {
+            console.log(
+              `Manual continuation with ${pending.length} pending production migration(s) (${pending.join(", ")}): db-migrate.yml (target production) must have applied them already — proceeding on operator confirmation (migrations_applied=true) for ${deploySha} vs live ${liveSha}`,
+            );
+          } else if (automatic) {
+            throw new Error(
+              `Target has ${pending.length} production migration(s) production lacks (${pending.join(", ")}); automatic production migration is blocked until the least-privilege migrator lands, so this promotion stops here`,
+            );
+          } else {
+            throw new Error(
+              `Target has ${pending.length} production migration(s) production lacks (${pending.join(", ")}); run db-migrate.yml (target production) first, then re-dispatch this workflow with sha ${deploySha} and migrations_applied=true — automatic production migration is blocked until the least-privilege migrator lands`,
+            );
+          }
+        } else {
+          console.log(`No pending production migrations (${deploySha} vs live ${liveSha})`);
         }
-        console.log(`No pending production migrations (${deploySha} vs live ${liveSha})`);
       }
     } else {
       const evidence = await checkProductionGate(process.env);

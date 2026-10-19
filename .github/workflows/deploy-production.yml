@@ -11,6 +11,11 @@ on:
         required: false
         type: string
         default: ""
+      migrations_applied:
+        description: "Set to true only after db-migrate.yml (target production) applied the target's pending migrations out of band. Audited manual continuation for the migration stop below; automatic runs ignore it and stay blocked until the least-privilege migrator lands"
+        required: false
+        type: boolean
+        default: false
   workflow_run:
     workflows: [e2e-staging]
     types: [completed]
@@ -74,6 +79,22 @@ jobs:
         run: node ci/production-deploy-gate.mjs --already-live
         env:
           DEPLOY_SHA: ${{ steps.target.outputs.sha }}
+      - name: Refuse pending production migrations before any deploy
+        # Until the least-privilege migrator lands, a target whose journal has
+        # entries production lacks stops here with a clear error instead of
+        # deploying. Afterwards this step becomes a db-migrate.yml
+        # (workflow_call, target production) call first. This check runs from
+        # the tip checkout on purpose, like --already-live above: after the
+        # re-checkout below, an older target's script could lack this flag and
+        # fall through to the full gate without its enable vars, blocking
+        # rescue redeploys of prior good commits.
+        if: steps.target.outputs.sha != '' && steps.live.outputs.already_live != 'true'
+        run: node ci/production-deploy-gate.mjs --check-migrations
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          DEPLOY_SHA: ${{ steps.target.outputs.sha }}
+          LIVE_SHA: ${{ steps.live.outputs.live_sha }}
+          MIGRATIONS_APPLIED: ${{ inputs.migrations_applied }}
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         if: steps.target.outputs.sha != '' && steps.live.outputs.already_live != 'true'
         with:
@@ -96,17 +117,6 @@ jobs:
           PRODUCTION_HOLD_UNTIL: ${{ vars.PRODUCTION_HOLD_UNTIL }}
           GITHUB_TOKEN: ${{ github.token }}
           DEPLOY_SHA: ${{ steps.target.outputs.sha }}
-      - name: Refuse pending production migrations before any deploy
-        # Until the least-privilege migrator lands, a target whose journal has
-        # entries production lacks stops here with a clear error instead of
-        # deploying. Afterwards this step becomes a db-migrate.yml
-        # (workflow_call, target production) call first.
-        if: steps.target.outputs.sha != '' && steps.live.outputs.already_live != 'true'
-        run: node ci/production-deploy-gate.mjs --check-migrations
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
-          DEPLOY_SHA: ${{ steps.target.outputs.sha }}
-          LIVE_SHA: ${{ steps.live.outputs.live_sha }}
 
   deploy-production:
     name: deploy-production

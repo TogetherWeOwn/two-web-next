@@ -1,5 +1,8 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { mkdtempSync, readFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import test from "node:test";
 import { stagingQualityJob, stagingQualitySteps } from "./production-deploy-gate.mjs";
 import { resolvePromotionSha } from "./resolve-promotion-sha.mjs";
@@ -595,4 +598,116 @@ test("a newer red run for a different commit blocks the older green", async () =
 
 test("a newer cancelled run does not block the older green", async () => {
   assert.equal(await resolve([run(3, A, "cancelled"), run(2, B)], { 2: "success" }), B);
+});
+
+// Spawned resolver CLI tests: per-event behavior pins, not source greps.
+// Inverting the empty-input clean skip (automatic exit 0 with an empty sha)
+// or breaking explicit-sha dispatch must fail here.
+function spawnResolverCli(env, stub) {
+  const dir = mkdtempSync(join(tmpdir(), "resolver-cli-"));
+  const output = join(dir, "output");
+  const result = spawnSync(
+    process.execPath,
+    ["--import", "./ci/test-fetch-stub.mjs", "ci/resolve-promotion-sha.mjs"],
+    {
+      env: {
+        ...process.env,
+        GITHUB_OUTPUT: output,
+        FETCH_STUB_JSON: JSON.stringify(stub),
+        ...env,
+      },
+      encoding: "utf8",
+    },
+  );
+  let written = "";
+  try {
+    written = readFileSync(output, "utf8");
+  } catch {
+    written = "";
+  }
+  return { ...result, written };
+}
+
+function cliRun(id, deployed, at) {
+  return {
+    id,
+    head_sha: TIP,
+    display_title: `e2e-staging deploy ${deployed}`,
+    status: "completed",
+    conclusion: "success",
+    updated_at: at,
+  };
+}
+
+function cliJobs(runId) {
+  return {
+    match: `/actions/runs/${runId}/jobs`,
+    body: {
+      jobs: [
+        { name: "staging-journeys", conclusion: "success" },
+        {
+          name: stagingQualityJob,
+          conclusion: "success",
+          steps: stagingQualitySteps.map((name) => ({ name, conclusion: "success" })),
+        },
+      ],
+    },
+  };
+}
+
+const cliBase = { GITHUB_REPOSITORY: "o/r", GITHUB_TOKEN: "t", INPUT_SHA: "" };
+
+test("resolver CLI promotes a soaked green on automatic triggers", () => {
+  const oldAt = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+  const result = spawnResolverCli({ ...cliBase, GITHUB_EVENT_NAME: "schedule" }, [
+    {
+      match: "/actions/workflows/e2e-staging.yml/runs",
+      body: { workflow_runs: [cliRun(7, A, oldAt)] },
+    },
+    cliJobs(7),
+  ]);
+  assert.equal(result.status, 0);
+  assert.equal(result.written, `sha=${A}\n`);
+  assert.match(result.stdout, /Promoting/);
+});
+
+test("resolver CLI skips cleanly on automatic triggers with nothing soaked and green", () => {
+  // A fresh green is not promotable yet and there is no older candidate: the
+  // run stays green with an empty sha instead of going red.
+  const freshAt = new Date(Date.now() - 5 * 60 * 1000).toISOString();
+  for (const event of ["workflow_run", "schedule"]) {
+    const result = spawnResolverCli({ ...cliBase, GITHUB_EVENT_NAME: event }, [
+      {
+        match: "/actions/workflows/e2e-staging.yml/runs",
+        body: { workflow_runs: [cliRun(7, A, freshAt)] },
+      },
+      cliJobs(7),
+    ]);
+    assert.equal(result.status, 0, event);
+    assert.equal(result.written, "sha=\n", event);
+    assert.match(result.stdout, /skipping/, event);
+  }
+});
+
+test("resolver CLI refuses a manual dispatch with nothing to promote", () => {
+  const freshAt = new Date(Date.now() - 5 * 60 * 1000).toISOString();
+  const result = spawnResolverCli({ ...cliBase, GITHUB_EVENT_NAME: "workflow_dispatch" }, [
+    {
+      match: "/actions/workflows/e2e-staging.yml/runs",
+      body: { workflow_runs: [cliRun(7, A, freshAt)] },
+    },
+    cliJobs(7),
+  ]);
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /No commit to promote/);
+});
+
+test("resolver CLI deploys an explicit input sha without any staging lookup", () => {
+  const result = spawnResolverCli(
+    { ...cliBase, GITHUB_EVENT_NAME: "workflow_dispatch", INPUT_SHA: B },
+    [],
+  );
+  assert.equal(result.status, 0);
+  assert.equal(result.written, `sha=${B}\n`);
+  assert.match(result.stdout, /requested commit/);
 });
