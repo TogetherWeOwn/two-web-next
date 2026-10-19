@@ -52,6 +52,30 @@ const USER_TOKEN = "user-token-probe-must-never-surface";
 const MAX_ANALYTICS_WAIT_MS = 5_000;
 const VALID_REQUEST_ID = "0123456789abcdef";
 
+// Real event-loop yields captured before any fake timers: crypto.subtle,
+// Response body streams and other wall-clock work complete on the real
+// threadpool/event loop, not on the fake clock. Interleaving a real yield
+// per fake advance gives that work wall-clock time without consuming fake
+// time (so the <=5 s caller bound is unchanged).
+const realSetImmediateImpl: (cb: () => void) => unknown =
+  globalThis.setImmediate?.bind(globalThis) ??
+  (globalThis.setTimeout.bind(globalThis) as unknown as (cb: () => void) => unknown);
+const realYield = () =>
+  new Promise<void>((resolve) => {
+    realSetImmediateImpl(() => resolve());
+  });
+// Real wall-clock sleep captured before fake timers. One short sleep per
+// fake-time step lets threadpool/stream work finish without consuming fake
+// time, so the <=5 s caller bound is unchanged while slow wall-clock work
+// no longer starves inside the fake budget.
+const realSetTimeoutImpl: (cb: () => void, ms: number) => unknown = globalThis.setTimeout.bind(
+  globalThis,
+) as unknown as (cb: () => void, ms: number) => unknown;
+const realSleep = (ms: number) =>
+  new Promise<void>((resolve) => {
+    realSetTimeoutImpl(() => resolve(), ms);
+  });
+
 const env: Env = {
   APP_URL: "https://next.example.test",
   DISCORD_CLIENT_ID: "client-id",
@@ -328,9 +352,13 @@ function expectStatementBounded(fake: Fake) {
 // Drive a callback (or a direct recordAttempt) whose analytics INSERT is
 // deferred: flush microtasks until the INSERT is initiated, prove the
 // caller is genuinely waiting, then advance the fake clock in 100ms steps
-// up to the ceiling. On failure the deferred INSERT is settled landed and
-// the promise drained before asserting, so a red run leaves no orphaned
-// in-flight request on the next test's clock.
+// up to the ceiling. Each fake advance is paired with real event-loop yields
+// plus a short real sleep so wall-clock work (crypto.subtle digests/HMAC,
+// Response body streams, session issuance) completes without consuming fake
+// time; the caller bound stays an independent <=5 s of fake time. On failure
+// the deferred INSERT is settled landed and the promise drained before
+// asserting, so a red run leaves no orphaned in-flight request on the next
+// test's clock.
 async function driveBounded<T>(pendingInput: Promise<T> | T, fake: Fake): Promise<T> {
   const pending = Promise.resolve(pendingInput);
   let settled = false;
@@ -342,20 +370,41 @@ async function driveBounded<T>(pendingInput: Promise<T> | T, fake: Fake): Promis
       settled = true;
     },
   );
-  for (let round = 0; round < 200 && fake.attemptInsertTries === 0 && !settled; round++)
+  for (let round = 0; round < 1000 && fake.attemptInsertTries === 0 && !settled; round++) {
     await vi.advanceTimersByTimeAsync(0);
+    await realYield();
+  }
   expect(fake.attemptInsertTries).toBe(1);
   expect(settled, "caller must actually wait for the analytics write, not drop it").toBe(false);
 
   let elapsed = 0;
   while (!settled && elapsed < MAX_ANALYTICS_WAIT_MS) {
     await vi.advanceTimersByTimeAsync(100);
+    await realYield();
+    await vi.advanceTimersByTimeAsync(0);
+    await realYield();
+    // Wall-clock grace without fake-time cost: the success path signs the
+    // member in after the analytics deadline (moderator fetch, session
+    // HMAC, roster write), all on the real threadpool/streams. A short real
+    // sleep lets that work land inside the same fake-time step.
+    await realSleep(5);
     elapsed += 100;
+  }
+  // Final drain without consuming fake time: post-deadline crypto/session
+  // work may have finished on the wall clock during the last advance but its
+  // .then has not run yet. This does not extend the fake-time bound.
+  for (let round = 0; round < 50 && !settled; round++) {
+    await vi.advanceTimersByTimeAsync(0);
+    await realYield();
+    await realSleep(2);
   }
   const settledWithinBound = settled;
   if (!settledWithinBound) {
     fake.resolveAttemptInsert();
-    for (let round = 0; round < 200 && !settled; round++) await vi.advanceTimersByTimeAsync(0);
+    for (let round = 0; round < 200 && !settled; round++) {
+      await vi.advanceTimersByTimeAsync(0);
+      await realYield();
+    }
   }
   expect(
     settledWithinBound,
@@ -632,12 +681,15 @@ describe("recordAttempt with a never-settling INSERT (direct)", () => {
     }).then(() => {
       settled = true;
     });
-    for (let round = 0; round < 200 && fake.attemptInsertTries === 0; round++)
+    for (let round = 0; round < 1000 && fake.attemptInsertTries === 0; round++) {
       await vi.advanceTimersByTimeAsync(0);
+      await realYield();
+    }
     expect(fake.attemptInsertTries).toBe(1);
     expect(settled).toBe(false);
     fake.resolveAttemptInsert();
     await vi.advanceTimersByTimeAsync(0);
+    await realYield();
     await pending;
     expect(settled).toBe(true);
     expect(fake.attempts).toEqual([
