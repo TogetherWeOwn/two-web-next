@@ -111,11 +111,11 @@ export function pgEventStore(
     limit?: number,
     dueBefore?: Date,
   ): Promise<string[] | StaleEventKeysPage> => {
-    // Empty when omitted, so the no-cutoff page text stays the clock-free
-    // predicate. Never `now()` / `clock_timestamp()`: the caller owns the clock.
-    const recoveryDue =
+    // Build fragments only for reads that use them; single-key reads stay
+    // unchanged. Never `now()` / `clock_timestamp()`: the caller owns the clock.
+    const recoveryDue = () =>
       dueBefore === undefined ? sql`` : sql` and pending.next_attempt_at <= ${dueBefore}`;
-    const futureBlock =
+    const futureBlock = () =>
       dueBefore === undefined ? sql`` : sql` or blocking.next_attempt_at > ${dueBefore}`;
     if (eventKey === null && typeof limit === "number" && Number.isFinite(limit) && limit > 0) {
       const page = await sql`select event_key, count(*) over() as total${readMarker()} from events
@@ -123,13 +123,13 @@ export function pgEventStore(
           exists (select 1 from event_sync_attempts pending
             where pending.event_id = events.id and pending.state = 'pending'
               and pending.request_attempts > 0 and pending.request_attempts < ${SYNC_EVENT.tries}
-              and pending.next_attempt_at is not null${recoveryDue})
+              and pending.next_attempt_at is not null${recoveryDue()})
           or (status in ('published', 'cancelled')
             and not exists (select 1 from event_sync_attempts rejected
               where rejected.event_id = events.id and rejected.revision = events.sync_revision and rejected.state = 'failed')
             and not exists (select 1 from event_sync_attempts blocking
               where blocking.event_id = events.id and blocking.state = 'pending'
-                and (blocking.request_attempts >= ${SYNC_EVENT.tries} or blocking.next_attempt_at is null${futureBlock}))
+                and (blocking.request_attempts >= ${SYNC_EVENT.tries} or blocking.next_attempt_at is null${futureBlock()}))
             and (sync_revision > synced_revision or
               (status = 'published' and (discord_event_id is null or exists (
                 select 1 from rsvps where rsvps.event_id = events.id and synced_to_discord_at is null
@@ -154,13 +154,13 @@ export function pgEventStore(
           exists (select 1 from event_sync_attempts pending
             where pending.event_id = events.id and pending.state = 'pending'
               and pending.request_attempts > 0 and pending.request_attempts < ${SYNC_EVENT.tries}
-              and pending.next_attempt_at is not null${recoveryDue})
+              and pending.next_attempt_at is not null${recoveryDue()})
           or (status in ('published', 'cancelled')
             and not exists (select 1 from event_sync_attempts rejected
               where rejected.event_id = events.id and rejected.revision = events.sync_revision and rejected.state = 'failed')
             and not exists (select 1 from event_sync_attempts blocking
               where blocking.event_id = events.id and blocking.state = 'pending'
-                and (blocking.request_attempts >= ${SYNC_EVENT.tries} or blocking.next_attempt_at is null${futureBlock}))
+                and (blocking.request_attempts >= ${SYNC_EVENT.tries} or blocking.next_attempt_at is null${futureBlock()}))
             and (sync_revision > synced_revision or
               (status = 'published' and (discord_event_id is null or exists (
                 select 1 from rsvps where rsvps.event_id = events.id and synced_to_discord_at is null
