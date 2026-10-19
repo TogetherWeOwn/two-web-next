@@ -16,7 +16,10 @@ import { withThrottleTx } from "./helpers/throttle-tx-double";
 import { createMemorySessionStore, type Sql } from "../src/sessions";
 import type { Env } from "../src/env";
 
-const CAP = DISCORD_HTTP_MAX_RESPONSE_BYTES;
+// 256 KiB provider-buffer convention, pinned as a literal like the sibling bot
+// suites (bot-client-response-cap, bot-event-read-budget) so a cap-value drift
+// turns this suite red instead of silently resizing every fixture.
+const CAP = 262_144;
 const TOKEN = "***synthetic-token-shape***";
 const SECRET = "***synthetic-secret-shape***";
 const MEMBER = "***synthetic-member-shape***";
@@ -79,6 +82,13 @@ afterEach(() => {
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
   vi.useRealTimers();
+});
+
+describe("shared response cap value", () => {
+  it("pins the 256 KiB provider-buffer bound", () => {
+    expect(DISCORD_HTTP_MAX_RESPONSE_BYTES).toBe(262_144);
+    expect(CAP).toBe(DISCORD_HTTP_MAX_RESPONSE_BYTES);
+  });
 });
 
 describe("oversized upstream bodies refuse cheaply without buffering", () => {
