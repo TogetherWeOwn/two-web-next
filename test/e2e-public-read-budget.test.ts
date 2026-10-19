@@ -14,8 +14,10 @@ import type { EnvWithThrottle } from "../src/throttle";
 import { withThrottleTx } from "./helpers/throttle-tx-double";
 
 // The sequential browser suites share one `events-read:anon` bucket off-edge,
-// so the loopback worker raises its budget via E2E_PUBLIC_READ_BUDGET while
-// production keeps 60 (docs/event-read-admission.md).
+// so both loopback workers raise the budget via E2E_PUBLIC_READ_BUDGET while
+// production keeps 60 (docs/event-read-admission.md). The Kit fixture value
+// is pinned in ci/kit-parity-ci-wiring.test.mjs, next to the other generated
+// fixture pins.
 
 function fixture(env: Partial<Env> = {}) {
   const hits: string[] = [];
@@ -96,7 +98,7 @@ describe("E2E public read budget config", () => {
     return [config.vars ?? {}, ...Object.values(config.env ?? {}).map((e) => e.vars ?? {})];
   };
 
-  it("sets 600 on the loopback E2E worker only", () => {
+  it("sets 600 on the loopback Hono worker", () => {
     expect(read("e2e/wrangler.jsonc").vars?.E2E_PUBLIC_READ_BUDGET).toBe("600");
   });
 

@@ -21,10 +21,13 @@ export const PUBLIC_EVENT_READS_PER_MINUTE = 60;
 
 /**
  * CI loopback override for the shared read budget. The sequential browser
- * suites present one `anon` client key off-edge, so `e2e/wrangler.jsonc` sets
- * `E2E_PUBLIC_READ_BUDGET` and the suites stop tripping each other's windows.
- * Positive integers only; anything else keeps the production 60 (same shape
- * as the agent-events `routePerMinute` override).
+ * suites present one `anon` client key off-edge, so both loopback workers
+ * (`e2e/wrangler.jsonc` and the generated Kit fixture in
+ * `ci/kit-worker-dev.mjs`, which enforces the same bucket on the same
+ * disposable Postgres) set `E2E_PUBLIC_READ_BUDGET` and the suites stop
+ * tripping each other's windows. Positive integers only; anything else keeps
+ * the production 60 (same shape as the agent-events `routePerMinute`
+ * override).
  */
 export function publicReadBudget(env: Env): number {
   const override = Number(env.E2E_PUBLIC_READ_BUDGET);

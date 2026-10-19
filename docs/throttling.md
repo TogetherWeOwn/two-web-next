@@ -129,9 +129,10 @@ already-throttled staging login lives in
 [`e2e/qa-login-retry.mjs`](../e2e/qa-login-retry.mjs); the local `qaLogin`
 fails hard on the first 429. The public-reads budget has the same CI-sharing
 shape — every suite in the `browser-smoke` job lands in `events-read:anon` —
-but reads have no static call-site count, so the loopback worker raises the
-budget instead: `e2e/wrangler.jsonc` sets `E2E_PUBLIC_READ_BUDGET` to `600`
-while production keeps 60 (see
+but reads have no static call-site count, so the loopback workers raise the
+budget instead: `e2e/wrangler.jsonc` and the generated Kit fixture
+(`ci/kit-worker-dev.mjs`) set `E2E_PUBLIC_READ_BUDGET` to `600` while
+production keeps 60 (see
 [`event-read-admission.md`](event-read-admission.md)).
 
 Generic and join buckets key on the client key above (`<name>:<clientKey>`);

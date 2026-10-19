@@ -83,6 +83,16 @@ test("the Kit fixture owns the live event detail only on its loopback worker", (
   assert.match(helper, /kitFixtureOwnsEventDetail/);
 });
 
+test("both loopback parity workers share the raised read budget", () => {
+  // The Kit fixture enforces the same `events-read:anon` bucket as the Hono
+  // loopback worker (same disposable Postgres, no forwarded client headers),
+  // so its generated vars carry the same override (docs/event-read-admission.md).
+  const worker = readFileSync(new URL("./kit-worker-dev.mjs", import.meta.url), "utf8");
+  assert.match(worker, /E2E_PUBLIC_READ_BUDGET: "600"/);
+  const hono = readFileSync(new URL("../e2e/wrangler.jsonc", import.meta.url), "utf8");
+  assert.match(hono, /"E2E_PUBLIC_READ_BUDGET": "600"/);
+});
+
 test("Kit snapshot updates are pinned and generated Kit baselines fail the CI guard", () => {
   const config = readFileSync(
     new URL("../playwright.kit-parity.config.ts", import.meta.url),

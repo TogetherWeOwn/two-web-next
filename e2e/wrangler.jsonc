@@ -15,8 +15,10 @@
     // The sequential suites share one `anon` read bucket off-edge and issue
     // well over 60 guarded reads inside a 60-second window; 600 absorbs the
     // combined bursts while a runaway loop still 429s within the minute
-    // (docs/event-read-admission.md). Production keeps 60: no deployed
-    // config sets this var (test/e2e-public-read-budget.test.ts pins that).
+    // (docs/event-read-admission.md). The generated Kit fixture carries the
+    // same value (ci/kit-worker-dev.mjs): it enforces the same bucket on the
+    // same disposable Postgres. Production keeps 60: no deployed config sets
+    // this var (test/e2e-public-read-budget.test.ts pins that).
     "E2E_PUBLIC_READ_BUDGET": "600"
   }
 }

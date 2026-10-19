@@ -62,14 +62,19 @@ Off-edge requests carry no `CF-Connecting-IP`, so every suite in the `e2e.yml`
 Postgres. The visual, journey, parity and perf suites run sequentially and
 issue well over 60 guarded reads inside a 60-second window, so whichever
 navigation lands past the budget gets a 429 with a matching URL and times out
-on content instead of failing fast on status. `e2e/wrangler.jsonc` therefore
-sets `E2E_PUBLIC_READ_BUDGET` to `600`: ten times the per-client production
+on content instead of failing fast on status. Both loopback workers therefore
+set `E2E_PUBLIC_READ_BUDGET` to `600` — `e2e/wrangler.jsonc` for Hono and the
+generated Kit fixture in `ci/kit-worker-dev.mjs`, which enforces the same
+bucket on the same disposable Postgres: ten times the per-client production
 budget, enough to absorb the combined suite bursts while a runaway loop still
-429s within the minute. The override is scoped to that loopback worker only —
-`publicReadBudget` (`src/events/routes-shared.ts`) keeps 60 for absent,
-invalid or nonpositive values, and no deployed config sets the var.
+429s within the minute. A raise on only one worker would concentrate the flake
+on the other's legs, so the two values move together. The override is scoped
+to those loopback workers only — `publicReadBudget`
+(`src/events/routes-shared.ts`) keeps 60 for absent, invalid or nonpositive
+values, and no deployed config sets the var.
 `test/e2e-public-read-budget.test.ts` pins the override behaviour and the
-deployed-config absence.
+deployed-config absence; `ci/kit-parity-ci-wiring.test.mjs` pins the Kit
+fixture value against the Hono one.
 
 ## Verification
 

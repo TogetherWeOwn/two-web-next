@@ -91,10 +91,11 @@ export type Env = AgentEventsEnv & {
   // model-context island on the four pilot pages; unset or anything else
   // leaves pages byte-identical. No session, cookie or database read.
   WEBMCP_PILOT_ENABLED?: string;
-  // CI loopback worker only (e2e/wrangler.jsonc sets it, never a deployed
-  // config): overrides the shared public-read admission budget for that
-  // worker, whose sequential suites present one `anon` client key off-edge.
-  // Positive integers only; unset or anything else keeps the production 60
+  // CI loopback workers only (e2e/wrangler.jsonc and the generated Kit
+  // fixture in ci/kit-worker-dev.mjs set it, never a deployed config):
+  // overrides the shared public-read admission budget for those workers,
+  // whose sequential suites present one `anon` client key off-edge. Positive
+  // integers only; unset or anything else keeps the production 60
   // (src/events/routes-shared.ts publicReadBudget).
   E2E_PUBLIC_READ_BUDGET?: string;
 };
