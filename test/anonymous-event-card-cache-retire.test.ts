@@ -337,6 +337,9 @@ describe.skipIf(!process.env.DATABASE_URL)(
       expect(await (await guestGet("/events")).text()).toContain("0 going");
 
       // A seat taken outside the service stays invisible while the entry lives.
+      // Attributable seed: the going count only counts named rows, so the
+      // ghost carries a stored name like any real member row would.
+      await fixture.client`insert into users (id, username) values ('ghost-member', 'ghost-member'), ('member-a', 'member-a') on conflict (id) do nothing`;
       await fixture.client`insert into rsvps (event_id, user_id, status) values (${row.id}, 'ghost-member', 'going')`;
       expect(await (await guestGet("/events")).text()).toContain("0 going");
 

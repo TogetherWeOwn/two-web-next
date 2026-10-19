@@ -508,9 +508,14 @@
   function reconcileCapacity(detail) {
     if (detail.eventKey !== eventKey || root.getAttribute("data-outcome-unknown") === "true")
       return;
+    // Seat-accurate verdict: occupancy counts every going row like the write
+    // path; absent on older snapshots, where the attributable count stands in.
+    var occupancy = detail.goingOccupancy === undefined ? detail.goingCount : detail.goingOccupancy;
     if (
       !Number.isSafeInteger(detail.goingCount) ||
       detail.goingCount < 0 ||
+      !Number.isSafeInteger(occupancy) ||
+      occupancy < 0 ||
       (detail.capacity !== null && (!Number.isSafeInteger(detail.capacity) || detail.capacity < 1))
     )
       return;
@@ -520,12 +525,13 @@
       pendingCapacity = {
         eventKey: eventKey,
         goingCount: detail.goingCount,
+        goingOccupancy: occupancy,
         capacity: detail.capacity,
       };
       return;
     }
     pendingCapacity = null;
-    var full = detail.capacity !== null && detail.goingCount >= detail.capacity;
+    var full = detail.capacity !== null && occupancy >= detail.capacity;
     root.setAttribute("data-full", full ? "true" : "false");
     if (detail.capacity === null) root.removeAttribute("data-capacity");
     else root.setAttribute("data-capacity", detail.capacity);

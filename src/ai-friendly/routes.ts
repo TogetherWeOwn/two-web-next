@@ -88,9 +88,13 @@ const toMdEvent = (e: {
   capacity: number | null;
   status: string;
   goingCount?: number | null;
+  goingOccupancy?: number | null;
 }): MdEvent => ({
   ...e,
   goingCount: e.goingCount ?? null,
+  // Feed rows carry no counts, so the full signal stays off there; the
+  // detail row carries both aggregates from withGoing.
+  goingOccupancy: e.goingOccupancy ?? null,
   // Callers only pass published/past rows: the collection predicate filters in
   // SQL and the detail handler returns drafts/cancelled above.
   status: e.status as MdEvent["status"],

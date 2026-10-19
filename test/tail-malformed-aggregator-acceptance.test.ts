@@ -408,3 +408,206 @@ describe("acceptance: well-formed aggregator responses are unchanged (controls)"
     expect(receipts()).toHaveLength(0);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Non-finite / mistyped aggregator numbers (second slice).
+//
+// `typeof NaN === "number"`, so a shape check that only asks "is it a
+// number" waves NaN, ±Infinity and negative durations through as
+// authoritative: a NaN downMs pages immediately with a garbage
+// down_seconds, and a spike alert with NaN/string counts is delivered
+// byte-for-byte while the local tracker never counts the burst. The
+// desired contract is the same as every other malformed 200 above: the
+// number fields a verdict is built from must be finite, non-negative
+// numbers, otherwise the observation falls back to the local tracker /
+// health tracker and paging is exactly the existing local paging.
+//
+// JSON text cannot carry NaN or ±Infinity (stringify emits null, parse
+// rejects the literals), but the worker consumes the *parsed* value from
+// response.json(). parsedJsonResponse supplies that parsed value
+// directly at the seam the worker actually reads (ok + json()), which is
+// where a malfunctioning aggregator client could surface non-finite
+// numbers. The same-seam finite controls below prove the double itself
+// does not trigger fallback — only the bad values do.
+//
+// Deliberately unpinned: downMs of exactly 0 or a small positive value,
+// an error_rate above 1, and non-integer counts. Only non-finite,
+// negative, and non-number values are pinned as malformed here.
+const parsedJsonResponse = (value: unknown) =>
+  ({
+    ok: true,
+    status: 200,
+    json: async () => value,
+  }) as unknown as Response;
+
+const spikeNumericFields = [
+  "requests",
+  "errors",
+  "crashes",
+  "error_rate",
+  "window_seconds",
+] as const;
+
+const badSpikeNumbers: [string, unknown][] = [
+  ["NaN", Number.NaN],
+  ["Infinity", Number.POSITIVE_INFINITY],
+  ["a negative number", -1],
+  ["a numeric string", "5"],
+];
+
+const badSpikePayloads: [string, () => unknown][] = [
+  ...spikeNumericFields.flatMap((field) =>
+    badSpikeNumbers.map(
+      ([label, value]) =>
+        [`${field} is ${label}`, () => ({ ...wellFormedSpike, [field]: value })] as [
+          string,
+          () => unknown,
+        ],
+    ),
+  ),
+  ["errors is -Infinity", () => ({ ...wellFormedSpike, errors: Number.NEGATIVE_INFINITY })],
+];
+
+const badHealthPayloads: [string, () => unknown][] = [
+  ["NaN downMs", () => ({ downMs: Number.NaN, attemptId: "health-attempt-1" })],
+  ["Infinity downMs", () => ({ downMs: Number.POSITIVE_INFINITY, attemptId: "health-attempt-1" })],
+  ["-Infinity downMs", () => ({ downMs: Number.NEGATIVE_INFINITY, attemptId: "health-attempt-1" })],
+  ["negative downMs (-1)", () => ({ downMs: -1, attemptId: "health-attempt-1" })],
+  ["negative downMs (-121000)", () => ({ downMs: -121_000, attemptId: "health-attempt-1" })],
+];
+
+describe("acceptance: non-finite aggregator spike numbers fall back to local counts", () => {
+  it.each(badSpikePayloads)(
+    "200 spike alert where %s increments the local tracker and the local threshold pages",
+    async (_name, payload) => {
+      const { worker, contents, receipts, localCounts } = makeWorker();
+      const { env } = aggregatorEnv((path) =>
+        path === "/observe" ? parsedJsonResponse(payload()) : Response.json(null),
+      );
+      await worker.tail(burst(SPIKE_MIN_ERRORS), env);
+      // The whole burst was counted locally, not dropped in favour of the
+      // aggregator's garbage alert.
+      expect(localCounts()).toEqual({
+        requests: SPIKE_MIN_ERRORS,
+        errors: SPIKE_MIN_ERRORS,
+        crashes: 0,
+      });
+      // Exactly one page, built from the local counts: every numeric
+      // field is a finite number, never the aggregator's bad value.
+      expect(contents()).toHaveLength(1);
+      expect(contents()[0]).toMatchObject({
+        event: "error.spike",
+        script: "two-web-next",
+        requests: SPIKE_MIN_ERRORS,
+        errors: SPIKE_MIN_ERRORS,
+        crashes: 0,
+        error_rate: 1,
+      });
+      for (const field of spikeNumericFields) {
+        expect(Number.isFinite(contents()[0][field]), `${field} must be finite`).toBe(true);
+      }
+      expect(receipts()).toMatchObject([{ event: "error.spike", delivery: "ops.alert.delivered" }]);
+      expect(JSON.stringify(contents())).not.toMatch(/never-send|example\.test/);
+    },
+  );
+
+  it("sub-threshold bursts behind NaN spike counts accumulate locally across calls until the threshold pages", async () => {
+    const { worker, contents, localCounts, setNow } = makeWorker();
+    const { env } = aggregatorEnv((path) =>
+      path === "/observe"
+        ? parsedJsonResponse({ ...wellFormedSpike, errors: Number.NaN })
+        : Response.json(null),
+    );
+    await worker.tail(burst(3, t0), env);
+    expect(localCounts()).toEqual({ requests: 3, errors: 3, crashes: 0 });
+    expect(contents()).toHaveLength(0); // Below the existing minimum: no page.
+    setNow(t0 + 60_000);
+    await worker.tail(burst(3, t0 + 60_000), env);
+    expect(localCounts()).toEqual({ requests: 6, errors: 6, crashes: 0 });
+    expect(contents()).toHaveLength(1);
+    expect(contents()[0]).toMatchObject({ event: "error.spike", requests: 6, errors: 6 });
+  });
+});
+
+describe("acceptance: non-finite aggregator downMs falls back to local health", () => {
+  it.each(badHealthPayloads)(
+    "200 with %s records a local health observation and pages after two minutes red",
+    async (_name, payload) => {
+      const start = t0 + 60_000;
+      const { worker, health, contents, receipts, setNow } = makeWorker(start);
+      const { env } = aggregatorEnv((path) =>
+        path === "/health" ? parsedJsonResponse(payload()) : Response.json(null),
+      );
+      const first = { cron: "* * * * *", scheduledTime: start, noRetry() {} };
+      await worker.scheduled(first, env);
+      // The red probe was observed locally; the bad downMs neither paged
+      // immediately nor was swallowed as an authoritative "no page".
+      expect(health.snapshot().downSince).toBe(start);
+      expect(contents()).toHaveLength(0);
+
+      const later = start + 121_000;
+      setNow(later);
+      const second = { cron: "* * * * *", scheduledTime: later, noRetry() {} };
+      await worker.scheduled(second, env);
+      // The existing two-minute local threshold pages exactly once, with
+      // the local down duration — never a NaN, infinite, or negative
+      // down_seconds derived from the aggregator value.
+      expect(contents()).toHaveLength(1);
+      expect(contents()[0]).toMatchObject({ event: "uptime.down", down_seconds: 121 });
+      expect(receipts()).toMatchObject([
+        { event: "uptime.down", down_seconds: 121, delivery: "ops.alert.delivered" },
+      ]);
+    },
+  );
+});
+
+describe("acceptance: finite aggregator numbers at the parsed seam are unchanged (controls)", () => {
+  it("control: a NaN downMs on a healthy probe already does not page and clears downSince", async () => {
+    const start = t0 + 60_000;
+    const { worker, health, contents, receipts } = makeWorker(start, 200);
+    health.restore({ downSince: t0, cooldownUntil: 0, pendingAt: null });
+    const { env } = aggregatorEnv((path) =>
+      path === "/health"
+        ? parsedJsonResponse({ downMs: Number.NaN, attemptId: "health-attempt-1" })
+        : Response.json(null),
+    );
+    const event = { cron: "* * * * *", scheduledTime: start, noRetry() {} };
+    await worker.scheduled(event, env);
+    expect(health.snapshot().downSince).toBeNull();
+    expect(contents()).toHaveLength(0);
+    expect(receipts()).toHaveLength(0);
+  });
+
+  it("control: a finite spike alert via the parsed seam is delivered byte-for-byte, with no local increment", async () => {
+    const finiteSpike = { ...wellFormedSpike, requests: 10, errors: 5, error_rate: 0.5 };
+    const { worker, tracker, contents, receipts } = makeWorker();
+    const { env, paths } = aggregatorEnv((path) =>
+      path === "/observe" ? parsedJsonResponse(finiteSpike) : Response.json(null),
+    );
+    await worker.tail([fetchTrace(500)], env);
+    expect(paths).toEqual(["/observe", "/spike-result"]);
+    expect(contents()).toHaveLength(1);
+    expect(contents()[0]).toEqual(finiteSpike);
+    expect(receipts()).toEqual([{ ...finiteSpike, delivery: "ops.alert.delivered" }]);
+    expect(tracker.snapshot()).toEqual({});
+  });
+
+  it("control: a large finite downMs via the parsed seam pages from the aggregator value, with no local observation", async () => {
+    const start = t0 + 60_000;
+    const { worker, health, contents, receipts } = makeWorker(start);
+    const { env, paths } = aggregatorEnv((path) =>
+      path === "/health"
+        ? parsedJsonResponse({ downMs: 86_400_000, attemptId: "health-attempt-1" })
+        : Response.json(null),
+    );
+    const event = { cron: "* * * * *", scheduledTime: start, noRetry() {} };
+    await worker.scheduled(event, env);
+    expect(paths).toEqual(["/health", "/health-result"]);
+    expect(contents()).toHaveLength(1);
+    expect(contents()[0]).toMatchObject({ event: "uptime.down", down_seconds: 86_400 });
+    expect(receipts()).toMatchObject([
+      { event: "uptime.down", down_seconds: 86_400, delivery: "ops.alert.delivered" },
+    ]);
+    expect(health.snapshot().downSince).toBeNull();
+  });
+});
