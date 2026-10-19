@@ -202,6 +202,8 @@ async function stub(t, change = () => {}) {
       headers: {
         "content-security-policy": "default-src 'self'; frame-ancestors 'none'",
         "x-content-type-options": "nosniff",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "x-frame-options": "DENY",
         ...(type ? { "content-type": `${type}; charset=UTF-8` } : {}),
         ...(type === "text/html" ? { "x-robots-tag": "noindex, nofollow" } : {}),
         ...(request.url === "/up"

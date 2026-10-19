@@ -50,6 +50,15 @@ const CAP_FIRST_ROUTES = new Set([
   "POST /__probe/alert",
 ]);
 
+// Moderator featured create/delete refuse oversized bodies before the shared
+// throttle (the moderator guard still runs first): cap-first, not
+// throttle-first. The featured update post keeps the throttle-before-buffering
+// order.
+const FEATURED_WRITE_CAP_FIRST = new Set([
+  "POST /admin/featured",
+  "POST /admin/featured/:id/delete",
+]);
+
 function routeInfo(key: string) {
   const [method, pattern] = key.split(" ");
   const kind = rawApp.routes
@@ -144,7 +153,7 @@ function upload(
 describe("shared throttles admit before buffering", () => {
   it.each(sharedRoutes)("%s rejects exhausted buckets without pulling any upload", async (key) => {
     const { method, path, max, budget } = routeInfo(key);
-    const capFirst = CAP_FIRST_ROUTES.has(key);
+    const capFirst = CAP_FIRST_ROUTES.has(key) || FEATURED_WRITE_CAP_FIRST.has(key);
     const { sql, count } = throttleFixture(budget);
     const { env, cookie } = await sessionEnv(sql as unknown as Sql);
     const empty = await app.request(
@@ -193,7 +202,7 @@ describe("shared throttles admit before buffering", () => {
 
   it.each(sharedRoutes)("%s counts advertised and chunked oversized attempts", async (key) => {
     const { method, path, max, budget } = routeInfo(key);
-    const capFirst = CAP_FIRST_ROUTES.has(key);
+    const capFirst = CAP_FIRST_ROUTES.has(key) || FEATURED_WRITE_CAP_FIRST.has(key);
     for (const advertised of [false, true]) {
       const { sql, count } = throttleFixture(budget - 1);
       const { env, cookie } = await sessionEnv(sql as unknown as Sql);
