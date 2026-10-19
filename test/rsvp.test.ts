@@ -780,12 +780,16 @@ describe.skipIf(!process.env.DATABASE_URL)("rsvp routes (agent-testdb)", () => {
     });
     await acquired;
     const pending = put(ev.key, "late", "going");
-    // Lock-acquire wait: the PUT blocks on the held event row.
-    expect(await waitForLock('%from "events"%for update%')).toBe(true);
-    // Time-passage stimulus: let the event end while the write stays queued; not a lock-acquire wait.
-    await new Promise((r) => setTimeout(r, 1800));
-    release();
-    await holder;
+    try {
+      // Lock-acquire wait: the PUT blocks on the held event row.
+      expect(await waitForLock('%from "events"%for update%')).toBe(true);
+      // Time-passage stimulus: let the event end while the write stays queued; not a lock-acquire wait.
+      await new Promise((r) => setTimeout(r, 1800));
+    } finally {
+      release();
+      await holder;
+      await pending.catch(() => undefined);
+    }
     expect((await pending).status).toBe(403);
     expect(await rows(ev.id)).toHaveLength(0);
   });
@@ -802,12 +806,16 @@ describe.skipIf(!process.env.DATABASE_URL)("rsvp routes (agent-testdb)", () => {
     });
     await acquired;
     const pending = put(ev.key, "late2", "going");
-    // Lock-acquire wait: the PUT blocks on the held member advisory lock.
-    expect(await waitForLock("%pg_advisory_xact_lock%")).toBe(true);
-    // Time-passage stimulus: let the event end while the write stays queued; not a lock-acquire wait.
-    await new Promise((r) => setTimeout(r, 1800));
-    release();
-    await holder;
+    try {
+      // Lock-acquire wait: the PUT blocks on the held member advisory lock.
+      expect(await waitForLock("%pg_advisory_xact_lock%")).toBe(true);
+      // Time-passage stimulus: let the event end while the write stays queued; not a lock-acquire wait.
+      await new Promise((r) => setTimeout(r, 1800));
+    } finally {
+      release();
+      await holder;
+      await pending.catch(() => undefined);
+    }
     expect((await pending).status).toBe(403);
     expect(await rows(ev.id)).toHaveLength(0);
   });
@@ -825,14 +833,19 @@ describe.skipIf(!process.env.DATABASE_URL)("rsvp routes (agent-testdb)", () => {
     });
     await acquired;
     const pending = put(ev.key, "stamp", "going");
-    // Lock-acquire wait: the PUT blocks on the held event row.
-    expect(await waitForLock('%from "events"%for update%')).toBe(true);
-    // Time-passage stimulus: let the queued write age so the hit stamps after the wait; not a lock-acquire wait.
-    await new Promise((r) => setTimeout(r, 1500));
-    const [tr] = await client`select clock_timestamp() as t`;
-    const t = tr!.t;
-    release();
-    await holder;
+    let t!: Date;
+    try {
+      // Lock-acquire wait: the PUT blocks on the held event row.
+      expect(await waitForLock('%from "events"%for update%')).toBe(true);
+      // Time-passage stimulus: let the queued write age so the hit stamps after the wait; not a lock-acquire wait.
+      await new Promise((r) => setTimeout(r, 1500));
+      const [tr] = await client`select clock_timestamp() as t`;
+      t = tr!.t;
+    } finally {
+      release();
+      await holder;
+      await pending.catch(() => undefined);
+    }
     expect((await pending).status).toBe(201);
     const [hit] = await client`select at from web_throttle_hits where bucket = 'rsvp-write:stamp'`;
     expect(new Date(hit!.at).getTime()).toBeGreaterThanOrEqual(new Date(t).getTime());
@@ -851,15 +864,20 @@ describe.skipIf(!process.env.DATABASE_URL)("rsvp routes (agent-testdb)", () => {
     });
     await acquired;
     const dels = Array.from({ length: 12 }, () => call("DELETE", ev.key, "dq"));
-    // Lock-acquire wait: at least one DELETE blocks on the held event row before the PUT burst starts.
-    expect(await waitForLock('%from "events"%for update%')).toBe(true);
-    // Time-passage stimulus: let the DELETE burst queue before the PUT burst; not a lock-acquire wait.
-    await new Promise((r) => setTimeout(r, 300));
-    const puts = Array.from({ length: 12 }, () => put(other.key, "dq"));
-    // Time-passage stimulus: let both bursts queue behind the holder before release; not a lock-acquire wait.
-    await new Promise((r) => setTimeout(r, 300));
-    release();
-    await holder;
+    let puts: ReturnType<typeof put>[] = [];
+    try {
+      // Lock-acquire wait: at least one DELETE blocks on the held event row before the PUT burst starts.
+      expect(await waitForLock('%from "events"%for update%')).toBe(true);
+      // Time-passage stimulus: let the DELETE burst queue before the PUT burst; not a lock-acquire wait.
+      await new Promise((r) => setTimeout(r, 300));
+      puts = Array.from({ length: 12 }, () => put(other.key, "dq"));
+      // Time-passage stimulus: let both bursts queue behind the holder before release; not a lock-acquire wait.
+      await new Promise((r) => setTimeout(r, 300));
+    } finally {
+      release();
+      await holder;
+      await Promise.all([...dels, ...puts].map((p) => p.catch(() => undefined)));
+    }
     const codes = (await Promise.all([...dels, ...puts])).map((r) => r.status);
     expect(codes.filter((c) => c === 429)).toHaveLength(12);
     const [nr] =
@@ -875,20 +893,28 @@ describe.skipIf(!process.env.DATABASE_URL)("rsvp routes (agent-testdb)", () => {
     await client`delete from web_throttle_hits where bucket = ${`rsvp-write:${who}`}`;
     await client`update events set ends_at = clock_timestamp() + interval '3 seconds' where id = ${ev.id}`;
     let release!: () => void;
+    let ready!: () => void;
     const held = new Promise<void>((r) => (release = r));
+    const acquired = new Promise<void>((r) => (ready = r));
     const holder = client.begin(async (tx) => {
       await tx`update rsvps set synced_to_discord_at = clock_timestamp() where event_id = ${ev.id} and user_id = ${who}`;
+      ready();
       await held;
     });
-    // Intentionally untouched pre-contend wait (out of scope): already paired with waitForLock below.
-    await new Promise((r) => setTimeout(r, 200));
+    // Holder-acquired signal: the UPDATE above owns the RSVP row before the contender starts.
+    await acquired;
     const pending = put(ev.key, who, "maybe");
-    expect(await waitForLock('%from "rsvps"%for update%')).toBe(true);
-    // Expiry-parking stimulus: sleep in the DB until the event ends while the
-    // write stays queued; not a lock-acquire wait.
-    await client`select pg_sleep(greatest(0, extract(epoch from (ends_at - clock_timestamp())) + 0.2)) from events where id = ${ev.id}`;
-    release();
-    await holder;
+    try {
+      // Lock-acquire wait: the PUT blocks on the held RSVP row.
+      expect(await waitForLock('%from "rsvps"%for update%')).toBe(true);
+      // Expiry-parking stimulus: sleep in the DB until the event ends while the
+      // write stays queued; not a lock-acquire wait.
+      await client`select pg_sleep(greatest(0, extract(epoch from (ends_at - clock_timestamp())) + 0.2)) from events where id = ${ev.id}`;
+    } finally {
+      release();
+      await holder;
+      await pending.catch(() => undefined);
+    }
     expect((await pending).status).toBe(403);
     expect((await rows(ev.id)).map((r) => r.status)).toEqual(["going"]);
     const [{ n }] =
@@ -947,20 +973,28 @@ describe.skipIf(!process.env.DATABASE_URL)("rsvp routes (agent-testdb)", () => {
     await client`insert into web_throttle_hits (bucket, at) values ('unrelated-expired-hold', clock_timestamp() - interval '10 minutes')`;
     await client`update events set ends_at = clock_timestamp() + interval '3 seconds' where id = ${ev.id}`;
     let release!: () => void;
+    let ready!: () => void;
     const held = new Promise<void>((r) => (release = r));
+    const acquired = new Promise<void>((r) => (ready = r));
     const holder = client.begin(async (tx) => {
       await tx`select id from events where id = ${ev.id} for update`;
+      ready();
       await held;
     });
-    // Intentionally untouched pre-contend wait (out of scope): already paired with waitForLock below.
-    await new Promise((r) => setTimeout(r, 200));
+    // Holder-acquired signal: the SELECT owns the event row before the contender starts.
+    await acquired;
     const pending = put(ev.key, who, "going");
-    expect(await waitForLock('%from "events"%for update%')).toBe(true);
-    // Expiry-parking stimulus: sleep in the DB until the event ends while the
-    // write stays queued; not a lock-acquire wait.
-    await client`select pg_sleep(greatest(0, extract(epoch from (ends_at - clock_timestamp())) + 0.2)) from events where id = ${ev.id}`;
-    release();
-    await holder;
+    try {
+      // Lock-acquire wait: the PUT blocks on the held event row.
+      expect(await waitForLock('%from "events"%for update%')).toBe(true);
+      // Expiry-parking stimulus: sleep in the DB until the event ends while the
+      // write stays queued; not a lock-acquire wait.
+      await client`select pg_sleep(greatest(0, extract(epoch from (ends_at - clock_timestamp())) + 0.2)) from events where id = ${ev.id}`;
+    } finally {
+      release();
+      await holder;
+      await pending.catch(() => undefined);
+    }
     expect((await pending).status).toBe(403);
     expect(await rows(ev.id)).toHaveLength(0);
     const [{ n }] =
