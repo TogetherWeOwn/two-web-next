@@ -44,6 +44,14 @@ const outage = () =>
 
 const flush = () => new Promise((resolve) => setTimeout(resolve, 5));
 
+const deferred = () => {
+  let resolve!: () => void;
+  const promise = new Promise<void>((r) => {
+    resolve = r;
+  });
+  return { promise, resolve };
+};
+
 const expectRefused = async (res: Response) => {
   expect(res.status).toBe(503);
   expect(res.headers.get("cache-control")).toBe("private, no-store");
@@ -376,33 +384,95 @@ describe("memberReadResponse (Kit boundary)", () => {
     expect(res.headers.getSetCookie()).toEqual(["a=1; Path=/", "b=2; Path=/"]);
   });
 
-  it("concurrent requests keep separate captures: one request's pending read never refuses another", async () => {
-    const { entries, sink } = recorder();
-    const clean = memberReadResponse(meta, declared(VIEWER), sink, async () => {
-      await new Promise((resolve) => setTimeout(resolve, 10));
-      return new Response(await readOwners([VIEWER, SUBJECT], "<p>clean</p>"));
-    });
-    const dirty = memberReadResponse(meta, declared(OTHER), sink, async () => {
-      void keyedMemberRead(
-        () =>
-          new Promise<string>((resolve) =>
-            setTimeout(() => {
-              memberQueryPermit();
-              declareMemberResult([SUBJECT]);
-              resolve("late");
-            }, 30),
-          ),
-      );
-      return new Response("<p>dirty</p>");
-    });
-    const [cleanRes, dirtyRes] = await Promise.all([clean, dirty]);
-    expect(cleanRes.status).toBe(200);
-    expect(await cleanRes.text()).toBe("<p>clean</p>");
-    await expectRefused(dirtyRes);
-    expect(entries).toEqual([
-      expect.objectContaining({ viewerDiscordId: VIEWER, subjectUserIds: [SUBJECT] }),
-    ]);
-  });
+  it.each(["clean-first", "dirty-first"] as const)(
+    "concurrent requests keep separate captures (%s): one request's pending read never refuses another",
+    async (order) => {
+      const { entries, sink } = recorder();
+      const cleanEntered = deferred();
+      const dirtyEntered = deferred();
+      const cleanParked = deferred();
+      const dirtyParked = deferred();
+      const cleanDeclared = deferred();
+      const dirtyDeclared = deferred();
+      const cleanRelease = deferred();
+      const dirtyRelease = deferred();
+      let settleLate: Promise<string> = Promise.resolve("unstarted");
+      const clean = memberReadResponse(meta, declared(VIEWER), sink, async () => {
+        const body = await keyedMemberRead(async () => {
+          memberQueryPermit();
+          cleanEntered.resolve();
+          await dirtyEntered.promise;
+          cleanParked.resolve();
+          await cleanRelease.promise;
+          declareMemberResult([VIEWER, SUBJECT]);
+          cleanDeclared.resolve();
+          return "<p>clean</p>";
+        });
+        return new Response(body);
+      });
+      const dirty = memberReadResponse(meta, declared(OTHER), sink, async () => {
+        settleLate = keyedMemberRead(async () => {
+          memberQueryPermit();
+          dirtyEntered.resolve();
+          await cleanEntered.promise;
+          dirtyParked.resolve();
+          await dirtyRelease.promise;
+          declareMemberResult([SUBJECT]);
+          dirtyDeclared.resolve();
+          return "late";
+        });
+        return new Response("<p>dirty</p>");
+      });
+      const both = Promise.all([clean, dirty]);
+      try {
+        // Rendezvous: both sensitive reads have begun and are still pending.
+        await cleanEntered.promise;
+        await dirtyEntered.promise;
+        await cleanParked.promise;
+        await dirtyParked.promise;
+        // Pin the refusal while the late read is still parked. The dirty
+        // render already returned, so its boundary decides here (pending read
+        // -> 503) in both orders, before either read completes. Without this
+        // pin, releasing the dirty gate first lets the late read land before
+        // the boundary decides (200 instead of 503 on Node 22 scheduling).
+        const dirtyRes = await dirty;
+        let cleanRes: Response;
+        if (order === "clean-first") {
+          cleanRelease.resolve();
+          await cleanDeclared.promise;
+          // Force the clean boundary to decide while the dirty read is still
+          // parked: a pending read in another capture must not refuse it.
+          cleanRes = await clean;
+          dirtyRelease.resolve();
+          await dirtyDeclared.promise;
+        } else {
+          dirtyRelease.resolve();
+          await dirtyDeclared.promise;
+          cleanRelease.resolve();
+          cleanRes = await clean;
+        }
+        expect(cleanRes.status).toBe(200);
+        expect(await cleanRes.text()).toBe("<p>clean</p>");
+        await expectRefused(dirtyRes);
+        await expect(settleLate).resolves.toBe("late");
+        expect(entries).toEqual([
+          {
+            viewerDiscordId: VIEWER,
+            viewerUserId: VIEWER,
+            resource: "profile",
+            action: "view",
+            route: "profile",
+            subjectUserIds: [SUBJECT],
+          },
+        ]);
+      } finally {
+        cleanRelease.resolve();
+        dirtyRelease.resolve();
+        await settleLate.catch(() => "refused");
+        await both.catch(() => undefined);
+      }
+    },
+  );
 
   it("concurrent requests never share a viewer: each row names only its own viewer", async () => {
     const { entries, sink } = recorder();
