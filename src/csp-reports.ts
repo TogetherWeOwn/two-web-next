@@ -142,6 +142,21 @@ function takeCspLogToken(): boolean {
   return true;
 }
 
+// Bounded shed signal: at most one warn per refill window, fixed keys only,
+// no request content. Counts log-budget drops since the previous shed emit so
+// operators can tell a shedding sink from a quiet one without flooding.
+let shedDropped = 0;
+let lastShedEmit = 0;
+function warnCspShed(): void {
+  shedDropped += 1;
+  const now = Date.now();
+  if (now - lastShedEmit < CSP_LOG_REFILL_MS) return;
+  lastShedEmit = now;
+  const dropped = shedDropped;
+  console.warn("csp.report.shed", { dropped });
+  shedDropped -= dropped;
+}
+
 // No session, no cookie, no DB: an unauthenticated sink that must answer when
 // everything behind it is down. Every path — valid, malformed, oversized,
 // empty, aborted, log-budget exhausted — ends in 204.
@@ -151,12 +166,14 @@ export async function cspReportsRoute(c: Context<{ Bindings: Env }>): Promise<Re
     const body = await readCappedBody(c.req.raw);
     if (body.truncated) {
       if (takeCspLogToken()) console.warn("csp.report.dropped_oversize", { bytes: body.bytes });
+      else warnCspShed();
       return c.body(null, 204);
     }
     const report = extractCspReport(body.text);
     if (report === null) return c.body(null, 204);
-    if (shouldSampleReport(parseCspSampleRate(c.env.CSP_REPORT_SAMPLE_RATE)) && takeCspLogToken()) {
-      console.warn("csp.report.violation", cspReportLogFields(report));
+    if (shouldSampleReport(parseCspSampleRate(c.env.CSP_REPORT_SAMPLE_RATE))) {
+      if (takeCspLogToken()) console.warn("csp.report.violation", cspReportLogFields(report));
+      else warnCspShed();
     }
     return c.body(null, 204);
   } catch {

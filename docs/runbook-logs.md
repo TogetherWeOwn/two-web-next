@@ -182,7 +182,7 @@ route instead of by ID.
 | `join attempt write failed` | The `join_attempts` analytics `INSERT` threw; the row is lost but the request outcome stands (`recordAttempt` in `src/join/service.ts`). | None on the journey. The gap shows only in `join_attempts` counts. | `SELECT outcome, count(*), max(created_at) FROM join_attempts WHERE created_at > now() - interval '1 hour' GROUP BY outcome`, then compare against `http.request` volume on `/join/callback` for the same window; a gap inside one window matches the warn timestamps. If writes never resume, route database insert health to the authorized operator. Never replay a member join to investigate. | `exception` (class name only, never the message, which can quote the live token or statement text), `outcome` |
 | `discord token exchange failed on the join journey` | One bounded line for three triggers in `src/join/route-callback.ts`: oversized code/state refused before any exchange, an invalid-state branch (state cookie missing or mismatched, journey already consumed or expired, missing `code`, or a swallowed journey-store error from `storeFor().catch(() => null)` / `journeys.consume().catch(() => false)`), or a token-exchange/user-fetch throw classified by `failureMeta` (`src/discord.ts`). | The member already sees the matching recovery page: expired-link retry, or the Discord-down 503. A database-caused invalid-state failure also renders "Join link expired" even though the link itself was fine. | Filter logs for the line and split by `kind` and `outcome`, not by `outcome` alone. `provider_outage`/`rate_limited`/`transport_failure` with `outcome: error` point at Discord or wire health; `expired_grant` with `outcome: expired` is a spent or replayed approval. `provider_reject` with status 400/401 (for example `invalid_client` after a secret rotation, or `invalid_request` from a bad redirect URI) points at `DISCORD_CLIENT_ID`/`DISCORD_CLIENT_SECRET` and the registered redirect URI, not at Discord health. `unknown` with a null status is an app-side throw. A sustained `expired` burst with no matching Discord-side change points at the journey store: check `web_oauth_journeys` and database health via the [alert runbook](runbook-alerts.md). Never replay a member join to investigate. | `exception` (class only, never the message, which can quote the secret), `kind`/`status` (exchange-throw site only), sanitized `source`, `outcome` |
 
-#### Kit session-bridge and auth-status probe warnings
+### Kit session-bridge and auth-status probe warnings
 
 Two `console.warn` lines from the Kit hook dispatch
 (`src/route-ownership.ts`). Neither pages: the bridge line is a designed
@@ -207,7 +207,19 @@ moderator authority and role-removal residuals in the
 Ownership flags, response behavior and the log privacy contract are unchanged
 by this section.
 
-## Missing sync-queue binding warning
+### CSP report warnings
+
+The session-free sink (`src/csp-reports.ts`) logs at warn level and always
+answers an empty no-store 204 with no session, cookie or DB read. This row
+covers the oversize diagnostic; `csp.report.violation` keeps its contract in
+[Privacy and boundaries](#privacy-and-boundaries). A separate shed or
+exhaustion diagnostic, if added, gets its own row: exhaustion today is silent.
+
+| Message | Meaning | Member impact | First read-only check | Fields carried |
+| --- | --- | --- | --- | --- |
+| `csp.report.dropped_oversize` | The sink refused a body larger than the 8,192-byte cap (`MAX_CSP_REPORT_BYTES` in `src/csp-report-body.ts`) before parsing. Benign: a misconfigured page or extension emitting a large report. Attack: an oversize flood spending the shared per-isolate log budget to hide real `csp.report.violation` lines. | None: every sink path answers 204. | Filter Workers Logs message/text with `csp.report.dropped_oversize` over the window and compare with `http.request` volume on `POST /csp-reports` and the `csp.report.violation` rate; then cross-check the [CSP report log budget](config.md#csp-report-log-budget) (burst of 20, one refill per 3 seconds, shared by both warning keys) and any shed or exhaustion signal where present. Exhaustion is silent, so a violation drought during an oversize burst may mean the shared per-isolate budget was spent; it does not prove violations stopped — also check `CSP_REPORT_SAMPLE_RATE` (sampled-out reports consume no token) and that the burst reached the burst cap of 20. | `bytes` (number only: the declared length when refused unread, otherwise observed bytes including the discarded overflow chunk; never the body, a URI, or member identity) |
+
+### Missing sync-queue binding warning
 
 `event write-back due but SYNC_EVENT_QUEUE is not bound` (`src/events/sync.ts`,
 `enqueueEventSync`) is a `console.warn`, not one of the `console.error` rows
@@ -376,6 +388,22 @@ identity. The `code` is a fixed allowlisted class, not a message.
    `"outcome":"stale"` and `"outcome":"error"` substrings across the window,
    and note any `"completionFailed":true` or `"code":"..."` values. Compare the
    mix against the healthy and unhealthy shapes above.
+
+## CSP sink shed signal
+
+`POST /csp-reports` (`src/csp-reports.ts`) logs through one in-memory token
+bucket per isolate (20 warnings, one token per 3 seconds, shared by violation
+and oversize warnings). When the bucket is spent, drops emit a bounded shed
+signal instead of going silent, so operators can tell a shedding sink from a
+quiet one under flood.
+
+| Message | Meaning | Severity | First read-only check | Fields carried |
+| --- | --- | --- | --- | --- |
+| `csp.report.shed` | Log-budget drops were shed: at most one line per 3-second refill window per isolate, counting drops since the previous shed emit. | Warns only: every report still answers 204 `no-store`, session-free and DB-free. | Filter logs for the line and compare against `http.request` volume on `/csp-reports` for the same window; an isolated sighting is a burst, a sustained one is a flood or a misbehaving reporter. | `dropped` (positive integer count, never request content) |
+
+The signal carries no URI, directive, sample, header, cookie or identity: only
+the fixed `dropped` count. Sampled-out (`CSP_REPORT_SAMPLE_RATE`) and
+malformed reports never touch the budget and never shed.
 
 ## Local regression check
 
