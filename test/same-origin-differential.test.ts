@@ -347,6 +347,9 @@ describe("same-origin differential (Hono guard vs Kit twin)", () => {
       // guarded paths rather than becoming exemptions.
       ["/%2fmcp", false],
       ["/mcp%2f", false],
+      // The multi-segment spelling must not form /api/agent-events: %2F stays
+      // encoded on both, which pins decodeURI over decodeURIComponent.
+      ["/api%2Fagent-events", false],
       // %25 survives Hono's pre-escape on both: still encoded, still guarded.
       ["/%256dcp", false],
       // Malformed escapes and invalid UTF-8 decode only valid runs on both.
