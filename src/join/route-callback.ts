@@ -78,8 +78,8 @@ export function registerJoinCallbackRoutes(
     // hardcoded fallback, never a hostile or relative href (legacy
     // JoinCallbackFailureTest "recovery uses static invite when none is configured").
     const invite = inviteDestination(c.env.DISCORD_INVITE_URL);
-    // The callback clears the journey cookies, so the retry href is the only
-    // place the return target and attribution survive: safe next/source values
+    // An admitted callback clears the journey cookies, so its retry href is
+    // where the return target and attribution survive: safe next/source values
     // re-mint the start URL (mirroring GET /join/discord?next=&source=), while
     // hostile or absent values keep the bare URL. Both already passed their
     // sanitizers above, so hostile stays dropped.
@@ -100,7 +100,6 @@ export function registerJoinCallbackRoutes(
 
     const rawExpected = await getSignedCookie(c, c.env.SESSION_SECRET, JOIN_STATE_COOKIE);
     const expected = typeof rawExpected === "string" ? rawExpected : null;
-    clearJourney();
     const code = c.req.query("code");
     const state = c.req.query("state");
     // Same inbound bound as the auth callback: refuse oversized code/state
@@ -125,18 +124,21 @@ export function registerJoinCallbackRoutes(
     const admitted =
       store && (await store.journeys.consume(await hashToken(state!), "join").catch(() => false));
 
+    // Only an admitted callback owns the jar's journey. A stale tab or stray
+    // hit must leave the newer tab's state and return intent intact.
+    if (admitted) clearJourney();
+
     // They pressed Cancel on the consent screen, or Discord answered the
-    // approval with an error: nothing to exchange. Legacy renders the recovery
-    // page (not a redirect) and never echoes Discord's error_description.
-    if (c.req.query("error")) {
+    // admitted approval with an error: nothing to exchange. Unadmitted errors
+    // use the generic expired recovery below, never provider details.
+    if (admitted && c.req.query("error")) {
       const denied = c.req.query("error") === "access_denied";
-      if (admitted)
-        await recordAttempt(sql, {
-          outcome: "denied",
-          source,
-          requestId: safeRequestId(c.get("requestId")) ?? null,
-          discordId: null,
-        });
+      await recordAttempt(sql, {
+        outcome: "denied",
+        source,
+        requestId: safeRequestId(c.get("requestId")) ?? null,
+        discordId: null,
+      });
       return recover(
         denied ? "Join cancelled" : "Join didn't complete",
         denied
