@@ -272,16 +272,48 @@ describe.skipIf(!process.env.DATABASE_URL)(
             expect(await observer`select job_id from queue_jobs`).toEqual([
               { job_id: successor!.jobId },
             ]);
+            // Pin the worker waitUntil wiring: after the dispatch deadline the
+            // background lifetime must still be pending while the held send is
+            // unresolved. A revert to successorLifetime(work) settles at the
+            // deadline and fails this pin (Node would still run the detached
+            // tail, masking it without this order assert).
+            await vi.waitFor(
+              () =>
+                expect(
+                  warnings.mock.calls.some(
+                    ([text]) => text === "sync successor dispatch failed; reconcile will retry",
+                  ),
+                ).toBe(true),
+              { timeout: 10_000 },
+            );
+            let backgroundSettled = false;
+            void Promise.all(background).then(
+              () => {
+                backgroundSettled = true;
+              },
+              () => {
+                backgroundSettled = true;
+              },
+            );
+            await new Promise((resolve) => setTimeout(resolve, 100));
+            expect(backgroundSettled).toBe(false);
             held.reject(new Error("local late transport rejection")); // AFTER actual pool end
+            await Promise.all(background);
+            // The tail (including exact-jobId ledger compensation) rides the
+            // background lifetime: already empty here with no waitFor. A
+            // reverted wiring drains at the deadline while compensation is
+            // still in flight and fails this immediate assert.
+            expect(await observer`select job_id from queue_jobs`).toEqual([]);
+          } else {
+            await awaitDispatchFailure();
+            // AB7 producer deadline: the dispatch can already have settled at
+            // its 2000 ms bound, so the rejection compensation below can still
+            // be in flight. Wait for it instead of asserting it immediately.
+            await vi.waitFor(
+              async () => expect(await observer`select job_id from queue_jobs`).toEqual([]),
+              { timeout: 10_000 },
+            );
           }
-          await awaitDispatchFailure();
-          // AB7 producer deadline: the dispatch can already have settled at
-          // its 2000 ms bound, so the rejection compensation below can still
-          // be in flight. Wait for it instead of asserting it immediately.
-          await vi.waitFor(
-            async () => expect(await observer`select job_id from queue_jobs`).toEqual([]),
-            { timeout: 10_000 },
-          );
           expect(await pgEventStore(observer).needsSync(firstKey)).toBe(true);
           await recover(); // A clean revision must not hide the old orphan jobId.
         } finally {

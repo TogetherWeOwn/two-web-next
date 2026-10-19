@@ -60,7 +60,10 @@ export async function withProducerDeadline<T>(
  * lifetime for that tail (the successor path) pass `onLateSettlement` and hold
  * the received promises in their own waitUntil; callers without lifetime
  * (the web after-commit path, whose pool ends in its finally) accept that a
- * late token or ledger compensation may wait for TTL/reconcile recovery.
+ * late token lingers until its TTL and a late ledger compensation stays as
+ * visible phantom backlog until manual cleanup: TTL recovers the lease and
+ * reconcile redispatches the sync, but neither removes an orphaned queue_jobs
+ * row.
  */
 export async function dispatchSyncEvent(
   queue: { send(body: unknown, opts?: { delaySeconds?: number }): Promise<unknown> },

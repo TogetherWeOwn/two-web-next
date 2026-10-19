@@ -160,6 +160,45 @@ describe("producer deadline", () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 
+  it("a late acquire token after the deadline is exposed to the lifetime hook; awaiting it releases the lease", async () => {
+    let resolveAcquire!: (token: string | null) => void;
+    const gate = new Promise<string | null>((resolve) => {
+      resolveAcquire = resolve;
+    });
+    const release = vi.fn(async (_k: string, _t: string) => {});
+    const lock: UniqueLock = { acquire: vi.fn(() => gate), release };
+    const sent: unknown[] = [];
+    const queue = trackingQueue(
+      { send: async (b: unknown) => void sent.push(b) },
+      memLedger().ledger,
+    );
+    const late: Promise<unknown>[] = [];
+    const outcome = track(
+      dispatchSyncEvent(
+        queue,
+        lock,
+        eventKey,
+        crypto.randomUUID(),
+        undefined,
+        undefined,
+        (tail) => {
+          late.push(tail);
+        },
+      ),
+    );
+    await vi.advanceTimersByTimeAsync(PRODUCER_BUDGET_MS + 1000);
+    expect(outcome().status).toBe("rejected");
+    expect(sent).toHaveLength(0);
+    // The acquire-path hook is the worker waitUntil wiring's input: removing
+    // its exposure must fail this pin, not stay green.
+    expect(late).toHaveLength(1);
+    resolveAcquire("late-token");
+    await vi.advanceTimersByTimeAsync(1000);
+    await late[0];
+    expect(release).toHaveBeenCalledWith(key, "late-token");
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
   it("a hung queue.send rejects within budget and releases the lease; the ledger row stays until the send settles", async () => {
     const { lock, rows } = memoryLock();
     const { ledger, rows: ledgerRows } = memLedger();
