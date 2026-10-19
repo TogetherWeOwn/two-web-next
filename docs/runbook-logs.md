@@ -245,6 +245,23 @@ the existing contract. Never run production database tests or replay a sync
 to investigate; log search, read-only `SELECT`s, source and deployed-config
 reads only.
 
+### Export omission warnings
+
+Two `console.warn` lines mark **incomplete but successful exports**: the
+response stays 200 and the valid rows survive, so a 200 does not prove
+completeness. Each row gives the exact message, what was dropped, how it
+differs from a request outage, the first read-only check, and the fields the
+line carries. Find a line with the message **contains** filter from
+[Find a request](#find-a-request). Read-only checks only: a Workers Logs
+search or a bounded `SELECT`. Neither line carries member identity (the ICS
+line carries public event keys, which are URL path segments, not member
+data). Collection behavior and privacy rules are unchanged.
+
+| Message | Meaning | Severity | First read-only check | Fields carried |
+| --- | --- | --- | --- | --- |
+| `sitemapEvents skipped unrenderable rows.` | One or more published rows had an unrenderable window (`startsAt`/`endsAt` outside the finite JS Date range) or an `updatedAt` that is not a finite `Date`, so those URLs were dropped from `/sitemap_index.xml` while the valid rows still shipped (`src/events/reads.ts:882-891`). | No page: incomplete 200 export, not an outage. A database failure instead rejects and the route degrades to the static entries with no warn line (`src/seo-leaves.tsx:48`): warn present means rows were skipped, warn absent with only static entries means the database read failed. | Filter logs for the exact message over the window and note `skipped`. The line carries no event keys, so do not guess which events are missing: compare `SELECT count(*) FROM events WHERE status = 'published'` against the served event-URL count, then page bounded timestamp windows (`SELECT event_key, starts_at, ends_at, updated_at FROM events WHERE status = 'published' ORDER BY starts_at LIMIT 100`) to find the non-finite or out-of-range instants. Never dump the table or re-render the export to investigate. | `skipped` (count only, no event keys) |
+| `eventsIcsCollection skipped out-of-range SEQUENCE rows.` | One or more collection rows carried a stored `ics_sequence` outside the RFC 5545 wire range 0–2147483647 (`IcsSequenceRangeError`, `src/events/feeds.ts:144-168`), so those VEVENTs were dropped from `/events.ics` while the valid VEVENTs shipped byte-identically. The feed is a METHOD:PUBLISH full-state replace, so subscribers drop the skipped event while `/e/:key` still shows it as live. The single-event download instead answers 503 `Calendar revision unavailable` for the same poison row: a 503 there is not a skip. | No page: incomplete 200 export, not an outage. A database failure instead fails the whole read without this line. | Use only the logged `skippedEventKeys`, never a table scan: `SELECT event_key, ics_sequence FROM events WHERE event_key IN ('<key>', ...)` confirms the out-of-range revision evidence. Subscriber impact and the only approved recovery (an explicitly approved calendar-identity migration with a new UID and subscriber transition, never lowering the counter on the existing UID) live in [Calendar wire range and exhaustion](import-events-rsvps.md#calendar-wire-range-and-exhaustion): no clamping, modulo, reset, or automatic UID change. Never reset or lower the counter, and never replay an export or sync, as a diagnostic shortcut. | `skipped` (count), `skippedEventKeys` (the skipped public event keys) |
+
 ## Privacy and boundaries
 
 Request logs allowlist only `event`, `request_id`, `method`, `route`, `status`,
