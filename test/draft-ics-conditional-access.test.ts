@@ -15,7 +15,7 @@ const SECRET = "test-session-secret-at-least-32-bytes-long";
 const COOKIE = "__Host-two_session";
 
 // Real app, Drizzle reads, signed cookies and session rotation; no external I/O.
-function fixture(status: "draft" | "published" = "draft") {
+function fixture(status: "draft" | "published" = "draft", clock: () => number = Date.now) {
   const row: typeof events.$inferSelect = {
     id: 1,
     eventKey: KEY,
@@ -63,7 +63,7 @@ function fixture(status: "draft" | "published" = "draft") {
     }
     throw new Error(`Unexpected fixture query: ${sql}`);
   });
-  const store = createMemorySessionStore();
+  const store = createMemorySessionStore(clock);
   const env = {
     APP_URL,
     SESSION_SECRET: SECRET,
@@ -163,8 +163,9 @@ describe("draft ICS conditional authorization (fixture-only)", () => {
     },
   );
 
-  it("returns 304 with the current moderator cookie and refuses replay of the consumed cookie", async () => {
-    const source = fixture();
+  it("returns 304 during predecessor grace and refuses replay at its deadline", async () => {
+    let now = Date.now();
+    const source = fixture("draft", () => now);
     const moderator = await source.session();
     const first = await source.request(moderator.cookie);
     expect(first.status).toBe(200);
@@ -176,9 +177,10 @@ describe("draft ICS conditional authorization (fixture-only)", () => {
     expect(body).toContain(source.row.title);
     const etag = first.headers.get("etag");
     expect(etag).toMatch(/^"[a-f0-9]{64}"$/);
-    // Rotation consumes each token. Issue a fresh signed login for the next request;
-    // cookie delivery by feedResponse is a separate concern from this authorization boundary.
-    expect(await source.store.get(moderator.tokenHash)).toBeNull();
+    // Keep independent logins for the conditional authorization boundary;
+    // replacement-cookie delivery is covered by the companion suite.
+    expect(await source.store.get(moderator.tokenHash)).toMatchObject({ moderator: true });
+    expect(await source.store.statusHash(moderator.tokenHash)).toBeNull();
     const current = await source.session();
     expect(current.cookie).not.toBe(moderator.cookie);
     expect(await source.store.get(current.tokenHash)).toMatchObject({
@@ -191,6 +193,16 @@ describe("draft ICS conditional authorization (fixture-only)", () => {
     expect(await unchanged.text()).toBe("");
     expect(unchanged.headers.get("etag")).toBe(etag);
     expect(unchanged.headers.get("cache-control")).toBe("max-age=300, private");
+    expect(await source.store.get(current.tokenHash)).toMatchObject({ moderator: true });
+    for (const predecessor of [moderator, current]) {
+      const replay = await source.request(predecessor.cookie, etag!);
+      expect(replay.status).toBe(304);
+      expect(await replay.text()).toBe("");
+      expect(replay.headers.get("etag")).toBe(etag);
+      expect(replay.headers.get("set-cookie")).toBeNull();
+    }
+    now += 10_000;
+    expect(await source.store.get(moderator.tokenHash)).toBeNull();
     expect(await source.store.get(current.tokenHash)).toBeNull();
     await expectForbidden(await source.request(moderator.cookie, etag!), source.row);
     await expectForbidden(await source.request(current.cookie, etag!), source.row);
