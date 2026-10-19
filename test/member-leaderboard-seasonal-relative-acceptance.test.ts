@@ -577,7 +577,7 @@ describe.skipIf(!process.env.DATABASE_URL)("member leaderboard (agent-testdb)", 
                   n: number;
                 }[]
               )[0]!.n,
-            { timeoutMs: 2000 },
+            { timeoutMs: 800 },
           ),
         ).toBe(true);
       });

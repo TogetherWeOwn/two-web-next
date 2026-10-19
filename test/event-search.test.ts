@@ -213,7 +213,7 @@ describe.skipIf(!process.env.DATABASE_URL)("event search (agent-testdb)", () => 
               (
                 await tx`select count(*)::int as n from pg_stat_activity where datname = current_database() and state = 'active' and wait_event_type = 'Lock' and query ilike '%event_search_logs%' and pid <> pg_backend_pid()`
               )[0]!.n,
-            { timeoutMs: 2000 },
+            { timeoutMs: 800 },
           ),
         ).toBe(true);
       });
@@ -302,7 +302,7 @@ describe.skipIf(!process.env.DATABASE_URL)("event search (agent-testdb)", () => 
               (
                 await tx`select count(*)::int as n from pg_stat_activity where datname = current_database() and state = 'active' and wait_event_type = 'Lock' and query ilike '%event_search_logs%' and pid <> pg_backend_pid()`
               )[0]!.n,
-            { timeoutMs: 2000 },
+            { timeoutMs: 800 },
           ),
         ).toBe(true);
       });
