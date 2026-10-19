@@ -28,6 +28,7 @@ import {
 } from "../src/sessions";
 import type { EnvWithThrottle } from "../src/throttle";
 import { createMemberDataFixture, type MemberDataFixture } from "./helpers/member-data-db";
+import { parseJsonLines } from "./helpers/parse-json-lines";
 import { validatePublicSchema } from "./helpers/public-api-schema";
 
 const APP_URL = "https://next.example.test";
@@ -503,14 +504,10 @@ describe.skipIf(!process.env.DATABASE_URL)("public MCP: /mcp", () => {
         expect(body.error.message).toBe("Event data could not be read.");
         expect(content[0]!.text).not.toContain("Failed query");
         expect(content[0]!.text).not.toContain("event_key");
-        const alerts = spy.mock.calls
-          .map((args) => {
-            try {
-              return JSON.parse(args[0] as string) as Record<string, unknown>;
-            } catch {
-              return null;
-            }
-          })
+        const { parsed, skipped } = parseJsonLines(spy.mock.calls);
+        expect(skipped, `unparsed log lines: ${JSON.stringify(skipped)}`).toEqual([]);
+        const alerts = parsed
+          .map(({ value }) => value as Record<string, unknown>)
           .filter((line) => line?.["event"] === "error.alert");
         expect(alerts).toHaveLength(1);
         expect(alerts[0]).toMatchObject({
@@ -551,14 +548,10 @@ describe.skipIf(!process.env.DATABASE_URL)("public MCP: /mcp", () => {
       // The SDK answers a factory failure as a 500 JSON-RPC error; the
       // wrapper above is what raises the single error.alert for it.
       expect(res.status).toBe(500);
-      const alerts = spy.mock.calls
-        .map((args) => {
-          try {
-            return JSON.parse(args[0] as string) as Record<string, unknown>;
-          } catch {
-            return null;
-          }
-        })
+      const { parsed, skipped } = parseJsonLines(spy.mock.calls);
+      expect(skipped, `unparsed log lines: ${JSON.stringify(skipped)}`).toEqual([]);
+      const alerts = parsed
+        .map(({ value }) => value as Record<string, unknown>)
         .filter((line) => line?.["event"] === "error.alert");
       expect(alerts).toHaveLength(1);
       expect(alerts[0]).toMatchObject({
@@ -605,14 +598,10 @@ describe.skipIf(!process.env.DATABASE_URL)("public MCP: /mcp", () => {
         env,
       );
       expect(res.status).toBe(400);
-      const alerts = spy.mock.calls
-        .map((args) => {
-          try {
-            return JSON.parse(args[0] as string) as Record<string, unknown>;
-          } catch {
-            return null;
-          }
-        })
+      const { parsed, skipped } = parseJsonLines(spy.mock.calls);
+      expect(skipped, `unparsed log lines: ${JSON.stringify(skipped)}`).toEqual([]);
+      const alerts = parsed
+        .map(({ value }) => value as Record<string, unknown>)
         .filter((line) => line?.["event"] === "error.alert");
       expect(alerts).toHaveLength(0);
     } finally {

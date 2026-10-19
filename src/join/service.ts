@@ -73,6 +73,21 @@ export function sanitizeSource(raw: unknown): string | null {
 }
 
 /**
+ * Bound on a return destination (login_next / intended, explicit or
+ * gate-recorded), in UTF-8 bytes. A multi-KB value risks silent cookie-cap
+ * drops, and a surviving long value lands in the callback Location header —
+ * so anything longer is rejected at write time (no cookie set) and at consume
+ * time (fall back to the next layer, then the default landing).
+ *
+ * Bytes, not UTF-16 units: the cookie serializer percent-encodes every byte
+ * of a multibyte character, so 512 CJK characters would still serialize past
+ * the browser's 4096-byte per-cookie cap; 512 bytes stays near 1.6 KB. ASCII
+ * (every gate-recorded page, which is already percent-encoded) counts one
+ * byte per character.
+ */
+export const MAX_RETURN_DESTINATION_BYTES = 512;
+
+/**
  * Legacy SafeRedirect::safe: the value survives only when it is a same-origin
  * path — starts with exactly one `/`, no `//`, no backslash, no scheme.
  * Hostile values leave no trace and the callback keeps the default landing.
@@ -84,6 +99,7 @@ export function sanitizeSource(raw: unknown): string | null {
 export function safeNext(raw: unknown): string | null {
   // eslint-disable-next-line no-control-regex
   if (typeof raw !== "string" || raw === "" || /[\s\x00-\x1f\x7f]/.test(raw)) return null;
+  if (new TextEncoder().encode(raw).byteLength > MAX_RETURN_DESTINATION_BYTES) return null;
   if (!raw.startsWith("/") || raw.startsWith("//") || raw.includes("\\")) return null;
   if (/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(raw)) return null;
   try {

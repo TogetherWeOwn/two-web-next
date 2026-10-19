@@ -233,8 +233,9 @@ it (`critical` only warns, `unknown` passes), so a blind or stuck queue cannot b
 fix. Redirects are not followed; each
 request/body has a 5-second timeout. A failure names the route and expected versus
 actual result and fails the deploy job after six attempts. That workflow remains
-staging-only; the separate production workflow below is gated and runs only
-when manually authorized.
+staging-only; the separate production workflow below is gated and promotes
+automatically once staging verifies a commit (with a daily backstop), keeping
+manual dispatch for explicit redeploys and recovery.
 Full procedures live in [docs/runbook.md](docs/runbook.md).
 
 `npm run test:smoke` runs both checkers against loopback stub servers with local
@@ -270,7 +271,7 @@ proof of environment isolation. The separate `env.production` block below
 configures the production Worker; it is not authorization for a deployment,
 database probe or production test.
 
-### Production (gated manual deployment)
+### Production (gated automatic promotion)
 
 Cutover decision state is recorded in `docs/cutover-gates.md` and the release
 contract in `docs/releases.md`; this section describes the deployment contract,
@@ -278,9 +279,18 @@ not the currently serving version. Worker code reaches production only through
 `.github/workflows/deploy-production.yml` (rollbacks through
 `.github/workflows/rollback-production.yml`; production migrations through
 `.github/workflows/db-migrate.yml`), all require `PRODUCTION_DEPLOY_ENABLED` to be
-exactly `true`, and each requires a
-manually authorized dispatch. The workflow accepts only `workflow_dispatch` on
-`main`; it never deploys on push, PR or release. Before the deploy job can start,
+exactly `true`. The production workflow promotes automatically when
+`e2e-staging` completes plus a daily 14:17 UTC schedule backstop, and keeps a
+manually authorized dispatch for explicit redeploys; it never deploys on push,
+PR or release. Automatic runs promote only a staging green that soaked 30
+minutes with no newer red staging run, skip cleanly when production already
+serves the target (`/up` revision marker) or there is nothing soaked and green,
+and stop with a clear error when the target journal has entries production
+lacks (automatic migration waits on the least-privilege migrator). A manual
+re-dispatch with `migrations_applied: true` records an audited continuation
+once `db-migrate.yml` (target production) has applied those entries. Repo
+variable `PRODUCTION_HOLD_UNTIL` (ISO-8601 UTC, at most 24h ahead) pauses all
+promotion while now is before its value. Before the deploy job can start,
 `ci/production-deploy-gate.mjs` requires the repository variable
 `PRODUCTION_DEPLOY_ENABLED` to be exactly `true`, verifies the live GitHub
 Environment `production` protection and rejects the placeholder Hyperdrive id.

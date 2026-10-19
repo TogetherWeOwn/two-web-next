@@ -334,7 +334,7 @@ approved account and binding isolation before any remote mutation.
    failed migration step fails the job before any Cloudflare mutation. The
    queue-create step currently suppresses errors; it is not permission/provisioning evidence.
    The final staging smoke runs `node bin/smoke.mjs https://next.togetherweown.com --fail-on-ready-wait-critical`
-   ([smoke checker](../bin/smoke.mjs)), covering 23 public routes: `/up`
+   ([smoke checker](../bin/smoke.mjs)), covering 24 public routes: `/up`
    (HTTP 200, `application/json`, `db:ok`, `pending_migrations:0`, `status`
    healthy/degraded, `queue.status` healthy/degraded/unknown, `warn_at:20`,
    `critical_at:100`) plus `/`, `/about`, `/faq`, `/rules`, `/privacy`,
@@ -346,14 +346,16 @@ approved account and binding isolation before any remote mutation.
    probe key exists in no database),
    `/api/public/community` (200 JSON community snapshot),
    `/api/public/join` (200 JSON join handoff),
-   `/openapi.json` (200 JSON discovery document)
+   `/openapi.json` (200 JSON discovery document),
+   `/e/<key>` (404 branded missing-event HTML page: the fixed probe key
+   exists in no database)
    and `/__smoke_unknown_route__` (404)
    with CSP/nosniff/content-type/noindex/redirect assertions. The `/up` assertions
    are DB/schema readiness, not liveness only; with the staging strict flag a literal
    `unknown` in `queue.status` or `ready_wait_severity`, or a `critical`
    `ready_wait_severity`, fails the deploy even though `/up` itself still returns 200.
    Queue `degraded` passes. The strict flag is staging-only: the apex production
-   smoke uses the same 23-route shape with `--allow-indexable` and without the strict flag
+   smoke uses the same 24-route shape with `--allow-indexable` and without the strict flag
    (`node bin/smoke.mjs https://togetherweown.com --allow-indexable`), so `critical`
    queue readiness only warns and `unknown` passes there.
 4. An explicitly authorized manual deployment of the reviewed release uses:
