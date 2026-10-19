@@ -98,8 +98,9 @@ describe("anonymous shield burst across one /64", () => {
       "shield:ip:2001:db8:abcd:1234::/64",
       "shield:ip:2001:db8:abcd:1234::/64",
     ]);
-    // The refused hit wrote no audit row: only the two admitted hits did.
-    expect(fake.audits.filter((audit) => audit.reason === "unauthenticated")).toHaveLength(2);
+    // The refused hit wrote no audit row: pre-auth refusals write none,
+    // so neither admitted hit did either.
+    expect(fake.audits.filter((audit) => audit.reason === "unauthenticated")).toHaveLength(0);
   });
 
   it("keeps a distinct /64 on its own budget while its neighbour is spent", async () => {

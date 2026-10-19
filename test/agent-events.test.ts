@@ -155,7 +155,9 @@ describe.skipIf(!process.env.DATABASE_URL)("agent-events ingress (agent-testdb)"
         })
       ).status,
     ).toBe(404);
-    expect(await audits("unauthenticated")).toBeGreaterThanOrEqual(2);
+    // Pre-auth refusals write zero audit rows: the two grantless denials
+    // above (null credential, unknown token) recorded nothing.
+    expect(await audits("unauthenticated")).toBe(0);
     const dump = JSON.stringify(await sql`SELECT * FROM agent_event_audits`);
     for (const t of Object.values(tokens)) expect(dump).not.toContain(t);
     expect((await sql`SELECT count(*)::int AS n FROM events`)[0]!.n).toBe(0);

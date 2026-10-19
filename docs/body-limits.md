@@ -8,15 +8,27 @@ reading the body. Existing authentication, field validation and throttles remain
 in place; authenticated-only route groups may reject a guest before the limiter.
 The global trusted-host and same-origin gates run before route admission or
 buffering; the same-origin ingress/CSP exemptions retain bounded body handling.
-Shared throttles and the profile write throttle run before buffering: oversized
+Except for the six event-write routes and the five admin action routes below,
+shared throttles and the profile write throttle run before buffering: oversized
 attempts consume admission budget and an exhausted bucket returns 429 without
-pulling the upload. Admin lifecycle actions (`POST /admin/events/:key/publish`,
-`/cancel`, `/rsvp-pause`, `/rsvp-reopen`) and queue redispatch
+pulling the upload. Profile owner policy and other moderator write
+authentication also run before buffering; moderator authentication is read once,
+without rotation. Admin event form routes retain their existing throttle-first
+order.
+
+`POST /events`, `PATCH /events/:key` and the four `POST /events/:key/` actions
+(`publish`, `cancel`, `rsvp-pause`, `rsvp-reopen`) instead apply the existing body
+cap before the shared throttle and moderator authentication. Oversized advertised
+or streamed bodies return 413 without throttle rows or session reads, even when
+the throttle budget is exhausted. At or under the cap, requests still run the
+throttle then moderator authentication, retaining the existing 429, 401 and 403
+refusals.
+
+Admin lifecycle actions (`POST /admin/events/:key/publish`, `/cancel`,
+`/rsvp-pause`, `/rsvp-reopen`) and queue redispatch
 (`POST /admin/queue/failed/:id/redispatch`) run the wire cap first instead: an
 oversized moderator body returns 413 with zero admin-write throttle spend and no
-store work, and stays 413 when the budget is already spent. Profile owner policy
-and moderator write authentication also run before buffering; moderator
-authentication is read once, without rotation.
+store work, and stays 413 when the budget is already spent.
 Agent ingress runs its byte cap first: an over-cap body returns 413 with no
 SQL, shield charge or client. Under-cap bodies are buffered, then the
 enabled/store configuration gate runs (404/503 without SQL), then the
