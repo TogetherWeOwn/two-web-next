@@ -459,19 +459,30 @@ test("a broken single-event error envelope served with HTTP 404 fails only that 
 test("a broken single-event HTML detail fails only that entry", async (t) => {
   // GET /e/:key (src/events/routes-detail.tsx) must answer the branded
   // missing-event page for the fixed probe key: a success body, the JSON
-  // error envelope, an unbranded page, or a wrong status fails this entry
-  // only while the neighbouring HTML and JSON probes keep passing.
+  // error envelope, an unbranded page, a wrong status, or a wrong
+  // Content-Type fails this entry only while the neighbouring HTML and
+  // JSON probes keep passing.
   const broken = [
     ["<h1>Fixture game night</h1>", 200],
     ['{"error":{"code":"not_found","message":"No published event with that key."}}', 404],
     ["<h1>Something went wrong</h1>", 404],
     ["<title>We cannot find that page — Together We Own</title>", 200],
+    // Branded body with the right status but the wrong Content-Type: pins
+    // the probe's type: "text/html" assertion (bin/smoke.mjs), which no
+    // body/status mutation exercises.
+    [
+      "<title>We cannot find that page — Together We Own</title>",
+      404,
+      "application/json",
+      "expected Content-Type text/html",
+    ],
   ];
-  for (const [body, status] of broken) {
+  for (const [body, status, contentType, expectedFragment] of broken) {
     const { url } = await stub(t, (route, result) => {
       if (route === "/e/00000000000000000000000001") {
         result.body = body;
         result.status = status;
+        if (contentType) result.headers["content-type"] = `${contentType}; charset=UTF-8`;
       }
     });
     const result = await run(url);
@@ -480,6 +491,12 @@ test("a broken single-event HTML detail fails only that entry", async (t) => {
       result.output.includes("FAIL /e/00000000000000000000000001: expected"),
       `${body}\n${result.output}`,
     );
+    if (expectedFragment) {
+      assert.ok(
+        result.output.includes(`FAIL /e/00000000000000000000000001: ${expectedFragment}`),
+        `${body}\n${result.output}`,
+      );
+    }
     assert.match(result.output, /^PASS \/events$/m, `${body}\n${result.output}`);
     assert.match(
       result.output,
