@@ -17,6 +17,30 @@ describe.skipIf(!process.env.DATABASE_URL)("postgres single-flight + unique lock
     await fixture?.dispose();
   });
 
+  // Observe the holder instead of guessing with a sleep: pg_try_advisory_xact_lock
+  // never blocks, so there is no waiter to watch — poll pg_locks until the exact
+  // advisory key for `name` is granted to another backend, with a deadline.
+  async function waitForAdvisoryHeld(name: string): Promise<void> {
+    const [keyRow] = await sql<{ k: string }[]>`
+      select hashtextextended(${name}, 0)::text as k`;
+    const signed = BigInt(keyRow!.k);
+    const unsigned = signed >= 0n ? signed : signed + (1n << 64n);
+    const high = Number(unsigned >> 32n);
+    const low = Number(unsigned & 0xffffffffn);
+    const deadline = performance.now() + 2000;
+    for (;;) {
+      const [held] = await sql<{ n: number }[]>`
+        select count(*)::int as n from pg_locks
+        where locktype = 'advisory' and granted
+          and classid::bigint = ${high} and objid::bigint = ${low}
+          and pid <> pg_backend_pid()`;
+      if (held!.n > 0) return;
+      if (performance.now() >= deadline)
+        throw new Error("first flight did not hold the advisory lock");
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+  }
+
   it("overlapping cron invocations single-flight, and the lock frees afterwards", async () => {
     const name = own("test-flight");
     const flight = pgSingleFlight(sql);
@@ -33,9 +57,16 @@ describe.skipIf(!process.env.DATABASE_URL)("postgres single-flight + unique lock
       running--;
     };
     const first = flight(name, job);
-    await new Promise((r) => setTimeout(r, 200)); // first now holds the lock
-    const second = await flight(name, job); // overlaps: must skip
-    release();
+    let second = false;
+    try {
+      await waitForAdvisoryHeld(name); // first now holds the lock
+      second = await flight(name, job); // overlaps: must skip
+    } finally {
+      // Release the gate even when observation times out so the blocked
+      // first flight never leaks an open transaction into teardown.
+      release();
+      await Promise.allSettled([first]);
+    }
     expect(await first).toBe(true);
     expect(second).toBe(false);
     expect(runs).toBe(1);
@@ -47,10 +78,17 @@ describe.skipIf(!process.env.DATABASE_URL)("postgres single-flight + unique lock
     const flight = pgSingleFlight(sql);
     let release!: () => void;
     const gate = new Promise<void>((r) => (release = r));
-    const a = flight(own("a"), () => gate);
-    await new Promise((r) => setTimeout(r, 100));
-    expect(await flight(own("b"), async () => {})).toBe(true);
-    release();
+    const nameA = own("a");
+    const a = flight(nameA, () => gate);
+    try {
+      await waitForAdvisoryHeld(nameA);
+      expect(await flight(own("b"), async () => {})).toBe(true);
+    } finally {
+      // Release the gate even when observation times out so the blocked
+      // flight never leaks an open transaction into teardown.
+      release();
+      await Promise.allSettled([a]);
+    }
     await a;
   });
 
