@@ -220,6 +220,21 @@ export class PruneBatchCapError extends Error {
 }
 
 /**
+ * Resolved-partial-failure signal: a scheduled reconcile pass committed with
+ * one or more isolated dispatch failures while healthy keys still dispatched.
+ * Only the class reaches the page line (never a key, message, SQL or count):
+ * the wrapper emits it after the flight commits, so a later flight failure
+ * cannot be muted by this earlier page. A direct reconcileEvents call never
+ * emits it; the scheduled wrapper owns the page.
+ */
+export class ReconcilePartialFailureError extends Error {
+  constructor() {
+    super("reconcile pass completed with isolated dispatch failures");
+    this.name = "ReconcilePartialFailureError";
+  }
+}
+
+/**
  * One table drain that failed while the rest of the pass settled. `table` is
  * a PruneCounts key in canonical table order; `error` preserves the original
  * rejection identity for whole-flight reporting when no reporter is supplied.

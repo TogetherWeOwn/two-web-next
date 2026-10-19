@@ -996,6 +996,26 @@ function validBatch(value: unknown): TraceBatch | null {
   };
 }
 
+// Skew-vs-malformed classifier for the /observe 400: true only for a batch
+// that would have counted but for its stamp. Every structural check mirrors
+// validBatch exactly, so a batch that is both malformed and future-stamped
+// (unknown script, bad counts, missing timestamp) reads as malformed, never
+// skew. Drop semantics and the slack bound live in validBatch; this function
+// only names the rejection reason for the log line.
+function isFutureSkewedBatch(value: unknown): boolean {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const b = value as Record<string, unknown>;
+  if (typeof b.script !== "string" || !APP_SCRIPT_NAMES.has(b.script)) return false;
+  if (
+    ![b.at, b.requests, b.errors, b.crashes].every(
+      (n) => Number.isSafeInteger(n) && (n as number) >= 0,
+    )
+  )
+    return false;
+  if ((b.errors as number) > (b.requests as number) + (b.crashes as number)) return false;
+  return (b.at as number) > Date.now() + BATCH_FUTURE_SLACK_MS;
+}
+
 /**
  * Durable aggregate state: one instance per Tail Worker environment keeps the
  * rolling counts and the health window across isolate churn. Storage holds
@@ -1062,12 +1082,23 @@ export class AlertAggregator {
     try {
       body = await request.json();
     } catch {
+      // Unparseable body: malformed, never skew. No payload bytes in the line.
+      console.warn("tail observe rejected malformed batch: invalid body");
       return new Response(null, { status: 400 });
     }
     await this.load();
     if (pathname === "/observe") {
       const batch = validBatch(body);
-      if (!batch) return new Response(null, { status: 400 });
+      if (!batch) {
+        // Status stays 400 either way; the line names the reason so
+        // operators can tell clock skew from payload corruption.
+        if (isFutureSkewedBatch(body)) {
+          console.warn("tail observe rejected future-skewed batch: timestamp beyond slack");
+        } else {
+          console.warn("tail observe rejected malformed batch: invalid payload");
+        }
+        return new Response(null, { status: 400 });
+      }
       return this.enqueue(async () => {
         // Deep-clone: snapshot() shares its bucket arrays with the live
         // tracker, so an alias would observe the very mutation it must undo.
@@ -1272,6 +1303,39 @@ export function createTailWorker(
 
   type ObservationSource = "aggregator" | "local";
   type SpikeObservation = SpikeAlert & { attemptId?: string; source: ObservationSource };
+
+  // Visibility for a malfunctioning aggregator: one classified console line
+  // per fallback (non-OK, unparseable, wrong-shape 200 on spike/observe and
+  // health). Console, not the sink: sink lines are delivery receipts and
+  // exact-receipt assertions pin them. Only fixed tokens plus a numeric
+  // status: never payload bytes, the webhook credential, the trace token,
+  // or the internal aggregator URL. Thrown/stalled operations stay silent
+  // (deliberately unpinned) so stall coverage keeps its exact shape.
+  type AggregatorFallbackClass = "non-ok" | "unparseable" | "wrong-shape";
+  function warnAggregatorFallback(
+    path: "spike" | "health",
+    failure: AggregatorFallbackClass,
+    status?: number,
+  ): void {
+    try {
+      console.warn(
+        JSON.stringify({
+          event: "aggregator.fallback",
+          path,
+          fallback: "aggregator-fallback",
+          reason:
+            failure === "non-ok"
+              ? "non-ok-status"
+              : failure === "unparseable"
+                ? "unparseable-json"
+                : "wrong-shape",
+          ...(status !== undefined ? { status } : {}),
+        }),
+      );
+    } catch {
+      /* Diagnostics never throw. */
+    }
+  }
   function normalizeSpikeObservation(value: unknown): SpikeObservation | null {
     if (value === null) return null;
     if (!value || typeof value !== "object" || Array.isArray(value)) return null;
@@ -1297,24 +1361,45 @@ export function createTailWorker(
     try {
       // One independent deadline covers request plus body parsing: headers
       // followed by a stalled JSON body expire as a single operation.
-      const operation = (async () => {
+      type ObserveOutcome =
+        | { fallback: true; failure: AggregatorFallbackClass; status?: number }
+        | { data: SpikeObservation | null };
+      const operation: Promise<ObserveOutcome> = (async () => {
         const response = await stub.fetch("https://aggregator.invalid/observe", {
           method: "POST",
           headers: { "content-type": "application/json" },
           body: JSON.stringify(batch),
           signal: AbortSignal.timeout(AGGREGATOR_TIMEOUT_MS),
         });
-        if (!response.ok) return { fallback: true as const };
-        const raw: unknown = await response.json();
+        if (!response.ok)
+          return { fallback: true as const, failure: "non-ok" as const, status: response.status };
+        let raw: unknown;
+        try {
+          raw = await response.json();
+        } catch (error) {
+          // Only malformed JSON warns: a body stream error, dropped
+          // connection, or abort/timeout mid-body rethrows to the silent
+          // outer fallback so on-call chases latency/resets, not parsing.
+          if (!(error instanceof SyntaxError)) throw error;
+          return { fallback: true as const, failure: "unparseable" as const };
+        }
         const spike = normalizeSpikeObservation(raw);
         // A 200 that parses to anything other than null or a valid spike
         // alert is a malfunctioning aggregator: fall back to local counts so
         // it can never suppress the spike page.
-        if (raw !== null && spike === null) return { fallback: true as const };
+        if (raw !== null && spike === null)
+          return { fallback: true as const, failure: "wrong-shape" as const };
         return { data: spike };
       })();
       const result = await withAggregatorDeadline(operation);
-      if ("fallback" in result) return localObserve();
+      if ("fallback" in result) {
+        warnAggregatorFallback(
+          "spike",
+          result.failure,
+          "status" in result ? result.status : undefined,
+        );
+        return localObserve();
+      }
       return result.data;
     } catch {
       // Aggregation is additive: a broken binding falls back to local counts
@@ -1415,24 +1500,37 @@ export function createTailWorker(
     try {
       // One independent deadline covers request plus body parsing, matching
       // observeBatch: expiry takes the existing local fallback.
-      const operation = (async () => {
+      type HealthOutcome =
+        | { fallback: true; failure: AggregatorFallbackClass; status?: number }
+        | { downMs: number | null; attemptId: string | null; source: "aggregator" };
+      const operation: Promise<HealthOutcome> = (async () => {
         const response = await stub.fetch("https://aggregator.invalid/health", {
           method: "POST",
           headers: { "content-type": "application/json" },
           body: JSON.stringify({ ok, at }),
           signal: AbortSignal.timeout(AGGREGATOR_TIMEOUT_MS),
         });
-        if (!response.ok) return { fallback: true as const };
-        const data: unknown = await response.json();
+        if (!response.ok)
+          return { fallback: true as const, failure: "non-ok" as const, status: response.status };
+        let data: unknown;
+        try {
+          data = await response.json();
+        } catch (error) {
+          // Same contract as the spike path: only SyntaxError is
+          // unparseable; stream/abort failures stay silent.
+          if (!(error instanceof SyntaxError)) throw error;
+          return { fallback: true as const, failure: "unparseable" as const };
+        }
         // Well-formed answers are exactly null or an object with a numeric
         // downMs. Anything else on a 200 is a malfunctioning aggregator:
         // fall back to the local health observation so it can never suppress
         // the uptime page.
         if (data === null) return { downMs: null, attemptId: null, source: "aggregator" as const };
         if (typeof data !== "object" || data === null || Array.isArray(data))
-          return { fallback: true as const };
+          return { fallback: true as const, failure: "wrong-shape" as const };
         const { downMs, attemptId } = data as { downMs?: unknown; attemptId?: unknown };
-        if (typeof downMs !== "number") return { fallback: true as const };
+        if (typeof downMs !== "number")
+          return { fallback: true as const, failure: "wrong-shape" as const };
         return {
           downMs,
           attemptId: validAttemptId(attemptId) ?? null,
@@ -1440,7 +1538,14 @@ export function createTailWorker(
         };
       })();
       const result = await withAggregatorDeadline(operation);
-      if ("fallback" in result) return local();
+      if ("fallback" in result) {
+        warnAggregatorFallback(
+          "health",
+          result.failure,
+          "status" in result ? result.status : undefined,
+        );
+        return local();
+      }
       // A healthy probe handled durably still ends the local red window:
       // without this, a fallback-red / aggregator-healthy / fallback-red
       // sequence pages as continuous red from the first run. Healthy
@@ -1648,25 +1753,37 @@ export function createTailWorker(
     async tail(events: readonly TraceLike[], env: TailEnv): Promise<void> {
       const url = webhookUrl(env.OPS_ALERT_WEBHOOK_URL);
       if (!url) return; // No secret: no parsing, no logging, no outbound work.
-      // Merge same-script traces so one invocation makes at most one
-      // aggregation call per script; SHA is per-trace version metadata.
-      // The merged batch keeps a SHA only while every counted trace in the
-      // invocation shares one validated SHA. An untagged or invalid trace,
-      // or a second validated build, clears it to unknown: the last tag
-      // must never speak for the whole invocation.
+      // Merge same-script traces by their 30-second event-time bucket, so
+      // one invocation makes at most one aggregation call per script and
+      // bucket; SHA is per-trace version metadata. Merging by script alone
+      // and re-stamping at the newest trace time would collapse minutes-old
+      // crashes into the newest bucket and page without any real in-window
+      // spike. Each bucket batch keeps a SHA only while every counted trace
+      // in that bucket shares one validated SHA. An untagged or invalid
+      // trace, or a second validated build, clears it to unknown: the last
+      // tag must never speak for the whole bucket.
       // Drop traces skewed beyond now plus the documented slack before the
       // merge: keeping one would let Math.max lift the merged batch into
       // the future and wipe in-window buckets. Merely-late traces still
       // count; a one-bucket future skew stays within the slack.
       const wallNow = now();
       const batches = new Map<string, TraceBatch>();
+      // Future-skew drop accounting: one line per invocation reporting that
+      // invocation's dropped count (not a running total). Drop semantics and
+      // the slack bound are unchanged; this counter only names the drops.
+      let skewDropped = 0;
       for (const trace of events) {
         const batch = batchForTrace(trace, wallNow);
         if (!batch) continue;
-        if (batch.at > wallNow + BATCH_FUTURE_SLACK_MS) continue;
-        const prior = batches.get(batch.script);
+        if (batch.at > wallNow + BATCH_FUTURE_SLACK_MS) {
+          skewDropped += 1;
+          continue;
+        }
+        const bucketAt = Math.floor(batch.at / BUCKET_MS) * BUCKET_MS;
+        const key = `${batch.script}\0${bucketAt}`;
+        const prior = batches.get(key);
         if (!prior) {
-          batches.set(batch.script, { ...batch });
+          batches.set(key, { ...batch });
         } else {
           const incomingCounts = batch.requests + batch.errors + batch.crashes;
           if (incomingCounts > 0) {
@@ -1689,7 +1806,18 @@ export function createTailWorker(
           prior.at = Math.max(prior.at, batch.at);
         }
       }
-      for (const batch of batches.values()) {
+      // One accounting line per invocation that dropped skewed traces,
+      // reporting that invocation's count. Goes to the log sink like the
+      // delivery receipts — never to the webhook — and carries no trace
+      // payload data. Zero-drop invocations stay silent.
+      if (skewDropped > 0) {
+        sink(JSON.stringify({ event: "tail.skew_drop", dropped: skewDropped }));
+      }
+      // Feed the oldest event-time bucket first, whatever order the
+      // traces arrived in: the rolling window, eviction cutoff and alert
+      // timestamp then match feeding the same traces bucket by bucket.
+      const ordered = [...batches.values()].sort((a, b) => a.at - b.at);
+      for (const batch of ordered) {
         const observed = await observeBatch(env, batch);
         if (!observed) continue;
         // The fencing identity and observation source stay internal: strip

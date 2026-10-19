@@ -6,7 +6,13 @@ import { databaseOptions, databaseUrl } from "../db/connection";
 import { setReleaseMetadata } from "../release-tag";
 import { qaEnabled } from "../qa";
 import { PRUNE_CRON, RECONCILE_CRON } from "./constants";
-import { PruneBatchCapError, pruneModelTables, reconcileEvents, runScheduled } from "./cron";
+import {
+  PruneBatchCapError,
+  ReconcilePartialFailureError,
+  pruneModelTables,
+  reconcileEvents,
+  runScheduled,
+} from "./cron";
 import { consume } from "./consumer";
 import { trackingQueue } from "./ledger";
 import { pgPruneStores, pgQueueLedger, pgSingleFlight, pgUniqueLock } from "./postgres";
@@ -104,7 +110,7 @@ export async function enqueueSyncEvent(
       message.requestId,
     );
   } finally {
-    await sql.end({ timeout: 1 });
+    await sql.end({ timeout: 1 }).catch(() => {});
   }
 }
 
@@ -158,7 +164,7 @@ export async function handleQueue(
       ledgerSql.end({ timeout: 1 }).catch(() => {}),
       cleanupSql.end({ timeout: 1 }).catch(() => {}),
     ]);
-    await sql.end({ timeout: 1 });
+    await sql.end({ timeout: 1 }).catch(() => {});
   }
 }
 
@@ -202,17 +208,27 @@ export async function handleScheduled(
     // cap if the backlog is still over the ceiling.
     let pruneCapped = false;
     let pruneFailures: { error: unknown }[] = [];
+    // Resolved partial failures: the pass committed with isolated keys failed
+    // while healthy keys still dispatched. Reported here (not inside the
+    // flight) so the page fires after the flight commits, like the prune-cap
+    // precedent: a rolled-back pass pages only its real error from the catch
+    // below, and a direct reconcileEvents call stays page-free.
+    let reconcilePartialFailures = 0;
     await runScheduled(controller.cron, pgSingleFlight(sqlClient), {
       // The reserved flight holds only the scheduler advisory lock during
       // dispatch. Event writes have a shorter transaction on the other pool,
       // so parent row locks are released before unrelated external sends.
-      reconcile: () =>
-        reconcileEvents({
+      reconcile: async () => {
+        const result = await reconcileEvents({
           events: pgEventStore(dispatchClient),
           writeTransaction: (work) => dispatchClient.begin(async (tx) => work(pgEventStore(tx))),
           queue: trackingQueue(env.SYNC_EVENT_QUEUE, pgQueueLedger(dispatchClient)),
           lock: pgUniqueLock(dispatchClient),
-        }),
+        });
+        const failed = (result as { failed?: unknown }).failed;
+        if (typeof failed === "number" && failed > 0) reconcilePartialFailures = failed;
+        return result;
+      },
       prune: async (db) => {
         // Report the cap and any table failures without paging inside the
         // flight; the single page fires below, after the transaction commits.
@@ -258,6 +274,18 @@ export async function handleScheduled(
     } else if (pruneCapped) {
       try {
         alertScheduledFailing("model:prune", new PruneBatchCapError());
+      } catch {
+        // A throwing alert sink must not fail a committed pass.
+      }
+    }
+    if (reconcilePartialFailures > 0) {
+      // One class-only page per resolved partial pass; the pass still
+      // resolves (isolated failures are never rethrown). Healthy, skipped
+      // and lock-skipped passes keep failed at 0 and stay silent, and the
+      // all-failed throw path never reaches here so it keeps exactly its one
+      // real-class page from the catch below.
+      try {
+        alertScheduledFailing("events:reconcile", new ReconcilePartialFailureError());
       } catch {
         // A throwing alert sink must not fail a committed pass.
       }
