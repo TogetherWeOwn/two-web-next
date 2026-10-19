@@ -54,8 +54,14 @@ export const load: PageServerLoad = async ({ url, request, cookies, setHeaders }
     inviteUrl: env.DISCORD_INVITE_URL,
     widgetUrl,
     widgetSnapshot,
-    next,
-    source,
+    oneClickHref:
+      next && source
+        ? `/join/discord?next=${encodeURIComponent(next)}&source=${encodeURIComponent(source)}`
+        : next
+          ? `/join/discord?next=${encodeURIComponent(next)}`
+          : source
+            ? `/join/discord?source=${encodeURIComponent(source)}`
+            : "/join/discord",
     appUrl: env.APP_URL,
     joinResult,
   };
