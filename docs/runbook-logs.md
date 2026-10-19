@@ -162,6 +162,29 @@ delete a ledger row, clear a lock, or reset a sync claim to investigate.
 | `sync successor dispatch timed out; reconcile will retry` | The post-ack successor check and dispatch hit the 2 s bound and aborted (`src/jobs/consumer.ts:281`). The lock was already released; a rejected or timed-out send still leaves the dirty revision for reconciliation. | No page. Reconcile re-dispatches stale revisions every 10 minutes (`*/10 * * * *`). | Search logs for the line; then check whether a later sync landed: `SELECT sync_revision, synced_revision, discord_event_id FROM events WHERE event_key = '<eventKey>'` (`synced_revision` catching up to `sync_revision` means reconcile recovered it). Never replay a sync to investigate. | None (message only) |
 | `sync successor dispatch failed; reconcile will retry` | The successor dispatch threw and was caught (`src/jobs/consumer.ts:293`). Same backstop as the timeout: the dirty revision stays for reconcile. | No page: same 10-minute reconcile backstop. | Same revision `SELECT` as the timeout row. Never replay a sync to investigate. | `exception` (class name only, never the message, which can carry SQL or connection secrets) |
 
+### Shield sampling and pre-auth refusal warns
+
+Docs-only: this section triages two existing `console.warn` lines. No
+behavior, sampler-rate or audit change, and no new logged field.
+
+| Message | Meaning | Severity | First read-only check | Fields carried |
+| --- | --- | --- | --- | --- |
+| `agent-events.shield.refusal_sampled` | An over-budget outer-shield 429 refusal was sampled (`src/agent-events/shield.ts:120`). Both the audit row and this warn fire on the same ~1% sample (`SHIELD_REFUSAL_AUDIT_RATE = 0.01`): to estimate true refusals, multiply sampled warns (or sampled `shield:credential` / `shield:anonymous` audit rows) by ~100. The latest warn's `refusals` value is the exact running per-class count for the emitting isolate only (process-local, resets on restart, not Worker-wide); estimate window totals by multiplying sampled warns/rows by ~100. | Warn only: no page. A 429 here is the shield doing its job, not an outage. | Filter logs message/text with `agent-events.shield.refusal_sampled` over the window and split by `bucket_class`; then `SELECT operation, payload_digest, count(*) FROM agent_event_audits WHERE created_at > now() - interval '1 hour' AND operation LIKE 'shield:%' GROUP BY operation, payload_digest`. One `shield:credential` digest recurring with a steadily climbing `refusals` counter within a single isolate's warns points at a misconfigured client looping over budget (route to the credential owner to slow its loop); many distinct credential digests point at spray. `shield:anonymous` rows always store a null digest by design, so grouping yields a single row that cannot attribute source: read anonymous spray vs single client from `bucket_class` volume and `http.request` 429s only. Correlate with `http.request` 429 volume on `POST /api/agent-events`. | `bucket_class` (`credential` or `anonymous`), running per-class `refusals`, server-minted `request_id`. Never raw identity. |
+| `agent-events.ingress.pre_auth_refusal` | A pre-auth refusal was sampled (`src/agent-events/ingress.ts:40`): an overlong bearer (> 512 chars), a missing/unknown grant 401, or a grantless control-byte 422. The warn fires on a ~1% sample (`PRE_AUTH_REFUSAL_WARN_RATE = 0.01`): multiply warns by ~100 to estimate true refusals. Grantless refusals write zero audit rows by contract, so an audit count undercounts them to zero. | Warn only: no page. A 401/422 here is the ingress refusing before auth, not an outage. | Filter logs message/text with `agent-events.ingress.pre_auth_refusal` over the window; then compare against `http.request` 401/422 volume on `POST /api/agent-events` for the same window and confirm `SELECT count(*) FROM agent_event_audits WHERE request_id = '<request_id from the sampled warn>'` shows zero rows (zero is expected for these refusals, not a gap). A steady low-rate warn stream with matching 401s and zero matching audit rows points at a misconfigured client (unknown or rotated credential, overlong bearer; route to the provisioning owner, never replay or log the bearer); a burst of warns with a 401/422 spike points at spray. Overlong bearers are never demoted to the anonymous shield bucket, so a rotation flood mints no shield rows. | Server-minted `request_id` only. Never credential, body, operation, key, or anything else the caller chose. |
+
+What the sampling deliberately hides, and why: 99 of 100 refusals leave
+no warn and (for pre-auth) no audit row at all, so per-hit granularity is
+gone by design; the warn carries only the bucket class (shield) or nothing
+but the server-minted `request_id` (pre-auth), and the sampled audit row
+carries only the bucket class with a credential sha256 (or null for
+anonymous), never the raw bearer, body, operation, key, event key, or IP
+bytes. Refusals are attacker-proportional volume, so exact logging would let
+a flood dictate log and table growth. The sample is deliberately
+probabilistic (`Math.random() < 0.01`), not a token bucket, so a flood of
+distinct unknown credentials or buckets cannot spend a shared allowance to
+blind the sink. Lock-contention 503s keep their exact error audit because a
+contention burst is a retryable load signal, not attacker volume.
+
 ### Join journey warnings
 
 Two `console.warn` lines are join-scoped (the attempt write in
