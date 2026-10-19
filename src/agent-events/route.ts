@@ -73,8 +73,10 @@ export const agentEventsAdmission: MiddlewareHandler<IngressEnv> = async (c, nex
   // Release idle sockets even if an admitted upload never reaches EOF.
   const sql = injected ?? postgres(url!, databaseOptions);
   try {
-    // Admit before the transport limiter reads. The bound handler cannot charge
-    // a second shield hit when the parsed body reaches the service.
+    // The route mounts requestBodyLimit("agent") first, so the body is already
+    // bounded and buffered here. Admission charges the shield exactly once; the
+    // bound handler cannot charge a second hit when the parsed body reaches
+    // the service.
     // `cf-connecting-ip` wins on the edge (unforgeable); off-edge the first
     // `x-forwarded-for` hop applies, else nothing (`unknown` downstream).
     const ip =
@@ -123,8 +125,9 @@ export const agentEventsAdmission: MiddlewareHandler<IngressEnv> = async (c, nex
     }
     return c.json({ reason: "internal_error", message: "The agent event ingress failed." }, 500);
   } finally {
-    // Also close on 413, source failures, and shield refusals. Never close the
-    // injected fixture client; its owner manages its lifecycle. A failing
+    // Close on shield refusals, admission/service errors and normal completion
+    // (413 and source-read failures never reach this middleware). Never close
+    // the injected fixture client; its owner manages its lifecycle. A failing
     // close settles silently so it never surfaces as an unhandled rejection.
     if (!injected) c.executionCtx.waitUntil(sql.end({ timeout: 2 }).catch(() => {}));
   }

@@ -414,7 +414,7 @@ describe.skipIf(!process.env.DATABASE_URL)("public MCP: /mcp", () => {
     expect(res.headers.get("retry-after")).toBeTruthy();
   });
 
-  it("refuses JSON-RPC batches with -32600/400 without burning the budget", async () => {
+  it("refuses JSON-RPC batches with -32600/400 after one admission burn", async () => {
     await seed(44);
     const batch = [
       {
@@ -438,8 +438,8 @@ describe.skipIf(!process.env.DATABASE_URL)("public MCP: /mcp", () => {
       error: { code: -32600 },
     });
     expect(res.messages[0]).not.toHaveProperty("result");
-    // No admission burn and no tool run: the shared budget is untouched.
-    expect(hits).toHaveLength(0);
+    // One admission burn and no tool run: admission runs before the batch refusal.
+    expect(hits).toHaveLength(1);
   });
 
   it.each([

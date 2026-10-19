@@ -23,10 +23,14 @@ the throttle budget is exhausted. At or under the cap, requests still run the
 throttle then moderator authentication, retaining the existing 429, 401 and 403
 refusals.
 
-Agent ingress checks enabled/store configuration first (404/503 without body
-reads or SQL), then its credential/IP shield admits once before the limiter.
-Its bound service handler does not charge a second shield hit; the SQL client is
-closed on shield refusals, overflow and parse failures as well as normal replies.
+Agent ingress runs its byte cap first: an over-cap body returns 413 with no
+SQL, shield charge or client. Under-cap bodies are buffered, then the
+enabled/store configuration gate runs (404/503 without SQL), then the
+credential/IP shield admits once, and the SQL client opens only after the
+buffered body reaches EOF. Its bound service handler does not charge a second
+shield hit; the SQL client is closed on shield refusals and normal replies
+(413 and source-read failures never reach admission, so no client opens for
+them).
 The QA environment gate runs first, so a disabled seam always returns 404 without
 reads or throttle queries. Source-read failures return a static 400; downstream
 route and store exceptions still reach their existing handlers.

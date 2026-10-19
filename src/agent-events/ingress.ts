@@ -40,7 +40,7 @@ export async function handleAgentEvent(
   return "handle" in admitted ? admitted.handle(body) : admitted;
 }
 
-/** Admission binds the body handler to this hit; HTTP callers run it before buffering. */
+/** Admission binds the body handler to this hit; HTTP callers run the byte cap first, so admission sees only bounded, buffered bodies. */
 export async function admitAgentEvent(
   sql: Sql,
   cfg: IngressConfig,
