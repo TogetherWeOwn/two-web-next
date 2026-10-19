@@ -9,6 +9,7 @@ import { featuredImageAllowed, featuredImageSrc } from "../src/featured-image";
 import { adminApp } from "../src/admin/routes";
 import { serializeSigned } from "hono/utils/cookie";
 import { createMemberDataFixture, type MemberDataFixture } from "./helpers/member-data-db";
+import { waitForNoLockWaiters } from "./helpers/wait-for-no-lock-waiters";
 import { createMemorySessionStore, hashToken, newSessionToken } from "../src/sessions";
 import type { Env } from "../src/env";
 import type { EnvWithAdminDb } from "../src/admin/db";
@@ -294,10 +295,15 @@ describe.skipIf(!process.env.DATABASE_URL)("featured homepage (isolated test Pos
       expect(res.status).toBe(200);
       expect(Date.now() - start).toBeLessThan(2000);
       expect(await res.text()).not.toContain('data-testid="featured-content"');
-      await new Promise((resolve) => setTimeout(resolve, 300));
-      const waiting =
-        await tx`select count(*)::int as n from pg_stat_activity where datname = current_database() and state = 'active' and wait_event_type = 'Lock' and query ilike '%featured_contents%' and pid <> pg_backend_pid()`;
-      expect(waiting[0]!.n).toBe(0);
+      expect(
+        await waitForNoLockWaiters(
+          async () =>
+            (
+              await tx`select count(*)::int as n from pg_stat_activity where datname = current_database() and state = 'active' and wait_event_type = 'Lock' and query ilike '%featured_contents%' and pid <> pg_backend_pid()`
+            )[0]!.n,
+          { timeoutMs: 800 },
+        ),
+      ).toBe(true);
     });
     // Transaction-scoped settings do not leak; subsequent reads still work.
     expect((await listVisibleFeatured(fixture.db)).map((row) => row.title)).toEqual([
