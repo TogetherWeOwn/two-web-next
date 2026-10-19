@@ -33,7 +33,7 @@ import type {
  */
 export type SingleFlight = (name: string, fn: (db: TxClient) => Promise<void>) => Promise<boolean>;
 
-type ReconcilePreparation = {
+export type ReconcilePreparation = {
   closed: number;
   materialized: number;
   stale: string[] | StaleEventKeysPage;

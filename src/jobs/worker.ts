@@ -12,11 +12,19 @@ import {
   pruneModelTables,
   reconcileEvents,
   runScheduled,
+  type ReconcilePreparation,
 } from "./cron";
 import { consume } from "./consumer";
 import { trackingQueue } from "./ledger";
 import { pgPruneStores, pgQueueLedger, pgSingleFlight, pgUniqueLock } from "./postgres";
-import type { BotClient, QueueLedger, QueueMessage, UniqueLock } from "./types";
+import type {
+  BotClient,
+  EventStore,
+  QueueLedger,
+  QueueMessage,
+  TxClient,
+  UniqueLock,
+} from "./types";
 import { dispatchSyncEvent } from "./sync-event";
 import { pgEventStore } from "./events";
 
@@ -197,6 +205,38 @@ const SCHEDULED_JOB_FOR_CRON: Record<string, ScheduledFailingJob> = {
   [PRUNE_CRON]: "model:prune",
 };
 
+/**
+ * Server-side budget for the scheduled reconcile prepare transaction
+ * (closeFinished + materializeSeries + staleEventKeys). The dispatch pool is
+ * `max: 1`, so an unbounded prepare wedges the only scheduler connection for
+ * the whole pass while another transaction holds a conflicting row lock. Both
+ * budgets name this one 5s constant (the file's own 5s-order precedent from
+ * successorSql): a held lock cancels the prepare with 55P03 (or 57014 when
+ * the equal statement timer wins the same-instant race; the scheduled path
+ * treats both identically), a slow statement with 57014, and the pass fails
+ * fast instead of wedging. Transaction-local
+ * (`SET LOCAL` via set_config) so pooled session settings never leak to the
+ * next holder; the next scheduled pass retries from a clean connection.
+ */
+export const RECONCILE_PREPARE_DB_TIMEOUT_MS = 5000;
+
+/** Scope the prepare budgets on this transaction, before any EventStore statement. */
+export async function setReconcilePrepareTimeouts(client: TxClient | postgres.Sql): Promise<void> {
+  await client`select set_config('lock_timeout', ${`${RECONCILE_PREPARE_DB_TIMEOUT_MS}ms`}, true), set_config('statement_timeout', ${`${RECONCILE_PREPARE_DB_TIMEOUT_MS}ms`}, true)`;
+}
+
+/** Production writeTransaction for the scheduled reconcile pass: the prepare
+ * runs in one transaction with the budgets above, on the given pool. */
+export function reconcileWriteTransaction(
+  sql: postgres.Sql,
+): (work: (events: EventStore) => Promise<ReconcilePreparation>) => Promise<ReconcilePreparation> {
+  return (work) =>
+    sql.begin(async (tx) => {
+      await setReconcilePrepareTimeouts(tx);
+      return work(pgEventStore(tx));
+    });
+}
+
 export async function handleScheduled(
   controller: ScheduledController,
   env: JobsEnv,
@@ -241,7 +281,7 @@ export async function handleScheduled(
       reconcile: async () => {
         const result = await reconcileEvents({
           events: pgEventStore(dispatchClient),
-          writeTransaction: (work) => dispatchClient.begin(async (tx) => work(pgEventStore(tx))),
+          writeTransaction: reconcileWriteTransaction(dispatchClient),
           queue: trackingQueue(env.SYNC_EVENT_QUEUE, pgQueueLedger(dispatchClient)),
           lock: pgUniqueLock(dispatchClient),
         });
