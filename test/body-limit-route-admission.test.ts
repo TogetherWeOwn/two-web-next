@@ -103,9 +103,10 @@ beforeEach(() => {
 
 describe("profile write admission", () => {
   it.each(["PATCH", "POST"])(
-    "%s refuses spent buckets without reading advertised or chunked overflow",
+    "%s refuses oversized bodies before throttle spend, even with a spent budget",
     async (method) => {
       const { sessions, cookie } = await session();
+      const get = vi.spyOn(sessions, "get");
       const throttle = vi.fn(async () => ({ limited: true as const, retryAfter: 31 }));
       const profile = profilesApp({ sessionStore: sessions, throttle });
       for (const advertised of [false, true]) {
@@ -119,18 +120,39 @@ describe("profile write admission", () => {
         if (method === "POST")
           request.headers.set("content-type", "application/x-www-form-urlencoded");
         const response = await profile.request(request, undefined, env);
-        expect(response.status).toBe(429);
-        expect(await response.json()).toMatchObject({ reason: "rate_limited", retry_after: 31 });
-        expect(pull).not.toHaveBeenCalled();
+        expect(response.status).toBe(413);
+        expect(await response.json()).toEqual(ERROR);
+        if (advertised) expect(pull).not.toHaveBeenCalled();
+        else expect(pull.mock.calls.length).toBeLessThanOrEqual(BODY_LIMIT_BYTES.form / 1024 + 2);
         await request.body?.cancel();
       }
-      expect(throttle).toHaveBeenCalledTimes(2);
+      expect(throttle).not.toHaveBeenCalled();
+      expect(get).not.toHaveBeenCalled();
+      const body =
+        method === "POST" ? "_method=PATCH&bio=hello&games_text=" : '{"bio":"hello","games":[]}';
+      const spent = await profile.request(
+        `/members/${userId}`,
+        {
+          method,
+          body,
+          headers: {
+            cookie,
+            accept: "application/json",
+            "content-type":
+              method === "POST" ? "application/x-www-form-urlencoded" : "application/json",
+          },
+        },
+        env,
+      );
+      expect(spent.status).toBe(429);
+      expect(await spent.json()).toMatchObject({ reason: "rate_limited", retry_after: 31 });
+      expect(throttle).toHaveBeenCalledTimes(1);
       expect(throttle).toHaveBeenCalledWith(`profile-write:${userId}`);
     },
   );
 
   it.each(["PATCH", "POST"])(
-    "%s spends exactly one attempt on an admitted overflow or valid write",
+    "%s spends nothing on overflow and exactly one attempt on a valid write",
     async (method) => {
       const { sessions, cookie } = await session();
       const throttle = vi.fn(async () => ({ limited: false as const }));
@@ -156,7 +178,7 @@ describe("profile write admission", () => {
         );
         expect((await profile.request(request, undefined, env)).status).toBe(413);
       }
-      expect(throttle).toHaveBeenCalledTimes(2);
+      expect(throttle).not.toHaveBeenCalled();
       expect(store.find).not.toHaveBeenCalled();
       expect(store.save).not.toHaveBeenCalled();
       const body =
@@ -176,7 +198,7 @@ describe("profile write admission", () => {
         env,
       );
       expect(response.status).toBe(200);
-      expect(throttle).toHaveBeenCalledTimes(3);
+      expect(throttle).toHaveBeenCalledTimes(1);
       expect(store.save).toHaveBeenCalledOnce();
     },
   );

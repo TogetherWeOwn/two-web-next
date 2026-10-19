@@ -8,10 +8,14 @@ reading the body. Existing authentication, field validation and throttles remain
 in place; authenticated-only route groups may reject a guest before the limiter.
 The global trusted-host and same-origin gates run before route admission or
 buffering; the same-origin ingress/CSP exemptions retain bounded body handling.
-Shared throttles and the profile write throttle run before buffering: oversized
-attempts consume admission budget and an exhausted bucket returns 429 without
-pulling the upload. Profile owner policy and moderator write authentication also
-run before buffering; moderator authentication is read once, without rotation.
+Shared throttles run before buffering: oversized attempts consume admission
+budget and an exhausted bucket returns 429 without pulling the upload. The
+profile write throttle is the exception: profile PATCH/form POST enforce the
+form cap before throttle and session work, so an oversized body returns 413
+with zero throttle spend and no session or store read, and an exhausted bucket
+returns 429 only for bodies at or under the cap. Profile owner policy runs
+after the cap; moderator write authentication also runs after its cap, read
+once, without rotation.
 Agent ingress runs its byte cap first: an over-cap body returns 413 with no
 SQL, shield charge or client. Under-cap bodies are buffered, then the
 enabled/store configuration gate runs (404/503 without SQL), then the
