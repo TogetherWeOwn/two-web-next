@@ -120,6 +120,14 @@ async function expectFallback(
   return location!;
 }
 
+function oneClickHref(html: string) {
+  const href = html
+    .match(/<a[^>]*data-testid="join-oneclick"[^>]*>/)?.[0]
+    .match(/href="([^"]*)"/)?.[1];
+  expect(href).not.toBeUndefined();
+  return new URL(href!.replace(/&amp;/g, "&"), "https://next.example.test");
+}
+
 afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
@@ -210,14 +218,33 @@ describe("join start fallback preserves sanitized intent", () => {
     // one-click button re-enters the funnel with the same return target.
     const page = await app.request(location, {}, e);
     expect(page.status).toBe(200);
-    const html = await page.text();
-    const href = html
-      .match(/<a[^>]*data-testid="join-oneclick"[^>]*>/)?.[0]
-      .match(/href="([^"]*)"/)?.[1];
-    expect(href).not.toBeUndefined();
-    const retry = new URL(href!.replace(/&amp;/g, "&"), "https://next.example.test");
+    const retry = oneClickHref(await page.text());
     expect(retry.pathname).toBe("/join/discord");
     expect(retry.searchParams.get("next")).toBe(SAFE_NEXT);
+    expect(retry.searchParams.get("source")).toBe(SAFE_SOURCE);
+    expect([...retry.searchParams.keys()].sort()).toEqual(["next", "source"]);
+  });
+
+  it("the landing page puts a safe source on the one-click link and drops a hostile one", async () => {
+    const { env: e } = isolated();
+    const kept = await app.request(
+      startQuery({ source: SAFE_SOURCE, next: SAFE_NEXT }).replace("/join/discord", "/join"),
+      {},
+      e,
+    );
+    expect(kept.status).toBe(200);
+    const keptHtml = await kept.text();
+    const keptHref = oneClickHref(keptHtml);
+    expect(keptHref.searchParams.get("next")).toBe(SAFE_NEXT);
+    expect(keptHref.searchParams.get("source")).toBe(SAFE_SOURCE);
+
+    const dropped = await app.request("/join?source=a%2Fb&next=%2Fevents", {}, e);
+    const droppedHtml = await dropped.text();
+    const droppedHref = oneClickHref(droppedHtml);
+    expect(droppedHref.pathname).toBe("/join/discord");
+    expect(droppedHref.searchParams.get("source")).toBeNull();
+    expect(droppedHref.searchParams.get("next")).toBe("/events");
+    expect(droppedHtml).not.toContain("a/b");
   });
 
   it("steady path is unchanged: an admitted journey still mints the same cookies", async () => {

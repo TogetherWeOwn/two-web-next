@@ -5,7 +5,7 @@
 import type { Hono } from "hono";
 import { discordWidgetHealth } from "../discord-widget";
 import type { Env } from "../env";
-import { safeNext } from "./service";
+import { safeNext, sanitizeSource } from "./service";
 import { background, type JoinRender } from "./route-shared";
 
 export function registerJoinPageRoutes(app: Hono<{ Bindings: Env }>, render: JoinRender) {
@@ -21,14 +21,19 @@ export function registerJoinPageRoutes(app: Hono<{ Bindings: Env }>, render: Joi
     // synchronous. Read after `url` so the stale verdict schedules its one
     // re-probe before this read.
     const widgetSnapshot = discordWidgetHealth.snapshot(c.env.DISCORD_GUILD_ID);
-    // A safe `?next=` survives onto the one-click link; a hostile one leaves
-    // no trace in the HTML (legacy ReturnToPageTest; safeNext pins the guard).
+    // A safe `?next=` or `?source=` survives onto the one-click link; a hostile
+    // one leaves no trace in the HTML (legacy ReturnToPageTest; safeNext and
+    // sanitizeSource pin the guards). Source is what lets a store-failure
+    // retry keep its attribution: the fallback 302 lands here, and the link
+    // is the only way back into /join/discord.
     const next = safeNext(c.req.query("next"));
+    const source = sanitizeSource(c.req.query("source"));
     return render.joinPage(c, {
       inviteUrl: c.env.DISCORD_INVITE_URL,
       widgetUrl,
       widgetSnapshot,
       next,
+      source,
       appUrl: c.env.APP_URL,
     });
   });

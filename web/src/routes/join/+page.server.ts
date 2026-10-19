@@ -1,7 +1,7 @@
 import { env, waitUntil } from "cloudflare:workers";
 import { discordWidgetHealth } from "../../../../src/discord-widget";
 import { applyJoinPageResponsePolicy } from "../../../../src/join/kit-page";
-import { safeNext } from "../../../../src/join/service";
+import { safeNext, sanitizeSource } from "../../../../src/join/service";
 import type { PageServerLoad } from "./$types";
 
 // Server-rendered only: no hydration bundle, so no inline bootstrap script that
@@ -30,9 +30,11 @@ export const load: PageServerLoad = async ({ url, request, cookies, setHeaders }
   // synchronous. Read after `url` so the stale verdict schedules its one
   // re-probe before this read.
   const widgetSnapshot = discordWidgetHealth.snapshot(env.DISCORD_GUILD_ID);
-  // A safe `?next=` survives onto the one-click link; a hostile one leaves
-  // no trace in the HTML (legacy ReturnToPageTest; safeNext pins the guard).
+  // A safe `?next=` or `?source=` survives onto the one-click link; a hostile
+  // one leaves no trace in the HTML (legacy ReturnToPageTest; safeNext and
+  // sanitizeSource pin the guards). Same inputs as the Hono handler.
   const next = safeNext(url.searchParams.get("next"));
+  const source = sanitizeSource(url.searchParams.get("source"));
   // One-shot join confirmation (legacy join_result flash): the read-only
   // bridge verifies the signed cookie but never consumes it, so a Kit read
   // can never double-spend a flash. This landing is itself a consumer (like
@@ -53,6 +55,7 @@ export const load: PageServerLoad = async ({ url, request, cookies, setHeaders }
     widgetUrl,
     widgetSnapshot,
     next,
+    source,
     appUrl: env.APP_URL,
     joinResult,
   };

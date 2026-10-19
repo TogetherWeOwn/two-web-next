@@ -26,9 +26,10 @@ export function registerJoinStartRoutes(app: Hono<{ Bindings: Env }>, hooks: Joi
     const source = sanitizeSource(c.req.query("source"));
     const next = safeNext(c.req.query("next"));
     // The fallback target is the only place the retry intent survives: safe
-    // next/source values ride back onto /join (mirroring the callback's retry
-    // href), while hostile or absent values keep the bare target. Both already
-    // passed their sanitizers above, so hostile stays dropped.
+    // next/source values ride back onto /join. The query encoding matches the
+    // callback retry href; the path is the journey page, which puts both
+    // values back on the one-click link. Hostile or absent values keep the
+    // bare target. Both already passed their sanitizers above.
     const fallback =
       next && source
         ? `/join?next=${encodeURIComponent(next)}&source=${encodeURIComponent(source)}`
