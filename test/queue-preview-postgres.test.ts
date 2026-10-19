@@ -249,9 +249,25 @@ describe.skipIf(!process.env.DATABASE_URL)("read-only one-row preview SQL", () =
     try {
       const before = await state();
       const preview = await previewFailedJobWithSql(monitored, failureId, STAGING_APP_URL);
-      const sourceReads = queries.filter((query) => /^select\b/i.test(query.trim()));
+      const selects = queries.filter((query) => /^select\b/i.test(query.trim()));
+      // Transaction-local timeout configuration (pendingSync's set_config
+      // SELECT) is not a source read: it carries no clock marker and reads no
+      // table. Absent on the old implementation, one statement when bounded.
+      const isTimeoutConfig = (query: string) =>
+        /set_config\s*\(\s*'(?:lock_timeout|statement_timeout)'/i.test(query);
+      const timeoutConfigs = selects.filter(isTimeoutConfig);
+      const sourceReads = selects.filter((query) => !isTimeoutConfig(query));
       expect(sourceReads).toHaveLength(5);
       for (const query of sourceReads) expect(query).toContain("clock_timestamp()");
+      expect(timeoutConfigs.length).toBeLessThanOrEqual(1);
+      for (const query of timeoutConfigs) {
+        expect(query).toMatch(/set_config\s*\(\s*'lock_timeout'/i);
+        expect(query).toMatch(/set_config\s*\(\s*'statement_timeout'/i);
+        expect(query.match(/,\s*true\s*\)/g)).toHaveLength(2);
+        expect(query).not.toMatch(/\bfrom\b/i);
+        expect(query).not.toContain("clock_timestamp()");
+        expect(query).not.toContain("preview_read_at");
+      }
       expect(preview!.disposition.action).toBe("discard-stale");
       expect(JSON.stringify(preview)).not.toContain("preview_read_at");
       expect(await state()).toEqual(before);
