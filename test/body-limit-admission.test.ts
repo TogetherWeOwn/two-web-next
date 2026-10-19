@@ -45,6 +45,15 @@ const EVENT_WRITE_CAP_FIRST = new Set([
   "POST /events/:key/rsvp-reopen",
 ]);
 
+// Moderator featured create/delete refuse oversized bodies before the shared
+// throttle (the moderator guard still runs first): cap-first, not
+// throttle-first. The featured update post keeps the throttle-before-buffering
+// order.
+const FEATURED_WRITE_CAP_FIRST = new Set([
+  "POST /admin/featured",
+  "POST /admin/featured/:id/delete",
+]);
+
 function routeInfo(key: string) {
   const [method, pattern] = key.split(" ");
   const kind = rawApp.routes
@@ -139,7 +148,7 @@ function upload(
 describe("shared throttles admit before buffering", () => {
   it.each(sharedRoutes)("%s rejects exhausted buckets without pulling any upload", async (key) => {
     const { method, path, max, budget } = routeInfo(key);
-    const capFirst = EVENT_WRITE_CAP_FIRST.has(key);
+    const capFirst = EVENT_WRITE_CAP_FIRST.has(key) || FEATURED_WRITE_CAP_FIRST.has(key);
     const { sql, count } = throttleFixture(budget);
     const { env, cookie } = await sessionEnv(sql as unknown as Sql);
     const empty = await app.request(
@@ -161,7 +170,7 @@ describe("shared throttles admit before buffering", () => {
       const { request, pull } = upload(path, method, cookie, max, advertised);
       const response = await app.request(request, undefined, env);
       if (capFirst) {
-        // Event writes refuse the oversized body before the throttle runs:
+        // Cap-first writes refuse the oversized body before the throttle runs:
         // 413 even with a spent budget, spending no throttle row.
         expect(response.status).toBe(413);
         expect(await response.json()).toEqual(ERROR);
@@ -187,7 +196,7 @@ describe("shared throttles admit before buffering", () => {
 
   it.each(sharedRoutes)("%s counts advertised and chunked oversized attempts", async (key) => {
     const { method, path, max, budget } = routeInfo(key);
-    const capFirst = EVENT_WRITE_CAP_FIRST.has(key);
+    const capFirst = EVENT_WRITE_CAP_FIRST.has(key) || FEATURED_WRITE_CAP_FIRST.has(key);
     for (const advertised of [false, true]) {
       const { sql, count } = throttleFixture(budget - 1);
       const { env, cookie } = await sessionEnv(sql as unknown as Sql);
