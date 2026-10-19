@@ -215,4 +215,32 @@ describe("hot-zone read admission (Kit dispatch)", () => {
     expect(render).toHaveBeenCalledOnce();
     expect(guard).not.toHaveBeenCalled();
   });
+
+  it("enforces the shared public-read budget through the production default guard", async () => {
+    let sql: ((parts: TemplateStringsArray) => Promise<unknown[]>) & {
+      begin: (run: (tx: never) => Promise<unknown>) => Promise<unknown>;
+    };
+    sql = Object.assign(
+      vi.fn(async (parts: TemplateStringsArray) =>
+        parts.join("").includes("SELECT count(*)") ? [{ n: 60, wait: 12 }] : [],
+      ),
+      {
+        begin: async (run: (tx: never) => Promise<unknown>) => run(sql as never),
+        // The throttle sets `SET LOCAL lock_timeout` through `unsafe` before
+        // the advisory lock; the double passes it through.
+        unsafe: async () => [],
+      },
+    );
+    const throttledEnv = {
+      APP_URL: "https://example.test",
+      THROTTLE_STORE: async () => sql,
+    } as never;
+    const render = vi.fn(async () => new Response("kit"));
+
+    const response = await dispatchHotzonesRequest(requestFor(), throttledEnv, render);
+
+    expect(response.status).toBe(429);
+    expect(response.headers.get("cache-control")).toBe("no-store, private");
+    expect(render).not.toHaveBeenCalled();
+  });
 });
