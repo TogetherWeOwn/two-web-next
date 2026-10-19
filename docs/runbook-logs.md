@@ -186,6 +186,29 @@ distinct unknown credentials or buckets cannot spend a shared allowance to
 blind the sink. Lock-contention 503s keep their exact error audit because a
 contention burst is a retryable load signal, not attacker volume.
 
+### `/up` degrade warnings
+
+These five `console.warn` lines come from the `/up` readiness path (the
+route in `src/index.tsx`, plus `src/up-queue.ts`, `src/up-database.ts` and
+`src/up-config.ts`). None pages on its own: the queue-only `unknown` still
+answers HTTP 200, and each 503 feeds the existing
+[`uptime.down`](runbook-alerts.md#scheduled-up-prober-uptimedown) prober
+rather than a new page. Each row gives the exact message, what it means, why
+it does not page, and the first read-only check, including what the degraded
+`/up` body still proves. Find a line with the message **contains** filter
+from [Find a request](#find-a-request). Read-only checks only: a Workers
+Logs search, a `GET /up` read, a `SELECT`, or a source or deployed-config
+read. Never set a secret, run or repair migrations, replay a sync, or
+substitute another backend or credential to investigate.
+
+| Message | Meaning | Severity | First read-only check | Fields carried |
+| --- | --- | --- | --- | --- |
+| `Health check could not build the database client.` | The `postgres()` client constructor threw synchronously (`src/index.tsx:664`), so neither the DB/schema read nor the queue-ledger read started. | No page. The 503 feeds the existing `uptime.down` prober (red for over two minutes); the warn adds no new paging. | Read `GET /up` per [Read `/up` without mistaking liveness for readiness](runbook.md#read-up-without-mistaking-liveness-for-readiness): expect HTTP 503 with `db: error`, `pending_migrations: null` and `queue.status: unknown` with `detail: "queue ledger is not configured."` That triple proves the route served but neither store was read; the `config` and `revision` slices stay valid. Route the unreachable or malformed selection (`DATABASE_URL`, else `DB.connectionString`) to the Operator. Never substitute another backend or credential. | `exception` (class name only) |
+| `Health check could not read the queue depth; reporting unknown.` | The ledger measure threw or hit the response deadline (`src/up-queue.ts:75`); the failure is reported as `unknown`, never thrown to the route. | No page. Queue-only `unknown` still answers HTTP 200 when DB/schema is ready, so the prober does not fire; backlog visibility is reduced, not lost, and ledger rows are unchanged. | Read `GET /up`: `queue.status: unknown` with all seven measurements `null`, `ready_wait_severity: unknown` and `detail: null` still proves `db: ok` with `pending_migrations: 0` and the `config` slice when present; then `SELECT job_id, kind, key, available_at, reserved_at, created_at FROM queue_jobs ORDER BY created_at, job_id LIMIT 100`. Never insert or delete a ledger row to investigate. | `exception` (class name only, never the message: the queue tables carry job payloads and the endpoint must not leak one into a log) |
+| `Health check could not establish database/schema readiness.` | The DB ping or the migration-ledger read threw or hit its deadline (`src/up-database.ts:67`). `db` reads `ok` when the ping passed but the ledger failed, else `error`; `pending_migrations` is `null` either way. | No page on the line itself. The 503 feeds the existing `uptime.down` prober. | Read `GET /up`: `db` plus `pending_migrations: null` with a still-measured `queue.status` proves the queue slice survived and only the DB/schema half failed; then check database health with the [alert runbook](runbook-alerts.md). Never run or repair migrations through `/up`. | `exception` (class name only) |
+| `Health check found SESSION_SECRET too weak: it must be at least 32 characters with no leading or trailing whitespace.` | `SESSION_SECRET` is configured but fails the documented strength floor (`src/up-config.ts:44`): under 32 characters or with leading or trailing whitespace. A weak session key takes precedence over a missing Discord secret, so fixing it can surface `config: "missing"` next. | No page on the line itself. The 503 with `config: "weak"` feeds the existing prober. | Read `GET /up`: `config: "weak"` with measured `db` and `queue` slices proves the stores are healthy and only the secret fails; then read the floor in [`SESSION_SECRET` strength and rotation](config.md#session_secret-strength-and-rotation). Route the fix to the Operator (`wrangler secret put` on the target); never weaken the probe. | `secret: "SESSION_SECRET"` plus the requirement text, never the value |
+| `Health check found required Worker secrets missing.` | One or more required secrets is absent, empty or whitespace-only (`src/up-config.ts:52`). The body answers 503 with `config: "missing"` and never names which secret. | No page on the line itself. The 503 feeds the existing prober. | Read `GET /up`: `config: "missing"` with measured `db` and `queue` slices proves the stores are healthy; only these names are safe to list from the log line, never values: `SESSION_SECRET`, `DISCORD_CLIENT_SECRET`, `DISCORD_BOT_TOKEN`. Route the fix to the Operator under [Deploy and record the rollback pointer](runbook.md#deploy-and-record-the-rollback-pointer); never echo a value. | `missing` (secret names only, never values) |
+
 ### Join journey warnings
 
 Two `console.warn` lines are join-scoped (the attempt write in
