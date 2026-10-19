@@ -12,7 +12,8 @@
 // of those are ignored, and the original Request passes through untouched
 // (query preserved, body unread) to whichever renderer owns it.
 
-import { serialize } from "hono/utils/cookie";
+import { Context } from "hono";
+import { deleteCookie } from "hono/cookie";
 import type { AccessSink } from "./access-log";
 import { isContentLeafPath, robotsTagFor, securityHeadersFor } from "./headers";
 import { transformContentLeafChunk } from "./kit-content-chunk";
@@ -625,9 +626,9 @@ function renderMemberRead(
 // (src/profiles/routes-gate.ts): expire the one-shot join flash only after the
 // member-read boundary has released a successful HTML GET. The peek in
 // readReturnJourney stays read-only, so a refused, failed, HEAD, or non-HTML
-// response leaves the pending cookie untouched. Unsigned expiry: the
-// return-journey deleteOpts (path /, Secure, HttpOnly, SameSite Lax) plus
-// Max-Age=0, which is what Hono deleteCookie emits. No secret and no new cookie.
+// response leaves the pending cookie untouched. Hono's deleteCookie supplies
+// the zero max-age expiry with return-journey deleteOpts (path /, Secure,
+// HttpOnly, SameSite Lax). No secret, new lifetime, or new cookie.
 function releasedProfileConsumesJoinFlash(
   route: OwnedRoute,
   event: HookEventLike,
@@ -639,16 +640,6 @@ function releasedProfileConsumesJoinFlash(
   if (!response.headers.get("content-type")?.includes("text/html")) return false;
   const flash = (event.locals as Partial<KitLocals> | undefined)?.joinResult;
   return flash === "added" || flash === "already_member";
-}
-
-function joinResultDeletionCookie(): string {
-  return serialize(JOIN_RESULT_COOKIE, "", {
-    path: "/",
-    secure: true,
-    httpOnly: true,
-    sameSite: "Lax",
-    maxAge: 0,
-  });
 }
 
 // Framework-free core of web/src/hooks.server.ts handle(): exactly one
@@ -792,13 +783,15 @@ export async function dispatchHookRequest(
   // After the released response exists, and only for the two profile paths.
   // Not in the loader: that would expire the flash before the audit can refuse.
   if (releasedProfileConsumesJoinFlash(route, event, response)) {
-    const headers = new Headers(response.headers);
-    headers.append("set-cookie", joinResultDeletionCookie());
-    response = new Response(response.body, {
-      status: response.status,
-      statusText: response.statusText,
-      headers,
+    const c = new Context(event.request);
+    c.res = response;
+    deleteCookie(c, JOIN_RESULT_COOKIE, {
+      path: "/",
+      secure: true,
+      httpOnly: true,
+      sameSite: "Lax",
     });
+    response = c.res;
   }
   decorateKitResponse(response, event, deps.appUrl, deps.featuredImageHosts);
   return response;
