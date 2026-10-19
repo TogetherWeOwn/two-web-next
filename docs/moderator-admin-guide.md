@@ -39,13 +39,20 @@ moderator signing out. First dry-run, check the active-session count, then apply
 revocation for the moderator's Discord snowflake:
 
 ```sh
-node --import ./bin/ts-hook.mjs bin/revoke-sessions.mjs --discord-id=<snowflake> --target production
-node --import ./bin/ts-hook.mjs bin/revoke-sessions.mjs --discord-id=<snowflake> --target production --apply
+node --import ./bin/ts-hook.mjs bin/revoke-sessions.mjs --discord-id=<snowflake> --target staging
+node --import ./bin/ts-hook.mjs bin/revoke-sessions.mjs --discord-id=<snowflake> --target staging --apply
 ```
 
 The command revokes only active sessions; the database URL is supplied through
-`DATABASE_URL`, never as an argument. Remote database URLs—including
-production-looking ones—require `--target production`. See [the runbook procedure](runbook.md#a-moderator-lost-their-role).
+`DATABASE_URL`, never as an argument. The examples target staging: confirm the
+authorized staging database before running them. For an authorized production
+incident, confirm the production database and replace `--target staging` with
+`--target production` in both commands. Remote non-production URLs require
+`--target staging` or `--target production`; production-looking URLs require
+exactly `--target production` and refuse `--target staging`, even on a local
+host. Local hosts otherwise need no target. The flag asserts the intended scope,
+not environment discovery; never use the production assertion for staging.
+See [the runbook procedure](runbook.md#a-moderator-lost-their-role).
 
 ## Quarterly moderator access review (role-audit half)
 
