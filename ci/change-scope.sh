@@ -6,9 +6,13 @@
 # executes or reads; anything else, or any doubt, prints `docs_only=false` and
 # the full suite runs. Also prints `skip_e2e=true` when no changed path can
 # alter what a browser or the staging Worker observes — docs prose plus the
-# `test/` unit tree, which the journeys never execute (Playwright `testDir` is
-# `./e2e`, the deploy smoke drives `bin/`); every other path prints
-# `skip_e2e=false`. The `skip_e2e` verdict is pure path matching on purpose: a
+# `test/` unit tree the journeys never execute (Playwright `testDir` is
+# `./e2e`, the deploy smoke drives `bin/`), except `test/` helpers the `e2e/`
+# tree imports: journeys execute those, so changing one runs the smoke. The
+# imported set is derived at runtime by grepping the `e2e/` tree for `test/`
+# imports on import lines (comments that merely name a path don't count),
+# never a hardcoded list. Every other path prints `skip_e2e=false`. The
+# `skip_e2e` verdict is pure path matching on purpose: a
 # doc that a gate reads (docs/config.md) is an input to `check` but proves
 # nothing about browser journeys, so it still skips them. `check` ignores
 # `skip_e2e`; only the e2e workflows consume it.
@@ -37,6 +41,33 @@ expected=$2
 # alter what a browser or the Worker observes. It must not share the docs_only
 # early exit below — a `test/` path trips that exit while still skipping e2e.
 # A truncated list proves nothing for either verdict, so it fails both closed.
+#
+# True when a changed test/ helper is imported by the e2e/ tree. Journeys
+# execute helpers they import (e2e/home-font-swap.spec.ts imports
+# ../test/helpers/page-shells), so such a change must run the smoke. The match
+# is extension-insensitive, so extensionless and .js-suffixed imports both
+# count; a missing e2e/ tree means no imports, while an unsearchable tree
+# fails closed to imported.
+is_e2e_imported_helper() {
+  [ -d e2e ] || return 1
+  local helper=$1
+  local sub=${helper#test/}
+  sub=${sub%.*}
+  [ -n "$sub" ] || return 0
+  # Only dots need regex-escaping below; anything outside the safe path
+  # charset fails closed to imported instead of risking a bad pattern.
+  case $sub in
+    *[!A-Za-z0-9_./-]*) return 0 ;;
+  esac
+  local escaped=${sub//./\\.}
+  local rc=0
+  git grep -qE "(from|import|require)[^'\"]*['\"]([^'\"]*[^A-Za-z0-9_.-])?test/${escaped}(\$|[.'\"])" -- e2e/ 2>/dev/null || rc=$?
+  case $rc in
+    0) return 0 ;;
+    1) return 1 ;;
+    *) return 0 ;;
+  esac
+}
 skip_e2e=false
 if [ -s "$files" ]; then
   listed_e2e=$(wc -l < "$files")
@@ -47,7 +78,12 @@ if [ -s "$files" ]; then
       # observing it, and moving code out of test/ starts observing it.
       for path in "$name" ${previous:+"$previous"}; do
         case "$path" in
-          docs/*|test/*|tier0/*) ;;
+          docs/*|tier0/*) ;;
+          test/*)
+            if is_e2e_imported_helper "$path"; then
+              skip_e2e=false
+            fi
+            ;;
           # Markdown elsewhere (content/, src/, fixtures outside test/) may
           # be shipped or read, so only root-level prose skips.
           */*) skip_e2e=false ;;

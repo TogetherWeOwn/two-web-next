@@ -65,6 +65,16 @@ beforeEach(() => {
     "src/app.ts": "export {};\n",
     "test/app.test.ts": 'import { it } from "vitest";\n',
     "test/helpers/fixture.ts": "export {};\n",
+    // Fixture-only names (absent from the real tree), so these verdicts prove
+    // the script derives its imported set from the checked-out tree instead of
+    // matching a hardcoded list: e2e/uses-imported.spec.ts imports
+    // test/helpers/imported.ts two ways, while test/helpers/fixture.ts is only
+    // named in a comment.
+    "test/helpers/imported.ts": "export {};\n",
+    "e2e/uses-imported.spec.ts":
+      'import { a } from "../test/helpers/imported";\nimport { b } from "../test/helpers/imported.js";\n',
+    "e2e/comment.spec.ts":
+      '// parity lives in "test/helpers/fixture.ts" (unit-pinned); this spec proves the same path\n',
   };
   for (const [path, body] of Object.entries(files)) {
     mkdirSync(dirname(join(repo, path)), { recursive: true });
@@ -266,6 +276,35 @@ describe("skip_e2e verdict", () => {
     // Unit tests still run the required check: docs_only stays false.
     expect(result.docsOnly).toBe("false");
     expect(result.skipE2e).toBe("true");
+  });
+
+  it("runs the smoke for a test helper the e2e tree imports", () => {
+    const result = scope([["test/helpers/imported.ts", ""]]);
+    expect(result.docsOnly).toBe("false");
+    expect(result.skipE2e).toBe("false");
+    expect(result.app).toBe("true");
+  });
+
+  it("skips the smoke for a never-imported helper e2e only names in a comment", () => {
+    const result = scope([["test/helpers/fixture.ts", ""]]);
+    expect(result.docsOnly).toBe("false");
+    expect(result.skipE2e).toBe("true");
+    expect(result.app).toBe("true");
+  });
+
+  it("runs the smoke when an imported helper meets never-imported helpers", () => {
+    const result = scope([
+      ["test/app.test.ts", ""],
+      ["test/helpers/fixture.ts", ""],
+      ["test/helpers/imported.ts", ""],
+    ]);
+    expect(result.skipE2e).toBe("false");
+  });
+
+  it("counts both names of a rename against the imported set", () => {
+    expect(scope([["test/helpers/imported.ts", "test/old-name.ts"]]).skipE2e).toBe("false");
+    expect(scope([["test/new-name.ts", "test/helpers/imported.ts"]]).skipE2e).toBe("false");
+    expect(scope([["test/new-name.ts", "test/old-name.ts"]]).skipE2e).toBe("true");
   });
 
   it("skips the smoke for mixed docs and test changes", () => {
