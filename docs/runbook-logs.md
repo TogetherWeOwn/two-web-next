@@ -453,6 +453,81 @@ the existing contract. Never run production database tests or replay a sync
 to investigate; log search, read-only `SELECT`s, source and deployed-config
 reads only.
 
+### Bot transport warnings
+
+One signed attempt per call; the queued job owns the retry policy
+(`src/bot/client-transport.ts`, header comment). The two console lines below
+are emitted on the jobs Worker (`two-web-jobs`), from the queue consumer's bot
+client, for `announcement.post`, `role.assign`, `event.upsert` and
+`event.cancel`. The two throws emit no console line at the transport: they
+surface as a transport wait (a retry, never a recorded refusal), and only
+exhaustion surfaces as `job failed` / `queue.failing`. None of the four pages
+on its own; only a terminal `queue.failing` pages, per the
+[alert runbook](runbook-alerts.md). Find a line with the message **contains**
+filter from [Find a request](#find-a-request). Read-only checks only: a
+Workers Logs search over the incident window, a `SELECT`, or a source file.
+
+| Message | Meaning | Member impact | First read-only check | Fields carried |
+| --- | --- | --- | --- | --- |
+| `bot internal action refused` | The bot answered with a refusal envelope (`console.warn`, `src/bot/client-transport.ts:205-212`). Branch on `retryable`, never on the status: `in_progress` and `replayed` are both 409 with opposite answers (`src/bot/client-retry.ts:7-18`; the wire flag is authoritative, the table is only the missing-flag fallback). | Retryable (`retryable: true`): the job waits and retries with backoff (a usable Retry-After on 429 is admitted, otherwise the attempt's backoff), so the announcement, role change or event sync is late, not lost, until the carrier exhausts. Terminal (`retryable: false`): the job fails and `queue.failing` follows. | Tally the line over the incident window, grouped by `action` and `code`; then correlate one logical operation by its exact `idempotency_key` UUID. `role.assign` sends no key (natural idempotency), so those lines carry no `idempotency_key`: correlate by time window plus `action: role.assign` instead. Never a cookie, token or secret value. | `idempotency_key` (caller-supplied UUID, absent for `role.assign`), `action` (or `(unknown)`), `status` (HTTP status, informational), `code` (always in-vocabulary, see below), `retryable`, `duration_ms` |
+| `bot internal action succeeded` | The bot answered `ok` (`console.info`, `src/bot/client-transport.ts:197-203`). `replayed: true` means the bot acknowledged a repeated idempotency key: an idempotent retry, not a fresh apply. Do not confuse it with refusal `code: replayed`, a 409 refusal code that fails closed when the wire flag is absent. | None: informational. `replayed: true` confirms the retry landed on an already-applied key (same message, same application), not a duplicate. | Same tally and `idempotency_key` correlation as the refused row; a `replayed: true` burst after an outage window is retries draining, not fresh traffic doubling. | `idempotency_key` (absent for `role.assign`), `action`, `status`, `replayed`, `duration_ms` |
+| `bot unreachable` | The signed fetch rejected (DNS failure, connection refused, abort/timeout, or a redirect the runtime refused to hand back), thrown as a `BotTransportError` with one fixed string and the raw rejection as the structural `cause` (`src/bot/client-transport.ts:171-176`). Transport, never refusal: no `code` and no `retryable` were observed. | A wait, never a recorded refusal: the job retries with backoff, exactly as if the bot were down. | There is no direct line to search. On the sync path, tally `sync retry classified` with `"sync_retry_class":"BotTransportError"` over the window (see [sync-event retry-cause diagnostics](#sync-event-retry-cause-diagnostics)); on the announcement/role path, per-attempt waits emit no line at all, so check `queue.failing` for the job kind after exhaustion. Correlate via the queue message's idempotency key, never a cookie or secret value. | None in logs. The fixed string travels as the exception message only; receipts carry the class `BotTransportError`, never the raw rejection text |
+| `bot answered with a redirect (3xx); not followed` | The bot answered 3xx (`3xx` is the answered status, 300-399), thrown as a `BotTransportError` (`src/bot/client-transport.ts:178-179`). The transport sends `redirect: manual` and never follows: a redirect would forward signed bodies and headers to an unvalidated origin. Same transport disposition as `bot unreachable`. | Same wait-and-retry as `bot unreachable`. A sustained burst points at the bot endpoint answering redirects (misconfigured base URL or a proxy in front of it), not at member behavior. | Same as `bot unreachable`: no direct line; tally `"sync_retry_class":"BotTransportError"` on the sync path, `queue.failing` after exhaustion. Then read the configured `BOT_ENDPOINT_URL` and compare it with the refused statuses. | None in logs. The status number rides in the exception message only; no `Location` target, URL or body ever does |
+
+Three dispositions, three different shapes. A refused-but-retryable answer is
+the bot saying no-for-now: it carries a `code` and `retryable: true`, and on
+the sync path it also appears as `sync_retry_class: BotFailure` in the
+[queue retry-cause table](#sync-event-retry-cause-diagnostics) (which uses its
+own narrower cause set: `in_progress`, `rate_limited`, `internal`,
+`discord_unavailable`, `upstream_timeout`, `unknown`; transport errors never
+carry a code there either). An unreachable/redirect throw is the transport
+saying it could not ask: no refusal was recorded, no `code` exists, and the
+sync path records it as `sync_retry_class: BotTransportError`. A
+`replayed: true` success is the bot saying already-applied: the operation is
+done, and the line is the retry's acknowledgment, not evidence of a second
+application.
+
+Security boundary: the fixed throw strings carry no endpoint URL, request or
+response body, redirect target, resolved address or runtime wording (the
+redirect line carries only the 3xx status number); the raw rejection rides
+structurally as `cause`, pinned by
+`test/bot-client-transport-throw-redaction.test.ts`. The refused line's `code`
+is `diagnosticCode(...)`: always one of the eleven known codes (`malformed`,
+`unauthorized`, `stale_request`, `action_not_allowed`, `replayed`,
+`in_progress`, `discord_rejected`, `rate_limited`, `internal`,
+`discord_unavailable`, `upstream_timeout`) with a fixed `unknown` fallback
+(`src/bot/diagnostic-code.ts:7-23`); a hostile or overlong provider code can
+neither smuggle bytes nor flood the line. Neither console line carries the
+provider's `request_id`, the provider's error message, the secret, signature
+or nonce material, or any request body —
+`test/bot-client-no-secret-log.test.ts` and
+`test/bot-client-provider-metadata-redaction.test.ts` pin both. Correlation
+uses the caller-supplied idempotency key (a validated UUID, never provider
+input) or a time window: never a cookie, token, secret, member identity or
+the unlogged provider `request_id`.
+
+```sh
+# Live stream of transport diagnostics (authorized Cloudflare access required).
+# The internal-action transport runs on two-web-jobs after the handoff, not on
+# two-web-next.
+npx wrangler tail two-web-jobs --format json \
+  | jq -c 'select(.logs[]?.message[]? | tostring | contains("bot internal action"))'
+
+# Count refusals per code over a saved tail file
+jq -c '.logs[]? | select(any(.message[]?; . == "bot internal action refused")) | .message[]? | select(type == "object")' \
+  deliveries.json | grep -o '"code":"[a-z_]*"' | sort | uniq -c
+
+# Correlate one logical operation by its idempotency key (announcement/event only)
+jq -c '.logs[]? | select(any(.message[]?; tostring | contains("<idempotency-key-uuid>")))' \
+  deliveries.json
+```
+
+In the dashboard (**Workers & Pages → two-web-jobs → Observability**), filter
+the message/text with `bot internal action refused` (or `succeeded`) over the
+incident window and group by `action` and `code`; paste one exact
+`idempotency_key` UUID into the filter to follow a single operation across its
+attempts. These receipts count attempts, not distinct logical operations.
+
 ### Export omission warnings
 
 Two `console.warn` lines mark **incomplete but successful exports**: the
