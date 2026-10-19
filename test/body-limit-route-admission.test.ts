@@ -211,6 +211,44 @@ describe("profile write admission", () => {
       expect(store.save).toHaveBeenCalledOnce();
     },
   );
+
+  it.each(["PATCH", "POST"])(
+    "%s keeps the member gate on deeper or bare member write shapes",
+    async (method) => {
+      const { sessions } = await session();
+      const get = vi.spyOn(sessions, "get");
+      const throttle = vi.fn(async () => ({ limited: false as const }));
+      const profile = profilesApp({ sessionStore: sessions, throttle });
+      for (const path of [`/members/${userId}/extra`, `/members/${userId}/`, "/members/"]) {
+        const response = await profile.request(
+          path,
+          { method, headers: { accept: "application/json", cookie: "" } },
+          env,
+        );
+        expect(response.status, `${method} ${path}`).toBe(401);
+        expect(await response.json(), `${method} ${path}`).toEqual({
+          error: "Unauthorized",
+          recovery: "/auth/recover?next=%2Fprofile",
+        });
+        expect(response.headers.get("cache-control") ?? "", `${method} ${path}`).toMatch(/private/);
+        expect(response.headers.get("cache-control") ?? "", `${method} ${path}`).toMatch(
+          /no-store/,
+        );
+      }
+      expect(throttle).not.toHaveBeenCalled();
+      expect(get).not.toHaveBeenCalled();
+      // The real single-segment write shape still 413s first when oversized.
+      const { request } = upload(`/members/${userId}`, method, BODY_LIMIT_BYTES.form, "", true);
+      if (method === "POST")
+        request.headers.set("content-type", "application/x-www-form-urlencoded");
+      const oversized = await profile.request(request, undefined, env);
+      expect(oversized.status).toBe(413);
+      expect(await oversized.json()).toEqual(ERROR);
+      expect(throttle).not.toHaveBeenCalled();
+      expect(get).not.toHaveBeenCalled();
+      await request.body?.cancel();
+    },
+  );
 });
 
 const moderatorWrites = [
