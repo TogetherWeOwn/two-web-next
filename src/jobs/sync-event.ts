@@ -99,16 +99,29 @@ export async function handleSyncEvent(
   const prepared = await deps.events.prepareSync(msg.eventKey, msg.idempotencyKey, now());
   if (!prepared) return { done: true };
   if ("waiting" in prepared) return waiting();
-  if (prepared.state !== "pending") return { done: true };
   // Settlement-only redelivery: a definitive outcome already recorded its
-  // terminal intent on this still-pending attempt. Never re-run the bot flow
-  // or re-derive the verdict; return the stored reason so the consumer
-  // re-runs the bounded settlement. The carried backoff keeps a
-  // still-unsettled store on delayed retry instead of going terminal.
+  // terminal intent on this attempt. Never re-run the bot flow or re-derive
+  // the verdict; return the stored reason so the consumer re-runs the
+  // bounded settlement. The carried backoff keeps a still-unsettled store
+  // on delayed retry instead of going terminal.
   const terminalIntent =
     prepared.terminalReason ??
     (prepared as unknown as { terminal_reason?: string | null }).terminal_reason ??
     null;
+  if (prepared.state === "failed" && terminalIntent) {
+    // Late settlement commit: the UPDATE landed after the client's race gave
+    // up, so the alert and the failed row were never written. Settle again —
+    // the UPDATE matches zero rows and resolves — and reach the terminal path.
+    return {
+      failed: terminalIntent,
+      definitive: true,
+      intentRedeliveryBackoffSeconds: backoffFor(
+        SYNC_EVENT.backoffSeconds,
+        Math.max(attempts, prepared.requestAttempts),
+      ),
+    };
+  }
+  if (prepared.state !== "pending") return { done: true };
   if (terminalIntent) {
     return {
       failed: terminalIntent,

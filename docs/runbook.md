@@ -1640,10 +1640,17 @@ subsequent mutation is eligible. Retrying an unchanged refused revision likewise
 requires an explicit reviewed operator action, not deleting history.
 
 A definitive refusal first records its redacted reason as `terminal_reason` on
-the still-`pending` attempt (terminal intent), then settles. If settlement
-cannot commit, the row stays live and redelivery re-runs settlement only — no
-bot call, no second alert — backing off until the store heals. The `failed`
-stamp and its single `queue.failing` alert land only when settlement commits.
+the still-`pending` attempt (terminal intent), then settles. If the intent note
+itself cannot commit, the consumer reopens the claim to a due deadline and
+retries released-only, so a healed redelivery re-derives the verdict instead
+of waiting on the nulled claim. If settlement cannot commit, the row stays
+live and redelivery re-runs settlement only — no bot call, no second alert —
+backing off until the store heals. Past the app carrier budget an unsettled
+intent redelivery raises a distinct `queue.failing` line (`terminal settlement
+unavailable; ...`) per delivery — still no `failed` stamp and no ack — until
+the store heals or the transport backstop drops the carrier; the pending row
+then waits for operator recovery. The `failed` stamp and its single
+`queue.failing` alert land only when settlement commits.
 
 Best-effort successor checks/dispatch time out after two seconds. These timers
 do not cancel SQL: ledger and lock traffic use pools separate from the handler,

@@ -24,6 +24,14 @@ type Msg = {
   retry(o?: { delaySeconds?: number }): void;
 };
 
+// Distinct alert reason when settlement-only redelivery outlives the app
+// carrier budget: the store still has not committed the settlement, so this
+// is not the terminal failure — the attempt stays pending, unstamped and
+// unacked, for operator recovery. Static class-only string, never provider
+// text; the delivery count rides in the alert's attempts field.
+const TERMINAL_SETTLEMENT_UNAVAILABLE =
+  "terminal settlement unavailable; intent retained, failSync uncommitted";
+
 // Legacy identity of each job, for the queue.failing alert line (ports Queue::failing fields).
 const JOBS = {
   "alert-probe": { queue: "two-internal-action", job: "AlertProbe", tries: 1 },
@@ -167,6 +175,56 @@ export async function consume(
       m.retry();
       return false;
     };
+    // Terminal-intent noting is correctness-critical like settlement: a
+    // swallowed note re-strands the row (a healed redelivery waits on the
+    // nulled claim forever), so a rejecting race gates the settlement path
+    // instead of the best-effort bounded helper. Stores that predate the
+    // marker skip noting and settle exactly as before.
+    const noteTerminalIntent = async (idempotencyKey: string, reason: string) => {
+      const noteOp = deps.events.noteTerminalIntent;
+      if (typeof noteOp !== "function") return true;
+      try {
+        let t: ReturnType<typeof setTimeout>;
+        const timeout = new Promise<never>((_, reject) => {
+          t = setTimeout(() => reject(new Error("timed out")), LEDGER_TIMEOUT_MS);
+        });
+        await Promise.race([noteOp(idempotencyKey, reason), timeout]).finally(() =>
+          clearTimeout(t),
+        );
+        return true;
+      } catch (e) {
+        console.error("sync terminal intent failed", { exception: queueExceptionClass(e) });
+        return false;
+      }
+    };
+    // Best-effort claim reopen after a failed intent note: a due deadline
+    // lets a healed redelivery re-run the bot flow, re-derive the verdict
+    // and re-note, instead of waiting on the nulled claim until the carrier
+    // exhausts. Never holds the batch: bounded like every sibling wait.
+    const reopenTerminalClaim = async (eventKey: string) => {
+      let t: ReturnType<typeof setTimeout>;
+      const timeout = new Promise<void>((r) => {
+        t = setTimeout(() => {
+          console.warn("sync terminal claim reopen timed out");
+          r();
+        }, LEDGER_TIMEOUT_MS);
+      });
+      await Promise.race([
+        (async () => {
+          try {
+            const pending = await deps.events.pendingSync(eventKey);
+            if (!pending) return;
+            await deps.events.deferSync(pending, deps.now?.() ?? new Date());
+          } catch (e) {
+            // Class-only: store errors can carry SQL or connection secrets.
+            console.warn("sync terminal claim reopen failed", {
+              exception: queueExceptionClass(e),
+            });
+          }
+        })(),
+        timeout,
+      ]).finally(() => clearTimeout(t));
+    };
     if (jobId) await bounded("reserved", deps.ledger.reserved(jobId));
 
     // Delivery-local only: never infer a previous carrier's cause from a waiting claim.
@@ -275,6 +333,20 @@ export async function consume(
           // live row keeps its depth accounting until the store heals. Never
           // fail, alert, or ack before failSync commits.
           if (!(await settleAttempt())) {
+            // Past the app carrier budget the silent loop would run until the
+            // transport backstop deletes the carrier, leaving the pending row
+            // with no signal. Raise one distinct alert per delivery instead —
+            // still no failed stamp and no ack before settlement commits.
+            if (m.attempts > SYNC_EVENT.tries) {
+              console.error("job failed", body.kind, TERMINAL_SETTLEMENT_UNAVAILABLE);
+              alertFailing(
+                body.kind,
+                m.attempts,
+                TERMINAL_SETTLEMENT_UNAVAILABLE,
+                { requestId },
+                syncRetry,
+              );
+            }
             const availableAt = new Date(
               (deps.now?.() ?? new Date()).getTime() +
                 outcome.intentRedeliveryBackoffSeconds * 1000,
@@ -286,12 +358,12 @@ export async function consume(
         } else {
           // Fresh definitive refusal: record terminal intent first (idempotent,
           // first-writer-wins), then run the existing settlement race unchanged.
-          if (typeof deps.events.noteTerminalIntent === "function") {
-            await bounded(
-              "terminal-intent",
-              deps.events.noteTerminalIntent(body.idempotencyKey, outcome.failed),
-            );
-          }
+          // A failed note still settles — but without intent a healed
+          // redelivery would wait on the nulled claim forever, so reopen the
+          // claim to a due deadline first and let redelivery re-derive the
+          // verdict and re-note if this settlement also wedges.
+          const noted = await noteTerminalIntent(body.idempotencyKey, outcome.failed);
+          if (!noted) await reopenTerminalClaim(body.eventKey);
           if (!(await failAttempt())) continue;
         }
       }
