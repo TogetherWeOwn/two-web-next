@@ -3,12 +3,22 @@
 // Hono guard: src/same-origin.ts:19-51 (exemptions :13-17, unsafe :4).
 // Kit twin: src/route-ownership.ts:524-552 (`isSameOriginAllowed`).
 // Both import the same constants, so this file pins the logic, not the lists:
-// every row drives the Hono middleware (via app requests against a minimal
-// guard app) and the twin (direct) over identical method/path/headers/URL and
-// asserts identical allow/refuse verdicts.
+// every agreement row drives the Hono middleware (via app requests against a
+// minimal guard app) and the twin (direct) over identical method/path/headers/
+// URL and asserts identical allow/refuse verdicts.
 //
-// Test-only: no production change. If a row diverges, cut a separately paired
-// build card; do not fix the guard or twin here.
+// Two input families currently split the halves and are pinned per-half
+// instead of as agreement, so either alignment direction flips them red:
+//   - Method case: fetch normalizes post/put/delete/get/head/options to
+//     uppercase but not patch, so `patch`/`Patch`/`pAtCh` bypass the Hono
+//     guard (raw compare, same-origin.ts:21) while the twin uppercases
+//     (route-ownership.ts:525) and guards them.
+//   - Encoded exempt paths: Hono matches exemptions against the decoded
+//     c.req.path (same-origin.ts:23), while the twin matches URL.pathname,
+//     which keeps %XX escapes (route-ownership.ts:528), so /%6dcp-style
+//     spellings are exempt on Hono only.
+// Aligning either family is a separately paired build slice: this file stays
+// test-only and never changes the guard or the twin.
 import { Hono } from "hono";
 import { describe, expect, it } from "vitest";
 import type { Env } from "../src/env";
@@ -65,6 +75,22 @@ async function expectSameVerdict(
   expect(hono, `Hono ${label}`).toBe(expected);
   expect(twin, `Kit twin ${label}`).toBe(expected);
   expect(twin, `differential ${label}`).toBe(hono);
+}
+
+// Known-divergence pin: asserts each half's current verdict separately. Used
+// only for the two families named in the header; every other row must agree.
+async function expectKnownDivergence(
+  url: string,
+  method: string,
+  headers: HeadersInit,
+  appUrl: string,
+  expected: { hono: boolean; twin: boolean },
+  label: string,
+): Promise<void> {
+  const hono = await honoAllows(url, method, headers, appUrl);
+  const twin = twinAllows(url, method, headers, appUrl);
+  expect(hono, `Hono ${label}`).toBe(expected.hono);
+  expect(twin, `Kit twin ${label}`).toBe(expected.twin);
 }
 
 describe("same-origin differential (Hono guard vs Kit twin)", () => {
@@ -139,6 +165,24 @@ describe("same-origin differential (Hono guard vs Kit twin)", () => {
         false,
         `${method} ${GUARDED_PATH} same-origin hint on alternate host`,
       );
+      // The fallback compares full origins, not hosts: a scheme or port
+      // mismatch refuses even when the hostname matches APP_URL.
+      await expectSameVerdict(
+        `http://two.test${GUARDED_PATH}`,
+        method,
+        { "sec-fetch-site": "same-origin" },
+        APP_URL,
+        false,
+        `${method} ${GUARDED_PATH} same-origin hint on http scheme`,
+      );
+      await expectSameVerdict(
+        `https://two.test:444${GUARDED_PATH}`,
+        method,
+        { "sec-fetch-site": "same-origin" },
+        APP_URL,
+        false,
+        `${method} ${GUARDED_PATH} same-origin hint on non-APP_URL port`,
+      );
       // Absent Origin with a non-same-origin hint (or no hint at all) refuses.
       await expectSameVerdict(
         guardedUrl(),
@@ -156,6 +200,56 @@ describe("same-origin differential (Hono guard vs Kit twin)", () => {
           APP_URL,
           false,
           `${method} ${GUARDED_PATH} hint=${JSON.stringify(hint)}`,
+        );
+      }
+    }
+  });
+
+  it("pins method casing: fetch-normalized verbs agree, patch-family splits", async () => {
+    // fetch uppercases post/put/delete/get/head/options before either half
+    // sees them, so both halves see the same method and agree; patch is not
+    // normalized, so the Hono raw compare bypasses while the twin uppercases
+    // and guards. Unknown verbs agree-allow on both.
+    for (const method of ["post", "Post", "put", "delete"]) {
+      await expectSameVerdict(
+        guardedUrl(),
+        method,
+        { origin: "https://evil.test" },
+        APP_URL,
+        false,
+        `${method} ${GUARDED_PATH} evil origin agrees refuse`,
+      );
+    }
+    for (const method of ["get", "purge"]) {
+      await expectSameVerdict(
+        guardedUrl(),
+        method,
+        { origin: "https://evil.test" },
+        APP_URL,
+        true,
+        `${method} ${GUARDED_PATH} evil origin agrees allow`,
+      );
+    }
+    // Exact Origin admits on both, for different reasons: Hono bypasses the
+    // guard entirely while the twin checks and admits.
+    await expectSameVerdict(
+      guardedUrl(),
+      "patch",
+      { origin: APP_URL },
+      APP_URL,
+      true,
+      `patch ${GUARDED_PATH} exact origin agrees allow`,
+    );
+    const splitHeaders: HeadersInit[] = [{ origin: "https://evil.test" }, { origin: "null" }, {}];
+    for (const method of ["patch", "Patch", "pAtCh"]) {
+      for (const headers of splitHeaders) {
+        await expectKnownDivergence(
+          guardedUrl(),
+          method,
+          headers,
+          APP_URL,
+          { hono: true, twin: false },
+          `${method} ${GUARDED_PATH} headers=${JSON.stringify(headers)}`,
         );
       }
     }
@@ -221,6 +315,50 @@ describe("same-origin differential (Hono guard vs Kit twin)", () => {
     }
   });
 
+  it("pins percent-encoded spellings: guarded paths agree, exempt spellings split", async () => {
+    // An encoded guarded path agrees on both; an encoded exempt spelling is
+    // exempt on Hono (decoded c.req.path) but guarded on the twin
+    // (URL.pathname keeps escapes). Exact Origin admits on both either way.
+    await expectSameVerdict(
+      guardedUrl("two.test", "/writ%65"),
+      "POST",
+      { origin: "https://evil.test" },
+      APP_URL,
+      false,
+      "encoded guarded path evil origin agrees refuse",
+    );
+    await expectSameVerdict(
+      guardedUrl("two.test", "/writ%65"),
+      "POST",
+      { origin: APP_URL },
+      APP_URL,
+      true,
+      "encoded guarded path exact origin agrees allow",
+    );
+    const encodedExempt = ["/%6dcp", "/m%63p", "/%63sp-reports", "/api/agent%2devents"];
+    const splitHeaders: HeadersInit[] = [{ origin: "https://evil.test" }, { origin: "null" }, {}];
+    for (const path of encodedExempt) {
+      await expectSameVerdict(
+        guardedUrl("two.test", path),
+        "POST",
+        { origin: APP_URL },
+        APP_URL,
+        true,
+        `encoded exempt ${path} exact origin agrees allow`,
+      );
+      for (const headers of splitHeaders) {
+        await expectKnownDivergence(
+          guardedUrl("two.test", path),
+          "POST",
+          headers,
+          APP_URL,
+          { hono: true, twin: false },
+          `encoded exempt ${path} headers=${JSON.stringify(headers)}`,
+        );
+      }
+    }
+  });
+
   it("refuses the PUT-/mcp non-exemption on both halves", async () => {
     // POST /mcp is exempt (pinned above); PUT /mcp is a guarded write: evil
     // Origin and absent-hint requests refuse, the exact Origin admits.
@@ -279,6 +417,54 @@ describe("same-origin differential (Hono guard vs Kit twin)", () => {
     }
   });
 
+  it("parses APP_URL as an origin on both: slash, subpath, port, and scheme", async () => {
+    // docs/same-origin.md: a configured trailing slash or path is not part
+    // of the origin; scheme and port matter. The raw configured string must
+    // never be compared directly.
+    for (const appUrl of ["https://two.test/", "https://two.test/base", "https://two.test:443"]) {
+      await expectSameVerdict(
+        guardedUrl(),
+        "POST",
+        { origin: "https://two.test" },
+        appUrl,
+        true,
+        `POST ${GUARDED_PATH} APP_URL=${appUrl} exact origin admits`,
+      );
+    }
+    await expectSameVerdict(
+      guardedUrl(),
+      "POST",
+      { origin: "http://two.test" },
+      "http://two.test",
+      true,
+      "http APP_URL matching http origin admits",
+    );
+    await expectSameVerdict(
+      guardedUrl(),
+      "POST",
+      { origin: "https://two.test" },
+      "http://two.test",
+      false,
+      "http APP_URL https origin refuses",
+    );
+    await expectSameVerdict(
+      guardedUrl(),
+      "POST",
+      { origin: "https://two.test:8443" },
+      "https://two.test:8443",
+      true,
+      "port APP_URL matching origin admits",
+    );
+    await expectSameVerdict(
+      guardedUrl(),
+      "POST",
+      { origin: "https://two.test" },
+      "https://two.test:8443",
+      false,
+      "port APP_URL bare origin refuses",
+    );
+  });
+
   it("fails closed on invalid APP_URL on both halves in the same run", async () => {
     for (const appUrl of ["", "not a URL", "file:///two", "null"]) {
       // Even the normally-admitting headers refuse when config is unparseable.
@@ -289,6 +475,16 @@ describe("same-origin differential (Hono guard vs Kit twin)", () => {
         appUrl,
         false,
         `POST ${GUARDED_PATH} invalid APP_URL=${JSON.stringify(appUrl)}`,
+      );
+      // A null Origin must not satisfy a non-HTTP(S) config whose URL origin
+      // is the string "null": the protocol gate fails closed first.
+      await expectSameVerdict(
+        guardedUrl(),
+        "POST",
+        { origin: "null" },
+        appUrl,
+        false,
+        `POST ${GUARDED_PATH} null origin invalid APP_URL=${JSON.stringify(appUrl)}`,
       );
       // Layering stays identical too: exact exemptions bypass the guard before
       // the config check, on both halves.
