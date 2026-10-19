@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { pgPruneStores } from "../src/jobs/postgres";
 import {
   createPostgresSessionStore,
   migrate,
@@ -197,5 +198,19 @@ describe.skipIf(!url)("postgres predecessor grace", () => {
     const skewMs = Number(g!.skew_ms);
     expect(skewMs).toBeGreaterThan(9_000);
     expect(skewMs).toBeLessThanOrEqual(10_500);
+  });
+
+  it("co-sweeps expired grace in the scheduled session adapter within one batch", async () => {
+    await store.create(session("prune-source"));
+    expect(await store.rotate("prune-source", session("prune-successor"))).toBe(true);
+    await fixture.client`update web_session_grace set grace_expires_at = clock_timestamp() - interval '1 second'
+      where predecessor_hash = 'prune-source'`;
+    const stores = pgPruneStores(fixture.client);
+    expect(await stores.sessions.sweepExpired(new Date())).toBe(1);
+    const grace = await fixture.client<
+      { n: number }[]
+    >`select count(*)::int as n from web_session_grace`;
+    expect(grace[0]!.n).toBe(0);
+    expect(await store.get("prune-successor")).not.toBeNull();
   });
 });
