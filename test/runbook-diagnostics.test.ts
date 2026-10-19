@@ -224,10 +224,10 @@ describe("runbook diagnostic and homepage contract", () => {
     expect(contractViolations(repaired)).toEqual([]);
   });
 
-  it("smokes the apex with --allow-indexable over the 20-route set", () => {
+  it("smokes the apex with --allow-indexable over the 23-route set", () => {
     const watch = readFileSync(new URL("../docs/48h-watch-spec.md", import.meta.url), "utf8");
     expect(watch).toContain("node bin/smoke.mjs https://togetherweown.com --allow-indexable");
-    expect(watch).toMatch(/Twenty public routes/s);
+    expect(watch).toMatch(/Twenty-three public routes/s);
     expect(watch).toMatch(/Without `--allow-indexable` the apex probe fails/s);
     expect(watch).toContain("node bin/smoke.mjs https://next.togetherweown.com");
     const smokeTests = readFileSync(new URL("./smoke.test.mjs", import.meta.url), "utf8");
