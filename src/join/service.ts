@@ -208,8 +208,6 @@ export async function migrateJoin(sql: Sql): Promise<void> {
  */
 const ATTEMPT_ANALYTICS_WAIT_MS = 2_000;
 
-type CancellableWrite = Promise<unknown> & { cancel?: () => void };
-
 function exceptionClass(err: unknown): string {
   return err instanceof Error
     ? err.name
@@ -219,8 +217,10 @@ function exceptionClass(err: unknown): string {
 /**
  * One queryable row per terminal join path. Null store = no-op (funnel stays up).
  * Analytics must never break the join: the answer waits at most
- * ATTEMPT_ANALYTICS_WAIT_MS. A write that outlasts the wait is cancelled where the
- * driver supports it and reported once; a late settlement changes nothing.
+ * ATTEMPT_ANALYTICS_WAIT_MS, independently of the transaction-local statement
+ * timeout. The server cancels a slow INSERT without changing pooled settings;
+ * connection/transport stalls still cannot hold the caller. A late settlement is
+ * observed without replaying the write or changing the request outcome.
  * Logs only the exception class (never the message, which can quote the live
  * token or statement text) plus the validated request_id, so the line joins to
  * request logs. Absent/malformed IDs are omitted, never raw.
@@ -243,18 +243,28 @@ export async function recordAttempt(
       ...(requestId !== undefined ? { request_id: requestId } : {}),
     });
   };
-  let insert: CancellableWrite;
-  try {
-    insert = sql`INSERT INTO join_attempts (outcome, source, request_id, discord_id)
+  const store = sql as Sql & {
+    begin?: (run: (tx: Sql) => Promise<void>) => Promise<void>;
+  };
+  const insert = (tx: Sql) =>
+    tx`INSERT INTO join_attempts (outcome, source, request_id, discord_id)
     VALUES (${attempt.outcome}, ${attempt.source}, ${attempt.requestId}, ${attempt.discordId})`;
-  } catch (err) {
-    warn(exceptionClass(err));
-    return;
-  }
-  const write = insert.then(
-    () => null,
-    (err: unknown) => ({ err }),
-  );
+  const write = (async () => {
+    try {
+      if (store.begin) {
+        await store.begin(async (tx) => {
+          await tx.unsafe(`SET LOCAL statement_timeout = '${ATTEMPT_ANALYTICS_WAIT_MS}ms'`);
+          await insert(tx);
+        });
+      } else {
+        // The minimal Sql seam does not require transactions; native stores do.
+        await insert(sql);
+      }
+      return null;
+    } catch (err) {
+      return { err };
+    }
+  })();
   let timer: ReturnType<typeof setTimeout> | undefined;
   const deadline = new Promise<"deadline">((resolve) => {
     timer = setTimeout(() => resolve("deadline"), ATTEMPT_ANALYTICS_WAIT_MS);
@@ -262,7 +272,6 @@ export async function recordAttempt(
   try {
     const failure = await Promise.race([write, deadline]);
     if (failure === null) return;
-    if (failure === "deadline") insert.cancel?.();
     warn(failure === "deadline" ? "AnalyticsWriteDeadline" : exceptionClass(failure.err));
   } finally {
     clearTimeout(timer);
