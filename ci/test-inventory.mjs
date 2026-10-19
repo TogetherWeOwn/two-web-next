@@ -39,9 +39,12 @@ const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
 const VITEST_TEST_DIRS = ["test"];
 
-// The body of the `exclude: [ … ]` array in <root>/vitest.config.ts. Scanned
-// quote-aware (brackets inside a quoted entry, e.g. a `[ab]` character
-// class, must not end the array early and silently drop the entry).
+// The body of the `exclude: [ … ]` array in <root>/vitest.config.ts, with
+// comments stripped. Scanned quote-aware (brackets inside a quoted entry,
+// e.g. a `[ab]` character class, must not end the array early and silently
+// drop the entry) and comment-aware (an apostrophe in a `//` comment must
+// not open a quote that swallows the closing bracket, and a quoted path
+// inside a `/* */` comment is prose, not an exclude).
 function excludeArrayBody(text, configPath) {
   const key = text.indexOf("exclude:");
   assert.ok(key !== -1, `${configPath} has no exclude block`);
@@ -50,25 +53,42 @@ function excludeArrayBody(text, configPath) {
   let i = open + 1;
   let quote = null;
   let depth = 1;
+  let out = "";
   while (i < text.length && depth > 0) {
     const c = text[i];
     if (quote) {
       if (c === "\\") {
+        out += text.slice(i, i + 2);
         i += 2;
         continue;
       }
       if (c === quote) quote = null;
+      out += c;
+    } else if (c === "/" && text[i + 1] === "/") {
+      const nl = text.indexOf("\n", i);
+      i = nl === -1 ? text.length : nl;
+      continue;
+    } else if (c === "/" && text[i + 1] === "*") {
+      const endC = text.indexOf("*/", i + 2);
+      assert.ok(endC !== -1, `${configPath} exclude block has an unclosed comment`);
+      i = endC + 2;
+      continue;
     } else if (c === '"' || c === "'" || c === "`") {
       quote = c;
+      out += c;
     } else if (c === "[") {
       depth += 1;
+      out += c;
     } else if (c === "]") {
       depth -= 1;
+      if (depth > 0) out += c;
+    } else {
+      out += c;
     }
     i += 1;
   }
   assert.ok(depth === 0, `${configPath} exclude block never closes`);
-  return text.slice(open + 1, i - 1);
+  return out;
 }
 
 // Every quoted entry in the `exclude` array in <root>/vitest.config.ts,
@@ -83,15 +103,18 @@ function rawVitestExcludes(root) {
 }
 
 // Fail closed on exclude entries this gate cannot expand. Vitest honors the
-// full picomatch grammar (`?`, braces, character classes, negation), while
-// globToRegExp understands only `*`/`**`: an unexpanded entry would read as
-// vitest-reachable although nothing runs it. Crash loudly instead, like the
-// missing-exclude asserts above, so the author rewrites the entry as a
-// literal or a `*`/`**` glob (or teaches this gate the new form).
+// full picomatch grammar (`?`, braces, character classes, negation,
+// extglobs), while globToRegExp understands only `*`/`**`: an unexpanded
+// entry would read as vitest-reachable although nothing runs it. A denylist
+// of magic characters keeps missing forms, so this is an allowlist of
+// exactly the grammar globToRegExp expands (word characters, dash, dot,
+// slash, star). Crash loudly instead, like the missing-exclude asserts
+// above, so the author rewrites the entry as a literal or a `*`/`**` glob
+// (or teaches this gate the new form).
 function assertSupportedExcludes(entries, root) {
   for (const e of entries) {
     assert.ok(
-      !/[!?{}[\]]/.test(e),
+      /^[\w\-./*]+$/.test(e),
       `${join(root, "vitest.config.ts")} has an exclude this gate cannot expand (${e}): use a literal or a * / ** glob`,
     );
   }
@@ -415,6 +438,9 @@ function selftest() {
       ["brace", "test/brace-*.test.{mjs,js}", "test/brace-a.test.mjs"],
       ["char-class", "test/[ab]-class.test.mjs", "test/a-class.test.mjs"],
       ["negation", "!test/neg.test.mjs", "test/neg.test.mjs"],
+      ["extglob-plus", "test/ext-+(a|b).test.mjs", "test/ext-ab.test.mjs"],
+      ["extglob-at", "test/at-@(x|y).test.mjs", "test/at-x.test.mjs"],
+      ["extglob-star", "test/star-*(a|b).test.mjs", "test/star-ab.test.mjs"],
     ];
     for (const [name, exclude, file] of cases) {
       const dir = mkdtempSync(join(tmpdir(), "test-inventory-"));
@@ -430,6 +456,58 @@ function selftest() {
       } finally {
         rmSync(dir, { recursive: true, force: true });
       }
+    }
+  });
+
+  check("line comment with apostrophe does not break exclude parsing", () => {
+    const dir = mkdtempSync(join(tmpdir(), "test-inventory-"));
+    try {
+      writeFileSync(
+        join(dir, "package.json"),
+        JSON.stringify({
+          scripts: { "test:smoke": "node --test test/g1.test.mjs test/g2.test.mjs" },
+        }),
+      );
+      writeFileSync(
+        join(dir, "vitest.config.ts"),
+        'export default { test: { exclude: [\n"test/g1.test.mjs", // don\'t run these locally\n"test/g2.test.mjs",\n] } };\n',
+      );
+      mkdirSync(join(dir, "test"), { recursive: true });
+      writeFileSync(join(dir, "test", "g1.test.mjs"), "node:test placeholder\n");
+      writeFileSync(join(dir, "test", "g2.test.mjs"), "node:test placeholder\n");
+      const { orphans, reachable } = inventory(dir);
+      assert.deepEqual(orphans, []);
+      for (const f of ["test/g1.test.mjs", "test/g2.test.mjs"]) {
+        const hit = reachable.find((r) => r.file === f);
+        assert.ok(hit, `${f} should be reachable`);
+        assert.match(hit.via, /test:smoke/);
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  check("commented-out exclude entry is not an exclude", () => {
+    const dir = mkdtempSync(join(tmpdir(), "test-inventory-"));
+    try {
+      writeFileSync(
+        join(dir, "package.json"),
+        JSON.stringify({ scripts: { "test:smoke": "node --test test/wired.test.mjs" } }),
+      );
+      writeFileSync(
+        join(dir, "vitest.config.ts"),
+        'export default { test: { exclude: [/* "test/ghost2.test.mjs", */ "test/wired.test.mjs"] } };\n',
+      );
+      mkdirSync(join(dir, "test"), { recursive: true });
+      writeFileSync(join(dir, "test", "wired.test.mjs"), "node:test placeholder\n");
+      writeFileSync(join(dir, "test", "ghost2.test.mjs"), "node:test placeholder\n");
+      const { orphans, reachable } = inventory(dir);
+      assert.deepEqual(orphans, []);
+      const ghost = reachable.find((r) => r.file === "test/ghost2.test.mjs");
+      assert.ok(ghost, "commented-out file should be vitest-reachable");
+      assert.match(ghost.via, /vitest include/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
     }
   });
 
