@@ -12,7 +12,9 @@ reads. It also charges redirects and missing-key requests on these routes.
 On the hot-zone paths the guard runs after the season grammar and the signal
 check, so a bad `?season=` (400) and an unknown signal (404) spend nothing;
 everywhere else on these four paths it runs before the aggregate reads and
-the board-view log insert.
+the board-view log insert. Invalid seasons return the branded 400 recovery page
+on both Hono and Kit, not a server-outage message; Kit data requests keep their
+machine-shaped error payload.
 
 The routes remain public; the budget applies equally to signed-in clients because
 reading a session before admission would itself incur database work. It does not
