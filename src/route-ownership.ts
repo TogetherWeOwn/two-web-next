@@ -667,7 +667,8 @@ export async function dispatchHookRequest(
   const isEventsListPage = event.route?.id === "/events";
   // Hot-zone heatmaps: the index plus the per-signal route. Concrete manifest
   // paths only (see ROUTE_MANIFEST): unknown segments never reach this branch.
-  const isHotzonesPage = event.route?.id === "/hotzones" || event.route?.id === "/hotzones/[signal]";
+  const isHotzonesPage =
+    event.route?.id === "/hotzones" || event.route?.id === "/hotzones/[signal]";
   // The live detail is a member read, so it renders inside the boundary; the
   // shared public-read budget runs before the session bridge through the
   // detail wrapper, exactly as the served handler throttles before any read.
