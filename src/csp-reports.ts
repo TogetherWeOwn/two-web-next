@@ -153,8 +153,8 @@ function warnCspShed(): void {
   if (now - lastShedEmit < CSP_LOG_REFILL_MS) return;
   lastShedEmit = now;
   const dropped = shedDropped;
-  shedDropped = 0;
   console.warn("csp.report.shed", { dropped });
+  shedDropped -= dropped;
 }
 
 // No session, no cookie, no DB: an unauthenticated sink that must answer when

@@ -141,9 +141,8 @@ describe("CSP sink shed signal", () => {
     await expectFunnel(await post(validBody()));
     const sheds = shedCalls(warn);
     expect(sheds).toHaveLength(2);
-    const dropped = (sheds[1]?.[1] as { dropped: unknown }).dropped;
-    expect(Number.isInteger(dropped)).toBe(true);
-    expect(dropped as number).toBeGreaterThanOrEqual(25);
+    // 4 drops left from the first batch, 25 from the second, plus the trigger.
+    expect(sheds[1]).toEqual(["csp.report.shed", { dropped: 30 }]);
     expect(JSON.stringify(warn.mock.calls)).not.toContain(MARKER);
   });
 });

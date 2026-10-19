@@ -307,6 +307,19 @@ describe("CSP sink abuse resistance (TOG-12864)", () => {
     });
     for (let i = 0; i < 80; i += 1) await expectFunnel(await post(validBody()));
     expect(warn).toHaveBeenCalledTimes(21);
+    // A failed shed emit stays rate-bounded but must not discard its count:
+    // once the logger recovers the next shed still carries those drops.
+    warn.mockImplementation(() => {});
+    now += 60_000;
+    for (let i = 0; i < 20; i += 1) await expectFunnel(await post(validBody()));
+    await expectFunnel(await post(validBody()));
+    const sheds = warn.mock.calls.filter((call) => call[0] === "csp.report.shed");
+    const last = sheds[sheds.length - 1]?.[1] as { dropped: unknown };
+    expect(Number.isInteger(last.dropped)).toBe(true);
+    // 60 drops from the throwing flood plus the triggering drop; preserved
+    // carryover from earlier tests can only raise this.
+    expect(last.dropped as number).toBeGreaterThanOrEqual(61);
+    expect(JSON.stringify(warn.mock.calls)).not.toContain(MARKER);
   });
 
   it("touches no persistence seam across a mixed abuse burst", async () => {
