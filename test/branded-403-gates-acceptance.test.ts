@@ -271,7 +271,7 @@ describe("branded 403 acceptance: admin guard", () => {
 
   it.each([
     ["GET", "/events"],
-    ["POST", "/events"],
+    ["POST", "/featured"],
   ] as const)(
     "signed-in non-moderator %s %s with a browser Accept gets the branded page",
     async (method, path) => {
@@ -291,7 +291,7 @@ describe("branded 403 acceptance: admin guard", () => {
 
   it.each([
     ["GET", "/events"],
-    ["POST", "/events"],
+    ["POST", "/featured"],
   ] as const)(
     "signed-in non-moderator %s %s with Accept: application/json gets the JSON envelope",
     async (method, path) => {
