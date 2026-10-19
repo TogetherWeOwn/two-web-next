@@ -192,7 +192,10 @@ describe.skipIf(!process.env.DATABASE_URL)(
       const locked = new Promise<void>((resolve) => {
         ready = resolve;
       });
+      let holderPid = 0;
       const holder = fixture.client.begin(async (tx) => {
+        const [me] = await tx<{ pid: number }[]>`select pg_backend_pid() as pid`;
+        holderPid = me!.pid;
         await tx`SELECT id FROM events WHERE id = ${id} FOR UPDATE`;
         await tx`INSERT INTO rsvps (event_id, user_id, status) VALUES (${id}, 'concurrent-member', 'going')`;
         ready();
@@ -204,8 +207,20 @@ describe.skipIf(!process.env.DATABASE_URL)(
         version: 1,
         fields: { ...FIELDS, capacity: 5 },
       });
-      // Start the edit before committing the sixth seat; this pins the outcome, not an observed lock wait.
-      await new Promise((resolve) => setTimeout(resolve, 150));
+      // Observe the edit waiting on the held event row lock instead of guessing
+      // with a sleep; the holder pid pins the observation to this transaction.
+      const deadline = performance.now() + 2000;
+      for (;;) {
+        const [waiting] = await fixture.client<{ n: number }[]>`
+          select count(*)::int as n from pg_stat_activity
+          where datname = current_database() and wait_event_type = 'Lock'
+            and ${holderPid} = any(pg_blocking_pids(pid))
+            and query ilike '%from events%for update%'`;
+        if (waiting!.n > 0) break;
+        if (performance.now() >= deadline)
+          throw new Error("grant update did not wait on the event row lock");
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      }
       release();
       await holder;
       const result = await pending;
