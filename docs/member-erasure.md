@@ -105,9 +105,8 @@ A second apply is a no-op: every count returns 0.
   erasure has nothing to delete. Each handshake expires after ten minutes
   (`OAUTH_JOURNEY_TTL_SECONDS = 600` in `src/oauth-journeys.ts`) and expired
   rows are swept when the next login starts (`sweepExpired`, called from
-  `src/auth/routes.ts` and `src/join/route-start.ts`). The published
-  [retention ledger](retention-ledger.md) has no row for this table yet, so
-  the window above is cited from the code, not the ledger.
+  `src/auth/routes.ts` and `src/join/route-start.ts`), as published in the
+  [retention ledger](retention-ledger.md).
 - The Discord-side mirror (roles, messages, tickets) is out of scope here:
   Discord is governed by Discord's own privacy policy, and removal there
   happens through Discord's moderation tools, not this command.

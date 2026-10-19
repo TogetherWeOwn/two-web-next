@@ -353,12 +353,12 @@ requires `X-TWO-QA-Auth` (constant-time comparison) and the existing global
 same-origin/host guards. It has **no same-origin exemption**. Valid same-origin
 requests with QA disabled (including production configuration), wrong/missing
 token, or GET return 404 without sending a job. Untrusted unsafe requests retain
-the ordinary global 403. Authenticated probes use the shared 10/minute QA
-throttle, checked only after the QA gate (so production/bad tokens cannot turn
-into 429s); an exhausted budget returns the ordinary 429 before reading an upload
-or enqueueing. After authentication/admission, the shared `action` body limit
-counts at most 4,096 bytes; oversized bodies return 413 without enqueueing.
-Disabled or unauthenticated probes never read bodies or consume throttle budget.
+the ordinary global 403. Authenticated probes run the shared `action` body cap
+(at most 4,096 bytes) after the QA gate and before the shared 10/minute QA
+throttle (so production/bad tokens cannot turn into 429s); over-cap probes
+return 413 with no throttle spend and without enqueueing, even when the budget
+is exhausted. Only under-cap probes can return the ordinary 429. Disabled or
+unauthenticated probes never read bodies or consume throttle budget.
 
 An authorized call enqueues `{ kind: "alert-probe", probeId }` on the staging internal
 queue, then throws `AlertProbeError` through the real 500 handler. **500 is the
