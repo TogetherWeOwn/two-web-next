@@ -18,7 +18,16 @@ import {
   PayloadTooDeepError,
   type IngressConfig,
 } from "../src/agent-events/service";
-import { makeFakeAgentDb } from "./helpers/fake-agent-ingress-db";
+import { makeFakeAgentDb, type FakeGrant } from "./helpers/fake-agent-ingress-db";
+
+const GRANTED = "cred-deep-static-001";
+const liveGrant = (): FakeGrant => ({
+  id: "grant-deep-static-1",
+  agent_id: "agent-under-test",
+  guild_id: DEFAULT_CONFIG.stagingGuildId,
+  expires_at: null,
+  disabled_at: null,
+});
 
 const cfg: IngressConfig = {
   ...DEFAULT_CONFIG,
@@ -63,7 +72,8 @@ describe("agent ingress over-deep body answers a static 422 message (DB-free)", 
       }),
     );
     const fake = makeFakeAgentDb();
-    const r = await handleAgentEvent(fake.sql, cfg, deepBody(), null, "127.0.0.32");
+    await fake.addGrant(GRANTED, liveGrant());
+    const r = await handleAgentEvent(fake.sql, cfg, deepBody(), GRANTED, "127.0.0.32");
     expect(r.status).toBe(422);
     expect(r.body.reason).toBe("payload_too_deep");
     expect(r.body.message).toBe(PAYLOAD_TOO_DEEP_MESSAGE);
