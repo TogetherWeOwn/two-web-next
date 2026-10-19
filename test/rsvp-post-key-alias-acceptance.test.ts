@@ -461,6 +461,7 @@ describe("POST /e/:key/rsvp event-key aliases (acceptance, hermetic)", () => {
     expect(res.headers.get("location")).toBe(`/e/${KEY}`);
     expect(f.fake.boundEventKeys).toEqual([KEY]);
     expect(f.fake.rowsFor(42)).toHaveLength(0);
+    expect(f.sent.map((m) => ("eventKey" in m ? m.eventKey : null))).toEqual([KEY]);
   });
 
   it.each([
@@ -479,6 +480,7 @@ describe("POST /e/:key/rsvp event-key aliases (acceptance, hermetic)", () => {
       expect(res.headers.get("location")).toBe(`/e/${KEY}`);
       expect(f.fake.boundEventKeys).toEqual([KEY]);
       expect(f.fake.rowsFor(42)).toHaveLength(0);
+      expect(f.sent.map((m) => ("eventKey" in m ? m.eventKey : null))).toEqual([KEY]);
     },
   );
 
