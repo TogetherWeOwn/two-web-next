@@ -92,7 +92,8 @@ while failed one-click join issues none. Ten-minute server expiry and tombstone
 cleanup are documented in [W15 coverage](w15-auth-tests.md#admission-state-retention-and-failure-contract).
 Local Chromium fixture proof (`ci/auth-browser.mjs`) covers the real sign-in CTA,
 auth/join re-entry, supplied prior-cookie rejection, ORIGINAL-cookie replay and
-consent-denial recovery without external traffic. Human admission is
+consent-denial recovery without external traffic, in CI (the `ci.yml` a11y job)
+as well as locally. Human admission is
 serialized per bucket (`test/human-throttle-concurrency.test.ts`) and
 signed-in re-entry replacing the prior session exactly once is pinned
 (`test/join-idempotence.test.ts`). Exact-head independent
