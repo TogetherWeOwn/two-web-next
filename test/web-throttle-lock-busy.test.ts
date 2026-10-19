@@ -2,7 +2,12 @@
 import { randomUUID } from "node:crypto";
 import postgres from "postgres";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { checkJoinThrottle, migrateJoin, type ThrottleVerdict } from "../src/join/service";
+import {
+  checkJoinThrottle,
+  migrateJoin,
+  WEB_THROTTLE_LOCK_TIMEOUT_MS,
+  type ThrottleVerdict,
+} from "../src/join/service";
 import type { Sql } from "../src/sessions";
 import { testDatabaseUrl } from "./helpers/member-data-db";
 
@@ -11,8 +16,8 @@ import { testDatabaseUrl } from "./helpers/member-data-db";
 // `checkJoinThrottle` takes `pg_advisory_xact_lock(web-throttle:<bucket>)`
 // before counting. While another connection holds that exact advisory lock,
 // a call for the held bucket must settle — while the holder remains locked —
-// within a generous 4s bound instead of waiting for the holder. On main
-// today there is no bound, so the busy cases below time out at that bound.
+// via the `WEB_THROTTLE_LOCK_TIMEOUT_MS` database lock_timeout instead of
+// waiting for the holder.
 //
 // Busy mapping (pinned here, from the human-throttle domain contract, not
 // the agent-events ingress): refuse `{ limited: true, retryAfter: 1 }` (the
@@ -23,9 +28,15 @@ import { testDatabaseUrl } from "./helpers/member-data-db";
 // degrades to allow, but a contended lock is not a missing store. The join
 // funnel calls this function with no catch of its own, so the mapping must
 // live inside `checkJoinThrottle`: a lock-timeout error (55P03) must never
-// propagate to a caller and never charge the bucket. The bound's mechanism
-// and exact value are not pinned — any bound that resolves well inside 4s
-// passes; an unbounded or multi-second wait does not.
+// propagate to a caller and never charge the bucket. The bound's magnitude is
+// pinned twice, both without reading the JavaScript clock: the containment
+// suite pins WEB_THROTTLE_LOCK_TIMEOUT_MS to 2000, and every busy case holds
+// its lock on a database-side self-release schedule (pg_sleep(5) inside the
+// holder transaction, then ROLLBACK). A wait honoring the 2s lock_timeout
+// refuses long before the 5s release; a wait that ignored it (say 20s) would
+// still be blocked at 5s, see the release, and be admitted instead of
+// refused, failing the verdict assert. An unbounded wait hangs past the
+// vitest test timeout instead of answering refusal.
 //
 // Prune stays outside the admission lock on every path, busy included: an
 // expired row seeded in another bucket is deleted by a busy pass while the
@@ -34,16 +45,17 @@ import { testDatabaseUrl } from "./helpers/member-data-db";
 //
 // Lock acquisition is coordinated explicitly: the holder's advisory-lock
 // query resolving inside its open transaction on a second connection is
-// the handshake that the lock is held; the measured call races a 4s bound
-// only so an unbounded wait fails fast instead of hanging the suite. No
-// timing-only sleep proves anything here. Every busy assertion runs while
-// the holder remains locked: releasing first could let a hung request
-// complete and mask it.
+// the handshake that the lock is held. The holder then sleeps on the
+// database clock (pg_sleep, still inside its transaction so the lock stays
+// held) and releases itself; the measured call is awaited directly with no
+// JavaScript timer — arrival of the refusal verdict before that self-release
+// IS the proof the 2s database lock_timeout fired. No wall-clock race, no
+// fake timers, no timing-only sleep proves anything here. Every busy
+// assertion runs before the self-release resolves: releasing first could let
+// a hung request complete and mask it.
 //
 // Live against the guarded test database in a throwaway schema. Skipped
 // when DATABASE_URL is unset. Never point this at production or staging.
-
-const BUSY_BOUND_MS = 4000;
 
 describe("web-throttle lock-busy test containment", () => {
   it("refuses staging/production URLs before a driver can connect", () => {
@@ -56,6 +68,13 @@ describe("web-throttle lock-busy test containment", () => {
 
   it("control: a missing store still degrades to allow", async () => {
     expect(await checkJoinThrottle(null, "join:missing-store", 10)).toEqual({ limited: false });
+  });
+
+  it("pins the admission-lock timeout magnitude the busy proofs rely on", () => {
+    // Mirrors test/performance-budgets-snapshot.test.ts: the busy cases'
+    // database-side self-release (5s) only discriminates a 2s wait from a
+    // 20s one while this stays 2000.
+    expect(WEB_THROTTLE_LOCK_TIMEOUT_MS).toBe(2000);
   });
 });
 
@@ -129,34 +148,44 @@ describe.skipIf(!raw)("web-throttle lock waits are busy-bounded (test database)"
     };
   }
 
-  // Race the measured call against a generous bound. The bound is not the
-  // proof — the lock handshake is — it only turns an unbounded wait into a
-  // readable failure instead of a hung suite.
-  async function settleWithinBound(
-    pending: Promise<ThrottleVerdict>,
+  // Hold `web-throttle:<bucket>` on a database-side self-release schedule.
+  // The await resolves only once the lock is actually held; the returned
+  // `done` promise resolves once the holder has slept `delaySecs` on the
+  // database clock (inside its open transaction, so the lock stays held
+  // throughout) and rolled back. The handle is a plain object (not a nested
+  // promise) because await flattens Promise<Promise<T>> and would wait out
+  // the whole self-release instead of just the handshake. A measured wait
+  // honoring the 2s lock_timeout settles before that release; a wait
+  // ignoring it is still blocked at release time, sees the lock free, and
+  // is admitted instead of refused.
+  async function holdBucketLockDbDelayed(
     bucket: string,
-  ): Promise<ThrottleVerdict> {
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    try {
-      return await Promise.race([
-        pending,
-        new Promise<never>((_, reject) => {
-          timer = setTimeout(
-            () =>
-              reject(
-                new Error(
-                  `web-throttle lock wait on ${bucket} was not bounded: ` +
-                    `call still blocked after ${BUSY_BOUND_MS}ms ` +
-                    `while the advisory lock holder remains locked`,
-                ),
-              ),
-            BUSY_BOUND_MS,
-          );
-        }),
-      ]);
-    } finally {
-      if (timer) clearTimeout(timer);
-    }
+    delaySecs: number,
+  ): Promise<{ done: Promise<void> }> {
+    const url = testDatabaseUrl(raw!);
+    const holder = postgres(url.href, {
+      max: 1,
+      port: 5432,
+      connect_timeout: 5,
+      password: () => url.password,
+      connection: { search_path: schemaName },
+      onnotice: () => {},
+    });
+    await holder.unsafe("BEGIN");
+    await holder`SELECT pg_advisory_xact_lock(hashtextextended(${"web-throttle:" + bucket}, 0))`;
+    const done = (async () => {
+      try {
+        await holder.unsafe(`SELECT pg_sleep(${delaySecs})`);
+      } finally {
+        try {
+          await holder.unsafe("ROLLBACK");
+        } catch {
+          // Already closed; the lock is gone either way.
+        }
+        await holder.end({ timeout: 1 }).catch(() => {});
+      }
+    })();
+    return { done };
   }
 
   it("control: an uncontended call admits and charges exactly one hit", async () => {
@@ -190,12 +219,7 @@ describe.skipIf(!raw)("web-throttle lock waits are busy-bounded (test database)"
     const held = "busy-control:held";
     const release = await holdBucketLock(held);
     try {
-      const start = Date.now();
-      const verdict = await settleWithinBound(
-        checkJoinThrottle(sql, "busy-control:independent", 10),
-        "busy-control:independent",
-      );
-      expect(Date.now() - start).toBeLessThan(BUSY_BOUND_MS);
+      const verdict = await checkJoinThrottle(sql, "busy-control:independent", 10);
       expect(verdict).toEqual({ limited: false });
       expect(await hitsFor("busy-control:independent")).toBe(1);
       expect(await hitsFor(held)).toBe(0);
@@ -212,25 +236,27 @@ describe.skipIf(!raw)("web-throttle lock waits are busy-bounded (test database)"
     "refuses within the bound while the bucket lock is held: %s",
     async (bucket) => {
       expect(await hitsFor(bucket)).toBe(0);
-      const release = await holdBucketLock(bucket);
+      const { done: holderDone } = await holdBucketLockDbDelayed(bucket, 5);
       let pending: Promise<ThrottleVerdict> | undefined;
       try {
-        const start = Date.now();
         pending = checkJoinThrottle(sql, bucket, 10);
-        const busy = await settleWithinBound(pending, bucket);
-        const elapsed = Date.now() - start;
+        // Direct await: the 2s database lock_timeout settles this before the
+        // holder's 5s database-side self-release. Arrival of the refusal
+        // before that release IS the magnitude proof: a wait ignoring the
+        // 2s bound would still be blocked at 5s and be admitted instead.
+        const busy = await pending;
 
-        // Every assertion below runs while the holder remains locked.
-        expect(elapsed).toBeLessThan(BUSY_BOUND_MS);
+        // Every assertion below runs before the self-release resolves.
         // Refusal (the shared 429): never an allow, never a thrown lock error.
         expect(busy).toEqual({ limited: true, retryAfter: 1 });
         // The busy pass is free: it charges no hit to the held bucket.
         expect(await hitsFor(bucket)).toBe(0);
       } finally {
-        await release();
-        // Let a still-blocked call settle after release so no work dangles
-        // into the next test (on the unbounded path it now completes and
-        // charges its hit; beforeEach clears it).
+        // Wait out the holder's database-side schedule so no work dangles
+        // into the next test, then settle any still-blocked call (on the
+        // unbounded path it now completes and charges its hit; beforeEach
+        // clears it).
+        await holderDone;
         await pending?.catch(() => null);
       }
 
@@ -242,15 +268,17 @@ describe.skipIf(!raw)("web-throttle lock waits are busy-bounded (test database)"
 
   it("a busy pass spends no budget: the full budget is still there after release", async () => {
     const bucket = "busy-budget:one";
-    const release = await holdBucketLock(bucket);
+    const { done: holderDone } = await holdBucketLockDbDelayed(bucket, 5);
     let pending: Promise<ThrottleVerdict> | undefined;
     try {
       pending = checkJoinThrottle(sql, bucket, 1);
-      const busy = await settleWithinBound(pending, bucket);
+      // Refusal before the holder's 5s self-release proves the 2s bound;
+      // an over-long wait would be admitted instead (see above).
+      const busy = await pending;
       expect(busy).toEqual({ limited: true, retryAfter: 1 });
       expect(await hitsFor(bucket)).toBe(0);
     } finally {
-      await release();
+      await holderDone;
       await pending?.catch(() => null);
     }
     // Discard any hit a still-blocked call charged once released (the
@@ -268,20 +296,22 @@ describe.skipIf(!raw)("web-throttle lock waits are busy-bounded (test database)"
     await client`INSERT INTO web_throttle_hits (bucket, at) VALUES
       ('busy-prune:expired', clock_timestamp() - interval '6 minutes'),
       ('busy-prune:live', clock_timestamp() - interval '30 seconds')`;
-    const release = await holdBucketLock(bucket);
+    const { done: holderDone } = await holdBucketLockDbDelayed(bucket, 5);
     let pending: Promise<ThrottleVerdict> | undefined;
     try {
       pending = checkJoinThrottle(sql, bucket, 10);
-      const busy = await settleWithinBound(pending, bucket);
+      // Refusal before the holder's 5s self-release proves the 2s bound;
+      // an over-long wait would be admitted instead (see above).
+      const busy = await pending;
 
-      // All while the holder remains locked: prune never waits on, and
+      // All before the self-release resolves: prune never waits on, and
       // never prolongs, the held admission lock.
       expect(busy).toEqual({ limited: true, retryAfter: 1 });
       expect(await hitsFor("busy-prune:expired")).toBe(0);
       expect(await hitsFor("busy-prune:live")).toBe(1);
       expect(await hitsFor(bucket)).toBe(0);
     } finally {
-      await release();
+      await holderDone;
       await pending?.catch(() => null);
     }
   });

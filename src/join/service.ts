@@ -164,9 +164,15 @@ export async function checkJoinThrottle(
   // (no catch there).
   try {
     await sql`DELETE FROM web_throttle_hits USING (SELECT id FROM web_throttle_hits WHERE at < now() - make_interval(mins => ${THROTTLE_COUNTER_RETENTION_MINUTES}) ORDER BY id LIMIT 1000 FOR UPDATE SKIP LOCKED) AS candidates WHERE web_throttle_hits.id = candidates.id`;
-  } catch {
-    // Housekeeping failed; the verdict below was already decided.
-    console.warn("Join throttle prune failed; keeping the decided verdict.");
+  } catch (err) {
+    // Housekeeping failed; the verdict below was already decided. Log the
+    // exception class only: the message can quote statement bindings.
+    console.warn("Join throttle prune failed; keeping the decided verdict.", {
+      exception:
+        err instanceof Error
+          ? err.name
+          : ((err as { constructor?: { name?: string } })?.constructor?.name ?? "unknown"),
+    });
   }
   return verdict;
 }
