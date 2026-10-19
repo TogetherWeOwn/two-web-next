@@ -430,16 +430,23 @@ describe("memberReadResponse (Kit boundary)", () => {
         await dirtyEntered.promise;
         await cleanParked.promise;
         await dirtyParked.promise;
+        // Pin the refusal while the late read is still parked. The dirty
+        // render already returned, so its boundary decides here (pending read
+        // -> 503) in both orders, before either read completes. Without this
+        // pin, releasing the dirty gate first lets the late read land before
+        // the boundary decides (200 instead of 503 on Node 22 scheduling).
+        const dirtyRes = await dirty;
         if (order === "clean-first") {
           cleanRelease.resolve();
           await cleanDeclared.promise;
           dirtyRelease.resolve();
+          await dirtyDeclared.promise;
         } else {
           dirtyRelease.resolve();
           await dirtyDeclared.promise;
           cleanRelease.resolve();
         }
-        const [cleanRes, dirtyRes] = await both;
+        const cleanRes = await clean;
         expect(cleanRes.status).toBe(200);
         expect(await cleanRes.text()).toBe("<p>clean</p>");
         await expectRefused(dirtyRes);
