@@ -404,7 +404,7 @@ test("workflow pins the exact central action and keeps production unreachable", 
   );
   // The unchanged pinned action, invoked exactly once.
   assert.equal(workflow.split(PINNED_ACTION).length - 1, 1);
-  assert.match(PINNED_ACTION, /@1dcce452d9066c02e4ab3d99931edf75d50388d7$/);
+  assert.match(PINNED_ACTION, /@89c290be20c0044efaf6916f28341c76e75fff06$/);
   // Manual dispatch from main only: no other trigger keys in the on: block.
   const onBlock = workflow.match(/^on:\n([\s\S]*?)\n\npermissions:/m)?.[1] ?? "";
   assert.match(onBlock, /workflow_dispatch:/);
@@ -444,4 +444,25 @@ test("workflow pins the exact central action and keeps production unreachable", 
   // stale edge response must not fail the run.
   assert.equal(workflow.split("--attempts 6 --delay-ms 5000").length - 1, 3);
   assert.equal(workflow.split('probe.mjs "https://$DOMAIN"').length - 1, 3);
+});
+
+test("proof pin equals the production deploy pin so they cannot drift", () => {
+  const deploy = readFileSync(
+    new URL("../../.github/workflows/deploy-production.yml", import.meta.url),
+    "utf8",
+  );
+  const match = deploy.match(
+    /TogetherWeOwn\/\.github\/actions\/gradual-promote@([0-9a-f]{40})/,
+  );
+  assert.ok(match, "production deploy must pin the central gradual-promote action");
+  const productionPin = `TogetherWeOwn/.github/actions/gradual-promote@${match[1]}`;
+  assert.equal(PINNED_ACTION, productionPin);
+  const workflow = readFileSync(
+    new URL("../../.github/workflows/gradual-promote-proof.yml", import.meta.url),
+    "utf8",
+  );
+  assert.ok(
+    workflow.includes(productionPin),
+    "proof workflow must invoke the production action pin",
+  );
 });
