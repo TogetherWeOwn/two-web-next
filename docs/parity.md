@@ -68,7 +68,7 @@ Guests get `/join?next=/e/{key}`; all event-page variants retain the existing
 private/no-store policy with `Vary: Cookie`. Three bounded link queries, no
 per-event RSVP reads.
 
-### Auth admission follow-up (merged PR #141 + PR #118; [TOG-10354](/TOG/issues/TOG-10354) ✅ done)
+### Auth admission follow-up (merged PR #141 + PR #118; done)
 
 [TOG-10354](/TOG/issues/TOG-10354) adds shared Postgres single-use admission for
 ordinary auth and one-click join, plus atomic invalidation of the supplied active
@@ -309,14 +309,13 @@ Next-internal, no legacy equivalent), #1216 grant-first agent-events ingress,
 #1221 released-only retry-contract restore (revert of #1142), #1135 draft ICS
 `TENTATIVE`, #1143/#1126/#1161 admin write hardening, #1151 bot-token-missing
 fail-closed. Two rows flipped to ✅ with merge evidence: `GET /events.json`
-and the legacy JSON show ([TOG-11155](/TOG/issues/TOG-11155) done 2026-10-02;
+and the legacy JSON show (owning event-JSON card done 2026-10-02;
 `test/event-json-access-matrix.test.ts` 9/9 plus
 `test/events-key-canonical-siblings.test.ts` and `test/draft-ics-status.test.ts`
 17/17 green at HEAD on agent-testdb). The §3 agent-events row stays unmarked:
 `docs/agent-events.md:50` still records the optional W8 carrier as unbound in
-checked-in Wrangler. [TOG-10354](/TOG/issues/TOG-10354) and
-[TOG-10112](/TOG/issues/TOG-10112) closed since the last pin (texts updated);
-W16 stays ⛔ on still-blocked parent [TOG-9698](/TOG/issues/TOG-9698).
+checked-in Wrangler. The admission and smoke-probe cards closed since the last
+pin (texts updated); W16 stays ⛔ on the still-blocked cutover-rehearsal parent.
 Kit-side moves (#886/#914/#879 event/member-board ownership, #960 admin lists)
 are out of scope and touch no Hono parity claim; the §12 Kit session-bridge
 divergence still pins `src/kit-session.ts`. No row invalidated, so no
