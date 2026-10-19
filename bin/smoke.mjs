@@ -13,9 +13,13 @@ const html = [
   ["/join", /One click with Discord/],
 ];
 // HTML leaves that stay non-indexable even on the indexable apex: the archive
-// and the branded 404 carry their noindex in <meta>, so the deploy smoke
+// and the branded 404s carry their noindex in <meta>, so the deploy smoke
 // asserts the X-Robots-Tag header only on the indexable leaves.
-const nonIndexableHtml = new Set(["/events/past", "/__smoke_unknown_route__"]);
+const nonIndexableHtml = new Set([
+  "/events/past",
+  "/e/00000000000000000000000001",
+  "/__smoke_unknown_route__",
+]);
 
 const routes = [
   { path: "/up", statuses: [200], type: "application/json", json: true },
@@ -49,6 +53,19 @@ const routes = [
   { path: "/api/public/community", statuses: [200], type: "application/json" },
   { path: "/api/public/join", statuses: [200], type: "application/json" },
   { path: "/openapi.json", statuses: [200], type: "application/json" },
+  // Single-event HTML detail (src/events/routes-detail.tsx GET /e/:key): the
+  // same fixed probe key exists in no database, so the real handler answers
+  // the branded missing-event page (404 text/html via notFound(), the same
+  // NotFoundPage the unknown-route probe asserts). A published-event 200
+  // would depend on seed data no environment guarantees, so the probe pins
+  // the missing-page contract — HTTP 404 plus the branded marker — with no
+  // live Discord data and no fixture seeding.
+  {
+    path: "/e/00000000000000000000000001",
+    statuses: [404],
+    type: "text/html",
+    body: /We cannot find that page[\s\S]*Together We Own/,
+  },
   {
     path: "/__smoke_unknown_route__",
     statuses: [404],
@@ -265,6 +282,19 @@ export async function smoke(
         "X-Content-Type-Options nosniff",
         headers.get("x-content-type-options") ?? "missing",
       );
+      // Static security headers (src/headers.ts SECURITY_HEADERS): every
+      // response carries them, not only HTML, so these run unconditionally
+      // like the CSP/nosniff pair above. Values are case-insensitive.
+      check(
+        headers.get("referrer-policy")?.toLowerCase() === "strict-origin-when-cross-origin",
+        "Referrer-Policy strict-origin-when-cross-origin",
+        headers.get("referrer-policy") ?? "missing",
+      );
+      check(
+        headers.get("x-frame-options")?.toLowerCase() === "deny",
+        "X-Frame-Options DENY",
+        headers.get("x-frame-options") ?? "missing",
+      );
       const contentType = headers.get("content-type")?.split(";")[0].trim().toLowerCase();
       // Indexing posture follows the probed origin (src/headers.ts robotsTagFor):
       // staging and other non-apex hosts send X-Robots-Tag noindex on returned
@@ -464,8 +494,25 @@ export async function smoke(
       if (route.path === "/robots.txt") {
         // Per-environment robots (W16b TOG-11942): the Sitemap line must name
         // this environment's own origin, never the apex or another env's host.
+        // Comment parity with ci/cutover-check.mjs: "#" starts a comment, so
+        // strip it before the anchored match. A comment-only Sitemap line
+        // cannot pass, while a trailing comment after a real same-origin
+        // line still passes. Horizontal whitespace only: \s would cross
+        // newlines and let a split-line Sitemap directive pass.
         const line = `Sitemap: ${base.origin}/sitemap_index.xml`;
-        check(body.includes(line), `robots ${line}`, "Sitemap line missing or foreign");
+        const stripped = String(body)
+          .split(/\r?\n/)
+          .map((robotsLine) => robotsLine.split("#", 1)[0])
+          .join("\n");
+        const sitemaps = [...stripped.matchAll(/^[ \t]*Sitemap:[ \t]*(\S+)[ \t]*$/gim)].map(
+          (match) => match[1],
+        );
+        const expectedSitemap = `${base.origin}/sitemap_index.xml`;
+        check(
+          sitemaps.length > 0 && sitemaps.every((url) => url === expectedSitemap),
+          `robots ${line}`,
+          "Sitemap line missing or foreign",
+        );
       }
       if (route.path === "/.well-known/security.txt") {
         // RFC 9116 publication (S8): field-parsed assertions shared with the

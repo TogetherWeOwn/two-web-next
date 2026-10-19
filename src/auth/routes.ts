@@ -129,20 +129,24 @@ export function registerAuthRoutes(app: Hono<{ Bindings: Env }>, hooks: AuthHook
     // Clears the state cookie and issues the session on success: every outcome is
     // per-visitor, so a shared cache must never keep one.
     c.header("cache-control", "no-store, private");
-    const limited = await throttleGuard(c, "login-callback", AUTH_THROTTLE_PER_MINUTE);
-    if (limited) return limited;
-    const expected = await getSignedCookie(c, c.env.SESSION_SECRET, STATE_COOKIE);
     const code = c.req.query("code");
     const state = c.req.query("state");
     const oauthError = c.req.query("error");
-    // Inbound length bound: refuse oversized code/state before any journey
-    // consume, exchange, or session work. Refusals keep today's path, so the
-    // error param is peeked first and oversized maps to the generic failure.
-    // Like every other stray below, an oversized hit leaves the state, next
-    // and intended cookies intact for the next real hit.
+    // Inbound length bound: refuse oversized code/state before throttle spend
+    // or any journey consume, exchange, or session work. Refusals keep today's
+    // path, so the error param is peeked first and oversized maps to the
+    // generic failure. Like every other stray below, an oversized hit leaves
+    // the state, next and intended cookies intact for the next real hit.
     if (!oauthError && hasOversizedOAuthParams(code, state)) {
+      console.warn("discord sign-in failed", {
+        exception: "OversizedOAuthParams",
+        request_id: safeRequestId(c.get("requestId")),
+      });
       return c.redirect("/?n=signin_failed", 302);
     }
+    const limited = await throttleGuard(c, "login-callback", AUTH_THROTTLE_PER_MINUTE);
+    if (limited) return limited;
+    const expected = await getSignedCookie(c, c.env.SESSION_SECRET, STATE_COOKIE);
     const store =
       state && typeof expected === "string" && state === expected
         ? await hooks.storeFor(c).catch(() => null)

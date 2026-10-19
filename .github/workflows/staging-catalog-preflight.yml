@@ -1,0 +1,70 @@
+name: staging-catalog-preflight
+
+# Fixed-purpose read-only staging catalog preflight for the standing-migrator
+# cutover. Manual dispatch only, staging environment, no inputs: seven
+# hardcoded SELECTs in one READ ONLY transaction (owners of the 4 runtime
+# tables + sequences with actual-name discovery, schema ACL, app/PUBLIC
+# CREATE booleans, table grants, default ACL, per-owner counts). Uses the
+# EXISTING staging-environment secret in place; no copy, no new credential,
+# no mint/rotate, no plan+apply dispatch, no writes. Reviewed main only.
+#
+# The trigger stays dispatch-only with no inputs on purpose: this workflow
+# reads a staging secret, and no pull-request-triggered workflow in this repo
+# touches staging secrets (a fork PR would have no secret and fail). There is
+# no scope gate: every dispatch runs the same seven reads. This workflow
+# gates no merge (required checks are check, gitleaks and pr-lint), so there
+# is no aggregator job and a skip never blocks anything.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: staging-catalog-preflight
+  cancel-in-progress: false
+
+jobs:
+  preflight:
+    name: preflight
+    # The org's two-selfhosted runner group refuses public repos:
+    # GitHub-hosted while public, the self-hosted fleet while private.
+    runs-on: ${{ github.event.repository.private && fromJSON('["self-hosted","two-selfhosted"]') || 'ubuntu-latest' }}
+    timeout-minutes: 10
+    environment: staging
+    steps:
+      - name: Ref gate (reviewed main only, before dependency install or DB access)
+        run: |
+          set -euo pipefail
+          [[ "$GITHUB_REF" == refs/heads/main ]] || { printf '%s\n' 'Preflight requires main.' >&2; exit 1; }
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - name: Read-only staging catalog preflight (seven SELECTs, no writes)
+        env:
+          # Staging Environment secret; never echoed, never written to a file.
+          # GitHub masks secret values in logs automatically. No DATABASE_URL
+          # fallback and no production secret is mapped into this step.
+          PLANETSCALE_STAGING_DATABASE_URL: ${{ secrets.PLANETSCALE_STAGING_DATABASE_URL }}
+          PREFLIGHT_OUTFILE: catalog-preflight.json
+        run: |
+          set -euo pipefail
+          if [ -z "${PLANETSCALE_STAGING_DATABASE_URL:-}" ]; then
+            echo "::error::PLANETSCALE_STAGING_DATABASE_URL is not configured on the staging environment"
+            exit 1
+          fi
+          node ci/staging-catalog-preflight.mjs
+      - name: Preflight output
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: staging-catalog-preflight
+          path: catalog-preflight.json
+          if-no-files-found: error
+          retention-days: 30
