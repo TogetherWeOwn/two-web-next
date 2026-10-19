@@ -1061,17 +1061,43 @@ describe("retention ledger L8b core member tables", () => {
     // separators between): a broad `events.*retention` false-positives on the
     // pre-existing EVENT_SEARCH_LOG_RETENTION_DAYS, and a broad
     // `retention.*events` false-positives on trailing `// config/agent-events`
-    // comments on the same line.
+    // comments on the same line. Two tables use a shorter concept prefix in
+    // code (DISCORD_SNAPSHOT_*, OAUTH_JOURNEY_*), so those aliases are probed
+    // too; the exact-name pin below ends synonym evasion entirely.
     const constants = read("src/jobs/constants.ts");
+    const ALIAS_STEMS: Record<string, string[]> = {
+      discord_event_snapshots: ["discord_snapshot"],
+      web_oauth_journeys: ["oauth_journey"],
+    };
+    const stemsFor = (table: string): string[] => {
+      const toStem = (name: string): string =>
+        name
+          .split("_")
+          .map((part) => part.replace(/s$/, "s?"))
+          .join(".?");
+      return [toStem(table), ...(ALIAS_STEMS[table] ?? []).map(toStem)];
+    };
     for (const table of L8B_TABLES) {
-      const stem = table
-        .split("_")
-        .map((part) => part.replace(/s$/, "s?"))
-        .join(".?");
-      expect(constants, `no retention-days constant may name ${table}`).not.toMatch(
-        new RegExp(`${stem}[_\\-\\s]*retention|retention[_\\-\\s]*${stem}`, "i"),
-      );
+      for (const stem of stemsFor(table)) {
+        expect(constants, `no retention-days constant may name ${table}`).not.toMatch(
+          new RegExp(`${stem}[_\\-\\s]*retention|retention[_\\-\\s]*${stem}`, "i"),
+        );
+      }
     }
+    // Exact-name pin: no *_RETENTION_DAYS may appear beyond the known six.
+    // A synonym (DISCORD_SNAPSHOT_RETENTION_DAYS, OAUTH_JOURNEY_RETENTION_DAYS)
+    // keeps the stem probe green when the alias list drifts; this fails it.
+    const retentionNames = [...constants.matchAll(/export const ([A-Z0-9_]*RETENTION_DAYS)\b/g)]
+      .map((m) => m[1])
+      .sort();
+    expect(retentionNames).toEqual([
+      "AGENT_EVENT_AUDIT_RETENTION_DAYS",
+      "BOARD_VIEW_LOG_RETENTION_DAYS",
+      "EVENT_SEARCH_LOG_RETENTION_DAYS",
+      "IDEMPOTENCY_KEY_RETENTION_DAYS",
+      "JOIN_ATTEMPT_RETENTION_DAYS",
+      "MEMBER_ACCESS_LOG_RETENTION_DAYS",
+    ]);
     // Prune wiring: bare names are unambiguous except "events", which also
     // matches ordinary prose ("stale events"), so that one is probed by its
     // exact SQL/store shape.
@@ -1231,6 +1257,15 @@ describe("retention ledger L8b core member tables", () => {
       expect(journeyProof, `journey batch proof: ${name}`).toContain(`it("${name}"`);
     }
     // The journey table carries no member key, so erasure never touches it.
-    expect(read("docs/member-erasure.md")).not.toContain("web_oauth_journeys");
+    // Scoped to the What-is-deleted section: the retained section names
+    // web_oauth_journeys (no member columns, erasure has nothing to delete),
+    // which agrees with the ledger. A doc-wide absence pin goes red on merge.
+    const erasureDoc = read("docs/member-erasure.md");
+    const deletedStart = erasureDoc.indexOf("## What is deleted");
+    const retainedStart = erasureDoc.indexOf("## What is retained");
+    expect(deletedStart).toBeGreaterThanOrEqual(0);
+    expect(retainedStart).toBeGreaterThan(deletedStart);
+    const deletedSection = erasureDoc.slice(deletedStart, retainedStart);
+    expect(deletedSection).not.toContain("web_oauth_journeys");
   });
 });
