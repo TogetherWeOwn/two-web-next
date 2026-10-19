@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { pgPruneStores } from "../src/jobs/postgres";
+import { countMemberRows, eraseMember, type ErasureSql } from "../src/member-erasure";
 import {
   createPostgresSessionStore,
   migrate,
@@ -173,28 +174,78 @@ describe.skipIf(!url)("postgres predecessor grace", () => {
     expect(grace[0]!.n).toBe(0);
   });
 
+  it("counts and erases grace with its member's sessions, leaving another member intact", async () => {
+    const other = "100000000000000402";
+    await store.create(session("erase-source"));
+    await store.create(session("erase-other-source", other));
+    expect(await store.rotate("erase-source", session("erase-successor"))).toBe(true);
+    expect(await store.rotate("erase-other-source", session("erase-other-successor", other))).toBe(
+      true,
+    );
+    const sql = fixture.client as unknown as ErasureSql;
+    const before = await countMemberRows(sql, USER);
+    expect(before.web_sessions).toBe(2);
+    expect(await eraseMember(sql, USER, { dryRun: true })).toEqual(before);
+    expect(await store.get("erase-source")).not.toBeNull();
+    expect(await eraseMember(sql, USER, { dryRun: false })).toEqual(before);
+    expect((await countMemberRows(sql, USER)).web_sessions).toBe(0);
+    expect(await store.get("erase-source")).toBeNull();
+    expect(await store.get("erase-successor")).toBeNull();
+    const grace = await fixture.client<{ user_id: string }[]>`
+      select user_id from web_session_grace order by user_id`;
+    expect(grace.map((row) => row.user_id)).toEqual([other]);
+    expect(await store.get("erase-other-source")).not.toBeNull();
+    expect(await store.get("erase-other-successor")).not.toBeNull();
+    expect(await eraseMember(sql, USER, { dryRun: false })).toEqual({
+      users: 0,
+      profiles: 0,
+      rsvps: 0,
+      web_sessions: 0,
+      join_attempts: 0,
+    });
+  });
+
   it("fixes the grace deadline at the winning rotation after a row-lock wait", async () => {
     await store.create(session("lock-source"));
     let release!: () => void;
     const gate = new Promise<void>((resolve) => {
       release = resolve;
     });
-    const holder = (async () => {
-      await fixture.client.begin(async (tx) => {
-        await tx`select token_hash from web_sessions where token_hash = 'lock-source' for update`;
-        await gate;
-      });
-    })();
-    await new Promise((resolve) => setTimeout(resolve, 50));
+    let locked!: (pid: number) => void;
+    const ready = new Promise<number>((resolve) => {
+      locked = resolve;
+    });
+    const holder = fixture.client.begin(async (tx) => {
+      await tx`select token_hash from web_sessions where token_hash = 'lock-source' for update`;
+      const [row] = await tx<{ pid: number }[]>`select pg_backend_pid() as pid`;
+      locked(row!.pid);
+      await gate;
+    });
+    const holderPid = await ready;
     const rotation = store.rotate("lock-source", session("lock-successor"));
-    await new Promise((resolve) => setTimeout(resolve, 100));
-    release();
+    try {
+      await expect
+        .poll(async () => {
+          const rows = await fixture.client`select pid from pg_stat_activity
+          where datname = current_database() and wait_event_type = 'Lock'
+            and ${holderPid} = any(pg_blocking_pids(pid))`;
+          return rows.length;
+        })
+        .toBe(1);
+      await new Promise((resolve) => setTimeout(resolve, 500));
+    } finally {
+      release();
+      await holder;
+    }
     expect(await rotation).toBe(true);
-    await holder;
     expect(await store.get("lock-source")).not.toBeNull();
-    const [g] = await fixture.client<{ skew_ms: string }[]>`
-      select extract(epoch from (grace_expires_at - clock_timestamp())) * 1000 as skew_ms
+    const [g] = await fixture.client<{ skew_ms: string; since_start_ms: string }[]>`
+      select extract(epoch from (grace_expires_at - clock_timestamp())) * 1000 as skew_ms,
+        extract(epoch from (grace_expires_at - created_at)) * 1000 as since_start_ms
       from web_session_grace where predecessor_hash = 'lock-source'`;
+    // created_at is statement-start now(), before the observed lock wait.
+    // A now()-based deadline loses that wait and fails this lower bound.
+    expect(Number(g!.since_start_ms)).toBeGreaterThanOrEqual(10_400);
     const skewMs = Number(g!.skew_ms);
     expect(skewMs).toBeGreaterThan(9_000);
     expect(skewMs).toBeLessThanOrEqual(10_500);
