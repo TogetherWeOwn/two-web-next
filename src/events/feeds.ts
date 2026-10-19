@@ -10,6 +10,14 @@ export const SITE_NAME = "Together We Own";
 
 const pad = (n: number) => String(n).padStart(2, "0");
 
+/** True when `d` formats on the RFC 5545 wire: a finite instant in years 0000-9999. */
+export function isWireInstant(d: Date): boolean {
+  // getUTCFullYear is NaN exactly when the time is NaN, so the finite
+  // check subsumes it: what remains is an integer year to range-check.
+  const year = d.getUTCFullYear();
+  return Number.isFinite(d.getTime()) && year >= 0 && year <= 9999;
+}
+
 /** PHP `Ymd\THis\Z` for a UTC instant.
  *
  * RFC 5545 wire form needs exactly four year digits: finite instants in
@@ -18,13 +26,8 @@ const pad = (n: number) => String(n).padStart(2, "0");
  * corrupt `NaN` or invalid-width bytes.
  */
 export function icsInstant(d: Date): string {
-  // getUTCFullYear is NaN exactly when the time is NaN, so the finite
-  // check subsumes it: what remains is an integer year to range-check.
-  const time = d.getTime();
+  if (!isWireInstant(d)) throw new IcsTimestampRangeError();
   const year = d.getUTCFullYear();
-  if (!Number.isFinite(time) || year < 0 || year > 9999) {
-    throw new IcsTimestampRangeError();
-  }
   return `${String(year).padStart(4, "0")}${pad(d.getUTCMonth() + 1)}${pad(d.getUTCDate())}T${pad(d.getUTCHours())}${pad(d.getUTCMinutes())}${pad(d.getUTCSeconds())}Z`;
 }
 

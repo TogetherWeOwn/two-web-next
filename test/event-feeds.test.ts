@@ -15,6 +15,7 @@ import {
   eventsIcsCollection,
   eventsRss,
   googleCalendarUrl,
+  isWireInstant,
   webcalUrl,
 } from "../src/events/feeds";
 
@@ -190,6 +191,22 @@ describe("feed builders (byte fixtures)", () => {
     expect(ics).toContain(`SUMMARY:${title}`);
     for (const l of ics.split("\r\n"))
       expect(new TextEncoder().encode(l).length).toBeLessThanOrEqual(75);
+  });
+});
+
+describe("isWireInstant", () => {
+  it.each([
+    ["finite UTC instant", "2026-07-15T18:00:00Z", true],
+    ["low year", "0001-01-02T03:04:05Z", true],
+    ["year 9999", "9999-01-02T03:04:05Z", true],
+    ["invalid Date", Number.NaN, false],
+    ["outside JS Date", 8.64e15 + 1, false],
+    ["expanded year", "+010000-01-02T03:04:05Z", false],
+    ["negative year", "-000001-01-02T03:04:05Z", false],
+    ["maximum finite Date", 8.64e15, false],
+    ["minimum finite Date", -8.64e15, false],
+  ])("%s classifies as %s", (_label, instant, expected) => {
+    expect(isWireInstant(new Date(instant))).toBe(expected);
   });
 });
 
