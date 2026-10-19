@@ -104,6 +104,14 @@ test("boolean attributes: bare, empty, and true agree on presence", () => {
     agree(`boolean serialization of ${input}`, input, "<input disabled>");
   }
   agree("selected true", '<option selected="true">x</option>', "<option selected>x</option>");
+  // Whitespace-lookahead proof: ="" and ="true" followed by another attribute
+  // (routine serializer output) must strip, pinning the \s alternative of
+  // (?=[\s>]) — not just the > alternative every other fixture exercises.
+  agree(
+    "empty/true before another attribute",
+    '<span data-avatar="" aria-hidden="true" class="avatar">x</span>',
+    '<span data-avatar aria-hidden class="avatar">x</span>',
+  );
   agree(
     "non-boolean values survive",
     '<input value="false" aria-checked="false" title="a=true">',
@@ -159,6 +167,20 @@ test("present section: contract and e2e pipelines agree byte-for-byte", () => {
     '<section data-testid="past-events"><div data-testid="past-events-list">' +
       '<article data-event-key="kit-parity-1" hidden>Parity night &lt;&amp;> 1</article>' +
       "</div></section>",
+  );
+  // Attribute-prefix + sibling proof: the real Hono archive section emits
+  // data-island before data-testid, and real pages are multi-section, so
+  // [^>]* must span leading attributes and [\s\S]*? must stop at the first
+  // closing tag — a lone testid-first section pins neither branch.
+  const multiDoc =
+    '<section data-island="past-events" data-testid="past-events">A</section>' +
+    '<section data-testid="other">B</section>';
+  const multiContract = contractSectionOf(multiDoc, "past-events");
+  const multiE2e = e2eNormalize(e2eSectionOf(multiDoc));
+  assert.equal(multiE2e, multiContract);
+  assert.equal(
+    multiContract,
+    '<section data-island="past-events" data-testid="past-events">A</section>',
   );
 });
 
