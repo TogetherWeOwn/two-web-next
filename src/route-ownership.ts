@@ -485,6 +485,13 @@ export interface HookDispatchDeps {
   // of in web/src/hooks.server.ts. Absent by default: without it the dispatch
   // behaves exactly as before.
   eventDetail?: (request: Request, render: () => Promise<Response>) => Promise<Response>;
+  // Native hot-zone read budget around Kit SSR. Same binding shape as the
+  // archive/list wrappers: the hook binds env into this
+  // (request, render) => dispatchHotzonesRequest(request, env, render); the
+  // core decides WHEN it runs, so the route-id branch is pinned here instead
+  // of in web/src/hooks.server.ts. Absent by default: without it the dispatch
+  // behaves exactly as before.
+  hotzones?: (request: Request, render: () => Promise<Response>) => Promise<Response>;
 }
 
 // Production Kit decoration, owned by the core so the tested path is the
@@ -658,6 +665,10 @@ export async function dispatchHookRequest(
   // wrapper.
   const isPastArchivePage = event.route?.id === "/events/past";
   const isEventsListPage = event.route?.id === "/events";
+  // Hot-zone heatmaps: the index plus the per-signal route. Concrete manifest
+  // paths only (see ROUTE_MANIFEST): unknown segments never reach this branch.
+  const isHotzonesPage =
+    event.route?.id === "/hotzones" || event.route?.id === "/hotzones/[signal]";
   // The live detail is a member read, so it renders inside the boundary; the
   // shared public-read budget runs before the session bridge through the
   // detail wrapper, exactly as the served handler throttles before any read.
@@ -683,6 +694,8 @@ export async function dispatchHookRequest(
     response = await deps.pastArchive(event.request, () => deps.resolve(event));
   } else if (isEventsListPage && deps.eventsPage) {
     response = await deps.eventsPage(event.request, () => deps.resolve(event));
+  } else if (isHotzonesPage && deps.hotzones) {
+    response = await deps.hotzones(event.request, () => deps.resolve(event));
   } else if (isContentLeafPath(route.path)) {
     // Content leaves keep #808's zero-stylesheet contract on the served
     // worker: the root layout's Tailwind asset is stripped after resolve and

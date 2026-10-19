@@ -11,11 +11,12 @@ import {
 import { dispatchHookRequest } from "../../src/route-ownership";
 import { dispatchEventDetailRequest } from "../../src/events/kit-detail";
 import { dispatchEventsRequest } from "../../src/kit-events";
+import { dispatchHotzonesRequest } from "../../src/kit-hotzones";
 import { dispatchPastArchiveRequest } from "../../src/kit-past-events";
 import { honoFetch } from "#lib/server/hono.ts";
 
 // Pure env binding: trust, ownership, decoration, the read-only session
-// bridge and the archive/list/detail guard branches live in the tested core
+// bridge and the archive/list/detail/hot-zone guard branches live in the tested core
 // (src/route-ownership.ts owns the one loopback-fixture route choice; it
 // dispatches deps.pastArchive for the archive route
 // and deps.eventDetail for the detail route, pinned through
@@ -45,6 +46,7 @@ export const handle: Handle = async ({ event, resolve }) =>
         journeyFor: kitEventsJourneyFor(env),
       }),
     eventDetail: (request, render) => dispatchEventDetailRequest(request, env, render),
+    hotzones: (request, render) => dispatchHotzonesRequest(request, env, render),
     sessionFor: kitSessionBridge(env),
     authStatusCookieFor: kitAuthStatusCookieFor(env),
     accessSink: kitAccessSink(env),

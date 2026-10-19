@@ -1,5 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
-import { loadHotzoneSignalData, loadHotzonesIndexData } from "../src/kit-hotzones";
+import {
+  dispatchHotzonesRequest,
+  loadHotzoneSignalData,
+  loadHotzonesIndexData,
+} from "../src/kit-hotzones";
 import { emptyGrid } from "../src/hotzones/aggregates";
 
 const env = { APP_URL: "https://example.test" } as never;
@@ -154,5 +158,89 @@ describe("Kit hot-zone load outage and telemetry parity", () => {
       }),
     ).rejects.toMatchObject({ status: 404 });
     expect(dbForFn).not.toHaveBeenCalled();
+  });
+});
+
+describe("hot-zone read admission (Kit dispatch)", () => {
+  const requestFor = (path = "/hotzones") =>
+    new Request(new URL(path, "https://example.test").href, { method: "GET" });
+
+  it("runs the shared guard before render and renders once when admitted", async () => {
+    const order: string[] = [];
+    const guard = vi.fn(async () => {
+      order.push("guard");
+      return null;
+    });
+    const render = vi.fn(async () => {
+      order.push("render");
+      return new Response("kit");
+    });
+    const response = await dispatchHotzonesRequest(requestFor(), env, render, guard);
+    expect(response.status).toBe(200);
+    expect(await response.text()).toBe("kit");
+    expect(guard).toHaveBeenCalledTimes(1);
+    expect(guard).toHaveBeenCalledWith(expect.any(Request), env);
+    expect(render).toHaveBeenCalledTimes(1);
+    expect(order).toEqual(["guard", "render"]);
+  });
+
+  it("returns the guard refusal without rendering", async () => {
+    const render = vi.fn(async () => new Response("kit"));
+    const limited = new Response("slow down", {
+      status: 429,
+      headers: { "cache-control": "no-store, private", "retry-after": "60" },
+    });
+    const guard = vi.fn(async () => limited);
+    const response = await dispatchHotzonesRequest(
+      requestFor("/hotzones/joins"),
+      env,
+      render,
+      guard,
+    );
+    expect(response).toBe(limited);
+    expect(response.status).toBe(429);
+    expect(render).not.toHaveBeenCalled();
+  });
+
+  it("renders a bad season without spending (the load answers its 400)", async () => {
+    const guard = vi.fn(async () => null);
+    const render = vi.fn(async () => new Response("Unknown season", { status: 400 }));
+    const response = await dispatchHotzonesRequest(
+      requestFor("/hotzones?season=not-a-season"),
+      env,
+      render,
+      guard,
+    );
+    expect(response.status).toBe(400);
+    expect(render).toHaveBeenCalledOnce();
+    expect(guard).not.toHaveBeenCalled();
+  });
+
+  it("enforces the shared public-read budget through the production default guard", async () => {
+    let sql: ((parts: TemplateStringsArray) => Promise<unknown[]>) & {
+      begin: (run: (tx: never) => Promise<unknown>) => Promise<unknown>;
+    };
+    sql = Object.assign(
+      vi.fn(async (parts: TemplateStringsArray) =>
+        parts.join("").includes("SELECT count(*)") ? [{ n: 60, wait: 12 }] : [],
+      ),
+      {
+        begin: async (run: (tx: never) => Promise<unknown>) => run(sql as never),
+        // The throttle sets `SET LOCAL lock_timeout` through `unsafe` before
+        // the advisory lock; the double passes it through.
+        unsafe: async () => [],
+      },
+    );
+    const throttledEnv = {
+      APP_URL: "https://example.test",
+      THROTTLE_STORE: async () => sql,
+    } as never;
+    const render = vi.fn(async () => new Response("kit"));
+
+    const response = await dispatchHotzonesRequest(requestFor(), throttledEnv, render);
+
+    expect(response.status).toBe(429);
+    expect(response.headers.get("cache-control")).toBe("no-store, private");
+    expect(render).not.toHaveBeenCalled();
   });
 });
