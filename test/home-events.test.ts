@@ -214,7 +214,7 @@ describe("homepage upcoming events", () => {
     const rows = await listHomeUpcoming(f.db, NOW);
     expect(rows.map((r) => r.eventKey)).toEqual(["event-1", "event-2", "event-3"]);
     expect(rows.map((r) => r.goingCount)).toEqual([2, 1, 0]);
-    expect(f.queries).toHaveLength(3);
+    expect(f.queries).toHaveLength(4);
     // Note: this pins listHomeUpcoming (the canonical teaser read) only, not
     // the merged homepage loader, which additionally reads past zones.
     expect(f.queries[0]!.sql).toContain("set_config('lock_timeout', $1, true)");
@@ -230,8 +230,16 @@ describe("homepage upcoming events", () => {
     );
     expect(f.queries[1]!.params).toEqual(["published", expect.any(String), 3]);
     expect(f.queries[2]!.sql).toContain('"rsvps"."status" =');
-    expect(f.queries[2]!.params).toEqual([1, 2, 3, "going"]);
-    expect(f.queries[2]!.sql).not.toContain("user_id");
+    expect(f.queries[2]!.params).toEqual([1, 2, 3, "going", ""]);
+    // Attributable count: joins users and counts only named rows, still with
+    // no viewer id anywhere in the params.
+    expect(f.queries[2]!.sql).toContain('inner join "users"');
+    expect(f.queries[2]!.sql).toContain('"users"."username" <>');
+    // Seat occupancy: the same batched all-rows shape as the write path, so
+    // the teaser keeps one query per aggregate, never one per row.
+    expect(f.queries[3]!.sql).toContain('"rsvps"."status" =');
+    expect(f.queries[3]!.params).toEqual([1, 2, 3, "going"]);
+    expect(f.queries[3]!.sql).not.toContain('inner join "users"');
     expect(Object.keys(rows[0]!).sort()).toEqual([
       "eventKey",
       "goingCount",
@@ -387,8 +395,9 @@ describe("homepage upcoming events", () => {
       await vi.advanceTimersByTimeAsync(0);
       expect(warn).toHaveBeenCalledTimes(1); // no duplicate or unhandled late rejection
       // The past-zones probe runs in parallel with the canonical read, so it
-      // lands even when the stalled read trips the deadline.
-      expect(f.queries).toHaveLength(holdAt === "events" ? 3 : 4);
+      // lands even when the stalled read trips the deadline. A stalled rsvps
+      // read holds both batched aggregates (attributable + occupancy).
+      expect(f.queries).toHaveLength(holdAt === "events" ? 3 : 5);
     },
   );
 
