@@ -269,7 +269,7 @@ export function createPostgresSessionStore(sql: Sql): SessionStore {
           select deleted.old_hash, ${replacement.tokenHash}, deleted.status_hash,
             deleted.user_id, deleted.username, deleted.avatar,
             deleted.member, deleted.moderator, deleted.expires_at,
-            clock_timestamp() + interval '10 seconds'
+            clock_timestamp() + make_interval(secs => ${SESSION_PREDECESSOR_GRACE_SECONDS})
           from deleted
           on conflict (predecessor_hash) do update set
             successor_hash = excluded.successor_hash, status_hash = excluded.status_hash,
