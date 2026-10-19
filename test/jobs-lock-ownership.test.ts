@@ -308,9 +308,19 @@ describe("queue carrier lease ownership", () => {
       expect(await lock.acquire(key, 300)).toEqual(expect.any(String));
       throw new Error("fixture late send failure");
     });
-    await expect(producer(lock, send).dispatch()).rejects.toThrow("fixture late send failure");
+    // AB7 producer deadline: a 300 s send times out at 2000 ms first, so
+    // dispatch rejects as a transport wait while lease safety still holds.
+    const error = await producer(lock, send)
+      .dispatch()
+      .then(
+        () => null,
+        (err: unknown) => err,
+      );
+    expect(error).toBeInstanceOf(BotTransportError);
+    expect((error as Error).message).toBe("sync producer timed out after 2000ms");
     const a = send.mock.calls[0]![0] as SyncMessage;
     expect(lock.release).toHaveBeenCalledWith(key, a.leaseToken);
+    expect(rows.get(key)?.token).toEqual(expect.any(String));
     expect(rows.get(key)?.token).not.toBe(a.leaseToken);
     expect(await lock.acquire(key, 300)).toBeNull();
   });
