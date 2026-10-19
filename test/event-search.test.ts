@@ -77,6 +77,12 @@ describe("recordSearch is fail-open", () => {
   it("never throws and never logs the driver message", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     await expect(recordSearch(failingDb, "helldiv", 1)).resolves.toBeUndefined();
+    // Emission proof: the redaction assert below is vacuous when nothing is
+    // logged, so pin the expected warn first (silencing the logger fails here).
+    expect(warn).toHaveBeenCalledWith(
+      "Event search unavailable for logging; serving results without recording.",
+      { exception: "Error" },
+    );
     expect(JSON.stringify(warn.mock.calls)).not.toContain("secret");
     warn.mockRestore();
   });
