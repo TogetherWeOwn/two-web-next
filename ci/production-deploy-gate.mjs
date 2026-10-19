@@ -68,7 +68,7 @@ export function assertProductionHold(env, { nowMs = Date.now() } = {}) {
 }
 
 // Live production identity: the Cloudflare active version's commit, read from
-// the production apex /up revision marker (the same source the TOG-25031
+// the production apex /up revision marker (the same source the production
 // promoter uses). Returns the 40-hex commit, or null when the marker is
 // absent or unreadable (unknown, never equal).
 export const PRODUCTION_ORIGIN = "https://togetherweown.com";

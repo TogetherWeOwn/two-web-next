@@ -712,7 +712,7 @@ describe("native automatic production promotion", () => {
     expect(production).toContain("already_live: ${{ steps.live.outputs.already_live }}");
     expect(production).toContain("live_sha: ${{ steps.live.outputs.live_sha }}");
     // The live check derives the commit from the Cloudflare active version
-    // (/up revision marker), like the TOG-25031 promoter.
+    // (/up revision marker), like the production promoter.
     const gate = read("ci/production-deploy-gate.mjs");
     expect(gate).toContain('new URL("/up", origin)');
     expect(gate).toContain("revision?.commit");
