@@ -193,6 +193,7 @@ describe("producer deadline", () => {
       resynced: 0,
       absorbed: 0,
       failed: 1,
+      deferred: 0,
     });
     expect(console.warn).toHaveBeenCalledWith("Event reconcile key failed.", {
       key: eventKey,
