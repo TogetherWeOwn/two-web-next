@@ -376,13 +376,11 @@ jobs:
       - name: Floor guard (HARD)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
         run: npm run floor-guard:selftest && npm run floor-guard
-      # Test-inventory WARN gate (quality-gates.md): every test file runs
-      # somewhere. Filesystem-only; continue-on-error so it reports without
-      # ever failing the job or skipping the steps after it (WARN).
-      - name: Test inventory (WARN)
+      # Test-inventory HARD gate (quality-gates.md): every test file runs
+      # somewhere. Filesystem-only; --strict fails the job on any orphan.
+      - name: Test inventory (HARD)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
-        continue-on-error: true
-        run: npm run test:inventory:selftest && npm run test:inventory
+        run: npm run test:inventory:selftest && npm run test:inventory -- --strict
       # SvelteKit workspaces (house-rules parity): unit coverage SSR-compiles
       # .svelte through web's svelte/compiler, so install before Check. Runs
       # whenever Check runs (docs/draft gate only): coverage runs every test

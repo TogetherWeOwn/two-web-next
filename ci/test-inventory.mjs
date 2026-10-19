@@ -1,18 +1,20 @@
-// CI-inventory check (WARN): every *.test.ts / *.test.mjs must be reachable
+// CI-inventory check (HARD): every *.test.ts / *.test.mjs must be reachable
 // from a CI job. A test file nobody runs is worse than no test: it claims
 // coverage the suite never verifies.
 //
-// Reachability rules (mirroring vitest.config.ts + package.json + workflows):
-// - test/** matches the vitest `include` globs, except the smoke trio the
-//   config excludes (they run via `npm run test:smoke` instead).
+// Reachability rules (vitest.config.ts + package.json + workflows):
+// - test/** matches the vitest `include` globs, except the files the config
+//   `exclude`s (parsed live from vitest.config.ts, never mirrored by hand).
+//   An excluded file runs via `npm run test:smoke` instead, and counts as
+//   reachable only while that script still names it.
 // - tier0/** matches the Tier-0 config (`tier0/vitest.config.ts`, run via
 //   `npm run test:tier0`); reachable only while that wiring names it.
 // - ci/** and e2e/** have no glob runner: each file must be named in a
 //   package.json script or a .github/workflows/*.yml step.
 // - test/helpers/** and other non-*.test.* files are fixtures, not tests.
 //
-// Modes: default WARN prints ::warning:: per orphan and exits 0 (new checks
-// start WARN). --strict exits 1 on any orphan (selftest + a future HARD flip).
+// Modes: default prints ::warning:: per orphan and exits 0 (triage runs).
+// --strict exits 1 on any orphan; CI runs --strict (HARD).
 // --selftest runs the fixture suite below and exits 0/1 on pass/fail.
 import {
   readdirSync,
@@ -30,13 +32,26 @@ import assert from "node:assert/strict";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
-// Mirrors vitest.config.ts include/exclude for test/**.
 const VITEST_TEST_DIRS = ["test"];
-const SMOKE_EXCLUDED = new Set([
-  "test/smoke.test.mjs",
-  "test/json-smoke.test.mjs",
-  "test/revision-check.test.mjs",
-]);
+
+// The test/** files vitest skips, parsed from the `exclude` array in
+// <root>/vitest.config.ts. Derived, not mirrored, so the gate cannot drift
+// from the config: only literal test/** test paths count (configDefaults and
+// glob entries never match a concrete file). A root without the config
+// (hermetic fixtures) excludes nothing.
+export function vitestExcludedTests(root = repoRoot) {
+  const configPath = join(root, "vitest.config.ts");
+  if (!existsSync(configPath)) return new Set();
+  const text = readFileSync(configPath, "utf8");
+  const start = text.indexOf("exclude:");
+  assert.ok(start !== -1, `${configPath} has no exclude block`);
+  const end = text.indexOf("]", start);
+  assert.ok(end !== -1, `${configPath} exclude block never closes`);
+  const files = [...text.slice(start, end).matchAll(/"([^"]+\.test\.(?:ts|mjs))"/g)]
+    .map((m) => m[1])
+    .filter((f) => f.startsWith("test/") && !f.includes("*"));
+  return new Set(files);
+}
 
 function listTestFiles(root, dir) {
   const out = [];
@@ -80,6 +95,7 @@ function referencedInCi(file, haystack) {
 
 export function inventory(root = repoRoot) {
   const haystack = collectHaystack(root);
+  const smokeExcluded = vitestExcludedTests(root);
   const files = [
     ...VITEST_TEST_DIRS.flatMap((d) => listTestFiles(root, d)),
     ...listTestFiles(root, "tier0"),
@@ -91,9 +107,9 @@ export function inventory(root = repoRoot) {
   for (const file of files) {
     let via = null;
     if (file.startsWith("test/")) {
-      via = SMOKE_EXCLUDED.has(file) ? "npm run test:smoke" : "vitest include (test/**/*.test.*)";
-      // The smoke trio is reachable only when test:smoke still names it.
-      if (SMOKE_EXCLUDED.has(file) && !referencedInCi(file, haystack)) via = null;
+      via = smokeExcluded.has(file) ? "npm run test:smoke" : "vitest include (test/**/*.test.*)";
+      // A vitest-excluded file is reachable only when test:smoke still names it.
+      if (smokeExcluded.has(file) && !referencedInCi(file, haystack)) via = null;
     } else if (file.startsWith("tier0/")) {
       // Tier-0 suites run only from the report-only step via their own
       // config: reachable only while that wiring still names the config or
@@ -122,9 +138,10 @@ function selftest() {
   };
 
   // Hermetic by design: --selftest must pass on any tree, including one with
-  // a genuinely orphaned file. The real tree's orphans are reported (not
-  // failed) by the plain `npm run test:inventory` run in the same CI step,
-  // which keeps this WARN gate from ever failing the job.
+  // a genuinely orphaned file. The repoRoot cases below assert only that the
+  // derived exclude set parses and stays wired (never that the tree has zero
+  // orphans); the plain `npm run test:inventory -- --strict` run in the same
+  // CI step is the check that fails the job on orphans (HARD).
   check("clean fixture tree reports no orphans", () => {
     const dir = mkdtempSync(join(tmpdir(), "test-inventory-"));
     try {
@@ -142,12 +159,54 @@ function selftest() {
     }
   });
 
-  check("smoke trio resolves via test:smoke", () => {
+  check("inventory derives the vitest exclude list (no hand mirror)", () => {
+    const excluded = [...vitestExcludedTests(repoRoot)].sort();
+    assert.deepEqual(excluded, [
+      "test/json-smoke.test.mjs",
+      "test/promotion-smoke-identity-acceptance.test.mjs",
+      "test/revision-check.test.mjs",
+      "test/smoke-ordinary-traffic-identity-acceptance.test.mjs",
+      "test/smoke-public-api-acceptance.test.mjs",
+      "test/smoke.test.mjs",
+    ]);
+  });
+
+  check("vitest-excluded smoke files resolve via test:smoke", () => {
     const { reachable } = inventory(repoRoot);
-    for (const f of SMOKE_EXCLUDED) {
+    const excluded = vitestExcludedTests(repoRoot);
+    assert.ok(excluded.size > 0, "expected vitest to exclude at least one smoke file");
+    for (const f of excluded) {
       const hit = reachable.find((r) => r.file === f);
       assert.ok(hit, `${f} should be reachable`);
       assert.match(hit.via, /test:smoke/);
+    }
+  });
+
+  check("vitest-excluded test file named in no script is an orphan", () => {
+    const dir = mkdtempSync(join(tmpdir(), "test-inventory-"));
+    try {
+      writeFileSync(
+        join(dir, "package.json"),
+        JSON.stringify({ scripts: { "test:smoke": "node --test test/wired.test.mjs" } }),
+      );
+      writeFileSync(
+        join(dir, "vitest.config.ts"),
+        'export default { test: { exclude: ["**/node_modules/**", "test/wired.test.mjs", "test/ghost.test.mjs"] } };\n',
+      );
+      mkdirSync(join(dir, "test"), { recursive: true });
+      writeFileSync(join(dir, "test", "wired.test.mjs"), "node:test placeholder\n");
+      writeFileSync(join(dir, "test", "ghost.test.mjs"), "node:test placeholder\n");
+      writeFileSync(join(dir, "test", "plain.test.ts"), "vitest placeholder\n");
+      const { orphans, reachable } = inventory(dir);
+      assert.deepEqual(orphans, ["test/ghost.test.mjs"]);
+      const wired = reachable.find((r) => r.file === "test/wired.test.mjs");
+      assert.ok(wired, "wired smoke file should be reachable");
+      assert.match(wired.via, /test:smoke/);
+      const plain = reachable.find((r) => r.file === "test/plain.test.ts");
+      assert.ok(plain, "non-excluded test file should be reachable");
+      assert.match(plain.via, /vitest include/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
     }
   });
 
