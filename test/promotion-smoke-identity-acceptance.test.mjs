@@ -105,6 +105,14 @@ const fixtures = {
   "/discord": [302, null, "", "https://discord.gg/fixture"],
   "/profile": [302, null, "", "/auth/discord"],
   "/admin": [302, null, "", "/auth/discord"],
+  // Single-event HTML detail (GET /e/:key): the fixed probe key exists in
+  // no database, so like the real handler's notFound() the stub answers the
+  // branded missing-event page.
+  "/e/00000000000000000000000001": [
+    404,
+    "text/html",
+    "<title>We cannot find that page — Together We Own</title>",
+  ],
   "/__smoke_unknown_route__": [
     404,
     "text/html",
