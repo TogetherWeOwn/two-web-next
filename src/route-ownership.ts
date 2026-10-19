@@ -485,6 +485,13 @@ export interface HookDispatchDeps {
   // of in web/src/hooks.server.ts. Absent by default: without it the dispatch
   // behaves exactly as before.
   eventDetail?: (request: Request, render: () => Promise<Response>) => Promise<Response>;
+  // Native hot-zone read budget around Kit SSR. Same binding shape as the
+  // archive/list wrappers: the hook binds env into this
+  // (request, render) => dispatchHotzonesRequest(request, env, render); the
+  // core decides WHEN it runs, so the route-id branch is pinned here instead
+  // of in web/src/hooks.server.ts. Absent by default: without it the dispatch
+  // behaves exactly as before.
+  hotzones?: (request: Request, render: () => Promise<Response>) => Promise<Response>;
 }
 
 // Production Kit decoration, owned by the core so the tested path is the
@@ -521,11 +528,31 @@ function decorateKitResponse(
 // (including "null"/malformed), Sec-Fetch-Site same-origin is a fallback only
 // when Origin is absent and only when the request origin is APP_URL, invalid
 // config fails closed. Reads headers + URL only, never the body.
+// Hono-identical path decode for the exemption match. Hono's guard and router
+// both see getPath() (hono/utils/url in the pinned Hono: decodeURI with a
+// %25 pre-escape, falling back to decoding only the valid %XX runs), so the
+// twin decodes the same way. decodeURI on purpose: reserved escapes such as
+// %2F stay encoded on Hono too, and decodeURIComponent would diverge.
+function decodeTwinPath(path: string): string {
+  const preescaped = path.includes("%25") ? path.replace(/%25/g, "%2525") : path;
+  try {
+    return decodeURI(preescaped);
+  } catch {
+    return preescaped.replace(/(?:%[0-9A-Fa-f]{2})+/g, (match) => {
+      try {
+        return decodeURI(match);
+      } catch {
+        return match;
+      }
+    });
+  }
+}
+
 export function isSameOriginAllowed(request: Request, appUrl: string): boolean {
   const method = request.method.toUpperCase();
   let path: string;
   try {
-    path = new URL(request.url).pathname;
+    path = decodeTwinPath(new URL(request.url).pathname);
   } catch {
     return false;
   }
@@ -658,6 +685,10 @@ export async function dispatchHookRequest(
   // wrapper.
   const isPastArchivePage = event.route?.id === "/events/past";
   const isEventsListPage = event.route?.id === "/events";
+  // Hot-zone heatmaps: the index plus the per-signal route. Concrete manifest
+  // paths only (see ROUTE_MANIFEST): unknown segments never reach this branch.
+  const isHotzonesPage =
+    event.route?.id === "/hotzones" || event.route?.id === "/hotzones/[signal]";
   // The live detail is a member read, so it renders inside the boundary; the
   // shared public-read budget runs before the session bridge through the
   // detail wrapper, exactly as the served handler throttles before any read.
@@ -683,6 +714,8 @@ export async function dispatchHookRequest(
     response = await deps.pastArchive(event.request, () => deps.resolve(event));
   } else if (isEventsListPage && deps.eventsPage) {
     response = await deps.eventsPage(event.request, () => deps.resolve(event));
+  } else if (isHotzonesPage && deps.hotzones) {
+    response = await deps.hotzones(event.request, () => deps.resolve(event));
   } else if (isContentLeafPath(route.path)) {
     // Content leaves keep #808's zero-stylesheet contract on the served
     // worker: the root layout's Tailwind asset is stripped after resolve and

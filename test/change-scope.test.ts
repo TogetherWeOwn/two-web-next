@@ -540,8 +540,8 @@ describe("e2e scope gate", () => {
     // stability (docs/visual-regression.md); still GitHub-hosted Linux.
     expect(smoke).toMatch(/\n    runs-on: ubuntu-(latest|24\.04)\n/);
     // browser-smoke is not a required check: CONTRIBUTING names exactly
-    // check, gitleaks and pr-lint, so a docs-only or test-only skip never
-    // blocks a merge.
+    // ci-ok, gitleaks, e2e-ok and pr-lint, so a docs-only or test-only skip
+    // never blocks a merge.
     const section =
       readFileSync("CONTRIBUTING.md", "utf8")
         .split("### Branch protection and required checks")[1]
@@ -602,8 +602,8 @@ describe("e2e-staging scope gate", () => {
     expect(scopeJob).toMatch(/\n    runs-on: ubuntu-latest\n/);
     expect(journeys).toMatch(/\n    runs-on: ubuntu-latest\n/);
     // staging-journeys is post-deploy evidence, not a merge gate: CONTRIBUTING
-    // names exactly check, gitleaks and pr-lint, so a docs-only or test-only
-    // skip never blocks a merge.
+    // names exactly ci-ok, gitleaks, e2e-ok and pr-lint, so a docs-only or
+    // test-only skip never blocks a merge.
     const section =
       readFileSync("CONTRIBUTING.md", "utf8")
         .split("### Branch protection and required checks")[1]

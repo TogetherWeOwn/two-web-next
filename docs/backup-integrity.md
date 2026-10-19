@@ -114,7 +114,8 @@ receipt transport failures, exact pairing and retention failures.
 ## Required CI
 
 The `check` job in `.github/workflows/ci.yml` runs all six suites above, each as
-its own step, so a red one fails the existing required `check` and `ci-ok`. No
+its own step, so a red one fails the `check` job and therefore the required
+`ci-ok`. No
 step is `continue-on-error`. The five new suites run when the change scope
 selects `app` or `full` (any path under `bin/` or `ci/`, including
 `bin/db-backup.sh`, `bin/backup/**`, `ci/backup-*` and

@@ -7,17 +7,13 @@
 // minimal guard app) and the twin (direct) over identical method/path/headers/
 // URL and asserts identical allow/refuse verdicts.
 //
-// Two input families currently split the halves and are pinned per-half
-// instead of as agreement, so either alignment direction flips them red:
-//   - Method case: fetch normalizes post/put/delete/get/head/options to
-//     uppercase but not patch, so `patch`/`Patch`/`pAtCh` bypass the Hono
-//     guard (raw compare, same-origin.ts:21) while the twin uppercases
-//     (route-ownership.ts:525) and guards them.
-//   - Encoded exempt paths: Hono matches exemptions against the decoded
-//     c.req.path (same-origin.ts:23), while the twin matches URL.pathname,
-//     which keeps %XX escapes (route-ownership.ts:528), so /%6dcp-style
-//     spellings are exempt on Hono only.
-// Aligning either family is a separately paired build slice: this file stays
+// Two input families used to split the halves and were pinned per-half: the
+// guard compared methods raw while the twin uppercased (so `patch` bypassed
+// the guard), and the guard matched exemptions against decoded c.req.path
+// while the twin matched raw URL.pathname (so /%6dcp-style spellings were
+// exempt on Hono only). Both are now aligned: the guard uppercases methods
+// and the twin decodes paths exactly like Hono getPath, so every row asserts
+// agreement and drift in either direction flips red. This file stays
 // test-only and never changes the guard or the twin.
 import { Hono } from "hono";
 import { describe, expect, it } from "vitest";
@@ -75,22 +71,6 @@ async function expectSameVerdict(
   expect(hono, `Hono ${label}`).toBe(expected);
   expect(twin, `Kit twin ${label}`).toBe(expected);
   expect(twin, `differential ${label}`).toBe(hono);
-}
-
-// Known-divergence pin: asserts each half's current verdict separately. Used
-// only for the two families named in the header; every other row must agree.
-async function expectKnownDivergence(
-  url: string,
-  method: string,
-  headers: HeadersInit,
-  appUrl: string,
-  expected: { hono: boolean; twin: boolean },
-  label: string,
-): Promise<void> {
-  const hono = await honoAllows(url, method, headers, appUrl);
-  const twin = twinAllows(url, method, headers, appUrl);
-  expect(hono, `Hono ${label}`).toBe(expected.hono);
-  expect(twin, `Kit twin ${label}`).toBe(expected.twin);
 }
 
 describe("same-origin differential (Hono guard vs Kit twin)", () => {
@@ -205,11 +185,11 @@ describe("same-origin differential (Hono guard vs Kit twin)", () => {
     }
   });
 
-  it("pins method casing: fetch-normalized verbs agree, patch-family splits", async () => {
+  it("guards unsafe methods in any casing on both halves", async () => {
     // fetch uppercases post/put/delete/get/head/options before either half
     // sees them, so both halves see the same method and agree; patch is not
-    // normalized, so the Hono raw compare bypasses while the twin uppercases
-    // and guards. Unknown verbs agree-allow on both.
+    // normalized, so both halves uppercase before comparing and guard it.
+    // Unknown verbs agree-allow on both.
     for (const method of ["post", "Post", "put", "delete"]) {
       await expectSameVerdict(
         guardedUrl(),
@@ -230,8 +210,7 @@ describe("same-origin differential (Hono guard vs Kit twin)", () => {
         `${method} ${GUARDED_PATH} evil origin agrees allow`,
       );
     }
-    // Exact Origin admits on both, for different reasons: Hono bypasses the
-    // guard entirely while the twin checks and admits.
+    // Exact Origin admits on both: both halves guard, then admit.
     await expectSameVerdict(
       guardedUrl(),
       "patch",
@@ -243,12 +222,12 @@ describe("same-origin differential (Hono guard vs Kit twin)", () => {
     const splitHeaders: HeadersInit[] = [{ origin: "https://evil.test" }, { origin: "null" }, {}];
     for (const method of ["patch", "Patch", "pAtCh"]) {
       for (const headers of splitHeaders) {
-        await expectKnownDivergence(
+        await expectSameVerdict(
           guardedUrl(),
           method,
           headers,
           APP_URL,
-          { hono: true, twin: false },
+          false,
           `${method} ${GUARDED_PATH} headers=${JSON.stringify(headers)}`,
         );
       }
@@ -315,10 +294,10 @@ describe("same-origin differential (Hono guard vs Kit twin)", () => {
     }
   });
 
-  it("pins percent-encoded spellings: guarded paths agree, exempt spellings split", async () => {
-    // An encoded guarded path agrees on both; an encoded exempt spelling is
-    // exempt on Hono (decoded c.req.path) but guarded on the twin
-    // (URL.pathname keeps escapes). Exact Origin admits on both either way.
+  it("decodes percent-encoded spellings identically on both halves", async () => {
+    // Both halves match exemptions against the Hono-decoded path, so encoded
+    // exempt spellings are exempt on both and encoded guarded paths are
+    // guarded on both. Exact Origin admits on both either way.
     await expectSameVerdict(
       guardedUrl("two.test", "/writ%65"),
       "POST",
@@ -347,15 +326,49 @@ describe("same-origin differential (Hono guard vs Kit twin)", () => {
         `encoded exempt ${path} exact origin agrees allow`,
       );
       for (const headers of splitHeaders) {
-        await expectKnownDivergence(
+        await expectSameVerdict(
           guardedUrl("two.test", path),
           "POST",
           headers,
           APP_URL,
-          { hono: true, twin: false },
+          true,
           `encoded exempt ${path} headers=${JSON.stringify(headers)}`,
         );
       }
+    }
+    // Adversarial decode spellings: the twin replicates Hono getPath exactly
+    // (decodeURI with a %25 pre-escape, valid-runs-only fallback), so
+    // reserved, double-encoded, malformed and invalid-UTF-8 escapes agree too.
+    const adversarial: Array<[string, boolean]> = [
+      // Fully-encoded and uppercase-hex spellings decode to the exemption.
+      ["/%6d%63%70", true],
+      ["/%6D%63%70", true],
+      // %2F is reserved: decodeURI keeps it encoded on both, so these stay
+      // guarded paths rather than becoming exemptions.
+      ["/%2fmcp", false],
+      ["/mcp%2f", false],
+      // The multi-segment spelling must not form /api/agent-events: %2F stays
+      // encoded on both, which pins decodeURI over decodeURIComponent.
+      ["/api%2Fagent-events", false],
+      // %25 survives Hono's pre-escape on both: still encoded, still guarded.
+      ["/%256dcp", false],
+      // Malformed escapes and invalid UTF-8 decode only valid runs on both.
+      ["/%zz", false],
+      ["/mcp%", false],
+      ["/%A4%A2", false],
+      ["/%41%zz", false],
+      // A literal plus is not an escape in a path on either half.
+      ["/mc+p", false],
+    ];
+    for (const [path, expected] of adversarial) {
+      await expectSameVerdict(
+        guardedUrl("two.test", path),
+        "POST",
+        { origin: "https://evil.test" },
+        APP_URL,
+        expected,
+        `adversarial ${path} evil origin`,
+      );
     }
   });
 

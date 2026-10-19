@@ -10,7 +10,8 @@
 // keeps today's order: the moderator guard still runs first (guest 401,
 // non-moderator 403, oversized or not), and at/under-cap moderator posts
 // still spend exactly one throttle hit before validation and the store.
-// The featured update post (POST /featured/:id) is not in scope here.
+// The featured update post (POST /featured/:id) is covered in
+// admin-featured-update-body-cap-first.test.ts.
 // Hermetic: in-memory sessions, a counting throttle Sql double, store
 // spies and a fail-if-touched Db double; no DATABASE_URL, no sockets.
 import { beforeEach, describe, expect, it, vi } from "vitest";

@@ -3,11 +3,16 @@
 The public event pages and feeds share one `events-read:<clientKey>` budget:
 **60 admitted requests per client in the last 60 seconds**. This covers GET and
 HEAD on `/events` (including search and island fragments), `/events/past`,
-`/events.rss`, `/events.ics`, `/events/:file.ics`, `/e/:key`, `/events.md` and
-`/e/:key.md`. Different query values, page numbers, event keys and feed formats
-do not create new budgets.
+`/events.rss`, `/events.ics`, `/events/:file.ics`, `/e/:key`, `/events.md`,
+`/e/:key.md` and the hot-zone heatmaps (`/hotzones`, `/hotzones/joins`,
+`/hotzones/voice`, `/hotzones/games`). Different query values, page numbers,
+event keys and feed formats do not create new budgets.
 The guard runs before event-store access, session reads, analytics and Discord
 reads. It also charges redirects and missing-key requests on these routes.
+On the hot-zone paths the guard runs after the season grammar and the signal
+check, so a bad `?season=` (400) and an unknown signal (404) spend nothing;
+everywhere else on these four paths it runs before the aggregate reads and
+the board-view log insert.
 
 The routes remain public; the budget applies equally to signed-in clients because
 reading a session before admission would itself incur database work. It does not
