@@ -64,6 +64,19 @@ export const THROTTLE_COUNTER_RETENTION_MINUTES = 5;
 export const WEB_THROTTLE_LOCK_TIMEOUT_MS = 2000;
 
 /**
+ * Named wait for the best-effort throttle prune: the already-decided verdict
+ * returns after at most this long, whether or not the database cancels the
+ * statement.
+ */
+const THROTTLE_PRUNE_WAIT_MS = 2_000;
+
+function exceptionClass(err: unknown): string {
+  return err instanceof Error
+    ? err.name
+    : ((err as { constructor?: { name?: string } })?.constructor?.name ?? "unknown");
+}
+
+/**
  * Legacy join_source validation (JoinController::rememberSource): starts
  * alnum, then up to 63 of [a-z0-9:_-]. Anything else leaves no trace.
  */
@@ -177,18 +190,45 @@ export async function checkJoinThrottle(
   // so rows held by unrelated transactions wait for a later pass). It is
   // best-effort: a throwing prune must not flip a decided refusal into an
   // admission (the generic middleware catch) or a 500 on the direct join path
-  // (no catch there).
+  // (no catch there) — and a stalled prune must not hold the decided verdict
+  // either. The answer waits at most THROTTLE_PRUNE_WAIT_MS, independently of
+  // the transaction-local statement timeout; the server cancels a slow DELETE
+  // without changing pooled settings, while connection/transport stalls still
+  // cannot hold the caller. A late settlement is observed without a second
+  // warning or a verdict change.
+  const pruneDelete = (tx: Sql) =>
+    tx`DELETE FROM web_throttle_hits USING (SELECT id FROM web_throttle_hits WHERE at < now() - make_interval(mins => ${THROTTLE_COUNTER_RETENTION_MINUTES}) ORDER BY id LIMIT 1000 FOR UPDATE SKIP LOCKED) AS candidates WHERE web_throttle_hits.id = candidates.id`;
+  const pruneStore = sql as Sql & {
+    begin: (run: (tx: Sql) => Promise<void>) => Promise<void>;
+  };
+  const prune = (async () => {
+    try {
+      await pruneStore.begin(async (tx) => {
+        await tx.unsafe(`SET LOCAL statement_timeout = '${THROTTLE_PRUNE_WAIT_MS}ms'`);
+        await pruneDelete(tx);
+      });
+      return null;
+    } catch (err) {
+      return { err };
+    }
+  })();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const deadline = new Promise<"deadline">((resolve) => {
+    timer = setTimeout(() => resolve("deadline"), THROTTLE_PRUNE_WAIT_MS);
+  });
   try {
-    await sql`DELETE FROM web_throttle_hits USING (SELECT id FROM web_throttle_hits WHERE at < now() - make_interval(mins => ${THROTTLE_COUNTER_RETENTION_MINUTES}) ORDER BY id LIMIT 1000 FOR UPDATE SKIP LOCKED) AS candidates WHERE web_throttle_hits.id = candidates.id`;
-  } catch (err) {
-    // Housekeeping failed; the verdict below was already decided. Log the
-    // exception class only: the message can quote statement bindings.
-    console.warn("Join throttle prune failed; keeping the decided verdict.", {
-      exception:
-        err instanceof Error
-          ? err.name
-          : ((err as { constructor?: { name?: string } })?.constructor?.name ?? "unknown"),
-    });
+    const failure = await Promise.race([prune, deadline]);
+    if (failure !== null) {
+      // Housekeeping failed or stalled; the verdict below was already decided.
+      // Log the exception class only: the message can quote statement bindings.
+      // An expired wait logs once as ThrottlePruneDeadline; a late settlement
+      // causes no second warning.
+      console.warn("Join throttle prune failed; keeping the decided verdict.", {
+        exception: failure === "deadline" ? "ThrottlePruneDeadline" : exceptionClass(failure.err),
+      });
+    }
+  } finally {
+    clearTimeout(timer);
   }
   return verdict;
 }
@@ -224,7 +264,23 @@ export async function migrateJoin(sql: Sql): Promise<void> {
   for (const stmt of JOIN_MIGRATION) await sql.unsafe(stmt);
 }
 
-/** One queryable row per terminal join path. Null store = no-op (funnel stays up). */
+/**
+ * Named wait for the best-effort attempt write: the join answers after at most
+ * this long, whether or not the database cancels the statement.
+ */
+const ATTEMPT_ANALYTICS_WAIT_MS = 2_000;
+
+/**
+ * One queryable row per terminal join path. Null store = no-op (funnel stays up).
+ * Analytics must never break the join: the answer waits at most
+ * ATTEMPT_ANALYTICS_WAIT_MS, independently of the transaction-local statement
+ * timeout. The server cancels a slow INSERT without changing pooled settings;
+ * connection/transport stalls still cannot hold the caller. A late settlement is
+ * observed without replaying the write or changing the request outcome.
+ * Logs only the exception class (never the message, which can quote the live
+ * token or statement text) plus the validated request_id, so the line joins to
+ * request logs. Absent/malformed IDs are omitted, never raw.
+ */
 export async function recordAttempt(
   sql: Sql | null,
   attempt: {
@@ -235,25 +291,46 @@ export async function recordAttempt(
   },
 ): Promise<void> {
   if (!sql) return;
-  try {
-    await sql`INSERT INTO join_attempts (outcome, source, request_id, discord_id)
-    VALUES (${attempt.outcome}, ${attempt.source}, ${attempt.requestId}, ${attempt.discordId})`;
-  } catch (err) {
-    // Analytics must never break the join: a throwing INSERT still resolves,
-    // logging only the exception class (never the message, which can quote
-    // the live token or statement text) plus the validated request_id so the
-    // line joins to request logs (the admin viewer queries by exact
-    // request_id). Absent/malformed IDs are omitted, never raw; no
-    // discordId/source is added.
+  const warn = (exception: string) => {
     const requestId = safeRequestId(attempt.requestId);
     console.warn("join attempt write failed", {
-      exception:
-        err instanceof Error
-          ? err.name
-          : ((err as { constructor?: { name?: string } })?.constructor?.name ?? "unknown"),
+      exception,
       outcome: attempt.outcome,
       ...(requestId !== undefined ? { request_id: requestId } : {}),
     });
+  };
+  const store = sql as Sql & {
+    begin?: (run: (tx: Sql) => Promise<void>) => Promise<void>;
+  };
+  const insert = (tx: Sql) =>
+    tx`INSERT INTO join_attempts (outcome, source, request_id, discord_id)
+    VALUES (${attempt.outcome}, ${attempt.source}, ${attempt.requestId}, ${attempt.discordId})`;
+  const write = (async () => {
+    try {
+      if (store.begin) {
+        await store.begin(async (tx) => {
+          await tx.unsafe(`SET LOCAL statement_timeout = '${ATTEMPT_ANALYTICS_WAIT_MS}ms'`);
+          await insert(tx);
+        });
+      } else {
+        // The minimal Sql seam does not require transactions; native stores do.
+        await insert(sql);
+      }
+      return null;
+    } catch (err) {
+      return { err };
+    }
+  })();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const deadline = new Promise<"deadline">((resolve) => {
+    timer = setTimeout(() => resolve("deadline"), ATTEMPT_ANALYTICS_WAIT_MS);
+  });
+  try {
+    const failure = await Promise.race([write, deadline]);
+    if (failure === null) return;
+    warn(failure === "deadline" ? "AnalyticsWriteDeadline" : exceptionClass(failure.err));
+  } finally {
+    clearTimeout(timer);
   }
 }
 
