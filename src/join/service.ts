@@ -73,6 +73,15 @@ export function sanitizeSource(raw: unknown): string | null {
 }
 
 /**
+ * Bound on a return destination (login_next / intended, explicit or
+ * gate-recorded). A multi-KB value risks silent cookie-cap drops, and a
+ * surviving long value lands in the callback Location header — so anything
+ * longer is rejected at write time (no cookie set) and at consume time
+ * (fall back to the next layer, then the default landing).
+ */
+export const MAX_RETURN_DESTINATION_LENGTH = 512;
+
+/**
  * Legacy SafeRedirect::safe: the value survives only when it is a same-origin
  * path — starts with exactly one `/`, no `//`, no backslash, no scheme.
  * Hostile values leave no trace and the callback keeps the default landing.
@@ -84,6 +93,7 @@ export function sanitizeSource(raw: unknown): string | null {
 export function safeNext(raw: unknown): string | null {
   // eslint-disable-next-line no-control-regex
   if (typeof raw !== "string" || raw === "" || /[\s\x00-\x1f\x7f]/.test(raw)) return null;
+  if (raw.length > MAX_RETURN_DESTINATION_LENGTH) return null;
   if (!raw.startsWith("/") || raw.startsWith("//") || raw.includes("\\")) return null;
   if (/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(raw)) return null;
   try {
