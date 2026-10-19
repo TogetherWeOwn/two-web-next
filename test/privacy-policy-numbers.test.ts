@@ -217,18 +217,18 @@ const PINNED_COOKIE_LIFETIMES = [
 
 // Each call to a cookie writer, from its name to its closing parenthesis.
 function cookieCalls(text: string): string[] {
-  return [...text.matchAll(/\b(?:setSignedCookie|generateSignedCookie|setCookie)\(/g)].map(
-    (call) => {
-      const start = call.index ?? 0;
-      let depth = 0;
-      let end = start + call[0].length - 1;
-      for (; end < text.length; end++) {
-        if (text[end] === "(") depth++;
-        else if (text[end] === ")" && --depth === 0) break;
-      }
-      return text.slice(start, end + 1);
-    },
-  );
+  return [
+    ...text.matchAll(/\b(?:setSignedCookie|generateSignedCookie|setCookie|generateCookie)\(/g),
+  ].map((call) => {
+    const start = call.index ?? 0;
+    let depth = 0;
+    let end = start + call[0].length - 1;
+    for (; end < text.length; end++) {
+      if (text[end] === "(") depth++;
+      else if (text[end] === ")" && --depth === 0) break;
+    }
+    return text.slice(start, end + 1);
+  });
 }
 
 // The only modules that may define each lifetime; every other file must import
@@ -294,7 +294,27 @@ function unpinnedCookieCalls(file: string, text: string): string[] {
   });
 }
 
+// An empty unsigned cookie with a literal zero expiry deletes state, not a
+// live lifetime. Recognize only this simple form: no nested calls, duplicate
+// expiry, or trailing spread that could override the zero.
+function withoutCookieDeletions(text: string): string {
+  if (
+    !importEntries(text).some(
+      (entry) =>
+        entry.local === "generateCookie" &&
+        entry.imported === "generateCookie" &&
+        entry.source === "hono/cookie",
+    )
+  )
+    return text;
+  return text.replace(
+    /\bgenerateCookie\(\s*\w+\s*,\s*(?:""|'')\s*,\s*\{\s*(?:\.\.\.\w+\s*,\s*)?maxAge:\s*0\s*,?\s*\}\s*\)/g,
+    "",
+  );
+}
+
 function cookieLifetimeOffenders(file: string, text: string): string[] {
+  text = withoutCookieDeletions(text);
   const where = relative(root, file);
   const expressions = [...text.matchAll(/maxAge:\s*([^,}\n]+)/g)].map((match) => match[1]!.trim());
   return [
@@ -391,6 +411,31 @@ describe(`privacy policy v${POLICY_VERSION} numbers are pinned to code`, () => {
     );
     expect(offenders, "every cookie lifetime in src must be one of the pinned constants").toEqual(
       [],
+    );
+  });
+
+  it("recognizes an explicit empty-cookie deletion rather than a live lifetime", () => {
+    const source = [
+      'import { generateCookie } from "hono/cookie";',
+      'generateCookie(LOGIN_INTENDED_COOKIE, "", { ...options, maxAge: 0 });',
+    ].join("\n");
+    expect(cookieLifetimeOffenders(resolve(root, "src/example.ts"), source)).toEqual([]);
+  });
+
+  it.each([
+    'generateCookie(name, "live", { maxAge: 0 });',
+    'generateCookie(name, "", { maxAge: 1 });',
+    'generateCookie(name, "", { maxAge: 0, ...options });',
+    'generateCookie(name, "", { maxAge: 0, maxAge: 31536000 });',
+    'generateSignedCookie(name, "", secret, { maxAge: 0 });',
+    'setCookie(c, name, "", { maxAge: 0 });',
+    'generateCookie(name, "live", options);',
+    'generateCookie(name, "", { ...generateCookie(other, "live", { maxAge: 31536000 }), maxAge: 0 });',
+    'generateCookie(name, "", { maxAge: 0 }); generateCookie(other, "live", { maxAge: 31536000 });',
+  ])("still rejects an unpinned writer: %s", (call) => {
+    const source = `import { generateCookie } from "hono/cookie";\n${call}`;
+    expect(cookieLifetimeOffenders(resolve(root, "src/example.ts"), source).length).toBeGreaterThan(
+      0,
     );
   });
 
