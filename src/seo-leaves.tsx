@@ -23,6 +23,28 @@ import { buildRobots, buildSitemapUrls, crawlableEvents, renderSitemap } from ".
 // of any kind (see the `/privacy` comment below).
 const PRIVACY_HTML = renderPolicyMarkdown(POLICY_MARKDOWN);
 
+async function readSitemapEvents(c: { env: Env }) {
+  let db;
+  try {
+    db = await dbFor(c);
+  } catch {
+    console.warn("Sitemap events read.", { outcome: "acquire_failed", exception: "ReadFailure" });
+    return [];
+  }
+  if (!db) {
+    console.info("Sitemap events read.", { outcome: "no_binding" });
+    return [];
+  }
+  try {
+    const rows = await sitemapEvents(db);
+    console.info("Sitemap events read.", { outcome: "ok", returned: rows.length });
+    return rows;
+  } catch {
+    console.warn("Sitemap events read.", { outcome: "query_failed", exception: "ReadFailure" });
+    return [];
+  }
+}
+
 export function registerSeoLeaves(app: Hono<{ Bindings: Env }>): void {
   // Versioned privacy policy (N1: TOG-9893 — ports two-web routes/funnel.php's
   // `/privacy` + PrivacyController). Funnel-style: no session, no cookie, no
@@ -36,16 +58,14 @@ export function registerSeoLeaves(app: Hono<{ Bindings: Env }>): void {
     return c.html(<Privacy appUrl={c.env.APP_URL} version={POLICY_VERSION} html={PRIVACY_HTML} />);
   });
 
-  // Sitemap (ports two-web routes/web.php's sitemap closure; crawl set per TOG-7072): published
-  // events only. No DB binding yet, so the static entries ship now; the W8 events slice adds the
-  // published /e/{key} rows (drafts 403 / cancelled 410 stay out of the index).
+  // Sitemap: published /e/{key} rows plus the static entries.
+  // Drafts (403) and cancelled events (410) stay out of the index.
   // W6 adds /join (changefreq monthly, priority 0.9 — same as legacy).
   app.get("/sitemap_index.xml", async (c) => {
     c.header("content-type", "application/xml; charset=UTF-8");
     c.header("cache-control", "public, max-age=3600");
     // Published events only; a DB outage degrades to the static entries, never a 500.
-    const db = await dbFor(c).catch(() => null);
-    const rows = db ? await sitemapEvents(db).catch(() => []) : [];
+    const rows = await readSitemapEvents(c);
     return c.body(renderSitemap(buildSitemapUrls(c.env.APP_URL, crawlableEvents(rows))));
   });
 
