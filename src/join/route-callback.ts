@@ -42,7 +42,20 @@ export function registerJoinCallbackRoutes(
   render: JoinRender,
 ) {
   app.get("/join/callback", async (c) => {
-    const limited = await throttled(c);
+    // Inbound length bound, decided before the shared join throttle spend:
+    // the query is synchronously readable (no async body read), so the gate
+    // costs no throttle INSERT of its own. A non-error oversized hit still
+    // renders the expired-link recovery in the existing branch below —
+    // recovery copy, cookie clearing and the log line are unchanged — but
+    // it spends zero budget, so a non-error oversized probe cannot burn the
+    // funnel's budget and the refusal survives an exhausted budget. `error`
+    // callbacks keep today's path (they spend throttle), and the
+    // normal-exhausted 429 is unchanged.
+    const gateCode = c.req.query("code");
+    const gateState = c.req.query("state");
+    const gateError = c.req.query("error");
+    const oversizedParams = !gateError && hasOversizedOAuthParams(gateCode, gateState);
+    const limited = oversizedParams ? null : await throttled(c);
     if (limited) return limited;
     const sql = await joinStore(c);
     // getSignedCookie answers false on a bad signature: not a string, not a source.
@@ -101,14 +114,23 @@ export function registerJoinCallbackRoutes(
     const rawExpected = await getSignedCookie(c, c.env.SESSION_SECRET, JOIN_STATE_COOKIE);
     const expected = typeof rawExpected === "string" ? rawExpected : null;
     clearJourney();
-    const code = c.req.query("code");
-    const state = c.req.query("state");
+    // The values the gate read above the throttle spend. `c.req.query()` is
+    // a first-wins projection of the immutable request URL, and nothing
+    // awaited between the gate and here rewrites that URL (the throttle
+    // spends shared budget and prunes hits but never touches the request,
+    // joinStore reads the env, getSignedCookie reads the Cookie header,
+    // clearJourney writes response headers) — so reusing the gate reads
+    // equals re-reading without further scans, and the gate and the
+    // branches below can never see different values.
+    const code = gateCode;
+    const state = gateState;
+    const oauthError = gateError;
     // Same inbound bound as the auth callback: refuse oversized code/state
-    // before any journey consume, exchange, or session work. Refusals keep
-    // today's path, so the error param is peeked first and oversized maps to
-    // the existing expired-link recovery with its bounded log line under its
-    // own class (replay keeps InvalidState).
-    if (!c.req.query("error") && hasOversizedOAuthParams(code, state)) {
+    // before any journey consume, exchange, or session work. `oversizedParams`
+    // was already decided above the throttle spend from these same values, so
+    // this branch keeps the existing expired-link recovery with its bounded
+    // log line under its own class (replay keeps InvalidState).
+    if (oversizedParams) {
       console.warn("discord token exchange failed on the join journey", {
         exception: "OversizedOAuthParams",
         source,
@@ -128,8 +150,8 @@ export function registerJoinCallbackRoutes(
     // They pressed Cancel on the consent screen, or Discord answered the
     // approval with an error: nothing to exchange. Legacy renders the recovery
     // page (not a redirect) and never echoes Discord's error_description.
-    if (c.req.query("error")) {
-      const denied = c.req.query("error") === "access_denied";
+    if (oauthError) {
+      const denied = oauthError === "access_denied";
       if (admitted)
         await recordAttempt(sql, {
           outcome: "denied",
