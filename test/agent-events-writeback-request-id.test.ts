@@ -145,7 +145,7 @@ describe("agent-events write-back request correlation (route level, hermetic)", 
   });
 
   it("falls back to no correlation when the request has no ID context", async () => {
-    // No requestLog upstream (the scheduled/reconcile shape): the write-back
+    // No requestLog middleware upstream: the write-back
     // still dispatches, with requestId absent rather than fabricated.
     const { response, sent } = await callIngress("publish", { "cf-ray": RAY }, false);
     expect(response.status).toBe(200);

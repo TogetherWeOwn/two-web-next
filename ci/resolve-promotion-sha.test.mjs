@@ -294,7 +294,7 @@ test("quality job/step names stay pinned to the deploy gate, and executed steps 
 
 // Evidence-failure refusal contract: HTTP, transport, and decoding failures must
 // reject instead of silently falling back to an older SHA or null. Test-only pin
-// of ci/resolve-promotion-sha.mjs:22-62; no promotion-policy change.
+// of ci/resolve-promotion-sha.mjs:47-59; no promotion-policy change.
 const EVIDENCE_HTTP_STATUSES = [401, 403, 429, 500];
 
 function failingRunsFetch(status, requested) {
