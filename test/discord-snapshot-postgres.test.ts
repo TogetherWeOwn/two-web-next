@@ -285,105 +285,113 @@ describe.skipIf(!raw)("Postgres Discord snapshots, independent request clients",
   it.each([true, false])(
     "fences %s completion after waiting on an unchanged row across expiry",
     async (success) => {
-      const store = pgDiscordSnapshotStore(connect);
-      const claim = await store.claim(key);
-      // connect() is lazy, so the pid query is the handshake. Do it before
-      // arming the 250ms lease: a slow handshake inside that window lets the
-      // first lock-wait sample land after expiry, which fails the live pin
-      // without proving the fence. The sleep still ends 25ms after expiry,
-      // inside the 350ms lock_timeout.
-      const holderClient = connect();
-      try {
-        const [backend] = await holderClient`select pg_backend_pid() as pid`;
-        const holderPid: number = backend!.pid;
-        await fixture.client`update discord_event_snapshots set lease_expires_at = clock_timestamp() + interval '250 milliseconds' where key = ${key}`;
-        // Hold the row with a single autocommit statement: the subquery's
-        // FOR UPDATE lock is held for the statement's duration and freed by
-        // the server's implicit commit when pg_sleep returns. No client-sent
-        // COMMIT means no JS scheduling hop between expiry and release, so an
-        // event-loop stall cannot push the completion's lock wait past the
-        // store's 350ms lock_timeout (55P03) instead of exercising the fence.
-        // postgres.js template queries are lazy: .execute() dispatches the
-        // statement now and returns the promise awaited below.
-        const released =
-          holderClient`select /* discord_snapshot_fence_holder */ pg_sleep(greatest(0, extract(epoch from (s.lease_expires_at - clock_timestamp()))) + 0.025)
+      // Whole-scenario retry: a transient 55P03 means this attempt never
+      // exercised a completion waiting across expiry, so re-issuing only the
+      // completion would assert the expiry-alone path (covered above) and
+      // launder a deterministic lock-timeout regression. Re-running the full
+      // claim/hold/wait/complete scenario once tolerates the flake
+      // (node22-compat 2026-10-19, 1/14013: the completion's 350ms
+      // lock_timeout can fire under CI load even though the holder nominally
+      // releases ~275ms after the lease update, with serial files, so this is
+      // intra-test scheduling margin, not parallel contention) while a
+      // deterministic 55P03 still fails on the second attempt. Any other
+      // error throws immediately.
+      for (let attempt = 0; attempt < 2; attempt++) {
+        const lastAttempt = attempt === 1;
+        // Fresh row per attempt: beforeEach cleans the first, this cleans the retry.
+        await fixture.client`delete from discord_event_snapshots`;
+        const store = pgDiscordSnapshotStore(connect);
+        const claim = await store.claim(key);
+        // connect() is lazy, so the pid query is the handshake. Do it before
+        // arming the 250ms lease: a slow handshake inside that window lets the
+        // first lock-wait sample land after expiry, which fails the live pin
+        // without proving the fence. The sleep still ends 25ms after expiry,
+        // inside the 350ms lock_timeout.
+        const holderClient = connect();
+        try {
+          const [backend] = await holderClient`select pg_backend_pid() as pid`;
+          const holderPid: number = backend!.pid;
+          await fixture.client`update discord_event_snapshots set lease_expires_at = clock_timestamp() + interval '250 milliseconds' where key = ${key}`;
+          // Hold the row with a single autocommit statement: the subquery's
+          // FOR UPDATE lock is held for the statement's duration and freed by
+          // the server's implicit commit when pg_sleep returns. No client-sent
+          // COMMIT means no JS scheduling hop between expiry and release, so an
+          // event-loop stall cannot push the completion's lock wait past the
+          // store's 350ms lock_timeout (55P03) instead of exercising the fence.
+          // postgres.js template queries are lazy: .execute() dispatches the
+          // statement now and returns the promise awaited below.
+          const released =
+            holderClient`select /* discord_snapshot_fence_holder */ pg_sleep(greatest(0, extract(epoch from (s.lease_expires_at - clock_timestamp()))) + 0.025)
           from (select lease_expires_at from discord_event_snapshots where key = ${key} for update) s`
-            .execute()
-            .then(
-              () => ({ released: true as const }),
-              (error: unknown) => ({ error }),
-            );
-        // Readiness waits for the holder's pg_sleep: it runs only after the
-        // subquery's FOR UPDATE has taken the tuple lock, so wait_event =
-        // 'PgSleep' proves the row is held. The sleep lasts ~250ms, so a 5ms
-        // poll cannot miss it; a stall past the sleep fails under any gate.
-        let holding = false;
-        for (let i = 0; i < 200 && !holding; i++) {
-          const [activity] = await fixture.client`select exists(
+              .execute()
+              .then(
+                () => ({ released: true as const }),
+                (error: unknown) => ({ error }),
+              );
+          // Readiness waits for the holder's pg_sleep: it runs only after the
+          // subquery's FOR UPDATE has taken the tuple lock, so wait_event =
+          // 'PgSleep' proves the row is held. The sleep lasts ~250ms, so a 5ms
+          // poll cannot miss it; a stall past the sleep fails under any gate.
+          let holding = false;
+          for (let i = 0; i < 200 && !holding; i++) {
+            const [activity] = await fixture.client`select exists(
             select 1 from pg_stat_activity
             where pid = ${holderPid}
               and state = 'active'
               and wait_event = 'PgSleep'
           ) as holding`;
-          holding = activity!.holding;
-          if (!holding) await new Promise((r) => setTimeout(r, 5));
-        }
-        expect(holding).toBe(true);
-        const pending = store.complete(
-          key,
-          claim.token!,
-          success ? { payload: "[]" } : { retryMs: 90_000 },
-        );
-        const settled = pending.then(
-          (result) => ({ result }),
-          (error: unknown) => ({ error }),
-        );
-        let waiting = false;
-        for (let i = 0; i < 30; i++) {
-          const [state] = await fixture.client`select lease_expires_at > clock_timestamp() as live,
+            holding = activity!.holding;
+            if (!holding) await new Promise((r) => setTimeout(r, 5));
+          }
+          expect(holding).toBe(true);
+          const pending = store.complete(
+            key,
+            claim.token!,
+            success ? { payload: "[]" } : { retryMs: 90_000 },
+          );
+          const settled = pending.then(
+            (result) => ({ result }),
+            (error: unknown) => ({ error }),
+          );
+          let waiting = false;
+          for (let i = 0; i < 30; i++) {
+            const [state] =
+              await fixture.client`select lease_expires_at > clock_timestamp() as live,
           exists(select 1 from pg_stat_activity where application_name = ${`discord-fence-${fixture.schemaName}`} and wait_event_type = 'Lock') as waiting
           from discord_event_snapshots where key = ${key}`;
-          if (state!.waiting) {
-            expect(state!.live).toBe(true); // The old UPDATE evaluated its predicate before expiry.
-            waiting = true;
-            break;
+            if (state!.waiting) {
+              expect(state!.live).toBe(true); // The old UPDATE evaluated its predicate before expiry.
+              waiting = true;
+              break;
+            }
+            await new Promise((r) => setTimeout(r, 5));
           }
-          await new Promise((r) => setTimeout(r, 5));
+          // Awaited on every path that reaches here; the wrapped promise never
+          // rejects, so a failing expect above cannot leave it unobserved.
+          const outcome = await released;
+          const completion = await settled;
+          if (
+            "error" in completion &&
+            (completion.error as { code?: string } | undefined)?.code === "55P03" &&
+            !lastAttempt
+          ) {
+            // Transient flake: this attempt proved nothing, so retry the whole
+            // scenario once instead of asserting on a post-expiry completion.
+            continue;
+          }
+          expect(waiting).toBe(true);
+          if ("error" in outcome) throw outcome.error;
+          if ("error" in completion) throw completion.error;
+          const [row] =
+            await fixture.client`select payload, succeeded_at, retry_at, lease_token from discord_event_snapshots where key = ${key}`;
+          expect(row!.payload).toBeNull();
+          expect(row!.succeeded_at).toBeNull();
+          expect(new Date(row!.retry_at).getTime()).toBe(0);
+          expect(row!.lease_token).toBe(claim.token);
+          return;
+        } finally {
+          await holderClient.end({ timeout: 0 });
         }
-        // Awaited on every path that reaches here; the wrapped promise never
-        // rejects, so a failing expect above cannot leave it unobserved.
-        const outcome = await released;
-        expect(waiting).toBe(true);
-        if ("error" in outcome) throw outcome.error;
-        let completion = await settled;
-        if (
-          "error" in completion &&
-          (completion.error as { code?: string } | undefined)?.code === "55P03"
-        ) {
-          // Flake retry (node22-compat 2026-10-19, 1/14013): the completion's
-          // 350ms lock_timeout can fire under CI load even though the holder
-          // nominally releases ~275ms after the lease update (the false case
-          // took 614ms with serial files, so this is intra-test scheduling
-          // margin, not parallel contention). The holder is gone by now, so
-          // re-issue the completion uncontended; the expired lease still
-          // fences it in the shared assertions below. Any other error, or a
-          // second timeout, throws as before.
-          completion = await store
-            .complete(key, claim.token!, success ? { payload: "[]" } : { retryMs: 90_000 })
-            .then(
-              (result) => ({ result }),
-              (error: unknown) => ({ error }),
-            );
-        }
-        if ("error" in completion) throw completion.error;
-        const [row] =
-          await fixture.client`select payload, succeeded_at, retry_at, lease_token from discord_event_snapshots where key = ${key}`;
-        expect(row!.payload).toBeNull();
-        expect(row!.succeeded_at).toBeNull();
-        expect(new Date(row!.retry_at).getTime()).toBe(0);
-        expect(row!.lease_token).toBe(claim.token);
-      } finally {
-        await holderClient.end({ timeout: 0 });
       }
     },
   );
