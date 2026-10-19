@@ -871,7 +871,7 @@ describe("production post-promotion verification (offline)", () => {
 describe("production release-docs contract (source)", () => {
   it("explains gradual promotion, manual restoration and release gating without static serving-state claims", () => {
     const readme = readFileSync("README.md", "utf8");
-    const heading = "### Production (gated manual deployment)";
+    const heading = "### Production (gated automatic promotion)";
     expect(readme).toContain(heading);
     expect(readme).not.toContain("### Production (not live");
     const section = readme.slice(
