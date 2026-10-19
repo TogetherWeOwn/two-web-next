@@ -209,6 +209,34 @@ substitute another backend or credential to investigate.
 | `Health check found SESSION_SECRET too weak: it must be at least 32 characters with no leading or trailing whitespace.` | `SESSION_SECRET` is configured but fails the documented strength floor (`src/up-config.ts:44`): under 32 characters or with leading or trailing whitespace. A weak session key takes precedence over a missing Discord secret, so fixing it can surface `config: "missing"` next. | No page on the line itself. The 503 with `config: "weak"` feeds the existing prober. | Read `GET /up`: `config: "weak"` with measured `db` and `queue` slices proves the stores are healthy and only the secret fails; then read the floor in [`SESSION_SECRET` strength and rotation](config.md#session_secret-strength-and-rotation). Route the fix to the Operator (`wrangler secret put` on the target); never weaken the probe. | `secret: "SESSION_SECRET"` plus the requirement text, never the value |
 | `Health check found required Worker secrets missing.` | One or more required secrets is absent, empty or whitespace-only (`src/up-config.ts:52`). The body answers 503 with `config: "missing"` and never names which secret. | No page on the line itself. The 503 feeds the existing prober. | Read `GET /up`: `config: "missing"` with measured `db` and `queue` slices proves the stores are healthy; only these names are safe to list from the log line, never values: `SESSION_SECRET`, `DISCORD_CLIENT_SECRET`, `DISCORD_BOT_TOKEN`. Route the fix to the Operator under [Deploy and record the rollback pointer](runbook.md#deploy-and-record-the-rollback-pointer); never echo a value. | `missing` (secret names only, never values) |
 
+### Sync-settlement and reconcile warnings
+
+Four `console.warn` lines cover the sync successor-settlement path and the
+scheduled reconcile/prune passes (`src/jobs/worker.ts`, `src/jobs/ledger.ts`,
+`src/jobs/cron.ts`). None pages: any pager signal comes from the existing
+`scheduled.failing` path in the
+[alert runbook](runbook-alerts.md#source-lines), never from these lines.
+Read-only checks only: a Workers Logs search on the jobs Worker
+(`two-web-jobs`), a `SELECT`, or a source file. Never re-dispatch,
+replay a sync, or reset a claim to investigate. The post-ack successor
+dispatch pair (`sync successor dispatch timed out; reconcile will retry` and
+`sync successor dispatch failed; reconcile will retry`,
+`src/jobs/consumer.ts:387,399`) is triaged under
+[Queue ledger, lock and malformed-carrier warnings](#queue-ledger-lock-and-malformed-carrier-warnings):
+reconcile owns recovery for both; never manually re-dispatch or replay.
+
+| Message | Meaning | Severity | First read-only check | Fields carried |
+| --- | --- | --- | --- | --- |
+| `sync successor settlement lifetime expired; unsettled ledger rows remain tracked` | The `waitUntil` successor-settlement extension (`successorLifetime` in `src/jobs/worker.ts:80`) hit its 30 s bound before the after-ACK successor work (dispatch plus exact-`jobId` ledger compensation on fresh pools) settled. Late work may still complete; a row is never deleted merely for being unsettled. | Warn only; no pager. | Filter the jobs Worker logs for the line over the window (it carries no `jobId`); then `SELECT job_id, kind FROM queue_jobs` to confirm tracked rows versus drained. | None (message only) |
+| `queue ledger compensation failed` | The `trackingQueue` send path (`src/jobs/ledger.ts:46`) threw (the ledger `enqueued` write failed, the send was rejected or cancelled, or the signal aborted) and the exact-`jobId` compensation (`dequeued`) also threw. The original error still propagates to the dispatcher; a committed row hidden behind a lost INSERT response stays visible as backlog, and a later reconciliation cannot remove it. | Warn only; no pager. | Filter logs for the line and its `jobId`; then `SELECT * FROM queue_jobs WHERE job_id = '<jobId>'` to see whether the phantom row remains. | Two positional arguments after the message, not object keys: `jobId` (the canonical UUIDv4 minted for the ledger row), then the exception class name (`e.constructor.name`, or `typeof` for non-errors) |
+| `Event reconcile key failed.` | One stale key's `pendingSync`/dispatch threw inside `reconcileEvents` (`src/jobs/cron.ts:116`); it counts as `failed` without starving the rest of the pass, and the first error is kept for the total-outage rethrow (a multi-key pass with only failures rethrows). | Warn only per key; no page from this line. A resolved partial pass pages once after the flight commits via `ReconcilePartialFailureError`, and an all-failed multi-key pass rethrows its real class: see [`scheduled.failing`](runbook-alerts.md#source-lines). | Filter the jobs Worker logs for the line and its `key`. If the pass emits `Event reconcile pass completed.`, read its counts (`failed` above 0 with `resynced`/`absorbed` preserved). Otherwise, inspect the corresponding `scheduled.failing` entry and rethrow class. | `key` (the stale event key being redispatched), `error_class` (exception class via `exceptionClass`; driver messages, which can echo bound values, are never logged) |
+| `Model prune pass hit per-table batch cap with rows possibly pending.` | The `job_unique_locks` expiry sweep (`src/jobs/cron.ts:367`) hit the per-pass batch ceiling with a full final batch, so rows may still be pending. This warn fires only for the lock table; other-table caps stay warn-free per the paging contract. The pass still returns its counts and never throws on a cap hit. | Warn only; no page from this line. A cap-only pass pages once after the flight commits via `PruneBatchCapError`; a co-occurring table failure pages with its own class instead: see [`scheduled.failing`](runbook-alerts.md#source-lines). | Check the next prune pass's warn and carried counts. A capped pass does not emit `Model prune pass completed.`; if that line appears, the pass was uncapped and deleted rows. Consecutive warnings mean the lock-table sweep remains capped; they do not distinguish a pre-existing backlog from new inflow. The carried counts are rows deleted during that pass, not the remaining backlog. | Eight per-table totals (`agentEventAudits`, `accessLog`, `joinAttempts`, `idempotencyKeys`, `searchLog`, `boardViews`, `sessions`, `jobUniqueLocks`) plus `cappedTables` |
+
+None of these fields is PII-adjacent: `key` is the sync event key being
+redispatched (never a member identity), `jobId` is a random UUIDv4 minted
+for the ledger row, and `exception`/`error_class` are bounded class names,
+never messages, SQL text, tokens, Discord IDs or payload bodies.
+
 ### Join journey warnings
 
 Two `console.warn` lines are join-scoped (the attempt write in
