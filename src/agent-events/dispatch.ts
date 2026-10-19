@@ -201,6 +201,19 @@ export async function execute(
     );
   }
 
+  // Past is not cancellable. Return the closed-event envelope without auditing
+  // or updating: denyOutcome would insert a denial row for a move that did not happen.
+  if (op === "cancel" && event.status === "past") {
+    return {
+      status: 409,
+      body: {
+        reason: "event_not_open",
+        message: "That event is not in a position to make this move.",
+        ...rid(requestId),
+      },
+    };
+  }
+
   // publish / cancel: cancelled stays terminal.
   const ok = op === "publish" ? event.status === "draft" : event.status !== "cancelled";
   if (!ok)
