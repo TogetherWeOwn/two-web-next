@@ -534,6 +534,9 @@ jobs:
       - name: Backup target selftest (fixtures, no secrets)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true')
         run: python3 ci/backup-target-selftest
+      - name: Backup branch-target selftest (stubbed, no secrets)
+        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true')
+        run: bash ci/db-backup-branch-target-selftest.sh
       - name: Database backup argv selftest (stubbed, no secrets)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true')
         run: bash ci/db-backup-argv-selftest.sh
