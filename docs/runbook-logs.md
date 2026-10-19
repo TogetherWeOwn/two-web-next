@@ -141,6 +141,22 @@ Read-only checks only: a Workers Logs search, a `SELECT`, or a source file.
 | `events calendar could not resolve the session; refusing.` | The events calendar session rotation threw (`src/events/routes-calendar.tsx`). | Fails closed with the database-unavailable response. | Search logs for the matching `http.request` status on `/events`; then `SELECT count(*) FROM web_sessions` to confirm the table is readable. | `exception` (class name) |
 | `profile save failed` | Saving a validated profile threw (`src/profiles/routes-writes.tsx`). | Fails closed: database-unavailable response for an outage, otherwise 500 "Could not save your profile." | Search logs for the matching `http.request` status on the profile save route; then `SELECT updated_at FROM profiles` for that member. | `exception` (class name), validated `request_id` |
 
+### Moderator-recompute, trust-host and session-fallback warnings
+
+Four `console.warn` lines stay narrow on purpose. Each row gives the exact
+message, what it means, the severity (none pages), the first read-only check,
+the exact fields the line carries, and why the projection stays narrow. Find a
+line with the message **contains** filter from
+[Find a request](#find-a-request). Read-only checks only: a Workers Logs
+search, a `SELECT`, or a source file.
+
+| Message | Meaning | Severity | First read-only check | Fields carried | Why fields stay narrow |
+| --- | --- | --- | --- | --- | --- |
+| `moderator recompute lookup failed` | The Discord member-role lookup answered non-OK other than 404 (`src/roles.ts:47` via `fetchMemberRoles`). The lookup returns null so the flag stays non-moderator; sign-in continues. | Degrades to non-moderator; does not page. | Filter Workers Logs for the message and `guild_id`, then split by `status` (a 429 or 5xx points at Discord or wire health; a 401 or 403 points at the bot credential configuration); then read `src/roles.ts` to confirm the non-OK branch. | `status`, `guild_id` | Non-moderator degrade: carries the guild scope and HTTP status only, never the member user ID, role list, or bot credential. A 404 returns the same non-moderator result silently with no line. |
+| `moderator recompute lookup returned non-JSON` | Discord answered with a non-JSON edge body (`src/roles.ts:55`). Treated as a failed lookup, not a crash; the flag stays non-moderator and sign-in continues. | Degrades to non-moderator; does not page. | Filter Workers Logs for the message and `guild_id` over the window; then read `src/roles.ts` to confirm the non-JSON branch. | `guild_id` | Non-moderator degrade: same narrow projection as the row above; no member identity or credential is logged. |
+| `refusing request with untrusted host` | The request Host or URL host did not match the `APP_URL` trusted hostname (`src/trust-hosts.ts:82`). Refused before routing with the branded DB-free 404. | Refuses with 404; does not page (expected under probing). | Filter Workers Logs for the message and the matching `http.request` 404; then read `src/trust-hosts.ts` and compare the deployed `APP_URL` hostname. | None (message only) | 404-masking: carries no fields and never echoes the refused host or URL, so probes learn nothing beyond the branded 404; the refusal carries no-store, private. |
+| `Home session unavailable; serving as guest.` | The homepage session read or rotation hit a classified database outage or a normalized rotation error (`src/index.tsx:486`). The homepage serves as guest with the session-unavailable treatment; the funnel stays up. | Degrades to guest; does not page. | Filter Workers Logs for the message on `/`; then `SELECT count(*) FROM web_sessions` to confirm the table is readable, and check database health with the [alert runbook](runbook-alerts.md). A revoked or expired row returns null guest without this line. | `exception` (constant `SessionReadFailure` only) | Privacy fail-closed: carries a fixed diagnostic only, never the driver message, which can hold DSN fragments or session identifiers, and never a token or row. |
+
 ### Join journey warnings
 
 Two `console.warn` lines are join-scoped (the attempt write in
@@ -243,7 +259,12 @@ investigating an incident.
 Warning lines follow the same boundary. `roster upsert failed` and
 `prior session sweep failed` (`src/index.tsx`) and `guild auto-join failed`
 (`src/auth/routes.ts`) carry `request_id` and, where there is one, the exception
-class; they never carry a member's Discord ID. The join journey lines carry
+class; they never carry a member's Discord ID. The
+[moderator-recompute, trust-host and session-fallback warnings](#moderator-recompute-trust-host-and-session-fallback-warnings)
+carry no member identity either: the recompute lines carry `guild_id` (and
+`status` on the non-OK branch) but never the member user ID, the trust-host
+line carries no fields, and the session-fallback line carries only the fixed
+`SessionReadFailure` diagnostic. The join journey lines carry
 no member identity either: the prune line carries no fields, the attempt line
 carries the exception class and `outcome`, and the token-exchange line carries
 the exception class, kind/status, sanitized `source` and `outcome` (see
