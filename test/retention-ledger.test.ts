@@ -1007,6 +1007,17 @@ describe("retention ledger L8b core member tables", () => {
       scope.some((line) => line.includes("Core member tables")),
       "scope must name the L8b slice",
     ).toBe(true);
+    // The cascade promise lives in two new rows (rsvps, events) plus the
+    // pre-existing sync-attempts row, so a doc-wide probe cannot see it go
+    // stale in one of them: pin it inside each extracted row instead.
+    const rowFor = (table: string): string =>
+      doc.split("\n").filter((line) => new RegExp(`^\\| \`${table}\`(?:\\s|\\|)`).test(line))[0]!;
+    expect(rowFor("rsvps"), "rsvps row must pin its never-firing cascade").toContain(
+      "ON DELETE cascade",
+    );
+    expect(rowFor("events"), "events row must pin its never-firing cascades").toContain(
+      "ON DELETE cascade",
+    );
     for (const claim of [
       "No age window",
       "eraseMember",
@@ -1015,7 +1026,6 @@ describe("retention ledger L8b core member tables", () => {
       "ON CONFLICT (id) DO UPDATE",
       "DELETE /events/:key/rsvp",
       "src/events/routes-rsvp.tsx:150",
-      "ON DELETE cascade",
       "deliberately no `deleteEvent`",
       "no event delete anywhere on this resource",
       "deleteFeatured",
@@ -1044,9 +1054,27 @@ describe("retention ledger L8b core member tables", () => {
     expect(DISCORD_SNAPSHOT_MAX_KEYS).toBe(128);
     expect(DISCORD_SNAPSHOT_CLEANUP_BATCH).toBe(16);
     // None of the seven tables has a retention-days constant or a prune
-    // store: the daily model:prune wiring never mentions them. Bare names
-    // are unambiguous except "events", which also matches ordinary prose
-    // ("stale events"), so that one is probed by its exact SQL/store shape.
+    // store: the daily model:prune wiring never mentions them. Constants use
+    // UPPER_SNAKE (EVENT_RETENTION_DAYS), so the constants probe is a
+    // case-insensitive per-table retention regex; singular/plural tolerant,
+    // separators flexible. The table stem must sit adjacent to retention (only
+    // separators between): a broad `events.*retention` false-positives on the
+    // pre-existing EVENT_SEARCH_LOG_RETENTION_DAYS, and a broad
+    // `retention.*events` false-positives on trailing `// config/agent-events`
+    // comments on the same line.
+    const constants = read("src/jobs/constants.ts");
+    for (const table of L8B_TABLES) {
+      const stem = table
+        .split("_")
+        .map((part) => part.replace(/s$/, "s?"))
+        .join(".?");
+      expect(constants, `no retention-days constant may name ${table}`).not.toMatch(
+        new RegExp(`${stem}[_\\-\\s]*retention|retention[_\\-\\s]*${stem}`, "i"),
+      );
+    }
+    // Prune wiring: bare names are unambiguous except "events", which also
+    // matches ordinary prose ("stale events"), so that one is probed by its
+    // exact SQL/store shape.
     for (const file of ["src/jobs/constants.ts", "src/jobs/cron.ts", "src/jobs/postgres.ts"]) {
       for (const table of L8B_TABLES.filter((name) => name !== "events")) {
         expect(read(file), `${file} must not prune ${table}`).not.toContain(table);
@@ -1092,9 +1120,18 @@ describe("retention ledger L8b core member tables", () => {
     const store = read("src/events/rsvp.ts");
     expect(store).toContain(".delete(rsvps)");
     // The event FK cascades, but no app path deletes an event row, so the
-    // cascade never fires (events row below).
+    // cascade never fires (events row below). The live schema check is scoped
+    // to the rsvps pgTable block: a file-wide probe stays green on the
+    // unrelated event_sync_attempts cascade when the rsvps FK flips.
     expect(read("drizzle/1002_rsvps.sql")).toContain("ON DELETE cascade");
-    expect(read("src/db/admin-schema.ts")).toContain('onDelete: "cascade"');
+    const schema = read("src/db/admin-schema.ts");
+    const rsvpsStart = schema.indexOf("export const rsvps = pgTable(");
+    expect(rsvpsStart, "rsvps table must exist in admin-schema").toBeGreaterThanOrEqual(0);
+    const rsvpsEnd = schema.indexOf("\nexport const ", rsvpsStart + 1);
+    const rsvpsBlock = schema.slice(rsvpsStart, rsvpsEnd < 0 ? undefined : rsvpsEnd);
+    expect(rsvpsBlock, "rsvps event_id FK must cascade").toContain(
+      '.references(() => events.id, { onDelete: "cascade" })',
+    );
     const offenders = listTsFiles(join(root, "src"))
       .filter((file) => deleteWindows(readFileSync(file, "utf8"), "rsvps").length > 0)
       .map((file) => file.replace(root, "").replace(/^\/+/, ""))
@@ -1183,6 +1220,16 @@ describe("retention ledger L8b core member tables", () => {
       .filter((file) => deleteWindows(readFileSync(file, "utf8"), "web_oauth_journeys").length > 0)
       .map((file) => file.replace(root, "").replace(/^\/+/, ""));
     expect(offenders, "only the journey store deletes journeys").toEqual(["src/oauth-journeys.ts"]);
+    // One batch per request: a loop draining the backlog inside one sweep
+    // would hold the auth/join start. The bound is proved by over-batch
+    // sweeps (1,001 expired rows -> 1,000 then 1 then 0), not by the SQL text.
+    const journeyProof = read("test/oauth-journeys.test.ts");
+    for (const name of [
+      "memory sweep removes at most one batch per call",
+      "postgres sweep drains a multi-batch backlog across calls, never within one request",
+    ]) {
+      expect(journeyProof, `journey batch proof: ${name}`).toContain(`it("${name}"`);
+    }
     // The journey table carries no member key, so erasure never touches it.
     expect(read("docs/member-erasure.md")).not.toContain("web_oauth_journeys");
   });
