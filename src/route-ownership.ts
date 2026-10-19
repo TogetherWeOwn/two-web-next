@@ -625,8 +625,9 @@ function renderMemberRead(
 // (src/profiles/routes-gate.ts): expire the one-shot join flash only after the
 // member-read boundary has released a successful HTML GET. The peek in
 // readReturnJourney stays read-only, so a refused, failed, HEAD, or non-HTML
-// response leaves the pending cookie untouched. Unsigned expiry, same
-// attributes as return-journey deleteOpts; no secret and no new cookie.
+// response leaves the pending cookie untouched. Unsigned expiry: the
+// return-journey deleteOpts (path /, Secure, HttpOnly, SameSite Lax) plus
+// Max-Age=0, which is what Hono deleteCookie emits. No secret and no new cookie.
 function releasedProfileConsumesJoinFlash(
   route: OwnedRoute,
   event: HookEventLike,
