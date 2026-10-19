@@ -112,7 +112,10 @@ function renderNotes({ version, prevTag, date, commits, sections, repoUrl }) {
 }
 
 function git(...args) {
-  return execFileSync("git", args, { encoding: "utf8" }).trim();
+  // The prevTag..sha log grows past Node's 1 MiB execFileSync default once
+  // several hundred commits accumulate (2.5 MiB at 622 commits, Oct 2026),
+  // which failed the promote as `spawnSync git ENOBUFS`. Keep a 32 MiB cap.
+  return execFileSync("git", args, { encoding: "utf8", maxBuffer: 32 * 1024 * 1024 }).trim();
 }
 
 // Only a 404 proves the release is absent. Any other failure (outage, rate
