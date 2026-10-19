@@ -5,7 +5,8 @@
 // Reachability rules (vitest.config.ts + package.json + workflows):
 // - test/** matches the vitest `include` globs, except the files the config
 //   `exclude`s (parsed live from vitest.config.ts, never mirrored by hand:
-//   literals plus `*`/`**` globs expanded against the files on disk).
+//   literals plus `*`/`**` globs expanded against the files on disk; any
+//   other glob magic fails the gate loudly instead of reading as reachable).
 //   An excluded file runs via `npm run test:smoke` instead, and counts as
 //   reachable only while that command still names it (a mention anywhere
 //   else is not a run).
@@ -38,6 +39,64 @@ const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
 const VITEST_TEST_DIRS = ["test"];
 
+// The body of the `exclude: [ … ]` array in <root>/vitest.config.ts. Scanned
+// quote-aware (brackets inside a quoted entry, e.g. a `[ab]` character
+// class, must not end the array early and silently drop the entry).
+function excludeArrayBody(text, configPath) {
+  const key = text.indexOf("exclude:");
+  assert.ok(key !== -1, `${configPath} has no exclude block`);
+  const open = text.indexOf("[", key);
+  assert.ok(open !== -1, `${configPath} exclude block never opens`);
+  let i = open + 1;
+  let quote = null;
+  let depth = 1;
+  while (i < text.length && depth > 0) {
+    const c = text[i];
+    if (quote) {
+      if (c === "\\") {
+        i += 2;
+        continue;
+      }
+      if (c === quote) quote = null;
+    } else if (c === '"' || c === "'" || c === "`") {
+      quote = c;
+    } else if (c === "[") {
+      depth += 1;
+    } else if (c === "]") {
+      depth -= 1;
+    }
+    i += 1;
+  }
+  assert.ok(depth === 0, `${configPath} exclude block never closes`);
+  return text.slice(open + 1, i - 1);
+}
+
+// Every quoted entry in the `exclude` array in <root>/vitest.config.ts,
+// single-, double- or backtick-quoted. Shared by both parsers below so no
+// quote style can slip through as a silent vitest-reachable.
+function rawVitestExcludes(root) {
+  const configPath = join(root, "vitest.config.ts");
+  if (!existsSync(configPath)) return [];
+  const text = readFileSync(configPath, "utf8");
+  const body = excludeArrayBody(text, configPath);
+  return [...body.matchAll(/(['"`])([^'"`]+)\1/g)].map((m) => m[2]);
+}
+
+// Fail closed on exclude entries this gate cannot expand. Vitest honors the
+// full picomatch grammar (`?`, braces, character classes, negation), while
+// globToRegExp understands only `*`/`**`: an unexpanded entry would read as
+// vitest-reachable although nothing runs it. Crash loudly instead, like the
+// missing-exclude asserts above, so the author rewrites the entry as a
+// literal or a `*`/`**` glob (or teaches this gate the new form).
+function assertSupportedExcludes(entries, root) {
+  for (const e of entries) {
+    assert.ok(
+      !/[!?{}[\]]/.test(e),
+      `${join(root, "vitest.config.ts")} has an exclude this gate cannot expand (${e}): use a literal or a * / ** glob`,
+    );
+  }
+}
+
 // The test/** files vitest skips, parsed from the `exclude` array in
 // <root>/vitest.config.ts. Derived, not mirrored, so the gate cannot drift
 // from the config. Literals land here; `*` globs are expanded against the
@@ -45,15 +104,10 @@ const VITEST_TEST_DIRS = ["test"];
 // wiring too, never a silent vitest-reachable). A root without the config
 // (hermetic fixtures) excludes nothing.
 export function vitestExcludedTests(root = repoRoot) {
-  const configPath = join(root, "vitest.config.ts");
-  if (!existsSync(configPath)) return new Set();
-  const text = readFileSync(configPath, "utf8");
-  const start = text.indexOf("exclude:");
-  assert.ok(start !== -1, `${configPath} has no exclude block`);
-  const end = text.indexOf("]", start);
-  assert.ok(end !== -1, `${configPath} exclude block never closes`);
-  const files = [...text.slice(start, end).matchAll(/"([^"]+\.test\.(?:ts|mjs))"/g)]
-    .map((m) => m[1])
+  const entries = rawVitestExcludes(root);
+  assertSupportedExcludes(entries, root);
+  const files = entries
+    .filter((f) => /\.test\.(?:ts|mjs)$/.test(f))
     .filter((f) => f.startsWith("test/") && !f.includes("*"));
   return new Set(files);
 }
@@ -63,16 +117,9 @@ export function vitestExcludedTests(root = repoRoot) {
 // vitest-reachable, however the glob is prefixed (`test/…`, `**/…`).
 // Entries matching nothing (node_modules, dist) expand to the empty set.
 export function vitestExcludeGlobs(root = repoRoot) {
-  const configPath = join(root, "vitest.config.ts");
-  if (!existsSync(configPath)) return [];
-  const text = readFileSync(configPath, "utf8");
-  const start = text.indexOf("exclude:");
-  assert.ok(start !== -1, `${configPath} has no exclude block`);
-  const end = text.indexOf("]", start);
-  assert.ok(end !== -1, `${configPath} exclude block never closes`);
-  return [...text.slice(start, end).matchAll(/"([^"]+)"/g)]
-    .map((m) => m[1])
-    .filter((g) => g.includes("*"));
+  const entries = rawVitestExcludes(root);
+  assertSupportedExcludes(entries, root);
+  return entries.filter((g) => g.includes("*"));
 }
 
 function listTestFiles(root, dir) {
@@ -334,6 +381,55 @@ function selftest() {
       assert.match(wired.via, /test:smoke/);
     } finally {
       rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  check("single-quoted vitest excludes are parsed (literal and glob)", () => {
+    const dir = mkdtempSync(join(tmpdir(), "test-inventory-"));
+    try {
+      writeFileSync(
+        join(dir, "package.json"),
+        JSON.stringify({ scripts: { "test:smoke": "node --test test/wired.test.mjs" } }),
+      );
+      writeFileSync(
+        join(dir, "vitest.config.ts"),
+        "export default { test: { exclude: ['test/wired.test.mjs', 'test/ghost.test.mjs', 'test/smoke-*.test.mjs'] } };\n",
+      );
+      mkdirSync(join(dir, "test"), { recursive: true });
+      writeFileSync(join(dir, "test", "wired.test.mjs"), "node:test placeholder\n");
+      writeFileSync(join(dir, "test", "ghost.test.mjs"), "node:test placeholder\n");
+      writeFileSync(join(dir, "test", "smoke-new.test.mjs"), "node:test placeholder\n");
+      const { orphans, reachable } = inventory(dir);
+      assert.deepEqual(orphans, ["test/ghost.test.mjs", "test/smoke-new.test.mjs"]);
+      const wired = reachable.find((r) => r.file === "test/wired.test.mjs");
+      assert.ok(wired, "single-quoted wired file should be reachable");
+      assert.match(wired.via, /test:smoke/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  check("unsupported vitest exclude magic fails closed", () => {
+    const cases = [
+      ["question", "test/q-?.test.mjs", "test/q-a.test.mjs"],
+      ["brace", "test/brace-*.test.{mjs,js}", "test/brace-a.test.mjs"],
+      ["char-class", "test/[ab]-class.test.mjs", "test/a-class.test.mjs"],
+      ["negation", "!test/neg.test.mjs", "test/neg.test.mjs"],
+    ];
+    for (const [name, exclude, file] of cases) {
+      const dir = mkdtempSync(join(tmpdir(), "test-inventory-"));
+      try {
+        writeFileSync(join(dir, "package.json"), JSON.stringify({ scripts: {} }));
+        writeFileSync(
+          join(dir, "vitest.config.ts"),
+          `export default { test: { exclude: ["${exclude}"] } };\n`,
+        );
+        mkdirSync(join(dir, "test"), { recursive: true });
+        writeFileSync(join(dir, file), "node:test placeholder\n");
+        assert.throws(() => inventory(dir), /cannot expand/, `${name} exclude should fail closed`);
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
     }
   });
 
