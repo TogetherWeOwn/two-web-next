@@ -201,19 +201,15 @@ describe.skipIf(!raw)("/up real read-only database readiness", () => {
       const started = Date.now();
       expect(await databaseReadiness(client)).toEqual({ db: "error", pending_migrations: null });
       expect(Date.now() - started).toBeLessThan(3500);
-      // Bounded poll-until-zero (inverted waitForEventLock pattern): observe
-      // actual backend shutdown instead of guessing with a fixed settle sleep.
-      // Deadline 2000ms: a still-active slow ping fails fast, never hangs.
-      const settleDeadline = performance.now() + 2000;
-      let activity: { active: number } | undefined;
-      for (;;) {
-        const rows = await admin<{ active: number }[]>`
+      // Prompt single sample, no settle wait: in the correct path the
+      // post-setup refusal throws before any ping is issued and the
+      // rollback is already awaited before databaseReadiness returns, so
+      // nothing needs to settle. A prompt sample fails fast on a leaked
+      // slow ping; waiting here would let statement_timeout cancel the ping
+      // server-side and mask the mutant this test is named for.
+      const [activity] = await admin<{ active: number }[]>`
         SELECT count(*)::int AS active FROM pg_stat_activity WHERE application_name = ${name} AND state = 'active'
       `;
-        activity = rows[0];
-        if (activity?.active === 0 || performance.now() >= settleDeadline) break;
-        await new Promise((resolve) => setTimeout(resolve, 20));
-      }
       expect(activity?.active).toBe(0); // No end(): an issued slow ping would still be active here.
       const [settings] =
         await reader`SELECT current_setting('statement_timeout') AS statement, current_setting('lock_timeout') AS lock`;
