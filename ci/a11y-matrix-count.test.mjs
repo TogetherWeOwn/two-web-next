@@ -1,12 +1,12 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { test } from "node:test";
-import { auditCases } from "./a11y-policy.mjs";
+import { auditCases, AUDIT_VIEWPORTS } from "./a11y-policy.mjs";
 import { loadAuditWorkerRoutes } from "./a11y-test-worker.mjs";
 
-// Pinned matrix: docs/a11y-ci.md states these same numbers. Any route or case
-// add/remove changes the derived total and fails the pin; update the docs and
-// this pin together in one PR.
+// Pinned matrix: docs/a11y-ci.md states these same numbers. Any route, case,
+// or viewport add/remove changes the derived total and fails the pin; update
+// the docs and this pin together in one PR.
 const EXPECTED_CASES = 73;
 const EXPECTED_EXPLICIT_CASES = 64;
 const EXPECTED_AUTO_CASES = 9;
@@ -28,13 +28,22 @@ test("documented matrix count matches the derived audit matrix", async () => {
     "explicit coverage case count drifted",
   );
 
-  const runner = await readFile(new URL("./a11y.mjs", import.meta.url), "utf8");
-  const loop = runner.match(/for \(const viewport of \[(.*?)\]\)/s);
-  assert(loop, "viewport loop must keep its shape so the scan multiplier stays readable");
+  // Derive the scan multiplier from the viewport list the runner iterates,
+  // not from source text: a spread/variable addition or dimension edit fails
+  // here even though the literal count in ci/a11y.mjs would be unchanged.
+  assert.deepEqual(
+    AUDIT_VIEWPORTS,
+    [
+      { width: 360, height: 780 },
+      { width: 1280, height: 900 },
+    ],
+    "viewport list drifted; the scan total is cases x viewports",
+  );
+  assert.equal(AUDIT_VIEWPORTS.length, EXPECTED_VIEWPORTS);
   assert.equal(
-    loop[1].match(/\{ width:/g)?.length ?? 0,
-    EXPECTED_VIEWPORTS,
-    "viewport count drifted; the scan total is cases x viewports",
+    scenarios.length * AUDIT_VIEWPORTS.length,
+    EXPECTED_SCANS,
+    "scan total drifted; reconcile docs/a11y-ci.md",
   );
 
   const docs = await readFile(new URL("../docs/a11y-ci.md", import.meta.url), "utf8");
@@ -42,6 +51,12 @@ test("documented matrix count matches the derived audit matrix", async () => {
     docs,
     new RegExp(`The matrix has ${EXPECTED_CASES} cases / ${EXPECTED_SCANS} scans`),
     "docs/a11y-ci.md case/scan total drifted from the derived matrix",
+  );
+  const viewportSizes = AUDIT_VIEWPORTS.map((v) => `${v.width}×${v.height}`).join(" and ");
+  assert.match(
+    docs,
+    new RegExp(`scanned at ${viewportSizes}`),
+    "docs/a11y-ci.md viewport sizes drifted from the executed list",
   );
   assert.match(
     docs,
