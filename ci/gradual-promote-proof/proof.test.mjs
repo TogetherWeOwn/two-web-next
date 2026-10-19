@@ -451,16 +451,22 @@ test("proof pin equals the production deploy pin so they cannot drift", () => {
     new URL("../../.github/workflows/deploy-production.yml", import.meta.url),
     "utf8",
   );
-  const match = deploy.match(/TogetherWeOwn\/\.github\/actions\/gradual-promote@([0-9a-f]{40})/);
-  assert.ok(match, "production deploy must pin the central gradual-promote action");
-  const productionPin = `TogetherWeOwn/.github/actions/gradual-promote@${match[1]}`;
+  const extractActivePin = (source, label) => {
+    const matches = [
+      ...source.matchAll(
+        /^[ \t]*uses:[ \t]*(TogetherWeOwn\/\.github\/actions\/gradual-promote@[^\s#]+)[ \t]*(?:#.*)?$/gm,
+      ),
+    ].map((m) => m[1]);
+    assert.equal(matches.length, 1, `${label} must contain exactly one active pin`);
+    return matches[0];
+  };
+  const productionPin = extractActivePin(deploy, "production workflow");
   assert.equal(PINNED_ACTION, productionPin);
   const workflow = readFileSync(
     new URL("../../.github/workflows/gradual-promote-proof.yml", import.meta.url),
     "utf8",
   );
-  assert.ok(
-    workflow.includes(productionPin),
-    "proof workflow must invoke the production action pin",
-  );
+  const proofPin = extractActivePin(workflow, "proof workflow");
+  assert.equal(proofPin, productionPin);
+  assert.equal(proofPin, PINNED_ACTION);
 });
