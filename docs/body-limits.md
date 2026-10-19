@@ -8,13 +8,15 @@ reading the body. Existing authentication, field validation and throttles remain
 in place; authenticated-only route groups may reject a guest before the limiter.
 The global trusted-host and same-origin gates run before route admission or
 buffering; the same-origin ingress/CSP exemptions retain bounded body handling.
-Shared throttles run before buffering: oversized attempts consume admission
-budget and an exhausted bucket returns 429 without pulling the upload. The
-profile write throttle is the exception: profile PATCH/form POST enforce the
-form cap before throttle and session work, so an oversized body returns 413
-with zero throttle spend and no session or store read, and an exhausted bucket
-returns 429 only for bodies at or under the cap. Profile owner policy runs
-after the cap; other moderator write authentication runs before buffering,
+Except for the event-write, admin event form, featured create/delete, staging
+alert probe, and profile write routes below, shared throttles run before
+buffering: oversized attempts
+consume admission budget and an exhausted bucket returns 429 without pulling
+the upload. The profile write routes enforce the form cap before throttle and
+session work, so an oversized body returns 413 with zero throttle spend and no
+session or store read, and an exhausted bucket returns 429 only for bodies at
+or under the cap. Profile owner policy runs after the cap; other moderator
+write authentication runs before buffering,
 read once, without rotation.
 
 `POST /events`, `PATCH /events/:key` and the four `POST /events/:key/` actions
@@ -37,6 +39,10 @@ throttle hit before validation and the store.
 oversized body is 413 with zero throttle spend even when the budget is already
 spent. The moderator guard still runs first on those routes, and the featured
 update post keeps the throttle-before-buffering order.
+
+The staging alert probe is likewise cap-first: its body cap runs before its
+throttle (after the QA gate), so an over-cap probe returns 413 with no throttle
+spend.
 Agent ingress runs its byte cap first: an over-cap body returns 413 with no
 SQL, shield charge or client. Under-cap bodies are buffered, then the
 enabled/store configuration gate runs (404/503 without SQL), then the
@@ -63,7 +69,7 @@ including field names, escaping, multipart boundaries and metadata:
 | `agent` | 32,768 | `/api/agent-events` | StoreEventRequest maxima: title/game 100, description 1,000, location 255, timezone 64 code points (`src/agent-events/payload.ts`, `validateFields`), plus idempotency_key 255 UTF-16 units. Even JSON-escaped surrogate pairs fit well below 32 KiB with the operation/version/key envelope. |
 | `mcp` | 32,768 | `POST /mcp` | JSON-RPC request envelope plus tool arguments (event key 26 chars, paging integers). Tool calls carry filters, never content; 32 KiB matches the `json`/`agent` tier and the public API's 32 KiB response budget. |
 | `featured` | 262,144 | Admin featured create (cap-first); update keeps throttle-first | The four bounded title/URL/image/alt strings are 255 code units each and featured `body` is 1,000 Unicode code points after trim (`src/admin/validation-featured-form.ts`, `parseFeaturedForm`); over-max bodies 422 with a field-level error. 256 KiB is the unchanged total editorial-body transport allowance, not a claim of legacy equivalence; large submissions still receive 413 before validation instead of consuming unbounded memory. The create post decides the cap before the admin-write throttle (zero spend on 413); the update post keeps the throttle-before-buffering order. |
-| `action` | 4,096 | Logout, QA login, staging alert probe, publish/cancel, RSVP pause/reopen (public and admin), featured delete (cap-first), RSVP PUT/DELETE | Actions do not consume bodies; RSVP only needs an enum, optional caller ID and honeypot. 4 KiB leaves form/JSON overhead while preventing bodyless endpoints from accepting arbitrary uploads. DELETE RSVP does read its honeypot body. Featured delete and the four public `POST /events/:key/` actions decide the cap before their throttle; the remaining throttled action routes keep the throttle-before-buffering order. |
+| `action` | 4,096 | Logout, QA login, staging alert probe (cap before throttle: over-cap probes 413 with no throttle spend), publish/cancel, RSVP pause/reopen (public and admin), featured delete (cap-first), RSVP PUT/DELETE | Actions do not consume bodies; RSVP only needs an enum, optional caller ID and honeypot. 4 KiB leaves form/JSON overhead while preventing bodyless endpoints from accepting arbitrary uploads. DELETE RSVP does read its honeypot body. Featured delete, the staging alert probe, and the four public `POST /events/:key/` actions decide the cap before their throttle; the remaining throttled action routes keep the throttle-before-buffering order. |
 
 Validation still determines which inputs are legitimate. Trimming, game
 normalization, unknown fields and some unrestricted ancillary fields mean there
