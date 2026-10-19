@@ -70,12 +70,19 @@ function contract(name: string, make: () => SessionStore | Promise<SessionStore>
           moderator: replacement.moderator,
         });
         if (source.tokenHash !== replacement.tokenHash) {
-          expect(await store.get(source.tokenHash)).toBeNull();
+          // Immediate predecessor stays valid for 10s with its own member row
+          // while its successor is live; the status key never authenticates.
+          expect(await store.get(source.tokenHash)).toMatchObject({
+            userId: "42",
+            moderator: source.moderator,
+          });
           expect(await store.statusHash(source.tokenHash)).toBeNull();
         }
       }
+      // Only the immediate predecessor keeps grace: the grandparent was pruned
+      // when its successor rotated, so it reads missing even inside 10s.
       expect(await store.get(original.tokenHash)).toBeNull();
-      expect(await store.get(first.tokenHash)).toBeNull();
+      expect(await store.get(first.tokenHash)).toMatchObject({ userId: "42" });
       const replay = row();
       expect(await store.rotate(original.tokenHash, replay)).toBe(false);
       expect(await store.get(replay.tokenHash)).toBeNull();
@@ -83,6 +90,11 @@ function contract(name: string, make: () => SessionStore | Promise<SessionStore>
       expect(await store.isActive(statusHash)).toBe(true);
       // A replacement's login hash does not become a second probe key.
       expect(await store.isActive(second.tokenHash)).toBe(false);
+      // A revoked successor grants nothing through its predecessor.
+      await store.revoke(second.tokenHash);
+      expect(await store.get(first.tokenHash)).toBeNull();
+      expect(await store.get(second.tokenHash)).toBeNull();
+      expect(await store.isActive(statusHash)).toBe(false);
     });
 
     it("revoking the current login token deactivates the status key retained through rotation", async () => {
@@ -136,10 +148,15 @@ function contract(name: string, make: () => SessionStore | Promise<SessionStore>
       await store.create(s);
       const replacement = { ...row(), moderator: true };
       expect(await store.rotate(s.tokenHash, replacement)).toBe(true);
-      expect(await store.get(s.tokenHash)).toBeNull();
+      // Immediate predecessor keeps 10s grace with its own row while live.
+      expect(await store.get(s.tokenHash)).toMatchObject({ moderator: s.moderator });
       expect(await store.get(replacement.tokenHash)).toMatchObject({ moderator: true });
       // Second rotation of the same old token fails: no double-spend.
       expect(await store.rotate(s.tokenHash, row())).toBe(false);
+      // Revoking the successor ends predecessor grace: no replay after revoke.
+      await store.revoke(replacement.tokenHash);
+      expect(await store.get(s.tokenHash)).toBeNull();
+      expect(await store.get(replacement.tokenHash)).toBeNull();
     });
 
     it("returns false when rotating a token that was never issued, and mints no orphan row", async () => {
@@ -188,9 +205,13 @@ it("memory status follows the replacement's expiry boundary, never the retired l
   const replacement = { ...row(), expiresAt: new Date(now + 2000) };
   await store.create(original);
   expect(await store.rotate(original.tokenHash, replacement)).toBe(true);
+  // Grace holds while the predecessor's own 1s expiry has not elapsed.
+  expect(await store.get(original.tokenHash)).toMatchObject({ userId: "42" });
   now = replacement.expiresAt.getTime() - 1;
   expect(await store.isActive(original.tokenHash)).toBe(true);
   expect(await store.statusHash(replacement.tokenHash)).toBe(original.tokenHash);
+  // The predecessor's own expiry bounds grace: at +1999ms the 10s grace window
+  // is still open but the 1s original expiry has passed, so it reads missing.
   expect(await store.get(original.tokenHash)).toBeNull();
   expect(await store.get(replacement.tokenHash)).not.toBeNull();
   now++;
@@ -211,6 +232,7 @@ describe.skipIf(!url)("postgres", () => {
   });
   afterAll(async () => fixture?.dispose());
   afterEach(async () => {
+    await sql`delete from web_session_grace`;
     await sql`delete from web_sessions`;
   });
   contract("postgres", () => createPostgresSessionStore(sql));
