@@ -308,6 +308,15 @@ assert.match(tagged.gh, /^release create v1\.0\.1 /m, "present tag reuses v1.0.1
 assert.match(tagged.gh, new RegExp(`--target ${later}\\b`), "present tag targets the promoted SHA");
 assert.equal(g("tag", "--list", "v1.0.2"), "", "present-tag repair must not bump to v1.0.2");
 g("tag", "-d", "v1.0.1");
+// A range whose log is larger than Node's 1 MiB default buffer still renders.
+const bodyFile = path.join(dir, "big-body.txt");
+fs.writeFileSync(bodyFile, `fix(voice): long body (#5)\n\n${"x".repeat(2 * 1024 * 1024)}\n`);
+g("commit", "-q", "--allow-empty", "-F", bodyFile);
+const big = g("rev-parse", "HEAD");
+g("update-ref", "refs/remotes/origin/main", big);
+r = run(big);
+assert.equal(r.status, 0, r.stderr);
+assert.match(r.stdout, /long body/, "a range log over 1 MiB still renders its notes");
 fs.rmSync(ghBin, { recursive: true, force: true });
 fs.rmSync(dir, { recursive: true, force: true });
 

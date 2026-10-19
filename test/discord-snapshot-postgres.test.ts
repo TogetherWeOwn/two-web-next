@@ -287,17 +287,22 @@ describe.skipIf(!raw)("Postgres Discord snapshots, independent request clients",
     async (success) => {
       const store = pgDiscordSnapshotStore(connect);
       const claim = await store.claim(key);
-      await fixture.client`update discord_event_snapshots set lease_expires_at = clock_timestamp() + interval '250 milliseconds' where key = ${key}`;
-      // Hold the row with a single autocommit statement: the subquery's
-      // FOR UPDATE lock is held for the statement's duration and freed by
-      // the server's implicit commit when pg_sleep returns. No client-sent
-      // COMMIT means no JS scheduling hop between expiry and release, so an
-      // event-loop stall cannot push the completion's lock wait past the
-      // store's 350ms lock_timeout (55P03) instead of exercising the fence.
+      // connect() is lazy, so the pid query is the handshake. Do it before
+      // arming the 250ms lease: a slow handshake inside that window lets the
+      // first lock-wait sample land after expiry, which fails the live pin
+      // without proving the fence. The sleep still ends 25ms after expiry,
+      // inside the 350ms lock_timeout.
       const holderClient = connect();
       try {
         const [backend] = await holderClient`select pg_backend_pid() as pid`;
         const holderPid: number = backend!.pid;
+        await fixture.client`update discord_event_snapshots set lease_expires_at = clock_timestamp() + interval '250 milliseconds' where key = ${key}`;
+        // Hold the row with a single autocommit statement: the subquery's
+        // FOR UPDATE lock is held for the statement's duration and freed by
+        // the server's implicit commit when pg_sleep returns. No client-sent
+        // COMMIT means no JS scheduling hop between expiry and release, so an
+        // event-loop stall cannot push the completion's lock wait past the
+        // store's 350ms lock_timeout (55P03) instead of exercising the fence.
         // postgres.js template queries are lazy: .execute() dispatches the
         // statement now and returns the promise awaited below.
         const released =

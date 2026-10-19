@@ -106,10 +106,11 @@ export function registerJoinCallbackRoutes(
     // Same inbound bound as the auth callback: refuse oversized code/state
     // before any journey consume, exchange, or session work. Refusals keep
     // today's path, so the error param is peeked first and oversized maps to
-    // the existing expired-link recovery with its bounded log line.
+    // the existing expired-link recovery with its bounded log line under its
+    // own class (replay keeps InvalidState).
     if (!c.req.query("error") && hasOversizedOAuthParams(code, state)) {
       console.warn("discord token exchange failed on the join journey", {
-        exception: "InvalidState",
+        exception: "OversizedOAuthParams",
         source,
         outcome: "expired",
         request_id: safeRequestId(c.get("requestId")),

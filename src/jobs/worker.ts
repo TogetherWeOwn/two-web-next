@@ -146,14 +146,34 @@ export async function handleQueue(
       ledger,
       needsSync: pgEventStore(cleanupSql).needsSync,
       dispatchPending: (eventKey, signal) => {
+        // Late settlement stays inside Workers lifetime: dispatch rejects at
+        // the producer deadline while the underlying acquire/send (and its
+        // exact-jobId ledger compensation on fresh successor pools) may still
+        // be in flight. The hook fires before dispatch settles, so awaiting
+        // the tail here covers it; ACK timing is unchanged (the consumer still
+        // races the returned work at its own 2s bound).
+        const late: Promise<unknown>[] = [];
         const work = dispatchSyncEvent(
           trackingQueue(env.SYNC_EVENT_QUEUE, successorLedger, undefined, signal),
           successorLock,
           eventKey,
           undefined,
           signal,
+          undefined,
+          (tail) => {
+            late.push(tail);
+          },
         );
-        ctx?.waitUntil(successorLifetime(work));
+        ctx?.waitUntil(
+          successorLifetime(
+            work
+              .finally(() => Promise.allSettled(late))
+              .then(
+                () => {},
+                () => {},
+              ),
+          ),
+        );
         return work;
       },
       probeEnabled: qaEnabled(env.APP_URL, env.QA_AUTH_TOKEN),
