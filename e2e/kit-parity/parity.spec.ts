@@ -423,6 +423,17 @@ for (const target of targets) {
         const body = await response.text();
         expect(scrubSecrets(body)).toEqual([]);
         expect(body).not.toContain("<table>");
+        // Body parity, not just status: both twins answer the branded 400
+        // shell — never the bare "Unknown season" text (Hono mutant) and
+        // never the 500 shell at HTTP 400 (Kit boundary mutant).
+        expect(body.trim(), `${target.name} ${path}`).not.toBe("Unknown season");
+        expect(body, `${target.name} ${path}`).not.toContain("Something broke on our side");
+        expect(body, `${target.name} ${path}`).toMatch(
+          /class="recovery-code(?:\s[^"]*)?"[^>]*>\s*400\s*</,
+        );
+        expect(body, `${target.name} ${path}`).toContain('data-testid="error-home"');
+        expect(body, `${target.name} ${path}`).toContain("Back to the homepage");
+        expect(body, `${target.name} ${path}`).toContain("noindex, nofollow");
       }
     });
 
