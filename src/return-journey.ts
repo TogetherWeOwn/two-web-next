@@ -74,16 +74,19 @@ export async function bounceToLogin(c: Ctx): Promise<Response> {
   if (!["GET", "HEAD"].includes(c.req.method)) return expiredWriteBounce(c);
   if (c.req.method === "GET" || c.req.method === "HEAD") {
     const url = new URL(c.req.url);
-    await setSignedCookie(
-      c,
-      LOGIN_INTENDED_COOKIE,
-      url.pathname + url.search,
-      c.env.SESSION_SECRET,
-      {
+    const dest = url.pathname + url.search;
+    // Length-bound at write time (safeNext parity): an oversized page
+    // records no live cookie — the bounce itself still enters OAuth. A
+    // rejected value also clears a stale intended cookie so the callback
+    // cannot honor another journey's return.
+    if (safeNext(dest)) {
+      await setSignedCookie(c, LOGIN_INTENDED_COOKIE, dest, c.env.SESSION_SECRET, {
         ...cookieOpts,
         maxAge: JOURNEY_TTL_SECONDS,
-      },
-    );
+      });
+    } else {
+      deleteCookie(c, LOGIN_INTENDED_COOKIE, deleteOpts);
+    }
   }
   return c.redirect("/auth/discord", 302);
 }

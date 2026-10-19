@@ -47,9 +47,10 @@ const baseEnv: Env = {
 type ThrowMode = "begin" | "statement" | null;
 
 // In-memory Sql double speaking the statements the join journey emits.
-// "begin" fails only the throttle transaction, so attempt recording (a
-// plain statement) still works and the failure stays isolated to the
-// throttle check. "statement" fails every web_throttle_hits statement.
+// "begin" fails only the throttle transaction, so attempt recording (now its
+// own BEGIN plus SET LOCAL statement_timeout) still works and the failure
+// stays isolated to the throttle check. "statement" fails every
+// web_throttle_hits statement.
 function makeSql(mode: ThrowMode = null) {
   const hits: { bucket: string; at: number }[] = [];
   const attempts: { outcome: string; discordId: string | null }[] = [];
@@ -86,8 +87,35 @@ function makeSql(mode: ThrowMode = null) {
   sql.unsafe = async () => [];
   sql.begin =
     mode === "begin"
-      ? async () => {
-          throw new Error(CANARY);
+      ? async (run: (tx: Sql) => Promise<unknown>) => {
+          // Fail only the throttle transaction: it opens with
+          // SET LOCAL lock_timeout and touches the advisory lock /
+          // web_throttle_hits. The analytics transaction opens with
+          // SET LOCAL statement_timeout and writes join_attempts, which
+          // must stay healthy so the callback journey still records.
+          const tx = (async (strings: TemplateStringsArray, ...values: unknown[]) => {
+            const head = strings.join("?");
+            if (
+              head.includes("pg_advisory_xact_lock") ||
+              head.includes("web_throttle_hits") ||
+              head.includes("lock_timeout")
+            )
+              throw new Error(CANARY);
+            return (sql as unknown as (s: TemplateStringsArray, ...v: unknown[]) => unknown)(
+              strings,
+              ...values,
+            );
+          }) as unknown as Sql & {
+            begin: (run: (tx: Sql) => Promise<unknown>) => Promise<unknown>;
+            unsafe: (q: string) => Promise<unknown>;
+          };
+          tx.unsafe = async (q: string) => {
+            if (q.includes("lock_timeout") || q.includes("pg_advisory_xact_lock"))
+              throw new Error(CANARY);
+            return [];
+          };
+          tx.begin = (nested: (tx: Sql) => Promise<unknown>) => nested(tx as unknown as Sql);
+          return run(tx as unknown as Sql);
         }
       : (run) => run(sql);
   return { sql, hits, attempts };

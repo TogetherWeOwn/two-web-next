@@ -8,7 +8,8 @@ export const UNSAFE_METHODS = ["POST", "PUT", "PATCH", "DELETE"] as const;
 // reliably and only feed the bounded, non-persistent violation sink. The MCP
 // endpoint serves remote clients that cannot send our Origin, so it enforces
 // its own transport guard instead (exact-path route plus the handler's
-// Origin/Host validation); the rule below is unchanged.
+// Origin validation, behind the TrustHosts Host pin); the rule below is
+// unchanged.
 export const SAME_ORIGIN_EXEMPTIONS = [
   { method: "POST", path: "/api/agent-events" },
   { method: "POST", path: "/csp-reports" },

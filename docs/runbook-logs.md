@@ -156,12 +156,14 @@ delete a ledger row, clear a lock, or reset a sync claim to investigate.
 
 | Message | Meaning | Severity | First read-only check | Fields carried |
 | --- | --- | --- | --- | --- |
-| `queue malformed message discarded` | The carrier failed envelope validation (`toQueueMessage` returned null, `src/jobs/consumer.ts:82`): its ledger and lock identifiers are untrusted and its payload is never logged. Ack-and-drop for this message only; the rest of the batch still runs. | No page. This path never fires `queue.failing`. | Search logs for the line and confirm no `queue.failing` follows in the window. There is nothing to replay: the payload was never recorded. | None (message only) |
+| `queue malformed message discarded` | The carrier matched neither envelope shape, so `toQueueMessage` returned null (`src/jobs/envelope.ts:65-83`, dropped at `src/jobs/consumer.ts:86-92`): an unknown `kind`, a wrong-type or missing required key (non-string `jobId`, non-UUID `leaseToken`, a string `role-assign` key, a non-string announcement body; `src/jobs/envelope.ts:11-48`), or a W8 write-back with the wrong `action`, a missing `eventKey`/`idempotencyKey`, or `dedupeKey` not equal to `eventKey`. Ack-and-drop for this message only; the rest of the batch still runs. Member impact for a sync-event or W8 carrier: one sync write-back lost for that carrier only; a dirty revision stays dirty until reconcile re-dispatches it on its schedule. An announcement or `role-assign` discard (both run on `two-internal-action`, `src/jobs/consumer.ts:37-48`) has no reconcile backstop: that payload is lost permanently (reconcile redispatches sync events only, `src/jobs/cron.ts:71,107`). | No page. This path never fires `queue.failing` and never touches the ledger or lock. Escalation boundary: for a sync-event carrier, a lone discard with a flat stale count is a poison carrier, nothing to fix; a burst or a growing stale count after a deploy points at a producer bug, route to the owning team with the window and counts. Internal-action discards leave the stale count flat by construction, so a flat count alone does not clear those kinds. | Filter Workers Logs message/text with the exact line on the consumer Worker over the incident window (staging `two-web-jobs`, production `two-web-next-production`) and tally sightings; confirm no `queue.failing` follows in the window. Then trend the `staleEventKeys` count across reconcile passes (`*/10 * * * *`), mirroring the full stale predicate (`src/jobs/events.ts:107-163`; tries = 6, `src/jobs/constants.ts:6-11`): `SELECT count(*) FROM events e WHERE EXISTS (SELECT 1 FROM event_sync_attempts p WHERE p.event_id = e.id AND p.state = 'pending' AND p.request_attempts > 0 AND p.request_attempts < 6 AND p.next_attempt_at IS NOT NULL) OR (e.status IN ('published', 'cancelled') AND NOT EXISTS (SELECT 1 FROM event_sync_attempts r WHERE r.event_id = e.id AND r.revision = e.sync_revision AND r.state = 'failed') AND NOT EXISTS (SELECT 1 FROM event_sync_attempts b WHERE b.event_id = e.id AND b.state = 'pending' AND (b.request_attempts >= 6 OR b.next_attempt_at IS NULL)) AND (e.sync_revision > e.synced_revision OR (e.status = 'published' AND (e.discord_event_id IS NULL OR EXISTS (SELECT 1 FROM rsvps s WHERE s.event_id = e.id AND s.synced_to_discord_at IS NULL)))))`. A count that drains on later passes recovered; a count that grows points at the producer. There is nothing to replay: the payload was never recorded. Never replay a message to investigate. | None (message only): no `requestId`, event key, `kind`, queue, or exception, so correlate by time window plus revision state, not by a request key; the line cannot tell a sync-event discard from an internal-action one |
 | `queue ledger <op> failed` | A best-effort ledger transition failed or hit the 2 s bound (`src/jobs/consumer.ts:94-95`). `<op>` is one of `reserved`, `released`, `dequeued`, `failed`. Job processing continues; the terminal ack or retry still lands. | No page. A stale ledger row is a visible backlog, not a silent loss. | Read `GET /up` (`queue.status`, `pending`, `oldest_ready_wait_age_seconds`, `ready_wait_severity`; `pending >= 20` is `degraded`) per [Read `/up` without mistaking liveness for readiness](runbook.md#read-up-without-mistaking-liveness-for-readiness); then `SELECT job_id, kind, key, available_at, reserved_at, created_at FROM queue_jobs ORDER BY created_at, job_id LIMIT 100`. Never insert or delete a ledger row to investigate. | `exception` (class name only, never the message, which can carry SQL bindings or secrets) |
 | `queue lock release timed out` | The lock `release` hung past the 2 s bound (`src/jobs/consumer.ts:119`). The terminal ack still lands and the rest of the batch still runs. | No page. A stuck lock row self-heals via its TTL (`job_unique_locks.expires_at`; reads treat expired rows as gone). | Search logs for the line; then `SELECT key, expires_at, expires_at > clock_timestamp() AS still_live FROM job_unique_locks ORDER BY expires_at, key LIMIT 100`: `still_live = false` already self-healed. Never delete rows by age or clear locks as a workaround ([Queue containment](runbook.md#queue-containment-drain-and-failed-job-replay)). | Sanitized lock scope (single-line, bounded; a hostile event key cannot split the log line) |
 | `queue lock release failed` | The lock `release` rejected (`src/jobs/consumer.ts:126`). Same handling as the timeout: the ack lands, the batch continues, the TTL heals. | No page: TTL self-heal, same as the timeout row. | Same lock-table `SELECT` as the timeout row; a live row expires on its own. Same never-delete rule. | Sanitized lock scope plus `exception` (class name only) |
 | `sync successor dispatch timed out; reconcile will retry` | The post-ack successor check and dispatch hit the 2 s bound and aborted (`src/jobs/consumer.ts:281`). The lock was already released; a rejected or timed-out send still leaves the dirty revision for reconciliation. | No page. Reconcile re-dispatches stale revisions every 10 minutes (`*/10 * * * *`). | Search logs for the line; then check whether a later sync landed: `SELECT sync_revision, synced_revision, discord_event_id FROM events WHERE event_key = '<eventKey>'` (`synced_revision` catching up to `sync_revision` means reconcile recovered it). Never replay a sync to investigate. | None (message only) |
 | `sync successor dispatch failed; reconcile will retry` | The successor dispatch threw and was caught (`src/jobs/consumer.ts:293`). Same backstop as the timeout: the dirty revision stays for reconcile. | No page: same 10-minute reconcile backstop. | Same revision `SELECT` as the timeout row. Never replay a sync to investigate. | `exception` (class name only, never the message, which can carry SQL or connection secrets) |
+| `sync terminal claim reopen timed out` | The best-effort claim reopen to a due deadline after a failed terminal-intent note hit the 2 s bound (`reopenTerminalClaim` in `src/jobs/consumer.ts:204-227`, warn at `:208`, `LEDGER_TIMEOUT_MS = 2000` at `:13`): without a due deadline a healed redelivery would wait on the nulled claim, so a healed redelivery re-runs the bot flow, re-derives the verdict and re-notes instead. | No page. Warn only; settlement still runs on this delivery (the settlement race at `:367` runs unchanged after the reopen). | Filter the jobs-Worker logs (**Workers & Pages → two-web-jobs → Observability**) for the line; then list pending rows by `next_attempt_at` null-vs-due: `SELECT e.event_key, a.request_attempts, a.next_attempt_at FROM event_sync_attempts a JOIN events e ON e.id = a.event_id WHERE a.state = 'pending' ORDER BY a.next_attempt_at NULLS FIRST LIMIT 100` (`NULL` = still on the nulled claim; due = reopened and eligible for redelivery). Never reset a sync claim to investigate. | None (message only) |
+| `sync terminal claim reopen failed` | The same best-effort reopen rejected (`src/jobs/consumer.ts:220`): the pending lookup or the defer-to-due write threw. Same handling as the timeout: the settlement race still runs this delivery. | No page: same as the timeout row. | Same pending-row `SELECT` as the timeout row. Same never-reset rule. | `exception` (class name only, never the message, which can carry SQL or connection secrets) |
 
 ### Shield sampling and pre-auth refusal warns
 
@@ -209,6 +211,34 @@ substitute another backend or credential to investigate.
 | `Health check found SESSION_SECRET too weak: it must be at least 32 characters with no leading or trailing whitespace.` | `SESSION_SECRET` is configured but fails the documented strength floor (`src/up-config.ts:44`): under 32 characters or with leading or trailing whitespace. A weak session key takes precedence over a missing Discord secret, so fixing it can surface `config: "missing"` next. | No page on the line itself. The 503 with `config: "weak"` feeds the existing prober. | Read `GET /up`: `config: "weak"` with measured `db` and `queue` slices proves the stores are healthy and only the secret fails; then read the floor in [`SESSION_SECRET` strength and rotation](config.md#session_secret-strength-and-rotation). Route the fix to the Operator (`wrangler secret put` on the target); never weaken the probe. | `secret: "SESSION_SECRET"` plus the requirement text, never the value |
 | `Health check found required Worker secrets missing.` | One or more required secrets is absent, empty or whitespace-only (`src/up-config.ts:52`). The body answers 503 with `config: "missing"` and never names which secret. | No page on the line itself. The 503 feeds the existing prober. | Read `GET /up`: `config: "missing"` with measured `db` and `queue` slices proves the stores are healthy; only these names are safe to list from the log line, never values: `SESSION_SECRET`, `DISCORD_CLIENT_SECRET`, `DISCORD_BOT_TOKEN`. Route the fix to the Operator under [Deploy and record the rollback pointer](runbook.md#deploy-and-record-the-rollback-pointer); never echo a value. | `missing` (secret names only, never values) |
 
+### Sync-settlement and reconcile warnings
+
+Four `console.warn` lines cover the sync successor-settlement path and the
+scheduled reconcile/prune passes (`src/jobs/worker.ts`, `src/jobs/ledger.ts`,
+`src/jobs/cron.ts`). None pages: any pager signal comes from the existing
+`scheduled.failing` path in the
+[alert runbook](runbook-alerts.md#source-lines), never from these lines.
+Read-only checks only: a Workers Logs search on the jobs Worker
+(`two-web-jobs`), a `SELECT`, or a source file. Never re-dispatch,
+replay a sync, or reset a claim to investigate. The post-ack successor
+dispatch pair (`sync successor dispatch timed out; reconcile will retry` and
+`sync successor dispatch failed; reconcile will retry`,
+`src/jobs/consumer.ts:387,399`) is triaged under
+[Queue ledger, lock and malformed-carrier warnings](#queue-ledger-lock-and-malformed-carrier-warnings):
+reconcile owns recovery for both; never manually re-dispatch or replay.
+
+| Message | Meaning | Severity | First read-only check | Fields carried |
+| --- | --- | --- | --- | --- |
+| `sync successor settlement lifetime expired; unsettled ledger rows remain tracked` | The `waitUntil` successor-settlement extension (`successorLifetime` in `src/jobs/worker.ts:80`) hit its 30 s bound before the after-ACK successor work (dispatch plus exact-`jobId` ledger compensation on fresh pools) settled. Late work may still complete; a row is never deleted merely for being unsettled. | Warn only; no pager. | Filter the jobs Worker logs for the line over the window (it carries no `jobId`); then `SELECT job_id, kind FROM queue_jobs` to confirm tracked rows versus drained. | None (message only) |
+| `queue ledger compensation failed` | The `trackingQueue` send path (`src/jobs/ledger.ts:46`) threw (the ledger `enqueued` write failed, the send was rejected or cancelled, or the signal aborted) and the exact-`jobId` compensation (`dequeued`) also threw. The original error still propagates to the dispatcher; a committed row hidden behind a lost INSERT response stays visible as backlog, and a later reconciliation cannot remove it. | Warn only; no pager. | Filter logs for the line and its `jobId`; then `SELECT * FROM queue_jobs WHERE job_id = '<jobId>'` to see whether the phantom row remains. | Two positional arguments after the message, not object keys: `jobId` (the canonical UUIDv4 minted for the ledger row), then the exception class name (`e.constructor.name`, or `typeof` for non-errors) |
+| `Event reconcile key failed.` | One stale key's `pendingSync`/dispatch threw inside `reconcileEvents` (`src/jobs/cron.ts:116`); it counts as `failed` without starving the rest of the pass, and the first error is kept for the total-outage rethrow (a multi-key pass with only failures rethrows). | Warn only per key; no page from this line. A resolved partial pass pages once after the flight commits via `ReconcilePartialFailureError`, and an all-failed multi-key pass rethrows its real class: see [`scheduled.failing`](runbook-alerts.md#source-lines). | Filter the jobs Worker logs for the line and its `key`. If the pass emits `Event reconcile pass completed.`, read its counts (`failed` above 0 with `resynced`/`absorbed` preserved). Otherwise, inspect the corresponding `scheduled.failing` entry and rethrow class. | `key` (the stale event key being redispatched), `error_class` (exception class via `exceptionClass`; driver messages, which can echo bound values, are never logged) |
+| `Model prune pass hit per-table batch cap with rows possibly pending.` | The `job_unique_locks` expiry sweep (`src/jobs/cron.ts:367`) hit the per-pass batch ceiling with a full final batch, so rows may still be pending. This warn fires only for the lock table; other-table caps stay warn-free per the paging contract. The pass still returns its counts and never throws on a cap hit. | Warn only; no page from this line. A cap-only pass pages once after the flight commits via `PruneBatchCapError`; a co-occurring table failure pages with its own class instead: see [`scheduled.failing`](runbook-alerts.md#source-lines). | Check the next prune pass's warn and carried counts. A capped pass does not emit `Model prune pass completed.`; if that line appears, the pass was uncapped and deleted rows. Consecutive warnings mean the lock-table sweep remains capped; they do not distinguish a pre-existing backlog from new inflow. The carried counts are rows deleted during that pass, not the remaining backlog. | Eight per-table totals (`agentEventAudits`, `accessLog`, `joinAttempts`, `idempotencyKeys`, `searchLog`, `boardViews`, `sessions`, `jobUniqueLocks`) plus `cappedTables` |
+
+None of these fields is PII-adjacent: `key` is the sync event key being
+redispatched (never a member identity), `jobId` is a random UUIDv4 minted
+for the ledger row, and `exception`/`error_class` are bounded class names,
+never messages, SQL text, tokens, Discord IDs or payload bodies.
+
 ### Join journey warnings
 
 Two `console.warn` lines are join-scoped (the attempt write in
@@ -219,15 +249,40 @@ and the attempt write are best-effort work that never changes the member's
 outcome, and the token-exchange line always accompanies a recovery page the
 member already sees. Promoting the attempt-write failure to `error.alert`
 was considered and rejected: the request itself succeeded, so a page would
-alarm on an analytics gap. None of the three lines carries a `request_id`,
-and the prune line carries no route field, so correlate by time window and
-route instead of by ID.
+alarm on an analytics gap. The attempt-write and token-exchange lines carry
+`request_id` only when it passes validation. The prune line carries neither
+a request ID nor a route field, so correlate that line by time window.
 
 | Message | Meaning | Member impact | First read-only check | Fields carried |
 | --- | --- | --- | --- | --- |
-| `Join throttle prune failed; keeping the decided verdict.` | The best-effort expiry delete on `web_throttle_hits` threw after the admit/refuse verdict was already decided (`checkJoinThrottle` in `src/join/service.ts`). Shared helper: the same line fires for join, login, events reads, profile writes and every other throttled POST (via `throttleGuard` in `src/throttle.ts` and profile-write admission in `src/profiles/routes-admission.ts`), so a sighting is not evidence of join traffic. | None on this request. Expired rows wait for a later pass; every request retries one bounded 1,000-row skip-locked batch. | `SELECT count(*) FROM web_throttle_hits WHERE at < now() - make_interval(mins => 5)` across passes: a spike that drains is healthy; a count that grows pass over pass points at database write/lock health (see the [alert runbook](runbook-alerts.md)). Correlate by time window across all throttled routes, not just `/join/callback`. | `exception` (class name only, never the message, which can quote statement bindings) |
-| `join attempt write failed` | The `join_attempts` analytics `INSERT` threw; the row is lost but the request outcome stands (`recordAttempt` in `src/join/service.ts`). | None on the journey. The gap shows only in `join_attempts` counts. | `SELECT outcome, count(*), max(created_at) FROM join_attempts WHERE created_at > now() - interval '1 hour' GROUP BY outcome`, then compare against `http.request` volume on `/join/callback` for the same window; a gap inside one window matches the warn timestamps. If writes never resume, route database insert health to the authorized operator. Never replay a member join to investigate. | `exception` (class name only, never the message, which can quote the live token or statement text), `outcome` |
-| `discord token exchange failed on the join journey` | One bounded line for three triggers in `src/join/route-callback.ts`: oversized code/state refused before any exchange, an invalid-state branch (state cookie missing or mismatched, journey already consumed or expired, missing `code`, or a swallowed journey-store error from `storeFor().catch(() => null)` / `journeys.consume().catch(() => false)`), or a token-exchange/user-fetch throw classified by `failureMeta` (`src/discord.ts`). | The member already sees the matching recovery page: expired-link retry, or the Discord-down 503. A database-caused invalid-state failure also renders "Join link expired" even though the link itself was fine. | Filter logs for the line and split by `kind` and `outcome`, not by `outcome` alone. `provider_outage`/`rate_limited`/`transport_failure` with `outcome: error` point at Discord or wire health; `expired_grant` with `outcome: expired` is a spent or replayed approval. `provider_reject` with status 400/401 (for example `invalid_client` after a secret rotation, or `invalid_request` from a bad redirect URI) points at `DISCORD_CLIENT_ID`/`DISCORD_CLIENT_SECRET` and the registered redirect URI, not at Discord health. `unknown` with a null status is an app-side throw. A sustained `expired` burst with no matching Discord-side change points at the journey store: check `web_oauth_journeys` and database health via the [alert runbook](runbook-alerts.md). Never replay a member join to investigate. | `exception` (class only, never the message, which can quote the secret), `kind`/`status` (exchange-throw site only), sanitized `source`, `outcome` |
+| `Join throttle prune failed; keeping the decided verdict.` | The best-effort expiry delete on `web_throttle_hits` threw, or was still pending after its 2 s wait, after the admit/refuse verdict was already decided (`checkJoinThrottle` in `src/join/service.ts`). A transaction-local 2 s statement timeout cancels a slow `DELETE` in Postgres, independently of the caller timer. Shared helper: the same line fires for join, login, events reads, profile writes and every other throttled POST (via `throttleGuard` in `src/throttle.ts` and profile-write admission in `src/profiles/routes-admission.ts`), so a sighting is not evidence of join traffic. An expired wait logs once with `exception: ThrottlePruneDeadline`; late settlements cause no second warning. | None on this request. Expired rows wait for a later pass; every request retries one bounded 1,000-row skip-locked batch. | `SELECT count(*) FROM web_throttle_hits WHERE at < now() - make_interval(mins => 5)` across passes: a spike that drains is healthy; a count that grows pass over pass points at database write/lock health (see the [alert runbook](runbook-alerts.md)). Correlate by time window across all throttled routes, not just `/join/callback`. A burst of `ThrottlePruneDeadline` means database writes are stalling. | `exception` (class name only, never the message, which can quote statement bindings; `ThrottlePruneDeadline` on an expired wait) |
+| `join attempt write failed` | The `join_attempts` analytics transaction threw, or was still pending after its 2 s caller wait. The row may be missing; the request outcome stands (`recordAttempt` in `src/join/service.ts`). A transaction-local 2 s statement timeout cancels a slow `INSERT` in Postgres, independently of the caller timer. A connection/transport stall can still let a row land late. An expired caller wait logs once with `exception: AnalyticsWriteDeadline`; late settlements cause no replay or second warning. | No change to the journey outcome. Analytics adds at most 2 s of waiting; other callback work has its own latency. The gap shows only in `join_attempts` counts. | `SELECT outcome, count(*), max(created_at) FROM join_attempts WHERE created_at > now() - interval '1 hour' GROUP BY outcome`, then compare against `http.request` volume on `/join/callback` for the same window; a gap inside one window matches the warn timestamps. A burst of `AnalyticsWriteDeadline` means database writes are stalling, not that Discord is down. If writes never resume, route database insert health to the authorized operator. Never replay a member join to investigate. | `exception` (class name only, never the message, which can quote the live token or statement text), `outcome`, `request_id` (only when it passes validation) |
+| `discord token exchange failed on the join journey` | One bounded line for three triggers in `src/join/route-callback.ts`: oversized code/state refused before any exchange, an invalid-state branch (state cookie missing or mismatched, journey already consumed or expired, missing `code`, or a swallowed journey-store error from `storeFor().catch(() => null)` / `journeys.consume().catch(() => false)`), or a token-exchange/user-fetch throw classified by `failureMeta` (`src/discord.ts`). | The member already sees the matching recovery page: expired-link retry, or the Discord-down 503. A database-caused invalid-state failure also renders "Join link expired" even though the link itself was fine. | Filter logs for the line and split by `kind` and `outcome`, not by `outcome` alone. `provider_outage`/`rate_limited`/`transport_failure` with `outcome: error` point at Discord or wire health; `expired_grant` with `outcome: expired` is a spent or replayed approval. `provider_reject` with status 400/401 (for example `invalid_client` after a secret rotation, or `invalid_request` from a bad redirect URI) points at `DISCORD_CLIENT_ID`/`DISCORD_CLIENT_SECRET` and the registered redirect URI, not at Discord health. `unknown` with a null status is an app-side throw. A sustained `expired` burst with no matching Discord-side change points at the journey store: check `web_oauth_journeys` and database health via the [alert runbook](runbook-alerts.md). Never replay a member join to investigate. | `exception` (class only, never the message, which can quote the secret), `kind`/`status` (exchange-throw site only), sanitized `source`, `outcome`, `request_id` (only when it passes validation) |
+
+### Kit session-bridge and auth-status probe warnings
+
+Two `console.warn` lines from the Kit hook dispatch
+(`src/route-ownership.ts`). Neither pages: the bridge line is a designed
+guest-equivalent render or fail-closed refusal, and the probe line is an
+optional cookie skipped on an already-authorized response. Neither line
+carries `request_id`, route, or cookie values, so correlate by time window
+plus route/status evidence per [Find a request](#find-a-request): never
+request cookie values and never invent request correlation fields.
+
+| Message | Trigger | Member impact | Severity | First read-only check | Fields carried | Security boundary |
+| --- | --- | --- | --- | --- | --- | --- |
+| `kit session bridge unavailable; rendering without locals.` | The optional read-only session bridge (`sessionFor`) rejected after a Kit ownership decision and before `resolve` (`src/route-ownership.ts:643-653`). The bridge merges one session decision into `event.locals`; on failure locals stay guest-equivalent and `viewerOf` names no viewer (`src/route-ownership.ts:403-406`). | Protected member contents are refused: the member-read render fails closed with the bridged (unknown) viewer (`test/kit-member-dispatch.test.ts:266`). Public Kit pages render as guest. | No page. Guest-equivalent render or sanitized refusal is the designed outcome, not an outage signal on its own. | Filter the exact message over the incident window; join by time window to `http.request` route/status (member-route refusal). Confirm effective ownership in `ROUTE_MANIFEST` (`src/route-ownership.ts`) via `decideRoute`/`decideOwner`, and read the bridge/session configuration in `src/kit-session.ts:228-245` and [`SESSION_SECRET`](config.md#session_secret-strength-and-rotation). | `exception` (class name only, never the message) | The bridge session read runs outside the member-read boundary (it is not member data); the render stays inside it, so protected contents are refused after bridge failure. Never request cookie values to investigate. |
+| `kit auth-status probe unavailable; rendering without probe cookie.` | The optional probe-cookie provider (`authStatusCookieFor`) rejected after the response was already rendered: `GET` on an `/admin` path, status 200, `text/html`, with authenticated moderator locals (`src/route-ownership.ts:701-724`; the signer admits only that shape, `src/kit-session.ts:256-283`). | None on authorization: the successful admin HTML response is served as rendered, without the probe cookie (`test/kit-member-dispatch.test.ts:219`). Scoped to successful GET admin HTML for an authenticated moderator; other responses never call the probe. | No page. A missing optional cookie is not a privilege change, and probe failure never implies de-authentication. | Filter the exact message over the incident window; join by time window to `http.request` (GET admin route, 200). Confirm the probe preconditions and the manifest `enabled` flag in source. Never request cookie values; do not invent request correlation fields. | `exception` (class name only, never the message) | The probe cookie decorates an already-authorized response: probe failure retains that response and never removes authentication. Carries the exception class only, per [privacy and boundaries](#privacy-and-boundaries). |
+
+Kit rollout context: admin shells and manifest-`enabled` rollback in
+[Kit admin shells](moderator-admin-guide.md#kit-admin-shells-shipped-join-attempts-pair-kit-served);
+artifact and log hygiene in
+[Kit journey, visual and performance parity gates](kit-parity-gates.md#security);
+moderator authority and role-removal residuals in the
+[threat model](threat-model.md#moderator-authority)
+([residuals](threat-model.md#gaps-and-residual-risks)).
+Ownership flags, response behavior and the log privacy contract are unchanged
+by this section.
 
 ### Auth sign-in warnings
 
@@ -270,6 +325,71 @@ secret or the live access token.
 | `discord sign-in failed` | The token exchange (`exchangeCode`) or user fetch (`fetchUser`) threw; the failure is classified by `failureMeta` in `src/discord.ts`. Read `kind` plus `status`, not volume alone: `expired_grant` (400 plus `invalid_grant`) is a spent, replayed or timed-out approval; `provider_reject` (any other 4xx, for example `invalid_client` after a secret rotation or `invalid_request` from a bad redirect URI) points at [`DISCORD_CLIENT_ID` / `DISCORD_CLIENT_SECRET` and the registered redirect URI](config.md), not at Discord health; `rate_limited`, `provider_outage` and `transport_failure` point at Discord or wire health; `unknown` with a null status is an app-side throw. | Sign-in blocked. `rate_limited`, `provider_outage` and `transport_failure` (`isProviderOutage` in `src/discord.ts`) redirect to `/?n=signin_unavailable`; every other kind redirects to `/?n=signin_failed`. | Filter logs for the line and split by `kind` and `status`. A `provider_reject` burst with status 400/401 after a deploy or rotation points at the OAuth config above; `provider_outage`, `transport_failure` and `rate_limited` point at Discord or wire health; a lone `unknown` with a null status points at an app-side throw, so read the `exception` class. Never replay a member sign-in to investigate. | `exception` (class only, never the message, which can quote the secret), `kind`, `status`, validated `request_id` |
 | `guild auto-join failed` | Adding the fresh member to the guild (`addGuildMemberDetailed` in `src/discord.ts`) returned a non-member outcome. Read `kind`: `rate_limited` is Discord throttling (a usable backoff rides to the recovery response as a `Retry-After` header); `provider_outage` is a Discord 5xx; `transport_failure` is a fetch throw; `forbidden` (403) is a bot permission problem, not an outage; `failed` is the config-shaped outcome (blank bot token, malformed guild or user id, or any other non-429/403/5xx status), so a sustained `failed` run points at [`DISCORD_GUILD_ID` / `DISCORD_BOT_TOKEN`](config.md) and the bot's guild membership, not at Discord health. | None on sign-in: the session is still issued as a non-member session and the member lands on the `/?n=join_failed` recovery page with the invite fallback; the remembered destination is re-recorded for the retry. | Filter logs for the line and split by `kind`. A sustained `failed` run points at the guild/bot config above; `forbidden` points at the bot's guild role and permissions; `rate_limited`, `provider_outage` and `transport_failure` point at Discord or wire health. Never replay a member sign-in to investigate. | `request_id`, `guild_id` (the configured guild actually used, not a member identity), `kind` |
 
+### Analytics write-degradation warnings
+
+Two `console.warn` lines mark best-effort analytics writes that rejected or
+outran the 500 ms response deadline (`recordSearch` in
+`src/events/search-log.ts`, `recordBoardView` in
+`src/hotzones/board-log.ts`). None pages: neither outcome fails the request,
+so a missing analytics row is a dashboard gap, never a member-facing failure.
+Promoting these warnings to `error.alert` was considered and rejected for the
+same reason the join attempt-write failure above stays a warning: the request
+itself succeeded.
+
+For event-search warnings, `recordSearch` is awaited before the page
+continues. A rejection warning may be emitted before or after the response
+continues, depending on whether the write wins the deadline race. A
+`LogWriteDeadline` warning can delay the response by up to 500 ms.
+
+| Message | Meaning | Member impact | First read-only check | Fields carried |
+| --- | --- | --- | --- | --- |
+| `Event search unavailable for logging; serving results without recording.` | The `event_search_logs` `INSERT` rejected, or the 500 ms response deadline fired first (`src/events/search-log.ts`). | None on this request. The results were still served; only the analytics row may be missing. | Filter logs for the exact message over the incident window; then run the shared aggregate check below. | `exception` (the rejection class name, or the fixed `LogWriteDeadline` string; never the raw error text, which can carry the DSN) |
+| `Board view unavailable for logging; serving results without recording.` | The `board_view_logs` `INSERT` rejected, or the 500 ms response deadline fired first (`src/hotzones/board-log.ts`). Member-board views queue behind the member-read boundary and write only after a released 200. | None on this request. The board was still served; only the analytics row may be missing. | Filter logs for the exact message over the incident window; then run the shared aggregate check below. | `exception` (the rejection class name, or the fixed `LogWriteDeadline` string; never the raw error text) |
+
+The `exception` field tells a rejection apart from a deadline expiry: a
+rejected write carries the error's class name (with a `typeof` fallback for a
+non-`Error` throw), while an expired response wait carries the fixed string
+`LogWriteDeadline`. The deadline is a race, not a cancellation: the write
+promise keeps running after the 500 ms timer fires, so a `LogWriteDeadline`
+warning may still be followed by a settled row — and if that late write then
+rejects, the same request logs a second warning with the rejection class.
+Never equate warning count with lost requests, and never assume one warning
+per affected request.
+
+These two lines are fail-open anonymous analytics. Do not confuse them with
+the fail-closed mandatory auditing rows in the table above (`Member read audit
+failed; refusing contents.`, `Member data access could not be recorded;
+refusing to serve the read.`): a member-data read is refused when its
+`member_data_access_logs` row cannot be written, while a search or board view
+is always served when its analytics row cannot. The analytics tables store
+normalized dimensions (`normalized_query` on event searches;
+`normalized_board_key`, `scope`, and `season` on board views) with per-row
+result counts and `occurred_at` timestamps. They carry no member identity by
+design, so erasure leaves them because no row belongs to a member (see [What
+is retained and why](member-erasure.md#what-is-retained-and-why)). Retention,
+prune batching,
+and outage-time refusal policy are decided in the [retention
+ledger](retention-ledger.md) and the [database-outage
+contract](db-outage-matrix.md); this section changes none of them.
+
+Shared first check for either line (read-only; run no `INSERT`, `DELETE`,
+replay, lock clear, or credential change to investigate):
+
+```sql
+-- Incident-window aggregates. Compare against http.request volume on the
+-- serving routes over the same window; a gap inside one window matches the
+-- warn timestamps. If writes never resume, route database insert health to
+-- the authorized operator.
+SELECT count(*), max(occurred_at) FROM event_search_logs WHERE occurred_at > now() - interval '1 hour';
+SELECT count(*), max(occurred_at) FROM board_view_logs WHERE occurred_at > now() - interval '1 hour';
+```
+
+Neither line carries a `request_id`, so correlate by time window and route,
+not by ID. Keep raw `normalized_query` and `normalized_board_key` values,
+member identity, cookies, tokens, connection strings, and invented request IDs
+out of diagnostic output: the aggregates above are sufficient, and the
+warning's `exception` is a class name, never the message.
+
 ### Missing sync-queue binding warning
 
 `event write-back due but SYNC_EVENT_QUEUE is not bound` (`src/events/sync.ts`,
@@ -302,7 +422,7 @@ the binding is fixed: treat a production warning as stuck, not late.
 | Field | Meaning and safe values |
 | --- | --- |
 | `eventKey` | The event whose write-back carrier was not sent |
-| `request_id` | The validated HTTP request ID (`safeRequestId`: a Cloudflare Ray ID or a generated ULID) from the `http.request` line's `x-request-id`. Agent-events ingress write-backs (`POST /api/agent-events`, `src/agent-events/route.ts`) carry that HTTP ID, not the `request_id` in the agent response body nor `agent_event_audits.request_id`, which is a separate ingress-minted ULID (`src/agent-events/ingress.ts`). Always correlate an agent-published event via `eventKey` plus `agent_event_audits WHERE event_key = ...`; `request_id` alone only joins to the `http.request` line. Never a secret or a member identity |
+| `request_id` | The validated HTTP request ID (`safeRequestId`: a Cloudflare Ray ID or a generated ULID) from the `http.request` line's `request_id`. Agent-events ingress write-backs (`POST /api/agent-events`, `src/agent-events/route.ts`) carry that HTTP ID, not the `request_id` in the agent response body nor `agent_event_audits.request_id`, which is a separate ingress-minted ULID (`src/agent-events/ingress.ts`). Always correlate an agent-published event via `eventKey` plus `agent_event_audits WHERE event_key = ...`; `request_id` alone only joins to the `http.request` line. Never a secret or a member identity |
 
 A successful HTTP response is not evidence of Discord synchronization: the
 request succeeded against the database, but Discord has not been told yet.
@@ -408,6 +528,24 @@ incident window and group by `action` and `code`; paste one exact
 `idempotency_key` UUID into the filter to follow a single operation across its
 attempts. These receipts count attempts, not distinct logical operations.
 
+### Export omission warnings
+
+Two `console.warn` lines mark **incomplete but successful exports**: the
+response stays 200 (a matching conditional `/events.ics` request answers 304
+after the collection is built) and the valid rows survive, so a 200 does not prove
+completeness. Each row gives the exact message, what was dropped, how it
+differs from a request outage, the first read-only check, and the fields the
+line carries. Find a line with the message **contains** filter from
+[Find a request](#find-a-request). Read-only checks only: a Workers Logs
+search or a bounded `SELECT`. Neither line carries member identity (the ICS
+line carries public event keys, which are URL path segments, not member
+data). Collection behavior and privacy rules are unchanged.
+
+| Message | Meaning | Severity | First read-only check | Fields carried |
+| --- | --- | --- | --- | --- |
+| `sitemapEvents skipped unrenderable rows.` | One or more published rows had an unrenderable window (`startsAt`/`endsAt` outside the finite JS Date range) or an `updatedAt` that is not a finite `Date`, so those URLs were dropped from `/sitemap_index.xml` while the valid rows still shipped (`src/events/reads.ts:882-891`). | No page: incomplete 200 export, not an outage. A database failure instead rejects and the route degrades to the static entries with no warn line (`src/seo-leaves.tsx:48`): warn present means rows were skipped, but warn absent with only static entries is inconclusive: the database read failed, or it succeeded with zero published rows. Verify the database read outcome and the published-row count before diagnosing a failure. | Filter logs for the exact message over the window and note `skipped` (the exact poison count). The line carries no event keys, so do not guess which events are missing: compare the served event-URL count against the same ordered, capped input the sitemap reads (`SELECT count(*) FROM (SELECT 1 FROM events WHERE status = 'published' ORDER BY starts_at LIMIT 1000) AS capped`, `src/events/reads.ts:865-875`) — an unbounded published count can exceed it by intentional cap overflow, not just skipped rows — then page bounded timestamp windows from the earliest rows, continuing past each page with the last seen instant (`SELECT event_key, starts_at, ends_at, updated_at FROM events WHERE status = 'published' AND starts_at > '<last seen>' ORDER BY starts_at LIMIT 100`) to find the non-finite or out-of-range instants. Never dump the table or re-render the export to investigate. | `skipped` (count only, no event keys) |
+| `eventsIcsCollection skipped out-of-range SEQUENCE rows.` | One or more collection rows carried a stored `ics_sequence` outside the RFC 5545 wire range 0–2147483647 (`IcsSequenceRangeError`, `src/events/feeds.ts:144-168`), so those VEVENTs were dropped from `/events.ics` while the valid VEVENTs shipped byte-identically. The feed is a METHOD:PUBLISH full-state replace, so subscribers drop the skipped event while `/e/:key` still shows it as live. The single-event download instead answers 503 `Calendar revision unavailable` for the same poison row: a 503 there is not a skip. | No page: incomplete 200 export (or a 304 when `If-None-Match` matches the built collection's ETag, `src/events/routes-feeds.ts:30-31,69`), not an outage. A database failure instead fails the whole read without this line. | Use only the logged `skippedEventKeys`, never a table scan: `SELECT event_key, ics_sequence FROM events WHERE event_key IN ('<key>', ...)` confirms the out-of-range revision evidence. Subscriber impact and the only approved recovery (an explicitly approved calendar-identity migration with a new UID and subscriber transition, never lowering the counter on the existing UID) live in [Calendar wire range and exhaustion](import-events-rsvps.md#calendar-wire-range-and-exhaustion): no clamping, modulo, reset, or automatic UID change. Never reset or lower the counter, and never replay an export or sync, as a diagnostic shortcut. | `skipped` (count), `skippedEventKeys` (the skipped public event keys) |
+
 ### Optional-content degradation warnings
 
 Four `console.warn` lines mark degraded optional content. The page still
@@ -460,8 +598,8 @@ validated `request_id`, and `guild auto-join failed` adds only the configured
 [Discord sign-in and guild auto-join warnings](#discord-sign-in-and-guild-auto-join-warnings)).
 The join journey lines carry
 no member identity either: the prune line carries the exception class (never the message), the attempt line
-carries the exception class and `outcome`, and the token-exchange line carries
-the exception class, kind/status, sanitized `source` and `outcome` (see
+carries the exception class, `outcome` and validated `request_id`, and the token-exchange line carries
+the exception class, kind/status, sanitized `source`, `outcome` and validated `request_id` (see
 [Join journey warnings](#join-journey-warnings)). `csp.report.violation`
 (`src/csp-reports.ts`) keeps each reported URI's origin and path shape, but a
 17-20 digit run in a path segment (a Discord ID in `/members/:user`) is logged
@@ -496,6 +634,33 @@ the calendar and home teaser (`test/discord-guild-admission-degrade.test.ts:101-
 This source does not emit a `Discord snapshot outcome` line. Check the configured
 [`DISCORD_GUILD_ID`](config.md), rather than treating the warning as a Discord
 or snapshot-store outage.
+
+## Live Discord scheduled-events read failure
+
+`Discord scheduled-events read failed.` is the exact fixed `console.warn`
+message for one failed live read of the guild's scheduled events
+(`src/events/discord-transients-live.ts:76-81`, `ReadFailure` at
+`src/events/discord-transients-types.ts:29-34`). One line per failed
+`upcoming()` call; a successful read stays quiet. The cached source turns a
+failed live read into a retry hold and keeps serving the last usable snapshot
+while one exists, so this line alone is not an outage. Read it together with
+the [Discord snapshot outcome](#discord-snapshot-outcome) line for the same
+window.
+
+| Message | Trigger (`reason`) | Member impact | Severity | First read-only check | Escalation boundary | Fields carried |
+| --- | --- | --- | --- | --- | --- | --- |
+| `Discord scheduled-events read failed.` | One of `deadline` (the 1,000 ms headers-and-body budget elapsed), `status` (non-2xx; the body is cancelled unread), `aborted` (the deadline fired while the read was in flight: a late adapter delivery or a mid-body stall), `no_body` (a 2xx without a body), `invalid_payload` (a non-list, over-row-count, or over-byte payload), or `exception` (a fetch/parse throw classified by class name, including unparseable JSON as `SyntaxError`). | Stale cached transients served while a usable snapshot exists (`held`/`stale` on the snapshot line); an honest error state (`cold`, nothing served) only when nothing usable is left. Canonical events stay available. Not an outage. | Warn only. No page and no new alert: a throttled or slow Discord episode is expected to log a burst of these while the snapshot line stays on `held`. | Filter Workers Logs message/text with the exact line over the incident window (see [Find a request](#find-a-request)), tally the `"reason":"..."` substrings, and compare against the [Discord snapshot outcome](#discord-snapshot-outcome) mix for the same window: a `status`/429 burst with `held` snapshots is throttling, while `cold` growth or any `error` line points past Discord. `jq -c '.logs[]? \| select(any(.message[]?; . == "Discord scheduled-events read failed.")) \| .message[]? \| select(type == "object")' tail.json \| grep -o '"reason":"[a-z_]*"' \| sort \| uniq -c` | Discord-side: `status` with 401/403 (token or guild access), 429 (throttling), or 5xx (Discord outage) — check Discord health and the configured guild/token via the authorized Operator, not code. App-side: `deadline`, `aborted`, `no_body`, `invalid_payload`, or `exception` sustained outside a Discord episode, or a matching snapshot `error`/`completionFailed: true` line — triage the app, store, or config. | `reason` (always), `status` (`status` only), `retryAfter` (429 with a usable header only), `exception` (`exception` only, class name), `elapsedMs` (always). Never a message, URL, header, body, token, or member identity. |
+
+`retryAfter` is bounded admitted backoff, not the raw header: the shared
+`parseRetryAfterSeconds` parser (`src/jobs/retry-delay.ts`) accepts trimmed
+digits with an optional fraction only, rounds fractions up, keeps 1 to 86,400
+seconds, and omits the field when the header is absent, empty, or unusable —
+so a 429 line without `retryAfter` means "no usable backoff", not "no
+throttle". Only a 429 carries it; every other `status` omits it. `exception`
+is the throw's fixed class name (`TypeError`, `SyntaxError`, `Error`, or the
+`typeof` fallback), never its message, which can echo the bot token or wire
+detail. The error body is deliberately never read: a stalled body must not
+hold the page past the deadline.
 
 ## Rules last-updated stamp warning
 

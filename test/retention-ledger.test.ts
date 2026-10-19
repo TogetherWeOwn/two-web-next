@@ -488,6 +488,92 @@ describe("retention ledger doc rows", () => {
     expect(scope.some((line) => line.includes("`event_sync_attempts`"))).toBe(true);
     expect(read("docs/retention-ledger.md")).not.toContain("documented in a later slice");
   });
+
+  it("publishes the web_oauth_journeys row: 10-minute TTL with bounded request-path sweep", () => {
+    expect(OAUTH_JOURNEY_TTL_SECONDS).toBe(600);
+    expect(OAUTH_JOURNEY_SWEEP_BATCH_SIZE).toBe(1000);
+    const lines = read("docs/retention-ledger.md").split("\n");
+    const rows = lines.filter((line) => /^\| `web_oauth_journeys`(?:\s|\|)/.test(line));
+    expect(rows, "one dedicated web_oauth_journeys row").toHaveLength(1);
+    // The row must render inside the GFM table: no blank line may sit between
+    // table rows, or the row drops out as a literal pipe paragraph.
+    const idx = lines.findIndex((line) => /^\| `web_oauth_journeys`(?:\s|\|)/.test(line));
+    expect(idx).toBeGreaterThan(0);
+    expect(lines[idx - 1]!.trim()).not.toBe("");
+    expect(lines[idx - 1]!.startsWith("| ")).toBe(true);
+    const row = rows[0]!;
+    for (const claim of [
+      "`web_oauth_journeys`",
+      "10-minute TTL",
+      "OAUTH_JOURNEY_TTL_SECONDS = 600",
+      "issue()` sets `expires_at = now() + 600 seconds`",
+      "10 minutes is an age cutoff, not a deletion timer",
+      "Cleanup is lazy and path-dependent",
+      "expired rows can linger on a quiet site",
+      "until a later auth or join start",
+      "never deletes on consume",
+      "No daily prune",
+      "pruneModelTables",
+      "GET /auth/discord",
+      "GET /join/discord",
+      "sweepExpired",
+      "inline before `issue()`",
+      "OAUTH_JOURNEY_SWEEP_BATCH_SIZE = 1000",
+      "for update skip locked",
+      "expires_at <= now()",
+      "across repeated starts",
+      "src/oauth-journeys.ts",
+      "drizzle/1022_web-sessions-oauth-journeys.sql",
+      "src/db/schema.ts",
+      "src/auth/routes.ts",
+      "src/join/route-start.ts",
+    ]) {
+      expect(row, `journey row must pin: ${claim}`).toContain(claim);
+    }
+    // The proof cites the whole journey module, not a line range that goes
+    // stale when lines above the store shift.
+    expect(row).not.toContain("src/oauth-journeys.ts:6-13");
+    // Mechanism pins: the bounded sweep lives in the journey store, the
+    // request paths run it inline, and the daily prune never mentions it.
+    const journeys = read("src/oauth-journeys.ts");
+    expect(journeys).toContain("OAUTH_JOURNEY_TTL_SECONDS = 600");
+    expect(journeys).toContain("OAUTH_JOURNEY_SWEEP_BATCH_SIZE = 1000");
+    expect(normalizeSqlWindow(journeys)).toContain(
+      "delete from web_oauth_journeys where state_hash in ( select state_hash from web_oauth_journeys where expires_at <= now() order by expires_at, state_hash limit ${OAUTH_JOURNEY_SWEEP_BATCH_SIZE} for update skip locked ) returning state_hash",
+    );
+    // The issue window is part of the documented mechanism too: expiry comes
+    // from the TTL constant, never a literal.
+    expect(normalizeSqlWindow(journeys)).toContain(
+      "insert into web_oauth_journeys (state_hash, flow, expires_at) values (${stateHash}, ${flow}, now() + ${OAUTH_JOURNEY_TTL_SECONDS} * interval '1 second')",
+    );
+    expect(read("drizzle/1022_web-sessions-oauth-journeys.sql")).toContain(
+      'CREATE TABLE IF NOT EXISTS "web_oauth_journeys"',
+    );
+    // Both starts sweep inline before issue() inside their own start handler:
+    // a swap that still contains both strings must fail here.
+    for (const [path, route, flow] of [
+      ["src/auth/routes.ts", 'app.get("/auth/discord"', "auth"],
+      ["src/join/route-start.ts", 'app.get("/join/discord"', "join"],
+    ] as const) {
+      const body = read(path);
+      const start = body.indexOf(route);
+      expect(start, `${path} start route`).toBeGreaterThanOrEqual(0);
+      const nextRoute = body.indexOf('app.get("', start + route.length);
+      const slice = nextRoute === -1 ? body.slice(start) : body.slice(start, nextRoute);
+      const sweep = slice.indexOf("await store.journeys.sweepExpired();");
+      const issue = slice.indexOf(`await store.journeys.issue(await hashToken(state), "${flow}")`);
+      expect(sweep, `${path} sweeps in the start handler`).toBeGreaterThanOrEqual(0);
+      expect(issue, `${path} issues in the start handler`).toBeGreaterThanOrEqual(0);
+      expect(sweep, `${path} sweeps before issuing`).toBeLessThan(issue);
+    }
+    expect(read("src/jobs/cron.ts")).not.toContain("web_oauth_journeys");
+    expect(read("src/jobs/postgres.ts")).not.toContain("web_oauth_journeys");
+    // Negative control: an invented row name pins nothing.
+    const invented = read("docs/retention-ledger.md")
+      .split("\n")
+      .filter((line) => /^\| `web_oauth_journeys_invented`(?:\s|\|)/.test(line));
+    expect(invented, "invented journey row must fail the pin").toHaveLength(0);
+  });
 });
 
 describe("retention ledger agent-event rows (L8a)", () => {
