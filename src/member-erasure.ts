@@ -1,6 +1,7 @@
 // Member erasure (TOG-12548). Backs the published deletion promise
 // (src/privacy-content.ts "Deletion"): one Discord id, one transaction,
-// member rows, including session predecessor grace. Authorship columns (events.created_by,
+// six member tables: users, profiles, rsvps, web_sessions, the session
+// predecessor-grace table, and join_attempts. Authorship columns (events.created_by,
 // featured_contents.created_by) and the append-only audit tables are
 // deliberately out of scope — see docs/member-erasure.md.
 export const DISCORD_ID_RE = /^[1-9]\d{0,19}$/;
@@ -30,6 +31,7 @@ export type ErasureCounts = {
   profiles: number;
   rsvps: number;
   web_sessions: number;
+  web_session_grace: number;
   join_attempts: number;
 };
 
@@ -38,6 +40,7 @@ export const ERASURE_TABLES = [
   "profiles",
   "rsvps",
   "web_sessions",
+  "web_session_grace",
   "join_attempts",
 ] as const;
 
@@ -58,6 +61,7 @@ const zeroCounts = (): ErasureCounts => ({
   profiles: 0,
   rsvps: 0,
   web_sessions: 0,
+  web_session_grace: 0,
   join_attempts: 0,
 });
 
@@ -86,16 +90,15 @@ export async function countMemberRows(sql: ErasureTx, discordId: string): Promis
   counts.users = u?.n ?? 0;
   counts.profiles = p?.n ?? 0;
   counts.rsvps = r?.n ?? 0;
-  // Keep the operator's session count inclusive of retired bearer records.
-  counts.web_sessions = (s?.n ?? 0) + (g?.n ?? 0);
+  counts.web_sessions = s?.n ?? 0;
+  counts.web_session_grace = g?.n ?? 0;
   counts.join_attempts = j?.n ?? 0;
   return counts;
 }
 
 /**
  * Erase one member's rows. Dry-run counts only and writes nothing; apply
- * deletes all member tables in one transaction and returns rows removed.
- * web_sessions includes live/revoked sessions and predecessor-grace records.
+ * deletes all six member tables in one transaction and returns rows removed.
  * The id is validated before any query runs.
  */
 export async function eraseMember(
@@ -117,7 +120,8 @@ export async function eraseMember(
     counts.users = users.length;
     counts.profiles = profiles.length;
     counts.rsvps = rsvps.length;
-    counts.web_sessions = sessions.length + grace.length;
+    counts.web_sessions = sessions.length;
+    counts.web_session_grace = grace.length;
     counts.join_attempts = attempts.length;
     return counts;
   });

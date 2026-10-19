@@ -137,7 +137,7 @@ describe("erase-member bounded waits: client budget and docs", () => {
     const section = doc.slice(start, doc.indexOf("\n## ", start + 1));
     expect(section).toMatch(/statement_timeout/);
     expect(section).toMatch(/lock_timeout/);
-    // A timed-out run erased nothing: the operator must be told all five
+    // A timed-out run erased nothing: the operator must be told all six
     // tables stay unchanged and to verify with a dry-run.
     expect(section).toMatch(/unchanged|erases? nothing|rolls? back/i);
     expect(section).toMatch(/dry-run/);
@@ -166,11 +166,12 @@ describe.skipIf(!ambientUrl)("erase-member bounded waits: CLI against disposable
   const password = () => new URL(ambientUrl!).password;
 
   const countsFor = async (id: string) => {
-    const [[u], [p], [r], [s], [j]] = await Promise.all([
+    const [[u], [p], [r], [s], [g], [j]] = await Promise.all([
       client`select count(*)::int as n from users where id = ${id}`,
       client`select count(*)::int as n from profiles where user_id = ${id}`,
       client`select count(*)::int as n from rsvps where user_id = ${id}`,
       client`select count(*)::int as n from web_sessions where user_id = ${id}`,
+      client`select count(*)::int as n from web_session_grace where user_id = ${id}`,
       client`select count(*)::int as n from join_attempts where discord_id = ${id}`,
     ]);
     return {
@@ -178,6 +179,7 @@ describe.skipIf(!ambientUrl)("erase-member bounded waits: CLI against disposable
       profiles: (p as { n: number }).n,
       rsvps: (r as { n: number }).n,
       web_sessions: (s as { n: number }).n,
+      web_session_grace: (g as { n: number }).n,
       join_attempts: (j as { n: number }).n,
     };
   };
@@ -311,13 +313,21 @@ describe.skipIf(!ambientUrl)("erase-member bounded waits: CLI against disposable
     expect(dry.status).toBe(0);
     expect(JSON.parse(dry.stdout)).toEqual({
       mode: "dry-run",
-      counts: { users: 1, profiles: 1, rsvps: 1, web_sessions: 2, join_attempts: 1 },
+      counts: {
+        users: 1,
+        profiles: 1,
+        rsvps: 1,
+        web_sessions: 2,
+        web_session_grace: 0,
+        join_attempts: 1,
+      },
     });
     const seeded = {
       users: 1,
       profiles: 1,
       rsvps: 1,
       web_sessions: 2,
+      web_session_grace: 0,
       join_attempts: 1,
     };
     expect(await countsFor(MEMBER_A)).toEqual(seeded);
@@ -325,7 +335,14 @@ describe.skipIf(!ambientUrl)("erase-member bounded waits: CLI against disposable
     const applied = await startCli([`--discord-id=${MEMBER_A}`, "--apply"], cliEnv());
     expect(applied.status).toBe(0);
     expect(JSON.parse(applied.stdout)).toEqual({ mode: "apply", counts: seeded });
-    const empty = { users: 0, profiles: 0, rsvps: 0, web_sessions: 0, join_attempts: 0 };
+    const empty = {
+      users: 0,
+      profiles: 0,
+      rsvps: 0,
+      web_sessions: 0,
+      web_session_grace: 0,
+      join_attempts: 0,
+    };
     expect(await countsFor(MEMBER_A)).toEqual(empty);
     expect(await countsFor(MEMBER_B)).toEqual(seeded);
 
@@ -354,6 +371,7 @@ describe.skipIf(!ambientUrl)("erase-member bounded waits: CLI against disposable
       profiles: 1,
       rsvps: 1,
       web_sessions: 2,
+      web_session_grace: 0,
       join_attempts: 1,
     };
     expect(await countsFor(MEMBER_A)).toEqual(seeded);
@@ -374,6 +392,7 @@ describe.skipIf(!ambientUrl)("erase-member bounded waits: CLI against disposable
       profiles: 1,
       rsvps: 1,
       web_sessions: 2,
+      web_session_grace: 0,
       join_attempts: 1,
     };
     expect(await countsFor(MEMBER_A)).toEqual(seeded);
@@ -398,6 +417,7 @@ describe.skipIf(!ambientUrl)("erase-member bounded waits: CLI against disposable
       profiles: 1,
       rsvps: 1,
       web_sessions: 2,
+      web_session_grace: 0,
       join_attempts: 1,
     };
     expect(JSON.parse(result.stdout)).toEqual({ mode: "apply", counts: seeded });
@@ -406,6 +426,7 @@ describe.skipIf(!ambientUrl)("erase-member bounded waits: CLI against disposable
       profiles: 0,
       rsvps: 0,
       web_sessions: 0,
+      web_session_grace: 0,
       join_attempts: 0,
     });
     expect(await countsFor(MEMBER_B)).toEqual(seeded);

@@ -184,11 +184,25 @@ describe.skipIf(!url)("postgres predecessor grace", () => {
     );
     const sql = fixture.client as unknown as ErasureSql;
     const before = await countMemberRows(sql, USER);
-    expect(before.web_sessions).toBe(2);
+    expect(before).toEqual({
+      users: 0,
+      profiles: 0,
+      rsvps: 0,
+      web_sessions: 1,
+      web_session_grace: 1,
+      join_attempts: 0,
+    });
     expect(await eraseMember(sql, USER, { dryRun: true })).toEqual(before);
     expect(await store.get("erase-source")).not.toBeNull();
     expect(await eraseMember(sql, USER, { dryRun: false })).toEqual(before);
-    expect((await countMemberRows(sql, USER)).web_sessions).toBe(0);
+    expect(await countMemberRows(sql, USER)).toEqual({
+      users: 0,
+      profiles: 0,
+      rsvps: 0,
+      web_sessions: 0,
+      web_session_grace: 0,
+      join_attempts: 0,
+    });
     expect(await store.get("erase-source")).toBeNull();
     expect(await store.get("erase-successor")).toBeNull();
     const grace = await fixture.client<{ user_id: string }[]>`
@@ -201,6 +215,7 @@ describe.skipIf(!url)("postgres predecessor grace", () => {
       profiles: 0,
       rsvps: 0,
       web_sessions: 0,
+      web_session_grace: 0,
       join_attempts: 0,
     });
   });

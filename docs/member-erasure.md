@@ -69,10 +69,11 @@ For ONE Discord id, in one transaction:
 | `web_session_grace` | `user_id` (retired predecessor identity and bearer hashes) |
 | `join_attempts` | `discord_id` |
 
-The output's `web_sessions` count includes rows from both session tables,
-keeping the existing five-key operator output while counting every removed
-session record. Dry-run includes those same rows. The disposable-Postgres proof
-in `test/session-predecessor-grace-postgres.test.ts` checks dry-run, deletion,
+The output counts carry one key per table: `web_sessions` counts live
+session rows and `web_session_grace` counts retired predecessor records, so a
+rotated member shows 1 under each key. Dry-run includes those same rows. The
+disposable-Postgres proofs in `test/session-predecessor-grace-postgres.test.ts`
+and `test/session-predecessor-grace-erasure.test.ts` check dry-run, deletion,
 repeat apply and preservation of another member's live session and grace.
 
 A second apply is a no-op: every count returns 0.
