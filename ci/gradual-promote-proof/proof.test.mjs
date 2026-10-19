@@ -451,9 +451,7 @@ test("proof pin equals the production deploy pin so they cannot drift", () => {
     new URL("../../.github/workflows/deploy-production.yml", import.meta.url),
     "utf8",
   );
-  const match = deploy.match(
-    /TogetherWeOwn\/\.github\/actions\/gradual-promote@([0-9a-f]{40})/,
-  );
+  const match = deploy.match(/TogetherWeOwn\/\.github\/actions\/gradual-promote@([0-9a-f]{40})/);
   assert.ok(match, "production deploy must pin the central gradual-promote action");
   const productionPin = `TogetherWeOwn/.github/actions/gradual-promote@${match[1]}`;
   assert.equal(PINNED_ACTION, productionPin);
