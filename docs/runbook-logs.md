@@ -244,7 +244,7 @@ Warning lines follow the same boundary. `roster upsert failed` and
 `prior session sweep failed` (`src/index.tsx`) and `guild auto-join failed`
 (`src/auth/routes.ts`) carry `request_id` and, where there is one, the exception
 class; they never carry a member's Discord ID. The join journey lines carry
-no member identity either: the prune line carries no fields, the attempt line
+no member identity either: the prune line carries the exception class (never the message), the attempt line
 carries the exception class and `outcome`, and the token-exchange line carries
 the exception class, kind/status, sanitized `source` and `outcome` (see
 [Join journey warnings](#join-journey-warnings)). `csp.report.violation`
