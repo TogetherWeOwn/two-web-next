@@ -57,9 +57,16 @@ describe.skipIf(!process.env.DATABASE_URL)("postgres single-flight + unique lock
       running--;
     };
     const first = flight(name, job);
-    await waitForAdvisoryHeld(name); // first now holds the lock
-    const second = await flight(name, job); // overlaps: must skip
-    release();
+    let second = false;
+    try {
+      await waitForAdvisoryHeld(name); // first now holds the lock
+      second = await flight(name, job); // overlaps: must skip
+    } finally {
+      // Release the gate even when observation times out so the blocked
+      // first flight never leaks an open transaction into teardown.
+      release();
+      await Promise.allSettled([first]);
+    }
     expect(await first).toBe(true);
     expect(second).toBe(false);
     expect(runs).toBe(1);
@@ -73,9 +80,15 @@ describe.skipIf(!process.env.DATABASE_URL)("postgres single-flight + unique lock
     const gate = new Promise<void>((r) => (release = r));
     const nameA = own("a");
     const a = flight(nameA, () => gate);
-    await waitForAdvisoryHeld(nameA);
-    expect(await flight(own("b"), async () => {})).toBe(true);
-    release();
+    try {
+      await waitForAdvisoryHeld(nameA);
+      expect(await flight(own("b"), async () => {})).toBe(true);
+    } finally {
+      // Release the gate even when observation times out so the blocked
+      // flight never leaks an open transaction into teardown.
+      release();
+      await Promise.allSettled([a]);
+    }
     await a;
   });
 

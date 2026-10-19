@@ -210,19 +210,26 @@ describe.skipIf(!process.env.DATABASE_URL)(
       // Observe the edit waiting on the held event row lock instead of guessing
       // with a sleep; the holder pid pins the observation to this transaction.
       const deadline = performance.now() + 2000;
-      for (;;) {
-        const [waiting] = await fixture.client<{ n: number }[]>`
-          select count(*)::int as n from pg_stat_activity
-          where datname = current_database() and wait_event_type = 'Lock'
-            and ${holderPid} = any(pg_blocking_pids(pid))
-            and query ilike '%from events%for update%'`;
-        if (waiting!.n > 0) break;
-        if (performance.now() >= deadline)
-          throw new Error("grant update did not wait on the event row lock");
-        await new Promise((resolve) => setTimeout(resolve, 20));
+      try {
+        for (;;) {
+          const [waiting] = await fixture.client<{ n: number }[]>`
+            select count(*)::int as n from pg_stat_activity
+            where datname = current_database() and wait_event_type = 'Lock'
+              and ${holderPid} = any(pg_blocking_pids(pid))
+              and query ilike '%from events%for update%'`;
+          if (waiting!.n > 0) break;
+          if (performance.now() >= deadline)
+            throw new Error("grant update did not wait on the event row lock");
+          await new Promise((resolve) => setTimeout(resolve, 20));
+        }
+      } finally {
+        // Always drain the holder and the pending update, including when the
+        // wait observation times out, so the row lock never leaks into the
+        // next test's fixture reset.
+        release();
+        await holder;
+        await pending;
       }
-      release();
-      await holder;
       const result = await pending;
       expect(result.status).toBe(422);
       expect(result.body).toMatchObject({
