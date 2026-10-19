@@ -161,6 +161,18 @@ route instead of by ID.
 | `join attempt write failed` | The `join_attempts` analytics `INSERT` threw; the row is lost but the request outcome stands (`recordAttempt` in `src/join/service.ts`). | None on the journey. The gap shows only in `join_attempts` counts. | `SELECT outcome, count(*), max(created_at) FROM join_attempts WHERE created_at > now() - interval '1 hour' GROUP BY outcome`, then compare against `http.request` volume on `/join/callback` for the same window; a gap inside one window matches the warn timestamps. If writes never resume, route database insert health to the authorized operator. Never replay a member join to investigate. | `exception` (class name only, never the message, which can quote the live token or statement text), `outcome` |
 | `discord token exchange failed on the join journey` | One bounded line for three triggers in `src/join/route-callback.ts`: oversized code/state refused before any exchange, an invalid-state branch (state cookie missing or mismatched, journey already consumed or expired, missing `code`, or a swallowed journey-store error from `storeFor().catch(() => null)` / `journeys.consume().catch(() => false)`), or a token-exchange/user-fetch throw classified by `failureMeta` (`src/discord.ts`). | The member already sees the matching recovery page: expired-link retry, or the Discord-down 503. A database-caused invalid-state failure also renders "Join link expired" even though the link itself was fine. | Filter logs for the line and split by `kind` and `outcome`, not by `outcome` alone. `provider_outage`/`rate_limited`/`transport_failure` with `outcome: error` point at Discord or wire health; `expired_grant` with `outcome: expired` is a spent or replayed approval. `provider_reject` with status 400/401 (for example `invalid_client` after a secret rotation, or `invalid_request` from a bad redirect URI) points at `DISCORD_CLIENT_ID`/`DISCORD_CLIENT_SECRET` and the registered redirect URI, not at Discord health. `unknown` with a null status is an app-side throw. A sustained `expired` burst with no matching Discord-side change points at the journey store: check `web_oauth_journeys` and database health via the [alert runbook](runbook-alerts.md). Never replay a member join to investigate. | `exception` (class only, never the message, which can quote the secret), `kind`/`status` (exchange-throw site only), sanitized `source`, `outcome` |
 
+### Auth sign-in warnings
+
+One `console.warn` line is auth-scoped (the oversized code/state refusal in
+`src/auth/routes.ts`). It never pages: the refusal keeps today's generic
+`/?n=signin_failed` redirect, so the member already sees the outcome. The
+replayed/invalid-state branch stays silent and unchanged. Correlate by the
+validated `request_id`, which joins to the `http.request` line.
+
+| Message | Meaning | Member impact | First read-only check | Fields carried |
+| --- | --- | --- | --- | --- |
+| `discord sign-in failed` with `exception: OversizedOAuthParams` | Oversized `code`/`state` on `GET /auth/discord/callback` refused before throttle spend or any journey consume, exchange, or session work. | The generic sign-in failure redirect (`/?n=signin_failed`); the state, next and intended cookies survive for the next real hit. | Filter logs for the message with `exception: OversizedOAuthParams` and compare against `http.request` volume on `/auth/discord/callback`. A burst with no matching Discord-side change points at probing, not at Discord health. Never replay a member sign-in to investigate. | `exception` (class only, never `InvalidState`, never the refused values), validated `request_id` |
+
 ### Missing sync-queue binding warning
 
 `event write-back due but SYNC_EVENT_QUEUE is not bound` (`src/events/sync.ts`,
