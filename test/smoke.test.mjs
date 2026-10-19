@@ -83,13 +83,32 @@ const fixtures = {
   "/discord": [302, null, "", "https://discord.gg/fixture"],
   "/profile": [302, null, "", "/auth/discord"],
   "/admin": [302, null, "", "/auth/discord"],
-  // Session-free public read API: collection envelope and discovery document.
-  // Bodies mirror the acceptance healthy fixtures; the probe asserts the
-  // envelope shape and the OpenAPI marker, not fixture contents.
+  // Session-free public read API: collection envelope, one missing event
+  // (404 not_found, mirroring the real handler), community snapshot, join
+  // handoff, and discovery document. Bodies mirror the acceptance healthy
+  // fixtures; the probe asserts each envelope shape and the OpenAPI marker,
+  // not fixture contents.
   "/api/public/events": [
     200,
     "application/json",
     '{"data":[],"page":1,"limit":20,"meta":{"current_page":1,"per_page":20,"total":0,"last_page":1}}',
+  ],
+  // The fixed probe key exists in no database, so like the real handler
+  // (src/public-data/routes.ts) the stub answers 404 not_found.
+  "/api/public/events/00000000000000000000000001": [
+    404,
+    "application/json",
+    '{"error":{"code":"not_found","message":"No published event with that key."}}',
+  ],
+  "/api/public/community": [
+    200,
+    "application/json",
+    '{"member_count":123,"online_count":12,"ranks":[{"key":"veterans","label":"Veterans","member_count":42}]}',
+  ],
+  "/api/public/join": [
+    200,
+    "application/json",
+    '{"intro":"Approve once with Discord and we will add you to the server.","invite_url":"https://discord.gg/fixture"}',
   ],
   "/openapi.json": [
     200,
@@ -190,7 +209,7 @@ test("CLI passes every route without following redirects or carrying cookies", a
   const { url, requests } = await stub(t);
   const result = await cli([url]);
   assert.equal(result.code, 0, result.output);
-  assert.match(result.output, /20 routes, 0 failed assertions/);
+  assert.match(result.output, /23 routes, 0 failed assertions/);
   assert.deepEqual(
     requests.map((r) => r.path),
     Object.keys(fixtures),
@@ -204,8 +223,8 @@ test("version override pins every gradual-promotion probe to the new version", a
   const override = 'two-web-next-production="22345678-1234-1234-1234-123456789abc"';
   const result = await cli([url, "--version-override", override]);
   assert.equal(result.code, 0, result.output);
-  assert.match(result.output, /20 routes, 0 failed assertions/);
-  assert.equal(requests.length, 20);
+  assert.match(result.output, /23 routes, 0 failed assertions/);
+  assert.equal(requests.length, 23);
   assert.ok(requests.every((r) => r.override === override));
 });
 
@@ -228,7 +247,7 @@ test("version override refuses a healthy /up that identifies another Worker vers
   const result = await run(url, { versionOverride: override });
   assert.equal(result.ok, false, result.output);
   assert.match(result.output, /FAIL \/up: expected revision\.version_id/);
-  assert.equal(requests.length, 20);
+  assert.equal(requests.length, 23);
   assert.ok(requests.every((r) => r.override === override));
 });
 
@@ -317,7 +336,7 @@ test("version override passes when the candidate version answers healthy", async
   const result = await run(url, { versionOverride: override });
   assert.equal(result.ok, true, result.output);
   assert.ok(result.output.includes("PASS /up"), result.output);
-  assert.equal(requests.length, 20);
+  assert.equal(requests.length, 23);
   assert.ok(requests.every((r) => r.override === override));
 });
 
@@ -354,7 +373,7 @@ for (const path of Object.keys(fixtures)) {
     assert.equal(result.ok, false);
     assert.ok(result.output.includes(`FAIL ${path}: expected HTTP`), result.output);
     assert.match(result.output, /actual HTTP 503/);
-    assert.equal(requests.length, 20);
+    assert.equal(requests.length, 23);
   });
 }
 
@@ -388,6 +407,115 @@ for (const path of Object.keys(fixtures).filter((path) => fixtures[path][1])) {
     assert.ok(!result.output.includes("upstream fallback"));
   });
 }
+
+test("a broken single-event error envelope served with HTTP 404 fails only that entry", async (t) => {
+  const brokenBodies = [
+    // A success envelope where the missing-event error belongs.
+    JSON.stringify({
+      event_key: "00000000000000000000000001",
+      title: "Fixture game night",
+      status: "published",
+      rsvp_open: true,
+      synced_to_discord: false,
+      going_count: 3,
+    }),
+    // Empty object: no envelope at all.
+    "{}",
+    // A collection array instead of the error object.
+    "[]",
+    // Wrong error code.
+    JSON.stringify({ error: { code: "unavailable", message: "Event data is unavailable." } }),
+    // Missing message.
+    JSON.stringify({ error: { code: "not_found" } }),
+    // Empty message.
+    JSON.stringify({ error: { code: "not_found", message: "" } }),
+    // Not JSON at all.
+    "event is temporarily unavailable",
+  ];
+  for (const body of brokenBodies) {
+    const { url } = await stub(t, (route, result) => {
+      if (route === "/api/public/events/00000000000000000000000001") result.body = body;
+    });
+    const result = await run(url);
+    assert.equal(result.ok, false, body);
+    assert.ok(
+      result.output.includes("FAIL /api/public/events/00000000000000000000000001: expected"),
+      result.output,
+    );
+    assert.match(result.output, /^PASS \/api\/public\/events$/m, `${body}\n${result.output}`);
+    assert.match(result.output, /^PASS \/api\/public\/community$/m, `${body}\n${result.output}`);
+    assert.match(result.output, /^PASS \/api\/public\/join$/m, `${body}\n${result.output}`);
+  }
+});
+
+test("a broken community snapshot served with HTTP 200 fails only that entry", async (t) => {
+  const brokenBodies = [
+    // The public error envelope, mis-served as a success.
+    JSON.stringify({ error: { code: "unavailable", message: "Event data is unavailable." } }),
+    // Empty object: no envelope at all.
+    "{}",
+    // Ranks is not an array.
+    JSON.stringify({ member_count: 123, online_count: 12, ranks: {} }),
+    // Counts with the wrong types (unknown must read as null, never "0").
+    JSON.stringify({ member_count: "123", online_count: 12, ranks: [] }),
+    // Rank row missing its member_count.
+    JSON.stringify({
+      member_count: 123,
+      online_count: 12,
+      ranks: [{ key: "veterans", label: "Veterans" }],
+    }),
+    // Not JSON at all.
+    "community snapshot unavailable",
+  ];
+  for (const body of brokenBodies) {
+    const { url } = await stub(t, (route, result) => {
+      if (route === "/api/public/community") result.body = body;
+    });
+    const result = await run(url);
+    assert.equal(result.ok, false, body);
+    assert.ok(result.output.includes("FAIL /api/public/community: expected"), result.output);
+    assert.match(result.output, /^PASS \/api\/public\/join$/m, `${body}\n${result.output}`);
+    assert.match(result.output, /^PASS \/openapi\.json$/m, `${body}\n${result.output}`);
+  }
+});
+
+test("a broken join handoff served with HTTP 200 fails only that entry", async (t) => {
+  const brokenBodies = [
+    // The public error envelope, mis-served as a success.
+    JSON.stringify({ error: { code: "rate_limited", message: "Too many requests." } }),
+    // Empty object: no envelope at all.
+    "{}",
+    // Missing invite.
+    JSON.stringify({ intro: "Approve once with Discord and we will add you to the server." }),
+    // Non-HTTPS invite.
+    JSON.stringify({
+      intro: "Approve once with Discord and we will add you to the server.",
+      invite_url: "http://discord.gg/fixture",
+    }),
+    // Not JSON at all.
+    "join handoff unavailable",
+  ];
+  for (const body of brokenBodies) {
+    const { url } = await stub(t, (route, result) => {
+      if (route === "/api/public/join") result.body = body;
+    });
+    const result = await run(url);
+    assert.equal(result.ok, false, body);
+    assert.ok(result.output.includes("FAIL /api/public/join: expected"), result.output);
+    assert.match(result.output, /^PASS \/api\/public\/community$/m, `${body}\n${result.output}`);
+    assert.match(result.output, /^PASS \/openapi\.json$/m, `${body}\n${result.output}`);
+  }
+});
+
+test("null community counts pass (collectors down reads as unknown, never 0)", async (t) => {
+  const { url } = await stub(t, (route, result) => {
+    if (route === "/api/public/community")
+      result.body = '{"member_count":null,"online_count":null,"ranks":[]}';
+  });
+  const result = await run(url);
+  assert.equal(result.ok, true, result.output);
+  assert.match(result.output, /^PASS \/api\/public\/community$/m, result.output);
+});
 
 test("rejects a foreign robots Sitemap host without leaking the body", async (t) => {
   const { url } = await stub(t, (route, result) => {
@@ -693,7 +821,7 @@ test("past events accepts rendered Archive but rejects rendered Upcoming with ar
     });
     const result = await run(url);
     assert.equal(result.ok, expected, result.output);
-    assert.equal(requests.length, 20);
+    assert.equal(requests.length, 23);
     if (!expected) {
       assert.match(
         result.output,
@@ -1548,7 +1676,7 @@ for (const [robotsTag, expected] of [
     });
     const result = await run(url);
     assert.equal(result.ok, expected, result.output);
-    assert.equal(requests.length, 20);
+    assert.equal(requests.length, 23);
     if (!expected) {
       for (const path of ["/about", "/admin"]) {
         assert.ok(
@@ -1633,7 +1761,7 @@ for (const [location, expected] of [
     });
     const result = await run(url);
     assert.equal(result.ok, expected, result.output);
-    assert.equal(requests.length, 20);
+    assert.equal(requests.length, 23);
     assert.ok(!result.output.includes("never-log-this"));
     if (!expected) {
       assert.match(
@@ -1679,7 +1807,7 @@ test("connection failures include route and expected versus actual", async (t) =
     result.output,
     /FAIL \/up: expected HTTP response and body within timeout; actual TypeError/,
   );
-  assert.match(result.output, /20 routes, 20 failed assertions/);
+  assert.match(result.output, /23 routes, 23 failed assertions/);
 });
 
 test("invalid input is rejected before making requests", async () => {
@@ -1707,7 +1835,7 @@ test("allowIndexable passes apex HTML without the staging noindex", async (t) =>
   });
   const result = await run(url, { allowIndexable: true });
   assert.equal(result.ok, true, result.output);
-  assert.equal(requests.length, 20);
+  assert.equal(requests.length, 23);
   assert.ok(requests.every((r) => r.method === "GET" && r.cookie === undefined));
 });
 
@@ -1743,5 +1871,5 @@ test("CLI --allow-indexable reaches the apex posture", async (t) => {
   });
   const result = await cli([url, "--allow-indexable"]);
   assert.equal(result.code, 0, result.output);
-  assert.match(result.output, /20 routes, 0 failed assertions/);
+  assert.match(result.output, /23 routes, 0 failed assertions/);
 });

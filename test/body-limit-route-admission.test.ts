@@ -1,10 +1,11 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { serializeSigned } from "hono/utils/cookie";
 import app from "./app";
 import { profilesApp } from "../src/profiles/routes";
 import { BODY_LIMIT_BYTES } from "../src/body-limit";
 import type { Env } from "../src/env";
 import { createMemorySessionStore, hashToken, newSessionToken } from "../src/sessions";
+import { SHIELD_REFUSAL_AUDIT_RATE } from "../src/agent-events/shield";
 
 // No sockets: model only the existing shield SQL and audit writes.
 const fixture = vi.hoisted(() => ({
@@ -14,6 +15,7 @@ const fixture = vi.hoisted(() => ({
   ends: 0,
   connects: 0,
   failAudit: false,
+  failGrants: false,
   options: [] as Record<string, unknown>[],
 }));
 vi.mock("postgres", () => ({
@@ -25,6 +27,8 @@ vi.mock("postgres", () => ({
       fixture.queries.push(query);
       if (fixture.failAudit && query.includes("agent_event_audits"))
         throw new Error("private audit failure");
+      if (fixture.failGrants && query.includes("agent_event_grants"))
+        throw new Error("private grant failure");
       if (query.includes("SELECT count(*)")) return [{ n: fixture.hits, wait: 31 }];
       if (query.includes("INSERT INTO agent_event_hits")) {
         fixture.hits++;
@@ -98,7 +102,12 @@ beforeEach(() => {
   fixture.ends = 0;
   fixture.connects = 0;
   fixture.failAudit = false;
+  fixture.failGrants = false;
   fixture.options = [];
+});
+
+afterEach(() => {
+  vi.restoreAllMocks();
 });
 
 describe("profile write admission", () => {
@@ -307,6 +316,10 @@ describe("agent ingress admission", () => {
   it.each([null, "test-only-machine-credential"])(
     "spent bucket %s refuses under-cap 429; over-cap is 413 first",
     async (credential) => {
+      // Sampler forced off (`rate < rate` is false): exact zero audits,
+      // deterministically. Row shape under sampling is pinned by the
+      // shield-429-audit suite.
+      vi.spyOn(Math, "random").mockReturnValue(SHIELD_REFUSAL_AUDIT_RATE);
       fixture.hits = 60;
       // Under-cap still reaches the spent bucket and refuses 429.
       for (let i = 0; i < 2; i++) {
@@ -328,10 +341,10 @@ describe("agent ingress admission", () => {
         expect(ctx.waitUntil).toHaveBeenCalledOnce();
       }
       expect(fixture.hits).toBe(60);
-      // Outer-shield refusals now write one denied/rate_limited audit row each
-      // (no grant lookup, no hit row).
+      // Sampler forced off: exact zero audit INSERTs with no hit row and no
+      // grant lookup either way.
       expect(fixture.queries.some((q) => /agent_event_grants/.test(q))).toBe(false);
-      expect(fixture.queries.filter((q) => q.includes("agent_event_audits"))).toHaveLength(2);
+      expect(fixture.queries.filter((q) => q.includes("agent_event_audits"))).toHaveLength(0);
       expect(fixture.ends).toBe(2);
       // Over-cap with the same spent bucket never reads the bucket: 413, no
       // new statements, hits, audits or closes.
@@ -390,16 +403,23 @@ describe("agent ingress admission", () => {
   );
 
   it("retains the static ingress 500 shape and closes the client on service failure", async () => {
-    fixture.failAudit = true;
+    // Grantless requests are refused 401 before any store touch, so an audit
+    // failure can no longer trigger this path. Fail the first DB touch of an
+    // authenticated request instead: the grant lookup. The static 500 shape,
+    // client close and error redaction are unchanged.
+    fixture.failGrants = true;
     const log = vi.spyOn(console, "error").mockImplementation(() => {});
     try {
       const ctx = execution();
-      const response = await app.request(
-        "/api/agent-events",
-        { method: "POST", body: "{}" },
-        ingressEnv,
-        ctx,
-      );
+      const request = new Request(new URL("/api/agent-events", env.APP_URL), {
+        method: "POST",
+        body: "{}",
+        headers: {
+          accept: "application/json",
+          authorization: "Bearer test-only-machine-credential",
+        },
+      });
+      const response = await app.request(request, undefined, ingressEnv, ctx);
       expect(response.status).toBe(500);
       expect(await response.json()).toEqual({
         reason: "internal_error",
@@ -407,7 +427,7 @@ describe("agent ingress admission", () => {
       });
       expect(fixture.ends).toBe(1);
       expect(ctx.waitUntil).toHaveBeenCalledOnce();
-      expect(JSON.stringify(log.mock.calls)).not.toContain("private audit failure");
+      expect(JSON.stringify(log.mock.calls)).not.toContain("private grant failure");
     } finally {
       log.mockRestore();
     }
@@ -483,13 +503,15 @@ describe("agent ingress admission", () => {
         await pending;
       }
       const response = await pending;
-      expect(response.status).toBe(finish === "complete" ? 422 : 400);
+      expect(response.status).toBe(finish === "complete" ? 401 : 400);
       expect(await response.text()).not.toContain("private withheld upload failure");
       if (finish === "complete") {
-        // Admitted after EOF: one shield hit, one audit, driver bounds apply.
+        // Admitted after EOF: one shield hit, then the grant resolution
+        // refuses the grantless upload 401 (not 422) with no audit row.
+        // Driver bounds apply either way.
         expect(fixture.hits).toBe(1);
         expect(fixture.connects).toBe(1);
-        expect(fixture.queries.filter((q) => q.includes("agent_event_audits"))).toHaveLength(1);
+        expect(fixture.queries.filter((q) => q.includes("agent_event_audits"))).toHaveLength(0);
         expect(fixture.ends).toBe(1);
         expect(ctx.waitUntil).toHaveBeenCalledOnce();
         expect(fixture.options).toEqual([
@@ -512,7 +534,7 @@ describe("agent ingress admission", () => {
     },
   );
 
-  it("charges one shield hit at the cap and for normal/malformed requests", async () => {
+  it("charges one shield hit at the cap and refuses grantless requests before envelope validation", async () => {
     for (const body of [" ".repeat(BODY_LIMIT_BYTES.agent - 2) + "{}", "{}", "bad-json"]) {
       const response = await app.request(
         "/api/agent-events",
@@ -520,11 +542,14 @@ describe("agent ingress admission", () => {
         ingressEnv,
         execution(),
       );
-      expect(response.status).toBe(422);
-      expect(await response.json()).toMatchObject({ reason: "validation_failed" });
+      // No credential is presented and this fixture admits no grants, so the
+      // grant resolution refuses 401 before the envelope is validated (no
+      // audit row). One shield hit is still charged per request either way.
+      expect(response.status).toBe(401);
+      expect(await response.json()).toMatchObject({ reason: "unauthenticated" });
     }
     expect(fixture.hits).toBe(3);
-    expect(fixture.queries.filter((q) => q.includes("agent_event_audits"))).toHaveLength(3);
+    expect(fixture.queries.filter((q) => q.includes("agent_event_audits"))).toHaveLength(0);
     expect(fixture.ends).toBe(3);
   });
 });
