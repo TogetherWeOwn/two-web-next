@@ -156,6 +156,8 @@ async function stub(t, change = () => {}) {
       headers: {
         "content-security-policy": "default-src 'self'; frame-ancestors 'none'",
         "x-content-type-options": "nosniff",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "x-frame-options": "DENY",
         ...(type ? { "content-type": `${type}; charset=UTF-8` } : {}),
         ...(type === "text/html" ? { "x-robots-tag": "noindex, nofollow" } : {}),
         // Cutover identity (TOG-12863): the live /up answers as two-web-next
@@ -380,6 +382,10 @@ for (const path of Object.keys(fixtures)) {
 for (const [header, path, expected] of [
   ["content-security-policy", "/events.rss", "nonempty Content-Security-Policy"],
   ["x-content-type-options", "/discord", "X-Content-Type-Options nosniff"],
+  // The static security headers apply to every response, not only HTML:
+  // one non-HTML route and one HTML route pin the unconditional scope.
+  ["referrer-policy", "/events.rss", "Referrer-Policy strict-origin-when-cross-origin"],
+  ["x-frame-options", "/about", "X-Frame-Options DENY"],
   ["x-robots-tag", "/about", "staging X-Robots-Tag noindex/none (unscoped)"],
   ["x-robots-tag", "/__smoke_unknown_route__", "staging X-Robots-Tag noindex/none (unscoped)"],
 ]) {
@@ -391,6 +397,25 @@ for (const [header, path, expected] of [
     assert.equal(result.ok, false);
     assert.ok(
       result.output.includes(`FAIL ${path}: expected ${expected}; actual missing`),
+      result.output,
+    );
+  });
+}
+
+for (const [header, path, wrong, expected] of [
+  ["referrer-policy", "/about", "unsafe-url", "Referrer-Policy strict-origin-when-cross-origin"],
+  // SAMEORIGIN is the wrong value, not an acceptable spelling of DENY; the
+  // redirect response pins the check outside HTML routes like nosniff above.
+  ["x-frame-options", "/discord", "SAMEORIGIN", "X-Frame-Options DENY"],
+]) {
+  test(`rejects wrong ${header} on ${path}`, async (t) => {
+    const { url } = await stub(t, (route, result) => {
+      if (route === path) result.headers[header] = wrong;
+    });
+    const result = await run(url);
+    assert.equal(result.ok, false);
+    assert.ok(
+      result.output.includes(`FAIL ${path}: expected ${expected}; actual ${wrong}`),
       result.output,
     );
   });
@@ -530,6 +555,57 @@ test("rejects a foreign robots Sitemap host without leaking the body", async (t)
     /FAIL \/robots\.txt: expected robots Sitemap: .*sitemap_index\.xml; actual Sitemap line missing or foreign/,
   );
   assert.doesNotMatch(result.output, /togetherweown\.com/);
+});
+
+test("rejects a comment-only robots Sitemap line", async (t) => {
+  const { url } = await stub(t, (route, result) => {
+    if (route === "/robots.txt") result.body = result.body.replace("Sitemap:", "# Sitemap:");
+  });
+  const result = await run(url);
+  assert.equal(result.ok, false);
+  assert.match(
+    result.output,
+    /FAIL \/robots\.txt: expected robots Sitemap: .*sitemap_index\.xml; actual Sitemap line missing or foreign/,
+  );
+});
+
+test("rejects a split-line robots Sitemap directive", async (t) => {
+  const { url } = await stub(t, (route, result) => {
+    if (route === "/robots.txt") result.body = result.body.replace("Sitemap:", "Sitemap:\n");
+  });
+  const result = await run(url);
+  assert.equal(result.ok, false);
+  assert.match(
+    result.output,
+    /FAIL \/robots\.txt: expected robots Sitemap: .*sitemap_index\.xml; actual Sitemap line missing or foreign/,
+  );
+});
+
+test("rejects a split-line robots Sitemap directive with a comment before the URL", async (t) => {
+  const { url } = await stub(t, (route, result) => {
+    if (route === "/robots.txt") result.body = result.body.replace("Sitemap:", "Sitemap: # note\n");
+  });
+  const result = await run(url);
+  assert.equal(result.ok, false);
+  assert.match(
+    result.output,
+    /FAIL \/robots\.txt: expected robots Sitemap: .*sitemap_index\.xml; actual Sitemap line missing or foreign/,
+  );
+});
+
+// Comment parity with the cutover robots gate: comments are stripped
+// before the anchored Sitemap match, so a trailing comment after a real
+// same-origin Sitemap line stays a pass, never a failure.
+test("passes a same-origin robots Sitemap line with a trailing comment", async (t) => {
+  const { url } = await stub(t, (route, result) => {
+    if (route === "/robots.txt")
+      result.body = result.body.replace(
+        "/sitemap_index.xml\n",
+        "/sitemap_index.xml # this environment\n",
+      );
+  });
+  const result = await run(url);
+  assert.equal(result.ok, true, result.output);
 });
 
 test("rejects foreign sitemap locs and an empty sitemap", async (t) => {

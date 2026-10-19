@@ -67,6 +67,12 @@ export type SyncAttempt = {
   /** Null while a claim's result is unsettled, or after retirement/exhaustion. */
   nextAttemptAt: Date | null;
   /**
+   * Terminal-intent marker: the redacted definitive reason, recorded while
+   * state stays pending so redelivery re-runs settlement without the bot
+   * flow. Null until a definitive outcome is noted; absent on older rows.
+   */
+  terminalReason?: string | null;
+  /**
    * Current `events.discord_event_id` at snapshot/claim time. Null means the
    * event was never mirrored to Discord; undefined is a pre-mirror snapshot
    * (hermetic doubles) and is treated as mirrored to preserve the bot path.
@@ -102,6 +108,12 @@ export interface EventStore {
   deferSync(attempt: SyncAttempt, nextAttemptAt: Date | null): Promise<void>;
   /** Settle only a definitive refusal. */
   failSync(idempotencyKey: string): Promise<void>;
+  /**
+   * Record terminal intent for a definitive refusal without settling it:
+   * first-writer-wins marker while the attempt stays pending. Optional so
+   * older doubles keep compiling; the consumer skips noting when absent.
+   */
+  noteTerminalIntent?(idempotencyKey: string, reason: string): Promise<void>;
   needsSync(eventKey: string): Promise<boolean>;
   /** Recovery preserves request identity, eligibility and attempts across carriers. */
   pendingSync(eventKey: string): Promise<SyncAttempt | null>;

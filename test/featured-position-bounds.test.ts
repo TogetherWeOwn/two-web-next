@@ -47,7 +47,9 @@ describe("featured position parser bounds", () => {
     expect(() => parseFeaturedForm(form(raw))).toThrow(ValidationError);
     try {
       parseFeaturedForm(form(raw));
+      expect.unreachable(`rejected position accepted: ${raw}`);
     } catch (error) {
+      expect(error).toBeInstanceOf(ValidationError);
       expect((error as ValidationError).fields).toEqual({ position: expect.any(String) });
     }
   });

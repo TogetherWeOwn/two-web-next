@@ -512,7 +512,7 @@ export async function runChecks(
       .split(/\r?\n/)
       .map((line) => line.split("#", 1)[0])
       .join("\n");
-    const robotsSitemaps = [...body.matchAll(/^\s*Sitemap:\s*(\S+)\s*$/gim)].map(
+    const robotsSitemaps = [...body.matchAll(/^[ \t]*Sitemap:[ \t]*(\S+)[ \t]*$/gim)].map(
       (match) => match[1],
     );
     record(

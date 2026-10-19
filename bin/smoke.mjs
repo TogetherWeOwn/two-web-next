@@ -265,6 +265,19 @@ export async function smoke(
         "X-Content-Type-Options nosniff",
         headers.get("x-content-type-options") ?? "missing",
       );
+      // Static security headers (src/headers.ts SECURITY_HEADERS): every
+      // response carries them, not only HTML, so these run unconditionally
+      // like the CSP/nosniff pair above. Values are case-insensitive.
+      check(
+        headers.get("referrer-policy")?.toLowerCase() === "strict-origin-when-cross-origin",
+        "Referrer-Policy strict-origin-when-cross-origin",
+        headers.get("referrer-policy") ?? "missing",
+      );
+      check(
+        headers.get("x-frame-options")?.toLowerCase() === "deny",
+        "X-Frame-Options DENY",
+        headers.get("x-frame-options") ?? "missing",
+      );
       const contentType = headers.get("content-type")?.split(";")[0].trim().toLowerCase();
       // Indexing posture follows the probed origin (src/headers.ts robotsTagFor):
       // staging and other non-apex hosts send X-Robots-Tag noindex on returned
@@ -464,8 +477,25 @@ export async function smoke(
       if (route.path === "/robots.txt") {
         // Per-environment robots (W16b TOG-11942): the Sitemap line must name
         // this environment's own origin, never the apex or another env's host.
+        // Comment parity with ci/cutover-check.mjs: "#" starts a comment, so
+        // strip it before the anchored match. A comment-only Sitemap line
+        // cannot pass, while a trailing comment after a real same-origin
+        // line still passes. Horizontal whitespace only: \s would cross
+        // newlines and let a split-line Sitemap directive pass.
         const line = `Sitemap: ${base.origin}/sitemap_index.xml`;
-        check(body.includes(line), `robots ${line}`, "Sitemap line missing or foreign");
+        const stripped = String(body)
+          .split(/\r?\n/)
+          .map((robotsLine) => robotsLine.split("#", 1)[0])
+          .join("\n");
+        const sitemaps = [...stripped.matchAll(/^[ \t]*Sitemap:[ \t]*(\S+)[ \t]*$/gim)].map(
+          (match) => match[1],
+        );
+        const expectedSitemap = `${base.origin}/sitemap_index.xml`;
+        check(
+          sitemaps.length > 0 && sitemaps.every((url) => url === expectedSitemap),
+          `robots ${line}`,
+          "Sitemap line missing or foreign",
+        );
       }
       if (route.path === "/.well-known/security.txt") {
         // RFC 9116 publication (S8): field-parsed assertions shared with the
