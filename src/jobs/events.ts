@@ -87,8 +87,7 @@ export function pgEventStore(
 ): EventStore {
   // Operational previews cannot combine a fresh timestamp with cached source reads.
   // https://developers.cloudflare.com/hyperdrive/concepts/query-caching/
-  const readMarker = (client: ReturnType<typeof postgres> | TxClient = sql) =>
-    bypassReadCache ? client`, clock_timestamp() as preview_read_at` : client``;
+  const readMarker = () => (bypassReadCache ? sql`, clock_timestamp() as preview_read_at` : sql``);
   // Bound every handler statement on its owning connection, including the
   // prepare fallback read. SET LOCAL expires on commit/rollback; callers that
   // already own a transaction must not issue a nested BEGIN.
@@ -142,7 +141,7 @@ export function pgEventStore(
       dueBefore === undefined ? sql`` : sql` or blocking.next_attempt_at > ${dueBefore}`;
     if (eventKey === null && typeof limit === "number" && Number.isFinite(limit) && limit > 0) {
       const page =
-        await client`select event_key, count(*) over() as total${readMarker(client)} from events
+        await client`select event_key, count(*) over() as total${readMarker()} from events
         where (${eventKey}::text is null or event_key = ${eventKey}) and (
           exists (select 1 from event_sync_attempts pending
             where pending.event_id = events.id and pending.state = 'pending'
@@ -378,7 +377,7 @@ export function pgEventStore(
     async pendingSync(eventKey) {
       return withSyncTimeout(async (sql) => {
         const [row] =
-          await sql`select a.*, e.discord_event_id${readMarker(sql)} from event_sync_attempts a join events e on e.id = a.event_id
+          await sql`select a.*, e.discord_event_id${readMarker()} from event_sync_attempts a join events e on e.id = a.event_id
         where e.event_key = ${eventKey} and a.state = 'pending'`;
         onSourceRead?.({
           statement: "pending_sync",
