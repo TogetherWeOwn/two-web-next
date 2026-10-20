@@ -22,6 +22,7 @@ import {
 } from "../discord";
 import type { Env } from "../env";
 import { STATE_TTL_SECONDS } from "../index";
+import { databaseUnavailable } from "../error-responses";
 import { safeNext } from "../join/service";
 import { safeRequestId } from "../request-log";
 import { QA_HEADER, qaEnabled, qaIdentity, qaTokenMatches, type QaIdentity } from "../qa";
@@ -314,8 +315,10 @@ export function registerAuthRoutes(app: Hono<{ Bindings: Env }>, hooks: AuthHook
           }
         } catch {
           // Authoritative, not best-effort: a failed revocation must not clear
-          // this browser's cookie as if the server row were gone.
-          return c.text("Sign-out temporarily unavailable", 503);
+          // this browser's cookie as if the server row were gone. Negotiated
+          // like other 503s (JSON for fetch, branded page for nav), with the
+          // correlation id and no driver detail.
+          return databaseUnavailable(c);
         }
       }
       deleteCookie(c, SESSION_COOKIE, { path: "/", secure: true, httpOnly: true, sameSite: "Lax" });

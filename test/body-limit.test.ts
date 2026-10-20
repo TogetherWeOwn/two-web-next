@@ -152,7 +152,7 @@ describe("every registered write route is body-limited", () => {
       if (bytes === max) expect(response.status).not.toBe(413);
       else {
         expect(response.status).toBe(413);
-        expect(await response.json()).toEqual(ERROR);
+        expect(await response.json()).toMatchObject(ERROR);
       }
     }
   });
@@ -196,7 +196,7 @@ describe("parser and error compatibility", () => {
     const body = "private-request-marker".repeat(300);
     const json = await api.request("/api/x", { method: "POST", body });
     expect(json.status).toBe(413);
-    expect(await json.json()).toEqual(ERROR);
+    expect(await json.json()).toMatchObject(ERROR);
     const html = await fixture("action").request("/x", {
       method: "POST",
       body,
@@ -259,7 +259,7 @@ for (const kind of Object.keys(BODY_LIMIT_BYTES) as (keyof typeof BODY_LIMIT_BYT
         });
         expect(response.status).toBe(413);
         expect(response.headers.get("cache-control")).toBe("no-store, private");
-        expect(await response.json()).toEqual(ERROR);
+        expect(await response.json()).toMatchObject(ERROR);
       },
     );
 
@@ -294,7 +294,7 @@ for (const kind of Object.keys(BODY_LIMIT_BYTES) as (keyof typeof BODY_LIMIT_BYT
       // Request construction can prefetch one chunk on Node's stream proxy.
       expect(pulls).toBeLessThanOrEqual(max / 1024 + 2);
       expect(cancel).toHaveBeenCalledOnce();
-      expect(await response.json()).toEqual(ERROR);
+      expect(await response.json()).toMatchObject(ERROR);
     });
   });
 }

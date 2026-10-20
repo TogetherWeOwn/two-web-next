@@ -71,6 +71,7 @@ import { topZeroResultSearches } from "../events/search-log";
 import { JOIN_OUTCOMES } from "../join/service";
 import { databaseUrl } from "../db/connection";
 import { isDatabaseQueryCancellation, isDatabaseUnavailable } from "../db/errors";
+import { safeRequestId } from "../request-log";
 import { dashboardJoinFunnel, FUNNEL_READ_DEADLINE_MS } from "./join-funnel";
 import { getJoinAttempt, listActivityLog, listJoinAttempts, listRoster } from "./reads";
 import { parseRecordId } from "./record-id";
@@ -265,6 +266,19 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
         if (result.status === "rejected" && !isDatabaseQueryCancellation(result.reason)) {
           throw result.reason;
         }
+      }
+      // One correlated line per degraded widget: a cancelled settlement omits
+      // its section but stays 200, so the log distinguishes degraded from
+      // healthy. Outages threw above; fulfilled undefined stays silent.
+      const requestId = safeRequestId(c.get("requestId"));
+      if (funnelResult.status !== "fulfilled") {
+        console.warn("dashboard widget degraded", { widget: "funnel", request_id: requestId });
+      }
+      if (zeroSearchesResult.status !== "fulfilled") {
+        console.warn("dashboard widget degraded", {
+          widget: "zero_searches",
+          request_id: requestId,
+        });
       }
       funnel = funnelResult.status === "fulfilled" ? funnelResult.value : undefined;
       zeroSearches =

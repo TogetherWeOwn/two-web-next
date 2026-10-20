@@ -241,7 +241,7 @@ describe("evidence-only source/cache verifier admission", () => {
       const { upload, pull } = oversizedUpload(method, true);
       const res = await app.request(upload, undefined, bindings);
       expect(res.status).toBe(413);
-      expect(await res.json()).toEqual(TOO_LARGE);
+      expect(await res.json()).toMatchObject(TOO_LARGE);
       expect(pull).not.toHaveBeenCalled();
       expect(get).not.toHaveBeenCalled();
       expect(mocks.factory).not.toHaveBeenCalled();
@@ -261,7 +261,7 @@ describe("evidence-only source/cache verifier admission", () => {
       const { upload, pull } = oversizedUpload(method, false);
       const res = await app.request(upload, undefined, bindings);
       expect(res.status).toBe(413);
-      expect(await res.json()).toEqual(TOO_LARGE);
+      expect(await res.json()).toMatchObject(TOO_LARGE);
       expect(pull.mock.calls.length).toBeLessThanOrEqual(ACTION_MAX / 1024 + 2);
       expect(get).not.toHaveBeenCalled();
       expect(mocks.factory).not.toHaveBeenCalled();

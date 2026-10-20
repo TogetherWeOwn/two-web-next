@@ -407,12 +407,20 @@ describe("public session failure boundaries", () => {
         bindings,
       );
       // Main #239: a failed revocation must not clear this browser's cookie
-      // as if the server row were gone. The body carries no driver details.
+      // as if the server row were gone. The negotiated 503 carries the
+      // correlation id and no driver details.
       expect(res.status).toBe(503);
       expect(res.headers.get("location")).toBeNull();
       expect(store.revoke).toHaveBeenCalledOnce();
       expect(res.headers.getSetCookie()).toEqual([]);
-      expect(await res.text()).toBe("Sign-out temporarily unavailable");
+      expect(res.headers.get("content-type")).toContain("text/html");
+      const requestId = res.headers.get("x-request-id");
+      expect(requestId).toBeTruthy();
+      const html = await res.text();
+      expect(html).toContain("We will be right back");
+      expect(html).toContain('data-testid="error-support-reference"');
+      expect(html).toContain(requestId!);
+      expect(html).not.toMatch(/ECONNREFUSED|private revocation bug/i);
     },
   );
   it.each([
