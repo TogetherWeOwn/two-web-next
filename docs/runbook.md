@@ -51,7 +51,7 @@ follow its linked legacy-origin readiness precondition, which still applies.
 | `error.alert` flood or pager storm | [48h post-flip watch](#48h-post-flip-watch) | `npx wrangler tail two-web-next-alerts --search '"delivery":"ops.alert.'`; correlate `request_id` per [runbook-logs.md](runbook-logs.md); fingerprints are in [runbook-alerts.md](runbook-alerts.md) | DevOps & Reliability Engineer |
 | `error.spike` alert (aggregate 5xx/error-rate or crash spike) | [Aggregate spike alarm](runbook-alerts.md#aggregate-spike-alarm-errorspike) | Read `script`, `build_sha`, `errors`/`crashes` and `error_rate` in the page; open the `logs` dashboard path for that script at the page timestamp and compare against the deploy that produced `build_sha`; crashes with no matching `error.alert` line mean unhandled exceptions or CPU/memory limit kills, so search by outcome, not fingerprint | DevOps & Reliability Engineer |
 | `uptime.down` alert (`/up` red for over two minutes) | [Scheduled `/up` prober: `uptime.down`](runbook-alerts.md#scheduled-up-prober-uptimedown) | Read status in alert; the prober has no corresponding app critical-log line; status zero means transport/timeout, not proof of a database failure; status 200 with missing or wrong `x-two-origin` means `/up` was not served by two-web-next (check DNS and routes), 3xx means a redirect; identify which Tail Worker sent the page (`two-web-next-alerts` vs `two-web-next-alerts-production`) or which webhook channel received it to verify staging vs production target first, then `curl -sS -D - -o /dev/null --max-time 10 https://next.togetherweown.com/up` for staging or apex for production and check `x-two-origin: two-web-next` | DevOps & Reliability Engineer |
-| `queue.failing` or failed-history growth (terminal bot failures, dead-letter backlog) | [Queue containment, drain and failed-job replay](#queue-containment-drain-and-failed-job-replay) | `npx wrangler queues info two-sync-event` and `npx wrangler queues info two-internal-action` (transport metadata only); read the `/up` queue envelope; do not purge or replay | DevOps & Reliability Engineer |
+| `queue.failing` or failed-history growth (terminal bot failures, dead-letter backlog) | [Queue containment, drain and failed-job replay](#queue-containment-drain-and-failed-job-replay) | Choose environment first (no silent default): staging `npx wrangler queues info two-sync-event` and `two-internal-action`, production `two-web-next-production-sync-event` and `two-web-next-production-internal-action` (transport metadata only); read the environment's `/up` queue envelope; do not purge or replay | DevOps & Reliability Engineer |
 | Sign-in or join failing (`/auth/discord/callback`, `/join/discord`, `/join/callback`, `/auth/qa/:identity`) | [Neon / Hyperdrive outage behavior](#neon--hyperdrive-outage-behavior) | `GET /up` readiness first; `GET /robots.txt` proves Worker startup only; on an auth failure stop and do not try another credential | DevOps & Reliability Engineer; through the Director to CISO if member data may have leaked |
 | Events page error state (`/events`, `/events.rss`, `/events.ics`, `/e/:key`) | [Neon / Hyperdrive outage behavior](#neon--hyperdrive-outage-behavior) | `GET /up` plus `ready_wait_severity` and `oldest_ready_wait_age_seconds`; filter `http.request` by route and status in Observability per [runbook-logs.md](runbook-logs.md) | DevOps & Reliability Engineer |
 | Discord rate limiting (sync backoff, `rate_limited` bot sync refusal) | [Queue containment, drain and failed-job replay](#queue-containment-drain-and-failed-job-replay) | `GET /up` queue envelope plus `sync_retry_code` per [runbook-alerts.md](runbook-alerts.md); `rate_limited` is a retryable bot refusal under backoff, not a database outage; read the retry-cause table before touching delivery; do not purge or replay | DevOps & Reliability Engineer |
@@ -1485,42 +1485,149 @@ provisioning them is an Operator step. `event.cancel` is also opt-in on the bot
 (`TWO_INTERNAL_ALLOW_EVENT_CANCEL`); without it a cancelled-event sync is a
 definitive `action_not_allowed` refusal.
 
-For an authorized queue incident, contain delivery without deleting messages:
+### Queue incident targets by environment (checked-in expectations, live readback required)
+
+Checked-in expectations below are parsed from `wrangler.jsonc` (top-level
+staging producers, `env.production` queues, consumers, crons, owner, Tail
+Worker and origin) and `wrangler.jobs.jsonc` (top-level staging consumers,
+crons, owner, Tail Worker and origin). They are expectations only: confirm
+every target with authorized live readback before containment — `queues info`,
+`consumer list`, `deployments status` and `GET /up` on the environment's
+readiness origin. Never assume the planned jobs transfer is already deployed:
+checked-in production consumers and crons remain on
+`two-web-next-production`, and `wrangler.jobs.jsonc` has no production env,
+so a future jobs Worker needs its own reviewed config change plus readback.
+Production incident guidance never silently defaults to staging targets.
+
+| Environment | Queues (checked-in) | Consumer/cron owner (checked-in) | Tail Worker (checked-in) | Readiness origin (checked-in) |
+| --- | --- | --- | --- | --- |
+| staging | `two-sync-event`, `two-internal-action` | `two-web-jobs` | `two-web-next-alerts` | `https://next.togetherweown.com` |
+| production | `two-web-next-production-sync-event`, `two-web-next-production-internal-action` | `two-web-next-production` | `two-web-next-alerts-production` | `https://togetherweown.com` |
+
+#### Staging (read-only metadata)
 
 ```bash
 (
   set -euo pipefail
-  # REMOTE MUTATION: authorized incident containment, not a test.
-  npx --no-install wrangler queues pause-delivery two-sync-event
-  npx --no-install wrangler queues pause-delivery two-internal-action
-  # Remote transport metadata; ledger counts cannot replace it.
+  # READ-ONLY: staging transport metadata, no mutation.
   npx --no-install wrangler queues info two-sync-event
   npx --no-install wrangler queues info two-internal-action
+  npx --no-install wrangler queues consumer list two-sync-event
+  npx --no-install wrangler queues consumer list two-internal-action
+  npx --no-install wrangler deployments status --name two-web-jobs --json
+  curl -sS --max-time 10 https://next.togetherweown.com/up
+  # Tail paging source for staging: two-web-next-alerts.
 )
 ```
 
-Pause is reversible but does not stop producers or the scheduled handler.
-Coordinate producer/writer holds separately; retained messages remain subject to
-Cloudflare queue retention. Do not purge, delete/recreate queues, remove
-consumers, or disable cron by an unreviewed config change to hide an incident.
-After the implementation gate, holds and downstream readiness are explicitly
-cleared, the approved drain starts by resuming the **existing** transport:
+#### Production (read-only metadata)
 
 ```bash
 (
   set -euo pipefail
-  # REMOTE MUTATION: only after the above gates; NOT safe on today's stubs.
-  npx --no-install wrangler queues resume-delivery two-sync-event
-  npx --no-install wrangler queues resume-delivery two-internal-action
+  # READ-ONLY: production transport metadata, no mutation.
+  npx --no-install wrangler queues info two-web-next-production-sync-event
+  npx --no-install wrangler queues info two-web-next-production-internal-action
+  npx --no-install wrangler queues consumer list two-web-next-production-sync-event
+  npx --no-install wrangler queues consumer list two-web-next-production-internal-action
+  npx --no-install wrangler deployments status --name two-web-next-production --json
+  curl -sS --max-time 10 https://togetherweown.com/up
+  # Tail paging source for production: two-web-next-alerts-production.
+)
+```
+
+#### Gated containment and resume (both environments, no silent default)
+
+For an authorized queue incident, contain delivery without deleting messages.
+`ENVIRONMENT` is required and has no default: pass exactly `staging` or
+`production`. The pattern fails closed on an unknown/mismatched target before
+mutation, so production containment never silently defaults to staging targets.
+
+```bash
+(
+  set -euo pipefail
+  # GATED CONTAINMENT: authorized incident containment, not a test.
+  : "${ENVIRONMENT:?set ENVIRONMENT to staging or production}"
+  case "$ENVIRONMENT" in
+    staging)
+      QUEUES=(two-sync-event two-internal-action)
+      UP_URL="https://next.togetherweown.com/up"
+      OWNER="two-web-jobs"
+      ;;
+    production)
+      QUEUES=(two-web-next-production-sync-event two-web-next-production-internal-action)
+      UP_URL="https://togetherweown.com/up"
+      OWNER="two-web-next-production"
+      ;;
+    *) echo "unknown ENVIRONMENT=$ENVIRONMENT; refusing to mutate" >&2; exit 1 ;;
+  esac
+  # Confirm live readback matches the checked-in matrix above before mutation:
+  # queues info plus consumer list show OWNER as the single consumer,
+  # deployments status names the live version, and GET "$UP_URL" shows the
+  # expected origin. On any mismatch, stop; do not continue by pasting the
+  # resume block.
+  # REMOTE MUTATION: authorized incident containment, not a test.
+  for q in "${QUEUES[@]}"; do npx --no-install wrangler queues pause-delivery "$q"; done
+  # Remote transport metadata; ledger counts cannot replace it.
+  npx --no-install wrangler queues info "${QUEUES[0]}"
+  npx --no-install wrangler queues info "${QUEUES[1]}"
+)
+```
+
+Pause is reversible but does not stop producers or the scheduled handler:
+producers and crons continue and in-flight work may remain. Coordinate
+producer/writer/cron holds separately per environment; retained messages
+remain subject to Cloudflare queue retention. Do not purge, delete/recreate
+queues, remove consumers, or disable cron by an unreviewed config change to
+hide an incident. Per-environment downstream and readiness gates must clear
+before any drain: staging reads `GET https://next.togetherweown.com/up` (HTTP
+200 plus `db:ok`, `pending_migrations:0` and the queue envelope), the
+implementation gate on `two-web-jobs` and quiet paging from
+`two-web-next-alerts`; production reads `GET https://togetherweown.com/up`
+with the same readiness shape, the implementation gate on
+`two-web-next-production` and quiet paging from
+`two-web-next-alerts-production`. After the implementation gate, holds and
+downstream readiness are explicitly cleared, the approved drain starts by
+resuming the **existing** transport. Resume is an owned-pause only: the same
+incident owner that paused resumes, and records pause/resume timestamps,
+owner, live version IDs and before/after queue info plus `/up` envelopes.
+
+```bash
+(
+  set -euo pipefail
+  # GATED RESUME: only after the above gates; NOT safe on today's stubs.
+  : "${ENVIRONMENT:?set ENVIRONMENT to staging or production}"
+  case "$ENVIRONMENT" in
+    staging)
+      QUEUES=(two-sync-event two-internal-action)
+      ;;
+    production)
+      QUEUES=(two-web-next-production-sync-event two-web-next-production-internal-action)
+      ;;
+    *) echo "unknown ENVIRONMENT=$ENVIRONMENT; refusing to mutate" >&2; exit 1 ;;
+  esac
+  # REMOTE MUTATION: only after implementation, holds, downstream/readiness
+  # and replay gates clear.
+  for q in "${QUEUES[@]}"; do npx --no-install wrangler queues resume-delivery "$q"; done
 )
 ```
 
 Use transport backlog plus redacted delivery/failure evidence to judge draining.
+Falling ledger depth is not proof of successful bot delivery: queue depth
+falling under missing bot bindings means terminal failure, not a drain.
 Cloudflare transport and the Postgres ledger are separate: inserting a ledger
 row does not send, deleting a row does not drain, resetting `reserved_at` does not
 release a transport reservation. Consumer ledger transitions are best-effort
 and bounded; old messages without `jobId` are invisible to the ledger. Do not
 age-delete old rows or clear unique locks as an outage workaround.
+
+Production containment does not authorize replay, SQL inspection/probes,
+credentials, migration or ownership changes. Queue preview and redispatch stay
+staging-only, default-off and separately authorized per
+[queue-redrive-runbook.md](queue-redrive-runbook.md#read-only-runtime-preview-disabled-until-separately-authorized):
+production containment never grants preview, replay, discard, purge or delete
+authority. Preserve all no-purge/no-delete behavior and every existing explicit
+hold (deployment, receiver/HMAC, isolation and migration holds).
 
 ### Inspect failed history safely
 
@@ -1587,6 +1694,12 @@ Message contracts from [src/jobs/types.ts](../src/jobs/types.ts):
 | `two-sync-event` / `SYNC_EVENT_QUEUE` | `kind: "sync-event"`, `eventKey`, `idempotencyKey`, optional `jobId` |
 | `two-internal-action` / `INTERNAL_ACTION_QUEUE` | `kind: "announcement"`, `action: { channelKey, body }`, `idempotencyKey`, optional `jobId` |
 | `two-internal-action` / `INTERNAL_ACTION_QUEUE` | `kind: "role-assign"`, `action: { userId, roleKey }`, `idempotencyKey: null`, optional `jobId` |
+
+Staging uses the transports above; production uses the same body fields on
+its own transports (`two-web-next-production-sync-event` /
+`SYNC_EVENT_QUEUE` and `two-web-next-production-internal-action` /
+`INTERNAL_ACTION_QUEUE`). Never substitute one environment's transport for
+the other.
 
 The tracking producer supplies `jobId`; it is not the bot idempotency key.
 W8 web/RSVP writes and cron use the same tracked W13 sync carrier. The first
