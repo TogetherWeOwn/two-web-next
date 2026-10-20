@@ -121,9 +121,15 @@ const lineup = $derived(
   {/if}
   <dl class="event-meta" aria-label="Event details">
     <div>
-      <dt>When</dt>
+      <dt>Starts</dt>
       <dd>
         <time datetime={model.timeDatetime}>{model.whenText} ({model.zoneLabel})</time>
+      </dd>
+    </div>
+    <div>
+      <dt>Ends</dt>
+      <dd>
+        <time datetime={model.endsAt}>{model.endsWhenText} ({model.zoneLabel})</time>
       </dd>
     </div>
     {#if model.location}

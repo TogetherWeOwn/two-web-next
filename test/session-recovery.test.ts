@@ -4,7 +4,11 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { Hono } from "hono";
 import { serializeSigned } from "hono/utils/cookie";
 import { AUTH_STATUS_COOKIE, authStatusScript } from "../src/auth-status";
-import { EXPIRED_WRITE_COOKIE, expiredWriteBanner } from "../src/write-recovery";
+import {
+  EXPIRED_WRITE_COOKIE,
+  expiredWriteBanner,
+  expiredWriteBounce,
+} from "../src/write-recovery";
 import {
   fixtureDiscord,
   MEMBER,
@@ -129,6 +133,34 @@ describe("read-only bool-only auth status", () => {
 });
 
 describe("explicit expired-write recovery, never replay", () => {
+  it.each<{ headers: Record<string, string>; jsonOnly: boolean; status: number }>([
+    { headers: {}, jsonOnly: false, status: 303 },
+    { headers: { accept: "application/json" }, jsonOnly: false, status: 401 },
+    { headers: { "content-type": "application/json" }, jsonOnly: false, status: 401 },
+    { headers: {}, jsonOnly: true, status: 401 },
+  ])("the bounce itself forbids caching ($status, $headers, $jsonOnly)", async (test) => {
+    const app = new Hono();
+    app.post("/members/:user", (c) => expiredWriteBounce(c, test.jsonOnly));
+    const response = await app.request(
+      `https://next.example.test/members/${MEMBER}`,
+      { method: "POST", headers: test.headers },
+      { APP_URL: "https://next.example.test" },
+    );
+    expect(response.status).toBe(test.status);
+    expect(response.headers.get("cache-control")).toBe("no-store, private");
+    expect(response.headers.get("vary")).toBe("Cookie");
+    expect(response.headers.getSetCookie()).toEqual([]);
+    if (test.status === 303) {
+      expect(response.headers.get("location")).toBe("/auth/recover?next=%2Fprofile");
+    } else {
+      expect(response.headers.get("location")).toBeNull();
+      expect(await response.json()).toEqual({
+        error: "Unauthorized",
+        recovery: "/auth/recover?next=%2Fprofile",
+      });
+    }
+  });
+
   it("an expired JSON PATCH remains 401 and native POST reaches durable recovery without any write", async () => {
     const f = recoveryFixture();
     const dead = await f.login(new Date(0));
@@ -144,6 +176,8 @@ describe("explicit expired-write recovery, never replay", () => {
       body: JSON.stringify({ bio: "Unsaved secret draft", games_text: "Go", timezone: "UTC" }),
     });
     expect(patch.status).toBe(401);
+    expect(patch.headers.get("cache-control")).toBe("no-store, private");
+    expect(patch.headers.get("vary")).toBe("Cookie");
     expect(await patch.json()).toEqual({
       error: "Unauthorized",
       recovery: "/auth/recover?next=%2Fprofile%3Fedit%3D1",
@@ -160,8 +194,14 @@ describe("explicit expired-write recovery, never replay", () => {
       body: "_method=PATCH&bio=Unsaved+secret+draft",
     });
     expect(native.status).toBe(303);
+    expect(native.headers.get("cache-control")).toBe("no-store, private");
+    expect(native.headers.get("vary")).toBe("Cookie");
+    expect(native.headers.getSetCookie()).toEqual([]);
     expect(native.headers.get("location")).toBe("/auth/recover?next=%2Fprofile");
     const landing = await f.request(native.headers.get("location")!);
+    expect(landing.status).toBe(200);
+    expect(landing.headers.get("cache-control")).toBe("no-store, private");
+    expect(landing.headers.get("vary")).toBe("Cookie");
     expect(await landing.text()).toContain("Your earlier changes were not saved");
     const jar = mergeCookies("", landing);
     expect(jar).not.toContain("Unsaved");
@@ -181,6 +221,7 @@ describe("explicit expired-write recovery, never replay", () => {
     const response = await f.request("/auth/recover?next=" + encodeURIComponent(next));
     expect(await response.text()).toContain('href="/auth/discord?next=%2Fprofile"');
     expect(response.headers.get("cache-control")).toBe("no-store, private");
+    expect(response.headers.get("vary")).toBe("Cookie");
   });
 
   it("OAuth returns to the safe original page, banner is consumed once, HEAD and audit failures leave it pending", async () => {

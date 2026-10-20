@@ -19,8 +19,8 @@ import {
 } from "./oauth-journeys";
 
 /** Session lifetime: 120-minute sliding window (legacy parity, `docs/parity.md`).
- * Login and every authenticated-page rotation re-stamp the DB expiry and the
- * cookie Max-Age; the session-status probe cookie follows the same value. */
+ * Login, authenticated-page rotation and member/admin GET renewal re-stamp the
+ * DB expiry and cookie Max-Age; the status probe cookie follows the same value. */
 export const SESSION_TTL_SECONDS = 60 * 120;
 
 /** Immediate-predecessor grace: 10s from winning rotation, bounded also by the
@@ -45,6 +45,8 @@ export type SessionStore = {
     replacement: DbSessionRow & { tokenHash: string; expiresAt: Date },
   ) => Promise<void>;
   get: (tokenHash: string) => Promise<DbSessionRow | null>;
+  /** Extend a live row without rotating its bearer or changing identity/roles. */
+  renew: (tokenHash: string, expiresAt: Date) => Promise<boolean>;
   /** Non-authenticating probe key, stable across rotation of a live session. */
   statusHash: (tokenHash: string) => Promise<string | null>;
   isActive: (statusHash: string) => Promise<boolean>;
@@ -201,6 +203,19 @@ export function createPostgresSessionStore(sql: Sql): SessionStore {
           )`;
       const g = grace[0];
       return g ? toRow(g) : null;
+    },
+    async renew(tokenHash, expiresAt) {
+      // Check wall-clock liveness after the lock wait, just like rotation. Never
+      // recreate a revoked/expired row or let an older request shorten renewal.
+      const rows = await sql<{ renewed: number }[]>`with locked as materialized (
+          select token_hash, revoked_at, expires_at from web_sessions
+          where token_hash = ${tokenHash} for update
+        )
+        update web_sessions set expires_at = greatest(web_sessions.expires_at, ${expiresAt})
+        from locked where web_sessions.token_hash = locked.token_hash
+          and locked.revoked_at is null and locked.expires_at > clock_timestamp()
+        returning 1 as renewed`;
+      return rows.length > 0;
     },
     async statusHash(tokenHash) {
       const rows = await sql<
@@ -410,6 +425,12 @@ export function createMemorySessionStore(clock: () => number = Date.now): Sessio
         member: g.member,
         moderator: g.moderator,
       };
+    },
+    async renew(hash, expiresAt) {
+      const r = live(hash);
+      if (!r) return false;
+      r.expiresAt = Math.max(r.expiresAt, expiresAt.getTime());
+      return true;
     },
     async statusHash(hash) {
       return live(hash)?.statusHash ?? null;
