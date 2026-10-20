@@ -511,7 +511,9 @@ saved, and your complete draft stays in the form for reference. Follow the
 **Review the current version** link to load the current saved row, re-apply
 the change you still intend, and save again. Pressing **Save** again on the
 conflict page without reviewing still refuses — it never silently rebases or
-overwrites — and reloading the edit page starts a fresh form. When two
+overwrites — and reloading the conflict page resubmits the refused save
+instead of clearing it. To start over with the current saved row, follow
+**Review the current version** or reopen the slot. When two
 moderators must edit one slot, take turns: the second saver always reviews
 first.
 
