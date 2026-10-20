@@ -70,6 +70,22 @@ export function seasonLabel(raw: string | null | undefined): string {
   return raw;
 }
 
+/**
+ * Clamp a season-window bound to something Postgres can bind. Postgres has
+ * no year 0, so a literal `0000-..` ISO bound fails with 22008 — and
+ * postgres-js rewrites every string bound to a timestamptz param through
+ * `new Date(x).toISOString()`, so BC text cannot travel as a bound param
+ * either, while inline literals would change the statement shapes pinned by
+ * the member-read classifier. Every grammar window with a year-0 bound ends
+ * on or before 0001-01-01, so clamping there yields the empty range exactly
+ * where the true window holds no app-reachable rows (join attempts are
+ * default-now plus retention-pruned; events carry modern scheduled dates),
+ * and returns every other bound untouched (same object, same wire bytes).
+ */
+export function pgSeasonBound(bound: Date): Date {
+  return bound.getUTCFullYear() < 1 ? new Date("0001-01-01T00:00:00.000Z") : bound;
+}
+
 /** True when `d` lies inside the window (all = unbounded). */
 export function inSeasonWindow(d: Date, window: SeasonWindow): boolean {
   if (window.kind === "all") return true;

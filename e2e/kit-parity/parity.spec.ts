@@ -426,6 +426,11 @@ for (const target of targets) {
       expect(indexBody).toContain(
         "Season-independent seeded estimates of games activity (estimates until calibration).",
       );
+      // The singular captions pin the real index loaders through rendering
+      // on both targets: a reworded season claim on either loader line (not
+      // just the exact old string) fails here.
+      expect(indexBody).toContain("Season-independent seeded estimate of voice activity");
+      expect(indexBody).toContain("Season-independent seeded estimate of games activity");
       const joinsBody = await (await api(target).get("/hotzones/joins")).text();
       expect(joinsBody).toMatch(/across [1-9]\d* scheduled gatherings/);
       expect(joinsBody).toContain("joins hot zone");
