@@ -109,6 +109,7 @@ export function linksIn(html: string): { url: URL; label: string; pager: boolean
 export function archiveEnv(db: Db): Env {
   return {
     APP_URL: ARCHIVE_ORIGIN,
+    SESSION_SECRET: "test-session-secret-at-least-32-bytes-long",
     ADMIN_DB: db,
     DISCORD_INVITE_URL: "https://discord.gg/example",
     DISCORD_EVENTS: { upcoming: async () => [], lastReadFailed: () => false },
