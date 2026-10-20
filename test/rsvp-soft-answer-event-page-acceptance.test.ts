@@ -206,13 +206,26 @@ const syncedMaybe: ViewerRsvp = {
 // answer, no seat/waitlist/sync status claim, submits by name/value (the
 // no-JS + island contract), never by new testids.
 
+const ENTITIES: Record<string, string> = {
+  "&#39;": "'",
+  "&quot;": '"',
+  "&amp;": "&",
+  "&lt;": "<",
+  "&gt;": ">",
+};
 const decode = (s: string): string =>
-  s
-    .replace(/&#39;/g, "'")
-    .replace(/&quot;/g, '"')
-    .replace(/&amp;/g, "&")
-    .replace(/&lt;/g, "<")
-    .replace(/&gt;/g, ">");
+  s.replace(/&#39;|&quot;|&amp;|&lt;|&gt;/g, (m) => ENTITIES[m]!);
+
+function stripTags(s: string): string {
+  let out = "";
+  let inTag = false;
+  for (const ch of s) {
+    if (ch === "<") inTag = true;
+    else if (ch === ">") inTag = false;
+    else if (!inTag) out += ch;
+  }
+  return out;
+}
 
 const MAYBE_LINE = /maybe/i;
 // "Can't go" or "Not going" — either naming is an honest answer line.
@@ -223,12 +236,7 @@ const SEAT_CLAIM = /you're in|waitlist|seat|#\d+ in line|cap is|this one's full|
 function statusLines(html: string): string[] {
   const out: string[] = [];
   for (const m of html.matchAll(/<p[^>]*\brole="status"[^>]*>([\s\S]*?)<\/p>/gi)) {
-    const line = decode(
-      m[1]!
-        .replace(/<[^>]*>/g, "")
-        .replace(/\s+/g, " ")
-        .trim(),
-    );
+    const line = decode(stripTags(m[1]!).replace(/\s+/g, " ").trim());
     // Empty live regions (the copy-link toast) carry no claim; skip them so
     // line counts compare across twins.
     if (line.length > 0) out.push(line);
