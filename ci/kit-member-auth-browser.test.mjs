@@ -113,7 +113,8 @@ async function fixture(t, mode = "kit", storage = false) {
         if (
           /^\/islands\/[a-z-]+\.js$/.test(url.pathname) ||
           /^\/[a-z.-]+\.css$/.test(url.pathname) ||
-          /^\/fonts\/[a-z0-9-]+\.woff2$/.test(url.pathname)
+          /^\/fonts\/[a-z0-9-]+\.woff2$/.test(url.pathname) ||
+          url.pathname === "/logo.svg"
         ) {
           const body = await readFile(resolve("public", url.pathname.slice(1)));
           res.writeHead(200, {
@@ -121,7 +122,9 @@ async function fixture(t, mode = "kit", storage = false) {
               ? "text/javascript"
               : url.pathname.endsWith(".woff2")
                 ? "font/woff2"
-                : "text/css",
+                : url.pathname === "/logo.svg"
+                  ? "image/svg+xml"
+                  : "text/css",
           });
           return res.end(body);
         }
