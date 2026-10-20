@@ -1,7 +1,8 @@
 // Offline acceptance, automatically discovered by the existing browser journey
-// config. All documents/POST results are intercepted synthetic fixtures. This
-// does not exercise a live database or substitute for server admission tests.
+// config. A test-owned loopback server carries real native POST/303/GET hops;
+// all responses are fixtures, with no database or live application writes.
 import { readFileSync } from "node:fs";
+import { createServer } from "node:http";
 import { join } from "node:path";
 import { expect, test, type Browser, type Page } from "@playwright/test";
 import {
@@ -19,7 +20,6 @@ import {
   type Surface,
 } from "../test/helpers/admin-terminal-review";
 
-const ORIGIN = "https://review.example.test";
 let kit: Awaited<ReturnType<typeof compileKitReview>>;
 test.beforeAll(async () => {
   kit = await compileKitReview();
@@ -40,83 +40,124 @@ async function openFixture(
   surface: Surface,
   options: FixtureOptions = {},
 ) {
+  // POST validation failures render Hono HTML even after a Kit editor GET.
+  // In particular, the Kit featured loader/page has no error/draft contract.
+  // Start rejected-Save cases with the real response owner's retained markup.
+  const html =
+    presentation === "hono" || options.rejectedSave
+      ? renderHonoReview(surface, "published", options.rejectedSave)
+      : kit.render(surface, await kitReviewData(surface));
+  const mutations: { path: string; body: string }[] = [];
+  const documents: string[] = [];
+  const dialogs: string[] = [];
+  let origin: string;
+  const server = createServer(
+    { requestTimeout: 5_000, headersTimeout: 5_000, keepAliveTimeout: 1_000 },
+    async (req, res) => {
+      try {
+        const url = new URL(req.url ?? "/", origin);
+        if (req.method !== "GET" && req.method !== "HEAD") {
+          let body = "";
+          for await (const chunk of req) {
+            body += chunk.toString();
+            if (Buffer.byteLength(body) > 4_096) {
+              res.writeHead(413).end("Fixture payload too large");
+              return;
+            }
+          }
+          mutations.push({ path: url.pathname, body });
+          if (req.method !== "POST" || url.pathname !== actionFor(surface)) {
+            res.writeHead(400).end("Unexpected mutation");
+          } else if (options.responseStatus) {
+            res.writeHead(options.responseStatus, { "Content-Type": "text/html" });
+            res.end(`<h1>Fixture terminal refusal ${options.responseStatus}</h1>`);
+          } else {
+            res.writeHead(303, { Location: `${resultFor(surface)}?fixture=complete` }).end();
+          }
+          return;
+        }
+        if (req.headers["sec-fetch-dest"] === "document") {
+          documents.push(url.pathname + url.search);
+          if (url.pathname === resultFor(surface) && url.search === "?fixture=complete") {
+            res.writeHead(200, { "Content-Type": "text/html" });
+            res.end("<h1>Fixture terminal result</h1>");
+          } else if (url.pathname === pathFor(surface) && !url.search) {
+            res.writeHead(200, { "Content-Type": "text/html" }).end(html);
+          } else {
+            res.writeHead(404).end("Unexpected document");
+          }
+          return;
+        }
+        if (url.pathname.startsWith("/islands/") && /^\/[a-z0-9/.-]+\.js$/.test(url.pathname)) {
+          res.writeHead(200, { "Content-Type": "application/javascript" });
+          res.end(readFileSync(join(REVIEW_ROOT, "public", url.pathname), "utf8"));
+        } else if (url.pathname.endsWith(".css") && /^\/[a-z0-9/.-]+\.css$/.test(url.pathname)) {
+          res.writeHead(200, { "Content-Type": "text/css" });
+          res.end(readFileSync(join(REVIEW_ROOT, "public", url.pathname), "utf8"));
+        } else if (url.pathname === "/auth/status") {
+          res.writeHead(200, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ authenticated: true }));
+        } else {
+          res.writeHead(404).end("Unexpected fixture request");
+        }
+      } catch (error) {
+        res.destroy(error instanceof Error ? error : new Error(String(error)));
+      }
+    },
+  );
   const context = await browser.newContext({
     javaScriptEnabled: options.javaScriptEnabled ?? false,
     serviceWorkers: "block",
     viewport: { width: options.width ?? 1280, height: options.height ?? 800 },
   });
-  const page = await context.newPage();
-  const html =
-    presentation === "hono"
-      ? renderHonoReview(surface, "published", options.rejectedSave)
-      : kit.render(surface, await kitReviewData(surface, "published", options.rejectedSave));
-  const mutations: { path: string; body: string }[] = [];
-  const documents: string[] = [];
-  const dialogs: string[] = [];
-  let acceptDeparture = false;
-  page.on("dialog", async (dialog) => {
-    dialogs.push(dialog.type());
-    if (acceptDeparture) await dialog.accept();
-    else await dialog.dismiss();
-  });
-  await context.route("**/*", async (route) => {
-    const req = route.request();
-    const url = new URL(req.url());
-    if (url.origin !== ORIGIN) return route.abort();
-    if (req.method() !== "GET" && req.method() !== "HEAD") {
-      mutations.push({ path: url.pathname, body: req.postData() ?? "" });
-      if (url.pathname !== actionFor(surface)) {
-        return route.fulfill({ status: 400, body: "Unexpected mutation" });
-      }
-      if (options.responseStatus) {
-        return route.fulfill({
-          status: options.responseStatus,
-          contentType: "text/html",
-          body: `<h1>Fixture terminal refusal ${options.responseStatus}</h1>`,
+  const close = async () => {
+    try {
+      await context.close();
+    } finally {
+      if (server.listening) {
+        await new Promise<void>((resolve, reject) => {
+          server.close((error) => (error ? reject(error) : resolve()));
+          server.closeAllConnections();
         });
       }
-      return route.fulfill({
-        status: 303,
-        headers: { location: `${resultFor(surface)}?fixture=complete` },
-        body: "",
-      });
     }
-    if (req.isNavigationRequest()) {
-      documents.push(url.pathname + url.search);
-      return route.fulfill({
-        contentType: "text/html",
-        body: url.searchParams.has("fixture") ? "<h1>Fixture terminal result</h1>" : html,
-      });
-    }
-    if (url.pathname.startsWith("/islands/") && /^\/[a-z0-9/.-]+\.js$/.test(url.pathname)) {
-      return route.fulfill({
-        contentType: "application/javascript",
-        body: readFileSync(join(REVIEW_ROOT, "public", url.pathname), "utf8"),
-      });
-    }
-    if (url.pathname.endsWith(".css") && /^\/[a-z0-9/.-]+\.css$/.test(url.pathname)) {
-      return route.fulfill({
-        contentType: "text/css",
-        body: readFileSync(join(REVIEW_ROOT, "public", url.pathname), "utf8"),
-      });
-    }
-    if (url.pathname === "/auth/status") {
-      return route.fulfill({ json: { authenticated: true } });
-    }
-    return route.abort();
-  });
-  await page.goto(ORIGIN + pathFor(surface));
-  await expect(page.locator("h1")).toBeVisible();
-  return {
-    page,
-    context,
-    mutations,
-    documents,
-    dialogs,
-    allowDeparture: () => {
-      acceptDeparture = true;
-    },
   };
+  try {
+    await new Promise<void>((resolve, reject) => {
+      server.once("error", reject);
+      server.listen(0, "127.0.0.1", resolve);
+    });
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("Missing fixture port");
+    origin = `http://127.0.0.1:${address.port}`;
+    // Only this loopback fixture may reach the network. Unlike route.fulfill,
+    // the real server also receives Chromium's un-intercepted redirect hops.
+    await context.route("**/*", (route) =>
+      new URL(route.request().url()).origin === origin ? route.continue() : route.abort(),
+    );
+    const page = await context.newPage();
+    let acceptDeparture = false;
+    page.on("dialog", async (dialog) => {
+      dialogs.push(dialog.type());
+      if (acceptDeparture) await dialog.accept();
+      else await dialog.dismiss();
+    });
+    await page.goto(origin + pathFor(surface));
+    await expect(page.locator("h1")).toBeVisible();
+    return {
+      page,
+      close,
+      mutations,
+      documents,
+      dialogs,
+      allowDeparture: () => {
+        acceptDeparture = true;
+      },
+    };
+  } catch (error) {
+    await close();
+    throw error;
+  }
 }
 
 async function nativeReview(page: Page, surface: Surface) {
@@ -156,7 +197,7 @@ for (const presentation of ["hono", "kit"] as const) {
         }
         expect(f.mutations).toEqual([]);
       } finally {
-        await f.context.close();
+        await f.close();
       }
     });
 
@@ -188,12 +229,19 @@ for (const presentation of ["hono", "kit"] as const) {
           await summary.press("Enter");
           await final.focus();
           await expect(final).toBeFocused();
+          const submitted = f.page.waitForResponse(
+            (response) =>
+              response.request().method() === "POST" &&
+              new URL(response.url()).pathname === actionFor(surface),
+          );
           await final.press("Enter");
+          expect((await submitted).status()).toBe(303);
           await expect(f.page.locator("h1")).toHaveText("Fixture terminal result");
+          expect(f.documents).toEqual([pathFor(surface), `${resultFor(surface)}?fixture=complete`]);
           expect(f.mutations).toEqual([{ path: actionFor(surface), body: "" }]);
           expect(new URL(f.page.url()).pathname).toBe(resultFor(surface));
         } finally {
-          await f.context.close();
+          await f.close();
         }
       });
     }
@@ -211,7 +259,7 @@ for (const presentation of ["hono", "kit"] as const) {
           expect(f.mutations).toEqual([{ path: actionFor(surface), body: "" }]);
           expect(new URL(f.page.url()).pathname).toBe(actionFor(surface));
         } finally {
-          await f.context.close();
+          await f.close();
         }
       });
     }
@@ -227,7 +275,15 @@ for (const presentation of ["hono", "kit"] as const) {
           });
           try {
             const title = f.page.locator('input[name="title"]');
-            if (!rejectedSave) await title.fill(DIRTY_TARGET);
+            if (rejectedSave) {
+              await expect(f.page.getByTestId("form-errors")).toBeVisible();
+              await expect(f.page.locator("form[data-event-editor]")).toHaveAttribute(
+                "data-event-draft",
+                "",
+              );
+            } else {
+              await title.fill(DIRTY_TARGET);
+            }
             const { review, summary, final } = await nativeReview(f.page, surface);
             await summary.press("Enter");
             await expect(review).toContainText(SAVED_TARGET);
@@ -242,12 +298,22 @@ for (const presentation of ["hono", "kit"] as const) {
             // warning; opening or abandoning must not globally disarm it.
             f.allowDeparture();
             await summary.press("Enter");
+            const submitted = f.page.waitForResponse(
+              (response) =>
+                response.request().method() === "POST" &&
+                new URL(response.url()).pathname === actionFor(surface),
+            );
             await final.press("Enter");
+            expect((await submitted).status()).toBe(303);
             await expect(f.page.locator("h1")).toHaveText("Fixture terminal result");
+            expect(f.documents).toEqual([
+              pathFor(surface),
+              `${resultFor(surface)}?fixture=complete`,
+            ]);
             expect(f.dialogs).toEqual(["beforeunload"]);
             expect(f.mutations).toEqual([{ path: actionFor(surface), body: "" }]);
           } finally {
-            await f.context.close();
+            await f.close();
           }
         });
       }
