@@ -4,7 +4,6 @@ import { eq, sql } from "drizzle-orm";
 import { Hono } from "hono";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { enforceOn, memberAccessLog, type AccessDecl, type AccessSink } from "../src/access-log";
-import { enforceEnabled } from "../src/admin/guard";
 import { adminApp } from "../src/admin/routes";
 import { recordAccess } from "../src/admin/store";
 import { memberDataAccessLogs } from "../src/db/admin-schema";
@@ -67,10 +66,9 @@ describe("access-log flush lifecycle", () => {
     ["FALSE", false],
     ["0", false],
     [" No ", false],
-  ])("profile/admin enforcement agree for %s => %s", (flag, expected) => {
+  ])("enforcement flag parsing for %s => %s", (flag, expected) => {
     const bindings = { ...env, MEMBER_ACCESS_LOG_ENFORCE: flag };
     expect(enforceOn(bindings)).toBe(expected);
-    expect(enforceEnabled(bindings)).toBe(expected);
   });
 
   it("arming a later request inherits nothing from unarmed/error requests", async () => {

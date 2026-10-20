@@ -2,11 +2,13 @@
 // that reads member data declares its subjects with `c.set("access", …)`; this
 // middleware writes ONE row per request after the handler and before the
 // response leaves. A read that cannot be recorded is not served: 503 under
-// enforce (the default), degrade-with-a-loud-log when MEMBER_ACCESS_LOG_ENFORCE
-// is "false". The admin guard (src/admin/guard.ts) carries the same contract
-// inline for the panel; this is the reusable form for member-facing routes.
+// enforce (the default), degrade-with-a-loud-log plus one rate-limited page
+// when MEMBER_ACCESS_LOG_ENFORCE is "false". The admin guard
+// (src/admin/guard.ts) carries the same contract inline for the panel; this is
+// the reusable form for member-facing routes.
 
 import type { Context, Next } from "hono";
+import { alertRequestError } from "./alerts";
 import type { Env } from "./env";
 import { databaseUnavailable } from "./errors";
 
@@ -112,6 +114,15 @@ export function memberAccessLog(sink: (c: { env: Env }) => Promise<AccessSink | 
       if (enforceOn(c.env)) {
         c.res = await databaseUnavailable(c);
         c.header("cache-control", "private, no-store");
+      } else {
+        // Degraded serve-unaudited: the read goes out without its audit row,
+        // so page once per class@route through the existing alert path. Class
+        // only, route + request id; never bindings, messages, SQL or payloads.
+        alertRequestError(err, {
+          method: c.req.method,
+          route: decl.route,
+          requestId: c.get("requestId"),
+        });
       }
     }
   };
