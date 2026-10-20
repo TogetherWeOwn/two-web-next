@@ -45,6 +45,28 @@ test.beforeAll(async ({ playwright }) => {
       }),
     );
   }
+  // Ranked RSVP before the first cache-settling read: anonymous /events
+  // entries are isolate-local (src/events/anon-cache.ts) and the RSVP PUT
+  // retires only the Hono isolate, so establishing the going RSVP here means
+  // every guest entry settled later on either isolate already carries
+  // count=1. This spends the journey's one memoized QA login early; the
+  // afterAll withdrawal and the exactly-one-login assertion are unchanged.
+  await memberGoingRsvp();
+  // Leave the shared jar guest-clean: the QA login above stores its session
+  // cookie in the Hono context, and every later api(hono) call would send
+  // it — turning the guest-contract tests (public cache-control on /events,
+  // the 302 member-board bounce) into member reads. Recreate the context
+  // instead: the memoized pair stays live (the RSVP PUT never rotates), so
+  // later memberCookie() calls replay it explicitly with no second login.
+  const hono = targets.find((target) => target.name === "hono")!;
+  await contexts.get(hono.name)!.dispose();
+  contexts.set(
+    hono.name,
+    await playwright.request.newContext({
+      baseURL: hono.origin,
+      ignoreHTTPSErrors: hono.ignoreHTTPSErrors,
+    }),
+  );
 });
 
 test.afterAll(async () => {
@@ -112,8 +134,8 @@ function honoMemberCookie(): Promise<string> {
 
 async function memberCookie(target: ParityTarget): Promise<string> {
   const pair = await honoMemberCookie();
-  // Freshest wins: rotating page reads (GET /events, GET /e/:key) delete the
-  // presented bearer's row and deliver the replacement via Set-Cookie into
+  // Freshest wins: rotating page reads (GET /events, GET /e/:key) retire the
+  // presented bearer to bounded grace and deliver the replacement via Set-Cookie into
   // Hono's jar. Kit has a separate cookie signature, but shares that same
   // session row, so it must re-sign the jar's current pair when a rotation
   // has already run.
@@ -380,12 +402,12 @@ for (const target of targets) {
         expect(scrubSecrets(body), `${target.name} ${path} secret scrub`).toEqual([]);
         expect(body).toContain("<table>");
         expect(body).toContain('<meta name="robots" content="noindex, follow"');
-        // Account chrome differs by renderer: the Hono pages pass an
-        // Open-Discord child into SiteHeader (src/hotzones/pages.tsx),
-        // which replaces the guest chrome (src/page-shell.tsx), while the
-        // Kit pages render the shell default. Either way nobody is signed in.
-        if (target.name === "kit") expect(body).toContain("Welcome, guest");
-        else expect(body).toContain("Open Discord");
+        // Both renderers replace guest sign-in with the direct Discord action.
+        const header = body.match(/<header\b[^>]*>[\s\S]*?<\/header>/)?.[0];
+        expect(header).toContain('href="/discord"');
+        expect(header).toContain("Open Discord");
+        expect(header).not.toContain("Sign in with Discord");
+        expect(header).not.toContain("/join/discord");
         expect(body).not.toContain("Sign out");
         expect(body).not.toMatch(/discord_id|created_at/i);
         expect(body).toContain('<link rel="canonical"');
@@ -423,6 +445,17 @@ for (const target of targets) {
         const body = await response.text();
         expect(scrubSecrets(body)).toEqual([]);
         expect(body).not.toContain("<table>");
+        // Body parity, not just status: both twins answer the branded 400
+        // shell — never the bare "Unknown season" text (Hono mutant) and
+        // never the 500 shell at HTTP 400 (Kit boundary mutant).
+        expect(body.trim(), `${target.name} ${path}`).not.toBe("Unknown season");
+        expect(body, `${target.name} ${path}`).not.toContain("Something broke on our side");
+        expect(body, `${target.name} ${path}`).toMatch(
+          /class="recovery-code(?:\s[^"]*)?"[^>]*>\s*400\s*</,
+        );
+        expect(body, `${target.name} ${path}`).toContain('data-testid="error-home"');
+        expect(body, `${target.name} ${path}`).toContain("Back to the homepage");
+        expect(body, `${target.name} ${path}`).toContain("noindex, nofollow");
       }
     });
 
@@ -641,49 +674,54 @@ for (const target of targets) {
       expect(body).toContain("/islands/rsvp-button.js");
       expect(body).toContain("Sign out");
       expect(body).not.toContain("Welcome, guest");
-      // Session rotation contract (docs/parity.md section 12, session row):
-      // Hono GET /e/:key reads through the rotating readSession
-      // (src/index.tsx: every authenticated page view mints a fresh token,
-      // deletes the old row and re-stamps the 120-minute sliding expiry), so
-      // a member read sets a __Host-two_session replacement with
-      // Max-Age=7200 and the presented bearer is dead afterwards. The Kit
-      // detail load uses the read-only bridge (src/kit-session.ts: it never
-      // rotates or sets cookies), so it emits no session Set-Cookie and the
-      // presented bearer stays live. That divergence is recorded in
-      // docs/parity.md and docs/kit-parity-gates.md as an explicit blocker
-      // for enabling GET /e/:key: members who only browse Kit event pages
-      // would otherwise lose the sliding renewal.
+      // Hono rotates the active bearer and renews its 120-minute sliding
+      // expiry. Only its immediate predecessor has a fixed <10s grace:
+      // replay cannot rotate, mint a sibling or renew that window. Kit's
+      // read-only bridge never rotates or sets cookies, so its bearer stays
+      // live beyond that window. Kit-only browsing still lacks sliding renewal.
       const sessionSets = (await response.headersArray())
         .filter((header) => header.name.toLowerCase() === "set-cookie")
         .map((header) => header.value)
         .filter((value) => value.startsWith("__Host-two_session="));
-      // Cookie-free replay: the shared api() jars accumulate the rotated
-      // replacements above, so replaying the presented bearer runs in a
-      // fresh context with exactly one Cookie header.
-      const replay = await playwright.request.newContext({
-        baseURL: target.origin,
-        ignoreHTTPSErrors: target.ignoreHTTPSErrors,
-      });
-      try {
-        const again = await replay.get(EVENT_PATH, { headers: { cookie } });
-        expect(again.status(), `${target.name} replayed bearer`).toBe(200);
-        const againBody = await again.text();
-        expect(scrubSecrets(againBody)).toEqual([]);
-        if (target.name === "kit") {
-          expect(sessionSets, "kit detail keeps the read-only bridge: no rotation").toEqual([]);
-          // Never retired: the same bearer still renders the member view.
-          expect(againBody).not.toContain('data-testid="event-join-pitch"');
-          expect(againBody).toContain("Sign out");
-        } else {
-          expect(sessionSets.length, "hono detail rotates the session").toBe(1);
-          expect(sessionSets[0]!, "rotation re-stamps 120 minutes").toMatch(/max-age=7200/i);
-          // The retired bearer finds no row: the guest contract renders.
-          expect(againBody).toContain('data-testid="event-join-pitch"');
-          expect(againBody).not.toContain("Sign out");
-          expect(againBody).toContain("Welcome, guest");
+      if (target.name === "kit") {
+        expect(sessionSets, "kit detail keeps the read-only bridge: no rotation").toEqual([]);
+      } else {
+        expect(sessionSets.length, "hono detail rotates the session").toBe(1);
+        expect(sessionSets[0]!, "rotation re-stamps 120 minutes").toMatch(/max-age=7200/i);
+      }
+      for (const phase of ["immediate", "expired"] as const) {
+        // A real-worker clock cannot be faked. Wait past grace without
+        // polling; exact-deadline behavior is pinned by the store suites.
+        if (phase === "expired") await new Promise((resolve) => setTimeout(resolve, 10_050));
+        // A new jar for EVERY replay: neither the shared jar nor a previous
+        // replay's replacement may silently substitute for this explicit bearer.
+        const replay = await playwright.request.newContext({
+          baseURL: target.origin,
+          ignoreHTTPSErrors: target.ignoreHTTPSErrors,
+        });
+        try {
+          const again = await replay.get(EVENT_PATH, { headers: { cookie } });
+          expect(again.status(), `${target.name} ${phase} replayed bearer`).toBe(200);
+          const againBody = await again.text();
+          expect(scrubSecrets(againBody)).toEqual([]);
+          const replaySessionSets = (await again.headersArray()).filter(
+            (header) =>
+              header.name.toLowerCase() === "set-cookie" &&
+              header.value.startsWith("__Host-two_session="),
+          );
+          expect(replaySessionSets, "replay never mints an independent sibling").toEqual([]);
+          if (target.name === "kit" || phase === "immediate") {
+            expect(againBody).not.toContain('data-testid="event-join-pitch"');
+            expect(againBody).toContain("Sign out");
+            expect(againBody).not.toContain("Welcome, guest");
+          } else {
+            expect(againBody).toContain('data-testid="event-join-pitch"');
+            expect(againBody).not.toContain("Sign out");
+            expect(againBody).toContain("Welcome, guest");
+          }
+        } finally {
+          await replay.dispose();
         }
-      } finally {
-        await replay.dispose();
       }
     });
 
@@ -956,18 +994,24 @@ test("cross-target: normalized archive sections match", async () => {
 test("cross-target: normalized events-calendar sections match", async ({ playwright }) => {
   const bodies = new Map<string, string>();
   for (const target of targets) {
-    // Cookie-free by construction: the shared api() context accumulates the
-    // session cookie from the earlier QA-login journey, which would render
-    // the member view (no join pitch, no sign-in links) on Hono instead of
-    // the guest contract. A fresh context renders the guest view on both.
+    // A fresh jar prevents authentication by the shared QA-login cookie.
+    // An unsigned, non-session cookie bypasses each worker's independent
+    // anonymous cache: the member-board RSVP write may have made only one
+    // cached going count stale. Compare equally fresh GUEST sections.
     const guest = await playwright.request.newContext({
       baseURL: target.origin,
       ignoreHTTPSErrors: target.ignoreHTTPSErrors,
     });
     try {
-      const response = await guest.get("/events");
+      const response = await guest.get("/events", {
+        headers: { cookie: "e2e-parity-bypass=1" },
+      });
       expect(response.status()).toBe(200);
-      bodies.set(target.name, normalizeOrigin(await response.text(), target.origin));
+      const body = await response.text();
+      expect(body).toContain("Welcome, guest");
+      expect(body).not.toContain("Sign out");
+      expect(response.headers()["set-cookie"] ?? null).toBeNull();
+      bodies.set(target.name, normalizeOrigin(body, target.origin));
     } finally {
       await guest.dispose();
     }

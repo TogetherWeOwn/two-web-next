@@ -12,7 +12,7 @@ on:
         type: string
         default: ""
       migrations_applied:
-        description: "Set to true only after db-migrate.yml (target production) applied the target's pending migrations out of band. Audited manual continuation for the migration stop below; automatic runs ignore it and stay blocked until the least-privilege migrator lands"
+        description: "Set to true only after db-migrate.yml (target production) applied the target's migrations out of band. Audited manual continuation for known-pending migrations or an unknown live commit after 3 /up reads; automatic runs ignore it and halt on either condition"
         required: false
         type: boolean
         default: false
@@ -82,7 +82,11 @@ jobs:
       - name: Refuse pending production migrations before any deploy
         # Until the least-privilege migrator lands, a target whose journal has
         # entries production lacks stops here with a clear error instead of
-        # deploying. Afterwards this step becomes a db-migrate.yml
+        # deploying. An unknown live commit after 3 /up reads also stops here.
+        # Manual dispatch can continue past either stop only on the audited
+        # migrations_applied=true confirmation after db-migrate.yml (target
+        # production); automatic runs ignore that input and halt on either.
+        # Afterwards this step becomes a db-migrate.yml
         # (workflow_call, target production) call first. This check runs from
         # the tip checkout on purpose, like --already-live above: after the
         # re-checkout below, an older target's script could lack this flag and
@@ -290,6 +294,41 @@ jobs:
         env:
           PROMOTED_VERSION_ID: ${{ steps.gradual.outputs.promoted-version-id }}
           PREV_VERSION: ${{ steps.gradual.outputs.rollback-version-id }}
+      - name: Record successful production promotion
+        # Success-only and after identity-aware smoke. Write inline because the
+        # selected deployment checkout can predate this receipt protocol.
+        run: |
+          node <<'NODE'
+          const fs = require('node:fs');
+          const path = require('node:path');
+          const receipt = {
+            schema: 1,
+            repository: process.env.GITHUB_REPOSITORY,
+            workflow: '.github/workflows/deploy-production.yml',
+            job: 'deploy-production',
+            sha: process.env.DEPLOY_SHA,
+            promoted_version_id: process.env.PROMOTED_VERSION_ID,
+            run_id: process.env.GITHUB_RUN_ID,
+            run_attempt: process.env.GITHUB_RUN_ATTEMPT,
+          };
+          if (!/^[0-9a-f]{40}$/.test(receipt.sha ?? '') ||
+              !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(receipt.promoted_version_id ?? '') ||
+              !/^[1-9][0-9]*$/.test(receipt.run_id ?? '') ||
+              !/^[1-9][0-9]*$/.test(receipt.run_attempt ?? '')) {
+            throw new Error('Invalid production promotion receipt identity');
+          }
+          fs.writeFileSync(path.join(process.env.RUNNER_TEMP, 'promotion.json'), JSON.stringify(receipt) + '\n');
+          NODE
+        env:
+          DEPLOY_SHA: ${{ needs.preflight.outputs.sha }}
+          PROMOTED_VERSION_ID: ${{ steps.gradual.outputs.promoted-version-id }}
+      - name: Upload production promotion proof
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: production-promotion-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/promotion.json
+          if-no-files-found: error
+          retention-days: 30
 
   release:
     name: release
@@ -297,7 +336,10 @@ jobs:
     # preflight.outputs.sha is the promoted commit (DEPLOY_SHA), never main's tip.
     needs: [preflight, deploy-production]
     permissions:
+      actions: read # Read only this repository's promotion evidence.
       contents: write # Create the tag and its GitHub Release.
     uses: ./.github/workflows/release.yml
     with:
       sha: ${{ needs.preflight.outputs.sha }}
+      promotion_run_id: ${{ github.run_id }}
+      promotion_run_attempt: ${{ github.run_attempt }}

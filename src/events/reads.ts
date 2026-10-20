@@ -864,6 +864,17 @@ export async function listJson(
  * bounding /events.ics, /events.rss, /events.md and sitemap bytes. */
 export const FEED_EGRESS_LIMIT = 1000;
 
+function warnEgressCapacity(surface: "sitemap" | "feed", returned: number): void {
+  // A full bounded result is not proof that any further rows exist.
+  if (returned === FEED_EGRESS_LIMIT) {
+    console.warn("Event egress read reached capacity.", {
+      surface,
+      limit: FEED_EGRESS_LIMIT,
+      returned,
+    });
+  }
+}
+
 export async function sitemapEvents(
   db: Db,
 ): Promise<{ key: string; status: "published"; updatedAt: string | null }[]> {
@@ -871,10 +882,11 @@ export async function sitemapEvents(
     .select()
     .from(events)
     .where(eq(events.status, "published"))
-    .orderBy(asc(events.startsAt))
+    .orderBy(asc(events.startsAt), asc(events.id))
     .limit(FEED_EGRESS_LIMIT);
+  warnEgressCapacity("sitemap", rows.length);
   // One poison row (unrenderable window, or an updatedAt outside the JS Date
-  // range) must not empty the sitemap via the route's `.catch(() => [])`:
+  // range) must not empty the sitemap via the route's static fallback:
   // skip it in JS and log the count. The guard lives in JS (not SQL) because
   // SQL cannot see a timestamp that is finite in PostgreSQL but out of range
   // in JS. A DB failure still rejects here; the route degrades to the static
@@ -904,9 +916,15 @@ export async function listFeed(db: Db, statuses: ("published" | "cancelled")[], 
     .where(and(inArray(events.status, statuses), finiteEventWindow, gte(events.endsAt, now)))
     .orderBy(asc(events.startsAt), asc(events.id))
     .limit(FEED_EGRESS_LIMIT);
+  warnEgressCapacity("feed", rows.length);
   // Feed builders stringify date parts without throwing, so without this the
   // export would serve corrupt `NaN` instants instead of failing loudly.
-  return rows.filter(isRenderableEventWindow);
+  const renderable = rows.filter(isRenderableEventWindow);
+  const skipped = rows.length - renderable.length;
+  if (skipped > 0) {
+    console.warn("listFeed skipped unrenderable rows.", { skipped });
+  }
+  return renderable;
 }
 
 export async function getEventRow(db: Db, key: string) {

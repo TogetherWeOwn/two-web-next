@@ -69,47 +69,65 @@ vi.mock("postgres", () => {
     const record = { ended: false };
     state.clients.push(record);
     const fullBatch = Array.from({ length: PRUNE_DELETE_BATCH_SIZE }, () => ({}));
-    const tag = async (
-      parts: TemplateStringsArray,
-      ..._values: unknown[]
-    ): Promise<Record<string, unknown>[]> => {
-      const text = parts.join(" ").toLowerCase();
-      if (text.includes("pg_try_advisory_xact_lock")) return [{ got: true }];
-      if (text.includes("savepoint") || text.includes("rollback to") || text.includes("release ")) {
+    type Settings = { lock: string; statement: string };
+    const makeTag =
+      (settings: Settings) =>
+      async (
+        parts: TemplateStringsArray,
+        ...values: unknown[]
+      ): Promise<Record<string, unknown>[]> => {
+        const text = parts.join(" ").toLowerCase();
+        if (text.includes("pg_try_advisory_xact_lock")) return [{ got: true }];
+        if (text.includes("current_setting(")) return [{ ...settings }];
+        if (text.includes("set_config(")) {
+          settings.lock = values[0] as string;
+          settings.statement = values[1] as string;
+          return [{ set_config: settings.statement }];
+        }
+        if (
+          text.includes("savepoint") ||
+          text.includes("rollback to") ||
+          text.includes("release ")
+        ) {
+          return [];
+        }
+        if (state.failTable && text.includes(state.failTable)) {
+          throw new state.SyntheticDbError();
+        }
+        if (text.includes("job_unique_locks") && state.gateLockSweep) {
+          state.order.push("lock:start");
+          await new Promise<void>((resolve) => {
+            state.releaseLockSweep = resolve;
+          });
+          state.order.push("lock:settled");
+          return [];
+        }
+        if (state.capTable && text.includes(state.capTable)) return fullBatch;
         return [];
-      }
-      if (state.failTable && text.includes(state.failTable)) {
-        throw new state.SyntheticDbError();
-      }
-      if (text.includes("job_unique_locks") && state.gateLockSweep) {
-        state.order.push("lock:start");
-        await new Promise<void>((resolve) => {
-          state.releaseLockSweep = resolve;
-        });
-        state.order.push("lock:settled");
-        return [];
-      }
-      if (state.capTable && text.includes(state.capTable)) return fullBatch;
-      return [];
-    };
-    // The transaction client handed out by `begin` is the only surface with
-    // `savepoint`, matching the real driver: the pool client has none.
-    const txClient = Object.assign(tag, {
-      savepoint: async (...args: unknown[]) => {
-        const run = args.find((arg) => typeof arg === "function") as (
-          tx: unknown,
-        ) => Promise<unknown>;
-        return run(txClient);
-      },
-    });
-    const client = Object.assign(tag, {
+      };
+    // Each scope has a distinct function, as in postgres.js. A successful
+    // savepoint keeps SET LOCAL changes; rejection rolls them back. Ending a
+    // transaction discards them without changing the pool's session defaults.
+    const makeTransaction = (settings: Settings) =>
+      Object.assign(makeTag(settings), {
+        savepoint: async (...args: unknown[]): Promise<unknown> => {
+          const run = args.find((arg) => typeof arg === "function") as (
+            tx: unknown,
+          ) => Promise<unknown>;
+          const local = { ...settings };
+          const out = await run(makeTransaction(local));
+          Object.assign(settings, local);
+          return out;
+        },
+      });
+    const settings: Settings = { lock: "0", statement: "0" };
+    const client = Object.assign(makeTag(settings), {
       begin: async (...args: unknown[]) => {
         const run = args.find((arg) => typeof arg === "function") as (
           tx: unknown,
         ) => Promise<unknown>;
-        return run(txClient);
+        return run(makeTransaction({ ...settings }));
       },
-      savepoint: undefined,
       end: async () => {
         record.ended = true;
         state.order.push(`end:${index}`);

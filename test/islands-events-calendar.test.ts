@@ -337,7 +337,14 @@ describe("EventsCalendar review regressions", () => {
       const page = await src.request("/events", { headers: { cookie: auth.cookie } });
       expect(page.headers.get("cache-control")).toBe("private, no-store");
       expect(page.headers.get("set-cookie")).toContain("__Host-two_session=");
-      expect(await auth.store.get(auth.hash)).toBeNull(); // Full-page rotation remains intact.
+      // Rotation retires the active row but leaves its bounded predecessor grace.
+      expect(await auth.store.get(auth.hash)).toMatchObject({ member: true, moderator });
+      expect(await auth.store.statusHash(auth.hash)).toBeNull();
+      const replay = await src.request("/events", {
+        headers: { cookie: auth.cookie, ...fragmentHeaders },
+      });
+      expect(replay.headers.get("cache-control")).toBe("private, no-store");
+      expect(replay.headers.get("set-cookie")).toBeNull();
     },
   );
 

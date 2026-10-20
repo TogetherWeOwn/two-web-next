@@ -20,6 +20,7 @@
 import { dbFor } from "../admin/db";
 import type { Db } from "../db/index";
 import type { Env } from "../env";
+import type { RsvpClosedReason } from "../islands/contracts";
 import type { KitRequestSession } from "../kit-session";
 import type {
   EventGoneModel,
@@ -33,7 +34,7 @@ import type { JoinResult } from "../return-journey";
 import { canonicalUrl } from "../seo";
 import { eventJsonLd, siteJsonLd } from "../seo-json-ld";
 import { isValidZone } from "./date-format";
-import { googleCalendarUrl } from "./feeds";
+import { googleCalendarUrl, isWireInstant } from "./feeds";
 import { canonicalEventKey, eventKeyAllowed } from "./keys";
 import { fmt } from "./pages-shared";
 import {
@@ -111,6 +112,12 @@ export interface KitEventDetailModel {
   goingOccupancy: number;
   capacity: number | null;
   rsvpOpen: boolean;
+  /** Server-decided RSVP closure at render: the RsvpButton twin's verdict
+   * (draft, or past for non-published rows and endsAt at or before the
+   * server instant), or null when the control stays open. The view renders
+   * this verbatim and never compares endsAt to the viewer clock. Cancelled
+   * rows return the gone outcome, so "cancelled" never appears here. */
+  rsvpClosed: RsvpClosedReason | null;
   /** Absolute canonical URL: the share/copy target and the JSON-LD @id. */
   canonical: string;
   /** Rooted page path, e.g. `/e/<key>`: the join return destination. */
@@ -123,7 +130,8 @@ export interface KitEventDetailModel {
   /** Rooted .md alternate path; drafts have no Markdown view. */
   markdownAlternate?: string;
   icsUrl: string;
-  googleCalendarUrl: string;
+  /** Google Calendar deep link; null when the window is not ICS-wire-formattable. */
+  googleCalendarUrl: string | null;
   /** Copy-link target: identical to the canonical URL by construction. */
   copyLink: string;
   /** Server-formatted wall time in the event zone, ISO fallback. */
@@ -149,7 +157,8 @@ export interface KitEventDetailModel {
   viewerModerator: boolean;
   /** Signed-in display name for the header sign-out form; null for guests. */
   viewerUsername: string | null;
-  /** Machine end instant: the view closes RSVP for ended rows, as served. */
+  /** Machine end instant, as served. Closure no longer derives from this in
+   * the view — see rsvpClosed. */
   endsAt: string;
   jsonLd: string;
   siteJsonLd: string;
@@ -407,6 +416,18 @@ export async function resolveKitEventDetail(
             ? attendeePageHref(event.eventKey, attendeePage + 1)
             : null,
       };
+      // RSVP closure is decided once here, on the server render instant, with
+      // the RsvpButton twin's verdict (src/events/rsvp-button.tsx): draft,
+      // past for non-published rows, or past when endsAt is at or before now.
+      // Cancelled returns the gone outcome above, so it never reaches this
+      // model. The view renders this verdict verbatim.
+      const now = new Date();
+      const rsvpClosed: RsvpClosedReason | null =
+        event.status === "draft"
+          ? "draft"
+          : event.status !== "published" || event.endsAt <= now
+            ? "past"
+            : null;
       const pagePath = `/e/${event.eventKey}`;
       const pageCanonical = canonicalUrl(appUrl, pagePath);
       const robots = event.status === "draft" || event.status === "past" ? NOINDEX : null;
@@ -434,6 +455,7 @@ export async function resolveKitEventDetail(
           goingOccupancy: event.goingOccupancy,
           capacity: event.capacity,
           rsvpOpen: event.rsvpOpen,
+          rsvpClosed,
           canonical: pageCanonical,
           path: pagePath,
           // Stale-roster refresh keeps the validated attendee page (page 1
@@ -445,7 +467,12 @@ export async function resolveKitEventDetail(
           // every viewer, so only link it where it answers 200.
           ...(event.status === "draft" ? {} : { markdownAlternate: `/e/${event.eventKey}.md` }),
           icsUrl: `/events/${event.eventKey}.ics`,
-          googleCalendarUrl: googleCalendarUrl(event),
+          // Finite but non-wire years stay a readable page: only the Google
+          // Calendar deep link (an ICS instant pair) is omitted, mirroring Hono.
+          googleCalendarUrl:
+            isWireInstant(event.startsAt) && isWireInstant(event.endsAt)
+              ? googleCalendarUrl(event)
+              : null,
           copyLink: pageCanonical,
           whenText: formatEventWhen(event.startsAt, event.timezone),
           zoneLabel: isValidZone(event.timezone) ? event.timezone : "UTC",

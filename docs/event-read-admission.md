@@ -12,7 +12,9 @@ reads. It also charges redirects and missing-key requests on these routes.
 On the hot-zone paths the guard runs after the season grammar and the signal
 check, so a bad `?season=` (400) and an unknown signal (404) spend nothing;
 everywhere else on these four paths it runs before the aggregate reads and
-the board-view log insert.
+the board-view log insert. Invalid seasons return the branded 400 recovery page
+on both Hono and Kit, not a server-outage message; Kit data requests keep their
+machine-shaped error payload.
 
 The routes remain public; the budget applies equally to signed-in clients because
 reading a session before admission would itself incur database work. It does not
@@ -60,6 +62,27 @@ is not a claim of enforcement during a database outage. Clients behind one IPv4
 NAT share a budget, and the current shared `clientKey` policy determines IPv6
 sharing. Sixty reads per minute leaves room for normal browsing and subscription
 refreshes; heavy shared clients may receive 429 and should respect `Retry-After`.
+
+## CI loopback budget
+
+Off-edge requests carry no `CF-Connecting-IP`, so every suite in the `e2e.yml`
+`browser-smoke` job shares the one `events-read:anon` bucket on the disposable
+Postgres. The visual, journey, parity and perf suites run sequentially and
+issue well over 60 guarded reads inside a 60-second window, so whichever
+navigation lands past the budget gets a 429 with a matching URL and times out
+on content instead of failing fast on status. Both loopback workers therefore
+set `E2E_PUBLIC_READ_BUDGET` to `600` — `e2e/wrangler.jsonc` for Hono and the
+generated Kit fixture in `ci/kit-worker-dev.mjs`, which enforces the same
+bucket on the same disposable Postgres: ten times the per-client production
+budget, enough to absorb the combined suite bursts while a runaway loop still
+429s within the minute. A raise on only one worker would concentrate the flake
+on the other's legs, so the two values move together. The override is scoped
+to those loopback workers only — `publicReadBudget`
+(`src/events/routes-shared.ts`) keeps 60 for absent, invalid or nonpositive
+values, and no deployed config sets the var.
+`test/e2e-public-read-budget.test.ts` pins the override behaviour and the
+deployed-config absence; `ci/kit-parity-ci-wiring.test.mjs` pins the Kit
+fixture value against the Hono one.
 
 ## Verification
 

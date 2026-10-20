@@ -287,9 +287,11 @@ PR or release. Automatic runs promote only a staging green that soaked 30
 minutes with no newer red staging run, skip cleanly when production already
 serves the target (`/up` revision marker) or there is nothing soaked and green,
 and stop with a clear error when the target journal has entries production
-lacks (automatic migration waits on the least-privilege migrator). A manual
-re-dispatch with `migrations_applied: true` records an audited continuation
-once `db-migrate.yml` (target production) has applied those entries. Repo
+lacks (automatic migration waits on the least-privilege migrator). An unknown
+live commit after three `/up` reads also stops promotion. A manual re-dispatch
+with `migrations_applied: true` records an audited continuation past either stop
+once `db-migrate.yml` (target production) has applied the target's migrations;
+automatic runs ignore that input and halt on either condition. Repo
 variable `PRODUCTION_HOLD_UNTIL` (ISO-8601 UTC, at most 24h ahead) pauses all
 promotion while now is before its value. Before the deploy job can start,
 `ci/production-deploy-gate.mjs` requires the repository variable
@@ -488,6 +490,14 @@ Pass `--announcement-only` (workflow input `announcement_only`) to run only
 `announcement.post` and its same-key replay check, for a receiver that does not
 implement `role.assign` or `event.upsert`; then only `--channel-key` is needed.
 Both probes are fixture-tested in `check` without real secrets.
+
+The smoke and drill accept only the documented `--name=value` options and the
+smoke's bare `--announcement-only` flag. Unknown flags (including `--dry-run`),
+duplicates, positional arguments, bare value options and empty values exit 2
+with bounded usage before any action or fetch. There is no preview mode. Each
+run validates all applicable payloads with the bot client's validators before
+its first action or queued carrier; announcement-only validates only its
+announcement. Invalid inputs therefore cannot leave earlier steps applied.
 
 The CallInternalAction drill (`drill:internal-action`) ports the remaining
 drill-only half of `docs/parity.md` §6: production web never dispatches

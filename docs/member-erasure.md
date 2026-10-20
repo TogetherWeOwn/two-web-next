@@ -47,7 +47,7 @@ Like `revoke-sessions`, the command sets its own session
 only; global database policy is unchanged. If a member row or table is
 locked, the run fails bounded with exit 1 and the redacted "operation
 failed; changes rolled back" message; the transaction rolls back, so a
-timed-out run erases nothing and all five tables stay unchanged. Verify
+timed-out run erases nothing and all member tables stay unchanged. Verify
 with a dry-run to read the per-table counts, then retry (re-run) the apply
 once the lock clears. If timeouts repeat, escalate to the DevOps &
 Reliability Engineer with the redacted error and the dry-run counts; do
@@ -66,9 +66,34 @@ For ONE Discord id, in one transaction:
 | `profiles` | `user_id` |
 | `rsvps` | `user_id` |
 | `web_sessions` | `user_id` (this signs the member out everywhere) |
+| `web_session_grace` | `user_id` (retired predecessor identity and bearer hashes) |
 | `join_attempts` | `discord_id` |
 
+The output counts carry one key per table: `web_sessions` counts live
+session rows and `web_session_grace` counts retired predecessor records, so a
+rotated member shows 1 under each key. Dry-run includes those same rows. The
+disposable-Postgres proofs in `test/session-predecessor-grace-postgres.test.ts`
+and `test/session-predecessor-grace-erasure.test.ts` check dry-run, deletion,
+repeat apply and preservation of another member's live session and grace.
+
 A second apply is a no-op: every count returns 0.
+
+## Concurrent rotations
+
+A rotation that is already in flight when erasure reaches its session
+removal cannot smuggle its successor past the erase. The session removal
+repeats its DELETE with a fresh snapshot until one pass finds no session
+row left for the member, and the reported `web_sessions` count is the
+rows the erase itself physically deleted, accumulated across passes. A
+rotation that starts after erasure has removed its source fails on the
+missing row without minting a successor.
+
+Boundary: this converges over rotations of sessions that existed when
+erasure ran. It is not a tombstone and not a sign-in ban: a genuinely
+new session created after erasure authenticates normally, and a sign-in
+racing the final pass can land after it. Retained-table policy is
+unchanged, and nothing here authorizes running erasure outside the
+Scope below.
 
 ## What is retained and why
 

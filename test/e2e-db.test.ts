@@ -33,6 +33,7 @@ describe.skipIf(!url)("login/logout/rotation against Postgres", () => {
   afterAll(async () => sql.end());
   afterEach(async () => {
     vi.unstubAllGlobals();
+    await sql`delete from web_session_grace`;
     await sql`delete from web_sessions`;
   });
 
@@ -76,7 +77,13 @@ describe.skipIf(!url)("login/logout/rotation against Postgres", () => {
     expect(secondCookie).not.toBe(firstCookie);
 
     const replay = await app.request("/", { headers: { cookie: firstCookie } }, env);
-    expect(await replay.text()).toContain("Sign in with Discord");
+    expect(await replay.text()).toContain("Rick");
+    expect(replay.headers.getSetCookie()).toHaveLength(0);
+    expect(await sql`select count(*)::int as n from web_sessions`).toEqual([{ n: 1 }]);
+    await sql`update web_session_grace set grace_expires_at = now()`;
+    const expiredReplay = await app.request("/", { headers: { cookie: firstCookie } }, env);
+    expect(await expiredReplay.text()).toContain("Sign in with Discord");
+    expect(expiredReplay.headers.getSetCookie()).toHaveLength(0);
 
     const out = await app.request(
       "/logout",
@@ -138,6 +145,11 @@ describe.skipIf(!url)("login/logout/rotation against Postgres", () => {
       }),
     );
     expect(results.filter(Boolean)).toHaveLength(1);
+    expect(await store.get(original.tokenHash)).toMatchObject({ userId: "42" });
+    expect(await store.statusHash(original.tokenHash)).toBeNull();
+    const losingHash = await hashToken(`two_test_replacement_${results[0] ? "b" : "a"}`);
+    expect(await store.get(losingHash)).toBeNull();
+    await sql`update web_session_grace set grace_expires_at = now() where predecessor_hash = ${original.tokenHash}`;
     expect(await store.get(original.tokenHash)).toBeNull();
     const count = await sql<{ n: number }[]>`select count(*)::int as n from web_sessions`;
     expect(count[0]!.n).toBe(1);

@@ -46,6 +46,7 @@ timing check to fake timers; do not retry the job until it passes.
 | `test/jobs-postgres.test.ts` "overlapping cron invocations single-flight…", "different jobs do not block each other" | 200 ms / 100 ms sleeps | Give the first flight time to take its lock before the second starts; a longer pause is safe, a shorter one can let the second flight win |
 | `test/rsvp-lock-busy.test.ts` (queued control) | `expect.poll` 4 s | Waits for the waiter backend to queue on the member advisory lock before releasing, proving the wait-then-judge path rather than a race past the holder |
 | `test/human-throttle-concurrency.test.ts` "uses post-lock time for expiry…" | 1.1 s held lock vs 2 s `WEB_THROTTLE_LOCK_TIMEOUT_MS` | The admission must acquire the held lock before the 2 s timeout so the post-lock expiry read still charges; a much slower host would refuse with no hit and break the row-count asserts |
+| `test/prune-execution-budget-acceptance.test.ts` | 8,000 ms default JavaScript observation ceiling (2,000 ms lease controls) vs 5,000 ms DB-side lock/statement budget | Witnesses active DELETE waits through `pg_stat_activity` (`Lock` plus `pg_blocking_pids`, or `PgSleep`) and requires settlement before external release/cleanup; leaves margin beyond the DB cap while proving cancellation, restored settings and healthy-sibling commits |
 
 The lock-busy busy verdicts (`test/web-throttle-lock-busy.test.ts`,
 `test/agent-events-inner-lock-busy.test.ts`, and the busy cases in

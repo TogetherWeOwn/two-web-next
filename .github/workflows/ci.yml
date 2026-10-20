@@ -227,6 +227,9 @@ jobs:
         run: |
           npx vitest run test/profile-native-length.test.ts --reporter=default --reporter=json --outputFile.json=artifacts/a11y/profile-native-length.json
           node ci/a11y-require-executed.mjs artifacts/a11y/profile-native-length.json "native browser submission and real island binder" 15
+      - name: Install Kit workspace dependencies (profile, error shell and member auth render)
+        # All three browser fixtures SSR-compile Svelte from the Kit workspace.
+        run: npm ci --prefix web --include=dev --no-audit --no-fund
       - name: Profile native 422 baseline regressions (memory fixtures)
         env:
           A11Y_BROWSER_TESTS: "true"
@@ -251,8 +254,6 @@ jobs:
         run: |
           npx vitest run test/calendar-search-unicode-boundaries.test.ts --reporter=default --reporter=json --outputFile.json=artifacts/a11y/calendar-search-unicode-boundaries.json
           node ci/a11y-require-executed.mjs artifacts/a11y/calendar-search-unicode-boundaries.json "native calendar search input (real Chromium typing/paste)" 21
-      - name: Install Kit workspace dependencies (Kit SSR browser fixtures)
-        run: npm ci --prefix web --include=dev --no-audit --no-fund
       - name: Kit member auth (real Chromium, local HTTPS fixtures)
         run: |
           mkdir -p artifacts/a11y
@@ -400,13 +401,11 @@ jobs:
       - name: Floor guard (HARD)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
         run: npm run floor-guard:selftest && npm run floor-guard
-      # Test-inventory WARN gate (quality-gates.md): every test file runs
-      # somewhere. Filesystem-only; continue-on-error so it reports without
-      # ever failing the job or skipping the steps after it (WARN).
-      - name: Test inventory (WARN)
+      # Test-inventory HARD gate (quality-gates.md): every test file runs
+      # somewhere. Filesystem-only; --strict fails the job on any orphan.
+      - name: Test inventory (HARD)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
-        continue-on-error: true
-        run: npm run test:inventory:selftest && npm run test:inventory
+        run: npm run test:inventory:selftest && npm run test:inventory -- --strict
       # SvelteKit workspaces (house-rules parity): unit coverage SSR-compiles
       # .svelte through web's svelte/compiler, so install before Check. Runs
       # whenever Check runs (docs/draft gate only): coverage runs every test
@@ -558,6 +557,9 @@ jobs:
       - name: Backup target selftest (fixtures, no secrets)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true')
         run: python3 ci/backup-target-selftest
+      - name: Backup branch-target selftest (stubbed, no secrets)
+        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true')
+        run: bash ci/db-backup-branch-target-selftest.sh
       - name: Database backup argv selftest (stubbed, no secrets)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true')
         run: bash ci/db-backup-argv-selftest.sh
@@ -751,9 +753,16 @@ jobs:
         run: npm run db:migrate
         env:
           DATABASE_URL: postgres://postgres:ci@localhost:5432/postgres
+      - name: Node 22 progress diagnostics selftests (local fixtures)
+        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
+        run: node --test ci/node22-progress.test.mjs
       - name: Lint + typecheck + unit tests on Node 22.23.0
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
-        run: npm run lint && npm run typecheck && npm test
+        run: |
+          node ci/node22-progress.mjs "$$" &
+          diagnostics_pid=$!
+          trap 'kill "$diagnostics_pid" 2>/dev/null || :; wait "$diagnostics_pid" 2>/dev/null || :' EXIT
+          npm run lint && npm run typecheck && npm test
         env:
           DATABASE_URL: postgres://postgres:ci@localhost:5432/postgres
           AUDIT_IMPORT_TEST_DATABASE_URL: postgres://postgres:ci@localhost:5432/postgres
