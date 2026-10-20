@@ -4,9 +4,9 @@ The public event pages and feeds share one `events-read:<clientKey>` budget:
 **60 admitted requests per client in the last 60 seconds**. This covers GET and
 HEAD on `/events` (including search and island fragments), `/events/past`,
 `/events.rss`, `/events.ics`, `/events/:file.ics`, `/e/:key`, `/events.md`,
-`/e/:key.md` and the hot-zone heatmaps (`/hotzones`, `/hotzones/joins`,
-`/hotzones/voice`, `/hotzones/games`). Different query values, page numbers,
-event keys and feed formats do not create new budgets.
+`/e/:key.md`, `/sitemap_index.xml` and the hot-zone heatmaps (`/hotzones`,
+`/hotzones/joins`, `/hotzones/voice`, `/hotzones/games`). Different query values,
+page numbers, event keys and feed formats do not create new budgets.
 The guard runs before event-store access, session reads, analytics and Discord
 reads. It also charges redirects and missing-key requests on these routes.
 On the hot-zone paths the guard runs after the season grammar and the signal
@@ -18,6 +18,9 @@ The routes remain public; the budget applies equally to signed-in clients becaus
 reading a session before admission would itself incur database work. It does not
 change the session requirement or guest 401 responses on `/events.json` or
 `/events/:key`, the existing write/auth budgets, or `/up` readiness.
+The sitemap is admitted before database setup and its event scan; its static-only
+200 fallback on a database outage is unchanged. The database-free `/robots.txt`
+and `/openapi.json` routes remain unguarded.
 
 ## Responses and search bounds
 

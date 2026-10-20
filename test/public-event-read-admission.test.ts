@@ -6,6 +6,8 @@ import type { Env } from "../src/env";
 import { PUBLIC_EVENT_READS_PER_MINUTE, registerEventRoutes } from "../src/events/routes";
 import { MAX_QUERY_LENGTH } from "../src/events/search-log";
 import { EVENTS_SEARCH_TOO_LONG_COPY } from "../src/islands/contracts-calendar";
+import { registerPublicApiRoutes } from "../src/public-data/routes";
+import { registerSeoLeaves } from "../src/seo-leaves";
 import type { Sql } from "../src/sessions";
 import type { EnvWithThrottle } from "../src/throttle";
 
@@ -16,6 +18,7 @@ const PATHS = [
   "/events.ics",
   "/events/01ARZ3NDEKTSV4RRFFQ69G5FAA.ics",
   "/e/01ARZ3NDEKTSV4RRFFQ69G5FAA",
+  "/sitemap_index.xml",
 ];
 const IP = "192.0.2.17";
 
@@ -55,6 +58,8 @@ function fixture(db: Db | null = null) {
   const readSession = vi.fn(async () => null);
   const app = new Hono<{ Bindings: Env }>();
   registerEventRoutes(app, readSession, readSession);
+  registerSeoLeaves(app);
+  registerPublicApiRoutes(app);
   const env = {
     APP_URL: "https://next.example.test",
     DISCORD_EVENTS: { upcoming: async () => [], lastReadFailed: () => false },
@@ -115,6 +120,65 @@ describe("public event read admission", () => {
     expect(new Set(f.hits.map((hit) => hit.bucket))).toEqual(new Set([`events-read:${IP}`]));
     expect(f.eventStore).not.toHaveBeenCalled();
     expect(f.readSession).not.toHaveBeenCalled();
+  });
+
+  it("charges sitemap reads once and refuses before the event scan without XML success headers", async () => {
+    const scan = vi.fn(async () => ({ rows: [] }));
+    const f = fixture(drizzle(scan) as unknown as Db);
+    const admitted = await f.request("/sitemap_index.xml");
+    expect(admitted.status).toBe(200);
+    expect(admitted.headers.get("cache-control")).toBe("public, max-age=3600");
+    expect(admitted.headers.get("content-type")).toBe("application/xml; charset=UTF-8");
+    expect(f.hits).toEqual([{ bucket: `events-read:${IP}`, at: expect.any(Number) }]);
+    expect(scan).toHaveBeenCalledOnce();
+    // Spend the rest through another route, then prove both GET and HEAD stop before dbFor.
+    f.eventStore.mockReturnValue(null);
+    for (let n = 1; n < PUBLIC_EVENT_READS_PER_MINUTE; n++) await f.request("/events");
+    f.eventStore.mockReturnValue(drizzle(scan) as unknown as Db);
+    f.eventStore.mockClear();
+    scan.mockClear();
+    for (const method of ["GET", "HEAD"]) {
+      const response = await f.request("/sitemap_index.xml", { method });
+      expect(response.status).toBe(429);
+      expect(response.headers.get("retry-after")).toBe("60");
+      expect(response.headers.get("cache-control")).toBe("no-store, private");
+      expect(response.headers.get("content-type")).toContain("text/html");
+      expect(await response.text()).toEqual(
+        method === "HEAD" ? "" : expect.stringContaining("Slow down a little"),
+      );
+    }
+    expect(f.eventStore).not.toHaveBeenCalled();
+    expect(scan).not.toHaveBeenCalled();
+    expect(f.hits).toHaveLength(PUBLIC_EVENT_READS_PER_MINUTE);
+  });
+
+  it("keeps static sitemap fallback during an outage and leaves static discovery routes unguarded", async () => {
+    const f = fixture();
+    const missing = await f.request("/sitemap_index.xml");
+    expect(missing.status).toBe(200);
+    const staticXml = await missing.text();
+    expect(staticXml).toContain("<loc>https://next.example.test/events</loc>");
+    f.eventStore.mockReturnValue(
+      drizzle(async () => {
+        throw new Error("DB outage");
+      }) as unknown as Db,
+    );
+    f.env.THROTTLE_STORE = async () => {
+      throw new Error("Limiter outage");
+    };
+    const outage = await f.request("/sitemap_index.xml");
+    expect(outage.status).toBe(200);
+    expect(outage.headers.get("cache-control")).toBe("public, max-age=3600");
+    expect(await outage.text()).toBe(staticXml);
+    const staticRoutes = fixture();
+    await staticRoutes.exhaust();
+    staticRoutes.throttleStore.mockClear();
+    staticRoutes.eventStore.mockClear();
+    for (const path of ["/robots.txt", "/openapi.json"]) {
+      expect((await staticRoutes.request(path)).status).toBe(200);
+    }
+    expect(staticRoutes.throttleStore).not.toHaveBeenCalled();
+    expect(staticRoutes.eventStore).not.toHaveBeenCalled();
   });
 
   it("renders a private branded browser refusal and guards HEAD and island reads", async () => {
