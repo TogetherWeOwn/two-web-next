@@ -18,4 +18,4 @@ const status = $derived(isKitErrorStatus(page.status) ? page.status : 500);
   <meta name="robots" content="noindex, nofollow" />
 </svelte:head>
 
-<ErrorShell code={status} inviteUrl={FALLBACK_INVITE} />
+<ErrorShell code={status} inviteUrl={FALLBACK_INVITE} supportReference={page.data.requestId} />

@@ -17,6 +17,7 @@ import { deleteCookie } from "hono/cookie";
 import type { AccessSink } from "./access-log";
 import { isContentLeafPath, robotsTagFor, securityHeadersFor } from "./headers";
 import { STAGING_APP_URL } from "./qa";
+import { newRequestId, safeRequestId } from "./request-log";
 import { transformContentLeafChunk } from "./kit-content-chunk";
 import type { KitLocals } from "./kit-session";
 import { type MemberRead, memberReadResponse } from "./member-reads";
@@ -447,6 +448,14 @@ function viewerOf(locals: unknown): string | null {
   return bridged?.status === "authenticated" ? (bridged.session?.userId ?? null) : null;
 }
 
+// The validated id dispatchHookRequest merged into locals on the Kit branch.
+// Read back defensively: only the string the dispatch set can reach an
+// error.alert line (alertRequestError re-validates at emit).
+function kitRequestId(locals: unknown): string | undefined {
+  const id = (locals as { requestId?: unknown } | undefined)?.requestId;
+  return typeof id === "string" ? id : undefined;
+}
+
 // The Kit catch-all route id that hands the request to the Hono app. Shared
 // here so the hook and its tests agree without importing SvelteKit code.
 export const HONO_FALLBACK_ROUTE_ID = "/[...path]";
@@ -660,7 +669,11 @@ function renderMemberRead(
   deps: HookDispatchDeps,
 ): Promise<Response> {
   return memberReadResponse(
-    { method: event.request.method, route: event.route?.id ?? "unmatched" },
+    {
+      method: event.request.method,
+      route: event.route?.id ?? "unmatched",
+      requestId: kitRequestId(event.locals),
+    },
     () =>
       reads && typeof reads === "object" ? { ...reads, viewer: viewerOf(event.locals) } : undefined,
     async (entry) => {
@@ -758,12 +771,23 @@ export async function dispatchHookRequest(
   if (!route) {
     return deps.honoFetch(event.request);
   }
+  // Kit request correlation (Hono requestLog parity): admit the validated
+  // edge id (cf-ray) or mint a ULID, ignoring any client-sent x-request-id.
+  // Merged into locals before resolve so Svelte loads and the error
+  // boundaries read the same id the response header carries; every
+  // Kit-branch return below sets it, while Hono-owned responses stay
+  // untouched (their middleware sets the header in production).
+  const requestId = safeRequestId(event.request.headers.get("cf-ray")) ?? newRequestId();
+  const priorLocals = (event.locals as Record<string, unknown> | undefined) ?? {};
+  event.locals = { ...priorLocals, requestId };
   // Kit same-origin gate (Hono sameOrigin parity): unsafe methods need an
   // exact APP_URL Origin (or the Sec-Fetch-Site fallback when Origin is
   // absent), with only the documented machine exemptions. Refused before the
   // session bridge and before resolve, body unread, hardened like Hono.
   if (!isSameOriginAllowed(event.request, deps.appUrl)) {
-    return sameOriginRefusal(event, deps.appUrl, deps.featuredImageHosts);
+    const refused = sameOriginRefusal(event, deps.appUrl, deps.featuredImageHosts);
+    refused.headers.set("x-request-id", requestId);
+    return refused;
   }
   // Kit branch only: one read-only session decision merged into locals before
   // resolve. A bridge failure must not 500 the render — public Kit pages fail
@@ -894,6 +918,10 @@ export async function dispatchHookRequest(
     deleteCookie(c, JOIN_RESULT_COOKIE, deleteOpts);
     response = c.res;
   }
+  // The Hono-fallback return above stays undecorated (Hono answering
+  // through Kit keeps its own header); every other Kit response carries the
+  // id the boundaries render and the error.alert lines log.
+  response.headers.set("x-request-id", requestId);
   decorateKitResponse(response, event, deps.appUrl, deps.featuredImageHosts);
   return response;
 }

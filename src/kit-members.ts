@@ -91,6 +91,8 @@ export interface MembersBoardArgs {
    * its pathname+search as the signed return destination. Optional: a legacy
    * call without it resolves the plain branded 302. */
   url?: string;
+  /** Validated dispatch id for error.alert correlation; absent in legacy calls. */
+  requestId?: string;
 }
 
 function branded(message: string, status: number): Error & { status: number } {
@@ -200,7 +202,11 @@ export function membersBoardUnavailable(): Error & { status: number } {
 function reportBoardFailure(err: unknown, args: MembersBoardArgs): never {
   const status = (err as { status?: unknown })?.status;
   if (typeof status === "number") throw err;
-  alertRequestError(err, { method: "GET", route: "/leaderboards/members" });
+  alertRequestError(err, {
+    method: "GET",
+    route: "/leaderboards/members",
+    requestId: args.requestId,
+  });
   args.setHeaders({ "cache-control": "private, no-store" });
   throw membersBoardUnavailable();
 }

@@ -39,6 +39,8 @@ export interface HotzonesLoadArgs {
   dbForFn: (c: { env: Env }) => Promise<Db | null>;
   loadJoinsGridFn?: LoadJoinsGrid;
   recordBoardViewFn?: RecordBoardView;
+  /** Validated dispatch id for error.alert correlation; absent in legacy calls. */
+  requestId?: string;
 }
 
 function branded(message: string, status: number): Error & { status: number } {
@@ -74,7 +76,7 @@ function seasonOrThrow(seasonParam: string | null): { window: SeasonWindow; labe
 function reportLoadFailure(err: unknown, args: HotzonesLoadArgs, route: string): never {
   const status = (err as { status?: unknown })?.status;
   if (typeof status === "number") throw err;
-  alertRequestError(err, { method: "GET", route });
+  alertRequestError(err, { method: "GET", route, requestId: args.requestId });
   args.setHeaders({ "cache-control": "private, no-store" });
   throw hotzonesUnavailable();
 }
