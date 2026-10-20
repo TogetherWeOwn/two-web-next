@@ -38,6 +38,7 @@ import type { Env } from "../src/env";
 import { createMemorySessionStore, hashToken, newSessionToken } from "../src/sessions";
 import app from "./app";
 import { clearAuditRows } from "./helpers/audit-rows";
+import { featuredBaselineFields } from "./helpers/featured-baseline";
 import { createMemberDataFixture, type MemberDataFixture } from "./helpers/member-data-db";
 
 export const FEATURED_BODY_MAX = 1000;
@@ -344,6 +345,7 @@ describe.skipIf(!process.env.DATABASE_URL)(
       const res = await routeApp().request(
         `/featured/${id}`,
         form({
+          ...(await featuredBaselineFields(db, id)),
           title: "Original slot",
           body: overMaxBody,
           image_url: "https://cdn.discordapp.com/photo.png",
@@ -375,6 +377,7 @@ describe.skipIf(!process.env.DATABASE_URL)(
       const res = await routeApp().request(
         `/featured/${id}`,
         form({
+          ...(await featuredBaselineFields(db, id)),
           title: "Original slot",
           body: atMaxBody,
           image_url: "https://cdn.discordapp.com/photo.png",

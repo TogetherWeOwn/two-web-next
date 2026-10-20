@@ -15,6 +15,7 @@ import {
 } from "../src/sessions";
 import app from "./app";
 import { createMemberDataFixture, type MemberDataFixture } from "./helpers/member-data-db";
+import { featuredBaselineFields } from "./helpers/featured-baseline";
 import { __resetHomeGuestCacheForTests } from "../src/home-cache";
 
 const startsAt = new Date("2026-10-01T12:34:56.789Z");
@@ -232,7 +233,7 @@ describe.skipIf(!process.env.DATABASE_URL)(
       expect(response.status).toBe(200);
       return response.text();
     };
-    const save = (values: Record<string, string>) =>
+    const save = async (values: Record<string, string>) =>
       admin.request(
         `/featured/${id}`,
         {
@@ -242,7 +243,11 @@ describe.skipIf(!process.env.DATABASE_URL)(
             origin: env.APP_URL,
             "content-type": "application/x-www-form-urlencoded",
           },
-          body: new URLSearchParams({ ...fields, ...values }),
+          body: new URLSearchParams({
+            ...(await featuredBaselineFields(fixture.db, id)),
+            ...fields,
+            ...values,
+          }),
         },
         bindings,
       );

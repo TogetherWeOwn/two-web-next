@@ -2,7 +2,12 @@ import { serializeSigned } from "hono/utils/cookie";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { adminApp } from "../src/admin/routes";
 import app from "./app";
-import { createFeatured, getFeatured, updateFeatured } from "../src/admin/store";
+import {
+  createFeatured,
+  featuredSaveBaseline,
+  getFeatured,
+  updateFeatured,
+} from "../src/admin/store";
 import type { EnvWithAdminDb } from "../src/admin/db";
 import type { Db } from "../src/db/index";
 import { createMemorySessionStore, hashToken, newSessionToken } from "../src/sessions";
@@ -52,6 +57,9 @@ const existing = {
   createdAt: new Date(0),
   updatedAt: new Date(0),
 };
+// Edit posts submit the mocked row's real saved-content baseline, the way a
+// rendered edit form carries it; only the store comparison is mocked.
+const BASELINE = await featuredSaveBaseline(existing);
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -89,6 +97,7 @@ async function post(path: string, imageUrl: string, bindings = env) {
         title: "Featured",
         image_url: imageUrl,
         image_alt: "Players together",
+        ...(path === "/featured" ? {} : { saved_baseline: BASELINE }),
       }),
     },
     bindings,
@@ -134,7 +143,11 @@ describe("featured preview response image policy (local fixtures)", () => {
         {
           method: "POST",
           headers: { cookie, origin: env.APP_URL },
-          body: new URLSearchParams({ title: "", image_url: "https://unapproved.com/bad.jpg" }),
+          body: new URLSearchParams({
+            title: "",
+            image_url: "https://unapproved.com/bad.jpg",
+            saved_baseline: BASELINE,
+          }),
         },
       ],
     ] as const) {
@@ -201,7 +214,10 @@ describe("featured create/edit image validation (local fixtures)", () => {
       expect((await post(path, url)).status).toBe(303);
       const write = path === "/featured" ? createFeatured : updateFeatured;
       expect(write).toHaveBeenCalled();
-      expect(vi.mocked(write).mock.calls[0]!.at(-1)).toMatchObject({ imageUrl: url });
+      // updateFeatured takes the submitted baseline as its trailing argument;
+      // the parsed input is the last argument only for creates.
+      const call = vi.mocked(write).mock.calls[0]!;
+      expect(path === "/featured" ? call.at(-1) : call[3]).toMatchObject({ imageUrl: url });
       expect((await post(path, url, { ...env, FEATURED_IMAGE_HOSTS: "" })).status).toBe(422);
     });
   }

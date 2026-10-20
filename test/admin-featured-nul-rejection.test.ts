@@ -22,6 +22,7 @@ import type { Db } from "../src/db/index";
 import type { Env } from "../src/env";
 import { createMemorySessionStore, hashToken, newSessionToken } from "../src/sessions";
 import { clearAuditRows } from "./helpers/audit-rows";
+import { featuredBaselineFields } from "./helpers/featured-baseline";
 import { createMemberDataFixture, type MemberDataFixture } from "./helpers/member-data-db";
 
 const NUL = "\u0000";
@@ -271,6 +272,7 @@ describe.skipIf(!process.env.DATABASE_URL)(
         const res = await app().request(
           `/featured/${id}`,
           form({
+            ...(await featuredBaselineFields(db, id)),
             title: "Original slot",
             body: "Original body",
             image_url: "https://cdn.discordapp.com/photo.png",

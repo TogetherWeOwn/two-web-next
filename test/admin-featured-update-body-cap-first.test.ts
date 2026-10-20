@@ -12,7 +12,12 @@
 // spies and a fail-if-touched Db double; no DATABASE_URL, no sockets.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { adminApp } from "../src/admin/routes";
-import { getFeatured, recordAccess, updateFeatured } from "../src/admin/store";
+import {
+  featuredSaveBaseline,
+  getFeatured,
+  recordAccess,
+  updateFeatured,
+} from "../src/admin/store";
 import type { FeaturedEditRow } from "../src/admin/store";
 import { BODY_LIMIT_BYTES } from "../src/body-limit";
 import type { Db } from "../src/db/index";
@@ -35,16 +40,11 @@ const ERROR = {
   reason: "payload_too_large",
   message: "Reduce the size of your request and try again.",
 };
-const FORM = {
-  title: "Game night",
-  body: "Bring a friend",
-  position: "0",
-};
 const row = {
   id: ID,
   legacyId: null,
-  title: FORM.title,
-  body: FORM.body,
+  title: "Game night",
+  body: "Bring a friend",
   url: null,
   imageUrl: null,
   imageAlt: null,
@@ -58,6 +58,14 @@ const row = {
   createdAt: new Date(0),
   updatedAt: new Date(0),
 } satisfies FeaturedEditRow;
+// The under-cap controls submit the row's real saved-content baseline, the
+// way a rendered edit form carries it; only the store comparison is mocked.
+const FORM = {
+  title: row.title,
+  body: row.body ?? "",
+  position: String(row.position),
+  saved_baseline: await featuredSaveBaseline(row),
+};
 
 // Any property access is a store read/write the fixture must never perform
 // (the store spies above are the only sanctioned store seam).

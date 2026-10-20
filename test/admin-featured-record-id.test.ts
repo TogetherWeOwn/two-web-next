@@ -3,6 +3,7 @@ import { adminApp } from "../src/admin/routes";
 import { parseRecordId } from "../src/admin/record-id";
 import {
   deleteFeatured,
+  featuredSaveBaseline,
   getFeatured,
   NotFoundError,
   recordAccess,
@@ -92,6 +93,9 @@ const row: FeaturedRow = {
   createdAt: new Date(0),
   updatedAt: new Date(0),
 };
+// Synthetic POSTs submit the mocked row's real saved-content baseline, the
+// way a rendered edit form carries it; only the store comparison is mocked.
+const BASELINE = await featuredSaveBaseline({ ...row, startsAtText: null, endsAtText: null });
 
 beforeEach(() => {
   vi.resetAllMocks();
@@ -131,7 +135,13 @@ async function request(
       method: route.method,
       headers: { cookie, origin: env.APP_URL },
       ...(route.method === "POST"
-        ? { body: new URLSearchParams({ title: "Updated fixture", position: "0" }) }
+        ? {
+            body: new URLSearchParams({
+              title: "Updated fixture",
+              position: "0",
+              saved_baseline: BASELINE,
+            }),
+          }
         : {}),
     },
     options.bindings ?? bindings,
@@ -193,6 +203,7 @@ for (const route of routes) {
           actor,
           id,
           expect.objectContaining({ title: "Updated fixture" }),
+          { expectedBaseline: BASELINE },
         );
         expect(deleteFeatured).not.toHaveBeenCalled();
       }

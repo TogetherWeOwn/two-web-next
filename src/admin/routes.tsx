@@ -56,6 +56,7 @@ import {
   createEvent,
   createFeatured,
   deleteFeatured,
+  featuredSaveBaseline,
   getEvent,
   getFeatured,
   getFeaturedIdByLegacyId,
@@ -63,6 +64,7 @@ import {
   listFeatured,
   NotFoundError,
   setRsvpOpen,
+  StaleFeaturedSaveError,
   transitionEvent,
   updateEvent,
   updateFeatured,
@@ -136,6 +138,37 @@ function errorPage(
 ) {
   c.status(status);
   return bufferedMemberHtml(c, <ErrorPage heading={heading} detail={detail} />, status);
+}
+
+const SAVED_BASELINE_SHAPE = /^[0-9a-f]{64}$/;
+
+/**
+ * Stale-save conflict (409): the submitted draft is preserved untouched, the
+ * original baseline is re-rendered so a repeat Save still refuses, and the
+ * moderator gets an explicit review-current-version action. Private/no-store:
+ * the draft belongs to this moderator's session, never a shared cache.
+ */
+function featuredSaveConflict(
+  c: Context<Vars>,
+  row: FeaturedEditRow,
+  values: Record<string, unknown>,
+  submittedBaseline: string | undefined,
+) {
+  c.status(409);
+  c.header("Cache-Control", "private, no-store");
+  return c.html(
+    <FeaturedFormPage
+      appUrl={c.env.APP_URL}
+      imageHosts={c.env.FEATURED_IMAGE_HOSTS}
+      mode="edit"
+      row={row}
+      values={values}
+      errors={{}}
+      baseline={submittedBaseline}
+      conflict
+    />,
+    409,
+  );
 }
 
 /** Validation errors re-render the form (422). */
@@ -631,6 +664,7 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
     if (!db) return bufferedMemberText(c, "Admin temporarily unavailable", 503);
     const row = await getFeatured(db, id);
     if (!row) return errorPage(c, 404, "Featured content not found");
+    const baseline = await featuredSaveBaseline(row);
     return bufferedMemberHtml(
       c,
       <FeaturedFormPage
@@ -640,6 +674,7 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
         row={row}
         values={featuredValues(row)}
         errors={{}}
+        baseline={baseline}
       />,
     );
   });
@@ -658,6 +693,16 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
       if (!existing) return errorPage(c, 404, "Featured content not found");
       const values = await parsedForm(c);
       if (!values) return c.text("Bad request", 400);
+      // A missing or malformed baseline can never silently bypass protection:
+      // it refuses exactly like a stale one, with the draft preserved.
+      const submitted = values.saved_baseline;
+      if (typeof submitted !== "string" || !SAVED_BASELINE_SHAPE.test(submitted))
+        return featuredSaveConflict(
+          c,
+          existing,
+          values,
+          typeof submitted === "string" ? submitted : undefined,
+        );
       let input;
       try {
         input = parseFeaturedForm(values, c.env.FEATURED_IMAGE_HOSTS);
@@ -675,6 +720,7 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
                   row={existing}
                   values={v}
                   errors={errors}
+                  baseline={submitted}
                 />,
               ),
             values,
@@ -683,10 +729,14 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
         throw err;
       }
       try {
-        const row = await updateFeatured(db, c.get("adminActor"), id, input);
+        const row = await updateFeatured(db, c.get("adminActor"), id, input, {
+          expectedBaseline: submitted,
+        });
         return c.redirect(`/admin/featured/${row.id}`, 303);
       } catch (err) {
         if (err instanceof NotFoundError) return errorPage(c, 404, "Featured content not found");
+        if (err instanceof StaleFeaturedSaveError)
+          return featuredSaveConflict(c, existing, values, submitted);
         throw err;
       }
     },
