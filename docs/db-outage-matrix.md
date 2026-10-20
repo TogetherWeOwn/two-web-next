@@ -13,7 +13,7 @@ The legacy `/auth/discord/redirect` alias remains database-free. The ordinary
 login start persists a one-use journey and retains its `/?n=signin_failed`
 redirect when persistence fails. A matching-state callback whose journey
 consume throws a classified database outage instead reaches the branded 503
-(`src/auth/routes.ts:155-163`, `src/error-responses.tsx:64`), before any Discord
+(`src/auth/routes.ts:157-164`, `src/error-responses.tsx:65`), before any Discord
 call. Genuine strays keep `signin_failed`/`signin_denied`; store acquisition
 and unclassified consume errors keep their existing fallback. Offline throwing
 store and replay controls live in `test/callback-journey-outage.test.ts`.
