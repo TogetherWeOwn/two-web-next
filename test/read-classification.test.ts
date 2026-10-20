@@ -46,6 +46,13 @@ const MILESTONE_ROW =
   "select member_id, milestone, occurred_at, detail from web_v1.member_milestones where member_id = $1 order by occurred_at desc, milestone asc, detail asc nulls last limit 101";
 const SELF_POSITION =
   "select event_id, user_id, position from ( select event_id, user_id, row_number() over (partition by event_id order by created_at, coalesce(legacy_id, id), id)::int as position from rsvps where event_id in ($1, $2) and status = 'waitlisted' ) line where user_id = $3";
+// Relative-scope member board (src/leaderboards/members.ts): exact normalized
+// statements from the query builder, full-filter variants. Kept in sync on
+// purpose — if the read changes shape, these pins must change too.
+const RELATIVE_RANK_READ =
+  "select ranked.user_id as user_id, ranked.rank as rank from ( select grouped.user_id as user_id, row_number() over (order by grouped.count desc, grouped.user_id asc)::int as rank from ( select rsvps.user_id as user_id, count(*)::int as count from rsvps inner join events on events.id = rsvps.event_id inner join users on users.id = rsvps.user_id left join profiles on profiles.user_id = rsvps.user_id where rsvps.status = 'going' and events.status = 'published' and users.member = true and (profiles.leaderboard_opt_out is null or profiles.leaderboard_opt_out = false) and events.starts_at >= $1 and events.starts_at < $2 and lower(trim(events.game)) = $3 group by rsvps.user_id ) grouped ) ranked where ranked.user_id = $4";
+const RELATIVE_WINDOW_READ =
+  "select ranked.user_id as user_id, ranked.username as username, ranked.count as count, ranked.rank as rank from ( select grouped.user_id as user_id, grouped.username as username, grouped.count as count, row_number() over (order by grouped.count desc, grouped.user_id asc)::int as rank from ( select rsvps.user_id as user_id, users.username as username, count(*)::int as count from rsvps inner join events on events.id = rsvps.event_id inner join users on users.id = rsvps.user_id left join profiles on profiles.user_id = rsvps.user_id where rsvps.status = 'going' and events.status = 'published' and users.member = true and (profiles.leaderboard_opt_out is null or profiles.leaderboard_opt_out = false) and events.starts_at >= $1 and events.starts_at < $2 and lower(trim(events.game)) = $3 group by rsvps.user_id, users.username ) grouped ) ranked where ranked.rank between $4 - 5 and $5 + 5 order by ranked.rank asc";
 // Verbatim copy of the module-private featuredEditRead literal: the admin edit
 // form needs PostgreSQL timestamp text, not lossy JS Dates. Kept in sync on
 // purpose — if the module changes this shape, this test must change too.
@@ -222,10 +229,28 @@ describe("rawMemberOwner", () => {
     expect(rawMemberOwner(`  ${MEMBER_ROW.replaceAll(" ", "  \n ")}  `)).toBe("member_id");
   });
 
+  it("returns user_id for the relative-board rank and window shapes", () => {
+    expect(rawMemberOwner(RELATIVE_RANK_READ)).toBe("user_id");
+    expect(rawMemberOwner(RELATIVE_WINDOW_READ)).toBe("user_id");
+    // Season window and game filter are optional; param numbers float.
+    const bare = (s: string) =>
+      s.replace(
+        " and events.starts_at >= $1 and events.starts_at < $2 and lower(trim(events.game)) = $3",
+        "",
+      );
+    expect(rawMemberOwner(bare(RELATIVE_RANK_READ))).toBe("user_id");
+    expect(rawMemberOwner(bare(RELATIVE_WINDOW_READ))).toBe("user_id");
+  });
+
   it("returns undefined for anything else, including near-misses", () => {
     expect(rawMemberOwner('select "id", "title" from "events"')).toBeUndefined();
     expect(rawMemberOwner(SELF_POSITION.replace("waitlisted", "going"))).toBeUndefined();
     expect(rawMemberOwner(MEMBER_ROW.replace("limit 1", "limit 2"))).toBeUndefined();
+    expect(rawMemberOwner(RELATIVE_WINDOW_READ.replace("+ 5", "+ 6"))).toBeUndefined();
+    expect(
+      rawMemberOwner(RELATIVE_WINDOW_READ.replace("order by ranked.rank asc", "")),
+    ).toBeUndefined();
+    expect(rawMemberOwner(`with grouped as (${RELATIVE_RANK_READ})`)).toBeUndefined();
     expect(rawMemberOwner("")).toBeUndefined();
   });
 });

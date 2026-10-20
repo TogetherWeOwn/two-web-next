@@ -37,38 +37,50 @@ describe("read-only bool-only auth status", () => {
     expect(await f.sessions.get(login.tokenHash)).not.toBeNull();
   });
 
-  it("a stable probe stays live before the rotating page's Set-Cookie is delivered; old login is dead", async () => {
-    const f = recoveryFixture();
-    const login = await f.login();
-    const profile = await f.request("/profile", { headers: { cookie: login.cookie } });
-    const oldJar = mergeCookies(login.cookie, profile);
-    const rotating = await f.request("/", { headers: { cookie: oldJar } });
-    // Deliberately do not deliver rotating.headers to this cookie jar yet.
-    expect(await f.sessions.get(login.tokenHash)).toBeNull();
-    const probe = await f.request("/auth/status", { headers: { cookie: oldJar } });
-    expect(await probe.json()).toEqual({ authenticated: true });
-    expect(probe.headers.getSetCookie()).toEqual([]);
-    const replay = await f.request("/profile", { headers: { cookie: oldJar } });
-    expect(replay.status).toBe(302);
-    const probeOnly = await f.request("/profile", {
-      headers: { cookie: only(oldJar, AUTH_STATUS_COOKIE) },
-    });
-    expect(probeOnly.status).toBe(302);
-    const newJar = mergeCookies(oldJar, rotating);
-    expect((await f.request("/profile", { headers: { cookie: newJar } })).status).toBe(200);
-    const logout = await f.request("/logout", {
-      method: "POST",
-      headers: { cookie: newJar, origin: f.env.APP_URL },
-    });
-    expect(logout.status).toBe(303);
-    expect(
-      logout.headers
-        .getSetCookie()
-        .some((c) => c.startsWith(AUTH_STATUS_COOKIE + "=") && c.includes("Max-Age=0")),
-    ).toBe(true);
-    expect(await (await f.request("/auth/status", { headers: { cookie: oldJar } })).json()).toEqual(
-      { authenticated: false },
-    );
+  it("a stable probe stays live before the rotating page's Set-Cookie is delivered; old login grace then dead", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      vi.setSystemTime(Date.parse("2030-01-01T12:00:00Z"));
+      const f = recoveryFixture();
+      const login = await f.login();
+      const profile = await f.request("/profile", { headers: { cookie: login.cookie } });
+      const oldJar = mergeCookies(login.cookie, profile);
+      const rotating = await f.request("/", { headers: { cookie: oldJar } });
+      // Deliberately do not deliver rotating.headers to this cookie jar yet.
+      // Inside 10s the predecessor keeps grace with its successor live.
+      expect(await f.sessions.get(login.tokenHash)).toMatchObject({ userId: MEMBER });
+      const probe = await f.request("/auth/status", { headers: { cookie: oldJar } });
+      expect(await probe.json()).toEqual({ authenticated: true });
+      expect(probe.headers.getSetCookie()).toEqual([]);
+      const replay = await f.request("/profile", { headers: { cookie: oldJar } });
+      expect(replay.status).toBe(200);
+      const probeOnly = await f.request("/profile", {
+        headers: { cookie: only(oldJar, AUTH_STATUS_COOKIE) },
+      });
+      expect(probeOnly.status).toBe(302);
+      // Past grace the predecessor is a guest while its successor stays live.
+      vi.setSystemTime(Date.parse("2030-01-01T12:01:00Z"));
+      expect(await f.sessions.get(login.tokenHash)).toBeNull();
+      const replayAfter = await f.request("/profile", { headers: { cookie: oldJar } });
+      expect(replayAfter.status).toBe(302);
+      const newJar = mergeCookies(oldJar, rotating);
+      expect((await f.request("/profile", { headers: { cookie: newJar } })).status).toBe(200);
+      const logout = await f.request("/logout", {
+        method: "POST",
+        headers: { cookie: newJar, origin: f.env.APP_URL },
+      });
+      expect(logout.status).toBe(303);
+      expect(
+        logout.headers
+          .getSetCookie()
+          .some((c) => c.startsWith(AUTH_STATUS_COOKIE + "=") && c.includes("Max-Age=0")),
+      ).toBe(true);
+      expect(
+        await (await f.request("/auth/status", { headers: { cookie: oldJar } })).json(),
+      ).toEqual({ authenticated: false });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("expiry/revocation return false; a store outage is 503 rather than an authoritative logout", async () => {

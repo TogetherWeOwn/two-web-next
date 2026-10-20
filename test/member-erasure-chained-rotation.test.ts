@@ -40,6 +40,7 @@ describe.skipIf(!url)("member erasure against chained session rotations", () => 
   });
 
   beforeEach(async () => {
+    await fixture.client`delete from web_session_grace`;
     await fixture.client`delete from web_sessions`;
     await fixture.client`delete from users`;
     await fixture.client`insert into users (id, username, member)
@@ -180,6 +181,8 @@ describe.skipIf(!url)("member erasure against chained session rotations", () => 
         profiles: 0,
         rsvps: 0,
         web_sessions: 2,
+        // A -> B was replaced by B -> C: only the immediate predecessor remains.
+        web_session_grace: 1,
         join_attempts: 0,
       });
       expect(await sessionRows()).toBe(0);
@@ -194,6 +197,7 @@ describe.skipIf(!url)("member erasure against chained session rotations", () => 
         profiles: 0,
         rsvps: 0,
         web_sessions: 0,
+        web_session_grace: 0,
         join_attempts: 0,
       });
       expect(await countMemberRows(sql(), VICTIM)).toEqual({
@@ -201,6 +205,7 @@ describe.skipIf(!url)("member erasure against chained session rotations", () => 
         profiles: 0,
         rsvps: 0,
         web_sessions: 0,
+        web_session_grace: 0,
         join_attempts: 0,
       });
     } finally {

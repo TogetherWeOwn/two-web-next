@@ -183,16 +183,19 @@ describe("W15 auth/join in Miniflare", () => {
     expect(await view.text()).toContain("Worker Member");
     expect(cookie(view)).not.toBe(cookie(login));
     const replay = await request("/", { headers: { cookie: cookie(login) } });
-    expect(await replay.text()).toContain("Sign in with Discord");
+    expect(await replay.text()).toContain("Worker Member");
+    expect(replay.headers.getSetCookie()).toHaveLength(0);
     const out = await request("/logout", {
       method: "POST",
       headers: { cookie: cookie(view), origin: STAGING_APP_URL },
     });
     expect(out.status).toBe(303);
     expect(out.headers.getSetCookie().join("\n")).toContain("Max-Age=0");
-    expect(await (await request("/", { headers: { cookie: cookie(view) } })).text()).toContain(
-      "Sign in with Discord",
-    );
+    for (const revokedCookie of [cookie(login), cookie(view)]) {
+      expect(await (await request("/", { headers: { cookie: revokedCookie } })).text()).toContain(
+        "Sign in with Discord",
+      );
+    }
     expect(calls.map((c) => c.path)).toEqual(expectedPaths);
   });
 

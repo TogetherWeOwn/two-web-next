@@ -252,7 +252,21 @@ too: `KIT_WORKER_ORIGIN`, else derived from `KIT_WORKER_PORT` (the port
   artifact. The Kit visual config has its own Playwright output directory so
   the later parity run cannot clear visual actuals before artifact upload.
   When an actual and its stale committed baseline share a destination, the
-  reviewed actual wins; distinct actuals still refuse. `ci/visual-accept.mjs`
+  reviewed actual wins; distinct actuals still refuse. Inspect every expected,
+  actual and diff image in the failed run's artifact before running
+  `node ci/kit-visual-accept.mjs <unzipped-artifact-dir>`. Suite ownership uses
+  exact directory segments relative to that root: extraction folder names and
+  substring-lookalike folders do not admit or exclude images. Copies under
+  `__screenshots-kit__/` can add absent baselines or match existing bytes
+  (no rewrite), but cannot replace a differing checkout baseline without a
+  reviewed actual. Such a stale-copy conflict names the target and refuses
+  the whole plan. Use a current artifact or review the matching actual, never
+  delete the newer checkout baseline to force acceptance. All source bytes
+  and existing targets are preflighted before writes, including sources later
+  superseded by actuals; unreadable files refuse without partial application.
+  Apply-time disk failures are not rolled back. Commit only the intentional
+  changes in the same PR and explain each one; never regenerate the tree.
+  `ci/visual-accept.mjs`
   ignores actuals from both `test-results-kit-visual/` and
   `test-results-kit-parity/`, as well as baselines under `__screenshots-kit__/`.
   An intentional redesign is a reviewed artifact

@@ -100,8 +100,11 @@ describe.skipIf(!process.env.DATABASE_URL)(
 
       const second = hex(32);
       expect(await store.rotate(first, { tokenHash: second, ...row, expiresAt })).toBe(true);
-      expect(await store.get(first)).toBeNull();
+      expect(await store.get(first)).toMatchObject({ userId: "7" });
+      expect(await store.statusHash(first)).toBeNull();
       expect(await store.get(second)).toMatchObject({ userId: "7" });
+      await owner`UPDATE web_session_grace SET grace_expires_at = now() WHERE predecessor_hash = ${first}`;
+      expect(await store.get(first)).toBeNull();
 
       await store.revokeUserSessions("7", second);
       expect(await store.get(second)).toMatchObject({ userId: "7" });

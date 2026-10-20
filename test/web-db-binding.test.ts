@@ -144,7 +144,7 @@ describe.skipIf(!process.env.DATABASE_URL)("web DB binding (test container)", ()
     }
   });
 
-  it("persists login, roster and profile across requests; rotation and logout still revoke", async () => {
+  it("persists login, roster and profile; predecessor grace is bounded and logout still revokes", async () => {
     const cookie = await login();
     const [user] =
       await fixture.client`SELECT id, username, member FROM users WHERE id = ${memberId}`;
@@ -156,6 +156,10 @@ describe.skipIf(!process.env.DATABASE_URL)("web DB binding (test container)", ()
     expect(home.status).toBe(200);
     const rotated = cookieFrom(home);
     expect(rotated).not.toBe(cookie);
+    const replay = await request("/profile", { headers: { cookie } }, env);
+    expect(replay.status).toBe(200);
+    expect(replay.headers.get("set-cookie")).toBeNull();
+    await fixture.client`UPDATE web_session_grace SET grace_expires_at = now() WHERE user_id = ${memberId}`;
     expect((await request("/profile", { headers: { cookie } }, env)).status).toBe(302);
     expect((await request("/profile", { headers: { cookie: rotated } }, env)).status).toBe(200);
     expect(

@@ -17,7 +17,7 @@ const SECRET = "test-session-secret-at-least-32-bytes-long";
 const COOKIE = "__Host-two_session";
 
 // Mounted app, fixture-backed Drizzle reads and the real signed-cookie boundary; no external I/O.
-function fixture(status: "draft" | "published" = "draft") {
+function fixture(status: "draft" | "published" = "draft", clock: () => number = Date.now) {
   const row: typeof events.$inferSelect = {
     id: 1,
     eventKey: KEY,
@@ -65,7 +65,7 @@ function fixture(status: "draft" | "published" = "draft") {
     }
     throw new Error(`Unexpected fixture query: ${sql}`);
   });
-  const store = createMemorySessionStore();
+  const store = createMemorySessionStore(clock);
   const env = {
     APP_URL,
     SESSION_SECRET: SECRET,
@@ -116,11 +116,12 @@ async function replacement(
   source: ReturnType<typeof fixture>,
   consumed: { cookie: string; tokenHash: string },
 ) {
-  expect(await source.store.get(consumed.tokenHash)).toBeNull();
+  expect(await source.store.get(consumed.tokenHash)).toMatchObject({ moderator: true });
+  expect(await source.store.statusHash(consumed.tokenHash)).toBeNull();
   const cookies = response.headers.getSetCookie();
   expect(cookies).toHaveLength(2);
   expect(cookies.filter((cookie) => cookie.startsWith(`${AUTH_STATUS_COOKIE}=`))).toHaveLength(1);
-  // The companion liveness hash cannot replace the one-use login token.
+  // The companion liveness hash cannot replace the rotating login token.
   const replacements = cookies.filter((cookie) => cookie.startsWith(`${COOKIE}=`));
   expect(replacements).toHaveLength(1);
   const setCookie = replacements[0]!;
@@ -149,8 +150,16 @@ async function expectForbidden(response: Response) {
 }
 
 describe("draft ICS rotated session delivery (fixture-only)", () => {
-  it("follows replacements from 200 through 304 into another authorized request and refuses consumed cookies", async () => {
-    const source = fixture();
+  it("delivers replacements on 200 and 304 with grace only for the immediate predecessor", async () => {
+    let now = Date.now();
+    const source = fixture("draft", () => now);
+    const expectGrace = async (cookie: string, etag: string) => {
+      const replay = await source.request(cookie, etag);
+      expect(replay.status).toBe(304);
+      expect(await replay.text()).toBe("");
+      expect(replay.headers.get("etag")).toBe(etag);
+      expect(replay.headers.get("set-cookie")).toBeNull();
+    };
     const original = await source.session();
     const body = eventIcs(source.row, APP_URL);
     const etag = await validator(body);
@@ -162,7 +171,7 @@ describe("draft ICS rotated session delivery (fixture-only)", () => {
     expect(first.headers.get("etag")).toBe(etag);
     expect(first.headers.get("cache-control")).toBe("max-age=300, private");
     const current = await replacement(first, source, original);
-    await expectForbidden(await source.request(original.cookie, etag));
+    await expectGrace(original.cookie, etag);
     const statusOnly = first.headers
       .getSetCookie()
       .find((cookie) => cookie.startsWith(`${AUTH_STATUS_COOKIE}=`))!
@@ -175,7 +184,8 @@ describe("draft ICS rotated session delivery (fixture-only)", () => {
     expect(unchanged.headers.get("etag")).toBe(etag);
     expect(unchanged.headers.get("cache-control")).toBe("max-age=300, private");
     const latest = await replacement(unchanged, source, current);
-    await expectForbidden(await source.request(current.cookie, etag));
+    await expectForbidden(await source.request(original.cookie, etag));
+    await expectGrace(current.cookie, etag);
 
     const changed = await source.request(latest.cookie, '"nonmatching-validator"');
     expect(changed.status).toBe(200);
@@ -183,6 +193,9 @@ describe("draft ICS rotated session delivery (fixture-only)", () => {
     expect(changed.headers.get("etag")).toBe(etag);
     expect(changed.headers.get("cache-control")).toBe("max-age=300, private");
     const next = await replacement(changed, source, latest);
+    await expectForbidden(await source.request(current.cookie, etag));
+    await expectGrace(latest.cookie, etag);
+    now += 10_000;
     await expectForbidden(await source.request(latest.cookie, etag));
     expect(await source.store.get(next.tokenHash)).toMatchObject({ moderator: true });
   });

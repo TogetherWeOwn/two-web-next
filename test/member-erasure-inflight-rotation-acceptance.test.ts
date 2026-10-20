@@ -12,7 +12,7 @@
 // (2) several pre-existing in-flight rotations converge in the same erase
 //     with truthful accumulated web_sessions counts (rows the erase itself
 //     physically deleted), without touching another member;
-// (3) the five-table transaction stays atomic: ordinary deletion, a repeat
+// (3) the six-table transaction stays atomic: ordinary deletion, a repeat
 //     apply returning zero, a read-only dry-run, and a whole-transaction
 //     rollback on a database failure;
 // (4) erasure is not a tombstone: a genuinely new sign-in afterwards works.
@@ -44,7 +44,14 @@ const session = (tokenHash: string, userId = VICTIM) => ({
   expiresAt: new Date(Date.now() + 3600_000),
 });
 
-const ZERO: ErasureCounts = { users: 0, profiles: 0, rsvps: 0, web_sessions: 0, join_attempts: 0 };
+const ZERO: ErasureCounts = {
+  users: 0,
+  profiles: 0,
+  rsvps: 0,
+  web_sessions: 0,
+  web_session_grace: 0,
+  join_attempts: 0,
+};
 
 describe.skipIf(!url)("member erasure against already-in-flight rotations", () => {
   let fixture: JobsFixture;
@@ -58,6 +65,7 @@ describe.skipIf(!url)("member erasure against already-in-flight rotations", () =
   });
 
   beforeEach(async () => {
+    await fixture.client`delete from web_session_grace`;
     await fixture.client`delete from web_sessions`;
     await fixture.client`delete from rsvps`;
     await fixture.client`delete from profiles`;
@@ -206,6 +214,7 @@ describe.skipIf(!url)("member erasure against already-in-flight rotations", () =
         profiles: 1,
         rsvps: 1,
         web_sessions: 2,
+        web_session_grace: 1,
         join_attempts: 1,
       });
       expect(await sessionRows(VICTIM)).toBe(0);
@@ -216,7 +225,7 @@ describe.skipIf(!url)("member erasure against already-in-flight rotations", () =
       // The minted successor cannot be rotated back to life afterwards.
       expect(await store.rotate("race-successor", session("race-revival"))).toBe(false);
       expect(await store.get("race-revival")).toBeNull();
-      // Repeat apply is a no-op across all five tables.
+      // Repeat apply is a no-op across all six tables.
       await expect(eraseMember(sql(), VICTIM, { dryRun: false })).resolves.toEqual(ZERO);
       // The other member is untouched everywhere.
       expect(await countMemberRows(sql(), BYSTANDER)).toEqual({
@@ -224,6 +233,7 @@ describe.skipIf(!url)("member erasure against already-in-flight rotations", () =
         profiles: 1,
         rsvps: 1,
         web_sessions: 1,
+        web_session_grace: 0,
         join_attempts: 1,
       });
       expect(await store.get("race-bystander")).not.toBeNull();
@@ -303,6 +313,7 @@ describe.skipIf(!url)("member erasure against already-in-flight rotations", () =
         profiles: 1,
         rsvps: 1,
         web_sessions: 4,
+        web_session_grace: 3,
         join_attempts: 1,
       });
       expect(await sessionRows(VICTIM)).toBe(0);
@@ -316,9 +327,10 @@ describe.skipIf(!url)("member erasure against already-in-flight rotations", () =
         profiles: 1,
         rsvps: 1,
         web_sessions: 1,
+        web_session_grace: 1,
         join_attempts: 1,
       });
-      expect(await store.get("multi-bystander-source")).toBeNull();
+      expect(await store.get("multi-bystander-source")).toMatchObject({ userId: BYSTANDER });
       expect(await store.get("multi-bystander-successor")).toMatchObject({ userId: BYSTANDER });
     } finally {
       for (const hold of sourceHolds) hold.release();
@@ -351,6 +363,7 @@ describe.skipIf(!url)("member erasure against already-in-flight rotations", () =
         profiles: 1,
         rsvps: 1,
         web_sessions: 1,
+        web_session_grace: 0,
         join_attempts: 1,
       });
       expect(await rotation).toBe(false);
@@ -372,11 +385,12 @@ describe.skipIf(!url)("member erasure against already-in-flight rotations", () =
       profiles: 1,
       rsvps: 1,
       web_sessions: 2,
+      web_session_grace: 0,
       join_attempts: 1,
     });
-    // Legitimate rotation still yields exactly one live successor.
+    // Legitimate rotation yields one live successor and its predecessor grace.
     expect(await store.rotate("dry-source", session("dry-successor"))).toBe(true);
-    expect(await store.get("dry-source")).toBeNull();
+    expect(await store.get("dry-source")).toMatchObject({ userId: VICTIM });
     expect(await store.get("dry-successor")).toMatchObject({ userId: VICTIM });
     // Dry-run wrote nothing and still reports the rotated shape truthfully.
     await expect(eraseMember(sql(), VICTIM, { dryRun: true })).resolves.toEqual({
@@ -384,19 +398,24 @@ describe.skipIf(!url)("member erasure against already-in-flight rotations", () =
       profiles: 1,
       rsvps: 1,
       web_sessions: 2,
+      web_session_grace: 1,
       join_attempts: 1,
     });
+    expect(await store.get("dry-source")).toMatchObject({ userId: VICTIM });
     expect(await sessionRows(VICTIM)).toBe(2);
 
-    // Sequential order: rotation finished first, then erasure removes both.
+    // Sequential order: erasure removes both live sessions and the grace row.
     await expect(eraseMember(sql(), VICTIM, { dryRun: false })).resolves.toEqual({
       users: 1,
       profiles: 1,
       rsvps: 1,
       web_sessions: 2,
+      web_session_grace: 1,
       join_attempts: 1,
     });
     expect(await sessionRows(VICTIM)).toBe(0);
+    expect(await store.get("dry-source")).toBeNull();
+    expect(await store.get("dry-successor")).toBeNull();
     await expect(eraseMember(sql(), VICTIM, { dryRun: false })).resolves.toEqual(ZERO);
 
     // Boundary: erasure is not a tombstone or a sign-in ban. A genuinely new
@@ -405,15 +424,23 @@ describe.skipIf(!url)("member erasure against already-in-flight rotations", () =
     expect(await store.get("dry-new-signin")).toMatchObject({ userId: VICTIM });
   });
 
-  it("rolls back all five tables when a late deletion fails (control)", async () => {
+  it("rolls back all six tables when a late deletion fails (control)", async () => {
     await seedMember(VICTIM, "synthetic-erase-rollback-a");
     await seedMember(BYSTANDER, "synthetic-erase-rollback-b");
     await store.create(session("rollback-source"));
     await store.create(session("rollback-bystander", BYSTANDER));
+    expect(await store.rotate("rollback-source", session("rollback-successor"))).toBe(true);
     const before = await countMemberRows(sql(), VICTIM);
-    expect(before).toEqual({ users: 1, profiles: 1, rsvps: 1, web_sessions: 1, join_attempts: 1 });
+    expect(before).toEqual({
+      users: 1,
+      profiles: 1,
+      rsvps: 1,
+      web_sessions: 1,
+      web_session_grace: 1,
+      join_attempts: 1,
+    });
 
-    // Fail the last of the five deletions from inside the database: every
+    // Fail the last of the six deletions from inside the database: every
     // earlier deletion in the transaction must be rolled back with it, and
     // no successful counts may be returned.
     await fixture.client.unsafe(
@@ -428,17 +455,22 @@ describe.skipIf(!url)("member erasure against already-in-flight rotations", () =
       );
       expect(await countMemberRows(sql(), VICTIM)).toEqual(before);
       expect(await store.get("rollback-source")).toMatchObject({ userId: VICTIM });
+      expect(await store.get("rollback-successor")).toMatchObject({ userId: VICTIM });
     } finally {
       await fixture.client.unsafe(`drop trigger if exists erasure_rollback_guard on join_attempts`);
       await fixture.client.unsafe(`drop function if exists erasure_rollback_guard()`);
     }
     // With the failure removed the same erase succeeds against intact rows.
     await expect(eraseMember(sql(), VICTIM, { dryRun: false })).resolves.toEqual(before);
+    expect(await countMemberRows(sql(), VICTIM)).toEqual(ZERO);
+    expect(await store.get("rollback-source")).toBeNull();
+    expect(await store.get("rollback-successor")).toBeNull();
     expect(await countMemberRows(sql(), BYSTANDER)).toEqual({
       users: 1,
       profiles: 1,
       rsvps: 1,
       web_sessions: 1,
+      web_session_grace: 0,
       join_attempts: 1,
     });
   }, 15_000);
