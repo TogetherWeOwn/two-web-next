@@ -571,6 +571,9 @@ type Bucket = {
 };
 type ScriptState = {
   buckets: Bucket[];
+  // Newest event time seen for this script, never rewound by late arrivals.
+  // Absent only for an empty legacy snapshot before its first observation.
+  windowEndAt?: number;
   cooldownUntil: number;
   // A page attempt is outstanding: set by observe, cleared by resolve. The
   // cooldown arms only when resolve reports a delivered page, mirroring the
@@ -619,6 +622,7 @@ export class AggregateTracker {
             crashes: b.crashes,
             ...(shaFromVersionTag(b.buildSha) ? { buildSha: shaFromVersionTag(b.buildSha)! } : {}),
           })),
+          ...(state.windowEndAt !== undefined ? { windowEndAt: state.windowEndAt } : {}),
           cooldownUntil: state.cooldownUntil,
           ...(state.pendingAt !== undefined ? { pendingAt: state.pendingAt } : {}),
           ...(state.pendingAttemptId !== undefined
@@ -687,8 +691,27 @@ export class AggregateTracker {
         }
       }
       const merged = [...byAt.values()].sort((a, b) => a.at - b.at);
+      // Legacy writers stored bucket starts, not the newest exact event time.
+      // Derive their endpoint from the newest valid bucket, regardless of array
+      // order. A saved endpoint cannot trail retained counts; an empty legacy
+      // snapshot leaves it unset until the first observation. Keep compatible
+      // pending/cooldown markers and unknown legacy provenance intact.
+      const newestBucketAt = merged.at(-1)?.at;
+      const savedEndAt =
+        Number.isSafeInteger(state.windowEndAt) && state.windowEndAt! >= 0
+          ? state.windowEndAt
+          : undefined;
+      const windowEndAt =
+        savedEndAt === undefined
+          ? newestBucketAt
+          : Math.max(savedEndAt, newestBucketAt ?? savedEndAt);
       this.scripts.set(script, {
-        buckets: merged.slice(-MAX_BUCKETS),
+        buckets: merged
+          .filter(
+            (b) => windowEndAt === undefined || b.at + BUCKET_MS > windowEndAt - SPIKE_WINDOW_MS,
+          )
+          .slice(-MAX_BUCKETS),
+        ...(windowEndAt !== undefined ? { windowEndAt } : {}),
         cooldownUntil: Number.isSafeInteger(state.cooldownUntil) ? state.cooldownUntil! : 0,
         pendingAt: Number.isSafeInteger(state.pendingAt) ? state.pendingAt : undefined,
         pendingAttemptId: validAttemptId(state.pendingAttemptId),
@@ -715,6 +738,14 @@ export class AggregateTracker {
       state = { buckets: [], cooldownUntil: 0 };
       this.scripts.set(batch.script, state);
     }
+    state.windowEndAt = Math.max(state.windowEndAt ?? at, at);
+    const cutoff = state.windowEndAt - SPIKE_WINDOW_MS;
+    state.buckets = state.buckets.filter((b) => b.at + BUCKET_MS > cutoff);
+    const bucketAt = Math.floor(at / BUCKET_MS) * BUCKET_MS;
+    // Expired arrivals are no-ops, before insertion, attribution or paging:
+    // they cannot fill the cap, evict live counts or retry an expired window.
+    // Equal timestamps and older buckets still overlapping the cutoff add.
+    if (bucketAt + BUCKET_MS <= cutoff) return null;
     // Provenance is per bucket, not per latest batch: a bucket keeps its
     // SHA only while every counted observation merged into it shares one
     // validated SHA. An untagged or invalid batch, or a second validated
@@ -722,7 +753,6 @@ export class AggregateTracker {
     // A batch contributing no counts never changes provenance.
     const incomingSha = shaFromVersionTag(batch.buildSha);
     const incomingCounts = batch.requests + batch.errors + batch.crashes;
-    const bucketAt = Math.floor(at / BUCKET_MS) * BUCKET_MS;
     // The same bucket time can recur after a different bucket was observed,
     // so coalesce by bucket time rather than reusing only the last bucket.
     // Otherwise each revisit appends a duplicate entry and the bucket cap
@@ -731,6 +761,7 @@ export class AggregateTracker {
     if (!bucket) {
       bucket = { at: bucketAt, requests: 0, errors: 0, crashes: 0 };
       state.buckets.push(bucket);
+      state.buckets.sort((a, b) => a.at - b.at);
       if (state.buckets.length > MAX_BUCKETS)
         state.buckets.splice(0, state.buckets.length - MAX_BUCKETS);
     }
@@ -750,8 +781,6 @@ export class AggregateTracker {
     bucket.requests += batch.requests;
     bucket.errors += batch.errors;
     bucket.crashes += batch.crashes;
-    const cutoff = at - SPIKE_WINDOW_MS;
-    state.buckets = state.buckets.filter((b) => b.at + BUCKET_MS > cutoff);
     if (at < state.cooldownUntil) return null;
     let requests = 0;
     let errors = 0;
