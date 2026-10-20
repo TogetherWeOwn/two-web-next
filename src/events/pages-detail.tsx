@@ -78,6 +78,7 @@ export const EventPage: FC<{
 }) => {
   const path = `/e/${e.eventKey}`;
   const canonical = canonicalUrl(appUrl, path);
+  const accessibilityNotes = e.accessibilityNotes?.trim();
   return (
     <EventDetailShell
       title={e.title}
@@ -161,6 +162,12 @@ export const EventPage: FC<{
             <section class="event-description" aria-labelledby="event-description-heading">
               <h2 id="event-description-heading">About this event</h2>
               <p>{e.description}</p>
+            </section>
+          ) : null}
+          {accessibilityNotes ? (
+            <section class="event-description" aria-labelledby="event-accessibility-heading">
+              <h2 id="event-accessibility-heading">Accessibility</h2>
+              <p>{accessibilityNotes}</p>
             </section>
           ) : null}
           {!session ? (

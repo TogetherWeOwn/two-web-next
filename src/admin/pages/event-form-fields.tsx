@@ -57,6 +57,18 @@ export const EventFormFields: FC<{
             </textarea>
           )}
         </Field>
+        <Field
+          name="accessibility_notes"
+          label="Accessibility notes"
+          errors={errors}
+          hint="Optional; include only confirmed details, not personal contact information."
+        >
+          {(id) => (
+            <textarea id={id} name="accessibility_notes" rows={4} data-event-text-limit={1000}>
+              {val(values, "accessibility_notes")}
+            </textarea>
+          )}
+        </Field>
         <Field name="starts_at" label="Starts (local wall time, YYYY-MM-DD HH:mm)" errors={errors}>
           {(id) => (
             <input id={id} name="starts_at" type="text" value={val(values, "starts_at")} required />
