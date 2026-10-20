@@ -27,6 +27,13 @@ Operations (deploy/rollback, `/up`, queues, outages and restore drills):
 - Agent-event ingress validates its caller and guild, supports idempotency, and applies an outer rate limit. CSP report ingestion and human-route throttles have fixture coverage; the human throttle uses `DATABASE_URL` when set, otherwise Hyperdrive's `DB.connectionString`. Shared throttle middleware allows when no store is configured or a store operation fails; `/join/discord` and `/join/callback` use a separate check that can fail if its configured store errors ([`src/agent-events/route.ts`](src/agent-events/route.ts), [`src/agent-events/service.ts`](src/agent-events/service.ts), [`src/throttle.ts`](src/throttle.ts), [`src/join/route.ts`](src/join/route.ts), [`src/db/connection.ts`](src/db/connection.ts), [`test/agent-events.test.ts`](test/agent-events.test.ts), [`test/agent-events-shield.test.ts`](test/agent-events-shield.test.ts), [`test/csp-reports.test.ts`](test/csp-reports.test.ts), [`test/throttle-db-connection.test.ts`](test/throttle-db-connection.test.ts)).
 - Queue and scheduler code includes retries, locking, a queue ledger, `events:reconcile`, retention pruning, and `/up` readiness (503 on DB/schema failure, on a missing `SESSION_SECRET`, `DISCORD_CLIENT_SECRET`, or `DISCORD_BOT_TOKEN`, or on a weak `SESSION_SECRET` under the documented strength floor). The jobs worker uses a bot client and Postgres event store; missing bot endpoint/key/secret configuration makes bot calls fail as terminal jobs. Internal-action producer/consumer logic and its Wrangler queue binding exist, but the alert probe is the only sender to the internal-action queue; this does not claim normal web dispatch or end-to-end live bot parity ([`src/jobs/worker.ts`](src/jobs/worker.ts), [`src/jobs/call-internal-action.ts`](src/jobs/call-internal-action.ts), [`src/bot/client.ts`](src/bot/client.ts), [`src/alert-probe.ts`](src/alert-probe.ts), [`src/up.ts`](src/up.ts), [`wrangler.jsonc`](wrangler.jsonc), [`test/jobs.test.ts`](test/jobs.test.ts), [`test/jobs-worker-config.test.ts`](test/jobs-worker-config.test.ts), [`test/callinternalaction-no-web-dispatch.test.ts`](test/callinternalaction-no-web-dispatch.test.ts), [`test/up.test.ts`](test/up.test.ts)). Guarded one-row re-dispatch applies a single `replay` advice by queueing a fresh sync-event via `POST /admin/queue/failed/:id/redispatch`; it is staging-only and disabled until separately authorized ([queue-redrive runbook](docs/queue-redrive-runbook.md)) ([`src/admin/queue-redispatch.ts`](src/admin/queue-redispatch.ts), [`src/admin/routes.tsx`](src/admin/routes.tsx), [`test/queue-redispatch-route.test.ts`](test/queue-redispatch-route.test.ts), [`test/queue-redispatch-postgres.test.ts`](test/queue-redispatch-postgres.test.ts)).
 
+## Event search
+
+Calendar past searches preview up to 20 matches. Use **Continue search in past events**
+to page through older matches without losing the query; **Clear search** returns to
+the ordinary archive. See the [archive search contract](docs/past-archive-search.md)
+for matching rules, empty-state recovery and cache boundaries.
+
 ## Moderator guides
 
 - [Moderator admin guide](docs/moderator-admin-guide.md): Next admin routes,
@@ -466,20 +473,23 @@ APP_URL=https://next.togetherweown.com npm run drill:internal-action -- \
   --discord-id=<drill identity> --role-key=<key> --channel-key=<throwaway>
 ```
 
-The deployment preflight parses the **top-level** `vars.DISCORD_MODERATOR_ROLE_IDS`
-and `vars.DISCORD_GUILD_ID` in `wrangler.jsonc` and requires exactly the
-guild-bound Owner+Moderator pair (staging guild `1545644954272137297`:
+`npm run check:worker-moderators` parses the top-level
+`vars.DISCORD_MODERATOR_ROLE_IDS` and `vars.DISCORD_GUILD_ID` in
+`web/wrangler.staging.jsonc`; `npm run check:worker-moderators-production` parses
+`env.production.vars` in `wrangler.jsonc`. Each requires exactly its guild-bound
+Owner+Moderator pair (staging guild `1545644954272137297`:
 `1546211363578191873,1545648550329851946`; production guild
-`326474832151838730`: `1546777855801954408,1546777856984481792`), before any queue
-creation or deployment. `wrangler deploy --config wrangler.jsonc` consumes that
-same source value, without `--env`/`--var` overrides; a separate GitHub moderator
-secret cannot make the gate pass. `keep_vars` retains unrelated remote plaintext
-vars, and Wrangler retains remote secrets. No binding values are read back or
-copied. The preflight proves source configuration, **not live isolation or a
-successful deployment**. Blank config remains a valid local revocation state,
-but unapproved extra roles (including duplicates) fail the probe, as does a
-pair that belongs to the other guild — role IDs are guild-scoped, so a
-production pair in the staging config matches nobody while looking configured.
+`326474832151838730`: `1546777855801954408,1546777856984481792`) before deployment.
+The staging workflow deploys `web/wrangler.staging.jsonc` and supplies only the
+validated `KIT_ROUTE_ARCHIVE` and `KIT_ROUTE_STATIC` route flags with `--var`;
+it does not override either moderator var. A separate GitHub moderator secret
+cannot make the gate pass. `keep_vars` retains unrelated remote plaintext vars,
+and Wrangler retains remote secrets. No binding values are read back or copied.
+The preflight proves source configuration, **not live isolation or a successful
+deployment**. Blank config remains a valid local revocation state, but
+unapproved extra roles (including duplicates) fail the probe, as does a pair
+that belongs to the other guild — role IDs are guild-scoped, so a production
+pair in the staging config matches nobody while looking configured.
 
 The live smoke runs manually via the `staging-smoke` workflow in a job container
 (`[self-hosted, two-selfhosted]` while the repo is private, GitHub-hosted while

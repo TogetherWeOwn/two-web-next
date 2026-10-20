@@ -11,6 +11,8 @@ import {
   writeAnonCache,
 } from "./events/anon-cache";
 import { normalizePastPage } from "./events/reads";
+import { resolveCalendarInput } from "./events/page-models.server";
+import { matchQuery } from "./events/search-log";
 import { publicReadGuard } from "./events/routes-shared";
 
 export type KitPublicReadGuard = (request: Request, env: Env) => Promise<Response | null>;
@@ -35,10 +37,12 @@ export async function dispatchPastArchiveRequest(
   guard: KitPublicReadGuard = kitPublicReadGuard,
   now: number = Date.now(),
 ): Promise<Response> {
+  const url = new URL(request.url);
+  const input = resolveCalendarInput({ q: url.searchParams.get("q") });
+  // The loader rejects raw oversized input before reads, even on a warm cache.
+  if (input.queryTooLong) return resolve();
   const limited = await guard(request, env);
   if (limited) return limited;
-
-  const url = new URL(request.url);
   // Kit data requests still execute the read guard/load but their JSON payload
   // is not the HTML representation cached by Hono.
   const htmlRequest = url.pathname === "/events/past";
@@ -49,7 +53,7 @@ export async function dispatchPastArchiveRequest(
       method: request.method,
       hasCookie: request.headers.has("cookie"),
       hasSession: false,
-      searching: false,
+      searching: input.searching,
       flashed: false,
     });
   const source = eligible ? anonCacheSource(env) : null;
@@ -118,11 +122,14 @@ export async function dispatchPastArchiveRequest(
 export type PastArchiveListPast<Row = never> = (
   db: Db,
   page: number,
+  now?: Date,
+  q?: string | null,
 ) => Promise<{ rows: Row[]; hasMore: boolean; totalPages: number }>;
 
 export interface PastArchiveLoadArgs<Row = never> {
   env: Env;
   pageParam: string | null;
+  queryParam?: string | null;
   setHeaders: (headers: Record<string, string>) => void;
   dbForFn: (c: { env: Env }) => Promise<Db | null>;
   listPastFn: PastArchiveListPast<Row>;
@@ -136,6 +143,7 @@ export function pastArchiveUnavailable(): Error & { status: number } {
 export async function loadPastArchivePage<Row>({
   env,
   pageParam,
+  queryParam,
   setHeaders,
   dbForFn,
   listPastFn,
@@ -145,7 +153,14 @@ export async function loadPastArchivePage<Row>({
   hasMore: boolean;
   totalPages: number;
   appUrl: string;
+  q: string;
 }> {
+  const input = resolveCalendarInput({ q: queryParam });
+  if (input.queryTooLong) {
+    setHeaders({ "cache-control": "private, no-store" });
+    throw Object.assign(new Error("Search query too long"), { status: 422 });
+  }
+  const q = matchQuery(input.q);
   let db: Db | null;
   try {
     db = await dbForFn({ env });
@@ -159,12 +174,14 @@ export async function loadPastArchivePage<Row>({
   }
   const page = normalizePastPage(Number.parseInt(pageParam ?? "1", 10));
   try {
-    const { rows, hasMore, totalPages } = await listPastFn(db, page);
+    const { rows, hasMore, totalPages } = q
+      ? await listPastFn(db, page, new Date(), q)
+      : await listPastFn(db, page);
     setHeaders({
-      "cache-control": "public, max-age=300",
-      "x-two-past-cacheable": String(rows.length > 0),
+      "cache-control": input.searching ? "private, no-store" : "public, max-age=300",
+      "x-two-past-cacheable": String(!input.searching && rows.length > 0),
     });
-    return { rows, page, hasMore, totalPages, appUrl: env.APP_URL };
+    return { rows, page, hasMore, totalPages, appUrl: env.APP_URL, q: q ?? "" };
   } catch {
     setHeaders({ "cache-control": "private, no-store" });
     throw pastArchiveUnavailable();
