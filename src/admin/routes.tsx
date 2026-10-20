@@ -707,6 +707,7 @@ function eventValues(row: EventRow): Record<string, unknown> {
     title: row.title,
     game: row.game ?? "",
     description: row.description ?? "",
+    purpose: row.purpose ?? "",
     // Wall text in the row's zone — what the moderator typed is what they see.
     starts_at: utcToWall(row.startsAt, row.timezone),
     ends_at: utcToWall(row.endsAt, row.timezone),

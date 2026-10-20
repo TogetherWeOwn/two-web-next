@@ -43,6 +43,7 @@ export const events = pgTable(
     title: text("title").notNull(),
     game: text("game"),
     description: text("description"),
+    purpose: text("purpose"),
     startsAt: timestamp("starts_at", { withTimezone: true }).notNull(),
     endsAt: timestamp("ends_at", { withTimezone: true }).notNull(),
     // IANA zone the host typed the wall time in. The instants above are the

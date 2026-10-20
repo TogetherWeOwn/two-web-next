@@ -65,6 +65,7 @@ export async function createEvent(
         title: input.title,
         game: input.game,
         description: input.description,
+        purpose: input.purpose ?? null,
         startsAt: input.startsAtUtc,
         endsAt: input.endsAtUtc,
         timezone: input.timezone,
@@ -151,6 +152,7 @@ export async function materializeMissingInstances(
         title: parent.title,
         game: parent.game,
         description: parent.description,
+        purpose: parent.purpose ?? null,
         startsAt: when.startsAt,
         endsAt: when.endsAt,
         timezone: parent.timezone,
@@ -219,7 +221,15 @@ export async function updateEvent(
 
 export type PatchBase = Pick<
   EventRow,
-  "title" | "game" | "description" | "timezone" | "location" | "capacity" | "startsAt" | "endsAt"
+  | "title"
+  | "game"
+  | "description"
+  | "purpose"
+  | "timezone"
+  | "location"
+  | "capacity"
+  | "startsAt"
+  | "endsAt"
 >;
 
 /**
@@ -235,6 +245,7 @@ export function mergePatchInput(base: PatchBase, patch: Record<string, unknown>)
     title: base.title,
     game: base.game,
     description: base.description,
+    purpose: base.purpose,
     timezone: base.timezone,
     location: base.location,
     capacity: base.capacity,
@@ -311,6 +322,7 @@ async function commitLockedUpdate(
       title: input.title,
       game: input.game,
       description: input.description,
+      purpose: input.purpose === undefined ? locked.purpose : input.purpose,
       startsAt: input.startsAtUtc,
       endsAt: input.endsAtUtc,
       timezone: input.timezone,
