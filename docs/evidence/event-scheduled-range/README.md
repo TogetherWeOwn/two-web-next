@@ -37,3 +37,21 @@ This is local fixture evidence, not staging or production evidence. Hono's
 accessibility, Lighthouse and pinned visual-regression gates do not exercise the
 Kit route. Intentional CI baseline changes are accepted separately from a pinned
 runner failure artifact, never from these local captures.
+
+## Reviewed CI baselines
+
+The [initial visual run](https://github.com/TogetherWeOwn/two-web-next/actions/runs/39453296985)
+on implementation `5ed22073cb493539fbc1edc6596c90a1e9950acd` produced artifact
+`e2e-failure-39453296985-1`. The author opened all four expected/actual/diff
+triplets before running `node ci/visual-accept.mjs` on that artifact.
+
+Only `event-desktop.png`, `event-mobile.png`, `event-paused-desktop.png` and
+`event-paused-mobile.png` changed. The existing When cell becomes Starts, the
+new Ends cell uses the existing metadata grid, and the extra cell/wrapped dates
+move the following content down. The paused notice, sign-in action, calendar
+links, related events and footer remain present. The cancelled page and all
+non-detail baselines are unchanged. The helper accepted exactly four baselines;
+no visual spec, mask or pixel threshold changed. These Hono baselines still mask
+`time` elements; the unmasked local captures above and no-JavaScript acceptance
+matrix provide the date-text evidence. Exact-head CI must confirm the new
+baselines, not merely their acceptance.
