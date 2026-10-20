@@ -1,8 +1,24 @@
 # Legacy users and profiles import
 
-Cutover tooling for [TOG-10831](/TOG/issues/TOG-10831). Implementing or testing this script does **not** authorize a real legacy/Neon run. That remains an operator cutover step subject to the migration and data-transfer gates in `docs/db-migrations.md`.
+> **Current status — historical reference only.** TWO Next is a fresh start:
+> no real legacy import, legacy verification or retired-repository revival.
+> The retained tools, mappings, CLI recipes and old evidence below support
+> historical reference and synthetic-fixture maintenance, not a live cutover.
+> Neither maintenance nor historical approval language authorizes a real legacy
+> run, including read-only verification.
+>
+> Follow the [safe-test rules](../README.md#database-and-migrations) and
+> [current database topology](db-migrations.md#topology-target).
+> This notice does not remove tools, change member erasure or audit-retention
+> policy, or release retained-archive approval holds.
+
+Historical cutover tooling from [the users/profiles importer PR](https://github.com/TogetherWeOwn/two-web-next/pull/62).
 
 ## Operator invocation
+
+**Historical operator recipe — not actionable under the current fresh-start directive.**
+The invocation and provisioning requirements below are retained CLI reference,
+not instructions to obtain credentials or run a real import.
 
 Provision `LEGACY_DATABASE_URL` (source) and `DATABASE_URL` (migrated Next destination) in the execution environment through the approved secret mechanism. Never place credentials in arguments, shell history, committed files, or logs. Both URLs require a PostgreSQL scheme, host, username and database; an empty password does not fall back to `PGPASSWORD`. Each client uses the URL's explicit port or 5432, never inherited `PGPORT` (Postgres.js options override URL/environment defaults: https://github.com/porsager/postgres#connection).
 
