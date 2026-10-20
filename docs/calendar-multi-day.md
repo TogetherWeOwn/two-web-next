@@ -29,8 +29,10 @@ cards or element IDs.
   occupy the next day.
 - Discord-transient rows and unknown-end rows keep start-day-only plotting.
   Past-drawer rows keep start-day-only plotting.
-- Cancelled and past-status rows do not occupy grid days. Cancelled rows stay
-  listed in the list view with their badge; drafts stay moderator-only.
+- Upcoming cancelled and past-status rows are not admitted to the grid.
+  Cancelled rows stay listed in the list view with their badge; drafts stay
+  moderator-only. Ended rows in the open past drawer keep their start-day
+  entries.
 
 ## Bounds
 
