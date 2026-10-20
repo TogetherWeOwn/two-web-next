@@ -1,5 +1,7 @@
 import { error, redirect } from "@sveltejs/kit";
 import { env } from "cloudflare:workers";
+import { parse } from "hono/utils/cookie";
+import { JOURNEY_TTL_SECONDS, LOGIN_INTENDED_COOKIE } from "../../../../src/return-journey";
 import type { PageServerLoad } from "./$types";
 import { kitProfileDeps, resolveKitProfile } from "../../../../src/profiles/kit";
 
@@ -11,18 +13,32 @@ export const csr = false;
 // Same reads and cache policy as the Hono GET /profile handler
 // (src/profiles/routes-reads.tsx): the viewer's own record, member-gated,
 // audited by the hook's member-read boundary before any bytes leave.
-export const load: PageServerLoad = async ({ locals, setHeaders }) => {
-  const { storeFor, statsFor } = kitProfileDeps(env);
+export const load: PageServerLoad = async ({ locals, url, cookies, setHeaders }) => {
+  const { storeFor, statsFor, sessionSecret } = kitProfileDeps(env);
   const outcome = await resolveKitProfile(
     {
       session: { status: locals.status ?? "unknown", session: locals.session ?? null },
       requestedId: locals.session?.userId ?? null,
       joinResult: locals.joinResult ?? null,
+      url: url.href,
     },
-    { store: await storeFor(), stats: (id) => statsFor(id) },
+    { store: await storeFor(), stats: (id) => statsFor(id), sessionSecret },
   );
   // redirect()/error() never return: after these guards the outcome is ok.
-  if (outcome.kind === "redirect") redirect(302, outcome.location);
+  if (outcome.kind === "redirect") {
+    if (outcome.intendedCookie) {
+      // Decode once: SvelteKit's cookies API encodes the signed value again.
+      const intended = parse(outcome.intendedCookie)[LOGIN_INTENDED_COOKIE] ?? "";
+      cookies.set(LOGIN_INTENDED_COOKIE, intended, {
+        path: "/",
+        secure: true,
+        httpOnly: true,
+        sameSite: "lax",
+        maxAge: intended ? JOURNEY_TTL_SECONDS : 0,
+      });
+    }
+    redirect(302, outcome.location);
+  }
   if (outcome.kind === "unavailable") error(503, "Member data is temporarily unavailable.");
   if (outcome.kind === "forbidden") error(403, "Forbidden");
   if (outcome.kind === "notFound") error(404, "Not found");
