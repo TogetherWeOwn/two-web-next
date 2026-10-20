@@ -342,12 +342,12 @@ export function checkTailKeys(
   for (const key of [...appConsumers].sort()) {
     if (!docs.has(key)) {
       errors.push(
-        `Undocumented Tail consumer service: ${key} (wrangler.jsonc/wrangler.jobs.jsonc -> docs/config.md)`,
+        `Undocumented Tail consumer service: ${key} (wrangler.jsonc/web/wrangler.staging.jsonc/wrangler.jobs.jsonc -> docs/config.md)`,
       );
     }
     if (!tailWorkerNames.has(key)) {
       errors.push(
-        `App tail_consumer without Tail worker: ${key} (wrangler.jsonc/wrangler.jobs.jsonc vs tail/wrangler.jsonc)`,
+        `App tail_consumer without Tail worker: ${key} (wrangler.jsonc/web/wrangler.staging.jsonc/wrangler.jobs.jsonc vs tail/wrangler.jsonc)`,
       );
     }
   }
@@ -359,7 +359,7 @@ export function checkTailKeys(
   for (const name of [...appScripts].sort()) {
     if (!tailScripts.has(name)) {
       errors.push(
-        `App script not accepted by Tail: ${name} (wrangler.jsonc/wrangler.jobs.jsonc vs tail/worker.ts APP_SCRIPT_NAMES)`,
+        `App script not accepted by Tail: ${name} (wrangler.jsonc/web/wrangler.staging.jsonc/wrangler.jobs.jsonc vs tail/worker.ts APP_SCRIPT_NAMES)`,
       );
     }
   }
@@ -372,9 +372,12 @@ export function checkTailKeys(
 export function checkConfigDocs() {
   const env = readEnvKeys(resolve(root, "src/env.ts"), resolve(root, "tsconfig.json"));
   const wrangler = new Set(
-    ["wrangler.jsonc", "wrangler.local.jsonc", "wrangler.jobs.jsonc"].flatMap((file) => [
-      ...readWranglerKeys(readFileSync(resolve(root, file), "utf8")),
-    ]),
+    [
+      "wrangler.jsonc",
+      "wrangler.local.jsonc",
+      "wrangler.jobs.jsonc",
+      "web/wrangler.staging.jsonc",
+    ].flatMap((file) => [...readWranglerKeys(readFileSync(resolve(root, file), "utf8"))]),
   );
   const docText = readFileSync(resolve(root, "docs/config.md"), "utf8");
   const docs = readDocKeys(docText);
@@ -386,11 +389,11 @@ export function checkConfigDocs() {
   const tailWorkerNames = readTailWorkerNames(
     readFileSync(resolve(root, "tail/wrangler.jsonc"), "utf8"),
   );
-  // Staging runs two app Workers after the handoff: the web front
-  // (wrangler.jsonc) and the jobs consumer (wrangler.jobs.jsonc). Both tail
-  // to the staging pager, so both configs contribute consumers/scripts.
-  const appConfigs = ["wrangler.jsonc", "wrangler.jobs.jsonc"].map((file) =>
-    readFileSync(resolve(root, file), "utf8"),
+  // Staging runs the Kit web front and jobs consumer; the root config retains
+  // the production environment and legacy Hono bindings. Include all three
+  // declarations so the Tail contract covers staging and production scripts.
+  const appConfigs = ["wrangler.jsonc", "web/wrangler.staging.jsonc", "wrangler.jobs.jsonc"].map(
+    (file) => readFileSync(resolve(root, file), "utf8"),
   );
   const appConsumers = new Set(appConfigs.flatMap((text) => [...readAppTailConsumers(text)]));
   const appScripts = new Set(appConfigs.flatMap((text) => [...readAppScriptNames(text)]));

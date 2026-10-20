@@ -9,12 +9,15 @@
 // several readers are wired). The bridge never rotates, revokes, or issues
 // a session; the one cookie this module writes is the signed auth-status
 // probe below, attached by the hook only to successful moderator admin
-// responses or audited full member documents. Rotation stays route-specific inside Hono's readSession
-// (no blanket rotating layout load; fragments and JSON keep nonrotating
-// reads), and logout stays the authoritative Hono POST /logout. This module
-// only peeks flashes. Profile destinations expire the join flash in the hook
-// core after a released successful HTML GET; that deletion does not run
-// here and does not issue or rotate a session.
+// responses or audited full member documents. Rotation stays route-specific:
+// Hono's readSession rotates its page views (no blanket rotating layout load;
+// fragments and JSON keep nonrotating reads), and the Kit event detail renews
+// through kitEventDetailRotationFor, which the hook core calls only after the
+// member-read boundary releases a successful GET. Logout stays the
+// authoritative Hono POST /logout. This module only peeks flashes. Profile
+// destinations expire the join flash in the hook core after a released
+// successful HTML GET; that deletion does not run here and does not issue
+// or rotate a session.
 //
 // Decision contract: "authenticated" (live row, bits from the row),
 // "guest" (missing/tampered cookie, non-two_ token, unknown/expired/revoked
@@ -36,7 +39,13 @@ import {
 } from "./return-journey";
 import type { HookEventLike } from "./route-ownership";
 import { SESSION_COOKIE } from "./session-cookie";
-import { hashToken, isValidSessionToken, SESSION_TTL_SECONDS, type SessionStore } from "./sessions";
+import {
+  hashToken,
+  isValidSessionToken,
+  newSessionToken,
+  SESSION_TTL_SECONDS,
+  type SessionStore,
+} from "./sessions";
 import { EXPIRED_WRITE_COOKIE } from "./write-recovery";
 
 export type KitSession = {
@@ -246,6 +255,61 @@ export function kitSessionBridge(env: Env): (event: HookEventLike) => Promise<Ki
       readReturnJourney(event.request, env.SESSION_SECRET),
     ]);
     return { ...session, ...journey };
+  };
+}
+
+/**
+ * Sliding renewal for the native Kit event detail (src/events/kit-detail.ts):
+ * the post-release twin of Hono's readSession rotation. The hook core calls
+ * this only after the member-read boundary releases a successful GET, so a
+ * refused, failed, throttled or redirected read never burns the presented
+ * bearer — the delivered response cannot strand a session it never issued.
+ *
+ * The rotation itself follows the shared Hono contract: re-verify the signed
+ * bearer (locals are never trusted alone), mint a fresh token, atomically
+ * replace the live row with the full 120-minute re-stamp, and sign the
+ * replacement with the same cookie attributes Hono sets (Path=/, Secure,
+ * HttpOnly, SameSite=Lax, Max-Age from SESSION_TTL_SECONDS). A lost race
+ * (rotate resolves false
+ * for a concurrently retired source) returns null like any other expected
+ * non-rotation; only a store failure propagates, and the hook core renders
+ * the released page without renewal then (fail-open: rotate is one atomic
+ * statement, so a throw leaves the old row live and the next read retries).
+ * Anonymous callers get null with zero store writes.
+ */
+export function kitEventDetailRotationFor(
+  env: Env,
+): (event: HookEventLike) => Promise<string | null> {
+  return async (event) => {
+    const locals = event.locals as Partial<KitLocals> | undefined;
+    const bits = locals?.status === "authenticated" ? locals.session : null;
+    if (!bits || !env.SESSION_SECRET) return null;
+    // verifiedCookies never throws (a malformed header resolves to no
+    // cookies); an unverifiable bearer simply does not rotate.
+    const cookies = await verifiedCookies(event.request, env.SESSION_SECRET);
+    const raw = cookies?.[SESSION_COOKIE];
+    if (!isValidSessionToken(raw)) return null;
+    const store = await storeForEnv(env);
+    const replacement = newSessionToken();
+    const rotated = await store.rotate(await hashToken(raw), {
+      tokenHash: await hashToken(replacement),
+      userId: bits.userId,
+      username: bits.username,
+      avatar: bits.avatar,
+      member: bits.member,
+      moderator: bits.moderator,
+      expiresAt: new Date(Date.now() + SESSION_TTL_SECONDS * 1000),
+    });
+    if (!rotated) return null;
+    // Inline options, like Hono's setSignedCookie calls: the pinned-lifetime
+    // guard (test/privacy-policy-numbers.test.ts) reads maxAge from the call.
+    return generateSignedCookie(SESSION_COOKIE, replacement, env.SESSION_SECRET, {
+      path: "/",
+      secure: true,
+      httpOnly: true,
+      sameSite: "Lax",
+      maxAge: SESSION_TTL_SECONDS,
+    });
   };
 }
 

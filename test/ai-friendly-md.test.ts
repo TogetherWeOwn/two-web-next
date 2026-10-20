@@ -165,6 +165,53 @@ describe("md builders (pure, DB-free)", () => {
       expect(body.toLowerCase()).not.toContain(leak);
   });
 
+  it("event detail exposes the complete scheduled range with endpoint offsets", () => {
+    // Overnight: the end date differs from the start; both carry their own offset.
+    const body = mdEvent(
+      APP_URL,
+      mdRow({
+        startsAt: new Date("2026-06-21T03:30:00.000Z"),
+        endsAt: new Date("2026-06-21T05:15:00.000Z"),
+        timezone: "America/New_York",
+      }),
+    );
+    expect(body).toContain(
+      "- Starts: Saturday, 20 June 2026 at 23:30 GMT-04:00 (America/New_York)",
+    );
+    expect(body).toContain("- Ends: Sunday, 21 June 2026 at 01:15 GMT-04:00 (America/New_York)");
+    expect(body).not.toContain("- When:");
+  });
+
+  it("event detail distinguishes the repeated DST hour by offset", () => {
+    const body = mdEvent(
+      APP_URL,
+      mdRow({
+        startsAt: new Date("2026-11-01T05:30:00.000Z"),
+        endsAt: new Date("2026-11-01T06:30:00.000Z"),
+        timezone: "America/New_York",
+      }),
+    );
+    // Same wall clock, different offsets: the range is unambiguous only with both.
+    expect(body).toContain("- Starts:");
+    expect(body).toContain("- Ends:");
+    expect(body).toContain("01:30 GMT-04:00");
+    expect(body).toContain("01:30 GMT-05:00");
+  });
+
+  it("event detail falls back to UTC for an invalid stored timezone", () => {
+    const body = mdEvent(
+      APP_URL,
+      mdRow({
+        startsAt: new Date("2026-06-21T03:30:00.000Z"),
+        endsAt: new Date("2026-06-21T05:15:00.000Z"),
+        timezone: "Invalid/Timezone",
+      }),
+    );
+    expect(body).toContain("- Starts: 2026-06-21T03:30:00.000Z (UTC)");
+    expect(body).toContain("- Ends: 2026-06-21T05:15:00.000Z (UTC)");
+    expect(body).not.toContain("Invalid/Timezone");
+  });
+
   it("signals full from seat occupancy, not the attributable count", () => {
     // A nameless seat fills the event while the roster reads one of two:
     // the full signal must follow occupancy, like the write path does.

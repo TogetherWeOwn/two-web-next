@@ -37,6 +37,7 @@ export const load: PageServerLoad = async ({ locals, params, url, cookies, setHe
         maxAge: intended ? JOURNEY_TTL_SECONDS : 0,
       });
     }
+    setHeaders({ "cache-control": "no-store, private", vary: "Cookie" });
     redirect(302, outcome.location);
   }
   if (outcome.kind === "unavailable") error(503, "Member data is temporarily unavailable.");

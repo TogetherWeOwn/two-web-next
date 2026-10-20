@@ -1,5 +1,5 @@
-import { createHmac } from "node:crypto";
-import { expect, test, type APIRequestContext } from "@playwright/test";
+import { createHash, createHmac } from "node:crypto";
+import { expect, test, type APIRequestContext, type APIResponse } from "@playwright/test";
 import postgres from "postgres";
 import { normalizeSection, sectionOf } from "../../ci/kit-section-contract.mjs";
 import { requireGithubRunner, requireTestDatabase } from "../ci-only.mjs";
@@ -83,11 +83,13 @@ test.afterAll(async () => {
   } finally {
     for (const context of contexts.values()) await context.dispose();
   }
-  // The whole parity run spends one QA login however many board fetches
-  // follow: dropping the memoization below burns one login per fetch
-  // against the shared qa-login throttle, and this counter is the proof.
+  // The shared member journey spends one QA login. Session-renewal coverage
+  // uses one isolated login so a Kit rotation cannot stale the shared bearer.
   if (memberCookiePromise !== null) {
-    expect(qaLoginCount, "exactly one QA login for the member journey").toBe(1);
+    expect(qaLoginCount, "exactly one shared QA login").toBe(1);
+  }
+  if (renewalLoginCount > 0) {
+    expect(renewalLoginCount, "exactly one isolated renewal login").toBe(1);
   }
 });
 
@@ -132,6 +134,15 @@ function honoMemberCookie(): Promise<string> {
   return memberCookiePromise;
 }
 
+function signCookieForTarget(source: string, target: ParityTarget): string {
+  if (target.name !== "kit") return source;
+  const eq = source.indexOf("=");
+  const signed = source.slice(eq + 1);
+  const raw = signed.slice(0, signed.lastIndexOf("."));
+  const signature = createHmac("sha256", kitFixtureSessionSecret()).update(raw).digest("base64");
+  return `${source.slice(0, eq + 1)}${raw}.${signature}`;
+}
+
 async function memberCookie(target: ParityTarget): Promise<string> {
   const pair = await honoMemberCookie();
   // Freshest wins: rotating page reads (GET /events, GET /e/:key) retire the
@@ -143,13 +154,89 @@ async function memberCookie(target: ParityTarget): Promise<string> {
   const state = await api(hono).storageState();
   const current = state.cookies.find((cookie) => cookie.name === "__Host-two_session");
   const source = current ? `${current.name}=${current.value}` : pair;
-  if (target.name !== "kit") return source;
+  return signCookieForTarget(source, target);
+}
 
-  const eq = source.indexOf("=");
-  const signed = source.slice(eq + 1);
-  const raw = signed.slice(0, signed.lastIndexOf("."));
-  const signature = createHmac("sha256", kitFixtureSessionSecret()).update(raw).digest("base64");
-  return `${source.slice(0, eq + 1)}${raw}.${signature}`;
+let renewalLoginCount = 0;
+async function isolatedRenewalCookie(
+  target: ParityTarget,
+  newContext: (options: {
+    baseURL: string;
+    ignoreHTTPSErrors: boolean;
+  }) => Promise<APIRequestContext>,
+): Promise<string> {
+  const hono = targets.find((candidate) => candidate.name === "hono")!;
+  const login = await newContext({
+    baseURL: hono.origin,
+    ignoreHTTPSErrors: hono.ignoreHTTPSErrors,
+  });
+  try {
+    renewalLoginCount += 1;
+    const token = process.env.E2E_QA_TOKEN;
+    if (!token) throw new Error("Missing ephemeral CI QA token");
+    // Use a separate QA account: issuing a fresh session revokes other live
+    // sessions for the same user and would invalidate the shared member jar.
+    const response = await login.post("/auth/qa/qa-moderator", {
+      headers: { "X-TWO-QA-Auth": token, Origin: "https://localhost:8787" },
+      maxRedirects: 0,
+    });
+    expect(response.status(), "isolated QA login issues a session").toBe(204);
+    const setCookie = (await response.headersArray()).find(
+      (header) =>
+        header.name.toLowerCase() === "set-cookie" &&
+        header.value.startsWith("__Host-two_session="),
+    );
+    if (!setCookie) throw new Error("Isolated QA login set no session cookie");
+    return signCookieForTarget(setCookie.value.split(";")[0]!, target);
+  } finally {
+    await login.dispose();
+  }
+}
+
+function bearerFromCookie(cookie: string): string {
+  const value = cookie.slice(cookie.indexOf("=") + 1);
+  return value.slice(0, value.lastIndexOf("."));
+}
+
+async function withSessionDb<T>(run: (sql: ReturnType<typeof postgres>) => Promise<T>): Promise<T> {
+  requireGithubRunner();
+  const url = requireTestDatabase(process.env.DATABASE_URL) as string;
+  const sql = postgres(url, { max: 1 });
+  try {
+    return await run(sql);
+  } finally {
+    await sql.end();
+  }
+}
+
+async function ageSessionNearExpiry(
+  cookie: string,
+): Promise<{ tokenHash: string; expiresAt: Date }> {
+  const tokenHash = createHash("sha256").update(bearerFromCookie(cookie)).digest("hex");
+  const expiresAt = new Date(Date.now() + 30_000);
+  await withSessionDb(async (sql) => {
+    const updated = await sql`
+      update web_sessions set expires_at = ${expiresAt}
+      where token_hash = ${tokenHash} and revoked_at is null
+      returning token_hash`;
+    expect(updated, "the authenticated fixture session exists").toHaveLength(1);
+  });
+  return { tokenHash, expiresAt };
+}
+
+async function sessionExpiry(tokenHash: string): Promise<Date | null> {
+  return withSessionDb(async (sql) => {
+    const rows = await sql<{ expires_at: Date }[]>`
+      select expires_at from web_sessions where token_hash = ${tokenHash} and revoked_at is null`;
+    return rows[0]?.expires_at ?? null;
+  });
+}
+
+async function sessionCount(): Promise<number> {
+  return withSessionDb(async (sql) => {
+    const rows = await sql<{ count: string }[]>`select count(*)::text as count from web_sessions`;
+    return Number(rows[0]?.count ?? 0);
+  });
 }
 
 // The board's one ranked member: the QA viewer answers going to the seeded
@@ -629,8 +716,21 @@ for (const target of targets) {
         ignoreHTTPSErrors: target.ignoreHTTPSErrors,
       });
       try {
+        const sessionsBefore = await sessionCount();
         const response = await guest.get(EVENT_PATH);
         expect(response.status(), `${target.name} guest detail`).toBe(200);
+        expect(
+          (await response.headersArray()).filter(
+            (header) =>
+              header.name.toLowerCase() === "set-cookie" &&
+              header.value.startsWith("__Host-two_session="),
+          ),
+          `${target.name} anonymous detail does not issue a session`,
+        ).toEqual([]);
+        expect(
+          await sessionCount(),
+          `${target.name} anonymous detail does not mutate sessions`,
+        ).toBe(sessionsBefore);
         expect(response.headers()["content-type"]).toContain("text/html");
         expect(response.headers()["x-two-renderer"] ?? null).toBe(expectedMarker);
         // Per-viewer page: never shared-cacheable, on either renderer.
@@ -658,13 +758,45 @@ for (const target of targets) {
       if (target.name === "kit")
         expect(kitFixtureOwnsEventDetail(), "Kit fixture owns the event detail").toBe(true);
       const expectedMarker = target.name === "kit" ? "kit" : null;
-      const cookie = await memberCookie(target);
-      const response = await api(target).get(EVENT_PATH, { headers: { cookie } });
-      expect(response.status(), `${target.name} member detail`).toBe(200);
+      // Put the real fixture row 30 seconds from expiry immediately before the
+      // request. Both detail handlers must rotate the bearer and re-stamp the
+      // full 120-minute sliding window, rather than merely refreshing cookie age.
+      const cookie =
+        target.name === "kit"
+          ? await isolatedRenewalCookie(target, (options) => playwright.request.newContext(options))
+          : await memberCookie(target);
+      const prior = await ageSessionNearExpiry(cookie);
+      let response: APIResponse | undefined;
+      let body = "";
+      let requestStartedAt = 0;
+      await expect
+        .poll(
+          async () => {
+            const startedAt = Date.now();
+            const candidate = await api(target).get(EVENT_PATH, { headers: { cookie } });
+            const candidateBody = await candidate.text();
+            if (
+              candidate.status() === 200 &&
+              (candidate.headers()["x-two-renderer"] ?? null) === expectedMarker &&
+              candidateBody.includes("Sign out")
+            ) {
+              response = candidate;
+              body = candidateBody;
+              requestStartedAt = startedAt;
+              return true;
+            }
+            return false;
+          },
+          {
+            message: `${target.name} member detail session becomes visible`,
+            timeout: 15000,
+          },
+        )
+        .toBe(true);
+      if (response === undefined)
+        throw new Error(`${target.name} member detail response was not captured`);
       expect(response.headers()["content-type"]).toContain("text/html");
-      expect(response.headers()["x-two-renderer"] ?? null).toBe(expectedMarker);
       expect(response.headers()["cache-control"]).toBe("private, no-store");
-      const body = await response.text();
       expect(scrubSecrets(body)).toEqual([]);
       expect(body).toContain("E2E Community Night");
       expect(body).not.toContain('data-testid="event-join-pitch"');
@@ -674,21 +806,37 @@ for (const target of targets) {
       expect(body).toContain("/islands/rsvp-button.js");
       expect(body).toContain("Sign out");
       expect(body).not.toContain("Welcome, guest");
-      // Hono rotates the active bearer and renews its 120-minute sliding
-      // expiry. Only its immediate predecessor has a fixed <10s grace:
-      // replay cannot rotate, mint a sibling or renew that window. Kit's
-      // read-only bridge never rotates or sets cookies, so its bearer stays
-      // live beyond that window. Kit-only browsing still lacks sliding renewal.
+      // Both renderers rotate the active bearer and renew its 120-minute
+      // sliding expiry through the shared session store. Only the immediate
+      // predecessor keeps a fixed <10s grace: replaying it authenticates the
+      // member without rotating, minting a sibling, or renewing that window.
       const sessionSets = (await response.headersArray())
         .filter((header) => header.name.toLowerCase() === "set-cookie")
         .map((header) => header.value)
         .filter((value) => value.startsWith("__Host-two_session="));
-      if (target.name === "kit") {
-        expect(sessionSets, "kit detail keeps the read-only bridge: no rotation").toEqual([]);
-      } else {
-        expect(sessionSets.length, "hono detail rotates the session").toBe(1);
-        expect(sessionSets[0]!, "rotation re-stamps 120 minutes").toMatch(/max-age=7200/i);
-      }
+      expect(sessionSets, `${target.name} detail rotates a near-expiry session`).toHaveLength(1);
+      expect(sessionSets[0]!, `${target.name} cookie re-stamps 120 minutes`).toMatch(
+        /max-age=7200/i,
+      );
+      const replacementCookie = sessionSets[0]!.split(";")[0]!;
+      const replacementTokenHash = createHash("sha256")
+        .update(bearerFromCookie(replacementCookie))
+        .digest("hex");
+      expect(bearerFromCookie(replacementCookie)).not.toBe(bearerFromCookie(cookie));
+      expect(
+        await sessionExpiry(prior.tokenHash),
+        `${target.name} retires the old bearer`,
+      ).toBeNull();
+      const renewedExpiry = await sessionExpiry(replacementTokenHash);
+      expect(renewedExpiry, `${target.name} stores the replacement session`).not.toBeNull();
+      expect(renewedExpiry!.getTime()).toBeGreaterThan(prior.expiresAt.getTime());
+      expect(renewedExpiry!.getTime()).toBeGreaterThanOrEqual(
+        requestStartedAt + 120 * 60 * 1000 - 60_000,
+      );
+      expect(renewedExpiry!.getTime()).toBeLessThanOrEqual(
+        requestStartedAt + 120 * 60 * 1000 + 60_000,
+      );
+
       for (const phase of ["immediate", "expired"] as const) {
         // A real-worker clock cannot be faked. Wait past grace without
         // polling; exact-deadline behavior is pinned by the store suites.
@@ -710,7 +858,7 @@ for (const target of targets) {
               header.value.startsWith("__Host-two_session="),
           );
           expect(replaySessionSets, "replay never mints an independent sibling").toEqual([]);
-          if (target.name === "kit" || phase === "immediate") {
+          if (phase === "immediate") {
             expect(againBody).not.toContain('data-testid="event-join-pitch"');
             expect(againBody).toContain("Sign out");
             expect(againBody).not.toContain("Welcome, guest");
