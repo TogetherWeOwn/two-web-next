@@ -61,20 +61,25 @@ test.beforeEach(async () => {
 });
 
 async function mount(page: Page, html: string) {
-  // Both SSR presentations use the shared served editor island. Exercise that
-  // real binder, not a fake dirty-state implementation or a Kit hydration claim.
-  const document =
-    html.replace(/<script\b[^>]*>[\s\S]*?<\/script>/g, "") +
-    '<script src="/islands/admin-event-editor.js"></script>';
+  // Serve the actual SSR output unchanged: both presentations already reference
+  // the shared same-origin editor island. Route fulfillment keeps the fixture
+  // isolated (unlisted paths 404) and exercises the real binder without any
+  // string sanitization or synthetic script tag.
   await page.route("**/*", async (route) => {
     const url = new URL(route.request().url());
     if (url.origin === ORIGIN && url.pathname === `/admin/events/${KEY}`) {
-      await route.fulfill({ status: 200, contentType: "text/html", body: document });
+      await route.fulfill({ status: 200, contentType: "text/html", body: html });
     } else if (url.origin === ORIGIN && url.pathname === "/islands/admin-event-editor.js") {
       await route.fulfill({
         status: 200,
         contentType: "application/javascript",
         body: readFileSync(join(root, "public/islands/admin-event-editor.js"), "utf8"),
+      });
+    } else if (url.origin === ORIGIN && url.pathname === "/islands/admin-event-text-limits.js") {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/javascript",
+        body: readFileSync(join(root, "public/islands/admin-event-text-limits.js"), "utf8"),
       });
     } else {
       await route.fulfill({ status: 404, body: "fixture only" });
