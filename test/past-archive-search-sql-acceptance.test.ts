@@ -20,51 +20,51 @@ import {
   lastMatchKeys,
 } from "./helpers/past-archive-search-acceptance";
 
-let fixture: MemberDataFixture;
-let countedDb: Db;
-let statements: string[] = [];
-let rowLimits: number[] = [];
-beforeAll(async () => {
-  fixture = await createMemberDataFixture(process.env.DATABASE_URL!);
-  countedDb = drizzle(fixture.client, {
-    schema: { ...schema, ...adminSchema },
-    logger: {
-      logQuery: (sql, params) => {
-        statements.push(sql);
-        const limit = /\blimit \$(\d+)/i.exec(sql);
-        if (limit) rowLimits.push(Number(params[Number(limit[1]) - 1]));
+describe.skipIf(!process.env.DATABASE_URL)("real SQL archive-search acceptance controls", () => {
+  let fixture: MemberDataFixture;
+  let countedDb: Db;
+  let statements: string[] = [];
+  let rowLimits: number[] = [];
+  beforeAll(async () => {
+    fixture = await createMemberDataFixture(process.env.DATABASE_URL!);
+    countedDb = drizzle(fixture.client, {
+      schema: { ...schema, ...adminSchema },
+      logger: {
+        logQuery: (sql, params) => {
+          statements.push(sql);
+          const limit = /\blimit \$(\d+)/i.exec(sql);
+          if (limit) rowLimits.push(Number(params[Number(limit[1]) - 1]));
+        },
       },
-    },
+    });
   });
-});
-afterAll(() => fixture?.dispose());
-beforeEach(async () => {
-  vi.useFakeTimers({ toFake: ["Date"] });
-  vi.setSystemTime(ARCHIVE_NOW);
-  __resetAnonEventCacheForTests();
-  await fixture.reset();
-  const excluded = [
-    archiveRow(101, { eventKey: "draft-decoy", status: "draft" }),
-    archiveRow(102, { eventKey: "cancelled-decoy", status: "cancelled" }),
-    archiveRow(103, {
-      eventKey: "ongoing-decoy",
-      status: "published",
-      endsAt: new Date(ARCHIVE_NOW.getTime() + 1),
-    }),
-    archiveRow(104, {
-      eventKey: "future-decoy",
-      status: "published",
-      startsAt: new Date("2031-01-01T20:00:00Z"),
-      endsAt: new Date("2031-01-01T22:00:00Z"),
-    }),
-  ];
-  await fixture.db.insert(events).values([...archiveRows(), ...excluded]);
-  statements = [];
-  rowLimits = [];
-});
-afterEach(() => vi.useRealTimers());
+  afterAll(() => fixture?.dispose());
+  beforeEach(async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(ARCHIVE_NOW);
+    __resetAnonEventCacheForTests();
+    await fixture.reset();
+    const excluded = [
+      archiveRow(101, { eventKey: "draft-decoy", status: "draft" }),
+      archiveRow(102, { eventKey: "cancelled-decoy", status: "cancelled" }),
+      archiveRow(103, {
+        eventKey: "ongoing-decoy",
+        status: "published",
+        endsAt: new Date(ARCHIVE_NOW.getTime() + 1),
+      }),
+      archiveRow(104, {
+        eventKey: "future-decoy",
+        status: "published",
+        startsAt: new Date("2031-01-01T20:00:00Z"),
+        endsAt: new Date("2031-01-01T22:00:00Z"),
+      }),
+    ];
+    await fixture.db.insert(events).values([...archiveRows(), ...excluded]);
+    statements = [];
+    rowLimits = [];
+  });
+  afterEach(() => vi.useRealTimers());
 
-describe("real SQL archive-search acceptance controls", () => {
   it("filters both count and rows before LIMIT/OFFSET, including title/description and id ties", async () => {
     const one = await listPast(countedDb, 1, ARCHIVE_NOW, "raid  NIGHT");
     const two = await listPast(countedDb, 2, ARCHIVE_NOW, "raid  NIGHT");
