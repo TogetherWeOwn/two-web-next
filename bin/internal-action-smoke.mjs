@@ -21,26 +21,17 @@ import { createBotClient } from "../src/bot/client.ts";
 import { BotTerminalError } from "../src/jobs/types.ts";
 import { runBotSmoke, stagingEndpoint } from "../src/probes/bot-smoke.ts";
 
-function opt(name) {
-  const prefix = `--${name}=`;
-  const found = process.argv.slice(2).find((a) => a.startsWith(prefix));
-  return found ? found.slice(prefix.length) : "";
-}
+import { parseInternalActionArgs } from "./internal-action-args.mjs";
 
-const discordId = opt("discord-id");
-const roleKey = opt("role-key");
-const channelKey = opt("channel-key");
-const eventKey = opt("event-key") || `tog10112-${crypto.randomUUID().slice(0, 12)}`;
-
-const announcementOnly = process.argv.slice(2).includes("--announcement-only");
-const required = announcementOnly ? ["channel-key"] : ["discord-id", "role-key", "channel-key"];
-const missing = required.filter((n) => opt(n) === "");
-if (missing.length > 0) {
-  console.error(
-    `internal-action-smoke: missing required option(s): ${missing.map((n) => `--${n}`).join(" ")}`,
-  );
+let args;
+try {
+  args = parseInternalActionArgs(process.argv.slice(2), true);
+} catch (e) {
+  console.error(`internal-action-smoke: ${e.message}`);
   process.exit(2);
 }
+const { discordId, roleKey, channelKey, announcementOnly } = args;
+const eventKey = args.eventKey ?? `tog10112-${crypto.randomUUID().slice(0, 12)}`;
 
 let url;
 try {
