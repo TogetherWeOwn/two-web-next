@@ -73,6 +73,9 @@ const SETTLE_DEADLINE_MS = 15_000;
 const BRANDED_OUTAGE_MARK = "We will be right back";
 const PLAIN_REFUSAL = "Member data is temporarily unavailable.";
 
+// Deterministic eventKey sequence: unique within each run, no collision risk.
+let eventKeySeq = 0;
+
 const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 function pgError(code: string) {
@@ -771,7 +774,7 @@ describe.skipIf(!raw)("inventory bounded reads (test database)", () => {
     const [row] = await db
       .insert(events)
       .values({
-        eventKey: `01J00000000000000000${String(Math.floor(Math.random() * 900) + 100)}`,
+        eventKey: `01J${String(++eventKeySeq).padStart(23, "0")}`,
         title: "Bounded inventory night",
         game: "Chess",
         description: "Boards out",
