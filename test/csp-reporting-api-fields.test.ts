@@ -233,35 +233,47 @@ describe("Reporting API CSP fields", () => {
   });
 
   it.each(["deprecation", "intervention", "network-error", null, {}, []].map((value) => [value]))(
-    "silently ignores an explicitly non-CSP or malformed type %j",
+    "accounts an explicitly non-CSP or malformed type without violation logging %j",
     async (type) => {
       const warn = captureLogs();
-      await post(JSON.stringify([{ ...report(), type }]));
-      expect(warn).not.toHaveBeenCalled();
+      const raw = JSON.stringify([{ ...report(), type }]);
+      await post(raw);
+      expect(warn.mock.calls).toEqual([["csp.report.malformed", { bytes: raw.length }]]);
+      expect(JSON.stringify(warn.mock.calls)).not.toContain("next.example.test");
     },
   );
 
   it("keeps first-report-only handling rather than treating a later report as the first", async () => {
     const warn = captureLogs();
-    await post(JSON.stringify([{ ...report(), type: "deprecation" }, report()]));
-    expect(warn).not.toHaveBeenCalled();
+    const raw = JSON.stringify([{ ...report(), type: "deprecation" }, report()]);
+    await post(raw);
+    // The non-CSP first report is malformed accounting, not a violation row
+    // for the later valid report.
+    expect(warn.mock.calls).toEqual([["csp.report.malformed", { bytes: raw.length }]]);
   });
 
   it.each([null, [], "invalid", 17].map((value) => [value]))(
-    "ignores a typed CSP report with malformed body %j",
+    "accounts a typed CSP report with malformed body %j",
     async (body) => {
       const warn = captureLogs();
-      await post(JSON.stringify([report(body)]));
-      expect(warn).not.toHaveBeenCalled();
+      const raw = JSON.stringify([report(body)]);
+      await post(raw);
+      expect(warn.mock.calls).toEqual([["csp.report.malformed", { bytes: raw.length }]]);
     },
   );
 
-  it.each(["", "not-json", "null", "[]", "[null]", '{"csp-report":[]}'])(
-    "always answers 204/no-store without logging malformed input %j",
+  it("silently answers 204/no-store for empty input", async () => {
+    const warn = captureLogs();
+    await post("");
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  it.each(["not-json", "null", "[]", "[null]", '{"csp-report":[]}'])(
+    "answers 204/no-store with byte-count accounting for malformed input %j",
     async (raw) => {
       const warn = captureLogs();
       await post(raw);
-      expect(warn).not.toHaveBeenCalled();
+      expect(warn.mock.calls).toEqual([["csp.report.malformed", { bytes: raw.length }]]);
     },
   );
 

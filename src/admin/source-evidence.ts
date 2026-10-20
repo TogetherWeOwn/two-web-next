@@ -255,7 +255,12 @@ export async function sourceEvidenceHandler(c: Context<QueuePreviewVars>) {
       observedAt: candidate.preview.observedAt,
       expiresAt: new Date(expiresAt).toISOString(),
     });
-  } catch {
+  } catch (err) {
+    // Exception class + incident id only: no message, SQL, bindings, URI or payload.
+    console.error("source evidence snapshot failed; refusing evidence.", {
+      exception: err instanceof Error ? err.name : typeof err,
+      incidentId: id,
+    });
     return c.json({ error: "evidence_unavailable" }, 503);
   } finally {
     await sql.end({ timeout: 1 });
