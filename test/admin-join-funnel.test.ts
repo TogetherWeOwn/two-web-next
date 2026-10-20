@@ -99,6 +99,25 @@ describe("dashboardJoinFunnel cache", () => {
     expect(fill).toHaveBeenCalledTimes(2);
   });
 
+  it.each([
+    { code: "55P03", depth: 1 },
+    { code: "55P03", depth: 2 },
+    { code: "57014", depth: 1 },
+    { code: "57014", depth: 2 },
+  ])("omits the funnel for wrapped $code cancellation at depth $depth", async ({ code, depth }) => {
+    let error: Error = Object.assign(new Error("statement timeout"), {
+      name: "PostgresError",
+      code,
+    });
+    for (let i = 0; i < depth; i++) error = new Error("Failed query", { cause: error });
+    const fill = vi.fn().mockRejectedValue(error);
+
+    await expect(
+      dashboardJoinFunnel(stubDb, `conn-cancelled-${code}-${depth}`, 500, fill),
+    ).resolves.toBeUndefined();
+    expect(fill).toHaveBeenCalledTimes(1);
+  });
+
   it("propagates a classified DB outage for the shared 503 handler without caching it", async () => {
     const outage = Object.assign(new Error("connection refused"), { code: "ECONNREFUSED" });
     const fill = vi.fn().mockRejectedValueOnce(outage).mockResolvedValueOnce({ added: 3 });
