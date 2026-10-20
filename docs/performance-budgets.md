@@ -204,8 +204,8 @@ critical journeys on the same seeded disposable Postgres:
 | member-rsvp | `GET /e/:key` (seeded published event) | member (`qa-member`) | median 1500 ms, slowest sample 3000 ms |
 | moderator-admin | `GET /admin/events` | moderator (`qa-moderator`) | median 1500 ms, slowest sample 3000 ms |
 
-`ci/check-auth-perf.mjs` (budgets in `ci/auth-perf-budget.json`, 3 samples
-each) mints exactly one QA session per identity, replays the
+`ci/check-auth-perf.mjs` (budgets in `ci/auth-perf-budget.json`, at least five
+samples each; the parser rejects smaller sample counts) mints exactly one QA session per identity, replays the
 `__Host-two_session` cookie with rotation like the browser journeys, and
 asserts status 200 **plus** authenticated content (signed-in account chrome on
 the detail page, administration nav on the admin list — a published event

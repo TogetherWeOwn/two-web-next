@@ -23,10 +23,11 @@ test("auth perf selftest passes hermetically", () => {
   assert.match(result.stdout, /guest bounce fails the admin journey/);
 });
 
-test("budget covers at least the member-RSVP and moderator-admin journeys", () => {
+test("budget covers both authenticated journeys with at least five samples", () => {
   const budget = JSON.parse(
     readFileSync(new URL("./auth-perf-budget.json", import.meta.url), "utf8"),
   );
+  assert.ok(budget.samples >= 5, "calibration requires five or more samples per journey");
   for (const id of ["member-rsvp", "moderator-admin"]) {
     const entry = budget.journeys[id];
     assert.ok(entry, `${id} must be budgeted`);
