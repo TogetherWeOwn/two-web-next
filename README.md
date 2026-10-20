@@ -41,6 +41,8 @@ Operations (deploy/rollback, `/up`, queues, outages and restore drills):
   qualitative event learning, separate from attendance and activity counts.
 - [Troubleshooting join and Discord sign-in](docs/troubleshooting-join.md):
   current notices, recovery pages, and the invite fallback.
+- [RSVP states and safe recovery](docs/rsvp-recovery.md): seats, waitlist positions,
+  pending Discord mirrors, uncertain writes, and bounded support steps.
 
 ## Develop and test safely
 

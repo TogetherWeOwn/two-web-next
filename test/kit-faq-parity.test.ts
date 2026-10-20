@@ -187,7 +187,7 @@ describe("faq shared content source", () => {
       "faq-profile",
       "faq-privacy",
     ]);
-    expect(QUESTION_COUNT).toBe(15);
+    expect(QUESTION_COUNT).toBe(17);
   });
 
   it("passes the app URL and the shared questions to the Kit page", () => {
