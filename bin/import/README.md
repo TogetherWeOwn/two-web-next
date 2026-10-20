@@ -1,12 +1,28 @@
 # Legacy content and funnel import
 
+> **Current status — historical reference only.** TWO Next is a fresh start:
+> no real legacy import, legacy verification or retired-repository revival.
+> The retained tools, mappings, CLI recipes and old evidence below support
+> historical reference and synthetic-fixture maintenance, not a live cutover.
+> Neither maintenance nor historical approval language authorizes a real legacy
+> run, including read-only verification.
+>
+> Follow the [safe-test rules](../../README.md#database-and-migrations) and
+> [current database topology](../../docs/db-migrations.md#topology-target).
+> This notice does not remove tools, change member erasure or audit-retention
+> policy, or release retained-archive approval holds.
+
 `content-funnel.mjs` imports only `featured_contents`, `join_attempts` and
 `event_search_logs` from the frozen `TogetherWeOwn/two-web` Postgres schema.
-It does not import audit tables, users, OAuth tokens or sessions. Shipping this
-tool is not authorization to move member data: actual cutover execution remains
-subject to the approved region/access gates in [db-migrations.md](../../docs/db-migrations.md).
+It does not import audit tables, users, OAuth tokens or sessions. Real cutover
+execution is historical scope, not a pending operator step under the current
+fresh-start directive.
 
 ## Invocation
+
+**Historical operator recipe — not actionable under the current fresh-start directive.**
+The invocation and provisioning requirements below are retained CLI reference,
+not instructions to obtain credentials or run a real import.
 
 Supply `LEGACY_DATABASE_URL` (source) and `DATABASE_URL` (Next destination)
 through the authorized environment/secret binding. Never pass URLs as arguments

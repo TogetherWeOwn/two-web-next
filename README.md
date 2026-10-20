@@ -286,9 +286,11 @@ PR or release. Automatic runs promote only a staging green that soaked 30
 minutes with no newer red staging run, skip cleanly when production already
 serves the target (`/up` revision marker) or there is nothing soaked and green,
 and stop with a clear error when the target journal has entries production
-lacks (automatic migration waits on the least-privilege migrator). A manual
-re-dispatch with `migrations_applied: true` records an audited continuation
-once `db-migrate.yml` (target production) has applied those entries. Repo
+lacks (automatic migration waits on the least-privilege migrator). An unknown
+live commit after three `/up` reads also stops promotion. A manual re-dispatch
+with `migrations_applied: true` records an audited continuation past either stop
+once `db-migrate.yml` (target production) has applied the target's migrations;
+automatic runs ignore that input and halt on either condition. Repo
 variable `PRODUCTION_HOLD_UNTIL` (ISO-8601 UTC, at most 24h ahead) pauses all
 promotion while now is before its value. Before the deploy job can start,
 `ci/production-deploy-gate.mjs` requires the repository variable
@@ -463,20 +465,23 @@ APP_URL=https://next.togetherweown.com npm run drill:internal-action -- \
   --discord-id=<drill identity> --role-key=<key> --channel-key=<throwaway>
 ```
 
-The deployment preflight parses the **top-level** `vars.DISCORD_MODERATOR_ROLE_IDS`
-and `vars.DISCORD_GUILD_ID` in `wrangler.jsonc` and requires exactly the
-guild-bound Owner+Moderator pair (staging guild `1545644954272137297`:
+`npm run check:worker-moderators` parses the top-level
+`vars.DISCORD_MODERATOR_ROLE_IDS` and `vars.DISCORD_GUILD_ID` in
+`web/wrangler.staging.jsonc`; `npm run check:worker-moderators-production` parses
+`env.production.vars` in `wrangler.jsonc`. Each requires exactly its guild-bound
+Owner+Moderator pair (staging guild `1545644954272137297`:
 `1546211363578191873,1545648550329851946`; production guild
-`326474832151838730`: `1546777855801954408,1546777856984481792`), before any queue
-creation or deployment. `wrangler deploy --config wrangler.jsonc` consumes that
-same source value, without `--env`/`--var` overrides; a separate GitHub moderator
-secret cannot make the gate pass. `keep_vars` retains unrelated remote plaintext
-vars, and Wrangler retains remote secrets. No binding values are read back or
-copied. The preflight proves source configuration, **not live isolation or a
-successful deployment**. Blank config remains a valid local revocation state,
-but unapproved extra roles (including duplicates) fail the probe, as does a
-pair that belongs to the other guild — role IDs are guild-scoped, so a
-production pair in the staging config matches nobody while looking configured.
+`326474832151838730`: `1546777855801954408,1546777856984481792`) before deployment.
+The staging workflow deploys `web/wrangler.staging.jsonc` and supplies only the
+validated `KIT_ROUTE_ARCHIVE` and `KIT_ROUTE_STATIC` route flags with `--var`;
+it does not override either moderator var. A separate GitHub moderator secret
+cannot make the gate pass. `keep_vars` retains unrelated remote plaintext vars,
+and Wrangler retains remote secrets. No binding values are read back or copied.
+The preflight proves source configuration, **not live isolation or a successful
+deployment**. Blank config remains a valid local revocation state, but
+unapproved extra roles (including duplicates) fail the probe, as does a pair
+that belongs to the other guild — role IDs are guild-scoped, so a production
+pair in the staging config matches nobody while looking configured.
 
 The live smoke runs manually via the `staging-smoke` workflow in a job container
 (`[self-hosted, two-selfhosted]` while the repo is private, GitHub-hosted while
@@ -487,6 +492,14 @@ Pass `--announcement-only` (workflow input `announcement_only`) to run only
 `announcement.post` and its same-key replay check, for a receiver that does not
 implement `role.assign` or `event.upsert`; then only `--channel-key` is needed.
 Both probes are fixture-tested in `check` without real secrets.
+
+The smoke and drill accept only the documented `--name=value` options and the
+smoke's bare `--announcement-only` flag. Unknown flags (including `--dry-run`),
+duplicates, positional arguments, bare value options and empty values exit 2
+with bounded usage before any action or fetch. There is no preview mode. Each
+run validates all applicable payloads with the bot client's validators before
+its first action or queued carrier; announcement-only validates only its
+announcement. Invalid inputs therefore cannot leave earlier steps applied.
 
 The CallInternalAction drill (`drill:internal-action`) ports the remaining
 drill-only half of `docs/parity.md` §6: production web never dispatches

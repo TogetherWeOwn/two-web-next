@@ -1,16 +1,17 @@
-// Cleanup-rejection pin: supplementary proof for the bounded-settlement
-// contract that the acceptance suite cannot pin on its own.
+// Cleanup-rejection pin: supplementary proof that response-body cleanup
+// rejection cannot surface as an unhandled rejection.
 //
-// Why plain functions: `vi.fn(async () => { throw ... })` records
-// settled results by attaching its own `.then` to the returned promise, so
-// the rejection is always handled and an `unhandledRejection` assertion can
-// never fail. A rejecting `cancel()` (or send) built from a plain function
-// with separately recorded calls leaves the rejection unhandled unless
-// production attaches its own noop handler, so deleting the swallow in
-// `cleanupResponse` (tail/worker.ts) or in `withDeliveryDeadline` fails
-// these tests with Unhandled Rejection reports. The acceptance-owned file
-// is intentionally untouched; this file is owned by the implementation
-// card and pins C3/D5 with mutant-killing proof.
+// Why plain functions: `vi.fn(async () => { throw ... })` records settled
+// results by attaching its own `.then` to the returned promise, so the
+// rejection is always handled and an `unhandledRejection` assertion can
+// never fail. A rejecting `cancel()` built from a plain function with
+// separately recorded calls leaves the rejection unhandled unless
+// `cleanupResponse` (tail/worker.ts) attaches its own noop handler. Removing
+// that handler makes the ordinary and scheduled cleanup tests fail. Removing
+// `withDeliveryDeadline`'s explicit noop handler alone does not: its
+// `Promise.race` already attaches a rejection handler to the work promise.
+// The acceptance-owned file is intentionally untouched; this implementation-
+// owned file pins C3/D5 with mutant-killing proof.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DeliveryMute, createTailWorker } from "../tail/worker";
 

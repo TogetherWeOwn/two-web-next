@@ -85,21 +85,14 @@ function assertNoAdmission(f: Fixture, res: Response) {
 }
 
 function assertCookies(flow: Flow, res: Response) {
+  // Every path covered here is unadmitted (outage, lost, replayed, or
+  // unclassified consume failure), and only an admitted callback owns the
+  // jar: the journey cookies stay in place so a retry or a newer tab's
+  // journey survives (`src/join/route-callback.ts` clears only after
+  // one-use admission; the auth callback likewise keeps return intent).
   const cookies = res.headers.getSetCookie();
-  if (flow === "auth") {
-    // The failed admission is not a terminal hit: keep return intent intact.
-    for (const name of cookieNames(flow))
-      expect(cookies.some((c) => c.startsWith(`${name}=`))).toBe(false);
-  } else {
-    for (const name of cookieNames(flow)) {
-      const cleared = cookies.find((c) => c.startsWith(`${name}=`));
-      expect(cleared).toContain("Max-Age=0");
-      expect(cleared).toContain("Path=/");
-      expect(cleared).toContain("Secure");
-      expect(cleared).toContain("HttpOnly");
-      expect(cleared).toContain("SameSite=Lax");
-    }
-  }
+  for (const name of cookieNames(flow))
+    expect(cookies.some((c) => c.startsWith(`${name}=`))).toBe(false);
 }
 
 afterEach(() => {

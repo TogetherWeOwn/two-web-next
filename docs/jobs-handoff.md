@@ -1,18 +1,20 @@
 # Staging jobs handoff runbook: two-web-next → two-web-jobs
 
 Staging-only transfer of the queue consumers and cron schedules from the web
-Worker (`two-web-next`, `wrangler.jsonc`) to the jobs Worker (`two-web-jobs`,
-`wrangler.jobs.jsonc`). Same queue names, same bindings, same payloads, same
-handlers (`handleQueue`/`handleScheduled` in `src/jobs/worker.ts`); no Effect,
-no renames. `test/jobs-worker-config.test.ts` and `test/jobs-handoff.test.ts`
-pin the split: exactly one consumer per queue and one cron owner.
+Worker (`two-web-next`, `web/wrangler.staging.jsonc`) to the jobs Worker
+(`two-web-jobs`, `wrangler.jobs.jsonc`). Same queue names, same bindings, same
+payloads, same handlers (`handleQueue`/`handleScheduled` in `src/jobs/worker.ts`);
+no Effect, no renames. `test/jobs-worker-config.test.ts` and
+`test/jobs-handoff.test.ts` pin the split: exactly one consumer per queue and
+one cron owner.
 
 ## What moves and what does not
 
 - Moves: `consumers` for `two-sync-event` / `two-internal-action` and both
   crons (`*/10 * * * *` reconcile, `0 0 * * *` prune) to the jobs top level.
-- Stays: web producers (`SYNC_EVENT_QUEUE`, `INTERNAL_ACTION_QUEUE`), routes,
-  `env.production` cutover template, preview envs and their disjoint queues.
+- Stays: web producers (`SYNC_EVENT_QUEUE`, `INTERNAL_ACTION_QUEUE`) in the Kit
+  staging config, routes, the root config's `env.production` cutover template,
+  preview envs and their disjoint queues.
 - Jobs top level adds only `placement` (aws:us-east-1, beside PlanetScale staging),
   `tail_consumers` (staging pager), `keep_vars` and `APP_URL`; never preview
   production guild settings and never secrets in source.
@@ -136,12 +138,16 @@ curl -fsS https://next.togetherweown.com/up
 npx --no-install wrangler queues pause-delivery two-sync-event
 npx --no-install wrangler queues pause-delivery two-internal-action
 
-# 2. Detach: deploy the web Worker without consumers or crons, then remove
-# its existing consumers explicitly. The deploy alone does NOT detach:
-# Wrangler only adds or updates the consumers listed in the deployed config
+# 2. Detach: build and deploy the Kit staging Worker without consumers or
+# crons, then remove its existing consumers explicitly. The deploy alone does
+# NOT detach: Wrangler only adds or updates the consumers listed in the config
 # and never deletes one that was dropped from it, so without the removes the
 # next step collides with the still-attached worker:two-web-next consumer.
-npx wrangler deploy --config wrangler.jsonc --tag "$DEPLOY_SHA"
+# Run these from the exact-SHA checkout whose full CI passed.
+npm ci --prefix web --include=dev --no-audit --no-fund
+npm run build --prefix web
+npx wrangler deploy --config web/wrangler.staging.jsonc --tag "$DEPLOY_SHA" \
+  --var "KIT_ROUTE_ARCHIVE:false" --var "KIT_ROUTE_STATIC:false"
 for q in two-sync-event two-internal-action; do
   # Capture before grepping: a failed list piped into grep reads as "no
   # consumer" without pipefail, and the attach then collides with the

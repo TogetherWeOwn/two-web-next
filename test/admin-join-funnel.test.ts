@@ -15,6 +15,7 @@ import { adminApp } from "../src/admin/routes";
 import type { EnvWithAdminDb } from "../src/admin/db";
 import type { Db } from "../src/db/index";
 import type { Env } from "../src/env";
+import * as searchLog from "../src/events/search-log";
 import { createMemorySessionStore, hashToken, newSessionToken } from "../src/sessions";
 
 vi.mock("../src/admin/writeback", () => ({ dispatchWriteBack: vi.fn() }));
@@ -99,6 +100,25 @@ describe("dashboardJoinFunnel cache", () => {
     expect(fill).toHaveBeenCalledTimes(2);
   });
 
+  it.each([
+    { code: "55P03", depth: 1 },
+    { code: "55P03", depth: 2 },
+    { code: "57014", depth: 1 },
+    { code: "57014", depth: 2 },
+  ])("omits the funnel for wrapped $code cancellation at depth $depth", async ({ code, depth }) => {
+    let error: Error = Object.assign(new Error("statement timeout"), {
+      name: "PostgresError",
+      code,
+    });
+    for (let i = 0; i < depth; i++) error = new Error("Failed query", { cause: error });
+    const fill = vi.fn().mockRejectedValue(error);
+
+    await expect(
+      dashboardJoinFunnel(stubDb, `conn-cancelled-${code}-${depth}`, 500, fill),
+    ).resolves.toBeUndefined();
+    expect(fill).toHaveBeenCalledTimes(1);
+  });
+
   it("propagates a classified DB outage for the shared 503 handler without caching it", async () => {
     const outage = Object.assign(new Error("connection refused"), { code: "ECONNREFUSED" });
     const fill = vi.fn().mockRejectedValueOnce(outage).mockResolvedValueOnce({ added: 3 });
@@ -172,7 +192,10 @@ function aggregateDb(n: number) {
 }
 
 describe("dashboard route optional analytics (stub ADMIN_DB)", () => {
-  afterEach(() => vi.useRealTimers());
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.useRealTimers();
+  });
 
   it.each([
     { DATABASE_URL: "postgres://synthetic.invalid/funnel" },
@@ -242,6 +265,65 @@ describe("dashboard route optional analytics (stub ADMIN_DB)", () => {
       expect(html.includes('data-testid="top-zero-searches"')).toBe(pending === "funnel");
     },
   );
+
+  it("omits a rejected zero-search cancellation and still answers with the funnel", async () => {
+    const cancellation = Object.assign(new Error("statement timeout"), {
+      code: "57014",
+      name: "PostgresError",
+    });
+    vi.spyOn(searchLog, "topZeroResultSearches").mockRejectedValueOnce(cancellation);
+    const store = createMemorySessionStore();
+    const cookie = await cookieFor(store);
+    const { db } = aggregateDb(7);
+    const res = await adminApp({ sessionStore: store }).request("/", { headers: { cookie } }, {
+      ...env,
+      ADMIN_DB: db,
+    } as Env);
+    expect(res.status).toBe(200);
+    const html = await res.text();
+    expect(html).toContain('data-testid="join-funnel"');
+    expect(html).not.toContain('data-testid="top-zero-searches"');
+  });
+
+  it.each([false, true])("503s a zero-search outage with funnel cache warm=%s", async (warm) => {
+    const store = createMemorySessionStore();
+    const cookie = await cookieFor(store);
+    const { db, session, aggregate } = aggregateDb(7);
+    const app = adminApp({ sessionStore: store });
+    const bindings = { ...env, ADMIN_DB: db } as Env;
+    if (warm) expect((await app.request("/", { headers: { cookie } }, bindings)).status).toBe(200);
+    let calls = 0;
+    session.transaction = async (work) => {
+      if (!warm && ++calls === 1) return work(db);
+      throw Object.assign(new Error("connection refused"), { code: "ECONNREFUSED" });
+    };
+    const res = await app.request("/", { headers: { cookie } }, bindings);
+    expect(res.status).toBe(503);
+    expect(await res.text()).toContain("We will be right back");
+    expect(aggregate).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    Object.assign(new Error("missing table"), { code: "42P01", name: "PostgresError" }),
+    new TypeError("programming error"),
+  ])("omits only zero-search on an ordinary read failure: %s", async (error) => {
+    const store = createMemorySessionStore();
+    const cookie = await cookieFor(store);
+    const { db, session } = aggregateDb(7);
+    let calls = 0;
+    session.transaction = async (work) => {
+      if (++calls === 1) return work(db);
+      throw error;
+    };
+    const res = await adminApp({ sessionStore: store }).request("/", { headers: { cookie } }, {
+      ...env,
+      ADMIN_DB: db,
+    } as Env);
+    expect(res.status).toBe(200);
+    const html = await res.text();
+    expect(html).toContain('data-testid="join-funnel"');
+    expect(html).not.toContain('data-testid="top-zero-searches"');
+  });
 
   it("omits the funnel widget and still answers 200", async () => {
     const store = createMemorySessionStore();

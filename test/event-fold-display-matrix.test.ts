@@ -288,9 +288,8 @@ describe.skipIf(!process.env.DATABASE_URL)(
         games: [],
         timezone: "Pacific/Auckland",
       });
-      // Each authenticated request mints its own token: the full-page
-      // reader rotates the session (deleting the presented row), so reusing
-      // one cookie across three requests would 401 the last one as a guest.
+      // Independent sessions keep the timezone comparisons isolated from
+      // full-page rotation and its bounded predecessor grace.
       const viewerGridCookie = await cookieFor("auck-viewer");
       const viewerListCookie = await cookieFor("auck-viewer");
       const viewerJsonCookie = await cookieFor("auck-viewer");

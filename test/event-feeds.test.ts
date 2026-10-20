@@ -15,6 +15,8 @@ import {
   eventsIcsCollection,
   eventsRss,
   googleCalendarUrl,
+  isWireInstant,
+  latestWireUpdatedAt,
   webcalUrl,
 } from "../src/events/feeds";
 
@@ -142,6 +144,18 @@ describe("feed builders (byte fixtures)", () => {
     );
   });
 
+  it.each([
+    ["0000-01-02T03:04:05Z", "Sun, 02 Jan 0000 03:04:05 +0000"],
+    ["0500-01-02T03:04:05Z", "Sat, 02 Jan 0500 03:04:05 +0000"],
+    ["0999-01-02T03:04:05Z", "Wed, 02 Jan 0999 03:04:05 +0000"],
+  ])("pads RSS item and channel years for %s", (instant, expected) => {
+    const date = new Date(instant);
+    const body = eventsRss([row({ startsAt: date })], APP_URL, date);
+    expect(body).toContain(`<pubDate>${expected}</pubDate>`);
+    expect(body).toContain(`<lastBuildDate>${expected}</lastBuildDate>`);
+    expect(body.match(/<item>/g)).toHaveLength(1);
+  });
+
   it("Google Calendar link is RFC3986-encoded UTC", () => {
     expect(googleCalendarUrl(row())).toBe(
       "https://calendar.google.com/calendar/render?action=TEMPLATE&text=Friday%20night%20Helldivers&dates=20260715T180000Z%2F20260715T200000Z&details=Bring%20stims.&location=Voice%3A%20General",
@@ -190,6 +204,115 @@ describe("feed builders (byte fixtures)", () => {
     expect(ics).toContain(`SUMMARY:${title}`);
     for (const l of ics.split("\r\n"))
       expect(new TextEncoder().encode(l).length).toBeLessThanOrEqual(75);
+  });
+  it("skips RSS rows with non-wire boundary years while keeping healthy bytes", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const body = eventsRss(
+        [
+          row({ eventKey: "01J0000000000000000000GOOD" }),
+          row({
+            eventKey: "01J0000000000000000000BAD1",
+            startsAt: new Date("+010000-01-02T03:04:05Z"),
+          }),
+          row({
+            eventKey: "01J0000000000000000000BAD2",
+            endsAt: new Date("-000001-01-02T03:04:05Z"),
+          }),
+        ],
+        APP_URL,
+        new Date("2026-07-01T12:00:00Z"),
+      );
+      expect(body).toContain("01J0000000000000000000GOOD");
+      expect(body).not.toContain("01J0000000000000000000BAD");
+      expect(warn).toHaveBeenCalledWith("eventsRss skipped rows with non-wire timestamps.", {
+        skipped: 2,
+      });
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("excludes a non-wire updatedAt from RSS lastBuildDate without dropping the item", () => {
+    const rows = [
+      row({
+        eventKey: "01J0000000000000000000BAD3",
+        updatedAt: new Date("+010000-01-02T03:04:05Z"),
+      }),
+      row({
+        eventKey: "01J0000000000000000000GOOD",
+        updatedAt: new Date("2026-07-01T12:00:00Z"),
+      }),
+    ];
+    const lastBuild = latestWireUpdatedAt(rows);
+    const body = eventsRss(rows, APP_URL, lastBuild);
+    expect(lastBuild).toEqual(new Date("2026-07-01T12:00:00Z"));
+    expect(body).toContain("<lastBuildDate>Wed, 01 Jul 2026 12:00:00 +0000</lastBuildDate>");
+    expect(body).toContain("01J0000000000000000000BAD3");
+  });
+
+  it("pads the lower supported ICS year to four digits", () => {
+    const event = row({
+      updatedAt: new Date("0000-01-02T03:04:05Z"),
+      startsAt: new Date("0000-02-03T04:05:06Z"),
+      endsAt: new Date("0000-03-04T05:06:07Z"),
+    });
+    const body = eventIcs(event, APP_URL);
+    expect(isWireInstant(event.updatedAt)).toBe(true);
+    expect(body).toContain("DTSTAMP:00000102T030405Z");
+    expect(body).toContain("DTSTART:00000203T040506Z");
+    expect(body).toContain("DTEND:00000304T050607Z");
+  });
+});
+
+describe("latestWireUpdatedAt", () => {
+  it.each([
+    ["empty", [], "1970-01-01T00:00:00Z"],
+    [
+      "all poison",
+      [Number.NaN, "+010000-01-01T00:00:00Z", "-000001-01-01T00:00:00Z"],
+      "1970-01-01T00:00:00Z",
+    ],
+    ["year zero only", ["0000-01-02T03:04:05Z"], "0000-01-02T03:04:05Z"],
+    [
+      "unsorted pre-epoch with poison",
+      [
+        Number.NaN,
+        "+010000-01-01T00:00:00Z",
+        "0000-01-02T03:04:05Z",
+        "1960-01-01T00:00:00Z",
+        "0500-01-02T03:04:05Z",
+      ],
+      "1960-01-01T00:00:00Z",
+    ],
+    [
+      "unsorted modern dates",
+      ["2000-01-01T00:00:00Z", "2030-01-01T00:00:00Z", "2020-01-01T00:00:00Z"],
+      "2030-01-01T00:00:00Z",
+    ],
+  ] as const)("selects the latest wire instant: %s", (_label, instants, expected) => {
+    const rows = instants.map((instant) => row({ updatedAt: new Date(instant) }));
+    expect(latestWireUpdatedAt(rows)).toEqual(new Date(expected));
+    expect(rows.map((row) => row.updatedAt.getTime())).toEqual(
+      instants.map((instant) => new Date(instant).getTime()),
+    );
+  });
+});
+
+describe("isWireInstant", () => {
+  it.each([
+    ["finite UTC instant", "2026-07-15T18:00:00Z", true],
+    ["year zero", "0000-01-02T03:04:05Z", true],
+    ["low year", "0001-01-02T03:04:05Z", true],
+    ["year 9999", "9999-01-02T03:04:05Z", true],
+    ["invalid Date", Number.NaN, false],
+    ["outside JS Date", 8.64e15 + 1, false],
+    ["expanded year", "+010000-01-02T03:04:05Z", false],
+    ["negative year", "-000001-01-02T03:04:05Z", false],
+    ["maximum finite Date", 8.64e15, false],
+    ["minimum finite Date", -8.64e15, false],
+  ])("%s classifies as %s", (_label, instant, expected) => {
+    expect(isWireInstant(new Date(instant))).toBe(expected);
   });
 });
 

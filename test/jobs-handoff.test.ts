@@ -14,7 +14,7 @@ import { PRUNE_CRON, RECONCILE_CRON } from "../src/jobs/constants";
 
 const read = (path: string) => readFileSync(path, "utf8");
 const jobs = readWranglerConfig(read("wrangler.jobs.jsonc"));
-const main = readWranglerConfig(read("wrangler.jsonc"));
+const staging = readWranglerConfig(read("web/wrangler.staging.jsonc"));
 
 type QueueEntry = { queue: string; binding?: string };
 const names = (entries: QueueEntry[] | undefined) => (entries ?? []).map((e) => e.queue);
@@ -23,20 +23,23 @@ describe("staging jobs handoff invariants", () => {
   it("keeps the exact staging queue names and bindings (no renames)", () => {
     expect(names(jobs.queues?.producers)).toEqual(["two-sync-event", "two-internal-action"]);
     expect(names(jobs.queues?.consumers)).toEqual(["two-sync-event", "two-internal-action"]);
-    expect(names(main.queues?.producers)).toEqual(["two-sync-event", "two-internal-action"]);
+    expect(names(staging.queues?.producers)).toEqual(["two-sync-event", "two-internal-action"]);
     const bindings = (entries: QueueEntry[] | undefined) => (entries ?? []).map((e) => e.binding);
     expect(bindings(jobs.queues?.producers)).toEqual(["SYNC_EVENT_QUEUE", "INTERNAL_ACTION_QUEUE"]);
-    expect(bindings(main.queues?.producers)).toEqual(["SYNC_EVENT_QUEUE", "INTERNAL_ACTION_QUEUE"]);
+    expect(bindings(staging.queues?.producers)).toEqual([
+      "SYNC_EVENT_QUEUE",
+      "INTERNAL_ACTION_QUEUE",
+    ]);
   });
 
   it("has exactly one consumer per staging queue across both top levels", () => {
-    const consumers = [...names(jobs.queues?.consumers), ...names(main.queues?.consumers)];
+    const consumers = [...names(jobs.queues?.consumers), ...names(staging.queues?.consumers)];
     expect(consumers.sort()).toEqual(["two-internal-action", "two-sync-event"]);
   });
 
   it("has exactly one owner per cron schedule", () => {
     expect(jobs.triggers?.crons).toEqual([RECONCILE_CRON, PRUNE_CRON]);
-    expect(main.triggers?.crons).toEqual([]);
+    expect(staging.triggers?.crons).toEqual([]);
     // Preview keeps its own reconcile-only schedule on its own queues.
     const preview = jobs.env?.preview;
     expect(preview?.triggers?.crons).toEqual([RECONCILE_CRON]);
@@ -60,6 +63,7 @@ describe("staging jobs handoff invariants", () => {
 
   it("pins the rollback configs inside the checkout (wrangler resolves assets relative to the config)", () => {
     const runbook = read("docs/jobs-handoff.md");
+    expect(runbook).toContain("--config web/wrangler.staging.jsonc");
     expect(runbook).toContain("> ./rollback-wrangler.jsonc");
     expect(runbook).toContain("> ./rollback-wrangler.jobs.jsonc");
     expect(runbook).toContain("--config ./rollback-wrangler.jsonc");

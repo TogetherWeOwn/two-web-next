@@ -157,10 +157,12 @@ const signInUrl = (returnTo: string | null) =>
 // loginReturnTo carries the guest sign-in destination. account={false} drops
 // the account area on the session-less cancelled (410) event page; active
 // "event" marks Events as the current section (not page) on event detail.
+// "leaderboard" marks the member board link, which renders for members only:
+// guests and non-members cannot open the board, so they are not offered it.
 export const SiteHeader: FC<
   PropsWithChildren<{
     session?: Session | null;
-    active?: "home" | "events" | "event";
+    active?: "home" | "events" | "event" | "leaderboard";
     loginReturnTo?: string | null;
     account?: boolean;
     joinAction?: boolean;
@@ -178,6 +180,14 @@ export const SiteHeader: FC<
       >
         Events
       </a>
+      {session?.member ? (
+        <a
+          href="/leaderboards/members"
+          aria-current={active === "leaderboard" ? "page" : undefined}
+        >
+          Leaderboard
+        </a>
+      ) : null}
     </nav>
     <a class="brand" href="/" aria-label="Together We Own homepage">
       <img src="/logo.svg" width="64" height="64" alt="Together We Own" />

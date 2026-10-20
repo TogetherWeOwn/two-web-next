@@ -740,19 +740,13 @@ export function parseAttendeePageParam(raw: string | null | undefined): number {
   return normalizeAttendeePage(Number(raw));
 }
 
-/** Native attendee page URL: page 1 stays bare so first-page links reset the
- * section, like the roster's page-one convention. */
-export function attendeePageHref(eventKey: string, page: number): string {
-  return page <= 1 ? `/e/${eventKey}` : `/e/${eventKey}?attendees=${page}`;
-}
-
-/** Encoded variant for POST destinations built from the routed :key param:
- * the key is encoded (route input) while the page stays a validated integer,
- * so malformed/unsafe page values can never escape the local destination. */
-export function rsvpPageReturnPath(eventKey: string, page: number): string {
-  const base = `/e/${encodeURIComponent(eventKey)}`;
-  return page > 1 ? `${base}?attendees=${page}` : base;
-}
+/** Native attendee page URLs (canonical builders in ./attendee-paths, shared
+ * with the renderers and the framework-free refusal core): page 1 stays bare
+ * so first-page links reset the section, like the roster's page-one
+ * convention. The return-path variant encodes the routed key while the page
+ * stays a validated integer, so malformed/unsafe page values can never escape
+ * the local destination. */
+export { attendeePageHref, rsvpPageReturnPath } from "./attendee-paths";
 
 /** Strict native-RSVP page resolution across the submitted carriers (action
  * query values plus the body attendees value). Missing carriers are absent;
@@ -864,6 +858,17 @@ export async function listJson(
  * bounding /events.ics, /events.rss, /events.md and sitemap bytes. */
 export const FEED_EGRESS_LIMIT = 1000;
 
+function warnEgressCapacity(surface: "sitemap" | "feed", returned: number): void {
+  // A full bounded result is not proof that any further rows exist.
+  if (returned === FEED_EGRESS_LIMIT) {
+    console.warn("Event egress read reached capacity.", {
+      surface,
+      limit: FEED_EGRESS_LIMIT,
+      returned,
+    });
+  }
+}
+
 export async function sitemapEvents(
   db: Db,
 ): Promise<{ key: string; status: "published"; updatedAt: string | null }[]> {
@@ -871,10 +876,11 @@ export async function sitemapEvents(
     .select()
     .from(events)
     .where(eq(events.status, "published"))
-    .orderBy(asc(events.startsAt))
+    .orderBy(asc(events.startsAt), asc(events.id))
     .limit(FEED_EGRESS_LIMIT);
+  warnEgressCapacity("sitemap", rows.length);
   // One poison row (unrenderable window, or an updatedAt outside the JS Date
-  // range) must not empty the sitemap via the route's `.catch(() => [])`:
+  // range) must not empty the sitemap via the route's static fallback:
   // skip it in JS and log the count. The guard lives in JS (not SQL) because
   // SQL cannot see a timestamp that is finite in PostgreSQL but out of range
   // in JS. A DB failure still rejects here; the route degrades to the static
@@ -904,9 +910,15 @@ export async function listFeed(db: Db, statuses: ("published" | "cancelled")[], 
     .where(and(inArray(events.status, statuses), finiteEventWindow, gte(events.endsAt, now)))
     .orderBy(asc(events.startsAt), asc(events.id))
     .limit(FEED_EGRESS_LIMIT);
+  warnEgressCapacity("feed", rows.length);
   // Feed builders stringify date parts without throwing, so without this the
   // export would serve corrupt `NaN` instants instead of failing loudly.
-  return rows.filter(isRenderableEventWindow);
+  const renderable = rows.filter(isRenderableEventWindow);
+  const skipped = rows.length - renderable.length;
+  if (skipped > 0) {
+    console.warn("listFeed skipped unrenderable rows.", { skipped });
+  }
+  return renderable;
 }
 
 export async function getEventRow(db: Db, key: string) {

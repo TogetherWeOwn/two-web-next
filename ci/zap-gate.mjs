@@ -47,6 +47,25 @@ function parseCount(raw, instancesLength) {
   return n;
 }
 
+function parseHttpUri(raw) {
+  // Do not coerce values, resolve relative paths, or let URL repair whitespace
+  // and backslashes into apparent evidence. Unproved URIs remain non-exempt.
+  if (
+    typeof raw !== "string" ||
+    !/^https?:\/\/[^/]/i.test(raw) ||
+    /[\u0000- \u007f\s\\]/.test(raw) ||
+    /%(?![\da-f]{2})/i.test(raw)
+  ) {
+    return null;
+  }
+  try {
+    const uri = new URL(raw);
+    return uri.username || uri.password ? null : uri;
+  } catch {
+    return null;
+  }
+}
+
 function validateBudget(budget, failures) {
   if (!budget || typeof budget !== "object" || Array.isArray(budget)) {
     failures.push("invalid budget: budget must be an object with maxMedium and maxLow");
@@ -167,29 +186,32 @@ export function summarize(report, budget) {
       const entries = ignoreByPlugin.get(pluginId) ?? [];
       // Unscoped entries ignore the whole alert (legacy behavior, Medium/Low only).
       if (entries.some((entry) => !entry.uriPrefix)) continue;
-      // Scoped entries ignore only instances whose URI contains uriPrefix, so
-      // Worker-served hits still count. Without instances we cannot prove
-      // scope, so the alert stays.
-      if (entries.length > 0) {
-        if (!Array.isArray(instances) || instances.length === 0) {
-          // Fall through to counting below.
-        } else {
-          const remaining = instances.filter(
-            (instance) =>
-              !entries.some(
-                (entry) =>
-                  entry.uriPrefix && String(instance.uri ?? "").includes(String(entry.uriPrefix)),
-              ),
+      // Scoped subtraction needs a declared count and a complete instance list.
+      // Reject inconsistent evidence rather than silently losing unseen residuals.
+      if (entries.length > 0 && Array.isArray(instances) && instances.length > 0) {
+        if (
+          !["string", "number"].includes(typeof alert.count) ||
+          !Number.isSafeInteger(count) ||
+          count !== instances.length
+        ) {
+          failures.push(
+            `invalid scan evidence: site ${si} alert ${ai} needs a complete declared instance count for scoped exemption`,
           );
-          if (remaining.length === 0) continue;
-          alerts.push({
-            pluginId,
-            name,
-            risk,
-            count: remaining.length,
-          });
           continue;
         }
+        const siteUri = parseHttpUri(site["@name"]);
+        const remaining = instances.filter((instance) => {
+          const uri = parseHttpUri(instance.uri);
+          return !(
+            siteUri &&
+            uri &&
+            uri.origin === siteUri.origin &&
+            entries.some((entry) => uri.pathname.startsWith(entry.uriPrefix))
+          );
+        });
+        if (remaining.length === 0) continue;
+        alerts.push({ pluginId, name, risk, count: remaining.length });
+        continue;
       }
       alerts.push({
         pluginId,

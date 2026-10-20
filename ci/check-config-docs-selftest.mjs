@@ -435,7 +435,7 @@ test("tail inventory covers vars, secrets, services and script names without inh
       appScripts,
     ),
     [
-      "App script not accepted by Tail: two-web-next-prod (wrangler.jsonc/wrangler.jobs.jsonc vs tail/worker.ts APP_SCRIPT_NAMES)",
+      "App script not accepted by Tail: two-web-next-prod (wrangler.jsonc/web/wrangler.staging.jsonc/wrangler.jobs.jsonc vs tail/worker.ts APP_SCRIPT_NAMES)",
     ],
   );
   assert.deepEqual(
@@ -522,8 +522,8 @@ test("tail check fails when a declaration is omitted from the docs", () => {
       set("UPTIME_URL", "OPS_ALERT_WEBHOOK_URL", "two-web-next-alerts", "two-web-next"),
     ),
     [
-      "Undocumented Tail consumer service: missing-service (wrangler.jsonc/wrangler.jobs.jsonc -> docs/config.md)",
-      "App tail_consumer without Tail worker: missing-service (wrangler.jsonc/wrangler.jobs.jsonc vs tail/wrangler.jsonc)",
+      "Undocumented Tail consumer service: missing-service (wrangler.jsonc/web/wrangler.staging.jsonc/wrangler.jobs.jsonc -> docs/config.md)",
+      "App tail_consumer without Tail worker: missing-service (wrangler.jsonc/web/wrangler.staging.jsonc/wrangler.jobs.jsonc vs tail/wrangler.jsonc)",
     ],
   );
 });
@@ -608,6 +608,7 @@ const repoRoot = fileURLToPath(new URL("../", import.meta.url));
 
 function runComposedCheck({
   appVars = {},
+  stagingVars = {},
   jobsRootVars = {},
   jobsRootBindings = [],
   jobsRootSecrets = [],
@@ -618,7 +619,7 @@ function runComposedCheck({
 } = {}) {
   const dir = mkdtempSync(join(process.env.PAPERCLIP_RUN_SCRATCH_DIR ?? tmpdir(), "jobs-comp-"));
   try {
-    for (const entry of ["ci", "src", "docs", "tail"]) mkdirSync(join(dir, entry));
+    for (const entry of ["ci", "src", "docs", "tail", "web"]) mkdirSync(join(dir, entry));
     copyFileSync(join(repoRoot, "ci/check-config-docs.mjs"), join(dir, "ci/check-config-docs.mjs"));
     copyFileSync(join(repoRoot, "ci/wrangler-config.mjs"), join(dir, "ci/wrangler-config.mjs"));
     symlinkSync(join(repoRoot, "node_modules"), join(dir, "node_modules"), "dir");
@@ -668,6 +669,14 @@ function runComposedCheck({
       }),
     );
     write("wrangler.local.jsonc", JSON.stringify({ vars: { APP_URL: "http://localhost:8787" } }));
+    write(
+      "web/wrangler.staging.jsonc",
+      JSON.stringify({
+        name: "app-fixture",
+        vars: { APP_URL: "https://example.test", ...stagingVars },
+        hyperdrive: [{ binding: "DB", id: "fixture" }],
+      }),
+    );
     write(
       "wrangler.jobs.jsonc",
       JSON.stringify({
@@ -726,6 +735,13 @@ test("composed check accepts typed and documented jobs root and preview keys", (
   const result = runComposedCheck();
   assert.equal(result.status, 0, result.stderr);
   assert.match(result.stdout, /config-docs: ok/);
+});
+
+test("composed check rejects an undeclared Kit staging-only var", () => {
+  const result = runComposedCheck({ stagingVars: { KIT_STAGING_UNDECLARED_VAR: "fixture" } });
+  assert.equal(result.status, 1, result.stderr);
+  assert.match(result.stderr, /Wrangler key missing from Env\/JobsEnv: KIT_STAGING_UNDECLARED_VAR/);
+  assert.match(result.stderr, /Undocumented Wrangler key: KIT_STAGING_UNDECLARED_VAR/);
 });
 
 test("composed check rejects a jobs-only undeclared root var", () => {

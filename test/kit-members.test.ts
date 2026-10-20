@@ -57,12 +57,34 @@ describe("Kit member-board load parity", () => {
     expect(setHeaders).toHaveBeenCalledWith({ "cache-control": "private, no-store" });
   });
 
-  it("centers the relative board on the viewer and queues the relative scope", async () => {
+  it("serves the pre-ranked relative window and marks the viewer", async () => {
+    // The relative read centers the window in SQL and returns BoardRows, so
+    // the load passes the window through and only marks the viewer: no
+    // re-slicing here (the window shape is pinned through the real read by
+    // the relative-board acceptance suites).
     const queueBoardViewFn = vi.fn(() => {});
-    const data = await loadMembersBoardData(args({ scopeParam: "relative", queueBoardViewFn }));
+    const window = [
+      { userId: "u-a", username: "Ana", count: 5, rank: 1 },
+      { userId: "u-viewer", username: "Vic", count: 3, rank: 2 },
+      { userId: "u-b", username: "Bo", count: 1, rank: 3 },
+    ];
+    const loadRankingFn = vi.fn(async () => window);
+    const data = await loadMembersBoardData(
+      args({ scopeParam: "relative", queueBoardViewFn, loadRankingFn }),
+    );
     expect(data.scope).toBe("relative");
-    expect(data.rows.map((row) => row.username)).toEqual(["Ana", "Vic", "Bo"]);
-    expect(data.rows.map((row) => row.isViewer)).toEqual([false, true, false]);
+    expect(loadRankingFn).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      null,
+      "relative",
+      "u-viewer",
+    );
+    expect(data.rows).toEqual([
+      { rank: 1, username: "Ana", count: 5, isViewer: false },
+      { rank: 2, username: "Vic", count: 3, isViewer: true },
+      { rank: 3, username: "Bo", count: 1, isViewer: false },
+    ]);
     expect(queueBoardViewFn).toHaveBeenCalledWith(
       expect.anything(),
       expect.objectContaining({ scope: "relative", resultCount: 3 }),
@@ -113,6 +135,7 @@ describe("Kit member-board load parity", () => {
       expect.objectContaining({ kind: "window", label: "2026-Q3" }),
       "valheim",
       "overall",
+      "u-viewer",
     );
     expect(queueBoardViewFn).toHaveBeenCalledWith(
       expect.anything(),

@@ -17,6 +17,11 @@ const QUERY = `query ($account: String!, $site: String!, $since: Time!, $until: 
   } }
 }`;
 
+// One total deadline for headers and body, even when the transport ignores abort.
+export const RUM_TRANSPORT_TIMEOUT_MS = 10_000;
+// Limit decoded response bytes before JSON parsing; the query returns at most one group.
+export const RUM_MAX_RESPONSE_BYTES = 64 * 1024;
+
 const DEFAULT_MIN_SAMPLES = 50;
 const P75_FIELDS = [
   "largestContentfulPaintP75",
@@ -107,12 +112,89 @@ function tableLines(rows) {
   ];
 }
 
+function cancelBody(target) {
+  try {
+    // Cleanup must never hold settlement hostage or surface a late rejection.
+    void Promise.resolve(target?.cancel()).catch(() => undefined);
+  } catch {
+    // A throwing disposal is also best-effort; the classified outcome is unchanged.
+  }
+}
+
+async function queryRum(fetchImpl, options, timeoutMs, maxResponseBytes) {
+  const controller = new AbortController();
+  let res;
+  let reader;
+  let stopped = false;
+  let timer;
+  const deadline = new Promise((resolve) => {
+    timer = setTimeout(() => resolve({ kind: "timeout" }), timeoutMs);
+  });
+  // Transport work never emits: only the winner below may reach the summary path.
+  const transport = (async () => {
+    try {
+      res = await fetchImpl("https://api.cloudflare.com/client/v4/graphql", {
+        ...options,
+        signal: controller.signal,
+      });
+    } catch {
+      return { kind: "query-failed" };
+    }
+    if (stopped) {
+      // Headers may arrive after the deadline when an injected fetch ignores abort.
+      cancelBody(res?.body);
+      return { kind: "timeout" };
+    }
+    let body;
+    let jsonFailed = false;
+    try {
+      reader = res.body.getReader();
+      const bytes = new Uint8Array(maxResponseBytes);
+      let length = 0;
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (stopped) return { kind: "timeout" };
+        if (done) break;
+        if (value.byteLength > maxResponseBytes - length) {
+          return { kind: "response-too-large" };
+        }
+        bytes.set(value, length);
+        length += value.byteLength;
+      }
+      body = JSON.parse(new TextDecoder().decode(bytes.subarray(0, length)));
+    } catch {
+      jsonFailed = true;
+    }
+    return { res, body, jsonFailed };
+  })();
+  let result;
+  try {
+    // Promise.race observes late transport failures as well as timely completion.
+    result = await Promise.race([transport, deadline]);
+    return result;
+  } finally {
+    stopped = true;
+    clearTimeout(timer);
+    if (result?.kind || result?.jsonFailed) {
+      controller.abort();
+      cancelBody(reader ?? res?.body);
+    }
+    try {
+      reader?.releaseLock();
+    } catch {
+      // An uncooperative reader cannot delay or replace the settled outcome.
+    }
+  }
+}
+
 // Summaries are bounded fixed-shape strings: no provider payloads, credentials or identity.
 export async function runRumCheck({
   env = process.env,
   fetchImpl = fetch,
   budget,
   onSummary,
+  timeoutMs = RUM_TRANSPORT_TIMEOUT_MS,
+  maxResponseBytes = RUM_MAX_RESPONSE_BYTES,
 } = {}) {
   const { CF_ANALYTICS_READ_TOKEN: token, CF_RUM_ACCOUNT_ID: account, CF_RUM_SITE_TAG: site } = env;
   const emit =
@@ -131,29 +213,30 @@ export async function runRumCheck({
   const resolvedBudget = budget ?? JSON.parse(readFileSync("ci/rum-budget.json", "utf8"));
   const until = new Date();
   const since = new Date(until.getTime() - 24 * 3600 * 1000);
-  let res;
-  try {
-    res = await fetchImpl("https://api.cloudflare.com/client/v4/graphql", {
+  const result = await queryRum(
+    fetchImpl,
+    {
       method: "POST",
       headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
       body: JSON.stringify({
         query: QUERY,
         variables: { account, site, since: since.toISOString(), until: until.toISOString() },
       }),
-    });
-  } catch {
-    const summary =
-      "## Real-user Web Vitals\n\nQuery failed (network error). Budgets not evaluated.";
+    },
+    timeoutMs,
+    maxResponseBytes,
+  );
+  if (result.kind) {
+    const reason = {
+      timeout: "Query timed out.",
+      "response-too-large": "Response too large.",
+      "query-failed": "Query failed (network error).",
+    }[result.kind];
+    const summary = `## Real-user Web Vitals\n\n${reason} Budgets not evaluated.`;
     emit(summary);
-    return { code: 1, kind: "query-failed", summary };
+    return { code: 1, kind: result.kind, summary };
   }
-  let body;
-  let jsonFailed = false;
-  try {
-    body = await res.json();
-  } catch {
-    jsonFailed = true;
-  }
+  const { res, body, jsonFailed } = result;
   const errorCount = Array.isArray(body?.errors) ? body.errors.length : 0;
   if (!res.ok || errorCount > 0) {
     // Provider error text is omitted on purpose; a non-JSON gateway page keeps its HTTP status.
