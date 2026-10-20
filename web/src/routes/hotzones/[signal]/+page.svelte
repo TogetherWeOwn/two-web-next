@@ -22,6 +22,9 @@ const destination = $derived(
   mainClass="events-page"
   loginReturnTo={destination}
 >
+  {#snippet accountChrome()}
+    <a class="btn" href="/discord">Open Discord</a>
+  {/snippet}
   <p class="strap">Activity rhythms</p>
   <h1>{signal} hot zone</h1>
   {#if estimated}
