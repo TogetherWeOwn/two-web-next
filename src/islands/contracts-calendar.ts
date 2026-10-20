@@ -186,6 +186,27 @@ export const CALENDAR_PREV_LABEL = "Previous month";
 export const CALENDAR_NEXT_LABEL = "Next month";
 export const GRID_TITLE_MAX = 18;
 
+/* Month jump: a server-derived This month anchor plus a native GET form, so a
+ * chosen month is one step away with or without JavaScript. The form carries
+ * only the island's month vocabulary (month/view/past) — never the search
+ * query — and its bounds mirror the addCalendarMonth saturation below. */
+export const CALENDAR_THIS_MONTH_TESTID = "calendar-this-month";
+export const CALENDAR_THIS_MONTH_COPY = "This month";
+export const CALENDAR_MONTH_JUMP_TESTID = "calendar-month-jump";
+export const CALENDAR_MONTH_JUMP_SUBMIT_TESTID = "calendar-month-jump-submit";
+export const CALENDAR_MONTH_JUMP_INPUT_ID = "calendar-month-jump-input";
+export const CALENDAR_MONTH_JUMP_LABEL = "Jump to month";
+export const CALENDAR_MONTH_JUMP_SUBMIT_COPY = "Go";
+export const CALENDAR_MONTH_MIN = "0001-01";
+export const CALENDAR_MONTH_MAX = "9999-12";
+
+/* Month-local empty guidance: a successfully read selected month with no
+ * in-month events keeps its grid and names the month, with a recovery link
+ * back to the upcoming list. Spillover-day rows never count as in-month, and
+ * the block never claims the whole schedule is empty. */
+export const CALENDAR_MONTH_EMPTY_TESTID = "calendar-month-empty";
+export const CALENDAR_MONTH_EMPTY_RECOVERY_COPY = "Upcoming events";
+
 export const EVENT_CARD_TESTID = "event-card";
 export const EVENT_DRAFT_TESTID = "event-draft";
 export const EVENT_CANCELLED_TESTID = "event-cancelled";
@@ -227,6 +248,10 @@ export function calendarMonthLabel(month: string): string {
     timeZone: "UTC",
   }).format(calendarDate(y!, m! - 1, 1));
 }
+
+/** Month-local empty guidance names the selected month, never the schedule. */
+export const calendarMonthEmptyCopy = (month: string): string =>
+  `No events in ${calendarMonthLabel(month)}.`;
 
 export interface CalendarDay<E = unknown> {
   /** ISO date; trailing neighbours after 9999-12 use the expanded year +010000. */

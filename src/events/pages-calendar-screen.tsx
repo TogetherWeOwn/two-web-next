@@ -2,6 +2,8 @@
 import type { FC } from "hono/jsx";
 import { canonicalUrl } from "../seo";
 import {
+  CALENDAR_MONTH_EMPTY_RECOVERY_COPY,
+  CALENDAR_MONTH_EMPTY_TESTID,
   EVENTS_CAL_FEEDBACK,
   EVENTS_CALENDAR_FETCH_FAILED,
   EVENTS_CALENDAR_ISLAND,
@@ -12,6 +14,7 @@ import {
   EVENTS_LOADING_TESTID,
   EVENTS_SEARCH_MAX_LENGTH,
   EVENTS_SEARCH_TOO_LONG_COPY,
+  calendarMonthEmptyCopy,
   calendarSearching,
   calendarShowingPast,
   calendarUrl,
@@ -98,6 +101,15 @@ export const EventsCalendarPage: FC<{
     byDay.set(key, list);
   }
   const weeks = monthGrid(state.month, wallDateIso(now, zone), byDay);
+  // Month-local emptiness reads the same buckets the grid plots: rows on
+  // spillover days plot outside the selected month, so they never count as
+  // in-month. A failed source suppresses the claim — October may only look
+  // empty — while the error/never/gap states keep their own precedence.
+  const monthEmpty =
+    emptyState === null &&
+    state.view === "calendar" &&
+    !discordFailed &&
+    ![...byDay.keys()].some((day) => day.startsWith(`${state.month}-`));
   return (
     <ScheduleShell
       title="Events"
@@ -196,7 +208,18 @@ export const EventsCalendarPage: FC<{
               absence alone opens the grid, exactly like the old unpaged merge
               whose non-emptiness always implied visible rows. */}
           {emptyState === null && state.view === "calendar" ? (
-            <MonthGrid state={state} weeks={weeks} zone={zone} />
+            <MonthGrid state={state} weeks={weeks} zone={zone} now={now} />
+          ) : null}
+
+          {monthEmpty ? (
+            <div data-testid={CALENDAR_MONTH_EMPTY_TESTID}>
+              <p>{calendarMonthEmptyCopy(state.month)}</p>
+              <p>
+                <a href={calendarUrl({ ...state, view: "list" })}>
+                  {CALENDAR_MONTH_EMPTY_RECOVERY_COPY}
+                </a>
+              </p>
+            </div>
           ) : null}
         </div>
       </section>
