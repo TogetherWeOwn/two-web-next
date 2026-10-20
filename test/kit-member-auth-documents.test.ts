@@ -237,13 +237,30 @@ describe.each([
         expect(f.audit[0]).toMatchObject({ viewerUserId: MEMBER, subjectUserIds: [subject] });
 
       const html = await response.text();
-      const bioMarkup = html
-        .match(/<p\b[^>]*data-testid="profile-bio"[^>]*>([\s\S]*?)<\/p>/)?.[1]
-        ?.replace(/<!--[\s\S]*?-->/g, "");
-      expect(bioMarkup, "the stored bio must reach real Svelte SSR as literal text").toBe(
-        escapedBio,
-      );
-      expect(controllers(bioMarkup!)).toHaveLength(0);
+      const bioMarkup = html.match(/<p\b[^>]*data-testid="profile-bio"[^>]*>([\s\S]*?)<\/p>/)?.[1];
+      expect(bioMarkup).toBeDefined();
+      // Walk past hydration comments without constructing rewritten markup.
+      let literalIndex = 0;
+      let controllerCount = 0;
+      for (let index = 0; index < bioMarkup!.length; ) {
+        if (bioMarkup!.startsWith("<!--", index)) {
+          const end = bioMarkup!.indexOf("-->", index + 4);
+          expect(end, "hydration comments must be closed").not.toBe(-1);
+          index = end + 3;
+          continue;
+        }
+        const nextComment = bioMarkup!.indexOf("<!--", index);
+        const end = nextComment === -1 ? bioMarkup!.length : nextComment;
+        const text = bioMarkup!.slice(index, end);
+        expect(text, "the stored bio must reach real Svelte SSR as literal text").toBe(
+          escapedBio.slice(literalIndex, literalIndex + text.length),
+        );
+        controllerCount += controllers(text).length;
+        literalIndex += text.length;
+        index = end;
+      }
+      expect(literalIndex).toBe(escapedBio.length);
+      expect(controllerCount).toBe(0);
       expect((await f.profiles.find(subject))?.bio).toBe(bio);
 
       // Check the probe before the controller assertion: the bug leaves a valid
