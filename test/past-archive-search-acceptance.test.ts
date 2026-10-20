@@ -54,6 +54,33 @@ function privateSearch(response: Response) {
   expect(response.headers.get("x-two-past-cacheable")).toBeNull();
 }
 
+describe("archive link label extraction", () => {
+  it.each([
+    [' <span title="next > page">Next <strong>page</strong></span> ', "Next page"],
+    ["<span title='previous > page'>Previous page</span>", "Previous page"],
+    ["<!-- fixture > marker -->Clear <span>search</span>", "Clear search"],
+    ["  &lt;Raid&gt; &amp; tea  ", "&lt;Raid&gt; &amp; tea"],
+  ])("reads assertion text from fixture fragment %j", (fragment, label) => {
+    const links = linksIn(
+      `<a data-archive-page href="/events/past?q=Raid&amp;page=2">${fragment}</a>`,
+    );
+    expect(links).toHaveLength(1);
+    expect(links[0]!.label).toBe(label);
+    expect(links[0]!.url.searchParams.get("q")).toBe("Raid");
+    expect(links[0]!.url.searchParams.get("page")).toBe("2");
+    expect(links[0]!.pager).toBe(true);
+  });
+
+  it.each(["<span", '<span title="unfinished>', "<!-- unfinished >"])(
+    "rejects incomplete fixture markup %j rather than inventing a link label",
+    (fragment) => {
+      expect(() => linksIn(`<a href="/events/past">${fragment}</a>`)).toThrow(
+        "Incomplete archive link label fixture",
+      );
+    },
+  );
+});
+
 describe.each(archiveTwins)("%s archive search acceptance", (twin) => {
   it("preserves the ordinary 20-row archive and reuses its anonymous cache", async () => {
     const source = archiveReadFixture();

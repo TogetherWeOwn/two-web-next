@@ -98,10 +98,46 @@ export const lastMatchKeys = [
 export const eventKeys = (html: string): string[] =>
   [...html.matchAll(/data-event-key="([^"]+)"/g)].map((m) => m[1]!);
 
+// Walk text tokens in our synthetic inline markup, respecting quoted attributes
+// and Svelte comments. This is assertion text, never sanitized or rendered HTML.
+function linkLabel(fragment: string): string {
+  const text: string[] = [];
+  let cursor = 0;
+  while (cursor < fragment.length) {
+    const start = fragment.indexOf("<", cursor);
+    if (start === -1) {
+      text.push(fragment.slice(cursor));
+      break;
+    }
+    text.push(fragment.slice(cursor, start));
+    if (fragment.startsWith("<!--", start)) {
+      const end = fragment.indexOf("-->", start + 4);
+      if (end === -1) throw new Error("Incomplete archive link label fixture");
+      cursor = end + 3;
+      continue;
+    }
+    let quote = "";
+    let end = start + 1;
+    for (; end < fragment.length; end++) {
+      const char = fragment[end];
+      if (quote) {
+        if (char === quote) quote = "";
+      } else if (char === '"' || char === "'") {
+        quote = char;
+      } else if (char === ">") {
+        break;
+      }
+    }
+    if (end === fragment.length) throw new Error("Incomplete archive link label fixture");
+    cursor = end + 1;
+  }
+  return text.join("").trim();
+}
+
 export function linksIn(html: string): { url: URL; label: string; pager: boolean }[] {
   return [...html.matchAll(/<a\b([^>]*?)href="([^"]*)"([^>]*)>([\s\S]*?)<\/a>/g)].map((m) => ({
     url: new URL(m[2]!.replaceAll("&amp;", "&"), ARCHIVE_ORIGIN),
-    label: m[4]!.replace(/<[^>]*>/g, "").trim(),
+    label: linkLabel(m[4]!),
     pager: /\bdata-archive-page\b/.test(m[1]! + m[3]!),
   }));
 }
