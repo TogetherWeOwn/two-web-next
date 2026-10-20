@@ -62,8 +62,8 @@ export function loadBudget(root = repoRoot) {
   } catch (error) {
     return { error: `auth perf budget: cannot enforce: ${error.message}` };
   }
-  if (!isObject(budget) || !Number.isSafeInteger(budget.samples) || budget.samples < 1) {
-    return { error: "auth perf budget: cannot enforce: samples must be a positive integer" };
+  if (!isObject(budget) || !Number.isSafeInteger(budget.samples) || budget.samples < 5) {
+    return { error: "auth perf budget: cannot enforce: samples must be an integer of at least 5" };
   }
   if (!isObject(budget.journeys)) {
     return { error: "auth perf budget: cannot enforce: journeys must be an object" };
@@ -368,10 +368,21 @@ function selftest() {
   mkdirSync(join(badRoot, "ci"), { recursive: true });
   writeFileSync(
     join(badRoot, "ci/auth-perf-budget.json"),
-    JSON.stringify({ samples: 3, journeys: { "member-rsvp": budget.journeys["member-rsvp"] } }),
+    JSON.stringify({ samples: 5, journeys: { "member-rsvp": budget.journeys["member-rsvp"] } }),
   );
+  const missingJourneyError = loadBudget(badRoot).error;
   check(
     "budget missing a journey fails closed",
+    missingJourneyError ===
+      "auth perf budget: cannot enforce: invalid journey entry: moderator-admin",
+    missingJourneyError ?? "",
+  );
+  writeFileSync(
+    join(badRoot, "ci/auth-perf-budget.json"),
+    JSON.stringify({ samples: 3, journeys: budget.journeys }),
+  );
+  check(
+    "fewer than five samples fails closed",
     loadBudget(badRoot).error !== undefined,
     loadBudget(badRoot).error ?? "",
   );
@@ -396,7 +407,7 @@ function selftest() {
     "member good fixture passes",
     assertJourney({
       id: "member-rsvp",
-      samples: [memberGood, memberGood, memberGood],
+      samples: Array(5).fill(memberGood),
       budget: memberBudget,
     }).length === 0,
   );
@@ -404,7 +415,7 @@ function selftest() {
     "admin good fixture passes",
     assertJourney({
       id: "moderator-admin",
-      samples: [adminGood, adminGood, adminGood],
+      samples: Array(5).fill(adminGood),
       budget: adminBudget,
     }).length === 0,
   );

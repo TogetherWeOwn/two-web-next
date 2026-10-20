@@ -49,7 +49,7 @@ const CANONICAL_STATEMENTS: ReadonlyArray<{ statement: SourceReadStatement; text
   },
   {
     statement: "stale_keys",
-    text: `select event_key\${readMarker()} from events
+    text: `select event_key\${readMarker(client)} from events
       where (\${eventKey}::text is null or event_key = \${eventKey}) and (
         exists (select 1 from event_sync_attempts pending
           where pending.event_id = events.id and pending.state = 'pending'
@@ -93,7 +93,7 @@ export async function statementSetHash(): Promise<string> {
 
 /** Pinned by `test/source-evidence-statements.test.ts`; recompute there. */
 export const STATEMENT_SET_HASH =
-  "sha256:4d723fa89b3d569a92cece0d3ce6241b3c2d399995d224222574dc1947de3b94";
+  "sha256:928edb69121ac0eaeda08ef88ca2c0c8f108e30b5c5465ad67323ab3b38e37b0";
 
 export function canonicalStatementTexts(): ReadonlyArray<{
   statement: SourceReadStatement;

@@ -9,15 +9,15 @@ The goal sets the target; this checklist records its literal reading, confirmed 
 - The target is one weekly event **held** for four consecutive weeks. Occurrence and attendance are separate metrics.
 - Bot traffic never counts toward any goal measure.
 
-This checklist does not reproduce the goal's internal link in public documentation. Where the goal is silent — week-boundary convention, attendance threshold, minimum presence duration — this checklist invents nothing; it records the gap instead.
+This checklist does not reproduce the goal's internal link in public documentation. Use the separately adopted [weekly reporting convention](community-participation-metrics.md#weekly-reporting-convention) for period identity; it changes no goal target or policy. Where the goal is silent — attendance threshold or minimum presence duration — this checklist invents nothing.
 
 ## Weekly evidence row
 
-Complete one row per week. Record exact inclusive/exclusive boundaries and timezone for each week, and use a consistent seven-day period when comparing weeks. The goal does not specify a timezone or week-boundary convention; do not imply one has been approved.
+Complete one row per ISO week, Monday 00:00 UTC inclusive to next Monday 00:00 UTC exclusive, under the reporting convention adopted 2026-10-20. Record the `YYYY-Www` label and exact UTC `[start, end)` timestamps. Assign a held event by its observed actual start instant in UTC; a planned slot uses its scheduled start and proves no occurrence. Keep the host-zone display unchanged and carry the note “counted by UTC instant, displayed in host zone”. Consecutive weeks have adjoining boundaries, including across ISO year changes.
 
 | Field | What to record |
 | --- | --- |
-| Week | Exact calendar date range, start/end timestamps, and timezone. |
+| Week | ISO week label and exact UTC start (inclusive) / end (exclusive) timestamps. |
 | Event | Title and scheduled start/end time of the event counted for this week. |
 | Occurrence evidence | Link to the organizer occurrence record proving the event was actually held at its scheduled time — for example a contemporaneous organizer, recorder, or host closeout note confirming the session began and ended, with observed start/end and timezone. Name the source and access date. |
 | Occurrence verdict | `Held` or `Not held` under the occurrence rule below. |
@@ -50,7 +50,7 @@ The gate needs four consecutive `Pass` weeks. Any `Fail` week — missed event, 
 
 ## Examples (synthetic; not community measurements)
 
-These examples demonstrate verdict handling only. Events, dates, values, and source names below are fabricated and must not be copied into a real report. Each example uses half-open weeks in UTC for illustration; this does not establish an approved reporting convention.
+These examples demonstrate verdict handling only. Events, dates, values, and source names below are fabricated and must not be copied into a real report. Each date range below means `[start date at 00:00:00Z, end date at 00:00:00Z)`, following the adopted ISO/UTC reporting convention. The passing run covers `2026-W06`–`2026-W09`, the missing-week case `2026-W10`–`2026-W13`, and the cancellation case `2026-W15`–`2026-W18`, in row order. Event note: “counted by UTC instant, displayed in host zone”.
 
 ### Passing run
 
