@@ -39,7 +39,7 @@ function middlewareBuckets(): Map<string, { file: string; count: number }[]> {
     const rel = full.slice(root.length + 1);
     if (rel === "src/throttle.ts") continue;
     const text = stripComments(readFileSync(full, "utf8"));
-    for (const match of text.matchAll(/throttle\(\s*"([^"]+)"\s*,/g)) {
+    for (const match of text.matchAll(/\bthrottle\(\s*"([^"]+)"\s*,/g)) {
       const bucket = match[1]!;
       if (!byBucket.has(bucket)) byBucket.set(bucket, new Map());
       const perFile = byBucket.get(bucket)!;
@@ -65,7 +65,7 @@ function guardBuckets(): Map<string, string[]> {
   for (const full of srcFiles()) {
     const rel = full.slice(root.length + 1);
     const text = stripComments(readFileSync(full, "utf8"));
-    for (const match of text.matchAll(/throttleGuard\(\s*c\s*,\s*"([^"]+)"\s*,/g)) {
+    for (const match of text.matchAll(/\bthrottleGuard\(\s*c\s*,\s*"([^"]+)"\s*,/g)) {
       const bucket = match[1]!;
       if (!byBucket.has(bucket)) byBucket.set(bucket, new Set());
       byBucket.get(bucket)!.add(rel);
@@ -74,6 +74,43 @@ function guardBuckets(): Map<string, string[]> {
   const out = new Map<string, string[]>();
   for (const [bucket, files] of byBucket) out.set(bucket, [...files].sort());
   return out;
+}
+
+// Call sites the literal scanners above cannot see: every throttle(/throttleGuard(
+// occurrence whose bucket is not a string literal (or whose guard context is not
+// `c`). A const-form or renamed-context registration lands here and fails the
+// pins test until it is hand-pinned with a dedicated assertion, so new buckets
+// cannot silently escape the inventory (precedent: JOIN_THROTTLE_BUCKET in
+// src/join/service.ts). src/throttle.ts is excluded: it holds the definitions
+// and the middleware's internal throttleGuard(c, name, max) delegation.
+function nonLiteralThrottleSites(): Map<string, number> {
+  const counts = new Map<string, number>();
+  for (const full of srcFiles()) {
+    const rel = full.slice(root.length + 1);
+    if (rel === "src/throttle.ts") continue;
+    const text = stripComments(readFileSync(full, "utf8"));
+    for (const call of text.matchAll(/\bthrottle\(/g)) {
+      if (!/^throttle\(\s*"[^"]+"\s*,/.test(text.slice(call.index))) {
+        counts.set(rel, (counts.get(rel) ?? 0) + 1);
+      }
+    }
+  }
+  return counts;
+}
+
+function nonLiteralGuardSites(): Map<string, number> {
+  const counts = new Map<string, number>();
+  for (const full of srcFiles()) {
+    const rel = full.slice(root.length + 1);
+    if (rel === "src/throttle.ts") continue;
+    const text = stripComments(readFileSync(full, "utf8"));
+    for (const call of text.matchAll(/\bthrottleGuard\(/g)) {
+      if (!/^throttleGuard\(\s*c\s*,\s*"[^"]+"\s*,/.test(text.slice(call.index))) {
+        counts.set(rel, (counts.get(rel) ?? 0) + 1);
+      }
+    }
+  }
+  return counts;
 }
 
 describe("throttle bucket inventory", () => {
@@ -100,6 +137,19 @@ describe("throttle bucket inventory", () => {
     expect(found.get("events-read")).toEqual(["src/events/routes-shared.ts"]);
   });
 
+  it("fails loudly on non-literal throttle registrations", () => {
+    // src/profiles/routes-admission.ts holds the only two: the local admitWrite
+    // helper call throttle(c, `profile-write:${viewer.id}`) and the
+    // deps.throttle(bucket) seam delegation. Neither is the src/throttle.ts
+    // middleware; the profile-write bucket itself is pinned by the dedicated
+    // assertion below. Any new entry here is a bucket escaping the literal
+    // inventory: hand-pin it and cover it, or make it literal.
+    expect(Object.fromEntries(nonLiteralThrottleSites())).toEqual({
+      "src/profiles/routes-admission.ts": 2,
+    });
+    expect(Object.fromEntries(nonLiteralGuardSites())).toEqual({});
+  });
+
   it("pins join, profile-write and rsvp-write buckets to their call sites", () => {
     const service = stripComments(readFileSync(resolve(root, "src/join/service.ts"), "utf8"));
     expect(service).toContain('JOIN_THROTTLE_BUCKET = "join"');
@@ -116,6 +166,18 @@ describe("throttle bucket inventory", () => {
   });
 
   it("documents every bucket in docs/throttling.md with live file pointers", () => {
+    // Discovered buckets: a new registration whose pins were updated but whose
+    // docs row was forgotten fails here. The hard-coded list below stays as the
+    // canonical inventory of documented buckets.
+    for (const bucket of [
+      ...middlewareBuckets().keys(),
+      ...guardBuckets().keys(),
+      "join",
+      "profile-write",
+      "rsvp-write",
+    ]) {
+      expect(throttlingDoc, `docs mention discovered bucket ${bucket}`).toContain(bucket);
+    }
     for (const bucket of [
       "login-redirect",
       "login-callback",
@@ -155,6 +217,49 @@ describe("throttle bucket inventory", () => {
     expect(throttlingDoc).toContain("POST /admin/featured");
     expect(throttlingDoc).toContain("POST /admin/events");
     expect(throttlingDoc).toContain("POST /admin/queue/failed/:id/redispatch");
+  });
+
+  it("pins each bucket to its registration file in its own table row", () => {
+    // Row-scoped association: whole-document co-occurrence would let any row
+    // point at any already-mentioned file, so each bucket's table row must name
+    // the file holding that bucket's registration. Expected files come from the
+    // same scanned maps as the pins tests (plus the hand-pinned buckets) so
+    // code, pins and docs cannot drift in pairs.
+    const bucketFiles = new Map<string, string[]>([
+      ["join", ["src/join/service.ts", "src/join/route-shared.ts"]],
+      ["profile-write", ["src/profiles/routes-admission.ts", "src/profiles/routes-writes.tsx"]],
+      ["rsvp-write", ["src/events/rsvp.ts"]],
+    ]);
+    for (const [bucket, sites] of middlewareBuckets()) {
+      bucketFiles.set(
+        bucket,
+        sites.map((s) => s.file),
+      );
+    }
+    for (const [bucket, files] of guardBuckets()) {
+      bucketFiles.set(bucket, files);
+    }
+    const rows = throttlingDoc.split("\n").filter((line) => line.startsWith("|"));
+    for (const [bucket, files] of bucketFiles) {
+      const hits = rows.filter((row) => row.includes(`\`${bucket}`));
+      expect(hits.length, `docs table rows mentioning \`${bucket}`).toBeGreaterThan(0);
+      for (const row of hits) {
+        for (const file of files) {
+          expect(row, `\`${bucket}\` row points at ${file}`).toContain(file);
+        }
+      }
+    }
+    // Multi-bucket rows need clause-level pins: the Auth and Write rows each
+    // name two registration files, so row scope alone cannot say which bucket
+    // belongs to which file.
+    for (const clause of [
+      "`login-redirect` (`GET /auth/discord`), `login-callback` (`GET /auth/discord/callback`), `qa-login` (`POST /auth/qa/:identity`) in [`src/auth/routes.ts`](../src/auth/routes.ts)",
+      "`alert-probe` in [`src/alert-probe.ts`](../src/alert-probe.ts)",
+      "`logout` (`POST /logout`) in [`src/auth/routes.ts`](../src/auth/routes.ts)",
+      "`event-write` on `POST /events`, `PATCH /events/:key` and `POST /events/:key/{publish,cancel,rsvp-pause,rsvp-reopen}` in [`src/events/routes-writes.ts`](../src/events/routes-writes.ts)",
+    ]) {
+      expect(throttlingDoc, `docs pin ${clause.slice(0, 48)}...`).toContain(clause);
+    }
   });
 
   it("documents the MCP cap-before-throttle order in docs/body-limits.md", () => {
