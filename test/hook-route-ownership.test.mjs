@@ -586,6 +586,12 @@ describe("hooks.server route ownership wiring", () => {
     expect(source).toContain("opts as Parameters<typeof resolve>[1]");
     expect(source).toContain("featuredImageHosts: env.FEATURED_IMAGE_HOSTS");
     expect(source).toContain("appUrl: env.APP_URL");
+    // Whole binding: swapping these two staging rollout lines (or deleting
+    // either) keeps every dispatch pin green — the rollout tests construct
+    // HookDispatchDeps directly — while silently disabling the archive stage
+    // on staging (static requires archive). The exact lines must fail.
+    expect(source).toContain("kitRouteArchive: env.KIT_ROUTE_ARCHIVE");
+    expect(source).toContain("kitRouteStatic: env.KIT_ROUTE_STATIC");
     expect(source).toContain("sessionFor: kitSessionBridge(env)");
     expect(source).toContain("authStatusCookieFor: kitAuthStatusCookieFor(env)");
     expect(source.match(/dispatchHookRequest\(event,/g)?.length).toBe(1);
