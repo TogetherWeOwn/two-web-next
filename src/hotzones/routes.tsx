@@ -6,13 +6,17 @@
 // any aggregation (also on signal views). Same aggregate reads the Kit load
 // functions call, per web/src/routes/events/past/ precedent.
 import { dbFor } from "../admin/db";
+import { BadRequestPage } from "../error-pages";
 import { publicReadGuard, type App, type Ctx } from "../events/routes-shared";
 import { HotzoneSignalPage, HotzonesIndexPage } from "./pages";
 import { isHotzoneSignal, joinsRetentionNote, loadJoinsGrid, priorGrid } from "./aggregates";
 import { recordBoardView } from "./board-log";
 import { parseSeasonParam, seasonLabel } from "./season";
 
-const badSeason = (c: Ctx) => c.text("Unknown season", 400);
+const badSeason = (c: Ctx) => {
+  c.header("cache-control", "no-store, private");
+  return c.html(<BadRequestPage />, 400);
+};
 
 async function renderIndex(c: Ctx) {
   const raw = c.req.query("season");
