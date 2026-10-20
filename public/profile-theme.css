@@ -43,6 +43,7 @@
 .profile-theme .profile-milestones time { color: var(--muted); font-size: .9rem; }
 .profile-theme .profile-new-member { text-align: center; }
 .profile-theme .profile-new-member h2 { font-size: 1.5rem; margin-bottom: .5rem; }
+.profile-theme .profile-new-member .actions { justify-content: center; }
 .profile-theme .profile-new-member p { max-width: 40rem; margin: 0 auto 1.25rem; }
 .profile-theme .profile-editor form { max-width: 44rem; }
 .profile-theme .profile-field { display: block; font-weight: 700; margin-top: 1.25rem; }
