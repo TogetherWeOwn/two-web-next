@@ -1,6 +1,6 @@
 {
-  "id": "26617804-2e62-4b07-aa3e-d626f1ff6b2d",
-  "prevId": "4e457d81-3759-4e93-99f9-25965bcde3e8",
+  "id": "5b12d2a2-9a0e-431c-802c-3bdfada2d8d4",
+  "prevId": "0bd696e5-5ada-4581-bb22-58f423f48f22",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -911,6 +911,148 @@
           "value": "\"web_oauth_journeys\".\"flow\" IN ('auth', 'join')"
         }
       },
+      "isRLSEnabled": false
+    },
+    "public.web_session_grace": {
+      "name": "web_session_grace",
+      "schema": "",
+      "columns": {
+        "predecessor_hash": {
+          "name": "predecessor_hash",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "successor_hash": {
+          "name": "successor_hash",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "status_hash": {
+          "name": "status_hash",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "user_id": {
+          "name": "user_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "username": {
+          "name": "username",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "avatar": {
+          "name": "avatar",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "member": {
+          "name": "member",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "moderator": {
+          "name": "moderator",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true,
+          "default": false
+        },
+        "expires_at": {
+          "name": "expires_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "grace_expires_at": {
+          "name": "grace_expires_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "web_session_grace_successor_hash_idx": {
+          "name": "web_session_grace_successor_hash_idx",
+          "columns": [
+            {
+              "expression": "successor_hash",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "web_session_grace_status_hash_idx": {
+          "name": "web_session_grace_status_hash_idx",
+          "columns": [
+            {
+              "expression": "status_hash",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "web_session_grace_user_id_idx": {
+          "name": "web_session_grace_user_id_idx",
+          "columns": [
+            {
+              "expression": "user_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "web_session_grace_grace_expires_at_idx": {
+          "name": "web_session_grace_grace_expires_at_idx",
+          "columns": [
+            {
+              "expression": "grace_expires_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
       "isRLSEnabled": false
     },
     "public.web_sessions": {

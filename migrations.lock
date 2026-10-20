@@ -124,6 +124,10 @@
     {
       "path": "drizzle/1030_session-predecessor-grace.sql",
       "sha256": "5f9855c23a796855e6abca83a1d746553bd9f8932df3dec5b6014720cb98831d"
+    },
+    {
+      "path": "drizzle/1031_event-public-join-details.sql",
+      "sha256": "221bcc30d0b183ccc1e4b7b72d9bb90cd97a4dd323ec829c7ca92151567a69fd"
     }
   ]
 }
