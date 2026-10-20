@@ -329,7 +329,12 @@ describe.skipIf(process.env.ADMIN_EVENT_BROWSER_TESTS !== "true")(
                 await page.evaluate<Record<string, string>[]>("window.submissions");
               expect(submissions).toHaveLength(1);
               expect(submissions[0]![field]).toBe(value);
-              expect(parseEventForm(submissions[0]!)[field]).toBe(value);
+              const parsedSubmission = parseEventForm(submissions[0]!);
+              expect(
+                field === "accessibility_notes"
+                  ? parsedSubmission.accessibilityNotes
+                  : parsedSubmission[field],
+              ).toBe(value);
               // A real user insertion must remain visible, but prevent native submission.
               await input.focus();
               await input.press("End");
