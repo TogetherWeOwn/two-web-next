@@ -61,11 +61,16 @@ function eligibilityContract(make: () => Harness) {
     await store.create(source);
     expect(await store.rotate(source.tokenHash, source)).toBe(true);
     expect(await store.rotate(source.tokenHash, session("active-replacement"))).toBe(true);
-    expect(await store.get(source.tokenHash)).toBeNull();
+    // Immediate predecessor keeps grace while its successor is live.
+    expect(await store.get(source.tokenHash)).toMatchObject({ userId: source.userId });
     expect(await store.get("active-replacement")).toMatchObject({ userId: source.userId });
     expect(await store.rotate(source.tokenHash, session("replay-replacement"))).toBe(false);
     expect(await store.get("replay-replacement")).toBeNull();
     expect(await store.rotate("missing", session("missing"))).toBe(false);
+    // A revoked successor grants nothing through its predecessor.
+    await store.revoke("active-replacement");
+    expect(await store.get(source.tokenHash)).toBeNull();
+    expect(await store.get("active-replacement")).toBeNull();
   });
 
   it("allows only one concurrent rotation to mint a replacement", async () => {
@@ -75,10 +80,14 @@ function eligibilityContract(make: () => Harness) {
     const replacements = [session("winner-a"), session("winner-b")];
     const results = await Promise.all(replacements.map((r) => store.rotate(source.tokenHash, r)));
     expect(results.filter(Boolean)).toHaveLength(1);
-    expect(await store.get(source.tokenHash)).toBeNull();
+    // The lone winner's predecessor keeps grace; the loser mints nothing.
+    expect(await store.get(source.tokenHash)).toMatchObject({ userId: source.userId });
     for (const [i, replacement] of replacements.entries()) {
       expect(Boolean(await store.get(replacement.tokenHash))).toBe(results[i]);
     }
+    const winner = replacements[results.indexOf(true)]!;
+    await store.revoke(winner.tokenHash);
+    expect(await store.get(source.tokenHash)).toBeNull();
   });
 }
 
@@ -110,6 +119,7 @@ describe.skipIf(!url)("postgres rotation eligibility", () => {
     store = createPostgresSessionStore(sql as unknown as Sql);
   });
   beforeEach(async () => {
+    await sql`delete from web_session_grace`;
     await sql`delete from web_sessions`;
   });
   afterAll(async () => {

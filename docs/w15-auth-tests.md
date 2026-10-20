@@ -184,6 +184,13 @@ SSR. Durable concurrency and attempt-row evidence comes from isolated Postgres
 request tests, not from the browser's Memory store. Return-routing/reinvite
 behavior remains separate work (PR #46).
 
+CI runs this fixture on every app-scope PR: the `a11y` job's OAuth sign-in
+CTA steps execute `npm run test:auth-signin-browser`, assert the evidence
+with `ci/require-auth-browser-evidence.mjs`, and upload `result.json` plus
+the four screenshots as `auth-browser-evidence`. (`npm run
+test:auth-browser` is the separate session-recovery fixture,
+`ci/session-recovery-browser.mjs`, not this one.)
+
 With declared Playwright dependencies and Chromium/system libraries provisioned:
 
 ```sh

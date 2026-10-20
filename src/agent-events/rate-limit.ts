@@ -1,5 +1,6 @@
 import type { Sql } from "postgres";
 import { ulid } from "./payload";
+import { pruneAgentEventHits } from "./prune-hits";
 import type { Answer, Grant, IngressConfig, Op } from "./types";
 
 /** One 429 shape for every throttle on this ingress (two-web TOG-6788). */
@@ -69,27 +70,18 @@ export async function rateLimit(
   } catch (err) {
     if ((err as { code?: string }).code !== "55P03") throw err;
     // Inner-budget lock contention: the verdict transaction aborted with no
-    // hits inserted. Prune best-effort outside the bucket locks so a busy
-    // pass still drains expired rows, then answer retryable 503. The caller
-    // audits it once as error/operation_busy.
-    try {
-      await sql`WITH candidates AS (SELECT id FROM agent_event_hits WHERE at < now() - interval '5 minutes' ORDER BY id LIMIT 1000 FOR UPDATE SKIP LOCKED) DELETE FROM agent_event_hits USING candidates WHERE agent_event_hits.id = candidates.id`;
-    } catch {
-      // The busy verdict stands even when housekeeping fails.
-    }
+    // hits inserted. Best-effort cleanup runs outside the bucket locks so a
+    // busy pass still attempts to drain expired rows, then answer retryable
+    // 503. The caller audits it once as error/operation_busy.
+    await pruneAgentEventHits(sql);
     return busyEnvelope(requestId ?? ulid());
   }
   // Expiry cleanup runs after the verdict — admitted or refused — outside the
-  // bucket advisory locks, so a prune never prolongs the admission lock and a
-  // bucket under sustained refused load still drains. Capped per pass at the
-  // outer shield's standard; the candidate select is SKIP LOCKED so expired
-  // rows held by unrelated transactions are left for a later pass instead of
-  // stalling admission. Best-effort: housekeeping must never flip a decided
-  // verdict into an admission or a 500.
-  try {
-    await sql`WITH candidates AS (SELECT id FROM agent_event_hits WHERE at < now() - interval '5 minutes' ORDER BY id LIMIT 1000 FOR UPDATE SKIP LOCKED) DELETE FROM agent_event_hits USING candidates WHERE agent_event_hits.id = candidates.id`;
-  } catch {
-    // The verdict above was already decided.
-  }
+  // bucket advisory locks, so a prune never prolongs the admission transaction
+  // and a bucket under sustained refused load still drains. It is single-flighted
+  // and lock-time-bounded; a held row or concurrent cleanup defers to a later
+  // pass. Housekeeping must never flip a decided verdict into an admission or a
+  // 500.
+  await pruneAgentEventHits(sql);
   return verdict;
 }

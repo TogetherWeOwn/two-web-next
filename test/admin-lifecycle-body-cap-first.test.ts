@@ -455,7 +455,7 @@ describe("controls: today's behavior outside the oversized-moderator case", () =
     },
   );
 
-  it("redispatch: moderator validation failure under-cap is still a 422 after exactly one throttle hit, with no candidate load", async () => {
+  it("redispatch: moderator validation failure under-cap is still a 422 with zero throttle spend, no candidate load", async () => {
     const throttle = throttleFixture(0);
     const deps = redispatchDeps();
     const { app, cookie, bindings } = await mounted(MODERATOR, throttle, deps.bindings);
@@ -466,8 +466,9 @@ describe("controls: today's behavior outside the oversized-moderator case", () =
     );
     expect(response.status).toBe(422);
     expect(await response.json()).toEqual({ error: "invalid_failure_id" });
-    expect(throttle.count()).toBe(1);
-    expectAdminWriteBucket(throttle);
+    expect(throttle.store).not.toHaveBeenCalled();
+    expect(throttle.sql).not.toHaveBeenCalled();
+    expect(throttle.count()).toBe(0);
     expect(deps.loadCandidate).not.toHaveBeenCalled();
     expect(deps.dispatch).not.toHaveBeenCalled();
     expect(pg.factory).not.toHaveBeenCalled();

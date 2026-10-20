@@ -111,14 +111,14 @@ timing check to fake timers; do not retry the job until it passes.
 | `test/db-ping-cli.test.mjs` (1× 10 s) | 10 s; elapsed `< 500`/`< 2500` ms | Asserts the CLI's probe and cleanup deadlines |
 | `test/counts-worker.test.ts` (4× 10 s) | 10 s per test | Bounds the miniflare counts Worker runs |
 | `test/remote-runner-isolation.test.ts:547` (1× 10 s) | 10 s; child exec 10 s | Asserts the runner's kill deadline |
-| `test/session-rotation-revocation-race.test.ts:220` (1× 10 s) | 10 s | Bounds the rotation/revocation race |
+| `test/session-rotation-revocation-race.test.ts:230` (1× 10 s) | 10 s | Bounds the rotation/revocation race |
 | `test/agent-events-grant-admission-race.test.ts:142` | `expect.poll` 4 s | Waits for the blocked admission backend |
 | `test/home-events-db.test.ts` | elapsed `< 1500` ms | Home page DB read budget |
 | `test/featured.test.ts:296` | elapsed `< 2000` ms | Featured rail fail-open budget |
 | `test/worker-runner.test.ts:720` | elapsed `< 5000` ms | Worker request deadline |
 | `test/event-search.test.ts` | elapsed `< 1000`-`< 2000` ms | Search-log write/read deadlines (see below) |
 | `test/event-ics-schema.test.ts` | 90 s; `drizzle-kit generate` 60 s | Spawns drizzle-kit, the slowest step on a loaded host |
-| `test/web-db-binding.test.ts:213` | 30 s | 31 sequential PATCH requests against the DB binding |
+| `test/web-db-binding.test.ts:217` | 30 s | 31 sequential PATCH requests against the DB binding |
 | `test/admin-validation.property.test.ts` | hard 10 s | Seeded property suite; intentionally hard |
 | `test/agent-events-shield.test.ts` "admits a fresh credential while an unrelated stale row is locked" | elapsed `< 4000` ms | Proves the shield skips a locked stale row instead of waiting on it (`lockWaitMs: 50`); a stalled wait would answer 503 or hang |
 | `test/agent-events-shield.test.ts` "bounds the shield lock wait under contention" | elapsed `< 4000` ms | Proves the shield gives up on a held advisory lock with a retryable 503 (`lockWaitMs: 50`) instead of waiting for the holder |
@@ -141,6 +141,7 @@ timing check to fake timers; do not retry the job until it passes.
 | `test/tail-build-attribution-acceptance.test.ts` (1× 15 s) | 15 s per test (options form) | A healthy response whose body stalls must still let a failing synthetic check page without attribution; 15 s bounds settlement of the Tail worker's independent body-read deadline |
 | `test/member-erasure-chained-rotation.test.ts` (1× 15 s) | 15 s per test | Held session-row locks force three fresh erasure passes across chained rotations; 15 s bounds the lock-wait handshakes and successor cleanup |
 | `test/member-erasure-inflight-rotation-acceptance.test.ts` (4× 15 s) | 15 s per test | Held-row rotation/erasure rendezvous, bystander isolation, queued-erasure ordering and rollback controls; 15 s bounds the database lock-wait handshakes and cleanup |
+| `test/prune-execution-budget-acceptance.test.ts` | 8,000 ms default JavaScript observation ceiling (2,000 ms lease controls) vs 5,000 ms DB-side lock/statement budget | Witnesses active DELETE waits through `pg_stat_activity` (`Lock` plus `pg_blocking_pids`, or `PgSleep`) and requires settlement before external release/cleanup; leaves margin beyond the DB cap while proving cancellation, restored settings and healthy-sibling commits |
 
 The lock-busy busy verdicts (`test/web-throttle-lock-busy.test.ts`,
 `test/agent-events-inner-lock-busy.test.ts`, and the busy cases in

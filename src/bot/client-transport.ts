@@ -20,8 +20,36 @@ export function assertBotConfigured(o: Pick<BotClientOptions, "url" | "secret" |
   if (!o.keyId) throw new BotTerminalError("Bot is not configured: BOT_KEY_ID is missing.");
 }
 
+/**
+ * The exact URL a signed mutation is POSTed to, admitted only when it is bare
+ * https:, as the read client requires (./event-read.ts). http: would put the
+ * signed body on the wire in cleartext, and URL credentials would ride into
+ * fetch errors. Validate both the configured URL (so appending cannot create
+ * a host) and the exact fetched string (so even an empty query/fragment cannot
+ * swallow the actions path). Path derivation is unchanged. A refusal is the
+ * rejecting-fetch message with no cause: a URL parser error carries its input.
+ */
 function endpointOf(url: string): string {
-  return `${url.replace(/\/+$/, "")}${INTERNAL_ACTIONS_PATH}`;
+  const endpoint = `${url.replace(/\/+$/, "")}${INTERNAL_ACTIONS_PATH}`;
+  for (const candidate of [url, endpoint]) {
+    let parsed: URL;
+    try {
+      parsed = new URL(candidate);
+    } catch (error) {
+      void error;
+      throw new BotTransportError("bot unreachable");
+    }
+    if (
+      parsed.protocol !== "https:" ||
+      !parsed.hostname ||
+      parsed.username ||
+      parsed.password ||
+      parsed.search ||
+      parsed.hash
+    )
+      throw new BotTransportError("bot unreachable");
+  }
+  return endpoint;
 }
 
 /** Maximum buffered mutation response body before parsing (256 KiB
@@ -31,10 +59,10 @@ function endpointOf(url: string): string {
  * refused before any JSON parsing. */
 const MUTATION_MAX_RESPONSE_BYTES = 262_144;
 
-/** Attempt cleanup of an over-limit body without awaiting it: a stalled,
- * rejecting, or throwing cancel must neither delay nor poison the throw.
- * Rejections are swallowed so a late cleanup failure can never surface as
- * an unhandled rejection. */
+/** Attempt cleanup of a refused body (over the limit, or a 3xx) without
+ * awaiting it: a stalled, rejecting, or throwing cancel must neither delay
+ * nor poison the throw. Rejections are swallowed so a late cleanup failure
+ * can never surface as an unhandled rejection. */
 function cancelBodyWithoutWaiting(target: { cancel?: () => unknown } | null | undefined): void {
   try {
     const pending = target?.cancel?.() as Promise<void> | void;
@@ -143,6 +171,8 @@ export async function send(
     throw new BotTerminalError(
       "An Idempotency-Key must be a UUID; the bot answers a malformed one with a non-retryable `malformed`.",
     );
+  // Before signing: a refused endpoint never gets a signed body built for it.
+  const endpoint = endpointOf(o.url);
   const body = encodeCanonicalJson(payload);
   const timestamp = Math.floor(Date.now() / 1000);
   const nonce = newNonce();
@@ -159,7 +189,7 @@ export async function send(
   const startedAt = Date.now();
   let res: Response;
   try {
-    res = await o.fetchFn(endpointOf(o.url), {
+    res = await o.fetchFn(endpoint, {
       method: "POST",
       // Never follow: a redirect would forward signed bodies/headers to an unvalidated origin.
       // Workers fetch rejects redirect "error" outright, so take the 3xx back and refuse it below.
@@ -175,8 +205,11 @@ export async function send(
     // message. Fixed string; the original rides structurally as `cause`.
     throw new BotTransportError("bot unreachable", { cause: e });
   }
-  if (res.status >= 300 && res.status < 400)
+  if (res.status >= 300 && res.status < 400) {
+    // Refused, never read: release the body as the over-limit path does.
+    cancelBodyWithoutWaiting(res.body);
     throw new BotTransportError(`bot answered with a redirect (${res.status}); not followed`);
+  }
   const json: unknown = await readCappedJson(res);
   const parsed = parseEnvelope(res.status, res.headers.get("Idempotent-Replay") === "true", json);
   if (!parsed.ok && parsed.failure.code === "rate_limited" && res.status === 429) {

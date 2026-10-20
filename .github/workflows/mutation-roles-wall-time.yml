@@ -1,0 +1,74 @@
+name: mutation-roles-wall-time
+
+# Advisory only: not a required check or a ci-ok dependency. A separate workflow
+# also keeps this signal out of the successful-ci deployment trigger.
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+  merge_group:
+    types: [checks_requested]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mutation-roles-wall-time-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' && github.event_name != 'merge_group' }}
+
+jobs:
+  focused-mutation:
+    name: focused-mutation (WARN)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: npm
+      - id: install
+        run: npm ci --include=dev --no-audit --no-fund
+        continue-on-error: true
+      - name: Mutation harness selftests (hermetic)
+        id: harness
+        run: npm run mutation:roles-wall-time:selftest
+        continue-on-error: true
+      - name: Focused baseline and seven mutants (WARN-only)
+        id: signal
+        if: always()
+        run: npm run mutation:roles-wall-time
+        continue-on-error: true
+      - name: Preserve summary including infrastructure failures (WARN-only)
+        if: always()
+        continue-on-error: true
+        env:
+          INSTALL_OUTCOME: ${{ steps.install.outcome }}
+          HARNESS_OUTCOME: ${{ steps.harness.outcome }}
+          SIGNAL_OUTCOME: ${{ steps.signal.outcome }}
+        run: |
+          mkdir -p artifacts/mutation-roles-wall-time
+          printf '{"install":"%s","harness":"%s","signal":"%s"}\n' "$INSTALL_OUTCOME" "$HARNESS_OUTCOME" "$SIGNAL_OUTCOME" > artifacts/mutation-roles-wall-time/workflow-status.json
+          if [ ! -f artifacts/mutation-roles-wall-time/report.md ]; then
+            printf '# Focused mutation signal (WARN-only)\n\nInfrastructure failure: runner report unavailable; inspect setup logs.\n' > artifacts/mutation-roles-wall-time/report.md
+            printf '{"mode":"WARN","infrastructureErrors":["runner report unavailable; inspect setup logs"]}\n' > artifacts/mutation-roles-wall-time/report.json
+          fi
+          if [ "$INSTALL_OUTCOME" != success ] || [ "$HARNESS_OUTCOME" != success ]; then
+            printf '\nSetup infrastructure: install=%s, harness=%s\n' "$INSTALL_OUTCOME" "$HARNESS_OUTCOME" >> artifacts/mutation-roles-wall-time/report.md
+            printf '::warning::Focused mutation setup infrastructure failed; inspect the report artifact.\n'
+          fi
+          cat artifacts/mutation-roles-wall-time/report.md >> "$GITHUB_STEP_SUMMARY"
+      - name: Focused mutation reports (including failures)
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: mutation-roles-wall-time-${{ github.sha }}
+          path: artifacts/mutation-roles-wall-time/
+          if-no-files-found: warn
+          retention-days: 14

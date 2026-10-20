@@ -21,7 +21,7 @@
 import { spawn } from "node:child_process";
 import assert from "node:assert/strict";
 import { existsSync, mkdtempSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, readdir, rm, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -30,12 +30,12 @@ import {
   ASSERT_FAILURE_MARKER,
   hasAssertFailure,
   loadCollectedLhrs,
-  routeOf,
-  shortfalls,
+  loadAssertions,
 } from "./lighthouse-quality-run.mjs";
 
 const require = createRequire(import.meta.url);
 const lib = require("./lighthouse-origin-lib.cjs");
+const { sampleMatrix, evidenceLines } = require("./lighthouse-samples.cjs");
 
 const OUTPUT_DIR = ".lighthouseci";
 const CONFIG = "ci/lighthouse-origin.cjs";
@@ -68,28 +68,6 @@ function runLhci(env) {
   });
 }
 
-async function readJson(path) {
-  return JSON.parse(await readFile(path, "utf8"));
-}
-
-async function readResults(dir) {
-  const names = await readdir(dir).catch(() => []);
-  const lhrs = [];
-  for (const name of names.filter((entry) => /^lhr-.*\.json$/.test(entry))) {
-    try {
-      lhrs.push(await readJson(join(dir, name)));
-    } catch {
-      // A half-written report from a crashed run is missing evidence, not a
-      // parse to hide: it simply does not count, and the unmeasured-route
-      // verdict below fails closed.
-    }
-  }
-  const assertions = names.includes("assertion-results.json")
-    ? await readJson(join(dir, "assertion-results.json")).catch(() => [])
-    : [];
-  return { lhrs, assertions };
-}
-
 // Fresh evidence for a retry: stale per-run LHRs from the short attempt must
 // never count toward the new one. The assertion verdicts over those runs go
 // too: attempt 2 re-collects and re-evaluates everything, so attempt 1's
@@ -107,15 +85,7 @@ async function clearOriginAttemptEvidence(dir) {
   }
 }
 
-export function buildOriginDiagnosis({
-  origin,
-  eventPath,
-  eventSource,
-  expected,
-  runsPerRoute,
-  planned,
-  attempts,
-}) {
+export function buildOriginDiagnosis({ origin, eventPath, eventSource, expected, attempts }) {
   const last = attempts[attempts.length - 1];
   const collected = last.lhrs;
   const lines = [
@@ -127,40 +97,26 @@ export function buildOriginDiagnosis({
     ...attempts.map((a) => `- attempt ${a.n}: exit ${a.exitCode}, ${a.lhrs} LHRs`),
   ];
   let verdict;
-  if (collected >= expected && last.assertFailed) {
+  if (last.matrix.complete && last.assertFailed) {
     verdict =
       "BUDGET BREACH: full evidence collected and an assertion vs " +
       "ci/lighthouserc.cjs missed. See watch-summary.md for the route and " +
       "the failing audits. Fix the cause; do not lower the budgets.";
-  } else if (collected >= expected) {
+  } else if (last.matrix.complete) {
     verdict =
-      "UNCLASSIFIED STEP FAILURE: full evidence collected but `lhci autorun` " +
-      "exited non-zero with no evaluated assertion failure, so no budget " +
+      "UNCLASSIFIED STEP FAILURE: full evidence collected but process or assertion evidence " +
+      "did not establish success. No evaluated assertion failure, so no budget " +
       "breach was evidenced. The failure came from a collect, upload or " +
       "config step — read the tails below. Do not lower ci/lighthouserc.cjs.";
   } else {
     verdict =
-      `COLLECT FAILURE (transient/infra suspected): only ${collected}/${expected} LHRs ` +
-      "collected, so no budget breach is evidenced. Re-run the failed step; do not " +
+      `COLLECT FAILURE (transient/infra suspected): ${collected}/${expected} LHR files, ` +
+      "but the planned per-URL sample quotas were not met. Re-run the failed step; do not " +
       "lower ci/lighthouserc.cjs. If this recurs, the tail below names the " +
       "collect error (Chrome crash, NO_NAVSTART, timeout) to chase next.";
   }
   lines.push(`- verdict: ${verdict}`, "");
-  const short = shortfalls(last.lhrObjects, { runsPerRoute });
-  // shortfalls only sees routes with at least one run: name the planned
-  // routes with zero runs too — the truncation signature is a silent tail
-  // (/faq partial, /rules and /privacy none), and the diagnosis must say so.
-  const seen = new Set(
-    last.lhrObjects.map((lhr) => routeOf(lhr.finalDisplayedUrl || lhr.requestedUrl || "")),
-  );
-  const missing = (planned ?? []).filter((route) => !seen.has(route));
-  if (short.length || missing.length) {
-    lines.push("### Routes short of evidence", "");
-    for (const [route, count] of short) lines.push(`- ${route}: ${count}/${runsPerRoute} runs`);
-    for (const route of missing)
-      lines.push(`- ${route}: 0/${runsPerRoute} runs (no run completed)`);
-    lines.push("");
-  }
+  lines.push("### Planned URL evidence", "", ...evidenceLines(last.matrix), "");
   lines.push("### Collect-error tails (last lines of each attempt)", "");
   for (const a of attempts) {
     lines.push(`#### Attempt ${a.n} (exit ${a.exitCode})`, "", "```", a.tail.trimEnd(), "```", "");
@@ -240,8 +196,6 @@ export async function main(
   // the event route is skipped).
   const { collect } = lib.buildConfig({ origin, eventPath }).ci;
   const expected = collect.url.length * collect.numberOfRuns;
-  const runsPerRoute = collect.numberOfRuns;
-  const planned = collect.url.map((url) => new URL(url).pathname);
   log(
     `Measuring ${collect.url.length} routes, ${collect.numberOfRuns} runs each:\n${collect.url.map((url) => `  ${url}`).join("\n")}`,
   );
@@ -284,20 +238,25 @@ export async function main(
       },
     );
     const lhrObjects = loadCollectedLhrs(dir);
-    const { lhrs, assertions } = await readResults(dir);
+    const matrix = sampleMatrix(lhrObjects, collect);
+    const assertions = loadAssertions(dir);
+    const assertFailed =
+      hasAssertFailure(output) ||
+      assertions.some((failure) => failure.level === "error" && !failure.readError);
     const rows = lib.summarizeRoutes({
       origin,
       eventPath,
       skipReason: found.reason,
-      lhrs,
+      lhrs: lhrObjects,
       assertions,
     });
     attempts.push({
+      matrix,
       n,
       exitCode,
       lhrs: lhrObjects.length,
       lhrObjects,
-      assertFailed: hasAssertFailure(output),
+      assertFailed,
       tail: output.split("\n").slice(-DIAGNOSIS_TAIL_LINES).join("\n"),
     });
     // lhci exits non-zero on an error-level assertion or a crashed run. A
@@ -305,13 +264,19 @@ export async function main(
     // (medians over thin evidence) retries below instead of passing.
     const unmeasured = rows.some((row) => row.verdict === "fail");
 
-    if (exitCode === 0 && !unmeasured && lhrObjects.length >= expected) {
+    if (
+      exitCode === 0 &&
+      !unmeasured &&
+      matrix.complete &&
+      !assertFailed &&
+      !assertions.some((failure) => failure.readError)
+    ) {
       const summary = await writeSummary(dir, { origin, eventPath, found, exitCode, rows });
       log(summary);
       log(`Collect complete: exit 0 with ${lhrObjects.length}/${expected} LHRs in ${elapsed}s.`);
       return 0;
     }
-    if (lhrObjects.length >= expected) {
+    if (matrix.complete) {
       // Full evidence: a real breach or an unclassified step failure — never
       // retry, the evidence already answers the gate.
       const summary = await writeSummary(dir, { origin, eventPath, found, exitCode, rows });
@@ -320,8 +285,6 @@ export async function main(
         eventPath,
         eventSource: found.source,
         expected,
-        runsPerRoute,
-        planned,
         attempts,
       });
       await writeFile(diagnosisPath, text);
@@ -336,8 +299,6 @@ export async function main(
         eventPath,
         eventSource: found.source,
         expected,
-        runsPerRoute,
-        planned,
         attempts,
       });
       await writeFile(diagnosisPath, text);

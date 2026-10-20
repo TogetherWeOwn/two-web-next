@@ -40,6 +40,7 @@ describe.skipIf(!url)("revocation converging under active rotation", () => {
   });
 
   beforeEach(async () => {
+    await fixture.client`delete from web_session_grace`;
     await fixture.client`delete from web_sessions`;
   });
 
@@ -312,15 +313,21 @@ describe.skipIf(!url)("revocation converging under active rotation", () => {
       web_sessions: 2,
     });
     expect(await liveCount(VICTIM)).toBe(2);
-    // Legitimate rotation still yields exactly one live successor.
+    // Legitimate rotation still yields exactly one live successor; the
+    // predecessor keeps 10s grace outside the live count.
     expect(await store.rotate("dry-source", session("dry-successor"))).toBe(true);
-    expect(await store.get("dry-source")).toBeNull();
+    expect(await store.get("dry-source")).toMatchObject({ userId: VICTIM });
     expect(await store.get("dry-successor")).toMatchObject({ userId: VICTIM });
     expect(await liveCount(VICTIM)).toBe(2);
     expect(await revokeMemberSessions(sql(), VICTIM, { dryRun: true })).toEqual({
       web_sessions: 2,
     });
     expect(await liveCount(VICTIM)).toBe(2);
+    // A revoked successor grants nothing through its predecessor.
+    await store.revoke("dry-successor");
+    expect(await store.get("dry-source")).toBeNull();
+    expect(await store.get("dry-successor")).toBeNull();
+    expect(await liveCount(VICTIM)).toBe(1);
   });
 
   it("scopes revocation to unexpired, unrevoked sessions of the target (positive control)", async () => {

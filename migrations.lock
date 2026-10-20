@@ -120,6 +120,10 @@
     {
       "path": "drizzle/1029_event-sync-terminal-intent.sql",
       "sha256": "074d9051c45a3d8d9fce97a05055bdf16eadafda7f04316983ed6877f68d5ad4"
+    },
+    {
+      "path": "drizzle/1030_session-predecessor-grace.sql",
+      "sha256": "5f9855c23a796855e6abca83a1d746553bd9f8932df3dec5b6014720cb98831d"
     }
   ]
 }

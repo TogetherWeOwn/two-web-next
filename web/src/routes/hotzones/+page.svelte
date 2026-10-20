@@ -21,6 +21,9 @@ const destination = $derived(season === "all" ? "/hotzones" : `/hotzones?season=
   mainClass="events-page"
   loginReturnTo={destination}
 >
+  {#snippet accountChrome()}
+    <a class="btn" href="/discord">Open Discord</a>
+  {/snippet}
   <p class="strap">Activity rhythms</p>
   <h1>Hot zones</h1>
   <p>Aggregate activity by hour and weekday for season {season}: {joinsTotal} joins across {eventCount} scheduled gatherings.</p>

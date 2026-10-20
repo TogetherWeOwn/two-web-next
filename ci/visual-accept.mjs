@@ -15,9 +15,13 @@
 // a reviewed `*-actual.png` supersedes a stale committed copy of the same
 // destination carried inside the artifact (the e2e-failure artifact uploads
 // the whole `e2e/visual/__screenshots__/` directory), and byte-identical
-// duplicates of one destination collapse to a single write.
-import { copyFileSync, mkdirSync, readdirSync, readFileSync, statSync } from "node:fs";
-import { basename, join } from "node:path";
+// duplicates of one destination collapse to a single write. An artifact copy
+// without a reviewed actual never replaces differing checkout bytes: that
+// conflict refuses the full plan before writes, as do unreadable candidates.
+// Suite directories are exact segments relative to the artifact root, so the
+// extraction folder's own name cannot change the plan.
+import { mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { basename, dirname, join, relative, sep } from "node:path";
 import { pathToFileURL } from "node:url";
 
 const MAX_DESTINATIONS_SHOWN = 5;
@@ -26,32 +30,34 @@ const MAX_SOURCES_SHOWN = 5;
 // Maps one artifact file to its baseline destination filename, or null when
 // the file is not an admitted baseline candidate. Naming is unchanged:
 // `*-actual.png` flattens to `<name>.png`, and new baselines already under a
-// `__screenshots__` path keep their filename.
+// `__screenshots__` directory keep their filename, even with an -actual suffix.
 //
 // Suite boundary: the shared e2e-failure artifact also carries the Kit
 // outputs (`test-results-kit-visual/`, `test-results-kit-parity/`,
 // `__screenshots-kit__/`), which belong to ci/kit-visual-accept.mjs. Anything
 // from those paths is ignored here, so a Kit redesign can never regenerate a
 // Hono baseline.
-export function destinationName(entry, fullPath) {
+export function destinationName(entry, relativePath) {
+  const directories = dirname(relativePath).split(sep);
   if (
-    fullPath.includes("test-results-kit-visual") ||
-    fullPath.includes("test-results-kit-parity") ||
-    fullPath.includes("__screenshots-kit__")
+    directories.includes("test-results-kit-visual") ||
+    directories.includes("test-results-kit-parity") ||
+    directories.includes("__screenshots-kit__")
   ) {
     return null;
   }
+  if (entry.endsWith(".png") && directories.includes("__screenshots__")) {
+    return basename(entry);
+  }
   if (entry.endsWith("-actual.png")) {
     return basename(entry).replace(/-actual\.png$/, ".png");
-  }
-  if (entry.endsWith(".png") && fullPath.includes("__screenshots__")) {
-    return basename(entry);
   }
   return null;
 }
 
 // Walks the artifact tree and returns every admitted candidate as
-// `{ src, dest }`. No filesystem writes happen here.
+// `{ src, dest, actual }`. Baseline-directory copies are never reviewed actuals.
+// No filesystem writes happen here.
 export function collectCandidates(root) {
   const candidates = [];
   const walk = (dir) => {
@@ -60,8 +66,14 @@ export function collectCandidates(root) {
       if (statSync(full).isDirectory()) {
         walk(full);
       } else {
-        const dest = destinationName(entry, full);
-        if (dest !== null) candidates.push({ src: full, dest });
+        const relativePath = relative(root, full);
+        const dest = destinationName(entry, relativePath);
+        if (dest !== null) {
+          const actual =
+            entry.endsWith("-actual.png") &&
+            !dirname(relativePath).split(sep).includes("__screenshots__");
+          candidates.push({ src: full, dest, actual });
+        }
       }
     }
   };
@@ -72,57 +84,54 @@ export function collectCandidates(root) {
   return candidates;
 }
 
-function isActualSource(src) {
-  return basename(src).endsWith("-actual.png");
-}
-
-// One representative `{ src, bytes }` per distinct byte content, in first-seen
-// order. Reading happens during the preflight, so an unreadable candidate
-// fails before any baseline is written.
+// One representative per distinct byte content, in first-seen order.
 function distinctByBytes(sources) {
   const seen = [];
-  for (const src of sources) {
-    const bytes = readFileSync(src);
-    if (!seen.some((entry) => entry.bytes.equals(bytes))) {
-      seen.push({ src, bytes });
+  for (const source of sources) {
+    if (!seen.some((entry) => entry.bytes.equals(source.bytes))) {
+      seen.push(source);
     }
   }
   return seen;
 }
 
 // Resolves every destination to a single winning source. Returns `{ resolved,
-// droppedStale, duplicates }`: `resolved` is the `[{ src, dest }]` write plan
+// droppedStale, duplicates }`: `resolved` holds candidates with cached bytes
 // in destination order, `droppedStale` counts committed copies superseded by a
 // reviewed actual, and `duplicates` lists destinations with more than one
 // genuinely different source. Sorted by destination for a stable diagnostic.
 export function resolveDestinations(candidates) {
   const byDest = new Map();
-  for (const { src, dest } of candidates) {
-    const sources = byDest.get(dest) ?? [];
-    sources.push(src);
-    byDest.set(dest, sources);
+  for (const candidate of candidates) {
+    const sources = byDest.get(candidate.dest) ?? [];
+    // Read even superseded copies before writing anything. Keep the bytes so
+    // the apply phase never needs to re-read a source from the artifact.
+    sources.push({ ...candidate, bytes: readFileSync(candidate.src) });
+    byDest.set(candidate.dest, sources);
   }
   const resolved = [];
   let droppedStale = 0;
   const duplicates = [];
   for (const dest of [...byDest.keys()].sort()) {
-    const sources = [...byDest.get(dest)].sort();
-    const actuals = sources.filter(isActualSource);
+    const sources = [...byDest.get(dest)].sort((a, b) =>
+      a.src < b.src ? -1 : a.src > b.src ? 1 : 0,
+    );
+    const actuals = sources.filter((source) => source.actual);
     if (actuals.length > 0) {
       // Reviewed actuals supersede stale committed copies of this destination.
       droppedStale += sources.length - actuals.length;
       const winners = distinctByBytes(actuals);
       if (winners.length > 1) {
-        duplicates.push({ dest, sources: actuals });
+        duplicates.push({ dest, sources: actuals.map((source) => source.src) });
       } else {
-        resolved.push({ src: winners[0].src, dest });
+        resolved.push(winners[0]);
       }
     } else {
       const winners = distinctByBytes(sources);
       if (winners.length > 1) {
-        duplicates.push({ dest, sources });
+        duplicates.push({ dest, sources: sources.map((source) => source.src) });
       } else {
-        resolved.push({ src: winners[0].src, dest });
+        resolved.push(winners[0]);
       }
     }
   }
@@ -149,32 +158,46 @@ export function formatCollisionDiagnostic(duplicates) {
   return lines.join("\n");
 }
 
-// Two-phase acceptance: preflight the full map, then write only when every
-// destination resolves to one source. Candidates already byte-identical to
-// the destination are skipped. Returns `{ written, dropped }`.
+// Check every local target before applying either suite's plan. Only an
+// admitted actual may replace differing checkout bytes; artifact baseline
+// copies are additions or identical no-ops, never replacement authority.
+export function preflightWrites(resolved, destDir) {
+  const writes = [];
+  for (const candidate of resolved) {
+    const target = join(destDir, candidate.dest);
+    let current = null;
+    try {
+      current = readFileSync(target);
+    } catch (error) {
+      if (error.code !== "ENOENT") throw error;
+    }
+    if (current !== null) {
+      if (current.equals(candidate.bytes)) continue;
+      if (!candidate.actual) {
+        throw new Error(
+          `Refusing stale artifact copy conflict for ${candidate.dest}: checkout baseline differs; no baselines written. Review a matching actual or use a current artifact.`,
+        );
+      }
+    }
+    writes.push({ ...candidate, target });
+  }
+  return writes;
+}
+
+// Two-phase acceptance: preflight all sources and local targets, then apply.
+// This is not rollback for apply-time filesystem failures.
 export function acceptBaselines(artifactDir, destDir) {
   const candidates = collectCandidates(artifactDir);
   const { resolved, droppedStale, duplicates } = resolveDestinations(candidates);
   if (duplicates.length > 0) {
     throw new Error(formatCollisionDiagnostic(duplicates));
   }
-  mkdirSync(destDir, { recursive: true });
-  let written = 0;
-  for (const { src, dest } of resolved) {
-    const target = join(destDir, dest);
-    let current = null;
-    try {
-      current = readFileSync(target);
-    } catch {
-      current = null;
-    }
-    if (current !== null && current.equals(readFileSync(src))) {
-      continue;
-    }
-    copyFileSync(src, target);
-    written++;
+  const writes = preflightWrites(resolved, destDir);
+  if (writes.length > 0) mkdirSync(destDir, { recursive: true });
+  for (const { bytes, target } of writes) {
+    writeFileSync(target, bytes);
   }
-  return { written, dropped: droppedStale };
+  return { written: writes.length, dropped: droppedStale };
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {

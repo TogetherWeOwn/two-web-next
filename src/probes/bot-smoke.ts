@@ -14,6 +14,11 @@
 // exclusion (BOT_PRODUCTION_URL) are mandatory. The entire production hostname
 // is refused regardless of port. Nothing here reads production creds.
 
+import {
+  validateAnnouncement,
+  validateEventUpsert,
+  validateRoleAssign,
+} from "../bot/client-validation";
 import { BotTerminalError } from "../jobs/types";
 import type { BotFailure } from "../jobs/types";
 import type {
@@ -132,21 +137,37 @@ export async function runBotSmoke(
     }
   };
 
+  // Prepare and validate the entire chosen run before its first effect. Reuse
+  // these payloads below so a late invalid key cannot leave a partial run.
+  const announcement = {
+    channelKey: args.channelKey,
+    body: `TOG-10112 smoke run. Ignore. ${now().toISOString()}`,
+  };
+  const roleAssignment = args.announcementOnly
+    ? null
+    : { userId: args.discordId, roleKey: args.roleKey };
+  const event = args.announcementOnly
+    ? null
+    : {
+        eventKey: args.eventKey,
+        name: "TOG-10112 smoke event",
+        startsAt: new Date(now().getTime() + 86_400_000).toISOString(),
+        endsAt: new Date(now().getTime() + 90_000_000).toISOString(),
+        location: "Smoke run - ignore",
+        description: "Created by the two-web-next internal-action staging smoke",
+      };
+  validateAnnouncement(announcement);
+  if (roleAssignment !== null) validateRoleAssign(roleAssignment);
+  if (event !== null) validateEventUpsert(event);
+
   // role.assign — natural idempotency, no key.
-  if (!args.announcementOnly) {
-    const { discordId, roleKey } = args;
-    const role = await attempt("role.assign", () =>
-      client.assignRole({ userId: discordId, roleKey }),
-    );
+  if (roleAssignment !== null) {
+    const role = await attempt("role.assign", () => client.assignRole(roleAssignment));
     if (role !== null) check("role.assign is ok", ok(role), describe(role));
   }
 
   // announcement.post — needs key. The same key retried must replay, not post twice.
   const key = crypto.randomUUID();
-  const announcement = {
-    channelKey: args.channelKey,
-    body: `TOG-10112 smoke run. Ignore. ${now().toISOString()}`,
-  };
   const first = await attempt("announcement.post", () =>
     client.postAnnouncement(announcement, key),
   );
@@ -170,24 +191,13 @@ export async function runBotSmoke(
     );
   }
 
-  if (args.announcementOnly) return { checks, failures, ok: failures.length === 0 };
+  if (event === null) return { checks, failures, ok: failures.length === 0 };
 
   // event.upsert — fresh event key per run by default, so a run creates rather than updates.
-  const { eventKey } = args;
-  const event = await attempt("event.upsert", () =>
-    client.upsertEvent(
-      {
-        eventKey,
-        name: "TOG-10112 smoke event",
-        startsAt: new Date(now().getTime() + 86_400_000).toISOString(),
-        endsAt: new Date(now().getTime() + 90_000_000).toISOString(),
-        location: "Smoke run - ignore",
-        description: "Created by the two-web-next internal-action staging smoke",
-      },
-      crypto.randomUUID(),
-    ),
+  const result = await attempt("event.upsert", () =>
+    client.upsertEvent(event, crypto.randomUUID()),
   );
-  if (event !== null) check("event.upsert is ok", ok(event), describe(event));
+  if (result !== null) check("event.upsert is ok", ok(result), describe(result));
 
   return { checks, failures, ok: failures.length === 0 };
 }
