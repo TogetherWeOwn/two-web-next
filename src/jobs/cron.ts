@@ -68,7 +68,10 @@ export async function reconcileEvents(deps: {
   const prepare = async (events: EventStore): Promise<ReconcilePreparation> => ({
     closed: await events.closeFinished((deps.now ?? (() => new Date()))()),
     materialized: await events.materializeSeries(),
-    stale: await events.staleEventKeys(RECONCILE_REDISPATCH_PAGE_SIZE),
+    stale: await events.staleEventKeys(
+      RECONCILE_REDISPATCH_PAGE_SIZE,
+      (deps.now ?? (() => new Date()))(),
+    ),
   });
   // Commit materialization and release parent row locks before external I/O.
   // The enclosing flight still excludes another scheduler throughout dispatch.

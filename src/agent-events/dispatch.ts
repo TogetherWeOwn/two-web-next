@@ -57,7 +57,7 @@ export async function execute(
         "This grant already owns its one proof event. Updates reuse it.",
         { event_key: existing.event_key },
       );
-    const v = validateFields(doc.fields);
+    const v = validateFields(doc.fields, "create");
     if (!v.ok)
       return denyOutcome(422, "validation_failed", "The event fields did not validate.", {
         errors: v.errors,
@@ -144,7 +144,7 @@ export async function execute(
       );
     if (event.status === "cancelled")
       return denyOutcome(409, "event_not_open", "That event is not open for this move.", {}, ek);
-    const v = validateFields(doc.fields);
+    const v = validateFields(doc.fields, "update");
     if (!v.ok)
       return denyOutcome(
         422,
@@ -154,6 +154,17 @@ export async function execute(
         ek,
       );
     const f = v.fields;
+    const startsAt = updatedInstant(f.starts_at, f.timezone, event.starts_at, event.timezone);
+    const endsAt = updatedInstant(f.ends_at, f.timezone, event.ends_at, event.timezone);
+    if (endsAt <= startsAt) {
+      return denyOutcome(
+        422,
+        "validation_failed",
+        "The event fields did not validate.",
+        { errors: { ends_at: ["The ends_at field must be a date after starts_at."] } },
+        ek,
+      );
+    }
     // Reuse the shared seat rules on this already-open raw transaction; a
     // postgres TransactionSql has no client options for postgres-js drizzle().
     const orm = drizzle(async (query, params) => ({
@@ -165,17 +176,6 @@ export async function execute(
         "validation_failed",
         "The event fields did not validate.",
         { errors: { capacity: [CAPACITY_BELOW_GOING] } },
-        ek,
-      );
-    }
-    const startsAt = updatedInstant(f.starts_at, f.timezone, event.starts_at, event.timezone);
-    const endsAt = updatedInstant(f.ends_at, f.timezone, event.ends_at, event.timezone);
-    if (endsAt <= startsAt) {
-      return denyOutcome(
-        422,
-        "validation_failed",
-        "The event fields did not validate.",
-        { errors: { ends_at: ["The ends_at field must be a date after starts_at."] } },
         ek,
       );
     }
