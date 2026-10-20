@@ -1,7 +1,8 @@
 // Dependency inventory for change-scope.sh. Runs before npm ci, so use only
 // Node built-ins. Conservatively follow quoted relative paths, not JS syntax:
 // this covers multiline imports, re-exports, require and literal import(`...`).
-// An import-like comment/string may select extra smoke, never suppress it.
+// A computed import()/require() path, or a multiline relative template, fails
+// closed. An import-like comment/string may select extra smoke, never suppress it.
 import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { posix } from "node:path";
@@ -24,6 +25,14 @@ while (pending.length) {
   if (visited.has(file)) continue;
   visited.add(file);
   const source = readFileSync(file, "utf8");
+  if (
+    /\b(?:import|require)\s*\((?!\s*(?:"[^"\\\r\n]*"|'[^'\\\r\n]*'|`[^`\\$\r\n]*`)\s*\))/.test(
+      source,
+    )
+  ) {
+    throw new Error("Cannot resolve a computed module import");
+  }
+  if (/`\.\.?\/[^`\n]*\n/.test(source)) throw new Error("Cannot resolve a multiline helper path");
   // No line or keyword restriction: the specifier may follow `from` on the
   // next line. Deliberately include import-like comments rather than trying
   // to lex JS with a regex and accidentally hiding real imports.
@@ -46,7 +55,11 @@ while (pending.length) {
     if (!/^(test|e2e)(\/|$)/.test(target)) continue;
     // A relative prefix may feed import(variable) later, so don't infer a
     // complete dependency from a concatenated string, even outside import().
-    if (/^\s*\+/.test(source.slice(match.index + match[0].length))) {
+    if (
+      /^(?:\s|\/\*(?:[^*]|\*(?!\/))*\*\/|\/\/[^\n]*|\))*\+/.test(
+        source.slice(match.index + match[0].length),
+      )
+    ) {
       throw new Error("Cannot resolve a concatenated helper path");
     }
     // Include all possible source counterparts, even absent ones: deleted or

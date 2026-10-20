@@ -355,6 +355,10 @@ describe("skip_e2e verdict", () => {
     "const path = `../test/helpers/${helper}`; import(path);\n",
     'const path = "../test/helpers/import\\u0065d"; import(path);\n',
     "const path = `./${helper}`; import(path);\n",
+    "import(`../test/helpers/${\n  helper,\n}`);\n",
+    "const path = `../test/helpers/${\n  helper,\n}`;\n",
+    "const path = pick(); import(path);\n",
+    'import(("../test/helpers/variant") + "iant");\n',
   ])("fails closed on an opaque module path: %s", (source) => {
     writeFileSync(join(repo, "e2e/opaque.spec.ts"), source);
     git("add", ".");
@@ -365,10 +369,23 @@ describe("skip_e2e verdict", () => {
     'import("../test/helpers/" + name);\n',
     'const path = "../test/helpers/" + name; import(path);\n',
     'const path = "../test/" + name; import(path);\n',
+    'const path = "../test/helpers/var" /* split */ + "iant";\n',
+    'const path = "../test/helpers/var" // which helper\n  + "iant";\n',
+    'const path = ("../test/helpers/var") + "iant";\n',
   ])("fails closed on a concatenated helper path: %s", (source) => {
     writeFileSync(join(repo, "e2e/concatenated.spec.ts"), source);
     git("add", ".");
     expect(scope([["test/helpers/fixture.ts", ""]]).skipE2e).toBe("false");
+  });
+
+  it("keeps a literal dynamic import precise: only its target is imported", () => {
+    writeFileSync(
+      join(repo, "e2e/lazy.spec.ts"),
+      'export const load = () => import("../test/helpers/imported.js");\n',
+    );
+    git("add", ".");
+    expect(scope([["test/helpers/fixture.ts", ""]]).skipE2e).toBe("true");
+    expect(scope([["test/helpers/imported.ts", ""]]).skipE2e).toBe("false");
   });
 
   it("does not mistake a computed file-reader string for a module import", () => {
