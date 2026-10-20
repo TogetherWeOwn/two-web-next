@@ -118,6 +118,11 @@ jobs:
         with:
           node-version: 24
       - run: npm run docs:links
+      # Parse the Vitest sources on every change, including ledger-only edits.
+      # No install hooks or browser/database fixtures are needed by this gate.
+      - run: npm ci --include=dev --ignore-scripts --no-audit --no-fund
+      - name: Timeout ledger ratchet (HARD)
+        run: npm run ledger:timeouts:selftest && npm run ledger:timeouts
 
   a11y:
     name: a11y

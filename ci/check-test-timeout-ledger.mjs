@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Timeout-ledger ratchet (HARD): every per-test timeout literal below the
-// 30 s vitest default in test/** must have a ledger row in
+// 30 s vitest default in its configured include set must have a ledger row in
 // docs/ci-load-sensitive-tests.md naming the file with an (N× <limit>) count
 // pin, plus a "why it stays" justification. Counts pin timeout LOCATIONS
 // (trailing it/test arguments, including .each forms), not generated tests.
@@ -15,9 +15,9 @@
 //
 // Exit codes: 0 = ledger covers every flagged literal with exact counts,
 // 1 = at least one uncovered file, missing count pin or count mismatch,
-// 2 = usage error or an unreadable file (fail closed, like check-doc-links).
+// 2 = usage, read, parse or config-scope error (fail closed).
 import {
-  readdirSync,
+  globSync,
   readFileSync,
   existsSync,
   mkdtempSync,
@@ -29,207 +29,124 @@ import { tmpdir } from "node:os";
 import { join, resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import assert from "node:assert/strict";
+import { parse } from "@babel/parser";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const LEDGER_REL = "docs/ci-load-sensitive-tests.md";
 const DEFAULT_TIMEOUT_MS = 30_000;
 
-// Blank comments, string literals and regex literals with spaces, preserving
-// newlines so line numbers survive. The regex heuristic is standard: a `/`
-// opens a regex when the previous significant character cannot end an
-// expression (so `a / b` and `(x) / y` stay division).
-export function blankNonCode(text) {
-  const out = text.split("");
-  const blank = (from, to) => {
-    for (let i = from; i < to; i++) if (out[i] !== "\n") out[i] = " ";
-  };
-  let i = 0;
-  const prevSignificant = (j) => {
-    j -= 1;
-    while (j >= 0 && (out[j] === " " || out[j] === "\t" || out[j] === "\r" || out[j] === "\n"))
-      j -= 1;
-    return j >= 0 ? out[j] : "";
-  };
-  while (i < text.length) {
-    const c = text[i];
-    const n = text[i + 1];
-    if (c === "/" && n === "/") {
-      let j = text.indexOf("\n", i);
-      if (j === -1) j = text.length;
-      blank(i, j);
-      i = j;
-    } else if (c === "/" && n === "*") {
-      const j = text.indexOf("*/", i + 2);
-      const end = j === -1 ? text.length : j + 2;
-      blank(i, end);
-      i = end;
-    } else if (c === "'" || c === '"') {
-      let j = i + 1;
-      while (j < text.length && text[j] !== c) j += text[j] === "\\" ? 2 : 1;
-      blank(i, Math.min(j + 1, text.length));
-      i = Math.min(j + 1, text.length);
-    } else if (c === "`") {
-      let j = i + 1;
-      while (j < text.length && text[j] !== "`") j += text[j] === "\\" ? 2 : 1;
-      blank(i, Math.min(j + 1, text.length));
-      i = Math.min(j + 1, text.length);
-    } else if (c === "/") {
-      const prev = prevSignificant(i);
-      if (/[a-zA-Z0-9_$)\]}]/.test(prev)) {
-        i += 1; // Division, not a regex literal.
-      } else {
-        let j = i + 1;
-        let inClass = false;
-        while (j < text.length) {
-          if (text[j] === "\\") j += 1;
-          else if (text[j] === "[") inClass = true;
-          else if (text[j] === "]") inClass = false;
-          else if (text[j] === "/" && !inClass) break;
-          else if (text[j] === "\n") break;
-          j += 1;
-        }
-        if (j < text.length && text[j] === "/") {
-          let k = j + 1;
-          while (k < text.length && /[a-z]/.test(text[k])) k += 1;
-          blank(i, k);
-          i = k;
-        } else {
-          i += 1;
-        }
-      }
-    } else {
-      i += 1;
-    }
-  }
-  return out.join("");
+// Parse syntax rather than approximating JavaScript lexical rules: templates,
+// keyword regexes, TypeScript generics and curried test builders all occur in
+// this suite. Never evaluate the config or test modules.
+function syntax(source) {
+  return parse(source, { sourceType: "module", plugins: ["typescript"] });
 }
 
-// Parse the argument list of the call opening at `open` (the index of `(`).
-// Returns the raw text between the balanced parens plus the index of the
-// closing paren, or null when unbalanced.
-function balancedArgs(code, open) {
-  let depth = 0;
-  for (let i = open; i < code.length; i++) {
-    if (code[i] === "(") depth += 1;
-    else if (code[i] === ")") {
-      depth -= 1;
-      if (depth === 0) return { text: code.slice(open + 1, i), close: i };
+function visit(node, callback) {
+  if (!node || typeof node !== "object") return;
+  if (typeof node.type === "string") callback(node);
+  for (const value of Object.values(node)) {
+    if (Array.isArray(value)) {
+      for (const child of value) visit(child, callback);
+    } else if (value && typeof value === "object" && typeof value.type === "string") {
+      visit(value, callback);
     }
   }
-  return null;
 }
 
-// Split raw argument text on top-level commas (non-code already blanked, so
-// every surviving paren/brace/bracket is structural).
-function splitTopLevel(args) {
-  const parts = [];
-  let depth = 0;
-  let start = 0;
-  for (let i = 0; i < args.length; i++) {
-    const c = args[i];
-    if (c === "(" || c === "{" || c === "[") depth += 1;
-    else if (c === ")" || c === "}" || c === "]") depth -= 1;
-    else if (c === "," && depth === 0) {
-      parts.push(args.slice(start, i));
-      start = i + 1;
-    }
-  }
-  parts.push(args.slice(start));
-  return parts;
+function propertyName(node) {
+  return node?.type === "Identifier" ? node.name : node?.value;
 }
 
-const NUMERIC_ARG = /^\s*(\d[\d_]*)\s*$/;
+function testRoot(expression) {
+  if (expression.type === "Identifier") return /^(it|test)$/.test(expression.name);
+  if (expression.type === "MemberExpression" && !expression.computed)
+    return testRoot(expression.object);
+  if (expression.type === "CallExpression") return testRoot(expression.callee);
+  if (expression.type === "TaggedTemplateExpression") return testRoot(expression.tag);
+  return false;
+}
 
-// Scan one test file for test-form timeout literals below the default.
-// Returns [{ line, value }] in file order.
+const BUILDERS = new Set(["each", "for", "skipIf", "runIf"]);
+
+// Returns timeout LOCATIONS, not the number of tests generated by .each/for.
 export function scanTestTimeouts(source) {
-  const code = blankNonCode(source);
   const found = [];
-  const callPattern = /(^|[^\w$])(it|test)((?:\s*\.\s*[A-Za-z_$][\w$]*)*)\s*\(/g;
-  const locate = (spanStart, span, digits) =>
-    code.slice(0, spanStart + span.lastIndexOf(digits)).split("\n").length;
-  let match;
-  while ((match = callPattern.exec(code)) !== null) {
-    const open = match.index + match[0].length - 1;
-    let parsed = balancedArgs(code, open);
-    if (parsed === null) continue;
-    let spanStart = open + 1;
-    if (/\.each\b/.test(match[3] ?? "")) {
-      // it.each(cases)(name, fn, timeout): the timeout lives on the inner call.
-      let inner = parsed.close + 1;
-      while (inner < code.length && /\s/.test(code[inner])) inner += 1;
-      if (code[inner] !== "(") continue;
-      const innerParsed = balancedArgs(code, inner);
-      if (innerParsed === null) continue;
-      parsed = innerParsed;
-      spanStart = inner + 1;
+  const record = (node) => {
+    if (node?.type === "NumericLiteral" && node.value < DEFAULT_TIMEOUT_MS)
+      found.push({ line: node.loc.start.line, value: node.value });
+  };
+  visit(syntax(source), (node) => {
+    if (node.type !== "CallExpression" || !testRoot(node.callee)) return;
+    // The inputs to it.each(cases) and it.skipIf(cond) aren't test options.
+    if (node.callee.type === "MemberExpression" && BUILDERS.has(propertyName(node.callee.property)))
+      return;
+    const args = node.arguments;
+    if (args.length >= 3 && args.at(-1).type === "NumericLiteral") {
+      record(args.at(-1));
+      return;
     }
-    const raw = parsed.text;
-    const args = splitTopLevel(raw)
-      .map((part) => part.trim())
-      .filter((part) => part !== "");
-    if (args.length === 0) continue;
-    const last = args[args.length - 1];
-    const numeric = NUMERIC_ARG.exec(last ?? "");
-    if (numeric) {
-      const value = Number(numeric[1].replaceAll("_", ""));
-      if (value < DEFAULT_TIMEOUT_MS) {
-        // Locate the literal for the diagnostic: its offset is the last
-        // occurrence of the digits inside the argument span (the timeout is
-        // the trailing argument, so the last occurrence is the literal).
-        found.push({ line: locate(spanStart, raw, numeric[1]), value });
-      }
-      continue;
-    }
-    // Options form it(name, { timeout: N }, fn): no such call exists today;
-    // the gate fails closed so a future one cannot slip past the ledger.
-    for (const arg of args) {
-      const option = /^\{\s*timeout\s*:\s*(\d[\d_]*)\s*\}$/.exec(arg);
-      if (option) {
-        const value = Number(option[1].replaceAll("_", ""));
-        if (value < DEFAULT_TIMEOUT_MS) {
-          found.push({ line: locate(spanStart, raw, option[1]), value });
-        }
+    for (const arg of args.slice(1)) {
+      if (arg.type !== "ObjectExpression") continue;
+      for (const prop of arg.properties) {
+        if (
+          prop.type === "ObjectProperty" &&
+          !prop.computed &&
+          propertyName(prop.key) === "timeout"
+        )
+          record(prop.value);
       }
     }
-  }
+  });
   return found.sort((a, b) => a.line - b.line);
 }
 
 function listTestFiles(root) {
-  const out = [];
-  const walk = (dir) => {
-    for (const entry of readdirSync(join(root, dir), { withFileTypes: true })) {
-      const rel = join(dir, entry.name).replaceAll("\\", "/");
-      if (entry.isDirectory()) walk(rel);
-      else if (/\.test\.(ts|mjs)$/.test(entry.name)) out.push(rel);
-    }
-  };
-  if (existsSync(join(root, "test"))) walk("test");
-  return out.sort();
+  const config = syntax(readFileSync(join(root, "vitest.config.ts"), "utf8"));
+  let includes;
+  visit(config, (node) => {
+    if (node.type !== "ObjectProperty" || propertyName(node.key) !== "test") return;
+    const include = node.value.properties?.find(
+      (prop) => prop.type === "ObjectProperty" && propertyName(prop.key) === "include",
+    )?.value;
+    if (
+      include?.type !== "ArrayExpression" ||
+      !include.elements.every((item) => item?.type === "StringLiteral")
+    )
+      throw new Error("vitest test.include must be a literal string array");
+    includes = include.elements.map((item) => item.value);
+  });
+  if (!includes?.length) throw new Error("missing vitest test.include scope");
+  // Cover every include, even an excluded/opt-in test. Exclusion from one
+  // runner is not permission to leave a deliberate timeout undocumented.
+  return [...new Set(globSync(includes, { cwd: root }))].sort();
 }
 
-// Parse the "Remaining limits" table of the ledger doc. Returns a Map from
-// test/ path to the summed (N×) count pins in rows mentioning that file.
+// Only a complete (N× <limit>) pin immediately after a file in the Test cell
+// belongs to that file. Multipliers in prose or another file's pin don't count.
 export function parseLedgerPins(ledgerText) {
   const lines = ledgerText.split(/\r?\n/);
   const section = lines.findIndex((line) => line.startsWith("## Remaining limits"));
   const pins = new Map();
   const mentioned = new Set();
-  for (let i = section === -1 ? 0 : section + 1; i < lines.length; i++) {
+  if (section === -1) return { pins, mentioned };
+  const pinPart = String.raw`\d+\s*×\s*\d+(?:\.\d+)?\s*(?:ms|s)`;
+  const pinGroup = new RegExp(`^\\s*\\((${pinPart}(?:\\s*,\\s*${pinPart})*)\\)`);
+  for (let i = section + 1; i < lines.length; i++) {
     const line = lines[i];
     if (/^##\s/.test(line)) break;
     if (!line.startsWith("|")) continue;
-    const files = new Set();
-    for (const span of line.matchAll(/`(test\/[^`\s]+)`/g)) {
+    const cell = line.split("|")[1] ?? "";
+    for (const span of cell.matchAll(/`([^`\s]+\.test\.(?:ts|mjs)(?::\d+(?:[,-]\d+)*)?)`/g)) {
       const file = span[1].replace(/:\d+(?:[,-]\d+)*$/, "");
-      files.add(file);
       mentioned.add(file);
+      const group = pinGroup.exec(cell.slice(span.index + span[0].length));
+      const count = [...(group?.[1] ?? "").matchAll(/(\d+)\s*×/g)].reduce(
+        (sum, pin) => sum + Number(pin[1]),
+        0,
+      );
+      pins.set(file, (pins.get(file) ?? 0) + count);
     }
-    if (files.size === 0) continue;
-    let count = 0;
-    for (const pin of line.matchAll(/(\d+)\s*×/g)) count += Number(pin[1]);
-    for (const file of files) pins.set(file, (pins.get(file) ?? 0) + count);
   }
   return { pins, mentioned };
 }
@@ -249,15 +166,21 @@ export function checkLedger(root, output = console) {
   }
   const { pins, mentioned } = parseLedgerPins(ledgerText);
   const errors = [];
-  for (const rel of listTestFiles(root)) {
-    let source;
+  let files;
+  try {
+    files = listTestFiles(root);
+  } catch (error) {
+    output.error(`timeout ledger: cannot enumerate Vitest includes: ${error.message}`);
+    return 2;
+  }
+  for (const rel of files) {
+    let flagged;
     try {
-      source = readFileSync(join(root, rel), "utf8");
+      flagged = scanTestTimeouts(readFileSync(join(root, rel), "utf8"));
     } catch (error) {
-      output.error(`timeout ledger: cannot read ${rel}: ${error.message}`);
+      output.error(`timeout ledger: cannot read/parse ${rel}: ${error.message}`);
       return 2;
     }
-    const flagged = scanTestTimeouts(source);
     if (flagged.length === 0) continue;
     const at = flagged.map((hit) => `${rel}:${hit.line} (${hit.value} ms)`).join(", ");
     if (!mentioned.has(rel)) {
@@ -310,6 +233,11 @@ function selftest() {
       ].join("\n");
     const check = (name, files, rows, expected, diagnostics = []) => {
       rmSync(join(root, "test"), { recursive: true, force: true });
+      rmSync(join(root, "ci"), { recursive: true, force: true });
+      write(
+        "vitest.config.ts",
+        'export default { test: { include: ["test/**/*.test.ts", "test/**/*.test.mjs", "ci/audit-lifecycle.test.mjs"] } };',
+      );
       for (const [path, content] of Object.entries(files)) write(path, content);
       write(LEDGER_REL, ledger(rows));
       const messages = [];
@@ -424,7 +352,156 @@ function selftest() {
       0,
     );
 
-    cases += 1;
+    for (const options of [
+      "{ timeout: 5000, retry: 1 }",
+      "{ retry: 1, timeout: 5000 }",
+      "{ timeout: 5000, }",
+      '{ "timeout": 5000, retry: 1 }',
+    ]) {
+      check(
+        `options property ${options}`,
+        { "test/a.test.ts": `it("opt", ${options}, () => {});` },
+        [],
+        1,
+        ["5000"],
+      );
+    }
+
+    for (const callee of [
+      "it.each<[string, Array<string>]>(cases)",
+      "it.skipIf(cond)",
+      "test.runIf(cond)",
+      "test.for(cases)",
+      "it.each`a | b\n${1} | ${2}`",
+      "it.skipIf(cond).each(cases)",
+      "test.concurrent",
+    ]) {
+      check(
+        `chained call ${callee}`,
+        { "test/a.test.ts": `${callee}("case", () => {}, 5000);` },
+        [],
+        1,
+        ["5000"],
+      );
+    }
+
+    check(
+      "regexes after keywords cannot swallow a timeout",
+      {
+        "test/a.test.ts": [
+          'it("return", () => { return /x\\(y/.test(s); }, 7000);',
+          'it("throw", () => { throw /x\\(y/; }, 7000);',
+          'it("case", () => { switch (s) { case /x\\(y/: break; } }, 7000);',
+        ].join("\n"),
+      },
+      [],
+      1,
+      ["3 sub-default", "test/a.test.ts:1", "test/a.test.ts:2", "test/a.test.ts:3"],
+    );
+
+    check(
+      "nested templates preserve interpolation code and ignore literal text",
+      {
+        "test/a.test.ts": [
+          'it(`case ${"`"}`, () => {}, 5000);',
+          'const name = `${it("real", () => {}, 5000)}`;',
+          "it(`case ${a ? `x` : `y`}`, () => {}, 5000);",
+          'const raw = `it("not code", () => {}, 5000)`;',
+        ].join("\n"),
+      },
+      ["| `test/a.test.ts` (3× 5 s) | 5 s | Bounds probes |"],
+      0,
+    );
+
+    check(
+      "member calls and builder inputs are not test timeouts",
+      {
+        "test/a.test.ts": [
+          'obj.test("not vitest", () => {}, 5000);',
+          'obj . it("not vitest", () => {}, 5000);',
+          'it.each([5000])("case", () => {});',
+          'it.skipIf(5000)("case", () => {});',
+          'it("nested option", { retry: { timeout: 5000 } }, () => {});',
+        ].join("\n"),
+      },
+      [],
+      0,
+    );
+
+    check(
+      "prose cannot supply a count pin",
+      { "test/a.test.ts": 'it("one", () => {}, 5000);' },
+      ["| `test/a.test.ts` | 5 s | Retries 1× under load (1× 5 s) |"],
+      1,
+      ["carries no (N×) count pin"],
+    );
+
+    check(
+      "a pin only belongs to its adjacent file",
+      {
+        "test/a.test.ts": 'it("one", () => {}, 5000);',
+        "test/b.test.ts": 'it("two", () => {}, 5000);',
+      },
+      ["| `test/a.test.ts`, `test/b.test.ts` (1× 5 s) | 5 s | Bounds probes |"],
+      1,
+      ["test/a.test.ts: ledger row names the file but carries no (N×) count pin"],
+    );
+
+    check(
+      "separate adjacent pins and mixed limits pass",
+      {
+        "test/a.test.ts": 'it("one", () => {}, 5000);',
+        "test/b.test.ts": 'it("two", () => {}, 2000); it("three", () => {}, 20000);',
+      },
+      [
+        "| `test/a.test.ts` (1× 5 s), `test/b.test.ts` (1× 2 s, 1× 20 s) | 2–20 s | Bounds probes |",
+      ],
+      0,
+    );
+
+    check(
+      "Vitest ci include without a ledger row fails",
+      { "ci/audit-lifecycle.test.mjs": 'it("child", () => {}, 2000);' },
+      [],
+      1,
+      ["ci/audit-lifecycle.test.mjs:1", "2000"],
+    );
+    rmSync(join(root, "ci"), { recursive: true, force: true });
+    check(
+      "Vitest ci include with a ledger row passes",
+      { "ci/audit-lifecycle.test.mjs": 'it("child", () => {}, 2000);' },
+      ["| `ci/audit-lifecycle.test.mjs` (1× 2 s) | 2 s | Bounds cleanup |"],
+      0,
+    );
+
+    check("parse errors fail closed", { "test/a.test.ts": 'it("broken", () => {, 5000);' }, [], 2, [
+      "cannot read/parse test/a.test.ts",
+    ]);
+    check(
+      "config scope errors fail closed",
+      { "vitest.config.ts": "export default { test: { include: dynamicScope } };" },
+      [],
+      2,
+      ["cannot enumerate Vitest includes"],
+    );
+    check(
+      "new configured include is scanned without a directory allowlist edit",
+      {
+        "vitest.config.ts": 'export default { test: { include: ["extra/**/*.test.mjs"] } };',
+        "extra/new.test.mjs": 'test("new", () => {}, 5000);',
+      },
+      [],
+      1,
+      ["extra/new.test.mjs:1"],
+    );
+    check(
+      "non-pins in the Test cell do not count",
+      { "test/a.test.ts": 'it("one", () => {}, 5000);' },
+      ["| `test/a.test.ts` retries 1× under load | 5 s | Bounds probe |"],
+      1,
+      ["carries no (N×) count pin"],
+    );
+
     console.log("PASS timeout ledger selftest suite");
     console.log(`timeout ledger selftest: ${cases} cases passed.`);
     return 0;

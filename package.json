@@ -87,6 +87,7 @@
   },
   "devDependencies": {
     "@axe-core/playwright": "^4.14.0",
+    "@babel/parser": "7.29.9",
     "@biomejs/biome": "2.5.15",
     "@cloudflare/workers-types": "^5.20261016.1",
     "@lhci/cli": "0.15.1",

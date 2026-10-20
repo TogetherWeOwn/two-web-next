@@ -17,14 +17,18 @@ written for a laptop fail under normal queue load (TOG-12177).
 
 The vitest defaults detect hangs; they are not performance budgets. Prefer the
 default to a per-test limit. Add a per-test limit only when the limit is the
-behavior under test, and list it below. Every `test/` file with a per-test
-timeout literal below the 30 s default (a trailing argument on `it()`/`test()`,
-including `.each` forms) carries one row naming the file with an `(N× <limit>)`
-count pin over its timeout locations, plus a "why it stays" justification.
+behavior under test, and list it below. Every file matched by Vitest's `include`
+list (`test/` plus `ci/audit-lifecycle.test.mjs`, even excluded or opt-in cases)
+with a per-test timeout literal below the 30 s default carries one row naming
+the file with an `(N× <limit>)` count pin immediately after its path in the Test
+cell, plus a "why it stays" justification. Mixed limits use `(N× 2 s, M× 20 s)`.
+Counts are timeout locations, not generated tests. The syntax parser covers
+trailing arguments and direct options properties on `it()`/`test()`, including
+generic, conditional and table forms (`.each`, `.for`, `.skipIf`, `.runIf`).
 Hook limits (`beforeEach`/`afterEach` and friends) are out of scope for the
 ledger. `ci/check-test-timeout-ledger.mjs` enforces the pins; it runs in
-`npm run check` (`npm run ledger:timeouts`, with a `--selftest` proving both
-verdicts).
+`npm run check` and the always-selected CI `docs-links` job
+(`npm run ledger:timeouts:selftest && npm run ledger:timeouts`).
 
 ## Remaining limits and timing asserts
 
@@ -64,6 +68,8 @@ timing check to fake timers; do not retry the job until it passes.
 | `test/jobs-isolation.test.ts` (3× 15 s) | 15 s per test | PR68 single-flight tests with blocking-holder handshakes; 15 s bounds the holder/release rendezvous (the 15 s `beforeEach`/`afterEach` hook limits are out of scope and uncounted) |
 | `test/session-revocation-rotation.test.ts` (2× 15 s) | 15 s per test | Rotation/revocation race windows with `pg_sleep`-backed expiry; 15 s bounds the race settlement |
 | `test/queue-settlement-released-acceptance.test.ts` (1× 15 s) | 15 s per test | The hung released-stamp case must stay bounded yet fail open to retry; 15 s bounds the hung clock |
+| `ci/audit-lifecycle.test.mjs` (1× 20 s, 2× 2 s) | 20 s browser signal cleanup; 2 s child shutdown | The browser proof waits through 1.2 s disposal after a real signal before recording evidence; the two child-process probes bound shutdown for already-exited and running children |
+| `test/tail-build-attribution-acceptance.test.ts` (1× 15 s) | 15 s per test (options form) | A healthy response whose body stalls must still let a failing synthetic check page without attribution; 15 s bounds settlement of the Tail worker's independent body-read deadline |
 
 The lock-busy busy verdicts (`test/web-throttle-lock-busy.test.ts`,
 `test/agent-events-inner-lock-busy.test.ts`, and the busy cases in
