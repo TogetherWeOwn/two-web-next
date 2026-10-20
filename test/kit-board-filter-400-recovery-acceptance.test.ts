@@ -29,14 +29,17 @@
 //
 // Hermetic only: mocked ranking/queue/headers plus the real +page.server.ts
 // bundled with stubbed SvelteKit/cloudflare imports (the binding pattern),
-// and source-text pins for the Svelte boundary (the root suite cannot
-// transform $app/state). No live database, no network, no member PII.
+// the real +error.svelte SSR-rendered per refused filter with stubbed
+// $app/state (the error-shell render precedent), and source-text pins for
+// the boundary's import/branch contract. No live database, no network, no
+// member PII.
 
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
+import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL, URL } from "node:url";
 import { build } from "esbuild";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { isKitErrorStatus, kitErrorCopy } from "../src/kit-errors";
@@ -200,6 +203,121 @@ describe("Kit board-filter 400 recovery (route boundary per filter)", () => {
     // legitimately carries outage copy.
     for (const copy of OUTAGE_COPY)
       expect(ownText, `board 400 source (${copy})`).not.toContain(copy);
+  });
+});
+
+describe("Kit board-filter 400 (executed boundary render per filter)", () => {
+  let renderBoardError: (status: number, message: string | null) => { head: string; body: string };
+  let scratch = "";
+
+  beforeAll(async () => {
+    const webRequire = createRequire(new URL("../web/package.json", import.meta.url));
+    const { compile } = webRequire("svelte/compiler") as {
+      compile: (
+        source: string,
+        options: { generate: string; dev: boolean; filename: string },
+      ) => { js: { code: string } };
+    };
+    scratch = await mkdtemp(join(tmpdir(), "kit-board-400-render-"));
+    const entry = join(scratch, "kit-board-error-entry.mjs");
+    writeFileSync(
+      entry,
+      `
+import { render } from "svelte/server";
+import BoardError from ${JSON.stringify(resolve(root, BOARD_ERROR_PATH))};
+import { page } from "$app/state";
+export function renderBoardError(status, message) {
+  page.status = status;
+  page.error = message === null ? null : { message };
+  const { head, body } = render(BoardError);
+  return { head, body };
+}
+`,
+    );
+    const outfile = join(scratch, "kit-board-error.mjs");
+    await build({
+      entryPoints: [entry],
+      bundle: true,
+      platform: "node",
+      format: "esm",
+      outfile,
+      logLevel: "warning",
+      absWorkingDir: root,
+      nodePaths: [join(root, "web/node_modules"), join(root, "node_modules")],
+      alias: { "#lib": resolve(root, "web/src/lib") },
+      plugins: [
+        {
+          name: "kit-board-400-app-state-stub",
+          setup(plugin) {
+            plugin.onResolve({ filter: /^\$app\/state$/ }, () => ({
+              path: "app-state",
+              namespace: "test",
+            }));
+            plugin.onLoad({ filter: /^app-state$/, namespace: "test" }, () => ({
+              contents: `export const page = { status: 500, error: null, url: new URL("https://example.test/leaderboards/members") };`,
+              loader: "js",
+            }));
+            plugin.onLoad({ filter: /\.svelte$/ }, (args) => {
+              const source = readFileSync(args.path, "utf8");
+              const { js } = compile(source, {
+                generate: "server",
+                dev: false,
+                filename: args.path,
+              });
+              return { contents: js.code, loader: "js", resolveDir: dirname(args.path) };
+            });
+          },
+        },
+      ],
+    });
+    ({ renderBoardError } = (await import(pathToFileURL(outfile).href)) as {
+      renderBoardError: (status: number, message: string | null) => { head: string; body: string };
+    });
+  });
+
+  afterAll(async () => {
+    if (scratch) await rm(scratch, { recursive: true, force: true });
+  });
+
+  it.each(BAD_FILTERS)(
+    "bad $label renders the refused filter with board + homepage recovery",
+    async (filter) => {
+      // The real thrown message wires load to boundary: the render below must
+      // name it in the parse message's own words, never a hard-coded sentence.
+      const failure = await loadMembersBoardData(kitArgs({ ...filter.overrides })).then(
+        () => null,
+        (error: unknown) => error,
+      );
+      expect(failure).toMatchObject({ status: 400 });
+      const message = (failure as Error).message;
+      expect(message, filter.label).toMatch(filter.problem);
+      const { body } = renderBoardError(400, message);
+      const label = `Kit board 400 executed (${filter.label})`;
+      expect(body, `${label} names the refused filter`).toContain(message);
+      expect(body, `${label} heading`).toContain("Check the board filters");
+      // The recovery anchors themselves: the header nav also links the board
+      // when activeNav is leaderboard (and always links home), so a bare path
+      // pin would pass with the wrong href on the recovery link.
+      expect(body, `${label} Show-the-board anchor`).toMatch(
+        /<a[^>]*href="\/leaderboards\/members"[^>]*data-testid="error-board"[^>]*>Show the board<\/a>|<a[^>]*data-testid="error-board"[^>]*href="\/leaderboards\/members"[^>]*>Show the board<\/a>/,
+      );
+      expect(body, `${label} homepage anchor`).toMatch(
+        /<a[^>]*href="\/"[^>]*data-testid="error-home"[^>]*>Back to the homepage<\/a>|<a[^>]*data-testid="error-home"[^>]*href="\/"[^>]*>Back to the homepage<\/a>/,
+      );
+      // Board branch, never the generic shell or outage copy.
+      expect(body, `${label} never generic 400 title`).not.toContain("Check your request");
+      expect(body, `${label} never generic events recovery`).not.toContain("Browse all events");
+      for (const copy of OUTAGE_COPY) expect(body, `${label} (${copy})`).not.toContain(copy);
+    },
+  );
+
+  it("non-400 falls back to the shared shell with no board recovery", () => {
+    const { body } = renderBoardError(500, "Something broke");
+    expect(body, "fallback keeps the shared 500 copy").toContain(kitErrorCopy(500).title);
+    expect(body, "fallback keeps invite recovery").toContain('data-testid="error-invite"');
+    expect(body, "fallback keeps homepage recovery").toContain('data-testid="error-home"');
+    expect(body, "fallback never board recovery").not.toContain('data-testid="error-board"');
+    expect(body, "fallback never board heading").not.toContain("Check the board filters");
   });
 });
 
