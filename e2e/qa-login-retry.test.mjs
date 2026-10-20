@@ -265,3 +265,26 @@ test("parity beforeAll raises its hook timeout by the one-login retry budget", (
       "on the bare 30s hook timeout instead of completing the bounded retry.",
   );
 });
+
+test("parity isolated-login test raises its timeout by the one-login retry budget", () => {
+  const source = readFileSync(paritySpecUrl, "utf8");
+  assert.ok(
+    source.includes('from "../qa-login-retry.mjs"'),
+    "parity.spec.ts must import the retry budget helper",
+  );
+  const testStart = source.indexOf(
+    'test("member renders the no-JS RSVP form posting to the Hono controller"',
+  );
+  const callSite = source.indexOf("await isolatedRenewalCookie(", testStart);
+  assert.ok(
+    testStart >= 0 && callSite > testStart,
+    "isolated-login test must spend its login via isolatedRenewalCookie",
+  );
+  assert.ok(
+    source.lastIndexOf("qaLoginRetryBudgetMs(1)", callSite) > testStart &&
+      source.lastIndexOf("test.setTimeout(", callSite) > testStart,
+    "isolated-login test must raise its own timeout first with " +
+      "test.setTimeout(30_000 + qaLoginRetryBudgetMs(1)): one capped 65s wait dies " +
+      "on the bare 30s test timeout instead of completing the bounded retry.",
+  );
+});

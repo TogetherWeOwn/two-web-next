@@ -773,6 +773,11 @@ for (const target of targets) {
     test("member renders the no-JS RSVP form posting to the Hono controller", async ({
       playwright,
     }) => {
+      // Test timeout: the config's 30s also bounds this test; the Kit path's
+      // isolated QA login spends one bounded 429 budget (qa-login-retry.mjs) —
+      // a capped 65s wait dies on the bare timeout without this raise. The
+      // Hono path replays the memoized login, so the budget is idle there.
+      test.setTimeout(30_000 + qaLoginRetryBudgetMs(1));
       if (target.name === "kit")
         expect(kitFixtureOwnsEventDetail(), "Kit fixture owns the event detail").toBe(true);
       const expectedMarker = target.name === "kit" ? "kit" : null;
