@@ -180,3 +180,74 @@ test("every staging spec login raises its block timeout by the retry budget firs
   }
   assert.ok(logins > 0, "no staging spec logins found — the guard would pass vacuously");
 });
+
+// Static guard, staging-style, for the Kit parity retry sites: the two
+// postQaLoginWithRetry calls live in helpers (honoMemberCookie spends the
+// journey's one memoized login from beforeAll via memberGoingRsvp;
+// isolatedRenewalCookie spends a fresh login per call), so the staging scan
+// for in-block loginQa* calls cannot see them — yet deleting either parity
+// timeout raise keeps every suite green while reopening the exact
+// hook/test-timeout flake the retry fixes. Pin both raises here: the
+// beforeAll shared spend and every isolated renewal spend must each be
+// preceded in its block by test.setTimeout sized with
+// qaLoginRetryBudgetMs(1). Later memberCookie/memberGoingRsvp calls replay
+// the memoized pair and spend nothing, so they need no raise; the afterAll
+// exactly-one-login assertions fail loud if a second shared spend appears.
+test("every parity retry spend raises its block timeout by the retry budget first", () => {
+  const source = readFileSync(new URL("./kit-parity/parity.spec.ts", import.meta.url), "utf8");
+  const budgetCall = "qaLoginRetryBudgetMs(1)";
+  const blockStarts = [...source.matchAll(/(^|\n)\s*test(?:\.beforeAll)?\s*\(/g)].map(
+    (match) => match.index,
+  );
+  const raisedBefore = (index) => {
+    const blockStart = blockStarts.filter((start) => start < index).at(-1) ?? -1;
+    return (
+      source.lastIndexOf(budgetCall, index) > blockStart &&
+      source.lastIndexOf("test.setTimeout(", index) > blockStart
+    );
+  };
+  // Tripwire on the retry sites themselves: a third postQaLoginWithRetry
+  // call means a new spend this guard does not pin yet — extend it.
+  const retrySites = source.match(/postQaLoginWithRetry\s*\(/g) ?? [];
+  assert.equal(
+    retrySites.length,
+    2,
+    `parity.spec.ts: expected 2 postQaLoginWithRetry call sites, found ` +
+      `${retrySites.length} — extend this guard to pin the new spend's block timeout.`,
+  );
+  // The shared spend: beforeAll's memberGoingRsvp is the journey's one
+  // memoized QA login; replays in later blocks spend nothing.
+  const beforeAllStart = source.indexOf("test.beforeAll(");
+  assert.ok(beforeAllStart >= 0, "parity.spec.ts: no test.beforeAll block found");
+  const nextBlockStart = blockStarts.find((start) => start > beforeAllStart) ?? source.length;
+  const beforeAllBody = source.slice(beforeAllStart, nextBlockStart);
+  const sharedSpend = beforeAllBody.indexOf("await memberGoingRsvp()");
+  assert.ok(
+    sharedSpend >= 0,
+    "parity.spec.ts: beforeAll spends no shared login — the guard would pass vacuously",
+  );
+  assert.ok(
+    beforeAllBody.lastIndexOf(budgetCall, sharedSpend) >= 0 &&
+      beforeAllBody.lastIndexOf("test.setTimeout(", sharedSpend) >= 0,
+    "parity.spec.ts: beforeAll's memberGoingRsvp() is not preceded by " +
+      `test.setTimeout(<base> + ${budgetCall}). Without that raise a 429 + ` +
+      `Retry-After dies on the bare 30s hook timeout instead of completing ` +
+      `the bounded retry.`,
+  );
+  // The isolated spend: every isolatedRenewalCookie call spends a fresh
+  // login, so each caller's block must raise first.
+  const renewals = [...source.matchAll(/await\s+isolatedRenewalCookie\s*\(/g)];
+  assert.ok(
+    renewals.length > 0,
+    "parity.spec.ts: no isolatedRenewalCookie call found — the guard would pass vacuously",
+  );
+  for (const renewal of renewals) {
+    assert.ok(
+      raisedBefore(renewal.index),
+      "parity.spec.ts: isolatedRenewalCookie() is not preceded in its block by " +
+        `test.setTimeout(<base> + ${budgetCall}). Without that raise a 429 + ` +
+        `Retry-After dies on the bare 30s test timeout instead of completing ` +
+        `the bounded retry.`,
+    );
+  }
+});
