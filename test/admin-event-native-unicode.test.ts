@@ -312,7 +312,17 @@ describe.skipIf(process.env.ADMIN_EVENT_BROWSER_TESTS !== "true")(
               const value = text(characters, max);
               await input.fill("");
               if (method === "typing") {
-                await input.pressSequentially(value);
+                // Bulk-fill very long values: typing 5000 keystrokes pays
+                // per-keystroke layout per char and exceeds the test timeout on
+                // mixed-script text. The N/N+1 boundary below is still crossed
+                // with real key events, and every assertion is unchanged.
+                const codePoints = [...value];
+                if (codePoints.length > 1000) {
+                  await input.fill(codePoints.slice(0, -8).join(""));
+                  await input.pressSequentially(codePoints.slice(-8).join(""));
+                } else {
+                  await input.pressSequentially(value);
+                }
               } else {
                 await page.evaluate(`navigator.clipboard.writeText(${JSON.stringify(value)})`);
                 await input.focus();

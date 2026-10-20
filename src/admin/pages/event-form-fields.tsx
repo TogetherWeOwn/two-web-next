@@ -112,9 +112,7 @@ export const EventFormFields: FC<{
           errors={errors}
           hint="HTTPS or HTTP link visible to everyone. Never use attendee-only or private links."
         >
-          {(id) => (
-            <input id={id} name="join_url" type="url" value={val(values, "join_url")} />
-          )}
+          {(id) => <input id={id} name="join_url" type="url" value={val(values, "join_url")} />}
         </Field>
         <Field
           name="join_instructions"
@@ -123,12 +121,7 @@ export const EventFormFields: FC<{
           hint="Share only verified details that are safe for anyone to see. Do not enter contact details."
         >
           {(id) => (
-            <textarea
-              id={id}
-              name="join_instructions"
-              rows={4}
-              data-event-text-limit={5000}
-            >
+            <textarea id={id} name="join_instructions" rows={4} data-event-text-limit={5000}>
               {val(values, "join_instructions")}
             </textarea>
           )}
