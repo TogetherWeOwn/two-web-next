@@ -674,7 +674,15 @@ test("pins the production predecessor grace default to the product window", () =
   // it with a scaled window), so pin it to src/sessions.ts
   // SESSION_PREDECESSOR_GRACE_SECONDS = 10: drift to 0 would reintroduce
   // instant-death false-red deploys, and a large value would tolerate replay.
+  // This .mjs suite runs under plain `node --test` without the TypeScript
+  // resolve hook, so it cannot import the product constant; read it from
+  // source instead so changing either side alone turns this test red.
   assert.equal(PREDECESSOR_GRACE_MS, 10_000);
+  const product = readFileSync("src/sessions.ts", "utf8").match(
+    /SESSION_PREDECESSOR_GRACE_SECONDS\s*=\s*(\d+)/,
+  );
+  assert.ok(product, "product grace constant not found in src/sessions.ts");
+  assert.equal(PREDECESSOR_GRACE_MS, Number(product[1]) * 1_000);
 });
 
 test("passes rotation when the old cookie dies once predecessor grace ends", async (t) => {
@@ -691,6 +699,47 @@ test("passes rotation when the old cookie dies once predecessor grace ends", asy
     (request) => request.cookie === `__Host-two_session=${SESSION}`,
   ).length;
   assert.ok(oldProbes >= 2, `expected the probe to poll the old cookie, saw ${oldProbes}`);
+  assert.ok(!result.output.includes("never-log-this"), result.output);
+});
+
+test("passes rotation when a probe routed inside grace answers after the window", async (t) => {
+  // Straddle: route() computes the status body at receipt, so the first
+  // old-cookie probe after rotation is routed inside the server grace
+  // (150ms, verdict true) but delivered 400ms later — after the probe's
+  // 300ms window has ended. Judging that stale verdict would false-red a
+  // predecessor that is dead post-grace; the check must take one fresh
+  // post-deadline probe (routed after grace, verdict false) and pass.
+  let rotated = false;
+  let delayed = false;
+  const { url, requests } = await stub(
+    t,
+    (id, result, { cookieHeader }) => {
+      if (id === "home" && result.headers["set-cookie"]) rotated = true;
+      else if (
+        rotated &&
+        !delayed &&
+        id === "status" &&
+        cookieHeader === `__Host-two_session=${SESSION}`
+      ) {
+        delayed = true;
+        result.delayMs = 400;
+      }
+    },
+    { graceMs: 150 },
+  );
+  const result = await run(url);
+  assert.equal(delayed, true, "straddling probe was never constructed");
+  assert.equal(result.ok, true, result.output);
+  assert.ok(result.output.includes("PASS session rotation replay"), result.output);
+  const homeAt = requests.findIndex((request) => request.path === "/");
+  const statuses = requests.slice(homeAt + 1).filter((request) => request.path === "/auth/status");
+  const oldProbes = statuses.filter(
+    (request) => request.cookie === `__Host-two_session=${SESSION}`,
+  ).length;
+  assert.ok(
+    oldProbes >= 2,
+    `expected a fresh post-deadline probe of the old cookie, saw ${oldProbes}`,
+  );
   assert.ok(!result.output.includes("never-log-this"), result.output);
 });
 
