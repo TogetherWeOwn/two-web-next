@@ -728,14 +728,15 @@ function releasedEventDetailRenewsSession(
 
 // Sliding renewal for Kit-served admin reads: the post-release twin of Hono's
 // admin-guard slide (src/admin/guard.ts renews the 120-minute window on a
-// current bearer only). Only a released successful HTML GET document with an
-// authenticated moderator bridge decision renews: the manifest owns the route
-// choice (any enabled admin family entry), so a future admin path renews with
-// zero renewal-code changes. Guest bounces, 403s (unlike the event-detail
-// draft 403 — Hono never renews a refused viewer), 503s, redirects and
-// non-HTML responses never renew. Not in the loader: that would renew before
-// the audit can refuse, spending the window on a response the boundary throws
-// away.
+// current bearer only). Only a released successful-or-missing HTML GET document
+// with an authenticated moderator bridge decision renews: the manifest owns the
+// route choice (any enabled admin family entry), so a future admin path renews with
+// zero renewal-code changes. 404s renew like Hono (the guard attaches on 404s
+// when the bearer survives rendering); guest bounces, 403s (unlike the
+// event-detail draft 403 — Hono never renews a refused viewer), 503s,
+// redirects and non-HTML responses never renew. Not in the loader: that would
+// renew before the audit can refuse, spending the window on a response the
+// boundary throws away.
 function releasedAdminRenewsSession(
   route: OwnedRoute,
   event: HookEventLike,
@@ -743,7 +744,7 @@ function releasedAdminRenewsSession(
 ): boolean {
   if (route.path !== "/admin" && !route.path.startsWith("/admin/")) return false;
   if (event.request.method !== "GET") return false;
-  if (response.status !== 200) return false;
+  if (response.status !== 200 && response.status !== 404) return false;
   if (!response.headers.get("content-type")?.includes("text/html")) return false;
   const locals = event.locals as Partial<KitLocals> | undefined;
   return locals?.status === "authenticated" && locals.session?.moderator === true;
