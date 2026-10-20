@@ -1,0 +1,96 @@
+// Implementation-owned regression pins for the two review findings on the
+// terminal-review slice: the keep/unpublish guidance and the summary
+// accessible name must stay inside the native review for both kinds and both
+// presentations. This file reuses the acceptance fixtures read-only; it does
+// not edit, disable, or rebaseline the independent acceptance suite.
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { terminalReviewCopy, type TerminalReviewKind } from "../src/admin/terminal-review";
+import {
+  OTHER_KEY,
+  SAVED_TARGET,
+  SURFACES,
+  actionFor,
+  compileKitReview,
+  kitReviewData,
+  renderHonoReview,
+  type Presentation,
+  type Surface,
+} from "./helpers/admin-terminal-review";
+
+let kit: Awaited<ReturnType<typeof compileKitReview>>;
+beforeAll(async () => {
+  kit = await compileKitReview();
+}, 60000);
+afterAll(() => kit?.close());
+
+async function render(presentation: Presentation, surface: Surface) {
+  return presentation === "hono"
+    ? renderHonoReview(surface)
+    : kit.render(surface, await kitReviewData(surface));
+}
+
+function kindFor(surface: Surface): TerminalReviewKind {
+  return surface === "featured-edit" ? "delete" : "cancel";
+}
+
+function reviewFor(html: string, action: string) {
+  const reviews = [...html.matchAll(/<details\b[^>]*>[\s\S]*?<\/details>/g)].map((m) => m[0]);
+  const matching = reviews.filter((review) => review.includes(`action="${action}"`));
+  expect(matching, `one native review must contain the existing ${action} form`).toHaveLength(1);
+  return matching[0]!;
+}
+
+function unescapeHtml(value: string) {
+  return value
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&#0*34;/g, '"')
+    .replace(/&#x22;/gi, '"')
+    .replace(/&#0*39;/g, "'")
+    .replace(/&apos;/g, "'")
+    .replace(/&amp;/g, "&");
+}
+
+function summaryLabel(review: string) {
+  const summary = review.match(/<summary\b[^>]*>[\s\S]*?<\/summary>/)?.[0] ?? "";
+  const raw = summary.match(/aria-label="([^"]*)"/)?.[1];
+  expect(raw, "summary must carry an aria-label naming the saved target").toBeDefined();
+  return unescapeHtml(raw!);
+}
+
+for (const presentation of ["hono", "kit"] as const) {
+  describe(`${presentation} terminal review safeguards`, () => {
+    for (const surface of SURFACES) {
+      const kind = kindFor(surface);
+      const copy = terminalReviewCopy[kind];
+
+      it(`${surface}: review keeps the exact non-destructive alternative inside the review`, async () => {
+        const review = reviewFor(await render(presentation, surface), actionFor(surface));
+        expect(review).toContain(copy.keep);
+        if (kind === "delete") {
+          expect(copy.guidance.length).toBeGreaterThan(0);
+          expect(review).toContain(copy.guidance);
+        } else {
+          expect(copy.guidance).toBe("");
+        }
+      });
+
+      it(`${surface}: summary accessible name is the exact saved target`, async () => {
+        const review = reviewFor(await render(presentation, surface), actionFor(surface));
+        expect(summaryLabel(review)).toBe(`${copy.summary}: ${SAVED_TARGET}`);
+      });
+    }
+
+    it("list rows carry distinct accessible names per saved event", async () => {
+      const html = await render(presentation, "event-list");
+      const copy = terminalReviewCopy.cancel;
+      expect(summaryLabel(reviewFor(html, actionFor("event-list")))).toBe(
+        `${copy.summary}: ${SAVED_TARGET}`,
+      );
+      expect(summaryLabel(reviewFor(html, `/admin/events/${OTHER_KEY}/cancel`))).toBe(
+        `${copy.summary}: Other saved event`,
+      );
+    });
+  });
+}
