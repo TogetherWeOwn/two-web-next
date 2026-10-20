@@ -249,6 +249,21 @@ for (const [label, message, expected] of [
     "{[redacted credential data]",
   ],
   [
+    "escaped credential",
+    '{\\"client_secret\\": \\"fixture-canary-value\\"}',
+    "{\\[redacted credential data]",
+  ],
+  [
+    "escaped host cookie",
+    '{\\"__Host-two_oauth_state\\": \\"fixture-canary-value\\"}',
+    "{\\[redacted credential data]",
+  ],
+  [
+    "escaped member",
+    '{\\"display_name\\": \\"fixture-canary-value\\"}',
+    "{\\[redacted member data]",
+  ],
+  [
     "suffixed token",
     "GET /cb?access_token=fixture-access-value",
     "GET /cb?[redacted credential data]",
@@ -273,7 +288,9 @@ for (const [label, message, expected] of [
   test(`flaky diagnostic redacts ${label} serialization`, () => {
     const summary = summarizeJourneys(reportWith([flakySpec("flaky journey", message)]));
     assert.equal(summary.journeys[0].reason, expected);
-    assert.ok(formatLedgerMarkdown(summary).includes(expected));
+    // Escaped fixtures keep a lone escape backslash that markdown doubles; collapse
+    // doubles before comparing so the containment check stays exact (no-op otherwise).
+    assert.ok(formatLedgerMarkdown(summary).replace(/\\\\/g, "\\").includes(expected));
   });
 }
 
@@ -732,6 +749,7 @@ test("gate scrubs its environment token from every diagnostic output before any 
 test("gate scrubs compound fields and auth schemes on every diagnostic path and output", () => {
   for (const [message, expected] of [
     ["client_secret=fixture-canary-value", "[redacted credential data]"],
+    ['{\\"client_secret\\": \\"fixture-canary-value\\"}', "{\\[redacted credential data]"],
     ["db_password=fixture-canary-value", "[redacted credential data]"],
     ["secret_key=fixture-canary-value", "[redacted credential data]"],
     ["token_value=fixture-canary-value", "[redacted credential data]"],
@@ -769,7 +787,12 @@ test("gate scrubs compound fields and auth schemes on every diagnostic path and 
       streams.out,
     ]) {
       assert.ok(!output.includes("fixture-canary-value"), "canary must never reach an output");
-      assert.ok(output.includes(expected), "each output must contain the exact scrubbed reason");
+      // JSON and markdown outputs double the lone escape backslash an escaped key
+      // leaves behind; collapse doubles so the check stays exact (no-op otherwise).
+      assert.ok(
+        output.replace(/\\\\/g, "\\").includes(expected),
+        "each output must contain the exact scrubbed reason",
+      );
     }
     assert.ok(!streams.err.includes("fixture-canary-value"));
   }

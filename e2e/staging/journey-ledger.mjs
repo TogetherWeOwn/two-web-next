@@ -69,7 +69,7 @@ function scrubDiagnosticReason(value, qaAuthToken) {
   // Normalization and truncation must not split a configured token either.
   return cleanReason(scrubbed + value.slice(cursor))
     .replace(
-      /["']?\b[\w-]*(?:__Host-[\w-]*|authorization|cookie|x-two-qa-auth|token|password|passwd|api[_\s-]*key|secret|private[_\s-]*key|session)[\w\s-]*["']?\s*[:=].*$/i,
+      /["']?\b[\w-]*(?:__Host-[\w-]*|authorization|cookie|x-two-qa-auth|token|password|passwd|api[_\s-]*key|secret|private[_\s-]*key|session)[\w\s-]*\\*["']?\s*[:=].*$/i,
       "[redacted credential data]",
     )
     .replace(
@@ -78,7 +78,7 @@ function scrubDiagnosticReason(value, qaAuthToken) {
     )
     .replace(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi, "[redacted email]")
     .replace(
-      /["']?\b[\w-]*(?:(?:member|user)(?:[_\s-]*(?:id|name))?|display[_\s-]*name|email|discord[_\s-]*id)[\w-]*["']?\s*[:=].*$/gi,
+      /["']?\b[\w-]*(?:(?:member|user)(?:[_\s-]*(?:id|name))?|display[_\s-]*name|email|discord[_\s-]*id)[\w-]*\\*["']?\s*[:=].*$/gi,
       "[redacted member data]",
     )
     .replace(/\b\d{17,}\b/g, "[redacted id]")

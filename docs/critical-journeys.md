@@ -210,7 +210,8 @@ text and merges overlaps before inserting any redaction marker. A token, email o
 numeric ID inside a URL cannot leave its path/query tail visible, and a configured
 token crossing a URL boundary cannot retain a partial value. It covers the entire `__Host-` cookie family, including
 signed OAuth/join/return-state cookies, not only session cookies. Redaction
-handles quoted keys and compound credential names (for example `client_secret`,
+handles quoted keys, including backslash-escaped keys from nested or stringified
+JSON, and compound credential names (for example `client_secret`,
 `db_password`, `secret_key`, `token_value`, private keys and session IDs), including
 underscore, hyphen and camelCase affixes and common spaced labels (`API Key`,
 `secret key`, `session id`). Member fields accept those spellings and spaces
