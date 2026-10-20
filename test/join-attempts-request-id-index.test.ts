@@ -221,13 +221,24 @@ describe.skipIf(!process.env.DATABASE_URL)("request_id index (agent-testdb)", ()
   it("uses the index for the request_id arm of the admin viewer's exact-match search", async () => {
     // listJoinAttempts with q set adds `(discord_id = q OR request_id = q)`
     // inside the retention window, newest first, one page plus its lookahead.
-    // A BitmapOr needs an index on BOTH arms, and discord_id has none, so the
-    // verbatim OR query still plans as a created_at bitmap + filter even with
-    // this index present (verified on this fixture). What this migration must
-    // prove is the request_id equality itself: in the search's window, order
-    // and limit shape the planner serves it from the new index, ready for the
-    // OR the day discord_id is indexed or the arms are split.
+    // A BitmapOr needs an index on BOTH arms; both now exist
+    // (join_attempts_discord_id_idx and this index), so the verbatim OR can
+    // resolve each arm from its own index. On this fixture (8,500 analyzed
+    // rows) the natural plan and the enable_seqscan=off plan below both
+    // choose a BitmapOr over the two indexes with created_at kept as a heap
+    // filter before the sort/limit; at other sizes the planner may choose
+    // differently. What this test pins is the usable request_id access path
+    // — in the verbatim OR shape and on its own, in the search's window,
+    // order and limit shape — not a cost claim.
     const since = new Date(Date.parse(NOW) - 90 * 86_400_000).toISOString();
+    expect(
+      await plan(
+        `select id, outcome, source, request_id, discord_id, created_at from join_attempts
+         where created_at >= $1 and (discord_id = $2 or request_id = $2)
+         order by created_at desc, id desc limit 21`,
+        [since, "req-4242"],
+      ),
+    ).toContain(INDEX_NAME);
     expect(
       await plan(
         `select id, outcome, source, request_id, discord_id, created_at from join_attempts

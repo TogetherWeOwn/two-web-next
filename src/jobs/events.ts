@@ -99,28 +99,37 @@ export function pgEventStore(
   // never become due on its own) is excluded from the dirty branch: the
   // reconcile loop always skips such rows, so counting them toward the page
   // would pin the same full page of skips ahead of every dispatchable key.
-  // Not-yet-due retries (future next_attempt_at) stay stale: selection is
-  // clock-free and the loop owns the exact due boundary.
+  // Not-yet-due retries (future next_attempt_at) stay stale when no cutoff
+  // is supplied: that selection is clock-free and the loop owns the exact
+  // due boundary. A supplied `dueBefore` applies the same boundary inside
+  // selection, before ORDER BY / LIMIT, and binds only that instant.
   // The single-key branch keeps its current semantics; the page branch adds
   // a deterministic `ORDER BY event_key` + `LIMIT` with a same-statement
   // window count (windows see pre-LIMIT rows) for the deferred remainder.
   const staleKeys = async (
     eventKey: string | null,
     limit?: number,
+    dueBefore?: Date,
   ): Promise<string[] | StaleEventKeysPage> => {
+    // Build fragments only for reads that use them; single-key reads stay
+    // unchanged. Never `now()` / `clock_timestamp()`: the caller owns the clock.
+    const recoveryDue = () =>
+      dueBefore === undefined ? sql`` : sql` and pending.next_attempt_at <= ${dueBefore}`;
+    const futureBlock = () =>
+      dueBefore === undefined ? sql`` : sql` or blocking.next_attempt_at > ${dueBefore}`;
     if (eventKey === null && typeof limit === "number" && Number.isFinite(limit) && limit > 0) {
       const page = await sql`select event_key, count(*) over() as total${readMarker()} from events
         where (${eventKey}::text is null or event_key = ${eventKey}) and (
           exists (select 1 from event_sync_attempts pending
             where pending.event_id = events.id and pending.state = 'pending'
               and pending.request_attempts > 0 and pending.request_attempts < ${SYNC_EVENT.tries}
-              and pending.next_attempt_at is not null)
+              and pending.next_attempt_at is not null${recoveryDue()})
           or (status in ('published', 'cancelled')
             and not exists (select 1 from event_sync_attempts rejected
               where rejected.event_id = events.id and rejected.revision = events.sync_revision and rejected.state = 'failed')
             and not exists (select 1 from event_sync_attempts blocking
               where blocking.event_id = events.id and blocking.state = 'pending'
-                and (blocking.request_attempts >= ${SYNC_EVENT.tries} or blocking.next_attempt_at is null))
+                and (blocking.request_attempts >= ${SYNC_EVENT.tries} or blocking.next_attempt_at is null${futureBlock()}))
             and (sync_revision > synced_revision or
               (status = 'published' and (discord_event_id is null or exists (
                 select 1 from rsvps where rsvps.event_id = events.id and synced_to_discord_at is null
@@ -136,6 +145,33 @@ export function pgEventStore(
       // whenever matches exist), so the remainder is exactly zero.
       const total = page.length === 0 ? 0 : Number((page[0] as { total: string | number }).total);
       return { keys, deferred: Math.max(0, total - keys.length) };
+    }
+    // A cutoff without a page limit still filters before the ordered read.
+    // Kept separate so the clock-free statement below stays the canonical text.
+    if (dueBefore !== undefined) {
+      const filtered = await sql`select event_key${readMarker()} from events
+        where (${eventKey}::text is null or event_key = ${eventKey}) and (
+          exists (select 1 from event_sync_attempts pending
+            where pending.event_id = events.id and pending.state = 'pending'
+              and pending.request_attempts > 0 and pending.request_attempts < ${SYNC_EVENT.tries}
+              and pending.next_attempt_at is not null${recoveryDue()})
+          or (status in ('published', 'cancelled')
+            and not exists (select 1 from event_sync_attempts rejected
+              where rejected.event_id = events.id and rejected.revision = events.sync_revision and rejected.state = 'failed')
+            and not exists (select 1 from event_sync_attempts blocking
+              where blocking.event_id = events.id and blocking.state = 'pending'
+                and (blocking.request_attempts >= ${SYNC_EVENT.tries} or blocking.next_attempt_at is null${futureBlock()}))
+            and (sync_revision > synced_revision or
+              (status = 'published' and (discord_event_id is null or exists (
+                select 1 from rsvps where rsvps.event_id = events.id and synced_to_discord_at is null
+              ))))))
+        order by event_key asc`;
+      onSourceRead?.({
+        statement: "stale_keys",
+        rowCount: filtered.length,
+        readAt: markerOf(filtered[0] as { preview_read_at?: unknown } | undefined),
+      });
+      return filtered.map((row: { event_key: string }) => row.event_key);
     }
     const rows = await sql`select event_key${readMarker()} from events
       where (${eventKey}::text is null or event_key = ${eventKey}) and (
@@ -365,6 +401,6 @@ export function pgEventStore(
       for (const parent of parents) created += await materializeMissingInstances(writer, parent);
       return created;
     },
-    staleEventKeys: (limit?: number) => staleKeys(null, limit),
+    staleEventKeys: (limit?: number, dueBefore?: Date) => staleKeys(null, limit, dueBefore),
   };
 }

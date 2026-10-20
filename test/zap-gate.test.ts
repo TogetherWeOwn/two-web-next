@@ -6,7 +6,9 @@ import { describe, expect, it } from "vitest";
 // @ts-expect-error Standalone tooling has no declaration file.
 import { markdown, summarize } from "../ci/zap-gate.mjs";
 
-const report = (alerts: object[]) => ({ site: [{ alerts }] });
+const report = (alerts: object[]) => ({
+  site: [{ "@name": "https://next.togetherweown.com", alerts }],
+});
 const alert = (pluginid: number, riskcode: string, name = `alert ${pluginid}`) => ({
   pluginid,
   riskcode,
@@ -58,6 +60,7 @@ describe("ci/zap-gate.mjs", () => {
     const unscoped = { maxMedium: null, maxLow: null, ignore: [{ pluginId: 10062, why: "test" }] };
     const scopedHigh = {
       ...alert(10062, "3", "High alert"),
+      count: "1",
       instances: [{ uri: "https://next.togetherweown.com/cdn-cgi/x" }],
     };
     const scoped = {
@@ -134,6 +137,7 @@ describe("ci/zap-gate.mjs", () => {
   it("keeps legitimate Medium/Low ignores without adding exceptions", () => {
     const low = {
       ...alert(10096, "1", "Timestamp Disclosure"),
+      count: "1",
       instances: [{ uri: "https://next.togetherweown.com/cdn-cgi/x" }],
     };
     const budget = {
@@ -175,6 +179,7 @@ describe("ci/zap-gate.mjs", () => {
   it("drops a scoped ignore only when every instance matches", () => {
     const edgeOnly = {
       ...alert(10096, "1", "Timestamp Disclosure"),
+      count: "1",
       instances: [
         {
           uri: "https://next.togetherweown.com/cdn-cgi/challenge-platform/h/g/scripts/jsd/main.js",

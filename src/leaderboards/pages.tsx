@@ -37,7 +37,7 @@ export const MemberLeaderboardPage: FC<{
       robots="noindex, nofollow"
       theme="schedule"
     >
-      <SiteHeader session={session} active="events" loginReturnTo={path} />
+      <SiteHeader session={session} active="leaderboard" loginReturnTo={path} />
       <main class="events-page" id="main" tabindex={-1}>
         <p class="strap">Members only</p>
         <h1>Member leaderboard</h1>
@@ -119,3 +119,36 @@ export const MemberLeaderboardPage: FC<{
     </Layout>
   );
 };
+
+// Bad-filter 400 in the member shell. The viewer passed the gate, so the
+// refusal keeps their signed-in header and names the refused filter in the
+// parse message's own words — never bare text, never outage copy. Served
+// through bufferedMemberHtml so the member-read boundary classifies it like
+// any other member response; no ranking read and no log writes happen.
+export const MemberBoardFilterErrorPage: FC<{
+  session: Session;
+  /** The refused filter, e.g. "Unknown season". Static parse messages only;
+   * most carry no closing period, so the lead supplies one. */
+  problem: string;
+}> = ({ session, problem }) => (
+  <Layout title="Board filters — Together We Own" robots="noindex, nofollow" theme="schedule">
+    <SiteHeader session={session} active="leaderboard" />
+    <main class="events-page" id="main" tabindex={-1}>
+      <p class="strap">Members only</p>
+      <h1>Check the board filters</h1>
+      <p class="lead">
+        {problem.endsWith(".") ? problem : `${problem}.`} Show the board without filters, or head
+        back to the homepage.
+      </p>
+      <p class="recovery-actions">
+        <a class="btn" href="/leaderboards/members" data-testid="error-board">
+          Show the board
+        </a>{" "}
+        <a href="/" data-testid="error-home">
+          Back to the homepage
+        </a>
+      </p>
+    </main>
+    <SiteFooter />
+  </Layout>
+);

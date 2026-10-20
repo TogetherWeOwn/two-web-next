@@ -169,6 +169,25 @@ async function recordAttemptOrRefuse(
   }
 }
 
+/**
+ * I/O-free refusals that run before the admin-write throttle (cap still
+ * first). A non-operator moderator 403s and a malformed id / non-empty
+ * query 422s with zero throttle spend, even under an exhausted budget.
+ * The handler keeps the same checks as idempotent defense; everything that
+ * needs I/O (candidate load, dispatch, receipts) still runs after the
+ * throttle.
+ */
+export async function queueRedispatchPreThrottleRefusal(c: Context<QueuePreviewVars>, next: Next) {
+  if (c.get("adminActor").id !== configuredOperator(c.env)) {
+    return bufferedMemberJson(c, { error: "operator_required" }, 403);
+  }
+  const id = parseFailureId(c.req.param("id") ?? "");
+  // No payload, event key, idempotency key or query overrides are admitted.
+  if (id === null || new URL(c.req.url).search !== "")
+    return bufferedMemberJson(c, { error: "invalid_failure_id" }, 422);
+  await next();
+}
+
 export async function queueRedispatchHandler(c: Context<QueuePreviewVars>) {
   if (c.get("adminActor").id !== configuredOperator(c.env)) {
     return bufferedMemberJson(c, { error: "operator_required" }, 403);

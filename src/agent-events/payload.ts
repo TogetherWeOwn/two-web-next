@@ -118,6 +118,7 @@ export type Fields = {
 // refuse control and invisible/bidi characters via the shared predicate.
 export function validateFields(
   raw: unknown,
+  mode: "create" | "update" = "create",
 ): { ok: true; fields: Fields } | { ok: false; errors: Record<string, string[]> } {
   const e: Record<string, string[]> = {};
   const bad = (k: string, m: string) => (e[k] ??= []).push(m);
@@ -179,7 +180,10 @@ export function validateFields(
   };
   const startsAt = wall("starts_at");
   const endsAt = wall("ends_at");
-  if (startsAt && endsAt && endsAt <= startsAt)
+  // Updates recover unchanged stored instants before comparing duration in
+  // dispatch: minute-only walls can look reversed at a fold or equal within
+  // one minute even when the stored interval is positive. Create stays strict.
+  if (mode === "create" && startsAt && endsAt && endsAt <= startsAt)
     bad("ends_at", "The ends_at field must be a date after starts_at.");
   let capacity: number | null = null;
   if (raw.capacity !== undefined && raw.capacity !== null) {
