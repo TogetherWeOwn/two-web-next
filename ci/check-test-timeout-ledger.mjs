@@ -9,9 +9,11 @@
 // vite.config.* with a test block, and any `vitest --config` target in the
 // package.json scripts). Each literal test.include array, inline projects
 // included, is globbed from the config's package root. The scan covers every
-// matched file (excluded and opt-in ones too) plus every module those files
-// import through a relative path, transitively, since helpers can define
-// tests. Each config test block must keep the 30 s testTimeout assumed here.
+// matched file (excluded and opt-in ones too), each literal test.setupFiles
+// module, and every module those files import through a relative path,
+// transitively, since setup files can set limits and helpers can define tests.
+// Explicit root and test.root values must resolve to the package root; ambiguous
+// roots and option shapes fail closed. Each test block keeps the 30 s default.
 //
 // A per-test limit is a numeric literal that Vitest reads as a timeout: the
 // third argument, or a direct `{ timeout: N }` option in the second, of a
@@ -46,7 +48,7 @@ import {
   statSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve, dirname, normalize } from "node:path";
+import { join, resolve, dirname, normalize, relative, isAbsolute, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parse } from "@babel/parser";
 
@@ -88,6 +90,18 @@ function visit(node, callback) {
   }
 }
 
+function visitWithParent(node, callback, parent = null) {
+  if (!node || typeof node !== "object") return;
+  if (typeof node.type === "string") callback(node, parent);
+  for (const value of Object.values(node)) {
+    if (Array.isArray(value)) {
+      for (const child of value) visitWithParent(child, callback, node);
+    } else if (value && typeof value === "object" && typeof value.type === "string") {
+      visitWithParent(value, callback, node);
+    }
+  }
+}
+
 // Type-only wrappers don't change the value: `5000 as const`, `test!`.
 function unwrap(node) {
   while (/^TS(As|Satisfies|NonNull|TypeAssertion|Instantiation)Expression$/.test(node?.type))
@@ -104,6 +118,16 @@ function keyName(node, computed = false) {
   if (node?.type === "TemplateLiteral" && node.expressions.length === 0)
     return node.quasis[0].value.cooked;
   return undefined;
+}
+
+function isImportMetaUrl(node) {
+  return (
+    node?.type === "MemberExpression" &&
+    node.object?.type === "MetaProperty" &&
+    node.object.meta?.name === "import" &&
+    node.object.property?.name === "meta" &&
+    keyName(node.property, node.computed) === "url"
+  );
 }
 
 // A synthetic `object[key]` read, for destructuring and literal lookups.
@@ -424,32 +448,166 @@ function packageRoot(root, dir) {
   return ".";
 }
 
-// Every literal test.include array of every config, inline projects too. A
-// non-literal include, one that matches no file, or a test block whose
-// default limit isn't the one this ledger assumes fails closed.
+function configRootMatchesPackage(root, config, base, ast, expression) {
+  const imports = new Map();
+  const bindings = new Map();
+  for (const statement of ast.program.body) {
+    if (statement.type === "ImportDeclaration") {
+      for (const specifier of statement.specifiers) {
+        if (specifier.type === "ImportSpecifier")
+          imports.set(specifier.local.name, {
+            module: statement.source.value,
+            name: keyName(specifier.imported),
+          });
+      }
+    } else if (statement.type === "VariableDeclaration") {
+      for (const declaration of statement.declarations)
+        if (declaration.id.type === "Identifier" && declaration.init)
+          bindings.set(declaration.id.name, [
+            ...(bindings.get(declaration.id.name) ?? []),
+            { kind: statement.kind, init: declaration.init },
+          ]);
+    }
+  }
+
+  const cwd = resolve(root, base);
+  const evaluate = (node, seen = new Set()) => {
+    node = unwrap(node);
+    if (node?.type === "StringLiteral") return node.value;
+    if (node?.type === "TemplateLiteral" && node.expressions.length === 0)
+      return node.quasis[0].value.cooked;
+    if (node?.type === "Identifier") {
+      if (seen.has(node.name)) return undefined;
+      const declarations = bindings.get(node.name);
+      if (declarations?.length !== 1 || declarations[0].kind !== "const") return undefined;
+      seen.add(node.name);
+      const value = evaluate(declarations[0].init, seen);
+      seen.delete(node.name);
+      return value;
+    }
+    if (node?.type !== "CallExpression" || node.callee.type !== "Identifier") return undefined;
+
+    const imported = imports.get(node.callee.name);
+    if (imported?.module === "node:url" && imported.name === "fileURLToPath") {
+      const argument = node.arguments[0];
+      if (node.arguments.length === 1 && isImportMetaUrl(argument)) return resolve(root, config);
+      return undefined;
+    }
+    const args = node.arguments.map((argument) => evaluate(argument, seen));
+    if (args.some((value) => typeof value !== "string")) return undefined;
+    if (
+      (imported?.module === "node:path" || imported?.module === "path") &&
+      imported.name === "resolve"
+    )
+      return resolve(cwd, ...args);
+    if (
+      (imported?.module === "node:path" || imported?.module === "path") &&
+      imported.name === "dirname" &&
+      args.length === 1
+    )
+      return dirname(args[0]);
+    return undefined;
+  };
+
+  const value = evaluate(expression);
+  if (typeof value !== "string") return false;
+  const configured = isAbsolute(value) ? resolve(value) : resolve(cwd, value);
+  return configured === cwd;
+}
+
+// Every literal test.include array and test.setupFiles value of every config,
+// inline projects too. Ambiguous scope or root options fail closed.
 function listTestFiles(root) {
   const files = new Set();
   for (const config of configFiles(root)) {
+    const ast = syntax(readFileSync(join(root, config), "utf8"), config);
     const blocks = [];
-    visit(syntax(readFileSync(join(root, config), "utf8"), config), (node) => {
+    visitWithParent(ast, (node, parent) => {
       if (
         node.type === "ObjectProperty" &&
         keyName(node.key, node.computed) === "test" &&
         unwrap(node.value).type === "ObjectExpression"
       )
-        blocks.push(unwrap(node.value));
+        blocks.push({ block: unwrap(node.value), parent });
     });
     // A plain Vite config (the Kit app's) carries no test block.
     if (blocks.length === 0 && /(^|\/)vite\.config\./.test(config)) continue;
     if (blocks.length === 0) throw new Error(`${config} has no literal test block`);
     const base = packageRoot(root, dirname(config));
-    for (const block of blocks) {
-      const option = (name) =>
-        unwrap(
-          block.properties.find(
-            (prop) => prop.type === "ObjectProperty" && keyName(prop.key, prop.computed) === name,
-          )?.value,
+    const packagePath = resolve(root, base);
+    for (const { block, parent } of blocks) {
+      if (parent?.type === "ObjectExpression") {
+        if (parent.properties.some((prop) => prop.type === "SpreadElement"))
+          throw new Error(`${config}: config options must not use object spreads`);
+        if (
+          parent.properties.some(
+            (prop) =>
+              (prop.type === "ObjectProperty" || prop.type === "ObjectMethod") &&
+              prop.computed &&
+              keyName(prop.key, prop.computed) === undefined,
+          )
+        )
+          throw new Error(`${config}: computed config option keys must be static`);
+        const roots = parent.properties.filter(
+          (prop) => keyName(prop.key, prop.computed) === "root",
         );
+        if (roots.length > 1) throw new Error(`${config}: root must be specified only once`);
+        if (roots.length === 1) {
+          if (
+            roots[0].type !== "ObjectProperty" ||
+            !configRootMatchesPackage(root, config, base, ast, roots[0].value)
+          )
+            throw new Error(`${config}: configured Vitest root must match the config package root`);
+        }
+      }
+      if (block.properties.some((prop) => prop.type === "SpreadElement"))
+        throw new Error(`${config}: test options must not use object spreads`);
+      if (
+        block.properties.some(
+          (prop) =>
+            (prop.type === "ObjectProperty" || prop.type === "ObjectMethod") &&
+            prop.computed &&
+            keyName(prop.key, prop.computed) === undefined,
+        )
+      )
+        throw new Error(`${config}: computed test option keys must be static`);
+      const option = (name) => {
+        const properties = block.properties.filter(
+          (prop) => keyName(prop.key, prop.computed) === name,
+        );
+        if (properties.length > 1)
+          throw new Error(`${config}: test.${name} must be specified only once`);
+        const property = properties[0];
+        if (property && property.type !== "ObjectProperty") {
+          const detail =
+            name === "setupFiles"
+              ? "must be a literal string or string array"
+              : "must be a static property";
+          throw new Error(`${config}: test.${name} ${detail}`);
+        }
+        return unwrap(property?.value);
+      };
+      const testRoot = option("root");
+      if (testRoot && !configRootMatchesPackage(root, config, base, ast, testRoot))
+        throw new Error(`${config}: configured Vitest root must match the config package root`);
+      const setup = option("setupFiles");
+      if (setup !== undefined) {
+        const setupFiles =
+          setup.type === "StringLiteral"
+            ? [setup.value]
+            : setup.type === "ArrayExpression" &&
+                setup.elements.every((item) => item?.type === "StringLiteral")
+              ? setup.elements.map((item) => item.value)
+              : undefined;
+        if (!setupFiles)
+          throw new Error(`${config}: test.setupFiles must be a literal string or string array`);
+        for (const setupFile of setupFiles) {
+          const file = normalize(relative(root, resolve(packagePath, setupFile)));
+          if (isAbsolute(file) || file === ".." || file.startsWith(`..${sep}`))
+            throw new Error(`${config}: test.setupFiles must stay inside the repository`);
+          files.add(file);
+        }
+      }
       const include = option("include");
       // A projects block runs each project's own test block instead.
       if (!include && option("projects")) continue;
@@ -473,8 +631,8 @@ function listTestFiles(root) {
   return [...files].sort();
 }
 
-// The configured files plus every module they import through a relative
-// path, transitively.
+// Configured test files and setupFiles modules, plus every module they import
+// through a relative path, transitively.
 function scanScope(ctx, files) {
   const queue = [...files];
   const seen = new Set(queue);
@@ -547,7 +705,7 @@ export function checkLedger(root, output = console) {
   try {
     files = listTestFiles(root);
   } catch (error) {
-    output.error(`timeout ledger: cannot enumerate Vitest includes: ${error.message}`);
+    output.error(`timeout ledger: cannot enumerate Vitest scope: ${error.message}`);
     return 2;
   }
   const ctx = project(root);
@@ -877,7 +1035,7 @@ function selftest() {
       { "vitest.config.ts": "export default { test: { include: dynamicScope } };" },
       [],
       2,
-      ["cannot enumerate Vitest includes"],
+      ["cannot enumerate Vitest scope"],
     );
     check(
       "new configured include is scanned without a directory allowlist edit",
@@ -1168,13 +1326,188 @@ function selftest() {
       ["5 sub-default"],
     );
 
-    // Scope: every Vitest config the repo runs, every include array.
+    check(
+      "unlisted timeout in a setupFiles module fails",
+      {
+        "vitest.config.ts":
+          'export default { test: { include: ["test/**/*.test.ts"], testTimeout: 30_000, setupFiles: "./test/setup.ts" } };',
+        "test/a.test.ts": 'it("uses setup config", () => {});',
+        "test/setup.ts": 'import { vi } from "vitest"; vi.setConfig({ testTimeout: 5000 });',
+      },
+      [],
+      1,
+      ["test/setup.ts:1 (5000 ms)"],
+    );
+    check(
+      "a setupFiles timeout passes with an exact pin from its package root",
+      {
+        "test/ok.test.ts": 'it("ok", () => {});',
+        "web/package.json": "{}",
+        "web/vite.config.ts":
+          'export default { test: { include: ["src/**/*.test.ts"], testTimeout: 30_000, setupFiles: ["./test/setup.ts"] } };',
+        "web/src/a.test.ts": 'it("uses setup config", () => {});',
+        "web/test/setup.ts": 'import { vi } from "vitest"; vi.setConfig({ testTimeout: 5000 });',
+      },
+      ["| `web/test/setup.ts` (1× 5 s) | 5 s | Sets the per-test limit |"],
+      0,
+    );
+    check(
+      "imports from a setupFiles module are scanned",
+      {
+        "vitest.config.ts":
+          'export default { test: { include: ["test/**/*.test.ts"], testTimeout: 30_000, setupFiles: ["./test/setup.ts"] } };',
+        "test/a.test.ts": 'it("uses setup config", () => {});',
+        "test/setup.ts": 'import { configure } from "./setup-helper"; configure();',
+        "test/setup-helper.ts": 'import { vi } from "vitest"; vi.setConfig({ testTimeout: 5000 });',
+      },
+      [],
+      1,
+      ["test/setup-helper.ts:1 (5000 ms)"],
+    );
+    check(
+      "non-literal setupFiles scope fails closed",
+      {
+        "vitest.config.ts":
+          'export default { test: { include: ["test/**/*.test.ts"], testTimeout: 30_000, setupFiles } };',
+        "test/a.test.ts": 'it("uses setup config", () => {});',
+      },
+      [],
+      2,
+      ["test.setupFiles must be a literal string or string array"],
+    );
+    check(
+      "spread-provided setupFiles scope fails closed",
+      {
+        "vitest.config.ts": [
+          'const shared = { setupFiles: ["./test/setup.ts"] };',
+          'export default { test: { ...shared, include: ["test/**/*.test.ts"], testTimeout: 30_000 } };',
+        ].join("\n"),
+        "test/a.test.ts": 'it("uses setup config", () => {});',
+        "test/setup.ts": 'import { vi } from "vitest"; vi.setConfig({ testTimeout: 5000 });',
+      },
+      [],
+      2,
+      ["test options must not use object spreads"],
+    );
+    check(
+      "duplicate setupFiles properties fail closed",
+      {
+        "vitest.config.ts":
+          'export default { test: { include: ["test/**/*.test.ts"], testTimeout: 30_000, setupFiles: "./test/first.ts", setupFiles: "./test/last.ts" } };',
+        "test/a.test.ts": 'it("uses setup config", () => {});',
+        "test/first.ts": "// no timeout",
+        "test/last.ts": 'import { vi } from "vitest"; vi.setConfig({ testTimeout: 5000 });',
+      },
+      [],
+      2,
+      ["test.setupFiles must be specified only once"],
+    );
+    check(
+      "computed setupFiles keys fail closed",
+      {
+        "vitest.config.ts": [
+          'const key = "setupFiles";',
+          'export default { test: { include: ["test/**/*.test.ts"], testTimeout: 30_000, [key]: ["./test/setup.ts"] } };',
+        ].join("\n"),
+        "test/a.test.ts": 'it("uses setup config", () => {});',
+        "test/setup.ts": 'import { vi } from "vitest"; vi.setConfig({ testTimeout: 5000 });',
+      },
+      [],
+      2,
+      ["computed test option keys must be static"],
+    );
+    check(
+      "duplicate include properties fail closed",
+      {
+        "vitest.config.ts":
+          'export default { test: { include: ["clean/**/*.test.ts"], ["include"]: ["dirty/**/*.test.ts"], testTimeout: 30_000 } };',
+        "clean/a.test.ts": 'it("clean", () => {});',
+        "dirty/b.test.ts": 'it("slow", () => {}, 5000);',
+      },
+      [],
+      2,
+      ["test.include must be specified only once"],
+    );
+    check(
+      "duplicate testTimeout properties fail closed",
+      {
+        "vitest.config.ts":
+          'export default { test: { include: ["test/**/*.test.ts"], testTimeout: 30_000, testTimeout: 60_000 } };',
+        "test/a.test.ts": 'it("medium", () => {}, 40_000);',
+      },
+      [],
+      2,
+      ["test.testTimeout must be specified only once"],
+    );
+    check(
+      "top-level root override fails closed",
+      {
+        "vitest.config.ts":
+          'export default { root: "sub", test: { include: ["test/**/*.test.ts"], testTimeout: 30_000, setupFiles: "./setup.ts" } };',
+        "test/a.test.ts": 'it("uses setup config", () => {});',
+        "setup.ts": "// no timeout",
+        "sub/test/a.test.ts": 'it("uses setup config", () => {});',
+        "sub/setup.ts": 'import { vi } from "vitest"; vi.setConfig({ testTimeout: 5000 });',
+      },
+      [],
+      2,
+      ["configured Vitest root must match the config package root"],
+    );
+    check(
+      "test.root override fails closed",
+      {
+        "vitest.config.ts":
+          'export default { test: { root: "sub", include: ["test/**/*.test.ts"], testTimeout: 30_000, setupFiles: "./setup.ts" } };',
+        "test/a.test.ts": 'it("uses setup config", () => {});',
+        "setup.ts": "// no timeout",
+        "sub/test/a.test.ts": 'it("uses setup config", () => {});',
+        "sub/setup.ts": 'import { vi } from "vitest"; vi.setConfig({ testTimeout: 5000 });',
+      },
+      [],
+      2,
+      ["configured Vitest root must match the config package root"],
+    );
+    check(
+      "config-level root spread fails closed",
+      {
+        "vitest.config.ts": [
+          'const shared = { root: "sub" };',
+          'export default { ...shared, test: { include: ["test/**/*.test.ts"], testTimeout: 30_000 } };',
+        ].join("\n"),
+        "test/a.test.ts": 'it("uses setup config", () => {});',
+        "sub/test/a.test.ts": 'it("uses setup config", () => {});',
+      },
+      [],
+      2,
+      ["config options must not use object spreads"],
+    );
+    check(
+      "computed config root keys fail closed",
+      {
+        "vitest.config.ts": [
+          'const key = "root";',
+          'export default { [key]: "sub", test: { include: ["test/**/*.test.ts"], testTimeout: 30_000 } };',
+        ].join("\n"),
+        "test/a.test.ts": 'it("uses setup config", () => {});',
+        "sub/test/a.test.ts": 'it("uses setup config", () => {});',
+      },
+      [],
+      2,
+      ["computed config option keys must be static"],
+    );
+
+    // Scope: every Vitest config, include array and setupFiles path.
     check(
       "a second Vitest config's includes are scanned",
       {
-        "tier0/vitest.config.ts":
-          'export default { root: repoRoot, test: { include: ["tier0/**/*.test.ts"], testTimeout: 30_000 } };',
+        "tier0/vitest.config.ts": [
+          'import { fileURLToPath } from "node:url";',
+          'import { dirname, resolve } from "node:path";',
+          'const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");',
+          'export default { root: repoRoot, test: { include: ["tier0/**/*.test.ts"], setupFiles: ["./test/setup.ts"], testTimeout: 30_000 } };',
+        ].join("\n"),
         "tier0/a.test.ts": 'it("tier0", () => {}, 5000);',
+        "test/setup.ts": "// no timeout",
         "test/ok.test.ts": 'it("ok", () => {});',
       },
       [],

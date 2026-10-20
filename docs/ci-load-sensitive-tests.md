@@ -26,7 +26,12 @@ job (`npm run ledger:timeouts:selftest && npm run ledger:timeouts`):
   `package.json` scripts). Today that is `vitest.config.ts` (`test/` plus
   `ci/audit-lifecycle.test.mjs`) and `tier0/vitest.config.ts` (`tier0/`). The
   gate scans every file an `include` glob matches, even excluded or opt-in
-  cases, plus every module those files import through a relative path. Each
+  cases, each literal `test.setupFiles` path (a string or string array resolved
+  from the config's package root), and every module those files import through
+  a relative path. The gate fails closed on non-literal or duplicate
+  `setupFiles`, duplicate `include` or `testTimeout` keys, object spreads and
+  dynamic computed keys in the config and `test` options, and explicit roots
+  that are not statically verified to match the config's package root. Each
   config `test` block keeps `testTimeout: 30_000`.
 - Limits: a per-test timeout literal below the 30 s default (`0`, which turns
   the limit off, counts too) that Vitest reads as a timeout: the third
