@@ -97,7 +97,12 @@ function route(request, origin, state, options) {
     .map((part) => part.trim())
     .find((part) => part.startsWith("__Host-two_session="))
     ?.slice("__Host-two_session=".length);
-  const authed = presented !== undefined && state.live.has(presented);
+  const graceLive =
+    presented !== undefined &&
+    state.grace.has(presented) &&
+    state.grace.get(presented) > Date.now() &&
+    state.live.has(ROTATED);
+  const authed = presented !== undefined && (state.live.has(presented) || graceLive);
   const html = (status, body, headers = {}) => ({
     status,
     headers: { "content-type": "text/html; charset=UTF-8", ...headers },
@@ -144,9 +149,13 @@ function route(request, origin, state, options) {
     return ["status", json(200, JSON.stringify({ authenticated: authed }))];
   if (url.pathname === "/") {
     if (authed && options.rotate) {
-      // Every authenticated page view rotates: the old row is gone for replays.
+      // Every authenticated page view rotates. With grace, the predecessor
+      // keeps authenticating until the test-scaled deadline (like the
+      // product's fixed window, never extended by reads); without it the
+      // old row is gone for replays immediately.
       state.live.delete(presented);
       state.live.add(ROTATED);
+      if (options.graceMs > 0) state.grace.set(presented, Date.now() + options.graceMs);
       return [
         "home",
         html(200, "<html>home</html>", {
@@ -183,10 +192,10 @@ function route(request, origin, state, options) {
 async function stub(
   t,
   change = () => {},
-  { missingShowRoute = false, rotate = true, revoke = true } = {},
+  { missingShowRoute = false, rotate = true, revoke = true, graceMs = 0 } = {},
 ) {
   const requests = [];
-  const state = { live: new Set(), rays: 0 };
+  const state = { live: new Set(), grace: new Map(), rays: 0 };
   const timers = new Set();
   const later = (fn, ms) => {
     const timer = setTimeout(() => {
@@ -209,7 +218,12 @@ async function stub(
         qa: request.headers["x-two-qa-auth"],
         cookie: request.headers.cookie,
       });
-      const [id, result] = route(request, origin, state, { rotate, revoke, missingShowRoute });
+      const [id, result] = route(request, origin, state, {
+        rotate,
+        revoke,
+        missingShowRoute,
+        graceMs,
+      });
       change(id, result, {
         originHeader: request.headers.origin,
         qaHeader: request.headers["x-two-qa-auth"],
@@ -248,7 +262,16 @@ async function stub(
 
 async function run(url, options = {}) {
   const output = [];
-  const ok = await jsonSmoke(url, { token: TOKEN, log: (line) => output.push(line), ...options });
+  // Test-scaled grace bounds: the product window is 10s, but these keep the
+  // loopback suite fast while still exercising the poll. Individual tests
+  // override both to pin the bounded-window behavior either way.
+  const ok = await jsonSmoke(url, {
+    token: TOKEN,
+    log: (line) => output.push(line),
+    predecessorGraceMs: 300,
+    replayPollMs: 25,
+    ...options,
+  });
   return { ok, output: output.join("\n") };
 }
 
@@ -636,12 +659,43 @@ test("fails rotation when the page view leaves the old cookie authenticating", a
   assert.equal(result.ok, false);
   assert.ok(
     result.output.includes(
-      "FAIL session rotation replay: expected old cookie unauthenticated and replacement authenticated on /auth/status; actual no replacement session cookie; no replacement status cookie; old cookie still authenticates",
+      "FAIL session rotation replay: expected old cookie unauthenticated after predecessor grace and replacement authenticated on /auth/status; actual no replacement session cookie; no replacement status cookie; old cookie still authenticates",
     ),
     result.output,
   );
   // The unrotated cookie is still the live one, so logout is judged on its own.
   assert.ok(result.output.includes("PASS logout revokes session"), result.output);
+  assert.ok(!result.output.includes("never-log-this"), result.output);
+});
+
+test("passes rotation when the old cookie dies once predecessor grace ends", async (t) => {
+  // Server grace (150ms) shorter than the probe's window (300ms): the old
+  // cookie authenticates on the first replays, then stops, and the check
+  // passes only by polling past the window.
+  const { url, requests } = await stub(t, () => {}, { graceMs: 150 });
+  const result = await run(url);
+  assert.equal(result.ok, true, result.output);
+  assert.ok(result.output.includes("PASS session rotation replay"), result.output);
+  const homeAt = requests.findIndex((request) => request.path === "/");
+  const statuses = requests.slice(homeAt + 1).filter((request) => request.path === "/auth/status");
+  const oldProbes = statuses.filter(
+    (request) => request.cookie === `__Host-two_session=${SESSION}`,
+  ).length;
+  assert.ok(oldProbes >= 2, `expected the probe to poll the old cookie, saw ${oldProbes}`);
+  assert.ok(!result.output.includes("never-log-this"), result.output);
+});
+
+test("fails rotation when the old cookie outlives predecessor grace", async (t) => {
+  // Server keeps the predecessor valid far past the probe's bounded window:
+  // grace tolerance must not become unbounded replay tolerance.
+  const { url } = await stub(t, () => {}, { graceMs: 60_000 });
+  const result = await run(url);
+  assert.equal(result.ok, false);
+  assert.ok(
+    result.output.includes("FAIL session rotation replay") &&
+      result.output.includes("old cookie still authenticates"),
+    result.output,
+  );
   assert.ok(!result.output.includes("never-log-this"), result.output);
 });
 
