@@ -24,14 +24,110 @@ export function recoveryGuide() {
   return { path, body: readRepo(path) };
 }
 
+function isTagNameChar(ch: string): boolean {
+  return (ch >= "0" && ch <= "9") || (ch >= "A" && ch <= "Z") || (ch >= "a" && ch <= "z");
+}
+
+function isHtmlSpace(ch: string): boolean {
+  return ch === " " || ch === "\t" || ch === "\n" || ch === "\f" || ch === "\r";
+}
+
+// Scan a tag starting at the "<" at index `start`. Returns the index just
+// past the closing ">", the lowercased tag name and whether it closes, or
+// null when there is no well-formed tag here (a stray "<" stays text).
+// Quoted attribute values may contain ">".
+function scanTag(
+  html: string,
+  start: number,
+): { end: number; name: string; closing: boolean } | null {
+  let i = start + 1;
+  let closing = false;
+  if (html.charAt(i) === "/") {
+    closing = true;
+    i++;
+  }
+  if (closing) {
+    while (isHtmlSpace(html.charAt(i))) i++;
+  }
+  const nameStart = i;
+  while (isTagNameChar(html.charAt(i))) i++;
+  if (i === nameStart) return null;
+  const name = html.slice(nameStart, i).toLowerCase();
+  let quote = "";
+  while (i < html.length) {
+    const ch = html.charAt(i);
+    if (quote) {
+      if (ch === quote) quote = "";
+    } else if (ch === '"' || ch === "'") {
+      quote = ch;
+    } else if (ch === ">") {
+      return { end: i + 1, name, closing };
+    }
+    i++;
+  }
+  return null;
+}
+
+// Find the index just past the closing tag for `name` at or after `from`,
+// tolerating whitespace and case inside the closer ("</script >", "</SCRIPT>").
+// Returns -1 when the element never closes.
+function scanClosingTag(html: string, from: number, name: string): number {
+  let i = from;
+  while (i < html.length) {
+    const next = html.indexOf("<", i);
+    if (next === -1) return -1;
+    const tag = scanTag(html, next);
+    if (tag?.closing && tag.name === name) return tag.end;
+    i = next + 1;
+  }
+  return -1;
+}
+
+// Visible-text extraction as a single-pass token scan: tags, comments and
+// declarations become one space, script/style bodies are skipped through
+// their closer, and anything else (including a stray "<") stays text.
 export function htmlText(html: string) {
-  return html
-    .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, "")
-    .replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, "")
-    .replace(/<[^>]*>/g, " ")
-    .replace(/&#x27;|&#39;|&apos;/g, "'")
-    .replace(/&quot;/g, '"')
-    .replace(/&amp;/g, "&")
+  const parts: string[] = [];
+  let i = 0;
+  while (i < html.length) {
+    if (html.startsWith("<!--", i)) {
+      const end = html.indexOf("-->", i + 4);
+      i = end === -1 ? html.length : end + 3;
+      parts.push(" ");
+      continue;
+    }
+    if (html.charAt(i) === "<" && (html.charAt(i + 1) === "!" || html.charAt(i + 1) === "?")) {
+      const end = html.indexOf(">", i + 2);
+      i = end === -1 ? html.length : end + 1;
+      parts.push(" ");
+      continue;
+    }
+    if (html.charAt(i) === "<") {
+      const tag = scanTag(html, i);
+      if (!tag) {
+        parts.push("<");
+        i++;
+        continue;
+      }
+      if (!tag.closing && (tag.name === "script" || tag.name === "style")) {
+        const end = scanClosingTag(html, tag.end, tag.name);
+        i = end === -1 ? html.length : end;
+      } else {
+        i = tag.end;
+      }
+      parts.push(" ");
+      continue;
+    }
+    parts.push(html.charAt(i));
+    i++;
+  }
+  return parts
+    .join("")
+    .replaceAll("&#x27;", "'")
+    .replaceAll("&#39;", "'")
+    .replaceAll("&apos;", "'")
+    .replaceAll("&quot;", '"')
+    .replaceAll("&amp;", "&")
     .replace(/\s+/g, " ")
     .trim();
 }
