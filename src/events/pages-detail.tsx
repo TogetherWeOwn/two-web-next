@@ -111,11 +111,19 @@ export const EventPage: FC<{
       {joinResult ? <JoinResultBanner result={joinResult} /> : null}
       <dl class="event-meta" aria-label="Event details">
         <div>
-          <dt>When</dt>
+          <dt>Starts</dt>
           <dd>
             <time datetime={e.startsAt.toISOString()}>
               {fmtWithOffset(e.startsAt, e.timezone)} (
               {isValidZone(e.timezone) ? e.timezone : "UTC"})
+            </time>
+          </dd>
+        </div>
+        <div>
+          <dt>Ends</dt>
+          <dd>
+            <time datetime={e.endsAt.toISOString()}>
+              {fmtWithOffset(e.endsAt, e.timezone)} ({isValidZone(e.timezone) ? e.timezone : "UTC"})
             </time>
           </dd>
         </div>

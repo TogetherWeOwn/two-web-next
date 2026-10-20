@@ -135,6 +135,8 @@ export interface KitEventDetailModel {
   copyLink: string;
   /** Server-formatted wall time in the event zone, ISO fallback. */
   whenText: string;
+  /** Server-formatted scheduled end in the event zone, ISO fallback. */
+  endsWhenText: string;
   /** Effective display zone (UTC when the stored zone is unknown). */
   zoneLabel: string;
   /** Machine instant for the <time> element, as served. */
@@ -469,6 +471,7 @@ export async function resolveKitEventDetail(
           googleCalendarUrl: googleCalendarUrl(event),
           copyLink: pageCanonical,
           whenText: formatEventWhen(event.startsAt, event.timezone),
+          endsWhenText: formatEventWhen(event.endsAt, event.timezone),
           zoneLabel: isValidZone(event.timezone) ? event.timezone : "UTC",
           timeDatetime: event.startsAt.toISOString(),
           attendees,
