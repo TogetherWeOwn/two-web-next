@@ -3,9 +3,10 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
 const workflow = readFileSync(".github/workflows/db-backup.yml", "utf8");
-const validation = workflow.match(
-  /      - name: Validate branch and target\n        run: \|\n((?:          [^\n]*\n)+)/,
-)?.[1];
+const validationStep = workflow.match(
+  /^      - name: Validate branch and target\n(?:(?!^      - ).*\n)*/m,
+)?.[0];
+const validation = validationStep?.match(/        run: \|\n((?:          [^\n]*\n)+)/)?.[1];
 
 function validate(target: string, branch: string) {
   return spawnSync("python3", ["bin/backup/branch-target-helper", target, branch], {
@@ -76,6 +77,8 @@ describe("backup branch/target admission", () => {
   });
 
   it("runs the shared validator before provisioning, without a ready/secret condition", () => {
+    expect(validationStep).toBeDefined();
+    expect(validationStep).not.toMatch(/^ {8}if:/m);
     expect(validation).toBeDefined();
     expect(workflow.indexOf("name: Validate branch and target")).toBeLessThan(
       workflow.indexOf("- id: probe"),
