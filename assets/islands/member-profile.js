@@ -247,6 +247,8 @@
     // A successful accept clears obsolete field errors; called only while
     // the request still owns feedback (generation guard at the call site).
     clearFieldErrors();
+    // Counts follow the normalized live values, not the submitted draft.
+    refreshCounts();
     return unchanged;
   }
 
@@ -274,6 +276,71 @@
             ? "leaderboard_opt_out"
             : null;
   }
+
+  // Composition feedback: the SSR hint/count nodes (seeded copy mirrored
+  // from src/profiles/composition.ts) refresh after input, explicit reset
+  // and accepted-save normalization. Code-point counts mirror the server
+  // validator exactly; typing never requests, truncates, validates or
+  // announces. Older markup without the nodes is left alone, never rebuilt.
+  var BIO_LIMIT = 1000;
+  var GAMES_RAW_LIMIT = 1700;
+  var GAME_NAME_LIMIT = 80;
+  var GAMES_COUNT_LIMIT = 20;
+  function codePoints(s) {
+    return Array.from(s).length;
+  }
+  function parseGamesText(value) {
+    var names = [];
+    var overlong = [];
+    value.split(/\r\n|\r|\n/).forEach(function (line, index) {
+      var trimmed = line.trim();
+      if (Array.from(trimmed).length > GAME_NAME_LIMIT) overlong.push(index + 1);
+      if (trimmed !== "" && names.indexOf(trimmed) < 0) names.push(trimmed);
+    });
+    return { names: names, raw: Array.from(value).length, overlong: overlong };
+  }
+  function bioCountText(count) {
+    return count <= BIO_LIMIT
+      ? count + " of 1000 characters"
+      : count + " of 1000 characters (" + (count - BIO_LIMIT) + " over the limit)";
+  }
+  function gamesCountText(facts) {
+    var distinct = facts.names.length;
+    var games =
+      distinct <= GAMES_COUNT_LIMIT
+        ? distinct + " of 20 games"
+        : distinct + " of 20 games (" + (distinct - GAMES_COUNT_LIMIT) + " over the limit)";
+    var raw =
+      facts.raw <= GAMES_RAW_LIMIT
+        ? facts.raw + " of 1700 characters"
+        : facts.raw + " of 1700 characters (" + (facts.raw - GAMES_RAW_LIMIT) + " over the limit)";
+    var lines =
+      facts.overlong.length === 0
+        ? ""
+        : ", line" +
+          (facts.overlong.length === 1 ? "" : "s") +
+          " " +
+          facts.overlong.join(", ") +
+          " over 80 characters";
+    return games + ", " + raw + lines;
+  }
+  function refreshCounts() {
+    var bio = form.elements.bio;
+    var bioCount = root.querySelector('[id="profile-bio-count"]');
+    if (bio && bioCount) bioCount.textContent = bioCountText(codePoints(bio.value));
+    var games = form.elements.games_text;
+    var gamesCount = root.querySelector('[id="profile-games-text-count"]');
+    if (games && gamesCount) gamesCount.textContent = gamesCountText(parseGamesText(games.value));
+  }
+  // Native reset restores the defaults after its handlers run, so the reset
+  // refresh must land past it; a microtask beats the next paint and works
+  // where only setTimeout exists.
+  var deferRefresh =
+    typeof queueMicrotask !== "undefined"
+      ? queueMicrotask
+      : function (fn) {
+          setTimeout(fn, 0);
+        };
 
   function clientErrors(bio, games, tz) {
     var e = [];
@@ -548,6 +615,8 @@
     form.hidden = false;
     if (editControl) editControl.hidden = true;
     clearNotices();
+    // Counts refresh from the restored values once native reset lands them.
+    deferRefresh(refreshCounts);
     // The draft that "still finishing" promised to keep is gone: an unsettled
     // write goes back to the plain saving line.
     if (pending) setPending(true);
@@ -563,6 +632,12 @@
     form.addEventListener(type, function () {
       if (pending) editing = true;
     });
+  });
+
+  // Live composition counts refresh the SSR nodes in place: no request, no
+  // truncation, no validation, no announcement.
+  form.addEventListener("input", function () {
+    refreshCounts();
   });
 
   form.addEventListener("submit", function (ev) {

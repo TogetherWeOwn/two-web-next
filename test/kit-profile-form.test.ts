@@ -122,8 +122,15 @@ describe("Kit profile view: 422 re-render keeps the Hono form contract", () => {
     for (const field of ["profile-bio", "profile-games-text", "profile-timezone"]) {
       expect(html).toContain(`id="${field}-error"`);
       expect(html).toContain('aria-invalid="true"');
-      expect(html).toContain(`aria-describedby="${field}-error"`);
     }
+    // Composition hints stay associated alongside the field errors.
+    expect(html).toContain(
+      'aria-describedby="profile-bio-hint profile-bio-count profile-bio-error"',
+    );
+    expect(html).toContain(
+      'aria-describedby="profile-games-text-hint profile-games-text-count profile-games-text-error"',
+    );
+    expect(html).toContain('aria-describedby="profile-timezone-error"');
     expect(html).toContain("Keep your bio to 1000 characters or fewer.");
     expect(html).toContain("Add no more than 20 games.");
   });
@@ -158,9 +165,11 @@ describe("Kit profile view: 422 re-render keeps the Hono form contract", () => {
     );
     // The draft lands in the controls; the read-only section above still
     // shows the stored record until the save succeeds (same as the Hono page).
-    expect(html).toContain('<textarea id="profile-bio" name="bio" rows="4">draft bio</textarea>');
     expect(html).toContain(
-      '<textarea id="profile-games-text" name="games_text" rows="4">draft game</textarea>',
+      '<textarea id="profile-bio" name="bio" rows="4" aria-describedby="profile-bio-hint profile-bio-count">draft bio</textarea>',
+    );
+    expect(html).toContain(
+      '<textarea id="profile-games-text" name="games_text" rows="4" aria-describedby="profile-games-text-hint profile-games-text-count">draft game</textarea>',
     );
     expect(html).toContain('value="Mars/Olympus"');
   });
