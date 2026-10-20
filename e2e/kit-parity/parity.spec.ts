@@ -680,7 +680,9 @@ for (const target of targets) {
         "/leaderboards/members?season=bogus",
         "/leaderboards/members?scope=friends",
         "/leaderboards/members?scope=bogus",
-        "/leaderboards/members?activity=chess!",
+        // Punctuation is a valid savable game name, so the activity
+        // refusal pin uses an overlong value (101 chars > 100 max).
+        `/leaderboards/members?activity=${"a".repeat(101)}`,
       ]) {
         const response = await api(target).get(path, { headers: { cookie } });
         expect(response.status(), `${target.name} ${path}`).toBe(400);
