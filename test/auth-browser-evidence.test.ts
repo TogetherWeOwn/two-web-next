@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -92,7 +92,7 @@ describe("auth-browser evidence guard", () => {
     }
   });
 
-  it("rejects a six-check report with an empty, partial, or padded screenshot list", () => {
+  it("rejects a six-check report with an empty, partial, padded, duplicate, or wrong-name screenshot list", () => {
     const dir = mkdtempSync(join(tmpdir(), "auth-guard-"));
     try {
       for (const screenshots of [
@@ -100,7 +100,9 @@ describe("auth-browser evidence guard", () => {
         ["auth-success.png"],
         ["auth-success.png", "auth-replay.png", "join-success.png", "join-replay.png", "extra.png"],
         ["auth-success.png", "auth-success.png", "join-success.png", "join-replay.png"],
+        ["auth-success.png", "auth-replay.png", "join-success.png", "other.png"],
       ]) {
+        for (const shot of screenshots) writeFileSync(join(dir, shot), "fake-png");
         writeFileSync(
           join(dir, "result.json"),
           JSON.stringify({ checks: [1, 2, 3, 4, 5, 6], unexpectedRequests: 0, screenshots }),
@@ -130,6 +132,33 @@ describe("auth-browser evidence guard", () => {
           ],
         }),
       );
+      expect(() => checkAuthBrowserEvidence(dir)).toThrow(/screenshot .* is missing or empty/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it.each(["empty file", "directory"])("rejects a screenshot path containing: %s", (kind) => {
+    const dir = mkdtempSync(join(tmpdir(), "auth-guard-"));
+    try {
+      const screenshots = [
+        "auth-success.png",
+        "auth-replay.png",
+        "join-success.png",
+        "join-replay.png",
+      ];
+      for (const shot of screenshots) writeFileSync(join(dir, shot), "fake-png");
+      writeFileSync(
+        join(dir, "result.json"),
+        JSON.stringify({ checks: [1, 2, 3, 4, 5, 6], unexpectedRequests: 0, screenshots }),
+      );
+      const shotPath = join(dir, "join-replay.png");
+      if (kind === "directory") {
+        rmSync(shotPath);
+        mkdirSync(shotPath);
+      } else {
+        writeFileSync(shotPath, "");
+      }
       expect(() => checkAuthBrowserEvidence(dir)).toThrow(/screenshot .* is missing or empty/);
     } finally {
       rmSync(dir, { recursive: true, force: true });

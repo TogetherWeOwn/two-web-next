@@ -59,7 +59,7 @@ export function checkAuthBrowserEvidence(dir = "artifacts/auth-browser") {
     throw new Error(`${dir}: ${EVIDENCE_RESULT} must list all four screenshots`);
   for (const shot of report.screenshots) {
     const shotPath = join(dir, shot);
-    if (!existsSync(shotPath) || statSync(shotPath).size === 0)
+    if (!existsSync(shotPath) || !statSync(shotPath).isFile() || statSync(shotPath).size === 0)
       throw new Error(`${dir}: screenshot ${shot} is missing or empty`);
   }
   return `${dir}: auth-browser evidence present (${files.length} files, ${EXPECTED_CHECKS} checks, 0 unexpected requests)`;
