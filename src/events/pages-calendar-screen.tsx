@@ -200,6 +200,7 @@ export const EventsCalendarPage: FC<{
           ) : null}
         </div>
       </section>
+      <script src="/islands/copy-link.js" defer />
       <script src="/islands/events-calendar.js" defer />
     </ScheduleShell>
   );

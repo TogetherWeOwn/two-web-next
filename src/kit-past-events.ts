@@ -11,7 +11,6 @@ import {
   writeAnonCache,
 } from "./events/anon-cache";
 import { normalizePastPage } from "./events/reads";
-import { subscriptionHelpHtml } from "./events/subscription-help";
 import { publicReadGuard } from "./events/routes-shared";
 
 export type KitPublicReadGuard = (request: Request, env: Env) => Promise<Response | null>;
@@ -146,7 +145,6 @@ export async function loadPastArchivePage<Row>({
   hasMore: boolean;
   totalPages: number;
   appUrl: string;
-  subscriptionHelp: string;
 }> {
   let db: Db | null;
   try {
@@ -172,8 +170,6 @@ export async function loadPastArchivePage<Row>({
       hasMore,
       totalPages,
       appUrl: env.APP_URL,
-      // Render only on the server: importing JSX in the Svelte page ships its runtime.
-      subscriptionHelp: subscriptionHelpHtml(env.APP_URL),
     };
   } catch {
     setHeaders({ "cache-control": "private, no-store" });

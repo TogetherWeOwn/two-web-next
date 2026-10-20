@@ -14,6 +14,7 @@ import {
   pastEventsUrl,
 } from "../../../../../src/islands/contracts";
 import { feedUrl, rssUrl, webcalUrl } from "../../../../../src/events/feeds";
+import { SUBSCRIPTION_GUIDANCE } from "../../../../../src/events/subscription-copy";
 import { canonicalUrl } from "../../../../../src/seo";
 import type { PageProps } from "./$types";
 
@@ -22,7 +23,8 @@ import type { PageProps } from "./$types";
 let { data }: PageProps = $props();
 const { rows, page, hasMore, totalPages, appUrl } = $derived(data);
 const destination = $derived(pastEventsUrl(page));
-// A component-level <script> is Svelte's own; the island tag is emitted as markup.
+// A component-level <script> is Svelte's own; the island tags are emitted as markup.
+const copyLinkIsland = '<script src="/islands/copy-link.js" defer></' + "script>";
 const island = '<script src="/islands/past-events.js" defer></' + "script>";
 </script>
 
@@ -46,7 +48,21 @@ const island = '<script src="/islands/past-events.js" defer></' + "script>";
       <a href={webcalUrl(appUrl)} data-testid={EVENTS_SUBSCRIBE_TESTID}>{EVENTS_EMPTY_COPY.subscribe}</a>{" "}
       <a href={rssUrl(appUrl)}>RSS feed</a> <a href={feedUrl(appUrl)}>Download calendar (.ics)</a>
     </p>
-    {@html data.subscriptionHelp}
+    <!-- Static mirror of subscriptionHelp() (src/events/subscription-help.tsx):
+         {@html} inside this section leaves hydration anchors with no Hono
+         counterpart and breaks the cross-target section contract. -->
+    <details class="subscription-help">
+      <summary>How to subscribe to the calendar</summary>
+      <p>{SUBSCRIPTION_GUIDANCE[0]}</p>
+      <p>{SUBSCRIPTION_GUIDANCE[1]}</p>
+      <label for="calendar-feed-url">Calendar feed URL</label>
+      <div class="subscription-copy">
+        <input id="calendar-feed-url" type="text" value={feedUrl(appUrl)} readonly /><button class="btn" type="button" data-copy-link={feedUrl(appUrl)} data-copy-feed="true" hidden>Copy feed URL</button>
+      </div>
+      <p>Select the feed URL to copy it manually if Subscribe does not open your calendar app.</p>
+      <p role="status" aria-atomic="true" data-copy-toast></p>
+      <p>{SUBSCRIPTION_GUIDANCE[2]}</p>
+    </details>
     <div data-archive-state>
       {#if rows.length === 0}
         {#if totalPages === 0}
@@ -64,5 +80,6 @@ const island = '<script src="/islands/past-events.js" defer></' + "script>";
     <p><a href="/events">Back to upcoming events</a></p>
     <p role="status" data-archive-feedback></p>
   </section>
+  {@html copyLinkIsland}
   {@html island}
 </Shell>
