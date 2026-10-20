@@ -4,7 +4,7 @@ import { readFileSync } from "node:fs";
 import { extname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import {
   FEED_URL,
   ORIGIN,
@@ -27,12 +27,15 @@ let fixture: Awaited<ReturnType<typeof subscriptionFixture>>;
 const publicDir = fileURLToPath(new URL("../public/", import.meta.url).href);
 
 beforeAll(async () => {
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(new Date("2026-10-01T12:00:00Z"));
   fixture = await subscriptionFixture();
   browser = await chromium.launch({ headless: true });
 });
 afterAll(async () => {
   await browser?.close();
   fixture?.dispose();
+  vi.useRealTimers();
 });
 
 async function open(
@@ -41,7 +44,12 @@ async function open(
   javaScriptEnabled = true,
   viewport = { width: 1280, height: 800 },
 ) {
-  const context = await browser.newContext({ javaScriptEnabled, viewport });
+  const context = await browser.newContext({
+    javaScriptEnabled,
+    viewport,
+    locale: "en-GB",
+    timezoneId: "UTC",
+  });
   const errors: string[] = [];
   await context.addInitScript((initialMode) => {
     const settlements: Array<(ok: boolean) => void> = [];
@@ -119,6 +127,7 @@ async function open(
     }
   });
   const page = await context.newPage();
+  await page.clock.setFixedTime(new Date("2026-10-01T12:00:00Z"));
   page.on("pageerror", (error) => errors.push(error.message));
   try {
     await page.goto(

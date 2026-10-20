@@ -2,7 +2,7 @@
 // route-inventory: GET /events/past
 // Independent, immutable acceptance handoff. Builder incorporates this history
 // unchanged; corrections belong to the test author. No runtime source changes.
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import {
   FEED_URL,
   ORIGIN,
@@ -12,9 +12,14 @@ import {
 
 let fixture: Awaited<ReturnType<typeof subscriptionFixture>>;
 beforeAll(async () => {
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(new Date("2026-10-01T12:00:00Z"));
   fixture = await subscriptionFixture();
 });
-afterAll(() => fixture?.dispose());
+afterAll(() => {
+  fixture?.dispose();
+  vi.useRealTimers();
+});
 
 function text(html: string) {
   return html
