@@ -54,11 +54,11 @@ describe("member leaderboard grammar", () => {
     expect(parseActivityParam("")).toEqual({ ok: true, game: null });
     expect(parseActivityParam("   ")).toEqual({ ok: true, game: null });
     expect(parseActivityParam("  Chess ")).toEqual({ ok: true, game: "chess" });
-    expect(parseActivityParam("a".repeat(64))).toEqual({ ok: true, game: "a".repeat(64) });
+    expect(parseActivityParam("a".repeat(100))).toEqual({ ok: true, game: "a".repeat(100) });
   });
 
-  it("rejects empty, over-long and out-of-alphabet names", () => {
-    for (const raw of ["a".repeat(65), "chess!", "ch/ess"])
+  it("rejects over-long and control-bearing names", () => {
+    for (const raw of ["a".repeat(101), "chess\u0000", "ch\u0007ess"])
       expect(parseActivityParam(raw).ok).toBe(false);
   });
 });

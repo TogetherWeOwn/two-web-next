@@ -198,7 +198,7 @@ describe("Kit member-board load parity", () => {
       { seasonParam: "bogus" },
       { scopeParam: "friends" },
       { scopeParam: "bogus" },
-      { activityParam: "chess!" },
+      { activityParam: "chess\u0000" },
     ]) {
       const dbForFn = vi.fn(async () => ({}) as never);
       const loadRankingFn = vi.fn(async () => ranked);
