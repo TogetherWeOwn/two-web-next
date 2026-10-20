@@ -94,6 +94,7 @@ beforeAll(async () => {
   const scratchRoot =
     process.env.PAPERCLIP_RUN_SCRATCH_DIR ??
     process.env.PAPERCLIP_SCRATCH_DIR ??
+    process.env.RUNNER_TEMP ??
     process.env.TMPDIR;
   if (!scratchRoot)
     throw new Error("Set TMPDIR to an owned scratch directory for the SSR compilation fixture.");
@@ -361,6 +362,23 @@ describe.each<Editor>(["Hono", "Kit"])("%s device timezone acceptance", (editor)
       await noPrivateEffects(page);
     });
   }
+  it("activation preserves other unsaved field and leaderboard choices", async () => {
+    const { page, requests, store } = await openProfile();
+    await page.locator('[name="bio"]').fill("An unsaved bio");
+    await page.locator('[name="games_text"]').fill("Unsaved game");
+    await page.locator("#profile-leaderboard-opt-out").uncheck();
+    await activate(page);
+    expect(await state(page)).toEqual({
+      timezone: DEVICE,
+      bio: "An unsaved bio",
+      games: "Unsaved game",
+      leaderboard: false,
+      dirty: true,
+    });
+    expect(await store.find(ID)).toMatchObject(SAVED);
+    expect(requests).toHaveLength(1);
+    await noPrivateEffects(page);
+  });
   it("keeps ordinary manual entry and blank native saves usable without JavaScript", async () => {
     const { page, store, requests } = await openProfile({ javaScriptEnabled: false });
     expect(await timezoneField(page).isEditable()).toBe(true);
