@@ -127,7 +127,8 @@ export const MemberLeaderboardPage: FC<{
 // any other member response; no ranking read and no log writes happen.
 export const MemberBoardFilterErrorPage: FC<{
   session: Session;
-  /** The refused filter, e.g. "Unknown season". Static parse messages only. */
+  /** The refused filter, e.g. "Unknown season". Static parse messages only;
+   * most carry no closing period, so the lead supplies one. */
   problem: string;
 }> = ({ session, problem }) => (
   <Layout title="Board filters — Together We Own" robots="noindex, nofollow" theme="schedule">
@@ -135,7 +136,10 @@ export const MemberBoardFilterErrorPage: FC<{
     <main class="events-page" id="main" tabindex={-1}>
       <p class="strap">Members only</p>
       <h1>Check the board filters</h1>
-      <p class="lead">{problem} Show the board without filters, or head back to the homepage.</p>
+      <p class="lead">
+        {problem.endsWith(".") ? problem : `${problem}.`} Show the board without filters, or head
+        back to the homepage.
+      </p>
       <p class="recovery-actions">
         <a class="btn" href="/leaderboards/members" data-testid="error-board">
           Show the board

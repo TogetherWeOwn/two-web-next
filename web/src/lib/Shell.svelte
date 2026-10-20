@@ -30,7 +30,7 @@ let {
   /** Inlined leaf CSS for the content shell; see SiteMetadata for why this
     arrives as load data instead of an import. */
   leafCss?: string;
-  activeNav?: "home" | "events";
+  activeNav?: "home" | "events" | "leaderboard";
   mainClass?: string;
   loginReturnTo?: string | null;
   /** Explicitly supplied session-aware chrome; the static shell never reads session state. */
